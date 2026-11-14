@@ -127,7 +127,12 @@ def _assert_a2a_calls_are_billed(
         key: Final = scenario.key()
         digest: Final = sha256(key.encode()).hexdigest()
         message: Final = (
-            {"kind": "message", "role": "user", "messageId": marker + "-in", "parts": [{"kind": "text", "text": "ping"}]}
+            {
+                "kind": "message",
+                "role": "user",
+                "messageId": marker + "-in",
+                "parts": [{"kind": "text", "text": "ping"}],
+            }
             if version == "0.3"
             else {"role": "ROLE_USER", "messageId": marker + "-in", "parts": [{"text": "ping"}]}
         )
@@ -146,9 +151,7 @@ def _assert_a2a_calls_are_billed(
                 **({"a2a-version": version} if version == "1.0" else {}),
             }
             if "stream" not in method.lower():
-                sent = gateway.client.post(
-                    path.format(agent=agent, name=marker), headers=headers, json=payload
-                )
+                sent = gateway.client.post(path.format(agent=agent, name=marker), headers=headers, json=payload)
                 assert sent.status_code == 200, sent.text
                 result: Final = sent.json()["result"]
                 parts: Final = result["parts"] if version == "0.3" else result["message"]["parts"]

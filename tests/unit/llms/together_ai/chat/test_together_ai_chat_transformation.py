@@ -1210,9 +1210,7 @@ def test_custom_role_wrappers_never_reach_the_request():
 def test_get_supported_response_format_together_ai(model: str) -> None:
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
-    optional_params = litellm.get_supported_openai_params(
-        model, custom_llm_provider="together_ai"
-    )
+    optional_params = litellm.get_supported_openai_params(model, custom_llm_provider="together_ai")
     assert isinstance(optional_params, list)
     assert "response_format" in optional_params
     assert "tools" in optional_params

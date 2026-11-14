@@ -33,7 +33,9 @@ def _response_for_model(response: JsonResponse, model: str) -> JsonResponse:
 
 
 def _stream_for_model(response: SseResponse, model: str) -> SseResponse:
-    return response.model_copy(update={"frames": tuple(frame.replace("gpt-6-luna", model) for frame in response.frames)})
+    return response.model_copy(
+        update={"frames": tuple(frame.replace("gpt-6-luna", model) for frame in response.frames)}
+    )
 
 
 def _responses_json_body(
@@ -11602,9 +11604,7 @@ GPT_5_6_TERRA_SERVICE_TIER_PRIORITY: Final = GPT_6_LUNA_SERVICE_TIER_PRIORITY.mo
     update={
         "name": "gpt-5.6-terra-service_tier_priority",
         "model": "gpt-5.6-terra",
-        "response": _response_for_model(
-            cast(JsonResponse, GPT_6_LUNA_SERVICE_TIER_PRIORITY.response), "gpt-5.6-terra"
-        ),
+        "response": _response_for_model(cast(JsonResponse, GPT_6_LUNA_SERVICE_TIER_PRIORITY.response), "gpt-5.6-terra"),
         "expected": ExactExpected(
             spend=0.0224224,
             input_cost=0.009568,
@@ -11618,9 +11618,7 @@ GPT_5_6_TERRA_RESPONSES_NATIVE_JSON: Final = GPT_6_LUNA_RESPONSES_NATIVE_JSON.mo
     update={
         "name": "gpt-5.6-terra-responses_native_json",
         "model": "gpt-5.6-terra",
-        "response": _response_for_model(
-            cast(JsonResponse, GPT_6_LUNA_RESPONSES_NATIVE_JSON.response), "gpt-5.6-terra"
-        ),
+        "response": _response_for_model(cast(JsonResponse, GPT_6_LUNA_RESPONSES_NATIVE_JSON.response), "gpt-5.6-terra"),
         "expected": ExactExpected(
             spend=0.0112112,
             input_cost=0.004784,
@@ -11680,9 +11678,7 @@ GPT_5_6_TERRA_CACHE_WRITE_5M: Final = GPT_6_LUNA_CACHE_WRITE_5M.model_copy(
     update={
         "name": "gpt-5.6-terra-cache_write_5m",
         "model": "gpt-5.6-terra",
-        "response": _response_for_model(
-            cast(JsonResponse, GPT_6_LUNA_CACHE_WRITE_5M.response), "gpt-5.6-terra"
-        ),
+        "response": _response_for_model(cast(JsonResponse, GPT_6_LUNA_CACHE_WRITE_5M.response), "gpt-5.6-terra"),
         "expected": ExactExpected(
             spend=0.047528,
             input_cost=0.0416,
@@ -11729,9 +11725,7 @@ GPT_5_6_TERRA_TIERED_INPUT_ABOVE_272K: Final = with_usage(
         "total_tokens": 300412,
         "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 0, "cached_tokens": 0},
     },
-    ExactExpected(
-        spend=1.5696408, input_cost=1.56, output_cost=0.0096408, prompt_tokens=300000, completion_tokens=412
-    ),
+    ExactExpected(spend=1.5696408, input_cost=1.56, output_cost=0.0096408, prompt_tokens=300000, completion_tokens=412),
 )
 GPT_5_6_TERRA_TIERED_CACHE_READ_ABOVE_272K: Final = with_usage(
     GPT_5_6_TERRA_INPUT_TEXT,
@@ -11861,9 +11855,9 @@ GPT_5_6_TERRA_RESPONSES_NATIVE_STREAM: Final = _responses_stream_case(
     "gpt-5.6-terra",
     95,
 )
-GPT_5_6_TERRA_MESSAGES_BRIDGED_JSON: Final = bridge_pairs(
-    (GPT_5_6_TERRA_RESPONSES_NATIVE_JSON,), ("/v1/messages",)
-)[0].bridged.model_copy(update={"name": "gpt-5.6-terra-messages_bridged_json"})
+GPT_5_6_TERRA_MESSAGES_BRIDGED_JSON: Final = bridge_pairs((GPT_5_6_TERRA_RESPONSES_NATIVE_JSON,), ("/v1/messages",))[
+    0
+].bridged.model_copy(update={"name": "gpt-5.6-terra-messages_bridged_json"})
 GPT_6_1_SOL_MESSAGES_BRIDGED_STREAM: Final = GPT_6_1_SOL_MESSAGES_BRIDGED_JSON.model_copy(
     update={
         "name": "gpt-6.1-sol-messages_bridged_stream",
@@ -11971,7 +11965,12 @@ GATEWAY_REPORTED_COST_OPERATOR_PRICED_STREAM: Final = GATEWAY_REPORTED_COST_STRE
     }
 )
 
-_GATEWAY_RESPONSES_USAGE: Final[Mapping[str, JsonValue]] = {"input_tokens": 100, "output_tokens": 20, "total_tokens": 120, "cost": 0.037}
+_GATEWAY_RESPONSES_USAGE: Final[Mapping[str, JsonValue]] = {
+    "input_tokens": 100,
+    "output_tokens": 20,
+    "total_tokens": 120,
+    "cost": 0.037,
+}
 _GATEWAY_RESPONSES_ITEM: Final[Mapping[str, JsonValue]] = {
     "id": "msg_gateway",
     "type": "message",
@@ -12393,9 +12392,7 @@ PARITY: Final[tuple[StreamParityTestCase, ...]] = (
     StreamParityTestCase(plain=GPT_6_1_SOL_MESSAGES_BRIDGED_JSON, streamed=GPT_6_1_SOL_MESSAGES_BRIDGED_STREAM),
     StreamParityTestCase(plain=GPT_6_LUNA_MESSAGES_BRIDGED_JSON, streamed=GPT_6_LUNA_MESSAGES_BRIDGED_STREAM),
     StreamParityTestCase(plain=GPT_6_ASTRA_MESSAGES_BRIDGED_JSON, streamed=GPT_6_ASTRA_MESSAGES_BRIDGED_STREAM),
-    StreamParityTestCase(
-        plain=GPT_5_6_TERRA_MESSAGES_BRIDGED_JSON, streamed=GPT_5_6_TERRA_MESSAGES_BRIDGED_STREAM
-    ),
+    StreamParityTestCase(plain=GPT_5_6_TERRA_MESSAGES_BRIDGED_JSON, streamed=GPT_5_6_TERRA_MESSAGES_BRIDGED_STREAM),
 )
 
 BRIDGE_COST_PARITY: Final[tuple[BridgeCostParityTestCase, ...]] = (
@@ -12435,7 +12432,5 @@ BRIDGE_COST_PARITY: Final[tuple[BridgeCostParityTestCase, ...]] = (
     BridgeCostParityTestCase(native=GPT_6_LUNA_RESPONSES_DEPLOYMENT_JSON, bridged=GPT_6_LUNA_CHAT_BRIDGED_JSON),
     BridgeCostParityTestCase(native=GPT_6_ASTRA_RESPONSES_DEPLOYMENT_JSON, bridged=GPT_6_ASTRA_CHAT_BRIDGED_JSON),
     BridgeCostParityTestCase(native=GPT_6_1_SOL_RESPONSES_DEPLOYMENT_JSON, bridged=GPT_6_1_SOL_CHAT_BRIDGED_JSON),
-    BridgeCostParityTestCase(
-        native=GPT_5_6_TERRA_RESPONSES_DEPLOYMENT_JSON, bridged=GPT_5_6_TERRA_CHAT_BRIDGED_JSON
-    ),
+    BridgeCostParityTestCase(native=GPT_5_6_TERRA_RESPONSES_DEPLOYMENT_JSON, bridged=GPT_5_6_TERRA_CHAT_BRIDGED_JSON),
 )

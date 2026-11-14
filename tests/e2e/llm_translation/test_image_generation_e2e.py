@@ -44,7 +44,9 @@ def _assert_image_returned(images: ImagesResponse) -> None:
     assert first.b64_json or first.url, f"generated image has neither b64_json nor url: {first!r}"
 
 
-def _register(proxy: ProxyClient, resources: ResourceManager, prefix: str, params: LiteLLMParamsBody) -> tuple[str, str]:
+def _register(
+    proxy: ProxyClient, resources: ResourceManager, prefix: str, params: LiteLLMParamsBody
+) -> tuple[str, str]:
     model = f"{prefix}-{unique_marker()}"
     model_id = proxy.create_model(model, params)
     resources.defer(lambda: proxy.delete_model(model_id))
@@ -105,7 +107,9 @@ class TestImageGeneration:
         images = sdk.openai(key).images.generate(model=model, prompt="Draw a cute cat")
         _assert_image_returned(images)
 
-    @pytest.mark.skip(reason="stage red: product gap, /v1/images/generations 500s (aimage_generation TypeError) on missing prompt instead of 400")
+    @pytest.mark.skip(
+        reason="stage red: product gap, /v1/images/generations 500s (aimage_generation TypeError) on missing prompt instead of 400"
+    )
     @pytest.mark.covers("llm.images_generations.openai.input_validation.nonstream.works")
     @meta(
         Subject(

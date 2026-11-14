@@ -37,6 +37,7 @@ from litellm.proxy.utils import ProxyLogging
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import ModelResponse, ModelResponseStream, TextCompletionResponse
 
+
 async def _run_streaming_block_and_get_wrapper(exception):
     """Drive chat_completion's streaming guardrail-passthrough handler for the
     given pre-call block exception and return the patched CustomStreamWrapper.
@@ -51,22 +52,24 @@ async def _run_streaming_block_and_get_wrapper(exception):
     user_api_key_dict = UserAPIKeyAuth()
     outer_body = {"model": "gpt-4o", "messages": [], "stream": True}
 
-    with patch(
-        "litellm.proxy.proxy_server.read_request_body",
-        new_callable=AsyncMock,
-        return_value=outer_body,
-    ), patch(
-        "litellm.proxy.proxy_server.ProxyBaseLLMRequestProcessing.base_process_llm_request",
-        new_callable=AsyncMock,
-        side_effect=exception,
-    ), patch(
-        "litellm.proxy.proxy_server.proxy_logging_obj"
-    ) as mock_proxy_logging, patch(
-        "litellm.proxy.proxy_server.select_data_generator",
-        return_value=iter([]),
-    ), patch(
-        "litellm.CustomStreamWrapper"
-    ) as mock_csw:
+    with (
+        patch(
+            "litellm.proxy.proxy_server.read_request_body",
+            new_callable=AsyncMock,
+            return_value=outer_body,
+        ),
+        patch(
+            "litellm.proxy.proxy_server.ProxyBaseLLMRequestProcessing.base_process_llm_request",
+            new_callable=AsyncMock,
+            side_effect=exception,
+        ),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging,
+        patch(
+            "litellm.proxy.proxy_server.select_data_generator",
+            return_value=iter([]),
+        ),
+        patch("litellm.CustomStreamWrapper") as mock_csw,
+    ):
         mock_proxy_logging.post_call_failure_hook = AsyncMock()
 
         await chat_completion(

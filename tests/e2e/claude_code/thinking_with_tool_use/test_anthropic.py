@@ -97,7 +97,10 @@ def _has_block_type(
         route=Route.MESSAGES,
         providers=(Provider.ANTHROPIC,),
         models=tuple(ANTHROPIC_MODELS),
-        capabilities=(Capability.REASONING, Capability.FUNCTION_CALLING,),
+        capabilities=(
+            Capability.REASONING,
+            Capability.FUNCTION_CALLING,
+        ),
         mode=Mode.NONSTREAM,
     )
 )

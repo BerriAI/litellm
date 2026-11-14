@@ -57,11 +57,7 @@ def _deployment(
             "api_base": api_base,
             "api_key": _API_KEY,
             **({"api_version": "2024-10-21"} if model.startswith("azure/") else {}),
-            **(
-                {"max_budget": max_budget, "budget_duration": "1d"}
-                if max_budget is not None
-                else {}
-            ),
+            **({"max_budget": max_budget, "budget_duration": "1d"} if max_budget is not None else {}),
         },
         "model_info": {"id": deployment_id},
     }
@@ -104,9 +100,7 @@ async def test_provider_budget_routes_to_unlimited_provider(
                 ),
             ],
             redis_client=redis_client,
-            provider_budget_config={
-                "openai": BudgetConfig(budget_duration="1d", max_budget=0.5)
-            },
+            provider_budget_config={"openai": BudgetConfig(budget_duration="1d", max_budget=0.5)},
         )
         response: Final = await router.acompletion(
             model="provider-budget",
@@ -136,9 +130,7 @@ async def test_provider_budget_rejects_when_every_provider_is_exhausted(
                 )
             ],
             redis_client=redis_client,
-            provider_budget_config={
-                "openai": BudgetConfig(budget_duration="1d", max_budget=0.5)
-            },
+            provider_budget_config={"openai": BudgetConfig(budget_duration="1d", max_budget=0.5)},
         )
         with pytest.raises(ValueError, match="budget"):
             await router.acompletion(
@@ -224,7 +216,6 @@ async def test_tag_budget_blocks_exhausted_tag_but_allows_another(
     assert response.choices[0].message.content == "openai"
     assert len(requests) == 1
     assert json.loads(requests[0].body)["model"] == _MODEL
-
 
 
 _ISOLATED_SPEND_KEY: Final = "provider_spend:hosted_vllm:1d"

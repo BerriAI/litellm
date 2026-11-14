@@ -33,7 +33,11 @@ _EVENTS: Final = (
     {"type": "content_block_delta", "index": 1, "delta": {"type": "text_delta", "text": "The answer "}},
     {"type": "content_block_delta", "index": 1, "delta": {"type": "text_delta", "text": "is 4."}},
     {"type": "content_block_stop", "index": 1},
-    {"type": "message_delta", "delta": {"stop_reason": "end_turn", "stop_sequence": None}, "usage": {"output_tokens": 9}},
+    {
+        "type": "message_delta",
+        "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+        "usage": {"output_tokens": 9},
+    },
     {"type": "message_stop"},
 )
 _THINKING: Final = {"type": "enabled", "budget_tokens": 1024}
@@ -48,11 +52,16 @@ def _stream(request: Request) -> Reply:
 
 @pytest.mark.parametrize("route", ["/anthropic", ""], ids=["anthropic_pass_through", "v1_messages"])
 def test_messages_stream_relays_thinking_and_text_deltas(gateway: Gateway, tmp_path: Path, route: str) -> None:
-    with wire_server(_stream) as provider, owned_proxy(
-        gateway,
-        tmp_path,
-        {"ANTHROPIC_API_BASE": provider.url, "ANTHROPIC_API_KEY": "synthetic-anthropic-key"},
-    ) as proxy, proxy.scenario() as scenario, httpx.Client(timeout=15, trust_env=False) as transport:
+    with (
+        wire_server(_stream) as provider,
+        owned_proxy(
+            gateway,
+            tmp_path,
+            {"ANTHROPIC_API_BASE": provider.url, "ANTHROPIC_API_KEY": "synthetic-anthropic-key"},
+        ) as proxy,
+        proxy.scenario() as scenario,
+        httpx.Client(timeout=15, trust_env=False) as transport,
+    ):
         model: Final = scenario.model(
             model="anthropic/claude-haiku-4-5", api_base=provider.url, api_key="synthetic-anthropic-key"
         )

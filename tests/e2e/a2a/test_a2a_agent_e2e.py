@@ -117,7 +117,9 @@ class TestA2AAgentLifecycle:
             mode=Mode.NONSTREAM,
         )
     )
-    def test_semver_protocol_version_registers_and_serves(self, client: A2AClient, resources: ResourceManager, scoped_key: str) -> None:
+    def test_semver_protocol_version_registers_and_serves(
+        self, client: A2AClient, resources: ResourceManager, scoped_key: str
+    ) -> None:
         agent = _register(client, resources, "0.3.0")
         assert agent.agent_card_params.protocol_version == "0.3"
         card = unwrap(client.agent_card(agent.agent_id, scoped_key))
@@ -135,7 +137,9 @@ class TestA2AAgentLifecycle:
             route=Route.A2A,
         )
     )
-    def test_discovery_card_is_proxy_fronted(self, client: A2AClient, resources: ResourceManager, scoped_key: str) -> None:
+    def test_discovery_card_is_proxy_fronted(
+        self, client: A2AClient, resources: ResourceManager, scoped_key: str
+    ) -> None:
         agent = _register(client, resources, "0.3")
         card = unwrap(client.agent_card(agent.agent_id, scoped_key))
         assert card.url is not None and card.url.endswith(f"/a2a/{agent.agent_id}")
@@ -155,7 +159,9 @@ class TestA2AAgentLifecycle:
             mode=Mode.NONSTREAM,
         )
     )
-    def test_message_send_runs_completion_bridge(self, client: A2AClient, resources: ResourceManager, scoped_key: str) -> None:
+    def test_message_send_runs_completion_bridge(
+        self, client: A2AClient, resources: ResourceManager, scoped_key: str
+    ) -> None:
         agent = _register(client, resources, "0.3")
         request = _ask("Reply with exactly the word PONG and nothing else")
         response = unwrap(client.send_message(agent.agent_id, scoped_key, request))
@@ -178,7 +184,9 @@ class TestA2AAgentLifecycle:
             mode=Mode.NONSTREAM,
         )
     )
-    def test_pinned_v0_3_serves_flat_message_shape(self, client: A2AClient, resources: ResourceManager, scoped_key: str) -> None:
+    def test_pinned_v0_3_serves_flat_message_shape(
+        self, client: A2AClient, resources: ResourceManager, scoped_key: str
+    ) -> None:
         agent = _register(client, resources, "0.3")
         request = _ask("Say hi in one word")
         result = unwrap(client.send_message(agent.agent_id, scoped_key, request)).result
@@ -198,7 +206,9 @@ class TestA2AAgentLifecycle:
             mode=Mode.NONSTREAM,
         )
     )
-    def test_pinned_v1_0_serves_nested_message_shape(self, client: A2AClient, resources: ResourceManager, scoped_key: str) -> None:
+    def test_pinned_v1_0_serves_nested_message_shape(
+        self, client: A2AClient, resources: ResourceManager, scoped_key: str
+    ) -> None:
         agent = _register(client, resources, "1.0")
         request = _ask("Say hi in one word")
         result = unwrap(client.send_message(agent.agent_id, scoped_key, request)).result

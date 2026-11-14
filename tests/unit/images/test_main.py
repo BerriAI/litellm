@@ -423,9 +423,7 @@ class TestAimlImageGeneration:
                 custom_logger = TestCustomLogger()
                 litellm.logging_callback_manager._reset_all_callbacks()
                 litellm.callbacks = [custom_logger]
-                base_image_generation_call_args = (
-                    self.get_base_image_generation_call_args()
-                )
+                base_image_generation_call_args = self.get_base_image_generation_call_args()
                 litellm.set_verbose = True
                 # Pass dummy api_key so validate_environment passes; HTTP is mocked
                 response = await litellm.aimage_generation(
@@ -442,9 +440,7 @@ class TestAimlImageGeneration:
                 # print("response_cost", response._hidden_params["response_cost"])
 
                 logged_standard_logging_payload = custom_logger.standard_logging_payload
-                print(
-                    "logged_standard_logging_payload", logged_standard_logging_payload
-                )
+                print("logged_standard_logging_payload", logged_standard_logging_payload)
                 assert logged_standard_logging_payload is not None
                 assert logged_standard_logging_payload["response_cost"] is not None
                 assert logged_standard_logging_payload["response_cost"] > 0
@@ -459,9 +455,7 @@ class TestAimlImageGeneration:
                     response_dict["usage"] = dict(response_dict["usage"])
                 print("response usage=", response_dict.get("usage"))
 
-                assert (
-                    response.data is not None
-                )  # type guard for iteration (base fails here if None)
+                assert response.data is not None  # type guard for iteration (base fails here if None)
                 for d in response.data:
                     assert isinstance(d, Image)
                     print("data in response.data", d)

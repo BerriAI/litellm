@@ -129,9 +129,7 @@ class TestIsModelCostZero:
 
     def test_zero_cost_model_in_router(self, mock_router_with_zero_cost_model):
         """Test that a zero-cost model in router is correctly identified."""
-        result = is_model_cost_zero(
-            model="on-prem-model", llm_router=mock_router_with_zero_cost_model
-        )
+        result = is_model_cost_zero(model="on-prem-model", llm_router=mock_router_with_zero_cost_model)
         assert result is True
 
     def test_paid_model_in_router(self, mock_router_with_zero_cost_model):
@@ -142,16 +140,12 @@ class TestIsModelCostZero:
                 "input_cost_per_token": 0.0000015,
                 "output_cost_per_token": 0.000002,
             }
-            result = is_model_cost_zero(
-                model="cloud-model", llm_router=mock_router_with_zero_cost_model
-            )
+            result = is_model_cost_zero(model="cloud-model", llm_router=mock_router_with_zero_cost_model)
             assert result is False
 
     def test_none_model(self, mock_router_with_zero_cost_model):
         """Test that None model returns False."""
-        result = is_model_cost_zero(
-            model=None, llm_router=mock_router_with_zero_cost_model
-        )
+        result = is_model_cost_zero(model=None, llm_router=mock_router_with_zero_cost_model)
         assert result is False
 
     def test_none_router(self):
@@ -161,9 +155,7 @@ class TestIsModelCostZero:
 
     def test_list_of_zero_cost_models(self, mock_router_with_zero_cost_model):
         """Test that a list of zero-cost models returns True."""
-        result = is_model_cost_zero(
-            model=["on-prem-model"], llm_router=mock_router_with_zero_cost_model
-        )
+        result = is_model_cost_zero(model=["on-prem-model"], llm_router=mock_router_with_zero_cost_model)
         assert result is True
 
     def test_mixed_cost_models(self, mock_router_with_zero_cost_model):
@@ -217,9 +209,7 @@ class TestUserBudgetBypass:
         assert result is True
 
     @pytest.mark.asyncio
-    async def test_user_over_budget_with_paid_model_blocked(
-        self, mock_router_with_zero_cost_model, mock_proxy_logging
-    ):
+    async def test_user_over_budget_with_paid_model_blocked(self, mock_router_with_zero_cost_model, mock_proxy_logging):
         """Test that user over budget cannot use paid models."""
         user_object = LiteLLM_UserTable(
             user_id="test-user",
@@ -375,9 +365,7 @@ class TestTeamBudgetBypass:
         assert result is True
 
     @pytest.mark.asyncio
-    async def test_team_over_budget_with_paid_model_blocked(
-        self, mock_router_with_zero_cost_model, mock_proxy_logging
-    ):
+    async def test_team_over_budget_with_paid_model_blocked(self, mock_router_with_zero_cost_model, mock_proxy_logging):
         """Test that team over budget cannot use paid models."""
         team_object = LiteLLM_TeamTable(
             team_id="test-team",
@@ -450,9 +438,7 @@ class TestTeamMemberBudgetBypass:
         request_body = {"model": "on-prem-model"}
 
         # Mock get_team_membership
-        with patch(
-            "litellm.proxy.auth.auth_checks.get_team_membership"
-        ) as mock_get_membership:
+        with patch("litellm.proxy.auth.auth_checks.get_team_membership") as mock_get_membership:
             mock_get_membership.return_value = team_membership
 
             # In the real flow, skip_budget_checks would be set to True for zero-cost models
@@ -501,9 +487,7 @@ class TestTeamMemberBudgetBypass:
 
         request_body = {"model": "cloud-model"}
 
-        with patch(
-            "litellm.proxy.auth.auth_checks.get_team_membership"
-        ) as mock_get_membership:
+        with patch("litellm.proxy.auth.auth_checks.get_team_membership") as mock_get_membership:
             mock_get_membership.return_value = team_membership
 
             with patch("litellm.get_model_info") as mock_get_model_info:
@@ -540,9 +524,7 @@ class TestEdgeCases:
         with patch("litellm.get_model_info") as mock_get_model_info:
             # Simulate model not found
             mock_get_model_info.side_effect = Exception("Model not found")
-            result = is_model_cost_zero(
-                model="nonexistent-model", llm_router=mock_router_with_zero_cost_model
-            )
+            result = is_model_cost_zero(model="nonexistent-model", llm_router=mock_router_with_zero_cost_model)
             # Should return False (conservative approach)
             assert result is False
 

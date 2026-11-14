@@ -5331,7 +5331,12 @@ _REPLAYED_CLAUDE_SEARCH_INPUT: Final = (
         "status": "completed",
         "tools": [{"type": "function", "name": "get_weather", "parameters": {"type": "object"}, "defer_loading": True}],
     },
-    {"type": "function_call", "call_id": "toolu_01GuardrailWeather", "name": "get_weather", "arguments": '{"city": "Paris"}'},
+    {
+        "type": "function_call",
+        "call_id": "toolu_01GuardrailWeather",
+        "name": "get_weather",
+        "arguments": '{"city": "Paris"}',
+    },
     {"type": "function_call_output", "call_id": "toolu_01GuardrailWeather", "output": "14C"},
     {"role": "user", "content": "Thanks"},
 )
@@ -5472,7 +5477,8 @@ class TestRefusalPartsReachTextGuardrails:
 
         assert guardrail.seen_texts == [[*leading_text, _REFUSAL]]
         assert [
-            (part["type"], part.get("text") or part.get("refusal")) for part in result.model_dump()["output"][0]["content"]
+            (part["type"], part.get("text") or part.get("refusal"))
+            for part in result.model_dump()["output"][0]["content"]
         ] == expected_parts
 
     @pytest.mark.asyncio
@@ -5495,7 +5501,8 @@ class TestRefusalPartsReachTextGuardrails:
 
         assert guardrail.seen_texts == [["Jane asked first.", _REFUSAL]]
         assert [
-            (part["type"], part.get("text") or part.get("refusal")) for part in result.model_dump()["output"][0]["content"]
+            (part["type"], part.get("text") or part.get("refusal"))
+            for part in result.model_dump()["output"][0]["content"]
         ] == [("output_text", "[NAME] asked first."), ("refusal", _MASKED_REFUSAL)]
 
     @pytest.mark.asyncio
@@ -5509,7 +5516,9 @@ class TestRefusalPartsReachTextGuardrails:
                 part=ContentPartDonePartRefusal(type="refusal", refusal=_REFUSAL),
                 **position,
             ),
-            OutputItemDoneEvent(type=ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE, output_index=0, item=_refused_message()),
+            OutputItemDoneEvent(
+                type=ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE, output_index=0, item=_refused_message()
+            ),
             ResponseIncompleteEvent(type=ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE, response=_refused_response()),
         ]
 

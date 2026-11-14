@@ -136,9 +136,7 @@ class TestVertexBase:
         mock_creds.quota_project_id = "project-1"
 
         with (
-            patch.object(
-                vertex_base, "load_auth", return_value=(mock_creds, "project-1")
-            ),
+            patch.object(vertex_base, "load_auth", return_value=(mock_creds, "project-1")),
             patch.object(vertex_base, "refresh_auth") as mock_refresh,
         ):
 
@@ -469,12 +467,8 @@ class TestVertexBase:
             assert resolved_cache_key in vertex_base._credentials_project_mapping
 
             # Both should contain the same tuple
-            original_entry = vertex_base._credentials_project_mapping[
-                original_cache_key
-            ]
-            resolved_entry = vertex_base._credentials_project_mapping[
-                resolved_cache_key
-            ]
+            original_entry = vertex_base._credentials_project_mapping[original_cache_key]
+            resolved_entry = vertex_base._credentials_project_mapping[resolved_cache_key]
 
             assert isinstance(original_entry, tuple)
             assert isinstance(resolved_entry, tuple)
@@ -498,9 +492,7 @@ class TestVertexBase:
         credentials = {"type": "service_account", "project_id": "project-1"}
 
         with (
-            patch.object(
-                vertex_base, "load_auth", return_value=(mock_creds, "project-1")
-            ),
+            patch.object(vertex_base, "load_auth", return_value=(mock_creds, "project-1")),
             patch.object(vertex_base, "refresh_auth") as mock_refresh,
         ):
 
@@ -644,12 +636,8 @@ class TestVertexBase:
             assert resolved_cache_key in vertex_base._credentials_project_mapping
 
             # Both should contain the tuple with resolved project_id
-            original_entry = vertex_base._credentials_project_mapping[
-                original_cache_key
-            ]
-            resolved_entry = vertex_base._credentials_project_mapping[
-                resolved_cache_key
-            ]
+            original_entry = vertex_base._credentials_project_mapping[original_cache_key]
+            resolved_entry = vertex_base._credentials_project_mapping[resolved_cache_key]
 
             assert isinstance(original_entry, tuple)
             assert isinstance(resolved_entry, tuple)
@@ -724,10 +712,9 @@ class TestVertexBase:
     )
     def test_get_api_base(self, api_base, vertex_location, expected):
         vertex_base = VertexBase()
-        assert (
-            vertex_base.get_api_base(api_base=api_base, vertex_location=vertex_location)
-            == expected
-        ), f"Expected {expected} with api_base {api_base} and vertex_location {vertex_location}"
+        assert vertex_base.get_api_base(api_base=api_base, vertex_location=vertex_location) == expected, (
+            f"Expected {expected} with api_base {api_base} and vertex_location {vertex_location}"
+        )
 
     @pytest.mark.parametrize(
         "api_base, custom_llm_provider, gemini_api_key, endpoint, stream, auth_header, url, model, expected_auth_header, expected_url",
@@ -841,12 +828,10 @@ class TestVertexBase:
                 model=model,
             )
 
-            assert (
-                result_auth_header == expected_auth_header
-            ), f"Expected auth_header {expected_auth_header}, got {result_auth_header}"
-            assert (
-                result_url == expected_url
-            ), f"Expected URL {expected_url}, got {result_url}"
+            assert result_auth_header == expected_auth_header, (
+                f"Expected auth_header {expected_auth_header}, got {result_auth_header}"
+            )
+            assert result_url == expected_url, f"Expected URL {expected_url}, got {result_url}"
 
     def test_check_custom_proxy_gemini_url_construction(self):
         """Test that Gemini URLs are constructed correctly with custom API base"""
@@ -883,9 +868,7 @@ class TestVertexBase:
                 model=model,
             )
 
-            assert (
-                result_url == expected_url
-            ), f"Expected {expected_url}, got {result_url} for model {model}"
+            assert result_url == expected_url, f"Expected {expected_url}, got {result_url} for model {model}"
 
     def test_check_custom_proxy_streaming_parameter(self):
         """Test that streaming parameter correctly adds ?alt=sse to URLs"""
@@ -904,9 +887,9 @@ class TestVertexBase:
         )
 
         expected_streaming_url = "https://proxy.example.com/generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?alt=sse"
-        assert (
-            result_url_streaming == expected_streaming_url
-        ), f"Expected {expected_streaming_url}, got {result_url_streaming}"
+        assert result_url_streaming == expected_streaming_url, (
+            f"Expected {expected_streaming_url}, got {result_url_streaming}"
+        )
 
         # Test with streaming disabled
         _, result_url_no_streaming = vertex_base._check_custom_proxy(
@@ -921,9 +904,9 @@ class TestVertexBase:
         )
 
         expected_no_streaming_url = "https://proxy.example.com/generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent"
-        assert (
-            result_url_no_streaming == expected_no_streaming_url
-        ), f"Expected {expected_no_streaming_url}, got {result_url_no_streaming}"
+        assert result_url_no_streaming == expected_no_streaming_url, (
+            f"Expected {expected_no_streaming_url}, got {result_url_no_streaming}"
+        )
 
     def test_check_custom_proxy_vertex_bare_host_api_base_grafts_default_path(self):
         vertex_base = VertexBase()
@@ -1144,7 +1127,10 @@ class TestVertexBase:
             use_psc_endpoint_format=True,
         )
 
-        assert result_url == "https://10.96.32.8/v1/projects/test-project/locations/us-central1/endpoints/1234567890:predict"
+        assert (
+            result_url
+            == "https://10.96.32.8/v1/projects/test-project/locations/us-central1/endpoints/1234567890:predict"
+        )
 
     @pytest.mark.parametrize(
         "custom_api_base, stream, expected_url",
@@ -1167,9 +1153,7 @@ class TestVertexBase:
         ],
         ids=["psc-host", "psc-host-streaming", "api-base-with-path"],
     )
-    def test_get_complete_vertex_url_openai_path_partner_custom_api_base(
-        self, custom_api_base, stream, expected_url
-    ):
+    def test_get_complete_vertex_url_openai_path_partner_custom_api_base(self, custom_api_base, stream, expected_url):
         vertex_base = VertexBase()
 
         result = vertex_base.get_complete_vertex_url(
@@ -1341,9 +1325,7 @@ class TestVertexBase:
             MockCredentials.from_info.return_value = mock_creds
 
             # Call the method
-            result = vertex_base._credentials_from_identity_pool_with_aws(
-                json_obj, scopes
-            )
+            result = vertex_base._credentials_from_identity_pool_with_aws(json_obj, scopes)
 
             # Verify calls
             MockCredentials.from_info.assert_called_once_with(json_obj)
@@ -1355,9 +1337,7 @@ class TestVertexBase:
         vertex_base = VertexBase()
         json_obj = {
             "type": "external_account",
-            "credential_source": {
-                "executable": {"command": "/path/to/executable", "timeout_millis": 5000}
-            },
+            "credential_source": {"executable": {"command": "/path/to/executable", "timeout_millis": 5000}},
         }
         scopes = ["https://www.googleapis.com/auth/cloud-platform"]
 
@@ -1400,26 +1380,18 @@ class TestVertexBase:
         vertex_base = VertexBase()
         json_obj = {
             "type": "external_account",
-            "credential_source": {
-                "executable": {"command": "/path/to/executable", "timeout_millis": 5000}
-            },
+            "credential_source": {"executable": {"command": "/path/to/executable", "timeout_millis": 5000}},
         }
 
         mock_creds = MagicMock()
         mock_creds.project_id = "test-project"
 
         with (
-            patch.object(
-                vertex_base, "_credentials_from_pluggable", return_value=mock_creds
-            ) as mock_pluggable,
-            patch.object(
-                vertex_base, "_credentials_from_identity_pool"
-            ) as mock_identity_pool,
+            patch.object(vertex_base, "_credentials_from_pluggable", return_value=mock_creds) as mock_pluggable,
+            patch.object(vertex_base, "_credentials_from_identity_pool") as mock_identity_pool,
             patch.object(vertex_base, "refresh_auth"),
         ):
-            creds, project_id = vertex_base.load_auth(
-                credentials=json.dumps(json_obj), project_id=None
-            )
+            creds, project_id = vertex_base.load_auth(credentials=json.dumps(json_obj), project_id=None)
 
             mock_pluggable.assert_called_once_with(
                 json_obj,
@@ -1522,9 +1494,7 @@ class TestVertexBase:
             MockBaseAWSLLM.return_value = mock_base_aws
             MockAwsCredentials.return_value = mock_gcp_creds
 
-            result = VertexAIAwsWifAuth.credentials_from_explicit_aws(
-                json_obj, aws_params, scopes
-            )
+            result = VertexAIAwsWifAuth.credentials_from_explicit_aws(json_obj, aws_params, scopes)
 
             # Verify aws.Credentials was called with supplier (not from_info)
             MockAwsCredentials.assert_called_once()
@@ -1533,10 +1503,7 @@ class TestVertexBase:
             assert call_kwargs["subject_token_type"] == json_obj["subject_token_type"]
             assert call_kwargs["token_url"] == json_obj["token_url"]
             assert call_kwargs["credential_source"] is None
-            assert (
-                call_kwargs["service_account_impersonation_url"]
-                == json_obj["service_account_impersonation_url"]
-            )
+            assert call_kwargs["service_account_impersonation_url"] == json_obj["service_account_impersonation_url"]
 
             # Verify the supplier is a lazy credentials provider (calls
             # get_credentials on demand, not at construction time)
@@ -1564,15 +1531,11 @@ class TestVertexBase:
         scopes = ["https://www.googleapis.com/auth/cloud-platform"]
 
         with pytest.raises(ValueError, match="aws_region_name is required"):
-            VertexAIAwsWifAuth.credentials_from_explicit_aws(
-                json_obj, aws_params, scopes
-            )
+            VertexAIAwsWifAuth.credentials_from_explicit_aws(json_obj, aws_params, scopes)
 
     @pytest.mark.parametrize("is_async", [True, False], ids=["async", "sync"])
     @pytest.mark.asyncio
-    async def test_aws_wif_routes_to_explicit_auth_when_aws_params_present(
-        self, is_async
-    ):
+    async def test_aws_wif_routes_to_explicit_auth_when_aws_params_present(self, is_async):
         """Test that load_auth routes to explicit auth when aws_* keys are in JSON."""
         vertex_base = VertexBase()
 
@@ -1630,9 +1593,7 @@ class TestVertexBase:
                 "aws_role_name": "arn:aws:iam::123456789012:role/MyRole",
                 "aws_region_name": "us-east-1",
             }
-            assert call_kwargs["scopes"] == [
-                "https://www.googleapis.com/auth/cloud-platform"
-            ]
+            assert call_kwargs["scopes"] == ["https://www.googleapis.com/auth/cloud-platform"]
             assert token == "refreshed-token"
 
     @pytest.mark.parametrize("is_async", [True, False], ids=["async", "sync"])
@@ -1723,9 +1684,7 @@ class TestVertexBase:
             aws_region="eu-west-1",
         )
 
-        aws_creds_static = supplier_static.get_aws_security_credentials(
-            context=None, request=None
-        )
+        aws_creds_static = supplier_static.get_aws_security_credentials(context=None, request=None)
         assert aws_creds_static.access_key_id == "AKIAIOSFODNN7EXAMPLE"
         assert aws_creds_static.session_token is None
 
@@ -1769,9 +1728,7 @@ class TestVertexBase:
         refresh_call_count = 0
 
         with (
-            patch.object(
-                vertex_base, "load_auth", return_value=(mock_creds, "project-1")
-            ),
+            patch.object(vertex_base, "load_auth", return_value=(mock_creds, "project-1")),
             patch.object(vertex_base, "refresh_auth") as mock_refresh,
         ):
 
@@ -1809,9 +1766,7 @@ class TestVertexBase:
                 assert project == "project-1"
 
             # refresh_auth should be called exactly once (single-flight)
-            assert (
-                refresh_call_count == 1
-            ), f"Expected 1 refresh call, got {refresh_call_count}"
+            assert refresh_call_count == 1, f"Expected 1 refresh call, got {refresh_call_count}"
 
     @pytest.mark.asyncio
     async def test_async_reauthentication_uses_async_single_flight(self):
@@ -1890,9 +1845,7 @@ class TestVertexBase:
         credentials = {"type": "service_account", "project_id": "project-1"}
 
         with (
-            patch.object(
-                vertex_base, "load_auth", return_value=(mock_creds, "project-1")
-            ),
+            patch.object(vertex_base, "load_auth", return_value=(mock_creds, "project-1")),
             patch.object(vertex_base, "refresh_auth") as mock_refresh,
         ):
 
@@ -1932,9 +1885,7 @@ class TestVertexBase:
         credentials = {"type": "service_account", "project_id": "project-1"}
 
         with (
-            patch.object(
-                vertex_base, "load_auth", return_value=(mock_creds, "project-1")
-            ),
+            patch.object(vertex_base, "load_auth", return_value=(mock_creds, "project-1")),
             patch.object(vertex_base, "refresh_auth") as mock_refresh,
         ):
 
@@ -2001,9 +1952,7 @@ class TestVertexBase:
         credentials = {"type": "service_account", "project_id": "project-1"}
 
         with (
-            patch.object(
-                vertex_base, "load_auth", return_value=(mock_creds, "project-1")
-            ),
+            patch.object(vertex_base, "load_auth", return_value=(mock_creds, "project-1")),
             patch.object(vertex_base, "refresh_auth") as mock_refresh,
         ):
 
@@ -2024,8 +1973,7 @@ class TestVertexBase:
 
             # After completion the entry should have been removed by the done-callback.
             assert len(vertex_base._background_refresh_tasks) == 0, (
-                "Completed background refresh task was not removed from "
-                "_background_refresh_tasks"
+                "Completed background refresh task was not removed from _background_refresh_tasks"
             )
 
     @pytest.mark.asyncio
@@ -2075,8 +2023,7 @@ class TestVertexBase:
         await asyncio.wait_for(asyncio.gather(*set(background_refreshes)), timeout=5)
 
         assert len(vertex_base._background_refresh_tasks) == 0, (
-            f"Expected 0 tasks after all refreshes completed, "
-            f"found {len(vertex_base._background_refresh_tasks)}"
+            f"Expected 0 tasks after all refreshes completed, found {len(vertex_base._background_refresh_tasks)}"
         )
 
     @pytest.mark.asyncio
@@ -2168,9 +2115,9 @@ class TestVertexBase:
         waiter = asyncio.create_task(queue_for_lock())
         await asyncio.sleep(0)  # let waiter queue on the lock
 
-        assert (
-            vertex_base._async_refresh_locks.get(key) is holder_lock
-        ), "lock with active holder/waiter must not be pruned"
+        assert vertex_base._async_refresh_locks.get(key) is holder_lock, (
+            "lock with active holder/waiter must not be pruned"
+        )
 
         release_holder.set()
         await holder
@@ -2399,9 +2346,7 @@ class TestVertexCredentialsSource:
             '"-----BEGIN PRIVATE KEY-----\nMIIEvQIBADA\n-----END PRIVATE KEY-----"}'
         )
 
-        with pytest.raises(
-            ValueError, match="The inline `vertex_credentials` value is not valid JSON"
-        ) as exc_info:
+        with pytest.raises(ValueError, match="The inline `vertex_credentials` value is not valid JSON") as exc_info:
             VertexBase().load_auth(credentials=inline, project_id="p")
 
         message = str(exc_info.value)
@@ -2505,7 +2450,9 @@ class TestVertexCredentialsSource:
             pytest.param('"' + _ENCODED_VERTEX_KEY + '"', id="quoted"),
             pytest.param("base64:" + _ENCODED_VERTEX_KEY, id="prefixed"),
             pytest.param(_ENCODED_VERTEX_KEY.replace("+", "-").replace("/", "_"), id="urlsafe"),
-            pytest.param("\n".join(_ENCODED_VERTEX_KEY[i : i + 64] for i in range(0, len(_ENCODED_VERTEX_KEY), 64)), id="wrapped"),
+            pytest.param(
+                "\n".join(_ENCODED_VERTEX_KEY[i : i + 64] for i in range(0, len(_ENCODED_VERTEX_KEY), 64)), id="wrapped"
+            ),
         ],
     )
     def test_base64_encoded_credentials_are_named_and_kept_out_of_the_log(self, encoded, caplog):
@@ -2619,6 +2566,7 @@ async def test_credential_cache_bounds_retention_and_reloads_least_recently_used
         patch("google.auth._helpers.utcnow", return_value=datetime(2025, 1, 1)),
         responses.RequestsMock() as oauth,
     ):
+
         def token_response(request: requests.PreparedRequest) -> tuple[int, dict[str, str], str]:
             return 200, {}, json.dumps({"access_token": f"token-{len(oauth.calls) + 1}", "expires_in": 3600})
 
@@ -2670,6 +2618,7 @@ async def test_evicted_credentials_finish_refresh_without_being_readmitted(
     donor: Final = _authorized_user_cache_credentials("donor")
     target: Final = _authorized_user_cache_credentials("target")
     with patch("google.auth._helpers.utcnow", return_value=now) as clock, responses.RequestsMock() as oauth:
+
         def token_response(request: requests.PreparedRequest) -> tuple[int, dict[str, str], str]:
             body: Final = request.body.decode() if isinstance(request.body, bytes) else request.body
             assert isinstance(body, str)
@@ -2677,8 +2626,12 @@ async def test_evicted_credentials_finish_refresh_without_being_readmitted(
             if is_target and len(oauth.calls) == limit:
                 refresh_started.set()
                 assert release_refresh.wait(5), "OAuth refresh was not released"
-            return 200, {}, json.dumps(
-                {"access_token": f"token-{len(oauth.calls) + 1}", "expires_in": 3600 if is_target else 86400}
+            return (
+                200,
+                {},
+                json.dumps(
+                    {"access_token": f"token-{len(oauth.calls) + 1}", "expires_in": 3600 if is_target else 86400}
+                ),
             )
 
         oauth.add_callback(responses.POST, "https://oauth2.googleapis.com/token", callback=token_response)

@@ -529,9 +529,7 @@ def test_worker_kill_mid_burst_keeps_serving_and_leaves_no_empty_key(gateway: Ga
         with owned.replacing_worker(min(workers)) as kill:
             attempts: Final = _burst(owned.gateway, tuple(teams), kill)
             probe: Final = scenario.team()
-            eventually(
-                lambda: _patch_status(owned.gateway, probe), lambda status_code: status_code == 200, seconds=60
-            )
+            eventually(lambda: _patch_status(owned.gateway, probe), lambda status_code: status_code == 200, seconds=60)
         _assert_burst_reflected(owned.gateway, teams, attempts)
 
 

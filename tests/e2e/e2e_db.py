@@ -17,9 +17,7 @@ from collections.abc import Callable
 RESET_OPT_IN_ENV = "E2E_RESET_SPEND_LOGS"
 
 
-def run_spend_log_cleanup(
-    *, opt_in: str | None, e2e_test_ran: bool, truncate: Callable[[], None]
-) -> bool:
+def run_spend_log_cleanup(*, opt_in: str | None, e2e_test_ran: bool, truncate: Callable[[], None]) -> bool:
     """Invoke `truncate` iff the destructive spend-log reset is both opted into
     and warranted, returning whether the truncate was attempted.
 

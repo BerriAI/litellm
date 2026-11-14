@@ -61,10 +61,19 @@ def ui_container() -> Iterator[tuple[str, str]]:
     try:
         assert IMAGE is not None
         _docker(
-            "run", "-d", "--name", container, "--network", network,
-            "--user", ARBITRARY_UID,
-            "--read-only", "--tmpfs", "/tmp",
-            IMAGE, "ui",
+            "run",
+            "-d",
+            "--name",
+            container,
+            "--network",
+            network,
+            "--user",
+            ARBITRARY_UID,
+            "--read-only",
+            "--tmpfs",
+            "/tmp",
+            IMAGE,
+            "ui",
         )
         yield network, container
     finally:
@@ -81,17 +90,33 @@ def _container_logs(container: str) -> str:
 def _is_running(container: str) -> bool:
     return bool(
         _docker(
-            "ps", "--filter", f"name={container}", "--filter", "status=running",
-            "--format", "{{.Names}}", check=False,
+            "ps",
+            "--filter",
+            f"name={container}",
+            "--filter",
+            "status=running",
+            "--format",
+            "{{.Names}}",
+            check=False,
         ).stdout.strip()
     )
 
 
 def _probe(network: str, container: str, path: str) -> "subprocess.CompletedProcess[str]":
     return _docker(
-        "run", "--rm", "--network", network, CURL_IMAGE,
-        "--silent", "--show-error", "--max-time", "10",
-        "--output", "/dev/null", "--write-out", "%{http_code}",
+        "run",
+        "--rm",
+        "--network",
+        network,
+        CURL_IMAGE,
+        "--silent",
+        "--show-error",
+        "--max-time",
+        "10",
+        "--output",
+        "/dev/null",
+        "--write-out",
+        "%{http_code}",
         f"http://{container}:{UI_PORT}{path}",
         check=False,
     )
@@ -128,8 +153,7 @@ def test_ui_serves_as_arbitrary_uid_read_only(ui_container: tuple[str, str]) -> 
     for path in ("/", "/ui", "/ui/login"):
         page = _probe(network, container, path)
         assert page.stdout.strip() == "200", (
-            f"GET {path} returned {page.stdout.strip()!r} as uid {ARBITRARY_UID}.\n"
-            f"{_container_logs(container)}"
+            f"GET {path} returned {page.stdout.strip()!r} as uid {ARBITRARY_UID}.\n{_container_logs(container)}"
         )
 
     for payload in ("/__next._tree.txt", "/login/index.txt", "/login/__next._tree.txt", "/projects/__next._full.txt"):
@@ -137,9 +161,17 @@ def test_ui_serves_as_arbitrary_uid_read_only(ui_container: tuple[str, str]) -> 
         assert exported, f"empty exported payload at {payload}"
         for prefix in ("", "/ui"):
             response: Final = _docker(
-                "run", "--rm", "--network", network, CURL_IMAGE,
-                "--silent", "--show-error", "--max-time", "10",
-                "--write-out", "\n%{http_code} %{content_type}",
+                "run",
+                "--rm",
+                "--network",
+                network,
+                CURL_IMAGE,
+                "--silent",
+                "--show-error",
+                "--max-time",
+                "10",
+                "--write-out",
+                "\n%{http_code} %{content_type}",
                 f"http://{container}:{UI_PORT}{prefix}{payload}?_rsc=regression",
             )
             assert response.stdout == f"{exported}\n200 text/plain", (

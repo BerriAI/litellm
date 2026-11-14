@@ -229,9 +229,9 @@ def test_drop_params_cuts_client_breakpoints_down_to_what_chat_completions_takes
         proxy.gpt_5_6_dropping_params, [{"role": "user", "content": _CLIENT_BREAKPOINTS_ON_PARTS}], stream=stream
     )
 
-    assert received["messages"] == [
-        {"role": "user", "content": _CLIENT_BREAKPOINTS_AS_CHAT_COMPLETIONS_TAKES_THEM}
-    ], _CHAT_COMPLETIONS_REJECTS_TTL_AND_IMPLICIT
+    assert received["messages"] == [{"role": "user", "content": _CLIENT_BREAKPOINTS_AS_CHAT_COMPLETIONS_TAKES_THEM}], (
+        _CHAT_COMPLETIONS_REJECTS_TTL_AND_IMPLICIT
+    )
 
 
 def test_without_drop_params_client_breakpoints_reach_openai_unchanged(proxy: _Proxy) -> None:

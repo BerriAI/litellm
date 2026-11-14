@@ -52,7 +52,5 @@ def test_triton_embeddings(gateway: Gateway) -> None:
             {"model": model, "input": INPUT},
         )
         assert response.status_code == 200, response.text
-        assert response.json()["data"] == [
-            {"object": "embedding", "index": 0, "embedding": OUTPUT}
-        ], response.text
+        assert response.json()["data"] == [{"object": "embedding", "index": 0, "embedding": OUTPUT}], response.text
         assert len(wire.drain()) == 1

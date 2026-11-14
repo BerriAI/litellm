@@ -182,9 +182,7 @@ OCR_CONTENT_CASES: Final = (
     _OcrContentCase("mistral-pdf", MistralOcr(), PDF_DOCUMENT, PDF_TEXT),
     _OcrContentCase("mistral-image", MistralOcr(), IMAGE_DOCUMENT, IMAGE_TEXT),
     _OcrContentCase("azure-ai-image", AzureAiOcr(AZURE_AI_OCR_MODEL), IMAGE_DOCUMENT, IMAGE_TEXT),
-    _OcrContentCase(
-        "vertex-mistral-image", VertexOcr(VERTEX_OCR_MODEL, "us-central1"), IMAGE_DOCUMENT, IMAGE_TEXT
-    ),
+    _OcrContentCase("vertex-mistral-image", VertexOcr(VERTEX_OCR_MODEL, "us-central1"), IMAGE_DOCUMENT, IMAGE_TEXT),
     _OcrContentCase("cohere-image", CohereOcr(), IMAGE_DOCUMENT, IMAGE_TEXT),
 )
 
@@ -275,10 +273,7 @@ class TestRustOcrGateway:
 class TestOcrDocumentContent:
     @pytest.mark.parametrize(
         "case",
-        [
-            pytest.param(case, marks=meta(_ocr_subject(case.provider)), id=case.suffix)
-            for case in OCR_CONTENT_CASES
-        ],
+        [pytest.param(case, marks=meta(_ocr_subject(case.provider)), id=case.suffix) for case in OCR_CONTENT_CASES],
     )
     def test_ocr_reads_the_document_and_bills_its_pages(
         self, proxy: ProxyClient, resources: ResourceManager, case: _OcrContentCase

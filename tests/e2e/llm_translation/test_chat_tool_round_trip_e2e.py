@@ -187,7 +187,10 @@ class TestChatToolResultRoundTrip:
             route=Route.CHAT_COMPLETIONS,
             providers=(Provider.ANTHROPIC,),
             models=(ANTHROPIC_BACKEND,),
-            capabilities=(Capability.FUNCTION_CALLING, Capability.REASONING,),
+            capabilities=(
+                Capability.FUNCTION_CALLING,
+                Capability.REASONING,
+            ),
             mode=Mode.NONSTREAM,
         )
     )
@@ -201,7 +204,10 @@ class TestChatToolResultRoundTrip:
             route=Route.CHAT_COMPLETIONS,
             providers=(Provider.BEDROCK,),
             models=(BEDROCK_LEGACY_THINKING_BACKEND,),
-            capabilities=(Capability.FUNCTION_CALLING, Capability.REASONING,),
+            capabilities=(
+                Capability.FUNCTION_CALLING,
+                Capability.REASONING,
+            ),
             mode=Mode.NONSTREAM,
         )
     )

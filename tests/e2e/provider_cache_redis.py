@@ -100,7 +100,14 @@ class RedisResponseStore:
     def publish(self, key: str, lease: CaptureLease, payload: bytes) -> bool:
         try:
             result: Final = self.client.eval(
-                PUBLISH, 2, *self.keys(key), lease.token, lease.captured_at_ms, lease.expires_at_ms, payload, self.lifetime_ms,
+                PUBLISH,
+                2,
+                *self.keys(key),
+                lease.token,
+                lease.captured_at_ms,
+                lease.expires_at_ms,
+                payload,
+                self.lifetime_ms,
             )
         except (RedisError, RedisClusterException, OSError):
             return False
@@ -125,9 +132,12 @@ class RedisResponseStore:
 def _redis_commands(url: str, cluster: bool) -> RedisCommands:
     if cluster:
         return cast(
-            RedisCommands, RedisCluster(url=url, socket_timeout=0.25, socket_connect_timeout=0.25, decode_responses=False)
+            RedisCommands,
+            RedisCluster(url=url, socket_timeout=0.25, socket_connect_timeout=0.25, decode_responses=False),
         )
-    return cast(RedisCommands, Redis.from_url(url, socket_timeout=0.25, socket_connect_timeout=0.25, decode_responses=False))
+    return cast(
+        RedisCommands, Redis.from_url(url, socket_timeout=0.25, socket_connect_timeout=0.25, decode_responses=False)
+    )
 
 
 @dataclass(frozen=True, slots=True)

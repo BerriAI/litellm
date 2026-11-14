@@ -166,9 +166,7 @@ def _delete_access_group(client: ManagementClient, access_group: str) -> None:
 
 
 def _create_db_model(client: ManagementClient, resources: ResourceManager, model_name: str) -> str:
-    model_id = client.proxy.create_model(
-        model_name, LiteLLMParamsBody(model=_DUMMY_MODEL, api_key=_DUMMY_API_KEY)
-    )
+    model_id = client.proxy.create_model(model_name, LiteLLMParamsBody(model=_DUMMY_MODEL, api_key=_DUMMY_API_KEY))
     resources.defer(lambda: client.proxy.delete_model(model_id))
     return model_id
 
@@ -223,9 +221,7 @@ class TestModelRoutes:
             route=Route.MODEL_MANAGEMENT,
         )
     )
-    def test_non_admin_key_cannot_add_global_model(
-        self, client: ManagementClient, resources: ResourceManager
-    ) -> None:
+    def test_non_admin_key_cannot_add_global_model(self, client: ManagementClient, resources: ResourceManager) -> None:
         key = client.proxy.generate_key(KeyGenerateBody(models=[]))
         resources.defer(lambda: client.proxy.delete_key(key))
 
@@ -284,11 +280,8 @@ class TestModelRoutes:
             assert response.blocked is expected
             _ = _poll(
                 client.proxy,
-                lambda want=expected: True
-                if _model_blocked_flag(client, model_id) is want
-                else None,
-                f"/model/info never reported blocked={expected} for {model_name!r} "
-                f"after /model/{action}",
+                lambda want=expected: True if _model_blocked_flag(client, model_id) is want else None,
+                f"/model/info never reported blocked={expected} for {model_name!r} after /model/{action}",
             )
 
 
@@ -357,16 +350,12 @@ class TestModelAccessGroupRoutes:
             route=Route.MODEL_MANAGEMENT,
         )
     )
-    def test_new_access_group_tags_the_deployment(
-        self, client: ManagementClient, resources: ResourceManager
-    ) -> None:
+    def test_new_access_group_tags_the_deployment(self, client: ManagementClient, resources: ResourceManager) -> None:
         model_name = f"e2e-mgmt-agmodel-{unique_marker()}"
         _ = _create_db_model(client, resources, model_name)
 
         access_group = f"e2e-mgmt-ag-{unique_marker()}"
-        created = _create_access_group(
-            client, AccessGroupNewBody(access_group=access_group, model_names=[model_name])
-        )
+        created = _create_access_group(client, AccessGroupNewBody(access_group=access_group, model_names=[model_name]))
         resources.defer(lambda: _delete_access_group(client, access_group))
 
         assert created.access_group == access_group, (
@@ -393,16 +382,12 @@ class TestModelAccessGroupRoutes:
             route=Route.MODEL_MANAGEMENT,
         )
     )
-    def test_access_group_info_reports_membership(
-        self, client: ManagementClient, resources: ResourceManager
-    ) -> None:
+    def test_access_group_info_reports_membership(self, client: ManagementClient, resources: ResourceManager) -> None:
         model_name = f"e2e-mgmt-agmodel-{unique_marker()}"
         _ = _create_db_model(client, resources, model_name)
 
         access_group = f"e2e-mgmt-ag-{unique_marker()}"
-        _ = _create_access_group(
-            client, AccessGroupNewBody(access_group=access_group, model_names=[model_name])
-        )
+        _ = _create_access_group(client, AccessGroupNewBody(access_group=access_group, model_names=[model_name]))
         resources.defer(lambda: _delete_access_group(client, access_group))
 
         info = _poll(

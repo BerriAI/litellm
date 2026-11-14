@@ -238,9 +238,7 @@ class TestStandardizedResetTime(unittest.TestCase):
         ),
     ],
 )
-def test_annual_reset_and_window_start(
-    now: datetime, zone: str, reset_time: time, expected: datetime
-) -> None:
+def test_annual_reset_and_window_start(now: datetime, zone: str, reset_time: time, expected: datetime) -> None:
     reset: Final = get_next_standardized_reset_time("12mo", now, zone, reset_time)
     assert reset == expected
     assert get_budget_window_start("12mo", reset) == expected.replace(year=expected.year - 1)
@@ -288,9 +286,7 @@ def test_long_month_spelling_without_a_calendar_schedule_keeps_its_nightly_reset
     ),
 )
 @pytest.mark.parametrize("storage", ("offset", "utc", "naive_utc"))
-def test_annual_window_survives_timestamp_storage(
-    zone: str, reset_at: str, expected: str, storage: str
-) -> None:
+def test_annual_window_survives_timestamp_storage(zone: str, reset_at: str, expected: str, storage: str) -> None:
     reset: Final = datetime.fromisoformat(reset_at)
     stored: Final = {
         "offset": reset,

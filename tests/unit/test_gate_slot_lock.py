@@ -324,7 +324,11 @@ def test_direct_make_lint_takes_a_slot_before_any_setup(tmp_path: Path) -> None:
     )
     (tmp_path / "Makefile").write_text((ROOT / "Makefile").read_text())
     command = [
-        "make", "-o", "lint-checks", "lint", "MAKE=make -o lint-checks",
+        "make",
+        "-o",
+        "lint-checks",
+        "lint",
+        "MAKE=make -o lint-checks",
         f"GATE_SLOT_LOCK={shlex.join([sys.executable, str(HELPER)])}",
         f"UV={shlex.join([sys.executable, str(probe), 'setup'])}",
         f"UV_RUN={shlex.join([sys.executable, str(probe), 'setup'])}",
@@ -333,7 +337,10 @@ def test_direct_make_lint_takes_a_slot_before_any_setup(tmp_path: Path) -> None:
     with (lock_dir / "slot-0.lock").open("wb") as held, stderr_file.open("wb") as stderr:
         fcntl.flock(held, fcntl.LOCK_EX)
         process = subprocess.Popen(
-            command, cwd=tmp_path, stdout=subprocess.DEVNULL, stderr=stderr,
+            command,
+            cwd=tmp_path,
+            stdout=subprocess.DEVNULL,
+            stderr=stderr,
             env={**_env(lock_dir, "1"), "EVENTS_FILE": str(events_file)},
         )
         try:

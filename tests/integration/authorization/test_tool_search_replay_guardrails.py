@@ -102,8 +102,9 @@ def guarded(session_gateway: Gateway, tmp_path_factory: pytest.TempPathFactory) 
     try:
         with (
             wire_server(ts.scripted) as wire,
-            owned_proxy(session_gateway, directory, {}, config=_config(directory, model, wire.url, shell), workers=2)
-            as proxy,
+            owned_proxy(
+                session_gateway, directory, {}, config=_config(directory, model, wire.url, shell), workers=2
+            ) as proxy,
         ):
             yield _Guarded(proxy, wire, model, shell, blocked)
     finally:

@@ -552,9 +552,7 @@ class TestCappedLoopReturnsTerminalResponse:
         assert fingerprints == []
         assert max_loops >= 1
 
-        depth, max_loops, fingerprints = BaseLLMHTTPHandler._get_agentic_loop_settings(
-            kwargs={"max_agentic_loops": 1}
-        )
+        depth, max_loops, fingerprints = BaseLLMHTTPHandler._get_agentic_loop_settings(kwargs={"max_agentic_loops": 1})
 
         assert max_loops == 1
         assert BaseLLMHTTPHandler._check_agentic_loop_safety(
@@ -897,7 +895,10 @@ class TestFailedSearchEndsTheTurn:
             "text",
         ]
         assert result["content"][0]["input"] == {"query": "fails"}
-        assert result["content"][1]["content"] == {"type": "web_search_tool_result_error", "error_code": "too_many_requests"}
+        assert result["content"][1]["content"] == {
+            "type": "web_search_tool_result_error",
+            "error_code": "too_many_requests",
+        }
         assert result["content"][2]["input"] == {"query": "works"}
         assert result["content"][3]["content"][0]["url"] == "https://example.com"
 
@@ -1146,9 +1147,7 @@ class TestRebuiltStreamIsWellFormed:
     def test_search_blocks_reach_the_client(self):
         events = _stream_events(self._capped_search_turn())
 
-        started_types = [
-            event["content_block"]["type"] for event in events if event["type"] == "content_block_start"
-        ]
+        started_types = [event["content_block"]["type"] for event in events if event["type"] == "content_block_start"]
 
         assert started_types == ["server_tool_use", "web_search_tool_result", "text"]
 
@@ -1158,8 +1157,7 @@ class TestRebuiltStreamIsWellFormed:
         result_block = next(
             event["content_block"]
             for event in events
-            if event["type"] == "content_block_start"
-            and event["content_block"]["type"] == "web_search_tool_result"
+            if event["type"] == "content_block_start" and event["content_block"]["type"] == "web_search_tool_result"
         )
 
         assert result_block["tool_use_id"] == "srvtoolu_01"

@@ -131,9 +131,7 @@ def _register_refusing_group(proxy: ProxyClient, resources: ResourceManager, nam
 
 def _transcript(turns: int) -> tuple[ChatMessage, ...]:
     return tuple(
-        ChatMessage(role=role, content=f"turn {turn} {role}")
-        for turn in range(turns)
-        for role in ("user", "assistant")
+        ChatMessage(role=role, content=f"turn {turn} {role}") for turn in range(turns) for role in ("user", "assistant")
     )
 
 

@@ -177,9 +177,7 @@ class BatchClient:
         )
 
     @step("Retrieve the uploaded file")
-    def retrieve_file(
-        self, file_id: str, *, key: str, provider: str | None = None
-    ) -> Result[FileObject]:
+    def retrieve_file(self, file_id: str, *, key: str, provider: str | None = None) -> Result[FileObject]:
         return self.proxy.transport.get(
             f"{_files_path(provider)}/{file_id}",
             headers=self.proxy.transport.bearer(key),
@@ -197,9 +195,7 @@ class BatchClient:
         )
 
     @step("Create a batch of {body.endpoint} requests from the uploaded file")
-    def create_batch(
-        self, *, body: BatchCreateBody, key: str, provider: str | None = None
-    ) -> StreamingResponse:
+    def create_batch(self, *, body: BatchCreateBody, key: str, provider: str | None = None) -> StreamingResponse:
         return self.proxy.transport.send(
             _batches_path(provider),
             headers=self.proxy.transport.bearer(key),
@@ -207,9 +203,7 @@ class BatchClient:
         )
 
     @step("Retrieve the batch")
-    def retrieve_batch(
-        self, batch_id: str, *, key: str, provider: str | None = None
-    ) -> Result[BatchObject]:
+    def retrieve_batch(self, batch_id: str, *, key: str, provider: str | None = None) -> Result[BatchObject]:
         return self.proxy.transport.get(
             f"{_batches_path(provider)}/{batch_id}",
             headers=self.proxy.transport.bearer(key),
@@ -218,9 +212,7 @@ class BatchClient:
         )
 
     @step("Cancel the batch")
-    def cancel_batch(
-        self, batch_id: str, *, key: str, provider: str | None = None
-    ) -> Result[BatchObject]:
+    def cancel_batch(self, batch_id: str, *, key: str, provider: str | None = None) -> Result[BatchObject]:
         return self.proxy.transport.post(
             f"{_batches_path(provider)}/{batch_id}/cancel",
             headers=self.proxy.transport.bearer(key),
@@ -245,9 +237,7 @@ class BatchClient:
         )
 
     @step("Delete the uploaded file")
-    def delete_file(
-        self, file_id: str, *, key: str, provider: str | None = None
-    ) -> Result[FileDeleteResponse]:
+    def delete_file(self, file_id: str, *, key: str, provider: str | None = None) -> Result[FileDeleteResponse]:
         return self.proxy.transport.delete(
             f"{_files_path(provider)}/{file_id}",
             headers=self.proxy.transport.bearer(key),

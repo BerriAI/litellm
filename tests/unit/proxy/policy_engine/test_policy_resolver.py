@@ -31,9 +31,7 @@ class TestPolicyResolverInheritance:
             ),
         }
 
-        resolved = PolicyResolver.resolve_policy_guardrails(
-            policy_name="global", policies=policies
-        )
+        resolved = PolicyResolver.resolve_policy_guardrails(policy_name="global", policies=policies)
 
         assert set(resolved.guardrails) == {"pii_blocker", "toxicity_filter"}
         assert resolved.inheritance_chain == ["global"]
@@ -50,9 +48,7 @@ class TestPolicyResolverInheritance:
             ),
         }
 
-        resolved = PolicyResolver.resolve_policy_guardrails(
-            policy_name="healthcare", policies=policies
-        )
+        resolved = PolicyResolver.resolve_policy_guardrails(policy_name="healthcare", policies=policies)
 
         # Healthcare inherits pii_blocker from base and adds hipaa_audit
         assert set(resolved.guardrails) == {"pii_blocker", "hipaa_audit"}
@@ -66,15 +62,11 @@ class TestPolicyResolverInheritance:
             ),
             "dev": Policy(
                 inherit="base",
-                guardrails=PolicyGuardrails(
-                    add=["toxicity_filter"], remove=["phi_blocker"]
-                ),
+                guardrails=PolicyGuardrails(add=["toxicity_filter"], remove=["phi_blocker"]),
             ),
         }
 
-        resolved = PolicyResolver.resolve_policy_guardrails(
-            policy_name="dev", policies=policies
-        )
+        resolved = PolicyResolver.resolve_policy_guardrails(policy_name="dev", policies=policies)
 
         # dev inherits pii_blocker from base, adds toxicity_filter, removes phi_blocker
         assert "pii_blocker" in resolved.guardrails
@@ -97,9 +89,7 @@ class TestPolicyResolverInheritance:
             ),
         }
 
-        resolved = PolicyResolver.resolve_policy_guardrails(
-            policy_name="leaf", policies=policies
-        )
+        resolved = PolicyResolver.resolve_policy_guardrails(policy_name="leaf", policies=policies)
 
         assert set(resolved.guardrails) == {
             "root_guardrail",
@@ -191,9 +181,7 @@ class TestPolicyResolverWithConditions:
         assert "child_guardrail" in resolved_gpt4.guardrails
 
         # GPT-3.5 should only get base guardrails (child condition doesn't match)
-        context_gpt35 = PolicyMatchContext(
-            team_alias="t", key_alias="k", model="gpt-3.5"
-        )
+        context_gpt35 = PolicyMatchContext(team_alias="t", key_alias="k", model="gpt-3.5")
         resolved_gpt35 = PolicyResolver.resolve_policy_guardrails(
             policy_name="child",
             policies=policies,

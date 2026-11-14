@@ -4172,12 +4172,26 @@ def test_jsonrpc_text_has_top_level_method_ignores_nested_method():
     ("text", "method"),
     [
         pytest.param('{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}', "tools/list", id="complete"),
-        pytest.param('{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{"cursor":"' + "c" * 5000, "tools/list", id="cut-after-method"),
+        pytest.param(
+            '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{"cursor":"' + "c" * 5000,
+            "tools/list",
+            id="cut-after-method",
+        ),
         pytest.param('{"jsonrpc":"2.0","params":{"cursor":"' + "c" * 5000, None, id="cut-before-method"),
         pytest.param('{"jsonrpc":"2.0","id":1,"method":"tools/li', None, id="cut-inside-method"),
-        pytest.param('{"jsonrpc":"2.0","params":{"method":"tools/list"},"method":"ping"}', "ping", id="nested-method-first"),
-        pytest.param('{"jsonrpc":"2.0","id":1,"method":"tools\\/list","params":{"cursor":"' + "c" * 5000, "tools/list", id="escaped-slash"),
-        pytest.param('{"jsonrpc":"2.0","id":1,"method":"\\u0074ools/list","params":{"cursor":"' + "c" * 5000, "tools/list", id="unicode-escape"),
+        pytest.param(
+            '{"jsonrpc":"2.0","params":{"method":"tools/list"},"method":"ping"}', "ping", id="nested-method-first"
+        ),
+        pytest.param(
+            '{"jsonrpc":"2.0","id":1,"method":"tools\\/list","params":{"cursor":"' + "c" * 5000,
+            "tools/list",
+            id="escaped-slash",
+        ),
+        pytest.param(
+            '{"jsonrpc":"2.0","id":1,"method":"\\u0074ools/list","params":{"cursor":"' + "c" * 5000,
+            "tools/list",
+            id="unicode-escape",
+        ),
         pytest.param('{"jsonrpc":"2.0","id":1,"method":"bad\\x","params":{}}', None, id="invalid-escape"),
         pytest.param('{"jsonrpc":"2.0","id":1,"method":7,"params":{}}', None, id="not-a-string"),
         pytest.param('{"jsonrpc":"2.0","id":1,"result":{"method":"tools/list"}}', None, id="response"),

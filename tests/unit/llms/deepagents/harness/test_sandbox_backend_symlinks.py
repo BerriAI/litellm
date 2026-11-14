@@ -73,6 +73,8 @@ async def test_write_into_new_nested_directory_is_allowed(tmp_path: Path) -> Non
 
 
 async def test_write_under_symlinked_dir_is_refused(repo_with_escape_links: Path) -> None:
-    b = backend.SandboxBackend(LocalSandbox(str(repo_with_escape_links)), loop=asyncio.get_running_loop(), writable=True)
+    b = backend.SandboxBackend(
+        LocalSandbox(str(repo_with_escape_links)), loop=asyncio.get_running_loop(), writable=True
+    )
     result = await b.awrite("/home_link/new_dir/evil.txt", "x")
     assert result.error and "outside the workspace" in result.error

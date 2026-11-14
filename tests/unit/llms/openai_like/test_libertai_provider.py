@@ -85,9 +85,7 @@ class TestLibertAIProviderConfig:
 
         import litellm as _litellm
 
-        backup_path = (
-            Path(_litellm.__file__).parent / "provider_endpoints_support_backup.json"
-        )
+        backup_path = Path(_litellm.__file__).parent / "provider_endpoints_support_backup.json"
         matrix = json.loads(backup_path.read_text())
 
         assert "libertai" in matrix["providers"]

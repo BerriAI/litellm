@@ -107,9 +107,7 @@ async def test_aws_polly_tts_with_native_voice():
     mock_httpx_response.status_code = 200
     mock_httpx_response.headers = {"content-type": "audio/mpeg"}
 
-    with patch(
-        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post"
-    ) as mock_post:
+    with patch("litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post") as mock_post:
         mock_post.return_value = mock_httpx_response
 
         response = await litellm.aspeech(
@@ -184,9 +182,7 @@ async def test_aws_polly_tts_with_openai_voice_mapping():
     mock_httpx_response.status_code = 200
     mock_httpx_response.headers = {"content-type": "audio/mpeg"}
 
-    with patch(
-        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post"
-    ) as mock_post:
+    with patch("litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post") as mock_post:
         mock_post.return_value = mock_httpx_response
 
         response = await litellm.aspeech(
@@ -230,9 +226,7 @@ async def test_aws_polly_tts_with_ssml():
 
     ssml_input = '<speak>Hello, <break time="500ms"/> this is SSML.</speak>'
 
-    with patch(
-        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post"
-    ) as mock_post:
+    with patch("litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post") as mock_post:
         mock_post.return_value = mock_httpx_response
 
         response = await litellm.aspeech(

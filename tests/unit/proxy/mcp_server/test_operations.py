@@ -584,9 +584,7 @@ async def test_legacy_adapter_cleans_context_after_cancelled_operation():
             assert active_mcp_request_ctx_var.get() is request
             raise asyncio.CancelledError
 
-    with patch(
-        "litellm.proxy.mcp_server.server.get_or_extract_auth_context", AsyncMock(return_value=auth)
-    ):
+    with patch("litellm.proxy.mcp_server.server.get_or_extract_auth_context", AsyncMock(return_value=auth)):
         with pytest.raises(asyncio.CancelledError):
             await cancelled_operation()
     assert server.active_mcp_session_var.get() is previous_session
@@ -2240,9 +2238,15 @@ async def test_discovery_optional_probes_use_remaining_listing_budget(delay, mon
         patch.object(operations, "_execute_handle_list_tools", side_effect=tools),
         patch.object(operations, "_execute_list_prompts", return_value=ListPromptsResult(prompts=[])),
         patch.object(operations, "_execute_list_resources", return_value=ListResourcesResult(resources=[])),
-        patch.object(operations, "_execute_list_resource_templates", return_value=ListResourceTemplatesResult(resource_templates=[])),
+        patch.object(
+            operations,
+            "_execute_list_resource_templates",
+            return_value=ListResourceTemplatesResult(resource_templates=[]),
+        ),
         patch.object(operations, "_mcp_server_rate_limit_rejection", return_value=None),
-        patch.object(subscriptions, "_targets", side_effect=blocked if delay == "target" else None, return_value=(target,)) as targets,
+        patch.object(
+            subscriptions, "_targets", side_effect=blocked if delay == "target" else None, return_value=(target,)
+        ) as targets,
     ):
         context = prepare_context(UserAPIKeyAuth(user_id="scoped"), protocol_version="2026-07-28")
         result = await asyncio.wait_for(GatewayOperations().execute(DiscoverRequest(), context), 0.5)

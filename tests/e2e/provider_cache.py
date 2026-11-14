@@ -35,9 +35,7 @@ LIFETIME_SECONDS: Final = 86_400
 MAX_REQUEST_BYTES: Final = 256 * 1024
 MAX_RESPONSE_BYTES: Final = 8 * 1024 * 1024
 UNRECORDED_RESPONSE_HEADERS: Final = frozenset({"set-cookie"})
-SIGNATURE_HEADERS: Final = frozenset(
-    {"authorization", "x-amz-date", "x-amz-security-token", "x-amz-content-sha256"}
-)
+SIGNATURE_HEADERS: Final = frozenset({"authorization", "x-amz-date", "x-amz-security-token", "x-amz-content-sha256"})
 BEDROCK_MOUNT_PREFIX: Final = "bedrock"
 BEDROCK_CONVERSE_SUFFIX: Final = "/converse"
 BEDROCK_INVOKE_SUFFIX: Final = "/invoke"
@@ -154,12 +152,21 @@ def canonical_body(body: bytes) -> bytes:
 
 
 def request_identity(
-    secret: bytes, test_key: str, method: str, url: str, headers: Mapping[str, str], body: bytes | None,
+    secret: bytes,
+    test_key: str,
+    method: str,
+    url: str,
+    headers: Mapping[str, str],
+    body: bytes | None,
 ) -> str:
     fields: Final = (
-        b"provider-cache-canonical-v2", test_key.encode(), method.encode(), canonical_text(url).encode(),
+        b"provider-cache-canonical-v2",
+        test_key.encode(),
+        method.encode(),
+        canonical_text(url).encode(),
         *(part.encode() for pair in sorted(headers.items()) for part in pair),
-        b"no-body" if body is None else b"body", b"" if body is None else canonical_body(body),
+        b"no-body" if body is None else b"body",
+        b"" if body is None else canonical_body(body),
     )
     encoded: Final = b"".join(len(part).to_bytes(8, "big") + part for part in fields)
     return hmac.new(secret, encoded, hashlib.sha256).hexdigest()
@@ -195,7 +202,8 @@ def successful_response(mount: str, url: str, status: int, headers: Mapping[str,
                 return False
             events: Final = tuple(
                 "\n".join(line[5:].removeprefix(" ") for line in event.split("\n") if line.startswith("data:"))
-                for event in text.split("\n\n") if any(line.startswith("data:") for line in event.split("\n"))
+                for event in text.split("\n\n")
+                if any(line.startswith("data:") for line in event.split("\n"))
             )
             values: Final = tuple(JSON_VALUE.validate_json(event) for event in events if event != "[DONE]")
         except (UnicodeDecodeError, ValidationError):
@@ -218,19 +226,34 @@ def successful_response(mount: str, url: str, status: int, headers: Mapping[str,
         return False
     path: Final = urlsplit(url).path
     if path == "/v1/messages":
-        return value.get("type") == "message" and isinstance(value.get("content"), list) and isinstance(value.get("stop_reason"), str)
+        return (
+            value.get("type") == "message"
+            and isinstance(value.get("content"), list)
+            and isinstance(value.get("stop_reason"), str)
+        )
     if path == "/v1/embeddings":
         data: Final = value.get("data")
-        return isinstance(data, list) and bool(data) and isinstance(value.get("usage"), dict) and all(
-            isinstance(item, dict) and isinstance(item.get("embedding"), list) and bool(item["embedding"])
-            for item in data
+        return (
+            isinstance(data, list)
+            and bool(data)
+            and isinstance(value.get("usage"), dict)
+            and all(
+                isinstance(item, dict) and isinstance(item.get("embedding"), list) and bool(item["embedding"])
+                for item in data
+            )
         )
     if path == "/v1/responses":
         return value.get("object") == "response" and value.get("status") == "completed"
     choices: Final = value.get("choices")
-    return isinstance(choices, list) and bool(choices) and all(
-        isinstance(choice, dict) and isinstance(choice.get("message"), dict) and isinstance(choice.get("finish_reason"), str)
-        for choice in choices
+    return (
+        isinstance(choices, list)
+        and bool(choices)
+        and all(
+            isinstance(choice, dict)
+            and isinstance(choice.get("message"), dict)
+            and isinstance(choice.get("finish_reason"), str)
+            for choice in choices
+        )
     )
 
 
@@ -290,10 +313,7 @@ def eventstream_events(body: bytes) -> tuple[tuple[str, JsonValue], ...] | None:
     buffer: Final = EventStreamBuffer()
     buffer.add_data(body)
     try:
-        return tuple(
-            (event_type(event.headers), JSON_VALUE.validate_json(event.payload))
-            for event in buffer
-        )
+        return tuple((event_type(event.headers), JSON_VALUE.validate_json(event.payload)) for event in buffer)
     except (ParserError, ValidationError, ValueError):
         return None
 
@@ -354,11 +374,15 @@ def complete_anthropic_stream(values: tuple[JsonValue, ...]) -> bool:
     first: Final = values[0]
     last: Final = values[-1]
     return (
-        isinstance(first, dict) and first.get("type") == "message_start"
-        and isinstance(last, dict) and last.get("type") == "message_stop"
+        isinstance(first, dict)
+        and first.get("type") == "message_start"
+        and isinstance(last, dict)
+        and last.get("type") == "message_stop"
         and any(
-            isinstance(value, dict) and value.get("type") == "message_delta"
-            and isinstance(delta := value.get("delta"), dict) and isinstance(delta.get("stop_reason"), str)
+            isinstance(value, dict)
+            and value.get("type") == "message_delta"
+            and isinstance(delta := value.get("delta"), dict)
+            and isinstance(delta.get("stop_reason"), str)
             for value in values
         )
     )
@@ -376,25 +400,38 @@ def complete_chat_stream(values: tuple[JsonValue, ...]) -> bool:
     if any(not isinstance(value, dict) or not isinstance(value.get("choices"), list) for value in values):
         return False
     choices: Final = tuple(
-        choice for value in values if isinstance(value, dict)
-        if isinstance(items := value.get("choices"), list) for choice in items
+        choice
+        for value in values
+        if isinstance(value, dict)
+        if isinstance(items := value.get("choices"), list)
+        for choice in items
     )
     if not choices or any(
-        not isinstance(choice, dict) or type(choice.get("index")) is not int
+        not isinstance(choice, dict)
+        or type(choice.get("index")) is not int
         or not isinstance(choice.get("delta"), dict)
         for choice in choices
     ):
         return False
     indices: Final = frozenset(choice["index"] for choice in choices if isinstance(choice, dict))
     return all(
-        isinstance(tuple(choice for choice in choices if isinstance(choice, dict) and choice["index"] == index)[-1].get("finish_reason"), str)
+        isinstance(
+            tuple(choice for choice in choices if isinstance(choice, dict) and choice["index"] == index)[-1].get(
+                "finish_reason"
+            ),
+            str,
+        )
         for index in indices
     )
 
 
 def encode_response(secret: bytes, response: CachedResponse) -> bytes:
     raw: Final = response.model_dump_json()
-    return SignedResponse(response=raw, signature=hmac.new(secret, raw.encode(), hashlib.sha256).hexdigest()).model_dump_json().encode()
+    return (
+        SignedResponse(response=raw, signature=hmac.new(secret, raw.encode(), hashlib.sha256).hexdigest())
+        .model_dump_json()
+        .encode()
+    )
 
 
 def decode_response(secret: bytes, key: str, payload: bytes, mount: str, url: str) -> CachedResponse | None:
@@ -402,7 +439,9 @@ def decode_response(secret: bytes, key: str, payload: bytes, mount: str, url: st
         return None
     try:
         signed: Final = SignedResponse.model_validate_json(payload)
-        if not hmac.compare_digest(signed.signature.encode(), hmac.new(secret, signed.response.encode(), hashlib.sha256).hexdigest().encode()):
+        if not hmac.compare_digest(
+            signed.signature.encode(), hmac.new(secret, signed.response.encode(), hashlib.sha256).hexdigest().encode()
+        ):
             return None
         response: Final = CachedResponse.model_validate_json(signed.response)
         chunks: Final = tuple(base64.b64decode(chunk, validate=True) for chunk in response.chunks)
@@ -416,7 +455,11 @@ def decode_response(secret: bytes, key: str, payload: bytes, mount: str, url: st
 
 
 def component_digests(
-    test_key: str, method: str, url: str, headers: Mapping[str, str], body: bytes | None,
+    test_key: str,
+    method: str,
+    url: str,
+    headers: Mapping[str, str],
+    body: bytes | None,
 ) -> dict[str, str]:
     """Per-component digests of everything the key covers.
 
@@ -542,14 +585,22 @@ class CacheEdge:
         self.counters.increment(f"mount:{mount}:{name}")
 
     def record_key(
-        self, mount: str, outcome: str, test_key: str, method: str, url: str,
-        headers: Mapping[str, str], body: bytes | None,
+        self,
+        mount: str,
+        outcome: str,
+        test_key: str,
+        method: str,
+        url: str,
+        headers: Mapping[str, str],
+        body: bytes | None,
     ) -> None:
         if not os.environ.get("E2E_PROVIDER_CACHE_METRICS_DIR"):
             return
         self.probe.observe(mount, outcome, component_digests(test_key, method, url, headers, body))
 
-    def outbound(self, mount: str, method: str, url: str, headers: dict[str, str], body: bytes | None) -> dict[str, str]:
+    def outbound(
+        self, mount: str, method: str, url: str, headers: dict[str, str], body: bytes | None
+    ) -> dict[str, str]:
         """The headers actually sent upstream. A signing mount gets a signature
         minted over the upstream URL, because the edge rewrote the Host the proxy
         signed and the provider verifies it."""
@@ -566,14 +617,25 @@ class CacheEdge:
         return {name: value for name, value in headers.items() if name.lower() not in unkeyed}
 
     def forward(
-        self, mount: str, method: str, url: str, headers: dict[str, str], body: bytes | None, timeout: float,
-        *, test_key: str | None,
+        self,
+        mount: str,
+        method: str,
+        url: str,
+        headers: dict[str, str],
+        body: bytes | None,
+        timeout: float,
+        *,
+        test_key: str | None,
     ) -> StreamHead | NetworkError:
         if test_key is None or not cacheable_endpoint(mount, method, url, body):
             self.count(mount, "bypass")
             self.count(mount, "upstream_attempts")
             return forward_stream(
-                method, url, headers=self.outbound(mount, method, url, headers, body), body=body, timeout=timeout,
+                method,
+                url,
+                headers=self.outbound(mount, method, url, headers, body),
+                body=body,
+                timeout=timeout,
             )
         prepared: Final = prepare_forward(method, url, self.outbound(mount, method, url, headers, body), body)
         if isinstance(prepared, NetworkError):
@@ -605,11 +667,18 @@ class CacheEdge:
             self.reject(mount, UNREACHABLE)
             return head
         return StreamHead(
-            head.status_code, head.headers, primed_steps(self.capture(mount, key, capture_slot, url, head)),
+            head.status_code,
+            head.headers,
+            primed_steps(self.capture(mount, key, capture_slot, url, head)),
         )
 
     def capture(
-        self, mount: str, key: str, lease: CaptureLease, url: str, head: StreamHead,
+        self,
+        mount: str,
+        key: str,
+        lease: CaptureLease,
+        url: str,
+        head: StreamHead,
     ) -> Generator[StreamStep, None, None]:
         capture: Final = ResponseCapture()
         reason = CUT_SHORT  # rebind-ok: a consumer that walks away never reaches the settle call below
@@ -626,7 +695,13 @@ class CacheEdge:
             capture.buffer.close()
 
     def settle(
-        self, mount: str, key: str, lease: CaptureLease, url: str, head: StreamHead, capture: ResponseCapture,
+        self,
+        mount: str,
+        key: str,
+        lease: CaptureLease,
+        url: str,
+        head: StreamHead,
+        capture: ResponseCapture,
     ) -> str | None:
         """None once the response is stored, otherwise the reason it was not."""
         if not capture.eligible:
@@ -640,7 +715,9 @@ class CacheEdge:
         if not successful_response(mount, url, head.status_code, headers, b"".join(chunks)):
             return INCOMPLETE
         response: Final = CachedResponse(
-            request_key=key, status_code=head.status_code, headers=headers,
+            request_key=key,
+            status_code=head.status_code,
+            headers=headers,
             chunks=tuple(base64.b64encode(chunk).decode("ascii") for chunk in chunks),
         )
         published: Final = self.store.publish(key, lease, encode_response(self.secret, response))

@@ -83,7 +83,10 @@ def _has_block_type(
         route=Route.MESSAGES,
         providers=(Provider.BEDROCK,),
         models=tuple(BEDROCK_CONVERSE_MODELS),
-        capabilities=(Capability.REASONING, Capability.FUNCTION_CALLING,),
+        capabilities=(
+            Capability.REASONING,
+            Capability.FUNCTION_CALLING,
+        ),
         mode=Mode.NONSTREAM,
     )
 )

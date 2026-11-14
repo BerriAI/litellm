@@ -591,7 +591,9 @@ def test_failing_or_transforming_failure_callbacks_never_change_the_denial_respo
     with hostile.proxy.scenario() as scenario:
         caller: Final = _caller(hostile, scenario)
         response: Final = _send(hostile, caller.key, f"/a2a/{target}", request_id=request_id)
-        expected: Final = (403, _refusal(target, response)) if outcome == "denied" else (404, _not_found(request_id, unknown))
+        expected: Final = (
+            (403, _refusal(target, response)) if outcome == "denied" else (404, _not_found(request_id, unknown))
+        )
         assert (response.status_code, response.content) == expected
 
 

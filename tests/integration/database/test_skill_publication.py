@@ -23,7 +23,8 @@ def _archive(name: str) -> bytes:
     buffer: Final = io.BytesIO()
     with zipfile.ZipFile(buffer, "w") as archive:
         archive.writestr(
-            "SKILL.md", f"---\nname: {name}\ndescription: Published instructions\n---\nRetain these exact bytes.\n",
+            "SKILL.md",
+            f"---\nname: {name}\ndescription: Published instructions\n---\nRetain these exact bytes.\n",
         )
     return buffer.getvalue()
 
@@ -65,7 +66,10 @@ async def test_snapshot_failure_rolls_back_catalog_archive_and_history_then_sour
         original_response: Final = gateway.request("GET", archive_path)
         assert original_response.status_code == 200, original_response.text
         published_content: Final = original_response.content
-        with zipfile.ZipFile(io.BytesIO(published_content)) as published, zipfile.ZipFile(io.BytesIO(content)) as uploaded:
+        with (
+            zipfile.ZipFile(io.BytesIO(published_content)) as published,
+            zipfile.ZipFile(io.BytesIO(content)) as uploaded,
+        ):
             assert published.read("SKILL.md") == uploaded.read("SKILL.md")
         current_path: Final = string_value(object_value(before["source"])["url"])
         original_current: Final = gateway.request("GET", current_path)
@@ -80,22 +84,26 @@ async def test_snapshot_failure_rolls_back_catalog_archive_and_history_then_sour
             connection.execute(
                 sql.SQL(
                     "CREATE FUNCTION {}() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN "
-                    "IF EXISTS (SELECT 1 FROM \"LiteLLM_ClaudeCodePluginTable\" "
+                    'IF EXISTS (SELECT 1 FROM "LiteLLM_ClaudeCodePluginTable" '
                     "WHERE id = NEW.plugin_id AND name = {}) THEN PERFORM nextval({}); "
                     "RAISE EXCEPTION 'publication snapshot failure'; END IF; RETURN NEW; END $$"
                 ).format(sql.Identifier(function), sql.Literal(name), sql.Literal(witness))
             )
             failure.callback(connection.execute, sql.SQL("DROP FUNCTION {}()").format(sql.Identifier(function)))
             connection.execute(
-                sql.SQL('CREATE TRIGGER {} BEFORE INSERT ON "LiteLLM_ClaudeCodePluginVersion" '
-                        "FOR EACH ROW EXECUTE FUNCTION {}()").format(sql.Identifier(trigger), sql.Identifier(function))
+                sql.SQL(
+                    'CREATE TRIGGER {} BEFORE INSERT ON "LiteLLM_ClaudeCodePluginVersion" '
+                    "FOR EACH ROW EXECUTE FUNCTION {}()"
+                ).format(sql.Identifier(trigger), sql.Identifier(function))
             )
             failure.callback(
                 connection.execute,
                 sql.SQL('DROP TRIGGER {} ON "LiteLLM_ClaudeCodePluginVersion"').format(sql.Identifier(trigger)),
             )
             rejected: Final = gateway.request(
-                "PUT", path, {"source": {"source": "github", "repo": "example/changed"}, "description": "must roll back"},
+                "PUT",
+                path,
+                {"source": {"source": "github", "repo": "example/changed"}, "description": "must roll back"},
             )
             assert rejected.status_code == 500, rejected.text
             assert connection.execute(
@@ -106,7 +114,9 @@ async def test_snapshot_failure_rolls_back_catalog_archive_and_history_then_sour
             current_archive: Final = gateway.request("GET", current_path)
             assert current_archive.status_code == 200 and current_archive.content == original_current.content
         updated: Final = gateway.request(
-            "PUT", path, {"source": {"source": "github", "repo": "example/changed"}},
+            "PUT",
+            path,
+            {"source": {"source": "github", "repo": "example/changed"}},
         )
         assert updated.status_code == 200, updated.text
         after: Final = gateway.get(history_path)
@@ -116,9 +126,7 @@ async def test_snapshot_failure_rolls_back_catalog_archive_and_history_then_sour
         assert versions[1]["content_kind"] == "stored_archive"
         retained: Final = gateway.request("GET", archive_path)
         assert retained.status_code == 200 and retained.content == published_content
-        assert read_rows(
-            'SELECT plugin_name FROM "LiteLLM_ClaudeCodePluginUpload" WHERE plugin_name=%s', (name,)
-        ) == []
+        assert read_rows('SELECT plugin_name FROM "LiteLLM_ClaudeCodePluginUpload" WHERE plugin_name=%s', (name,)) == []
         assert snapshot in await repository.versions(metadata, 100, 0)
         assert await repository.version(metadata, snapshot.id) == snapshot
         assert await repository.version_content(metadata, snapshot.id) == snapshot_bytes
@@ -146,7 +154,9 @@ def test_neutral_publication_preserves_portable_files_and_atomic_metadata_histor
             archive.writestr(entry, content)
     with ExitStack() as cleanup:
         created: Final = gateway.request_multipart(
-            "/skill-hub/skills/upload", {}, {"file": ("skill.zip", buffer.getvalue(), "application/zip")},
+            "/skill-hub/skills/upload",
+            {},
+            {"file": ("skill.zip", buffer.getvalue(), "application/zip")},
         )
         assert created.status_code == 200, created.text
         cleanup.callback(_delete, gateway, name)
@@ -166,7 +176,8 @@ def test_neutral_publication_preserves_portable_files_and_atomic_metadata_histor
 
         def publish(index: int) -> int:
             response: Final = gateway.request(
-                "PUT", path,
+                "PUT",
+                path,
                 {"description": f"Registry edit {index}", "expected_updated_at": before["updated_at"]},
             )
             if response.status_code == 200:

@@ -1416,7 +1416,9 @@ def test_completion_merges_leading_system_and_developer_messages_for_chat_templa
                 "object": "chat.completion",
                 "created": 1677652288,
                 "model": "my-custom-model",
-                "choices": [{"index": 0, "message": {"role": "assistant", "content": "Answer"}, "finish_reason": "stop"}],
+                "choices": [
+                    {"index": 0, "message": {"role": "assistant", "content": "Answer"}, "finish_reason": "stop"}
+                ],
                 "usage": {"prompt_tokens": 9, "completion_tokens": 1, "total_tokens": 10},
             },
         )
@@ -1452,7 +1454,9 @@ def test_completion_merges_system_messages_when_one_has_empty_content(respx_mock
                 "object": "chat.completion",
                 "created": 1677652288,
                 "model": "my-custom-model",
-                "choices": [{"index": 0, "message": {"role": "assistant", "content": "Answer"}, "finish_reason": "stop"}],
+                "choices": [
+                    {"index": 0, "message": {"role": "assistant", "content": "Answer"}, "finish_reason": "stop"}
+                ],
                 "usage": {"prompt_tokens": 9, "completion_tokens": 1, "total_tokens": 10},
             },
         )
@@ -1516,19 +1520,12 @@ def test_completions_with_sync_http_handler(monkeypatch):
             extraparam="testpassingextraparam",
         )
 
-        assert (
-            mock_post.call_args.kwargs["headers"]["Content-Type"] == "application/json"
-        )
-        assert (
-            mock_post.call_args.kwargs["headers"]["Authorization"]
-            == f"Bearer {api_key}"
-        )
+        assert mock_post.call_args.kwargs["headers"]["Content-Type"] == "application/json"
+        assert mock_post.call_args.kwargs["headers"]["Authorization"] == f"Bearer {api_key}"
         assert mock_post.call_args.kwargs["url"] == f"{base_url}/chat/completions"
         assert mock_post.call_args.kwargs["stream"] == False
 
-        actual_data = json.loads(
-            mock_post.call_args.kwargs["data"]
-        )  # Deserialize the actual data
+        actual_data = json.loads(mock_post.call_args.kwargs["data"])  # Deserialize the actual data
         expected_data = {
             "model": "dbrx-instruct-071224",
             "messages": messages,
@@ -1558,9 +1555,7 @@ def test_completions_with_async_http_handler(monkeypatch):
 
     messages = [{"role": "user", "content": "How are you?"}]
 
-    with patch.object(
-        AsyncHTTPHandler, "post", return_value=mock_response
-    ) as mock_post:
+    with patch.object(AsyncHTTPHandler, "post", return_value=mock_response) as mock_post:
         response = asyncio.run(
             litellm.acompletion(
                 model="databricks/dbrx-instruct-071224",
@@ -1571,19 +1566,12 @@ def test_completions_with_async_http_handler(monkeypatch):
             )
         )
 
-        assert (
-            mock_post.call_args.kwargs["headers"]["Content-Type"] == "application/json"
-        )
-        assert (
-            mock_post.call_args.kwargs["headers"]["Authorization"]
-            == f"Bearer {api_key}"
-        )
+        assert mock_post.call_args.kwargs["headers"]["Content-Type"] == "application/json"
+        assert mock_post.call_args.kwargs["headers"]["Authorization"] == f"Bearer {api_key}"
         assert mock_post.call_args.kwargs["url"] == f"{base_url}/chat/completions"
         assert mock_post.call_args.kwargs["stream"] == False
 
-        actual_data = json.loads(
-            mock_post.call_args.kwargs["data"]
-        )  # Deserialize the actual data
+        actual_data = json.loads(mock_post.call_args.kwargs["data"])  # Deserialize the actual data
         expected_data = {
             "model": "dbrx-instruct-071224",
             "messages": messages,
@@ -1618,19 +1606,12 @@ def test_completions_streaming_with_sync_http_handler(monkeypatch):
         assert "chatcmpl" in str(response)
         assert len(response) == 4
 
-        assert (
-            mock_post.call_args.kwargs["headers"]["Content-Type"] == "application/json"
-        )
-        assert (
-            mock_post.call_args.kwargs["headers"]["Authorization"]
-            == f"Bearer {api_key}"
-        )
+        assert mock_post.call_args.kwargs["headers"]["Content-Type"] == "application/json"
+        assert mock_post.call_args.kwargs["headers"]["Authorization"] == f"Bearer {api_key}"
         assert mock_post.call_args.kwargs["url"] == f"{base_url}/chat/completions"
         assert mock_post.call_args.kwargs["stream"] == True
 
-        actual_data = json.loads(
-            mock_post.call_args.kwargs["data"]
-        )  # Deserialize the actual data
+        actual_data = json.loads(mock_post.call_args.kwargs["data"])  # Deserialize the actual data
         expected_data = {
             "model": "dbrx-instruct-071224",
             "messages": messages,
@@ -1652,9 +1633,7 @@ def test_completions_streaming_with_async_http_handler(monkeypatch):
     messages = [{"role": "user", "content": "How are you?"}]
     mock_response = mock_http_handler_chat_async_streaming_response()
 
-    with patch.object(
-        AsyncHTTPHandler, "post", return_value=mock_response
-    ) as mock_post:
+    with patch.object(AsyncHTTPHandler, "post", return_value=mock_response) as mock_post:
         response_stream: CustomStreamWrapper = asyncio.run(
             litellm.acompletion(
                 model="databricks/dbrx-instruct-071224",
@@ -1675,19 +1654,12 @@ def test_completions_streaming_with_async_http_handler(monkeypatch):
         assert "chatcmpl" in str(response)
         assert len(response) == 4
 
-        assert (
-            mock_post.call_args.kwargs["headers"]["Content-Type"] == "application/json"
-        )
-        assert (
-            mock_post.call_args.kwargs["headers"]["Authorization"]
-            == f"Bearer {api_key}"
-        )
+        assert mock_post.call_args.kwargs["headers"]["Content-Type"] == "application/json"
+        assert mock_post.call_args.kwargs["headers"]["Authorization"] == f"Bearer {api_key}"
         assert mock_post.call_args.kwargs["url"] == f"{base_url}/chat/completions"
         assert mock_post.call_args.kwargs["stream"] == True
 
-        actual_data = json.loads(
-            mock_post.call_args.kwargs["data"]
-        )  # Deserialize the actual data
+        actual_data = json.loads(mock_post.call_args.kwargs["data"])  # Deserialize the actual data
         expected_data = {
             "model": "dbrx-instruct-071224",
             "messages": messages,
@@ -1750,9 +1722,7 @@ def test_embeddings_with_async_http_handler(monkeypatch):
 
     inputs = ["Hello", "World"]
 
-    with patch.object(
-        AsyncHTTPHandler, "post", return_value=mock_response
-    ) as mock_post:
+    with patch.object(AsyncHTTPHandler, "post", return_value=mock_response) as mock_post:
         response = asyncio.run(
             litellm.aembedding(
                 model="databricks/bge-large-en-v1.5",
@@ -1813,9 +1783,7 @@ async def test_databricks_embeddings(sync_mode, monkeypatch):
                 client=sync_handler,
             )
 
-            openai.types.CreateEmbeddingResponse.model_validate(
-                response.model_dump(), strict=True
-            )
+            openai.types.CreateEmbeddingResponse.model_validate(response.model_dump(), strict=True)
 
             mock_post.assert_called_once_with(
                 f"{base_url}/embeddings",
@@ -1834,9 +1802,7 @@ async def test_databricks_embeddings(sync_mode, monkeypatch):
             )
     else:
         async_handler = AsyncHTTPHandler()
-        with patch.object(
-            AsyncHTTPHandler, "post", return_value=mock_response
-        ) as mock_post:
+        with patch.object(AsyncHTTPHandler, "post", return_value=mock_response) as mock_post:
             response = await litellm.aembedding(
                 model="databricks/databricks-bge-large-en",
                 input=inputs,
@@ -1844,9 +1810,7 @@ async def test_databricks_embeddings(sync_mode, monkeypatch):
                 client=async_handler,
             )
 
-            openai.types.CreateEmbeddingResponse.model_validate(
-                response.model_dump(), strict=True
-            )
+            openai.types.CreateEmbeddingResponse.model_validate(response.model_dump(), strict=True)
 
             mock_post.assert_called_once_with(
                 f"{base_url}/embeddings",
@@ -1874,9 +1838,7 @@ def test_completion_with_prompt_caching_anthropic_model_repeat(monkeypatch):
     sync_handler = HTTPHandler()
     mock_response = Mock(spec=httpx.Response)
     mock_response.status_code = 200
-    mock_response.json.return_value = (
-        mock_chat_response_anthropic_prompt_caching_repeat()
-    )
+    mock_response.json.return_value = mock_chat_response_anthropic_prompt_caching_repeat()
 
     mock_text = "example text" * 512
     messages = [
@@ -1909,13 +1871,8 @@ def test_completion_with_prompt_caching_anthropic_model_repeat(monkeypatch):
             temperature=0.5,
             extraparam="testpassingextraparam",
         )
-        assert (
-            mock_post.call_args.kwargs["headers"]["Content-Type"] == "application/json"
-        )
-        assert (
-            mock_post.call_args.kwargs["headers"]["Authorization"]
-            == f"Bearer {api_key}"
-        )
+        assert mock_post.call_args.kwargs["headers"]["Content-Type"] == "application/json"
+        assert mock_post.call_args.kwargs["headers"]["Authorization"] == f"Bearer {api_key}"
         assert mock_post.call_args.kwargs["url"] == f"{base_url}/chat/completions"
         assert mock_post.call_args.kwargs["stream"] == False
 
@@ -1971,25 +1928,21 @@ def test_completion_with_prompt_caching_nonanthropic_model(monkeypatch):
             temperature=0.5,
             extraparam="testpassingextraparam",
         )
-        assert (
-            mock_post.call_args.kwargs["headers"]["Content-Type"] == "application/json"
-        )
-        assert (
-            mock_post.call_args.kwargs["headers"]["Authorization"]
-            == f"Bearer {api_key}"
-        )
+        assert mock_post.call_args.kwargs["headers"]["Content-Type"] == "application/json"
+        assert mock_post.call_args.kwargs["headers"]["Authorization"] == f"Bearer {api_key}"
         assert mock_post.call_args.kwargs["url"] == f"{base_url}/chat/completions"
         assert mock_post.call_args.kwargs["stream"] == False
 
         # TODO: add test for entire expected output schema in the future
         # Check the response object returned from litellm.completion()
         assert "gpt-oss-20b" in response["model"]
-        assert ("cache_read_input_tokens" not in response["usage"]) or response[
-            "usage"
-        ]["cache_read_input_tokens"] in [0, None]
-        assert ("cache_creation_input_tokens" not in response["usage"]) or response[
-            "usage"
-        ]["cache_creation_input_tokens"] in [0, None]
+        assert ("cache_read_input_tokens" not in response["usage"]) or response["usage"]["cache_read_input_tokens"] in [
+            0,
+            None,
+        ]
+        assert ("cache_creation_input_tokens" not in response["usage"]) or response["usage"][
+            "cache_creation_input_tokens"
+        ] in [0, None]
         assert response["usage"]["prompt_tokens"] == 1638
         assert response["usage"]["completion_tokens"] == 500
         assert response["usage"]["total_tokens"] == 2138
@@ -2057,9 +2010,7 @@ def test_databricks_anthropic_function_call_with_no_schema(model, monkeypatch):
             },
         }
     ]
-    messages = [
-        {"role": "user", "content": "What is the current temperature in New York?"}
-    ]
+    messages = [{"role": "user", "content": "What is the current temperature in New York?"}]
 
     with patch.object(HTTPHandler, "post", return_value=mock_response):
         response = litellm.completion(
@@ -2072,10 +2023,7 @@ def test_databricks_anthropic_function_call_with_no_schema(model, monkeypatch):
 
         assert response.choices[0].message.tool_calls is not None
         assert len(response.choices[0].message.tool_calls) == 1
-        assert (
-            response.choices[0].message.tool_calls[0].function.name
-            == "get_current_weather"
-        )
+        assert response.choices[0].message.tool_calls[0].function.name == "get_current_weather"
 
 
 def test_databricks_anthropic_user_string_content_cache_injection(monkeypatch):
@@ -2105,13 +2053,8 @@ def test_databricks_anthropic_user_string_content_cache_injection(monkeypatch):
             cache_control_injection_points=cache_control_injection_points,
             extraparam="testpassingextraparam",
         )
-        assert (
-            mock_post.call_args.kwargs["headers"]["Content-Type"] == "application/json"
-        )
-        assert (
-            mock_post.call_args.kwargs["headers"]["Authorization"]
-            == f"Bearer {api_key}"
-        )
+        assert mock_post.call_args.kwargs["headers"]["Content-Type"] == "application/json"
+        assert mock_post.call_args.kwargs["headers"]["Authorization"] == f"Bearer {api_key}"
         assert mock_post.call_args.kwargs["url"] == f"{base_url}/chat/completions"
         assert mock_post.call_args.kwargs["stream"] == False
 
@@ -2152,13 +2095,8 @@ def test_databricks_anthropic_system_string_content_cache_injection(monkeypatch)
             cache_control_injection_points=cache_control_injection_points,
             extraparam="testpassingextraparam",
         )
-        assert (
-            mock_post.call_args.kwargs["headers"]["Content-Type"] == "application/json"
-        )
-        assert (
-            mock_post.call_args.kwargs["headers"]["Authorization"]
-            == f"Bearer {api_key}"
-        )
+        assert mock_post.call_args.kwargs["headers"]["Content-Type"] == "application/json"
+        assert mock_post.call_args.kwargs["headers"]["Authorization"] == f"Bearer {api_key}"
         assert mock_post.call_args.kwargs["url"] == f"{base_url}/chat/completions"
         assert mock_post.call_args.kwargs["stream"] == False
 
@@ -2183,9 +2121,7 @@ def test_databricks_anthropic_system_string_content_cache_injection_not_enough_t
     sync_handler = HTTPHandler()
     mock_response = Mock(spec=httpx.Response)
     mock_response.status_code = 200
-    mock_response.json.return_value = (
-        mock_chat_response_anthropic_prompt_caching_not_enough_tokens()
-    )
+    mock_response.json.return_value = mock_chat_response_anthropic_prompt_caching_not_enough_tokens()
 
     mock_text = "example text" * 512
     messages = [
@@ -2206,13 +2142,8 @@ def test_databricks_anthropic_system_string_content_cache_injection_not_enough_t
             cache_control_injection_points=cache_control_injection_points,
             extraparam="testpassingextraparam",
         )
-        assert (
-            mock_post.call_args.kwargs["headers"]["Content-Type"] == "application/json"
-        )
-        assert (
-            mock_post.call_args.kwargs["headers"]["Authorization"]
-            == f"Bearer {api_key}"
-        )
+        assert mock_post.call_args.kwargs["headers"]["Content-Type"] == "application/json"
+        assert mock_post.call_args.kwargs["headers"]["Authorization"] == f"Bearer {api_key}"
         assert mock_post.call_args.kwargs["url"] == f"{base_url}/chat/completions"
         assert mock_post.call_args.kwargs["stream"] == False
 
@@ -2628,9 +2559,7 @@ def test_databricks_claude_json_tool_is_forced_only_when_the_model_will_not_thin
         )
     )
 
-    assert (
-        request.get("tool_choice") == {"type": "function", "function": {"name": "json_tool_call"}}
-    ) is forced
+    assert (request.get("tool_choice") == {"type": "function", "function": {"name": "json_tool_call"}}) is forced
     assert optional_params["tools"][0]["function"].get("description") == (
         None if forced else RESPONSE_FORMAT_UNFORCED_TOOL_DESCRIPTION
     )
@@ -3052,7 +2981,9 @@ def test_claude_json_schema_stream_sends_a_text_answer_as_it_arrives(respx_mock:
 
 @pytest.mark.usefixtures("_databricks_httpx_transport")
 @pytest.mark.parametrize("call", ["completion", "acompletion"])
-def test_claude_json_schema_stream_sends_prose_before_the_user_tool_call(respx_mock: respx.MockRouter, call: str) -> None:
+def test_claude_json_schema_stream_sends_prose_before_the_user_tool_call(
+    respx_mock: respx.MockRouter, call: str
+) -> None:
     user_tool_opening: Final = _tool_call_opening(0, "get_weather", _GET_WEATHER_ARGUMENTS)
     choices: Final = _json_schema_stream_choices(
         respx_mock, call, _sse_stream((*_PROSE_DELTAS, user_tool_opening), "tool_calls")

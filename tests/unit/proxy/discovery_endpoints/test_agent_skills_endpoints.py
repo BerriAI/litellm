@@ -97,13 +97,24 @@ def hub_record(
     digest: Final = hashlib.sha256(wrapper).hexdigest()
     return (
         prisma_models.LiteLLM_ClaudeCodePluginTable(
-            id=f"hub-{name}", name=name, enabled=True, anonymous_download_count=0, manifest_json=json.dumps({
-                "source": {
-                    "source": "archive", "sha256": digest,
-                    "url": f"http://testserver/claude-code/plugins/{name}/archive/{digest}.zip",
-                },
-                "agent_skill": {"name": name, "description": portable.declared_description, "digest": portable.digest},
-            }),
+            id=f"hub-{name}",
+            name=name,
+            enabled=True,
+            anonymous_download_count=0,
+            manifest_json=json.dumps(
+                {
+                    "source": {
+                        "source": "archive",
+                        "sha256": digest,
+                        "url": f"http://testserver/claude-code/plugins/{name}/archive/{digest}.zip",
+                    },
+                    "agent_skill": {
+                        "name": name,
+                        "description": portable.declared_description,
+                        "digest": portable.digest,
+                    },
+                }
+            ),
         ),
         prisma_models.LiteLLM_ClaudeCodePluginUpload(plugin_name=name, content=Base64.encode(wrapper)),
     )
@@ -207,15 +218,21 @@ def test_skills_sharing_a_title_get_distinct_install_names(index_enabled):
     assert names == ["pdf-summarizer", "pdf-summarizer-2"]
 
 
-@pytest.mark.parametrize("hosted_names, hub_names, aliases", (
-    (("foo",), ("foo", "foo-2"), ("foo-3", "foo-2")),
-    (("a" * 64,), ("a" * 64, "a" * 62 + "-2"), ("a" * 62 + "-3", "a" * 62 + "-2")),
-    (("foo", "foo"), ("foo", "foo-2"), ("foo-3", "foo-2-2")),
-    (("foo", "foo", "foo-2"), ("foo", "foo-2", "foo-3"), ("foo-4", "foo-2-2", "foo-3-2")),
-    (("bar", "bar", "foo", "foo"), ("bar", "bar-2", "foo", "foo-2"), ("bar-3", "bar-2-2", "foo-3", "foo-2-2")),
-))
+@pytest.mark.parametrize(
+    "hosted_names, hub_names, aliases",
+    (
+        (("foo",), ("foo", "foo-2"), ("foo-3", "foo-2")),
+        (("a" * 64,), ("a" * 64, "a" * 62 + "-2"), ("a" * 62 + "-3", "a" * 62 + "-2")),
+        (("foo", "foo"), ("foo", "foo-2"), ("foo-3", "foo-2-2")),
+        (("foo", "foo", "foo-2"), ("foo", "foo-2", "foo-3"), ("foo-4", "foo-2-2", "foo-3-2")),
+        (("bar", "bar", "foo", "foo"), ("bar", "bar-2", "foo", "foo-2"), ("bar-3", "bar-2-2", "foo-3", "foo-2-2")),
+    ),
+)
 def test_hub_collisions_keep_every_hosted_entry_and_only_alias_hub_install_names(
-    index_enabled: None, hosted_names: tuple[str, ...], hub_names: tuple[str, ...], aliases: tuple[str, ...],
+    index_enabled: None,
+    hosted_names: tuple[str, ...],
+    hub_names: tuple[str, ...],
+    aliases: tuple[str, ...],
 ) -> None:
     hosted: Final = tuple(
         skill(f"hosted-{position}", files={"s/SKILL.md": MANIFEST.replace(b"pdf-summarizer", name.encode())})
@@ -226,10 +243,10 @@ def test_hub_collisions_keep_every_hosted_entry_and_only_alias_hub_install_names
     response: Final = client.get(WELL_KNOWN_PATHS[0])
     assert response.status_code == 200, response.text
     entries: Final = response.json()["skills"]
-    assert entries[:len(hosted)] == before
+    assert entries[: len(hosted)] == before
     assert len({entry["name"] for entry in entries}) == len(hosted) + len(hub_names)
     assert all(len(entry["name"]) <= MAX_SKILL_NAME_LENGTH for entry in entries)
-    assert tuple(entry["name"] for entry in entries[len(hosted):]) == aliases
+    assert tuple(entry["name"] for entry in entries[len(hosted) :]) == aliases
     assert client.get(WELL_KNOWN_PATHS[1]).json() == response.json()
     assert client.get(WELL_KNOWN_PATHS[0]).json() == response.json()
     for entry, declared_name in zip(entries, hosted_names + hub_names, strict=True):

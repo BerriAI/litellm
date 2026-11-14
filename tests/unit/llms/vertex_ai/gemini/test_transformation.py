@@ -1,4 +1,3 @@
-
 import json
 import logging
 import uuid
@@ -74,9 +73,7 @@ async def test__transform_request_body_metadata():
         {"role": "user", "content": "hi"},
     ]
     optional_params = {}
-    litellm_params = {
-        "metadata": {"requester_metadata": {"rparam1": "rvalue1", "rparam2": "rvalue2"}}
-    }
+    litellm_params = {"metadata": {"requester_metadata": {"rparam1": "rvalue1", "rparam2": "rvalue2"}}}
     transform_request_params = {
         "messages": messages,
         "model": model,
@@ -117,9 +114,7 @@ async def test__transform_request_body_labels_and_metadata():
         {"role": "user", "content": "hi"},
     ]
     optional_params = {"labels": {"lparam1": "lvalue1", "lparam2": "lvalue2"}}
-    litellm_params = {
-        "metadata": {"requester_metadata": {"rparam1": "rvalue1", "rparam2": "rvalue2"}}
-    }
+    litellm_params = {"metadata": {"requester_metadata": {"rparam1": "rvalue1", "rparam2": "rvalue2"}}}
     transform_request_params = {
         "messages": messages,
         "model": model,
@@ -224,9 +219,7 @@ async def test__transform_request_body_image_config_with_image_size():
     messages = [
         {
             "role": "user",
-            "content": [
-                {"type": "text", "text": "Generate a 4K image of Tokyo skyline"}
-            ],
+            "content": [{"type": "text", "text": "Generate a 4K image of Tokyo skyline"}],
         }
     ]
     optional_params = {

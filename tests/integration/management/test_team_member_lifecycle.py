@@ -368,10 +368,13 @@ def test_member_delete_by_case_variant_email_removes_member_and_refuses_warmed_k
         assert read_rows('SELECT members_with_roles FROM "LiteLLM_TeamTable" WHERE team_id = %s', (team,)) == [
             {"members_with_roles": [stayer_roster]}
         ], deleted.text
-        assert read_rows(
-            'SELECT user_id, team_id FROM "LiteLLM_TeamMembership" WHERE team_id = %s AND user_id = %s',
-            (team, user),
-        ) == [], deleted.text
+        assert (
+            read_rows(
+                'SELECT user_id, team_id FROM "LiteLLM_TeamMembership" WHERE team_id = %s AND user_id = %s',
+                (team, user),
+            )
+            == []
+        ), deleted.text
 
         refused: Final = _chat(gateway, model, leaver_key, f"deleted case-variant leaver {uuid.uuid4().hex}")
         _refused(refused, 401, "token_not_found_in_db")
@@ -920,10 +923,13 @@ def test_bulk_delete_by_case_variant_email_removes_member_and_refuses_warmed_key
         assert results == (_BulkDeleteResult(user_email=email.upper(), success=True),), deleted.text
         info: Final = _team_info(gateway, team)
         assert info.team_info.members_with_roles == [], repr(info)
-        assert read_rows(
-            'SELECT user_id, team_id FROM "LiteLLM_TeamMembership" WHERE team_id = %s AND user_id = %s',
-            (team, user),
-        ) == [], deleted.text
+        assert (
+            read_rows(
+                'SELECT user_id, team_id FROM "LiteLLM_TeamMembership" WHERE team_id = %s AND user_id = %s',
+                (team, user),
+            )
+            == []
+        ), deleted.text
 
         refused: Final = _chat(gateway, model, member_key, f"deleted bulk case-variant member {uuid.uuid4().hex}")
         _refused(refused, 401, "token_not_found_in_db")

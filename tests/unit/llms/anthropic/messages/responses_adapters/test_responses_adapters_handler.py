@@ -566,7 +566,9 @@ def _gpt_5_6_input_for_a_cached_block(drop_params: bool, raw_mark: Mapping[str, 
         model="openai/gpt-5.6",
         extra_kwargs={**OPENAI_API, "drop_params": drop_params},
         max_tokens=1024,
-        messages=[{"role": "user", "content": [{"type": "text", "text": "look", "cache_control": EPHEMERAL, **raw_mark}]}],
+        messages=[
+            {"role": "user", "content": [{"type": "text", "text": "look", "cache_control": EPHEMERAL, **raw_mark}]}
+        ],
     )
     return responses_kwargs["input"]
 
@@ -1162,7 +1164,10 @@ def _history(*, replayed_reasoning: bool) -> list[dict[str, object]]:
     )
     return [
         {"role": "user", "content": "List the logs."},
-        {"role": "assistant", "content": [*reasoning, {"type": "tool_use", "id": "call_1", "name": "Bash", "input": {}}]},
+        {
+            "role": "assistant",
+            "content": [*reasoning, {"type": "tool_use", "id": "call_1", "name": "Bash", "input": {}}],
+        },
         {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "call_1", "content": "app.log"}]},
     ]
 

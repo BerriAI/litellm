@@ -156,12 +156,8 @@ class TestKeyDistinctness:
         assert canonicalize(first).key != canonicalize(second).key
 
     def test_file_content_is_identity(self) -> None:
-        first = request(
-            "upload", "/v1/files", file_name="batch.jsonl", file_sha256="a" * 64, file_bytes=10
-        )
-        second = request(
-            "upload", "/v1/files", file_name="batch.jsonl", file_sha256="b" * 64, file_bytes=10
-        )
+        first = request("upload", "/v1/files", file_name="batch.jsonl", file_sha256="a" * 64, file_bytes=10)
+        second = request("upload", "/v1/files", file_name="batch.jsonl", file_sha256="b" * 64, file_bytes=10)
         assert canonicalize(first).key != canonicalize(second).key
 
 

@@ -14,18 +14,23 @@ from tests.integration._support.process import _wait_until_gone, group_members, 
 
 @pytest.mark.parametrize("mode", ("deadline", "cap", "complete"))
 async def test_adapter_bounds_worker_lifetime_and_reaps_its_process_group(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, mode: str,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    mode: str,
 ) -> None:
     script: Final = (
         "import subprocess, sys, time\n"
         "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'], "
         "stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n"
-        "print(child.pid, flush=True)\n"
-        + ("pass\n" if mode == "complete" else "time.sleep(30)\n")
+        "print(child.pid, flush=True)\n" + ("pass\n" if mode == "complete" else "time.sleep(30)\n")
     )
     child: Final = await asyncio.create_subprocess_exec(
-        sys.executable, "-c", script, stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.DEVNULL, start_new_session=True,
+        sys.executable,
+        "-c",
+        script,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.DEVNULL,
+        start_new_session=True,
     )
     try:
         assert child.stdout is not None
@@ -41,7 +46,8 @@ async def test_adapter_bounds_worker_lifetime_and_reaps_its_process_group(
         monkeypatch.setattr(server.asyncio, "create_subprocess_exec", launch)
         monkeypatch.setattr(server, "SCAN_TIMEOUT", 0.05 if mode == "cap" else 30)
         deadline: Final = (
-            None if mode == "cap"
+            None
+            if mode == "cap"
             else datetime.now(timezone.utc) + timedelta(seconds=0.05 if mode == "deadline" else 30)
         )
         result: Final = server.run_worker("unused.zip", output, False, deadline)

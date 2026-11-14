@@ -20,9 +20,7 @@ async def test_azure_chat_o_series_transformation():
     litellm_params = {}
     headers = {}
 
-    response = await provider_config.async_transform_request(
-        model, messages, optional_params, litellm_params, headers
-    )
+    response = await provider_config.async_transform_request(model, messages, optional_params, litellm_params, headers)
     print(response)
     assert response["model"] == "web-interface-o1-mini"
 
@@ -235,9 +233,7 @@ async def test_azure_o1_series_response_format_extra_params():
     ]
     response_format = {"type": "json_object"}
     tool_choice = "auto"
-    with patch.object(
-        client, "post"
-    ) as mock_client:
+    with patch.object(client, "post") as mock_client:
         try:
             await litellm.acompletion(
                 client=client,

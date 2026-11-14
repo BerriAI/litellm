@@ -297,7 +297,10 @@ class TestAzureFoundryMidConversationSystem:
             route=Route.MESSAGES,
             providers=(Provider.AZURE_AI,),
             models=(FLAGGED_MODEL,),
-            capabilities=(Capability.MID_CONVERSATION_SYSTEM, Capability.PROMPT_CACHING,),
+            capabilities=(
+                Capability.MID_CONVERSATION_SYSTEM,
+                Capability.PROMPT_CACHING,
+            ),
             mode=Mode.NONSTREAM,
         )
     )
@@ -316,7 +319,10 @@ class TestAzureFoundryMidConversationSystem:
             route=Route.MESSAGES,
             providers=(Provider.AZURE_AI,),
             models=(UNFLAGGED_MODEL,),
-            capabilities=(Capability.MID_CONVERSATION_SYSTEM, Capability.PROMPT_CACHING,),
+            capabilities=(
+                Capability.MID_CONVERSATION_SYSTEM,
+                Capability.PROMPT_CACHING,
+            ),
             mode=Mode.NONSTREAM,
         )
     )
@@ -349,7 +355,10 @@ class TestVertexMidConversationSystem:
             route=Route.MESSAGES,
             providers=(Provider.VERTEX_AI,),
             models=(FLAGGED_MODEL,),
-            capabilities=(Capability.MID_CONVERSATION_SYSTEM, Capability.PROMPT_CACHING,),
+            capabilities=(
+                Capability.MID_CONVERSATION_SYSTEM,
+                Capability.PROMPT_CACHING,
+            ),
             mode=Mode.NONSTREAM,
         )
     )
@@ -370,7 +379,10 @@ class TestVertexMidConversationSystem:
             route=Route.MESSAGES,
             providers=(Provider.VERTEX_AI,),
             models=(UNFLAGGED_MODEL,),
-            capabilities=(Capability.MID_CONVERSATION_SYSTEM, Capability.PROMPT_CACHING,),
+            capabilities=(
+                Capability.MID_CONVERSATION_SYSTEM,
+                Capability.PROMPT_CACHING,
+            ),
             mode=Mode.NONSTREAM,
         )
     )

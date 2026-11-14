@@ -60,23 +60,17 @@ async def test_azure_transcribe_model_mapping():
     class MockTranscriptionResponse(PydanticBaseModel):
         text: str
 
-    mock_transcription_response = MockTranscriptionResponse(
-        text="This is a test transcription"
-    )
+    mock_transcription_response = MockTranscriptionResponse(text="This is a test transcription")
 
     mock_raw_response = MagicMock()
     mock_raw_response.headers = {"content-type": "application/json"}
     mock_raw_response.parse = MagicMock(return_value=mock_transcription_response)
 
     mock_azure_client = MagicMock(spec=AsyncAzureOpenAI)
-    mock_azure_client.audio.transcriptions.with_raw_response.create = AsyncMock(
-        return_value=mock_raw_response
-    )
+    mock_azure_client.audio.transcriptions.with_raw_response.create = AsyncMock(return_value=mock_raw_response)
     mock_azure_client.api_key = "test-api-key"
     mock_azure_client._base_url = MagicMock()
-    mock_azure_client._base_url._uri_reference = (
-        "https://my-endpoint-europe-berri-992.openai.azure.com/"
-    )
+    mock_azure_client._base_url._uri_reference = "https://my-endpoint-europe-berri-992.openai.azure.com/"
 
     with patch(
         "litellm.llms.azure.audio_transcriptions.AzureAudioTranscription.get_azure_openai_client",
@@ -94,13 +88,9 @@ async def test_azure_transcribe_model_mapping():
 
         mock_azure_client.audio.transcriptions.with_raw_response.create.assert_called_once()
 
-        call_kwargs = (
-            mock_azure_client.audio.transcriptions.with_raw_response.create.call_args.kwargs
-        )
+        call_kwargs = mock_azure_client.audio.transcriptions.with_raw_response.create.call_args.kwargs
 
-        assert (
-            call_kwargs["model"] == "whisper-1"
-        ), f"Expected model 'whisper-1', got {call_kwargs['model']}"
+        assert call_kwargs["model"] == "whisper-1", f"Expected model 'whisper-1', got {call_kwargs['model']}"
         assert "file" in call_kwargs
         assert call_kwargs["response_format"] == "json"
 

@@ -19,7 +19,9 @@ from litellm.proxy.mcp_server.faults.types import (
 )
 
 
-def _response(status_code: int, *, json_body: object = None, text_body: str = "", headers: dict = None) -> httpx.Response:
+def _response(
+    status_code: int, *, json_body: object = None, text_body: str = "", headers: dict = None
+) -> httpx.Response:
     request = httpx.Request("POST", "https://idp.example.com/token")
     if json_body is not None:
         return httpx.Response(status_code, json=json_body, request=request)
@@ -152,7 +154,9 @@ def test_dcr_server_error_code_is_not_blamed_on_caller():
 
 
 @pytest.mark.parametrize("status_code", [401, 403])
-@pytest.mark.parametrize("body", ["Forbidden", '<html>private upstream details</html>', '{"error": ""}', '{"error": 12}'])
+@pytest.mark.parametrize(
+    "body", ["Forbidden", "<html>private upstream details</html>", '{"error": ""}', '{"error": 12}']
+)
 def test_dcr_access_refusal_without_oauth_error(status_code: int, body: str) -> None:
     fault: Final = classify_upstream_dcr_rejection(_response(status_code, text_body=body), log_context="srv")
     assert isinstance(fault, UpstreamRegistrationRefused)

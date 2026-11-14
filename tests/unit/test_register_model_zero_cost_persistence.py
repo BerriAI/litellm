@@ -89,12 +89,10 @@ def test_second_registration_does_not_persist_synthesized_zero_costs():
 
     entry = litellm.model_cost.get(key, {})
     assert "input_cost_per_token" not in entry, (
-        "second register_model() persisted a synthesized zero "
-        "input_cost_per_token; this disables budget enforcement"
+        "second register_model() persisted a synthesized zero input_cost_per_token; this disables budget enforcement"
     )
     assert "output_cost_per_token" not in entry, (
-        "second register_model() persisted a synthesized zero "
-        "output_cost_per_token; this disables budget enforcement"
+        "second register_model() persisted a synthesized zero output_cost_per_token; this disables budget enforcement"
     )
 
 

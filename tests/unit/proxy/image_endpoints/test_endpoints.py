@@ -585,8 +585,13 @@ async def test_image_router_refusal_without_or_with_caller_logging(
     kwargs: Final[dict[str, object]] = {"litellm_trace_id": "refused-trace", "litellm_session_id": "refused-session"}
     if supply_logging:
         logging_obj, _ = litellm.utils.function_setup(
-            "aimage_generation", litellm.utils.Rules(), datetime.now(),
-            model="B", prompt="draw a tree", litellm_call_id="supplied-image", **kwargs,
+            "aimage_generation",
+            litellm.utils.Rules(),
+            datetime.now(),
+            model="B",
+            prompt="draw a tree",
+            litellm_call_id="supplied-image",
+            **kwargs,
         )
         kwargs.update(litellm_logging_obj=logging_obj, litellm_call_id="supplied-image")
 
@@ -644,10 +649,13 @@ def test_image_generation_uses_key_router_settings_fallbacks(monkeypatch: pytest
     response: Final = client.post("/v1/images/generations", json={"model": "A", "prompt": "draw a tree"})
 
     assert response.status_code == 200, response.text
-    assert response.json() == ImageResponse(
-        created=1,
-        data=[ImageObject(url="https://images.example/generated.png")],
-    ).model_dump(), response.text
+    assert (
+        response.json()
+        == ImageResponse(
+            created=1,
+            data=[ImageObject(url="https://images.example/generated.png")],
+        ).model_dump()
+    ), response.text
     assert handler.calls == ["failing", "working"], response.text
 
 
@@ -662,10 +670,13 @@ def test_image_generation_uses_team_router_settings_fallbacks(monkeypatch: pytes
     response: Final = client.post("/v1/images/generations", json={"model": "A", "prompt": "draw a tree"})
 
     assert response.status_code == 200, response.text
-    assert response.json() == ImageResponse(
-        created=1,
-        data=[ImageObject(url="https://images.example/generated.png")],
-    ).model_dump(), response.text
+    assert (
+        response.json()
+        == ImageResponse(
+            created=1,
+            data=[ImageObject(url="https://images.example/generated.png")],
+        ).model_dump()
+    ), response.text
     assert handler.calls == ["failing", "working"], response.text
 
 
@@ -687,10 +698,13 @@ def test_image_generation_uses_key_model_group_alias(monkeypatch: pytest.MonkeyP
     response: Final = client.post("/v1/images/generations", json={"model": "alias", "prompt": "draw a tree"})
 
     assert response.status_code == 200, response.text
-    assert response.json() == ImageResponse(
-        created=1,
-        data=[ImageObject(url="https://images.example/generated.png")],
-    ).model_dump(), response.text
+    assert (
+        response.json()
+        == ImageResponse(
+            created=1,
+            data=[ImageObject(url="https://images.example/generated.png")],
+        ).model_dump()
+    ), response.text
     assert handler.calls == ["working"], response.text
 
 

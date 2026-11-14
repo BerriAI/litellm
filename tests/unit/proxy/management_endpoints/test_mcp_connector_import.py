@@ -82,7 +82,11 @@ class TestConvertMcpServersMapping:
 
     def test_basic_authorization_header_is_sent_verbatim(self):
         result = _single(
-            {"mcpServers": {"srv": {"url": "https://x.example/mcp", "headers": {"Authorization": "Basic dXNlcjpwdw=="}}}}
+            {
+                "mcpServers": {
+                    "srv": {"url": "https://x.example/mcp", "headers": {"Authorization": "Basic dXNlcjpwdw=="}}
+                }
+            }
         )
         assert isinstance(result, ConvertedConnector)
         assert result.request.auth_type == MCPAuth.authorization
@@ -107,9 +111,7 @@ class TestConvertMcpServersMapping:
         assert result.request.static_headers is None
 
     def test_camel_case_authorization_token_alias(self):
-        result = _single(
-            {"mcpServers": {"srv": {"url": "https://x.example/mcp", "authorizationToken": "tok"}}}
-        )
+        result = _single({"mcpServers": {"srv": {"url": "https://x.example/mcp", "authorizationToken": "tok"}}})
         assert isinstance(result, ConvertedConnector)
         assert result.request.credentials == {"auth_value": "tok"}
 

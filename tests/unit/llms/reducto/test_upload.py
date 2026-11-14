@@ -121,5 +121,3 @@ async def test_parse_v3_uses_programmatic_api_key_over_env(disable_aiohttp_trans
 
     assert reducto_server.requests[0].headers["authorization"] == "Bearer passed-key"
     assert reducto_server.requests[1].headers["authorization"] == "Bearer passed-key"
-
-

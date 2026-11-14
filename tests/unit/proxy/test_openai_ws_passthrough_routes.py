@@ -484,9 +484,7 @@ async def test_proxy_frame_model_gate_refuses_an_alias_that_would_reach_openai_u
 async def test_proxy_frame_model_gate_refuses_a_proxy_wide_alias_for_a_key_limited_to_its_target(monkeypatch):
     monkeypatch.setattr(litellm, "model_alias_map", {"gpt-5.4": "gpt-5.4-mini"})
 
-    refusal: Final = _refusal(
-        await _gate_verdict(_FrameAuthorizer(UserAPIKeyAuth(models=["gpt-5.4-mini"])), "gpt-5.4")
-    )
+    refusal: Final = _refusal(await _gate_verdict(_FrameAuthorizer(UserAPIKeyAuth(models=["gpt-5.4-mini"])), "gpt-5.4"))
 
     assert refusal.message == _OPENAI_WS_ALIASED_MODEL_REFUSAL
 
@@ -547,7 +545,9 @@ async def test_proxy_frame_model_gate_does_not_count_the_sessions_own_reservatio
     """
     connect_reservation: Final[dict[str, object]] = {"reserved_cost": 0.0001, "entries": []}
     socket: Final = WebSocket(
-        {"type": "websocket", "state": {"budget_reservation": connect_reservation}}, receive=AsyncMock(), send=AsyncMock()
+        {"type": "websocket", "state": {"budget_reservation": connect_reservation}},
+        receive=AsyncMock(),
+        send=AsyncMock(),
     )
 
     async def key_budget_check(websocket: object, model: str) -> UserAPIKeyAuth:

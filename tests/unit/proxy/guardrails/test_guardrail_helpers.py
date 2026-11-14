@@ -15,7 +15,9 @@ DB_ROWS: Final = MappingProxyType({"valid": "active", "also-valid": "active", "s
 
 def _filter(where: Mapping[str, object]) -> Mapping[str, object]:
     clauses: Final = where.get("AND", (where,))
-    return {key: value for clause in clauses for key, value in clause.items()}  # comprehension-ok: flattens prisma AND clauses
+    return {
+        key: value for clause in clauses for key, value in clause.items()
+    }  # comprehension-ok: flattens prisma AND clauses
 
 
 def _prisma(rows: Mapping[str, str] = DB_ROWS) -> MagicMock:

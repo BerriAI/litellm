@@ -293,7 +293,6 @@ _AMBIENT_AWS_ENV: Final = (
 )
 
 
-
 def _isolate_from_ambient_aws(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     for name in _AMBIENT_AWS_ENV:
         monkeypatch.delenv(name, raising=False)
@@ -417,9 +416,7 @@ class _CredentialSourceThatCannotRefresh(BaseAWSLLM):
         )
 
 
-@pytest.mark.parametrize(
-    "refresh", [_refresh_returning_expired_credentials, _refresh_after_the_token_file_is_gone]
-)
+@pytest.mark.parametrize("refresh", [_refresh_returning_expired_credentials, _refresh_after_the_token_file_is_gone])
 @pytest.mark.parametrize(
     "sign",
     [
@@ -450,7 +447,9 @@ def test_credentials_that_fail_to_refresh_at_signing_are_a_500(
 @pytest.mark.asyncio
 async def test_the_index_pass_through_answers_500_when_credentials_fail_to_refresh() -> None:
     refused: Final = await prepare_index_request(
-        config=OpenSearchVectorStoreConfig(aws=_CredentialSourceThatCannotRefresh(_refresh_after_the_token_file_is_gone)),
+        config=OpenSearchVectorStoreConfig(
+            aws=_CredentialSourceThatCannotRefresh(_refresh_after_the_token_file_is_gone)
+        ),
         method="GET",
         path=IndexPath(index_name="docs", api=("_mapping",)),
         operation=index_operation("GET", ("_mapping",)),

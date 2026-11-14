@@ -41,9 +41,7 @@ async def test_count_tokens_does_not_require_vertexai_sdk(monkeypatch):
 
     captured = {}
 
-    async def fake_ensure_access_token(
-        self, credentials, project_id, custom_llm_provider
-    ):
+    async def fake_ensure_access_token(self, credentials, project_id, custom_llm_provider):
         return "fake-token", "fake-project"
 
     def fake_build_endpoint(self, model, project_id, vertex_location, api_base=None):
@@ -76,9 +74,7 @@ async def test_count_tokens_does_not_require_vertexai_sdk(monkeypatch):
 
     import litellm.llms.vertex_ai.vertex_ai_partner_models.count_tokens.handler as handler_mod
 
-    monkeypatch.setattr(
-        handler_mod, "get_async_httpx_client", lambda **kwargs: FakeClient()
-    )
+    monkeypatch.setattr(handler_mod, "get_async_httpx_client", lambda **kwargs: FakeClient())
 
     result = await VertexAIPartnerModels().count_tokens(
         model="claude-sonnet-4-6",

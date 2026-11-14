@@ -591,14 +591,20 @@ def test_scim_admin_group_put_members_promotes_and_demotes(gateway: Gateway, tmp
             fixture.group_name,
             [expected_member],
         )
-        assert eventually(
-            lambda: _user_role(fixture.gateway, fixture.user_id),
-            lambda role: role == "proxy_admin",
-        ) == "proxy_admin"
-        assert eventually(
-            lambda: _database_user_role(fixture.user_id),
-            lambda role: role == "proxy_admin",
-        ) == "proxy_admin"
+        assert (
+            eventually(
+                lambda: _user_role(fixture.gateway, fixture.user_id),
+                lambda role: role == "proxy_admin",
+            )
+            == "proxy_admin"
+        )
+        assert (
+            eventually(
+                lambda: _database_user_role(fixture.user_id),
+                lambda role: role == "proxy_admin",
+            )
+            == "proxy_admin"
+        )
         allowed: Final = eventually(
             lambda: _generate_key_for_user(fixture.scenario, fixture.user_key, fixture.other_user),
             lambda response: response.status_code == 200,
@@ -641,14 +647,20 @@ def test_scim_admin_group_put_members_promotes_and_demotes(gateway: Gateway, tmp
             fixture.group_name,
             [],
         )
-        assert eventually(
-            lambda: _user_role(fixture.gateway, fixture.user_id),
-            lambda role: role == fixture.default_role,
-        ) == fixture.default_role
-        assert eventually(
-            lambda: _database_user_role(fixture.user_id),
-            lambda role: role == fixture.default_role,
-        ) == fixture.default_role
+        assert (
+            eventually(
+                lambda: _user_role(fixture.gateway, fixture.user_id),
+                lambda role: role == fixture.default_role,
+            )
+            == fixture.default_role
+        )
+        assert (
+            eventually(
+                lambda: _database_user_role(fixture.user_id),
+                lambda role: role == fixture.default_role,
+            )
+            == fixture.default_role
+        )
         refused: Final = eventually(
             lambda: _generate_key_for_user(fixture.scenario, fixture.user_key, fixture.other_user),
             lambda response: response.status_code == 401,

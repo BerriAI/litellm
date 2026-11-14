@@ -42,9 +42,7 @@ STREAM_CHUNK_1: Final = {
     "object": "chat.completion.chunk",
     "created": 1700000000,
     "model": "gpt-4.1-nano",
-    "choices": [
-        {"index": 0, "delta": {"role": "assistant", "content": "Lite"}, "finish_reason": None}
-    ],
+    "choices": [{"index": 0, "delta": {"role": "assistant", "content": "Lite"}, "finish_reason": None}],
 }
 STREAM_CHUNK_2: Final = {
     "id": "chatcmpl-unit-stream",
@@ -54,9 +52,7 @@ STREAM_CHUNK_2: Final = {
     "choices": [{"index": 0, "delta": {"content": "LLM"}, "finish_reason": "stop"}],
 }
 STREAM_BODY: Final = (
-    f"data: {json.dumps(STREAM_CHUNK_1)}\n\n"
-    f"data: {json.dumps(STREAM_CHUNK_2)}\n\n"
-    "data: [DONE]\n\n"
+    f"data: {json.dumps(STREAM_CHUNK_1)}\n\ndata: {json.dumps(STREAM_CHUNK_2)}\n\ndata: [DONE]\n\n"
 ).encode()
 
 
@@ -121,18 +117,14 @@ def test_chat_completion(client: TestClient, respx_mock: respx.MockRouter) -> No
     assert "authorization" not in proxy_server_request["headers"]
     body: Final = proxy_server_request["body"]
     assert body.get("model") == "Azure OpenAI GPT-4 Canada"
-    assert body.get("messages") == [
-        {"role": "user", "content": "write a litellm poem"}
-    ]
+    assert body.get("messages") == [{"role": "user", "content": "write a litellm poem"}]
     assert body.get("max_tokens") == 10
     assert upstream.call_count == 1
 
 
 def test_chat_completion_stream(client: TestClient, respx_mock: respx.MockRouter) -> None:
     upstream: Final = respx_mock.post(f"{OPENAI_BASE}/chat/completions").mock(
-        return_value=httpx.Response(
-            200, content=STREAM_BODY, headers={"content-type": "text/event-stream"}
-        )
+        return_value=httpx.Response(200, content=STREAM_BODY, headers={"content-type": "text/event-stream"})
     )
     my_custom_logger = _custom_logger()
     litellm.callbacks = [my_custom_logger]
@@ -151,18 +143,13 @@ def test_chat_completion_stream(client: TestClient, respx_mock: respx.MockRouter
     assert response.status_code == 200, response.text
     complete_response: Final = "".join(
         json.loads(data)["choices"][0]["delta"].get("content") or ""
-        for data in (
-            line.replace("data: ", "") for line in response.iter_lines() if line
-        )
+        for data in (line.replace("data: ", "") for line in response.iter_lines() if line)
         if "[DONE]" not in data
     )
 
     assert complete_response == "LiteLLM"
     assert my_custom_logger.done_event.wait(10)
-    assert (
-        complete_response
-        == my_custom_logger.streaming_response_obj["choices"][0]["message"]["content"]
-    )
+    assert complete_response == my_custom_logger.streaming_response_obj["choices"][0]["message"]["content"]
     assert upstream.call_count == 1
 
 

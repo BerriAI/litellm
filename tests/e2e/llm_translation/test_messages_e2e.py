@@ -110,7 +110,6 @@ def _user_turn(text: str) -> MessageParam:
     return {"role": "user", "content": text}
 
 
-
 class TestAnthropicMessages:
     @pytest.mark.covers("llm.messages.anthropic.basic.nonstream.works")
     @meta(
@@ -466,7 +465,9 @@ class TestOpenAIMessagesToolContinuation:
         model_id: Final = proxy.create_model(
             model,
             LiteLLMParamsBody(
-                model=OPENAI_BRIDGE_BACKEND, api_key="os.environ/OPENAI_API_KEY", api_base=f"{base}/v1" if base else None
+                model=OPENAI_BRIDGE_BACKEND,
+                api_key="os.environ/OPENAI_API_KEY",
+                api_base=f"{base}/v1" if base else None,
             ),
         )
         resources.defer(lambda: proxy.delete_model(model_id))
@@ -609,9 +610,7 @@ def _bare_error_frame(frame: str) -> bool:
 @pytest.mark.provider_live
 class TestMessagesUpstreamStreamFailure:
     @pytest.mark.covers("llm.messages.anthropic.upstream_stream_failure.stream.error_event")
-    @pytest.mark.parametrize(
-        ("register", "cut"), _cut_params(_DROPPED_UPSTREAMS)
-    )
+    @pytest.mark.parametrize(("register", "cut"), _cut_params(_DROPPED_UPSTREAMS))
     def test_interrupted_upstream_stream_raises_in_the_anthropic_sdk(
         self,
         proxy: ProxyClient,
@@ -647,9 +646,7 @@ class TestMessagesUpstreamStreamFailure:
             )
 
     @pytest.mark.covers("llm.messages.anthropic.upstream_stream_failure.stream.error_event")
-    @pytest.mark.parametrize(
-        ("register", "cut"), _cut_params(_DROPPED_UPSTREAMS)
-    )
+    @pytest.mark.parametrize(("register", "cut"), _cut_params(_DROPPED_UPSTREAMS))
     def test_interrupted_upstream_stream_is_an_anthropic_error_event(
         self, proxy: ProxyClient, resources: ResourceManager, register: _CutRegistration, cut: StreamCut
     ) -> None:

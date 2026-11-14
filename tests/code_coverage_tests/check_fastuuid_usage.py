@@ -13,9 +13,7 @@ def _to_module_path(relative_path: str) -> str:
     return module
 
 
-def _find_fastuuid_imports_in_file(
-    file_path: str, base_dir: str
-) -> List[Dict[str, Any]]:
+def _find_fastuuid_imports_in_file(file_path: str, base_dir: str) -> List[Dict[str, Any]]:
     results: List[Dict[str, Any]] = []
     try:
         with open(file_path, "r", encoding="utf-8") as f:
@@ -70,9 +68,7 @@ def main() -> None:
     base_dir = "."  # tests run from repo root in CI
     violations = scan_directory_for_fastuuid(base_dir)
     if violations:
-        print(
-            "\n🚨 fastuuid must only be imported inside litellm/_uuid.py. Found violations:"
-        )
+        print("\n🚨 fastuuid must only be imported inside litellm/_uuid.py. Found violations:")
         for v in violations:
             print(f"* {v['module']} ({v['file']}:{v['line']}) -> {v['import']}")
         print("\n")

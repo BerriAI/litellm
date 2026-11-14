@@ -595,7 +595,9 @@ def test_stream_chunk_builder_reads_list_cost_from_dict_chunks():
 
 
 @pytest.mark.parametrize(("model", "cache_marks"), [("qwen3.8-flash", 0), ("minimax-m3", 0), ("claude-haiku-5-5", 4)])
-def test_go_messages_route_carries_prompt_cache_breakpoint_to_cache_control_only_for_claude(model: str, cache_marks: int):
+def test_go_messages_route_carries_prompt_cache_breakpoint_to_cache_control_only_for_claude(
+    model: str, cache_marks: int
+):
     marked_notes: Final = [
         {"type": "text", "text": f"Note {n}", "prompt_cache_breakpoint": {"mode": "explicit"}} for n in range(4)
     ]

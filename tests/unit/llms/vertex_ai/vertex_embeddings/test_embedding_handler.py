@@ -298,7 +298,10 @@ async def test_vertex_async_embedding_call_maps_a_malformed_predict_body_to_a_co
 async def test_vertex_embedding_usage_carries_the_billable_character_count_google_prices_on(
     run_async: bool, predict_endpoint: respx.Route, metadata: dict[str, object], character_count: int | None
 ) -> None:
-    payload: Final = {"predictions": [_gecko_prediction([0.1, 0.2, 0.3], 3), _gecko_prediction([1, 2.0, 3], 5)], **metadata}
+    payload: Final = {
+        "predictions": [_gecko_prediction([0.1, 0.2, 0.3], 3), _gecko_prediction([1, 2.0, 3], 5)],
+        **metadata,
+    }
     response: Final = await _embedding_response(run_async, predict_endpoint, GECKO, payload, _embedding_logging())
 
     assert (response.usage.prompt_tokens, getattr(response.usage.prompt_tokens_details, "character_count", None)) == (

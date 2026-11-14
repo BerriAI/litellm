@@ -61,7 +61,9 @@ VERTEX_AI_MODELS = [
 ]
 
 
-@pytest.mark.skip(reason="stage red: Vertex rejects tool_search when deployment extra_headers inject context-1m beta; product/config")
+@pytest.mark.skip(
+    reason="stage red: Vertex rejects tool_search when deployment extra_headers inject context-1m beta; product/config"
+)
 @pytest.mark.covers("llm.messages.vertex.tool_search.nonstream.works")
 @meta(
     Subject(

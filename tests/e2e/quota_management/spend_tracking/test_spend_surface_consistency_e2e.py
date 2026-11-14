@@ -76,7 +76,7 @@ def _poll_spend_series_for_key(client: SpendClient, token: str) -> Mapping[Serie
     scrapes: Final = outcome.result if isinstance(outcome, Converged) else outcome.last_result
     assert _spend_series_for_key(scrapes, token), (
         f"{SPEND_METRIC} never exposed a series for {KEY_HASH_LABEL}={token} on any replica; "
-        f"last scrape status per replica: {({replica: scrape.status_code for replica, scrape in scrapes.items()})}"
+        f"last scrape status per replica: { ({replica: scrape.status_code for replica, scrape in scrapes.items()}) }"
     )
     return _spend_series_for_key(scrapes, token)
 

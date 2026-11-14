@@ -444,7 +444,10 @@ def test_identical_uncached_chats_are_each_forwarded_and_billed(gateway: Gateway
             ("POST", "/v1/chat/completions")
         ] * 2
         rows: Final = group_rows(alias, 2)
-        assert {string_value(row["request_id"]) for row in rows} == {string_value(first["id"]), string_value(second["id"])}
+        assert {string_value(row["request_id"]) for row in rows} == {
+            string_value(first["id"]),
+            string_value(second["id"]),
+        }
         for row in rows:
             assert_billed(row, alias, "acompletion")
 

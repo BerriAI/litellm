@@ -79,9 +79,7 @@ def file_has_tests(path: Path) -> bool:
     except SyntaxError:
         return False
     for node in ast.walk(tree):
-        if isinstance(
-            node, (ast.FunctionDef, ast.AsyncFunctionDef)
-        ) and node.name.startswith("test_"):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith("test_"):
             return True
     return False
 
@@ -113,9 +111,7 @@ def parse_coverage_xml(xml_path: Path) -> Tuple[float, float]:
         filename = class_elem.get("filename", "")
         # Coverage tools emit either a repo-relative path or just the basename
         # depending on configuration. Match by suffix.
-        if filename.endswith("proxy/proxy_server.py") or filename.endswith(
-            "proxy_server.py"
-        ):
+        if filename.endswith("proxy/proxy_server.py") or filename.endswith("proxy_server.py"):
             line_rate = float(class_elem.get("line-rate", "0"))
             branch_rate = float(class_elem.get("branch-rate", "0"))
             return line_rate * 100.0, branch_rate * 100.0
@@ -183,16 +179,9 @@ def main() -> int:
     branch_ok = branch_pct >= branch_min
     status = "PASS" if (line_ok and branch_ok) else "FAIL"
 
-    print(
-        f"target={target} baseline=(line:{baseline_line:.2f} branch:{baseline_branch:.2f})"
-    )
-    print(
-        f"line:   {line_pct:6.2f}% / {line_min:6.2f}% " f"{'OK' if line_ok else 'MISS'}"
-    )
-    print(
-        f"branch: {branch_pct:6.2f}% / {branch_min:6.2f}% "
-        f"{'OK' if branch_ok else 'MISS'}"
-    )
+    print(f"target={target} baseline=(line:{baseline_line:.2f} branch:{baseline_branch:.2f})")
+    print(f"line:   {line_pct:6.2f}% / {line_min:6.2f}% {'OK' if line_ok else 'MISS'}")
+    print(f"branch: {branch_pct:6.2f}% / {branch_min:6.2f}% {'OK' if branch_ok else 'MISS'}")
     print(status)
     return 0 if status == "PASS" else 1
 

@@ -270,13 +270,16 @@ def test_management_requests_leave_omitted_rate_limits_unset(
     assert request.model_dump(include={"rpm_limit", "tpm_limit"}, exclude_unset=True) == {}
 
 
-@pytest.mark.parametrize(("response_model", "identifiers"), (
-    (GenerateKeyResponse, {"key": "sk-test"}),
-    (NewUserResponse, {"key": "sk-test"}),
-    (LiteLLM_TeamTable, {"team_id": "team-test"}),
-    (LiteLLM_UserTable, {"user_id": "user-test"}),
-    (LiteLLM_BudgetTable, {"budget_id": "budget-test"}),
-))
+@pytest.mark.parametrize(
+    ("response_model", "identifiers"),
+    (
+        (GenerateKeyResponse, {"key": "sk-test"}),
+        (NewUserResponse, {"key": "sk-test"}),
+        (LiteLLM_TeamTable, {"team_id": "team-test"}),
+        (LiteLLM_UserTable, {"user_id": "user-test"}),
+        (LiteLLM_BudgetTable, {"budget_id": "budget-test"}),
+    ),
+)
 def test_existing_negative_rate_limits_remain_readable(
     response_model: type[BaseModel], identifiers: dict[str, str]
 ) -> None:
@@ -286,10 +289,13 @@ def test_existing_negative_rate_limits_remain_readable(
 
 
 def test_existing_customer_negative_rate_limits_remain_readable() -> None:
-    customer: Final = LiteLLM_EndUserTable.model_validate({
-        "user_id": "customer-test", "blocked": False,
-        "litellm_budget_table": {"rpm_limit": -1, "tpm_limit": -100},
-    })
+    customer: Final = LiteLLM_EndUserTable.model_validate(
+        {
+            "user_id": "customer-test",
+            "blocked": False,
+            "litellm_budget_table": {"rpm_limit": -1, "tpm_limit": -100},
+        }
+    )
     assert customer.litellm_budget_table is not None
     assert customer.litellm_budget_table.rpm_limit == -1
     assert customer.litellm_budget_table.tpm_limit == -100
@@ -501,6 +507,8 @@ def test_change_password_request_passwords_hidden_from_repr():
     for rendered in (repr(request), str(request)):
         assert "hunter2hunter2" not in rendered
         assert "NewP@ssw0rd-2026" not in rendered
+
+
 @pytest.mark.parametrize("versions", [[], ["2099-01-01"]])
 def test_mcp_advertised_versions_reject_unavailable_revisions(versions):
     from pydantic import ValidationError
@@ -515,7 +523,12 @@ def test_mcp_advertised_versions_reject_unavailable_revisions(versions):
 def test_mcp_metadata_rejects_unavailable_upstream_protocol(revision):
     from litellm.proxy._types import NewMCPServerRequest, UpdateMCPServerRequest
 
-    payload = {"server_id": "test", "transport": "http", "url": "https://example.com/mcp", "mcp_info": {"protocol_version": revision}}
+    payload = {
+        "server_id": "test",
+        "transport": "http",
+        "url": "https://example.com/mcp",
+        "mcp_info": {"protocol_version": revision},
+    }
     for model in (NewMCPServerRequest, UpdateMCPServerRequest):
         with pytest.raises(ValidationError):
             model.model_validate(payload)
@@ -637,7 +650,10 @@ def test_an_enabled_stdio_mcp_server_still_needs_a_command_and_args(monkeypatch,
 def test_an_http_mcp_server_is_unaffected_by_the_stdio_flag(monkeypatch, request_model):
     monkeypatch.delenv("LITELLM_ENABLE_MCP_STDIO", raising=False)
 
-    assert request_model(server_id="http-1", transport="http", url="https://mcp.example.com").url == "https://mcp.example.com"
+    assert (
+        request_model(server_id="http-1", transport="http", url="https://mcp.example.com").url
+        == "https://mcp.example.com"
+    )
     with pytest.raises(ValidationError, match="url or spec_path is required"):
         request_model(server_id="http-1", transport="http")
 
@@ -650,10 +666,14 @@ def test_a_non_mapping_mcp_server_payload_gets_a_validation_error(request_model)
 
 @pytest.mark.parametrize("request_model", MCP_SERVER_REQUESTS)
 def test_modern_http_upstream_protocol_is_available(request_model):
-    parsed = request_model.model_validate({
-        "server_id": "modern", "transport": "http", "url": "https://example.com/mcp",
-        "mcp_info": {"protocol_version": "2026-07-28"},
-    })
+    parsed = request_model.model_validate(
+        {
+            "server_id": "modern",
+            "transport": "http",
+            "url": "https://example.com/mcp",
+            "mcp_info": {"protocol_version": "2026-07-28"},
+        }
+    )
     assert parsed.mcp_info["protocol_version"] == "2026-07-28"
     assert parsed.transport == "http"
 

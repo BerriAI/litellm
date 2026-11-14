@@ -596,7 +596,9 @@ class TestResolveDeploymentReasoningEffort:
         provider, model = _bare_map_model_declaring_fewer_levels()
         echoed: Final = {"key": f"{provider}/{model}", "litellm_provider": provider}
 
-        sent: Final = [_sent(level, echoed, model=model, provider=provider) for level in REASONING_EFFORT_STRENGTH_ORDER]
+        sent: Final = [
+            _sent(level, echoed, model=model, provider=provider) for level in REASONING_EFFORT_STRENGTH_ORDER
+        ]
 
         assert sent == list(REASONING_EFFORT_STRENGTH_ORDER)
 
@@ -734,6 +736,6 @@ class TestThinkingBudgetEffort:
     ) -> None:
         thinking: Final = {"type": "enabled", "budget_tokens": 2048}
 
-        assert thinking_budget_effort(thinking, model=model, custom_llm_provider=custom_llm_provider, drop_params=False) == (
-            expected
-        )
+        assert thinking_budget_effort(
+            thinking, model=model, custom_llm_provider=custom_llm_provider, drop_params=False
+        ) == (expected)

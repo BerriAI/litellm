@@ -107,7 +107,9 @@ def test_xai_chat_reports_zero_usage_when_the_provider_usage_is_null(gateway: Ga
         assert len(wire.drain()) == 1
 
 
-@pytest.mark.parametrize("usage", (pytest.param([1, 2], id="usage-is-a-list"), pytest.param("lots", id="usage-is-text")))
+@pytest.mark.parametrize(
+    "usage", (pytest.param([1, 2], id="usage-is-a-list"), pytest.param("lots", id="usage-is-text"))
+)
 def test_xai_chat_answers_500_when_the_provider_usage_is_not_an_object(gateway: Gateway, usage: JsonValue) -> None:
     with wire_server(_peer(usage)) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(model=f"xai/{_BACKEND}", api_base=f"{wire.url}/v1", api_key=_API_KEY)

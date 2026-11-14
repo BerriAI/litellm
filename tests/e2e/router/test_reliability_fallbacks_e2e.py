@@ -105,7 +105,10 @@ class TestReliabilityFallbacks:
         Subject(
             domain=Domain.ROUTING,
             providers=(Provider.OPENAI,),
-            models=(FALLBACK_MODEL, REAL_MODEL,),
+            models=(
+                FALLBACK_MODEL,
+                REAL_MODEL,
+            ),
             mode=Mode.NONSTREAM,
         )
     )
@@ -130,7 +133,10 @@ class TestReliabilityFallbacks:
         Subject(
             domain=Domain.ROUTING,
             providers=(Provider.OPENAI,),
-            models=(FALLBACK_MODEL, REAL_MODEL,),
+            models=(
+                FALLBACK_MODEL,
+                REAL_MODEL,
+            ),
             mode=Mode.NONSTREAM,
         )
     )
@@ -155,7 +161,10 @@ class TestReliabilityFallbacks:
         Subject(
             domain=Domain.ROUTING,
             providers=(Provider.OPENAI,),
-            models=(FALLBACK_MODEL, SMALL_CONTEXT_MODEL,),
+            models=(
+                FALLBACK_MODEL,
+                SMALL_CONTEXT_MODEL,
+            ),
             mode=Mode.NONSTREAM,
         )
     )
@@ -179,8 +188,14 @@ class TestReliabilityFallbacks:
     @meta(
         Subject(
             domain=Domain.ROUTING,
-            providers=(Provider.AZURE, Provider.OPENAI,),
-            models=(AZURE_MODEL, FALLBACK_MODEL,),
+            providers=(
+                Provider.AZURE,
+                Provider.OPENAI,
+            ),
+            models=(
+                AZURE_MODEL,
+                FALLBACK_MODEL,
+            ),
             mode=Mode.NONSTREAM,
         )
     )

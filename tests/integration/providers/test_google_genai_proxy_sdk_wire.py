@@ -101,9 +101,7 @@ def _expected_request_body(provider: Provider) -> Mapping[str, JsonValue]:
 def _respond(provider: Provider, stream: bool) -> Callable[[Request], Reply]:
     def respond(request: Request) -> Reply:
         if request.target == "/_oauth/token":
-            return Reply(
-                body=b'{"access_token":"scripted-token","expires_in":3600,"token_type":"Bearer"}'
-            )
+            return Reply(body=b'{"access_token":"scripted-token","expires_in":3600,"token_type":"Bearer"}')
         assert request.target == _target(provider, stream)
         if provider == "gemini":
             assert request.headers["x-goog-api-key"] == _API_KEY
@@ -128,9 +126,7 @@ def _client(gateway: Gateway) -> genai.Client:
 
 
 @pytest.mark.parametrize("provider", _PROVIDERS)
-def test_google_genai_sdk_non_streaming_forwards_body_and_response(
-    gateway: Gateway, provider: Provider
-) -> None:
+def test_google_genai_sdk_non_streaming_forwards_body_and_response(gateway: Gateway, provider: Provider) -> None:
     with wire_server(_respond(provider, stream=False)) as wire, gateway.scenario() as scenario:
         model: Final = _register_model(gateway, scenario, provider, wire)
         response: Final = _client(gateway).models.generate_content(
@@ -144,9 +140,7 @@ def test_google_genai_sdk_non_streaming_forwards_body_and_response(
 
 
 @pytest.mark.parametrize("provider", _PROVIDERS)
-def test_google_genai_sdk_streaming_forwards_body_and_response(
-    gateway: Gateway, provider: Provider
-) -> None:
+def test_google_genai_sdk_streaming_forwards_body_and_response(gateway: Gateway, provider: Provider) -> None:
     with wire_server(_respond(provider, stream=True)) as wire, gateway.scenario() as scenario:
         model: Final = _register_model(gateway, scenario, provider, wire)
         chunks: Final = tuple(
@@ -160,9 +154,7 @@ def test_google_genai_sdk_streaming_forwards_body_and_response(
 
 
 @pytest.mark.parametrize("provider", _PROVIDERS)
-def test_google_genai_sdk_dict_streaming_forwards_body_and_response(
-    gateway: Gateway, provider: Provider
-) -> None:
+def test_google_genai_sdk_dict_streaming_forwards_body_and_response(gateway: Gateway, provider: Provider) -> None:
     with wire_server(_respond(provider, stream=True)) as wire, gateway.scenario() as scenario:
         model: Final = _register_model(gateway, scenario, provider, wire)
         chunks: Final = tuple(

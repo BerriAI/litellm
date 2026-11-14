@@ -23,9 +23,7 @@ async def test_mock_basic_google_ai_studio_responses_api_with_tools():
         choices=[
             litellm.utils.Choices(
                 index=0,
-                message=litellm.utils.Message(
-                    role="assistant", content="Test response"
-                ),
+                message=litellm.utils.Message(role="assistant", content="Test response"),
                 finish_reason="stop",
             )
         ],

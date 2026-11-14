@@ -107,9 +107,7 @@ def workflow_errors(rel: Path, text: str) -> Iterator[str]:
         return
 
     for job_name, job in workflow.jobs.items():
-        if any(s.generates_prisma_client() for s in job.steps) and not any(
-            s.restores_cache() for s in job.steps
-        ):
+        if any(s.generates_prisma_client() for s in job.steps) and not any(s.restores_cache() for s in job.steps):
             yield (
                 f"{rel}: job `{job_name}` generates the Prisma client without a "
                 f"`uses: {CACHE_ACTION}` step, so it downloads ~85 MB of engines "
@@ -128,9 +126,7 @@ def main() -> None:
     )
 
     if errors:
-        raise PrismaBinaryCacheError(
-            "Prisma binary cache invariants violated:\n  - " + "\n  - ".join(errors)
-        )
+        raise PrismaBinaryCacheError("Prisma binary cache invariants violated:\n  - " + "\n  - ".join(errors))
 
     print("Prisma binary cache invariants hold across .github/workflows/")
 

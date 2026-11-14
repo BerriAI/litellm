@@ -116,9 +116,7 @@ class TestHelperFunctions:
         mock_response = MagicMock()
         mock_response.choices = [first_choice, second_choice]
 
-        assert (
-            _extract_response_text(mock_response) == "first response\nsecond response"
-        )
+        assert _extract_response_text(mock_response) == "first response\nsecond response"
 
     def test_extract_response_text_empty(self):
         from litellm.proxy.guardrails.guardrail_hooks.semantic_guard.semantic_guard import (
@@ -273,9 +271,7 @@ class TestContentFilterSqlInjectionTemplate:
         ids=[f"sql_conditional_{i}" for i in range(len(SQL_CONDITIONAL_BLOCK_CASES))],
     )
     @pytest.mark.asyncio
-    async def test_sql_conditional_block(
-        self, sql_injection_guardrail, sentence, reason
-    ):
+    async def test_sql_conditional_block(self, sql_injection_guardrail, sentence, reason):
         request_data = {"messages": [{"role": "user", "content": sentence}]}
         with pytest.raises(HTTPException):
             await sql_injection_guardrail.apply_guardrail(
@@ -311,9 +307,7 @@ class TestContentFilterSqlInjectionTemplate:
         ids=[f"sql_exception_{i}" for i in range(len(SQL_EXCEPTION_CASES))],
     )
     @pytest.mark.asyncio
-    async def test_sql_exceptions_allowed(
-        self, sql_injection_guardrail, sentence, reason
-    ):
+    async def test_sql_exceptions_allowed(self, sql_injection_guardrail, sentence, reason):
         request_data = {"messages": [{"role": "user", "content": sentence}]}
         result = await sql_injection_guardrail.apply_guardrail(
             inputs={"texts": [sentence]},
@@ -347,9 +341,7 @@ class TestContentFilterSqlInjectionTemplate:
         ids=[f"sql_no_match_{i}" for i in range(len(SQL_NO_MATCH_CASES))],
     )
     @pytest.mark.asyncio
-    async def test_sql_no_match_allowed(
-        self, sql_injection_guardrail, sentence, reason
-    ):
+    async def test_sql_no_match_allowed(self, sql_injection_guardrail, sentence, reason):
         request_data = {"messages": [{"role": "user", "content": sentence}]}
         result = await sql_injection_guardrail.apply_guardrail(
             inputs={"texts": [sentence]},

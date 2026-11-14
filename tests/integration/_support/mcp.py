@@ -689,19 +689,37 @@ class McpCaller:
         arguments: Final = dict(params or {})
         return self.gateway.client.post(
             self._path(),
-            json={"jsonrpc": "2.0", "id": 1, "method": method, "params": {
-                **arguments,
-                **({"_meta": {
-                    "io.modelcontextprotocol/protocolVersion": self.protocol_version,
-                    "io.modelcontextprotocol/clientInfo": {"name": "integration-caller", "version": "1"},
-                    "io.modelcontextprotocol/clientCapabilities": {},
-                }} if modern else {}),
-            }},
-            headers={**self._headers(), **({
-                "MCP-Protocol-Version": self.protocol_version,
-                "Mcp-Method": method,
-                "Mcp-Name": str(arguments.get("name", arguments.get("uri", ""))),
-            } if modern else {})},
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": method,
+                "params": {
+                    **arguments,
+                    **(
+                        {
+                            "_meta": {
+                                "io.modelcontextprotocol/protocolVersion": self.protocol_version,
+                                "io.modelcontextprotocol/clientInfo": {"name": "integration-caller", "version": "1"},
+                                "io.modelcontextprotocol/clientCapabilities": {},
+                            }
+                        }
+                        if modern
+                        else {}
+                    ),
+                },
+            },
+            headers={
+                **self._headers(),
+                **(
+                    {
+                        "MCP-Protocol-Version": self.protocol_version,
+                        "Mcp-Method": method,
+                        "Mcp-Name": str(arguments.get("name", arguments.get("uri", ""))),
+                    }
+                    if modern
+                    else {}
+                ),
+            },
         )
 
     def initialize(self) -> Outcome:

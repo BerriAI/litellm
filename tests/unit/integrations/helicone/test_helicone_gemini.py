@@ -4,7 +4,6 @@ Fixes: https://github.com/BerriAI/litellm/issues/19093
 """
 
 
-
 def test_helicone_gemini_model_in_list():
     """
     Test that Gemini models are in the helicone_model_list.
@@ -14,9 +13,7 @@ def test_helicone_gemini_model_in_list():
     logger = HeliconeLogger()
 
     # Test that "gemini" is in the model list
-    assert (
-        "gemini" in logger.helicone_model_list
-    ), "gemini should be in helicone_model_list"
+    assert "gemini" in logger.helicone_model_list, "gemini should be in helicone_model_list"
 
 
 def test_helicone_gemini_models_recognized():
@@ -29,9 +26,7 @@ def test_helicone_gemini_models_recognized():
 
     test_models = ["gemini-1.5-pro", "gemini-2.0-flash", "vertex_ai/gemini-1.5-flash"]
     for model in test_models:
-        is_recognized = any(
-            accepted_model in model for accepted_model in logger.helicone_model_list
-        )
+        is_recognized = any(accepted_model in model for accepted_model in logger.helicone_model_list)
         assert is_recognized, f"{model} should be recognized by helicone_model_list"
 
 
@@ -101,6 +96,5 @@ def test_helicone_vertex_gemini_gets_vertex_provider_url():
         assert "data" in captured, f"No request captured for {model}"
         actual_url = captured["data"]["providerRequest"]["url"]
         assert actual_url == expected_url, (
-            f"Model {model} (provider={custom_llm_provider!r}): "
-            f"expected provider_url={expected_url}, got {actual_url}"
+            f"Model {model} (provider={custom_llm_provider!r}): expected provider_url={expected_url}, got {actual_url}"
         )

@@ -106,7 +106,9 @@ def _chat_body(
     }
 
 
-def _messages_body(model: str, prompt: str, guardrails: tuple[str, ...], *, stream: bool = False) -> dict[str, JsonValue]:
+def _messages_body(
+    model: str, prompt: str, guardrails: tuple[str, ...], *, stream: bool = False
+) -> dict[str, JsonValue]:
     return {
         "model": model,
         "max_tokens": 16,
@@ -116,7 +118,9 @@ def _messages_body(model: str, prompt: str, guardrails: tuple[str, ...], *, stre
     }
 
 
-def _responses_body(model: str, value: JsonValue, guardrails: tuple[str, ...], *, stream: bool = False) -> dict[str, JsonValue]:
+def _responses_body(
+    model: str, value: JsonValue, guardrails: tuple[str, ...], *, stream: bool = False
+) -> dict[str, JsonValue]:
     return {
         "model": model,
         "input": value,
@@ -139,10 +143,7 @@ def _stream_request(candidate: Gateway, path: str, body: dict[str, JsonValue]) -
 def _chat_stream_delta_content(event: dict[str, JsonValue]) -> str:
     choices: Final = event["choices"]
     assert isinstance(choices, list), event
-    return "".join(
-        _chat_stream_choice_content(choice)
-        for choice in choices
-    )
+    return "".join(_chat_stream_choice_content(choice) for choice in choices)
 
 
 def _chat_stream_choice_content(choice: JsonValue) -> str:
@@ -153,9 +154,7 @@ def _chat_stream_choice_content(choice: JsonValue) -> str:
 
 def _chat_stream_content(response_text: str) -> tuple[str, bool]:
     events: Final = tuple(
-        line.removeprefix("data: ")
-        for line in response_text.splitlines()
-        if line.startswith("data: ")
+        line.removeprefix("data: ") for line in response_text.splitlines() if line.startswith("data: ")
     )
     content_events: Final = tuple(event for event in events if event != "[DONE]")
     chunks: Final = tuple(object_value(json.loads(event)) for event in content_events)
@@ -163,9 +162,7 @@ def _chat_stream_content(response_text: str) -> tuple[str, bool]:
     return content, bool(events) and events[-1] == "[DONE]"
 
 
-def _openai_chat_sync(
-    base_url: str, key: str, model: str, prompt: str, guardrails: tuple[str, ...]
-) -> None:
+def _openai_chat_sync(base_url: str, key: str, model: str, prompt: str, guardrails: tuple[str, ...]) -> None:
     client: Final = openai.OpenAI(base_url=base_url, api_key=key, max_retries=0)
     with client:
         client.chat.completions.create(
@@ -176,9 +173,7 @@ def _openai_chat_sync(
         )
 
 
-async def _openai_chat_async(
-    base_url: str, key: str, model: str, prompt: str, guardrails: tuple[str, ...]
-) -> None:
+async def _openai_chat_async(base_url: str, key: str, model: str, prompt: str, guardrails: tuple[str, ...]) -> None:
     client: Final = openai.AsyncOpenAI(base_url=base_url, api_key=key, max_retries=0)
     async with client:
         await client.chat.completions.create(
@@ -664,9 +659,7 @@ def test_h13_messages_less_embeddings_log_allow_without_azure_request(
 
 
 @pytest.mark.parametrize("guardrail_name", ["shield", "moderation"], ids=("H14-shield", "H14-moderation"))
-def test_h14_completions_without_messages_log_allow(
-    azure_rig: tuple[Gateway, Wire, Wire], guardrail_name: str
-) -> None:
+def test_h14_completions_without_messages_log_allow(azure_rig: tuple[Gateway, Wire, Wire], guardrail_name: str) -> None:
     candidate, azure, provider = azure_rig
     prompt: Final = f"synthetic completion input {uuid.uuid4().hex}"
     with candidate.scenario() as scenario:
@@ -729,9 +722,7 @@ def test_c2_tuple_attack_cache_twins_are_both_blocked(
 
 
 @pytest.mark.parametrize("guardrail_name", ["shield", "moderation"], ids=("C3-shield", "C3-moderation"))
-def test_c3_embeddings_cache_twins_keep_allow_rows(
-    azure_rig: tuple[Gateway, Wire, Wire], guardrail_name: str
-) -> None:
+def test_c3_embeddings_cache_twins_keep_allow_rows(azure_rig: tuple[Gateway, Wire, Wire], guardrail_name: str) -> None:
     candidate, azure, provider = azure_rig
     prompt: Final = f"cache embedding {uuid.uuid4().hex}"
     with candidate.scenario() as scenario:
@@ -864,11 +855,7 @@ def test_s2_malformed_messages_shapes_match_base_pin(
             "messages": messages,
             "guardrails": ["shield"],
         }
-        raw: Final = json.dumps(
-            {"model": model, "guardrails": ["shield"]}
-            if shape == "missing"
-            else body
-        )
+        raw: Final = json.dumps({"model": model, "guardrails": ["shield"]} if shape == "missing" else body)
         response: Final = candidate.client.post(
             "/v1/chat/completions",
             content=raw,
@@ -888,9 +875,7 @@ def test_s2d_duplicate_messages_key_matches_single_key_request(
         model: Final = _model(scenario, provider)
         body: Final = _chat_body(model, prompt, ("shield",))
         raw: Final = json.dumps(body)
-        raw_with_duplicate: Final = (
-            raw[:-1] + ',"messages":' + json.dumps(body["messages"]) + "}"
-        )
+        raw_with_duplicate: Final = raw[:-1] + ',"messages":' + json.dumps(body["messages"]) + "}"
         response: Final = candidate.client.post(
             "/v1/chat/completions",
             content=raw_with_duplicate,
@@ -902,9 +887,7 @@ def test_s2d_duplicate_messages_key_matches_single_key_request(
 
 
 @pytest.mark.parametrize("authorization", ["", "Bearer invalid-key"], ids=("S3-missing", "S3-invalid"))
-def test_s3_authentication_rejects_before_guardrails(
-    azure_rig: tuple[Gateway, Wire, Wire], authorization: str
-) -> None:
+def test_s3_authentication_rejects_before_guardrails(azure_rig: tuple[Gateway, Wire, Wire], authorization: str) -> None:
     candidate, azure, provider = azure_rig
     with candidate.scenario() as scenario:
         model: Final = _model(scenario, provider)
@@ -921,9 +904,7 @@ def test_s3_authentication_rejects_before_guardrails(
 
 @pytest.mark.parametrize("status", [500, 403, 404], ids=("S4-500", "S4-403", "S4-404"))
 @pytest.mark.parametrize("guardrail_name", ["shield", "moderation"], ids=("S4-shield", "S4-moderation"))
-def test_s4_azure_error_fails_closed(
-    azure_rig: tuple[Gateway, Wire, Wire], status: int, guardrail_name: str
-) -> None:
+def test_s4_azure_error_fails_closed(azure_rig: tuple[Gateway, Wire, Wire], status: int, guardrail_name: str) -> None:
     candidate, azure, provider = azure_rig
     prompt: Final = f"AZURE_{status} benign {uuid.uuid4().hex}"
     with candidate.scenario() as scenario:
@@ -940,9 +921,7 @@ def test_s4_azure_error_fails_closed(
 
 
 @pytest.mark.parametrize("guardrail_name", ["shield", "moderation"], ids=("S5-shield", "S5-moderation"))
-def test_s5_list_guardrail_azure_error_control(
-    azure_rig: tuple[Gateway, Wire, Wire], guardrail_name: str
-) -> None:
+def test_s5_list_guardrail_azure_error_control(azure_rig: tuple[Gateway, Wire, Wire], guardrail_name: str) -> None:
     candidate, azure, provider = azure_rig
     prompt: Final = f"AZURE_500 list benign {uuid.uuid4().hex}"
     with candidate.scenario() as scenario:
@@ -1257,15 +1236,13 @@ def test_e4_cache_disabled_twin_requests_have_distinct_spend_rows(
         assert len(set(response.headers["x-litellm-call-id"] for response in responses)) == 3
         assert _azure_texts(azure) == (prompt, prompt, prompt), responses[-1].text
         assert provider_texts(provider) == (prompt, prompt, prompt), responses[-1].text
-        assert all(_guardrail_entry(response)["guardrail_status"] == "success" for response in responses), (
-            responses[-1].text
-        )
+        assert all(_guardrail_entry(response)["guardrail_status"] == "success" for response in responses), responses[
+            -1
+        ].text
 
 
 @pytest.mark.parametrize("async_client", [False, True], ids=("sync", "async"))
-def test_h15_openai_sdk_tuple_attack_is_blocked(
-    azure_rig: tuple[Gateway, Wire, Wire], async_client: bool
-) -> None:
+def test_h15_openai_sdk_tuple_attack_is_blocked(azure_rig: tuple[Gateway, Wire, Wire], async_client: bool) -> None:
     candidate, azure, provider = azure_rig
     prompt: Final = f"OpenAI SDK tuple {ATTACK_MARKER} {uuid.uuid4().hex}"
     with candidate.scenario() as scenario:
@@ -1299,9 +1276,7 @@ def test_h15_openai_sdk_tuple_benign_is_scanned_and_served(
 
 
 @pytest.mark.parametrize("async_client", [False, True], ids=("sync", "async"))
-def test_h16_anthropic_sdk_tuple_attack_is_blocked(
-    azure_rig: tuple[Gateway, Wire, Wire], async_client: bool
-) -> None:
+def test_h16_anthropic_sdk_tuple_attack_is_blocked(azure_rig: tuple[Gateway, Wire, Wire], async_client: bool) -> None:
     candidate, azure, provider = azure_rig
     prompt: Final = f"Anthropic SDK tuple {ATTACK_MARKER} {uuid.uuid4().hex}"
     with candidate.scenario() as scenario:
@@ -1349,9 +1324,7 @@ def test_h18_h19_key_and_team_tuple_guardrails_are_applied(
     with candidate.scenario() as scenario:
         team_id: Final = scenario.team(guardrails=["tuple-writer", "shield"]) if guardrail_source == "team" else ""
         key_fields: Final = (
-            {"team_id": team_id}
-            if guardrail_source == "team"
-            else {"guardrails": ["tuple-writer", "shield"]}
+            {"team_id": team_id} if guardrail_source == "team" else {"guardrails": ["tuple-writer", "shield"]}
         )
         key: Final = scenario.key(**key_fields)
         model: Final = _model(scenario, provider)

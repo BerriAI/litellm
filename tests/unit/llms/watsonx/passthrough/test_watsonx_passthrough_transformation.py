@@ -23,9 +23,7 @@ class TestWatsonxPassthroughConfig:
         config = WatsonxPassthroughConfig()
         request_data = {"stream": True, "input": "test"}
 
-        result = config.is_streaming_request(
-            endpoint="ml/v1/text/generation", request_data=request_data
-        )
+        result = config.is_streaming_request(endpoint="ml/v1/text/generation", request_data=request_data)
 
         assert result is True
 
@@ -34,9 +32,7 @@ class TestWatsonxPassthroughConfig:
         config = WatsonxPassthroughConfig()
         request_data = {"stream": False, "input": "test"}
 
-        result = config.is_streaming_request(
-            endpoint="ml/v1/text/generation", request_data=request_data
-        )
+        result = config.is_streaming_request(endpoint="ml/v1/text/generation", request_data=request_data)
 
         assert result is False
 
@@ -45,9 +41,7 @@ class TestWatsonxPassthroughConfig:
         config = WatsonxPassthroughConfig()
         request_data = {"input": "test"}
 
-        result = config.is_streaming_request(
-            endpoint="ml/v1/text/generation", request_data=request_data
-        )
+        result = config.is_streaming_request(endpoint="ml/v1/text/generation", request_data=request_data)
 
         assert result is False
 

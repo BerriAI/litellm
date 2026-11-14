@@ -132,7 +132,9 @@ def test_vector_store_search_forwards_all_search_fields_on_both_routes(gateway: 
 
         alias_response: Final = gateway.request("POST", f"{search_path}", _ALIAS_REQUEST_BODY)
         assert alias_response.status_code == 200, alias_response.text
-        assert _SearchPage.model_validate_json(alias_response.content).model_dump(mode="json") == expected_alias_response
+        assert (
+            _SearchPage.model_validate_json(alias_response.content).model_dump(mode="json") == expected_alias_response
+        )
 
         requests: Final = wire.drain()
         assert [(request.method, request.target) for request in requests] == [

@@ -746,6 +746,7 @@ def test_a_runtime_change_to_the_budget_exceeded_status_code_reaches_the_next_re
 ROUTED_MODELS: Final = (
     ("gpt-realtime", "openai/gpt-realtime"),
     ("gpt-image-1", "openai/gpt-image-1"),
+    ("gpt-4o-mini-tts", "openai/gpt-4o-mini-tts"),
 )
 
 
@@ -763,6 +764,9 @@ FAMILIES: Final[Mapping[str, Family]] = {
     ),
     "images": Family(
         "/v1/images/generations", {"model": "gpt-image-1", "prompt": "a cat"}, call_type="aimage_generation"
+    ),
+    "speech": Family(
+        "/v1/audio/speech", {"model": "gpt-4o-mini-tts", "input": "hello", "voice": "alloy"}, call_type="aspeech"
     ),
 }
 

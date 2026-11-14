@@ -50,9 +50,7 @@ def _assert_budget_blocks(client: BudgetClient, key: str, *, user: str = "") -> 
 
 def _assert_blocked_422(client: BudgetClient, key: str) -> StreamingResponse:
     blocked = _assert_budget_blocks(client, key)
-    assert blocked.status_code == 422, (
-        f"budget refusal must be 422, got {blocked.status_code}: {blocked.body[:200]}"
-    )
+    assert blocked.status_code == 422, f"budget refusal must be 422, got {blocked.status_code}: {blocked.body[:200]}"
     return blocked
 
 
@@ -147,9 +145,7 @@ class TestBudgetBlocksPerLevel:
             mode=Mode.NONSTREAM,
         )
     )
-    def test_end_user_budget_blocks_attributed_calls(
-        self, client: BudgetClient, resources: ResourceManager
-    ) -> None:
+    def test_end_user_budget_blocks_attributed_calls(self, client: BudgetClient, resources: ResourceManager) -> None:
         customer = f"e2e-budget-cust-{unique_marker()}"
         client.create_customer(customer, max_budget=TINY_CAP)
         resources.defer(lambda: client.delete_customers([customer]))
@@ -224,9 +220,7 @@ class TestKeyBudgetBlocksAcrossKeyKinds:
             mode=Mode.NONSTREAM,
         )
     )
-    def test_personal_key_blocks_over_its_own_budget(
-        self, client: BudgetClient, resources: ResourceManager
-    ) -> None:
+    def test_personal_key_blocks_over_its_own_budget(self, client: BudgetClient, resources: ResourceManager) -> None:
         user_id = client.create_user(max_budget=ROOMY_CAP)
         resources.defer(lambda: client.delete_user(user_id))
         capped_key = client.generate_key(user_id=user_id, max_budget=TINY_CAP)
@@ -266,9 +260,7 @@ class TestKeyBudgetBlocksAcrossKeyKinds:
             mode=Mode.NONSTREAM,
         )
     )
-    def test_team_member_key_blocks_over_its_own_budget(
-        self, client: BudgetClient, resources: ResourceManager
-    ) -> None:
+    def test_team_member_key_blocks_over_its_own_budget(self, client: BudgetClient, resources: ResourceManager) -> None:
         team_id = client.create_team(alias=f"e2e-key-cap-team-{unique_marker()}", max_budget=ROOMY_CAP)
         resources.defer(lambda: client.delete_team(team_id))
         member_id = client.create_user(max_budget=ROOMY_CAP)

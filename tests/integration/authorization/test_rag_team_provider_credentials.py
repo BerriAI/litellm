@@ -1082,7 +1082,9 @@ def test_files_upload_by_a_key_restricted_under_the_team_wildcard_uses_the_team_
     assert rag_rig.signatures() == (("wildcard", "POST", "/v1/files", f"Bearer {WILDCARD_API_KEY}"),)
 
 
-@pytest.mark.parametrize("batch_options", ({}, {"litellm_credential_name": "no-such-credential"}), ids=("plain", "credential_name"))
+@pytest.mark.parametrize(
+    "batch_options", ({}, {"litellm_credential_name": "no-such-credential"}), ids=("plain", "credential_name")
+)
 @pytest.mark.parametrize(
     ("caller", "prefix", "api_key", "reads_input"),
     (("team_a_key", "team", TEAM_API_KEY, False), ("wildcard_bare_key", "wildcard", WILDCARD_API_KEY, True)),
@@ -2173,9 +2175,9 @@ def test_forwarded_provider_key_on_files_and_batches_wins_over_team_provider_cre
 
     assert created.status_code == 200, created.text
     calls: Final = rag_rig.calls()
-    assert [(call.prefix, call.authorization) for call in calls] == [
-        (prefix, f"Bearer {FORWARDED_API_KEY}")
-    ] * len(calls), calls
+    assert [(call.prefix, call.authorization) for call in calls] == [(prefix, f"Bearer {FORWARDED_API_KEY}")] * len(
+        calls
+    ), calls
     assert {(call.method, call.route) for call in calls} >= {("POST", "/v1/files"), ("POST", "/v1/batches")}, calls
 
 

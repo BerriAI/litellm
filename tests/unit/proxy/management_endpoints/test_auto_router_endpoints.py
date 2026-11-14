@@ -222,7 +222,10 @@ async def test_preview_missing_unresolvable_default_is_a_config_error(monkeypatc
         await preview_auto_router_routing(
             http_request=ROUTING_HTTP_REQUEST,
             data=_request(
-                "hello", tiers={}, classifier_type="llm", classifier_fallback="default_model",
+                "hello",
+                tiers={},
+                classifier_type="llm",
+                classifier_fallback="default_model",
                 classifier_llm_config={"model": "unconfigured-classifier"},
             ),
             user_api_key_dict=ADMIN,
@@ -276,7 +279,9 @@ async def test_escalation_keyword_bumps_the_classified_tier(monkeypatch: pytest.
     assert response.routing_decision["escalation_keyword"] == "ultrathink"
 
 
-@pytest.mark.parametrize("default_model,expected,configured", ((None, "mid-model", True), ("never-configured", "never-configured", False)))
+@pytest.mark.parametrize(
+    "default_model,expected,configured", ((None, "mid-model", True), ("never-configured", "never-configured", False))
+)
 @pytest.mark.asyncio
 async def test_tier_model_missing_from_the_proxy_is_reported(
     monkeypatch: pytest.MonkeyPatch, default_model: str | None, expected: str, configured: bool
@@ -1131,7 +1136,9 @@ class TestAutoRouterBenchmarks:
         from litellm.proxy.management_endpoints.auto_router_endpoints import get_auto_router_benchmarks
 
         monkeypatch.setattr(
-            proxy_server, "prisma_client", _benchmark_db([{**TestAutoRouterBenchmarks.ROW.model_dump(), "tier_turns": wire_value}])
+            proxy_server,
+            "prisma_client",
+            _benchmark_db([{**TestAutoRouterBenchmarks.ROW.model_dump(), "tier_turns": wire_value}]),
         )
 
         response = await get_auto_router_benchmarks(
@@ -1344,9 +1351,7 @@ class TestAutoRouterSession:
             "savings_estimated_turns": 3 if estimated else 0,
             "savings_estimated_actual_spend": 0.14 if estimated else 0.0,
             "baseline_spend": pytest.approx(spend + 0.24),
-            "savings_estimated_baseline_spend": (
-                pytest.approx(0.38 if turns == 3 else 0.10) if estimated else None
-            ),
+            "savings_estimated_baseline_spend": (pytest.approx(0.38 if turns == 3 else 0.10) if estimated else None),
             "baseline_model": "anthropic/claude-opus-5",
             "baseline_models": {"anthropic/claude-opus-5": 3},
         }
@@ -1419,9 +1424,7 @@ class TestAutoRouterSession:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("mixed", [False, True])
-    async def test_session_preserves_historical_baseline_labels(
-        self, monkeypatch: pytest.MonkeyPatch, mixed: bool
-    ):
+    async def test_session_preserves_historical_baseline_labels(self, monkeypatch: pytest.MonkeyPatch, mixed: bool):
         from litellm.proxy.management_endpoints.auto_router_endpoints import get_auto_router_session
 
         priced = {"anthropic/claude-opus-5": 2, "anthropic/claude-sonnet-5": 1}
@@ -2809,7 +2812,17 @@ async def test_jev_test_routing_authorizes_paid_evaluation_before_contacting_typ
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "case",
-    ["allowed", "credential-free", "team-admin-environment", "missing", "blocked", "key", "budget", "team", "not-router"],
+    [
+        "allowed",
+        "credential-free",
+        "team-admin-environment",
+        "missing",
+        "blocked",
+        "key",
+        "budget",
+        "team",
+        "not-router",
+    ],
 )
 async def test_saved_jev_probe_uses_authorized_server_configuration(monkeypatch: pytest.MonkeyPatch, case: str) -> None:
     router, recorded_calls = _recording_router("SIMPLE")
@@ -2837,8 +2850,11 @@ async def test_saved_jev_probe_uses_authorized_server_configuration(monkeypatch:
                     "id": "saved-jev-id",
                     "blocked": case == "blocked",
                     "team_id": (
-                        "owner-team" if case == "team"
-                        else "admin-preview-team" if case == "team-admin-environment" else None
+                        "owner-team"
+                        if case == "team"
+                        else "admin-preview-team"
+                        if case == "team-admin-environment"
+                        else None
                     ),
                 },
             }
@@ -2864,8 +2880,11 @@ async def test_saved_jev_probe_uses_authorized_server_configuration(monkeypatch:
             "prompt": "what is 2+2",
             "saved_model_id": "missing-id" if case == "missing" else "saved-jev-id",
             "team_id": (
-                "member-preview-team" if case == "team"
-                else "admin-preview-team" if case == "team-admin-environment" else None
+                "member-preview-team"
+                if case == "team"
+                else "admin-preview-team"
+                if case == "team-admin-environment"
+                else None
             ),
         },
         classifier_type="jev",
@@ -3463,7 +3482,9 @@ async def test_team_admin_cannot_preview_or_validate_environment_references(
         "tiers": TIERS,
         "classifier_type": "jev" if legacy else "oss_classifier",
         "jev_classifier_config" if legacy else "opensource_classifier_config": {
-            "api_key": "caller-key", "api_base": "https://denied-jev.test", field: "os.environ/PRIVATE_JEV_VALUE",
+            "api_key": "caller-key",
+            "api_base": "https://denied-jev.test",
+            field: "os.environ/PRIVATE_JEV_VALUE",
         },
     }
     validation: Final = ComplexityRouterConfigValidationRequest(

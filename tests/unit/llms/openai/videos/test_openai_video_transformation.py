@@ -20,10 +20,7 @@ def test_video_content_request_encodes_video_id_path_segment():
         headers={},
     )
 
-    assert (
-        url
-        == "https://api.openai.com/v1/videos/..%2F..%2Fresponses%3Fx%3D1%23frag/content"
-    )
+    assert url == "https://api.openai.com/v1/videos/..%2F..%2Fresponses%3Fx%3D1%23frag/content"
     assert params == {}
 
 
@@ -70,10 +67,7 @@ def test_wrapped_character_id_is_decoded_then_encoded_as_path_segment():
         headers={},
     )
 
-    assert (
-        url
-        == "https://api.openai.com/v1/videos/characters/..%2F..%2Fcharacters%3Fx%3D1%23frag"
-    )
+    assert url == "https://api.openai.com/v1/videos/characters/..%2F..%2Fcharacters%3Fx%3D1%23frag"
     assert params == {}
 
 
@@ -133,4 +127,6 @@ def test_first_class_video_fields_are_rejected_or_dropped(field: str) -> None:
     config: Final = OpenAIVideoConfig()
     with pytest.raises(UnsupportedParamsError, match=field):
         config.map_openai_params({field: 1}, "video-model", False)
-    assert config.map_openai_params({field: 1}, "video-model", True) == config.map_openai_params({}, "video-model", True)
+    assert config.map_openai_params({field: 1}, "video-model", True) == config.map_openai_params(
+        {}, "video-model", True
+    )

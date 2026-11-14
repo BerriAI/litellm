@@ -294,7 +294,10 @@ class TestReliabilityCooldowns:
         Subject(
             domain=Domain.ROUTING,
             providers=(Provider.OPENAI,),
-            models=(CHEAP_OPENAI_MODEL, REAL_MODEL,),
+            models=(
+                CHEAP_OPENAI_MODEL,
+                REAL_MODEL,
+            ),
             mode=Mode.NONSTREAM,
         )
     )

@@ -113,7 +113,6 @@ async def test_header_and_logging_share_one_allowance_allocation(
     assert payload["cost_breakdown"] == costs[0].logging_breakdown()
 
 
-
 @pytest.mark.asyncio
 async def test_failed_counter_freezes_full_price_without_a_retry(logging_obj: Logging) -> None:
     counter: Final = Counter(fail=True)

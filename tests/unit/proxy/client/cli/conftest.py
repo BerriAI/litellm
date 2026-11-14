@@ -21,9 +21,7 @@ def _statusline_script_under_tmp(monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 
 
 @pytest.fixture
-def fake_codex_version(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> Callable[[str | None, int], Path]:
+def fake_codex_version(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Callable[[str | None, int], Path]:
     directory: Final = tmp_path / "codex-bin"
     directory.mkdir()
     binary: Final = directory / ("codex.cmd" if os.name == "nt" else "codex")
@@ -39,12 +37,12 @@ def fake_codex_version(
             binary.write_text(
                 '@echo off\nif not "%~1"=="--version" exit /b 2\n'
                 'if not "%~2"=="" exit /b 2\ntype "%~dp0version-output.txt"\n'
-                f'exit /b {returncode}\n'
+                f"exit /b {returncode}\n"
             )
         else:
             binary.write_text(
                 '#!/bin/sh\nif [ "$#" -ne 1 ] || [ "$1" != "--version" ]; then\n    exit 2\nfi\n'
-                f'/bin/cat {shlex.quote(str(version_output))}\nexit {returncode}\n'
+                f"/bin/cat {shlex.quote(str(version_output))}\nexit {returncode}\n"
             )
         binary.chmod(0o700)
         return binary

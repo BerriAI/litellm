@@ -567,9 +567,7 @@ async def test_caller_headers_pass_through_untouched_when_url_validation_is_disa
 @pytest.mark.parametrize(("method", "body"), [("PUT", "put"), ("DELETE", "deleted"), ("PATCH", "patched")])
 async def test_http_request_other_methods_reach_an_allowlisted_host(local_server, monkeypatch, method, body):
     monkeypatch.setattr(litellm, "user_url_allowed_hosts", [f"127.0.0.1:{local_server.port}"])
-    guardrail = _reporting_guardrail(
-        f'http_request("http://127.0.0.1:{local_server.port}/marker", method="{method}")'
-    )
+    guardrail = _reporting_guardrail(f'http_request("http://127.0.0.1:{local_server.port}/marker", method="{method}")')
 
     reason = await _block_reason(guardrail)
 

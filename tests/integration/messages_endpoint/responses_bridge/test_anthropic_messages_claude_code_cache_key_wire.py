@@ -69,9 +69,7 @@ def test_prompt_cache_key_is_derived_from_claude_code_session_id_not_device_id(g
         send(_claude_code_user_id(device_one, session_two), f"probe two {identity}")
         send(_claude_code_user_id(device_two, session_two), f"probe three {identity}")
 
-        keys: Final = [
-            _JSON_OBJECT.validate_json(request.body).get("prompt_cache_key") for request in wire.drain()
-        ]
+        keys: Final = [_JSON_OBJECT.validate_json(request.body).get("prompt_cache_key") for request in wire.drain()]
         assert keys[0] == session_one, keys
         assert keys[1] == session_two, keys
         assert keys[2] == session_two, keys

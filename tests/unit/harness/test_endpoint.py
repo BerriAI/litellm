@@ -99,13 +99,9 @@ async def test_rejects_bad_token_and_accepts_both_header_styles() -> None:
         assert ep.url == f"http://127.0.0.1:{ep.port}" and ep.port > 0
         async with httpx.AsyncClient(base_url=ep.url) as client:
             missing = await client.post("/v1/messages", json={})
-            wrong = await client.post(
-                "/v1/messages", json={}, headers={"x-api-key": "nope"}
-            )
+            wrong = await client.post("/v1/messages", json={}, headers={"x-api-key": "nope"})
             bearer = await client.post("/v1/messages", json={}, headers=auth(ep))
-            api_key = await client.post(
-                "/messages", json={}, headers={"x-api-key": ep.token}
-            )
+            api_key = await client.post("/messages", json={}, headers={"x-api-key": ep.token})
     assert missing.status_code == 401
     assert wrong.status_code == 401
     assert "error" in wrong.json()
@@ -154,9 +150,7 @@ async def test_gateway_rewrites_headers_and_model() -> None:
         ("/responses", RESPONSES_SSE, (20, 4)),
     ],
 )
-async def test_gateway_sse_passthrough_and_usage(
-    path: str, body: bytes, expected: tuple[int, int]
-) -> None:
+async def test_gateway_sse_passthrough_and_usage(path: str, body: bytes, expected: tuple[int, int]) -> None:
     recorder = Recorder(sse_response(body))
     async with gateway_endpoint(recorder) as ep:
         async with httpx.AsyncClient(base_url=ep.url) as client:
@@ -223,9 +217,7 @@ async def test_sdk_chat_non_stream(monkeypatch: pytest.MonkeyPatch) -> None:
         return response
 
     monkeypatch.setattr(litellm, "acompletion", fake_acompletion)
-    async with ModelEndpoint(
-        Harness.OPENCODE, "openai/gpt-x", None, api_key="sk-real", api_base="https://x"
-    ) as ep:
+    async with ModelEndpoint(Harness.OPENCODE, "openai/gpt-x", None, api_key="sk-real", api_base="https://x") as ep:
         async with httpx.AsyncClient(base_url=ep.url) as client:
             resp = await client.post(
                 "/v1/chat/completions",
@@ -291,9 +283,7 @@ async def test_sdk_messages_stream_handles_dicts_and_bytes(
     monkeypatch.setattr(litellm.anthropic.messages, "acreate", fake_acreate)
     async with ModelEndpoint(Harness.CLAUDE_CODE, "anthropic/claude", None) as ep:
         async with httpx.AsyncClient(base_url=ep.url) as client:
-            resp = await client.post(
-                "/v1/messages", json={"stream": True}, headers=auth(ep)
-            )
+            resp = await client.post("/v1/messages", json={"stream": True}, headers=auth(ep))
     assert "event: message_start" in resp.text
     assert "event: message_delta" in resp.text
     assert (ep.usage.input_tokens, ep.usage.output_tokens) == (4, 9)
@@ -430,8 +420,7 @@ def anthropic_cached_sse() -> bytes:
     start: Final = {"type": "message_start", "message": {"usage": {**ANTHROPIC_CACHED_USAGE, "output_tokens": 1}}}
     delta: Final = {"type": "message_delta", "usage": {"output_tokens": 10}}
     return (
-        f"event: message_start\ndata: {json.dumps(start)}\n\n"
-        f"event: message_delta\ndata: {json.dumps(delta)}\n\n"
+        f"event: message_start\ndata: {json.dumps(start)}\n\nevent: message_delta\ndata: {json.dumps(delta)}\n\n"
     ).encode()
 
 

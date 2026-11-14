@@ -100,9 +100,7 @@ def test_bedrock_embedding_with_api_key_bearer_token(model, input_type, embed_re
         ("bedrock/amazon.titan-embed-text-v1", "text", titan_embedding_response),
     ],
 )
-def test_bedrock_embedding_with_env_variable_bearer_token(
-    model, input_type, embed_response
-):
+def test_bedrock_embedding_with_env_variable_bearer_token(model, input_type, embed_response):
     """Test embedding functionality with bearer token from environment variable"""
     client = HTTPHandler()
     test_api_key = "env-bearer-token-12345"
@@ -111,7 +109,6 @@ def test_bedrock_embedding_with_env_variable_bearer_token(
         patch.dict(os.environ, {"AWS_BEARER_TOKEN_BEDROCK": test_api_key}),
         patch.object(client, "post") as mock_post,
     ):
-
         mock_response = Mock()
         mock_response.status_code = 200
         mock_response.text = json.dumps(embed_response)
@@ -318,9 +315,9 @@ def test_bedrock_embedding_plain_model_id_calls_the_env_region_like_chat(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("AWS_REGION_NAME", "us-west-2")
-    route = respx_mock.post("https://bedrock-runtime.us-west-2.amazonaws.com/model/cohere.embed-english-v3/invoke").mock(
-        return_value=httpx.Response(200, json=cohere_embedding_response)
-    )
+    route = respx_mock.post(
+        "https://bedrock-runtime.us-west-2.amazonaws.com/model/cohere.embed-english-v3/invoke"
+    ).mock(return_value=httpx.Response(200, json=cohere_embedding_response))
 
     litellm.embedding(
         model="bedrock/us-east-1/cohere.embed-english-v3",
@@ -456,9 +453,7 @@ def test_bedrock_embedding_with_a_govcloud_arn_model_id_bills_at_the_arn_region_
 ) -> None:
     arn: Final = "arn:aws-us-gov:bedrock:us-gov-west-1::foundation-model/amazon.nova-2-multimodal-embeddings-v1:0"
     route = respx_mock.post(url__startswith=f"{GOVCLOUD_WEST_RUNTIME}/model/").mock(
-        return_value=httpx.Response(
-            200, json={"embeddings": [{"embeddingType": "TEXT", "embedding": [0.1, 0.2, 0.3]}]}
-        )
+        return_value=httpx.Response(200, json={"embeddings": [{"embeddingType": "TEXT", "embedding": [0.1, 0.2, 0.3]}]})
     )
 
     response: Final = litellm.embedding(
@@ -537,9 +532,7 @@ def test_bedrock_embedding_with_sigv4():
     """Test embedding falls back to SigV4 auth when no bearer token is provided"""
     model = "bedrock/amazon.titan-embed-text-v1"
 
-    with patch(
-        "litellm.llms.bedrock.embed.embedding.BedrockEmbedding.embeddings"
-    ) as mock_bedrock_embed:
+    with patch("litellm.llms.bedrock.embed.embedding.BedrockEmbedding.embeddings") as mock_bedrock_embed:
         mock_embedding_response = litellm.EmbeddingResponse()
         mock_embedding_response.data = [{"embedding": [0.1, 0.2, 0.3]}]
         mock_bedrock_embed.return_value = mock_embedding_response
@@ -636,9 +629,7 @@ def test_twelvelabs_input_type_parameter_mapping():
     test_api_key = "test-bearer-token-12345"
     model = "bedrock/twelvelabs.marengo-embed-2-7-v1:0"
 
-    twelvelabs_response = {
-        "data": [{"embedding": [0.1, 0.2, 0.3], "inputTextTokenCount": 10}]
-    }
+    twelvelabs_response = {"data": [{"embedding": [0.1, 0.2, 0.3], "inputTextTokenCount": 10}]}
 
     with patch.object(client, "post") as mock_post:
         mock_response = Mock()
@@ -675,9 +666,7 @@ def test_twelvelabs_input_type_parameter_mapping_async_invoke():
     test_api_key = "test-bearer-token-12345"
     model = "bedrock/async_invoke/twelvelabs.marengo-embed-2-7-v1:0"
 
-    async_invoke_response = {
-        "invocationArn": "arn:aws:bedrock:us-east-1:123456789012:async-invoke/abc123def456"
-    }
+    async_invoke_response = {"invocationArn": "arn:aws:bedrock:us-east-1:123456789012:async-invoke/abc123def456"}
 
     with patch.object(client, "post") as mock_post:
         mock_response = Mock()
@@ -718,9 +707,7 @@ def test_twelvelabs_missing_input_type_error():
 
     # Test TwelveLabs model - should default to 'text' when input_type is missing
     twelvelabs_model = "bedrock/twelvelabs.marengo-embed-2-7-v1:0"
-    twelvelabs_response = {
-        "data": [{"embedding": [0.1, 0.2, 0.3], "inputTextTokenCount": 10}]
-    }
+    twelvelabs_response = {"data": [{"embedding": [0.1, 0.2, 0.3], "inputTextTokenCount": 10}]}
 
     with patch.object(client, "post") as mock_post:
         mock_response = Mock()
@@ -840,8 +827,7 @@ def test_bedrock_embedding_header_forwarding(model, embed_response):
                     or any(k.lower() == header_key.lower() for k in headers.keys())
                 )
                 assert header_found, (
-                    f"Header {header_key} should be in request headers. "
-                    f"Found headers: {list(headers.keys())}"
+                    f"Header {header_key} should be in request headers. Found headers: {list(headers.keys())}"
                 )
 
             print(f"✓ Test passed for {model}")
@@ -897,20 +883,14 @@ def test_bedrock_embedding_extra_headers_and_headers_merge():
 
             # Both sets of headers should be present
             # Note: AWS SigV4 signing may modify header names to lowercase
-            proxy_header_found = any(
-                k.lower() == "x-forwarded-header" for k in headers.keys()
-            )
+            proxy_header_found = any(k.lower() == "x-forwarded-header" for k in headers.keys())
             assert proxy_header_found, (
-                "Proxy forwarded header should be present. "
-                f"Found headers: {list(headers.keys())}"
+                f"Proxy forwarded header should be present. Found headers: {list(headers.keys())}"
             )
 
-            explicit_header_found = any(
-                k.lower() == "x-explicit-header" for k in headers.keys()
-            )
+            explicit_header_found = any(k.lower() == "x-explicit-header" for k in headers.keys())
             assert explicit_header_found, (
-                "Explicitly passed header should be present. "
-                f"Found headers: {list(headers.keys())}"
+                f"Explicitly passed header should be present. Found headers: {list(headers.keys())}"
             )
 
             print("✓ Both header sources correctly merged and forwarded")
@@ -1039,12 +1019,9 @@ def test_bedrock_embedding_custom_headers_with_iam_role_and_custom_api_base():
             # Note: HeadersDict should be converted to regular dict, so headers should be accessible
             for header_key, header_value in custom_headers.items():
                 # Check if header exists (case-insensitive for HTTP headers)
-                header_found = any(
-                    k.lower() == header_key.lower() for k in headers.keys()
-                )
+                header_found = any(k.lower() == header_key.lower() for k in headers.keys())
                 assert header_found, (
-                    f"Custom header {header_key} should be in request headers. "
-                    f"Found headers: {list(headers.keys())}"
+                    f"Custom header {header_key} should be in request headers. Found headers: {list(headers.keys())}"
                 )
 
                 # Verify the value matches
@@ -1055,30 +1032,22 @@ def test_bedrock_embedding_custom_headers_with_iam_role_and_custom_api_base():
                         break
 
                 assert header_value_found == header_value, (
-                    f"Header {header_key} should have value {header_value}, "
-                    f"but found {header_value_found}"
+                    f"Header {header_key} should have value {header_value}, but found {header_value_found}"
                 )
 
             # Verify AWS signature headers are also present
             assert "Authorization" in headers, "AWS signature should be present"
             assert "X-Amz-Date" in headers, "AWS date header should be present"
-            assert (
-                "X-Amz-Security-Token" in headers
-            ), "Session token header should be present"
-            assert (
-                headers["X-Amz-Security-Token"] == aws_session_token
-            ), "Session token should match the provided token"
+            assert "X-Amz-Security-Token" in headers, "Session token header should be present"
+            assert headers["X-Amz-Security-Token"] == aws_session_token, "Session token should match the provided token"
 
             # Verify the custom api_base was used
             called_url = call_kwargs.get("url", "")
             assert custom_api_base in str(called_url), (
-                f"Custom api_base {custom_api_base} should be used. "
-                f"Got URL: {called_url}"
+                f"Custom api_base {custom_api_base} should be used. Got URL: {called_url}"
             )
 
-            print(
-                "✓ Test passed: Custom headers forwarded with IAM role + custom api_base"
-            )
+            print("✓ Test passed: Custom headers forwarded with IAM role + custom api_base")
             print(
                 f"  Custom headers found: {[k for k in headers.keys() if k.lower().startswith('x-custom') or k.lower().startswith('x-forwarded')]}"
             )
@@ -1087,9 +1056,7 @@ def test_bedrock_embedding_custom_headers_with_iam_role_and_custom_api_base():
             )
 
         except Exception as e:
-            pytest.fail(
-                f"Failed to forward headers with IAM role + custom api_base: {str(e)}"
-            )
+            pytest.fail(f"Failed to forward headers with IAM role + custom api_base: {str(e)}")
 
 
 @pytest.mark.asyncio
@@ -1154,12 +1121,9 @@ async def test_bedrock_embedding_custom_headers_with_iam_role_and_custom_api_bas
             # Verify custom headers are present in the request
             for header_key, header_value in custom_headers.items():
                 # Check if header exists (case-insensitive for HTTP headers)
-                header_found = any(
-                    k.lower() == header_key.lower() for k in headers.keys()
-                )
+                header_found = any(k.lower() == header_key.lower() for k in headers.keys())
                 assert header_found, (
-                    f"Custom header {header_key} should be in request headers. "
-                    f"Found headers: {list(headers.keys())}"
+                    f"Custom header {header_key} should be in request headers. Found headers: {list(headers.keys())}"
                 )
 
                 # Verify the value matches
@@ -1170,30 +1134,22 @@ async def test_bedrock_embedding_custom_headers_with_iam_role_and_custom_api_bas
                         break
 
                 assert header_value_found == header_value, (
-                    f"Header {header_key} should have value {header_value}, "
-                    f"but found {header_value_found}"
+                    f"Header {header_key} should have value {header_value}, but found {header_value_found}"
                 )
 
             # Verify AWS signature headers are also present
             assert "Authorization" in headers, "AWS signature should be present"
             assert "X-Amz-Date" in headers, "AWS date header should be present"
-            assert (
-                "X-Amz-Security-Token" in headers
-            ), "Session token header should be present"
-            assert (
-                headers["X-Amz-Security-Token"] == aws_session_token
-            ), "Session token should match the provided token"
+            assert "X-Amz-Security-Token" in headers, "Session token header should be present"
+            assert headers["X-Amz-Security-Token"] == aws_session_token, "Session token should match the provided token"
 
             # Verify the custom api_base was used
             called_url = call_kwargs.get("url", "")
             assert custom_api_base in str(called_url), (
-                f"Custom api_base {custom_api_base} should be used. "
-                f"Got URL: {called_url}"
+                f"Custom api_base {custom_api_base} should be used. Got URL: {called_url}"
             )
 
-            print(
-                "✓ Test passed (async): Custom headers forwarded with IAM role + custom api_base"
-            )
+            print("✓ Test passed (async): Custom headers forwarded with IAM role + custom api_base")
             print(
                 f"  Custom headers found: {[k for k in headers.keys() if k.lower().startswith('x-custom') or k.lower().startswith('x-forwarded')]}"
             )
@@ -1202,9 +1158,7 @@ async def test_bedrock_embedding_custom_headers_with_iam_role_and_custom_api_bas
             )
 
         except Exception as e:
-            pytest.fail(
-                f"Failed to forward headers with IAM role + custom api_base (async): {str(e)}"
-            )
+            pytest.fail(f"Failed to forward headers with IAM role + custom api_base (async): {str(e)}")
 
 
 def test_titan_multimodal_embedding_image_cost_tracking():
@@ -1333,9 +1287,7 @@ def test_titan_image_embedding_cost_uses_per_image_rate():
         (["float", "int8"], ["float", "int8"]),
     ],
 )
-def test_bedrock_cohere_embedding_types_wrapped_as_list(
-    encoding_format, expected_embedding_types
-):
+def test_bedrock_cohere_embedding_types_wrapped_as_list(encoding_format, expected_embedding_types):
     """
     Bedrock Cohere expects `embedding_types` as a JSON array, not a raw string.
 
@@ -1538,6 +1490,8 @@ async def test_async_single_func_embeddings_signs_off_the_event_loop(monkeypatch
     assert response.data[0]["embedding"] == titan_embedding_response["embedding"]
     assert "Authorization" in client.post.call_args.kwargs["headers"]
     assert probe.served_during_refresh is True
+
+
 marengo_3_embedding_response = {"data": [{"embedding": [0.01 * i for i in range(512)]}]}
 MARENGO_3_DUCK = "data:image/png;base64,ZHVjaw=="
 
@@ -1602,7 +1556,9 @@ def test_marengo_3_embedding_sends_the_nested_payload_and_parses_512_dims(
         )
 
     assert json.loads(mock_post.call_args.kwargs["data"]) == expected_body
-    assert mock_post.call_args.kwargs["url"].endswith(f"/model/{model.removeprefix('bedrock/').replace(':', '%3A')}/invoke")
+    assert mock_post.call_args.kwargs["url"].endswith(
+        f"/model/{model.removeprefix('bedrock/').replace(':', '%3A')}/invoke"
+    )
     assert len(response.data[0]["embedding"]) == 512
     assert response.data[0]["embedding"][:2] == [0.0, 0.01]
     assert response.usage.prompt_tokens == 0
@@ -1887,9 +1843,7 @@ def test_bedrock_embedding_models(model, input_type, embed_response):
         mock_post.return_value = mock_response
 
         # Prepare input based on type
-        input_data = (
-            img_base_64 if input_type == "image" else "Hello world from litellm"
-        )
+        input_data = img_base_64 if input_type == "image" else "Hello world from litellm"
 
         try:
             response = litellm.embedding(
@@ -1912,9 +1866,7 @@ def test_bedrock_embedding_models(model, input_type, embed_response):
             # Verify AWS params are not in request body
             aws_params = ["aws_region_name", "aws_bedrock_runtime_endpoint"]
             for param in aws_params:
-                assert (
-                    param not in request_data
-                ), f"AWS param {param} should not be in request body"
+                assert param not in request_data, f"AWS param {param} should not be in request body"
 
         except Exception as e:
             pytest.fail(f"Error occurred: {e}")
@@ -1932,12 +1884,8 @@ def test_e2e_bedrock_async_invoke_embedding_twelvelabs_marengo():
     litellm.turn_on_debug()
 
     # Mock the HTTP call to return async invoke response
-    with patch(
-        "litellm.llms.bedrock.embed.embedding.BedrockEmbedding._make_sync_call"
-    ) as mock_call:
-        mock_call.return_value = {
-            "invocationArn": "arn:aws:bedrock:us-east-1:123456789012:async-invoke/test-job-123"
-        }
+    with patch("litellm.llms.bedrock.embed.embedding.BedrockEmbedding._make_sync_call") as mock_call:
+        mock_call.return_value = {"invocationArn": "arn:aws:bedrock:us-east-1:123456789012:async-invoke/test-job-123"}
 
         response = litellm.embedding(
             model="bedrock/async_invoke/us.twelvelabs.marengo-embed-2-7-v1:0",
@@ -1948,18 +1896,12 @@ def test_e2e_bedrock_async_invoke_embedding_twelvelabs_marengo():
         )
 
         # Validate response structure
-        assert isinstance(
-            response, litellm.EmbeddingResponse
-        ), "Response should be EmbeddingResponse type"
-        assert hasattr(
-            response, "_hidden_params"
-        ), "Response should have _hidden_params"
+        assert isinstance(response, litellm.EmbeddingResponse), "Response should be EmbeddingResponse type"
+        assert hasattr(response, "_hidden_params"), "Response should have _hidden_params"
         assert response._hidden_params is not None, "Hidden params should not be None"
 
         # Validate hidden params contain invocation ARN
-        assert hasattr(
-            response._hidden_params, "_invocation_arn"
-        ), "Hidden params should have _invocation_arn"
+        assert hasattr(response._hidden_params, "_invocation_arn"), "Hidden params should have _invocation_arn"
         assert (
             response._hidden_params._invocation_arn
             == "arn:aws:bedrock:us-east-1:123456789012:async-invoke/test-job-123"
@@ -1967,16 +1909,10 @@ def test_e2e_bedrock_async_invoke_embedding_twelvelabs_marengo():
 
         # Validate embedding structure
         assert len(response.data) == 1, "Should have one embedding"
-        assert (
-            response.data[0].object == "embedding"
-        ), "Embedding object should be 'embedding'"
-        assert (
-            response.data[0].embedding == []
-        ), "Embedding should be empty for async jobs"
+        assert response.data[0].object == "embedding", "Embedding object should be 'embedding'"
+        assert response.data[0].embedding == [], "Embedding should be empty for async jobs"
 
-        print(
-            f"Async invoke embedding successful! Invocation ARN: {response._hidden_params._invocation_arn}"
-        )
+        print(f"Async invoke embedding successful! Invocation ARN: {response._hidden_params._invocation_arn}")
 
     # Restore original region name
     if original_region_name:
@@ -1996,9 +1932,7 @@ async def test_e2e_bedrock_async_invoke_embedding_async_twelvelabs_marengo():
     litellm.turn_on_debug()
 
     # Mock the async HTTP call to return async invoke response
-    with patch(
-        "litellm.llms.bedrock.embed.embedding.BedrockEmbedding._make_async_call"
-    ) as mock_call:
+    with patch("litellm.llms.bedrock.embed.embedding.BedrockEmbedding._make_async_call") as mock_call:
         mock_call.return_value = {
             "invocationArn": "arn:aws:bedrock:us-east-1:123456789012:async-invoke/test-async-job-456"
         }
@@ -2012,26 +1946,18 @@ async def test_e2e_bedrock_async_invoke_embedding_async_twelvelabs_marengo():
         )
 
         # Validate response structure
-        assert isinstance(
-            response, litellm.EmbeddingResponse
-        ), "Response should be EmbeddingResponse type"
-        assert hasattr(
-            response, "_hidden_params"
-        ), "Response should have _hidden_params"
+        assert isinstance(response, litellm.EmbeddingResponse), "Response should be EmbeddingResponse type"
+        assert hasattr(response, "_hidden_params"), "Response should have _hidden_params"
         assert response._hidden_params is not None, "Hidden params should not be None"
 
         # Validate hidden params contain invocation ARN
-        assert hasattr(
-            response._hidden_params, "_invocation_arn"
-        ), "Hidden params should have _invocation_arn"
+        assert hasattr(response._hidden_params, "_invocation_arn"), "Hidden params should have _invocation_arn"
         assert (
             response._hidden_params._invocation_arn
             == "arn:aws:bedrock:us-east-1:123456789012:async-invoke/test-async-job-456"
         ), "Invocation ARN should be preserved"
 
-        print(
-            f"Async invoke embedding successful! Invocation ARN: {response._hidden_params._invocation_arn}"
-        )
+        print(f"Async invoke embedding successful! Invocation ARN: {response._hidden_params._invocation_arn}")
 
     # Restore original region name
     if original_region_name:
@@ -2079,9 +2005,7 @@ def test_bedrock_embedding_uses_correct_region_when_specified():
 
             # The URL should contain us-east-1, NOT ap-northeast-1
             assert "us-east-1" in url, f"URL should contain us-east-1, but got: {url}"
-            assert (
-                "ap-northeast-1" not in url
-            ), f"URL should NOT contain ap-northeast-1, but got: {url}"
+            assert "ap-northeast-1" not in url, f"URL should NOT contain ap-northeast-1, but got: {url}"
 
             print(f"✓ Test passed: URL contains correct region: {url}")
 
@@ -2138,17 +2062,11 @@ def test_bedrock_embedding_region_bug_reproduction():
             # This assertion will FAIL if the bug exists (it will use ap-northeast-1)
             # This assertion will PASS if the bug is fixed (it will use us-east-1)
             if "ap-northeast-1" in url:
-                print(
-                    "❌ BUG REPRODUCED: Using wrong region from env var instead of explicit parameter"
-                )
+                print("❌ BUG REPRODUCED: Using wrong region from env var instead of explicit parameter")
                 pytest.fail(f"Bug reproduced: URL contains ap-northeast-1 instead of us-east-1. URL: {url}")
             else:
-                print(
-                    "✓ Bug NOT reproduced: Using correct region from explicit parameter"
-                )
-                assert (
-                    "us-east-1" in url
-                ), f"URL should contain us-east-1, but got: {url}"
+                print("✓ Bug NOT reproduced: Using correct region from explicit parameter")
+                assert "us-east-1" in url, f"URL should contain us-east-1, but got: {url}"
 
     finally:
         # Restore original env var

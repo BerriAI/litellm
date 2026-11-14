@@ -54,22 +54,16 @@ async def test_construct_request_headers_project_id_from_env(monkeypatch):
 
     try:
         # Create handler with no project_id
-        handler = GcsPubSubLogger(
-            topic_id="test-topic", credentials_path="test-path.json"
-        )
+        handler = GcsPubSubLogger(topic_id="test-topic", credentials_path="test-path.json")
 
         # Mock the Vertex AI auth calls
         mock_auth_header = "mock-auth-header"
         mock_token = "mock-token"
 
-        with patch(
-            "litellm.vertex_chat_completion.ensure_access_token_async"
-        ) as mock_ensure_token:
+        with patch("litellm.vertex_chat_completion.ensure_access_token_async") as mock_ensure_token:
             mock_ensure_token.return_value = (mock_auth_header, test_project_id)
 
-            with patch(
-                "litellm.vertex_chat_completion._get_token_and_url"
-            ) as mock_get_token:
+            with patch("litellm.vertex_chat_completion._get_token_and_url") as mock_get_token:
                 mock_get_token.return_value = (mock_token, "mock-url")
 
                 # Call construct_request_headers
@@ -196,9 +190,7 @@ def _without_volatile_gcs_payload_fields(value: object, path: str = "") -> objec
         )
     if isinstance(value, list):
         items: Final = TypeAdapter(list[object]).validate_python(value)
-        return tuple(
-            _without_volatile_gcs_payload_fields(item, f"{path}[{index}]") for index, item in enumerate(items)
-        )
+        return tuple(_without_volatile_gcs_payload_fields(item, f"{path}[{index}]") for index, item in enumerate(items))
     return value
 
 

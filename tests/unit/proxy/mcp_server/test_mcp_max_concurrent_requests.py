@@ -330,9 +330,9 @@ async def test_queued_persistent_call_survives_header_change_while_waiting_for_a
         await asyncio.wait_for(old_session.wait_closed(), 1)
     finally:
         release_holder.set()
-        sessions_to_close: Final = tuple(
-            manager._upstream_sessions.values()
-        ) + tuple(session for _, session in manager._retiring_upstream_sessions)
+        sessions_to_close: Final = tuple(manager._upstream_sessions.values()) + tuple(
+            session for _, session in manager._retiring_upstream_sessions
+        )
         manager.release_upstream_sessions(gateway_session_id)
         await asyncio.gather(*(session.wait_closed() for session in sessions_to_close), return_exceptions=True)
         await asyncio.gather(*call_tasks, return_exceptions=True)

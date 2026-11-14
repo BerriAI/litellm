@@ -47,14 +47,8 @@ public_key = {
 
 
 def test_load_config_with_custom_role_names():
-    config = {
-        "general_settings": {
-            "litellm_proxy_roles": {"admin_jwt_scope": "litellm-proxy-admin"}
-        }
-    }
-    proxy_roles = LiteLLM_JWTAuth(
-        **config.get("general_settings", {}).get("litellm_proxy_roles", {})
-    )
+    config = {"general_settings": {"litellm_proxy_roles": {"admin_jwt_scope": "litellm-proxy-admin"}}}
+    proxy_roles = LiteLLM_JWTAuth(**config.get("general_settings", {}).get("litellm_proxy_roles", {}))
 
     print(f"proxy_roles: {proxy_roles}")
 
@@ -125,9 +119,7 @@ async def test_valid_invalid_token(audience, monkeypatch):
     monkeypatch.setenv("JWT_PUBLIC_KEY_URL", "https://example.com/public-key")
 
     # Generate a private / public key pair using RSA algorithm
-    key = rsa.generate_private_key(
-        public_exponent=65537, key_size=2048, backend=default_backend()
-    )
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048, backend=default_backend())
     # Get private key in PEM format
     private_key = key.private_bytes(
         encoding=serialization.Encoding.PEM,
@@ -141,9 +133,7 @@ async def test_valid_invalid_token(audience, monkeypatch):
         format=serialization.PublicFormat.SubjectPublicKeyInfo,
     )
 
-    public_key_obj = serialization.load_pem_public_key(
-        public_key, backend=default_backend()
-    )
+    public_key_obj = serialization.load_pem_public_key(public_key, backend=default_backend())
 
     # Convert RSA public key object to JWK (JSON Web Key)
     public_jwk = json.loads(jwt.algorithms.RSAAlgorithm.to_jwk(public_key_obj))
@@ -153,9 +143,7 @@ async def test_valid_invalid_token(audience, monkeypatch):
     # set cache
     cache = DualCache()
 
-    await cache.async_set_cache(
-        key="litellm_jwt_auth_keys_https://example.com/public-key", value=[public_jwk]
-    )
+    await cache.async_set_cache(key="litellm_jwt_auth_keys_https://example.com/public-key", value=[public_jwk])
 
     jwt_handler = JWTHandler()
 
@@ -231,9 +219,7 @@ def prisma_client():
     os.environ["DATABASE_URL"] = modified_url
 
     # Assuming PrismaClient is a class that needs to be instantiated
-    prisma_client = PrismaClient(
-        database_url=os.environ["DATABASE_URL"], proxy_logging_obj=proxy_logging_obj
-    )
+    prisma_client = PrismaClient(database_url=os.environ["DATABASE_URL"], proxy_logging_obj=proxy_logging_obj)
 
     return prisma_client
 
@@ -255,9 +241,7 @@ def team_token_tuple():
     from litellm.proxy.proxy_server import user_api_key_auth
 
     # Generate a private / public key pair using RSA algorithm
-    key = rsa.generate_private_key(
-        public_exponent=65537, key_size=2048, backend=default_backend()
-    )
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048, backend=default_backend())
     # Get private key in PEM format
     private_key = key.private_bytes(
         encoding=serialization.Encoding.PEM,
@@ -271,9 +255,7 @@ def team_token_tuple():
         format=serialization.PublicFormat.SubjectPublicKeyInfo,
     )
 
-    public_key_obj = serialization.load_pem_public_key(
-        public_key, backend=default_backend()
-    )
+    public_key_obj = serialization.load_pem_public_key(public_key, backend=default_backend())
 
     # Convert RSA public key object to JWK (JSON Web Key)
     public_jwk = json.loads(jwt.algorithms.RSAAlgorithm.to_jwk(public_key_obj))
@@ -330,9 +312,7 @@ async def test_team_token_output(prisma_client, audience, monkeypatch):
     monkeypatch.setenv("JWT_PUBLIC_KEY_URL", "https://example.com/public-key")
 
     # Generate a private / public key pair using RSA algorithm
-    key = rsa.generate_private_key(
-        public_exponent=65537, key_size=2048, backend=default_backend()
-    )
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048, backend=default_backend())
     # Get private key in PEM format
     private_key = key.private_bytes(
         encoding=serialization.Encoding.PEM,
@@ -346,9 +326,7 @@ async def test_team_token_output(prisma_client, audience, monkeypatch):
         format=serialization.PublicFormat.SubjectPublicKeyInfo,
     )
 
-    public_key_obj = serialization.load_pem_public_key(
-        public_key, backend=default_backend()
-    )
+    public_key_obj = serialization.load_pem_public_key(public_key, backend=default_backend())
 
     # Convert RSA public key object to JWK (JSON Web Key)
     public_jwk = json.loads(jwt.algorithms.RSAAlgorithm.to_jwk(public_key_obj))
@@ -358,9 +336,7 @@ async def test_team_token_output(prisma_client, audience, monkeypatch):
     # set cache
     cache = DualCache()
 
-    await cache.async_set_cache(
-        key="litellm_jwt_auth_keys_https://example.com/public-key", value=[public_jwk]
-    )
+    await cache.async_set_cache(key="litellm_jwt_auth_keys_https://example.com/public-key", value=[public_jwk])
 
     jwt_handler = JWTHandler()
 
@@ -458,9 +434,7 @@ async def test_team_token_output(prisma_client, audience, monkeypatch):
     bearer_token = "Bearer " + token
     request._url = URL(url="/chat/completions")
     try:
-        team_result: UserAPIKeyAuth = await user_api_key_auth(
-            request=request, api_key=bearer_token
-        )
+        team_result: UserAPIKeyAuth = await user_api_key_auth(request=request, api_key=bearer_token)
     except Exception as e:
         pytest.fail(f"Team exists. This should not fail - {e}")
 
@@ -519,9 +493,7 @@ async def aaaatest_user_token_output(
         os.environ["JWT_AUDIENCE"] = audience
 
     # Generate a private / public key pair using RSA algorithm
-    key = rsa.generate_private_key(
-        public_exponent=65537, key_size=2048, backend=default_backend()
-    )
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048, backend=default_backend())
     # Get private key in PEM format
     private_key = key.private_bytes(
         encoding=serialization.Encoding.PEM,
@@ -535,9 +507,7 @@ async def aaaatest_user_token_output(
         format=serialization.PublicFormat.SubjectPublicKeyInfo,
     )
 
-    public_key_obj = serialization.load_pem_public_key(
-        public_key, backend=default_backend()
-    )
+    public_key_obj = serialization.load_pem_public_key(public_key, backend=default_backend())
 
     # Convert RSA public key object to JWK (JSON Web Key)
     public_jwk = json.loads(jwt.algorithms.RSAAlgorithm.to_jwk(public_key_obj))
@@ -549,9 +519,7 @@ async def aaaatest_user_token_output(
     # set cache
     cache = DualCache()
 
-    await cache.async_set_cache(
-        key="litellm_jwt_auth_keys_https://example.com/public-key", value=[public_jwk]
-    )
+    await cache.async_set_cache(key="litellm_jwt_auth_keys_https://example.com/public-key", value=[public_jwk])
 
     jwt_handler = JWTHandler()
 
@@ -664,9 +632,7 @@ async def aaaatest_user_token_output(
     bearer_token = "Bearer " + token
     request._url = URL(url="/chat/completions")
     try:
-        team_result: UserAPIKeyAuth = await user_api_key_auth(
-            request=request, api_key=bearer_token
-        )
+        team_result: UserAPIKeyAuth = await user_api_key_auth(request=request, api_key=bearer_token)
         if user_id_upsert == False:
             pytest.fail(f"User doesn't exist. this should fail")
     except Exception as e:
@@ -701,9 +667,7 @@ async def aaaatest_user_token_output(
     bearer_token = "Bearer " + token
     request._url = URL(url="/chat/completions")
     try:
-        team_result: UserAPIKeyAuth = await user_api_key_auth(
-            request=request, api_key=bearer_token
-        )
+        team_result: UserAPIKeyAuth = await user_api_key_auth(request=request, api_key=bearer_token)
     except Exception as e:
         pytest.fail(f"Team exists. This should not fail - {e}")
 
@@ -719,9 +683,7 @@ async def aaaatest_user_token_output(
 @pytest.mark.parametrize("admin_allowed_routes", [None, ["ui_routes"]])
 @pytest.mark.parametrize("audience", [None, "litellm-proxy"])
 @pytest.mark.asyncio
-async def test_allowed_routes_admin(
-    prisma_client, audience, admin_allowed_routes, monkeypatch
-):
+async def test_allowed_routes_admin(prisma_client, audience, admin_allowed_routes, monkeypatch):
     """
     Add a check to make sure jwt proxy admin scope can access all allowed admin routes
 
@@ -751,9 +713,7 @@ async def test_allowed_routes_admin(
         os.environ["JWT_AUDIENCE"] = audience
 
     # Generate a private / public key pair using RSA algorithm
-    key = rsa.generate_private_key(
-        public_exponent=65537, key_size=2048, backend=default_backend()
-    )
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048, backend=default_backend())
     # Get private key in PEM format
     private_key = key.private_bytes(
         encoding=serialization.Encoding.PEM,
@@ -767,9 +727,7 @@ async def test_allowed_routes_admin(
         format=serialization.PublicFormat.SubjectPublicKeyInfo,
     )
 
-    public_key_obj = serialization.load_pem_public_key(
-        public_key, backend=default_backend()
-    )
+    public_key_obj = serialization.load_pem_public_key(public_key, backend=default_backend())
 
     # Convert RSA public key object to JWK (JSON Web Key)
     public_jwk = json.loads(jwt.algorithms.RSAAlgorithm.to_jwk(public_key_obj))
@@ -779,9 +737,7 @@ async def test_allowed_routes_admin(
     # set cache
     cache = DualCache()
 
-    await cache.async_set_cache(
-        key="litellm_jwt_auth_keys_https://example.com/public-key", value=[public_jwk]
-    )
+    await cache.async_set_cache(key="litellm_jwt_auth_keys_https://example.com/public-key", value=[public_jwk])
 
     jwt_handler = JWTHandler()
 
@@ -870,9 +826,7 @@ def public_jwt_key():
     from cryptography.hazmat.primitives.asymmetric import rsa
 
     # Generate a private / public key pair using RSA algorithm
-    key = rsa.generate_private_key(
-        public_exponent=65537, key_size=2048, backend=default_backend()
-    )
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048, backend=default_backend())
     # Get private key in PEM format
     private_key = key.private_bytes(
         encoding=serialization.Encoding.PEM,
@@ -886,9 +840,7 @@ def public_jwt_key():
         format=serialization.PublicFormat.SubjectPublicKeyInfo,
     )
 
-    public_key_obj = serialization.load_pem_public_key(
-        public_key, backend=default_backend()
-    )
+    public_key_obj = serialization.load_pem_public_key(public_key, backend=default_backend())
 
     # Convert RSA public key object to JWK (JSON Web Key)
     public_jwk = json.loads(jwt.algorithms.RSAAlgorithm.to_jwk(public_key_obj))
@@ -903,18 +855,12 @@ async def mock_user_object(*args, **kwargs):
     # Return a mock user object
     user_id = kwargs.get("user_id")
     user_email = kwargs.get("user_email")
-    return LiteLLM_UserTable(
-        spend=0, user_id=user_id, max_budget=None, user_email=user_email
-    )
+    return LiteLLM_UserTable(spend=0, user_id=user_id, max_budget=None, user_email=user_email)
 
 
-@pytest.mark.parametrize(
-    "user_email, should_work", [("ishaan@berri.ai", True), ("krrish@tassle.xyz", False)]
-)
+@pytest.mark.parametrize("user_email, should_work", [("ishaan@berri.ai", True), ("krrish@tassle.xyz", False)])
 @pytest.mark.asyncio
-async def test_allow_access_by_email(
-    public_jwt_key, user_email, should_work, monkeypatch
-):
+async def test_allow_access_by_email(public_jwt_key, user_email, should_work, monkeypatch):
     """
     Allow anyone with an `@xyz.com` email make a request to the proxy.
 
@@ -934,9 +880,7 @@ async def test_allow_access_by_email(
     # set cache
     cache = DualCache()
 
-    await cache.async_set_cache(
-        key="litellm_jwt_auth_keys_https://example.com/public-key", value=[public_jwk]
-    )
+    await cache.async_set_cache(key="litellm_jwt_auth_keys_https://example.com/public-key", value=[public_jwk])
 
     jwt_handler = JWTHandler()
 
@@ -1190,9 +1134,7 @@ async def test_end_user_jwt_auth(monkeypatch):
         ),
     )
 
-    with patch(
-        "litellm.acompletion", new=AsyncMock(return_value=mock_response)
-    ) as mock_completion:
+    with patch("litellm.acompletion", new=AsyncMock(return_value=mock_response)) as mock_completion:
         resp = await chat_completion(
             request=request,
             fastapi_response=temp_response,
@@ -1210,10 +1152,7 @@ async def test_end_user_jwt_auth(monkeypatch):
 
         # end_user_id is passed in metadata as 'user_api_key_end_user_id'
         metadata = call_kwargs.get("metadata", {})
-        assert (
-            metadata.get("user_api_key_end_user_id")
-            == "81b3e52a-67a6-4efb-9645-70527e101479"
-        )
+        assert metadata.get("user_api_key_end_user_id") == "81b3e52a-67a6-4efb-9645-70527e101479"
 
 
 def test_can_rbac_role_call_route():
@@ -1225,11 +1164,7 @@ def test_can_rbac_role_call_route():
         JWTAuthManager.can_rbac_role_call_route(
             rbac_role=LitellmUserRoles.TEAM,
             general_settings={
-                "role_permissions": [
-                    RoleBasedPermissions(
-                        role=LitellmUserRoles.TEAM, routes=["/v1/chat/completions"]
-                    )
-                ]
+                "role_permissions": [RoleBasedPermissions(role=LitellmUserRoles.TEAM, routes=["/v1/chat/completions"])]
             },
             route="/v1/embeddings",
         )
@@ -1548,7 +1483,7 @@ async def test_auth_jwt_mismatched_key_fails(monkeypatch):
 
     h = JWTHandler()
     with patch.object(h, "get_public_key", new=AsyncMock(return_value=rsa_jwk)):
-        with pytest.raises(Exception, match='Validation fails: Expecting a PEM-formatted key\\.') as exc:
+        with pytest.raises(Exception, match="Validation fails: Expecting a PEM-formatted key\\.") as exc:
             await h.auth_jwt(token)
         assert "Validation fails" in str(exc.value)
 
@@ -1678,9 +1613,7 @@ async def test_multi_issuer_jwt_validates_selected_issuer_and_maps_claims(
 
     assert claims[JWTHandler.LITELLM_JWT_ISSUER_CLAIM] == issuer_two
     assert jwt_handler.get_user_id(token=claims, default_value=None) == ("example-org")
-    assert jwt_handler.get_team_id(token=claims, default_value=None) == (
-        "example-org/litellm-fork"
-    )
+    assert jwt_handler.get_team_id(token=claims, default_value=None) == ("example-org/litellm-fork")
 
 
 @pytest.mark.asyncio
@@ -1713,9 +1646,7 @@ async def test_multi_issuer_jwt_maps_kubernetes_namespace_claim(monkeypatch):
 
     claims = await jwt_handler.auth_jwt(token=token)
 
-    assert (
-        jwt_handler.get_user_id(token=claims, default_value=None) == "example-namespace"
-    )
+    assert jwt_handler.get_user_id(token=claims, default_value=None) == "example-namespace"
 
 
 @pytest.mark.asyncio
@@ -1791,7 +1722,7 @@ async def test_multi_issuer_jwt_unknown_issuer_without_global_jwks_rejected(
         kid="issuer-key",
     )
 
-    with pytest.raises(Exception, match='Missing JWT Public Key URL from environment\\.') as exc:
+    with pytest.raises(Exception, match="Missing JWT Public Key URL from environment\\.") as exc:
         await jwt_handler.auth_jwt(token=token)
 
     assert "Missing JWT Public Key URL" in str(exc.value)
@@ -1865,7 +1796,7 @@ async def test_multi_issuer_jwt_same_kid_does_not_cross_issuer_keys(monkeypatch)
         kid=shared_kid,
     )
 
-    with pytest.raises(Exception, match='Validation fails: Signature verification failed') as exc:
+    with pytest.raises(Exception, match="Validation fails: Signature verification failed") as exc:
         await jwt_handler.auth_jwt(token=token)
 
     assert "Validation fails" in str(exc.value)
@@ -1918,7 +1849,7 @@ def test_multi_issuer_jwt_requires_audience_unless_explicitly_disabled(
     issuer = "https://issuer.example.com"
     jwks_url = f"{issuer}/keys"
 
-    with pytest.raises(Exception, match='must configure audience or set') as exc:
+    with pytest.raises(Exception, match="must configure audience or set") as exc:
         LiteLLM_JWTAuth(
             issuers=[
                 {
@@ -1979,21 +1910,15 @@ async def test_global_jwt_ignores_user_supplied_internal_claims(monkeypatch):
 
     claims = await jwt_handler.auth_jwt(token=token)
 
-    assert jwt_handler.get_user_id(token=claims, default_value=None) == (
-        "real-user@example.com"
-    )
-    assert jwt_handler.get_user_email(token=claims, default_value=None) == (
-        "real-user@example.com"
-    )
+    assert jwt_handler.get_user_id(token=claims, default_value=None) == ("real-user@example.com")
+    assert jwt_handler.get_user_email(token=claims, default_value=None) == ("real-user@example.com")
     assert jwt_handler.get_team_id(token=claims, default_value=None) == "real-team"
     assert jwt_handler.get_team_ids_from_jwt(token=claims) == [
         "real-team",
         "secondary-team",
     ]
     assert jwt_handler.get_org_id(token=claims, default_value=None) == "real-org"
-    assert jwt_handler.get_end_user_id(token=claims, default_value=None) == (
-        "real-end-user"
-    )
+    assert jwt_handler.get_end_user_id(token=claims, default_value=None) == ("real-end-user")
 
 
 @pytest.mark.asyncio
@@ -2033,15 +1958,11 @@ async def test_multi_issuer_jwt_strips_unmapped_internal_claims(monkeypatch):
     assert JWTHandler.LITELLM_TEAM_ID_CLAIM not in claims
     assert jwt_handler.get_user_id(token=claims, default_value=None) is None
     assert jwt_handler.get_team_id(token=claims, default_value=None) is None
-    assert jwt_handler.get_user_email(token=claims, default_value=None) == (
-        "real-user@example.com"
-    )
+    assert jwt_handler.get_user_email(token=claims, default_value=None) == ("real-user@example.com")
 
 
 @pytest.mark.asyncio
-async def test_multi_issuer_jwt_does_not_emit_unscoped_global_warning(
-    monkeypatch, caplog
-):
+async def test_multi_issuer_jwt_does_not_emit_unscoped_global_warning(monkeypatch, caplog):
     monkeypatch.delenv("JWT_AUDIENCE", raising=False)
     monkeypatch.delenv("JWT_ISSUER", raising=False)
     monkeypatch.delenv("JWT_PUBLIC_KEY_URL", raising=False)

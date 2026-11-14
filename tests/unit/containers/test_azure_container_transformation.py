@@ -45,9 +45,7 @@ class TestAzureContainerConfig:
         headers = {}
         api_key = "test-azure-key"
 
-        validated_headers = self.config.validate_environment(
-            headers=headers, api_key=api_key
-        )
+        validated_headers = self.config.validate_environment(headers=headers, api_key=api_key)
 
         assert "api-key" in validated_headers
         assert validated_headers["api-key"] == api_key
@@ -66,9 +64,7 @@ class TestAzureContainerConfig:
         headers = {}
         api_key = "azure-test-key"
 
-        validated_headers = self.config.validate_environment(
-            headers=headers, api_key=api_key
-        )
+        validated_headers = self.config.validate_environment(headers=headers, api_key=api_key)
 
         assert "Authorization" not in validated_headers
         assert "api-key" in validated_headers
@@ -78,9 +74,7 @@ class TestAzureContainerConfig:
         api_base = "https://my-resource.openai.azure.com"
         litellm_params = {}
 
-        url = self.config.get_complete_url(
-            api_base=api_base, litellm_params=litellm_params
-        )
+        url = self.config.get_complete_url(api_base=api_base, litellm_params=litellm_params)
 
         assert "/openai/v1/containers" in url
         assert "my-resource.openai.azure.com" in url
@@ -89,9 +83,7 @@ class TestAzureContainerConfig:
         api_base = "https://my-resource.openai.azure.com"
         litellm_params = {"api_version": "2025-01-01"}
 
-        url = self.config.get_complete_url(
-            api_base=api_base, litellm_params=litellm_params
-        )
+        url = self.config.get_complete_url(api_base=api_base, litellm_params=litellm_params)
 
         assert "api-version=2025-01-01" in url
         assert "/openai/containers" in url
@@ -100,9 +92,7 @@ class TestAzureContainerConfig:
         api_base = "https://my-resource.openai.azure.com"
         litellm_params = {"api_version": "latest"}
 
-        url = self.config.get_complete_url(
-            api_base=api_base, litellm_params=litellm_params
-        )
+        url = self.config.get_complete_url(api_base=api_base, litellm_params=litellm_params)
 
         assert "/openai/v1/containers" in url
 
@@ -119,17 +109,11 @@ class TestAzureContainerConfig:
             litellm_params={"api_version": "2024-08-01-preview"},
         )
 
-        assert (
-            "/openai/responses/openai/containers" not in url
-        ), "path must not double /openai/responses"
+        assert "/openai/responses/openai/containers" not in url, "path must not double /openai/responses"
         assert "my-resource.cognitiveservices.azure.com" in url
         assert "/openai/containers" in url or "/openai/v1/containers" in url
-        assert (
-            "2025-04-01-preview" in url
-        ), "must use version from api_base, not litellm_params"
-        assert (
-            "2024-08-01-preview" not in url
-        ), "must not fall back to older chat api_version"
+        assert "2025-04-01-preview" in url, "must use version from api_base, not litellm_params"
+        assert "2024-08-01-preview" not in url, "must not fall back to older chat api_version"
 
     def test_get_complete_url_raises_without_api_base(self, monkeypatch):
         monkeypatch.delenv("AZURE_API_BASE", raising=False)
@@ -302,10 +286,7 @@ class TestAzureContainerConfig:
         """api-version must not appear before /{container_id}/... (Azure bases include ?)."""
         from litellm.types.router import GenericLiteLLMParams
 
-        api_base = (
-            "https://my-resource.openai.azure.com/openai/v1/containers"
-            "?api-version=v1"
-        )
+        api_base = "https://my-resource.openai.azure.com/openai/v1/containers?api-version=v1"
         litellm_params = GenericLiteLLMParams()
         headers: dict = {}
 
@@ -315,10 +296,7 @@ class TestAzureContainerConfig:
             litellm_params=litellm_params,
             headers=headers,
         )
-        assert (
-            url_r
-            == "https://my-resource.openai.azure.com/openai/v1/containers/cntr_x?api-version=v1"
-        )
+        assert url_r == "https://my-resource.openai.azure.com/openai/v1/containers/cntr_x?api-version=v1"
 
         url_fl, _ = self.config.transform_container_file_list_request(
             container_id="cntr_x",
@@ -326,10 +304,7 @@ class TestAzureContainerConfig:
             litellm_params=litellm_params,
             headers=headers,
         )
-        assert (
-            url_fl
-            == "https://my-resource.openai.azure.com/openai/v1/containers/cntr_x/files?api-version=v1"
-        )
+        assert url_fl == "https://my-resource.openai.azure.com/openai/v1/containers/cntr_x/files?api-version=v1"
 
         url_fc, _ = self.config.transform_container_file_content_request(
             container_id="cntr_x",
@@ -339,8 +314,7 @@ class TestAzureContainerConfig:
             headers=headers,
         )
         expected_fc = (
-            "https://my-resource.openai.azure.com/openai/v1/containers/"
-            "cntr_x/files/cfile_y/content?api-version=v1"
+            "https://my-resource.openai.azure.com/openai/v1/containers/cntr_x/files/cfile_y/content?api-version=v1"
         )
         assert url_fc == expected_fc
         assert url_fc.index("/content") < url_fc.index("?")
@@ -348,10 +322,7 @@ class TestAzureContainerConfig:
     def test_transform_requests_encode_path_ids_before_query_string(self):
         from litellm.types.router import GenericLiteLLMParams
 
-        api_base = (
-            "https://my-resource.openai.azure.com/openai/v1/containers"
-            "?api-version=v1"
-        )
+        api_base = "https://my-resource.openai.azure.com/openai/v1/containers?api-version=v1"
 
         url, _ = self.config.transform_container_file_content_request(
             container_id="../../other",
@@ -372,9 +343,7 @@ class TestAzureContainerConfig:
         from litellm.types.utils import LlmProviders
         from litellm.utils import ProviderConfigManager
 
-        config = ProviderConfigManager.get_provider_container_config(
-            provider=LlmProviders.AZURE
-        )
+        config = ProviderConfigManager.get_provider_container_config(provider=LlmProviders.AZURE)
 
         assert config is not None
         assert isinstance(config, AzureContainerConfig)
@@ -422,10 +391,7 @@ class TestAzureContainerKnownFailureRegressions:
         """Forbid the broken shape: …/containers?api-version=v1/cntr_…"""
         from litellm.types.router import GenericLiteLLMParams
 
-        api_base = (
-            "https://my-resource.openai.azure.com/openai/v1/containers"
-            "?api-version=v1"
-        )
+        api_base = "https://my-resource.openai.azure.com/openai/v1/containers?api-version=v1"
         cid = "cntr_69d4f27de324819082c54f6aeaab6391056f5dbdf1fe2b02"
         fid = "cfile_69d4f283bac0819094bfe7805a4f3ce8"
         litellm_params = GenericLiteLLMParams()
@@ -457,10 +423,7 @@ class TestAzureContainerKnownFailureRegressions:
             litellm_params={},
         )
         assert "openai.azure.com" in container_base
-        assert (
-            "openai/v1/containers" in container_base
-            or "/openai/containers" in container_base
-        )
+        assert "openai/v1/containers" in container_base or "/openai/containers" in container_base
 
         cid = "cntr_livepath123"
         fid = "cfile_live456"
@@ -484,10 +447,7 @@ class TestAzureContainerKnownFailureRegressions:
         """Retrieve, delete, list files, and file content all keep ?api-version last."""
         from litellm.types.router import GenericLiteLLMParams
 
-        api_base = (
-            "https://iamkankute-5584-resource.openai.azure.com/openai/v1/containers"
-            "?api-version=v1"
-        )
+        api_base = "https://iamkankute-5584-resource.openai.azure.com/openai/v1/containers?api-version=v1"
         cid = "cntr_69d4f1c5c6448190930a444af3f84f670b35dc2ee845cd1b"
         fid = "cfile_69d4f1c97a1081908d22a9f56268c743"
         litellm_params = GenericLiteLLMParams()
@@ -536,10 +496,7 @@ class TestAzureContainerKnownFailureRegressions:
         """Multiple query params must stay at the end after path join."""
         from litellm.types.router import GenericLiteLLMParams
 
-        api_base = (
-            "https://my-resource.openai.azure.com/openai/v1/containers"
-            "?api-version=v1&foo=bar"
-        )
+        api_base = "https://my-resource.openai.azure.com/openai/v1/containers?api-version=v1&foo=bar"
         cid = "cntr_x"
         url_lf, _ = self.config.transform_container_file_list_request(
             container_id=cid,
@@ -554,9 +511,7 @@ class TestAzureContainerKnownFailureRegressions:
         assert qs.get("foo") == ["bar"]
 
     @pytest.mark.asyncio
-    async def test_regression_no_container_id_does_not_use_user_supplied_model_id(
-        self, monkeypatch
-    ):
+    async def test_regression_no_container_id_does_not_use_user_supplied_model_id(self, monkeypatch):
         """Operations without container_id (create, list) must NOT route via
         a deployment using a caller-supplied model_id.
 
@@ -600,8 +555,7 @@ class TestAzureContainerKnownFailureRegressions:
 
         assert called_with, "the container call must still run directly"
         assert called_with.get("api_key") is None, (
-            "the deployment's credentials must NOT be applied when "
-            "container_id is absent, even if model_id is supplied"
+            "the deployment's credentials must NOT be applied when container_id is absent, even if model_id is supplied"
         )
         assert called_with.get("api_base") is None
 
@@ -615,25 +569,18 @@ class TestAzureContainerKnownFailureRegressions:
         Fix: every container httpx call now uses `params or None` so an empty
         dict falls back to None, which tells httpx to leave the URL untouched.
         """
-        url = (
-            "https://resource.cognitiveservices.azure.com"
-            "/openai/containers/cntr_123?api-version=2025-04-01-preview"
-        )
+        url = "https://resource.cognitiveservices.azure.com/openai/containers/cntr_123?api-version=2025-04-01-preview"
         client = httpx.AsyncClient()
 
         req_none = client.build_request("DELETE", url, params=None)
         assert "api-version=2025-04-01-preview" in str(req_none.url)
 
         req_empty = client.build_request("DELETE", url, params={})
-        assert "api-version" not in str(
-            req_empty.url
-        ), "Documents root cause: params={} strips the query string"
+        assert "api-version" not in str(req_empty.url), "Documents root cause: params={} strips the query string"
 
         effective: dict = {}
         req_guarded = client.build_request("DELETE", url, params=effective or None)
-        assert "api-version=2025-04-01-preview" in str(
-            req_guarded.url
-        ), "`params or None` must preserve ?api-version"
+        assert "api-version=2025-04-01-preview" in str(req_guarded.url), "`params or None` must preserve ?api-version"
 
     def test_regression_proxy_resolves_azure_text_same_as_azure(self):
         """Router/proxy treat azure_text like azure for container config."""
@@ -647,9 +594,7 @@ class TestAzureContainerKnownFailureRegressions:
         assert isinstance(c1, AzureContainerConfig)
 
     @pytest.mark.asyncio
-    async def test_proxy_process_request_forwards_decoded_container_id(
-        self, monkeypatch
-    ):
+    async def test_proxy_process_request_forwards_decoded_container_id(self, monkeypatch):
         from starlette.requests import Request
 
         from litellm.proxy.container_endpoints import handler_factory
@@ -717,9 +662,7 @@ class TestAzureContainerKnownFailureRegressions:
         assert "api_base" not in captured["data"]
 
     @pytest.mark.asyncio
-    async def test_regression_binary_file_request_routes_through_proxy_processor(
-        self, monkeypatch
-    ):
+    async def test_regression_binary_file_request_routes_through_proxy_processor(self, monkeypatch):
         from fastapi import Response
         from starlette.requests import Request
 
@@ -792,9 +735,7 @@ class TestAzureContainerKnownFailureRegressions:
         assert response.headers["x-litellm-call-id"] == "call-123"
 
     @pytest.mark.asyncio
-    async def test_regression_multipart_upload_request_uses_provider_from_managed_id(
-        self, monkeypatch
-    ):
+    async def test_regression_multipart_upload_request_uses_provider_from_managed_id(self, monkeypatch):
         from starlette.requests import Request
 
         from litellm.proxy.common_request_processing import (
@@ -901,18 +842,14 @@ class TestAzureContainerKnownFailureRegressions:
             custom_llm_provider="azure",
         )
 
-        assert (
-            params.get("model_id") == "deployment-uuid-123"
-        ), "model_id must be forwarded to the router for managed container IDs"
-        assert params.get("container_id") == (
-            "cntr_6a058b43d24c8190a226cfb1d35405b20115fb7875ff11df"
+        assert params.get("model_id") == "deployment-uuid-123", (
+            "model_id must be forwarded to the router for managed container IDs"
         )
+        assert params.get("container_id") == ("cntr_6a058b43d24c8190a226cfb1d35405b20115fb7875ff11df")
         assert params.get("custom_llm_provider") == "azure"
 
     @pytest.mark.asyncio
-    async def test_regression_get_container_forwarding_params_recovers_model_id_for_native_id(
-        self, monkeypatch
-    ):
+    async def test_regression_get_container_forwarding_params_recovers_model_id_for_native_id(self, monkeypatch):
         """Native Azure IDs (``cntr_<hex>``) cannot be decoded, so model_id
         must be recovered from the ownership row's ``unified_object_id`` —
         the encoded form captured at create time when the router selected a
@@ -943,9 +880,7 @@ class TestAzureContainerKnownFailureRegressions:
             file_purpose=ownership.CONTAINER_OBJECT_PURPOSE,
             unified_object_id=encoded_stored_id,
         )
-        prisma_client = SimpleNamespace(
-            db=SimpleNamespace(litellm_managedobjecttable=table)
-        )
+        prisma_client = SimpleNamespace(db=SimpleNamespace(litellm_managedobjecttable=table))
         monkeypatch.setattr(
             ownership,
             "_get_prisma_client",
@@ -959,16 +894,13 @@ class TestAzureContainerKnownFailureRegressions:
         )
 
         assert params.get("model_id") == "deployment-uuid-123", (
-            "model_id must be recovered from the stored unified_object_id "
-            "for native upstream container IDs"
+            "model_id must be recovered from the stored unified_object_id for native upstream container IDs"
         )
         assert params.get("container_id") == native_id
         assert params.get("custom_llm_provider") == "azure"
 
     @pytest.mark.asyncio
-    async def test_regression_native_azure_container_id_uses_forwarded_model_id(
-        self, monkeypatch
-    ):
+    async def test_regression_native_azure_container_id_uses_forwarded_model_id(self, monkeypatch):
         """Native Azure container IDs (cntr_ + hex, no LiteLLM payload) must
         still route through the deployment named by the model_id forwarded
         from the proxy ownership check so that deployment credentials

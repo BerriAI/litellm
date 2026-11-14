@@ -57,9 +57,7 @@ class TestBridgeInputTransformation:
         transformed = LiteLLMResponsesInteractionsConfig._transform_interactions_input_to_responses_input(
             [Turn(role="model", content="I like oranges.")]
         )
-        assert transformed == [
-            {"role": "assistant", "content": [{"type": "output_text", "text": "I like oranges."}]}
-        ]
+        assert transformed == [{"role": "assistant", "content": [{"type": "output_text", "text": "I like oranges."}]}]
 
     def test_string_input_passes_through(self):
         transformed = LiteLLMResponsesInteractionsConfig._transform_interactions_input_to_responses_input("Hello")

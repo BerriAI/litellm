@@ -201,9 +201,7 @@ def reasoning_tool_backend(registry: dict[str, CostMapEntry]) -> str:
 
 def _register(client: PassthroughClient, resources: ResourceManager, backend: str) -> tuple[str, str]:
     model = f"e2e-together-{unique_marker()}"
-    model_id = client.proxy.create_model(
-        model, LiteLLMParamsBody(model=backend, api_key="os.environ/TOGETHER_API_KEY")
-    )
+    model_id = client.proxy.create_model(model, LiteLLMParamsBody(model=backend, api_key="os.environ/TOGETHER_API_KEY"))
     resources.defer(lambda: client.proxy.delete_model(model_id))
     return model, resources.key()
 
@@ -431,12 +429,7 @@ class TestTogetherChatCompletions:
                 ),
             )
         )
-        calls = [
-            call.function
-            for delta in deltas
-            for call in delta.tool_calls or []
-            if call.function is not None
-        ]
+        calls = [call.function for delta in deltas for call in delta.tool_calls or [] if call.function is not None]
         assert calls, f"stream carried no tool call deltas: {deltas[:5]}"
         names = {call.name for call in calls if call.name}
         assert names == {"get_weather"}, f"unexpected streamed tool names: {names}"
@@ -474,10 +467,7 @@ class TestTogetherChatCompletions:
                                 reasoning_content=first.reasoning_content,
                                 tool_calls=first.tool_calls,
                             ),
-                            *(
-                                ChatToolResultTurn(tool_call_id=call_id, content=WEATHER_REPORT)
-                                for call_id in call_ids
-                            ),
+                            *(ChatToolResultTurn(tool_call_id=call_id, content=WEATHER_REPORT) for call_id in call_ids),
                         ],
                         tools=[WEATHER_TOOL],
                         max_tokens=512,
@@ -485,9 +475,7 @@ class TestTogetherChatCompletions:
                 )
             )
         )
-        assert answer.content and "22" in answer.content, (
-            f"the model never saw the tool result: {answer}"
-        )
+        assert answer.content and "22" in answer.content, f"the model never saw the tool result: {answer}"
 
     @pytest.mark.covers("llm.chat_completions.together_ai.thinking.nonstream.template_kwargs_forwarded")
     @meta(
@@ -500,9 +488,7 @@ class TestTogetherChatCompletions:
             mode=Mode.NONSTREAM,
         )
     )
-    def test_chat_template_kwargs_reach_together(
-        self, client: PassthroughClient, resources: ResourceManager
-    ) -> None:
+    def test_chat_template_kwargs_reach_together(self, client: PassthroughClient, resources: ResourceManager) -> None:
         model, key = _register(client, resources, HYBRID_REASONING_BACKEND)
 
         def ask(chat_template_kwargs: dict[str, bool] | None) -> OutMessage:
@@ -893,14 +879,10 @@ class TestTogetherMessages:
         assert not result.stream_error, f"stream errored: {result.stream_error}"
         events = [_MessagesStreamEvent.model_validate_json(event) for event in result.stream_events]
         types = [event.type for event in events]
-        delta_positions = [
-            index for index, event in enumerate(events) if event.type == "content_block_delta"
-        ]
+        delta_positions = [index for index, event in enumerate(events) if event.type == "content_block_delta"]
         assert delta_positions, f"stream carried no content deltas: {types}"
         text = "".join(
-            event.delta.text
-            for event in events
-            if event.type == "content_block_delta" and event.delta is not None
+            event.delta.text for event in events if event.type == "content_block_delta" and event.delta is not None
         )
         assert "200" in text, f"streamed text lost the answer: {text[:300]!r}"
         assert "message_stop" in types, f"stream never reached message_stop: {types}"

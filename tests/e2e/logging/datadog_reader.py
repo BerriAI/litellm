@@ -49,9 +49,7 @@ def _seconds(value: str | None) -> float | None:
 
 def _rate_limit_delay(headers: Mapping[str, str]) -> float:
     delays: Final = tuple(
-        delay
-        for name in ("x-ratelimit-reset", "retry-after")
-        if (delay := _seconds(headers.get(name))) is not None
+        delay for name in ("x-ratelimit-reset", "retry-after") if (delay := _seconds(headers.get(name))) is not None
     )
     return max(1.0, max(delays, default=DD_SEARCH_INTERVAL))
 

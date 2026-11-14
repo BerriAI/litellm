@@ -474,7 +474,9 @@ async def test_auth_rejects_redis_outage_with_503(accounting_state):
 @pytest.mark.parametrize("member", (False, True))
 @pytest.mark.parametrize("ledger", (False, True))
 @pytest.mark.parametrize("failure", (False, True))
-async def test_admitted_windows_are_charged_during_policy_outage(accounting_state, monkeypatch, member, ledger, failure):
+async def test_admitted_windows_are_charged_during_policy_outage(
+    accounting_state, monkeypatch, member, ledger, failure
+):
     backend, writer, prisma = accounting_state
     scopes: Final = (
         CustomerScopeAuth(key="customer_org", entity_id="org", budget_limits=LIMITS),

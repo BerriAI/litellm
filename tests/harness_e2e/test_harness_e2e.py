@@ -84,9 +84,7 @@ def test_agent_structured_output(harness: Harness, workspace: Path) -> None:
 
 
 @pytest.mark.parametrize("harness", harness_params())
-def test_agent_session_remembers_previous_turn(
-    harness: Harness, workspace: Path
-) -> None:
+def test_agent_session_remembers_previous_turn(harness: Harness, workspace: Path) -> None:
     with litellm.agent_session(
         harness,
         sandbox=sandbox.local(workspace),
@@ -94,9 +92,7 @@ def test_agent_session_remembers_previous_turn(
         timeout=TURN_TIMEOUT,
     ) as s:
         s.run("Remember this code word: PELICAN. Reply with just OK.")
-        second = s.run(
-            "What code word did I ask you to remember? Reply with just the word."
-        )
+        second = s.run("What code word did I ask you to remember? Reply with just the word.")
         assert "pelican" in second.text.lower()
         assert s.cost >= second.cost
 
@@ -104,30 +100,20 @@ def test_agent_session_remembers_previous_turn(
 @pytest.mark.parametrize("harness", harness_params())
 def test_agent_detach_and_resume(harness: Harness, workspace: Path) -> None:
     box = sandbox.local(workspace)
-    s = litellm.agent_session(
-        harness, sandbox=box, model=model_for(harness), timeout=TURN_TIMEOUT
-    )
+    s = litellm.agent_session(harness, sandbox=box, model=model_for(harness), timeout=TURN_TIMEOUT)
     s.run("Remember this number: 4817. Reply with just OK.")
     raw = s.detach().dumps()
 
-    with litellm.agent_resume(
-        State.loads(raw), sandbox=box, model=model_for(harness)
-    ) as resumed:
-        r = resumed.run(
-            "What number did I ask you to remember? Reply with just the number."
-        )
+    with litellm.agent_resume(State.loads(raw), sandbox=box, model=model_for(harness)) as resumed:
+        r = resumed.run("What number did I ask you to remember? Reply with just the number.")
     assert "4817" in r.text
 
 
-requires_opencode = pytest.mark.skipif(
-    not harness_available(Harness.OPENCODE), reason="opencode runtime not installed"
-)
+requires_opencode = pytest.mark.skipif(not harness_available(Harness.OPENCODE), reason="opencode runtime not installed")
 
 
 @requires_opencode
-def test_opencode_session_resumed_in_another_sandbox_keeps_working_in_both(
-    workspace: Path, tmp_path: Path
-) -> None:
+def test_opencode_session_resumed_in_another_sandbox_keeps_working_in_both(workspace: Path, tmp_path: Path) -> None:
     model = model_for(Harness.OPENCODE)
     s = litellm.agent_session(
         Harness.OPENCODE,
@@ -147,14 +133,8 @@ def test_opencode_session_resumed_in_another_sandbox_keeps_working_in_both(
         with litellm.agent_resume(
             State.loads(raw), sandbox=sandbox.local(moved), model=model, timeout=TURN_TIMEOUT
         ) as resumed:
-            resumed.run(
-                "Create a file named hello.txt whose only content is the number I asked "
-                "you to remember."
-            )
-        original.run(
-            "Create a file named again.txt whose only content is the number I asked "
-            "you to remember."
-        )
+            resumed.run("Create a file named hello.txt whose only content is the number I asked you to remember.")
+        original.run("Create a file named again.txt whose only content is the number I asked you to remember.")
 
     assert (moved / "hello.txt").read_text().strip() == "4817"
     assert (workspace / "again.txt").read_text().strip() == "4817"
@@ -173,9 +153,7 @@ def test_opencode_resume_of_a_missing_session_ends_with_a_runtime_error(
         model=model,
     )
 
-    with litellm.agent_resume(
-        missing, sandbox=sandbox.local(workspace), model=model, timeout=TURN_TIMEOUT
-    ) as resumed:
+    with litellm.agent_resume(missing, sandbox=sandbox.local(workspace), model=model, timeout=TURN_TIMEOUT) as resumed:
         result = resumed.run("Reply with just OK.")
 
     assert result.stop_reason == "runtime_error"

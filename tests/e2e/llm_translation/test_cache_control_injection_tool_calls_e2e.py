@@ -155,9 +155,7 @@ def _assert_normal_completion(response: ChatResponse, model_name: str) -> None:
         f"{model_name}: unexpected finish reason: {completion.finish_reason}"
     )
     assert (
-        completion.message is not None
-        and completion.message.content is not None
-        and completion.message.content.strip()
+        completion.message is not None and completion.message.content is not None and completion.message.content.strip()
     ), f"{model_name}: chat completion returned no text: {completion.message}"
 
 

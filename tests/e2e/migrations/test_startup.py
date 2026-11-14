@@ -21,9 +21,7 @@ from e2e_metadata import Domain, Subject, meta
 pytestmark: Final = [pytest.mark.e2e, pytest.mark.migration_startup]
 
 
-def union_waiting_identities(
-    observed: frozenset[str], snapshot: frozenset[str]
-) -> frozenset[str]:
+def union_waiting_identities(observed: frozenset[str], snapshot: frozenset[str]) -> frozenset[str]:
     return observed | snapshot
 
 
@@ -78,8 +76,7 @@ class TestMigrationStartup:
                 until(
                     "a replica logged a migration lock-timeout retry",
                     lambda: any(
-                        "timed out waiting for a table lock" in replica.logs()
-                        for replica in (owner, *followers)
+                        "timed out waiting for a table lock" in replica.logs() for replica in (owner, *followers)
                     ),
                 )
                 waiting((owner, *followers), 20)
@@ -135,8 +132,8 @@ class TestMigrationStartup:
             replicas: Final = start_replicas(stack, containers, database, (FATAL,))
             failed(replicas, COMPLETE.name)
             assert database.query(
-                'SELECT count(*) FROM _prisma_migrations WHERE migration_name = %s AND logs LIKE '
-                '%s AND finished_at IS NULL',
+                "SELECT count(*) FROM _prisma_migrations WHERE migration_name = %s AND logs LIKE "
+                "%s AND finished_at IS NULL",
                 (COMPLETE.name, "%MIGRATION_TEST_FATAL%"),
             ) == ((1,),)
 

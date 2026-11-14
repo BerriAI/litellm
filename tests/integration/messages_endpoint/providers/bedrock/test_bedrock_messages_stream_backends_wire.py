@@ -55,7 +55,9 @@ _CONVERSE_FRAMES: Final = (
     _frame("contentBlockDelta", {"delta": {"text": _TAIL}, "contentBlockIndex": 0}),
     _frame("contentBlockStop", {"contentBlockIndex": 0}),
     _frame("messageStop", {"stopReason": "end_turn"}),
-    _frame("metadata", {"usage": {"inputTokens": 21, "outputTokens": 5, "totalTokens": 26}, "metrics": {"latencyMs": 1}}),
+    _frame(
+        "metadata", {"usage": {"inputTokens": 21, "outputTokens": 5, "totalTokens": 26}, "metrics": {"latencyMs": 1}}
+    ),
 )
 
 

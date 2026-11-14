@@ -84,9 +84,7 @@ class TestToolPermissionGuardrail:
         assert len(self.guardrail.rules) == 5
         assert self.guardrail.default_action == "deny"
         assert self.guardrail.on_disallowed_action == "block"
-        assert GuardrailEventHooks.post_call in (
-            self.guardrail.supported_event_hooks or []
-        )
+        assert GuardrailEventHooks.post_call in (self.guardrail.supported_event_hooks or [])
 
     def test_matches_regex_helper(self):
         pattern = re.compile(r"^Read$")
@@ -141,7 +139,7 @@ class TestToolPermissionGuardrail:
         assert rule_id is None
 
     def test_rule_requires_name_or_type(self):
-        with pytest.raises(ValueError, match='validation error for ToolPermissionRule'):
+        with pytest.raises(ValueError, match="validation error for ToolPermissionRule"):
             ToolPermissionGuardrail(
                 guardrail_name="invalid-rule",
                 rules=[{"id": "no_target", "decision": "allow"}],
@@ -179,9 +177,7 @@ class TestToolPermissionGuardrail:
         assert rule_id == "allow_bash"
         assert "allowed" in (msg or "")
 
-        is_allowed, rule_id, _ = self.guardrail._check_tool_permission(
-            "mcp__github_add_issue_comment"
-        )
+        is_allowed, rule_id, _ = self.guardrail._check_tool_permission("mcp__github_add_issue_comment")
         assert is_allowed is True
         assert rule_id == "allow_github"
 
@@ -737,9 +733,7 @@ class TestToolPermissionGuardrail:
             "function": Function(name="lookup", arguments='{"country": "France"}'),
             "provider_specific_fields": {"namespace": "mcp__weather"},
         }
-        response = ModelResponse(
-            choices=[Choices(finish_reason="tool_calls", message={"tool_calls": [tagged_call]})]
-        )
+        response = ModelResponse(choices=[Choices(finish_reason="tool_calls", message={"tool_calls": [tagged_call]})])
 
         await guardrail.async_post_call_success_hook(
             data={"guardrails": ["post-mcp"], "tools": [namespace, top_level]},
@@ -860,9 +854,7 @@ class TestToolPermissionGuardrail:
             '["owner@berri.ai"]',
         ],
     )
-    async def test_async_post_call_success_hook_malformed_arguments_blocks_param_rule(
-        self, arguments
-    ):
+    async def test_async_post_call_success_hook_malformed_arguments_blocks_param_rule(self, arguments):
         guardrail = ToolPermissionGuardrail(
             guardrail_name="mail-guardrail",
             rules=[
@@ -1237,9 +1229,7 @@ class TestToolPermissionGuardrail:
         async def _fake_stream():
             yield text_chunk
 
-        assembled = ModelResponse(
-            choices=[Choices(message={"content": "Hello, world!"})]
-        )
+        assembled = ModelResponse(choices=[Choices(message={"content": "Hello, world!"})])
 
         with patch("litellm.main.stream_chunk_builder", return_value=assembled):
             chunks = []
@@ -1251,12 +1241,10 @@ class TestToolPermissionGuardrail:
                 chunks.append(chunk)
 
         assert len(chunks) >= 1, (
-            "Hook must yield at least one chunk for plain-text responses; "
-            "got none — bare return bug"
+            "Hook must yield at least one chunk for plain-text responses; got none — bare return bug"
         )
         assert chunks[0].choices[0].delta.content == "Hello, world!", (
-            "Hook must preserve the original response content; "
-            f"got: {chunks[0].choices[0].delta.content!r}"
+            f"Hook must preserve the original response content; got: {chunks[0].choices[0].delta.content!r}"
         )
 
     @pytest.mark.asyncio
@@ -1301,12 +1289,8 @@ class TestToolPermissionGuardrail:
 
     def test_modify_response_with_permission_errors(self):
         # Setup a response with one tool_call
-        tool_call = ChatCompletionMessageToolCall(
-            function={"name": "Read", "arguments": "{}"}, id="call_123"
-        )
-        response = ModelResponse(
-            choices=[Choices(message={"tool_calls": [tool_call], "content": ""})]
-        )
+        tool_call = ChatCompletionMessageToolCall(function={"name": "Read", "arguments": "{}"}, id="call_123")
+        response = ModelResponse(choices=[Choices(message={"tool_calls": [tool_call], "content": ""})])
 
         # Denied tools tuple of (tool_call, PermissionError)
         denied_tools = [
@@ -1338,7 +1322,9 @@ class TestToolPermissionGuardrail:
         denied_tools = [
             (
                 tool_call,
-                PermissionError(tool_name="Read", rule_id="deny_read", message="Tool 'Read' denied by rule 'deny_read'"),
+                PermissionError(
+                    tool_name="Read", rule_id="deny_read", message="Tool 'Read' denied by rule 'deny_read'"
+                ),
             )
         ]
 
@@ -1383,7 +1369,6 @@ class TestToolPermissionGuardrail:
         assert choice.message.function_call is None
         assert isinstance(choice.message.content, str)
         assert "Permission denied" in choice.message.content
-
 
     def _server_search_response(self) -> ModelResponse:
         return ModelResponse(
@@ -1488,7 +1473,9 @@ class TestToolPermissionGuardrail:
         denied_tools = [
             (
                 denied_call,
-                PermissionError(tool_name="Bash", rule_id="deny_bash", message="Tool 'Bash' denied by rule 'deny_bash'"),
+                PermissionError(
+                    tool_name="Bash", rule_id="deny_bash", message="Tool 'Bash' denied by rule 'deny_bash'"
+                ),
             )
         ]
 
@@ -1631,10 +1618,7 @@ class TestToolPermissionGuardrailInMemoryUpdate:
             on_disallowed_action="block",
         )
         # No pattern yet: any Bash command is allowed.
-        assert (
-            guardrail._get_permission_for_tool_call(self._bash("echo blockme"))[0]
-            is True
-        )
+        assert guardrail._get_permission_for_tool_call(self._bash("echo blockme"))[0] is True
 
         guardrail.update_in_memory_litellm_params(
             LitellmParams(
@@ -1647,9 +1631,7 @@ class TestToolPermissionGuardrailInMemoryUpdate:
                         "id": "native-bash",
                         "tool_name": r"^Bash$",
                         "decision": "allow",
-                        "allowed_param_patterns": {
-                            "command": r"^(?!(echo blockme)$).*$"
-                        },
+                        "allowed_param_patterns": {"command": r"^(?!(echo blockme)$).*$"},
                     }
                 ],
             )
@@ -1657,13 +1639,8 @@ class TestToolPermissionGuardrailInMemoryUpdate:
 
         # The compiled map must be rebuilt, and enforcement must reflect it.
         assert "command" in guardrail._compiled_rule_patterns.get("native-bash", {})
-        assert (
-            guardrail._get_permission_for_tool_call(self._bash("echo blockme"))[0]
-            is False
-        )
-        assert (
-            guardrail._get_permission_for_tool_call(self._bash("echo hello"))[0] is True
-        )
+        assert guardrail._get_permission_for_tool_call(self._bash("echo blockme"))[0] is False
+        assert guardrail._get_permission_for_tool_call(self._bash("echo hello"))[0] is True
 
     def test_update_in_memory_recompiles_tool_name_target(self):
         guardrail = ToolPermissionGuardrail(
@@ -1718,10 +1695,7 @@ class TestToolPermissionGuardrailInMemoryUpdate:
 
         assert len(guardrail.rules) == 1
         assert "command" in guardrail._compiled_rule_patterns.get("native-bash", {})
-        assert (
-            guardrail._get_permission_for_tool_call(self._bash("echo blockme"))[0]
-            is False
-        )
+        assert guardrail._get_permission_for_tool_call(self._bash("echo blockme"))[0] is False
 
     def test_update_in_memory_rejects_invalid_regex_and_keeps_previous_rules(self):
         """Regression: a live update whose rules contain an invalid regex must be
@@ -2080,7 +2054,9 @@ class TestToolPermissionGuardrailAnthropicMessages:
     @pytest.mark.asyncio
     async def test_pre_call_lets_a_type_rule_allow_a_gemini_tool_by_its_key(self) -> None:
         guardrail = self._pre_call(
-            [{"id": "allow_search", "tool_type": r"^googleSearch$", "decision": "allow"}], "block", default_action="deny"
+            [{"id": "allow_search", "tool_type": r"^googleSearch$", "decision": "allow"}],
+            "block",
+            default_action="deny",
         )
         data = {"model": "gemini-3", "messages": [{"role": "user", "content": "hi"}], "tools": [{"googleSearch": {}}]}
 
@@ -2106,7 +2082,10 @@ class TestToolPermissionGuardrailAnthropicMessages:
         lookup = {"type": "function", "name": "mcp__weather__lookup"}
         data = {
             "model": "m",
-            "input": [{"role": "user", "content": "hi"}, {"type": "tool_search_output", "tools": [get_weather, lookup]}],
+            "input": [
+                {"role": "user", "content": "hi"},
+                {"type": "tool_search_output", "tools": [get_weather, lookup]},
+            ],
             "tools": [{"functionDeclarations": [{"name": "get_weather"}, {"name": "mcp__weather__lookup"}]}],
         }
 
@@ -2226,7 +2205,10 @@ class TestToolPermissionGuardrailAnthropicMessages:
         lookup = {"type": "function", "name": "mcp__weather__lookup"}
         data = {
             "model": "m",
-            "input": [{"role": "user", "content": "hi"}, {"type": "tool_search_output", "tools": [get_weather, lookup]}],
+            "input": [
+                {"role": "user", "content": "hi"},
+                {"type": "tool_search_output", "tools": [get_weather, lookup]},
+            ],
             "tools": [lookup],
             "tool_choice": tool_choice,
         }
@@ -2361,7 +2343,12 @@ class TestToolPermissionGuardrailAnthropicMessages:
     @pytest.mark.parametrize(
         ("tool", "tool_choice", "call_type", "allowed_tool_type"),
         [
-            ({"type": "custom", "name": "apply_patch"}, {"type": "custom", "name": "apply_patch"}, "responses", r"^custom$"),
+            (
+                {"type": "custom", "name": "apply_patch"},
+                {"type": "custom", "name": "apply_patch"},
+                "responses",
+                r"^custom$",
+            ),
             (
                 {"type": "web_search_20250305", "name": "web_search"},
                 {"type": "tool", "name": "web_search"},
@@ -3571,16 +3558,31 @@ class TestToolPermissionGuardrailAnthropicMessages:
 
     def _sse_chunks(self, tool_name, tool_id="tu_1"):
         events = [
-            {"type": "message_start", "message": {"id": "msg_1", "type": "message", "role": "assistant",
-                                                  "model": "claude-sonnet-4-5", "content": [], "stop_reason": None,
-                                                  "usage": {"input_tokens": 10, "output_tokens": 0}}},
+            {
+                "type": "message_start",
+                "message": {
+                    "id": "msg_1",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": "claude-sonnet-4-5",
+                    "content": [],
+                    "stop_reason": None,
+                    "usage": {"input_tokens": 10, "output_tokens": 0},
+                },
+            },
             {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
             {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "working"}},
             {"type": "content_block_stop", "index": 0},
-            {"type": "content_block_start", "index": 1,
-             "content_block": {"type": "tool_use", "id": tool_id, "name": tool_name, "input": {}}},
-            {"type": "content_block_delta", "index": 1,
-             "delta": {"type": "input_json_delta", "partial_json": '{"command": "ls"}'}},
+            {
+                "type": "content_block_start",
+                "index": 1,
+                "content_block": {"type": "tool_use", "id": tool_id, "name": tool_name, "input": {}},
+            },
+            {
+                "type": "content_block_delta",
+                "index": 1,
+                "delta": {"type": "input_json_delta", "partial_json": '{"command": "ls"}'},
+            },
             {"type": "content_block_stop", "index": 1},
             {"type": "message_delta", "delta": {"stop_reason": "tool_use"}, "usage": {"output_tokens": 5}},
             {"type": "message_stop"},
@@ -3644,8 +3646,12 @@ class TestToolPermissionGuardrailAnthropicMessages:
             for line in body.splitlines()
             if line.startswith("data: ") and json.loads(line[6:]).get("type") == "message_start"
         )["message"]
-        assert message_start["id"].startswith("chatcmpl-"), "the rewritten stream must not adopt the upstream message id"
-        assert message_start["model"] == "claude-sonnet-4-5", "the rewritten stream reports the model the upstream served"
+        assert message_start["id"].startswith("chatcmpl-"), (
+            "the rewritten stream must not adopt the upstream message id"
+        )
+        assert message_start["model"] == "claude-sonnet-4-5", (
+            "the rewritten stream reports the model the upstream served"
+        )
 
     @pytest.mark.asyncio
     async def test_rewrite_mode_keeps_the_allowed_tool_use_verdict_with_its_explanation(self):
@@ -3726,7 +3732,11 @@ class TestToolPermissionGuardrailAnthropicMessages:
                 "index": index,
                 "content_block": {"type": block_type, "id": f"tu_{index}", "name": name, "input": {}},
             },
-            {"type": "content_block_delta", "index": index, "delta": {"type": "input_json_delta", "partial_json": '{"command": "l'}},
+            {
+                "type": "content_block_delta",
+                "index": index,
+                "delta": {"type": "input_json_delta", "partial_json": '{"command": "l'},
+            },
         )
         return [f"event: {e['type']}\ndata: {json.dumps(e)}\n\n".encode() for e in events]
 
@@ -3750,7 +3760,12 @@ class TestToolPermissionGuardrailAnthropicMessages:
             return "".join(delta.get("text") or delta.get("partial_json") or "" for delta in deltas)
 
         return [
-            (event["content_block"]["type"], event["content_block"].get("name"), content_of(event["index"]), event["index"] in stopped)
+            (
+                event["content_block"]["type"],
+                event["content_block"].get("name"),
+                content_of(event["index"]),
+                event["index"] in stopped,
+            )
             for event in events
             if event["type"] == "content_block_start"
         ]
@@ -3815,13 +3830,20 @@ class TestToolPermissionGuardrailAnthropicMessages:
 
         with pytest.raises(GuardrailRaisedException, match="could not be parsed"):
             await self._drain(
-                guardrail, [*sse_chunks[:5], f"event: content_block_delta\ndata: {deep_input}\n\n".encode(), *sse_chunks[6:]]
+                guardrail,
+                [*sse_chunks[:5], f"event: content_block_delta\ndata: {deep_input}\n\n".encode(), *sse_chunks[6:]],
             )
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "frame",
-        ["event: error\u2028\n\n", "event: error\x0b\n\n", "event:  error\n\n", "event: error\nevent: ping\n\n", "event: error"],
+        [
+            "event: error\u2028\n\n",
+            "event: error\x0b\n\n",
+            "event:  error\n\n",
+            "event: error\nevent: ping\n\n",
+            "event: error",
+        ],
         ids=["u2028", "vertical-tab", "second-space", "later-name", "no-blank-line"],
     )
     async def test_healthy_stream_with_a_frame_no_client_reads_as_an_error_is_passed_through_verbatim(self, frame: str):
@@ -3856,7 +3878,9 @@ class TestToolPermissionGuardrailAnthropicMessages:
     }
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("error_frame", ERROR_FRAMES_WITH_NO_ERROR_TYPE.values(), ids=ERROR_FRAMES_WITH_NO_ERROR_TYPE)
+    @pytest.mark.parametrize(
+        "error_frame", ERROR_FRAMES_WITH_NO_ERROR_TYPE.values(), ids=ERROR_FRAMES_WITH_NO_ERROR_TYPE
+    )
     async def test_rewrite_ends_in_an_error_event_known_only_by_its_name(self, error_frame: bytes):
         chunks: Final = [*self._sse_chunks("Read")[:7], *self._cut_off_tool_use(2, "Bash"), error_frame]
 
@@ -3868,7 +3892,9 @@ class TestToolPermissionGuardrailAnthropicMessages:
         assert self._tool_use_blocks(events) == []
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("error_frame", ERROR_FRAMES_WITH_NO_ERROR_TYPE.values(), ids=ERROR_FRAMES_WITH_NO_ERROR_TYPE)
+    @pytest.mark.parametrize(
+        "error_frame", ERROR_FRAMES_WITH_NO_ERROR_TYPE.values(), ids=ERROR_FRAMES_WITH_NO_ERROR_TYPE
+    )
     async def test_allowed_stream_drops_a_call_cut_off_before_an_error_event_known_only_by_its_name(
         self, error_frame: bytes
     ):
@@ -3884,7 +3910,11 @@ class TestToolPermissionGuardrailAnthropicMessages:
     @pytest.mark.parametrize("block_type", ["server_tool_use", "mcp_tool_use"])
     async def test_stream_drops_a_server_side_call_cut_off_by_an_upstream_error(self, block_type: str):
         delivered: Final = self._sse_chunks("Bash")[:3]
-        chunks: Final = [*delivered, *self._cut_off_tool_use(2, "web_search", block_type), *self._ended_by_upstream_error([])]
+        chunks: Final = [
+            *delivered,
+            *self._cut_off_tool_use(2, "web_search", block_type),
+            *self._ended_by_upstream_error([]),
+        ]
 
         out: Final = await self._drain(self.blocking, chunks)
 
@@ -3895,7 +3925,11 @@ class TestToolPermissionGuardrailAnthropicMessages:
     async def test_error_name_on_a_message_delta_frame_keeps_the_stream_as_sent(self):
         source: Final = self._sse_chunks("Bash")
         message_delta_frame: Final = source[-2]
-        chunks: Final = [*source[:-2], message_delta_frame.replace(b"event: message_delta", b"event: error"), source[-1]]
+        chunks: Final = [
+            *source[:-2],
+            message_delta_frame.replace(b"event: message_delta", b"event: error"),
+            source[-1],
+        ]
 
         out: Final = await self._drain(self.blocking, chunks)
 
@@ -3924,16 +3958,24 @@ class TestToolPermissionGuardrailAnthropicMessages:
         def over_two_data_lines(frame: bytes) -> bytes:
             return frame.replace(b", ", b",\ndata: ", 1)
 
-        chunks: Final = self._ended_by_upstream_error([over_two_data_lines(frame) for frame in self._sse_chunks("Read")])
+        chunks: Final = self._ended_by_upstream_error(
+            [over_two_data_lines(frame) for frame in self._sse_chunks("Read")]
+        )
 
         with pytest.raises(GuardrailRaisedException, match="could not be verified"):
             await self._drain(self.blocking, chunks)
 
     DENIED_CALL_EVENTS: Final = (
-        {"type": "content_block_start", "index": 0,
-         "content_block": {"type": "tool_use", "id": "tu_1", "name": "Read", "input": {}}},
-        {"type": "content_block_delta", "index": 0,
-         "delta": {"type": "input_json_delta", "partial_json": '{"command": "ls"}'}},
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {"type": "tool_use", "id": "tu_1", "name": "Read", "input": {}},
+        },
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "input_json_delta", "partial_json": '{"command": "ls"}'},
+        },
         {"type": "content_block_stop", "index": 0},
     )
     DENIED_CALL: Final = tuple(f"event: {e['type']}\ndata: {json.dumps(e)}\n\n".encode() for e in DENIED_CALL_EVENTS)
@@ -3947,15 +3989,15 @@ class TestToolPermissionGuardrailAnthropicMessages:
         "cr-line-ends": tuple(frame.replace(b"\n", b"\r") for frame in DENIED_CALL),
         "behind-a-glued-crlf-ping": (b'event: ping\r\ndata: {"type": "ping"}\r\n\r\n' + b"".join(DENIED_CALL),),
         "finished-mcp-call": tuple(frame.replace(b'"tool_use"', b'"mcp_tool_use"') for frame in DENIED_CALL),
-        "behind-a-form-feed": tuple(
-            b'data: {"type": "ping"}\x0c' + frame.split(b"\n", 1)[1] for frame in DENIED_CALL
-        ),
+        "behind-a-form-feed": tuple(b'data: {"type": "ping"}\x0c' + frame.split(b"\n", 1)[1] for frame in DENIED_CALL),
         "over-two-data-lines": tuple(frame.replace(b", ", b",\ndata: ", 1) for frame in DENIED_CALL),
         "glued-to-the-error-frame": (ERROR_WITH_CR_LINE_ENDS + b"".join(DENIED_CALL).replace(b"\n", b"\r"),),
     }
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("frames", DENIED_CALLS_ASSEMBLY_CANNOT_READ.values(), ids=DENIED_CALLS_ASSEMBLY_CANNOT_READ)
+    @pytest.mark.parametrize(
+        "frames", DENIED_CALLS_ASSEMBLY_CANNOT_READ.values(), ids=DENIED_CALLS_ASSEMBLY_CANNOT_READ
+    )
     async def test_denied_call_assembly_cannot_read_never_reaches_the_client_past_an_upstream_error(
         self, frames: tuple[bytes, ...]
     ):
@@ -3970,7 +4012,9 @@ class TestToolPermissionGuardrailAnthropicMessages:
     async def test_denied_call_inside_message_start_never_reaches_the_client_past_an_upstream_error(self):
         message_start, *_ = self._sse_chunks("Read")
         call: Final = json.dumps(self._tool_use("Read")).encode()
-        chunks: Final = self._ended_by_upstream_error([message_start.replace(b'"content": []', b'"content": [' + call + b"]")])
+        chunks: Final = self._ended_by_upstream_error(
+            [message_start.replace(b'"content": []', b'"content": [' + call + b"]")]
+        )
 
         out: Final = await self._drain(self.blocking, chunks)
 
@@ -4000,7 +4044,11 @@ class TestToolPermissionGuardrailAnthropicMessages:
 
         def tool_input(index: int, command: str) -> dict[str, object]:
             partial_json: Final = json.dumps({"command": command})
-            return {"type": "content_block_delta", "index": index, "delta": {"type": "input_json_delta", "partial_json": partial_json}}
+            return {
+                "type": "content_block_delta",
+                "index": index,
+                "delta": {"type": "input_json_delta", "partial_json": partial_json},
+            }
 
         events: Final = (
             tool_start(0, "tu_1", "Read"),
@@ -4056,12 +4104,16 @@ class TestToolPermissionGuardrailAnthropicMessages:
         events = self._events(await self._drain(self.blocking, chunks))
 
         assert events[-1] == self.UPSTREAM_ERROR
-        assert self._tool_use_blocks(events) == [], "a client can still read a cut-off call, so a denied one must not reach it"
+        assert self._tool_use_blocks(events) == [], (
+            "a client can still read a cut-off call, so a denied one must not reach it"
+        )
         assert any("working" in json.dumps(event) for event in events)
 
     @pytest.mark.asyncio
     async def test_rewrite_of_a_stream_cut_off_mid_tool_input_ends_in_the_upstream_error(self):
-        chunks: Final = self._ended_by_upstream_error([*self._sse_chunks("Read")[:7], *self._cut_off_tool_use(2, "Bash")])
+        chunks: Final = self._ended_by_upstream_error(
+            [*self._sse_chunks("Read")[:7], *self._cut_off_tool_use(2, "Bash")]
+        )
 
         events = self._events(await self._drain(self.rewriting, chunks))
 
@@ -4087,7 +4139,9 @@ class TestToolPermissionGuardrailAnthropicMessages:
             default_action="deny",
             on_disallowed_action="block",
         )
-        chunks: Final = self._ended_by_upstream_error([*self._sse_chunks("Bash")[:4], *self._cut_off_tool_use(1, "Bash")])
+        chunks: Final = self._ended_by_upstream_error(
+            [*self._sse_chunks("Bash")[:4], *self._cut_off_tool_use(1, "Bash")]
+        )
 
         events: Final = self._events(await self._drain(guardrail, chunks))
 
@@ -4107,7 +4161,9 @@ class TestToolPermissionGuardrailAnthropicMessages:
         """Claude Code retries a stream that failed before any block finished, but not one that shows a
         finished block, so the rebuilt stream must not finish a block for the upstream."""
         sent_before_the_cut: Final = self._sse_chunks("Bash")[:sent_events]
-        chunks: Final = self._ended_by_upstream_error([*sent_before_the_cut, *self._cut_off_tool_use(cut_off_index, "Bash")])
+        chunks: Final = self._ended_by_upstream_error(
+            [*sent_before_the_cut, *self._cut_off_tool_use(cut_off_index, "Bash")]
+        )
 
         out: Final = await self._drain(self.blocking, chunks)
 

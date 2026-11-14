@@ -67,15 +67,18 @@ def _patch_responses_dispatch():
     """Patch everything after the prompt management block so tests stay unit-level."""
     return [
         patch.object(
-            import_module("litellm.responses.main").litellm, "get_llm_provider",
+            import_module("litellm.responses.main").litellm,
+            "get_llm_provider",
             side_effect=_provider_by_model,
         ),
         patch.object(
-            import_module("litellm.responses.main").ProviderConfigManager, "get_provider_responses_api_config",
+            import_module("litellm.responses.main").ProviderConfigManager,
+            "get_provider_responses_api_config",
             return_value=None,
         ),
         patch.object(
-            import_module("litellm.responses.main").litellm_completion_transformation_handler, "response_api_handler",
+            import_module("litellm.responses.main").litellm_completion_transformation_handler,
+            "response_api_handler",
             return_value=MagicMock(),
         ),
     ]
@@ -137,7 +140,6 @@ def _make_cache_control_case() -> tuple[
 
 
 class TestResponsesAPIPromptManagement:
-
     def test_str_input_coerced_and_merged(self):
         """[A] str input is wrapped into a message list before being passed to the hook."""
         template_messages: List[AllMessageValues] = [
@@ -168,9 +170,7 @@ class TestResponsesAPIPromptManagement:
         logging_obj.get_chat_completion_prompt.assert_called_once()
         call_kwargs = logging_obj.get_chat_completion_prompt.call_args.kwargs
         # str was coerced to a single user message before being passed to the hook
-        assert call_kwargs["messages"] == [
-            {"role": "user", "content": "Tell me about AI."}
-        ]
+        assert call_kwargs["messages"] == [{"role": "user", "content": "Tell me about AI."}]
         assert call_kwargs["prompt_id"] == "summariser-prompt"
 
     def test_list_input_merged_with_template(self):
@@ -391,7 +391,8 @@ class TestResponsesAPIPromptManagement:
         patches = _patch_responses_dispatch()
         with (
             patch.object(
-                import_module("litellm.responses.main").litellm, "get_llm_provider",
+                import_module("litellm.responses.main").litellm,
+                "get_llm_provider",
                 side_effect=_provider_by_model,
             ),
             patches[1],
@@ -595,9 +596,13 @@ def test_sync_prompt_swap_resolves_credentials_for_swapped_provider(monkeypatch:
 
     monkeypatch.setenv("XAI_API_KEY", "sk-xai-test")
     logging_obj = _make_logging_obj("gpt-4o-mini", [{"role": "user", "content": "hi"}])
-    with patch.object(  # test-quality-ok: handler boundary stub proves creds resolve for the swapped provider without network
-        import_module("litellm.responses.main").base_llm_http_handler, "response_api_handler", return_value=MagicMock()
-    ) as mock_handler:
+    with (
+        patch.object(  # test-quality-ok: handler boundary stub proves creds resolve for the swapped provider without network
+            import_module("litellm.responses.main").base_llm_http_handler,
+            "response_api_handler",
+            return_value=MagicMock(),
+        ) as mock_handler
+    ):
         litellm.responses(input="hi", model="xai/grok-4", prompt_id="p1", litellm_logging_obj=logging_obj)
 
     handler_kwargs = mock_handler.call_args.kwargs

@@ -97,7 +97,9 @@ async def test_bedrock_mantle_claude_async_completion_inlines_remote_images_off_
     assert async_only_image_fetch.base64_png in captured["body"]
 
 
-async def test_bedrock_mantle_claude_async_completion_inlines_document_url_sources_off_the_event_loop(async_only_image_fetch):
+async def test_bedrock_mantle_claude_async_completion_inlines_document_url_sources_off_the_event_loop(
+    async_only_image_fetch,
+):
     pdf_url = f"http://docs.example/{uuid.uuid4()}.pdf"
     captured = {}
 
@@ -264,7 +266,9 @@ def _json_tool_message(request: httpx.Request) -> httpx.Response:
 
 
 @pytest.mark.usefixtures("local_model_cost_map")
-@pytest.mark.parametrize("model", ("bedrock_mantle/anthropic.claude-opus-5-5", "bedrock/mantle/anthropic.claude-opus-5-5"))
+@pytest.mark.parametrize(
+    "model", ("bedrock_mantle/anthropic.claude-opus-5-5", "bedrock/mantle/anthropic.claude-opus-5-5")
+)
 def test_mantle_claude_that_cannot_force_a_tool_keeps_json_schema_on_the_json_tool(model: str) -> None:
     respond: Final = MagicMock(wraps=_json_tool_message)
 
@@ -275,9 +279,9 @@ def test_mantle_claude_that_cannot_force_a_tool_keeps_json_schema_on_the_json_to
 
     sent: Final = tuple(json.loads(call.args[0].content) for call in respond.call_args_list)
     assert json.loads(response.choices[0].message.content) == RISK_ANSWER
-    assert [(body.get("output_config", {}).get("format"), [tool["name"] for tool in body["tools"]]) for body in sent] == [
-        (None, ["json_tool_call"])
-    ]
+    assert [
+        (body.get("output_config", {}).get("format"), [tool["name"] for tool in body["tools"]]) for body in sent
+    ] == [(None, ["json_tool_call"])]
 
 
 def test_mantle_claude_default_max_tokens_comes_from_the_mantle_row(local_model_cost_map):

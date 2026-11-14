@@ -53,9 +53,7 @@ COMPACTED_HISTORY = [
 ]
 
 
-@pytest.mark.parametrize(
-    "config_type", (AnthropicCountTokensConfig, AzureAIAnthropicCountTokensConfig)
-)
+@pytest.mark.parametrize("config_type", (AnthropicCountTokensConfig, AzureAIAnthropicCountTokensConfig))
 @pytest.mark.parametrize(
     ("image_url", "block"),
     (
@@ -83,59 +81,72 @@ def test_count_translates_openai_images_without_mutating_input(
     block: dict[str, JsonValue],
 ) -> None:
     cache_control: Final[dict[str, JsonValue]] = {"type": "ephemeral"}
-    messages: Final[list[dict[str, JsonValue]]] = [{
-        "role": "user", "content": [
-            {"type": "text", "text": "Count this image"},
-            {"type": "image_url", "image_url": image_url, "cache_control": cache_control},
-        ],
-    }]
+    messages: Final[list[dict[str, JsonValue]]] = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Count this image"},
+                {"type": "image_url", "image_url": image_url, "cache_control": cache_control},
+            ],
+        }
+    ]
     original: Final = deepcopy(messages)
-    result: Final = config_type().transform_request_to_count_tokens(
-        model="claude-opus-5-5", messages=messages
-    )
+    result: Final = config_type().transform_request_to_count_tokens(model="claude-opus-5-5", messages=messages)
 
     assert result == {
-        "model": "claude-opus-5-5", "messages": [{
-            "role": "user", "content": [
-                {"type": "text", "text": "Count this image"},
-                {**block, "cache_control": cache_control},
-            ],
-        }],
+        "model": "claude-opus-5-5",
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Count this image"},
+                    {**block, "cache_control": cache_control},
+                ],
+            }
+        ],
     }
     assert messages == original
 
 
-@pytest.mark.parametrize(
-    "config_type", (AnthropicCountTokensConfig, AzureAIAnthropicCountTokensConfig)
-)
+@pytest.mark.parametrize("config_type", (AnthropicCountTokensConfig, AzureAIAnthropicCountTokensConfig))
 def test_count_normalizes_nested_tool_images_and_preserves_native_fields(
     config_type: type[AnthropicCountTokensConfig],
 ) -> None:
     openai_image: Final[dict[str, JsonValue]] = {
-        "type": "image_url", "image_url": {"url": "data:image/png;base64,aW1hZ2U="}
+        "type": "image_url",
+        "image_url": {"url": "data:image/png;base64,aW1hZ2U="},
     }
     native_image: Final[dict[str, JsonValue]] = {
-        "type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "aW1hZ2U="}
+        "type": "image",
+        "source": {"type": "base64", "media_type": "image/png", "data": "aW1hZ2U="},
     }
-    assistant: Final[dict[str, JsonValue]] = {"role": "assistant", "content": [
-        {"type": "thinking", "thinking": "inspect screenshot", "signature": "fixture-signature"},
-        {"type": "tool_use", "id": "read-1", "name": "Read", "input": {"content": [openai_image]}},
-    ]}
+    assistant: Final[dict[str, JsonValue]] = {
+        "role": "assistant",
+        "content": [
+            {"type": "thinking", "thinking": "inspect screenshot", "signature": "fixture-signature"},
+            {"type": "tool_use", "id": "read-1", "name": "Read", "input": {"content": [openai_image]}},
+        ],
+    }
     tool_result: Final[dict[str, JsonValue]] = {
-        "type": "tool_result", "tool_use_id": "read-1", "is_error": False,
+        "type": "tool_result",
+        "tool_use_id": "read-1",
+        "is_error": False,
         "content": [{"type": "text", "text": "Screenshot"}, native_image, openai_image],
         "cache_control": {"type": "ephemeral"},
     }
     text_result: Final[dict[str, JsonValue]] = {"type": "tool_result", "tool_use_id": "read-2", "content": "done"}
     messages: Final[list[dict[str, JsonValue]]] = [
-        assistant, {"role": "user", "content": [native_image, tool_result, text_result]}
+        assistant,
+        {"role": "user", "content": [native_image, tool_result, text_result]},
     ]
-    tools: Final[list[dict[str, JsonValue]]] = [{
-        "name": "Read", "input_schema": {"type": "object", "examples": [openai_image]}
-    }]
+    tools: Final[list[dict[str, JsonValue]]] = [
+        {"name": "Read", "input_schema": {"type": "object", "examples": [openai_image]}}
+    ]
     system: Final[JsonValue] = [{"type": "text", "text": "policy", "cache_control": {"type": "ephemeral"}}]
     options: Final[dict[str, JsonValue]] = {
-        "thinking": {"type": "adaptive"}, "tool_choice": {"type": "auto"}, "output_config": {"effort": "high"}
+        "thinking": {"type": "adaptive"},
+        "tool_choice": {"type": "auto"},
+        "output_config": {"effort": "high"},
     }
     original: Final = deepcopy((messages, tools, system, options))
     result: Final = config_type().transform_request_to_count_tokens(
@@ -143,10 +154,21 @@ def test_count_normalizes_nested_tool_images_and_preserves_native_fields(
     )
 
     assert result == {
-        "model": "claude-opus-5-5", "system": system, "tools": tools, **options,
-        "messages": [assistant, {"role": "user", "content": [native_image, {
-            **tool_result, "content": [{"type": "text", "text": "Screenshot"}, native_image, native_image]
-        }, text_result]}],
+        "model": "claude-opus-5-5",
+        "system": system,
+        "tools": tools,
+        **options,
+        "messages": [
+            assistant,
+            {
+                "role": "user",
+                "content": [
+                    native_image,
+                    {**tool_result, "content": [{"type": "text", "text": "Screenshot"}, native_image, native_image]},
+                    text_result,
+                ],
+            },
+        ],
     }
     assert (messages, tools, system, options) == original
 
@@ -356,9 +378,7 @@ async def test_handler_posts_to_count_tokens_path_under_deployment_api_base(http
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("httpx_transport_clients")
-@pytest.mark.parametrize(
-    "handler_type", (AnthropicCountTokensHandler, AzureAIAnthropicCountTokensHandler)
-)
+@pytest.mark.parametrize("handler_type", (AnthropicCountTokensHandler, AzureAIAnthropicCountTokensHandler))
 @pytest.mark.parametrize("scheme", ("http", "https"))
 @pytest.mark.parametrize("dict_url", (False, True))
 async def test_remote_image_fetch_keeps_counting_handler_event_loop_responsive(
@@ -374,12 +394,13 @@ async def test_remote_image_fetch_keeps_counting_handler_event_loop_responsive(
     model: Final = "claude-opus-5-5"
     api_base: Final = "https://gateway.example/anthropic"
     image: Final[dict[str, JsonValue]] = {
-        "type": "image_url", "image_url": {"url": image_url} if dict_url else image_url,
+        "type": "image_url",
+        "image_url": {"url": image_url} if dict_url else image_url,
         "cache_control": {"type": "ephemeral"},
     }
-    messages: Final[list[dict[str, JsonValue]]] = [{
-        "role": "user", "content": [image, {"type": "tool_result", "tool_use_id": "read-1", "content": [image]}]
-    }]
+    messages: Final[list[dict[str, JsonValue]]] = [
+        {"role": "user", "content": [image, {"type": "tool_result", "tool_use_id": "read-1", "content": [image]}]}
+    ]
     original: Final = deepcopy(messages)
 
     async def run_witness() -> None:
@@ -399,7 +420,9 @@ async def test_remote_image_fetch_keeps_counting_handler_event_loop_responsive(
         result: Final = await (
             handler.handle_count_tokens_request(
                 model=model, messages=messages, api_base=api_base, auth_header={"x-api-key": "test-key"}
-            ) if isinstance(handler, AnthropicCountTokensHandler) else handler.handle_count_tokens_request(
+            )
+            if isinstance(handler, AnthropicCountTokensHandler)
+            else handler.handle_count_tokens_request(
                 model=model, messages=messages, api_base=api_base, api_key="test-key"
             )
         )
@@ -408,21 +431,23 @@ async def test_remote_image_fetch_keeps_counting_handler_event_loop_responsive(
     assert image_route.call_count == count_route.call_count == 1
     assert result == {"input_tokens": 7}
     native_image: Final[dict[str, JsonValue]] = {
-        "type": "image", "source": {
-            "type": "base64", "media_type": "image/png", "data": b64encode(image_bytes).decode()
-        }, "cache_control": {"type": "ephemeral"},
+        "type": "image",
+        "source": {"type": "base64", "media_type": "image/png", "data": b64encode(image_bytes).decode()},
+        "cache_control": {"type": "ephemeral"},
     }
     assert TypeAdapter(dict[str, JsonValue]).validate_json(count_route.calls.last.request.content) == {
-        "model": model, "messages": [{"role": "user", "content": [
-            native_image, {"type": "tool_result", "tool_use_id": "read-1", "content": [native_image]}
-        ]}],
+        "model": model,
+        "messages": [
+            {
+                "role": "user",
+                "content": [native_image, {"type": "tool_result", "tool_use_id": "read-1", "content": [native_image]}],
+            }
+        ],
     }
     assert messages == original
 
 
-@pytest.mark.parametrize(
-    "config_type", (AnthropicCountTokensConfig, AzureAIAnthropicCountTokensConfig)
-)
+@pytest.mark.parametrize("config_type", (AnthropicCountTokensConfig, AzureAIAnthropicCountTokensConfig))
 def test_count_lifts_the_leading_system_run_into_system(
     config_type: type[AnthropicCountTokensConfig],
 ) -> None:
@@ -595,7 +620,12 @@ async def _counted_body(
 @pytest.mark.parametrize(
     "tool",
     (
-        {"type": "function", "name": "get_weather", "description": "Look up the weather", "parameters": _WEATHER_SCHEMA},
+        {
+            "type": "function",
+            "name": "get_weather",
+            "description": "Look up the weather",
+            "parameters": _WEATHER_SCHEMA,
+        },
         {
             "type": "function",
             "function": {"name": "get_weather", "description": "Look up the weather", "parameters": _WEATHER_SCHEMA},
@@ -761,7 +791,12 @@ _CHAT_WEATHER_TOOL: Final[dict[str, JsonValue]] = {
         pytest.param(
             [{"role": "user", "content": "Open the docs"}],
             [
-                {"type": "computer_use_preview", "display_width": 1024, "display_height": 768, "environment": "browser"},
+                {
+                    "type": "computer_use_preview",
+                    "display_width": 1024,
+                    "display_height": 768,
+                    "environment": "browser",
+                },
                 _CHAT_WEATHER_TOOL,
             ],
             id="computer-use-preview-tool",
@@ -943,7 +978,10 @@ _MESSAGES_CONFIGS: Final = MappingProxyType(
         ("claude-sonnet-4-5", {"tool_choice": {"type": "any"}, "thinking": {"type": "enabled", "budget_tokens": 2048}}),
         ("claude-haiku-5-5", {"thinking": {"type": "enabled", "budget_tokens": 2048}}),
         ("claude-opus-5-5", {"thinking": {"type": "adaptive"}, "output_config": {"effort": "low"}}),
-        ("claude-unlisted-model", {"tool_choice": {"type": "any"}, "thinking": {"type": "enabled", "budget_tokens": 2048}}),
+        (
+            "claude-unlisted-model",
+            {"tool_choice": {"type": "any"}, "thinking": {"type": "enabled", "budget_tokens": 2048}},
+        ),
     ),
 )
 async def test_counter_sends_the_thinking_tool_choice_and_effort_messages_inference_sends(
@@ -1159,7 +1197,9 @@ async def test_counter_forwards_context_management_with_the_beta_inference_sends
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("httpx_transport_clients")
-@pytest.mark.parametrize("context_management", ({}, {"edits": []}, []), ids=("empty_object", "empty_edits", "empty_list"))
+@pytest.mark.parametrize(
+    "context_management", ({}, {"edits": []}, []), ids=("empty_object", "empty_edits", "empty_list")
+)
 async def test_counter_leaves_out_context_management_without_edits(context_management: JsonValue) -> None:
     """Anthropic's count endpoint rejects a context_management with no edits, which inference accepts, so the count
     leaves it out and adds no context-management beta."""
@@ -1194,7 +1234,9 @@ async def test_counter_leaves_out_context_management_without_edits(context_manag
         (None, ("output_config", "thinking")),
     ),
 )
-def test_drop_paths_skip_entries_and_values_inference_skips(additional_drop_params: object, kept: tuple[str, ...]) -> None:
+def test_drop_paths_skip_entries_and_values_inference_skips(
+    additional_drop_params: object, kept: tuple[str, ...]
+) -> None:
     options: Final[dict[str, JsonValue]] = {
         "output_config": {"effort": "low"},
         "thinking": {"type": "enabled", "budget_tokens": 2048},

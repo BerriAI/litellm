@@ -118,9 +118,7 @@ class TestBedrockMoonshotInvoke:
         return a canned moonshot response. Returns (mock_post, response)."""
         client = HTTPHandler()
         mock_resp = self._make_moonshot_response(content=response_content)
-        with patch.object(
-            client, "post", new=Mock(return_value=mock_resp)
-        ) as mock_post:
+        with patch.object(client, "post", new=Mock(return_value=mock_resp)) as mock_post:
             response = litellm.completion(
                 model="bedrock/invoke/moonshot.kimi-k2-thinking",
                 messages=messages,
@@ -190,9 +188,7 @@ class TestBedrockMoonshotInvoke:
         assert response is not None
 
     @pytest.mark.parametrize("response_format", [{"type": "text"}])
-    def test_response_format_type_text_with_tool_calls_no_tool_choice(
-        self, response_format
-    ):
+    def test_response_format_type_text_with_tool_calls_no_tool_choice(self, response_format):
         """Verify response_format + tools + drop_params sends a valid request
         and produces a response object."""
         tools = [
@@ -219,9 +215,7 @@ class TestBedrockMoonshotInvoke:
             }
         ]
         mock_post, response = self._invoke_with_mocked_post(
-            messages=[
-                {"role": "user", "content": "What's the weather like in Boston today?"}
-            ],
+            messages=[{"role": "user", "content": "What's the weather like in Boston today?"}],
             extra_kwargs={
                 "response_format": response_format,
                 "tools": tools,
@@ -252,8 +246,7 @@ class TestBedrockMoonshotInvoke:
             return iter([]), httpx.Headers()
 
         with patch(
-            "litellm.llms.bedrock.chat.invoke_transformations."
-            "base_invoke_transformation.make_sync_call",
+            "litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation.make_sync_call",
             new=fake_make_sync_call,
         ):
             response = litellm.completion(
@@ -300,7 +293,6 @@ class TestBedrockMoonshotInvoke:
         assert response._hidden_params["response_cost"] > 0
 
 
-
 class TestBedrockMoonshotBasic:
     @pytest.mark.usefixtures("fake_provider_credentials")
     def test_provider_detection_invoke(self):
@@ -326,9 +318,7 @@ class TestBedrockMoonshotBasic:
     def test_supported_params(self):
         """Test that supported OpenAI params are correctly defined."""
         config = get_bedrock_chat_config("invoke/moonshot.kimi-k2-thinking")
-        supported_params = config.get_supported_openai_params(
-            "moonshot.kimi-k2-thinking"
-        )
+        supported_params = config.get_supported_openai_params("moonshot.kimi-k2-thinking")
 
         # Should support these params
         assert "temperature" in supported_params
@@ -368,7 +358,6 @@ class TestBedrockMoonshotBasic:
         assert transformed["model"] == "moonshot.kimi-k2-thinking"
 
 
-
 class TestBedrockMoonshotReasoningContent:
     @pytest.mark.usefixtures("fake_provider_credentials")
     def test_reasoning_content_extraction(self):
@@ -380,12 +369,8 @@ class TestBedrockMoonshotReasoningContent:
         config = AmazonMoonshotConfig()
 
         # Test with reasoning tags
-        content_with_reasoning = (
-            "<reasoning>This is my thought process</reasoning>This is the answer"
-        )
-        reasoning, content = config._extract_reasoning_from_content(
-            content_with_reasoning
-        )
+        content_with_reasoning = "<reasoning>This is my thought process</reasoning>This is the answer"
+        reasoning, content = config._extract_reasoning_from_content(content_with_reasoning)
 
         assert reasoning == "This is my thought process"
         assert content == "This is the answer"
@@ -393,13 +378,10 @@ class TestBedrockMoonshotReasoningContent:
 
         # Test without reasoning tags
         content_without_reasoning = "This is just a regular answer"
-        reasoning, content = config._extract_reasoning_from_content(
-            content_without_reasoning
-        )
+        reasoning, content = config._extract_reasoning_from_content(content_without_reasoning)
 
         assert reasoning is None
         assert content == "This is just a regular answer"
-
 
 
 class TestBedrockMoonshotToolCalling:
@@ -407,9 +389,7 @@ class TestBedrockMoonshotToolCalling:
     def test_tool_calling_supported(self):
         """Test that tool calling is supported for Kimi K2 Thinking model."""
         config = get_bedrock_chat_config("invoke/moonshot.kimi-k2-thinking")
-        supported_params = config.get_supported_openai_params(
-            "moonshot.kimi-k2-thinking"
-        )
+        supported_params = config.get_supported_openai_params("moonshot.kimi-k2-thinking")
 
         # Kimi K2 Thinking DOES support tool calls (unlike kimi-thinking-preview)
         assert "tools" in supported_params
@@ -460,15 +440,12 @@ class TestBedrockMoonshotToolCalling:
         assert transformed["tools"][0]["function"]["name"] == "get_weather"
 
 
-
 class TestBedrockMoonshotParameterValidation:
     @pytest.mark.usefixtures("fake_provider_credentials")
     def test_stop_sequences_not_supported(self):
         """Test that stop sequences are correctly excluded from supported params."""
         config = get_bedrock_chat_config("invoke/moonshot.kimi-k2-thinking")
-        supported_params = config.get_supported_openai_params(
-            "moonshot.kimi-k2-thinking"
-        )
+        supported_params = config.get_supported_openai_params("moonshot.kimi-k2-thinking")
 
         # Bedrock Moonshot doesn't support stopSequences field
         assert "stop" not in supported_params
@@ -482,11 +459,8 @@ class TestBedrockMoonshotParameterValidation:
 
         # Verify config exists and can handle temperature
         assert config is not None
-        supported_params = config.get_supported_openai_params(
-            "moonshot.kimi-k2-thinking"
-        )
+        supported_params = config.get_supported_openai_params("moonshot.kimi-k2-thinking")
         assert "temperature" in supported_params
-
 
 
 class TestBedrockMoonshotTransformations:

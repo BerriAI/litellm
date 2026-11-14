@@ -89,9 +89,7 @@ class _ModelDeleteBody(BaseModel):
     id: str
 
 
-def _add_vertex_passthrough_model(
-    client: PassthroughClient, model_name: str, project: str, credentials: str
-) -> str:
+def _add_vertex_passthrough_model(client: PassthroughClient, model_name: str, project: str, credentials: str) -> str:
     """Register the passthrough deployment and settle before the caller uses it.
 
     This body carries `use_in_pass_through` and a pinned `model_info.id`, so it

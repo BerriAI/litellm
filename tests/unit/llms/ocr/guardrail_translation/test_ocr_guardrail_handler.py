@@ -17,9 +17,7 @@ from litellm.types.utils import CallTypes
 class MockGuardrail(CustomGuardrail):
     """Mock guardrail for testing"""
 
-    async def apply_guardrail(
-        self, inputs: dict, request_data: dict, input_type: str, **kwargs
-    ) -> dict:
+    async def apply_guardrail(self, inputs: dict, request_data: dict, input_type: str, **kwargs) -> dict:
         texts = inputs.get("texts", [])
         return {"texts": [f"{text} [GUARDRAILED]" for text in texts]}
 
@@ -27,9 +25,7 @@ class MockGuardrail(CustomGuardrail):
 class BlockingGuardrail(CustomGuardrail):
     """Mock guardrail that raises on forbidden content"""
 
-    async def apply_guardrail(
-        self, inputs: dict, request_data: dict, input_type: str, **kwargs
-    ) -> dict:
+    async def apply_guardrail(self, inputs: dict, request_data: dict, input_type: str, **kwargs) -> dict:
         texts = inputs.get("texts", [])
         for text in texts:
             if "FORBIDDEN" in text:
@@ -254,9 +250,7 @@ class TestPIIMaskingScenario:
         """Test that PII can be masked from OCR extracted text"""
 
         class PIIMaskingGuardrail(CustomGuardrail):
-            async def apply_guardrail(
-                self, inputs: dict, request_data: dict, input_type: str, **kwargs
-            ) -> dict:
+            async def apply_guardrail(self, inputs: dict, request_data: dict, input_type: str, **kwargs) -> dict:
                 texts = inputs.get("texts", [])
                 masked_texts = []
                 for text in texts:

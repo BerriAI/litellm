@@ -1550,9 +1550,7 @@ class TestLoggingOnlyScopeValidation:
 
     def test_invalid_continue_flag_raises_without_tolerance(self) -> None:
         with pytest.raises(ValidationError):
-            LitellmParams(
-                guardrail="test", mode="logging_only", logging_only_continue_on_input_failure="banana"
-            )
+            LitellmParams(guardrail="test", mode="logging_only", logging_only_continue_on_input_failure="banana")
 
     def test_invalid_scope_literal_does_not_tolerate_other_litellm_params_errors(self) -> None:
         with pytest.raises(ValidationError):

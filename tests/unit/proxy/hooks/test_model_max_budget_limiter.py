@@ -802,9 +802,10 @@ async def test_spend_charged_while_the_database_is_unreachable_reaches_the_share
         shared_windows=database.replica(),
     )
     assert usage["claude-opus*"]["current_spend"] == round(CHAT_COST * 3, 4)
-    assert usage["claude-opus*"]["budget_reset_at"] == datetime.fromtimestamp(
-        WINDOW_EPOCH + 24 * 3600, tz=timezone.utc
-    ).isoformat()
+    assert (
+        usage["claude-opus*"]["budget_reset_at"]
+        == datetime.fromtimestamp(WINDOW_EPOCH + 24 * 3600, tz=timezone.utc).isoformat()
+    )
 
 
 @pytest.mark.asyncio
@@ -857,7 +858,9 @@ def test_an_access_group_named_after_a_served_model_never_widens_that_models_ent
         resolved: Final = resolve_model_budget(
             model="gpt-4o-mini",
             model_max_budget=model_max_budget,
-            model_access_groups=lambda model, team_id: model_access_groups_of(router=router, model=model, team_id=team_id),
+            model_access_groups=lambda model, team_id: model_access_groups_of(
+                router=router, model=model, team_id=team_id
+            ),
         )
         return None if resolved is None else resolved.budget_model
 

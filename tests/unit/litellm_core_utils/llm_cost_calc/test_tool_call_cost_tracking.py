@@ -1075,16 +1075,18 @@ def _register_priced_deployment(
             {
                 "model_name": "priced-deployment",
                 "litellm_params": {"model": model, "api_key": "k", "vertex_project": "p", "vertex_location": "global"},
-                "model_info": {**token_rates, **search_rates, **({} if deployment_id is None else {"id": deployment_id})},
+                "model_info": {
+                    **token_rates,
+                    **search_rates,
+                    **({} if deployment_id is None else {"id": deployment_id}),
+                },
             }
         ]
     )
     return router.model_list[0]["model_info"]["id"]
 
 
-def _claude_chat_response(
-    web_search_requests: int, model: str = "claude-sonnet-5-5"
-) -> tuple[object, Usage | None]:
+def _claude_chat_response(web_search_requests: int, model: str = "claude-sonnet-5-5") -> tuple[object, Usage | None]:
     usage: Final = Usage(
         prompt_tokens=1840,
         completion_tokens=412,

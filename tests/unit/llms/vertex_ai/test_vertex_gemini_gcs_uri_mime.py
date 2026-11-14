@@ -2,6 +2,7 @@
 
 Split from test_vertex.py to satisfy CI per-file size limits.
 """
+
 import asyncio
 import threading
 
@@ -53,9 +54,7 @@ def test_process_gemini_media_gcs_without_extension_errors_and_metadata_mock():
         return_value="image/jpeg",
     ) as m:
         r = _process_gemini_media("gs://bucket/image-without-extension")
-    assert r["file_data"] == FileDataType(
-        mime_type="image/jpeg", file_uri="gs://bucket/image-without-extension"
-    )
+    assert r["file_data"] == FileDataType(mime_type="image/jpeg", file_uri="gs://bucket/image-without-extension")
     m.assert_called()
 
     with patch(
@@ -216,10 +215,7 @@ def test_get_gcs_object_content_type_http_error_explicit_vs_anonymous():
             return_value=http2,
         ),
     ):
-        assert (
-            gt._get_gcs_object_content_type(image_url="gs://public-bucket/public-object")
-            is None
-        )
+        assert gt._get_gcs_object_content_type(image_url="gs://public-bucket/public-object") is None
     mock_v2.get_access_token.assert_not_called()
 
 
@@ -241,10 +237,7 @@ def test_get_gcs_object_content_type_anonymous_success_no_auth_header():
             return_value=http,
         ),
     ):
-        assert (
-            gt._get_gcs_object_content_type(image_url="gs://public-bucket/public-object")
-            == "image/jpeg"
-        )
+        assert gt._get_gcs_object_content_type(image_url="gs://public-bucket/public-object") == "image/jpeg"
     mock_v.get_access_token.assert_not_called()
     hdrs = http.get.call_args.kwargs.get("headers")
     assert hdrs is None or "Authorization" not in hdrs

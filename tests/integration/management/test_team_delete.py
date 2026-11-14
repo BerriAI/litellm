@@ -47,22 +47,16 @@ async def test_team_delete_authz_matrix(
         headers={"Authorization": f"Bearer {caller.cleartext}"},
         json={"team_ids": [resources.prefix], "organization_id": org_id},
     )
-    assert (
-        resp.status_code == expected_status
-    ), f"{actor.value} {shape}: {resp.status_code} {resp.text}"
+    assert resp.status_code == expected_status, f"{actor.value} {shape}: {resp.status_code} {resp.text}"
 
-    row = await db.db.litellm_teamtable.find_unique(
-        where={"team_id": resources.prefix}
-    )
+    row = await db.db.litellm_teamtable.find_unique(where={"team_id": resources.prefix})
     if expected_status == 200:
         assert row is None, "deleted but team row survives"
     else:
         assert row is not None, "denied but team row vanished"
 
 
-async def test_team_delete_batch_with_missing_id_deletes_nothing(
-    gateway_client, db, resources, actors
-):
+async def test_team_delete_batch_with_missing_id_deletes_nothing(gateway_client, db, resources, actors):
     """A batch is validated whole before any deletion: one missing team_id
     fails the request 404 and the accessible team in the batch survives."""
     await create_scratch_team(db, resources.prefix, organization_id=actors.org_a_id)
@@ -72,7 +66,5 @@ async def test_team_delete_batch_with_missing_id_deletes_nothing(
         json={"team_ids": [resources.prefix, "behavior-pin-no-such-team"]},
     )
     assert resp.status_code == 404, resp.text
-    row = await db.db.litellm_teamtable.find_unique(
-        where={"team_id": resources.prefix}
-    )
+    row = await db.db.litellm_teamtable.find_unique(where={"team_id": resources.prefix})
     assert row is not None, "batch aborted but the accessible team was deleted"

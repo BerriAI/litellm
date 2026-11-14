@@ -58,9 +58,7 @@ class TestVertexAIBatchPassthroughHandler:
         mock_hook.afile_content.return_value = Mock(content=b'{"test": "data"}')
         return mock_hook
 
-    def test_batch_prediction_jobs_handler_success(
-        self, mock_httpx_response, mock_logging_obj
-    ):
+    def test_batch_prediction_jobs_handler_success(self, mock_httpx_response, mock_logging_obj):
         """Test successful batch job creation and tracking"""
         with patch(
             "litellm.proxy.pass_through_endpoints.llm_provider_handlers.vertex_passthrough_logging_handler.verbose_proxy_logger"
@@ -74,7 +72,6 @@ class TestVertexAIBatchPassthroughHandler:
                     with patch(
                         "litellm.llms.vertex_ai.batches.transformation.VertexAIBatchTransformation"
                     ) as mock_transformation:
-
                         # Setup mocks
                         mock_get_model_id.return_value = "vertex_ai/gemini-1.5-flash"
                         mock_transformation.transform_vertex_ai_batch_response_to_openai_batch_response.return_value = {
@@ -151,7 +148,6 @@ class TestVertexAIBatchPassthroughHandler:
             with patch(
                 "litellm.proxy.pass_through_endpoints.llm_provider_handlers.vertex_passthrough_logging_handler.VertexPassthroughLoggingHandler.extract_model_name_from_vertex_path"
             ) as mock_extract:
-
                 # Setup mocks
                 mock_router.get_model_ids.return_value = ["vertex_ai/gemini-1.5-flash"]
                 mock_extract.return_value = "gemini-1.5-flash"
@@ -163,9 +159,7 @@ class TestVertexAIBatchPassthroughHandler:
 
                 # Verify result
                 assert result == "vertex_ai/gemini-1.5-flash"
-                mock_router.get_model_ids.assert_called_once_with(
-                    model_name="gemini-1.5-flash"
-                )
+                mock_router.get_model_ids.assert_called_once_with(model_name="gemini-1.5-flash")
 
     def test_get_actual_model_id_from_router_without_router(self):
         """Test getting model ID when router is not available"""
@@ -173,7 +167,6 @@ class TestVertexAIBatchPassthroughHandler:
             with patch(
                 "litellm.proxy.pass_through_endpoints.llm_provider_handlers.vertex_passthrough_logging_handler.VertexPassthroughLoggingHandler.extract_model_name_from_vertex_path"
             ) as mock_extract:
-
                 # Setup mocks
                 mock_extract.return_value = "gemini-1.5-flash"
 
@@ -193,7 +186,6 @@ class TestVertexAIBatchPassthroughHandler:
             with patch(
                 "litellm.proxy.pass_through_endpoints.llm_provider_handlers.vertex_passthrough_logging_handler.VertexPassthroughLoggingHandler.extract_model_name_from_vertex_path"
             ) as mock_extract:
-
                 # Setup mocks - router returns empty list
                 mock_router.get_model_ids.return_value = []
                 mock_extract.return_value = "gemini-1.5-flash"
@@ -212,39 +204,24 @@ class TestVertexAIBatchPassthroughHandler:
         batch_id = "123456789"
 
         # Generate the expected unified ID
-        unified_id_string = (
-            SpecialEnums.LITELLM_MANAGED_BATCH_COMPLETE_STR.value.format(
-                model_id, batch_id
-            )
-        )
-        expected_unified_id = (
-            base64.urlsafe_b64encode(unified_id_string.encode()).decode().rstrip("=")
-        )
+        unified_id_string = SpecialEnums.LITELLM_MANAGED_BATCH_COMPLETE_STR.value.format(model_id, batch_id)
+        expected_unified_id = base64.urlsafe_b64encode(unified_id_string.encode()).decode().rstrip("=")
 
         # Test the generation
-        actual_unified_id = (
-            base64.urlsafe_b64encode(unified_id_string.encode()).decode().rstrip("=")
-        )
+        actual_unified_id = base64.urlsafe_b64encode(unified_id_string.encode()).decode().rstrip("=")
 
         assert actual_unified_id == expected_unified_id
         assert isinstance(actual_unified_id, str)
         assert len(actual_unified_id) > 0
 
-    def test_store_batch_managed_object(
-        self, mock_logging_obj, mock_managed_files_hook
-    ):
+    def test_store_batch_managed_object(self, mock_logging_obj, mock_managed_files_hook):
         """Test storing batch managed object for cost tracking"""
-        with patch(
-            "litellm.proxy.proxy_server.proxy_logging_obj"
-        ) as mock_proxy_logging_obj:
+        with patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging_obj:
             with patch(
                 "litellm.proxy.pass_through_endpoints.llm_provider_handlers.vertex_passthrough_logging_handler.verbose_proxy_logger"
             ) as mock_logger:
-
                 # Setup mock proxy logging obj
-                mock_proxy_logging_obj.get_proxy_hook.return_value = (
-                    mock_managed_files_hook
-                )
+                mock_proxy_logging_obj.get_proxy_hook.return_value = mock_managed_files_hook
 
                 # Test data
                 unified_object_id = "test-unified-id"
@@ -350,9 +327,7 @@ class TestVertexAIBatchPassthroughHandler:
 
         assert call_kwargs["request_tags"] == ("clean", "badtag")
 
-    def test_create_persists_key_hash_and_tags(
-        self, mock_logging_obj, mock_managed_files_hook
-    ):
+    def test_create_persists_key_hash_and_tags(self, mock_logging_obj, mock_managed_files_hook):
         """Regression (spend loss): the batch create must persist the creating key's hashed
         token and its tags so CheckBatchCost can attribute the batch-cost spend row. Before
         this fix the stored api_key was always "" and the row was dropped as unattributed."""
@@ -388,9 +363,7 @@ class TestVertexAIBatchPassthroughHandler:
             ({}, None),
         ],
     )
-    def test_request_tags_precedence(
-        self, mock_logging_obj, mock_managed_files_hook, metadata, expected
-    ):
+    def test_request_tags_precedence(self, mock_logging_obj, mock_managed_files_hook, metadata, expected):
         """Request tags take precedence over the key's tags, and the key's tags are the
         fallback because a tagged key does not put its tags in the top-level metadata."""
         call_kwargs = self._store_with_metadata(
@@ -411,9 +384,7 @@ class TestVertexAIBatchPassthroughHandler:
             ("/v1/projects/p/locations/us-central1/batchPredictionJobs/123456?alt=json", False),
         ],
     )
-    def test_batch_is_registered_from_the_create_route_only(
-        self, mock_logging_obj, url_route, expected
-    ):
+    def test_batch_is_registered_from_the_create_route_only(self, mock_logging_obj, url_route, expected):
         """Only a POST to the collection route is the create, and only the create claims
         attribution. Every id-scoped route is a poll or retrieve, which still reports the
         batch so its status and file object stay in sync, but carries is_batch_create=False
@@ -432,9 +403,7 @@ class TestVertexAIBatchPassthroughHandler:
             patch(
                 "litellm.proxy.pass_through_endpoints.llm_provider_handlers.vertex_passthrough_logging_handler.VertexPassthroughLoggingHandler._store_batch_managed_object"
             ) as mock_store,
-            patch(
-                "litellm.llms.vertex_ai.batches.transformation.VertexAIBatchTransformation"
-            ) as mock_transformation,
+            patch("litellm.llms.vertex_ai.batches.transformation.VertexAIBatchTransformation") as mock_transformation,
             patch(
                 "litellm.proxy.pass_through_endpoints.llm_provider_handlers.vertex_passthrough_logging_handler.VertexPassthroughLoggingHandler.get_actual_model_id_from_router",
                 return_value="gemini-2.5-flash",
@@ -465,7 +434,6 @@ class TestVertexAIBatchPassthroughHandler:
         assert mock_store.call_args[1]["unified_object_id"]
         assert mock_store.call_args[1]["is_batch_create"] is expected
 
-
     def test_batch_response_transformation(self):
         """Test transformation of Vertex AI batch responses to OpenAI format"""
         from litellm.llms.vertex_ai.batches.transformation import (
@@ -489,9 +457,7 @@ class TestVertexAIBatchPassthroughHandler:
         # Verify the transformation
         assert result["id"] == "123456789"
         assert result["object"] == "batch"
-        assert (
-            result["status"] == "completed"
-        )  # JOB_STATE_SUCCEEDED should map to completed
+        assert result["status"] == "completed"  # JOB_STATE_SUCCEEDED should map to completed
 
     def test_batch_id_extraction(self):
         """Test extraction of batch ID from Vertex AI response"""
@@ -535,17 +501,11 @@ class TestVertexAIBatchPassthroughHandler:
         ]
 
         for test_case, expected in zip(test_cases, expected_results):
-            result = (
-                VertexPassthroughLoggingHandler.extract_model_name_from_vertex_path(
-                    test_case
-                )
-            )
+            result = VertexPassthroughLoggingHandler.extract_model_name_from_vertex_path(test_case)
             assert result == expected
 
     @pytest.mark.asyncio
-    async def test_batch_completion_workflow(
-        self, mock_httpx_response, mock_logging_obj, mock_managed_files_hook
-    ):
+    async def test_batch_completion_workflow(self, mock_httpx_response, mock_logging_obj, mock_managed_files_hook):
         """Test the complete batch completion workflow"""
         with patch(
             "litellm.proxy.pass_through_endpoints.llm_provider_handlers.vertex_passthrough_logging_handler.verbose_proxy_logger"
@@ -553,16 +513,11 @@ class TestVertexAIBatchPassthroughHandler:
             with patch(
                 "litellm.proxy.pass_through_endpoints.llm_provider_handlers.vertex_passthrough_logging_handler.VertexPassthroughLoggingHandler.get_actual_model_id_from_router"
             ) as mock_get_model_id:
-                with patch(
-                    "litellm.proxy.proxy_server.proxy_logging_obj"
-                ) as mock_proxy_logging_obj:
-                    mock_proxy_logging_obj.get_proxy_hook.return_value = (
-                        mock_managed_files_hook
-                    )
+                with patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging_obj:
+                    mock_proxy_logging_obj.get_proxy_hook.return_value = mock_managed_files_hook
                 with patch(
                     "litellm.llms.vertex_ai.batches.transformation.VertexAIBatchTransformation"
                 ) as mock_transformation:
-
                     # Setup mocks
                     mock_get_model_id.return_value = "vertex_ai/gemini-1.5-flash"
                     mock_transformation.transform_vertex_ai_batch_response_to_openai_batch_response.return_value = {
@@ -612,15 +567,11 @@ class TestVertexAIBatchCostCalculation:
     batch_cost_calculator — no VertexGeminiConfig transformation involved.
     """
 
-
-
     def test_should_return_zeros_for_empty_response_list(self):
         """Empty input → zero cost and zero usage."""
         from litellm.batches.batch_utils import calculate_vertex_ai_batch_cost_and_usage
 
-        result = calculate_vertex_ai_batch_cost_and_usage(
-            [], model_name="gemini-2.0-flash-001"
-        )
+        result = calculate_vertex_ai_batch_cost_and_usage([], model_name="gemini-2.0-flash-001")
 
         assert result.cost == 0.0
         assert result.usage.total_tokens == 0
@@ -635,12 +586,8 @@ class TestVertexAIBatchCostCalculation:
             {"response": {"candidates": [{"content": {"parts": [{"text": "hi"}]}}]}},
         ]
 
-        result = calculate_vertex_ai_batch_cost_and_usage(
-            responses, model_name="gemini-2.0-flash-001"
-        )
+        result = calculate_vertex_ai_batch_cost_and_usage(responses, model_name="gemini-2.0-flash-001")
 
         assert result.usage.prompt_tokens == 0
         assert result.usage.completion_tokens == 0
         assert result.usage.total_tokens == 0
-
-

@@ -44,7 +44,9 @@ def main() -> int:
     for line in found:
         print(line)
     if found:
-        print(f"{len(found)} litellm.* uses in router modules; read settings from RouterDynamicConfig and use PythonHost")
+        print(
+            f"{len(found)} litellm.* uses in router modules; read settings from RouterDynamicConfig and use PythonHost"
+        )
         return 1
     print("router modules use no litellm.* globals")
     return 0

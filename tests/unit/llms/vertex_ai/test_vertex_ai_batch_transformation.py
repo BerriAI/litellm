@@ -19,11 +19,7 @@ def test_output_file_id_uses_predictions_jsonl_with_output_info():
         }
     }
 
-    output_file_id = (
-        VertexAIBatchTransformation._get_output_file_id_from_vertex_ai_batch_response(
-            response
-        )
-    )
+    output_file_id = VertexAIBatchTransformation._get_output_file_id_from_vertex_ai_batch_response(response)
 
     assert (
         output_file_id
@@ -41,11 +37,7 @@ def test_output_file_id_is_none_until_output_info():
         },
     }
 
-    output_file_id = (
-        VertexAIBatchTransformation._get_output_file_id_from_vertex_ai_batch_response(
-            response
-        )
-    )
+    output_file_id = VertexAIBatchTransformation._get_output_file_id_from_vertex_ai_batch_response(response)
 
     assert output_file_id is None
 
@@ -125,10 +117,7 @@ def test_vertex_ai_cancel_batch_encodes_batch_id():
 
             post_url = mock_client.return_value.post.call_args.kwargs["url"]
             get_url = mock_client.return_value.get.call_args.kwargs["url"]
-            assert (
-                "/..%2F..%2FbatchPredictionJobs%2Fother%3Fx%3D1%23frag:cancel"
-                in post_url
-            )
+            assert "/..%2F..%2FbatchPredictionJobs%2Fother%3Fx%3D1%23frag:cancel" in post_url
             assert "/..%2F..%2FbatchPredictionJobs%2Fother%3Fx%3D1%23frag" in get_url
 
 

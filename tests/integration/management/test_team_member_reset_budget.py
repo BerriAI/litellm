@@ -161,7 +161,9 @@ async def test_team_member_reset_budget_without_team_default_detaches_member(gat
     assert row.spend == _SEED_SPEND
 
 
-async def test_team_member_reset_budget_with_deleted_team_default_detaches_member(gateway_client, db, resources, actors):
+async def test_team_member_reset_budget_with_deleted_team_default_detaches_member(
+    gateway_client, db, resources, actors
+):
     member_id = resources.tag("member")
     await create_scratch_team(
         db,

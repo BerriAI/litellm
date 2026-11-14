@@ -33,8 +33,8 @@ def adopt_legacy(containers: Containers, database: Database) -> None:
             assert detail in logs
     assert database.query("SELECT count(*) FROM _prisma_migrations") == ((count,),)
     assert database.query(
-        'SELECT count(*) FROM _prisma_migrations WHERE finished_at IS NULL OR rolled_back_at IS '
-        'NOT NULL OR applied_steps_count <> 0'
+        "SELECT count(*) FROM _prisma_migrations WHERE finished_at IS NULL OR rolled_back_at IS "
+        "NOT NULL OR applied_steps_count <> 0"
     ) == ((0,),)
     assert set(existing_keys).issubset(database.query('SELECT token FROM "LiteLLM_VerificationToken" ORDER BY token'))
     assert database.query("SELECT stopped_by FROM \"LiteLLM_ShadowEvalJob\" WHERE id = 'migration-legacy'") == (

@@ -92,9 +92,7 @@ def _cache_priced_params(backend: str) -> LiteLLMParamsBody:
     )
 
 
-def _chat_body(
-    model: str, content: str, *, stream: bool = False, reasoning_effort: str | None = None
-) -> ChatBody:
+def _chat_body(model: str, content: str, *, stream: bool = False, reasoning_effort: str | None = None) -> ChatBody:
     return ChatBody(
         model=model,
         messages=[ChatMessage(role="user", content=content)],
@@ -113,10 +111,7 @@ def _require_row(client: SpendClient, request_id: str) -> CostRow:
 def _assert_cache_read_billed(row: CostRow) -> None:
     assert row.breakdown.cache_read_cost is not None and approx_equal(
         row.breakdown.cache_read_cost, row.cache_read_tokens * CACHE_READ_RATE
-    ), (
-        f"cache_read_cost {row.breakdown.cache_read_cost} != "
-        f"{row.cache_read_tokens} cached tokens * {CACHE_READ_RATE}"
-    )
+    ), f"cache_read_cost {row.breakdown.cache_read_cost} != {row.cache_read_tokens} cached tokens * {CACHE_READ_RATE}"
     assert_fresh_tokens_billed_at(row, INPUT_RATE)
     assert_total_is_sum_of_components(row)
 
@@ -183,9 +178,7 @@ class TestCacheCostAccounting:
             unwrap(
                 client.proxy.chat(
                     scoped_key,
-                    _chat_body(
-                        model, f"{prefix}\n{PRIME_QUESTION}", reasoning_effort=REASONING_EFFORT
-                    ),
+                    _chat_body(model, f"{prefix}\n{PRIME_QUESTION}", reasoning_effort=REASONING_EFFORT),
                 )
             )
             chat = unwrap(
@@ -218,16 +211,10 @@ class TestCacheCostAccounting:
         breakdown = row.breakdown
         assert breakdown.output_cost is not None and approx_equal(
             breakdown.output_cost, (row.completion_tokens or 0) * OUTPUT_RATE
-        ), (
-            f"output_cost {breakdown.output_cost} != "
-            f"{row.completion_tokens} completion tokens * {OUTPUT_RATE}"
-        )
+        ), f"output_cost {breakdown.output_cost} != {row.completion_tokens} completion tokens * {OUTPUT_RATE}"
         assert breakdown.reasoning_cost is not None and approx_equal(
             breakdown.reasoning_cost, reasoning_tokens * OUTPUT_RATE
-        ), (
-            f"reasoning_cost {breakdown.reasoning_cost} != "
-            f"{reasoning_tokens} reasoning tokens * {OUTPUT_RATE}"
-        )
+        ), f"reasoning_cost {breakdown.reasoning_cost} != {reasoning_tokens} reasoning tokens * {OUTPUT_RATE}"
         assert breakdown.reasoning_cost <= (breakdown.output_cost or 0.0) * 1.01, (
             f"reasoning_cost {breakdown.reasoning_cost} exceeds output_cost "
             f"{breakdown.output_cost}; reasoning must be a subset of output"

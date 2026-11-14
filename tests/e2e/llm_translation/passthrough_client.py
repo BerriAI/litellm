@@ -36,20 +36,14 @@ class JsonSchema(BaseModel):
 
 class GeminiHeaders(Headers):
     x_goog_api_key: str = Field(serialization_alias="x-goog-api-key", repr=False)
-    content_type: str = Field(
-        default="application/json", serialization_alias="Content-Type"
-    )
+    content_type: str = Field(default="application/json", serialization_alias="Content-Type")
     tags: str | None = None
 
 
 class AnthropicHeaders(Headers):
     x_api_key: str = Field(serialization_alias="x-api-key", repr=False)
-    anthropic_version: str = Field(
-        default="2023-06-01", serialization_alias="anthropic-version"
-    )
-    content_type: str = Field(
-        default="application/json", serialization_alias="Content-Type"
-    )
+    anthropic_version: str = Field(default="2023-06-01", serialization_alias="anthropic-version")
+    content_type: str = Field(default="application/json", serialization_alias="Content-Type")
     tags: str | None = None
 
 
@@ -58,9 +52,7 @@ class VertexHeaders(Headers):
     # from the proxy's own service account (the deployment marked use_in_pass_through),
     # so no upstream Authorization bearer is sent from the client.
     x_litellm_api_key: str = Field(serialization_alias="x-litellm-api-key", repr=False)
-    content_type: str = Field(
-        default="application/json", serialization_alias="Content-Type"
-    )
+    content_type: str = Field(default="application/json", serialization_alias="Content-Type")
 
 
 class AltSseParams(BaseModel):
@@ -83,9 +75,7 @@ class GeminiFunctionDeclaration(BaseModel):
 
 
 class GeminiTool(BaseModel):
-    function_declarations: list[GeminiFunctionDeclaration] = Field(
-        serialization_alias="functionDeclarations"
-    )
+    function_declarations: list[GeminiFunctionDeclaration] = Field(serialization_alias="functionDeclarations")
 
 
 class GeminiGenerateBody(BaseModel):
@@ -157,14 +147,9 @@ def completed_responses_object(result: StreamingResponse) -> ResponsesObject | N
     """The `response.completed` frame's response object, or None if the stream never
     completed. Its `id` is what the spend row is keyed by on this route, and its
     usage is what the row is priced from."""
-    events = (
-        ResponsesStreamEvent.model_validate_json(payload)
-        for payload in result.stream_events
-    )
+    events = (ResponsesStreamEvent.model_validate_json(payload) for payload in result.stream_events)
     completed = tuple(
-        event.response
-        for event in events
-        if event.type == "response.completed" and event.response is not None
+        event.response for event in events if event.type == "response.completed" and event.response is not None
     )
     return completed[-1] if completed else None
 
@@ -186,15 +171,8 @@ def anthropic_message_id(result: StreamingResponse) -> str | None:
     on this route: off the `message_start` frame when streaming, off the body when not."""
     if not result.is_streaming:
         return AnthropicMessageObject.model_validate_json(result.body).id
-    events = (
-        AnthropicStreamEvent.model_validate_json(payload)
-        for payload in result.stream_events
-    )
-    started = tuple(
-        event.message
-        for event in events
-        if event.type == "message_start" and event.message is not None
-    )
+    events = (AnthropicStreamEvent.model_validate_json(payload) for payload in result.stream_events)
+    started = tuple(event.message for event in events if event.type == "message_start" and event.message is not None)
     return started[0].id if started else None
 
 
@@ -260,21 +238,15 @@ class PassthroughClient:
         return self.proxy.transport.send(
             f"/gemini/v1beta/models/{model}:generateContent",
             headers=GeminiHeaders(x_goog_api_key=key, tags=_tags_header(tags)),
-            json=GeminiGenerateBody(
-                contents=[GeminiContent(parts=[GeminiPart(text=text)])], tools=tools
-            ),
+            json=GeminiGenerateBody(contents=[GeminiContent(parts=[GeminiPart(text=text)])], tools=tools),
         )
 
     @step("Send a Gemini streamGenerateContent request to {model} through /gemini")
-    def gemini_stream(
-        self, key: str, model: str, text: str, *, tags: list[str] | None = None
-    ) -> StreamingResponse:
+    def gemini_stream(self, key: str, model: str, text: str, *, tags: list[str] | None = None) -> StreamingResponse:
         return self.proxy.transport.send(
             f"/gemini/v1beta/models/{model}:streamGenerateContent",
             headers=GeminiHeaders(x_goog_api_key=key, tags=_tags_header(tags)),
-            json=GeminiGenerateBody(
-                contents=[GeminiContent(parts=[GeminiPart(text=text)])]
-            ),
+            json=GeminiGenerateBody(contents=[GeminiContent(parts=[GeminiPart(text=text)])]),
             params=AltSseParams(),
             stream=True,
         )
@@ -282,19 +254,12 @@ class PassthroughClient:
     # ---- Vertex AI native passthrough (/vertex_ai/v1/projects/...) -------
 
     @step("Send a Vertex AI generateContent request to {model} in {location} through /vertex_ai")
-    def vertex_generate(
-        self, key: str, project: str, location: str, model: str, text: str
-    ) -> StreamingResponse:
-        path = (
-            f"/vertex_ai/v1/projects/{project}/locations/{location}"
-            f"/publishers/google/models/{model}:generateContent"
-        )
+    def vertex_generate(self, key: str, project: str, location: str, model: str, text: str) -> StreamingResponse:
+        path = f"/vertex_ai/v1/projects/{project}/locations/{location}/publishers/google/models/{model}:generateContent"
         return self.proxy.transport.send(
             path,
             headers=VertexHeaders(x_litellm_api_key=key),
-            json=GeminiGenerateBody(
-                contents=[GeminiContent(parts=[GeminiPart(text=text)])]
-            ),
+            json=GeminiGenerateBody(contents=[GeminiContent(parts=[GeminiPart(text=text)])]),
         )
 
     # ---- Anthropic native passthrough (/anthropic/v1/messages) ----------
@@ -343,9 +308,7 @@ class PassthroughClient:
         )
 
     @step("Delete the uploaded file through /openai_passthrough/v1/files")
-    def openai_passthrough_delete_file(
-        self, key: str, file_id: str
-    ) -> Result[PassthroughFileDeleted]:
+    def openai_passthrough_delete_file(self, key: str, file_id: str) -> Result[PassthroughFileDeleted]:
         return self.proxy.transport.delete(
             f"/openai_passthrough/v1/files/{file_id}",
             headers=self.proxy.transport.bearer(key),
@@ -380,9 +343,7 @@ class PassthroughClient:
         )
 
     @step('Send a /v1/embeddings request to {model} through /openai_passthrough for "{text}"')
-    def openai_passthrough_embed(
-        self, key: str, model: str, text: str
-    ) -> StreamingResponse:
+    def openai_passthrough_embed(self, key: str, model: str, text: str) -> StreamingResponse:
         return self.proxy.transport.send(
             "/openai_passthrough/v1/embeddings",
             headers=self.proxy.transport.bearer(key),
@@ -390,9 +351,7 @@ class PassthroughClient:
         )
 
     @step("Send a /v1/chat/completions request to {model} through /openai")
-    def openai_chat(
-        self, key: str, model: str, text: str, *, max_completion_tokens: int = 64
-    ) -> StreamingResponse:
+    def openai_chat(self, key: str, model: str, text: str, *, max_completion_tokens: int = 64) -> StreamingResponse:
         return self.proxy.transport.send(
             "/openai/v1/chat/completions",
             headers=self.proxy.transport.bearer(key),
@@ -433,9 +392,7 @@ class PassthroughClient:
             except TimeoutError:
                 return WebsocketHandshake()
             text = frame.decode("utf-8") if isinstance(frame, bytes) else frame
-            return WebsocketHandshake(
-                first_event_type=WebsocketEnvelope.model_validate_json(text).type
-            )
+            return WebsocketHandshake(first_event_type=WebsocketEnvelope.model_validate_json(text).type)
 
 
 def build_client(proxy: ProxyClient) -> PassthroughClient:

@@ -112,9 +112,7 @@ async def test_fetch_tools_from_passthrough_raises_on_upstream_401():
         headers={"www-authenticate": 'Bearer resource_metadata="https://upstream"'},
         request=httpx.Request("GET", "https://upstream/mcp"),
     )
-    upstream_error = httpx.HTTPStatusError(
-        "401", request=response.request, response=response
-    )
+    upstream_error = httpx.HTTPStatusError("401", request=response.request, response=response)
 
     mock_client = MagicMock()
     mock_client.list_tools_result = AsyncMock(side_effect=upstream_error)
@@ -123,9 +121,7 @@ async def test_fetch_tools_from_passthrough_raises_on_upstream_401():
         await manager._fetch_tools_with_timeout(mock_client, passthrough_server.name)
 
     assert exc_info.value.status_code == 401
-    assert exc_info.value.www_authenticate == (
-        'Bearer resource_metadata="https://upstream"'
-    )
+    assert exc_info.value.www_authenticate == ('Bearer resource_metadata="https://upstream"')
     assert exc_info.value.server_name == "sample_docs"
     mock_client.list_tools_result.assert_awaited_with(raise_on_error=True)
 
@@ -147,9 +143,7 @@ async def test_fetch_tools_from_delegated_oauth2_raises_on_upstream_401():
         headers={"www-authenticate": 'Bearer resource_metadata="https://upstream"'},
         request=httpx.Request("GET", "https://upstream/mcp"),
     )
-    upstream_error = httpx.HTTPStatusError(
-        "401", request=response.request, response=response
-    )
+    upstream_error = httpx.HTTPStatusError("401", request=response.request, response=response)
 
     mock_client = MagicMock()
     mock_client.list_tools_result = AsyncMock(side_effect=upstream_error)
@@ -158,9 +152,7 @@ async def test_fetch_tools_from_delegated_oauth2_raises_on_upstream_401():
         await manager._fetch_tools_with_timeout(mock_client, delegated_server.name)
 
     assert exc_info.value.status_code == 401
-    assert exc_info.value.www_authenticate == (
-        'Bearer resource_metadata="https://upstream"'
-    )
+    assert exc_info.value.www_authenticate == ('Bearer resource_metadata="https://upstream"')
     assert exc_info.value.server_name == "delegated_docs"
     mock_client.list_tools_result.assert_awaited_with(raise_on_error=True)
 
@@ -186,9 +178,7 @@ async def test_fetch_tools_from_client_credentials_oauth2_surfaces_upstream_401(
         headers={"www-authenticate": 'Bearer resource_metadata="https://upstream"'},
         request=httpx.Request("GET", "https://upstream/mcp"),
     )
-    upstream_error = httpx.HTTPStatusError(
-        "401", request=response.request, response=response
-    )
+    upstream_error = httpx.HTTPStatusError("401", request=response.request, response=response)
 
     mock_client = MagicMock()
     mock_client.list_tools_result = AsyncMock(side_effect=upstream_error)
@@ -223,7 +213,9 @@ async def test_fetch_tools_from_passthrough_returns_tools_on_success():
 
 
 @pytest.mark.parametrize("status_code", [401, 403])
-@pytest.mark.parametrize("public_detail", [None, TOKEN_EXCHANGE_SUBJECT_ERROR, "private failure", {"secret": "private"}])
+@pytest.mark.parametrize(
+    "public_detail", [None, TOKEN_EXCHANGE_SUBJECT_ERROR, "private failure", {"secret": "private"}]
+)
 def test_to_http_exception_preserves_upstream_www_authenticate(public_detail: object, status_code: int):
     err = MCPUpstreamAuthError(
         status_code=status_code,
@@ -237,7 +229,9 @@ def test_to_http_exception_preserves_upstream_www_authenticate(public_detail: ob
     assert http_exc.detail == (
         TOKEN_EXCHANGE_SUBJECT_ERROR
         if public_detail == TOKEN_EXCHANGE_SUBJECT_ERROR
-        else "Forbidden" if status_code == 403 else "Unauthorized"
+        else "Forbidden"
+        if status_code == 403
+        else "Unauthorized"
     )
     assert http_exc.headers == {
         "www-authenticate": 'Bearer resource_metadata="https://upstream/.well-known/oauth-protected-resource"'
@@ -305,9 +299,7 @@ async def test_fetch_tools_from_gateway_managed_surfaces_upstream_401():
         headers={},
         request=httpx.Request("GET", "https://upstream/mcp"),
     )
-    upstream_error = httpx.HTTPStatusError(
-        "401", request=response.request, response=response
-    )
+    upstream_error = httpx.HTTPStatusError("401", request=response.request, response=response)
     mock_client = MagicMock()
     mock_client.list_tools_result = AsyncMock(side_effect=upstream_error)
 
@@ -345,9 +337,7 @@ async def test_aggregate_list_tools_absorbs_one_unauthenticated_server():
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.mcp_server import server as mcp_server
 
-    delegate = _http_server(
-        "s1", "delegate_docs", auth_type=MCPAuth.oauth2, delegate_auth_to_upstream=True
-    )
+    delegate = _http_server("s1", "delegate_docs", auth_type=MCPAuth.oauth2, delegate_auth_to_upstream=True)
     working = _http_server("s2", "working_docs", auth_type=MCPAuth.none)
     good_tool = MCPTool(name="working_docs-read", description="d", inputSchema={"type": "object"})
 
@@ -356,14 +346,17 @@ async def test_aggregate_list_tools_absorbs_one_unauthenticated_server():
             raise MCPUpstreamAuthError(status_code=401, www_authenticate=None, server_name=server.name)
         return [good_tool]
 
-    with patch.object(mcp_operations, "_get_allowed_mcp_servers", AsyncMock(return_value=[delegate, working])), patch.object(
-        mcp_operations, "_prefetch_oauth_creds_for_user", AsyncMock(return_value={})
-    ), patch.object(mcp_operations, "_prepare_mcp_server_headers", MagicMock(return_value=(None, None))), patch.object(
-        mcp_operations, "_get_user_oauth_extra_headers_from_db", AsyncMock(return_value=None)
-    ), patch.object(
-        mcp_operations, "filter_tools_by_key_team_permissions", AsyncMock(side_effect=lambda tools, **k: tools)
-    ), patch.object(
-        mcp_operations.global_mcp_server_manager, "get_tools_from_server", AsyncMock(side_effect=fake_get_tools)
+    with (
+        patch.object(mcp_operations, "_get_allowed_mcp_servers", AsyncMock(return_value=[delegate, working])),
+        patch.object(mcp_operations, "_prefetch_oauth_creds_for_user", AsyncMock(return_value={})),
+        patch.object(mcp_operations, "_prepare_mcp_server_headers", MagicMock(return_value=(None, None))),
+        patch.object(mcp_operations, "_get_user_oauth_extra_headers_from_db", AsyncMock(return_value=None)),
+        patch.object(
+            mcp_operations, "filter_tools_by_key_team_permissions", AsyncMock(side_effect=lambda tools, **k: tools)
+        ),
+        patch.object(
+            mcp_operations.global_mcp_server_manager, "get_tools_from_server", AsyncMock(side_effect=fake_get_tools)
+        ),
     ):
         listing = await mcp_operations._get_tools_from_mcp_servers(
             user_api_key_auth=UserAPIKeyAuth(token="h", user_id="u1"),
@@ -387,9 +380,7 @@ async def test_single_server_route_also_absorbs_upstream_auth_error() -> None:
     from litellm.proxy.mcp_server import server as mcp_server
     from litellm.proxy.mcp_server.mcp_context import mcp_gateway_server_name
 
-    delegate = _http_server(
-        "s1", "delegate_docs", auth_type=MCPAuth.oauth2, delegate_auth_to_upstream=True
-    )
+    delegate = _http_server("s1", "delegate_docs", auth_type=MCPAuth.oauth2, delegate_auth_to_upstream=True)
 
     async def fake_get_tools(server, **kwargs):
         raise MCPUpstreamAuthError(status_code=401, www_authenticate=None, server_name=server.name)
@@ -397,12 +388,14 @@ async def test_single_server_route_also_absorbs_upstream_auth_error() -> None:
     # /<server>/mcp sets the path-derived single-server scope; absorption must hold even then.
     token = mcp_gateway_server_name.set("delegate_docs")
     try:
-        with patch.object(mcp_operations, "_get_allowed_mcp_servers", AsyncMock(return_value=[delegate])), patch.object(
-            mcp_operations, "_prefetch_oauth_creds_for_user", AsyncMock(return_value={})
-        ), patch.object(mcp_operations, "_prepare_mcp_server_headers", MagicMock(return_value=(None, None))), patch.object(
-            mcp_operations, "_get_user_oauth_extra_headers_from_db", AsyncMock(return_value=None)
-        ), patch.object(
-            mcp_operations.global_mcp_server_manager, "get_tools_from_server", AsyncMock(side_effect=fake_get_tools)
+        with (
+            patch.object(mcp_operations, "_get_allowed_mcp_servers", AsyncMock(return_value=[delegate])),
+            patch.object(mcp_operations, "_prefetch_oauth_creds_for_user", AsyncMock(return_value={})),
+            patch.object(mcp_operations, "_prepare_mcp_server_headers", MagicMock(return_value=(None, None))),
+            patch.object(mcp_operations, "_get_user_oauth_extra_headers_from_db", AsyncMock(return_value=None)),
+            patch.object(
+                mcp_operations.global_mcp_server_manager, "get_tools_from_server", AsyncMock(side_effect=fake_get_tools)
+            ),
         ):
             listing = await mcp_operations._get_tools_from_mcp_servers(
                 user_api_key_auth=UserAPIKeyAuth(token="h", user_id="u1"),
@@ -427,19 +420,19 @@ async def test_aggregate_with_single_accessible_server_still_absorbs():
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.mcp_server import server as mcp_server
 
-    delegate = _http_server(
-        "s1", "delegate_docs", auth_type=MCPAuth.oauth2, delegate_auth_to_upstream=True
-    )
+    delegate = _http_server("s1", "delegate_docs", auth_type=MCPAuth.oauth2, delegate_auth_to_upstream=True)
 
     async def fake_get_tools(server, **kwargs):
         raise MCPUpstreamAuthError(status_code=401, www_authenticate=None, server_name=server.name)
 
-    with patch.object(mcp_operations, "_get_allowed_mcp_servers", AsyncMock(return_value=[delegate])), patch.object(
-        mcp_operations, "_prefetch_oauth_creds_for_user", AsyncMock(return_value={})
-    ), patch.object(mcp_operations, "_prepare_mcp_server_headers", MagicMock(return_value=(None, None))), patch.object(
-        mcp_operations, "_get_user_oauth_extra_headers_from_db", AsyncMock(return_value=None)
-    ), patch.object(
-        mcp_operations.global_mcp_server_manager, "get_tools_from_server", AsyncMock(side_effect=fake_get_tools)
+    with (
+        patch.object(mcp_operations, "_get_allowed_mcp_servers", AsyncMock(return_value=[delegate])),
+        patch.object(mcp_operations, "_prefetch_oauth_creds_for_user", AsyncMock(return_value={})),
+        patch.object(mcp_operations, "_prepare_mcp_server_headers", MagicMock(return_value=(None, None))),
+        patch.object(mcp_operations, "_get_user_oauth_extra_headers_from_db", AsyncMock(return_value=None)),
+        patch.object(
+            mcp_operations.global_mcp_server_manager, "get_tools_from_server", AsyncMock(side_effect=fake_get_tools)
+        ),
     ):
         # Aggregate route: no explicit server filter, even though only one server is accessible.
         listing = await mcp_operations._get_tools_from_mcp_servers(
@@ -479,9 +472,15 @@ async def test_fetch_tools_logs_upstream_request_details_on_500(caplog):
 @pytest.mark.asyncio
 async def test_client_creation_failure_logs_sanitized_exchange(monkeypatch, caplog):
     manager = MCPServerManager()
-    server = MCPServer(server_id="sample", name="sample", url="https://upstream/mcp", transport=MCPTransport.http, auth_type=MCPAuth.none)
+    server = MCPServer(
+        server_id="sample",
+        name="sample",
+        url="https://upstream/mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.none,
+    )
     request = httpx.Request("POST", "https://upstream/mcp?credential=query-secret")
-    response = httpx.Response(500, request=request, json={"error":"missing_scope"})
+    response = httpx.Response(500, request=request, json={"error": "missing_scope"})
     error = httpx.HTTPStatusError("query-secret", request=request, response=response)
     monkeypatch.setattr(manager, "create_mcp_client", AsyncMock(side_effect=error))
     with caplog.at_level(logging.WARNING, logger="LiteLLM"):
@@ -513,11 +512,24 @@ def test_passthrough_admission_recognizes_only_matching_authorization(oauth_head
     assert _client_has_passthrough_authorization(server, oauth_headers, server_headers) is authorized
 
 
-@pytest.mark.parametrize("base_url, request_path, scope, expected", [
-    ("https://gateway.test/proxy", "/alias/mcp", "tools.write", 'Bearer resource_metadata="https://gateway.test/proxy/.well-known/oauth-protected-resource/alias/mcp", error="insufficient_scope", scope="tools.write"'),
-    ("https://gateway.test/proxy", "/mcp/alias", "", 'Bearer resource_metadata="https://gateway.test/proxy/.well-known/oauth-protected-resource/mcp/alias", error="insufficient_scope"'),
-    (None, None, "tools.write", 'Bearer error="insufficient_scope", scope="tools.write"'),
-])
+@pytest.mark.parametrize(
+    "base_url, request_path, scope, expected",
+    [
+        (
+            "https://gateway.test/proxy",
+            "/alias/mcp",
+            "tools.write",
+            'Bearer resource_metadata="https://gateway.test/proxy/.well-known/oauth-protected-resource/alias/mcp", error="insufficient_scope", scope="tools.write"',
+        ),
+        (
+            "https://gateway.test/proxy",
+            "/mcp/alias",
+            "",
+            'Bearer resource_metadata="https://gateway.test/proxy/.well-known/oauth-protected-resource/mcp/alias", error="insufficient_scope"',
+        ),
+        (None, None, "tools.write", 'Bearer error="insufficient_scope", scope="tools.write"'),
+    ],
+)
 def test_managed_step_up_challenge_uses_only_the_gateway_metadata(base_url, request_path, scope, expected):
     error = MCPUpstreamAuthError(status_code=403, www_authenticate=None, server_name="alias", required_scope=scope)
     response = error.to_http_exception(base_url=base_url, request_path=request_path)
@@ -542,8 +554,10 @@ async def test_scope_challenge_replaces_pending_stream_headers_once():
     start, result = [call.args[0] for call in send.await_args_list]
     assert start["status"] == 403
     challenge = dict(start["headers"])[b"www-authenticate"].decode()
-    assert challenge == ('Bearer resource_metadata="https://gateway.example/.well-known/oauth-protected-resource/docs/mcp", '
-                         'error="insufficient_scope", scope="tools.write"')
+    assert challenge == (
+        'Bearer resource_metadata="https://gateway.example/.well-known/oauth-protected-resource/docs/mcp", '
+        'error="insufficient_scope", scope="tools.write"'
+    )
     assert result["body"] == b'{"detail":"Forbidden"}'
 
 
@@ -551,7 +565,8 @@ async def test_scope_challenge_replaces_pending_stream_headers_once():
 @pytest.mark.parametrize("failure", [ValueError, asyncio.CancelledError])
 @pytest.mark.parametrize("fail_send", [False, True])
 async def test_scope_middleware_releases_waiting_response_on_validation_or_cancellation(
-    failure: type[BaseException], fail_send: bool,
+    failure: type[BaseException],
+    fail_send: bool,
 ) -> None:
     from mcp.server.context import ServerRequestContext
     from starlette.requests import Request
@@ -560,7 +575,13 @@ async def test_scope_middleware_releases_waiting_response_on_validation_or_cance
 
     send: Final = AsyncMock(side_effect=BrokenPipeError("peer disconnected") if fail_send else None)
     gate: Final = OAuthScopeResponse(send, "https://gateway.example", "/mcp/docs")
-    context: Final = ServerRequestContext(session=MagicMock(), lifespan_context={}, protocol_version="2025-11-25", method="tools/call", request=Request({"type": "http", SCOPE_RESPONSE_KEY: gate}))
+    context: Final = ServerRequestContext(
+        session=MagicMock(),
+        lifespan_context={},
+        protocol_version="2025-11-25",
+        method="tools/call",
+        request=Request({"type": "http", SCOPE_RESPONSE_KEY: gate}),
+    )
     headers: Final = asyncio.create_task(gate({"type": "http.response.start", "status": 200, "headers": []}))
     await asyncio.sleep(0)
     with pytest.raises(failure):
@@ -605,9 +626,14 @@ async def test_scope_transport_owns_header_send_cancellation_and_errors(fail_sen
     body: Final = asyncio.create_task(gate({"type": "http.response.body", "body": b"result"}))
     await asyncio.sleep(0)
     assert not send_started.is_set()
-    response: Final = httpx2.Response(200, request=httpx2.Request(
-        "POST", "https://upstream.example/mcp", json={"method": "tools/call"},
-    ))
+    response: Final = httpx2.Response(
+        200,
+        request=httpx2.Request(
+            "POST",
+            "https://upstream.example/mcp",
+            json={"method": "tools/call"},
+        ),
+    )
     try:
         await record_upstream_tool_authorization(response, pending=gate)
         await send_started.wait()
@@ -635,7 +661,11 @@ async def test_scope_authorization_sends_stream_headers_before_the_first_body_ch
 
     send: Final = AsyncMock()
     gate: Final = OAuthScopeResponse(send, "https://gateway.example", "/mcp/docs")
-    start: Final[Message] = {"type": "http.response.start", "status": 200, "headers": [(b"content-type", b"text/event-stream")]}
+    start: Final[Message] = {
+        "type": "http.response.start",
+        "status": 200,
+        "headers": [(b"content-type", b"text/event-stream")],
+    }
     if allowed_before_start:
         gate.allow()
     headers: Final = asyncio.create_task(gate(start))
@@ -700,17 +730,44 @@ async def test_streamable_sdk_relays_scope_challenge_before_committing_http_resp
         async with httpx2.AsyncClient(transport=httpx2.ASGITransport(app=app)) as client:
             headers = {"Accept": "application/json, text/event-stream", "MCP-Protocol-Version": "2025-11-25"}
             if not stateless:
-                initialized = await asyncio.wait_for(client.post("https://gateway.example/mcp/docs", headers=headers, json={
-                    "jsonrpc": "2.0", "id": 0, "method": "initialize", "params": {
-                        "protocolVersion": "2025-11-25", "capabilities": {}, "clientInfo": {"name": "scope-test" + "x" * padding_size, "version": "1"},
-                    },
-                }), 3)
+                initialized = await asyncio.wait_for(
+                    client.post(
+                        "https://gateway.example/mcp/docs",
+                        headers=headers,
+                        json={
+                            "jsonrpc": "2.0",
+                            "id": 0,
+                            "method": "initialize",
+                            "params": {
+                                "protocolVersion": "2025-11-25",
+                                "capabilities": {},
+                                "clientInfo": {"name": "scope-test" + "x" * padding_size, "version": "1"},
+                            },
+                        },
+                    ),
+                    3,
+                )
                 assert initialized.status_code == 200
                 headers["MCP-Session-Id"] = initialized.headers["mcp-session-id"]
-                notified = await client.post("https://gateway.example/mcp/docs", headers=headers, json={"jsonrpc": "2.0", "method": "notifications/initialized"})
+                notified = await client.post(
+                    "https://gateway.example/mcp/docs",
+                    headers=headers,
+                    json={"jsonrpc": "2.0", "method": "notifications/initialized"},
+                )
                 assert notified.status_code == 202
-            response = await asyncio.wait_for(client.post("https://gateway.example/mcp/docs", headers=headers,
-                json={"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "write", "arguments": {"padding": "x" * padding_size}}}), 3)
+            response = await asyncio.wait_for(
+                client.post(
+                    "https://gateway.example/mcp/docs",
+                    headers=headers,
+                    json={
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "tools/call",
+                        "params": {"name": "write", "arguments": {"padding": "x" * padding_size}},
+                    },
+                ),
+                3,
+            )
     assert response.status_code == (403 if denied else 200)
     if denied:
         assert 'error="insufficient_scope"' in response.headers["www-authenticate"]
@@ -733,7 +790,13 @@ async def test_scope_challenges_are_isolated_between_concurrent_requests():
     async def request_scope(denied):
         send = AsyncMock()
         gate = OAuthScopeResponse(send, "https://gateway.example", "/mcp/docs")
-        context = ServerRequestContext(session=MagicMock(), lifespan_context={}, protocol_version="2025-11-25", method="tools/call", request=Request({"type": "http", SCOPE_RESPONSE_KEY: gate}))
+        context = ServerRequestContext(
+            session=MagicMock(),
+            lifespan_context={},
+            protocol_version="2025-11-25",
+            method="tools/call",
+            request=Request({"type": "http", SCOPE_RESPONSE_KEY: gate}),
+        )
         token = active_mcp_request_ctx_var.set(context)
         try:
             headers: Final = asyncio.create_task(gate({"type": "http.response.start", "status": 200, "headers": []}))
@@ -742,7 +805,13 @@ async def test_scope_challenges_are_isolated_between_concurrent_requests():
             if denied:
                 gate.deny(MCPUpstreamAuthError(403, None, "docs", required_scope="tools.write"))
             else:
-                await record_upstream_tool_authorization(httpx2.Response(200, request=httpx2.Request("POST", "https://upstream.example/mcp", json={"method": "tools/call"})), pending=get_scope_response())
+                await record_upstream_tool_authorization(
+                    httpx2.Response(
+                        200,
+                        request=httpx2.Request("POST", "https://upstream.example/mcp", json={"method": "tools/call"}),
+                    ),
+                    pending=get_scope_response(),
+                )
             await headers
             await gate({"type": "http.response.body", "body": b"done"})
             return send.await_args_list[0].args[0]["status"]
@@ -768,7 +837,10 @@ async def test_scope_middleware_preserves_non_http_requests():
 
     from litellm.proxy.mcp_server.scope_challenge import finish_scope_response
 
-    context = ServerRequestContext(session=MagicMock(), lifespan_context={}, protocol_version="2025-11-25", method="tools/call")
+    context = ServerRequestContext(
+        session=MagicMock(), lifespan_context={}, protocol_version="2025-11-25", method="tools/call"
+    )
+
     async def call_next(request):
         return CallToolResult(content=[TextContent(type="text", text=request.method)])
 

@@ -57,16 +57,12 @@ class TestInitLitellmCallbacks:
 
         # The string "lago" should be replaced by the instance, not appended
         string_entries = [c for c in litellm.callbacks if isinstance(c, str)]
-        instance_entries = [
-            c for c in litellm.callbacks if isinstance(c, FakeCustomLogger)
-        ]
+        instance_entries = [c for c in litellm.callbacks if isinstance(c, FakeCustomLogger)]
 
-        assert (
-            len(string_entries) == 0
-        ), f"String callbacks should have been replaced, but found: {string_entries}"
-        assert (
-            len(instance_entries) == 1
-        ), f"Expected exactly one FakeCustomLogger instance, found {len(instance_entries)}"
+        assert len(string_entries) == 0, f"String callbacks should have been replaced, but found: {string_entries}"
+        assert len(instance_entries) == 1, (
+            f"Expected exactly one FakeCustomLogger instance, found {len(instance_entries)}"
+        )
         assert instance_entries[0] is fake_logger
 
         # Clean up
@@ -90,9 +86,7 @@ class TestInitLitellmCallbacks:
         proxy_logging._init_litellm_callbacks(llm_router=None)
 
         # Count how many FakeCustomLogger instances are in litellm.callbacks
-        instance_count = sum(
-            1 for c in litellm.callbacks if isinstance(c, FakeCustomLogger)
-        )
+        instance_count = sum(1 for c in litellm.callbacks if isinstance(c, FakeCustomLogger))
         assert instance_count == 1, (
             f"Expected exactly 1 FakeCustomLogger instance, found {instance_count}. "
             f"litellm.callbacks = {litellm.callbacks}"
@@ -158,16 +152,10 @@ class TestInitLitellmCallbacks:
             proxy_logging._init_litellm_callbacks(llm_router=None)
 
         string_entries = [c for c in litellm.callbacks if isinstance(c, str)]
-        instance_entries = [
-            c for c in litellm.callbacks if isinstance(c, FakeCustomLogger)
-        ]
+        instance_entries = [c for c in litellm.callbacks if isinstance(c, FakeCustomLogger)]
 
-        assert (
-            len(string_entries) == 0
-        ), f"All string callbacks should have been replaced: {string_entries}"
-        assert (
-            len(instance_entries) == 2
-        ), f"Expected 2 FakeCustomLogger instances, found {len(instance_entries)}"
+        assert len(string_entries) == 0, f"All string callbacks should have been replaced: {string_entries}"
+        assert len(instance_entries) == 2, f"Expected 2 FakeCustomLogger instances, found {len(instance_entries)}"
         assert instance_entries[0] is fake_logger_a
         assert instance_entries[1] is fake_logger_b
 

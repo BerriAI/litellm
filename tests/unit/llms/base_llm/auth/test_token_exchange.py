@@ -916,7 +916,9 @@ class TestAssertionGuards:
         poster = ScriptedPoster([token_response()])
 
         def reader(ref: str) -> str | None:
-            raise ImportError("the internal_issuer identity source needs PyJWT and cryptography: pip install 'litellm[proxy]'")
+            raise ImportError(
+                "the internal_issuer identity source needs PyJWT and cryptography: pip install 'litellm[proxy]'"
+            )
 
         result = make_engine(poster, reader=reader).get_token(make_spec())
 

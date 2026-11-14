@@ -99,7 +99,9 @@ async def test_grant_sends_rfc8707_resource_indicator():
 async def test_changing_only_the_resource_mints_a_fresh_token():
     """The resource is part of the mint identity: retargeting a live M2M server must not keep serving
     the token minted for the previous audience."""
-    poster = _FakePoster([_success(access_token="tok-a", expires_in=3600), _success(access_token="tok-b", expires_in=3600)])
+    poster = _FakePoster(
+        [_success(access_token="tok-a", expires_in=3600), _success(access_token="tok-b", expires_in=3600)]
+    )
     source = ClientCredentialsTokenSource(poster)
     first = await source.get("s", _config(upstream_resource="api://one"))
     second = await source.get("s", _config(upstream_resource="api://two"))
@@ -499,9 +501,18 @@ async def test_token_exchange_failure_diagnostics(mode, monkeypatch, caplog):
                 raise httpx.ConnectError("private-transport-message", request=request)
             if mode == "cancel":
                 raise asyncio.CancelledError
-            response = httpx.Response(401 if mode == "denied" else 200, request=request,
+            response = httpx.Response(
+                401 if mode == "denied" else 200,
+                request=request,
                 content=b"not-json-private" if mode == "invalid" else None,
-                json=None if mode == "invalid" else {"error": "invalid_client", "client_secret":"first second", **({"access_token":"private-token"} if mode == "success" else {})})
+                json=None
+                if mode == "invalid"
+                else {
+                    "error": "invalid_client",
+                    "client_secret": "first second",
+                    **({"access_token": "private-token"} if mode == "success" else {}),
+                },
+            )
             response.raise_for_status()
             return response
 
@@ -512,8 +523,18 @@ async def test_token_exchange_failure_diagnostics(mode, monkeypatch, caplog):
                 await post_client_credentials_grant("https://idp/token", {}, {})
             assert not caplog.text
             return
-        result = await post_client_credentials_grant("https://idp/token?key=query-secret", {"client_secret":"first second"}, {"X-Custom":"header-secret"})
-    for secret in ("first", "second", "query-secret", "header-secret", "private-token", "not-json-private", "private-transport-message"):
+        result = await post_client_credentials_grant(
+            "https://idp/token?key=query-secret", {"client_secret": "first second"}, {"X-Custom": "header-secret"}
+        )
+    for secret in (
+        "first",
+        "second",
+        "query-secret",
+        "header-secret",
+        "private-token",
+        "not-json-private",
+        "private-transport-message",
+    ):
         assert secret not in caplog.text
     if mode == "success":
         assert isinstance(result, TokenEndpointSuccess) and result.body["access_token"] == "private-token"
@@ -523,23 +544,30 @@ async def test_token_exchange_failure_diagnostics(mode, monkeypatch, caplog):
         assert "POST https://idp/ failed" in caplog.text
     else:
         assert "POST https://idp/ -> HTTP" in caplog.text
-        assert {"denied":"denied", "invalid":"invalid response", "missing":"no access token"}[mode] in caplog.text
+        assert {"denied": "denied", "invalid": "invalid response", "missing": "no access token"}[mode] in caplog.text
 
 
-@pytest.mark.parametrize("changed", [
-    {"client_id": "other-client"},
-    {"client_secret": SecretStr("other-secret")},
-    {"token_url": "https://other.example/token"},
-    {"scopes": ("read",)},
-    {"audience": "other-audience"},
-    {"upstream_resource": "https://other.example/mcp"},
-    {"token_endpoint_auth_method": "client_secret_basic"},
-    {"value_prefix": "Token"},
-])
+@pytest.mark.parametrize(
+    "changed",
+    [
+        {"client_id": "other-client"},
+        {"client_secret": SecretStr("other-secret")},
+        {"token_url": "https://other.example/token"},
+        {"scopes": ("read",)},
+        {"audience": "other-audience"},
+        {"upstream_resource": "https://other.example/mcp"},
+        {"token_endpoint_auth_method": "client_secret_basic"},
+        {"value_prefix": "Token"},
+    ],
+)
 def test_subscription_identity_tracks_grant_configuration(changed):
     config = ClientCredentialsConfig(
-        client_id="client", client_secret=SecretStr("secret"), token_url="https://idp.example/token",
-        scopes=("read", "write"), audience="audience", upstream_resource="https://upstream.example/mcp",
+        client_id="client",
+        client_secret=SecretStr("secret"),
+        token_url="https://idp.example/token",
+        scopes=("read", "write"),
+        audience="audience",
+        upstream_resource="https://upstream.example/mcp",
         token_endpoint_auth_method="client_secret_post",
     )
 
@@ -548,7 +576,9 @@ def test_subscription_identity_tracks_grant_configuration(changed):
 
     original = ClientCredentialsBearerAuth("first", refetch, config, granted_scopes=("read", "write"))
     renewed = ClientCredentialsBearerAuth("second", refetch, config, granted_scopes=("write", "read"))
-    changed_auth = ClientCredentialsBearerAuth("second", refetch, config.model_copy(update=changed), granted_scopes=("read", "write"))
+    changed_auth = ClientCredentialsBearerAuth(
+        "second", refetch, config.model_copy(update=changed), granted_scopes=("read", "write")
+    )
     reduced = ClientCredentialsBearerAuth("second", refetch, config, granted_scopes=("read",))
     assert original.subscription_identity is not None
     assert original.subscription_identity == renewed.subscription_identity

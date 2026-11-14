@@ -777,7 +777,7 @@ GPT_6_ASTRA_CONTENT_FILTERS: Final[JsonValue] = [
             "self_harm": {"filtered": False, "severity": "safe"},
         },
         "content_filter_offsets": {"start_offset": 0, "end_offset": 511, "check_offset": 0},
-    }
+    },
 ]
 
 GPT_6_ASTRA_ENCRYPTED_REASONING: Final = (

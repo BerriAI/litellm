@@ -48,8 +48,7 @@ _PYPI_FETCH_BACKOFF_SECONDS: Final[float] = 0.5
 
 
 class _HttpGet(Protocol):
-    def __call__(self, url: str, *, timeout: float) -> requests.Response:
-        ...
+    def __call__(self, url: str, *, timeout: float) -> requests.Response: ...
 
 
 @dataclass
@@ -76,12 +75,8 @@ class LicenseChecker:
         self.config.read(config_file)
 
         # Initialize license sets
-        self.authorized_licenses = self._parse_license_list(
-            "Licenses", "authorized_licenses"
-        )
-        self.unauthorized_licenses = self._parse_license_list(
-            "Licenses", "unauthorized_licenses"
-        )
+        self.authorized_licenses = self._parse_license_list("Licenses", "authorized_licenses")
+        self.unauthorized_licenses = self._parse_license_list("Licenses", "unauthorized_licenses")
 
         # Parse authorized packages
         self.authorized_packages = self._parse_authorized_packages()
@@ -131,9 +126,7 @@ class LicenseChecker:
                     }
         return authorized
 
-    def get_package_license_from_pypi(
-        self, package_name: str, version: str
-    ) -> Optional[str]:
+    def get_package_license_from_pypi(self, package_name: str, version: str) -> Optional[str]:
         """Fetch license information for a package from PyPI.
 
         Prefers the PEP 639 SPDX expression (``info.license_expression``),
@@ -159,9 +152,7 @@ class LicenseChecker:
                 if self._is_retryable_pypi_error(error) and attempt < _PYPI_FETCH_ATTEMPTS - 1:
                     sleep(_PYPI_FETCH_BACKOFF_SECONDS)
                     continue
-                print(
-                    f"Warning: Failed to fetch license for {package_name} {version}: {str(error)}"
-                )
+                print(f"Warning: Failed to fetch license for {package_name} {version}: {str(error)}")
                 return None
         return None
 
@@ -240,10 +231,7 @@ class LicenseChecker:
 
         # Special case for BSD licenses
         if "bsd" in normalized_license:
-            if any(
-                variation in normalized_license
-                for variation in ["3 clause", "3-clause", "new", "simplified"]
-            ):
+            if any(variation in normalized_license for variation in ["3 clause", "3-clause", "new", "simplified"]):
                 return True, "Matches authorized license: BSD 3-Clause"
 
         # Check unauthorized licenses first
@@ -280,9 +268,7 @@ class LicenseChecker:
                 return True
 
             # If no comment, proceed with license check but package is considered authorized
-            license_type = self.get_package_license_from_pypi(
-                package_name, version or ""
-            )
+            license_type = self.get_package_license_from_pypi(package_name, version or "")
             if license_type:
                 is_acceptable, reason = self.is_license_acceptable(license_type)
                 result = PackageLicense(
@@ -293,9 +279,7 @@ class LicenseChecker:
                     reason=f"Listed in authorized packages - {license_type}",
                 )
                 self.package_results.append(result)
-                print(
-                    f"✅ {package_name}: {license_type} (Listed in authorized packages)"
-                )
+                print(f"✅ {package_name}: {license_type} (Listed in authorized packages)")
                 return True
 
         # If package is not authorized or authorization check failed, proceed with normal license check
@@ -304,9 +288,7 @@ class LicenseChecker:
         if cache_key in self.license_cache:
             license_type = self.license_cache[cache_key]
         else:
-            license_type = self.get_package_license_from_pypi(
-                package_name, version or ""
-            )
+            license_type = self.get_package_license_from_pypi(package_name, version or "")
             if license_type:
                 self.license_cache[cache_key] = license_type
 
@@ -340,9 +322,7 @@ class LicenseChecker:
 
         return is_acceptable
 
-    def _direct_group_requirements(
-        self, entries: Iterable[object], group_names: Collection[str]
-    ) -> Iterator[str]:
+    def _direct_group_requirements(self, entries: Iterable[object], group_names: Collection[str]) -> Iterator[str]:
         for entry in entries:
             match entry:
                 case str():
@@ -354,9 +334,7 @@ class LicenseChecker:
                 case _:
                     raise ValueError(f"Invalid dependency group entry: {entry!r}")
 
-    def _load_requirements(
-        self, requirements_file: Optional[Path] = None
-    ) -> List[Requirement]:
+    def _load_requirements(self, requirements_file: Optional[Path] = None) -> List[Requirement]:
         """Load pinned requirements from a file or from the repo defaults."""
         try:
             if requirements_file is not None:
@@ -369,18 +347,12 @@ class LicenseChecker:
                     lock_data = tomllib.load(f)
 
                 requirement_lines = list(pyproject["project"].get("dependencies", []))
-                for extra_reqs in (
-                    pyproject["project"].get("optional-dependencies", {}).values()
-                ):
+                for extra_reqs in pyproject["project"].get("optional-dependencies", {}).values():
                     requirement_lines.extend(extra_reqs)
                 groups: Final = pyproject.get("dependency-groups", {})
-                group_names: Final = frozenset(
-                    self._normalize_package_name(name) for name in groups
-                )
+                group_names: Final = frozenset(self._normalize_package_name(name) for name in groups)
                 for group_reqs in groups.values():
-                    requirement_lines.extend(
-                        self._direct_group_requirements(group_reqs, group_names)
-                    )
+                    requirement_lines.extend(self._direct_group_requirements(group_reqs, group_names))
 
                 lock_versions: Dict[str, List[str]] = {}
                 for package in lock_data.get("package", []):
@@ -409,14 +381,11 @@ class LicenseChecker:
             return [
                 Requirement(requirement)
                 for line in requirement_lines
-                if (requirement := re.split(r"\s+#", line, maxsplit=1)[0].strip())
-                and not requirement.startswith("#")
+                if (requirement := re.split(r"\s+#", line, maxsplit=1)[0].strip()) and not requirement.startswith("#")
             ]
         except Exception as e:
             source = requirements_file or "pyproject.toml + uv.lock"
-            raise RuntimeError(
-                f"Error parsing requirements from {source}: {str(e)}"
-            ) from e
+            raise RuntimeError(f"Error parsing requirements from {source}: {str(e)}") from e
 
     def check_requirements(self, requirements_file: Optional[Path] = None) -> bool:
         """Check all packages from a requirements file or the default repo deps."""
@@ -439,16 +408,12 @@ class LicenseChecker:
             # would 404 to an "unknown" license.
             try:
                 floor_versions = [
-                    spec.version
-                    for spec in req.specifier
-                    if spec.operator in (">=", "==", "===", "~=", ">")
+                    spec.version for spec in req.specifier if spec.operator in (">=", "==", "===", "~=", ">")
                 ]
                 if floor_versions:
                     version = floor_versions[0]
                 else:
-                    version = (
-                        next(iter(req.specifier)).version if req.specifier else None
-                    )
+                    version = next(iter(req.specifier)).version if req.specifier else None
             except StopIteration:
                 version = None
 
@@ -473,9 +438,7 @@ def main():
 
         # Get lists of problematic packages
         unverified = [p for p in checker.package_results if not p.license_type]
-        invalid = [
-            p for p in checker.package_results if p.license_type and not p.is_authorized
-        ]
+        invalid = [p for p in checker.package_results if p.license_type and not p.is_authorized]
 
         # Print detailed information about problematic packages
         if unverified:
@@ -494,19 +457,14 @@ def main():
         unhandled_packages = [
             p
             for p in (unverified + invalid)
-            if checker._normalize_package_name(p.name)
-            not in checker.authorized_packages
+            if checker._normalize_package_name(p.name) not in checker.authorized_packages
         ]
 
         if unhandled_packages:
             print("\n❌ Error: Found packages that need verification:")
             for pkg in unhandled_packages:
                 version_str = f" ({pkg.version})" if pkg.version else ""
-                license_str = (
-                    f" - {pkg.license_type}"
-                    if pkg.license_type
-                    else " - Unknown license"
-                )
+                license_str = f" - {pkg.license_type}" if pkg.license_type else " - Unknown license"
                 print(f"- {pkg.name}{version_str}{license_str}")
             print(
                 "\nAdd these packages to the [Authorized Packages] section in liccheck.ini with a comment about their license verification."

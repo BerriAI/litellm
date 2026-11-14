@@ -13,9 +13,7 @@ from unittest.mock import patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../.."))
-)
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../..")))
 
 from litellm.proxy.types_utils.utils import get_instance_fn  # noqa: E402
 
@@ -44,18 +42,14 @@ def test_remote_url_with_config_file_path_is_allowed():
         )
 
     assert result == "loaded"
-    mock_loader.assert_called_once_with(
-        "s3://my-bucket/m.inst", "/etc/litellm/config.yaml"
-    )
+    mock_loader.assert_called_once_with("s3://my-bucket/m.inst", "/etc/litellm/config.yaml")
 
 
 def test_dotted_module_path_is_unaffected_by_gate():
     # Local dotted-name imports — the other branch of get_instance_fn —
     # have nothing to do with the remote-URL gate. Regression that the
     # gate doesn't accidentally affect them.
-    with patch(
-        "litellm.proxy.types_utils.utils.importlib.import_module"
-    ) as mock_import:
+    with patch("litellm.proxy.types_utils.utils.importlib.import_module") as mock_import:
         mock_module = type("M", (), {"my_instance": "loaded"})
         mock_import.return_value = mock_module
 
@@ -73,11 +67,7 @@ def test_installed_package_resolved_when_local_file_absent(tmp_path, monkeypatch
     pkg_dir = tmp_path / "site"
     pkg_dir.mkdir()
     (pkg_dir / "my_installed_plugin.py").write_text(
-        "class _P:\n"
-        "    async def run(self, context):\n"
-        "        return context\n"
-        "\n"
-        "instance = _P()\n"
+        "class _P:\n    async def run(self, context):\n        return context\n\ninstance = _P()\n"
     )
     monkeypatch.syspath_prepend(str(pkg_dir))
     config_dir = tmp_path / "cfg"
@@ -132,9 +122,7 @@ def test_pass_through_route_threads_config_file_path():
 
     # ``get_instance_fn`` is imported lazily inside the function — patch
     # at the source so the deferred import resolves to the mock.
-    with patch(
-        "litellm.proxy.types_utils.utils.get_instance_fn", return_value=object()
-    ) as mock_get:
+    with patch("litellm.proxy.types_utils.utils.get_instance_fn", return_value=object()) as mock_get:
         pte.create_pass_through_route(
             endpoint="/x",
             target="s3://bucket/mod.inst",
@@ -167,6 +155,4 @@ def test_mcp_tool_registry_threads_config_file_path():
             config_file_path="/etc/litellm/config.yaml",
         )
 
-    mock_get.assert_called_once_with(
-        "s3://bucket/mod.handler", "/etc/litellm/config.yaml"
-    )
+    mock_get.assert_called_once_with("s3://bucket/mod.handler", "/etc/litellm/config.yaml")

@@ -31,9 +31,7 @@ def test_token_counter_tool_increases(messages):
         conversation.append(message)
         tokens = token_counter(model="gpt-3.5-turbo", messages=conversation, tools=TOOLS)  # type: ignore
         print(f"tokens: {tokens}")
-        assert (
-            tokens > prev_tokens
-        ), f"Token did not increase: {tokens} <= {prev_tokens}"
+        assert tokens > prev_tokens, f"Token did not increase: {tokens} <= {prev_tokens}"
         prev_tokens = tokens
 
 

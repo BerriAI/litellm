@@ -596,7 +596,10 @@ async def test_async_post_call_failure_hook_carries_used_client_oauth_token_from
 @pytest.mark.parametrize(
     "metadata_buckets, expected",
     [
-        ({"metadata": {"used_client_oauth_token": True}, "litellm_metadata": {"used_client_oauth_token": False}}, False),
+        (
+            {"metadata": {"used_client_oauth_token": True}, "litellm_metadata": {"used_client_oauth_token": False}},
+            False,
+        ),
         ({"metadata": {"used_client_oauth_token": True}, "litellm_metadata": {"user_id": "caller"}}, None),
         ({"metadata": {"used_client_oauth_token": "yes"}}, None),
     ],
@@ -681,7 +684,6 @@ async def test_async_post_call_failure_hook_reads_used_client_oauth_token_from_t
         end_time=datetime.now(),
     )
     assert json.loads(payload["metadata"])["used_client_oauth_token"] is expected
-
 
 
 @pytest.mark.asyncio
@@ -803,7 +805,10 @@ async def test_async_post_call_failure_hook_adds_guardrail_cost_to_recovered_str
     [
         (None, ["detect-only-scanner"]),
         ([], ["detect-only-scanner"]),
-        ([{"guardrail_name": "logged-before-the-failure", "guardrail_status": "success"}], ["logged-before-the-failure"]),
+        (
+            [{"guardrail_name": "logged-before-the-failure", "guardrail_status": "success"}],
+            ["logged-before-the-failure"],
+        ),
     ],
 )
 async def test_async_post_call_failure_hook_keeps_a_guardrail_verdict_recorded_after_the_failure_was_logged(
@@ -3125,9 +3130,7 @@ async def test_a_completed_cost_failure_raises_the_live_spend_counters_once(live
     for key, spend in _LIVE_COUNTERS.items():
         live_spend_counters.set_local(key, spend)
 
-    await _fail_request(
-        ProxyDBLogger(), {"standard_logging_object": {"cost_finalized": True, "response_cost": 0.125}}
-    )
+    await _fail_request(ProxyDBLogger(), {"standard_logging_object": {"cost_finalized": True, "response_cost": 0.125}})
 
     assert await _counter_values(live_spend_counters) == pytest.approx(
         {key: spend + 0.125 for key, spend in _LIVE_COUNTERS.items()}
@@ -3253,8 +3256,7 @@ async def test_a_billed_attempt_on_a_deployment_the_router_dropped_debits_every_
     )
 
     assert {
-        group: live_spend_counters.get_local(f"spend:model_access_group:{group}")
-        for group in ("premium", "pool")
+        group: live_spend_counters.get_local(f"spend:model_access_group:{group}") for group in ("premium", "pool")
     } == pytest.approx({"premium": 0.25, "pool": 1.25})
 
 
@@ -4056,7 +4058,9 @@ async def test_track_cost_callback_failure_alert_never_carries_request_metadata_
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("identity_field", ["agent_id", "billing_agent_id"])
-async def test_autonomous_llm_callback_persists_without_human_or_key(identity_field: str) -> None:  # test-quality-ok: verifies anonymous-agent charges reach the persistence boundary; no injection seam
+async def test_autonomous_llm_callback_persists_without_human_or_key(
+    identity_field: str,
+) -> None:  # test-quality-ok: verifies anonymous-agent charges reach the persistence boundary; no injection seam
     kwargs: Final = {
         "call_type": "acompletion",
         "model": "test-model",
@@ -4080,9 +4084,12 @@ async def test_autonomous_llm_callback_persists_without_human_or_key(identity_fi
 
 @pytest.mark.parametrize("agent_id,expected", [(None, False), ("autonomous-agent", True)])
 def test_autonomous_agent_cost_tracking_needs_no_human_or_virtual_key(agent_id: str | None, expected: bool) -> None:
-    assert _should_track_cost_callback(
-        user_api_key=None, user_id=None, team_id=None, end_user_id=None, call_type="acompletion", agent_id=agent_id
-    ) is expected
+    assert (
+        _should_track_cost_callback(
+            user_api_key=None, user_id=None, team_id=None, end_user_id=None, call_type="acompletion", agent_id=agent_id
+        )
+        is expected
+    )
 
 
 _CALL_START: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
@@ -4122,6 +4129,7 @@ async def test_track_cost_callback_enqueue_emits_no_service_span():  # test-qual
 
     assert update_database.await_count == 1, "the spend enqueue itself must still run"
     assert success_hook.await_count == 0, [call.kwargs for call in success_hook.await_args_list]
+
 
 class _SharedCounter:
     def __init__(self) -> None:
@@ -4166,7 +4174,9 @@ def _grounded_gemini_kwargs(response_cost: float) -> dict:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("opted_in", "finalized"), [(True, False), (False, False), (True, True)])
-async def test_track_cost_callback_frees_grounding_under_the_allowance_only_when_opted_in(monkeypatch, opted_in, finalized):
+async def test_track_cost_callback_frees_grounding_under_the_allowance_only_when_opted_in(
+    monkeypatch, opted_in, finalized
+):
     monkeypatch.setattr(litellm, "apply_search_free_tier", opted_in, raising=False)
     counter = _SharedCounter()
     kwargs = _grounded_gemini_kwargs(response_cost=1.0)

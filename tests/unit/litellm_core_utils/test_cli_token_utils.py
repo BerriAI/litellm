@@ -227,9 +227,7 @@ class TestLoadCliToken:
         assert json.loads(vault.blob)["key"] == "sk-live"
         assert json.loads(vault.blob)["refresh_token"] == "rt-live"
 
-    def test_a_superseded_refresh_token_on_disk_never_outlives_the_keychain(
-        self, isolated_home, secret_vault_factory
-    ):
+    def test_a_superseded_refresh_token_on_disk_never_outlives_the_keychain(self, isolated_home, secret_vault_factory):
         """Two stores, two sign-ins, and the newer one is in the keychain. Handing back its key with
         the older one's refresh token would build a credential neither store ever held, and would
         renew the login the user already replaced."""
@@ -290,9 +288,7 @@ class TestLoadCliToken:
         assert json.loads(vault.blob)["key"] == "sk-fresh"
         assert "key" not in json.loads(path.read_text())
 
-    def test_a_login_the_file_could_not_record_is_the_one_that_gets_used(
-        self, isolated_home, secret_vault_factory
-    ):
+    def test_a_login_the_file_could_not_record_is_the_one_that_gets_used(self, isolated_home, secret_vault_factory):
         """A login the keychain took and the file could not be pointed at afterwards leaves the
         superseded secret sitting on disk in front of the fresh one. Serving the file's copy would
         put a credential the user just replaced, and may well have just revoked, back into every
@@ -307,9 +303,7 @@ class TestLoadCliToken:
         assert json.loads(vault.blob)["key"] == "sk-fresh"
         assert "key" not in json.loads(path.read_text())
 
-    def test_a_secret_written_to_disk_after_the_keychain_entry_still_wins(
-        self, isolated_home, secret_vault_factory
-    ):
+    def test_a_secret_written_to_disk_after_the_keychain_entry_still_wins(self, isolated_home, secret_vault_factory):
         """The other direction of the same rule, which is the common one: a login that fell back to
         the file because the keychain refused it is newer than whatever the keychain kept."""
         path = _write_legacy_file(isolated_home, key="sk-fresh", timestamp=2000.0)
@@ -321,9 +315,7 @@ class TestLoadCliToken:
         assert json.loads(vault.blob)["key"] == "sk-fresh"
         assert "key" not in json.loads(path.read_text())
 
-    def test_a_disk_secret_survives_when_the_stale_vault_refuses_the_rewrite(
-        self, isolated_home, secret_vault_factory
-    ):
+    def test_a_disk_secret_survives_when_the_stale_vault_refuses_the_rewrite(self, isolated_home, secret_vault_factory):
         path = _write_legacy_file(isolated_home, key="sk-fresh")
         before = path.read_text()
 
@@ -441,9 +433,7 @@ class TestSaveCliToken:
         assert json.loads(vault.blob)["key"] == "sk-new"
         assert load_cli_token(vault=vault).key == "sk-new"
 
-    def test_the_refresh_token_goes_to_the_keychain_and_never_to_the_file(
-        self, isolated_home, secret_vault_factory
-    ):
+    def test_the_refresh_token_goes_to_the_keychain_and_never_to_the_file(self, isolated_home, secret_vault_factory):
         vault = secret_vault_factory()
 
         stored = save_cli_token(
@@ -533,9 +523,7 @@ class TestSaveCliToken:
         assert vault.blob is None
 
     @pytest.mark.skipif(os.geteuid() == 0, reason="root ignores directory permissions")
-    def test_a_login_that_cannot_be_saved_leaves_the_working_one_alone(
-        self, isolated_home, secret_vault_factory
-    ):
+    def test_a_login_that_cannot_be_saved_leaves_the_working_one_alone(self, isolated_home, secret_vault_factory):
         """Signing in again on a machine whose ~/.litellm has gone read-only must not cost the user
         the credential they already had. Overwriting the keychain and then failing to record it, or
         undoing that write afterwards, would take a login that still works out from under them."""
@@ -568,9 +556,7 @@ class TestSaveCliToken:
         assert isinstance(outcome, CredentialNotRecorded)
         assert json.loads(vault.blob)["key"] == "sk-new"
 
-    def test_the_credential_the_file_cannot_name_is_left_in_the_keychain(
-        self, isolated_home, secret_vault_factory
-    ):
+    def test_the_credential_the_file_cannot_name_is_left_in_the_keychain(self, isolated_home, secret_vault_factory):
         """The keychain holds one entry, so the secret that was there went the moment this one
         landed. Taking the new one back out would turn a login this machine may still be able to
         use into no login at all, and it cannot restore the old one either way."""
@@ -583,7 +569,9 @@ class TestSaveCliToken:
 
         assert vault.blob is not None
 
-    def test_a_failed_write_leaves_the_previous_credential_intact(self, isolated_home, secret_vault_factory, monkeypatch):
+    def test_a_failed_write_leaves_the_previous_credential_intact(
+        self, isolated_home, secret_vault_factory, monkeypatch
+    ):
         path = _write_legacy_file(isolated_home)
         before = path.read_text()
 
@@ -625,9 +613,7 @@ class TestSaveCliToken:
 
         assert load_cli_token(vault=vault).key == "sk-fresh"
 
-    def test_a_login_on_a_clock_that_moved_forwards_keeps_its_own_time(
-        self, isolated_home, secret_vault_factory
-    ):
+    def test_a_login_on_a_clock_that_moved_forwards_keeps_its_own_time(self, isolated_home, secret_vault_factory):
         """Pinning the stamp above the previous login is only ever a floor. The ordinary case has
         to record when the user actually signed in, because that is what decides expiry."""
         _write_legacy_file(isolated_home, key="sk-old", timestamp=1000.0)
@@ -737,7 +723,6 @@ class TestScrubFailure:
         assert load_cli_token(vault=vault).key == "sk-legacy"
         assert json.loads(path.read_text()).get("key") is None
 
-
     @pytest.mark.skipif(os.geteuid() == 0, reason="root ignores file permissions")
     def test_a_rejoin_the_file_refuses_never_takes_the_key_with_it(
         self, isolated_home, secret_vault_factory, monkeypatch
@@ -798,9 +783,7 @@ class TestClearCliToken:
 
         assert clear_cli_token(vault=vault) == KeyringUnreachable()
 
-    @pytest.mark.parametrize(
-        "failure", [KeyringDisabled(), KeyringUnreachable(), KeyringNotInstalled()]
-    )
+    @pytest.mark.parametrize("failure", [KeyringDisabled(), KeyringUnreachable(), KeyringNotInstalled()])
     def test_a_secret_in_the_file_is_no_evidence_about_a_keychain_that_exists(
         self, isolated_home, secret_vault_factory, failure
     ):
@@ -818,9 +801,7 @@ class TestClearCliToken:
         assert not _token_file(isolated_home).exists()
         assert "sk-legacy" not in _everything_on_disk(isolated_home)
 
-    def test_a_second_logout_still_reports_the_keychain_it_could_not_clear(
-        self, isolated_home, secret_vault_factory
-    ):
+    def test_a_second_logout_still_reports_the_keychain_it_could_not_clear(self, isolated_home, secret_vault_factory):
         """The first logout deletes the file and tells the user to run it again once the keychain is
         reachable. If the second run reads that missing file as proof of a clean keychain, the advice
         turns into the very false all-clear it was issued to prevent."""
@@ -868,9 +849,7 @@ class TestClearCliToken:
         assert "sk-legacy" not in left_on_disk
         assert "rt-legacy" not in left_on_disk
 
-    def test_a_repeat_logout_never_answers_its_own_warning_with_an_all_clear(
-        self, isolated_home, secret_vault_factory
-    ):
+    def test_a_repeat_logout_never_answers_its_own_warning_with_an_all_clear(self, isolated_home, secret_vault_factory):
         """Sign in while the keychain works, sign in again once it has gone out of reach so the
         second secret lands in the file, then log out twice. The first logout cannot say the first
         login's entry is gone, and says so. If the second one reads the file the first one took
@@ -954,9 +933,7 @@ class TestClearCliToken:
         assert left is not None
         assert (left.key, left.refresh_token) == ("sk-first", "rt-first")
 
-    def test_the_note_never_pairs_with_a_keychain_entry_a_later_login_wrote(
-        self, isolated_home, secret_vault_factory
-    ):
+    def test_the_note_never_pairs_with_a_keychain_entry_a_later_login_wrote(self, isolated_home, secret_vault_factory):
         vault = secret_vault_factory()
         save_cli_token(
             CliTokenRecord(base_url=SERVER, key="sk-first", refresh_token="rt-first", timestamp=1000.0), vault=vault
@@ -1332,9 +1309,7 @@ class TestKeyringVault:
         finally:
             keyring.set_keyring(previous)
 
-    def test_a_credential_survives_a_backend_that_keeps_nothing(
-        self, isolated_home, install_fake_keyring
-    ):
+    def test_a_credential_survives_a_backend_that_keeps_nothing(self, isolated_home, install_fake_keyring):
         """The end of the same story: the credential must still be usable afterwards. Reporting the
         discard is only worth anything if the token file then keeps the copy the keychain refused."""
         install_fake_keyring(_FakeKeyringModule(discard=True))

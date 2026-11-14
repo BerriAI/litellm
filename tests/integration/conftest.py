@@ -344,9 +344,7 @@ def scenario(gateway: Gateway) -> Iterator[Scenario]:
 
 
 @pytest_asyncio.fixture(scope="session", loop_scope="session")
-async def actors(
-    session_gateway: Gateway, db: ManagementDatabase
-) -> AsyncIterator[ActorSet]:
+async def actors(session_gateway: Gateway, db: ManagementDatabase) -> AsyncIterator[ActorSet]:
     with session_gateway.scenario() as scenario:
         from tests.integration._support.actors import create_actor_set
 

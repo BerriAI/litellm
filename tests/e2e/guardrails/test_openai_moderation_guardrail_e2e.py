@@ -56,15 +56,11 @@ class TestOpenAIModerationGuardrail:
         name = f"e2e-openai-moderation-{unique_marker()}"
         guardrail_id = client.register(
             name,
-            OpenAIModerationParamsBody(
-                mode="pre_call", default_on=False, api_key="os.environ/OPENAI_API_KEY"
-            ),
+            OpenAIModerationParamsBody(mode="pre_call", default_on=False, api_key="os.environ/OPENAI_API_KEY"),
         )
         resources.defer(lambda: client.delete_guardrail(guardrail_id))
 
-        blocked = poll_until_blocked(
-            lambda: client.chat(scoped_key, model, FLAGGED_PROMPT, guardrails=[name])
-        )
+        blocked = poll_until_blocked(lambda: client.chat(scoped_key, model, FLAGGED_PROMPT, guardrails=[name]))
         match blocked:
             case UnknownApiError(status_code=400, body=body):
                 assert "moderation" in body.lower(), (
@@ -73,9 +69,7 @@ class TestOpenAIModerationGuardrail:
             case UnknownApiError(status_code=status, body=body):
                 pytest.fail(f"expected a 400 moderation block, got {status}: {body[:400]}")
             case _:
-                pytest.fail(
-                    f"openai moderation did not block a flagged prompt; got {blocked}"
-                )
+                pytest.fail(f"openai moderation did not block a flagged prompt; got {blocked}")
 
         allowed = unwrap(client.chat(scoped_key, model, BENIGN_PROMPT, guardrails=[name]))
         assert allowed.choices, (
@@ -104,32 +98,22 @@ class TestOpenAIModerationGuardrail:
         name = f"e2e-openai-moderation-msg-{unique_marker()}"
         guardrail_id = client.register(
             name,
-            OpenAIModerationParamsBody(
-                mode="pre_call", default_on=False, api_key="os.environ/OPENAI_API_KEY"
-            ),
+            OpenAIModerationParamsBody(mode="pre_call", default_on=False, api_key="os.environ/OPENAI_API_KEY"),
         )
         resources.defer(lambda: client.delete_guardrail(guardrail_id))
 
-        blocked = poll_until_blocked(
-            lambda: client.messages(scoped_key, model, FLAGGED_PROMPT, guardrails=[name])
-        )
+        blocked = poll_until_blocked(lambda: client.messages(scoped_key, model, FLAGGED_PROMPT, guardrails=[name]))
         match blocked:
             case UnknownApiError(status_code=400, body=body):
                 assert "moderation" in body.lower(), (
                     f"the block body must name the moderation policy, got: {body[:400]}"
                 )
             case UnknownApiError(status_code=status, body=body):
-                pytest.fail(
-                    f"expected a 400 moderation block on /v1/messages, got {status}: {body[:400]}"
-                )
+                pytest.fail(f"expected a 400 moderation block on /v1/messages, got {status}: {body[:400]}")
             case _:
-                pytest.fail(
-                    f"openai moderation did not block a flagged /v1/messages prompt; got {blocked}"
-                )
+                pytest.fail(f"openai moderation did not block a flagged /v1/messages prompt; got {blocked}")
 
-        allowed = unwrap(
-            client.messages(scoped_key, model, BENIGN_PROMPT, guardrails=[name], max_tokens=512)
-        )
+        allowed = unwrap(client.messages(scoped_key, model, BENIGN_PROMPT, guardrails=[name], max_tokens=512))
         assert allowed.content or allowed.choices, (
             "the same moderation guardrail must let a benign /v1/messages prompt through, but "
             f"the response carried neither content nor choices: {allowed}"

@@ -122,7 +122,9 @@ def _provider_prompt(request: Request) -> str:
     return prompt
 
 
-def test_k1_acompletion_scans_tuple_messages(sdk_rig: tuple[AzureContentSafetyPromptShieldGuardrail, Wire, Wire]) -> None:
+def test_k1_acompletion_scans_tuple_messages(
+    sdk_rig: tuple[AzureContentSafetyPromptShieldGuardrail, Wire, Wire],
+) -> None:
     _, azure, provider = sdk_rig
     with pytest.raises((HTTPException, litellm.BadRequestError), match="Violated Azure Prompt Shield"):
         asyncio.run(
@@ -187,7 +189,7 @@ def test_k1_acompletion_stream_scans_tuple_messages(
 
 
 def test_k1_acompletion_list_messages_control(
-    sdk_rig: tuple[AzureContentSafetyPromptShieldGuardrail, Wire, Wire]
+    sdk_rig: tuple[AzureContentSafetyPromptShieldGuardrail, Wire, Wire],
 ) -> None:
     _, azure, provider = sdk_rig
     with pytest.raises((HTTPException, litellm.BadRequestError), match="Violated Azure Prompt Shield"):

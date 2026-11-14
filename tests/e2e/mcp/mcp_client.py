@@ -80,9 +80,7 @@ class McpToolsListResponse(BaseModel):
 
     def tool_names_for_server(self, server_id: str) -> frozenset[str]:
         return frozenset(
-            tool.name
-            for tool in self.tools
-            if tool.mcp_info is not None and tool.mcp_info.server_id == server_id
+            tool.name for tool in self.tools if tool.mcp_info is not None and tool.mcp_info.server_id == server_id
         )
 
     def tool_name_containing(self, server_id: str, needle: str) -> str | None:
@@ -264,9 +262,7 @@ class McpClient:
             McpServerListResponse,
             settled=lambda response: any(row.server_id == server_id for row in response.root),
         )
-        return next(
-            row for response in registered.values() for row in response.root if row.server_id == server_id
-        )
+        return next(row for response in registered.values() for row in response.root if row.server_id == server_id)
 
     @step("Generate a virtual key for the user {user_id}")
     def generate_key(
@@ -421,13 +417,10 @@ class McpClient:
             if isinstance(last, UnknownApiError) and last.status_code == 403:
                 return last
             if not _is_mcp_not_synced(last, tool_name=name):
-                raise AssertionError(
-                    f"ungranted key's tools/call was not 403 access_denied: {last}"
-                )
+                raise AssertionError(f"ungranted key's tools/call was not 403 access_denied: {last}")
             if time.monotonic() >= deadline:
                 raise AssertionError(
-                    f"ungranted key never got 403 for {name!r} within {self.proxy.poll_timeout}s; "
-                    f"last result: {last}"
+                    f"ungranted key never got 403 for {name!r} within {self.proxy.poll_timeout}s; last result: {last}"
                 )
             time.sleep(self.proxy.poll_interval)
 
@@ -476,9 +469,7 @@ class McpClient:
         return self.proxy.transport.post(
             "/mcp-rest/tools/call",
             headers=ApiKeyHeaders(x_litellm_api_key=key),
-            json=McpCallToolBody(
-                name=name, arguments=dict(arguments), server_id=server_id
-            ),
+            json=McpCallToolBody(name=name, arguments=dict(arguments), server_id=server_id),
             response_type=McpCallToolResponse,
         )
 
@@ -526,9 +517,7 @@ def _is_mcp_not_synced(
 
     # Gateway: "Tool search_datadog_logs not found" (optionally inside a longer message)
     if tool_name is not None:
-        return (
-            re.search(rf"\btool\s+{re.escape(tool_name)}\s+not found\b", body_l) is not None
-        )
+        return re.search(rf"\btool\s+{re.escape(tool_name)}\s+not found\b", body_l) is not None
     return re.search(r"\btool\s+\S+\s+not found\b", body_l) is not None
 
 

@@ -40,9 +40,7 @@ def _probe_mantle(client: ManagementClient) -> ConnectionTestResponse:
     return unwrap(
         client.connection_test(
             ConnectionTestBody(
-                litellm_params=LiteLLMParamsBody(
-                    model=MANTLE_RESPONSES_BACKEND, aws_region_name=MANTLE_REGION
-                ),
+                litellm_params=LiteLLMParamsBody(model=MANTLE_RESPONSES_BACKEND, aws_region_name=MANTLE_REGION),
                 mode="responses",
             )
         )

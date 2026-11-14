@@ -138,7 +138,9 @@ def test_proxy_400_reaches_responses_caller_with_the_same_body_as_chat_completio
         "responses",
         httpx.Response(400, json=_GUARDRAIL_BLOCK),
         lambda: (
-            _consume(litellm.responses(model="litellm_proxy/gpt-5.5", input="project bluebird", stream=True, **_PROXY_PARAMS))
+            _consume(
+                litellm.responses(model="litellm_proxy/gpt-5.5", input="project bluebird", stream=True, **_PROXY_PARAMS)
+            )
             if stream
             else litellm.responses(model="litellm_proxy/gpt-5.5", input="project bluebird", **_PROXY_PARAMS)
         ),

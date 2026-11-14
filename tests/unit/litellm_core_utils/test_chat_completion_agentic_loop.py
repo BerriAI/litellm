@@ -1065,9 +1065,7 @@ async def test_converted_stream_replays_the_final_answer_with_the_requested_usag
 
 class TestAgenticFollowUpKeepsTheProviderPrefix:
     @staticmethod
-    async def _run_followup(
-        model: str, custom_llm_provider: str, patched_model: str | None = None
-    ) -> ModelResponse:
+    async def _run_followup(model: str, custom_llm_provider: str, patched_model: str | None = None) -> ModelResponse:
         response: Final = await _execute_chat_completion_agentic_plan(
             plan=AgenticLoopPlan(
                 run_agentic_loop=True,
@@ -1284,7 +1282,6 @@ async def test_acompletion_hands_the_callers_choice_to_the_chat_hooks(tool_choic
     )
 
     assert (hook.runs, mock_client.post.await_count, response.choices[0].message.tool_calls) == (hook_runs, 1, None)
-
 
 
 class _RetrievalHookLogger(_ChatHookLogger):

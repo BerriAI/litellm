@@ -80,9 +80,12 @@ async def test_missing_group_and_no_database_grant_nothing() -> None:
         == ()
     )
     assert await access_group_ids_for_identity(UserAPIKeyAuth(user_id="subject"), rules=rules, cache=cache) == ()
-    assert await access_group_ids_for_identity(
-        UserAPIKeyAuth(user_id="subject"), rules=rules, prisma_client=_Database(object())
-    ) == ()
+    assert (
+        await access_group_ids_for_identity(
+            UserAPIKeyAuth(user_id="subject"), rules=rules, prisma_client=_Database(object())
+        )
+        == ()
+    )
 
 
 @pytest.mark.asyncio

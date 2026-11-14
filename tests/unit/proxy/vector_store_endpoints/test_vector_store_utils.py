@@ -114,7 +114,9 @@ class _ManagedFileIds:
     async def get_unified_file_ids_for_provider_file_ids(
         self, provider_file_ids: Sequence[str], user_api_key_dict: UserAPIKeyAuth
     ) -> Mapping[str, str]:
-        return {file_id: self.unified_file_ids[file_id] for file_id in provider_file_ids if file_id in self.unified_file_ids}
+        return {
+            file_id: self.unified_file_ids[file_id] for file_id in provider_file_ids if file_id in self.unified_file_ids
+        }
 
 
 class _UnreachableManagedFilesTable:

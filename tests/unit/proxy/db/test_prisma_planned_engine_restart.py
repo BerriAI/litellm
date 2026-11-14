@@ -103,8 +103,7 @@ async def _await_health_check_reports() -> None:
     reports = [
         task
         for task in asyncio.all_tasks()
-        if getattr(task.get_coro(), "__qualname__", "")
-        == "PrismaClient._report_health_check_failure"
+        if getattr(task.get_coro(), "__qualname__", "") == "PrismaClient._report_health_check_failure"
     ]
     if reports:
         await asyncio.gather(*reports, return_exceptions=True)
@@ -147,10 +146,7 @@ def _blocking_replacement(gate: asyncio.Event, fail: bool = False) -> MagicMock:
 
 def _token_db_url(created: datetime, expires_in: int = 900) -> str:
     """Build a DATABASE_URL whose password is a parseable RDS IAM token."""
-    token = (
-        f"host/?X-Amz-Date={created.strftime('%Y%m%dT%H%M%SZ')}"
-        f"&X-Amz-Expires={expires_in}&X-Amz-Signature=abc"
-    )
+    token = f"host/?X-Amz-Date={created.strftime('%Y%m%dT%H%M%SZ')}&X-Amz-Expires={expires_in}&X-Amz-Signature=abc"
     quoted = urllib.parse.quote(token, safe="")
     return f"postgresql://user:{quoted}@host:5432/db"
 
@@ -212,9 +208,7 @@ async def test_recreate_skips_when_expected_generation_is_stale(mock_prisma_bina
         patch("os.kill") as mock_kill,
         patch("asyncio.sleep", new_callable=AsyncMock),
     ):
-        recreated = await wrapper.recreate_prisma_client(
-            "postgresql://new", expected_generation=2
-        )
+        recreated = await wrapper.recreate_prisma_client("postgresql://new", expected_generation=2)
 
     pinned = {
         "recreated": recreated,
@@ -242,9 +236,7 @@ async def test_recreate_proceeds_when_expected_generation_matches(mock_prisma_bi
         patch("os.kill"),
         patch("asyncio.sleep", new_callable=AsyncMock),
     ):
-        recreated = await wrapper.recreate_prisma_client(
-            "postgresql://new", expected_generation=3
-        )
+        recreated = await wrapper.recreate_prisma_client("postgresql://new", expected_generation=3)
 
     assert recreated is True
     assert wrapper._engine_generation == 4
@@ -312,16 +304,12 @@ async def test_on_engine_replaced_not_invoked_when_recreate_skipped(
 
 
 @pytest.mark.asyncio
-async def test_safe_refresh_token_skips_when_token_still_fresh(
-    mock_prisma_binary, monkeypatch
-):
+async def test_safe_refresh_token_skips_when_token_still_fresh(mock_prisma_binary, monkeypatch):
     """Stacked refresh triggers (e.g. __getattr__ scheduling a refresh task
     that runs after the proactive loop already refreshed) must coalesce
     instead of killing the freshly-spawned engine again."""
     wrapper = _make_wrapper(engine_pid=111, iam=True)
-    monkeypatch.setenv(
-        "DATABASE_URL", _token_db_url(created=datetime.utcnow(), expires_in=900)
-    )
+    monkeypatch.setenv("DATABASE_URL", _token_db_url(created=datetime.utcnow(), expires_in=900))
     wrapper.get_rds_iam_token = MagicMock(return_value="postgresql://fresh")
 
     await wrapper._safe_refresh_token()
@@ -334,9 +322,7 @@ async def test_safe_refresh_token_skips_when_token_still_fresh(
 
 
 @pytest.mark.asyncio
-async def test_safe_refresh_token_refreshes_when_token_expired(
-    mock_prisma_binary, monkeypatch
-):
+async def test_safe_refresh_token_refreshes_when_token_expired(mock_prisma_binary, monkeypatch):
     wrapper = _make_wrapper(engine_pid=111, iam=True)
     expired = datetime.utcnow() - timedelta(seconds=1200)
     monkeypatch.setenv("DATABASE_URL", _token_db_url(created=expired, expires_in=900))
@@ -358,9 +344,7 @@ async def test_safe_refresh_token_refreshes_when_token_expired(
 
 
 @pytest.mark.asyncio
-async def test_safe_refresh_connects_replacement_before_swapping_and_killing(
-    mock_prisma_binary, monkeypatch
-):
+async def test_safe_refresh_connects_replacement_before_swapping_and_killing(mock_prisma_binary, monkeypatch):
     wrapper = _make_wrapper(engine_pid=111, iam=True)
     old_prisma = wrapper._original_prisma
     expired = datetime.utcnow() - timedelta(seconds=1200)
@@ -394,9 +378,7 @@ async def test_safe_refresh_connects_replacement_before_swapping_and_killing(
 
 
 @pytest.mark.asyncio
-async def test_safe_refresh_failure_keeps_old_client_and_token(
-    mock_prisma_binary, monkeypatch
-):
+async def test_safe_refresh_failure_keeps_old_client_and_token(mock_prisma_binary, monkeypatch):
     wrapper = _make_wrapper(engine_pid=111, iam=True)
     old_prisma = wrapper._original_prisma
     expired = datetime.utcnow() - timedelta(seconds=1200)
@@ -422,9 +404,7 @@ async def test_safe_refresh_failure_keeps_old_client_and_token(
 
 
 @pytest.mark.asyncio
-async def test_safe_refresh_waits_for_active_query_before_retiring_old_engine(
-    mock_prisma_binary, monkeypatch
-):
+async def test_safe_refresh_waits_for_active_query_before_retiring_old_engine(mock_prisma_binary, monkeypatch):
     wrapper = _make_wrapper(engine_pid=111, iam=True)
     old_engine = wrapper._original_prisma._engine
     query_started = asyncio.Event()
@@ -462,9 +442,7 @@ async def test_safe_refresh_waits_for_active_query_before_retiring_old_engine(
 
 
 @pytest.mark.asyncio
-async def test_safe_refresh_waits_for_open_transaction_before_retiring_old_engine(
-    mock_prisma_binary, monkeypatch
-):
+async def test_safe_refresh_waits_for_open_transaction_before_retiring_old_engine(mock_prisma_binary, monkeypatch):
     wrapper = _make_wrapper(engine_pid=111, iam=True)
     old_engine = wrapper._original_prisma._engine
     old_engine._engine.start_transaction = AsyncMock(return_value="transaction-1")
@@ -492,9 +470,7 @@ async def test_safe_refresh_waits_for_open_transaction_before_retiring_old_engin
 
 
 @pytest.mark.asyncio
-async def test_retirement_kills_old_engine_when_drain_never_completes(
-    mock_prisma_binary, monkeypatch
-):
+async def test_retirement_kills_old_engine_when_drain_never_completes(mock_prisma_binary, monkeypatch):
     """A leaked drain count (e.g. a transaction whose owner was hard-cancelled
     before commit/rollback) must not keep the replaced engine alive forever."""
     wrapper = _make_wrapper(engine_pid=111, iam=True)
@@ -522,9 +498,7 @@ async def test_retirement_kills_old_engine_when_drain_never_completes(
 
 
 @pytest.mark.asyncio
-async def test_safe_refresh_cancellation_restores_token_and_cleans_replacement(
-    mock_prisma_binary, monkeypatch
-):
+async def test_safe_refresh_cancellation_restores_token_and_cleans_replacement(mock_prisma_binary, monkeypatch):
     wrapper = _make_wrapper(engine_pid=111, iam=True)
     old_prisma = wrapper._original_prisma
     expired = datetime.utcnow() - timedelta(seconds=1200)
@@ -568,9 +542,7 @@ async def test_safe_refresh_cancellation_restores_token_and_cleans_replacement(
 
 
 @pytest.mark.asyncio
-async def test_repeated_safe_refreshes_retire_each_replaced_engine(
-    mock_prisma_binary, monkeypatch
-):
+async def test_repeated_safe_refreshes_retire_each_replaced_engine(mock_prisma_binary, monkeypatch):
     wrapper = _make_wrapper(engine_pid=111, iam=True)
     replacement_clients = []
     for engine_pid in (222, 333):
@@ -603,9 +575,7 @@ async def test_repeated_safe_refreshes_retire_each_replaced_engine(
 
 
 @pytest.mark.asyncio
-async def test_safe_refresh_token_refreshes_when_token_unparseable(
-    mock_prisma_binary, monkeypatch
-):
+async def test_safe_refresh_token_refreshes_when_token_unparseable(mock_prisma_binary, monkeypatch):
     """Unparseable tokens follow the fallback-interval path and must always
     refresh — skipping here would mean never refreshing at all."""
     wrapper = _make_wrapper(engine_pid=111, iam=True)
@@ -624,9 +594,7 @@ async def test_safe_refresh_token_refreshes_when_token_unparseable(
 
 
 @pytest.mark.asyncio
-async def test_routing_recreate_skips_reader_when_writer_generation_stale(
-    mock_prisma_binary, monkeypatch
-):
+async def test_routing_recreate_skips_reader_when_writer_generation_stale(mock_prisma_binary, monkeypatch):
     from litellm.proxy.db.routing_prisma_wrapper import RoutingPrismaWrapper
 
     monkeypatch.setenv("DATABASE_URL_READ_REPLICA", "postgresql://reader")
@@ -636,9 +604,7 @@ async def test_routing_recreate_skips_reader_when_writer_generation_stale(
     reader.recreate_prisma_client = AsyncMock()
     routing = RoutingPrismaWrapper(writer=writer, reader=reader)
 
-    recreated = await routing.recreate_prisma_client(
-        "postgresql://new", expected_generation=1
-    )
+    recreated = await routing.recreate_prisma_client("postgresql://new", expected_generation=1)
 
     pinned = {
         "recreated": recreated,
@@ -653,9 +619,7 @@ async def test_routing_recreate_skips_reader_when_writer_generation_stale(
 
 
 @pytest.mark.asyncio
-async def test_routing_recreate_recreates_both_when_generation_matches(
-    mock_prisma_binary, monkeypatch
-):
+async def test_routing_recreate_recreates_both_when_generation_matches(mock_prisma_binary, monkeypatch):
     from litellm.proxy.db.routing_prisma_wrapper import RoutingPrismaWrapper
 
     monkeypatch.setenv("DATABASE_URL_READ_REPLICA", "postgresql://reader")
@@ -669,9 +633,7 @@ async def test_routing_recreate_recreates_both_when_generation_matches(
         patch("os.kill"),
         patch("asyncio.sleep", new_callable=AsyncMock),
     ):
-        recreated = await routing.recreate_prisma_client(
-            "postgresql://new", expected_generation=0
-        )
+        recreated = await routing.recreate_prisma_client("postgresql://new", expected_generation=0)
 
     pinned = {
         "recreated": recreated,
@@ -710,9 +672,7 @@ async def test_wait_for_planned_engine_replacement_returns_once_recreate_settles
     mock_prisma_binary.Prisma.return_value = _blocking_replacement(gate)
 
     with patch("os.kill"), patch("asyncio.sleep", new_callable=AsyncMock):
-        recreate = asyncio.create_task(
-            wrapper.recreate_prisma_client("postgresql://new")
-        )
+        recreate = asyncio.create_task(wrapper.recreate_prisma_client("postgresql://new"))
         await _yield_to_loop()
         assert wrapper._reconnection_lock.locked() is True
 
@@ -741,15 +701,11 @@ async def test_wait_for_planned_engine_replacement_gives_up_at_timeout(
     mock_prisma_binary.Prisma.return_value = _blocking_replacement(gate)
 
     with patch("os.kill"), patch("asyncio.sleep", new_callable=AsyncMock):
-        recreate = asyncio.create_task(
-            wrapper.recreate_prisma_client("postgresql://new")
-        )
+        recreate = asyncio.create_task(wrapper.recreate_prisma_client("postgresql://new"))
         await _yield_to_loop()
         assert wrapper._reconnection_lock.locked() is True
 
-        await asyncio.wait_for(
-            wrapper.wait_for_planned_engine_replacement(0.05), timeout=5.0
-        )
+        await asyncio.wait_for(wrapper.wait_for_planned_engine_replacement(0.05), timeout=5.0)
         gave_up_with_replacement_still_in_flight = not recreate.done()
 
         gate.set()
@@ -783,9 +739,7 @@ async def test_health_check_does_not_alert_when_probe_races_a_completed_replacem
     mock_prisma_binary.Prisma.return_value = _blocking_replacement(gate)
 
     with patch("os.kill"), patch("asyncio.sleep", new_callable=AsyncMock):
-        recreate = asyncio.create_task(
-            wrapper.recreate_prisma_client("postgresql://new")
-        )
+        recreate = asyncio.create_task(wrapper.recreate_prisma_client("postgresql://new"))
         await _yield_to_loop()
         assert wrapper._reconnection_lock.locked() is True
 
@@ -793,9 +747,7 @@ async def test_health_check_does_not_alert_when_probe_races_a_completed_replacem
 
         drain = asyncio.create_task(_await_health_check_reports())
         await _yield_to_loop()
-        alerts_while_replacement_in_flight = (
-            client.proxy_logging_obj.failure_handler.await_count
-        )
+        alerts_while_replacement_in_flight = client.proxy_logging_obj.failure_handler.await_count
 
         gate.set()
         await recreate
@@ -824,16 +776,12 @@ async def test_health_check_alerts_when_a_completed_replacement_still_cannot_rea
     must not be enough to stay silent."""
     wrapper = _make_wrapper(engine_pid=111)
     client = _make_prisma_client(wrapper)
-    wrapper.query_raw = AsyncMock(
-        side_effect=httpx.ConnectError("All connection attempts failed")
-    )
+    wrapper.query_raw = AsyncMock(side_effect=httpx.ConnectError("All connection attempts failed"))
     gate = asyncio.Event()
     mock_prisma_binary.Prisma.return_value = _blocking_replacement(gate)
 
     with patch("os.kill"), patch("asyncio.sleep", new_callable=AsyncMock):
-        recreate = asyncio.create_task(
-            wrapper.recreate_prisma_client("postgresql://new")
-        )
+        recreate = asyncio.create_task(wrapper.recreate_prisma_client("postgresql://new"))
         await _yield_to_loop()
         assert wrapper._reconnection_lock.locked() is True
 
@@ -858,16 +806,12 @@ async def test_health_check_alerts_when_the_replacement_never_completes(
     engine generation never advances and the probe failure must still alert."""
     wrapper = _make_wrapper(engine_pid=111)
     client = _make_prisma_client(wrapper)
-    wrapper.query_raw = AsyncMock(
-        side_effect=httpx.ConnectError("All connection attempts failed")
-    )
+    wrapper.query_raw = AsyncMock(side_effect=httpx.ConnectError("All connection attempts failed"))
     gate = asyncio.Event()
     mock_prisma_binary.Prisma.return_value = _blocking_replacement(gate, fail=True)
 
     with patch("os.kill"), patch("asyncio.sleep", new_callable=AsyncMock):
-        recreate = asyncio.create_task(
-            wrapper.recreate_prisma_client("postgresql://new")
-        )
+        recreate = asyncio.create_task(wrapper.recreate_prisma_client("postgresql://new"))
         await _yield_to_loop()
         assert wrapper._reconnection_lock.locked() is True
 
@@ -879,10 +823,7 @@ async def test_health_check_alerts_when_the_replacement_never_completes(
             await recreate
         await _await_health_check_reports()
 
-    call_types: List[str] = [
-        c.kwargs["call_type"]
-        for c in client.proxy_logging_obj.failure_handler.await_args_list
-    ]
+    call_types: List[str] = [c.kwargs["call_type"] for c in client.proxy_logging_obj.failure_handler.await_args_list]
     assert {
         "generation": wrapper.engine_generation,
         "alerted": len(call_types) > 0,
@@ -904,13 +845,11 @@ async def test_health_check_alerts_for_non_connection_errors_during_a_replacemen
     mock_prisma_binary.Prisma.return_value = _blocking_replacement(gate)
 
     with patch("os.kill"), patch("asyncio.sleep", new_callable=AsyncMock):
-        recreate = asyncio.create_task(
-            wrapper.recreate_prisma_client("postgresql://new")
-        )
+        recreate = asyncio.create_task(wrapper.recreate_prisma_client("postgresql://new"))
         await _yield_to_loop()
         assert wrapper._reconnection_lock.locked() is True
 
-        with pytest.raises(ValueError, match='malformed SELECT'):
+        with pytest.raises(ValueError, match="malformed SELECT"):
             await client.health_check()
 
         gate.set()
@@ -952,9 +891,7 @@ async def test_health_check_alerts_for_a_transient_failure_with_no_engine_replac
 
 
 @pytest.mark.asyncio
-async def test_health_probe_stays_on_its_target_when_reader_availability_flips(
-    mock_prisma_binary, monkeypatch
-):
+async def test_health_probe_stays_on_its_target_when_reader_availability_flips(mock_prisma_binary, monkeypatch):
     """Routing is re-resolved on every attribute access, so a reader that
     recovers mid-call would otherwise send the probe to a different engine than
     the one whose generation is being checked, and blame the wrong replacement.
@@ -988,9 +925,7 @@ async def test_health_probe_stays_on_its_target_when_reader_availability_flips(
 
 
 @pytest.mark.asyncio
-async def test_health_check_consults_the_reader_wrapper_under_read_replica_routing(
-    mock_prisma_binary, monkeypatch
-):
+async def test_health_check_consults_the_reader_wrapper_under_read_replica_routing(mock_prisma_binary, monkeypatch):
     """``query_raw`` is routed to the reader, so a reader-side planned
     replacement is the one that explains a probe failure."""
     from litellm.proxy.db.routing_prisma_wrapper import RoutingPrismaWrapper
@@ -1011,9 +946,7 @@ async def test_health_check_consults_the_reader_wrapper_under_read_replica_routi
     mock_prisma_binary.Prisma.return_value = _blocking_replacement(gate)
 
     with patch("os.kill"), patch("asyncio.sleep", new_callable=AsyncMock):
-        recreate = asyncio.create_task(
-            reader.recreate_prisma_client("postgresql://new-reader")
-        )
+        recreate = asyncio.create_task(reader.recreate_prisma_client("postgresql://new-reader"))
         await _yield_to_loop()
         assert reader._reconnection_lock.locked() is True
 
@@ -1021,9 +954,7 @@ async def test_health_check_consults_the_reader_wrapper_under_read_replica_routi
 
         drain = asyncio.create_task(_await_health_check_reports())
         await _yield_to_loop()
-        alerts_while_replacement_in_flight = (
-            client.proxy_logging_obj.failure_handler.await_count
-        )
+        alerts_while_replacement_in_flight = client.proxy_logging_obj.failure_handler.await_count
 
         gate.set()
         await recreate

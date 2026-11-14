@@ -30,9 +30,7 @@ from coverage_registry.schema import (
 )
 
 
-def _llm(
-    cell_id: str, tier: Tier, subject_endpoint: LlmEndpoint = "chat_completions"
-) -> LlmCell:
+def _llm(cell_id: str, tier: Tier, subject_endpoint: LlmEndpoint = "chat_completions") -> LlmCell:
     return LlmCell(
         id=cell_id,
         module="llm",
@@ -64,9 +62,7 @@ def test_orphan_marker_is_reported_not_counted() -> None:
 
 def test_cell_claimed_only_by_a_skipped_test_is_uncovered() -> None:
     cells = (_llm("llm.a", Tier.P0), _llm("llm.b", Tier.P0))
-    report = compute_coverage(
-        cells, frozenset({"llm.a"}), skipped_only=frozenset({"llm.b"})
-    )
+    report = compute_coverage(cells, frozenset({"llm.a"}), skipped_only=frozenset({"llm.b"}))
     assert (report.covered, report.p0_covered) == (1, 1)
     assert report.p0_gaps == ("llm.b",)
     assert report.skipped_markers == ("llm.b",)
@@ -76,9 +72,7 @@ def test_cell_claimed_only_by_a_skipped_test_is_uncovered() -> None:
 
 
 def test_skipped_marker_outside_the_registry_is_still_an_orphan() -> None:
-    report = compute_coverage(
-        (_llm("llm.a", Tier.P0),), frozenset(), skipped_only=frozenset({"llm.ghost"})
-    )
+    report = compute_coverage((_llm("llm.a", Tier.P0),), frozenset(), skipped_only=frozenset({"llm.ghost"}))
     assert report.orphan_markers == ("llm.ghost",)
     assert report.skipped_markers == ()
 
@@ -105,9 +99,7 @@ def test_logging_and_guardrail_roll_up_into_one_module() -> None:
         ),
     )
     report = compute_coverage(cells, frozenset())
-    logging_and_guardrails = next(
-        m for m in report.modules if m.module == "Logging & Guardrails"
-    )
+    logging_and_guardrails = next(m for m in report.modules if m.module == "Logging & Guardrails")
     assert logging_and_guardrails.total == 2
 
 
@@ -183,21 +175,15 @@ def test_loki_render_exposes_exact_stdout_lines_for_loki() -> None:
 
     assert len(lines) == 1 + len(report.modules)
     assert lines[0] == "COVERAGE_TOTAL percent=50.0 covered=1 total=2"
-    assert (
-        lines[1] == "COVERAGE_MODULE module=core_llms percent=100.0 covered=1 total=1"
-    )
-    assert (
-        lines[2] == "COVERAGE_MODULE module=non_core_llms percent=0.0 covered=0 total=1"
-    )
+    assert lines[1] == "COVERAGE_MODULE module=core_llms percent=100.0 covered=1 total=1"
+    assert lines[2] == "COVERAGE_MODULE module=non_core_llms percent=0.0 covered=0 total=1"
     assert [line.split("module=", 1)[1].split(" ", 1)[0] for line in lines[1:]] == [
         loki_module_label(module.module) for module in report.modules
     ]
-    assert all(
-        " " not in line.split("module=", 1)[1].split(" ", 1)[0] for line in lines[1:]
-    )
+    assert all(" " not in line.split("module=", 1)[1].split(" ", 1)[0] for line in lines[1:])
 
 
-_MARKED_TESTS = '''
+_MARKED_TESTS = """
 import pytest
 
 
@@ -239,9 +225,9 @@ def test_shared_cell_runs() -> None:
 @pytest.mark.covers("llm.shared")
 def test_shared_cell_skipped() -> None:
     pass
-'''
+"""
 
-_MODULE_LEVEL_SKIP = '''
+_MODULE_LEVEL_SKIP = """
 import pytest
 
 pytestmark = pytest.mark.skipif(True, reason="whole module needs a session fixture")
@@ -250,7 +236,7 @@ pytestmark = pytest.mark.skipif(True, reason="whole module needs a session fixtu
 @pytest.mark.covers("llm.module_skipped")
 def test_module_level_skip() -> None:
     pass
-'''
+"""
 
 
 def test_collection_counts_only_markers_on_tests_that_would_run(
@@ -263,9 +249,7 @@ def test_collection_counts_only_markers_on_tests_that_would_run(
 
     markers = collect_markers(tmp_path)
 
-    assert markers.covered == frozenset(
-        {"llm.runs", "llm.skipif_false", "llm.shared"}
-    )
+    assert markers.covered == frozenset({"llm.runs", "llm.skipif_false", "llm.shared"})
     assert markers.skipped_only == frozenset(
         {"llm.skipped", "llm.skipif_true", "llm.skipif_string", "llm.module_skipped"}
     )

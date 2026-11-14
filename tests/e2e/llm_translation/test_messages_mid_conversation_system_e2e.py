@@ -215,7 +215,10 @@ class TestBedrockInvokeMidConversationSystem:
             route=Route.MESSAGES,
             providers=(Provider.BEDROCK,),
             models=(FLAGGED_INVOKE_MODEL,),
-            capabilities=(Capability.MID_CONVERSATION_SYSTEM, Capability.PROMPT_CACHING,),
+            capabilities=(
+                Capability.MID_CONVERSATION_SYSTEM,
+                Capability.PROMPT_CACHING,
+            ),
             mode=Mode.NONSTREAM,
         )
     )
@@ -251,7 +254,10 @@ class TestBedrockInvokeMidConversationSystem:
             route=Route.MESSAGES,
             providers=(Provider.BEDROCK,),
             models=(UNFLAGGED_INVOKE_MODEL,),
-            capabilities=(Capability.MID_CONVERSATION_SYSTEM, Capability.PROMPT_CACHING,),
+            capabilities=(
+                Capability.MID_CONVERSATION_SYSTEM,
+                Capability.PROMPT_CACHING,
+            ),
             mode=Mode.NONSTREAM,
         )
     )

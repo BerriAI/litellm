@@ -635,7 +635,6 @@ def test_a_saved_conversation_with_a_null_created_by_is_counted_without_it() -> 
     assert body["input"] == [compaction, tool_output, sent_created_by]
 
 
-
 def test_a_set_created_by_is_counted_without_it_under_drop_params() -> None:
     tool_output: Final = {"type": "function_call_output", "call_id": "call_1", "output": "42"}
     request: Final = {"model": "gpt-5.6", "input": [{**tool_output, "created_by": "user_1"}]}

@@ -91,7 +91,6 @@ class TestGPTImageCostRouting:
     """Test that gpt-image models are properly routed to the token-based calculator"""
 
 
-
 class TestGPTImage15OutputImageTokens:
     """
     Test for GitHub issue #19508:

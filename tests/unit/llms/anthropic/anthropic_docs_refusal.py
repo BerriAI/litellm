@@ -1,6 +1,8 @@
 from typing import Final
 
-ANTHROPIC_DOCS_REFUSAL_URL: Final = "https://platform.claude.com/docs/en/build-with-claude/refusals-and-fallback#refusal-response"
+ANTHROPIC_DOCS_REFUSAL_URL: Final = (
+    "https://platform.claude.com/docs/en/build-with-claude/refusals-and-fallback#refusal-response"
+)
 
 # Copied verbatim from ANTHROPIC_DOCS_REFUSAL_URL on 2026-10-12. Streams carry the same stop_details on message_delta.
 ANTHROPIC_DOCS_REFUSAL_MESSAGE: Final = {

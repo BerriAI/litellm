@@ -21,9 +21,7 @@ def test_updating_an_unattached_budget_persists_its_limits(gateway: Gateway) -> 
         budget: Final = gateway.post("/budget/new", {"max_budget": 10, "rpm_limit": 20})
         budget_id: Final = string_value(budget["budget_id"])
         scenario.cleanups.callback(gateway.post, "/budget/delete", {"id": budget_id})
-        updated: Final = gateway.post(
-            "/budget/update", {"budget_id": budget_id, "max_budget": 15, "rpm_limit": 30}
-        )
+        updated: Final = gateway.post("/budget/update", {"budget_id": budget_id, "max_budget": 15, "rpm_limit": 30})
         assert (updated["budget_id"], updated["max_budget"], updated["rpm_limit"]) == (budget_id, 15, 30)
         assert read_rows(
             'SELECT max_budget, rpm_limit FROM "LiteLLM_BudgetTable" WHERE budget_id=%s', (budget_id,)

@@ -610,12 +610,17 @@ async def test_async_build_agentic_loop_plan_handles_retrieve_404(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("context", [
-    None, {"issued_hashes": ["deadbeef000000000000dead"]},
-    HeadroomRequestContext(frozenset({"deadbeef000000000000dead"}), None, 0.0),
-])
+@pytest.mark.parametrize(
+    "context",
+    [
+        None,
+        {"issued_hashes": ["deadbeef000000000000dead"]},
+        HeadroomRequestContext(frozenset({"deadbeef000000000000dead"}), None, 0.0),
+    ],
+)
 async def test_async_build_agentic_loop_plan_rejects_hash_with_no_known_call(
-    guardrail: HeadroomGuardrail, context: object,
+    guardrail: HeadroomGuardrail,
+    context: object,
 ) -> None:
     """A hash-shaped string planted in message text must not be honored when
     this guardrail has no record of ever issuing it, even if it's echoed back
@@ -921,7 +926,9 @@ HASH_SHAPED_HISTORY = [
 
 
 async def _apply(
-    guardrail: HeadroomGuardrail, messages: list, ccr_hashes: list | None = None,
+    guardrail: HeadroomGuardrail,
+    messages: list,
+    ccr_hashes: list | None = None,
     request_data: dict[str, object] | None = None,
 ) -> dict:
     data: Final = request_data if request_data is not None else {"model": "claude-sonnet-5"}

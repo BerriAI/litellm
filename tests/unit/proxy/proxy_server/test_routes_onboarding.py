@@ -129,9 +129,7 @@ def test_onboarding_get_token_master_key_missing_500(client, monkeypatch, mock_p
     assert "Master Key not set" in str(err_blob)
 
 
-def test_onboarding_get_token_invalid_invite_link_401(
-    client, monkeypatch, mock_prisma
-):
+def test_onboarding_get_token_invalid_invite_link_401(client, monkeypatch, mock_prisma):
     """Unknown invite link → 401 with the not-in-db error message."""
     from litellm.proxy import proxy_server as ps
 
@@ -140,22 +138,16 @@ def test_onboarding_get_token_invalid_invite_link_401(
     monkeypatch.setattr(ps, "master_key", "sk-master-test")
     monkeypatch.setattr(ps, "general_settings", {})
 
-    response = client.get(
-        "/onboarding/get_token", params={"invite_link": "does-not-exist"}
-    )
+    response = client.get("/onboarding/get_token", params={"invite_link": "does-not-exist"})
     assert response.status_code == 401
-    assert response.json() == {
-        "detail": {"error": "Invitation link does not exist in db."}
-    }
+    assert response.json() == {"detail": {"error": "Invitation link does not exist in db."}}
 
 
 def test_onboarding_get_token_expired_invite_401(client, monkeypatch, mock_prisma):
     """Invite whose expires_at is in the past → 401 expired."""
     from litellm.proxy import proxy_server as ps
 
-    expired_invite = _make_invite(
-        expires_at=datetime.now(timezone.utc) - timedelta(days=2)
-    )
+    expired_invite = _make_invite(expires_at=datetime.now(timezone.utc) - timedelta(days=2))
     mock_prisma.db.litellm_invitationlink.find_unique.return_value = expired_invite
 
     monkeypatch.setattr(ps, "prisma_client", mock_prisma)
@@ -237,9 +229,7 @@ def test_claim_onboarding_link_happy(client, monkeypatch, mock_prisma, httpx_tra
     async def _fake_session_token(user_obj):
         return "session-jwt-token"
 
-    monkeypatch.setattr(
-        ps, "_generate_onboarding_ui_session_token", _fake_session_token
-    )
+    monkeypatch.setattr(ps, "_generate_onboarding_ui_session_token", _fake_session_token)
 
     password = "Hunter2Strong!"
     respx.get(_hibp_url_for(password)).mock(
@@ -283,14 +273,10 @@ def test_claim_onboarding_link_invalid_invite_401(client, monkeypatch, mock_pris
         headers={"Authorization": "Bearer irrelevant"},
     )
     assert response.status_code == 401
-    assert response.json() == {
-        "detail": {"error": "Invitation link does not exist in db."}
-    }
+    assert response.json() == {"detail": {"error": "Invitation link does not exist in db."}}
 
 
-def test_claim_onboarding_link_user_id_mismatch_401(
-    client, monkeypatch, mock_prisma
-):
+def test_claim_onboarding_link_user_id_mismatch_401(client, monkeypatch, mock_prisma):
     """Invitation belongs to a different user_id → 401 with mismatch error."""
     from litellm.proxy import proxy_server as ps
 
@@ -354,9 +340,7 @@ def test_claim_onboarding_link_422_never_echoes_the_submitted_password(client):
     assert set(detail[0]) == {"type", "loc", "msg"}
 
 
-def test_claim_onboarding_link_bad_onboarding_jwt_401(
-    client, monkeypatch, mock_prisma
-):
+def test_claim_onboarding_link_bad_onboarding_jwt_401(client, monkeypatch, mock_prisma):
     """Onboarding JWT decodes but token_type / invitation_link don't match → 401."""
     from litellm.proxy import proxy_server as ps
 
@@ -381,7 +365,4 @@ def test_claim_onboarding_link_bad_onboarding_jwt_401(
         headers={"Authorization": f"Bearer {bogus_jwt}"},
     )
     assert response.status_code == 401
-    assert (
-        response.json().get("detail", {}).get("error")
-        == "Invalid onboarding session for invitation link."
-    )
+    assert response.json().get("detail", {}).get("error") == "Invalid onboarding session for invitation link."

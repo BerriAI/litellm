@@ -499,9 +499,7 @@ def test_framing_keeps_the_403_when_the_shipped_count_model_runs_in_the_deployme
                 count_model_status=403,
             )
         assert _runtime_counts(runtime) == ()
-        assert _mantle_count_requests(mantle) == (
-            ((_ACCESS_KEY, "ca-central-1"), _mantle_body(_prompt(200, 403))),
-        )
+        assert _mantle_count_requests(mantle) == (((_ACCESS_KEY, "ca-central-1"), _mantle_body(_prompt(200, 403))),)
 
 
 def test_configured_token_count_model_error_stands_with_framing(

@@ -365,20 +365,24 @@ def test_repeated_count_tokens_on_budgeted_key_does_not_reserve_budget_or_block_
         input_tokens: Final = counts[0].json()["input_tokens"]
         assert input_tokens == 12, counts[0].text
         counted_requests: Final = upstream.get("/__observations").json()["requests"]
-        assert counted_requests == [
-            {
-                "path": f"/{counting_upstream.scenario_id}/v1/responses/input_tokens",
-                "authorization": "Bearer integration-provider-key",
-                "body": {
-                    "model": "gpt-4o-mini",
-                    "input": [
-                        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hello!!!"}]}
-                    ],
-                },
-                "method": "POST",
-                "api_key": "",
-            }
-        ] * 3, counted_requests
+        assert (
+            counted_requests
+            == [
+                {
+                    "path": f"/{counting_upstream.scenario_id}/v1/responses/input_tokens",
+                    "authorization": "Bearer integration-provider-key",
+                    "body": {
+                        "model": "gpt-4o-mini",
+                        "input": [
+                            {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hello!!!"}]}
+                        ],
+                    },
+                    "method": "POST",
+                    "api_key": "",
+                }
+            ]
+            * 3
+        ), counted_requests
         upstream.delete("/__observations").raise_for_status()
         completion_prompt: Final = f"after counting {uuid.uuid4().hex}"
         completion: Final = gateway.request(

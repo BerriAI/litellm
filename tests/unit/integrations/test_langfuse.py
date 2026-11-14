@@ -2946,9 +2946,7 @@ def test_langfuse_logging_without_request_response(monkeypatch: pytest.MonkeyPat
             "messages": [{"role": "user", "content": _LANGFUSE_REDACTED}],
             "optional_params": {},
         },
-        response_obj=litellm.ModelResponse(
-            choices=[{"message": {"role": "assistant", "content": _LANGFUSE_REDACTED}}]
-        ),
+        response_obj=litellm.ModelResponse(choices=[{"message": {"role": "assistant", "content": _LANGFUSE_REDACTED}}]),
     )
     span = _exported_span(logger, exporter)
 

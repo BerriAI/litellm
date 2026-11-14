@@ -109,17 +109,9 @@ def test_file_like_object(sample_file_like):
 def test_router_metadata_variable_name():
     """Test that the variable name is correct"""
     assert get_router_metadata_variable_name(function_name="completion") == "metadata"
-    assert (
-        get_router_metadata_variable_name(function_name="batch") == "litellm_metadata"
-    )
-    assert (
-        get_router_metadata_variable_name(function_name="acreate_file")
-        == "litellm_metadata"
-    )
-    assert (
-        get_router_metadata_variable_name(function_name="aget_file")
-        == "litellm_metadata"
-    )
+    assert get_router_metadata_variable_name(function_name="batch") == "litellm_metadata"
+    assert get_router_metadata_variable_name(function_name="acreate_file") == "litellm_metadata"
+    assert get_router_metadata_variable_name(function_name="aget_file") == "litellm_metadata"
 
 
 def test_non_json_input():
@@ -394,8 +386,14 @@ def _batch(status: str, output_file_id: str | None = None, counts: BatchRequestC
     from openai.types import Batch
 
     return Batch(
-        id="job-budget", completion_window="24h", created_at=1, endpoint="/v1/chat/completions",
-        input_file_id="file-budget", object="batch", status=status, output_file_id=output_file_id,
+        id="job-budget",
+        completion_window="24h",
+        created_at=1,
+        endpoint="/v1/chat/completions",
+        input_file_id="file-budget",
+        object="batch",
+        status=status,
+        output_file_id=output_file_id,
         request_counts=counts,
     )
 
@@ -496,7 +494,11 @@ def test_a_video_is_charged_once_it_completes_under_the_id_the_client_polled() -
 
     def poll(status: str, polled_id: str) -> ChargeOnceJob | None:
         return job_to_charge_once(
-            {"call_type": "avideo_status", POLLED_VIDEO_STATUS_KWARG: status, "litellm_params": {"video_id": polled_id}},
+            {
+                "call_type": "avideo_status",
+                POLLED_VIDEO_STATUS_KWARG: status,
+                "litellm_params": {"video_id": polled_id},
+            },
             VideoObject(id="job-1", object="video", status=status),
             0.42,
         )
@@ -549,7 +551,11 @@ def test_a_video_polled_with_or_without_its_base64_padding_is_charged_as_one_job
 
     def charged_job(polled_id: str):
         return job_to_charge_once(
-            {"call_type": "avideo_status", POLLED_VIDEO_STATUS_KWARG: "completed", "litellm_params": {"video_id": polled_id}},
+            {
+                "call_type": "avideo_status",
+                POLLED_VIDEO_STATUS_KWARG: "completed",
+                "litellm_params": {"video_id": polled_id},
+            },
             None,
             0.42,
         )

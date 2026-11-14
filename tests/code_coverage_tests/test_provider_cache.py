@@ -24,7 +24,16 @@ from urllib.parse import urlsplit
 
 import pytest
 from pydantic import JsonValue, TypeAdapter
-from e2e_http import NetworkError, PreparedForward, RawResponse, StreamChunk, StreamHead, forward, prepare_forward, without_retries
+from e2e_http import (
+    NetworkError,
+    PreparedForward,
+    RawResponse,
+    StreamChunk,
+    StreamHead,
+    forward,
+    prepare_forward,
+    without_retries,
+)
 from models import LiteLLMParamsBody, ModelMode, ModelNewBody
 from botocore.credentials import Credentials
 from botocore.eventstream import EventStreamBuffer
@@ -163,8 +172,21 @@ def redis_url(tmp_path_factory: pytest.TempPathFactory) -> Generator[str, None, 
         port: Final = probe.getsockname()[1]
     with (root / "redis.log").open("wb") as log:
         process: Final = subprocess.Popen(
-            [binary, "--bind", "127.0.0.1", "--port", str(port), "--save", "", "--appendonly", "no", "--dir", str(root)],
-            stdout=log, stderr=subprocess.STDOUT,
+            [
+                binary,
+                "--bind",
+                "127.0.0.1",
+                "--port",
+                str(port),
+                "--save",
+                "",
+                "--appendonly",
+                "no",
+                "--dir",
+                str(root),
+            ],
+            stdout=log,
+            stderr=subprocess.STDOUT,
         )
         try:
             deadline: Final = time.monotonic() + 5
@@ -194,8 +216,11 @@ def cache_edge(store: ResponseStore) -> CacheEdge:
 
 
 def slot_key(
-    url: str, slot: int = 0, body: bytes | None = BODY,
-    headers: dict[str, str] = HEADERS, test_key: str = TEST_KEY,
+    url: str,
+    slot: int = 0,
+    body: bytes | None = BODY,
+    headers: dict[str, str] = HEADERS,
+    test_key: str = TEST_KEY,
 ) -> str:
     prepared: Final = prepare_forward("POST", url, headers, body)
     assert isinstance(prepared, PreparedForward)
@@ -205,10 +230,14 @@ def slot_key(
 
 def bedrock_cache_edge(store: ResponseStore) -> CacheEdge:
     return CacheEdge(
-        store, SECRET,
-        policies={BEDROCK_MOUNT: MountPolicy(
-            sign=bedrock_signer("us-east-1", lambda: STATIC_CREDENTIALS), unkeyed_headers=SIGNATURE_HEADERS,
-        )},
+        store,
+        SECRET,
+        policies={
+            BEDROCK_MOUNT: MountPolicy(
+                sign=bedrock_signer("us-east-1", lambda: STATIC_CREDENTIALS),
+                unkeyed_headers=SIGNATURE_HEADERS,
+            )
+        },
     )
 
 
@@ -242,7 +271,8 @@ def call(url: str, body: bytes = BODY, headers: dict[str, str] = HEADERS) -> Raw
 
 
 def test_repeated_call_takes_its_own_slot_and_both_replay_next_run(
-    store: RedisResponseStore, provider: Provider,
+    store: RedisResponseStore,
+    provider: Provider,
 ) -> None:
     with edge(cache_edge(store), provider) as url:
         assert call(url).body == SUCCESS
@@ -267,7 +297,9 @@ def test_any_body_change_calls_live(store: RedisResponseStore, provider: Provide
     assert len(provider.hits) == 2
 
 
-@pytest.mark.parametrize("name,value", [("authorization", "Bearer another-account"), ("x-request-id", "one"), ("anthropic-version", "new")])
+@pytest.mark.parametrize(
+    "name,value", [("authorization", "Bearer another-account"), ("x-request-id", "one"), ("anthropic-version", "new")]
+)
 def test_changed_header_cannot_reuse(store: RedisResponseStore, provider: Provider, name: str, value: str) -> None:
     with edge(cache_edge(store), provider) as url:
         call(url)
@@ -278,8 +310,13 @@ def test_changed_header_cannot_reuse(store: RedisResponseStore, provider: Provid
     assert len(provider.hits) == 3
 
 
-@pytest.mark.parametrize("status,response", [(429, b'{"error":"rate limited"}'), (500, b'failed'), (200, b'{"error":"bad"}'), (200, b'not json')])
-def test_failed_provider_responses_never_enter_cache(store: RedisResponseStore, provider: Provider, status: int, response: bytes) -> None:
+@pytest.mark.parametrize(
+    "status,response",
+    [(429, b'{"error":"rate limited"}'), (500, b"failed"), (200, b'{"error":"bad"}'), (200, b"not json")],
+)
+def test_failed_provider_responses_never_enter_cache(
+    store: RedisResponseStore, provider: Provider, status: int, response: bytes
+) -> None:
     provider.status = status
     provider.response = response
     with edge(cache_edge(store), provider) as url:
@@ -319,7 +356,8 @@ def test_expiry_does_not_slide(store: RedisResponseStore, provider: Provider) ->
 
 
 def test_concurrent_builds_publish_one_recording_atomically(
-    store: RedisResponseStore, provider: Provider,
+    store: RedisResponseStore,
+    provider: Provider,
 ) -> None:
     """Five processes running the same test at the same time all reach slot 0 of
     one key, which is the only way the capture lease is contended now that a
@@ -341,7 +379,8 @@ def test_concurrent_builds_publish_one_recording_atomically(
 
 @pytest.mark.parametrize("age_past_expiry_ms", [0, 1])
 def test_expired_response_is_rejected_without_physical_eviction(
-    store: RedisResponseStore, age_past_expiry_ms: int,
+    store: RedisResponseStore,
+    age_past_expiry_ms: int,
 ) -> None:
     response_key: Final = store.keys("expired")[0]
     retained: Final = store.client.eval(
@@ -351,7 +390,9 @@ local expires = clock[1] * 1000 + math.floor(clock[2] / 1000) - tonumber(ARGV[1]
 redis.call('HSET', KEYS[1], 'captured', expires - 86400000, 'expires', expires, 'payload', 'old-response')
 return redis.call('PTTL', KEYS[1])
 """,
-        1, response_key, age_past_expiry_ms,
+        1,
+        response_key,
+        age_past_expiry_ms,
     )
     assert retained == -1
     replacement: Final = store.lookup("expired")
@@ -366,7 +407,9 @@ return redis.call('PTTL', KEYS[1])
 def test_stream_completion_controls_publication(store: RedisResponseStore, provider: Provider, truncated: bool) -> None:
     provider.stream = True
     provider.truncated = truncated
-    provider.response = b'data: {"choices":[{"index":0,"delta":{"content":"hello"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n'
+    provider.response = (
+        b'data: {"choices":[{"index":0,"delta":{"content":"hello"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n'
+    )
     for _ in range(2):
         with edge(cache_edge(store), provider) as url:
             result = forward("POST", url, headers=HEADERS, body=BODY, timeout=5)
@@ -379,7 +422,9 @@ def test_stream_completion_controls_publication(store: RedisResponseStore, provi
 
 @pytest.mark.parametrize("cluster_mode", ("0", "1"))
 def test_store_outage_preserves_provider_success(
-    provider: Provider, monkeypatch: pytest.MonkeyPatch, cluster_mode: str,
+    provider: Provider,
+    monkeypatch: pytest.MonkeyPatch,
+    cluster_mode: str,
 ) -> None:
     monkeypatch.setenv("E2E_PROVIDER_CACHE_REDIS_CLUSTER", cluster_mode)
     with socket.socket() as probe:
@@ -420,7 +465,7 @@ def test_separate_namespaces_keep_their_own_response(store: RedisResponseStore) 
 
 
 def test_identity_preserves_values_and_never_contains_credentials() -> None:
-    variants: Final = (b'{}', b'{"a":null}', b'{"a":false}', b'{"a":0}', b'{"a":0.0}', b'{"a":"0"}', b' { }', None, b'')
+    variants: Final = (b"{}", b'{"a":null}', b'{"a":false}', b'{"a":0}', b'{"a":0.0}', b'{"a":"0"}', b" { }", None, b"")
     url: Final = "https://example.invalid/v1/chat/completions"
     keys: Final = tuple(request_identity(SECRET, TEST_KEY, "POST", url, HEADERS, body) for body in variants)
     assert len(set(keys)) == len(variants)
@@ -428,7 +473,9 @@ def test_identity_preserves_values_and_never_contains_credentials() -> None:
 
 
 @pytest.mark.parametrize("payload", [b"corrupt response", '{"response":"{}","signature":"é"}'.encode()])
-def test_corrupt_entry_is_replaced_by_same_successful_request(store: RedisResponseStore, provider: Provider, payload: bytes) -> None:
+def test_corrupt_entry_is_replaced_by_same_successful_request(
+    store: RedisResponseStore, provider: Provider, payload: bytes
+) -> None:
     upstream: Final = f"http://127.0.0.1:{provider.server_port}/v1/chat/completions"
     key: Final = slot_key(upstream)
     lease: Final = store.lookup(key)
@@ -441,20 +488,30 @@ def test_corrupt_entry_is_replaced_by_same_successful_request(store: RedisRespon
         assert b"".join(step.data for step in head.steps if isinstance(step, StreamChunk)) == SUCCESS
     assert len(provider.hits) == 1
     assert dict(caches[0].counters.counts) == {
-        "corrupt": 1, "mount:openai:corrupt": 1, "misses": 1, "mount:openai:misses": 1,
-        "upstream_attempts": 1, "mount:openai:upstream_attempts": 1,
-        "writes": 1, "mount:openai:writes": 1,
+        "corrupt": 1,
+        "mount:openai:corrupt": 1,
+        "misses": 1,
+        "mount:openai:misses": 1,
+        "upstream_attempts": 1,
+        "mount:openai:upstream_attempts": 1,
+        "writes": 1,
+        "mount:openai:writes": 1,
     }
     assert dict(caches[1].counters.counts) == {"hits": 1, "mount:openai:hits": 1}
 
 
-@pytest.mark.parametrize("payload", [
-    b'data: {}\n\ndata: [DONE]\n\n',
-    b'data: {"choices":[{"index":0,"delta":{}}]}\n\ndata: [DONE]\n\n',
-    b'data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\ndata: [DONE]',
-    b'data: {"error":{"message":"failed"}}\n\ndata: [DONE]\n\n',
-])
-def test_malformed_success_stream_is_never_cached(store: RedisResponseStore, provider: Provider, payload: bytes) -> None:
+@pytest.mark.parametrize(
+    "payload",
+    [
+        b"data: {}\n\ndata: [DONE]\n\n",
+        b'data: {"choices":[{"index":0,"delta":{}}]}\n\ndata: [DONE]\n\n',
+        b'data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\ndata: [DONE]',
+        b'data: {"error":{"message":"failed"}}\n\ndata: [DONE]\n\n',
+    ],
+)
+def test_malformed_success_stream_is_never_cached(
+    store: RedisResponseStore, provider: Provider, payload: bytes
+) -> None:
     provider.stream = True
     provider.response = payload
     for _ in range(2):
@@ -464,7 +521,8 @@ def test_malformed_success_stream_is_never_cached(store: RedisResponseStore, pro
 
 
 def test_requests_differing_only_by_marker_share_one_recording_per_slot(
-    store: RedisResponseStore, provider: Provider,
+    store: RedisResponseStore,
+    provider: Provider,
 ) -> None:
     """The whole point of the canonical key. Every e2e test salts its prompt with
     a fresh ``unique_marker()``, so before this the same test could never reuse
@@ -481,14 +539,19 @@ def test_requests_differing_only_by_marker_share_one_recording_per_slot(
     assert len(provider.hits) == 2
 
 
-@pytest.mark.parametrize("body", [
-    b'{"model":"test","messages":[{"role":"user","content":"hello 0a1b2c3d4e5"}]}',
-    b'{"model":"test","messages":[{"role":"user","content":"hello 0a1b2c3d4e5f0"}]}',
-    b'{"model":"test","messages":[{"role":"user","content":"hello 0A1B2C3D4E5F"}]}',
-    b'{"model":"0a1b2c3d4e5f","messages":[{"role":"user","content":"hello"}]}',
-])
+@pytest.mark.parametrize(
+    "body",
+    [
+        b'{"model":"test","messages":[{"role":"user","content":"hello 0a1b2c3d4e5"}]}',
+        b'{"model":"test","messages":[{"role":"user","content":"hello 0a1b2c3d4e5f0"}]}',
+        b'{"model":"test","messages":[{"role":"user","content":"hello 0A1B2C3D4E5F"}]}',
+        b'{"model":"0a1b2c3d4e5f","messages":[{"role":"user","content":"hello"}]}',
+    ],
+)
 def test_a_token_that_is_not_a_marker_keeps_its_own_key(
-    store: RedisResponseStore, provider: Provider, body: bytes,
+    store: RedisResponseStore,
+    provider: Provider,
+    body: bytes,
 ) -> None:
     """Too short, too long, upper case, or in another field: none of these is the
     12-lowercase-hex token ``unique_marker`` mints, so none may fold onto it."""
@@ -501,7 +564,8 @@ def test_a_token_that_is_not_a_marker_keeps_its_own_key(
 
 
 def test_another_test_never_reuses_this_tests_recording(
-    store: RedisResponseStore, provider: Provider,
+    store: RedisResponseStore,
+    provider: Provider,
 ) -> None:
     with edge(cache_edge(store), provider) as url:
         call(url)
@@ -515,7 +579,9 @@ def test_another_test_never_reuses_this_tests_recording(
 
 
 def test_a_request_without_a_test_segment_is_never_cached(
-    store: RedisResponseStore, provider: Provider, monkeypatch: pytest.MonkeyPatch,
+    store: RedisResponseStore,
+    provider: Provider,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The bare mount URL is what a deployment registered outside any test would
     carry. The serving process is inside a test here, and that must not count:
@@ -527,8 +593,10 @@ def test_a_request_without_a_test_segment_is_never_cached(
         assert call(url).body == SUCCESS
     assert len(provider.hits) == 2
     assert dict(cache.counters.counts) == {
-        "bypass": 2, "mount:openai:bypass": 2,
-        "upstream_attempts": 2, "mount:openai:upstream_attempts": 2,
+        "bypass": 2,
+        "mount:openai:bypass": 2,
+        "upstream_attempts": 2,
+        "mount:openai:upstream_attempts": 2,
     }
     with edge(cache_edge(store), provider) as url:
         assert call(url).body == SUCCESS
@@ -536,7 +604,9 @@ def test_a_request_without_a_test_segment_is_never_cached(
 
 
 def test_attribution_comes_from_the_deployment_path_not_the_serving_process(
-    store: RedisResponseStore, provider: Provider, monkeypatch: pytest.MonkeyPatch,
+    store: RedisResponseStore,
+    provider: Provider,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Under xdist the process serving a call is unrelated to the test that made
     it: the proxy is a separate pod, and the compat matrix's shared aliases had
@@ -559,25 +629,32 @@ def test_attribution_comes_from_the_deployment_path_not_the_serving_process(
     assert len(provider.hits) == 2
 
 
-@pytest.mark.parametrize("upstream_path,expected", [
-    (f"t/{TEST_SLUG}/v1/chat/completions", (TEST_SLUG, "v1/chat/completions")),
-    (f"t/{TEST_SLUG}/model/{BEDROCK_MODEL}/converse-stream", (TEST_SLUG, f"model/{BEDROCK_MODEL}/converse-stream")),
-    ("v1/chat/completions", (None, "v1/chat/completions")),
-    (f"model/{BEDROCK_MODEL}/invoke", (None, f"model/{BEDROCK_MODEL}/invoke")),
-    ("t//v1/chat/completions", (None, "v1/chat/completions")),
-    ("t", (None, "")),
-])
+@pytest.mark.parametrize(
+    "upstream_path,expected",
+    [
+        (f"t/{TEST_SLUG}/v1/chat/completions", (TEST_SLUG, "v1/chat/completions")),
+        (f"t/{TEST_SLUG}/model/{BEDROCK_MODEL}/converse-stream", (TEST_SLUG, f"model/{BEDROCK_MODEL}/converse-stream")),
+        ("v1/chat/completions", (None, "v1/chat/completions")),
+        (f"model/{BEDROCK_MODEL}/invoke", (None, f"model/{BEDROCK_MODEL}/invoke")),
+        ("t//v1/chat/completions", (None, "v1/chat/completions")),
+        ("t", (None, "")),
+    ],
+)
 def test_the_test_segment_is_read_off_the_path_and_never_reaches_the_provider(
-    upstream_path: str, expected: tuple[str | None, str],
+    upstream_path: str,
+    expected: tuple[str | None, str],
 ) -> None:
     assert split_test_segment(upstream_path) == expected
     assert split_test_segment(scoped_edge_base("", TEST_KEY).lstrip("/") + "/v1/chat/completions") == (
-        TEST_SLUG, "v1/chat/completions",
+        TEST_SLUG,
+        "v1/chat/completions",
     )
 
 
 def test_the_cache_edge_base_is_scoped_to_the_registering_test(
-    redis_url: str, monkeypatch: pytest.MonkeyPatch, tmp_path,
+    redis_url: str,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
 ) -> None:
     monkeypatch.setenv("E2E_PROVIDER_CACHE", "1")
     monkeypatch.setenv("E2E_PROVIDER_CACHE_REDIS_URL", redis_url)
@@ -587,7 +664,11 @@ def test_the_cache_edge_base_is_scoped_to_the_registering_test(
 
     def base_for(test_key: str) -> str | None:
         return provider_edge_api_base(
-            "openai", mode_raw="live", bundle_dir=tmp_path, bind_host="127.0.0.1", advertise_host="127.0.0.1",
+            "openai",
+            mode_raw="live",
+            bundle_dir=tmp_path,
+            bind_host="127.0.0.1",
+            advertise_host="127.0.0.1",
             test_key=test_key,
         )
 
@@ -605,7 +686,10 @@ def test_the_cache_edge_base_is_scoped_to_the_registering_test(
 
 @pytest.mark.parametrize("provider_live", (False, True))
 def test_a_registration_carries_its_owners_segment_unless_it_is_provider_live(
-    provider_live: bool, provider: Provider, redis_url: str, monkeypatch: pytest.MonkeyPatch,
+    provider_live: bool,
+    provider: Provider,
+    redis_url: str,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("E2E_PROVIDER_CACHE", "1")
     monkeypatch.setenv("E2E_PROVIDER_CACHE_REDIS_URL", redis_url)
@@ -678,11 +762,26 @@ def test_a_fixture_owns_what_it_registers_at_the_node_it_is_scoped_to(tmp_path: 
     probe.write_text(OWNER_PROBE)
     out: Final = tmp_path / "owners.json"
     run: Final = subprocess.run(
-        [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "-p", "fixture_mode", "--noconftest",
-         "-o", "addopts=", probe.name],
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+            "-p",
+            "fixture_mode",
+            "--noconftest",
+            "-o",
+            "addopts=",
+            probe.name,
+        ],
         cwd=tmp_path,
         env={**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[1] / "e2e"), "OWNER_PROBE_OUT": str(out)},
-        capture_output=True, text=True, timeout=120, check=False,
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
     )
     assert run.returncode == 0, run.stdout + run.stderr
     assert TypeAdapter(dict[str, str]).validate_json(out.read_text()) == {
@@ -695,7 +794,8 @@ def test_a_fixture_owns_what_it_registers_at_the_node_it_is_scoped_to(tmp_path: 
 
 
 def test_counters_attribute_every_outcome_to_its_mount(
-    store: RedisResponseStore, provider: Provider,
+    store: RedisResponseStore,
+    provider: Provider,
 ) -> None:
     """The build report needs per-provider hit counts, and the flat totals cannot
     supply them. Anthropic is served a chat-shaped body here, which its validator
@@ -716,7 +816,8 @@ def test_counters_attribute_every_outcome_to_its_mount(
 
 
 def test_a_rejection_says_whether_the_body_was_cut_short_or_simply_unfinished(
-    store: RedisResponseStore, provider: Provider,
+    store: RedisResponseStore,
+    provider: Provider,
 ) -> None:
     """One `rejected` count cannot tell a connection that dropped from a body the
     provider finished sending and the rules turned down, and those have opposite
@@ -727,11 +828,18 @@ def test_a_rejection_says_whether_the_body_was_cut_short_or_simply_unfinished(
     cut_short: Final = cache_edge(store)
     provider.stream = True
     provider.truncated = True
-    provider.response = b'data: {"choices":[{"index":0,"delta":{"content":"hi"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n'
+    provider.response = (
+        b'data: {"choices":[{"index":0,"delta":{"content":"hi"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n'
+    )
     running: Final = start_provider_edge(cut_short, mounts={"openai": upstream})
     try:
-        forward("POST", scoped_edge_base(running.edge.api_base("openai"), TEST_KEY) + "/v1/chat/completions",
-                headers=HEADERS, body=MARKED, timeout=5)
+        forward(
+            "POST",
+            scoped_edge_base(running.edge.api_base("openai"), TEST_KEY) + "/v1/chat/completions",
+            headers=HEADERS,
+            body=MARKED,
+            timeout=5,
+        )
     finally:
         running.shutdown()
 
@@ -796,12 +904,19 @@ class TestNonChatOpenAiEndpoints:
     each needs its own completeness rule: a chat response's ``choices`` check
     would reject a perfectly good embedding."""
 
-    @pytest.mark.parametrize("path,response", [
-        ("/v1/embeddings", EMBEDDING_SUCCESS),
-        ("/v1/responses", RESPONSE_SUCCESS),
-    ])
+    @pytest.mark.parametrize(
+        "path,response",
+        [
+            ("/v1/embeddings", EMBEDDING_SUCCESS),
+            ("/v1/responses", RESPONSE_SUCCESS),
+        ],
+    )
     def test_complete_responses_replay_on_the_next_run(
-        self, store: RedisResponseStore, provider: Provider, path: str, response: bytes,
+        self,
+        store: RedisResponseStore,
+        provider: Provider,
+        path: str,
+        response: bytes,
     ) -> None:
         provider.response = response
         for _ in range(2):
@@ -810,7 +925,9 @@ class TestNonChatOpenAiEndpoints:
         assert len(provider.hits) == 1
 
     def test_a_completed_response_stream_replays(
-        self, store: RedisResponseStore, provider: Provider,
+        self,
+        store: RedisResponseStore,
+        provider: Provider,
     ) -> None:
         provider.stream = True
         provider.response = RESPONSE_STREAM_SUCCESS
@@ -819,16 +936,26 @@ class TestNonChatOpenAiEndpoints:
                 assert call(url, MARKED).body == RESPONSE_STREAM_SUCCESS
         assert len(provider.hits) == 1
 
-    @pytest.mark.parametrize("path,response", [
-        ("/v1/embeddings", b'{"object":"list","data":[],"usage":{"prompt_tokens":0}}'),
-        ("/v1/embeddings", b'{"object":"list","data":[{"object":"embedding","index":0,"embedding":[]}],"usage":{}}'),
-        ("/v1/embeddings", b'{"object":"list","data":[{"object":"embedding","index":0,"embedding":[0.1]}]}'),
-        ("/v1/responses", b'{"id":"resp_x","object":"response","status":"incomplete","output":[]}'),
-        ("/v1/responses", b'{"id":"resp_x","object":"response","status":"in_progress","output":[]}'),
-        ("/v1/responses", b'{"id":"resp_x","object":"response","output":[]}'),
-    ])
+    @pytest.mark.parametrize(
+        "path,response",
+        [
+            ("/v1/embeddings", b'{"object":"list","data":[],"usage":{"prompt_tokens":0}}'),
+            (
+                "/v1/embeddings",
+                b'{"object":"list","data":[{"object":"embedding","index":0,"embedding":[]}],"usage":{}}',
+            ),
+            ("/v1/embeddings", b'{"object":"list","data":[{"object":"embedding","index":0,"embedding":[0.1]}]}'),
+            ("/v1/responses", b'{"id":"resp_x","object":"response","status":"incomplete","output":[]}'),
+            ("/v1/responses", b'{"id":"resp_x","object":"response","status":"in_progress","output":[]}'),
+            ("/v1/responses", b'{"id":"resp_x","object":"response","output":[]}'),
+        ],
+    )
     def test_incomplete_bodies_never_enter_the_cache(
-        self, store: RedisResponseStore, provider: Provider, path: str, response: bytes,
+        self,
+        store: RedisResponseStore,
+        provider: Provider,
+        path: str,
+        response: bytes,
     ) -> None:
         provider.response = response
         for _ in range(2):
@@ -836,13 +963,19 @@ class TestNonChatOpenAiEndpoints:
                 assert call(url, MARKED).body == response
         assert len(provider.hits) == 2
 
-    @pytest.mark.parametrize("payload", [
-        b'data: {"type":"response.created","response":{"id":"resp_x"}}\n\n',
-        b'data: {"type":"response.created","response":{"id":"resp_x"}}\n\ndata: {"type":"response.failed"}\n\n',
-        b'data: {"type":"response.completed","response":{"id":"resp_x"}}\n\ndata: {"type":"response.created"}\n\n',
-    ])
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            b'data: {"type":"response.created","response":{"id":"resp_x"}}\n\n',
+            b'data: {"type":"response.created","response":{"id":"resp_x"}}\n\ndata: {"type":"response.failed"}\n\n',
+            b'data: {"type":"response.completed","response":{"id":"resp_x"}}\n\ndata: {"type":"response.created"}\n\n',
+        ],
+    )
     def test_a_response_stream_that_never_completed_is_never_cached(
-        self, store: RedisResponseStore, provider: Provider, payload: bytes,
+        self,
+        store: RedisResponseStore,
+        provider: Provider,
+        payload: bytes,
     ) -> None:
         provider.stream = True
         provider.response = payload
@@ -851,15 +984,27 @@ class TestNonChatOpenAiEndpoints:
                 assert call(url, MARKED).body == payload
         assert len(provider.hits) == 2
 
-    @pytest.mark.parametrize("path,response", [
-        ("/v1/chat/completions", b'{"id":"x","error":null,"choices":[{"message":{"content":"hi"},'
-                                 b'"finish_reason":"stop"}]}'),
-        ("/v1/messages", b'{"id":"msg_x","type":"message","role":"assistant","error":null,'
-                         b'"content":[{"type":"text","text":"hi"}],"stop_reason":"end_turn"}'),
-        ("/v1/responses", RESPONSE_SUCCESS),
-    ])
+    @pytest.mark.parametrize(
+        "path,response",
+        [
+            (
+                "/v1/chat/completions",
+                b'{"id":"x","error":null,"choices":[{"message":{"content":"hi"},"finish_reason":"stop"}]}',
+            ),
+            (
+                "/v1/messages",
+                b'{"id":"msg_x","type":"message","role":"assistant","error":null,'
+                b'"content":[{"type":"text","text":"hi"}],"stop_reason":"end_turn"}',
+            ),
+            ("/v1/responses", RESPONSE_SUCCESS),
+        ],
+    )
     def test_a_null_error_field_is_not_an_error(
-        self, store: RedisResponseStore, provider: Provider, path: str, response: bytes,
+        self,
+        store: RedisResponseStore,
+        provider: Provider,
+        path: str,
+        response: bytes,
     ) -> None:
         """Every OpenAI Responses body carries `error: null`, and testing the key's
         presence rather than its value rejected all of them. The cost was silent:
@@ -871,12 +1016,19 @@ class TestNonChatOpenAiEndpoints:
                 assert call(url, MARKED).body == response
         assert len(provider.hits) == 1
 
-    @pytest.mark.parametrize("path,response", [
-        ("/v1/chat/completions", b'{"error":{"message":"rate limited","type":"rate_limit_error"}}'),
-        ("/v1/responses", b'{"object":"response","status":"completed","error":{"message":"bad"},"output":[]}'),
-    ])
+    @pytest.mark.parametrize(
+        "path,response",
+        [
+            ("/v1/chat/completions", b'{"error":{"message":"rate limited","type":"rate_limit_error"}}'),
+            ("/v1/responses", b'{"object":"response","status":"completed","error":{"message":"bad"},"output":[]}'),
+        ],
+    )
     def test_a_populated_error_field_still_rejects(
-        self, store: RedisResponseStore, provider: Provider, path: str, response: bytes,
+        self,
+        store: RedisResponseStore,
+        provider: Provider,
+        path: str,
+        response: bytes,
     ) -> None:
         provider.response = response
         for _ in range(2):
@@ -884,12 +1036,19 @@ class TestNonChatOpenAiEndpoints:
                 assert call(url, MARKED).body == response
         assert len(provider.hits) == 2
 
-    @pytest.mark.parametrize("path,cacheable", [
-        ("/v1/chat/completions", True), ("/v1/messages", True),
-        ("/v1/embeddings", True), ("/v1/responses", True),
-        ("/v1/audio/speech", False), ("/v1/images/generations", False),
-        ("/v1/files", False), ("/v1/batches", False),
-    ])
+    @pytest.mark.parametrize(
+        "path,cacheable",
+        [
+            ("/v1/chat/completions", True),
+            ("/v1/messages", True),
+            ("/v1/embeddings", True),
+            ("/v1/responses", True),
+            ("/v1/audio/speech", False),
+            ("/v1/images/generations", False),
+            ("/v1/files", False),
+            ("/v1/batches", False),
+        ],
+    )
     def test_only_the_json_endpoints_are_cacheable(self, path: str, cacheable: bool) -> None:
         assert cacheable_endpoint("openai", "POST", f"https://api.openai.com{path}", MARKED) is cacheable
 
@@ -951,8 +1110,12 @@ class TestBedrockSigning:
         signed: Final = signer(
             "POST",
             f"https://bedrock-runtime.us-east-1.amazonaws.com/model/{BEDROCK_MODEL}/converse",
-            {"content-type": "application/json", "Authorization": "AWS4-HMAC-SHA256 Credential=PROXY/...",
-             "X-Amz-Date": "19700101T000000Z", "X-Amz-Security-Token": "proxy-session-token"},
+            {
+                "content-type": "application/json",
+                "Authorization": "AWS4-HMAC-SHA256 Credential=PROXY/...",
+                "X-Amz-Date": "19700101T000000Z",
+                "X-Amz-Security-Token": "proxy-session-token",
+            },
             BEDROCK_BODY,
         )
         assert "PROXY" not in str(signed) and "proxy-session-token" not in str(signed)
@@ -972,7 +1135,9 @@ class TestBedrockSigning:
         assert urlsplit(prepared.url).path == urlsplit(url).path
 
     def test_signature_headers_are_excluded_from_the_key(
-        self, store: RedisResponseStore, provider: Provider,
+        self,
+        store: RedisResponseStore,
+        provider: Provider,
     ) -> None:
         """A real signature is fresh on every call, so keying on it would make
         every Bedrock request a permanent miss. The stub signer here varies its
@@ -986,7 +1151,8 @@ class TestBedrockSigning:
 
         def signing_edge() -> CacheEdge:
             return CacheEdge(
-                store, SECRET,
+                store,
+                SECRET,
                 policies={BEDROCK_MOUNT: MountPolicy(sign=varying, unkeyed_headers=SIGNATURE_HEADERS)},
             )
 
@@ -999,7 +1165,9 @@ class TestBedrockSigning:
         ), "the signature must cover the upstream URL the edge calls, not the edge URL the proxy called"
 
     def test_a_mount_without_a_signer_still_keys_on_its_credentials(
-        self, store: RedisResponseStore, provider: Provider,
+        self,
+        store: RedisResponseStore,
+        provider: Provider,
     ) -> None:
         """The exclusion is per mount. Dropping authorization globally would let
         one OpenAI account read another's recording."""
@@ -1015,7 +1183,11 @@ class TestBedrockSigning:
 
     @pytest.mark.parametrize("action,response", [("converse", CONVERSE_SUCCESS), ("invoke", INVOKE_SUCCESS)])
     def test_complete_responses_replay_on_the_next_run(
-        self, store: RedisResponseStore, provider: Provider, action: str, response: bytes,
+        self,
+        store: RedisResponseStore,
+        provider: Provider,
+        action: str,
+        response: bytes,
     ) -> None:
         provider.response = response
         for _ in range(2):
@@ -1023,17 +1195,24 @@ class TestBedrockSigning:
                 assert call(url, BEDROCK_BODY).body == response
         assert len(provider.hits) == 1
 
-    @pytest.mark.parametrize("action,response", [
-        ("converse", b'{"output":{"message":{}}}'),
-        ("converse", b'{"stopReason":"end_turn"}'),
-        ("converse", b'{"message":"The provided model identifier is invalid."}'),
-        ("converse", CONVERSE_SUCCESS[:-20]),
-        ("invoke", b'{"id":"msg_x","type":"message","content":[{"type":"text","text":"hi"}]}'),
-        ("invoke", b'{"id":"msg_x","type":"message","stop_reason":"end_turn"}'),
-        ("invoke", b'{"message":"Too many requests, please wait before trying again."}'),
-    ])
+    @pytest.mark.parametrize(
+        "action,response",
+        [
+            ("converse", b'{"output":{"message":{}}}'),
+            ("converse", b'{"stopReason":"end_turn"}'),
+            ("converse", b'{"message":"The provided model identifier is invalid."}'),
+            ("converse", CONVERSE_SUCCESS[:-20]),
+            ("invoke", b'{"id":"msg_x","type":"message","content":[{"type":"text","text":"hi"}]}'),
+            ("invoke", b'{"id":"msg_x","type":"message","stop_reason":"end_turn"}'),
+            ("invoke", b'{"message":"Too many requests, please wait before trying again."}'),
+        ],
+    )
     def test_incomplete_or_error_bodies_never_enter_the_cache(
-        self, store: RedisResponseStore, provider: Provider, action: str, response: bytes,
+        self,
+        store: RedisResponseStore,
+        provider: Provider,
+        action: str,
+        response: bytes,
     ) -> None:
         provider.response = response
         for _ in range(2):
@@ -1041,12 +1220,20 @@ class TestBedrockSigning:
                 assert call(url, BEDROCK_BODY).body == response
         assert len(provider.hits) == 2
 
-    @pytest.mark.parametrize("action,response", [
-        ("converse-stream", CONVERSE_STREAM_OK),
-        ("invoke-with-response-stream", INVOKE_STREAM_OK),
-    ], ids=["converse-stream", "invoke-stream"])
+    @pytest.mark.parametrize(
+        "action,response",
+        [
+            ("converse-stream", CONVERSE_STREAM_OK),
+            ("invoke-with-response-stream", INVOKE_STREAM_OK),
+        ],
+        ids=["converse-stream", "invoke-stream"],
+    )
     def test_a_finished_stream_is_served_from_the_cache_the_second_time(
-        self, store: RedisResponseStore, provider: Provider, action: str, response: bytes,
+        self,
+        store: RedisResponseStore,
+        provider: Provider,
+        action: str,
+        response: bytes,
     ) -> None:
         provider.response = response
         with bedrock_edge(bedrock_cache_edge(store), provider, action) as url:
@@ -1058,16 +1245,23 @@ class TestBedrockSigning:
         assert len(provider.hits) == 1
         assert dict(replay.counters.counts)[f"mount:{BEDROCK_MOUNT}:hits"] == 1
         assert all(
-            sent.startswith("AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/")
-            for sent in provider.authorizations
+            sent.startswith("AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/") for sent in provider.authorizations
         ), provider.authorizations
 
-    @pytest.mark.parametrize("action,response", [
-        ("converse-stream", CONVERSE_STREAM_OK[:-1]),
-        ("invoke-with-response-stream", INVOKE_STREAM_OK[:-1]),
-    ], ids=["converse-stream", "invoke-stream"])
+    @pytest.mark.parametrize(
+        "action,response",
+        [
+            ("converse-stream", CONVERSE_STREAM_OK[:-1]),
+            ("invoke-with-response-stream", INVOKE_STREAM_OK[:-1]),
+        ],
+        ids=["converse-stream", "invoke-stream"],
+    )
     def test_a_stream_the_connection_cut_short_calls_the_provider_every_time(
-        self, store: RedisResponseStore, provider: Provider, action: str, response: bytes,
+        self,
+        store: RedisResponseStore,
+        provider: Provider,
+        action: str,
+        response: bytes,
     ) -> None:
         """The whole risk of caching an eventstream is recording a half-finished
         one, so a truncated body has to be rejected rather than stored."""
@@ -1120,30 +1314,37 @@ def test_normal_registration_routes_supported_providers(provider: str, suffix: s
     assert params.api_base is None
 
 
-@pytest.mark.parametrize("params", [
-    LiteLLMParamsBody(model="bedrock/test"),
-    LiteLLMParamsBody(model="azure/test"),
-    LiteLLMParamsBody(model="openai/test", api_base="https://custom.invalid/v1"),
-    LiteLLMParamsBody(model="openai/test", api_base=""),
-    LiteLLMParamsBody(model="openai/test", litellm_credential_name="named-credential"),
-    LiteLLMParamsBody(model="openai/test", mock_response="synthetic"),
-])
+@pytest.mark.parametrize(
+    "params",
+    [
+        LiteLLMParamsBody(model="bedrock/test"),
+        LiteLLMParamsBody(model="azure/test"),
+        LiteLLMParamsBody(model="openai/test", api_base="https://custom.invalid/v1"),
+        LiteLLMParamsBody(model="openai/test", api_base=""),
+        LiteLLMParamsBody(model="openai/test", litellm_credential_name="named-credential"),
+        LiteLLMParamsBody(model="openai/test", mock_response="synthetic"),
+    ],
+)
 def test_registration_preserves_unsupported_or_explicit_routes(params: LiteLLMParamsBody) -> None:
     def unexpected_edge(mount: str) -> str:
         pytest.fail(f"should not start edge for {mount}")
+
     assert route_cache_model(params, unexpected_edge, enabled=True) is params
 
 
-@pytest.mark.parametrize("model,region", [
-    ("bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0", None),
-    ("bedrock/converse/us.anthropic.claude-sonnet-5", None),
-    ("bedrock/invoke/us.anthropic.claude-haiku-4-5-20251001-v1:0", None),
-    ("bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0", "us-east-1"),
-    ("bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0", "os.environ/AWS_REGION"),
-    ("bedrock/invoke/us.anthropic.claude-sonnet-5", "os.environ/AWS_REGION"),
-    ("bedrock/us.anthropic.claude-opus-4-7", "us-east-1"),
-    ("bedrock/converse/us.anthropic.claude-opus-4-7", "us-east-1"),
-])
+@pytest.mark.parametrize(
+    "model,region",
+    [
+        ("bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0", None),
+        ("bedrock/converse/us.anthropic.claude-sonnet-5", None),
+        ("bedrock/invoke/us.anthropic.claude-haiku-4-5-20251001-v1:0", None),
+        ("bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0", "us-east-1"),
+        ("bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0", "os.environ/AWS_REGION"),
+        ("bedrock/invoke/us.anthropic.claude-sonnet-5", "os.environ/AWS_REGION"),
+        ("bedrock/us.anthropic.claude-opus-4-7", "us-east-1"),
+        ("bedrock/converse/us.anthropic.claude-opus-4-7", "us-east-1"),
+    ],
+)
 def test_anthropic_on_bedrock_registers_the_edge_as_its_runtime_endpoint(model: str, region: str | None) -> None:
     """Almost every Bedrock deployment in the suite declares its region as
     `os.environ/AWS_REGION`, which only the proxy can resolve. Treating that
@@ -1158,24 +1359,31 @@ def test_anthropic_on_bedrock_registers_the_edge_as_its_runtime_endpoint(model: 
     )
 
 
-@pytest.mark.parametrize("params", [
-    LiteLLMParamsBody(model="bedrock/amazon.titan-embed-text-v2:0"),
-    LiteLLMParamsBody(model="bedrock/amazon.nova-canvas-v1:0"),
-    LiteLLMParamsBody(model="bedrock/amazon.nova-sonic-v1:0"),
-    LiteLLMParamsBody(model="bedrock/arn:aws:bedrock:us-east-1::foundation-model/cohere.rerank-v3-5:0"),
-    LiteLLMParamsBody(model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0", aws_role_name="arn:aws:iam::1:role/x"),
-    LiteLLMParamsBody(model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0", aws_access_key_id="AKIA"),
-    LiteLLMParamsBody(model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0", api_base="https://custom.invalid"),
-    LiteLLMParamsBody(
-        model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
-        aws_bedrock_runtime_endpoint="https://custom.invalid",
-    ),
-    LiteLLMParamsBody(model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0", aws_region_name="eu-west-1"),
-    LiteLLMParamsBody(model="bedrock/anthropic.claude-sonnet-5", aws_region_name="os.environ/AWS_REGION"),
-    LiteLLMParamsBody(model="bedrock/invoke/eu.anthropic.claude-sonnet-5", aws_region_name="os.environ/AWS_REGION"),
-    LiteLLMParamsBody(model="bedrock/us.anthropic.claude-opus-4-5", aws_region_name="us-east-1"),
-    LiteLLMParamsBody(model="bedrock/converse/us.anthropic.claude-haiku-9-9", aws_region_name="us-east-1"),
-])
+@pytest.mark.parametrize(
+    "params",
+    [
+        LiteLLMParamsBody(model="bedrock/amazon.titan-embed-text-v2:0"),
+        LiteLLMParamsBody(model="bedrock/amazon.nova-canvas-v1:0"),
+        LiteLLMParamsBody(model="bedrock/amazon.nova-sonic-v1:0"),
+        LiteLLMParamsBody(model="bedrock/arn:aws:bedrock:us-east-1::foundation-model/cohere.rerank-v3-5:0"),
+        LiteLLMParamsBody(
+            model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0", aws_role_name="arn:aws:iam::1:role/x"
+        ),
+        LiteLLMParamsBody(model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0", aws_access_key_id="AKIA"),
+        LiteLLMParamsBody(
+            model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0", api_base="https://custom.invalid"
+        ),
+        LiteLLMParamsBody(
+            model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+            aws_bedrock_runtime_endpoint="https://custom.invalid",
+        ),
+        LiteLLMParamsBody(model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0", aws_region_name="eu-west-1"),
+        LiteLLMParamsBody(model="bedrock/anthropic.claude-sonnet-5", aws_region_name="os.environ/AWS_REGION"),
+        LiteLLMParamsBody(model="bedrock/invoke/eu.anthropic.claude-sonnet-5", aws_region_name="os.environ/AWS_REGION"),
+        LiteLLMParamsBody(model="bedrock/us.anthropic.claude-opus-4-5", aws_region_name="us-east-1"),
+        LiteLLMParamsBody(model="bedrock/converse/us.anthropic.claude-haiku-9-9", aws_region_name="us-east-1"),
+    ],
+)
 def test_bedrock_deployments_the_edge_must_not_touch_keep_their_direct_route(params: LiteLLMParamsBody) -> None:
     """Non-Anthropic models the runner role cannot invoke, deployments carrying
     their own AWS identity (routing those would replace the assume-role chain the
@@ -1183,20 +1391,26 @@ def test_bedrock_deployments_the_edge_must_not_touch_keep_their_direct_route(par
     region only the proxy can resolve on a model that is not cross-region, whose
     real region the harness cannot know."""
     routed: Final = route_cache_model(
-        params, lambda mount: None if mount not in EDGE_MOUNTS else f"http://edge.invalid/{mount}", enabled=True,
+        params,
+        lambda mount: None if mount not in EDGE_MOUNTS else f"http://edge.invalid/{mount}",
+        enabled=True,
     )
     assert routed is params
 
 
-@pytest.mark.parametrize("declared,expected", [
-    (None, "us-east-1"),
-    ("us-west-2", "us-west-2"),
-    ("eu-west-1", "eu-west-1"),
-    ("os.environ/AWS_REGION", "us-east-1"),
-    ("os.environ/ANY_OTHER_NAME", "us-east-1"),
-])
+@pytest.mark.parametrize(
+    "declared,expected",
+    [
+        (None, "us-east-1"),
+        ("us-west-2", "us-west-2"),
+        ("eu-west-1", "eu-west-1"),
+        ("os.environ/AWS_REGION", "us-east-1"),
+        ("os.environ/ANY_OTHER_NAME", "us-east-1"),
+    ],
+)
 def test_a_region_only_the_proxy_can_resolve_falls_back_to_the_default_mount(
-    declared: str | None, expected: str,
+    declared: str | None,
+    expected: str,
 ) -> None:
     """A declared literal region is the one the deployment meant. A region the
     proxy resolves from its own environment is one the run pod cannot see, and
@@ -1216,9 +1430,15 @@ def test_every_model_on_the_edge_allowlist_is_a_cross_region_profile() -> None:
 @pytest.mark.parametrize("mode", ["batch", "realtime", "image_generation"])
 def test_a_bedrock_deployment_with_a_mode_keeps_its_direct_route(mode: ModelMode) -> None:
     params: Final = LiteLLMParamsBody(model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0")
-    assert route_cache_model(
-        params, lambda mount: f"http://edge.invalid/{mount}", enabled=True, mode=mode,
-    ) is params
+    assert (
+        route_cache_model(
+            params,
+            lambda mount: f"http://edge.invalid/{mount}",
+            enabled=True,
+            mode=mode,
+        )
+        is params
+    )
 
 
 def test_rollback_and_live_only_policy_keep_direct_provider_route() -> None:
@@ -1286,7 +1506,10 @@ def test_close_before_first_chunk_releases_lease(store: RedisResponseStore, prov
 
 
 def test_effective_account_change_cannot_reuse_cache(
-    store: RedisResponseStore, provider: Provider, monkeypatch: pytest.MonkeyPatch, tmp_path,
+    store: RedisResponseStore,
+    provider: Provider,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
 ) -> None:
     url: Final = f"http://127.0.0.1:{provider.server_port}/v1/chat/completions"
     caches: Final = tuple(cache_edge(store) for _ in range(3))
@@ -1302,7 +1525,9 @@ def test_effective_account_change_cannot_reuse_cache(
 
 
 def test_enabled_environment_reuses_store_across_fresh_backends(
-    redis_url: str, provider: Provider, monkeypatch: pytest.MonkeyPatch,
+    redis_url: str,
+    provider: Provider,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("E2E_PROVIDER_CACHE", "1")
     monkeypatch.setenv("E2E_PROVIDER_CACHE_REDIS_URL", redis_url)
@@ -1325,7 +1550,9 @@ def test_enabled_environment_reuses_store_across_fresh_backends(
 
 @pytest.mark.parametrize("known_mount", (True, False))
 def test_duplicate_headers_bypass_cache_and_count_live_calls(
-    store: RedisResponseStore, provider: Provider, known_mount: bool,
+    store: RedisResponseStore,
+    provider: Provider,
+    known_mount: bool,
 ) -> None:
     cache: Final = cache_edge(store)
     with edge(cache, provider) as url:
@@ -1355,34 +1582,50 @@ class TestBedrockStreams:
         buffer: Final = EventStreamBuffer()
         buffer.add_data(CONVERSE_STREAM_OK)
         assert [event.headers[":event-type"] for event in buffer] == [
-            "messageStart", "contentBlockDelta", "contentBlockStop", "messageStop", "metadata",
+            "messageStart",
+            "contentBlockDelta",
+            "contentBlockStop",
+            "messageStop",
+            "metadata",
         ]
 
-    @pytest.mark.parametrize("url,body", [
-        (CONVERSE_STREAM_URL, CONVERSE_STREAM_OK),
-        (INVOKE_STREAM_URL, INVOKE_STREAM_OK),
-    ])
+    @pytest.mark.parametrize(
+        "url,body",
+        [
+            (CONVERSE_STREAM_URL, CONVERSE_STREAM_OK),
+            (INVOKE_STREAM_URL, INVOKE_STREAM_OK),
+        ],
+    )
     def test_a_finished_stream_is_recordable(self, url: str, body: bytes) -> None:
         assert cacheable_endpoint(BEDROCK_MOUNT, "POST", url, b"{}")
         assert successful_response(BEDROCK_MOUNT, url, 200, {}, body)
 
-    @pytest.mark.parametrize("url,body", [
-        (CONVERSE_STREAM_URL, CONVERSE_STREAM_OK),
-        (INVOKE_STREAM_URL, INVOKE_STREAM_OK),
-    ])
+    @pytest.mark.parametrize(
+        "url,body",
+        [
+            (CONVERSE_STREAM_URL, CONVERSE_STREAM_OK),
+            (INVOKE_STREAM_URL, INVOKE_STREAM_OK),
+        ],
+    )
     @pytest.mark.parametrize("keep", [1, -1, -4])
     def test_a_stream_the_connection_cut_short_is_not_recordable(
-        self, url: str, body: bytes, keep: int,
+        self,
+        url: str,
+        body: bytes,
+        keep: int,
     ) -> None:
         """botocore yields the frames it did receive and silently drops a trailing
         partial one, so a stream cut a single byte short parses clean and only the
         byte accounting and the terminator rule catch it."""
         assert not successful_response(BEDROCK_MOUNT, url, 200, {}, body[:keep])
 
-    @pytest.mark.parametrize("url,body", [
-        (CONVERSE_STREAM_URL, CONVERSE_STREAM_OK),
-        (INVOKE_STREAM_URL, INVOKE_STREAM_OK),
-    ])
+    @pytest.mark.parametrize(
+        "url,body",
+        [
+            (CONVERSE_STREAM_URL, CONVERSE_STREAM_OK),
+            (INVOKE_STREAM_URL, INVOKE_STREAM_OK),
+        ],
+    )
     def test_a_corrupted_frame_is_not_recordable(self, url: str, body: bytes) -> None:
         flipped: Final = bytearray(body)
         flipped[len(body) // 2] ^= 0xFF
@@ -1392,15 +1635,17 @@ class TestBedrockStreams:
         """ConverseStream names its stop reason a frame before it reports usage,
         and litellm prices the call from that usage, so a stream cut between the
         two would replay as a free call."""
-        without_metadata: Final = (
-            eventstream_event("messageStart", {"role": "assistant"})
-            + eventstream_event("messageStop", {"stopReason": "end_turn"})
+        without_metadata: Final = eventstream_event("messageStart", {"role": "assistant"}) + eventstream_event(
+            "messageStop", {"stopReason": "end_turn"}
         )
         assert not successful_response(BEDROCK_MOUNT, CONVERSE_STREAM_URL, 200, {}, without_metadata)
 
     def test_a_converse_stream_that_never_stopped_is_not_recordable(self) -> None:
         assert not successful_response(
-            BEDROCK_MOUNT, CONVERSE_STREAM_URL, 200, {},
+            BEDROCK_MOUNT,
+            CONVERSE_STREAM_URL,
+            200,
+            {},
             eventstream_event("messageStart", {"role": "assistant"})
             + eventstream_event("metadata", {"usage": {"totalTokens": 18}}),
         )
@@ -1409,16 +1654,23 @@ class TestBedrockStreams:
         """Bedrock reports a fault that began after the headers went out as an
         exception frame in place of the terminator it never got to send."""
         assert not successful_response(
-            BEDROCK_MOUNT, CONVERSE_STREAM_URL, 200, {},
+            BEDROCK_MOUNT,
+            CONVERSE_STREAM_URL,
+            200,
+            {},
             eventstream_event("messageStart", {"role": "assistant"})
             + eventstream_event("contentBlockDelta", {"contentBlockIndex": 0, "delta": {"text": "hi"}})
             + eventstream_event("modelStreamErrorException", {"message": "boom"}, message_type="exception"),
         )
 
-    @pytest.mark.parametrize("url,body", [
-        (CONVERSE_STREAM_URL, CONVERSE_STREAM_OK),
-        (INVOKE_STREAM_URL, INVOKE_STREAM_OK),
-    ], ids=["converse-stream", "invoke-stream"])
+    @pytest.mark.parametrize(
+        "url,body",
+        [
+            (CONVERSE_STREAM_URL, CONVERSE_STREAM_OK),
+            (INVOKE_STREAM_URL, INVOKE_STREAM_OK),
+        ],
+        ids=["converse-stream", "invoke-stream"],
+    )
     def test_a_stream_cut_after_its_terminator_is_not_recordable(self, url: str, body: bytes) -> None:
         """The terminator rules cannot see this one. Every frame the stream owes
         has arrived and the partial frame after them is the one botocore drops
@@ -1429,7 +1681,10 @@ class TestBedrockStreams:
 
     def test_a_converse_stream_whose_stop_frame_names_no_reason_is_not_recordable(self) -> None:
         assert not successful_response(
-            BEDROCK_MOUNT, CONVERSE_STREAM_URL, 200, {},
+            BEDROCK_MOUNT,
+            CONVERSE_STREAM_URL,
+            200,
+            {},
             eventstream_event("messageStart", {"role": "assistant"})
             + eventstream_event("messageStop", {})
             + eventstream_event("metadata", {"usage": {"totalTokens": 18}}),
@@ -1440,7 +1695,10 @@ class TestBedrockStreams:
         A frame that is not one carries an event this rule cannot read, so the
         stream can no longer be judged complete."""
         assert not successful_response(
-            BEDROCK_MOUNT, INVOKE_STREAM_URL, 200, {},
+            BEDROCK_MOUNT,
+            INVOKE_STREAM_URL,
+            200,
+            {},
             invoke_chunk({"type": "message_start", "message": {"id": "msg_bdrk_x"}})
             + eventstream_event("metadata", {"usage": {"totalTokens": 18}})
             + invoke_chunk({"type": "message_delta", "delta": {"stop_reason": "end_turn"}})
@@ -1452,24 +1710,32 @@ class TestBedrockStreams:
         keeps a corrupt body from spinning the edge instead of answering."""
         assert not successful_response(BEDROCK_MOUNT, CONVERSE_STREAM_URL, 200, {}, b"\x00\x00\x00\x00" * 4)
 
-    @pytest.mark.parametrize("url,terminator", [
-        (INVOKE_STREAM_URL, invoke_chunk({"type": "message_stop"})),
-        (CONVERSE_STREAM_URL, eventstream_event("metadata", {"usage": {"totalTokens": 18}})),
-    ], ids=["invoke-stream", "converse-stream"])
+    @pytest.mark.parametrize(
+        "url,terminator",
+        [
+            (INVOKE_STREAM_URL, invoke_chunk({"type": "message_stop"})),
+            (CONVERSE_STREAM_URL, eventstream_event("metadata", {"usage": {"totalTokens": 18}})),
+        ],
+        ids=["invoke-stream", "converse-stream"],
+    )
     def test_a_delta_that_names_no_stop_reason_does_not_finish_a_stream(
-        self, url: str, terminator: bytes,
+        self,
+        url: str,
+        terminator: bytes,
     ) -> None:
         """A `message_delta` arriving without its stop reason is the shape of a
         turn the connection cut short partway through the delta itself."""
-        head: Final = (
-            invoke_chunk({"type": "message_start", "message": {"id": "msg_bdrk_x"}})
-            + invoke_chunk({"type": "message_delta", "delta": {}})
+        head: Final = invoke_chunk({"type": "message_start", "message": {"id": "msg_bdrk_x"}}) + invoke_chunk(
+            {"type": "message_delta", "delta": {}}
         )
         assert not successful_response(BEDROCK_MOUNT, url, 200, {}, head + terminator)
 
     def test_an_invoke_chunk_that_is_not_base64_is_not_recordable(self) -> None:
         assert not successful_response(
-            BEDROCK_MOUNT, INVOKE_STREAM_URL, 200, {},
+            BEDROCK_MOUNT,
+            INVOKE_STREAM_URL,
+            200,
+            {},
             invoke_chunk({"type": "message_start", "message": {"id": "msg_bdrk_x"}})
             + eventstream_event("chunk", {"bytes": "not base64 at all !!"})
             + invoke_chunk({"type": "message_stop"}),
@@ -1477,7 +1743,10 @@ class TestBedrockStreams:
 
     def test_an_invoke_stream_missing_its_stop_reason_is_not_recordable(self) -> None:
         assert not successful_response(
-            BEDROCK_MOUNT, INVOKE_STREAM_URL, 200, {},
+            BEDROCK_MOUNT,
+            INVOKE_STREAM_URL,
+            200,
+            {},
             invoke_chunk({"type": "message_start", "message": {"id": "msg_bdrk_x"}})
             + invoke_chunk({"type": "message_stop"}),
         )

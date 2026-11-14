@@ -210,9 +210,7 @@ def test_ultrafast_long_context_prompt_bills_ultrafast_long_context_rates(
 ) -> None:
     with gateway.scenario() as scenario:
         scenario_id: Final = f"ultrafast-long-context-{uuid.uuid4().hex}"
-        handle: Final = register_scenario(
-            scenario_id, _surface_response(surface, service_tier, prompt_tokens)
-        )
+        handle: Final = register_scenario(scenario_id, _surface_response(surface, service_tier, prompt_tokens))
         scenario.cleanups.callback(delete_scenario, handle)
         key: Final = scenario.key()
         model: Final = scenario.model(

@@ -25,9 +25,7 @@ def test_merge_a2a_session_is_scoped_per_principal():
     params = {"message": {"contextId": "ctx-1"}}
 
     key_a = merge_a2a_session_into_litellm_params(base, params, "hash-a")["session_id"]
-    key_a_again = merge_a2a_session_into_litellm_params(base, params, "hash-a")[
-        "session_id"
-    ]
+    key_a_again = merge_a2a_session_into_litellm_params(base, params, "hash-a")["session_id"]
     key_b = merge_a2a_session_into_litellm_params(base, params, "hash-b")["session_id"]
 
     assert key_a == key_a_again, "same key + contextId must stay on one session"
@@ -92,9 +90,7 @@ async def test_langflow_a2a_config_passes_session_id_to_completion():
             api_base="http://localhost:7860",
         )
 
-        assert (
-            mock_acompletion.call_args.kwargs.get("session_id") == "shared-session-99"
-        )
+        assert mock_acompletion.call_args.kwargs.get("session_id") == "shared-session-99"
 
 
 @pytest.mark.asyncio
@@ -131,9 +127,7 @@ async def test_langflow_a2a_config_scopes_session_by_authenticated_key():
     forwarded = mock_acompletion.call_args.kwargs
     assert forwarded.get("session_id") != "ctx-1"
     assert forwarded.get("session_id").endswith("-ctx-1")
-    assert (
-        A2A_USER_API_KEY_HASH_PARAM not in forwarded
-    ), "internal principal param must not leak to the LLM call"
+    assert A2A_USER_API_KEY_HASH_PARAM not in forwarded, "internal principal param must not leak to the LLM call"
 
 
 @pytest.mark.asyncio

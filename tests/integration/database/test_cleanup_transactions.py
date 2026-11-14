@@ -141,7 +141,7 @@ async def test_size_rule_deletes_the_oldest_rows_until_under_the_target_and_does
                 sql.SQL(
                     'CREATE TABLE {} (request_id text, "startTime" timestamp NOT NULL, payload text, '
                     'PRIMARY KEY (request_id, "startTime")) '
-                    'WITH (autovacuum_enabled = false, toast.autovacuum_enabled = false)'
+                    "WITH (autovacuum_enabled = false, toast.autovacuum_enabled = false)"
                 ).format(logs)
             )
             setup.execute(

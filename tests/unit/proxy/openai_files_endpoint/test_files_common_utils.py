@@ -851,7 +851,10 @@ def test_a_team_keeps_its_first_config_file_openai_deployment_over_older_db_ones
 
 @pytest.mark.parametrize(
     ("custom_llm_provider", "openrouter_key", "api_key"),
-    [("openai", "sk-or-files-openai", "openai-key"), ("openrouter", "sk-or-files-openrouter", "sk-or-files-openrouter")],
+    [
+        ("openai", "sk-or-files-openai", "openai-key"),
+        ("openrouter", "sk-or-files-openrouter", "sk-or-files-openrouter"),
+    ],
 )
 def test_a_provider_credential_lookup_never_lists_an_openrouter_wildcards_live_catalog(
     monkeypatch: pytest.MonkeyPatch, custom_llm_provider: str, openrouter_key: str, api_key: str
@@ -896,8 +899,18 @@ def test_a_provider_credential_lookup_never_lists_an_openrouter_wildcards_live_c
             "anthropic",
             "anthropic-narrow-key",
         ),
-        (["anthropic/claude-3*"], (("anthropic/*", "anthropic/*", "anthropic-wide-key"),), "anthropic", "anthropic-wide-key"),
-        (["openrouter/*"], (("openrouter/openai/*", "openrouter/openai/*", "sk-or-narrow"),), "openrouter", "sk-or-narrow"),
+        (
+            ["anthropic/claude-3*"],
+            (("anthropic/*", "anthropic/*", "anthropic-wide-key"),),
+            "anthropic",
+            "anthropic-wide-key",
+        ),
+        (
+            ["openrouter/*"],
+            (("openrouter/openai/*", "openrouter/openai/*", "sk-or-narrow"),),
+            "openrouter",
+            "sk-or-narrow",
+        ),
         (
             ["team/*"],
             (("team/*", "openrouter/*", "sk-or-team"), ("team/openai/*", "openai/*", "openai-team-key")),

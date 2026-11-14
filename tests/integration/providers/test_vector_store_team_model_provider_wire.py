@@ -81,7 +81,10 @@ def _openai_search_peer(store_id: str) -> Callable[[Request], Reply]:
 
 def test_bedrock_vector_store_search_uses_bedrock_team_model_credentials(gateway: Gateway) -> None:
     knowledge_base_id: Final = f"KB{uuid.uuid4().hex[:8].upper()}"
-    with wire_server(_bedrock_retrieve_peer(knowledge_base_id, TEAM_ACCESS_KEY)) as wire, gateway.scenario() as scenario:
+    with (
+        wire_server(_bedrock_retrieve_peer(knowledge_base_id, TEAM_ACCESS_KEY)) as wire,
+        gateway.scenario() as scenario,
+    ):
         team: Final = scenario.team()
         scenario.model(
             model="langgraph/repro-agent",
@@ -126,7 +129,10 @@ def test_bedrock_vector_store_search_uses_store_credentials_without_matching_tea
     gateway: Gateway,
 ) -> None:
     knowledge_base_id: Final = f"KB{uuid.uuid4().hex[:8].upper()}"
-    with wire_server(_bedrock_retrieve_peer(knowledge_base_id, STORE_ACCESS_KEY)) as wire, gateway.scenario() as scenario:
+    with (
+        wire_server(_bedrock_retrieve_peer(knowledge_base_id, STORE_ACCESS_KEY)) as wire,
+        gateway.scenario() as scenario,
+    ):
         team: Final = scenario.team()
         scenario.model(
             model="langgraph/repro-agent",

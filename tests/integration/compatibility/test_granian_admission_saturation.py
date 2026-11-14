@@ -24,7 +24,10 @@ async def test_granian_admission_control_saturation(tmp_path: Path) -> None:
     proxy_port: Final = allocate_port()
     fake_script: Final = Path(__file__).parents[2] / "_fake_openai_endpoint_server.py"
     config_path: Final = tmp_path / "saturation_config.yaml"
-    proxy_env: Final = {**{k: v for k, v in os.environ.items() if k != "DATABASE_URL"}, "LITELLM_MASTER_KEY": MASTER_KEY}
+    proxy_env: Final = {
+        **{k: v for k, v in os.environ.items() if k != "DATABASE_URL"},
+        "LITELLM_MASTER_KEY": MASTER_KEY,
+    }
     config_path.write_text(
         f"""model_list:
   - model_name: slow-endpoint

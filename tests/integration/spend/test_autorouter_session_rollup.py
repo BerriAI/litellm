@@ -305,9 +305,7 @@ async def test_subtotal_coverage_survives_legacy_and_rolling_writers(db, writers
 async def test_unknown_and_legacy_turns_preserve_actual_spend_without_entering_the_estimated_cohort(db: Prisma) -> None:
     key: Final = f"k-{_new_identity()}"
     await _turn(db, key, "A", T0, spend=0.25, saved=-0.05, baseline="opus")
-    await _turn(
-        db, key, "B", T0 + timedelta(seconds=1), spend=0.7, saved=0, baseline="sonnet", estimated=False
-    )
+    await _turn(db, key, "B", T0 + timedelta(seconds=1), spend=0.7, saved=0, baseline="sonnet", estimated=False)
     await _legacy_turn(db, key, T0 + timedelta(seconds=2))
 
     row: Final = await _row(db, key)
@@ -373,7 +371,9 @@ async def test_the_benchmarks_aggregate_can_filter_to_one_key(db):
     assert day["classifier_cost"] == pytest.approx(0.01)
     assert day["classifier_cost_recorded_turns"] == 1
 
-    unknown_key_rows = await _benchmark_rows(db, (T0 - timedelta(days=1)), (T0 + timedelta(days=1)), f"k-{_new_identity()}", None)
+    unknown_key_rows = await _benchmark_rows(
+        db, (T0 - timedelta(days=1)), (T0 + timedelta(days=1)), f"k-{_new_identity()}", None
+    )
     assert [row for row in unknown_key_rows if row["router_name"] == router] == []
 
 
@@ -397,9 +397,7 @@ async def _scoped_benchmarks(
 ) -> tuple[_BenchmarkRow, ...]:
     rows: Final = await _benchmark_rows(db, (T0 - timedelta(days=1)), (T0 + timedelta(days=1)), key, user_id)
     days: Final = await _days(db, key, user_id, router)
-    return tuple(
-        cast(_BenchmarkRow, {**row, **next(iter(days), {})}) for row in rows if row["router_name"] == router
-    )
+    return tuple(cast(_BenchmarkRow, {**row, **next(iter(days), {})}) for row in rows if row["router_name"] == router)
 
 
 async def test_users_keep_written_identity_across_shared_keys_and_keyless_sessions(db: Prisma) -> None:
@@ -411,7 +409,15 @@ async def test_users_keep_written_identity_across_shared_keys_and_keyless_sessio
     await _legacy_turn(db, first_key, T0, router=router)
     await _turn(db, first_key, "A", T0 + timedelta(seconds=10), router=router, user_id=alice, tier="simple")
     await _turn(
-        db, first_key, "B", T0 + timedelta(seconds=20), router=router, user_id=bob, spend=0.03, saved=0.06, tier="complex"
+        db,
+        first_key,
+        "B",
+        T0 + timedelta(seconds=20),
+        router=router,
+        user_id=bob,
+        spend=0.03,
+        saved=0.06,
+        tier="complex",
     )
     await _turn(db, second_key, "C", T0, router=router, user_id=alice, spend=0.02, saved=0.04)
     await _turn(db, "", "A", T0, router=router, user_id=alice, ttl=300)
@@ -508,7 +514,12 @@ async def test_a_failed_user_projection_rolls_back_the_keys_increment(db: Prisma
     assert set(by_user) == {first_user, second_user}
     for user, count, model in ((first_user, 3, "B"), (second_user, 2, "C")):
         row: Final = by_user[user]
-        assert (row["turns"], row["same_model_turns"], row["unordered_turns"], row["last_model"]) == (count, 1, 0, model)
+        assert (row["turns"], row["same_model_turns"], row["unordered_turns"], row["last_model"]) == (
+            count,
+            1,
+            0,
+            model,
+        )
         assert row["spend"] == pytest.approx(count * 0.01)
         assert row["saved_spend"] == pytest.approx(count * 0.02)
     days: Final = await db.query_raw(
@@ -543,7 +554,13 @@ async def test_a_reconfigured_alias_reports_each_router_type_as_its_own_group(db
     router = f"r-{_new_identity()}"
     await _turn(db, key, "A", T0, session_id=f"s-{_new_identity()}", router=router, router_type="complexity")
     await _turn(
-        db, key, "A", T0 + timedelta(seconds=10), session_id=f"s-{_new_identity()}", router=router, router_type="quality"
+        db,
+        key,
+        "A",
+        T0 + timedelta(seconds=10),
+        session_id=f"s-{_new_identity()}",
+        router=router,
+        router_type="quality",
     )
 
     rows = await _benchmark_rows(db, (T0 - timedelta(days=1)), (T0 + timedelta(days=1)), None, None)
@@ -621,8 +638,12 @@ async def test_the_benchmarks_aggregate_sums_tier_turns_across_sessions(db):
     key = f"k-{_new_identity()}"
     router = f"r-{_new_identity()}"
     await _turn(db, key, "A", T0, session_id=f"s-{_new_identity()}", router=router, tier="simple")
-    await _turn(db, key, "A", T0 + timedelta(seconds=10), session_id=f"s-{_new_identity()}", router=router, tier="simple")
-    await _turn(db, key, "B", T0 + timedelta(seconds=20), session_id=f"s-{_new_identity()}", router=router, tier="complex")
+    await _turn(
+        db, key, "A", T0 + timedelta(seconds=10), session_id=f"s-{_new_identity()}", router=router, tier="simple"
+    )
+    await _turn(
+        db, key, "B", T0 + timedelta(seconds=20), session_id=f"s-{_new_identity()}", router=router, tier="complex"
+    )
     await _turn(db, key, "C", T0 + timedelta(seconds=30), session_id=f"s-{_new_identity()}", router=router, tier=None)
 
     rows = await _benchmark_rows(db, (T0 - timedelta(days=1)), (T0 + timedelta(days=1)), None, None)
@@ -691,9 +712,15 @@ async def test_a_cross_midnight_session_splits_its_money_by_request_day(db):
     key = f"k-{_new_identity()}"
     router = f"auto-{_new_identity()}"
     midnight = datetime(2026, 9, 2)
-    await _turn(db, key, "A", midnight - timedelta(minutes=10), router=router, tokens=100, spend=1.0, saved=7.0, user_id="u1")
-    await _turn(db, key, "A", midnight + timedelta(minutes=10), router=router, tokens=200, spend=1.0, saved=3.0, user_id="u1")
-    await _turn(db, key, "B", midnight + timedelta(days=1), router=router, tokens=300, spend=1.0, saved=11.0, user_id="u1")
+    await _turn(
+        db, key, "A", midnight - timedelta(minutes=10), router=router, tokens=100, spend=1.0, saved=7.0, user_id="u1"
+    )
+    await _turn(
+        db, key, "A", midnight + timedelta(minutes=10), router=router, tokens=200, spend=1.0, saved=3.0, user_id="u1"
+    )
+    await _turn(
+        db, key, "B", midnight + timedelta(days=1), router=router, tokens=300, spend=1.0, saved=11.0, user_id="u1"
+    )
 
     assert (await _row(db, key, router=router))["saved_spend"] == 21.0
     days = await db.query_raw(
@@ -729,7 +756,11 @@ async def test_a_router_type_change_mid_session_keeps_session_shape_with_the_ses
 
     rows = {row["router_type"]: row for row in await _benchmark_rows(db, T0, T0 + timedelta(days=1), key)}
     assert set(rows) == {"complexity", "quality"}
-    assert (rows["complexity"]["sessions"], rows["complexity"]["session_turns"], rows["complexity"]["turns"]) == (1, 2, 1)
+    assert (rows["complexity"]["sessions"], rows["complexity"]["session_turns"], rows["complexity"]["turns"]) == (
+        1,
+        2,
+        1,
+    )
     assert (rows["quality"]["sessions"], rows["quality"]["session_turns"], rows["quality"]["turns"]) == (0, 0, 1)
     assert rows["quality"]["spend"] == 2.0
 
@@ -780,15 +811,19 @@ async def test_daily_token_coverage_stays_unknown_with_old_writers(db: Prisma, h
     if historical:
         await db.execute_raw(
             'INSERT INTO "LiteLLM_AutoRouterDailySpend" '
-            '(date, api_key, user_id, router_name, router_type, turns, spend) '
+            "(date, api_key, user_id, router_name, router_type, turns, spend) "
             "VALUES ($1, $2, 'u1', $3, 'complexity', 1, 1)",
-            T0.date().isoformat(), key, router,
+            T0.date().isoformat(),
+            key,
+            router,
         )
     await _turn(db, key, "A", T0, router=router, tokens=123, spend=1.0, user_id="u1")
     if not historical:
         await db.execute_raw(
             'UPDATE "LiteLLM_AutoRouterDailySpend" SET turns = turns + 1, spend = spend + 1 '
-            'WHERE api_key = $1 AND router_name = $2', key, router,
+            "WHERE api_key = $1 AND router_name = $2",
+            key,
+            router,
         )
     for user_id in (None, "u1"):
         (day,) = await _days(db, key, user_id, router)
@@ -801,8 +836,15 @@ async def test_missing_usage_never_completes_daily_token_coverage(db: Prisma, mi
     router: Final = f"auto-{_new_identity()}"
     for offset, recorded in enumerate((not missing_first, missing_first)):
         await _turn(
-            db, key, "A", T0 + timedelta(seconds=offset), router=router,
-            tokens=100 if recorded else 0, spend=1.0, user_id="u1", token_counts_recorded=recorded,
+            db,
+            key,
+            "A",
+            T0 + timedelta(seconds=offset),
+            router=router,
+            tokens=100 if recorded else 0,
+            spend=1.0,
+            user_id="u1",
+            token_counts_recorded=recorded,
         )
     for user_id in (None, "u1"):
         (day,) = await _days(db, key, user_id, router)

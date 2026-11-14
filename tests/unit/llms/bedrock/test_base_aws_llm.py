@@ -13,7 +13,6 @@ import respx
 from fastapi.testclient import TestClient
 
 
-
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Final, Optional
@@ -39,9 +38,7 @@ from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outco
 
 # Global variable for the base_aws_llm.py file path
 
-BASE_AWS_LLM_PATH = os.path.join(
-    os.path.dirname(__file__), "../../../../litellm/llms/bedrock/base_aws_llm.py"
-)
+BASE_AWS_LLM_PATH = os.path.join(os.path.dirname(__file__), "../../../../litellm/llms/bedrock/base_aws_llm.py")
 
 
 @pytest.fixture(autouse=True)
@@ -140,9 +137,7 @@ def test_ambient_env_path_boto3_session_constructed_once_when_cached():
     mock_session_instance = MagicMock()
     mock_session_instance.get_credentials.return_value = real_creds
     with patch.dict(os.environ, _os_environ_without_aws_keys(), clear=True):
-        with patch(
-            "boto3.Session", return_value=mock_session_instance
-        ) as mock_session_cls:
+        with patch("boto3.Session", return_value=mock_session_instance) as mock_session_cls:
             base_a.get_credentials()
             base_b.get_credentials()
             mock_session_cls.assert_called_once()
@@ -193,11 +188,14 @@ def test_get_credentials_does_not_expand_request_env_reference():
     env = _os_environ_without_aws_keys()
     env["SERVER_ONLY_VALUE"] = "config-managed-value"
     base = BaseAWSLLM()
-    with patch.dict(os.environ, env, clear=True), patch.object(
-        base,
-        "_auth_with_aws_profile",
-        return_value=(Credentials("ak", "sk", None), None),
-    ) as mock_profile:
+    with (
+        patch.dict(os.environ, env, clear=True),
+        patch.object(
+            base,
+            "_auth_with_aws_profile",
+            return_value=(Credentials("ak", "sk", None), None),
+        ) as mock_profile,
+    ):
         base.get_credentials(aws_profile_name="os.environ/SERVER_ONLY_VALUE")
 
     assert mock_profile.call_args.args[0] == "os.environ/SERVER_ONLY_VALUE"
@@ -212,11 +210,14 @@ def test_get_credentials_falls_back_to_ambient_aws_profile_name_env():
     env = _os_environ_without_aws_keys()
     env["AWS_PROFILE_NAME"] = "ambient-profile"
     base = BaseAWSLLM()
-    with patch.dict(os.environ, env, clear=True), patch.object(
-        base,
-        "_auth_with_aws_profile",
-        return_value=(Credentials("ak", "sk", None), None),
-    ) as mock_profile:
+    with (
+        patch.dict(os.environ, env, clear=True),
+        patch.object(
+            base,
+            "_auth_with_aws_profile",
+            return_value=(Credentials("ak", "sk", None), None),
+        ) as mock_profile,
+    ):
         base.get_credentials(aws_profile_name=None)
 
     assert mock_profile.call_args.args[0] == "ambient-profile"
@@ -231,11 +232,14 @@ def test_get_credentials_ambient_fallback_resolves_aws_external_id():
     env = _os_environ_without_aws_keys()
     env["AWS_EXTERNAL_ID"] = "ext-from-env"
     base = BaseAWSLLM()
-    with patch.dict(os.environ, env, clear=True), patch.object(
-        base,
-        "_auth_with_aws_role",
-        return_value=(Credentials("ak", "sk", "tok"), None),
-    ) as mock_role:
+    with (
+        patch.dict(os.environ, env, clear=True),
+        patch.object(
+            base,
+            "_auth_with_aws_role",
+            return_value=(Credentials("ak", "sk", "tok"), None),
+        ) as mock_role,
+    ):
         base.get_credentials(
             aws_role_name="arn:aws:iam::123456789012:role/x",
             aws_session_name="s",
@@ -277,9 +281,11 @@ def test_web_identity_token_env_reference_not_expanded(token_ref):
     env["SERVER_ONLY_VALUE"] = "server-only-value"
     captured: Dict[str, Any] = {}
     base = BaseAWSLLM()
-    with patch.dict(os.environ, env, clear=True), patch(
-        "boto3.client", side_effect=lambda *a, **k: _capturing_sts_client(captured)
-    ), patch("boto3.Session", return_value=MagicMock()):
+    with (
+        patch.dict(os.environ, env, clear=True),
+        patch("boto3.client", side_effect=lambda *a, **k: _capturing_sts_client(captured)),
+        patch("boto3.Session", return_value=MagicMock()),
+    ):
         with pytest.raises(AwsAuthError):
             base.get_credentials(
                 aws_web_identity_token=token_ref,
@@ -299,8 +305,9 @@ def test_web_identity_token_oidc_reference_still_resolved():
     """
     base = BaseAWSLLM()
     env = _os_environ_without_aws_keys()
-    with patch.dict(os.environ, env, clear=True), patch(
-        "litellm.llms.bedrock.base_aws_llm.get_secret", return_value=None
+    with (
+        patch.dict(os.environ, env, clear=True),
+        patch("litellm.llms.bedrock.base_aws_llm.get_secret", return_value=None),
     ):
         with pytest.raises(AwsAuthError) as exc:
             base.get_credentials(
@@ -398,9 +405,9 @@ def test_boto3_init_tracer_wrapping():
                     for i, ctx_line in enumerate(context_lines, start=start_line + 1):
                         print(f"{i}: {ctx_line}")
 
-                assert (
-                    has_trace
-                ), f"boto3 initialization '{pattern}' on line {line_number} is not wrapped with tracer.trace or @tracer.wrap"
+                assert has_trace, (
+                    f"boto3 initialization '{pattern}' on line {line_number} is not wrapped with tracer.trace or @tracer.wrap"
+                )
 
 
 def test_auth_functions_tracer_wrapping():
@@ -421,18 +428,16 @@ def test_auth_functions_tracer_wrapping():
             start_line = max(0, line_number - 2)
             context_lines = lines[start_line:line_number]
 
-            has_tracer_wrap = any(
-                "@tracer.wrap" in prev_line for prev_line in context_lines
-            )
+            has_tracer_wrap = any("@tracer.wrap" in prev_line for prev_line in context_lines)
 
             if not has_tracer_wrap:
                 print(f"\nContext for line {line_number}:")
                 for i, ctx_line in enumerate(context_lines, start=start_line + 1):
                     print(f"{i}: {ctx_line}")
 
-            assert (
-                has_tracer_wrap
-            ), f"Auth function on line {line_number} is not wrapped with @tracer.wrap: {line.strip()}"
+            assert has_tracer_wrap, (
+                f"Auth function on line {line_number} is not wrapped with @tracer.wrap: {line.strip()}"
+            )
 
 
 def test_get_aws_region_name_boto3_fallback():
@@ -587,9 +592,7 @@ def test_get_aws_region_name_for_non_llm_api_calls_rejects_malformed_param():
     base_aws_llm = BaseAWSLLM()
 
     with pytest.raises(ValueError, match="Invalid AWS region format"):
-        base_aws_llm.get_aws_region_name_for_non_llm_api_calls(
-            aws_region_name="us-east-1@example.com/"
-        )
+        base_aws_llm.get_aws_region_name_for_non_llm_api_calls(aws_region_name="us-east-1@example.com/")
 
 
 def test_get_aws_region_name_for_non_llm_api_calls_rejects_malformed_env():
@@ -615,12 +618,7 @@ def test_get_aws_region_name_for_non_llm_api_calls_rejects_malformed_env():
 def test_get_aws_region_name_for_non_llm_api_calls_accepts_valid_region():
     """The non-LLM helper still returns valid regions unchanged."""
     base_aws_llm = BaseAWSLLM()
-    assert (
-        base_aws_llm.get_aws_region_name_for_non_llm_api_calls(
-            aws_region_name="us-east-1"
-        )
-        == "us-east-1"
-    )
+    assert base_aws_llm.get_aws_region_name_for_non_llm_api_calls(aws_region_name="us-east-1") == "us-east-1"
 
 
 def test_get_aws_region_from_model_arn_rejects_malformed_region():
@@ -630,16 +628,10 @@ def test_get_aws_region_from_model_arn_rejects_malformed_region():
     """
     base_aws_llm = BaseAWSLLM()
 
-    bad_arn = (
-        "arn:aws:bedrock:us-east-1@example.com:123456789012"
-        ":foundation-model/anthropic.claude-3-sonnet"
-    )
+    bad_arn = "arn:aws:bedrock:us-east-1@example.com:123456789012:foundation-model/anthropic.claude-3-sonnet"
     assert base_aws_llm._get_aws_region_from_model_arn(bad_arn) is None
 
-    good_arn = (
-        "arn:aws:bedrock:us-east-1:123456789012"
-        ":foundation-model/anthropic.claude-3-sonnet"
-    )
+    good_arn = "arn:aws:bedrock:us-east-1:123456789012:foundation-model/anthropic.claude-3-sonnet"
     assert base_aws_llm._get_aws_region_from_model_arn(good_arn) == "us-east-1"
 
 
@@ -843,7 +835,6 @@ def test_sigv4_matches_rust_golden_vector():
     )
 
 
-
 def test_role_assumption_without_session_name():
     """
     Test for issue 12583: Role assumption should work when only aws_role_name is provided
@@ -883,10 +874,7 @@ def test_role_assumption_without_session_name():
 
         # Check the call arguments
         call_args = mock_sts_client.assume_role.call_args
-        assert (
-            call_args[1]["RoleArn"]
-            == "arn:aws:iam::2222222222222:role/LitellmEvalBedrockRole"
-        )
+        assert call_args[1]["RoleArn"] == "arn:aws:iam::2222222222222:role/LitellmEvalBedrockRole"
         # Session name should be auto-generated with format "litellm-session-{timestamp}"
         assert call_args[1]["RoleSessionName"].startswith("litellm-session-")
 
@@ -943,11 +931,7 @@ def _assume_role_sts_mock(access_key: str = "assumed-access-key") -> MagicMock:
 
 
 def _env_without_irsa() -> dict:
-    return {
-        k: v
-        for k, v in os.environ.items()
-        if k not in ("AWS_ROLE_ARN", "AWS_WEB_IDENTITY_TOKEN_FILE")
-    }
+    return {k: v for k, v in os.environ.items() if k not in ("AWS_ROLE_ARN", "AWS_WEB_IDENTITY_TOKEN_FILE")}
 
 
 def test_assume_role_path_uses_process_iam_cache():
@@ -958,14 +942,10 @@ def test_assume_role_path_uses_process_iam_cache():
 
     with patch.dict(os.environ, _env_without_irsa(), clear=True):
         with patch("boto3.client", return_value=mock_sts_client):
-            first = base_aws_llm.get_credentials(
-                aws_role_name=role_arn, aws_session_name="attributed-user-1"
-            )
+            first = base_aws_llm.get_credentials(aws_role_name=role_arn, aws_session_name="attributed-user-1")
             mock_sts_client.get_caller_identity.reset_mock()
 
-            second = base_aws_llm.get_credentials(
-                aws_role_name=role_arn, aws_session_name="attributed-user-1"
-            )
+            second = base_aws_llm.get_credentials(aws_role_name=role_arn, aws_session_name="attributed-user-1")
 
             mock_sts_client.get_caller_identity.assert_not_called()
             assert mock_sts_client.assume_role.call_count == 1
@@ -992,20 +972,12 @@ def test_assume_role_cache_is_scoped_per_session_name():
 
     with patch.dict(os.environ, _env_without_irsa(), clear=True):
         with patch("boto3.client", return_value=mock_sts_client):
-            user_1 = base_aws_llm.get_credentials(
-                aws_role_name=role_arn, aws_session_name="attributed-user-1"
-            )
-            user_2 = base_aws_llm.get_credentials(
-                aws_role_name=role_arn, aws_session_name="attributed-user-2"
-            )
-            user_1_again = base_aws_llm.get_credentials(
-                aws_role_name=role_arn, aws_session_name="attributed-user-1"
-            )
+            user_1 = base_aws_llm.get_credentials(aws_role_name=role_arn, aws_session_name="attributed-user-1")
+            user_2 = base_aws_llm.get_credentials(aws_role_name=role_arn, aws_session_name="attributed-user-2")
+            user_1_again = base_aws_llm.get_credentials(aws_role_name=role_arn, aws_session_name="attributed-user-1")
 
     assert mock_sts_client.assume_role.call_count == 2
-    session_names = [
-        call.kwargs["RoleSessionName"] for call in mock_sts_client.assume_role.call_args_list
-    ]
+    session_names = [call.kwargs["RoleSessionName"] for call in mock_sts_client.assume_role.call_args_list]
     assert session_names == ["attributed-user-1", "attributed-user-2"]
 
     assert user_1.access_key == "assumed-access-key-attributed-user-1"
@@ -1021,9 +993,7 @@ def test_assume_role_cache_entry_expires_with_the_sts_session():
 
     with patch.dict(os.environ, _env_without_irsa(), clear=True):
         with patch("boto3.client", return_value=mock_sts_client):
-            base_aws_llm.get_credentials(
-                aws_role_name=role_arn, aws_session_name="attributed-user-1"
-            )
+            base_aws_llm.get_credentials(aws_role_name=role_arn, aws_session_name="attributed-user-1")
 
     in_memory_cache = BaseAWSLLM._shared_iam_cache.in_memory_cache
     assert len(in_memory_cache.ttl_dict) == 1
@@ -1040,17 +1010,13 @@ def test_assume_role_credentials_expired_in_cache_trigger_a_fresh_sts_call():
 
     with patch.dict(os.environ, _env_without_irsa(), clear=True):
         with patch("boto3.client", return_value=mock_sts_client):
-            base_aws_llm.get_credentials(
-                aws_role_name=role_arn, aws_session_name="attributed-user-1"
-            )
+            base_aws_llm.get_credentials(aws_role_name=role_arn, aws_session_name="attributed-user-1")
 
             in_memory_cache = BaseAWSLLM._shared_iam_cache.in_memory_cache
             expired_key = list(in_memory_cache.ttl_dict.keys())[0]
             in_memory_cache.ttl_dict[expired_key] = time.time() - 1
 
-            base_aws_llm.get_credentials(
-                aws_role_name=role_arn, aws_session_name="attributed-user-1"
-            )
+            base_aws_llm.get_credentials(aws_role_name=role_arn, aws_session_name="attributed-user-1")
 
     assert mock_sts_client.assume_role.call_count == 2
 
@@ -1086,9 +1052,7 @@ def test_concurrent_cold_cache_calls_for_one_identity_make_a_single_sts_call():
 
     def resolve():
         barrier.wait()
-        resolved.append(
-            base_aws_llm.get_credentials(aws_role_name=role_arn, aws_session_name="attribution-1")
-        )
+        resolved.append(base_aws_llm.get_credentials(aws_role_name=role_arn, aws_session_name="attribution-1"))
 
     with patch.dict(os.environ, _env_without_irsa(), clear=True):
         with patch("boto3.client", return_value=mock_sts_client):
@@ -1220,11 +1184,7 @@ def test_eks_irsa_ambient_credentials_used(role_kwargs, expected_client_kwargs):
     This allows web identity tokens to work automatically.
     """
     # Isolate from ambient AWS_REGION/AWS_DEFAULT_REGION so no_region_or_endpoint is deterministic
-    env_without_aws_region = {
-        k: v
-        for k, v in os.environ.items()
-        if k not in ("AWS_REGION", "AWS_DEFAULT_REGION")
-    }
+    env_without_aws_region = {k: v for k, v in os.environ.items() if k not in ("AWS_REGION", "AWS_DEFAULT_REGION")}
     base_aws_llm = BaseAWSLLM()
     mock_expiry = MagicMock()
     mock_expiry.tzinfo = timezone.utc
@@ -1313,10 +1273,7 @@ def test_parse_sts_region_from_endpoint(endpoint, expected_region):
 )
 def test_resolve_sts_region(env, aws_sts_endpoint, expected_region):
     with patch.dict(os.environ, env, clear=True):
-        assert (
-            BaseAWSLLM._resolve_sts_region(aws_sts_endpoint=aws_sts_endpoint)
-            == expected_region
-        )
+        assert BaseAWSLLM._resolve_sts_region(aws_sts_endpoint=aws_sts_endpoint) == expected_region
 
 
 @pytest.mark.parametrize(
@@ -1517,12 +1474,7 @@ def test_get_aws_region_from_model_arn_partition_arns(model: str, expected_regio
     ],
 )
 def test_select_default_endpoint_url_partitions(endpoint_type: str, region: str, expected: str) -> None:
-    assert (
-        BaseAWSLLM()._select_default_endpoint_url(
-            endpoint_type=endpoint_type, aws_region_name=region
-        )
-        == expected
-    )
+    assert BaseAWSLLM()._select_default_endpoint_url(endpoint_type=endpoint_type, aws_region_name=region) == expected
 
 
 def test_irsa_cross_account_sts_client_uses_resolved_region():
@@ -1562,9 +1514,7 @@ def test_irsa_cross_account_sts_client_uses_resolved_region():
                 }
             }
 
-            with patch(
-                "boto3.client", return_value=mock_sts_client
-            ) as mock_boto3_client:
+            with patch("boto3.client", return_value=mock_sts_client) as mock_boto3_client:
                 base_aws_llm._auth_with_aws_role(
                     aws_access_key_id=None,
                     aws_secret_access_key=None,
@@ -1741,11 +1691,7 @@ def test_explicit_credentials_used_when_provided(role_kwargs, expected_client_kw
     Test that explicit credentials are used when provided (non-EKS/IRSA scenario).
     """
     # Isolate from ambient AWS_REGION/AWS_DEFAULT_REGION so no_region_or_endpoint is deterministic
-    env_without_aws_region = {
-        k: v
-        for k, v in os.environ.items()
-        if k not in ("AWS_REGION", "AWS_DEFAULT_REGION")
-    }
+    env_without_aws_region = {k: v for k, v in os.environ.items() if k not in ("AWS_REGION", "AWS_DEFAULT_REGION")}
     base_aws_llm = BaseAWSLLM()
     mock_expiry = MagicMock()
     mock_expiry.tzinfo = timezone.utc
@@ -1790,11 +1736,7 @@ def test_partial_credentials_still_use_ambient():
     Test that if only one credential is provided, we still use ambient credentials.
     This handles edge cases where configuration might be incomplete.
     """
-    env_without_aws_region = {
-        k: v
-        for k, v in os.environ.items()
-        if k not in ("AWS_REGION", "AWS_DEFAULT_REGION")
-    }
+    env_without_aws_region = {k: v for k, v in os.environ.items() if k not in ("AWS_REGION", "AWS_DEFAULT_REGION")}
     base_aws_llm = BaseAWSLLM()
 
     # Mock the boto3 STS client
@@ -1819,7 +1761,6 @@ def test_partial_credentials_still_use_ambient():
 
     with patch.dict(os.environ, env_without_aws_region, clear=True):
         with patch("boto3.client", return_value=mock_sts_client) as mock_boto3_client:
-
             # Call with only access key (missing secret key)
             credentials, ttl = base_aws_llm._auth_with_aws_role(
                 aws_access_key_id="AKIAEXAMPLE",
@@ -1849,11 +1790,7 @@ def test_cross_account_role_assumption():
     """
     Test assuming a role in a different AWS account (common in multi-account setups).
     """
-    env_without_aws_region = {
-        k: v
-        for k, v in os.environ.items()
-        if k not in ("AWS_REGION", "AWS_DEFAULT_REGION")
-    }
+    env_without_aws_region = {k: v for k, v in os.environ.items() if k not in ("AWS_REGION", "AWS_DEFAULT_REGION")}
     base_aws_llm = BaseAWSLLM()
 
     # Mock the boto3 STS client
@@ -1878,7 +1815,6 @@ def test_cross_account_role_assumption():
 
     with patch.dict(os.environ, env_without_aws_region, clear=True):
         with patch("boto3.client", return_value=mock_sts_client) as mock_boto3_client:
-
             # Assume role in different account (EKS/IRSA scenario)
             credentials, ttl = base_aws_llm._auth_with_aws_role(
                 aws_access_key_id=None,
@@ -1931,7 +1867,6 @@ def test_role_assumption_with_custom_session_name():
     mock_sts_client.assume_role.return_value = mock_sts_response
 
     with patch("boto3.client", return_value=mock_sts_client):
-
         # Use custom session name
         credentials, ttl = base_aws_llm._auth_with_aws_role(
             aws_access_key_id=None,
@@ -1976,7 +1911,6 @@ def test_role_assumption_ttl_calculation():
     mock_sts_client.assume_role.return_value = mock_sts_response
 
     with patch("boto3.client", return_value=mock_sts_client):
-
         credentials, ttl = base_aws_llm._auth_with_aws_role(
             aws_access_key_id=None,
             aws_secret_access_key=None,
@@ -2010,13 +1944,9 @@ def test_role_assumption_access_denied_falls_back_when_same_role():
     mock_creds.secret_key = "fallback-secret-key"
 
     with patch("boto3.client", return_value=mock_sts_client):
-        with patch.object(
-            base_aws_llm, "_auth_with_env_vars", return_value=(mock_creds, None)
-        ) as mock_env_auth:
+        with patch.object(base_aws_llm, "_auth_with_env_vars", return_value=(mock_creds, None)) as mock_env_auth:
             # _is_already_running_as_role returns True => fallback allowed
-            with patch.object(
-                base_aws_llm, "_is_already_running_as_role", return_value=True
-            ):
+            with patch.object(base_aws_llm, "_is_already_running_as_role", return_value=True):
                 credentials, ttl = base_aws_llm._auth_with_aws_role(
                     aws_access_key_id=None,
                     aws_secret_access_key=None,
@@ -2045,10 +1975,8 @@ def test_role_assumption_access_denied_raises_when_different_role():
 
     with patch("boto3.client", return_value=mock_sts_client):
         # _is_already_running_as_role returns False => do NOT fallback
-        with patch.object(
-            base_aws_llm, "_is_already_running_as_role", return_value=False
-        ):
-            with pytest.raises(Exception, match='An error occurred \\(AccessDenied\\) when calling the') as exc_info:
+        with patch.object(base_aws_llm, "_is_already_running_as_role", return_value=False):
+            with pytest.raises(Exception, match="An error occurred \\(AccessDenied\\) when calling the") as exc_info:
                 base_aws_llm._auth_with_aws_role(
                     aws_access_key_id=None,
                     aws_secret_access_key=None,
@@ -2073,7 +2001,7 @@ def test_role_assumption_non_access_denied_error_propagated():
     )
 
     with patch("boto3.client", return_value=mock_sts_client):
-        with pytest.raises(Exception, match='An error occurred \\(MalformedPolicyDocument\\) when calling') as exc_info:
+        with pytest.raises(Exception, match="An error occurred \\(MalformedPolicyDocument\\) when calling") as exc_info:
             base_aws_llm._auth_with_aws_role(
                 aws_access_key_id=None,
                 aws_secret_access_key=None,
@@ -2126,7 +2054,6 @@ def test_multiple_role_assumptions_in_sequence():
     mock_sts_client.assume_role.side_effect = [mock_sts_response1, mock_sts_response2]
 
     with patch("boto3.client", return_value=mock_sts_client):
-
         # First role assumption
         credentials1, ttl1 = base_aws_llm._auth_with_aws_role(
             aws_access_key_id=None,
@@ -2198,14 +2125,10 @@ def test_auth_with_aws_role_irsa_environment():
                     "Expiration": datetime.now() + timedelta(hours=1),
                 }
             }
-            mock_sts_client.assume_role_with_web_identity.return_value = (
-                mock_assume_web_identity_response
-            )
+            mock_sts_client.assume_role_with_web_identity.return_value = mock_assume_web_identity_response
             mock_sts_client.assume_role.return_value = mock_assume_role_response
 
-            with patch(
-                "boto3.client", return_value=mock_sts_client
-            ) as mock_boto3_client:
+            with patch("boto3.client", return_value=mock_sts_client) as mock_boto3_client:
                 # Call _auth_with_aws_role without explicit credentials
                 creds, ttl = base_llm._auth_with_aws_role(
                     aws_access_key_id=None,
@@ -2263,9 +2186,7 @@ def test_auth_with_aws_role_same_role_irsa():
         mock_creds.secret_key = "irsa-secret-key"
         mock_creds.token = "irsa-session-token"
 
-        with patch.object(
-            base_llm, "_auth_with_env_vars", return_value=(mock_creds, None)
-        ) as mock_env_auth:
+        with patch.object(base_llm, "_auth_with_env_vars", return_value=(mock_creds, None)) as mock_env_auth:
             # Call get_credentials instead of _auth_with_aws_role directly
             # This tests the full flow
             creds = base_llm.get_credentials(
@@ -2697,13 +2618,8 @@ def test_converse_handler_external_id_extraction():
 
                             # Verify aws_external_id was extracted and passed to get_credentials
                             assert hasattr(mock_get_credentials, "called_kwargs")
-                            assert (
-                                "aws_external_id" in mock_get_credentials.called_kwargs
-                            )
-                            assert (
-                                mock_get_credentials.called_kwargs["aws_external_id"]
-                                == "TestExternalID123"
-                            )
+                            assert "aws_external_id" in mock_get_credentials.called_kwargs
+                            assert mock_get_credentials.called_kwargs["aws_external_id"] == "TestExternalID123"
 
 
 def test_is_already_running_as_role_irsa_same_role():
@@ -2717,12 +2633,7 @@ def test_is_already_running_as_role_irsa_same_role():
             "AWS_WEB_IDENTITY_TOKEN_FILE": "/var/run/secrets/token",
         },
     ):
-        assert (
-            base_aws_llm._is_already_running_as_role(
-                "arn:aws:iam::123456789012:role/MyRole"
-            )
-            is True
-        )
+        assert base_aws_llm._is_already_running_as_role("arn:aws:iam::123456789012:role/MyRole") is True
 
 
 def test_is_already_running_as_role_irsa_different_role():
@@ -2736,12 +2647,7 @@ def test_is_already_running_as_role_irsa_different_role():
             "AWS_WEB_IDENTITY_TOKEN_FILE": "/var/run/secrets/token",
         },
     ):
-        assert (
-            base_aws_llm._is_already_running_as_role(
-                "arn:aws:iam::999999999999:role/OtherRole"
-            )
-            is False
-        )
+        assert base_aws_llm._is_already_running_as_role("arn:aws:iam::999999999999:role/OtherRole") is False
 
 
 def test_is_already_running_as_role_ecs_task_role():
@@ -2755,19 +2661,10 @@ def test_is_already_running_as_role_ecs_task_role():
 
     with patch.dict(os.environ, {}, clear=False):
         # Ensure no IRSA env vars
-        env = {
-            k: v
-            for k, v in os.environ.items()
-            if k not in ("AWS_ROLE_ARN", "AWS_WEB_IDENTITY_TOKEN_FILE")
-        }
+        env = {k: v for k, v in os.environ.items() if k not in ("AWS_ROLE_ARN", "AWS_WEB_IDENTITY_TOKEN_FILE")}
         with patch.dict(os.environ, env, clear=True):
             with patch("boto3.client", return_value=mock_sts_client):
-                assert (
-                    base_aws_llm._is_already_running_as_role(
-                        "arn:aws:iam::123456789012:role/MyEcsTaskRole"
-                    )
-                    is True
-                )
+                assert base_aws_llm._is_already_running_as_role("arn:aws:iam::123456789012:role/MyEcsTaskRole") is True
 
 
 def test_is_already_running_as_role_ecs_different_role():
@@ -2780,19 +2677,10 @@ def test_is_already_running_as_role_ecs_different_role():
     }
 
     with patch.dict(os.environ, {}, clear=False):
-        env = {
-            k: v
-            for k, v in os.environ.items()
-            if k not in ("AWS_ROLE_ARN", "AWS_WEB_IDENTITY_TOKEN_FILE")
-        }
+        env = {k: v for k, v in os.environ.items() if k not in ("AWS_ROLE_ARN", "AWS_WEB_IDENTITY_TOKEN_FILE")}
         with patch.dict(os.environ, env, clear=True):
             with patch("boto3.client", return_value=mock_sts_client):
-                assert (
-                    base_aws_llm._is_already_running_as_role(
-                        "arn:aws:iam::999999999999:role/DifferentRole"
-                    )
-                    is False
-                )
+                assert base_aws_llm._is_already_running_as_role("arn:aws:iam::999999999999:role/DifferentRole") is False
 
 
 def test_is_already_running_as_role_ecs_role_with_path():
@@ -2805,11 +2693,7 @@ def test_is_already_running_as_role_ecs_role_with_path():
     }
 
     with patch.dict(os.environ, {}, clear=False):
-        env = {
-            k: v
-            for k, v in os.environ.items()
-            if k not in ("AWS_ROLE_ARN", "AWS_WEB_IDENTITY_TOKEN_FILE")
-        }
+        env = {k: v for k, v in os.environ.items() if k not in ("AWS_ROLE_ARN", "AWS_WEB_IDENTITY_TOKEN_FILE")}
         with patch.dict(os.environ, env, clear=True):
             with patch("boto3.client", return_value=mock_sts_client):
                 # Role ARN with path
@@ -2829,19 +2713,10 @@ def test_is_already_running_as_role_get_caller_identity_fails():
     mock_sts_client.get_caller_identity.side_effect = Exception("No credentials found")
 
     with patch.dict(os.environ, {}, clear=False):
-        env = {
-            k: v
-            for k, v in os.environ.items()
-            if k not in ("AWS_ROLE_ARN", "AWS_WEB_IDENTITY_TOKEN_FILE")
-        }
+        env = {k: v for k, v in os.environ.items() if k not in ("AWS_ROLE_ARN", "AWS_WEB_IDENTITY_TOKEN_FILE")}
         with patch.dict(os.environ, env, clear=True):
             with patch("boto3.client", return_value=mock_sts_client):
-                assert (
-                    base_aws_llm._is_already_running_as_role(
-                        "arn:aws:iam::123456789012:role/SomeRole"
-                    )
-                    is False
-                )
+                assert base_aws_llm._is_already_running_as_role("arn:aws:iam::123456789012:role/SomeRole") is False
 
 
 def test_get_credentials_ecs_same_role_skips_assume_role():
@@ -3002,20 +2877,11 @@ def test_is_already_running_as_role_cross_account_same_name():
     }
 
     with patch.dict(os.environ, {}, clear=False):
-        env = {
-            k: v
-            for k, v in os.environ.items()
-            if k not in ("AWS_ROLE_ARN", "AWS_WEB_IDENTITY_TOKEN_FILE")
-        }
+        env = {k: v for k, v in os.environ.items() if k not in ("AWS_ROLE_ARN", "AWS_WEB_IDENTITY_TOKEN_FILE")}
         with patch.dict(os.environ, env, clear=True):
             with patch("boto3.client", return_value=mock_sts_client):
                 # Target is same role name but in account 222222222222
-                assert (
-                    base_aws_llm._is_already_running_as_role(
-                        "arn:aws:iam::222222222222:role/MyRole"
-                    )
-                    is False
-                )
+                assert base_aws_llm._is_already_running_as_role("arn:aws:iam::222222222222:role/MyRole") is False
 
 
 def test_is_already_running_as_role_cross_partition():
@@ -3030,20 +2896,11 @@ def test_is_already_running_as_role_cross_partition():
     }
 
     with patch.dict(os.environ, {}, clear=False):
-        env = {
-            k: v
-            for k, v in os.environ.items()
-            if k not in ("AWS_ROLE_ARN", "AWS_WEB_IDENTITY_TOKEN_FILE")
-        }
+        env = {k: v for k, v in os.environ.items() if k not in ("AWS_ROLE_ARN", "AWS_WEB_IDENTITY_TOKEN_FILE")}
         with patch.dict(os.environ, env, clear=True):
             with patch("boto3.client", return_value=mock_sts_client):
                 # Same account and role but aws-cn partition
-                assert (
-                    base_aws_llm._is_already_running_as_role(
-                        "arn:aws-cn:iam::123456789012:role/MyRole"
-                    )
-                    is False
-                )
+                assert base_aws_llm._is_already_running_as_role("arn:aws-cn:iam::123456789012:role/MyRole") is False
 
 
 def test_is_already_running_as_role_invalid_target_arn():
@@ -3127,9 +2984,7 @@ def test_sign_request_with_none_header_values():
 
         # None-valued headers must NOT appear in the returned headers
         for header_name, header_value in result_headers.items():
-            assert (
-                header_value is not None
-            ), f"Header '{header_name}' has None value in returned headers"
+            assert header_value is not None, f"Header '{header_name}' has None value in returned headers"
 
 
 def test_is_already_running_as_role_ssl_verify_passed():
@@ -3144,22 +2999,14 @@ def test_is_already_running_as_role_ssl_verify_passed():
     }
 
     with patch.dict(os.environ, {}, clear=False):
-        env = {
-            k: v
-            for k, v in os.environ.items()
-            if k not in ("AWS_ROLE_ARN", "AWS_WEB_IDENTITY_TOKEN_FILE")
-        }
+        env = {k: v for k, v in os.environ.items() if k not in ("AWS_ROLE_ARN", "AWS_WEB_IDENTITY_TOKEN_FILE")}
         with patch.dict(os.environ, env, clear=True):
-            with patch(
-                "boto3.client", return_value=mock_sts_client
-            ) as mock_boto3_client:
+            with patch("boto3.client", return_value=mock_sts_client) as mock_boto3_client:
                 base_aws_llm._is_already_running_as_role(
                     "arn:aws:iam::123456789012:role/MyRole",
                     ssl_verify="/path/to/ca-bundle.crt",
                 )
-                mock_boto3_client.assert_called_once_with(
-                    "sts", verify="/path/to/ca-bundle.crt"
-                )
+                mock_boto3_client.assert_called_once_with("sts", verify="/path/to/ca-bundle.crt")
 
 
 # ---------------------------------------------------------------------------
@@ -3189,9 +3036,7 @@ class TestGetBedrockModelIdArnHandling:
     def test_arn_with_bedrock_prefix_is_stripped_and_encoded(self):
         """bedrock/arn:... must not appear verbatim in the model_id."""
         model_id = self._call(f"bedrock/{self.ARN}")
-        assert (
-            "bedrock/arn" not in model_id
-        ), f"'bedrock/' prefix not stripped; got: {model_id}"
+        assert "bedrock/arn" not in model_id, f"'bedrock/' prefix not stripped; got: {model_id}"
         # Must be URL-encoded (colons → %3A)
         assert "%3A" in model_id, f"ARN not URL-encoded; got: {model_id}"
         assert "%2F" in model_id, f"ARN slashes not URL-encoded; got: {model_id}"
@@ -3210,12 +3055,8 @@ class TestGetBedrockModelIdArnHandling:
         strip_bedrock_routing_prefix() has no break and handles this correctly.
         """
         model_id = self._call(f"bedrock/invoke/{self.ARN}")
-        assert (
-            "invoke/" not in model_id
-        ), f"'invoke/' prefix not stripped; got: {model_id}"
-        assert (
-            "bedrock/" not in model_id
-        ), f"'bedrock/' prefix not stripped; got: {model_id}"
+        assert "invoke/" not in model_id, f"'invoke/' prefix not stripped; got: {model_id}"
+        assert "bedrock/" not in model_id, f"'bedrock/' prefix not stripped; got: {model_id}"
         assert "%3A" in model_id, f"ARN not URL-encoded; got: {model_id}"
         assert "%2F" in model_id, f"ARN slashes not URL-encoded; got: {model_id}"
 
@@ -3242,13 +3083,8 @@ class TestGetBedrockModelIdArnHandling:
             stream=True,
         )
         encoded_arn = urllib.parse.quote(self.ARN, safe="")
-        expected = (
-            f"https://bedrock-runtime.us-east-1.amazonaws.com"
-            f"/model/{encoded_arn}/invoke-with-response-stream"
-        )
-        assert (
-            url == expected
-        ), f"URL mismatch:\n  got:      {url}\n  expected: {expected}"
+        expected = f"https://bedrock-runtime.us-east-1.amazonaws.com/model/{encoded_arn}/invoke-with-response-stream"
+        assert url == expected, f"URL mismatch:\n  got:      {url}\n  expected: {expected}"
 
     def test_regular_model_id_unaffected(self):
         """Non-ARN model IDs must continue to work as before."""
@@ -3643,6 +3479,7 @@ def _vcr_outcome_gate(request, vcr):
     yield
     record_vcr_outcome(request, vcr)
 
+
 @pytest.fixture(scope="session")
 def event_loop():
     try:
@@ -3651,6 +3488,7 @@ def event_loop():
         loop = asyncio.new_event_loop()
     yield loop
     loop.close()
+
 
 @pytest.fixture(scope="function")
 def setup_and_teardown(event_loop):
@@ -3685,6 +3523,7 @@ def setup_and_teardown(event_loop):
     if pending:
         event_loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
 
+
 _SCALAR_DEFAULTS = {
     "num_retries": getattr(litellm, "num_retries", None),
     "set_verbose": getattr(litellm, "set_verbose", False),
@@ -3699,13 +3538,16 @@ _SCALAR_DEFAULTS = {
     "cohere_key": getattr(litellm, "cohere_key", None),
 }
 
+
 @pytest.fixture
 def base_aws_llm():
     return BaseAWSLLM()
 
+
 @pytest.fixture
 def mock_credentials():
     return Credentials(access_key="test_access", secret_key="test_secret", token="test_token")
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 def test_get_cache_key(base_aws_llm):
@@ -3716,6 +3558,7 @@ def test_get_cache_key(base_aws_llm):
     cache_key = base_aws_llm.get_cache_key(test_args)
     assert isinstance(cache_key, str)
     assert len(cache_key) == 64  # SHA-256 produces 64 character hex string
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 @patch("boto3.client")
@@ -3750,6 +3593,7 @@ def test_auth_with_web_identity_token(mock_get_secret, mock_boto3_client, base_a
     assert isinstance(credentials, Credentials)
     assert ttl == 3540  # default TTL (3600 - 60)
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 @patch("boto3.client")
 def test_auth_with_aws_role(mock_boto3_client, base_aws_llm):
@@ -3777,6 +3621,7 @@ def test_auth_with_aws_role(mock_boto3_client, base_aws_llm):
     assert isinstance(credentials, Credentials)
     assert isinstance(ttl, float)
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 @patch("boto3.Session")
 def test_auth_with_aws_profile(mock_session, base_aws_llm, mock_credentials):
@@ -3789,6 +3634,7 @@ def test_auth_with_aws_profile(mock_session, base_aws_llm, mock_credentials):
 
     assert credentials == mock_credentials
     assert ttl is None
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 def test_auth_with_aws_session_token(base_aws_llm):
@@ -3803,6 +3649,7 @@ def test_auth_with_aws_session_token(base_aws_llm):
     assert credentials.secret_key == "test_secret"
     assert credentials.token == "test_token"
     assert ttl is None
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 @patch("boto3.Session")
@@ -3821,6 +3668,7 @@ def test_auth_with_access_key_and_secret_key(mock_session, base_aws_llm, mock_cr
     assert credentials == mock_credentials
     assert ttl == 3540  # default TTL (3600 - 60)
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 @patch("boto3.Session")
 def test_auth_with_env_vars(mock_session, base_aws_llm, mock_credentials):
@@ -3833,6 +3681,7 @@ def test_auth_with_env_vars(mock_session, base_aws_llm, mock_credentials):
 
     assert credentials == mock_credentials
     assert ttl is None
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 def test_get_runtime_endpoint(base_aws_llm):
@@ -3848,17 +3697,20 @@ def test_get_runtime_endpoint(base_aws_llm):
     assert endpoint_url == "https://bedrock-runtime.us-east-1.amazonaws.com"
     assert proxy_endpoint_url == "https://bedrock-runtime.us-east-1.amazonaws.com"
 
+
 @pytest.fixture
 def clear_cache(base_aws_llm):
     """Clear the cache before each test"""
     base_aws_llm.iam_cache.in_memory_cache.cache_dict = {}
     yield
 
+
 @pytest.fixture
 def _pr4_bedrock_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("AWS_ACCESS_KEY_ID", "pr4-test-aws-access-key")
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "pr4-test-aws-secret-key")
     monkeypatch.setenv("AWS_REGION_NAME", "us-east-1")
+
 
 @pytest.mark.usefixtures("_pr4_bedrock_env", "_vcr_outcome_gate", "setup_and_teardown")
 def test_bedrock_completion_with_region_name():
@@ -3916,6 +3768,7 @@ def test_bedrock_completion_with_region_name():
         pattern = r"us-west-12/bedrock/aws4_request"
         assert re.search(pattern, _authorization_header) is not None
 
+
 @pytest.mark.usefixtures("_pr4_bedrock_env", "_vcr_outcome_gate", "setup_and_teardown")
 def test_bedrock_completion_with_dynamic_authentication_params():
     litellm.turn_on_debug()
@@ -3966,6 +3819,7 @@ def test_bedrock_completion_with_dynamic_authentication_params():
         )
         assert re.search(pattern, _authorization_header) is not None
 
+
 @pytest.mark.usefixtures("_pr4_bedrock_env", "_vcr_outcome_gate", "setup_and_teardown")
 def test_bedrock_completion_with_dynamic_bedrock_runtime_endpoint():
     litellm.turn_on_debug()
@@ -4006,10 +3860,12 @@ def test_bedrock_completion_with_dynamic_bedrock_runtime_endpoint():
         mock_post.assert_called_once()
         assert mock_post.call_args.kwargs["url"] == "https://my-fake-endpoint.com/model/cohere.command-r-v1:0/invoke"
 
+
 class DummyCredentials:
     access_key = "dummy_access"
     secret_key = "dummy_secret"
     token = "dummy_token"
+
 
 @pytest.mark.usefixtures("_pr4_bedrock_env", "_vcr_outcome_gate", "setup_and_teardown")
 @pytest.mark.parametrize(
@@ -4148,9 +4004,13 @@ def test_signing_preserves_unrelated_import_failure(missing):
     with patch("builtins.__import__", side_effect=failure):
         with pytest.raises(ImportError) as error:
             llm.get_request_headers(
-                credentials=Credentials("key", "secret"), aws_region_name="us-east-1",
-                extra_headers=None, endpoint_url="https://bedrock-runtime.us-east-1.amazonaws.com",
-                data="{}", headers={}, supports_bearer_token=False,
+                credentials=Credentials("key", "secret"),
+                aws_region_name="us-east-1",
+                extra_headers=None,
+                endpoint_url="https://bedrock-runtime.us-east-1.amazonaws.com",
+                data="{}",
+                headers={},
+                supports_bearer_token=False,
             )
     if missing == "botocore":
         assert "pip install boto3" in str(error.value)
@@ -4169,11 +4029,25 @@ def test_json_signers_report_only_missing_aws_dependency(missing, shared_signer)
     from functools import partial
 
     sign = (
-        partial(sign_aws_json_post, lambda: Credentials("key", "secret"), "bedrock", "us-east-1",
-                "https://bedrock-runtime.us-east-1.amazonaws.com", "{}", {})
-        if shared_signer else
-        partial(llm._sign_request, service_name="bedrock", headers={}, optional_params={}, request_data={},
-                api_base="https://bedrock-runtime.us-east-1.amazonaws.com", api_key="")
+        partial(
+            sign_aws_json_post,
+            lambda: Credentials("key", "secret"),
+            "bedrock",
+            "us-east-1",
+            "https://bedrock-runtime.us-east-1.amazonaws.com",
+            "{}",
+            {},
+        )
+        if shared_signer
+        else partial(
+            llm._sign_request,
+            service_name="bedrock",
+            headers={},
+            optional_params={},
+            request_data={},
+            api_base="https://bedrock-runtime.us-east-1.amazonaws.com",
+            api_key="",
+        )
     )
     with patch.dict(os.environ, {}, clear=True), patch("builtins.__import__", side_effect=failure):
         with pytest.raises(ImportError) as error:
@@ -4214,8 +4088,12 @@ def test_shared_json_signer_preserves_body_and_signs_for_the_requested_service()
 
     body = '{"message":"ping"}'
     request = sign_aws_json_post(
-        lambda: Credentials("test-key", "test-secret"), "s3", "us-west-2",
-        "https://s3.us-west-2.amazonaws.com", body, {"Content-Type": "application/json"},
+        lambda: Credentials("test-key", "test-secret"),
+        "s3",
+        "us-west-2",
+        "https://s3.us-west-2.amazonaws.com",
+        body,
+        {"Content-Type": "application/json"},
     )
     assert request.body == body
     assert "/us-west-2/s3/aws4_request" in request.headers["Authorization"]

@@ -163,7 +163,10 @@ async def test_approval_commits_version_archive_history_and_review(pending_updat
     assert history[0].published_by == "integration-reviewer"
     assert history[1].published_by == case.original.created_by
     for version, publication, manifest in zip(
-        history, (case.proposal, case.original), (published_manifest, {**case.original.manifest, "_litellm_published_by": case.original.created_by}), strict=True
+        history,
+        (case.proposal, case.original),
+        (published_manifest, {**case.original.manifest, "_litellm_published_by": case.original.created_by}),
+        strict=True,
     ):
         assert version.manifest == {**manifest, "version": version.version}
         assert await case.publications.version_content(metadata, version.id) == publication.content
@@ -382,7 +385,8 @@ async def test_submission_pages_filter_owner_and_status_before_limit(pending_upd
 
 @pytest.mark.parametrize("completion_seconds", (13, 21), ids=("before-deadline", "at-deadline"))
 async def test_scan_claim_retry_and_late_result_preserve_proposal(
-    pending_update: PendingUpdate, completion_seconds: int,
+    pending_update: PendingUpdate,
+    completion_seconds: int,
 ) -> None:
     from datetime import datetime, timedelta, timezone
 
@@ -392,35 +396,61 @@ async def test_scan_claim_retry_and_late_result_preserve_proposal(
     case: Final = pending_update
     now: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
     first: Final = SkillScan(
-        id="first", status="running", requested_by="reviewer", started_at=now,
+        id="first",
+        status="running",
+        requested_by="reviewer",
+        started_at=now,
         expires_at=now + timedelta(seconds=10),
     )
     started: Final = await case.submissions.start_scan(case.submission.id, first)
     assert isinstance(started, SkillScanInput)
     assert started.content == case.proposal.content
     assert started.scan.archive_sha256 == hashlib.sha256(case.proposal.content or b"").hexdigest()
-    duplicate: Final = await case.submissions.start_scan(case.submission.id, first.model_copy(update={"id": "duplicate"}))
+    duplicate: Final = await case.submissions.start_scan(
+        case.submission.id, first.model_copy(update={"id": "duplicate"})
+    )
     assert isinstance(duplicate, SubmissionConflict)
-    second: Final = first.model_copy(update={
-        "id": "second", "started_at": now + timedelta(seconds=11), "expires_at": now + timedelta(seconds=21),
-    })
+    second: Final = first.model_copy(
+        update={
+            "id": "second",
+            "started_at": now + timedelta(seconds=11),
+            "expires_at": now + timedelta(seconds=21),
+        }
+    )
     retry: Final = await case.submissions.start_scan(case.submission.id, second)
     assert isinstance(retry, SkillScanInput)
     report: Final = SkillScanReport(
-        scanner_version="test-version", complete=False, scan_mode="static-only", risk_score=90, findings=(),
+        scanner_version="test-version",
+        complete=False,
+        scan_mode="static-only",
+        risk_score=90,
+        findings=(),
     )
-    await case.submissions.finish_scan(case.submission.id, started.scan.model_copy(update={
-        "status": "completed", "report": report, "completed_at": now + timedelta(seconds=12),
-    }))
+    await case.submissions.finish_scan(
+        case.submission.id,
+        started.scan.model_copy(
+            update={
+                "status": "completed",
+                "report": report,
+                "completed_at": now + timedelta(seconds=12),
+            }
+        ),
+    )
     assert await case.submissions.get_scan(case.submission.id) == retry.scan
-    completed: Final = retry.scan.model_copy(update={
-        "status": "completed", "report": report, "completed_at": now + timedelta(seconds=completion_seconds),
-    })
+    completed: Final = retry.scan.model_copy(
+        update={
+            "status": "completed",
+            "report": report,
+            "completed_at": now + timedelta(seconds=completion_seconds),
+        }
+    )
     expected: Final = completed if completion_seconds < 21 else retry.scan.at(now + timedelta(seconds=21))
     await case.submissions.finish_scan(case.submission.id, completed)
     assert await case.submissions.get_scan(case.submission.id) == expected
     assert await case.submissions.get(case.submission.id, None) == case.submission
-    approved: Final = await case.submissions.review(case.submission.id, "reviewer", True, None, publication_base_url="https://gateway.test")
+    approved: Final = await case.submissions.review(
+        case.submission.id, "reviewer", True, None, publication_base_url="https://gateway.test"
+    )
     assert isinstance(approved, SubmissionReviewed)
     assert await case.submissions.get_scan(case.submission.id) == expected
     denied: Final = await case.submissions.start_scan(case.submission.id, second)
@@ -438,18 +468,30 @@ async def test_metadata_scan_requires_the_matching_managed_archive(
 
     case: Final = pending_update
     submission: Final = await case.submissions.submit(
-        replace(case.original, content=None, manifest={
-            **case.original.manifest,
-            **({"source": {"source": "archive", "url": "https://example.org/skill.zip"}} if remote else {}),
-        }), "member", PluginPublicationBase(case.base.id, case.base.updated_at)
+        replace(
+            case.original,
+            content=None,
+            manifest={
+                **case.original.manifest,
+                **({"source": {"source": "archive", "url": "https://example.org/skill.zip"}} if remote else {}),
+            },
+        ),
+        "member",
+        PluginPublicationBase(case.base.id, case.base.updated_at),
     )
     if not available:
         write_rows('DELETE FROM "LiteLLM_ClaudeCodePluginUpload" WHERE plugin_name=%s', (case.original.name,))
     now: Final = datetime.now(timezone.utc)
-    result: Final = await case.submissions.start_scan(submission.id, SkillScan(
-        id="metadata-scan", status="running", requested_by="admin", started_at=now,
-        expires_at=now + timedelta(seconds=10),
-    ))
+    result: Final = await case.submissions.start_scan(
+        submission.id,
+        SkillScan(
+            id="metadata-scan",
+            status="running",
+            requested_by="admin",
+            started_at=now,
+            expires_at=now + timedelta(seconds=10),
+        ),
+    )
     if available or remote:
         assert isinstance(result, SkillScanInput)
         assert result.content == (None if remote else case.original.content)
@@ -468,16 +510,31 @@ async def test_owner_edits_preserve_base_and_require_review_of_new_revision(pend
     edited: Final = await case.submissions.edit(case.submission.id, case.submission.submitted_by, 0, replacement)
     assert isinstance(edited, SkillSubmission)
     assert (edited.revision, edited.submitted_by, edited.created_at, edited.base_updated_at) == (
-        1, case.submission.submitted_by, case.submission.created_at, case.submission.base_updated_at,
+        1,
+        case.submission.submitted_by,
+        case.submission.created_at,
+        case.submission.base_updated_at,
     )
     assert await case.submissions.get_archive(edited.id, edited.submitted_by) == replacement.content
     assert _published_rows(case.original.name) == before
     for revision in (None, 0):
-        stale: Final = await case.submissions.review(edited.id, "reviewer", True, None,
-            publication_base_url="https://skills.example.test", expected_revision=revision)
+        stale: Final = await case.submissions.review(
+            edited.id,
+            "reviewer",
+            True,
+            None,
+            publication_base_url="https://skills.example.test",
+            expected_revision=revision,
+        )
         assert isinstance(stale, SubmissionConflict)
-    reviewed: Final = await case.submissions.review(edited.id, "reviewer", True, None,
-        publication_base_url="https://skills.example.test", expected_revision=edited.revision)
+    reviewed: Final = await case.submissions.review(
+        edited.id,
+        "reviewer",
+        True,
+        None,
+        publication_base_url="https://skills.example.test",
+        expected_revision=edited.revision,
+    )
     assert isinstance(reviewed, SubmissionReviewed)
     current: Final = await case.publications.get_metadata(case.original.name)
     assert current is not None
@@ -493,19 +550,40 @@ async def test_owner_mutation_racing_approval_has_one_winner(pending_update: Pen
         blocker.execute('SELECT id FROM "LiteLLM_SkillSubmission" WHERE id=%s FOR UPDATE', (case.submission.id,))
         blocker_pid: Final = str(blocker.info.backend_pid)
         requests: Final = (
-            asyncio.create_task(case.submissions.edit(case.submission.id, case.submission.submitted_by, 0,
-                _publication(case.original.name, "Concurrent owner edit"))) if action == "edit" else
-            asyncio.create_task(case.submissions.withdraw(case.submission.id, case.submission.submitted_by, 0)),
-            asyncio.create_task(case.submissions.review(case.submission.id, "reviewer", True, None,
-                publication_base_url="https://skills.example.test", expected_revision=0)),
+            asyncio.create_task(
+                case.submissions.edit(
+                    case.submission.id,
+                    case.submission.submitted_by,
+                    0,
+                    _publication(case.original.name, "Concurrent owner edit"),
+                )
+            )
+            if action == "edit"
+            else asyncio.create_task(case.submissions.withdraw(case.submission.id, case.submission.submitted_by, 0)),
+            asyncio.create_task(
+                case.submissions.review(
+                    case.submission.id,
+                    "reviewer",
+                    True,
+                    None,
+                    publication_base_url="https://skills.example.test",
+                    expected_revision=0,
+                )
+            ),
         )
         try:
-            await asyncio.to_thread(eventually, lambda: read_rows(
-                """WITH RECURSIVE blocked AS (
+            await asyncio.to_thread(
+                eventually,
+                lambda: read_rows(
+                    """WITH RECURSIVE blocked AS (
                        SELECT %s::integer AS pid UNION SELECT a.pid FROM pg_stat_activity a
                        JOIN blocked b ON b.pid = ANY(pg_blocking_pids(a.pid))
-                   ) SELECT pid FROM blocked WHERE pid<>%s::integer""", (blocker_pid, blocker_pid)),
-                lambda rows: len(rows) == 2, seconds=3)
+                   ) SELECT pid FROM blocked WHERE pid<>%s::integer""",
+                    (blocker_pid, blocker_pid),
+                ),
+                lambda rows: len(rows) == 2,
+                seconds=3,
+            )
         finally:
             blocker.rollback()
             results: Final = await asyncio.gather(*requests)

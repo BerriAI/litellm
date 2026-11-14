@@ -381,7 +381,10 @@ def test_importing_sdk_code_while_another_thread_initializes_the_sdk_does_not_ha
 def test_every_use_after_a_failed_sdk_init_raises_the_init_error(tmp_path: Path):
     sdk_root: Final = _write_sdk(tmp_path / "sdk", _SDK_WHOSE_INIT_FAILS)
 
-    assert _run(_RUN_LITE_AGAINST_SDK_AT, (str(sdk_root),), tmp_path) == ["ImportError: a dependency of the SDK is broken"] * 3
+    assert (
+        _run(_RUN_LITE_AGAINST_SDK_AT, (str(sdk_root),), tmp_path)
+        == ["ImportError: a dependency of the SDK is broken"] * 3
+    )
 
 
 def test_lite_keeps_an_sdk_that_was_already_imported(

@@ -342,7 +342,6 @@ def test_azure_gpt_4o_with_tool_call_and_response_format(api_version):
     from pydantic import BaseModel
     import litellm
 
-
     client = AzureOpenAI(
         api_key="fake-key",
         base_url="https://fake-azure.openai.azure.com",
@@ -513,12 +512,8 @@ def test_map_openai_params():
 @pytest.mark.usefixtures("fake_provider_credentials")
 @pytest.mark.parametrize("max_retries", [0, 4])
 @pytest.mark.parametrize("stream", [True, False])
-@patch(
-    "litellm.main.azure_chat_completions.make_sync_azure_openai_chat_completion_request"
-)
-def test_azure_max_retries_0(
-    mock_make_sync_azure_openai_chat_completion_request, max_retries, stream
-):
+@patch("litellm.main.azure_chat_completions.make_sync_azure_openai_chat_completion_request")
+def test_azure_max_retries_0(mock_make_sync_azure_openai_chat_completion_request, max_retries, stream):
     import litellm
     from litellm import completion
 
@@ -537,10 +532,7 @@ def test_azure_max_retries_0(
 
     mock_make_sync_azure_openai_chat_completion_request.assert_called_once()
     assert (
-        mock_make_sync_azure_openai_chat_completion_request.call_args.kwargs[
-            "azure_client"
-        ].max_retries
-        == max_retries
+        mock_make_sync_azure_openai_chat_completion_request.call_args.kwargs["azure_client"].max_retries == max_retries
     )
 
 
@@ -549,9 +541,7 @@ def test_azure_max_retries_0(
 @pytest.mark.parametrize("stream", [True, False])
 @patch("litellm.main.azure_chat_completions.make_azure_openai_chat_completion_request")
 @pytest.mark.asyncio
-async def test_async_azure_max_retries_0(
-    make_azure_openai_chat_completion_request, max_retries, stream
-):
+async def test_async_azure_max_retries_0(make_azure_openai_chat_completion_request, max_retries, stream):
     import litellm
     from litellm import acompletion
 
@@ -569,12 +559,7 @@ async def test_async_azure_max_retries_0(
         print(e)
 
     make_azure_openai_chat_completion_request.assert_called_once()
-    assert (
-        make_azure_openai_chat_completion_request.call_args.kwargs[
-            "azure_client"
-        ].max_retries
-        == max_retries
-    )
+    assert make_azure_openai_chat_completion_request.call_args.kwargs["azure_client"].max_retries == max_retries
 
 
 def test_azure_openai_responses_bridge():
@@ -596,10 +581,7 @@ def test_azure_openai_responses_bridge():
             print(e)
 
         mock_responses.assert_called_once()
-        assert (
-            mock_responses.call_args.kwargs["model"]
-            == "azure/test-azure-computer-use-preview"
-        )
+        assert mock_responses.call_args.kwargs["model"] == "azure/test-azure-computer-use-preview"
         assert mock_responses.call_args.kwargs["custom_llm_provider"] == "azure"
 
 
@@ -644,22 +626,9 @@ def test_azure_with_content_safety_error():
     assert e.provider_specific_fields is not None
     print("got provider_specific_fields=", e.provider_specific_fields)
     assert e.provider_specific_fields.get("innererror") is not None
-    assert (
-        e.provider_specific_fields["innererror"]["code"]
-        == "ResponsibleAIPolicyViolation"
-    )
-    assert (
-        e.provider_specific_fields["innererror"]["content_filter_result"]["violence"][
-            "filtered"
-        ]
-        is True
-    )
-    assert (
-        e.provider_specific_fields["innererror"]["content_filter_result"]["violence"][
-            "severity"
-        ]
-        == "high"
-    )
+    assert e.provider_specific_fields["innererror"]["code"] == "ResponsibleAIPolicyViolation"
+    assert e.provider_specific_fields["innererror"]["content_filter_result"]["violence"]["filtered"] is True
+    assert e.provider_specific_fields["innererror"]["content_filter_result"]["violence"]["severity"] == "high"
 
 
 def _azure_sse_body(chunks: tuple[Mapping[str, object], ...]) -> str:
@@ -684,9 +653,7 @@ def test_azure_chat_stream_preserves_text_and_special_characters():
             "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
         },
     )
-    route: Final = respx.post(
-        url__regex=r"https://azure-stream\.openai\.azure\.com/.*/chat/completions.*"
-    ).mock(
+    route: Final = respx.post(url__regex=r"https://azure-stream\.openai\.azure\.com/.*/chat/completions.*").mock(
         return_value=httpx.Response(
             200,
             text=_azure_sse_body(response_chunks),
@@ -750,9 +717,7 @@ def test_azure_chat_stream_reassembles_tool_call_arguments():
             ],
         },
     )
-    route: Final = respx.post(
-        url__regex=r"https://azure-tool-stream\.openai\.azure\.com/.*/chat/completions.*"
-    ).mock(
+    route: Final = respx.post(url__regex=r"https://azure-tool-stream\.openai\.azure\.com/.*/chat/completions.*").mock(
         return_value=httpx.Response(
             200,
             text=_azure_sse_body(response_chunks),

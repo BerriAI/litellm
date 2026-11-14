@@ -453,7 +453,9 @@ def test_settings_store_truthiness_stops_at_the_first_key() -> None:
         resolutions.append(key)
         return original(self, key)
 
-    with patch.object(SettingsStore, "_resolution_for", counted):  # test-quality-ok: counting resolutions is the only way to observe that truthiness short-circuits
+    with patch.object(
+        SettingsStore, "_resolution_for", counted
+    ):  # test-quality-ok: counting resolutions is the only way to observe that truthiness short-circuits
         assert bool(store) is True
         truthiness_resolutions: Final = len(resolutions)
         resolutions.clear()

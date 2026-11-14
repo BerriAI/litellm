@@ -26,18 +26,23 @@ def test_fireworks_non_nomic_embedding_drops_dimensions():
     config: Final = FireworksAIEmbeddingConfig()
 
     assert config.get_supported_openai_params("other/model") == []
-    assert config.map_openai_params(
-        non_default_params={"dimensions": 256},
-        optional_params={},
-        model="other/model",
-    ) == {}
+    assert (
+        config.map_openai_params(
+            non_default_params={"dimensions": 256},
+            optional_params={},
+            model="other/model",
+        )
+        == {}
+    )
     assert not config.is_fireworks_embedding_model("other/model")
 
 
 @respx.mock
 def test_fireworks_embeddings_forwards_supported_dimensions(monkeypatch: pytest.MonkeyPatch):
     model_key: Final = "fireworks_ai/nomic-ai/nomic-embed-text-v1.5"
-    monkeypatch.setitem(litellm.model_cost, model_key, {**litellm.model_cost[model_key], "input_cost_per_token": 2.5e-08})
+    monkeypatch.setitem(
+        litellm.model_cost, model_key, {**litellm.model_cost[model_key], "input_cost_per_token": 2.5e-08}
+    )
     route: Final = respx.post("https://fireworks.example/v1/embeddings").mock(
         return_value=httpx.Response(
             200,

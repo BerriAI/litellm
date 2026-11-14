@@ -351,7 +351,7 @@ def _post_chat(rig: Rig, label: str) -> tuple[int, str]:
 
 def _spend_rows(identities: tuple[str, ...]) -> list[dict[str, JsonValue]]:
     return read_rows(
-        'SELECT request_id FROM "LiteLLM_SpendLogs" WHERE request_id = ANY(string_to_array(%s, \',\'))',
+        "SELECT request_id FROM \"LiteLLM_SpendLogs\" WHERE request_id = ANY(string_to_array(%s, ','))",
         (",".join(identities),),
     )
 

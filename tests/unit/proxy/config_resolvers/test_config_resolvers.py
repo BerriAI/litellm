@@ -47,9 +47,7 @@ def test_resolve_fields_empty_db_absent_by_default_falls_to_env():
 def test_resolve_fields_empty_db_is_explicit_clear_when_flag_set():
     # Alerting semantics: a present-but-empty stored value is an explicit clear
     # that must win over a stale env var.
-    values, provenance = resolve_fields(
-        _D, {"client_id": ""}, {"CLIENT_ID": "stale-env"}, empty_db_is_set=True
-    )
+    values, provenance = resolve_fields(_D, {"client_id": ""}, {"CLIENT_ID": "stale-env"}, empty_db_is_set=True)
     assert values["client_id"] == ""
     assert provenance["client_id"] == "db"
 
@@ -58,9 +56,7 @@ def test_sso_descriptor_mapping_is_single_sourced():
     # The write path and read path both consume this mapping; it must cover every
     # env-backed SSO field and map to the uppercase env var.
     assert SSO_FIELD_ENV_VARS["generic_client_id"] == "GENERIC_CLIENT_ID"
-    assert SSO_SECRET_FIELDS == frozenset(
-        {"google_client_secret", "microsoft_client_secret", "generic_client_secret"}
-    )
+    assert SSO_SECRET_FIELDS == frozenset({"google_client_secret", "microsoft_client_secret", "generic_client_secret"})
 
 
 def test_sso_descriptor_mapping_covers_saml_fields():

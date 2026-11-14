@@ -105,7 +105,9 @@ def test_concurrent_success_and_failure_join_callbacks_and_rows_without_credenti
                 responses: Final = tuple(pool.map(request, tags))
             assert tuple(response.status_code for response in responses) == (200, 400, 200, 400)
             assert len(provider.drain()) == 4
-            batches: Final[list[Request]] = []  # mutable-ok: drain() consumes the queue, later polls must keep earlier batches
+            batches: Final[
+                list[Request]
+            ] = []  # mutable-ok: drain() consumes the queue, later polls must keep earlier batches
 
             def delivered() -> tuple[dict, ...]:
                 batches.extend(endpoint.drain())
@@ -249,7 +251,9 @@ def test_streamed_responses_success_callback_carries_provider_apim_request_id(ga
             assert f'"item_id":"msg_{marker}"' in response.text, response.text
             assert '"type":"response.completed"' in response.text, response.text
             assert len(provider.drain()) == 1
-            batches: Final[list[Request]] = []  # mutable-ok: drain() consumes the queue, later polls must keep earlier batches
+            batches: Final[
+                list[Request]
+            ] = []  # mutable-ok: drain() consumes the queue, later polls must keep earlier batches
 
             def delivered() -> tuple[dict, ...]:
                 batches.extend(endpoint.drain())
@@ -334,7 +338,9 @@ def test_non_stream_openai_like_success_callback_carries_provider_headers(gatewa
             assert response.status_code == 200, response.text
             assert response.json()["choices"][0]["message"]["content"] == marker, response.text
             assert len(provider.drain()) == 1
-            batches: Final[list[Request]] = []  # mutable-ok: drain() consumes the queue, later polls must keep earlier batches
+            batches: Final[
+                list[Request]
+            ] = []  # mutable-ok: drain() consumes the queue, later polls must keep earlier batches
 
             def delivered() -> tuple[dict, ...]:
                 batches.extend(endpoint.drain())

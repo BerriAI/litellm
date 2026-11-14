@@ -50,9 +50,7 @@ def test_parasail_dynamic_config_env_vars():
 def test_parasail_provider_detection_by_prefix():
     from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 
-    model, provider, _, api_base = get_llm_provider(
-        "parasail/parasail-llama-33-70b-fp8"
-    )
+    model, provider, _, api_base = get_llm_provider("parasail/parasail-llama-33-70b-fp8")
 
     assert model == "parasail-llama-33-70b-fp8"
     assert provider == "parasail"
@@ -88,10 +86,7 @@ def test_parasail_responses_api_config():
 
     assert isinstance(config, OpenAIResponsesAPIConfig)
     assert config.custom_llm_provider == "parasail"
-    assert (
-        config.get_complete_url(api_base=None, litellm_params={})
-        == f"{PARASAIL_API_BASE}/responses"
-    )
+    assert config.get_complete_url(api_base=None, litellm_params={}) == f"{PARASAIL_API_BASE}/responses"
 
 
 def test_parasail_responses_api_honors_api_base_override():

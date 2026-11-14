@@ -75,9 +75,7 @@ class FakeSandbox:
     async def exec(self, cmd: list[str], *, env: Any = None, cwd: Any = None) -> Any:
         raise NotImplementedError
 
-    async def run(
-        self, cmd: list[str], *, env: Any = None, cwd: Any = None, timeout: Any = None
-    ) -> CompletedRun:
+    async def run(self, cmd: list[str], *, env: Any = None, cwd: Any = None, timeout: Any = None) -> CompletedRun:
         return CompletedRun(stdout="", stderr="", exit_code=0)
 
     async def read(self, path: str) -> bytes:
@@ -142,9 +140,7 @@ class FakeEndpoint:
         self.exited = True
 
 
-async def script_hello(
-    adapter: FakeAdapter, ctx: SessionContext, prompt: str
-) -> AsyncIterator[Event]:
+async def script_hello(adapter: FakeAdapter, ctx: SessionContext, prompt: str) -> AsyncIterator[Event]:
     yield Text("hello ")
     yield ToolCall(id="t1", name="bash", native_name="Bash", input={"cmd": "ls"})
     yield ToolResult(id="t1", output="a.txt")
@@ -199,9 +195,7 @@ class FakeAdapter(BaseHarnessHandler):
         return [{"role": "user", "content": p} for p in self.prompts]
 
 
-async def script_approval(
-    adapter: FakeAdapter, ctx: SessionContext, prompt: str
-) -> AsyncIterator[Event]:
+async def script_approval(adapter: FakeAdapter, ctx: SessionContext, prompt: str) -> AsyncIterator[Event]:
     approval = Approval(tool="bash", input={"cmd": "rm"})
     yield approval
     decision = await approval.wait()
@@ -232,9 +226,7 @@ def install_adapter(
         {"capabilities": caps, "uses_model_endpoint": uses_endpoint},
     )
     monkeypatch.setattr(runtime, "get_harness_config", lambda harness: config_cls())
-    monkeypatch.setattr(
-        runtime, "get_harness_handler", lambda config: adapter_cls(config)
-    )
+    monkeypatch.setattr(runtime, "get_harness_handler", lambda config: adapter_cls(config))
     monkeypatch.setattr(runtime, "ModelEndpoint", FakeEndpoint)
     monkeypatch.delenv("LITELLM_PROXY_API_BASE", raising=False)
     monkeypatch.delenv("LITELLM_PROXY_API_KEY", raising=False)

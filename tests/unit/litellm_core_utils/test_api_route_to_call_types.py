@@ -87,9 +87,7 @@ class TestFirstCallTypeHasTranslationHandler:
         misordered = {
             route: [call_type.value for call_type in call_types]
             for route, call_types in API_ROUTE_TO_CALL_TYPES.items()
-            if call_types
-            and call_types[0] not in mappings
-            and any(call_type in mappings for call_type in call_types)
+            if call_types and call_types[0] not in mappings and any(call_type in mappings for call_type in call_types)
         }
         assert misordered == {}
 

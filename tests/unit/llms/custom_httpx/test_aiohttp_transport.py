@@ -71,9 +71,7 @@ class MockAiohttpResponse:
         self.status = status
         self.headers = headers or {}
         self.closed = False
-        self.content = MockContent(
-            content_chunks, exception_to_raise, exception_at_chunk
-        )
+        self.content = MockContent(content_chunks, exception_to_raise, exception_at_chunk)
 
     def close(self):
         self.closed = True
@@ -119,9 +117,7 @@ async def test_client_payload_error_mid_stream_raises_read_error():
     transfer_error = aiohttp.http_exceptions.TransferEncodingError(
         message="400, message: Not enough data for satisfy transfer length header."
     )
-    client_payload_error = aiohttp.ClientPayloadError(
-        "Response payload is not completed"
-    )
+    client_payload_error = aiohttp.ClientPayloadError("Response payload is not completed")
     client_payload_error.__cause__ = transfer_error
 
     mock_response = MockAiohttpResponse(
@@ -190,9 +186,7 @@ async def test_bytes_already_read_before_a_dropped_connection_are_not_yielded_ag
 @pytest.mark.asyncio
 async def test_client_payload_error_before_first_chunk_raises_read_error():
     """A connection reset before any body byte must surface, not yield an empty 200 body"""
-    client_error = aiohttp.client_exceptions.ClientPayloadError(
-        "Response payload is not completed"
-    )
+    client_error = aiohttp.client_exceptions.ClientPayloadError("Response payload is not completed")
 
     mock_response = MockAiohttpResponse(
         content_chunks=[b"data1", b"data2"],
@@ -335,9 +329,7 @@ async def test_handle_async_request_uses_env_proxy(monkeypatch):
     monkeypatch.setenv("HTTPS_PROXY", proxy_url)
     monkeypatch.setenv("https_proxy", proxy_url)
     monkeypatch.delenv("DISABLE_AIOHTTP_TRUST_ENV", raising=False)
-    monkeypatch.setattr(
-        "urllib.request.getproxies", lambda: {"http": proxy_url, "https": proxy_url}
-    )
+    monkeypatch.setattr("urllib.request.getproxies", lambda: {"http": proxy_url, "https": proxy_url})
     monkeypatch.setattr("urllib.request.proxy_bypass", lambda host: False)
 
     captured = {}
@@ -427,9 +419,7 @@ async def test_handle_async_request_empty_body_sends_no_data():
     await transport.handle_async_request(empty_request)
     assert captured["data"] is None
 
-    body_request = httpx.Request(
-        "POST", "http://example.com/responses", json={"input": "ping"}
-    )
+    body_request = httpx.Request("POST", "http://example.com/responses", json={"input": "ping"})
     await transport.handle_async_request(body_request)
     assert captured["data"] == body_request.content
     assert captured["data"]
@@ -693,9 +683,7 @@ async def test_handle_closed_session_before_request():
         return _make_mock_session(closed=counts["sessions"] == 1)
 
     transport = LiteLLMAiohttpTransport(client=factory)  # type: ignore
-    response = await transport.handle_async_request(
-        httpx.Request("GET", "http://example.com")
-    )
+    response = await transport.handle_async_request(httpx.Request("GET", "http://example.com"))
 
     assert counts["sessions"] == 2  # Created 2 sessions: closed one, then open one
     assert response.status_code == 200
@@ -724,9 +712,7 @@ async def test_handle_session_closed_during_request():
         return MockSession()
 
     transport = LiteLLMAiohttpTransport(client=factory)  # type: ignore
-    response = await transport.handle_async_request(
-        httpx.Request("GET", "http://example.com")
-    )
+    response = await transport.handle_async_request(httpx.Request("GET", "http://example.com"))
 
     assert counts["requests"] == 2  # First request failed, second succeeded
     assert counts["sessions"] == 2  # Created 2 sessions for retry
@@ -1254,6 +1240,7 @@ def _vcr_outcome_gate(request, vcr):
     yield
     record_vcr_outcome(request, vcr)
 
+
 @pytest.fixture(scope="function")
 def setup_and_teardown():
     """
@@ -1266,10 +1253,12 @@ def setup_and_teardown():
     loop.close()
     asyncio.set_event_loop(None)
 
+
 def _closed_local_port() -> int:
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
         return probe.getsockname()[1]
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 async def test_client_session_helper() -> None:
@@ -1282,6 +1271,7 @@ async def test_client_session_helper() -> None:
     session2: Final = transport.get_valid_client_session()
     assert session2 is session1
     await session1.close()
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 async def test_event_loop_robustness() -> None:
@@ -1301,6 +1291,7 @@ async def test_event_loop_robustness() -> None:
     assert transport.client is session_after_factory
     await session_after_close.close()
     await session_after_factory.close()
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 @pytest.mark.parametrize(("ssl_verify", "expected_ssl"), [(False, False), (None, True)])

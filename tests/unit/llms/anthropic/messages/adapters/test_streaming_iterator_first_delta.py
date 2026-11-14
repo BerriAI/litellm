@@ -1495,7 +1495,9 @@ def _last_delta_types_per_thinking_block(events: List[dict]) -> Tuple[str, ...]:
 
 async def _events_for(chunks: Sequence[MagicMock], is_async: bool) -> List[dict]:
     if is_async:
-        return await _drain_async(AnthropicStreamWrapper(completion_stream=_AsyncStream(list(chunks)), model="mistral-x"))
+        return await _drain_async(
+            AnthropicStreamWrapper(completion_stream=_AsyncStream(list(chunks)), model="mistral-x")
+        )
     return _drain_sync(AnthropicStreamWrapper(completion_stream=iter(chunks), model="mistral-x"))
 
 

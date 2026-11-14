@@ -18,9 +18,7 @@ async def test_team_filter_ui_is_proxy_admin_only(actor: Actor, gateway_client, 
         headers={"Authorization": f"Bearer {actors.keys[actor].cleartext}"},
     )
     expected = 200 if actor == Actor.PROXY_ADMIN else 401
-    assert (
-        resp.status_code == expected
-    ), f"{actor.value}: {resp.status_code} {resp.text}"
+    assert resp.status_code == expected, f"{actor.value}: {resp.status_code} {resp.text}"
 
 
 async def test_team_filter_ui_proxy_admin_sees_cross_org_teams(gateway_client, actors):

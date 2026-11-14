@@ -32,9 +32,7 @@ import pytest
 from litellm.proxy.utils import PrismaClient
 
 
-pytestmark = pytest.mark.skipif(
-    sys.platform == "win32", reason="engine watcher is Unix-only"
-)
+pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="engine watcher is Unix-only")
 
 
 def test_get_engine_pid_extracts_process_pid(prisma_client: PrismaClient) -> None:
@@ -59,9 +57,7 @@ def test_get_engine_pid_returns_zero_when_engine_attr_missing(
     assert prisma_client._get_engine_pid() == 0
 
 
-def test_get_engine_pid_returns_zero_when_client_disconnected(
-    prisma_client: PrismaClient, disconnected_prisma
-) -> None:
+def test_get_engine_pid_returns_zero_when_client_disconnected(prisma_client: PrismaClient, disconnected_prisma) -> None:
     """The reconnect path calls this on an arbitrarily-broken client; it must
     report "no engine" instead of re-raising ClientNotConnectedError."""
     prisma_client.db._original_prisma = disconnected_prisma
@@ -82,15 +78,11 @@ def test_is_engine_alive_false_when_process_lookup_fails(
     prisma_client: PrismaClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     prisma_client._engine_pid = 99999
-    monkeypatch.setattr(
-        "os.kill", MagicMock(side_effect=ProcessLookupError())
-    )
+    monkeypatch.setattr("os.kill", MagicMock(side_effect=ProcessLookupError()))
     assert prisma_client._is_engine_alive() is False
 
 
-def test_is_engine_alive_true_on_permission_error(
-    prisma_client: PrismaClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_is_engine_alive_true_on_permission_error(prisma_client: PrismaClient, monkeypatch: pytest.MonkeyPatch) -> None:
     prisma_client._engine_pid = 1
     monkeypatch.setattr("os.kill", MagicMock(side_effect=PermissionError()))
     assert prisma_client._is_engine_alive() is True
@@ -118,9 +110,7 @@ def test_reap_all_zombies_returns_set_of_reaped_pids(
 def test_reap_all_zombies_handles_no_children_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(
-        "os.waitpid", MagicMock(side_effect=ChildProcessError())
-    )
+    monkeypatch.setattr("os.waitpid", MagicMock(side_effect=ChildProcessError()))
     assert PrismaClient._reap_all_zombies() == set()
 
 
@@ -163,9 +153,7 @@ async def test_try_waitpid_watch_starts_thread_for_live_child(
 async def test_try_waitpid_watch_returns_false_for_non_child(
     prisma_client: PrismaClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(
-        "os.waitpid", MagicMock(side_effect=ChildProcessError())
-    )
+    monkeypatch.setattr("os.waitpid", MagicMock(side_effect=ChildProcessError()))
     assert prisma_client._try_waitpid_watch(123) is False
 
 
@@ -679,10 +667,7 @@ async def test_start_db_health_watchdog_task_wires_engine_replaced_hook(
 
     await prisma_client.start_db_health_watchdog_task()
     try:
-        assert (
-            prisma_client.db.on_engine_replaced
-            == prisma_client._handle_writer_engine_replaced
-        )
+        assert prisma_client.db.on_engine_replaced == prisma_client._handle_writer_engine_replaced
     finally:
         await prisma_client.stop_db_health_watchdog_task()
 

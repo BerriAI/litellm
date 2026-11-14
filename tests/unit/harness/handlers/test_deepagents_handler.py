@@ -185,9 +185,7 @@ async def test_custom_tool(tmp_path: Path, fake_model) -> None:
 
 
 @pytest.mark.parametrize("approve", [True, False])
-async def test_ask_permissions_emit_approval(
-    tmp_path: Path, fake_model, approve: bool
-) -> None:
+async def test_ask_permissions_emit_approval(tmp_path: Path, fake_model, approve: bool) -> None:
     fake_model(
         [
             tool_call("write_file", {"file_path": "/a.txt", "content": "x"}, "c1"),
@@ -247,9 +245,7 @@ async def test_resume_keeps_thread(tmp_path: Path, fake_model) -> None:
 async def test_skills_copied_and_loaded(tmp_path: Path, fake_model) -> None:
     skill = tmp_path / "src-skills" / "greeter"
     skill.mkdir(parents=True)
-    (skill / "SKILL.md").write_text(
-        "---\nname: greeter\ndescription: Says hi\n---\nSay hi.\n"
-    )
+    (skill / "SKILL.md").write_text("---\nname: greeter\ndescription: Says hi\n---\nSay hi.\n")
     work = tmp_path / "work"
     work.mkdir()
     fake_model([final("ok")])
@@ -259,9 +255,7 @@ async def test_skills_copied_and_loaded(tmp_path: Path, fake_model) -> None:
     assert (work / ".deepagents" / "skills" / "greeter" / "SKILL.md").exists()
 
 
-async def test_turn_and_history_before_start_and_after_stop(
-    tmp_path: Path, fake_model
-) -> None:
+async def test_turn_and_history_before_start_and_after_stop(tmp_path: Path, fake_model) -> None:
     fake_model([final("ok")])
     ctx = make_ctx(tmp_path)
     handler = make_handler()
@@ -314,10 +308,7 @@ async def test_sandbox_backend_fs_ops(tmp_path: Path) -> None:
     assert (await backend.aedit("/b.txt", "zzz", "q")).error
     assert (await backend.adelete("/src")).path == "/src"
     assert not (tmp_path / "src").exists()
-    assert (
-        backend.to_real(str(tmp_path / "b.txt"))
-        == str(LocalSandbox(tmp_path).workdir) + "/b.txt"
-    )
+    assert backend.to_real(str(tmp_path / "b.txt")) == str(LocalSandbox(tmp_path).workdir) + "/b.txt"
     sync_ls = await asyncio.to_thread(backend.ls, "/")
     assert [e["path"] for e in sync_ls.entries or []] == ["/b.txt"]
 
@@ -350,9 +341,7 @@ def test_missing_deps_raise_install_hint(monkeypatch: pytest.MonkeyPatch) -> Non
     for mod in [m for m in sys.modules if m.startswith("deepagents")]:
         monkeypatch.delitem(sys.modules, mod)
     monkeypatch.setattr(builtins, "__import__", fake_import)
-    with pytest.raises(
-        HarnessInstallFailed, match="pip install deepagents langchain-litellm"
-    ):
+    with pytest.raises(HarnessInstallFailed, match="pip install deepagents langchain-litellm"):
         dh.load_deps()
 
 
@@ -360,9 +349,7 @@ LIVE_BASE = os.environ.get("LITELLM_PROXY_API_BASE", "")
 LIVE_KEY = os.environ.get("LITELLM_PROXY_API_KEY", "")
 
 
-@pytest.mark.skipif(
-    not (LIVE_BASE and LIVE_KEY), reason="LITELLM_PROXY_API_BASE / KEY not set"
-)
+@pytest.mark.skipif(not (LIVE_BASE and LIVE_KEY), reason="LITELLM_PROXY_API_BASE / KEY not set")
 async def test_live_gateway_write_file(tmp_path: Path) -> None:
     model = os.environ.get("HARNESS_DEEPAGENTS_LIVE_MODEL", "claude-haiku-4-5-20251001")
     ctx = make_ctx(

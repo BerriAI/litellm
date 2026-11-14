@@ -43,9 +43,7 @@ class TestAnthropicBetaHeaderSupport:
 
     def test_get_anthropic_beta_from_headers_whitespace(self):
         """Test header extraction handles whitespace correctly."""
-        headers = {
-            "anthropic-beta": " context-1m-2025-08-07 , computer-use-2024-10-22 "
-        }
+        headers = {"anthropic-beta": " context-1m-2025-08-07 , computer-use-2024-10-22 "}
         result = get_anthropic_beta_from_headers(headers)
         assert result == ["context-1m-2025-08-07", "computer-use-2024-10-22"]
 
@@ -72,9 +70,7 @@ class TestAnthropicBetaHeaderSupport:
     def test_converse_transformation_anthropic_beta(self):
         """Test that Converse API transformation includes anthropic_beta in additionalModelRequestFields."""
         config = AmazonConverseConfig()
-        headers = {
-            "anthropic-beta": "context-1m-2025-08-07,interleaved-thinking-2025-05-14"
-        }
+        headers = {"anthropic-beta": "context-1m-2025-08-07,interleaved-thinking-2025-05-14"}
 
         result = config._transform_request_helper(
             model="anthropic.claude-haiku-4-5-20251001-v1:0",
@@ -308,9 +304,7 @@ class TestAnthropicBetaHeaderSupport:
         """
         config = AmazonConverseConfig()
         # Even if headers contain anthropic-beta, non-Anthropic models should NOT get it
-        headers = {
-            "anthropic-beta": "context-1m-2025-08-07,interleaved-thinking-2025-05-14"
-        }
+        headers = {"anthropic-beta": "context-1m-2025-08-07,interleaved-thinking-2025-05-14"}
 
         # Test with Qwen model (using ARN format like the user's config)
         result = config._transform_request_helper(
@@ -341,9 +335,7 @@ class TestAnthropicBetaHeaderSupport:
         )
 
         additional_fields = result.get("additionalModelRequestFields", {})
-        assert (
-            "anthropic_beta" not in additional_fields
-        ), "anthropic_beta should NOT be added for Llama models."
+        assert "anthropic_beta" not in additional_fields, "anthropic_beta should NOT be added for Llama models."
 
     def test_converse_nova_model_no_anthropic_beta(self):
         """Test that Amazon Nova models do NOT get anthropic_beta in additionalModelRequestFields."""
@@ -359,9 +351,7 @@ class TestAnthropicBetaHeaderSupport:
         )
 
         additional_fields = result.get("additionalModelRequestFields", {})
-        assert (
-            "anthropic_beta" not in additional_fields
-        ), "anthropic_beta should NOT be added for Amazon Nova models."
+        assert "anthropic_beta" not in additional_fields, "anthropic_beta should NOT be added for Amazon Nova models."
 
     def test_converse_anthropic_model_gets_anthropic_beta(self):
         """Test that Anthropic models DO get anthropic_beta in additionalModelRequestFields."""
@@ -377,9 +367,7 @@ class TestAnthropicBetaHeaderSupport:
         )
 
         additional_fields = result.get("additionalModelRequestFields", {})
-        assert (
-            "anthropic_beta" in additional_fields
-        ), "anthropic_beta SHOULD be added for Anthropic models."
+        assert "anthropic_beta" in additional_fields, "anthropic_beta SHOULD be added for Anthropic models."
         assert "context-1m-2025-08-07" in additional_fields["anthropic_beta"]
 
     def test_converse_anthropic_model_with_cross_region_prefix(self):
@@ -397,7 +385,7 @@ class TestAnthropicBetaHeaderSupport:
         )
 
         additional_fields = result.get("additionalModelRequestFields", {})
-        assert (
-            "anthropic_beta" in additional_fields
-        ), "anthropic_beta SHOULD be added for Anthropic models with cross-region prefix."
+        assert "anthropic_beta" in additional_fields, (
+            "anthropic_beta SHOULD be added for Anthropic models with cross-region prefix."
+        )
         assert "context-1m-2025-08-07" in additional_fields["anthropic_beta"]

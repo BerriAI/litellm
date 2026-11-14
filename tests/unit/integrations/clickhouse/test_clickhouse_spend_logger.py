@@ -216,11 +216,16 @@ def test_success_row_mapping():
 def test_provider_request_id_stays_separate_from_message_and_gateway_ids(header_source: str) -> None:
     headers: Final = {"request-id": "req_native"}
     hidden: Final = {"additional_headers": headers} if header_source == "additional_headers" else {}
-    kwargs: Final = {"response_cost": 0.00042, "response_headers": headers if header_source == "response_headers" else None}
+    kwargs: Final = {
+        "response_cost": 0.00042,
+        "response_headers": headers if header_source == "response_headers" else None,
+    }
     payload: Final = cast(StandardLoggingPayload, _payload(id="msg_native", hidden_params=hidden))
     row: Final = spend_log_row_from_payload(payload, kwargs)
     assert (row["provider_request_id"], row["response_id"], row["litellm_call_id"]) == (
-        "req_native", "msg_native", "gateway-call"
+        "req_native",
+        "msg_native",
+        "gateway-call",
     )
 
 

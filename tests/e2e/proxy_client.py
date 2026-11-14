@@ -335,6 +335,7 @@ def await_everywhere[T](
     """`_last_answer` against every replica in turn, each with the full budget, so a
     write counts as visible only once the last replica reflects it, and stop at the
     first replica that never converges. Clock and sleep are injected."""
+
     def read_replica(
         outcome: EverywhereConverged[T] | NeverConvergedOn[T],
         item: tuple[str, ReplicaRead[T]],
@@ -534,9 +535,7 @@ class ProxyClient:
         ).info
 
     @step("Read memory usage from /debug/memory/summary on every proxy replica")
-    def memory_summary_everywhere(
-        self, *, timeout: float | None = None
-    ) -> Mapping[str, Result[MemorySummaryResponse]]:
+    def memory_summary_everywhere(self, *, timeout: float | None = None) -> Mapping[str, Result[MemorySummaryResponse]]:
         return {
             url: transport.get(
                 "/debug/memory/summary",
@@ -686,9 +685,7 @@ class ProxyClient:
         return any(entry.field_name == field_name and entry.field_value is True for entry in fields)
 
     @step("Add a deployment named {body.model_name} that calls {body.litellm_params.model}")
-    def register_model(
-        self, body: ModelNewBody, listed_for: str | None = None, *, provider_live: bool = False
-    ) -> str:
+    def register_model(self, body: ModelNewBody, listed_for: str | None = None, *, provider_live: bool = False) -> str:
         """`create_model` for deployments that carry more than a mode: access groups,
         team scoping, a pinned id. `listed_for` is the virtual key whose /v1/models
         view must list the deployment before it counts as servable, because a
@@ -734,11 +731,16 @@ class ProxyClient:
         return self.transport.post(
             "/model/new",
             headers=self.management_headers(),
-            json=body.model_copy(update={"litellm_params": route_cache_model(
-                body.litellm_params, provider_edge_base,
-                enabled=os.environ.get("E2E_PROVIDER_CACHE", "0") == "1" and not provider_live,
-                mode=body.model_info.mode,
-            )}),
+            json=body.model_copy(
+                update={
+                    "litellm_params": route_cache_model(
+                        body.litellm_params,
+                        provider_edge_base,
+                        enabled=os.environ.get("E2E_PROVIDER_CACHE", "0") == "1" and not provider_live,
+                        mode=body.model_info.mode,
+                    )
+                }
+            ),
             response_type=ModelNewResponse,
         )
 

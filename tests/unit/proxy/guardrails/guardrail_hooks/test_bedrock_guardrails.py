@@ -6646,8 +6646,6 @@ async def test_attachment_scan_skipped_when_subclass_overrides_make_bedrock_api_
     assert mock_post.await_count == 0
 
 
-
-
 @pytest.mark.asyncio
 async def test_bedrock_guardrails_streaming_request_body_mock(aws_test_credentials):
     """Test that the exact request body sent to Bedrock matches expected format when using streaming"""
@@ -6672,9 +6670,7 @@ async def test_bedrock_guardrails_streaming_request_body_mock(aws_test_credentia
         choices=[
             litellm.Choices(
                 index=0,
-                message=litellm.Message(
-                    role="assistant", content="The capital of Spain is Madrid."
-                ),
+                message=litellm.Message(role="assistant", content="The capital of Spain is Madrid."),
                 finish_reason="stop",
             )
         ],
@@ -6697,9 +6693,7 @@ async def test_bedrock_guardrails_streaming_request_body_mock(aws_test_credentia
             "metadata": {"guardrails": ["bedrock-post-guard"]},
         }
 
-        await guardrail.make_bedrock_api_request(
-            source="OUTPUT", response=mock_response, request_data=request_data
-        )
+        await guardrail.make_bedrock_api_request(source="OUTPUT", response=mock_response, request_data=request_data)
 
         mock_async_handler.post.assert_called_once()
 
@@ -6720,9 +6714,7 @@ async def test_bedrock_guardrails_streaming_request_body_mock(aws_test_credentia
         print("Actual Bedrock request body:", json.dumps(actual_body, indent=2))
         print("Expected Bedrock request body:", json.dumps(expected_body, indent=2))
 
-        assert (
-            actual_body == expected_body
-        ), f"Request body mismatch. Expected: {expected_body}, Got: {actual_body}"
+        assert actual_body == expected_body, f"Request body mismatch. Expected: {expected_body}, Got: {actual_body}"
 
 
 @pytest.mark.asyncio
@@ -6741,9 +6733,7 @@ async def test_bedrock_guardrail_aws_param_persistence():
         guardrail_name="bedrock-post-guard",
     )
 
-    with patch.object(
-        guardrail, "get_credentials", wraps=guardrail.get_credentials
-    ) as mock_get_creds:
+    with patch.object(guardrail, "get_credentials", wraps=guardrail.get_credentials) as mock_get_creds:
         for i in range(3):
             request_data = {
                 "model": "gpt-5.5",
@@ -6751,14 +6741,10 @@ async def test_bedrock_guardrail_aws_param_persistence():
                 "stream": False,
                 "metadata": {"guardrails": ["bedrock-post-guard"]},
             }
-            with patch.object(
-                guardrail.async_handler, "post", new_callable=AsyncMock
-            ) as mock_post:
+            with patch.object(guardrail.async_handler, "post", new_callable=AsyncMock) as mock_post:
                 mock_response = AsyncMock()
                 mock_response.status_code = 200
-                mock_response.json = MagicMock(
-                    return_value={"action": "NONE", "outputs": []}
-                )
+                mock_response.json = MagicMock(return_value={"action": "NONE", "outputs": []})
                 mock_post.return_value = mock_response
                 await guardrail.make_bedrock_api_request(
                     source="INPUT",
@@ -6786,9 +6772,7 @@ async def test_bedrock_guardrail_blocked_vs_anonymized_actions_including_content
         BedrockGuardrailResponse,
     )
 
-    guardrail = BedrockGuardrail(
-        guardrailIdentifier="test-guardrail", guardrailVersion="DRAFT"
-    )
+    guardrail = BedrockGuardrail(guardrailIdentifier="test-guardrail", guardrailVersion="DRAFT")
 
     anonymized_response: BedrockGuardrailResponse = {
         "action": "GUARDRAIL_INTERVENED",
@@ -6808,22 +6792,14 @@ async def test_bedrock_guardrail_blocked_vs_anonymized_actions_including_content
         ],
     }
 
-    should_raise = guardrail._should_raise_guardrail_blocked_exception(
-        anonymized_response
-    )
+    should_raise = guardrail._should_raise_guardrail_blocked_exception(anonymized_response)
     assert should_raise is False, "ANONYMIZED actions should not raise exceptions"
 
     blocked_response: BedrockGuardrailResponse = {
         "action": "GUARDRAIL_INTERVENED",
         "outputs": [{"text": "I can't provide that information."}],
         "assessments": [
-            {
-                "topicPolicy": {
-                    "topics": [
-                        {"name": "Sensitive Topic", "type": "DENY", "action": "BLOCKED"}
-                    ]
-                }
-            }
+            {"topicPolicy": {"topics": [{"name": "Sensitive Topic", "type": "DENY", "action": "BLOCKED"}]}}
         ],
     }
 
@@ -6844,19 +6820,13 @@ async def test_bedrock_guardrail_blocked_vs_anonymized_actions_including_content
                         }
                     ]
                 },
-                "topicPolicy": {
-                    "topics": [
-                        {"name": "Blocked Topic", "type": "DENY", "action": "BLOCKED"}
-                    ]
-                },
+                "topicPolicy": {"topics": [{"name": "Blocked Topic", "type": "DENY", "action": "BLOCKED"}]},
             }
         ],
     }
 
     should_raise = guardrail._should_raise_guardrail_blocked_exception(mixed_response)
-    assert (
-        should_raise is True
-    ), "Mixed actions with any BLOCKED should raise exceptions"
+    assert should_raise is True, "Mixed actions with any BLOCKED should raise exceptions"
 
     none_response: BedrockGuardrailResponse = {
         "action": "NONE",
@@ -6871,22 +6841,12 @@ async def test_bedrock_guardrail_blocked_vs_anonymized_actions_including_content
         "action": "GUARDRAIL_INTERVENED",
         "outputs": [{"text": "I can't provide that information."}],
         "assessments": [
-            {
-                "contentPolicy": {
-                    "filters": [
-                        {"type": "VIOLENCE", "confidence": "HIGH", "action": "BLOCKED"}
-                    ]
-                }
-            }
+            {"contentPolicy": {"filters": [{"type": "VIOLENCE", "confidence": "HIGH", "action": "BLOCKED"}]}}
         ],
     }
 
-    should_raise = guardrail._should_raise_guardrail_blocked_exception(
-        content_blocked_response
-    )
-    assert (
-        should_raise is True
-    ), "Content policy BLOCKED actions should raise exceptions"
+    should_raise = guardrail._should_raise_guardrail_blocked_exception(content_blocked_response)
+    assert should_raise is True, "Content policy BLOCKED actions should raise exceptions"
 
 
 @pytest.mark.asyncio
@@ -6931,9 +6891,7 @@ async def test_bedrock_guardrail_masking_with_anonymized_response(aws_test_crede
         ],
     }
 
-    with patch.object(
-        guardrail.async_handler, "post", new_callable=AsyncMock
-    ) as mock_post:
+    with patch.object(guardrail.async_handler, "post", new_callable=AsyncMock) as mock_post:
         mock_post.return_value = mock_bedrock_response
 
         try:
@@ -6943,14 +6901,9 @@ async def test_bedrock_guardrail_masking_with_anonymized_response(aws_test_crede
                 call_type="completion",
             )
             assert response is not None
-            assert (
-                response["messages"][0]["content"]
-                == "Hello, my phone number is {PHONE}"
-            )
+            assert response["messages"][0]["content"] == "Hello, my phone number is {PHONE}"
         except Exception as e:
-            pytest.fail(
-                f"Should not raise exception for ANONYMIZED actions, but got: {e}"
-            )
+            pytest.fail(f"Should not raise exception for ANONYMIZED actions, but got: {e}")
 
 
 @pytest.mark.asyncio
@@ -7001,9 +6954,7 @@ async def test_bedrock_guardrail_uses_masked_output_without_masking_flags(aws_te
         ],
     }
 
-    with patch.object(
-        guardrail.async_handler, "post", new_callable=AsyncMock
-    ) as mock_post:
+    with patch.object(guardrail.async_handler, "post", new_callable=AsyncMock) as mock_post:
         mock_post.return_value = mock_bedrock_response
 
         response = await guardrail.async_moderation_hook(
@@ -7013,10 +6964,7 @@ async def test_bedrock_guardrail_uses_masked_output_without_masking_flags(aws_te
         )
 
         assert response is not None
-        assert (
-            response["messages"][0]["content"]
-            == "Hello, my phone number is {PHONE} and email is {EMAIL}"
-        )
+        assert response["messages"][0]["content"] == "Hello, my phone number is {PHONE} and email is {EMAIL}"
         print("✅ Masked output was applied even without masking flags enabled")
 
 
@@ -7037,11 +6985,7 @@ async def test_bedrock_guardrail_response_pii_masking_non_streaming(aws_test_cre
     mock_bedrock_response.status_code = 200
     mock_bedrock_response.json.return_value = {
         "action": "GUARDRAIL_INTERVENED",
-        "outputs": [
-            {
-                "text": "My credit card number is {CREDIT_DEBIT_CARD_NUMBER} and my phone is {PHONE}"
-            }
-        ],
+        "outputs": [{"text": "My credit card number is {CREDIT_DEBIT_CARD_NUMBER} and my phone is {PHONE}"}],
         "assessments": [
             {
                 "sensitiveInformationPolicy": {
@@ -7086,9 +7030,7 @@ async def test_bedrock_guardrail_response_pii_masking_non_streaming(aws_test_cre
         ],
     }
 
-    with patch.object(
-        guardrail.async_handler, "post", new_callable=AsyncMock
-    ) as mock_post:
+    with patch.object(guardrail.async_handler, "post", new_callable=AsyncMock) as mock_post:
         mock_post.return_value = mock_bedrock_response
 
         await guardrail.async_post_call_success_hook(
@@ -7163,9 +7105,7 @@ async def test_bedrock_guardrail_response_pii_masking_streaming(aws_test_credent
                 choices=[
                     litellm.utils.StreamingChoices(
                         index=0,
-                        delta=litellm.utils.Delta(
-                            content="john@example.com and SSN is "
-                        ),
+                        delta=litellm.utils.Delta(content="john@example.com and SSN is "),
                         finish_reason=None,
                     )
                 ],
@@ -7198,9 +7138,7 @@ async def test_bedrock_guardrail_response_pii_masking_streaming(aws_test_credent
         "stream": True,
     }
 
-    with patch.object(
-        guardrail.async_handler, "post", new_callable=AsyncMock
-    ) as mock_post:
+    with patch.object(guardrail.async_handler, "post", new_callable=AsyncMock) as mock_post:
         mock_post.return_value = mock_bedrock_response
 
         masked_stream = guardrail.async_post_call_streaming_iterator_hook(
@@ -7219,10 +7157,7 @@ async def test_bedrock_guardrail_response_pii_masking_streaming(aws_test_credent
         for chunk in masked_chunks:
             if hasattr(chunk, "choices") and chunk.choices:
                 if hasattr(chunk.choices[0], "delta") and chunk.choices[0].delta:
-                    if (
-                        hasattr(chunk.choices[0].delta, "content")
-                        and chunk.choices[0].delta.content
-                    ):
+                    if hasattr(chunk.choices[0].delta, "content") and chunk.choices[0].delta.content:
                         full_content += chunk.choices[0].delta.content
 
         assert "Sure! My email is {EMAIL} and SSN is {US_SSN}" == full_content
@@ -7240,9 +7175,7 @@ async def test_convert_to_bedrock_format_input_source():
     )
     from unittest.mock import patch
 
-    guardrail = BedrockGuardrail(
-        guardrailIdentifier="test-guardrail", guardrailVersion="DRAFT"
-    )
+    guardrail = BedrockGuardrail(guardrailIdentifier="test-guardrail", guardrailVersion="DRAFT")
 
     mock_messages = [
         {"role": "user", "content": "Hello, how are you?"},
@@ -7286,25 +7219,19 @@ async def test_convert_to_bedrock_format_output_source():
     import litellm
     from unittest.mock import patch
 
-    guardrail = BedrockGuardrail(
-        guardrailIdentifier="test-guardrail", guardrailVersion="DRAFT"
-    )
+    guardrail = BedrockGuardrail(guardrailIdentifier="test-guardrail", guardrailVersion="DRAFT")
 
     mock_response = litellm.ModelResponse(
         id="test-response-id",
         choices=[
             litellm.Choices(
                 index=0,
-                message=litellm.Message(
-                    role="assistant", content="This is a test response from the model."
-                ),
+                message=litellm.Message(role="assistant", content="This is a test response from the model."),
                 finish_reason="stop",
             ),
             litellm.Choices(
                 index=1,
-                message=litellm.Message(
-                    role="assistant", content="This is a second choice response."
-                ),
+                message=litellm.Message(role="assistant", content="This is a second choice response."),
                 finish_reason="stop",
             ),
         ],
@@ -7313,9 +7240,7 @@ async def test_convert_to_bedrock_format_output_source():
         object="chat.completion",
     )
 
-    result = guardrail.convert_to_bedrock_format(
-        source="OUTPUT", response=mock_response
-    )
+    result = guardrail.convert_to_bedrock_format(source="OUTPUT", response=mock_response)
 
     assert isinstance(result, dict)
     assert result.get("source") == "OUTPUT"
@@ -7341,9 +7266,7 @@ async def test_convert_to_bedrock_format_post_call_streaming_hook():
 
     mock_user_api_key_dict = UserAPIKeyAuth()
 
-    guardrail = BedrockGuardrail(
-        guardrailIdentifier="test-guardrail", guardrailVersion="DRAFT"
-    )
+    guardrail = BedrockGuardrail(guardrailIdentifier="test-guardrail", guardrailVersion="DRAFT")
 
     async def mock_streaming_response():
         chunks = [
@@ -7428,10 +7351,7 @@ async def test_convert_to_bedrock_format_post_call_streaming_hook():
 
         return BedrockGuardrailResponse(**mock_bedrock_response.json())
 
-    with patch.object(
-        guardrail, "make_bedrock_api_request", side_effect=mock_make_bedrock_api_request
-    ):
-
+    with patch.object(guardrail, "make_bedrock_api_request", side_effect=mock_make_bedrock_api_request):
         result_generator = guardrail.async_post_call_streaming_iterator_hook(
             user_api_key_dict=mock_user_api_key_dict,
             response=mock_streaming_response(),
@@ -7442,9 +7362,7 @@ async def test_convert_to_bedrock_format_post_call_streaming_hook():
         async for chunk in result_generator:
             result_chunks.append(chunk)
 
-        assert (
-            len(bedrock_calls) == 1
-        ), f"Expected 1 bedrock call (OUTPUT only), got {len(bedrock_calls)}"
+        assert len(bedrock_calls) == 1, f"Expected 1 bedrock call (OUTPUT only), got {len(bedrock_calls)}"
 
         output_call = bedrock_calls[0]
         assert output_call["source"] == "OUTPUT"
@@ -7454,22 +7372,13 @@ async def test_convert_to_bedrock_format_post_call_streaming_hook():
         full_content = ""
         for chunk in result_chunks:
             if hasattr(chunk, "choices") and chunk.choices:
-                if (
-                    hasattr(chunk.choices[0], "delta")
-                    and chunk.choices[0].delta.content
-                ):
+                if hasattr(chunk.choices[0], "delta") and chunk.choices[0].delta.content:
                     full_content += chunk.choices[0].delta.content
 
-        assert (
-            "{EMAIL}" in full_content
-        ), f"Expected masked content with {{EMAIL}}, got: {full_content}"
-        assert (
-            "john@example.com" not in full_content
-        ), f"Original email should be masked, got: {full_content}"
+        assert "{EMAIL}" in full_content, f"Expected masked content with {{EMAIL}}, got: {full_content}"
+        assert "john@example.com" not in full_content, f"Original email should be masked, got: {full_content}"
 
-        print(
-            "✅ Post-call streaming hook test passed - OUTPUT source used for masking"
-        )
+        print("✅ Post-call streaming hook test passed - OUTPUT source used for masking")
         print(
             f"✅ Bedrock calls made: {[call['source'] for call in bedrock_calls]} "
             "(INPUT validation skipped due to event_hook=None implying pre_call/during_call enabled)"
@@ -7486,9 +7395,7 @@ async def test_bedrock_guardrail_blocked_action_shows_output_text(aws_test_crede
 
     mock_user_api_key_dict = UserAPIKeyAuth()
 
-    guardrail = BedrockGuardrail(
-        guardrailIdentifier="test-guardrail", guardrailVersion="DRAFT"
-    )
+    guardrail = BedrockGuardrail(guardrailIdentifier="test-guardrail", guardrailVersion="DRAFT")
 
     mock_bedrock_response = MagicMock()
     mock_bedrock_response.status_code = 200
@@ -7496,13 +7403,7 @@ async def test_bedrock_guardrail_blocked_action_shows_output_text(aws_test_crede
         "action": "GUARDRAIL_INTERVENED",
         "outputs": [{"text": "this violates litellm corporate guardrail policy"}],
         "assessments": [
-            {
-                "topicPolicy": {
-                    "topics": [
-                        {"name": "Sensitive Topic", "type": "DENY", "action": "BLOCKED"}
-                    ]
-                }
-            }
+            {"topicPolicy": {"topics": [{"name": "Sensitive Topic", "type": "DENY", "action": "BLOCKED"}]}}
         ],
     }
 
@@ -7513,9 +7414,7 @@ async def test_bedrock_guardrail_blocked_action_shows_output_text(aws_test_crede
         ],
     }
 
-    with patch.object(
-        guardrail.async_handler, "post", new_callable=AsyncMock
-    ) as mock_post:
+    with patch.object(guardrail.async_handler, "post", new_callable=AsyncMock) as mock_post:
         mock_post.return_value = mock_bedrock_response
 
         with pytest.raises(HTTPException) as exc_info:
@@ -7536,9 +7435,7 @@ async def test_bedrock_guardrail_blocked_action_shows_output_text(aws_test_crede
         expected_output_text = "this violates litellm corporate guardrail policy"
         assert detail["bedrock_guardrail_response"] == expected_output_text
 
-        print(
-            "✅ BLOCKED action HTTPException test passed - output text properly included"
-        )
+        print("✅ BLOCKED action HTTPException test passed - output text properly included")
 
 
 @pytest.mark.asyncio
@@ -7550,9 +7447,7 @@ async def test_bedrock_guardrail_blocked_action_empty_outputs(aws_test_credentia
 
     mock_user_api_key_dict = UserAPIKeyAuth()
 
-    guardrail = BedrockGuardrail(
-        guardrailIdentifier="test-guardrail", guardrailVersion="DRAFT"
-    )
+    guardrail = BedrockGuardrail(guardrailIdentifier="test-guardrail", guardrailVersion="DRAFT")
 
     mock_bedrock_response = MagicMock()
     mock_bedrock_response.status_code = 200
@@ -7560,13 +7455,7 @@ async def test_bedrock_guardrail_blocked_action_empty_outputs(aws_test_credentia
         "action": "GUARDRAIL_INTERVENED",
         "outputs": [],
         "assessments": [
-            {
-                "contentPolicy": {
-                    "filters": [
-                        {"type": "VIOLENCE", "confidence": "HIGH", "action": "BLOCKED"}
-                    ]
-                }
-            }
+            {"contentPolicy": {"filters": [{"type": "VIOLENCE", "confidence": "HIGH", "action": "BLOCKED"}]}}
         ],
     }
 
@@ -7577,9 +7466,7 @@ async def test_bedrock_guardrail_blocked_action_empty_outputs(aws_test_credentia
         ],
     }
 
-    with patch.object(
-        guardrail.async_handler, "post", new_callable=AsyncMock
-    ) as mock_post:
+    with patch.object(guardrail.async_handler, "post", new_callable=AsyncMock) as mock_post:
         mock_post.return_value = mock_bedrock_response
 
         with pytest.raises(HTTPException) as exc_info:
@@ -7621,13 +7508,7 @@ async def test_bedrock_guardrail_disable_exception_on_block_non_streaming(aws_te
         "action": "GUARDRAIL_INTERVENED",
         "outputs": [{"text": "I can't provide that information."}],
         "assessments": [
-            {
-                "topicPolicy": {
-                    "topics": [
-                        {"name": "Sensitive Topic", "type": "DENY", "action": "BLOCKED"}
-                    ]
-                }
-            }
+            {"topicPolicy": {"topics": [{"name": "Sensitive Topic", "type": "DENY", "action": "BLOCKED"}]}}
         ],
     }
 
@@ -7638,9 +7519,7 @@ async def test_bedrock_guardrail_disable_exception_on_block_non_streaming(aws_te
         ],
     }
 
-    with patch.object(
-        guardrail_default.async_handler, "post", new_callable=AsyncMock
-    ) as mock_post:
+    with patch.object(guardrail_default.async_handler, "post", new_callable=AsyncMock) as mock_post:
         mock_post.return_value = mock_bedrock_response
 
         with pytest.raises(HTTPException) as exc_info:
@@ -7662,9 +7541,7 @@ async def test_bedrock_guardrail_disable_exception_on_block_non_streaming(aws_te
         disable_exception_on_block=True,
     )
 
-    with patch.object(
-        guardrail_disabled.async_handler, "post", new_callable=AsyncMock
-    ) as mock_post:
+    with patch.object(guardrail_disabled.async_handler, "post", new_callable=AsyncMock) as mock_post:
         mock_post.return_value = mock_bedrock_response
 
         with pytest.raises(ModifyResponseException) as exc_info:
@@ -7694,9 +7571,7 @@ async def test_bedrock_guardrail_disable_exception_on_block_streaming(aws_test_c
                 choices=[
                     litellm.utils.StreamingChoices(
                         index=0,
-                        delta=litellm.utils.Delta(
-                            content="Here's how to make explosives: "
-                        ),
+                        delta=litellm.utils.Delta(content="Here's how to make explosives: "),
                         finish_reason=None,
                     )
                 ],
@@ -7727,13 +7602,7 @@ async def test_bedrock_guardrail_disable_exception_on_block_streaming(aws_test_c
         "action": "GUARDRAIL_INTERVENED",
         "outputs": [{"text": "I can't provide that information."}],
         "assessments": [
-            {
-                "contentPolicy": {
-                    "filters": [
-                        {"type": "VIOLENCE", "confidence": "HIGH", "action": "BLOCKED"}
-                    ]
-                }
-            }
+            {"contentPolicy": {"filters": [{"type": "VIOLENCE", "confidence": "HIGH", "action": "BLOCKED"}]}}
         ],
     }
 
@@ -7749,18 +7618,14 @@ async def test_bedrock_guardrail_disable_exception_on_block_streaming(aws_test_c
         disable_exception_on_block=False,
     )
 
-    with patch.object(
-        guardrail_default.async_handler, "post", new_callable=AsyncMock
-    ) as mock_post:
+    with patch.object(guardrail_default.async_handler, "post", new_callable=AsyncMock) as mock_post:
         mock_post.return_value = mock_bedrock_response
 
         async def _drain():
-            result_generator = (
-                guardrail_default.async_post_call_streaming_iterator_hook(
-                    user_api_key_dict=mock_user_api_key_dict,
-                    response=mock_streaming_response(),
-                    request_data=request_data,
-                )
+            result_generator = guardrail_default.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=mock_user_api_key_dict,
+                response=mock_streaming_response(),
+                request_data=request_data,
             )
 
             async for chunk in result_generator:
@@ -7775,9 +7640,7 @@ async def test_bedrock_guardrail_disable_exception_on_block_streaming(aws_test_c
         disable_exception_on_block=True,
     )
 
-    with patch.object(
-        guardrail_disabled.async_handler, "post", new_callable=AsyncMock
-    ) as mock_post:
+    with patch.object(guardrail_disabled.async_handler, "post", new_callable=AsyncMock) as mock_post:
         mock_post.return_value = mock_bedrock_response
 
         result_generator = guardrail_disabled.async_post_call_streaming_iterator_hook(
@@ -7806,9 +7669,7 @@ async def test_bedrock_guardrail_post_call_success_hook_no_output_text():
 
     mock_user_api_key_dict = UserAPIKeyAuth()
 
-    guardrail = BedrockGuardrail(
-        guardrailIdentifier="test-guardrail", guardrailVersion="DRAFT"
-    )
+    guardrail = BedrockGuardrail(guardrailIdentifier="test-guardrail", guardrailVersion="DRAFT")
 
     mock_response = litellm.ModelResponse(
         id="test-id",
@@ -7821,9 +7682,7 @@ async def test_bedrock_guardrail_post_call_success_hook_no_output_text():
                     tool_calls=[
                         litellm.utils.ChatCompletionMessageToolCall(
                             id="tooluse_kZJMlvQmRJ6eAyJE5GIl7Q",
-                            function=litellm.utils.Function(
-                                name="top_song", arguments='{"sign": "WZPZ"}'
-                            ),
+                            function=litellm.utils.Function(name="top_song", arguments='{"sign": "WZPZ"}'),
                             type="function",
                         )
                     ],
@@ -7874,9 +7733,7 @@ async def test__redact_pii_matches_null_list_fields():
     }
     redacted = _redact_pii_matches(response_with_null_pii)
     assert redacted is not None
-    assert (
-        redacted["assessments"][0]["sensitiveInformationPolicy"]["piiEntities"] is None
-    )
+    assert redacted["assessments"][0]["sensitiveInformationPolicy"]["piiEntities"] is None
     assert redacted["assessments"][0]["sensitiveInformationPolicy"]["regexes"] is None
 
     response_with_null_words = {
@@ -7928,69 +7785,48 @@ async def test_should_raise_guardrail_blocked_exception_null_fields():
     Validates the or [] null-safety pattern works for all policy fields
     in _should_raise_guardrail_blocked_exception.
     """
-    guardrail = BedrockGuardrail(
-        guardrailIdentifier="test-guardrail", guardrailVersion="DRAFT"
-    )
+    guardrail = BedrockGuardrail(guardrailIdentifier="test-guardrail", guardrailVersion="DRAFT")
 
     response_null_assessments = {
         "action": "GUARDRAIL_INTERVENED",
         "assessments": None,
     }
-    assert (
-        guardrail._should_raise_guardrail_blocked_exception(response_null_assessments)
-        is False
-    )
+    assert guardrail._should_raise_guardrail_blocked_exception(response_null_assessments) is False
 
     response_null_topics = {
         "action": "GUARDRAIL_INTERVENED",
         "assessments": [{"topicPolicy": {"topics": None}}],
     }
-    assert (
-        guardrail._should_raise_guardrail_blocked_exception(response_null_topics)
-        is False
-    )
+    assert guardrail._should_raise_guardrail_blocked_exception(response_null_topics) is False
 
     response_null_filters = {
         "action": "GUARDRAIL_INTERVENED",
         "assessments": [{"contentPolicy": {"filters": None}}],
     }
-    assert (
-        guardrail._should_raise_guardrail_blocked_exception(response_null_filters)
-        is False
-    )
+    assert guardrail._should_raise_guardrail_blocked_exception(response_null_filters) is False
 
     response_null_words = {
         "action": "GUARDRAIL_INTERVENED",
-        "assessments": [
-            {"wordPolicy": {"customWords": None, "managedWordLists": None}}
-        ],
+        "assessments": [{"wordPolicy": {"customWords": None, "managedWordLists": None}}],
     }
-    assert (
-        guardrail._should_raise_guardrail_blocked_exception(response_null_words)
-        is False
-    )
+    assert guardrail._should_raise_guardrail_blocked_exception(response_null_words) is False
 
     response_null_pii = {
         "action": "GUARDRAIL_INTERVENED",
-        "assessments": [
-            {"sensitiveInformationPolicy": {"piiEntities": None, "regexes": None}}
-        ],
+        "assessments": [{"sensitiveInformationPolicy": {"piiEntities": None, "regexes": None}}],
     }
-    assert (
-        guardrail._should_raise_guardrail_blocked_exception(response_null_pii) is False
-    )
+    assert guardrail._should_raise_guardrail_blocked_exception(response_null_pii) is False
 
     response_null_grounding = {
         "action": "GUARDRAIL_INTERVENED",
         "assessments": [{"contextualGroundingPolicy": {"filters": None}}],
     }
-    assert (
-        guardrail._should_raise_guardrail_blocked_exception(response_null_grounding)
-        is False
-    )
+    assert guardrail._should_raise_guardrail_blocked_exception(response_null_grounding) is False
 
 
-_MASKING_GUARDRAIL_URL: Final = "https://bedrock-runtime.us-east-1.amazonaws.com/guardrail/wf0hkdb5x07f/version/DRAFT/apply"
+_MASKING_GUARDRAIL_URL: Final = (
+    "https://bedrock-runtime.us-east-1.amazonaws.com/guardrail/wf0hkdb5x07f/version/DRAFT/apply"
+)
 
 
 def _masking_guardrail() -> BedrockGuardrail:

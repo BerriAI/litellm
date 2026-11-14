@@ -335,7 +335,10 @@ async def test_count_sends_the_tool_change_beta_when_the_history_adds_a_tool(mon
             model_to_use="claude-sonnet-5-5",
             messages=[
                 {"role": "user", "content": "Use the ping tool once."},
-                {"role": "system", "content": [{"type": "tool_addition", "tool": {"type": "tool_reference", "name": "ping"}}]},
+                {
+                    "role": "system",
+                    "content": [{"type": "tool_addition", "tool": {"type": "tool_reference", "name": "ping"}}],
+                },
             ],
             contents=None,
             deployment={"litellm_params": {"api_key": "azure-key", "api_base": API_BASE}},
@@ -343,7 +346,10 @@ async def test_count_sends_the_tool_change_beta_when_the_history_adds_a_tool(mon
         )
     assert result is not None
     assert result.total_tokens == 541
-    assert route.calls.last.request.headers["anthropic-beta"] == "mid-conversation-tool-changes-2026-07-01,token-counting-2024-11-01"
+    assert (
+        route.calls.last.request.headers["anthropic-beta"]
+        == "mid-conversation-tool-changes-2026-07-01,token-counting-2024-11-01"
+    )
 
 
 async def _betas_azure_inference_sends(context_management: Mapping[str, object]) -> frozenset[str]:

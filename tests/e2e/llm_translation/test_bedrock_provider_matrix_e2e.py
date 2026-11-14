@@ -73,9 +73,7 @@ def _assert_completion(response: ChatResponse) -> None:
     assert content.strip(), f"completion carried no content: {response}"
 
 
-def _register_bedrock_model(
-    client: PassthroughClient, resources: ResourceManager, prefix: str, backend: str
-) -> str:
+def _register_bedrock_model(client: PassthroughClient, resources: ResourceManager, prefix: str, backend: str) -> str:
     model = f"{prefix}-{unique_marker()}"
     model_id = client.proxy.create_model(
         model,
@@ -108,9 +106,7 @@ class TestBedrockResponseHeaders:
             mode=Mode.NONSTREAM,
         )
     )
-    def test_bedrock_request_id_header_surfaces(
-        self, client: PassthroughClient, resources: ResourceManager
-    ) -> None:
+    def test_bedrock_request_id_header_surfaces(self, client: PassthroughClient, resources: ResourceManager) -> None:
         model = _register_bedrock_model(client, resources, "e2e-bedrock-headers", CONVERSE_REGIONAL_BACKEND)
         key = resources.key()
 
@@ -139,14 +135,10 @@ class TestBedrockResponseHeaders:
     def test_bedrock_request_id_header_surfaces_on_stream(
         self, client: PassthroughClient, resources: ResourceManager
     ) -> None:
-        model = _register_bedrock_model(
-            client, resources, "e2e-bedrock-headers-stream", CONVERSE_REGIONAL_BACKEND
-        )
+        model = _register_bedrock_model(client, resources, "e2e-bedrock-headers-stream", CONVERSE_REGIONAL_BACKEND)
         key = resources.key()
 
-        result = client.proxy.chat_stream(
-            key, ChatBody(model=model, messages=_prompt(), stream=True, max_tokens=64)
-        )
+        result = client.proxy.chat_stream(key, ChatBody(model=model, messages=_prompt(), stream=True, max_tokens=64))
 
         _assert_streamed_completion(result)
         _assert_request_id_header(result)
@@ -186,9 +178,7 @@ class TestBedrockBatchDeploymentServesChat:
             mode=Mode.NONSTREAM,
         )
     )
-    def test_batch_s3_keys_do_not_break_chat(
-        self, client: PassthroughClient, resources: ResourceManager
-    ) -> None:
+    def test_batch_s3_keys_do_not_break_chat(self, client: PassthroughClient, resources: ResourceManager) -> None:
         model = _register_bedrock_batch_deployment(client, resources)
         key = resources.key()
 
@@ -216,9 +206,7 @@ class TestBedrockInvokeRegionalModelIds:
             mode=Mode.NONSTREAM,
         )
     )
-    def test_invoke_regional_id_completes(
-        self, client: PassthroughClient, resources: ResourceManager
-    ) -> None:
+    def test_invoke_regional_id_completes(self, client: PassthroughClient, resources: ResourceManager) -> None:
         model = _register_bedrock_model(client, resources, "e2e-bedrock-invoke", INVOKE_REGIONAL_BACKEND)
         key = resources.key()
 
@@ -236,15 +224,11 @@ class TestBedrockInvokeRegionalModelIds:
             mode=Mode.STREAM,
         )
     )
-    def test_invoke_regional_id_streams(
-        self, client: PassthroughClient, resources: ResourceManager
-    ) -> None:
+    def test_invoke_regional_id_streams(self, client: PassthroughClient, resources: ResourceManager) -> None:
         model = _register_bedrock_model(client, resources, "e2e-bedrock-invoke-stream", INVOKE_REGIONAL_BACKEND)
         key = resources.key()
 
-        result = client.proxy.chat_stream(
-            key, ChatBody(model=model, messages=_prompt(), stream=True, max_tokens=64)
-        )
+        result = client.proxy.chat_stream(key, ChatBody(model=model, messages=_prompt(), stream=True, max_tokens=64))
 
         _assert_streamed_completion(result)
 
@@ -263,9 +247,7 @@ class TestBedrockOpenAIFamilyDefaultRoute:
     def test_openai_family_model_id_completes_with_max_tokens(
         self, client: PassthroughClient, resources: ResourceManager
     ) -> None:
-        model = _register_bedrock_model(
-            client, resources, "e2e-bedrock-openai-family", OPENAI_FAMILY_BACKEND
-        )
+        model = _register_bedrock_model(client, resources, "e2e-bedrock-openai-family", OPENAI_FAMILY_BACKEND)
         key = resources.key()
 
         response = unwrap(client.proxy.chat(key, ChatBody(model=model, messages=_prompt(), max_tokens=64)))

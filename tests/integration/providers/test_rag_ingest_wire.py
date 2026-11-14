@@ -235,9 +235,7 @@ def test_rag_ingest_request_multipart_json_and_registered_credentials(gateway: G
                     {"file": ("ui-upload.txt", _MULTIPART_CONTENT, "text/plain")},
                 )
                 _ingest_response(multipart, new_store_id, "file_ingest_multipart")
-                scenario.cleanups.callback(
-                    owned.post, "/vector_store/delete", {"vector_store_id": new_store_id}
-                )
+                scenario.cleanups.callback(owned.post, "/vector_store/delete", {"vector_store_id": new_store_id})
 
                 json_upload: Final = owned.request(
                     "POST",
@@ -272,9 +270,7 @@ def test_rag_ingest_request_multipart_json_and_registered_credentials(gateway: G
                     "file_id": "file_ingest_json",
                     "chunking_strategy": {"type": "auto"},
                 }
-                assert all(
-                    request.headers["authorization"] == f"Bearer {default_key}" for request in default_requests
-                )
+                assert all(request.headers["authorization"] == f"Bearer {default_key}" for request in default_requests)
                 _assert_upload(default_requests[1], _MULTIPART_CONTENT)
                 _assert_upload(default_requests[4], _JSON_CONTENT)
 
@@ -291,9 +287,7 @@ def test_rag_ingest_request_multipart_json_and_registered_credentials(gateway: G
                     },
                 )
                 assert registered.status_code == 200, registered.text
-                scenario.cleanups.callback(
-                    owned.post, "/vector_store/delete", {"vector_store_id": registered_store_id}
-                )
+                scenario.cleanups.callback(owned.post, "/vector_store/delete", {"vector_store_id": registered_store_id})
                 rejected_credentials: Final = owned.request_multipart(
                     "/v1/rag/ingest",
                     {
@@ -370,9 +364,7 @@ def test_documented_multipart_ingest_options_is_honored(gateway: Gateway, tmp_pa
                     {"file": ("docs.txt", _MULTIPART_CONTENT, "text/plain")},
                 )
                 _ingest_response(response, store_id, "file_ingest_multipart")
-                scenario.cleanups.callback(
-                    owned.post, "/vector_store/delete", {"vector_store_id": store_id}
-                )
+                scenario.cleanups.callback(owned.post, "/vector_store/delete", {"vector_store_id": store_id})
 
                 requests: Final = wire.drain()
                 assert [(request.method, urlsplit(request.target).path) for request in requests] == [
@@ -380,7 +372,5 @@ def test_documented_multipart_ingest_options_is_honored(gateway: Gateway, tmp_pa
                     ("POST", "/v1/files"),
                     ("POST", f"/v1/vector_stores/{store_id}/files"),
                 ], requests
-                assert all(
-                    request.headers["authorization"] == f"Bearer {provider_key}" for request in requests
-                )
+                assert all(request.headers["authorization"] == f"Bearer {provider_key}" for request in requests)
                 _assert_upload(requests[1], _MULTIPART_CONTENT)

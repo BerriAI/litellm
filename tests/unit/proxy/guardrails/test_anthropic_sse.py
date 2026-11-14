@@ -410,7 +410,9 @@ def test_masked_stream_that_failed_after_its_message_delta_still_carries_that_me
     rewritten: Final = _masked_through_upstream_error(upstream)
 
     assert [event for event, _ in rewritten][-2:] == ["message_delta", "error"]
-    assert next(payload for event, payload in rewritten if event == "message_delta")["delta"]["stop_reason"] == "end_turn"
+    assert (
+        next(payload for event, payload in rewritten if event == "message_delta")["delta"]["stop_reason"] == "end_turn"
+    )
 
 
 def test_healthy_stream_with_a_tool_input_that_is_not_json_still_raises():

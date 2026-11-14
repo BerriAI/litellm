@@ -1674,9 +1674,9 @@ def test_K3_patch_flag_rejection_preserves_raw_stored_row(gateway: Gateway, tmp_
             before_params: Final = JSON_OBJECT.validate_json(before_raw[0]["raw_params"])
             after_params: Final = JSON_OBJECT.validate_json(after_raw[0]["raw_params"])
             assert set(before_params) == set(after_params), (before_params, after_params)
-            assert {
-                key: before_params[key] for key in before_params if key != "api_key"
-            } == {key: after_params[key] for key in after_params if key != "api_key"}, (before_params, after_params)
+            assert {key: before_params[key] for key in before_params if key != "api_key"} == {
+                key: after_params[key] for key in after_params if key != "api_key"
+            }, (before_params, after_params)
             assert str(after_params["api_key"]).startswith("litellm_enc::"), after_params
     finally:
         _delete_database_guardrail(gateway, identity)

@@ -237,9 +237,7 @@ def test_bedrock_500_keeps_amzn_request_id_on_error_headers_and_failure_log(gate
         call_id: Final = response.headers["x-litellm-call-id"]
         assert len(wire.drain()) == 1
         rows: Final = eventually(
-            lambda: read_rows(
-                'SELECT status, metadata FROM "LiteLLM_SpendLogs" WHERE request_id=%s', (call_id,)
-            ),
+            lambda: read_rows('SELECT status, metadata FROM "LiteLLM_SpendLogs" WHERE request_id=%s', (call_id,)),
             lambda values: len(values) == 1,
             seconds=70,
         )

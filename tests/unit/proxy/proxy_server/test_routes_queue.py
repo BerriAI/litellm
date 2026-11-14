@@ -307,7 +307,12 @@ def test_streamed_queue_responses_report_the_priority_the_router_queued_at(
     client, auth_as, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _queue_router(monkeypatch, default_priority=3)
-    payload: Final = {"model": "gpt-4", "messages": [{"role": "user", "content": "hi"}], "priority": "1", "stream": True}
+    payload: Final = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "hi"}],
+        "priority": "1",
+        "stream": True,
+    }
     with auth_as():
         response: Final = client.post("/queue/chat/completions", json=payload)
     assert response.status_code == 200, response.text

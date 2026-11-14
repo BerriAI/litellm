@@ -41,7 +41,7 @@ def test_deleting_a_customer_team_deletes_its_override_budget_row(
             value for value in (body["budget_id"], body["budget_override_id"]) if isinstance(value, str)
         )
         assert len(owned) == (1 if budget is None else 2)
-        stored: Final = 'SELECT budget_id FROM "LiteLLM_BudgetTable" WHERE budget_id = ANY(string_to_array(%s, \',\'))'
+        stored: Final = "SELECT budget_id FROM \"LiteLLM_BudgetTable\" WHERE budget_id = ANY(string_to_array(%s, ','))"
         assert len(read_rows(stored, (",".join(owned),))) == len(owned)
         deleted: Final = gateway.request("DELETE", f"{_ROUTE}/customer_teams/{team}")
         assert deleted.status_code == 204, deleted.text

@@ -19,9 +19,7 @@ import textwrap
 import pytest
 
 
-def _run_python(
-    script: str, env_override: dict | None = None
-) -> subprocess.CompletedProcess:
+def _run_python(script: str, env_override: dict | None = None) -> subprocess.CompletedProcess:
     """Run a Python script in a subprocess and return the result."""
     import os
 
@@ -55,9 +53,7 @@ def test_eager_loading_enabled():
         """,
         env_override={"LITELLM_DISABLE_LAZY_LOADING": "1"},
     )
-    assert (
-        result.returncode == 0
-    ), f"Subprocess failed:\nstdout: {result.stdout}\nstderr: {result.stderr}"
+    assert result.returncode == 0, f"Subprocess failed:\nstdout: {result.stdout}\nstderr: {result.stderr}"
 
 
 def test_eager_loading_env_var_values():
@@ -87,9 +83,7 @@ def test_eager_loading_env_var_values():
         """,
         env_override={"LITELLM_DISABLE_LAZY_LOADING": "1"},
     )
-    assert (
-        result.returncode == 0
-    ), f"Failed:\nstdout: {result.stdout}\nstderr: {result.stderr}"
+    assert result.returncode == 0, f"Failed:\nstdout: {result.stdout}\nstderr: {result.stderr}"
 
 
 def test_lazy_loading_default():
@@ -103,9 +97,7 @@ def test_lazy_loading_default():
         assert len(tokens) > 0, "Encoding should work"
         """,
     )
-    assert (
-        result.returncode == 0
-    ), f"Subprocess failed:\nstdout: {result.stdout}\nstderr: {result.stderr}"
+    assert result.returncode == 0, f"Subprocess failed:\nstdout: {result.stdout}\nstderr: {result.stderr}"
 
 
 def test_tiktoken_cache_dir_set_on_lazy_load():
@@ -125,6 +117,4 @@ def test_tiktoken_cache_dir_set_on_lazy_load():
         assert "tokenizers" in cache_dir, f"TIKTOKEN_CACHE_DIR should point to tokenizers directory, got: {cache_dir}"
         """,
     )
-    assert (
-        result.returncode == 0
-    ), f"Subprocess failed:\nstdout: {result.stdout}\nstderr: {result.stderr}"
+    assert result.returncode == 0, f"Subprocess failed:\nstdout: {result.stdout}\nstderr: {result.stderr}"

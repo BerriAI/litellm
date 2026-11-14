@@ -3385,15 +3385,27 @@ CLAUDE_SONNET_5_5_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCas
             headers={":event-type": "contentBlockStart", ":content-type": "application/json", ":message-type": "event"},
         ),
         EventStreamFrame(
-            data={"contentBlockIndex": 0, "delta": {"toolUse": {"input": ""}}, "p": "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQR"},
+            data={
+                "contentBlockIndex": 0,
+                "delta": {"toolUse": {"input": ""}},
+                "p": "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQR",
+            },
             headers={":event-type": "contentBlockDelta", ":content-type": "application/json", ":message-type": "event"},
         ),
         EventStreamFrame(
-            data={"contentBlockIndex": 0, "delta": {"toolUse": {"input": '{"qu'}}, "p": "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQR"},
+            data={
+                "contentBlockIndex": 0,
+                "delta": {"toolUse": {"input": '{"qu'}},
+                "p": "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQR",
+            },
             headers={":event-type": "contentBlockDelta", ":content-type": "application/json", ":message-type": "event"},
         ),
         EventStreamFrame(
-            data={"contentBlockIndex": 0, "delta": {"toolUse": {"input": 'ery": '}}, "p": "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"},
+            data={
+                "contentBlockIndex": 0,
+                "delta": {"toolUse": {"input": 'ery": '}},
+                "p": "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ",
+            },
             headers={":event-type": "contentBlockDelta", ":content-type": "application/json", ":message-type": "event"},
         ),
         EventStreamFrame(
@@ -3427,11 +3439,19 @@ CLAUDE_SONNET_5_5_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCas
             headers={":event-type": "contentBlockDelta", ":content-type": "application/json", ":message-type": "event"},
         ),
         EventStreamFrame(
-            data={"contentBlockIndex": 1, "delta": {"toolUse": {"input": '{"p'}}, "p": "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ012345"},
+            data={
+                "contentBlockIndex": 1,
+                "delta": {"toolUse": {"input": '{"p'}},
+                "p": "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ012345",
+            },
             headers={":event-type": "contentBlockDelta", ":content-type": "application/json", ":message-type": "event"},
         ),
         EventStreamFrame(
-            data={"contentBlockIndex": 1, "delta": {"toolUse": {"input": 'ath": "tests'}}, "p": "abcdefghijklmnopqrstuvwxyzABCDEFGHIJK"},
+            data={
+                "contentBlockIndex": 1,
+                "delta": {"toolUse": {"input": 'ath": "tests'}},
+                "p": "abcdefghijklmnopqrstuvwxyzABCDEFGHIJK",
+            },
             headers={":event-type": "contentBlockDelta", ":content-type": "application/json", ":message-type": "event"},
         ),
         EventStreamFrame(
@@ -3447,7 +3467,11 @@ CLAUDE_SONNET_5_5_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCas
             headers={":event-type": "contentBlockDelta", ":content-type": "application/json", ":message-type": "event"},
         ),
         EventStreamFrame(
-            data={"contentBlockIndex": 1, "delta": {"toolUse": {"input": 'py"}'}}, "p": "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRST"},
+            data={
+                "contentBlockIndex": 1,
+                "delta": {"toolUse": {"input": 'py"}'}},
+                "p": "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRST",
+            },
             headers={":event-type": "contentBlockDelta", ":content-type": "application/json", ":message-type": "event"},
         ),
         EventStreamFrame(

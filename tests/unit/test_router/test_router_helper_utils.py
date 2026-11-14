@@ -42,7 +42,6 @@ from litellm.types.utils import (
 )
 
 if TYPE_CHECKING:
-
     pass
 
 
@@ -672,10 +671,7 @@ async def test_responses_call_sends_the_provider_only_the_client_metadata_and_se
     await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10.0)
 
     assert [json.loads(call.request.read()).get("metadata") for call in provider.calls] == [client_metadata]
-    assert [
-        _minutes_count(router, kind, router_minute_pinned)
-        for kind in ("itpm", "otpm")
-    ] == [10, 5]
+    assert [_minutes_count(router, kind, router_minute_pinned) for kind in ("itpm", "otpm")] == [10, 5]
 
 
 @pytest.mark.parametrize(
@@ -779,10 +775,7 @@ async def test_retried_call_settles_deployment_io_tokens_to_the_successful_attem
     await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10.0)
 
     assert provider.call_count == 2
-    assert [
-        _minutes_count(router, kind, router_minute_pinned, model)
-        for kind in ("itpm", "otpm")
-    ] == [10, 5]
+    assert [_minutes_count(router, kind, router_minute_pinned, model) for kind in ("itpm", "otpm")] == [10, 5]
 
 
 @pytest.mark.asyncio

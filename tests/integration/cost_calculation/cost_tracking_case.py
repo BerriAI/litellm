@@ -640,9 +640,7 @@ _LITELLM_PARAMS: Final[Mapping[str, Mapping[str, str]]] = MappingProxyType(
         "deepgram": MappingProxyType({}),
         "text-completion-openai": MappingProxyType({}),
         "cohere": MappingProxyType({}),
-        "vertex_ai": MappingProxyType(
-            {"vertex_project": "cc-scripted-project", "vertex_location": "us-central1"}
-        ),
+        "vertex_ai": MappingProxyType({"vertex_project": "cc-scripted-project", "vertex_location": "us-central1"}),
         "vertex_ai-language-models": MappingProxyType(
             {"vertex_project": "cc-scripted-project", "vertex_location": "us-central1"}
         ),

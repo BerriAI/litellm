@@ -9,9 +9,7 @@ import pytest
 _REPO_ROOT: Final = Path(__file__).resolve().parents[2]
 
 
-def _run_import_check(
-    block_enterprise: bool, repo_root: Path
-) -> subprocess.CompletedProcess[str]:
+def _run_import_check(block_enterprise: bool, repo_root: Path) -> subprocess.CompletedProcess[str]:
     program: Final = f"""
 import importlib.abc
 import pathlib
@@ -113,10 +111,7 @@ def main(repo_root: Path = _REPO_ROOT) -> None:
         if result.stderr:
             print(result.stderr, file=sys.stderr, end="")
 
-    if any(
-        result.returncode != 0 or expected_output not in result.stdout
-        for _, result, expected_output in results
-    ):
+    if any(result.returncode != 0 or expected_output not in result.stdout for _, result, expected_output in results):
         sys.exit(1)
 
 

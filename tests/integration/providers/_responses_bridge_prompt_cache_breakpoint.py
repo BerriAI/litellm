@@ -45,11 +45,13 @@ _ClientKind: TypeAlias = Literal["openai_sync", "openai_async", "httpx"]
 
 _Surface: TypeAlias = Literal["chat", "responses"]
 
+
 @dataclass(frozen=True, slots=True)
 class _Call:
     surface: _Surface
     stream: bool
     marker: str
+
 
 @dataclass(frozen=True, slots=True)
 class _Served:
@@ -58,13 +60,16 @@ class _Served:
     response_id: str | None
     text: str
 
+
 def _response_id(marker: str) -> str:
     return f"resp_{marker}"
+
 
 def _request_marker(request: Request) -> str:
     match: Final = _MARKER.search(request.body)
     assert match is not None, request.body
     return match.group(1).decode()
+
 
 def _contains_breakpoint(value: JsonValue) -> bool:
     if isinstance(value, dict):
@@ -72,6 +77,7 @@ def _contains_breakpoint(value: JsonValue) -> bool:
     if isinstance(value, list):
         return any(_contains_breakpoint(item) for item in value)
     return False
+
 
 def _responses_body(marker: str) -> dict[str, JsonValue]:
     response_id: Final = _response_id(marker)
@@ -94,6 +100,7 @@ def _responses_body(marker: str) -> dict[str, JsonValue]:
             "usage": {"input_tokens": 10, "output_tokens": 2, "total_tokens": 12},
         }
     )
+
 
 def _responses_reply(request: Request, *, reject_breakpoints: bool = False) -> Reply:
     if request.method == "GET" and request.target == "/v1/models":
@@ -138,8 +145,10 @@ def _responses_reply(request: Request, *, reject_breakpoints: bool = False) -> R
         chunks=tuple(f"event: {event['type']}\ndata: {json.dumps(event)}\n\n".encode() for event in events),
     )
 
+
 def _prompt(marker: str, label: str) -> str:
     return f"{label} marker-{marker}"
+
 
 def _simple_chat_body(
     model: str,
@@ -168,6 +177,7 @@ def _simple_chat_body(
             **({"prompt_cache_options": prompt_cache_options} if prompt_cache_options is not None else {}),
         }
     )
+
 
 def _multimodal_chat_body(model: str, marker: str, stream: bool) -> dict[str, JsonValue]:
     return _JSON_OBJECT.validate_python(
@@ -210,6 +220,7 @@ def _multimodal_chat_body(model: str, marker: str, stream: bool) -> dict[str, Js
         }
     )
 
+
 def _expected_multimodal_input(marker: str) -> list[JsonValue]:
     return [
         {
@@ -236,6 +247,7 @@ def _expected_multimodal_input(marker: str) -> list[JsonValue]:
         },
     ]
 
+
 def _simple_expected_input(marker: str, *, marked: bool) -> list[JsonValue]:
     text_block: Final = {"type": "input_text", "text": _prompt(marker, "user")}
     return [
@@ -246,9 +258,11 @@ def _simple_expected_input(marker: str, *, marked: bool) -> list[JsonValue]:
         }
     ]
 
+
 def _request_body(request: Request) -> dict[str, JsonValue]:
     assert request.method == "POST" and request.target == "/v1/responses", request.target
     return _JSON_OBJECT.validate_json(request.body)
+
 
 def _decoded_response_id(response_id: str) -> str:
     decoded: Final = _RU._decode_responses_api_response_id(  # pyright: ignore[reportPrivateUsage]  # reuse ID decoder
@@ -257,6 +271,7 @@ def _decoded_response_id(response_id: str) -> str:
     raw_response_id: Final = decoded.get("response_id")
     assert isinstance(raw_response_id, str), decoded
     return raw_response_id
+
 
 def _spend_request_id_matches(
     row: Mapping[str, JsonValue],
@@ -272,6 +287,7 @@ def _spend_request_id_matches(
             return request_id == caller_response_id
         case "chat":
             return _decoded_response_id(request_id) == peer_response_id
+
 
 def _spend_rows(
     model: str,
@@ -293,6 +309,7 @@ def _spend_rows(
     assert len(matched) == 1, matched
     return matched
 
+
 def _response_id_from_chat_stream(text: str) -> str:
     payloads: Final = tuple(
         _JSON_OBJECT.validate_json(line.removeprefix("data: "))
@@ -304,12 +321,14 @@ def _response_id_from_chat_stream(text: str) -> str:
     assert isinstance(response_id, str), payloads[0]
     return response_id
 
+
 def _extra_body(body: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
     return {
         key: value
         for key, value in body.items()
         if key not in {"model", "messages", "tools", "reasoning_effort", "stream", "num_retries"}
     }
+
 
 def _sync_sdk_chat(gateway: Gateway, body: dict[str, JsonValue], stream: bool) -> _Served:
     base_url: Final = f"{str(gateway.client.base_url).rstrip('/')}/v1"
@@ -340,6 +359,7 @@ def _sync_sdk_chat(gateway: Gateway, body: dict[str, JsonValue], stream: bool) -
         )
         return _Served(_Call("chat", False, _request_marker_from_body(body)), 200, response.id, "")
 
+
 async def _async_sdk_chat(gateway: Gateway, body: dict[str, JsonValue], stream: bool) -> _Served:
     base_url: Final = f"{str(gateway.client.base_url).rstrip('/')}/v1"
     model: Final = str(body["model"])
@@ -369,6 +389,7 @@ async def _async_sdk_chat(gateway: Gateway, body: dict[str, JsonValue], stream: 
         )
         return _Served(_Call("chat", False, _request_marker_from_body(body)), 200, response.id, "")
 
+
 async def _serve_chat(
     gateway: Gateway,
     body: dict[str, JsonValue],
@@ -394,10 +415,12 @@ async def _serve_chat(
                     _Call("chat", stream, _request_marker_from_body(body)),
                 )
 
+
 def _request_marker_from_body(body: Mapping[str, JsonValue]) -> str:
     match: Final = _MARKER.search(json.dumps(body).encode())
     assert match is not None, body
     return match.group(1).decode()
+
 
 async def _raw_call(
     client: httpx.AsyncClient,
@@ -423,6 +446,7 @@ async def _raw_call(
     )
     return _Served(call, status, response_id if isinstance(response_id, str) else None, text)
 
+
 async def _send_call(
     client: httpx.AsyncClient,
     model: str,
@@ -444,6 +468,7 @@ async def _send_call(
     except httpx.TransportError as error:
         return _Served(call, 0, None, f"{type(error).__name__}: {error}")
 
+
 async def _burst(
     base_url: str,
     key: str,
@@ -459,6 +484,7 @@ async def _burst(
     ) as client:
         return tuple(await asyncio.gather(*(_send_call(client, model, call) for call in calls)))
 
+
 def _calls(count: int) -> tuple[_Call, ...]:
     surfaces: Final[tuple[_Surface, ...]] = ("chat", "chat", "responses")
     return tuple(
@@ -470,6 +496,7 @@ def _calls(count: int) -> tuple[_Call, ...]:
         for index in range(count)
     )
 
+
 def _requests_for_marker(requests: tuple[Request, ...], marker: str) -> tuple[Request, ...]:
     return tuple(
         request
@@ -477,15 +504,18 @@ def _requests_for_marker(requests: tuple[Request, ...], marker: str) -> tuple[Re
         if request.method == "POST" and request.target == "/v1/responses" and _request_marker(request) == marker
     )
 
+
 def _peer_request_has_marker(request: Request, marker: str) -> bool:
     body: Final = _request_body(request)
     return _contains_breakpoint(body) and _request_marker(request) == marker
+
 
 def _peer_marker_matches_response(served: _Served, requests: tuple[Request, ...]) -> bool:
     peer_requests: Final = _requests_for_marker(requests, served.call.marker)
     assert len(peer_requests) == 1, (served, peer_requests)
     (peer_request,) = peer_requests
     return _peer_request_has_marker(peer_request, served.call.marker)
+
 
 def _assert_spend_for_result(served: _Served, model: str) -> None:
     assert served.status == 200 and served.response_id is not None, served

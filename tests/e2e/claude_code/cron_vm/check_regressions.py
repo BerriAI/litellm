@@ -52,8 +52,7 @@ def main() -> int:
 
     if not args.old.exists():
         print(  # noqa: T201  # CLI output read by run_daily.sh
-            "no published matrix to compare against "
-            "(first publish); treating as no regressions"
+            "no published matrix to compare against (first publish); treating as no regressions"
         )
         return 0
 

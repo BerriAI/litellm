@@ -71,9 +71,7 @@ def _seed(gateway: Gateway, database_url: str) -> None:
         )
 
 
-def test_boot_logs_the_keys_and_teams_on_the_deprecated_empty_models_defaults(
-    gateway: Gateway, tmp_path: Path
-) -> None:
+def test_boot_logs_the_keys_and_teams_on_the_deprecated_empty_models_defaults(gateway: Gateway, tmp_path: Path) -> None:
     with owned_proxy_process(gateway, tmp_path / "seed", {}, state=OwnedState.PRIVATE) as seeding:
         database_url: Final = seeding.gateway.database_url
         assert database_url is not None

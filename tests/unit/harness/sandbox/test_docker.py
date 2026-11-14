@@ -166,9 +166,7 @@ async def test_read_write_which_tempdir(fake):
 async def test_snapshot_parses_output(fake):
     box = sandbox.docker("img")
     digest = "a" * 64
-    fake.responses["exec"] = FakeHandle(
-        stdout=f"{digest}  ./x.txt\n{digest}  ./dir/with space.txt\n".encode()
-    )
+    fake.responses["exec"] = FakeHandle(stdout=f"{digest}  ./x.txt\n{digest}  ./dir/with space.txt\n".encode())
     snap = await box.snapshot()
     assert snap == {"x.txt": digest, "dir/with space.txt": digest}
     script = fake.calls[-1][-3]
@@ -204,12 +202,7 @@ def _docker_usable() -> bool:
     if shutil.which("docker") is None:
         return False
     try:
-        return (
-            subprocess.run(
-                ["docker", "info"], capture_output=True, timeout=20
-            ).returncode
-            == 0
-        )
+        return subprocess.run(["docker", "info"], capture_output=True, timeout=20).returncode == 0
     except (OSError, subprocess.SubprocessError):
         return False
 

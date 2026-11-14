@@ -20,6 +20,6 @@ def test_is_not_base_http_middleware():
 
 def test_has_asgi_call_protocol():
     """PrometheusAuthMiddleware must implement the ASGI __call__ protocol."""
-    assert (
-        "__call__" in PrometheusAuthMiddleware.__dict__
-    ), "PrometheusAuthMiddleware must define __call__(self, scope, receive, send)"
+    assert "__call__" in PrometheusAuthMiddleware.__dict__, (
+        "PrometheusAuthMiddleware must define __call__(self, scope, receive, send)"
+    )

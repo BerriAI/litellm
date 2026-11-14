@@ -43,7 +43,7 @@ _SEED: Final = (
     "INSERT INTO \"LiteLLM_TeamMembership\" (team_id, user_id, budget_id) VALUES ('team', 'user', 'budget')",
     "INSERT INTO \"LiteLLM_OrganizationMembership\" (organization_id, user_id) VALUES ('org', 'user')",
     f"INSERT INTO \"LiteLLM_VerificationToken\" (token, budget_id) VALUES ('{_KEY}', 'budget')",
-    "INSERT INTO \"LiteLLM_ProjectTable\" (project_id, budget_id, created_by, updated_by) "
+    'INSERT INTO "LiteLLM_ProjectTable" (project_id, budget_id, created_by, updated_by) '
     "VALUES ('project', 'budget', 't', 't')",
     "INSERT INTO \"LiteLLM_TagTable\" (tag_name, budget_id) VALUES ('tag', 'budget')",
     "INSERT INTO \"LiteLLM_ModelAccessGroupBudgetTable\" (access_group_name, budget_id) VALUES ('group', 'budget')",
@@ -53,8 +53,18 @@ _SEED: Final = (
 @pytest.fixture(scope="module")
 def schema_sql() -> str:
     return subprocess.run(
-        [sys.executable, "-I", "-m", "prisma", "migrate", "diff", "--from-empty", "--to-schema-datamodel",
-         str(_ROOT / "litellm/schema.prisma"), "--script"],
+        [
+            sys.executable,
+            "-I",
+            "-m",
+            "prisma",
+            "migrate",
+            "diff",
+            "--from-empty",
+            "--to-schema-datamodel",
+            str(_ROOT / "litellm/schema.prisma"),
+            "--script",
+        ],
         check=True,
         capture_output=True,
         text=True,
@@ -97,11 +107,14 @@ async def _ledger_waits_for_a_lock(url: str) -> None:
 
 def _spend(url: str) -> Sequence[object]:
     with psycopg.connect(url) as connection:
-        return connection.execute(
-            'SELECT (SELECT spend FROM "LiteLLM_UserTable"), (SELECT spend FROM "LiteLLM_TeamTable"), '
-            '(SELECT spend FROM "LiteLLM_TeamMembership"), (SELECT spend FROM "LiteLLM_VerificationToken"), '
-            '(SELECT spend FROM "LiteLLM_OrganizationTable"), (SELECT spend FROM "LiteLLM_ProjectTable")'
-        ).fetchone() or ()
+        return (
+            connection.execute(
+                'SELECT (SELECT spend FROM "LiteLLM_UserTable"), (SELECT spend FROM "LiteLLM_TeamTable"), '
+                '(SELECT spend FROM "LiteLLM_TeamMembership"), (SELECT spend FROM "LiteLLM_VerificationToken"), '
+                '(SELECT spend FROM "LiteLLM_OrganizationTable"), (SELECT spend FROM "LiteLLM_ProjectTable")'
+            ).fetchone()
+            or ()
+        )
 
 
 _Writer = Callable[[psycopg.Connection[tuple[object, ...]]], None]
@@ -113,7 +126,9 @@ def _roster_first(connection: psycopg.Connection[tuple[object, ...]]) -> None:
 
 def _roster_rest(connection: psycopg.Connection[tuple[object, ...]]) -> None:
     connection.execute("SELECT 1 FROM \"LiteLLM_UserTable\" WHERE user_id = 'user' FOR UPDATE")
-    connection.execute("UPDATE \"LiteLLM_TeamTable\" SET members_with_roles = members_with_roles WHERE team_id = 'team'")
+    connection.execute(
+        "UPDATE \"LiteLLM_TeamTable\" SET members_with_roles = members_with_roles WHERE team_id = 'team'"
+    )
 
 
 def _access_group_first(connection: psycopg.Connection[tuple[object, ...]]) -> None:
@@ -121,7 +136,9 @@ def _access_group_first(connection: psycopg.Connection[tuple[object, ...]]) -> N
 
 
 def _access_group_rest(connection: psycopg.Connection[tuple[object, ...]]) -> None:
-    connection.execute(f"UPDATE \"LiteLLM_VerificationToken\" SET access_group_ids = ARRAY['ag'] WHERE token = '{_KEY}'")
+    connection.execute(
+        f"UPDATE \"LiteLLM_VerificationToken\" SET access_group_ids = ARRAY['ag'] WHERE token = '{_KEY}'"
+    )
 
 
 def _cascade_first(connection: psycopg.Connection[tuple[object, ...]]) -> None:

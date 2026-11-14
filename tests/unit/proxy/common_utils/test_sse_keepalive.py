@@ -404,7 +404,5 @@ def _deployment(keepalive_seconds=..., model="openai/gpt-4o"):
         ([_deployment()], None, None, "nothing anywhere leaves it off"),
     ],
 )
-def test_ttft_interval_resolves_through_the_deployments_it_could_land_on(
-    deployments, global_interval, expected, why
-):
+def test_ttft_interval_resolves_through_the_deployments_it_could_land_on(deployments, global_interval, expected, why):
     assert resolve_ttft_keepalive_interval(deployments, global_interval) == expected, why

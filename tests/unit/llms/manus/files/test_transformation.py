@@ -198,4 +198,6 @@ async def test_manus_file_create_retrieve_list_delete(
     assert (retrieved.id, retrieved.filename) == (file_id, filename)
     assert tuple(file.id for file in listed) == (file_id,)
     assert (deleted.id, deleted.deleted) == (file_id, True)
-    assert all(route.call_count == 1 for route in (create_route, upload_route, retrieve_route, list_route, delete_route))
+    assert all(
+        route.call_count == 1 for route in (create_route, upload_route, retrieve_route, list_route, delete_route)
+    )

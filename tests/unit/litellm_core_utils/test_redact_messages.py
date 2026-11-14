@@ -137,7 +137,9 @@ def _reasoning_items() -> list[dict[str, object]]:
 
 def _message_response() -> ModelResponse:
     return ModelResponse(
-        choices=[{"index": 0, "message": {"role": "assistant", "content": "answer", "reasoning_items": _reasoning_items()}}]
+        choices=[
+            {"index": 0, "message": {"role": "assistant", "content": "answer", "reasoning_items": _reasoning_items()}}
+        ]
     )
 
 
@@ -169,7 +171,12 @@ def test_redaction_hides_reasoning_item_summaries(details: dict[str, object], re
 
 
 def test_an_opted_out_callback_gets_a_text_completion_with_its_answer_redacted() -> None:
-    logprobs: Final = {"tokens": [SECRET], "token_logprobs": [-0.1], "text_offset": [0], "top_logprobs": [{SECRET: -0.1}]}
+    logprobs: Final = {
+        "tokens": [SECRET],
+        "token_logprobs": [-0.1],
+        "text_offset": [0],
+        "top_logprobs": [{SECRET: -0.1}],
+    }
     response: Final = TextCompletionResponse(
         choices=[{"index": 0, "text": SECRET, "logprobs": logprobs, "finish_reason": "stop"}]
     )

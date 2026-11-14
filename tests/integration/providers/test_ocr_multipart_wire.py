@@ -45,7 +45,12 @@ def _data_url(media_type: str, content: bytes) -> str:
 def _expected_body(
     upstream_model: str, document: dict[str, str], include_image_base64: bool = True
 ) -> dict[str, object]:
-    return {"model": upstream_model, "document": document, "pages": [0, 1], "include_image_base64": include_image_base64}
+    return {
+        "model": upstream_model,
+        "document": document,
+        "pages": [0, 1],
+        "include_image_base64": include_image_base64,
+    }
 
 
 def _mistral_reply(request: Request) -> Reply:

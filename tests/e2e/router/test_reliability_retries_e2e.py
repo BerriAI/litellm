@@ -135,7 +135,10 @@ class TestReliabilityRetries:
         Subject(
             domain=Domain.ROUTING,
             providers=(Provider.OPENAI,),
-            models=(CHEAP_OPENAI_MODEL, REAL_MODEL,),
+            models=(
+                CHEAP_OPENAI_MODEL,
+                REAL_MODEL,
+            ),
             mode=Mode.NONSTREAM,
         )
     )
@@ -181,7 +184,10 @@ class TestReliabilityRetries:
         Subject(
             domain=Domain.ROUTING,
             providers=(Provider.OPENAI,),
-            models=(REAL_MODEL, SMALL_CONTEXT_MODEL,),
+            models=(
+                REAL_MODEL,
+                SMALL_CONTEXT_MODEL,
+            ),
             mode=Mode.NONSTREAM,
         )
     )

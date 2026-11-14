@@ -110,7 +110,6 @@ def test_output_tool_calls_use_the_datadog_tool_call_schema(logger: DataDogLLMOb
     assert "function" not in message["tool_calls"][0]
 
 
-
 def test_claude_server_tool_calls_are_reported_before_client_tool_calls(logger: DataDogLLMObsLogger) -> None:
     payload: Final = build(
         logger,
@@ -144,6 +143,7 @@ def test_claude_server_tool_calls_are_reported_before_client_tool_calls(logger: 
             "type": "function",
         },
     ]
+
 
 def test_tool_call_identifiers_that_are_not_strings_are_blanked_not_stringified(logger: DataDogLLMObsLogger) -> None:
     payload = build(

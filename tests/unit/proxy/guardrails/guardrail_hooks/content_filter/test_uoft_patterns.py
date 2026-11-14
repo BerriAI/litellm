@@ -22,10 +22,7 @@ class TestUofTStudentId:
 
     def test_in_sentence(self):
         pattern = get_compiled_pattern("uoft_student_id")
-        assert (
-            pattern.search("My student number is 1012345678 for registration")
-            is not None
-        )
+        assert pattern.search("My student number is 1012345678 for registration") is not None
 
     def test_prefix_must_be_10(self):
         """All UofT numbers start with 10"""
@@ -97,10 +94,7 @@ class TestUofTTCard:
 
     def test_in_sentence(self):
         pattern = get_compiled_pattern("uoft_tcard")
-        assert (
-            pattern.search("My TCard number is 1234567890123456 for library access")
-            is not None
-        )
+        assert pattern.search("My TCard number is 1234567890123456 for library access") is not None
 
     def test_too_few_digits_rejected(self):
         pattern = get_compiled_pattern("uoft_tcard")

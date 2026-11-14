@@ -345,8 +345,18 @@ class TestConfigureAgents:
         group_url = "http://group.test" if leaf_override else PROXY
         group_key = "sk-group" if leaf_override else VALID_KEY
         args = [
-            "--base-url", "http://global.test", "--api-key", "sk-global", "configure",
-            "--gateway-url", group_url, "--api-key", group_key, target, "--model", "auto",
+            "--base-url",
+            "http://global.test",
+            "--api-key",
+            "sk-global",
+            "configure",
+            "--gateway-url",
+            group_url,
+            "--api-key",
+            group_key,
+            target,
+            "--model",
+            "auto",
         ]
         if leaf_override:
             args.extend(["--base-url", f"{PROXY}/v1/", "--api-key", VALID_KEY])
@@ -367,9 +377,7 @@ class TestConfigureAgents:
 
     @responses.activate
     @pytest.mark.parametrize("failure", ["invalid-model", "cancel"])
-    def test_both_model_choices_complete_before_either_configuration_changes(
-        self, paths, codex_path, failure
-    ):
+    def test_both_model_choices_complete_before_either_configuration_changes(self, paths, codex_path, failure):
         _mock_agent_models()
         settings_path, state_path = paths
         settings_path.parent.mkdir(parents=True)
@@ -399,9 +407,7 @@ class TestConfigureAgents:
         assert not tuple((codex_path.parent / ".litellm").glob("*.json"))
 
     @responses.activate
-    def test_both_configs_are_preflighted_before_fetching_models_or_writing(
-        self, paths, codex_path
-    ):
+    def test_both_configs_are_preflighted_before_fetching_models_or_writing(self, paths, codex_path):
         _mock_agent_models()
         codex_path.parent.mkdir(parents=True)
         codex_path.write_text("[invalid")
@@ -439,9 +445,7 @@ class TestConfigureAgents:
         assert not codex_path.exists() and not tuple((codex_path.parent / ".litellm").glob("*.json"))
 
     @responses.activate
-    def test_claude_only_configuration_does_not_require_codex(
-        self, runner, paths, codex_path, fake_codex_version
-    ):
+    def test_claude_only_configuration_does_not_require_codex(self, runner, paths, codex_path, fake_codex_version):
         _mock_agent_models()
         fake_codex_version(None, 0)
         result = runner.invoke(
@@ -452,9 +456,7 @@ class TestConfigureAgents:
         assert not codex_path.exists()
 
     @responses.activate
-    def test_codex_only_ignores_claudes_temporary_owner(
-        self, runner, paths, codex_path, lite_up_backup
-    ):
+    def test_codex_only_ignores_claudes_temporary_owner(self, runner, paths, codex_path, lite_up_backup):
         _mock_agent_models()
         result = runner.invoke(
             cli, ["configure", "--api-key", VALID_KEY, "--gateway-url", PROXY, "codex", "--model", "auto"]
@@ -486,8 +488,16 @@ class TestConfigureAgents:
         result = runner.invoke(
             cli,
             [
-                "configure", "--api-key", VALID_KEY, "--gateway-url", PROXY,
-                target, "--model", "auto", option, value,
+                "configure",
+                "--api-key",
+                VALID_KEY,
+                "--gateway-url",
+                PROXY,
+                target,
+                "--model",
+                "auto",
+                option,
+                value,
             ],
         )
         assert result.exit_code != 0 and expected in result.output
@@ -807,9 +817,7 @@ class TestSavedAgentSetup:
         restored: Final = runner.invoke(cli, ["unconfigure"])
         assert restored.exit_code == 0, restored.output
         assert json.loads(paths[0].read_text()) == {"theme": "light", "model": "personal-claude"}
-        assert tomlkit.parse(codex_path.read_text()) == {
-            "model": "personal-codex", "approval_policy": "on-request"
-        }
+        assert tomlkit.parse(codex_path.read_text()) == {"model": "personal-codex", "approval_policy": "on-request"}
 
     @responses.activate
     @pytest.mark.parametrize("disconnected", [False, True], ids=["active", "disconnected"])
@@ -974,9 +982,7 @@ class TestSavedAgentSetup:
         _configure_saved_agent(runner, "codex")
         untouched: Final = codex_path if target == "claude" else paths[0]
         before: Final = untouched.read_bytes()
-        responses.replace(
-            responses.GET, f"{PROXY}/v1/models", json={"data": [{"id": "auto"}, {"id": "replacement"}]}
-        )
+        responses.replace(responses.GET, f"{PROXY}/v1/models", json={"data": [{"id": "auto"}, {"id": "replacement"}]})
 
         def checkbox(**kwargs: object) -> SimpleNamespace:
             choices: Final = kwargs["choices"]
@@ -1017,7 +1023,10 @@ class TestSavedAgentSetup:
         _configure_saved_agent(runner, "claude")
         _configure_saved_agent(runner, "codex")
         files: Final = (
-            paths[0], codex_path, _saved_profile_path("claude", paths[0]), _saved_profile_path("codex", codex_path)
+            paths[0],
+            codex_path,
+            _saved_profile_path("claude", paths[0]),
+            _saved_profile_path("codex", codex_path),
         )
         before: Final = tuple(path.read_bytes() for path in files)
 
@@ -1074,15 +1083,18 @@ class TestSavedAgentSetup:
         responses.reset()
         if fault == "key":
             responses.get(
-                f"{PROXY}/v1/models", status=401,
+                f"{PROXY}/v1/models",
+                status=401,
                 match=[responses.matchers.header_matcher({"Authorization": f"Bearer {VALID_KEY}"})],
             )
         responses.get(
             f"{PROXY}/v1/models",
             json={"data": [{"id": "auto" if fault == "key" else "replacement"}]},
-            match=[responses.matchers.header_matcher({
-                "Authorization": "Bearer sk-repaired" if fault == "key" else f"Bearer {VALID_KEY}"
-            })],
+            match=[
+                responses.matchers.header_matcher(
+                    {"Authorization": "Bearer sk-repaired" if fault == "key" else f"Bearer {VALID_KEY}"}
+                )
+            ],
         )
         failed: Final = runner.invoke(cli, ["configure", target])
         assert failed.exit_code != 0, failed.output
@@ -1190,8 +1202,14 @@ class TestSavedAgentSetup:
             failed: Final = runner.invoke(
                 cli,
                 [
-                    "reconfigure", target, "--gateway-url", replacement_url,
-                    "--api-key", replacement_key, "--model", "replacement",
+                    "reconfigure",
+                    target,
+                    "--gateway-url",
+                    replacement_url,
+                    "--api-key",
+                    replacement_key,
+                    "--model",
+                    "replacement",
                 ],
             )
         assert failed.exit_code != 0, failed.output
@@ -1200,7 +1218,10 @@ class TestSavedAgentSetup:
         saved: Final = TypeAdapter(dict[str, JsonValue]).validate_json(profile_path.read_text())
         if failure == "apply":
             assert saved == {
-                **original_profile, "base_url": replacement_url, "api_key": replacement_key, "model": "replacement"
+                **original_profile,
+                "base_url": replacement_url,
+                "api_key": replacement_key,
+                "model": "replacement",
             }
             assert "simulated agent settings write failure" in failed.output
             assert "setup was saved" in failed.output and f"lite configure {target}" in failed.output
@@ -1216,7 +1237,9 @@ class TestSavedAgentSetup:
             environment: Final = written["env"]
             assert isinstance(environment, dict)
             assert (environment["ANTHROPIC_BASE_URL"], environment["ANTHROPIC_AUTH_TOKEN"], written["model"]) == (
-                replacement_url, replacement_key, "replacement"
+                replacement_url,
+                replacement_key,
+                "replacement",
             )
         else:
             providers: Final = written["model_providers"]
@@ -1226,7 +1249,9 @@ class TestSavedAgentSetup:
             headers: Final = provider["http_headers"]
             assert isinstance(headers, dict)
             assert (provider["base_url"], headers["Authorization"], written["model"]) == (
-                f"{replacement_url}/v1", f"Bearer {replacement_key}", "replacement"
+                f"{replacement_url}/v1",
+                f"Bearer {replacement_key}",
+                "replacement",
             )
 
     @responses.activate

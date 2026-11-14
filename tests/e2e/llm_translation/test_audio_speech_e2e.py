@@ -55,19 +55,13 @@ class TestAudioSpeech:
             mode=Mode.NONSTREAM,
         )
     )
-    def test_audio_speech_returns_audio(
-        self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
-    ) -> None:
+    def test_audio_speech_returns_audio(self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients) -> None:
         model, key = _register_tts(proxy, resources)
         client = sdk.openai(key)
 
-        response = client.audio.speech.with_raw_response.create(
-            model=model, voice="alloy", input="Hello!"
-        )
+        response = client.audio.speech.with_raw_response.create(model=model, voice="alloy", input="Hello!")
         content_type = response_header(response.headers, "content-type")
-        assert "audio" in (content_type or ""), (
-            f"/audio/speech content-type is not audio: {content_type!r}"
-        )
+        assert "audio" in (content_type or ""), f"/audio/speech content-type is not audio: {content_type!r}"
         assert response.content, "/audio/speech returned an empty body"
 
     @pytest.mark.covers("llm.audio_speech.openai.basic.stream.works")
@@ -99,9 +93,7 @@ class TestAudioSpeech:
             content_length = response_header(response.headers, "content-length")
             total_bytes = sum(len(chunk) for chunk in response.iter_bytes(chunk_size=8192))
 
-        assert "audio" in (content_type or ""), (
-            f"/audio/speech content-type is not audio: {content_type!r}"
-        )
+        assert "audio" in (content_type or ""), f"/audio/speech content-type is not audio: {content_type!r}"
         assert "chunked" in (transfer_encoding or ""), (
             f"/audio/speech did not stream: transfer-encoding={transfer_encoding!r}, "
             f"content-length={content_length!r} (a buffered body is not a stream)"
@@ -123,9 +115,7 @@ class TestAudioSpeech:
             mode=Mode.NONSTREAM,
         )
     )
-    def test_missing_input_returns_error(
-        self, proxy: ProxyClient, resources: ResourceManager
-    ) -> None:
+    def test_missing_input_returns_error(self, proxy: ProxyClient, resources: ResourceManager) -> None:
         model, key = _register_tts(proxy, resources)
         result = proxy.transport.send(
             "/v1/audio/speech",
@@ -142,9 +132,7 @@ class TestAudioSpeech:
             route=Route.AUDIO,
         )
     )
-    def test_missing_model_returns_error(
-        self, proxy: ProxyClient, resources: ResourceManager
-    ) -> None:
+    def test_missing_model_returns_error(self, proxy: ProxyClient, resources: ResourceManager) -> None:
         _, key = _register_tts(proxy, resources)
         result = proxy.transport.send(
             "/v1/audio/speech",
@@ -153,7 +141,9 @@ class TestAudioSpeech:
         )
         assert_client_error(result, "speech missing model")
 
-    @pytest.mark.skip(reason="stage red: product gap, /v1/audio/speech 500s on invalid voice instead of surfacing the provider 4xx")
+    @pytest.mark.skip(
+        reason="stage red: product gap, /v1/audio/speech 500s on invalid voice instead of surfacing the provider 4xx"
+    )
     @pytest.mark.covers("llm.audio_speech.openai.input_validation.nonstream.works")
     @meta(
         Subject(
@@ -164,9 +154,7 @@ class TestAudioSpeech:
             mode=Mode.NONSTREAM,
         )
     )
-    def test_invalid_voice_returns_error(
-        self, proxy: ProxyClient, resources: ResourceManager
-    ) -> None:
+    def test_invalid_voice_returns_error(self, proxy: ProxyClient, resources: ResourceManager) -> None:
         model, key = _register_tts(proxy, resources)
         result = proxy.transport.send(
             "/v1/audio/speech",
@@ -175,7 +163,9 @@ class TestAudioSpeech:
         )
         assert_client_error(result, "speech invalid voice")
 
-    @pytest.mark.skip(reason="stage red: product gap, /v1/audio/speech 500s on empty input instead of surfacing the provider 4xx")
+    @pytest.mark.skip(
+        reason="stage red: product gap, /v1/audio/speech 500s on empty input instead of surfacing the provider 4xx"
+    )
     @pytest.mark.covers("llm.audio_speech.openai.input_validation.nonstream.works")
     @meta(
         Subject(
@@ -186,9 +176,7 @@ class TestAudioSpeech:
             mode=Mode.NONSTREAM,
         )
     )
-    def test_empty_input_returns_error(
-        self, proxy: ProxyClient, resources: ResourceManager
-    ) -> None:
+    def test_empty_input_returns_error(self, proxy: ProxyClient, resources: ResourceManager) -> None:
         model, key = _register_tts(proxy, resources)
         result = proxy.transport.send(
             "/v1/audio/speech",

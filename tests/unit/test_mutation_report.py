@@ -28,18 +28,14 @@ def test_a_run_that_reported_nothing_is_not_a_clean_sweep():
 
 
 def test_a_run_that_killed_every_mutant_says_so():
-    rendered = report.render(
-        _CONFIG, report.MutmutResults(survivors=(), reported=0), {"killed": 48, "survived": 0}
-    )
+    rendered = report.render(_CONFIG, report.MutmutResults(survivors=(), reported=0), {"killed": 48, "survived": 0})
 
     assert "caught every mutation" in rendered
     assert "not a passing score" not in rendered
 
 
 def test_stats_counting_survivors_results_never_listed_is_not_a_clean_sweep():
-    rendered = report.render(
-        _CONFIG, report.MutmutResults(survivors=(), reported=0), {"killed": 48, "survived": 3}
-    )
+    rendered = report.render(_CONFIG, report.MutmutResults(survivors=(), reported=0), {"killed": 48, "survived": 3})
 
     assert "not a passing score" in rendered
     assert "caught every mutation" not in rendered
@@ -72,9 +68,7 @@ def test_a_status_the_reporter_has_never_met_still_blocks_a_clean_sweep():
 
 
 def test_no_survivors_without_a_kill_is_not_a_clean_sweep():
-    rendered = report.render(
-        _CONFIG, report.MutmutResults(survivors=(), reported=48), {"killed": 0, "survived": 0}
-    )
+    rendered = report.render(_CONFIG, report.MutmutResults(survivors=(), reported=48), {"killed": 0, "survived": 0})
 
     assert "not a passing score" in rendered
     assert "caught every mutation" not in rendered
@@ -102,9 +96,7 @@ def test_survivors_are_read_out_of_the_verdicts_they_came_with(monkeypatch):
 
     results = report.get_survivors()
 
-    assert results.survivors == (
-        "litellm.proxy.management_endpoints.key_management_endpoints.x_2",
-    )
+    assert results.survivors == ("litellm.proxy.management_endpoints.key_management_endpoints.x_2",)
     assert results.reported == 3
 
 

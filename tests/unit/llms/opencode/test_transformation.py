@@ -21,9 +21,7 @@ from litellm.litellm_core_utils.get_llm_provider_logic import get_provider_affin
 def test_opencode_defaults_affinity_header_to_the_callers_session(api_base: str) -> None:
     headers: Final = {"Authorization": "Bearer test-key"}
     params: Final = {"metadata": {"session_id": "conversation-123"}}
-    assert add_provider_affinity_header(
-        headers, params, get_provider_affinity_header(api_base)
-    ) == {
+    assert add_provider_affinity_header(headers, params, get_provider_affinity_header(api_base)) == {
         **headers,
         "x-opencode-session": "conversation-123",
     }
@@ -69,12 +67,7 @@ def test_other_destinations_do_not_receive_an_automatic_session_header(api_base:
     ],
 )
 def test_opencode_does_not_invent_a_conversation_id(params: dict[str, object]) -> None:
-    assert (
-        add_provider_affinity_header(
-            {}, params, get_provider_affinity_header("https://opencode.ai/zen/go/v1")
-        )
-        == {}
-    )
+    assert add_provider_affinity_header({}, params, get_provider_affinity_header("https://opencode.ai/zen/go/v1")) == {}
 
 
 def test_opencode_preserves_explicit_header_and_affinity_configuration() -> None:

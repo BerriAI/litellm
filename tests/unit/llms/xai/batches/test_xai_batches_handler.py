@@ -283,7 +283,9 @@ async def test_file_content_of_a_batch_id_walks_every_results_page(sync_mode: bo
 @respx.mock
 async def test_file_retrieve_of_a_batch_id_describes_its_results_from_one_batch_read(sync_mode: bool) -> None:
     batch_id: Final = f"batch_retrieve_{sync_mode}"
-    batch: Final = respx.get(f"{API_BASE}/v1/batches/{batch_id}").respond(200, json={**_XAI_BATCH, "batch_id": batch_id})
+    batch: Final = respx.get(f"{API_BASE}/v1/batches/{batch_id}").respond(
+        200, json={**_XAI_BATCH, "batch_id": batch_id}
+    )
     results: Final = respx.get(f"{API_BASE}/v1/batches/{batch_id}/results").respond(
         200, json={"results": [], "pagination_token": None}
     )

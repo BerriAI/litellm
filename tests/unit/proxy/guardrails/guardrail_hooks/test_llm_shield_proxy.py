@@ -486,14 +486,22 @@ class TestRequestCoverage:
                         },
                         {
                             "type": "document",
-                            "source": {"type": "content", "content": [{"type": "text", "text": "Reach bob@example.com"}]},
+                            "source": {
+                                "type": "content",
+                                "content": [{"type": "text", "text": "Reach bob@example.com"}],
+                            },
                         },
-                        {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": "JVBERi0x"}},
+                        {
+                            "type": "document",
+                            "source": {"type": "base64", "media_type": "application/pdf", "data": "JVBERi0x"},
+                        },
                     ],
                 }
             ]
         }
-        await guardrail.async_pre_call_hook(user_api_key_dict=None, cache=None, data=data, call_type="anthropic_messages")
+        await guardrail.async_pre_call_hook(
+            user_api_key_dict=None, cache=None, data=data, call_type="anthropic_messages"
+        )
 
         sent = mock.call_args_list[0].kwargs["json"]["texts"]
         assert sent == ["Jane Doe notes", "alice@example.com", "Reach bob@example.com"]
@@ -1087,7 +1095,6 @@ class TestVaultIsolation:
         seen = {call.kwargs["headers"]["X-Session-ID"] for call in mock.call_args_list}
         assert len(seen) == 2
 
-
     @pytest.mark.parametrize(
         "data",
         [
@@ -1191,13 +1198,9 @@ class TestVaultIsolation:
                 {"role": "user", "content": "email a@b.com"},
             ]
         }
-        await guardrail.async_pre_call_hook(
-            user_api_key_dict=None, cache=None, data=data, call_type="completion"
-        )
+        await guardrail.async_pre_call_hook(user_api_key_dict=None, cache=None, data=data, call_type="completion")
 
-        privileged_id, caller_id = (
-            call.kwargs["headers"]["X-Session-ID"] for call in mock.call_args_list
-        )
+        privileged_id, caller_id = (call.kwargs["headers"]["X-Session-ID"] for call in mock.call_args_list)
         assert privileged_id != caller_id
         assert guardrail._session_id(data) == caller_id
 
@@ -1217,9 +1220,7 @@ class TestVaultIsolation:
                 {"role": "user", "content": "email a@b.com"},
             ]
         }
-        await guardrail.async_pre_call_hook(
-            user_api_key_dict=None, cache=None, data=data, call_type="completion"
-        )
+        await guardrail.async_pre_call_hook(user_api_key_dict=None, cache=None, data=data, call_type="completion")
 
         privileged_id = mock.call_args_list[0].kwargs["headers"]["X-Session-ID"]
         assert privileged_id not in json.dumps(data, default=str)

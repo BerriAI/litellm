@@ -145,14 +145,21 @@ def test_a_404_without_not_found_retries_falls_back_to_bad_request_then_default_
         == 0
     )
     assert get_num_retries_from_retry_policy(exception=exception, retry_policy=RetryPolicy(DefaultRetries=3)) == 3
-    assert get_num_retries_from_retry_policy(exception=_error(litellm.NotFoundError), retry_policy=RetryPolicy(DefaultRetries=3)) == 3
+    assert (
+        get_num_retries_from_retry_policy(
+            exception=_error(litellm.NotFoundError), retry_policy=RetryPolicy(DefaultRetries=3)
+        )
+        == 3
+    )
 
 
 def test_not_found_retries_leaves_a_plain_400_alone():
     exception: Final = _error(litellm.BadRequestError)
     assert exception.status_code == 400
 
-    assert get_num_retries_from_retry_policy(exception=exception, retry_policy=RetryPolicy(NotFoundErrorRetries=0)) is None
+    assert (
+        get_num_retries_from_retry_policy(exception=exception, retry_policy=RetryPolicy(NotFoundErrorRetries=0)) is None
+    )
     assert (
         get_num_retries_from_retry_policy(
             exception=exception, retry_policy=RetryPolicy(NotFoundErrorRetries=0, BadRequestErrorRetries=2)

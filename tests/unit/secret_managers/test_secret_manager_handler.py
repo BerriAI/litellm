@@ -74,8 +74,7 @@ class FakeAzureKeyVaultClient:
 
 
 FIXTURE_PATH: Path = (
-    Path(__file__).parents[3]
-    / "litellm/rust/crates/secrets-azure/tests/fixtures/key_vault_parity.json"
+    Path(__file__).parents[3] / "litellm/rust/crates/secrets-azure/tests/fixtures/key_vault_parity.json"
 )
 
 
@@ -89,9 +88,7 @@ def test_azure_key_vault_matches_rust_parity_fixture() -> None:
             value=secret,
         )
         if case.expected.missing or case.expected.error:
-            with pytest.raises(
-                AzureResourceNotFoundError if case.expected.missing else AzureHttpResponseError
-            ):
+            with pytest.raises(AzureResourceNotFoundError if case.expected.missing else AzureHttpResponseError):
                 get_secret_from_manager(
                     secret_name=case.secret_name,
                     key_manager=KeyManagementSystem.AZURE_KEY_VAULT.value,

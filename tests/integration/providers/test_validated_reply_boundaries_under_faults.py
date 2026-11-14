@@ -62,7 +62,9 @@ _IMAGE_USAGE: Final[dict[str, JsonValue]] = {
 }
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 _STARTED_WORKER: Final = re.compile(r"Started server process \[(\d+)\]")
-_PACKAGED_PRICES: Final = Path(__file__).resolve().parents[3] / "litellm" / "model_prices_and_context_window_backup.json"
+_PACKAGED_PRICES: Final = (
+    Path(__file__).resolve().parents[3] / "litellm" / "model_prices_and_context_window_backup.json"
+)
 
 
 def _chat_reply(model: str, usage: dict[str, JsonValue]) -> Reply:
@@ -380,9 +382,7 @@ def _sent_image_config(request: Request) -> JsonValue:
 
 def _assert_outbound(received: tuple[Request, ...], expected: dict[tuple[str, str], int]) -> None:
     assert (
-        Counter(
-            (request.method, _path(request)) for request in received if _path(request) != _OPENAI_MODEL_LISTING
-        )
+        Counter((request.method, _path(request)) for request in received if _path(request) != _OPENAI_MODEL_LISTING)
         == expected
     )
     assert {_sent_betas(request) for request in received if _path(request) == _INVOKE} == {tuple(sorted(_BETAS))}
@@ -477,7 +477,9 @@ def test_a_restarted_proxy_answers_with_the_same_validated_shapes(gateway: Gatew
     with wire_server(_peer) as wire:
         config: Final = _faults_config(wire, tmp_path)
         with owned_proxy_process(gateway, tmp_path, _environment(wire), config=config, workers=2) as first:
-            container: Final = str(first.gateway.post("/v1/containers", {"model": _OPENAI_MODEL, "name": "faults"})["id"])
+            container: Final = str(
+                first.gateway.post("/v1/containers", {"model": _OPENAI_MODEL, "name": "faults"})["id"]
+            )
             calls: Final = (
                 _ENRICHED,
                 _IMAGE,

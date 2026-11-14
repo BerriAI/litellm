@@ -24,9 +24,7 @@ _UNKNOWN_MESSAGES: Final = {
     "allowlist": "is not recognized",
     "http": "rejected by cost center service",
 }
-_UNAVAILABLE_MESSAGE: Final = (
-    "Cost center validation is unavailable right now; the team was not saved. Contact FinOps."
-)
+_UNAVAILABLE_MESSAGE: Final = "Cost center validation is unavailable right now; the team was not saved. Contact FinOps."
 
 
 def _meta(impl: str, **fields: JsonValue) -> dict[str, JsonValue]:
@@ -105,9 +103,7 @@ def gateway(cost_center_service: None, tmp_path_factory: pytest.TempPathFactory)
 
 
 @pytest.fixture
-def team_with_cost_center(
-    request: pytest.FixtureRequest, gateway: Gateway
-) -> Iterator[tuple[str, str]]:
+def team_with_cost_center(request: pytest.FixtureRequest, gateway: Gateway) -> Iterator[tuple[str, str]]:
     impl: Final = request.param
     team_id: Final = f"meta-validate-{impl}-{uuid4().hex[:8]}"
     response: Final = _create_team(gateway, _meta(impl, cost_center="CC-1001"), team_id)
@@ -149,9 +145,7 @@ def test_create_with_unknown_cost_center(gateway: Gateway, impl: str) -> None:
 
 
 @pytest.mark.parametrize("team_with_cost_center", _IMPLS, indirect=True)
-def test_patch_changing_cost_center(
-    gateway: Gateway, team_with_cost_center: tuple[str, str]
-) -> None:
+def test_patch_changing_cost_center(gateway: Gateway, team_with_cost_center: tuple[str, str]) -> None:
     impl: Final
     team_id: Final
     impl, team_id = team_with_cost_center
@@ -159,9 +153,7 @@ def test_patch_changing_cost_center(
     if impl == "immutable":
         assert response.status_code == 400, response.text
         assert "immutable once set" in response.text
-        metadata: Final = object_value(object_value(_team_info(gateway, team_id).json())["team_info"])[
-            "metadata"
-        ]
+        metadata: Final = object_value(object_value(_team_info(gateway, team_id).json())["team_info"])["metadata"]
         assert object_value(metadata)["cost_center"] == "CC-1001"
         return
     assert response.status_code == 200, response.text
@@ -169,36 +161,32 @@ def test_patch_changing_cost_center(
 
 
 @pytest.mark.parametrize("team_with_cost_center", _IMPLS, indirect=True)
-def test_patch_unrelated_key_validates_merged_result(
-    gateway: Gateway, team_with_cost_center: tuple[str, str]
-) -> None:
+def test_patch_unrelated_key_validates_merged_result(gateway: Gateway, team_with_cost_center: tuple[str, str]) -> None:
     _, team_id = team_with_cost_center
     response: Final = _patch_team(gateway, team_id, {"metadata": {"team_notes": "hello"}})
     assert response.status_code == 200, response.text
     metadata: Final = object_value(object_value(response.json())["metadata"])
-    assert metadata == {"cost_center": "CC-1001", "team_notes": "hello", "_e2e_validator_impl": team_with_cost_center[0]}
+    assert metadata == {
+        "cost_center": "CC-1001",
+        "team_notes": "hello",
+        "_e2e_validator_impl": team_with_cost_center[0],
+    }
 
 
 @pytest.mark.parametrize("team_with_cost_center", _IMPLS, indirect=True)
-def test_patch_null_deleting_cost_center_is_rejected(
-    gateway: Gateway, team_with_cost_center: tuple[str, str]
-) -> None:
+def test_patch_null_deleting_cost_center_is_rejected(gateway: Gateway, team_with_cost_center: tuple[str, str]) -> None:
     impl: Final
     team_id: Final
     impl, team_id = team_with_cost_center
     response: Final = _patch_team(gateway, team_id, {"metadata": {"cost_center": None}})
     assert response.status_code == 400, response.text
     assert _REQUIRED_MESSAGES[impl] in response.text
-    metadata: Final = object_value(
-        object_value(_team_info(gateway, team_id).json())["team_info"]
-    )["metadata"]
+    metadata: Final = object_value(object_value(_team_info(gateway, team_id).json())["team_info"])["metadata"]
     assert object_value(metadata)["cost_center"] == "CC-1001"
 
 
 @pytest.mark.parametrize("team_with_cost_center", _IMPLS, indirect=True)
-def test_post_update_dropping_cost_center_is_rejected(
-    gateway: Gateway, team_with_cost_center: tuple[str, str]
-) -> None:
+def test_post_update_dropping_cost_center_is_rejected(gateway: Gateway, team_with_cost_center: tuple[str, str]) -> None:
     impl: Final
     team_id: Final
     impl, team_id = team_with_cost_center
@@ -208,9 +196,7 @@ def test_post_update_dropping_cost_center_is_rejected(
 
 
 @pytest.mark.parametrize("team_with_cost_center", _IMPLS, indirect=True)
-def test_update_without_metadata_skips_validation(
-    gateway: Gateway, team_with_cost_center: tuple[str, str]
-) -> None:
+def test_update_without_metadata_skips_validation(gateway: Gateway, team_with_cost_center: tuple[str, str]) -> None:
     _, team_id = team_with_cost_center
     response: Final = _post_update(gateway, team_id, {"tpm_limit": 55})
     assert response.status_code == 200, response.text

@@ -46,13 +46,9 @@ async def test_member_add_both_none_rejected(gateway_client, db, resources, acto
 # ---------------------------------------------------------------------------
 
 
-async def test_member_add_email_id_mismatch_rejected(
-    gateway_client, db, resources, actors
-):
+async def test_member_add_email_id_mismatch_rejected(gateway_client, db, resources, actors):
     email = f"{resources.prefix}-mismatch@example.com"
-    real_user_id = await create_scratch_user(
-        db, resources.prefix, suffix="real", user_email=email
-    )
+    real_user_id = await create_scratch_user(db, resources.prefix, suffix="real", user_email=email)
     other_user_id = await create_scratch_user(db, resources.prefix, suffix="other")
     assert real_user_id != other_user_id  # sanity
     team_id = await create_scratch_team(db, team_id=resources.tag("team"))
@@ -72,7 +68,9 @@ async def test_member_add_email_id_mismatch_rejected(
     assert resp.status_code == 400, resp.text
     assert "do not belong to the same user" in resp.text, resp.text
     rows = await db.db.litellm_teammembership.find_many(where={"team_id": team_id})
-    assert not any(row.user_id in {real_user_id, other_user_id} for row in rows), "mismatch payload leaked a membership row"
+    assert not any(row.user_id in {real_user_id, other_user_id} for row in rows), (
+        "mismatch payload leaked a membership row"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -80,13 +78,9 @@ async def test_member_add_email_id_mismatch_rejected(
 # ---------------------------------------------------------------------------
 
 
-async def test_member_add_email_only_resolves_user_id(
-    gateway_client, db, resources, actors
-):
+async def test_member_add_email_only_resolves_user_id(gateway_client, db, resources, actors):
     email = f"{resources.prefix}-resolve@example.com"
-    user_id = await create_scratch_user(
-        db, resources.prefix, suffix="lookup", user_email=email
-    )
+    user_id = await create_scratch_user(db, resources.prefix, suffix="lookup", user_email=email)
     team_id = await create_scratch_team(db, team_id=resources.tag("team"))
     seeder = actors.keys[Actor.PROXY_ADMIN].cleartext
     resp = await gateway_client.post(
@@ -106,9 +100,7 @@ async def test_member_add_email_only_resolves_user_id(
     team_row = await db.db.litellm_teamtable.find_unique(where={"team_id": team_id})
     assert team_row is not None
     member_user_ids = [m.get("user_id") for m in team_row.members_with_roles]
-    assert (
-        user_id in member_user_ids
-    ), f"email did not resolve to {user_id}; members={member_user_ids}"
+    assert user_id in member_user_ids, f"email did not resolve to {user_id}; members={member_user_ids}"
 
 
 # ---------------------------------------------------------------------------
@@ -116,9 +108,7 @@ async def test_member_add_email_only_resolves_user_id(
 # ---------------------------------------------------------------------------
 
 
-async def test_member_add_unknown_user_id_upserted(
-    gateway_client, db, resources, actors
-):
+async def test_member_add_unknown_user_id_upserted(gateway_client, db, resources, actors):
     team_id = await create_scratch_team(db, team_id=resources.tag("team"))
     new_user_id = f"{resources.prefix}-fresh"
     # Sanity — user does not exist yet.
@@ -138,9 +128,7 @@ async def test_member_add_unknown_user_id_upserted(
     assert post is not None, "user_id was not upserted"
     # The user row was created with NULL email (the helper returned the
     # member as-is, no email lookup happened because the user didn't exist).
-    assert (
-        post.user_email is None
-    ), f"upserted user has unexpected email: {post.user_email!r}"
+    assert post.user_email is None, f"upserted user has unexpected email: {post.user_email!r}"
 
 
 # ---------------------------------------------------------------------------
@@ -149,9 +137,7 @@ async def test_member_add_unknown_user_id_upserted(
 # ---------------------------------------------------------------------------
 
 
-async def test_member_add_duplicate_email_rejected(
-    gateway_client, db, resources, actors
-):
+async def test_member_add_duplicate_email_rejected(gateway_client, db, resources, actors):
     email = f"{resources.prefix}-dup@example.com"
     first = await create_scratch_user(db, resources.prefix, suffix="dup1", user_email=email)
     write_rows(

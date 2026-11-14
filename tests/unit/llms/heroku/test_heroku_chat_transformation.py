@@ -68,9 +68,7 @@ class TestHerokuChatConfig:
 
         response = completion(
             model=model,
-            messages=[
-                {"role": "user", "content": "write code for saying hey from LiteLLM"}
-            ],
+            messages=[{"role": "user", "content": "write code for saying hey from LiteLLM"}],
             extended_thinking={"enabled": True, "include_reasoning": True},
         )
 
@@ -78,9 +76,7 @@ class TestHerokuChatConfig:
         assert len(respx_mock.calls) == 1
         request = respx_mock.calls[0].request
 
-        assert (
-            request.headers["Authorization"] == f"Bearer {os.environ['HEROKU_API_KEY']}"
-        )
+        assert request.headers["Authorization"] == f"Bearer {os.environ['HEROKU_API_KEY']}"
         assert request.headers["Content-Type"] == "application/json"
 
         assert response.choices[0].message.content == "It's me, Mia! How are you?"
@@ -158,23 +154,11 @@ class TestHerokuChatConfig:
             tool_choice="auto",
         )
         print(response)
-        assert (
-            response.choices[0].message.content
-            == "Let me check the current weather in Portland for you."
-        )
-        assert (
-            response.choices[0].message.tool_calls[0].id
-            == "tooluse_dV3Vtnb-S9-Z_YFicSv2Gw"
-        )
+        assert response.choices[0].message.content == "Let me check the current weather in Portland for you."
+        assert response.choices[0].message.tool_calls[0].id == "tooluse_dV3Vtnb-S9-Z_YFicSv2Gw"
         assert response.choices[0].message.tool_calls[0].type == "function"
-        assert (
-            response.choices[0].message.tool_calls[0].function.name
-            == "get_current_weather"
-        )
-        assert (
-            response.choices[0].message.tool_calls[0].function.arguments
-            == '{"location":"Portland, OR"}'
-        )
+        assert response.choices[0].message.tool_calls[0].function.name == "get_current_weather"
+        assert response.choices[0].message.tool_calls[0].function.arguments == '{"location":"Portland, OR"}'
 
         assert response.usage.prompt_tokens == 354
         assert response.usage.completion_tokens == 69

@@ -111,7 +111,12 @@ def test_local_messages_count_accepts_search_result_text(gateway: Gateway, neste
 @pytest.mark.parametrize(
     ("block", "status", "error_type", "message"),
     (
-        ({"type": "future_block", "future_block": {"value": "ignore me"}}, 400, "invalid_request_error", "future_block"),
+        (
+            {"type": "future_block", "future_block": {"value": "ignore me"}},
+            400,
+            "invalid_request_error",
+            "future_block",
+        ),
         ({"type": "image"}, 500, "api_error", "source"),
     ),
     ids=("unknown-block", "unrelated-counting-error"),
@@ -214,9 +219,7 @@ def test_anthropic_count_request_errors_use_the_anthropic_envelope(keyless_proxy
             "error": {"type": "invalid_request_error", "message": "messages parameter is required"},
         }
 
-        rejected: Final = gateway.request(
-            "POST", "/v1/messages/count_tokens", {"model": model, "messages": _MESSAGES}
-        )
+        rejected: Final = gateway.request("POST", "/v1/messages/count_tokens", {"model": model, "messages": _MESSAGES})
         assert rejected.status_code == 400, rejected.text
         body: Final = _JSON_OBJECT.validate_json(rejected.content)
         assert set(body) <= {"type", "error", "request_id"}, body
@@ -242,7 +245,11 @@ def test_openai_input_tokens_without_a_provider_key_is_an_openai_401(keyless_pro
 def test_google_count_tokens_errors_use_the_google_envelope(keyless_proxy: OwnedProxy) -> None:
     gateway: Final = keyless_proxy.gateway
     upstream_error: Final = {
-        "error": {"code": 400, "message": "API key not valid. Please pass a valid API key.", "status": "INVALID_ARGUMENT"}
+        "error": {
+            "code": 400,
+            "message": "API key not valid. Please pass a valid API key.",
+            "status": "INVALID_ARGUMENT",
+        }
     }
     with (
         wire_server(lambda _request: Reply(status=400, body=json.dumps(upstream_error).encode())) as wire,

@@ -17,7 +17,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
 from litellm.responses.utils import ResponsesAPIRequestUtils
-from litellm.types.llms.openai import(
+from litellm.types.llms.openai import (
     OutputTextDeltaEvent,
     ResponseAPIUsage,
     ResponseCompletedEvent,
@@ -95,6 +95,7 @@ def _vcr_outcome_gate(request, vcr):
     yield
     record_vcr_outcome(request, vcr)
 
+
 @pytest.fixture(scope="function")
 def setup_and_teardown():
     """
@@ -111,6 +112,7 @@ def setup_and_teardown():
     yield
     loop.close()
     asyncio.set_event_loop(None)
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 class TestBaseResponsesAPIStreamingIterator:
@@ -290,9 +292,7 @@ class TestBaseResponsesAPIStreamingIterator:
             "content_index": 0,
         }
 
-        with patch.object(
-            ResponsesAPIRequestUtils, "update_responses_api_response_id_with_model_id"
-        ) as mock_update_id:
+        with patch.object(ResponsesAPIRequestUtils, "update_responses_api_response_id_with_model_id") as mock_update_id:
             # Process the chunk
             result = iterator._process_chunk(json.dumps(test_chunk_data))
 
@@ -751,6 +751,7 @@ class TestBaseResponsesAPIStreamingIterator:
             mock_logging_obj.async_failure_handler.assert_not_called()
             mock_logging_obj.failure_handler.assert_not_called()
 
+
 def _sse(*events: Mapping[str, object]) -> httpx.Response:
     return httpx.Response(
         200,
@@ -762,14 +763,22 @@ def _sse(*events: Mapping[str, object]) -> httpx.Response:
 def _openai_stream_cut_after(partial: str) -> httpx.Response:
     return _sse(
         *(
-            ({
-                "type": "response.output_text.delta", "sequence_number": 0,
-                "item_id": "msg_primary", "output_index": 0, "content_index": 0, "delta": partial,
-            },)
-            if partial else ()
+            (
+                {
+                    "type": "response.output_text.delta",
+                    "sequence_number": 0,
+                    "item_id": "msg_primary",
+                    "output_index": 0,
+                    "content_index": 0,
+                    "delta": partial,
+                },
+            )
+            if partial
+            else ()
         ),
         {
-            "type": "error", "sequence_number": 1,
+            "type": "error",
+            "sequence_number": 1,
             "error": {"type": "server_error", "code": "internal_error", "message": "interrupted"},
         },
     )
@@ -777,10 +786,17 @@ def _openai_stream_cut_after(partial: str) -> httpx.Response:
 
 def _anthropic_stream(text: str) -> httpx.Response:
     return _sse(
-        {"type": "message_start", "message": {
-            "id": "msg_fallback", "type": "message", "role": "assistant",
-            "model": "claude-fallback", "content": [], "usage": {"input_tokens": 10, "output_tokens": 0},
-        }},
+        {
+            "type": "message_start",
+            "message": {
+                "id": "msg_fallback",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-fallback",
+                "content": [],
+                "usage": {"input_tokens": 10, "output_tokens": 0},
+            },
+        },
         {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
         {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": text}},
         {"type": "content_block_stop", "index": 0},
@@ -831,9 +847,13 @@ async def test_responses_fallback_can_continue_on_a_provider_without_prefill(
         if body["messages"][-1]["role"] != "user":
             return httpx.Response(
                 400,
-                json={"type": "error", "error": {
-                    "type": "invalid_request_error", "message": "The conversation must end with a user message",
-                }},
+                json={
+                    "type": "error",
+                    "error": {
+                        "type": "invalid_request_error",
+                        "message": "The conversation must end with a user message",
+                    },
+                },
             )
         return _anthropic_stream("3, 4, 5" if partial else "1, 2, 3, 4, 5")
 
@@ -894,7 +914,9 @@ async def test_responses_fallback_continuation_drops_reasoning_the_fallback_cann
     fallback: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
         return_value=_anthropic_stream(" 3, 4, 5")
     )
-    router: Final = _primary_with_fallback(claude_with_prefill if fallback_takes_prefill else "anthropic/claude-opus-5-5")
+    router: Final = _primary_with_fallback(
+        claude_with_prefill if fallback_takes_prefill else "anthropic/claude-opus-5-5"
+    )
     try:
         stream: Final = await router.aresponses(
             model="primary",
@@ -924,7 +946,10 @@ class _Numbers(BaseModel):
     [
         {"text": {"format": {"type": "json_schema", "name": "numbers", "strict": True, "schema": {"type": "object"}}}},
         {"text": {"format": {"type": "json_object"}}},
-        {"tool_choice": "required", "tools": [{"type": "function", "name": "lookup", "parameters": {"type": "object"}}]},
+        {
+            "tool_choice": "required",
+            "tools": [{"type": "function", "name": "lookup", "parameters": {"type": "object"}}],
+        },
         {"text_format": _Numbers},
     ],
     ids=["json_schema", "json_object", "required_tool", "sdk_text_format"],
@@ -965,7 +990,9 @@ async def test_responses_fallback_continues_within_the_callers_output_ceiling(
     )
     router: Final = _primary_with_fallback(claude_with_prefill)
     try:
-        stream: Final = await router.aresponses(model="primary", input="Count to 5.", stream=True, max_output_tokens=100)
+        stream: Final = await router.aresponses(
+            model="primary", input="Count to 5.", stream=True, max_output_tokens=100
+        )
         events: Final = tuple([event async for event in stream])
         assert _streamed_text(events) == "1, 2, 3, 4, 5"
         assert json.loads(fallback.calls.last.request.content)["max_tokens"] == 100 - litellm.token_counter(
@@ -998,40 +1025,75 @@ async def test_responses_fallback_surfaces_the_primary_error_once_the_cut_stream
 
 def _openai_stream_cut_mid_tool_call(preamble: str, *, announce_item: bool = True) -> httpx.Response:
     text: Final = {
-        "type": "response.output_text.delta", "sequence_number": 0,
-        "item_id": "msg_primary", "output_index": 0, "content_index": 0, "delta": preamble,
+        "type": "response.output_text.delta",
+        "sequence_number": 0,
+        "item_id": "msg_primary",
+        "output_index": 0,
+        "content_index": 0,
+        "delta": preamble,
     }
     item_added: Final = {
-        "type": "response.output_item.added", "sequence_number": 1, "output_index": 1,
+        "type": "response.output_item.added",
+        "sequence_number": 1,
+        "output_index": 1,
         "item": {
-            "type": "function_call", "id": "fc_primary", "call_id": "call_primary",
-            "name": "lookup", "arguments": "", "status": "in_progress",
+            "type": "function_call",
+            "id": "fc_primary",
+            "call_id": "call_primary",
+            "name": "lookup",
+            "arguments": "",
+            "status": "in_progress",
         },
     }
     arguments: Final = {
-        "type": "response.function_call_arguments.delta", "sequence_number": 2,
-        "item_id": "fc_primary", "output_index": 1, "delta": '{"city": "Par',
+        "type": "response.function_call_arguments.delta",
+        "sequence_number": 2,
+        "item_id": "fc_primary",
+        "output_index": 1,
+        "delta": '{"city": "Par',
     }
     error: Final = {
-        "type": "error", "sequence_number": 3,
+        "type": "error",
+        "sequence_number": 3,
         "error": {"type": "server_error", "code": "internal_error", "message": "interrupted"},
     }
     return _sse(*((text,) if preamble else ()), *((item_added,) if announce_item else ()), arguments, error)
 
 
-def _anthropic_stream_cut_mid_tool_call(preamble: str, tool_block: Mapping[str, object] | None = None) -> httpx.Response:
+def _anthropic_stream_cut_mid_tool_call(
+    preamble: str, tool_block: Mapping[str, object] | None = None
+) -> httpx.Response:
     return _sse(
-        {"type": "message_start", "message": {
-            "id": "msg_primary", "type": "message", "role": "assistant",
-            "model": "claude-primary", "content": [], "usage": {"input_tokens": 10, "output_tokens": 0},
-        }},
+        {
+            "type": "message_start",
+            "message": {
+                "id": "msg_primary",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-primary",
+                "content": [],
+                "usage": {"input_tokens": 10, "output_tokens": 0},
+            },
+        },
         {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
         {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": preamble}},
         {"type": "content_block_stop", "index": 0},
-        {"type": "content_block_start", "index": 1, "content_block": tool_block or {
-            "type": "tool_use", "id": "toolu_primary", "name": "lookup", "input": {},
-        }},
-        {"type": "content_block_delta", "index": 1, "delta": {"type": "input_json_delta", "partial_json": '{"city": "Par'}},
+        {
+            "type": "content_block_start",
+            "index": 1,
+            "content_block": tool_block
+            or {
+                "type": "tool_use",
+                "id": "toolu_primary",
+                "name": "lookup",
+                "input": {},
+            },
+        },
+        {
+            "type": "content_block_delta",
+            "index": 1,
+            "delta": {"type": "input_json_delta", "partial_json": '{"city": "Par'},
+        },
         {"type": "error", "error": {"type": "overloaded_error", "message": "interrupted"}},
     )
 
@@ -1067,12 +1129,17 @@ async def test_responses_fallback_surfaces_the_primary_error_once_the_cut_stream
 def _openai_stream_cut_after_event(preamble: str, event: Mapping[str, object]) -> httpx.Response:
     return _sse(
         {
-            "type": "response.output_text.delta", "sequence_number": 0,
-            "item_id": "msg_primary", "output_index": 0, "content_index": 0, "delta": preamble,
+            "type": "response.output_text.delta",
+            "sequence_number": 0,
+            "item_id": "msg_primary",
+            "output_index": 0,
+            "content_index": 0,
+            "delta": preamble,
         },
         {**event, "sequence_number": 1},
         {
-            "type": "error", "sequence_number": 2,
+            "type": "error",
+            "sequence_number": 2,
             "error": {"type": "server_error", "code": "internal_error", "message": "interrupted"},
         },
     )
@@ -1088,18 +1155,34 @@ def _openai_stream_cut_after_output_item(preamble: str, item: Mapping[str, objec
 @pytest.mark.parametrize(
     "item",
     [
-        {"type": "shell_call", "id": "sh_1", "call_id": "call_1", "action": {"commands": ["ls"]}, "status": "in_progress"},
         {
-            "type": "apply_patch_call", "id": "apc_1", "call_id": "call_1", "status": "in_progress",
+            "type": "shell_call",
+            "id": "sh_1",
+            "call_id": "call_1",
+            "action": {"commands": ["ls"]},
+            "status": "in_progress",
+        },
+        {
+            "type": "apply_patch_call",
+            "id": "apc_1",
+            "call_id": "call_1",
+            "status": "in_progress",
             "operation": {"type": "update_file", "path": "a.py", "diff": "@@"},
         },
         {
-            "type": "local_shell_call", "id": "lsh_1", "call_id": "call_1", "status": "in_progress",
+            "type": "local_shell_call",
+            "id": "lsh_1",
+            "call_id": "call_1",
+            "status": "in_progress",
             "action": {"type": "exec", "command": ["ls"], "env": {}},
         },
         {
-            "type": "computer_call", "id": "cu_1", "call_id": "call_1", "status": "in_progress",
-            "action": {"type": "screenshot"}, "pending_safety_checks": [],
+            "type": "computer_call",
+            "id": "cu_1",
+            "call_id": "call_1",
+            "status": "in_progress",
+            "action": {"type": "screenshot"},
+            "pending_safety_checks": [],
         },
         {"type": "mcp_approval_request", "id": "mcpr_1", "name": "lookup", "arguments": "{}", "server_label": "docs"},
     ],
@@ -1130,13 +1213,23 @@ async def test_responses_fallback_surfaces_the_primary_error_once_the_cut_stream
     "server_run_event",
     [
         {
-            "type": "response.output_item.added", "output_index": 1,
+            "type": "response.output_item.added",
+            "output_index": 1,
             "item": {
-                "type": "mcp_call", "id": "mcp_1", "name": "ask_question", "arguments": "{}",
-                "server_label": "docs", "status": "in_progress",
+                "type": "mcp_call",
+                "id": "mcp_1",
+                "name": "ask_question",
+                "arguments": "{}",
+                "server_label": "docs",
+                "status": "in_progress",
             },
         },
-        {"type": "response.mcp_call_arguments.delta", "output_index": 1, "item_id": "mcp_1", "delta": '{"question": "set'},
+        {
+            "type": "response.mcp_call_arguments.delta",
+            "output_index": 1,
+            "item_id": "mcp_1",
+            "delta": '{"question": "set',
+        },
     ],
     ids=["mcp_call_item", "mcp_call_arguments"],
 )
@@ -1170,14 +1263,23 @@ async def test_responses_fallback_continues_when_allowed_tools_in_auto_mode_leav
             _openai_stream_cut_after("1, 2, "),
             _sse(
                 {
-                    "type": "response.output_text.delta", "sequence_number": 0,
-                    "item_id": "msg_fallback", "output_index": 0, "content_index": 0, "delta": "3, 4, 5",
+                    "type": "response.output_text.delta",
+                    "sequence_number": 0,
+                    "item_id": "msg_fallback",
+                    "output_index": 0,
+                    "content_index": 0,
+                    "delta": "3, 4, 5",
                 },
                 {
-                    "type": "response.completed", "sequence_number": 1,
+                    "type": "response.completed",
+                    "sequence_number": 1,
                     "response": {
-                        "id": "resp_fallback", "object": "response", "created_at": 0, "status": "completed",
-                        "model": "gpt-6.1-terra", "output": [],
+                        "id": "resp_fallback",
+                        "object": "response",
+                        "created_at": 0,
+                        "status": "completed",
+                        "model": "gpt-6.1-terra",
+                        "output": [],
                         "usage": {"input_tokens": 5, "output_tokens": 5, "total_tokens": 10},
                     },
                 },
@@ -1210,14 +1312,21 @@ async def test_responses_fallback_surfaces_a_content_filter_that_cut_the_stream_
     respx_mock.post("https://api.openai.com/v1/responses").mock(
         return_value=_sse(
             {
-                "type": "response.output_text.delta", "sequence_number": 0,
-                "item_id": "msg_primary", "output_index": 0, "content_index": 0, "delta": "Step one is to obtain the",
+                "type": "response.output_text.delta",
+                "sequence_number": 0,
+                "item_id": "msg_primary",
+                "output_index": 0,
+                "content_index": 0,
+                "delta": "Step one is to obtain the",
             },
             {
-                "type": "error", "sequence_number": 1,
+                "type": "error",
+                "sequence_number": 1,
                 "error": {
-                    "type": "invalid_request_error", "code": "content_policy_violation",
-                    "message": "The response was halted mid-stream.", "param": None,
+                    "type": "invalid_request_error",
+                    "code": "content_policy_violation",
+                    "message": "The response was halted mid-stream.",
+                    "param": None,
                 },
             },
         )
@@ -1228,7 +1337,10 @@ async def test_responses_fallback_surfaces_a_content_filter_that_cut_the_stream_
     router: Final = Router(
         model_list=[
             {"model_name": "primary", "litellm_params": {"model": "openai/gpt-6-astra", "api_key": "synthetic"}},
-            {"model_name": "fallback", "litellm_params": {"model": "anthropic/claude-opus-5-5", "api_key": "synthetic"}},
+            {
+                "model_name": "fallback",
+                "litellm_params": {"model": "anthropic/claude-opus-5-5", "api_key": "synthetic"},
+            },
         ],
         fallbacks=[{"primary": ["fallback"]}],
         content_policy_fallbacks=[{"primary": ["fallback"]}],
@@ -1257,7 +1369,10 @@ async def test_bridged_responses_fallback_surfaces_the_primary_error_once_the_cu
     router: Final = Router(
         model_list=[
             {"model_name": "primary", "litellm_params": {"model": "anthropic/claude-primary", "api_key": "synthetic"}},
-            {"model_name": "fallback", "litellm_params": {"model": "anthropic/claude-opus-5-5", "api_key": "synthetic"}},
+            {
+                "model_name": "fallback",
+                "litellm_params": {"model": "anthropic/claude-opus-5-5", "api_key": "synthetic"},
+            },
         ],
         fallbacks=[{"primary": ["fallback"]}],
         num_retries=0,
@@ -1293,7 +1408,10 @@ async def test_bridged_responses_fallback_continues_after_a_server_run_tool_sear
     router: Final = Router(
         model_list=[
             {"model_name": "primary", "litellm_params": {"model": "anthropic/claude-primary", "api_key": "synthetic"}},
-            {"model_name": "fallback", "litellm_params": {"model": "anthropic/claude-opus-5-5", "api_key": "synthetic"}},
+            {
+                "model_name": "fallback",
+                "litellm_params": {"model": "anthropic/claude-opus-5-5", "api_key": "synthetic"},
+            },
         ],
         fallbacks=[{"primary": ["fallback"]}],
         num_retries=0,
@@ -1317,10 +1435,16 @@ async def test_bridged_responses_fallback_continues_after_a_server_run_tool_sear
 
 def _openai_completed(model: str) -> Mapping[str, object]:
     return {
-        "type": "response.completed", "sequence_number": 1,
+        "type": "response.completed",
+        "sequence_number": 1,
         "response": {
-            "id": f"resp_{model}", "object": "response", "created_at": 0, "status": "completed", "model": model,
-            "output": [], "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+            "id": f"resp_{model}",
+            "object": "response",
+            "created_at": 0,
+            "status": "completed",
+            "model": model,
+            "output": [],
+            "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
         },
     }
 

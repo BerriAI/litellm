@@ -182,7 +182,9 @@ async def test_async_stream_skips_blank_sse_lines_and_keeps_the_usage_chunk():
 
     chunks: Final = [chunk async for chunk in ModelResponseIterator(streaming_response=lines(), sync_stream=False)]
 
-    assert [(chunk["text"], chunk["finish_reason"], (chunk["usage"] or {}).get("prompt_tokens")) for chunk in chunks] == [
+    assert [
+        (chunk["text"], chunk["finish_reason"], (chunk["usage"] or {}).get("prompt_tokens")) for chunk in chunks
+    ] == [
         ("144", "", None),
         ("", "stop", None),
         ("", "", None),

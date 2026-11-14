@@ -53,7 +53,9 @@ def test_list_container_files_forwards_declared_query_params(monkeypatch):
 
     assert response.status_code == 200
     assert response.json()["has_more"] is True
-    assert processor_cls.return_value.base_process_llm_request.await_args.kwargs["route_type"] == "alist_container_files"
+    assert (
+        processor_cls.return_value.base_process_llm_request.await_args.kwargs["route_type"] == "alist_container_files"
+    )
     forwarded = processor_cls.call_args.kwargs["data"]
     assert forwarded["container_id"] == "cntr_123"
     assert forwarded["limit"] == "1"

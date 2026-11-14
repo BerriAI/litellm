@@ -113,14 +113,18 @@ def _entrypoint_with_runtime_config(tmp_path: Path) -> tuple[Path, Path]:
     return entrypoint, runtime_dir / "runtime-config.json"
 
 
-@pytest.mark.parametrize("backend_url", ("https://backend.example.com///", "http://backend.example.com", None, "", "invalid"))
+@pytest.mark.parametrize(
+    "backend_url", ("https://backend.example.com///", "http://backend.example.com", None, "", "invalid")
+)
 def test_ui_runtime_config_is_refreshed_before_nginx_starts(tmp_path: Path, backend_url: str | None) -> None:
     entrypoint, runtime_file = _entrypoint_with_runtime_config(tmp_path)
     runtime_file.write_text('{"backend_url":"https://stale.example.com"}')
     recorded: Final = _run_entrypoint(("ui",), tmp_path, entrypoint=entrypoint, LITELLM_BACKEND_URL=backend_url)
     assert recorded[0] == "exec=nginx"
     assert (json.loads(runtime_file.read_text()) if runtime_file.exists() else None) == (
-        {"backend_url": backend_url.rstrip("/")} if backend_url and backend_url.startswith(("https://", "http://")) else None
+        {"backend_url": backend_url.rstrip("/")}
+        if backend_url and backend_url.startswith(("https://", "http://"))
+        else None
     )
 
 
@@ -169,7 +173,11 @@ def _entrypoint_argv(dockerfile: Path) -> tuple[str, ...]:
             "args=-m gateway.launch --workers 1 --host 0.0.0.0 --port 4000 --port 8080",
         ),
         (("backend",), "exec=uvicorn", "args=litellm.runtime.backend.main:app --host 0.0.0.0 --port 4001"),
-        (("backend", "--port", "9001"), "exec=uvicorn", "args=litellm.runtime.backend.main:app --host 0.0.0.0 --port 4001 --port 9001"),
+        (
+            ("backend", "--port", "9001"),
+            "exec=uvicorn",
+            "args=litellm.runtime.backend.main:app --host 0.0.0.0 --port 4001 --port 9001",
+        ),
         (("ui",), "exec=nginx", "args=-g daemon off;"),
         (("migrations",), "exec=python", "args=-m litellm.runtime.migrations.run"),
         (("metrics", "--port", "9090"), "exec=python", "args=-m litellm.proxy.prometheus_metrics_server --port 9090"),
@@ -617,7 +625,8 @@ def test_proxy_pins_an_env_configured_idle_lifetime(tmp_path: Path) -> None:
 
 def test_proxy_keeps_a_reader_url_pinned_idle_lifetime(tmp_path: Path) -> None:
     lines: Final = _run_proxy_with_discrete_database(
-        tmp_path, {"DATABASE_URL_READ_REPLICA": "postgresql://app:pass@reader.db/litellm?max_idle_connection_lifetime=300"}
+        tmp_path,
+        {"DATABASE_URL_READ_REPLICA": "postgresql://app:pass@reader.db/litellm?max_idle_connection_lifetime=300"},
     )
     assert "max_idle_connection_lifetime" not in parse_qs(urlsplit(lines[1]).query)
     assert "max_idle_connection_lifetime=300" in lines[2]

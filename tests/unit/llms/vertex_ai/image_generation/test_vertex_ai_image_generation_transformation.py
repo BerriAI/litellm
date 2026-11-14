@@ -791,7 +791,6 @@ class TestGetVertexAIImageGenerationConfig:
 class TestVertexAIImageGenerationIntegration:
     """Integration tests for Vertex AI image generation"""
 
-
     def test_gemini_get_complete_url(self):
         """Test Gemini config URL generation"""
         config = VertexAIGeminiImageGenerationConfig()

@@ -97,9 +97,7 @@ def test_get_access_token_reuses_token_refreshed_by_parallel_request():
         "expires_at": time.time() + 3600,
     }
     authenticator = XAIOAuthAuthenticator()
-    authenticator._read_auth_file = MagicMock(
-        side_effect=[expired_auth_data, refreshed_auth_data]
-    )
+    authenticator._read_auth_file = MagicMock(side_effect=[expired_auth_data, refreshed_auth_data])
     authenticator._refresh_tokens = MagicMock()
 
     assert authenticator.get_access_token() == "already-refreshed-token"
@@ -136,9 +134,7 @@ def test_refresh_failure_surfaces_oauth_error(tmp_path, monkeypatch):
     monkeypatch.setenv("XAI_OAUTH_TOKEN_DIR", str(token_dir))
 
     client = httpx.Client(
-        transport=httpx.MockTransport(
-            lambda request: httpx.Response(401, text="invalid_grant", request=request)
-        )
+        transport=httpx.MockTransport(lambda request: httpx.Response(401, text="invalid_grant", request=request))
     )
 
     with pytest.raises(XAIOAuthError) as exc_info:
@@ -242,9 +238,7 @@ def test_discover_returns_validated_xai_endpoints():
             },
         )
 
-    authenticator = XAIOAuthAuthenticator(
-        http_client=httpx.Client(transport=httpx.MockTransport(handler))
-    )
+    authenticator = XAIOAuthAuthenticator(http_client=httpx.Client(transport=httpx.MockTransport(handler)))
 
     assert authenticator._discover() == {
         "authorization_endpoint": "https://auth.x.ai/oauth/authorize",
@@ -254,9 +248,7 @@ def test_discover_returns_validated_xai_endpoints():
 
 def test_discover_requires_authorization_and_token_endpoints():
     authenticator = XAIOAuthAuthenticator(
-        http_client=httpx.Client(
-            transport=httpx.MockTransport(lambda request: httpx.Response(200, json={}))
-        )
+        http_client=httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(200, json={})))
     )
 
     with pytest.raises(XAIOAuthError, match="missing endpoints"):
@@ -266,28 +258,20 @@ def test_discover_requires_authorization_and_token_endpoints():
 def test_discover_wraps_http_errors():
     authenticator = XAIOAuthAuthenticator(
         http_client=httpx.Client(
-            transport=httpx.MockTransport(
-                lambda request: httpx.Response(
-                    500, text="discovery failed", request=request
-                )
-            )
+            transport=httpx.MockTransport(lambda request: httpx.Response(500, text="discovery failed", request=request))
         )
     )
 
     with pytest.raises(XAIOAuthError) as exc_info:
         authenticator._discover()
 
-    assert "xAI OAuth discovery request failed: 500 discovery failed" in str(
-        exc_info.value
-    )
+    assert "xAI OAuth discovery request failed: 500 discovery failed" in str(exc_info.value)
 
 
 def test_discover_wraps_invalid_json_response():
     authenticator = XAIOAuthAuthenticator(
         http_client=httpx.Client(
-            transport=httpx.MockTransport(
-                lambda request: httpx.Response(200, text="<html>not-json</html>")
-            )
+            transport=httpx.MockTransport(lambda request: httpx.Response(200, text="<html>not-json</html>"))
         )
     )
 
@@ -295,9 +279,7 @@ def test_discover_wraps_invalid_json_response():
         authenticator._discover()
 
 
-def test_refresh_discovers_token_endpoint_when_auth_file_is_legacy(
-    tmp_path, monkeypatch
-):
+def test_refresh_discovers_token_endpoint_when_auth_file_is_legacy(tmp_path, monkeypatch):
     token_dir, auth_file = _write_auth_file(
         tmp_path,
         {
@@ -326,9 +308,7 @@ def test_refresh_discovers_token_endpoint_when_auth_file_is_legacy(
             },
         )
 
-    authenticator = XAIOAuthAuthenticator(
-        http_client=httpx.Client(transport=httpx.MockTransport(handler))
-    )
+    authenticator = XAIOAuthAuthenticator(http_client=httpx.Client(transport=httpx.MockTransport(handler)))
 
     assert authenticator.get_access_token() == "discovered-token"
     stored = json.loads(auth_file.read_text())
@@ -338,9 +318,7 @@ def test_refresh_discovers_token_endpoint_when_auth_file_is_legacy(
 def test_exchange_token_rejects_non_object_response():
     authenticator = XAIOAuthAuthenticator(
         http_client=httpx.Client(
-            transport=httpx.MockTransport(
-                lambda request: httpx.Response(200, json=["not", "an", "object"])
-            )
+            transport=httpx.MockTransport(lambda request: httpx.Response(200, json=["not", "an", "object"]))
         )
     )
 
@@ -351,9 +329,7 @@ def test_exchange_token_rejects_non_object_response():
 def test_exchange_token_wraps_invalid_json_response():
     authenticator = XAIOAuthAuthenticator(
         http_client=httpx.Client(
-            transport=httpx.MockTransport(
-                lambda request: httpx.Response(200, text="<html>not-json</html>")
-            )
+            transport=httpx.MockTransport(lambda request: httpx.Response(200, text="<html>not-json</html>"))
         )
     )
 
@@ -372,9 +348,7 @@ def test_start_callback_server_falls_back_to_ephemeral_port(monkeypatch):
                 raise OSError("port unavailable")
             super().__init__(server_address, handler_class)
 
-    monkeypatch.setattr(
-        xai_oauth_module, "_CallbackServer", FirstPortFailsCallbackServer
-    )
+    monkeypatch.setattr(xai_oauth_module, "_CallbackServer", FirstPortFailsCallbackServer)
 
     server, redirect_uri = XAIOAuthAuthenticator()._start_callback_server("state-value")
     try:
@@ -441,12 +415,8 @@ def test_login_exchanges_authorization_code_and_persists_auth_record(monkeypatch
         }
     )
     authenticator._pkce_pair = MagicMock(return_value=("verifier", "challenge"))
-    authenticator._start_callback_server = MagicMock(
-        return_value=(fake_server, "http://127.0.0.1:56121/callback")
-    )
-    authenticator._wait_for_callback = MagicMock(
-        return_value={"state": "state-value", "code": "auth-code"}
-    )
+    authenticator._start_callback_server = MagicMock(return_value=(fake_server, "http://127.0.0.1:56121/callback"))
+    authenticator._wait_for_callback = MagicMock(return_value={"state": "state-value", "code": "auth-code"})
     authenticator._exchange_token = MagicMock(
         return_value={
             "access_token": "access-token",
@@ -478,9 +448,7 @@ def test_login_raises_on_callback_error_or_missing_code(monkeypatch):
     class FakeUUID:
         hex = "state-value"
 
-    monkeypatch.setattr(
-        xai_oauth_module.uuid, "uuid4", MagicMock(return_value=FakeUUID())
-    )
+    monkeypatch.setattr(xai_oauth_module.uuid, "uuid4", MagicMock(return_value=FakeUUID()))
     authenticator._read_auth_file = MagicMock(return_value=None)
     authenticator._discover = MagicMock(
         return_value={
@@ -489,9 +457,7 @@ def test_login_raises_on_callback_error_or_missing_code(monkeypatch):
         }
     )
     authenticator._pkce_pair = MagicMock(return_value=("verifier", "challenge"))
-    authenticator._start_callback_server = MagicMock(
-        return_value=(MagicMock(), "http://127.0.0.1:56121/callback")
-    )
+    authenticator._start_callback_server = MagicMock(return_value=(MagicMock(), "http://127.0.0.1:56121/callback"))
     authenticator._wait_for_callback = MagicMock(
         return_value={
             "state": "state-value",
@@ -511,11 +477,7 @@ def test_login_raises_on_callback_error_or_missing_code(monkeypatch):
 
 def test_pkce_pair_generates_s256_challenge():
     verifier, challenge = XAIOAuthAuthenticator()._pkce_pair()
-    expected = (
-        base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest())
-        .rstrip(b"=")
-        .decode()
-    )
+    expected = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
 
     assert challenge == expected
     assert "=" not in verifier
@@ -560,9 +522,7 @@ def test_xai_oauth_alias_is_not_a_provider():
         get_llm_provider("xai_oauth/grok-4")
 
 
-def test_chat_config_wraps_flagged_oauth_errors_as_authentication_error(
-    tmp_path, monkeypatch
-):
+def test_chat_config_wraps_flagged_oauth_errors_as_authentication_error(tmp_path, monkeypatch):
     monkeypatch.setenv("XAI_OAUTH_TOKEN_DIR", str(tmp_path / "missing"))
 
     with pytest.raises(litellm.AuthenticationError) as exc_info:
@@ -616,9 +576,7 @@ def test_chat_config_ignores_api_base_override_for_flagged_oauth(monkeypatch):
     assert url == "https://api.x.ai/v1/chat/completions"
 
 
-def test_chat_config_treats_blank_api_key_as_absent_for_flagged_oauth(
-    tmp_path, monkeypatch
-):
+def test_chat_config_treats_blank_api_key_as_absent_for_flagged_oauth(tmp_path, monkeypatch):
     token_dir, _ = _write_auth_file(
         tmp_path,
         {
@@ -733,9 +691,9 @@ def test_responses_config_endpoint_url_uses_oauth_authenticator(monkeypatch):
     monkeypatch.setenv("XAI_OAUTH_API_BASE", "https://xai.example.com/v1/")
     config = XAIResponsesAPIConfig()
 
-    assert config.get_complete_url(
-        api_base=None, litellm_params={"use_xai_oauth": True}
-    ) == ("https://xai.example.com/v1/responses")
+    assert config.get_complete_url(api_base=None, litellm_params={"use_xai_oauth": True}) == (
+        "https://xai.example.com/v1/responses"
+    )
     assert (
         config.get_complete_url(
             api_base="https://custom.example.com/v1/",
@@ -759,9 +717,7 @@ def test_responses_config_endpoint_url_uses_oauth_authenticator(monkeypatch):
     )
 
 
-def test_responses_config_wraps_flagged_oauth_errors_as_authentication_error(
-    tmp_path, monkeypatch
-):
+def test_responses_config_wraps_flagged_oauth_errors_as_authentication_error(tmp_path, monkeypatch):
     monkeypatch.setenv("XAI_OAUTH_TOKEN_DIR", str(tmp_path / "missing"))
 
     with pytest.raises(litellm.AuthenticationError) as exc_info:
@@ -789,9 +745,7 @@ def test_proxy_cli_xai_oauth_login_uses_single_authenticator(monkeypatch):
         def login(self):
             return {"expires_at": 1234567890}
 
-    monkeypatch.setattr(
-        "litellm.llms.xai.oauth.XAIOAuthAuthenticator", FakeAuthenticator
-    )
+    monkeypatch.setattr("litellm.llms.xai.oauth.XAIOAuthAuthenticator", FakeAuthenticator)
 
     result = CliRunner().invoke(run_server, ["xai-oauth", "login"])
 

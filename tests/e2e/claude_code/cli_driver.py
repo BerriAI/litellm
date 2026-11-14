@@ -34,9 +34,7 @@ CLAUDE_CLI_DEFAULT = "claude"
 # upstreams can take several minutes to respond under that contention.
 # We expose the timeout as an env var so binary-search runs can grow
 # it without touching the test code.
-DEFAULT_TIMEOUT_SECONDS = float(
-    os.environ.get("LITELLM_COMPAT_CLI_TIMEOUT_SECONDS") or 120
-)
+DEFAULT_TIMEOUT_SECONDS = float(os.environ.get("LITELLM_COMPAT_CLI_TIMEOUT_SECONDS") or 120)
 
 RATE_LIMIT_SHAPED_RE = re.compile(
     r"(?:\b429\b|rate[\s_-]?limit|too\s+many\s+requests|throttl(?:ed|ing)|"
@@ -60,12 +58,8 @@ lowering our own request rate, which does nothing for a provider that is simply
 out of capacity."""
 
 
-DEFAULT_RATE_LIMIT_RETRIES = int(
-    os.environ.get("LITELLM_COMPAT_RATE_LIMIT_RETRIES") or 2
-)
-DEFAULT_RATE_LIMIT_BACKOFF_SECONDS = float(
-    os.environ.get("LITELLM_COMPAT_RATE_LIMIT_BACKOFF_SECONDS") or 65
-)
+DEFAULT_RATE_LIMIT_RETRIES = int(os.environ.get("LITELLM_COMPAT_RATE_LIMIT_RETRIES") or 2)
+DEFAULT_RATE_LIMIT_BACKOFF_SECONDS = float(os.environ.get("LITELLM_COMPAT_RATE_LIMIT_BACKOFF_SECONDS") or 65)
 """Rate-limit-shaped failures are retried after a backoff long enough
 for a per-minute quota window (the dominant 429 source across
 Anthropic / Bedrock / Vertex) to reset. Both knobs are env-tunable so
@@ -394,11 +388,7 @@ def run_claude_models_parallel(
     if not models:
         raise ValueError("models must be a non-empty sequence")
 
-    retries = (
-        DEFAULT_RATE_LIMIT_RETRIES
-        if rate_limit_retries is None
-        else max(0, rate_limit_retries)
-    )
+    retries = DEFAULT_RATE_LIMIT_RETRIES if rate_limit_retries is None else max(0, rate_limit_retries)
     backoff = (
         DEFAULT_RATE_LIMIT_BACKOFF_SECONDS
         if rate_limit_backoff_seconds is None
@@ -428,10 +418,7 @@ def run_claude_models_parallel(
             # raise ValueError on edge-case model strings, and a future
             # bug elsewhere in the call stack must not abort the entire
             # parallel batch and lose the other models' outcomes.
-            wrapped = ClaudeCLIError(
-                f"unexpected error running model {model!r}: "
-                f"{type(exc).__name__}: {exc}"
-            )
+            wrapped = ClaudeCLIError(f"unexpected error running model {model!r}: {type(exc).__name__}: {exc}")
             wrapped.__cause__ = exc
             return wrapped
 

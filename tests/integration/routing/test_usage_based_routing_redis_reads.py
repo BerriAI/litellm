@@ -79,9 +79,7 @@ def _request_object(body: bytes) -> dict[str, JsonValue]:
     return JSON_OBJECT.validate_json(body)
 
 
-def _deployment_list(
-    model_name: str, api_base: str, deployment_ids: tuple[str, str]
-) -> list[dict[str, JsonValue]]:
+def _deployment_list(model_name: str, api_base: str, deployment_ids: tuple[str, str]) -> list[dict[str, JsonValue]]:
     return [
         {
             "model_name": model_name,
@@ -181,9 +179,7 @@ def _drain_mgets(commands: SimpleQueue[str]) -> tuple[tuple[str, tuple[str, ...]
     ("/v1/chat/completions", "/v1/messages", "/v1/responses"),
     ids=("chat-completions", "messages", "responses"),
 )
-def test_proxy_usage_routing_reads_cooldown_tpm_then_rpm_from_redis(
-    endpoint: str, tmp_path: Path
-) -> None:
+def test_proxy_usage_routing_reads_cooldown_tpm_then_rpm_from_redis(endpoint: str, tmp_path: Path) -> None:
     with owned_redis(tmp_path) as cache, wire_server(_reply) as wire:
         run_id: Final = uuid.uuid4().hex
         model_name: Final = f"usage-redis-{run_id}"
@@ -229,9 +225,7 @@ def test_proxy_usage_routing_reads_cooldown_tpm_then_rpm_from_redis(
                 minute: Final = datetime.now(UTC).strftime("%H-%M")
                 markers: Final = tuple(f"{run_id}-{index}" for index in range(3))
                 payloads: Final = tuple(_request_payload(endpoint, model_name, marker) for marker in markers)
-                request_headers: Final = (
-                    {"anthropic-version": "2023-06-01"} if endpoint == "/v1/messages" else {}
-                )
+                request_headers: Final = {"anthropic-version": "2023-06-01"} if endpoint == "/v1/messages" else {}
                 with _capture_redis_commands(cache.host, cache.port) as commands:
                     responses: Final = tuple(
                         candidate.request("POST", endpoint, payload, headers=request_headers) for payload in payloads

@@ -118,9 +118,7 @@ def realtime_model(provider: RealtimeProvider, provisioned: Mapping[str, str]) -
     PROVIDERS is provisioned at session start, so a missing entry is a harness bug,
     never an environment skip - the suite hard-fails instead (see tests/e2e/AGENTS.md)."""
     model = provisioned.get(provider.id)
-    assert model is not None, (
-        f"{provider.id} was not provisioned; the realtime_models fixture is broken"
-    )
+    assert model is not None, f"{provider.id} was not provisioned; the realtime_models fixture is broken"
     return model
 
 
@@ -257,9 +255,7 @@ RealtimeClientEvent = (
 
 
 def user_message(text: str) -> ConversationItemCreate:
-    return ConversationItemCreate(
-        item=MessageItem(content=[InputTextContent(text=text)])
-    )
+    return ConversationItemCreate(item=MessageItem(content=[InputTextContent(text=text)]))
 
 
 # ---- received events ---------------------------------------------------
@@ -323,15 +319,11 @@ class ReceivedEvent:
     payload: str
 
 
-def events_of_type(
-    events: tuple[ReceivedEvent, ...], event_type: str
-) -> tuple[ReceivedEvent, ...]:
+def events_of_type(events: tuple[ReceivedEvent, ...], event_type: str) -> tuple[ReceivedEvent, ...]:
     return tuple(e for e in events if e.type == event_type)
 
 
-def parse_last(
-    events: tuple[ReceivedEvent, ...], event_type: str, model: type[_M]
-) -> _M | None:
+def parse_last(events: tuple[ReceivedEvent, ...], event_type: str, model: type[_M]) -> _M | None:
     matches = events_of_type(events, event_type)
     return model.model_validate_json(matches[-1].payload) if matches else None
 
@@ -364,10 +356,7 @@ def _text_from_response_done(events: tuple[ReceivedEvent, ...]) -> str:
 
 def transcript(events: tuple[ReceivedEvent, ...]) -> str:
     for delta_type in _TEXT_DELTA_TYPES:
-        text = "".join(
-            DeltaEvent.model_validate_json(e.payload).delta
-            for e in events_of_type(events, delta_type)
-        )
+        text = "".join(DeltaEvent.model_validate_json(e.payload).delta for e in events_of_type(events, delta_type))
         if text:
             return text
     return _text_from_response_done(events)
@@ -397,28 +386,19 @@ class RealtimeSession:
         self.connection.send(event.model_dump_json(by_alias=True, exclude_none=True))
 
     @step("Wait for a {stop_type} event on the realtime websocket")
-    def collect_until(
-        self, stop_type: str, *, timeout: float
-    ) -> tuple[ReceivedEvent, ...]:
+    def collect_until(self, stop_type: str, *, timeout: float) -> tuple[ReceivedEvent, ...]:
         deadline = time.monotonic() + timeout
         collected: list[ReceivedEvent] = []
         while time.monotonic() < deadline:
             try:
-                text = as_text(
-                    self.connection.recv(timeout=deadline - time.monotonic())
-                )
+                text = as_text(self.connection.recv(timeout=deadline - time.monotonic()))
             except TimeoutError:
                 break
-            event = ReceivedEvent(
-                type=ServerEnvelope.model_validate_json(text).type, payload=text
-            )
+            event = ReceivedEvent(type=ServerEnvelope.model_validate_json(text).type, payload=text)
             collected.append(event)
             if event.type == stop_type:
                 return tuple(collected)
-        raise TimeoutError(
-            f"no {stop_type!r} within {timeout}s; got {[e.type for e in collected]}"
-        )
-
+        raise TimeoutError(f"no {stop_type!r} within {timeout}s; got {[e.type for e in collected]}")
 
     @step("Stream the spoken question as mic chunks, then silence until the turn goes idle")
     def stream_and_collect(
@@ -476,9 +456,7 @@ class RealtimeClient:
         show up as a realtime model on /model/info. add_deployment runs synchronously,
         so the deployment is connectable as soon as this returns."""
         model_name = f"{provider.alias}-{unique_marker()}"
-        model_id = self.proxy.create_model(
-            model_name, provider.litellm_params, mode="realtime"
-        )
+        model_id = self.proxy.create_model(model_name, provider.litellm_params, mode="realtime")
         return model_name, model_id
 
     @step("Open a {route} websocket session to {model}")

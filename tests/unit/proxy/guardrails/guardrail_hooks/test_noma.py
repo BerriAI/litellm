@@ -81,9 +81,7 @@ class TestNomaGuardrailConfiguration:
     """Test configuration and initialization of Noma guardrail"""
 
     def test_legacy_guardrail_emits_deprecation_warning(self, monkeypatch):
-        monkeypatch.setattr(
-            noma_legacy_module, "_LEGACY_NOMA_DEPRECATION_WARNED", False
-        )
+        monkeypatch.setattr(noma_legacy_module, "_LEGACY_NOMA_DEPRECATION_WARNED", False)
         with pytest.warns(DeprecationWarning, match="deprecated"):
             NomaGuardrail(api_key="test-api-key")
 
@@ -244,13 +242,9 @@ class TestNomaApplicationIdResolution:
         return sent_payload["x-noma-context"]["applicationId"]
 
     @pytest.mark.asyncio
-    async def test_application_id_prefers_extra_body(
-        self, noma_guardrail, mock_user_api_key_dict, mock_request_data
-    ):
+    async def test_application_id_prefers_extra_body(self, noma_guardrail, mock_user_api_key_dict, mock_request_data):
         request_data = self._clone_request_data(mock_request_data)
-        request_data.setdefault("metadata", {}).setdefault("headers", {})[
-            "x-noma-application-id"
-        ] = "header-app"
+        request_data.setdefault("metadata", {}).setdefault("headers", {})["x-noma-application-id"] = "header-app"
         user_auth = self._clone_user_auth(mock_user_api_key_dict)
         user_auth.key_alias = "alias-app"
 
@@ -268,9 +262,7 @@ class TestNomaApplicationIdResolution:
         self, noma_guardrail, mock_user_api_key_dict, mock_request_data
     ):
         request_data = self._clone_request_data(mock_request_data)
-        request_data.setdefault("metadata", {}).setdefault("headers", {})[
-            "x-noma-application-id"
-        ] = "header-app"
+        request_data.setdefault("metadata", {}).setdefault("headers", {})["x-noma-application-id"] = "header-app"
         user_auth = self._clone_user_auth(mock_user_api_key_dict)
         user_auth.key_alias = "alias-app"
         original_app_id = noma_guardrail.application_id
@@ -311,9 +303,7 @@ class TestNomaApplicationIdResolution:
         assert application_id == "config-app"
 
     @pytest.mark.asyncio
-    async def test_application_id_falls_back_to_alias(
-        self, noma_guardrail, mock_user_api_key_dict, mock_request_data
-    ):
+    async def test_application_id_falls_back_to_alias(self, noma_guardrail, mock_user_api_key_dict, mock_request_data):
         request_data = self._clone_request_data(mock_request_data)
         user_auth = self._clone_user_auth(mock_user_api_key_dict)
         user_auth.key_alias = "alias-app"
@@ -333,9 +323,7 @@ class TestNomaApplicationIdResolution:
         assert application_id == "alias-app"
 
     @pytest.mark.asyncio
-    async def test_application_id_defaults_to_litellm(
-        self, noma_guardrail, mock_user_api_key_dict, mock_request_data
-    ):
+    async def test_application_id_defaults_to_litellm(self, noma_guardrail, mock_user_api_key_dict, mock_request_data):
         request_data = self._clone_request_data(mock_request_data)
         user_auth = self._clone_user_auth(mock_user_api_key_dict)
         user_auth.key_alias = None
@@ -449,9 +437,7 @@ class TestNomaGuardrailHooks:
     """Test the guardrail hook methods"""
 
     @pytest.mark.asyncio
-    async def test_pre_call_hook_allowed(
-        self, noma_guardrail, mock_user_api_key_dict, mock_request_data
-    ):
+    async def test_pre_call_hook_allowed(self, noma_guardrail, mock_user_api_key_dict, mock_request_data):
         """Test pre-call hook when content is allowed"""
         mock_response = MagicMock()
         mock_response.json.return_value = {
@@ -460,9 +446,7 @@ class TestNomaGuardrailHooks:
         }
         mock_response.raise_for_status = MagicMock()
 
-        with patch.object(
-            noma_guardrail.async_handler, "post", return_value=mock_response
-        ) as mock_post:
+        with patch.object(noma_guardrail.async_handler, "post", return_value=mock_response) as mock_post:
             result = await noma_guardrail.async_pre_call_hook(
                 user_api_key_dict=mock_user_api_key_dict,
                 cache=MagicMock(),
@@ -489,9 +473,7 @@ class TestNomaGuardrailHooks:
                 assert json_payload["x-noma-context"]["applicationId"] == "test-app"
 
     @pytest.mark.asyncio
-    async def test_pre_call_hook_with_system_prompt(
-        self, noma_guardrail, mock_user_api_key_dict
-    ):
+    async def test_pre_call_hook_with_system_prompt(self, noma_guardrail, mock_user_api_key_dict):
         """Test pre-call hook includes system prompt in Noma API request"""
         request_data = {
             "messages": [
@@ -512,9 +494,7 @@ class TestNomaGuardrailHooks:
         }
         mock_response.raise_for_status = MagicMock()
 
-        with patch.object(
-            noma_guardrail.async_handler, "post", return_value=mock_response
-        ) as mock_post:
+        with patch.object(noma_guardrail.async_handler, "post", return_value=mock_response) as mock_post:
             result = await noma_guardrail.async_pre_call_hook(
                 user_api_key_dict=mock_user_api_key_dict,
                 cache=MagicMock(),
@@ -547,9 +527,7 @@ class TestNomaGuardrailHooks:
             assert messages[1]["content"][0]["text"] == "Hello, how are you?"
 
     @pytest.mark.asyncio
-    async def test_pre_call_hook_with_multiple_system_prompts(
-        self, noma_guardrail, mock_user_api_key_dict
-    ):
+    async def test_pre_call_hook_with_multiple_system_prompts(self, noma_guardrail, mock_user_api_key_dict):
         """Test pre-call hook combines multiple system prompts into single message"""
         request_data = {
             "messages": [
@@ -570,9 +548,7 @@ class TestNomaGuardrailHooks:
         }
         mock_response.raise_for_status = MagicMock()
 
-        with patch.object(
-            noma_guardrail.async_handler, "post", return_value=mock_response
-        ) as mock_post:
+        with patch.object(noma_guardrail.async_handler, "post", return_value=mock_response) as mock_post:
             result = await noma_guardrail.async_pre_call_hook(
                 user_api_key_dict=mock_user_api_key_dict,
                 cache=MagicMock(),
@@ -595,8 +571,7 @@ class TestNomaGuardrailHooks:
             assert messages[0]["role"] == "system"
             assert messages[0]["content"][0]["type"] == "input_text"
             assert (
-                messages[0]["content"][0]["text"]
-                == "You are a helpful assistant You should be polite and respectful"
+                messages[0]["content"][0]["text"] == "You are a helpful assistant You should be polite and respectful"
             )
 
             # Second message should be user
@@ -605,9 +580,7 @@ class TestNomaGuardrailHooks:
             assert messages[1]["content"][0]["text"] == "Hello, how are you?"
 
     @pytest.mark.asyncio
-    async def test_pre_call_hook_blocked(
-        self, noma_guardrail, mock_user_api_key_dict, mock_request_data
-    ):
+    async def test_pre_call_hook_blocked(self, noma_guardrail, mock_user_api_key_dict, mock_request_data):
         """Test pre-call hook when content is blocked"""
         mock_response = MagicMock()
         mock_response.json.return_value = {
@@ -628,9 +601,7 @@ class TestNomaGuardrailHooks:
         }
         mock_response.raise_for_status = MagicMock()
 
-        with patch.object(
-            noma_guardrail.async_handler, "post", return_value=mock_response
-        ):
+        with patch.object(noma_guardrail.async_handler, "post", return_value=mock_response):
             with pytest.raises(NomaBlockedMessage) as exc_info:
                 await noma_guardrail.async_pre_call_hook(
                     user_api_key_dict=mock_user_api_key_dict,
@@ -642,9 +613,7 @@ class TestNomaGuardrailHooks:
             assert exc_info.value.status_code == 400
 
     @pytest.mark.asyncio
-    async def test_pre_call_hook_monitor_mode(
-        self, mock_user_api_key_dict, mock_request_data
-    ):
+    async def test_pre_call_hook_monitor_mode(self, mock_user_api_key_dict, mock_request_data):
         """Test pre-call hook in monitor mode (logs but doesn't block)"""
         guardrail = NomaGuardrail(
             api_key="test-key",
@@ -654,9 +623,7 @@ class TestNomaGuardrailHooks:
             default_on=True,
         )
 
-        with patch.object(
-            guardrail, "_create_background_noma_check"
-        ) as mock_create_background:
+        with patch.object(guardrail, "_create_background_noma_check") as mock_create_background:
             # Should return immediately without waiting for API call
             result = await guardrail.async_pre_call_hook(
                 user_api_key_dict=mock_user_api_key_dict,
@@ -670,9 +637,7 @@ class TestNomaGuardrailHooks:
             mock_create_background.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_pre_call_hook_monitor_mode_background_task_failure(
-        self, mock_user_api_key_dict, mock_request_data
-    ):
+    async def test_pre_call_hook_monitor_mode_background_task_failure(self, mock_user_api_key_dict, mock_request_data):
         """Test pre-call hook in monitor mode when background task creation fails"""
         guardrail = NomaGuardrail(
             api_key="test-key",
@@ -698,9 +663,7 @@ class TestNomaGuardrailHooks:
             assert result == mock_request_data
 
     @pytest.mark.asyncio
-    async def test_post_call_success_hook(
-        self, noma_guardrail, mock_user_api_key_dict, mock_request_data
-    ):
+    async def test_post_call_success_hook(self, noma_guardrail, mock_user_api_key_dict, mock_request_data):
         """Test post-call success hook"""
         # Create a mock ModelResponse
         response = ModelResponse(
@@ -709,9 +672,7 @@ class TestNomaGuardrailHooks:
                 Choices(
                     finish_reason="stop",
                     index=0,
-                    message=Message(
-                        content="I'm doing well, thank you!", role="assistant"
-                    ),
+                    message=Message(content="I'm doing well, thank you!", role="assistant"),
                 )
             ],
             created=1234567890,
@@ -731,9 +692,7 @@ class TestNomaGuardrailHooks:
         # Update guardrail to use post_call event hook
         noma_guardrail.event_hook = "post_call"
 
-        with patch.object(
-            noma_guardrail.async_handler, "post", return_value=mock_api_response
-        ) as mock_post:
+        with patch.object(noma_guardrail.async_handler, "post", return_value=mock_api_response) as mock_post:
             result = await noma_guardrail.async_post_call_success_hook(
                 data=mock_request_data,
                 user_api_key_dict=mock_user_api_key_dict,
@@ -744,9 +703,7 @@ class TestNomaGuardrailHooks:
             mock_post.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_moderation_hook(
-        self, noma_guardrail, mock_user_api_key_dict, mock_request_data
-    ):
+    async def test_moderation_hook(self, noma_guardrail, mock_user_api_key_dict, mock_request_data):
         """Test moderation hook (during_call)"""
         # Update guardrail to use during_call event hook
         noma_guardrail.event_hook = "during_call"
@@ -758,9 +715,7 @@ class TestNomaGuardrailHooks:
         }
         mock_response.raise_for_status = MagicMock()
 
-        with patch.object(
-            noma_guardrail.async_handler, "post", return_value=mock_response
-        ):
+        with patch.object(noma_guardrail.async_handler, "post", return_value=mock_response):
             result = await noma_guardrail.async_moderation_hook(
                 data=mock_request_data,
                 user_api_key_dict=mock_user_api_key_dict,
@@ -770,15 +725,11 @@ class TestNomaGuardrailHooks:
             assert result == mock_request_data
 
     @pytest.mark.asyncio
-    async def test_api_failure_handling(
-        self, noma_guardrail, mock_user_api_key_dict, mock_request_data
-    ):
+    async def test_api_failure_handling(self, noma_guardrail, mock_user_api_key_dict, mock_request_data):
         with patch.object(
             noma_guardrail.async_handler,
             "post",
-            side_effect=httpx.HTTPStatusError(
-                "API Error", request=MagicMock(), response=MagicMock(status_code=500)
-            ),
+            side_effect=httpx.HTTPStatusError("API Error", request=MagicMock(), response=MagicMock(status_code=500)),
         ):
             with pytest.raises(httpx.HTTPStatusError):
                 await noma_guardrail.async_pre_call_hook(
@@ -789,9 +740,7 @@ class TestNomaGuardrailHooks:
                 )
 
     @pytest.mark.asyncio
-    async def test_api_failure_no_block(
-        self, mock_user_api_key_dict, mock_request_data
-    ):
+    async def test_api_failure_no_block(self, mock_user_api_key_dict, mock_request_data):
         guardrail = NomaGuardrail(
             api_key="test-key",
             block_failures=False,
@@ -803,9 +752,7 @@ class TestNomaGuardrailHooks:
         with patch.object(
             guardrail.async_handler,
             "post",
-            side_effect=httpx.HTTPStatusError(
-                "API Error", request=MagicMock(), response=MagicMock(status_code=500)
-            ),
+            side_effect=httpx.HTTPStatusError("API Error", request=MagicMock(), response=MagicMock(status_code=500)),
         ):
             result = await guardrail.async_pre_call_hook(
                 user_api_key_dict=mock_user_api_key_dict,
@@ -846,20 +793,14 @@ class TestBackgroundProcessing:
                 {
                     "role": "user",
                     "type": "message",
-                    "results": {
-                        "harmfulContent": {"result": True, "status": "SUCCESS"}
-                    },
+                    "results": {"harmfulContent": {"result": True, "status": "SUCCESS"}},
                 }
             ],
         }
         mock_response.raise_for_status = MagicMock()
 
-        with patch.object(
-            monitor_mode_guardrail.async_handler, "post", return_value=mock_response
-        ) as mock_post:
-            with patch.object(
-                monitor_mode_guardrail, "_handle_verdict_background"
-            ) as mock_handle_verdict:
+        with patch.object(monitor_mode_guardrail.async_handler, "post", return_value=mock_response) as mock_post:
+            with patch.object(monitor_mode_guardrail, "_handle_verdict_background") as mock_handle_verdict:
                 result = await monitor_mode_guardrail._process_user_message_check(
                     mock_request_data, mock_user_api_key_dict
                 )
@@ -880,13 +821,9 @@ class TestBackgroundProcessing:
         }
         mock_response.raise_for_status = MagicMock()
 
-        with patch.object(
-            noma_guardrail.async_handler, "post", return_value=mock_response
-        ) as mock_post:
+        with patch.object(noma_guardrail.async_handler, "post", return_value=mock_response) as mock_post:
             with patch.object(noma_guardrail, "_check_verdict") as mock_check_verdict:
-                result = await noma_guardrail._process_user_message_check(
-                    mock_request_data, mock_user_api_key_dict
-                )
+                result = await noma_guardrail._process_user_message_check(mock_request_data, mock_user_api_key_dict)
 
                 assert result is not None
                 mock_post.assert_called_once()
@@ -905,9 +842,7 @@ class TestBackgroundProcessing:
                 Choices(
                     finish_reason="stop",
                     index=0,
-                    message=Message(
-                        content="I'm doing well, thank you!", role="assistant"
-                    ),
+                    message=Message(content="I'm doing well, thank you!", role="assistant"),
                 )
             ],
             created=1234567890,
@@ -924,12 +859,8 @@ class TestBackgroundProcessing:
         }
         mock_api_response.raise_for_status = MagicMock()
 
-        with patch.object(
-            monitor_mode_guardrail.async_handler, "post", return_value=mock_api_response
-        ) as mock_post:
-            with patch.object(
-                monitor_mode_guardrail, "_handle_verdict_background"
-            ) as mock_handle_verdict:
+        with patch.object(monitor_mode_guardrail.async_handler, "post", return_value=mock_api_response) as mock_post:
+            with patch.object(monitor_mode_guardrail, "_handle_verdict_background") as mock_handle_verdict:
                 result = await monitor_mode_guardrail._process_llm_response_check(
                     mock_request_data, response, mock_user_api_key_dict
                 )
@@ -943,16 +874,10 @@ class TestBackgroundProcessing:
         self, monitor_mode_guardrail, mock_user_api_key_dict, mock_request_data
     ):
         """Test background user message check method"""
-        with patch.object(
-            monitor_mode_guardrail, "_process_user_message_check"
-        ) as mock_process:
-            await monitor_mode_guardrail._check_user_message_background(
-                mock_request_data, mock_user_api_key_dict
-            )
+        with patch.object(monitor_mode_guardrail, "_process_user_message_check") as mock_process:
+            await monitor_mode_guardrail._check_user_message_background(mock_request_data, mock_user_api_key_dict)
 
-            mock_process.assert_called_once_with(
-                mock_request_data, mock_user_api_key_dict
-            )
+            mock_process.assert_called_once_with(mock_request_data, mock_user_api_key_dict)
 
     @pytest.mark.asyncio
     async def test_check_user_message_background_exception_handling(
@@ -965,9 +890,7 @@ class TestBackgroundProcessing:
             side_effect=Exception("API failed"),
         ):
             # Should not raise exception, just log error
-            await monitor_mode_guardrail._check_user_message_background(
-                mock_request_data, mock_user_api_key_dict
-            )
+            await monitor_mode_guardrail._check_user_message_background(mock_request_data, mock_user_api_key_dict)
 
     @pytest.mark.asyncio
     async def test_check_llm_response_background(
@@ -992,16 +915,12 @@ class TestBackgroundProcessing:
             usage={"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
         )
 
-        with patch.object(
-            monitor_mode_guardrail, "_process_llm_response_check"
-        ) as mock_process:
+        with patch.object(monitor_mode_guardrail, "_process_llm_response_check") as mock_process:
             await monitor_mode_guardrail._check_llm_response_background(
                 mock_request_data, response, mock_user_api_key_dict
             )
 
-            mock_process.assert_called_once_with(
-                mock_request_data, response, mock_user_api_key_dict
-            )
+            mock_process.assert_called_once_with(mock_request_data, response, mock_user_api_key_dict)
 
     @pytest.mark.asyncio
     async def test_handle_verdict_background_blocked(self, monitor_mode_guardrail):
@@ -1012,17 +931,13 @@ class TestBackgroundProcessing:
                 {
                     "role": "user",
                     "type": "message",
-                    "results": {
-                        "harmfulContent": {"result": True, "status": "SUCCESS"}
-                    },
+                    "results": {"harmfulContent": {"result": True, "status": "SUCCESS"}},
                 }
             ],
         }
 
         with patch("litellm._logging.verbose_proxy_logger.warning") as mock_warning:
-            await monitor_mode_guardrail._handle_verdict_background(
-                "user", "test message", response_json
-            )
+            await monitor_mode_guardrail._handle_verdict_background("user", "test message", response_json)
 
             mock_warning.assert_called_once()
             assert "blocked user message" in mock_warning.call_args[0][0]
@@ -1036,9 +951,7 @@ class TestBackgroundProcessing:
         }
 
         with patch("litellm._logging.verbose_proxy_logger.info") as mock_info:
-            await monitor_mode_guardrail._handle_verdict_background(
-                "assistant", "test response", response_json
-            )
+            await monitor_mode_guardrail._handle_verdict_background("assistant", "test response", response_json)
 
             mock_info.assert_called_once()
             assert "allowed assistant message" in mock_info.call_args[0][0]
@@ -1061,9 +974,7 @@ class TestBackgroundProcessing:
         async def dummy_coroutine():
             return "completed"
 
-        with patch(
-            "asyncio.create_task", side_effect=Exception("Task creation failed")
-        ):
+        with patch("asyncio.create_task", side_effect=Exception("Task creation failed")):
             # Should not raise exception, just log error
             monitor_mode_guardrail._create_background_noma_check(dummy_coroutine())
 
@@ -1075,9 +986,7 @@ class TestBackgroundProcessing:
         # Update event hook to during_call
         monitor_mode_guardrail.event_hook = "during_call"
 
-        with patch.object(
-            monitor_mode_guardrail, "_create_background_noma_check"
-        ) as mock_create_background:
+        with patch.object(monitor_mode_guardrail, "_create_background_noma_check") as mock_create_background:
             result = await monitor_mode_guardrail.async_moderation_hook(
                 data=mock_request_data,
                 user_api_key_dict=mock_user_api_key_dict,
@@ -1113,9 +1022,7 @@ class TestBackgroundProcessing:
             usage={"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
         )
 
-        with patch.object(
-            monitor_mode_guardrail, "_create_background_noma_check"
-        ) as mock_create_background:
+        with patch.object(monitor_mode_guardrail, "_create_background_noma_check") as mock_create_background:
             result = await monitor_mode_guardrail.async_post_call_success_hook(
                 data=mock_request_data,
                 user_api_key_dict=mock_user_api_key_dict,
@@ -1176,9 +1083,7 @@ class TestNomaImageProcessing:
             }
         ]
 
-        input_items, _ = handler.convert_chat_completion_messages_to_responses_api(
-            messages
-        )
+        input_items, _ = handler.convert_chat_completion_messages_to_responses_api(messages)
 
         assert len(input_items) == 1
         message = input_items[0]["content"]
@@ -1210,9 +1115,7 @@ class TestNomaImageProcessing:
             }
         ]
 
-        input_items, _ = handler.convert_chat_completion_messages_to_responses_api(
-            messages
-        )
+        input_items, _ = handler.convert_chat_completion_messages_to_responses_api(messages)
 
         # Match the original assertions: `message` is the content list
         assert len(input_items) == 1
@@ -1254,9 +1157,7 @@ class TestNomaImageProcessing:
             }
         ]
 
-        input_items, _ = handler.convert_chat_completion_messages_to_responses_api(
-            messages
-        )
+        input_items, _ = handler.convert_chat_completion_messages_to_responses_api(messages)
 
         # Match the original assertions
         assert len(input_items) == 1
@@ -1270,9 +1171,7 @@ class TestNomaImageProcessing:
         assert message[2]["image_url"] == "https://example.com/image2.jpg"
 
     @pytest.mark.asyncio
-    async def test_pre_call_hook_with_image_content(
-        self, noma_guardrail, mock_user_api_key_dict
-    ):
+    async def test_pre_call_hook_with_image_content(self, noma_guardrail, mock_user_api_key_dict):
         """Test pre-call hook with image content"""
         request_data = {
             "messages": [
@@ -1312,9 +1211,7 @@ class TestNomaImageProcessing:
         mock_response.json.return_value = noma_response
         mock_response.raise_for_status = MagicMock()
 
-        with patch.object(
-            noma_guardrail.async_handler, "post", return_value=mock_response
-        ) as mock_post:
+        with patch.object(noma_guardrail.async_handler, "post", return_value=mock_response) as mock_post:
             result = await noma_guardrail.async_pre_call_hook(
                 user_api_key_dict=mock_user_api_key_dict,
                 cache=MagicMock(),
@@ -1334,9 +1231,7 @@ class TestNomaImageProcessing:
             assert "content" in payload["input"][0]
 
     @pytest.mark.asyncio
-    async def test_pre_call_hook_with_mixed_content(
-        self, noma_guardrail, mock_user_api_key_dict
-    ):
+    async def test_pre_call_hook_with_mixed_content(self, noma_guardrail, mock_user_api_key_dict):
         """Test pre-call hook with mixed text and image content"""
         request_data = {
             "messages": [
@@ -1379,9 +1274,7 @@ class TestNomaImageProcessing:
         mock_response.json.return_value = noma_response
         mock_response.raise_for_status = MagicMock()
 
-        with patch.object(
-            noma_guardrail.async_handler, "post", return_value=mock_response
-        ) as mock_post:
+        with patch.object(noma_guardrail.async_handler, "post", return_value=mock_response) as mock_post:
             result = await noma_guardrail.async_pre_call_hook(
                 user_api_key_dict=mock_user_api_key_dict,
                 cache=MagicMock(),
@@ -1402,9 +1295,7 @@ class TestNomaImageProcessing:
                     "content": [
                         {
                             "type": "image_url",
-                            "image_url": {
-                                "url": "https://example.com/inappropriate-image.jpg"
-                            },
+                            "image_url": {"url": "https://example.com/inappropriate-image.jpg"},
                         }
                     ],
                 }
@@ -1438,9 +1329,7 @@ class TestNomaImageProcessing:
             NomaBlockedMessage,
         )
 
-        with patch.object(
-            noma_guardrail.async_handler, "post", return_value=mock_response
-        ):
+        with patch.object(noma_guardrail.async_handler, "post", return_value=mock_response):
             with pytest.raises(NomaBlockedMessage) as exc_info:
                 await noma_guardrail.async_pre_call_hook(
                     user_api_key_dict=mock_user_api_key_dict,
@@ -1465,9 +1354,7 @@ class TestNomaImageProcessing:
                     "content": [
                         {
                             "type": "image_url",
-                            "image_url": {
-                                "url": "data:image/jpeg;base64,/9j/4AAQSkZJRg..."
-                            },
+                            "image_url": {"url": "data:image/jpeg;base64,/9j/4AAQSkZJRg..."},
                         }
                     ],
                 }
@@ -1477,9 +1364,7 @@ class TestNomaImageProcessing:
         handler = LiteLLMResponsesTransformationHandler()
         messages = cast(list[AllMessageValues], data["messages"])
 
-        input_items, _ = handler.convert_chat_completion_messages_to_responses_api(
-            messages
-        )
+        input_items, _ = handler.convert_chat_completion_messages_to_responses_api(messages)
 
         assert len(input_items) == 1
         message = input_items[0]["content"]
@@ -1522,10 +1407,8 @@ class TestIntegration:
                 config_file_path="",
             )
 
-            custom_loggers = (
-                litellm.logging_callback_manager.get_custom_loggers_for_type(
-                    callback_type=litellm.integrations.custom_guardrail.CustomGuardrail
-                )
+            custom_loggers = litellm.logging_callback_manager.get_custom_loggers_for_type(
+                callback_type=litellm.integrations.custom_guardrail.CustomGuardrail
             )
             assert len(custom_loggers) >= 2
 
@@ -1628,9 +1511,7 @@ class TestNomaAnonymizationLogic:
         result = anonymize_guardrail._should_only_sensitive_data_failed(classification)
         assert result is True
 
-    def test_should_only_data_detector_failed_false_other_detectors(
-        self, anonymize_guardrail
-    ):
+    def test_should_only_data_detector_failed_false_other_detectors(self, anonymize_guardrail):
         """Test _should_only_sensitive_data_failed when other detectors also triggered"""
         classification = {
             "sensitiveData": {
@@ -1646,9 +1527,7 @@ class TestNomaAnonymizationLogic:
         result = anonymize_guardrail._should_only_sensitive_data_failed(classification)
         assert result is False
 
-    def test_should_only_data_detector_failed_false_no_data_detected(
-        self, anonymize_guardrail
-    ):
+    def test_should_only_data_detector_failed_false_no_data_detected(self, anonymize_guardrail):
         """Test _should_only_sensitive_data_failed when no sensitive data detected"""
         classification = {
             "sensitiveData": {
@@ -1662,9 +1541,7 @@ class TestNomaAnonymizationLogic:
         result = anonymize_guardrail._should_only_sensitive_data_failed(classification)
         assert result is False
 
-    def test_should_only_data_detector_failed_with_nested_detectors(
-        self, anonymize_guardrail
-    ):
+    def test_should_only_data_detector_failed_with_nested_detectors(self, anonymize_guardrail):
         """Test _should_only_sensitive_data_failed with nested detectors like topicDetector"""
         classification = {
             "sensitiveData": {
@@ -1689,11 +1566,7 @@ class TestNomaAnonymizationLogic:
                 {
                     "role": "user",
                     "type": "message",
-                    "results": {
-                        "anonymizedContent": {
-                            "anonymized": "My email is ******* and phone is *******"
-                        }
-                    },
+                    "results": {"anonymizedContent": {"anonymized": "My email is ******* and phone is *******"}},
                 }
             ]
         }
@@ -1708,25 +1581,17 @@ class TestNomaAnonymizationLogic:
                 {
                     "role": "assistant",
                     "type": "message",
-                    "results": {
-                        "anonymizedContent": {
-                            "anonymized": "I can't help with that request."
-                        }
-                    },
+                    "results": {"anonymizedContent": {"anonymized": "I can't help with that request."}},
                 }
             ]
         }
 
-        result = anonymize_guardrail._extract_anonymized_content(
-            response_json, "assistant"
-        )
+        result = anonymize_guardrail._extract_anonymized_content(response_json, "assistant")
         assert result == "I can't help with that request."
 
     def test_extract_anonymized_content_missing(self, anonymize_guardrail):
         """Test _extract_anonymized_content when anonymized content is missing"""
-        response_json = {
-            "scanResult": [{"role": "user", "type": "message", "results": {}}]
-        }
+        response_json = {"scanResult": [{"role": "user", "type": "message", "results": {}}]}
 
         result = anonymize_guardrail._extract_anonymized_content(response_json, "user")
         assert result == ""
@@ -1818,15 +1683,11 @@ class TestNomaAnonymizationLogic:
             ]
         }
 
-        anonymize_guardrail._replace_user_message_content(
-            request_data, "My phone is *******"
-        )
+        anonymize_guardrail._replace_user_message_content(request_data, "My phone is *******")
 
         # Should replace the last user message
         assert request_data["messages"][-1]["content"] == "My phone is *******"
-        assert (
-            request_data["messages"][1]["content"] == "My email is test@example.com"
-        )  # Unchanged
+        assert request_data["messages"][1]["content"] == "My email is test@example.com"  # Unchanged
 
     def test_replace_llm_response_content(self, anonymize_guardrail):
         """Test _replace_llm_response_content"""
@@ -1836,9 +1697,7 @@ class TestNomaAnonymizationLogic:
                 Choices(
                     finish_reason="stop",
                     index=0,
-                    message=Message(
-                        content="Your email is test@example.com", role="assistant"
-                    ),
+                    message=Message(content="Your email is test@example.com", role="assistant"),
                 )
             ],
             created=1234567890,
@@ -1848,9 +1707,7 @@ class TestNomaAnonymizationLogic:
             usage={"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
         )
 
-        anonymize_guardrail._replace_llm_response_content(
-            response, "Your email is *******", 0
-        )
+        anonymize_guardrail._replace_llm_response_content(response, "Your email is *******", 0)
 
         assert response.choices[0].message.content == "Your email is *******"
 
@@ -1935,7 +1792,9 @@ class TestNomaMultiChoiceResponses:
         response = ModelResponse(
             id="resp_1",
             choices=[
-                Choices(index=0, finish_reason="stop", message=Message(role="assistant", content="Mail test@example.com")),
+                Choices(
+                    index=0, finish_reason="stop", message=Message(role="assistant", content="Mail test@example.com")
+                ),
                 Choices(
                     index=1, finish_reason="stop", message=Message(role="assistant", content="Write test@example.com")
                 ),
@@ -2083,9 +1942,7 @@ class TestNomaAnonymizationFlow:
         )
 
     @pytest.mark.asyncio
-    async def test_anonymization_verdict_true_user_message(
-        self, anonymize_guardrail, mock_user_api_key_dict
-    ):
+    async def test_anonymization_verdict_true_user_message(self, anonymize_guardrail, mock_user_api_key_dict):
         """Test anonymization when verdict=True for user message"""
         request_data = {
             "messages": [
@@ -2117,9 +1974,7 @@ class TestNomaAnonymizationFlow:
         mock_response.json.return_value = noma_response
         mock_response.raise_for_status = MagicMock()
 
-        with patch.object(
-            anonymize_guardrail.async_handler, "post", return_value=mock_response
-        ):
+        with patch.object(anonymize_guardrail.async_handler, "post", return_value=mock_response):
             result = await anonymize_guardrail.async_pre_call_hook(
                 user_api_key_dict=mock_user_api_key_dict,
                 cache=MagicMock(),
@@ -2132,9 +1987,7 @@ class TestNomaAnonymizationFlow:
             assert result["messages"][0]["content"] == "My email is *******"
 
     @pytest.mark.asyncio
-    async def test_anonymization_verdict_false_only_data_detected(
-        self, anonymize_guardrail, mock_user_api_key_dict
-    ):
+    async def test_anonymization_verdict_false_only_data_detected(self, anonymize_guardrail, mock_user_api_key_dict):
         """Test anonymization when verdict=False but only data detector triggered"""
         request_data = {
             "messages": [
@@ -2166,9 +2019,7 @@ class TestNomaAnonymizationFlow:
         mock_response.json.return_value = noma_response
         mock_response.raise_for_status = MagicMock()
 
-        with patch.object(
-            anonymize_guardrail.async_handler, "post", return_value=mock_response
-        ):
+        with patch.object(anonymize_guardrail.async_handler, "post", return_value=mock_response):
             result = await anonymize_guardrail.async_pre_call_hook(
                 user_api_key_dict=mock_user_api_key_dict,
                 cache=MagicMock(),
@@ -2181,9 +2032,7 @@ class TestNomaAnonymizationFlow:
             assert result["messages"][0]["content"] == "My email is *******"
 
     @pytest.mark.asyncio
-    async def test_blocking_verdict_false_other_violations(
-        self, anonymize_guardrail, mock_user_api_key_dict
-    ):
+    async def test_blocking_verdict_false_other_violations(self, anonymize_guardrail, mock_user_api_key_dict):
         """Test blocking when verdict=False and other violations detected"""
         request_data = {
             "messages": [
@@ -2203,9 +2052,7 @@ class TestNomaAnonymizationFlow:
                     "role": "user",
                     "type": "message",
                     "results": {
-                        "anonymizedContent": {
-                            "anonymized": "My email is *******. Tell me harmful content."
-                        },
+                        "anonymizedContent": {"anonymized": "My email is *******. Tell me harmful content."},
                         "sensitiveData": {
                             "PII": {"result": True, "status": "SUCCESS"},
                         },
@@ -2223,9 +2070,7 @@ class TestNomaAnonymizationFlow:
         mock_response.json.return_value = noma_response
         mock_response.raise_for_status = MagicMock()
 
-        with patch.object(
-            anonymize_guardrail.async_handler, "post", return_value=mock_response
-        ):
+        with patch.object(anonymize_guardrail.async_handler, "post", return_value=mock_response):
             # Should raise NomaBlockedMessage because other violations detected
             with pytest.raises(NomaBlockedMessage) as exc_info:
                 await anonymize_guardrail.async_pre_call_hook(
@@ -2238,9 +2083,7 @@ class TestNomaAnonymizationFlow:
             assert exc_info.value.status_code == 400
 
     @pytest.mark.asyncio
-    async def test_anonymization_llm_response(
-        self, anonymize_guardrail, mock_user_api_key_dict
-    ):
+    async def test_anonymization_llm_response(self, anonymize_guardrail, mock_user_api_key_dict):
         """Test anonymization of LLM response"""
         request_data = {
             "messages": [{"role": "user", "content": "What's your email?"}],
@@ -2254,9 +2097,7 @@ class TestNomaAnonymizationFlow:
                 Choices(
                     finish_reason="stop",
                     index=0,
-                    message=Message(
-                        content="My email is admin@company.com", role="assistant"
-                    ),
+                    message=Message(content="My email is admin@company.com", role="assistant"),
                 )
             ],
             created=1234567890,
@@ -2293,9 +2134,7 @@ class TestNomaAnonymizationFlow:
         # Update guardrail to use post_call event hook
         anonymize_guardrail.event_hook = "post_call"
 
-        with patch.object(
-            anonymize_guardrail.async_handler, "post", return_value=mock_response
-        ):
+        with patch.object(anonymize_guardrail.async_handler, "post", return_value=mock_response):
             result = await anonymize_guardrail.async_post_call_success_hook(
                 data=request_data,
                 user_api_key_dict=mock_user_api_key_dict,
@@ -2369,9 +2208,7 @@ class TestNomaAnonymizationFlow:
             ],
         }
 
-        with patch.object(
-            guardrail, "_create_background_noma_check"
-        ) as mock_create_background:
+        with patch.object(guardrail, "_create_background_noma_check") as mock_create_background:
             result = await guardrail.async_pre_call_hook(
                 user_api_key_dict=mock_user_api_key_dict,
                 cache=MagicMock(),
@@ -2381,15 +2218,11 @@ class TestNomaAnonymizationFlow:
 
             # Should return original data unchanged
             assert result == request_data
-            assert (
-                request_data["messages"][0]["content"] == "My email is test@example.com"
-            )
+            assert request_data["messages"][0]["content"] == "My email is test@example.com"
             mock_create_background.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_anonymization_no_anonymized_content_available(
-        self, anonymize_guardrail, mock_user_api_key_dict
-    ):
+    async def test_anonymization_no_anonymized_content_available(self, anonymize_guardrail, mock_user_api_key_dict):
         """Test behavior when anonymized content is not available"""
         request_data = {
             "messages": [
@@ -2417,9 +2250,7 @@ class TestNomaAnonymizationFlow:
         mock_response.json.return_value = noma_response
         mock_response.raise_for_status = MagicMock()
 
-        with patch.object(
-            anonymize_guardrail.async_handler, "post", return_value=mock_response
-        ):
+        with patch.object(anonymize_guardrail.async_handler, "post", return_value=mock_response):
             # Should raise NomaBlockedMessage because no anonymized content available
             with pytest.raises(NomaBlockedMessage):
                 await anonymize_guardrail.async_pre_call_hook(
@@ -2446,9 +2277,7 @@ class TestNomaAnonymizationFlow:
                 Choices(
                     finish_reason="stop",
                     index=0,
-                    message=Message(
-                        content="My email is admin@company.com", role="assistant"
-                    ),
+                    message=Message(content="My email is admin@company.com", role="assistant"),
                 )
             ],
             created=1234567890,
@@ -2484,9 +2313,7 @@ class TestNomaAnonymizationFlow:
         # Update guardrail to use post_call event hook
         anonymize_guardrail.event_hook = "post_call"
 
-        with patch.object(
-            anonymize_guardrail.async_handler, "post", return_value=mock_response
-        ):
+        with patch.object(anonymize_guardrail.async_handler, "post", return_value=mock_response):
             # Should raise NomaBlockedMessage because no anonymized content available for LLM response
             with pytest.raises(NomaBlockedMessage):
                 await anonymize_guardrail.async_post_call_success_hook(

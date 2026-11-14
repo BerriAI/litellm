@@ -29,7 +29,7 @@ def test_existing_toolset_format_loads_before_start_and_keeps_sibling_denied(gat
         with psycopg.connect(os.environ["DATABASE_URL"]) as connection:
             connection.execute(
                 'INSERT INTO "LiteLLM_MCPToolsetTable" (toolset_id, toolset_name, tools, updated_at) '
-                'VALUES (%s,%s,%s::jsonb,NOW())',
+                "VALUES (%s,%s,%s::jsonb,NOW())",
                 (toolset, "integration" + uuid.uuid4().hex, json.dumps([{"server_id": identity, "tool_name": "add"}])),
             )
         scenario.cleanups.callback(cleanup)

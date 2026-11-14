@@ -26,9 +26,7 @@ from litellm.types.utils import CallTypes, GenericGuardrailAPIInputs, TextChoice
 class MockGuardrail(CustomGuardrail):
     """Mock guardrail for testing"""
 
-    async def apply_guardrail(
-        self, inputs: dict, request_data: dict, input_type: str, **kwargs
-    ) -> dict:
+    async def apply_guardrail(self, inputs: dict, request_data: dict, input_type: str, **kwargs) -> dict:
         texts = inputs.get("texts", [])
         return {"texts": [f"{text} [GUARDRAILED]" for text in texts]}
 
@@ -250,9 +248,7 @@ class TestPIIMaskingScenario:
         class PIIMaskingGuardrail(CustomGuardrail):
             """Mock PII masking guardrail"""
 
-            async def apply_guardrail(
-                self, inputs: dict, request_data: dict, input_type: str, **kwargs
-            ) -> dict:
+            async def apply_guardrail(self, inputs: dict, request_data: dict, input_type: str, **kwargs) -> dict:
                 # Simple mock: replace email-like patterns
                 import re
 
@@ -314,9 +310,7 @@ class TestPIIMaskingScenario:
         class PIIMaskingGuardrail(CustomGuardrail):
             """Mock PII masking guardrail"""
 
-            async def apply_guardrail(
-                self, inputs: dict, request_data: dict, input_type: str, **kwargs
-            ) -> dict:
+            async def apply_guardrail(self, inputs: dict, request_data: dict, input_type: str, **kwargs) -> dict:
                 import re
 
                 texts = inputs.get("texts", [])
@@ -481,7 +475,9 @@ class TestStreamingOutputProcessing:
 
         with pytest.raises(HTTPException) as exc_info:
             await OpenAITextCompletionHandler().process_output_streaming_response(
-                responses_so_far=chunks, guardrail_to_apply=_RecordingKeywordFilter(), deliver_ended_stream_rewrites=True
+                responses_so_far=chunks,
+                guardrail_to_apply=_RecordingKeywordFilter(),
+                deliver_ended_stream_rewrites=True,
             )
 
         assert exc_info.value.status_code == 400
@@ -505,7 +501,9 @@ class TestStreamingOutputProcessing:
 
         with pytest.raises(HTTPException) as exc_info:
             await OpenAITextCompletionHandler().process_output_streaming_response(
-                responses_so_far=chunks, guardrail_to_apply=_RecordingKeywordFilter(), deliver_ended_stream_rewrites=True
+                responses_so_far=chunks,
+                guardrail_to_apply=_RecordingKeywordFilter(),
+                deliver_ended_stream_rewrites=True,
             )
 
         assert exc_info.value.status_code == 400

@@ -229,7 +229,9 @@ async def test_a_gemini_upstream_error_keeps_its_status_on_the_failed_ingest(
 
 
 @pytest.mark.asyncio
-async def test_a_gemini_store_with_no_api_key_anywhere_fails_without_a_caller_error_status(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_a_gemini_store_with_no_api_key_anywhere_fails_without_a_caller_error_status(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
     ingestion: Final = GeminiRAGIngestion(ingest_options={"vector_store": {"custom_llm_provider": "gemini"}})

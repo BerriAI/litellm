@@ -54,8 +54,9 @@ def test_default_otel_logger_keeps_spend_flush_outside_the_request_trace(
         request_trace: Final = next(trace for trace, names in traces.items() if expected <= names)
         key_info: Final = eventually(
             lambda: candidate.request("GET", "/key/info", key=key, params={"key": key}),
-            lambda response: response.status_code == 200
-            and float(str(object_value(response.json()["info"])["spend"])) > 0,
+            lambda response: (
+                response.status_code == 200 and float(str(object_value(response.json()["info"])["spend"])) > 0
+            ),
             seconds=60,
         )
         assert key_info.status_code == 200, key_info.text

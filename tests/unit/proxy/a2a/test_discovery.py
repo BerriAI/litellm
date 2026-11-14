@@ -49,9 +49,7 @@ async def test_fetch_uses_first_path_that_returns_200():
     fake_client = MagicMock()
     fake_client.get = AsyncMock(return_value=_mock_response(200, body=body))
 
-    with patch(
-        "litellm.proxy.a2a.discovery.get_async_httpx_client", return_value=fake_client
-    ):
+    with patch("litellm.proxy.a2a.discovery.get_async_httpx_client", return_value=fake_client):
         card = await fetch_well_known_card("https://upstream.example")
 
     assert card == body
@@ -72,9 +70,7 @@ async def test_fetch_falls_back_to_later_paths_on_404():
         ]
     )
 
-    with patch(
-        "litellm.proxy.a2a.discovery.get_async_httpx_client", return_value=fake_client
-    ):
+    with patch("litellm.proxy.a2a.discovery.get_async_httpx_client", return_value=fake_client):
         card = await fetch_well_known_card("https://upstream.example")
 
     assert card == body
@@ -84,13 +80,9 @@ async def test_fetch_falls_back_to_later_paths_on_404():
 @pytest.mark.asyncio
 async def test_fetch_raises_when_all_paths_fail():
     fake_client = MagicMock()
-    fake_client.get = AsyncMock(
-        side_effect=[_mock_response(404) for _ in AGENT_CARD_WELL_KNOWN_PATHS]
-    )
+    fake_client.get = AsyncMock(side_effect=[_mock_response(404) for _ in AGENT_CARD_WELL_KNOWN_PATHS])
 
-    with patch(
-        "litellm.proxy.a2a.discovery.get_async_httpx_client", return_value=fake_client
-    ):
+    with patch("litellm.proxy.a2a.discovery.get_async_httpx_client", return_value=fake_client):
         with pytest.raises(AgentCardDiscoveryError):
             await fetch_well_known_card("https://upstream.example")
 
@@ -106,9 +98,7 @@ async def test_fetch_skips_path_that_returns_non_json_body():
         ]
     )
 
-    with patch(
-        "litellm.proxy.a2a.discovery.get_async_httpx_client", return_value=fake_client
-    ):
+    with patch("litellm.proxy.a2a.discovery.get_async_httpx_client", return_value=fake_client):
         card = await fetch_well_known_card("https://upstream.example")
 
     assert card == body
@@ -125,9 +115,7 @@ async def test_fetch_skips_path_that_returns_non_object_json():
         ]
     )
 
-    with patch(
-        "litellm.proxy.a2a.discovery.get_async_httpx_client", return_value=fake_client
-    ):
+    with patch("litellm.proxy.a2a.discovery.get_async_httpx_client", return_value=fake_client):
         card = await fetch_well_known_card("https://upstream.example")
 
     assert card == {"name": "agent"}
@@ -151,9 +139,7 @@ async def test_langgraph_mode_appends_assistant_id_query_param():
     fake_client = MagicMock()
     fake_client.get = AsyncMock(return_value=_mock_response(200, body=body))
 
-    with patch(
-        "litellm.proxy.a2a.discovery.get_async_httpx_client", return_value=fake_client
-    ):
+    with patch("litellm.proxy.a2a.discovery.get_async_httpx_client", return_value=fake_client):
         card = await fetch_well_known_card(
             "http://localhost:2024",
             discovery_mode=DiscoveryMode.LANGGRAPH_PLATFORM,
@@ -164,9 +150,7 @@ async def test_langgraph_mode_appends_assistant_id_query_param():
     called_url = fake_client.get.call_args.args[0]
     # The canonical A2A path with the LangGraph query parameter — NOT a
     # per-assistant subpath like /agent/.well-known/agent-card.json.
-    assert called_url == (
-        "http://localhost:2024/.well-known/agent-card.json?assistant_id=agent"
-    )
+    assert called_url == ("http://localhost:2024/.well-known/agent-card.json?assistant_id=agent")
 
 
 @pytest.mark.asyncio
@@ -190,9 +174,7 @@ async def test_langgraph_mode_falls_back_to_older_well_known_paths():
         ]
     )
 
-    with patch(
-        "litellm.proxy.a2a.discovery.get_async_httpx_client", return_value=fake_client
-    ):
+    with patch("litellm.proxy.a2a.discovery.get_async_httpx_client", return_value=fake_client):
         card = await fetch_well_known_card(
             "http://localhost:2024",
             discovery_mode=DiscoveryMode.LANGGRAPH_PLATFORM,
@@ -213,9 +195,7 @@ async def test_langgraph_mode_falls_back_to_older_well_known_paths():
 def _client_for_role(role: LitellmUserRoles) -> TestClient:
     app = FastAPI()
     app.include_router(a2a_router)
-    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
-        user_id="u", user_role=role
-    )
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_id="u", user_role=role)
     return TestClient(app)
 
 

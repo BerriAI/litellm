@@ -25,9 +25,7 @@ class TestFunctionToolParametersValidation:
 
     def test_should_add_type_object_when_parameters_missing_type(self):
         """Parameters without type should get type='object' added."""
-        tool = FunctionTool(
-            name="test_tool", parameters={"properties": {"query": {"type": "string"}}}
-        )
+        tool = FunctionTool(name="test_tool", parameters={"properties": {"query": {"type": "string"}}})
 
         assert tool.parameters.get("type") == "object"
         assert tool.parameters.get("properties") == {"query": {"type": "string"}}
@@ -91,11 +89,7 @@ class TestChatCompletionToolValidation:
             "function": {
                 "name": "web_search",
                 "description": "Search the web",
-                "parameters": {
-                    "properties": {
-                        "query": {"type": "string", "description": "Search query"}
-                    }
-                },
+                "parameters": {"properties": {"query": {"type": "string", "description": "Search query"}}},
             },
         }
         completion_tool = ChatCompletionTool(**tool_dict)
@@ -132,9 +126,7 @@ class TestToolTransformationIntegration:
                 "name": "get_weather",
                 "description": "Get weather for a location",
                 "parameters": {
-                    "properties": {
-                        "location": {"type": "string", "description": "City name"}
-                    },
+                    "properties": {"location": {"type": "string", "description": "City name"}},
                     "required": ["location"],
                 },
             },

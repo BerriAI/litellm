@@ -109,7 +109,9 @@ def _attempted_fallbacks(stream: object) -> object:
 
 
 def _stream_sync(router: Router, **request: object) -> _Streamed:
-    stream: Final = router.completion(model="primary", messages=[{"role": "user", "content": _PROMPT}], stream=True, **request)
+    stream: Final = router.completion(
+        model="primary", messages=[{"role": "user", "content": _PROMPT}], stream=True, **request
+    )
     text: Final = "".join(_text_of(chunk) for chunk in stream)
     return _Streamed(text=text, attempted_fallbacks=_attempted_fallbacks(stream))
 
@@ -130,7 +132,11 @@ def _stream(client: str, router: Router, **request: object) -> _Streamed:
 
 _CLIENTS: Final = ("sync", "async")
 _PRIMARY_DIES: Final = {"primary": _DIES_BEFORE_CONTENT, "backup": _serves("answered by the backup")}
-_PRIMARY_AND_FB1_DIE: Final = {"primary": _DIES_BEFORE_CONTENT, "fb1": _DIES_BEFORE_CONTENT, "fb2": _serves("answered by fb2")}
+_PRIMARY_AND_FB1_DIE: Final = {
+    "primary": _DIES_BEFORE_CONTENT,
+    "fb1": _DIES_BEFORE_CONTENT,
+    "fb2": _serves("answered by fb2"),
+}
 _PRIMARY_TO_BACKUP: Final = [{"primary": ["backup"]}]
 
 
@@ -223,7 +229,9 @@ def test_per_request_fallbacks_none_turns_the_router_list_off(client: str) -> No
 @pytest.mark.parametrize("client", _CLIENTS)
 def test_max_fallbacks_walks_the_list_like_a_non_streaming_request(client: str) -> None:
     with wire_server(_peer(_PRIMARY_AND_FB1_DIE)) as wire:
-        router: Final = _router(wire, ("primary", "fb1", "fb2"), fallbacks=[{"primary": ["fb1", "fb2"]}], max_fallbacks=1)
+        router: Final = _router(
+            wire, ("primary", "fb1", "fb2"), fallbacks=[{"primary": ["fb1", "fb2"]}], max_fallbacks=1
+        )
         streamed: Final = _stream(client, router)
         assert streamed.text == "answered by fb2", streamed
         assert _deployments_hit(wire) == ("primary", "fb1", "fb2")

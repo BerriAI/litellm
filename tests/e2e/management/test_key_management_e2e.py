@@ -23,8 +23,15 @@ from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
 from lifecycle import ResourceManager
 from management_client import ManagementClient
 from models import (
-    CLEAR, ChatResponse, KeyDeleteBody, KeyGenerateBody, KeyInfo, KeyUpdateBody,
-    LiteLLMParamsBody, OrgNewBody, TeamNewBody,
+    CLEAR,
+    ChatResponse,
+    KeyDeleteBody,
+    KeyGenerateBody,
+    KeyInfo,
+    KeyUpdateBody,
+    LiteLLMParamsBody,
+    OrgNewBody,
+    TeamNewBody,
 )
 from pydantic import BaseModel, RootModel
 
@@ -185,40 +192,68 @@ class TestKeyManagementRoutes:
         resources.defer(lambda: client.delete_org(org_id))
         team_id: Final = client.create_team(TeamNewBody(team_alias=name, organization_id=org_id, models=[name]))
         resources.defer(lambda: client.delete_team(team_id))
-        project: Final = unwrap(client.proxy.transport.post(
-            "/project/new", headers=client.proxy.transport.master,
-            json=ProjectCreateBody(team_id=team_id, project_alias=name, models=[name]),
-            response_type=ProjectIdentity,
-        ))
-        resources.defer(lambda: unwrap(client.proxy.transport.delete(
-            "/project/delete", headers=client.proxy.transport.master,
-            json=ProjectDeleteBody(project_ids=[project.project_id]), response_type=RootModel[list[ProjectIdentity]],
-        )))
-        key: Final = _generate_key(client, resources, KeyGenerateBody(
-            key_alias=name, team_id=team_id, organization_id=org_id, project_id=project.project_id,
-            models=[name], max_budget=5, tpm_limit=12345, rpm_limit=97,
-        ))
+        project: Final = unwrap(
+            client.proxy.transport.post(
+                "/project/new",
+                headers=client.proxy.transport.master,
+                json=ProjectCreateBody(team_id=team_id, project_alias=name, models=[name]),
+                response_type=ProjectIdentity,
+            )
+        )
+        resources.defer(
+            lambda: unwrap(
+                client.proxy.transport.delete(
+                    "/project/delete",
+                    headers=client.proxy.transport.master,
+                    json=ProjectDeleteBody(project_ids=[project.project_id]),
+                    response_type=RootModel[list[ProjectIdentity]],
+                )
+            )
+        )
+        key: Final = _generate_key(
+            client,
+            resources,
+            KeyGenerateBody(
+                key_alias=name,
+                team_id=team_id,
+                organization_id=org_id,
+                project_id=project.project_id,
+                models=[name],
+                max_budget=5,
+                tpm_limit=12345,
+                rpm_limit=97,
+            ),
+        )
         initial: Final = client.chat_status(key, name, "project attached")
         assert initial.ok, initial.body
         _ = unwrap(client.update_key(KeyUpdateBody(key=key, key_alias=f"{name}-saved")))
         assert client.proxy.key_info(key).project_id == project.project_id
         _ = unwrap(client.update_key(KeyUpdateBody(key=key, project_id=project.project_id)))
         rejected: Final = client.proxy.transport.send(
-            "/key/update", headers=client.proxy.transport.master,
+            "/key/update",
+            headers=client.proxy.transport.master,
             json=KeyUpdateBody(key=key, project_id=f"{name}-different"),
         )
         assert rejected.status_code == 400 and "reassignment" in rejected.body
         assert client.proxy.key_info(key).project_id == project.project_id
-        _ = unwrap(client.proxy.transport.post(
-            "/project/update", headers=client.proxy.transport.master,
-            json=ProjectBlockBody(project_id=project.project_id, blocked=True), response_type=NoBody,
-        ))
+        _ = unwrap(
+            client.proxy.transport.post(
+                "/project/update",
+                headers=client.proxy.transport.master,
+                json=ProjectBlockBody(project_id=project.project_id, blocked=True),
+                response_type=NoBody,
+            )
+        )
         blocked: Final = client.chat_status(key, name, "project blocked")
         assert not blocked.ok and "is blocked" in blocked.body
-        detached: Final = unwrap(client.proxy.transport.post(
-            "/key/update", headers=client.proxy.transport.master,
-            json=KeyUpdateBody(key=key, project_id=CLEAR), response_type=KeyInfo,
-        ))
+        detached: Final = unwrap(
+            client.proxy.transport.post(
+                "/key/update",
+                headers=client.proxy.transport.master,
+                json=KeyUpdateBody(key=key, project_id=CLEAR),
+                response_type=KeyInfo,
+            )
+        )
         assert detached.project_id is None
         saved: Final = client.proxy.key_info(key)
         assert (saved.project_id, saved.team_id, saved.organization_id) == (None, team_id, org_id)
@@ -259,9 +294,7 @@ class TestKeyManagementRoutes:
 
     @pytest.mark.covers("mgmt.key.unblock.persists")
     @meta(Subject(domain=Domain.MANAGEMENT, route=Route.KEY_MANAGEMENT))
-    def test_unblock_flips_key_info_blocked_back(
-        self, client: ManagementClient, resources: ResourceManager
-    ) -> None:
+    def test_unblock_flips_key_info_blocked_back(self, client: ManagementClient, resources: ResourceManager) -> None:
         key = _generate_key(client, resources, KeyGenerateBody(models=["gpt-5.5"]))
 
         _block(client, key)
@@ -280,9 +313,7 @@ class TestKeyManagementRoutes:
 
     @pytest.mark.covers("mgmt.key.health.happy_path")
     @meta(Subject(domain=Domain.MANAGEMENT, route=Route.KEY_MANAGEMENT))
-    def test_health_reports_the_calling_key_healthy(
-        self, client: ManagementClient, resources: ResourceManager
-    ) -> None:
+    def test_health_reports_the_calling_key_healthy(self, client: ManagementClient, resources: ResourceManager) -> None:
         key = _generate_key(client, resources, KeyGenerateBody(models=["gpt-5.5"]))
 
         health = unwrap(
@@ -365,9 +396,7 @@ class TestKeyManagementRoutes:
 
     @pytest.mark.covers("mgmt.key.generate.admin_only")
     @meta(Subject(domain=Domain.PROXY_AUTH, route=Route.KEY_MANAGEMENT))
-    def test_generate_forbidden_for_non_admin_key(
-        self, client: ManagementClient, resources: ResourceManager
-    ) -> None:
+    def test_generate_forbidden_for_non_admin_key(self, client: ManagementClient, resources: ResourceManager) -> None:
         nonadmin = _generate_key(client, resources, KeyGenerateBody(models=["gpt-5.5"]))
 
         outcome = client.proxy.transport.send(
@@ -381,9 +410,7 @@ class TestKeyManagementRoutes:
 
     @pytest.mark.covers("mgmt.key.delete.admin_only")
     @meta(Subject(domain=Domain.PROXY_AUTH, route=Route.KEY_MANAGEMENT))
-    def test_delete_forbidden_for_non_admin_key(
-        self, client: ManagementClient, resources: ResourceManager
-    ) -> None:
+    def test_delete_forbidden_for_non_admin_key(self, client: ManagementClient, resources: ResourceManager) -> None:
         nonadmin = _generate_key(client, resources, KeyGenerateBody(models=["gpt-5.5"]))
         victim = _generate_key(client, resources, KeyGenerateBody(models=["gpt-5.5"]))
 
@@ -401,9 +428,7 @@ class TestKeyManagementRoutes:
 
     @pytest.mark.covers("mgmt.key.update.admin_only")
     @meta(Subject(domain=Domain.PROXY_AUTH, route=Route.KEY_MANAGEMENT))
-    def test_update_forbidden_for_non_admin_key(
-        self, client: ManagementClient, resources: ResourceManager
-    ) -> None:
+    def test_update_forbidden_for_non_admin_key(self, client: ManagementClient, resources: ResourceManager) -> None:
         nonadmin = _generate_key(client, resources, KeyGenerateBody(models=["gpt-5.5"]))
         target = _generate_key(client, resources, KeyGenerateBody(models=["gpt-5.5"]))
 

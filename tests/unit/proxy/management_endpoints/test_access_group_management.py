@@ -75,7 +75,6 @@ async def test_create_duplicate_access_group_fails():
         patch("litellm.proxy.proxy_server.llm_router", mock_router),
         patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
     ):
-
         # Should raise 409 Conflict
         with pytest.raises(HTTPException) as exc_info:
             await create_model_group(data=request_data, user_api_key_dict=mock_user)
@@ -104,9 +103,7 @@ async def test_create_access_group_with_model_ids_tags_only_specific_deployments
 
     mock_prisma = MagicMock()
     mock_prisma.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
-    mock_prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(
-        return_value=deploy_a
-    )
+    mock_prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(return_value=deploy_a)
     mock_prisma.db.litellm_proxymodeltable.update = AsyncMock()
 
     mock_user = UserAPIKeyAuth(
@@ -127,15 +124,11 @@ async def test_create_access_group_with_model_ids_tags_only_specific_deployments
             new=AsyncMock(return_value=ReconcileOutcome(still_desired=None, live_after=None)),
         ),
     ):
-        response = await create_model_group(
-            data=request_data, user_api_key_dict=mock_user
-        )
+        response = await create_model_group(data=request_data, user_api_key_dict=mock_user)
 
     assert response.models_updated == 1
     assert response.model_ids == ["deploy-A"]
-    mock_prisma.db.litellm_proxymodeltable.find_unique.assert_called_once_with(
-        where={"model_id": "deploy-A"}
-    )
+    mock_prisma.db.litellm_proxymodeltable.find_unique.assert_called_once_with(where={"model_id": "deploy-A"})
     assert mock_prisma.db.litellm_proxymodeltable.update.call_count == 1
     update_call = mock_prisma.db.litellm_proxymodeltable.update.call_args
     assert update_call.kwargs["where"] == {"model_id": "deploy-A"}
@@ -170,9 +163,7 @@ async def test_create_access_group_with_model_names_tags_all_deployments():
     )
 
     mock_prisma = MagicMock()
-    mock_prisma.db.litellm_proxymodeltable.find_many = AsyncMock(
-        side_effect=[[], [deploy_a, deploy_b, deploy_c]]
-    )
+    mock_prisma.db.litellm_proxymodeltable.find_many = AsyncMock(side_effect=[[], [deploy_a, deploy_b, deploy_c]])
     mock_prisma.db.litellm_proxymodeltable.update = AsyncMock()
 
     mock_user = UserAPIKeyAuth(
@@ -180,9 +171,7 @@ async def test_create_access_group_with_model_names_tags_all_deployments():
         user_role=LitellmUserRoles.PROXY_ADMIN,
     )
 
-    request_data = NewModelGroupRequest(
-        access_group="production-models", model_names=["gpt-4o"]
-    )
+    request_data = NewModelGroupRequest(access_group="production-models", model_names=["gpt-4o"])
 
     with (
         patch("litellm.proxy.proxy_server.llm_router", mock_router),
@@ -192,9 +181,7 @@ async def test_create_access_group_with_model_names_tags_all_deployments():
             new=AsyncMock(return_value=ReconcileOutcome(still_desired=None, live_after=None)),
         ),
     ):
-        response = await create_model_group(
-            data=request_data, user_api_key_dict=mock_user
-        )
+        response = await create_model_group(data=request_data, user_api_key_dict=mock_user)
 
     assert response.models_updated == 3
     assert response.model_names == ["gpt-4o"]
@@ -218,9 +205,7 @@ async def test_create_access_group_model_ids_takes_priority_over_model_names():
 
     mock_prisma = MagicMock()
     mock_prisma.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
-    mock_prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(
-        return_value=deploy_a
-    )
+    mock_prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(return_value=deploy_a)
     mock_prisma.db.litellm_proxymodeltable.update = AsyncMock()
 
     mock_user = UserAPIKeyAuth(
@@ -242,14 +227,10 @@ async def test_create_access_group_model_ids_takes_priority_over_model_names():
             new=AsyncMock(return_value=ReconcileOutcome(still_desired=None, live_after=None)),
         ),
     ):
-        response = await create_model_group(
-            data=request_data, user_api_key_dict=mock_user
-        )
+        response = await create_model_group(data=request_data, user_api_key_dict=mock_user)
 
     assert response.models_updated == 1
-    mock_prisma.db.litellm_proxymodeltable.find_unique.assert_called_once_with(
-        where={"model_id": "deploy-A"}
-    )
+    mock_prisma.db.litellm_proxymodeltable.find_unique.assert_called_once_with(where={"model_id": "deploy-A"})
 
 
 @pytest.mark.asyncio
@@ -368,7 +349,6 @@ async def test_create_access_group_surfaces_dropped_models():
     assert "deploy-A" in str(exc_info.value.detail)
 
 
-
 @pytest.mark.asyncio
 async def test_create_access_group_trusts_reload_snapshot_over_post_lock_fresh_read():
     """A concurrent reconcile sampled after the lock is released must not make this
@@ -397,9 +377,7 @@ async def test_create_access_group_trusts_reload_snapshot_over_post_lock_fresh_r
         patch(
             "litellm.proxy.management_endpoints.model_access_group_management_endpoints.clear_cache",
             new=AsyncMock(
-                return_value=ReconcileOutcome(
-                    still_desired=frozenset({"deploy-A"}), live_after=frozenset({"deploy-A"})
-                )
+                return_value=ReconcileOutcome(still_desired=frozenset({"deploy-A"}), live_after=frozenset({"deploy-A"}))
             ),
         ),
     ):
@@ -576,6 +554,7 @@ async def test_create_access_group_model_missing_everywhere_still_400s():
 
     assert exc_info.value.status_code == 400
     assert model_name in str(exc_info.value.detail)
+
 
 @dataclass
 class _FakeBudgetRow:
@@ -795,7 +774,9 @@ class _FakeModelTableBatch:
     async def __aexit__(self, exc_type, exc, tb):
         if exc_type is not None:
             return False
-        failing = [where["model_id"] for where, _ in self.queued if where["model_id"] in self.model_table.failing_model_ids]
+        failing = [
+            where["model_id"] for where, _ in self.queued if where["model_id"] in self.model_table.failing_model_ids
+        ]
         if failing:
             raise RuntimeError(f"batch write to {failing} failed, nothing applied")
         for where, data in self.queued:
@@ -1272,9 +1253,7 @@ async def test_deleting_the_access_group_strips_deployments_before_dropping_the_
     cache = _FakeAuthCache()
 
     with _proxy_with_stubbed_reload(prisma):
-        response = await delete_access_group(
-            access_group="prod-models", user_api_key_dict=_admin(), auth_cache=cache
-        )
+        response = await delete_access_group(access_group="prod-models", user_api_key_dict=_admin(), auth_cache=cache)
 
     assert response.models_updated == 1
     assert prisma.access_group_budget_table.rows == {}
@@ -1426,9 +1405,7 @@ async def test_deleting_an_access_group_that_never_had_a_budget_still_evicts():
     cache = _FakeAuthCache(journal)
 
     with _proxy_with_stubbed_reload(prisma):
-        response = await delete_access_group(
-            access_group="prod-models", user_api_key_dict=_admin(), auth_cache=cache
-        )
+        response = await delete_access_group(access_group="prod-models", user_api_key_dict=_admin(), auth_cache=cache)
 
     assert response.models_updated == 1
     assert prisma.access_group_budget_table.rows == {}
@@ -1470,8 +1447,7 @@ async def test_updating_an_access_group_writes_only_the_deployments_that_join_or
         )
 
     written_access_groups = {
-        where["model_id"]: json.loads(data["model_info"])["access_groups"]
-        for where, data in prisma.model_table.updates
+        where["model_id"]: json.loads(data["model_info"])["access_groups"] for where, data in prisma.model_table.updates
     }
     assert written_access_groups == {"joins": ["prod-models"], "leaves": []}
     assert response.models_updated == 2
@@ -1737,8 +1713,7 @@ async def test_an_access_group_update_goes_through_while_another_session_holds_a
         )
 
     written_access_groups = {
-        where["model_id"]: json.loads(data["model_info"])["access_groups"]
-        for where, data in prisma.model_table.updates
+        where["model_id"]: json.loads(data["model_info"])["access_groups"] for where, data in prisma.model_table.updates
     }
     assert written_access_groups == {"joins": ["prod-models"], "leaves": []}
     assert response.models_updated == 2

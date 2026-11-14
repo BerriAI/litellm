@@ -42,7 +42,8 @@ GET_ASYNC_CLIENT_TARGET = "litellm.proxy.mcp_server.openapi_to_mcp_generator.get
 
 @pytest.mark.asyncio
 async def test_unsupported_http_method_returns_text_without_sending_request(
-    respx_mock: MockRouter, monkeypatch: pytest.MonkeyPatch,
+    respx_mock: MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
     tool: Final = create_tool_function("/echo", "HEAD", {}, "https://upstream.example")
@@ -56,19 +57,24 @@ async def test_unsupported_http_method_returns_text_without_sending_request(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("body,expected", [
-    (' { "ok": true }\n', JsonResult({"ok": True}, ' { "ok": true }\n')),
-    (' [1, 2]\n', JsonResult([1, 2], ' [1, 2]\n')),
-    ('false', JsonResult(False, 'false')),
-    ('0', JsonResult(0, '0')),
-    ('""', JsonResult("", '""')),
-    ('null', TextResult('null')),
-    ('{"unfinished":', TextResult('{"unfinished":')),
-    ('', TextResult('')),
-])
+@pytest.mark.parametrize(
+    "body,expected",
+    [
+        (' { "ok": true }\n', JsonResult({"ok": True}, ' { "ok": true }\n')),
+        (" [1, 2]\n", JsonResult([1, 2], " [1, 2]\n")),
+        ("false", JsonResult(False, "false")),
+        ("0", JsonResult(0, "0")),
+        ('""', JsonResult("", '""')),
+        ("null", TextResult("null")),
+        ('{"unfinished":', TextResult('{"unfinished":')),
+        ("", TextResult("")),
+    ],
+)
 async def test_http_response_preserves_body_and_classifies_json(
-    respx_mock: MockRouter, monkeypatch: pytest.MonkeyPatch,
-    body: str, expected: TextResult | JsonResult,
+    respx_mock: MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    body: str,
+    expected: TextResult | JsonResult,
 ) -> None:
     monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
     tool: Final = create_tool_function("/echo", "get", {}, "https://upstream.example")
@@ -78,23 +84,42 @@ async def test_http_response_preserves_body_and_classifies_json(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("auth_type,value,accepted", [
-    (MCPAuth.api_key, "Bearer Bearer", False), (MCPAuth.api_key, "ApiKey ApiKey", False),
-    (MCPAuth.api_key, "token token", False), (MCPAuth.api_key, "bEaReR   BEARER", False),
-    (MCPAuth.api_key, "aPiKeY\tAPIKEY", False), (MCPAuth.api_key, "Bearer fixture-key", True),
-    (MCPAuth.api_key, "ApiKey fixture-key", True), (MCPAuth.api_key, "token fixture-key", True),
-    (MCPAuth.authorization, "Bearer", False), (MCPAuth.authorization, "basic", False),
-    (MCPAuth.authorization, "token", False), (MCPAuth.authorization, "ApiKey", False),
-    (MCPAuth.authorization, " bEaReR ", False), (MCPAuth.authorization, "\tTOKEN\t", False),
-    (MCPAuth.authorization, "opaque-secret-value", True), (MCPAuth.authorization, "Bearer abc", True),
-    (MCPAuth.authorization, "Custom abc", True),
-])
+@pytest.mark.parametrize(
+    "auth_type,value,accepted",
+    [
+        (MCPAuth.api_key, "Bearer Bearer", False),
+        (MCPAuth.api_key, "ApiKey ApiKey", False),
+        (MCPAuth.api_key, "token token", False),
+        (MCPAuth.api_key, "bEaReR   BEARER", False),
+        (MCPAuth.api_key, "aPiKeY\tAPIKEY", False),
+        (MCPAuth.api_key, "Bearer fixture-key", True),
+        (MCPAuth.api_key, "ApiKey fixture-key", True),
+        (MCPAuth.api_key, "token fixture-key", True),
+        (MCPAuth.authorization, "Bearer", False),
+        (MCPAuth.authorization, "basic", False),
+        (MCPAuth.authorization, "token", False),
+        (MCPAuth.authorization, "ApiKey", False),
+        (MCPAuth.authorization, " bEaReR ", False),
+        (MCPAuth.authorization, "\tTOKEN\t", False),
+        (MCPAuth.authorization, "opaque-secret-value", True),
+        (MCPAuth.authorization, "Bearer abc", True),
+        (MCPAuth.authorization, "Custom abc", True),
+    ],
+)
 async def test_authorization_validates_credentials_before_http(
-    respx_mock: MockRouter, monkeypatch: pytest.MonkeyPatch, auth_type: MCPAuthType, value: str, accepted: bool,
+    respx_mock: MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    auth_type: MCPAuthType,
+    value: str,
+    accepted: bool,
 ) -> None:
     monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
     tool: Final = create_tool_function(
-        "/echo", "get", {}, "https://upstream.example", auth_type=auth_type,
+        "/echo",
+        "get",
+        {},
+        "https://upstream.example",
+        auth_type=auth_type,
     )
     destination: Final = respx_mock.get("https://upstream.example/echo").respond(200, text="authenticated")
     caller_token: Final = request_auth_header.set(value)
@@ -113,20 +138,44 @@ async def test_authorization_validates_credentials_before_http(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("static,forwarded,caller,resolved,expected", [
-    ({"Authorization": "Bearer configured"}, {"authorization": "Bearer forwarded"}, None, None, "Bearer configured"),
-    ({"Authorization": "Bearer configured"}, None, "Bearer caller", None, "Bearer caller"),
-    ({"Authorization": "Bearer configured"}, None, "Bearer", None, None),
-    ({"Authorization": "Bearer configured"}, None, "Bearer caller", {"authorization": " "}, None),
-    ({"Authorization": "Bearer configured"}, None, "Bearer", {"authorization": "Bearer resolved"}, "Bearer resolved"),
-])
+@pytest.mark.parametrize(
+    "static,forwarded,caller,resolved,expected",
+    [
+        (
+            {"Authorization": "Bearer configured"},
+            {"authorization": "Bearer forwarded"},
+            None,
+            None,
+            "Bearer configured",
+        ),
+        ({"Authorization": "Bearer configured"}, None, "Bearer caller", None, "Bearer caller"),
+        ({"Authorization": "Bearer configured"}, None, "Bearer", None, None),
+        ({"Authorization": "Bearer configured"}, None, "Bearer caller", {"authorization": " "}, None),
+        (
+            {"Authorization": "Bearer configured"},
+            None,
+            "Bearer",
+            {"authorization": "Bearer resolved"},
+            "Bearer resolved",
+        ),
+    ],
+)
 async def test_static_auth_validates_headers_after_existing_precedence(
-    respx_mock: MockRouter, monkeypatch: pytest.MonkeyPatch,
-    static: dict[str, str], forwarded: dict[str, str] | None, caller: str | None,
-    resolved: dict[str, str] | None, expected: str | None,
+    respx_mock: MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    static: dict[str, str],
+    forwarded: dict[str, str] | None,
+    caller: str | None,
+    resolved: dict[str, str] | None,
+    expected: str | None,
 ) -> None:
     tool: Final = create_tool_function(
-        "/echo", "get", {}, "https://upstream.example", headers=static, auth_type=MCPAuth.bearer_token,
+        "/echo",
+        "get",
+        {},
+        "https://upstream.example",
+        headers=static,
+        auth_type=MCPAuth.bearer_token,
     )
     monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
     destination: Final = respx_mock.get("https://upstream.example/echo").respond(200, text="authenticated")
@@ -152,12 +201,19 @@ async def test_static_auth_validates_headers_after_existing_precedence(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("credential", ["custom-key", ""])
 async def test_static_auth_uses_configured_custom_header(
-    respx_mock: MockRouter, monkeypatch: pytest.MonkeyPatch, credential: str,
+    respx_mock: MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    credential: str,
 ) -> None:
     monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
     tool: Final = create_tool_function(
-        "/echo", "get", {}, "https://upstream.example", headers={"x-custom": credential},
-        auth_type=MCPAuth.api_key, upstream_token_header="X-Custom",
+        "/echo",
+        "get",
+        {},
+        "https://upstream.example",
+        headers={"x-custom": credential},
+        auth_type=MCPAuth.api_key,
+        upstream_token_header="X-Custom",
     )
     destination: Final = respx_mock.get("https://upstream.example/echo").respond(200, text="authenticated")
     if credential:
@@ -173,11 +229,18 @@ async def test_static_auth_uses_configured_custom_header(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("credential", ["static-key", ""])
 async def test_static_auth_accepts_api_key_carried_by_static_header(
-    respx_mock: MockRouter, monkeypatch: pytest.MonkeyPatch, credential: str,
+    respx_mock: MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    credential: str,
 ) -> None:
     monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
     tool: Final = create_tool_function(
-        "/echo", "get", {}, "https://upstream.example", headers={"apikey": credential}, auth_type=MCPAuth.api_key,
+        "/echo",
+        "get",
+        {},
+        "https://upstream.example",
+        headers={"apikey": credential},
+        auth_type=MCPAuth.api_key,
     )
     destination: Final = respx_mock.get("https://upstream.example/echo").respond(200, text="authenticated")
     if credential:
@@ -191,13 +254,18 @@ async def test_static_auth_accepts_api_key_carried_by_static_header(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("auth_type,resolved", [
-    (MCPAuth.none, None),
-    (MCPAuth.oauth2, {"Authorization": "Bearer user-oauth"}),
-])
+@pytest.mark.parametrize(
+    "auth_type,resolved",
+    [
+        (MCPAuth.none, None),
+        (MCPAuth.oauth2, {"Authorization": "Bearer user-oauth"}),
+    ],
+)
 async def test_static_validation_preserves_no_auth_and_resolved_oauth(
-    respx_mock: MockRouter, monkeypatch: pytest.MonkeyPatch,
-    auth_type: MCPAuthType, resolved: dict[str, str] | None,
+    respx_mock: MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    auth_type: MCPAuthType,
+    resolved: dict[str, str] | None,
 ) -> None:
     monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
     tool: Final = create_tool_function("/echo", "get", {}, "https://upstream.example", auth_type=auth_type)
@@ -261,9 +329,7 @@ class TestCreateToolFunction:
 
             # Verify URL was constructed correctly
             call_args = async_client.get.call_args
-            assert "repository-id" in str(call_args[0][0]) or "test-repo" in str(
-                call_args[0][0]
-            )
+            assert "repository-id" in str(call_args[0][0]) or "test-repo" in str(call_args[0][0])
 
     @pytest.mark.asyncio
     async def test_leading_digit_parameter(self):
@@ -608,9 +674,7 @@ class TestExtractParameters:
                 {"name": "filter", "in": "query"},
                 {"name": "data", "in": "body"},
             ],
-            "requestBody": {
-                "content": {"application/json": {"schema": {"type": "object"}}}
-            },
+            "requestBody": {"content": {"application/json": {"schema": {"type": "object"}}}},
         }
 
         path_params, query_params, body_params = extract_parameters(operation)
@@ -811,7 +875,6 @@ class TestGetBaseUrl:
 
         base_url = get_base_url(spec, spec_path)
         assert base_url == "https://production.example.com"
-
 
     def test_fallback_with_nested_path(self):
         """Test fallback with deeply nested spec path."""
@@ -1040,9 +1103,7 @@ class TestResolveOperationParams:
             ],
         }
         path_item = {"parameters": path_level_params, "get": operation}
-        result = resolve_operation_params(
-            operation, path_item, {"parameters": component_params}
-        )
+        result = resolve_operation_params(operation, path_item, {"parameters": component_params})
         names = [p["name"] for p in result["parameters"]]
         assert "owner" in names
         assert "repo" in names
@@ -1145,22 +1206,16 @@ class TestRegisterToolsFromOpenAPI:
             }
         }
 
-        openapi_to_mcp_generator.register_tools_from_openapi(
-            spec, base_url="https://api.example.com"
-        )
+        openapi_to_mcp_generator.register_tools_from_openapi(spec, base_url="https://api.example.com")
 
         assert registered, "expected at least one registered tool"
         anthropic_re = re.compile(r"^[a-zA-Z0-9_-]{1,128}$")
         for name in registered:
-            assert anthropic_re.match(
-                name
-            ), f"tool name {name!r} violates ^[a-zA-Z0-9_-]+$"
+            assert anthropic_re.match(name), f"tool name {name!r} violates ^[a-zA-Z0-9_-]+$"
         assert "actions_download-job-logs-for-workflow-run" in registered
         assert "pulls_list-files" in registered
 
-    def test_missing_operation_id_uses_sanitized_method_path_fallback(
-        self, monkeypatch
-    ):
+    def test_missing_operation_id_uses_sanitized_method_path_fallback(self, monkeypatch):
         import re
 
         from litellm.proxy.mcp_server import openapi_to_mcp_generator
@@ -1183,15 +1238,11 @@ class TestRegisterToolsFromOpenAPI:
                 }
             }
         }
-        openapi_to_mcp_generator.register_tools_from_openapi(
-            spec, base_url="https://api.example.com"
-        )
+        openapi_to_mcp_generator.register_tools_from_openapi(spec, base_url="https://api.example.com")
 
         assert registered
         for name in registered:
-            assert re.match(
-                r"^[a-zA-Z0-9_-]+$", name
-            ), f"fallback tool name {name!r} not sanitized"
+            assert re.match(r"^[a-zA-Z0-9_-]+$", name), f"fallback tool name {name!r} not sanitized"
 
 
 class TestRequestExtraHeaders:
@@ -1347,9 +1398,7 @@ class TestRequestExtraHeaders:
             async_client = _create_mock_client("get", "secure-data")
             mock_client.return_value = async_client
 
-            extra_token = request_extra_headers.set(
-                {"Authorization": "Bearer extra", "X-TOKEN": "token-value"}
-            )
+            extra_token = request_extra_headers.set({"Authorization": "Bearer extra", "X-TOKEN": "token-value"})
             auth_token = request_auth_header.set("Bearer byok-credential")
             try:
                 result = await func()
@@ -1477,7 +1526,9 @@ class TestUpstreamStatusIsClassified:
 
     @pytest.mark.asyncio
     async def test_401_raises_the_reauth_signal_carrying_the_challenge(self):
-        tool, client = self._tool(401, text='{"error":"invalid_token"}', headers={"www-authenticate": 'Bearer realm="x"'})
+        tool, client = self._tool(
+            401, text='{"error":"invalid_token"}', headers={"www-authenticate": 'Bearer realm="x"'}
+        )
         with patch(GET_ASYNC_CLIENT_TARGET, return_value=client):
             with pytest.raises(MCPUpstreamAuthError) as exc:
                 await tool()
@@ -1554,6 +1605,7 @@ class TestUpstreamStatusIsClassified:
         assert exc.value.status_code == status_code
         assert secret_body not in str(exc.value)
         assert str(exc.value) == f"upstream returned HTTP {status_code}"
+
 
 class TestBoundedOpenAPISpecLoading:
     @pytest.mark.asyncio

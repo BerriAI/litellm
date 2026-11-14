@@ -238,9 +238,7 @@ class _LoggedCallTypes(CustomLogger):
         start_time: datetime.datetime,
         end_time: datetime.datetime,
     ) -> None:
-        self.seen_by_caller["acompletion"].put(
-            self._logged(kwargs, response_obj, "async_complete_streaming_response")
-        )
+        self.seen_by_caller["acompletion"].put(self._logged(kwargs, response_obj, "async_complete_streaming_response"))
 
 
 _GET_WEATHER_TOOL: Final = {
@@ -294,7 +292,10 @@ def _searched_responses_body(model: str) -> Mapping[str, object]:
 
 def _responses_sse(response_body: Mapping[str, object]) -> str:
     events: Final = (
-        {"type": "response.created", "response": {**response_body, "status": "in_progress", "output": [], "usage": None}},
+        {
+            "type": "response.created",
+            "response": {**response_body, "status": "in_progress", "output": [], "usage": None},
+        },
         {
             "type": "response.output_text.delta",
             "item_id": "msg_logged_call_type",
@@ -423,7 +424,9 @@ async def test_bridged_structured_output_call_is_logged_with_the_json_document_t
         router.post(url__startswith="https://api.openai.com/v1/responses").mock(
             return_value=httpx.Response(200, json=response_body)
         )
-        served: Final = await litellm.acompletion(**request) if caller == "acompletion" else litellm.completion(**request)
+        served: Final = (
+            await litellm.acompletion(**request) if caller == "acompletion" else litellm.completion(**request)
+        )
         logged: Final = await asyncio.to_thread(recorder.seen_by_caller[caller].get, timeout=10)
 
     assert isinstance(served, ModelResponse)
@@ -457,7 +460,9 @@ async def _logged_text_completion(
     return served, logged, response_body
 
 
-@pytest.mark.parametrize(("caller", "call_type"), [("completion", "text_completion"), ("acompletion", "atext_completion")])
+@pytest.mark.parametrize(
+    ("caller", "call_type"), [("completion", "text_completion"), ("acompletion", "atext_completion")]
+)
 @pytest.mark.asyncio
 async def test_bridged_text_completion_is_logged_and_priced_under_the_callers_call_type(
     monkeypatch: pytest.MonkeyPatch, caller: str, call_type: str
@@ -487,7 +492,9 @@ async def test_bridged_text_completion_is_logged_as_the_text_completion_it_serve
 def _served_message_start_id(events: Sequence[bytes]) -> object:
     lines: Final = b"".join(events).decode().splitlines()
     starts: Final = tuple(
-        json.loads(line.removeprefix("data:")) for line in lines if line.startswith("data:") and '"message_start"' in line
+        json.loads(line.removeprefix("data:"))
+        for line in lines
+        if line.startswith("data:") and '"message_start"' in line
     )
     assert len(starts) == 1
     return starts[0]["message"]["id"]
@@ -3954,9 +3961,13 @@ async def test_streamed_reasoning_signature_reaches_messages_clients_and_never_c
         )
         sse: Final = b"".join([chunk async for chunk in messages_stream]).decode()
 
-    assert [getattr(delta, "thinking_blocks", None) for delta in chat_deltas if getattr(delta, "thinking_blocks", None)] == []
+    assert [
+        getattr(delta, "thinking_blocks", None) for delta in chat_deltas if getattr(delta, "thinking_blocks", None)
+    ] == []
     assert "".join(delta.content or "" for delta in chat_deltas) == "pong"
-    messages_events: Final = [json.loads(line[len("data: ") :]) for line in sse.splitlines() if line.startswith("data: ")]
+    messages_events: Final = [
+        json.loads(line[len("data: ") :]) for line in sse.splitlines() if line.startswith("data: ")
+    ]
     started: Final = [event["content_block"] for event in messages_events if event.get("type") == "content_block_start"]
     assert [block["type"] for block in started] == ["redacted_thinking", "text"]
     assert started[0]["data"] == encrypted_reasoning_signature("gAAAA_consumer")

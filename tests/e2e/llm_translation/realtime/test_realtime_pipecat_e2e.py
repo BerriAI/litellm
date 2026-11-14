@@ -82,7 +82,8 @@ PROVIDER_PARAMS = [
             )
         ),
     )
-    for p in PROVIDERS if p.id not in ("vertex_ai", "bedrock")
+    for p in PROVIDERS
+    if p.id not in ("vertex_ai", "bedrock")
 ]
 
 WEATHER_TOOL = ToolsSchema(
@@ -116,23 +117,17 @@ async def _run_pipeline(key: str, model: str) -> tuple[bool, bool]:
         tool_called.set()
         await params.result_callback({"city": "Paris", "temperature_f": 72})
 
-    llm = LiteLLMRealtimeLLMService(
-        api_key=key, base_url=f"{ws_base_url()}/v1/realtime", model=model
-    )
+    llm = LiteLLMRealtimeLLMService(api_key=key, base_url=f"{ws_base_url()}/v1/realtime", model=model)
     llm.register_function("get_weather", get_weather)
 
     context = LLMContext(tools=WEATHER_TOOL)
     aggregator = LLMContextAggregatorPair(context)
     capture = _CaptureText()
-    task = PipelineTask(
-        Pipeline([aggregator.user(), llm, capture, aggregator.assistant()])
-    )
+    task = PipelineTask(Pipeline([aggregator.user(), llm, capture, aggregator.assistant()]))
 
     await task.queue_frames(
         [
-            TranscriptionFrame(
-                "What's the weather in Paris?", user_id="e2e", timestamp=""
-            ),
+            TranscriptionFrame("What's the weather in Paris?", user_id="e2e", timestamp=""),
             LLMRunFrame(),
         ]
     )

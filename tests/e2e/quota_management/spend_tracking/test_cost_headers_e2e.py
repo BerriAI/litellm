@@ -121,9 +121,7 @@ class TestCostHeaders:
             )
 
         total = measured.response_cost
-        assert total is not None and total > 0, (
-            f"x-litellm-response-cost missing or zero: {measured.headers}"
-        )
+        assert total is not None and total > 0, f"x-litellm-response-cost missing or zero: {measured.headers}"
         component_sum = sum(_header_cost(measured, name) for name in COMPONENT_HEADERS)
         assert approx_equal(component_sum, total), (
             f"component headers sum to {component_sum}, not the total {total}: "
@@ -133,15 +131,12 @@ class TestCostHeaders:
         reasoning = _header_cost(measured, "x-litellm-response-cost-reasoning")
         output = _header_cost(measured, "x-litellm-response-cost-output")
         assert reasoning <= output * 1.01, (
-            f"reasoning header {reasoning} exceeds output header {output}; "
-            "reasoning must be a subset of output"
+            f"reasoning header {reasoning} exceeds output header {output}; reasoning must be a subset of output"
         )
 
         usage = ChatResponse.model_validate_json(measured.body).usage
         assert usage is not None, f"measured response carried no usage: {measured.body[:300]}"
-        cached_tokens = (
-            usage.prompt_tokens_details.cached_tokens or 0 if usage.prompt_tokens_details else 0
-        )
+        cached_tokens = usage.prompt_tokens_details.cached_tokens or 0 if usage.prompt_tokens_details else 0
         cache_creation_tokens = usage.cache_creation_input_tokens or 0
         assert cached_tokens > 0, f"cache-read header nonzero but usage shows no cached tokens: {usage}"
         assert approx_equal(
@@ -152,9 +147,7 @@ class TestCostHeaders:
             f"{cached_tokens} cached tokens * {CACHE_READ_RATE}"
         )
         fresh_tokens = (usage.prompt_tokens or 0) - cached_tokens - cache_creation_tokens
-        assert approx_equal(
-            _header_cost(measured, "x-litellm-response-cost-input"), fresh_tokens * INPUT_RATE
-        ), (
+        assert approx_equal(_header_cost(measured, "x-litellm-response-cost-input"), fresh_tokens * INPUT_RATE), (
             f"input header {measured.headers.get('x-litellm-response-cost-input')} != "
             f"{fresh_tokens} fresh tokens * {INPUT_RATE}; the input component is not "
             "subtracting the cache components"

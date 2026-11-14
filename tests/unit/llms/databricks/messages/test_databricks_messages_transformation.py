@@ -30,7 +30,10 @@ AUTO_MODE_SAFEGUARDS: Final = [
 SAFEGUARD_RESULTS: Final = [
     {
         "type": "dangerous_tool_use",
-        "status": {"type": "available", "tool_uses": {"toolu_bdrk_01": {"type": "evaluated", "outcome": "not_flagged"}}},
+        "status": {
+            "type": "available",
+            "tool_uses": {"toolu_bdrk_01": {"type": "evaluated", "outcome": "not_flagged"}},
+        },
     }
 ]
 BASH_TOOL: Final = {
@@ -139,7 +142,11 @@ def test_validation_then_url_building_appends_the_messages_route_once(api_base: 
     )
 
     url: Final = config.get_complete_url(
-        api_base=validated_api_base, api_key=DATABRICKS_API_KEY, model=CLAUDE_MODEL, optional_params={}, litellm_params={}
+        api_base=validated_api_base,
+        api_key=DATABRICKS_API_KEY,
+        model=CLAUDE_MODEL,
+        optional_params={},
+        litellm_params={},
     )
 
     assert url == MESSAGES_URL
@@ -644,7 +651,9 @@ async def test_client_anthropic_headers_keep_the_sdk_credentials_on_the_native_r
 ) -> None:
     for name in ("DATABRICKS_API_BASE", "DATABRICKS_API_KEY", "DATABRICKS_CLIENT_ID", "DATABRICKS_CLIENT_SECRET"):
         monkeypatch.delenv(name, raising=False)
-    sdk_config: Final = SimpleNamespace(host=WORKSPACE_URL, authenticate=lambda: {"Authorization": f"Bearer {SDK_TOKEN}"})
+    sdk_config: Final = SimpleNamespace(
+        host=WORKSPACE_URL, authenticate=lambda: {"Authorization": f"Bearer {SDK_TOKEN}"}
+    )
     sdk_module: Final = ModuleType("databricks.sdk")
     setattr(sdk_module, "WorkspaceClient", lambda: SimpleNamespace(config=sdk_config))
     setattr(sdk_module, "useragent", SimpleNamespace(with_partner=lambda _: None))
@@ -701,7 +710,10 @@ async def test_client_anthropic_headers_skip_an_opted_in_passthrough_api_base() 
             model_info=OPTED_IN_MODEL_INFO,
             provider_specific_header={
                 "custom_llm_provider": "databricks",
-                "extra_headers": {"anthropic-beta": "prompt-caching-scope-2026-01-05", "anthropic-version": "2023-01-01"},
+                "extra_headers": {
+                    "anthropic-beta": "prompt-caching-scope-2026-01-05",
+                    "anthropic-version": "2023-01-01",
+                },
                 "native_anthropic_messages_only": True,
             },
         )
@@ -727,10 +739,19 @@ class _ChunkedStream(httpx.AsyncByteStream):
 async def test_streamed_message_stop_drops_the_bedrock_invocation_metrics(chunk_size: int) -> None:
     events: Final = (
         ("message_start", {"type": "message_start", "message": {**MESSAGE, "content": [], "stop_reason": None}}),
-        ("content_block_start", {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}),
-        ("content_block_delta", {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "hi"}}),
+        (
+            "content_block_start",
+            {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+        ),
+        (
+            "content_block_delta",
+            {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "hi"}},
+        ),
         ("content_block_stop", {"type": "content_block_stop", "index": 0}),
-        ("message_delta", {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 4}}),
+        (
+            "message_delta",
+            {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 4}},
+        ),
         (
             "message_stop",
             {

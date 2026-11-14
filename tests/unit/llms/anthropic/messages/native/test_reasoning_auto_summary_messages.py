@@ -29,13 +29,10 @@ def _call_handler_and_capture_optional_params(thinking=None, **extra_kwargs):
     """
     captured = {}
 
-    with patch(
-        "litellm.llms.anthropic.messages.native.handler."
-        "base_llm_http_handler"
-    ) as mock_handler, patch(
-        "litellm.llms.anthropic.messages.native.handler."
-        "ProviderConfigManager"
-    ) as mock_pcm:
+    with (
+        patch("litellm.llms.anthropic.messages.native.handler.base_llm_http_handler") as mock_handler,
+        patch("litellm.llms.anthropic.messages.native.handler.ProviderConfigManager") as mock_pcm,
+    ):
         # Make get_provider_anthropic_messages_config return a non-None config
         # so the handler takes the native Anthropic path
         mock_pcm.get_provider_anthropic_messages_config.return_value = MagicMock()

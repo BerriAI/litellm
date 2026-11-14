@@ -57,17 +57,10 @@ def check_for_callback_modifications(file_path):
             attr_chain = attr_chain[::-1]
 
             # Check if the attribute chain starts with 'litellm' and modifies a protected list
-            if (
-                len(attr_chain) >= 3
-                and attr_chain[0] == "litellm"
-                and attr_chain[2] in forbidden_operations
-            ):
+            if len(attr_chain) >= 3 and attr_chain[0] == "litellm" and attr_chain[2] in forbidden_operations:
                 protected_list = attr_chain[1]
                 operation = attr_chain[2]
-                if (
-                    protected_list in protected_lists
-                    and operation in forbidden_operations
-                ):
+                if protected_list in protected_lists and operation in forbidden_operations:
                     violating_line = lines[node.lineno - 1].strip()
                     violations.append(
                         f"Found violation in file {file_path} line {node.lineno}: '{violating_line}'. "
@@ -104,9 +97,7 @@ def test_no_unauthorized_callback_modifications():
         print(f"\nFound {len(violations)} callback modification violations:")
         for violation in violations:
             print("\n" + violation)
-        raise AssertionError(
-            "Found unauthorized callback modifications. See above for details."
-        )
+        raise AssertionError("Found unauthorized callback modifications. See above for details.")
 
 
 if __name__ == "__main__":

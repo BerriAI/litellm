@@ -78,8 +78,6 @@ async def drain_logging_worker() -> typing.AsyncIterator[None]:
         pass
 
 
-
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize("cancel", (False, True))
 @pytest.mark.parametrize("concurrency", (1, 8))

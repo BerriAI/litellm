@@ -1,8 +1,6 @@
-
 import time
 import pytest
 import requests
-
 
 
 import responses

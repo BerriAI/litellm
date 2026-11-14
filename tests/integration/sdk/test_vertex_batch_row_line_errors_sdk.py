@@ -100,9 +100,7 @@ ROWS: Final[tuple[tuple[str, Callable[[], bytes], str], ...]] = (
 )
 
 
-@pytest.mark.parametrize(
-    ("content", "message"), tuple(row[1:] for row in ROWS), ids=tuple(row[0] for row in ROWS)
-)
+@pytest.mark.parametrize(("content", "message"), tuple(row[1:] for row in ROWS), ids=tuple(row[0] for row in ROWS))
 @pytest.mark.parametrize("client", CLIENTS)
 async def test_sdk_create_file_names_the_file_line_vertex_cannot_read(
     client: Client, content: Callable[[], bytes], message: str

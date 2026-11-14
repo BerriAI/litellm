@@ -103,9 +103,7 @@ async def _reserve(valid_token, cost, key_cache, proxy_logging_obj):
 
 
 @pytest.mark.asyncio
-async def test_reservation_still_protects_under_budget_throttled_key(
-    spend_counter_state, monkeypatch
-):
+async def test_reservation_still_protects_under_budget_throttled_key(spend_counter_state, monkeypatch):
     """An opted-in key that is still under budget keeps its reservation counter,
     so concurrent requests can't collectively overshoot max_budget."""
     monkeypatch.setattr(litellm, "budget_exceeded_throttle_percentage", 0.1)
@@ -329,9 +327,7 @@ async def test_should_shrink_second_tag_reservation_to_remaining_budget(
     proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
     valid_token = UserAPIKeyAuth(token="key-budget-tag")
     request_body = _request_body()
-    request_body["metadata"] = {
-        "tags": ["tag-budget-race", "tag-without-budget", "tag-budget-race"]
-    }
+    request_body["metadata"] = {"tags": ["tag-budget-race", "tag-without-budget", "tag-budget-race"]}
     await key_cache.async_set_cache(
         key="tag:tag-budget-race",
         value=LiteLLM_TagTable(
@@ -1234,9 +1230,7 @@ async def test_should_skip_reservation_when_counter_initialization_fails(
             "litellm.proxy.proxy_server.ensure_spend_counter_initialized",
             side_effect=RuntimeError("redis unavailable"),
         ),
-        patch(
-            "litellm.proxy.spend_tracking.budget_reservation.verbose_proxy_logger.warning"
-        ) as mock_warning,
+        patch("litellm.proxy.spend_tracking.budget_reservation.verbose_proxy_logger.warning") as mock_warning,
     ):
         reservation = await reserve_budget_for_request(
             request_body=_request_body(),
@@ -1541,9 +1535,7 @@ async def test_release_budget_reservation_on_cancel_gives_back_counter(
 ):
     counter_cache, key_cache = spend_counter_state
     proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
-    valid_token = UserAPIKeyAuth(
-        token="key-cancel-give-back", spend=0.0, max_budget=10.0
-    )
+    valid_token = UserAPIKeyAuth(token="key-cancel-give-back", spend=0.0, max_budget=10.0)
 
     with (
         patch(
@@ -1588,9 +1580,7 @@ async def test_release_budget_reservation_on_cancel_noop_when_finalized(
 ):
     counter_cache, key_cache = spend_counter_state
     proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
-    valid_token = UserAPIKeyAuth(
-        token="key-cancel-finalized", spend=0.0, max_budget=10.0
-    )
+    valid_token = UserAPIKeyAuth(token="key-cancel-finalized", spend=0.0, max_budget=10.0)
 
     with patch(
         "litellm.proxy.spend_tracking.budget_reservation.estimate_request_max_cost",
@@ -1683,6 +1673,7 @@ async def test_streaming_cancel_before_any_chunk_reconciles_to_input_cost(
 
     generator, streaming_logging_obj = _drive_streaming_cancel(valid_token, cancel_before_chunk)
     received = []
+
     async def _drain():
         async for chunk in generator:
             received.append(chunk)
@@ -1716,6 +1707,7 @@ async def test_streaming_cancel_after_chunk_keeps_reservation(
 
     generator, streaming_logging_obj = _drive_streaming_cancel(valid_token, cancel_after_chunk)
     received = []
+
     async def _drain():
         async for chunk in generator:
             received.append(chunk)
@@ -1853,9 +1845,7 @@ async def test_streaming_cancel_in_slow_path_before_yield_refunds(spend_counter_
     streaming_logging_obj.arelease_max_parallel_requests_on_disconnect = AsyncMock()
     # On the slow path the per-chunk hook is awaited before the chunk is yielded
     # to the client; cancel there. Nothing has reached the client yet.
-    streaming_logging_obj.async_post_call_streaming_hook = AsyncMock(
-        side_effect=asyncio.CancelledError()
-    )
+    streaming_logging_obj.async_post_call_streaming_hook = AsyncMock(side_effect=asyncio.CancelledError())
 
     generator = ProxyBaseLLMRequestProcessing.async_streaming_data_generator(
         response=MagicMock(),
@@ -1869,6 +1859,7 @@ async def test_streaming_cancel_in_slow_path_before_yield_refunds(spend_counter_
     received = []
     # include_cost_in_streaming_usage forces fast_path off, so the hook above runs
     with patch.object(litellm, "include_cost_in_streaming_usage", True, create=True):
+
         async def _drain():
             async for chunk in generator:
                 received.append(chunk)
@@ -1916,18 +1907,14 @@ async def test_streaming_disconnect_after_consuming_chunk_keeps_reservation(
 async def test_streaming_slow_path_processes_and_yields_chunk(spend_counter_state):
     counter_cache, key_cache = spend_counter_state
     proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
-    valid_token, _ = await _reserve_for_stream(
-        counter_cache, key_cache, proxy_logging_obj, "key-slowpath-ok"
-    )
+    valid_token, _ = await _reserve_for_stream(counter_cache, key_cache, proxy_logging_obj, "key-slowpath-ok")
 
     async def one_chunk(user_api_key_dict, response, request_data):
         yield {"content": "hi"}
 
     streaming_logging_obj: Final = MagicMock(spec=ProxyLogging)
     streaming_logging_obj.async_post_call_streaming_iterator_hook = one_chunk
-    streaming_logging_obj.async_post_call_streaming_hook = AsyncMock(
-        side_effect=lambda **kwargs: kwargs["response"]
-    )
+    streaming_logging_obj.async_post_call_streaming_hook = AsyncMock(side_effect=lambda **kwargs: kwargs["response"])
 
     generator = ProxyBaseLLMRequestProcessing.async_streaming_data_generator(
         response=MagicMock(),
@@ -1992,9 +1979,7 @@ async def test_reservation_tokenizes_the_prompt_once(spend_counter_state):
     re-tokenize the prompt, once per tiered-pricing candidate."""
     _, key_cache = spend_counter_state
     proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
-    valid_token = UserAPIKeyAuth(
-        token="key-tokenize-once", spend=0.0, max_budget=100.0
-    )
+    valid_token = UserAPIKeyAuth(token="key-tokenize-once", spend=0.0, max_budget=100.0)
     request_body = _body_with_content_size("dashscope/qwen3-max", 600)
     real_token_counter = litellm.token_counter
     calls = []
@@ -2029,9 +2014,7 @@ async def test_large_prompt_is_tokenized_off_the_event_loop(spend_counter_state)
     _, key_cache = spend_counter_state
     proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
     valid_token = UserAPIKeyAuth(token="key-offloaded", spend=0.0, max_budget=100.0)
-    request_body = _body_with_content_size(
-        "gpt-4o-mini", TOKENIZE_OFF_EVENT_LOOP_MIN_CHARS + 6000
-    )
+    request_body = _body_with_content_size("gpt-4o-mini", TOKENIZE_OFF_EVENT_LOOP_MIN_CHARS + 6000)
     threads = []
 
     def recording_token_counter(**kwargs):
@@ -2076,8 +2059,7 @@ def _key_heavy_tool(index: int) -> dict:
             "parameters": {
                 "type": "object",
                 "properties": {
-                    f"{_TOOL_PROPERTY_NAME_PREFIX}{index}_{field}": {"type": "string"}
-                    for field in range(24)
+                    f"{_TOOL_PROPERTY_NAME_PREFIX}{index}_{field}": {"type": "string"} for field in range(24)
                 },
             },
         },
@@ -2209,14 +2191,14 @@ class _ModelAccessGroupBudgetPrisma:
             group: SimpleNamespace(
                 access_group_name=group,
                 spend=7.0,
-                litellm_budget_table=None if max_budget is None else SimpleNamespace(max_budget=max_budget, budget_limits=None),
+                litellm_budget_table=None
+                if max_budget is None
+                else SimpleNamespace(max_budget=max_budget, budget_limits=None),
             )
             for group, max_budget in max_budget_by_group.items()
         }
         self.batches = []
-        self.db = SimpleNamespace(
-            litellm_modelaccessgroupbudgettable=SimpleNamespace(find_many=self._find_many)
-        )
+        self.db = SimpleNamespace(litellm_modelaccessgroupbudgettable=SimpleNamespace(find_many=self._find_many))
 
     async def _find_many(self, **kwargs):
         requested = list(kwargs["where"]["access_group_name"]["in"])

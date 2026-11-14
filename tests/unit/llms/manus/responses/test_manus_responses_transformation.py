@@ -7,8 +7,6 @@ transformations for the Responses API.
 Source: litellm/llms/manus/responses/transformation.py
 """
 
-
-
 from litellm.llms.manus.responses.transformation import ManusResponsesAPIConfig
 from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams
 from litellm.types.router import GenericLiteLLMParams

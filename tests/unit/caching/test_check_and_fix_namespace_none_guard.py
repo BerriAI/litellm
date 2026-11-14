@@ -3,6 +3,7 @@ Test that check_and_fix_namespace handles None key gracefully.
 
 Regression test for https://github.com/BerriAI/litellm/issues/30424
 """
+
 from unittest.mock import MagicMock
 
 from litellm.caching.redis_cache import RedisCache

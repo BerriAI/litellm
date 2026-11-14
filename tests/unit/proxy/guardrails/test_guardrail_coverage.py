@@ -97,9 +97,7 @@ async def test_aim_inspects_responses_api_input(user_api_key, monkeypatch):
             call_type="acompletion",
         )
 
-    assert sent_payload["messages"] == [
-        {"role": "user", "content": "responses-api content"}
-    ]
+    assert sent_payload["messages"] == [{"role": "user", "content": "responses-api content"}]
 
 
 @pytest.mark.asyncio
@@ -166,9 +164,7 @@ async def test_lakera_v2_inspects_responses_api_input(user_api_key, monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_lakera_v2_responses_api_input_redacted_writeback(
-    user_api_key, monkeypatch
-):
+async def test_lakera_v2_responses_api_input_redacted_writeback(user_api_key, monkeypatch):
     """Greptile P1: when input arrives via Responses-API ``data["input"]``
     (string) and Lakera flags PII, the redacted content must be written
     back to ``data["input"]`` — the Responses-API backend reads from
@@ -214,11 +210,7 @@ async def test_aim_responses_api_input_anonymize_writeback(user_api_key, monkeyp
 
     aim_response_body = {
         "required_action": {"action_type": "anonymize_action"},
-        "redacted_chat": {
-            "all_redacted_messages": [
-                {"role": "user", "content": "[REDACTED] anonymised"}
-            ]
-        },
+        "redacted_chat": {"all_redacted_messages": [{"role": "user", "content": "[REDACTED] anonymised"}]},
     }
 
     async def capture(url, headers, json, **_kwargs):
@@ -391,9 +383,7 @@ async def test_lasso_inspects_responses_api_input(user_api_key, monkeypatch):
         seen_messages.append(messages)
         return data
 
-    with patch.object(
-        guard, "_handle_classification", side_effect=fake_handle_classification
-    ):
+    with patch.object(guard, "_handle_classification", side_effect=fake_handle_classification):
         await guard._run_lasso_guardrail(
             data={"input": "responses-api content"},
             cache=DualCache(),
@@ -599,9 +589,7 @@ async def test_banned_keywords_post_call_checks_all_choices(monkeypatch, user_ap
         ("aresponses", {"input": "scan me"}),
     ],
 )
-async def test_azure_content_safety_pre_call_fires_on_runtime_call_types(
-    user_api_key, call_type, data
-):
+async def test_azure_content_safety_pre_call_fires_on_runtime_call_types(user_api_key, call_type, data):
     """The proxy ingress passes ``route_type`` straight through as
     ``call_type`` — ``acompletion`` for chat completions and
     ``aresponses`` for the Responses API. The hook must inspect text
@@ -744,9 +732,7 @@ async def test_openai_moderation_inspects_multimodal_content(monkeypatch, user_a
     fake_router = MagicMock()
     fake_router.amoderation = AsyncMock(side_effect=fake_amoderation)
 
-    monkeypatch.setattr(
-        "litellm.proxy.proxy_server.llm_router", fake_router, raising=False
-    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", fake_router, raising=False)
 
     await guard.async_moderation_hook(
         data={

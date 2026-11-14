@@ -63,9 +63,7 @@ def test_should_use_dd_tracer():
     """
     Test that the should_use_dd_tracer function works as expected
     """
-    with patch(
-        "litellm.litellm_core_utils.dd_tracing.get_secret_bool"
-    ) as mock_get_secret:
+    with patch("litellm.litellm_core_utils.dd_tracing.get_secret_bool") as mock_get_secret:
         # Test when USE_DDTRACE is True
 
         mock_get_secret.return_value = True
@@ -85,9 +83,7 @@ def test_should_use_dd_profiler():
     """
     Test that the should_use_dd_profiler function works as expected
     """
-    with patch(
-        "litellm.litellm_core_utils.dd_tracing.get_secret_bool"
-    ) as mock_get_secret:
+    with patch("litellm.litellm_core_utils.dd_tracing.get_secret_bool") as mock_get_secret:
         # Test when USE_DDPROFILER is True
 
         mock_get_secret.return_value = True

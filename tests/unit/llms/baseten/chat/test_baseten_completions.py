@@ -95,12 +95,16 @@ class TestBasetenModelDiscovery:
 
     def test_wildcard_drops_a_model_whose_retirement_date_passes_while_running(self, monkeypatch: pytest.MonkeyPatch):
         model: Final = "baseten/acme/retires-while-running"
-        monkeypatch.setitem(litellm.model_cost, model, {"litellm_provider": "baseten", "deprecation_date": "2999-01-01"})
+        monkeypatch.setitem(
+            litellm.model_cost, model, {"litellm_provider": "baseten", "deprecation_date": "2999-01-01"}
+        )
         try:
             litellm.add_known_models({model: litellm.model_cost[model]})
             assert model in get_valid_models(custom_llm_provider="baseten")
 
-            monkeypatch.setitem(litellm.model_cost, model, {"litellm_provider": "baseten", "deprecation_date": "2000-01-01"})
+            monkeypatch.setitem(
+                litellm.model_cost, model, {"litellm_provider": "baseten", "deprecation_date": "2000-01-01"}
+            )
 
             assert model not in get_valid_models(custom_llm_provider="baseten")
         finally:

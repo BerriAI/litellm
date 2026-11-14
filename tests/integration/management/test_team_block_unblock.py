@@ -56,22 +56,16 @@ async def test_team_block_unblock_authz_matrix(
 
     # /unblock starts from a blocked row so a 200 is observable as True->False.
     if route == "unblock":
-        await db.db.litellm_teamtable.update(
-            where={"team_id": resources.prefix}, data={"blocked": True}
-        )
+        await db.db.litellm_teamtable.update(where={"team_id": resources.prefix}, data={"blocked": True})
 
     resp = await gateway_client.post(
         f"/team/{route}",
         headers={"Authorization": f"Bearer {caller.cleartext}"},
         json={"team_id": resources.prefix, "organization_id": org_id},
     )
-    assert (
-        resp.status_code == expected_status
-    ), f"{route} {actor.value} {shape}: {resp.status_code} {resp.text}"
+    assert resp.status_code == expected_status, f"{route} {actor.value} {shape}: {resp.status_code} {resp.text}"
 
-    row = await db.db.litellm_teamtable.find_unique(
-        where={"team_id": resources.prefix}
-    )
+    row = await db.db.litellm_teamtable.find_unique(where={"team_id": resources.prefix})
     assert row is not None
     if expected_status == 200:
         assert bool(row.blocked) is (route == "block")
@@ -84,22 +78,14 @@ async def test_team_block_unblock_round_trip(gateway_client, db, resources, acto
     await create_scratch_team(db, resources.prefix, organization_id=actors.org_a_id)
     headers = {"Authorization": f"Bearer {actors.keys[Actor.PROXY_ADMIN].cleartext}"}
 
-    blocked = await gateway_client.post(
-        "/team/block", headers=headers, json={"team_id": resources.prefix}
-    )
+    blocked = await gateway_client.post("/team/block", headers=headers, json={"team_id": resources.prefix})
     assert blocked.status_code == 200, blocked.text
-    row = await db.db.litellm_teamtable.find_unique(
-        where={"team_id": resources.prefix}
-    )
+    row = await db.db.litellm_teamtable.find_unique(where={"team_id": resources.prefix})
     assert row is not None and row.blocked is True
 
-    unblocked = await gateway_client.post(
-        "/team/unblock", headers=headers, json={"team_id": resources.prefix}
-    )
+    unblocked = await gateway_client.post("/team/unblock", headers=headers, json={"team_id": resources.prefix})
     assert unblocked.status_code == 200, unblocked.text
-    row = await db.db.litellm_teamtable.find_unique(
-        where={"team_id": resources.prefix}
-    )
+    row = await db.db.litellm_teamtable.find_unique(where={"team_id": resources.prefix})
     assert row is not None and row.blocked is False
 
 

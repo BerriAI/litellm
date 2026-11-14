@@ -92,9 +92,7 @@ async def test_sap_chat(
     ):
         model = "sap/gpt-4o"
         messages = [{"role": "user", "content": "Hello"}]
-        respx_mock.post(f"{fake_deployment_url}/v2/completion").respond(
-            json=sap_api_response
-        )
+        respx_mock.post(f"{fake_deployment_url}/v2/completion").respond(json=sap_api_response)
 
         if sync_mode:
             response = litellm.completion(model=model, messages=messages)
@@ -197,8 +195,7 @@ async def test_sap_chat_required_headers(
         request = route.calls[0].request
         for header_name, expected_value in required_headers.items():
             assert header_name in request.headers, (
-                f"Required header '{header_name}' missing from request. "
-                f"Found headers: {list(request.headers.keys())}"
+                f"Required header '{header_name}' missing from request. Found headers: {list(request.headers.keys())}"
             )
             assert request.headers[header_name] == expected_value, (
                 f"Header '{header_name}' has incorrect value. "

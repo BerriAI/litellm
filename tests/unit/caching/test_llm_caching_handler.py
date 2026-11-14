@@ -22,7 +22,7 @@ from litellm.caching.llm_caching_handler import LLMClientCache
 from litellm.llms.custom_httpx.aiohttp_transport import LiteLLMAiohttpTransport
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-from litellm.llms.custom_httpx.http_handler import(
+from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     get_async_httpx_client,
     HTTPHandler,
@@ -185,12 +185,8 @@ async def test_eviction_does_not_close_async_clients():
         cache.set_cache("key-new", "new-value")
         await asyncio.sleep(0.1)
 
-    coroutine_warnings = [
-        w for w in caught_warnings if "coroutine" in str(w.message).lower()
-    ]
-    assert (
-        len(coroutine_warnings) == 0
-    ), f"Got unawaited coroutine warnings: {coroutine_warnings}"
+    coroutine_warnings = [w for w in caught_warnings if "coroutine" in str(w.message).lower()]
+    assert len(coroutine_warnings) == 0, f"Got unawaited coroutine warnings: {coroutine_warnings}"
 
     # Evicted clients must NOT be closed
     for client in clients:
@@ -216,12 +212,8 @@ async def test_eviction_no_unawaited_coroutine_warning():
         cache._remove_key("test-key")
         await asyncio.sleep(0.1)
 
-    coroutine_warnings = [
-        w for w in caught_warnings if "coroutine" in str(w.message).lower()
-    ]
-    assert (
-        len(coroutine_warnings) == 0
-    ), f"Got unawaited coroutine warnings: {coroutine_warnings}"
+    coroutine_warnings = [w for w in caught_warnings if "coroutine" in str(w.message).lower()]
+    assert len(coroutine_warnings) == 0, f"Got unawaited coroutine warnings: {coroutine_warnings}"
 
 
 def test_remove_key_no_event_loop():
@@ -358,6 +350,7 @@ def _vcr_outcome_gate(request, vcr):
     yield
     record_vcr_outcome(request, vcr)
 
+
 @pytest.fixture(scope="function")
 def isolate_litellm_state():
     """
@@ -410,6 +403,7 @@ def isolate_litellm_state():
             setattr(litellm, attr, original_value)
     publish(litellm.model_cost)
 
+
 _SCALAR_DEFAULTS = {
     "num_retries": getattr(litellm, "num_retries", None),
     "num_retries_per_request": getattr(litellm, "num_retries_per_request", None),
@@ -429,6 +423,7 @@ _SCALAR_DEFAULTS = {
     "api_base": getattr(litellm, "api_base", None),
     "api_key": getattr(litellm, "api_key", None),
 }
+
 
 @pytest.fixture(scope="module")
 def setup_and_teardown():
@@ -452,6 +447,7 @@ def setup_and_teardown():
             litellm.in_memory_llm_clients_cache.flush_cache()
     yield
 
+
 FRAME_COUNT = 6
 
 READ_TIMEOUT_SECONDS = 15.0
@@ -463,6 +459,7 @@ BOTH_TRANSPORTS = pytest.mark.parametrize("disable_aiohttp_transport", [False, T
 STILL_PINNED = "the handler was released while its response could still read"
 
 NOT_RELEASED = "the handler outlived the response that was holding it"
+
 
 class _ChunkedSSEServer:
     """In-process HTTP/1.1 server that answers every request with chunked SSE frames."""
@@ -508,10 +505,12 @@ class _ChunkedSSEServer:
         self._server.shutdown()
         self._server.server_close()
 
+
 def _select_transport(monkeypatch, disable_aiohttp_transport: bool) -> None:
     monkeypatch.delenv("DISABLE_AIOHTTP_TRANSPORT", raising=False)
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", disable_aiohttp_transport)
     monkeypatch.setattr(litellm, "force_ipv4", False)
+
 
 async def _read_frames(response: httpx.Response) -> int:
     """Count SSE frames, collecting garbage between chunks so a finalizer has every chance to fire.
@@ -525,6 +524,7 @@ async def _read_frames(response: httpx.Response) -> int:
         gc.collect()
     return b"".join(chunks).count(b"data: frame-")
 
+
 async def _wait_until(is_done, failure: str) -> None:
     deadline = time.monotonic() + RELEASE_TIMEOUT_SECONDS
     while time.monotonic() < deadline:
@@ -532,6 +532,7 @@ async def _wait_until(is_done, failure: str) -> None:
             return
         await asyncio.sleep(0.05)
     pytest.fail(failure)
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 @pytest.mark.asyncio
@@ -559,6 +560,7 @@ async def test_async_stream_survives_handler_collection(monkeypatch, disable_aio
         del response
         gc.collect()
         assert ref() is None, NOT_RELEASED
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 def test_sync_stream_survives_handler_collection(monkeypatch):
@@ -590,6 +592,7 @@ def test_sync_stream_survives_handler_collection(monkeypatch):
         gc.collect()
         assert ref() is None, NOT_RELEASED
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 @pytest.mark.asyncio
 @BOTH_TRANSPORTS
@@ -618,6 +621,7 @@ async def test_an_abandoned_stream_still_releases_its_handler(monkeypatch, disab
             lambda: client_ref() is None or client_ref().is_closed,
             "the client outlived the abandoned stream without being closed",
         )
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 @pytest.mark.asyncio
@@ -659,6 +663,7 @@ async def test_the_pool_is_released_once_the_stream_it_carried_ends(monkeypatch,
 
         await _wait_until(is_released, "the pool outlived the stream it carried, unclosed")
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 @pytest.mark.asyncio
 @BOTH_TRANSPORTS
@@ -681,6 +686,7 @@ async def test_a_non_streaming_response_does_not_pin_its_handler(monkeypatch, di
         gc.collect()
 
         assert ref() is None, "a fully-read response pinned its handler"
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 @pytest.mark.asyncio

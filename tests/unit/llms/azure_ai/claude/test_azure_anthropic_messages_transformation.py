@@ -3,9 +3,7 @@ import json
 import os
 import sys
 
-sys.path.insert(
-    0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../.."))
-)
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../..")))
 
 from collections.abc import Mapping
 from typing import Final
@@ -44,9 +42,7 @@ class TestAzureAnthropicMessagesConfig:
         litellm_params = {"api_key": "test-api-key"}
         api_key = "test-api-key"
 
-        with patch(
-            "litellm.llms.azure.common_utils.BaseAzureLLM.base_validate_azure_environment"
-        ) as mock_validate:
+        with patch("litellm.llms.azure.common_utils.BaseAzureLLM.base_validate_azure_environment") as mock_validate:
             mock_validate.return_value = {"api-key": "test-api-key"}
             result, api_base = config.validate_anthropic_messages_environment(
                 headers=headers,
@@ -77,9 +73,7 @@ class TestAzureAnthropicMessagesConfig:
         optional_params = {}
         litellm_params = {"api_key": "test-api-key"}
 
-        with patch(
-            "litellm.llms.azure.common_utils.BaseAzureLLM.base_validate_azure_environment"
-        ) as mock_validate:
+        with patch("litellm.llms.azure.common_utils.BaseAzureLLM.base_validate_azure_environment") as mock_validate:
             mock_validate.return_value = {"api-key": "test-api-key"}
             result, api_base = config.validate_anthropic_messages_environment(
                 headers=headers,
@@ -103,9 +97,7 @@ class TestAzureAnthropicMessagesConfig:
         optional_params = {}
         litellm_params = {"api_key": "test-api-key"}
 
-        with patch(
-            "litellm.llms.azure.common_utils.BaseAzureLLM.base_validate_azure_environment"
-        ) as mock_validate:
+        with patch("litellm.llms.azure.common_utils.BaseAzureLLM.base_validate_azure_environment") as mock_validate:
             mock_validate.return_value = {"api-key": "test-api-key"}
             result, api_base = config.validate_anthropic_messages_environment(
                 headers=headers,
@@ -177,7 +169,6 @@ class TestAzureAnthropicMessagesConfig:
         )
 
         assert url == "https://test.services.ai.azure.com/anthropic/v1/messages"
-
 
     def test_get_complete_url_with_base_url_without_anthropic(self):
         """Test get_complete_url with base URL without /anthropic"""
@@ -283,9 +274,7 @@ class TestAzureAnthropicMessagesConfig:
         assert "scope" not in result["system"][0]["cache_control"]
         assert result["system"][0]["cache_control"]["type"] == "ephemeral"
         assert "scope" not in result["messages"][0]["content"][0]["cache_control"]
-        assert (
-            result["messages"][0]["content"][0]["cache_control"]["type"] == "ephemeral"
-        )
+        assert result["messages"][0]["content"][0]["cache_control"]["type"] == "ephemeral"
 
 
 class TestProviderConfigManagerAzureAnthropicMessages:
@@ -359,9 +348,7 @@ def test_messages_thinking_shape_follows_exact_azure_entry_flag(local_model_cost
     assert result.get("thinking") == {"type": "adaptive", "display": "summarized"}
     assert result.get("output_config") == {"effort": "medium"}
 
-    monkeypatch.setitem(
-        litellm.model_cost["azure_ai/claude-opus-4-8"], "supports_adaptive_thinking", False
-    )
+    monkeypatch.setitem(litellm.model_cost["azure_ai/claude-opus-4-8"], "supports_adaptive_thinking", False)
     litellm.get_model_info.cache_clear()
     assert litellm.model_cost["claude-opus-4-8"]["supports_adaptive_thinking"] is True
 
@@ -432,9 +419,7 @@ class TestAzureAnthropicMidConversationSystem:
             {"role": "assistant", "content": "reading"},
             {"role": "user", "content": "continue"},
         ]
-        result = _azure_transform(
-            "claude-opus-4-7", messages, system=[{"type": "text", "text": "Base."}]
-        )
+        result = _azure_transform("claude-opus-4-7", messages, system=[{"type": "text", "text": "Base."}])
         assert result["messages"] == [
             {"role": "user", "content": "read the file"},
             {
@@ -465,9 +450,7 @@ def test_azure_claude_4_8_plus_cost_map_entries_carry_mid_conversation_system_fl
 
     import litellm
 
-    cost_map_path = os.path.join(
-        os.path.dirname(litellm.__file__), "model_prices_and_context_window_backup.json"
-    )
+    cost_map_path = os.path.join(os.path.dirname(litellm.__file__), "model_prices_and_context_window_backup.json")
     with open(cost_map_path) as f:
         cost_map = json.load(f)
     rules = cost_map["fallback_generalizations"]["rules"]
@@ -488,7 +471,9 @@ def test_azure_claude_4_8_plus_cost_map_entries_carry_mid_conversation_system_fl
     assert missing == []
 
 
-AUTO_MODE_SAFEGUARDS: Final = ({"type": "dangerous_tool_use", "classifier_context": {"v": 1, "permission_mode": "auto"}},)
+AUTO_MODE_SAFEGUARDS: Final = (
+    {"type": "dangerous_tool_use", "classifier_context": {"v": 1, "permission_mode": "auto"}},
+)
 
 
 @pytest.mark.usefixtures("local_beta_headers_config")

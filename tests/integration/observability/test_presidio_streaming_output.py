@@ -667,8 +667,7 @@ def test_native_gemini_keeps_streaming_after_one_worker_is_killed(gateway: Gatew
         workers: Final = eventually(rig.proxy.worker_pids, lambda members: len(members) >= 2, seconds=30)
         with rig.proxy.replacing_worker(min(workers)) as kill, ThreadPoolExecutor(max_workers=8) as pool:
             futures: Final = tuple(
-                pool.submit(rig.stream_on_a_worker_that_may_die, rig.gemini_path(), rig.gemini_body())
-                for _ in range(8)
+                pool.submit(rig.stream_on_a_worker_that_may_die, rig.gemini_path(), rig.gemini_body()) for _ in range(8)
             )
             kill()
             first_wave: Final = tuple(future.result() for future in futures)

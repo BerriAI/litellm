@@ -71,11 +71,21 @@ async def _call_rerank(hidden_params: dict = HIDDEN_PARAMS) -> Response:
         return _call()
 
     with (
-        patch.object(proxy_server_mod, "add_litellm_data_to_request", fake_add_litellm_data_to_request),  # test-quality-ok: the rerank route reads these proxy_server module globals; no injection seam on the FastAPI handler
-        patch.object(proxy_server_mod, "route_request", fake_route_request),  # test-quality-ok: the rerank route reads these proxy_server module globals; no injection seam on the FastAPI handler
-        patch.object(proxy_server_mod, "proxy_logging_obj", proxy_logging_obj),  # test-quality-ok: the rerank route reads these proxy_server module globals; no injection seam on the FastAPI handler
-        patch.object(proxy_server_mod, "llm_router", MagicMock()),  # test-quality-ok: the rerank route reads these proxy_server module globals; no injection seam on the FastAPI handler
-        patch.object(proxy_server_mod, "version", "1.2.3"),  # test-quality-ok: the rerank route reads these proxy_server module globals; no injection seam on the FastAPI handler
+        patch.object(
+            proxy_server_mod, "add_litellm_data_to_request", fake_add_litellm_data_to_request
+        ),  # test-quality-ok: the rerank route reads these proxy_server module globals; no injection seam on the FastAPI handler
+        patch.object(
+            proxy_server_mod, "route_request", fake_route_request
+        ),  # test-quality-ok: the rerank route reads these proxy_server module globals; no injection seam on the FastAPI handler
+        patch.object(
+            proxy_server_mod, "proxy_logging_obj", proxy_logging_obj
+        ),  # test-quality-ok: the rerank route reads these proxy_server module globals; no injection seam on the FastAPI handler
+        patch.object(
+            proxy_server_mod, "llm_router", MagicMock()
+        ),  # test-quality-ok: the rerank route reads these proxy_server module globals; no injection seam on the FastAPI handler
+        patch.object(
+            proxy_server_mod, "version", "1.2.3"
+        ),  # test-quality-ok: the rerank route reads these proxy_server module globals; no injection seam on the FastAPI handler
     ):
         await rerank(
             request=_build_request(headers=((b"x-litellm-call-id", b"call-123"),)),
@@ -101,7 +111,9 @@ async def test_rerank_emits_latency_and_cost_headers():
 @pytest.mark.asyncio
 async def test_rerank_emits_detailed_timing_headers_when_enabled():
     """LITELLM_DETAILED_TIMING must also work on /rerank, not just /chat/completions."""
-    with patch.object(common_request_processing_mod, "LITELLM_DETAILED_TIMING", True):  # test-quality-ok: LITELLM_DETAILED_TIMING is a module constant; toggling it is the behavior under test
+    with patch.object(
+        common_request_processing_mod, "LITELLM_DETAILED_TIMING", True
+    ):  # test-quality-ok: LITELLM_DETAILED_TIMING is a module constant; toggling it is the behavior under test
         fastapi_response = await _call_rerank()
 
     assert fastapi_response.headers["x-litellm-timing-llm-api-ms"] == "1488.0"
@@ -120,7 +132,9 @@ async def test_rerank_emits_zero_response_cost_header():
 
 @pytest.mark.asyncio
 async def test_rerank_omits_detailed_timing_headers_when_disabled():
-    with patch.object(common_request_processing_mod, "LITELLM_DETAILED_TIMING", False):  # test-quality-ok: LITELLM_DETAILED_TIMING is a module constant; toggling it is the behavior under test
+    with patch.object(
+        common_request_processing_mod, "LITELLM_DETAILED_TIMING", False
+    ):  # test-quality-ok: LITELLM_DETAILED_TIMING is a module constant; toggling it is the behavior under test
         fastapi_response = await _call_rerank()
 
     assert "x-litellm-timing-llm-api-ms" not in fastapi_response.headers
@@ -196,7 +210,9 @@ async def test_failure_log_carries_the_callers_litellm_call_id(
 async def test_a_model_the_router_cannot_serve_answers_an_openai_typed_error(monkeypatch: pytest.MonkeyPatch):
     """A bare HTTPException carries no type or param, so the tail used to ship the
     literal string "None" in both fields."""
-    failure = HTTPException(status_code=404, detail={"error": "rerank: Invalid model name passed in model=rerank-model"})
+    failure = HTTPException(
+        status_code=404, detail={"error": "rerank: Invalid model name passed in model=rerank-model"}
+    )
 
     error = await _rerank_failure(failure, raised_before_routing=False, monkeypatch=monkeypatch)
 
@@ -214,9 +230,7 @@ async def test_a_rejection_raised_before_routing_keeps_its_own_status(monkeypatc
     assert (error.type, error.param, error.code) == ("bad_request_error", "session_id", "400")
 
 
-def test_failed_rerank_spend_row_records_arerank(
-    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
-) -> None:
+def test_failed_rerank_spend_row_records_arerank(monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter) -> None:
     import litellm
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache

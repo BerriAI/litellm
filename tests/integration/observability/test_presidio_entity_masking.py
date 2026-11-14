@@ -127,13 +127,13 @@ def _assert_apply_guardrail_successes(
 
     analyzer_requests: Final = presidio.analyzer.drain()
     assert len(analyzer_requests) == len(responses)
-    assert tuple((request.method, request.target) for request in analyzer_requests) == (
-        ("POST", "/analyze"),
-    ) * len(responses)
+    assert tuple((request.method, request.target) for request in analyzer_requests) == (("POST", "/analyze"),) * len(
+        responses
+    )
     expected_analyzer_body: Final = {"text": text, "language": "en"}
-    assert tuple(json.loads(request.body) for request in analyzer_requests) == (
-        expected_analyzer_body,
-    ) * len(responses)
+    assert tuple(json.loads(request.body) for request in analyzer_requests) == (expected_analyzer_body,) * len(
+        responses
+    )
 
     anonymizer_requests: Final = presidio.anonymizer.drain()
     assert len(anonymizer_requests) == len(responses)
@@ -157,9 +157,9 @@ def _assert_apply_guardrail_successes(
             },
         ],
     }
-    assert tuple(json.loads(request.body) for request in anonymizer_requests) == (
-        expected_anonymizer_body,
-    ) * len(responses)
+    assert tuple(json.loads(request.body) for request in anonymizer_requests) == (expected_anonymizer_body,) * len(
+        responses
+    )
 
 
 def test_pre_call_masks_only_the_configured_entities_before_the_provider_sees_the_prompt(gateway: Gateway) -> None:
@@ -335,8 +335,7 @@ def test_long_apply_guardrail_alias_accepts_an_llm_api_scoped_key(gateway: Gatew
 
 def test_short_apply_guardrail_alias_accepts_an_llm_api_scoped_key(gateway: Gateway) -> None:
     pytest.skip(
-        "BUG: llm_api scoped keys are refused on /apply_guardrail while "
-        "/guardrails/apply_guardrail serves them"
+        "BUG: llm_api scoped keys are refused on /apply_guardrail while /guardrails/apply_guardrail serves them"
     )
     with (
         _presidio(gateway, "pre_call", None) as presidio,

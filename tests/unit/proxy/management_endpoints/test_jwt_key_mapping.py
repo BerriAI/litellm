@@ -40,9 +40,7 @@ async def test_jwt_to_virtual_key_mapping_resolution():
     Test that a JWT claim is correctly resolved to a virtual key token.
     """
     jwt_handler = JWTHandler()
-    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
-        virtual_key_claim_field="email", virtual_key_mapping_cache_ttl=3600
-    )
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(virtual_key_claim_field="email", virtual_key_mapping_cache_ttl=3600)
 
     jwt_claims = {"email": "user@example.com", "sub": "123"}
 
@@ -102,9 +100,7 @@ async def test_colliding_claim_value_from_another_issuer_does_not_resolve_to_the
     issuer_b = "https://issuer-b.example.com"
 
     jwt_handler = JWTHandler()
-    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
-        virtual_key_claim_field="sub", virtual_key_mapping_cache_ttl=3600
-    )
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(virtual_key_claim_field="sub", virtual_key_mapping_cache_ttl=3600)
 
     rows = [
         {
@@ -316,9 +312,7 @@ async def test_virtual_key_mapping_oidc_enabled_jwt_token_uses_auth_jwt():
     oidc_userinfo_mock = AsyncMock(return_value={"email": "user@example.com"})
 
     # Simulate the routing condition from user_api_key_auth.py
-    if jwt_handler.litellm_jwtauth.oidc_userinfo_enabled and not jwt_handler.is_jwt(
-        token=api_key
-    ):
+    if jwt_handler.litellm_jwtauth.oidc_userinfo_enabled and not jwt_handler.is_jwt(token=api_key):
         jwt_claims = await oidc_userinfo_mock(token=api_key)
     else:
         jwt_claims = await auth_jwt_mock(token=api_key)
@@ -347,13 +341,9 @@ async def test_virtual_key_mapping_oidc_enabled_opaque_token_uses_oidc_userinfo(
     assert jwt_handler.is_jwt(token=api_key) is False
 
     auth_jwt_mock = AsyncMock(return_value={"email": "user@example.com"})
-    oidc_userinfo_mock = AsyncMock(
-        return_value={"email": "user@example.com", "sub": "123"}
-    )
+    oidc_userinfo_mock = AsyncMock(return_value={"email": "user@example.com", "sub": "123"})
 
-    if jwt_handler.litellm_jwtauth.oidc_userinfo_enabled and not jwt_handler.is_jwt(
-        token=api_key
-    ):
+    if jwt_handler.litellm_jwtauth.oidc_userinfo_enabled and not jwt_handler.is_jwt(token=api_key):
         jwt_claims = await oidc_userinfo_mock(token=api_key)
     else:
         jwt_claims = await auth_jwt_mock(token=api_key)
@@ -455,9 +445,7 @@ async def test_create_returns_409_on_unique_violation():
     from litellm.proxy._types import CreateJWTKeyMappingRequest
 
     mock_prisma = _mock_prisma()
-    mock_prisma.db.litellm_jwtkeymapping.create.side_effect = Exception(
-        "Unique constraint failed (P2002)"
-    )
+    mock_prisma.db.litellm_jwtkeymapping.create.side_effect = Exception("Unique constraint failed (P2002)")
     mock_cache = AsyncMock()
 
     data = CreateJWTKeyMappingRequest(
@@ -471,9 +459,7 @@ async def test_create_returns_409_on_unique_violation():
         patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache),
     ):
         with pytest.raises(HTTPException) as exc_info:
-            await create_jwt_key_mapping(
-                data=data, user_api_key_dict=_make_admin_auth()
-            )
+            await create_jwt_key_mapping(data=data, user_api_key_dict=_make_admin_auth())
         assert exc_info.value.status_code == 409
         assert "already exists" in exc_info.value.detail
 
@@ -500,9 +486,7 @@ async def test_create_returns_400_on_foreign_key_violation():
         patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache),
     ):
         with pytest.raises(HTTPException) as exc_info:
-            await create_jwt_key_mapping(
-                data=data, user_api_key_dict=_make_admin_auth()
-            )
+            await create_jwt_key_mapping(data=data, user_api_key_dict=_make_admin_auth())
         assert exc_info.value.status_code == 400
         assert "does not match" in exc_info.value.detail
 
@@ -519,9 +503,7 @@ async def test_create_non_admin_returns_403():
     )
 
     with pytest.raises(HTTPException) as exc_info:
-        await create_jwt_key_mapping(
-            data=data, user_api_key_dict=_make_non_admin_auth()
-        )
+        await create_jwt_key_mapping(data=data, user_api_key_dict=_make_non_admin_auth())
     assert exc_info.value.status_code == 403
 
 
@@ -541,9 +523,7 @@ async def test_delete_returns_404_when_not_found():
         patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache),
     ):
         with pytest.raises(HTTPException) as exc_info:
-            await delete_jwt_key_mapping(
-                data=data, user_api_key_dict=_make_admin_auth()
-            )
+            await delete_jwt_key_mapping(data=data, user_api_key_dict=_make_admin_auth())
         assert exc_info.value.status_code == 404
 
 
@@ -563,9 +543,7 @@ async def test_update_returns_404_when_not_found():
         patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache),
     ):
         with pytest.raises(HTTPException) as exc_info:
-            await update_jwt_key_mapping(
-                data=data, user_api_key_dict=_make_admin_auth()
-            )
+            await update_jwt_key_mapping(data=data, user_api_key_dict=_make_admin_auth())
         assert exc_info.value.status_code == 404
 
 
@@ -586,13 +564,15 @@ async def test_update_returns_404_when_row_deleted_before_write():
     data = UpdateJWTKeyMappingRequest(id="mapping-1", description="test")
 
     with (
-        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),  # test-quality-ok: proxy_server module global is the endpoint's only injection point
-        patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache),  # test-quality-ok: proxy_server module global is the endpoint's only injection point
+        patch(
+            "litellm.proxy.proxy_server.prisma_client", mock_prisma
+        ),  # test-quality-ok: proxy_server module global is the endpoint's only injection point
+        patch(
+            "litellm.proxy.proxy_server.user_api_key_cache", mock_cache
+        ),  # test-quality-ok: proxy_server module global is the endpoint's only injection point
     ):
         with pytest.raises(HTTPException) as exc_info:
-            await update_jwt_key_mapping(
-                data=data, user_api_key_dict=_make_admin_auth()
-            )
+            await update_jwt_key_mapping(data=data, user_api_key_dict=_make_admin_auth())
         assert exc_info.value.status_code == 404
         assert exc_info.value.detail == "Mapping not found"
 
@@ -605,9 +585,7 @@ async def test_info_returns_404_when_not_found():
 
     with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
         with pytest.raises(HTTPException) as exc_info:
-            await info_jwt_key_mapping(
-                id="nonexistent-id", user_api_key_dict=_make_admin_auth()
-            )
+            await info_jwt_key_mapping(id="nonexistent-id", user_api_key_dict=_make_admin_auth())
         assert exc_info.value.status_code == 404
 
 
@@ -630,9 +608,7 @@ async def test_create_success_returns_response_without_token():
         patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
         patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache),
     ):
-        result = await create_jwt_key_mapping(
-            data=data, user_api_key_dict=_make_admin_auth()
-        )
+        result = await create_jwt_key_mapping(data=data, user_api_key_dict=_make_admin_auth())
         assert isinstance(result, JWTKeyMappingResponse)
         assert "token" not in result.model_fields
         assert result.jwt_claim_name == "email"
@@ -748,9 +724,7 @@ async def test_reject_behavior_caches_sentinel_after_db_miss():
         assert exc_info.value.status_code == 403
 
         # Sentinel must now be in cache
-        cached = await user_api_key_cache.async_get_cache(
-            "jwt_key_mapping:email:unknown@example.com"
-        )
+        cached = await user_api_key_cache.async_get_cache("jwt_key_mapping:email:unknown@example.com")
         assert cached == "__NO_MAPPING__"
 
         # Second call — must raise 403 from cache, no additional DB hit
@@ -950,9 +924,7 @@ async def test_auto_register_returns_pending_signal_on_stale_no_mapping_sentinel
     prisma_client.db.litellm_jwtkeymapping.create = AsyncMock()
 
     user_api_key_cache = DualCache()
-    await user_api_key_cache.async_set_cache(
-        "jwt_key_mapping:email:alice@corp.com", "__NO_MAPPING__"
-    )
+    await user_api_key_cache.async_set_cache("jwt_key_mapping:email:alice@corp.com", "__NO_MAPPING__")
 
     with patch(
         "litellm.proxy.management_endpoints.key_management_endpoints.generate_key_helper_fn",
@@ -970,9 +942,7 @@ async def test_auto_register_returns_pending_signal_on_stale_no_mapping_sentinel
     assert isinstance(result, _PendingAutoRegister)
     # Stale sentinel must be evicted so the deferred auto-register actually
     # runs after auth_builder validates the JWT
-    cached_after = await user_api_key_cache.async_get_cache(
-        "jwt_key_mapping:email:alice@corp.com"
-    )
+    cached_after = await user_api_key_cache.async_get_cache("jwt_key_mapping:email:alice@corp.com")
     assert cached_after is None
     mock_gen_key.assert_not_called()
     prisma_client.db.litellm_jwtkeymapping.create.assert_not_called()
@@ -999,17 +969,13 @@ async def test_auto_register_race_condition_unique_conflict():
     )
 
     prisma_client = MagicMock()
-    prisma_client.db.litellm_jwtkeymapping.create = AsyncMock(
-        side_effect=Exception("Unique constraint failed (P2002)")
-    )
+    prisma_client.db.litellm_jwtkeymapping.create = AsyncMock(side_effect=Exception("Unique constraint failed (P2002)"))
     prisma_client.db.litellm_verificationtoken.delete = AsyncMock()
     # Simulate the winner's mapping already in DB after the conflict
     winner_mapping = MagicMock()
     winner_mapping.token = "winner_token_hash"
     winner_mapping.is_active = True
-    prisma_client.db.litellm_jwtkeymapping.find_first = AsyncMock(
-        return_value=winner_mapping
-    )
+    prisma_client.db.litellm_jwtkeymapping.find_first = AsyncMock(return_value=winner_mapping)
 
     user_api_key_cache = DualCache()
     loser_plaintext = "sk-loser"
@@ -1042,9 +1008,7 @@ async def test_auto_register_race_condition_unique_conflict():
 
     assert result == mock_key_obj
     # The orphaned loser key must be deleted from LiteLLM_VerificationToken
-    prisma_client.db.litellm_verificationtoken.delete.assert_called_once_with(
-        where={"token": loser_hash}
-    )
+    prisma_client.db.litellm_verificationtoken.delete.assert_called_once_with(where={"token": loser_hash})
     # Cache should hold the winner's token, not the loser's
     cached = await user_api_key_cache.async_get_cache("jwt_key_mapping:sub:user-42")
     assert cached == "winner_token_hash"
@@ -1249,9 +1213,7 @@ async def test_auto_register_raises_500_when_sentinel_cached_and_no_db():
 
     user_api_key_cache = DualCache()
     # Stale sentinel written under a prior fallback_team_mapping config
-    await user_api_key_cache.async_set_cache(
-        "jwt_key_mapping:sub:user-42", "__NO_MAPPING__"
-    )
+    await user_api_key_cache.async_set_cache("jwt_key_mapping:sub:user-42", "__NO_MAPPING__")
 
     with pytest.raises(HTTPException) as exc_info:
         await _resolve_jwt_to_virtual_key(
@@ -1284,18 +1246,12 @@ async def test_auto_register_race_conflict_tolerates_delete_failure():
     )
 
     prisma_client = MagicMock()
-    prisma_client.db.litellm_jwtkeymapping.create = AsyncMock(
-        side_effect=Exception("Unique constraint failed (P2002)")
-    )
-    prisma_client.db.litellm_verificationtoken.delete = AsyncMock(
-        side_effect=Exception("transient DB error")
-    )
+    prisma_client.db.litellm_jwtkeymapping.create = AsyncMock(side_effect=Exception("Unique constraint failed (P2002)"))
+    prisma_client.db.litellm_verificationtoken.delete = AsyncMock(side_effect=Exception("transient DB error"))
     winner_mapping = MagicMock()
     winner_mapping.token = "winner_token_hash"
     winner_mapping.is_active = True
-    prisma_client.db.litellm_jwtkeymapping.find_first = AsyncMock(
-        return_value=winner_mapping
-    )
+    prisma_client.db.litellm_jwtkeymapping.find_first = AsyncMock(return_value=winner_mapping)
 
     user_api_key_cache = DualCache()
     mock_key_obj = UserAPIKeyAuth(token="winner_token_hash", team_id=None)
@@ -1350,9 +1306,7 @@ async def test_auto_register_raises_503_when_winner_mapping_vanishes():
     )
 
     prisma_client = MagicMock()
-    prisma_client.db.litellm_jwtkeymapping.create = AsyncMock(
-        side_effect=Exception("Unique constraint failed (P2002)")
-    )
+    prisma_client.db.litellm_jwtkeymapping.create = AsyncMock(side_effect=Exception("Unique constraint failed (P2002)"))
     prisma_client.db.litellm_verificationtoken.delete = AsyncMock()
     # Winner row no longer exists by the time we refetch
     prisma_client.db.litellm_jwtkeymapping.find_first = AsyncMock(return_value=None)
@@ -1410,9 +1364,7 @@ async def test_proxy_admin_sentinel_skips_db_lookup_on_cache_hit():
     )
 
     user_api_key_cache = DualCache()
-    await user_api_key_cache.async_set_cache(
-        "jwt_key_mapping:sub:admin-user", "__JWT_PROXY_ADMIN__"
-    )
+    await user_api_key_cache.async_set_cache("jwt_key_mapping:sub:admin-user", "__JWT_PROXY_ADMIN__")
 
     result = await _resolve_jwt_to_virtual_key(
         jwt_claims=jwt_claims,
@@ -1452,9 +1404,7 @@ async def test_auto_register_helper_stamps_validated_identity_context():
 
     prisma_client = MagicMock()
     prisma_client.db.litellm_jwtkeymapping.create = AsyncMock()
-    mock_key_obj = UserAPIKeyAuth(
-        token="hashed", team_id="validated-team", user_id="validated-user"
-    )
+    mock_key_obj = UserAPIKeyAuth(token="hashed", team_id="validated-team", user_id="validated-user")
 
     with (
         patch(
@@ -1528,9 +1478,7 @@ def test_create_stores_a_supplied_token_hash_verbatim():
     """A caller that holds only the hash gets it stored as given, not hashed again."""
     from litellm.proxy._types import CreateJWTKeyMappingRequest
 
-    data = CreateJWTKeyMappingRequest(
-        jwt_claim_name="email", jwt_claim_value="user@example.com", token=_TOKEN_HASH
-    )
+    data = CreateJWTKeyMappingRequest(jwt_claim_name="email", jwt_claim_value="user@example.com", token=_TOKEN_HASH)
 
     assert _token_hash_for_create(data) == _TOKEN_HASH
 
@@ -1539,9 +1487,7 @@ def test_create_hashes_a_supplied_plaintext_key():
     """Supplying `key` keeps the original behaviour, so existing configs are unaffected."""
     from litellm.proxy._types import CreateJWTKeyMappingRequest, hash_token
 
-    data = CreateJWTKeyMappingRequest(
-        jwt_claim_name="email", jwt_claim_value="user@example.com", key="sk-test-key"
-    )
+    data = CreateJWTKeyMappingRequest(jwt_claim_name="email", jwt_claim_value="user@example.com", key="sk-test-key")
 
     assert _token_hash_for_create(data) == hash_token("sk-test-key")
 
@@ -1557,9 +1503,7 @@ def test_create_requires_exactly_one_identifier(kwargs):
     """Neither or both is a 400, so a mapping can never be created ambiguously."""
     from litellm.proxy._types import CreateJWTKeyMappingRequest
 
-    data = CreateJWTKeyMappingRequest(
-        jwt_claim_name="email", jwt_claim_value="user@example.com", **kwargs
-    )
+    data = CreateJWTKeyMappingRequest(jwt_claim_name="email", jwt_claim_value="user@example.com", **kwargs)
 
     with pytest.raises(HTTPException) as exc_info:
         _token_hash_for_create(data)
@@ -1583,9 +1527,7 @@ def test_create_rejects_a_token_that_is_not_a_sha256_hash(token):
     of a hash and then silently match nothing at auth time."""
     from litellm.proxy._types import CreateJWTKeyMappingRequest
 
-    data = CreateJWTKeyMappingRequest(
-        jwt_claim_name="email", jwt_claim_value="user@example.com", token=token
-    )
+    data = CreateJWTKeyMappingRequest(jwt_claim_name="email", jwt_claim_value="user@example.com", token=token)
 
     with pytest.raises(HTTPException) as exc_info:
         _token_hash_for_create(data)
@@ -1673,8 +1615,12 @@ async def test_delete_evicts_cache_after_row_is_gone():
     mock_prisma.db.litellm_jwtkeymapping.delete.side_effect = concurrent_reader_repopulates
 
     with (
-        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),  # test-quality-ok: proxy_server module global is the endpoint's only injection point
-        patch("litellm.proxy.proxy_server.user_api_key_cache", user_api_key_cache),  # test-quality-ok: proxy_server module global is the endpoint's only injection point
+        patch(
+            "litellm.proxy.proxy_server.prisma_client", mock_prisma
+        ),  # test-quality-ok: proxy_server module global is the endpoint's only injection point
+        patch(
+            "litellm.proxy.proxy_server.user_api_key_cache", user_api_key_cache
+        ),  # test-quality-ok: proxy_server module global is the endpoint's only injection point
     ):
         result = await delete_jwt_key_mapping(
             data=DeleteJWTKeyMappingRequest(id="mapping-1"),
@@ -1713,8 +1659,12 @@ async def test_update_evicts_old_and_new_cache_keys_after_write():
     mock_prisma.db.litellm_jwtkeymapping.update.side_effect = concurrent_reader_repopulates
 
     with (
-        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),  # test-quality-ok: proxy_server module global is the endpoint's only injection point
-        patch("litellm.proxy.proxy_server.user_api_key_cache", user_api_key_cache),  # test-quality-ok: proxy_server module global is the endpoint's only injection point
+        patch(
+            "litellm.proxy.proxy_server.prisma_client", mock_prisma
+        ),  # test-quality-ok: proxy_server module global is the endpoint's only injection point
+        patch(
+            "litellm.proxy.proxy_server.user_api_key_cache", user_api_key_cache
+        ),  # test-quality-ok: proxy_server module global is the endpoint's only injection point
     ):
         result = await update_jwt_key_mapping(
             data=UpdateJWTKeyMappingRequest(id="mapping-1", jwt_claim_value="renamed@example.com"),

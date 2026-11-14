@@ -879,7 +879,9 @@ def test_input_tokens_trigger_counts_the_system_prompt(system: str | list[dict[s
     assert with_system["cleared_input_tokens"] == met_without_system["cleared_input_tokens"] > 0
 
 
-@pytest.mark.parametrize("compact_position", [None, "after", "before"], ids=["alone", "before_compact", "after_compact"])
+@pytest.mark.parametrize(
+    "compact_position", [None, "after", "before"], ids=["alone", "before_compact", "after_compact"]
+)
 async def test_input_tokens_trigger_counts_a_client_compaction_summary(compact_position: str | None) -> None:
     """A client compaction summary counts toward the trigger and calls beside it stay clearable, in any edit order."""
     tail: Final = _make_history(n_pairs=3)
@@ -930,7 +932,10 @@ async def test_compact_after_clearing_replaces_the_client_compaction_summary(mon
     tail: Final = _make_history(n_pairs=3)
     result: Final = await prepare_context_managed_request(
         model=MODEL,
-        messages=[{"role": "assistant", "content": [{"type": "compaction", "content": "Old summary. " * 20_000}]}, *tail],
+        messages=[
+            {"role": "assistant", "content": [{"type": "compaction", "content": "Old summary. " * 20_000}]},
+            *tail,
+        ],
         tools=None,
         system="You are a helpful assistant.",
         context_management_spec={

@@ -206,10 +206,7 @@ def test_redis_semantic_cache_uses_isolated_index_for_old_schema(monkeypatch):
 
         assert redis_semantic_cache.llmcache is fallback_cache_mock
         assert semantic_cache_mock.call_args_list[0].kwargs["name"] == "existing_index"
-        assert (
-            semantic_cache_mock.call_args_list[1].kwargs["name"]
-            == "existing_index_isolated"
-        )
+        assert semantic_cache_mock.call_args_list[1].kwargs["name"] == "existing_index_isolated"
         assert semantic_cache_mock.call_args_list[1].kwargs["filterable_fields"] == [
             RedisSemanticCache._cache_key_filterable_field()
         ]
@@ -239,10 +236,7 @@ def test_redis_semantic_cache_overwrites_stale_isolated_index(monkeypatch):
         )
 
         assert redis_semantic_cache.llmcache is fallback_cache_mock
-        assert (
-            semantic_cache_mock.call_args_list[2].kwargs["name"]
-            == "existing_index_isolated"
-        )
+        assert semantic_cache_mock.call_args_list[2].kwargs["name"] == "existing_index_isolated"
         assert semantic_cache_mock.call_args_list[2].kwargs["overwrite"] is True
         assert semantic_cache_mock.call_args_list[2].kwargs["filterable_fields"] == [
             RedisSemanticCache._cache_key_filterable_field()
@@ -388,9 +382,7 @@ async def test_redis_semantic_cache_async_get_cache(monkeypatch):
         ]
 
         redis_semantic_cache.llmcache.acheck = AsyncMock(return_value=mock_result)
-        redis_semantic_cache._get_async_embedding = AsyncMock(
-            return_value=[0.1, 0.2, 0.3]
-        )
+        redis_semantic_cache._get_async_embedding = AsyncMock(return_value=[0.1, 0.2, 0.3])
 
         with patch.object(
             redis_semantic_cache,
@@ -438,9 +430,7 @@ async def test_redis_semantic_cache_async_get_cache_rejects_unscoped_hit(monkeyp
                 }
             ]
         )
-        redis_semantic_cache._get_async_embedding = AsyncMock(
-            return_value=[0.1, 0.2, 0.3]
-        )
+        redis_semantic_cache._get_async_embedding = AsyncMock(return_value=[0.1, 0.2, 0.3])
 
         with patch.object(
             redis_semantic_cache,
@@ -472,9 +462,7 @@ async def test_redis_semantic_cache_async_set_cache_stores_cache_key_filter(
 
         redis_semantic_cache = RedisSemanticCache(similarity_threshold=0.8)
         redis_semantic_cache.llmcache.astore = AsyncMock()
-        redis_semantic_cache._get_async_embedding = AsyncMock(
-            return_value=[0.1, 0.2, 0.3]
-        )
+        redis_semantic_cache._get_async_embedding = AsyncMock(return_value=[0.1, 0.2, 0.3])
 
         await redis_semantic_cache.async_set_cache(
             key="test_key",
@@ -648,9 +636,7 @@ def test_redis_semantic_cache_prompt_extraction_returns_none_without_text():
     assert RedisSemanticCache._get_prompt_from_kwargs(input=None) is None
     assert RedisSemanticCache._get_prompt_from_kwargs(input="   ") is None
     assert (
-        RedisSemanticCache._get_prompt_from_kwargs(
-            input=[{"type": "input_image", "image_url": "https://example.com"}]
-        )
+        RedisSemanticCache._get_prompt_from_kwargs(input=[{"type": "input_image", "image_url": "https://example.com"}])
         is None
     )
 
@@ -658,9 +644,7 @@ def test_redis_semantic_cache_prompt_extraction_returns_none_without_text():
 def test_redis_semantic_cache_prompt_extraction_skips_blank_dict_text_keys():
     from litellm.caching.redis_semantic_cache import RedisSemanticCache
 
-    prompt = RedisSemanticCache._get_prompt_from_kwargs(
-        input={"text": "   ", "input_text": "fallback prompt"}
-    )
+    prompt = RedisSemanticCache._get_prompt_from_kwargs(input={"text": "   ", "input_text": "fallback prompt"})
 
     assert prompt == "fallback prompt"
 
@@ -906,9 +890,7 @@ def test_redis_get_embedding_falls_back_to_direct(monkeypatch):
     fake_proxy.llm_model_list = None
     monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", fake_proxy)
 
-    with patch(
-        "litellm.embedding", return_value={"data": [{"embedding": [0.1, 0.2]}]}
-    ) as direct_embed:
+    with patch("litellm.embedding", return_value={"data": [{"embedding": [0.1, 0.2]}]}) as direct_embed:
         vec = cache._get_embedding("hello")
 
     assert vec == [0.1, 0.2]
@@ -1044,9 +1026,7 @@ def test_redis_sync_set_cache_passes_precomputed_vector():
 
     cache = RedisSemanticCache.__new__(RedisSemanticCache)
     cache.llmcache = MagicMock()
-    cache._get_cache_filters = MagicMock(
-        return_value={RedisSemanticCache.CACHE_KEY_FIELD_NAME: "test_key"}
-    )
+    cache._get_cache_filters = MagicMock(return_value={RedisSemanticCache.CACHE_KEY_FIELD_NAME: "test_key"})
     cache._get_ttl = MagicMock(return_value=None)
     cache._get_embedding = MagicMock(return_value=[0.1, 0.2, 0.3])
 
@@ -1083,9 +1063,7 @@ def test_redis_sync_get_cache_passes_precomputed_vector():
     )
     cache._get_embedding = MagicMock(return_value=[0.1, 0.2, 0.3])
 
-    with patch.object(
-        cache, "_get_cache_key_filter_expression", return_value="cache-key-filter"
-    ):
+    with patch.object(cache, "_get_cache_key_filter_expression", return_value="cache-key-filter"):
         result = cache.get_cache(
             key="test_key",
             messages=[{"content": "What is the capital of France?"}],
@@ -1199,9 +1177,7 @@ def test_redis_get_embedding_truncates_direct_path_with_explicit_limit(monkeypat
     fake_proxy.llm_model_list = None
     monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", fake_proxy)
 
-    with patch(
-        "litellm.embedding", return_value={"data": [{"embedding": [0.1, 0.2]}]}
-    ) as direct_embed:
+    with patch("litellm.embedding", return_value={"data": [{"embedding": [0.1, 0.2]}]}) as direct_embed:
         cache._get_embedding(LONG_PROMPT)
 
     sent_input = direct_embed.call_args.kwargs["input"]
@@ -1248,9 +1224,7 @@ def test_redis_init_defers_redisvl_construction(monkeypatch):
 
 def test_redis_failed_llmcache_build_is_not_memoized(monkeypatch):
     built_cache = MagicMock()
-    semantic_cache_mock = MagicMock(
-        side_effect=[ConnectionError("redis down"), built_cache]
-    )
+    semantic_cache_mock = MagicMock(side_effect=[ConnectionError("redis down"), built_cache])
     custom_vectorizer_mock = MagicMock()
 
     with _fake_redisvl_modules(semantic_cache_mock, custom_vectorizer_mock):

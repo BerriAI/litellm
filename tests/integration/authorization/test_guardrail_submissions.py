@@ -125,9 +125,10 @@ def _assert_submission_actions_are_forbidden(responses: tuple[httpx.Response, ..
         response.text for response in responses
     )
     expected_error: Final = {"detail": "Admin access required"}
-    assert tuple(
-        _SubmissionForbiddenResponse.model_validate_json(response.content).model_dump() for response in responses
-    ) == (expected_error,) * 4, tuple(response.text for response in responses)
+    assert (
+        tuple(_SubmissionForbiddenResponse.model_validate_json(response.content).model_dump() for response in responses)
+        == (expected_error,) * 4
+    ), tuple(response.text for response in responses)
 
 
 def _mask_user_id(user_id: str) -> str:

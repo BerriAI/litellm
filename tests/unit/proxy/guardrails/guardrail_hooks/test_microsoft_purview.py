@@ -201,9 +201,7 @@ class TestResolveUserId:
     def test_end_user_id_after_key_user_id(self):
         """When both key user_id and end_user_id exist, key user_id is used first."""
         guardrail = _make_guardrail()
-        auth = UserAPIKeyAuth(
-            api_key="test", user_id="key-owner", end_user_id="end-user-101"
-        )
+        auth = UserAPIKeyAuth(api_key="test", user_id="key-owner", end_user_id="end-user-101")
         assert guardrail._resolve_user_id({}, auth) == "key-owner"
 
     def test_none_when_missing(self):
@@ -222,9 +220,7 @@ class TestPreCallHook:
     async def test_pre_call_allow(self):
         guardrail = _make_guardrail()
 
-        with patch.object(
-            guardrail, "_check_content", new_callable=AsyncMock
-        ) as mock_check:
+        with patch.object(guardrail, "_check_content", new_callable=AsyncMock) as mock_check:
             mock_check.return_value = {"policyActions": []}
 
             await guardrail.async_pre_call_hook(
@@ -247,9 +243,7 @@ class TestPreCallHook:
             "litellm_call_id": "call-abc",
         }
 
-        with patch.object(
-            guardrail, "_check_content", new_callable=AsyncMock
-        ) as mock_check:
+        with patch.object(guardrail, "_check_content", new_callable=AsyncMock) as mock_check:
             mock_check.return_value = {"policyActions": []}
 
             out = await guardrail.async_pre_call_hook(
@@ -265,9 +259,7 @@ class TestPreCallHook:
     async def test_pre_call_block(self):
         guardrail = _make_guardrail()
 
-        with patch.object(
-            guardrail, "_check_content", new_callable=AsyncMock
-        ) as mock_check:
+        with patch.object(guardrail, "_check_content", new_callable=AsyncMock) as mock_check:
             mock_check.side_effect = HTTPException(
                 status_code=400,
                 detail={"error": "Microsoft Purview DLP: Content blocked by policy"},
@@ -275,9 +267,7 @@ class TestPreCallHook:
 
             with pytest.raises(HTTPException) as exc_info:
                 await guardrail.async_pre_call_hook(
-                    user_api_key_dict=UserAPIKeyAuth(
-                        api_key="test", user_id="user-123"
-                    ),
+                    user_api_key_dict=UserAPIKeyAuth(api_key="test", user_id="user-123"),
                     cache=None,
                     data={
                         "messages": [
@@ -296,9 +286,7 @@ class TestPreCallHook:
     async def test_pre_call_no_user_id_raises(self):
         guardrail = _make_guardrail()
 
-        with patch.object(
-            guardrail, "_check_content", new_callable=AsyncMock
-        ) as mock_check:
+        with patch.object(guardrail, "_check_content", new_callable=AsyncMock) as mock_check:
             with pytest.raises(HTTPException) as exc_info:
                 await guardrail.async_pre_call_hook(
                     user_api_key_dict=UserAPIKeyAuth(api_key="test"),
@@ -314,9 +302,7 @@ class TestPreCallHook:
     async def test_pre_call_no_messages_skips(self):
         guardrail = _make_guardrail()
 
-        with patch.object(
-            guardrail, "_check_content", new_callable=AsyncMock
-        ) as mock_check:
+        with patch.object(guardrail, "_check_content", new_callable=AsyncMock) as mock_check:
             await guardrail.async_pre_call_hook(
                 user_api_key_dict=UserAPIKeyAuth(api_key="test", user_id="user-123"),
                 cache=None,
@@ -333,9 +319,7 @@ class TestPreCallFullTranscript:
         """DLP text must include system / prior turns, not only the last user block."""
         guardrail = _make_guardrail()
 
-        with patch.object(
-            guardrail, "_check_content", new_callable=AsyncMock
-        ) as mock_check:
+        with patch.object(guardrail, "_check_content", new_callable=AsyncMock) as mock_check:
             mock_check.return_value = {"policyActions": []}
 
             await guardrail.async_pre_call_hook(
@@ -371,16 +355,10 @@ class TestPostCallHook:
 
         guardrail = _make_guardrail()
         response = ModelResponse(
-            choices=[
-                Choices(
-                    index=0, message=Message(content="Safe response", role="assistant")
-                )
-            ],
+            choices=[Choices(index=0, message=Message(content="Safe response", role="assistant"))],
         )
 
-        with patch.object(
-            guardrail, "_check_content", new_callable=AsyncMock
-        ) as mock_check:
+        with patch.object(guardrail, "_check_content", new_callable=AsyncMock) as mock_check:
             mock_check.return_value = {"policyActions": []}
 
             result = await guardrail.async_post_call_success_hook(
@@ -410,9 +388,7 @@ class TestPostCallHook:
             ],
         )
 
-        with patch.object(
-            guardrail, "_check_content", new_callable=AsyncMock
-        ) as mock_check:
+        with patch.object(guardrail, "_check_content", new_callable=AsyncMock) as mock_check:
             mock_check.side_effect = HTTPException(
                 status_code=400,
                 detail={"error": "Microsoft Purview DLP: Content blocked by policy"},
@@ -421,9 +397,7 @@ class TestPostCallHook:
             with pytest.raises(HTTPException) as exc_info:
                 await guardrail.async_post_call_success_hook(
                     data={},
-                    user_api_key_dict=UserAPIKeyAuth(
-                        api_key="test", user_id="user-123"
-                    ),
+                    user_api_key_dict=UserAPIKeyAuth(api_key="test", user_id="user-123"),
                     response=response,
                 )
 
@@ -435,14 +409,10 @@ class TestPostCallHook:
 
         guardrail = _make_guardrail()
         response = ModelResponse(
-            choices=[
-                Choices(index=0, message=Message(content="Response", role="assistant"))
-            ],
+            choices=[Choices(index=0, message=Message(content="Response", role="assistant"))],
         )
 
-        with patch.object(
-            guardrail, "_check_content", new_callable=AsyncMock
-        ) as mock_check:
+        with patch.object(guardrail, "_check_content", new_callable=AsyncMock) as mock_check:
             with pytest.raises(HTTPException) as exc_info:
                 await guardrail.async_post_call_success_hook(
                     data={},
@@ -471,9 +441,7 @@ class TestPostCallHook:
             ],
         )
 
-        with patch.object(
-            guardrail, "_check_content", new_callable=AsyncMock
-        ) as mock_check:
+        with patch.object(guardrail, "_check_content", new_callable=AsyncMock) as mock_check:
             mock_check.return_value = {"policyActions": []}
 
             await guardrail.async_post_call_success_hook(
@@ -493,9 +461,7 @@ class TestTextCompletionHooks:
     async def test_pre_call_text_completion_uses_prompt(self):
         guardrail = _make_guardrail()
 
-        with patch.object(
-            guardrail, "_check_content", new_callable=AsyncMock
-        ) as mock_check:
+        with patch.object(guardrail, "_check_content", new_callable=AsyncMock) as mock_check:
             mock_check.return_value = {"policyActions": []}
 
             await guardrail.async_pre_call_hook(
@@ -522,9 +488,7 @@ class TestTextCompletionHooks:
             ],
         )
 
-        with patch.object(
-            guardrail, "_check_content", new_callable=AsyncMock
-        ) as mock_check:
+        with patch.object(guardrail, "_check_content", new_callable=AsyncMock) as mock_check:
             mock_check.return_value = {"policyActions": []}
 
             await guardrail.async_post_call_success_hook(
@@ -605,9 +569,7 @@ class TestResponsesAPIHooks:
         """Pre-call hook must scan plain-string ``input`` on responses call type."""
         guardrail = _make_guardrail()
 
-        with patch.object(
-            guardrail, "_check_content", new_callable=AsyncMock
-        ) as mock_check:
+        with patch.object(guardrail, "_check_content", new_callable=AsyncMock) as mock_check:
             mock_check.return_value = {"policyActions": []}
 
             await guardrail.async_pre_call_hook(
@@ -626,9 +588,7 @@ class TestResponsesAPIHooks:
         """Pre-call hook must scan ``input`` on ``aresponses`` call type too."""
         guardrail = _make_guardrail()
 
-        with patch.object(
-            guardrail, "_check_content", new_callable=AsyncMock
-        ) as mock_check:
+        with patch.object(guardrail, "_check_content", new_callable=AsyncMock) as mock_check:
             mock_check.return_value = {"policyActions": []}
 
             await guardrail.async_pre_call_hook(
@@ -646,17 +606,13 @@ class TestResponsesAPIHooks:
         """Pre-call hook must extract text from structured list ``input``."""
         guardrail = _make_guardrail()
 
-        with patch.object(
-            guardrail, "_check_content", new_callable=AsyncMock
-        ) as mock_check:
+        with patch.object(guardrail, "_check_content", new_callable=AsyncMock) as mock_check:
             mock_check.return_value = {"policyActions": []}
 
             await guardrail.async_pre_call_hook(
                 user_api_key_dict=UserAPIKeyAuth(api_key="test", user_id="user-123"),
                 cache=None,
-                data={
-                    "input": [{"role": "user", "content": "Secret phrase: alpha bravo"}]
-                },
+                data={"input": [{"role": "user", "content": "Secret phrase: alpha bravo"}]},
                 call_type="responses",
             )
 
@@ -668,9 +624,7 @@ class TestResponsesAPIHooks:
         """Pre-call hook must not call _check_content when ``input`` is absent."""
         guardrail = _make_guardrail()
 
-        with patch.object(
-            guardrail, "_check_content", new_callable=AsyncMock
-        ) as mock_check:
+        with patch.object(guardrail, "_check_content", new_callable=AsyncMock) as mock_check:
             await guardrail.async_pre_call_hook(
                 user_api_key_dict=UserAPIKeyAuth(api_key="test", user_id="user-123"),
                 cache=None,
@@ -685,9 +639,7 @@ class TestResponsesAPIHooks:
         """Benign string ``input`` must still scan ``instructions`` (system message)."""
         guardrail = _make_guardrail()
 
-        with patch.object(
-            guardrail, "_check_content", new_callable=AsyncMock
-        ) as mock_check:
+        with patch.object(guardrail, "_check_content", new_callable=AsyncMock) as mock_check:
             mock_check.return_value = {"policyActions": []}
 
             await guardrail.async_pre_call_hook(
@@ -710,9 +662,7 @@ class TestResponsesAPIHooks:
         """Requests with only ``instructions`` (no ``input``) must still be scanned."""
         guardrail = _make_guardrail()
 
-        with patch.object(
-            guardrail, "_check_content", new_callable=AsyncMock
-        ) as mock_check:
+        with patch.object(guardrail, "_check_content", new_callable=AsyncMock) as mock_check:
             mock_check.return_value = {"policyActions": []}
 
             await guardrail.async_pre_call_hook(
@@ -723,10 +673,7 @@ class TestResponsesAPIHooks:
             )
 
             mock_check.assert_called_once()
-            assert (
-                "policy text in instructions only"
-                in mock_check.call_args.kwargs["text"]
-            )
+            assert "policy text in instructions only" in mock_check.call_args.kwargs["text"]
 
     @pytest.mark.asyncio
     async def test_post_call_responses_api_output_text(self):
@@ -743,16 +690,12 @@ class TestResponsesAPIHooks:
                     "id": "msg-1",
                     "status": "completed",
                     "role": "assistant",
-                    "content": [
-                        {"type": "output_text", "text": "card 4111-1111-1111-1111"}
-                    ],
+                    "content": [{"type": "output_text", "text": "card 4111-1111-1111-1111"}],
                 }
             ],
         )
 
-        with patch.object(
-            guardrail, "_check_content", new_callable=AsyncMock
-        ) as mock_check:
+        with patch.object(guardrail, "_check_content", new_callable=AsyncMock) as mock_check:
             mock_check.return_value = {"policyActions": []}
 
             result = await guardrail.async_post_call_success_hook(
@@ -778,9 +721,7 @@ class TestResponsesAPIHooks:
             output=[],
         )
 
-        with patch.object(
-            guardrail, "_check_content", new_callable=AsyncMock
-        ) as mock_check:
+        with patch.object(guardrail, "_check_content", new_callable=AsyncMock) as mock_check:
             await guardrail.async_post_call_success_hook(
                 data={},
                 user_api_key_dict=UserAPIKeyAuth(api_key="test", user_id="user-123"),
@@ -809,17 +750,13 @@ class TestResponsesAPIHooks:
             ],
         )
 
-        with patch.object(
-            guardrail, "_check_content", new_callable=AsyncMock
-        ) as mock_check:
+        with patch.object(guardrail, "_check_content", new_callable=AsyncMock) as mock_check:
             mock_check.return_value = {"policyActions": []}
 
             await guardrail.async_logging_hook(
                 kwargs={
                     "input": "prompt body",
-                    "litellm_params": {
-                        "metadata": {"user_api_key_user_id": "user-123"}
-                    },
+                    "litellm_params": {"metadata": {"user_api_key_user_id": "user-123"}},
                 },
                 result=result_response,
                 call_type="responses",
@@ -860,9 +797,7 @@ class TestResponsesAPIHooks:
             ],
         )
 
-        with patch.object(
-            guardrail, "_check_content", new_callable=AsyncMock
-        ) as mock_check:
+        with patch.object(guardrail, "_check_content", new_callable=AsyncMock) as mock_check:
             mock_check.return_value = {"policyActions": []}
 
             await guardrail.async_logging_hook(
@@ -872,9 +807,7 @@ class TestResponsesAPIHooks:
                     # Simulate litellm's logging path which mirrors the raw
                     # responses input under "messages".
                     "messages": "prompt body",
-                    "litellm_params": {
-                        "metadata": {"user_api_key_user_id": "user-123"}
-                    },
+                    "litellm_params": {"metadata": {"user_api_key_user_id": "user-123"}},
                 },
                 result=result_response,
                 call_type="aresponses",
@@ -883,11 +816,7 @@ class TestResponsesAPIHooks:
             assert mock_check.call_count == 2
             activities = {c.kwargs["activity"] for c in mock_check.call_args_list}
             assert activities == {"uploadText", "downloadText"}
-            upload_calls = [
-                c
-                for c in mock_check.call_args_list
-                if c.kwargs["activity"] == "uploadText"
-            ]
+            upload_calls = [c for c in mock_check.call_args_list if c.kwargs["activity"] == "uploadText"]
             assert len(upload_calls) == 1
             upload_text = upload_calls[0].kwargs["text"]
             assert "prompt body" in upload_text
@@ -910,10 +839,7 @@ class TestLoggingResolveUserId:
                 }
             }
         }
-        assert (
-            guardrail._resolve_user_id_from_logging_kwargs(kwargs)
-            == "trusted-from-proxy"
-        )
+        assert guardrail._resolve_user_id_from_logging_kwargs(kwargs) == "trusted-from-proxy"
 
     def test_logging_ignores_caller_supplied_user_id_field(self):
         """Caller-controlled ``metadata[user_id_field]`` must not drive Purview audit attribution."""
@@ -928,9 +854,7 @@ class TestLoggingResolveUserId:
             "user_api_key_user_id": "from-top-level",
             "litellm_params": {"metadata": {}},
         }
-        assert (
-            guardrail._resolve_user_id_from_logging_kwargs(kwargs) == "from-top-level"
-        )
+        assert guardrail._resolve_user_id_from_logging_kwargs(kwargs) == "from-top-level"
 
     def test_logging_returns_none_when_no_trusted_identity(self):
         guardrail = _make_guardrail()
@@ -1064,9 +988,7 @@ class TestTokenCaching:
     async def test_token_cached(self):
         guardrail = _make_guardrail()
 
-        with patch.object(
-            guardrail.async_handler, "post", return_value=_mock_token_response()
-        ) as mock_post:
+        with patch.object(guardrail.async_handler, "post", return_value=_mock_token_response()) as mock_post:
             token1 = await guardrail._get_access_token()
             token2 = await guardrail._get_access_token()
 
@@ -1079,9 +1001,7 @@ class TestTokenCaching:
     async def test_token_refreshed_on_expiry(self):
         guardrail = _make_guardrail()
 
-        with patch.object(
-            guardrail.async_handler, "post", return_value=_mock_token_response()
-        ) as mock_post:
+        with patch.object(guardrail.async_handler, "post", return_value=_mock_token_response()) as mock_post:
             await guardrail._get_access_token()
 
             # Expire the token
@@ -1130,9 +1050,7 @@ class TestGraphPostHttpError:
         guardrail = _make_guardrail()
 
         error_resp = Mock()
-        error_resp.json.return_value = {
-            "error": {"code": "Forbidden", "message": "no access"}
-        }
+        error_resp.json.return_value = {"error": {"code": "Forbidden", "message": "no access"}}
         error_resp.headers = {}
         error_resp.raise_for_status = Mock(
             side_effect=httpx.HTTPStatusError(
@@ -1143,9 +1061,7 @@ class TestGraphPostHttpError:
         )
 
         with (
-            patch.object(
-                guardrail, "_get_access_token", new_callable=AsyncMock
-            ) as mock_token,
+            patch.object(guardrail, "_get_access_token", new_callable=AsyncMock) as mock_token,
             patch.object(guardrail.async_handler, "post", return_value=error_resp),
         ):
             mock_token.return_value = "mock-token"
@@ -1161,9 +1077,7 @@ class TestGraphPostHttpError:
         """A Graph error on protectionScopes/compute must not be cached as success."""
         guardrail = _make_guardrail()
 
-        with patch.object(
-            guardrail, "_graph_post", new_callable=AsyncMock
-        ) as mock_post:
+        with patch.object(guardrail, "_graph_post", new_callable=AsyncMock) as mock_post:
             mock_post.side_effect = httpx.HTTPStatusError(
                 "429 Too Many Requests",
                 request=httpx.Request("POST", "https://graph.microsoft.com/"),
@@ -1187,15 +1101,9 @@ class TestScopeCaching:
     async def test_scope_cached(self):
         guardrail = _make_guardrail()
 
-        with patch.object(
-            guardrail, "_graph_post", new_callable=AsyncMock
-        ) as mock_post:
+        with patch.object(guardrail, "_graph_post", new_callable=AsyncMock) as mock_post:
             mock_post.return_value = (
-                {
-                    "value": [
-                        {"activities": "uploadText", "executionMode": "evaluateInline"}
-                    ]
-                },
+                {"value": [{"activities": "uploadText", "executionMode": "evaluateInline"}]},
                 {"ETag": "scope-etag"},
             )
 
@@ -1213,17 +1121,11 @@ class TestScopeCaching:
         guardrail._scope_cache_maxsize = 3
 
         scope_payload = (
-            {
-                "value": [
-                    {"activities": "uploadText", "executionMode": "evaluateInline"}
-                ]
-            },
+            {"value": [{"activities": "uploadText", "executionMode": "evaluateInline"}]},
             {"ETag": "scope-etag"},
         )
 
-        with patch.object(
-            guardrail, "_graph_post", new_callable=AsyncMock
-        ) as mock_post:
+        with patch.object(guardrail, "_graph_post", new_callable=AsyncMock) as mock_post:
             mock_post.return_value = scope_payload
 
             await guardrail._compute_protection_scopes("user-a")
@@ -1258,9 +1160,7 @@ class TestScopeCaching:
             {"ETag": "scope-etag"},
         )
 
-        with patch.object(
-            guardrail, "_graph_post", new_callable=AsyncMock
-        ) as mock_post:
+        with patch.object(guardrail, "_graph_post", new_callable=AsyncMock) as mock_post:
             mock_post.return_value = scope_payload
 
             # Populate cache: user-a (older), user-b (newer)
@@ -1281,18 +1181,14 @@ class TestScopeCaching:
             assert mock_post.call_count == 4
 
             assert "user-a" in guardrail._scope_cache, "user-a was wrongly evicted"
-            assert (
-                "user-b" not in guardrail._scope_cache
-            ), "user-b should have been evicted"
+            assert "user-b" not in guardrail._scope_cache, "user-b should have been evicted"
             assert "user-c" in guardrail._scope_cache
 
     @pytest.mark.asyncio
     async def test_scope_invalidated_on_modified(self):
         guardrail = _make_guardrail()
 
-        with patch.object(
-            guardrail, "_graph_post", new_callable=AsyncMock
-        ) as mock_post:
+        with patch.object(guardrail, "_graph_post", new_callable=AsyncMock) as mock_post:
             # First call: compute scopes
             mock_post.return_value = (
                 {"value": []},
@@ -1320,9 +1216,7 @@ class TestGetPromptTextForDlp:
     def test_single_message_no_extra_separator(self):
         """A single message is returned as-is (no leading/trailing separator)."""
         guardrail = _make_guardrail()
-        result = guardrail.get_prompt_text_for_dlp(
-            [{"role": "user", "content": "Hello"}]
-        )
+        result = guardrail.get_prompt_text_for_dlp([{"role": "user", "content": "Hello"}])
         assert result == "Hello"
 
     def test_messages_separated_by_double_newline(self):
@@ -1542,9 +1436,7 @@ class TestCheckContentApiErrorHandling:
 
         assert exc_info.value.status_code == 400
         assert isinstance(exc_info.value.detail, dict)
-        assert "upstream policy evaluation failed" in exc_info.value.detail.get(
-            "error", ""
-        )
+        assert "upstream policy evaluation failed" in exc_info.value.detail.get("error", "")
         assert "network failure" in exc_info.value.detail.get("exception", "")
         assert isinstance(exc_info.value.__cause__, RuntimeError)
 
@@ -1633,9 +1525,7 @@ class TestCheckContentApiErrorHandling:
             headers={"Retry-After": "30"},
             request=httpx.Request("POST", "https://graph.microsoft.com/v1.0/x"),
         )
-        upstream_err = httpx.HTTPStatusError(
-            "rate limited", request=upstream_resp.request, response=upstream_resp
-        )
+        upstream_err = httpx.HTTPStatusError("rate limited", request=upstream_resp.request, response=upstream_resp)
 
         with patch.object(
             guardrail,
@@ -1666,9 +1556,7 @@ class TestCheckContentApiErrorHandling:
             status_code=401,
             request=httpx.Request("POST", "https://graph.microsoft.com/v1.0/x"),
         )
-        upstream_err = httpx.HTTPStatusError(
-            "unauthorized", request=upstream_resp.request, response=upstream_resp
-        )
+        upstream_err = httpx.HTTPStatusError("unauthorized", request=upstream_resp.request, response=upstream_resp)
 
         with patch.object(
             guardrail,
@@ -1723,9 +1611,7 @@ class TestAsyncLoggingHookIndependence:
             await guardrail.async_logging_hook(
                 kwargs={
                     "messages": [{"role": "user", "content": "prompt"}],
-                    "litellm_params": {
-                        "metadata": {"user_api_key_user_id": "user-123"}
-                    },
+                    "litellm_params": {"metadata": {"user_api_key_user_id": "user-123"}},
                 },
                 result=response,
                 call_type="completion",
@@ -1762,9 +1648,7 @@ class TestAsyncLoggingHookIndependence:
             await guardrail.async_logging_hook(
                 kwargs={
                     "messages": [{"role": "user", "content": "prompt"}],
-                    "litellm_params": {
-                        "metadata": {"user_api_key_user_id": "user-123"}
-                    },
+                    "litellm_params": {"metadata": {"user_api_key_user_id": "user-123"}},
                 },
                 result=response,
                 call_type="completion",
@@ -1924,15 +1808,13 @@ class TestGetPromptTextToolCalls:
         """async_pre_call_hook must include tool_call arguments in the text sent to Purview."""
         guardrail = _make_guardrail()
 
-        with patch.object(
-            guardrail, "_check_content", new_callable=AsyncMock
-        ) as mock_check:
+        with patch.object(guardrail, "_check_content", new_callable=AsyncMock) as mock_check:
             mock_check.return_value = {"policyActions": []}
 
             await guardrail.async_pre_call_hook(
-                user_api_key_dict=__import__(
-                    "litellm.proxy._types", fromlist=["UserAPIKeyAuth"]
-                ).UserAPIKeyAuth(api_key="test", user_id="user-123"),
+                user_api_key_dict=__import__("litellm.proxy._types", fromlist=["UserAPIKeyAuth"]).UserAPIKeyAuth(
+                    api_key="test", user_id="user-123"
+                ),
                 cache=None,
                 data={
                     "messages": [
@@ -2055,16 +1937,14 @@ class TestCompletionResponseTextPartsToolCalls:
             ],
         )
 
-        with patch.object(
-            guardrail, "_check_content", new_callable=AsyncMock
-        ) as mock_check:
+        with patch.object(guardrail, "_check_content", new_callable=AsyncMock) as mock_check:
             mock_check.return_value = {"policyActions": []}
 
             await guardrail.async_post_call_success_hook(
                 data={},
-                user_api_key_dict=__import__(
-                    "litellm.proxy._types", fromlist=["UserAPIKeyAuth"]
-                ).UserAPIKeyAuth(api_key="test", user_id="user-123"),
+                user_api_key_dict=__import__("litellm.proxy._types", fromlist=["UserAPIKeyAuth"]).UserAPIKeyAuth(
+                    api_key="test", user_id="user-123"
+                ),
                 response=response,
             )
 
@@ -2232,9 +2112,7 @@ class TestGraphUserIdEncoding:
 
         guardrail.async_handler.post = AsyncMock(side_effect=_capture_post)
 
-        with patch.object(
-            guardrail, "_get_access_token", new_callable=AsyncMock
-        ) as mock_token:
+        with patch.object(guardrail, "_get_access_token", new_callable=AsyncMock) as mock_token:
             mock_token.return_value = "tok"
             await guardrail._compute_protection_scopes("user/with%special")
 
@@ -2274,9 +2152,7 @@ class TestResolveTrustedUserId:
 
     def test_trusted_prefers_key_user_id_over_end_user_id(self):
         guardrail = _make_guardrail()
-        auth = UserAPIKeyAuth(
-            api_key="test", user_id="key-owner", end_user_id="end-user"
-        )
+        auth = UserAPIKeyAuth(api_key="test", user_id="key-owner", end_user_id="end-user")
         assert guardrail._resolve_trusted_user_id({}, auth) == "key-owner"
 
 
@@ -2365,9 +2241,7 @@ class TestTokenIdPromptHandling:
         """Pure token-id prompts must be rejected in blocking pre_call mode."""
         guardrail = _make_guardrail()
 
-        with patch.object(
-            guardrail, "_check_content", new_callable=AsyncMock
-        ) as mock_check:
+        with patch.object(guardrail, "_check_content", new_callable=AsyncMock) as mock_check:
             with pytest.raises(HTTPException) as exc_info:
                 await guardrail.async_pre_call_hook(
                     user_api_key_dict=UserAPIKeyAuth(api_key="test", user_id="u1"),
@@ -2387,9 +2261,7 @@ class TestTokenIdPromptHandling:
 
         guardrail = _make_guardrail()
 
-        with patch.object(
-            guardrail, "_check_content", new_callable=AsyncMock
-        ) as mock_check:
+        with patch.object(guardrail, "_check_content", new_callable=AsyncMock) as mock_check:
             with caplog.at_level(logging.WARNING):
                 await guardrail.async_pre_call_hook(
                     user_api_key_dict=UserAPIKeyAuth(api_key="test", user_id="u1"),
@@ -2406,9 +2278,7 @@ class TestTokenIdPromptHandling:
         """Normal string prompts must still be sent to Purview."""
         guardrail = _make_guardrail()
 
-        with patch.object(
-            guardrail, "_check_content", new_callable=AsyncMock
-        ) as mock_check:
+        with patch.object(guardrail, "_check_content", new_callable=AsyncMock) as mock_check:
             mock_check.return_value = {"policyActions": []}
             await guardrail.async_pre_call_hook(
                 user_api_key_dict=UserAPIKeyAuth(api_key="test", user_id="u1"),
@@ -2426,9 +2296,7 @@ class TestTokenIdPromptHandling:
         """Empty/whitespace-only string prompts must not be flagged as token-id prompts."""
         guardrail = _make_guardrail()
 
-        with patch.object(
-            guardrail, "_check_content", new_callable=AsyncMock
-        ) as mock_check:
+        with patch.object(guardrail, "_check_content", new_callable=AsyncMock) as mock_check:
             data = {"prompt": empty_prompt}
             result = await guardrail.async_pre_call_hook(
                 user_api_key_dict=UserAPIKeyAuth(api_key="test", user_id="u1"),
@@ -2454,9 +2322,7 @@ class TestTokenIdPromptHandling:
         """Nested/mixed token-id prompts must also be rejected in blocking pre_call mode."""
         guardrail = _make_guardrail()
 
-        with patch.object(
-            guardrail, "_check_content", new_callable=AsyncMock
-        ) as mock_check:
+        with patch.object(guardrail, "_check_content", new_callable=AsyncMock) as mock_check:
             with pytest.raises(HTTPException) as exc_info:
                 await guardrail.async_pre_call_hook(
                     user_api_key_dict=UserAPIKeyAuth(api_key="test", user_id="u1"),
@@ -2515,12 +2381,8 @@ class TestStreamingIteratorHook:
 
         with (
             patch("litellm.main.stream_chunk_builder", return_value=assembled_response),
-            patch(
-                "litellm.llms.base_llm.base_model_iterator.MockResponseIterator"
-            ) as mock_iterator_cls,
-            patch.object(
-                guardrail, "_check_content", new_callable=AsyncMock
-            ) as mock_check,
+            patch("litellm.llms.base_llm.base_model_iterator.MockResponseIterator") as mock_iterator_cls,
+            patch.object(guardrail, "_check_content", new_callable=AsyncMock) as mock_check,
         ):
             mock_check.return_value = {"policyActions": []}
 
@@ -2571,18 +2433,15 @@ class TestStreamingIteratorHook:
                 new_callable=AsyncMock,
                 side_effect=HTTPException(
                     status_code=400,
-                    detail={
-                        "error": "Microsoft Purview DLP: Content blocked by policy"
-                    },
+                    detail={"error": "Microsoft Purview DLP: Content blocked by policy"},
                 ),
             ),
         ):
             chunks = []
+
             async def _drain():
                 async for chunk in guardrail.async_post_call_streaming_iterator_hook(
-                    user_api_key_dict=UserAPIKeyAuth(
-                        api_key="test", user_id="user-123"
-                    ),
+                    user_api_key_dict=UserAPIKeyAuth(api_key="test", user_id="user-123"),
                     response=fake_response_stream(),
                     request_data={"metadata": {"user_id": "user-123"}},
                 ):
@@ -2613,10 +2472,9 @@ class TestStreamingIteratorHook:
         async def fake_response_stream():
             yield assembled_response
 
-        with patch(
-            "litellm.main.stream_chunk_builder", return_value=assembled_response
-        ):
+        with patch("litellm.main.stream_chunk_builder", return_value=assembled_response):
             chunks = []
+
             async def _drain():
                 async for chunk in guardrail.async_post_call_streaming_iterator_hook(
                     user_api_key_dict=UserAPIKeyAuth(api_key="test"),  # no user_id
@@ -2648,9 +2506,7 @@ class TestStreamingIteratorHook:
 
         with (
             patch("litellm.main.stream_chunk_builder", return_value=assembled_response),
-            patch.object(
-                guardrail, "_check_content", new_callable=AsyncMock
-            ) as mock_check,
+            patch.object(guardrail, "_check_content", new_callable=AsyncMock) as mock_check,
         ):
             mock_check.return_value = {"policyActions": []}
 
@@ -2706,9 +2562,7 @@ class TestStreamingIteratorHook:
 
         with (
             patch("litellm.main.stream_chunk_builder") as mock_stream_builder,
-            patch.object(
-                guardrail, "_check_content", new_callable=AsyncMock
-            ) as mock_check,
+            patch.object(guardrail, "_check_content", new_callable=AsyncMock) as mock_check,
         ):
             mock_check.return_value = {"policyActions": []}
 
@@ -2768,11 +2622,10 @@ class TestStreamingIteratorHook:
             ),
         ):
             chunks = []
+
             async def _drain():
                 async for chunk in guardrail.async_post_call_streaming_iterator_hook(
-                    user_api_key_dict=UserAPIKeyAuth(
-                        api_key="test", user_id="user-123"
-                    ),
+                    user_api_key_dict=UserAPIKeyAuth(api_key="test", user_id="user-123"),
                     response=fake_response_stream(),
                     request_data={},
                 ):
@@ -2799,10 +2652,7 @@ class TestRegistration:
 
         assert "microsoft_purview" in guardrail_initializer_registry
         assert "microsoft_purview" in guardrail_class_registry
-        assert (
-            guardrail_class_registry["microsoft_purview"]
-            is MicrosoftPurviewDLPGuardrail
-        )
+        assert guardrail_class_registry["microsoft_purview"] is MicrosoftPurviewDLPGuardrail
 
 
 def test_responses_input_scan_includes_the_arguments_of_a_replayed_claude_tool_search():

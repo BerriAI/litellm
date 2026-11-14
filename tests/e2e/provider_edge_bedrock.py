@@ -46,9 +46,7 @@ class BedrockSigner:
     credentials: Callable[[], Credentials]
 
     def __call__(self, method: str, url: str, headers: Mapping[str, str], body: bytes | None) -> dict[str, str]:
-        unsigned: Final = {
-            name: value for name, value in headers.items() if name.lower() not in SIGNATURE_HEADERS
-        }
+        unsigned: Final = {name: value for name, value in headers.items() if name.lower() not in SIGNATURE_HEADERS}
         request: Final = AWSRequest(method=method, url=url, headers=unsigned, data=body or b"")
         SigV4Auth(self.credentials(), BEDROCK_SERVICE, self.region).add_auth(request)
         return dict(request.headers)

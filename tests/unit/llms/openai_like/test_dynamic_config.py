@@ -20,7 +20,6 @@ def _isolate_generated_class_cache():
 
 
 class TestClassCaching:
-
     def test_cache_is_keyed_on_slug_not_on_the_provider_instance(self):
         first = create_responses_config_class(_provider("cache_by_slug"))
         second = create_responses_config_class(_provider("cache_by_slug"))
@@ -143,7 +142,9 @@ class TestForceStoreFalse:
 
 class TestWebSearchRequestsFromToolUsage:
     def test_counts_only_paid_search_tools(self):
-        payload = {"usage": {"tool_usage": {"web_search": 2, "image_search": 1, "code_interpreter": 3, "web_extractor": 1}}}
+        payload = {
+            "usage": {"tool_usage": {"web_search": 2, "image_search": 1, "code_interpreter": 3, "web_extractor": 1}}
+        }
         assert dynamic_config.web_search_requests_from_tool_usage(payload) == 3
 
     @pytest.mark.parametrize(

@@ -36,12 +36,8 @@ class TestAzureServiceTierCostCalculation:
         """Priority tier should cost more than standard."""
         usage = Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
 
-        standard_prompt, standard_completion = cost_per_token(
-            model=TEST_MODEL, usage=usage
-        )
-        priority_prompt, priority_completion = cost_per_token(
-            model=TEST_MODEL, usage=usage, service_tier="priority"
-        )
+        standard_prompt, standard_completion = cost_per_token(model=TEST_MODEL, usage=usage)
+        priority_prompt, priority_completion = cost_per_token(model=TEST_MODEL, usage=usage, service_tier="priority")
 
         assert priority_prompt > standard_prompt
         assert priority_completion > standard_completion
@@ -50,12 +46,8 @@ class TestAzureServiceTierCostCalculation:
         """Flex tier should cost less than standard."""
         usage = Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
 
-        standard_prompt, standard_completion = cost_per_token(
-            model=TEST_MODEL, usage=usage
-        )
-        flex_prompt, flex_completion = cost_per_token(
-            model=TEST_MODEL, usage=usage, service_tier="flex"
-        )
+        standard_prompt, standard_completion = cost_per_token(model=TEST_MODEL, usage=usage)
+        flex_prompt, flex_completion = cost_per_token(model=TEST_MODEL, usage=usage, service_tier="flex")
 
         assert flex_prompt < standard_prompt
         assert flex_completion < standard_completion
@@ -64,12 +56,8 @@ class TestAzureServiceTierCostCalculation:
         """service_tier=None should return standard pricing."""
         usage = Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
 
-        none_prompt, none_completion = cost_per_token(
-            model=TEST_MODEL, usage=usage, service_tier=None
-        )
-        standard_prompt, standard_completion = cost_per_token(
-            model=TEST_MODEL, usage=usage, service_tier="standard"
-        )
+        none_prompt, none_completion = cost_per_token(model=TEST_MODEL, usage=usage, service_tier=None)
+        standard_prompt, standard_completion = cost_per_token(model=TEST_MODEL, usage=usage, service_tier="standard")
 
         assert abs(none_prompt - standard_prompt) < 1e-10
         assert abs(none_completion - standard_completion) < 1e-10

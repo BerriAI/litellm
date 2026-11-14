@@ -108,9 +108,7 @@ def _await_group_members(client: AccessControlClient, access_group: str, expecte
         if expected.issubset(listed):
             return
         time.sleep(client.proxy.poll_interval)
-    pytest.fail(
-        f"/access_group/{access_group}/info never listed {sorted(expected)} as members; last read {listed}"
-    )
+    pytest.fail(f"/access_group/{access_group}/info never listed {sorted(expected)} as members; last read {listed}")
 
 
 @pytest.fixture(scope="module")
@@ -149,9 +147,7 @@ def team_grant(client: AccessControlClient) -> Iterator[TeamGrant]:
     model_id: Final = client.proxy.register_model(
         ModelNewBody(
             model_name=TEAM_WILDCARD_PATTERN,
-            litellm_params=LiteLLMParamsBody(
-                model=TEAM_WILDCARD_PATTERN, api_key=_provider_key("OPENAI_API_KEY")
-            ),
+            litellm_params=LiteLLMParamsBody(model=TEAM_WILDCARD_PATTERN, api_key=_provider_key("OPENAI_API_KEY")),
             model_info=ModelInfoBody(team_id=team_id, access_groups=[access_group]),
         ),
         listed_for=key,
@@ -182,7 +178,11 @@ class TestKeyScopedToAccessGroup:
         Subject(
             domain=Domain.PROXY_AUTH,
             providers=(Provider.OPENAI,),
-            models=(GROUP_BACKEND, WILDCARD_BARE_MODEL, WILDCARD_PREFIXED_MODEL,),
+            models=(
+                GROUP_BACKEND,
+                WILDCARD_BARE_MODEL,
+                WILDCARD_PREFIXED_MODEL,
+            ),
             mode=Mode.NONSTREAM,
         )
     )
@@ -197,9 +197,7 @@ class TestKeyScopedToAccessGroup:
         key = resources.key(models=[grouped.access_group])
         model = select_model(grouped)
 
-        result = client.chat_status(
-            key, model, f"{PROMPT} {unique_marker()}", MAX_COMPLETION_TOKENS
-        )
+        result = client.chat_status(key, model, f"{PROMPT} {unique_marker()}", MAX_COMPLETION_TOKENS)
 
         assert result.status_code == 200, (
             f"a key holding access group {grouped.access_group!r} must be able to call "
@@ -214,7 +212,10 @@ class TestKeyScopedToAccessGroup:
     @meta(
         Subject(
             domain=Domain.PROXY_AUTH,
-            models=(GROUP_BACKEND, UNCOVERED_OPENAI_MODEL,),
+            models=(
+                GROUP_BACKEND,
+                UNCOVERED_OPENAI_MODEL,
+            ),
             mode=Mode.NONSTREAM,
         )
     )
@@ -229,9 +230,7 @@ class TestKeyScopedToAccessGroup:
         key = resources.key(models=[grouped.access_group])
         model = select_model(grouped)
 
-        result = client.chat_status(
-            key, model, f"{PROMPT} {unique_marker()}", MAX_COMPLETION_TOKENS
-        )
+        result = client.chat_status(key, model, f"{PROMPT} {unique_marker()}", MAX_COMPLETION_TOKENS)
 
         assert result.status_code == 403, (
             f"a key holding only access group {grouped.access_group!r} must be denied 403 on "
@@ -252,9 +251,7 @@ class TestTeamScopedToAccessGroup:
             mode=Mode.NONSTREAM,
         )
     )
-    def test_group_grants_the_teams_own_wildcard(
-        self, client: AccessControlClient, team_grant: TeamGrant
-    ) -> None:
+    def test_group_grants_the_teams_own_wildcard(self, client: AccessControlClient, team_grant: TeamGrant) -> None:
         result = client.chat_status(
             team_grant.key,
             TEAM_WILDCARD_BARE_MODEL,
@@ -278,14 +275,10 @@ class TestTeamScopedToAccessGroup:
             mode=Mode.NONSTREAM,
         )
     )
-    def test_group_grants_the_team_nothing_outside_it(
-        self, client: AccessControlClient, team_grant: TeamGrant
-    ) -> None:
+    def test_group_grants_the_team_nothing_outside_it(self, client: AccessControlClient, team_grant: TeamGrant) -> None:
         model = f"e2e-ag-unknown-{unique_marker()}"
 
-        result = client.chat_status(
-            team_grant.key, model, f"{PROMPT} {unique_marker()}", MAX_COMPLETION_TOKENS
-        )
+        result = client.chat_status(team_grant.key, model, f"{PROMPT} {unique_marker()}", MAX_COMPLETION_TOKENS)
 
         assert result.status_code == 403, (
             f"a team holding only access group {team_grant.access_group!r} must be denied 403 on "

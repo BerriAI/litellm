@@ -27,7 +27,6 @@ from litellm.proxy.proxy_server import ProxyConfig
 
 
 class TestDefaultTeamParamsFromSettingsStore:
-
     def _make_proxy_config(self) -> ProxyConfig:
         return ProxyConfig()
 

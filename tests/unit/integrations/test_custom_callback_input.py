@@ -73,9 +73,7 @@ def _provider_response(request: httpx.Request) -> httpx.Response:
                 "usage": {"prompt_tokens": 2, "completion_tokens": 3, "total_tokens": 5},
             },
         )
-        stream_body: Final = b"".join(
-            f"data: {json.dumps(chunk)}\n\n".encode() for chunk in audio_chunks
-        )
+        stream_body: Final = b"".join(f"data: {json.dumps(chunk)}\n\n".encode() for chunk in audio_chunks)
         return httpx.Response(
             200,
             headers={"content-type": "text/event-stream"},
@@ -129,9 +127,7 @@ def _provider_response(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
             200,
             json={
-                "candidates": [
-                    {"content": {"role": "model", "parts": [{"text": "Hello"}]}, "finishReason": "STOP"}
-                ],
+                "candidates": [{"content": {"role": "model", "parts": [{"text": "Hello"}]}, "finishReason": "STOP"}],
                 "usageMetadata": {"promptTokenCount": 2, "candidatesTokenCount": 1, "totalTokenCount": 3},
             },
         )
@@ -157,13 +153,13 @@ def _provider_response(request: httpx.Request) -> httpx.Response:
             200,
             headers={"content-type": "text/event-stream"},
             content=(
-                b'event: message_start\n'
+                b"event: message_start\n"
                 b'data: {"type":"message_start","message":{"id":"msg_test","type":"message","role":"assistant","content":[],"model":"claude-test","usage":{"input_tokens":2,"output_tokens":0}}}\n\n'
-                b'event: content_block_delta\n'
+                b"event: content_block_delta\n"
                 b'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}\n\n'
-                b'event: message_delta\n'
+                b"event: message_delta\n"
                 b'data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}\n\n'
-                b'event: message_stop\n'
+                b"event: message_stop\n"
                 b'data: {"type":"message_stop"}\n\n'
             ),
         )
@@ -206,9 +202,7 @@ def _provider_response(request: httpx.Request) -> httpx.Response:
             "object": "chat.completion",
             "created": 1700000000,
             "model": body.get("model", "test-model"),
-            "choices": [
-                {"index": 0, "message": {"role": "assistant", "content": "Hello"}, "finish_reason": "stop"}
-            ],
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "Hello"}, "finish_reason": "stop"}],
             "usage": {"prompt_tokens": 2, "completion_tokens": 1, "total_tokens": 3},
         },
     )
@@ -432,16 +426,16 @@ async def test_standard_logging_payload_stream_usage(
         stream=True,
     )
     chunks: Final = tuple([chunk async for chunk in response])
-    await _assert_success_payload(callback_capture, "anthropic/claude-test", [{"role": "user", "content": "usage marker"}])
+    await _assert_success_payload(
+        callback_capture, "anthropic/claude-test", [{"role": "user", "content": "usage marker"}]
+    )
     assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == "Hello"
     event: Final = callback_capture.async_success.call_args.kwargs["kwargs"]
     assert event["standard_logging_object"]["total_tokens"] == 3
 
 
 @pytest.mark.asyncio
-async def test_async_chat_openai_stream(
-    provider_router: respx.MockRouter, callback_capture: _CallbackCapture
-) -> None:
+async def test_async_chat_openai_stream(provider_router: respx.MockRouter, callback_capture: _CallbackCapture) -> None:
     messages: Final = [{"role": "user", "content": "async stream marker"}]
     response: Final = await litellm.acompletion(model="gpt-4o-mini", messages=messages, stream=True)
     chunks: Final = tuple([chunk async for chunk in response])
@@ -471,7 +465,9 @@ async def test_async_custom_handler_completion(
 async def test_async_custom_handler_embedding(
     provider_router: respx.MockRouter, callback_capture: _CallbackCapture
 ) -> None:
-    response: Final = await litellm.aembedding(model="text-embedding-3-small", input=["custom handler embedding marker"])
+    response: Final = await litellm.aembedding(
+        model="text-embedding-3-small", input=["custom handler embedding marker"]
+    )
     await _assert_success_payload(callback_capture, "text-embedding-3-small", None, "custom handler embedding marker")
     assert response.usage.prompt_tokens == 2
 
@@ -551,9 +547,7 @@ async def test_chat_azure_stream(provider_router: respx.MockRouter, callback_cap
 
 
 @pytest.mark.asyncio
-async def test_async_chat_azure_stream(
-    provider_router: respx.MockRouter, callback_capture: _CallbackCapture
-) -> None:
+async def test_async_chat_azure_stream(provider_router: respx.MockRouter, callback_capture: _CallbackCapture) -> None:
     response: Final = await litellm.acompletion(
         model="azure/gpt-4o-mini",
         messages=[{"role": "user", "content": "async azure marker"}],
@@ -561,7 +555,9 @@ async def test_async_chat_azure_stream(
         api_base="https://provider.test/v1",
     )
     tuple([chunk async for chunk in response])
-    await _assert_success_payload(callback_capture, "azure/gpt-4o-mini", [{"role": "user", "content": "async azure marker"}])
+    await _assert_success_payload(
+        callback_capture, "azure/gpt-4o-mini", [{"role": "user", "content": "async azure marker"}]
+    )
 
 
 @pytest.mark.asyncio
@@ -580,9 +576,7 @@ async def test_async_chat_openai_stream_options(
 
 
 @pytest.mark.asyncio
-async def test_standard_logging_payload(
-    provider_router: respx.MockRouter, callback_capture: _CallbackCapture
-) -> None:
+async def test_standard_logging_payload(provider_router: respx.MockRouter, callback_capture: _CallbackCapture) -> None:
     messages: Final = [{"role": "user", "content": "standard marker"}]
     response: Final = await litellm.acompletion(
         model="gpt-4o-mini",
@@ -674,13 +668,9 @@ def test_logging_cache_hit_sync_stream_call(
     monkeypatch.setattr(litellm, "cache", litellm.Cache(type="local"))
     monkeypatch.setattr(litellm, "turn_off_message_logging", turn_off_message_logging)
     messages: Final = [{"role": "user", "content": "sync cache marker"}]
-    first_chunks: Final = tuple(
-        litellm.completion(model="gpt-4o-mini", messages=messages, caching=True, stream=True)
-    )
+    first_chunks: Final = tuple(litellm.completion(model="gpt-4o-mini", messages=messages, caching=True, stream=True))
     assert callback_capture.sync_logged.acquire(timeout=5)
-    second_chunks: Final = tuple(
-        litellm.completion(model="gpt-4o-mini", messages=messages, caching=True, stream=True)
-    )
+    second_chunks: Final = tuple(litellm.completion(model="gpt-4o-mini", messages=messages, caching=True, stream=True))
     assert callback_capture.sync_logged.acquire(timeout=5)
     assert "".join(chunk.choices[0].delta.content or "" for chunk in first_chunks) == "Hello"
     assert "".join(chunk.choices[0].delta.content or "" for chunk in second_chunks) == "Hello"
@@ -749,9 +739,7 @@ async def test_standard_logging_payload_audio(
     if stream:
         _ = [chunk async for chunk in response]
     assert json.loads(provider_router.calls[0].request.content)["model"] == "gpt-4o-audio-preview"
-    await _assert_success_payload(
-        callback_capture, "gpt-4o-audio-preview", None, call_id=callback_capture.call_id
-    )
+    await _assert_success_payload(callback_capture, "gpt-4o-audio-preview", None, call_id=callback_capture.call_id)
     call: Final = callback_capture.async_success.call_args or callback_capture.sync_success.call_args
     standard: Final = call.kwargs["kwargs"]["standard_logging_object"]
     assert standard["model"] == "gpt-4o-audio-preview"

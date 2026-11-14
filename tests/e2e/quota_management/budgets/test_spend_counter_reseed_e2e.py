@@ -153,9 +153,7 @@ def _accumulate(client: BudgetClient, key: str, count: int) -> None:
         mode=Mode.NONSTREAM,
     )
 )
-def test_cold_counter_reseed_keeps_counter_equal_to_db_spend(
-    client: BudgetClient, resources: ResourceManager
-) -> None:
+def test_cold_counter_reseed_keeps_counter_equal_to_db_spend(client: BudgetClient, resources: ResourceManager) -> None:
     try:
         rds = _redis()
         rds.ping()

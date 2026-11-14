@@ -111,9 +111,7 @@ class TestModelAccessGroupBudget:
             mode=Mode.NONSTREAM,
         )
     )
-    def test_the_key_that_drained_the_pool_stays_blocked(
-        self, client: BudgetClient, drained: DrainedPool
-    ) -> None:
+    def test_the_key_that_drained_the_pool_stays_blocked(self, client: BudgetClient, drained: DrainedPool) -> None:
         result = _call(client, drained.spender_key, drained.model)
         assert is_budget_block(result), (
             f"an exhausted pool served {drained.model!r} again: {result.status_code} {result.body[:300]}"

@@ -397,9 +397,7 @@ def _forbidden_surface_request(
         case "file_content_encoded":
             return gateway.request("GET", f"/v1/files/{encoded_file}/content", key=caller_key)
         case "file_content_query":
-            return gateway.request(
-                "GET", f"/v1/files/{raw_file}/content", key=caller_key, params={"model": forbidden}
-            )
+            return gateway.request("GET", f"/v1/files/{raw_file}/content", key=caller_key, params={"model": forbidden})
         case "file_content_header":
             return gateway.request(
                 "GET", f"/v1/files/{raw_file}/content", key=caller_key, headers={"x-litellm-model": forbidden}
@@ -556,7 +554,9 @@ def test_indexed_target_model_upload_cannot_use_a_forbidden_deployment(gateway: 
 
 
 def test_repeated_target_model_upload_cannot_use_a_forbidden_deployment(gateway: Gateway) -> None:
-    pytest.skip("BUG: repeated target_model_names[] upload bypasses the key's model restriction and reaches the deployment")
+    pytest.skip(
+        "BUG: repeated target_model_names[] upload bypasses the key's model restriction and reaches the deployment"
+    )
     key_allowed: Final = "provider-key-allowed-" + uuid.uuid4().hex[:8]
     key_forbidden: Final = "provider-key-forbidden-" + uuid.uuid4().hex[:8]
     with wire_server(_openai_backend()) as wire, gateway.scenario() as scenario:
@@ -786,7 +786,9 @@ def _assert_signed_empty_body_s3_request(request: Request, method: Literal["GET"
     )
     aws_request.context["timestamp"] = request_date
     auth: Final = S3SigV4Auth(Credentials(AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY), "s3", AWS_REGION)
-    signature: Final = auth.signature(auth.string_to_sign(aws_request, auth.canonical_request(aws_request)), aws_request)
+    signature: Final = auth.signature(
+        auth.string_to_sign(aws_request, auth.canonical_request(aws_request)), aws_request
+    )
     expected_authorization: Final = (
         f"AWS4-HMAC-SHA256 Credential={AWS_ACCESS_KEY_ID}/{request_date[:8]}/{AWS_REGION}/s3/aws4_request, "
         f"SignedHeaders={auth.signed_headers(auth.headers_to_sign(aws_request))}, Signature={signature}"
@@ -899,9 +901,7 @@ def _queued(queue: SimpleQueue[str]) -> tuple[str, ...]:
 
 
 @pytest.mark.timeout(180)
-def test_proxy_admin_deletes_a_raw_gcs_uri_with_one_authorized_storage_delete(
-    gateway: Gateway, tmp_path: Path
-) -> None:
+def test_proxy_admin_deletes_a_raw_gcs_uri_with_one_authorized_storage_delete(gateway: Gateway, tmp_path: Path) -> None:
     cert_file, key_file = write_self_signed_cert(tmp_path, (GCS_HOST,))
     object_name: Final = f"litellm-vertex-files/admin-{uuid.uuid4().hex}.jsonl"
     object_uri: Final = f"gs://{BUCKET}/{object_name}"
@@ -922,9 +922,7 @@ def test_proxy_admin_deletes_a_raw_gcs_uri_with_one_authorized_storage_delete(
         )
         token_wire.drain()
 
-        deleted: Final = candidate.request(
-            "DELETE", "/v1/files/" + quote(object_uri, safe=""), params={"model": model}
-        )
+        deleted: Final = candidate.request("DELETE", "/v1/files/" + quote(object_uri, safe=""), params={"model": model})
         storage_requests: Final = storage.drain()
         assert deleted.status_code == 200, f"{deleted.text}; storage requests={storage_requests}"
         parsed: Final = _FileDeleted.model_validate_json(deleted.content)
@@ -932,7 +930,7 @@ def test_proxy_admin_deletes_a_raw_gcs_uri_with_one_authorized_storage_delete(
         assert [(r.method, r.target) for r in storage_requests] == [
             ("DELETE", f"/storage/v1/b/{BUCKET}/o/{quote(object_name, safe='')}")
         ], storage_requests
-        assert storage_requests[0].headers["authorization"] == f"Bearer {VERTEX_ACCESS_TOKEN}", (
-            storage_requests[0].headers
-        )
+        assert storage_requests[0].headers["authorization"] == f"Bearer {VERTEX_ACCESS_TOKEN}", storage_requests[
+            0
+        ].headers
         assert _queued(tunnel.authorities) == (GCS_AUTHORITY,), "raw GCS delete took an unexpected route"

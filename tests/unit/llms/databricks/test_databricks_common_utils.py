@@ -21,9 +21,7 @@ from litellm.llms.databricks.common_utils import DatabricksBase, DatabricksExcep
 def test_databricks_validate_environment():
     databricks_base = DatabricksBase()
 
-    with patch.object(
-        databricks_base, "_get_databricks_credentials"
-    ) as mock_get_credentials:
+    with patch.object(databricks_base, "_get_databricks_credentials") as mock_get_credentials:
         try:
             databricks_base.databricks_validate_environment(
                 api_key=None,

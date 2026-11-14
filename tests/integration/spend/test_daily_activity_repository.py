@@ -684,9 +684,7 @@ async def test_user_page_ranks_users_and_folds_null_ids() -> None:
         repository: Final = _repository(database)
         full_page: Final = await repository.user_page(scope, offset=0, limit=50)
         empty_page: Final = await repository.user_page(scope, offset=full_page.total_users + 1, limit=50)
-        scoped_page: Final = await repository.user_page(
-            replace(scope, entity_ids=("user-alpha",)), offset=0, limit=50
-        )
+        scoped_page: Final = await repository.user_page(replace(scope, entity_ids=("user-alpha",)), offset=0, limit=50)
 
         assert tuple((row.user_id, row.spend) for row in full_page.rows) == (
             (None, 45.0),

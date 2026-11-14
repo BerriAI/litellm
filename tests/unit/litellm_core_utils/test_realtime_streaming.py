@@ -2095,7 +2095,11 @@ async def test_the_next_clean_turn_is_answered_after_a_blocked_item_with_no_resp
     monkeypatch.setattr(
         litellm,
         "callbacks",
-        [SecretBlockingGuardrail(guardrail_name="no-secrets", event_hook=GuardrailEventHooks.pre_call, default_on=True)],
+        [
+            SecretBlockingGuardrail(
+                guardrail_name="no-secrets", event_hook=GuardrailEventHooks.pre_call, default_on=True
+            )
+        ],
     )
     client_ws: Final = MagicMock()
     client_ws.send_text = AsyncMock()
@@ -3058,7 +3062,9 @@ async def test_default_mode_merges_every_session_update_sent_before_the_first_co
     instructions_update = json.dumps({"type": "session.update", "session": {"instructions": "Be brief."}})
     modalities_update = json.dumps({"type": "session.update", "session": {"modalities": ["text"]}})
     streaming, backend_ws = _gemini_default_mode_streaming(
-        monkeypatch, [instructions_update, modalities_update, _TEXT_ITEM_CREATE, _RESPONSE_CREATE], model="gemini-live-2.5-flash"
+        monkeypatch,
+        [instructions_update, modalities_update, _TEXT_ITEM_CREATE, _RESPONSE_CREATE],
+        model="gemini-live-2.5-flash",
     )
 
     await streaming.client_ack_messages()
@@ -3161,9 +3167,7 @@ async def test_default_mode_drops_a_late_session_update_quietly_under_drop_param
     ],
 )
 async def test_default_mode_rejects_an_output_modality_the_model_cannot_produce(monkeypatch, model, requested_output):
-    update: Final = json.dumps(
-        {"type": "session.update", "session": {**requested_output, "instructions": "Be brief."}}
-    )
+    update: Final = json.dumps({"type": "session.update", "session": {**requested_output, "instructions": "Be brief."}})
     streaming, backend_ws = _gemini_default_mode_streaming(monkeypatch, [update, _TEXT_ITEM_CREATE], model=model)
 
     await streaming.client_ack_messages()
@@ -3238,7 +3242,9 @@ async def test_default_mode_folds_transcription_guardrail_vad_disable_into_the_m
         {"type": "session.update", "session": {"turn_detection": {"type": "server_vad", "silence_duration_ms": 900}}}
     )
     streaming, backend_ws = _gemini_default_mode_streaming(
-        monkeypatch, [instructions_update, vad_update, _TEXT_ITEM_CREATE, _RESPONSE_CREATE], model="gemini-live-2.5-flash"
+        monkeypatch,
+        [instructions_update, vad_update, _TEXT_ITEM_CREATE, _RESPONSE_CREATE],
+        model="gemini-live-2.5-flash",
     )
 
     await streaming.client_ack_messages()
@@ -3337,7 +3343,9 @@ async def test_default_mode_sends_the_held_setup_when_no_content_arrives_before_
     backend_ws: Final = MagicMock()
     backend_ws.send = AsyncMock(side_effect=lambda frame: setup_sent.set())
     streaming: Final = RealTimeStreaming(
-        _client_ws_receiving(instructions_update_then_the_deadline_passes, late_update_once_the_setup_is_out, disconnect),
+        _client_ws_receiving(
+            instructions_update_then_the_deadline_passes, late_update_once_the_setup_is_out, disconnect
+        ),
         backend_ws,
         MagicMock(),
         provider_config=GeminiRealtimeConfig(),
@@ -3365,7 +3373,12 @@ async def test_default_mode_refuses_held_session_updates_past_the_size_cap(monke
     half_the_cap: Final = RealTimeStreaming._MAX_BUFFERED_BYTES // 2
     streaming, backend_ws = _gemini_default_mode_streaming(
         monkeypatch,
-        [instructions_update("a" * half_the_cap), instructions_update("b" * half_the_cap), _TEXT_ITEM_CREATE, _RESPONSE_CREATE],
+        [
+            instructions_update("a" * half_the_cap),
+            instructions_update("b" * half_the_cap),
+            _TEXT_ITEM_CREATE,
+            _RESPONSE_CREATE,
+        ],
         model="gemini-live-2.5-flash",
     )
 
@@ -3468,7 +3481,9 @@ async def test_default_mode_acknowledges_an_unchanged_session_update_after_conte
         {"type": "session.update", "session": {"modalities": ["text"], "instructions": "Be brief."}}
     )
     streaming, backend_ws = _gemini_default_mode_streaming(
-        monkeypatch, [session_update, _TEXT_ITEM_CREATE, _RESPONSE_CREATE, session_update], model="gemini-live-2.5-flash"
+        monkeypatch,
+        [session_update, _TEXT_ITEM_CREATE, _RESPONSE_CREATE, session_update],
+        model="gemini-live-2.5-flash",
     )
 
     await streaming.client_ack_messages()

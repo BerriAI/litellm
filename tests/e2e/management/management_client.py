@@ -256,6 +256,7 @@ class ManagementClient:
                 response_type=NoBody,
             )
         )
+
     @step("Regenerate the virtual key with /key/regenerate")
     def regenerate_key(self, key: str, *, grace_period: str | None = None) -> str:
         return unwrap(

@@ -60,7 +60,9 @@ def test_customer_per_model_rpm_limit_is_shared_across_keys_and_isolated_per_cus
     (("model_rpm_limit", "model_per_end_user"), ("rpm_limit", "end_user")),
     ids=("customer-model", "customer-wide"),
 )
-def test_customer_rate_limit_429_names_the_limit_in_a_header(gateway: Gateway, limit_field: str, limited_by: str) -> None:
+def test_customer_rate_limit_429_names_the_limit_in_a_header(
+    gateway: Gateway, limit_field: str, limited_by: str
+) -> None:
     with gateway.scenario() as scenario:
         capped: Final = scenario.model()
         customer: Final = _customer(scenario, **{limit_field: {capped: 1} if limit_field.startswith("model_") else 1})

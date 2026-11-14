@@ -43,9 +43,7 @@ def scratch_schema(monkeypatch):
     schema = f"replica_identity_{uuid.uuid4().hex[:8]}"
     with psycopg.connect(_base_url(), autocommit=True) as conn:
         conn.execute(f'CREATE SCHEMA "{schema}"')
-        conn.execute(
-            f'CREATE TABLE "{schema}"."LiteLLM_ScratchTable" (id TEXT PRIMARY KEY, note TEXT)'
-        )
+        conn.execute(f'CREATE TABLE "{schema}"."LiteLLM_ScratchTable" (id TEXT PRIMARY KEY, note TEXT)')
         conn.execute(f'CREATE TABLE "{schema}"."LiteLLM_ScratchSibling" (id TEXT PRIMARY KEY)')
         conn.execute(f'CREATE TABLE "{schema}"."ScratchForeignTable" (id TEXT PRIMARY KEY)')
 
@@ -113,9 +111,3 @@ def test_reports_failure_without_raising(scratch_schema, monkeypatch):
 
     assert ProxyExtrasDBManager.apply_replica_identity_full_if_requested() is False
     assert _replica_identities(scratch_schema)["LiteLLM_ScratchTable"] == "d"
-
-
-
-
-
-

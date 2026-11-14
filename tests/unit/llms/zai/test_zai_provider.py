@@ -75,9 +75,7 @@ async def test_zai_completion_call(respx_mock, zai_response, monkeypatch):
     monkeypatch.setenv("ZAI_API_KEY", "test-api-key")
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
 
-    respx_mock.post("https://api.z.ai/api/paas/v4/chat/completions").respond(
-        json=zai_response
-    )
+    respx_mock.post("https://api.z.ai/api/paas/v4/chat/completions").respond(json=zai_response)
 
     response = await litellm.acompletion(
         model="zai/glm-4.6",
@@ -101,9 +99,7 @@ def test_zai_sync_completion(respx_mock, zai_response, monkeypatch):
     monkeypatch.setenv("ZAI_API_KEY", "test-api-key")
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
 
-    respx_mock.post("https://api.z.ai/api/paas/v4/chat/completions").respond(
-        json=zai_response
-    )
+    respx_mock.post("https://api.z.ai/api/paas/v4/chat/completions").respond(json=zai_response)
 
     response = completion(
         model="zai/glm-4.6",
@@ -262,9 +258,7 @@ def test_zai_glm_5v_turbo_bills_cached_input_at_cache_read_price(local_model_cos
     prompt_cost, _ = cost_per_token(model="glm-5v-turbo", custom_llm_provider="zai", usage_object=usage)
 
     entry: Final = litellm.model_cost["zai/glm-5v-turbo"]
-    assert math.isclose(
-        prompt_cost, 200 * entry["input_cost_per_token"] + 800 * entry["cache_read_input_token_cost"]
-    )
+    assert math.isclose(prompt_cost, 200 * entry["input_cost_per_token"] + 800 * entry["cache_read_input_token_cost"])
 
 
 @pytest.mark.parametrize("model", ["glm-5v-turbo", "GLM-5V-Turbo", "GLM-5.3", "GLM-5.3-Flash"])

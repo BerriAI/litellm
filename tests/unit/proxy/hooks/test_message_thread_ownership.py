@@ -49,7 +49,9 @@ def sent_with(anthropic_beta: str, **data: object) -> dict[str, object]:
         litellm_call_id="call",
         function_id="function",
     )
-    sent: Final = httpx.Request("POST", "https://api.anthropic.com/v1/messages", headers={"anthropic-beta": anthropic_beta})
+    sent: Final = httpx.Request(
+        "POST", "https://api.anthropic.com/v1/messages", headers={"anthropic-beta": anthropic_beta}
+    )
     logging_obj.model_call_details["httpx_response"] = httpx.Response(200, request=sent)
     logging_obj.post_call(original_response="{}", additional_args={"complete_input_dict": {}})
     return {**data, "litellm_logging_obj": logging_obj}
@@ -395,7 +397,10 @@ async def test_the_create_turns_betas_reach_every_later_turn_of_the_thread() -> 
     items: Final = (sse_frame(message_start("msg_streamed_first")), sse_frame({"type": "message_stop"}))
     await served(ownership, items, sent_with("advisor-tool-2026-03-01,message-threads-2026-08-12", thread=CREATE))
     second: Final = await ownership.async_pre_call_hook(
-        user_api_key_dict=OWNER, cache=DualCache(), data=continue_from("msg_streamed_first"), call_type="anthropic_messages"
+        user_api_key_dict=OWNER,
+        cache=DualCache(),
+        data=continue_from("msg_streamed_first"),
+        call_type="anthropic_messages",
     )
     assert second is not None
     second_headers: Final = second["extra_headers"]
@@ -406,7 +411,10 @@ async def test_the_create_turns_betas_reach_every_later_turn_of_the_thread() -> 
         response=anthropic_message("msg_second_turn"),
     )
     third: Final = await ownership.async_pre_call_hook(
-        user_api_key_dict=OWNER, cache=DualCache(), data=continue_from("msg_second_turn"), call_type="anthropic_messages"
+        user_api_key_dict=OWNER,
+        cache=DualCache(),
+        data=continue_from("msg_second_turn"),
+        call_type="anthropic_messages",
     )
 
     assert third is not None
@@ -432,7 +440,10 @@ async def test_a_continue_on_chat_or_responses_resends_the_betas_its_create_turn
     assert continued["extra_headers"] == {"anthropic-beta": "advisor-tool-2026-03-01,message-threads-2026-08-12"}
 
 
-CLIENT_BETAS: Final = {"custom_llm_provider": "anthropic,azure_ai", "extra_headers": {"anthropic-beta": "context-1m-2025-08-07"}}
+CLIENT_BETAS: Final = {
+    "custom_llm_provider": "anthropic,azure_ai",
+    "extra_headers": {"anthropic-beta": "context-1m-2025-08-07"},
+}
 CLIENT_VERSION: Final = {"custom_llm_provider": "anthropic", "extra_headers": {"anthropic-version": "2023-06-01"}}
 CLIENT_BETAS_WITH_THE_CREATES: Final = {
     "custom_llm_provider": "anthropic,azure_ai",
@@ -503,7 +514,9 @@ async def test_thread_bindings_never_push_the_proxys_rate_limit_counters_out_of_
             data={"thread": CREATE}, user_api_key_dict=OWNER, response=anthropic_message(f"msg_{turn}")
         )
 
-    assert await proxy_logging.internal_usage_cache.async_get_cache(key="rpm-counter", litellm_parent_otel_span=None) == 1
+    assert (
+        await proxy_logging.internal_usage_cache.async_get_cache(key="rpm-counter", litellm_parent_otel_span=None) == 1
+    )
     assert await allows(ownership, OWNER, "msg_0")
 
 

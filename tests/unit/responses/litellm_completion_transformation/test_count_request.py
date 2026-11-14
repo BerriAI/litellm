@@ -88,7 +88,12 @@ async def test_claude_count_request_counts_additional_tools_input_items_as_tools
     hoisted: Final = await _claude_count(
         {
             "input": [
-                {"type": "additional_tools", "role": "developer", "content": "Reply PINEAPPLE.", "tools": [_WEATHER_TOOL]},
+                {
+                    "type": "additional_tools",
+                    "role": "developer",
+                    "content": "Reply PINEAPPLE.",
+                    "tools": [_WEATHER_TOOL],
+                },
                 _QUESTION,
             ]
         },
@@ -138,7 +143,13 @@ async def test_claude_count_request_rejects_a_malformed_tool_flag_without_drop_p
 @pytest.mark.asyncio
 async def test_claude_count_request_leaves_a_non_string_role_for_the_count_endpoint_to_judge() -> None:
     counted: Final = await _claude_count(
-        {"input": [{"type": "additional_tools", "tools": [_WEATHER_TOOL]}, _QUESTION, {"role": ["user"], "content": "?"}]},
+        {
+            "input": [
+                {"type": "additional_tools", "tools": [_WEATHER_TOOL]},
+                _QUESTION,
+                {"role": ["user"], "content": "?"},
+            ]
+        },
         DropPolicy(drop_params=False, additional_drop_params=frozenset()),
     )
 

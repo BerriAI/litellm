@@ -43,9 +43,7 @@ async def test_team_model_authz_matrix(
     actors,
 ):
     initial = [] if route == "add" else [_MARKER_MODEL]
-    await create_scratch_team(
-        db, resources.prefix, organization_id=actors.org_a_id, models=initial
-    )
+    await create_scratch_team(db, resources.prefix, organization_id=actors.org_a_id, models=initial)
     caller = actors.keys[actor]
 
     resp = await gateway_client.post(
@@ -53,13 +51,9 @@ async def test_team_model_authz_matrix(
         headers={"Authorization": f"Bearer {caller.cleartext}"},
         json={"team_id": resources.prefix, "models": [_MARKER_MODEL]},
     )
-    assert (
-        resp.status_code == expected_status
-    ), f"{route} {actor.value}: {resp.status_code} {resp.text}"
+    assert resp.status_code == expected_status, f"{route} {actor.value}: {resp.status_code} {resp.text}"
 
-    row = await db.db.litellm_teamtable.find_unique(
-        where={"team_id": resources.prefix}
-    )
+    row = await db.db.litellm_teamtable.find_unique(where={"team_id": resources.prefix})
     assert row is not None
     if expected_status == 200:
         assert (_MARKER_MODEL in row.models) is (route == "add")

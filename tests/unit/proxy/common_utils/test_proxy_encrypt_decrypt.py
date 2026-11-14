@@ -21,9 +21,7 @@ def test_encrypt_decrypt_with_master_key():
     assert decrypt_value_helper(encrypt_value_helper(10), key="test_key") == 10
     assert decrypt_value_helper(encrypt_value_helper(True), key="test_key") is True
     assert decrypt_value_helper(encrypt_value_helper(None), key="test_key") is None
-    assert decrypt_value_helper(encrypt_value_helper({"rpm": 10}), key="test_key") == {
-        "rpm": 10
-    }
+    assert decrypt_value_helper(encrypt_value_helper({"rpm": 10}), key="test_key") == {"rpm": 10}
 
     # encryption should actually occur for strings
     assert encrypt_value_helper("test") != "test"
@@ -36,9 +34,7 @@ def test_encrypt_decrypt_with_salt_key():
     assert decrypt_value_helper(encrypt_value_helper(10), key="test_key") == 10
     assert decrypt_value_helper(encrypt_value_helper(True), key="test_key") is True
     assert decrypt_value_helper(encrypt_value_helper(None), key="test_key") is None
-    assert decrypt_value_helper(encrypt_value_helper({"rpm": 10}), key="test_key") == {
-        "rpm": 10
-    }
+    assert decrypt_value_helper(encrypt_value_helper({"rpm": 10}), key="test_key") == {"rpm": 10}
 
     # encryption should actually occur for strings
     assert encrypt_value_helper("test") != "test"

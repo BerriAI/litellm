@@ -132,10 +132,7 @@ class TestBedrockCountTokensEndpoint:
             model="amazon.nova-lite-v1:0",
             aws_region_name="us-east-1",
         )
-        assert (
-            url
-            == "https://bedrock-runtime.us-east-1.amazonaws.com/model/amazon.nova-lite-v1%3A0/count-tokens"
-        )
+        assert url == "https://bedrock-runtime.us-east-1.amazonaws.com/model/amazon.nova-lite-v1%3A0/count-tokens"
 
     def test_api_base_overrides_default(self):
         handler = self._make_handler()
@@ -149,9 +146,7 @@ class TestBedrockCountTokensEndpoint:
 
     def test_aws_bedrock_runtime_endpoint_overrides_default(self):
         handler = self._make_handler()
-        custom_endpoint = (
-            "https://vpce-yyy.bedrock-runtime.eu-west-1.vpce.amazonaws.com"
-        )
+        custom_endpoint = "https://vpce-yyy.bedrock-runtime.eu-west-1.vpce.amazonaws.com"
         url = handler.get_bedrock_count_tokens_endpoint(
             model="amazon.nova-lite-v1:0",
             aws_region_name="eu-west-1",
@@ -181,6 +176,4 @@ class TestBedrockCountTokensEndpoint:
             model="amazon.nova-lite-v1:0",
             aws_region_name="us-west-2",
         )
-        assert url.startswith(
-            "https://env-endpoint.bedrock-runtime.us-west-2.amazonaws.com"
-        )
+        assert url.startswith("https://env-endpoint.bedrock-runtime.us-west-2.amazonaws.com")

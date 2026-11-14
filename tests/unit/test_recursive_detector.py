@@ -18,7 +18,18 @@ def detector() -> ModuleType:
 
 @pytest.mark.parametrize(
     "source_dir",
-    ("cli", "deploy", "enterprise", "packaging", "proxy-extras", "runtime", "rust", "scripts", "ui", "vscode-extension"),
+    (
+        "cli",
+        "deploy",
+        "enterprise",
+        "packaging",
+        "proxy-extras",
+        "runtime",
+        "rust",
+        "scripts",
+        "ui",
+        "vscode-extension",
+    ),
 )
 def test_workspace_sources_do_not_hide_sdk_recursion(detector: ModuleType, tmp_path: Path, source_dir: str) -> None:
     workspace: Final = tmp_path / source_dir

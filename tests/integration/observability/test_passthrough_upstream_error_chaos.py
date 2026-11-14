@@ -113,7 +113,8 @@ async def _fire_burst(
 
     async with httpx.AsyncClient(base_url=base_url, timeout=30, trust_env=False) as client:
         results: Final = await asyncio.gather(
-            *(one(client, index) for index in range(start_index, start_index + count)), return_exceptions=tolerate_transport_errors
+            *(one(client, index) for index in range(start_index, start_index + count)),
+            return_exceptions=tolerate_transport_errors,
         )
     for result in results:
         assert not isinstance(result, BaseException) or isinstance(result, httpx.TransportError), repr(result)
@@ -166,7 +167,9 @@ async def test_passthrough_worker_sigkill_leaves_sibling_serving_and_logging(gat
                 try:
                     with owned.suspended(workers[0]):
                         seed: Final = tasks.create_task(
-                            _fire_burst(str(candidate.client.base_url), candidate.key, 1, tolerate_transport_errors=True)
+                            _fire_burst(
+                                str(candidate.client.base_url), candidate.key, 1, tolerate_transport_errors=True
+                            )
                         )
                         await asyncio.to_thread(eventually, lambda: wire.received.qsize(), lambda size: size >= 1, 30)
                     with owned.suspended(workers[1]):

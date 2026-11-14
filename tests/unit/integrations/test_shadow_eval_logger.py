@@ -186,7 +186,9 @@ def _reasoning_judge_router(
     return router
 
 
-def _judge_reply_router(content: str | None, finish_reason: str = "stop", served_model: str = "judge-pick") -> MagicMock:
+def _judge_reply_router(
+    content: str | None, finish_reason: str = "stop", served_model: str = "judge-pick"
+) -> MagicMock:
     """A router whose judge arm returns a caller-shaped reply, so the shapes that all land
     on the same parser error can be posed apart: no content at all, versus JSON cut off
     mid-object."""
@@ -200,7 +202,9 @@ def _judge_reply_router(content: str | None, finish_reason: str = "stop", served
             return {"choices": [{"message": {"content": "shadow answer"}}]}
         return ModelResponse(
             model=served_model,
-            choices=[{"index": 0, "finish_reason": finish_reason, "message": {"role": "assistant", "content": content}}],
+            choices=[
+                {"index": 0, "finish_reason": finish_reason, "message": {"role": "assistant", "content": content}}
+            ],
         )
 
     router.acompletion = MagicMock(side_effect=acompletion)
@@ -657,9 +661,7 @@ class TestSurfaceNormalization:
         ],
         ids=["tool-final-chat-turn", "tool-final-responses-turn"],
     )
-    async def test_a_tool_final_turn_is_sampled_and_serialized_for_the_judge(
-        self, response_mutation, kwargs_mutation
-    ):
+    async def test_a_tool_final_turn_is_sampled_and_serialized_for_the_judge(self, response_mutation, kwargs_mutation):
         """A turn where the real model called a tool used to be dropped before sampling, on
         every surface. On agentic traffic that is most of the traffic, so a job set to
         sample 10% was really sampling 10% of the prose-only slice and calling it 10% of
@@ -775,7 +777,8 @@ class TestSurfaceNormalization:
         }
         snapshot: Final = (
             GuardrailRequestSnapshot.capture(body, {"standard_logging_guardrail_information": history})
-            if checkpoint in ("approved", "corrupt") else None
+            if checkpoint in ("approved", "corrupt")
+            else None
         )
         if checkpoint == "corrupt":
             assert snapshot is None
@@ -829,11 +832,15 @@ class TestSurfaceNormalization:
             "model": "model",
             "input" if is_responses else "messages": [live_message],
             "max_output_tokens" if is_responses else "max_tokens": 123,
-            **({} if remove_optional_fields else {
-                "instructions" if is_responses else "system": "approved system",
-                "tools": [live_tool],
-                "temperature": 0.2,
-            }),
+            **(
+                {}
+                if remove_optional_fields
+                else {
+                    "instructions" if is_responses else "system": "approved system",
+                    "tools": [live_tool],
+                    "temperature": 0.2,
+                }
+            ),
         }
         snapshot: Final = GuardrailRequestSnapshot.capture(data, metadata)
         assert snapshot is not None
@@ -863,12 +870,21 @@ class TestSurfaceNormalization:
         ) + [{"role": "user", "content": "approved input"}]
         assert shadow_call["max_tokens"] == 123
         assert {key: shadow_call[key] for key in ("tools", "temperature") if key in shadow_call} == (
-            {} if remove_optional_fields else {
+            {}
+            if remove_optional_fields
+            else {
                 "temperature": 0.2,
-                "tools": [{"type": "function", "function": {
-                    "name": "approved_tool", "description": "approved tool", "strict": False,
-                    "parameters": {"type": "object", "properties": {}},
-                }}],
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "approved_tool",
+                            "description": "approved tool",
+                            "strict": False,
+                            "parameters": {"type": "object", "properties": {}},
+                        },
+                    }
+                ],
             }
         )
         prisma.db.litellm_shadowevalattempt.create.assert_called_once()
@@ -1371,7 +1387,9 @@ class TestModelScope:
     )
     async def test_scope_admits_only_the_named_groups_and_counts_nothing_else(self, requested, sampled):
         prisma = _prisma()
-        logger = _logger(router=_router(), prisma=prisma, jobs=(_job(models=frozenset({"sonnet-group", "haiku-group"})),))
+        logger = _logger(
+            router=_router(), prisma=prisma, jobs=(_job(models=frozenset({"sonnet-group", "haiku-group"})),)
+        )
 
         await logger.async_log_success_event(_success_kwargs(model_group=requested), RESPONSE, None, None)
         await _drain(logger)
@@ -1626,17 +1644,13 @@ class TestShadowPipeline:
         )
         return prisma.db.litellm_shadowevalattempt.create.call_args.kwargs["data"]["error"]
 
-    async def test_a_judge_that_answered_nothing_is_told_apart_from_one_cut_off(
-        self, monkeypatch: pytest.MonkeyPatch
-    ):
+    async def test_a_judge_that_answered_nothing_is_told_apart_from_one_cut_off(self, monkeypatch: pytest.MonkeyPatch):
         """Both land on the same parser message, and they want opposite fixes: a judge
         returning no content points at the reply never being text, while one cut off
         mid-object points at the output cap. The row has to say which."""
         truncated = '{"preference": "A", "confidence": 0.9, "reasoning": "'
         answered_nothing = await self._judge_error(_judge_reply_router(None), monkeypatch)
-        cut_off = await self._judge_error(
-            _judge_reply_router(truncated, finish_reason="length"), monkeypatch
-        )
+        cut_off = await self._judge_error(_judge_reply_router(truncated, finish_reason="length"), monkeypatch)
 
         assert "content=no content" in answered_nothing
         assert "finish_reason=stop" in answered_nothing

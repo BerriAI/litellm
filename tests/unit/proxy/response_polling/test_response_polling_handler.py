@@ -59,15 +59,9 @@ class TestResponsePollingHandler:
         # OpenAI format
         assert ResponsePollingHandler.is_polling_id("resp_abc123") is False
         # Anthropic format
-        assert (
-            ResponsePollingHandler.is_polling_id("msg_01XFDUDYJgAACzvnptvVoYEL")
-            is False
-        )
+        assert ResponsePollingHandler.is_polling_id("msg_01XFDUDYJgAACzvnptvVoYEL") is False
         # Generic UUID
-        assert (
-            ResponsePollingHandler.is_polling_id("550e8400-e29b-41d4-a716-446655440000")
-            is False
-        )
+        assert ResponsePollingHandler.is_polling_id("550e8400-e29b-41d4-a716-446655440000") is False
 
     def test_get_cache_key_format(self):
         """Test that cache keys have the correct format"""
@@ -121,9 +115,7 @@ class TestResponsePollingHandler:
         mock_redis.async_set_cache.assert_called_once()
         call_args = mock_redis.async_set_cache.call_args
 
-        assert (
-            call_args.kwargs["key"] == "litellm:polling:response:litellm_poll_test123"
-        )
+        assert call_args.kwargs["key"] == "litellm:polling:response:litellm_poll_test123"
         assert call_args.kwargs["ttl"] == 7200
 
         # Verify the stored value is valid JSON
@@ -268,9 +260,7 @@ class TestResponsePollingHandler:
 
         reasoning_data = {"effort": "medium", "summary": "Step by step analysis"}
         tool_choice_data = {"type": "function", "function": {"name": "get_weather"}}
-        tools_data = [
-            {"type": "function", "function": {"name": "get_weather", "parameters": {}}}
-        ]
+        tools_data = [{"type": "function", "function": {"name": "get_weather", "parameters": {}}}]
 
         await handler.update_state(
             polling_id="litellm_poll_test",
@@ -567,9 +557,7 @@ class TestResponsePollingHandler:
         result = await handler.delete_polling("litellm_poll_test")
 
         assert result is True
-        mock_async_client.delete.assert_called_once_with(
-            "litellm:polling:response:litellm_poll_test"
-        )
+        mock_async_client.delete.assert_called_once_with("litellm:polling:response:litellm_poll_test")
 
     @pytest.mark.asyncio
     async def test_delete_polling_returns_false_without_redis(self):
@@ -887,9 +875,7 @@ class TestProviderResolutionForPolling:
         model_name_to_deployment_indices = {
             "gpt-5": [0],
         }
-        model_list = [
-            {"model_name": "gpt-5", "litellm_params": {"model": "openai/gpt-5"}}
-        ]
+        model_list = [{"model_name": "gpt-5", "litellm_params": {"model": "openai/gpt-5"}}]
 
         model = "unknown-model"  # Not in router
         polling_via_cache_enabled = ["openai"]
@@ -1283,9 +1269,7 @@ class TestStreamingEventParsing:
                         content_list = output_items[item_id]["content"]
                         if content_index < len(content_list):
                             if isinstance(content_list[content_index], dict):
-                                content_list[content_index]["text"] = accumulated_text[
-                                    key
-                                ]
+                                content_list[content_index]["text"] = accumulated_text[key]
 
         assert accumulated_text[("item_123", 0)] == "Hello World!"
         assert output_items["item_123"]["content"][0]["text"] == "Hello World!"
@@ -1347,9 +1331,7 @@ class TestStreamingEventParsing:
 
     def test_parse_sse_format(self):
         """Test parsing Server-Sent Events format"""
-        raw_chunk = (
-            b'data: {"type": "response.output_item.added", "item": {"id": "123"}}'
-        )
+        raw_chunk = b'data: {"type": "response.output_item.added", "item": {"id": "123"}}'
 
         # Decode bytes to string
         if isinstance(raw_chunk, bytes):
@@ -1477,9 +1459,7 @@ class TestBackgroundStreamingTerminalEvents:
         with patch(
             "litellm.proxy.response_polling.background_streaming.ProxyBaseLLMRequestProcessing"
         ) as MockProcessor:
-            MockProcessor.return_value.base_process_llm_request = AsyncMock(
-                return_value=mock_response
-            )
+            MockProcessor.return_value.base_process_llm_request = AsyncMock(return_value=mock_response)
             await background_streaming_task(**kwargs)
 
         # Find the final update_state call (last one)
@@ -1516,9 +1496,7 @@ class TestBackgroundStreamingTerminalEvents:
         with patch(  # test-quality-ok: the processor is built inside the task, same idiom as the sibling tests
             "litellm.proxy.response_polling.background_streaming.ProxyBaseLLMRequestProcessing"
         ) as MockProcessor:
-            MockProcessor.return_value.base_process_llm_request = AsyncMock(
-                return_value=mock_response
-            )
+            MockProcessor.return_value.base_process_llm_request = AsyncMock(return_value=mock_response)
             await background_streaming_task(**kwargs)
 
         final_call = handler.update_state.call_args_list[-1]
@@ -1547,9 +1525,7 @@ class TestBackgroundStreamingTerminalEvents:
         with patch(  # test-quality-ok: the processor is built inside the task, same idiom as the sibling tests
             "litellm.proxy.response_polling.background_streaming.ProxyBaseLLMRequestProcessing"
         ) as MockProcessor:
-            MockProcessor.return_value.base_process_llm_request = AsyncMock(
-                return_value=mock_response
-            )
+            MockProcessor.return_value.base_process_llm_request = AsyncMock(return_value=mock_response)
             await background_streaming_task(**kwargs)
 
         final_call: Final = handler.update_state.call_args_list[-1]
@@ -1565,7 +1541,11 @@ class TestBackgroundStreamingTerminalEvents:
                 {"type": "guardrail_error", "code": "400", "message": "output blocked by policy"},
                 {"code": "invalid_request_error", "message": "output blocked by policy"},
             ),
-            ({"type": "error"}, "output blocked by policy", {"code": "server_error", "message": "output blocked by policy"}),
+            (
+                {"type": "error"},
+                "output blocked by policy",
+                {"code": "server_error", "message": "output blocked by policy"},
+            ),
             (
                 {},
                 {"code": "400", "message": "output blocked by policy"},
@@ -1603,9 +1583,7 @@ class TestBackgroundStreamingTerminalEvents:
         with patch(  # test-quality-ok: the processor is built inside the task, same idiom as the sibling tests
             "litellm.proxy.response_polling.background_streaming.ProxyBaseLLMRequestProcessing"
         ) as MockProcessor:
-            MockProcessor.return_value.base_process_llm_request = AsyncMock(
-                return_value=mock_response
-            )
+            MockProcessor.return_value.base_process_llm_request = AsyncMock(return_value=mock_response)
             await background_streaming_task(**kwargs)
 
         final_call: Final = handler.update_state.call_args_list[-1]
@@ -1731,7 +1709,9 @@ class TestBackgroundStreamingTerminalEvents:
                 {"input_tokens": 3},
             ),
             (
-                ('data: event: response.incomplete\ndata: {"type": "response.incomplete", "response": {"status": "incomplete"}}\n\n',),
+                (
+                    'data: event: response.incomplete\ndata: {"type": "response.incomplete", "response": {"status": "incomplete"}}\n\n',
+                ),
                 "completed",
                 None,
                 None,
@@ -1801,9 +1781,7 @@ class TestBackgroundStreamingTerminalEvents:
         with patch(  # test-quality-ok: the processor is built inside the task, same idiom as the sibling tests
             "litellm.proxy.response_polling.background_streaming.ProxyBaseLLMRequestProcessing"
         ) as MockProcessor:
-            MockProcessor.return_value.base_process_llm_request = AsyncMock(
-                return_value=mock_response
-            )
+            MockProcessor.return_value.base_process_llm_request = AsyncMock(return_value=mock_response)
             await background_streaming_task(**kwargs)
 
         final_call: Final = handler.update_state.call_args_list[-1]
@@ -1819,7 +1797,10 @@ class TestBackgroundStreamingTerminalEvents:
 
         final_item: Final = {"id": "msg_1", "content": [{"type": "output_text", "text": "final"}]}
         draft_item: Final = {"id": "msg_1", "content": [{"type": "output_text", "text": ""}]}
-        completed: Final = {"type": "response.completed", "response": {"status": "completed", "output": ["hook-text", final_item]}}
+        completed: Final = {
+            "type": "response.completed",
+            "response": {"status": "completed", "output": ["hook-text", final_item]},
+        }
 
         async def _body_iterator():
             yield f"data: {json.dumps({'type': 'response.output_item.added', 'item': draft_item})}\n\n".encode()
@@ -1834,12 +1815,12 @@ class TestBackgroundStreamingTerminalEvents:
         with patch(  # test-quality-ok: the processor is built inside the task, same idiom as the sibling tests
             "litellm.proxy.response_polling.background_streaming.ProxyBaseLLMRequestProcessing"
         ) as MockProcessor:
-            MockProcessor.return_value.base_process_llm_request = AsyncMock(
-                return_value=mock_response
-            )
+            MockProcessor.return_value.base_process_llm_request = AsyncMock(return_value=mock_response)
             await background_streaming_task(**kwargs)
 
-        stored_outputs: Final = [call.kwargs["output"] for call in handler.update_state.call_args_list if "output" in call.kwargs]
+        stored_outputs: Final = [
+            call.kwargs["output"] for call in handler.update_state.call_args_list if "output" in call.kwargs
+        ]
         assert stored_outputs[-1] == [final_item]
 
     @pytest.mark.asyncio
@@ -1849,7 +1830,14 @@ class TestBackgroundStreamingTerminalEvents:
             (
                 404,
                 json.dumps(
-                    {"error": {"message": "model not found", "type": "invalid_request_error", "param": None, "code": "404"}}
+                    {
+                        "error": {
+                            "message": "model not found",
+                            "type": "invalid_request_error",
+                            "param": None,
+                            "code": "404",
+                        }
+                    }
                 ),
                 {"code": "not_found_error", "message": "model not found"},
             ),
@@ -1882,9 +1870,7 @@ class TestBackgroundStreamingTerminalEvents:
         with patch(  # test-quality-ok: the processor is built inside the task, same idiom as the sibling tests
             "litellm.proxy.response_polling.background_streaming.ProxyBaseLLMRequestProcessing"
         ) as MockProcessor:
-            MockProcessor.return_value.base_process_llm_request = AsyncMock(
-                return_value=first_chunk_error
-            )
+            MockProcessor.return_value.base_process_llm_request = AsyncMock(return_value=first_chunk_error)
             await background_streaming_task(**kwargs)
 
         final_call: Final = handler.update_state.call_args_list[-1]
@@ -1948,17 +1934,13 @@ class TestBackgroundStreamingTerminalEvents:
         with patch(
             "litellm.proxy.response_polling.background_streaming.ProxyBaseLLMRequestProcessing"
         ) as MockProcessor:
-            MockProcessor.return_value.base_process_llm_request = AsyncMock(
-                return_value=mock_response
-            )
+            MockProcessor.return_value.base_process_llm_request = AsyncMock(return_value=mock_response)
             await background_streaming_task(**kwargs)
 
         final_call = handler.update_state.call_args_list[-1]
         assert final_call.kwargs["status"] == "incomplete"
         assert final_call.kwargs["error"] == error_payload
-        assert final_call.kwargs["incomplete_details"] == {
-            "reason": "max_output_tokens"
-        }
+        assert final_call.kwargs["incomplete_details"] == {"reason": "max_output_tokens"}
         assert final_call.kwargs["usage"] == {"input_tokens": 10, "output_tokens": 4096}
 
     @pytest.mark.asyncio
@@ -1987,9 +1969,7 @@ class TestBackgroundStreamingTerminalEvents:
         with patch(
             "litellm.proxy.response_polling.background_streaming.ProxyBaseLLMRequestProcessing"
         ) as MockProcessor:
-            MockProcessor.return_value.base_process_llm_request = AsyncMock(
-                return_value=mock_response
-            )
+            MockProcessor.return_value.base_process_llm_request = AsyncMock(return_value=mock_response)
             await background_streaming_task(**kwargs)
 
         final_call = handler.update_state.call_args_list[-1]
@@ -2022,9 +2002,7 @@ class TestBackgroundStreamingTerminalEvents:
         with patch(
             "litellm.proxy.response_polling.background_streaming.ProxyBaseLLMRequestProcessing"
         ) as MockProcessor:
-            MockProcessor.return_value.base_process_llm_request = AsyncMock(
-                return_value=mock_response
-            )
+            MockProcessor.return_value.base_process_llm_request = AsyncMock(return_value=mock_response)
             await background_streaming_task(**kwargs)
 
         final_call = handler.update_state.call_args_list[-1]
@@ -2089,9 +2067,7 @@ class TestBackgroundStreamingTerminalEvents:
         with patch(
             "litellm.proxy.response_polling.background_streaming.ProxyBaseLLMRequestProcessing"
         ) as MockProcessor:
-            MockProcessor.return_value.base_process_llm_request = AsyncMock(
-                return_value=mock_response
-            )
+            MockProcessor.return_value.base_process_llm_request = AsyncMock(return_value=mock_response)
             await background_streaming_task(**kwargs)
 
         final_call = handler.update_state.call_args_list[-1]
@@ -2115,9 +2091,7 @@ class TestBackgroundStreamingTerminalEvents:
         with patch(
             "litellm.proxy.response_polling.background_streaming.ProxyBaseLLMRequestProcessing"
         ) as MockProcessor:
-            MockProcessor.return_value.base_process_llm_request = AsyncMock(
-                return_value=mock_response
-            )
+            MockProcessor.return_value.base_process_llm_request = AsyncMock(return_value=mock_response)
             await background_streaming_task(**kwargs)
 
         final_call = handler.update_state.call_args_list[-1]
@@ -2153,9 +2127,7 @@ class TestBackgroundStreamingTerminalEvents:
                 yield f"data: {json.dumps(event)}\n\n"
 
         async def upstream_call_behind_disconnect_guard(**kwargs):
-            return await create_response(
-                slow_upstream_stream(), "text/event-stream", {}, request=kwargs["request"]
-            )
+            return await create_response(slow_upstream_stream(), "text/event-stream", {}, request=kwargs["request"])
 
         handler = AsyncMock(spec=ResponsePollingHandler)
         kwargs = _make_background_streaming_kwargs("poll_7", handler)

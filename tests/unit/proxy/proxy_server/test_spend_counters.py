@@ -1690,9 +1690,7 @@ async def test_update_cache_moves_this_workers_global_proxy_spend_to_the_shared_
 async def test_update_cache_keeps_the_newest_global_proxy_spend_when_redis_replies_out_of_order() -> None:
     held_increment_applied: Final = asyncio.Event()
     held_reply_released: Final = asyncio.Event()
-    cache, _ = shared_cache(
-        _SharedSpend(10.0, held=0.25, applied=held_increment_applied, released=held_reply_released)
-    )
+    cache, _ = shared_cache(_SharedSpend(10.0, held=0.25, applied=held_increment_applied, released=held_reply_released))
     cache.set_cache(key=GLOBAL_PROXY_SPEND_CACHE_KEY, value=10.0, local_only=True)
 
     async def _request(response_cost: float) -> None:

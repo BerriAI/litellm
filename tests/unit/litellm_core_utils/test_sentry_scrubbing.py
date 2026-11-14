@@ -58,7 +58,11 @@ def raise_with_identity_locals() -> None:
         user_obj=LiteLLM_UserTable(user_id=EMAIL, user_email=EMAIL, user_role="internal_user"),
         general_settings={"master_key": MASTER_KEY, "database_url": DATABASE_URL},
         data={"metadata": {"user_api_key_hash": KEY_HASH, "user_api_key_user_email": EMAIL}},
-        raw_headers={"authorization": f"Bearer {VIRTUAL_KEY}", "x-api-key": VIRTUAL_KEY, "content-type": "application/json"},
+        raw_headers={
+            "authorization": f"Bearer {VIRTUAL_KEY}",
+            "x-api-key": VIRTUAL_KEY,
+            "content-type": "application/json",
+        },
     )
 
 
@@ -157,7 +161,11 @@ def test_pii_opt_in_keeps_identifiers_and_still_scrubs_secrets() -> None:
     }
     assert f"token='{FILTERED}'" in frame_vars["valid_token"]
     assert frame_vars["general_settings"] == {"master_key": FILTERED, "database_url": FILTERED}
-    assert frame_vars["raw_headers"] == {"authorization": FILTERED, "x-api-key": FILTERED, "content-type": "'application/json'"}
+    assert frame_vars["raw_headers"] == {
+        "authorization": FILTERED,
+        "x-api-key": FILTERED,
+        "content-type": "'application/json'",
+    }
     assert MASTER_KEY not in serialized
     assert VIRTUAL_KEY not in serialized
     assert "db-password-under-test" not in serialized
@@ -228,7 +236,10 @@ def test_key_pattern_floor_never_exceeds_a_generated_key() -> None:
     generated_key: Final = "sk-" + secrets.token_urlsafe(LENGTH_OF_LITELLM_GENERATED_KEY)
     stricter_custom_minimum: Final = len(generated_key) + 10
     assert build_key_pattern(stricter_custom_minimum, LENGTH_OF_LITELLM_GENERATED_KEY).fullmatch(generated_key)
-    assert build_key_pattern(stricter_custom_minimum, LENGTH_OF_LITELLM_GENERATED_KEY).fullmatch(generated_key[:-1]) is None
+    assert (
+        build_key_pattern(stricter_custom_minimum, LENGTH_OF_LITELLM_GENERATED_KEY).fullmatch(generated_key[:-1])
+        is None
+    )
 
 
 def test_json_walk_fails_closed_past_the_depth_cap() -> None:

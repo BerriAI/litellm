@@ -78,9 +78,9 @@ def test_interactions_with_an_openai_model_answers_in_the_interactions_shape(
         assert str(payload["id"]).startswith("resp_"), response.text
         assert payload["model"] == model, response.text
         assert payload["outputs"] == [{"type": "text", "text": _REPLY_TEXT}], response.text
-        assert payload["steps"] == [
-            {"type": "model_output", "content": [{"type": "text", "text": _REPLY_TEXT}]}
-        ], response.text
+        assert payload["steps"] == [{"type": "model_output", "content": [{"type": "text", "text": _REPLY_TEXT}]}], (
+            response.text
+        )
         assert payload["usage"] == expected_usage, response.text
         created: Final = payload["created"]
         assert isinstance(created, str) and created == payload["updated"], response.text

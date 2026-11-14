@@ -15,9 +15,7 @@ import litellm
 @pytest.mark.parametrize("sync_mode", [True, False])
 @patch("litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post")
 @patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post")
-def test_deepinfra_rerank_with_queries_param(
-    mock_sync_post, mock_async_post, sync_mode
-):
+def test_deepinfra_rerank_with_queries_param(mock_sync_post, mock_async_post, sync_mode):
     """Test DeepInfra rerank with multiple queries parameter."""
     mock_response_data = {
         "scores": [0.8, 0.6, 0.2],

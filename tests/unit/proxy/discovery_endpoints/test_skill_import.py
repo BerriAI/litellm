@@ -39,24 +39,37 @@ def repository_zip(entries: tuple[tuple[str | zipfile.ZipInfo, bytes], ...]) -> 
     return buffer.getvalue()
 
 
-@pytest.mark.parametrize(("url", "skill", "ref", "path", "expected"), (
-    ("https://skills.sh/author/repo/pdf-summarizer", None, "HEAD", None, SOURCE),
-    ("https://github.com/author/repo.git/", "pdf-summarizer", "release/v2", NESTED,
-     GitHubSkillSource("author", "repo", "release/v2", "pdf-summarizer", NESTED)),
-    (f"https://github.com/author/repo/tree/release%2Fv2/{NESTED}", None, "HEAD", None,
-     GitHubSkillSource("author", "repo", "release/v2", None, NESTED)),
-    ("http://github.com/author/repo", None, "HEAD", None, 400),
-    ("https://github.com.example/author/repo", None, "HEAD", None, 400),
-    ("https://user:secret@github.com/author/repo", None, "HEAD", None, 400),
-    ("https://github.com/author/repo?token=secret", None, "HEAD", None, 400),
-    ("https://github.com/author/repo#fragment", None, "HEAD", None, 400),
-    ("https://github.com/author%2Fother/repo", None, "HEAD", None, 400),
-    ("https://[invalid/author/repo", None, "HEAD", None, 400),
-    ("https://skills.sh/author/repo", None, "HEAD", None, 400),
-    ("https://skills.sh/author/repo/pdf-summarizer", "other", "HEAD", None, 400),
-    (f"https://github.com/author/repo/tree/main/{NESTED}", None, "other", None, 400),
-    (f"https://github.com/author/repo/tree/main/{NESTED}", None, "HEAD", "other", 400),
-))
+@pytest.mark.parametrize(
+    ("url", "skill", "ref", "path", "expected"),
+    (
+        ("https://skills.sh/author/repo/pdf-summarizer", None, "HEAD", None, SOURCE),
+        (
+            "https://github.com/author/repo.git/",
+            "pdf-summarizer",
+            "release/v2",
+            NESTED,
+            GitHubSkillSource("author", "repo", "release/v2", "pdf-summarizer", NESTED),
+        ),
+        (
+            f"https://github.com/author/repo/tree/release%2Fv2/{NESTED}",
+            None,
+            "HEAD",
+            None,
+            GitHubSkillSource("author", "repo", "release/v2", None, NESTED),
+        ),
+        ("http://github.com/author/repo", None, "HEAD", None, 400),
+        ("https://github.com.example/author/repo", None, "HEAD", None, 400),
+        ("https://user:secret@github.com/author/repo", None, "HEAD", None, 400),
+        ("https://github.com/author/repo?token=secret", None, "HEAD", None, 400),
+        ("https://github.com/author/repo#fragment", None, "HEAD", None, 400),
+        ("https://github.com/author%2Fother/repo", None, "HEAD", None, 400),
+        ("https://[invalid/author/repo", None, "HEAD", None, 400),
+        ("https://skills.sh/author/repo", None, "HEAD", None, 400),
+        ("https://skills.sh/author/repo/pdf-summarizer", "other", "HEAD", None, 400),
+        (f"https://github.com/author/repo/tree/main/{NESTED}", None, "other", None, 400),
+        (f"https://github.com/author/repo/tree/main/{NESTED}", None, "HEAD", "other", 400),
+    ),
+)
 def test_source_urls(
     url: str, skill: str | None, ref: str, path: str | None, expected: GitHubSkillSource | int
 ) -> None:
@@ -76,9 +89,16 @@ class DownloadStream(httpx.AsyncByteStream):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(("mode", "status"), (
-    ("bounded", None), ("overflow", 413), ("redirect", 422), ("http-error", 422), ("timeout", 502),
-))
+@pytest.mark.parametrize(
+    ("mode", "status"),
+    (
+        ("bounded", None),
+        ("overflow", 413),
+        ("redirect", 422),
+        ("http-error", 422),
+        ("timeout", 502),
+    ),
+)
 async def test_public_download_transport(mode: str, status: int | None) -> None:
     credentials: Final = {
         "Authorization": "Bearer unit-secret",
@@ -100,8 +120,11 @@ async def test_public_download_transport(mode: str, status: int | None) -> None:
         )
 
     async with httpx.AsyncClient(
-        transport=httpx.MockTransport(respond), headers=credentials, auth=httpx.BasicAuth("unit-user", "unit-secret"),
-        follow_redirects=True, trust_env=False,
+        transport=httpx.MockTransport(respond),
+        headers=credentials,
+        auth=httpx.BasicAuth("unit-user", "unit-secret"),
+        follow_redirects=True,
+        trust_env=False,
     ) as client:
         result: Final = await fetch_skill_source(GitHubSkillSource("author", "repo", "release/v2", None, None), client)
     if status is None:
@@ -113,24 +136,26 @@ async def test_public_download_transport(mode: str, status: int | None) -> None:
         assert isinstance(result, SkillImportError) and result.status == status
 
 
-@pytest.mark.parametrize(("skill", "path", "root_name", "expected"), (
-    (None, "", b"root", "root"),
-    (None, "/", b"root", "root"),
-    (None, "SKILL.md", b"root", 422),
-    (None, NESTED, b"root", "pdf-summarizer"),
-    ("pdf-summarizer", None, b"root", "pdf-summarizer"),
-    ("pdf-summarizer", f"/{NESTED}/", b"pdf-summarizer", "pdf-summarizer"),
-    (None, None, b"root", 422),
-    ("missing", None, b"root", 422),
-    ("pdf-summarizer", "", b"root", 422),
-    ("pdf-summarizer", None, b"pdf-summarizer", 422),
-    (None, "", None, 422),
-))
-def test_repository_selection(skill: str | None, path: str | None, root_name: bytes | None, expected: str | int) -> None:
-    root: Final = (
-        (("repo/SKILL.md", MANIFEST.replace(b"pdf-summarizer", root_name)),)
-        if root_name is not None else ()
-    )
+@pytest.mark.parametrize(
+    ("skill", "path", "root_name", "expected"),
+    (
+        (None, "", b"root", "root"),
+        (None, "/", b"root", "root"),
+        (None, "SKILL.md", b"root", 422),
+        (None, NESTED, b"root", "pdf-summarizer"),
+        ("pdf-summarizer", None, b"root", "pdf-summarizer"),
+        ("pdf-summarizer", f"/{NESTED}/", b"pdf-summarizer", "pdf-summarizer"),
+        (None, None, b"root", 422),
+        ("missing", None, b"root", 422),
+        ("pdf-summarizer", "", b"root", 422),
+        ("pdf-summarizer", None, b"pdf-summarizer", 422),
+        (None, "", None, 422),
+    ),
+)
+def test_repository_selection(
+    skill: str | None, path: str | None, root_name: bytes | None, expected: str | int
+) -> None:
+    root: Final = (("repo/SKILL.md", MANIFEST.replace(b"pdf-summarizer", root_name)),) if root_name is not None else ()
     result: Final = select_imported_skill(
         repository_zip(root + ((f"repo/{NESTED}/SKILL.md", MANIFEST),)),
         GitHubSkillSource("author", "repo", "HEAD", skill, path),
@@ -144,14 +169,21 @@ def test_corrupt_manifest_compression_returns_an_import_error() -> None:
         entry: Final = archive.infolist()[0]
         filename_size, extra_size = struct.unpack_from("<HH", content, entry.header_offset + 26)
         offset: Final = entry.header_offset + 30 + filename_size + extra_size
-        invalid: Final = content[:offset] + b"\xff" * entry.compress_size + content[offset + entry.compress_size:]
+        invalid: Final = content[:offset] + b"\xff" * entry.compress_size + content[offset + entry.compress_size :]
     result: Final = select_imported_skill(invalid, SOURCE)
     assert isinstance(result, SkillImportError) and result.status == 422
 
 
-@pytest.mark.parametrize(("violation", "expected"), (
-    ("path", 422), ("inside-link", 422), ("outside-link", "pdf-summarizer"), ("entries", 413), ("unpacked-bytes", 413),
-))
+@pytest.mark.parametrize(
+    ("violation", "expected"),
+    (
+        ("path", 422),
+        ("inside-link", 422),
+        ("outside-link", "pdf-summarizer"),
+        ("entries", 413),
+        ("unpacked-bytes", 413),
+    ),
+)
 def test_repository_validation_scope(violation: str, expected: str | int) -> None:
     paths: Final = {"path": "repo/../escape", "inside-link": f"repo/{NESTED}/run.sh"}
     entry: Final = zipfile.ZipInfo(paths.get(violation, "repo/CLAUDE.md"))
@@ -160,11 +192,10 @@ def test_repository_validation_scope(violation: str, expected: str | int) -> Non
     payload: Final = b"x" * (MAX_ARCHIVE_UNPACKED_BYTES if violation == "unpacked-bytes" else 1)
     extra: Final = (
         tuple((f"repo/unrelated/{index}", b"x") for index in range(MAX_ARCHIVE_ENTRIES))
-        if violation == "entries" else ((entry, payload),)
+        if violation == "entries"
+        else ((entry, payload),)
     )
-    result: Final = select_imported_skill(
-        repository_zip(((f"repo/{NESTED}/SKILL.md", MANIFEST),) + extra), SOURCE
-    )
+    result: Final = select_imported_skill(repository_zip(((f"repo/{NESTED}/SKILL.md", MANIFEST),) + extra), SOURCE)
     assert (result.status if isinstance(result, SkillImportError) else result.declared_name) == expected
 
 

@@ -104,9 +104,7 @@ def _cacheable_prefix() -> str:
     """A prefix long enough to clear provider minimum cacheable sizes (Haiku is
     2048 tokens), unique per run so the first call writes and the second reads."""
     marker = unique_marker()
-    body = " ".join(
-        f"Cacheable reference paragraph {index} for run {marker}." for index in range(600)
-    )
+    body = " ".join(f"Cacheable reference paragraph {index} for run {marker}." for index in range(600))
     return f"{body}\nEnd of reference material {marker}."
 
 
@@ -162,9 +160,7 @@ def _plain_cache_chat(
     )
 
 
-def _assert_cache_read_on_second_call(
-    model: str, send: Callable[[str], Result[ChatResponse]]
-) -> None:
+def _assert_cache_read_on_second_call(model: str, send: Callable[[str], Result[ChatResponse]]) -> None:
     prefix = _cacheable_prefix()
 
     first = unwrap(send(prefix))
@@ -345,9 +341,7 @@ class TestCacheControl:
             mode=Mode.NONSTREAM,
         )
     )
-    def test_bedrock_prompt_caching_reads_cache(
-        self, client: PassthroughClient, resources: ResourceManager
-    ) -> None:
+    def test_bedrock_prompt_caching_reads_cache(self, client: PassthroughClient, resources: ResourceManager) -> None:
         model = f"e2e-bedrock-cache-{unique_marker()}"
         model_id = client.proxy.create_model(
             model,
@@ -371,9 +365,7 @@ class TestCacheControl:
             mode=Mode.NONSTREAM,
         )
     )
-    def test_vertex_prompt_caching_reads_cache(
-        self, client: PassthroughClient, resources: ResourceManager
-    ) -> None:
+    def test_vertex_prompt_caching_reads_cache(self, client: PassthroughClient, resources: ResourceManager) -> None:
         model = f"e2e-vertex-cache-{unique_marker()}"
         model_id = client.proxy.create_model(
             model,
@@ -405,9 +397,7 @@ class TestCacheControl:
             mode=Mode.NONSTREAM,
         )
     )
-    def test_anthropic_prompt_caching_reads_cache(
-        self, client: PassthroughClient, resources: ResourceManager
-    ) -> None:
+    def test_anthropic_prompt_caching_reads_cache(self, client: PassthroughClient, resources: ResourceManager) -> None:
         model = f"e2e-anthropic-cache-{unique_marker()}"
         model_id = client.proxy.create_model(
             model,
@@ -504,9 +494,7 @@ class TestCacheControl:
             mode=Mode.NONSTREAM,
         )
     )
-    def test_openai_prompt_caching_reads_cache(
-        self, client: PassthroughClient, resources: ResourceManager
-    ) -> None:
+    def test_openai_prompt_caching_reads_cache(self, client: PassthroughClient, resources: ResourceManager) -> None:
         model = f"e2e-openai-cache-{unique_marker()}"
         model_id = client.proxy.create_model(
             model,

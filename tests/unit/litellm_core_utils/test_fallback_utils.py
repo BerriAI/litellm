@@ -179,9 +179,7 @@ def test_process_response_headers_ignores_preserve_flag_for_httpx_headers():
 
 
 @pytest.mark.asyncio
-async def test_acompletion_fallbacks_bad_models(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_acompletion_fallbacks_bad_models(respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
         side_effect=(
@@ -222,9 +220,7 @@ async def test_acompletion_fallbacks_bad_models(
 
 
 @pytest.mark.asyncio
-async def test_acompletion_fallbacks_basic(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_acompletion_fallbacks_basic(respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
         side_effect=(
@@ -271,9 +267,7 @@ async def test_acompletion_fallbacks_basic(
 
 
 @pytest.mark.asyncio
-async def test_acompletion_fallbacks_empty_list(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_acompletion_fallbacks_empty_list(respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
         return_value=httpx.Response(
@@ -401,9 +395,7 @@ async def test_acompletion_fallbacks_with_dict_config(
     )
 
 
-def test_completion_fallbacks_sync(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_completion_fallbacks_sync(respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
         side_effect=(

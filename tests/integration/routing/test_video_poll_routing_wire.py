@@ -122,9 +122,7 @@ def _burst(gateway: Gateway, body: Mapping[str, JsonValue]) -> frozenset[int]:
 
 
 def _settled(gateway: Gateway, body: Mapping[str, JsonValue]) -> None:
-    eventually(
-        lambda: _burst(gateway, body) | _burst(gateway, body), lambda seen: seen == frozenset({200}), seconds=90
-    )
+    eventually(lambda: _burst(gateway, body) | _burst(gateway, body), lambda seen: seen == frozenset({200}), seconds=90)
 
 
 def _current(gateway: Gateway, field: str) -> JsonValue:

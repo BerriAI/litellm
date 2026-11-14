@@ -21,9 +21,7 @@ def test_admin_can_reset_tag_spend_and_resume_budget_blocked_requests(
                 "object": "chat.completion",
                 "created": 1,
                 "model": "gpt-4o-mini",
-                "choices": [
-                    {"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}
-                ],
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
                 "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
             }
         ).encode()

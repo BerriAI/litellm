@@ -157,9 +157,7 @@ async def test_env_filters_provider_secrets(sbx, monkeypatch):
         "print(os.environ.get('HARNESS_TEST_PLAIN','<none>'));"
         "print(os.environ.get('ANTHROPIC_BASE_URL','<none>'))"
     )
-    result = await sbx.run(
-        [PY, "-c", script], env={"ANTHROPIC_BASE_URL": "http://127.0.0.1:1"}
-    )
+    result = await sbx.run([PY, "-c", script], env={"ANTHROPIC_BASE_URL": "http://127.0.0.1:1"})
     assert result.stdout.split() == [
         "<none>",
         "<none>",
@@ -188,9 +186,7 @@ def test_is_secret_env_name(name, secret):
 
 
 def test_filtered_environ_overlay_wins():
-    env = filtered_environ(
-        {"PATH": "/bin", "OPENAI_API_KEY": "x"}, {"PATH": "/usr/bin"}
-    )
+    env = filtered_environ({"PATH": "/bin", "OPENAI_API_KEY": "x"}, {"PATH": "/usr/bin"})
     assert env == {"PATH": "/usr/bin"}
 
 

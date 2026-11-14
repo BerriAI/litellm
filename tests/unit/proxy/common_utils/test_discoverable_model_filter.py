@@ -88,9 +88,7 @@ def test_alias_follows_its_target_deployments():
 def test_wildcard_expansions_follow_the_wildcard_entry():
     router = _router(_deployment("gpt-4"), _deployment("anthropic/*", model="anthropic/*", discoverable=False))
 
-    hidden = undiscoverable_model_names(
-        ["gpt-4", "anthropic/*", "anthropic/claude-opus-5"], router, _non_admin(), None
-    )
+    hidden = undiscoverable_model_names(["gpt-4", "anthropic/*", "anthropic/claude-opus-5"], router, _non_admin(), None)
 
     assert hidden == {"anthropic/*", "anthropic/claude-opus-5"}
 
@@ -98,9 +96,7 @@ def test_wildcard_expansions_follow_the_wildcard_entry():
 def test_flagged_team_model_is_undiscoverable_for_its_team_member():
     router = _router(
         _deployment("gpt-4"),
-        _deployment(
-            "model_name_team1_abc", team_id="team1", team_public_model_name="team-gpt", discoverable=False
-        ),
+        _deployment("model_name_team1_abc", team_id="team1", team_public_model_name="team-gpt", discoverable=False),
     )
     member = UserAPIKeyAuth(
         api_key="sk-test", user_role=LitellmUserRoles.INTERNAL_USER, team_id="team1", team_models=["team-gpt"]

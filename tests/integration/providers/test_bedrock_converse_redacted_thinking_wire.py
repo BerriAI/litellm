@@ -371,7 +371,9 @@ def test_redacted_history_replayed_to_a_converse_target_carries_redacted_content
         assert _replayed_assistant_turn(wire).content == (*redacted, {"text": FIRST_ANSWER})
 
 
-@pytest.mark.parametrize("legacy_history", [False, True], ids=["converse-reply", "history-saved-with-converse-wrapping"])
+@pytest.mark.parametrize(
+    "legacy_history", [False, True], ids=["converse-reply", "history-saved-with-converse-wrapping"]
+)
 def test_converse_redacted_thinking_replays_to_the_anthropic_api_as_claude_native_data(
     gateway: Gateway, legacy_history: bool
 ) -> None:

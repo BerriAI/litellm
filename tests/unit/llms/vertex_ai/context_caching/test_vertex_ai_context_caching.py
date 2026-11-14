@@ -2545,7 +2545,9 @@ def test_a_plain_system_prompt_goes_into_the_gemini_cache_instead_of_beside_it(l
     )
 
     created: Final = next(
-        json.loads(call.content) for call in calls if call.method == "POST" and call.url.path.endswith("/cachedContents")
+        json.loads(call.content)
+        for call in calls
+        if call.method == "POST" and call.url.path.endswith("/cachedContents")
     )
     generated: Final = next(json.loads(call.content) for call in calls if call.url.path.endswith(":generateContent"))
     assert created["system_instruction"] == {"parts": [{"text": "You are terse."}]}

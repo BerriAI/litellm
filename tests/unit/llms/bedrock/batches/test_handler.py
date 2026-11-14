@@ -88,9 +88,7 @@ def test_extract_region_swallows_unexpected_split_errors():
 def test_predict_output_file_uri_returns_none_for_directory_input_uri():
     """Input URI ending in `/` has an empty basename — we must bail rather
     than emit ``<prefix>/<job-id>/.out``."""
-    assert (
-        _predict_output_file_uri(OUTPUT_PREFIX, "s3://bucket/inputs/", JOB_ID) is None
-    )
+    assert _predict_output_file_uri(OUTPUT_PREFIX, "s3://bucket/inputs/", JOB_ID) is None
 
 
 _DT = datetime(2026, 4, 28, 12, 0, 0, tzinfo=timezone.utc)
@@ -112,9 +110,7 @@ def test_to_epoch_handles_supported_types(value, expected):
 
 def test_extract_job_id_from_arn():
     assert _extract_job_id_from_arn(JOB_ARN) == JOB_ID
-    assert (
-        _extract_job_id_from_arn("arn:aws:bedrock:us-west-2:1:async-invoke/x") is None
-    )
+    assert _extract_job_id_from_arn("arn:aws:bedrock:us-west-2:1:async-invoke/x") is None
 
 
 def test_predict_output_file_uri_happy_path():
@@ -369,11 +365,7 @@ def test_logging_obj_pre_and_post_call_invoked(patched_boto3):
 def test_missing_boto3_raises_helpful_import_error():
     """If boto3 isn't installed we should raise a clear, actionable
     ImportError rather than letting a NameError escape."""
-    real_import = (
-        __builtins__["__import__"]
-        if isinstance(__builtins__, dict)
-        else __builtins__.__import__
-    )
+    real_import = __builtins__["__import__"] if isinstance(__builtins__, dict) else __builtins__.__import__
 
     def fake_import(name, *args, **kwargs):
         if name == "boto3":
@@ -801,18 +793,16 @@ async def test_async_file_and_batch():
             print("CREATED BATCH RESPONSE=", create_batch_response)
 
             mock_bedrock_client = MagicMock()
-            mock_bedrock_client.get_model_invocation_job.side_effect = (
-                lambda jobIdentifier: capture_client.batch_jobs[jobIdentifier]
-            )
+            mock_bedrock_client.get_model_invocation_job.side_effect = lambda jobIdentifier: capture_client.batch_jobs[
+                jobIdentifier
+            ]
             with patch("boto3.client", return_value=mock_bedrock_client):
                 retrieve_batch_response = await litellm.aretrieve_batch(
                     batch_id=create_batch_response.id,
                     custom_llm_provider="bedrock",
                     model="us.anthropic.claude-haiku-4-5-20251001-v1:0",
                 )
-            mock_bedrock_client.get_model_invocation_job.assert_called_once_with(
-                jobIdentifier=create_batch_response.id
-            )
+            mock_bedrock_client.get_model_invocation_job.assert_called_once_with(jobIdentifier=create_batch_response.id)
             print("RETRIEVED BATCH RESPONSE=", retrieve_batch_response)
 
     assert retrieve_batch_response.id == create_batch_response.id
@@ -881,12 +871,8 @@ async def test_bedrock_retrieve_batch():
         "submitTime": "2024-01-01T12:00:00Z",
         "lastModifiedTime": "2024-01-01T12:30:00Z",
         "endTime": "2024-01-01T13:00:00Z",
-        "inputDataConfig": {
-            "s3InputDataConfig": {"s3Uri": "s3://test-bucket/input/test-input.jsonl"}
-        },
-        "outputDataConfig": {
-            "s3OutputDataConfig": {"s3Uri": "s3://test-bucket/output/"}
-        },
+        "inputDataConfig": {"s3InputDataConfig": {"s3Uri": "s3://test-bucket/input/test-input.jsonl"}},
+        "outputDataConfig": {"s3OutputDataConfig": {"s3Uri": "s3://test-bucket/output/"}},
     }
 
     mock_bedrock_client = MagicMock()
@@ -906,19 +892,13 @@ async def test_bedrock_retrieve_batch():
             model="us.anthropic.claude-haiku-4-5-20251001-v1:0",
         )
 
-        assert (
-            batch_response.id
-            == "arn:aws:bedrock:us-west-2:123456789012:model-invocation-job/test-job-123"
-        )
+        assert batch_response.id == "arn:aws:bedrock:us-west-2:123456789012:model-invocation-job/test-job-123"
         assert batch_response.object == "batch"
         assert batch_response.status == "completed"
         assert batch_response.endpoint == "/v1/chat/completions"
 
         assert batch_response.input_file_id == "s3://test-bucket/input/test-input.jsonl"
-        assert (
-            batch_response.output_file_id
-            == "s3://test-bucket/output/test-job-123/test-input.jsonl.out"
-        )
+        assert batch_response.output_file_id == "s3://test-bucket/output/test-job-123/test-input.jsonl.out"
 
 
 def test_bedrock_batch_with_encryption_key_in_post_request():
@@ -928,9 +908,7 @@ def test_bedrock_batch_with_encryption_key_in_post_request():
     import json
     import litellm
 
-    test_kms_key_id = (
-        "arn:aws:kms:us-west-2:123456789012:key/12345678-1234-1234-1234-123456789012"
-    )
+    test_kms_key_id = "arn:aws:kms:us-west-2:123456789012:key/12345678-1234-1234-1234-123456789012"
 
     captured_request_body = None
 
@@ -974,10 +952,7 @@ def test_bedrock_batch_with_encryption_key_in_post_request():
     assert "outputDataConfig" in request_data
     assert "s3OutputDataConfig" in request_data["outputDataConfig"]
     assert "s3EncryptionKeyId" in request_data["outputDataConfig"]["s3OutputDataConfig"]
-    assert (
-        request_data["outputDataConfig"]["s3OutputDataConfig"]["s3EncryptionKeyId"]
-        == test_kms_key_id
-    )
+    assert request_data["outputDataConfig"]["s3OutputDataConfig"]["s3EncryptionKeyId"] == test_kms_key_id
 
     print("SUCCESS: s3_encryption_key_id properly included in AWS POST request")
 

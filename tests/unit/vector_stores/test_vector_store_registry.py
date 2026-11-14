@@ -512,7 +512,9 @@ def test_file_search_tool_passes_its_store_only_the_fields_a_store_search_takes(
     registry: Final = VectorStoreRegistry(
         [LiteLLM_ManagedVectorStore(vector_store_id="vs_kb", created_at=now, updated_at=now)]
     )
-    tools: Final = [{"type": "file_search", "vector_store_ids": ["vs_kb"], "max_num_results": 3, tool_field: tool_value}]
+    tools: Final = [
+        {"type": "file_search", "vector_store_ids": ["vs_kb"], "max_num_results": 3, tool_field: tool_value}
+    ]
 
     to_run: Final = registry.pop_vector_stores_to_run(non_default_params={}, tools=tools)
 
@@ -599,5 +601,7 @@ def test_vector_store_ids_to_run_merge_the_param_and_tools_once_per_request():
     first: Final = registry.get_vector_store_ids_to_run(
         {"vector_store_ids": ["vs-a"]}, tools=[{"type": "file_search", "vector_store_ids": ["vs-b", "vs-a"]}]
     )
-    second: Final = registry.get_vector_store_ids_to_run({}, tools=[{"type": "file_search", "vector_store_ids": ["vs-c"]}])
+    second: Final = registry.get_vector_store_ids_to_run(
+        {}, tools=[{"type": "file_search", "vector_store_ids": ["vs-c"]}]
+    )
     assert (first, second) == (["vs-a", "vs-b"], ["vs-c"])

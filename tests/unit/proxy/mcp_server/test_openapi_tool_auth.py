@@ -138,9 +138,7 @@ async def test_openapi_local_tool_blocked_when_pre_call_check_raises():
     fake_tool.input_schema = {"type": "object"}
     fake_tool.server_id = fake_server.server_id
 
-    pre_call = AsyncMock(
-        side_effect=HTTPException(status_code=403, detail="not allowed")
-    )
+    pre_call = AsyncMock(side_effect=HTTPException(status_code=403, detail="not allowed"))
     handle_local = AsyncMock(return_value=CallToolResult(content=[], is_error=False))
 
     with (
@@ -336,7 +334,6 @@ async def test_openapi_local_tool_injects_resolved_oauth_token():
     assert request_resolved_auth_headers.get() is None
 
 
-
 LEGACY_SERVER_ID = "srv-legacy-petstore"
 LEGACY_SERVER_NAME = "legacy_petstore"
 LEGACY_TOOL = "dump_secrets"
@@ -375,12 +372,9 @@ def legacy_local_tool():
         handler=lambda **kwargs: executed.append(kwargs) or "legacy local tool ran",
     )
     global_mcp_server_manager.registry[LEGACY_SERVER_ID] = server
-    assert (
-        global_mcp_server_manager._get_mcp_server_from_tool_name(
-            f"{LEGACY_SERVER_NAME}-{LEGACY_TOOL}"
-        )
-        is None
-    ), "fixture precondition: the prefixed name must resolve to no server"
+    assert global_mcp_server_manager._get_mcp_server_from_tool_name(f"{LEGACY_SERVER_NAME}-{LEGACY_TOOL}") is None, (
+        "fixture precondition: the prefixed name must resolve to no server"
+    )
     try:
         yield server, executed
     finally:
@@ -877,20 +871,28 @@ def test_the_openapi_arm_keeps_the_shared_client_when_no_guard_is_needed(resolve
 @pytest.mark.parametrize("mode", [MCPAuth.true_passthrough, MCPAuth.oauth_delegate])
 @pytest.mark.parametrize("per_server", [None, "Bearer per-server"])
 async def test_openapi_passthrough_preparation_preserves_credential_precedence(
-    mode: MCPAuth, per_server: str | None,
+    mode: MCPAuth,
+    per_server: str | None,
 ) -> None:
     from typing import Final
 
     from litellm.proxy.mcp_server.mcp_server_manager import MCPServerManager
 
     server: Final = MCPServer(
-        server_id="openapi-passthrough", name="openapi-passthrough", transport=MCPTransport.http,
-        url="https://upstream.example", spec_path="https://upstream.example/openapi.json", auth_type=mode,
+        server_id="openapi-passthrough",
+        name="openapi-passthrough",
+        transport=MCPTransport.http,
+        url="https://upstream.example",
+        spec_path="https://upstream.example/openapi.json",
+        auth_type=mode,
     )
     headers: Final = {"authorization": "Bearer forwarded", "X-Trace": "trace"}
     resolved, remaining = await MCPServerManager().resolve_openapi_upstream_auth(
-        mcp_server=server, oauth2_headers=None, raw_headers=None,
-        mcp_auth_header=per_server, user_api_key_auth=UserAPIKeyAuth(user_id="alice"),
+        mcp_server=server,
+        oauth2_headers=None,
+        raw_headers=None,
+        mcp_auth_header=per_server,
+        user_api_key_auth=UserAPIKeyAuth(user_id="alice"),
         forwarded_headers=headers,
     )
     assert resolved == {"Authorization": per_server or "Bearer forwarded"}

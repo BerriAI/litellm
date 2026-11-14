@@ -28,7 +28,7 @@ _BEDROCK_503 = (
     '{"error":{"message":"litellm.ServiceUnavailableError: BedrockException - '
     '{\\"message\\":\\"Bedrock is unable to process your request.\\"}"}}'
 )
-_ANTHROPIC_529 = "status 529: {\"type\":\"overloaded_error\"}"
+_ANTHROPIC_529 = 'status 529: {"type":"overloaded_error"}'
 _OPENAI_429 = 'status 429: {"error":{"message":"Rate limit reached"}}'
 
 

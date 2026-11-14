@@ -213,9 +213,7 @@ class TestAzureContainerFiles:
         model: Final = _register_two_azure_deployments(proxy, resources, marker)
         key: Final = _service_account_key(proxy, resources, build_client(proxy), marker, model)
         client: Final = sdk.openai(key)
-        native_id: Final = _native_container_id(
-            _container_id(_streamed_response_with_code_interpreter(client, model))
-        )
+        native_id: Final = _native_container_id(_container_id(_streamed_response_with_code_interpreter(client, model)))
         resources.defer(lambda: client.containers.delete(native_id, extra_query=AZURE_PROVIDER_QUERY))
         _assert_file_round_trip(client, native_id, marker)
 

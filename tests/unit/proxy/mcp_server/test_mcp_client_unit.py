@@ -59,9 +59,7 @@ class TestMCPClientUnitTests:
         }
 
         # Basic auth
-        client = MCPClient(
-            "http://example.com", auth_type=MCPAuth.basic, auth_value="user:pass"
-        )
+        client = MCPClient("http://example.com", auth_type=MCPAuth.basic, auth_value="user:pass")
         expected_encoded = base64.b64encode("user:pass".encode("utf-8")).decode()
         headers = client._get_auth_headers()
         assert headers == {
@@ -69,9 +67,7 @@ class TestMCPClientUnitTests:
         }
 
         # API key
-        client = MCPClient(
-            "http://example.com", auth_type=MCPAuth.api_key, auth_value="api_key_123"
-        )
+        client = MCPClient("http://example.com", auth_type=MCPAuth.api_key, auth_value="api_key_123")
         headers = client._get_auth_headers()
         assert headers == {
             "X-API-Key": "api_key_123",
@@ -196,8 +192,12 @@ class TestMCPClientUnitTests:
         mock_session_instance.list_tools.assert_called_once()
 
     @pytest.mark.asyncio
-    @patch.object(mcp_client_module, "streamable_http_client")  # test-quality-ok: exercises MCPClient wiring; the walk itself is covered sessionless in test_tools.py
-    @patch.object(mcp_client_module, "ClientSession")  # test-quality-ok: exercises MCPClient wiring; the walk itself is covered sessionless in test_tools.py
+    @patch.object(
+        mcp_client_module, "streamable_http_client"
+    )  # test-quality-ok: exercises MCPClient wiring; the walk itself is covered sessionless in test_tools.py
+    @patch.object(
+        mcp_client_module, "ClientSession"
+    )  # test-quality-ok: exercises MCPClient wiring; the walk itself is covered sessionless in test_tools.py
     async def test_list_tools_follows_next_cursor_until_exhausted(
         self,
         mock_session_class,
@@ -242,8 +242,12 @@ class TestMCPClientUnitTests:
         assert second_call_params.cursor == "page-2"
 
     @pytest.mark.asyncio
-    @patch.object(mcp_client_module, "streamable_http_client")  # test-quality-ok: exercises MCPClient wiring; the walk itself is covered sessionless in test_tools.py
-    @patch.object(mcp_client_module, "ClientSession")  # test-quality-ok: exercises MCPClient wiring; the walk itself is covered sessionless in test_tools.py
+    @patch.object(
+        mcp_client_module, "streamable_http_client"
+    )  # test-quality-ok: exercises MCPClient wiring; the walk itself is covered sessionless in test_tools.py
+    @patch.object(
+        mcp_client_module, "ClientSession"
+    )  # test-quality-ok: exercises MCPClient wiring; the walk itself is covered sessionless in test_tools.py
     async def test_list_tools_swallows_mid_walk_error_without_raise_on_error(
         self,
         mock_session_class,

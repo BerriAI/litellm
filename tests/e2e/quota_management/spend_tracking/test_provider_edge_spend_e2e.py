@@ -47,14 +47,10 @@ def test_edge_wired_chat_writes_nonzero_spend_row(
     )
     resources.defer(lambda: client.proxy.delete_model(model_id))
 
-    chat = unwrap(
-        client.chat(scoped_key, model, f"reply with one word {unique_marker()}", max_tokens=16)
-    )
+    chat = unwrap(client.chat(scoped_key, model, f"reply with one word {unique_marker()}", max_tokens=16))
     assert chat.id
 
-    rows = client.poll_logs_for_key(
-        scoped_key, predicate=lambda rs: any((r.spend or 0) > 0 for r in rs)
-    )
+    rows = client.poll_logs_for_key(scoped_key, predicate=lambda rs: any((r.spend or 0) > 0 for r in rs))
     matching = [row for row in rows if row.request_id == chat.id]
     assert matching, f"no SpendLogs row for request_id {chat.id}; saw {len(rows)} row(s)"
     assert (matching[0].spend or 0) > 0, f"spend row for {chat.id} has zero spend"

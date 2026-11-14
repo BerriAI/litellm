@@ -141,7 +141,14 @@ def _success_rows(gateway: Gateway, request_id: str) -> list[dict[str, JsonValue
 
 
 def _assert_completed_by_retry(
-    gateway: Gateway, status: int, events: tuple[SseEvent, ...], prompt: str, model: str, wire: Wire, *, attempts: int = 2
+    gateway: Gateway,
+    status: int,
+    events: tuple[SseEvent, ...],
+    prompt: str,
+    model: str,
+    wire: Wire,
+    *,
+    attempts: int = 2,
 ) -> None:
     assert status == 200, events
     assert event_types(events) == LIFECYCLE, events

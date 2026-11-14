@@ -12,7 +12,6 @@ Line shape decides the parse, not the batch's declared endpoint, so an output
 file mixing Responses-shaped and chat-shaped lines sums across both.
 """
 
-
 import pytest
 
 import litellm

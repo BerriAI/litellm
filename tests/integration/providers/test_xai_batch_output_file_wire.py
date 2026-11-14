@@ -156,7 +156,9 @@ def _upstream_paths(gateway: Gateway, scenario_id: str) -> tuple[str, ...]:
 
 
 def _results_reads(gateway: Gateway, batch: _XAIBatch, raw_batch_id: str) -> int:
-    return sum(path.endswith(f"/{raw_batch_id}/results") for path in _upstream_paths(gateway, batch.upstream.scenario_id))
+    return sum(
+        path.endswith(f"/{raw_batch_id}/results") for path in _upstream_paths(gateway, batch.upstream.scenario_id)
+    )
 
 
 def _stable_results_reads(gateway: Gateway, batch: _XAIBatch, raw_batch_id: str) -> int:
@@ -278,9 +280,7 @@ def test_xai_batch_output_file_registered_by_the_batch_job_first_carries_the_dow
             lambda values: any(value.get("filename") == raw_batch_id for value in values),
             seconds=60,
         )
-        listed_output: Final = next(
-            value for value in listed if value.get("filename") == raw_batch_id
-        )
+        listed_output: Final = next(value for value in listed if value.get("filename") == raw_batch_id)
         content: Final = gateway.request("GET", f"/v1/files/{listed_output['id']}/content", key=batch.owner_key)
         assert content.status_code == 200, content.text
         assert (listed_output["purpose"], listed_output["bytes"]) == ("batch_output", len(content.content)), (

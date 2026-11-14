@@ -161,8 +161,6 @@ def test_acount_tokens_no_api_key_falls_back(monkeypatch):
     assert result.tokenizer_type == "local_tokenizer"
 
 
-
-
 @pytest.fixture
 def httpx_transport_clients(monkeypatch):
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)

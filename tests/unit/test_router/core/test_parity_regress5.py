@@ -130,8 +130,7 @@ async def test_a_group_that_serves_no_chat_endpoint_names_what_it_serves(make_co
     with pytest.raises(EndpointNotSupportedByModelError) as refused:
         await core.acompletion(model="g", messages=MESSAGES)  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]  # an endpoint
     assert (
-        refused.value.message
-        == "/v1/chat/completions is not supported by model=g. Supported endpoints: /v1/embeddings"
+        refused.value.message == "/v1/chat/completions is not supported by model=g. Supported endpoints: /v1/embeddings"
     )
 
 
@@ -401,9 +400,7 @@ async def test_a_listed_pass_through_pick_names_the_group_the_alias_resolved_to(
 
 @pytest.mark.asyncio
 async def test_an_async_pass_through_pick_of_a_strategy_marker_group_takes_the_tier(make_core: MakeCore) -> None:
-    core: Final = make_core(
-        model_list=list(COMPLEXITY_GROUP), num_retries=0, routing_strategy="usage-based-routing-v2"
-    )
+    core: Final = make_core(model_list=list(COMPLEXITY_GROUP), num_retries=0, routing_strategy="usage-based-routing-v2")
     picked: Final = await core.async_get_available_deployment_for_pass_through(  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]  # the async pass-through pick
         "smart", {}, messages=[{"role": "user", "content": "what is up"}]
     )

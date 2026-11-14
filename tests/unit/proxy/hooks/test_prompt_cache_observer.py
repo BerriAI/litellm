@@ -27,13 +27,19 @@ def body(ttl="5m", texts=("private cache prefix",)):
         "max_tokens": 2,
         "system": "private system instructions",
         "tools": [{"name": "lookup", "input_schema": {"type": "object"}}],
-        "messages": [{"role": "user", "content": [
-            {"type": "text", "text": text, **(
-                {"cache_control": {"type": "ephemeral", "ttl": ttl}}
-                if index == len(texts) - 1 else {}
-            )}
-            for index, text in enumerate(texts)
-        ]}],
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": text,
+                        **({"cache_control": {"type": "ephemeral", "ttl": ttl}} if index == len(texts) - 1 else {}),
+                    }
+                    for index, text in enumerate(texts)
+                ],
+            }
+        ],
     }
 
 
@@ -52,7 +58,9 @@ def usage(ttl="5m", read=100, write=200):
 
 def event(request_body, started=1000.0, headers=None, **overrides):
     request = httpx.Request(
-        "POST", "https://api.anthropic.com/v1/messages", json=request_body,
+        "POST",
+        "https://api.anthropic.com/v1/messages",
+        json=request_body,
         headers={"x-api-key": KEY, "anthropic-version": "2023-06-01", **(headers or {})},
     )
     return {
@@ -62,7 +70,8 @@ def event(request_body, started=1000.0, headers=None, **overrides):
         "httpx_response": httpx.Response(200, request=request),
         "first_api_call_start_time": datetime.fromtimestamp(started),
         "standard_logging_object": {
-            "status": "success", "model_id": DEPLOYMENT,
+            "status": "success",
+            "model_id": DEPLOYMENT,
             "metadata": {"user_api_key_hash": CALLER},
         },
         **overrides,
@@ -76,16 +85,23 @@ async def observe(cache, request_body=None, native_usage=None, now=1010.0, **ove
         usage=AnthropicConfig().calculate_usage(native_usage or usage(), reasoning_content=None),
     )
     await observer.async_log_success_event(
-        event(request_body or body(), **overrides), response,
-        datetime.fromtimestamp(now), datetime.fromtimestamp(now),
+        event(request_body or body(), **overrides),
+        response,
+        datetime.fromtimestamp(now),
+        datetime.fromtimestamp(now),
     )
 
 
 def scope(**overrides):
-    return cache_scope(**{
-        "caller_key_hash": CALLER, "deployment_id": DEPLOYMENT,
-        "provider_key": KEY, "model": MODEL, **overrides,
-    })
+    return cache_scope(
+        **{
+            "caller_key_hash": CALLER,
+            "deployment_id": DEPLOYMENT,
+            "provider_key": KEY,
+            "model": MODEL,
+            **overrides,
+        }
+    )
 
 
 @pytest.mark.parametrize("ttl,expires", [("5m", 1300), ("1h", 4600)])
@@ -107,11 +123,16 @@ async def test_observed_cache_count_and_request_start_expiry_survive_as_stale(tt
     assert CALLER not in saved
 
 
-@pytest.mark.parametrize("changed", [
-    {"caller_key_hash": "b" * 64}, {"deployment_id": "other"},
-    {"provider_key": "rotated"}, {"model": "claude-opus-5"},
-    {"anthropic_version": "different"},
-])
+@pytest.mark.parametrize(
+    "changed",
+    [
+        {"caller_key_hash": "b" * 64},
+        {"deployment_id": "other"},
+        {"provider_key": "rotated"},
+        {"model": "claude-opus-5"},
+        {"anthropic_version": "different"},
+    ],
+)
 @pytest.mark.asyncio
 async def test_cache_evidence_is_isolated_by_every_scope_dimension(changed):
     cache = DualCache()
@@ -138,15 +159,18 @@ async def test_append_only_prefix_finds_prior_evidence_but_edit_or_context_chang
     assert await lookup(cache, scope(), outside_lookback, now=1010) is None
 
 
-@pytest.mark.parametrize("change", [
-    {"thinking": {"type": "enabled", "budget_tokens": 1024}},
-    {"tool_choice": {"type": "auto"}},
-    {"cache_control": {"type": "ephemeral"}},
-    {"tools": [{"type": "web_search_20250305", "name": "web_search"}]},
-    {"system": [{"type": "text", "text": "system", "cache_control": {"type": "ephemeral"}}]},
-    {"messages": [{"role": "user", "content": [{"type": "image", "source": {}}]}]},
-    {"messages": [{"role": "user", "content": "no breakpoint"}]},
-])
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"thinking": {"type": "enabled", "budget_tokens": 1024}},
+        {"tool_choice": {"type": "auto"}},
+        {"cache_control": {"type": "ephemeral"}},
+        {"tools": [{"type": "web_search_20250305", "name": "web_search"}]},
+        {"system": [{"type": "text", "text": "system", "cache_control": {"type": "ephemeral"}}]},
+        {"messages": [{"role": "user", "content": [{"type": "image", "source": {}}]}]},
+        {"messages": [{"role": "user", "content": "no breakpoint"}]},
+    ],
+)
 def test_unsupported_or_ambiguous_shapes_have_no_cache_identity(change):
     assert parse_prompt({**body(), **change}) is None
     duplicate = body()
@@ -154,13 +178,18 @@ def test_unsupported_or_ambiguous_shapes_have_no_cache_identity(change):
     assert parse_prompt(duplicate) is None
 
 
-@pytest.mark.parametrize("overrides", [
-    {"cache_hit": True}, {"call_type": "completion"},
-    {"custom_llm_provider": "bedrock"}, {"stream": True},
-    {"headers": {"anthropic-beta": "unverified-feature"}},
-    {"headers": {"x-custom-header": "unverified"}},
-    {"standard_logging_object": {"status": "success", "model_id": DEPLOYMENT, "metadata": {}}},
-])
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"cache_hit": True},
+        {"call_type": "completion"},
+        {"custom_llm_provider": "bedrock"},
+        {"stream": True},
+        {"headers": {"anthropic-beta": "unverified-feature"}},
+        {"headers": {"x-custom-header": "unverified"}},
+        {"standard_logging_object": {"status": "success", "model_id": DEPLOYMENT, "metadata": {}}},
+    ],
+)
 @pytest.mark.asyncio
 async def test_unverified_source_never_creates_observations(overrides):
     cache = DualCache()
@@ -168,13 +197,16 @@ async def test_unverified_source_never_creates_observations(overrides):
     assert await lookup(cache, scope(), parse_prompt(body()), now=1010) is None
 
 
-@pytest.mark.parametrize("native_usage", [
-    usage(write=0),
-    {**usage(), "cache_creation": None},
-    {**usage(), "cache_creation": {"ephemeral_5m_input_tokens": 199, "ephemeral_1h_input_tokens": 0}},
-    usage(ttl="1h"),
-    {**usage(), "cache_creation_input_tokens": -200},
-])
+@pytest.mark.parametrize(
+    "native_usage",
+    [
+        usage(write=0),
+        {**usage(), "cache_creation": None},
+        {**usage(), "cache_creation": {"ephemeral_5m_input_tokens": 199, "ephemeral_1h_input_tokens": 0}},
+        usage(ttl="1h"),
+        {**usage(), "cache_creation_input_tokens": -200},
+    ],
+)
 @pytest.mark.asyncio
 async def test_missing_or_contradictory_telemetry_cannot_create_observations(native_usage):
     cache = DualCache()
@@ -208,9 +240,14 @@ class RecordingObserver(PromptCacheObserver):
 
 def native_response():
     return {
-        "id": "msg_prediction", "type": "message", "role": "assistant", "model": MODEL,
-        "content": [{"type": "text", "text": "ok"}], "stop_reason": "end_turn",
-        "stop_sequence": None, "usage": usage(ttl="1h"),
+        "id": "msg_prediction",
+        "type": "message",
+        "role": "assistant",
+        "model": MODEL,
+        "content": [{"type": "text", "text": "ok"}],
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "usage": usage(ttl="1h"),
     }
 
 
@@ -238,24 +275,29 @@ class TransportChunks(httpx.AsyncByteStream):
 
     async def __aiter__(self):
         if self.prefix_length:
-            yield self.payload[:self.prefix_length]
+            yield self.payload[: self.prefix_length]
         for offset in range(self.prefix_length, len(self.payload), self.chunk_size):
-            yield self.payload[offset:offset + self.chunk_size]
+            yield self.payload[offset : offset + self.chunk_size]
 
 
-@pytest.mark.parametrize("stream,completed,provider_error,transport", [
-    (False, True, False, "whole"),
-    (True, True, False, "whole"),
-    (True, False, False, "whole"),
-    (True, True, True, "whole"),
-    (True, True, False, "fragmented"),
-    (True, False, False, "fragmented"),
-    (True, True, True, "fragmented"),
-    (True, True, True, "fragmented_error"),
-    (True, True, False, "unterminated"),
-])
+@pytest.mark.parametrize(
+    "stream,completed,provider_error,transport",
+    [
+        (False, True, False, "whole"),
+        (True, True, False, "whole"),
+        (True, False, False, "whole"),
+        (True, True, True, "whole"),
+        (True, True, False, "fragmented"),
+        (True, False, False, "fragmented"),
+        (True, True, True, "fragmented"),
+        (True, True, True, "fragmented_error"),
+        (True, True, False, "unterminated"),
+    ],
+)
 @pytest.mark.asyncio
-async def test_native_production_callback_records_only_completed_wire_requests(stream, completed, provider_error, transport):
+async def test_native_production_callback_records_only_completed_wire_requests(
+    stream, completed, provider_error, transport
+):
     cache = DualCache()
     observer = RecordingObserver(cache)
     litellm.logging_callback_manager.add_litellm_callback(observer)
@@ -266,9 +308,12 @@ async def test_native_production_callback_records_only_completed_wire_requests(s
             if transport == "unterminated":
                 payload = payload.removesuffix("\n\n")
             return httpx.Response(
-                200, request=request, headers={"content-type": "text/event-stream"},
+                200,
+                request=request,
+                headers={"content-type": "text/event-stream"},
                 stream=TransportChunks(
-                    payload, 1 if transport.startswith("fragmented") else None,
+                    payload,
+                    1 if transport.startswith("fragmented") else None,
                     fragment_error_only=transport == "fragmented_error",
                 ),
             )
@@ -282,7 +327,10 @@ async def test_native_production_callback_records_only_completed_wire_requests(s
         before = time.time()
         result = await litellm.anthropic_messages(
             **{**request_body, "model": f"anthropic/{MODEL}"},
-            api_key=KEY, client=client, stream=stream, model_info={"id": DEPLOYMENT},
+            api_key=KEY,
+            client=client,
+            stream=stream,
+            model_info={"id": DEPLOYMENT},
             litellm_metadata={"user_api_key_hash": CALLER, "model_info": {"id": DEPLOYMENT}},
         )
         if stream:

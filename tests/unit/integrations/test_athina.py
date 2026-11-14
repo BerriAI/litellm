@@ -81,9 +81,7 @@ class TestAthinaLogger(unittest.TestCase):
         }
 
         # Call the method
-        self.logger.log_event(
-            kwargs, response_obj, self.start_time, self.end_time, self.print_verbose
-        )
+        self.logger.log_event(kwargs, response_obj, self.start_time, self.end_time, self.print_verbose)
 
         # Verify the results
         mock_post.assert_called_once()
@@ -138,14 +136,10 @@ class TestAthinaLogger(unittest.TestCase):
         }
 
         # Call the method
-        self.logger.log_event(
-            kwargs, response_obj, self.start_time, self.end_time, self.print_verbose
-        )
+        self.logger.log_event(kwargs, response_obj, self.start_time, self.end_time, self.print_verbose)
 
         # Verify print_verbose was called with error message
-        self.print_verbose.assert_called_once_with(
-            "Athina Logger Error - Bad Request, 400"
-        )
+        self.print_verbose.assert_called_once_with("Athina Logger Error - Bad Request, 400")
 
     @patch("litellm.module_level_client.post")
     def test_log_event_exception(self, mock_post):
@@ -164,15 +158,11 @@ class TestAthinaLogger(unittest.TestCase):
         response_obj.model_dump.return_value = {}
 
         # Call the method
-        self.logger.log_event(
-            kwargs, response_obj, self.start_time, self.end_time, self.print_verbose
-        )
+        self.logger.log_event(kwargs, response_obj, self.start_time, self.end_time, self.print_verbose)
 
         # Verify print_verbose was called with exception info
         self.print_verbose.assert_called_once()
-        self.assertIn(
-            "Athina Logger Error - Test exception", self.print_verbose.call_args[0][0]
-        )
+        self.assertIn("Athina Logger Error - Test exception", self.print_verbose.call_args[0][0])
 
     @patch("litellm.module_level_client.post")
     def test_log_event_with_tools(self, mock_post):
@@ -187,9 +177,7 @@ class TestAthinaLogger(unittest.TestCase):
             "model": "gpt-4",
             "messages": [{"role": "user", "content": "What's the weather?"}],
             "stream": False,
-            "optional_params": {
-                "tools": [{"type": "function", "function": {"name": "get_weather"}}]
-            },
+            "optional_params": {"tools": [{"type": "function", "function": {"name": "get_weather"}}]},
         }
 
         response_obj = MagicMock()
@@ -199,9 +187,7 @@ class TestAthinaLogger(unittest.TestCase):
         }
 
         # Call the method
-        self.logger.log_event(
-            kwargs, response_obj, self.start_time, self.end_time, self.print_verbose
-        )
+        self.logger.log_event(kwargs, response_obj, self.start_time, self.end_time, self.print_verbose)
 
         # Verify the results
         sent_data = json.loads(mock_post.call_args[1]["data"])

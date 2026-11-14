@@ -455,9 +455,7 @@ def test_chat_stream_through_web_search_has_single_spend_owner(rig: _Rig, scenar
     _assert_single_model_spend_for_key(key, "acompletion")
 
 
-def test_multi_round_chat_stream_through_web_search_bills_each_search(
-    rig: _Rig, scenario: Scenario
-) -> None:
+def test_multi_round_chat_stream_through_web_search_bills_each_search(rig: _Rig, scenario: Scenario) -> None:
     deployment: Final = _deploy(rig, scenario, "multi-search", priced=True)
     key: Final = scenario.key(models=[deployment.model])
     stream: Final = _post(rig, "/v1/chat/completions", _chat_body(deployment), key=key)
@@ -532,9 +530,7 @@ def test_responses_stream_through_web_search_has_single_spend_owner(rig: _Rig, s
     _assert_single_model_spend_for_key(key, "aresponses")
 
 
-def test_multi_round_responses_stream_through_web_search_bills_each_search(
-    rig: _Rig, scenario: Scenario
-) -> None:
+def test_multi_round_responses_stream_through_web_search_bills_each_search(rig: _Rig, scenario: Scenario) -> None:
     deployment: Final = _deploy(rig, scenario, "multi-search", priced=True)
     key: Final = scenario.key(models=[deployment.model])
     stream: Final = _post(rig, "/v1/responses", _responses_body(deployment), key=key)
@@ -862,9 +858,7 @@ def _assert_failed_once(call_id: str, *, spend: float) -> None:
 def test_failed_follow_up_call_answers_with_the_providers_error_instead_of_the_search_tool_call(
     rig: _Rig, scenario: Scenario, stream: bool
 ) -> None:
-    deployment: Final = _deploy(
-        rig, scenario, "followup-fails", priced=True
-    )
+    deployment: Final = _deploy(rig, scenario, "followup-fails", priced=True)
     extra: Final = {**_NO_CACHE, "stream_options": dict(_USAGE)} if stream else _NO_CACHE
     body: Final = _chat_body(deployment, stream=stream, extra=extra)
     response: Final = rig.gateway.request("POST", "/v1/chat/completions", body)

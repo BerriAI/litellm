@@ -3,7 +3,6 @@ End-to-end tests for GDPR Art. 32 EU PII Protection policy template
 Tests the complete policy with various EU PII patterns
 """
 
-
 import pytest
 
 

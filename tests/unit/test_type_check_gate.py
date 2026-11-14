@@ -37,20 +37,12 @@ def test_basedpyright_counts_per_rule_from_json_not_warnings():
 
 
 def test_basedpyright_error_without_a_rule_is_bucketed():
-    payload = json.dumps(
-        {"generalDiagnostics": [_bpr(f"{ROOT}/litellm/x.py", "error", None)]}
-    )
+    payload = json.dumps({"generalDiagnostics": [_bpr(f"{ROOT}/litellm/x.py", "error", None)]})
     assert gate.count_basedpyright(payload) == {gate.UNCODED: 1}
 
 
 def test_paths_outside_repo_are_skipped():
-    payload = json.dumps(
-        {
-            "generalDiagnostics": [
-                _bpr("/tmp/elsewhere.py", "error", "reportArgumentType")
-            ]
-        }
-    )
+    payload = json.dumps({"generalDiagnostics": [_bpr("/tmp/elsewhere.py", "error", "reportArgumentType")]})
     assert gate.count_basedpyright(payload) == {}
 
 
@@ -59,13 +51,7 @@ def test_symlinked_root_keeps_diagnostics_in_tree(tmp_path):
     real.mkdir()
     link = tmp_path / "link"
     link.symlink_to(real)
-    payload = json.dumps(
-        {
-            "generalDiagnostics": [
-                _bpr(link / "litellm" / "x.py", "error", "reportArgumentType")
-            ]
-        }
-    )
+    payload = json.dumps({"generalDiagnostics": [_bpr(link / "litellm" / "x.py", "error", "reportArgumentType")]})
     assert gate.count_basedpyright(payload, root=link) == {"reportArgumentType": 1}
 
 
@@ -76,9 +62,7 @@ def test_node_options_with_heap_sets_the_flag_in_a_bare_env():
 def test_node_options_with_heap_appends_after_caller_flags_so_it_wins():
     # node resolves a repeated --max-old-space-size last-wins, so ours must come
     # after any caller-set value while keeping their other flags.
-    merged = gate.node_options_with_heap(
-        {"NODE_OPTIONS": "--max-old-space-size=4096 --no-warnings"}
-    )
+    merged = gate.node_options_with_heap({"NODE_OPTIONS": "--max-old-space-size=4096 --no-warnings"})
     assert merged == f"--max-old-space-size=4096 --no-warnings {gate.NODE_HEAP_OPTION}"
 
 
@@ -98,9 +82,7 @@ def test_run_basedpyright_exports_the_raised_heap_to_the_child(tmp_path, monkeyp
         f'echo "$NODE_OPTIONS" > "{captured}"\necho \'{{"generalDiagnostics": []}}\'',
     )
     monkeypatch.delenv("NODE_OPTIONS", raising=False)
-    assert json.loads(gate.run_basedpyright(cwd=tmp_path, env_dir=env_dir)) == {
-        "generalDiagnostics": []
-    }
+    assert json.loads(gate.run_basedpyright(cwd=tmp_path, env_dir=env_dir)) == {"generalDiagnostics": []}
     assert captured.read_text().strip() == gate.NODE_HEAP_OPTION
 
 
@@ -148,12 +130,10 @@ def test_fingerprints_carry_the_dependency_group_set():
     # another's: the fingerprint difference re-keys every cache entry and
     # artifact name, so a changed canonical set falls back to recompute.
     assert gate.environment_fingerprints() == gate.environment_fingerprints()
-    assert gate.environment_fingerprints(
-        dep_groups=("proxy-dev",)
-    ) != gate.environment_fingerprints(dep_groups=("proxy-dev", "e2e-dev"))
-    assert gate.environment_fingerprints()[-1] == "groups:" + ",".join(
-        gate.TYPECHECK_DEP_GROUPS
+    assert gate.environment_fingerprints(dep_groups=("proxy-dev",)) != gate.environment_fingerprints(
+        dep_groups=("proxy-dev", "e2e-dev")
     )
+    assert gate.environment_fingerprints()[-1] == "groups:" + ",".join(gate.TYPECHECK_DEP_GROUPS)
 
 
 def test_fingerprints_cover_the_prisma_schema():

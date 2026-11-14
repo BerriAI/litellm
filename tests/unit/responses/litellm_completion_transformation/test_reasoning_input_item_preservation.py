@@ -178,16 +178,12 @@ class TestEncryptedReasoningRoundTrip:
         item = {
             "type": "reasoning",
             "id": "rs_1",
-            "encrypted_content": json.dumps(
-                [{"type": "thinking", "thinking": "hidden", "signature": "sig-one"}]
-            ),
+            "encrypted_content": json.dumps([{"type": "thinking", "thinking": "hidden", "signature": "sig-one"}]),
         }
         messages = _transform_item(item)
         assert len(messages) == 1
         assert messages[0]["content"] is None
-        assert messages[0]["thinking_blocks"] == [
-            {"type": "thinking", "thinking": "hidden", "signature": "sig-one"}
-        ]
+        assert messages[0]["thinking_blocks"] == [{"type": "thinking", "thinking": "hidden", "signature": "sig-one"}]
 
     def test_unsigned_blocks_dropped(self):
         """Blocks without a signature or redacted payload are not replayed."""
@@ -229,9 +225,7 @@ class TestEncryptedReasoningRoundTrip:
         )
         assert len(messages) == 1
         assert messages[0]["reasoning_content"] == "look it up"
-        assert messages[0]["thinking_blocks"] == [
-            {"type": "thinking", "thinking": "hidden", "signature": "sig-one"}
-        ]
+        assert messages[0]["thinking_blocks"] == [{"type": "thinking", "thinking": "hidden", "signature": "sig-one"}]
         assert len(messages[0]["tool_calls"]) == 1
 
     def test_replayed_blocks_precede_existing_blocks(self):

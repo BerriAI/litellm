@@ -39,12 +39,16 @@ def _patch_paths(monkeypatch, tmp_path):
 
 class TestMergeClaudeSettings:
     def test_preserves_unrelated_top_level_keys(self):
-        merged = merge_claude_settings({"theme": "dark"}, "http://localhost:4000", StaticToken("sk-fresh"), status_line="statusline-cmd")
+        merged = merge_claude_settings(
+            {"theme": "dark"}, "http://localhost:4000", StaticToken("sk-fresh"), status_line="statusline-cmd"
+        )
         assert merged["theme"] == "dark"
 
     def test_preserves_unrelated_env_keys(self):
         settings = {"env": {"SOME_OTHER_VAR": "value"}}
-        merged = merge_claude_settings(settings, "http://localhost:4000", StaticToken("sk-fresh"), status_line="statusline-cmd")
+        merged = merge_claude_settings(
+            settings, "http://localhost:4000", StaticToken("sk-fresh"), status_line="statusline-cmd"
+        )
         assert merged["env"]["SOME_OTHER_VAR"] == "value"
 
     def test_overrides_base_url_and_strips_an_old_helper(self):
@@ -52,7 +56,9 @@ class TestMergeClaudeSettings:
             "env": {"ANTHROPIC_BASE_URL": "https://old.example.com"},
             "apiKeyHelper": "old-helper",
         }
-        merged = merge_claude_settings(settings, "http://localhost:4000/", StaticToken("sk-fresh"), status_line="statusline-cmd")
+        merged = merge_claude_settings(
+            settings, "http://localhost:4000/", StaticToken("sk-fresh"), status_line="statusline-cmd"
+        )
         assert merged["env"]["ANTHROPIC_BASE_URL"] == "http://localhost:4000"
         assert merged["env"]["ANTHROPIC_AUTH_TOKEN"] == "sk-fresh"
         assert merged["env"]["ENABLE_TOOL_SEARCH"] == "true"
@@ -61,21 +67,29 @@ class TestMergeClaudeSettings:
 
     def test_preserves_existing_gateway_model_discovery(self):
         settings = {"env": {"CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY": "0"}}
-        merged = merge_claude_settings(settings, "http://localhost:4000", StaticToken("sk-fresh"), status_line="statusline-cmd")
+        merged = merge_claude_settings(
+            settings, "http://localhost:4000", StaticToken("sk-fresh"), status_line="statusline-cmd"
+        )
         assert merged["env"]["CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY"] == "0"
 
     def test_preserves_existing_tool_search(self):
         settings = {"env": {"ENABLE_TOOL_SEARCH": "false"}}
-        merged = merge_claude_settings(settings, "http://localhost:4000", StaticToken("sk-fresh"), status_line="statusline-cmd")
+        merged = merge_claude_settings(
+            settings, "http://localhost:4000", StaticToken("sk-fresh"), status_line="statusline-cmd"
+        )
         assert merged["env"]["ENABLE_TOOL_SEARCH"] == "false"
 
     def test_drops_stray_api_key(self):
         settings = {"env": {"ANTHROPIC_API_KEY": "leaked-key"}}
-        merged = merge_claude_settings(settings, "http://localhost:4000", StaticToken("sk-fresh"), status_line="statusline-cmd")
+        merged = merge_claude_settings(
+            settings, "http://localhost:4000", StaticToken("sk-fresh"), status_line="statusline-cmd"
+        )
         assert "ANTHROPIC_API_KEY" not in merged["env"]
 
     def test_works_from_empty_settings(self):
-        merged = merge_claude_settings({}, "http://localhost:4000", StaticToken("sk-fresh"), status_line="statusline-cmd")
+        merged = merge_claude_settings(
+            {}, "http://localhost:4000", StaticToken("sk-fresh"), status_line="statusline-cmd"
+        )
         assert merged["env"] == {
             "ANTHROPIC_BASE_URL": "http://localhost:4000",
             "ANTHROPIC_AUTH_TOKEN": "sk-fresh",
@@ -403,9 +417,7 @@ class TestEnsureFreshLogin:
         with pytest.raises(UpError, match="Run `lite login --pkce` first"):
             ensure_fresh_login(_make_ctx("http://proxy-a:4000"))
 
-    def test_trusts_the_key_the_cli_group_already_resolved_instead_of_reading_the_token_file_again(
-        self, monkeypatch
-    ):
+    def test_trusts_the_key_the_cli_group_already_resolved_instead_of_reading_the_token_file_again(self, monkeypatch):
         """The `lite` group renews a --pkce key on the way in, so a second renewal here would hit
         the proxy twice and, once the refresh token is burned, print the refusal twice."""
         store = _FakeTokenStore(monkeypatch, _pkce_record("http://proxy-a:4000", seconds_left=86_400), {})

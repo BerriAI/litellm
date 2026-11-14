@@ -195,14 +195,20 @@ def health_of(gateway: Gateway, model: str) -> tuple[int, int, int, str]:
 
 def assert_unhealthy(gateway: Gateway, model: str) -> None:
     observed: Final = eventually(
-        lambda: health_of(gateway, model), lambda found: found[:3] == (503, 0, 1), seconds=30, return_last_on_timeout=True
+        lambda: health_of(gateway, model),
+        lambda found: found[:3] == (503, 0, 1),
+        seconds=30,
+        return_last_on_timeout=True,
     )
     assert observed[:3] == (503, 0, 1), observed[3]
 
 
 def assert_healthy(gateway: Gateway, model: str) -> None:
     observed: Final = eventually(
-        lambda: health_of(gateway, model), lambda found: found[:3] == (200, 1, 0), seconds=30, return_last_on_timeout=True
+        lambda: health_of(gateway, model),
+        lambda found: found[:3] == (200, 1, 0),
+        seconds=30,
+        return_last_on_timeout=True,
     )
     assert observed[:3] == (200, 1, 0), observed[3]
 
@@ -300,7 +306,9 @@ def worker_pids(log: Path) -> tuple[int, ...]:
 
 
 @pytest.mark.timeout(2 * graceful_stop_seconds() + 240)
-async def test_worker_sigkill_mid_burst_leaves_the_sibling_serving_coralbricks(gateway: Gateway, tmp_path: Path) -> None:
+async def test_worker_sigkill_mid_burst_leaves_the_sibling_serving_coralbricks(
+    gateway: Gateway, tmp_path: Path
+) -> None:
     calls: Final = calls_of(20, ("chat", "messages", "responses"), lambda _: False)
     release: Final = threading.Event()
     held: Final[SimpleQueue[str]] = SimpleQueue()
@@ -383,7 +391,9 @@ async def test_proxy_sigterm_mid_burst_then_reboot_serves_coralbricks_again(gate
                     f"{SPEND_COLUMNS} WHERE model_group=%s AND status='success' AND request_id NOT LIKE 'probe_%%'",
                     (alias,),
                 ),
-                lambda found: any(same_response(string_value(row["request_id"]), expected_row_id(follow_up)) for row in found),
+                lambda found: any(
+                    same_response(string_value(row["request_id"]), expected_row_id(follow_up)) for row in found
+                ),
                 seconds=90,
             )
             identities: Final = [string_value(row["request_id"]) for row in rows]

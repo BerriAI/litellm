@@ -1164,7 +1164,9 @@ def _aggregated_entity_metadata(
     prefix: str, query_name: str, entity_id: str, prisma_client: object
 ) -> tuple[httpx.Response, tuple[Mapping[str, object], ...]]:
     with _daily_activity_test_client(_FakeRepository(_seeded_activity()), prisma_client) as client:
-        response: Final = client.get(f"{prefix}/daily/activity/aggregated", params=_entity_params(query_name, entity_id))
+        response: Final = client.get(
+            f"{prefix}/daily/activity/aggregated", params=_entity_params(query_name, entity_id)
+        )
     if response.status_code != 200:
         return response, ()
     entities: Final = chain.from_iterable(

@@ -249,9 +249,7 @@ def test_perplexity_malformed_result_is_rejected_without_naming_its_position():
 
 
 @pytest.mark.asyncio
-async def test_router_search_with_search_tools(
-    respx_mock: respx.MockRouter, httpx_transport: None
-) -> None:
+async def test_router_search_with_search_tools(respx_mock: respx.MockRouter, httpx_transport: None) -> None:
     route: Final = respx_mock.post(PERPLEXITY_SEARCH_URL).respond(
         json={
             "results": [

@@ -53,12 +53,7 @@ def _standard_logging_payload_with_requester_metadata() -> dict:
 
 
 def _metric_samples(metric_name: str):
-    return [
-        sample
-        for metric in REGISTRY.collect()
-        for sample in metric.samples
-        if sample.name == metric_name
-    ]
+    return [sample for metric in REGISTRY.collect() for sample in metric.samples if sample.name == metric_name]
 
 
 @pytest.mark.asyncio

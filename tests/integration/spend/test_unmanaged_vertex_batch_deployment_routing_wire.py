@@ -85,7 +85,10 @@ def _job(project: str, location: str, job: str, input_uri: str, state: str) -> d
         "displayName": "litellm-vertex-batch-scripted",
         "model": f"publishers/google/models/{BASE_MODEL}",
         "inputConfig": {"gcsSource": {"uris": [input_uri]}, "instancesFormat": "jsonl"},
-        "outputConfig": {"predictionsFormat": "jsonl", "gcsDestination": {"outputUriPrefix": input_uri.rsplit("/", 1)[0]}},
+        "outputConfig": {
+            "predictionsFormat": "jsonl",
+            "gcsDestination": {"outputUriPrefix": input_uri.rsplit("/", 1)[0]},
+        },
         "state": state,
         "createTime": "2026-10-30T20:00:00.000000Z",
         "updateTime": "2026-10-30T20:00:00.000000Z",
@@ -106,7 +109,9 @@ def _owned_config(path: Path, gateway: Gateway, wire_url: str) -> Path:
                             "api_base": wire_url,
                             "vertex_project": _project(team),
                             "vertex_location": LOCATION,
-                            "vertex_credentials": service_account_json(_project(team), gateway.upstream_url.rstrip("/")),
+                            "vertex_credentials": service_account_json(
+                                _project(team), gateway.upstream_url.rstrip("/")
+                            ),
                             "gcs_bucket_name": f"scripted-bucket-{team}",
                         },
                     }
@@ -144,7 +149,9 @@ def _create_batch(gateway: Gateway, key: str, team: str) -> str:
 
 
 def _retrieve_targets(requests: tuple[Request, ...], job: str) -> tuple[str, ...]:
-    return tuple(request.target for request in requests if request.method == "GET" and request.target.endswith(f"/{job}"))
+    return tuple(
+        request.target for request in requests if request.method == "GET" and request.target.endswith(f"/{job}")
+    )
 
 
 @pytest.mark.timeout(240)
@@ -163,7 +170,9 @@ def test_unmanaged_batch_on_the_second_deployment_sharing_a_base_model_is_polled
         batch_b: Final = _create_batch(owned.gateway, key, "b")
         assert (batch_a, batch_b) == (jobs[_project("a")][0], jobs[_project("b")][0]), (batch_a, batch_b, jobs)
 
-        seen: Final[list[Request]] = []  # mutable-ok: drain empties the wire queue, so samples accumulate across retries
+        seen: Final[
+            list[Request]
+        ] = []  # mutable-ok: drain empties the wire queue, so samples accumulate across retries
 
         def polled_so_far() -> tuple[Request, ...]:
             seen.extend(wire.drain())
@@ -178,4 +187,3 @@ def test_unmanaged_batch_on_the_second_deployment_sharing_a_base_model_is_polled
             assert all(
                 target.startswith(f"/v1/projects/{_project(team)}/") for target in _retrieve_targets(polled, batch)
             ), (team, _retrieve_targets(polled, batch))
-

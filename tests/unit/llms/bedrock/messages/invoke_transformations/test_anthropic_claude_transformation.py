@@ -4434,7 +4434,9 @@ def test_bedrock_messages_offers_a_native_output_retry_only_when_it_sends_native
     )
     retry_params: Final = config.native_output_fallback_litellm_params(model, optional_params, litellm_params)
 
-    assert (retry_params is not None) is ("format" in REASONING_BODY_ADAPTER.validate_python(body.get("output_config", {})))
+    assert (retry_params is not None) is (
+        "format" in REASONING_BODY_ADAPTER.validate_python(body.get("output_config", {}))
+    )
 
 
 # Bedrock's 400 bodies for requests past Claude's strict tool limits, seen live on us.anthropic.claude-sonnet-4-6 on 2026-10-29
@@ -4753,7 +4755,10 @@ async def test_bedrock_messages_fallback_to_anthropic_sends_the_tool_names_bedro
                     "aws_region_name": "us-east-1",
                 },
             },
-            {"model_name": "anthropic-claude", "litellm_params": {"model": "anthropic/claude-opus-4-8", "api_key": "test"}},
+            {
+                "model_name": "anthropic-claude",
+                "litellm_params": {"model": "anthropic/claude-opus-4-8", "api_key": "test"},
+            },
         ],
         fallbacks=[{"bedrock-claude": ["anthropic-claude"]}],
         num_retries=0,

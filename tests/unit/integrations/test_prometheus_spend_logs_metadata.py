@@ -144,9 +144,7 @@ def test_combined_metadata_includes_top_level_fields():
         }
     }
 
-    combined = _get_combined_custom_metadata_from_standard_logging_payload(
-        standard_logging_payload
-    )
+    combined = _get_combined_custom_metadata_from_standard_logging_payload(standard_logging_payload)
 
     assert combined["user_api_key_project_alias"] == "hotel-recommendations"
     assert combined["user_api_key_project_id"] == "proj-1"
@@ -176,9 +174,7 @@ def test_project_alias_accessible_via_custom_prometheus_labels(monkeypatch):
         }
     }
 
-    combined = _get_combined_custom_metadata_from_standard_logging_payload(
-        standard_logging_payload
-    )
+    combined = _get_combined_custom_metadata_from_standard_logging_payload(standard_logging_payload)
     result = get_custom_labels_from_metadata(combined)
 
     assert result == {"metadata_user_api_key_project_alias": "hotel-recommendations"}
@@ -203,9 +199,7 @@ def test_project_alias_accessible_without_prefix(monkeypatch):
         }
     }
 
-    combined = _get_combined_custom_metadata_from_standard_logging_payload(
-        standard_logging_payload
-    )
+    combined = _get_combined_custom_metadata_from_standard_logging_payload(standard_logging_payload)
     result = get_custom_labels_from_metadata(combined)
 
     assert result == {"user_api_key_project_alias": "hotel-recommendations"}

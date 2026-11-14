@@ -1686,8 +1686,6 @@ def test_operation_exception_log_event_encodes_for_otlp():
     assert resource_attrs["service.name"] == logger_provider.resource.attributes["service.name"]
 
 
-
-
 def _isolate_v2_otlp_tls_env(monkeypatch: pytest.MonkeyPatch) -> None:
     for key in (
         "SSL_VERIFY",
@@ -1772,7 +1770,6 @@ def test_v2_otlp_http_export_skips_verification_when_ssl_verify_false(
 def test_v2_otlp_http_export_rejects_untrusted_collector_by_default(
     monkeypatch: pytest.MonkeyPatch, tls_sink: TlsSink
 ) -> None:
-
 
     _isolate_v2_otlp_tls_env(monkeypatch)
     cfg = OpenTelemetryV2Config(exporter="otlp_http", endpoint=tls_sink.url)

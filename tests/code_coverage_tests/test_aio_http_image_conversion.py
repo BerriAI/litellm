@@ -22,9 +22,7 @@ def get_image_details(image_url) -> Tuple[str, str]:
 
         content_type = response.headers.get("content-type")
         if not content_type or "image" not in content_type:
-            raise ValueError(
-                f"URL does not point to a valid image (content-type: {content_type})"
-            )
+            raise ValueError(f"URL does not point to a valid image (content-type: {content_type})")
 
         base64_bytes = base64.b64encode(response.content).decode("utf-8")
         return base64_bytes, content_type
@@ -40,9 +38,7 @@ async def get_image_details_async(image_url) -> Tuple[str, str]:
 
         content_type = response.headers.get("content-type")
         if not content_type or "image" not in content_type:
-            raise ValueError(
-                f"URL does not point to a valid image (content-type: {content_type})"
-            )
+            raise ValueError(f"URL does not point to a valid image (content-type: {content_type})")
 
         base64_bytes = base64.b64encode(response.content).decode("utf-8")
         return base64_bytes, content_type
@@ -57,9 +53,7 @@ async def get_image_details_aio(image_url) -> Tuple[str, str]:
                 response.raise_for_status()
                 content_type = response.headers.get("content-type")
                 if not content_type or "image" not in content_type:
-                    raise ValueError(
-                        f"URL does not point to a valid image (content-type: {content_type})"
-                    )
+                    raise ValueError(f"URL does not point to a valid image (content-type: {content_type})")
                 content = await response.read()
                 base64_bytes = base64.b64encode(content).decode("utf-8")
                 return base64_bytes, content_type
@@ -95,9 +89,7 @@ async def test_aiohttp(urls: list[str], iterations: int = 3) -> list[float]:
 
 
 async def run_comparison():
-    urls = [
-        "https://awsmp-logos.s3.amazonaws.com/seller-xw5kijmvmzasy/c233c9ade2ccb5491072ae232c814942.png"
-    ] * 150
+    urls = ["https://awsmp-logos.s3.amazonaws.com/seller-xw5kijmvmzasy/c233c9ade2ccb5491072ae232c814942.png"] * 150
 
     print("Testing asyncified version...")
     asyncified_times = await test_asyncified(urls)
@@ -119,10 +111,10 @@ async def run_comparison():
         f"Aiohttp version    - Mean: {statistics.mean(aiohttp_times):.3f}s, Std: {statistics.stdev(aiohttp_times):.3f}s"
     )
     print(
-        f"Speed improvement over asyncified: {statistics.mean(asyncified_times)/statistics.mean(aiohttp_times):.2f}x"
+        f"Speed improvement over asyncified: {statistics.mean(asyncified_times) / statistics.mean(aiohttp_times):.2f}x"
     )
     print(
-        f"Speed improvement over async httpx: {statistics.mean(async_httpx_times)/statistics.mean(aiohttp_times):.2f}x"
+        f"Speed improvement over async httpx: {statistics.mean(async_httpx_times) / statistics.mean(aiohttp_times):.2f}x"
     )
 
 

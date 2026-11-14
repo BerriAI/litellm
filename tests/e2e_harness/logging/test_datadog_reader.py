@@ -179,7 +179,10 @@ def test_settlement_quota_retries_keep_the_remaining_readback_budget() -> None:
     empty_reads: Final = int(POLL_TIMEOUT / DD_SEARCH_INTERVAL) - 2
     reader, search = _reader(
         (_page(),) * empty_reads
-        + (_page("first"), StreamingResponse(status_code=429, body="", headers={"x-ratelimit-reset": str(POLL_TIMEOUT)})),
+        + (
+            _page("first"),
+            StreamingResponse(status_code=429, body="", headers={"x-ratelimit-reset": str(POLL_TIMEOUT)}),
+        ),
         clock,
     )
 

@@ -94,7 +94,6 @@ class TestVertexAIBinaryFileUpload:
         assert isinstance(transformed_request, bytes)
         assert transformed_request == mock_png_content
 
-
     @pytest.mark.asyncio
     async def test_jsonl_file_upload_returns_streaming_body(self):
         """

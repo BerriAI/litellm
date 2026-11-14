@@ -98,7 +98,9 @@ def test_sync_transcription_stream_logs_final_text_and_usage_once() -> None:
         stream: Final = client.audio.transcriptions.create(
             model="gpt-transcribe", file=("sample.webm", b"audio"), stream=True
         )
-        wrapped: Final = wrap_transcription_stream(stream, logging_obj, datetime(2026, 1, 1), litellm_exception_mapper({}))
+        wrapped: Final = wrap_transcription_stream(
+            stream, logging_obj, datetime(2026, 1, 1), litellm_exception_mapper({})
+        )
         received: Final = tuple(wrapped)
         wrapped.close()
 
@@ -199,8 +201,13 @@ async def test_atranscription_stream_preserves_duration_for_callback_cost():
     from litellm.litellm_core_utils.litellm_logging import Logging
 
     logging_obj = Logging(
-        model="gpt-transcribe", messages=[], stream=True, call_type="atranscription",
-        start_time=datetime.now(), litellm_call_id="transcription-cost-test", function_id="transcription-cost-test",
+        model="gpt-transcribe",
+        messages=[],
+        stream=True,
+        call_type="atranscription",
+        start_time=datetime.now(),
+        litellm_call_id="transcription-cost-test",
+        function_id="transcription-cost-test",
     )
     audio_file = io.BytesIO()
     with wave.open(audio_file, "wb") as wav_file:

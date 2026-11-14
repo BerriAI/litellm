@@ -297,8 +297,6 @@ def test_repair_defaults_to_the_public_schema(monkeypatch: pytest.MonkeyPatch) -
             conn.execute(f'DROP TABLE public."{table}"')
 
 
-
-
 @requires_db
 def test_repair_connects_over_direct_url_but_looks_in_the_schema_database_url_names(scratch_schema: str) -> None:
     _leave_invalid_index(scratch_schema, HEALTH_TABLE, HEALTH_INDEX, HEALTH_INDEX_COLUMNS)

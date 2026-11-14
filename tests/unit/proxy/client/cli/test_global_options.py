@@ -162,7 +162,9 @@ LOGIN_SERVER: Final = "https://login-gateway.example.com"
 SHELL_VERSION_THEN_QUIT: Final = "version\nquit\n"
 
 
-def test_bare_lite_connects_to_the_server_it_logged_in_to(cli_runner, isolated_home, requests_mock, secret_vault_factory):
+def test_bare_lite_connects_to_the_server_it_logged_in_to(
+    cli_runner, isolated_home, requests_mock, secret_vault_factory
+):
     _write_login_token(isolated_home, LOGIN_SERVER, "sk-from-login")
     requests_mock.get(f"{LOGIN_SERVER}/health/readiness", json={"litellm_version": "1.2.3"})
     context: Final[dict[str, object]] = {"secret_vault": secret_vault_factory()}
@@ -344,7 +346,9 @@ def test_version_flag_never_sends_api_key_to_unnamed_server(cli_runner, isolated
     assert sent_keys == ["Bearer sk-intended-for-flag-proxy"] * len(requested_urls)
 
 
-def test_litellm_proxy_entrypoint_prints_deprecation_notice_on_stderr_and_still_runs(monkeypatch, capsys, requests_mock):
+def test_litellm_proxy_entrypoint_prints_deprecation_notice_on_stderr_and_still_runs(
+    monkeypatch, capsys, requests_mock
+):
     requests_mock.get("http://localhost:4000/health/readiness", json={"litellm_version": "1.2.3"})
     monkeypatch.setattr(sys, "argv", ["litellm-proxy", "--version"])
     monkeypatch.setenv("LITELLM_PROXY_URL", "http://localhost:4000")

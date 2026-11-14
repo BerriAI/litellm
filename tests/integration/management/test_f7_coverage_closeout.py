@@ -1,4 +1,5 @@
 from typing import Final
+
 """Phase 4 F7 — coverage gap-closer scenarios picked from the un-covered
 ranges left after F1–F6 landed.
 
@@ -43,9 +44,7 @@ pytestmark = pytest.mark.asyncio(loop_scope="session")
 # ---------------------------------------------------------------------------
 
 
-async def test_org_team_guaranteed_throughput_model_over_bound_rejected(
-    gateway_client, db, resources, actors
-):
+async def test_org_team_guaranteed_throughput_model_over_bound_rejected(gateway_client, db, resources, actors):
     org_id = await create_scratch_org(
         db,
         resources.prefix,
@@ -83,9 +82,7 @@ async def test_org_team_guaranteed_throughput_model_over_bound_rejected(
     assert rows == []
 
 
-async def test_org_team_guaranteed_throughput_model_tpm_over_bound_rejected(
-    gateway_client, db, resources, actors
-):
+async def test_org_team_guaranteed_throughput_model_tpm_over_bound_rejected(gateway_client, db, resources, actors):
     """Mirror of the rpm scenario but for the model_tpm side — pins
     _check_team_model_specific_limits's tpm branch (lines 503–521) which
     the rpm scenario doesn't exercise."""
@@ -122,7 +119,6 @@ async def test_org_team_guaranteed_throughput_model_tpm_over_bound_rejected(
     assert rows == []
 
 
-
 @pytest.mark.parametrize("requested_tpm,expected_status", [(50, 400), (20, 200)], ids=["over", "within"])
 async def test_org_team_guaranteed_throughput_counts_sibling_allocations(
     requested_tpm: int, expected_status: int, gateway_client, db, resources, actors
@@ -154,6 +150,7 @@ async def test_org_team_guaranteed_throughput_counts_sibling_allocations(
     if expected_status == 400:
         assert "Allocated TPM limit=100" in resp.text, resp.text
 
+
 # ---------------------------------------------------------------------------
 # /key/generate — _check_project_key_limits project-not-found branch
 # (lines 1147–1156). Hitting it requires a project_id that doesn't resolve;
@@ -161,9 +158,7 @@ async def test_org_team_guaranteed_throughput_counts_sibling_allocations(
 # ---------------------------------------------------------------------------
 
 
-async def test_key_generate_with_unknown_project_id_rejected(
-    gateway_client, db, resources, actors
-):
+async def test_key_generate_with_unknown_project_id_rejected(gateway_client, db, resources, actors):
     seeder = actors.keys[Actor.PROXY_ADMIN].cleartext
     body = {
         "key_alias": resources.prefix,
@@ -178,9 +173,7 @@ async def test_key_generate_with_unknown_project_id_rejected(
     # The route's exception handler may wrap it; pin both shapes.
     assert resp.status_code in (400, 404), resp.text
     assert "project" in resp.text.lower() or "not found" in resp.text.lower(), resp.text
-    rows = await db.db.litellm_verificationtoken.find_many(
-        where={"key_alias": resources.prefix}
-    )
+    rows = await db.db.litellm_verificationtoken.find_many(where={"key_alias": resources.prefix})
     assert rows == [], "rejected key leaked a row"
 
 
@@ -192,9 +185,7 @@ async def test_key_generate_with_unknown_project_id_rejected(
 # ---------------------------------------------------------------------------
 
 
-async def _seed_key_for_relocation(
-    db, scratch_prefix: str, *, user_id: str, team_id: str
-) -> str:
+async def _seed_key_for_relocation(db, scratch_prefix: str, *, user_id: str, team_id: str) -> str:
     cleartext = "sk-" + uuid.uuid4().hex
     await db.db.litellm_verificationtoken.create(
         data={
@@ -209,9 +200,7 @@ async def _seed_key_for_relocation(
     return cleartext
 
 
-async def test_team_new_with_team_member_budget_creates_budget_row(
-    gateway_client, db, resources, actors
-):
+async def test_team_new_with_team_member_budget_creates_budget_row(gateway_client, db, resources, actors):
     """/team/new with `team_member_budget` routes through
     TeamMemberBudgetHandler.create_team_member_budget_table (lines 196–248).
     Observable end-state: a litellm_budgettable row is created and the
@@ -233,18 +222,14 @@ async def test_team_new_with_team_member_budget_creates_budget_row(
     team_row = await db.db.litellm_teamtable.find_unique(where={"team_id": team_id})
     assert team_row is not None
     budget_id = (team_row.metadata or {}).get("team_member_budget_id")
-    assert (
-        budget_id is not None
-    ), f"team_member_budget_id not stamped on team metadata: {team_row.metadata!r}"
+    assert budget_id is not None, f"team_member_budget_id not stamped on team metadata: {team_row.metadata!r}"
 
     # The handler writes the per-member budget row under a non-resources id
     # pattern (`team-<alias>-budget-<uuid>`), so the prefix sweep can't
     # reclaim it. Cleanup must run even when a downstream assertion fires;
     # otherwise orphan rows accumulate across CI re-runs.
     try:
-        budget_row = await db.db.litellm_budgettable.find_unique(
-            where={"budget_id": budget_id}
-        )
+        budget_row = await db.db.litellm_budgettable.find_unique(where={"budget_id": budget_id})
         assert budget_row is not None, "team_member_budget row was not created"
         assert budget_row.max_budget == 10.0
         assert budget_row.rpm_limit == 100
@@ -257,9 +242,7 @@ async def test_team_new_with_team_member_budget_creates_budget_row(
         await db.db.litellm_budgettable.delete(where={"budget_id": budget_id})
 
 
-async def test_team_update_team_member_budget_upserts(
-    gateway_client, db, resources, actors
-):
+async def test_team_update_team_member_budget_upserts(gateway_client, db, resources, actors):
     team_id = await create_scratch_team(db, team_id=resources.tag("team"))
     seeder = actors.keys[Actor.PROXY_ADMIN].cleartext
     resp = await gateway_client.post(
@@ -279,9 +262,7 @@ async def test_team_update_team_member_budget_upserts(
     assert budget_row is not None and budget_row.max_budget == 5.0, budget_row
 
     try:
-        budget_row: Final = await db.db.litellm_budgettable.find_unique(
-            where={"budget_id": budget_id}
-        )
+        budget_row: Final = await db.db.litellm_budgettable.find_unique(where={"budget_id": budget_id})
         assert budget_row is not None, "team_member_budget row was not created"
         assert budget_row.max_budget == 5.0
     finally:
@@ -292,9 +273,7 @@ async def test_team_update_team_member_budget_upserts(
         await db.db.litellm_budgettable.delete(where={"budget_id": budget_id})
 
 
-async def test_key_team_change_accepted_by_target_team_admin(
-    gateway_client, db, resources, actors
-):
+async def test_key_team_change_accepted_by_target_team_admin(gateway_client, db, resources, actors):
     """Caller is admin of the destination team AND the key's owner — the
     common_key_access_checks gate requires user_id-match for non-proxy-admin
     callers, so the team-admin-accepts branch of validate_key_team_change
@@ -302,9 +281,7 @@ async def test_key_team_change_accepted_by_target_team_admin(
     Hits validate_key_team_change line 3007–3011."""
     actor_user_id = f"{resources.prefix}-self-admin"
     actor_cleartext = "sk-" + uuid.uuid4().hex
-    await db.db.litellm_usertable.create(
-        data={"user_id": actor_user_id, "user_role": "internal_user"}
-    )
+    await db.db.litellm_usertable.create(data={"user_id": actor_user_id, "user_role": "internal_user"})
     await db.db.litellm_verificationtoken.create(
         data={
             "token": hash_token(actor_cleartext),
@@ -325,17 +302,13 @@ async def test_key_team_change_accepted_by_target_team_admin(
         team_id=resources.tag("target"),
         admin_user_ids=[actor_user_id],
     )
-    key_cleartext = await _seed_key_for_relocation(
-        db, resources.prefix, user_id=actor_user_id, team_id=source_team
-    )
+    key_cleartext = await _seed_key_for_relocation(db, resources.prefix, user_id=actor_user_id, team_id=source_team)
     resp = await gateway_client.post(
         "/key/update",
         headers={"Authorization": f"Bearer {actor_cleartext}"},
         json={"key": key_cleartext, "team_id": target_team},
     )
     assert resp.status_code == 200, resp.text
-    row = await db.db.litellm_verificationtoken.find_unique(
-        where={"token": hash_token(key_cleartext)}
-    )
+    row = await db.db.litellm_verificationtoken.find_unique(where={"token": hash_token(key_cleartext)})
     assert row is not None
     assert row.team_id == target_team, "key did not move under team-admin initiator"

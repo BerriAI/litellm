@@ -106,10 +106,7 @@ class TestSagemakerNovaConfig:
             litellm_params={},
             stream=False,
         )
-        assert (
-            url
-            == "https://runtime.sagemaker.us-east-1.amazonaws.com/endpoints/my-nova-endpoint/invocations"
-        )
+        assert url == "https://runtime.sagemaker.us-east-1.amazonaws.com/endpoints/my-nova-endpoint/invocations"
 
     def test_should_generate_correct_url_streaming(self):
         """Streaming URL should use /invocations-response-stream."""
@@ -295,10 +292,7 @@ class TestSagemakerChatBackwardsCompatibility:
             litellm_params={},
             stream=False,
         )
-        assert (
-            url
-            == "https://runtime.sagemaker.us-west-2.amazonaws.com/endpoints/my-hf-endpoint/invocations"
-        )
+        assert url == "https://runtime.sagemaker.us-west-2.amazonaws.com/endpoints/my-hf-endpoint/invocations"
 
         stream_url = self.config.get_complete_url(
             api_base=None,
@@ -347,9 +341,7 @@ class TestSagemakerChatBackwardsCompatibility:
         mock_response.iter_bytes.return_value = iter([])
         mock_client.post.return_value = mock_response
 
-        with patch(
-            "litellm.llms.sagemaker.chat.transformation.CustomStreamWrapper"
-        ) as mock_csw:
+        with patch("litellm.llms.sagemaker.chat.transformation.CustomStreamWrapper") as mock_csw:
             mock_csw.return_value = MagicMock()
             self.config.get_sync_custom_stream_wrapper(
                 litellm_params={},
@@ -386,9 +378,7 @@ class TestSagemakerChatBackwardsCompatibility:
         mock_response.aiter_bytes.return_value = empty_aiter()
         mock_client.post.return_value = mock_response
 
-        with patch(
-            "litellm.llms.sagemaker.chat.transformation.CustomStreamWrapper"
-        ) as mock_csw:
+        with patch("litellm.llms.sagemaker.chat.transformation.CustomStreamWrapper") as mock_csw:
             mock_csw.return_value = MagicMock()
             asyncio.run(
                 self.config.get_async_custom_stream_wrapper(

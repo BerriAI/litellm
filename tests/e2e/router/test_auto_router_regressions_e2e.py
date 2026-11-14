@@ -672,8 +672,14 @@ class TestSemanticAutoRouterResponses:
         Subject(
             domain=Domain.ROUTING,
             route=Route.RESPONSES,
-            providers=(Provider.ANTHROPIC, Provider.OPENAI,),
-            models=(CHEAP_MODEL, EMBEDDING_MODEL,),
+            providers=(
+                Provider.ANTHROPIC,
+                Provider.OPENAI,
+            ),
+            models=(
+                CHEAP_MODEL,
+                EMBEDDING_MODEL,
+            ),
             mode=Mode.NONSTREAM,
         )
     )

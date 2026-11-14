@@ -36,9 +36,7 @@ def test_should_encode_vertex_search_vector_store_id_in_complete_url():
 def test_should_reject_dot_segment_vertex_search_vector_store_id():
     config = VertexSearchAPIVectorStoreConfig()
 
-    with pytest.raises(
-        ValueError, match="vector_store_id cannot be a dot path segment"
-    ):
+    with pytest.raises(ValueError, match="vector_store_id cannot be a dot path segment"):
         config.get_complete_url(
             api_base=None,
             litellm_params={
@@ -108,9 +106,7 @@ def test_should_encode_vertex_engine_id_in_complete_url():
 def test_should_reject_dot_segment_vertex_engine_id():
     config = VertexSearchAPIVectorStoreConfig()
 
-    with pytest.raises(
-        ValueError, match="vertex_engine_id cannot be a dot path segment"
-    ):
+    with pytest.raises(ValueError, match="vertex_engine_id cannot be a dot path segment"):
         config.get_complete_url(
             api_base=None,
             litellm_params={
@@ -159,9 +155,7 @@ def _search_request(**overrides):
         litellm_params={"vertex_engine_id": "app-2"},
     )
     kwargs.update(overrides)
-    return VertexSearchAPIVectorStoreConfig().transform_search_vector_store_request(
-        **kwargs
-    )
+    return VertexSearchAPIVectorStoreConfig().transform_search_vector_store_request(**kwargs)
 
 
 def _datastore_search_request(**overrides):
@@ -175,9 +169,7 @@ def _datastore_search_request(**overrides):
         litellm_params={},
     )
     kwargs.update(overrides)
-    return VertexSearchAPIVectorStoreConfig().transform_search_vector_store_request(
-        **kwargs
-    )
+    return VertexSearchAPIVectorStoreConfig().transform_search_vector_store_request(**kwargs)
 
 
 def test_search_request_defaults_to_query_and_pagesize_10():
@@ -188,19 +180,13 @@ def test_search_request_defaults_to_query_and_pagesize_10():
 
 
 def test_search_request_maps_max_num_results_to_pagesize():
-    _, body = _search_request(
-        vector_store_search_optional_params={"max_num_results": 25}
-    )
+    _, body = _search_request(vector_store_search_optional_params={"max_num_results": 25})
 
     assert body["pageSize"] == 25
 
 
 def test_engine_search_request_forwards_datastorespecs():
-    specs = [
-        {
-            "dataStore": "projects/p/locations/global/collections/default_collection/dataStores/ds-beta"
-        }
-    ]
+    specs = [{"dataStore": "projects/p/locations/global/collections/default_collection/dataStores/ds-beta"}]
 
     _, body = _search_request(extra_body={"dataStoreSpecs": specs})
 
@@ -263,9 +249,7 @@ def test_search_request_forwards_supported_extra_body_fields():
 
 
 def test_datastore_search_request_forwards_supported_extra_body_fields():
-    _, body = _datastore_search_request(
-        extra_body={"filter": 'category: ANY("docs")'}
-    )
+    _, body = _datastore_search_request(extra_body={"filter": 'category: ANY("docs")'})
 
     assert body["filter"] == 'category: ANY("docs")'
 
@@ -306,8 +290,7 @@ def test_search_request_logs_effective_query_when_extra_body_overrides_query():
 
 
 _CHUNK_NAME = (
-    "projects/p/locations/global/collections/default_collection/dataStores/ds-1/"
-    "branches/0/documents/policy/chunks/c3"
+    "projects/p/locations/global/collections/default_collection/dataStores/ds-1/branches/0/documents/policy/chunks/c3"
 )
 
 
@@ -340,9 +323,7 @@ def test_chunk_hit_uses_chunk_content_and_document_metadata():
 
     result = _search_response(payload)["data"][0]
 
-    assert result["content"] == [
-        {"text": "Refunds are available within 14 days.", "type": "text"}
-    ]
+    assert result["content"] == [{"text": "Refunds are available within 14 days.", "type": "text"}]
     assert result["score"] == 0.91
     assert result["file_id"] == "gs://bucket/policy.pdf"
     assert result["filename"] == "Refund policy"

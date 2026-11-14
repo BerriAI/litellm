@@ -48,7 +48,9 @@ def _is_violation(node: ast.AST) -> bool:
 
 
 def violations(source: str, filename: str) -> Iterator[str]:
-    return (f"{filename}:{node.lineno}" for node in ast.walk(ast.parse(source, filename=filename)) if _is_violation(node))
+    return (
+        f"{filename}:{node.lineno}" for node in ast.walk(ast.parse(source, filename=filename)) if _is_violation(node)
+    )
 
 
 def _file_violations(path: Path) -> Iterator[str]:

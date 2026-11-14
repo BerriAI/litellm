@@ -354,8 +354,6 @@ def test_search_treats_an_explicit_null_max_num_results_as_the_default():
     assert client.index.searched_query.query_string() == "*=>[KNN 10 @embedding $vec AS vector_distance]"
 
 
-
-
 @pytest.mark.asyncio
 async def test_async_search_builds_knn_query_and_maps_response():
     aembedding_fn = FakeAsyncEmbeddingFn([0.5, 0.5])

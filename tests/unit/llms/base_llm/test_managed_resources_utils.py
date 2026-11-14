@@ -105,11 +105,7 @@ def test_extract_model_id_decodes_base64_then_anchors():
     assert extract_model_id_from_unified_id(encoded) is None
 
     vector_store_plain = (
-        "litellm_proxy:vector_store"
-        ";unified_id,abc"
-        ";target_model_names,gpt-4"
-        ";resource_id,vs_xyz"
-        ";model_id,real-model-id"
+        "litellm_proxy:vector_store;unified_id,abc;target_model_names,gpt-4;resource_id,vs_xyz;model_id,real-model-id"
     )
     encoded_vs = encode_unified_id(vector_store_plain)
     assert extract_model_id_from_unified_id(encoded_vs) == "real-model-id"
@@ -126,9 +122,4 @@ def test_extract_model_id_returns_none_for_non_string_input(bad_input):
 
 
 def test_extract_model_id_returns_none_when_field_absent():
-    assert (
-        extract_model_id_from_unified_id(
-            "litellm_proxy:other;unified_id,abc;some_field,whatever"
-        )
-        is None
-    )
+    assert extract_model_id_from_unified_id("litellm_proxy:other;unified_id,abc;some_field,whatever") is None

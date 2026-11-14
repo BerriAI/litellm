@@ -287,9 +287,13 @@ def assert_key_reported(
     if entity_rows is None:
         assert all(counted(record["metrics"]) == pytest.approx(metrics) for record in records), response.text
     else:
-        totals: Final = records_of_key({name: value for name, value in breakdown.items() if name != "entities"}, api_key)
+        totals: Final = records_of_key(
+            {name: value for name, value in breakdown.items() if name != "entities"}, api_key
+        )
         assert totals, response.text
-        assert all(counted(object_value(record)["metrics"]) == pytest.approx(metrics) for record in totals), response.text
+        assert all(counted(object_value(record)["metrics"]) == pytest.approx(metrics) for record in totals), (
+            response.text
+        )
         entities: Final = object_value(breakdown["entities"])
         assert set(entities) == set(entity_rows), response.text
         for entity, rows in entity_rows.items():

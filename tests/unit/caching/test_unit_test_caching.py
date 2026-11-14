@@ -171,9 +171,9 @@ def test_get_cache_key_responses_api():
     ]:
         kx = {**base_kwargs, param: value_x}
         ky = {**base_kwargs, param: value_y}
-        assert cache.get_cache_key(**kx) != cache.get_cache_key(
-            **ky
-        ), f"Responses-API param `{param}` is not part of the cache key"
+        assert cache.get_cache_key(**kx) != cache.get_cache_key(**ky), (
+            f"Responses-API param `{param}` is not part of the cache key"
+        )
 
 
 def test_get_hashed_cache_key():
@@ -225,10 +225,7 @@ def test_get_model_param_value():
             "caching_groups": [("openai-gpt-3.5-turbo", "azure-gpt-3.5-turbo")],
         },
     }
-    assert (
-        cache._get_model_param_value(kwargs)
-        == "('openai-gpt-3.5-turbo', 'azure-gpt-3.5-turbo')"
-    )
+    assert cache._get_model_param_value(kwargs) == "('openai-gpt-3.5-turbo', 'azure-gpt-3.5-turbo')"
 
     kwargs = {
         "model": "gpt-3.5-turbo",
@@ -237,10 +234,7 @@ def test_get_model_param_value():
             "caching_groups": [("openai-gpt-3.5-turbo", "azure-gpt-3.5-turbo")],
         },
     }
-    assert (
-        cache._get_model_param_value(kwargs)
-        == "('openai-gpt-3.5-turbo', 'azure-gpt-3.5-turbo')"
-    )
+    assert cache._get_model_param_value(kwargs) == "('openai-gpt-3.5-turbo', 'azure-gpt-3.5-turbo')"
 
     kwargs = {
         "model": "gpt-3.5-turbo",
@@ -265,15 +259,18 @@ def test_get_model_param_value_reads_model_group_from_litellm_metadata():
         cache._get_model_param_value({**request, "litellm_params": {"litellm_metadata": {"model_group": "group-a"}}})
         == "group-a"
     )
-    assert cache._get_model_param_value(
-        {
-            **request,
-            "litellm_metadata": {
-                "model_group": "group-a",
-                "caching_groups": [("group-a", "group-b")],
-            },
-        }
-    ) == "('group-a', 'group-b')"
+    assert (
+        cache._get_model_param_value(
+            {
+                **request,
+                "litellm_metadata": {
+                    "model_group": "group-a",
+                    "caching_groups": [("group-a", "group-b")],
+                },
+            }
+        )
+        == "('group-a', 'group-b')"
+    )
     assert cache.get_cache_key(**request, litellm_metadata={"model_group": "group-a"}) != cache.get_cache_key(
         **request, litellm_metadata={"model_group": "group-b"}
     )

@@ -145,12 +145,8 @@ def test_audio_transcription_routes_to_the_requested_model_not_the_moderation_mo
             ("POST", _TRANSCRIPTIONS),
         ), response.text
         assert tuple(
-            _text_parts(_multipart_parts(request))
-            for request in calls
-            if request.target == _TRANSCRIPTIONS
+            _text_parts(_multipart_parts(request)) for request in calls if request.target == _TRANSCRIPTIONS
         ) == ((("model", "whisper-1"), ("response_format", "json")),), response.text
         assert tuple(
-            _file_parts(_multipart_parts(request))
-            for request in calls
-            if request.target == _TRANSCRIPTIONS
+            _file_parts(_multipart_parts(request)) for request in calls if request.target == _TRANSCRIPTIONS
         ) == ((("file", "a.wav", _WAV_CONTENT_TYPE, _WAV_BYTES),),), response.text

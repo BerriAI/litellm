@@ -720,9 +720,10 @@ async def test_handle_logging_proxy_only_path_attributes_with_read_only_metadata
     update_kwargs = logging_obj.update_environment_variables.call_args.kwargs
     assert update_kwargs["custom_llm_provider"] == "openai"
     assert update_kwargs["litellm_params"]["custom_llm_provider"] == "openai"
-    assert {
-        key: update_kwargs["litellm_params"]["metadata"][key] for key in ("preexisting", "user_api_key_alias")
-    } == {"preexisting": "logged", "user_api_key_alias": "frozen"}
+    assert {key: update_kwargs["litellm_params"]["metadata"][key] for key in ("preexisting", "user_api_key_alias")} == {
+        "preexisting": "logged",
+        "user_api_key_alias": "frozen",
+    }
     assert update_kwargs["litellm_params"]["metadata"]["tags"] == ["checkout"]
     assert update_kwargs["litellm_params"]["metadata"]["standard_logging_guardrail_information"] == guardrail_info
 

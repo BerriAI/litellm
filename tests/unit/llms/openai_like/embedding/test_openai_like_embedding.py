@@ -70,9 +70,9 @@ class TestOpenAILikeEmbeddingHandler:
         sent_data = json.loads(call_args[1]["data"])
 
         # Assert that encoding_format is NOT in the sent data
-        assert (
-            "encoding_format" not in sent_data
-        ), "encoding_format=None should be filtered out from the request payload"
+        assert "encoding_format" not in sent_data, (
+            "encoding_format=None should be filtered out from the request payload"
+        )
 
         # Assert that model and input are still present
         assert sent_data["model"] == "test-model"
@@ -129,9 +129,9 @@ class TestOpenAILikeEmbeddingHandler:
         sent_data = json.loads(call_args[1]["data"])
 
         # Assert that encoding_format is NOT in the sent data
-        assert (
-            "encoding_format" not in sent_data
-        ), "encoding_format='' (empty string) should be filtered out from the request payload"
+        assert "encoding_format" not in sent_data, (
+            "encoding_format='' (empty string) should be filtered out from the request payload"
+        )
 
     def test_encoding_format_float_preserved(self):
         """
@@ -181,9 +181,7 @@ class TestOpenAILikeEmbeddingHandler:
         sent_data = json.loads(call_args[1]["data"])
 
         # Assert that encoding_format IS in the sent data with correct value
-        assert (
-            "encoding_format" in sent_data
-        ), "encoding_format='float' should be preserved in the request payload"
+        assert "encoding_format" in sent_data, "encoding_format='float' should be preserved in the request payload"
         assert sent_data["encoding_format"] == "float"
 
     def test_encoding_format_base64_preserved(self):
@@ -234,9 +232,7 @@ class TestOpenAILikeEmbeddingHandler:
         sent_data = json.loads(call_args[1]["data"])
 
         # Assert that encoding_format IS in the sent data with correct value
-        assert (
-            "encoding_format" in sent_data
-        ), "encoding_format='base64' should be preserved in the request payload"
+        assert "encoding_format" in sent_data, "encoding_format='base64' should be preserved in the request payload"
         assert sent_data["encoding_format"] == "base64"
 
     def test_other_optional_params_preserved(self):

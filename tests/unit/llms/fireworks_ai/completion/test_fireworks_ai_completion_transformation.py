@@ -1,5 +1,3 @@
-
-
 from litellm.llms.fireworks_ai.completion.transformation import (
     FireworksAITextCompletionConfig,
 )

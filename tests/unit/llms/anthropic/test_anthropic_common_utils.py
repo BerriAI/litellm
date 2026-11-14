@@ -69,7 +69,9 @@ def test_is_anthropic_messages_url(url: str, expected: bool) -> None:
         pytest.param(None, "https://api.anthropic.com/v1/messages", 512, id="default-upstream"),
         pytest.param(None, "https://api.anthropic.com:443/v1/messages/", 512, id="default-upstream-explicit-port"),
         pytest.param("http://relay.test:8080", "https://api.anthropic.com/v1/messages", 512, id="direct-target"),
-        pytest.param("https://api.anthropic.com", "https://api.anthropic.com/v1/messages", 512, id="configured-default"),
+        pytest.param(
+            "https://api.anthropic.com", "https://api.anthropic.com/v1/messages", 512, id="configured-default"
+        ),
         pytest.param("http://relay.test:8080", "http://relay.test:8080/v1/messages", 255, id="configured-upstream"),
         pytest.param("http://relay.test:8080/a", "http://relay.test:8080/a/v1/messages", 255, id="configured-prefix"),
         pytest.param("https://Relay.Test", "https://relay.test/v1/messages", 255, id="configured-upper-case-host"),
@@ -4733,7 +4735,12 @@ def test_a_replayed_tool_search_keeps_the_tools_it_found_that_the_follow_up_stil
             },
         }
 
-    weather_call: Final = {"type": "tool_use", "id": "toolu_01Weather", "name": "get_weather", "input": {"city": "Paris"}}
+    weather_call: Final = {
+        "type": "tool_use",
+        "id": "toolu_01Weather",
+        "name": "get_weather",
+        "input": {"city": "Paris"},
+    }
     messages: Final = [
         {"role": "user", "content": "What is the weather and the time in Paris?"},
         {"role": "assistant", "content": [search_use, search_result("get_weather", "get_local_time"), weather_call]},
@@ -4797,7 +4804,9 @@ def test_auto_injection_reads_a_deployments_own_prompt_caching_flag_not_a_siblin
         ]
     )
 
-    assert {name: supports_anthropic_cache_control(model, "bedrock", model_infos[name]) for name in registration_order} == {
+    assert {
+        name: supports_anthropic_cache_control(model, "bedrock", model_infos[name]) for name in registration_order
+    } == {
         "caching-off": False,
         "unflagged": True,
     }
@@ -4824,7 +4833,9 @@ def test_auto_injection_honors_a_register_model_opt_out_made_under_the_provider_
 
 
 @pytest.mark.parametrize("route_prefix", ["bedrock/", "bedrock/converse/"])
-def test_auto_injection_honors_a_register_model_opt_out_made_under_a_bedrock_route_prefixed_name(route_prefix: str) -> None:
+def test_auto_injection_honors_a_register_model_opt_out_made_under_a_bedrock_route_prefixed_name(
+    route_prefix: str,
+) -> None:
     from litellm.llms.anthropic.common_utils import supports_anthropic_cache_control
     from litellm.utils import catalog_with_runtime_registrations
 

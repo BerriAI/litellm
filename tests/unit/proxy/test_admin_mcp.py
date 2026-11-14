@@ -39,7 +39,9 @@ def _native_credential(request: Request) -> str:
         anthropic_api_key_header=request.headers.get("x-api-key"),
         google_ai_studio_api_key_header=request.headers.get("x-goog-api-key"),
         azure_apim_header=request.headers.get("ocp-apim-subscription-key"),
-        pass_through_endpoints=None, route=request.url.path, request=request,
+        pass_through_endpoints=None,
+        route=request.url.path,
+        request=request,
     )
     configured: Final = proxy_server.general_settings.get("litellm_key_header_name")
     return get_api_key_from_custom_header(request, configured) if configured is not None else key
@@ -52,8 +54,11 @@ def management_app(monkeypatch: pytest.MonkeyPatch) -> FastAPI:
     monkeypatch.setenv("LITELLM_ENABLE_ADMIN_MCP", "true")
     monkeypatch.setenv("LITELLM_ADMIN_TOOLS", "list_keys")
     for name in (
-        "PROXY_BASE_URL", "LITELLM_MCP_PUBLIC_URL", "LITELLM_ADMIN_READ_ONLY",
-        "LITELLM_ADMIN_RESPONSE_VIEW", "LITELLM_ADMIN_SCHEMA_MODE",
+        "PROXY_BASE_URL",
+        "LITELLM_MCP_PUBLIC_URL",
+        "LITELLM_ADMIN_READ_ONLY",
+        "LITELLM_ADMIN_RESPONSE_VIEW",
+        "LITELLM_ADMIN_SCHEMA_MODE",
     ):
         monkeypatch.delenv(name, raising=False)
     app: Final = FastAPI(lifespan=admin_mcp_lifespan)
@@ -71,7 +76,8 @@ def management_app(monkeypatch: pytest.MonkeyPatch) -> FastAPI:
             user_id, LitellmUserRoles.PROXY_ADMIN
         )
         auth: Final = UserAPIKeyAuth(
-            user_id=user_id, user_role=role,
+            user_id=user_id,
+            user_role=role,
             allowed_routes=["/user/info"] if credential == "admin-b-limited" else None,
         )
         return {
@@ -98,12 +104,10 @@ def management_app(monkeypatch: pytest.MonkeyPatch) -> FastAPI:
             "scheme": request.url.scheme,
             "forwarded_for": request.headers.get("x-forwarded-for"),
             "cookie": request.headers.get("cookie"),
-            "caller_is_changed_by": request.headers.get("litellm-changed-by")
-            == credential,
+            "caller_is_changed_by": request.headers.get("litellm-changed-by") == credential,
             "policy_team": request.headers.get("x-litellm-team-id"),
             "alternate_credentials_absent": not any(
-                name in request.headers
-                for name in SpecialHeaders.litellm_credential_header_names() - {"authorization"}
+                name in request.headers for name in SpecialHeaders.litellm_credential_header_names() - {"authorization"}
             ),
         }
 
@@ -318,11 +322,22 @@ def test_configured_key_header_uses_mcp_bearer_after_settings_change(
     assert json.loads(response.json()["result"]["content"][0]["text"])["keys"] == ["owned-by-a"]
 
 
-@pytest.mark.parametrize("header_name", [
-    "", "bad name", "x-ключ", 7, "Cookie", "litellm-changed-by",
-    "Content-Type", "Host", "X-Forwarded-For", "x-litellm-team-id",
-    *STANDARD_CUSTOMER_ID_HEADERS,
-])
+@pytest.mark.parametrize(
+    "header_name",
+    [
+        "",
+        "bad name",
+        "x-ключ",
+        7,
+        "Cookie",
+        "litellm-changed-by",
+        "Content-Type",
+        "Host",
+        "X-Forwarded-For",
+        "x-litellm-team-id",
+        *STANDARD_CUSTOMER_ID_HEADERS,
+    ],
+)
 def test_configured_key_header_rejects_invalid_or_reserved_names(
     management_app: FastAPI, monkeypatch: pytest.MonkeyPatch, header_name: object
 ) -> None:
@@ -332,13 +347,16 @@ def test_configured_key_header_rejects_invalid_or_reserved_names(
             pytest.fail("An ambiguous or malformed credential header must fail startup")
 
 
-@pytest.mark.parametrize("policy", [
-    {"user_header_name": "X-Custom-Key"},
-    {"user_header_mappings": {"header_name": "X-Custom-Key", "litellm_user_role": "customer"}},
-    {"user_header_mappings": [{"header_name": "X-Custom-Key", "litellm_user_role": "internal_user"}]},
-    {"enable_oauth2_proxy_auth": True, "oauth2_config_mappings": {"user_id": "X-Custom-Key"}},
-    {"mcp_client_id_header": "X-Custom-Key"},
-])
+@pytest.mark.parametrize(
+    "policy",
+    [
+        {"user_header_name": "X-Custom-Key"},
+        {"user_header_mappings": {"header_name": "X-Custom-Key", "litellm_user_role": "customer"}},
+        {"user_header_mappings": [{"header_name": "X-Custom-Key", "litellm_user_role": "internal_user"}]},
+        {"enable_oauth2_proxy_auth": True, "oauth2_config_mappings": {"user_id": "X-Custom-Key"}},
+        {"mcp_client_id_header": "X-Custom-Key"},
+    ],
+)
 def test_configured_key_header_cannot_replace_configured_identity(
     management_app: FastAPI, monkeypatch: pytest.MonkeyPatch, policy: dict[str, object]
 ) -> None:
@@ -348,11 +366,14 @@ def test_configured_key_header_cannot_replace_configured_identity(
             pytest.fail("A credential header must not replace a configured identity header")
 
 
-@pytest.mark.parametrize("policy", [
-    {"user_header_name": "x-api-key"},
-    {"user_header_mappings": {"header_name": "Cookie", "litellm_user_role": "customer"}},
-    {"enable_oauth2_proxy_auth": True, "oauth2_config_mappings": {"user_id": "x-litellm-api-key"}},
-])
+@pytest.mark.parametrize(
+    "policy",
+    [
+        {"user_header_name": "x-api-key"},
+        {"user_header_mappings": {"header_name": "Cookie", "litellm_user_role": "customer"}},
+        {"enable_oauth2_proxy_auth": True, "oauth2_config_mappings": {"user_id": "x-litellm-api-key"}},
+    ],
+)
 def test_policy_headers_cannot_share_overwritten_slots_without_a_custom_key(
     management_app: FastAPI, monkeypatch: pytest.MonkeyPatch, policy: dict[str, object]
 ) -> None:
@@ -365,26 +386,44 @@ def test_policy_headers_cannot_share_overwritten_slots_without_a_custom_key(
 @pytest.mark.skipif(sys.version_info < (3, 12), reason="Admin MCP requires Python 3.12+")
 def test_compact_results_bind_to_bearer_despite_conflicting_alternate_keys(management_app: FastAPI) -> None:
     headers: Final = {
-        "Authorization": "Bearer admin-a", "x-litellm-api-key": "Bearer admin-b",
+        "Authorization": "Bearer admin-a",
+        "x-litellm-api-key": "Bearer admin-b",
         "Accept": "application/json, text/event-stream",
     }
     with TestClient(management_app, base_url="http://localhost:4000") as client:
         saved: Final = client.post(
-            "/admin/mcp", headers=headers,
-            json={"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {
-                "name": "list_keys", "arguments": {"query": {"large": True}, "response": {"view": "compact"}},
-            }},
+            "/admin/mcp",
+            headers=headers,
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {
+                    "name": "list_keys",
+                    "arguments": {"query": {"large": True}, "response": {"view": "compact"}},
+                },
+            },
         )
         assert saved.status_code == 200, saved.text
         result_id: Final = json.loads(saved.json()["result"]["content"][0]["text"])["result_id"]
-        read_payload: Final = {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {
-            "name": "read_admin_result", "arguments": {"result_id": result_id, "view": "full"},
-        }}
+        read_payload: Final = {
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {
+                "name": "read_admin_result",
+                "arguments": {"result_id": result_id, "view": "full"},
+            },
+        }
         replayed: Final = client.post(
-            "/admin/mcp", headers={**headers, "x-litellm-api-key": "Bearer admin-b-limited"}, json=read_payload,
+            "/admin/mcp",
+            headers={**headers, "x-litellm-api-key": "Bearer admin-b-limited"},
+            json=read_payload,
         )
         other_bearer: Final = client.post(
-            "/admin/mcp", headers={**headers, "Authorization": "Bearer admin-b"}, json=read_payload,
+            "/admin/mcp",
+            headers={**headers, "Authorization": "Bearer admin-b"},
+            json=read_payload,
         )
         limited: Final = client.post(
             "/admin/mcp",
@@ -501,7 +540,9 @@ def test_oversized_mcp_body_is_rejected_before_a_write(
             "/admin/mcp",
             headers={"Authorization": "Bearer admin-a", "Accept": "application/json, text/event-stream"},
             json={
-                "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
                 "params": {"name": "create_key", "arguments": {"body": {"key_alias": "x" * 300_000}}},
             },
         )
@@ -511,14 +552,21 @@ def test_oversized_mcp_body_is_rejected_before_a_write(
 
 @pytest.mark.asyncio
 @pytest.mark.skipif(sys.version_info < (3, 12), reason="Admin MCP requires Python 3.12+")
-@pytest.mark.parametrize("peer,mapped_user,bearer,status", [
-    ("10.0.0.8", "admin-a", "member", 200),
-    ("10.0.0.8", "member", "admin-a", 403),
-    ("203.0.113.8", "admin-a", "admin-a", 401),
-])
+@pytest.mark.parametrize(
+    "peer,mapped_user,bearer,status",
+    [
+        ("10.0.0.8", "admin-a", "member", 200),
+        ("10.0.0.8", "member", "admin-a", 403),
+        ("203.0.113.8", "admin-a", "admin-a", 401),
+    ],
+)
 async def test_oauth2_proxy_auth_preserves_native_identity_and_peer_trust(
-    management_app: FastAPI, monkeypatch: pytest.MonkeyPatch,
-    peer: str, mapped_user: str, bearer: str, status: int,
+    management_app: FastAPI,
+    monkeypatch: pytest.MonkeyPatch,
+    peer: str,
+    mapped_user: str,
+    bearer: str,
+    status: int,
 ) -> None:
     users: Final = {
         user_id: LiteLLM_UserTable(user_id=user_id, user_role=role, teams=[])
@@ -546,13 +594,18 @@ async def test_oauth2_proxy_auth_preserves_native_identity_and_peer_trust(
         cache.set_cache(user_id, user)
     monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
     monkeypatch.setattr(proxy_server, "prisma_client", UserInfoDatabase())
-    monkeypatch.setattr(proxy_server, "general_settings", {
-        "enable_oauth2_proxy_auth": True,
-        "trusted_proxy_ranges": ["10.0.0.0/24"],
-        "oauth2_config_mappings": {"user_id": "X-Authenticated-User"},
-    })
+    monkeypatch.setattr(
+        proxy_server,
+        "general_settings",
+        {
+            "enable_oauth2_proxy_auth": True,
+            "trusted_proxy_ranges": ["10.0.0.0/24"],
+            "oauth2_config_mappings": {"user_id": "X-Authenticated-User"},
+        },
+    )
     management_app.router.routes[:] = [
-        route for route in management_app.router.routes
+        route
+        for route in management_app.router.routes
         if not (isinstance(route, APIRoute) and route.path == "/user/info")
     ]
     management_app.add_api_route("/user/info", internal_user_endpoints.user_info, methods=["GET"])

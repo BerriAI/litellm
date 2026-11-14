@@ -72,10 +72,14 @@ async def _hold_team_lock(held, team_id: str) -> tuple[int, int]:
 
 async def _await_lock_contention(lock_key: tuple[int, int], task: asyncio.Task[object], what: str) -> None:
     deadline: Final = time.monotonic() + _LOCK_WAIT_TIMEOUT_SECONDS
-    async with await AsyncConnection.connect(os.environ["DATABASE_URL"], autocommit=True, row_factory=dict_row) as watcher:
+    async with await AsyncConnection.connect(
+        os.environ["DATABASE_URL"], autocommit=True, row_factory=dict_row
+    ) as watcher:
         while time.monotonic() < deadline:
             if task.done():
-                raise AssertionError(f"{what} returned without waiting on the team's advisory lock") from task.exception()
+                raise AssertionError(
+                    f"{what} returned without waiting on the team's advisory lock"
+                ) from task.exception()
             cursor: Final = await watcher.execute(_LOCK_WAITER_SQL, lock_key)
             observed: Final = await cursor.fetchone()
             if observed is not None and observed["waiters"]:

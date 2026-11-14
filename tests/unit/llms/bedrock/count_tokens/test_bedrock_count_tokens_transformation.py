@@ -56,9 +56,7 @@ def test_detect_input_type_converse_blocks_route_to_converse():
 
 
 @pytest.mark.parametrize("content", [[{"text": "hi"}], "hi"])
-@pytest.mark.parametrize(
-    "context_management", [None, {"edits": [{"type": "clear_tool_uses_20250919"}]}]
-)
+@pytest.mark.parametrize("context_management", [None, {"edits": [{"type": "clear_tool_uses_20250919"}]}])
 def test_a_pass_through_body_with_context_management_keeps_its_converse_input(content, context_management):
     request = {
         "model": "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
@@ -226,6 +224,7 @@ def test_transform_maps_chat_function_tools():
         {"toolSpec": {"name": "get_weather", "description": "Look up the weather", "inputSchema": {"json": parameters}}}
     ]
 
+
 def test_transform_includes_system_and_tools_together():
     """Test that both system and tools are included together."""
     config = BedrockCountTokensConfig()
@@ -285,9 +284,7 @@ def test_tool_name_sanitization():
 
     result = config.transform_anthropic_to_bedrock_count_tokens(request)
 
-    tool_name = result["input"]["converse"]["toolConfig"]["tools"][0]["toolSpec"][
-        "name"
-    ]
+    tool_name = result["input"]["converse"]["toolConfig"]["tools"][0]["toolSpec"]["name"]
     # Should be sanitized: only [a-zA-Z0-9_]
     assert tool_name == "my_tool_"
 

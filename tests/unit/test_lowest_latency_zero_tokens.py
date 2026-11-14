@@ -42,9 +42,7 @@ def test_zero_completion_tokens_no_division_error():
             litellm.Choices(
                 finish_reason="stop",
                 index=0,
-                message=litellm.Message(
-                    content=None, role="assistant", tool_calls=None
-                ),
+                message=litellm.Message(content=None, role="assistant", tool_calls=None),
             )
         ],
         usage=litellm.Usage(
@@ -67,14 +65,10 @@ def test_zero_completion_tokens_no_division_error():
             end_time=end_time,
         )
     except ZeroDivisionError:
-        pytest.fail(
-            "log_success_event raised ZeroDivisionError with zero completion tokens"
-        )
+        pytest.fail("log_success_event raised ZeroDivisionError with zero completion tokens")
 
     # Verify the deployment was logged (even with zero completion tokens)
-    cached_value = test_cache.get_cache(
-        key=f"{kwargs['litellm_params']['metadata']['model_group']}_map"
-    )
+    cached_value = test_cache.get_cache(key=f"{kwargs['litellm_params']['metadata']['model_group']}_map")
     assert cached_value is not None
     assert deployment_id in cached_value
 
@@ -102,9 +96,7 @@ def test_zero_completion_tokens_with_time_to_first_token():
 
     # Create a ModelResponse with zero completion tokens
     response_obj = litellm.ModelResponse(
-        usage=litellm.Usage(
-            completion_tokens=0, prompt_tokens=100000, total_tokens=100000
-        )
+        usage=litellm.Usage(completion_tokens=0, prompt_tokens=100000, total_tokens=100000)
     )
 
     start_time = time.time()
@@ -120,9 +112,7 @@ def test_zero_completion_tokens_with_time_to_first_token():
             end_time=end_time,
         )
     except ZeroDivisionError:
-        pytest.fail(
-            "log_success_event raised ZeroDivisionError with zero completion tokens in streaming"
-        )
+        pytest.fail("log_success_event raised ZeroDivisionError with zero completion tokens in streaming")
 
 
 if __name__ == "__main__":

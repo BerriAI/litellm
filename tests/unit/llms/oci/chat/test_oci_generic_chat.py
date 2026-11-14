@@ -31,15 +31,11 @@ from litellm.llms.oci.common_utils import OCIError
 class TestGenericContentMessageErrors:
     def test_non_dict_content_item_raises(self):
         with pytest.raises(OCIError, match="must be a dictionary"):
-            adapt_messages_to_generic_oci_standard_content_message(
-                "user", ["not a dict"]
-            )
+            adapt_messages_to_generic_oci_standard_content_message("user", ["not a dict"])
 
     def test_non_string_type_field_raises(self):
         with pytest.raises(OCIError, match="string `type` field"):
-            adapt_messages_to_generic_oci_standard_content_message(
-                "user", [{"type": 123, "text": "hi"}]
-            )
+            adapt_messages_to_generic_oci_standard_content_message("user", [{"type": 123, "text": "hi"}])
 
     def test_unsupported_content_type_raises(self):
         with pytest.raises(OCIError, match="not supported by OCI"):
@@ -49,15 +45,11 @@ class TestGenericContentMessageErrors:
 
     def test_non_string_text_raises(self):
         with pytest.raises(OCIError, match="must have a string `text` field"):
-            adapt_messages_to_generic_oci_standard_content_message(
-                "user", [{"type": "text", "text": 42}]
-            )
+            adapt_messages_to_generic_oci_standard_content_message("user", [{"type": "text", "text": 42}])
 
     def test_image_url_as_invalid_type_raises(self):
         with pytest.raises(OCIError, match="must be a string or an object"):
-            adapt_messages_to_generic_oci_standard_content_message(
-                "user", [{"type": "image_url", "image_url": 99}]
-            )
+            adapt_messages_to_generic_oci_standard_content_message("user", [{"type": "image_url", "image_url": 99}])
 
     def test_image_url_as_string(self):
         msg = adapt_messages_to_generic_oci_standard_content_message(
@@ -175,9 +167,7 @@ class TestGenericMessageAdaptation:
             adapt_messages_to_generic_oci_standard(messages)
 
     def test_tool_result_non_string_content_raises(self):
-        messages = [
-            {"role": "tool", "content": {"structured": "data"}, "tool_call_id": "c1"}
-        ]
+        messages = [{"role": "tool", "content": {"structured": "data"}, "tool_call_id": "c1"}]
         with pytest.raises(OCIError, match="`content` must be a string"):
             adapt_messages_to_generic_oci_standard(messages)
 
@@ -203,9 +193,7 @@ class TestHandleGenericResponse:
             "chatResponse": {
                 "apiFormat": "GENERIC",
                 "timeCreated": "2024-01-01T00:00:00Z",
-                "choices": [
-                    {"message": message, "finishReason": "COMPLETE", "index": 0}
-                ],
+                "choices": [{"message": message, "finishReason": "COMPLETE", "index": 0}],
                 "usage": {"promptTokens": 5, "completionTokens": 5, "totalTokens": 10},
             },
         }
@@ -412,22 +400,16 @@ class TestGpt5MaxCompletionTokens:
         assert out.get("maxCompletionTokens") == DEFAULT_OCI_CHAT_MAX_TOKENS
         assert "maxTokens" not in out
 
-    def test_gpt5_routes_max_tokens_to_max_completion_tokens(
-        self, _register_oci_gpt5_in_catalog
-    ):
+    def test_gpt5_routes_max_tokens_to_max_completion_tokens(self, _register_oci_gpt5_in_catalog):
         cfg = OCIChatConfig()
         # Both shapes optional_params can take after upstream map_openai_params:
         # 1. openai-side key still present
-        out_a = cfg._get_optional_params(
-            OCIVendors.GENERIC, {"max_tokens": 64}, model="openai.gpt-5"
-        )
+        out_a = cfg._get_optional_params(OCIVendors.GENERIC, {"max_tokens": 64}, model="openai.gpt-5")
         assert out_a.get("maxCompletionTokens") == 64
         assert "maxTokens" not in out_a
 
         # 2. already pre-translated to OCI alias
-        out_b = cfg._get_optional_params(
-            OCIVendors.GENERIC, {"maxTokens": 64}, model="openai.gpt-5-mini"
-        )
+        out_b = cfg._get_optional_params(OCIVendors.GENERIC, {"maxTokens": 64}, model="openai.gpt-5-mini")
         assert out_b.get("maxCompletionTokens") == 64
         assert "maxTokens" not in out_b
 

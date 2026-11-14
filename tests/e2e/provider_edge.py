@@ -118,10 +118,7 @@ EDGE_MOUNTS: Final[Mapping[str, str]] = MappingProxyType(
     {
         "openai": "https://api.openai.com",
         "anthropic": "https://api.anthropic.com",
-        **{
-            f"bedrock/{region}": f"https://bedrock-runtime.{region}.amazonaws.com"
-            for region in BEDROCK_REGIONS
-        },
+        **{f"bedrock/{region}": f"https://bedrock-runtime.{region}.amazonaws.com" for region in BEDROCK_REGIONS},
     }
 )
 
@@ -140,8 +137,9 @@ def resolve_mount(path: str, mounts: Mapping[str, str]) -> ResolvedMount | None:
     trimmed: Final = path.lstrip("/")
     for mount in sorted(mounts, key=len, reverse=True):
         if trimmed == mount or trimmed.startswith(f"{mount}/"):
-            return ResolvedMount(mount, mounts[mount], trimmed[len(mount):].lstrip("/"))
+            return ResolvedMount(mount, mounts[mount], trimmed[len(mount) :].lstrip("/"))
     return None
+
 
 REPLAY_MISS_STATUS: Final = 599
 
@@ -171,13 +169,9 @@ _RESPONSE_DROPPED_HEADERS: Final[frozenset[str]] = _HOP_BY_HOP_HEADERS | {
 _JSON: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
 
 
-_BOUNDARY_PATTERN: Final = re.compile(
-    r'(?:^|;)\s*boundary\s*=\s*(?:"([^"]*)"|([^;,\s]+))', re.IGNORECASE
-)
+_BOUNDARY_PATTERN: Final = re.compile(r'(?:^|;)\s*boundary\s*=\s*(?:"([^"]*)"|([^;,\s]+))', re.IGNORECASE)
 _DISPOSITION_NAME_PATTERN: Final = re.compile(r'(?:^|;)\s*name="([^"]*)"', re.IGNORECASE)
-_DISPOSITION_FILENAME_PATTERN: Final = re.compile(
-    r'(?:^|;)\s*filename="([^"]*)"', re.IGNORECASE
-)
+_DISPOSITION_FILENAME_PATTERN: Final = re.compile(r'(?:^|;)\s*filename="([^"]*)"', re.IGNORECASE)
 _UNPARSED_MULTIPART: Final = "<unparsed-multipart>"
 _BOUNDARY_PLACEHOLDER: Final = b"--<boundary>"
 _BINARY_FIELD_PREFIX: Final = "<binary:sha256:"
@@ -244,8 +238,7 @@ def _multipart_parts(body: bytes, boundary: str) -> tuple[_MultipartPart, ...] |
     if len(segments) < 3 or not segments[-1].startswith(b"--"):
         return None
     parsed: Final = tuple(
-        _parse_multipart_part(segment.removeprefix(b"\r\n").removesuffix(b"\r\n"))
-        for segment in segments[1:-1]
+        _parse_multipart_part(segment.removeprefix(b"\r\n").removesuffix(b"\r\n")) for segment in segments[1:-1]
     )
     if any(part is None for part in parsed):
         return None
@@ -322,9 +315,7 @@ def _file_identity(files: tuple[_MultipartPart, ...]) -> tuple[str | None, str |
     canonicalized digest exists to absorb."""
     if not files:
         return None, None, None
-    names: Final = _JSON.dump_json(
-        [[part.field_name, part.filename, part.content_type] for part in files]
-    ).decode()
+    names: Final = _JSON.dump_json([[part.field_name, part.filename, part.content_type] for part in files]).decode()
     total: Final = sum(len(part.content) for part in files)
     if len(files) == 1:
         return names, _content_digest(files[0].content), total
@@ -339,9 +330,7 @@ def _multipart_request(
     ordinary field, plus the identity of the uploaded file. The random per-request
     boundary is envelope, never content, so it never reaches the digest."""
     form: Final = _form_fields(tuple(part for part in parts if not _is_file_part(part)))
-    file_name, file_sha256, file_bytes = _file_identity(
-        tuple(part for part in parts if _is_file_part(part))
-    )
+    file_name, file_sha256, file_bytes = _file_identity(tuple(part for part in parts if _is_file_part(part)))
     return RecordedRequest(
         method=method,
         path=path,
@@ -376,9 +365,7 @@ def _opaque_request(
     )
 
 
-def edge_request(
-    method: str, path: str, query: str, body: bytes | None, content_type: str = ""
-) -> RecordedRequest:
+def edge_request(method: str, path: str, query: str, body: bytes | None, content_type: str = "") -> RecordedRequest:
     """The identity replay matches on: the edge path (mount included), the query as
     params, and the body as parsed JSON, as parsed multipart fields and file identity
     when the content type declares an envelope, or as a content digest otherwise so
@@ -406,30 +393,25 @@ def edge_request(
         parsed: Final[JsonValue] = _JSON.validate_json(body)
     except ValueError:
         return _opaque_request(lowered_method, path, params, body, body)
-    return RecordedRequest(
-        method=lowered_method, path=path, headers={}, params=params, body=parsed
-    )
+    return RecordedRequest(method=lowered_method, path=path, headers={}, params=params, body=parsed)
 
 
 def _build_pool(recorded: tuple[Interaction, ...]) -> dict[str, deque[Interaction]]:
     keys: Final = tuple(canonicalize(interaction.request).key for interaction in recorded)
     return {
         key: deque(
-            interaction
-            for candidate_key, interaction in zip(keys, recorded, strict=True)
-            if candidate_key == key
+            interaction for candidate_key, interaction in zip(keys, recorded, strict=True) if candidate_key == key
         )
         for key in dict.fromkeys(keys)
     }
 
 
-def _closest_recorded(
-    canonical: CanonicalRequest, recorded: tuple[Interaction, ...]
-) -> tuple[CanonicalRequest, str]:
+def _closest_recorded(canonical: CanonicalRequest, recorded: tuple[Interaction, ...]) -> tuple[CanonicalRequest, str]:
     candidates: Final = tuple(canonicalize(interaction.request) for interaction in recorded)
     ratios: Final = tuple(
         difflib.SequenceMatcher(
-            None, f"{canonical.method} {canonical.path}\n{canonical.content}",
+            None,
+            f"{canonical.method} {canonical.path}\n{canonical.content}",
             f"{candidate.method} {candidate.path}\n{candidate.content}",
         ).ratio()
         for candidate in candidates
@@ -485,9 +467,7 @@ class ReplaySource:
     _pools: dict[str, dict[str, deque[Interaction]]] = field(init=False)
 
     def __post_init__(self) -> None:
-        self._pools = {
-            slug: _build_pool(recorded) for slug, recorded in self.bundle.interactions.items()
-        }
+        self._pools = {slug: _build_pool(recorded) for slug, recorded in self.bundle.interactions.items()}
 
     def _pool(self, slug: str) -> dict[str, deque[Interaction]]:
         return self._pools.get(slug, {})
@@ -515,9 +495,7 @@ class ReplaySource:
         recorded: Final = self.bundle.interactions.get(slug, ())
         if not recorded:
             return None
-        leftover: Final = tuple(
-            interaction for queue in self._pool(slug).values() for interaction in queue
-        )
+        leftover: Final = tuple(interaction for queue in self._pool(slug).values() for interaction in queue)
         if not leftover:
             return None
         return (
@@ -623,9 +601,7 @@ def _text_reply(status_code: int, message: str) -> EdgeReply:
     )
 
 
-def _recorded_steps(
-    chunks_b64: Sequence[str], truncated: str | None
-) -> Generator[StreamStep, None, None]:
+def _recorded_steps(chunks_b64: Sequence[str], truncated: str | None) -> Generator[StreamStep, None, None]:
     """Replay's step source: the recorded chunks in recorded order, as fast as the
     socket takes them (inter-chunk delays are deliberately not reproduced), then the
     recorded truncation if the stream ended without a terminator."""
@@ -659,24 +635,18 @@ def _filtered_response_headers(headers: Mapping[str, str]) -> dict[str, str]:
     """What the edge stores and serves: the provider's headers minus hop-by-hop and
     volatile entries. Framing headers are in that set, so a stored header can never
     contradict the framing the edge chooses when it serves the response."""
-    return {
-        name: value for name, value in headers.items() if name not in _RESPONSE_DROPPED_HEADERS
-    }
+    return {name: value for name, value in headers.items() if name not in _RESPONSE_DROPPED_HEADERS}
 
 
 def _network_error_response(message: str) -> RecordedHttpResponse:
     return RecordedHttpResponse(
         status_code=502,
         headers={"content-type": "text/plain; charset=utf-8"},
-        body_b64=base64.b64encode(
-            f"provider edge could not reach the provider: {message}".encode()
-        ).decode("ascii"),
+        body_b64=base64.b64encode(f"provider edge could not reach the provider: {message}".encode()).decode("ascii"),
     )
 
 
-def _buffered_response(
-    status_code: int, headers: Mapping[str, str], body: bytes
-) -> RecordedHttpResponse:
+def _buffered_response(status_code: int, headers: Mapping[str, str], body: bytes) -> RecordedHttpResponse:
     return RecordedHttpResponse(
         status_code=status_code,
         headers=_filtered_response_headers(headers),
@@ -711,9 +681,7 @@ def _upstream_url(upstream_base: str, upstream_path: str, query: str) -> str:
     return f"{url}?{query}" if query else url
 
 
-def _persist(
-    backend: RecordEdge, test_key: str, request: RecordedRequest, response: RecordedResponse
-) -> None:
+def _persist(backend: RecordEdge, test_key: str, request: RecordedRequest, response: RecordedResponse) -> None:
     with backend.lock:
         backend.recorder.record(test_key=test_key, request=request, response=response)
 
@@ -791,9 +759,7 @@ def _handle_record(
     timeout: float,
 ) -> EdgeOutcome:
     test_key: Final = current_test_key()
-    forwarded: Final = {
-        name: value for name, value in headers.items() if name.lower() not in _REQUEST_DROPPED_HEADERS
-    }
+    forwarded: Final = {name: value for name, value in headers.items() if name.lower() not in _REQUEST_DROPPED_HEADERS}
     head: Final = forward_stream(method, url, headers=forwarded, body=body, timeout=timeout)
     match head:
         case NetworkError(message=message):
@@ -844,7 +810,7 @@ class _DataLineTearer:
         if _data_line_start(buffered) < 0:
             self.observe(data)
             return None
-        return _torn_prefix(buffered)[len(self._unfinished_line):]
+        return _torn_prefix(buffered)[len(self._unfinished_line) :]
 
 
 def _is_content_delta(value: JsonValue | None) -> bool:
@@ -855,7 +821,7 @@ def _sse_data_carries_content(line: bytes) -> bool:
     if not line.startswith(b"data:"):
         return False
     try:
-        return _is_content_delta(JSON_VALUE.validate_json(line[len(b"data:"):].strip()))
+        return _is_content_delta(JSON_VALUE.validate_json(line[len(b"data:") :].strip()))
     except ValidationError:
         return False
 
@@ -931,27 +897,36 @@ def _cut_steps(
 
 
 def _handle_live(
-    method: str, url: str, headers: Mapping[str, str], body: bytes | None, timeout: float,
-    cache: CacheEdge | None = None, mount: str = "", test_key: str | None = None,
+    method: str,
+    url: str,
+    headers: Mapping[str, str],
+    body: bytes | None,
+    timeout: float,
+    cache: CacheEdge | None = None,
+    mount: str = "",
+    test_key: str | None = None,
     observe_request: Callable[[str, Mapping[str, str], bytes | None], None] | None = None,
     sign: RequestSigner | None = None,
     cut: StreamCut | None = None,
 ) -> EdgeOutcome:
-    forwarded: Final = {
-        name: value for name, value in headers.items() if name.lower() not in _REQUEST_DROPPED_HEADERS
-    }
+    forwarded: Final = {name: value for name, value in headers.items() if name.lower() not in _REQUEST_DROPPED_HEADERS}
     if observe_request is not None:
         observe_request(url, forwarded, body)
     outbound: Final = forwarded if sign is None else sign(method, url, forwarded, body)
     head: Final = (
         forward_stream(method, url, headers=outbound, body=body, timeout=timeout)
-        if cache is None else cache.forward(mount, method, url, forwarded, body, timeout, test_key=test_key)
+        if cache is None
+        else cache.forward(mount, method, url, forwarded, body, timeout, test_key=test_key)
     )
     match head:
         case NetworkError(message=message):
             return _recorded_outcome(_network_error_response(message))
         case StreamHead() if cut is not None:
-            return EdgeStream(head.status_code, _filtered_response_headers(head.headers), _cut_steps(head.steps, cut, _content_detector(mount)))
+            return EdgeStream(
+                head.status_code,
+                _filtered_response_headers(head.headers),
+                _cut_steps(head.steps, cut, _content_detector(mount)),
+            )
         case StreamHead() if _is_streamed(head.headers):
             return EdgeStream(head.status_code, _filtered_response_headers(head.headers), head.steps)
         case StreamHead():
@@ -1019,13 +994,26 @@ def handle_edge_request(
     match backend:
         case CacheEdge():
             return _handle_live(
-                method, _upstream_url(upstream_base, upstream_path, split.query), headers, body, timeout,
-                backend, mount, test_key,
+                method,
+                _upstream_url(upstream_base, upstream_path, split.query),
+                headers,
+                body,
+                timeout,
+                backend,
+                mount,
+                test_key,
             )
         case LiveEdge(observe_request=observe_request, sign=sign, cut=cut):
             return _handle_live(
-                method, _upstream_url(upstream_base, upstream_path, split.query), headers, body, timeout,
-                mount=mount, observe_request=observe_request, sign=sign, cut=cut,
+                method,
+                _upstream_url(upstream_base, upstream_path, split.query),
+                headers,
+                body,
+                timeout,
+                mount=mount,
+                observe_request=observe_request,
+                sign=sign,
+                cut=cut,
             )
         case RecordEdge():
             return _handle_record(
@@ -1069,7 +1057,8 @@ class _EdgeHandler(BaseHTTPRequestHandler):
         if edge_server.observation is not None:
             edge_server.observation.observe(body)
         strict: Final = (
-            isinstance(edge_server.backend, RecordEdge) and edge_server.backend.recorder.profile == "stateless_v1"
+            isinstance(edge_server.backend, RecordEdge)
+            and edge_server.backend.recorder.profile == "stateless_v1"
             or isinstance(edge_server.backend, ReplayEdge)
             and edge_server.backend.source.bundle.manifest.match_profile == "stateless_v1"
         )
@@ -1332,8 +1321,11 @@ def _shared_cache_edge(bind_host: str, advertise_host: str, forward_timeout: flo
     backend: Final = configured_cache_backend()
     assert backend is not None
     return start_provider_edge(
-        backend, mounts=EDGE_MOUNTS, bind_host=bind_host,
-        advertise_host=advertise_host, forward_timeout=forward_timeout,
+        backend,
+        mounts=EDGE_MOUNTS,
+        bind_host=bind_host,
+        advertise_host=advertise_host,
+        forward_timeout=forward_timeout,
     ).edge
 
 
@@ -1350,9 +1342,12 @@ def observed_provider_edge(
     mounts: Mapping[str, str] = EDGE_MOUNTS,
 ) -> Generator[ProviderEdge, None, None]:
     running: Final = start_provider_edge(
-        _observed_backend(mode_raw, bundle_dir), mounts=mounts,
-        bind_host=bind_host, advertise_host=advertise_host,
-        forward_timeout=forward_timeout, observation=observation,
+        _observed_backend(mode_raw, bundle_dir),
+        mounts=mounts,
+        bind_host=bind_host,
+        advertise_host=advertise_host,
+        forward_timeout=forward_timeout,
+        observation=observation,
     )
     try:
         yield running.edge

@@ -18,9 +18,9 @@ COVERAGE_SUBPROCESS_VARS: Final = frozenset(
 
 
 def test_host_proxy_base_url_cannot_reach_request_derived_url_tests():
-    child_env: Final = {
-        key: value for key, value in os.environ.items() if key not in COVERAGE_SUBPROCESS_VARS
-    } | {"PROXY_BASE_URL": "https://leaked-host-origin.example.com"}
+    child_env: Final = {key: value for key, value in os.environ.items() if key not in COVERAGE_SUBPROCESS_VARS} | {
+        "PROXY_BASE_URL": "https://leaked-host-origin.example.com"
+    }
 
     completed: Final = subprocess.run(
         [

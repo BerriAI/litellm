@@ -45,9 +45,7 @@ class TestBaseModelResponseIterator:
             "",  # Empty line after DONE
         ]
 
-        iterator = BaseModelResponseIterator(
-            streaming_response=iter(sse_lines), sync_stream=True
-        )
+        iterator = BaseModelResponseIterator(streaming_response=iter(sse_lines), sync_stream=True)
 
         chunks = list(iterator)
 
@@ -69,9 +67,7 @@ class TestBaseModelResponseIterator:
             "data: [DONE]",
         ]
 
-        iterator = BaseModelResponseIterator(
-            streaming_response=iter(sse_lines), sync_stream=True
-        )
+        iterator = BaseModelResponseIterator(streaming_response=iter(sse_lines), sync_stream=True)
 
         chunks = list(iterator)
 
@@ -87,9 +83,7 @@ class TestBaseModelResponseIterator:
             "data: [DONE]",
         ]
 
-        iterator = BaseModelResponseIterator(
-            streaming_response=iter(sse_lines), sync_stream=True
-        )
+        iterator = BaseModelResponseIterator(streaming_response=iter(sse_lines), sync_stream=True)
 
         chunks = list(iterator)
 
@@ -115,9 +109,7 @@ async def test_filter_empty_sse_lines_async():
         for line in lines:
             yield line
 
-    iterator = BaseModelResponseIterator(
-        streaming_response=async_sse_generator(), sync_stream=False
-    )
+    iterator = BaseModelResponseIterator(streaming_response=async_sse_generator(), sync_stream=False)
 
     chunks = []
     async for chunk in iterator:
@@ -244,9 +236,7 @@ async def test_aclose_closes_attached_http_response():
     async def async_gen():
         yield "data: {}"
 
-    iterator = BaseModelResponseIterator(
-        streaming_response=async_gen(), sync_stream=False
-    )
+    iterator = BaseModelResponseIterator(streaming_response=async_gen(), sync_stream=False)
     http_response = MagicMock()
     http_response.aclose = AsyncMock()
     iterator.http_response = http_response
@@ -261,9 +251,7 @@ async def test_aclose_is_noop_without_http_response():
     async def async_gen():
         yield "data: {}"
 
-    iterator = BaseModelResponseIterator(
-        streaming_response=async_gen(), sync_stream=False
-    )
+    iterator = BaseModelResponseIterator(streaming_response=async_gen(), sync_stream=False)
 
     await iterator.aclose()
 

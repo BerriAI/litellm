@@ -71,9 +71,7 @@ def _upstream(request: Request) -> Reply:
                 }
             ]
         }
-        expected_auth: Final = base64.b64encode(
-            f"{LANGFUSE_PUBLIC_KEY}:{LANGFUSE_SECRET_KEY}".encode()
-        ).decode()
+        expected_auth: Final = base64.b64encode(f"{LANGFUSE_PUBLIC_KEY}:{LANGFUSE_SECRET_KEY}".encode()).decode()
         assert request.headers.get("authorization") == f"Basic {expected_auth}"
         return Reply(status=207, body=json.dumps({"received": body}).encode())
     if request.target == "/v1/rerank":
@@ -329,9 +327,7 @@ async def test_secret_detection_redacts_the_logged_request(monkeypatch: pytest.M
         request._url = URL(url="/chat/completions")
 
         async def return_body() -> bytes:
-            return json.dumps(
-                {"model": "fake-model", "messages": [{"role": "user", "content": prompt}]}
-            ).encode()
+            return json.dumps({"model": "fake-model", "messages": [{"role": "user", "content": prompt}]}).encode()
 
         request.body = return_body
         from litellm.proxy._types import UserAPIKeyAuth
@@ -347,9 +343,7 @@ async def test_secret_detection_redacts_the_logged_request(monkeypatch: pytest.M
                 break
             await asyncio.sleep(0)
 
-    assert recorder.logged_messages == [
-        {"role": "user", "content": "Hello here is my OPENAI_API_KEY = [REDACTED]"}
-    ]
+    assert recorder.logged_messages == [{"role": "user", "content": "Hello here is my OPENAI_API_KEY = [REDACTED]"}]
 
 
 def _spend_row(marker: Canary, since: datetime) -> str:

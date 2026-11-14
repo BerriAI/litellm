@@ -12,16 +12,12 @@ def test_get_llm_provider_lambda_ai():
     from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 
     # Test with lambda_ai/model-name format
-    model, provider, api_key, api_base = get_llm_provider(
-        "lambda_ai/llama3.1-8b-instruct"
-    )
+    model, provider, api_key, api_base = get_llm_provider("lambda_ai/llama3.1-8b-instruct")
     assert model == "llama3.1-8b-instruct"
     assert provider == "lambda_ai"
 
     # Test with api_base containing Lambda AI endpoint
-    model, provider, api_key, api_base = get_llm_provider(
-        "llama3.1-8b-instruct", api_base="https://api.lambda.ai/v1"
-    )
+    model, provider, api_key, api_base = get_llm_provider("llama3.1-8b-instruct", api_base="https://api.lambda.ai/v1")
     assert model == "llama3.1-8b-instruct"
     assert provider == "lambda_ai"
     assert api_base == "https://api.lambda.ai/v1"

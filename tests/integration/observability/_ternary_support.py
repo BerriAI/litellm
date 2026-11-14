@@ -86,7 +86,11 @@ class TernaryPeers:
 
     def uploads(self) -> tuple[Upload, ...]:
         return tuple(
-            Upload(day=urlsplit(put.target).path.rsplit("/", 1)[-1].removesuffix(".csv"), headers=put.headers, body=put.body)
+            Upload(
+                day=urlsplit(put.target).path.rsplit("/", 1)[-1].removesuffix(".csv"),
+                headers=put.headers,
+                body=put.body,
+            )
             for put in self.puts()
             if put.method == "PUT"
         )
@@ -162,7 +166,9 @@ def callbacks_config(directory: Path, callbacks: tuple[str, ...]) -> Path:
 def set_database_timezone(database_url: str, zone: str) -> None:
     name: Final = urlsplit(database_url).path.lstrip("/")
     with psycopg.connect(database_url, autocommit=True) as connection:
-        connection.execute(sql.SQL("ALTER DATABASE {} SET timezone TO {}").format(sql.Identifier(name), sql.Literal(zone)))
+        connection.execute(
+            sql.SQL("ALTER DATABASE {} SET timezone TO {}").format(sql.Identifier(name), sql.Literal(zone))
+        )
 
 
 @dataclass(frozen=True, slots=True)

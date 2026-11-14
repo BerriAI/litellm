@@ -100,5 +100,3 @@ async def test_concurrent_requests_obey_both_caps_with_existing_reservation_engi
     )
     await release_budget_reservation(accepted[0])
     assert all(backend.get_local(counter.counter_key) == pytest.approx(0.0) for counter in counters)
-
-

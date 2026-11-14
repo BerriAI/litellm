@@ -63,7 +63,9 @@ def _managed_deployment(proxy: ProxyClient, resources: ResourceManager) -> str:
     return model
 
 
-def _generate_content(proxy: ProxyClient, key: str, model: str, text: str, *, stream: bool = False) -> StreamingResponse:
+def _generate_content(
+    proxy: ProxyClient, key: str, model: str, text: str, *, stream: bool = False
+) -> StreamingResponse:
     operation = "streamGenerateContent" if stream else "generateContent"
     body = _GenerateContentBody(contents=(_GenerateContentContent(parts=(_GenerateContentPart(text=text),)),))
     return proxy.transport.send(

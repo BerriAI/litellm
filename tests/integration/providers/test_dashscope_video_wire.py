@@ -497,7 +497,9 @@ def test_drop_params_drops_malformed_fields_and_unpriced_tiers_instead_of_answer
     gateway: Gateway, level: str
 ) -> None:
     with wire_server(task_api()) as wire, gateway.scenario() as scenario:
-        model: Final = deployed(gateway, scenario, 
+        model: Final = deployed(
+            gateway,
+            scenario,
             model="dashscope/wan2.7-t2v",
             api_base=wire.url,
             api_key=API_KEY,
@@ -527,9 +529,7 @@ def test_drop_params_drops_malformed_fields_and_unpriced_tiers_instead_of_answer
         settled_spend(key, expected)
 
 
-@pytest.mark.parametrize(
-    "parameters", [{}, None, "missing"], ids=["empty-object", "null", "missing"]
-)
+@pytest.mark.parametrize("parameters", [{}, None, "missing"], ids=["empty-object", "null", "missing"])
 def test_empty_null_and_missing_parameters_send_the_same_task_body(gateway: Gateway, parameters: JsonValue) -> None:
     with wire_server(task_api()) as wire, gateway.scenario() as scenario:
         model: Final = deployed(gateway, scenario, model=f"dashscope/{MODEL}", api_base=wire.url, api_key=API_KEY)

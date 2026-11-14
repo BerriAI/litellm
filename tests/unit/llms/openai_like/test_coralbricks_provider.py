@@ -49,13 +49,9 @@ def test_coralbricks_provider_keeps_explicit_credentials(monkeypatch: pytest.Mon
 
 
 def test_coralbricks_is_available_in_add_model_form():
-    fields_path: Final = (
-        Path(litellm.__file__).parent / "proxy" / "public_endpoints" / "provider_create_fields.json"
-    )
+    fields_path: Final = Path(litellm.__file__).parent / "proxy" / "public_endpoints" / "provider_create_fields.json"
     providers: Final = json.loads(fields_path.read_text())
-    coralbricks: Final = next(
-        provider for provider in providers if provider["litellm_provider"] == "coralbricks"
-    )
+    coralbricks: Final = next(provider for provider in providers if provider["litellm_provider"] == "coralbricks")
 
     assert coralbricks["provider"] == "CORALBRICKS"
     assert coralbricks["provider_display_name"] == "CoralBricks"
@@ -133,9 +129,7 @@ def test_coralbricks_responses_request():
                         "type": "message",
                         "role": "assistant",
                         "status": "completed",
-                        "content": [
-                            {"type": "output_text", "text": "Hello from CoralBricks", "annotations": []}
-                        ],
+                        "content": [{"type": "output_text", "text": "Hello from CoralBricks", "annotations": []}],
                     }
                 ],
                 "usage": {"input_tokens": 4, "output_tokens": 3, "total_tokens": 7},
@@ -373,7 +367,9 @@ async def test_coralbricks_anthropic_messages_cost_includes_cache_write_and_free
 
 
 def test_coralbricks_rows_are_listed_for_wildcard_expansion():
-    catalog: Final = {name for name, info in litellm.model_cost.items() if info.get("litellm_provider") == "coralbricks"}
+    catalog: Final = {
+        name for name, info in litellm.model_cost.items() if info.get("litellm_provider") == "coralbricks"
+    }
     assert CORALBRICKS_MODEL in catalog
     assert set(litellm.get_valid_models(custom_llm_provider="coralbricks")) == catalog
 
@@ -403,9 +399,7 @@ def test_coralbricks_cost_map_rows_declare_same_endpoints_as_providers_json():
     )
     for cost_map_path in cost_map_paths:
         cost_map: Final = json.loads(cost_map_path.read_text())
-        coralbricks_rows: Final = {
-            key: row for key, row in cost_map.items() if key.startswith("coralbricks/")
-        }
+        coralbricks_rows: Final = {key: row for key, row in cost_map.items() if key.startswith("coralbricks/")}
         assert coralbricks_rows
         for row in coralbricks_rows.values():
             assert row["supported_endpoints"] == declared
@@ -523,9 +517,7 @@ def test_coralbricks_streaming_chat_cost_includes_cache_write_and_free_cached_re
     assert route.call_count == 1
     assert body["stream"] is True
 
-    built: Final = litellm.stream_chunk_builder(
-        chunks, messages=[{"role": "user", "content": "Say hello"}]
-    )
+    built: Final = litellm.stream_chunk_builder(chunks, messages=[{"role": "user", "content": "Say hello"}])
     assert built.usage.prompt_tokens_details.cached_tokens == 4352
     cost: Final = litellm.completion_cost(completion_response=built, model=CORALBRICKS_MODEL)
     assert cost == pytest.approx(

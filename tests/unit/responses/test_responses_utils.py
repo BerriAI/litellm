@@ -775,11 +775,13 @@ def test_responses_extra_body_forwarded_to_completion_transformation_handler():
     """
     with (
         patch.object(
-            import_module("litellm.responses.main").ProviderConfigManager, "get_provider_responses_api_config",
+            import_module("litellm.responses.main").ProviderConfigManager,
+            "get_provider_responses_api_config",
             return_value=None,
         ),
         patch.object(
-            import_module("litellm.responses.main").litellm_completion_transformation_handler, "response_api_handler",
+            import_module("litellm.responses.main").litellm_completion_transformation_handler,
+            "response_api_handler",
         ) as mock_handler,
     ):
         mock_handler.return_value = MagicMock()
@@ -806,11 +808,13 @@ def test_responses_maps_reasoning_effort_from_litellm_params_to_reasoning():
     """
     with (
         patch.object(
-            import_module("litellm.responses.main").ProviderConfigManager, "get_provider_responses_api_config",
+            import_module("litellm.responses.main").ProviderConfigManager,
+            "get_provider_responses_api_config",
             return_value=None,
         ),
         patch.object(
-            import_module("litellm.responses.main").litellm_completion_transformation_handler, "response_api_handler",
+            import_module("litellm.responses.main").litellm_completion_transformation_handler,
+            "response_api_handler",
         ) as mock_handler,
     ):
         mock_handler.return_value = MagicMock()
@@ -925,16 +929,14 @@ class TestResponsesInputToChatMessages:
         assert ResponsesAPIRequestUtils.responses_input_to_chat_messages(None) == []
 
     def test_str_input_becomes_user_message(self):
-        assert ResponsesAPIRequestUtils.responses_input_to_chat_messages("hi") == [
-            {"role": "user", "content": "hi"}
-        ]
+        assert ResponsesAPIRequestUtils.responses_input_to_chat_messages("hi") == [{"role": "user", "content": "hi"}]
 
     def test_list_input_keeps_only_role_items(self):
         reasoning_item = {"type": "reasoning", "id": "rs_1", "summary": []}
         user_message = {"role": "user", "content": "hi"}
-        assert ResponsesAPIRequestUtils.responses_input_to_chat_messages(
-            [reasoning_item, user_message, "stray"]
-        ) == [user_message]
+        assert ResponsesAPIRequestUtils.responses_input_to_chat_messages([reasoning_item, user_message, "stray"]) == [
+            user_message
+        ]
 
 
 class TestMergeProviderSpecificHeaders:
@@ -968,9 +970,12 @@ class TestMergeProviderSpecificHeaders:
         assert merged == {"Authorization": "Bearer chatgpt-token"}
 
     def test_no_scoped_headers_returns_extra_headers_unchanged(self):
-        assert ResponsesAPIRequestUtils.merge_provider_specific_headers(
-            extra_headers=None, provider_specific_header=None, custom_llm_provider="chatgpt"
-        ) is None
+        assert (
+            ResponsesAPIRequestUtils.merge_provider_specific_headers(
+                extra_headers=None, provider_specific_header=None, custom_llm_provider="chatgpt"
+            )
+            is None
+        )
 
 
 def test_responses_object_bills_an_explicit_cache_hit_at_the_explicit_rate():

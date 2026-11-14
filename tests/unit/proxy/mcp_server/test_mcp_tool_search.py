@@ -183,12 +183,11 @@ FAKE_VECTORS: dict[str, Vector] = {
 }
 
 
-
-
 def _paged_params():
     from mcp.types import PaginatedRequestParams
 
     return PaginatedRequestParams()
+
 
 class RecordingEmbedder:
     def __init__(self) -> None:
@@ -1158,7 +1157,8 @@ class TestDispatchVirtualMcpTool:
         sentinel_logging_obj = object()
         with (
             patch.object(
-                mcp_operations, "_build_virtual_call_logging_obj",
+                mcp_operations,
+                "_build_virtual_call_logging_obj",
                 new_callable=AsyncMock,
                 return_value=sentinel_logging_obj,
             ) as mock_build,
@@ -1291,7 +1291,9 @@ class TestCaptureHostProgressCallback:
     @pytest.mark.parametrize("token", ["tok12345", 12345, 0])
     @pytest.mark.parametrize("message", [None, "halfway"])
     @pytest.mark.parametrize("delivery_error", [None, RuntimeError("request stream closed")])
-    async def test_forwards_progress_on_originating_request(self, _mcp_request_ctx, token, message, delivery_error) -> None:
+    async def test_forwards_progress_on_originating_request(
+        self, _mcp_request_ctx, token, message, delivery_error
+    ) -> None:
         from mcp.server.connection import Connection
         from mcp.server.session import ServerSession
         from mcp.shared.dispatcher import DispatchContext
@@ -1471,5 +1473,3 @@ async def test_cold_concurrent_schema_validation_accepts_valid_arguments() -> No
     finally:
         if original_affinity is not None:
             os.sched_setaffinity(0, original_affinity)
-
-

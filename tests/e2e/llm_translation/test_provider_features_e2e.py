@@ -46,9 +46,7 @@ PROMPT_CACHE_RETENTION: Final = "24h"
 
 
 class TestServiceTier:
-    @pytest.mark.covers(
-        "llm.chat_completions.openai.service_tier.nonstream.works", exercised_on=[]
-    )
+    @pytest.mark.covers("llm.chat_completions.openai.service_tier.nonstream.works", exercised_on=[])
     @meta(
         Subject(
             domain=Domain.LLM_TRANSLATION,
@@ -58,15 +56,11 @@ class TestServiceTier:
             mode=Mode.NONSTREAM,
         )
     )
-    def test_openai_service_tier_is_echoed(
-        self, client: PassthroughClient, resources: ResourceManager
-    ) -> None:
+    def test_openai_service_tier_is_echoed(self, client: PassthroughClient, resources: ResourceManager) -> None:
         model = f"e2e-service-tier-{unique_marker()}"
         model_id = client.proxy.create_model(
             model,
-            LiteLLMParamsBody(
-                model=OPENAI_BACKEND, api_key="os.environ/OPENAI_API_KEY"
-            ),
+            LiteLLMParamsBody(model=OPENAI_BACKEND, api_key="os.environ/OPENAI_API_KEY"),
         )
         resources.defer(lambda: client.proxy.delete_model(model_id))
         key = resources.key()
@@ -83,8 +77,7 @@ class TestServiceTier:
             )
         )
         assert response.service_tier == SERVICE_TIER, (
-            f"service_tier not honored: sent {SERVICE_TIER!r}, response reported "
-            f"{response.service_tier!r} ({response})"
+            f"service_tier not honored: sent {SERVICE_TIER!r}, response reported {response.service_tier!r} ({response})"
         )
 
 
@@ -109,7 +102,9 @@ class _OpenAIBodyCapture:
         return tuple(_OutboundRetention.model_validate_json(body).prompt_cache_retention for body in bodies)
 
 
-def _openai_edge_api_base(resources: ResourceManager, capture: _OpenAIBodyCapture, *, reachable_from_proxy: bool) -> str:
+def _openai_edge_api_base(
+    resources: ResourceManager, capture: _OpenAIBodyCapture, *, reachable_from_proxy: bool
+) -> str:
     """The proxy may run in a container, so its edge binds where the proxy can
     reach it; an in-process SDK call reaches the edge on loopback."""
     edge: Final = (

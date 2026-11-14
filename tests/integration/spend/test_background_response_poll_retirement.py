@@ -303,7 +303,9 @@ def test_responses_gone_at_the_provider_do_not_starve_a_newer_response_out_of_co
         assert [_row_status(gone_id) for gone_id in gone_ids] == [
             [{"status": "stale_expired"}]
         ] * MAX_OBJECTS_PER_POLL_CYCLE
-        spend_rows: Final = eventually(lambda: _poll_spend_rows(completable_id), lambda rows: len(rows) >= 1, seconds=70)
+        spend_rows: Final = eventually(
+            lambda: _poll_spend_rows(completable_id), lambda rows: len(rows) >= 1, seconds=70
+        )
         assert spend_rows[0]["spend"] == pytest.approx(
             INPUT_TOKENS * INPUT_COST_PER_TOKEN + OUTPUT_TOKENS * OUTPUT_COST_PER_TOKEN
         )

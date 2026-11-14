@@ -343,7 +343,9 @@ async def test_the_request_sees_its_committed_spend_charge_settle_whoever_sends_
 async def test_native_post_call_ops_go_out_with_the_post_call_flush_not_the_request_boundary():
     natives = FakeNatives()
 
-    with request_redis_batch_scope(post_call_deadline=60, native_factory=natives, native_send_factory=fake_send) as request:  # pyright: ignore[reportArgumentType]  # test double
+    with request_redis_batch_scope(
+        post_call_deadline=60, native_factory=natives, native_send_factory=fake_send
+    ) as request:  # pyright: ignore[reportArgumentType]  # test double
         request.native_post_call()
         await request.flush_pre_call()
         at_the_boundary = list(natives.built[0].events)
@@ -358,7 +360,9 @@ async def test_native_post_call_ops_go_out_with_the_post_call_flush_not_the_requ
 async def test_native_post_call_ops_still_waiting_on_their_callbacks_are_drained_at_shutdown():
     natives = FakeNatives()
 
-    with request_redis_batch_scope(post_call_deadline=60, native_factory=natives, native_send_factory=fake_send) as request:  # pyright: ignore[reportArgumentType]  # test double
+    with request_redis_batch_scope(
+        post_call_deadline=60, native_factory=natives, native_send_factory=fake_send
+    ) as request:  # pyright: ignore[reportArgumentType]  # test double
         request.native_post_call()
         await request.flush_pre_call()
     await drain_post_call_redis_batches()

@@ -87,8 +87,7 @@ def test_get_complete_url_default_base():
 
 def test_get_complete_url_appends_search():
     assert (
-        _config().get_complete_url("https://self-hosted.local/api/v1", {})
-        == "https://self-hosted.local/api/v1/search"
+        _config().get_complete_url("https://self-hosted.local/api/v1", {}) == "https://self-hosted.local/api/v1/search"
     )
 
 
@@ -112,9 +111,7 @@ def test_get_complete_url_ignores_a_trailing_slash_on_api_base(api_base: str) ->
 
 
 def test_get_complete_url_reads_env_base():
-    with patch.dict(
-        os.environ, {"CRW_API_BASE": "https://env-base.local/v1"}, clear=True
-    ):
+    with patch.dict(os.environ, {"CRW_API_BASE": "https://env-base.local/v1"}, clear=True):
         assert _config().get_complete_url(None, {}) == "https://env-base.local/v1/search"
 
 
@@ -173,9 +170,7 @@ def test_transform_search_response_falls_back_to_description():
         _resp(
             {
                 "success": True,
-                "data": [
-                    {"title": "T", "url": "https://e.com", "description": "only-desc"}
-                ],
+                "data": [{"title": "T", "url": "https://e.com", "description": "only-desc"}],
             }
         ),
         logging_obj=Mock(),
@@ -184,9 +179,7 @@ def test_transform_search_response_falls_back_to_description():
 
 
 def test_transform_search_response_empty_data():
-    resp = _config().transform_search_response(
-        _resp({"success": True, "data": []}), logging_obj=Mock()
-    )
+    resp = _config().transform_search_response(_resp({"success": True, "data": []}), logging_obj=Mock())
     assert resp.results == []
 
 
@@ -198,9 +191,7 @@ def test_transform_search_response_non_list_data():
 
 
 def _transform(payload: object) -> SearchResponse:
-    return _config().transform_search_response(
-        raw_response=httpx.Response(200, json=payload), logging_obj=None
-    )
+    return _config().transform_search_response(raw_response=httpx.Response(200, json=payload), logging_obj=None)
 
 
 def _entry(index: int) -> dict[str, str]:
@@ -229,12 +220,8 @@ def test_transform_search_response_keeps_provider_order_and_snippet_fallbacks():
     assert response.object == "search"
     assert response.results == [
         SearchResult(title="Title 1", url="https://example.com/1", snippet="# Page 1"),
-        SearchResult(
-            title="Title 2", url="https://example.com/2", snippet="Description 2"
-        ),
-        SearchResult(
-            title="Title 3", url="https://example.com/3", snippet="Description 3"
-        ),
+        SearchResult(title="Title 2", url="https://example.com/2", snippet="Description 2"),
+        SearchResult(title="Title 3", url="https://example.com/3", snippet="Description 3"),
         SearchResult(title="Title 4", url="https://example.com/4", snippet=""),
         SearchResult(title="", url="", snippet="", date=None, last_updated=None),
     ]
@@ -265,17 +252,13 @@ def test_transform_search_response_rejects_a_body_that_is_not_an_object(payload)
 
 @pytest.mark.parametrize("position", [0, 1, 403])
 @pytest.mark.parametrize("entry", ["rate limit", None, 429, [_entry(1)]])
-def test_transform_search_response_rejects_an_entry_that_is_not_an_object(
-    position, entry
-):
+def test_transform_search_response_rejects_an_entry_that_is_not_an_object(position, entry):
     entries = [_entry(index) for index in range(position)] + [entry]
 
     with pytest.raises(ValidationError) as exc_info:
         _transform({"success": True, "data": entries})
 
-    assert [(error["type"], error["loc"]) for error in exc_info.value.errors()] == [
-        ("dict_type", ())
-    ]
+    assert [(error["type"], error["loc"]) for error in exc_info.value.errors()] == [("dict_type", ())]
     assert "input_value" not in str(exc_info.value)
 
 

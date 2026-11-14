@@ -224,7 +224,7 @@ def rpc(gateway: Gateway, method: str, params: dict[str, JsonValue], *, status: 
 def test_continuations_resume_on_another_replica_and_reject_changed_operations(
     tmp_path: Path, changed_target: bool, sdk_upstream: bool
 ) -> None:
-    with (sdk_interaction_peer() if sdk_upstream else wire_server(interaction_peer)) as peer, httpx.Client() as client:
+    with sdk_interaction_peer() if sdk_upstream else wire_server(interaction_peer) as peer, httpx.Client() as client:
         config: Final = tmp_path / "proxy.yaml"
         config.write_text(
             yaml.safe_dump(
@@ -302,7 +302,9 @@ def test_continuations_resume_on_another_replica_and_reject_changed_operations(
 
 
 @pytest.mark.parametrize("sdk_upstream", [False, True])
-def test_continuation_reauthenticates_caller_and_rechecks_revoked_permissions(tmp_path: Path, sdk_upstream: bool) -> None:
+def test_continuation_reauthenticates_caller_and_rechecks_revoked_permissions(
+    tmp_path: Path, sdk_upstream: bool
+) -> None:
     auth_module: Final = tmp_path / "interaction_auth.py"
     auth_module.write_text(
         "from pathlib import Path\n"
@@ -322,8 +324,8 @@ def test_continuation_reauthenticates_caller_and_rechecks_revoked_permissions(tm
     auth_state: Final = auth_module.with_suffix(".json")
     auth_state.write_text(json.dumps(identity))
     with (
-        (sdk_interaction_peer() if sdk_upstream else wire_server(interaction_peer)) as peer,
-        (sdk_interaction_peer() if sdk_upstream else wire_server(interaction_peer)) as other_peer,
+        sdk_interaction_peer() if sdk_upstream else wire_server(interaction_peer) as peer,
+        sdk_interaction_peer() if sdk_upstream else wire_server(interaction_peer) as other_peer,
         httpx.Client() as client,
     ):
         config: Final = tmp_path / "proxy.yaml"
@@ -680,7 +682,9 @@ def test_modern_subscription_delivers_changes_between_calls_and_refreshes_tools(
         "user_role": "internal_user",
         "object_permission": {
             "object_permission_id": "subscription-permission",
-            "mcp_servers": ["subscription-server", "second-server"] if access in ("fanout", "mixed-capabilities", "missing-credentials", "concurrent-probes", "rate-limited") else ["subscription-server"],
+            "mcp_servers": ["subscription-server", "second-server"]
+            if access in ("fanout", "mixed-capabilities", "missing-credentials", "concurrent-probes", "rate-limited")
+            else ["subscription-server"],
         },
     }
     auth_state: Final = auth_module.with_suffix(".json")
@@ -938,7 +942,9 @@ def test_modern_subscription_delivers_changes_between_calls_and_refreshes_tools(
                     else:
                         assert discovery.capabilities.tools.list_changed
                         assert discovery.capabilities.resources.list_changed
-                        assert bool(discovery.capabilities.resources.subscribe) is (access not in ("fanout", "concurrent-probes", "rate-limited"))
+                        assert bool(discovery.capabilities.resources.subscribe) is (
+                            access not in ("fanout", "concurrent-probes", "rate-limited")
+                        )
                     if access == "rate-limited":
                         assert limited_requests, "Admitted discovery never reached the limited upstream"
                         limited_requests.clear()
@@ -949,7 +955,9 @@ def test_modern_subscription_delivers_changes_between_calls_and_refreshes_tools(
                         assert not (limited.capabilities.resources and limited.capabilities.resources.subscribe)
                         return
                     if access in ("probe-failure", "concurrent-probes", "probe-timeout"):
-                        probe_catalog_goal.append(len(catalog_reads) + 4 * len(identity["object_permission"]["mcp_servers"]))
+                        probe_catalog_goal.append(
+                            len(catalog_reads) + 4 * len(identity["object_permission"]["mcp_servers"])
+                        )
                         probe_fails.set()
                         try:
                             degraded = DiscoverResult.model_validate(
@@ -957,7 +965,11 @@ def test_modern_subscription_delivers_changes_between_calls_and_refreshes_tools(
                             )
                         finally:
                             probe_barrier.set()
-                        assert probe_failed.is_set(), ("Controlled discovery probe was not exercised", catalog_reads, probe_catalog_goal)
+                        assert probe_failed.is_set(), (
+                            "Controlled discovery probe was not exercised",
+                            catalog_reads,
+                            probe_catalog_goal,
+                        )
                         assert degraded.capabilities.tools is not None
                         if access == "concurrent-probes":
                             assert len(probe_arrivals) == 2
@@ -980,7 +992,14 @@ def test_modern_subscription_delivers_changes_between_calls_and_refreshes_tools(
                     if access == "modern-boundary":
                         for method, params in (
                             ("notifications/initialized", {}),
-                            ("initialize", {"protocolVersion": "2026-07-28", "clientInfo": {"name": "boundary", "version": "1"}, "capabilities": {}}),
+                            (
+                                "initialize",
+                                {
+                                    "protocolVersion": "2026-07-28",
+                                    "clientInfo": {"name": "boundary", "version": "1"},
+                                    "capabilities": {},
+                                },
+                            ),
                             ("resources/subscribe", {"uri": "test://value"}),
                             ("resources/unsubscribe", {"uri": "test://value"}),
                         ):
@@ -1152,10 +1171,12 @@ def test_modern_subscription_delivers_changes_between_calls_and_refreshes_tools(
         await asyncio.wait_for(asyncio.gather(*watchers), 2)
 
     transport_app: Final = app if access == "legacy-upstream-sse" else _acknowledge_notifications_after_dispatch(app)
-    hosted: Final = Starlette(routes=[Route("/token", token_endpoint, methods=["POST"]), Mount("/", app=transport_app)], lifespan=lifespan)
+    hosted: Final = Starlette(
+        routes=[Route("/token", token_endpoint, methods=["POST"]), Mount("/", app=transport_app)], lifespan=lifespan
+    )
     with (
         asgi_server(hosted) as upstream_url,
-        (sdk_interaction_peer() if access == "mixed-capabilities" else nullcontext(None)) as plain,
+        sdk_interaction_peer() if access == "mixed-capabilities" else nullcontext(None) as plain,
         httpx.Client() as client,
     ):
         config: Final = tmp_path / "proxy.yaml"
@@ -1180,9 +1201,15 @@ def test_modern_subscription_delivers_changes_between_calls_and_refreshes_tools(
                             ),
                             "url": upstream_url + ("/sse" if access == "legacy-upstream-sse" else "/mcp"),
                             "transport": "sse" if access == "legacy-upstream-sse" else "http",
-                            "protocol_version": "2025-11-25" if access in ("legacy", "legacy-both", "legacy-upstream-sse") else "2026-07-28",
+                            "protocol_version": "2025-11-25"
+                            if access in ("legacy", "legacy-both", "legacy-upstream-sse")
+                            else "2026-07-28",
                             **({"allowed_tools": ["change_tools"]} if access == "hidden" else {}),
-                            **({"rpm": 1, "static_headers": {"X-Probe-Target": "limited"}} if access == "rate-limited" else {}),
+                            **(
+                                {"rpm": 1, "static_headers": {"X-Probe-Target": "limited"}}
+                                if access == "rate-limited"
+                                else {}
+                            ),
                             **({"timeout": 2} if access == "concurrent-probes" else {}),
                             **(
                                 {"auth_type": "oauth_delegate", "extra_headers": ["Authorization"]}
@@ -1200,16 +1227,27 @@ def test_modern_subscription_delivers_changes_between_calls_and_refreshes_tools(
                                     "protocol_version": "2026-07-28",
                                     "auth_type": "oauth_delegate",
                                     "extra_headers": ["Authorization"],
-                                    **({
-                                        "auth_type": "oauth2",
-                                        "oauth2_flow": "authorization_code",
-                                        "client_id": "subscription-client",
-                                        "authorization_url": upstream_url + "/authorize",
-                                        "token_url": upstream_url + "/token",
-                                    } if access == "missing-credentials" else {}),
+                                    **(
+                                        {
+                                            "auth_type": "oauth2",
+                                            "oauth2_flow": "authorization_code",
+                                            "client_id": "subscription-client",
+                                            "authorization_url": upstream_url + "/authorize",
+                                            "token_url": upstream_url + "/token",
+                                        }
+                                        if access == "missing-credentials"
+                                        else {}
+                                    ),
                                 }
                             }
-                            if access in ("fanout", "mixed-capabilities", "missing-credentials", "concurrent-probes", "rate-limited")
+                            if access
+                            in (
+                                "fanout",
+                                "mixed-capabilities",
+                                "missing-credentials",
+                                "concurrent-probes",
+                                "rate-limited",
+                            )
                             else {}
                         ),
                     },
@@ -1261,7 +1299,9 @@ def test_modern_subscription_delivers_changes_between_calls_and_refreshes_tools(
 
             async def legacy_after_rollback(gateway: Gateway) -> None:
                 async with httpx2.AsyncClient(headers={"Authorization": "Bearer " + gateway.key}) as client:
-                    async with streamable_http_client(str(gateway.client.base_url).rstrip("/") + "/mcp/", http_client=client) as streams:
+                    async with streamable_http_client(
+                        str(gateway.client.base_url).rstrip("/") + "/mcp/", http_client=client
+                    ) as streams:
                         async with ClientSession(streams[0], streams[1]) as session:
                             await session.initialize()
                             assert "peer-added" in {tool.name for tool in (await session.list_tools()).tools}
@@ -1269,12 +1309,27 @@ def test_modern_subscription_delivers_changes_between_calls_and_refreshes_tools(
                             assert not result.is_error
                             assert result.content[0].text == "new tool"
 
-            with owned_proxy(seed, tmp_path / "rollback", environment, config=config, database_setup=(), remove_environment=("DATABASE_URL", "DATABASE_URL_READ_REPLICA", "DIRECT_URL", "INTEGRATION_PROXY_DATABASE_URL", "INTEGRATION_PROXY_READ_REPLICA_URL")) as rollback:
+            with owned_proxy(
+                seed,
+                tmp_path / "rollback",
+                environment,
+                config=config,
+                database_setup=(),
+                remove_environment=(
+                    "DATABASE_URL",
+                    "DATABASE_URL_READ_REPLICA",
+                    "DIRECT_URL",
+                    "INTEGRATION_PROXY_DATABASE_URL",
+                    "INTEGRATION_PROXY_READ_REPLICA_URL",
+                ),
+            ) as rollback:
                 rejected = rpc(rollback, "tools/list", {}, status=400)
                 assert "error" in rejected
                 asyncio.run(legacy_after_rollback(rollback))
             eventually(lambda: len(active_listeners), lambda count: count == 0, seconds=10)
-            assert tool_executions == ["change_tools", "added"], "Rollback duplicated or restarted upstream tool execution"
+            assert tool_executions == ["change_tools", "added"], (
+                "Rollback duplicated or restarted upstream tool execution"
+            )
 
 
 def test_subscription_partial_setup_releases_upstream_capacity() -> None:
@@ -1467,7 +1522,6 @@ def test_modern_sampling_obeys_opt_in_and_completes_upstream_interaction(tmp_pat
                 assert calls == (), "Disabled sampling reached the model provider"
 
 
-
 @pytest.mark.parametrize("downstream", ["2025-11-25", "2026-07-28"])
 @pytest.mark.parametrize("upstream", ["2025-11-25", "2026-07-28"])
 def test_input_interaction_pairs_preserve_consent_and_never_restart_legacy_work(
@@ -1485,11 +1539,26 @@ def test_input_interaction_pairs_preserve_consent_and_never_restart_legacy_work(
     peer_context = wire_server(interaction_peer) if modern_upstream else mcp_peer("sse", rich=True)
     with peer_context as peer, httpx.Client() as http_client:
         config = tmp_path / "proxy.yaml"
-        config.write_text(yaml.safe_dump({
-            "model_list": [],
-            "mcp_servers": {"peer": {"url": peer.url, "transport": "http" if modern_upstream else "sse", "protocol_version": upstream, "allow_elicitation": True}},
-            "general_settings": {"master_key": _KEY, "store_model_in_db": False, "mcp_advertised_versions": ["2025-11-25", "2026-07-28"]},
-        }))
+        config.write_text(
+            yaml.safe_dump(
+                {
+                    "model_list": [],
+                    "mcp_servers": {
+                        "peer": {
+                            "url": peer.url,
+                            "transport": "http" if modern_upstream else "sse",
+                            "protocol_version": upstream,
+                            "allow_elicitation": True,
+                        }
+                    },
+                    "general_settings": {
+                        "master_key": _KEY,
+                        "store_model_in_db": False,
+                        "mcp_advertised_versions": ["2025-11-25", "2026-07-28"],
+                    },
+                }
+            )
+        )
         consent_requests = []
 
         async def consent(context, params):
@@ -1498,7 +1567,9 @@ def test_input_interaction_pairs_preserve_consent_and_never_restart_legacy_work(
 
         async def exercise(gateway):
             async with httpx2.AsyncClient(headers={"Authorization": "Bearer " + gateway.key}) as client:
-                async with streamable_http_client(str(gateway.client.base_url).rstrip("/") + "/mcp/", http_client=client) as streams:
+                async with streamable_http_client(
+                    str(gateway.client.base_url).rstrip("/") + "/mcp/", http_client=client
+                ) as streams:
                     async with ClientSession(streams[0], streams[1], elicitation_callback=consent) as session:
                         if downstream == "2026-07-28":
                             session.adopt(DiscoverResult.model_validate(await session.send_discover(downstream)))
@@ -1511,7 +1582,12 @@ def test_input_interaction_pairs_preserve_consent_and_never_restart_legacy_work(
                         if downstream == "2026-07-28" and modern_upstream:
                             assert isinstance(result, InputRequiredResult)
                             assert set(result.input_requests) == {"consent"}
-                            result = await session.call_tool(name, args, request_state=result.request_state, input_responses={"consent": ElicitResult(action="accept")})
+                            result = await session.call_tool(
+                                name,
+                                args,
+                                request_state=result.request_state,
+                                input_responses={"consent": ElicitResult(action="accept")},
+                            )
                         assert isinstance(result, CallToolResult)
                         if downstream == "2026-07-28" and not modern_upstream:
                             assert result.is_error
@@ -1524,11 +1600,33 @@ def test_input_interaction_pairs_preserve_consent_and_never_restart_legacy_work(
                             assert len(consent_requests) == (0 if downstream == "2026-07-28" else 1)
 
         seed = Gateway(http_client, _KEY, peer.url)
-        with owned_proxy(seed, tmp_path / "gateway", {"PYTHONPATH": _PROXY_PYTHONPATH, "STORE_MODEL_IN_DB": "False", "DISABLE_SCHEMA_UPDATE": "true", "LITELLM_SALT_KEY": "interaction-matrix-test"}, config=config, database_setup=(), remove_environment=("DATABASE_URL", "DATABASE_URL_READ_REPLICA", "DIRECT_URL", "REDIS_URL", "REDIS_HOST")) as gateway:
+        with owned_proxy(
+            seed,
+            tmp_path / "gateway",
+            {
+                "PYTHONPATH": _PROXY_PYTHONPATH,
+                "STORE_MODEL_IN_DB": "False",
+                "DISABLE_SCHEMA_UPDATE": "true",
+                "LITELLM_SALT_KEY": "interaction-matrix-test",
+            },
+            config=config,
+            database_setup=(),
+            remove_environment=("DATABASE_URL", "DATABASE_URL_READ_REPLICA", "DIRECT_URL", "REDIS_URL", "REDIS_HOST"),
+        ) as gateway:
             asyncio.run(exercise(gateway))
         observed = peer.drain()
-        calls = [json.loads(item.body) for item in observed if item.method == "POST" and json.loads(item.body).get("method") == "tools/call"] if modern_upstream else tool_calls(observed)
-        assert len(calls) == (2 if modern_upstream else 1), "Gateway restarted work instead of returning or resuming the original request"
+        calls = (
+            [
+                json.loads(item.body)
+                for item in observed
+                if item.method == "POST" and json.loads(item.body).get("method") == "tools/call"
+            ]
+            if modern_upstream
+            else tool_calls(observed)
+        )
+        assert len(calls) == (2 if modern_upstream else 1), (
+            "Gateway restarted work instead of returning or resuming the original request"
+        )
 
 
 def test_legacy_notification_dispatch_finishes_before_session_deletion() -> None:
@@ -1585,9 +1683,12 @@ def test_legacy_notification_dispatch_finishes_before_session_deletion() -> None
             url + "/mcp",
             headers=headers,
             json={
-                "jsonrpc": "2.0", "id": 1, "method": "initialize",
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
                 "params": {
-                    "protocolVersion": "2025-11-25", "capabilities": {},
+                    "protocolVersion": "2025-11-25",
+                    "capabilities": {},
                     "clientInfo": {"name": "notification-order", "version": "1"},
                 },
             },
@@ -1596,7 +1697,8 @@ def test_legacy_notification_dispatch_finishes_before_session_deletion() -> None
         headers["Mcp-Session-Id"] = initialized.headers["mcp-session-id"]
         try:
             accepted = client.post(
-                url + "/mcp", headers=headers,
+                url + "/mcp",
+                headers=headers,
                 json={"jsonrpc": "2.0", "method": "notifications/initialized"},
             )
             assert accepted.status_code == 202

@@ -98,7 +98,12 @@ _CLAUDE_SEARCH_CALL: Final = {
 
 
 _BM25_TOOL: Final = {"type": "tool_search_tool_bm25_20251119", "name": "tool_search_tool_bm25"}
-_DEFERRED_WEATHER: Final = {"type": "function", "name": "get_weather", "parameters": {"type": "object"}, "defer_loading": True}
+_DEFERRED_WEATHER: Final = {
+    "type": "function",
+    "name": "get_weather",
+    "parameters": {"type": "object"},
+    "defer_loading": True,
+}
 _CLIENT_TOOL_SEARCH: Final = {
     "type": "tool_search",
     "execution": "client",
@@ -209,9 +214,7 @@ class TestOpenAIResponsesAPIConfig:
         # Check expected fields have correct values
         for field, value in expected_fields.items():
             assert field in params, f"Missing expected field: {field}"
-            assert (
-                params[field] == value
-            ), f"Field {field} has value {params[field]}, expected {value}"
+            assert params[field] == value, f"Field {field} has value {params[field]}, expected {value}"
 
     def test_transform_responses_api_request(self):
         """Test request transformation"""
@@ -295,9 +298,7 @@ class TestOpenAIResponsesAPIConfig:
         ]
 
     @pytest.mark.parametrize("execution", [None, "client", "server"])
-    def test_transform_keeps_caller_tool_search_and_drops_anthropic_search_tools(
-        self, execution: str | None
-    ) -> None:
+    def test_transform_keeps_caller_tool_search_and_drops_anthropic_search_tools(self, execution: str | None) -> None:
         caller_tool_search: Final[dict[str, object]] = {
             "type": "tool_search",
             **({"execution": execution} if execution is not None else {}),
@@ -845,9 +846,7 @@ class TestOpenAIResponsesAPIConfig:
         }
 
         # Mock the get_event_model_class to avoid validation issues in tests
-        with patch.object(
-            OpenAIResponsesAPIConfig, "get_event_model_class"
-        ) as mock_get_class:
+        with patch.object(OpenAIResponsesAPIConfig, "get_event_model_class") as mock_get_class:
             mock_get_class.return_value = ResponseCompletedEvent
 
             result = self.config.transform_streaming_response(
@@ -866,9 +865,7 @@ class TestOpenAIResponsesAPIConfig:
         headers = {}
         api_key = "test_api_key"
         litellm_params = GenericLiteLLMParams(api_key=api_key)
-        result = self.config.validate_environment(
-            headers=headers, model=self.model, litellm_params=litellm_params
-        )
+        result = self.config.validate_environment(headers=headers, model=self.model, litellm_params=litellm_params)
 
         assert "Authorization" in result
         assert result["Authorization"] == f"Bearer {api_key}"
@@ -879,9 +876,7 @@ class TestOpenAIResponsesAPIConfig:
 
         with patch("litellm.api_key", "litellm_api_key"):
             litellm_params = GenericLiteLLMParams()
-            result = self.config.validate_environment(
-                headers=headers, model=self.model, litellm_params=litellm_params
-            )
+            result = self.config.validate_environment(headers=headers, model=self.model, litellm_params=litellm_params)
 
             assert "Authorization" in result
             assert result["Authorization"] == "Bearer litellm_api_key"
@@ -987,10 +982,7 @@ class TestOpenAIResponsesAPIConfig:
             headers={},
         )
 
-        assert (
-            url
-            == "https://custom-openai.example.com/v1/responses/..%2F..%2Ffiles%3Fx%3D1%23frag/input_items"
-        )
+        assert url == "https://custom-openai.example.com/v1/responses/..%2F..%2Ffiles%3Fx%3D1%23frag/input_items"
         assert data["limit"] == 20
 
     def test_get_event_model_class_generic_event(self):
@@ -1065,9 +1057,7 @@ class TestOpenAIResponsesAPIConfig:
             )
 
             assert isinstance(result, ImageGenerationPartialImageEvent)
-            assert (
-                result.type == ResponsesAPIStreamEvents.IMAGE_GENERATION_PARTIAL_IMAGE
-            )
+            assert result.type == ResponsesAPIStreamEvents.IMAGE_GENERATION_PARTIAL_IMAGE
             assert result.partial_image_index == idx
             assert result.b64_json == chunk["b64_json"]
 
@@ -1282,9 +1272,7 @@ class TestOpenAIResponsesAPIConfig:
                 "namespace": "drop",
             },
         ]
-        out = BaseResponsesAPIConfig.strip_custom_tool_call_namespace_from_responses_input(
-            inp
-        )
+        out = BaseResponsesAPIConfig.strip_custom_tool_call_namespace_from_responses_input(inp)
         assert out[0]["namespace"] == "keep"
         assert "namespace" not in out[1]
 
@@ -1565,20 +1553,14 @@ class TestAzureResponsesAPIConfig:
             api_base=base_url,
             litellm_params={"api_version": "preview"},
         )
-        assert (
-            result_preview
-            == "https://litellm8397336933.openai.azure.com/openai/v1/responses?api-version=preview"
-        )
+        assert result_preview == "https://litellm8397336933.openai.azure.com/openai/v1/responses?api-version=preview"
 
         # Test with latest version - should use openai/v1/responses
         result_latest = self.config.get_complete_url(
             api_base=base_url,
             litellm_params={"api_version": "latest"},
         )
-        assert (
-            result_latest
-            == "https://litellm8397336933.openai.azure.com/openai/v1/responses?api-version=latest"
-        )
+        assert result_latest == "https://litellm8397336933.openai.azure.com/openai/v1/responses?api-version=latest"
 
         # Test with date-based version - should use openai/responses
         result_date = self.config.get_complete_url(
@@ -1586,8 +1568,7 @@ class TestAzureResponsesAPIConfig:
             litellm_params={"api_version": "2025-04-01-preview"},
         )
         assert (
-            result_date
-            == "https://litellm8397336933.openai.azure.com/openai/responses?api-version=2025-04-01-preview"
+            result_date == "https://litellm8397336933.openai.azure.com/openai/responses?api-version=2025-04-01-preview"
         )
 
     def test_azure_transform_then_normalize_strips_custom_tool_call_namespace(self):
@@ -1755,10 +1736,7 @@ class TestTransformListInputItemsRequest:
         )
 
         # Assert
-        assert (
-            url
-            == "https://test.openai.azure.com/openai/responses/compact?api-version=2024-05-01-preview"
-        )
+        assert url == "https://test.openai.azure.com/openai/responses/compact?api-version=2024-05-01-preview"
         assert data["model"] == "gpt-5.2-codex"
         assert data["input"] == "hello"
 
@@ -1845,9 +1823,7 @@ class TestTransformListInputItemsRequest:
         assert params == expected_params
 
     @patch("litellm.router.Router")
-    def test_mock_litellm_router_with_transform_list_input_items_request(
-        self, mock_router
-    ):
+    def test_mock_litellm_router_with_transform_list_input_items_request(self, mock_router):
         """Mock test using litellm.router for transform_list_input_items_request"""
         # Setup mock router
         mock_router_instance = Mock()
@@ -1861,9 +1837,7 @@ class TestTransformListInputItemsRequest:
         )
 
         # Setup router mock
-        mock_router_instance.get_provider_responses_api_config.return_value = (
-            mock_provider_config
-        )
+        mock_router_instance.get_provider_responses_api_config.return_value = mock_provider_config
 
         # Test parameters
         response_id = "resp_test123"
@@ -2179,9 +2153,7 @@ class TestPhaseParameter:
                 phase = getattr(output_item, "phase", None)
 
             expected = "commentary" if idx == 0 else "final_answer"
-            assert (
-                phase == expected
-            ), f"output[{idx}] phase={phase!r}, expected {expected!r}"
+            assert phase == expected, f"output[{idx}] phase={phase!r}, expected {expected!r}"
 
     def test_streaming_output_item_done_preserves_phase(self):
         """OutputItemDoneEvent must preserve phase on its item."""
@@ -2315,9 +2287,7 @@ class TestPhaseParameter:
             if isinstance(item, dict):
                 input_items.append(item)
             else:
-                input_items.append(
-                    item.model_dump() if hasattr(item, "model_dump") else dict(item)
-                )
+                input_items.append(item.model_dump() if hasattr(item, "model_dump") else dict(item))
 
         input_items.append(
             {
@@ -2414,9 +2384,7 @@ class TestResponsesSurfaceSharesTheEffortRule:
             ("gpt-6-astra", "low", False),
         ],
     )
-    def test_temperature_follows_the_resolved_effort(
-        self, local_model_cost_map, model, effort, temperature_survives
-    ):
+    def test_temperature_follows_the_resolved_effort(self, local_model_cost_map, model, effort, temperature_survives):
         params = {"temperature": 0}
         if effort is not None:
             params["reasoning"] = {"effort": effort}
@@ -3375,9 +3343,7 @@ async def test_openai_responses_litellm_router_no_metadata():
                 "id": "msg_123",
                 "status": "completed",
                 "role": "assistant",
-                "content": [
-                    {"type": "output_text", "text": "Hello world!", "annotations": []}
-                ],
+                "content": [{"type": "output_text", "text": "Hello world!", "annotations": []}],
             }
         ],
         "parallel_tool_calls": True,
@@ -3445,9 +3411,7 @@ async def test_openai_responses_litellm_router_no_metadata():
         print("Request body:", json.dumps(request_body, indent=4))
 
         # Assert metadata is not in the request
-        assert (
-            "metadata" not in request_body
-        ), "metadata should not be in the request body"
+        assert "metadata" not in request_body, "metadata should not be in the request body"
         mock_post.assert_called_once()
 
 
@@ -3474,9 +3438,7 @@ async def test_openai_responses_litellm_router_with_metadata():
                 "id": "msg_123",
                 "status": "completed",
                 "role": "assistant",
-                "content": [
-                    {"type": "output_text", "text": "Hello world!", "annotations": []}
-                ],
+                "content": [{"type": "output_text", "text": "Hello world!", "annotations": []}],
             }
         ],
         "parallel_tool_calls": True,
@@ -3544,9 +3506,7 @@ async def test_openai_responses_litellm_router_with_metadata():
         print("Request body:", json.dumps(request_body, indent=4))
 
         # Assert metadata matches exactly what was passed
-        assert (
-            request_body["metadata"] == test_metadata
-        ), "metadata in request body should match what was passed"
+        assert request_body["metadata"] == test_metadata, "metadata in request body should match what was passed"
         mock_post.assert_called_once()
 
 
@@ -3643,9 +3603,7 @@ def test_bad_request_bad_param_error():
 async def test_async_bad_request_bad_param_error():
     """Raise a BadRequestError when an invalid parameter value is provided"""
     try:
-        await litellm.aresponses(
-            model="gpt-5.5", input="This should fail", temperature=2000
-        )
+        await litellm.aresponses(model="gpt-5.5", input="This should fail", temperature=2000)
         pytest.fail("Expected BadRequestError but no exception was raised")
     except litellm.BadRequestError as e:
         print(f"Exception raised: {e}")
@@ -4002,9 +3960,7 @@ async def test_store_field_transformation():
                 "id": "msg_1",
                 "status": "completed",
                 "role": "assistant",
-                "content": [
-                    {"type": "output_text", "text": "Hello", "annotations": []}
-                ],
+                "content": [{"type": "output_text", "text": "Hello", "annotations": []}],
             }
         ],
         "parallel_tool_calls": True,
@@ -4042,51 +3998,37 @@ async def test_store_field_transformation():
     )
 
     # Test case 4: API omits store field
-    mock_response_no_store = httpx.Response(
-        status_code=200, content=json.dumps(base_response).encode()
-    )
+    mock_response_no_store = httpx.Response(status_code=200, content=json.dumps(base_response).encode())
 
     # Test when store=True in request
     logging_obj.optional_params = {"store": True}
     response = config.transform_response_api_response(
         model="gpt-5.5", raw_response=mock_response_store_true, logging_obj=logging_obj
     )
-    assert (
-        response.store is True
-    ), "store should be True when specified in request and API returns True"
+    assert response.store is True, "store should be True when specified in request and API returns True"
 
     # Test when store=False in request
     logging_obj.optional_params = {"store": False}
     response = config.transform_response_api_response(
         model="gpt-5.5", raw_response=mock_response_store_false, logging_obj=logging_obj
     )
-    assert (
-        response.store is False
-    ), "store should be False when specified in request and API returns False"
+    assert response.store is False, "store should be False when specified in request and API returns False"
 
     # Test when store not in request but API returns null
     response = config.transform_response_api_response(
         model="gpt-5.5", raw_response=mock_response_store_null, logging_obj=logging_obj
     )
-    assert (
-        response.store is None
-    ), "store should be None when not specified in request and API returns null"
+    assert response.store is None, "store should be None when not specified in request and API returns null"
 
     # Test when store not in request and API omits store field
     response = config.transform_response_api_response(
         model="gpt-5.5", raw_response=mock_response_no_store, logging_obj=logging_obj
     )
-    assert (
-        response.store is None
-    ), "store should be None when not specified in request and API omits store"
+    assert response.store is None, "store should be None when not specified in request and API omits store"
 
     # Verify created_at is always converted to integer
-    assert isinstance(
-        response.created_at, int
-    ), "created_at should always be converted to integer"
-    assert (
-        response.created_at == 1751443898
-    ), "created_at should maintain the same value after conversion"
+    assert isinstance(response.created_at, int), "created_at should always be converted to integer"
+    assert response.created_at == 1751443898, "created_at should maintain the same value after conversion"
 
 
 @pytest.mark.asyncio
@@ -4167,12 +4109,8 @@ async def test_aresponses_service_tier_and_safety_identifier():
         print("request_body=", json.dumps(request_body, indent=4, default=str))
 
         # Validate that both parameters are present in the request body
-        assert (
-            request_body["service_tier"] == "flex"
-        ), "service_tier should be 'flex' in request body"
-        assert (
-            request_body["safety_identifier"] == "123"
-        ), "safety_identifier should be '123' in request body"
+        assert request_body["service_tier"] == "flex", "service_tier should be 'flex' in request body"
+        assert request_body["safety_identifier"] == "123", "safety_identifier should be '123' in request body"
         assert request_body["model"] == "gpt-5.5"
         assert request_body["input"] == "Test with service tier and safety identifier"
 
@@ -4263,12 +4201,8 @@ async def test_openai_gpt5_reasoning_effort_parameter():
         print("request_body=", json.dumps(request_body, indent=4, default=str))
         print("reasoning=", request_body["reasoning"])
         # Validate that reasoning_effort is present in the request body
-        assert (
-            "reasoning" in request_body
-        ), "reasoning should be present in request body"
-        assert (
-            request_body["reasoning"]["effort"] == "minimal"
-        ), "reasoning_effort should be 'minimal' in request body"
+        assert "reasoning" in request_body, "reasoning should be present in request body"
+        assert request_body["reasoning"]["effort"] == "minimal", "reasoning_effort should be 'minimal' in request body"
         assert request_body["model"] == "gpt-5-mini"
         assert request_body["input"] == "What is the capital of France?"
 
@@ -4574,14 +4508,18 @@ def test_malformed_prompt_cache_breakpoint_on_a_tool_output_part_is_dropped_unde
 ) -> None:
     monkeypatch.setattr(litellm, "drop_params", False)
     marked_output: Final = [{"type": "input_text", "text": "42", "prompt_cache_breakpoint": "yes"}]
-    input: Final[list[dict[str, object]]] = [{"type": "function_call_output", "call_id": "call_1", "output": marked_output}]
+    input: Final[list[dict[str, object]]] = [
+        {"type": "function_call_output", "call_id": "call_1", "output": marked_output}
+    ]
     (item,) = cast(
         list[Mapping[str, object]], _transformed_input(_CONFIGS[0], input, GenericLiteLLMParams(drop_params=True))
     )
     assert item["output"] == [{"type": "input_text", "text": "42"}]
 
 
-@pytest.mark.parametrize("input", ("hi", [{"type": "message", "role": "user", "content": "hi"}]), ids=("string", "unmarked"))
+@pytest.mark.parametrize(
+    "input", ("hi", [{"type": "message", "role": "user", "content": "hi"}]), ids=("string", "unmarked")
+)
 def test_input_without_a_marker_is_untouched_under_drop_params(
     monkeypatch: pytest.MonkeyPatch, input: str | list[dict[str, object]]
 ) -> None:
@@ -4640,7 +4578,9 @@ def test_a_cost_map_entry_registered_under_the_deployment_name_keeps_a_valid_mar
     registered: Final = {"id": "litellm-qa-sol-alias", "supports_vision": True, "input_cost_per_token": 1e-6}
     monkeypatch.setitem(litellm.model_cost, "litellm-qa-sol-alias", registered)
     valid: Final = _marked_message("input_text", {"mode": "explicit"})
-    assert _transformed_input_for("litellm-qa-sol-alias", valid, GenericLiteLLMParams(drop_params=True), config) == valid
+    assert (
+        _transformed_input_for("litellm-qa-sol-alias", valid, GenericLiteLLMParams(drop_params=True), config) == valid
+    )
 
 
 @pytest.mark.parametrize("config", _CONFIGS, ids=_CONFIG_IDS)
@@ -4734,7 +4674,10 @@ def test_a_model_that_takes_markers_sends_kept_parts_byte_for_byte_and_drops_onl
     ]
     transformed: Final = _transformed_input_for("gpt-6.1-sol", input, GenericLiteLLMParams(drop_params=True))
     assert json.dumps(transformed) == json.dumps(
-        [{"type": "message", "role": "user", "content": kept}, {"type": "message", "role": "user", "content": [rejected]}]
+        [
+            {"type": "message", "role": "user", "content": kept},
+            {"type": "message", "role": "user", "content": [rejected]},
+        ]
     )
 
 

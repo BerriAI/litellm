@@ -3242,9 +3242,7 @@ class TestPanwAirsMcpToolEventScan:
         mock_server.server_id = "abc-123"
 
         with (
-            patch(
-                "litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager"
-            ) as mock_manager,
+            patch("litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_manager,
             patch.object(handler, "_call_panw_api", new_callable=AsyncMock) as mock_api,
         ):
             mock_manager.get_mcp_server_by_id.return_value = mock_server
@@ -6548,9 +6546,7 @@ class TestPanwAirsServerToolCalls:
         return handler, transport
 
     @pytest.mark.asyncio
-    async def test_post_call_scan_sends_server_tool_call_query_to_airs(
-        self, user_api_key_dict: UserAPIKeyAuth
-    ) -> None:
+    async def test_post_call_scan_sends_server_tool_call_query_to_airs(self, user_api_key_dict: UserAPIKeyAuth) -> None:
         handler, transport = self._airs({"action": "allow", "category": "benign", "scan_id": "s1"})
         response: Final = self._response(
             ChatCompletionMessageToolCall(

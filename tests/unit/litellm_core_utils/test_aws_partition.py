@@ -113,11 +113,13 @@ ENDPOINT_BUILDERS: Final = {
     "bedrock_agent_default": lambda region: BaseAWSLLM()._select_default_endpoint_url("agent", region),
     "bedrock_agentcore_default": lambda region: BaseAWSLLM()._select_default_endpoint_url("agentcore", region),
     "bedrock_get_runtime_endpoint": lambda region: BaseAWSLLM().get_runtime_endpoint(None, None, region)[0],
-    "bedrock_legacy_client": lambda region: init_bedrock_client(
-        region_name=region,
-        aws_access_key_id="test-key",
-        aws_secret_access_key="test-secret",
-    ).meta.endpoint_url,
+    "bedrock_legacy_client": lambda region: (
+        init_bedrock_client(
+            region_name=region,
+            aws_access_key_id="test-key",
+            aws_secret_access_key="test-secret",
+        ).meta.endpoint_url
+    ),
     "bedrock_batches": lambda region: BedrockBatchesConfig().get_complete_batch_url(
         api_base=None,
         api_key=None,

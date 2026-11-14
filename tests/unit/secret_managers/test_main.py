@@ -123,9 +123,7 @@ def test_should_read_secret_from_secret_manager():
     assert _should_read_secret_from_secret_manager() is True
 
     # Test with secret manager client and read_and_write access
-    litellm._key_management_settings = KeyManagementSettings(
-        access_mode="read_and_write"
-    )
+    litellm._key_management_settings = KeyManagementSettings(access_mode="read_and_write")
     assert _should_read_secret_from_secret_manager() is True
 
     # Test with secret manager client and write_only access
@@ -163,9 +161,7 @@ def test_get_secret_with_access_mode():
     assert _should_read_secret_from_secret_manager() is True
 
     # Test with read_and_write access
-    litellm._key_management_settings = KeyManagementSettings(
-        access_mode="read_and_write"
-    )
+    litellm._key_management_settings = KeyManagementSettings(access_mode="read_and_write")
     assert _should_read_secret_from_secret_manager() is True
 
     # Reset global variables

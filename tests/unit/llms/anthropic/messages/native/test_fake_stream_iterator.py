@@ -122,7 +122,8 @@ def _content_events(content: Sequence[Mapping[str, object]]) -> tuple[tuple[str,
         "usage": {"input_tokens": 10, "output_tokens": 5},
     }
     return tuple(
-        event for event in _decoded_events(FakeAnthropicMessagesStreamIterator(response=response))
+        event
+        for event in _decoded_events(FakeAnthropicMessagesStreamIterator(response=response))
         if event[0].startswith("content_block_")
     )
 
@@ -190,7 +191,13 @@ _REPLAYED_BLOCKS: Final = (
     {"type": "thinking", "thinking": "Look up the release page.", "signature": "sig_01"},
     {"type": "redacted_thinking", "data": "EncryptedThinking=="},
     {"type": "tool_use", "id": "toolu_01", "name": "get_weather", "input": {"city": "Paris"}, "caller": _CALLER},
-    {"type": "server_tool_use", "id": "srvtoolu_01", "name": "web_fetch", "input": {"url": "https://example.com/a"}, "caller": _CALLER},
+    {
+        "type": "server_tool_use",
+        "id": "srvtoolu_01",
+        "name": "web_fetch",
+        "input": {"url": "https://example.com/a"},
+        "caller": _CALLER,
+    },
     _WEB_SEARCH_RESULT_BLOCK,
     {
         "type": "text",

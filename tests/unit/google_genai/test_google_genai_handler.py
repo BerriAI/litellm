@@ -503,9 +503,7 @@ async def test_generate_content_adapter_stream_without_usage_still_ends_with_sto
     assert [payload["candidates"][0].get("finishReason") for payload in payloads][-1] == "STOP"
 
 
-async def _adapter_stream_payloads(
-    model: str, api_base: str, upstream_url: str, upstream_sse: str, **kwargs: object
-):
+async def _adapter_stream_payloads(model: str, api_base: str, upstream_url: str, upstream_sse: str, **kwargs: object):
     from litellm.types.router import GenericLiteLLMParams
 
     with respx.mock() as upstream:

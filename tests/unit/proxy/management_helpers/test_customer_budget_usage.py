@@ -49,20 +49,32 @@ async def test_recorded_usage_matches_enforced_windows_and_keeps_shared_members_
     assert counters[0].window_start == datetime(2026, 11, 1, 17, tzinfo=timezone.utc)
     database.litellm_budgetwindowspend.rows = {
         "monthly": Record(
-            entity_type="customer_member", entity_id="member-a", window_duration="1mo",
-            window_start=counters[0].window_start, spend=8,
+            entity_type="customer_member",
+            entity_id="member-a",
+            window_duration="1mo",
+            window_start=counters[0].window_start,
+            spend=8,
         ),
         "yearly": Record(
-            entity_type="customer_member", entity_id="member-a", window_duration="12mo",
-            window_start=counters[1].window_start, spend=62,
+            entity_type="customer_member",
+            entity_id="member-a",
+            window_duration="12mo",
+            window_start=counters[1].window_start,
+            spend=62,
         ),
         "another-scope": Record(
-            entity_type="customer_team", entity_id="member-b", window_duration="1mo",
-            window_start=counters[0].window_start, spend=999,
+            entity_type="customer_team",
+            entity_id="member-b",
+            window_duration="1mo",
+            window_start=counters[0].window_start,
+            spend=999,
         ),
         "expired": Record(
-            entity_type="customer_member", entity_id="member-b", window_duration="1mo",
-            window_start=datetime(2026, 10, 1, 16, tzinfo=timezone.utc), spend=100,
+            entity_type="customer_member",
+            entity_id="member-b",
+            window_duration="1mo",
+            window_start=datetime(2026, 10, 1, 16, tzinfo=timezone.utc),
+            spend=100,
         ),
     }
     result: Final = await customer_budget_usage(

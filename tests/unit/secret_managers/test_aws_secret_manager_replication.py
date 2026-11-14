@@ -155,9 +155,7 @@ async def test_async_replicate_secret_empty_regions_returns_empty():
     """async_replicate_secret returns {} immediately for an empty list — no HTTP call."""
     manager = AWSSecretsManagerV2()
 
-    with patch(
-        "litellm.secret_managers.aws_secret_manager_v2.get_async_httpx_client"
-    ) as mock_get_client:
+    with patch("litellm.secret_managers.aws_secret_manager_v2.get_async_httpx_client") as mock_get_client:
         result = await manager.async_replicate_secret(
             secret_name="litellm/test-key",
             replica_regions=[],
@@ -182,9 +180,7 @@ async def test_async_replicate_secret_correct_payload():
             b"{}",
         )
 
-    with patch.object(
-        AWSSecretsManagerV2, "_prepare_request", side_effect=capture_prepare
-    ):
+    with patch.object(AWSSecretsManagerV2, "_prepare_request", side_effect=capture_prepare):
         with patch(
             "litellm.secret_managers.aws_secret_manager_v2.get_async_httpx_client",
             return_value=_mock_http_client(_REPLICATE_RESPONSE),
@@ -302,9 +298,7 @@ async def test_write_secret_http_error_raises():
     ):
         with patch(
             "litellm.secret_managers.aws_secret_manager_v2.get_async_httpx_client",
-            return_value=_mock_http_client_raising(
-                _http_status_error(400, "ResourceExistsException")
-            ),
+            return_value=_mock_http_client_raising(_http_status_error(400, "ResourceExistsException")),
         ):
             with pytest.raises(ValueError, match="HTTP error occurred"):
                 await manager.async_write_secret(
@@ -329,9 +323,7 @@ async def test_write_secret_timeout_raises():
     ):
         with patch(
             "litellm.secret_managers.aws_secret_manager_v2.get_async_httpx_client",
-            return_value=_mock_http_client_raising(
-                httpx.ReadTimeout("timed out", request=None)
-            ),
+            return_value=_mock_http_client_raising(httpx.ReadTimeout("timed out", request=None)),
         ):
             with pytest.raises(ValueError, match="Timeout error occurred"):
                 await manager.async_write_secret(
@@ -361,9 +353,7 @@ async def test_replicate_secret_http_error_raises():
     ):
         with patch(
             "litellm.secret_managers.aws_secret_manager_v2.get_async_httpx_client",
-            return_value=_mock_http_client_raising(
-                _http_status_error(403, "AccessDeniedException")
-            ),
+            return_value=_mock_http_client_raising(_http_status_error(403, "AccessDeniedException")),
         ):
             with pytest.raises(ValueError, match="HTTP error occurred"):
                 await manager.async_replicate_secret(
@@ -388,9 +378,7 @@ async def test_replicate_secret_timeout_raises():
     ):
         with patch(
             "litellm.secret_managers.aws_secret_manager_v2.get_async_httpx_client",
-            return_value=_mock_http_client_raising(
-                httpx.ReadTimeout("timed out", request=None)
-            ),
+            return_value=_mock_http_client_raising(httpx.ReadTimeout("timed out", request=None)),
         ):
             with pytest.raises(ValueError, match="Timeout error occurred"):
                 await manager.async_replicate_secret(

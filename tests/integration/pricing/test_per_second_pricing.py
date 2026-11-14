@@ -72,7 +72,9 @@ def _observed_request_body(upstream: httpx.Client) -> dict[str, JsonValue]:
     observations: Final = JSON_OBJECT.validate_json(upstream.get("/__observations").content)["requests"]
     assert isinstance(observations, list)
     post_observations: Final = tuple(
-        observation for observation in observations if isinstance(observation, dict) and observation.get("method") == "POST"
+        observation
+        for observation in observations
+        if isinstance(observation, dict) and observation.get("method") == "POST"
     )
     assert len(post_observations) == 1
     return object_value(object_value(post_observations[0])["body"])
@@ -160,9 +162,9 @@ def test_streaming_chat_per_second_pricing_covers_the_full_stream(
                     "stream_options": {"include_usage": True},
                 },
                 headers={"Authorization": f"Bearer {key}"},
-                ) as response:
-                    stream_lines: Final = tuple(response.iter_lines())
-                    assert response.status_code == 200, "\n".join(stream_lines)
+            ) as response:
+                stream_lines: Final = tuple(response.iter_lines())
+                assert response.status_code == 200, "\n".join(stream_lines)
             body: Final = _observed_request_body(upstream)
 
         events: Final = tuple(
@@ -177,9 +179,9 @@ def test_streaming_chat_per_second_pricing_covers_the_full_stream(
         request_id: Final = string_value(events[0]["id"])
         rows: Final = eventually(
             lambda: read_rows(
-                'SELECT spend, request_duration_ms, '
+                "SELECT spend, request_duration_ms, "
                 'CAST(EXTRACT(EPOCH FROM ("endTime" - "startTime")) * 1000 AS DOUBLE PRECISION) '
-                'AS elapsed_duration_ms '
+                "AS elapsed_duration_ms "
                 'FROM "LiteLLM_SpendLogs" WHERE request_id = %s',
                 (request_id,),
             ),
@@ -211,7 +213,9 @@ def test_streaming_chat_per_second_pricing_covers_the_full_stream(
 def test_transcription_per_second_model_bills_request_time_through_cost_per_token(
     model: str, custom_llm_provider: str, expected_cost: tuple[float, float]
 ) -> None:
-    cost: Final = litellm.cost_per_token(model=model, custom_llm_provider=custom_llm_provider, response_time_ms=10_000.0)
+    cost: Final = litellm.cost_per_token(
+        model=model, custom_llm_provider=custom_llm_provider, response_time_ms=10_000.0
+    )
 
     assert cost == pytest.approx(expected_cost)
 

@@ -442,8 +442,7 @@ def test_partial_legacy_model_update_keeps_the_stored_api_key_usable(
             model_name=model, litellm_params=_served_openai_params(api_base, **expected_params)
         )
         assert tuple(
-            (key, type(served_params.litellm_params[key]), served_params.litellm_params[key])
-            for key in expected_params
+            (key, type(served_params.litellm_params[key]), served_params.litellm_params[key]) for key in expected_params
         ) == tuple((key, type(value), value) for key, value in expected_params.items()), served_params
         caller: Final = _caller(scenario, models=[model])
         _chat(rig.proxy, caller.key, model, "B2", marker, "success")

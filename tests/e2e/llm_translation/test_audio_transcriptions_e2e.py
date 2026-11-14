@@ -30,9 +30,7 @@ from sdk_clients import SdkClients, response_header
 
 pytestmark = pytest.mark.e2e
 
-WEATHER_WAV = (
-    Path(__file__).resolve().parent / "realtime" / "fixtures" / "weather_question_24k.wav"
-)
+WEATHER_WAV = Path(__file__).resolve().parent / "realtime" / "fixtures" / "weather_question_24k.wav"
 
 OPENAI_TRANSCRIBE_MODEL: Final = "openai/gpt-4o-mini-transcribe"
 OPENAI_WHISPER_MODEL: Final = "openai/whisper-1"
@@ -52,9 +50,7 @@ def _register(proxy: ProxyClient, resources: ResourceManager) -> tuple[str, str]
     model = f"e2e-transcribe-{unique_marker()}"
     model_id = proxy.create_model(
         model,
-        LiteLLMParamsBody(
-            model=OPENAI_TRANSCRIBE_MODEL, api_key="os.environ/OPENAI_API_KEY"
-        ),
+        LiteLLMParamsBody(model=OPENAI_TRANSCRIBE_MODEL, api_key="os.environ/OPENAI_API_KEY"),
     )
     resources.defer(lambda: proxy.delete_model(model_id))
     return model, resources.key()
@@ -82,9 +78,7 @@ class TestAudioTranscriptions:
         )
         text = transcription.text.strip()
         assert text, "/audio/transcriptions returned an empty transcript"
-        assert "weather" in text.lower(), (
-            f"transcript of a spoken weather question does not mention weather: {text!r}"
-        )
+        assert "weather" in text.lower(), f"transcript of a spoken weather question does not mention weather: {text!r}"
 
     @pytest.mark.covers("llm.audio_transcriptions.openai.input_validation.nonstream.works")
     @meta(
@@ -96,9 +90,7 @@ class TestAudioTranscriptions:
             mode=Mode.NONSTREAM,
         )
     )
-    def test_missing_file_returns_error(
-        self, proxy: ProxyClient, resources: ResourceManager
-    ) -> None:
+    def test_missing_file_returns_error(self, proxy: ProxyClient, resources: ResourceManager) -> None:
         model, key = _register(proxy, resources)
         result = proxy.transport.upload(
             "/v1/audio/transcriptions",
@@ -128,9 +120,7 @@ class TestAudioTranscriptions:
             route=Route.AUDIO,
         )
     )
-    def test_missing_model_returns_error(
-        self, proxy: ProxyClient, resources: ResourceManager
-    ) -> None:
+    def test_missing_model_returns_error(self, proxy: ProxyClient, resources: ResourceManager) -> None:
         _, key = _register(proxy, resources)
         result = proxy.transport.upload(
             "/v1/audio/transcriptions",
