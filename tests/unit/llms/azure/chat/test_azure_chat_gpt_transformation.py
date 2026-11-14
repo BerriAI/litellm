@@ -17,6 +17,7 @@ from litellm.utils import _invalidate_model_cost_lowercase_map, get_optional_par
 from datetime import datetime
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.router import Router
+from litellm.types.llms.openai import AllMessageValues
 from openai.types.chat import ChatCompletionMessage
 from openai.types.chat.chat_completion import ChatCompletion, Choice
 from respx import MockRouter
@@ -187,9 +188,9 @@ def test_transform_request_drops_tool_reference_parts():
     assert request["messages"][2]["content"] == ""
 
 
-def test_transform_request_leaves_the_caller_messages_untouched():
-    city_arguments = json.dumps({"city": "Copenhagen"})
-    messages = [
+def test_transform_request_leaves_the_caller_messages_untouched() -> None:
+    city_arguments: Final = json.dumps({"city": "Copenhagen"})
+    messages: Final[list[AllMessageValues]] = [
         {"role": "user", "content": "What is the weather where I am?"},
         {"role": "assistant", "content": None, "function_call": {"name": "get_current_city", "arguments": None}},
         {"role": "function", "name": "get_current_city", "content": "Copenhagen"},
@@ -205,9 +206,9 @@ def test_transform_request_leaves_the_caller_messages_untouched():
             ],
         },
     ]
-    snapshot = copy.deepcopy(messages)
+    snapshot: Final = copy.deepcopy(messages)
 
-    request = AzureOpenAIConfig().transform_request(
+    request: Final = AzureOpenAIConfig().transform_request(
         model="gpt-4o",
         messages=messages,
         optional_params={},
