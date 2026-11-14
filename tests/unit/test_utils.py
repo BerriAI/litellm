@@ -9627,6 +9627,56 @@ def test_trimming_with_untokenizable_field(caplog: pytest.LogCaptureFixture) -> 
     assert trimmed_messages == messages
 
 
+def test_trim_messages_multimodal_list_content():
+    """Test that trim_messages correctly shortens multimodal message content (list of content dicts) without TypeError."""
+    messages = [
+        {"role": "user", "content": [{"type": "text", "text": "This is a sentence. " * 60000}]},
+    ]
+    trimmed = trim_messages(messages, model="gpt-4o")
+    assert len(trimmed) == 1
+    content = trimmed[0]["content"]
+    assert isinstance(content, list)
+    text_blocks = [p for p in content if isinstance(p, dict) and p.get("type") == "text"]
+    assert len(text_blocks) == 1
+    assert ".." in text_blocks[0]["text"]
+    assert get_token_count(trimmed, model="gpt-4o") <= 96000
+
+
+def test_trim_messages_system_message_list_content():
+    """Test that trim_messages supports system messages with list content format."""
+    messages = [
+        {"role": "system", "content": [{"type": "text", "text": "You are a helpful assistant."}]},
+        {"role": "user", "content": "This is a sentence. " * 60000},
+    ]
+    trimmed = trim_messages(messages, model="gpt-4o")
+    assert len(trimmed) >= 1
+    assert get_token_count(trimmed, model="gpt-4o") <= 96000
+
+
+def test_trim_messages_provider_prefixed_model():
+    """Test that trim_messages resolves context window for provider-prefixed model names."""
+    messages = [
+        {"role": "user", "content": "This is a sentence. " * 60000},
+    ]
+    trimmed = trim_messages(messages, model="openai/gpt-4o")
+    assert get_token_count(trimmed, model="openai/gpt-4o") <= 96000
+
+
+def test_trim_messages_assistant_content_none():
+    """Test that trim_messages does not raise TypeError when assistant message has content=None (tool calling)."""
+    messages = [
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "test", "arguments": "{}"}}],
+        },
+        {"role": "user", "content": "This is a sentence. " * 60000},
+    ]
+    trimmed = trim_messages(messages, model="gpt-4o")
+    assert len(trimmed) >= 1
+    assert get_token_count(trimmed, model="gpt-4o") <= 96000
+
+
 @pytest.fixture
 def reset_mock_cache() -> None:
     from litellm.utils import _model_cache
