@@ -129,18 +129,20 @@ def test_fallback_600_when_no_global_timeout():
     )
 
 
-def test_httpx_timeout_coerced_for_provider_without_httpx_timeout_support():
+def test_httpx_timeout_preserved_for_non_openai_providers():
+    """httpx.Timeout must keep connect/read components for all providers (not only openai/azure/bedrock)."""
     t = httpx.Timeout(50.0, connect=2.0)
     out = CompletionTimeout.resolve(
         t,
         {},
-        "azure_ai",
+        "mistral",
         global_timeout=None,
         supports_httpx_timeout=supports_httpx_timeout,
         stream_kind=StreamKind.NOT_STREAMED,
     )
-    assert out == 50.0
-    assert not isinstance(out, httpx.Timeout)
+    assert out is t
+    assert isinstance(out, httpx.Timeout)
+    assert out.connect == 2.0
 
 
 def test_httpx_timeout_preserved_for_openai():
@@ -174,21 +176,22 @@ def test_sdk_timeout_preserves_components_for_httpx_providers(
     assert resolved.as_dict() == timeout.as_dict()
 
 
-@pytest.mark.parametrize("read_timeout, expected", ((23.0, 23.0), (None, 600.0)))
-def test_sdk_timeout_coerces_read_timeout_for_providers_without_httpx_support(
-    read_timeout: float | None, expected: float
+@pytest.mark.parametrize("read_timeout", (23.0, None))
+def test_sdk_timeout_preserves_components_for_all_providers(
+    read_timeout: float | None,
 ) -> None:
-    assert (
-        CompletionTimeout.resolve(
-            SDKTimeout(connect=2.0, read=read_timeout, write=5.0, pool=7.0),
-            {},
-            "azure_ai",
-            global_timeout=None,
-            supports_httpx_timeout=supports_httpx_timeout,
-            stream_kind=StreamKind.NOT_STREAMED,
-        )
-        == expected
+    """SDK Timeout objects must keep their components for every provider."""
+    timeout = SDKTimeout(connect=2.0, read=read_timeout, write=5.0, pool=7.0)
+    resolved = CompletionTimeout.resolve(
+        timeout,
+        {},
+        "mistral",
+        global_timeout=None,
+        supports_httpx_timeout=supports_httpx_timeout,
+        stream_kind=StreamKind.NOT_STREAMED,
     )
+    assert isinstance(resolved, httpx.Timeout)
+    assert resolved.as_dict() == timeout.as_dict()
 
 
 @pytest.mark.parametrize(
