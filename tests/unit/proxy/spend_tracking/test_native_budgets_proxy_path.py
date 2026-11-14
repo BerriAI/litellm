@@ -73,12 +73,11 @@ def golden(request: pytest.FixtureRequest) -> Golden:
     return Golden(NATIVE_BUDGETS_PROXY_PATH, request.node.name)
 
 
-def _use_native(proxy: Proxy, native: bool) -> None:
-    native_budgets._installed.clear()  # pyright: ignore[reportPrivateUsage]  # each run picks its own side
+def _use_native(proxy: Proxy) -> None:
+    native_budgets._installed.clear()  # pyright: ignore[reportPrivateUsage]  # each run installs its owner over a fresh store
     litellm.callbacks.clear()
     proxy.store.flush_local()
-    if native:
-        native_budgets.install_native_budgets(proxy.store, litellm.callbacks)
+    native_budgets.install_native_budgets(proxy.store, litellm.callbacks)
 
 
 def _request(path: str = "/v1/chat/completions", body: Mapping[str, object] = BODY) -> Request:
@@ -160,8 +159,8 @@ class Run:
     settled: Mapping[str, float]
 
 
-async def _run(proxy: Proxy, native: bool, exit_path: Exit) -> Run:
-    _use_native(proxy, native)
+async def _run(proxy: Proxy, exit_path: Exit) -> Run:
+    _use_native(proxy)
     auth, data = await _admit(proxy, "call-path")
     reservation: Final = auth.budget_reservation
     assert reservation is not None
@@ -182,35 +181,26 @@ EXITS: Final[Mapping[str, Exit]] = {"success": _success, "failure": _failure}
 async def test_a_request_through_auth_and_pre_call_settles_like_python(
     proxy: Proxy, exit_path: Exit, golden: Golden
 ) -> None:
-    python: Final = await _run(proxy, native=False, exit_path=exit_path)
-    native: Final = await _run(proxy, native=True, exit_path=exit_path)
+    native: Final = await _run(proxy, exit_path=exit_path)
 
-    assert python.entries_after_pre_call, (
-        "the flag-off run must hold a reservation for this comparison to mean anything"
-    )
-    assert native == python
-    assert golden.canonical(python) == golden.recorded("python", python)
+    assert native.entries_after_pre_call, "the run must hold a reservation for this comparison to mean anything"
+    assert golden.canonical(native) == golden.recorded("python", native)
 
 
 @pytest.mark.asyncio
 async def test_an_over_budget_key_is_refused_by_auth_like_python(proxy: Proxy, golden: Golden) -> None:
-    refusals: Final[list[tuple[object, ...]]] = []  # mutable-ok: one refusal per side
-    for native in (False, True):
-        _use_native(proxy, native)
-        proxy.store.set_local(KEY_COUNTER, 2.0)
-        with pytest.raises(ProxyException) as refused:
-            await _authenticate(proxy, max_budget=1.0)
-        refusals.append((refused.value.type, refused.value.code, refused.value.message, refused.value.param))
+    _use_native(proxy)
+    proxy.store.set_local(KEY_COUNTER, 2.0)
+    with pytest.raises(ProxyException) as refused:
+        await _authenticate(proxy, max_budget=1.0)
+    refusal: Final = (refused.value.type, refused.value.code, refused.value.message, refused.value.param)
 
-    assert refusals[0][0] == "budget_exceeded"
-    assert refusals[1] == refusals[0]
-    assert golden.canonical(refusals[0]) == golden.recorded("python", refusals[0])
+    assert refusal[0] == "budget_exceeded"
+    assert golden.canonical(refusal) == golden.recorded("python", refusal)
 
 
-async def _websocket_auth(
-    proxy: Proxy, native: bool, path: str = "/v1/responses", model: str = "gpt-4o"
-) -> UserAPIKeyAuth:
-    _use_native(proxy, native)
+async def _websocket_auth(proxy: Proxy, path: str = "/v1/responses", model: str = "gpt-4o") -> UserAPIKeyAuth:
+    _use_native(proxy)
     await cache_key_object(
         hashed_token=TOKEN,
         user_api_key_obj=UserAPIKeyAuth(token=TOKEN, max_budget=1.0, spend=0.0),
@@ -241,8 +231,8 @@ async def _websocket_auth(
     return await user_api_key_auth_websocket_for_model(websocket, model)
 
 
-async def _websocket_session_held(proxy: Proxy, native: bool) -> tuple[object, Mapping[str, float]]:
-    auth: Final = await _websocket_auth(proxy, native)
+async def _websocket_session_held(proxy: Proxy) -> tuple[object, Mapping[str, float]]:
+    auth: Final = await _websocket_auth(proxy)
     reservation: Final = auth.budget_reservation
     entries: Final = None if reservation is None else reservation.get("entries")
     return entries, dict(proxy.store.snapshot())
@@ -252,12 +242,10 @@ async def _websocket_session_held(proxy: Proxy, native: bool) -> tuple[object, M
 async def test_a_responses_websocket_session_holds_its_admission_at_connect_like_python(
     proxy: Proxy, golden: Golden
 ) -> None:
-    python: Final = await _websocket_session_held(proxy, native=False)
-    native: Final = await _websocket_session_held(proxy, native=True)
+    native: Final = await _websocket_session_held(proxy)
 
-    assert python[1][KEY_COUNTER] > 0.0, "the flag-off run must hold the admission at connect"
-    assert native == python
-    assert golden.canonical(python) == golden.recorded("python", python)
+    assert native[1][KEY_COUNTER] > 0.0, "the run must hold the admission at connect"
+    assert golden.canonical(native) == golden.recorded("python", native)
 
 
 SOCKET_ROUTES: Final = {
@@ -272,22 +260,17 @@ SOCKET_ROUTES: Final = {
 async def test_the_native_owner_holds_a_websocket_admission_at_connect_like_python(
     proxy: Proxy, golden: Golden, route: tuple[str, str]
 ) -> None:
-    python: Final = await _websocket_auth(proxy, False, *route)
-    python_held: Final = (python.budget_reservation, dict(proxy.store.snapshot()))
-    native: Final = await _websocket_auth(proxy, True, *route)
+    native: Final = await _websocket_auth(proxy, *route)
 
     assert native_budgets.is_native_reservation(native.budget_reservation)
-    assert python_held[1][KEY_COUNTER] > 0.0, "the Python engine must hold the admission at connect"
-    assert native.budget_reservation is not None and python.budget_reservation is not None
-    assert _held_entries(native.budget_reservation) == _held_entries(python.budget_reservation)
-    assert proxy.store.snapshot() == python_held[1]
-    assert golden.canonical(python_held) == golden.recorded("python", python_held)
+    assert native.budget_reservation is not None
+    held: Final = (_python_shaped(native.budget_reservation), dict(proxy.store.snapshot()))
+    assert held[1][KEY_COUNTER] > 0.0, "the native owner must hold the admission at connect"
+    assert golden.canonical(held) == golden.recorded("python", held)
 
 
-def _held_entries(reservation: Mapping[str, object]) -> object:
-    entries: Final = reservation["entries"]
-    assert isinstance(entries, list)
-    return (reservation["reserved_cost"], entries, reservation["input_cost"], reservation["input_tokens"])
+def _python_shaped(reservation: Mapping[str, object]) -> Mapping[str, object]:
+    return {key: value for key, value in reservation.items() if key != native_budgets.NATIVE_CALL_ID_KEY}
 
 
 async def _second_turn(_auth: UserAPIKeyAuth, _data: RequestData) -> None:
@@ -296,8 +279,8 @@ async def _second_turn(_auth: UserAPIKeyAuth, _data: RequestData) -> None:
     )
 
 
-async def _websocket_turns(proxy: Proxy, native: bool) -> tuple[Mapping[str, float], ...]:
-    auth: Final = await _websocket_auth(proxy, native)
+async def _websocket_turns(proxy: Proxy) -> tuple[Mapping[str, float], ...]:
+    auth: Final = await _websocket_auth(proxy)
     data: Final = {"model": "gpt-4o", "metadata": {"user_api_key_budget_reservation": auth.budget_reservation}}
     at_connect: Final = dict(proxy.store.snapshot())
     await _success(auth, data)
@@ -310,13 +293,11 @@ async def _websocket_turns(proxy: Proxy, native: bool) -> tuple[Mapping[str, flo
 async def test_a_responses_websocket_settles_its_first_turn_against_the_connect_hold_like_python(
     proxy: Proxy, golden: Golden
 ) -> None:
-    python: Final = await _websocket_turns(proxy, native=False)
-    native: Final = await _websocket_turns(proxy, native=True)
+    native: Final = await _websocket_turns(proxy)
 
-    assert python[0][KEY_COUNTER] > python[1][KEY_COUNTER] > 0.0, "the first turn must settle the connect hold"
-    assert python[2][KEY_COUNTER] == pytest.approx(python[1][KEY_COUNTER] + 0.0003)
-    assert native == python
-    assert golden.canonical(python) == golden.recorded("python", python)
+    assert native[0][KEY_COUNTER] > native[1][KEY_COUNTER] > 0.0, "the first turn must settle the connect hold"
+    assert native[2][KEY_COUNTER] == pytest.approx(native[1][KEY_COUNTER] + 0.0003)
+    assert golden.canonical(native) == golden.recorded("python", native)
 
 
 AUTH_ADMITTED_ROUTES: Final[Mapping[str, tuple[str, Mapping[str, object]]]] = {
@@ -333,18 +314,14 @@ async def test_a_route_without_a_native_pre_call_is_admitted_at_auth_by_the_nati
     proxy: Proxy, golden: Golden, route: tuple[str, Mapping[str, object]]
 ) -> None:
     path, body = route
-    _use_native(proxy, False)
-    python: Final = await _authenticate(proxy, max_budget=1.0, path=path, body=body)
-    python_held: Final = (python.budget_reservation, dict(proxy.store.snapshot()))
-    _use_native(proxy, True)
+    _use_native(proxy)
     native: Final = await _authenticate(proxy, max_budget=1.0, path=path, body=body)
 
     assert native_budgets.is_native_reservation(native.budget_reservation)
-    assert python_held[1][KEY_COUNTER] > 0.0, "the Python engine must hold the admission at auth"
-    assert native.budget_reservation is not None and python.budget_reservation is not None
-    assert _held_entries(native.budget_reservation) == _held_entries(python.budget_reservation)
-    assert proxy.store.snapshot() == python_held[1]
-    assert golden.canonical(python_held) == golden.recorded("python", python_held)
+    assert native.budget_reservation is not None
+    held: Final = (_python_shaped(native.budget_reservation), dict(proxy.store.snapshot()))
+    assert held[1][KEY_COUNTER] > 0.0, "the native owner must hold the admission at auth"
+    assert golden.canonical(held) == golden.recorded("python", held)
 
 
 @dataclass(frozen=True, slots=True)
@@ -354,8 +331,8 @@ class SocketRun:
     counters_after_close: Mapping[str, float]
 
 
-def _responses_socket(proxy: Proxy, native: bool, team_at_max: bool) -> SocketRun:
-    _use_native(proxy, native)
+def _responses_socket(proxy: Proxy, team_at_max: bool) -> SocketRun:
+    _use_native(proxy)
 
     async def seed() -> None:
         await cache_key_object(
@@ -392,20 +369,18 @@ SOCKET_OUTCOMES: Final = {"admitted_then_disconnects": False, "refused_at_connec
 def test_a_responses_websocket_over_the_proxy_reserves_refuses_and_releases_like_python(
     proxy: Proxy, golden: Golden, team_at_max: bool
 ) -> None:
-    python: Final = _responses_socket(proxy, False, team_at_max)
-    native: Final = _responses_socket(proxy, True, team_at_max)
+    native: Final = _responses_socket(proxy, team_at_max)
 
-    assert (python.closed is not None) == team_at_max
-    assert python.held_at_connect is None or python.held_at_connect[KEY_COUNTER] > 0.0
-    assert native == python
-    assert golden.canonical(python) == golden.recorded("python", python)
+    assert (native.closed is not None) == team_at_max
+    assert native.held_at_connect is None or native.held_at_connect[KEY_COUNTER] > 0.0
+    assert golden.canonical(native) == golden.recorded("python", native)
 
 
 RACERS: Final = 24
 
 
-async def _race(proxy: Proxy, native: bool, budget: float) -> tuple[int, float]:
-    _use_native(proxy, native)
+async def _race(proxy: Proxy, budget: float) -> tuple[int, float]:
+    _use_native(proxy)
     await cache_key_object(
         hashed_token=TOKEN,
         user_api_key_obj=UserAPIKeyAuth(token=TOKEN, max_budget=budget, spend=0.0),
@@ -454,12 +429,10 @@ async def test_racing_requests_for_the_last_of_a_budget_admit_like_python(proxy:
     estimate: Final = 0.00102
     budget: Final = estimate * 5.5
 
-    python: Final = await _race(proxy, native=False, budget=budget)
-    native: Final = await _race(proxy, native=True, budget=budget)
+    native: Final = await _race(proxy, budget=budget)
 
-    assert python[0] < RACERS, "the budget must run out during the race"
-    assert native == python
-    assert golden.canonical(python) == golden.recorded("python", python)
+    assert native[0] < RACERS, "the budget must run out during the race"
+    assert golden.canonical(native) == golden.recorded("python", native)
 
 
 @pytest.mark.asyncio
@@ -467,21 +440,19 @@ async def test_the_reservation_lease_stops_when_the_reservation_is_finalized(
     proxy: Proxy, monkeypatch: pytest.MonkeyPatch, golden: Golden
 ) -> None:
     monkeypatch.setattr(SpendCounterStore, "redis_ttl", property(lambda _store: 0.01))
-    stopped: Final[list[bool]] = []  # mutable-ok: one result per side
-    for native in (False, True):
-        _use_native(proxy, native)
-        before: Final = set(budget_reservation._lease_renewals)  # pyright: ignore[reportPrivateUsage]  # the running lease tasks are the observable
-        auth, _ = await _admit(proxy, f"call-lease-{native}")
-        leases: Final = set(budget_reservation._lease_renewals) - before  # pyright: ignore[reportPrivateUsage]  # the running lease tasks are the observable
-        assert len(leases) == 1 and auth.budget_reservation is not None
-        await asyncio.sleep(0.03)
-        assert not next(iter(leases)).done()
-        auth.budget_reservation["finalized"] = True
-        _ = await asyncio.wait_for(asyncio.gather(*leases), timeout=1.0)
-        stopped.append(all(lease.done() for lease in leases))
+    _use_native(proxy)
+    before: Final = set(budget_reservation._lease_renewals)  # pyright: ignore[reportPrivateUsage]  # the running lease tasks are the observable
+    auth, _ = await _admit(proxy, "call-lease")
+    leases: Final = set(budget_reservation._lease_renewals) - before  # pyright: ignore[reportPrivateUsage]  # the running lease tasks are the observable
+    assert len(leases) == 1 and auth.budget_reservation is not None
+    await asyncio.sleep(0.03)
+    assert not next(iter(leases)).done()
+    auth.budget_reservation["finalized"] = True
+    _ = await asyncio.wait_for(asyncio.gather(*leases), timeout=1.0)
+    stopped: Final = all(lease.done() for lease in leases)
 
-    assert stopped == [True, True]
-    assert golden.canonical(stopped[0]) == golden.recorded("python", stopped[0])
+    assert stopped is True
+    assert golden.canonical(stopped) == golden.recorded("python", stopped)
 
 
 PASS_THROUGH: Final = "/anthropic/v1/messages"
@@ -521,27 +492,24 @@ async def test_a_forged_plan_in_a_pass_through_body_changes_no_counter(
     proxy: Proxy, forgery: tuple[str, float], max_budget: float | None, golden: Golden
 ) -> None:
     counter_key, reservation_cost = forgery
-    held: Final[list[Mapping[str, float]]] = []  # mutable-ok: one snapshot per side
-    for native in (False, True):
-        _use_native(proxy, native)
-        proxy.store.set_local(VICTIM, 1.0)
-        proxy.store.set_local(KEY_COUNTER, 0.5)
-        auth = await _authenticate(proxy, max_budget=max_budget, path=PASS_THROUGH)
-        forged = _forged_plan(counter_key, reservation_cost)
-        body: RequestData = {
-            **BODY,
-            "metadata": {
-                "user_api_key_budget_reservation": forged,
-                "user_api_key_auth": {"budget_reservation": forged},
-            },
-            "litellm_metadata": {"user_api_key_budget_reservation": forged},
-        }
-        _ = await proxy.logging.pre_call_hook(user_api_key_dict=auth, data=body, call_type="pass_through_endpoint")
-        held.append(dict(proxy.store.snapshot()))
+    _use_native(proxy)
+    proxy.store.set_local(VICTIM, 1.0)
+    proxy.store.set_local(KEY_COUNTER, 0.5)
+    auth: Final = await _authenticate(proxy, max_budget=max_budget, path=PASS_THROUGH)
+    forged: Final = _forged_plan(counter_key, reservation_cost)
+    body: Final[RequestData] = {
+        **BODY,
+        "metadata": {
+            "user_api_key_budget_reservation": forged,
+            "user_api_key_auth": {"budget_reservation": forged},
+        },
+        "litellm_metadata": {"user_api_key_budget_reservation": forged},
+    }
+    _ = await proxy.logging.pre_call_hook(user_api_key_dict=auth, data=body, call_type="pass_through_endpoint")
+    held: Final = dict(proxy.store.snapshot())
 
-    assert held[0][VICTIM] == 1.0
-    assert held[1] == held[0]
-    assert golden.canonical(held[0]) == golden.recorded("python", held[0])
+    assert held[VICTIM] == 1.0
+    assert golden.canonical(held) == golden.recorded("python", held)
 
 
 @pytest.mark.asyncio
@@ -549,27 +517,22 @@ async def test_a_forged_plan_in_a_pass_through_body_changes_no_counter(
 async def test_a_pass_through_llm_route_reserves_and_settles_like_python(
     proxy: Proxy, exit_path: Exit, golden: Golden
 ) -> None:
-    runs: Final[list[Run]] = []  # mutable-ok: one run per side
-    for native in (False, True):
-        _use_native(proxy, native)
-        auth = await _authenticate(proxy, max_budget=1.0, path=PASS_THROUGH)
-        body: RequestData = {**BODY, "litellm_call_id": "call-pass-through"}
-        _ = await proxy.logging.pre_call_hook(user_api_key_dict=auth, data=body, call_type="pass_through_endpoint")
-        reservation = auth.budget_reservation
-        assert reservation is not None
-        entries = [
-            {key: entry[key] for key in ("counter_key", "entity_type", "reserved_cost")}
-            for entry in reservation["entries"]  # pyright: ignore[reportGeneralTypeIssues]  # the entries list the reservation carries
-        ]
-        held = dict(proxy.store.snapshot())
-        await exit_path(auth, {**body, "metadata": {"user_api_key_budget_reservation": reservation}})
-        runs.append(Run(entries_after_pre_call=entries, held_after_pre_call=held, settled=dict(proxy.store.snapshot())))
+    _use_native(proxy)
+    auth: Final = await _authenticate(proxy, max_budget=1.0, path=PASS_THROUGH)
+    body: Final[RequestData] = {**BODY, "litellm_call_id": "call-pass-through"}
+    _ = await proxy.logging.pre_call_hook(user_api_key_dict=auth, data=body, call_type="pass_through_endpoint")
+    reservation: Final = auth.budget_reservation
+    assert reservation is not None
+    entries: Final = [
+        {key: entry[key] for key in ("counter_key", "entity_type", "reserved_cost")}
+        for entry in reservation["entries"]  # pyright: ignore[reportGeneralTypeIssues]  # the entries list the reservation carries
+    ]
+    held: Final = dict(proxy.store.snapshot())
+    await exit_path(auth, {**body, "metadata": {"user_api_key_budget_reservation": reservation}})
+    run: Final = Run(entries_after_pre_call=entries, held_after_pre_call=held, settled=dict(proxy.store.snapshot()))
 
-    assert runs[0].entries_after_pre_call, (
-        "the flag-off run must hold a reservation for this comparison to mean anything"
-    )
-    assert runs[1] == runs[0]
-    assert golden.canonical(runs[0]) == golden.recorded("python", runs[0])
+    assert run.entries_after_pre_call, "the run must hold a reservation for this comparison to mean anything"
+    assert golden.canonical(run) == golden.recorded("python", run)
 
 
 MESSAGES_BODY: Final = {
@@ -600,8 +563,8 @@ class HttpRun:
     held_upstream: tuple[Mapping[str, float], ...]
 
 
-def _over_http(proxy: Proxy, native: bool, monkeypatch: pytest.MonkeyPatch, body: Mapping[str, object]) -> HttpRun:
-    _use_native(proxy, native)
+def _over_http(proxy: Proxy, monkeypatch: pytest.MonkeyPatch, body: Mapping[str, object]) -> HttpRun:
+    _use_native(proxy)
     asyncio.run(
         cache_key_object(
             hashed_token=TOKEN,
@@ -647,14 +610,12 @@ def test_the_anthropic_pass_through_route_holds_the_reservation_like_python_over
     proxy: Proxy, monkeypatch: pytest.MonkeyPatch, body: Mapping[str, object], golden: Golden
 ) -> None:
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
-    python: Final = _over_http(proxy, False, monkeypatch, body)
-    native: Final = _over_http(proxy, True, monkeypatch, body)
+    native: Final = _over_http(proxy, monkeypatch, body)
 
-    assert python.status == 200
-    assert python.held_upstream[0][KEY_COUNTER] > 0.5, "the flag-off run must hold a reservation upstream"
-    assert python.held_upstream[0][VICTIM] == 1.0
-    assert native == python
-    assert golden.canonical(python) == golden.recorded("python", python)
+    assert native.status == 200
+    assert native.held_upstream[0][KEY_COUNTER] > 0.5, "the run must hold a reservation upstream"
+    assert native.held_upstream[0][VICTIM] == 1.0
+    assert golden.canonical(native) == golden.recorded("python", native)
 
 
 TEAM: Final = "team-at-max"
@@ -672,14 +633,13 @@ class Refusal:
 
 def _refused_over_http(
     proxy: Proxy,
-    native: bool,
     monkeypatch: pytest.MonkeyPatch,
     path: str,
     body: Mapping[str, object],
     upstream_token: str | None = None,
     upload: str | None = None,
 ) -> Refusal:
-    _use_native(proxy, native)
+    _use_native(proxy)
 
     async def seed() -> None:
         await cache_key_object(
@@ -781,12 +741,10 @@ def test_a_reservation_refusal_reaches_the_client_like_the_auth_refusal(
 ) -> None:
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
     path, body = route
-    python: Final = _refused_over_http(proxy, False, monkeypatch, path, body)
-    native: Final = _refused_over_http(proxy, True, monkeypatch, path, body)
+    native: Final = _refused_over_http(proxy, monkeypatch, path, body)
 
-    assert python.status == 422
-    assert native == python
-    assert golden.canonical(python) == golden.recorded("python", python)
+    assert native.status == 422
+    assert golden.canonical(native) == golden.recorded("python", native)
 
 
 @dataclass(frozen=True, slots=True)
@@ -803,20 +761,16 @@ class _GatedHandle:
         return returned
 
 
-async def _cancel_during_pre_call(proxy: Proxy, native: bool, monkeypatch: pytest.MonkeyPatch) -> Mapping[str, float]:
-    _use_native(proxy, native)
+async def _cancel_during_pre_call(proxy: Proxy, monkeypatch: pytest.MonkeyPatch) -> Mapping[str, float]:
+    _use_native(proxy)
     auth: Final = await _authenticate(proxy, max_budget=1.0)
-    data: Final = {**BODY, "litellm_call_id": f"call-cancel-{native}"}
-    gate: Final = _GatedHandle(
-        getattr(litellm.callbacks[0], "_handled", None) if native else None, asyncio.Event(), asyncio.Event()
-    )
-    if native:
-        monkeypatch.setattr(litellm.callbacks[0], "_handled", gate)
+    data: Final = {**BODY, "litellm_call_id": "call-cancel"}
+    gate: Final = _GatedHandle(getattr(litellm.callbacks[0], "_handled", None), asyncio.Event(), asyncio.Event())
+    monkeypatch.setattr(litellm.callbacks[0], "_handled", gate)
     pre_call: Final = asyncio.ensure_future(
         proxy.logging.pre_call_hook(user_api_key_dict=auth, data=data, call_type="completion")
     )
-    if native:
-        _ = await gate.entered.wait()
+    _ = await gate.entered.wait()
     _ = pre_call.cancel()
     with pytest.raises(asyncio.CancelledError):
         await pre_call
@@ -835,17 +789,15 @@ async def _cancel_during_pre_call(proxy: Proxy, native: bool, monkeypatch: pytes
 async def test_a_client_that_disconnects_during_pre_call_leaves_no_hold_like_python(
     proxy: Proxy, monkeypatch: pytest.MonkeyPatch, golden: Golden
 ) -> None:
-    python: Final = await _cancel_during_pre_call(proxy, False, monkeypatch)
-    native: Final = await _cancel_during_pre_call(proxy, True, monkeypatch)
+    native: Final = await _cancel_during_pre_call(proxy, monkeypatch)
 
-    assert python[KEY_COUNTER] > 0.0, "the flag-off run must charge the input cost on cancel"
-    assert native == python
-    assert golden.canonical(python) == golden.recorded("python", python)
+    assert native[KEY_COUNTER] > 0.0, "the run must charge the input cost on cancel"
+    assert golden.canonical(native) == golden.recorded("python", native)
 
 
-async def _admit_twice(proxy: Proxy, native: bool) -> Run:
-    _use_native(proxy, native)
-    auth, data = await _admit(proxy, f"call-fallback-{native}")
+async def _admit_twice(proxy: Proxy) -> Run:
+    _use_native(proxy)
+    auth, data = await _admit(proxy, "call-fallback")
     reservation: Final = auth.budget_reservation
     assert reservation is not None
     _ = await proxy.logging.pre_call_hook(user_api_key_dict=auth, data=dict(data), call_type="completion")
@@ -862,14 +814,10 @@ async def _admit_twice(proxy: Proxy, native: bool) -> Run:
 
 @pytest.mark.asyncio
 async def test_a_second_pre_call_for_the_same_auth_reserves_once_like_python(proxy: Proxy, golden: Golden) -> None:
-    python: Final = await _admit_twice(proxy, native=False)
-    native: Final = await _admit_twice(proxy, native=True)
+    native: Final = await _admit_twice(proxy)
 
-    assert python.entries_after_pre_call, (
-        "the flag-off run must hold a reservation for this comparison to mean anything"
-    )
-    assert native == python
-    assert golden.canonical(python) == golden.recorded("python", python)
+    assert native.entries_after_pre_call, "the run must hold a reservation for this comparison to mean anything"
+    assert golden.canonical(native) == golden.recorded("python", native)
     assert native.held_after_pre_call[KEY_COUNTER] == pytest.approx(
         sum(float(entry["reserved_cost"]) for entry in native.entries_after_pre_call)  # pyright: ignore[reportGeneralTypeIssues, reportUnknownArgumentType, reportUnknownVariableType]  # entries are the dicts built above
     )
@@ -886,15 +834,15 @@ class _NextSubscriber(CustomLogger):
         self.seen.append((reservation, None if reservation is None else list(reservation["entries"])))  # pyright: ignore[reportArgumentType]  # the entries list the reservation carries
 
 
-async def _seen_by_the_next_subscriber(proxy: Proxy, native: bool) -> tuple[object, object]:
-    _use_native(proxy, native)
+async def _seen_by_the_next_subscriber(proxy: Proxy) -> tuple[object, object]:
+    _use_native(proxy)
     subscriber: Final = _NextSubscriber()
     litellm.callbacks.append(subscriber)
     auth: Final = await _authenticate(proxy, max_budget=1.0)
     shared: Final = auth.budget_reservation
     assert shared is not None
     _ = await proxy.logging.pre_call_hook(
-        user_api_key_dict=auth, data={**BODY, "litellm_call_id": f"call-next-{native}"}, call_type="completion"
+        user_api_key_dict=auth, data={**BODY, "litellm_call_id": "call-next"}, call_type="completion"
     )
     assert len(subscriber.seen) == 1
     reservation, entries = subscriber.seen[0]
@@ -907,12 +855,10 @@ async def _seen_by_the_next_subscriber(proxy: Proxy, native: bool) -> tuple[obje
 async def test_the_next_pre_call_subscriber_sees_the_reservation_written_into_the_auth_dict(
     proxy: Proxy, golden: Golden
 ) -> None:
-    python: Final = await _seen_by_the_next_subscriber(proxy, native=False)
-    native: Final = await _seen_by_the_next_subscriber(proxy, native=True)
+    native: Final = await _seen_by_the_next_subscriber(proxy)
 
-    assert python[0], "the flag-off run must hold a reservation before the next subscriber runs"
-    assert native == python
-    assert golden.canonical(python) == golden.recorded("python", python)
+    assert native[0], "the run must hold a reservation before the next subscriber runs"
+    assert golden.canonical(native) == golden.recorded("python", native)
 
 
 @pytest.mark.parametrize("route", REFUSED_ROUTES.values(), ids=REFUSED_ROUTES.keys())
@@ -921,18 +867,13 @@ def test_a_runtime_change_to_the_budget_exceeded_status_code_reaches_the_next_re
 ) -> None:
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
     path, body = route
-    refusals: Final[dict[int, tuple[Refusal, Refusal]]] = {}  # mutable-ok: one pair per status code
+    refusals: Final[dict[int, Refusal]] = {}  # mutable-ok: one refusal per status code
     for code in (402, 429):
         monkeypatch.setattr(litellm, "budget_exceeded_status_code", code)
-        refusals[code] = (
-            _refused_over_http(proxy, False, monkeypatch, path, body),
-            _refused_over_http(proxy, True, monkeypatch, path, body),
-        )
+        refusals[code] = _refused_over_http(proxy, monkeypatch, path, body)
 
-    assert {code: python.status for code, (python, _) in refusals.items()} == {402: 402, 429: 429}
-    python_refusals: Final = {code: python for code, (python, _) in refusals.items()}
-    assert {code: native for code, (_, native) in refusals.items()} == python_refusals
-    assert golden.canonical(python_refusals) == golden.recorded("python", python_refusals)
+    assert {code: refusal.status for code, refusal in refusals.items()} == {402: 402, 429: 429}
+    assert golden.canonical(refusals) == golden.recorded("python", refusals)
 
 
 ROUTED_MODELS: Final = (
@@ -1016,8 +957,8 @@ def _route_the_family_models(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(proxy_server, "llm_model_list", model_list)
 
 
-async def _family_run(proxy: Proxy, native: bool, family: Family, exit_path: Exit) -> Run:
-    _use_native(proxy, native)
+async def _family_run(proxy: Proxy, family: Family, exit_path: Exit) -> Run:
+    _use_native(proxy)
     auth: Final = await _authenticate(proxy, max_budget=10.0, path=family.path, body=family.body)
     data: Final = {
         **family.body,
@@ -1043,13 +984,11 @@ async def test_a_widened_route_family_reserves_and_settles_like_python(
     proxy: Proxy, monkeypatch: pytest.MonkeyPatch, family: Family, exit_path: Exit, golden: Golden
 ) -> None:
     _route_the_family_models(monkeypatch)
-    python: Final = await _family_run(proxy, False, family, exit_path)
-    native: Final = await _family_run(proxy, True, family, exit_path)
+    native: Final = await _family_run(proxy, family, exit_path)
 
-    assert python.entries_after_pre_call, "the Python engine must hold a reservation on this route"
+    assert native.entries_after_pre_call, "the native owner must hold a reservation on this route"
     assert native_budgets.native_budget_route(family.path.partition("?")[0])
-    assert native == python
-    assert golden.canonical(python) == golden.recorded("python", python)
+    assert golden.canonical(native) == golden.recorded("python", native)
 
 
 @pytest.mark.parametrize("family", FAMILIES.values(), ids=FAMILIES.keys())
@@ -1057,13 +996,9 @@ def test_a_refusal_on_a_widened_route_family_reaches_the_client_like_the_auth_re
     proxy: Proxy, monkeypatch: pytest.MonkeyPatch, family: Family, golden: Golden
 ) -> None:
     _route_the_family_models(monkeypatch)
-    python: Final = _refused_over_http(
-        proxy, False, monkeypatch, family.path, family.body, family.upstream_token, family.upload
-    )
     native: Final = _refused_over_http(
-        proxy, True, monkeypatch, family.path, family.body, family.upstream_token, family.upload
+        proxy, monkeypatch, family.path, family.body, family.upstream_token, family.upload
     )
 
-    assert python.status == 422
-    assert native == python
-    assert golden.canonical(python) == golden.recorded("python", python)
+    assert native.status == 422
+    assert golden.canonical(native) == golden.recorded("python", native)
