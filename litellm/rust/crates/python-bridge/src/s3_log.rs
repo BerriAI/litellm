@@ -163,6 +163,11 @@ impl NativeS3Log {
     }
 
     #[getter]
+    fn s3_bucket_name(&self) -> Option<String> {
+        self.sink.settings().bucket_name.clone()
+    }
+
+    #[getter]
     fn strip_base64_files(&self) -> bool {
         self.sink.settings().strip_base64_files
     }

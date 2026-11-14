@@ -6500,13 +6500,13 @@ def build_custom_logger_compatible_class(
         _in_memory_loggers.append(_gcs_bucket_logger)
         return _gcs_bucket_logger
     elif logging_integration == "s3_v2":
-        from litellm.integrations.s3_v3 import S3_V2_LOGGER_TYPES, new_s3_v2_logger
+        from litellm.integrations.s3_v3 import S3LoggerV3
 
         for callback in _in_memory_loggers:
-            if isinstance(callback, S3_V2_LOGGER_TYPES):
+            if isinstance(callback, S3LoggerV3):
                 return callback
 
-        _s3_v2_logger: Final = new_s3_v2_logger()
+        _s3_v2_logger: Final = S3LoggerV3()
         _in_memory_loggers.append(_s3_v2_logger)
         return _s3_v2_logger
     elif logging_integration == "clickhouse":
@@ -7324,10 +7324,10 @@ def get_custom_logger_compatible_class(
                 if isinstance(callback, GCSBucketLogger):
                     return callback
         elif logging_integration == "s3_v2":
-            from litellm.integrations.s3_v3 import S3_V2_LOGGER_TYPES
+            from litellm.integrations.s3_v3 import S3LoggerV3
 
             for callback in _in_memory_loggers:
-                if isinstance(callback, S3_V2_LOGGER_TYPES):
+                if isinstance(callback, S3LoggerV3):
                     return callback
         elif logging_integration == "clickhouse":
             for callback in _in_memory_loggers:
@@ -8031,9 +8031,9 @@ class StandardLoggingPayloadSetup:
                 )
                 if custom_logger and hasattr(custom_logger, "s3_path") and getattr(custom_logger, "s3_path"):
                     s3_path = getattr(custom_logger, "s3_path")
-                from litellm.integrations.s3_v3 import S3_V2_LOGGER_TYPES
+                from litellm.integrations.s3_v3 import S3LoggerV3
 
-                if isinstance(custom_logger, S3_V2_LOGGER_TYPES):
+                if isinstance(custom_logger, S3LoggerV3):
                     partition_granularity = custom_logger.resolve_partition_granularity()
             except Exception:
                 # If any error occurs in getting the logger instance, use default empty s3_path

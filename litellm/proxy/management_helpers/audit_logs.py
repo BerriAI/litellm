@@ -78,9 +78,9 @@ def _resolve_audit_log_callback(name: str) -> "CustomLogger | S3LoggerV3 | None"
     instance: CustomLogger | S3LoggerV3 | None
     audit_params: Final[Mapping[str, object] | None] = getattr(litellm, "s3_audit_callback_params", None)
     if name == "s3_v2" and audit_params is not None:
-        from litellm.integrations.s3_v3 import new_s3_v2_logger
+        from litellm.integrations import s3_v3
 
-        instance = new_s3_v2_logger(s3_callback_params_override=audit_params)
+        instance = s3_v3.S3LoggerV3(s3_callback_params_override=audit_params)
     else:
         from litellm.litellm_core_utils.litellm_logging import (
             _init_custom_logger_compatible_class,

@@ -2,8 +2,7 @@ import asyncio
 import json
 import os
 from collections.abc import Callable, Collection, Mapping
-from functools import cache
-from typing import TYPE_CHECKING, ClassVar, Final
+from typing import TYPE_CHECKING, Final
 
 from typing_extensions import Unpack
 
@@ -31,10 +30,11 @@ from litellm.integrations.custom_logger_v2.derivations import (
 )
 from litellm.integrations.custom_logger_v2.enums import Field, Hook
 from litellm.integrations.custom_logger_v2.field_sources import HookArgs
+from litellm.integrations.custom_logger_v2.logger import on
 from litellm.integrations.custom_logger_v2.outcomes import Abort, Patch
-from litellm.integrations.custom_logger_v2.rust import RustLogger, rust_logger
+from litellm.integrations.custom_logger_v2.rust import RustLogger
+from litellm.integrations.custom_logger_v2.selection import Selection
 from litellm.integrations.s3 import resolve_s3_max_queue_size, resolve_s3_max_retry_age_seconds
-from litellm.integrations.s3_v2 import S3Logger
 from litellm.llms.bedrock.web_identity_session_policy import S3_LOGGING_SESSION_POLICY, session_policy_document
 from litellm.secret_managers.main import get_secret, get_secret_str
 from litellm.types.integrations.s3_v2 import S3LoggerSettings, S3PartitionGranularity
@@ -43,15 +43,9 @@ from litellm.types.utils import StandardAuditLogPayload, StandardBatchLineItemsP
 if TYPE_CHECKING:
     from litellm.rust_bridge._native import NativeS3Log
 
-NATIVE_S3_V2_FLAG: Final = "LITELLM_NATIVE_S3_V2"
 CALLBACK_NAME: Final = "s3_v2"
 _WEB_IDENTITY_TOKEN_MIN_LENGTH: Final = 4
 _DEFAULT_MAX_RETRY_AGE_SECONDS: Final = 3600
-
-
-@cache
-def native_s3_v2_enabled() -> bool:
-    return os.environ.get(NATIVE_S3_V2_FLAG, "").strip().lower() == "true"
 
 
 class _Host:
@@ -282,24 +276,44 @@ class _ExcludedView:
         return value
 
 
-class S3LoggerV3(RustLogger):
-    sink: ClassVar["NativeS3Log"]
-    s3_host: ClassVar[_Host]
-    periodic_flush_task: ClassVar["asyncio.Task[None]"]
+_ATTEMPT_ENDED_READS: Final = frozenset(
+    {
+        Field.deprecated_kwargs,
+        Field.attempt_timing,
+        Field.log_id,
+        Field.cold_storage_object_key,
+        Field.standard_logging_payload_ref,
+        Field.logged_key_identity,
+    }
+)
 
-    def __new__(
-        cls,
-        s3_callback_params_override: Mapping[str, object] | None = None,
-        **settings: Unpack[S3LoggerSettings],  # kwargs-ok: the S3Logger constructor keywords
-    ) -> "S3LoggerV3":
-        return _native_logger(s3_callback_params_override, settings)
+
+class S3LoggerV3(RustLogger):
+    selection = Selection(name=CALLBACK_NAME, honors_no_log=True)
 
     def __init__(
         self,
         s3_callback_params_override: Mapping[str, object] | None = None,
         **settings: Unpack[S3LoggerSettings],  # kwargs-ok: the S3Logger constructor keywords
     ) -> None:
-        return None
+        from litellm.rust_bridge._native import NativeS3Log
+
+        host: Final = _Host()
+        sink: Final = NativeS3Log(
+            _constructed_params(s3_callback_params_override, settings),
+            _constants(settings.get("s3_batch_size", DEFAULT_S3_BATCH_SIZE)),
+            host,
+        )
+        self.sink: Final = sink
+        self.s3_host: Final = host
+        self.periodic_flush_task: Final = asyncio.create_task(
+            _periodic_flush(sink, _flush_interval(settings.get("s3_flush_interval", DEFAULT_S3_FLUSH_INTERVAL_SECONDS)))
+        )
+        super().__init__(sink.callback(), {Field.deprecated_kwargs: lambda _kwargs: None})
+
+    @on(Hook.attempt_ended, reads=_ATTEMPT_ENDED_READS, awaited=True)
+    async def on_attempt_ended(self, view: object, ctx: CallContext[object]) -> Patch | Abort | None:
+        return await self.run_rust(Hook.attempt_ended, _ATTEMPT_ENDED_READS, view, ctx)
 
     async def run_rust(
         self, hook: Hook, reads: frozenset[Field], view: object, ctx: CallContext[object]
@@ -329,6 +343,10 @@ class S3LoggerV3(RustLogger):
     @property
     def s3_path(self) -> str | None:
         return self.sink.s3_path
+
+    @property
+    def s3_bucket_name(self) -> str | None:
+        return self.sink.s3_bucket_name
 
     def resolve_partition_granularity(self) -> S3PartitionGranularity:
         return "hour" if self.sink.partition_granularity() == "hour" else "day"
@@ -376,45 +394,7 @@ class S3LoggerV3(RustLogger):
             return None
 
 
-S3_V2_LOGGER_TYPES: Final = (S3Logger, S3LoggerV3)
-
-
-def _native_logger(params_source: Mapping[str, object] | None, settings: S3LoggerSettings) -> S3LoggerV3:
-    from litellm.rust_bridge._native import NativeS3Log
-
-    host: Final = _Host()
-    sink: Final = NativeS3Log(
-        _constructed_params(params_source, settings),
-        _constants(settings.get("s3_batch_size", DEFAULT_S3_BATCH_SIZE)),
-        host,
-    )
-    periodic: Final = asyncio.create_task(
-        _periodic_flush(sink, _flush_interval(settings.get("s3_flush_interval", DEFAULT_S3_FLUSH_INTERVAL_SECONDS)))
-    )
-    generated: Final = type(rust_logger(sink.callback()))
-    cls: Final = type(
-        S3Logger.__name__, (S3LoggerV3, generated), {"sink": sink, "s3_host": host, "periodic_flush_task": periodic}
-    )
-    logger: Final[S3LoggerV3] = object.__new__(cls)
-    RustLogger.__init__(logger, sink.callback(), {Field.deprecated_kwargs: lambda _kwargs: None})
-    return logger
-
-
-def new_s3_v2_logger(s3_callback_params_override: Mapping[str, object] | None = None) -> S3Logger | S3LoggerV3:
-    if not native_s3_v2_enabled():
-        return (
-            S3Logger()
-            if s3_callback_params_override is None
-            else S3Logger(s3_callback_params_override=dict(s3_callback_params_override))
-        )
-    return _native_logger(s3_callback_params_override, {})
-
-
 __all__ = [
-    "NATIVE_S3_V2_FLAG",
-    "S3_V2_LOGGER_TYPES",
     "S3LoggerV3",
     "legacy_should_log",
-    "native_s3_v2_enabled",
-    "new_s3_v2_logger",
 ]

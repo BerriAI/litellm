@@ -34,11 +34,6 @@ from integration._support.process import OwnedProxy, graceful_stop_seconds, owne
 from integration._support.wire import Reply, Request, wire_server
 
 
-@pytest.fixture(autouse=True)
-def _native_s3_v2(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("LITELLM_NATIVE_S3_V2", "true")
-
-
 pytestmark: Final = pytest.mark.shares_worker_state
 
 FLUSH: Final = {"DEFAULT_S3_FLUSH_INTERVAL_SECONDS": "1"}

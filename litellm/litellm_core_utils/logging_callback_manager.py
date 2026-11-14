@@ -570,19 +570,9 @@ class LoggingCallbackManager:
         custom_logger_class_type: Final = CustomLoggerRegistry.get_class_type_for_custom_logger_name(callback_name)
 
         # get the active custom logger
-        custom_logger: Final = self.get_custom_loggers_for_type(custom_logger_class_type) or (
-            _native_s3_v2_loggers(self.get_all_callbacks()) if callback_name == "s3_v2" else []
-        )
+        custom_logger: Final = self.get_custom_loggers_for_type(custom_logger_class_type)
 
         if len(custom_logger) == 0:
             raise ValueError(f"No active custom logger found for callback name: {callback_name}")
 
         return custom_logger[0]
-
-
-def _native_s3_v2_loggers(
-    callbacks: Iterable[object],
-) -> list[CustomLogger]:  # mutable-ok: matches get_custom_loggers_for_type
-    from litellm.integrations.s3_v3 import S3LoggerV3
-
-    return [callback for callback in callbacks if isinstance(callback, S3LoggerV3)]  # pyright: ignore[reportReturnType]  # S3LoggerV3 serves the same cold storage calls

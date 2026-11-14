@@ -31,7 +31,7 @@ from litellm.integrations.custom_logger_v2.legacy import KwargsFields
 from litellm.integrations.custom_logger_v2.field_sources import HookArgs, with_sources
 from litellm.integrations.custom_logger_v2.selection import RequestSelection
 from litellm.integrations.s3_v2 import S3Logger
-from litellm.integrations.s3_v3 import S3LoggerV3, native_s3_v2_enabled, new_s3_v2_logger
+from litellm.integrations.s3_v3 import S3LoggerV3
 from litellm.litellm_core_utils.litellm_logging import LOGGING_KEYS, V2_ASYNC_LOGGING_LINE
 from litellm.llms.bedrock import base_aws_llm
 from litellm.rust_bridge import _native
@@ -184,9 +184,7 @@ def _isolated(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     monkeypatch.delenv("S3_PARTITION_GRANULARITY", raising=False)
     monkeypatch.delenv("S3_LOG_PROMPTS_ONLY", raising=False)
     monkeypatch.setattr(litellm, "cold_storage_custom_logger", None)
-    native_s3_v2_enabled.cache_clear()
     yield
-    native_s3_v2_enabled.cache_clear()
 
 
 def _params(endpoint: str, extra: Mapping[str, object]) -> dict[str, object]:
@@ -205,15 +203,9 @@ async def _loggers(
     monkeypatch: pytest.MonkeyPatch, pair: tuple[FakeBucket, FakeBucket], extra: Mapping[str, object]
 ) -> tuple[S3Logger, S3LoggerV3]:
     monkeypatch.setattr(litellm, "s3_callback_params", _params(pair[0].url, extra))
-    monkeypatch.setenv("LITELLM_NATIVE_S3_V2", "false")
-    native_s3_v2_enabled.cache_clear()
-    python_logger: Final = new_s3_v2_logger()
+    python_logger: Final = S3Logger()
     monkeypatch.setattr(litellm, "s3_callback_params", _params(pair[1].url, extra))
-    monkeypatch.setenv("LITELLM_NATIVE_S3_V2", "true")
-    native_s3_v2_enabled.cache_clear()
-    rust_logger: Final = new_s3_v2_logger()
-    assert isinstance(python_logger, S3Logger)
-    assert isinstance(rust_logger, S3LoggerV3)
+    rust_logger: Final = S3LoggerV3()
     return python_logger, rust_logger
 
 
@@ -777,13 +769,11 @@ async def test_a_payload_changed_before_the_flush_is_stored_as_it_is_at_the_flus
 def test_both_loggers_need_a_running_event_loop(golden: Golden, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "s3_callback_params", _params("http://127.0.0.1:9", {}))
     errors: Final[dict[str, str]] = {}
-    for flag in ("false", "true"):
-        monkeypatch.setenv("LITELLM_NATIVE_S3_V2", flag)
-        native_s3_v2_enabled.cache_clear()
+    for name, build in (("python", S3Logger), ("rust", S3LoggerV3)):
         with pytest.raises(RuntimeError, match="no running event loop") as raised:
-            new_s3_v2_logger()
-        errors[flag] = str(raised.value)
-    assert errors["true"] == golden.python("error", errors["false"] if RECORDING else _UNSET)
+            build()
+        errors[name] = str(raised.value)
+    assert errors["rust"] == golden.python("error", errors["python"] if RECORDING else _UNSET)
 
 
 @pytest.mark.asyncio

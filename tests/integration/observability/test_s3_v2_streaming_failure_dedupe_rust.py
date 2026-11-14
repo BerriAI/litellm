@@ -15,11 +15,6 @@ from integration._support.process import owned_proxy
 from integration._support.wire import Reply, Request, wire_server
 
 
-@pytest.fixture(autouse=True)
-def _native_s3_v2(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("LITELLM_NATIVE_S3_V2", "true")
-
-
 Surface = Literal["chat", "messages", "responses"]
 SURFACES: Final[tuple[Surface, ...]] = ("chat", "messages", "responses")
 FAILURE_BODY: Final[bytes] = json.dumps(

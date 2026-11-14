@@ -16,7 +16,7 @@ from litellm.integrations.custom_logger_v2.enforcement import FieldView
 from litellm.integrations.custom_logger_v2.field_sources import HookArgs, with_sources
 from litellm.integrations.custom_logger_v2.legacy import KwargsFields
 from litellm.integrations.custom_logger_v2.rust import WireManifest
-from litellm.integrations.s3_v3 import S3LoggerV3, native_s3_v2_enabled, new_s3_v2_logger
+from litellm.integrations.s3_v3 import S3LoggerV3
 from litellm.litellm_core_utils.litellm_logging import LOGGING_KEYS, V2_ASYNC_LOGGING_LINE
 from litellm.types.integrations.custom_logger_v2 import Outcome
 
@@ -120,11 +120,7 @@ def scripted_bucket() -> Iterator[ScriptedBucket]:
 
 
 def rust_s3_logger(monkeypatch: pytest.MonkeyPatch, **params: object) -> S3LoggerV3:  # kwargs-ok: the S3Logger keywords
-    monkeypatch.setenv("LITELLM_NATIVE_S3_V2", "true")
-    native_s3_v2_enabled.cache_clear()
-    logger: Final = new_s3_v2_logger(params) if params else new_s3_v2_logger()
-    assert isinstance(logger, S3LoggerV3)
-    return logger
+    return S3LoggerV3(params) if params else S3LoggerV3()
 
 
 async def log_attempt(

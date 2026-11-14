@@ -21,11 +21,6 @@ from integration._support.timing import assert_enforced_within
 from integration._support.wire import Reply, Request, Wire, wire_server
 
 
-@pytest.fixture(autouse=True)
-def _native_s3_v2(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("LITELLM_NATIVE_S3_V2", "true")
-
-
 BUCKET: Final = "integration-bucket"
 PREFIX: Final = "integration-logs"
 REQUESTS: Final = 64

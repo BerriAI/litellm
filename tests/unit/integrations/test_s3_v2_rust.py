@@ -46,7 +46,6 @@ def _isolated(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setattr(litellm, "cold_storage_custom_logger", None)
     yield
-    s3_v3.native_s3_v2_enabled.cache_clear()
 
 
 @pytest.fixture
@@ -2820,3 +2819,36 @@ async def test_constructor_flush_interval_drives_the_periodic_flush(
         assert [put.path for put in bucket.puts()] == [f"/test-bucket/{_key('tick')}"]
     finally:
         _ = logger.periodic_flush_task.cancel()
+
+
+@pytest.mark.asyncio
+async def test_the_declared_subscription_matches_the_rust_manifest(
+    monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket
+) -> None:
+    from litellm.integrations.custom_logger_v2.rust import WireManifest
+
+    logger: Final = _logger(monkeypatch, bucket)
+    manifest: Final = WireManifest.model_validate_json(logger.rust.manifest())
+
+    assert {(s.hook, s.reads, s.writes, s.may_abort, s.parallel, s.awaited) for s in manifest.subscriptions} == {
+        (hook, s.reads, s.writes, s.may_abort, s.parallel, s.awaited) for hook, s in S3LoggerV3.subscriptions.items()
+    }
+    assert logger.selection is not None
+    assert manifest.selection.name == logger.selection.name
+    assert frozenset(manifest.selection.aliases) == logger.selection.aliases
+    assert manifest.selection.activation == logger.selection.activation
+    assert frozenset(manifest.selection.opt_out_by) == logger.selection.opt_out_by
+    assert manifest.selection.honors_no_log == logger.selection.honors_no_log
+    assert not manifest.has_request_state
+
+
+@pytest.mark.asyncio
+async def test_the_s3_v2_callback_name_resolves_to_the_rust_logger_class(
+    monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket
+) -> None:
+    from litellm.litellm_core_utils.custom_logger_registry import CustomLoggerRegistry
+
+    logger: Final = _logger(monkeypatch, bucket)
+
+    assert CustomLoggerRegistry.get_class_type_for_custom_logger_name("s3_v2") is S3LoggerV3
+    assert CustomLoggerRegistry.get_callback_str_from_class_type(type(logger)) == "s3_v2"

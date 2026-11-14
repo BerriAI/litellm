@@ -22,11 +22,6 @@ from integration._support.wire import wire_server
 from integration.caching.response_cache_case import entry_keys, redis_store
 
 
-@pytest.fixture(autouse=True)
-def _native_s3_v2(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("LITELLM_NATIVE_S3_V2", "true")
-
-
 pytestmark: Final = pytest.mark.shares_worker_state
 
 PER_REQUEST_KEY: Final = re.compile(rf"^/{BUCKET}/{PREFIX}/\d{{4}}-\d{{2}}-\d{{2}}/.+\.json$")
