@@ -272,10 +272,13 @@ class EndUserRepository(PrismaTableRepository["prisma_models.LiteLLM_EndUserTabl
     table_name = "litellm_endusertable"
 
     async def find_restricted_ids(self, limit: int) -> tuple[str, ...]:
+        from litellm.proxy.db.db_span import db_span
+
         database: Final = require_attributes(self._selected_database(), LedgerTransaction, "query_raw")
         module: Final = import_module("litellm_proxy_extras.request_log_indexes")
         query: Final = _END_USER_QUERY.validate_python(module.END_USER_RESTRICTED_QUERY)
-        rows: Final = _END_USER_ID_ROWS.validate_python(await database.query_raw(query, limit))
+        async with db_span("find_many", "LiteLLM_EndUserTable"):
+            rows: Final = _END_USER_ID_ROWS.validate_python(await database.query_raw(query, limit))
         return tuple(row["user_id"] for row in rows)
 
 
