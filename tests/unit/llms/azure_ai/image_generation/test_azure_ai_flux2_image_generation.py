@@ -15,17 +15,18 @@ from litellm.llms.azure_ai.image_generation.flux_transformation import (
     AzureFoundryFluxImageGenerationConfig,
 )
 from litellm.types.utils import ImageObject, ImageResponse
-from litellm.utils import _invalidate_model_cost_lowercase_map, get_optional_params_image_gen
+from litellm.utils import get_optional_params_image_gen
+from litellm.litellm_core_utils.model_cost_table import publish
 
 
 @pytest.fixture(autouse=True)
 def use_local_model_cost_map(monkeypatch):
     monkeypatch.setattr(litellm, "model_cost", GetModelCostMap.load_local_model_cost_map())
     litellm.get_model_info.cache_clear()
-    _invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
     yield
     litellm.get_model_info.cache_clear()
-    _invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
 
 
 @pytest.mark.parametrize(

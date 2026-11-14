@@ -6,15 +6,17 @@ to detect and block/mask sensitive content.
 """
 
 import asyncio
+import bisect
 import contextvars
 import itertools
 import json
 import os
 import re
 import time
-from collections.abc import AsyncGenerator, AsyncIterable, Callable, Coroutine, Mapping, Sequence
+from collections.abc import AsyncGenerator, AsyncIterable, Callable, Coroutine, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime
+from functools import partial
 from re import Pattern
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, TypedDict, TypeVar, cast
 
@@ -30,6 +32,7 @@ from litellm.constants import (
     DEFAULT_MAX_RECURSE_DEPTH,
 )
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.litellm_core_utils.core_helpers import attribute_or_none
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.path_utils import is_within, try_safe_join
 from litellm.proxy.guardrails.content_filter_data import (
@@ -78,7 +81,7 @@ from .competitor_intent import (
     AirlineCompetitorIntentChecker,
     BaseCompetitorIntentChecker,
 )
-from .patterns import PATTERN_EXTRA_CONFIG, get_compiled_pattern
+from .patterns import PATTERN_EXTRA_CONFIG, PATTERN_STREAMING_HOLDBACK_CHARS, get_compiled_pattern
 
 MAX_KEYWORD_VALUE_GAP_WORDS: Final = 1
 _DECODED_ARGUMENTS: Final = TypeAdapter(object)
@@ -147,10 +150,10 @@ class _CategoryConfigView(TypedDict):
 def _streamed_choice_content(choice: StreamingChoices | TextChoices) -> str | None:
     if isinstance(choice, TextChoices):
         return choice.text if isinstance(choice.text, str) else ""
-    delta: Final = getattr(choice, "delta", None)
+    delta: Final = attribute_or_none(choice, "delta")
     if not delta:
         return None
-    content: Final = getattr(delta, "content", None)
+    content: Final = attribute_or_none(delta, "content")
     return content if isinstance(content, str) else ""
 
 
@@ -222,8 +225,68 @@ async def _stream_then_end_of_stream_chunk(
 @dataclass(frozen=True, slots=True)
 class _StreamedScanPlan:
     context_chars: int
+    holdback_chars: int
     exception_phrases: tuple[str, ...]
     conditional_words: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _RedactionSpan:
+    start: int
+    end: int
+    pattern_index: int
+    pattern_name: str
+
+
+def _merge_redaction_spans(spans: Iterable[_RedactionSpan]) -> tuple[_RedactionSpan, ...]:
+    ordered: Final = sorted(spans, key=lambda span: (span.start, -span.end))
+    reach: Final = tuple(itertools.accumulate((span.end for span in ordered), max))
+    first_indices: Final = tuple(
+        index for index, span in enumerate(ordered) if index == 0 or span.start >= reach[index - 1]
+    )
+    last_indices: Final = (*(index - 1 for index in first_indices[1:]), len(ordered) - 1)
+    return tuple(replace(ordered[first], end=reach[last]) for first, last in zip(first_indices, last_indices))
+
+
+@dataclass(frozen=True, slots=True)
+class _RedactedText:
+    spans: tuple[_RedactionSpan, ...]
+    tags: tuple[str, ...]
+    tag_starts: tuple[int, ...]
+
+    def render(self, text: str) -> str:
+        previous_ends: Final = (0, *(span.end for span in self.spans))
+        kept_parts: Final = (
+            text[previous_end : span.start] + tag
+            for previous_end, span, tag in zip(previous_ends, self.spans, self.tags)
+        )
+        return "".join((*kept_parts, text[previous_ends[-1] :]))
+
+    def original_start(self, position: int) -> int:
+        index: Final = bisect.bisect_right(self.tag_starts, position) - 1
+        if index < 0:
+            return position
+        tag_end: Final = self.tag_starts[index] + len(self.tags[index])
+        if position < tag_end:
+            return self.spans[index].start
+        return position - tag_end + self.spans[index].end
+
+    def original_end(self, position: int) -> int:
+        index: Final = bisect.bisect_left(self.tag_starts, position) - 1
+        if index < 0:
+            return position
+        tag_end: Final = self.tag_starts[index] + len(self.tags[index])
+        if position <= tag_end:
+            return self.spans[index].end
+        return position - tag_end + self.spans[index].end
+
+
+def _redacted_text(spans: tuple[_RedactionSpan, ...], redaction_format: str) -> _RedactedText:
+    tags: Final = tuple(redaction_format.format(pattern_name=span.pattern_name.upper()) for span in spans)
+    shifts: Final = itertools.accumulate(
+        (len(tag) - (span.end - span.start) for span, tag in zip(spans, tags)), initial=0
+    )
+    return _RedactedText(spans, tags, tuple(span.start + shift for span, shift in zip(spans, shifts)))
 
 
 class CategoryFileData(TypedDict, total=False):
@@ -986,21 +1049,6 @@ class ContentFilterGuardrail(CustomGuardrail):
                 merged.append((start, end))
         return merged
 
-    def _mask_spans(self, text: str, spans: list[tuple[int, int]], redaction: str) -> str:
-        """Apply masking for the provided spans using the given redaction tag."""
-
-        if not spans:
-            return text
-
-        result_parts: Final[list[str]] = []
-        previous_end = 0
-        for start, end in spans:
-            result_parts.append(text[previous_end:start])
-            result_parts.append(redaction)
-            previous_end = end
-        result_parts.append(text[previous_end:])
-        return "".join(result_parts)
-
     def _convert_word_number_sequence(self, sequence: str) -> str | None:
         """Convert a spelled-out digit sequence (e.g., 'One-Two') into digits."""
 
@@ -1391,10 +1439,8 @@ class ContentFilterGuardrail(CustomGuardrail):
         self,
         pattern_name: str,
         action: ContentFilterAction,
-        text: str,
-        spans: list[tuple[int, int]],
         detections: list[ContentFilterDetection] | None,
-    ) -> str:
+    ) -> None:
         """Handle regex pattern match detection and action."""
         if detections is not None:
             pattern_detection: Final[PatternDetection] = {
@@ -1412,11 +1458,49 @@ class ContentFilterGuardrail(CustomGuardrail):
                 detail={"error": error_msg, "pattern": pattern_name},
             )
         elif action == ContentFilterAction.MASK:
-            redaction_tag: Final = self.pattern_redaction_format.format(pattern_name=pattern_name.upper())
-            text = self._mask_spans(text, spans, redaction_tag)
             verbose_proxy_logger.info("Masked all %s matches in content", pattern_name)
 
-        return text
+    def _mask_step(
+        self,
+        text: str,
+        spans: tuple[_RedactionSpan, ...],
+        indexed_entry: tuple[int, CompiledPatternEntry],
+    ) -> tuple[_RedactionSpan, ...]:
+        index, pattern_entry = indexed_entry
+        if pattern_entry["action"] != ContentFilterAction.MASK:
+            return spans
+        original_matches: Final = self._find_pattern_spans(text, pattern_entry)
+        redacted_matches: Final = self._redacted_text_matches(text, spans, pattern_entry) if spans else ()
+        return _merge_redaction_spans(
+            (
+                *spans,
+                *(
+                    _RedactionSpan(start, end, index, pattern_entry["pattern_name"])
+                    for start, end in (*original_matches, *redacted_matches)
+                ),
+            )
+        )
+
+    def _redacted_text_matches(
+        self, text: str, spans: tuple[_RedactionSpan, ...], pattern_entry: CompiledPatternEntry
+    ) -> tuple[tuple[int, int], ...]:
+        redacted: Final = _redacted_text(spans, self.pattern_redaction_format)
+        return tuple(
+            (redacted.original_start(start), redacted.original_end(end))
+            for start, end in self._find_pattern_spans(redacted.render(text), pattern_entry)
+        )
+
+    def _pattern_detected(
+        self,
+        text: str,
+        index: int,
+        pattern_entry: CompiledPatternEntry,
+        span_states: Sequence[tuple[_RedactionSpan, ...]],
+    ) -> bool:
+        if pattern_entry["action"] == ContentFilterAction.MASK:
+            return any(span.pattern_index == index for span in span_states[-1])
+        text_after_earlier_masks: Final = _redacted_text(span_states[index], self.pattern_redaction_format).render(text)
+        return bool(self._find_pattern_spans(text_after_earlier_masks, pattern_entry))
 
     def _handle_blocked_word_match(
         self,
@@ -1505,13 +1589,14 @@ class ContentFilterGuardrail(CustomGuardrail):
             keyword, category_name, severity, action = category_keyword_match
             text = self._handle_category_keyword_match(keyword, category_name, severity, action, text, detections)
 
-        # Check regex patterns - process ALL patterns, not just first match
-        for pattern_entry in self.compiled_patterns:
-            spans = self._find_pattern_spans(text, pattern_entry)
-            if spans:
-                pattern_name = pattern_entry["pattern_name"]
-                action = pattern_entry["action"]
-                text = self._handle_pattern_match(pattern_name, action, text, spans, detections)
+        no_spans: Final[tuple[_RedactionSpan, ...]] = ()
+        span_states: Final = tuple(
+            itertools.accumulate(enumerate(self.compiled_patterns), partial(self._mask_step, text), initial=no_spans)
+        )
+        for index, pattern_entry in enumerate(self.compiled_patterns):
+            if self._pattern_detected(text, index, pattern_entry, span_states):
+                self._handle_pattern_match(pattern_entry["pattern_name"], pattern_entry["action"], detections)
+        text = _redacted_text(span_states[-1], self.pattern_redaction_format).render(text)
 
         # Check blocked words - iterate through ALL blocked words
         text_lower = text.lower()
@@ -2070,7 +2155,9 @@ class ContentFilterGuardrail(CustomGuardrail):
     def _streamed_scan_plan(self) -> _StreamedScanPlan:
         """
         Per-stream inputs for buffer trimming: the retained tail length (the default
-        context, widened to the longest configured keyword), the category exception
+        context, widened to the longest configured keyword), the unreleased tail length
+        (widened to the longest holdback a configured prebuilt pattern declares, since
+        provider keys run longer than the default), the category exception
         phrases, which suppress matches anywhere in the scanned text, and the conditional
         category words, which only match when paired inside one sentence.
         """
@@ -2080,6 +2167,13 @@ class ContentFilterGuardrail(CustomGuardrail):
         )
         return _StreamedScanPlan(
             context_chars=max(CONTENT_FILTER_STREAMING_SCAN_CONTEXT_CHARS, longest_keyword),
+            holdback_chars=max(
+                (
+                    PATTERN_STREAMING_HOLDBACK_CHARS.get(entry["pattern_name"], CONTENT_FILTER_STREAMING_HOLDBACK_CHARS)
+                    for entry in self.compiled_patterns
+                ),
+                default=CONTENT_FILTER_STREAMING_HOLDBACK_CHARS,
+            ),
             exception_phrases=tuple(
                 phrase for category in self.loaded_categories.values() for phrase in category.exceptions
             ),
@@ -2220,7 +2314,7 @@ class ContentFilterGuardrail(CustomGuardrail):
 
                     safe_to_yield_len = max(
                         previous_state.yielded_masked_text_len,
-                        len(masked_text) - (0 if is_final else CONTENT_FILTER_STREAMING_HOLDBACK_CHARS),
+                        len(masked_text) - (0 if is_final else plan.holdback_chars),
                     )
                     released_text = masked_text[previous_state.yielded_masked_text_len : safe_to_yield_len]
                     if isinstance(choice, TextChoices):
