@@ -145,7 +145,7 @@ def test_banner_silent_when_vcr_disabled(monkeypatch, health_reset, patch_capaci
 
 
 # ---------------------------------------------------------------------------
-# Diagnostic-log dedup + cap. CircleCI truncates step output to the last
+# Diagnostic-log dedup + cap. GitHub Actions truncates step output to the last
 # ~400 KB; an unbounded diagnostic dump pushes the VCR classification summary
 # out of the retrievable window, so the dump must dedupe and cap.
 # ---------------------------------------------------------------------------

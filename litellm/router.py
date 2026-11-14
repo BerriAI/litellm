@@ -34,6 +34,7 @@ from litellm.types.router import (
     DeploymentTypedDict,
     FallbackAccessCheck,
     FallbackBudgetCheck,
+    FallbackRateLimitCheck,
     GuardrailTypedDict,
     LiteLLM_Params,
     ModelGroupInfo,
@@ -120,6 +121,7 @@ def _router_init(
     enable_mid_stream_fallback_continuation: bool = False,
     fallback_access_check: FallbackAccessCheck | None = None,
     fallback_budget_check: FallbackBudgetCheck | None = None,
+    fallback_rate_limit_check: FallbackRateLimitCheck | None = None,
     auto_router_capability_limit: AutoRouterCapabilityLimit | None = None,
     session_affinity_repin_on_failover: bool = False,
     _host: PythonHost = python_host,
@@ -166,6 +168,7 @@ def _router_init(
         enable_mid_stream_fallback_continuation (bool): When True, a chat-completions stream that breaks after plain assistant text has been delivered continues on a fallback deployment via assistant prefill instead of surfacing the error. Only deployments whose model supports assistant prefill are eligible, so the partial text is continued, not regenerated; if none is, the original error is surfaced. Streams that emitted tool calls, thinking blocks, audio/images, or constrained (JSON / forced tool_choice) output are never continued. Async-only. Defaults to False.
         fallback_access_check (Optional[FallbackAccessCheck]): Awaited before each cross-model-group fallback attempt on the async path; a fallback target it rejects is skipped. Defaults to None (every configured fallback is attempted).
         fallback_budget_check (Optional[FallbackBudgetCheck]): Awaited before each cross-model-group fallback attempt on the async path; a fallback target it rejects as over budget is skipped. Defaults to None (budget is not re-checked on fallback).
+        fallback_rate_limit_check (Optional[FallbackRateLimitCheck]): Awaited before each cross-model-group fallback attempt on the async path; a fallback target it rejects as over its per-model rate limit is skipped. Defaults to None (rate limits are not re-checked on fallback).
     Returns:
         Router: An instance of the litellm.Router class.
 
@@ -231,11 +234,29 @@ def _class_descriptor(cls: type, name: str) -> bool:
 
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator, Awaitable
     from typing import ParamSpec, overload
 
+    import httpx
+    from openai.pagination import AsyncCursorPage
+    from openai.types.beta.assistant import Assistant
+    from openai.types.beta.assistant_deleted import AssistantDeleted
+    from openai.types.beta.threads.message import Message as OpenAIMessage
+    from openai.types.file_deleted import FileDeleted
+
+    from litellm.files.types import FileContentStreamingResult
     from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
-    from litellm.types.llms.openai import AllMessageValues, OpenAIFileObject
-    from litellm.types.utils import EmbeddingResponse, LiteLLMBatch, ModelResponse
+    from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
+    from litellm.types.decisions import DecisionsResponse, OpenAIDecisionResponse
+    from litellm.types.llms.openai import (
+        AllMessageValues,
+        HttpxBinaryResponseContent,
+        OpenAIFileObject,
+        ResponsesAPIResponse,
+        Thread,
+    )
+    from litellm.types.utils import EmbeddingResponse, LiteLLMBatch, LiteLLMFineTuningJob, ModelResponse
+    from litellm.types.vector_stores import VectorStoreCreateResponse
 
     _P: Final = ParamSpec("_P")
 
@@ -278,6 +299,28 @@ if TYPE_CHECKING:
         async def acreate_file(self, model: str, **kwargs: object) -> OpenAIFileObject: ...  # pyright: ignore[reportIncompatibleMethodOverride]  # see acompletion
         async def acreate_batch(self, model: str, **kwargs: object) -> LiteLLMBatch: ...  # pyright: ignore[reportIncompatibleMethodOverride]  # see acompletion
         async def aretrieve_batch(self, model: str | None = None, **kwargs: object) -> LiteLLMBatch: ...  # pyright: ignore[reportIncompatibleMethodOverride]  # see acompletion
+
+        aget_assistants: Callable[..., Awaitable[AsyncCursorPage[Assistant]]]
+        acreate_assistants: Callable[..., Awaitable[Assistant]]
+        adelete_assistant: Callable[..., Awaitable[AssistantDeleted]]
+        acreate_thread: Callable[..., Awaitable[Thread]]
+        aget_thread: Callable[..., Awaitable[Thread]]
+        a_add_message: Callable[..., Awaitable[OpenAIMessage]]
+        aget_messages: Callable[..., Awaitable[AsyncCursorPage[OpenAIMessage]]]
+        arun_thread: Callable[..., Awaitable[object]]
+        adecisions: Callable[..., Awaitable[OpenAIDecisionResponse | DecisionsResponse]]
+        acreate_fine_tuning_job: Callable[..., Awaitable[LiteLLMFineTuningJob]]
+        aretrieve_fine_tuning_job: Callable[..., Awaitable[LiteLLMFineTuningJob]]
+        acancel_fine_tuning_job: Callable[..., Awaitable[LiteLLMFineTuningJob]]
+        alist_fine_tuning_jobs: Callable[..., Awaitable[object]]
+        alist_batches: Callable[..., Awaitable[Mapping[str, object]]]
+        acancel_batch: Callable[..., Awaitable[LiteLLMBatch]]
+        aget_responses: Callable[..., Awaitable[ResponsesAPIResponse | BaseResponsesAPIStreamingIterator]]
+        afile_content: Callable[..., Awaitable[HttpxBinaryResponseContent | FileContentStreamingResult]]
+        afile_delete: Callable[..., Awaitable[FileDeleted]]
+        avector_store_create: Callable[..., Awaitable[VectorStoreCreateResponse]]
+        allm_passthrough_route: Callable[..., Awaitable[httpx.Response | AsyncGenerator[bytes, bytes]]]
+
         def __getattr__(self, name: str) -> Any: ...  # the endpoints served by name
 
 else:

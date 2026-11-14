@@ -6,18 +6,19 @@ import copy
 import functools
 import itertools
 import re
-from collections.abc import Callable, Collection, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from types import MappingProxyType
-from typing import Final, TypeVar
+from typing import Final, TypeAlias, TypeVar
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
+from litellm.litellm_core_utils.get_llm_provider_logic import inferred_provider
 from litellm.litellm_core_utils.litellm_logging import use_custom_pricing_for_model
-from litellm.litellm_core_utils.pattern_match_deployments import PatternMatchRouter
+from litellm.litellm_core_utils.pattern_match_deployments import PatternMatchRouter, PatternUtils
 from litellm.llms.azure.ptu_capacity import is_str_keyed_mapping
 from litellm.proxy._types import SpecialModelNames, UserAPIKeyAuth
 from litellm.proxy.common_utils.model_listing_utils import CallerAliases, alias_map, dispatched_model
@@ -429,6 +430,71 @@ def _ids_routing_to_catalog_models(
     )
 
 
+def _names_whole_models(name_pattern: str) -> bool:
+    return name_pattern.count("*") == 1 and name_pattern.endswith("/*")
+
+
+@dataclass(frozen=True, slots=True)
+class _Rivals:
+    direct: tuple[re.Pattern[str], ...]
+    under_a_provider: tuple[re.Pattern[str], ...]
+
+
+RivalPatterns: TypeAlias = Callable[[str], _Rivals | None]
+
+
+def _rival_may_take(listed_id: str, rivals: _Rivals) -> bool:
+    if any(rival.match(listed_id) for rival in rivals.direct):
+        return True
+    if not rivals.under_a_provider:
+        return False
+    provider_request: Final = f"{inferred_provider(listed_id)}/{listed_id}"
+    return any(rival.match(provider_request) for rival in rivals.under_a_provider)
+
+
+def _routes_through_alias(
+    name_pattern: str,
+    rivals: _Rivals | None,
+    routes_to_model: Callable[[str, str], bool],
+) -> Callable[[str], bool]:
+    alias_regex: Final = _wildcard_name_regex(name_pattern)
+
+    def routes_through(listed_id: str) -> bool:
+        alias_match: Final = alias_regex.match(listed_id)
+        if alias_match is None or alias_match.group(1) == AZURE_MODEL_PLACEHOLDER:
+            return False
+        no_rival_matches: Final = rivals is not None and not _rival_may_take(listed_id, rivals)
+        return no_rival_matches or routes_to_model(listed_id, alias_match.group(1))
+
+    return routes_through
+
+
+def _reads_as_another_catalog_id(listed_id: str, catalog_id: str, name_scope: str, catalog: AbstractSet[str]) -> bool:
+    read_as: Final = listed_id.removeprefix(name_scope)
+    return read_as != catalog_id and read_as in catalog
+
+
+def _ids_routing_through_catch_all(
+    name_pattern: str, catalog_ids: Sequence[str], routes_through: Callable[[str], bool]
+) -> tuple[str, ...]:
+    if name_pattern.count("*") != 1:
+        return ()
+    name_scope: Final = "".join(name_pattern.partition("*")[0].rpartition("/")[:2])
+    catalog: Final = frozenset(catalog_ids)
+    named_ids: Final = ((name_pattern.replace("*", catalog_id), catalog_id) for catalog_id in catalog_ids)
+    listed_ids: Final = (
+        listed_id
+        for listed_id, catalog_id in named_ids
+        if not _reads_as_another_catalog_id(listed_id, catalog_id, name_scope, catalog) and routes_through(listed_id)
+    )
+    return tuple(dict.fromkeys(listed_ids))
+
+
+def _catch_all_catalog(litellm_params: LiteLLM_Params | None) -> Sequence[str]:
+    pinned_provider: Final = litellm_params.custom_llm_provider if litellm_params is not None else None
+    return get_provider_models(provider=pinned_provider or "*", litellm_params=litellm_params) or ()
+
+
 def _catalog_ids_a_wider_name_matches(
     name_pattern: str,
     deployment_pattern: str,
@@ -477,6 +543,71 @@ def _deployed_by_name(llm_router: Router | None) -> Callable[[str, str | None], 
     return lambda model, team_id: model in deployed_names or (team_id, model) in team_deployed_names
 
 
+def _literal_start(regex: str) -> str:
+    return regex.partition("(.*)")[0]
+
+
+def _prefixes_overlap(first: str, second: str) -> bool:
+    return first.startswith(second) or second.startswith(first)
+
+
+def _may_match_directly(own_regex: str, regex: str) -> bool:
+    return regex != own_regex and _prefixes_overlap(_literal_start(regex), _literal_start(own_regex))
+
+
+_UNINFERRED_PROVIDER: Final = str(None)
+
+
+def _may_name_a_provider(escaped_provider: str) -> bool:
+    provider: Final = re.sub(r"\\(.)", r"\1", escaped_provider)
+    return provider == _UNINFERRED_PROVIDER or inferred_provider(f"{provider}/{provider}") == provider
+
+
+def _may_match_under_a_provider(own_regex: str, regex: str) -> bool:
+    provider, has_provider, rest = _literal_start(regex).partition("/")
+    if not has_provider:
+        return True
+    return _prefixes_overlap(rest, _literal_start(own_regex)) and _may_name_a_provider(provider)
+
+
+def _can_take_ids_of(own_regex: str, regex: str) -> bool:
+    return _may_match_directly(own_regex, regex) and PatternUtils.calculate_pattern_specificity(
+        regex
+    ) >= PatternUtils.calculate_pattern_specificity(own_regex)
+
+
+def _compiled(regexes: Iterable[str]) -> tuple[re.Pattern[str], ...]:
+    return tuple(re.compile(regex) for regex in regexes)
+
+
+def _pattern_regexes(pattern_router: PatternMatchRouter | None) -> tuple[str, ...]:
+    if pattern_router is None:
+        return ()
+    return tuple(pattern_router.patterns)  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # untyped deployment lists
+
+
+def _rival_patterns(llm_router: Router | None, team_id: str | None) -> RivalPatterns:
+    if llm_router is None:
+        return lambda _name_pattern: None
+    registry: Final = llm_router.registry()
+    router_regexes: Final = _pattern_regexes(registry.patterns())
+    team_regexes: Final = _pattern_regexes(registry.patterns(team=True).get(team_id) if team_id is not None else None)
+
+    def rivals(name_pattern: str) -> _Rivals | None:
+        own_regex: Final = PatternMatchRouter().pattern_to_regex(name_pattern)
+        if own_regex in team_regexes:
+            return _Rivals(_compiled(regex for regex in team_regexes if _can_take_ids_of(own_regex, regex)), ())
+        if own_regex not in router_regexes:
+            return None
+        return _Rivals(
+            _compiled(regex for regex in router_regexes if _can_take_ids_of(own_regex, regex))
+            + _compiled(regex for regex in team_regexes if _may_match_directly(own_regex, regex)),
+            _compiled(regex for regex in team_regexes if _may_match_under_a_provider(own_regex, regex)),
+        )
+
+    return functools.cache(rivals)
+
+
 def _routes_to_model(
     routed_models: Callable[[str, str | None], frozenset[str]] | None, team_id: str | None
 ) -> Callable[[str, str], bool]:
@@ -495,10 +626,11 @@ def get_known_models_from_wildcard(
     wildcard_model: str,
     litellm_params: LiteLLM_Params | None = None,
     routes_to_model: Callable[[str, str], bool] = lambda _listed_id, _model: True,
+    rival_patterns: RivalPatterns = lambda _name_pattern: None,
 ) -> list[str]:
     provider_id_prefix: Final = _custom_llm_provider_prefix(wildcard_model, litellm_params)
     if litellm_params is None or provider_id_prefix is None:
-        return list(_known_models_from_wildcard(wildcard_model, litellm_params, routes_to_model))
+        return list(_known_models_from_wildcard(wildcard_model, litellm_params, routes_to_model, rival_patterns))
     return [
         listed_id.removeprefix(provider_id_prefix)
         for listed_id in _known_models_from_wildcard(
@@ -507,6 +639,7 @@ def get_known_models_from_wildcard(
             lambda listed_id, model: routes_to_model(
                 listed_id.removeprefix(provider_id_prefix), model.removeprefix(provider_id_prefix)
             ),
+            rival_patterns,
         )
     ]
 
@@ -532,6 +665,7 @@ def _known_models_from_wildcard(
     wildcard_model: str,
     litellm_params: LiteLLM_Params | None,
     routes_to_model: Callable[[str, str], bool],
+    rival_patterns: RivalPatterns,
 ) -> tuple[str, ...]:
     wildcard_model_to_expand: Final = (
         litellm_params.model
@@ -562,6 +696,16 @@ def _known_models_from_wildcard(
 
     litellm_params = _hydrate_litellm_credential_name(litellm_params)
 
+    routes_through_catch_all: Final = (
+        _routes_through_alias(wildcard_model, rival_patterns(wildcard_model), routes_to_model)
+        if litellm_params is not None and litellm_params.model == "*"
+        else None
+    )
+    if routes_through_catch_all is not None and not _names_whole_models(wildcard_model):
+        return _ids_routing_through_catch_all(
+            wildcard_model, _catch_all_catalog(litellm_params), routes_through_catch_all
+        )
+
     wildcard_models = get_provider_models(provider=provider, litellm_params=litellm_params)
 
     if wildcard_models is None:
@@ -588,9 +732,12 @@ def _known_models_from_wildcard(
             # add model prefix to wildcard models
             wildcard_models = [f"{model_prefix}{model.removeprefix(provider_id_prefix)}" for model in wildcard_models]
 
-    return tuple(
+    listed_ids: Final = tuple(
         dict.fromkeys(_under_wildcard_prefix(model, wildcard_provider_prefix, provider) for model in wildcard_models)
     )
+    if routes_through_catch_all is None:
+        return listed_ids
+    return tuple(listed_id for listed_id in listed_ids if routes_through_catch_all(listed_id))
 
 
 def _under_wildcard_prefix(model: str, wildcard_provider_prefix: str, listed_provider: str) -> str:
@@ -647,6 +794,7 @@ def expand_wildcard_deployments_for_model_info(
     """
     expanded: Final[list[dict[str, object]]] = []
     routed_models: Final = _cached_wildcard_routing(llm_router)
+    rival_patterns_of_team: Final = functools.cache(functools.partial(_rival_patterns, llm_router))
     deployed_by_name: Final = _deployed_by_name(llm_router)
     for deployment in deployments:
         model_name = str(deployment.get("model_name") or "")
@@ -668,6 +816,7 @@ def expand_wildcard_deployments_for_model_info(
             wildcard_model=model_name,
             litellm_params=litellm_params,
             routes_to_model=_routes_to_model(routed_models, _deployment_team_id(deployment)),
+            rival_patterns=rival_patterns_of_team(_deployment_team_id(deployment)),
         )
         if not expanded_names:
             expanded.append(deployment)
@@ -826,6 +975,7 @@ def _get_wildcard_models(
 ) -> list[str]:
     models_to_remove: Final = set()
     routes_to_model: Final = _routes_to_model(_cached_wildcard_routing(llm_router), team_id)
+    rival_patterns: Final = _rival_patterns(llm_router, team_id)
     all_wildcard_models: Final = []
     for model in unique_models:
         if _check_wildcard_routing(model=model):
@@ -844,6 +994,7 @@ def _get_wildcard_models(
                             wildcard_model=model,
                             litellm_params=LiteLLM_Params(**router_model["litellm_params"]),
                             routes_to_model=routes_to_model,
+                            rival_patterns=rival_patterns,
                         )
                     )
             else:

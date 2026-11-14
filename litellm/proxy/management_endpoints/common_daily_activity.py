@@ -164,6 +164,9 @@ class DailySpendRecord(Protocol):
     def autorouter_savings_spend(self) -> float: ...
 
     @property
+    def guardrail_spend(self) -> float: ...
+
+    @property
     def api_requests(self) -> int: ...
 
     @property
@@ -250,6 +253,7 @@ def update_metrics(existing_metrics: SpendMetrics, record: DailySpendRecord) -> 
     existing_metrics.prompt_caching_savings_spend += record.prompt_caching_savings_spend or 0
     existing_metrics.gateway_injected_caching_savings_spend += record.gateway_injected_caching_savings_spend or 0
     existing_metrics.autorouter_savings_spend += record.autorouter_savings_spend or 0
+    existing_metrics.guardrail_spend += record.guardrail_spend or 0  # rebind-ok: callers rely on in-place accumulation
     existing_metrics.api_requests += record.api_requests or 0
     existing_metrics.successful_requests += record.successful_requests or 0
     existing_metrics.failed_requests += record.failed_requests or 0
@@ -736,6 +740,7 @@ def sum_spend_metrics(metrics: Sequence[SpendMetrics]) -> SpendMetrics:
         prompt_caching_savings_spend=sum(metric.prompt_caching_savings_spend for metric in metrics),
         gateway_injected_caching_savings_spend=sum(metric.gateway_injected_caching_savings_spend for metric in metrics),
         autorouter_savings_spend=sum(metric.autorouter_savings_spend for metric in metrics),
+        guardrail_spend=sum(metric.guardrail_spend for metric in metrics),
         total_tokens=sum(metric.total_tokens for metric in metrics),
         successful_requests=sum(metric.successful_requests for metric in metrics),
         failed_requests=sum(metric.failed_requests for metric in metrics),
@@ -766,6 +771,7 @@ def _record_to_spend_metrics(record: RollupMetricsRow) -> SpendMetrics:
         prompt_caching_savings_spend=record.prompt_caching_savings_spend or 0,
         gateway_injected_caching_savings_spend=record.gateway_injected_caching_savings_spend or 0,
         autorouter_savings_spend=record.autorouter_savings_spend or 0,
+        guardrail_spend=record.guardrail_spend or 0,
         api_requests=record.api_requests or 0,
         successful_requests=record.successful_requests or 0,
         failed_requests=record.failed_requests or 0,

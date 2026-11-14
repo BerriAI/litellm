@@ -10,7 +10,7 @@ from pydantic import JsonValue, TypeAdapter
 
 import litellm
 from litellm import ModelResponse, Router
-from litellm.rust_bridge.host.model_cost import publish
+from litellm.litellm_core_utils.model_cost_table import publish
 
 _OPUS_4_8: Final = "us.anthropic.claude-opus-4-8"
 _JSON_TOOL: Final = "json_tool_call"
