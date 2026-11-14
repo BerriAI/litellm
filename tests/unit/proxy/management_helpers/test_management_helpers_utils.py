@@ -19,6 +19,7 @@ from litellm.proxy._types import (
     Member,
     UserAPIKeyAuth,
 )
+from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy.management_helpers.utils import add_new_member, reject_budget_windows, validate_budget_windows_update
 from litellm.proxy.utils import PrismaClient
 
@@ -1566,7 +1567,7 @@ async def test_add_new_member_gives_a_new_user_the_default_budget_windows(new_me
     prisma_client.db.litellm_teammembership.upsert = AsyncMock(return_value=membership_row)
     prisma_client.get_data = AsyncMock(return_value=[])
     prisma_client.insert_data = AsyncMock(return_value=created_row)
-    before_call: Final = datetime.now(timezone.utc)
+    resets_before_call: Final = {duration: get_budget_reset_time(duration) for duration in ("1h", "30d")}
 
     await add_new_member(
         new_member=new_member,
@@ -1581,8 +1582,12 @@ async def test_add_new_member_gives_a_new_user_the_default_budget_windows(new_me
         *(call.kwargs["data"]["create"] for call in prisma_client.db.litellm_usertable.upsert.call_args_list),
         *(call.kwargs["data"] for call in prisma_client.insert_data.call_args_list),
     )
+    resets_after_call: Final = {duration: get_budget_reset_time(duration) for duration in ("1h", "30d")}
     assert len(written_rows) == 1
     windows: Final = json.loads(written_rows[0]["budget_limits"])
     assert [(window["budget_duration"], window["max_budget"]) for window in windows] == [("1h", 5.0), ("30d", 100.0)]
-    hourly_reset, monthly_reset = (datetime.fromisoformat(window["reset_at"]) for window in windows)
-    assert before_call < hourly_reset < monthly_reset
+    assert all(
+        datetime.fromisoformat(window["reset_at"])
+        in (resets_before_call[window["budget_duration"]], resets_after_call[window["budget_duration"]])
+        for window in windows
+    )

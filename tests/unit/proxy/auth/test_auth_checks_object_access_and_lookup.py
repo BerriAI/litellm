@@ -89,6 +89,7 @@ from litellm.proxy.auth.user_api_key_auth import check_api_key_for_custom_header
 from litellm.proxy.utils import ProxyLogging
 from litellm.proxy import proxy_server
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_bearer_token, encrypt_value_helper
+from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from prisma.errors import DataError
 from litellm.proxy.common_utils.user_api_key_cache import (
@@ -1091,6 +1092,7 @@ async def test_get_user_object_upsert_starts_each_default_window_with_its_own_re
     cache: Final = MagicMock()
     cache.async_get_cache = AsyncMock(return_value=None)
     cache.async_set_cache = AsyncMock()
+    resets_before_call: Final = {duration: get_budget_reset_time(duration) for duration in ("1h", "30d")}
 
     try:
         await get_user_object(
@@ -1103,11 +1105,14 @@ async def test_get_user_object_upsert_starts_each_default_window_with_its_own_re
     except Exception as e:
         print(e)
 
+    resets_after_call: Final = {duration: get_budget_reset_time(duration) for duration in ("1h", "30d")}
     windows: Final = json.loads(prisma_client.db.litellm_usertable.create.call_args[1]["data"]["budget_limits"])
-    resets: Final = {window["budget_duration"]: datetime.fromisoformat(window["reset_at"]) for window in windows}
-    now: Final = datetime.now(timezone.utc)
-    assert now < resets["1h"] <= now + timedelta(hours=1)
-    assert now + timedelta(days=1) < resets["30d"]
+    assert [window["budget_duration"] for window in windows] == ["1h", "30d"]
+    assert all(
+        datetime.fromisoformat(window["reset_at"])
+        in (resets_before_call[window["budget_duration"]], resets_after_call[window["budget_duration"]])
+        for window in windows
+    )
 
 def _user_read_raising(error: Exception) -> tuple[MagicMock, MagicMock]:
     prisma_client = MagicMock()
