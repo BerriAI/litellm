@@ -15,6 +15,7 @@ from openai.types.responses.response_function_web_search import (
     ActionSearchSource,
     ResponseFunctionWebSearch,
 )
+from openai.types.responses.tool_param import FunctionToolParam
 from pydantic import TypeAdapter, ValidationError
 
 import litellm
@@ -1979,6 +1980,34 @@ def _stateless_tool_search_input(
 
 class TestToolTransformation:
     """Test cases for tool transformation from Responses API to Chat Completion format"""
+
+    @pytest.mark.parametrize("strict", [None, False, True])
+    def test_responses_function_tool_preserves_strict_presence(self, strict: bool | None) -> None:
+        tool: Final = cast(
+            FunctionToolParam,
+            {
+                "type": "function",
+                "name": "get_weather",
+                "description": "Look up the weather",
+                "parameters": {"type": "object", "properties": {"city": {"type": "string"}}},
+                **({"strict": strict} if strict is not None else {}),
+            },
+        )
+        chat_tools: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=[tool]
+        )[0]
+
+        assert chat_tools == [
+            {
+                "type": "function",
+                "function": {
+                    "name": tool["name"],
+                    "description": tool.get("description"),
+                    "parameters": tool["parameters"],
+                    **({"strict": strict} if strict is not None else {}),
+                },
+            }
+        ]
 
     def test_transform_vertex_ai_tools(self):
         """Test that Vertex AI tools are passed through as-is"""

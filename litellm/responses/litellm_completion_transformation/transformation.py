@@ -3084,7 +3084,7 @@ class LiteLLMCompletionResponsesConfig:
                     "name": typed_tool.get("name") or "",
                     "description": typed_tool.get("description") or "",
                     "parameters": parameters,
-                    "strict": typed_tool.get("strict", False) or False,
+                    **({"strict": typed_tool["strict"]} if "strict" in typed_tool else {}),
                 },
             }
             if tool.get("cache_control"):
