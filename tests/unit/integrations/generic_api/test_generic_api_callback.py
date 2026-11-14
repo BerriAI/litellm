@@ -821,3 +821,133 @@ async def test_v1_payload_of_a_chat_row_never_shows_the_committed_spend_auth_rea
     assert "team_id='t1'" in payload["metadata"]
     assert "0.123456" not in payload["metadata"]
     assert str(counter_keys.team) not in payload["metadata"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("log_format", ("json_array", "ndjson", "single"))
+async def test_shutdown_finishes_in_flight_batch_and_drains_remaining_logs(log_format: LOG_FORMAT_TYPES) -> None:
+    sink: Final = _InProcessLogSink(hold_first=True)
+    delivered: tuple[str, ...] = ()
+
+    async def respond(request: httpx.Request) -> httpx.Response:
+        nonlocal delivered
+        response: Final = await sink.respond(request)
+        delivered = (*delivered, *(event["id"] for event in _batch_events(request.content, log_format)))
+        return response
+
+    handler: Final = AsyncHTTPHandler(transport=httpx.MockTransport(respond))
+    logger: Final = GenericAPILogger(
+        endpoint="https://owned-logger.invalid",
+        async_httpx_client=handler,
+        log_format=log_format,
+        batch_size=1000,
+        flush_interval=0.001,
+    )
+    try:
+        await logger.async_log_success_event({"standard_logging_object": {"id": "first"}}, None, None, None)
+        await asyncio.wait_for(sink.arrived.wait(), timeout=5)
+        await logger.async_log_failure_event({"standard_logging_object": {"id": "queued"}}, None, None, None)
+        logger.shutdown()
+        sink.release.set()
+        await logger._flush_task
+        await logger._shutdown_task
+        await logger.async_log_success_event({"standard_logging_object": {"id": "late"}}, None, None, None)
+        assert delivered == ("first", "queued", "late")
+        assert logger.log_queue == []
+    finally:
+        sink.release.set()
+        logger.shutdown()
+        await logger._shutdown_task
+        await handler.close()
+
+
+@pytest.mark.asyncio
+async def test_header_rotation_replaces_registered_logger_and_forwards_late_callbacks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.litellm_core_utils.logging_callback_manager import LoggingCallbackManager
+
+    sink: Final = _InProcessLogSink()
+    handler: Final = AsyncHTTPHandler(transport=httpx.MockTransport(sink.respond))
+    monkeypatch.setattr(
+        "litellm.integrations.generic_api.generic_api_callback.get_async_httpx_client", lambda **kwargs: handler
+    )
+    monkeypatch.setattr(
+        litellm,
+        "callback_settings",
+        {
+            "rotation": {
+                "callback_type": "generic_api",
+                "endpoint": "https://owned-logger.invalid",
+                "headers": {"Authorization": "old"},
+            },
+        },
+    )
+    monkeypatch.setattr("litellm.litellm_core_utils.logging_callback_manager._generic_api_logger_cache", {})
+    for name in (
+        "callbacks",
+        "input_callback",
+        "_async_input_callback",
+        "success_callback",
+        "failure_callback",
+        "_async_success_callback",
+        "_async_failure_callback",
+        "service_callback",
+    ):
+        monkeypatch.setattr(litellm, name, [])
+    manager: Final = LoggingCallbackManager()
+    manager.add_litellm_success_callback("rotation")
+    old: Final = litellm.success_callback[0]
+    monkeypatch.setattr(
+        litellm,
+        "callback_settings",
+        {
+            "rotation": {
+                "callback_type": "generic_api",
+                "endpoint": "https://owned-logger.invalid",
+                "headers": {"Authorization": "new"},
+            },
+        },
+    )
+    manager.add_litellm_success_callback("rotation")
+    replacement: Final = litellm.success_callback[0]
+    try:
+        await old._shutdown_task
+        await old.async_log_success_event({"standard_logging_object": {"id": "late"}}, None, None, None)
+        await replacement.async_log_failure_event({"standard_logging_object": {"id": "new"}}, None, None, None)
+        await replacement.flush_queue()
+        assert len(litellm.success_callback) == 1
+        assert tuple(_received_log_ids(sink.requests, "json_array")) == ("late", "new")
+        assert all(request.headers["Authorization"] == "new" for request in sink.requests)
+    finally:
+        old.shutdown()
+        replacement.shutdown()
+        await old._shutdown_task
+        await replacement._shutdown_task
+        await handler.close()
+
+
+@pytest.mark.asyncio
+async def test_shutdown_deadline_stops_a_stalled_log_sink(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    sink: Final = _InProcessLogSink(hold_first=True)
+    handler: Final = AsyncHTTPHandler(transport=httpx.MockTransport(sink.respond))
+    logger: Final = GenericAPILogger(
+        endpoint="https://owned-logger.invalid", async_httpx_client=handler, flush_interval=0.001
+    )
+    try:
+        await logger.async_log_success_event({"standard_logging_object": {"id": "stalled"}}, None, None, None)
+        await asyncio.wait_for(sink.arrived.wait(), timeout=5)
+        monkeypatch.setattr("litellm.integrations.generic_api.generic_api_callback._SHUTDOWN_TIMEOUT_SECONDS", 0)
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            logger.shutdown()
+            logger.shutdown()
+            await logger._shutdown_task
+        assert "shutdown timed out" in caplog.text
+        assert logger._flush_task.cancelled()
+    finally:
+        sink.release.set()
+        logger.shutdown()
+        await logger._shutdown_task
+        await handler.close()
