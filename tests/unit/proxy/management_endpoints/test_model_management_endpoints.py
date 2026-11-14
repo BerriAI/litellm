@@ -11833,3 +11833,52 @@ def test_a_boolean_price_on_a_usd_model_keeps_the_legacy_coercion():
     )
 
     assert params["input_cost_per_token"] == 1.0
+
+
+def _huf_model_info_db_model() -> Deployment:
+    return Deployment(
+        model_name="huf-model-info",
+        litellm_params=LiteLLM_Params(model="openai/huf-model-info"),
+        model_info=ModelInfo(
+            id="huf-model-info",
+            pricing_currency="HUF",
+            usd_per_currency_unit="0.003",
+            input_cost_per_token=0.00072,
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    "patch",
+    [
+        {"model_info": {"usd_per_currency_unit": "0.0033"}},
+        {"litellm_params": {"pricing_currency": "HUF", "usd_per_currency_unit": "0.0033"}},
+    ],
+    ids=["edited-where-configured", "edited-from-the-ui-in-litellm_params"],
+)
+def test_a_rate_configured_in_model_info_can_be_edited_from_either_section(patch):
+    from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
+
+    params, info = _stored(
+        update_db_model(db_model=_huf_model_info_db_model(), updated_patch=updateDeployment.model_validate(patch))
+    )
+
+    rebuilt: Final = Deployment(model_name="huf-model-info", litellm_params=params, model_info=info)  # pyright: ignore[reportArgumentType]  # a stored row
+    assert rebuilt.model_info.input_cost_per_token == pytest.approx(0.00072 * 0.0033, rel=1e-15)
+
+
+def test_a_model_info_currency_can_be_switched_back_to_usd_in_model_info():
+    from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
+
+    params, info = _stored(
+        update_db_model(
+            db_model=_huf_model_info_db_model(),
+            updated_patch=updateDeployment.model_validate(
+                {"model_info": {"pricing_currency": "USD", "usd_per_currency_unit": None, "input_cost_per_token": 2e-6}}
+            ),
+        )
+    )
+
+    assert "usd_per_currency_unit" not in info and "usd_per_currency_unit" not in params
+    rebuilt: Final = Deployment(model_name="huf-model-info", litellm_params=params, model_info=info)  # pyright: ignore[reportArgumentType]  # a stored row
+    assert rebuilt.model_info.input_cost_per_token == 2e-6

@@ -313,7 +313,10 @@ export default function ModelInfoView({
       }
       Object.assign(
         updatedLitellmParams,
-        currencyPatch(storedCurrencySetting(localModelData?.litellm_params), formCurrencySetting(values)),
+        currencyPatch(
+          storedCurrencySetting(localModelData?.litellm_params, localModelData?.model_info),
+          formCurrencySetting(values),
+        ),
       );
 
       const storedCredentialName: string | null = localModelData?.litellm_params?.litellm_credential_name ?? null;

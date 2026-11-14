@@ -18,7 +18,7 @@ const perMillion = (rate: unknown): string | null =>
 
 function SourceCurrency({ model }: { model: PricingFields }) {
   const { t } = useTranslation();
-  const setting = storedCurrencySetting(model.litellm_params);
+  const setting = storedCurrencySetting(model.litellm_params, model.model_info);
   if (setting.currency === "USD") return null;
   const input = perMillion(model.litellm_params?.input_cost_per_token ?? model.model_info?.input_cost_per_token);
   const output = perMillion(model.litellm_params?.output_cost_per_token ?? model.model_info?.output_cost_per_token);

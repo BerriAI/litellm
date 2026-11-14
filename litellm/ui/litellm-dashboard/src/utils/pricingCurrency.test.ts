@@ -7,6 +7,7 @@ import {
   priceUnit,
   rateProblem,
   reinterpretedFields,
+  storedCurrencySetting,
   usdRate,
   withoutDerivedPricing,
   type CurrencySetting,
@@ -38,6 +39,18 @@ describe("priceUnit", () => {
     ["search_context_cost_per_query.search_context_size_low", "query"],
   ])("reads %s as priced %s", (field, unit) => {
     expect(priceUnit(field)).toBe(unit);
+  });
+});
+
+describe("storedCurrencySetting", () => {
+  it("reads a currency configured in model_info when litellm_params has none", () => {
+    expect(storedCurrencySetting({ model: "m" }, { pricing_currency: "HUF", usd_per_currency_unit: "0.003" })).toEqual({
+      currency: "HUF",
+      rate: "0.003",
+    });
+    expect(
+      storedCurrencySetting({ pricing_currency: "EUR", usd_per_currency_unit: "1.2" }, { pricing_currency: "HUF" }),
+    ).toEqual({ currency: "EUR", rate: "1.2" });
   });
 });
 

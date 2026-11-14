@@ -51,6 +51,7 @@ from litellm.litellm_core_utils.completion_timeout import CompletionTimeout
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, normalize_drop_params
 from litellm.litellm_core_utils.pricing_currency import (
     PricingCurrencyError,
+    boolean_price_error,
     needs_pricing_normalization,
     normalize_deployment_pricing,
 )
@@ -973,6 +974,14 @@ def _usd_priced(
         return litellm_params, model_info
     params: Final[Mapping[str, object]] = dict(litellm_params)
     info: Final[Mapping[str, object]] = dict(model_info)
+    sent_booleans: Final = model_info.boolean_prices | (
+        litellm_params.boolean_prices
+        if isinstance(litellm_params, GenericLiteLLMParams)
+        else boolean_price_fields(litellm_params)
+    )
+    boolean_error: Final = boolean_price_error(sent_booleans, params, info)
+    if boolean_error is not None:
+        raise ValueError(boolean_error)
     normalized: Final = normalize_deployment_pricing(params, info)
     if isinstance(normalized, PricingCurrencyError):
         raise ValueError(normalized.message)

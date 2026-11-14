@@ -595,3 +595,46 @@ async def test_a_direct_call_naming_a_non_usd_currency_is_refused() -> None:
             pricing_currency="EUR",
             usd_per_currency_unit=1.1,
         )
+
+
+@pytest.mark.parametrize(
+    ("litellm_params", "model_info"),
+    [
+        ({}, {"pricing_currency": "EUR", "usd_per_currency_unit": 1.1, "input_cost_per_token": True}),
+        ({"pricing_currency": "EUR", "usd_per_currency_unit": 1.1}, {"input_cost_per_token": True}),
+    ],
+    ids=["all-in-model-info", "price-in-model-info"],
+)
+def test_a_deployment_built_from_a_request_body_refuses_a_boolean_model_info_price(
+    litellm_params: dict[str, object], model_info: dict[str, object]
+) -> None:
+    with pytest.raises(ValueError, match="got a boolean for input_cost_per_token"):
+        Deployment(
+            model_name="g",
+            litellm_params={"model": "openai/currency-demo", **litellm_params},  # pyright: ignore[reportArgumentType]  # a request body
+            model_info=model_info,
+        )
+
+
+def test_currency_settings_read_back_in_the_section_that_set_them() -> None:
+    built: Final = Deployment(
+        model_name="g",
+        litellm_params={"model": "openai/currency-demo"},  # pyright: ignore[reportArgumentType]  # a config entry
+        model_info={
+            "id": "huf",
+            "pricing_currency": "HUF",
+            "usd_per_currency_unit": "0.003",
+            "input_cost_per_token": 0.00072,
+        },
+    )
+    params, info = source_currency_view(dict(built.litellm_params), dict(built.model_info))
+    assert "pricing_currency" not in params and "usd_per_currency_unit" not in params
+    assert (info["pricing_currency"], info["usd_per_currency_unit"], info["input_cost_per_token"]) == (
+        "HUF",
+        "0.003",
+        0.00072,
+    )
+    rebuilt: Final = Deployment(
+        model_name="g", litellm_params=params, model_info={k: v for k, v in info.items() if k != USD_PRICING}
+    )  # pyright: ignore[reportArgumentType]  # a saved read
+    assert rebuilt.model_info.input_cost_per_token == pytest.approx(2.16e-06, rel=1e-15)

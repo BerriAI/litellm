@@ -76,6 +76,7 @@ class PricingSource(BaseModel):
     revision: str
     litellm_params: Mapping[str, object]
     model_info: Mapping[str, object]
+    settings_section: Literal["litellm_params", "model_info"] = "litellm_params"
 
 
 @dataclass(frozen=True, slots=True)
@@ -407,6 +408,7 @@ def normalize_deployment_pricing(
         revision=pricing_revision(currency, rate, params_prices, info_prices),
         litellm_params=dict(params_prices),
         model_info=dict(info_prices),
+        settings_section="litellm_params" if configures_pricing_currency(litellm_params, {}) else "model_info",
     )
     return NormalizedPricing(
         litellm_params={**params_base, **params_usd},
@@ -431,8 +433,8 @@ def pricing_source_of(model_info: Mapping[str, object] | None) -> PricingSource 
 def source_currency_view(
     litellm_params: Mapping[str, object], model_info: Mapping[str, object]
 ) -> tuple[Mapping[str, object], Mapping[str, object]]:
-    """The deployment as the operator configured it: prices back in the source currency, the currency settings on
-    ``litellm_params``, mirrored fields showing the ``litellm_params`` price, and the USD rates under ``usd_pricing``.
+    """The deployment as the operator configured it: prices back in the source currency, the currency settings in the
+    section that set them, mirrored fields showing the ``litellm_params`` price, and the USD rates under ``usd_pricing``.
     Anything else, including a record that does not reproduce the current prices, comes back without a currency
     record. A client that saves this view back stores the original configuration, never the USD projection."""
     source: Final = _verified_source(litellm_params, model_info)
@@ -443,14 +445,11 @@ def source_currency_view(
         **{field: model_info.get(field) for field in source.model_info},
         **{field: litellm_params.get(field) for field in source.litellm_params},
     }
+    settings: Final = {PRICING_CURRENCY: source.currency.value, USD_PER_CURRENCY_UNIT: source.usd_per_currency_unit}
+    in_params: Final = source.settings_section == "litellm_params"
     return (
-        {
-            **litellm_params,
-            **source.litellm_params,
-            PRICING_CURRENCY: source.currency.value,
-            USD_PER_CURRENCY_UNIT: source.usd_per_currency_unit,
-        },
-        {**model_info, **source.model_info, **mirrored, USD_PRICING: usd},
+        {**litellm_params, **source.litellm_params, **(settings if in_params else {})},
+        {**model_info, **source.model_info, **mirrored, **({} if in_params else settings), USD_PRICING: usd},
     )
 
 

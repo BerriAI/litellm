@@ -1611,6 +1611,14 @@ def update_db_model(
         if is_server_derived_pricing_key(field):
             merged_model_info.pop(field, None)
 
+    for setting in CURRENCY_FIELDS:
+        if updated_patch.litellm_params and setting in updated_patch.litellm_params.model_fields_set:
+            merged_model_info.pop(setting, None)
+        if updated_patch.model_info and setting in updated_patch.model_info.model_fields_set:
+            merged_litellm_params.pop(setting, None)
+            if getattr(updated_patch.model_info, setting) is None:
+                merged_model_info.pop(setting, None)
+
     _validate_ptu_model_info(merged_model_info)
     sent_boolean_prices: Final = frozenset(
         {

@@ -58,9 +58,12 @@ export interface CurrencySetting {
   rate: string;
 }
 
-export const storedCurrencySetting = (litellmParams: Record<string, unknown> | null | undefined): CurrencySetting => {
-  const currency = litellmParams?.[PRICING_CURRENCY_FIELD];
-  const rate = litellmParams?.[USD_PER_CURRENCY_UNIT_FIELD];
+export const storedCurrencySetting = (
+  litellmParams: Record<string, unknown> | null | undefined,
+  modelInfo?: Record<string, unknown> | null,
+): CurrencySetting => {
+  const currency = litellmParams?.[PRICING_CURRENCY_FIELD] ?? modelInfo?.[PRICING_CURRENCY_FIELD];
+  const rate = litellmParams?.[USD_PER_CURRENCY_UNIT_FIELD] ?? modelInfo?.[USD_PER_CURRENCY_UNIT_FIELD];
   return {
     currency: isPricingCurrency(currency) ? currency : "USD",
     rate: rate == null ? "" : String(rate),

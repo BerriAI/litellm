@@ -256,8 +256,8 @@ export const toModelEditFormValues = (localModelData: any, isWildcardModel: bool
   max_retries: localModelData.litellm_params.max_retries,
   timeout: localModelData.litellm_params.timeout,
   stream_timeout: localModelData.litellm_params.stream_timeout,
-  pricing_currency: storedCurrencySetting(localModelData.litellm_params).currency,
-  usd_per_currency_unit: storedCurrencySetting(localModelData.litellm_params).rate,
+  pricing_currency: storedCurrencySetting(localModelData.litellm_params, localModelData.model_info).currency,
+  usd_per_currency_unit: storedCurrencySetting(localModelData.litellm_params, localModelData.model_info).rate,
   input_cost: perMillionTokens(
     localModelData.litellm_params.input_cost_per_token,
     localModelData.model_info?.input_cost_per_token,
@@ -304,7 +304,7 @@ export const toModelEditFormValues = (localModelData: any, isWildcardModel: bool
 const displayCost = (localModelData: any, field: TouchedPricingField, t: TFunction = i18n.t.bind(i18n)): string => {
   const key = COST_SOURCES[field];
   const rate = localModelData?.litellm_params?.[key] ?? localModelData?.model_info?.[key];
-  const { currency } = storedCurrencySetting(localModelData?.litellm_params);
+  const { currency } = storedCurrencySetting(localModelData?.litellm_params, localModelData?.model_info);
   const amount = rate != null ? (Number(rate) * 1_000_000).toFixed(4) : null;
   if (amount === null) return t("modelInfoEditForm.notSet");
   return currency === "USD" ? amount : `${currency} ${amount}`;
@@ -425,7 +425,7 @@ const ModelInfoEditForm: React.FC<ModelInfoEditFormProps> = ({
       await onSubmit(values, isFieldTouched);
     })(event);
 
-  const storedSetting = storedCurrencySetting(localModelData.litellm_params);
+  const storedSetting = storedCurrencySetting(localModelData.litellm_params, localModelData.model_info);
   const watchedValues = form.watch();
   const editedSetting = formCurrencySetting(watchedValues);
   const currencySuffix = editedSetting.currency === "USD" ? "" : ` (${editedSetting.currency})`;
