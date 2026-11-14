@@ -24,6 +24,16 @@ if current == false then
 end
 if ARGV[3] then
   local decoded, stored = pcall(cjson.decode, current)
+  if ARGV[4] then
+    local legacy = current
+    if decoded and type(stored) == 'string' then legacy = stored end
+    for _, eligible in ipairs(cjson.decode(ARGV[3])) do
+      if eligible['model_id'] == legacy then
+        redis.call('EXPIRE', KEYS[1], ARGV[2])
+        return current
+      end
+    end
+  end
   if decoded and type(stored) == 'table' then
     for _, eligible in ipairs(cjson.decode(ARGV[3])) do
       local matches = true
@@ -68,6 +78,7 @@ def claim_affinity_pin_in_memory(
     ttl_seconds: int,
     *,
     eligible_values: tuple[Mapping[str, str], ...] | None = None,
+    preserve_legacy_model_ids: bool = False,
 ) -> object:
     """No await between read and write, so same-loop claims agree during a Redis outage."""
     existing: Final[object] = cache.in_memory_cache.get_cache(cache_key)
@@ -75,7 +86,12 @@ def claim_affinity_pin_in_memory(
         if _legacy_pin_matches(existing, pin_value):
             set_local_affinity_pin(cache, cache_key, pin_value, ttl_seconds)
         return existing
-    winner: Final = existing if existing is not None and existing in (eligible_values or ()) else pin_value
+    eligible_existing: Final = existing in (eligible_values or ()) or (
+        preserve_legacy_model_ids
+        and isinstance(existing, str)
+        and any("model_id" in value and _legacy_pin_matches(existing, value) for value in (eligible_values or ()))
+    )
+    winner: Final = existing if existing is not None and eligible_existing else pin_value
     set_local_affinity_pin(cache, cache_key, winner, ttl_seconds)
     return winner
 
@@ -94,6 +110,7 @@ async def claim_affinity_pin(
     ttl_seconds: int,
     *,
     eligible_values: tuple[Mapping[str, str], ...] | None = None,
+    preserve_legacy_model_ids: bool = False,
 ) -> object:
     """Return the authoritative first writer, replacing it only when it becomes ineligible.
 
@@ -112,6 +129,7 @@ async def claim_affinity_pin(
                     if eligible_values is not None
                     else ()
                 ),
+                *(("1",) if preserve_legacy_model_ids and eligible_values is not None else ()),
             )
             raw: Final = cast(  # cast-ok: Redis scripts return heterogeneous values; only object is asserted here
                 object, await claim_script(keys=(cache_key,), args=args)
@@ -124,4 +142,11 @@ async def claim_affinity_pin(
             return winner
         except Exception as error:  # noqa: BLE001  # Redis/Lua faults retain same-pod affinity through local claims
             verbose_router_logger.debug("Affinity cache: Redis claim failed, using pod-local claim. error=%s", error)
-    return claim_affinity_pin_in_memory(cache, cache_key, pin_value, ttl_seconds, eligible_values=eligible_values)
+    return claim_affinity_pin_in_memory(
+        cache,
+        cache_key,
+        pin_value,
+        ttl_seconds,
+        eligible_values=eligible_values,
+        preserve_legacy_model_ids=preserve_legacy_model_ids,
+    )

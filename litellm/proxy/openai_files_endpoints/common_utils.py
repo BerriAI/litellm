@@ -19,13 +19,13 @@ from urllib.parse import unquote, urlparse
 
 from pydantic import TypeAdapter
 
-from litellm.batches.batch_utils import batch_cost_is_final
 from litellm.constants import MAX_FILE_LIST_LIMIT
 from litellm.proxy._types import ProxyException
 from litellm.repositories.managed_file_repository import ManagedFileRepository
 from litellm.repositories.table_repositories import (
     ManagedObjectRepository,
 )
+from litellm.router_utils.batch_utils import batch_cost_is_final
 from litellm.types.llms.openai import OpenAIFilesPurpose
 from litellm.types.utils import SpecialEnums
 

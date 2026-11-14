@@ -1,10 +1,12 @@
 import asyncio
 import copy
+import functools
+import itertools
 import json
 import logging
 import re
-from collections.abc import AsyncIterator, Callable
-from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
+from contextlib import AbstractAsyncContextManager, asynccontextmanager, contextmanager
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Final, cast
@@ -4252,7 +4254,7 @@ async def _update_database_with(
             end_user_id=None,
             team_id=None,
             org_id=None,
-            kwargs={"model": "gpt-5.6-luna", "call_type": "aretrieve_batch"},
+            kwargs={"model": "gpt-5.6-luna", "call_type": payload["call_type"]},
             completion_response=None,
             start_time=datetime.now(timezone.utc),
             end_time=datetime.now(timezone.utc),
@@ -4501,6 +4503,391 @@ async def test_update_database_queues_every_other_spend_row_for_the_next_flush(p
     prisma.db.litellm_spendlogs.create_many.assert_not_called()
     assert prisma.spend_log_transactions == [payload]
     assert db_writer._batch_database_updates.await_count == 1
+
+
+def _video_status_payload(request_id: str = "video_abc_video_cost") -> dict:
+    return {
+        **_minimal_spend_payload(),
+        "request_id": request_id,
+        "call_type": "avideo_status",
+        "status": "success",
+    }
+
+
+class _SpendLogsTable:
+    """LiteLLM_SpendLogs keyed by its request_id primary key, as the writer's three queries see it."""
+
+    def __init__(self) -> None:
+        self.rows: dict[str, dict] = {}
+
+    async def create_many(self, data: list[dict], skip_duplicates: bool) -> int:
+        fresh = {row["request_id"]: dict(row) for row in data if row["request_id"] not in self.rows}
+        self.rows.update(fresh)
+        return len(fresh)
+
+    async def find_unique(self, where: dict) -> SimpleNamespace | None:
+        row = self.rows.get(where["request_id"])
+        return None if row is None else SimpleNamespace(**row)
+
+    async def update_many(self, data: dict, where: dict) -> int:
+        row = self.rows.get(where["request_id"])
+        if row is None or any(row.get(field) != value for field, value in where.items()):
+            return 0
+        row.update(data)
+        return 1
+
+
+def _spend_logs_table_prisma() -> MagicMock:
+    prisma = _tool_usage_prisma()
+    prisma.jsonify_object = lambda data: dict(data)
+    prisma.db.litellm_spendlogs = _SpendLogsTable()
+    return prisma
+
+
+async def _flush_queued_spend_logs(prisma: MagicMock) -> None:
+    await prisma.db.litellm_spendlogs.create_many(data=prisma.spend_log_transactions, skip_duplicates=True)
+    prisma.spend_log_transactions.clear()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "flushes_before_completion",
+    [0, 1],
+    ids=["rendering_poll_still_queued", "rendering_poll_already_written"],
+)
+async def test_update_database_charges_a_video_once_from_the_poll_that_sees_it_completed(
+    flushes_before_completion: int,
+):
+    """
+    A custom video provider reports the video's cost on the status poll that sees it completed,
+    and clients poll a finished video again before they download it, so only that first completed
+    poll may charge, and its spend row has to carry the charge (LIT-10404). The $0 poll written
+    while the video was still rendering keeps the bare video id, so it lands on the create row.
+    """
+    db_writer = DBSpendUpdateWriter()
+    db_writer._batch_database_updates = AsyncMock()
+    prisma = _spend_logs_table_prisma()
+
+    rendering = await _update_database_with(db_writer, prisma, _video_status_payload("video_abc"), response_cost=0.0)
+    for _ in range(flushes_before_completion):
+        await _flush_queued_spend_logs(prisma)
+    completed = await _update_database_with(db_writer, prisma, _video_status_payload(), response_cost=0.42)
+    repolled = await _update_database_with(db_writer, prisma, _video_status_payload(), response_cost=0.42)
+    await _flush_queued_spend_logs(prisma)
+
+    assert (rendering, completed, repolled) == (True, True, False)
+    assert db_writer._batch_database_updates.await_count == 2
+    rows = prisma.db.litellm_spendlogs.rows
+    assert {request_id: (row["call_type"], row["spend"]) for request_id, row in rows.items()} == {
+        "video_abc": ("avideo_status", 0.0),
+        "video_abc_video_cost": ("avideo_status", 0.42),
+    }
+
+
+def _indexed_guardrail_request_ids(prisma: MagicMock, index_table: str) -> tuple[str, ...]:
+    calls: Final = getattr(prisma.db, index_table).create_many.await_args_list
+    batches: Final = tuple(call.kwargs["data"] for call in calls)
+    return tuple(row["request_id"] for row in itertools.chain.from_iterable(batches))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("disable_spend_logs", [False, True], ids=["spend_logs_on", "spend_logs_off"])
+@pytest.mark.parametrize("left_uncharged", [False, True], ids=["claimed_row", "taken_over_row"])
+async def test_a_job_cost_row_counts_its_polls_guardrail_run_in_guardrail_usage_once(
+    disable_spend_logs: bool, left_uncharged: bool
+):
+    """The job's cost row is written by its claim, not the spend log queue whose flush counts guardrail runs, so a
+    finished video's guardrail run must still reach guardrail usage, once, and not when spend logs are off."""
+    from litellm.repositories.table_repositories import (
+        DailyGuardrailMetricsRepository,
+        SpendLogGuardrailIndexRepository,
+    )
+
+    db_writer = DBSpendUpdateWriter()
+    db_writer._batch_database_updates = AsyncMock()
+    prisma = _spend_logs_table_prisma()
+    getattr(prisma.db, SpendLogGuardrailIndexRepository.table_name).create_many = AsyncMock(return_value=1)
+    getattr(prisma.db, DailyGuardrailMetricsRepository.table_name).upsert = AsyncMock()
+    if left_uncharged:
+        prisma.db.litellm_spendlogs.rows["video_abc_video_cost"] = {**_video_status_payload(), "spend": 0.0}
+    guarded_poll: Final = {
+        **_video_status_payload(),
+        "metadata": json.dumps(
+            {"guardrail_information": [{"guardrail_name": "priced", "guardrail_status": "success"}]}
+        ),
+    }
+
+    charged = [
+        await _update_database_with(
+            db_writer, prisma, guarded_poll, disable_spend_logs=disable_spend_logs, response_cost=0.43
+        )
+        for _ in range(2)
+    ]
+
+    assert charged == [True, False]
+    assert _indexed_guardrail_request_ids(prisma, SpendLogGuardrailIndexRepository.table_name) == (
+        () if disable_spend_logs else ("video_abc_video_cost",)
+    )
+
+
+def _job_poll(
+    litellm_call_id: str,
+    response_cost: float,
+    status: str = "completed",
+    polled_video_id: str = "video_abc",
+    guardrail_cost: float = 0.0,
+    call_type: str = "avideo_status",
+) -> tuple[dict[str, object], object]:
+    """The logging kwargs a job poll reaches the spend writer with: litellm logs the provider's own cost as
+    response_cost and the guardrails' on top of it only in the standard logging payload."""
+    from litellm.types.utils import LiteLLMBatch
+    from litellm.types.videos.main import VideoObject
+
+    polled_job = (
+        VideoObject(id="video_abc", object="video", status=status)
+        if call_type == "avideo_status"
+        else LiteLLMBatch(
+            id="batch_abc",
+            completion_window="24h",
+            created_at=1,
+            endpoint="/v1/chat/completions",
+            input_file_id="f",
+            object="batch",
+            status=status,
+            output_file_id="file-out",
+        )
+    )
+    kwargs: Final[dict[str, object]] = {
+        "model": "sora-2",
+        "call_type": call_type,
+        "litellm_call_id": litellm_call_id,
+        "response_cost": response_cost - guardrail_cost,
+        "polled_video_status": status,
+        "litellm_params": {"metadata": {"user_api_key": "test-key"}, "video_id": polled_video_id},
+        **(
+            {
+                "standard_logging_object": {
+                    "response_cost": response_cost,
+                    "guardrail_information": [{"guardrail_name": "priced", "guardrail_cost": guardrail_cost}],
+                    "metadata": {},
+                    "hidden_params": {},
+                    "request_tags": [],
+                    "model_map_information": None,
+                }
+            }
+            if guardrail_cost
+            else {}
+        ),
+    }
+    return kwargs, polled_job
+
+
+def _spend_writer_call(db_writer: DBSpendUpdateWriter, polled_job: object) -> Callable[..., Awaitable[bool]]:
+    return functools.partial(
+        db_writer.update_database,
+        token="test-token",
+        user_id="test-user",
+        end_user_id=None,
+        team_id=None,
+        org_id=None,
+        completion_response=polled_job,
+        start_time=datetime.now(timezone.utc),
+        end_time=datetime.now(timezone.utc),
+    )
+
+
+@contextmanager
+def _proxy_globals(prisma: MagicMock) -> Iterator[None]:
+    with (
+        patch(  # test-quality-ok: update_database reads this proxy_server global at call time, no seam
+            "litellm.proxy.proxy_server.prisma_client", prisma
+        ),
+        patch(  # test-quality-ok: update_database reads this proxy_server global at call time, no seam
+            "litellm.proxy.proxy_server.litellm_proxy_budget_name", "test-budget"
+        ),
+    ):
+        yield
+
+
+async def _update_database_for_video_poll(
+    db_writer: DBSpendUpdateWriter,
+    prisma: MagicMock,
+    litellm_call_id: str,
+    response_cost: float,
+    status: str = "completed",
+    polled_video_id: str = "video_abc",
+    guardrail_cost: float = 0.0,
+    call_type: str = "avideo_status",
+) -> bool:
+    kwargs, polled_job = _job_poll(litellm_call_id, response_cost, status, polled_video_id, guardrail_cost, call_type)
+    with _proxy_globals(prisma):
+        charged = await _spend_writer_call(db_writer, polled_job)(kwargs=kwargs, response_cost=response_cost)
+        await asyncio.sleep(0)
+        return charged
+
+
+@pytest.mark.asyncio
+async def test_update_database_charges_the_completed_polls_cost_and_not_a_running_polls():
+    """A provider that also prices a running video must still have the completed poll's cost billed, once."""
+    db_writer = DBSpendUpdateWriter()
+    db_writer._batch_database_updates = AsyncMock()
+    prisma = _spend_logs_table_prisma()
+
+    running = await _update_database_for_video_poll(db_writer, prisma, "poll-1", 0.1, status="in_progress")
+    completed = await _update_database_for_video_poll(db_writer, prisma, "poll-2", 0.42)
+    repolled = await _update_database_for_video_poll(db_writer, prisma, "poll-3", 0.42)
+    await _flush_queued_spend_logs(prisma)
+
+    assert (running, completed, repolled) == (True, True, False)
+    assert prisma.db.litellm_spendlogs.rows["video_abc_video_cost"]["spend"] == 0.42
+
+
+@pytest.mark.asyncio
+async def test_a_poll_paying_only_its_guardrail_cannot_take_the_jobs_charge_whatever_call_id_the_client_sent():
+    """A client picks its own x-litellm-call-id, so a guardrail-only video poll naming the job's charge row, once or
+    twice, must still be charged each time and leave the finished job's charge to the poll that sees it done. An
+    unfinished batch retrieve never reaches the writer, and its row is named by the batch id the provider sent."""
+    call_type: Final = "avideo_status"
+    charge_row_id: Final = "video_abc_video_cost"
+    db_writer = DBSpendUpdateWriter()
+    db_writer._batch_database_updates = AsyncMock()
+    prisma = _spend_logs_table_prisma()
+
+    charged = [
+        await _update_database_for_video_poll(
+            db_writer, prisma, call_id, cost, status=status, guardrail_cost=0.01, call_type=call_type
+        )
+        for call_id, cost, status in (
+            (charge_row_id, 0.01, "in_progress"),
+            (charge_row_id, 0.01, "in_progress"),
+            ("poll-3", 0.43, "completed"),
+        )
+    ]
+    await _flush_queued_spend_logs(prisma)
+
+    assert charged == [True, True, True]
+    assert prisma.db.litellm_spendlogs.rows[charge_row_id]["spend"] == 0.43
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("call_type", "charge_row_id"),
+    [("avideo_status", "video_abc_video_cost"), ("aretrieve_batch", "batch_abc_batch_cost")],
+)
+async def test_a_finished_job_cheaper_than_its_polls_guardrail_is_still_charged_once(call_type, charge_row_id):
+    """A batch of a few cheap requests costs less than a priced guardrail on its retrieve, and the finished job's
+    cost must still settle under its charge row once instead of being billed again on every poll."""
+    db_writer = DBSpendUpdateWriter()
+    db_writer._batch_database_updates = AsyncMock()
+    prisma = _spend_logs_table_prisma()
+
+    charged = [
+        await _update_database_for_video_poll(
+            db_writer, prisma, call_id, 0.01002775, guardrail_cost=0.01, call_type=call_type
+        )
+        for call_id in ("poll-1", "poll-2")
+    ]
+    await _flush_queued_spend_logs(prisma)
+
+    assert charged == [True, False]
+    assert {request_id: row["spend"] for request_id, row in prisma.db.litellm_spendlogs.rows.items()} == {
+        charge_row_id: 0.01002775
+    }
+
+
+@pytest.mark.asyncio
+async def test_a_finished_batch_that_cost_nothing_itself_settles_its_retrieves_guardrail_once():
+    """A batch whose every request failed costs nothing itself, and its finished retrieves must still settle under
+    the batch's charge row once, as they always have, instead of each paying the retrieve's guardrail again."""
+    db_writer = DBSpendUpdateWriter()
+    db_writer._batch_database_updates = AsyncMock()
+    prisma = _spend_logs_table_prisma()
+
+    charged = [
+        await _update_database_for_video_poll(
+            db_writer, prisma, call_id, 0.01, status="failed", guardrail_cost=0.01, call_type="aretrieve_batch"
+        )
+        for call_id in ("poll-1", "poll-2", "poll-3")
+    ]
+    await _flush_queued_spend_logs(prisma)
+
+    assert charged == [True, False, False]
+    assert {request_id: row["spend"] for request_id, row in prisma.db.litellm_spendlogs.rows.items()} == {
+        "batch_abc_batch_cost": 0.01
+    }
+
+
+@pytest.mark.asyncio
+async def test_a_repeat_poll_of_a_finished_video_charges_its_guardrail_on_a_row_of_its_own():
+    from litellm.proxy.hooks.proxy_track_cost_callback import _charge_request_cost
+
+    db_writer = DBSpendUpdateWriter()
+    db_writer._batch_database_updates = AsyncMock()
+    prisma = _spend_logs_table_prisma()
+    await _update_database_for_video_poll(db_writer, prisma, "poll-1", 0.43, guardrail_cost=0.01)
+    kwargs, polled_job = _job_poll("poll-2", 0.43, guardrail_cost=0.01)
+
+    async def charge_spend(
+        *, kwargs: dict[str, object], response_cost: float, budget_reservation: dict[str, object] | None
+    ) -> bool:
+        return await _spend_writer_call(db_writer, polled_job)(kwargs=kwargs, response_cost=response_cost)
+
+    with _proxy_globals(prisma):
+        repeat_charge = await _charge_request_cost(charge_spend, kwargs, 0.43, None)
+        await asyncio.sleep(0)
+    await _flush_queued_spend_logs(prisma)
+
+    assert repeat_charge == 0.01
+    assert {request_id: row["spend"] for request_id, row in prisma.db.litellm_spendlogs.rows.items()} == {
+        "video_abc_video_cost": 0.43,
+        "poll-2_guardrail_cost": 0.01,
+    }
+
+
+@pytest.mark.asyncio
+async def test_update_database_charges_each_deployments_video_though_their_provider_ids_match():
+    """A custom provider's own ids can repeat across deployments, so the cost row keys off the id the client polled."""
+    db_writer = DBSpendUpdateWriter()
+    db_writer._batch_database_updates = AsyncMock()
+    prisma = _spend_logs_table_prisma()
+
+    charged = [
+        await _update_database_for_video_poll(db_writer, prisma, call_id, 0.42, polled_video_id=polled_id)
+        for call_id, polled_id in (("poll-1", "video_dep_a"), ("poll-2", "video_dep_b"), ("poll-3", "video_dep_a"))
+    ]
+
+    assert charged == [True, True, False]
+    assert {
+        request_id: row["spend"]
+        for request_id, row in prisma.db.litellm_spendlogs.rows.items()
+        if request_id.endswith("_video_cost")
+    } == {"video_dep_a_video_cost": 0.42, "video_dep_b_video_cost": 0.42}
+
+
+@pytest.mark.asyncio
+async def test_update_database_writes_no_row_of_its_own_for_a_video_poll_that_reports_no_cost():
+    """
+    Built-in video providers charge at create and report nothing on the status poll, so those
+    polls keep the ordinary queued write under the create row's id and still count as requests
+    in the daily rollups, leaving the video with its one create row.
+    """
+    db_writer = DBSpendUpdateWriter()
+    db_writer._batch_database_updates = AsyncMock()
+    prisma = _spend_logs_table_prisma()
+    await prisma.db.litellm_spendlogs.create_many(
+        data=[{**_minimal_spend_payload(), "request_id": "video_abc", "call_type": "avideo_generation", "spend": 0.3}],
+        skip_duplicates=True,
+    )
+
+    assert await _update_database_for_video_poll(db_writer, prisma, "poll-1", response_cost=0.0) is True
+    assert await _update_database_for_video_poll(db_writer, prisma, "poll-2", response_cost=0.0) is True
+    await _flush_queued_spend_logs(prisma)
+
+    assert db_writer._batch_database_updates.await_count == 2
+    rows = prisma.db.litellm_spendlogs.rows
+    assert {request_id: (row["call_type"], row["spend"]) for request_id, row in rows.items()} == {
+        "video_abc": ("avideo_generation", 0.3)
+    }
 
 
 @pytest.mark.asyncio

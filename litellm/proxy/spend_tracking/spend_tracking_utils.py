@@ -64,6 +64,12 @@ from litellm.proxy._types import (
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
 from litellm.proxy.utils import PrismaClient, hash_token, query_raw_within_statement_timeout
+from litellm.router_utils.batch_utils import (
+    BATCH_COST_REQUEST_ID_SUFFIX,
+    charged_poll_cost,
+    charged_video_id,
+    pays_only_its_guardrail,
+)
 from litellm.types.router import DeploymentTypedDict, LiteLLM_Params
 from litellm.types.utils import (
     BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN,
@@ -80,6 +86,7 @@ from litellm.types.utils import (
     StandardLoggingVectorStoreRequest,
     VectorStoreSearchResponse,
 )
+from litellm.types.videos.utils import VIDEO_COST_REQUEST_ID_SUFFIX
 from litellm.utils import get_end_user_id_for_cost_tracking
 
 if TYPE_CHECKING:
@@ -300,8 +307,8 @@ def _get_spend_logs_metadata(
     return clean_metadata
 
 
-BATCH_COST_REQUEST_ID_SUFFIX: Final = "_batch_cost"
 BACKGROUND_RESPONSE_COST_REQUEST_ID_SUFFIX: Final = "_background_cost"
+JOB_POLL_GUARDRAIL_COST_REQUEST_ID_SUFFIX: Final = "_guardrail_cost"
 
 
 def _cost_row_request_id_suffix(call_type: str, metadata: Mapping[str, object]) -> str:
@@ -329,6 +336,13 @@ def get_spend_logs_id(
     )
     if resolved_id is None:
         return None
+    response_cost: Final = charged_poll_cost(kwargs)
+    charged_video: Final = charged_video_id(call_type, kwargs, resolved_id, response_cost)
+    if charged_video is not None:
+        return f"{charged_video}{VIDEO_COST_REQUEST_ID_SUFFIX}"
+    call_id: Final = kwargs.get("litellm_call_id")
+    if pays_only_its_guardrail(call_type, kwargs, response_cost) and isinstance(call_id, str) and call_id:
+        return f"{call_id}{JOB_POLL_GUARDRAIL_COST_REQUEST_ID_SUFFIX}"
     return f"{resolved_id}{_cost_row_request_id_suffix(call_type, metadata)}"
 
 

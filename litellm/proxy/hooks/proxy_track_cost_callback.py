@@ -4,6 +4,7 @@ from collections.abc import Callable, Generator, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import datetime, timezone
+from functools import partial
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Protocol, TypeAlias, cast
 
@@ -11,7 +12,6 @@ from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.batches.batch_utils import batch_cost_is_final
 from litellm.constants import BACKGROUND_INTERACTION_COST_POLLING_ENABLED, BILLED_RETRY_ATTEMPT_METADATA_KEY
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import (
@@ -60,10 +60,10 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (  # noqa: F401  #
     should_store_prompts_and_responses_in_spend_logs,
 )
 from litellm.proxy.utils import BilledFailedAttempt, ProxyUpdateSpend
+from litellm.router_utils.batch_utils import defers_batch_cost, repeat_poll_cost
 from litellm.types.router import Deployment
 from litellm.types.utils import (
     CallTypes,
-    LiteLLMBatch,
     StandardLoggingPayload,
     StandardLoggingPayloadErrorInformation,
 )
@@ -86,6 +86,7 @@ class BatchAccountingOutcome:
 
 _BATCH_ACCOUNTING: Final[ContextVar[BatchAccountingOutcome | None]] = ContextVar("batch_accounting", default=None)
 _BATCH_CALLBACK_FIELDS: Final = TypeAdapter(dict[str, object])
+_OBJECT_MAPPING: Final = TypeAdapter(ObjectMapping)
 
 
 @contextmanager
@@ -297,7 +298,7 @@ class _ProxyDBLogger(CustomLogger):
     async def async_log_success_event(
         self, kwargs: ObjectMapping, response_obj: object, start_time: datetime, end_time: datetime
     ) -> None:
-        if self.spend_event_producer is None or not is_offloadable_success(response_obj):
+        if self.spend_event_producer is None or not is_offloadable_success(response_obj, kwargs.get("call_type")):
             await self._PROXY_track_cost_callback(kwargs, response_obj, start_time, end_time)
             return
         event: Final = build_spend_event(
@@ -532,16 +533,8 @@ class _ProxyDBLogger(CustomLogger):
             budget_reservation: Final = _get_budget_reservation_from_metadata(metadata=metadata)
             if accounting is not None and (budget_reservation is not None or litellm.apply_search_free_tier):
                 accounting.write_started = True
-            if (
-                isinstance(completion_response, LiteLLMBatch)
-                and kwargs.get("call_type") == CallTypes.aretrieve_batch.value
-                and not batch_cost_is_final(completion_response)
-            ):
-                verbose_proxy_logger.debug(
-                    "Cost tracking deferred for batch %s still in status %s",
-                    completion_response.id,
-                    completion_response.status,
-                )
+            if defers_batch_cost(kwargs, completion_response):
+                verbose_proxy_logger.debug("Cost tracking deferred for a batch whose cost is not final yet")
                 await _release_budget_reservation(budget_reservation=budget_reservation)
                 return
             user_id: Final = cast(str | None, metadata.get("user_api_key_user_id", None))
@@ -600,25 +593,28 @@ class _ProxyDBLogger(CustomLogger):
                     agent_id=metadata.get("billing_agent_id") or metadata.get("agent_id"),
                 ):
                     ## UPDATE DATABASE
-                    charged: Final = await _update_database_and_spend_counters(
-                        proxy_logging_obj=proxy_logging_obj,
-                        increment_spend_counters=increment_spend_counters,
-                        user_api_key=user_api_key,
-                        user_id=user_id,
-                        end_user_id=end_user_id,
-                        team_id=team_id,
-                        org_id=org_id,
+                    charged_cost: Final = await _charge_request_cost(
+                        partial(
+                            _update_database_and_spend_counters,
+                            proxy_logging_obj=proxy_logging_obj,
+                            increment_spend_counters=increment_spend_counters,
+                            user_api_key=user_api_key,
+                            user_id=user_id,
+                            end_user_id=end_user_id,
+                            team_id=team_id,
+                            org_id=org_id,
+                            completion_response=completion_response,
+                            start_time=start_time,
+                            end_time=end_time,
+                            request_tags=tags,
+                            model_access_groups=model_access_groups,
+                            project_id=project_id,
+                        ),
                         kwargs=kwargs,
-                        completion_response=completion_response,
-                        start_time=start_time,
-                        end_time=end_time,
                         response_cost=response_cost,
                         budget_reservation=budget_reservation,
-                        request_tags=tags,
-                        model_access_groups=model_access_groups,
-                        project_id=project_id,
                     )
-                    if not charged:
+                    if charged_cost is None:
                         return
 
                     # update cache (fire-and-forget for backward compat:
@@ -628,7 +624,7 @@ class _ProxyDBLogger(CustomLogger):
                             token=user_api_key,
                             user_id=user_id,
                             end_user_id=end_user_id,
-                            response_cost=response_cost,
+                            response_cost=charged_cost,
                             team_id=team_id,
                             parent_otel_span=parent_otel_span,
                             tags=tags,
@@ -639,7 +635,7 @@ class _ProxyDBLogger(CustomLogger):
                         token=user_api_key,
                         key_alias=key_alias,
                         end_user_id=end_user_id,
-                        response_cost=response_cost,
+                        response_cost=charged_cost,
                         max_budget=end_user_max_budget,
                     )
                 elif budget_reservation is not None:
@@ -909,6 +905,50 @@ def _get_request_tags_for_cost_tracking(
         return metadata_tags
 
     return None
+
+
+class _ChargeSpend(Protocol):
+    async def __call__(
+        self,
+        *,
+        kwargs: dict[str, object],  # mutable-ok: update_database takes the logging kwargs dict itself
+        response_cost: float,
+        budget_reservation: dict[str, object] | None,  # mutable-ok: reconcile stamps the shared reservation dict
+    ) -> bool: ...
+
+
+async def _charge_request_cost(
+    charge_spend: _ChargeSpend,
+    kwargs: dict[str, object],  # mutable-ok: the first charge passes the caller's logging kwargs dict on unchanged
+    response_cost: float,
+    budget_reservation: dict[str, object] | None,  # mutable-ok: reconcile stamps the shared reservation dict
+) -> float | None:
+    """What the request charged, since a poll of a job an earlier poll charged still pays for its own guardrails."""
+    if await charge_spend(kwargs=kwargs, response_cost=response_cost, budget_reservation=budget_reservation):
+        return response_cost
+    standard_logging_payload: Final = kwargs.get("standard_logging_object")
+    cost_after_job: Final = repeat_poll_cost(kwargs.get("call_type"), response_cost, standard_logging_payload)
+    if cost_after_job <= 0:
+        return None
+    charged: Final = await charge_spend(
+        kwargs={
+            **kwargs,
+            "response_cost": cost_after_job,
+            **(
+                {
+                    "standard_logging_object": {
+                        **_OBJECT_MAPPING.validate_python(standard_logging_payload),
+                        "response_cost": cost_after_job,
+                    }
+                }
+                if isinstance(standard_logging_payload, Mapping)
+                else {}
+            ),
+        },
+        response_cost=cost_after_job,
+        budget_reservation=None,
+    )
+    return cost_after_job if charged else None
 
 
 class _IncrementSpendCounters(Protocol):

@@ -1,18 +1,366 @@
 import asyncio
 import json
 from typing import Final
+from collections.abc import AsyncIterator, Mapping
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fakeredis import FakeRedis, FakeServer
+from fakeredis.aioredis import FakeConnection
+from redis.asyncio import BlockingConnectionPool, Redis
 
 import litellm
 from litellm.caching.affinity_cache import claim_affinity_pin
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.caching.redis_cache import RedisCache
 from litellm.constants import SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY, SESSION_ID_GENERATED_METADATA_KEY
 from litellm.router_utils.pre_call_checks.deployment_affinity_check import (
     DeploymentAffinityCheck,
 )
+
+
+def _repinning_router(enabled: bool | None = True) -> litellm.Router:
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": "repin-group",
+                "litellm_params": {"model": "openai/test-model", "api_key": "fake-api-key"},
+                "model_info": {"id": deployment_id},
+            }
+            for deployment_id in ("original", "replacement", "other")
+        ]
+        + [
+            {
+                "model_name": "unrelated-group",
+                "litellm_params": {"model": "openai/test-model", "api_key": "fake-api-key"},
+                "model_info": {"id": "unrelated"},
+            }
+        ],
+        optional_pre_call_checks=["session_affinity", "deployment_affinity"],
+        **({"session_affinity_repin_on_failover": enabled} if enabled is not None else {}),
+    )
+
+
+def _repin_params(deployment_id: str, caller: str = "caller-1") -> dict[str, object]:
+    return {
+        "model_info": {"id": deployment_id},
+        "metadata": {
+            "model_group": "repin-group",
+            "deployment_model_name": "repin-group",
+            "session_id": "repin-session",
+            "user_api_key_hash": caller,
+        },
+    }
+
+
+def _repin_key(caller: str = "caller-1") -> str:
+    return DeploymentAffinityCheck.get_session_affinity_cache_key("repin-group", "repin-session", caller)
+
+
+def _cool_down_original(router: litellm.Router) -> None:
+    router.cooldown_cache.add_deployment_to_cooldown(
+        model_id="original", original_exception=RuntimeError("test outage"), exception_status=503, cooldown_time=3600
+    )
+
+
+async def _record_replacement_success(
+    router: litellm.Router, deployment_id: str = "replacement", response: object = None
+) -> None:
+    timestamp: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    await router.deployment_callback_on_success(
+        {"litellm_params": _repin_params(deployment_id), "standard_logging_object": {"total_tokens": 0}},
+        {"choices": [{"message": {"content": "ok"}}]} if response is None else response,
+        timestamp,
+        timestamp,
+    )
+
+
+@pytest.mark.parametrize("enabled", [None, False, True], ids=["default", "disabled", "enabled"])
+@pytest.mark.parametrize("unavailable", ["cooldown", "removed", "temporary-filter"])
+async def test_session_repin_requires_opt_in_unavailable_original_and_success(
+    enabled: bool | None, unavailable: str
+) -> None:
+    router: Final = _repinning_router(enabled)
+    try:
+        await router.cache.async_set_cache(_repin_key(), {"model_id": "original"})
+        await router.cache.async_set_cache(_repin_key("caller-2"), {"model_id": "original"})
+        user_key: Final = DeploymentAffinityCheck.get_affinity_cache_key("repin-group", "caller-1")
+        await router.cache.async_set_cache(user_key, {"model_id": "original"})
+        if unavailable == "cooldown":
+            _cool_down_original(router)
+        elif unavailable == "removed":
+            router.delete_deployment("original")
+        callback: Final = next(cb for cb in router.optional_callbacks or () if isinstance(cb, DeploymentAffinityCheck))
+        await callback.async_pre_call_deployment_hook(_repin_params("replacement"), None)
+        assert await router.cache.async_get_cache(_repin_key()) == {"model_id": "original"}
+        await _record_replacement_success(router)
+        expected: Final = "replacement" if enabled and unavailable != "temporary-filter" else "original"
+        assert await router.cache.async_get_cache(_repin_key()) == {"model_id": expected}
+        assert await router.cache.async_get_cache(_repin_key("caller-2")) == {"model_id": "original"}
+        assert await router.cache.async_get_cache(user_key) == {"model_id": "original"}
+        router.cooldown_cache.cooldown_store.flush_cache()
+        await _record_replacement_success(router, "other")
+        assert await router.cache.async_get_cache(_repin_key()) == {"model_id": expected}
+    finally:
+        router.discard()
+
+
+@pytest.mark.parametrize("status", ["failed", "incomplete", "in_progress", "cancelled"])
+@pytest.mark.parametrize("wrapped", [False, True])
+async def test_unsuccessful_responses_do_not_repin(status: str, wrapped: bool) -> None:
+    router: Final = _repinning_router()
+    try:
+        await router.cache.async_set_cache(_repin_key(), {"model_id": "original"})
+        _cool_down_original(router)
+        response: Final[Mapping[str, object]] = {"status": status}
+        await _record_replacement_success(router, response={"response": response} if wrapped else response)
+        assert await router.cache.async_get_cache(_repin_key()) == {"model_id": "original"}
+    finally:
+        router.discard()
+
+
+async def test_concurrent_successful_replacements_keep_first_winner() -> None:
+    router: Final = _repinning_router()
+    try:
+        await router.cache.async_set_cache(_repin_key(), {"model_id": "original"})
+        _cool_down_original(router)
+        await asyncio.gather(_record_replacement_success(router), _record_replacement_success(router, "other"))
+        winner: Final = await router.cache.async_get_cache(_repin_key())
+        assert winner in ({"model_id": "replacement"}, {"model_id": "other"})
+        router.cooldown_cache.cooldown_store.flush_cache()
+        await _record_replacement_success(router, "original")
+        assert await router.cache.async_get_cache(_repin_key()) == winner
+    finally:
+        router.discard()
+
+
+async def test_healthy_legacy_string_pin_is_preserved_with_repinning_enabled() -> None:
+    router: Final = _repinning_router()
+    try:
+        await router.cache.async_set_cache(_repin_key(), "original")
+        await _record_replacement_success(router)
+        assert await router.cache.async_get_cache(_repin_key()) == "original"
+    finally:
+        router.discard()
+
+
+@pytest.mark.parametrize("route_bucket", ["metadata", "litellm_metadata"])
+async def test_repin_session_after_success_reads_split_metadata(route_bucket: str) -> None:
+    router: Final = _repinning_router()
+    try:
+        await router.cache.async_set_cache(_repin_key(), {"model_id": "original"})
+        _cool_down_original(router)
+        session_bucket: Final = "litellm_metadata" if route_bucket == "metadata" else "metadata"
+        await router._repin_session_after_success(
+            {
+                "model_info": {"id": "replacement"},
+                route_bucket: {"deployment_model_name": "repin-group"},
+                session_bucket: {"session_id": "repin-session", "user_api_key_hash": "caller-1"},
+            },
+            {"status": "completed"},
+        )
+        assert await router.cache.async_get_cache(_repin_key()) == {"model_id": "replacement"}
+    finally:
+        router.discard()
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+async def test_session_selection_observes_another_workers_repin_only_when_enabled(enabled: bool) -> None:
+    server: Final = FakeServer()
+    sync_client: Final = FakeRedis(server=server)
+    pool: Final = BlockingConnectionPool(connection_class=FakeConnection, server=server)
+    router: Final = _repinning_router(enabled)
+    try:
+        with (
+            patch("redis.Redis.from_url", return_value=sync_client),
+            patch("redis.asyncio.BlockingConnectionPool.from_url", return_value=pool),
+        ):
+            redis: Final = RedisCache(url=f"redis://repin-cache.example:6379/{int(enabled)}")
+            router.cache.attach_redis_cache(redis)
+            other_worker: Final = DualCache(redis_cache=redis)
+            router.cache.in_memory_cache.set_cache(_repin_key(), {"model_id": "original"}, ttl=3600)
+            await other_worker.async_set_cache(_repin_key(), {"model_id": "replacement"}, ttl=3600)
+            callback: Final = next(
+                cb for cb in router.optional_callbacks or () if isinstance(cb, DeploymentAffinityCheck)
+            )
+            selected: Final = await callback.async_filter_deployments(
+                model="repin-group",
+                healthy_deployments=router.get_model_list(model_name="repin-group") or [],
+                messages=None,
+                request_kwargs=_repin_params("replacement"),
+            )
+            assert [deployment["model_info"]["id"] for deployment in selected] == [
+                "replacement" if enabled else "original"
+            ]
+    finally:
+        router.discard()
+        await pool.aclose()
+        sync_client.close()
+
+
+@pytest.fixture
+async def shared_session_router() -> AsyncIterator[tuple[litellm.Router, FakeServer, RedisCache]]:
+    server: Final = FakeServer()
+    sync_client: Final = FakeRedis(server=server)
+    pool: Final = BlockingConnectionPool(connection_class=FakeConnection, server=server)
+    router: Final = _repinning_router()
+    try:
+        with (
+            patch("redis.Redis.from_url", return_value=sync_client),
+            patch("redis.asyncio.BlockingConnectionPool.from_url", return_value=pool),
+        ):
+            redis: Final = RedisCache(url="redis://session-outage.example:6379/0")
+            router.cache.attach_redis_cache(redis)
+            yield router, server, redis
+    finally:
+        router.discard()
+        await pool.aclose()
+        sync_client.close()
+
+
+async def _selected_session_ids(router: litellm.Router) -> tuple[str, ...]:
+    callback: Final = next(cb for cb in router.optional_callbacks or () if isinstance(cb, DeploymentAffinityCheck))
+    selected: Final = await callback.async_filter_deployments(
+        model="repin-group",
+        healthy_deployments=router.get_model_list(model_name="repin-group") or [],
+        messages=None,
+        request_kwargs=_repin_params("replacement"),
+    )
+    return tuple(deployment["model_info"]["id"] for deployment in selected)
+
+
+@pytest.mark.parametrize("has_pin", [False, True])
+async def test_redis_read_failures_and_open_breaker_preserve_session_routing(
+    shared_session_router: tuple[litellm.Router, FakeServer, RedisCache], has_pin: bool
+) -> None:
+    router, server, redis = shared_session_router
+    if has_pin:
+        await redis.async_set_cache(_repin_key(), {"model_id": "replacement"}, ttl=3600)
+        router.cache.in_memory_cache.set_cache(_repin_key(), {"model_id": "original"}, ttl=3600)
+        assert await _selected_session_ids(router) == ("replacement",)
+    server.connected = False
+    with patch("time.time", return_value=1790000000.0):
+        for _ in range(redis._circuit_breaker.failure_threshold + 1):
+            assert set(await _selected_session_ids(router)) == (
+                {"replacement"} if has_pin else {"original", "replacement", "other"}
+            )
+        assert redis._circuit_breaker.is_open()
+
+
+async def test_confirmed_redis_miss_does_not_revive_a_local_pin_during_outage(
+    shared_session_router: tuple[litellm.Router, FakeServer, RedisCache],
+) -> None:
+    router, server, _ = shared_session_router
+    router.cache.in_memory_cache.set_cache(_repin_key(), {"model_id": "original"}, ttl=3600)
+    assert set(await _selected_session_ids(router)) == {"original", "replacement", "other"}
+    server.connected = False
+    assert set(await _selected_session_ids(router)) == {"original", "replacement", "other"}
+
+
+async def test_shared_session_pin_resumes_after_a_transient_redis_failure(
+    shared_session_router: tuple[litellm.Router, FakeServer, RedisCache],
+) -> None:
+    router, server, redis = shared_session_router
+    await redis.async_set_cache(_repin_key(), {"model_id": "replacement"}, ttl=3600)
+    router.cache.in_memory_cache.set_cache(_repin_key(), {"model_id": "original"}, ttl=3600)
+    server.connected = False
+    assert await _selected_session_ids(router) == ("original",)
+    server.connected = True
+    assert await _selected_session_ids(router) == ("replacement",)
+
+
+@pytest.mark.parametrize("shared_value", [None, {"model_id": "original"}])
+async def test_delayed_shared_pin_read_preserves_a_newer_local_write(
+    shared_session_router: tuple[litellm.Router, FakeServer, RedisCache], shared_value: Mapping[str, str] | None
+) -> None:
+    router, server, redis = shared_session_router
+    if shared_value is not None:
+        await redis.async_set_cache(_repin_key(), shared_value, ttl=3600)
+    observed: Final = asyncio.Event()
+    resume: Final = asyncio.Event()
+
+    class DelayedReader(Redis):
+        async def get(self, name: str) -> object:
+            value: Final = await super().get(name)
+            observed.set()
+            await resume.wait()
+            return value
+
+    reader: Final = DelayedReader(connection_pool=redis.init_async_client().connection_pool)
+    litellm.in_memory_llm_clients_cache.set_cache(key=redis._get_async_client_cache_key(), value=reader)
+    pending: Final = asyncio.create_task(_selected_session_ids(router))
+    try:
+        await observed.wait()
+        router.cache.in_memory_cache.set_cache(_repin_key(), {"model_id": "replacement"}, ttl=3600)
+    finally:
+        resume.set()
+        await pending
+    server.connected = False
+    assert await _selected_session_ids(router) == ("replacement",)
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        {"status": "failed", "response": {"status": "completed"}},
+        {"error": {"message": "test failure"}, "response": {"status": "completed"}},
+        {"response": {"response": {"status": "completed"}}},
+    ],
+)
+async def test_unsuccessful_or_nested_response_envelopes_never_repin(response: Mapping[str, object]) -> None:
+    router: Final = _repinning_router()
+    try:
+        await router.cache.async_set_cache(_repin_key(), {"model_id": "original"})
+        _cool_down_original(router)
+        await _record_replacement_success(router, response=response)
+        assert await router.cache.async_get_cache(_repin_key()) == {"model_id": "original"}
+    finally:
+        router.discard()
+
+
+class _ReadCountingCache(InMemoryCache):
+    def __init__(self) -> None:
+        super().__init__()
+        self.read_keys: tuple[str, ...] = ()
+
+    def get_cache(self, key: str, **kwargs: object) -> object:
+        self.read_keys += (key,)
+        return super().get_cache(key, **kwargs)
+
+
+@pytest.mark.parametrize("case", ["disabled", "no-session", "generated-session", "group-disabled", "active"])
+async def test_repin_cooldown_reads_are_limited_to_active_session_route(case: str) -> None:
+    router: Final = _repinning_router(case != "disabled")
+    reads: Final = _ReadCountingCache()
+    try:
+        router.cooldown_cache.cooldown_store.in_memory_cache = reads
+        callback: Final = next(cb for cb in router.optional_callbacks or () if isinstance(cb, DeploymentAffinityCheck))
+        if case == "group-disabled":
+            callback.model_group_affinity_config = {"repin-group": []}
+        await router._repin_session_after_success(
+            {
+                "model_info": {"id": "replacement"},
+                "metadata": {
+                    "deployment_model_name": "repin-group",
+                    **({"session_id": "repin-session"} if case != "no-session" else {}),
+                    SESSION_ID_GENERATED_METADATA_KEY: case == "generated-session",
+                },
+            },
+            {"status": "completed"},
+        )
+        expected: Final = (
+            {
+                router.cooldown_cache.get_cooldown_cache_key(model_id)
+                for model_id in ("original", "replacement", "other")
+            }
+            if case == "active"
+            else set()
+        )
+        assert set(reads.read_keys) == expected
+    finally:
+        router.discard()
 
 
 class MockResponse:

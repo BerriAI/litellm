@@ -2,6 +2,7 @@
 ## Helper utilities
 import copy
 import logging
+import math
 import re
 from collections.abc import Collection, Iterable, Iterator, Mapping, Sequence
 from types import MappingProxyType
@@ -59,6 +60,12 @@ def as_str_mapping(value: object) -> Mapping[str, object] | None:
 
 def as_object_list(value: object) -> Sequence[object] | None:
     return value if isinstance(value, list) else None
+
+
+def finite_cost(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, int | float) or not math.isfinite(value):
+        return None
+    return float(value)
 
 
 @runtime_checkable

@@ -17,7 +17,12 @@ from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSet
 from litellm.llms.bedrock.common_utils import get_bedrock_base_model
 from litellm.proxy._types import Litellm_EntityType, UserAPIKeyAuth
 from litellm.router_strategy.budget_limiter import RouterBudgetLimiting, budget_window_seconds
-from litellm.router_utils.batch_utils import batch_charged_once_marker_key, batch_id_to_charge_once
+from litellm.router_utils.batch_utils import (
+    ChargeOnceJob,
+    defers_batch_cost,
+    job_charged_once_marker_key,
+    job_to_charge_once,
+)
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import BudgetConfig, StandardLoggingPayload
 
@@ -676,18 +681,17 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             )
             return
 
-        batch_id: Final = batch_id_to_charge_once(
-            call_type=kwargs.get("call_type"),
-            response_obj=response_obj,
-            response_cost=response_cost,
-        )
+        if defers_batch_cost(kwargs, response_obj):
+            return
+
+        job: Final = job_to_charge_once(kwargs=kwargs, response_obj=response_obj, response_cost=response_cost)
         for entity_type, entity_id, resolved in resolved_budgets:
             await self._charge_entity(
                 entity_type=entity_type,
                 entity_id=entity_id,
                 resolved=resolved,
                 response_cost=response_cost,
-                batch_id=batch_id,
+                job=job,
             )
 
         if self.dual_cache.redis_cache is not None:
@@ -704,7 +708,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         entity_id: str | None,
         resolved: ResolvedModelBudget,
         response_cost: float,
-        batch_id: str | None,
+        job: ChargeOnceJob | None,
     ) -> None:
         budget_duration: Final = resolved.budget_config.budget_duration
         if budget_duration is None:
@@ -715,11 +719,19 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             budget_model=resolved.budget_model,
             budget_duration=budget_duration,
         )
-        if batch_id is not None and not await self._claim_batch_charge(
+        if job is not None and not await self._claim_job_charge(
             spend_key=spend_key,
-            batch_id=batch_id,
+            job=job,
             ttl_seconds=duration_in_seconds(budget_duration),
         ):
+            if job.repeat_poll_cost > 0:
+                await self._charge_entity(
+                    entity_type=entity_type,
+                    entity_id=entity_id,
+                    resolved=resolved,
+                    response_cost=job.repeat_poll_cost,
+                    job=None,
+                )
             return
         await self._increment_spend_for_key(
             budget_config=resolved.budget_config,
@@ -733,8 +745,8 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             response_cost=response_cost,
         )
 
-    async def _claim_batch_charge(self, spend_key: str, batch_id: str, ttl_seconds: int) -> bool:
-        marker_key: Final = batch_charged_once_marker_key(spend_key=spend_key, batch_id=batch_id)
+    async def _claim_job_charge(self, spend_key: str, job: ChargeOnceJob, ttl_seconds: int) -> bool:
+        marker_key: Final = job_charged_once_marker_key(spend_key=spend_key, job=job)
         polls: Final = await self.dual_cache.async_increment_cache(
             key=marker_key, value=1, ttl=ttl_seconds, refresh_ttl=True
         )

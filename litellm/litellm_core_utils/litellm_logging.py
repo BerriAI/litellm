@@ -33,7 +33,7 @@ from litellm._logging import (
     verbose_logger,
 )
 from litellm._uuid import uuid
-from litellm.batches.batch_utils import batch_cost_is_final, handle_completed_batch
+from litellm.batches.batch_utils import handle_completed_batch
 from litellm.caching.caching import DualCache
 from litellm.caching.caching_handler import LLMCachingHandler
 from litellm.caching.redis_batch import flush_post_call_redis_batches
@@ -125,6 +125,11 @@ from litellm.litellm_core_utils.thread_pool_executor import executor
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from litellm.llms.base_llm.search.transformation import SearchResponse
 from litellm.responses.utils import ResponseAPILoggingUtils
+from litellm.router_utils.batch_utils import (
+    POLLED_BATCH_COST_IS_FINAL_KWARG,
+    POLLED_BATCH_ID_KWARG,
+    batch_cost_is_final,
+)
 from litellm.types.agents import LiteLLMSendMessageResponse
 from litellm.types.containers.main import ContainerObject
 from litellm.types.decisions import DecisionsResponse, OpenAIDecisionResponse
@@ -186,6 +191,7 @@ from litellm.types.utils import (
     Usage,
 )
 from litellm.types.videos.main import VideoObject
+from litellm.types.videos.utils import POLLED_VIDEO_STATUS_KWARG
 from litellm.utils import get_base_model_from_metadata, print_verbose
 
 from ..integrations.argilla import ArgillaLogger
@@ -2718,6 +2724,11 @@ class Logging(LiteLLMLoggingBaseClass):
                 result = self._handle_non_streaming_google_genai_generate_content_response_logging(result=result)
             elif self.call_type == CallTypes.asend_message.value or self.call_type == CallTypes.send_message.value:
                 result = self._handle_a2a_response_logging(result=result)
+            if isinstance(result, VideoObject):
+                self.model_call_details[POLLED_VIDEO_STATUS_KWARG] = result.status
+            if isinstance(result, LiteLLMBatch):
+                self.model_call_details[POLLED_BATCH_ID_KWARG] = result.id
+                self.model_call_details[POLLED_BATCH_COST_IS_FINAL_KWARG] = batch_cost_is_final(result)
 
             logging_result: Final = self.normalize_logging_result(result=result)
 
