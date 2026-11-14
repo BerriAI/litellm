@@ -10,7 +10,7 @@ pub const LICENSE_SERVER: &str = "https://license.litellm.ai";
 
 /// Asks the license server, retrying a non-2xx reply right away up to three attempts in all. A transport failure is
 /// final
-pub async fn verify_remote(
+pub(crate) async fn verify_remote(
     client: &Client,
     server: &str,
     license: &str,

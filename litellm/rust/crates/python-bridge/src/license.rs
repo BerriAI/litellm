@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use litellm_error::Report;
 use litellm_http::{ClientVariant, HttpClientConfig};
-use litellm_license::{LICENSE_SERVER, PublicKey};
+use litellm_license::{LICENSE_SERVER, PublicKey, Verifier};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
@@ -12,9 +12,7 @@ use pyo3::prelude::*;
     module = "litellm.rust_bridge._native"
 )]
 pub(crate) struct LicenseVerifier {
-    public_key: PublicKey,
-    server: String,
-    timeout: Duration,
+    verifier: Verifier,
     http: HttpClientConfig,
 }
 
@@ -37,59 +35,30 @@ impl LicenseVerifier {
             PyValueError::new_err("timeout_seconds must be a non-negative number of seconds")
         })?;
         Ok(Self {
-            public_key,
-            server: license_server.unwrap_or_else(|| LICENSE_SERVER.to_owned()),
-            timeout,
+            verifier: Verifier::new(
+                public_key,
+                license_server.unwrap_or_else(|| LICENSE_SERVER.to_owned()),
+                timeout,
+            ),
             http: crate::http::settings_config(py, true)?,
         })
     }
 
-    /// A license the bundled key signed carries its claims. Any other license is enterprise only when the license
-    /// server vouches for it
+    /// Runs on a throwaway runtime like the cost map fetch, since the proxy checks its license at import, before it
+    /// may fork workers
     fn entitlements(&self, py: Python<'_>, license: Option<String>) -> PyResult<Entitlements> {
         let Some(license) = license else {
             return Ok(Entitlements(litellm_license::Entitlements::Community));
         };
-        let error = match self.public_key.verify_now(&license) {
-            Ok(signed) => {
-                return Ok(Entitlements(litellm_license::Entitlements::Signed(signed)));
-            }
-            Err(error) => error,
-        };
-        crate::logger::capture(py).scope(|| {
-            litellm_tracing::debug!("license not verified locally: {}", Report::new(&error));
-        });
-        Ok(Entitlements(if self.ask_server(py, license)? {
-            litellm_license::Entitlements::ServerVerified
-        } else {
-            litellm_license::Entitlements::Community
-        }))
-    }
-}
-
-impl LicenseVerifier {
-    /// Runs on a throwaway runtime like the cost map fetch, since the proxy checks its license at import, before it
-    /// may fork workers
-    fn ask_server(&self, py: Python<'_>, license: String) -> PyResult<bool> {
-        let (config, server, timeout) = (self.http.clone(), self.server.clone(), self.timeout);
         let logger = crate::logger::capture(py);
-        litellm_host_python::release_gil(py, move || {
+        let entitlements = litellm_host_python::release_gil(py, || {
             logger.scope(|| {
-                let client = crate::http::pool()
-                    .unpooled(&config, ClientVariant::Provider)
-                    .map_err(crate::http::client_error)?;
-                let verdict = litellm_host_python::run_isolated(litellm_license::verify_remote(
-                    &client, &server, &license, timeout,
-                ))?;
-                Ok(verdict.unwrap_or_else(|error| {
-                    litellm_tracing::error!(
-                        "license not verified by the license server: {}",
-                        Report::new(&error)
-                    );
-                    false
+                litellm_host_python::run_isolated(self.verifier.entitlements(&license, || {
+                    crate::http::pool().unpooled(&self.http, ClientVariant::Provider)
                 }))
             })
-        })
+        })?;
+        Ok(Entitlements(entitlements))
     }
 }
 

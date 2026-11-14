@@ -4309,6 +4309,7 @@ dependencies = [
  "strum",
  "thiserror 2.0.19",
  "tokio",
+ "tracing",
  "wiremock",
 ]
 

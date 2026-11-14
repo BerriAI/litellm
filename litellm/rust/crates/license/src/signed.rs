@@ -85,54 +85,40 @@ fn expiration_date(claims: &Claims) -> Result<Date, Error> {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::LazyLock;
-
     use base64::engine::general_purpose::STANDARD;
     use jiff::civil::date;
-    use rsa::RsaPrivateKey;
     use rstest::rstest;
     use serde_json::json;
 
     use super::*;
+    use crate::test_support::{OTHER_SIGNER, SIGNER, license, public_key, sign, sign_with};
 
-    const MAX_SALT_FOR_2048_BIT_KEY: usize = 222;
-
-    static SIGNER: LazyLock<RsaPrivateKey> = LazyLock::new(key);
-    static OTHER_SIGNER: LazyLock<RsaPrivateKey> = LazyLock::new(key);
-
-    fn key() -> RsaPrivateKey {
-        RsaPrivateKey::new(&mut rand::thread_rng(), 2048).unwrap()
-    }
-
-    fn public_key() -> PublicKey {
-        PublicKey(SIGNER.to_public_key())
-    }
+    /// Signed once by Python's `cryptography` with `PSS.MAX_LENGTH`, the way LiteLLM issues licenses, using a
+    /// throwaway key whose private half was discarded
+    const PYTHON_PUBLIC_KEY: &str = "-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAkBrrav0fhJV8PCexp13M\nhM/M5YbXUrl6VndP9U9C2nQ9TJC5sZy3f7OQ3H/oCkQXo5r86gk7zgShZtzJW+0E\n2/V4yvYSHdvRtBkbKuBZQT8tGT5bRNPYnD0Zbz8MfPtdZRhU5wg0XP2NqL4ip7kM\nALHpz+z6BuBkMLqFyK8ww++UJl37MmY6WiGLkO1mChe8jvrUOBJfokHrwvW7d0Iq\nMWFcZbBNFhu10X6n0OQGZ/0NCKr2PyroAC836xLd6Ti2lVBq1iXNTmla/u1qUrCK\nNDsxHpoNUYGDm4LP1COkdw3ulI8STDrelbzr/QLfML2ohKM6jKcO8iyanzTEGmqy\nmwIDAQAB\n-----END PUBLIC KEY-----\n";
+    const PYTHON_SIGNED_LICENSE: &str = "eyJleHBpcmF0aW9uX2RhdGUiOiAiMjk5OS0wMS0wMSIsICJ1c2VyX2lkIjogInB5dGhvbi1zaWduZWQiLCAiYWxsb3dlZF9mZWF0dXJlcyI6IFsiYXV0b19yb3V0ZXIiXSwgIm1heF91c2VycyI6IDcsICJtYXhfdGVhbXMiOiAzfS4RmJm6SLvfZv0m7UumByEW16ViJg6Zzktviaa8s82LdGtrsi1XQrj6k+dOFG99hoUF9kL1eR2x2w9pzycqkuo1BeoSeEut6cWp7Aq84n6r800n842GozRGONb873ivHXq2KvEEmkdKo9WGUzn/JNL1Pq3xugvccV2cufU0oFaDQO1ZBcbktMS/liSdDwOyQOnEeDBoR3zDV20ZBy+QnptTRwQBdz8MvyxrJFpSOgtdTJtQ5invj8CPl4qdJDwCrUKMIbVprPw0DWKql5CNUvgHPMBv7ckqvlD8VbJPFj9FOPo3pd+rg4i4mKqRT2nuguwzLUYydJCouTwU9cu5znUG";
 
     fn now() -> DateTime {
         date(2026, 11, 13).at(12, 0, 0, 0)
     }
 
-    fn sign_with(signer: &RsaPrivateKey, message: &[u8]) -> String {
-        let signature = signer
-            .sign_with_rng(
-                &mut rand::thread_rng(),
-                Pss::new_with_salt::<Sha256>(MAX_SALT_FOR_2048_BIT_KEY),
-                &Sha256::digest(message),
-            )
+    #[rstest]
+    fn verifies_a_license_python_cryptography_signed() {
+        let license = PublicKey::from_pem(PYTHON_PUBLIC_KEY)
+            .unwrap()
+            .verify(PYTHON_SIGNED_LICENSE, now())
             .unwrap();
-        STANDARD.encode([message, b".", &signature].concat())
-    }
 
-    fn sign(message: &[u8]) -> String {
-        sign_with(&SIGNER, message)
-    }
-
-    fn license(expiration_date: &str) -> String {
-        sign(
-            json!({"expiration_date": expiration_date, "max_users": 5})
-                .to_string()
-                .as_bytes(),
-        )
+        assert_eq!(
+            license,
+            License {
+                expiration_date: date(2999, 1, 1),
+                user_id: Some("python-signed".into()),
+                allowed_features: vec!["auto_router".into()],
+                max_users: Some(7),
+                max_teams: Some(3),
+            }
+        );
     }
 
     #[rstest]
