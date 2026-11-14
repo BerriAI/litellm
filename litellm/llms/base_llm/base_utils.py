@@ -3,17 +3,21 @@ Utility functions for base LLM classes.
 """
 
 import copy
+import functools
 import itertools
 import json
+import math
 import re
+import secrets
 from abc import ABC, abstractmethod
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any, Final, TypeAlias
 
+import httpx
 from openai.lib import _parsing, _pydantic  # pyright: ignore[reportPrivateUsage]  # SDK parser internals
-from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
+from pydantic import BaseModel, JsonValue, PositiveFloat, TypeAdapter, ValidationError
 from typing_extensions import TypeIs  # noqa: TID251  # narrows a message to its system member by the role literal
 
 from litellm._logging import verbose_logger
@@ -35,6 +39,27 @@ from litellm.types.utils import (
     TokenCountResponse,
 )
 
+_SECONDS: Final[TypeAdapter[float]] = TypeAdapter(PositiveFloat)
+
+
+def deployment_timeout(litellm_params: Mapping[str, object]) -> float | httpx.Timeout | None:
+    timeout: Final = litellm_params.get("timeout")
+    if timeout is None or isinstance(timeout, httpx.Timeout):
+        return timeout
+    try:
+        return _SECONDS.validate_python(timeout)
+    except ValidationError:
+        return None
+
+
+def deployment_litellm_params(deployment: Mapping[str, object] | None) -> Mapping[str, object]:
+    params: Final = None if deployment is None else as_str_mapping(deployment.get("litellm_params"))
+    return MappingProxyType({}) if params is None else params
+
+
+def optional_str(value: object) -> str | None:
+    return value if isinstance(value, str) else None
+
 
 class BaseTokenCounter(ABC):
     @abstractmethod
@@ -51,6 +76,7 @@ class BaseTokenCounter(ABC):
         output_format: JsonValue = None,
         context_management: CountContextManagement | None = None,
         chat_params: Mapping[str, JsonValue] = MappingProxyType({}),
+        count_options: Mapping[str, JsonValue] = MappingProxyType({}),
     ) -> TokenCountResponse | None:
         pass
 
@@ -166,13 +192,10 @@ def convert_tool_response_to_message(
             args: Final = _DECODED_JSON.validate_python(json.loads(json_mode_content_str))
             args_object: Final = as_str_mapping(args)
             if args_object is not None and (values := args_object.get("values")) is not None:
-                _message = Message(content=json.dumps(values))
-                return _message
-            else:
-                # a lot of the times the `values` key is not present in the tool response
-                # relevant issue: https://github.com/BerriAI/litellm/issues/6741
-                _message = Message(content=json.dumps(args))
-                return _message
+                return Message(content=json.dumps(values))
+            # a lot of the times the `values` key is not present in the tool response
+            # relevant issue: https://github.com/BerriAI/litellm/issues/6741
+            return Message(content=json.dumps(args))
     except json.JSONDecodeError:
         # json decode error does occur, return the original tool response str
         return Message(content=json_mode_content_str)
@@ -203,6 +226,60 @@ def as_json_object(value: object) -> Mapping[str, JsonValue] | None:
         return _JSON_OBJECT.validate_python(value)
     except ValidationError:
         return None
+
+
+@dataclass(frozen=True, slots=True)
+class SourceNumber:
+    text: str
+
+
+_JsonScalar: TypeAlias = str | bool | int | float | None
+AnswerValue: TypeAlias = SourceNumber | _JsonScalar | Sequence["AnswerValue"] | Mapping[str, "AnswerValue"]
+
+
+def as_answer_object(value: AnswerValue) -> Mapping[str, AnswerValue] | None:
+    return value if isinstance(value, Mapping) else None
+
+
+def _source_float(text: str) -> float | SourceNumber:
+    value: Final = float(text)
+    written_as_zero: Final = not any(digit in "123456789" for digit in text.lower().partition("e")[0])
+    return value if math.isfinite(value) and (value != 0 or written_as_zero) else SourceNumber(text)
+
+
+def _source_int(text: str) -> int | SourceNumber:
+    try:
+        return int(text)
+    except ValueError:
+        return SourceNumber(text)
+
+
+def _is_decoded_json_object(
+    decoded: object,
+) -> TypeIs[Mapping[str, AnswerValue]]:  # guard-ok: json.loads with the source-number hooks yields only answer values
+    return isinstance(decoded, dict)
+
+
+def decoded_answer_object(text: str) -> Mapping[str, AnswerValue] | None:
+    try:
+        decoded: Final = _DECODED_JSON.validate_python(
+            json.loads(text, parse_float=_source_float, parse_int=_source_int)
+        )
+    except (json.JSONDecodeError, RecursionError):
+        return None
+    return decoded if _is_decoded_json_object(decoded) else None
+
+
+def _marked_source_number(marker: str, number: SourceNumber) -> str:
+    return marker + number.text
+
+
+def answer_json_text(value: AnswerValue, *, ensure_ascii: bool) -> str:
+    marker: Final = secrets.token_hex(16)
+    encoded: Final = json.dumps(
+        value, ensure_ascii=ensure_ascii, default=functools.partial(_marked_source_number, marker)
+    )
+    return re.sub(f'"{marker}([^"]*)"', r"\1", encoded)
 
 
 def _names(value: object) -> frozenset[str]:
@@ -241,20 +318,15 @@ RESPONSE_FORMAT_ENVELOPE_NAME_KEYS: Final = frozenset({"name", "tool_name"})
 
 @dataclass(frozen=True, slots=True)
 class _EnvelopeLayer:
-    inner: Mapping[str, JsonValue]
+    inner: Mapping[str, AnswerValue]
     names_the_tool: bool
 
 
-def _json_object_or_encoded_object(value: JsonValue) -> Mapping[str, JsonValue] | None:
-    if not isinstance(value, str):
-        return as_json_object(value)
-    try:
-        return as_json_object(_DECODED_JSON.validate_python(json.loads(value)))
-    except (json.JSONDecodeError, RecursionError):
-        return None
+def _answer_object_or_encoded_object(value: AnswerValue) -> Mapping[str, AnswerValue] | None:
+    return decoded_answer_object(value) if isinstance(value, str) else as_answer_object(value)
 
 
-def _label_keys(payload_object: Mapping[str, JsonValue], schema: ResponseFormatSchema) -> frozenset[str]:
+def _label_keys(payload_object: Mapping[str, AnswerValue], schema: ResponseFormatSchema) -> frozenset[str]:
     if not schema.required_names:
         return frozenset()
     return frozenset(
@@ -263,7 +335,7 @@ def _label_keys(payload_object: Mapping[str, JsonValue], schema: ResponseFormatS
 
 
 def _envelope_layer(
-    payload_object: Mapping[str, JsonValue], schema: ResponseFormatSchema, tool_name: str
+    payload_object: Mapping[str, AnswerValue], schema: ResponseFormatSchema, tool_name: str
 ) -> _EnvelopeLayer | None:
     name_keys: Final = frozenset(
         key for key in RESPONSE_FORMAT_ENVELOPE_NAME_KEYS if payload_object.get(key) == tool_name
@@ -273,12 +345,12 @@ def _envelope_layer(
     if len(wrapper_keys) != 1 or wrapper_keys[0] in schema.declared_names:
         return None
     wrapped: Final = payload_object[wrapper_keys[0]]
-    inner: Final = _json_object_or_encoded_object(wrapped) if name_keys else as_json_object(wrapped)
+    inner: Final = _answer_object_or_encoded_object(wrapped) if name_keys else as_answer_object(wrapped)
     return None if inner is None else _EnvelopeLayer(inner=inner, names_the_tool=bool(name_keys))
 
 
 def _envelope_layers(
-    payload_object: Mapping[str, JsonValue], schema: ResponseFormatSchema, tool_name: str
+    payload_object: Mapping[str, AnswerValue], schema: ResponseFormatSchema, tool_name: str
 ) -> Iterator[_EnvelopeLayer]:
     layer = _envelope_layer(payload_object, schema, tool_name)  # rebind-ok: the recursion gate needs a loop
     while layer is not None:
@@ -287,8 +359,8 @@ def _envelope_layers(
 
 
 def _schema_object_inside_envelope(
-    payload_object: Mapping[str, JsonValue], schema: ResponseFormatSchema, tool_name: str
-) -> Mapping[str, JsonValue] | None:
+    payload_object: Mapping[str, AnswerValue], schema: ResponseFormatSchema, tool_name: str
+) -> Mapping[str, AnswerValue] | None:
     walk: Final = _envelope_layers(payload_object, schema, tool_name)
     layers: Final = tuple(walk if schema.declared_names else itertools.islice(walk, 1))
     schema_object: Final = next((layer.inner for layer in layers if _shares_a_schema_key(layer.inner, schema)), None)
@@ -297,14 +369,13 @@ def _schema_object_inside_envelope(
     return next((layer.inner for layer in layers if layer.names_the_tool), None)
 
 
-def _shares_a_schema_key(candidate: Mapping[str, JsonValue], schema: ResponseFormatSchema) -> bool:
+def _shares_a_schema_key(candidate: Mapping[str, AnswerValue], schema: ResponseFormatSchema) -> bool:
     return not schema.accepts_a_lone_undeclared_key and not schema.declared_names.isdisjoint(candidate)
 
 
-def response_format_envelope_contents(payload: object, schema: ResponseFormatSchema, tool_name: str) -> object | None:
-    payload_object: Final = as_json_object(payload)
-    if payload_object is None:
-        return None
+def response_format_envelope_contents(
+    payload_object: Mapping[str, AnswerValue], schema: ResponseFormatSchema, tool_name: str
+) -> AnswerValue:
     schema_object: Final = _schema_object_inside_envelope(payload_object, schema, tool_name)
     if schema_object is not None:
         return schema_object
@@ -314,29 +385,31 @@ def response_format_envelope_contents(payload: object, schema: ResponseFormatSch
 _LONE_SURROGATE: Final = re.compile("[\ud800-\udfff]")
 
 
-def response_format_answer_json(value: object) -> str:
-    text: Final = json.dumps(value, ensure_ascii=False)
-    return json.dumps(value) if _LONE_SURROGATE.search(text) else text
+def response_format_answer_json(value: AnswerValue) -> str:
+    text: Final = answer_json_text(value, ensure_ascii=False)
+    return answer_json_text(value, ensure_ascii=True) if _LONE_SURROGATE.search(text) else text
 
 
-def unwrap_response_format_envelope(payload: object, schema: ResponseFormatSchema, tool_name: str) -> object:
-    contents: Final = response_format_envelope_contents(payload, schema, tool_name)
-    return payload if contents is None else contents
+def unwrap_response_format_envelope(
+    payload_object: Mapping[str, AnswerValue], schema: ResponseFormatSchema, tool_name: str
+) -> AnswerValue:
+    contents: Final = response_format_envelope_contents(payload_object, schema, tool_name)
+    return payload_object if contents is None else contents
 
 
 def _field_names(
-    blocks: tuple[Mapping[str, JsonValue], ...], key: str, schema: ResponseFormatSchema
+    blocks: tuple[Mapping[str, AnswerValue], ...], key: str, schema: ResponseFormatSchema
 ) -> tuple[str, ...] | None:
     values: Final = (block[key] for block in blocks)
     names: Final = tuple(value for value in values if isinstance(value, str) and value in schema.declared_names)
     return names if len(frozenset(names)) == len(blocks) else None
 
 
-def _is_a_label_every_block_repeats(blocks: tuple[Mapping[str, JsonValue], ...], key: str) -> bool:
+def _is_a_label_every_block_repeats(blocks: tuple[Mapping[str, AnswerValue], ...], key: str) -> bool:
     return isinstance(blocks[0][key], str) and all(block[key] == blocks[0][key] for block in blocks)
 
 
-def _value_key(blocks: tuple[Mapping[str, JsonValue], ...], keys: frozenset[str]) -> str | None:
+def _value_key(blocks: tuple[Mapping[str, AnswerValue], ...], keys: frozenset[str]) -> str | None:
     if len(keys) == 1:
         return next(iter(keys))
     varying: Final = tuple(key for key in keys if not _is_a_label_every_block_repeats(blocks, key))
@@ -344,8 +417,8 @@ def _value_key(blocks: tuple[Mapping[str, JsonValue], ...], keys: frozenset[str]
 
 
 def _split_answer_fields(
-    blocks: tuple[Mapping[str, JsonValue], ...], schema: ResponseFormatSchema
-) -> Mapping[str, JsonValue] | None:
+    blocks: tuple[Mapping[str, AnswerValue], ...], schema: ResponseFormatSchema
+) -> Mapping[str, AnswerValue] | None:
     keys: Final = frozenset(blocks[0])
     if not keys.isdisjoint(schema.declared_names) or any(frozenset(block) != keys for block in blocks):
         return None
@@ -360,8 +433,8 @@ def _split_answer_fields(
 
 
 def _merged_partial_answers(
-    blocks: tuple[Mapping[str, JsonValue], ...], schema: ResponseFormatSchema
-) -> Mapping[str, JsonValue] | None:
+    blocks: tuple[Mapping[str, AnswerValue], ...], schema: ResponseFormatSchema
+) -> Mapping[str, AnswerValue] | None:
     keys: Final = frozenset(itertools.chain.from_iterable(blocks))
     if not keys <= schema.declared_names or len(keys) != sum(len(block) for block in blocks):
         return None
@@ -370,8 +443,8 @@ def _merged_partial_answers(
 
 def split_response_format_answer(
     encoded_blocks: Sequence[str], schema: ResponseFormatSchema
-) -> Mapping[str, JsonValue] | None:
-    decoded: Final = tuple(_json_object_or_encoded_object(encoded) for encoded in encoded_blocks)
+) -> Mapping[str, AnswerValue] | None:
+    decoded: Final = tuple(decoded_answer_object(encoded) for encoded in encoded_blocks)
     blocks: Final = tuple(block for block in decoded if block is not None)
     if len(blocks) < 2 or len(blocks) != len(decoded):
         return None
@@ -379,13 +452,15 @@ def split_response_format_answer(
     return named_fields if named_fields is not None else _merged_partial_answers(blocks, schema)
 
 
-def partial_response_format_answer(encoded_block: str, schema: ResponseFormatSchema) -> Mapping[str, JsonValue] | None:
-    block: Final = _json_object_or_encoded_object(encoded_block)
+def partial_response_format_answer(
+    encoded_block: str, schema: ResponseFormatSchema
+) -> Mapping[str, AnswerValue] | None:
+    block: Final = decoded_answer_object(encoded_block)
     return block if block is not None and frozenset(block) <= schema.declared_names else None
 
 
 def names_a_response_format_property(encoded_block: str, schema: ResponseFormatSchema) -> bool:
-    block: Final = _json_object_or_encoded_object(encoded_block)
+    block: Final = decoded_answer_object(encoded_block)
     if block is None:
         return False
     return any(isinstance(value, str) and value in schema.declared_names for value in block.values())
