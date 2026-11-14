@@ -1,6 +1,8 @@
-from typing import Any, Final
+from collections.abc import Mapping
+from typing import Final
 
 from httpx._types import RequestFiles
+from pydantic import TypeAdapter
 
 from litellm.images.utils import image_to_data_url
 from litellm.litellm_core_utils.url_utils import join_api_base
@@ -8,38 +10,39 @@ from litellm.llms.minimax.chat.transformation import MinimaxChatConfig
 from litellm.llms.openai.image_edit.transformation import OpenAIImageEditConfig
 from litellm.types.router import GenericLiteLLMParams
 
+_IMAGES: Final = TypeAdapter(tuple[object, ...])
+
 
 class MinimaxImageEditConfig(OpenAIImageEditConfig):
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:  # mutable-ok: mirrors override contract
         return [
             "n",
             "response_format",
             "size",
             "aspect_ratio",
             "area",
+            "output_format",
+            "output_compression",
         ]
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: Mapping[str, str],
         model: str,
         api_key: str | None = None,
-        litellm_params: dict | None = None,
+        litellm_params: Mapping[str, object] | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, str]:  # mutable-ok: mirrors override contract
         resolved_key: Final = MinimaxChatConfig.get_api_key(api_key=api_key)
         if not resolved_key:
-            raise ValueError(
-                "Missing MiniMax API Key - set MINIMAX_API_KEY or pass api_key"
-            )
-        headers["Authorization"] = f"Bearer {resolved_key}"
-        return headers
+            raise ValueError("Missing MiniMax API Key - set MINIMAX_API_KEY or pass api_key")
+        return {**headers, "Authorization": f"Bearer {resolved_key}"}
 
     def get_complete_url(
         self,
         model: str,
         api_base: str | None,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
     ) -> str:
         base_url: Final = MinimaxChatConfig.get_api_base(api_base=api_base).rstrip("/")
         if base_url.endswith("/images/edits"):
@@ -56,20 +59,14 @@ class MinimaxImageEditConfig(OpenAIImageEditConfig):
         model: str,
         prompt: str | None,
         image: object,
-        image_edit_optional_request_params: dict,
+        image_edit_optional_request_params: Mapping[str, object],
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> tuple[dict, RequestFiles]:
-        image_list = image if isinstance(image, list) else [image]
-        request: dict[str, Any] = {
+        headers: Mapping[str, str],
+    ) -> tuple[dict[str, object], RequestFiles]:  # mutable-ok: mirrors override contract
+        images: Final = _IMAGES.validate_python(image) if isinstance(image, list) else (image,)
+        return {
             "model": model,
-            "images": [
-                {"image_url": image_to_data_url(item)}
-                for item in image_list
-                if item is not None
-            ],
+            "images": [{"image_url": image_to_data_url(item)} for item in images if item is not None],
             **image_edit_optional_request_params,
-        }
-        if prompt is not None:
-            request["prompt"] = prompt
-        return request, []
+            **({} if prompt is None else {"prompt": prompt}),
+        }, []

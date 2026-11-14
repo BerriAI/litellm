@@ -1,3 +1,4 @@
+from collections.abc import Mapping, Sequence
 from typing import Final
 
 from litellm.litellm_core_utils.url_utils import join_api_base
@@ -14,40 +15,39 @@ from litellm.types.llms.openai import (
 class MinimaxImageGenerationConfig(GPTImageGenerationConfig):
     def get_supported_openai_params(
         self, model: str
-    ) -> list[OpenAIImageGenerationOptionalParams]:
+    ) -> list[OpenAIImageGenerationOptionalParams]:  # mutable-ok: mirrors override contract
         return [
             "n",
             "response_format",
             "size",
             "aspect_ratio",
             "area",
+            "output_format",
+            "output_compression",
         ]
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: Mapping[str, str],
         model: str,
-        messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        messages: Sequence[AllMessageValues],
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, str]:  # mutable-ok: mirrors override contract
         resolved_key: Final = MinimaxChatConfig.get_api_key(api_key=api_key)
         if not resolved_key:
-            raise ValueError(
-                "Missing MiniMax API Key - set MINIMAX_API_KEY or pass api_key"
-            )
-        headers["Authorization"] = f"Bearer {resolved_key}"
-        return headers
+            raise ValueError("Missing MiniMax API Key - set MINIMAX_API_KEY or pass api_key")
+        return {**headers, "Authorization": f"Bearer {resolved_key}"}
 
     def get_complete_url(
         self,
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         stream: bool | None = None,
     ) -> str:
         base_url: Final = MinimaxChatConfig.get_api_base(api_base=api_base).rstrip("/")
@@ -61,8 +61,8 @@ class MinimaxImageGenerationConfig(GPTImageGenerationConfig):
         self,
         model: str,
         prompt: str,
-        optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
-    ) -> dict:
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
+        headers: Mapping[str, str],
+    ) -> dict[str, object]:  # mutable-ok: mirrors override contract
         return {"model": model, "prompt": prompt, **optional_params}
