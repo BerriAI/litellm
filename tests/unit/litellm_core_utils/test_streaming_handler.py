@@ -1977,11 +1977,9 @@ def test_openrouter_post_finish_usage_trailer_keeps_a_choice_with_a_payload(
         stream_options=ChatCompletionStreamOptionsParam(include_usage=True),
     )
 
-    collected_chunks: Final = list(response)
+    streamed_choices: Final = tuple(chain.from_iterable(chunk.choices for chunk in response))
 
-    assert [read_payload(choice) for chunk in collected_chunks for choice in chunk.choices if read_payload(choice)] == [
-        expected_payload
-    ]
+    assert [read_payload(choice) for choice in streamed_choices if read_payload(choice)] == [expected_payload]
 
 
 @pytest.mark.asyncio
