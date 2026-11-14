@@ -16,6 +16,7 @@ from litellm.a2a_protocol.cost_calculator import A2ACostCalculator
 from litellm.a2a_protocol.utils import A2ARequestUtils
 from litellm.constants import A2A_COMPLETION_BRIDGE_WORKING_MESSAGE
 from litellm.litellm_core_utils.asyncify import asyncify
+from litellm.litellm_core_utils.background_logging_tasks import spawn_logging_task
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
@@ -172,14 +173,16 @@ class A2AStreamingIterator:
             result: Final = self._build_logging_result(usage)
 
             # Call success handlers - they will build standard_logging_object
-            asyncio.create_task(
+            spawn_logging_task(
+                asyncio.get_running_loop(),
                 self.logging_obj.dispatch_success_handlers(
                     result,
                     start_time=self.start_time,
                     end_time=end_time,
                     cache_hit=None,
                     prefer_async_handlers=True,
-                )
+                ),
+                task_name="A2A stream success logging",
             )
 
             verbose_logger.info(

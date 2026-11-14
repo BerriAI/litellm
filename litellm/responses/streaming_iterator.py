@@ -40,6 +40,11 @@ from litellm.constants import (
 )
 from litellm.exceptions import MidStreamFallbackError, RateLimitError, ServiceUnavailableError
 from litellm.litellm_core_utils.asyncify import run_async_function
+from litellm.litellm_core_utils.background_logging_tasks import (
+    drain_logging_tasks,  # noqa: F401  # pyright: ignore[reportUnusedImport]  # re-exported for existing importers
+    log_background_task_failure,
+    spawn_logging_task,
+)
 from litellm.litellm_core_utils.core_helpers import (
     UPSTREAM_USAGE_COST,
     process_response_headers,
@@ -204,17 +209,6 @@ def _model_id_from_metadata(litellm_metadata: Mapping[str, object] | None) -> st
     return model_id if isinstance(model_id, str) else None
 
 
-def _log_background_task_failure(task: asyncio.Task[object], *, task_name: str) -> None:
-    if task.cancelled():
-        return
-    exception: Final = task.exception()
-    if exception is not None:
-        verbose_logger.error("%s failed: %s", task_name, exception)
-
-
-_PENDING_LOGGING_TASKS: Final[set[asyncio.Task[object]]] = set()  # mutable-ok: strong refs to pending logging tasks
-
-
 def _running_loop() -> asyncio.AbstractEventLoop | None:
     try:
         return asyncio.get_running_loop()
@@ -229,29 +223,6 @@ async def _finish_even_if_cancelled(work: Awaitable[None]) -> None:
     except asyncio.CancelledError:
         _ = await asyncio.wait((task,))
         raise
-
-
-def spawn_logging_task(
-    running_loop: asyncio.AbstractEventLoop, coroutine: Coroutine[object, object, object], *, task_name: str
-) -> asyncio.Task[object]:
-    task: Final = running_loop.create_task(coroutine)
-    _PENDING_LOGGING_TASKS.add(task)
-    task.add_done_callback(_PENDING_LOGGING_TASKS.discard)
-    task.add_done_callback(lambda done: _log_background_task_failure(done, task_name=task_name))
-    return task
-
-
-async def drain_logging_tasks(timeout: float = 5.0) -> None:
-    # A task that finished as its loop closed never ran its discard callback, and a
-    # task from another loop cannot be awaited here: forget both, wait on the rest.
-    running_loop: Final = asyncio.get_running_loop()
-    stale: Final = {task for task in _PENDING_LOGGING_TASKS if task.done() or task.get_loop() is not running_loop}
-    _PENDING_LOGGING_TASKS.difference_update(stale)
-    if not _PENDING_LOGGING_TASKS:
-        return
-    _, pending = await asyncio.wait(tuple(_PENDING_LOGGING_TASKS), timeout=timeout)
-    if pending:
-        verbose_logger.warning("Timed out draining logging tasks on shutdown: %d tasks still alive", len(pending))
 
 
 _ERROR_CODE_HTTP_STATUS: Final[Mapping[str, int]] = MappingProxyType(
@@ -889,7 +860,7 @@ class BaseResponsesAPIStreamingIterator:
                 )
             )
             cache_write_task.add_done_callback(
-                lambda task: _log_background_task_failure(
+                lambda task: log_background_task_failure(
                     task,
                     task_name="Responses stream cache write",
                 )

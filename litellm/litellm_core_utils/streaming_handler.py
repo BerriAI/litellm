@@ -25,6 +25,7 @@ from litellm import verbose_logger
 from litellm._uuid import uuid
 from litellm.constants import STREAM_CHUNK_CHOICE_FIELDS, STREAM_FINISH_CHOICE_FIELDS
 from litellm.litellm_core_utils.asyncify import asyncify
+from litellm.litellm_core_utils.background_logging_tasks import spawn_logging_task
 from litellm.litellm_core_utils.core_helpers import (
     UPSTREAM_USAGE_COST,
     as_str_mapping,
@@ -2732,11 +2733,13 @@ class CustomStreamWrapper:
                     _copy = complete_streaming_response.model_copy(deep=True)
                 except RuntimeError:
                     _copy = complete_streaming_response.model_copy()
-                asyncio.create_task(
+                spawn_logging_task(
+                    asyncio.get_running_loop(),
                     self.async_cache_streaming_response(
                         processed_chunk=_copy,
                         cache_hit=cache_hit,
-                    )
+                    ),
+                    task_name="Streaming response cache write",
                 )
             # Update hidden_params with final usage from
             # stream_chunk_builder (see sync __next__ for full comment).
@@ -2774,14 +2777,16 @@ class CustomStreamWrapper:
                 # prefer_async_handlers routes CustomLogger to async_success_handler
                 # when consumers use ``async for`` on sync-SDK streams. Legacy string
                 # callbacks still run via executor.submit inside dispatch_success_handlers.
-                asyncio.create_task(
+                spawn_logging_task(
+                    asyncio.get_running_loop(),
                     self.logging_obj.dispatch_success_handlers(
                         complete_streaming_response,
                         cache_hit=cache_hit,
                         start_time=None,
                         end_time=None,
                         prefer_async_handlers=True,
-                    )
+                    ),
+                    task_name="Streaming success logging",
                 )
 
             await self.aclose()

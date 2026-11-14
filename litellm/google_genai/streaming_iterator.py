@@ -3,6 +3,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final
 
 import litellm
+from litellm.litellm_core_utils.background_logging_tasks import spawn_logging_task
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.custom_httpx.sse_lines import aiter_sse_lines, iter_sse_lines
 from litellm.proxy.pass_through_endpoints.success_handler import (
@@ -90,7 +91,8 @@ class BaseGoogleGenAIGenerateContentStreamingIterator:
         )
 
         end_time: Final = datetime.now()
-        asyncio.create_task(
+        spawn_logging_task(
+            asyncio.get_running_loop(),
             PassThroughStreamingHandler.route_streaming_logging_to_handler(
                 litellm_logging_obj=self.litellm_logging_obj,
                 passthrough_success_handler_obj=GLOBAL_PASS_THROUGH_SUCCESS_HANDLER_OBJ,
@@ -101,7 +103,8 @@ class BaseGoogleGenAIGenerateContentStreamingIterator:
                 raw_bytes=self.collected_chunks,
                 end_time=end_time,
                 model=self.model,
-            )
+            ),
+            task_name="Gemini passthrough stream logging",
         )
 
 

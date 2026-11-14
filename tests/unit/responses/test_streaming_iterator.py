@@ -1927,7 +1927,7 @@ async def test_log_background_task_failure_logs_task_exceptions(monkeypatch):
     with suppress(RuntimeError):
         await task
 
-    streaming_module._log_background_task_failure(task, task_name="cache write")
+    streaming_module.log_background_task_failure(task, task_name="cache write")
 
     error_logger.assert_called_once()
     assert error_logger.call_args.args == (
@@ -1948,7 +1948,7 @@ async def test_log_background_task_failure_ignores_cancelled_tasks(monkeypatch):
     with suppress(asyncio.CancelledError):
         await task
 
-    streaming_module._log_background_task_failure(task, task_name="cache write")
+    streaming_module.log_background_task_failure(task, task_name="cache write")
 
     error_logger.assert_not_called()
 
