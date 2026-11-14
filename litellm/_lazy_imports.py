@@ -6,8 +6,6 @@ from collections.abc import Callable, Mapping
 from types import MappingProxyType, ModuleType
 from typing import TYPE_CHECKING, Final
 
-from typing_extensions import ReadOnly, TypedDict
-
 from ._lazy_imports_registry import LITELLM_ATTRIBUTES, UTILS_ATTRIBUTES
 
 if TYPE_CHECKING:
@@ -61,22 +59,14 @@ def _cache(namespace: str, name: str, value: object) -> object:
     return value
 
 
-class _AttributeView(TypedDict):
-    value: ReadOnly[object]
-
-
-def _module_attribute(module: ModuleType, attr_name: str) -> object:
-    attribute: Final[_AttributeView] = {"value": getattr(module, attr_name)}
-    return attribute["value"]
-
-
 def _import(namespace: str, name: str, location: tuple[str, str]) -> object:
     cached: Final = _cached(namespace, name)
     if cached is not _NOT_LOADED:
         return cached
     module_path, attr_name = location
     module: Final[ModuleType] = importlib.import_module(module_path, package="litellm")
-    return _cache(namespace, name, _module_attribute(module, attr_name))
+    attribute: Final[object] = getattr(module, attr_name)
+    return _cache(namespace, name, attribute)
 
 
 def _instance_of(class_name: str) -> Callable[[], object]:

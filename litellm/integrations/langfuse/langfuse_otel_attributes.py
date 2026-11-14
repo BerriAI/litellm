@@ -17,6 +17,7 @@ from litellm.integrations.opentelemetry_utils.base_otel_llm_obs_attributes impor
     safe_set_attribute,
 )
 from litellm.litellm_core_utils.core_helpers import require_attributes
+from litellm.litellm_core_utils.safe_json_dumps import jsonable_or_str
 from litellm.types.llms.openai import HttpxBinaryResponseContent, ResponsesAPIResponse
 from litellm.types.utils import (
     EmbeddingResponse,
@@ -103,7 +104,7 @@ class LangfuseLLMObsOTELAttributes(BaseLLMObsOTELAttributes):
             prompt["tools"] = tools
 
         input: Final = prompt
-        safe_set_attribute(span, "langfuse.observation.input", json.dumps(input))
+        safe_set_attribute(span, "langfuse.observation.input", json.dumps(input, default=jsonable_or_str))
 
     @staticmethod
     @override

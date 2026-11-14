@@ -10,19 +10,21 @@ import datetime
 import uuid
 from collections.abc import Mapping
 from typing import Final, Literal
-from unittest.mock import patch
 
 import pytest
 from pydantic import ValidationError
 
 import litellm
 from litellm import Router
-from litellm.caching.redis_cache import RedisPipelineIncrementOperation
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.redis.stores.router_usage import CounterIncrement, UsageCounter
+from litellm.router import router_arguments
 from litellm.router_api import RoutingContext
+from litellm.router_config import build_router_config
 from litellm.router_strategy.least_busy import picks_reserve
 from litellm.types.router import DeploymentTypedDict, FallbackAccessCheck, RoutingGroup
 from litellm.utils import Rules, function_setup
+from tests.unit.redis.stores.router_usage_double import FakeUsageHandle, UsageHost
 
 
 def _model_list():
@@ -1094,33 +1096,21 @@ async def test_update_settings_same_routing_strategy_args_does_not_leak_sync_tas
                 pass
 
 
-class _RecordingRedisCache:
-    def __init__(self) -> None:
-        self.increment_lists: list[list[RedisPipelineIncrementOperation]] = []
-
-    async def async_increment_pipeline(self, increment_list: list[RedisPipelineIncrementOperation]) -> list[float]:
-        self.increment_lists.append(list(increment_list))
-        return [float(op["increment_value"]) for op in increment_list]
-
-
 @pytest.mark.asyncio
 async def test_update_settings_changed_routing_strategy_args_flushes_replaced_selector_queue(
     monkeypatch,
 ) -> None:
     monkeypatch.setattr(litellm, "callbacks", [])
     monkeypatch.setattr(litellm, "input_callback", [])
-    router: Final = Router(
-        model_list=_model_list(),
-        routing_strategy="usage-based-routing-v2",
-        routing_strategy_args={"ttl": 60},
+    handle: Final = FakeUsageHandle(redis={})
+    queued: Final = CounterIncrement(UsageCounter.for_deployment("dep", "m", "rpm", "12-34"), 3, 60)
+    arguments: Final = router_arguments(
+        model_list=_model_list(), routing_strategy="usage-based-routing-v2", routing_strategy_args={"ttl": 60}
     )
+    router: Final = Router.from_config(build_router_config(arguments), UsageHost(handle))
     try:
-        redis_cache: Final = _RecordingRedisCache()
         replaced: Final = router.lowesttpm_logger_v2
-        replaced.dual_cache.redis_cache = redis_cache
-        replaced.redis_increment_operation_queue.append(
-            RedisPipelineIncrementOperation(key="rpm-key", increment_value=3, ttl=60)
-        )
+        replaced.redis_increment_operation_queue.append(queued)
 
         router.update_settings(routing_strategy_args={"ttl": 120})
         await asyncio.sleep(0)
@@ -1134,9 +1124,7 @@ async def test_update_settings_changed_routing_strategy_args_flushes_replaced_se
         )
 
         assert router.lowesttpm_logger_v2 is not replaced
-        assert redis_cache.increment_lists == [
-            [RedisPipelineIncrementOperation(key="rpm-key", increment_value=3, ttl=60)]
-        ]
+        assert [args for name, args in handle.calls if name == "remote"] == [(queued,)]
         assert replaced.redis_increment_operation_queue == []
     finally:
         for t in [

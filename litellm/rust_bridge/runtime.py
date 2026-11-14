@@ -134,7 +134,7 @@ async def _aattempt_native(
 
 def _required(result: RustAttempt[ResultT], context: RouteContext) -> ResultT:
     if isinstance(result, RustHandled):
-        return mark_rust_response(result.value)
+        return mark_rust_response(result.value, context.route)
     _raise_required(result, _error_context(context))
 
 

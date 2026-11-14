@@ -103,7 +103,7 @@ class QualityRouter(CustomLogger):
             self._tier_to_models_cache = self._build_tier_index()
         return self._tier_to_models_cache
 
-    def _get_routing_preferences(self, deployment: object) -> dict[str, Any] | None:
+    def _get_routing_preferences(self, deployment: object) -> dict[str, object] | None:
         """
         Extract litellm_routing_preferences from a deployment, handling both
         dict-shaped and Pydantic-object-shaped deployments.

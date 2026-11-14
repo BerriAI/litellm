@@ -11,6 +11,11 @@ inputs:
 runs:
   using: composite
   steps:
+    - name: Configure the Rust build environment
+      shell: bash
+      working-directory: ${{ github.workspace }}
+      run: bash .github/scripts/setup_rust_environment.sh
+
     - name: Set up uv (attempt 1)
       id: attempt-1
       continue-on-error: true
