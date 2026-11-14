@@ -13,7 +13,7 @@ from unittest.mock import MagicMock, Mock, patch
 import httpx
 import pytest
 import respx
-from openai import AsyncOpenAI, AzureOpenAI, OpenAI
+from openai import AsyncOpenAI, AzureOpenAI, OpenAI, omit
 from openai._legacy_response import LegacyAPIResponse
 from openai._types import Response as SDKResponse
 from pydantic import BaseModel, ConfigDict, JsonValue
@@ -2661,6 +2661,34 @@ async def test_chat_completion_sends_the_caller_params_extra_body_and_extra_head
     assert json.loads(sent.content) == {**_WIRE_REQUEST, "vendor_flag": True}
     assert sent.headers["x-caller"] == "unit"
     assert sent.headers["authorization"] == "Bearer sk-test"
+
+
+@pytest.mark.parametrize("is_async", (False, True))
+@respx.mock
+async def test_chat_completion_leaves_out_a_header_the_caller_omits(
+    is_async: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    route: Final = respx.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=httpx.Response(200, json=_CHAT_RESPONSE_JSON)
+    )
+    kwargs: Final = {
+        **_WIRE_REQUEST,
+        "model": "openai/gpt-5.4",
+        "api_base": "https://api.openai.com/v1",
+        "api_key": "sk-test",
+        "num_retries": 0,
+        "extra_headers": {"Authorization": omit, "x-caller": "unit"},
+    }
+
+    if is_async:
+        await litellm.acompletion(**kwargs)
+    else:
+        litellm.completion(**kwargs)
+
+    sent: Final = route.calls.last.request
+    assert "authorization" not in sent.headers
+    assert sent.headers["x-caller"] == "unit"
 
 
 def _developer_message_after_a_user_turn() -> list[dict[str, str]]:

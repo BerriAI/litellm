@@ -12,7 +12,7 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
 import openai
-from openai import AsyncOpenAI, AsyncStream, OpenAI, Stream
+from openai import AsyncOpenAI, AsyncStream, Omit, OpenAI, Stream
 from openai._base_client import make_request_options
 from openai._constants import RAW_RESPONSE_HEADER
 from openai._legacy_response import LegacyAPIResponse
@@ -22,7 +22,7 @@ from openai.types import CreateEmbeddingResponse
 from openai.types.beta.assistant_deleted import AssistantDeleted
 from openai.types.chat import ChatCompletion, ChatCompletionChunk
 from openai.types.file_deleted import FileDeleted
-from pydantic import BaseModel, TypeAdapter
+from pydantic import BaseModel, InstanceOf, TypeAdapter
 from typing_extensions import overload
 
 import litellm
@@ -379,9 +379,9 @@ class OpenAIChatCompletionResponseIterator(BaseModelResponseIterator):
             raise e
 
 
-_EXTRA_HEADERS_ADAPTER: Final = TypeAdapter(dict[str, str] | None)
+_EXTRA_HEADERS_ADAPTER: Final = TypeAdapter(dict[str, str | InstanceOf[Omit]] | None)
 _EXTRA_QUERY_ADAPTER: Final = TypeAdapter(dict[str, object] | None)
-_NO_EXTRA_HEADERS: Final[Mapping[str, str]] = types.MappingProxyType({})
+_NO_EXTRA_HEADERS: Final[Mapping[str, str | Omit]] = types.MappingProxyType({})
 _SDK_OPTION_KEYS: Final = frozenset(("extra_headers", "extra_query", "extra_body"))
 _CLIENT_API_KEY_ONLY_AUTH: Final[Mapping[str, Mapping[str, bool]]] = (
     types.MappingProxyType({"security": types.MappingProxyType({"bearer_auth": True})})
