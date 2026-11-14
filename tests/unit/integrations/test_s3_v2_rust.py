@@ -2071,3 +2071,384 @@ async def test_batch_line_items_are_serialized_and_hashed_off_the_event_loop(
     assert len(bucket.received) == 1
     assert set(threads) == {"serialize"}
     assert threading.main_thread() not in threads.values()
+
+
+_BOUNDING_START: Final = datetime(2026, 8, 24, 6, 18, 41, 948021)
+
+
+def _oversized_response_id() -> str:
+    return "resp_" + "A" * 1100
+
+
+def _alias_metadata(team_alias: str | None = None, key_alias: str | None = None) -> dict[str, object]:
+    metadata: Final[dict[str, object]] = {}
+    if team_alias is not None:
+        metadata["user_api_key_team_alias"] = team_alias
+    if key_alias is not None:
+        metadata["user_api_key_alias"] = key_alias
+    return metadata
+
+
+async def _bounded_key(
+    monkeypatch: pytest.MonkeyPatch,
+    bucket: ScriptedBucket,
+    response_id: str,
+    s3_path: str = "",
+    team_alias: str | None = None,
+    key_alias: str | None = None,
+    start_time: datetime = _BOUNDING_START,
+) -> str:
+    logger: Final = _logger(
+        monkeypatch,
+        bucket,
+        s3_path=s3_path or None,
+        s3_use_team_prefix=team_alias is not None,
+        s3_use_key_prefix=key_alias is not None,
+    )
+    return await _queued_key(logger, _payload(response_id, metadata=_alias_metadata(team_alias, key_alias)), start_time)
+
+
+@pytest.mark.asyncio
+async def test_s3_object_key_bounds_the_file_segment_when_the_full_key_fits(
+    monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket
+) -> None:
+    from litellm.constants import MAX_S3_OBJECT_KEY_BYTES
+
+    file_name: Final = "time-01-14-19-015434_resp_" + "A" * 300
+
+    key: Final = await _bounded_key(
+        monkeypatch, bucket, "resp_" + "A" * 300, "requests", start_time=datetime(2026, 9, 12, 1, 14, 19, 15434)
+    )
+
+    file_segment: Final = key.rsplit("/", 1)[1]
+    assert len(key.encode("utf-8")) < MAX_S3_OBJECT_KEY_BYTES
+    assert len(file_segment.encode("utf-8")) <= 255
+    assert file_segment.startswith("time-01-14-19-015434_resp_")
+    assert file_segment.endswith(f"_{hashlib.sha256(file_name.encode('utf-8')).hexdigest()}.json")
+
+
+@pytest.mark.asyncio
+async def test_s3_object_key_file_segment_limit_counts_utf8_bytes(
+    monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket
+) -> None:
+    key: Final = await _bounded_key(
+        monkeypatch, bucket, "resp_" + "日" * 100, "requests", start_time=datetime(2026, 9, 12, 1, 14, 19, 15434)
+    )
+
+    file_segment: Final = key.rsplit("/", 1)[1]
+    assert len(file_segment.encode("utf-8")) <= 255
+    assert "�" not in file_segment
+
+
+@pytest.mark.asyncio
+async def test_s3_object_key_is_bounded_for_oversized_response_id(
+    monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket
+) -> None:
+    from litellm.constants import MAX_S3_OBJECT_KEY_BYTES
+
+    file_name: Final = f"time-06-18-41-948021_{_oversized_response_id()}"
+
+    key: Final = await _bounded_key(
+        monkeypatch, bucket, _oversized_response_id(), "input", team_alias="DefaultTeamProd"
+    )
+
+    assert len(key.encode("utf-8")) <= MAX_S3_OBJECT_KEY_BYTES
+    assert key.startswith("input/DefaultTeamProd/2026-08-24/time-06-18-41-948021_resp_")
+    assert key.endswith(f"_{hashlib.sha256(file_name.encode('utf-8')).hexdigest()}.json")
+
+
+@pytest.mark.parametrize(
+    "s3_path,team_alias,key_alias",
+    [
+        ("input", None, None),
+        ("a" * 900, None, None),
+        ("input", "team-" + "b" * 900, None),
+        ("c" * 600, "team-" + "d" * 600, "key-" + "e" * 600),
+        ("", "ssss/" * 199 + "ssss", None),
+    ],
+)
+@pytest.mark.asyncio
+async def test_s3_object_key_is_bounded_for_long_paths_and_aliases(
+    monkeypatch: pytest.MonkeyPatch,
+    bucket: ScriptedBucket,
+    s3_path: str,
+    team_alias: str | None,
+    key_alias: str | None,
+) -> None:
+    from litellm.constants import MAX_S3_OBJECT_KEY_BYTES
+
+    key: Final = await _bounded_key(monkeypatch, bucket, _oversized_response_id(), s3_path, team_alias, key_alias)
+
+    assert len(key.encode("utf-8")) <= MAX_S3_OBJECT_KEY_BYTES
+    assert key.endswith(".json")
+    assert "/2026-08-24/" in key or key.startswith("2026-08-24/")
+    assert "/" not in key.rsplit("2026-08-24/", 1)[1]
+
+
+@pytest.mark.asyncio
+async def test_s3_object_key_trimmed_prefixes_stay_distinct_per_operator(
+    monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket
+) -> None:
+    from litellm.constants import MAX_S3_OBJECT_KEY_BYTES
+
+    keys: Final = [
+        await _bounded_key(monkeypatch, bucket, _oversized_response_id(), "input", "team-" + "b" * 1000 + suffix)
+        for suffix in ("-one", "-two")
+    ]
+
+    assert keys[0] != keys[1]
+    assert all(key.startswith("input/team-" + "b" * 900) for key in keys)
+    assert all(len(key.encode("utf-8")) == MAX_S3_OBJECT_KEY_BYTES for key in keys)
+
+
+@pytest.mark.asyncio
+async def test_s3_object_key_bounded_prefix_never_splits_a_multibyte_character(
+    monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket
+) -> None:
+    from litellm.constants import MAX_S3_OBJECT_KEY_BYTES
+
+    s3_path: Final = "日本語" * 200
+
+    key: Final = await _bounded_key(monkeypatch, bucket, _oversized_response_id(), s3_path, "チーム" * 200)
+
+    assert len(key.encode("utf-8")) <= MAX_S3_OBJECT_KEY_BYTES
+    assert key.startswith(s3_path[:100])
+    assert "�" not in key
+
+
+@pytest.mark.asyncio
+async def test_s3_object_key_stays_unique_for_ids_sharing_a_head(
+    monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket
+) -> None:
+    keys: Final = {
+        await _bounded_key(monkeypatch, bucket, f"{_oversized_response_id()}{suffix}", "input")
+        for suffix in ("first", "second", "third")
+    }
+
+    assert len(keys) == 3
+
+
+@pytest.mark.asyncio
+async def test_s3_object_key_bounding_matches_the_documented_layout(
+    monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket
+) -> None:
+    file_name: Final = f"time-06-18-41-948021_{_oversized_response_id()}"
+
+    key: Final = await _bounded_key(monkeypatch, bucket, _oversized_response_id(), "input", "team")
+
+    digest: Final = hashlib.sha256(file_name.encode("utf-8")).hexdigest()
+    assert key == f"input/team/2026-08-24/{file_name[:64]}_{digest}.json"
+
+
+@pytest.mark.asyncio
+async def test_s3_object_key_keeps_the_configured_prefix_when_only_the_id_overflows(
+    monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket
+) -> None:
+    from litellm.constants import MAX_S3_OBJECT_KEY_BYTES
+
+    prefix: Final = "team-" + "b" * 934 + "/"
+
+    key: Final = await _bounded_key(monkeypatch, bucket, _oversized_response_id(), "", prefix[:-1])
+
+    assert key.startswith(prefix + "2026-08-24/")
+    assert len(key.encode("utf-8")) == MAX_S3_OBJECT_KEY_BYTES
+
+
+@pytest.mark.asyncio
+async def test_s3_object_key_spends_the_whole_budget_when_the_prefix_must_be_trimmed(
+    monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket
+) -> None:
+    from litellm.constants import MAX_S3_OBJECT_KEY_BYTES
+
+    key: Final = await _bounded_key(monkeypatch, bucket, "abc", "p" * 400 + "/" + "q" * 600)
+
+    assert len(key.encode("utf-8")) == MAX_S3_OBJECT_KEY_BYTES
+    assert key.startswith("p" * 400 + "/" + "q" * 500)
+
+
+@pytest.mark.asyncio
+async def test_s3_object_key_keeps_a_single_segment_path_as_far_as_it_fits(
+    monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket
+) -> None:
+    from litellm.constants import MAX_S3_OBJECT_KEY_BYTES
+
+    key: Final = await _bounded_key(monkeypatch, bucket, "chatcmpl-xyz", "a" * 1050)
+
+    assert len(key.encode("utf-8")) == MAX_S3_OBJECT_KEY_BYTES
+    assert key.startswith("a" * 900)
+
+
+@pytest.mark.asyncio
+async def test_create_s3_batch_logging_element_bounds_key_and_keeps_full_response_id(
+    monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket
+) -> None:
+    from litellm.constants import MAX_S3_OBJECT_KEY_BYTES
+
+    logger: Final = _logger(monkeypatch, bucket, s3_use_team_prefix=True, s3_use_key_prefix=True)
+    response_id: Final = _oversized_response_id()
+
+    await _upload(
+        logger, _payload(response_id, metadata=_alias_metadata("DefaultTeamProd", "prod-key")), _BOUNDING_START
+    )
+
+    (put,) = bucket.puts()
+    s3_object_key: Final = unquote(put.path).removeprefix("/test-bucket/")
+    assert len(s3_object_key.encode("utf-8")) <= MAX_S3_OBJECT_KEY_BYTES
+    assert s3_object_key.startswith("DefaultTeamProd/prod-key/2026-08-24/")
+    assert _uploaded(put)["id"] == response_id
+
+
+async def _download_filenames(
+    monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket, response_ids: list[str]
+) -> list[str]:
+    logger: Final = _logger(monkeypatch, bucket)
+    await _log_all_at(logger, [_payload(response_id) for response_id in response_ids], _BOUNDING_START)
+    await logger.flush_queue()
+    names: Final = [
+        re.fullmatch(r'inline; filename="(.*)"', put.headers["content-disposition"]) for put in bucket.puts()
+    ]
+    return [name.group(1) for name in names if name is not None]
+
+
+async def _log_all_at(logger: S3LoggerV3, payloads: list[dict[str, object]], start_time: datetime) -> None:
+    for payload in payloads:
+        await log_payload(logger, payload, start_time)
+
+
+@pytest.mark.asyncio
+async def test_s3_object_download_filename_is_bounded_for_oversized_response_id(
+    monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket
+) -> None:
+    from litellm.constants import MAX_S3_OBJECT_DOWNLOAD_FILENAME_BYTES
+
+    (file_name,) = await _download_filenames(monkeypatch, bucket, [_oversized_response_id()])
+
+    assert len(file_name.encode("utf-8")) <= MAX_S3_OBJECT_DOWNLOAD_FILENAME_BYTES
+    assert file_name.startswith("time-2026-08-24T06-18-41-948021_resp_")
+    assert file_name.endswith(".json")
+
+
+@pytest.mark.asyncio
+async def test_s3_object_download_filenames_stay_distinct_when_shortened(
+    monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket
+) -> None:
+    file_names: Final = set(
+        await _download_filenames(
+            monkeypatch, bucket, [_oversized_response_id() + suffix for suffix in ("first", "second", "third")]
+        )
+    )
+
+    assert len(file_names) == 3
+
+
+@pytest.mark.asyncio
+async def test_s3_object_download_filename_short_id_is_unchanged(
+    monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket
+) -> None:
+    (file_name,) = await _download_filenames(monkeypatch, bucket, ["resp_abc123"])
+
+    assert file_name == "time-2026-08-24T06-18-41-948021_resp_abc123.json"
+
+
+@pytest.mark.asyncio
+async def test_create_s3_batch_logging_element_bounds_the_download_filename(
+    monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket
+) -> None:
+    from litellm.constants import MAX_S3_OBJECT_DOWNLOAD_FILENAME_BYTES
+
+    (file_name,) = await _download_filenames(monkeypatch, bucket, [_oversized_response_id()])
+
+    assert len(file_name.encode("utf-8")) <= MAX_S3_OBJECT_DOWNLOAD_FILENAME_BYTES
+
+
+@pytest.mark.asyncio
+async def test_audit_log_object_key_is_bounded_for_a_long_configured_path(
+    monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket
+) -> None:
+    from litellm.constants import MAX_S3_OBJECT_KEY_BYTES
+
+    logger: Final = _logger(monkeypatch, bucket, s3_path="audit-archive/" + "z" * 1100)
+
+    await logger.async_log_audit_log_event({"id": "1a4f7bd0-6f1e-4d0a-9b3c-9f2e1d5a7c88"})
+
+    (key,) = logger.sink.queued_keys()
+    assert len(key.encode("utf-8")) <= MAX_S3_OBJECT_KEY_BYTES
+    assert key.startswith("audit-archive/" + "z" * 900)
+
+
+@pytest.mark.asyncio
+async def test_s3_object_download_filename_drops_characters_that_break_the_header(
+    monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket
+) -> None:
+    (file_name,) = await _download_filenames(monkeypatch, bucket, ['resp_a"b/c'])
+
+    assert file_name == "time-2026-08-24T06-18-41-948021_resp_a_b_c.json"
+
+
+@pytest.mark.asyncio
+async def test_s3_callback_params_override_uses_alternate_dict(
+    monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket
+) -> None:
+    monkeypatch.setattr(litellm, "s3_callback_params", {"s3_bucket_name": "normal-bucket"})
+    logger: Final = rust_s3_logger(
+        monkeypatch,
+        s3_bucket_name="audit-bucket",
+        s3_path="audit-prefix",
+        s3_region_name="us-west-2",
+        s3_endpoint_url=bucket.url,
+        s3_aws_access_key_id="test-key",
+        s3_aws_secret_access_key="test-secret",
+    )
+    _ = logger.periodic_flush_task.cancel()
+
+    await _upload(logger, _payload("override"))
+
+    (put,) = bucket.puts()
+    assert put.path.startswith("/audit-bucket/")
+    assert put.path.startswith("/audit-bucket/audit-prefix/")
+    assert "/us-west-2/s3/aws4_request" in put.headers["authorization"]
+
+
+@pytest.mark.asyncio
+async def test_s3_callback_params_override_does_not_mutate_inputs(
+    monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket
+) -> None:
+    monkeypatch.setenv("MY_AUDIT_BUCKET", "resolved-bucket")
+    override: Final = {
+        "s3_bucket_name": "os.environ/MY_AUDIT_BUCKET",
+        "s3_endpoint_url": bucket.url,
+        "s3_aws_access_key_id": "test-key",
+        "s3_aws_secret_access_key": "test-secret",
+        "s3_region_name": "us-east-1",
+    }
+    monkeypatch.setattr(litellm, "s3_callback_params", {"s3_bucket_name": "os.environ/MY_AUDIT_BUCKET"})
+    logger: Final = rust_s3_logger(monkeypatch, **override)
+    _ = logger.periodic_flush_task.cancel()
+
+    await _upload(logger, _payload("override"))
+
+    assert bucket.puts()[0].path.startswith("/resolved-bucket/")
+    assert override["s3_bucket_name"] == "os.environ/MY_AUDIT_BUCKET"
+    assert litellm.s3_callback_params["s3_bucket_name"] == "os.environ/MY_AUDIT_BUCKET"
+
+
+@pytest.mark.asyncio
+async def test_s3_callback_params_override_none_falls_back_to_global(
+    monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket
+) -> None:
+    monkeypatch.setattr(
+        litellm,
+        "s3_callback_params",
+        {
+            "s3_bucket_name": "from-global",
+            "s3_endpoint_url": bucket.url,
+            "s3_aws_access_key_id": "test-key",
+            "s3_aws_secret_access_key": "test-secret",
+            "s3_region_name": "us-east-1",
+        },
+    )
+    logger: Final = _logger_from_globals(monkeypatch)
+
+    await _upload(logger, _payload("global"))
+
+    assert bucket.puts()[0].path.startswith("/from-global/")
