@@ -126,6 +126,7 @@ from litellm.utils import (
     validate_and_fix_openai_messages,
 )
 from litellm.litellm_core_utils.model_cost_table import publish
+from litellm.litellm_core_utils.model_retirement import is_hidden_as_retired
 
 
 @pytest.mark.parametrize("root_base_model", [42, ["gemini-3.5-flash"], {"model": "gemini-3.5-flash"}])
@@ -9802,7 +9803,7 @@ def _live_together_ai_cost_map_rows() -> frozenset[str]:
     return frozenset(
         key
         for key, value in litellm.model_cost.items()
-        if value.get("litellm_provider") == "together_ai" and not litellm._is_past_deprecation_date(value)
+        if value.get("litellm_provider") == "together_ai" and not is_hidden_as_retired(value)
     )
 
 
