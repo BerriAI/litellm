@@ -1,3 +1,4 @@
+import json
 import os
 import uuid
 from pathlib import Path
@@ -15,6 +16,16 @@ from integration._support.process import owned_proxy
 from integration._support.redis_process import owned_redis
 
 
+def _redis_data_plane_ready(candidate: Gateway, client: Redis) -> bool:
+    sentinel: Final = "integration_recovery:" + uuid.uuid4().hex
+    client.set(sentinel + ":input", json.dumps(sentinel), ex=30)
+    response: Final = candidate.request("GET", "/health/integration-redis-recovery?sentinel=" + sentinel)
+    response.raise_for_status()
+    native: Final = json.loads(client.get(sentinel + ":native") or b"null")
+    cached: Final = json.loads(client.get(sentinel + ":response") or b"null")
+    return response.json() == {"native": True} and native == sentinel and cached is not None and cached["response"] == sentinel
+
+
 @pytest.mark.covers("other.routing.redis.owned_outage_recovers_serving_and_response_cache")
 def test_owned_redis_outage_recovers_requests_and_real_response_cache(gateway: Gateway, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     original: Final = os.environ["DATABASE_URL"]
@@ -26,13 +37,13 @@ def test_owned_redis_outage_recovers_requests_and_real_response_cache(gateway: G
         try:
             with owned_redis(tmp_path) as cache, monkeypatch.context() as environment:
                 environment.setenv("DATABASE_URL", database_url)
-                with owned_proxy(gateway, tmp_path, {"DATABASE_URL": database_url, "REDIS_HOST": cache.host, "REDIS_PORT": str(cache.port), "REDIS_CIRCUIT_BREAKER_RECOVERY_TIMEOUT": "1"}, remove_environment=("DATABASE_URL_READ_REPLICA",)) as candidate, candidate.scenario() as scenario, httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as upstream:
+                with owned_proxy(gateway, tmp_path, {"DATABASE_URL": database_url, "REDIS_HOST": cache.host, "REDIS_PORT": str(cache.port), "REDIS_CIRCUIT_BREAKER_RECOVERY_TIMEOUT": "1", "LITELLM_WORKER_STARTUP_HOOKS": "integration._support.runtime:configure_redis_recovery"}, remove_environment=("DATABASE_URL_READ_REPLICA",)) as candidate, candidate.scenario() as scenario, httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as upstream:
                     model: Final = scenario.model()
                     key: Final = scenario.key(models=[model])
                     for generation in ("before", "after"):
                         with Redis(host=cache.host, port=cache.port, socket_timeout=1) as client:
                             eventually(client.ping, bool)
-                            eventually(lambda: client.pubsub_numsub("litellm_proxy.auth_cache_invalidation")[0][1], lambda count: count >= 1, seconds=8)
+                            eventually(lambda: _redis_data_plane_ready(candidate, client), bool)
                         upstream.delete("/__observations").raise_for_status()
                         first: Final = candidate.chat(model, key=key, text=identity + generation)
                         second: Final = candidate.chat(model, key=key, text=identity + generation)
