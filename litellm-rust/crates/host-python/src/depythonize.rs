@@ -3,7 +3,7 @@ use pyo3::intern;
 use pyo3::prelude::*;
 use pyo3::types::{
     PyBool, PyByteArray, PyBytes, PyDict, PyFloat, PyFrozenSet, PyInt, PyIterator, PyList,
-    PyMapping, PySequence, PySet, PyString, PyTuple,
+    PyMapping, PySequence, PySet, PyString, PyTuple, PyType,
 };
 use pythonize::{PythonizeError, Result};
 use serde::de::value::StrDeserializer;
@@ -31,10 +31,13 @@ impl<'a, 'py> Depythonizer<'a, 'py> {
     }
 
     fn dataclass_fields(self) -> Result<Option<Entries<'py>>> {
-        self.input
-            .getattr_opt(intern!(self.input.py(), "__dataclass_fields__"))
+        let py = self.input.py();
+        py.get_type::<PyType>()
+            .getattr(intern!(py, "__getattribute__"))
+            .and_then(|lookup| {
+                lookup.call1((self.input.get_type(), intern!(py, "__dataclass_fields__")))
+            })
             .ok()
-            .flatten()
             .map(|fields| Entries::dataclass_fields(self.input, &fields))
             .transpose()
     }
@@ -194,7 +197,8 @@ impl<'de> de::Deserializer<'de> for Depythonizer<'_, '_> {
         }
         match self.dataclass_fields()? {
             Some(fields) => visitor.visit_map(fields),
-            None => visitor.visit_map(self.items()?),
+            None if self.input.cast::<PyMapping>().is_ok() => visitor.visit_map(self.items()?),
+            None => self.leaf().deserialize_map(visitor),
         }
     }
 
@@ -451,6 +455,7 @@ mod tests {
             let namespace = PyDict::new(py);
             py.run(
                 c"
+import collections.abc
 import dataclasses
 import types
 
@@ -461,6 +466,31 @@ class CatchAllDict(dict):
 @dataclasses.dataclass
 class DataclassDict(dict):
     pass
+
+class CatchAllMapping(collections.abc.Mapping):
+    def __init__(self, **items):
+        self._items = items
+    def __getitem__(self, key):
+        return self._items[key]
+    def __iter__(self):
+        return iter(self._items)
+    def __len__(self):
+        return len(self._items)
+    def __getattr__(self, name):
+        return CatchAllMapping()
+
+class CatchAllMeta(type(collections.abc.Mapping)):
+    def __getattr__(cls, name):
+        return {}
+
+class CatchAllTypeMapping(CatchAllMapping, metaclass=CatchAllMeta):
+    pass
+
+class InstanceFields:
+    def __init__(self):
+        self.__dataclass_fields__ = {'type': None, 'text': None}
+        self.type = 'text'
+        self.text = 'hi'
 
 @dataclasses.dataclass
 class Block:
@@ -615,6 +645,9 @@ def without_text():
     #[case::dict("{'type': 'text', 'text': 'hi'}")]
     #[case::mapping("types.MappingProxyType({'type': 'text', 'text': 'hi'})")]
     #[case::dataclass("Block(type='text', text='hi')")]
+    #[case::catch_all_mapping("CatchAllMapping(type='text', text='hi')")]
+    #[case::catch_all_metaclass_mapping("CatchAllTypeMapping(type='text', text='hi')")]
+    #[case::instance_dataclass_fields("InstanceFields()")]
     fn a_plain_mapping_or_dataclass_converts_by_its_fields(
         namespace: Py<PyDict>,
         #[case] expression: &str,

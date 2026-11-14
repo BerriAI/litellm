@@ -35,28 +35,30 @@ impl FileDocumentInput {
     }
 }
 
+fn optional_field<'py>(
+    document: Borrowed<'_, 'py, PyAny>,
+    key: &str,
+) -> PyResult<Option<Bound<'py, PyAny>>> {
+    if !document.contains(key)? {
+        return Ok(None);
+    }
+    document.get_item(key).map(Some)
+}
+
 impl FromPyObject<'_, '_> for FileDocumentInput {
     type Error = PyErr;
 
     fn extract(document: Borrowed<'_, '_, PyAny>) -> PyResult<Self> {
         let py = document.py();
-        let mime_type = match document.get_item("mime_type") {
-            Ok(value) => Some(value.extract::<String>()?),
-            Err(error) if error.is_instance_of::<pyo3::exceptions::PyKeyError>(py) => None,
-            Err(error) => return Err(error),
-        };
+        let mime_type = optional_field(document, "mime_type")?
+            .map(|value| value.extract::<String>())
+            .transpose()?;
         let missing = || {
             PyValueError::new_err(
                 "document with type='file' must include a 'file' field containing a pathlib.Path, file-like object, or bytes",
             )
         };
-        let file = document.get_item("file").map_err(|error| {
-            if error.is_instance_of::<pyo3::exceptions::PyKeyError>(py) {
-                missing()
-            } else {
-                error
-            }
-        })?;
+        let file = optional_field(document, "file")?.ok_or_else(missing)?;
         if file.is_none() {
             return Err(missing());
         }
@@ -106,6 +108,53 @@ mod tests {
             FileDocumentInput::Ready(input) => input,
             FileDocumentInput::Deferred { .. } => panic!("expected a ready document"),
         }
+    }
+
+    #[rstest::rstest]
+    #[case::without_mime_type(c"{'file': b'abc'}", None)]
+    #[case::with_mime_type(c"{'file': b'abc', 'mime_type': 'image/png'}", Some("image/png"))]
+    fn a_dict_answering_missing_keys_reads_only_the_keys_it_holds(
+        #[case] items: &std::ffi::CStr,
+        #[case] mime_type: Option<&str>,
+    ) {
+        Python::initialize();
+        Python::attach(|py| {
+            let locals = eval(
+                py,
+                c"class Defaulting(dict):
+    def __missing__(self, key):
+        return Defaulting()
+    def __getattr__(self, name):
+        return self[name]",
+            );
+            let document = locals
+                .get_item("Defaulting")
+                .unwrap()
+                .unwrap()
+                .call1((py.eval(items, None, None).unwrap(),))
+                .unwrap();
+            assert_eq!(
+                ready(document.extract().unwrap()),
+                OcrDocumentInput::Bytes {
+                    bytes: b"abc".as_slice().into(),
+                    file_name: None,
+                    mime_type: mime_type.map(str::to_owned),
+                }
+            );
+            let error = locals
+                .get_item("Defaulting")
+                .unwrap()
+                .unwrap()
+                .call0()
+                .unwrap()
+                .extract::<FileDocumentInput>()
+                .err()
+                .unwrap();
+            assert!(
+                error.to_string().contains("must include a 'file' field"),
+                "{error}"
+            );
+        });
     }
 
     #[test]
