@@ -8,6 +8,7 @@ import assemblyaiSmallLogo from "../../public/assets/logos/assemblyai_small.png"
 import basetenLogo from "../../public/assets/logos/baseten.svg";
 import bedrockLogo from "../../public/assets/logos/bedrock.svg";
 import bigmodelLogo from "../../public/assets/logos/bigmodel.png";
+import butlerLogo from "../../public/assets/logos/butler.png";
 import cerebrasLogo from "../../public/assets/logos/cerebras.svg";
 import cloudflareLogo from "../../public/assets/logos/cloudflare.svg";
 import cohereLogo from "../../public/assets/logos/cohere.svg";
@@ -96,6 +97,7 @@ export enum Providers {
   AZURE_TEXT = "Azure Text",
   BASETEN = "Baseten",
   Bespoke = "Bespoke Nimble",
+  BUTLER = "Butler",
   BYTEZ = "Bytez",
   Cerebras = "Cerebras",
   CHATGPT = "ChatGPT Subscription",
@@ -232,6 +234,7 @@ export const provider_map: Record<string, string> = {
   Bedrock: "bedrock",
   BedrockMantle: "bedrock_mantle",
   Bespoke: "bespoke",
+  BUTLER: "butler",
   BYTEZ: "bytez",
   Cerebras: "cerebras",
   CHATGPT: "chatgpt",
@@ -373,6 +376,7 @@ export const providerLogoMap: Partial<Record<Providers, string>> = {
   [Providers.BASETEN]: basetenLogo.src,
   [Providers.Bedrock]: bedrockLogo.src,
   [Providers.BedrockMantle]: bedrockLogo.src,
+  [Providers.BUTLER]: butlerLogo.src,
   [Providers.SageMaker]: bedrockLogo.src,
   [Providers.Cerebras]: cerebrasLogo.src,
   [Providers.CHATGPT]: openaiSmallLogo.src,
@@ -520,6 +524,7 @@ const providerPlaceholderMap: Partial<Record<Providers, string>> = {
   [Providers.Sail]: "sail/openai/gpt-oss-120b",
   [Providers.SCX_AI]: "scx-ai/GLM-5.2",
   [Providers.Bespoke]: "bespoke/nimble",
+  [Providers.BUTLER]: "butler/cicero",
   [Providers.Laya]: "laya/english",
   [Providers.Snowflake]: "snowflake/mistral-7b",
   [Providers.StrandsDecider]: "strands_decider/strands-decider-2B-hobson-v19",

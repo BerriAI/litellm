@@ -244,6 +244,7 @@ jobs:
               tests/unit/llms/bigmodel
               tests/unit/llms/black_forest_labs
               tests/unit/llms/brave
+              tests/unit/llms/butler
               tests/unit/llms/bytez
               tests/unit/llms/cerebras
               tests/unit/llms/chat

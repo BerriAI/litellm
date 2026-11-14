@@ -1727,6 +1727,9 @@ if TYPE_CHECKING:
     from .llms.scaleway.rerank.transformation import (
         ScalewayRerankConfig as ScalewayRerankConfig,
     )
+    from .llms.butler.rerank.transformation import (
+        ButlerRerankConfig as ButlerRerankConfig,
+    )
     from .llms.deepinfra.rerank.transformation import (
         DeepinfraRerankConfig as DeepinfraRerankConfig,
     )
@@ -1780,6 +1783,9 @@ if TYPE_CHECKING:
     )
     from .llms.bespoke.decisions.transformation import (
         BespokeDecisionsConfig as BespokeDecisionsConfig,
+    )
+    from .llms.butler.decisions.transformation import (
+        ButlerDecisionsConfig as ButlerDecisionsConfig,
     )
     from .llms.empiriolabs.decisions.transformation import (
         EmpirioLabsDecisionsConfig as EmpirioLabsDecisionsConfig,

@@ -10316,12 +10316,12 @@ class ProviderConfigManager:
             return litellm.AzureAIRerankConfig()
         elif litellm.LlmProviders.INFINITY == provider:
             return litellm.InfinityRerankConfig()
-        elif provider in (litellm.LlmProviders.JINA_AI, litellm.LlmProviders.SCALEWAY):
-            return (
-                litellm.ScalewayRerankConfig()
-                if provider == litellm.LlmProviders.SCALEWAY
-                else litellm.JinaAIRerankConfig()
-            )
+        elif provider in (litellm.LlmProviders.JINA_AI, litellm.LlmProviders.SCALEWAY, litellm.LlmProviders.BUTLER):
+            configs: Final = {
+                litellm.LlmProviders.SCALEWAY: litellm.ScalewayRerankConfig,
+                litellm.LlmProviders.BUTLER: litellm.ButlerRerankConfig,
+            }
+            return configs.get(provider, litellm.JinaAIRerankConfig)()
         elif litellm.LlmProviders.HOSTED_VLLM == provider:
             return litellm.HostedVLLMRerankConfig()
         elif litellm.LlmProviders.HUGGINGFACE == provider:
@@ -10391,6 +10391,7 @@ class ProviderConfigManager:
         if provider == LlmProviders.BESPOKE:
             return litellm.BespokeDecisionsConfig()
         if provider in (
+            LlmProviders.BUTLER,
             LlmProviders.EMPIRIOLABS,
             LlmProviders.OPENAI,
             LlmProviders.AZURE,
@@ -10399,6 +10400,7 @@ class ProviderConfigManager:
             LlmProviders.PARALLEL_AI,
         ):
             configs: Final = {
+                LlmProviders.BUTLER: litellm.ButlerDecisionsConfig,
                 LlmProviders.EMPIRIOLABS: litellm.EmpirioLabsDecisionsConfig,
                 LlmProviders.OPENAI: litellm.OpenAIDecisionsConfig,
                 LlmProviders.AZURE: litellm.AzureDecisionsConfig,

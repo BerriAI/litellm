@@ -183,6 +183,12 @@
     },
     "supported_endpoints": ["/v1/chat/completions", "/v1/responses", "/v1/embeddings"]
   },
+  "butler": {
+    "base_url": "https://api.butlercompute.com/v1",
+    "api_key_env": "BUTLER_API_KEY",
+    "api_base_env": "BUTLER_API_BASE",
+    "supported_endpoints": ["/v1/chat/completions", "/v1/responses", "/v1/messages"]
+  },
   "meta": {
     "base_url": "https://api.meta.ai/v1",
     "api_key_env": "META_API_KEY",
