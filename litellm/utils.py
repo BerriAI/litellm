@@ -6364,7 +6364,23 @@ def add_provider_specific_params_to_optional_params(
                 if _should_drop_param(k=k, additional_drop_params=additional_drop_params):
                     continue
                 optional_params[k] = passed_params[k]
-    return optional_params
+    if custom_llm_provider == "litellm_proxy":
+        return optional_params
+
+    vector_store_params: Final = frozenset(("vector_store_id", "vector_store_ids"))
+    provider_params: Final = {
+        k: v
+        for k, v in TypeAdapter(dict[str, object]).validate_python(optional_params).items()
+        if k not in vector_store_params
+    }
+    provider_extra_body: Final = as_str_mapping(provider_params.get("extra_body"))
+    if provider_extra_body is not None:
+        filtered_provider_params: Final = {
+            **provider_params,
+            "extra_body": {k: v for k, v in provider_extra_body.items() if k not in vector_store_params},
+        }
+        return filtered_provider_params
+    return provider_params
 
 
 def apply_openai_param_overrides(

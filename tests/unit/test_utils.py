@@ -3704,6 +3704,79 @@ class TestAdditionalDropParamsForNonOpenAIProviders:
         assert result.get("custom_param") == "value"
 
 
+@pytest.mark.parametrize("provider", ("anthropic", "openai", "azure", "azure_ai", "hosted_vllm", "litellm_proxy"))
+@pytest.mark.parametrize("source", ("kwargs", "extra_body", "mapped_extra_body"))
+def test_provider_specific_params_withhold_vector_store_routing_keys(provider: str, source: str) -> None:
+    from litellm.utils import add_provider_specific_params_to_optional_params
+
+    routing_params: Final = {"vector_store_id": "vs-single", "vector_store_ids": ["vs-first", "vs-second"]}
+    tools: Final = [{"type": "file_search", "vector_store_ids": ["vs-tool"]}]
+    extras: Final = {**routing_params, "provider_option": True, "tools": tools}
+    passed_params: Final = extras if source == "kwargs" else {"extra_body": extras} if source == "extra_body" else {}
+    optional_params: Final = {"extra_body": extras} if source == "mapped_extra_body" else {}
+
+    result: Final[Mapping[str, object]] = add_provider_specific_params_to_optional_params(
+        optional_params=optional_params,
+        passed_params=passed_params,
+        custom_llm_provider=provider,
+        openai_params=[],
+    )
+
+    expected_extras: Final = extras if provider == "litellm_proxy" else {"provider_option": True, "tools": tools}
+    expected: Final = (
+        expected_extras if provider == "anthropic" and source == "kwargs" else {"extra_body": expected_extras}
+    )
+    assert result == expected
+
+
+@pytest.mark.parametrize(
+    ("provider", "model", "url"),
+    (
+        ("anthropic", "claude-sonnet-5-5", "https://api.anthropic.com/v1/messages"),
+        ("openai", "gpt-6.1-sol", "https://api.openai.com/v1/chat/completions"),
+    ),
+)
+def test_completion_keeps_vector_store_routing_keys_out_of_provider_requests(
+    provider: str, model: str, url: str, respx_mock: respx.MockRouter
+) -> None:
+    reply: Final = (
+        {
+            "id": "msg-vector-routing",
+            "type": "message",
+            "role": "assistant",
+            "model": model,
+            "content": [{"type": "text", "text": "ok"}],
+            "stop_reason": "end_turn",
+            "stop_sequence": None,
+            "usage": {"input_tokens": 1, "output_tokens": 1},
+        }
+        if provider == "anthropic"
+        else {
+            "id": "chatcmpl-vector-routing",
+            "object": "chat.completion",
+            "created": 0,
+            "model": model,
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        }
+    )
+    upstream: Final = respx_mock.post(url).respond(200, json=reply)
+    response: Final = litellm.completion(
+        model=f"{provider}/{model}",
+        messages=[{"role": "user", "content": "hi"}],
+        max_tokens=32,
+        api_key="test-key",
+        vector_store_id="vs-single",
+        vector_store_ids=["vs-first", "vs-second"],
+    )
+    request_body: Final[Mapping[str, object]] = json.loads(upstream.calls.last.request.content)
+
+    assert response.choices[0].message.content == "ok"
+    assert request_body["model"] == model
+    assert "vector_store_id" not in request_body
+    assert "vector_store_ids" not in request_body
+
+
 class TestExtraBodyCannotOverrideModel:
     @pytest.mark.parametrize("custom_llm_provider", ["edenai", "openai", "azure"])
     def test_extra_body_model_is_dropped_for_openai_compatible_providers(self, custom_llm_provider: str) -> None:
