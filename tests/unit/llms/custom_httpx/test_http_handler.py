@@ -2087,6 +2087,22 @@ async def test_http2_https_proxy_mount_uses_handler_ca_bundle(private_ca_tls_ups
     assert response.text == "ok-tls"
 
 
+@pytest.mark.asyncio
+async def test_http2_handler_loads_client_cert_on_first_request(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch):
+    for proxy_var in ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"):
+        monkeypatch.delenv(proxy_var, raising=False)
+    monkeypatch.setenv("SSL_CERTIFICATE", str(tmp_path / "missing-client.pem"))
+    monkeypatch.setattr(litellm, "force_ipv4", False)
+    monkeypatch.setattr(litellm, "http2", True)
+
+    handler = AsyncHTTPHandler()
+    try:
+        with pytest.raises(FileNotFoundError):
+            await handler.get("https://upstream.invalid/v1/models")
+    finally:
+        await handler.close()
+
+
 def test_sync_force_ipv4_https_proxy_mount_uses_handler_ca_bundle(
     private_ca_tls_upstream, monkeypatch: pytest.MonkeyPatch
 ):
