@@ -2697,8 +2697,7 @@ class CustomStreamWrapper:
                             if isinstance(choice, StreamingChoices):
                                 self._accumulate_streamed_delta(choice.delta)
                         self.rules.post_call_rules(input=self.response_uptil_now, model=self.model)
-                        returned_chunk = self._returned_sync_stream_chunk(processed_chunk)
-                        if returned_chunk is None:
+                        if (returned_chunk := self._returned_sync_stream_chunk(processed_chunk)) is None:
                             continue
                         self._maybe_set_final_chunk_usage(returned_chunk)
                         return returned_chunk
