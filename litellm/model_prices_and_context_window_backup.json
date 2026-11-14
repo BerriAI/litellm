@@ -101811,6 +101811,39 @@
         "supports_tool_choice": true,
         "supports_vision": true
     },
+    "tinker/thinkingmachines/Inkling-2-Small:peft:262144": {
+        "cache_read_input_token_cost": 3e-08,
+        "input_cost_per_token": 3e-07,
+        "litellm_provider": "tinker",
+        "max_input_tokens": 262144,
+        "mode": "chat",
+        "output_cost_per_token": 1e-06,
+        "source": "https://tinker-docs.thinkingmachines.ai/tinker/models/models_and_pricing/",
+        "supports_prompt_caching": true,
+        "supports_reasoning": true
+    },
+    "tinker/thinkingmachines/Inkling-Small:peft:262144:sampling-nvfp4": {
+        "cache_read_input_token_cost": 6e-08,
+        "input_cost_per_token": 3e-07,
+        "litellm_provider": "tinker",
+        "max_input_tokens": 262144,
+        "mode": "chat",
+        "output_cost_per_token": 1.2e-06,
+        "source": "https://tinker-docs.thinkingmachines.ai/tinker/models/models_and_pricing/",
+        "supports_prompt_caching": true,
+        "supports_reasoning": true
+    },
+    "tinker/thinkingmachines/Inkling:peft:262144:sampling-nvfp4": {
+        "cache_read_input_token_cost": 1.7e-07,
+        "input_cost_per_token": 1e-06,
+        "litellm_provider": "tinker",
+        "max_input_tokens": 262144,
+        "mode": "chat",
+        "output_cost_per_token": 4.05e-06,
+        "source": "https://tinker-docs.thinkingmachines.ai/tinker/models/models_and_pricing/",
+        "supports_prompt_caching": true,
+        "supports_reasoning": true
+    },
     "fal_ai/google/gemini-omni-flash/v1.2/upscale": {
         "litellm_provider": "fal_ai",
         "metadata": {"comment":"per second of upscaled output video by target resolution; the 1080p tier and output_cost_per_second take the higher source-dependent rate ($0.0819 from a 360p source) because the catalog selects by target resolution alone and the source resolution has no field, so a 720p source upscaled to 1080p ($0.041 per second) is overcounted, the same convention as fal_ai/blackforestlabs/flux-video-upscale"},
