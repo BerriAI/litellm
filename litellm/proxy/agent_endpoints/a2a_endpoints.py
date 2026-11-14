@@ -278,9 +278,14 @@ def _jsonrpc_error(
     request_id: object,
     code: int,
     message: str,
-    status_code: int = 400,
+    status_code: int = 200,
 ) -> JSONResponse:
-    """Create a JSON-RPC 2.0 error response."""
+    """Create a JSON-RPC 2.0 error response.
+
+    JSON-RPC errors travel in the body with HTTP 200, like the A2A reference server
+    answers them, so a2a-sdk clients reach the typed error instead of failing on the
+    HTTP status. Server-side failures keep an explicit 5xx.
+    """
     return JSONResponse(
         content={
             "jsonrpc": "2.0",
@@ -289,6 +294,11 @@ def _jsonrpc_error(
         },
         status_code=status_code,
     )
+
+
+def _with_request_id(content: Mapping[str, object], request_id: object) -> Mapping[str, object]:
+    """Echo the caller's id verbatim: ``exclude_none`` dumps drop a null id and the SDK request type has no null."""
+    return {**content, "id": request_id}
 
 
 class _JsonRpcRequestId(BaseModel):
@@ -865,7 +875,7 @@ async def invoke_agent_a2a(
                 target_agent_id=agent_id,
                 model=f"a2a_agent/{agent_id}",
             )
-            return _jsonrpc_error(request_id, -32000, f"Agent '{agent_id}' not found", 404)
+            return _jsonrpc_error(request_id, -32000, f"Agent '{agent_id}' not found")
 
         served_version: Final = _served_version(agent, request, original_method)
 
@@ -1071,10 +1081,9 @@ async def invoke_agent_a2a(
                 else {}
             )
             return JSONResponse(
-                content=normalize_jsonrpc_response(
-                    response_dict,
-                    served_version,
-                    method="message/send",
+                content=_with_request_id(
+                    normalize_jsonrpc_response(response_dict, served_version, method="message/send"),
+                    request_id,
                 )
             )
 
@@ -1161,7 +1170,9 @@ async def invoke_agent_a2a(
             )
             return JSONResponse(
                 content=(
-                    response.model_dump(mode="json", exclude_none=True) if hasattr(response, "model_dump") else response
+                    _with_request_id(response.model_dump(mode="json", exclude_none=True), request_id)
+                    if hasattr(response, "model_dump")
+                    else response
                 )
             )
 
@@ -1203,7 +1214,7 @@ async def invoke_agent_a2a(
         except Exception:
             pass
         if isinstance(e, litellm.BadRequestError):
-            return _jsonrpc_error(body.get("id"), -32602, e.message, 400)
+            return _jsonrpc_error(body.get("id"), -32602, e.message)
         if isinstance(e, litellm.AuthenticationError) and caused_by_entra_rejection(e):
             return _jsonrpc_error(body.get("id"), -32000, e.message, 401)
         return _jsonrpc_error(body.get("id"), -32603, f"Internal error: {e}", 500)
