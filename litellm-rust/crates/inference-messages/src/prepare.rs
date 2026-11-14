@@ -94,23 +94,6 @@ fn prepare_provider_request(
         &MessagesTransformContext::new(shaping.capabilities, shaping.settings.drop_params),
     )?;
 
-    let scoped =
-        get_provider_specific_headers(provider_specific_header.as_ref(), provider.as_str());
-    let forwarded = string_headers(Some(
-        extra_headers.into_iter().flatten().chain(scoped).collect(),
-    ))?;
-    let forwarded = config.request_headers(
-        with_default_headers(forwarded, config.default_headers()),
-        &transformed,
-    );
-    let environment = config.validate_environment(
-        forwarded,
-        api_key.as_deref(),
-        &transformed.model,
-        &connection_params,
-        &env_lookup,
-    )?;
-
     let url = config.get_complete_url(
         api_base.as_deref(),
         &transformed.model,
@@ -118,11 +101,29 @@ fn prepare_provider_request(
         transformed.params.stream == Some(true),
         &env_lookup,
     )?;
+    let body = config.request_for_url(transformed, &url);
+
+    let scoped =
+        get_provider_specific_headers(provider_specific_header.as_ref(), provider.as_str());
+    let forwarded = string_headers(Some(
+        extra_headers.into_iter().flatten().chain(scoped).collect(),
+    ))?;
+    let forwarded = config.request_headers(
+        with_default_headers(forwarded, config.default_headers()),
+        &body,
+    );
+    let environment = config.validate_environment(
+        forwarded,
+        api_key.as_deref(),
+        &body.model,
+        &connection_params,
+        &env_lookup,
+    )?;
 
     Ok(ProviderMessagesRequest {
         provider,
         url,
-        body: transformed,
+        body,
         environment,
         timeout: timeout.or_else(|| shaping.settings.request_timeout()),
         api_key: api_key.map(SecretValue::new),
@@ -251,6 +252,48 @@ mod tests {
             (auth.as_slice(), prepared.url.as_str()),
             (expected_auth, expected_url)
         );
+    }
+
+    #[rstest]
+    #[case::anthropic("https://api.anthropic.com", false)]
+    #[case::anthropic_compatible_host("https://api.deepseek.com/anthropic", true)]
+    fn unsigned_thinking_is_sent_only_to_a_host_that_does_not_check_claude_signatures(
+        shaping: MessagesShaping,
+        #[case] api_base: &str,
+        #[case] kept: bool,
+    ) {
+        let unsigned = json!({"type": "thinking", "thinking": "Gemini's plan", "signature": ""});
+        let prepared = prepare(MessagesCall {
+            body: body(json!({
+                "model": "claude-sonnet-5-5",
+                "max_tokens": 4096,
+                "thinking": {"type": "enabled", "budget_tokens": 2048},
+                "messages": [
+                    {"role": "user", "content": "hi"},
+                    {"role": "assistant", "content": [unsigned.clone(), {"type": "text", "text": "hello"}]},
+                    {"role": "user", "content": "again"}
+                ]
+            })),
+            api_key: Some("sk-test".into()),
+            api_base: Some(api_base.into()),
+            custom_llm_provider: Some("anthropic".into()),
+            litellm_params: Default::default(),
+            extra_headers: None,
+            provider_specific_header: None,
+            timeout: None,
+            shaping,
+        })
+        .unwrap();
+        let sent = serde_json::to_value(&prepared.body).unwrap();
+        assert_eq!(prepared.url, format!("{api_base}/v1/messages"));
+        assert_eq!(
+            sent["messages"][1]["content"]
+                .as_array()
+                .expect("the assistant turn is sent")
+                .contains(&unsigned),
+            kept
+        );
+        assert!(sent.get("thinking").is_some());
     }
 
     #[rstest]

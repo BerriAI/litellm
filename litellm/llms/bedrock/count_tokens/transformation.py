@@ -9,8 +9,9 @@ import re
 from collections.abc import Mapping
 from typing import Final, Literal
 
-from pydantic import JsonValue
+from pydantic import JsonValue, TypeAdapter
 
+from litellm.llms.anthropic.common_utils import strip_unsigned_thinking_from_anthropic_messages
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.common_utils import get_bedrock_base_model
 
@@ -18,6 +19,7 @@ from litellm.llms.bedrock.common_utils import get_bedrock_base_model
 # max_tokens field; CountTokens only counts input, so it has no effect
 # on any generation.
 DEFAULT_ANTHROPIC_INVOKE_MODEL_MAX_TOKENS: Final = 1024
+_ANTHROPIC_MESSAGES: Final = TypeAdapter(list[dict[str, JsonValue]])
 
 
 def _json_dict(value: JsonValue) -> dict[str, JsonValue]:
@@ -190,7 +192,19 @@ class BedrockCountTokensConfig(BaseAWSLLM):
 
         # For InvokeModel, we need to provide the raw body that would be sent to the model
         # Remove the 'model' field from the body as it's not part of the model input
-        body_data: Final = {k: v for k, v in request_data.items() if k != "model"}
+        messages: Final = request_data.get("messages")
+        body_data: Final = {
+            **{k: v for k, v in request_data.items() if k != "model"},
+            **(
+                {
+                    "messages": strip_unsigned_thinking_from_anthropic_messages(
+                        _ANTHROPIC_MESSAGES.validate_python(messages)
+                    )
+                }
+                if isinstance(messages, list)
+                else {}
+            ),
+        }
 
         if "messages" in body_data:
             # Bedrock validates the body against the model's InvokeModel schema;

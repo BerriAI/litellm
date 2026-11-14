@@ -4,11 +4,18 @@ Tests for Vertex AI partner models count_tokens location resolution.
 Ref: https://github.com/BerriAI/litellm/issues/23872
 """
 
+from typing import Final
+
 import pytest
 
+from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.experimental_pass_through.transformation import (
+    VertexAIPartnerModelsAnthropicMessagesConfig,
+)
 from litellm.llms.vertex_ai.vertex_ai_partner_models.count_tokens.handler import (
     VertexAIPartnerModelsTokenCounter,
+    count_tokens_request_body,
 )
+from litellm.types.router import GenericLiteLLMParams
 
 
 @pytest.fixture
@@ -294,3 +301,48 @@ class TestCountTokensVersionSuffixStripping:
 
         # The model name sent to the API must NOT have the @default suffix
         assert captured_json["model"] == "claude-sonnet-4-6"
+
+
+GEMINI_THOUGHT_HISTORY: Final = [
+    {"role": "user", "content": "Pick a number."},
+    {
+        "role": "assistant",
+        "content": [
+            {"type": "thinking", "thinking": "plan", "signature": "EqQBCkYIAxgCIkA_anthropic_signed"},
+            {"type": "text", "text": "Seven."},
+        ],
+    },
+    {"role": "user", "content": "Double it."},
+    {
+        "role": "assistant",
+        "content": [
+            {"type": "thinking", "thinking": "Gemini reasoning", "signature": ""},
+            {"type": "text", "text": "Fourteen."},
+        ],
+    },
+    {"role": "user", "content": "Halve it."},
+]
+
+
+def test_count_tokens_counts_the_thinking_history_vertex_messages_sends():
+    model: Final = "claude-sonnet-5-5"
+    sent: Final = VertexAIPartnerModelsAnthropicMessagesConfig().transform_anthropic_messages_request(
+        model=model,
+        messages=GEMINI_THOUGHT_HISTORY,
+        anthropic_messages_optional_request_params={"max_tokens": 1024},
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    body: Final = count_tokens_request_body({"model": model, "messages": GEMINI_THOUGHT_HISTORY}, model)
+
+    assert body["messages"] == sent["messages"]
+    assert body["messages"] != GEMINI_THOUGHT_HISTORY
+
+
+def test_count_tokens_keeps_unsigned_thinking_for_a_model_that_is_not_claude():
+    model: Final = "meta/llama-4-maverick-17b-128e-instruct-maas"
+
+    body: Final = count_tokens_request_body({"model": model, "messages": GEMINI_THOUGHT_HISTORY}, model)
+
+    assert body["messages"] == GEMINI_THOUGHT_HISTORY

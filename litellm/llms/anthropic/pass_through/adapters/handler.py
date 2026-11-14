@@ -29,7 +29,7 @@ from litellm.litellm_core_utils.tool_fields import (
     drops_mcp_servers,
     tools_without_mcp_servers,
 )
-from litellm.llms.anthropic.common_utils import strip_encrypted_reasoning_blocks_from_anthropic_messages
+from litellm.llms.anthropic.common_utils import strip_unreplayable_blocks_from_anthropic_messages
 from litellm.llms.anthropic.pass_through.adapters.transformation import (
     AnthropicAdapter,
     openai_thinking_routes_to_responses,
@@ -165,7 +165,9 @@ def messages_without_rejected_reasoning(
         _logged_rejection_code(error),
     )
     return _ANTHROPIC_MESSAGES.validate_python(
-        strip_encrypted_reasoning_blocks_from_anthropic_messages([dict(message) for message in messages])
+        strip_unreplayable_blocks_from_anthropic_messages(
+            [dict(message) for message in messages], is_encrypted_reasoning_block
+        )
     )
 
 

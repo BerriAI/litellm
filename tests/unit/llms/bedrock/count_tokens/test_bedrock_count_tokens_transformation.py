@@ -1,10 +1,15 @@
 import base64
 import json
+from typing import Final
 
 from litellm.llms.bedrock.count_tokens.transformation import (
     DEFAULT_ANTHROPIC_INVOKE_MODEL_MAX_TOKENS,
     BedrockCountTokensConfig,
 )
+from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
+    AmazonAnthropicClaudeMessagesConfig,
+)
+from litellm.types.router import GenericLiteLLMParams
 
 
 def test_detect_input_type():
@@ -253,3 +258,41 @@ def test_count_tokens_endpoint_encodes_model_id(monkeypatch):
         endpoint
         == "https://bedrock-runtime.us-east-1.amazonaws.com/model/..%2F..%2Fmodel%2Fother%3Fx%3D1%23frag/count-tokens"
     )
+
+
+def test_count_tokens_counts_the_thinking_history_bedrock_invoke_sends():
+    model: Final = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+    messages: Final = [
+        {"role": "user", "content": "Pick a number."},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "thinking", "thinking": "plan", "signature": "EqQBCkYIAxgCIkA_anthropic_signed"},
+                {"type": "text", "text": "Seven."},
+            ],
+        },
+        {"role": "user", "content": "Double it."},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "thinking", "thinking": "Gemini reasoning", "signature": ""},
+                {"type": "text", "text": "Fourteen."},
+            ],
+        },
+        {"role": "user", "content": "Halve it."},
+    ]
+    sent: Final = AmazonAnthropicClaudeMessagesConfig().transform_anthropic_messages_request(
+        model=model,
+        messages=messages,
+        anthropic_messages_optional_request_params={"max_tokens": 1024},
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    transformed: Final = BedrockCountTokensConfig().transform_anthropic_to_bedrock_count_tokens(
+        {"model": model, "messages": messages}
+    )
+    counted: Final = json.loads(base64.b64decode(transformed["input"]["invokeModel"]["body"]))
+
+    assert counted["messages"] == sent["messages"]
+    assert counted["messages"] != messages

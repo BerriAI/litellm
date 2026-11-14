@@ -6,8 +6,15 @@ Unlike Gemini models which use Google's token counting API, partner models use
 their respective publisher-specific count-tokens endpoints.
 """
 
+from collections.abc import Mapping
 from typing import Any, Final
 
+from pydantic import JsonValue, TypeAdapter
+
+from litellm.llms.anthropic.common_utils import (
+    is_claude_model_target,
+    strip_unsigned_thinking_from_anthropic_messages,
+)
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.llms.vertex_ai.common_utils import get_vertex_base_url
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
@@ -19,8 +26,21 @@ _COUNT_TOKENS_PUBLISHERS: Final = (
 )
 
 
+_ANTHROPIC_MESSAGES: Final = TypeAdapter(list[dict[str, JsonValue]])
+
+
 def count_tokens_publisher(model: str) -> str | None:
     return next((publisher for marker, publisher in _COUNT_TOKENS_PUBLISHERS if marker in model), None)
+
+
+def count_tokens_request_body(request_data: Mapping[str, object], model: str) -> Mapping[str, object]:
+    messages: Final = request_data.get("messages")
+    if not (is_claude_model_target("vertex_ai", model) and isinstance(messages, list)):
+        return request_data
+    return {
+        **request_data,
+        "messages": strip_unsigned_thinking_from_anthropic_messages(_ANTHROPIC_MESSAGES.validate_python(messages)),
+    }
 
 
 class VertexAIPartnerModelsTokenCounter(VertexBase):
@@ -170,7 +190,7 @@ class VertexAIPartnerModelsTokenCounter(VertexBase):
         response: Final = await async_client.post(
             endpoint_url,
             headers=headers,
-            json=request_data,
+            json=dict(count_tokens_request_body(request_data, model)),
             timeout=30.0,
         )
 

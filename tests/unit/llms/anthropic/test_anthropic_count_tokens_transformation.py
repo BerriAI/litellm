@@ -14,12 +14,15 @@ from litellm.llms.anthropic.count_tokens.handler import AnthropicCountTokensHand
 from litellm.llms.anthropic.count_tokens.transformation import (
     AnthropicCountTokensConfig,
 )
+from litellm.llms.anthropic.pass_through.messages.transformation import AnthropicMessagesConfig
 from litellm.llms.azure_ai.anthropic.count_tokens.handler import (
     AzureAIAnthropicCountTokensHandler,
 )
 from litellm.llms.azure_ai.anthropic.count_tokens.transformation import (
     AzureAIAnthropicCountTokensConfig,
 )
+from litellm.llms.azure_ai.anthropic.messages_transformation import AzureAnthropicMessagesConfig
+from litellm.types.router import GenericLiteLLMParams
 
 
 @pytest.mark.parametrize(
@@ -418,6 +421,50 @@ def test_count_drops_a_leading_system_message_without_text() -> None:
     )
 
     assert result == {"model": "claude-opus-5-5", "messages": [{"role": "user", "content": "hi"}]}
+
+
+@pytest.mark.parametrize(
+    ("count_config", "messages_config"),
+    (
+        (AnthropicCountTokensConfig(), AnthropicMessagesConfig()),
+        (AzureAIAnthropicCountTokensConfig(), AzureAnthropicMessagesConfig()),
+    ),
+)
+@pytest.mark.parametrize("model", ("claude-opus-5-5", "kimi-k3"))
+def test_count_sends_the_thinking_history_messages_sends(
+    count_config: AnthropicCountTokensConfig, messages_config: AnthropicMessagesConfig, model: str
+) -> None:
+    messages: Final[list[dict[str, JsonValue]]] = [
+        {"role": "user", "content": "Pick a number."},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "thinking", "thinking": "plan", "signature": "EqQBCkYIAxgCIkA_anthropic_signed"},
+                {"type": "text", "text": "Seven."},
+            ],
+        },
+        {"role": "user", "content": "Double it."},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "thinking", "thinking": "Gemini reasoning", "signature": ""},
+                {"type": "text", "text": "Fourteen."},
+            ],
+        },
+        {"role": "user", "content": "Halve it."},
+    ]
+
+    counted: Final = count_config.transform_request_to_count_tokens(model=model, messages=messages)
+    sent: Final = messages_config.transform_anthropic_messages_request(
+        model=model,
+        messages=messages,
+        anthropic_messages_optional_request_params={"max_tokens": 1024},
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert counted["messages"] == sent["messages"]
+    assert (counted["messages"] == messages) is (model == "kimi-k3")
 
 
 @pytest.mark.asyncio

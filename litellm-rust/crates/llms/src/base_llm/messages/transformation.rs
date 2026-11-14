@@ -74,6 +74,10 @@ pub trait BaseMessagesConfig: Sync {
         headers
     }
 
+    fn request_for_url(&self, request: MessagesRequest, _url: &str) -> MessagesRequest {
+        request
+    }
+
     /// The JSON that goes on the wire, for a host whose body differs from the typed request:
     /// Python's configs `pop("model")` when the model is addressed by the URL.
     fn wire_body(&self, body: Value) -> Value {

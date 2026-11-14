@@ -7,6 +7,10 @@ from litellm._logging import verbose_logger
 from litellm.anthropic_beta_headers_manager import is_beta_header_supported_by_bundled_config
 from litellm.exceptions import AuthenticationError
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    is_encrypted_reasoning_block,
+    is_unsignable_thinking_block,
+)
 from litellm.llms.base_llm.anthropic_messages.transformation import (
     BaseAnthropicMessagesConfig,
 )
@@ -26,11 +30,12 @@ from litellm.types.router import GenericLiteLLMParams
 from ...common_utils import (
     AnthropicError,
     AnthropicModelInfo,
+    checks_claude_signatures,
     merge_anthropic_beta_headers,
     optionally_handle_anthropic_oauth,
     requires_native_compaction_beta,
     strip_advisor_blocks_from_messages,
-    strip_encrypted_reasoning_blocks_from_anthropic_messages,
+    strip_unreplayable_blocks_from_anthropic_messages,
 )
 from .mid_conversation_system import (
     as_system_content_blocks,
@@ -148,6 +153,12 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         base config keeps them. Providers that reject them override this to True.
         """
         return False
+
+    def verifies_thinking_signatures(self, model: str, api_base: str | None) -> bool:
+        return "claude" in model.lower() and (
+            self._resolved_provider != "anthropic"
+            or checks_claude_signatures(AnthropicModelInfo.get_api_base(api_base) or "https://api.anthropic.com")
+        )
 
     @staticmethod
     def _filter_billing_headers_from_system(system_param):
@@ -658,7 +669,12 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             messages = strip_advisor_blocks_from_messages(messages)
 
         anthropic_messages_request: Final[AnthropicMessagesRequest] = AnthropicMessagesRequest(
-            messages=strip_encrypted_reasoning_blocks_from_anthropic_messages(messages),
+            messages=strip_unreplayable_blocks_from_anthropic_messages(
+                messages,
+                is_unsignable_thinking_block
+                if self.verifies_thinking_signatures(model, getattr(litellm_params, "api_base", None))
+                else is_encrypted_reasoning_block,
+            ),
             max_tokens=max_tokens,
             model=model,
             **anthropic_messages_optional_request_params,

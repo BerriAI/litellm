@@ -18,7 +18,7 @@ use crate::{
         ANTHROPIC_BASE_URL_ENV, OauthHandling, complete_anthropic_url, get_auth_header,
         has_advisor_tool, has_anthropic_credential, is_tool_search_used, merge_beta_headers,
         optionally_handle_anthropic_oauth, requires_native_compaction_beta, strip_advisor_blocks,
-        strip_encrypted_reasoning_blocks,
+        strip_encrypted_reasoning_blocks, strip_unsignable_thinking_blocks,
     },
     base_llm::{
         auth::AuthScheme,
@@ -114,6 +114,46 @@ impl BaseMessagesConfig for AnthropicMessagesConfig {
             provider_feature_betas(request, BetaProvider::Anthropic),
         )
     }
+
+    fn request_for_url(&self, request: MessagesRequest, url: &str) -> MessagesRequest {
+        if !(is_claude_model(&request.model) && checks_claude_signatures(url)) {
+            return request;
+        }
+        MessagesRequest {
+            messages: strip_unsignable_thinking_blocks(request.messages),
+            ..request
+        }
+    }
+}
+
+const CLAUDE_SIGNATURE_CHECKING_DOMAINS: [&str; 4] = [
+    "anthropic.com",
+    "services.ai.azure.com",
+    "openai.azure.com",
+    "cognitiveservices.azure.com",
+];
+
+fn url_host(url: &str) -> Option<String> {
+    let absolute = if url.contains("://") {
+        url.to_string()
+    } else {
+        format!("https://{url}")
+    };
+    url::Url::parse(&absolute)
+        .ok()
+        .and_then(|parsed| parsed.host_str().map(str::to_ascii_lowercase))
+}
+
+fn checks_claude_signatures(url: &str) -> bool {
+    url_host(url).is_some_and(|host| {
+        CLAUDE_SIGNATURE_CHECKING_DOMAINS
+            .iter()
+            .any(|domain| host == *domain || host.ends_with(&format!(".{domain}")))
+    })
+}
+
+fn is_claude_model(model: &str) -> bool {
+    model.to_lowercase().contains("claude")
 }
 
 pub(crate) fn transform_messages_request(
@@ -763,6 +803,52 @@ mod tests {
                 {"role": "user", "content": "And the next one?"}
             ]})))
         );
+    }
+
+    #[rstest]
+    #[case::claude_on_anthropic(
+        "claude-sonnet-5-5",
+        "https://api.anthropic.com/v1/messages",
+        false
+    )]
+    #[case::claude_on_foundry(
+        "claude-sonnet-5-5",
+        "https://example.services.ai.azure.com/anthropic/v1/messages",
+        false
+    )]
+    #[case::claude_name_on_deepseek(
+        "claude-sonnet-4-5",
+        "https://api.deepseek.com/anthropic/v1/messages",
+        true
+    )]
+    #[case::non_claude_on_anthropic("kimi-k3", "https://api.anthropic.com/v1/messages", true)]
+    fn unsigned_thinking_is_dropped_only_for_claude_on_a_host_that_checks_its_signatures(
+        #[case] model: &str,
+        #[case] url: &str,
+        #[case] kept: bool,
+    ) {
+        let unsigned_turn = json!([
+            {"type": "thinking", "thinking": "Read it first.", "signature": ""},
+            {"type": "tool_use", "id": "toolu_1", "name": "Read", "input": {"file_path": "numbers.txt"}}
+        ]);
+        let messages = json!([
+            {"role": "user", "content": "Read numbers.txt."},
+            {"role": "assistant", "content": unsigned_turn},
+            {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "toolu_1", "content": "3 7 12"}
+            ]}
+        ]);
+        let sent = serde_json::to_value(
+            ANTHROPIC_MESSAGES_CONFIG
+                .request_for_url(request(json!({"model": model, "messages": messages})), url),
+        )
+        .unwrap();
+        let expected = if kept {
+            unsigned_turn.clone()
+        } else {
+            json!([unsigned_turn[1]])
+        };
+        assert_eq!(sent["messages"][1]["content"], expected);
     }
 
     #[test]
