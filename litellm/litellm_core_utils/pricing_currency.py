@@ -309,6 +309,8 @@ def pricing_revision(
 
 
 def _parsed_source(raw: object) -> PricingSource | None:
+    if raw is None:
+        return None
     try:
         return PricingSource.model_validate(raw)
     except ValidationError:
