@@ -2010,9 +2010,7 @@ async def update_user(
         admin_group: Final = await _get_scim_admin_group()
         if admin_group is not None and user_data["teams"]:
             update_data["user_role"] = _resolve_scim_user_role(
-                [group for group in user.groups or [] if group.value in synced_teams],
-                admin_group,
-                _default_scim_user_role(),
+                user.groups or [], admin_group, _default_scim_user_role()
             )
 
         updated_user: Final = await _table(UserRepository(prisma_client)).update(

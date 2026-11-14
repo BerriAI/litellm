@@ -1536,17 +1536,19 @@ async def test_update_user_put_with_valueless_entitlements_deactivates_user(scim
 
 
 @pytest.mark.asyncio
-async def test_update_user_put_deactivates_and_blocks_keys_when_a_group_has_no_team(mocker, scim_test_client):
-    existing_user = mocker.MagicMock()
+async def test_update_user_put_deactivates_and_blocks_keys_when_a_group_has_no_team(
+    mocker: MockerFixture, scim_test_client: AsyncClient
+) -> None:
+    existing_user: Final = mocker.MagicMock()
     existing_user.teams = []
     existing_user.metadata = {}
 
-    mock_prisma_client = mocker.MagicMock()
+    mock_prisma_client: Final = mocker.MagicMock()
     mock_prisma_client.db.litellm_usertable.update = AsyncMock(
         return_value={"user_id": "leaver", "user_email": "leaver@example.com", "teams": [], "metadata": "{}"}
     )
     mock_prisma_client.db.litellm_teamtable.find_many = AsyncMock(return_value=[])
-    mock_patch_team_membership = mocker.patch(  # test-quality-ok: endpoint collaborators are module-level, not injectable
+    mock_patch_team_membership: Final = mocker.patch(  # test-quality-ok: endpoint collaborators are module-level, not injectable
         "litellm.proxy.management_endpoints.scim.scim_v2.patch_team_membership",
         AsyncMock(),
     )
@@ -1558,7 +1560,7 @@ async def test_update_user_put_deactivates_and_blocks_keys_when_a_group_has_no_t
         "litellm.proxy.management_endpoints.scim.scim_v2._check_user_exists",
         AsyncMock(return_value=existing_user),
     )
-    set_keys_blocked_mock = mocker.patch(  # test-quality-ok: endpoint collaborators are module-level, not injectable
+    set_keys_blocked_mock: Final = mocker.patch(  # test-quality-ok: endpoint collaborators are module-level, not injectable
         "litellm.proxy.management_endpoints.scim.scim_v2._set_user_keys_blocked",
         AsyncMock(return_value=1),
     )
@@ -1587,7 +1589,7 @@ async def test_update_user_put_deactivates_and_blocks_keys_when_a_group_has_no_t
         )
 
     assert response.status_code == 200, response.text
-    update_data = mock_prisma_client.db.litellm_usertable.update.call_args.kwargs["data"]
+    update_data: Final = mock_prisma_client.db.litellm_usertable.update.call_args.kwargs["data"]
     assert json.loads(update_data["metadata"])["scim_active"] is False
     assert update_data["teams"] == []
     mock_patch_team_membership.assert_not_called()
@@ -2857,28 +2859,30 @@ async def test_update_user_does_not_force_role_when_scim_admin_group_unset(mocke
 
 
 @pytest.mark.asyncio
-async def test_update_user_ignores_a_group_with_no_team_named_like_the_scim_admin_group(mocker, monkeypatch):
+async def test_update_user_keeps_the_admin_role_from_a_group_with_no_team_named_like_the_scim_admin_group(
+    mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
     from litellm.proxy.proxy_server import proxy_config
 
-    async def mock_get_config():
+    async def mock_get_config() -> dict[str, dict[str, str]]:
         return {"litellm_settings": {"scim_admin_group": "litellm-admins"}}
 
     monkeypatch.setattr(proxy_config, "get_config", mock_get_config)
     monkeypatch.setattr("litellm.default_internal_user_params", None, raising=False)
 
-    existing_user = mocker.MagicMock()
+    existing_user: Final = mocker.MagicMock()
     existing_user.teams = []
     existing_user.metadata = {}
-    scim_user = SCIMUser(
+    scim_user: Final = SCIMUser(
         schemas=["urn:ietf:params:scim:schemas:core:2.0:User"],
-        userName="not-an-admin",
-        emails=[SCIMUserEmail(value="not-an-admin@example.com")],
+        userName="an-admin",
+        emails=[SCIMUserEmail(value="an-admin@example.com")],
         groups=[SCIMUserGroup(value="no-such-team", display="litellm-admins")],
     )
 
-    mock_prisma_client = mocker.MagicMock()
+    mock_prisma_client: Final = mocker.MagicMock()
     mock_prisma_client.db.litellm_usertable.update = AsyncMock(
-        return_value={"user_id": "not-an-admin", "teams": [], "metadata": "{}"}
+        return_value={"user_id": "an-admin", "teams": [], "metadata": "{}"}
     )
     mock_prisma_client.db.litellm_teamtable.find_many = AsyncMock(return_value=[])
     mocker.patch(  # test-quality-ok: endpoint collaborators are module-level, not injectable
@@ -2894,10 +2898,10 @@ async def test_update_user_ignores_a_group_with_no_team_named_like_the_scim_admi
         AsyncMock(return_value=scim_user),
     )
 
-    await update_user(user_id="not-an-admin", user=scim_user)
+    await update_user(user_id="an-admin", user=scim_user)
 
-    update_data = mock_prisma_client.db.litellm_usertable.update.call_args.kwargs["data"]
-    assert update_data["user_role"] == LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
+    update_data: Final = mock_prisma_client.db.litellm_usertable.update.call_args.kwargs["data"]
+    assert update_data["user_role"] == LitellmUserRoles.PROXY_ADMIN
     assert update_data["teams"] == []
 
 
