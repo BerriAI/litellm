@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import socket
 import uuid
 from collections.abc import Iterator, Mapping, Sequence
 from typing import Final
@@ -21,8 +22,10 @@ from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.spend_tracking import budget_reservation, native_budgets
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.proxy.v2_proxy_fields import PRE_CALL_SOURCES
+from litellm.redis.store_settings import RedisStoreSettings
 from litellm.redis.stores.spend_counters import SpendCounterStore
 from litellm.router import Router
+from litellm.rust_bridge._native import NativeRedisClient
 
 
 def native_budgets_enabled(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
@@ -90,6 +93,19 @@ async def authorize_and_admit(
     )
     await admit_native_plan(billed or token, request_data)
     return billed
+
+
+def refused_redis_client() -> NativeRedisClient:
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port: Final[int] = probe.getsockname()[1]
+    client: Final = NativeRedisClient.connect(
+        RedisStoreSettings(
+            redis_kwargs={"host": "127.0.0.1", "port": port}, namespace=None, default_ttl=60, breaker=None
+        )
+    )
+    assert client is not None
+    return client
 
 
 UNLIMITED_BUDGET: Final = 1e12
