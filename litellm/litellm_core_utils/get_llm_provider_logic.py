@@ -156,9 +156,9 @@ def declared_provider(model: str | None, custom_llm_provider: str | None = None)
     """
     if custom_llm_provider:
         return custom_llm_provider
-    prefix, slash, _ = (model or "").partition("/")
-    if not slash:
+    if not model or "/" not in model:
         return None
+    prefix: Final = model.split("/", 1)[0]
     if prefix in litellm.provider_list or JSONProviderRegistry.exists(prefix) or is_registered_custom_provider(prefix):
         return prefix
     return None
