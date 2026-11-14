@@ -703,26 +703,20 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                 self._flush_retries,
                 len(uploads),
             )
-        delivered: Final = sum(1 for outcome in results if outcome == "delivered")
-        bucket_wide: Final = delivered == 0
         failed: Final = tuple(
             (element, outcome) for element, outcome in zip(uploads, results, strict=True) if outcome != "delivered"
         )
         now: Final = time.monotonic()
-        requeued: Final = (
-            tuple(element for element, _ in failed)
-            if bucket_wide
-            else tuple(
-                element
-                if element.retrying_since is not None or self.s3_max_retry_age_seconds is None
-                else element.model_copy(update={"retrying_since": now})
-                for element, outcome in failed
-                if outcome != "dropped"
-                and not (
-                    self.s3_max_retry_age_seconds is not None
-                    and element.retrying_since is not None
-                    and now - element.retrying_since > self.s3_max_retry_age_seconds
-                )
+        requeued: Final = tuple(
+            element
+            if element.retrying_since is not None or self.s3_max_retry_age_seconds is None
+            else element.model_copy(update={"retrying_since": now})
+            for element, outcome in failed
+            if outcome != "dropped"
+            and not (
+                self.s3_max_retry_age_seconds is not None
+                and element.retrying_since is not None
+                and now - element.retrying_since > self.s3_max_retry_age_seconds
             )
         )
         dropped: Final = len(failed) - len(requeued)
