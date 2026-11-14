@@ -5672,6 +5672,63 @@ class TestAnthropicPassthroughVirtualKeyLeak:
         assert "accept-encoding" not in forwarded
 
 
+class TestAnthropicPassthroughFilesUnderManagedFiles:
+    async def _call(self, monkeypatch, endpoint: str, method: str = "GET") -> tuple[HTTPException | None, bool]:
+        from litellm.proxy.pass_through_endpoints.passthrough_endpoint_router import PassthroughEndpointRouter
+
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-api03-proxy-configured-key")
+        monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
+        caller: Final = UserAPIKeyAuth(api_key="sk-litellm-caller")
+
+        async def receive():
+            return {"type": "http.request", "body": b"", "more_body": False}
+
+        request: Final = Request(
+            {"type": "http", "method": method, "path": f"/anthropic/{endpoint}", "headers": [], "query_string": b""},
+            receive=receive,
+        )
+        module: Final = "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints"
+        monkeypatch.setattr(f"{module}.passthrough_endpoint_router", PassthroughEndpointRouter(lambda: None))
+        create_route: Final = mock.MagicMock(return_value=AsyncMock(return_value={"status": "success"}))
+        with mock.patch(f"{module}.create_pass_through_route", create_route):
+            try:
+                await anthropic_proxy_route(
+                    endpoint=endpoint, request=request, fastapi_response=Response(), user_api_key_dict=caller
+                )
+            except HTTPException as exc:
+                return exc, create_route.called
+        return None, create_route.called
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("endpoint", "method"),
+        [
+            pytest.param("v1/files/", "POST", id="upload"),
+            pytest.param("v1//files", "GET", id="list"),
+            pytest.param("v1/files/file_abc/content", "GET", id="content"),
+            pytest.param("v1/files/file_abc", "DELETE", id="delete"),
+        ],
+    )
+    async def test_files_requests_are_refused_with_require_managed_files(self, monkeypatch, endpoint, method):
+        monkeypatch.setattr(litellm, "require_managed_files", True)
+        raised, forwarded = await self._call(monkeypatch, endpoint, method)
+        assert not forwarded
+        assert raised is not None and raised.status_code == 400
+        assert "/anthropic/v1/files" in str(raised.detail)
+
+    @pytest.mark.asyncio
+    async def test_files_requests_forward_without_require_managed_files(self, monkeypatch):
+        monkeypatch.setattr(litellm, "require_managed_files", False)
+        raised, forwarded = await self._call(monkeypatch, "v1/files/file_abc")
+        assert raised is None and forwarded
+
+    @pytest.mark.asyncio
+    async def test_other_requests_forward_with_require_managed_files(self, monkeypatch):
+        monkeypatch.setattr(litellm, "require_managed_files", True)
+        raised, forwarded = await self._call(monkeypatch, "v1/messages", "POST")
+        assert raised is None and forwarded
+
+
 class TestVertexPassthroughDefaultLocationOnShortRoutes:
     PROJECT = "test-project"
     SHORT_ROUTE = "publishers/google/models/gemini-2.5-flash:generateContent"
