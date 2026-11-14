@@ -20,6 +20,26 @@ _CREDENTIALS: Final[TypeAdapter[str | Mapping[str, JsonValue] | None]] = TypeAda
 _AUTH: Final = VertexBase()
 _MUSE_PREFIX: Final = "muse-"
 _STORED_RESPONSE_PARAMS: Final = frozenset({"background", "conversation", "previous_response_id"})
+MUSE_CHAT_PARAMS: Final = (
+    "max_tokens",
+    "max_completion_tokens",
+    "stream",
+    "stream_options",
+    "temperature",
+    "top_p",
+    "tools",
+    "tool_choice",
+    "parallel_tool_calls",
+    "response_format",
+    "reasoning_effort",
+    "user",
+    "store",
+    "service_tier",
+    "safety_identifier",
+    "prompt_cache_key",
+    "prompt_cache_retention",
+    "extra_headers",
+)
 
 
 def is_vertex_muse_model(model: str | None) -> bool:
@@ -73,7 +93,10 @@ class VertexAIMuseResponsesAPIConfig(OpenAIResponsesAPIConfig):
         return {**headers, "Content-Type": "application/json", "Authorization": f"Bearer {token}"}
 
     def get_complete_url(self, api_base: str | None, litellm_params: Mapping[str, object]) -> str:
-        _, project = self._access_token(litellm_params)
+        explicit_project: Final = VertexBase.safe_get_vertex_ai_project(  # pyright: ignore[reportUnknownMemberType]  # untyped bag
+            dict(litellm_params)
+        )
+        project: Final = explicit_project or self._access_token(litellm_params)[1]
         default_url: Final = (
             f"https://aiplatform.googleapis.com/v1/projects/{encode_url_path_segment(project)}"
             "/locations/global/publishers/meta/v1/responses"
@@ -101,14 +124,22 @@ class VertexAIMuseResponsesAPIConfig(OpenAIResponsesAPIConfig):
                 message="Vertex Muse is served from the global location only. Set vertex_location to global "
                 "or drop_params=True.",
             )
+        truncates: Final = response_api_optional_request_params.get("truncation") not in (None, "disabled")
+        if truncates and not drops_unsupported:
+            raise UnsupportedParamsError(
+                status_code=400,
+                message="Vertex Muse supports only truncation='disabled'. Set drop_params=True to omit it.",
+            )
         tool_choice: Final = response_api_optional_request_params.get("tool_choice")
         if tool_choice is not None and tool_choice != "auto" and not drops_unsupported:
             raise UnsupportedParamsError(
                 status_code=400,
                 message="Vertex Muse supports only tool_choice='auto'. Set drop_params=True to normalize unsupported choices.",
             )
-        dropped_params: Final = (_STORED_RESPONSE_PARAMS if drops_unsupported else frozenset[str]()) | (
-            {"tools"} if tool_choice == "none" else frozenset[str]()
+        dropped_params: Final = (
+            (_STORED_RESPONSE_PARAMS if drops_unsupported else frozenset[str]())
+            | ({"tools"} if tool_choice == "none" else frozenset[str]())
+            | ({"truncation"} if truncates else frozenset[str]())
         )
         tool_params: Final = {
             key: value for key, value in response_api_optional_request_params.items() if key not in dropped_params
