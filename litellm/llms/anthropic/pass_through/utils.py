@@ -253,23 +253,23 @@ def thinking_off_switch(request: Mapping[str, object]) -> ThinkingOffSwitch | No
 
 
 def _mapped_model_info(model: str, custom_llm_provider: str | None) -> ModelInfo | None:
-    from litellm.utils import get_model_info, is_generalized_model_info
+    from litellm.utils import get_model_info
 
     try:
-        model_info: Final = get_model_info(model=model, custom_llm_provider=custom_llm_provider)
+        return get_model_info(model=model, custom_llm_provider=custom_llm_provider)
     except Exception:
         return None
-    return None if is_generalized_model_info(model_info) else model_info
 
 
 def _deployment_model_info(
     model: str, custom_llm_provider: str | None, deployment_model_info: object
 ) -> Mapping[str, object] | None:
-    from litellm.utils import catalog_entry
+    from litellm.utils import catalog_entry, is_generalized_model_info
 
     own_info: Final = as_str_mapping(deployment_model_info)
     if own_info is None:
-        return _mapped_model_info(model, custom_llm_provider)
+        model_info: Final = _mapped_model_info(model, custom_llm_provider)
+        return None if model_info is None or is_generalized_model_info(model_info) else model_info
     declared: Final = {key: value for key, value in own_info.items() if value is not None}
     return {**(catalog_entry(model, custom_llm_provider) or {}), **declared}
 
