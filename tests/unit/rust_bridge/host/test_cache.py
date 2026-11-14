@@ -13,8 +13,10 @@ from litellm.llms.anthropic.messages.native.response_cache import AnthropicMessa
 from litellm.rust_bridge.host.cache import (
     caching_handler,
     configured_cache,
+    lookup,
     store_response,
     store_verbatim,
+    stream_hit,
     wrap_stream,
 )
 from litellm.types.caching import LiteLLMCacheType
@@ -162,3 +164,15 @@ def test_caching_handler_is_the_one_the_logging_object_holds() -> None:
     )
     logging_obj.llm_caching_handler = handler
     assert caching_handler(litellm_logging_obj=logging_obj) is handler
+
+
+@pytest.mark.asyncio
+async def test_a_hit_without_stream_events_is_not_replayed_as_a_stream(monkeypatch: pytest.MonkeyPatch) -> None:
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL, supported_call_types=["anthropic_messages"])
+    monkeypatch.setattr(litellm, "cache", cache)
+    store_response(cache, {"id": "msg_5", "type": "message", "content": [{"type": "text", "text": "hi"}]}, **_REQUEST)
+    await asyncio.gather(*_PENDING_CACHE_WRITES)
+    logging_obj: Final = _logging()
+
+    assert await lookup(cache, anthropic_messages, **_REQUEST, litellm_logging_obj=logging_obj) is not None
+    assert stream_hit(logging_obj) is None
