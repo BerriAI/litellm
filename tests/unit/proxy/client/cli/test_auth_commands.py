@@ -578,6 +578,19 @@ class TestLogoutCommand:
         assert vault.blob is None
         assert not (isolated_home / ".litellm" / "token.json").exists()
 
+    def test_logout_removes_the_key_files_lite_claude_launched_with(
+        self, isolated_home, secret_vault_factory, launch_claude
+    ):
+        vault = secret_vault_factory(blob=_secret_blob("https://test.example.com", "sk-stored"))
+        _write_token_file(isolated_home, key=None)
+        launched_with = (launch_claude(False), launch_claude(True))
+        assert all(path.exists() for path in launched_with)
+
+        result = self.runner.invoke(logout, obj={"secret_vault": vault})
+
+        assert result.exit_code == 0, result.output
+        assert not any(path.exists() for path in launched_with)
+
     def test_logout_without_the_keyring_package_does_not_claim_the_keychain_is_clear(
         self, isolated_home, secret_vault_factory
     ):

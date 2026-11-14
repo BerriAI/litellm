@@ -82,6 +82,9 @@ STARTING_MODEL_ROLE: Final = "the /model picker's default row, the model Claude 
 
 CLAUDE_SETTINGS_PATH: Final = Path.home() / ".claude" / "settings.json"
 CLAUDE_CONFIG_DIR_ENV: Final = "CLAUDE_CONFIG_DIR"
+OVERLAY_FILE_NAME: Final = "litellm-subscription-overlay.json"
+LAUNCH_KEY_OVERLAY_PREFIX: Final = "litellm-launch-key-overlay-"
+_LAUNCH_SETTINGS_FILE_PATTERNS: Final = (OVERLAY_FILE_NAME, f"{LAUNCH_KEY_OVERLAY_PREFIX}*.json")
 BACKUP_PATH: Final = Path.home() / ".litellm" / "claude_settings_backup.json"
 AUTOROUTE_BACKUP_PATH: Final = Path.home() / ".litellm" / "autorouter" / "claude_settings_backup.json"
 CONFIGURE_STATE_PATH: Final = Path.home() / ".litellm" / "claude_configure_state.json"
@@ -116,6 +119,25 @@ def claude_settings_path(environ: Mapping[str, str]) -> Path:
     if not config_dir:
         return CLAUDE_SETTINGS_PATH
     return Path(config_dir).expanduser() / "settings.json"
+
+
+def _unlink(path: Path) -> OSError | None:
+    try:
+        path.unlink(missing_ok=True)
+    except OSError as error:
+        return error
+    return None
+
+
+def remove_launch_settings_files(config_dir: Path) -> None:
+    """Delete the `--settings` files `lite claude` launched Claude Code with, since each holds a LiteLLM key.
+    Claude Code reads that file only as it starts, so a session already running keeps working."""
+    found: Final = tuple(chain.from_iterable(config_dir.glob(pattern) for pattern in _LAUNCH_SETTINGS_FILE_PATTERNS))
+    failures: Final = tuple((path, error) for path in found if (error := _unlink(path)) is not None)
+    if len(found) > len(failures):
+        click.echo(f"Removed the settings files holding a LiteLLM key that `lite claude` left in {config_dir}.")
+    for path, error in failures:
+        click.echo(f"Could not remove {path}, which holds a LiteLLM key: {error}. Delete it yourself.", err=True)
 
 
 def _is_default_settings_file(settings_path: Path) -> bool:
@@ -733,7 +755,9 @@ __all__ = (
     "ENABLE_TOOL_SEARCH_KEY",
     "ENABLE_TOOL_SEARCH_VALUE",
     "ENV_KEY",
+    "LAUNCH_KEY_OVERLAY_PREFIX",
     "MODEL_KEY",
+    "OVERLAY_FILE_NAME",
     "OWNED_ENV_KEYS",
     "OWNED_PATHS",
     "OWNED_TOP_LEVEL_KEYS",
@@ -765,6 +789,7 @@ __all__ = (
     "merge_claude_settings",
     "read_configure_receipt",
     "refuse_while_owned",
+    "remove_launch_settings_files",
     "settings_file_owners",
     "unconfigure_claude_settings",
     "write_claude_settings",

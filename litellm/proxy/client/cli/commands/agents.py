@@ -32,6 +32,8 @@ from .auth import cli_context_obj, context_secret_vault, get_stored_api_key, is_
 from .claude_settings import (
     API_KEY_HELPER_KEY,
     ENV_KEY,
+    LAUNCH_KEY_OVERLAY_PREFIX,
+    OVERLAY_FILE_NAME,
     ClaudeSettingsError,
     claude_settings_path,
     install_statusline_script,
@@ -348,10 +350,6 @@ def _readable_settings_files(
         return claude_settings_files(read_settings, environ, project_dir)
     except AgentRunError:
         return ()
-
-
-OVERLAY_FILE_NAME: Final = "litellm-subscription-overlay.json"
-LAUNCH_KEY_OVERLAY_PREFIX: Final = "litellm-launch-key-overlay-"
 
 
 def write_settings_overlay(name: str, text: str, environ: Mapping[str, str]) -> Path:
@@ -1371,8 +1369,6 @@ def agent_commands() -> tuple[click.Command, ...]:
 
 
 __all__ = [
-    "LAUNCH_KEY_OVERLAY_PREFIX",
-    "OVERLAY_FILE_NAME",
     "AgentRunError",
     "ListedModel",
     "ModelSyncSkipped",

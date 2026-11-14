@@ -23,6 +23,7 @@ from litellm.proxy.client.cli.commands.claude_settings import (
     BACKUP_PATH,
     CLAUDE_SETTINGS_PATH,
     CONFIGURE_STATE_PATH,
+    LAUNCH_KEY_OVERLAY_PREFIX,
     OWNED_ENV_KEYS,
     OWNED_TOP_LEVEL_KEYS,
     SETTINGS_FILE_OWNERS,
@@ -42,6 +43,7 @@ from litellm.proxy.client.cli.commands.claude_settings import (
     is_lite_api_key_helper_for,
     lite_api_key_helper,
     merge_claude_settings,
+    remove_launch_settings_files,
     statusline_command,
     unconfigure_claude_settings,
     with_status_line,
@@ -1132,3 +1134,21 @@ class TestStatusLine:
         assert "ANTHROPIC_AUTH_TOKEN" not in restored.get("env", {})
         assert restored["statusLine"]["command"] == statusline_command(script)
         assert "statusLine" not in outcome.restored
+
+
+@pytest.mark.skipif(os.name != "posix" or os.geteuid() == 0, reason="needs a directory its owner cannot write")
+def test_a_key_file_that_cannot_be_removed_is_named_so_the_user_can_delete_it(tmp_path, capsys):
+    config_dir = tmp_path / "cfg"
+    config_dir.mkdir()
+    stuck = config_dir / f"{LAUNCH_KEY_OVERLAY_PREFIX}0123456789abcdef.json"
+    stuck.write_text("{}")
+    config_dir.chmod(0o500)
+    try:
+        remove_launch_settings_files(config_dir)
+    finally:
+        config_dir.chmod(0o700)
+
+    output = capsys.readouterr()
+    assert stuck.exists()
+    assert str(stuck) in output.err
+    assert "Removed" not in output.out

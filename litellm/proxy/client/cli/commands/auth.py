@@ -54,6 +54,7 @@ from .claude_settings import (
     configure_state_path,
     lite_api_key_helper,
     refuse_while_owned,
+    remove_launch_settings_files,
     settings_file_owners,
 )
 from .config import pkce_default
@@ -1117,6 +1118,7 @@ def logout(ctx: click.Context):
         case KeyringUnreachable():
             click.echo(UNCHECKED_KEYCHAIN_MESSAGE)
             click.echo("Unlock your keychain and run 'lite logout' again to clear it.")
+    remove_launch_settings_files(claude_settings_path(os.environ).parent)
 
 
 def _renewing_login_command(ctx_obj: CliContextObj | None) -> str:
