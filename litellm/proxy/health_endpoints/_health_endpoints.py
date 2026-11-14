@@ -21,6 +21,7 @@ from typing_extensions import ReadOnly
 import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm.constants import HEALTH_CHECK_TIMEOUT_SECONDS, PROXY_DB_LOOKUP_STALL_WINDOW_SECONDS
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.SlackAlerting.ms_teams import (
     MS_TEAMS_ALERT_HEADERS,
     build_ms_teams_payload,
@@ -2019,6 +2020,50 @@ async def _db_health_readiness_check_unbounded() -> DBHealthCache:
         return db_health_cache
 
 
+_DEFAULT_ASYNC_PRE_CALL_HOOK: Final = MappingProxyType[str, object](CustomLogger.__dict__)["async_pre_call_hook"]
+
+
+class _CallbackDetail(TypedDict):
+    repr: ReadOnly[str]
+    kind: ReadOnly[Literal["class", "instance", "string"]]
+    name: ReadOnly[str]
+    module: ReadOnly[str | None]
+    is_custom_logger_subclass: ReadOnly[bool]
+    implements_async_pre_call_hook: ReadOnly[bool]
+
+
+def _callback_detail(callback: object) -> _CallbackDetail:
+    display: Final = str(callback)
+    if isinstance(callback, str):
+        return {
+            "repr": display,
+            "kind": "string",
+            "name": display,
+            "module": None,
+            "is_custom_logger_subclass": False,
+            "implements_async_pre_call_hook": False,
+        }
+    callback_type: Final = callback if isinstance(callback, type) else type(callback)
+    is_custom_logger: Final = issubclass(callback_type, CustomLogger)
+    attributes: Final[Mapping[str, object]] = callback_type.__dict__
+    leaf_hook: Final = attributes.get("async_pre_call_hook")
+    hook: Final[object] = (
+        getattr(leaf_hook, "__func__")  # noqa: B009  # exact builtin types exclude user-defined descriptors
+        if type(leaf_hook) in (staticmethod, classmethod)
+        else leaf_hook
+    )
+    return {
+        "repr": display,
+        "kind": "class" if isinstance(callback, type) else "instance",
+        "name": callback_type.__name__,
+        "module": callback_type.__module__,
+        "is_custom_logger_subclass": is_custom_logger,
+        "implements_async_pre_call_hook": (
+            is_custom_logger and callable(hook) and hook is not _DEFAULT_ASYNC_PRE_CALL_HOOK
+        ),
+    }
+
+
 @router.get(
     "/settings",
     tags=["health"],
@@ -2034,12 +2079,18 @@ async def active_callbacks():
     Returns a list of litellm level settings
 
     This is useful for debugging and ensuring the proxy server is configured correctly.
+    `litellm.callbacks_detail` aligns with `litellm.callbacks`, preserving its strings in `repr`.
+    Each detail includes `kind` (class, instance, or string), `name`, `module` (null for strings),
+    `is_custom_logger_subclass`, and `implements_async_pre_call_hook`. The hook flag requires
+    a callable defined on the concrete class other than the CustomLogger default. Inherited
+    hooks are excluded. Classes are not instantiated and hook descriptors are not evaluated.
 
     Response schema:
     ```
     {
         "alerting": _alerting,
         "litellm.callbacks": litellm_callbacks,
+        "litellm.callbacks_detail": callbacks_detail,
         "litellm.input_callback": litellm_input_callbacks,
         "litellm.failure_callback": litellm_failure_callbacks,
         "litellm.success_callback": litellm_success_callbacks,
@@ -2059,7 +2110,8 @@ async def active_callbacks():
     _alerting: Final = str(general_settings.get("alerting"))
     # get success callbacks
 
-    litellm_callbacks: Final = [str(x) for x in litellm.callbacks]
+    callbacks_detail: Final = [_callback_detail(callback) for callback in tuple(litellm.callbacks)]
+    litellm_callbacks: Final = [detail["repr"] for detail in callbacks_detail]
     litellm_input_callbacks: Final = [str(x) for x in litellm.input_callback]
     litellm_failure_callbacks: Final = [str(x) for x in litellm.failure_callback]
     litellm_success_callbacks: Final = [str(x) for x in litellm.success_callback]
@@ -2085,6 +2137,7 @@ async def active_callbacks():
     return {
         "alerting": _alerting,
         "litellm.callbacks": litellm_callbacks,
+        "litellm.callbacks_detail": callbacks_detail,
         "litellm.input_callback": litellm_input_callbacks,
         "litellm.failure_callback": litellm_failure_callbacks,
         "litellm.success_callback": litellm_success_callbacks,
