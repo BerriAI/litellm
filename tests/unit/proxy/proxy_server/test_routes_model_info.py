@@ -2455,6 +2455,7 @@ def test_model_info_hides_api_base_from_non_admin_callers(
         "base_url": "http://127.0.0.1:9559/v1?cred=CANARY-SECRET-BASE-URL",
         "azure_endpoint": "https://example.invalid/openai?cred=CANARY-SECRET-AZURE",
         "aws_bedrock_runtime_endpoint": "https://example.invalid/bedrock?cred=CANARY-SECRET-BEDROCK",
+        "aws_bedrock_control_plane_endpoint": "https://example.invalid/bedrock-cp?cred=CANARY-SECRET-BEDROCK-CP",
         "sagemaker_base_url": "https://example.invalid/sagemaker?cred=CANARY-SECRET-SAGEMAKER",
         "deployment_url": "https://example.invalid/sap?cred=CANARY-SECRET-SAP",
         "s3_endpoint_url": "https://example.invalid/s3?cred=CANARY-SECRET-S3",

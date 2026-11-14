@@ -18802,6 +18802,9 @@ _ADMIN_ONLY_ENDPOINT_URL_FIELDS: Final = frozenset(
         # The Azure endpoint URL, consumed as the client base_url
         # (litellm/llms/azure/common_utils.py). Not in API_KEY_UPSTREAM_PARAMS.
         "azure_endpoint",
+        # The Bedrock control plane endpoint, passed to boto3 as endpoint_url
+        # (litellm/llms/bedrock/batches/handler.py). Not in API_KEY_UPSTREAM_PARAMS.
+        "aws_bedrock_control_plane_endpoint",
     )
 )
 
