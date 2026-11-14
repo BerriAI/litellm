@@ -4832,6 +4832,7 @@ class LlmProviders(str, Enum):
     CORALBRICKS = "coralbricks"
     CORTECS = "cortecs"
     SCX_AI = "scx-ai"
+    PZERO = "pzero"
     PRISM = "prism"
     OPENINFER = "openinfer"
     INFERENCEAPIS = "inferenceapis"

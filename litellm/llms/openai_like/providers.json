@@ -314,5 +314,10 @@
       "supports_function_calling": true,
       "supports_reasoning": true
     }
+  },
+  "pzero": {
+    "base_url": "https://api.pzero.studio/v1",
+    "api_key_env": "PZERO_API_KEY",
+    "supported_endpoints": ["/v1/chat/completions", "/v1/responses"]
   }
 }
