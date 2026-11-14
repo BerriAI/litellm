@@ -2758,7 +2758,7 @@ class LiteLLMCompletionResponsesConfig:
                 type=cast(Literal["function"], _tool_use_definition.get("type") or "function"),
                 function=ChatCompletionToolCallFunctionChunk(
                     name=function.get("name") or "",
-                    arguments=serialize_tool_call_arguments(function.get("arguments")),
+                    arguments=serialize_tool_call_arguments(function.get("arguments"), "{}"),
                 ),
                 index=0,
             )
@@ -2800,7 +2800,7 @@ class LiteLLMCompletionResponsesConfig:
             raw_arguments = REDACTED_TOOL_CALL_ARGUMENTS_PLACEHOLDER
         if not raw_arguments and function_call.get("type") == "custom_tool_call":
             raw_input: Final = function_call.get("input") or ""
-            raw_arguments = json.dumps({"content": raw_input}) if raw_input else ""
+            raw_arguments = json.dumps({"content": raw_input or ""})
         raw_name: Final = function_call.get("name") or ""
         namespace: Final = function_call.get("namespace") or ""
         deferred_top_level: Final = namespace == raw_name and raw_name not in self_named_namespace_members
@@ -2808,7 +2808,7 @@ class LiteLLMCompletionResponsesConfig:
         tool_call_id: Final = function_call.get("call_id") or function_call.get("id") or ""
         tool_call_function: Final = ChatCompletionToolCallFunctionChunk(
             name=f"{namespace}__{raw_name}" if qualify else raw_name,
-            arguments=serialize_tool_call_arguments(raw_arguments),
+            arguments=serialize_tool_call_arguments(raw_arguments, "{}"),
         )
         function_call_cache_control: Final = _input_item_cache_control(function_call)
         tool_call: Final = (
@@ -4004,7 +4004,7 @@ class LiteLLMCompletionResponsesConfig:
             type="function",
             function=Function(
                 name=tool_call.get("name") or "",
-                arguments=serialize_tool_call_arguments(tool_call.get("arguments")),
+                arguments=serialize_tool_call_arguments(tool_call.get("arguments"), "{}"),
             ),
         )
 
