@@ -95,12 +95,11 @@ function EditProjectForm({ project, onClose, onSuccess }: Omit<EditProjectModalP
       : { ...values, guardrails: undefined, modelLimits: undefined, metadata: undefined };
 
     const built = buildProjectUpdateParams(submitted, project.litellm_budget_table?.max_budget);
-    const keepsStoredBatchLimit = built.metadata !== undefined && !isProxyAdminRole(userRole ?? "");
-    const params: ProjectUpdateParams = {
-      ...built,
-      ...(keepsStoredBatchLimit && { metadata: withStoredBatchEnqueuedTokenLimit(built.metadata, project.metadata) }),
-      team_id: submitted.team_id,
-    };
+    const storedBatchLimitKept =
+      built.metadata !== undefined && !isProxyAdminRole(userRole ?? "")
+        ? { metadata: withStoredBatchEnqueuedTokenLimit(built.metadata, project.metadata) }
+        : {};
+    const params: ProjectUpdateParams = { ...built, ...storedBatchLimitKept, team_id: submitted.team_id };
 
     updateMutation.mutate(
       { projectId: project.project_id, params },
