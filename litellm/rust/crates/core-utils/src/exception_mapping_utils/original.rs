@@ -114,6 +114,7 @@ const OPENAI_COMPATIBLE_PROVIDERS: &[&str] = &[
     "cognition",
     "scx-ai",
     "zerogpu",
+    "flexai",
 ];
 
 impl ExceptionFamily {
