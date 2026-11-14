@@ -1,5 +1,4 @@
 import asyncio
-import base64
 import json
 import re
 import signal
@@ -118,17 +117,6 @@ def _responses_reply(identity: str, stream: bool) -> Reply:
     )
 
 
-def _decoded_responses_id(identity: str) -> str:
-    try:
-        return base64.b64decode(identity.removeprefix("resp_").encode()).decode()
-    except (ValueError, UnicodeDecodeError):
-        return identity
-
-
-def _canonical_id(identity: str) -> str:
-    return _decoded_responses_id(identity).rpartition("response_id:")[2]
-
-
 def _sse_events(text: str) -> tuple[dict[str, JsonValue], ...]:
     return tuple(
         json.loads(line[6:]) for line in text.splitlines() if line.startswith("data: ") and line != "data: [DONE]"
@@ -170,8 +158,7 @@ class Collector:
         return tuple(
             attributes
             for attributes in self.attributes()
-            if isinstance(logged := attributes.get("gen_ai.response.id", {}).get("stringValue"), str)
-            and _canonical_id(logged) == _canonical_id(response_id)
+            if attributes.get("gen_ai.response.id", {}).get("stringValue") == response_id
         )
 
     def conversation_ids(self, response_id: str) -> tuple[str | None, ...]:
@@ -182,10 +169,6 @@ class Collector:
 
     def single_span(self, response_id: str) -> str | None:
         return eventually(lambda: self.conversation_ids(response_id), lambda values: len(values) == 1, seconds=30)[0]
-
-    def logged_id(self, response_id: str) -> str:
-        spans: Final = eventually(lambda: self.spans(response_id), lambda values: len(values) == 1, seconds=30)
-        return str(spans[0]["gen_ai.response.id"]["stringValue"])
 
 
 @pytest.fixture(scope="session")
@@ -437,12 +420,13 @@ def test_responses_stream_raw_metadata_session_id_lands_as_conversation_id(rig: 
     completed: Final = tuple(event for event in events if event["type"] == "response.completed")
     assert len(completed) == 1, events
     assert completed[0]["response"]["output"][0]["id"] == f"msg_resp_{marker}", completed
-    assert str(completed[0]["response"]["id"]).startswith("resp_"), completed
+    client_id: Final = str(completed[0]["response"]["id"])
+    assert client_id.startswith("resp_"), completed
     assert rig.upstream_bodies(marker) == (
         {"model": "gpt-4o-mini", "input": marker, "metadata": {"session_id": session}, "stream": True},
     )
-    assert rig.sink.single_span(f"resp_{marker}") == session
-    assert rig.spend_session(rig.sink.logged_id(f"resp_{marker}")) == session
+    assert rig.sink.single_span(client_id) == session
+    assert rig.spend_session(client_id) == session
 
 
 @pytest.mark.covers("other.observability.otel.conversation_id_from_metadata_chat_raw")
@@ -689,15 +673,11 @@ def _burst(rig: Rig, count: int, session_for: Mapping[int, str]) -> tuple[tuple[
         return tuple(pool.map(one, range(count)))
 
 
-def _is_encrypted_responses_id(identity: str) -> bool:
-    return identity.startswith("resp_") and _decoded_responses_id(identity) == identity
-
-
 def _landed(rig: Rig, expected: Mapping[str, str]) -> dict[str, tuple[str, ...]]:
     spans: Final = rig.sink.attributes()
     return {
         session: tuple(
-            _canonical_id(str(attributes["gen_ai.response.id"]["stringValue"]))
+            str(attributes["gen_ai.response.id"]["stringValue"])
             for attributes in spans
             if attributes.get(CONVERSATION, {}).get("stringValue") == session and "gen_ai.response.id" in attributes
         )
@@ -707,21 +687,13 @@ def _landed(rig: Rig, expected: Mapping[str, str]) -> dict[str, tuple[str, ...]]
 
 def _assert_exactly_once(rig: Rig, expected: Mapping[str, str], landed: Mapping[str, tuple[str, ...]]) -> None:
     spend: Final = eventually(
-        lambda: {
-            session: tuple(_canonical_id(identity) for identity in rig.spend_request_ids(session))
-            for session in expected.values()
-        },
+        lambda: {session: rig.spend_request_ids(session) for session in expected.values()},
         lambda rows: all(len(values) >= 1 for values in rows.values()),
         seconds=70,
     )
     assert landed == spend, (landed, spend)
     assert all(len(values) == 1 for values in landed.values()), landed
-    caller_visible: Final = {
-        session: (_canonical_id(identity),)
-        for identity, session in expected.items()
-        if not _is_encrypted_responses_id(identity)
-    }
-    assert {session: landed[session] for session in caller_visible} == caller_visible, landed
+    assert landed == {session: (identity,) for identity, session in expected.items()}, landed
 
 
 @pytest.mark.covers("other.observability.otel.conversation_id_sink_outage_recovers_exactly_once")

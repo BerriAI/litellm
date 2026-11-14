@@ -531,6 +531,9 @@ def _serve_h2(context: ssl.SSLContext, raw: socket.socket, drain: bool) -> None:
         tls.sendall(connection.data_to_send())
         while data := tls.recv(65535):
             if _reply_to_ended_streams(connection, tls, data, drain) and drain:
+                tls.shutdown(socket.SHUT_WR)
+                while tls.recv(65535):
+                    pass
                 return
 
 

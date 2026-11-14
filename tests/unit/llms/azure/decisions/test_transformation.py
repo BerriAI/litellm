@@ -125,6 +125,29 @@ async def test_default_credential_refreshes_without_opt_in(
     )
 
 
+@pytest.mark.parametrize("is_async", (False, True))
+@pytest.mark.parametrize("systemone", (False, True))
+async def test_entra_rejecting_the_default_credential_answers_401_with_only_the_aadsts_reason(
+    monkeypatch: pytest.MonkeyPatch, is_async: bool, systemone: bool
+) -> None:
+    from azure.core.exceptions import ClientAuthenticationError
+
+    app_client_id: Final = "0d08e61f-6184-4980-9cef-a2e9128f4cb2"
+    credential = Mock(spec=["get_token"])
+    credential.get_token.side_effect = ClientAuthenticationError(
+        message="Authentication failed: AADSTS7000215: Invalid client secret provided. Ensure the secret being "
+        f"sent in the request is the client secret value, for a secret added to app '{app_client_id}'."
+    )
+    monkeypatch.setattr("azure.identity.DefaultAzureCredential", Mock(return_value=credential))
+
+    with pytest.raises(litellm.AuthenticationError) as excinfo:
+        await call_decisions(is_async, systemone, {})
+
+    assert excinfo.value.status_code == 401
+    assert "AADSTS7000215" in str(excinfo.value)
+    assert app_client_id not in str(excinfo.value)
+
+
 @pytest.mark.parametrize("kind", ("service-principal", "oidc", "provider"))
 async def test_azure_decisions_reuses_existing_azure_credential_resolution(
     monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, kind: str

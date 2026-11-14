@@ -301,6 +301,18 @@ def _assert_answered_with_its_own_marker(served: _Served) -> None:
     assert set(_MARKER.findall(served.text)) == {served.call.marker}, served.text
 
 
+def _spend_id(served: _Served) -> str:
+    if served.call.endpoint == "responses" and served.call.stream:
+        payloads: Final = (
+            _JSON_OBJECT.validate_json(line.removeprefix("data: "))
+            for line in served.text.splitlines()
+            if line.startswith("data: {")
+        )
+        (completed,) = tuple(event for event in payloads if event.get("type") == "response.completed")
+        return str(_JSON_OBJECT.validate_python(completed["response"])["id"])
+    return _response_id(served.call.marker)
+
+
 async def test_a_concurrent_mixed_burst_reaches_gemini_with_each_tool_result_in_its_own_form(gateway: Gateway) -> None:
     calls: Final = _calls(
         30, ("chat", "messages", "responses"), lambda index: index % 2 == 0, lambda index: (index // 2) % 2 == 0
@@ -314,7 +326,7 @@ async def test_a_concurrent_mixed_burst_reaches_gemini_with_each_tool_result_in_
         _assert_each_in_its_own_form(wire.drain(), calls)
         landed: Final = _spend_rows_by_model(model, 30)
         assert landed >= {
-            _response_id(call.marker) for call in calls if not (call.endpoint == "messages" and call.stream)
+            _spend_id(item) for item in served if not (item.call.endpoint == "messages" and item.call.stream)
         }
 
 

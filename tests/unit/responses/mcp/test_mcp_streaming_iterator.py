@@ -6,9 +6,12 @@ from typing import Final, cast
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from fastapi import HTTPException
 from mcp.types import CallToolResult, TextContent
 
 import litellm  # noqa: F401 - ensures litellm.responses.main is registered in sys.modules
+from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.proxy.guardrails.exception_utils import enrich_http_exception_with_guardrail_context
 from litellm.responses.mcp.mcp_streaming_iterator import (
     MCPEnhancedStreamingIterator,
 )
@@ -291,6 +294,27 @@ async def test_continuation_id_is_final_round_not_interim_tool_call(monkeypatch)
     assert completed[-1].response.output[-1]["content"][0]["text"] == "The first item is Alpha."
     assert completed[-1].response.id == "resp-final"
     assert completed[-1].response.id != "resp-interim"
+
+
+@pytest.mark.asyncio
+async def test_opted_in_guardrail_block_emits_terminal_error_without_follow_up(monkeypatch):
+    call_tool: Final = _mock_mcp_environment(monkeypatch)
+    callback: Final = CustomGuardrail(guardrail_name="blocked")
+    callback.mcp_block_behavior = "raise"
+    error: Final = HTTPException(status_code=400, detail={"error": "guardrail denied", "guardrail_name": "blocked"})
+    enrich_http_exception_with_guardrail_context(error, callback)
+    call_tool.side_effect = error
+    follow_up: Final = AsyncMock(return_value=_text_only_stream("unguarded follow-up"))
+    monkeypatch.setattr(responses_main_module, "aresponses", follow_up)
+    iterator: Final = _make_iterator([_completed_chunk([_function_call("call_1", "read_wiki_contents")])])
+
+    chunks: Final = [chunk async for chunk in iterator]
+
+    assert chunks[-1].type == ResponsesAPIStreamEvents.ERROR
+    assert chunks[-1].error.code == "400"
+    assert "guardrail denied" in chunks[-1].error.message
+    assert all(chunk.type != ResponsesAPIStreamEvents.RESPONSE_COMPLETED for chunk in chunks)
+    follow_up.assert_not_awaited()
 
 
 @pytest.mark.asyncio

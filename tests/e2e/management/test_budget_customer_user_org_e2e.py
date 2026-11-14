@@ -418,7 +418,7 @@ class TestBudgetListV1:
     @pytest.mark.covers("mgmt.budget.list_v1.happy_path")
     @meta(Subject(domain=Domain.SPEND_BUDGETS, route=Route.BUDGET_MANAGEMENT))
     def test_refuses_a_sort_field_and_a_parameter_it_does_not_support(self, client: ManagementClient) -> None:
-        assert _list_status(client, BudgetPageParams(sort="budget_duration")) == 400
+        assert _list_status(client, BudgetPageParams(sort="not_a_sort_field")) == 400
         assert _list_status(client, BudgetPageParams(not_a_parameter="b-1")) == 400
 
     @pytest.mark.covers("mgmt.budget.list_v1.admin_only")

@@ -1,4 +1,4 @@
-"""Tests for the repo's git hook scripts in ``.githooks/``.
+"""Tests for the repo's git hook scripts in ``litellm/scripts/githooks/``.
 
 The commit-msg hook enforces Conventional Commits. It is exercised as a
 subprocess against representative valid / invalid inputs so that any future
@@ -16,7 +16,7 @@ from pathlib import Path
 import pytest
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
-_HOOKS_DIR = _REPO_ROOT / ".githooks"
+_HOOKS_DIR = _REPO_ROOT / "litellm/scripts/githooks"
 _COMMIT_MSG_HOOK = _HOOKS_DIR / "commit-msg"
 
 pytestmark = pytest.mark.skipif(

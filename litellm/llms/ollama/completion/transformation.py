@@ -75,7 +75,7 @@ class _OllamaGenerateReasoning(LiteLLMBaseModel):
     def split(self) -> tuple[str | None, str | None]:
         """Reasoning reaches `/api/generate` either in the top-level `thinking` field or
         inline in `<think>` tags, never both. The field wins, matching `ollama_chat`."""
-        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
             parse_content_for_reasoning,
         )
 

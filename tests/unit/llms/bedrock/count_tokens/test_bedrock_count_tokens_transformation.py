@@ -1,6 +1,8 @@
 import base64
 import json
 
+import pytest
+
 from litellm.llms.bedrock.count_tokens.transformation import (
     DEFAULT_ANTHROPIC_INVOKE_MODEL_MAX_TOKENS,
     BedrockCountTokensConfig,
@@ -51,6 +53,22 @@ def test_detect_input_type_converse_blocks_route_to_converse():
 
     request = {"messages": [{"role": "user", "content": [{"text": "hi"}]}]}
     assert config._detect_input_type(request) == "converse"
+
+
+@pytest.mark.parametrize("content", [[{"text": "hi"}], "hi"])
+@pytest.mark.parametrize(
+    "context_management", [None, {"edits": [{"type": "clear_tool_uses_20250919"}]}]
+)
+def test_a_pass_through_body_with_context_management_keeps_its_converse_input(content, context_management):
+    request = {
+        "model": "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        "messages": [{"role": "user", "content": content}],
+        "context_management": context_management,
+    }
+
+    transformed = BedrockCountTokensConfig().transform_anthropic_to_bedrock_count_tokens(request)
+
+    assert transformed["input"]["converse"]["messages"] == [{"role": "user", "content": [{"text": "hi"}]}]
 
 
 def test_transform_to_invoke_model_format_base64_encodes_body():
@@ -293,3 +311,37 @@ def test_count_tokens_endpoint_encodes_model_id(monkeypatch):
         endpoint
         == "https://bedrock-runtime.us-east-1.amazonaws.com/model/..%2F..%2Fmodel%2Fother%3Fx%3D1%23frag/count-tokens"
     )
+
+
+@pytest.mark.parametrize(
+    "request_data",
+    [
+        {"model": "us.anthropic.claude-opus-4-8", "messages": [{"role": "user", "content": "hi"}]},
+        {"model": "us.anthropic.claude-opus-4-8", "messages": "hi"},
+        {
+            "model": "us.anthropic.claude-opus-4-8",
+            "messages": [{"role": "user", "content": [{"type": "text", "text": "hi"}]}, {"content": "hi"}],
+        },
+    ],
+)
+def test_count_tokens_request_problem_leaves_bodies_bedrock_can_judge_to_bedrock(request_data):
+    assert BedrockCountTokensConfig().count_tokens_request_problem(request_data) is None
+
+
+def test_count_tokens_request_problem_names_tool_calls_instead_of_asking_for_content():
+    problem = BedrockCountTokensConfig().count_tokens_request_problem(
+        {
+            "model": "us.amazon.nova-pro-v1:0",
+            "messages": [
+                {"role": "user", "content": "hi"},
+                {
+                    "role": "assistant",
+                    "tool_calls": [{"id": "1", "type": "function", "function": {"name": "t", "arguments": "{}"}}],
+                },
+            ],
+        }
+    )
+
+    assert problem is not None
+    assert "tool_calls" in problem
+    assert "must have a 'content' field" not in problem

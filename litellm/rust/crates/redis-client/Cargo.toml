@@ -1,0 +1,33 @@
+[package]
+name = "litellm-redis-client"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+tracing.workspace = true
+litellm-circuit-breaker.workspace = true
+litellm-secret-value.workspace = true
+litellm-python-compat.workspace = true
+litellm-redis-types.workspace = true
+futures-util.workspace = true
+redis = { workspace = true, features = [
+    "cluster-async",
+    "connection-manager",
+    "sentinel",
+    "tls-rustls-insecure",
+    "token-based-authentication",
+    "tokio-rustls-comp",
+] }
+pem = "4.0.0"
+pkcs8 = { version = "0.10.2", features = ["3des", "encryption", "std"] }
+rustls-native-certs.workspace = true
+socket2 = "0.6.5"
+thiserror.workspace = true
+tokio = { workspace = true, features = ["rt", "sync", "time"] }
+
+[dev-dependencies]
+litellm-redis-testing.workspace = true
+rustls.workspace = true
+rstest.workspace = true

@@ -32,23 +32,29 @@ from litellm.litellm_core_utils.cli_token_utils import (
     CredentialNotCleared,
     CredentialNotRecorded,
     CredentialNotSaved,
+    LoginRecordNotMoved,
     SecretSave,
     clear_cli_token,
     get_cli_token_file_path,
     is_cli_token_fresh,
     load_cli_token,
+    load_cli_token_left_in_keychain,
     save_cli_token,
 )
 
 from .claude_settings import (
     STARTING_MODEL_ROLE,
+    ApiKeyHelper,
+    ClaudeCredential,
     ClaudeSettingsError,
     KeepModel,
     StaticToken,
     claude_settings_path,
     configure_claude_settings,
     configure_state_path,
+    lite_api_key_helper,
     refuse_while_owned,
+    remove_launch_settings_files,
     settings_file_owners,
 )
 from .config import pkce_default
@@ -234,22 +240,53 @@ def load_token(*, vault: SecretVault = SYSTEM_KEYRING) -> Mapping[str, object] |
     return None if record is None else record.model_dump(exclude_none=True)
 
 
+def is_pkce_login(token_data: Mapping[str, object] | None, base_url: str) -> bool:
+    return (
+        token_data is not None
+        and token_data.get("refresh_token") is not None
+        and token_data.get("base_url") == base_url.rstrip("/")
+    )
+
+
+def _login_left_in_keychain(vault: SecretVault) -> Mapping[str, object] | None:
+    """The login an earlier logout left in a keychain it could not reach"""
+    left: Final = load_cli_token_left_in_keychain(vault=vault)
+    return None if left is None else left.model_dump(exclude_none=True)
+
+
+def _same_refresh_token(left: Mapping[str, object] | None, current: Mapping[str, object] | None) -> bool:
+    return left is not None and current is not None and left.get("refresh_token") == current.get("refresh_token")
+
+
+def _credentials_to_revoke(vault: SecretVault) -> tuple[Mapping[str, object], ...]:
+    left: Final = _login_left_in_keychain(vault)
+    current: Final = load_token(vault=vault)
+    if current is None or _same_refresh_token(left, current):
+        return () if left is None else (left,)
+    return (current,) if left is None else (left, current)
+
+
 def save_token(record: CliTokenData, *, vault: SecretVault = SYSTEM_KEYRING) -> SecretSave:
     """Store a credential the PKCE layer produced, secret in the vault and the rest on disk"""
     return save_cli_token(CliTokenRecord(**record), vault=vault)
 
 
-def _renewal_saver(vault: SecretVault) -> Callable[[CliTokenData], None]:
+def _renewal_saver(vault: SecretVault, http: Http) -> Callable[[CliTokenData], None]:
     """Persist a silently renewed credential, and say on stderr when no store would keep it.
 
     A renewal rotates the refresh token, so a rotation that is never stored logs this
-    machine out on the next command; the user hears about it rather than guessing.
+    machine out on the next command; the user hears about it rather than guessing. The save
+    can take the keychain entry of a login an earlier logout could not end, which leaves no
+    other record of that login's refresh token, so it is revoked the way a login revokes it.
     """
 
     def save(record: CliTokenData) -> None:
+        left: Final = _login_left_in_keychain(vault)
         outcome: Final = save_token(record, vault=vault)
         if isinstance(outcome, (CredentialNotSaved, CredentialNotRecorded)):
             _warn(storage_notice(outcome))
+        if left is not None:
+            _revoke_the_replaced_login(left, http, _warn)
 
     return save
 
@@ -280,10 +317,11 @@ def get_stored_api_key(
         return None
     if expected_base_url is not None and token_data.get("base_url") != expected_base_url.rstrip("/"):
         return None
+    http: Final = requests.Session()
     return fresh_api_key(
         token_data,
-        _renewal_saver(vault),
-        requests.Session(),
+        _renewal_saver(vault, http),
+        http,
         reload=_renewal_reader(vault),
         warn=_warn,
     )
@@ -807,16 +845,25 @@ def _render_and_prompt_for_team_selection(teams: list[CliTeam]) -> str | None:
             return None
 
 
-def _configure_claude_code(base_url: str, api_key: str) -> None:
-    """Write the key this login just minted into Claude Code's settings.json as a static token, undoable with
-    `lite unconfigure claude`. The key expires with the login, so the flag is the re-wire step of each login
-    rather than a one-time setup: no apiKeyHelper is written, since Claude Code would spawn `lite` (and its
-    keychain probe) on every credential refresh to keep one fresh."""
+def _claude_credential(base_url: str, api_key: str, renews: bool, stored: SecretSave) -> ClaudeCredential:
+    """`print-token` renews from the stored record, so only a stored login with a refresh token gets the helper."""
+    if not renews or isinstance(stored, (CredentialNotSaved, CredentialNotRecorded)):
+        return StaticToken(api_key)
+    helper: Final = lite_api_key_helper(base_url)
+    if helper is None:
+        click.echo("Could not find the `lite` command, so Claude Code cannot run it to renew this login's key.")
+        return StaticToken(api_key)
+    return helper
+
+
+def _configure_claude_code(base_url: str, credential: ClaudeCredential, renews: bool) -> None:
+    """Undoable with `lite unconfigure claude`. A static key expires with the login, so the flag is then the
+    re-wire step of each login."""
     settings_path: Final = claude_settings_path(os.environ)
     try:
         configure_claude_settings(
             base_url,
-            StaticToken(api_key),
+            credential,
             KeepModel(),
             settings_path,
             configure_state_path(settings_path),
@@ -825,14 +872,27 @@ def _configure_claude_code(base_url: str, api_key: str) -> None:
     except ClaudeSettingsError as e:
         raise click.ClickException(f"Logged in, but could not configure Claude Code: {e}")
     click.echo(f"\nConfigured Claude Code: {settings_path} now routes through {base_url.rstrip('/')}.")
+    match credential:
+        case ApiKeyHelper():
+            click.echo(
+                "Claude Code gets this login's key from `lite auth print-token`, which renews it before it expires."
+            )
+        case StaticToken():
+            click.echo(
+                f"This login's key is stored in the file, so run `{_login_command(renews)} --config-claude` again "
+                "after it expires."
+            )
+            if not renews:
+                click.echo("`lite login --pkce --config-claude` instead lets Claude Code renew the key on its own.")
+        case _:
+            assert_never(credential)
     click.echo(
-        "This login's key is stored in the file, so run `lite login --config-claude` again after it expires. "
         "Your other Claude Code settings were left untouched. Restart Claude Code to pick this up. "
         f"Undo with `lite unconfigure claude`; `lite configure claude --model` sets {STARTING_MODEL_ROLE}."
     )
 
 
-def _finish_login(base_url: str, api_key: str, config_claude: bool, stored: SecretSave) -> None:
+def _finish_login(base_url: str, api_key: str, config_claude: bool, stored: SecretSave, *, renews: bool) -> None:
     """Claude Code is configured from the key in hand, so it does not wait on the CLI's own store: a login whose
     token file or keychain refused it still has a usable key, and `--config-claude` asked for exactly that
     key to be written into settings.json."""
@@ -842,7 +902,7 @@ def _finish_login(base_url: str, api_key: str, config_claude: bool, stored: Secr
     click.echo(f"JWT Token: {api_key[:20]}...")
     click.echo(storage_notice(stored))
     if config_claude:
-        _configure_claude_code(base_url, api_key)
+        _configure_claude_code(base_url, _claude_credential(base_url, api_key, renews, stored), renews)
     if isinstance(stored, (CredentialNotSaved, CredentialNotRecorded)):
         if config_claude:
             click.echo("Claude Code was configured with this key even though the CLI itself could not keep it.")
@@ -853,17 +913,22 @@ def _finish_login(base_url: str, api_key: str, config_claude: bool, stored: Secr
 
 
 def _replace_stored_token(record: CliTokenData, http: Http, vault: SecretVault) -> SecretSave:
-    previous: Final = load_token(vault=vault)
+    previous: Final = _credentials_to_revoke(vault)
     stored: Final = save_token(record, vault=vault)
-    if previous is None or isinstance(stored, CredentialNotSaved):
+    if isinstance(stored, CredentialNotSaved):
         return stored
-    revocation: Final = revoke_stored_credential(previous, http)
+    for login in previous:
+        _revoke_the_replaced_login(login, http, click.echo)
+    return stored
+
+
+def _revoke_the_replaced_login(login: Mapping[str, object], http: Http, report: Callable[[str], None]) -> None:
+    revocation: Final = revoke_stored_credential(login, http)
     if revocation is not None:
-        click.echo(
+        report(
             f"Could not revoke the previous login's refresh token on the proxy ({revocation.reason}); "
             "it expires on its own."
         )
-    return stored
 
 
 def _pkce_login(base_url: str, config_claude: bool, vault: SecretVault) -> None:
@@ -873,7 +938,7 @@ def _pkce_login(base_url: str, config_claude: bool, vault: SecretVault) -> None:
         click.echo(f"Authentication failed: {credential.reason}")
         return
     stored: Final = _replace_stored_token(pkce_token_record(base_url, credential), http, vault)
-    _finish_login(base_url, credential.access_token, config_claude, stored)
+    _finish_login(base_url, credential.access_token, config_claude, stored, renews=True)
 
 
 @click.command(name="login")
@@ -882,8 +947,9 @@ def _pkce_login(base_url: str, config_claude: bool, vault: SecretVault) -> None:
     is_flag=True,
     default=False,
     help=(
-        "After logging in, write this login's key into ~/.claude/settings.json so Claude Code routes through "
-        "this proxy; run it again after the key expires. Unrelated settings are preserved."
+        "After logging in, wire ~/.claude/settings.json so Claude Code routes through this proxy. A --pkce login "
+        "gets an apiKeyHelper that renews the key; any other login writes the key itself, so run it again after "
+        "the key expires. Unrelated settings are preserved."
     ),
 )
 @click.option(
@@ -965,7 +1031,7 @@ def login(ctx: click.Context, config_claude: bool, pkce: bool | None) -> None:
                 context_secret_vault(ctx),
             )
 
-            _finish_login(base_url, api_key, config_claude, stored)
+            _finish_login(base_url, api_key, config_claude, stored, renews=False)
             return
         else:
             click.echo("Authentication timed out. Please try again.")
@@ -987,13 +1053,22 @@ def login(ctx: click.Context, config_claude: bool, pkce: bool | None) -> None:
         return
 
 
-@click.command(name="logout")
-@click.pass_context
-def logout(ctx: click.Context):
-    """Logout and clear stored authentication"""
-    vault: Final = context_secret_vault(ctx)
-    token_data: Final = load_token(vault=vault)
-    revocation: Final = revoke_stored_credential(token_data, requests.Session()) if token_data is not None else None
+def _revoke_before_logout(left: Mapping[str, object] | None, current: Mapping[str, object] | None, http: Http) -> None:
+    """Revoke every login this logout ends, holding the logout back only for the one it signs out.
+
+    An earlier login left in the keychain is the previous login once another one is current, so a
+    proxy that cannot revoke it only earns the warning `lite login` gives, never a logout that the
+    current proxy is ready to finish.
+    """
+    if left is None or current is None or _same_refresh_token(left, current):
+        _revoke_the_login_or_keep_it(current if left is None else left, http)
+        return
+    _revoke_the_replaced_login(left, http, click.echo)
+    _revoke_the_login_or_keep_it(current, http)
+
+
+def _revoke_the_login_or_keep_it(token_data: Mapping[str, object] | None, http: Http) -> None:
+    revocation: Final = None if token_data is None else revoke_stored_credential(token_data, http)
     match revocation:
         case RevocationUnavailable(reason=reason):
             raise click.ClickException(
@@ -1007,6 +1082,17 @@ def logout(ctx: click.Context):
         case _:
             assert_never(revocation)
 
+
+@click.command(name="logout")
+@click.pass_context
+def logout(ctx: click.Context):
+    """Logout and clear stored authentication"""
+    vault: Final = context_secret_vault(ctx)
+    http: Final = requests.Session()
+    left: Final = _login_left_in_keychain(vault)
+    current: Final = load_token(vault=vault)
+    _revoke_before_logout(left, current, http)
+
     path: Final = get_cli_token_file_path()
     match clear_cli_token(vault=vault):
         case SecretErased():
@@ -1014,6 +1100,12 @@ def logout(ctx: click.Context):
         case CredentialNotCleared(detail=detail):
             click.echo(f"Your credential is still in {path}, which could not be removed: {detail}.")
             click.echo("Delete that file, or make the directory writable and run 'lite logout' again.")
+        case LoginRecordNotMoved(detail=detail):
+            click.echo(f"Not logged out. {path} could not be moved aside: {detail}.")
+            click.echo(
+                "Keep that file, since 'lite logout' needs it to revoke a login your OS keychain may still hold. "
+                "Make its directory writable and run 'lite logout' again."
+            )
         case SecretStranded():
             click.echo(STRANDED_CREDENTIAL_MESSAGE)
             click.echo("Unlock your keychain and run 'lite logout' again to clear it.")
@@ -1026,6 +1118,13 @@ def logout(ctx: click.Context):
         case KeyringUnreachable():
             click.echo(UNCHECKED_KEYCHAIN_MESSAGE)
             click.echo("Unlock your keychain and run 'lite logout' again to clear it.")
+    remove_launch_settings_files(claude_settings_path(os.environ).parent)
+
+
+def _renewing_login_command(ctx_obj: CliContextObj | None) -> str:
+    if ctx_obj is None or not ctx_obj.get("base_url_explicit"):
+        return "lite login --pkce"
+    return f"lite --base-url {ctx_obj['base_url'].rstrip('/')} login --pkce"
 
 
 @click.command(name="print-token")
@@ -1045,7 +1144,7 @@ def print_token(ctx: click.Context):
     vault: Final = context_secret_vault(ctx)
     token_data: Final = load_token(vault=vault)
     if not token_data:
-        click.echo("Not authenticated. Run 'lite login'.", err=True)
+        click.echo(f"Not authenticated. Run '{_renewing_login_command(_optional_cli_context_obj(ctx))}'.", err=True)
         sys.exit(1)
 
     # apiKeyHelper is invoked bare (no --base-url), so unless the caller
@@ -1055,31 +1154,32 @@ def print_token(ctx: click.Context):
     ctx_obj: Final = cli_context_obj(ctx)
     issued_for_this_server: Final = token_data.get("base_url") == ctx_obj.get("base_url", "").rstrip("/")
     if ctx_obj.get("base_url_explicit") and not issued_for_this_server:
-        click.echo("Not authenticated for this server. Run 'lite login'.", err=True)
+        click.echo(f"Not authenticated for this server. Run '{_renewing_login_command(ctx_obj)}'.", err=True)
         sys.exit(1)
 
     renews: Final = "refresh_token" in token_data
     if not renews and token_expired(token_data):
-        click.echo("Token expired. Run 'lite login' again.", err=True)
+        click.echo(f"Token expired. Run '{_renewing_login_command(ctx_obj)}' again.", err=True)
         sys.exit(1)
 
     if token_data.get("key") is None:
-        click.echo(keychain_unreadable_notice(vault), err=True)
+        click.echo(keychain_unreadable_notice(vault, _renewing_login_command(ctx_obj)), err=True)
         sys.exit(1)
 
+    http: Final = requests.Session()
     api_key: Final = (
         ctx_obj.get("api_key")
         if issued_for_this_server and ctx_obj.get("api_key_from_token_file")
         else fresh_api_key(
             token_data,
-            _renewal_saver(vault),
-            requests.Session(),
+            _renewal_saver(vault, http),
+            http,
             reload=_renewal_reader(vault),
             warn=_warn,
         )
     )
     if not api_key:
-        click.echo(f"Key expired. Run '{_login_command(renews)}' again.", err=True)
+        click.echo(f"Key expired. Run '{_renewing_login_command(ctx_obj)}' again.", err=True)
         sys.exit(1)
 
     click.echo(api_key)

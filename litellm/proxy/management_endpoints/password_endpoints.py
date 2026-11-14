@@ -33,7 +33,7 @@ from litellm.proxy.auth.password_policy import (
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.management_endpoints.session_endpoints import revoke_ui_session_keys
 from litellm.proxy.management_helpers.audit_logs import create_object_audit_log
-from litellm.proxy.utils import hash_password, verify_password
+from litellm.proxy.utils import hash_password, run_off_loop_if_fips, verify_password
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.user_repository import UserRepository
 
@@ -129,7 +129,7 @@ async def change_password(
             ),
         )
 
-    if not verify_password(data.current_password, stored_password):
+    if not await run_off_loop_if_fips(verify_password, data.current_password, stored_password):
         raise HTTPException(status_code=400, detail=_error_detail("Current password is incorrect."))
 
     if data.new_password == data.current_password:
@@ -142,7 +142,7 @@ async def change_password(
     await validate_password_not_breached(data.new_password, general_settings, hibp_client)
 
     password_update: Final[prisma_types.LiteLLM_UserTableUpdateInput] = {
-        "password": hash_password(data.new_password),
+        "password": await run_off_loop_if_fips(hash_password, data.new_password),
         "password_reset_required": False,
         "last_breach_check_at": None,
     }

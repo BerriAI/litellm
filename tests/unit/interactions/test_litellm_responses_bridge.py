@@ -6,7 +6,7 @@ the litellm_responses bridge provider, which calls litellm.responses() internall
 """
 
 from collections.abc import Mapping
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Final
 
 import pytest
@@ -143,6 +143,26 @@ class TestBridgeResponseTransformation:
         assert interaction.created is not None
         assert datetime.fromisoformat(interaction.created).timestamp() == 1700000000
         assert interaction.updated == interaction.created
+
+    @pytest.mark.parametrize(
+        ("created_at", "expected_created"),
+        [
+            (datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc), "2026-01-02T03:04:05+00:00"),
+            (None, None),
+        ],
+        ids=["datetime", "missing"],
+    )
+    def test_responses_response_created_at_that_is_not_a_timestamp(
+        self, created_at: datetime | None, expected_created: str | None
+    ):
+        reply: Final = _responses_api_response("completed", None).model_copy(update={"created_at": created_at})
+
+        interaction: Final = LiteLLMResponsesInteractionsConfig.transform_responses_response_to_interactions_response(
+            reply, None
+        )
+
+        assert interaction.created == expected_created
+        assert interaction.updated == expected_created
 
     def test_responses_response_with_a_status_that_is_not_text_is_refused(self):
         reply: Final = _responses_api_response("completed", None).model_copy(update={"status": 7})

@@ -75,7 +75,7 @@ def route_entry_points_to_stubs(router: _RouterDouble) -> _RouterDouble:
         if kind == "deployment_names":
             return router.deployment_names
         if kind == "team_public":
-            return router.team_public_model_names
+            return router.team_public_model_names if team_id is None else router.team_public_model_names_of(team_id)
         if kind == "litellm_models":
             return router.resolved_litellm_models(model_name, **_given(team_id=team_id))
         if kind == "route_candidates":
@@ -99,8 +99,12 @@ def route_entry_points_to_stubs(router: _RouterDouble) -> _RouterDouble:
             return router.is_recognized_model(name)
         if kind == "upstream":
             return router.get_routable_upstream_model(name, **_given(team_id=team_id))
+        if kind == "upstream_provider":
+            return router.get_routable_upstream_provider(name, **_given(team_id=team_id))
         if kind == "search_tool_support":
             return router.get_search_tool_support(name, **_given(team_id=team_id))
+        if kind == "upstreams":
+            return router.get_routable_upstreams(name, **_given(team_id=team_id))
         if kind == "from_id":
             # The old call sites passed the provider positionally, exactly when the new ones pass it.
             if custom_llm_provider is _NOT_GIVEN:
@@ -123,6 +127,12 @@ def route_entry_points_to_stubs(router: _RouterDouble) -> _RouterDouble:
             return router.get_configured_display_name(name)
         if field == "service_tiers":
             return router.get_configured_service_tiers(name, **_given(team_id=team_id))
+        if field == "pinned_reasoning_efforts":
+            return router.get_pinned_reasoning_efforts(name, **_given(team_id=team_id))
+        if field == "max_input_tokens":
+            return router.get_configured_max_input_tokens(name, **_given(team_id=team_id))
+        if field == "deployment_model_info":
+            return router.get_routable_deployment_model_info(name, **_given(team_id=team_id))
         if field == "listing_info":
             return router.get_model_listing_info(name)
         if field == "mode":
@@ -143,6 +153,10 @@ def route_entry_points_to_stubs(router: _RouterDouble) -> _RouterDouble:
     registry.deployment_dict.side_effect = lambda id: router.get_model_info(id=id)
     registry.has_deployment.side_effect = lambda id: router.has_model_id(id)
     registry.discovered_model_info.side_effect = lambda id: router.get_discovered_model_info(id)
+    registry.routing_group.side_effect = lambda name: router.get_routing_group(name)
+    registry.client.side_effect = lambda deployment, *, client_type=None: router._get_client(
+        deployment=deployment, kwargs={}, client_type=client_type
+    )
 
     def _credentials(id, *, form="params", **team):
         # Old call sites passed team_id (even None) exactly when the new ones do, so pass it on as given.
@@ -159,6 +173,9 @@ def route_entry_points_to_stubs(router: _RouterDouble) -> _RouterDouble:
     registry.plugins.side_effect = lambda kind: getattr(router, f"{kind}_routers")
     health.fully_blocked_model_names.side_effect = lambda: router.get_fully_blocked_model_names()
     health.split_priority.side_effect = lambda model, kwargs: router.split_request_priority(model=model, kwargs=kwargs)
+    health.priority_header_fields.side_effect = lambda model, kwargs, header: router.priority_header_update(
+        model=model, kwargs=kwargs, header=header
+    )
     registry.index.side_effect = lambda name: getattr(router, f"{name}_to_deployment_indices")
     registry.patterns.side_effect = lambda team=False: router.team_pattern_routers if team else router.pattern_router
     health.is_blocked.side_effect = lambda deployment: router.is_deployment_blocked(deployment)
@@ -167,6 +184,7 @@ def route_entry_points_to_stubs(router: _RouterDouble) -> _RouterDouble:
         _core_get_settings=lambda: router.get_settings(),
         _core_get_available_guardrail=lambda name: router.get_available_guardrail(guardrail_name=name),
         _core_get_allowed_fails_from_policy=lambda exception: router.get_allowed_fails_from_policy(exception=exception),
+        _core_deployment_call_timeout=lambda litellm_params: router.deployment_call_timeout(litellm_params),
     )
     router.settings.side_effect = lambda: RouterSettings(
         **{name: getattr(router, name) for name in SETTING_FIELDS}, _router=settings_backend

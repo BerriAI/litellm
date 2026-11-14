@@ -29,6 +29,7 @@ DOCS_STREAMING_REFUSAL_URL: Final = (
 )
 
 # Copied verbatim from DOCS_REFUSAL_URL and DOCS_STREAMING_REFUSAL_URL on 2026-10-12.
+DOCS_REFUSAL_EXPLANATION: Final = "This request was declined because it could enable cyber harm."
 DOCS_REFUSAL: Final[Event] = {
     "id": "msg_01XFUDYJgAACzvnptvVoYEL",
     "type": "message",
@@ -39,7 +40,7 @@ DOCS_REFUSAL: Final[Event] = {
     "stop_details": {
         "type": "refusal",
         "category": "cyber",
-        "explanation": "This request was declined because it could enable cyber harm.",
+        "explanation": DOCS_REFUSAL_EXPLANATION,
     },
     "usage": {"input_tokens": 412, "output_tokens": 0},
 }
@@ -50,7 +51,7 @@ DOCS_PARTIAL_REFUSAL: Final[Event] = {
     "stop_details": {
         "type": "refusal",
         "category": "cyber",
-        "explanation": "This request was declined because it could enable cyber harm.",
+        "explanation": DOCS_REFUSAL_EXPLANATION,
     },
 }
 

@@ -188,6 +188,7 @@ class AlertType(str, Enum):
     cooldown_deployment = "cooldown_deployment"
     new_model_added = "new_model_added"
     model_deprecation_warnings = "model_deprecation_warnings"
+    performance_alerts = "performance_alerts"
 
     # Outage alerts
     outage_alerts = "outage_alerts"
@@ -313,6 +314,9 @@ class Litellm_EntityType(enum.Enum):
     TAG = "tag"
     AGENT = "agent"
     MODEL_ACCESS_GROUP = "model_access_group"
+    CUSTOMER_ORG = "customer_org"
+    CUSTOMER_TEAM = "customer_team"
+    CUSTOMER_MEMBER = "customer_member"
 
     # global proxy level entity
     PROXY = "proxy"

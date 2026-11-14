@@ -43,9 +43,7 @@ class TestGoogleAIStudioFilesTransformation:
         # CRITICAL: params should be empty dict, not contain Content-Type or any other params
         # These would be incorrectly interpreted as query parameters
         assert params == {}, f"Expected empty params dict, got: {params}"
-        assert (
-            "Content-Type" not in params
-        ), "Content-Type should not be in query params"
+        assert "Content-Type" not in params, "Content-Type should not be in query params"
 
     def test_transform_retrieve_file_request_with_file_name_only(self):
         """
@@ -66,9 +64,7 @@ class TestGoogleAIStudioFilesTransformation:
 
         # CRITICAL: params should be empty dict
         assert params == {}, f"Expected empty params dict, got: {params}"
-        assert (
-            "Content-Type" not in params
-        ), "Content-Type should not be in query params"
+        assert "Content-Type" not in params, "Content-Type should not be in query params"
 
     def test_transform_retrieve_file_request_with_raw_id_only(self):
         """
@@ -86,9 +82,7 @@ class TestGoogleAIStudioFilesTransformation:
             litellm_params=litellm_params,
         )
 
-        assert (
-            url == "https://generativelanguage.googleapis.com/v1beta/files/cctqueckiggb"
-        )
+        assert url == "https://generativelanguage.googleapis.com/v1beta/files/cctqueckiggb"
         assert "key=" not in url
         assert params == {}
 
@@ -103,8 +97,7 @@ class TestGoogleAIStudioFilesTransformation:
         )
 
         assert (
-            url
-            == "https://generativelanguage.googleapis.com/v1beta/files/..%2F..%2Fmodels%2Fgemini-pro%3Fx%3D1%23frag"
+            url == "https://generativelanguage.googleapis.com/v1beta/files/..%2F..%2Fmodels%2Fgemini-pro%3Fx%3D1%23frag"
         )
         assert params == {}
 
@@ -358,7 +351,49 @@ class TestGoogleAIStudioFilesTransformation:
         )
 
         assert (
-            url
-            == "https://generativelanguage.googleapis.com/v1beta/files/..%2F..%2Fmodels%2Fgemini-pro%3Fx%3D1%23frag"
+            url == "https://generativelanguage.googleapis.com/v1beta/files/..%2F..%2Fmodels%2Fgemini-pro%3Fx%3D1%23frag"
         )
         assert params == {}
+
+
+@pytest.mark.parametrize(
+    "file_id",
+    ["batch-la6", "files/batch-la6", "https://generativelanguage.googleapis.com/v1beta/files/batch-la6"],
+)
+def test_file_content_request_downloads_the_file_as_media(file_id):
+    handler = GoogleAIStudioFilesHandler()
+    url, params = handler.transform_file_content_request(
+        file_content_request={"file_id": file_id},
+        optional_params={},
+        litellm_params={"api_base": "https://proxy.example"},
+    )
+    assert (url, params) == ("https://proxy.example/download/v1beta/files/batch-la6:download", {"alt": "media"})
+
+
+def test_file_content_response_passes_the_jsonl_bytes_through():
+    handler = GoogleAIStudioFilesHandler()
+    body = b'{"custom_id":"r0","response":{"status_code":200,"body":{"object":"chat.completion"}}}\n'
+    raw = httpx.Response(200, content=body, request=httpx.Request("GET", "https://generativelanguage.googleapis.com/x"))
+    assert (
+        handler.transform_file_content_response(raw_response=raw, logging_obj=Mock(), litellm_params={}).content == body
+    )
+
+
+def test_retrieve_file_response_accepts_nanosecond_create_time():
+    handler = GoogleAIStudioFilesHandler()
+    raw = httpx.Response(
+        200,
+        json={
+            "name": "files/batch-la6",
+            "displayName": "Results of batch la6",
+            "mimeType": "application/jsonl",
+            "sizeBytes": "1024",
+            "createTime": "2026-11-10T21:35:00.902340270Z",
+            "updateTime": "2026-11-10T21:35:00.902340270Z",
+            "uri": "https://generativelanguage.googleapis.com/v1beta/files/batch-la6",
+            "state": "ACTIVE",
+        },
+        request=httpx.Request("GET", "https://generativelanguage.googleapis.com/v1beta/files/batch-la6"),
+    )
+    file_object = handler.transform_retrieve_file_response(raw_response=raw, logging_obj=Mock(), litellm_params={})
+    assert (file_object.created_at, file_object.bytes, file_object.status) == (1794346500, 1024, "processed")
