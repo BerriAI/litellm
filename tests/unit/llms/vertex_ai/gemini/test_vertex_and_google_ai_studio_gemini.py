@@ -6227,6 +6227,46 @@ def test_chunk_parser_handles_prompt_feedback_block_with_usage():
     assert result.usage.total_tokens == 8175, f"total_tokens should be 8175, got {result.usage.total_tokens}"
 
 
+@pytest.mark.parametrize("finish_reason", sorted(VertexGeminiConfig().get_flagged_finish_reasons()))
+def test_flagged_finish_reason_is_kept_as_native_finish_reason(finish_reason: str) -> None:
+    completion_response: Final = {
+        "candidates": [{"finishReason": finish_reason, "index": 0}],
+        "usageMetadata": {"promptTokenCount": 19, "candidatesTokenCount": 0, "totalTokenCount": 19},
+    }
+
+    response: Final = VertexGeminiConfig().transform_google_generate_content_to_openai_model_response(
+        completion_response=completion_response,
+        model_response=ModelResponse(),
+        model="gemini-2.5-flash",
+        logging_obj=MagicMock(),
+        raw_response=httpx.Response(200, headers={}),
+    )
+
+    assert response.choices[0].finish_reason == "content_filter"
+    assert response.choices[0].provider_specific_fields == {"native_finish_reason": finish_reason}
+    assert (response.usage.prompt_tokens, response.usage.completion_tokens, response.usage.total_tokens) == (19, 0, 19)
+
+
+@pytest.mark.parametrize("block_reason", ["SAFETY", "PROHIBITED_CONTENT", "OTHER"])
+def test_blocked_prompt_keeps_block_reason(block_reason: str) -> None:
+    completion_response: Final = {
+        "promptFeedback": {"blockReason": block_reason},
+        "usageMetadata": {"promptTokenCount": 19, "totalTokenCount": 19},
+    }
+
+    response: Final = VertexGeminiConfig().transform_google_generate_content_to_openai_model_response(
+        completion_response=completion_response,
+        model_response=ModelResponse(),
+        model="gemini-2.5-flash",
+        logging_obj=MagicMock(),
+        raw_response=httpx.Response(200, headers={}),
+    )
+
+    assert response.choices[0].finish_reason == "content_filter"
+    assert response.choices[0].provider_specific_fields == {"block_reason": block_reason}
+    assert (response.usage.prompt_tokens, response.usage.completion_tokens, response.usage.total_tokens) == (19, 0, 19)
+
+
 def test_vertex_ai_traffic_type_preserved_in_hidden_params_streaming():
     """Test trafficType is preserved in _hidden_params for streaming."""
     from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
