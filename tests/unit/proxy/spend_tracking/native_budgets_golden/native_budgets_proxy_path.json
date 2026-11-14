@@ -904,6 +904,98 @@
         }
       ]
     },
+    "test_a_route_without_a_native_pre_call_is_admitted_at_auth_by_the_native_owner_like_python[containers]": {
+      "python": [
+        {
+          "callback_bound": false,
+          "entries": [
+            {
+              "applied_adjustment": 0.0,
+              "counter_key": "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf",
+              "entity_id": "e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf",
+              "entity_type": "Key",
+              "reserved_cost": 0.48384000000000005
+            }
+          ],
+          "finalized": false,
+          "input_cost": 0.32,
+          "input_tokens": null,
+          "reserved_cost": 0.48384000000000005
+        },
+        {
+          "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf": 0.48384000000000005
+        }
+      ]
+    },
+    "test_a_route_without_a_native_pre_call_is_admitted_at_auth_by_the_native_owner_like_python[rag_query]": {
+      "python": [
+        {
+          "callback_bound": false,
+          "entries": [
+            {
+              "applied_adjustment": 0.0,
+              "counter_key": "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf",
+              "entity_id": "e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf",
+              "entity_type": "Key",
+              "reserved_cost": 0.1638425
+            }
+          ],
+          "finalized": false,
+          "input_cost": 2.5e-06,
+          "input_tokens": 1,
+          "reserved_cost": 0.1638425
+        },
+        {
+          "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf": 0.1638425
+        }
+      ]
+    },
+    "test_a_route_without_a_native_pre_call_is_admitted_at_auth_by_the_native_owner_like_python[realtime_calls]": {
+      "python": [
+        {
+          "callback_bound": false,
+          "entries": [
+            {
+              "applied_adjustment": 0.0,
+              "counter_key": "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf",
+              "entity_id": "e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf",
+              "entity_type": "Key",
+              "reserved_cost": 0.19353599999999999
+            }
+          ],
+          "finalized": false,
+          "input_cost": 0.128,
+          "input_tokens": null,
+          "reserved_cost": 0.19353599999999999
+        },
+        {
+          "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf": 0.19353599999999999
+        }
+      ]
+    },
+    "test_a_route_without_a_native_pre_call_is_admitted_at_auth_by_the_native_owner_like_python[vector_store_search]": {
+      "python": [
+        {
+          "callback_bound": false,
+          "entries": [
+            {
+              "applied_adjustment": 0.0,
+              "counter_key": "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf",
+              "entity_id": "e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf",
+              "entity_type": "Key",
+              "reserved_cost": 0.1638425
+            }
+          ],
+          "finalized": false,
+          "input_cost": 2.5e-06,
+          "input_tokens": 1,
+          "reserved_cost": 0.1638425
+        },
+        {
+          "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf": 0.1638425
+        }
+      ]
+    },
     "test_a_runtime_change_to_the_budget_exceeded_status_code_reaches_the_next_refusal_like_python[anthropic_pass_through]": {
       "python": {
         "402": {
@@ -1979,5 +2071,5 @@
       "python": true
     }
   },
-  "recorded_from": "9a6b6e7fccbc9d810d3ea24d82c0ef071fa7c3ab"
+  "recorded_from": "4300d7e824c2feae735fd3a090c475dd7b04e5f1"
 }

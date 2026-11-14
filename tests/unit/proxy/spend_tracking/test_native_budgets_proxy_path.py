@@ -319,6 +319,34 @@ async def test_a_responses_websocket_settles_its_first_turn_against_the_connect_
     assert golden.canonical(python) == golden.recorded("python", python)
 
 
+AUTH_ADMITTED_ROUTES: Final[Mapping[str, tuple[str, Mapping[str, object]]]] = {
+    "vector_store_search": ("/v1/vector_stores/vs-1/search", {"model": "gpt-4o", "query": "q"}),
+    "containers": ("/v1/containers", {"model": "gpt-4o", "name": "c"}),
+    "realtime_calls": ("/v1/realtime/calls", {"model": "gpt-realtime"}),
+    "rag_query": ("/v1/rag/query", {"model": "gpt-4o", "query": "q"}),
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route", AUTH_ADMITTED_ROUTES.values(), ids=AUTH_ADMITTED_ROUTES.keys())
+async def test_a_route_without_a_native_pre_call_is_admitted_at_auth_by_the_native_owner_like_python(
+    proxy: Proxy, golden: Golden, route: tuple[str, Mapping[str, object]]
+) -> None:
+    path, body = route
+    _use_native(proxy, False)
+    python: Final = await _authenticate(proxy, max_budget=1.0, path=path, body=body)
+    python_held: Final = (python.budget_reservation, dict(proxy.store.snapshot()))
+    _use_native(proxy, True)
+    native: Final = await _authenticate(proxy, max_budget=1.0, path=path, body=body)
+
+    assert native_budgets.is_native_reservation(native.budget_reservation)
+    assert python_held[1][KEY_COUNTER] > 0.0, "the Python engine must hold the admission at auth"
+    assert native.budget_reservation is not None and python.budget_reservation is not None
+    assert _held_entries(native.budget_reservation) == _held_entries(python.budget_reservation)
+    assert proxy.store.snapshot() == python_held[1]
+    assert golden.canonical(python_held) == golden.recorded("python", python_held)
+
+
 @dataclass(frozen=True, slots=True)
 class SocketRun:
     held_at_connect: Mapping[str, float] | None
