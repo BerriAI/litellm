@@ -16,6 +16,7 @@ import {
   entitySelectionPatch,
   selectedEntitiesFromParams,
   usageHrefForUser,
+  userRecordHref,
   usageTabFromParams,
   usageTabPatch,
   usageUrlParsers,
@@ -268,6 +269,17 @@ describe("cross-page links", () => {
     const params: UsageUrlParams = load(href.slice(href.indexOf("?")));
 
     expect(params.user).toBe("alice+ops@example.com");
+  });
+});
+
+describe("user record link", () => {
+  it("does not link the default proxy admin placeholder", () => {
+    expect(userRecordHref("default_user_id")).toBeUndefined();
+  });
+
+  it("links real users and encodes special characters", () => {
+    expect(userRecordHref("user-1")).toMatch(/\/users\?user=user-1$/);
+    expect(userRecordHref("a b/c")).toMatch(/\?user=a%20b%2Fc$/);
   });
 });
 
