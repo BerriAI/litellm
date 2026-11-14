@@ -91,6 +91,7 @@ class _AsyncConnections:
         advertised: Mapping[str, int | None] = MappingProxyType({}),
         through_tunnel: bool = False,
         refusals: int = 0,
+        refusal: type[httpx.TransportError] = httpx.ConnectError,
         reports_settings: bool = True,
         resends_settings: bool = False,
         first_frames: tuple[int, ...] = (),
@@ -103,6 +104,7 @@ class _AsyncConnections:
         self._first_frames: Final = first_frames
         self._through_tunnel: Final = through_tunnel
         self._refusals_left = refusals
+        self._refusal: Final = refusal
         self._reports_settings: Final = reports_settings
         self._resends_settings: Final = resends_settings
         self.opened: tuple[_GatedAsyncConnection, ...] = ()
@@ -117,10 +119,10 @@ class _AsyncConnections:
             return
         self._refusals_left -= 1
         await asyncio.sleep(0)
-        raise httpx.ConnectError("refused", request=request)
+        raise self._refusal("refused", request=request)
 
     async def send_settings(self, request: httpx.Request, connection: _GatedAsyncConnection) -> None:
-        if not self._reports_settings:
+        if not self._reports_settings or request.url.scheme == "http":
             return
         if self._through_tunnel:
             tunnel: Final = httpcore.Request(b"CONNECT", str(request.url))
@@ -283,10 +285,13 @@ async def test_async_spread_opens_another_connection_at_the_upstreams_stream_lim
 
 
 @pytest.mark.asyncio
-async def test_async_spread_learns_the_stream_limit_from_the_next_request_when_the_first_fails():
+@pytest.mark.parametrize("refusal", [httpx.ConnectError, httpx.ConnectTimeout])
+async def test_async_spread_learns_the_stream_limit_from_the_next_request_when_the_first_cannot_connect(
+    refusal: type[httpx.TransportError],
+):
     gate: Final = asyncio.Event()
     connections: Final = _AsyncConnections(
-        gate, advertised=MappingProxyType({"search.example": FEW_STREAMS}), refusals=1
+        gate, advertised=MappingProxyType({"search.example": FEW_STREAMS}), refusals=1, refusal=refusal
     )
     connections.settings_arrive.clear()
     burst: Final = 4 * FEW_STREAMS
@@ -300,7 +305,7 @@ async def test_async_spread_learns_the_stream_limit_from_the_next_request_when_t
         assert [connection.peak for connection in connections.opened] == [FEW_STREAMS] * 4
 
         gate.set()
-        with pytest.raises(httpx.ConnectError):
+        with pytest.raises(refusal):
             await refused
         assert {response.status_code for response in await asyncio.gather(*pending)} == {200}
 
@@ -328,6 +333,19 @@ async def test_async_spread_lets_the_next_request_through_when_opening_a_connect
         )
     assert isinstance(failed, ImportError)
     assert isinstance(served, httpx.Response) and served.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_async_spread_fails_the_waiting_requests_with_the_first_requests_error_when_it_breaks_after_connecting():
+    gate: Final = asyncio.Event()
+    gate.set()
+    connections: Final = _AsyncConnections(gate, refusals=1, refusal=httpx.RemoteProtocolError)
+    async with httpx.AsyncClient(transport=AsyncHTTP2ConnectionSpread(connections, UNCAPPED)) as client:
+        outcomes: Final = await asyncio.gather(*(client.get(URL) for _ in range(FEW_STREAMS)), return_exceptions=True)
+        assert all(isinstance(outcome, httpx.RemoteProtocolError) for outcome in outcomes)
+        assert len(connections.opened) == 1
+
+        assert (await client.get(URL)).status_code == 200
 
 
 @pytest.mark.asyncio
@@ -412,6 +430,25 @@ async def test_async_spread_keeps_each_upstream_on_its_own_connections_once_the_
 
         gate.set()
         assert {response.status_code for response in await asyncio.gather(*pending)} == {200}
+
+
+@pytest.mark.asyncio
+async def test_async_spread_keeps_tracking_new_upstreams_while_a_plain_http_upstream_has_a_request_running():
+    gate: Final = asyncio.Event()
+    connections: Final = _AsyncConnections(gate, advertised=MappingProxyType({"search.example": FEW_STREAMS}))
+    burst: Final = 4 * FEW_STREAMS
+    async with httpx.AsyncClient(
+        transport=AsyncHTTP2ConnectionSpread(connections, httpx.Limits(max_connections=HTTP2_STREAMS_PER_CONNECTION))
+    ) as client:
+        plain: Final = asyncio.create_task(client.get("http://plain.example/v1/search"))
+        await _until(lambda: connections.in_flight() == 1)
+
+        pending: Final = tuple(asyncio.create_task(client.get(URL)) for _ in range(burst))
+        await _until(lambda: connections.in_flight() == 1 + burst)
+        assert connections.peaks_serving("search.example") == [FEW_STREAMS] * 4
+
+        gate.set()
+        assert {response.status_code for response in await asyncio.gather(plain, *pending)} == {200}
 
 
 @pytest.mark.asyncio
@@ -518,6 +555,29 @@ async def test_async_spread_keeps_http1_connections_within_the_connection_cap():
 
 
 @pytest.mark.asyncio
+async def test_async_spread_hands_an_idle_upstreams_connections_to_another_upstream_at_the_connection_cap():
+    gate: Final = asyncio.Event()
+    connections: Final = _MixedConnections(gate, MappingProxyType({"search.example": FEW_STREAMS}))
+    cap: Final = 3 * HTTP2_CONNECTIONS_PER_LANE
+    first_burst: Final = 2 * FEW_STREAMS
+    async with httpx.AsyncClient(
+        transport=AsyncHTTP2ConnectionSpread(connections, httpx.Limits(max_connections=cap))
+    ) as client:
+        streams: Final = await asyncio.gather(
+            *(client.send(client.build_request("GET", URL), stream=True) for _ in range(first_burst))
+        )
+        for response in streams:
+            await response.aread()
+
+        pending: Final = tuple(asyncio.create_task(client.get("http://plain.example/x.png")) for _ in range(cap))
+        await _until(lambda: connections.requested == first_burst + cap)
+        assert connections.open == cap
+
+        gate.set()
+        assert {response.status_code for response in await asyncio.gather(*pending)} == {200}
+
+
+@pytest.mark.asyncio
 async def test_async_spread_keeps_connections_within_the_cap_after_upstreams_report_low_stream_limits():
     gate: Final = asyncio.Event()
     single_stream_hosts: Final = tuple(f"single-stream-{index}.example" for index in range(4))
@@ -579,19 +639,16 @@ async def test_async_spread_runs_another_upstreams_burst_at_once_after_the_first
 async def test_async_spread_sends_an_upstream_first_seen_at_the_cap_to_the_connections_with_the_most_room():
     gate: Final = asyncio.Event()
     connections: Final = _MixedConnections(gate, MappingProxyType({"search.example": MORE_STREAMS_THAN_WE_RUN}))
-    async with httpx.AsyncClient(
-        transport=AsyncHTTP2ConnectionSpread(connections, httpx.Limits(max_connections=HTTP2_STREAMS_PER_CONNECTION))
-    ) as client:
-        assert (await client.get(URL)).status_code == 200
-        filling: Final = tuple(asyncio.create_task(client.get("http://http1.example/x.png")) for _ in range(FEW_STREAMS))
-        await _until(lambda: connections.open == FEW_STREAMS)
+    filling: Final = 2 * HTTP2_CONNECTIONS_PER_LANE - 1
+    async with httpx.AsyncClient(transport=AsyncHTTP2ConnectionSpread(connections, TWO_LANES)) as client:
+        filled: Final = tuple(asyncio.create_task(client.get("http://http1.example/x.png")) for _ in range(filling))
+        await _until(lambda: connections.open == filling)
 
-        burst: Final = 2 * FEW_STREAMS
-        first_seen: Final = tuple(asyncio.create_task(client.get("http://other.example/x.png")) for _ in range(burst))
-        await _until(lambda: connections.open == FEW_STREAMS + burst)
+        first_seen: Final = tuple(asyncio.create_task(client.get("http://other.example/x.png")) for _ in range(2))
+        await _until(lambda: connections.open == filling + 1)
 
         gate.set()
-        assert {response.status_code for response in await asyncio.gather(*filling, *first_seen)} == {200}
+        assert {response.status_code for response in await asyncio.gather(*filled, *first_seen)} == {200}
 
 
 @pytest.mark.asyncio
@@ -629,9 +686,23 @@ async def test_async_spread_holds_a_stream_until_its_response_is_closed():
         assert len(connections.opened) == 2
 
         for response in open_responses:
-            await response.aclose()
+            await response.aread()
         await client.get(URL)
         assert [connection.served for connection in connections.opened] == [HTTP2_STREAMS_PER_CONNECTION + 1, 1]
+
+
+@pytest.mark.asyncio
+async def test_async_spread_moves_off_a_connection_whose_only_stream_was_closed_before_its_end():
+    gate: Final = asyncio.Event()
+    gate.set()
+    connections: Final = _AsyncConnections(gate, advertised=MappingProxyType({"search.example": 1}))
+    async with httpx.AsyncClient(transport=AsyncHTTP2ConnectionSpread(connections, UNCAPPED)) as client:
+        hung_up: Final = await client.send(client.build_request("GET", URL), stream=True)
+        await hung_up.aclose()
+
+        assert (await client.get(URL)).text == "ok"
+        assert [connection.served for connection in connections.opened] == [1, 1]
+        assert connections.opened[0].closed
 
 
 @pytest.mark.asyncio
@@ -661,7 +732,7 @@ async def test_async_spread_frees_the_streams_of_responses_dropped_without_closi
 
         assert spread.has_request_in_flight() is False
         assert (await client.get(URL)).text == "ok"
-        assert len(connections.opened) == 1
+        assert [connection.closed for connection in connections.opened] == [True, False]
 
 
 class _TwoChunks(httpx.AsyncByteStream):
