@@ -173,8 +173,9 @@ class ResponsesSessionHandler:
         # Add Input messages for this Spend Log
         ############################################################
         if proxy_server_request_dict:
-            _response_input_param: Final = proxy_server_request_dict.get("input") or proxy_server_request_dict.get(
-                "messages"
+            stored_request_input: Final = proxy_server_request_dict.get("input")
+            _response_input_param: Final = (
+                proxy_server_request_dict.get("messages") if stored_request_input is None else stored_request_input
             )
             if isinstance(_response_input_param, (str, list)):
                 response_input_param = _response_input_param
@@ -187,7 +188,7 @@ class ResponsesSessionHandler:
         output_messages: Final = ResponsesSessionHandler._stored_output_messages(
             (as_str_mapping(spend_log) or {}).get("response")
         )
-        if response_input_param:
+        if response_input_param is not None:
             stored_input: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
                 input=response_input_param,
                 responses_api_request={},

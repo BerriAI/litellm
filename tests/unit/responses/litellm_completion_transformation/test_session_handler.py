@@ -906,11 +906,12 @@ async def _replay_of_a_blank_follow_up(
 @pytest.mark.parametrize(
     "blank_input",
     (
+        "",
         "   ",
         [{"role": "user", "content": "   "}],
         [{"role": "user", "content": [{"type": "input_text", "text": " \n"}]}],
     ),
-    ids=("whitespace_input_string", "whitespace_string_item", "whitespace_text_block_item"),
+    ids=("empty_input_string", "whitespace_input_string", "whitespace_string_item", "whitespace_text_block_item"),
 )
 @pytest.mark.parametrize(
     "stored_route",
