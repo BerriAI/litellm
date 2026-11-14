@@ -2248,6 +2248,144 @@ def test_bedrock_embedding_extra_body_cannot_replace_the_input_or_a_mapped_param
     assert json.loads(route.calls.last.request.read())[field] == expected
 
 
+_NOVA_MODEL_ID: Final = "amazon.nova-2-multimodal-embeddings-v1:0"
+_MARENGO_MODEL_ID: Final = "twelvelabs.marengo-embed-2-7-v1:0"
+
+
+def _sent_body(
+    respx_mock: respx.MockRouter, model_id: str, embed_response: dict[str, object], **params: object
+) -> dict[str, object]:
+    route: Final = respx_mock.post(f"https://bedrock-runtime.us-east-1.amazonaws.com/model/{model_id}/invoke").mock(
+        return_value=httpx.Response(200, json=embed_response)
+    )
+    litellm.embedding(
+        model=f"bedrock/{model_id}",
+        input=[test_input],
+        api_key="test-bearer-token",
+        aws_region_name="us-east-1",
+        **params,
+    )
+    return json.loads(route.calls.last.request.read())
+
+
+@pytest.mark.parametrize(
+    ("model_id", "embed_response", "extra_body"),
+    [
+        ("cohere.embed-english-v3", cohere_embedding_response, {"input_type": "search_query"}),
+        ("cohere.embed-v4:0", cohere_embedding_response, {"input_type": "classification"}),
+        (_MARENGO_MODEL_ID, {"data": [{"embedding": [0.1, 0.2]}]}, {"textTruncate": "none"}),
+    ],
+    ids=["cohere_v3", "cohere_v4", "marengo_2_7"],
+)
+def test_bedrock_embedding_extra_body_value_replaces_a_litellm_default(
+    respx_mock: respx.MockRouter, model_id: str, embed_response: dict[str, object], extra_body: dict[str, object]
+) -> None:
+    default_body: Final = _sent_body(respx_mock, model_id, embed_response)
+    body: Final = _sent_body(respx_mock, model_id, embed_response, extra_body=extra_body)
+
+    assert extra_body.items() <= body.items()
+    assert {k: v for k, v in body.items() if k not in extra_body} == {
+        k: v for k, v in default_body.items() if k not in extra_body
+    }
+
+
+def test_bedrock_nova_embedding_combines_extra_body_params_with_the_generated_ones(
+    respx_mock: respx.MockRouter,
+) -> None:
+    nova_response: Final = {"embeddings": [{"embeddingType": "TEXT", "embedding": [0.1, 0.2]}]}
+    default_params: Final = _sent_body(respx_mock, _NOVA_MODEL_ID, nova_response)["singleEmbeddingParams"]
+    caller_params: Final = {
+        "embeddingDimension": 256,
+        "embeddingPurpose": "GENERIC_RETRIEVAL",
+        "text": {"value": "text the guardrails never saw"},
+        "extraOption": {"enabled": True},
+    }
+
+    params: Final = _sent_body(
+        respx_mock, _NOVA_MODEL_ID, nova_response, extra_body={"singleEmbeddingParams": caller_params}
+    )["singleEmbeddingParams"]
+
+    assert params == {
+        **default_params,
+        "embeddingDimension": 256,
+        "embeddingPurpose": "GENERIC_RETRIEVAL",
+        "extraOption": {"enabled": True},
+    }
+
+
+def test_bedrock_nova_embedding_argument_beats_the_same_extra_body_param(respx_mock: respx.MockRouter) -> None:
+    body: Final = _sent_body(
+        respx_mock,
+        _NOVA_MODEL_ID,
+        {"embeddings": [{"embeddingType": "TEXT", "embedding": [0.1, 0.2]}]},
+        dimensions=1024,
+        extra_body={"singleEmbeddingParams": {"embeddingDimension": 256}},
+    )
+
+    assert body["singleEmbeddingParams"]["embeddingDimension"] == 1024
+
+
+def test_bedrock_async_nova_embedding_uses_extra_body_params_under_model_input(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = respx_mock.post("https://bedrock-runtime.us-east-1.amazonaws.com/async-invoke").mock(
+        return_value=httpx.Response(200, json={"invocationArn": "arn:aws:bedrock:us-east-1:1:async-invoke/abc"})
+    )
+
+    litellm.embedding(
+        model=f"bedrock/async_invoke/{_NOVA_MODEL_ID}",
+        input=[test_input],
+        api_key="test-bearer-token",
+        aws_region_name="us-east-1",
+        output_s3_uri="s3://test-bucket/out/",
+        extra_body={
+            "modelInput": {
+                "segmentedEmbeddingParams": {
+                    "embeddingDimension": 256,
+                    "text": {
+                        "value": "text the guardrails never saw",
+                        "source": {"s3Location": {"uri": "s3://bucket/unscanned.txt"}},
+                        "segmentationConfig": {"maxLengthChars": 500},
+                    },
+                    "image": {"detailLevel": "STANDARD_IMAGE"},
+                    "extraOption": {"enabled": True},
+                }
+            }
+        },
+    )
+
+    body: Final = json.loads(route.calls.last.request.read())
+    params: Final = body["modelInput"]["segmentedEmbeddingParams"]
+    assert params["embeddingDimension"] == 256
+    assert params["extraOption"] == {"enabled": True}
+    assert params["text"]["value"] == test_input
+    assert params["text"]["segmentationConfig"] == {"maxLengthChars": 500}
+    assert "source" not in params["text"]
+    assert "image" not in params
+    assert body["outputDataConfig"] == {"s3OutputDataConfig": {"s3Uri": "s3://test-bucket/out/"}}
+
+
+def test_bedrock_cohere_image_embedding_keeps_its_input_type_over_extra_body(respx_mock: respx.MockRouter) -> None:
+    model_id: Final = "cohere.embed-english-v3"
+    route: Final = respx_mock.post(f"https://bedrock-runtime.us-east-1.amazonaws.com/model/{model_id}/invoke").mock(
+        return_value=httpx.Response(200, json=cohere_embedding_response)
+    )
+    def sent_body(**params: object) -> dict[str, object]:
+        litellm.embedding(
+            model=f"bedrock/{model_id}",
+            input=[img_base_64],
+            api_key="test-bearer-token",
+            aws_region_name="us-east-1",
+            **params,
+        )
+        return json.loads(route.calls.last.request.read())
+
+    default_body: Final = sent_body()
+
+    assert "images" in default_body
+    assert sent_body(extra_body={"input_type": "search_query"}) == default_body
+
+
 def test_bedrock_embedding_signs_the_body_it_sends(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ) -> None:

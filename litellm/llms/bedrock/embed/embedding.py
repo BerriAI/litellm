@@ -5,7 +5,7 @@ Handles embedding calls to Bedrock's `/invoke` endpoint
 import copy
 import json
 import urllib.parse
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, ClassVar, Final, get_args, overload
 
@@ -31,6 +31,7 @@ from litellm.types.llms.bedrock import (
     TwelveLabsAsyncInvokeStatusResponse,
 )
 from litellm.types.utils import EmbeddingResponse, LlmProviders
+from litellm.utils import is_base64_encoded
 
 from ..base_aws_llm import (
     AWSPreparedRequest,
@@ -77,6 +78,88 @@ _OPTIONAL_STR: Final[TypeAdapter[str | None]] = TypeAdapter(str | None)
 def _without_region_path(model: str) -> str:
     region, model_id = split_bedrock_region_path(model)
     return model if region is None else model_id
+
+
+_NO_FIELDS: Final[Mapping[str, object]] = MappingProxyType({})
+_FIELDS: Final = TypeAdapter(dict[str, object])
+_NOVA_PARAMS_KEYS: Final = ("segmentedEmbeddingParams", "singleEmbeddingParams")
+_NOVA_INPUT_KEYS: Final = frozenset({"text", "image", "video", "audio"})
+_NOVA_CONTENT_KEYS: Final = frozenset({"value", "source"})
+_DEFAULTED_FIELDS: Final[Mapping[str, tuple[str, ...]]] = MappingProxyType(
+    {
+        "cohere": ("input_type",),
+        "nova": ("embeddingPurpose", "embeddingDimension"),
+        "twelvelabs": ("textTruncate",),
+    }
+)
+
+
+def _fields(value: object) -> Mapping[str, object]:
+    return _FIELDS.validate_python(value) if isinstance(value, Mapping) else _NO_FIELDS
+
+
+def _nova_params(model_input: Mapping[str, object]) -> Mapping[str, object]:
+    return next((_fields(model_input[key]) for key in _NOVA_PARAMS_KEYS if key in model_input), _NO_FIELDS)
+
+
+def _nova_options(model_input: Mapping[str, object]) -> Mapping[str, object]:
+    """The caller's Nova embedding params without the fields that describe the content to embed."""
+    return {k: v for k, v in _nova_params(model_input).items() if k not in _NOVA_INPUT_KEYS}
+
+
+def _nova_input_options(model_input: Mapping[str, object], input_key: str) -> Mapping[str, object]:
+    """The caller's settings for one Nova input field, such as ``text.segmentationConfig``, without its content."""
+    return {k: v for k, v in _fields(_nova_params(model_input).get(input_key)).items() if k not in _NOVA_CONTENT_KEYS}
+
+
+def _nova_params_with_options(caller: Mapping[str, object], params: Mapping[str, object]) -> Mapping[str, object]:
+    merged_inputs: Final = {
+        k: {**_nova_input_options(caller, k), **_fields(v)} for k, v in params.items() if k in _NOVA_INPUT_KEYS
+    }
+    return {**_nova_options(caller), **params, **merged_inputs}
+
+
+def _nova_model_input(extra_body: Mapping[str, object]) -> Mapping[str, object]:
+    return _fields(extra_body["modelInput"]) if "modelInput" in extra_body else extra_body
+
+
+def _caller_values_for_defaults(
+    provider: str, model: str, input: Sequence[str], extra_body: Mapping[str, object]
+) -> Mapping[str, object]:
+    """The ``extra_body`` values for fields the provider transform only fills with a default, passed as params so the
+    default is skipped while an explicit argument for the same field still wins."""
+    if provider == "twelvelabs" and TwelveLabsMarengoEmbeddingConfig(model=model).is_marengo_3:
+        return {}
+    if provider == "cohere" and any(is_base64_encoded(item) for item in input):
+        return {}
+    source: Final = _nova_options(_nova_model_input(extra_body)) if provider == "nova" else extra_body
+    return {k: source[k] for k in _DEFAULTED_FIELDS.get(provider, ()) if k in source}
+
+
+def _nova_model_input_with_options(
+    caller: Mapping[str, object], model_input: Mapping[str, object]
+) -> Mapping[str, object]:
+    return {
+        k: _nova_params_with_options(caller, _fields(v)) if k in _NOVA_PARAMS_KEYS else v
+        for k, v in model_input.items()
+    }
+
+
+def _with_extra_body(
+    provider: str, extra_body: Mapping[str, object], body: Mapping[str, object]
+) -> dict[str, object]:  # mutable-ok: serialized as the request body
+    """The provider body over the ``extra_body`` fields. On Nova the caller's embedding params are also kept next to
+    the generated ones, which win on a shared field."""
+    merged: Final = {**extra_body, **body}
+    if provider != "nova":
+        return merged
+    caller: Final = _nova_model_input(extra_body)
+    if "modelInput" in body:
+        return {
+            **merged,
+            "modelInput": dict(_nova_model_input_with_options(caller, _fields(body["modelInput"]))),
+        }
+    return {**extra_body, **_nova_model_input_with_options(caller, body)}
 
 
 class BedrockEmbedding(BaseAWSLLM):
@@ -283,7 +366,7 @@ class BedrockEmbedding(BaseAWSLLM):
         self,
         client: HTTPHandler | None,
         timeout: float | httpx.Timeout | None,
-        batch_data: list[dict],
+        batch_data: list[dict[str, object]],
         credentials: Credentials | None,
         extra_headers: dict | None,
         endpoint_url: str,
@@ -296,7 +379,7 @@ class BedrockEmbedding(BaseAWSLLM):
         extra_body: Mapping[str, object] = MappingProxyType({}),
     ):
         responses: Final[list[dict]] = []
-        for data in ({**extra_body, **item} for item in batch_data):
+        for data in (_with_extra_body(provider, extra_body, item) for item in batch_data):
             headers = {"Content-Type": "application/json"}
             if extra_headers is not None:
                 headers = {"Content-Type": "application/json", **extra_headers}
@@ -353,7 +436,7 @@ class BedrockEmbedding(BaseAWSLLM):
         self,
         client: AsyncHTTPHandler | None,
         timeout: float | httpx.Timeout | None,
-        batch_data: list[dict],
+        batch_data: list[dict[str, object]],
         credentials: Credentials | None,
         extra_headers: dict | None,
         endpoint_url: str,
@@ -366,7 +449,7 @@ class BedrockEmbedding(BaseAWSLLM):
         extra_body: Mapping[str, object] = MappingProxyType({}),
     ):
         responses: Final[list[dict]] = []
-        for data in ({**extra_body, **item} for item in batch_data):
+        for data in (_with_extra_body(provider, extra_body, item) for item in batch_data):
             headers = {"Content-Type": "application/json"}
             if extra_headers is not None:
                 headers = {"Content-Type": "application/json", **extra_headers}
@@ -464,14 +547,18 @@ class BedrockEmbedding(BaseAWSLLM):
                 f"Unable to determine bedrock embedding provider for model: {bedrock_model}. "
                 f"Supported providers: {list(get_args(BEDROCK_EMBEDDING_PROVIDERS_LITERAL))}"
             )
+        extra_body: Final = extra_body_fields(optional_params)
         inference_params = copy.deepcopy(optional_params)
         inference_params = {
-            k: v
-            for k, v in inference_params.items()
-            if k.lower() not in self.aws_authentication_params and k != "extra_body"
+            **_caller_values_for_defaults(provider, bedrock_model, input, extra_body),
+            **{
+                k: v
+                for k, v in inference_params.items()
+                if k.lower() not in self.aws_authentication_params and k != "extra_body"
+            },
         }
         inference_params.pop("user", None)  # make sure user is not passed in for bedrock call
-        extra_body: Final = extra_body_fields(optional_params)
+        output_s3_uri: Final = _OPTIONAL_STR.validate_python(inference_params.get("output_s3_uri"))
 
         data: CohereEmbeddingRequest | None = None
         batch_data: list | None = None
@@ -526,7 +613,7 @@ class BedrockEmbedding(BaseAWSLLM):
                     inference_params=inference_params,
                     async_invoke_route=has_async_invoke,
                     model_id=modelId,
-                    output_s3_uri=inference_params.get("output_s3_uri"),
+                    output_s3_uri=output_s3_uri,
                     drop_params=drop_params_enabled(litellm_params),
                 )
                 batch_data.append(twelvelabs_request)
@@ -538,7 +625,7 @@ class BedrockEmbedding(BaseAWSLLM):
                     inference_params=inference_params,
                     async_invoke_route=has_async_invoke,
                     model_id=modelId,
-                    output_s3_uri=inference_params.get("output_s3_uri"),
+                    output_s3_uri=output_s3_uri,
                 )
                 batch_data.append(nova_request)
 
