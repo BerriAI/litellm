@@ -51,7 +51,6 @@ def _sse_upstream_response(*lines: str, first_line_delay: float = 0.0) -> httpx.
 class CapturedAgentCall:
     request_id: object
     agent_extra_headers: dict[str, str] | None
-    agent_name: object
 
 
 @pytest.mark.asyncio
@@ -87,6 +86,7 @@ async def test_invoke_agent_a2a_adds_litellm_data():
     # Mock agent
     mock_agent = MagicMock()
     mock_agent.agent_id = "test-agent"
+    mock_agent.agent_name = "test-agent-name"
     mock_agent.agent_card_params = {
         "url": "http://backend-agent:10001",
         "name": "Test Agent",
@@ -219,10 +219,10 @@ async def test_invoke_agent_a2a_adds_litellm_data():
         mock_add_data.assert_called_once()
 
         # Verify model and custom_llm_provider were set
-        assert mock_send_message.await_args.kwargs["model"] == "a2a_agent/Test Agent"
-        assert captured_data["metadata"]["model_group"] == "a2a_agent/Test Agent"
+        assert mock_send_message.await_args.kwargs["model"] == "a2a_agent/test-agent-name"
+        assert captured_data["metadata"]["model_group"] == "a2a_agent/test-agent-name"
         assert captured_data["metadata"]["model_info"] == {"id": mock_agent.agent_id}
-        assert captured_data.get("model") == "a2a_agent/Test Agent"
+        assert captured_data.get("model") == "a2a_agent/test-agent-name"
         assert captured_data.get("custom_llm_provider") == "a2a_agent"
 
         # Verify proxy_server_request was added
@@ -638,7 +638,6 @@ async def _invoke_message_method(
     return CapturedAgentCall(
         request_id=request_id,
         agent_extra_headers=kwargs.get("agent_extra_headers"),
-        agent_name=kwargs.get("agent_name"),
     )
 
 
@@ -651,6 +650,112 @@ async def test_message_methods_preserve_numeric_zero_request_id(method: str):
     captured = await _invoke_message_method(method, mock_request, user_api_key_dict)
 
     assert captured.request_id == 0
+
+
+_RESEARCH_BOT_ID: Final = "9f1c2d6e-agent-id"
+_RESEARCH_BOT_URL: Final = "http://backend-agent:10001/"
+_UPSTREAM_CARD_NAMED_AGENT: Final = MappingProxyType(
+    {
+        "protocolVersion": "0.3",
+        "name": "agent",
+        "url": _RESEARCH_BOT_URL,
+        "version": "1.0.0",
+        "capabilities": {"streaming": True},
+        "defaultInputModes": ["text"],
+        "defaultOutputModes": ["text"],
+        "skills": [],
+    }
+)
+
+
+class _LoggedAgentCall(BaseModel):
+    model_config = ConfigDict(frozen=True, protected_namespaces=())
+
+    model: str
+    model_group: str
+
+
+class _AgentCallRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.logged: Final = asyncio.Event()
+        self.call: _LoggedAgentCall | None = None
+
+    async def async_log_success_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self.call = _LoggedAgentCall.model_validate(kwargs["standard_logging_object"])
+        self.logged.set()
+
+
+def _upstream_agent_reply(request: httpx.Request, streaming: bool) -> httpx.Response:
+    reply: Final = {
+        "jsonrpc": "2.0",
+        "id": json.loads(request.content)["id"],
+        "result": {"kind": "message", "role": "agent", "messageId": "m-out", "parts": [{"kind": "text", "text": "pong"}]},
+    }
+    if streaming:
+        return httpx.Response(
+            200, headers={"content-type": "text/event-stream"}, content=f"data: {json.dumps(reply)}\n\n"
+        )
+    return httpx.Response(200, json=reply)
+
+
+@pytest.mark.skipif(importlib.util.find_spec("a2a") is None, reason="needs the optional a2a-sdk")
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["message/send", "message/stream"])
+@pytest.mark.parametrize(
+    ("registered_card_params", "path_agent_id"),
+    [
+        pytest.param({"url": _RESEARCH_BOT_URL, "name": "agent"}, "research-bot", id="discovered-card-by-name"),
+        pytest.param({"url": _RESEARCH_BOT_URL}, _RESEARCH_BOT_ID, id="unnamed-card-by-id"),
+    ],
+)
+async def test_url_agent_calls_are_logged_under_the_registered_agent_name(
+    monkeypatch: pytest.MonkeyPatch, method: str, registered_card_params: Mapping[str, object], path_agent_id: str
+):
+    from fastapi import FastAPI
+
+    from litellm.caching.llm_caching_handler import LLMClientCache
+    from litellm.proxy import proxy_server
+    from litellm.proxy.agent_endpoints import agent_registry
+    from litellm.proxy.agent_endpoints.a2a_endpoints import router
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    registry: Final = agent_registry.AgentRegistry()
+    registry.register_agent(
+        AgentResponse(
+            agent_id=_RESEARCH_BOT_ID, agent_name="research-bot", agent_card_params=dict(registered_card_params)
+        )
+    )
+    recorder: Final = _AgentCallRecorder()
+    monkeypatch.setattr(agent_registry, "global_agent_registry", registry)
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    monkeypatch.setattr(litellm, "success_callback", [recorder])
+    monkeypatch.setattr(litellm, "_async_success_callback", [recorder])
+    app: Final = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(api_key="hashed-caller", user_id="u1")
+
+    with respx.mock(assert_all_called=True) as upstream:
+        upstream.get(f"{_RESEARCH_BOT_URL}.well-known/agent-card.json").mock(
+            return_value=httpx.Response(200, json=dict(_UPSTREAM_CARD_NAMED_AGENT))
+        )
+        upstream.post(_RESEARCH_BOT_URL).mock(
+            side_effect=lambda request: _upstream_agent_reply(request, streaming=method == "message/stream")
+        )
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://proxy") as proxy:
+            response: Final = await proxy.post(
+                f"/a2a/{path_agent_id}",
+                json={"jsonrpc": "2.0", "id": "req-1", "method": method, "params": _HELLO_MESSAGE_PARAMS},
+            )
+
+    assert response.status_code == 200, response.text
+    await asyncio.wait_for(recorder.logged.wait(), timeout=10)
+    assert recorder.call == _LoggedAgentCall(model="a2a_agent/research-bot", model_group="a2a_agent/research-bot")
 
 
 @pytest.mark.asyncio
@@ -1841,21 +1946,6 @@ def test_build_message_send_params_proto_fallback_ignores_unknown_fields():
         }
     )
     assert result.message.role.value == "user"
-
-
-@pytest.mark.asyncio
-async def test_message_stream_names_the_agent_by_its_card_name():
-    agent: Final = _make_agent_mock()
-    agent.agent_card_params = {"url": "http://backend-agent:10001", "name": "trip-planner"}
-
-    captured: Final = await _invoke_message_method(
-        "message/stream",
-        _make_request_mock("message/stream", _HELLO_MESSAGE_PARAMS),
-        UserAPIKeyAuth(api_key="sk-test", user_id="u1"),
-        agent=agent,
-    )
-
-    assert captured.agent_name == "trip-planner"
 
 
 class _StreamedSpend(BaseModel):
@@ -3201,7 +3291,7 @@ _EXPECTED_REJECTIONS: Final = (
         403,
         "Agent 'denied-agent' is not allowed for your key/team. Contact proxy admin for access.",
         "registered-denied-id",
-        "a2a_agent/Test Agent",
+        "a2a_agent/denied-agent",
         id="not-granted",
     ),
     pytest.param(

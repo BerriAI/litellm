@@ -838,6 +838,7 @@ class DBSpendUpdateWriter:
             )
 
             ## CREATE SPEND LOG PAYLOAD ##
+            from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
             from litellm.proxy.spend_tracking.spend_tracking_utils import (
                 get_logging_payload_async,
                 get_request_model_access_groups,
@@ -850,6 +851,7 @@ class DBSpendUpdateWriter:
                 start_time=start_time,
                 end_time=end_time,
                 llm_router=llm_router,
+                agent_names=global_agent_registry,
             )
             billable_cost: Final = _billable_cost(response_cost, payload)
             if (
