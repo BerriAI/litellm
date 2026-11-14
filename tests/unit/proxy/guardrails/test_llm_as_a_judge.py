@@ -9,6 +9,7 @@ from fastapi import HTTPException
 
 import litellm
 from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.llm_as_a_judge import (
     LLMAsAJudgeGuardrail,
     _build_judge_prompt,
@@ -673,6 +674,61 @@ async def test_judge_routes_through_router_for_router_served_model(
     assert call_kwargs["num_retries"] == 0
     assert call_kwargs["fallbacks"] == []
     mock_sdk_completion.assert_not_called()
+
+
+_TEAM_JUDGE_MODEL_LIST = [
+    {
+        "model_name": "model_name_team1_uuid",
+        "litellm_params": {"model": "hosted_vllm/Qwen/Qwen3.6-27B", "api_key": "vllm-key"},
+        "model_info": {"team_id": "team1", "team_public_model_name": "team-judge"},
+    }
+]
+
+
+@pytest.mark.asyncio
+@patch("litellm.proxy.guardrails.guardrail_hooks.llm_as_a_judge.litellm.acompletion", new_callable=AsyncMock)
+async def test_judge_team_public_alias_runs_under_caller_team(mock_sdk_completion):
+    """A judge model exposed only as a team's public name serves only that team. The
+    caller's attached auth must resolve the team and stamp it onto the dispatch so the
+    router arm can actually serve the alias; without the stamp the call fell through to
+    the SDK with the raw name and raised 'LLM Provider NOT provided' (#27767)."""
+    router = _real_router(_TEAM_JUDGE_MODEL_LIST)
+    guardrail = _make_guardrail(judge_model="team-judge", router_provider=lambda: router)
+    inputs = {"texts": ["good response"]}
+    request_data: dict = {
+        "messages": [{"role": "user", "content": "hi"}],
+        "metadata": {"user_api_key_auth": UserAPIKeyAuth(team_id="team1")},
+    }
+
+    result = await guardrail.apply_guardrail(inputs, request_data, "response")
+
+    assert result is inputs
+    router.acompletion.assert_awaited_once()
+    call_kwargs = router.acompletion.await_args.kwargs
+    assert call_kwargs["model"] == "team-judge"
+    assert call_kwargs["metadata"]["user_api_key_team_id"] == "team1"
+    mock_sdk_completion.assert_not_called()
+
+
+@pytest.mark.asyncio
+@patch("litellm.proxy.guardrails.guardrail_hooks.llm_as_a_judge.litellm.acompletion", new_callable=AsyncMock)
+async def test_judge_team_public_alias_without_team_caller_falls_back_to_sdk(mock_sdk_completion):
+    """With no caller team, a team-public alias serves nobody through the router, so
+    the SDK receives the raw alias. LiteLLM only serves provider-qualified public
+    names, which is the exact shape of the reported 'LLM Provider NOT provided'
+    failure, so dispatch must stay on the SDK arm for SDK-resolvable names and never
+    consult the router with a team the caller does not have."""
+    router = _real_router(_TEAM_JUDGE_MODEL_LIST)
+    guardrail = _make_guardrail(judge_model="team-judge", router_provider=lambda: router)
+    inputs = {"texts": ["good response"]}
+    request_data: dict = {"messages": [{"role": "user", "content": "hi"}], "metadata": {}}
+
+    result = await guardrail.apply_guardrail(inputs, request_data, "response")
+
+    assert result is inputs
+    router.acompletion.assert_not_called()
+    mock_sdk_completion.assert_awaited_once()
+    assert mock_sdk_completion.await_args.kwargs["model"] == "team-judge"
 
 
 @pytest.mark.asyncio
