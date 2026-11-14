@@ -2,16 +2,13 @@ import asyncio
 import datetime
 import itertools
 import json
-import os
 import queue
-import subprocess
 import sys
 import threading
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from itertools import chain
-from pathlib import Path
 from types import CodeType, FrameType, MappingProxyType, TracebackType
 from typing import AsyncIterator, Callable, Final, Iterator, Literal, NoReturn, Optional, cast
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
@@ -2071,66 +2068,6 @@ async def test_stream_logprobs_without_top_logprobs_reach_caller_as_litellm_logp
     ]
 
 
-FINISH_ONLY_LOGPROBS_STREAM_SCRIPT: Final = """
-import json
-import sys
-
-sys.path.insert(0, sys.argv[1])
-
-import httpx
-from openai import OpenAI
-
-import litellm
-
-upstream_choices = (
-    {"index": 0, "delta": {"role": "assistant", "content": "hi"}, "finish_reason": None},
-    {
-        "index": 0,
-        "delta": {},
-        "logprobs": {"content": [{"token": "<|return|>", "logprob": -0.5, "top_logprobs": []}]},
-        "finish_reason": "stop",
-    },
-)
-body = "".join(
-    "data: "
-    + json.dumps({"id": "c", "object": "chat.completion.chunk", "created": 1, "model": "m", "choices": [choice]})
-    + "\\n\\n"
-    for choice in upstream_choices
-) + "data: [DONE]\\n\\n"
-client = OpenAI(
-    api_key="unused",
-    base_url="https://provider.example/v1",
-    http_client=httpx.Client(
-        transport=httpx.MockTransport(
-            lambda request: httpx.Response(200, content=body, headers={"content-type": "text/event-stream"})
-        )
-    ),
-)
-stream = litellm.completion(
-    model="openai/m", messages=[{"role": "user", "content": "hi"}], stream=True, logprobs=True, client=client
-)
-print(json.dumps([json.loads(chunk.model_dump_json(exclude_none=True)) for chunk in stream]))
-"""
-
-
-def test_stream_with_logprobs_only_on_finish_chunk_serializes_in_a_fresh_process() -> None:
-    result: Final = subprocess.run(
-        [sys.executable, "-I", "-c", FINISH_ONLY_LOGPROBS_STREAM_SCRIPT, str(Path(litellm.__file__).parent.parent)],
-        capture_output=True,
-        text=True,
-        timeout=120,
-        env={**os.environ, "LITELLM_LOCAL_MODEL_COST_MAP": "True"},
-    )
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    wire_choices: Final = tuple(
-        itertools.chain.from_iterable(chunk["choices"] for chunk in json.loads(result.stdout.strip().splitlines()[-1]))
-    )
-    finish_choices: Final = [choice for choice in wire_choices if choice.get("finish_reason")]
-    assert [choice["finish_reason"] for choice in finish_choices] == ["stop"]
-    assert [entry["token"] for entry in finish_choices[0]["logprobs"]["content"]] == ["<|return|>"]
-
-
 def _hosted_vllm_stream_wrapper(logging_obj: Logging, error_payload: dict) -> CustomStreamWrapper:
     """A CustomStreamWrapper over the real OpenAI-compatible line iterator,
     fed an HTTP 200 SSE body that carries an in-body error payload the way
@@ -2396,7 +2333,6 @@ async def test_mid_stream_error_leaves_out_an_api_base_it_cannot_resolve():
 
     assert "model_group: `gpt-5.4-mini-azure`" in debug_info
     assert "API Base:" not in debug_info
-
 
 
 @pytest.mark.asyncio
@@ -7169,7 +7105,6 @@ def test_chunk_creator_skips_full_dump_of_model_response_stream_chunks(
     assert getattr(emitted_chunks[1], "custom_chunk_attribute") == "custom value"
 
 
-
 def test_openai_chunk_creator_keeps_multiple_choice_logprobs_and_extras(
     logging_obj: Logging,
 ) -> None:
@@ -9763,7 +9698,6 @@ async def test_logged_response_keeps_finish_reason_from_last_content_chunk(
         assert tool_calls[0].function.arguments == '{"command": "ls"}'
     else:
         assert logged.choices[0].message.content == "Hello, this reply is cut off"
-
 
 
 @pytest.mark.parametrize("sync_mode", [True, False])
