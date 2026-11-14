@@ -4045,8 +4045,8 @@ _GUARDRAIL_CONFIG: Final = {"guardrailConfig": {"guardrailIdentifier": "gr-abc12
 @pytest.mark.parametrize("placement", ["leading_system", "assistant", "mid_conversation_system", "user"])
 @pytest.mark.parametrize(
     ("optional_params", "drop_params", "sends_guard_content"),
-    [({}, True, False), (_GUARDRAIL_CONFIG, True, True), ({}, False, True)],
-    ids=["drop_params_without_guardrail", "drop_params_with_guardrail", "no_drop_params"],
+    [({}, True, False), (_GUARDRAIL_CONFIG, True, True)],
+    ids=["drop_params_without_guardrail", "drop_params_with_guardrail"],
 )
 async def test_guarded_text_part_goes_as_text_only_under_drop_params_without_a_guardrail(
     use_async: bool,
@@ -4073,6 +4073,28 @@ async def test_guarded_text_part_goes_as_text_only_under_drop_params_without_a_g
     assert (_GUARD_BLOCK in sent_blocks) is sends_guard_content
     if not sends_guard_content:
         assert guarded == await transformed("text")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("placement", ["leading_system", "assistant", "mid_conversation_system", "user"])
+async def test_without_a_guardrail_or_drop_params_only_user_turns_keep_guarded_text(use_async: bool, placement: str):
+    config: Final = AmazonConverseConfig()
+    kwargs: Final = dict(
+        model="us.anthropic.claude-haiku-5-5",
+        messages=_conversation_with_parts(placement, "guarded_text"),
+        optional_params={},
+        litellm_params={},
+    )
+    guarded: Final = (
+        await config._async_transform_request(**kwargs) if use_async else config._transform_request(**kwargs)
+    )
+
+    sent_blocks: Final = tuple(
+        chain(guarded.get("system", ()), chain.from_iterable(message["content"] for message in guarded["messages"]))
+    )
+    assert (_GUARD_BLOCK in sent_blocks) is (placement == "user")
+    assert (_GUARDED_PART_TEXT in json.dumps(guarded)) is (placement == "user")
 
 
 def test_convert_consecutive_user_messages_to_guarded_text():

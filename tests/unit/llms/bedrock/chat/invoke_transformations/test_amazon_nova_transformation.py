@@ -151,11 +151,13 @@ def test_guarded_parts_go_as_text_under_drop_params_because_invoke_model_rejects
     ]
 
 
-def test_guarded_parts_reach_bedrock_without_drop_params(local_model_cost_map):
+def test_only_user_guarded_parts_reach_bedrock_without_drop_params(local_model_cost_map):
     request = _transform_request(messages=GUARDED_CONVERSATION, optional_params={"max_tokens": 20})
     sent_guard_texts = [
         block["guardContent"]["text"]["text"]
         for block in [*request["system"], *(block for message in request["messages"] for block in message["content"])]
         if "guardContent" in block
     ]
-    assert sent_guard_texts == ["guarded system", "guarded user", "guarded assistant"]
+    assert sent_guard_texts == ["guarded user"]
+    assert "guarded system" not in json.dumps(request)
+    assert "guarded assistant" not in json.dumps(request)

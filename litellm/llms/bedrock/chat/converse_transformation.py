@@ -229,6 +229,19 @@ def _request_with_guard_content_as_text(
     return {**unguarded, "system": list(system_with_guard_content_as_text(request["system"]))}
 
 
+def _is_guarded_text(part: object) -> bool:
+    return message_field(part, "type") == "guarded_text"
+
+
+def _without_guarded_text_outside_user_turns(message: AllMessageValues) -> AllMessageValues:
+    parts: Final = parts_of(message_field(message, "content"))
+    if message_field(message, "role") not in ("system", "assistant") or not any(map(_is_guarded_text, parts)):
+        return message
+    return cast(  # cast-ok: only the content parts change, so the message keeps its role's shape
+        AllMessageValues, {**message, "content": [part for part in parts if not _is_guarded_text(part)]}
+    )
+
+
 class AmazonConverseConfig(BaseConfig):
     """
     Reference - https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
@@ -2239,8 +2252,13 @@ class AmazonConverseConfig(BaseConfig):
     ) -> RequestObject:
         base_model: Final = litellm_params.get("base_model")
         capability_model: Final = bedrock_capability_model(model, base_model)
+        can_send_guarded_text: Final = "guardrailConfig" in optional_params or drops_unsupported_params(
+            litellm_params.get("drop_params")
+        )
         messages, system_content_blocks = self._transform_system_message(
-            messages, model=capability_model, deployment_model=model
+            messages if can_send_guarded_text else list(map(_without_guarded_text_outside_user_turns, messages)),
+            model=capability_model,
+            deployment_model=model,
         )
 
         # Convert last user message to guarded_text if guardrailConfig is present
@@ -2320,8 +2338,13 @@ class AmazonConverseConfig(BaseConfig):
     ) -> RequestObject:
         base_model: Final = litellm_params.get("base_model")
         capability_model: Final = bedrock_capability_model(model, base_model)
+        can_send_guarded_text: Final = "guardrailConfig" in optional_params or drops_unsupported_params(
+            litellm_params.get("drop_params")
+        )
         messages, system_content_blocks = self._transform_system_message(
-            messages, model=capability_model, deployment_model=model
+            messages if can_send_guarded_text else list(map(_without_guarded_text_outside_user_turns, messages)),
+            model=capability_model,
+            deployment_model=model,
         )
 
         # Convert last user message to guarded_text if guardrailConfig is present
