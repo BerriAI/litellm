@@ -1381,7 +1381,6 @@ async def exchange_token_with_server(
     bridge_upstream_scope: str | None = None
     refresh_request_scope: str | None = None
     is_bridge: Final = resolved_server.is_oauth_delegate and resolved_server.is_dcr_bridge
-    requested_scope: Final[str | None]
 
     if grant_type == "refresh_token":
         # Phase 1 for a bridge refresh: open the client's refresh envelope, re-validate the sealed
@@ -1404,13 +1403,12 @@ async def exchange_token_with_server(
                 status_code=400,
                 detail="refresh_token is required for refresh_token grant",
             )
-        token_data: dict = {
+        token_data: dict[str, str] = {
             "grant_type": "refresh_token",
             "refresh_token": upstream_refresh_token,
             **token_request.body,
         }
         refresh_request_scope = scope or bridge_upstream_scope
-        requested_scope = scope or " ".join(refresh_credential.get("scopes") or ()) if refresh_credential else None
         if refresh_request_scope:
             token_data["scope"] = refresh_request_scope
         refresh_ownership = (  # rebind-ok: grant-specific branches assign one ownership value
@@ -1460,14 +1458,16 @@ async def exchange_token_with_server(
                 ),
             )
         proxy_base_url: Final = get_request_base_url(request)
-        resolved_redirect_uri: Final = redirect_uri if bridge_token_relay else f"{proxy_base_url}/callback"
+        resolved_redirect_uri: Final = (
+            redirect_uri if bridge_token_relay and redirect_uri is not None else f"{proxy_base_url}/callback"
+        )
         granted_scope: Final = (
             managed_code.requested_scope
             if managed_code is not None
             else (bridge_identity.requested_scope if bridge_identity is not None else None)
         )
         exchange_scope: Final = granted_scope if granted_scope is not None else scope
-        requested_scope = (
+        authorization_scope: Final = (
             exchange_scope
             if exchange_scope is not None or managed_code is not None or bridge_identity is not None
             else " ".join(resolved_server.scopes or ()) or None
@@ -1477,7 +1477,7 @@ async def exchange_token_with_server(
             "code": bridge_identity.upstream_code if bridge_identity else authorization_code,
             "redirect_uri": resolved_redirect_uri,
             **token_request.body,
-            **({"scope": requested_scope} if requested_scope else {}),
+            **({"scope": authorization_scope} if authorization_scope else {}),
         }
         if code_verifier:
             token_data["code_verifier"] = code_verifier
@@ -1552,6 +1552,14 @@ async def exchange_token_with_server(
             expected_nonce=bridge_identity.oauth_nonce if bridge_identity else None,
         )
         if isinstance(token_response, dict)
+        else None
+    )
+
+    requested_scope: Final = (
+        token_data.get("scope")
+        if grant_type == "authorization_code"
+        else scope or " ".join(refresh_credential.get("scopes") or ())
+        if refresh_credential
         else None
     )
 
