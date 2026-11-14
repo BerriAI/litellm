@@ -451,10 +451,11 @@ def test_failure_hook_replacement_ends_a_queue_stream_that_fails_before_the_firs
     marker: Final = _marker()
     body: Final = _body("clean", marker, (_RAISING,), "raise-builtin-after-0", _REPLACE, priority=0)
     response: Final = rig.proxy.gateway.request("POST", "/queue/chat/completions", body)
-    ended: Final = _ended_in_band(response, 200)
-    assert ended.content == "", response.text
-    assert ended.error["code"] == "403", ended.error
-    assert ended.error["message"] == _REPLACEMENT_MESSAGE, ended.error
+    assert response.status_code == 403, response.text
+    assert response.headers["content-type"] == "application/json", response.headers
+    assert JSON_OBJECT.validate_json(response.content) == {
+        "error": {"message": _REPLACEMENT_MESSAGE, "type": "permission_error", "param": None, "code": "403"}
+    }, response.text
     assert _CRASH_MESSAGE not in response.text, response.text
     assert _calls_with(rig.upstream, marker) == 1
 

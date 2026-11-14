@@ -81,10 +81,10 @@ def _deployment_route(litellm_params: Mapping[str, object]) -> tuple[str, LlmPro
     return model, LlmProviders(provider)
 
 
-def _claude_count_translator(litellm_params: Mapping[str, object]) -> AnthropicConfig:
+def _anthropic_chat_config(litellm_params: Mapping[str, object]) -> AnthropicConfig | None:
     route: Final = _deployment_route(litellm_params)
     chat_config: Final = None if route is None else litellm.ProviderConfigManager.get_provider_chat_config(*route)
-    return chat_config if isinstance(chat_config, AnthropicConfig) else AnthropicConfig()
+    return chat_config if isinstance(chat_config, AnthropicConfig) else None
 
 
 def _claude_messages_translator(litellm_params: Mapping[str, object]) -> "AnthropicMessagesConfig":
@@ -236,6 +236,8 @@ class BedrockTokenCounter(BaseTokenCounter):
         resolved_model: Final = get_bedrock_base_model(counted_model)
         primary_tokenizer: Final = MANTLE_TOKENIZER_TYPE if use_mantle else RUNTIME_TOKENIZER_TYPE
         litellm_params: Final = dict(deployment_litellm_params(deployment))
+        claude: Final = is_mantle_claude_model(resolved_model)
+        chat_config: Final = _anthropic_chat_config(litellm_params) if claude else None
         translated: Final = (
             await anthropic_count_fields(
                 counted_model,
@@ -243,10 +245,11 @@ class BedrockTokenCounter(BaseTokenCounter):
                 system,
                 tools,
                 messages_format,
-                _claude_count_translator(litellm_params),
+                chat_config or AnthropicConfig(),
                 chat_params,
+                translate_contentless_turns=chat_config is not None,
             )
-            if is_mantle_claude_model(resolved_model)
+            if claude
             else None
         )
         if isinstance(translated, ChatCountTranslationError):
@@ -261,14 +264,12 @@ class BedrockTokenCounter(BaseTokenCounter):
                 count_options,
                 litellm_params,
             )
-            if is_mantle_claude_model(resolved_model)
+            if claude
             else _NO_OPTIONS
         )
         if isinstance(options, ChatCountTranslationError):
             return options.response(request_model, model_to_use, primary_tokenizer)
-        native_context_management: Final = _invoke_context_management(
-            context_management if is_mantle_claude_model(resolved_model) else None
-        )
+        native_context_management: Final = _invoke_context_management(context_management if claude else None)
         counted_messages: Final = messages if translated is None else translated.messages
         runtime_request: Final = {
             **_request_data(

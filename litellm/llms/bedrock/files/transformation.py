@@ -35,6 +35,7 @@ from litellm.litellm_core_utils.cloud_storage_security import (
     STORED_S3_BUCKET_PARAM,
     build_managed_cloud_object_name,
     encode_s3_object_key_for_url,
+    s3_media_uris,
     sanitize_cloud_object_component,
     should_allow_legacy_cloud_file_ids,
     split_configured_cloud_bucket_name,
@@ -389,6 +390,14 @@ _BATCH_RECORD_CONVERSION_ERRORS: Final = (
 
 def _batch_line_error(line_number: int, problem: str) -> BedrockError:
     return _client_error(f"Batch input file line {line_number} {problem}")
+
+
+class _S3MediaInBatchRecord(ValueError):
+    def __init__(self, s3_uris: tuple[str, ...]) -> None:
+        super().__init__(
+            f"has s3:// media URLs ({', '.join(s3_uris)}). "
+            "LiteLLM does not accept s3:// media URLs in Bedrock batch files, so send the media inline as base64 data"
+        )
 
 
 _OPENAI_FORMAT_INVOKE_SERVICE_TIERS: Final = frozenset({"default", "flex", "priority"})
@@ -1184,6 +1193,9 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
                 AmazonConverseConfig,
             )
 
+            s3_uris: Final = s3_media_uris(openai_request_body)
+            if s3_uris:
+                raise _S3MediaInBatchRecord(s3_uris)
             _check_batch_record_service_tier(requested_service_tier, model, drop_unsupported_params)
             converse_config: Final = AmazonConverseConfig()
             mapped_params = converse_config.map_openai_params(
@@ -1274,6 +1286,8 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             return self._transform_openai_batch_record(
                 idx, batch_input_line.record, target_model, model_info, drop_params
             )
+        except _S3MediaInBatchRecord as e:
+            raise _batch_line_error(batch_input_line.line_number, str(e)) from e
         except _BATCH_RECORD_CONVERSION_ERRORS as e:
             raise _batch_line_error(
                 batch_input_line.line_number, f"could not be converted to a Bedrock batch record: {e}"
