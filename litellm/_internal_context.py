@@ -44,6 +44,23 @@ _resent_on: Final[ContextVar[Callable[[Exception], bool] | None]] = ContextVar("
 _request_parent_otel_span: Final[ContextVar[Span | None]] = ContextVar("request_parent_otel_span", default=None)
 
 
+_emulated_file_search: Final[ContextVar[bool]] = ContextVar("emulated_file_search", default=False)
+
+
+@contextmanager
+def emulated_file_search_phase() -> Generator[None]:
+    """Nested calls of emulated file_search, whose answer keeps only its own tool calls."""
+    token: Final = _emulated_file_search.set(True)
+    try:
+        yield
+    finally:
+        _emulated_file_search.reset(token)
+
+
+def in_emulated_file_search() -> bool:
+    return _emulated_file_search.get()
+
+
 @contextmanager
 def internal_sub_call(parent_request_id: str | None = None) -> Generator[None]:
     """A nested call the parent call logs and bills, so the parent must fold this call's cost into its own."""
