@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator, Mapping, Sequence
 from typing import Final
 
 import pytest
@@ -64,6 +64,44 @@ async def native_pre_call(auth: UserAPIKeyAuth, data: Mapping[str, object]) -> P
     if isinstance(outcome, Patch):
         _ = fields.apply(outcome)
     return outcome
+
+
+UNLIMITED_BUDGET: Final = 1e12
+
+
+async def native_reservation(
+    store: SpendCounterStore,
+    auth: UserAPIKeyAuth,
+    entries: Sequence[Mapping[str, object]],
+    reserved_cost: float,
+    input_cost: float = 0.0,
+    route: str = "/v1/chat/completions",
+) -> dict[str, object]:
+    _ = install_native_owner(store)
+    plan: Final = {
+        "counters": [
+            {
+                "counter_key": entry["counter_key"],
+                "max_budget": entry.get("max_budget", UNLIMITED_BUDGET),
+                "fallback_spend": entry.get("fallback_spend", 0.0),
+                "entity_type": entry.get("entity_type"),
+                "entity_id": entry.get("entity_id"),
+                "spend_log_entity_id": entry.get("spend_log_entity_id", entry.get("entity_id")),
+            }
+            for entry in entries
+        ],
+        "reservation_cost": float(reserved_cost),
+        "input_cost": float(input_cost),
+        "input_tokens": None,
+        "throttle_counter": None,
+        "fail_closed": False,
+        "status_code": int(litellm.budget_exceeded_status_code),
+        "reservation_id": native_budgets.new_reservation_id(),
+    }
+    _ = native_budgets.pending_native_reservation(plan, auth, route, {}, {})
+    reservation: Final = await native_budgets.admit_native_reservation_now(auth)
+    assert reservation is not None and native_budgets.is_native_reservation(reservation)
+    return reservation
 
 
 async def reserve_budget_for_request(
