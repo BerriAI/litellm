@@ -147,6 +147,15 @@ def parse_control_options(kwargs: Mapping[str, object]) -> ControlOptions | Inva
         )
 
 
+def valid_control_options(kwargs: Mapping[str, object]) -> ControlOptions:
+    valid: Final = {
+        name: kwargs[name]
+        for name in _CONTROL_OPTION_NAMES
+        if name in kwargs and isinstance(parse_control_options({name: kwargs[name]}), ControlOptions)
+    }
+    return _CONTROL_OPTIONS.validate_python(valid)
+
+
 def stored_control_options(litellm_params: Mapping[str, object]) -> ControlOptions:
     control: Final = litellm_params.get(CONTROL_OPTIONS_KEY)
     return control if isinstance(control, ControlOptions) else ControlOptions()

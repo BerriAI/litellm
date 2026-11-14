@@ -193,7 +193,7 @@ def _sync_client_returning_converse_response():
     return client
 
 
-def test_a_caller_fake_stream_calls_converse_and_replays_the_answer_as_chunks():
+def test_a_caller_fake_stream_calls_converse_and_replays_the_answer_as_chunks() -> None:
     client: Final = MagicMock()
     client.post.side_effect = lambda *_args, **_kwargs: httpx.Response(
         200,

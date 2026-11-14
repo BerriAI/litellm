@@ -97,6 +97,7 @@ from litellm.litellm_core_utils.get_litellm_params import (
     SUPPLEMENTAL_KWARGS_KEYS,
     InvalidControlOption,
     parse_control_options,
+    valid_control_options,
     with_control_options,
 )
 from litellm.litellm_core_utils.get_llm_provider_logic import (
@@ -405,7 +406,7 @@ def _resolve_control_options(kwargs: Mapping[str, object], model: str) -> Contro
             return control
         case InvalidControlOption(param=param, message=message):
             if litellm.drop_params is True or normalize_drop_params(kwargs.get("drop_params")) is True:
-                return ControlOptions()
+                return valid_control_options(kwargs)
             raise litellm.BadRequestError(message=message, model=model, llm_provider=None, body={"param": param})
         case _:
             return assert_never(control)

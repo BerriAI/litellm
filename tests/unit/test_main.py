@@ -6685,6 +6685,28 @@ def test_drop_params_drops_an_invalid_stream_chunk_size_instead_of_rejecting_it(
     assert stored_control_options(logging_obj.litellm_params) == ControlOptions()
 
 
+@pytest.mark.parametrize(
+    ("given", "kept"),
+    [
+        ({"stream_chunk_size": "sixty-four", "fake_stream": True}, ControlOptions(fake_stream=True)),
+        ({"stream_chunk_size": 64, "fake_stream": "maybe"}, ControlOptions(stream_chunk_size=64)),
+    ],
+)
+def test_drop_params_drops_only_the_invalid_control_option(
+    given: Mapping[str, object], kept: ControlOptions
+) -> None:
+    logging_obj: Final = _completion_logging_obj(f"drop-only-invalid-{kept}")
+    litellm.completion(
+        model="openai/gpt-4.1-mini",
+        messages=[{"role": "user", "content": "hi"}],
+        drop_params=True,
+        mock_response="hi",
+        litellm_logging_obj=logging_obj,
+        **given,
+    )
+    assert stored_control_options(logging_obj.litellm_params) == kept
+
+
 def test_drop_params_keeps_a_dropped_stream_chunk_size_out_of_the_provider_request(
     respx_mock: respx.MockRouter,
 ) -> None:

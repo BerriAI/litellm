@@ -214,10 +214,9 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
             provider=provider,
             custom_prompt_dict=custom_prompt_dict,
         )
-        inference_params = copy.deepcopy(optional_params)
-        inference_params = {
+        inference_params: Final = {
             k: v
-            for k, v in inference_params.items()
+            for k, v in copy.deepcopy(optional_params).items()
             if k not in self.aws_authentication_params and k not in MCP_HANDLER_KWARG_NAMES
         }
         request_data: dict = {}
