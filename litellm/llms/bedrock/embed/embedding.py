@@ -296,7 +296,12 @@ class BedrockEmbedding(BaseAWSLLM):
         extra_body: Mapping[str, object] = MappingProxyType({}),
     ):
         responses: Final[list[dict]] = []
-        for data in ({**extra_body, **item} for item in batch_data):
+        for data in (
+            {**item, "modelInput": {**extra_body, **item["modelInput"]}}
+            if "modelInput" in item
+            else {**extra_body, **item}
+            for item in batch_data
+        ):
             headers = {"Content-Type": "application/json"}
             if extra_headers is not None:
                 headers = {"Content-Type": "application/json", **extra_headers}
@@ -366,7 +371,12 @@ class BedrockEmbedding(BaseAWSLLM):
         extra_body: Mapping[str, object] = MappingProxyType({}),
     ):
         responses: Final[list[dict]] = []
-        for data in ({**extra_body, **item} for item in batch_data):
+        for data in (
+            {**item, "modelInput": {**extra_body, **item["modelInput"]}}
+            if "modelInput" in item
+            else {**extra_body, **item}
+            for item in batch_data
+        ):
             headers = {"Content-Type": "application/json"}
             if extra_headers is not None:
                 headers = {"Content-Type": "application/json", **extra_headers}
