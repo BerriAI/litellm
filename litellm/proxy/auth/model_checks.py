@@ -42,13 +42,10 @@ LLM_PROVIDER_PREFIXES: Final = frozenset(llm_provider.value for llm_provider in 
 _PROVIDERS_WITH_ROUTES_THE_CATALOG_LOOKUP_CANNOT_PARSE: Final = frozenset(
     provider.value
     for provider in (
-        LlmProviders.OPENAI,
         LlmProviders.AZURE,
         LlmProviders.BEDROCK,
         LlmProviders.VERTEX_AI,
         LlmProviders.HUGGINGFACE,
-        LlmProviders.COHERE,
-        LlmProviders.COHERE_CHAT,
         LlmProviders.AWS_POLLY,
         LlmProviders.BLACK_FOREST_LABS,
         LlmProviders.MICROSOFT_365_COPILOT,
@@ -60,6 +57,11 @@ _PROVIDERS_WITH_ROUTES_THE_CATALOG_LOOKUP_CANNOT_PARSE: Final = frozenset(
 )
 _ROUTES_THE_CATALOG_LOOKUP_CANNOT_PARSE: Final = frozenset(
     (
+        f"{LlmProviders.OPENAI.value}/chat_completions/",
+        f"{LlmProviders.COHERE.value}/v1/",
+        f"{LlmProviders.COHERE.value}/v2/",
+        f"{LlmProviders.COHERE_CHAT.value}/v1/",
+        f"{LlmProviders.COHERE_CHAT.value}/v2/",
         f"{LlmProviders.FIREWORKS_AI.value}/routers/",
         f"{LlmProviders.AZURE_AI.value}/model_router/",
         f"{LlmProviders.AZURE_AI.value}/model-router/",
@@ -70,6 +72,11 @@ _ROUTE_PREFIXES_THE_CATALOG_LOOKUP_CANNOT_PARSE: Final = (
     f"{LlmProviders.FIREWORKS_AI.value}/routers/{FIREROUTER}/",
     f"{LlmProviders.AZURE_AI.value}/speech/",
 )
+_FIREWORKS_ROUTER_ROUTES: Final = (
+    f"{LlmProviders.FIREWORKS_AI.value}/routers/",
+    f"{LlmProviders.FIREWORKS_AI.value}/{FIREROUTER}/",
+)
+_FIREWORKS_RESOURCE_PATH_PREFIX: Final = "accounts/"
 
 _CREDENTIAL_LITELLM_PARAM_FIELDS = set(CredentialLiteLLMParams.model_fields)
 
@@ -407,6 +414,16 @@ def _catalog_lookup_parses_route(provider: str, routing_prefix: str) -> bool:
     )
 
 
+def _model_ids_a_route_can_reach(
+    provider: str, routing_prefix: str, provider_model_ids: tuple[str, ...]
+) -> tuple[str, ...]:
+    if not f"{provider}/{routing_prefix}".startswith(_FIREWORKS_ROUTER_ROUTES):
+        return provider_model_ids
+    return tuple(
+        model_id for model_id in provider_model_ids if not model_id.startswith(_FIREWORKS_RESOURCE_PATH_PREFIX)
+    )
+
+
 def _routes_to_catalog_model(
     routes_to_model: Callable[[str, str], bool], provider: str, provider_model_ids: frozenset[str]
 ) -> Callable[[str, str], bool]:
@@ -446,7 +463,8 @@ def _ids_routing_to_catalog_models(
     deployment_regex: Final = re.compile(PatternMatchRouter().pattern_to_regex(deployment_model_pattern))
     name_regex: Final = re.compile(PatternMatchRouter().pattern_to_regex(name_pattern))
     catalog_matches: Final = (
-        deployment_regex.fullmatch(f"{provider_id_prefix}{model_id}") for model_id in provider_model_ids
+        deployment_regex.fullmatch(f"{provider_id_prefix}{model_id}")
+        for model_id in _model_ids_a_route_can_reach(provider, routing_prefix, provider_model_ids)
     )
     listed_ids: Final = (
         (

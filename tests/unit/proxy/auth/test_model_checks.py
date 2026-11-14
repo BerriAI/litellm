@@ -2019,7 +2019,9 @@ def test_partial_wildcard_lists_catalog_ids_stored_with_the_provider_prefix(
         ("openai", "chat_completions"),
         ("azure", "o_series"),
         ("vertex_ai", "gemini"),
+        ("cohere", "v1"),
         ("cohere", "v2"),
+        ("cohere_chat", "v1"),
         ("cohere_chat", "v2"),
         ("black_forest_labs", "unread-segment"),
         ("aws_polly", "unread-segment"),
@@ -2028,11 +2030,6 @@ def test_partial_wildcard_lists_catalog_ids_stored_with_the_provider_prefix(
         ("microsoft_365_copilot", "unread-segment"),
         ("reducto", "unread-segment"),
         ("transcribe", "unread-segment"),
-        ("fireworks_ai", "routers"),
-        ("fireworks_ai", "firerouter"),
-        ("fireworks_ai", "firerouter/kimi-k3"),
-        ("fireworks_ai", "routers/firerouter"),
-        ("fireworks_ai", "routers/firerouter/kimi-k3"),
         ("azure_ai", "model_router"),
         ("azure_ai", "model-router"),
         ("azure_ai", "speech"),
@@ -2068,6 +2065,9 @@ def test_routing_segment_lists_the_same_catalog_ids_as_the_bare_provider_wildcar
         "featherless_ai",
         "anthropic",
         "watsonx",
+        "openai",
+        "cohere",
+        "cohere_chat",
     ],
 )
 def test_wildcard_over_an_org_the_catalog_lacks_lists_no_catalog_id(provider: str) -> None:
@@ -2092,9 +2092,12 @@ def test_wildcard_over_an_org_the_catalog_lacks_lists_no_catalog_id(provider: st
         ("fireworks_ai", "routers"),
         ("azure_ai", "model_router"),
         ("azure_ai", "model-router"),
+        ("openai", "chat_completions"),
+        ("cohere", "v2"),
+        ("cohere_chat", "v2"),
     ],
 )
-def test_wildcard_over_an_unknown_org_beneath_a_router_route_lists_no_catalog_id(provider: str, route: str) -> None:
+def test_wildcard_over_an_unknown_org_beneath_an_exempt_route_lists_no_catalog_id(provider: str, route: str) -> None:
     from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
     from litellm.types.router import LiteLLM_Params
 
@@ -2103,6 +2106,27 @@ def test_wildcard_over_an_unknown_org_beneath_a_router_route_lists_no_catalog_id
     )
 
     assert listed == []
+
+
+@pytest.mark.parametrize(
+    "route", ["routers", "firerouter", "firerouter/kimi-k3", "routers/firerouter", "routers/firerouter/kimi-k3"]
+)
+def test_fireworks_router_wildcard_lists_the_bare_wildcard_ids_except_full_resource_paths(route: str) -> None:
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+    from litellm.types.router import LiteLLM_Params
+
+    resource_path_id: Final = "fireworks_ai/accounts/fireworks/models/router-route-model-r"
+    short_id: Final = "fireworks_ai/router-route-model-s"
+    with _registered_chat_models({resource_path_id: "fireworks_ai", short_id: "fireworks_ai"}):
+        bare_listing: Final = get_known_models_from_wildcard("fireworks_ai/*", LiteLLM_Params(model="fireworks_ai/*"))
+        router_listing: Final = get_known_models_from_wildcard(
+            "fireworks_ai/*", LiteLLM_Params(model=f"fireworks_ai/{route}/*")
+        )
+
+    assert {resource_path_id, short_id} <= set(bare_listing)
+    assert sorted(router_listing) == sorted(
+        listed_id for listed_id in bare_listing if not listed_id.startswith("fireworks_ai/accounts/")
+    )
 
 
 def test_provider_wildcard_lists_cost_map_models_but_not_pricing_tiers() -> None:
