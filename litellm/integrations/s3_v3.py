@@ -190,30 +190,36 @@ def _constructor_wins(key: str, configured: object, value: object) -> bool:
     )
 
 
-def _with_constructor_value(params: dict[str, object], key: str, value: object) -> None:  # mutable-ok: built here
-    configured: Final = params.get(key)
+_KEEP_CONFIGURED: Final = object()
+
+
+def _constructor_value(key: str, configured: object, value: object) -> object:
     if _constructor_wins(key, configured, value):
-        params[key] = value
-    elif key in _CONSTRUCTOR_ENABLES and value:
-        params[key] = True
-    elif key == "s3_max_queue_size" and value is not None:
-        params[key] = resolve_s3_max_queue_size(
+        return value
+    if key in _CONSTRUCTOR_ENABLES and value:
+        return True
+    if key == "s3_max_queue_size" and value is not None:
+        return resolve_s3_max_queue_size(
             configured, resolve_s3_max_queue_size(value, CustomBatchLogger.DEFAULT_MAX_QUEUE_SIZE)
         )
-    elif key == "s3_max_retry_age_seconds":
+    if key == "s3_max_retry_age_seconds":
         fallback: Final = resolve_s3_max_retry_age_seconds(value, _DEFAULT_MAX_RETRY_AGE_SECONDS)
         resolved: Final = fallback if _blank(configured) else resolve_s3_max_retry_age_seconds(configured, fallback)
-        params[key] = 0 if resolved is None else resolved
+        return 0 if resolved is None else resolved
+    return _KEEP_CONFIGURED
 
 
 def _constructed_params(
     params_source: Mapping[str, object] | None, settings: S3LoggerSettings
 ) -> dict[str, object]:  # mutable-ok: handed to Rust
     params: Final = _resolved_params(params_source)
-    for key, value in settings.items():
-        if value != _CONSTRUCTOR_DEFAULTS.get(key, False if key in _CONSTRUCTOR_ENABLES else None):
-            _with_constructor_value(params, key, value)
-    return params
+    overrides: Final = {
+        key: replaced
+        for key, value in settings.items()
+        if value != _CONSTRUCTOR_DEFAULTS.get(key, False if key in _CONSTRUCTOR_ENABLES else None)
+        and (replaced := _constructor_value(key, params.get(key), value)) is not _KEEP_CONFIGURED
+    }
+    return {**params, **overrides}
 
 
 class _Base64Stripper(CustomLogger):
