@@ -6745,7 +6745,6 @@ async def test_centralized_checks_enforce_token_end_user_budget_against_row_spen
                 "litellm.proxy.spend_tracking.budget_reservation.estimate_request_max_cost",
                 return_value=0.6,
             ),
-            pytest.raises(litellm.BudgetExceededError) as exc_info,
         ):
             _ = install_native_owner(litellm.proxy.proxy_server.spend_counter_store)
             request_data = {
@@ -6758,7 +6757,8 @@ async def test_centralized_checks_enforce_token_end_user_budget_against_row_spen
                 request_data=request_data,
                 route="/chat/completions",
             )
-            await admit_native_plan(token, request_data)
+            with pytest.raises(litellm.BudgetExceededError) as exc_info:
+                await admit_native_plan(token, request_data)
 
     assert exc_info.value.max_budget == 50.0
     assert exc_info.value.current_cost == pytest.approx(100.6)
