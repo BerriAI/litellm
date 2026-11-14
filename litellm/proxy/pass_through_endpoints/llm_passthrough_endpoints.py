@@ -482,8 +482,15 @@ def _gemini_upload_request_headers(request_headers: Mapping[str, str]) -> Mappin
     )
 
 
-def _upload_session_url_via_proxy(upload_session_url: str, upstream_base_url: str, proxy_gemini_url: str) -> str:
-    session_url: Final = httpx.URL(upload_session_url).copy_remove_param("key")
+def _upload_session_url_via_proxy(
+    upload_session_url: str, upstream_base_url: str, proxy_gemini_url: str, caller_api_key: str | None
+) -> str:
+    upstream_session_url: Final = httpx.URL(upload_session_url)
+    session_url: Final = (
+        upstream_session_url.copy_remove_param("key")
+        if caller_api_key is None
+        else upstream_session_url.copy_set_param("key", caller_api_key)
+    )
     keyless_session_url: Final = str(session_url)
     if keyless_session_url.startswith(f"{upstream_base_url}/"):
         return f"{proxy_gemini_url}{keyless_session_url.removeprefix(upstream_base_url)}"
@@ -491,13 +498,13 @@ def _upload_session_url_via_proxy(upload_session_url: str, upstream_base_url: st
 
 
 def _gemini_response_headers_via_proxy(
-    upstream_headers: Mapping[str, str], upstream_base_url: str, proxy_gemini_url: str
+    upstream_headers: Mapping[str, str], upstream_base_url: str, proxy_gemini_url: str, caller_api_key: str | None
 ) -> Mapping[str, str]:
     return MappingProxyType(
         {
             name: (
-                _upload_session_url_via_proxy(value, upstream_base_url, proxy_gemini_url)
-                if name.lower() in GEMINI_UPLOAD_SESSION_URL_RESPONSE_HEADERS
+                _upload_session_url_via_proxy(value, upstream_base_url, proxy_gemini_url, caller_api_key)
+                if name in GEMINI_UPLOAD_SESSION_URL_RESPONSE_HEADERS
                 else value
             )
             for name, value in upstream_headers.items()
@@ -569,6 +576,7 @@ async def gemini_proxy_route(
             _gemini_response_headers_via_proxy,
             upstream_base_url=base_target_url.rstrip("/"),
             proxy_gemini_url=get_custom_url(str(request.base_url), route=GEMINI_PASS_THROUGH_ROUTE_PREFIX.lstrip("/")),
+            caller_api_key=google_ai_studio_api_key,
         ),
     )  # dynamically construct pass-through endpoint based on incoming path
     if is_upload:
