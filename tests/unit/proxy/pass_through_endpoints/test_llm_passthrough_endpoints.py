@@ -303,6 +303,9 @@ async def test_gemini_upload_forwards_jsonl_bytes_and_upload_headers(
 
 
 GEMINI_UPLOAD_SESSION_PATH: Final = f"/{GEMINI_UPLOAD_ENDPOINT}?upload_id=session-1&upload_protocol=resumable"
+GOOGLE_UPLOAD_SESSION_PATH: Final = (
+    f"/{GEMINI_UPLOAD_ENDPOINT}?key=gemini-test-key&upload_id=session-1&upload_protocol=resumable"
+)
 
 
 @pytest.mark.asyncio
@@ -312,25 +315,25 @@ GEMINI_UPLOAD_SESSION_PATH: Final = f"/{GEMINI_UPLOAD_ENDPOINT}?upload_id=sessio
         (
             None,
             None,
-            f"https://generativelanguage.googleapis.com{GEMINI_UPLOAD_SESSION_PATH}",
+            f"https://generativelanguage.googleapis.com{GOOGLE_UPLOAD_SESSION_PATH}",
             f"http://proxy.local:4000/gemini{GEMINI_UPLOAD_SESSION_PATH}",
         ),
         (
             None,
             "https://llm.example.com",
-            f"https://generativelanguage.googleapis.com{GEMINI_UPLOAD_SESSION_PATH}",
+            f"https://generativelanguage.googleapis.com{GOOGLE_UPLOAD_SESSION_PATH}",
             f"https://llm.example.com/gemini{GEMINI_UPLOAD_SESSION_PATH}",
         ),
         (
             "https://gemini-gateway.internal/google",
             None,
-            f"https://gemini-gateway.internal/google{GEMINI_UPLOAD_SESSION_PATH}",
+            f"https://gemini-gateway.internal/google{GOOGLE_UPLOAD_SESSION_PATH}",
             f"http://proxy.local:4000/gemini{GEMINI_UPLOAD_SESSION_PATH}",
         ),
         (
             "https://gemini-gateway.internal/google",
             None,
-            f"https://generativelanguage.googleapis.com{GEMINI_UPLOAD_SESSION_PATH}",
+            f"https://generativelanguage.googleapis.com{GOOGLE_UPLOAD_SESSION_PATH}",
             f"http://proxy.local:4000/gemini{GEMINI_UPLOAD_SESSION_PATH}",
         ),
     ],
@@ -382,6 +385,7 @@ async def test_gemini_resumable_upload_start_returns_an_upload_url_on_the_proxy(
     assert response.headers["x-goog-upload-url"] == expected_upload_url
     assert response.headers["x-goog-upload-control-url"] == expected_upload_url
     assert response.headers["x-goog-upload-status"] == "active"
+    assert not any("gemini-test-key" in value for value in response.headers.values())
     outbound: Final = upstream.calls[0].request
     assert outbound.content == metadata
     assert outbound.headers["x-goog-upload-command"] == "start"

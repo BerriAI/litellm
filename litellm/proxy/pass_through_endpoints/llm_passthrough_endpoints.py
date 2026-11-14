@@ -483,9 +483,11 @@ def _gemini_upload_request_headers(request_headers: Mapping[str, str]) -> Mappin
 
 
 def _upload_session_url_via_proxy(upload_session_url: str, upstream_base_url: str, proxy_gemini_url: str) -> str:
-    if upload_session_url.startswith(f"{upstream_base_url}/"):
-        return f"{proxy_gemini_url}{upload_session_url.removeprefix(upstream_base_url)}"
-    return f"{proxy_gemini_url}{httpx.URL(upload_session_url).raw_path.decode('ascii')}"
+    session_url: Final = httpx.URL(upload_session_url).copy_remove_param("key")
+    keyless_session_url: Final = str(session_url)
+    if keyless_session_url.startswith(f"{upstream_base_url}/"):
+        return f"{proxy_gemini_url}{keyless_session_url.removeprefix(upstream_base_url)}"
+    return f"{proxy_gemini_url}{session_url.raw_path.decode('ascii')}"
 
 
 def _gemini_response_headers_via_proxy(
