@@ -7,12 +7,15 @@ secrets from strings without depending on the logging-configuration module.
 """
 
 import re
+import sys
+from functools import lru_cache
 from typing import Final
 
 from litellm.constants import MINIMUM_CUSTOM_KEY_LENGTH
-from litellm.rust_bridge import diagnostics
+from litellm.rust_bridge import _native, diagnostics
 
 REDACTED: Final = "REDACTED"
+_MINIMUM_TOKEN_LENGTH: Final = min(MINIMUM_CUSTOM_KEY_LENGTH, len("xoxb-") + 10)
 
 _PEM_PRIVATE_KEY_BLOCK: Final = r"-----BEGIN[A-Z \-]*PRIVATE KEY-----[\s\S]*?-----END[A-Z \-]*PRIVATE KEY-----"
 
@@ -138,19 +141,33 @@ _UNMATCHED_JWT: Final = (
 _TOKEN_RE: Final = re.compile(f"{_NON_JWT_TOKEN_RE.pattern}|{_TOKEN_START}(?:{_TOKEN_SHAPES[-1]}|{_UNMATCHED_JWT})")
 
 
-def redact_tokens(value: str, replacement: str = REDACTED) -> str:
-    """Replace substrings shaped like a credential (provider key prefixes, JWTs, PEM private keys).
-
-    Unlike redact_string() this never matches on surrounding words such as ``password:`` or ``Basic``,
-    so it is safe to run over free-form prompt and tool content.
-    """
-
+def _python_redact_tokens(value: str, replacement: str = REDACTED) -> str:
     def replace(match: re.Match[str]) -> str:
         if match.lastgroup == "unmatched_jwt":
             return _NON_JWT_TOKEN_RE.sub(replacement, match.group())
         return match.expand(replacement)
 
     return _TOKEN_RE.sub(replace, value)
+
+
+@lru_cache(maxsize=1)
+def _token_redactor() -> _native.NativeTokenRedactor:
+    characters: Final = "".join(map(chr, range(128, sys.maxunicode + 1)))
+    word_ranges: Final = tuple((match.start() + 128, match.end() + 127) for match in re.finditer(r"\w+", characters))
+    return _native.NativeTokenRedactor(MINIMUM_CUSTOM_KEY_LENGTH, word_ranges)
+
+
+def redact_tokens(value: str, replacement: str = REDACTED) -> str:
+    """Replace credential-shaped tokens without matching surrounding words or field names."""
+    if "\\" in replacement:
+        return _python_redact_tokens(value, replacement)
+    if len(value) < _MINIMUM_TOKEN_LENGTH:
+        return value
+    try:
+        redacted: Final = _token_redactor().redact(value, replacement)
+    except UnicodeEncodeError:
+        return _python_redact_tokens(value, replacement)
+    return value if redacted is None else redacted
 
 
 _UNIX_SYSTEM_PATH: Final = r"/(?:etc|var|opt|usr|home|root|private|Users|tmp|mnt|srv)/[^\s'\"\)\]}>,]+"

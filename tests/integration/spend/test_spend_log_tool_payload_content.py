@@ -548,6 +548,44 @@ def test_stored_messages_mask_a_github_token_inside_tool_output(gateway: Gateway
         assert json.loads(string_value(stored_arguments)) == {"cmd": f"git push https://{REDACTED}@github.com/o/r HEAD"}
 
 
+def test_malformed_jwt_text_preserves_nested_key_redaction(gateway: Gateway, tmp_path: Path) -> None:
+    access_key: Final = "AKIA" + "A" * 16
+    content: Final = (f"eyJaaaaaaaaaa-{access_key}-" * 20) + ".body."
+    redacted: Final = ((f"eyJaaaaaaaaaa-{REDACTED}-") * 20) + ".body."
+    response_id: Final = f"chatcmpl-jwt-{uuid4()}"
+
+    def respond(request: Request) -> Reply:
+        assert request.method == "POST"
+        assert _json_object(request.body)["messages"] == [{"role": "user", "content": content}]
+        return Reply(body=json.dumps(_chat_completion(response_id, content)).encode())
+
+    with (
+        wire_server(_answering_model_listing(respond)) as wire,
+        owned_proxy(
+            gateway, tmp_path, {}, config=_prompt_storage_config(tmp_path, redact_tokens=True), workers=2
+        ) as isolated,
+        isolated.scenario() as scenario,
+    ):
+        model: Final = scenario.model(
+            model="openai/synthetic-redaction-model",
+            api_base=wire.url,
+            api_key="synthetic-openai-key",
+            input_cost_per_token=0.001,
+            output_cost_per_token=0.002,
+        )
+        response: Final = isolated.request(
+            "POST", "/v1/chat/completions", {"model": model, "messages": [{"role": "user", "content": content}]}
+        )
+        assert response.status_code == 200, response.text
+        caller_choice: Final = _objects(_json_object(response.content)["choices"])[0]
+        assert object_value(caller_choice["message"])["content"] == content
+        assert len(_provider_calls(wire.drain())) == 1
+        row: Final = _stored_row(response_id)
+        assert object_value(row["proxy_server_request"])["messages"] == [{"role": "user", "content": redacted}]
+        stored_choice: Final = _objects(object_value(row["response"])["choices"])[0]
+        assert object_value(stored_choice["message"])["content"] == redacted
+
+
 def test_previous_response_id_replay_sends_real_tool_payloads(gateway: Gateway, tmp_path: Path) -> None:
     function_arguments: Final = {"sort_key": "created_at", "access_level": "admin"}
     function_output: Final = {

@@ -2,13 +2,40 @@ mod machine;
 
 pub(crate) use machine::LoggedMachine;
 
-use litellm_host_python::Pythonized;
-use litellm_tracing::{DiagnosticInput, Level, Logger, Metadata, Policy, Processor, Record, Sink};
+use litellm_host_python::{Pythonized, release_gil};
+use litellm_tracing::{
+    DiagnosticInput, Level, Logger, Metadata, Policy, Processor, Record, Sink, TokenRedactor,
+};
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
+use pyo3::pybacked::PyBackedStr;
 
 const MODULE: &str = "litellm.rust_bridge.host.logger";
 type NativeDiagnosticOutput = (String, Option<String>, Option<String>, Vec<String>, bool);
+
+#[pyclass]
+pub(crate) struct NativeTokenRedactor {
+    inner: TokenRedactor,
+}
+
+#[pymethods]
+impl NativeTokenRedactor {
+    #[new]
+    fn new(minimum_custom_key_length: usize, word_ranges: Vec<(u32, u32)>) -> Self {
+        Self {
+            inner: TokenRedactor::new(minimum_custom_key_length, word_ranges),
+        }
+    }
+
+    fn redact(
+        &self,
+        py: Python<'_>,
+        text: PyBackedStr,
+        replacement: PyBackedStr,
+    ) -> Option<String> {
+        release_gil(py, || self.inner.redact(&text, &replacement))
+    }
+}
 
 #[pyclass]
 pub(crate) struct NativeDiagnosticProcessor {
