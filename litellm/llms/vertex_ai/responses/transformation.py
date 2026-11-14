@@ -1,11 +1,12 @@
 import json
 from collections.abc import Mapping
 from typing import Final
+from urllib.parse import urlparse
 
 from pydantic import JsonValue, TypeAdapter
 
 from litellm.exceptions import UnsupportedParamsError
-from litellm.litellm_core_utils.url_utils import encode_url_path_segment
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig, drops_params
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase, graft_default_vertex_path
 from litellm.types.llms.openai import ResponseInputParam
@@ -18,7 +19,7 @@ _CREDENTIALS: Final[TypeAdapter[str | Mapping[str, JsonValue] | None]] = TypeAda
     str | Mapping[str, JsonValue] | None
 )
 _AUTH: Final = VertexBase()
-_MUSE_PREFIX: Final = "muse-"
+_MUSE_PREFIX: Final = "meta/muse-"
 _STORED_RESPONSE_PARAMS: Final = frozenset({"background", "conversation", "previous_response_id"})
 MUSE_CHAT_PARAMS: Final = (
     "max_tokens",
@@ -43,7 +44,7 @@ MUSE_CHAT_PARAMS: Final = (
 
 
 def is_vertex_muse_model(model: str | None) -> bool:
-    return (model or "").removeprefix("vertex_ai/").removeprefix("meta/").startswith(_MUSE_PREFIX)
+    return (model or "").removeprefix("vertex_ai/").startswith(_MUSE_PREFIX)
 
 
 class VertexAIMuseResponsesAPIConfig(OpenAIResponsesAPIConfig):
@@ -60,6 +61,9 @@ class VertexAIMuseResponsesAPIConfig(OpenAIResponsesAPIConfig):
         return LlmProviders.VERTEX_AI
 
     def supports_native_file_search(self) -> bool:
+        return False
+
+    def supports_native_websocket(self) -> bool:
         return False
 
     def get_supported_openai_params(self, model: str) -> list[str]:  # mutable-ok: base API requires a list return
@@ -101,7 +105,11 @@ class VertexAIMuseResponsesAPIConfig(OpenAIResponsesAPIConfig):
             f"https://aiplatform.googleapis.com/v1/projects/{encode_url_path_segment(project)}"
             "/locations/global/publishers/meta/v1/responses"
         )
-        return graft_default_vertex_path(api_base, default_url) if api_base else default_url
+        if not api_base:
+            return default_url
+        if urlparse(api_base).path.rstrip("/") in ("/v1", "/v1beta1"):
+            return graft_default_vertex_path(api_base, default_url)
+        return join_api_base(api_base, urlparse(default_url).path)
 
     def transform_extra_body(
         self,
