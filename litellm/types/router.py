@@ -89,6 +89,7 @@ class SilentExperimentFlag(TypedDict, total=False):
 class FallbackSkipReason(str, enum.Enum):
     NOT_AUTHORIZED = "not_authorized"
     OVER_BUDGET = "over_budget"
+    RATE_LIMITED = "rate_limited"
 
 
 @dataclass(frozen=True, slots=True)
@@ -236,6 +237,7 @@ class UpdateRouterConfig(LiteLLMBaseModel):
     tag_routing_prefix: str | None = None
     optional_pre_call_checks: OptionalPreCallChecks | None = None
     fallback_on_unsupported_params: bool | None = None
+    fallback_on_saturation: bool | None = None
 
     model_config = ConfigDict(protected_namespaces=())
 
@@ -352,6 +354,10 @@ class ModelInfo(MirroredPricingParams):
     internal_router_model: bool | None = None
 
     max_embedding_batch_size: Annotated[int, Field(gt=0)] | None = None
+
+    # deployments that set the same value share one provider encryption boundary, so encrypted reasoning
+    # minted on one can be replayed to another (e.g. regional endpoints of one OpenAI organization)
+    encrypted_content_boundary: Annotated[str, Field(min_length=1)] | None = None
 
     def __init__(self, id: str | int | None = None, **params) -> None:
         if id is None:
@@ -864,12 +870,14 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     cost_per_second: ReadOnly[float | None]
     input_cost_per_second: float | None
     input_cost_per_text_message: ReadOnly[float | None]
+    output_cost_per_video: ReadOnly[float | None]
     output_cost_per_second: float | None
     output_cost_per_second_480p: ReadOnly[float | None]
     output_cost_per_second_720p: ReadOnly[float | None]
     output_cost_per_second_768p: ReadOnly[float | None]
     output_cost_per_second_2k: ReadOnly[float | None]
     output_cost_per_second_1080p: float | None
+    output_cost_per_video_clip: ReadOnly[Mapping[str, Mapping[str, float]] | None]
     output_cost_per_second_4k: ReadOnly[float | None]
     num_retries: int | None
     ## MOCK RESPONSES ##
@@ -1308,13 +1316,6 @@ class RoutingStrategy(enum.Enum):
     PROVIDER_BUDGET_LIMITING = "provider-budget-routing"
 
 
-class RouterCacheEnum(enum.Enum):
-    TPM = "global_router:{id}:{model}:tpm:{current_minute}"
-    RPM = "global_router:{id}:{model}:rpm:{current_minute}"
-    ITPM = "global_router:{id}:{model}:itpm:{current_minute}"
-    OTPM = "global_router:{id}:{model}:otpm:{current_minute}"
-
-
 class GenericBudgetWindowDetails(LiteLLMBaseModel):
     """Details about a provider's budget window"""
 
@@ -1343,6 +1344,19 @@ class FallbackBudgetCheck(Protocol):
     chosen later, inside the router, so a zero-cost group that falls back to a priced one bills
     without any budget gate. The router runs this before every cross-model-group fallback attempt
     and skips targets it rejects, leaving the free attempt itself untouched.
+    """
+
+    async def __call__(self, *, model: str, request_kwargs: Mapping[str, object], ctx: "RouterContext") -> bool: ...
+
+
+class FallbackRateLimitCheck(Protocol):
+    """
+    Decides whether the caller behind `request_kwargs` still has per-model rate limit capacity on fallback `model`.
+
+    The limiter admits a request once, against the *requested* model group, so a provider failure would hand
+    the caller a fallback group whose per-model limits were never checked. The router runs this before every
+    cross-model-group fallback attempt, skips rejected targets, and an implementation reserves capacity when
+    it admits so concurrent failovers cannot all pass.
     """
 
     async def __call__(self, *, model: str, request_kwargs: Mapping[str, object], ctx: "RouterContext") -> bool: ...

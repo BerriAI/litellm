@@ -1276,6 +1276,35 @@ class TestVertexEmbeddingsBatchInputTranslation:
             },
         }
 
+    def test_should_nest_embed_content_config_params_inside_the_request(self) -> None:
+        (row,) = _wrap_entries(
+            [
+                _embeddings_entry(
+                    body={
+                        "model": "gemini-embedding-2",
+                        "input": "hello world",
+                        "dimensions": 768,
+                        "document_ocr": True,
+                        "audio_track_extraction": True,
+                        "auto_truncate": False,
+                    }
+                )
+            ]
+        )
+
+        assert row == {
+            "key": "request-1",
+            "request": {
+                "content": {"parts": [{"text": "hello world"}]},
+                "output_dimensionality": 768,
+                "embed_content_config": {
+                    "document_ocr": True,
+                    "audio_track_extraction": True,
+                    "auto_truncate": False,
+                },
+            },
+        }
+
     def test_should_omit_config_fields_when_no_params_given(self):
         (row,) = _wrap_entries([_embeddings_entry()])
 
