@@ -2,6 +2,7 @@ import copy
 import itertools
 import json
 import logging
+import sys
 from collections.abc import Iterator, Mapping
 from itertools import chain
 from typing import Final, cast
@@ -14,6 +15,7 @@ from httpx import Headers
 from pydantic import BaseModel, ConfigDict
 
 import litellm
+from litellm.llms.anthropic.messages.native import handler as python_messages
 from litellm.constants import (
     ANTHROPIC_MIN_THINKING_BUDGET_TOKENS,
     DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
@@ -1459,9 +1461,9 @@ def test_dict_fields_take_the_unforced_json_tool_on_a_default_thinking_model(loc
 
     assert "output_format" not in optional_params
     assert "tool_choice" not in optional_params
-    assert [
-        (tool["name"], tool["input_schema"]["properties"]["field"]) for tool in optional_params["tools"]
-    ] == [("json_tool_call", {"type": "object", "additionalProperties": {"type": "integer"}})]
+    assert [(tool["name"], tool["input_schema"]["properties"]["field"]) for tool in optional_params["tools"]] == [
+        ("json_tool_call", {"type": "object", "additionalProperties": {"type": "integer"}})
+    ]
 
 
 def test_native_structured_output_uses_bundled_capability_when_remote_map_lags(
@@ -3793,7 +3795,9 @@ def _tool_search_turn(tool_references: list[str], last_block: dict[str, object])
     ]
 
 
-def _parsed_choice(content: list[dict[str, object]], stop_reason: str) -> Choices:
+def _parsed_choice(
+    content: list[dict[str, object]], stop_reason: str, tool_name_reverse_map: dict[str, str] | None = None
+) -> Choices:
     anthropic_response: Final = {
         "id": "msg_01XYZ",
         "type": "message",
@@ -3816,6 +3820,7 @@ def _parsed_choice(content: list[dict[str, object]], stop_reason: str) -> Choice
             model_response=ModelResponse(),
             json_mode=False,
             prefix_prompt=None,
+            tool_name_reverse_map=tool_name_reverse_map,
         )
         .choices[0]
     )
@@ -3823,11 +3828,18 @@ def _parsed_choice(content: list[dict[str, object]], stop_reason: str) -> Choice
     return choice
 
 
-def _parsed_assistant_message(content: list[dict[str, object]], stop_reason: str) -> Message:
-    return _parsed_choice(content, stop_reason).message
+def _parsed_assistant_message(
+    content: list[dict[str, object]], stop_reason: str, tool_name_reverse_map: dict[str, str] | None = None
+) -> Message:
+    return _parsed_choice(content, stop_reason, tool_name_reverse_map).message
 
 
-_WEATHER_TOOL_USE: Final = {"type": "tool_use", "id": "toolu_01Weather", "name": "get_weather", "input": {"city": "Paris"}}
+_WEATHER_TOOL_USE: Final = {
+    "type": "tool_use",
+    "id": "toolu_01Weather",
+    "name": "get_weather",
+    "input": {"city": "Paris"},
+}
 
 
 def _web_search_turn(last_block: Mapping[str, object]) -> list[dict[str, object]]:
@@ -3963,7 +3975,11 @@ _PARIS_ANSWER: Final[Mapping[str, str]] = {"type": "text", "text": _PARIS_TEXT}
     [
         pytest.param(_web_search_turn(_PARIS_ANSWER), "end_turn", [], "stop", id="web_search_then_answer"),
         pytest.param(
-            _web_search_turn(_WEATHER_TOOL_USE), "tool_use", ["toolu_01Weather"], "tool_calls", id="web_search_then_tool"
+            _web_search_turn(_WEATHER_TOOL_USE),
+            "tool_use",
+            ["toolu_01Weather"],
+            "tool_calls",
+            id="web_search_then_tool",
         ),
         pytest.param([_WEATHER_TOOL_USE], "tool_use", ["toolu_01Weather"], "tool_calls", id="client_tool_only"),
     ],
@@ -4080,6 +4096,110 @@ def test_replayed_search_that_found_nothing_answers_every_tool_use_and_ends_on_a
     assert [turn["role"] for turn in replayed] == ["user", "assistant", "user"]
     assert _block_ids(replayed[2], "tool_result", "tool_use_id") == _block_ids(replayed[1], "tool_use", "id")
     assert _block_ids(replayed[1], "server_tool_use", "id") == server_tool_use_ids
+
+
+def _function_tool(name: str) -> dict[str, object]:
+    return {
+        "type": "function",
+        "function": {"name": name, "parameters": {"type": "object", "properties": {"city": {"type": "string"}}}},
+        "defer_loading": True,
+    }
+
+
+def _anthropic_request_after(
+    assistant_content: list[dict[str, object]], stop_reason: str, tool_names: tuple[str, ...] | None
+) -> dict[str, object]:
+    config: Final = AnthropicConfig()
+    message: Final = _parsed_assistant_message(assistant_content, stop_reason)
+    answers: Final = [
+        {"role": "tool", "tool_call_id": block["id"], "content": "18C"}
+        for block in assistant_content
+        if block["type"] == "tool_use"
+    ]
+    optional_params: Final = (
+        {}
+        if tool_names is None
+        else config.map_openai_params(
+            non_default_params={
+                "tools": [
+                    {"type": "tool_search_tool_regex_20251119", "name": "tool_search_tool_regex"},
+                    *map(_function_tool, tool_names),
+                ]
+            },
+            optional_params={},
+            model="claude-opus-5-5",
+            drop_params=False,
+        )
+    )
+    return config.transform_request(
+        model="claude-opus-5-5",
+        messages=[
+            {"role": "user", "content": "What is the weather in Paris?"},
+            message.model_dump(),
+            *answers,
+            {"role": "user", "content": "And in Osaka?"},
+        ],
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+
+@pytest.mark.parametrize(
+    ("tool_names", "search_replayed"),
+    [
+        pytest.param(("get_weather", "get_local_time"), True, id="every_loaded_tool_is_still_sent"),
+        pytest.param(("get_local_time",), False, id="a_loaded_tool_is_no_longer_sent"),
+        pytest.param(None, False, id="no_tools_so_litellm_sends_a_dummy_tool"),
+    ],
+)
+def test_replayed_tool_search_is_sent_only_while_every_tool_it_loaded_is_still_sent(
+    tool_names: tuple[str, ...] | None, search_replayed: bool
+):
+    search_turn: Final = _tool_search_turn(["get_weather"], _WEATHER_TOOL_USE)
+
+    request: Final = _anthropic_request_after(search_turn, "tool_use", tool_names)
+
+    assert request["messages"][1]["content"] == (search_turn if search_replayed else [_WEATHER_TOOL_USE])
+    assert [block["type"] for block in request["messages"][2]["content"]] == ["tool_result", "text"]
+
+
+def test_replayed_tool_search_turn_that_held_only_the_search_is_dropped_once_its_tool_is_no_longer_sent():
+    request: Final = _anthropic_request_after(_tool_search_turn(["get_weather"], _WEATHER_TOOL_USE)[:2], "end_turn", ())
+
+    assert [message["role"] for message in request["messages"]] == ["user", "user"]
+    assert "srvtoolu_01Search" not in json.dumps(request["messages"])
+
+
+def test_replayed_tool_search_result_litellm_cannot_read_is_sent_as_the_client_replayed_it():
+    unreadable_result: Final = {
+        "type": "tool_search_tool_result",
+        "tool_use_id": "srvtoolu_01Search",
+        "content": {"tool_references": "get_weather"},
+    }
+    message: Final = _parsed_assistant_message(_tool_search_turn(["get_weather"], _WEATHER_TOOL_USE), "tool_use")
+    provider_fields: Final = {**(message.provider_specific_fields or {}), "tool_results": [unreadable_result]}
+    replayed: Final = message.model_copy(update={"provider_specific_fields": provider_fields})
+    config: Final = AnthropicConfig()
+
+    request: Final = config.transform_request(
+        model="claude-opus-5-5",
+        messages=[
+            {"role": "user", "content": "What is the weather in Paris?"},
+            replayed.model_dump(),
+            {"role": "tool", "tool_call_id": "toolu_01Weather", "content": "18C"},
+        ],
+        optional_params=config.map_openai_params(
+            non_default_params={"tools": [_function_tool("get_local_time")]},
+            optional_params={},
+            model="claude-opus-5-5",
+            drop_params=False,
+        ),
+        litellm_params={},
+        headers={},
+    )
+
+    assert unreadable_result in request["messages"][1]["content"]
 
 
 def test_replayed_search_that_found_nothing_keeps_its_result_when_the_call_never_reached_the_client(
@@ -4390,7 +4510,7 @@ async def test_native_compaction_wire_roundtrip(
         return httpx.Response(200, json=body)
 
     route.mock(side_effect=respond)
-    call: Final = litellm.anthropic.messages.acreate if messages_api else litellm.acompletion
+    call: Final = python_messages.anthropic_messages if messages_api else litellm.acompletion
     params: Final = dict(
         model=f"{'openai/' if gateway else ''}anthropic/claude-sonnet-5",
         api_key="test",
@@ -5646,10 +5766,10 @@ def test_basic_sanitize_anthropic_tool_name_replaces_invalid_chars():
 def test_build_anthropic_tool_name_maps_no_collisions():
     """Names that need rewriting go in the maps; valid names stay out."""
     from litellm.llms.anthropic.chat.transformation import (
-        _build_anthropic_tool_name_maps,
+        build_anthropic_tool_name_maps,
     )
 
-    forward, reverse = _build_anthropic_tool_name_maps(
+    forward, reverse = build_anthropic_tool_name_maps(
         [
             "fine_name",
             "actions/download-job-logs-for-workflow-run",
@@ -5671,10 +5791,10 @@ def test_build_anthropic_tool_name_maps_disambiguates_collision_with_existing_va
     the rewritten one must get a unique suffix and only THAT one shows up in
     the reverse map. The legitimately-named `foo_bar` round-trips identically."""
     from litellm.llms.anthropic.chat.transformation import (
-        _build_anthropic_tool_name_maps,
+        build_anthropic_tool_name_maps,
     )
 
-    forward, reverse = _build_anthropic_tool_name_maps(["foo_bar", "foo/bar"])
+    forward, reverse = build_anthropic_tool_name_maps(["foo_bar", "foo/bar"])
     # The original valid name keeps its slot.
     assert "foo_bar" not in forward  # untouched
     # The rewritten one gets a disambiguating suffix.
@@ -5690,10 +5810,10 @@ def test_build_anthropic_tool_name_maps_disambiguates_two_rewrites_to_same_targe
     """Two different invalid names that collapse to the same candidate must
     both end up with unique sanitized forms."""
     from litellm.llms.anthropic.chat.transformation import (
-        _build_anthropic_tool_name_maps,
+        build_anthropic_tool_name_maps,
     )
 
-    forward, reverse = _build_anthropic_tool_name_maps(["foo/bar", "foo.bar"])
+    forward, reverse = build_anthropic_tool_name_maps(["foo/bar", "foo.bar"])
     # First wins the canonical slot, second gets a suffix.
     assert forward["foo/bar"] == "foo_bar"
     assert forward["foo.bar"] == "foo_bar_2"
@@ -5705,10 +5825,10 @@ def test_build_anthropic_tool_name_maps_disambiguates_two_rewrites_to_same_targe
 def test_build_anthropic_tool_name_maps_three_way_collision():
     """`foo/bar`, `foo.bar`, and an existing `foo_bar` must all coexist."""
     from litellm.llms.anthropic.chat.transformation import (
-        _build_anthropic_tool_name_maps,
+        build_anthropic_tool_name_maps,
     )
 
-    forward, reverse = _build_anthropic_tool_name_maps(["foo_bar", "foo/bar", "foo.bar"])
+    forward, reverse = build_anthropic_tool_name_maps(["foo_bar", "foo/bar", "foo.bar"])
     assert "foo_bar" not in forward  # untouched
     assert forward["foo/bar"] == "foo_bar_2"
     assert forward["foo.bar"] == "foo_bar_3"
@@ -5723,10 +5843,10 @@ def test_build_anthropic_tool_name_maps_reverse_order_collision():
     its sanitized form collides with, both must still end up with distinct
     names on the wire."""
     from litellm.llms.anthropic.chat.transformation import (
-        _build_anthropic_tool_name_maps,
+        build_anthropic_tool_name_maps,
     )
 
-    forward, reverse = _build_anthropic_tool_name_maps(["foo/bar", "foo_bar"])
+    forward, reverse = build_anthropic_tool_name_maps(["foo/bar", "foo_bar"])
     # The valid name keeps its slot untouched.
     assert "foo_bar" not in forward
     # The rewritten one gets a disambiguating suffix.
@@ -5746,10 +5866,10 @@ def test_build_anthropic_tool_name_maps_duplicate_originals():
     on duplicates.
     """
     from litellm.llms.anthropic.chat.transformation import (
-        _build_anthropic_tool_name_maps,
+        build_anthropic_tool_name_maps,
     )
 
-    forward, reverse = _build_anthropic_tool_name_maps(["foo/bar", "foo/bar"])
+    forward, reverse = build_anthropic_tool_name_maps(["foo/bar", "foo/bar"])
     # Same original sanitizes to the same target — no spurious suffix.
     assert forward == {"foo/bar": "foo_bar"}
     assert reverse == {"foo_bar": "foo/bar"}
@@ -8574,6 +8694,166 @@ def test_convert_tool_response_to_message_keeps_arguments_too_deep_to_decode(arg
     assert message.content == arguments
 
 
+@pytest.mark.parametrize("arguments", ["[1, 2]", '"x"', "5"])
+def test_convert_tool_response_to_message_keeps_a_non_object_answer_as_written(arguments: str) -> None:
+    message: Final = AnthropicConfig.convert_tool_response_to_message(
+        tool_calls=[
+            ChatCompletionToolCallChunk(
+                id="toolu_1",
+                type="function",
+                function=ChatCompletionToolCallFunctionChunk(name=RESPONSE_FORMAT_TOOL_NAME, arguments=arguments),
+                index=0,
+            )
+        ],
+        response_format_schema=None,
+    )
+
+    assert message is not None
+    assert message.content == arguments
+
+
+_DEEPLY_NESTED: Final = "[" * 300 + "]" * 300
+
+
+@pytest.mark.parametrize(
+    "arguments, schema, expected",
+    [
+        pytest.param('{"values": ' + _DEEPLY_NESTED + "}", None, _DEEPLY_NESTED, id="values_answer"),
+        pytest.param(
+            '{"name": "json_tool_call", "parameters": {"tier": ' + _DEEPLY_NESTED + ', "summary": "x"}}',
+            _RISK_SCHEMA,
+            '{"tier": ' + _DEEPLY_NESTED + ', "summary": "x"}',
+            id="envelope",
+        ),
+    ],
+)
+def test_convert_tool_response_to_message_unwraps_a_deeply_nested_answer(
+    arguments: str, schema: dict[str, object] | None, expected: str
+) -> None:
+    message = AnthropicConfig.convert_tool_response_to_message(
+        tool_calls=[
+            ChatCompletionToolCallChunk(
+                id="toolu_1",
+                type="function",
+                function=ChatCompletionToolCallFunctionChunk(name=RESPONSE_FORMAT_TOOL_NAME, arguments=arguments),
+                index=0,
+            )
+        ],
+        response_format_schema=None if schema is None else _schema(schema),
+    )
+
+    assert message is not None
+    assert message.content == expected
+
+
+_DIGITS_PAST_THE_INT_LIMIT: Final = "1" * (sys.get_int_max_str_digits() + 1)
+
+
+@pytest.mark.parametrize(
+    "arguments, schema, expected",
+    [
+        pytest.param('{"values": [1e400, "\u00e9"]}', None, '[1e400, "\\u00e9"]', id="values_number_past_a_float"),
+        pytest.param(
+            '{"values": [' + _DIGITS_PAST_THE_INT_LIMIT + "]}",
+            None,
+            "[" + _DIGITS_PAST_THE_INT_LIMIT + "]",
+            id="values_integer_past_the_digit_limit",
+        ),
+        pytest.param('{"count":-1e400}', None, '{"count": -1e400}', id="schemaless_answer_number_past_a_float"),
+        pytest.param(
+            '{"values": [1e400, -1E-400, 0e-400]}',
+            None,
+            "[1e400, -1E-400, 0.0]",
+            id="values_numbers_past_a_float_both_ways",
+        ),
+        pytest.param(
+            '{"name": "json_tool_call", "parameters": {"tier": 2.5e-400, "summary": "x"}}',
+            _RISK_SCHEMA,
+            '{"tier": 2.5e-400, "summary": "x"}',
+            id="envelope_number_below_a_float",
+        ),
+        pytest.param(
+            '{"name": "json_tool_call", "parameters": {"tier": 1e400, "summary": "\u00e9"}}',
+            _RISK_SCHEMA,
+            '{"tier": 1e400, "summary": "\u00e9"}',
+            id="envelope_number_past_a_float",
+        ),
+        pytest.param(
+            '{"tier":' + _DIGITS_PAST_THE_INT_LIMIT + ',"summary":"x"}',
+            _RISK_SCHEMA,
+            '{"tier": ' + _DIGITS_PAST_THE_INT_LIMIT + ', "summary": "x"}',
+            id="answer_integer_past_the_digit_limit",
+        ),
+    ],
+)
+def test_convert_tool_response_to_message_keeps_out_of_range_numbers_as_the_model_wrote_them(
+    arguments: str, schema: dict[str, object] | None, expected: str
+):
+    message = AnthropicConfig.convert_tool_response_to_message(
+        tool_calls=[
+            ChatCompletionToolCallChunk(
+                id="toolu_1",
+                type="function",
+                function=ChatCompletionToolCallFunctionChunk(name=RESPONSE_FORMAT_TOOL_NAME, arguments=arguments),
+                index=0,
+            )
+        ],
+        response_format_schema=None if schema is None else _schema(schema),
+    )
+
+    assert message is not None
+    assert message.content == expected
+
+
+@pytest.mark.parametrize(
+    "blocks, expected",
+    [
+        pytest.param(
+            ('{"tier": 1e400}', '{"summary": "x"}'), '{"tier": 1e400, "summary": "x"}', id="number_past_a_float_first"
+        ),
+        pytest.param(
+            ('{"summary": "x"}', '{"tier": ' + _DIGITS_PAST_THE_INT_LIMIT + "}"),
+            '{"summary": "x", "tier": ' + _DIGITS_PAST_THE_INT_LIMIT + "}",
+            id="integer_past_the_digit_limit_last",
+        ),
+        pytest.param(
+            (
+                '{"$PARAMETER_NAME": "tier", "$PARAMETER_VALUE": 1e400}',
+                '{"$PARAMETER_NAME": "summary", "$PARAMETER_VALUE": "x"}',
+            ),
+            '{"tier": 1e400, "summary": "x"}',
+            id="named_field_number_past_a_float_first",
+        ),
+        pytest.param(
+            (
+                ' {"$PARAMETER_NAME":"summary","$PARAMETER_VALUE":"Jos\u00e9"} ',
+                '{"$PARAMETER_NAME":"tier","$PARAMETER_VALUE":' + _DIGITS_PAST_THE_INT_LIMIT + "}",
+            ),
+            '{"summary": "Jos\u00e9", "tier": ' + _DIGITS_PAST_THE_INT_LIMIT + "}",
+            id="compact_named_field_integer_past_the_digit_limit_last",
+        ),
+    ],
+)
+def test_convert_tool_response_to_message_joins_split_fields_keeping_out_of_range_numbers_as_written(
+    blocks: tuple[str, ...], expected: str
+):
+    message = AnthropicConfig.convert_tool_response_to_message(
+        tool_calls=[
+            ChatCompletionToolCallChunk(
+                id=f"toolu_{index}",
+                type="function",
+                function=ChatCompletionToolCallFunctionChunk(name=RESPONSE_FORMAT_TOOL_NAME, arguments=block),
+                index=index,
+            )
+            for index, block in enumerate(blocks)
+        ],
+        response_format_schema=_schema(_RISK_SCHEMA),
+    )
+
+    assert message is not None
+    assert message.content == expected
+
+
 @pytest.mark.parametrize(
     "document",
     [
@@ -8837,6 +9117,12 @@ def test_vertex_claude_json_answer_split_into_one_tool_block_per_field_returns_o
             id="one_partial_object_per_field",
         ),
         pytest.param(
+            _CONTACT_SCHEMA,
+            ({}, {"name": "unknown"}, {"email": "unknown"}),
+            {"name": "unknown", "email": "unknown"},
+            id="empty_object_then_one_partial_object_per_field",
+        ),
+        pytest.param(
             _OPTIONAL_CONTACT_SCHEMA,
             ({"name": "Ada", "email": "ada@example.com"}, {"phone": "555-0100"}),
             {"name": "Ada", "email": "ada@example.com", "phone": "555-0100"},
@@ -8854,7 +9140,7 @@ def test_json_tool_blocks_that_each_name_one_schema_property_become_one_object(
     )
 
     assert replacement is not None
-    assert json.loads(replacement.content) == expected_content
+    assert replacement.content == json.dumps(expected_content)
     assert remaining_tool_calls == []
     assert extra_content is None
 
@@ -10529,6 +10815,136 @@ def test_transform_request_tool_config_point_without_tools_drops_the_key():
     assert "cache_control_injection_points" not in data
     assert "tools" not in data
     assert litellm_params["metadata"] == {}
+
+
+def test_a_renamed_tool_leaves_tool_results_without_tool_references_as_claude_sent_them():
+    errored_search: Final = {
+        "type": "tool_search_tool_result",
+        "tool_use_id": "srvtoolu_01Search",
+        "content": {"type": "tool_search_tool_result_error", "error_code": "unavailable"},
+    }
+    results: Final = [_CODE_EXECUTION_BLOCKS[1], errored_search]
+    message: Final = _parsed_assistant_message(
+        [
+            *_CODE_EXECUTION_BLOCKS,
+            _tool_search_turn([], _WEATHER_TOOL_USE)[0],
+            errored_search,
+            {**_WEATHER_TOOL_USE, "name": "weather_get"},
+        ],
+        "tool_use",
+        {"weather_get": "weather.get"},
+    )
+    config: Final = AnthropicConfig()
+
+    request: Final = config.transform_request(
+        model="claude-opus-5-5",
+        messages=[
+            {"role": "user", "content": "What is the weather in Paris?"},
+            message.model_dump(),
+            {"role": "tool", "tool_call_id": "toolu_01Weather", "content": "18C"},
+        ],
+        optional_params=config.map_openai_params(
+            non_default_params={
+                "tools": [
+                    {"type": "tool_search_tool_regex_20251119", "name": "tool_search_tool_regex"},
+                    _function_tool("weather.get"),
+                ]
+            },
+            optional_params={},
+            model="claude-opus-5-5",
+            drop_params=False,
+        ),
+        litellm_params={},
+        headers={},
+    )
+
+    assert message.provider_specific_fields["tool_results"] == results
+    assert message.tool_calls[-1].function.name == "weather.get"
+    sent: Final = request["messages"][1]["content"]
+    assert [block for block in sent if block["type"].endswith("_tool_result")] == results
+    assert [block["name"] for block in sent if block["type"] == "tool_use"] == ["weather_get"]
+
+
+@pytest.mark.parametrize(
+    ("last_block", "stop_reason"),
+    [
+        pytest.param(dict(_PARIS_ANSWER), "end_turn", id="search_then_answer"),
+        pytest.param({**_WEATHER_TOOL_USE, "name": "weather_get"}, "tool_use", id="search_then_tool"),
+    ],
+)
+def test_a_renamed_tool_keeps_the_replayed_search_that_loaded_it(last_block: dict[str, object], stop_reason: str):
+    search_turn: Final = _tool_search_turn(["weather_get"], last_block)
+    message: Final = _parsed_assistant_message(search_turn, stop_reason, {"weather_get": "weather.get"})
+    answers: Final = (
+        [{"role": "tool", "tool_call_id": "toolu_01Weather", "content": "18C"}] if stop_reason == "tool_use" else []
+    )
+    config: Final = AnthropicConfig()
+
+    request: Final = config.transform_request(
+        model="claude-opus-5-5",
+        messages=[
+            {"role": "user", "content": "What is the weather in Paris?"},
+            message.model_dump(),
+            *answers,
+            {"role": "user", "content": "And in Osaka?"},
+        ],
+        optional_params=config.map_openai_params(
+            non_default_params={
+                "tools": [
+                    {"type": "tool_search_tool_regex_20251119", "name": "tool_search_tool_regex"},
+                    _function_tool("weather.get"),
+                ]
+            },
+            optional_params={},
+            model="claude-opus-5-5",
+            drop_params=False,
+        ),
+        litellm_params={},
+        headers={},
+    )
+
+    sent: Final = request["messages"][1]["content"]
+    assert [block for block in sent if block["type"] == "tool_search_tool_result"] == [search_turn[1]]
+    assert [block["id"] for block in sent if block["type"] == "server_tool_use"] == ["srvtoolu_01Search"]
+
+
+def _parsed_tool_search_fields(
+    content: list[dict[str, object]], tool_name_reverse_map: dict[str, str]
+) -> tuple[object, list[str]]:
+    message: Final = _parsed_assistant_message(content, "tool_use", tool_name_reverse_map)
+    return message.provider_specific_fields["tool_results"], [call.function.name for call in message.tool_calls]
+
+
+def _streamed_tool_search_fields(
+    content: list[dict[str, object]], tool_name_reverse_map: dict[str, str]
+) -> tuple[object, list[str]]:
+    iterator: Final = ModelResponseIterator(None, sync_stream=True, tool_name_reverse_map=tool_name_reverse_map)
+    events: Final = chain.from_iterable(
+        (
+            {"type": "content_block_start", "index": index, "content_block": block},
+            {"type": "content_block_stop", "index": index},
+        )
+        for index, block in enumerate(content)
+    )
+    deltas: Final = [iterator.chunk_parser(event).choices[0].delta for event in events]
+    fields: Final = [delta.provider_specific_fields for delta in deltas if delta.provider_specific_fields]
+    calls: Final = chain.from_iterable(delta.tool_calls or () for delta in deltas)
+    return fields[-1]["tool_results"], [call.function.name for call in calls]
+
+
+@pytest.mark.parametrize("stream", [False, True], ids=["sync", "stream"])
+def test_a_renamed_tool_search_result_keeps_claudes_names_so_an_older_proxy_accepts_the_replay(stream: bool):
+    search_turn: Final = _tool_search_turn(["weather_get"], {**_WEATHER_TOOL_USE, "name": "weather_get", "input": {}})
+    reverse_map: Final = {"weather_get": "weather.get"}
+
+    tool_results, tool_names = (
+        _streamed_tool_search_fields(search_turn, reverse_map)
+        if stream
+        else _parsed_tool_search_fields(search_turn, reverse_map)
+    )
+
+    assert tool_results == [search_turn[1]]
+    assert tool_names == ["weather.get"]
 
 
 _INPUT_TRANSFORMATIONS: Final = [{"type": "thinking_block_binding", "count": 2}]

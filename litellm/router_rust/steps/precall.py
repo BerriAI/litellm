@@ -20,7 +20,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Protocol
 
 from litellm._logging import verbose_router_logger
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.core_helpers import allowed_openai_param_names, as_str_mapping
 from litellm.litellm_core_utils.deployment_pricing import deployment_backend_models
 from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider
 from litellm.litellm_core_utils.prompt_templates.tpm_media_utils import is_plain_embedding_text
@@ -115,7 +115,7 @@ def _input_tokens(
     instructions: Final = raw_instructions if isinstance(raw_instructions, str) else None
     input_messages: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(  # pyright: ignore[reportUnknownMemberType]  # its input type is untyped
         input=text_input,  # pyright: ignore[reportArgumentType]  # str | list, as the request carries it
-        responses_api_request={"instructions": instructions} if instructions is not None else {},
+        responses_api_request={"instructions": instructions, "tools": extras.get("tools")},
         only_since_compaction=True,
     )
     return counter(model=tokenizer_model, messages=input_messages, tools=_tools(extras))
@@ -204,8 +204,7 @@ def _is_list(value: object) -> bool:
 
 
 def _declared_param_allowlist(params: Mapping[str, object]) -> frozenset[str]:
-    declared: Final = params.get("allowed_openai_params")
-    return frozenset(entry for entry in _items(declared) if isinstance(entry, str))
+    return frozenset(allowed_openai_param_names(params.get("allowed_openai_params")))
 
 
 def _capability_model_and_provider(deployment_params: Mapping[str, object], group: str) -> tuple[str, str]:

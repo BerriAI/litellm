@@ -37,6 +37,17 @@ _AZURE_RESPONSES_PROMPT_CACHE_BREAKPOINT: Final = TypeAdapter(AzureResponsesProm
 
 
 _DATED_GA_API_VERSION: Final = re.compile(r"\d{4}-\d{2}-\d{2}")
+_FOUNDRY_PROJECT_V1_RESPONSES_PATH: Final = re.compile(r"/api/projects/[^/]+/openai/v1/responses$")
+_DATED_API_VERSION: Final = re.compile(r"\d{4}-\d{2}-\d{2}(?:-preview)?")
+_MIN_RESPONSES_API_DATE: Final = "2025-03-01"
+
+
+def _predates_responses_api(api_version: str | None) -> bool:
+    return (
+        api_version is not None
+        and _DATED_API_VERSION.fullmatch(api_version) is not None
+        and api_version[:10] < _MIN_RESPONSES_API_DATE
+    )
 
 
 def _str_param(litellm_params: Mapping[str, object], key: str) -> str | None:
@@ -45,16 +56,14 @@ def _str_param(litellm_params: Mapping[str, object], key: str) -> str | None:
 
 
 def _resolve_responses_api_version(api_base: str | None, litellm_params: Mapping[str, object]) -> str | None:
-    """
-    Dated GA api_versions (e.g. 2024-10-21) predate the Responses API on Azure and 404 there, so a deployment
-    pinned to one for chat gets the default Responses version unless it sets responses_api_version.
-    """
-    api_version: Final = _str_param(litellm_params, "api_version")
-    if api_base is not None and "api-version" in httpx.URL(api_base).params:
-        return api_version
     responses_api_version: Final = _str_param(litellm_params, "responses_api_version")
     if responses_api_version is not None:
         return responses_api_version
+    api_version: Final = _str_param(litellm_params, "api_version")
+    if api_base is not None and "api-version" in httpx.URL(api_base).params:
+        return api_version
+    if _predates_responses_api(api_version):
+        return None
     if api_version is not None and _DATED_GA_API_VERSION.fullmatch(api_version):
         return AZURE_DEFAULT_RESPONSES_API_VERSION
     return api_version
@@ -64,7 +73,11 @@ def _v1_responses_url(api_base: str) -> httpx.URL:
     parsed_url: Final = httpx.URL(api_base)
     path: Final = parsed_url.path.rstrip("/")
     root: Final = next(
-        (path.removesuffix(route) for route in ("/openai/v1/responses", "/openai/responses") if path.endswith(route)),
+        (
+            path.removesuffix(route)
+            for route in ("/openai/v1/responses", "/openai/responses", "/openai/v1")
+            if path.endswith(route)
+        ),
         path,
     )
     return parsed_url.copy_with(path=f"{root}/openai/v1/responses", query=None)
@@ -72,6 +85,15 @@ def _v1_responses_url(api_base: str) -> httpx.URL:
 
 def _with_responses_api_version(api_base: str | None, litellm_params: Mapping[str, object]) -> Mapping[str, object]:
     return MappingProxyType({**litellm_params, "api_version": _resolve_responses_api_version(api_base, litellm_params)})
+
+
+def _without_rejected_api_version(url: str, api_version: str | None) -> str:
+    parsed_url: Final = httpx.URL(url)
+    if not (
+        BaseAzureLLM.is_api_version_opt_out(api_version) or _FOUNDRY_PROJECT_V1_RESPONSES_PATH.search(parsed_url.path)
+    ):
+        return url
+    return str(parsed_url.copy_with(params=parsed_url.params.remove("api-version")))
 
 
 _AZURE_REJECTED_INPUT_FIELDS: Final = MappingProxyType(
@@ -137,7 +159,12 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         return BaseAzureLLM.base_validate_azure_environment(headers=headers, litellm_params=litellm_params)
 
     def get_stripped_model_name(self, model: str) -> str:
-        return model.replace("responses/", "").replace("o_series/", "").replace("azure_ai/", "")
+        return (
+            model.replace("responses/", "")
+            .replace("o_series/", "")
+            .replace("azure_ai/", "")
+            .replace(AzureOpenAIGPT5Config.GPT5_SERIES_ROUTE, "")
+        )
 
     def _validate_input_param(
         self, input: str | ResponseInputParam, *, drop_params: bool = False
@@ -188,7 +215,7 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
     def get_complete_url(
         self,
         api_base: str | None,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
     ) -> str:
         """
         Constructs a complete URL for the API request.
@@ -206,24 +233,43 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         - A complete URL string, e.g.,
         "https://litellm8397336933.openai.azure.com/openai/responses?api-version=2024-05-01-preview"
         """
-        resolved_api_base: Final = BaseAzureLLM.resolve_azure_api_base(api_base)
+        base: Final = BaseAzureLLM.resolve_azure_api_base(api_base)
+        parsed_url: Final = httpx.URL(base) if base is not None else None
+        resolved_api_base: Final = (
+            str(parsed_url.copy_with(params=parsed_url.params.remove("api-version")))
+            if parsed_url is not None
+            and (
+                _predates_responses_api(parsed_url.params.get("api-version"))
+                or _str_param(litellm_params, "responses_api_version") is not None
+            )
+            else base
+        )
         responses_params: Final = _with_responses_api_version(resolved_api_base, litellm_params)
         parsed_base: Final = urlsplit(resolved_api_base or "")
         path: Final = parsed_base.path.rstrip("/")
-        if path.endswith(("/openai/v1", "/openai/v1/responses")):
-            responses_path: Final = f"{path}/responses" if path.endswith("/openai/v1") else path
-            return BaseAzureLLM.get_base_azure_url(
-                api_base=parsed_base._replace(path=responses_path).geturl(),
-                litellm_params=responses_params,
-                route="/openai/v1/responses",
-                default_api_version=AZURE_DEFAULT_RESPONSES_API_VERSION,
+        api_version: Final = _str_param(responses_params, "api_version")
+        if path.endswith(("/openai/v1", "/openai/v1/responses")) or BaseAzureLLM.is_api_version_opt_out(api_version):
+            responses_path: Final = (
+                f"{path}/responses" if path.endswith("/openai/v1") else path.removesuffix("/openai/responses")
+            )
+            return _without_rejected_api_version(
+                BaseAzureLLM.get_base_azure_url(
+                    api_base=parsed_base._replace(path=responses_path).geturl(),
+                    litellm_params=responses_params,
+                    route="/openai/v1/responses",
+                    default_api_version=AZURE_DEFAULT_RESPONSES_API_VERSION,
+                ),
+                api_version,
             )
 
-        return BaseAzureLLM.get_base_azure_url(
-            api_base=resolved_api_base,
-            litellm_params=responses_params,
-            route="/openai/responses",
-            default_api_version=AZURE_DEFAULT_RESPONSES_API_VERSION,
+        return _without_rejected_api_version(
+            BaseAzureLLM.get_base_azure_url(
+                api_base=resolved_api_base,
+                litellm_params=responses_params,
+                route="/openai/responses",
+                default_api_version=AZURE_DEFAULT_RESPONSES_API_VERSION,
+            ),
+            api_version,
         )
 
     def supports_native_websocket(self) -> bool:

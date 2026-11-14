@@ -137,12 +137,13 @@ def _v2_team_public_names(gateway: Gateway, key: str, model: str) -> list[JsonVa
     return [entry["model_info"].get("team_public_model_name") for entry in response.json()["data"]]
 
 
-def test_v2_model_info_reports_a_team_model_to_team_and_non_team_keys(gateway: Gateway) -> None:
+def test_v2_model_info_reports_a_team_model_only_to_team_and_admin_keys(gateway: Gateway) -> None:
     with gateway.scenario() as scenario:
         team: Final = scenario.team(models=[])
         model: Final = scenario.model(model_info={"team_id": team})
         assert _v2_team_public_names(gateway, scenario.key(team_id=team), model) == [model]
-        assert _v2_team_public_names(gateway, scenario.key(), model) == [model]
+        assert _v2_team_public_names(gateway, scenario.key(), model) == []
+        assert _v2_team_public_names(gateway, gateway.key, model) == [model]
 
 
 @pytest.mark.parametrize("set_on", ["team_new", "team_update"])

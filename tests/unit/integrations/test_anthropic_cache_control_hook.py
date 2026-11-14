@@ -19,6 +19,7 @@ from openai.types.chat import ChatCompletionMessage
 from pydantic import BaseModel, ConfigDict
 
 import litellm
+from litellm.litellm_core_utils.model_cost_table import publish
 from litellm import Router
 from litellm._logging import verbose_logger
 from litellm.integrations.anthropic_cache_control_hook import (
@@ -4353,9 +4354,9 @@ class TestPromptCacheBreakpointCapability:
         bundled = os.path.join(os.path.dirname(litellm.__file__), "model_prices_and_context_window_backup.json")
         with open(bundled) as handle:
             monkeypatch.setattr(litellm, "model_cost", json.load(handle))
-        litellm.utils.cached_get_model_info_helper.cache_clear()
+        publish(litellm.model_cost)
         yield
-        litellm.utils.cached_get_model_info_helper.cache_clear()
+        publish(litellm.model_cost)
 
     def test_listed_model_uses_the_model_map_flag(self, monkeypatch):
         flagged = {**litellm.model_cost["gpt-4.1"], "supports_prompt_cache_breakpoint": True}
@@ -4587,9 +4588,9 @@ class TestBedrockMantleGptShipsTheOpenAIDialect:
         bundled = os.path.join(os.path.dirname(litellm.__file__), "model_prices_and_context_window_backup.json")
         with open(bundled) as handle:
             monkeypatch.setattr(litellm, "model_cost", json.load(handle))
-        litellm.utils.cached_get_model_info_helper.cache_clear()
+        publish(litellm.model_cost)
         yield
-        litellm.utils.cached_get_model_info_helper.cache_clear()
+        publish(litellm.model_cost)
 
     def test_shipped_entry_makes_the_deployment_eligible(self):
         assert supports_openai_prompt_cache_breakpoint(self.MANTLE_MODEL) is True
@@ -5863,3 +5864,24 @@ def test_cache_control_hook_reads_a_non_string_answer_id_as_answering_no_tool_ca
     assert _cache_marks_after_injection(_search_conversation_with(malformed)) == _cache_marks_after_injection(
         _search_conversation_with(well_formed)
     )
+
+
+def test_cache_control_as_prompt_cache_breakpoints_leaves_unmarked_parts_with_non_string_keys_alone() -> None:
+    unmarked_part: Final = {"type": "text", "text": "Context", 1: "ignored"}
+    message: Final = cast(
+        AllMessageValues,
+        {
+            "role": "user",
+            "content": [
+                unmarked_part,
+                {"type": "text", "text": "Stable prefix", "cache_control": {"type": "ephemeral"}},
+            ],
+        },
+    )  # cast-ok: a chat caller passing a Python dict may use keys JSON cannot carry
+
+    renamed: Final = AnthropicCacheControlHook.cache_control_as_prompt_cache_breakpoints(message)
+
+    assert renamed["content"] == [
+        unmarked_part,
+        {"type": "text", "text": "Stable prefix", "prompt_cache_breakpoint": {"mode": "explicit"}},
+    ]

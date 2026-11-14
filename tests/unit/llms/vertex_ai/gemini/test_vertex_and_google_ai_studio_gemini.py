@@ -1,4 +1,4 @@
-import asyncio, importlib, os, uuid
+import asyncio, base64, importlib, os, uuid
 import json
 import logging
 import re
@@ -36,7 +36,8 @@ from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
 from litellm.types.llms.base import CachedTokensDetails
 from litellm.types.llms.vertex_ai import GeminiFinishReason, RequestBody, UsageMetadata
 from litellm.types.utils import ChoiceLogprobs, ModelInfo, ModelResponseStream, Usage
-from litellm.utils import _invalidate_model_cost_lowercase_map, CustomStreamWrapper
+from litellm.utils import CustomStreamWrapper
+from litellm.litellm_core_utils.model_cost_table import publish
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.vertex_ai.gemini.transformation import (
@@ -2485,6 +2486,61 @@ async def test_gemini_image_generation_async_stream(respx_mock: respx.MockRouter
         None,
     ]
     assert chunks[-1].choices[0].finish_reason == "stop"
+
+
+def _gemini_tts_audio_event(audio_base64: str) -> dict[str, object]:
+    return {
+        "candidates": [
+            {
+                "content": {
+                    "role": "model",
+                    "parts": [{"inlineData": {"mimeType": "audio/L16;codec=pcm;rate=24000", "data": audio_base64}}],
+                },
+                "index": 0,
+            }
+        ],
+        "usageMetadata": {"promptTokenCount": 9, "totalTokenCount": 9},
+    }
+
+
+@pytest.mark.usefixtures("_gemini_httpx_transport")
+@pytest.mark.respx(assert_all_called=True)
+def test_gemini_tts_stream_carries_audio_in_delta_and_rebuilds_full_clip(respx_mock: respx.MockRouter) -> None:
+    first_audio: Final = base64.b64encode(b"\x01\x02\x03").decode()
+    second_audio: Final = base64.b64encode(b"\x04\x05").decode()
+    respx_mock.post(
+        "https://generativelanguage.googleapis.com/v1alpha/models/gemini-3.8-flash-tts:streamGenerateContent?alt=sse"
+    ).mock(
+        return_value=_gemini_sse(
+            _gemini_tts_audio_event(first_audio),
+            _gemini_tts_audio_event(second_audio),
+            {
+                "candidates": [
+                    {"content": {"role": "model", "parts": [{"text": ""}]}, "finishReason": "STOP", "index": 0}
+                ],
+                "usageMetadata": {"promptTokenCount": 9, "candidatesTokenCount": 40, "totalTokenCount": 49},
+            },
+        )
+    )
+
+    chunks: Final = list(
+        litellm.completion(
+            model="gemini/gemini-3.8-flash-tts",
+            messages=[{"role": "user", "content": "Say hello"}],
+            modalities=["audio"],
+            audio={"voice": "Kore", "format": "pcm16"},
+            stream=True,
+            api_key="test-api-key",
+        )
+    )
+    complete_response: Final = litellm.stream_chunk_builder(chunks)
+
+    assert [chunk.choices[0].delta.audio for chunk in chunks if chunk.choices[0].delta.audio is not None] == [
+        {"data": first_audio},
+        {"data": second_audio},
+    ]
+    assert chunks[-1].choices[0].finish_reason == "stop"
+    assert base64.b64decode(complete_response.choices[0].message.audio.data) == b"\x01\x02\x03\x04\x05"
 
 
 @pytest.mark.respx(assert_all_called=True)
@@ -8161,7 +8217,7 @@ def isolate_litellm_state():
     for attr, original_value in original_state.items():
         if hasattr(litellm, attr):
             setattr(litellm, attr, original_value)
-    _invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
 
 
 _SCALAR_DEFAULTS = {
@@ -9676,7 +9732,7 @@ async def test_gemini_pro_json_schema_args_sent_httpx(
     monkeypatch.setenv("GEMINI_API_KEY", "test-gemini-api-key")
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
-    _invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
     monkeypatch.setattr(litellm, "set_verbose", True)
     messages = [{"role": "user", "content": "List 5 cookie recipes"}]
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
@@ -9782,7 +9838,7 @@ async def test_gemini_pro_json_schema_args_sent_httpx_openai_schema(
 
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
-    _invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
     monkeypatch.setattr(litellm, "set_verbose", True)
     messages = [{"role": "user", "content": "List 5 cookie recipes"}]
     from litellm.llms.custom_httpx.http_handler import HTTPHandler

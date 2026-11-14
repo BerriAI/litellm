@@ -2,7 +2,8 @@ import json
 import asyncio
 import datetime
 import time
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
+from pathlib import Path
 from types import MappingProxyType, SimpleNamespace
 from typing import Final, Literal, cast
 
@@ -10,7 +11,7 @@ import httpx
 import pytest
 import respx
 from openai.types.completion_usage import CompletionUsage
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 
 import litellm
 from litellm import TranscriptionResponse, model_cost
@@ -37,7 +38,8 @@ from litellm.types.llms.xai import RealtimeMeteredUsage
 from litellm.types.rerank import RerankResponse
 from litellm.types.utils import CacheCreationTokenDetails, CallTypes, Choices, CompletionTokensDetailsWrapper, EmbeddingResponse, ImageObject, ImageResponse, ImageUsage, ImageUsageInputTokensDetails, LiteLLMRealtimeStreamLoggingObject, Message, ModelInfo, ModelResponse, PromptTokensDetails, PromptTokensDetailsWrapper, Usage
 from litellm.types.videos.main import VideoObject
-from litellm.utils import _invalidate_model_cost_lowercase_map, cached_get_model_info_helper, supports_prompt_caching
+from litellm.utils import cached_get_model_info_helper, supports_prompt_caching
+from litellm.litellm_core_utils.model_cost_table import publish
 import os
 import threading
 from unittest.mock import MagicMock, patch
@@ -194,6 +196,83 @@ def test_completion_cost_uses_response_model_for_dynamic_routing(_local_model_co
     )
 
     assert cost > 0, "Cost should be calculated using response model"
+
+
+_ROUTER_FEE_PER_INPUT_TOKEN: Final = 3e-07
+
+
+def _model_router_cost_map(routed_model_rows: Mapping[str, tuple[float, float]]) -> dict[str, dict[str, object]]:
+    fee_rows: Final = {
+        f"{provider}/model-router": {
+            "litellm_provider": provider,
+            "mode": "chat",
+            "input_cost_per_token": _ROUTER_FEE_PER_INPUT_TOKEN,
+            "output_cost_per_token": 0.0,
+        }
+        for provider in ("azure", "azure_ai")
+    }
+    routed_rows: Final = {
+        key: {
+            "litellm_provider": key.partition("/")[0],
+            "mode": "chat",
+            "input_cost_per_token": input_rate,
+            "output_cost_per_token": output_rate,
+        }
+        for key, (input_rate, output_rate) in routed_model_rows.items()
+    }
+    return {**fee_rows, **routed_rows}
+
+
+def _routed_response(served_model: str) -> ModelResponse:
+    response: Final = ModelResponse(
+        model=served_model, choices=[], usage=Usage(prompt_tokens=25, completion_tokens=10, total_tokens=35)
+    )
+    response._hidden_params = {"model": "model-router"}
+    return response
+
+
+@pytest.mark.parametrize(
+    ("routed_model_rows", "served_model", "billed_rates"),
+    [
+        ({"azure_ai/foundry-only-model": (2e-06, 5e-06)}, "foundry-only-model", (2e-06, 5e-06)),
+        (
+            {"azure/azure-priced-model": (1e-06, 4e-06), "azure_ai/azure-priced-model": (9e-06, 9e-06)},
+            "azure-priced-model",
+            (1e-06, 4e-06),
+        ),
+    ],
+)
+def test_azure_model_router_bills_the_routed_model_and_the_router_fee_once(
+    monkeypatch: pytest.MonkeyPatch,
+    routed_model_rows: Mapping[str, tuple[float, float]],
+    served_model: str,
+    billed_rates: tuple[float, float],
+) -> None:
+    monkeypatch.setattr(litellm, "model_cost", _model_router_cost_map(routed_model_rows))
+
+    cost: Final = completion_cost(
+        completion_response=_routed_response(served_model), model="model-router", custom_llm_provider="azure"
+    )
+
+    input_rate, output_rate = billed_rates
+    assert cost == pytest.approx(25 * input_rate + 10 * output_rate + 25 * _ROUTER_FEE_PER_INPUT_TOKEN)
+
+
+def test_azure_and_azure_ai_model_routers_bill_a_foundry_only_routed_model_the_same(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "model_cost", _model_router_cost_map({"azure_ai/foundry-only-model": (2e-06, 5e-06)}))
+
+    azure_cost: Final = completion_cost(
+        completion_response=_routed_response("foundry-only-model"), model="model-router", custom_llm_provider="azure"
+    )
+    azure_ai_cost: Final = completion_cost(
+        completion_response=_routed_response("foundry-only-model"),
+        model="model-router",
+        custom_llm_provider="azure_ai",
+    )
+
+    assert azure_cost == pytest.approx(azure_ai_cost)
 
 
 def test_completion_cost_prefers_exact_route_price_over_capability_generalization(
@@ -524,6 +603,204 @@ def test_completion_cost_bills_priced_response_model_over_priced_requested_model
     assert cost == pytest.approx(_token_rates_cost(litellm.model_cost["openai/sol-requested-test-2099-01-01"], usage))
 
 
+_BEDROCK_PROFILE_GLOBAL_RATES: Final = MappingProxyType(
+    {
+        "input_cost_per_token": 1e-6,
+        "output_cost_per_token": 5e-6,
+        "cache_read_input_token_cost": 1e-7,
+        "cache_creation_input_token_cost": 1.25e-6,
+    }
+)
+_BEDROCK_PROFILE_MODEL: Final = "anthropic.bedrock-profile-test-v1:0"
+_BEDROCK_PROFILE_RATE_MULTIPLIERS: Final = MappingProxyType(
+    {
+        _BEDROCK_PROFILE_MODEL: 1.0,
+        f"eu.{_BEDROCK_PROFILE_MODEL}": 1.1,
+        f"us.{_BEDROCK_PROFILE_MODEL}": 1.2,
+        f"jp.{_BEDROCK_PROFILE_MODEL}": 1.3,
+        f"global.{_BEDROCK_PROFILE_MODEL}": 0.9,
+        "anthropic.bedrock-profile-other-test-v1:0": 3.0,
+        "anthropic.bedrock-profile-unpriced-test-v1:0": 1.0,
+        "bedrock-profile-router-test": 5.0,
+    }
+)
+_BEDROCK_PROFILE_CACHE_USAGE: Final = MappingProxyType(
+    {"cache_creation_input_tokens": 2000, "cache_read_input_tokens": 24000}
+)
+
+
+@pytest.fixture
+def _bedrock_profile_rows(_local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    for key, multiplier in _BEDROCK_PROFILE_RATE_MULTIPLIERS.items():
+        monkeypatch.setitem(
+            litellm.model_cost,
+            key,
+            {
+                "litellm_provider": "bedrock_converse",
+                "mode": "chat",
+                **{field: rate * multiplier for field, rate in _BEDROCK_PROFILE_GLOBAL_RATES.items()},
+            },
+        )
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "eu.anthropic.bedrock-profile-unpriced-test-v1:0",
+        {"litellm_provider": "bedrock_converse", "mode": "chat"},
+    )
+
+
+def _bedrock_messages_body(model: str) -> dict[str, object]:
+    return {
+        "id": "msg_bdrk_profile",
+        "type": "message",
+        "role": "assistant",
+        "model": model,
+        "content": [{"type": "text", "text": "hi"}],
+        "stop_reason": "end_turn",
+        "usage": {"input_tokens": 18, "output_tokens": 4, **_BEDROCK_PROFILE_CACHE_USAGE},
+    }
+
+
+def _bedrock_stream_response(model: str) -> ModelResponse:
+    cached: Final = _BEDROCK_PROFILE_CACHE_USAGE["cache_read_input_tokens"]
+    written: Final = _BEDROCK_PROFILE_CACHE_USAGE["cache_creation_input_tokens"]
+    return ModelResponse(
+        model=model,
+        choices=[],
+        usage=Usage(
+            prompt_tokens=18 + cached + written,
+            completion_tokens=4,
+            total_tokens=22 + cached + written,
+            cache_creation_input_tokens=written,
+            cache_read_input_tokens=cached,
+            prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=cached),
+        ),
+    )
+
+
+def _bedrock_private_route_response(model: str) -> ModelResponse:
+    response: Final = _bedrock_stream_response("bedrock-profile-alias")
+    response._hidden_params = {"custom_llm_provider": "bedrock", "provider_response_model": model}
+    return response
+
+
+def _bedrock_global_cost(served_shape: Callable[[str], object]) -> float:
+    return completion_cost(
+        completion_response=served_shape(_BEDROCK_PROFILE_MODEL),
+        model=f"bedrock/{_BEDROCK_PROFILE_MODEL}",
+        custom_llm_provider="bedrock",
+    )
+
+
+_BEDROCK_SERVED_SHAPES: Final = (
+    pytest.param(_bedrock_messages_body, id="non-streaming"),
+    pytest.param(_bedrock_stream_response, id="streaming"),
+    pytest.param(_bedrock_private_route_response, id="private-provider-response-model"),
+)
+
+
+@pytest.mark.parametrize("served_shape", _BEDROCK_SERVED_SHAPES)
+@pytest.mark.parametrize("route", ["bedrock/", "bedrock/invoke/"])
+@pytest.mark.parametrize("region", ["eu", "us", "jp"])
+def test_completion_cost_bills_bedrock_cross_region_profile_when_bedrock_serves_the_region_stripped_id(
+    _bedrock_profile_rows: None, region: str, route: str, served_shape: Callable[[str], object]
+) -> None:
+    profile: Final = f"{region}.{_BEDROCK_PROFILE_MODEL}"
+
+    cost: Final = completion_cost(
+        completion_response=served_shape(_BEDROCK_PROFILE_MODEL),
+        model=f"{route}{profile}",
+        custom_llm_provider="bedrock",
+    )
+
+    assert cost == pytest.approx(_bedrock_global_cost(served_shape) * _BEDROCK_PROFILE_RATE_MULTIPLIERS[profile])
+
+
+@pytest.mark.parametrize("served_shape", _BEDROCK_SERVED_SHAPES)
+@pytest.mark.parametrize(
+    ("deployment", "served_model"),
+    [
+        pytest.param(f"bedrock/eu.{_BEDROCK_PROFILE_MODEL}", f"us.{_BEDROCK_PROFILE_MODEL}", id="other-region"),
+        pytest.param(f"bedrock/eu.{_BEDROCK_PROFILE_MODEL}", f"global.{_BEDROCK_PROFILE_MODEL}", id="global-profile"),
+        pytest.param(
+            f"bedrock/jp.{_BEDROCK_PROFILE_MODEL}", "anthropic.bedrock-profile-other-test-v1:0", id="other-model"
+        ),
+        pytest.param(
+            "bedrock/eu.anthropic.bedrock-profile-unpriced-test-v1:0",
+            "anthropic.bedrock-profile-unpriced-test-v1:0",
+            id="unpriced-profile",
+        ),
+    ],
+)
+def test_completion_cost_keeps_the_served_bedrock_row_unless_it_is_the_region_stripped_profile(
+    _bedrock_profile_rows: None, deployment: str, served_model: str, served_shape: Callable[[str], object]
+) -> None:
+    cost: Final = completion_cost(
+        completion_response=served_shape(served_model),
+        model=deployment,
+        custom_llm_provider="bedrock",
+    )
+
+    assert cost == pytest.approx(_bedrock_global_cost(served_shape) * _BEDROCK_PROFILE_RATE_MULTIPLIERS[served_model])
+
+
+@pytest.mark.parametrize(
+    ("base_model", "custom_pricing", "router_model_id", "priced_row"),
+    [
+        pytest.param(
+            "bedrock/anthropic.bedrock-profile-other-test-v1:0",
+            None,
+            None,
+            "anthropic.bedrock-profile-other-test-v1:0",
+            id="base-model",
+        ),
+        pytest.param(None, True, "bedrock-profile-router-test", "bedrock-profile-router-test", id="custom-pricing"),
+    ],
+)
+def test_completion_cost_explicit_pricing_precedes_the_bedrock_cross_region_profile(
+    _bedrock_profile_rows: None,
+    base_model: str | None,
+    custom_pricing: bool | None,
+    router_model_id: str | None,
+    priced_row: str,
+) -> None:
+    cost: Final = completion_cost(
+        completion_response=_bedrock_messages_body(_BEDROCK_PROFILE_MODEL),
+        model=f"bedrock/eu.{_BEDROCK_PROFILE_MODEL}",
+        custom_llm_provider="bedrock",
+        base_model=base_model,
+        custom_pricing=custom_pricing,
+        router_model_id=router_model_id,
+    )
+
+    assert cost == pytest.approx(
+        _bedrock_global_cost(_bedrock_messages_body) * _BEDROCK_PROFILE_RATE_MULTIPLIERS[priced_row]
+    )
+
+
+def test_completion_cost_keeps_the_served_row_for_a_region_dotted_name_outside_bedrock(
+    _local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "openai/eu.profile-dotted-test",
+        {"litellm_provider": "openai", "mode": "chat", "input_cost_per_token": 3e-6, "output_cost_per_token": 7e-6},
+    )
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "openai/profile-dotted-test",
+        {"litellm_provider": "openai", "mode": "chat", "input_cost_per_token": 5e-6, "output_cost_per_token": 11e-6},
+    )
+    usage: Final = Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
+
+    cost: Final = completion_cost(
+        completion_response=ModelResponse(model="profile-dotted-test", choices=[], usage=usage),
+        model="openai/eu.profile-dotted-test",
+        custom_llm_provider="openai",
+    )
+
+    assert cost == pytest.approx(_token_rates_cost(litellm.model_cost["openai/profile-dotted-test"], usage))
+
+
 def test_completion_cost_keeps_response_pricing_when_requested_alias_has_no_rates(
     _local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -724,7 +1001,7 @@ def test_completion_cost_bills_a_requested_model_priced_after_an_unpriced_lookup
         requested_model,
         {"litellm_provider": "fireworks_ai", "mode": "chat", "input_cost_per_token": 3e-6, "output_cost_per_token": 7e-6},
     )
-    _invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
 
     cost: Final = completion_cost(completion_response=display_name_response())
 
@@ -2501,6 +2778,36 @@ def test_vertex_gemini_flash_image_generation_regional_costs_uplift_over_global(
     assert image_cost("us-central1") == pytest.approx(global_cost * 1.10, rel=1e-9)
 
 
+@pytest.mark.parametrize("requested_tier", ["flex", "priority"])
+def test_vertex_gemini_image_generation_bills_only_the_tier_vertex_served(
+    _local_model_cost_map: None, requested_tier: str
+) -> None:
+    """Image requests never send service_tier upstream, so a request tier must not change the bill
+    when Vertex reports no trafficType, while a served ON_DEMAND_PRIORITY still bills priority rates."""
+    usage: Final = ImageUsage(
+        input_tokens=1000,
+        input_tokens_details=ImageUsageInputTokensDetails(image_tokens=0, text_tokens=1000),
+        output_tokens=1120,
+        total_tokens=2120,
+    )
+
+    def image_cost(traffic_type: str | None, service_tier: str | None) -> float:
+        response: Final = ImageResponse(data=[ImageObject(b64_json="img")], usage=usage)
+        response.hidden_params["provider_specific_fields"] = {"traffic_type": traffic_type} if traffic_type else {}
+        return completion_cost(
+            completion_response=response,
+            model="vertex_ai/gemini-3.1-flash-image",
+            call_type="image_generation",
+            optional_params={"service_tier": service_tier} if service_tier else {},
+        )
+
+    standard_cost: Final = image_cost(None, None)
+    assert standard_cost > 0
+    assert image_cost(None, requested_tier) == standard_cost
+    assert image_cost("ON_DEMAND", requested_tier) == standard_cost
+    assert image_cost("ON_DEMAND_PRIORITY", requested_tier) > standard_cost
+
+
 def test_vertex_uplift_composes_with_above_128k_pricing(monkeypatch):
     """The regional-endpoint uplift multiplies whatever rate the request priced at,
     including the above-128k dynamic rates, so a synthetic model carrying both keys
@@ -3225,6 +3532,37 @@ def test_completion_cost_service_tier_for_bedrock(_local_model_cost_map):
     )
 
     assert priority_cost > default_cost > flex_cost > 0
+
+
+@pytest.mark.parametrize(
+    ("model", "service_tier", "regional_row"),
+    [
+        pytest.param(
+            "bedrock/moonshotai.kimi-k2.5",
+            "priority",
+            "bedrock/us-west-2/moonshotai.kimi-k2.5",
+            id="kimi-k2.5-priority",
+        ),
+        pytest.param("zai.glm-5", "flex", "bedrock/us-west-2/zai.glm-5", id="glm-5-flex"),
+    ],
+)
+def test_cost_per_token_bedrock_service_tier_without_a_region_matches_the_regional_row(
+    _local_model_cost_map, model: str, service_tier: str, regional_row: str
+) -> None:
+    """Regression for #46880: a Bedrock priority or flex call priced without a region fell back to the
+    standard rate because the region-less row lacked the tier prices its regional rows carry."""
+    regional: Final = litellm.model_cost[regional_row]
+    tier_input: Final = regional[f"input_cost_per_token_{service_tier}"]
+    tier_output: Final = regional[f"output_cost_per_token_{service_tier}"]
+    assert tier_input != regional["input_cost_per_token"]
+
+    usage: Final = Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
+    prompt_usd, completion_usd = cost_per_token(
+        model=model, custom_llm_provider="bedrock", usage_object=usage, service_tier=service_tier
+    )
+
+    assert prompt_usd == pytest.approx(1000 * tier_input)
+    assert completion_usd == pytest.approx(500 * tier_output)
 
 
 def test_completion_cost_service_tier_for_anthropic(_local_model_cost_map):
@@ -4579,6 +4917,158 @@ def test_batch_cost_calculator_bills_cached_tokens_at_the_standard_cache_price_w
     assert prompt_cost == pytest.approx(1000 * expected_rate)
 
 
+def _cached_image_batch_usage() -> Usage:
+    return Usage(
+        prompt_tokens=1000,
+        completion_tokens=0,
+        total_tokens=1000,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cached_tokens=1000, image_tokens=1000, cached_tokens_details=CachedTokensDetails(image_tokens=1000)
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    ("image_batch_cache_price", "text_batch_cache_price", "expected_rate"),
+    [
+        pytest.param(1e-6, 6.25e-7, 1e-6, id="the-batch-cached-image-price-wins"),
+        pytest.param(None, 6.25e-7, 6.25e-7, id="without-it-cached-images-bill-the-batch-cache-price"),
+        pytest.param(None, None, 2e-6, id="without-any-batch-cache-price-cached-images-bill-the-standard-image-cache-price"),
+    ],
+)
+def test_batch_cost_calculator_bills_cached_image_tokens_at_the_batch_cached_image_price(
+    image_batch_cache_price: float | None, text_batch_cache_price: float | None, expected_rate: float
+) -> None:
+    model_info: Final = cast(
+        ModelInfo,
+        {
+            "input_cost_per_token": 5e-6,
+            "input_cost_per_image_token": 8e-6,
+            "cache_read_input_token_cost": 1.25e-6,
+            "cache_read_input_image_token_cost": 2e-6,
+            "input_cost_per_token_batches": 2.5e-6,
+            "input_cost_per_image_token_batches": 4e-6,
+            "cache_read_input_token_cost_batches": text_batch_cache_price,
+            "cache_read_input_image_token_cost_batches": image_batch_cache_price,
+        },
+    )
+
+    prompt_cost, _ = batch_cost_calculator(
+        usage=_cached_image_batch_usage(), model="gpt-image-2", custom_llm_provider="openai", model_info=model_info
+    )
+
+    assert prompt_cost == pytest.approx(1000 * expected_rate)
+
+
+_COST_MAP_ROWS: Final = TypeAdapter(dict[str, dict[str, object]])
+
+
+def _rows_with_a_batch_cached_image_price() -> tuple[tuple[str, str, float, ModelInfo], ...]:
+    rows: Final = _COST_MAP_ROWS.validate_json(
+        Path(litellm.__file__).with_name("model_prices_and_context_window_backup.json").read_bytes()
+    )
+    return tuple(
+        (name, str(entry["litellm_provider"]), rate, cast(ModelInfo, entry))
+        for name, entry in rows.items()
+        if isinstance(rate := entry.get("cache_read_input_image_token_cost_batches"), float)
+    )
+
+
+def _batch_cached_image_cost(name: str, provider: str, entry: ModelInfo) -> float:
+    return batch_cost_calculator(_cached_image_batch_usage(), name, provider, model_info=entry)[0]
+
+
+@pytest.mark.parametrize(
+    ("usage", "modality_batch_cache_key"),
+    [
+        pytest.param(_cached_audio_batch_usage(), "cache_read_input_audio_token_cost_batches", id="cached-audio"),
+        pytest.param(_cached_image_batch_usage(), "cache_read_input_image_token_cost_batches", id="cached-image"),
+    ],
+)
+def test_batch_cost_calculator_bills_cached_modality_tokens_at_their_batch_cache_price_without_a_text_cache_price(
+    usage: Usage, modality_batch_cache_key: str
+) -> None:
+    model_info: Final = cast(
+        ModelInfo,
+        {
+            "input_cost_per_token": 5e-6,
+            "input_cost_per_audio_token": 8e-6,
+            "input_cost_per_image_token": 8e-6,
+            "input_cost_per_token_batches": 2.5e-6,
+            "input_cost_per_audio_token_batches": 4e-6,
+            "input_cost_per_image_token_batches": 4e-6,
+            modality_batch_cache_key: 1e-6,
+        },
+    )
+
+    prompt_cost, _ = batch_cost_calculator(
+        usage=usage, model="gpt-image-2", custom_llm_provider="openai", model_info=model_info
+    )
+
+    assert prompt_cost == pytest.approx(1000 * 1e-6)
+
+
+@pytest.mark.parametrize(
+    ("usage", "modality_cache_key", "expected_prompt_cost"),
+    [
+        pytest.param(
+            _cached_audio_batch_usage(),
+            "cache_read_input_audio_token_cost_batches",
+            1000 * 1e-6,
+            id="cached-audio-batch-price",
+        ),
+        pytest.param(
+            _cached_image_batch_usage(),
+            "cache_read_input_image_token_cost_batches",
+            1000 * 1e-6,
+            id="cached-image-batch-price",
+        ),
+        pytest.param(
+            _cached_audio_batch_usage(),
+            "cache_read_input_audio_token_cost",
+            1000 * 1e-6 / 2,
+            id="cached-audio-standard-price-halved",
+        ),
+        pytest.param(
+            _cached_image_batch_usage(),
+            "cache_read_input_image_token_cost",
+            1000 * 1e-6 / 2,
+            id="cached-image-standard-price-halved",
+        ),
+    ],
+)
+def test_batch_cost_calculator_half_price_fallback_bills_cached_modality_tokens_at_their_own_cache_price(
+    usage: Usage, modality_cache_key: str, expected_prompt_cost: float
+) -> None:
+    model_info: Final = cast(
+        ModelInfo,
+        {
+            "input_cost_per_token": 5e-6,
+            "cache_read_input_token_cost": 2.5e-6,
+            modality_cache_key: 1e-6,
+        },
+    )
+
+    prompt_cost, _ = batch_cost_calculator(
+        usage=usage, model="gpt-image-2", custom_llm_provider="openai", model_info=model_info
+    )
+
+    assert prompt_cost == pytest.approx(expected_prompt_cost)
+
+
+def test_batch_cached_image_tokens_bill_the_rows_batch_cached_image_price_on_every_row_that_has_one() -> None:
+    rows: Final = _rows_with_a_batch_cached_image_price()
+    assert rows, "no cost map row prices Batch cached image input"
+
+    mispriced: Final = tuple(
+        (name, _batch_cached_image_cost(name, provider, entry), 1000 * rate)
+        for name, provider, rate, entry in rows
+        if _batch_cached_image_cost(name, provider, entry) != pytest.approx(1000 * rate)
+    )
+
+    assert mispriced == ()
+
+
 def test_batch_cost_calculator_bills_long_context_cached_tokens_at_the_standard_long_context_cache_price() -> None:
     model_info: Final[ModelInfo] = {
         "input_cost_per_token": 1.25e-6,
@@ -4835,6 +5325,37 @@ def test_completion_cost_bills_interactions_google_search_per_query():
     assert model_info.get("web_search_billing_unit") == "per_query"
     assert cost == pytest.approx(expected)
     assert cost > 3 * per_query_cost
+
+
+def test_completion_cost_bills_an_agent_interaction_at_its_agent_row():
+    from litellm.types.interactions import InteractionsAPIResponse
+
+    agent: Final = "deep-research-preview-04-2026"
+    model_info: Final = litellm.get_model_info(model=agent, custom_llm_provider="vertex_ai")
+    response: Final = InteractionsAPIResponse(
+        id="interactions/agent123",
+        agent=agent,
+        status="completed",
+        usage={
+            "total_input_tokens": 1000,
+            "input_tokens_by_modality": [{"modality": "text", "tokens": 1000}],
+            "total_cached_tokens": 200,
+            "total_output_tokens": 300,
+            "output_tokens_by_modality": [{"modality": "text", "tokens": 300}],
+            "total_thought_tokens": 100,
+            "grounding_tool_count": [{"type": "google_search", "count": 3}],
+        },
+    )
+
+    cost: Final = completion_cost(completion_response=response, custom_llm_provider="vertex_ai")
+
+    assert model_info["key"] == f"vertex_ai/{agent}"
+    assert cost == pytest.approx(
+        800 * model_info["input_cost_per_token"]
+        + 200 * model_info["cache_read_input_token_cost"]
+        + 400 * model_info["output_cost_per_token"]
+        + 3 * model_info["search_context_cost_per_query"]["search_context_size_medium"]
+    )
 
 
 def test_completion_cost_bills_interactions_video_output_at_video_rate():
@@ -6228,6 +6749,10 @@ def test_regular_path_never_bills_the_batch_tier_keys(_local_model_cost_map, mon
     assert completion_cost == pytest.approx(64 * 8e-6)
 
 
+# https://developers.openai.com/api/docs/pricing lists "-" for these models' Batch long context price (2026-11-13)
+_OPENAI_MODELS_WITHOUT_A_LONG_CONTEXT_BATCH_PRICE: Final = frozenset({"gpt-5.5-pro"})
+
+
 @pytest.mark.parametrize("prefix", _BATCH_RATE_PREFIXES)
 def test_every_openai_entry_with_a_long_context_rate_and_a_batch_rate_declares_the_batch_tier(
     _local_model_cost_map: None, prefix: str
@@ -6236,6 +6761,7 @@ def test_every_openai_entry_with_a_long_context_rate_and_a_batch_rate_declares_t
         name
         for name, entry in litellm.model_cost.items()
         if isinstance(entry, dict)
+        and name not in _OPENAI_MODELS_WITHOUT_A_LONG_CONTEXT_BATCH_PRICE
         and entry.get("litellm_provider") == "openai"
         and entry.get(f"{prefix}_above_272k_tokens") is not None
         and entry.get(f"{prefix}_batches") is not None
@@ -7532,82 +8058,65 @@ def test_whisper_azure():
     assert round(cost, 5) == round(expected_cost, 5)
 
 
-@pytest.mark.parametrize(
-    ("provider", "requested_model", "response_extras", "expected_seconds"),
-    [
-        ("openai", "openai/gpt-fake-transcribe", {}, 2.0),
-        ("openai", "openai/gpt-fake-transcribe", {"_audio_transcription_duration": 1.35}, 1.35),
-        ("openai", "openai/gpt-fake-transcribe", {"duration": 1.34}, 1.34),
-        ("openai", "openai/whisper-fake", {}, 0.0),
-        ("azure", "gpt-fake-transcribe", {}, 0.0),
-    ],
-    ids=[
-        "undecodable_upload_bills_provider_seconds",
-        "measured_duration_still_wins",
-        "provider_duration_still_wins",
-        "whisper_models_never_bill_provider_seconds",
-        "azure_never_bills_provider_seconds",
-    ],
-)
-def test_transcription_cost_falls_back_to_provider_billed_seconds(
-    monkeypatch: pytest.MonkeyPatch,
-    provider: str,
-    requested_model: str,
-    response_extras: Mapping[str, float],
-    expected_seconds: float,
-) -> None:
-    model: Final = requested_model.removeprefix(f"{provider}/")
+def _per_second_transcription(
+    monkeypatch: pytest.MonkeyPatch, provider: str, model: str, response_object: Mapping[str, object]
+) -> TranscriptionResponse:
     monkeypatch.setitem(
         litellm.model_cost,
         model,
         {"input_cost_per_second": 0.01, "litellm_provider": provider, "mode": "audio_transcription"},
     )
-    transcription: Final = convert_to_model_response_object(
-        response_object={
-            "text": "What is the weather in Paris?",
-            "usage": {"type": "duration", "seconds": 2},
-            **response_extras,
-        },
+    return convert_to_model_response_object(
+        response_object={"text": "What is the weather in Paris?", **response_object},
         model_response_object=TranscriptionResponse(),
         hidden_params={"model": model, "custom_llm_provider": provider},
         response_type="audio_transcription",
     )
 
-    cost: Final = completion_cost(
-        completion_response=transcription, model=requested_model, call_type="atranscription"
+
+@pytest.mark.parametrize(
+    ("provider", "model", "measured"),
+    [
+        ("openai", "whisper-fake", {}),
+        ("openai", "whisper-fake", {"_audio_transcription_duration": 2.4}),
+        ("openai", "whisper-fake", {"duration": 2.4}),
+        ("openai", "gpt-fake-transcribe", {"_audio_transcription_duration": 2.4}),
+        ("azure", "whisper-fake", {"_audio_transcription_duration": 2.4}),
+    ],
+    ids=[
+        "unmeasured_upload",
+        "measured_upload",
+        "verbose_json_duration",
+        "gpt_transcribe_model",
+        "azure",
+    ],
+)
+def test_transcription_cost_bills_the_seconds_the_provider_billed(
+    monkeypatch: pytest.MonkeyPatch, provider: str, model: str, measured: Mapping[str, float]
+) -> None:
+    transcription: Final = _per_second_transcription(
+        monkeypatch, provider, model, {"usage": {"type": "duration", "seconds": 3}, **measured}
     )
 
-    assert cost == pytest.approx(0.01 * expected_seconds)
+    cost: Final = completion_cost(
+        completion_response=transcription, model=f"{provider}/{model}", call_type="atranscription"
+    )
+
+    assert cost == pytest.approx(0.01 * 3)
 
 
 @pytest.mark.parametrize(
-    ("provider", "measured_seconds", "expected_seconds"),
-    [("openai", 1.0, 1.0), ("azure", 1.0, 1.0), ("azure", None, 7.0)],
-    ids=["openai_measured_upload_wins", "azure_measured_upload_wins", "unmeasured_upload_bills_provider_seconds"],
+    ("measured", "expected_seconds"),
+    [({"_audio_transcription_duration": 2.4}, 2.4), ({"duration": 2.4}, 2.4), ({}, 0.0)],
+    ids=["measured_upload", "reply_duration", "nothing_known"],
 )
-def test_transcription_priced_by_provider_duration_still_bills_the_measured_upload(
-    monkeypatch: pytest.MonkeyPatch, provider: str, measured_seconds: float | None, expected_seconds: float
+def test_transcription_cost_without_provider_seconds_bills_the_measured_length(
+    monkeypatch: pytest.MonkeyPatch, measured: Mapping[str, float], expected_seconds: float
 ) -> None:
-    monkeypatch.setitem(
-        litellm.model_cost,
-        "gpt-fake-transcribe",
-        {
-            "input_cost_per_second": 0.01,
-            "litellm_provider": provider,
-            "mode": "audio_transcription",
-            "provider_specific_entry": {"transcription_usage_duration": 1},
-        },
-    )
-    measured: Final = {} if measured_seconds is None else {"audio_transcription_duration": measured_seconds}
-    transcription: Final = convert_to_model_response_object(
-        response_object={"text": "What is the weather in Paris?", "usage": {"type": "duration", "seconds": 7}},
-        model_response_object=TranscriptionResponse(),
-        hidden_params={"model": "gpt-fake-transcribe", "custom_llm_provider": provider, **measured},
-        response_type="audio_transcription",
-    )
+    transcription: Final = _per_second_transcription(monkeypatch, "openai", "whisper-fake", measured)
 
     cost: Final = completion_cost(
-        completion_response=transcription, model=f"{provider}/gpt-fake-transcribe", call_type="atranscription"
+        completion_response=transcription, model="openai/whisper-fake", call_type="atranscription"
     )
 
     assert cost == pytest.approx(0.01 * expected_seconds)
@@ -11077,7 +11586,6 @@ def test_bedrock_converse_profile_preserves_registered_price_override(
     import litellm.utils as model_utils
     from litellm.cost_calculator import pricing_entry_for_cost_calc
 
-    monkeypatch.setattr(model_utils, "_runtime_registered_model_cost", {})
     catalog: Final = dict(litellm.model_cost)
     model: Final = "openai.gpt-5.6-sol"
     litellm.register_model(
@@ -11142,7 +11650,7 @@ def test_bedrock_converse_profile_preserves_registered_price_override(
     ) == pytest.approx(10 * updated_rate + 5 * rate)
 
     monkeypatch.setattr(litellm, "model_cost", catalog)
-    model_utils._invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
     model_utils.reapply_runtime_model_cost_registrations()
     profile_prices: Final = litellm.get_model_info(f"us.{model}", custom_llm_provider="bedrock")
     expected_after_reload: Final = (
@@ -11161,9 +11669,6 @@ def test_bedrock_converse_profile_preserves_registered_price_override(
 def test_bedrock_converse_profile_ignores_registered_capabilities_without_prices(
     _local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import litellm.utils as model_utils
-
-    monkeypatch.setattr(model_utils, "_runtime_registered_model_cost", {})
     model: Final = "openai.gpt-6-sol"
     litellm.register_model({model: {"supports_function_calling": True}})
     response: Final = ModelResponse(model=model, usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15))
@@ -11196,7 +11701,6 @@ def test_bedrock_converse_profile_preserves_cache_only_registered_prices(
     import litellm.utils as model_utils
     from litellm.cost_calculator import pricing_entry_for_cost_calc
 
-    monkeypatch.setattr(model_utils, "_runtime_registered_model_cost", {})
     model: Final = "openai.cache-overlay-test"
     profile: Final = f"{profile_prefix}.{model}"
     catalog: Final = {
@@ -11217,7 +11721,7 @@ def test_bedrock_converse_profile_preserves_cache_only_registered_prices(
     }
     profile_before: Final = dict(catalog[profile])
     monkeypatch.setattr(litellm, "model_cost", dict(catalog))
-    model_utils._invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
     litellm.register_model({model: {cache_field: rate}}, persist_across_reloads=persist_across_reloads)
     response: Final = ModelResponse(
         model=model,
@@ -11268,7 +11772,7 @@ def test_bedrock_converse_profile_preserves_cache_only_registered_prices(
     assert litellm.model_cost[profile] == profile_before
 
     monkeypatch.setattr(litellm, "model_cost", dict(catalog))
-    model_utils._invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
     model_utils.reapply_runtime_model_cost_registrations()
     expected_after_reload: Final = (
         10 * 0.02 + 3 * 0.04 + 5 * (rate if persist_across_reloads else catalog[profile][cache_field])
@@ -11286,8 +11790,6 @@ def test_bedrock_converse_profile_preserves_cache_only_registered_prices(
 def test_bedrock_cache_registration_with_unpriced_profile_keeps_registered_rates(
     _local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch, profile: str
 ) -> None:
-    import litellm.utils as model_utils
-
     model: Final = "openai.registered-cache-test"
     monkeypatch.setattr(
         litellm,
@@ -11303,7 +11805,7 @@ def test_bedrock_cache_registration_with_unpriced_profile_keeps_registered_rates
             "us.openai.unpriced-profile-test": {"litellm_provider": "bedrock", "mode": "chat"},
         },
     )
-    model_utils._invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
     litellm.register_model({model: {"cache_read_input_token_cost": 0.001}}, persist_across_reloads=False)
     response: Final = ModelResponse(
         model=model,
@@ -11395,7 +11897,6 @@ def test_bedrock_registered_cache_prices_preserve_dynamic_threshold_rates(
     cache_field: str,
     tier_override: float | None,
 ) -> None:
-    import litellm.utils as model_utils
     from litellm.cost_calculator import pricing_entry_for_cost_calc
 
     model: Final = "openai.threshold-overlay-test"
@@ -11417,7 +11918,7 @@ def test_bedrock_registered_cache_prices_preserve_dynamic_threshold_rates(
             },
         },
     )
-    model_utils._invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
     litellm.register_model(
         {
             model: {
@@ -11700,7 +12201,7 @@ def test_per_call_custom_prices_keep_the_regional_and_speed_multipliers(
     multiplier: float,
 ) -> None:
     monkeypatch.setitem(litellm.model_cost, call_kwargs["model"], {**row, **_PER_CALL_RATES})
-    _invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
 
     response: Final = litellm.completion(
         messages=[{"role": "user", "content": "hello"}],
@@ -11710,3 +12211,39 @@ def test_per_call_custom_prices_keep_the_regional_and_speed_multipliers(
     )
 
     assert response._hidden_params["response_cost"] == pytest.approx((1000 * 2e-06 + 1000 * 4e-06) * multiplier)
+
+
+@pytest.mark.parametrize(
+    ("message_logging_off", "query_image", "echoes_response"),
+    [
+        (True, None, False),
+        (False, None, True),
+        (False, {"type": "base64", "media_type": "image/jpeg", "data": "cXVlcnk="}, False),
+    ],
+)
+def test_cost_failure_for_an_unpriced_response_echoes_only_a_text_search_response_with_message_logging_on(
+    message_logging_off: bool,
+    query_image: Mapping[str, str] | None,
+    echoes_response: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "turn_off_message_logging", message_logging_off)
+    image_data: Final = "c2VjcmV0LWltYWdlLWJ5dGVz"
+    logging_obj: Final = Logging(
+        model="",
+        messages=[],
+        stream=False,
+        call_type="avector_store_search",
+        start_time=datetime.datetime.now(),
+        litellm_call_id="unpriced-search",
+        function_id="f",
+    )
+    logging_obj.model_call_details["query_image"] = query_image
+
+    with pytest.raises(ValueError, match="Model is None") as exc_info:
+        completion_cost(
+            completion_response={"data": [{"content": [{"source": {"data": image_data}}]}]},
+            litellm_logging_obj=logging_obj,
+        )
+
+    assert (image_data in str(exc_info.value)) is echoes_response
