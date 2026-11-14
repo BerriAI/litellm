@@ -9,6 +9,7 @@ import httpx
 import pytest
 from aiohttp import ClientSession
 from openai import AsyncAzureOpenAI, AsyncOpenAI, AzureOpenAI, OpenAI
+from opentelemetry.trace import Span
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 import litellm
@@ -261,6 +262,7 @@ INTERNAL_STATE_NAMES: Final = (
     "model_alias_map",
     "data_residency",
     "litellm_logging_obj",
+    "parent_otel_span",
     "preset_cache_key",
     "cache_key",
     "stream_response",
@@ -537,6 +539,7 @@ TYPE_HINT_NAMESPACE: Final[Mapping[str, object]] = {
     "ModelResponse": ModelResponse,
     "ModelResponseStream": ModelResponseStream,
     "Logging": Logging,
+    "Span": Span,
     "SecretFields": SecretFields,
     "CompactionState": CompactionState,
     "HeadroomRequestContext": HeadroomRequestContext,
