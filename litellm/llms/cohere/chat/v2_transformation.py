@@ -1,9 +1,10 @@
 import time
 from collections.abc import AsyncIterator, Iterator, Mapping
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Annotated, Any, Final, Literal
 
 import httpx
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter
 
 import litellm
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
@@ -28,6 +29,58 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+
+class _CohereV2ToolCallFunction(BaseModel):
+    model_config = ConfigDict(frozen=True, from_attributes=True)
+
+    name: str
+    arguments: str
+
+
+class _CohereV2ToolCall(BaseModel):
+    model_config = ConfigDict(frozen=True, from_attributes=True)
+
+    id: str
+    type: Literal["function"] = "function"
+    function: _CohereV2ToolCallFunction
+
+
+class _CohereV2Message(BaseModel):
+    model_config = ConfigDict(frozen=True, from_attributes=True)
+
+    role: str
+    content: str | tuple[Mapping[str, JsonValue], ...] | None = None
+    tool_calls: tuple[_CohereV2ToolCall, ...] | None = None
+    tool_call_id: str | None = None
+    tool_plan: str | None = None
+    citations: tuple[JsonValue, ...] | None = None
+
+
+_COHERE_V2_HISTORY: Final = TypeAdapter(
+    tuple[Annotated[_CohereV2Message | object, Field(union_mode="left_to_right")], ...]
+)
+
+
+def _cohere_v2_assistant_turn(message: _CohereV2Message) -> _CohereV2Message | None:
+    content: Final = (
+        tuple(part for part in message.content if part.get("type") == "text")
+        if isinstance(message.content, tuple)
+        else message.content
+    )
+    text: Final = content if isinstance(content, str) else "".join(str(part.get("text", "")) for part in content or ())
+    if message.tool_calls:
+        return message.model_copy(update={"content": None, "tool_plan": message.tool_plan or text or None})
+    if not text:
+        return None
+    return message.model_copy(update={"content": content, "tool_calls": None})
+
+
+def _cohere_v2_message(message: object) -> object | None:
+    if not isinstance(message, _CohereV2Message):
+        return message
+    rebuilt: Final = _cohere_v2_assistant_turn(message) if message.role == "assistant" else message
+    return None if rebuilt is None else rebuilt.model_dump(mode="json", exclude_none=True)
 
 
 class CohereV2ChatConfig(OpenAIGPTConfig):
@@ -175,12 +228,10 @@ class CohereV2ChatConfig(OpenAIGPTConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-        """
-        Cohere v2 chat api is in openai format, so we can use the openai transform request function to transform the request.
-        """
         data: Final = super().transform_request(model, messages, optional_params, litellm_params, headers)
-
-        return data
+        history: Final = _COHERE_V2_HISTORY.validate_python(data["messages"])
+        rebuilt_messages: Final = (_cohere_v2_message(message) for message in history)
+        return {**data, "messages": [message for message in rebuilt_messages if message is not None]}
 
     def transform_response(
         self,
