@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import sys
+import tracemalloc
 from collections.abc import Mapping
 from typing import Final, cast
 
@@ -13,6 +14,7 @@ import pytest
 import litellm
 from litellm.constants import REDACTED_BY_LITELLM
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    DEFS_MAX_INLINED_BYTES,
     ENCRYPTED_REASONING_SIGNATURE_PREFIX,
     TOOL_RESULT_IMAGE_BOUNDARY,
     TOOL_RESULT_IMAGE_PLACEHOLDER,
@@ -41,6 +43,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     strip_encrypted_reasoning_from_messages,
     strip_litellm_response_only_fields,
     system_messages_first,
+    unpack_defs,
     update_messages_with_model_file_ids,
     with_prompt_cache_breakpoint,
 )
@@ -2492,3 +2495,31 @@ def test_parse_tool_call_arguments_repair_warning_redacts_arguments_when_message
     assert result == {"patient": "Jane Doe"}
     assert f"Original ({len(arguments)} chars): {REDACTED_BY_LITELLM}" in caplog.text
     assert "Jane Doe" not in caplog.text
+
+
+def _unpack_defs_peak_bytes(definition_count: int) -> int:
+    schema: Final = {
+        "type": "object",
+        "properties": {f"p{index}": {"$ref": f"#/$defs/D{index}"} for index in range(definition_count)},
+    }
+    defs: Final = {f"D{index}": {"type": "string"} for index in range(definition_count)}
+    tracemalloc.start()
+    try:
+        unpack_defs(schema, defs, max_inlined_bytes=DEFS_MAX_INLINED_BYTES)
+        return tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+
+
+def test_unpack_defs_memory_grows_linearly_with_the_number_of_definitions_and_refs() -> None:
+    assert _unpack_defs_peak_bytes(2048) < 8 * _unpack_defs_peak_bytes(512)
+
+
+def test_unpack_defs_resolves_refs_under_a_property_named_ref() -> None:
+    schema: Final = {
+        "type": "object",
+        "properties": {"$ref": {"$ref": "#/$defs/Name"}},
+        "$defs": {"Name": {"type": "string"}},
+    }
+    unpack_defs(schema, {})
+    assert schema["properties"] == {"$ref": {"type": "string"}}

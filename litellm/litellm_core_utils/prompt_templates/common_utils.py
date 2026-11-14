@@ -14,9 +14,10 @@ from itertools import chain, groupby, islice
 from os import PathLike
 from pathlib import Path
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias, TypeVar, cast
 
 from pydantic import TypeAdapter
+from typing_extensions import TypeIs  # noqa: TID251  # TypeIs reaches typing only on 3.13
 
 import litellm
 from litellm import verbose_logger
@@ -993,6 +994,32 @@ def _estimate_json_bytes(obj: object) -> int:
     return total
 
 
+_DefsScope: TypeAlias = tuple[Mapping[str, object], ...]
+_DEFS_KEYS: Final = ("$defs", "definitions")
+
+
+def _is_json_object(
+    value: object,
+) -> TypeIs[dict[str, object]]:  # guard-ok: JSON schema object keys are str  # mutable-ok: refs are inlined in place
+    return isinstance(value, dict)
+
+
+def _mapping_or_empty(value: object) -> Mapping[str, object]:
+    return value if _is_json_object(value) else {}
+
+
+def _local_defs(node: Mapping[str, object]) -> Mapping[str, object]:
+    return dict(chain.from_iterable(_mapping_or_empty(node.get(key)).items() for key in _DEFS_KEYS))
+
+
+def _scope_with_local_defs(scope: _DefsScope, local_defs: Mapping[str, object]) -> _DefsScope:
+    return (local_defs, *scope) if local_defs else scope
+
+
+def _resolve_in_scope(scope: _DefsScope, name: str) -> object:
+    return next((defs[name] for defs in scope if name in defs), None)
+
+
 class DefsInliningBudgetExceededError(ValueError):
     pass
 
@@ -1029,15 +1056,11 @@ def unpack_defs(
     # Combine the defs handed down by the caller with defs/definitions found on
     # the current node.  Local keys shadow parent keys to match JSON-schema
     # scoping rules.
-    root_defs: Final[dict] = {
-        **defs,
-        **schema.get("$defs", {}),
-        **schema.get("definitions", {}),
-    }
+    root_defs: Final[_DefsScope] = ({**defs, **_local_defs(schema)},)
 
     # Use iterative approach with queue to avoid recursion
     # Each item in queue is (node, parent_container, key/index, active_defs, ref_chain)
-    queue: Final[deque[tuple[object, dict | list | None, str | int | None, dict, set]]] = deque(
+    queue: Final[deque[tuple[object, dict | list | None, str | int | None, _DefsScope, set]]] = deque(
         [(schema, None, None, root_defs, set())]
     )
     inlined_bytes = 0
@@ -1046,19 +1069,20 @@ def unpack_defs(
         node, parent, key, active_defs, ref_chain = queue.popleft()
 
         # ----------------------------- dict -----------------------------
-        if isinstance(node, dict):
+        if _is_json_object(node):
             # --- Case 1: this node *is* a reference ---
-            if "$ref" in node:
-                ref_name = node["$ref"].split("/")[-1]
+            ref = node.get("$ref")
+            if isinstance(ref, str):
+                ref_name = ref.split("/")[-1]
 
                 # Check for circular reference in the resolution chain
                 if ref_name in ref_chain:
                     # Circular reference detected - leave as-is to prevent infinite recursion
                     continue
 
-                target_schema = active_defs.get(ref_name)
+                target_schema = _resolve_in_scope(active_defs, ref_name)
                 # Unknown reference – leave untouched
-                if target_schema is None:
+                if not _is_json_object(target_schema):
                     continue
 
                 if max_inlined_bytes is not None:
@@ -1072,11 +1096,7 @@ def unpack_defs(
                         )
 
                 # Merge defs from the target to capture nested definitions
-                child_defs = {
-                    **active_defs,
-                    **target_schema.get("$defs", {}),
-                    **target_schema.get("definitions", {}),
-                }
+                child_defs = _scope_with_local_defs(active_defs, _local_defs(target_schema))
 
                 # Replace the reference with resolved copy
                 resolved = copy.deepcopy(target_schema)
@@ -1104,11 +1124,7 @@ def unpack_defs(
 
             # --- Case 2: regular dict – process its values ---
             # Update defs with any nested $defs/definitions present *here*.
-            current_defs = {
-                **active_defs,
-                **node.get("$defs", {}),
-                **node.get("definitions", {}),
-            }
+            current_defs = _scope_with_local_defs(active_defs, _local_defs(node))
 
             # Add all dict values to queue
             for k, v in node.items():
