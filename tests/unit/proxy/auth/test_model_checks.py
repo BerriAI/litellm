@@ -2031,8 +2031,11 @@ def test_partial_wildcard_lists_catalog_ids_stored_with_the_provider_prefix(
         ("fireworks_ai", "routers"),
         ("fireworks_ai", "firerouter"),
         ("fireworks_ai", "firerouter/kimi-k3"),
+        ("fireworks_ai", "routers/firerouter"),
+        ("fireworks_ai", "routers/firerouter/kimi-k3"),
         ("azure_ai", "model_router"),
         ("azure_ai", "model-router"),
+        ("azure_ai", "speech"),
     ],
 )
 def test_routing_segment_lists_the_same_catalog_ids_as_the_bare_provider_wildcard(

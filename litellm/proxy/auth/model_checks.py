@@ -65,7 +65,11 @@ _ROUTES_THE_CATALOG_LOOKUP_CANNOT_PARSE: Final = frozenset(
         f"{LlmProviders.AZURE_AI.value}/model-router/",
     )
 )
-_ROUTE_PREFIXES_THE_CATALOG_LOOKUP_CANNOT_PARSE: Final = (f"{LlmProviders.FIREWORKS_AI.value}/{FIREROUTER}/",)
+_ROUTE_PREFIXES_THE_CATALOG_LOOKUP_CANNOT_PARSE: Final = (
+    f"{LlmProviders.FIREWORKS_AI.value}/{FIREROUTER}/",
+    f"{LlmProviders.FIREWORKS_AI.value}/routers/{FIREROUTER}/",
+    f"{LlmProviders.AZURE_AI.value}/speech/",
+)
 
 _CREDENTIAL_LITELLM_PARAM_FIELDS = set(CredentialLiteLLMParams.model_fields)
 
