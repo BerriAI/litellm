@@ -413,6 +413,68 @@ def test_anthropic_request_counts_like_the_same_openai_request(pair_encoding: ti
     assert anthropic == openai
 
 
+_FORCED_TOOL_CHOICE: Final = (
+    '<|open|>message role="system" type="tool-choice"<|sep|>The system is invoked with `tool_choice=required`.\n'
+    "You MUST call tools in the next message.<|close|>message<|sep|><|end_of_msg|>"
+)
+_WEATHER_QUESTION: Final = [{"role": "user", "content": "Weather in Paris?"}]
+_ANTHROPIC_WEATHER: Final = {
+    "name": "get_weather",
+    "description": "Get the weather in °C",
+    "input_schema": _WEATHER["function"]["parameters"],
+}
+
+
+# Bedrock billed us.moonshotai.kimi-k3 and kimi-k3.1 206 input tokens for an any or named tool choice and 170 for an
+# auto or unset one on 2026-11-12, and the template above renders this message for tool_choice=required only
+@pytest.mark.parametrize(
+    ("tools", "tool_choice", "added"),
+    [
+        pytest.param([_WEATHER], "required", _FORCED_TOOL_CHOICE, id="required"),
+        pytest.param(
+            [_WEATHER], {"type": "function", "function": {"name": "get_weather"}}, _FORCED_TOOL_CHOICE, id="named"
+        ),
+        pytest.param([_WEATHER], "auto", "", id="auto"),
+        pytest.param([_WEATHER], "none", "", id="none_dropped_by_bedrock"),
+        pytest.param(None, "required", "", id="no_tools"),
+    ],
+)
+def test_tool_choice_adds_the_template_message_bedrock_bills_only_for_a_forced_tool(
+    pair_encoding: tiktoken.Encoding,
+    tools: list[dict[str, object]] | None,
+    tool_choice: str | dict[str, object],
+    added: str,
+):
+    unset: Final = kimi_k3_tokens(pair_encoding, MODEL, _WEATHER_QUESTION, tools)
+
+    assert unset is not None
+    assert kimi_k3_tokens(pair_encoding, MODEL, _WEATHER_QUESTION, tools, tool_choice) == unset + _template_count(
+        pair_encoding, added
+    )
+
+
+@pytest.mark.parametrize(
+    ("anthropic_choice", "openai_choice"),
+    [
+        pytest.param({"type": "any"}, "required", id="any"),
+        pytest.param({"type": "tool", "name": "get_weather"}, "required", id="tool"),
+        pytest.param({"type": "auto"}, None, id="auto"),
+        pytest.param({"type": "none"}, None, id="none"),
+    ],
+)
+def test_anthropic_tool_choice_counts_like_the_openai_tool_choice_it_translates_to(
+    pair_encoding: tiktoken.Encoding, anthropic_choice: dict[str, object], openai_choice: str | None
+):
+    anthropic: Final = kimi_k3_anthropic_tokens(
+        pair_encoding,
+        MODEL,
+        {"messages": _WEATHER_QUESTION, "tools": [_ANTHROPIC_WEATHER], "tool_choice": anthropic_choice},
+    )
+
+    assert anthropic is not None
+    assert anthropic == kimi_k3_tokens(pair_encoding, MODEL, _WEATHER_QUESTION, [_WEATHER], openai_choice)
+
+
 @pytest.mark.parametrize("failure", ["checksum", "missing_file"])
 def test_tokenizer_that_fails_its_checksum_or_cannot_be_read_is_not_loaded(
     byte_source: KimiK3TokenizerSource, tmp_path: Path, caplog: pytest.LogCaptureFixture, failure: str
