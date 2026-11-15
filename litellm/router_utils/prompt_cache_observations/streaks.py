@@ -1,22 +1,25 @@
-"""Per-prefix miss streaks, shared across workers.
+"""Per-prefix miss streaks, shared across workers through Redis.
 
 A streak belongs to one prefix on one deployment and cache configuration. It only exists once the provider's
-own cache write proved that prefix cacheable, and only for as long as that cache entry lives. Every other kind of
-evidence about the prefix ends the streak, so only consecutive misses count.
+own cache write proved that prefix cacheable, and only while that cache entry lives. Events are ordered by when
+their request started, which a replayed callback repeats exactly: every reset moves the prefix's epoch to the
+start of the request that caused it, and only a miss that started after the epoch can count. So a replay of
+any earlier event, a stale proof, or a miss from before a hit, an unknown or an incident never counts again,
+with no history kept beyond the misses of the current streak.
 """
 
 import hashlib
 from collections.abc import Awaitable, Callable, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from enum import StrEnum
 from typing import Final, Protocol, TypeAlias
 
 from pydantic import TypeAdapter, ValidationError
 
-from litellm.caching.in_memory_cache import InMemoryCache
+from ..prompt_caching_cache import PROMPT_CACHE_ONE_HOUR_PIN_TTL_SECONDS
 
 MISSES_TO_OPEN_INCIDENT: Final = 3
-_IN_MEMORY_STREAK_LIMIT: Final = 10_000
+SCOPE_BREAK_TTL_MS: Final = 2 * PROMPT_CACHE_ONE_HOUR_PIN_TTL_SECONDS * 1000
 
 
 class StreakEvent(StrEnum):
@@ -27,25 +30,36 @@ class StreakEvent(StrEnum):
 
 
 @dataclass(frozen=True, slots=True)
-class StreakKey:
+class StreakScope:
     deployment_id: str
     config_fingerprint: str
-    prefix_fingerprint: str
 
-    def digest(self) -> str:
-        return hashlib.sha256(
-            f"{self.deployment_id}\0{self.config_fingerprint}\0{self.prefix_fingerprint}".encode()
-        ).hexdigest()
+    def slot(self) -> str:
+        digest: Final = hashlib.sha256(f"{self.deployment_id}\0{self.config_fingerprint}".encode()).hexdigest()
+        return f"prompt_cache_streak:{{{digest}}}"
 
 
 @dataclass(frozen=True, slots=True)
-class StreakUpdate:
-    key: StreakKey
+class PrefixEvent:
+    scope: StreakScope
+    prefix_fingerprint: str
     event: StreakEvent
     call_id: str
-    now_ms: int
+    started_ms: int
     ttl_ms: int
     write_tokens: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeBreak:
+    """A caching request on the deployment and configuration whose prefix could not be read. It may have been
+    any of the scope's prefixes, so it ends every one of their streaks."""
+
+    scope: StreakScope
+    started_ms: int
+
+
+StreakUpdate: TypeAlias = PrefixEvent | ScopeBreak
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,107 +83,59 @@ StreakOutcome: TypeAlias = Unproven | Counting | Triggered
 
 
 class StreakStore(Protocol):
-    async def apply(self, update: StreakUpdate) -> StreakOutcome: ...
-
-
-@dataclass(frozen=True, slots=True)
-class _Streak:
-    write_tokens: int
-    proven_until_ms: int
-    misses: frozenset[str] = frozenset()
-    first_miss_ms: int | None = None
-
-
-def _next(current: _Streak | None, update: StreakUpdate) -> tuple[_Streak | None, StreakOutcome]:
-    if update.event is StreakEvent.PROOF:
-        return _Streak(write_tokens=update.write_tokens, proven_until_ms=update.now_ms + update.ttl_ms), Unproven()
-    proven: Final = current is not None and current.proven_until_ms > update.now_ms
-    if current is None or not proven:
-        return None, Unproven()
-    match update.event:
-        case StreakEvent.HIT:
-            return _Streak(write_tokens=current.write_tokens, proven_until_ms=update.now_ms + update.ttl_ms), Unproven()
-        case StreakEvent.UNKNOWN:
-            return replace(current, misses=frozenset(), first_miss_ms=None), Unproven()
-        case _:
-            misses: Final = current.misses | {update.call_id}
-            first: Final = current.first_miss_ms if current.first_miss_ms is not None else update.now_ms
-            if len(misses) < MISSES_TO_OPEN_INCIDENT:
-                return replace(current, misses=misses, first_miss_ms=first), Counting(len(misses))
-            return (
-                replace(current, misses=frozenset(), first_miss_ms=None),
-                Triggered(misses=len(misses), proven_write_tokens=current.write_tokens, first_miss_ms=first),
-            )
-
-
-class _BoundedCache(Protocol):
-    def get_cache(self, key: str) -> object: ...
-
-    def set_cache(self, key: str, value: object, *, ttl: int) -> None: ...
-
-    def delete_cache(self, key: str) -> None: ...
-
-
-def _bounded_cache() -> _BoundedCache:
-    return InMemoryCache(max_size_in_memory=_IN_MEMORY_STREAK_LIMIT, default_ttl=86_400)
-
-
-class InMemoryStreakStore:
-    """For a gateway without Redis. Each worker keeps its own streaks, so misses spread across workers are not
-    added up, which can only delay an incident, never open one early."""
-
-    def __init__(self) -> None:
-        self._streaks: Final = _bounded_cache()
-
-    async def apply(self, update: StreakUpdate) -> StreakOutcome:
-        key: Final = update.key.digest()
-        stored: Final = self._streaks.get_cache(key)
-        streak, outcome = _next(stored if isinstance(stored, _Streak) else None, update)
-        if streak is None:
-            self._streaks.delete_cache(key)
-        else:
-            self._streaks.set_cache(key, streak, ttl=max(1, (streak.proven_until_ms - update.now_ms) // 1000 + 1))
-        return outcome
+    async def apply(self, update: StreakUpdate, now_ms: int) -> StreakOutcome: ...
 
 
 STREAK_SCRIPT: Final = """
-local now = tonumber(ARGV[2])
-local ttl = tonumber(ARGV[3])
-if ARGV[1] == 'proof' then
-  redis.call('DEL', KEYS[2])
-  redis.call('DEL', KEYS[1])
-  redis.call('HSET', KEYS[1], 'tokens', ARGV[5], 'until', now + ttl)
-  redis.call('PEXPIRE', KEYS[1], ttl)
+local event = ARGV[1]
+local started = tonumber(ARGV[2])
+local now = tonumber(ARGV[3])
+local ttl = tonumber(ARGV[4])
+local function later(a, b)
+  if a > b then return a end
+  return b
+end
+local broken = tonumber(redis.call('GET', KEYS[1]) or '0')
+if event == 'break' then
+  redis.call('SET', KEYS[1], later(broken, started), 'PX', ARGV[8])
   return {'unproven'}
 end
-local proven_until = tonumber(redis.call('HGET', KEYS[1], 'until') or '0')
+local proven_until = tonumber(redis.call('HGET', KEYS[2], 'until') or '0')
+local epoch = later(tonumber(redis.call('HGET', KEYS[2], 'epoch') or '0'), broken)
+if event == 'proof' then
+  if started + ttl <= now then return {'unproven'} end
+  local live = later(proven_until, started + ttl)
+  local fresh = later(epoch, started)
+  redis.call('HSET', KEYS[2], 'tokens', ARGV[6], 'until', live, 'epoch', fresh)
+  redis.call('PEXPIRE', KEYS[2], live - now)
+  redis.call('ZREMRANGEBYSCORE', KEYS[3], '-inf', fresh)
+  return {'unproven'}
+end
 if proven_until <= now then
-  redis.call('DEL', KEYS[1], KEYS[2])
+  redis.call('DEL', KEYS[2], KEYS[3])
   return {'unproven'}
 end
-if ARGV[1] == 'hit' then
-  redis.call('DEL', KEYS[2])
-  redis.call('HDEL', KEYS[1], 'first')
-  redis.call('HSET', KEYS[1], 'until', now + ttl)
-  redis.call('PEXPIRE', KEYS[1], ttl)
+if event ~= 'miss' then
+  local fresh = later(epoch, started)
+  if event == 'hit' then
+    proven_until = later(proven_until, started + ttl)
+    redis.call('HSET', KEYS[2], 'until', proven_until)
+    redis.call('PEXPIRE', KEYS[2], proven_until - now)
+  end
+  redis.call('HSET', KEYS[2], 'epoch', fresh)
+  redis.call('ZREMRANGEBYSCORE', KEYS[3], '-inf', fresh)
   return {'unproven'}
 end
-if ARGV[1] == 'unknown' then
-  redis.call('DEL', KEYS[2])
-  redis.call('HDEL', KEYS[1], 'first')
-  return {'unproven'}
-end
-redis.call('SADD', KEYS[2], ARGV[4])
-redis.call('PEXPIRE', KEYS[2], proven_until - now)
-redis.call('HSETNX', KEYS[1], 'first', now)
-local misses = redis.call('SCARD', KEYS[2])
-if misses < tonumber(ARGV[6]) then
-  return {'counting', misses}
-end
-local first = redis.call('HGET', KEYS[1], 'first')
-redis.call('DEL', KEYS[2])
-redis.call('HDEL', KEYS[1], 'first')
-return {'triggered', misses, redis.call('HGET', KEYS[1], 'tokens'), first}
+if started <= epoch then return {'unproven'} end
+redis.call('ZREMRANGEBYSCORE', KEYS[3], '-inf', epoch)
+redis.call('ZADD', KEYS[3], 'NX', started, ARGV[5])
+redis.call('PEXPIRE', KEYS[3], proven_until - now)
+local misses = redis.call('ZRANGE', KEYS[3], 0, -1, 'WITHSCORES')
+local count = #misses / 2
+if count < tonumber(ARGV[7]) then return {'counting', count} end
+redis.call('HSET', KEYS[2], 'epoch', misses[#misses])
+redis.call('DEL', KEYS[3])
+return {'triggered', count, redis.call('HGET', KEYS[2], 'tokens'), misses[2]}
 """
 
 RunScript: TypeAlias = Callable[[Sequence[str], Sequence[str | int]], Awaitable[object]]
@@ -184,36 +150,38 @@ def _text(value: str | bytes | int) -> str:
 def _outcome(reply: object) -> StreakOutcome:
     try:
         parts: Final = tuple(_text(part) for part in _REPLY.validate_python(reply))
-    except ValidationError:
+        match parts:
+            case ("counting", misses):
+                return Counting(int(misses))
+            case ("triggered", misses, tokens, first):
+                return Triggered(misses=int(misses), proven_write_tokens=int(tokens), first_miss_ms=int(float(first)))
+            case _:
+                return Unproven()
+    except (ValidationError, ValueError):
         return Unproven()
-    match parts:
-        case ("counting", misses):
-            return Counting(int(misses))
-        case ("triggered", misses, tokens, first):
-            return Triggered(misses=int(misses), proven_write_tokens=int(tokens), first_miss_ms=int(first))
-        case _:
-            return Unproven()
+
+
+def _keys(update: StreakUpdate) -> tuple[str, str, str]:
+    slot: Final = update.scope.slot()
+    prefix: Final = update.prefix_fingerprint if isinstance(update, PrefixEvent) else ""
+    return f"{slot}:break", f"{slot}:{prefix}:state", f"{slot}:{prefix}:misses"
+
+
+def _args(update: StreakUpdate, now_ms: int) -> tuple[str | int, ...]:
+    match update:
+        case PrefixEvent(event=event, call_id=call_id, started_ms=started, ttl_ms=ttl, write_tokens=tokens):
+            return event.value, started, now_ms, ttl, call_id, tokens, MISSES_TO_OPEN_INCIDENT, SCOPE_BREAK_TTL_MS
+        case ScopeBreak(started_ms=started):
+            return "break", started, now_ms, 0, "", 0, MISSES_TO_OPEN_INCIDENT, SCOPE_BREAK_TTL_MS
 
 
 class RedisStreakStore:
-    """One Lua script per update, so workers that see the same prefix at once apply their updates in some order
-    and never lose one, and a request logged twice adds one miss."""
+    """One Lua script per update, so workers that see the same scope at once apply their updates in some order
+    and never lose one. All of a scope's keys share one cluster slot, which lets a scope break reach every
+    prefix's streak."""
 
     def __init__(self, run_script: RunScript) -> None:
         self._run_script: Final = run_script
 
-    async def apply(self, update: StreakUpdate) -> StreakOutcome:
-        slot: Final = f"prompt_cache_streak:{{{update.key.digest()}}}"
-        return _outcome(
-            await self._run_script(
-                (f"{slot}:state", f"{slot}:misses"),
-                (
-                    update.event.value,
-                    update.now_ms,
-                    update.ttl_ms,
-                    update.call_id,
-                    update.write_tokens,
-                    MISSES_TO_OPEN_INCIDENT,
-                ),
-            )
-        )
+    async def apply(self, update: StreakUpdate, now_ms: int) -> StreakOutcome:
+        return _outcome(await self._run_script(_keys(update), _args(update, now_ms)))

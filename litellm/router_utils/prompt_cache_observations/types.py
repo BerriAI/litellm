@@ -112,9 +112,10 @@ class Unassessed:
 
 @dataclass(frozen=True, slots=True)
 class PromptCacheObservation:
-    """Retained evidence: opaque identities, counters and reasons only, never prompt content."""
+    """Retained evidence: opaque identities, counters and reasons only, never prompt content. `started_at` is the
+    attempt's own start time, so a callback delivered twice carries the same one."""
 
     call_id: str
     deployment: DeploymentCacheIdentity
-    observed_at: float
+    started_at: float
     outcome: Assessed | Unassessed

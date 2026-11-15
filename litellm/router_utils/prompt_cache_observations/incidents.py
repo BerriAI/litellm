@@ -1,5 +1,7 @@
-from collections.abc import Callable, Sequence
+import time
+from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime, timedelta, timezone
+from types import MappingProxyType
 from typing import Final, Protocol
 
 from redis.exceptions import RedisError
@@ -9,8 +11,17 @@ from litellm.caching.redis_cache import RedisCircuitBreakerOpenError
 from litellm.models.alert import Alert, AlertDetection, IncidentAlertStore, PromptCacheEvidence
 
 from .eligibility import write_proves_prefix_eligible
-from .streaks import StreakEvent, StreakKey, StreakStore, StreakUpdate, Triggered
-from .types import Assessed, CacheablePrefix, CacheCounters, PromptCacheObservation, Unassessed, UsageUnknown
+from .streaks import (
+    PrefixEvent,
+    ScopeBreak,
+    StreakEvent,
+    StreakOutcome,
+    StreakScope,
+    StreakStore,
+    StreakUpdate,
+    Triggered,
+)
+from .types import Assessed, CacheablePrefix, CacheCounters, PromptCacheObservation
 
 _STORE_FAILURES: Final = (RedisError, RedisCircuitBreakerOpenError, OSError, TimeoutError)
 
@@ -66,34 +77,39 @@ def _event(counters: CacheCounters, prefix: CacheablePrefix) -> StreakEvent:
     return StreakEvent.HIT if counters.active else StreakEvent.MISS
 
 
-def _classified(observation: PromptCacheObservation) -> tuple[CacheablePrefix, StreakEvent, int] | None:
-    """A failed, unverified or unreadable attempt on a prefix is unknown evidence, which ends its streak."""
-    match observation.outcome:
-        case Assessed(prefix=prefix, usage=CacheCounters() as counters):
-            return prefix, _event(counters, prefix), counters.write_tokens
-        case Assessed(prefix=prefix, usage=UsageUnknown()) | Unassessed(prefix=CacheablePrefix() as prefix):
-            return prefix, StreakEvent.UNKNOWN, 0
-        case _:
-            return None
-
-
-def streak_update(observation: PromptCacheObservation) -> StreakUpdate | None:
-    classified: Final = _classified(observation)
-    if classified is None:
-        return None
-    prefix, event, write_tokens = classified
-    return StreakUpdate(
-        key=StreakKey(
-            deployment_id=observation.deployment.deployment_id,
-            config_fingerprint=observation.deployment.config_fingerprint,
-            prefix_fingerprint=prefix.fingerprint,
-        ),
+def _prefix_event(
+    observation: PromptCacheObservation, scope: StreakScope, prefix: CacheablePrefix, event: StreakEvent, tokens: int
+) -> PrefixEvent:
+    return PrefixEvent(
+        scope=scope,
+        prefix_fingerprint=prefix.fingerprint,
         event=event,
         call_id=observation.call_id,
-        now_ms=int(observation.observed_at * 1000),
+        started_ms=_epoch_ms(observation.started_at),
         ttl_ms=prefix.ttl_seconds * 1000,
-        write_tokens=write_tokens,
+        write_tokens=tokens,
     )
+
+
+def streak_update(observation: PromptCacheObservation) -> StreakUpdate:
+    """A failed, unverified or unreadable attempt on a prefix is unknown evidence, which ends its streak. A
+    caching attempt whose prefix could not be read at all ends every streak of its deployment and configuration."""
+    scope: Final = StreakScope(
+        deployment_id=observation.deployment.deployment_id,
+        config_fingerprint=observation.deployment.config_fingerprint,
+    )
+    outcome: Final = observation.outcome
+    prefix: Final = outcome.prefix
+    if prefix is None:
+        return ScopeBreak(scope=scope, started_ms=_epoch_ms(observation.started_at))
+    usage: Final = outcome.usage if isinstance(outcome, Assessed) else None
+    if isinstance(usage, CacheCounters):
+        return _prefix_event(observation, scope, prefix, _event(usage, prefix), usage.write_tokens)
+    return _prefix_event(observation, scope, prefix, StreakEvent.UNKNOWN, 0)
+
+
+def _epoch_ms(epoch_seconds: float) -> int:
+    return int(epoch_seconds * 1000)
 
 
 def _moment(epoch_ms: int) -> datetime:
@@ -112,7 +128,7 @@ def incident_detection(observation: PromptCacheObservation, triggered: Triggered
         resource_type="deployment",
         resource_id=deployment.deployment_id,
         window_start=start,
-        window_end=max(_moment(int(observation.observed_at * 1000)), start) + timedelta(milliseconds=1),
+        window_end=max(_moment(_epoch_ms(observation.started_at)), start) + timedelta(milliseconds=1),
         evidence=PromptCacheEvidence(
             config_fingerprint=deployment.config_fingerprint,
             prefix_fingerprint=prefix.fingerprint,
@@ -127,27 +143,53 @@ def incident_detection(observation: PromptCacheObservation, triggered: Triggered
 
 class PromptCacheIncidentDetector:
     """Feeds each observation into its prefix's streak and opens an incident when a proven prefix misses three
-    times in a row. Redis or database trouble skips the evidence instead of failing the request it came from."""
+    times in a row. Redis or database trouble skips the evidence instead of failing the request it came from.
+
+    Evidence this worker could not deliver may have been the hit that ended a streak, so before anything else
+    reaches Redis again the lost evidence's scope is broken as of the lost request's start. Lost callbacks on
+    other workers, or ones that never ran, stay invisible."""
 
     def __init__(
         self,
         streaks: StreakStore,
         incidents: Callable[[], IncidentRecorder | None],
+        clock: Callable[[], float] = time.time,
         failures: Sequence[type[BaseException]] = _STORE_FAILURES,
     ) -> None:
         self._streaks: Final = streaks
         self._incidents: Final = incidents
+        self._clock: Final = clock
         self._failures: Final = tuple(failures)
+        self._lost: Mapping[StreakScope, int] = MappingProxyType({})
 
-    async def record(self, observation: PromptCacheObservation) -> None:
-        update: Final = streak_update(observation)
-        if update is None:
-            return
+    def _remember(self, update: StreakUpdate) -> None:
+        started: Final = max(self._lost.get(update.scope, update.started_ms), update.started_ms)
+        self._lost = MappingProxyType({**self._lost, update.scope: started})
+
+    async def _break_lost_scopes(self, now_ms: int) -> bool:
+        for scope, started in tuple(self._lost.items()):
+            try:
+                await self._streaks.apply(ScopeBreak(scope=scope, started_ms=started), now_ms)
+            except self._failures as error:
+                verbose_router_logger.warning("prompt cache streak unavailable (%s)", type(error).__name__)
+                return False
+            self._lost = MappingProxyType({key: value for key, value in self._lost.items() if key != scope})
+        return True
+
+    async def _apply(self, update: StreakUpdate) -> StreakOutcome | None:
+        now_ms: Final = _epoch_ms(self._clock())
+        if not await self._break_lost_scopes(now_ms):
+            self._remember(update)
+            return None
         try:
-            outcome: Final = await self._streaks.apply(update)
+            return await self._streaks.apply(update, now_ms)
         except self._failures as error:
             verbose_router_logger.warning("prompt cache streak unavailable (%s)", type(error).__name__)
-            return
+            self._remember(update)
+            return None
+
+    async def record(self, observation: PromptCacheObservation) -> None:
+        outcome: Final = await self._apply(streak_update(observation))
         if not isinstance(outcome, Triggered):
             return
         recorder: Final = self._incidents()

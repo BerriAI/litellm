@@ -1,8 +1,7 @@
 import hashlib
 import json
 import os
-import time
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass
 from itertools import product
 from typing import Final, Protocol, TypeAlias
@@ -36,7 +35,7 @@ from .incidents import PROMPT_CACHE_INCIDENTS, PromptCacheIncidentDetector
 from .intent import cache_requested
 from .paths import classify_path
 from .prefix import outgoing_cacheable_prefix
-from .streaks import STREAK_SCRIPT, InMemoryStreakStore, RedisStreakStore, StreakStore
+from .streaks import STREAK_SCRIPT, RedisStreakStore
 from .types import (
     Assessed,
     CacheablePrefix,
@@ -91,6 +90,7 @@ class _LoggedPayload(BaseModel):
     custom_llm_provider: str | None = None
     api_base: str | None = None
     model_id: str | None = None
+    startTime: float
 
 
 class _LoggedCall(BaseModel):
@@ -266,7 +266,7 @@ def _selected(logged: _LoggedCall, settings: DeploymentCacheSettings | None) -> 
 
 
 def observe_call(
-    settings: ObserverSettings, kwargs: Mapping[str, object], response: object, succeeded: bool, observed_at: float
+    settings: ObserverSettings, kwargs: Mapping[str, object], response: object, succeeded: bool
 ) -> PromptCacheObservation | None:
     """One observation for an opted-in deployment's attempt. The request is the body that attempt sent, so
     gateway injection is applied, while whether caching was requested comes from what the client sent and what the
@@ -305,7 +305,7 @@ def observe_call(
     return PromptCacheObservation(
         call_id=payload.litellm_call_id or payload.id,
         deployment=deployment,
-        observed_at=observed_at,
+        started_at=payload.startTime,
         outcome=outcome,
     )
 
@@ -353,13 +353,10 @@ class DiagnosticLog:
 
 
 class PromptCacheObserver(CustomLogger):
-    def __init__(
-        self, settings: ObserverSettings, sink: ObservationSink, clock: Callable[[], float] = time.time
-    ) -> None:
+    def __init__(self, settings: ObserverSettings, sink: ObservationSink) -> None:
         super().__init__()
         self._settings: Final = settings
         self._sink: Final = sink
-        self._clock: Final = clock
 
     def exempt_from_message_redaction(self) -> bool:
         return True
@@ -374,9 +371,7 @@ class PromptCacheObserver(CustomLogger):
             )
 
     async def _observe(self, kwargs: Mapping[str, object], response: object, succeeded: bool) -> None:
-        observed: Final = await offload_token_count(observe_call)(
-            self._settings, kwargs, response, succeeded, self._clock()
-        )
+        observed: Final = await offload_token_count(observe_call)(self._settings, kwargs, response, succeeded)
         if observed is not None:
             await self._sink.record(observed)
 
@@ -404,8 +399,14 @@ class ObservationFanout:
             await sink.record(observation)
 
 
-def _streak_store(redis: RedisCache | None) -> StreakStore:
-    return InMemoryStreakStore() if redis is None else RedisStreakStore(redis.async_register_script(STREAK_SCRIPT))
+def _sinks(redis: RedisCache | None) -> tuple[ObservationSink, ...]:
+    """Streaks are only kept in Redis. Workers keeping their own would each miss what the others saw, and a hit
+    seen by one worker between misses seen by another would go unnoticed, so without Redis nothing is detected."""
+    log: Final = ObservationLog(capacity=OBSERVATION_LOG_CAPACITY)
+    if redis is None:
+        return (log,)
+    streaks: Final = RedisStreakStore(redis.async_register_script(STREAK_SCRIPT))
+    return log, PromptCacheIncidentDetector(streaks, PROMPT_CACHE_INCIDENTS.current)
 
 
 def prompt_cache_observer(redis: RedisCache | None = None) -> PromptCacheObserver:
@@ -413,7 +414,5 @@ def prompt_cache_observer(redis: RedisCache | None = None) -> PromptCacheObserve
         settings=ObserverSettings(
             verified_paths=VERIFIED_PATHS, fingerprint_key=prefix_fingerprint_key(os.getenv("LITELLM_SALT_KEY"))
         ),
-        sink=ObservationFanout(
-            (DiagnosticLog(), PromptCacheIncidentDetector(_streak_store(redis), PROMPT_CACHE_INCIDENTS.current))
-        ),
+        sink=ObservationFanout(_sinks(redis)),
     )

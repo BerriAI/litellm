@@ -17,6 +17,7 @@ if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
 
 PROMPT_CACHE_ALERTS_SETTING: Final = "prompt_cache_alerts"
+PROMPT_CACHE_ALERT_NOTIFICATIONS_SETTING: Final = "prompt_cache_alert_notifications"
 
 
 def incident_text(alert: Alert, base_url: str) -> str:
@@ -38,8 +39,8 @@ class SlackWebhooks(Protocol):
 
 
 class SlackPromptCacheNotifier:
-    """Posts once, for the request that opened the incident. A failed post is logged and not retried, so the
-    incident is never announced twice."""
+    """One post is attempted, for the request that opened the incident. A failed post is logged and not retried,
+    so delivery is at most once and never guaranteed."""
 
     def __init__(self, slack: SlackWebhooks, base_url: str) -> None:
         self._slack: Final = slack
@@ -68,12 +69,15 @@ def attach_prompt_cache_incidents(
     slot: IncidentSlot = PROMPT_CACHE_INCIDENTS,
 ) -> None:
     """Incidents are saved only when the gateway opts in and has a database. Otherwise deployments that opted
-    into observation keep tracking streaks without saving anything."""
+    into observation keep tracking streaks in Redis without saving anything. Slack is a separate opt-in reusing the
+    performance alert webhooks, so subscribing to performance alerts never subscribes anyone to these."""
     if general_settings.get(PROMPT_CACHE_ALERTS_SETTING) is not True or prisma_client is None:
         slot.attach(None)
         return
+    notified: Final = slack if general_settings.get(PROMPT_CACHE_ALERT_NOTIFICATIONS_SETTING) is True else None
     slot.attach(
         PromptCacheIncidents(
-            AlertRepository(prisma_client), SlackPromptCacheNotifier(slack, base_url) if slack is not None else None
+            AlertRepository(prisma_client),
+            SlackPromptCacheNotifier(notified, base_url) if notified is not None else None,
         )
     )
