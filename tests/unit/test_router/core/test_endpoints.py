@@ -467,7 +467,7 @@ async def _request_state_after_a_call(
 ) -> "weakref.ref[_RequestState]":
     state: Final = _RequestState()
     request: Final = {"model": "g", "messages": MESSAGES, "max_tokens": 5, "metadata": {"state": state}}
-    if outcome == "failed":
+    if outcome in ("failed", "all_fail"):
         with pytest.raises(litellm.InternalServerError) as raised:
             await core.call(endpoint, request)
         origin: Final = "_answer_sync" if endpoint == "completion" else "_answer_async"
@@ -479,13 +479,16 @@ async def _request_state_after_a_call(
         "success": ["d1"],
         "recovered": ["d1", "d1"],
         "failed": ["d1", "d1", "d2", "d2"],
+        "retry_then_ok": ["d1", "d1"],
+        "all_fail": ["d1", "d1", "d2", "d2"],
     }[outcome]
     host.calls.clear()
+    host.raised.clear()
     return weakref.ref(state)
 
 
 @pytest.mark.parametrize("endpoint", ["acompletion", "aanthropic_messages", "completion"])
-@pytest.mark.parametrize("outcome", ["success", "recovered", "failed"])
+@pytest.mark.parametrize("outcome", ["success", "recovered", "failed", "retry_then_ok", "all_fail"])
 async def test_a_finished_call_frees_its_request_without_a_gc_pass(
     make_core: MakeCore, host: ScriptedHost, endpoint: str, outcome: str
 ):
@@ -500,6 +503,11 @@ async def test_a_finished_call_frees_its_request_without_a_gc_pass(
         host.answer("*", _raise_server_error)
     elif outcome == "recovered":
         host.answer("*", _raise_server_error, None)
+    elif outcome == "retry_then_ok":
+        host.answer("openai/d1", server_error("d1"), completion_response())
+    elif outcome == "all_fail":
+        host.answer("openai/d1", server_error("d1"))
+        host.answer("openai/d2", server_error("d2"))
     gc.disable()
     try:
         state: Final = await _request_state_after_a_call(core, host, endpoint, outcome)
