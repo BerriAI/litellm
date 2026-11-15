@@ -9,6 +9,7 @@ commits:
   fix: 8a3a54faf9
   main2: ff997e6970
   mainfix: e8d9774bd8
+  main3: 91fc6c2071
 
 variants:
   A0: {worktree: base, path: messages, env: {}}
@@ -28,3 +29,5 @@ variants:
   F1: {worktree: fix, path: messages, env: {PYTHONPATH: /home/user/bench/wt/fix}, expect_rust: true}
   M3: {worktree: main2, path: messages, env: {}, expect_rust: true}
   M3F: {worktree: mainfix, path: messages, env: {PYTHONPATH: /home/user/bench/wt/mainfix}, expect_rust: true}
+  N: {worktree: main3, path: messages, env: {}, expect_rust: true}
+  Nb: {worktree: main3, path: messages, env: {}, expect_rust: true}
