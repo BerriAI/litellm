@@ -13537,6 +13537,25 @@ class TestDetachedStreamFailureHook:
         ]
 
     @pytest.mark.asyncio
+    async def test_detached_failure_reporting_preserves_the_live_request_logging_object(self):
+        from litellm.proxy._types import UserAPIKeyAuth as RealUserAPIKeyAuth
+
+        logging_obj: Final = self._logging_obj()
+        processing_obj: Final = ProxyBaseLLMRequestProcessing(
+            data={"litellm_logging_obj": logging_obj, "model": "original", "stream": True}
+        )
+        proxy_logging_obj: Final = ProxyLogging(user_api_key_cache=UserApiKeyCache())
+        processing_obj._arm_detached_stream_failure_hook(
+            logging_obj=logging_obj,
+            user_api_key_dict=RealUserAPIKeyAuth(api_key="sk-test"),
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+        await logging_obj.on_detached_stream_failure(logging_obj, RuntimeError("detached failure"))
+
+        assert processing_obj.data.get("litellm_logging_obj") is logging_obj
+
+    @pytest.mark.asyncio
     async def test_detached_failure_hook_sees_request_fields_changed_after_arming(self):
         from litellm.proxy._types import UserAPIKeyAuth as RealUserAPIKeyAuth
 

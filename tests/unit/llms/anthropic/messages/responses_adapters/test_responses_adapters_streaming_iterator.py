@@ -759,6 +759,31 @@ def _failing_after_one_delta() -> AsyncIterator[dict[str, object]]:
 
 
 class TestUpstreamFailureReachesTheProxyFailureHook:
+    def test_a_superseded_attempt_preserves_the_replacement_failure_report(self):
+        recorder: Final = _FailureHookRecorder()
+        logging_obj: Final = _logging_obj_with_failure_hook(recorder)
+
+        async def run() -> None:
+            superseded: Final = AnthropicResponsesStreamWrapper(
+                responses_stream=_failing_after_one_delta(), model="m", litellm_logging_obj=logging_obj
+            )
+            old_stream: Final = superseded.async_anthropic_sse_wrapper()
+            async for frame in old_stream:
+                if frame.startswith(b"event: error\n"):
+                    await aclose_superseded_attempt(old_stream)
+                    break
+            assert recorder.received == ()
+
+            replacement: Final = AnthropicResponsesStreamWrapper(
+                responses_stream=_failing_after_one_delta(), model="m", litellm_logging_obj=logging_obj
+            )
+            frames: Final = [frame async for frame in replacement.async_anthropic_sse_wrapper()]
+            assert frames[-1].startswith(b"event: error\n")
+            assert recorder.received == (replacement.stream_failure,)
+            assert logging_obj.on_detached_stream_failure is None
+
+        asyncio.run(run())
+
     def test_raised_upstream_failure_reaches_the_hook_unwrapped_once_the_error_event_was_consumed(self):
         rate_limit = litellm.RateLimitError(message="You have no credits remaining.", llm_provider="openai", model="m")
         wrapped = MidStreamFallbackError(

@@ -4489,7 +4489,7 @@ class ProxyBaseLLMRequestProcessing:
                 await proxy_logging_obj.post_call_failure_hook(
                     user_api_key_dict=user_api_key_dict,
                     original_exception=exc,
-                    request_data=request_data,
+                    request_data=dict(request_data),
                     dispatched_call_type=route_type,
                 )
             except HTTPException:
