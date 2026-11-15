@@ -12,7 +12,7 @@ from typing_extensions import assert_never
 
 import litellm
 from litellm.litellm_core_utils.core_helpers import RESPONSE_COST_HEADER, normalize_drop_params
-from litellm.litellm_core_utils.get_provider_specific_headers import ProviderSpecificHeaderUtils
+from litellm.litellm_core_utils.get_provider_specific_headers import ProviderSpecificHeaderUtils, override_headers
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.prompt_templates.image_handling import (
     async_convert_urls_to_base64,
@@ -415,7 +415,7 @@ def _outbound_headers(
         ),
         custom_llm_provider=custom_llm_provider,
     )
-    return MappingProxyType({**(extra_headers or {}), **forwarded})
+    return MappingProxyType(override_headers(extra_headers or {}, forwarded))
 
 
 _LOGGED_FIELDS_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])

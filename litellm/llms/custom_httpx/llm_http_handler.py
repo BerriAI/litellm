@@ -6,7 +6,6 @@ import ssl
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Coroutine, Iterator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from functools import lru_cache, partial, reduce
-from itertools import chain
 from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
@@ -535,19 +534,10 @@ def _unwrap_provider_error(error: Exception) -> Exception:
     return error
 
 
-def _without_anthropic_beta(source: Mapping[str, object] | None) -> Mapping[str, object]:
-    return {name: value for name, value in (source or {}).items() if name.lower() != "anthropic-beta"}
-
-
-def _anthropic_beta_entries(source: Mapping[str, object] | None) -> Iterator[tuple[str, object]]:
-    return ((name, value) for name, value in (source or {}).items() if name.lower() == "anthropic-beta")
-
-
 def _merge_messages_header_sources(
     *sources: Mapping[str, object] | None,
 ) -> dict[str, object]:  # mutable-ok: passed on as the request's headers dict
-    without_beta: Final[Mapping[str, object]] = reduce(override_headers, map(_without_anthropic_beta, sources), {})
-    return {**without_beta, **dict(chain.from_iterable(map(_anthropic_beta_entries, sources)))}
+    return reduce(override_headers, (source or {} for source in sources), {})
 
 
 class BaseLLMHTTPHandler:

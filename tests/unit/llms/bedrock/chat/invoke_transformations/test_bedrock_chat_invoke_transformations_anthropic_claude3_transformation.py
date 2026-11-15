@@ -17,7 +17,7 @@ import litellm
 from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import (
     AmazonAnthropicClaudeConfig,
 )
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 from tests.unit.llms.anthropic.anthropic_docs_refusal import ANTHROPIC_DOCS_REFUSAL_MESSAGE
 
@@ -2064,42 +2064,3 @@ def test_invoke_uses_opt_in_native_output_is_false_when_native_output_did_not_co
     assert not AmazonAnthropicClaudeConfig().uses_opt_in_native_output(
         model, optional_params, {"model_info": model_info}
     )
-
-
-def _claude_text_message(request: httpx.Request) -> httpx.Response:
-    return httpx.Response(
-        200,
-        json={
-            "id": "msg_1",
-            "type": "message",
-            "role": "assistant",
-            "model": "us.anthropic.claude-sonnet-5",
-            "content": [{"type": "text", "text": "ok"}],
-            "stop_reason": "end_turn",
-            "usage": {"input_tokens": 1, "output_tokens": 1},
-        },
-    )
-
-
-@pytest.mark.parametrize("user_profile_id,expected_fields", [("uprof_01", {"user_profile_id": "uprof_01"}), (None, {})])
-def test_bedrock_chat_invoke_sends_a_proxy_user_profile_id_in_the_body(
-    user_profile_id: str | None, expected_fields: dict[str, str]
-) -> None:
-    from litellm.proxy.litellm_pre_call_utils import add_provider_specific_headers_to_request
-
-    proxy_request_data: Final[dict] = {}  # mutable-ok: the function under test writes into it
-    add_provider_specific_headers_to_request(data=proxy_request_data, headers={}, user_profile_id=user_profile_id)
-    respond: Final = MagicMock(wraps=_claude_text_message)
-
-    litellm.completion(
-        model="bedrock/invoke/us.anthropic.claude-sonnet-5",
-        messages=[{"role": "user", "content": "hi"}],
-        aws_access_key_id="AKIAEXAMPLE",
-        aws_secret_access_key="fake-secret",
-        aws_region_name="us-east-1",
-        client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond))),
-        **proxy_request_data,
-    )
-
-    body: Final = json.loads(respond.call_args.args[0].content)
-    assert {key: body[key] for key in ("user_profile_id",) if key in body} == expected_fields

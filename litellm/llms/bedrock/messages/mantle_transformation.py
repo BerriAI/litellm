@@ -18,7 +18,7 @@ from litellm.llms.anthropic.pass_through.messages.transformation import (
     DEFAULT_ANTHROPIC_API_VERSION,
     AnthropicMessagesConfig,
 )
-from litellm.llms.bedrock.common_utils import build_mantle_messages_url
+from litellm.llms.bedrock.common_utils import REQUEST_HEADERS, bedrock_user_profile_fields, build_mantle_messages_url
 from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
     AmazonAnthropicClaudeMessagesConfig,
 )
@@ -148,6 +148,7 @@ class AmazonMantleMessagesConfig(AmazonAnthropicClaudeMessagesConfig):
         return {
             **body,
             **mantle_fields,
+            **bedrock_user_profile_fields(REQUEST_HEADERS.validate_python(headers)),
         }
 
     def transform_anthropic_messages_response(

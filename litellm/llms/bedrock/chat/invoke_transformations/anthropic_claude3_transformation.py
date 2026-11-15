@@ -24,13 +24,11 @@ from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation
 )
 from litellm.llms.bedrock.common_utils import (
     BEDROCK_INVOKE_TRACE_FIELD,
-    REQUEST_HEADERS,
     apply_bedrock_invoke_structured_output,
     bedrock_chat_uses_native_structured_output,
     bedrock_cleaned_output_schema,
     bedrock_native_output_is_opt_in,
     bedrock_supports_tool_search,
-    bedrock_user_profile_fields,
     deployment_model_info,
     get_anthropic_beta_from_headers,
     normalize_bedrock_opus_output_config_effort,
@@ -220,10 +218,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         if beta_list:
             _anthropic_request["anthropic_beta"] = beta_list
 
-        return {
-            **_anthropic_request,
-            **bedrock_user_profile_fields(REQUEST_HEADERS.validate_python(headers)),
-        }
+        return _anthropic_request
 
     @property
     def uses_async_transform_request(self) -> bool:
