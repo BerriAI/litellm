@@ -790,6 +790,18 @@ class BaseAnthropicMessagesStreamingIterator:
         client_detached: "asyncio.Event",
         drain_deadline: anyio.CancelScope,
     ) -> None:
+        try:
+            await self._drain_upstream_to_queue(completion_stream, queue, client_detached, drain_deadline)
+        finally:
+            self.litellm_logging_obj.on_detached_stream_failure = None
+
+    async def _drain_upstream_to_queue(
+        self,
+        completion_stream: AsyncIterator[bytes | GenericStreamingChunk | ModelResponseStream | Mapping[str, object]],
+        queue: "asyncio.Queue[bytes | None | BaseException]",
+        client_detached: "asyncio.Event",
+        drain_deadline: anyio.CancelScope,
+    ) -> None:
         """Drain the whole upstream into ``queue`` (backpressured) and bill once.
 
         Runs detached so a client disconnect can't interrupt the upstream read;

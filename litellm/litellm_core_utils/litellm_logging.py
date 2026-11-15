@@ -3173,6 +3173,7 @@ class Logging(LiteLLMLoggingBaseClass):
             self.cost_breakdown = _with_failed_attempts_cost(self.cost_breakdown, own_cost, failed_attempts_cost)
 
     def claim_stream_failure_report(self) -> bool:
+        self.on_detached_stream_failure = None
         if self._stream_failure_claimed:
             return False
         self._stream_failure_claimed = True

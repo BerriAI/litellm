@@ -607,8 +607,12 @@ class AnthropicResponsesStreamWrapper:
         finally:
             from litellm.llms.anthropic.messages.native.streaming_iterator import closing_superseded_attempt
 
-            if not closing_superseded_attempt():
-                await self._report_unreported_failure()
+            try:
+                if not closing_superseded_attempt():
+                    await self._report_unreported_failure()
+            finally:
+                if self.litellm_logging_obj is not None:
+                    self.litellm_logging_obj.on_detached_stream_failure = None
 
     def partial_response_on_disconnect(self) -> "ResponseIncompleteEvent | None":
         return partial_responses_incomplete_event_on_disconnect(self.responses_stream)

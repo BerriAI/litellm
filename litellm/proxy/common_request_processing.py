@@ -2752,7 +2752,8 @@ class _ClientStreamFailureReport:
             self.held = failure
 
     async def release(self) -> None:
-        self.logging_obj.on_detached_stream_failure = self.report
+        if self.logging_obj.on_detached_stream_failure is not None:
+            self.logging_obj.on_detached_stream_failure = self.report
         if self.held is None:
             return
         await asyncio.shield(
@@ -4478,8 +4479,7 @@ class ProxyBaseLLMRequestProcessing:
         so the failed spend is still written and the budget reservation released;
         a replacement error the hook raises has no client left to reach.
         """
-        request_fields: Final = cast(Mapping[str, object], self.data)  # cast-ok: legacy request dict has string keys
-        request_data: Final = {key: value for key, value in request_fields.items() if key != "litellm_logging_obj"}
+        request_data: Final = self.data
         route_type: Final = self.route_type
 
         async def _on_detached_stream_failure(failed_logging_obj: LiteLLMLoggingObj, exc: Exception) -> None:
@@ -4489,7 +4489,7 @@ class ProxyBaseLLMRequestProcessing:
                 await proxy_logging_obj.post_call_failure_hook(
                     user_api_key_dict=user_api_key_dict,
                     original_exception=exc,
-                    request_data={**request_data, "litellm_logging_obj": failed_logging_obj},
+                    request_data=request_data,
                     dispatched_call_type=route_type,
                 )
             except HTTPException:
@@ -5453,6 +5453,8 @@ class ProxyBaseLLMRequestProcessing:
                         e,
                     )
             logging_obj: Final = request_data.get("litellm_logging_obj")
+            if stream_completed and isinstance(logging_obj, LiteLLMLoggingObj):
+                logging_obj.on_detached_stream_failure = None
             if (
                 not stream_completed
                 and isinstance(logging_obj, LiteLLMLoggingObj)
