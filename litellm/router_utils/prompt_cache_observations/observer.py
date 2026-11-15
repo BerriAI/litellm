@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, Valid
 
 from litellm._logging import verbose_router_logger
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.token_counter import offload_token_count
 from litellm.litellm_core_utils.upstream_cache_evidence import (
     DEPLOYMENT_CACHE_SETTINGS_KEY,
@@ -240,11 +241,13 @@ def _outcome(settings: ObserverSettings, call: _Call) -> _Outcome | None:
 
 
 def _attempt_settings(logged: _LoggedCall) -> DeploymentCacheSettings | None:
-    """Settings the deployment hook stamped for this attempt's own deployment. The standard log names the
-    deployment on every route, while `litellm_params.model_info` is absent on some Rust-served ones."""
+    """Settings the deployment hook stamped for this attempt's own deployment. The router names the deployment in
+    the standard log on every route, while `litellm_params.model_info` is absent on some Rust-served ones and is
+    the only name an SDK call that passes `model_info` carries."""
     settings: Final = logged.deployment_settings
-    model_id: Final = logged.standard_logging_object.model_id
-    if isinstance(settings, DeploymentCacheSettings) and settings.selected.deployment_id == model_id:
+    model_info: Final = as_str_mapping(logged.litellm_params.get("model_info")) or {}
+    deployment_ids: Final = (logged.standard_logging_object.model_id, model_info.get("id"))
+    if isinstance(settings, DeploymentCacheSettings) and settings.selected.deployment_id in deployment_ids:
         return settings
     return None
 

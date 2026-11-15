@@ -8,7 +8,8 @@ import respx
 from pydantic import JsonValue
 
 import litellm
-from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.responses.streaming_iterator import drain_logging_tasks
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.litellm_core_utils.upstream_cache_evidence import (
     DEPLOYMENT_CACHE_SETTINGS_KEY,
@@ -501,17 +502,6 @@ async def test_live_stream_cut_after_its_final_delta_never_reads_as_a_miss(
             pytest.fail(f"a stream without message_stop must not be authoritative, got {outcome}")
 
 
-class _AfterObserver(CustomLogger):
-    def __init__(self) -> None:
-        super().__init__()
-        self.logged = asyncio.Event()
-
-    async def async_log_success_event(
-        self, kwargs: Mapping[str, object], response_obj: object, start_time: object, end_time: object
-    ) -> None:
-        self.logged.set()
-
-
 async def test_router_check_observes_only_opted_in_deployments_and_never_trusts_config_as_verification(
     monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
 ) -> None:
@@ -552,8 +542,6 @@ async def test_router_check_observes_only_opted_in_deployments_and_never_trusts_
     log = observers[0].sink
     assert isinstance(log, ObservationLog)
     for model in ("unobserved", "observed"):
-        after = _AfterObserver()
-        monkeypatch.setattr(litellm, "callbacks", [*litellm.callbacks, after])
         await router.acompletion(
             model=model,
             messages=[
@@ -563,7 +551,8 @@ async def test_router_check_observes_only_opted_in_deployments_and_never_trusts_
                 }
             ],
         )
-        await asyncio.wait_for(after.logged.wait(), timeout=10)
+        await drain_logging_tasks()
+        await GLOBAL_LOGGING_WORKER.flush()
     assert [observation.deployment.deployment_id for observation in log.recent] == ["observed-deployment"]
     match log.recent[0].outcome:
         case Unassessed(reason=reason, path=path, prefix=CacheablePrefix(ttl_seconds=ttl, breakpoints=breakpoints)):
