@@ -6,6 +6,7 @@ from typing import Any, Final, cast
 
 import litellm
 from litellm.litellm_core_utils.hidden_params import get_or_create_hidden_params
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.main import stream_chunk_builder
 from litellm.responses.litellm_completion_transformation.custom_tools import (
     build_tool_call_item_kwargs,
@@ -1356,6 +1357,14 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         Built from the chat completion chunks relayed so far, so the usage is what
         stream_chunk_builder counts for them.
         """
+        return self._partial_response_on_disconnect(pricing_logging_obj=self.litellm_logging_obj)
+
+    def unpriced_partial_response_on_disconnect(self) -> ResponseIncompleteEvent | None:
+        return self._partial_response_on_disconnect(pricing_logging_obj=None)
+
+    def _partial_response_on_disconnect(
+        self, pricing_logging_obj: LiteLLMLoggingObj | None
+    ) -> ResponseIncompleteEvent | None:
         if self.completed_response is not None or not self.collected_chat_completion_chunks:
             return None
         built: Final = stream_chunk_builder(
@@ -1364,7 +1373,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                 input=self.request_input,
                 responses_api_request=dict(self.responses_api_request),
             ),
-            logging_obj=self.litellm_logging_obj,
+            logging_obj=pricing_logging_obj,
         )
         if not isinstance(built, ModelResponse):
             return None
@@ -1384,7 +1393,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                 }
             )
         )
-        stamp_responses_usage_cost(partial, self.litellm_logging_obj)
+        stamp_responses_usage_cost(partial, pricing_logging_obj)
         return ResponseIncompleteEvent(type=ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE, response=partial)
 
     def _emit_terminal_response_event(

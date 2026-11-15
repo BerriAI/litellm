@@ -27925,16 +27925,20 @@ async def test_a_disconnect_during_the_fallback_bills_a_chat_bridged_cut_partial
     (success,) = recorder.successes
     (spend_row,) = recorder.spend_rows
     backup_prompt: Final = spend_row["prompt_tokens"] - cut_prompt
-    backup_cost: Final = sum(
-        litellm.cost_per_token(
-            model="openai/gpt-4o-mini", prompt_tokens=backup_prompt, completion_tokens=backup_completion
-        )
+    backup_input_cost, backup_output_cost = litellm.cost_per_token(
+        model="openai/gpt-4o-mini", prompt_tokens=backup_prompt, completion_tokens=backup_completion
     )
+    breakdown: Final = success["cost_breakdown"]
     assert cut_completion > 0
-    assert backup_prompt >= 0
-    assert success["cost_breakdown"]["additional_costs"]["mid_stream_partial_cost"] == pytest.approx(cut_cost)
-    assert (spend_row["completion_tokens"], spend_row["spend"]) == pytest.approx(
-        (cut_completion + backup_completion, cut_cost + backup_cost)
+    assert (backup_prompt > 0) == bool(backup_words)
+    assert spend_row["completion_tokens"] == cut_completion + backup_completion
+    assert (
+        breakdown["input_cost"],
+        breakdown["output_cost"],
+        breakdown["additional_costs"]["mid_stream_partial_cost"],
+    ) == pytest.approx((backup_input_cost, backup_output_cost, cut_cost))
+    assert (breakdown["total_cost"], success["response_cost"], spend_row["spend"]) == pytest.approx(
+        (backup_input_cost + backup_output_cost + cut_cost,) * 3
     )
 
 

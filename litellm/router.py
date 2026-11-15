@@ -3530,7 +3530,9 @@ class Router:
         unpriced: Final = event.response.model_copy(
             update={"usage": ResponseAPIUsage(input_tokens=0, output_tokens=0, total_tokens=0)}
         )
-        unpriced.hidden_params = {**event.response.hidden_params, "response_cost": 0.0}
+        unpriced.hidden_params = {
+            key: value for key, value in event.response.hidden_params.items() if key != "response_cost"
+        }
         return event.model_copy(update={"response": unpriced})
 
     @staticmethod
@@ -3766,15 +3768,20 @@ class Router:
                 stream's relayed tokens are folded into the fallback's event, the way
                 _combine_responses_fallback_usage does for a natural end of stream.
                 """
-                from litellm.responses.streaming_iterator import partial_responses_incomplete_event_on_disconnect
+                from litellm.responses.streaming_iterator import (
+                    partial_responses_incomplete_event_on_disconnect,
+                    unpriced_partial_responses_incomplete_event_on_disconnect,
+                )
 
                 current: Final = partial_responses_incomplete_event_on_disconnect(self._billing_source)
                 if self._billing_source is source_iterator:
                     return current
-                primary: Final = partial_responses_incomplete_event_on_disconnect(source_iterator)
                 fallback_logging: Final = getattr(self._billing_source, "logging_obj", None)
                 if isinstance(fallback_logging, LiteLLMLogging) and fallback_logging.continued_partial is not None:
-                    return current or Router._without_own_usage(primary)
+                    return current or Router._without_own_usage(
+                        unpriced_partial_responses_incomplete_event_on_disconnect(source_iterator)
+                    )
+                primary: Final = partial_responses_incomplete_event_on_disconnect(source_iterator)
                 if current is None or primary is None:
                     return current or primary
                 if primary.response.usage is not None:
