@@ -49999,6 +49999,27 @@
         "litellm_provider": "linkup",
         "mode": "search"
     },
+    "tadly/qwen3.5": {
+        "input_cost_per_token": 1.5e-07,
+        "litellm_provider": "tadly",
+        "max_input_tokens": 131072,
+        "max_output_tokens": 16384,
+        "max_tokens": 16384,
+        "mode": "chat",
+        "output_cost_per_token": 1.5e-07,
+        "source": "https://tadly.dev/pricing",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses",
+            "/v1/messages"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_reasoning": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": false
+    },
     "tavily/search": {
         "input_cost_per_query": 0.008,
         "litellm_provider": "tavily",

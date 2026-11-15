@@ -1087,6 +1087,32 @@
         "generateContent": false
       }
     },
+    "tadly": {
+      "display_name": "Tadly (`tadly`)",
+      "url": "https://docs.litellm.ai/docs/providers/tadly",
+      "endpoints": {
+        "chat_completions": true,
+        "responses": true,
+        "text_completion": true,
+        "embeddings": false,
+        "image_generations": false,
+        "image_edits": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "rerank": false,
+        "ocr": false,
+        "search": false,
+        "moderations": false,
+        "realtime": false,
+        "video_generations": false,
+        "batches": false,
+        "messages": true,
+        "interactions": true,
+        "systemone": false,
+        "a2a": true,
+        "generateContent": true
+      }
+    },
     "hostinger_router": {
       "display_name": "Hostinger Router (`hostinger_router`)",
       "url": "https://docs.litellm.ai/docs/providers/hostinger_router",
