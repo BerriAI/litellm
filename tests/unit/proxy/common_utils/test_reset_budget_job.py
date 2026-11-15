@@ -895,7 +895,10 @@ def _quiet_customer_evictions(monkeypatch):
     monkeypatch.setattr(reset_budget_job_module, "broadcast_evictions", _broadcast)
 
 
-def _customer_member(member_id, spend, template_cap=10.0, override_cap=None, override_duration=None, expires_at=None):
+def _customer_member(
+    member_id, spend, template_cap=10.0, override_cap=None, override_duration=None, expires_at=None,
+    template_duration="7d",
+):
     """A member row as the paged reset reads it: its budget rows included, so the cap it carries over is its own."""
     override = (
         None
@@ -906,11 +909,83 @@ def _customer_member(member_id, spend, template_cap=10.0, override_cap=None, ove
         customer_member_id=member_id,
         spend=spend,
         budget_id="tier",
-        budget=types.SimpleNamespace(max_budget=template_cap, budget_duration="7d"),
+        budget=types.SimpleNamespace(max_budget=template_cap, budget_duration=template_duration),
         budget_override_id=None if override is None else f"override-{member_id}",
         budget_override=override,
         budget_override_expires_at=expires_at,
     )
+
+
+@pytest.mark.parametrize("max_budget", [None, 0.0, 10.0])
+def test_uncapped_tier_preserves_customer_spend_but_resets_endusers_and_tags(
+    reset_budget_job, mock_prisma_client, monkeypatch, max_budget
+):
+    _quiet_customer_evictions(monkeypatch)
+    mock_prisma_client.data["budget"] = [
+        _budget_row(budget_id="tier", budget_duration="7d", max_budget=max_budget)
+    ]
+    mock_prisma_client.db.litellm_customermembertable.set_find_many_results(
+        [_customer_member("member", 1.0, template_cap=max_budget)]
+    )
+    mock_prisma_client.db.litellm_customerteamtable.set_find_many_results(
+        [
+            types.SimpleNamespace(
+                **{**vars(_customer_member("member", 1.0, template_cap=max_budget)), "customer_team_id": "team"}
+            )
+        ]
+    )
+    mock_prisma_client.db.litellm_endusertable.set_find_many_results(
+        [types.SimpleNamespace(user_id="enduser", budget_id="tier", spend=1.0)]
+    )
+
+    asyncio.run(reset_budget_job.reset_budget_for_litellm_budget_table())
+
+    assert bool(_batch_writes(mock_prisma_client, "customer_org")) is (max_budget is not None)
+    assert bool(_page_writes(mock_prisma_client, "customer_team")) is (max_budget is not None)
+    assert bool(_page_writes(mock_prisma_client, "customer_member")) is (max_budget is not None)
+    assert _replay_spend_writes(_enduser_writes(mock_prisma_client), 1.0) == 0.0
+    assert _replay_spend_writes(_batch_writes(mock_prisma_client, "tag"), 1.0) == 0.0
+    assert _batch_writes(mock_prisma_client, "budget")[0]["data"]["budget_reset_at"] is not None
+
+
+@pytest.mark.parametrize("rollover", [False, True])
+@pytest.mark.parametrize("entity", ["team", "member"])
+@pytest.mark.parametrize(
+    "template_cap,override_cap,override_duration,clock_id,expected_cap",
+    [(None, 5.0, None, "tier", 5.0), (10.0, None, "7d", "override-member", 10.0)],
+    ids=["template-clock-override-cap", "override-clock-template-cap"],
+)
+def test_customer_reset_uses_effective_cap_when_clock_tier_is_uncapped(
+    reset_budget_job,
+    mock_prisma_client,
+    monkeypatch,
+    rollover,
+    entity,
+    template_cap,
+    override_cap,
+    override_duration,
+    clock_id,
+    expected_cap,
+):
+    _quiet_customer_evictions(monkeypatch)
+    monkeypatch.setattr(reset_budget_job_module.litellm, "budget_rollover", rollover)
+    mock_prisma_client.data["budget"] = [
+        _budget_row(budget_id=clock_id, max_budget=None, budget_duration="1mo" if clock_id == "tier" else "7d")
+    ]
+    row: Final = _customer_member(
+        "member", 12.0, template_cap=template_cap, override_cap=override_cap,
+        override_duration=override_duration, template_duration="1mo",
+    )
+    getattr(mock_prisma_client.db, f"litellm_customer{entity}table").set_find_many_results(
+        [types.SimpleNamespace(**{**vars(row), f"customer_{entity}_id": "member"})]
+    )
+
+    asyncio.run(reset_budget_job.reset_budget_for_litellm_budget_table())
+
+    assert _replay_spend_writes(_page_writes(mock_prisma_client, f"customer_{entity}"), 12.0) == (
+        12.0 - expected_cap if rollover else 0.0
+    )
+    assert _batch_writes(mock_prisma_client, "budget")[0]["data"]["budget_reset_at"] is not None
 
 
 def test_budget_table_reset_zeroes_customer_hierarchy_rows_on_the_budget_window(
@@ -929,7 +1004,7 @@ def test_budget_table_reset_zeroes_customer_hierarchy_rows_on_the_budget_window(
                 customer_team_id="team-1",
                 spend=2.0,
                 budget_id="tier",
-                budget=None,
+                budget=types.SimpleNamespace(max_budget=10.0, budget_duration="7d"),
                 budget_override_id=None,
                 budget_override=None,
                 budget_override_expires_at=None,
