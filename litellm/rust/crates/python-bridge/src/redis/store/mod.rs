@@ -43,6 +43,19 @@ fn call(py: Python<'_>, call_type: &'static str) -> PyResult<RedisCall> {
     })
 }
 
+/// `call`, for a store op the Python store runs under `with_service_target(target)`.
+pub(crate) fn targeted_call(
+    py: Python<'_>,
+    call_type: &'static str,
+    target: &str,
+) -> PyResult<RedisCall> {
+    Ok(RedisCall {
+        context: ReportContext::of_caller_for(py, target)?,
+        event_loop: EventLoop::running(py),
+        call_type,
+    })
+}
+
 /// Runs one Redis operation as a Python awaitable, reported to `ServiceLogging` as `call_type`.
 fn redis_async<'py, T, E: 'static>(
     py: Python<'py>,
@@ -147,7 +160,7 @@ pyo3::create_exception!(
 );
 
 /// What every native store raises, its kind telling a caller which failures it may drop.
-fn kind_error(error: Error) -> PyErr {
+pub(crate) fn kind_error(error: Error) -> PyErr {
     let kind: &'static str = error.kind().into();
     NativeRedisStoreError::new_err((kind, litellm_error::Report::new(&error).to_string()))
 }

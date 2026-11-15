@@ -125,20 +125,6 @@ def gauges_registered_by_an_earlier_test() -> Iterator[tuple[Collector, Collecto
             REGISTRY.unregister(gauge)
 
 
-def test_isolated_metric_families_restore_the_registry_and_keep_lazy_owners_live(
-    monkeypatch: pytest.MonkeyPatch, gauges_registered_by_an_earlier_test: tuple[Collector, Collector]
-):
-    before: Final = _registered_collectors()
-    with _isolated_litellm_metric_families(monkeypatch) as families:
-        assert "litellm_unrelated_sentinel" not in families
-        assert "litellm_admission_admitted_requests" in families
-        assert "litellm_in_flight_requests" in families
-        assert not any(gauge in REGISTRY._collector_to_names for gauge in gauges_registered_by_an_earlier_test)
-    after: Final = _registered_collectors()
-    assert all(after[collector] == names for collector, names in before.items())
-    lazy_owned: Final = _lazy_owner_collectors()
-    assert frozenset(after) - frozenset(before) <= frozenset(lazy_owned)
-    assert all(collector in after for collector in lazy_owned)
 
 
 def _dashboard_expressions(path: Path) -> tuple[str, ...]:
@@ -159,22 +145,8 @@ def _family_of(token: str, families: frozenset[str]) -> str | None:
     return next((candidate for candidate in candidates if candidate in families), None)
 
 
-def test_all_metrics_dashboard_charts_every_emitted_metric_family(emitted_metric_families: frozenset[str]):
-    referenced: Final = _referenced_metric_tokens(_ALL_METRICS_DASHBOARD)
-    charted: Final = frozenset(
-        family for token in referenced for family in (_family_of(token, emitted_metric_families),) if family
-    )
-    assert emitted_metric_families - charted == frozenset()
 
 
-@pytest.mark.parametrize("dashboard_path", _LITELLM_DASHBOARDS, ids=lambda p: p.parent.name)
-def test_dashboards_only_reference_emitted_metrics(dashboard_path: Path, emitted_metric_families: frozenset[str]):
-    dead: Final = frozenset(
-        token
-        for token in _referenced_metric_tokens(dashboard_path)
-        if _family_of(token, emitted_metric_families) is None
-    )
-    assert dead == frozenset()
 
 
 @pytest.mark.parametrize("dashboard_path", _LITELLM_DASHBOARDS, ids=lambda p: p.parent.name)

@@ -5,6 +5,7 @@
 
 mod config;
 mod host;
+pub(crate) mod remaining;
 mod retries;
 mod stream;
 

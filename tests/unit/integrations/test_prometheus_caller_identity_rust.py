@@ -24,6 +24,12 @@ from litellm.types.integrations.prometheus import (
     validate_prometheus_deployment_and_latency_caller_identity,
 )
 from litellm.types.utils import StandardLoggingPayload
+from tests.unit.integrations.prometheus_native_support import (
+    enable_native_prometheus,
+    native_failure,
+    native_success,
+    standard_payload,
+)
 
 TARGET_METRICS: Final[tuple[DEFINED_PROMETHEUS_METRICS, ...]] = cast(
     tuple[DEFINED_PROMETHEUS_METRICS, ...],
@@ -35,6 +41,11 @@ IDENTITY_MODES: Final = ("api_key_alias", "user_email", "both")
 def _clear_prometheus_registry() -> None:
     for collector in list(REGISTRY._collector_to_names):  # pyright: ignore[reportPrivateUsage]
         REGISTRY.unregister(collector)
+
+
+@pytest.fixture(autouse=True)
+def native_prometheus(monkeypatch: pytest.MonkeyPatch):
+    enable_native_prometheus(monkeypatch)
 
 
 @pytest.fixture(autouse=True)
@@ -232,6 +243,13 @@ def _standard_logging_payload(user_email: str | None = "alice@example.com") -> S
     )
 
 
+def _native_payload(payload: StandardLoggingPayload) -> dict[str, object]:
+    return standard_payload(
+        metadata=payload["metadata"],
+        **{key: value for key, value in payload.items() if key != "metadata"},
+    )
+
+
 def _sample_labels(scrape: str, sample_name: str) -> list[dict[str, str]]:
     return [
         sample.labels
@@ -242,31 +260,14 @@ def _sample_labels(scrape: str, sample_name: str) -> list[dict[str, str]]:
 
 
 @pytest.mark.parametrize("mode", IDENTITY_MODES)
-def test_successful_request_emits_configured_identity_on_real_counter_and_histogram_samples(
+@pytest.mark.asyncio
+async def test_successful_request_emits_configured_identity_on_real_counter_and_histogram_samples(
     monkeypatch: pytest.MonkeyPatch,
     mode: str,
 ):
     _set_caller_identity(monkeypatch, mode)
     logger = PrometheusLogger()
-    payload = _standard_logging_payload()
-    enum_values = UserAPIKeyLabelValues(
-        end_user="end-user",
-        user="user-id",
-        user_email="alice@example.com",
-        hashed_api_key="hashed-key",
-        api_key_alias="alias-a",
-        requested_model="requested-model",
-        model_group="requested-model",
-        team="team-id",
-        team_alias="team-alias",
-        model="provider-model",
-        litellm_model_name="deployment-model",
-        model_id="deployment-id",
-        api_base="https://api.example.com",
-        api_provider="openai",
-        client_ip="192.0.2.10",
-        user_agent="caller-identity-test",
-    )
+    payload = _native_payload(_standard_logging_payload())
     start_time = datetime.now()
     api_call_start_time = start_time + timedelta(milliseconds=100)
     completion_start_time = api_call_start_time + timedelta(milliseconds=200)
@@ -288,22 +289,7 @@ def test_successful_request_emits_configured_identity_on_real_counter_and_histog
         "standard_logging_object": payload,
     }
 
-    logger._set_latency_metrics(  # pyright: ignore[reportPrivateUsage, reportUnknownMemberType]
-        kwargs=request_kwargs,
-        model="deployment-model",
-        user_api_key="hashed-key",
-        user_api_key_alias="alias-a",
-        user_api_team="team-id",
-        user_api_team_alias="team-alias",
-        enum_values=enum_values,
-    )
-    logger.set_llm_deployment_success_metrics(  # pyright: ignore[reportUnknownMemberType]
-        request_kwargs=request_kwargs,
-        start_time=start_time,
-        end_time=end_time,
-        enum_values=enum_values,
-        output_tokens=10,
-    )
+    await native_success(logger, request_kwargs, None, start_time, end_time)
 
     scrape = generate_latest(REGISTRY).decode()
     sample_names = (
@@ -340,7 +326,8 @@ def test_successful_request_emits_configured_identity_on_real_counter_and_histog
         (None, None, None, "None"),
     ),
 )
-def test_deployment_failure_email_fallbacks_reach_both_real_counters(
+@pytest.mark.asyncio
+async def test_deployment_failure_email_fallbacks_reach_both_real_counters(
     monkeypatch: pytest.MonkeyPatch,
     standard_email: str | None,
     metadata_email: str | None,
@@ -349,7 +336,7 @@ def test_deployment_failure_email_fallbacks_reach_both_real_counters(
 ):
     _set_caller_identity(monkeypatch, "both")
     logger = PrometheusLogger()
-    payload = _standard_logging_payload(user_email=standard_email)
+    payload = _native_payload(_standard_logging_payload(user_email=standard_email))
     metadata = {
         "model_info": {"id": "deployment-id"},
         "user_api_key_user_email": metadata_email,
@@ -365,7 +352,7 @@ def test_deployment_failure_email_fallbacks_reach_both_real_counters(
         "exception": RuntimeError("provider failed"),
     }
 
-    logger.set_llm_deployment_failure_metrics(request_kwargs)  # pyright: ignore[reportUnknownMemberType]
+    await native_failure(logger, request_kwargs, None)
 
     scrape = generate_latest(REGISTRY).decode()
     for sample_name in (

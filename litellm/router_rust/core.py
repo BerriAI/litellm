@@ -31,7 +31,7 @@ from time import time as unix_time
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Final, Literal, Protocol, TypeAlias, TypeVar, final, overload
 
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 from typing_extensions import assert_never
 
 from litellm._internal_context import request_parent_otel_span, service_target
@@ -288,8 +288,10 @@ if TYPE_CHECKING:
         RouterCoreHandle,
         _CallSteps,  # pyright: ignore[reportPrivateUsage]  # the stub's step shapes
         _FailureReportSteps,  # pyright: ignore[reportPrivateUsage]  # see above
+        _RustRouterRef,  # pyright: ignore[reportPrivateUsage]  # the stub's router reference
         _SuccessReportSteps,  # pyright: ignore[reportPrivateUsage]  # see above
     )
+    from litellm.types.integrations.custom_logger_v2 import RouterLimits
     from litellm.types.router import (
         CustomRoutingStrategyBase,
         DeploymentTypedDict,
@@ -1279,6 +1281,29 @@ _REBOUND_STATE: Final = MappingProxyType(
         "_core_slack_alerting_logger": "_slack_alerting_logger",
     }
 )
+
+
+def _rust_core_of(router: object) -> "RustCore | None":
+    attributes: Final[object] = getattr(router, "__dict__", None)
+    core: Final = router if isinstance(router, RustCore) else (as_str_mapping(attributes) or {}).get("_core")
+    return core if isinstance(core, RustCore) else None
+
+
+def remaining_usage_ref(router: object) -> "_RustRouterRef | None":
+    """A reference that reads ``router``'s remaining usage in Rust, from the usage store its core
+    writes; ``None`` for a router no Rust core with a Rust usage store runs."""
+    from litellm.rust_bridge._native import router_usage_ref
+
+    core: Final = _rust_core_of(router)
+    native: Final = None if core is None else core._hosted._core_usage_store.native  # pyright: ignore[reportPrivateUsage]  # the store health().usage(kind="remaining") reads
+    return None if native is None else router_usage_ref(native)
+
+
+def router_limits_of(router: object, model_group: str) -> "RouterLimits | None":
+    """What ``remaining_usage_ref``'s read of ``model_group`` needs from Python, resolved as
+    ``health().usage(kind="remaining")`` resolves it; raises what that raises."""
+    core: Final = _rust_core_of(router)
+    return None if core is None else core._hosted._core_router_limits(model_group)  # pyright: ignore[reportPrivateUsage]  # see above
 
 
 _HEALTH_SERVED: Final = frozenset(
@@ -3669,31 +3694,10 @@ class RustCore(
             case _:
                 assert_never(step)
 
-    def run_routing_cache_sync(self, read_or_write: "Callable[[], Coroutine[object, object, object]]") -> object:
-        """A routing-cache coroutine on a sync call, whose `make_call` runs on the one event loop
-        `run_async_function` opened for the whole call. Without Redis the coroutine never suspends, so
-        it runs here: a loop of its own would hand the GIL to the logging thread, which then reads the
-        response before the router's headers are on it."""
-        if self._cache.redis_cache is not None:
-            from litellm.litellm_core_utils import asyncify
-
-            return asyncify.run_async_function(read_or_write)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # the untyped sync bridge
-        running: Final = read_or_write()
-        try:
-            while True:
-                _ = running.send(None)
-        except StopIteration as finished:
-            return finished.value  # pyright: ignore[reportAny]  # the coroutine's result
-
     @property
     def _stores(self) -> RoutingStores:
         """The stores router-core's cache steps reach, over the cooldowns as last assigned."""
         return RoutingStores(self._cooldowns, self._usage, self._health_checks)
-
-    def io_token_usage_sync(self, model_group: str) -> tuple[int | None, int | None]:
-        """``get_model_group_io_token_usage``, whose counters stay in the routing cache, on a sync call."""
-        read: Final = self.run_routing_cache_sync(lambda: self._hosted.get_model_group_io_token_usage(model_group))
-        return _IO_TOKEN_USAGE.validate_python(read)
 
     def _answer_cache_sync(self, raw: Mapping[str, object]) -> object:
         step: Final = CACHE_STEP.validate_python(raw)
@@ -4066,9 +4070,6 @@ def _seconds(value: object, default: float) -> float | int:
     if isinstance(value, int | float) and not isinstance(value, bool):
         return value
     return int(default) if float(default).is_integer() else default
-
-
-_IO_TOKEN_USAGE: Final = TypeAdapter(tuple[int | None, int | None])
 
 
 # The plans whose kwargs carry `original_generic_function`, which the fallback cooldown reads.
@@ -5554,9 +5555,7 @@ class _Driver:
         name: Final = self._served[0]
         if name is not None:
             core: Final = self._core
-            remaining: Final = core._hosted._core_get_remaining_model_group_usage_sync(  # pyright: ignore[reportPrivateUsage]  # the core reads its own host registry
-                name, core.io_token_usage_sync
-            )
+            remaining: Final = core._hosted._core_get_remaining_model_group_usage_sync(name)  # pyright: ignore[reportPrivateUsage]  # the core reads its own host registry
             apply_remaining_usage_headers(ensure_response_additional_headers(response), remaining)
         counted: Final = self._count_response(response, step)
         self.log_outcomes_sync()
@@ -5699,6 +5698,7 @@ __all__ = [
     "RustSettings",
     "attempt_failure",
     "failure_kind",
+    "remaining_usage_ref",
     "total_tokens",
     "unsupported_arguments",
 ]

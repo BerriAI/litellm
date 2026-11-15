@@ -20,22 +20,23 @@ def test_field_round_trips_from_its_config_string() -> None:
 
 def test_field_bits_are_distinct_and_fit_a_u64_bitset() -> None:
     bits = [member.bit for member in Field]
-    assert len(set(bits)) == len(bits) == 47
+    assert len(set(bits)) == len(bits) == 52
     assert all(0 <= bit < 64 for bit in bits)
 
 
 def test_fields_fall_in_the_four_cost_tiers_of_the_design() -> None:
     assert Counter(member.tier for member in Field) == {
-        FieldTier.small_record: 27,
+        FieldTier.small_record: 31,
         FieldTier.content: 12,
         FieldTier.wire: 4,
-        FieldTier.compatibility: 4,
+        FieldTier.compatibility: 5,
     }
     assert {member for member in Field if member.tier is FieldTier.compatibility} == {
         Field.standard_logging_payload,
         Field.deprecated_kwargs,
         Field.deprecated_response_obj,
         Field.standard_logging_payload_ref,
+        Field.router_ref,
     }
 
 
@@ -88,4 +89,9 @@ def test_field_bits_are_the_wire_contract_shared_with_the_rust_manifest() -> Non
         "metadata_labels": 44,
         "input_sequence_length": 45,
         "limiter_request": 46,
+        "prometheus_settings": 48,
+        "logged_deployment_labels": 49,
+        "router_ref": 50,
+        "logged_wall_clock": 51,
+        "router_limits": 52,
     }

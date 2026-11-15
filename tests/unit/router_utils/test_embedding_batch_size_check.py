@@ -26,6 +26,7 @@ from litellm.router_utils.embedding_batch_size_check import (
     embedding_batch_too_large_error,
     embedding_deployment_selection,
 )
+from tests.unit.integrations.prometheus_native_support import series
 
 _MODEL: Final = "embed-group"
 _PROVIDER: Final = "openai"
@@ -530,7 +531,7 @@ class TestRouterEmbeddingBatchLimit:
                 await router.aembedding(
                     model="embed", input=["one", "two", "three"], metadata=metadata, litellm_logging_obj=logging_obj
                 )
-        assert prometheus.litellm_deployment_state._metrics == {}
+        assert series("litellm_deployment_state") == []
 
     @pytest.mark.parametrize("sync", [False, True], ids=["async", "sync"])
     @pytest.mark.asyncio

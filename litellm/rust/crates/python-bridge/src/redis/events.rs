@@ -36,6 +36,17 @@ impl ReportContext {
         Ok(Self(PythonContext::capture(py)?))
     }
 
+    /// The caller of a store op, as `of_caller`, under `target`: what `with_service_target(target)`
+    /// sets around the Python store's own methods.
+    pub(crate) fn of_caller_for(py: Python<'_>, target: &str) -> PyResult<Self> {
+        let context = py.import("contextvars")?.call_method0("copy_context")?;
+        let target_var = py
+            .import("litellm._internal_context")?
+            .getattr("_service_target")?;
+        context.call_method1("run", (target_var.getattr("set")?, target))?;
+        Ok(Self(PythonContext::built(context)))
+    }
+
     /// The request whose post-call batch its deadline sends, with no caller awaiting the flush.
     fn of_deadline_flush(py: Python<'_>) -> PyResult<Self> {
         let context = py
@@ -250,6 +261,54 @@ mod tests {
     use tokio::runtime::Handle;
 
     use super::{EventLoop, RedisCall, ReportContext, ServiceLoggingEvents};
+
+    /// `litellm._internal_context`'s service target, stubbed where the package is not importable.
+    fn internal_context(py: Python<'_>) -> Bound<'_, PyModule> {
+        if let Ok(internal) = py.import("litellm._internal_context") {
+            return internal;
+        }
+        let code = c"from contextvars import ContextVar\n_service_target = ContextVar('service_target', default=None)\ndef current_service_target():\n    return _service_target.get()\n";
+        let internal = PyModule::from_code(
+            py,
+            code,
+            c"_internal_context.py",
+            c"litellm._internal_context",
+        )
+        .unwrap();
+        let modules = py.import("sys").unwrap().getattr("modules").unwrap();
+        if modules.get_item("litellm").is_err() {
+            modules
+                .set_item("litellm", PyModule::new(py, "litellm").unwrap())
+                .unwrap();
+        }
+        modules
+            .set_item("litellm._internal_context", &internal)
+            .unwrap();
+        internal
+    }
+
+    #[rstest]
+    fn a_targeted_caller_context_carries_the_target_and_leaves_the_callers_own_unchanged() {
+        Python::initialize();
+        Python::attach(|py| {
+            let internal = internal_context(py);
+            let target_var = internal.getattr("_service_target").unwrap();
+            let token = target_var.call_method1("set", ("caller",)).unwrap();
+            let context = ReportContext::of_caller_for(py, "router_usage").unwrap();
+            let seen = context
+                .0
+                .enter(py, |py| {
+                    py.import("litellm._internal_context")
+                        .and_then(|internal| internal.call_method0("current_service_target"))
+                        .and_then(|target| target.extract::<String>())
+                        .unwrap()
+                })
+                .unwrap();
+            let caller: String = target_var.call_method0("get").unwrap().extract().unwrap();
+            target_var.call_method1("reset", (token,)).unwrap();
+            assert_eq!((seen.as_str(), caller.as_str()), ("router_usage", "caller"));
+        });
+    }
 
     const RECORDER: &str = "
 import contextvars, time

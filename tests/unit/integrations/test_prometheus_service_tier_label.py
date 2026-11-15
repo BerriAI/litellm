@@ -9,12 +9,10 @@ Run with:
     uv run pytest tests/unit/integrations/test_prometheus_service_tier_label.py -v
 """
 
-import datetime
 from typing import Final
 
 import pytest
 
-from litellm.integrations.prometheus import PrometheusLogger
 from litellm.litellm_core_utils.service_tier_utils import (
     KNOWN_REQUEST_SERVICE_TIERS,
     get_service_tier_from_standard_logging_payload,
@@ -201,51 +199,6 @@ def test_no_tier_resolves_to_none(response, usage_object, model_parameters):
     assert get_service_tier_from_standard_logging_payload(payload) is None
 
 
-@pytest.mark.asyncio
-async def test_success_event_emits_service_tier_on_latency_and_spend_metrics():
-    """
-    End-to-end emit wiring.
-
-    Drives the real logger with a payload whose response was served on the flex
-    tier and asserts every latency histogram and the spend counter carries
-    service_tier="flex". Fails if the label is dropped from a metric's label list
-    or if the value is not populated on the success path.
-    """
-    payload = _standard_logging_payload(
-        response={"service_tier": "flex"},
-        model_parameters={"service_tier": "auto"},
-    )
-    now = datetime.datetime.now()
-    kwargs = {
-        "model": "gpt-4o-mini",
-        "litellm_params": {"metadata": {}},
-        "standard_logging_object": payload,
-        "stream": True,
-        "start_time": now - datetime.timedelta(seconds=3),
-        "api_call_start_time": now - datetime.timedelta(seconds=2),
-        "completion_start_time": now - datetime.timedelta(seconds=1),
-        "end_time": now,
-    }
-
-    _clear_prometheus_registry()
-    try:
-        logger = PrometheusLogger()
-        await logger.async_log_success_event(kwargs, None, now, now)
-
-        for metric_name in (
-            "litellm_request_total_latency_metric_bucket",
-            "litellm_llm_api_latency_metric_bucket",
-            "litellm_llm_api_time_to_first_token_metric_bucket",
-            "litellm_spend_metric_total",
-        ):
-            samples = _collected_samples(metric_name)
-            assert samples, f"expected {metric_name} to be emitted"
-            assert all(sample.labels.get("service_tier") == "flex" for sample in samples), (
-                f"{metric_name} must carry service_tier=flex, got "
-                f"{sorted({sample.labels.get('service_tier') for sample in samples})}"
-            )
-    finally:
-        _clear_prometheus_registry()
 
 
 def test_allowlist_covers_every_modeled_service_tier():

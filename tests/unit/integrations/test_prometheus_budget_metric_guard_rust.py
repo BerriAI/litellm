@@ -15,6 +15,12 @@ from prometheus_client import REGISTRY
 import litellm
 from litellm.integrations.prometheus import PrometheusLogger
 from litellm.types.integrations.prometheus import NoOpMetric
+from tests.unit.integrations.prometheus_native_support import enable_native_prometheus
+
+
+@pytest.fixture(autouse=True)
+def native_prometheus(monkeypatch):
+    enable_native_prometheus(monkeypatch)
 
 _BUDGET_EXCLUDED_CONFIG = [
     {

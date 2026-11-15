@@ -26,6 +26,9 @@ I64: TypeAlias = Annotated[int, Member(ge=-(2**63), le=2**63 - 1)]
 U16: TypeAlias = Annotated[int, Member(ge=0, le=2**16 - 1)]
 F64: TypeAlias = Annotated[float, Member(allow_inf_nan=True)]
 Flag: TypeAlias = Annotated[bool, Member(strict=True)]
+StrictText: TypeAlias = Annotated[str, Member(strict=True)]
+StrictI64: TypeAlias = Annotated[int, Member(strict=True, ge=-(2**63), le=2**63 - 1)]
+StrictF64: TypeAlias = Annotated[float, Member(strict=True, allow_inf_nan=True)]
 
 
 def _float_or_zero(value: object) -> float:
@@ -394,11 +397,67 @@ class InputSequenceLength(Record):
     error_text: str | None = None
 
 
+class RouterLimitKind(str, Enum):
+    """What a router limit is in Python: an ``int`` (a ``bool`` counts as one), a ``float``, or
+    anything else, which subtracting raises on."""
+
+    whole = "int"
+    real = "float"
+    other = "other"
+
+
+class RouterLimit(Strict):
+    """A limit by its decimal digits, its float ``repr``, or its type name."""
+
+    kind: RouterLimitKind
+    text: str
+
+
+class RouterGroupLimits(Strict):
+    """A group's limits as ``ModelGroupInfo`` resolves them."""
+
+    tpm: RouterLimit | None = None
+    rpm: RouterLimit | None = None
+    itpm: RouterLimit | None = None
+    otpm: RouterLimit | None = None
+
+
+class UsageMember(Strict):
+    """A deployment a usage counter is keyed by; ``None`` is a value that is not a ``str``, which the
+    usage store refuses."""
+
+    deployment_id: str | None = None
+    model: str | None = None
+
+
+class RouterLimits(Record):
+    """A group's limits and the deployments its counters are keyed by, resolved in Python for the
+    Rust read: ``members`` is ``None`` when no deployment matches, ``io_members`` when the model
+    list is ``None``, and ``reset`` the seconds left in the minute."""
+
+    limits: RouterGroupLimits | None = None
+    members: tuple[UsageMember, ...] | None = None
+    io_members: tuple[UsageMember, ...] | None = None
+    reset: I64 | None = None
+    error_type: str | None = None
+    error_text: str | None = None
+
+
 class LoggedRequest(Record):
     client_ip: Scalar | None = None
     user_agent: Scalar | None = None
     service_tier: str | None = None
     stream: Scalar | None = None
+
+
+class PrometheusSettings(Strict):
+    emit_stream_label: Flag
+    custom_tags: tuple[StrictText, ...]
+    disable_end_user_cost_tracking: Flag
+    end_user_prometheus_only: Flag
+    end_user_max_series: StrictI64 | None
+    end_user_ttl_seconds: StrictF64 | None
+    end_user_cleanup_interval_seconds: StrictF64 | None
 
 
 class MetadataLabel(Strict):
@@ -493,18 +552,25 @@ __all__ = [
     "MetadataLabel",
     "ModelInfo",
     "Moment",
+    "MomentInput",
     "Outcome",
     "OutputCap",
+    "PrometheusSettings",
     "RateLimitState",
     "RateLimitStatus",
     "RateLimitStatuses",
     "Record",
     "ReservationEntry",
+    "RouterGroupLimits",
+    "RouterLimit",
+    "RouterLimitKind",
+    "RouterLimits",
     "Scalar",
     "ScalarItem",
     "Strict",
     "Stringified",
     "Usage",
+    "UsageMember",
     "UsageRecord",
     "ZeroCost",
     "coerce_record",

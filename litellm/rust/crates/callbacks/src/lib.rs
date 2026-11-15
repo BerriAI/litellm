@@ -7,6 +7,7 @@ mod input;
 mod manifest;
 mod payload;
 mod record;
+mod router;
 mod scalar;
 mod verdict;
 
@@ -28,8 +29,10 @@ pub use record::{
     AgentPolicy, AttemptTiming, BudgetPlan, BudgetPlanCounter, BudgetReservation, Cost, Deployment,
     EstimatedOutputTokens, GuardrailEntry, InputSequenceLength, KeyIdentity, KeyLimits,
     LimiterRequest, LoggedKeyIdentity, LoggedModelGroup, LoggedRequest, McpToolCall, MetadataKind,
-    MetadataLabel, ModelInfo, Moment, Outcome, OutputCap, RateLimitState, RateLimitStatus,
-    RateLimitStatuses, ReservationEntry, Usage, UsageRecord, ZeroCost,
+    MetadataLabel, ModelInfo, Moment, Outcome, OutputCap, PrometheusSettings, RateLimitState,
+    RateLimitStatus, RateLimitStatuses, ReservationEntry, RouterGroupLimits, RouterLimit,
+    RouterLimitKind, RouterLimits, Usage, UsageMember, UsageRecord, ZeroCost,
 };
+pub use router::{RemainingUsage, RouterReadError, RouterRef, RouterUsage, UsageAmount};
 pub use scalar::Scalar;
 pub use verdict::{Abort, AbortError, Patch, PatchOp, Verdict};

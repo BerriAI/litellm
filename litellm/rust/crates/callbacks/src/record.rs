@@ -383,6 +383,68 @@ pub struct McpToolCall {
     pub server_name: Option<Scalar>,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct PrometheusSettings {
+    pub emit_stream_label: bool,
+    pub custom_tags: Vec<String>,
+    pub disable_end_user_cost_tracking: bool,
+    pub end_user_prometheus_only: bool,
+    pub end_user_max_series: Option<i64>,
+    pub end_user_ttl_seconds: Option<f64>,
+    pub end_user_cleanup_interval_seconds: Option<f64>,
+}
+
+/// What a router limit is in Python: an `int` (a `bool` counts as one) by its decimal digits, a
+/// `float` by its `repr`, or anything else by its type name, which subtracting raises on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RouterLimitKind {
+    Int,
+    Float,
+    Other,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RouterLimit {
+    pub kind: RouterLimitKind,
+    pub text: String,
+}
+
+/// The group's limits as `ModelGroupInfo` resolves them.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct RouterGroupLimits {
+    pub tpm: Option<RouterLimit>,
+    pub rpm: Option<RouterLimit>,
+    pub itpm: Option<RouterLimit>,
+    pub otpm: Option<RouterLimit>,
+}
+
+/// One deployment a usage counter is keyed by. `None` is a value that is not a `str`, which the
+/// usage store refuses as Python's read did.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct UsageMember {
+    pub deployment_id: Option<String>,
+    pub model: Option<String>,
+}
+
+/// The group's limits and the deployments its counters are keyed by, resolved in Python;
+/// `members` is `None` when no deployment matches, `io_members` when the model list is `None`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct RouterLimits {
+    pub rejected: Option<Vec<String>>,
+    pub limits: Option<RouterGroupLimits>,
+    pub members: Option<Vec<UsageMember>>,
+    pub io_members: Option<Vec<UsageMember>>,
+    pub reset: Option<i64>,
+    pub error_type: Option<String>,
+    pub error_text: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use rstest::rstest;
@@ -427,6 +489,10 @@ mod tests {
             Field::MetadataLabels => round_trip::<typed::MetadataLabels>(sample),
             Field::InputSequenceLength => round_trip::<typed::InputSequenceLength>(sample),
             Field::LimiterRequest => round_trip::<typed::LimiterRequest>(sample),
+            Field::PrometheusSettings => round_trip::<typed::PrometheusSettings>(sample),
+            Field::LoggedDeploymentLabels => round_trip::<typed::LoggedDeploymentLabels>(sample),
+            Field::LoggedWallClock => round_trip::<typed::LoggedWallClock>(sample),
+            Field::RouterLimits => round_trip::<typed::RouterLimits>(sample),
             other => panic!("{other:?} has no typed record sample"),
         }
     }
@@ -440,7 +506,7 @@ mod tests {
             assert_eq!(&decoded(field, sample), sample, "{name}");
         }
         let typed: Vec<&str> = samples.keys().map(String::as_str).collect();
-        assert_eq!(typed.len(), 23);
+        assert_eq!(typed.len(), 27);
     }
 
     #[rstest]

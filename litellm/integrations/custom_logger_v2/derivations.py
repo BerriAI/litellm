@@ -1,9 +1,11 @@
+import sys
 from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Final
 
-from pydantic import TypeAdapter
+from pydantic import JsonValue, TypeAdapter, ValidationError
 
+import litellm
 from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY, RESPONSES_WEBSOCKET_CALL_ID_METADATA_KEY
 from litellm.integrations.custom_logger_v2.enums import Field
 from litellm.integrations.custom_logger_v2.field_sources import FieldSource, HookArgs, derived, mapped
@@ -27,11 +29,15 @@ from litellm.types.integrations.custom_logger_v2 import (
     MetadataKind,
     MetadataLabel,
     ModelInfo,
+    Moment,
+    MomentInput,
     Outcome,
     OutputCap,
+    PrometheusSettings,
     RateLimitState,
     RateLimitStatuses,
     ReservationEntry,
+    RouterLimits,
     ScalarItem,
     Stringified,
     Usage,
@@ -46,6 +52,10 @@ _TAGS: Final[TypeAdapter[tuple[str | int | float | bool | Stringified | None, ..
 )
 _DERIVED_RESERVATION_MEMBERS: Final = frozenset({"rejected", "entries_is_list", "not_a_mapping"})
 _LIMITER_HEADER_PREFIX: Final = "x-ratelimit-"
+_PROMETHEUS_SETTINGS: Final = TypeAdapter(PrometheusSettings)
+_WALL_CLOCK: Final[TypeAdapter[Moment]] = TypeAdapter(MomentInput)
+_PAYLOAD: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
+_DEPLOYMENT_LABEL_KEYS: Final = ("model_group", "model_id", "api_base", "custom_llm_provider")
 
 
 def member(source: object, name: str) -> object:
@@ -585,7 +595,11 @@ def rate_limit_state(args: HookArgs) -> RateLimitState | None:
             else _metadata_value(metadata, f"litellm-key-remaining-tokens-{group}"),
             "limiter_headers": None
             if header_map is None
-            else {key: value for key, value in header_map.items() if key.startswith(_LIMITER_HEADER_PREFIX)},
+            else {
+                key: value
+                for key, value in header_map.items()
+                if isinstance(key, str) and key.startswith(_LIMITER_HEADER_PREFIX)
+            },
             "provider_remaining_requests": member(header_map, "x_ratelimit_remaining_requests"),
             "provider_remaining_tokens": member(header_map, "x_ratelimit_remaining_tokens"),
             "hidden_params_present": isinstance(hidden, Mapping),
@@ -655,11 +669,75 @@ def input_sequence_length(args: HookArgs) -> InputSequenceLength | None:
     return InputSequenceLength(bucket=bucket)
 
 
+def current_prometheus_settings() -> Mapping[str, object]:
+    return {
+        "emit_stream_label": litellm.prometheus_emit_stream_label is True,
+        "custom_tags": list(litellm.custom_prometheus_tags or ()),
+        "disable_end_user_cost_tracking": bool(litellm.disable_end_user_cost_tracking),
+        "end_user_prometheus_only": litellm.enable_end_user_cost_tracking_prometheus_only is True,
+        "end_user_max_series": litellm.prometheus_end_user_metrics_max_series_per_metric,
+        "end_user_ttl_seconds": litellm.prometheus_end_user_metrics_ttl_seconds,
+        "end_user_cleanup_interval_seconds": litellm.prometheus_end_user_metrics_cleanup_interval_seconds,
+    }
+
+
+def prometheus_settings(_args: HookArgs) -> PrometheusSettings | None:
+    return coerce_value(PrometheusSettings.__name__, _PROMETHEUS_SETTINGS, current_prometheus_settings())
+
+
+def _payload_or_empty(value: object) -> Mapping[str, object]:
+    try:
+        return _PAYLOAD.validate_python(value)
+    except ValidationError:
+        return {}
+
+
+def logged_deployment_labels(args: HookArgs) -> Mapping[str, object]:
+    from litellm.integrations.prometheus_helpers.native_store import json_safe
+
+    payload: Final = _payload_or_empty(member(args.request, "standard_logging_object"))
+    excluded: Final = litellm.standard_logging_payload_excluded_fields or ()
+    kept: Final = tuple(key for key in _DEPLOYMENT_LABEL_KEYS if key not in excluded)
+    return {key: json_safe(payload[key]) for key in kept if key in payload}
+
+
+def logged_wall_clock(_args: HookArgs) -> Moment | None:
+    from litellm.integrations.prometheus import wall_clock
+
+    return coerce_value(Moment.__name__, _WALL_CLOCK, wall_clock())
+
+
 def payload_copy(
     args: HookArgs,
 ) -> dict[str, object] | None:  # mutable-ok: the shallow copy handed to Rust by reference
     payload: Final = payload_of(args)
     return None if payload is None else dict(payload)
+
+
+def router_ref(_args: HookArgs) -> object:
+    llm_router: Final[object] = getattr(sys.modules.get("litellm.proxy.proxy_server"), "llm_router", None)
+    if llm_router is None:
+        return None
+    from litellm.router_rust.core import remaining_usage_ref
+
+    return remaining_usage_ref(llm_router)
+
+
+def router_limits(args: HookArgs) -> RouterLimits | None:
+    """What the router reference's read of the logged model group needs from Python, as Prometheus
+    reads it: ``None`` with no Rust router or a model group that is not a ``str``, and what resolving
+    the limits raised as its error."""
+    payload: Final = payload_of(args)
+    model_group: Final[object] = None if payload is None else payload.get("model_group")
+    llm_router: Final[object] = getattr(sys.modules.get("litellm.proxy.proxy_server"), "llm_router", None)
+    if llm_router is None or type(model_group) is not str:
+        return None
+    from litellm.router_rust.core import router_limits_of
+
+    try:
+        return router_limits_of(llm_router, model_group)
+    except Exception as error:  # noqa: BLE001  # the port carries what the read raised, as prometheus logs it
+        return RouterLimits(error_type=type(error).__name__, error_text=str(error))
 
 
 RECORD_TYPES: Final[Mapping[Field, object]] = MappingProxyType(
@@ -687,6 +765,10 @@ RECORD_TYPES: Final[Mapping[Field, object]] = MappingProxyType(
         Field.metadata_labels: tuple[MetadataLabel, ...],
         Field.input_sequence_length: InputSequenceLength,
         Field.limiter_request: LimiterRequest,
+        Field.prometheus_settings: PrometheusSettings,
+        Field.logged_deployment_labels: Mapping[str, JsonValue],
+        Field.logged_wall_clock: MomentInput,
+        Field.router_limits: RouterLimits,
     }
 )
 
@@ -714,6 +796,11 @@ DERIVED_ATTEMPT_FIELDS: Final[Mapping[Field, FieldSource]] = MappingProxyType(
         Field.outcome: derived(outcome),
         Field.standard_logging_payload_ref: derived(payload_copy),
         Field.input_sequence_length: derived(input_sequence_length),
+        Field.prometheus_settings: derived(prometheus_settings),
+        Field.logged_deployment_labels: derived(logged_deployment_labels),
+        Field.router_ref: derived(router_ref),
+        Field.logged_wall_clock: derived(logged_wall_clock),
+        Field.router_limits: derived(router_limits),
     }
 )
 DERIVED_AUTH_FIELDS: Final[Mapping[Field, FieldSource]] = MappingProxyType({Field.key_identity: derived(key_identity)})
@@ -757,15 +844,18 @@ __all__ = [
     "claim_budget_plan",
     "combined_usage",
     "cost",
+    "current_prometheus_settings",
     "deployment",
     "guardrail_info",
     "input_sequence_length",
     "key_identity",
     "key_limits",
     "log_id",
+    "logged_deployment_labels",
     "logged_key_identity",
     "logged_model_group",
     "logged_request",
+    "logged_wall_clock",
     "mapping",
     "mcp_tool_call",
     "member",
@@ -773,8 +863,11 @@ __all__ = [
     "model_group",
     "payload_copy",
     "payload_of",
+    "prometheus_settings",
     "rate_limit_state",
     "request_tags",
+    "router_limits",
+    "router_ref",
     "usage",
     "usage_record",
     "write_budget_reservation",
