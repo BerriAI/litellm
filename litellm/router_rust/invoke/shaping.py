@@ -407,10 +407,10 @@ def _selected_pricing_snapshot(deployment: Mapping[str, object]) -> Mapping[str,
 
 def _without_stale_pricing_snapshot(kwargs: Mapping[str, object], bucket: str) -> Mapping[str, object]:
     """The other metadata bucket without a snapshot an earlier attempt left there, else nothing to change."""
-    stale: Final = kwargs.get(bucket)
-    if not isinstance(stale, Mapping) or PRICING_SNAPSHOT not in stale:
+    stale: Final = as_dict(kwargs.get(bucket))
+    if PRICING_SNAPSHOT not in stale:
         return MappingProxyType({})
-    return MappingProxyType({bucket: {key: value for key, value in as_dict(stale).items() if key != PRICING_SNAPSHOT}})
+    return MappingProxyType({bucket: {key: value for key, value in stale.items() if key != PRICING_SNAPSHOT}})
 
 
 def update_kwargs_with_deployment(

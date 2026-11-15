@@ -200,7 +200,7 @@ def _converted_price(field: str, value: object, rate: Decimal) -> object | Prici
             return _converted_video_clips(field, value, rate)
         case "search_context_cost_per_query":
             return _converted_rates(field, value, rate, _SEARCH_CONTEXT_RATE_KEYS, frozenset())
-        case "search_queries_cost_per_query" if isinstance(value, Mapping):
+        case "search_queries_cost_per_query" if _str_mapping(value) is not None:
             return _converted_rates(field, value, rate, _SEARCH_CONTEXT_RATE_KEYS, frozenset())
         case _:
             return _usd(field, value, rate)
