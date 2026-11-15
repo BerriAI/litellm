@@ -2421,7 +2421,6 @@ def test_v2_model_info_access_group_paginates_over_the_filtered_set(client, auth
     assert payload["total_pages"] == 2
 
 
-
 def test_model_info_reads_a_currency_priced_row_back_as_configured_with_its_usd_rates_beside_it() -> None:
     from litellm.types.router import Deployment
 

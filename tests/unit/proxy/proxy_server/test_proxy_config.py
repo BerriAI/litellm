@@ -6508,8 +6508,8 @@ async def test_proxy_config_validates_advertised_mcp_versions_at_load(tmp_path, 
         await ProxyConfig().load_config(router=None, config_file_path=str(config))
 
 
-def test_a_config_currency_the_deployment_build_would_reject_fails_startup_naming_the_model():
-    model = {
+def test_a_config_currency_the_deployment_build_would_reject_fails_startup_naming_the_model() -> None:
+    model: Final = {
         "model_name": "eur-model",
         "litellm_params": {"model": "openai/eur", "pricing_currency": "EUR", "input_cost_per_token": 1e-6},
     }
@@ -6520,8 +6520,8 @@ def test_a_config_currency_the_deployment_build_would_reject_fails_startup_namin
     assert "eur-model" in str(exc_info.value)
 
 
-def test_a_currency_record_planted_in_a_config_file_is_dropped_and_configured_prices_kept():
-    model = {
+def test_a_currency_record_planted_in_a_config_file_is_dropped_and_configured_prices_kept() -> None:
+    model: Final = {
         "model_name": "huf-model",
         "litellm_params": {"model": "openai/huf"},
         "model_info": {
