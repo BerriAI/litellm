@@ -6,6 +6,7 @@ import os
 import time
 from datetime import datetime, timezone
 from types import SimpleNamespace
+from collections.abc import Mapping
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -9514,6 +9515,9 @@ async def test_add_litellm_data_to_request_strips_router_reserved_stamps_despite
 
 
 def _eur_rates() -> ReferenceRateLookup:
+    def now() -> datetime:
+        return datetime(2026, 11, 13, 16, tzinfo=timezone.utc)
+
     async def fetch() -> bytes:
         return (
             "<gesmes:Envelope xmlns:gesmes='http://www.gesmes.org/xml/2002-08-01'"
@@ -9521,7 +9525,7 @@ def _eur_rates() -> ReferenceRateLookup:
             "<Cube currency='USD' rate='1.25'/></Cube></Cube></gesmes:Envelope>"
         ).encode()
 
-    return ReferenceRateLookup(EcbReferenceRates(clock=lambda: datetime(2026, 11, 13, 16, tzinfo=timezone.utc)), fetch)
+    return ReferenceRateLookup(EcbReferenceRates(clock=now), fetch)
 
 
 @pytest.mark.parametrize(
@@ -9544,14 +9548,15 @@ def _eur_rates() -> ReferenceRateLookup:
 )
 @pytest.mark.asyncio
 async def test_add_litellm_data_to_request_prices_chat_completions_in_usd_only_for_trusted_keys(
-    key_metadata: dict, body: dict, expected: dict
+    key_metadata: Mapping[str, object], body: Mapping[str, object], expected: Mapping[str, float]
 ) -> None:
     from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
 
-    updated = await add_litellm_data_to_request(
-        data={"model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}], **body},
+    data: Final[dict[str, object]] = {"model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}], **body}
+    updated: Final[Mapping[str, object]] = await add_litellm_data_to_request(
+        data=data,
         request=_reserved_stamp_request("/v1/chat/completions"),
-        user_api_key_dict=_reserved_stamp_key(key_metadata),
+        user_api_key_dict=_reserved_stamp_key(dict(key_metadata)),
         proxy_config=MagicMock(),
         general_settings={},
         version="test-version",
@@ -9568,14 +9573,15 @@ async def test_add_litellm_data_to_request_prices_chat_completions_in_usd_only_f
 async def test_add_litellm_data_to_request_rejects_pricing_currency_outside_chat_completions() -> None:
     from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
 
+    data: Final[dict[str, object]] = {
+        "model": "text-embedding-3-small",
+        "input": "hi",
+        "pricing_currency": "EUR",
+        "input_cost_per_token": 0.5,
+    }
     with pytest.raises(ProxyException) as rejected:
         await add_litellm_data_to_request(
-            data={
-                "model": "text-embedding-3-small",
-                "input": "hi",
-                "pricing_currency": "EUR",
-                "input_cost_per_token": 0.5,
-            },
+            data=data,
             request=_reserved_stamp_request("/v1/embeddings"),
             user_api_key_dict=_reserved_stamp_key({"allow_client_pricing_override": True}),
             proxy_config=MagicMock(),
@@ -11970,7 +11976,10 @@ def test_pre_call_served_model_applies_aliases_in_request_preparation_order(
 def test_request_served_model_ignores_a_malformed_alias_like_request_preparation_does(
     token_fields: dict[str, object], expected: str
 ) -> None:
-    from litellm.proxy.litellm_pre_call_utils import _update_model_if_key_alias_exists, _update_model_if_team_alias_exists
+    from litellm.proxy.litellm_pre_call_utils import (
+        _update_model_if_key_alias_exists,
+        _update_model_if_team_alias_exists,
+    )
     from litellm.proxy.litellm_pre_call_utils import request_served_model
 
     valid_token: Final = UserAPIKeyAuth(**token_fields)

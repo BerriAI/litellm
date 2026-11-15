@@ -194,8 +194,53 @@ async def test_held_rates_answer_without_waiting_for_a_due_refresh() -> None:
         while_refreshing: Final = await asyncio.wait_for(usd_request_prices(body, CHAT, lookup), DEADLOCK_GUARD_SECONDS)
     finally:
         feed.release.set()
-    await asyncio.wait_for(feed.served.wait(), DEADLOCK_GUARD_SECONDS)
+        await asyncio.wait_for(feed.served.wait(), DEADLOCK_GUARD_SECONDS)
     after_refresh: Final = await usd_request_prices(body, CHAT, lookup)
 
     assert first == while_refreshing == {"input_cost_per_token": 0.625}
     assert after_refresh == {"input_cost_per_token": 1.0}
+
+
+async def test_stale_rates_with_a_failed_refresh_are_rejected_not_used() -> None:
+    clock: Final = _Clock(datetime(2026, 11, 13, 16, tzinfo=timezone.utc))
+    lookup: Final = _lookup(_Feed(_feed(), EcbFetchFailed("HTTP 503")), clock)
+    body: Final = {"pricing_currency": "EUR", "input_cost_per_token": 0.5}
+    assert await usd_request_prices(body, CHAT, lookup) == {"input_cost_per_token": 0.625}
+    clock.now = datetime(2026, 11, 21, 16, tzinfo=timezone.utc)
+
+    result: Final = await asyncio.wait_for(usd_request_prices(body, CHAT, lookup), DEADLOCK_GUARD_SECONDS)
+
+    assert result == PricingCurrencyRejected(f"ECB reference rates dated {DAY} are too old to convert prices", 503)
+
+
+async def test_failed_background_refresh_keeps_the_fresh_held_rates() -> None:
+    clock: Final = _Clock(datetime(2026, 11, 13, 16, tzinfo=timezone.utc))
+    rates: Final = EcbReferenceRates(clock=clock)
+    feed: Final = _Feed(_feed(), EcbFetchFailed("HTTP 503"))
+    lookup: Final = ReferenceRateLookup(rates, feed)
+    body: Final = {"pricing_currency": "EUR", "input_cost_per_token": 0.5}
+    assert await usd_request_prices(body, CHAT, lookup) == {"input_cost_per_token": 0.625}
+    feed.served.clear()
+    clock.now = datetime(2026, 11, 14, 16, tzinfo=timezone.utc)
+
+    try:
+        during: Final = await usd_request_prices(body, CHAT, lookup)
+    finally:
+        await asyncio.wait_for(feed.served.wait(), DEADLOCK_GUARD_SECONDS)
+
+    assert during == {"input_cost_per_token": 0.625}
+    assert rates.usd_per_unit("EUR") == UsdRate(currency="EUR", usd_per_unit=1.25, rate_date=DAY, source="ecb")
+    assert rates.refresh_due()
+
+
+async def test_a_refresh_that_raises_rejects_the_request_instead_of_failing_it() -> None:
+    async def raising_fetch() -> bytes | EcbFetchFailed:
+        raise RuntimeError("transport bug")
+
+    lookup: Final = ReferenceRateLookup(
+        EcbReferenceRates(clock=_Clock(datetime(2026, 11, 13, 16, tzinfo=timezone.utc))), raising_fetch
+    )
+
+    result: Final = await usd_request_prices({"pricing_currency": "EUR", "input_cost_per_token": 0.5}, CHAT, lookup)
+
+    assert result == PricingCurrencyRejected("ECB reference rates are unavailable, retry later", 503)
