@@ -44,11 +44,13 @@ from litellm.constants import (
     AZURE_SPEECH_STT_DOMAIN,
     AZURE_SPEECH_SUBSCRIPTION_KEY_HEADER,
     BEDROCK_AGENT_RUNTIME_PASS_THROUGH_ROUTES,
+    PASS_THROUGH_HEADER_PREFIX,
     TYPESAFE_DANGER_ZONE_HEADER_PREFIX,
 )
 from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
 from litellm.integrations.custom_guardrail import guardrail_request_data_with_streaming, is_guardrail_intervention
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
+from litellm.litellm_core_utils.get_provider_specific_headers import override_headers
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo, merge_anthropic_beta_headers
 from litellm.llms.azure.passthrough.transformation import (
     foreign_azure_deployment,
@@ -972,6 +974,9 @@ async def anthropic_proxy_route(
         target=str(updated_url),
         custom_headers=_upstream_headers_for_anthropic_route(request, user_api_key_dict, auth_header),
         is_streaming_request=is_streaming_request,
+        upstream_request_filter=partial(
+            _with_pinned_profile, {} if auth_header is None else _pinned_profile_header(user_api_key_dict)
+        ),
     )  # dynamically construct pass-through endpoint based on incoming path
     received_value: Final = await endpoint_func(
         request,
@@ -2219,7 +2224,7 @@ async def _relay_router_model(
             method=request.method,
             endpoint=endpoint,
             request_query_params=request.query_params,
-            request_headers=safe_get_request_headers(request),
+            request_headers=dict(_relay_request_headers(request, user_api_key_dict)),
             stream=is_streaming_request,
             content=None,
             data=None,
@@ -2867,9 +2872,7 @@ def _upstream_headers_for_anthropic_route(
         if caller_beta and credential_beta
         else {}
     )
-    return MappingProxyType(
-        {**forwarded, **proxy_auth_header, **merged_beta, **_pinned_profile_header(user_api_key_dict)}
-    )
+    return MappingProxyType({**forwarded, **proxy_auth_header, **merged_beta})
 
 
 def _pinned_profile_header(user_api_key_dict: UserAPIKeyAuth) -> Mapping[str, str]:
@@ -2877,6 +2880,37 @@ def _pinned_profile_header(user_api_key_dict: UserAPIKeyAuth) -> Mapping[str, st
 
     pinned: Final = pinned_anthropic_user_profile_id(user_api_key_dict)
     return {ANTHROPIC_USER_PROFILE_ID_HEADER: pinned} if pinned else {}
+
+
+def _with_pinned_profile(
+    pinned_profile: Mapping[str, str],
+    headers: Mapping[str, str],
+    body: Mapping[str, object] | None,
+    litellm_params: Mapping[str, object],
+) -> UpstreamRequest:
+    return override_headers(headers, pinned_profile), body
+
+
+def _vertex_upstream_request(
+    placement: VertexLabelPlacement | None,
+    pinned_profile: Mapping[str, str],
+    headers: Mapping[str, str],
+    body: Mapping[str, object] | None,
+    litellm_params: Mapping[str, object],
+) -> UpstreamRequest:
+    labelled_headers, labelled_body = _with_vertex_request_labels(placement, headers, body, litellm_params)
+    return override_headers(labelled_headers, pinned_profile), labelled_body
+
+
+def _relay_request_headers(request: Request, user_api_key_dict: UserAPIKeyAuth) -> Mapping[str, str]:
+    from litellm.proxy.litellm_pre_call_utils import pinned_anthropic_user_profile_id
+
+    if pinned_anthropic_user_profile_id(user_api_key_dict) is None:
+        return request.headers
+    pass_through_profile_header: Final = PASS_THROUGH_HEADER_PREFIX + ANTHROPIC_USER_PROFILE_ID_HEADER
+    return MappingProxyType(
+        {name: value for name, value in dict(request.headers).items() if name != pass_through_profile_header}
+    )
 
 
 def _upstream_headers_for_bedrock_agent_runtime_route(
@@ -3112,7 +3146,9 @@ async def _base_vertex_proxy_route(
         custom_headers=_upstream_headers_for_vertex_route(endpoint, headers),
         is_streaming_request=is_streaming_request,
         upstream_request_filter=partial(
-            _with_vertex_request_labels, _vertex_label_placement(request.method, updated_url.path)
+            _vertex_upstream_request,
+            _vertex_label_placement(request.method, updated_url.path),
+            {} if headers_passed_through else _pinned_profile_header(user_api_key_dict),
         ),
     )  # dynamically construct pass-through endpoint based on incoming path
 

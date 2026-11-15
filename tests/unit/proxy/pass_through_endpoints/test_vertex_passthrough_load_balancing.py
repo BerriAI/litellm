@@ -83,7 +83,7 @@ async def test_vertex_passthrough_load_balancing():
 
         mock_endpoint_func = AsyncMock()
         mock_create_route.return_value = mock_endpoint_func
-        mock_auth.return_value = {}
+        mock_auth.return_value = UserAPIKeyAuth()
 
         # Execute
         await _base_vertex_proxy_route(
@@ -736,7 +736,7 @@ async def test_vertex_passthrough_custom_model_name_replaced_in_url():
         )
         mock_endpoint_func = AsyncMock()
         mock_create_route.return_value = mock_endpoint_func
-        mock_auth.return_value = {}
+        mock_auth.return_value = UserAPIKeyAuth()
 
         mock_handler.get_default_base_target_url.return_value = (
             "https://global-aiplatform.googleapis.com"

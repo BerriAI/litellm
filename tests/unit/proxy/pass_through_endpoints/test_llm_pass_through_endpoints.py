@@ -339,7 +339,7 @@ class TestVertexAIPassThroughHandler:
             # Setup mocks
             mock_load_auth.return_value = (mock_credentials, test_project)
             mock_get_virtual_key.return_value = "Bearer test-key"
-            mock_user_auth.return_value = {"api_key": "test-key"}
+            mock_user_auth.return_value = UserAPIKeyAuth(api_key="test-key")
 
             # Mock the vertex handler
             mock_handler = Mock()
@@ -358,7 +358,7 @@ class TestVertexAIPassThroughHandler:
                     endpoint=endpoint,
                     request=mock_request,
                     fastapi_response=mock_response,
-                    user_api_key_dict={"api_key": "test-key"},
+                    user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
                 )
             except Exception as e:
                 print(f"Error: {e}")
@@ -441,7 +441,7 @@ class TestVertexAIPassThroughHandler:
             # Setup mocks
             mock_load_auth.return_value = (mock_credentials, test_project)
             mock_get_virtual_key.return_value = "Bearer test-key"
-            mock_user_auth.return_value = {"api_key": "test-key"}
+            mock_user_auth.return_value = UserAPIKeyAuth(api_key="test-key")
 
             # Mock the vertex handler for global location
             mock_handler = Mock()
@@ -458,7 +458,7 @@ class TestVertexAIPassThroughHandler:
                     endpoint=endpoint,
                     request=mock_request,
                     fastapi_response=mock_response,
-                    user_api_key_dict={"api_key": "test-key"},
+                    user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
                 )
             except Exception as e:
                 print(f"Error: {e}")
@@ -1265,7 +1265,7 @@ class TestVertexAIDiscoveryPassThroughHandler:
             # Setup mocks
             mock_load_auth.return_value = (mock_credentials, test_project)
             mock_get_virtual_key.return_value = "Bearer test-key"
-            mock_user_auth.return_value = {"api_key": "test-key"}
+            mock_user_auth.return_value = UserAPIKeyAuth(api_key="test-key")
 
             # Mock the discovery handler
             mock_handler = Mock()
@@ -6597,9 +6597,10 @@ class TestAnthropicProxyRouteCallerAuthHeaders:
         [
             ({"anthropic_user_profile_id": "uprof_key"}, {"anthropic_user_profile_id": "uprof_team"}, "uprof_key"),
             ({}, {"anthropic_user_profile_id": "uprof_team"}, "uprof_team"),
+            ({"anthropic_user_profile_id": ""}, {"anthropic_user_profile_id": "uprof_team"}, "uprof_team"),
             ({}, {}, "uprof_caller"),
         ],
-        ids=["key_pin", "team_pin", "no_pin"],
+        ids=["key_pin", "team_pin", "empty_key_pin", "no_pin"],
     )
     async def test_server_credential_sends_the_pinned_user_profile_id_over_the_callers(
         self, monkeypatch, metadata: Mapping[str, str], team_metadata: Mapping[str, str], sent_profile_id: str
@@ -6624,6 +6625,84 @@ class TestAnthropicProxyRouteCallerAuthHeaders:
         )
 
         assert sent["anthropic-user-profile-id"] == "uprof_caller"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "metadata,sent_profile_id",
+        [({"anthropic_user_profile_id": "uprof_key"}, "uprof_key"), ({}, "uprof_forwarded")],
+        ids=["key_pin", "no_pin"],
+    )
+    async def test_server_credential_pin_wins_over_an_x_pass_user_profile_id(
+        self, monkeypatch, metadata: Mapping[str, str], sent_profile_id: str
+    ):
+        self._clear_anthropic_env(monkeypatch)
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-server-owned")
+
+        sent: Final = await self._upstream_headers(
+            self._request({"content-type": "application/json", "x-pass-anthropic-user-profile-id": "uprof_forwarded"}),
+            UserAPIKeyAuth(api_key="sk-caller-virtual-key", metadata=dict(metadata)),
+        )
+
+        assert sent["anthropic-user-profile-id"] == sent_profile_id
+
+
+class TestRouterModelRelayUnderAUserProfilePin:
+    def _request(self) -> Request:
+        async def receive() -> dict:
+            return {"type": "http.request", "body": b'{"model":"gpt-5"}', "more_body": False}
+
+        return Request(
+            {
+                "type": "http",
+                "method": "POST",
+                "path": "/azure/openai/deployments/gpt-5/chat/completions",
+                "query_string": b"",
+                "headers": [
+                    (b"content-type", b"application/json"),
+                    (b"x-pass-anthropic-user-profile-id", b"uprof_forwarded"),
+                ],
+            },
+            receive,
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "metadata,forwarded_profile_id",
+        [({"anthropic_user_profile_id": "uprof_key"}, None), ({}, "uprof_forwarded")],
+        ids=["key_pin", "no_pin"],
+    )
+    async def test_a_pinned_key_cannot_forward_its_own_user_profile_id_to_a_router_model(
+        self, monkeypatch, metadata: Mapping[str, str], forwarded_profile_id: str | None
+    ):
+        import litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints as ep
+        import litellm.proxy.proxy_server as proxy_server
+
+        captured: Final[list[Mapping[str, object]]] = []
+
+        class RecordingRouter:
+            async def allm_passthrough_route(self, **kwargs: object) -> httpx.Response:
+                captured.append(kwargs)
+                return httpx.Response(200, json={"ok": True})
+
+        monkeypatch.setattr(proxy_server, "llm_router", RecordingRouter())
+        monkeypatch.setattr(
+            ep,
+            "is_passthrough_request_using_router_model",
+            lambda request_body, llm_router=None: request_body.get("model") == "gpt-5",
+        )
+
+        await azure_proxy_route(
+            endpoint="openai/deployments/gpt-5/chat/completions",
+            request=self._request(),
+            fastapi_response=MagicMock(spec=Response),
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-caller-virtual-key", metadata=dict(metadata)),
+        )
+
+        assert len(captured) == 1
+        request_headers: Final = captured[0]["request_headers"]
+        assert isinstance(request_headers, Mapping)
+        assert request_headers.get("x-pass-anthropic-user-profile-id") == forwarded_profile_id
+        assert request_headers["content-type"] == "application/json"
 
 
 class TestPassthroughRouterModelBudgetReservation:

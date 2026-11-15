@@ -599,6 +599,71 @@ def test_vertex_claude_pass_through_forwards_the_callers_labels_header_with_the_
     assert upstream.calls.last.request.headers.get_list("x-vertex-ai-labels") == [forged_header]
 
 
+_VERTEX_PINNED_PROFILE: Final = {"anthropic_user_profile_id": "uprof_key"}
+
+
+@pytest.mark.parametrize(
+    ("metadata", "model_path", "caller_headers", "profile_header", "sent_profile_id"),
+    [
+        pytest.param({}, _VERTEX_DEPLOYMENT_PATH, {}, "anthropic-user-profile-id", "uprof_caller", id="no-pin"),
+        pytest.param(
+            _VERTEX_PINNED_PROFILE,
+            _VERTEX_DEPLOYMENT_PATH,
+            {},
+            "anthropic-user-profile-id",
+            "uprof_key",
+            id="pin-over-the-callers-header",
+        ),
+        pytest.param(
+            _VERTEX_PINNED_PROFILE,
+            _VERTEX_DEPLOYMENT_PATH,
+            {},
+            "x-pass-anthropic-user-profile-id",
+            "uprof_key",
+            id="pin-over-the-callers-x-pass-header",
+        ),
+        pytest.param(
+            _VERTEX_PINNED_PROFILE,
+            _VERTEX_CALLER_PATH,
+            {"Authorization": f"Bearer {_VERTEX_CALLER_GOOGLE_TOKEN}"},
+            "anthropic-user-profile-id",
+            "uprof_caller",
+            id="caller-credentials-keep-their-own-id",
+        ),
+    ],
+)
+def test_vertex_pass_through_sends_the_pinned_user_profile_id_or_the_callers(
+    vertex_proxy: TestClient,
+    respx_mock: "respx.MockRouter",
+    monkeypatch: pytest.MonkeyPatch,
+    metadata: Mapping[str, str],
+    model_path: str,
+    caller_headers: dict[str, str],
+    profile_header: str,
+    sent_profile_id: str,
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    async def authenticate(request: object, api_key: str) -> UserAPIKeyAuth:
+        return UserAPIKeyAuth(api_key=api_key, metadata=dict(metadata))
+
+    monkeypatch.setattr(proxy_server, "user_custom_auth", authenticate)
+    upstream: Final = respx_mock.post(f"https://aiplatform.googleapis.com/{model_path}").mock(
+        return_value=httpx.Response(200, json=_VERTEX_CLAUDE_REPLY)
+    )
+
+    response: Final = vertex_proxy.post(
+        f"/vertex_ai/{model_path}",
+        json=_VERTEX_CLAUDE_BODY,
+        headers={"x-litellm-api-key": "sk-caller", profile_header: "uprof_caller", **caller_headers},
+    )
+
+    assert (response.status_code, response.json()) == (200, _VERTEX_CLAUDE_REPLY)
+    assert upstream.calls.last.request.headers["anthropic-user-profile-id"] == sent_profile_id
+
+
+
 @pytest.mark.usefixtures("search_team_caller")
 def test_vertex_mistral_pass_through_moves_body_labels_into_the_labels_header(
     vertex_proxy: TestClient, respx_mock: "respx.MockRouter", monkeypatch: pytest.MonkeyPatch

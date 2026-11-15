@@ -1687,6 +1687,7 @@ BEDROCK_AGENT_RUNTIME_PASS_THROUGH_ROUTES: Final = [
 ALLOWED_VERTEX_AI_PASSTHROUGH_HEADERS: Final = {
     "anthropic-beta",  # Required for Anthropic features like extended context windows
     "content-type",  # Required for request body parsing
+    "anthropic-user-profile-id",
 }
 
 # Prefix for headers that should be forwarded to the provider with the prefix stripped
