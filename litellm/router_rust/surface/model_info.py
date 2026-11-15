@@ -86,8 +86,8 @@ if TYPE_CHECKING:
     from litellm.rust_bridge._native import (
         RouterCall,
         RouterCoreHandle,
-        RouterRemainingReads,
         _ModelInfoSteps,  # pyright: ignore[reportPrivateUsage]  # the stub's step shapes
+        _RouterRemainingReads,  # pyright: ignore[reportPrivateUsage]  # the stub's read shape
     )
 
 _MODEL_INFO_ADAPTER: Final = TypeAdapter(Mapping[str, object])
@@ -242,7 +242,7 @@ def _remaining_reads(
     info: ModelGroupInfo | None,
     io_usage: tuple[int | None, int | None] | None,
     usage: tuple[int | None, int | None] | None,
-) -> "RouterRemainingReads":
+) -> "_RouterRemainingReads":
     limits: Final = None if info is None else (info.tpm, info.rpm, info.itpm, info.otpm)
     reset: Final = seconds_until_minute_reset() if info is not None and io_usage is not None else 0
     return limits, io_usage, usage, reset
@@ -912,7 +912,7 @@ class HostModelInfo:
             if model_id is not None and litellm_model is not None
         )
 
-    async def _core_remaining_usage_reads(self, model_group: str) -> "RouterRemainingReads":
+    async def _core_remaining_usage_reads(self, model_group: str) -> "_RouterRemainingReads":
         info: Final = self._cached_get_model_group_info(model_group)
         io_usage: Final = await self.get_model_group_io_token_usage(model_group) if _limits_io(info) else None
         usage: Final = await self._core_get_model_group_usage(model_group) if _limits_usage(info) else None

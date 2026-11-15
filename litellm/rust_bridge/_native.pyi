@@ -26,7 +26,7 @@ def unsupported_tls_settings(ssl_security_level: str | None = None, ssl_ecdh_cur
 
 _RouterLimit = int | float | None
 _RouterTotals = tuple[int | None, int | None]
-RouterRemainingReads = tuple[
+_RouterRemainingReads = tuple[
     tuple[_RouterLimit, _RouterLimit, _RouterLimit, _RouterLimit] | None,
     _RouterTotals | None,
     _RouterTotals | None,
@@ -39,7 +39,7 @@ class _RustRouterRef:
     def remaining(self, model_group: str, limits: Mapping[str, object]) -> Awaitable[dict[str, int]]: ...
 
 def router_usage_ref(store: NativeRouterUsage) -> _RustRouterRef: ...
-def router_remaining_usage(reads: RouterRemainingReads) -> dict[str, int]: ...
+def router_remaining_usage(reads: _RouterRemainingReads) -> dict[str, int]: ...
 def router_usage_totals(values: Sequence[object], tpm_count: int) -> _RouterTotals: ...
 
 @final
