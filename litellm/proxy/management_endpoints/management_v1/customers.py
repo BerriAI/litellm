@@ -471,7 +471,9 @@ async def get_customer_member(
 @router.patch(
     "/customer_members/{customer_member_id}",
     response_model=CustomerMember,
-    description="Update a customer member and its budgets. Proxy admins only.",
+    description="Update a customer member and its budgets. Supply parent_team_ids to replace its teams within the "
+    "same organization, with the first team as default. Identity, budget counters and historical usage are retained. "
+    "Historical usage stays attributed to the original team. Proxy admins only.",
 )
 @management_endpoint_wrapper
 async def update_customer_member(

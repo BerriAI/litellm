@@ -113,6 +113,36 @@ function BrowserNavigationProbe() {
 }
 
 describe("customer hierarchy management", () => {
+  it("moves a member through its row menu without editing budgets", async () => {
+    const user = userEvent.setup();
+    const moved = { ...member, parent_team_ids: ["team-b"] };
+    fetchMock.mockImplementation(async (input, init) => {
+      const url = requestUrl(input);
+      const method = input instanceof Request ? input.method : init?.method;
+      if (url.pathname === "/management/v1/customer_members/member-a" && method === "PATCH") return json(moved);
+      return serve(input);
+    });
+    const options = { searchParams: "?org=org-1&tab=members" };
+    renderWithProviders(<CustomerHierarchyManager />, options);
+    await user.click(await screen.findByRole("button", { name: "Actions for Member One" }));
+    await user.keyboard("{ArrowDown}");
+    await user.click(await screen.findByRole("menuitem", { name: "Move teams" }));
+    const dialog = screen.getByRole("dialog", { name: "Move teams" });
+    const teams = within(dialog).getByRole("combobox", { name: "Choose teams" });
+    await waitFor(() => expect(teams).toBeEnabled());
+    await user.click(teams);
+    await user.click(screen.getByRole("option", { name: /Operations/ }));
+    await user.click(screen.getByRole("option", { name: /Product/ }));
+    await user.keyboard("{Escape}");
+    await user.click(within(dialog).getByRole("button", { name: "Move teams" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    const write = fetchMock.mock.calls
+      .map(([input]) => input)
+      .find((input) => input instanceof Request && input.method === "PATCH");
+    expect(write).toBeInstanceOf(Request);
+    expect(await (write as Request).clone().json()).toEqual({ parent_team_ids: ["team-b"] });
+  });
+
   it("should preserve a draft on refresh and conflict, then reload and save the current configuration", async () => {
     const user = userEvent.setup();
     const standard = {
@@ -364,7 +394,9 @@ describe("customer hierarchy management", () => {
         .find((url) => url.pathname === "/management/v1/customer_members")
         ?.searchParams.get("parent_team_id"),
     ).toBe("team-a");
-    await user.click(within(members).getByRole("button", { name: "Edit Member One" }));
+    await user.click(within(members).getByRole("button", { name: "Actions for Member One" }));
+    await user.keyboard("{ArrowDown}");
+    await user.click(await screen.findByRole("menuitem", { name: "Settings" }));
     expect(await screen.findByRole("heading", { name: "Member One" })).toBeInTheDocument();
     expect(screen.getByText("Manage settings and budget for this customer member.")).toBeInTheDocument();
     const usage = screen.getByRole("link", { name: "Usage" });
