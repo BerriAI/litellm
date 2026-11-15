@@ -51,12 +51,13 @@ def test_status_code_zero_is_preserved():
 
 
 @pytest.mark.asyncio
-async def test_async_streaming_missing_credentials_is_not_a_server_error(monkeypatch):
+@pytest.mark.parametrize("stream", [False, True])
+async def test_async_missing_credentials_is_not_a_server_error(monkeypatch, stream):
     """
-    The helper alone is not enough: async_streaming's no-response branch used
-    to hard-code 500, discarding the status computed above it, so the same
-    missing-key error that maps to 400 on the non-streaming path surfaced as a
-    retryable 500 when stream=True. This exercises the full call path.
+    The helper alone is not enough. acompletion (stream=False) and async_streaming
+    (stream=True) each turn the SDK error into a status of their own, and
+    async_streaming's no-response branch used to hard-code 500, so either path can
+    report the missing key as a retryable 500. This exercises both full call paths.
     """
     import litellm
 
@@ -66,9 +67,9 @@ async def test_async_streaming_missing_credentials_is_not_a_server_error(monkeyp
 
     with pytest.raises(openai.OpenAIError) as exc_info:
         await litellm.acompletion(
-            model="gpt-4o-mini",
+            model="gpt-6-luna",
             messages=[{"role": "user", "content": "hi"}],
-            stream=True,
+            stream=stream,
         )
 
     assert getattr(exc_info.value, "status_code", None) == 400
