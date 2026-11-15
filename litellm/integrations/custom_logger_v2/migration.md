@@ -13,6 +13,12 @@ The Python proxy can use Rust components such as the router while it continues t
 
 For a callback that blocks outgoing content, include a test in which an earlier callback adds that content. Assert both that the request is rejected and that the provider receives zero calls. Keep the Python path available until the native path covers all the callbacks required by that request.
 
+## Map the callback to the native contract
+
+For a request filter, start with the `pre_call` entry in [the hook contract](https://github.com/BerriAI/litellm/blob/09ce4f50ed1298882747c6e279ea6760f1527384/litellm/rust/crates/callbacks/contract.json). In the port's manifest, declare the fields the Python filter actually inspects, such as `messages` for chat or `input` for input-based routes. A block-only port needs no field writes. Use the hook's `abort` outcome for a block and preserve the existing denial status and error body. If you later add masking, declare the fields you write and compare the provider-bound payload with the Python baseline.
+
+[Implement the Rust callback and wrap it with `rust_logger`](https://github.com/BerriAI/litellm/blob/09ce4f50ed1298882747c6e279ea6760f1527384/litellm/integrations/custom_logger_v2/README.md) when wiring the port into LiteLLM. Verify where it runs relative to callbacks that mutate content. Check registration and routing in the target build to establish whether the candidate runs and whether the gateway forwards the request to Python.
+
 ## Use the built-in content filter as a parity example
 
 Add the following to a test proxy config with a model named `demo` pointed at a local mock provider. Bind the proxy to localhost and use only synthetic inputs.
@@ -43,6 +49,6 @@ curl -i http://localhost:4000/v1/chat/completions \
   -d '{"model":"demo","messages":[{"role":"user","content":"demo-12345"}]}'
 ```
 
-The first request should be blocked before the mock receives it. It also checks case-insensitive matching. The second should reach the mock once. Use the same configuration for a candidate port and compare both results, including the denial response and provider call counts.
+The first request should be blocked before the mock receives it. It also checks case-insensitive matching. The second should reach the mock once. Repeat these requests with the same policy and model when the candidate port is selected. Compare the denial status and body, the provider call counts (zero for the blocked request, one for the allowed request), and the allowed request payload. Record which callback handled each request and whether the gateway forwarded it to Python.
 
 A first port could move just the regex matcher behind the existing filter. Before expanding coverage, check Python regex syntax and Unicode behavior, pattern order, and offsets used for masking. Keep a Python path for patterns whose semantics the Rust implementation cannot preserve. A full native filter also needs to preserve which fields and turns are inspected, how matches are recorded, and how streamed content is handled.
