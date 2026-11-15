@@ -378,9 +378,15 @@ def _customer_reset_key(
 def _customer_ids_by_reset(
     rows: Sequence[_CustomerScopedRow], ids: Sequence[str], now: datetime, windows: Mapping[str, str]
 ) -> Mapping[tuple[float | None, str | None], tuple[str, ...]]:
-    keys: Final = tuple(_customer_reset_key(row, now, windows) for row in rows)
+    capped: Final = tuple(
+        (row_id, row) for row_id, row in zip(ids, rows) if _customer_effective_cap(row, now) is not None
+    )
+    keys: Final = tuple(_customer_reset_key(row, now, windows) for _, row in capped)
     return MappingProxyType(
-        {key: tuple(row_id for row_id, row_key in zip(ids, keys) if row_key == key) for key in dict.fromkeys(keys)}
+        {
+            key: tuple(row_id for (row_id, _), row_key in zip(capped, keys) if row_key == key)
+            for key in dict.fromkeys(keys)
+        }
     )
 
 
@@ -1202,10 +1208,10 @@ class ResetBudgetJob:
         Paged like ``_reset_enduser_spend``: an aliased request can register a member, so the rows on one
         template are unbounded. Each row carries its own rollover cap, read with its budget rows, because an
         override may set the limit while the template owns the reset clock, or the other way round."""
-        if not cascade.customer_budget_ids:
+        if not cascade.budget_ids:
             return
         now: Final = datetime.now(timezone.utc)
-        where: Final = _customer_due_where(cascade.customer_budget_ids, now)
+        where: Final = _customer_due_where(cascade.budget_ids, now)
         cursor: str | None = ""  # rebind-ok: keyset cursor advances one committed page at a time
         while cursor is not None:
             rows: tuple[_CustomerRowT, ...] = tuple(
