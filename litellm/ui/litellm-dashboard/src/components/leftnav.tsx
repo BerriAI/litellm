@@ -198,7 +198,7 @@ export const visibleMenuGroups = (groups: readonly MenuGroup[], context: MenuVis
 // icons changed to lucide as part of the sidebar redesign.
 const customerPortalGroups: MenuGroup[] = [
   {
-    groupLabel: "CUSTOMER PORTAL",
+    groupLabel: "CUSTOMER MANAGEMENT",
     items: [
       {
         key: "customers",
@@ -531,7 +531,7 @@ const findMenuItemKey = (route: string): string => {
 
 const GROUP_LABELS: Record<string, ParseKeys> = {
   "AI GATEWAY": "shell.nav.groups.aiGateway",
-  "CUSTOMER PORTAL": "shell.nav.groups.customerPortal",
+  "CUSTOMER MANAGEMENT": "shell.nav.groups.customerPortal",
   OBSERVABILITY: "shell.nav.groups.observability",
   "ACCESS CONTROL": "shell.nav.groups.accessControl",
   "DEVELOPER TOOLS": "shell.nav.groups.developerTools",
@@ -543,7 +543,7 @@ export const groupText = (groupLabel: string): string =>
 
 const SECTION_DISPLAY: Record<string, ParseKeys> = {
   "AI GATEWAY": "shell.nav.sections.aiGateway",
-  "CUSTOMER PORTAL": "shell.nav.sections.customerPortal",
+  "CUSTOMER MANAGEMENT": "shell.nav.sections.customerPortal",
   OBSERVABILITY: "shell.nav.sections.observability",
   "ACCESS CONTROL": "shell.nav.sections.accessControl",
   "DEVELOPER TOOLS": "shell.nav.sections.developerTools",

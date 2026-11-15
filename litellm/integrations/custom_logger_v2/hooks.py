@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final, Literal, TypeAlias
 
-from litellm.integrations.custom_logger_v2.enums import Activation, Field, Hook
+from litellm.integrations.custom_logger_v2.enums import DERIVED_ONLY, Activation, Field, Hook
 from litellm.integrations.custom_logger_v2.outcomes import Abort, Reroute, Respond
 
 LegacyGuardrailEvent: TypeAlias = Literal["pre_call", "during_call", "post_call", "post_mcp_call"]
@@ -64,6 +64,8 @@ HOOK_SPECS: Final[Mapping[Hook, HookSpec]] = MappingProxyType(
                     Field.tools,
                     Field.model,
                     Field.input,
+                    Field.budget_reservation,
+                    Field.rate_limit_statuses,
                 }
             ),
             outcomes=_ANY_OUTCOME,
@@ -158,6 +160,7 @@ HOOK_SPECS: Final[Mapping[Hook, HookSpec]] = MappingProxyType(
             ),
             request_path=False,
         ),
+        # Not dispatched: the five ports settle on attempt_ended and none needs a once-per-call end event.
         Hook.call_ended: HookSpec(legacy_methods=(), request_path=False),
         Hook.router_event: HookSpec(
             legacy_methods=(
@@ -198,6 +201,12 @@ def subscription_problem(subscription: Subscription) -> str | None:
     spec: Final = HOOK_SPECS[subscription.hook]
     if not spec.subscribable:
         return "this hook point has no V2 subscription support yet"
+    derived: Final = subscription.writes & DERIVED_ONLY
+    if derived:
+        return (
+            f"writes {', '.join(sorted(field.value for field in derived))}, "
+            "which are derived from the hook's arguments and never writable"
+        )
     legacy_writes: Final = frozenset({Field.deprecated_kwargs}) if subscription.legacy else frozenset[Field]()
     forbidden: Final = subscription.writes - spec.writes - legacy_writes
     if forbidden:

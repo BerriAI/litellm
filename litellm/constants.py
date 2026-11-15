@@ -130,7 +130,6 @@ S3_PREFIX_DIGEST_CHARS: Final = 16
 # s3 allows 2048 bytes of combined metadata headers, which Content-Disposition counts against
 MAX_S3_OBJECT_DOWNLOAD_FILENAME_BYTES: Final = 1024
 S3_LOG_PROMPTS_ONLY_ENV_VAR: Final = "S3_LOG_PROMPTS_ONLY"
-S3_PARTITION_GRANULARITY_ENV_VAR: Final = "S3_PARTITION_GRANULARITY"
 MAX_FILE_LIST_LIMIT: Final = 10000
 ANTHROPIC_DEFAULT_FILE_LIST_LIMIT: Final = 20
 DEFAULT_SQS_FLUSH_INTERVAL_SECONDS: Final = get_env_int("DEFAULT_SQS_FLUSH_INTERVAL_SECONDS", 10)
@@ -1307,39 +1306,14 @@ empower_models: Final = set(
     ]
 )
 
-together_ai_models: Final[set[str]] = set(
-    [
-        # llama llms - chat
-        "togethercomputer/llama-2-70b-chat",
-        # llama llms - language / instruct
-        "togethercomputer/llama-2-70b",
-        "togethercomputer/LLaMA-2-7B-32K",
-        "togethercomputer/Llama-2-7B-32K-Instruct",
-        "togethercomputer/llama-2-7b",
-        # falcon llms
-        "togethercomputer/falcon-40b-instruct",
-        "togethercomputer/falcon-7b-instruct",
-        # alpaca
-        "togethercomputer/alpaca-7b",
-        # chat llms
-        "HuggingFaceH4/starchat-alpha",
-        # code llms
-        "togethercomputer/CodeLlama-34b",
-        "togethercomputer/CodeLlama-34b-Instruct",
-        "togethercomputer/CodeLlama-34b-Python",
-        "defog/sqlcoder",
-        "NumbersStation/nsql-llama-2-7B",
-        "WizardLM/WizardCoder-15B-V1.0",
-        "WizardLM/WizardCoder-Python-34B-V1.0",
-        # language llms
-        "NousResearch/Nous-Hermes-Llama2-13b",
-        "Austism/chronos-hermes-13b",
-        "upstage/SOLAR-0-70b-16bit",
-        "WizardLM/WizardLM-70B-V1.0",
-    ]
-)
-# supports all together ai models, just pass in the model id e.g. completion(model="together_computer/replit_code_3b",...)
+together_ai_models: Final[set[str]] = set()  # mutable-ok: filled from the cost map at import and on reload
 
+TOGETHER_AI_API_KEY_ENV_VARS: Final = (
+    "TOGETHER_API_KEY",
+    "TOGETHER_AI_API_KEY",
+    "TOGETHERAI_API_KEY",
+    "TOGETHER_AI_TOKEN",
+)
 
 featherless_ai_models: Final[set] = set(
     [
@@ -1858,6 +1832,10 @@ OTEL_SERVICE_NAME_METADATA_KEYS: Final = ("otel_service_name_override", "otel_se
 
 # Key Rotation Constants
 LITELLM_KEY_ROTATION_ENABLED: Final = os.getenv("LITELLM_KEY_ROTATION_ENABLED", "false")
+KEY_EXPIRY_ALERT_MAX_DAYS: Final = 365
+LITELLM_KEY_EXPIRY_ALERT_CHECK_INTERVAL_SECONDS: Final = get_env_int(
+    "LITELLM_KEY_EXPIRY_ALERT_CHECK_INTERVAL_SECONDS", 43200
+)  # 12 hours default
 LITELLM_KEY_ROTATION_CHECK_INTERVAL_SECONDS: Final = get_env_int(
     "LITELLM_KEY_ROTATION_CHECK_INTERVAL_SECONDS", 86400
 )  # 24 hours default
@@ -1917,6 +1895,7 @@ CLOUDZERO_MAX_FETCHED_DATA_RECORDS: Final = get_env_int("CLOUDZERO_MAX_FETCHED_D
 SPEND_LOG_CLEANUP_JOB_NAME: Final = "spend_log_cleanup"
 BACKGROUND_HEALTH_CHECK_DB_SAVE_JOB_NAME: Final = "background_health_check_db_save"
 KEY_ROTATION_JOB_NAME: Final = "litellm_key_rotation_job"
+KEY_EXPIRY_ALERT_JOB_NAME: Final = "litellm_key_expiry_alert_job"
 EXPIRED_UI_SESSION_KEY_CLEANUP_JOB_NAME: Final = "litellm_expired_ui_session_key_cleanup_job"
 WEEKLY_SPEND_REPORT_JOB_ID: Final = "weekly_spend_report_job"
 MONTHLY_SPEND_REPORT_JOB_ID: Final = "monthly_spend_report_job"
@@ -2374,10 +2353,12 @@ PTU_PRUNE_SKEW_GRACE_SECONDS: Final[int] = 300
 # was never observed (e.g. proxy restart); expiry returns the tokens to the caller.
 BATCH_ENQUEUED_TOKEN_TTL_SECONDS: Final[int] = 8 * 24 * 60 * 60
 
-# Key/team metadata field that opts batches into enqueued-token limiting. Only proxy
-# admins may write it: when present it replaces the standard RPM/TPM checks for
-# batch submissions.
+# Key/team metadata field that opts batches into enqueued-token limiting, and its
+# per-model project counterpart. Only proxy admins may write them. A key or team limit
+# replaces the standard batch rate-limit checks. A project limit on the model the batch
+# routes to replaces the per-minute checks, and daily caps still apply.
 BATCH_ENQUEUED_TOKEN_LIMIT_METADATA_KEY: Final = "batch_enqueued_token_limit"
+MODEL_BATCH_ENQUEUED_TOKEN_LIMIT_METADATA_KEY: Final = "model_batch_enqueued_token_limit"
 MAX_BATCH_FILE_RECORDS_KEY: Final = "max_batch_file_records"
 MAX_BATCH_FILE_UPLOADS_PER_DAY_KEY: Final = "max_batch_file_uploads_per_day"
 MAX_FILE_DOWNLOADS_PER_MINUTE_KEY: Final = "max_file_downloads_per_minute"

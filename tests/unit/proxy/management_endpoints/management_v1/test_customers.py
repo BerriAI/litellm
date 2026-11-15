@@ -78,7 +78,7 @@ def test_customer_portal_limits_and_free_tier_problem(premium: bool) -> None:
     assert sixth.status_code == (201 if premium else 403), sixth.text
     if not premium:
         assert sixth.json()["detail"] == (
-            "Free customer portal limit reached: up to 5 customer organizations, 5 teams per organization and "
+            "Customer Management free tier limit reached: up to 5 customer organizations, 5 teams per organization and "
             "5 members per team without a LiteLLM Enterprise license. Upgrade to Enterprise to remove the limits: "
             "https://www.litellm.ai/enterprise"
         )
@@ -161,9 +161,9 @@ def test_capacity_contention_is_retryable_without_hiding_other_database_errors(e
     assert response.status_code == 503, response.text
     assert response.json() == {
         "type": "urn:litellm:error:customer-hierarchy-capacity-busy",
-        "title": "Customer portal busy",
+        "title": "Customer Management busy",
         "status": 503,
-        "detail": "Customer portal capacity is being updated. Retry the request.",
+        "detail": "Customer Management capacity is being updated. Retry the request.",
     }
     assert http.get("/management/v1/customer_members/blocked").status_code == 404
 
@@ -197,9 +197,9 @@ def test_team_model_write_contention_is_retryable_and_rolls_back(error: DataErro
         assert response.status_code == 503, response.text
         assert response.json() == {
             "type": "urn:litellm:error:customer-hierarchy-capacity-busy",
-            "title": "Customer portal busy",
+            "title": "Customer Management busy",
             "status": 503,
-            "detail": "Customer portal capacity is being updated. Retry the request.",
+            "detail": "Customer Management capacity is being updated. Retry the request.",
         }
     assert http.get("/management/v1/customer_teams/blocked").status_code == 404
     assert not database.litellm_budgettable.rows
@@ -976,6 +976,57 @@ def test_organization_list_counts_all_members_and_searches_before_paginating() -
     assert literal.json()["data"][0]["customer_org_id"] == "other"
     assert literal.json()["data"][0]["member_count"] == 0
     assert literal.json()["meta"]["total_count"] == 1
+
+
+def test_member_list_searches_id_and_alias_within_its_parent_before_paginating() -> None:
+    http: Final = client()
+    family(http)
+    parents: Final = (
+        (
+            "customer_organizations",
+            {
+                "customer_org_id": "other-org",
+                "default_budgets": [{"name": "standard", "max_budget": 1}],
+                "default_budget_template": "standard",
+            },
+        ),
+        ("customer_teams", {"customer_team_id": "other-team", "parent_org_id": "org"}),
+        ("customer_teams", {"customer_team_id": "outside-team", "parent_org_id": "other-org"}),
+    )
+    members: Final = (
+        ("user-1", "Filler One", "team"),
+        ("user-2", "Filler Two", "team"),
+        ("user-3", "Zed Target", "team"),
+        ("zed_4", "Filler Four", "team"),
+        ("zedx4", "100% Filler", "team"),
+        ("user-6", "Zed Elsewhere", "other-team"),
+        ("user-7", "Zed Outside", "outside-team"),
+    )
+    rows: Final = (
+        *parents,
+        *(
+            ("customer_members", {"customer_member_id": identifier, "alias": alias, "parent_team_ids": [team]})
+            for identifier, alias, team in members
+        ),
+    )
+    for collection, body in rows:
+        created: Final = http.post(f"/management/v1/{collection}", json=body)
+        assert created.status_code == 201, created.text
+
+    def found(params: Mapping[str, str | int]) -> tuple[tuple[str, ...], int]:
+        response: Final = http.get("/management/v1/customer_members", params=params)
+        assert response.status_code == 200, response.text
+        ids: Final = tuple(row["customer_member_id"] for row in response.json()["data"])
+        return ids, response.json()["meta"]["total_count"]
+
+    assert found({"parent_team_id": "team", "page_size": 2})[0] == ("user-1", "user-2")
+    assert found({"parent_team_id": "team", "page_size": 2, "search": " ZED "}) == (("user-3", "zed_4"), 3)
+    assert found({"parent_team_id": "team", "page_size": 2, "page": 2, "search": "zed"}) == (("zedx4",), 3)
+    assert found({"parent_org_id": "org", "search": "zed"}) == (("user-3", "user-6", "zed_4", "zedx4"), 4)
+    assert found({"search": "zed"})[1] == 5
+    assert found({"parent_team_id": "team", "search": "zed_"}) == (("zed_4",), 1)
+    assert found({"parent_team_id": "team", "search": "%"}) == (("zedx4",), 1)
+    assert found({"parent_team_id": "team", "search": "nobody"}) == ((), 0)
 
 
 def created_member(http: TestClient, member_id: str, team_id: str, *, override: bool = False) -> CustomerMember:
@@ -1800,7 +1851,7 @@ def test_grouped_configuration_keeps_window_clocks_and_invalidates_member_cache(
     )
     assert windows.status_code == 200, windows.text
     advanced: Final = http.patch(
-        f'/management/v1/customer_organizations/org/default_budgets/{first["budget_id"]}',
+        f"/management/v1/customer_organizations/org/default_budgets/{first['budget_id']}",
         json={
             "budget_limits": [
                 {**row, "reset_at": "2028-01-15T00:00:00Z"}
@@ -1912,9 +1963,11 @@ def test_list_and_detail_expose_each_effective_budget_with_its_own_recorded_spen
     created: Final = http.post(
         "/management/v1/customer_members",
         json={
-            "customer_member_id": "window-member", "parent_team_ids": ["team"],
+            "customer_member_id": "window-member",
+            "parent_team_ids": ["team"],
             "budget_override": {
-                "max_budget": 50, "budget_duration": "1mo",
+                "max_budget": 50,
+                "budget_duration": "1mo",
                 "budget_limits": [{"budget_duration": "1mo", "max_budget": 10}],
             },
         },
@@ -1922,8 +1975,11 @@ def test_list_and_detail_expose_each_effective_budget_with_its_own_recorded_spen
     assert created.status_code == 201, created.text
     database.litellm_budgetwindowspend.rows = {
         "window-member": Record(
-            entity_type="customer_member", entity_id="window-member", window_duration="1mo",
-            window_start=NOW, spend=8,
+            entity_type="customer_member",
+            entity_id="window-member",
+            window_duration="1mo",
+            window_start=NOW,
+            spend=8,
         ),
     }
     detail: Final = http.get("/management/v1/customer_members/window-member")
@@ -1931,3 +1987,114 @@ def test_list_and_detail_expose_each_effective_budget_with_its_own_recorded_spen
     assert detail.status_code == listing.status_code == 200
     assert listing.json()["data"][0]["budget_usage"] == detail.json()["budget_usage"]
     assert [(item["spend"], item["max_budget"]) for item in detail.json()["budget_usage"]] == [(0, 50), (8, 10)]
+
+def test_member_team_replacement_retains_identity_budgets_and_spend() -> None:
+    database: Final = Database()
+    cache: Final = UserApiKeyCache()
+    http: Final = client(database=database, cache=cache)
+    family(http)
+    assert (
+        http.post(
+            "/management/v1/customer_teams", json={"customer_team_id": "next", "parent_org_id": "org"}
+        ).status_code
+        == 201
+    )
+    created: Final = http.post(
+        "/management/v1/customer_members",
+        json={
+            "customer_member_id": "moving",
+            "parent_team_ids": ["team"],
+            "budget_override": {"max_budget": 25, "budget_duration": "1mo"},
+        },
+    )
+    assert created.status_code == 201, created.text
+    asyncio.run(
+        database.litellm_customermembertable.update(where={"customer_member_id": "moving"}, data={"spend": 7.5})
+    )
+    original: Final = http.get("/management/v1/customer_members/moving").json()
+    cache.set_cache(customer_member_cache_key("moving"), "old-team")
+    moved: Final = http.patch("/management/v1/customer_members/moving", json={"parent_team_ids": ["next"]})
+    assert moved.status_code == 200, moved.text
+    assert moved.json() == {**original, "parent_team_ids": ["next"]}
+    assert cache.get_cache(customer_member_cache_key("moving")) is None
+    assert http.get("/management/v1/customer_members", params={"parent_team_id": "team"}).json()["data"] == []
+    assert [
+        m["customer_member_id"]
+        for m in http.get("/management/v1/customer_members", params={"parent_team_id": "next"}).json()["data"]
+    ] == ["moving"]
+    renamed: Final = http.patch("/management/v1/customer_members/moving", json={"alias": "Renamed"})
+    assert renamed.status_code == 200, renamed.text
+    assert renamed.json()["parent_team_ids"] == ["next"]
+
+
+@pytest.mark.parametrize(
+    "teams,status",
+    ((None, 422), ([], 422), ([""], 422), (["team", "team"], 422), (["missing"], 404), (["foreign"], 409)),
+)
+def test_member_team_replacement_rejects_invalid_parents_atomically(teams: object, status: int) -> None:
+    http: Final = client()
+    family(http)
+    assert http.post("/management/v1/customer_organizations", json={"customer_org_id": "other"}).status_code == 201
+    assert (
+        http.post(
+            "/management/v1/customer_teams", json={"customer_team_id": "foreign", "parent_org_id": "other"}
+        ).status_code
+        == 201
+    )
+    original: Final = http.post(
+        "/management/v1/customer_members", json={"customer_member_id": "moving", "parent_team_ids": ["team"]}
+    )
+    assert original.status_code == 201, original.text
+    rejected: Final = http.patch(
+        "/management/v1/customer_members/moving", json={"parent_team_ids": teams, "alias": "Must not change"}
+    )
+    assert rejected.status_code == status, rejected.text
+    assert http.get("/management/v1/customer_members/moving").json() == original.json()
+
+
+def test_member_team_replacement_schema_allows_omission_but_not_null() -> None:
+    http: Final = client()
+    response: Final = http.get("/openapi.json")
+    assert response.status_code == 200, response.text
+    spec: Final = response.json()
+    request_schema: Final = spec["paths"]["/management/v1/customer_members/{customer_member_id}"]["patch"][
+        "requestBody"
+    ]["content"]["application/json"]["schema"]
+    member_patch: Final = spec["components"]["schemas"][request_schema["$ref"].rsplit("/", 1)[-1]]
+    parent_teams: Final = member_patch["properties"]["parent_team_ids"]
+    assert parent_teams["type"] == "array"
+    assert parent_teams["items"] == {"type": "string"}
+    assert "parent_team_ids" not in member_patch.get("required", ())
+
+
+@pytest.mark.parametrize("premium", (False, True))
+def test_member_team_replacement_checks_only_added_team_capacity(premium: bool) -> None:
+    http: Final = client(premium_user=premium)
+    family(http)
+    assert (
+        http.post(
+            "/management/v1/customer_teams", json={"customer_team_id": "next", "parent_org_id": "org"}
+        ).status_code
+        == 201
+    )
+    for index in range(5):
+        assert (
+            http.post(
+                "/management/v1/customer_members",
+                json={"customer_member_id": f"full-{index}", "parent_team_ids": ["team"]},
+            ).status_code
+            == 201
+        )
+    moved: Final = http.patch("/management/v1/customer_members/full-0", json={"parent_team_ids": ["team", "next"]})
+    assert moved.status_code == 200, moved.text
+    reordered: Final = http.patch("/management/v1/customer_members/full-0", json={"parent_team_ids": ["next", "team"]})
+    assert reordered.status_code == 200, reordered.text
+    assert reordered.json()["parent_team_ids"] == ["next", "team"]
+    assert (
+        http.post(
+            "/management/v1/customer_members", json={"customer_member_id": "moving", "parent_team_ids": ["next"]}
+        ).status_code
+        == 201
+    )
+    full: Final = http.patch("/management/v1/customer_members/moving", json={"parent_team_ids": ["team"]})
+    assert full.status_code == (200 if premium else 403), full.text
