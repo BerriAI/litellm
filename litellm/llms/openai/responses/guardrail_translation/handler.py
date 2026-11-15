@@ -593,6 +593,7 @@ class OpenAIResponsesHandler(BaseTranslation):
         messages: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
             input=input_data,
             responses_api_request=data,
+            member_name=qualified_member_name,
         )
         return cast(list[AllMessageValues], messages) if messages else None
 

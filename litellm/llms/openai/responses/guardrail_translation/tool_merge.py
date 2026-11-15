@@ -83,21 +83,27 @@ def _leftmost_alignment(originals: Sequence[Tool], kept: Sequence[Tool]) -> tupl
     return None if -1 in aligned else aligned
 
 
-def _unique_alignment(
-    originals: Sequence[Tool], kept: Sequence[Tool], *, with_description: bool
+def _alignment(
+    originals: Sequence[Tool], kept: Sequence[Tool], *, with_description: bool, interchangeable: bool
 ) -> tuple[int, ...] | None:
     original_views: Final = tuple(_comparable(tool, with_description=with_description) for tool in originals)
     kept_views: Final = tuple(_comparable(tool, with_description=with_description) for tool in kept)
     leftmost: Final = _leftmost_alignment(original_views, kept_views)
+    if leftmost is None or interchangeable:
+        return leftmost
     rightmost: Final = _leftmost_alignment(original_views[::-1], kept_views[::-1])
-    if leftmost is None or rightmost is None:
+    if rightmost is None:
         return None
     return leftmost if leftmost == tuple(len(originals) - 1 - ordinal for ordinal in reversed(rightmost)) else None
 
 
-def _kept_ordinals(flattened: Sequence[Tool], guardrailed: Sequence[Tool]) -> tuple[int, ...] | None:
-    exact: Final = _unique_alignment(flattened, guardrailed, with_description=True)
-    return exact if exact is not None else _unique_alignment(flattened, guardrailed, with_description=False)
+def _kept_ordinals(
+    flattened: Sequence[Tool], guardrailed: Sequence[Tool], *, interchangeable: bool
+) -> tuple[int, ...] | None:
+    exact: Final = _alignment(flattened, guardrailed, with_description=True, interchangeable=interchangeable)
+    if exact is not None:
+        return exact
+    return _alignment(flattened, guardrailed, with_description=False, interchangeable=interchangeable)
 
 
 def _positioned_ordinals(
@@ -105,21 +111,26 @@ def _positioned_ordinals(
     guardrailed: Sequence[Tool],
     flattened_positions: Sequence[int],
     guardrailed_positions: Sequence[int],
+    top_level_functions: frozenset[int],
 ) -> tuple[tuple[int, int], ...] | None:
     ordinals: Final = _kept_ordinals(
         tuple(map(flattened.__getitem__, flattened_positions)),
         tuple(map(guardrailed.__getitem__, guardrailed_positions)),
+        interchangeable=top_level_functions.issuperset(flattened_positions),
     )
     return None if ordinals is None else tuple(zip(guardrailed_positions, ordinals))
 
 
 def _guardrailed_keys(
-    flattened: Sequence[Tool], flattened_positions: Mapping[str, tuple[int, ...]], guardrailed: Sequence[Tool]
+    flattened: Sequence[Tool],
+    flattened_positions: Mapping[str, tuple[int, ...]],
+    guardrailed: Sequence[Tool],
+    top_level_functions: frozenset[int],
 ) -> tuple[IndexedKey, ...] | None:
     keys: Final = tuple(map(_chat_tool_key, guardrailed))
     positions: Final = _key_positions(keys)
     realigned: Final = tuple(
-        _positioned_ordinals(flattened, guardrailed, flattened_positions[key], kept)
+        _positioned_ordinals(flattened, guardrailed, flattened_positions[key], kept, top_level_functions)
         for key, kept in positions.items()
         if len(kept) < len(flattened_positions.get(key, ()))
     )
@@ -236,6 +247,15 @@ def _merged_original(
     )
 
 
+def _top_level_function_positions(
+    original_tools: Sequence[Tool], flattened_groups: Sequence[Sequence[Tool]]
+) -> frozenset[int]:
+    is_function: Final = chain.from_iterable(
+        (original.get("type") == "function",) * len(group) for original, group in zip(original_tools, flattened_groups)
+    )
+    return frozenset(position for position, function in enumerate(is_function) if function)
+
+
 def merge_guardrailed_tools(
     original_tools: Sequence[Tool],
     flattened_groups: Sequence[Sequence[Tool]],
@@ -246,7 +266,9 @@ def merge_guardrailed_tools(
     flattened_names: Final = tuple(map(_chat_tool_key, flattened))
     flattened_positions: Final = _key_positions(flattened_names)
     flattened_keys: Final = _indexed_keys(flattened_names, flattened_positions)
-    guardrailed_keys: Final = _guardrailed_keys(flattened, flattened_positions, guardrailed)
+    guardrailed_keys: Final = _guardrailed_keys(
+        flattened, flattened_positions, guardrailed, _top_level_function_positions(original_tools, flattened_groups)
+    )
     if guardrailed_keys is None:
         return None
     guardrailed_by_key: Final = MappingProxyType(dict(zip(guardrailed_keys, guardrailed)))

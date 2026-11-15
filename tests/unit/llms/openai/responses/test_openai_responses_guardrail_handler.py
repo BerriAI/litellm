@@ -8,6 +8,7 @@ with guardrail transformations.
 import copy
 import json
 from collections.abc import Callable
+from itertools import chain
 from typing import Any, Final, List, Literal, Optional, Tuple
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -3530,6 +3531,10 @@ def _with_description(chat_tool: dict, description: str) -> dict:
     return {**chat_tool, "function": {**chat_tool["function"], "description": description}}
 
 
+def _replayed_tool_calls(messages: list[dict]) -> list[dict]:
+    return list(chain.from_iterable(message.get("tool_calls") or [] for message in messages))
+
+
 def _function_tool_descriptions(tools: list[dict]) -> list[tuple[str | None, str, str]]:
     return [
         (tool["name"] if tool["type"] == "namespace" else None, function["name"], function["description"])
@@ -3756,6 +3761,55 @@ class TestOpenAIResponsesHandlerNamespaceTools:
 
         with pytest.raises(UnappliableRequestRewrite):
             await OpenAIResponsesHandler().process_input_messages({**_codex_request("hi"), "tools": tools}, guardrail)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("dropped", [0, 1], ids=["drop_first", "drop_second"])
+    async def test_a_guardrail_dropping_one_of_two_same_named_top_level_functions_edits_the_one_it_kept(
+        self, dropped: int
+    ):
+        parameters: Final = {"type": "object", "properties": {"city": {"type": "string"}}}
+        tools: Final = [
+            {"type": "function", "name": "lookup_city", "description": "Look up a city", "parameters": parameters},
+            {"type": "function", "name": "lookup_city", "description": "Find a city", "parameters": parameters},
+        ]
+        guardrail: Final = ToolEditingGuardrail(
+            edit=lambda chat_tools: [_with_description(chat_tools[1 - dropped], "edited")], guardrail_name="test"
+        )
+
+        result: Final = await OpenAIResponsesHandler().process_input_messages(
+            {**_codex_request("hi"), "tools": tools}, guardrail
+        )
+
+        assert _function_tool_descriptions(result["tools"]) == [(None, "lookup_city", "edited")]
+
+    @pytest.mark.asyncio
+    async def test_a_guardrail_sees_a_replayed_long_member_call_under_the_name_it_sees_the_tool_by(self):
+        namespace: Final = "mcp__codex_apps__codex_document_control"
+        member: Final = "_get_document_tool_schemas"
+        tools: Final = [
+            {
+                "type": "namespace",
+                "name": namespace,
+                "description": "Document tools",
+                "tools": [{"type": "function", "name": member, "description": "Get schemas", "parameters": {}}],
+            }
+        ]
+        input_items: Final = [
+            {"type": "message", "role": "user", "content": "Get the schemas"},
+            {"type": "function_call", "namespace": namespace, "name": member, "call_id": "call_1", "arguments": "{}"},
+            {"type": "function_call_output", "call_id": "call_1", "output": "the schemas"},
+            {"type": "message", "role": "user", "content": "Thanks"},
+        ]
+        guardrail: Final = MockRecordingGuardrail(guardrail_name="test")
+
+        await OpenAIResponsesHandler().process_input_messages(
+            {**_codex_request(input_items), "tools": tools}, guardrail
+        )
+
+        seen: Final = guardrail.seen_inputs[0]
+        tool_names: Final = [tool["function"]["name"] for tool in seen["tools"]]
+        call_names: Final = [call["function"]["name"] for call in _replayed_tool_calls(seen["structured_messages"])]
+        assert call_names == tool_names == [f"{namespace}__{member}"]
 
     @pytest.mark.asyncio
     async def test_a_function_only_guardrail_keeps_the_tool_search_tool_it_never_scans(self):
