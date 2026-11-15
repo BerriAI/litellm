@@ -31,6 +31,7 @@ _STANDBY_ID: Final = f"standby-{uuid.uuid4().hex[:8]}"
 _TESTED_ID: Final = f"tested-{uuid.uuid4().hex[:8]}"
 _BROKEN_ID: Final = f"broken-{uuid.uuid4().hex[:8]}"
 _FORGED: Final = f"forged-{uuid.uuid4().hex[:8]}"
+_FORGED_PROBE_KEY: Final = f"forged-probe-{uuid.uuid4().hex[:8]}"
 _HEALTH_CHECK_KEY: Final = "litellm-internal-health-check"
 _SUCCESSES: Final = "litellm_deployment_success_responses_total"
 _FAILURES: Final = "litellm_deployment_failure_responses_total"
@@ -330,8 +331,8 @@ def test_request_metadata_cannot_forge_a_deployment_id(rig: _Rig) -> None:
 
 def test_test_connection_sets_deployment_state_and_ignores_caller_metadata(rig: _Rig) -> None:
     forged: Final[dict[str, JsonValue]] = {
-        "health_check_deployment_id": _FORGED,
-        "model_info": {"id": _FORGED},
+        "health_check_deployment_id": _FORGED_PROBE_KEY,
+        "model_info": {"id": _FORGED_PROBE_KEY},
         "user_api_key_hash": _HEALTH_CHECK_KEY,
     }
     _test_connection(
@@ -351,5 +352,5 @@ def test_test_connection_sets_deployment_state_and_ignores_caller_metadata(rig: 
         (_TESTED_ID, _TESTED_ID),
         (_BROKEN_ID, _BROKEN_ID),
     }
-    assert not tuple(sample for sample in scrape(rig.gateway) if _FORGED in sample.labels.values())
-    assert _FORGED not in json.dumps(rig.logged())
+    assert not tuple(sample for sample in scrape(rig.gateway) if _FORGED_PROBE_KEY in sample.labels.values())
+    assert _FORGED_PROBE_KEY not in json.dumps(rig.logged())
