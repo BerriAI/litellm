@@ -5869,8 +5869,8 @@
       "retiredTitle": "{{name}} retired on {{date}}",
       "retiresTitle": "{{name}} retires on {{date}}",
       "promptCache": {
-        "title": "Prompt caching stopped on {{name}}",
-        "description": "{{misses}} requests in a row to {{model}} read and wrote no cache for a prefix the provider had cached before.",
+        "title": "Prompt cache usage not observed on {{name}}",
+        "description": "{{misses}} requests in a row to {{model}} reported no cache read or write for a prefix the provider had cached before.",
         "evidenceHeading": "What was observed",
         "deployment": "Deployment",
         "model": "Model",
@@ -5881,11 +5881,9 @@
         "ttl": "Cache lifetime",
         "ttlMinutes_one": "{{count}} minute",
         "ttlMinutes_other": "{{count}} minutes",
-        "ttlHours_one": "{{count}} hour",
-        "ttlHours_other": "{{count}} hours",
         "window": "Misses observed",
         "windowValue": "{{start}} to {{end}} UTC",
-        "scope": "This alert only covers a prompt prefix that the provider had already written to its cache on this deployment and configuration. A prefix that was never cached, including when caching was off from the first request, is not checked, and nothing here watches every request or deployment."
+        "scope": "Only non-streaming Anthropic Chat Completions requests with one five-minute cache breakpoint are checked, after the provider confirmed a cache write for that prefix. Prefixes never confirmed as cached are not assessed."
       },
       "deprecationDescription": "{{requests}} recorded requests. Last used {{date}} UTC.",
       "retired": "Retired",
@@ -5933,7 +5931,6 @@
           "ratio": "Daily error rate"
         }
       },
-      "unrecognized": "This alert can't be shown in this version of the dashboard.",
       "promptCacheError": "Could not load prompt cache alerts."
     },
     "page": {

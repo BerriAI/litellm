@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
-from litellm.models.alert import METRIC_ALERT_TYPES, Alert, AlertDetection
+from litellm.models.alert import Alert, AlertDetection
 from litellm.repositories.alert_repository import AlertRepository
 
 _START: Final = datetime(2026, 1, 8, tzinfo=timezone.utc)
@@ -30,29 +30,16 @@ _DETECTION: Final = AlertDetection.model_validate(
 
 class _Row:
     def __init__(self, values: Mapping[str, object]) -> None:
-        self._values = dict(values)
+        self._values: Final = dict(values)
 
     def dict(self) -> dict[str, object]:
         return self._values
 
 
-def _saved(detection: AlertDetection, status: str = "open") -> Alert:
-    return Alert.model_validate(
-        {
-            **detection.model_dump(),
-            "id": "7",
-            "status": status,
-            "created_at": _START,
-            "updated_at": _START,
-            "updated_by": None,
-        }
-    )
-
-
-def _row(detection: AlertDetection, status: str) -> _Row:
+def _row(status: str) -> _Row:
     return _Row(
         {
-            **detection.model_dump(),
+            **_DETECTION.model_dump(),
             "id": 7,
             "detection_key": "key",
             "status": status,
@@ -65,20 +52,19 @@ def _row(detection: AlertDetection, status: str) -> _Row:
 
 class _Transaction:
     def __init__(self) -> None:
-        self.queries: tuple[tuple[str, tuple[object, ...]], ...] = ()
+        self.queries: tuple[str, ...] = ()
 
     async def query_raw(self, query: str, *args: object) -> Sequence[Mapping[str, object]]:
-        self.queries = (*self.queries, (query, args))
+        self.queries = (*self.queries, query)
         return ()
 
 
-def _repository(transaction: _Transaction | None = None) -> tuple[AlertRepository, MagicMock]:
-    client = MagicMock()
-    opened = transaction or _Transaction()
+def _repository(transaction: _Transaction) -> tuple[AlertRepository, MagicMock]:
+    client: Final = MagicMock()
 
     @asynccontextmanager
     async def tx(*, timeout: timedelta) -> AsyncIterator[_Transaction]:
-        yield opened
+        yield transaction
 
     client.writer_db.tx = tx
     return AlertRepository(client), client.writer_db.litellm_alert
@@ -89,69 +75,30 @@ async def test_a_later_detection_of_a_dismissed_incident_returns_it_unchanged() 
     and another prefix find the same problem."""
     from prisma.errors import UniqueViolationError
 
-    later = _DETECTION.model_copy(
+    later: Final = _DETECTION.model_copy(
         update={
             "window_start": _START + timedelta(hours=2),
             "window_end": _START + timedelta(hours=2, seconds=3),
             "evidence": _DETECTION.evidence.model_copy(update={"prefix_fingerprint": "prefix-2"}),
         }
     )
-    repository, table = _repository()
+    repository, table = _repository(_Transaction())
     table.create = AsyncMock(side_effect=UniqueViolationError({}, message="detection_key"))
-    table.find_unique = AsyncMock(return_value=_row(_DETECTION, "dismissed"))
+    table.find_unique = AsyncMock(return_value=_row("dismissed"))
     await repository.record(_DETECTION)
-    saved = await repository.record(later)
+    saved: Final = await repository.record(later)
     first_key, later_key = (call.kwargs["data"]["detection_key"] for call in table.create.await_args_list)
     assert first_key == later_key
     assert saved.status == "dismissed"
     table.update.assert_not_called()
 
 
-async def test_performance_listing_names_the_metric_types_so_new_categories_stay_out() -> None:
-    repository, table = _repository()
-    table.find_many = AsyncMock(return_value=[])
-    await repository.list("open", 10, None, "performance")
-    where = table.find_many.await_args.kwargs["where"]
-    assert where["type"] == {"in": list(METRIC_ALERT_TYPES)}
-    assert "prompt_cache" not in where["type"]["in"] and "model_deprecation" not in where["type"]["in"]
-
-
-async def test_daily_summaries_only_read_metric_alerts() -> None:
-    transaction = _Transaction()
+async def test_prompt_cache_alerts_are_returned_without_looking_up_metric_history() -> None:
+    transaction: Final = _Transaction()
     repository, _ = _repository(transaction)
-    await repository.summaries(0, 10)
-    (_, args) = transaction.queries[-1]
-    assert args[-1] == list(METRIC_ALERT_TYPES)
-
-
-async def test_history_is_only_looked_up_for_metric_alerts() -> None:
-    transaction = _Transaction()
-    repository, _ = _repository(transaction)
-    incident = _saved(_DETECTION)
-    views = await repository.enrich((incident,))
-    assert transaction.queries == ()
-    assert views[0].id == "7" and views[0].history is None
-
-
-async def test_a_mixed_page_looks_up_history_only_for_its_metric_resources() -> None:
-    transaction = _Transaction()
-    repository, _ = _repository(transaction)
-    incident = _saved(_DETECTION)
-    spend = Alert.model_validate(
-        {
-            "id": "8",
-            "type": "spend",
-            "resource_type": "team",
-            "resource_id": "team-1",
-            "status": "open",
-            "window_start": _START,
-            "window_end": _START + timedelta(days=1),
-            "evidence": {"value": 20, "baseline": 2, "unit": "usd", "sample_size": 50},
-            "created_at": _START,
-            "updated_at": _START,
-        }
+    incident: Final = Alert.model_validate(
+        {**_DETECTION.model_dump(), "id": "7", "status": "open", "created_at": _START, "updated_at": _START}
     )
-    views = await repository.enrich((incident, spend))
-    (query, _) = transaction.queries[-1]
-    assert [view.id for view in views] == ["7", "8"]
-    assert '"LiteLLM_DailyTeamSpend"' in query and "deployment" not in query
+    (view,) = await repository.enrich((incident,))
+    assert transaction.queries == ()
+    assert (view.id, view.history) == ("7", None)

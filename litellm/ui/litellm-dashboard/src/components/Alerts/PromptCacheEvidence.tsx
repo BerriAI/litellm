@@ -2,14 +2,9 @@ import { useTranslation } from "react-i18next";
 import type { PromptCacheDetails } from "./alertPresentation";
 
 const timeFormat = { dateStyle: "medium", timeStyle: "medium", timeZone: "UTC" } as const;
-const SECONDS_PER_HOUR = 3600;
 
 export default function PromptCacheEvidence({ details }: { details: PromptCacheDetails }) {
   const { t } = useTranslation();
-  const ttl =
-    details.ttlSeconds % SECONDS_PER_HOUR === 0
-      ? t("alerts.unified.promptCache.ttlHours", { count: details.ttlSeconds / SECONDS_PER_HOUR })
-      : t("alerts.unified.promptCache.ttlMinutes", { count: Math.round(details.ttlSeconds / 60) });
   const facts: [string, string][] = [
     [t("alerts.unified.promptCache.deployment"), details.deploymentId],
     [t("alerts.unified.promptCache.model"), details.model],
@@ -18,7 +13,10 @@ export default function PromptCacheEvidence({ details }: { details: PromptCacheD
       t("alerts.unified.promptCache.provenWrite"),
       t("alerts.unified.promptCache.provenWriteTokens", { count: details.provenWriteTokens }),
     ],
-    [t("alerts.unified.promptCache.ttl"), ttl],
+    [
+      t("alerts.unified.promptCache.ttl"),
+      t("alerts.unified.promptCache.ttlMinutes", { count: details.ttlSeconds / 60 }),
+    ],
     [
       t("alerts.unified.promptCache.window"),
       t("alerts.unified.promptCache.windowValue", {

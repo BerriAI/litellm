@@ -44,17 +44,15 @@ class DeprecationEvidence(BaseModel):
 
 
 class PromptCacheEvidence(BaseModel):
-    """Opaque identities and counters only, never prompt content."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     config_fingerprint: str = Field(min_length=1, max_length=64, description="Cache-relevant deployment settings.")
     prefix_fingerprint: str = Field(min_length=1, max_length=64, description="Keyed hash of the cached prefix.")
-    provider: str = Field(min_length=1, max_length=64, description="Provider that served the requests.")
+    provider: Literal["anthropic"] = Field(description="Provider that served the requests.")
     provider_model: str = Field(min_length=1, max_length=1024, description="Model the provider served.")
     consecutive_misses: int = Field(ge=1, le=MAX_ALERT_ID, description="Requests in a row that read and wrote 0.")
     proven_write_tokens: int = Field(ge=1, le=MAX_ALERT_ID, description="Tokens the proving cache write stored.")
-    ttl_seconds: int = Field(ge=1, le=86_400, description="Cache lifetime the prefix asked for.")
+    ttl_seconds: Literal[300] = Field(description="Cache lifetime of the prefix's breakpoint.")
 
 
 class AlertSummary(BaseModel):
@@ -131,8 +129,8 @@ class AlertDetection(BaseModel):
         return self
 
     def identity(self) -> tuple[str, ...]:
-        """A prompt cache incident is one per deployment and cache configuration, whatever window found it, so a
-        dismissed or resolved incident stays the only one for that configuration."""
+        """One prompt cache incident per deployment and configuration, whatever window or prefix found it, so a
+        dismissed or resolved one is never reopened by a later detection."""
         if isinstance(self.evidence, PromptCacheEvidence):
             return (self.type, self.resource_type, self.resource_id, self.evidence.config_fingerprint)
         return (

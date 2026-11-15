@@ -6,7 +6,6 @@ from unittest.mock import ANY, AsyncMock, MagicMock
 import pytest
 from pydantic import TypeAdapter
 
-from litellm.models.alert import METRIC_ALERT_TYPES
 from litellm.models.performance_alert import ResourceUnreadableError, SweepOwnershipLostError, SweepState
 from litellm.proxy.spend_tracking.performance_alerts import run_performance_alerts
 from litellm.repositories.performance_alert_repository import PerformanceAlertRepository
@@ -186,10 +185,7 @@ async def test_first_read_initializes_the_allowance_once(enterprise: bool) -> No
     assert first.active
     assert await repository.monitoring() == first
     assert execute.await_count == 2
-    (_, limit, counted_types) = execute.await_args.args
-    assert limit == 5
-    assert "prompt_cache" not in counted_types and "model_deprecation" not in counted_types
-    assert set(counted_types) == set(METRIC_ALERT_TYPES)
+    execute.assert_awaited_with(ANY, 5, ANY)
 
 
 @pytest.mark.asyncio

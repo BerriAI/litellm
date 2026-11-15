@@ -94,10 +94,12 @@ PROMPT_CACHE: Final[Mapping[str, object]] = {
         {"evidence": DETECTION["evidence"]},
         {"type": "spend"},
         {"evidence": {**CACHE_EVIDENCE, "consecutive_misses": 0}},
+        {"evidence": {**CACHE_EVIDENCE, "provider": "bedrock"}},
+        {"evidence": {**CACHE_EVIDENCE, "ttl_seconds": 3600}},
         {"evidence": {**CACHE_EVIDENCE, "prompt": "never retained"}},
     ),
 )
-def test_prompt_cache_detection_requires_its_deployment_resource_and_bounded_evidence(
+def test_prompt_cache_detection_accepts_only_its_deployment_resource_and_supported_evidence(
     change: Mapping[str, object],
 ) -> None:
     with pytest.raises(ValidationError):

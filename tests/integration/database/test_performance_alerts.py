@@ -13,7 +13,7 @@ import pytest_asyncio
 from litellm_proxy_extras.request_log_indexes import ensure_request_log_indexes
 from psycopg import sql
 
-from litellm.models.alert import AlertDetection, DeprecationEvidence
+from litellm.models.alert import AlertDetection, DeprecationEvidence, PromptCacheEvidence
 from litellm.models.performance_alert import FREE_ALERT_LIMIT, SweepOwnershipLostError, SweepState
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.spend_tracking.performance_alerts import run_performance_alerts
@@ -325,7 +325,9 @@ async def test_admin_can_opt_out_while_a_detection_batch_holds_the_state_lock(
 
 
 @pytest.mark.asyncio
-async def test_existing_performance_alerts_consume_allowance_but_deprecations_do_not(fixture: Fixture) -> None:
+async def test_existing_performance_alerts_consume_allowance_but_deprecations_and_prompt_cache_do_not(
+    fixture: Fixture,
+) -> None:
     start: Final = datetime(2026, 1, 8, tzinfo=timezone.utc)
     await fixture.alerts.record(
         AlertDetection(
@@ -335,6 +337,24 @@ async def test_existing_performance_alerts_consume_allowance_but_deprecations_do
             window_start=start,
             window_end=start + timedelta(days=1),
             evidence=DeprecationEvidence(deprecation_date=DAY + timedelta(days=90)),
+        )
+    )
+    await fixture.alerts.record(
+        AlertDetection(
+            type="prompt_cache",
+            resource_type="deployment",
+            resource_id=f"{fixture.prefix}-deployment",
+            window_start=start,
+            window_end=start + timedelta(seconds=3),
+            evidence=PromptCacheEvidence(
+                config_fingerprint="config-1",
+                prefix_fingerprint="prefix-1",
+                provider="anthropic",
+                provider_model="claude-sonnet-5-5",
+                consecutive_misses=3,
+                proven_write_tokens=2048,
+                ttl_seconds=300,
+            ),
         )
     )
     assert (await fixture.repository.monitoring()).alerts_used == 0

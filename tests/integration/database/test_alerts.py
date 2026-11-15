@@ -28,6 +28,16 @@ from tests.integration._support.client import Gateway
 from tests.integration._support.database import read_rows, write_rows
 
 
+PROMPT_CACHE_EVIDENCE: Final = {
+    "config_fingerprint": "config-1",
+    "provider": "anthropic",
+    "provider_model": "claude-sonnet-5-5",
+    "consecutive_misses": 3,
+    "proven_write_tokens": 2048,
+    "ttl_seconds": 300,
+}
+
+
 def saved_alert(content: bytes) -> Alert:
     view: Final = AlertView.model_validate_json(content)
     return Alert.model_validate(view.model_dump(exclude={"resource_name", "history"}))
@@ -48,6 +58,17 @@ class Alerts:
 
     def detection(self, kind: AlertType = "spend", day: int = 0) -> AlertDetection:
         start: Final = datetime(2026, 1, 1, tzinfo=timezone.utc) + timedelta(days=day)
+        if kind == "prompt_cache":
+            return AlertDetection.model_validate(
+                {
+                    "type": kind,
+                    "resource_type": "deployment",
+                    "resource_id": self.resource_id,
+                    "window_start": start,
+                    "window_end": start + timedelta(seconds=3),
+                    "evidence": {**PROMPT_CACHE_EVIDENCE, "prefix_fingerprint": f"prefix-{day}"},
+                }
+            )
         evidence: Final = (
             {"deprecation_date": "2026-03-01", "replacement_model": "example/replacement"}
             if kind == "model_deprecation"
@@ -88,7 +109,7 @@ async def alerts() -> AsyncIterator[Alerts]:
             await client.disconnect()
 
 
-@pytest.mark.parametrize("kind", ("spend", "traffic", "latency", "reliability", "model_deprecation"))
+@pytest.mark.parametrize("kind", ("spend", "traffic", "latency", "reliability", "model_deprecation", "prompt_cache"))
 @pytest.mark.asyncio
 async def test_each_alert_type_round_trips_through_api_and_status_changes(
     alerts: Alerts, gateway: Gateway, kind: AlertType
@@ -329,11 +350,36 @@ async def test_type_filter_applies_before_cursor_limit(alerts: Alerts, gateway: 
     following: Final = gateway.request("GET", "/alerts", params={"type": "traffic", "limit": "1", "cursor": newest.id})
     assert following.status_code == 200, following.text
     assert AlertViewPage.model_validate_json(following.content).data[0].id == oldest.id
+    cache: Final = await alerts.repository.record(alerts.detection("prompt_cache"))
     performance: Final = gateway.request("GET", "/alerts", params={"type": "performance"})
     assert performance.status_code == 200, performance.text
-    assert all(
-        alert.type != "model_deprecation" for alert in AlertViewPage.model_validate_json(performance.content).data
-    )
+    assert {alert.type for alert in AlertViewPage.model_validate_json(performance.content).data} <= {
+        "spend",
+        "traffic",
+        "latency",
+        "reliability",
+    }
+    incidents: Final = gateway.request("GET", "/alerts", params={"type": "prompt_cache"})
+    assert incidents.status_code == 200, incidents.text
+    assert [alert.id for alert in AlertViewPage.model_validate_json(incidents.content).data] == [cache.id]
+
+
+@pytest.mark.asyncio
+async def test_a_dismissed_prompt_cache_incident_stays_the_only_one_for_its_configuration(alerts: Alerts) -> None:
+    first: Final = await alerts.repository.record(alerts.detection("prompt_cache"))
+    dismissed: Final = await alerts.repository.set_status(int(first.id), "dismissed", "reviewer")
+    assert await alerts.repository.record(alerts.detection("prompt_cache", day=3)) == dismissed
+    assert read_rows('SELECT count(*) AS count FROM "LiteLLM_Alert" WHERE resource_id=%s', (alerts.resource_id,)) == [
+        {"count": 1}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_daily_summaries_carry_metric_alerts_and_never_prompt_cache_alerts(alerts: Alerts) -> None:
+    spend: Final = await alerts.repository.record(alerts.detection("spend"))
+    cache: Final = await alerts.repository.record(alerts.detection("prompt_cache"))
+    assert [summary.id for summary in await alerts.repository.summaries(int(spend.id) - 1, int(spend.id))] == [spend.id]
+    assert await alerts.repository.summaries(int(cache.id) - 1, int(cache.id)) == ()
 
 
 @pytest.mark.asyncio

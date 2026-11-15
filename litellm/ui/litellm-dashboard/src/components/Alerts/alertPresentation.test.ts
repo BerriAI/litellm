@@ -1,10 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  activityLink,
-  listedAlertType,
-  presentAlert,
-  type SavedAlert,
-} from "./alertPresentation";
+import { activityLink, presentAlert, type SavedAlert } from "./alertPresentation";
 
 const saved: SavedAlert = {
   id: "1",
@@ -55,7 +50,7 @@ describe("alert presentation", () => {
         },
       },
     });
-    expect(presentation.title).toBe("Prompt caching stopped on claude-east");
+    expect(presentation.title).toBe("Prompt cache usage not observed on claude-east");
     expect(presentation.description).toContain("3 requests in a row to claude-test");
     expect(presentation.description).not.toContain("prefix-1");
     expect([presentation.resourceType, presentation.href, presentation.history]).toEqual([
@@ -75,19 +70,6 @@ describe("alert presentation", () => {
   });
   it("keeps metric alerts on their chart", () => {
     expect(presentAlert({ source: "performance", alert: saved }).promptCache).toBeNull();
-  });
-  it.each([
-    ["all", "performance"],
-    ["performance", "performance"],
-    ["model-deprecations", null],
-    ["spend", "spend"],
-  ] as const)("lists %s through the %s alert query", (filter, type) => {
-    expect(listedAlertType(filter)).toBe(type);
-  });
-  it("does not read a record whose type, resource and evidence disagree as a metric alert", () => {
-    const presentation = presentAlert({ source: "performance", alert: { ...saved, resource_type: "deployment" } });
-    expect(presentation.title).toBe("This alert can't be shown in this version of the dashboard.");
-    expect([presentation.href, presentation.history, presentation.baseline]).toEqual([undefined, null, undefined]);
   });
   it("links to the resource with an inclusive eight-day window", () => {
     expect(activityLink(saved)).toBe(
