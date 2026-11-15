@@ -4,11 +4,13 @@
 
 import json
 import logging
+import warnings
 from typing import Dict, Final, List, Mapping, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException, WebSocket, status
+from pydantic import PydanticDeprecatedSince20
 from starlette.datastructures import URL
 from starlette.requests import Request as StarletteRequest
 from starlette.types import Message
@@ -377,7 +379,7 @@ async def test_check_blocked_team():
         last_refreshed_at=time.time(),
     )
     await asyncio.sleep(1)
-    team_obj = LiteLLM_TeamTableCachedObj(team_id=_team_id, blocked=False, last_refreshed_at=time.time())
+    team_obj = LiteLLM_TeamTableCachedObj(team_id=_team_id, blocked=False, tpm_limit=123, last_refreshed_at=time.time())
     hashed_token = hash_token(user_key)
     print(f"STORING TOKEN UNDER KEY={hashed_token}")
     user_api_key_cache.set_cache(key=hashed_token, value=valid_token)
@@ -390,7 +392,12 @@ async def test_check_blocked_team():
     request = Request(scope={"type": "http", "method": "POST", "path": "/chat/completions", "headers": []})
     request._url = URL(url="/chat/completions")
 
-    await user_api_key_auth(request=request, api_key="Bearer " + user_key)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", PydanticDeprecatedSince20)
+        result = await user_api_key_auth(request=request, api_key="Bearer " + user_key)
+
+    assert result.team_blocked is False
+    assert result.team_tpm_limit == 123
 
 
 @pytest.mark.asyncio
