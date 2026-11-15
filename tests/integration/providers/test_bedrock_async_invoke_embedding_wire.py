@@ -9,6 +9,7 @@ TOKEN: Final = "synthetic-bedrock-bearer"
 INPUT: Final = "hello world"
 S3_URI: Final = "s3://synthetic-bucket/out/"
 SEGMENTATION: Final = {"durationSeconds": 10}
+REQUEST_TOKEN: Final = "retry-1"
 INVOCATION_ARN: Final = "arn:aws:bedrock:us-east-1:123456789012:async-invoke/abc123"
 
 
@@ -16,7 +17,9 @@ def start_async_invoke_peer(request: Request) -> Reply:
     assert request.method == "POST" and request.target == "/async-invoke", request.target
     assert request.headers["authorization"] == f"Bearer {TOKEN}"
     body: Final = json.loads(request.body)
-    assert body.keys() == {"modelId", "modelInput", "outputDataConfig"}, request.body
+    assert body.keys() == {"modelId", "modelInput", "outputDataConfig", "clientRequestToken"}, request.body
+    assert body["clientRequestToken"] == REQUEST_TOKEN, request.body
+    assert "clientRequestToken" not in body["modelInput"], request.body
     assert body["modelId"] == MODEL_ID, request.body
     assert body["outputDataConfig"] == {"s3OutputDataConfig": {"s3Uri": S3_URI}}, request.body
     assert body["modelInput"]["segmentationConfig"] == SEGMENTATION, request.body
@@ -35,7 +38,11 @@ def test_async_invoke_embedding_extra_body_fields_reach_bedrock_inside_model_inp
         response: Final = gateway.request(
             "POST",
             "/v1/embeddings",
-            {"model": model, "input": INPUT, "extra_body": {"segmentationConfig": SEGMENTATION}},
+            {
+                "model": model,
+                "input": INPUT,
+                "extra_body": {"segmentationConfig": SEGMENTATION, "clientRequestToken": REQUEST_TOKEN},
+            },
         )
         assert response.status_code == 200, response.text
         assert len(wire.drain()) == 1, "the async-invoke request never reached Bedrock"
