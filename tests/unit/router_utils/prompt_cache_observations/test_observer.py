@@ -407,7 +407,7 @@ def _sse(events: tuple[Mapping[str, object], ...]) -> str:
 
 
 def _anthropic_stream(
-    start_usage: Mapping[str, object], delta_usage: Mapping[str, object], completed: bool = True
+    start_usage: Mapping[str, object], delta_usage: Mapping[str, object], terminal: str | None = None
 ) -> str:
     events: tuple[Mapping[str, object], ...] = (
         {
@@ -427,7 +427,7 @@ def _anthropic_stream(
         {"type": "content_block_stop", "index": 0},
         {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": delta_usage},
     )
-    return _sse((*events, {"type": "message_stop"}) if completed else events)
+    return _sse(events) + (_sse(({"type": "message_stop"},)) if terminal is None else terminal)
 
 
 async def _observe_live_stream(
@@ -486,12 +486,22 @@ async def test_live_stream_with_reported_zero_counters_is_an_authoritative_miss(
             pytest.fail(f"expected an assessed stream observation, got {outcome}")
 
 
-async def test_live_stream_cut_after_its_final_delta_never_reads_as_a_miss(
-    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+@pytest.mark.parametrize(
+    "terminal",
+    [
+        "",
+        "event: message_stop\n",
+        'event: message_stop\ndata: {"type": "message_st\n\n',
+        'event: message_stop\ndata: {"type": "message_stop"}',
+    ],
+    ids=["cut-after-delta", "header-only", "malformed-data", "unterminated-frame"],
+)
+async def test_live_stream_without_a_complete_message_stop_frame_never_reads_as_a_miss(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, terminal: str
 ) -> None:
     zeros = {"input_tokens": 9, "output_tokens": 1, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0}
     observation = await _observe_live_stream(
-        monkeypatch, respx_mock, _anthropic_stream(zeros, {"output_tokens": 2}, completed=False), may_fail=True
+        monkeypatch, respx_mock, _anthropic_stream(zeros, {"output_tokens": 2}, terminal=terminal), may_fail=True
     )
     match observation.outcome:
         case Assessed(usage=UsageUnknown(reason=UsageUnknownReason.INCOMPLETE)):

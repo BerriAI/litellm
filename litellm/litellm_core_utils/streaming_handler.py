@@ -52,7 +52,13 @@ from litellm.litellm_core_utils.model_response_utils import (
 )
 from litellm.litellm_core_utils.redact_messages import LiteLLMLoggingObject, drop_token_ids
 from litellm.litellm_core_utils.thread_pool_executor import executor
-from litellm.litellm_core_utils.upstream_cache_evidence import RecordsUpstreamStreamUsage
+from litellm.litellm_core_utils.upstream_cache_evidence import (
+    DEPLOYMENT_CACHE_SETTINGS_KEY,
+    TERMINAL_EVENT_MAX_LINES,
+    TERMINAL_EVENT_WAIT_SECONDS,
+    DrainsTerminalFrames,
+    RecordsUpstreamStreamUsage,
+)
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.ollama.common_utils import OllamaResponseIdNormalizer
 from litellm.types.llms.base import LiteLLMBaseModel
@@ -2717,12 +2723,36 @@ class CustomStreamWrapper:
             await self.aclose()
             self._log_stream_failure_and_raise(e)
 
+    def _upstream_evidence_stream(self) -> RecordsUpstreamStreamUsage | None:
+        return self.completion_stream if isinstance(self.completion_stream, RecordsUpstreamStreamUsage) else None
+
+    async def _adrain_terminal_frames(self) -> None:
+        """A stream ends here at the first empty chunk after the finish reason, before the provider's terminal
+        event is read. For a deployment that opted into prompt cache observation, read the rest of that event,
+        bounded, so a completed stream can be told apart from one cut after its last delta. Nothing read here
+        reaches the caller."""
+        stream: Final = self._upstream_evidence_stream()
+        if (
+            DEPLOYMENT_CACHE_SETTINGS_KEY not in self.logging_obj.model_call_details
+            or not isinstance(stream, DrainsTerminalFrames)
+            or not stream.awaits_terminal_event
+        ):
+            return
+        try:
+            await asyncio.wait_for(
+                stream.adrain_terminal_frames(TERMINAL_EVENT_MAX_LINES), timeout=TERMINAL_EVENT_WAIT_SECONDS
+            )
+        except (TimeoutError, httpx.HTTPError, RuntimeError):
+            return
+
     def _record_upstream_stream_usage(self) -> None:
-        if isinstance(self.completion_stream, RecordsUpstreamStreamUsage):
-            self.logging_obj.record_upstream_stream_usage(self.completion_stream.upstream_stream_usage)
+        stream: Final = self._upstream_evidence_stream()
+        if stream is not None:
+            self.logging_obj.record_upstream_stream_usage(stream.upstream_stream_usage)
 
     async def _finalize_completed_stream(self, cache_hit: bool) -> "ModelResponseStream":
         if self.sent_last_chunk is True:
+            await self._adrain_terminal_frames()
             self._record_upstream_stream_usage()
             complete_streaming_response: Final = await self._async_build_complete_streaming_response()
             response: Final = self._new_usage_chunk()

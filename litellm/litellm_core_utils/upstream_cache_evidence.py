@@ -17,6 +17,8 @@ from litellm.litellm_core_utils.core_helpers import as_str_mapping
 SERVED_RUNTIME_KEY: Final = "litellm_served_runtime"
 UPSTREAM_STREAM_USAGE_KEY: Final = "litellm_upstream_stream_usage"
 DEPLOYMENT_CACHE_SETTINGS_KEY: Final = "litellm_deployment_cache_settings"
+TERMINAL_EVENT_WAIT_SECONDS: Final = 1.0
+TERMINAL_EVENT_MAX_LINES: Final = 16
 
 _JSON: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
 _EVENT: Final[TypeAdapter[Mapping[str, JsonValue]]] = TypeAdapter(Mapping[str, JsonValue])
@@ -59,6 +61,14 @@ UpstreamStreamUsage: TypeAlias = AnthropicStreamUsage | ConverseStreamUsage
 @runtime_checkable
 class RecordsUpstreamStreamUsage(Protocol):
     upstream_stream_usage: UpstreamStreamUsage | None
+
+
+@runtime_checkable
+class DrainsTerminalFrames(Protocol):
+    @property
+    def awaits_terminal_event(self) -> bool: ...
+
+    async def adrain_terminal_frames(self, max_lines: int) -> None: ...
 
 
 @runtime_checkable

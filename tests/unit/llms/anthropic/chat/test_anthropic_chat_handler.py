@@ -3,7 +3,7 @@ import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from itertools import chain
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -4463,18 +4463,54 @@ def test_stream_iterator_keeps_the_raw_usage_the_provider_sent_and_sees_message_
     )
 
 
-def test_stream_iterator_counts_the_message_stop_event_line_once() -> None:
-    lines = (
-        "event: message_start",
-        'data: {"type": "message_start", "message": {"id": "m", "usage": {"input_tokens": 9}}}',
-        "event: message_delta",
-        'data: {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 2}}',
-        "event: message_stop",
-        'data: {"type": "message_stop"}',
-    )
+_START_LINES: Final = (
+    "event: message_start",
+    'data: {"type": "message_start", "message": {"id": "m", "usage": {"input_tokens": 9}}}',
+    "",
+    "event: message_delta",
+    'data: {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 2}}',
+    "",
+)
+
+
+def _stopped_after(lines: tuple[str, ...]) -> bool:
     iterator = ModelResponseIterator(streaming_response=iter(lines), sync_stream=True, json_mode=False)
-    consumed = list(iterator)
-    assert len(consumed) == len(lines)
+    _ = list(iterator)
+    return iterator.upstream_stream_usage is not None and iterator.upstream_stream_usage.stopped
+
+
+@pytest.mark.parametrize(
+    ("terminal", "stopped"),
+    [
+        (("event: message_stop", 'data: {"type": "message_stop"}', ""), True),
+        (("event: message_stop",), False),
+        (("event: message_stop", 'data: {"type": "message_st'), False),
+        (("event: message_stop", 'data: {"type": "message_stop"}'), False),
+        ((), False),
+    ],
+)
+def test_stream_iterator_counts_message_stop_only_once_its_frame_is_complete(
+    terminal: tuple[str, ...], stopped: bool
+) -> None:
+    assert _stopped_after((*_START_LINES, *terminal)) is stopped
+
+
+def test_stream_iterator_counts_a_whole_message_stop_frame_read_in_one_chunk() -> None:
+    lines = (*_START_LINES, 'data: {"type": "message_stop"}\n\n')
+    assert _stopped_after(lines) is True
+
+
+async def test_draining_reads_the_terminal_frame_a_caller_stopped_before() -> None:
+    async def lines() -> AsyncIterator[str]:
+        for line in (*_START_LINES, "event: message_stop", 'data: {"type": "message_stop"}', "", "unread"):
+            yield line
+
+    iterator = ModelResponseIterator(streaming_response=lines(), sync_stream=False, json_mode=False)
+    stream = iterator.__aiter__()
+    for _ in _START_LINES:
+        await stream.__anext__()
+    assert iterator.awaits_terminal_event is True
+    await iterator.adrain_terminal_frames(max_lines=16)
     assert iterator.upstream_stream_usage == AnthropicStreamUsage(
         opening={"input_tokens": 9},
         closing={"output_tokens": 2},
@@ -4482,3 +4518,4 @@ def test_stream_iterator_counts_the_message_stop_event_line_once() -> None:
         starts=1,
         stopped=True,
     )
+    assert await stream.__anext__() is not None

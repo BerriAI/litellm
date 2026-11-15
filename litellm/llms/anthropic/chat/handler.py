@@ -699,7 +699,7 @@ class AnthropicChatCompletion(BaseLLM):
         pass
 
 
-_MESSAGE_STOP_EVENT_LINE: Final = "event: message_stop"
+_SSE_FRAME_TERMINATORS: Final = ("\n\n", "\r\n\r\n")
 
 
 class ModelResponseIterator:
@@ -724,7 +724,8 @@ class ModelResponseIterator:
         self.speed = speed
         self._cumulative_usage: Mapping[str, object] = MappingProxyType({})
         self.upstream_stream_usage: AnthropicStreamUsage | None = None
-        self._message_stop_line_seen = False
+        self._sse_framed = False
+        self._message_stop_frame_open = False
         # rewritten-name -> caller's original. Built per-request from the
         # forward map in AnthropicConfig._build_request_tool_name_maps; only
         # contains entries we actually rewrote, so a tool legitimately named
@@ -1010,18 +1011,41 @@ class ModelResponseIterator:
         return results
 
     def _record_message_stop(self) -> None:
-        """The stream wrapper ends a stream at the first empty chunk after the finish reason, which is the
-        `event: message_stop` line, before its `data:` line is read, so the event line counts as the stop."""
-        self._message_stop_line_seen = True
         self.upstream_stream_usage = recorded_anthropic_stream_event(
             self.upstream_stream_usage, {"type": "message_stop"}
         )
 
+    def _end_of_sse_frame(self) -> None:
+        """An SSE event only counts once the blank line that terminates its frame arrives, so a stream cut inside
+        the `message_stop` frame stays incomplete."""
+        if self._message_stop_frame_open:
+            self._message_stop_frame_open = False
+            self._record_message_stop()
+
+    @property
+    def awaits_terminal_event(self) -> bool:
+        usage: Final = self.upstream_stream_usage
+        return usage is not None and isinstance(usage.stop_reason, str) and not usage.stopped
+
+    async def adrain_terminal_frames(self, max_lines: int) -> None:
+        """Reads what is left of a stream the caller stopped consuming after the stop reason, up to `max_lines`
+        lines, so a `message_stop` the provider did send is recorded. Nothing read here is returned to anyone."""
+        for _ in range(max_lines):
+            if not self.awaits_terminal_event:
+                return
+            try:
+                await self.__anext__()
+            except StopAsyncIteration:
+                return
+
     def chunk_parser(self, chunk: dict) -> ModelResponseStream:
         try:
             type_chunk: Final = chunk.get("type", "") or ""
-            if type_chunk == "message_stop" and not self._message_stop_line_seen:
-                self._record_message_stop()
+            if type_chunk == "message_stop":
+                if self._sse_framed:
+                    self._message_stop_frame_open = True
+                else:
+                    self._record_message_stop()
 
             text = ""
             tool_use: ChatCompletionToolCallChunk | None = None
@@ -1515,6 +1539,12 @@ class ModelResponseIterator:
                 return self.chunk_parser(chunk=decoded)
 
     def _parse_sse_data(self, str_line: str) -> ModelResponseStream | None:
+        result: Final = self._parse_sse_payload(str_line)
+        if str_line.endswith(_SSE_FRAME_TERMINATORS):
+            self._end_of_sse_frame()
+        return result
+
+    def _parse_sse_payload(self, str_line: str) -> ModelResponseStream | None:
         """
         Parse SSE data line, handling both complete and partial JSON chunks.
 
@@ -1525,6 +1555,7 @@ class ModelResponseIterator:
             ModelResponseStream if parsing succeeded, None if accumulating partial JSON
         """
         data_str: Final = str_line[5:]  # Remove "data:" prefix
+        self._sse_framed = True
 
         if self.chunk_type == "accumulated_json":
             # Already in accumulation mode, keep accumulating
@@ -1590,8 +1621,8 @@ class ModelResponseIterator:
                         return result
                     # If None, continue loop to get more chunks for accumulation
                 else:
-                    if isinstance(str_line, str) and str_line.strip() == _MESSAGE_STOP_EVENT_LINE:
-                        self._record_message_stop()
+                    if isinstance(str_line, str) and not str_line.strip():
+                        self._end_of_sse_frame()
                     return GenericStreamingChunk(
                         text="",
                         is_finished=False,
@@ -1641,8 +1672,8 @@ class ModelResponseIterator:
                         return result
                     # If None, continue loop to get more chunks for accumulation
                 else:
-                    if isinstance(str_line, str) and str_line.strip() == _MESSAGE_STOP_EVENT_LINE:
-                        self._record_message_stop()
+                    if isinstance(str_line, str) and not str_line.strip():
+                        self._end_of_sse_frame()
                     return GenericStreamingChunk(
                         text="",
                         is_finished=False,
