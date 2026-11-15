@@ -3041,7 +3041,7 @@ class LiteLLMCompletionResponsesConfig:
         return (flat_tool,) if flat_tool is not None else ()
 
     @staticmethod
-    def _validate_namespace_name_collisions(tools: ResponseTools) -> None:
+    def validate_namespace_name_collisions(tools: ResponseTools) -> None:
         member_chat_names: Final = LiteLLMCompletionResponsesConfig.member_chat_names(tools)
         top_level_function_names: Final = frozenset(
             str(tool.get("name") or "") for tool in tools or () if tool.get("type") == "function"
@@ -3049,15 +3049,25 @@ class LiteLLMCompletionResponsesConfig:
         flattened_namespace_names: Final = frozenset(chain.from_iterable(member_chat_names.items()))
         conflicting_tool_names: Final = top_level_function_names & flattened_namespace_names
         if conflicting_tool_names:
-            raise ValueError(
-                "Top-level function names conflict with flattened namespace tools: "
-                + ", ".join(sorted(conflicting_tool_names))
+            raise litellm.BadRequestError(
+                message=(
+                    "Top-level function names conflict with flattened namespace tools: "
+                    + ", ".join(sorted(conflicting_tool_names))
+                ),
+                model="",
+                llm_provider="",
             )
         shared_chat_names: Final = sorted(
             chat_name for chat_name, count in Counter(member_chat_names.values()).items() if count > 1
         )
         if shared_chat_names:
-            raise ValueError("Flattened namespace tools share a name: " + ", ".join(shared_chat_names))
+            raise litellm.BadRequestError(
+                message="Flattened namespace tools share a name: " + ", ".join(shared_chat_names),
+                model="",
+                llm_provider="",
+            )
+
+    _validate_namespace_name_collisions = validate_namespace_name_collisions
 
     @staticmethod
     def _responses_tool_to_chat_form(tool: Mapping[str, object]) -> ResponsesToolChatForm:
@@ -3142,7 +3152,7 @@ class LiteLLMCompletionResponsesConfig:
         """
         if tools is None:
             return [], None
-        LiteLLMCompletionResponsesConfig._validate_namespace_name_collisions(tools)
+        LiteLLMCompletionResponsesConfig.validate_namespace_name_collisions(tools)
         forms: Final = LiteLLMCompletionResponsesConfig.responses_tools_to_chat_forms(tools)
         web_search_options: Final = next(
             (form.web_search_options for form in reversed(forms) if form.web_search_options is not None),
