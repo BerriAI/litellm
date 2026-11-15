@@ -24,6 +24,7 @@ from tests.unit.test_router.core.scripted_host import (
     completion_response,
     deployment,
     embedding_response,
+    server_error,
 )
 
 MESSAGES: Final = [{"role": "user", "content": "hi"}]
@@ -462,14 +463,18 @@ async def _request_state_after_a_call(
     state: Final = _RequestState()
     _ = await core.call(endpoint, {"model": "g", "messages": MESSAGES, "max_tokens": 5, "metadata": {"state": state}})
     host.calls.clear()
+    host.raised.clear()
     return weakref.ref(state)
 
 
 @pytest.mark.parametrize("endpoint", ["acompletion", "aanthropic_messages", "completion"])
+@pytest.mark.parametrize("retry_then_succeed", [False, True])
 async def test_a_finished_call_frees_its_request_without_a_gc_pass(
-    make_core: MakeCore, host: ScriptedHost, endpoint: str
+    make_core: MakeCore, host: ScriptedHost, endpoint: str, retry_then_succeed: bool
 ):
-    core: Final = _one_group(make_core)
+    if retry_then_succeed:
+        host.answer("openai/d1", server_error("d1"), None)
+    core: Final = make_core(model_list=[deployment("g", "d1")], num_retries=1, retry_after=0)
     gc.disable()
     try:
         state: Final = await _request_state_after_a_call(core, host, endpoint)
