@@ -123,6 +123,7 @@ def available(ctx: click.Context):
         click.echo(f"Error: HTTP {e.response.status_code}", err=True)
         error_body: Final[_ErrorBodyView] = {"body": e.response.json()}
         click.echo(f"Details: {error_body['body'].get('detail', 'Unknown error')}", err=True)
+        raise click.Abort()
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
         raise click.Abort()
