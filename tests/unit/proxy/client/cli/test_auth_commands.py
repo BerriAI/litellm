@@ -942,7 +942,7 @@ class TestCLIKeyRegenerationFlow:
         ],
     )
     def test_login_skips_the_team_prompt_only_when_the_requested_team_names_one_of_the_users_teams(
-        self, args, env, polled_team, prompted
+        self, secret_vault_factory, args, env, polled_team, prompted
     ):
         team_pick = Mock(status_code=200)
         team_pick.json.return_value = {
@@ -962,11 +962,14 @@ class TestCLIKeyRegenerationFlow:
             patch("webbrowser.open"),
             patch("requests.post", return_value=_mock_cli_sso_start_response(login_id="cli-session-uuid-456")),
             patch("requests.get", side_effect=[team_pick, issued]) as mock_get,
-            patch("litellm.proxy.client.cli.commands.auth.save_cli_token"),
-            patch("litellm.proxy.client.cli.interface.show_commands"),
             patch("click.prompt", return_value="4") as prompt,
         ):
-            result = self.runner.invoke(login, args, obj={"base_url": "https://test.example.com"}, env=env)
+            result = self.runner.invoke(
+                login,
+                args,
+                obj={"base_url": "https://test.example.com", "secret_vault": secret_vault_factory()},
+                env=env,
+            )
 
         assert "Login successful!" in result.output, result.output
         assert mock_get.call_args_list[1].args[0].endswith(f"?team_id={polled_team}"), result.output
@@ -1978,45 +1981,39 @@ class TestPkceLoginCommand:
             (None, ["--pkce"], "false", True),
         ],
     )
-    def test_login_pkce_env_var_sits_between_the_flag_and_the_saved_setting(self, saved, args, env, uses_pkce):
+    def test_login_pkce_env_var_sits_between_the_flag_and_the_saved_setting(
+        self, secret_vault_factory, login_edges, saved, args, env, uses_pkce
+    ):
         from litellm.proxy.client.cli.commands.config import save_config
 
         if saved is not None:
             save_config({"pkce": saved})
-        with (
-            patch("litellm.proxy.client.cli.commands.auth.run_pkce_login", return_value=_pkce_credential()),
-            patch(
-                "litellm.proxy.client.cli.commands.auth._start_cli_sso_flow",
-                side_effect=RuntimeError("classic sso flow"),
-            ),
-            patch("litellm.proxy.client.cli.commands.auth.save_token", return_value=SecretStored()),
-            patch("litellm.proxy.client.cli.interface.show_commands"),
-        ):
-            result = self.runner.invoke(
-                login, args, obj={"base_url": PKCE_BASE_URL}, env={"LITELLM_PROXY_LOGIN_PKCE": env}
-            )
+        result = self.runner.invoke(
+            login,
+            args,
+            obj={"base_url": PKCE_BASE_URL, "secret_vault": secret_vault_factory()},
+            env={"LITELLM_PROXY_LOGIN_PKCE": env},
+        )
 
-        assert ("Login successful!" in result.output) is uses_pkce
-        assert ("Authentication failed: classic sso flow" in result.output) is (not uses_pkce)
+        assert [flow for flow, _ in login_edges.login_reached] == ["pkce" if uses_pkce else "classic"], result.output
 
     @pytest.mark.parametrize(
         ("args", "env", "team"),
         [
             (["--pkce", "--team", "Team A"], {}, "Team A"),
             (["--pkce"], {"LITELLM_PROXY_TEAM": "team-b"}, "team-b"),
+            (["--pkce", "--team", "Team A"], {"LITELLM_PROXY_TEAM": "team-b"}, "Team A"),
             (["--pkce"], {}, None),
         ],
     )
-    def test_pkce_login_hands_the_requested_team_to_the_browser_flow(self, args, env, team):
-        with (
-            patch("litellm.proxy.client.cli.commands.auth.run_pkce_login", return_value=_pkce_credential()) as run,
-            patch("litellm.proxy.client.cli.commands.auth.save_token", return_value=SecretStored()),
-            patch("litellm.proxy.client.cli.interface.show_commands"),
-        ):
-            result = self.runner.invoke(login, args, obj={"base_url": PKCE_BASE_URL}, env=env)
+    def test_pkce_login_names_the_requested_team_in_the_authorize_url_it_opens(
+        self, secret_vault_factory, login_edges, args, env, team
+    ):
+        result = self.runner.invoke(
+            login, args, obj={"base_url": PKCE_BASE_URL, "secret_vault": secret_vault_factory()}, env=env
+        )
 
-        assert "Login successful!" in result.output, result.output
-        assert run.call_args.kwargs["team"] == team
+        assert login_edges.login_reached == [("pkce", team)], result.output
 
     def test_pkce_login_saves_the_refreshable_record_and_skips_the_sso_poll(self):
         with (

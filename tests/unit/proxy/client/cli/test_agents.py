@@ -36,7 +36,6 @@ from litellm.proxy.client.cli.commands.agents import (
 from litellm.proxy.client.cli.commands.auth import save_token
 from litellm.proxy.client.cli.commands.claude_settings import ClaudeSettingsError
 from litellm.proxy.client.cli.commands.config import save_config
-from litellm.proxy.client.cli.commands.pkce_login import PkceFailure
 from litellm.proxy.client.cli.main import cli as lite
 
 if sys.version_info >= (3, 11):
@@ -45,7 +44,6 @@ else:
     import tomli as tomllib
 
 AGENTS_MODULE = "litellm.proxy.client.cli.commands.agents"
-AUTH_MODULE = "litellm.proxy.client.cli.commands.auth"
 CLAUDE_SETTINGS_MODULE = "litellm.proxy.client.cli.commands.claude_settings"
 
 
@@ -2912,52 +2910,37 @@ class TestAgentCommands:
     @pytest.mark.parametrize(
         ("env", "saved_pkce", "flow", "team"),
         [
-            ({"LITELLM_PROXY_LOGIN_PKCE": "true", "LITELLM_PROXY_TEAM": "Team A"}, False, "pkce", "Team A"),
-            ({"LITELLM_PROXY_TEAM": "team-b"}, False, "classic", "team-b"),
-            ({"LITELLM_PROXY_LOGIN_PKCE": "false"}, True, "classic", None),
-            ({}, True, "pkce", None),
+            ({"LITELLM_PROXY_LOGIN_PKCE": "true", "LITELLM_PROXY_TEAM": "Team A"}, "false", "pkce", "Team A"),
+            ({"LITELLM_PROXY_TEAM": "Team B"}, "false", "classic", "team-b"),
+            ({"LITELLM_PROXY_LOGIN_PKCE": "false"}, "true", "classic", "team-a"),
+            ({}, "true", "pkce", None),
         ],
         ids=["pkce-and-team-from-env", "team-from-env", "env-pkce-off-beats-saved-setting", "no-env-keeps-saved-setting"],
     )
     def test_the_login_lite_claude_starts_honors_the_login_env_vars(
-        self, secret_vault_factory, env, saved_pkce, flow, team
+        self, secret_vault_factory, login_edges, env, saved_pkce, flow, team
     ):
-        reached = []
-        with (
-            patch(f"{AGENTS_MODULE}._is_interactive", return_value=True),
-            patch(f"{AGENTS_MODULE}.run_agent"),
-            patch(f"{AGENTS_MODULE}.pkce_default", return_value=saved_pkce),
-            patch(
-                f"{AUTH_MODULE}.run_pkce_login",
-                side_effect=lambda *_, **kwargs: reached.append(("pkce", kwargs["team"])) or PkceFailure("stop"),
-            ),
-            patch(
-                f"{AUTH_MODULE}._start_cli_sso_flow",
-                return_value={"login_id": "cli-1", "poll_secret": "secret", "user_code": "ABCD"},
-            ),
-            patch(f"{AUTH_MODULE}.webbrowser.open"),
-            patch(
-                f"{AUTH_MODULE}._poll_for_authentication",
-                side_effect=lambda **kwargs: reached.append(("classic", kwargs["requested_team"])),
-            ),
-        ):
+        save_config({"pkce": saved_pkce})
+        with patch(f"{AGENTS_MODULE}._is_interactive", return_value=True):
             result = self.runner.invoke(
                 _agent_command("claude"),
                 [],
                 obj={"base_url": "http://localhost:4000", "api_key": None, "secret_vault": secret_vault_factory()},
                 env=env,
+                input="1\n",
             )
 
-        assert reached == [(flow, team)], result.output
+        assert login_edges.login_reached == [(flow, team)], result.output
+        prompted = "Select a team by entering the index number" in result.output
+        assert prompted is (flow == "classic" and "LITELLM_PROXY_TEAM" not in env)
 
     def test_an_invalid_pkce_env_var_is_named_in_the_error_lite_claude_shows(self, secret_vault_factory):
-        with patch(f"{AGENTS_MODULE}.run_agent"):
-            result = self.runner.invoke(
-                _agent_command("claude"),
-                [],
-                obj={"base_url": "http://localhost:4000", "api_key": None, "secret_vault": secret_vault_factory()},
-                env={"LITELLM_PROXY_LOGIN_PKCE": "maybe"},
-            )
+        result = self.runner.invoke(
+            _agent_command("claude"),
+            [],
+            obj={"base_url": "http://localhost:4000", "api_key": None, "secret_vault": secret_vault_factory()},
+            env={"LITELLM_PROXY_LOGIN_PKCE": "maybe"},
+        )
 
         assert result.exit_code != 0
         assert "LITELLM_PROXY_LOGIN_PKCE" in result.output
