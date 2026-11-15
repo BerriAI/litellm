@@ -313,7 +313,7 @@ export function LogDetailsDrawer({
       <SheetContent
         side="right"
         showCloseButton={false}
-        className="gap-0 overflow-hidden p-0 data-[side=right]:sm:max-w-none w-full sm:w-[60%]"
+        className="gap-0 overflow-hidden p-0 data-[side=right]:sm:max-w-none !w-full sm:!w-[60%]"
       >
         <SheetTitle className="sr-only">
           {logEntry?.request_id
