@@ -1227,6 +1227,44 @@ class TestOllamaStreamingUsage:
         assert result.usage is None
 
 
+def test_ollama_chat_stream_carries_one_response_id_on_every_chunk(respx_mock: respx.MockRouter) -> None:
+    ollama_lines: Final = (
+        {"model": "qwen3:0.6b", "message": {"role": "assistant", "content": "Hel"}, "done": False},
+        {"model": "qwen3:0.6b", "message": {"role": "assistant", "content": "lo"}, "done": False},
+        {"model": "qwen3:0.6b", "message": {"role": "assistant", "content": "!"}, "done": False},
+        {
+            "model": "qwen3:0.6b",
+            "message": {"role": "assistant", "content": ""},
+            "done": True,
+            "done_reason": "stop",
+            "prompt_eval_count": 5,
+            "eval_count": 3,
+        },
+    )
+    respx_mock.post("http://ollama.test:11434/api/chat").respond(
+        content="".join(json.dumps(line) + "\n" for line in ollama_lines).encode(),
+        headers={"Content-Type": "application/x-ndjson"},
+    )
+
+    def stream_ids() -> tuple[str, ...]:
+        return tuple(
+            chunk.id
+            for chunk in litellm.completion(
+                model="ollama_chat/qwen3:0.6b",
+                messages=[{"role": "user", "content": "hi"}],
+                stream=True,
+                api_base="http://ollama.test:11434",
+            )
+        )
+
+    first: Final = stream_ids()
+    second: Final = stream_ids()
+
+    assert len(first) >= len(ollama_lines) - 1 and len(set(first)) == 1, first
+    assert first[0].startswith("chatcmpl-")
+    assert set(first) != set(second)
+
+
 def test_get_ollama_params():
     try:
         converted_params = get_optional_params(
