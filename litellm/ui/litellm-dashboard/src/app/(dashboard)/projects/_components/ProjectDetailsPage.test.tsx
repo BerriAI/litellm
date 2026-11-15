@@ -340,5 +340,18 @@ describe("ProjectDetail", () => {
       expect(screen.getByText("18500")).toBeInTheDocument();
       expect(mockUseTeamMemberCount).toHaveBeenCalledWith("team-1");
     });
+
+    it("should not report zero members while the member count has not loaded", () => {
+      mockUseProjectDetails.mockReturnValue({ data: { ...mockProject, team_id: "team-1" }, isLoading: false });
+      mockUseTeam.mockReturnValue({
+        data: { team_id: "team-1", team_alias: "Engineering", members_with_roles: [] },
+        isLoading: false,
+      });
+      mockUseTeamMemberCount.mockReturnValue({ data: undefined });
+      renderWithProviders(<ProjectDetail projectId="proj-1" onBack={onBack} />);
+      const membersRow = screen.getByText("Members").parentElement;
+      expect(membersRow).toHaveTextContent("Members-");
+      expect(membersRow).not.toHaveTextContent("0");
+    });
   });
 });

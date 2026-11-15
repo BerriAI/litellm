@@ -269,7 +269,7 @@ export function ProjectDetail({ projectId, onBack }: ProjectDetailProps) {
 
                     <div className="flex items-center justify-between">
                       <span className="text-xs text-muted-foreground">{t("projects.detail.team.members")}</span>
-                      <span className="text-xs text-foreground">{teamMemberCount ?? 0}</span>
+                      <span className="text-xs text-foreground">{teamMemberCount ?? "-"}</span>
                     </div>
                   </div>
                 );

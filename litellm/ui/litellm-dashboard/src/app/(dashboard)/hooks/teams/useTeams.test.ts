@@ -1017,6 +1017,22 @@ describe("team members list route", () => {
     );
   });
 
+  it("asks for a member whose id holds a comma on its own so the id is not split", async () => {
+    vi.mocked(apiClient.get).mockImplementation(async (_path, options) => ({
+      data: [options?.query?.["filter[user_id][eq]"] ?? options?.query?.["filter[user_id][in]"]].map((user_id) => ({
+        user_id,
+      })),
+    }));
+
+    const members = await fetchTeamMembersByUserId("token", "team-1", ["cn=jane,ou=eng", "user-1"]);
+
+    expect(members.map((member) => member.user_id)).toEqual(["user-1", "cn=jane,ou=eng"]);
+    expect(vi.mocked(apiClient.get).mock.calls.map(([, options]) => options?.query)).toEqual([
+      { "filter[user_id][in]": "user-1", page_size: 100 },
+      { "filter[user_id][eq]": "cn=jane,ou=eng", page_size: 1 },
+    ]);
+  });
+
   it("makes no request when no member is named", async () => {
     expect(await fetchTeamMembersByUserId("token", "team-1", [])).toEqual([]);
     expect(apiClient.get).not.toHaveBeenCalled();

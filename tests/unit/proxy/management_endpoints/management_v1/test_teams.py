@@ -13,6 +13,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Final
 
+import httpx
 import pytest
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -1047,3 +1048,26 @@ def test_a_driver_error_while_listing_members_is_a_500_problem_document_without_
     assert response.headers["content-type"] == "application/problem+json"
     assert response.json()["type"] == "urn:litellm:error:internal-server-error"
     assert "connection reset by peer" not in response.text
+
+
+class _OutagePrisma:
+    class _Db:
+        def __getattr__(self, name: str) -> object:
+            raise httpx.ConnectError("connection refused")
+
+    def __init__(self) -> None:
+        self.db = self._Db()
+
+
+def test_a_database_outage_while_listing_members_is_a_503_problem_document_so_callers_retry(
+    monkeypatch, as_proxy_admin
+):
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", _OutagePrisma())
+
+    response: Final = client.get(MEMBERS_PATH)
+
+    assert response.status_code == 503
+    assert response.headers["content-type"] == "application/problem+json"
+    assert response.json()["type"] == "urn:litellm:error:database-unavailable"
+    assert "connection refused" not in response.text
+

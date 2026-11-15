@@ -259,6 +259,21 @@ def test_filters_reach_members_past_the_first_page(gateway: Gateway, large_team:
     assert _user_ids(named_admin) == [large_team.user_id(3000)]
 
 
+def test_a_member_whose_user_id_holds_a_comma_is_found_by_the_eq_filter(gateway: Gateway, scenario: Scenario) -> None:
+    comma_id: Final = f"cn=jane,ou=eng-{uuid.uuid4().hex[:8]}"
+    scenario.user(user_id=comma_id, user_role="internal_user")
+    team_id: Final = scenario.team(members_with_roles=[{"user_id": comma_id, "role": "user"}])
+    path: Final = f"/management/v1/teams/{team_id}/members"
+
+    by_eq: Final = gateway.request("GET", path, params={"filter[user_id][eq]": comma_id})
+    assert by_eq.status_code == 200, by_eq.text
+    assert [row["user_id"] for row in _rows(object_value(by_eq.json()))] == [comma_id]
+
+    by_in: Final = gateway.request("GET", path, params={"filter[user_id][in]": comma_id})
+    assert by_in.status_code == 200, by_in.text
+    assert _rows(object_value(by_in.json())) == ()
+
+
 def _effective_max_budget(n: int) -> float:
     return 100.0 + n % CUSTOM_BUDGETS if n <= WITH_MEMBERSHIP and n % 4 == 0 else DEFAULT_MEMBER_BUDGET
 

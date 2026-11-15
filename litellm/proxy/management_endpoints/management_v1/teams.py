@@ -13,6 +13,7 @@ from litellm.models.budget import LiteLLM_BudgetTable, LiteLLM_BudgetTableFull
 from litellm.models.team_membership import LiteLLM_TeamMembership
 from litellm.proxy._types import CommonProxyErrors, TeamMemberBudgetSource, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.list_api.common import PROBLEM_TYPE_BASE, ManagementProblem, reject_unknown_query_params
 from litellm.proxy.list_api.list_framework import (
     FilterSpec,
@@ -181,7 +182,7 @@ TEAM_MEMBERS_LIST_SPEC: Final[ListSpec[TeamMemberListItem, TeamMemberListItem]] 
     filters=MappingProxyType(
         {
             "role": FilterSpec(type=str, ops=frozenset(("eq", "in"))),
-            "user_id": FilterSpec(type=str, ops=frozenset(("in",))),
+            "user_id": FilterSpec(type=str, ops=frozenset(("eq", "in"))),
         }
     ),
     default_sort=(SortKey(field="position", descending=False),),
@@ -219,7 +220,8 @@ async def list_team_members(
     or `position` (roster order, the default and the tiebreaker), each optionally prefixed with `-`
     for descending. `q` is a case-insensitive substring match on `user_id`, `user_email` and
     `user_alias`. `page_size` defaults to 50 and is capped at 100. Filters are
-    `filter[role][eq|in]` and `filter[user_id][in]`.
+    `filter[role][eq|in]` and `filter[user_id][eq|in]`. `in` splits its value on commas, so name a `user_id`
+    that contains a comma with `eq`.
 
     Example curl:
     ```
@@ -269,6 +271,15 @@ async def list_team_members(
         verbose_proxy_logger.exception(
             "litellm.proxy.management_endpoints.management_v1.teams.list_team_members(): Exception occured - %s", e
         )
+        if PrismaDBExceptionHandler.is_database_service_unavailable_error_in_chain(e):
+            raise ManagementProblem(
+                ProblemDetail(
+                    type=f"{PROBLEM_TYPE_BASE}database-unavailable",
+                    title="Database unavailable",
+                    status=503,
+                    detail=PrismaDBExceptionHandler.database_unavailable_message(e),
+                )
+            ) from e
         raise ManagementProblem(
             ProblemDetail(
                 type=f"{PROBLEM_TYPE_BASE}internal-server-error",

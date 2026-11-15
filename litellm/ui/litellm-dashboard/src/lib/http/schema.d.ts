@@ -10095,7 +10095,8 @@ export interface paths {
          *     or `position` (roster order, the default and the tiebreaker), each optionally prefixed with `-`
          *     for descending. `q` is a case-insensitive substring match on `user_id`, `user_email` and
          *     `user_alias`. `page_size` defaults to 50 and is capped at 100. Filters are
-         *     `filter[role][eq|in]` and `filter[user_id][in]`.
+         *     `filter[role][eq|in]` and `filter[user_id][eq|in]`. `in` splits its value on commas, so name a `user_id`
+         *     that contains a comma with `eq`.
          *
          *     Example curl:
          *     ```

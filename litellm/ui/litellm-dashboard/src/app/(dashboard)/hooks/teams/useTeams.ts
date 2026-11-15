@@ -204,17 +204,21 @@ export const fetchTeamMembersByUserId = async (
   teamId: string,
   userIds: readonly string[],
 ): Promise<TeamMemberListItem[]> => {
-  const batches = Array.from({ length: Math.ceil(userIds.length / TEAM_MEMBER_FILTER_BATCH) }, (_, index) =>
-    userIds.slice(index * TEAM_MEMBER_FILTER_BATCH, (index + 1) * TEAM_MEMBER_FILTER_BATCH),
+  const batchable = userIds.filter((userId) => !userId.includes(","));
+  const batches = Array.from({ length: Math.ceil(batchable.length / TEAM_MEMBER_FILTER_BATCH) }, (_, index) =>
+    batchable.slice(index * TEAM_MEMBER_FILTER_BATCH, (index + 1) * TEAM_MEMBER_FILTER_BATCH),
   );
-  const pages = await Promise.all(
-    batches.map((batch) =>
+  const pages = await Promise.all([
+    ...batches.map((batch) =>
       fetchTeamMemberPage(accessToken, teamId, {
         "filter[user_id][in]": batch.join(","),
         page_size: TEAM_MEMBER_FILTER_BATCH,
       }),
     ),
-  );
+    ...userIds
+      .filter((userId) => userId.includes(","))
+      .map((userId) => fetchTeamMemberPage(accessToken, teamId, { "filter[user_id][eq]": userId, page_size: 1 })),
+  ]);
   return pages.flatMap((page) => page.data);
 };
 
