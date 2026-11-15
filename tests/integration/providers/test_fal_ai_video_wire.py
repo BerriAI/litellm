@@ -465,6 +465,7 @@ def test_deployment_per_second_price_bills_a_fal_model_the_catalog_prices_per_vi
     def respond(request: Request) -> Reply:
         assert request.method == "POST"
         assert request.target == f"/{fal_model}"
+        assert json.loads(request.body) == {"prompt": "a cat playing volleyball on a beach", "duration": "5"}
         return Reply(body=json.dumps({"status": "IN_QUEUE", "request_id": request_id, "queue_position": 0}).encode())
 
     with wire_server(respond) as wire, gateway.scenario() as scenario:
