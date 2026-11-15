@@ -154,15 +154,13 @@ class BigModelMessagesConfig(OpenAILikeAnthropicMessagesConfig):
             model, normalized, request_body, litellm_logging_obj
         )
 
-    @staticmethod
     def _translate_reasoning_effort_to_anthropic(
-        model: str, optional_params: Mapping[str, object], max_tokens: int | None, custom_llm_provider: str
+        self, model: str, optional_params: Mapping[str, object], max_tokens: int | None, custom_llm_provider: str
     ) -> None:
         return None
 
-    @staticmethod
     def _translate_adaptive_effort_for_non_adaptive_model(
-        model: str, optional_params: Mapping[str, object], max_tokens: int | None, custom_llm_provider: str
+        self, model: str, optional_params: Mapping[str, object], max_tokens: int | None, custom_llm_provider: str
     ) -> None:
         return None
 

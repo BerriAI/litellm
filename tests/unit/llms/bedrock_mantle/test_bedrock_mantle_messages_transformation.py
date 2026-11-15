@@ -19,6 +19,7 @@ import respx
 
 import litellm
 from litellm.caching.llm_caching_handler import LLMClientCache
+from litellm.constants import BEDROCK_MIN_THINKING_BUDGET_TOKENS
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock_mantle.messages.transformation import (
     BedrockMantleAnthropicMessagesConfig,
@@ -223,6 +224,86 @@ class TestRequestBody:
             headers={},
         )
         assert "stream" not in body
+
+    @pytest.mark.parametrize(
+        ("model", "thinking_params", "expected_thinking", "expected_edit_types"),
+        [
+            pytest.param(
+                "anthropic.claude-3-5-haiku-20241022-v1:0",
+                {"thinking": {"type": "adaptive"}},
+                None,
+                ["clear_tool_uses_20250919"],
+                id="no-thinking-support-drops-edit",
+            ),
+            pytest.param(
+                "anthropic.claude-3-5-haiku-20241022-v1:0",
+                {},
+                None,
+                ["clear_thinking_20251015", "clear_tool_uses_20250919"],
+                id="caller-edit-without-thinking-forwarded",
+            ),
+            pytest.param(
+                "anthropic.claude-opus-4-5-20251101-v1:0",
+                {"thinking": {"type": "adaptive"}, "output_config": {"effort": "high"}},
+                {"type": "enabled", "budget_tokens": BEDROCK_MIN_THINKING_BUDGET_TOKENS},
+                ["clear_thinking_20251015", "clear_tool_uses_20250919"],
+                id="thinking-added-back-keeps-edit",
+            ),
+            pytest.param(
+                "anthropic.claude-opus-4-5-20251101-v1:0",
+                {"max_tokens": BEDROCK_MIN_THINKING_BUDGET_TOKENS, "reasoning_effort": "none"},
+                None,
+                ["clear_tool_uses_20250919"],
+                id="max-tokens-too-small-to-add-thinking-back-drops-edit",
+            ),
+            pytest.param(
+                "anthropic.claude-mythos-preview",
+                {},
+                None,
+                ["clear_thinking_20251015", "clear_tool_uses_20250919"],
+                id="always-on-model-keeps-edit",
+            ),
+            pytest.param(
+                "anthropic.claude-sonnet-4-6",
+                {"thinking": {"type": "adaptive"}},
+                {"type": "adaptive"},
+                ["clear_thinking_20251015", "clear_tool_uses_20250919"],
+                id="adaptive-thinking-keeps-edit",
+            ),
+        ],
+    )
+    def test_clear_thinking_edit_dropped_only_with_dropped_thinking(
+        self,
+        model: str,
+        thinking_params: dict[str, object],
+        expected_thinking: dict[str, object] | None,
+        expected_edit_types: list[str],
+    ) -> None:
+        body: Final = BedrockMantleAnthropicMessagesConfig().transform_anthropic_messages_request(
+            model=model,
+            messages=[{"role": "user", "content": "ping"}],
+            anthropic_messages_optional_request_params={
+                "max_tokens": 32000,
+                **thinking_params,
+                "context_management": {
+                    "edits": [{"type": "clear_thinking_20251015", "keep": "all"}, {"type": "clear_tool_uses_20250919"}]
+                },
+            },
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+        assert body.get("thinking") == expected_thinking
+        assert [edit["type"] for edit in body["context_management"]["edits"]] == expected_edit_types
+
+    def test_disabled_thinking_without_edits_is_untouched(self) -> None:
+        body: Final = BedrockMantleAnthropicMessagesConfig().transform_anthropic_messages_request(
+            model="anthropic.claude-3-5-haiku-20241022-v1:0",
+            messages=[{"role": "user", "content": "ping"}],
+            anthropic_messages_optional_request_params={"max_tokens": 8, "thinking": {"type": "disabled"}},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+        assert body["thinking"] == {"type": "disabled"}
 
     def test_body_hoists_wrapped_defer_loading_and_drops_custom(self):
         schema: Final = {"type": "object", "properties": {}}

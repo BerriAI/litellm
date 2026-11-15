@@ -136,3 +136,53 @@ fn every_messages_provider_drops_rejected_strict_tools_like_the_python_base_conf
         .collect();
     assert_eq!(mismatched, Vec::<&str>::new());
 }
+
+#[rstest]
+#[case::anthropic(&ANTHROPIC_MESSAGES_CONFIG)]
+#[case::azure_ai(&AZURE_ANTHROPIC_MESSAGES_CONFIG)]
+#[case::bedrock_invoke(&BEDROCK_ANTHROPIC_MESSAGES_CONFIG)]
+#[case::bedrock_claude_platform(&BEDROCK_CLAUDE_PLATFORM_MESSAGES_CONFIG)]
+#[case::bedrock_mantle(&BEDROCK_MANTLE_MESSAGES_CONFIG)]
+#[case::deepseek(&DEEPSEEK_ANTHROPIC_MESSAGES_CONFIG)]
+#[case::edenai(&EDENAI_MESSAGES_CONFIG)]
+#[case::minimax(&MINIMAX_MESSAGES_CONFIG)]
+#[case::openrouter(&OPENROUTER_MESSAGES_CONFIG)]
+#[case::tencent(&TENCENT_MESSAGES_CONFIG)]
+#[case::vertex_ai(&VERTEX_ANTHROPIC_MESSAGES_CONFIG)]
+fn every_messages_provider_keeps_thinking_for_a_clear_thinking_edit_like_the_python_base_config(
+    #[case] config: &dyn BaseMessagesConfig,
+) {
+    let fixture: Value = serde_json::from_str(include_str!(
+        "fixtures/anthropic_messages_http_error_retry.json"
+    ))
+    .unwrap();
+    let replay = &fixture["http_error_retry"];
+    let table = &fixture["clear_thinking_retry"];
+    let cases = table["cases"].as_array().unwrap();
+    assert!(!cases.is_empty());
+    let status = u16::try_from(table["status"].as_u64().unwrap()).unwrap();
+    let mismatched: Vec<&str> = cases
+        .iter()
+        .filter(|case| {
+            let mut body = replay["request"].clone();
+            body["thinking"] = table["thinking"].clone();
+            body["context_management"] = case["context_management"].clone();
+            let mut expected = replay["stripped_request"].clone();
+            expected["context_management"] = case["context_management"].clone();
+            if case["keeps_thinking"].as_bool().unwrap() {
+                expected["thinking"] = table["thinking"].clone();
+            }
+            config.retry_after_http_error(
+                status,
+                table["error_text"].as_str().unwrap(),
+                &body,
+                &MessagesTransformContext::default(),
+            ) != Some(RetriedRequest {
+                reasons: vec![RetryReason::ThinkingSignature],
+                body: expected,
+            })
+        })
+        .map(|case| case["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(mismatched, Vec::<&str>::new());
+}

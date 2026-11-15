@@ -249,6 +249,61 @@
       }
     ]
   },
+  "clear_thinking_retry": {
+    "status": 400,
+    "error_text": "messages.1.content.0: Invalid `signature` in `thinking` block",
+    "thinking": {
+      "type": "adaptive"
+    },
+    "cases": [
+      {
+        "name": "clear_thinking_edit_keeps_thinking",
+        "context_management": {
+          "edits": [
+            {
+              "type": "clear_thinking_20251015",
+              "keep": "all"
+            },
+            {
+              "type": "clear_tool_uses_20250919"
+            }
+          ]
+        },
+        "keeps_thinking": true
+      },
+      {
+        "name": "any_clear_thinking_version_keeps_thinking",
+        "context_management": {
+          "edits": [
+            {
+              "type": "clear_thinking_20990101"
+            }
+          ]
+        },
+        "keeps_thinking": true
+      },
+      {
+        "name": "other_edits_drop_thinking",
+        "context_management": {
+          "edits": [
+            {
+              "type": "clear_tool_uses_20250919"
+            }
+          ]
+        },
+        "keeps_thinking": false
+      },
+      {
+        "name": "edits_not_a_list_drop_thinking",
+        "context_management": {
+          "edits": {
+            "type": "clear_thinking_20251015"
+          }
+        },
+        "keeps_thinking": false
+      }
+    ]
+  },
   "claude_strict_tools_rejection": [
     {
       "name": "too_many_strict_tools",
