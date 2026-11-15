@@ -413,13 +413,16 @@ async def _count_tokens(
                 request_model,
             )
 
+        client_oauth_token: Final = forwarded_anthropic_oauth_token(request.headers)
         token_response: Final = await count_request_tokens(
             request=token_request,
             call_endpoint=True,
             messages_format="anthropic",
             litellm_call_id=litellm_call_id,
-            client_oauth_token=forwarded_anthropic_oauth_token(request.headers),
-            user_profile_id=anthropic_user_profile_id(user_api_key_dict, request.headers),
+            client_oauth_token=client_oauth_token,
+            user_profile_id=anthropic_user_profile_id(
+                user_api_key_dict, request.headers, caller_credential=client_oauth_token is not None
+            ),
             **_count_tokens_body_options(data, auto_drop_params),
         )
     except HTTPException as e:

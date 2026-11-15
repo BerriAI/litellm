@@ -1168,6 +1168,11 @@ def test_count_tokens_returns_the_context_management_the_provider_applied(monkey
     }, response.text
 
 
+_CALLER_OAUTH_HEADERS: Final = MappingProxyType(
+    {"x-litellm-api-key": "Bearer sk-proxy", "authorization": "Bearer sk-ant-oat01-caller"}
+)
+
+
 @pytest.mark.parametrize(
     "key_metadata,client_headers,sent_profile_id",
     [
@@ -1175,8 +1180,21 @@ def test_count_tokens_returns_the_context_management_the_provider_applied(monkey
         ({"anthropic_user_profile_id": "uprof_pinned"}, {"anthropic-user-profile-id": "uprof_client"}, "uprof_pinned"),
         ({"anthropic_user_profile_id": "uprof_pinned"}, {}, "uprof_pinned"),
         ({}, {}, None),
+        (
+            {"anthropic_user_profile_id": "uprof_pinned"},
+            {**_CALLER_OAUTH_HEADERS, "anthropic-user-profile-id": "uprof_client"},
+            "uprof_client",
+        ),
+        ({"anthropic_user_profile_id": "uprof_pinned"}, _CALLER_OAUTH_HEADERS, None),
     ],
-    ids=["client_header", "key_pin_over_client", "key_pin_alone", "neither"],
+    ids=[
+        "client_header",
+        "key_pin_over_client",
+        "key_pin_alone",
+        "neither",
+        "caller_oauth_keeps_its_own_id",
+        "caller_oauth_without_an_id_gets_no_pin",
+    ],
 )
 def test_count_tokens_sends_the_user_profile_id_inference_would_send(
     monkeypatch: pytest.MonkeyPatch,
