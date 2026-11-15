@@ -43,7 +43,6 @@ import pytest
 from botocore.session import get_session
 from pydantic import TypeAdapter
 
-from litellm.integrations.s3_v2 import S3Logger
 from litellm.integrations.sqs import SQSLogger
 from litellm.llms.aws_polly.text_to_speech.transformation import AWSPollyTextToSpeechConfig
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
@@ -55,7 +54,11 @@ from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
 from litellm.llms.bedrock.model_listing import BedrockModelLister
 from litellm.llms.bedrock.passthrough.transformation import BedrockAgentRuntimeAWS
 from litellm.llms.bedrock.realtime.handler import BedrockRealtime
-from litellm.llms.bedrock.web_identity_session_policy import WebIdentitySessionPolicy, _SessionPolicyStatement
+from litellm.llms.bedrock.web_identity_session_policy import (
+    S3_LOGGING_SESSION_POLICY,
+    WebIdentitySessionPolicy,
+    _SessionPolicyStatement,
+)
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.llms.opensearch.vector_stores.transformation import OpenSearchVectorStoreConfig
 from litellm.llms.s3_vectors.vector_stores.transformation import S3VectorsVectorStoreConfig
@@ -433,9 +436,12 @@ class TestSessionPolicyGrantsEveryBedrockRoute:
         assert len(_captured_policy_document()) <= _STS_SESSION_POLICY_PLAINTEXT_LIMIT
 
 
-def _s3_logger() -> S3Logger:
-    with patch("asyncio.create_task"):
-        return S3Logger(s3_bucket_name="litellm-logs", s3_region_name="us-east-1")
+class _S3LoggingSession(BaseAWSLLM):
+    _web_identity_session_policy = S3_LOGGING_SESSION_POLICY
+
+
+def _s3_logger() -> _S3LoggingSession:
+    return _S3LoggingSession()
 
 
 def _sqs_logger() -> SQSLogger:

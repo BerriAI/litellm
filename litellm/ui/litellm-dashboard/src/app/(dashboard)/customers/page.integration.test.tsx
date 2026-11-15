@@ -147,29 +147,32 @@ describe("customer organization overview", () => {
     expect(within(overview).getByText("$100.00")).toBeInTheDocument();
   });
 
-  it("restores saved sorting and changes summary dates without changing monthly shares", async () => {
-    const user = userEvent.setup();
-    renderWithProviders(<CustomersPage />, {
-      searchParams: "?sort_by=customer&sort_order=asc&range=2024-02-01..2024-02-29",
-    });
-    await screen.findByRole("link", { name: "Customer 00" });
-    expect(customerLinks()[0]).toHaveTextContent("Customer 00");
-    expect(
-      within(screen.getByRole("region", { name: "Overall customer usage" })).getByText("$20.00"),
-    ).toBeInTheDocument();
-    expect(within(screen.getByRole("row", { name: /Customer 00/ })).getByText("75%")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Customer 00" })).toHaveAttribute(
-      "href",
-      "/ui/customers/usage?org=customer-00&from=2024-02-01&to=2024-02-29",
-    );
-    await user.click(screen.getByRole("button", { name: /1 Feb 2024/ }));
-    await user.click(screen.getByRole("button", { name: /This month/ }));
-    await user.click(screen.getByRole("button", { name: "Apply" }));
-    expect(
-      await within(screen.getByRole("region", { name: "Overall customer usage" })).findByText("$100.00"),
-    ).toBeInTheDocument();
-    expect(within(screen.getByRole("row", { name: /Customer 00/ })).getByText("75%")).toBeInTheDocument();
-  });
+  it.each(["range=2024-02-01..2024-02-29", "from=2024-02-01&to=2024-02-29"])(
+    "restores saved sorting and %s without changing monthly shares",
+    async (dates) => {
+      const user = userEvent.setup();
+      renderWithProviders(<CustomersPage />, {
+        searchParams: `?sort_by=customer&sort_order=asc&${dates}`,
+      });
+      await screen.findByRole("link", { name: "Customer 00" });
+      expect(customerLinks()[0]).toHaveTextContent("Customer 00");
+      expect(
+        within(screen.getByRole("region", { name: "Overall customer usage" })).getByText("$20.00"),
+      ).toBeInTheDocument();
+      expect(within(screen.getByRole("row", { name: /Customer 00/ })).getByText("75%")).toBeInTheDocument();
+      expect(screen.getByRole("link", { name: "Customer 00" })).toHaveAttribute(
+        "href",
+        "/ui/customers/usage?org=customer-00&from=2024-02-01&to=2024-02-29",
+      );
+      await user.click(screen.getByRole("button", { name: /1 Feb 2024/ }));
+      await user.click(screen.getByRole("button", { name: /This month/ }));
+      await user.click(screen.getByRole("button", { name: "Apply" }));
+      expect(
+        await within(screen.getByRole("region", { name: "Overall customer usage" })).findByText("$100.00"),
+      ).toBeInTheDocument();
+      expect(within(screen.getByRole("row", { name: /Customer 00/ })).getByText("75%")).toBeInTheDocument();
+    },
+  );
 
   it("shows a newly created customer first and resets the search, sort, and page", async () => {
     const user = userEvent.setup();

@@ -3119,7 +3119,7 @@ async def user_api_key_auth_builder(
 
                     for k, v in team_obj_dict.items():
                         field_name = f"team_{k}"
-                        if field_name in valid_token.__fields__:
+                        if field_name in type(valid_token).model_fields:
                             setattr(valid_token, field_name, v)
             except Exception as e:
                 verbose_logger.debug(e)  # moving from .warning to .debug as it spams logs when team missing from cache.
