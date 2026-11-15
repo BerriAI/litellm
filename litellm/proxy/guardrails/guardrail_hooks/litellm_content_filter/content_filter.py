@@ -81,7 +81,12 @@ from .competitor_intent import (
     AirlineCompetitorIntentChecker,
     BaseCompetitorIntentChecker,
 )
-from .patterns import PATTERN_EXTRA_CONFIG, PATTERN_STREAMING_HOLDBACK_CHARS, get_compiled_pattern
+from .patterns import (
+    PATTERN_EXTRA_CONFIG,
+    PATTERN_STREAMING_HOLDBACK_CHARS,
+    PATTERN_VALIDATORS,
+    get_compiled_pattern,
+)
 
 MAX_KEYWORD_VALUE_GAP_WORDS: Final = 1
 _DECODED_ARGUMENTS: Final = TypeAdapter(object)
@@ -973,9 +978,12 @@ class ContentFilterGuardrail(CustomGuardrail):
         if keyword_matches is not None and not keyword_matches:
             return []
 
+        validator: Final = PATTERN_VALIDATORS.get(pattern_entry["pattern_name"])
         match_spans: Final[list[tuple[int, int]]] = []
 
         for match in regex.finditer(text):
+            if validator is not None and not validator(text[match.start() : match.end()]):
+                continue
             if keyword_matches is not None and not self._match_near_keyword(
                 match.start(), match.end(), keyword_matches, text
             ):
@@ -988,6 +996,8 @@ class ContentFilterGuardrail(CustomGuardrail):
                 if not digits:
                     continue
                 if not regex.fullmatch(digits):
+                    continue
+                if validator is not None and not validator(digits):
                     continue
                 if keyword_matches is not None and not self._match_near_keyword(
                     word_match.start(), word_match.end(), keyword_matches, text
