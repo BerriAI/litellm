@@ -6,7 +6,7 @@ from types import MappingProxyType
 from typing import Annotated, Final
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
-from pydantic import TypeAdapter
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
 from litellm.models.budget import LiteLLM_BudgetTable, LiteLLM_BudgetTableFull
@@ -50,6 +50,8 @@ router: Final = APIRouter(prefix=MANAGEMENT_V1_PREFIX)
 
 
 class _RosterEntry(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
     user_id: str | None = None
     user_email: str | None = None
     user_alias: str | None = None
@@ -58,6 +60,8 @@ class _RosterEntry(LiteLLMBaseModel):
 
 class TeamMemberListItem(_RosterEntry):
     """One roster entry with the same membership fields `/team/info` reports in `team_memberships`."""
+
+    model_config = ConfigDict(frozen=True)
 
     team_id: str
     spend: float | None = 0.0
@@ -68,6 +72,8 @@ class TeamMemberListItem(_RosterEntry):
 
 
 class _RowCount(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
     count: int
 
 
