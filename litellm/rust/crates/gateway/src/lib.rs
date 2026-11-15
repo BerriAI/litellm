@@ -1,8 +1,10 @@
 mod auth;
 mod error;
+mod license;
 mod redis;
 mod secrets;
 pub use error::Error;
+pub use license::build_license;
 pub use redis::RedisClients;
 
 use std::{sync::Arc, time::Instant};

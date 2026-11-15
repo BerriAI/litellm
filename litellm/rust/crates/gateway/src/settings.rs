@@ -1,4 +1,4 @@
-use std::ffi::OsString;
+use std::{ffi::OsString, time::Duration};
 
 use litellm_secret_value::SecretValue;
 use litellm_tracing::Level;
@@ -62,6 +62,22 @@ fn default_username() -> String {
 
 fn default_secure_cookies() -> bool {
     true
+}
+
+#[derive(Deserialize)]
+pub(super) struct LicenseSettings {
+    #[serde(default = "default_non_llm_connection_timeout")]
+    non_llm_connection_timeout: u64,
+}
+
+impl LicenseSettings {
+    pub fn timeout(&self) -> Duration {
+        Duration::from_secs(self.non_llm_connection_timeout)
+    }
+}
+
+fn default_non_llm_connection_timeout() -> u64 {
+    15
 }
 
 pub(super) fn from_iter<T: DeserializeOwned>(
@@ -132,6 +148,18 @@ mod tests {
     #[case::invalid("http")]
     fn invalid_ports_fail_startup(#[case] value: &str) {
         assert!(parse::<Settings>(&[("PORT", value)]).is_err());
+    }
+
+    #[rstest]
+    #[case::default(&[], 15)]
+    #[case::overridden(&[("NON_LLM_CONNECTION_TIMEOUT", "40")], 40)]
+    fn license_checks_time_out_after_the_non_llm_connection_timeout(
+        #[case] variables: &[(&str, &str)],
+        #[case] seconds: u64,
+    ) {
+        let settings: LicenseSettings = parse(variables).unwrap();
+
+        assert_eq!(settings.timeout(), Duration::from_secs(seconds));
     }
 
     #[rstest]

@@ -17,6 +17,7 @@ use tower_sessions::{
 };
 
 use litellm_gateway_auth::UiBackend;
+use litellm_license::Entitlements;
 use litellm_secret_value::SecretValue;
 
 struct App {
@@ -24,12 +25,16 @@ struct App {
     store: MemoryStore,
 }
 
-#[fixture]
-fn app() -> App {
+fn licensed_app(entitlements: &Entitlements) -> App {
     let store = MemoryStore::default();
     let backend = UiBackend::new("admin".into(), SecretValue::new("test-password")).unwrap();
-    let router = litellm_gateway_ui::router(backend, store.clone(), true);
+    let router = litellm_gateway_ui::router(backend, store.clone(), true, entitlements);
     App { router, store }
+}
+
+#[fixture]
+fn app() -> App {
+    licensed_app(&Entitlements::Community)
 }
 
 async fn body(response: Response) -> Value {
@@ -503,6 +508,7 @@ async fn changed_password_revokes_sessions_in_shared_store(app: App) {
         UiBackend::new("admin".into(), SecretValue::new("new-password")).unwrap(),
         app.store,
         true,
+        &Entitlements::Community,
     );
     let response = replaced
         .oneshot(
@@ -518,4 +524,19 @@ async fn changed_password_revokes_sessions_in_shared_store(app: App) {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[rstest]
+#[case::community(Entitlements::Community, false)]
+#[case::enterprise(Entitlements::ServerVerified, true)]
+#[tokio::test]
+async fn login_token_says_whether_the_license_is_enterprise(
+    #[case] entitlements: Entitlements,
+    #[case] premium_user: bool,
+) {
+    let app = licensed_app(&entitlements);
+
+    let token = claims(login(&app, None).await).await;
+
+    assert_eq!(token["premium_user"], json!(premium_user));
 }

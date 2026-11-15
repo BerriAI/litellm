@@ -22,6 +22,7 @@ pub struct State {
     pub signing_key: EncodingKey,
     pub login_limit: DefaultDirectRateLimiter,
     pub secure_cookies: bool,
+    pub premium_user: bool,
 }
 
 #[derive(Serialize)]
@@ -98,7 +99,7 @@ pub async fn login(
             user_id: &user.username,
             user_role: "proxy_admin",
             login_method: "username_password",
-            premium_user: false,
+            premium_user: state.premium_user,
             auth_header_name: "Authorization",
             server_root_path: "",
             exp: expires.unix_timestamp(),

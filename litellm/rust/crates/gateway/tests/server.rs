@@ -166,6 +166,7 @@ async fn mounts_ui_without_exposing_credentials_or_authorizing_inference(inferen
         backend,
         tower_sessions_moka_store::MokaStore::new(Some(10_000)),
         false,
+        &litellm_license::Entitlements::Community,
     )
     .merge(litellm_gateway_ui::dashboard_assets(assets.path()));
     let app = litellm_gateway::router(inference, &config, Some(ui), None);

@@ -56,6 +56,7 @@ pub struct GeneralSettings {
     pub max_queued_requests_per_worker: Option<u64>,
     pub admission_queue_timeout_seconds: f64,
     pub master_key: Option<SecretValue>,
+    pub litellm_license: Option<SecretValue>,
     pub database_url: Option<SecretValue>,
     pub tracing: Option<TracingSettings>,
     pub database_connection_pool_limit: Option<u64>,
@@ -93,6 +94,7 @@ impl Default for GeneralSettings {
             max_queued_requests_per_worker: None,
             admission_queue_timeout_seconds: 1.0,
             master_key: None,
+            litellm_license: None,
             database_url: None,
             tracing: None,
             database_connection_pool_limit: Some(10),
@@ -141,6 +143,7 @@ impl fmt::Debug for GeneralSettings {
                 &self.admission_queue_timeout_seconds,
             )
             .field("master_key", &self.master_key)
+            .field("litellm_license", &self.litellm_license)
             .field("database_url", &self.database_url)
             .field("tracing", &self.tracing)
             .field("store_model_in_db", &self.store_model_in_db)

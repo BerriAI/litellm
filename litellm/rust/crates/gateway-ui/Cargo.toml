@@ -13,6 +13,7 @@ base64.workspace = true
 governor = { version = "0.10.4", default-features = false, features = ["std"] }
 jsonwebtoken = { workspace = true, features = ["rust_crypto"] }
 litellm-gateway-auth.workspace = true
+litellm-license.workspace = true
 rand.workspace = true
 serde.workspace = true
 thiserror.workspace = true

@@ -14,6 +14,7 @@ use axum_login::AuthManagerLayerBuilder;
 use governor::{Quota, RateLimiter};
 use jsonwebtoken::EncodingKey;
 use litellm_gateway_auth::UiBackend;
+use litellm_license::Entitlements;
 use tower_http::set_header::SetResponseHeaderLayer;
 use tower_sessions::{SessionManagerLayer, SessionStore, cookie::SameSite};
 
@@ -25,6 +26,7 @@ pub fn router(
     backend: UiBackend,
     store: impl SessionStore + Clone,
     secure_cookies: bool,
+    entitlements: &Entitlements,
 ) -> Router {
     let sessions = SessionManagerLayer::new(store)
         .with_name("litellm_session")
@@ -36,6 +38,7 @@ pub fn router(
         signing_key: EncodingKey::from_secret(&rand::random::<[u8; 32]>()),
         login_limit: RateLimiter::direct(Quota::per_minute(NonZeroU32::new(10).unwrap())),
         secure_cookies,
+        premium_user: entitlements.is_enterprise(),
     });
 
     Router::new()

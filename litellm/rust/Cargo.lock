@@ -3832,6 +3832,7 @@ dependencies = [
  "litellm-gateway-ui",
  "litellm-http",
  "litellm-inference",
+ "litellm-license",
  "litellm-llms",
  "litellm-redis-client",
  "litellm-redis-connect",
@@ -3854,6 +3855,7 @@ dependencies = [
  "tracing",
  "uuid",
  "veil",
+ "wiremock",
 ]
 
 [[package]]
@@ -3992,6 +3994,7 @@ dependencies = [
  "jsonwebtoken",
  "litellm-error",
  "litellm-gateway-auth",
+ "litellm-license",
  "litellm-secret-value",
  "rand 0.8.7",
  "rstest",

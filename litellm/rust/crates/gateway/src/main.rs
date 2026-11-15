@@ -10,7 +10,7 @@ use serde_json::json;
 
 mod settings;
 
-use settings::{LogSettings, Settings, UiSettings};
+use settings::{LicenseSettings, LogSettings, Settings, UiSettings};
 
 struct StderrSink {
     level: Level,
@@ -62,6 +62,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let inference = litellm_gateway::build_inference(&config)?;
     let _redis =
         litellm_gateway::build_redis(&config, &inference.resources.pool, &inference.http).await?;
+    let license: LicenseSettings = settings::from_iter(std::env::vars_os())?;
+    let entitlements = litellm_gateway::build_license(
+        &config,
+        license.timeout(),
+        &inference.resources.pool,
+        &inference.http,
+    )
+    .await?;
     let ui = match std::env::var_os("LITELLM_UI_PATH") {
         Some(directory) => {
             let ui_settings: UiSettings = settings::from_iter(std::env::vars_os())?;
@@ -71,6 +79,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     backend,
                     tower_sessions_moka_store::MokaStore::new(Some(10_000)),
                     ui_settings.litellm_ui_secure_cookies,
+                    &entitlements,
                 )
                 .merge(litellm_gateway_ui::dashboard_assets(
                     std::path::PathBuf::from(directory),
