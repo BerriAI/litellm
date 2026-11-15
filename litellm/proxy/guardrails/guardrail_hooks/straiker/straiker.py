@@ -183,7 +183,6 @@ class _WebhookFailure:
     message: str
     is_unreachable: bool
     retryable: bool = False
-    #: Straiker answered, but with no allow or block decision in the reply.
     no_verdict: bool = False
 
 
@@ -196,12 +195,8 @@ class _RememberedBlock:
     turn_id: str | None
 
 
-#: What one phase logs as `action`, in the labels Straiker's other gateway integrations log.
 _V3LogAction: TypeAlias = Literal["allow", "detect", "block", "degraded", "unknown"]
 
-#: LiteLLM's guardrail status for each logged action. A detect-mode finding is flagged, not
-#: intervened: the request went through. A phase that was never scored failed to respond,
-#: whether the request then failed open or closed.
 _V3_LOG_STATUS: Final[Mapping[str, GuardrailStatus]] = MappingProxyType(
     {
         "allow": "success",
