@@ -4,6 +4,7 @@ import copy
 import inspect
 import itertools
 import time
+import types
 import weakref
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
@@ -20,6 +21,7 @@ import httpx
 HTTP2_STREAMS_PER_CONNECTION: Final = 100
 HTTP2_CONNECTIONS_PER_LANE: Final = 2
 END_OF_STREAM_WAIT_SECONDS: Final = 0.25
+UPSTREAMS_SWEPT_PER_RELEASE: Final = 64
 _REMOTE_SETTINGS_RECEIVED: Final = "http2.receive_remote_settings.complete"
 _HTTP1_REQUEST_STARTED: Final = "http11.send_request_headers.started"
 _HTTP2_STREAM_OPENED: Final = "http2.send_request_headers.started"
@@ -100,6 +102,10 @@ async def _chunks_of(stream: httpx.AsyncByteStream) -> AsyncGenerator[bytes, Non
         yield chunk
 
 
+def _read_by_another_task(chunks: AsyncGenerator[bytes, None]) -> bool:
+    return isinstance(chunks, types.AsyncGeneratorType) and chunks.ag_running
+
+
 @dataclass(frozen=True, slots=True)
 class _SentStream:
     opened: asyncio.Event = field(default_factory=asyncio.Event)
@@ -122,20 +128,27 @@ def _enough_to_free(lanes: tuple[_Lane, ...], connections: int) -> frozenset[_La
     return frozenset(lane for lane, freed in zip(lanes, freed_before) if freed < connections)
 
 
-def _expired(idle: tuple[_Lane, ...], keepalive_expiry: float | None, now: float) -> frozenset[_Lane]:
+@dataclass(frozen=True, slots=True)
+class _IdleLane:
+    lane: _Lane
+    spent: bool
+    connections: int
+
+
+def _expired(idle: tuple[_IdleLane, ...], keepalive_expiry: float | None, now: float) -> frozenset[_Lane]:
     if keepalive_expiry is None:
         return frozenset()
-    return frozenset(lane for lane in idle if now - lane.idle_since > keepalive_expiry)
+    return frozenset(entry.lane for entry in idle if now - entry.lane.idle_since > keepalive_expiry)
 
 
-def _past_keepalive_limit(idle: tuple[_Lane, ...], max_keepalive_connections: int | None) -> frozenset[_Lane]:
+def _past_keepalive_limit(idle: tuple[_IdleLane, ...], max_keepalive_connections: int | None) -> frozenset[_Lane]:
     if max_keepalive_connections is None:
         return frozenset()
-    newest_first: Final = sorted(idle, key=lambda lane: lane.idle_since, reverse=True)
+    newest_first: Final = sorted(idle, key=lambda entry: entry.lane.idle_since, reverse=True)
     kept_through: Final = itertools.accumulate(
-        min(lane.most_connections or 0, max_keepalive_connections) for lane in newest_first
+        min(entry.connections, max_keepalive_connections) for entry in newest_first
     )
-    return frozenset(lane for lane, kept in zip(newest_first, kept_through) if kept > max_keepalive_connections)
+    return frozenset(entry.lane for entry, kept in zip(newest_first, kept_through) if kept > max_keepalive_connections)
 
 
 def _shared_with_waiters(failure: BaseException | None) -> httpx.TransportError | None:
@@ -205,8 +218,18 @@ class _OriginLanes:
     def usable_lanes(self) -> tuple[_Lane, ...]:
         return tuple(lane for lane in self.lanes if self.requests_on(lane) > 0)
 
-    def spent_idle_lanes(self) -> tuple[_Lane, ...]:
-        return tuple(lane for lane in self.lanes if lane.in_flight == 0 and self.requests_on(lane) <= 0)
+    def idle_lanes(self) -> tuple[_IdleLane, ...]:
+        return tuple(self._as_idle(lane) for lane in self.lanes if lane.in_flight == 0)
+
+    def _as_idle(self, lane: _Lane) -> _IdleLane:
+        return _IdleLane(lane, spent=self.requests_on(lane) <= 0, connections=self._idle_connections(lane))
+
+    def _idle_connections(self, lane: _Lane) -> int:
+        match self.protocol:
+            case _Multiplexed():
+                return 1
+            case _OneRequestPerConnection() | None:
+                return lane.most_connections or 0
 
     def drop(self, lanes: frozenset[_Lane]) -> None:
         self.lanes = tuple(lane for lane in self.lanes if lane not in lanes)
@@ -259,6 +282,7 @@ class _Lanes:
         self._origins: MappingProxyType[_Origin, _OriginLanes] = MappingProxyType({})
         self._closing: tuple[_Lane, ...] = ()
         self._freed: asyncio.Future[None] | None = None
+        self._releases_since_sweep = 0
 
     def enter(self, origin: _Origin) -> _OriginLanes | None:
         tracked: Final = self._tracked(origin)
@@ -270,7 +294,6 @@ class _Lanes:
         return tuple(itertools.chain.from_iterable(origin.lanes for origin in self._origins.values()))
 
     def acquire(self, origin: _OriginLanes | None) -> _Placement | None:
-        self._retire_idle_lanes()
         placement: Final = _Placement(_most_spare(self.all_lanes()), None) if origin is None else self._place(origin)
         if placement is not None:
             placement.lane.acquire()
@@ -278,7 +301,7 @@ class _Lanes:
 
     def release(self, lane: _Lane, stream_lost: bool) -> None:
         lane.release(stream_lost)
-        self._retire_idle_lanes()
+        self._sweep_when_due()
         freed: Final = self._freed
         self._freed = None
         if freed is not None and not freed.done():
@@ -310,9 +333,11 @@ class _Lanes:
         if free is not None:
             return _Placement(free, origin)
         wanted: Final = origin.connections_for_a_new_lane()
-        room: Final = self._make_room(wanted)
-        if room is None or room > 0:
-            return _Placement(self._open(origin, None if room is None else min(wanted, room)), origin)
+        kept_for_others: Final = HTTP2_CONNECTIONS_PER_LANE if origin.lanes else 0
+        room: Final = self._make_room(wanted + kept_for_others, kept_for_others)
+        spare: Final = None if room is None else room - kept_for_others
+        if spare is None or spare > 0:
+            return _Placement(self._open(origin, None if spare is None else min(wanted, spare)), origin)
         if isinstance(origin.protocol, _OneRequestPerConnection):
             return None
         usable: Final = origin.usable_lanes()
@@ -320,20 +345,28 @@ class _Lanes:
             return _Placement(_least_busy(usable), origin)
         return _Placement(_most_spare(self.all_lanes()), None)
 
+    def _sweep_when_due(self) -> None:
+        self._releases_since_sweep += 1
+        if self._releases_since_sweep * UPSTREAMS_SWEPT_PER_RELEASE < len(self._origins):
+            return
+        self._releases_since_sweep = 0
+        self._retire_idle_lanes()
+
     def _retire_idle_lanes(self) -> None:
-        spent: Final = frozenset(
-            itertools.chain.from_iterable(known.spent_idle_lanes() for known in self._origins.values())
-        )
-        idle: Final = tuple(lane for lane in self.all_lanes() if lane.in_flight == 0 and lane not in spent)
-        expired: Final = _expired(idle, self._limits.keepalive_expiry, time.monotonic())
-        kept: Final = tuple(lane for lane in idle if lane not in expired)
+        idle: Final = tuple(itertools.chain.from_iterable(known.idle_lanes() for known in self._origins.values()))
+        spent: Final = frozenset(entry.lane for entry in idle if entry.spent)
+        unspent: Final = tuple(entry for entry in idle if not entry.spent)
+        expired: Final = _expired(unspent, self._limits.keepalive_expiry, time.monotonic())
+        kept: Final = tuple(entry for entry in unspent if entry.lane not in expired)
         self._close_when_free(spent | expired | _past_keepalive_limit(kept, self._limits.max_keepalive_connections))
 
-    def _make_room(self, connections: int) -> int | None:
+    def _make_room(self, connections: int, kept_for_others: int = 0) -> int | None:
         room: Final = self._room()
         if room is None or room >= connections:
             return room
         idle: Final = tuple(lane for lane in self.all_lanes() if lane.in_flight == 0)
+        if room + sum(lane.most_connections or 0 for lane in idle) <= kept_for_others:
+            return room
         self._close_when_free(_enough_to_free(idle, connections - room))
         return self._room()
 
@@ -398,6 +431,9 @@ class _AsyncReleasingStream(httpx.AsyncByteStream):
         if self._closing:
             return
         self._closing = True
+        if _read_by_another_task(self._chunks):
+            await self._close_under_its_reader()
+            return
         try:
             ended: Final = await self._ended_by_the_upstream()
         except BaseException:
@@ -409,6 +445,13 @@ class _AsyncReleasingStream(httpx.AsyncByteStream):
         if not self._waits_for_its_end or not self._release_dropped.alive:
             return True
         return await _ends_soon(self._chunks)
+
+    async def _close_under_its_reader(self) -> None:
+        try:
+            await self._stream.aclose()
+        finally:
+            self._release_once(stream_lost=True)
+        await self._close_dropped()
 
     async def _close(self, stream_lost: bool) -> None:
         try:

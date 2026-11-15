@@ -26,6 +26,7 @@ OTHER_URL: Final = "https://other.example/v1/search"
 BURST: Final = HTTP2_STREAMS_PER_CONNECTION + HTTP2_STREAMS_PER_CONNECTION // 2
 UNCAPPED: Final = httpx.Limits(max_connections=None)
 TWO_LANES: Final = httpx.Limits(max_connections=2 * HTTP2_CONNECTIONS_PER_LANE)
+THREE_LANES: Final = httpx.Limits(max_connections=3 * HTTP2_CONNECTIONS_PER_LANE)
 MORE_STREAMS_THAN_WE_RUN: Final = 2 * HTTP2_STREAMS_PER_CONNECTION
 FEW_STREAMS: Final = 5
 
@@ -220,9 +221,11 @@ class _HTTP1Connections:
         self.requested = 0
         self.open = 0
         self.most_open = 0
+        self.pools = 0
 
     def __call__(self, limits: httpx.Limits) -> "_HTTP1Pool":
         assert limits.max_connections is not None
+        self.pools += 1
         return _HTTP1Pool(self, asyncio.Semaphore(limits.max_connections))
 
     async def serve(self, request: httpx.Request, pool_slots: asyncio.Semaphore) -> None:
@@ -625,11 +628,11 @@ async def test_async_spread_sends_a_plain_http_burst_at_once_without_waiting_for
 
 
 @pytest.mark.asyncio
-async def test_async_spread_shares_the_least_busy_connection_once_the_connection_cap_is_reached():
+async def test_async_spread_shares_the_least_busy_connection_once_an_upstream_has_its_share_of_the_cap():
     gate: Final = asyncio.Event()
     connections: Final = _AsyncConnections(gate)
     burst: Final = 2 * HTTP2_STREAMS_PER_CONNECTION + HTTP2_STREAMS_PER_CONNECTION // 2
-    async with httpx.AsyncClient(transport=AsyncHTTP2ConnectionSpread(connections, TWO_LANES)) as client:
+    async with httpx.AsyncClient(transport=AsyncHTTP2ConnectionSpread(connections, THREE_LANES)) as client:
         pending: Final = tuple(asyncio.create_task(client.get(URL)) for _ in range(burst))
         await _until(lambda: connections.in_flight() == burst)
         assert [connection.peak for connection in connections.opened] == [burst // 2, burst // 2]
@@ -648,11 +651,54 @@ async def test_async_spread_keeps_http1_connections_within_the_connection_cap():
         transport=AsyncHTTP2ConnectionSpread(connections, httpx.Limits(max_connections=cap))
     ) as client:
         pending: Final = tuple(asyncio.create_task(client.get(URL)) for _ in range(burst))
-        await _until(lambda: connections.open == cap)
+        await _until(lambda: connections.open == cap - HTTP2_CONNECTIONS_PER_LANE)
 
         gate.set()
         assert {response.status_code for response in await asyncio.gather(*pending)} == {200}
-    assert connections.most_open == cap
+    assert connections.most_open == cap - HTTP2_CONNECTIONS_PER_LANE
+
+
+@pytest.mark.asyncio
+async def test_async_spread_keeps_connections_for_another_upstream_while_one_upstream_has_requests_waiting():
+    slow: Final = asyncio.Event()
+    fast: Final = asyncio.Event()
+    fast.set()
+    connections: Final = _HTTP1Connections(fast, gates_by_path=MappingProxyType({"/slow": slow}))
+    cap: Final = 3 * HTTP2_CONNECTIONS_PER_LANE
+    async with httpx.AsyncClient(
+        transport=AsyncHTTP2ConnectionSpread(connections, httpx.Limits(max_connections=cap))
+    ) as client:
+        held: Final = tuple(asyncio.create_task(client.get("http://busy.example/slow")) for _ in range(cap))
+        await _until(lambda: connections.requested == cap - HTTP2_CONNECTIONS_PER_LANE)
+
+        for _ in range(2):
+            assert (await asyncio.wait_for(client.get("http://other.example/fast"), 1)).status_code == 200
+        assert connections.open == cap - HTTP2_CONNECTIONS_PER_LANE
+
+        slow.set()
+        assert {response.status_code for response in await asyncio.gather(*held)} == {200}
+
+
+@pytest.mark.asyncio
+async def test_async_spread_keeps_another_upstreams_idle_connections_when_closing_them_lets_no_request_through():
+    slow: Final = asyncio.Event()
+    fast: Final = asyncio.Event()
+    fast.set()
+    connections: Final = _HTTP1Connections(fast, gates_by_path=MappingProxyType({"/slow": slow}))
+    share: Final = 2 * HTTP2_CONNECTIONS_PER_LANE
+    async with httpx.AsyncClient(transport=AsyncHTTP2ConnectionSpread(connections, THREE_LANES)) as client:
+        held: Final = tuple(asyncio.create_task(client.get("http://busy.example/slow")) for _ in range(share))
+        await _until(lambda: connections.requested == share)
+        assert (await client.get("http://other.example/fast")).status_code == 200
+        pools_before: Final = connections.pools
+
+        waiting: Final = asyncio.create_task(client.get("http://busy.example/slow"))
+        await asyncio.sleep(0)
+        assert (await client.get("http://other.example/fast")).status_code == 200
+        assert connections.pools == pools_before
+
+        slow.set()
+        assert {response.status_code for response in await asyncio.gather(*held, waiting)} == {200}
 
 
 @pytest.mark.asyncio
@@ -660,7 +706,7 @@ async def test_async_spread_gives_a_plain_http_request_at_the_connection_cap_the
     slow: Final = asyncio.Event()
     fast: Final = asyncio.Event()
     connections: Final = _HTTP1Connections(fast, MappingProxyType({"/slow": slow}))
-    async with httpx.AsyncClient(transport=AsyncHTTP2ConnectionSpread(connections, TWO_LANES)) as client:
+    async with httpx.AsyncClient(transport=AsyncHTTP2ConnectionSpread(connections, THREE_LANES)) as client:
         slow_calls: Final = tuple(
             asyncio.create_task(client.get("http://plain.example/slow")) for _ in range(HTTP2_CONNECTIONS_PER_LANE)
         )
@@ -682,10 +728,10 @@ async def test_async_spread_gives_a_plain_http_request_at_the_connection_cap_the
 async def test_async_spread_raises_a_pool_timeout_when_no_connection_frees_in_time_at_the_connection_cap():
     gate: Final = asyncio.Event()
     connections: Final = _HTTP1Connections(gate)
-    cap: Final = 2 * HTTP2_CONNECTIONS_PER_LANE
-    async with httpx.AsyncClient(transport=AsyncHTTP2ConnectionSpread(connections, TWO_LANES)) as client:
-        holding: Final = tuple(asyncio.create_task(client.get("http://plain.example/x")) for _ in range(cap))
-        await _until(lambda: connections.open == cap)
+    share: Final = 2 * HTTP2_CONNECTIONS_PER_LANE
+    async with httpx.AsyncClient(transport=AsyncHTTP2ConnectionSpread(connections, THREE_LANES)) as client:
+        holding: Final = tuple(asyncio.create_task(client.get("http://plain.example/x")) for _ in range(share))
+        await _until(lambda: connections.open == share)
         patient: Final = asyncio.create_task(client.get("http://plain.example/x"))
 
         with pytest.raises(httpx.PoolTimeout):
@@ -712,8 +758,8 @@ async def test_async_spread_hands_an_idle_upstreams_connections_to_another_upstr
             await response.aread()
 
         pending: Final = tuple(asyncio.create_task(client.get("http://plain.example/x.png")) for _ in range(cap))
-        await _until(lambda: connections.requested == first_burst + cap)
-        assert connections.open == cap
+        await _until(lambda: connections.requested == first_burst + cap - HTTP2_CONNECTIONS_PER_LANE)
+        assert connections.open == cap - HTTP2_CONNECTIONS_PER_LANE
 
         gate.set()
         assert {response.status_code for response in await asyncio.gather(*pending)} == {200}
@@ -783,7 +829,9 @@ async def test_async_spread_keeps_no_more_idle_connections_than_the_keepalive_li
     connections: Final = _AsyncConnections(gate)
     lanes: Final = 4
     burst: Final = lanes * HTTP2_CONNECTIONS_PER_LANE
-    limits: Final = httpx.Limits(max_connections=burst, max_keepalive_connections=HTTP2_CONNECTIONS_PER_LANE)
+    limits: Final = httpx.Limits(
+        max_connections=burst + HTTP2_CONNECTIONS_PER_LANE, max_keepalive_connections=HTTP2_CONNECTIONS_PER_LANE
+    )
     async with httpx.AsyncClient(transport=AsyncHTTP2ConnectionSpread(connections, limits)) as client:
         pending: Final = tuple(asyncio.create_task(client.get("http://plain.example/v1/search")) for _ in range(burst))
         await _until(lambda: connections.in_flight() == burst)
@@ -792,6 +840,25 @@ async def test_async_spread_keeps_no_more_idle_connections_than_the_keepalive_li
         assert {response.status_code for response in await asyncio.gather(*pending)} == {200}
         assert len(connections.opened) == lanes
         assert [connection.closed for connection in connections.opened].count(False) == 1
+
+
+@pytest.mark.asyncio
+async def test_async_spread_keeps_as_many_idle_http2_connections_as_the_keepalive_limit_after_a_burst():
+    gate: Final = asyncio.Event()
+    connections: Final = _AsyncConnections(gate, advertised=MappingProxyType({"search.example": FEW_STREAMS}))
+    lanes: Final = 4
+    burst: Final = lanes * FEW_STREAMS
+    limits: Final = httpx.Limits(
+        max_connections=(lanes + 1) * HTTP2_CONNECTIONS_PER_LANE, max_keepalive_connections=lanes
+    )
+    async with httpx.AsyncClient(transport=AsyncHTTP2ConnectionSpread(connections, limits)) as client:
+        pending: Final = tuple(asyncio.create_task(client.get(URL)) for _ in range(burst))
+        await _until(lambda: connections.in_flight() == burst)
+
+        gate.set()
+        assert {response.status_code for response in await asyncio.gather(*pending)} == {200}
+        assert len(connections.opened) == lanes
+        assert [connection.closed for connection in connections.opened] == [False] * lanes
 
 
 @pytest.mark.asyncio
@@ -821,11 +888,11 @@ async def test_async_spread_keeps_connections_within_the_cap_after_upstreams_rep
             assert (await client.get(f"https://{host}/v1/search")).status_code == 200
 
         pending: Final = tuple(asyncio.create_task(client.get("https://http1.example/x.png")) for _ in range(burst))
-        await _until(lambda: connections.open == cap)
+        await _until(lambda: connections.open == cap - HTTP2_CONNECTIONS_PER_LANE)
 
         gate.set()
         assert {response.status_code for response in await asyncio.gather(*pending)} == {200}
-    assert connections.most_open == cap
+    assert connections.most_open == cap - HTTP2_CONNECTIONS_PER_LANE
 
 
 @pytest.mark.asyncio
@@ -839,7 +906,7 @@ async def test_async_spread_runs_a_request_on_every_connection_the_cap_leaves_wh
         first: Final = asyncio.create_task(client.get(URL))
         await _until(lambda: connections.in_flight() == 1)
 
-        after_the_first: Final = cap - HTTP2_CONNECTIONS_PER_LANE
+        after_the_first: Final = cap - 2 * HTTP2_CONNECTIONS_PER_LANE
         pending: Final = tuple(asyncio.create_task(client.get(URL)) for _ in range(after_the_first))
         await _until(lambda: connections.in_flight() == 1 + after_the_first)
         assert [connection.peak for connection in connections.opened] == [1] * (1 + after_the_first)
@@ -871,7 +938,10 @@ async def test_async_spread_sends_an_upstream_first_seen_at_the_cap_to_the_conne
     connections: Final = _MixedConnections(gate, MappingProxyType({"search.example": MORE_STREAMS_THAN_WE_RUN}))
     filling: Final = 2 * HTTP2_CONNECTIONS_PER_LANE - 1
     async with httpx.AsyncClient(transport=AsyncHTTP2ConnectionSpread(connections, TWO_LANES)) as client:
-        filled: Final = tuple(asyncio.create_task(client.get("http://http1.example/x.png")) for _ in range(filling))
+        filled: Final = (
+            *(asyncio.create_task(client.get("http://http1.example/x.png")) for _ in range(HTTP2_CONNECTIONS_PER_LANE)),
+            asyncio.create_task(client.get("http://second.example/x.png")),
+        )
         await _until(lambda: connections.open == filling)
 
         first_seen: Final = tuple(asyncio.create_task(client.get("http://other.example/x.png")) for _ in range(2))
@@ -887,7 +957,8 @@ async def test_async_spread_sends_a_new_upstreams_burst_at_once_when_the_connect
     connections: Final = _AsyncConnections(gate)
     filling: Final = 2 * HTTP2_STREAMS_PER_CONNECTION
     async with httpx.AsyncClient(transport=AsyncHTTP2ConnectionSpread(connections, TWO_LANES)) as client:
-        pending: Final = tuple(asyncio.create_task(client.get(URL)) for _ in range(filling))
+        two_upstreams: Final = (URL, "https://filling.example/v1/search") * HTTP2_STREAMS_PER_CONNECTION
+        pending: Final = tuple(asyncio.create_task(client.get(url)) for url in two_upstreams)
         await _until(lambda: connections.in_flight() == filling)
 
         connections.settings_arrive.clear()
@@ -964,6 +1035,32 @@ class _OneStreamConnection(httpx.AsyncBaseTransport):
         self.closed = True
 
 
+class _BodyClosedUnderItsReader(httpx.AsyncByteStream):
+    def __init__(self) -> None:
+        self._closed: Final = asyncio.Event()
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        yield b"o"
+        await self._closed.wait()
+        raise httpx.RemoteProtocolError("stream closed while it was read")
+
+    async def aclose(self) -> None:
+        self._closed.set()
+
+
+class _UnendingStreamConnection(httpx.AsyncBaseTransport):
+    def __init__(self) -> None:
+        self.closed = False
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        await _emit(request, "http2.send_request_headers.started", {})
+        await _emit_settings(request, 1)
+        return httpx.Response(200, stream=_BodyClosedUnderItsReader(), extensions=_spoken_over(request))
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
 async def _never_answer() -> None:
     await asyncio.Event().wait()
 
@@ -1011,6 +1108,23 @@ async def test_async_spread_retires_a_one_stream_connection_when_closing_its_res
         closing.cancel()
         with pytest.raises(asyncio.CancelledError):
             await closing
+        assert connection.closed
+
+
+@pytest.mark.asyncio
+async def test_async_spread_closes_a_response_another_task_is_still_reading():
+    connection: Final = _UnendingStreamConnection()
+    async with httpx.AsyncClient(transport=AsyncHTTP2ConnectionSpread(lambda _limits: connection, UNCAPPED)) as client:
+        response: Final = await client.send(client.build_request("GET", URL), stream=True)
+        chunks: Final = response.aiter_raw()
+        assert await anext(chunks) == b"o"
+        reading: Final = asyncio.create_task(anext(chunks))
+        await asyncio.sleep(0)
+
+        await response.aclose()
+
+        with pytest.raises(httpx.RemoteProtocolError):
+            await reading
         assert connection.closed
 
 
