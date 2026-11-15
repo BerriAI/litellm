@@ -10,12 +10,13 @@ from collections.abc import Callable, Mapping
 from functools import lru_cache
 from types import MappingProxyType
 from typing import Final
+from urllib.parse import urlparse
 
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.integrations.otel.model.config import is_otel_v2_enabled
+from litellm.integrations.otel.model.config import OTEL_V2_ENV, is_otel_v2_enabled
 from litellm.integrations.otel.model.destination import OtelDestination
 from litellm.litellm_core_utils.url_utils import is_url_destination_allowed_by_host
 from litellm.types.utils import OtelSpanScope, StandardCallbackDynamicParams
@@ -62,20 +63,51 @@ def _langfuse_destination(params: StandardCallbackDynamicParams) -> "_Destinatio
     return (endpoint, None)
 
 
-def _allowed_by_entry(url: str, entry: str) -> bool:
+def _allowlist_entry_parses(entry: str) -> bool:
+    stripped: Final = entry.strip()
     try:
-        return is_url_destination_allowed_by_host(url, [entry])
+        urlparse(stripped if "://" in stripped else f"//{stripped}")
     except ValueError:
         return False
+    return True
+
+
+@lru_cache(maxsize=256)
+def _allowlist_allows(url: str, entries: tuple[str, ...]) -> bool:
+    try:
+        urlparse(url)
+    except ValueError:
+        return False
+    return is_url_destination_allowed_by_host(url, [entry for entry in entries if _allowlist_entry_parses(entry)])
+
+
+def _str_entries(entries: tuple[object, ...]) -> tuple[str, ...]:
+    return tuple(entry for entry in entries if isinstance(entry, str))
 
 
 def _tenant_url_is_allowlisted(url: str) -> bool:
     configured: Final = litellm.provider_url_destination_allowed_hosts
     entries: Final = (configured,) if isinstance(configured, str) else tuple(configured or ())
-    return any(_allowed_by_entry(url, entry) for entry in entries)
+    return _allowlist_allows(url, _str_entries(entries))
+
+
+_FLAG_VALUE: Final = TypeAdapter(bool)
+
+
+@lru_cache(maxsize=8)
+def _otel_v2_flag_value_parses(raw_flag: str | None) -> bool:
+    if raw_flag is None:
+        return True
+    try:
+        _FLAG_VALUE.validate_python(raw_flag)
+    except ValidationError:
+        return False
+    return True
 
 
 def _otel_v2_enabled_or_off() -> bool:
+    if not _otel_v2_flag_value_parses(os.environ.get(OTEL_V2_ENV)):
+        return False
     try:
         return is_otel_v2_enabled()
     except ValidationError:
@@ -83,7 +115,7 @@ def _otel_v2_enabled_or_off() -> bool:
 
 
 def _tenant_host_refused_by_otel_v2(tenant_host: object, url_called: Callable[[str], str]) -> bool:
-    if not tenant_host or _tenant_url_is_allowlisted(url_called(str(tenant_host))) or not _otel_v2_enabled_or_off():
+    if not tenant_host or not _otel_v2_enabled_or_off() or _tenant_url_is_allowlisted(url_called(str(tenant_host))):
         return False
     _warn_host_not_allowlisted(str(tenant_host))
     return True
