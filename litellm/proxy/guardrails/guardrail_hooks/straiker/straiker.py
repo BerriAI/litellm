@@ -4,10 +4,11 @@ import asyncio
 import hashlib
 import json
 import random
+import time
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Literal, NoReturn, Protocol
+from typing import TYPE_CHECKING, Final, Literal, NoReturn, Protocol, TypeAlias
 from urllib.parse import urlsplit
 
 import httpx
@@ -39,6 +40,7 @@ from litellm.types.guardrails import GuardrailEventHooks, Mode
 from litellm.types.proxy.guardrails.guardrail_hooks.straiker import (
     STRAIKER_WEBHOOK_SCHEMA_VERSION,
     StraikerGuardrailConfigModel,
+    StraikerStreamMode,
     StraikerWebhookApplication,
     StraikerWebhookContent,
     StraikerWebhookContext,
@@ -49,7 +51,14 @@ from litellm.types.proxy.guardrails.guardrail_hooks.straiker import (
     StraikerWebhookStream,
     StraikerWebhookUsage,
 )
-from litellm.types.utils import CallTypes, GenericGuardrailAPIInputs, ModelResponse, TextCompletionResponse
+from litellm.types.utils import (
+    CallTypes,
+    GenericGuardrailAPIInputs,
+    GuardrailStatus,
+    GuardrailTracingDetail,
+    ModelResponse,
+    TextCompletionResponse,
+)
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -65,10 +74,21 @@ V3_KEY_PREFIX: Final = "sk_agt_"
 V3_SESSION_HEADER: Final = "x-claude-code-session-id"
 V3_CLIENT_HEADER: Final = "x-s6r-client"
 V3_FORMAT_HEADER: Final = "x-s6r-format"
-# (User-Agent prefix, Straiker client value, display name). Straiker recognises a coding agent
-# from the system prompt of its main turns only; Claude Code's title and topic sidecars carry
-# other prompts and would split the session across two agents. The User-Agent is on every call.
-_V3_CLIENT_BY_USER_AGENT: Final = (("claude-cli/", "claude", "Claude"),)
+# (User-Agent prefix, entrypoints, Straiker client value, display name). Claude's clients send
+# `claude-cli/<version> (<user type>, <entrypoint>[, agent-sdk/<version>])` on every call, title
+# and topic side calls included, and the entrypoint names the product. Only Claude Code's are
+# listed: the terminal CLI (`cli`), `claude -p` (`sdk-cli`), the VS Code extension and the desktop
+# app's Code tab. Cowork and Chat in the desktop app send `local-agent`, and applications built on
+# the Claude Agent SDK send `sdk-ts` or `sdk-py`. They share the prefix but are not Claude Code,
+# so they are not named here.
+_V3_CLIENT_BY_USER_AGENT: Final = (
+    (
+        "claude-cli/",
+        frozenset({"cli", "sdk-cli", "claude-vscode", "claude-desktop", "claude-desktop-3p"}),
+        "claude",
+        "Claude",
+    ),
+)
 V3_GATEWAY_NAME: Final = "LiteLLM"
 V3_DERIVED_SESSION_PREFIX: Final = "litellm-"
 V3_AGENT_HEADER: Final = "x-s6r-agent"
@@ -148,8 +168,11 @@ _V3_IDENTITY_METADATA_KEYS: Final = (
     "user_api_key_alias",
     "user_api_key_team_id",
 )
-RETRY_STATUS: Final = frozenset({408, 429, 500, 502, 503, 504})
-UNREACHABLE_STATUS: Final = frozenset({502, 503, 504})
+#: Statuses that mean Straiker could not give a verdict right now. They are retried and, once the
+#: retries are spent, follow `unreachable_fallback` like a timeout or a connection error. Any
+#: other status is an error (`fail_on_error`): a bad key or a rejected request does not change
+#: on a retry.
+TRANSIENT_STATUS: Final = frozenset({408, 429, 500, 502, 503, 504})
 _APPLICATION_METADATA_KEYS: Final = frozenset({"agent_id", "app_name"})
 _OPAQUE_METADATA_SCALAR_TYPES: Final = (str, int, float, bool)
 _JSON_DICT_ADAPTER: Final = TypeAdapter(dict[str, object])
@@ -160,13 +183,64 @@ class _WebhookFailure:
     message: str
     is_unreachable: bool
     retryable: bool = False
+    #: Straiker answered, but with no allow or block decision in the reply.
+    no_verdict: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class _RememberedBlock:
+    """A blocked prompt, kept so that a resend is blocked again and logged as a repeat of it."""
+
+    message: str
+    blocked_by: tuple[str, ...]
+    turn_id: str | None
+
+
+#: What one phase logs as `action`, in the labels Straiker's other gateway integrations log.
+_V3LogAction: TypeAlias = Literal["allow", "detect", "block", "degraded", "unknown"]
+
+#: LiteLLM's guardrail status for each logged action. A detect-mode finding is flagged, not
+#: intervened: the request went through. A phase that was never scored failed to respond,
+#: whether the request then failed open or closed.
+_V3_LOG_STATUS: Final[Mapping[str, GuardrailStatus]] = MappingProxyType(
+    {
+        "allow": "success",
+        "detect": "guardrail_flagged",
+        "block": "guardrail_intervened",
+        "degraded": "guardrail_failed_to_respond",
+        "unknown": "guardrail_failed_to_respond",
+    }
+)
+
+
+def _v3_log_details(
+    parsed: StraikerWebhookResponse | None, replay_of: _RememberedBlock | None
+) -> tuple[tuple[str, object], ...]:
+    """The turn's details for the log entry. A phase that was never scored has none; a block
+    repeated from this guardrail's memory names the turn it repeats and has no turn of its own."""
+    if parsed is not None:
+        return (
+            ("turn_id", parsed.turn_id),
+            ("controls", list(parsed.controls)),
+            ("blocked_by", list(parsed.blocked_by)),
+            ("events_scored", parsed.events_scored),
+        )
+    if replay_of is not None:
+        return (("blocked_by", list(replay_of.blocked_by)), ("replay_of", replay_of.turn_id))
+    return ()
+
+
+def _v3_log_action(parsed: StraikerWebhookResponse) -> _V3LogAction:
+    if parsed.action == "BLOCKED":
+        return "block"
+    return "detect" if parsed.verdict == "detect" else "allow"
 
 
 def _status_failure(status: int, text: str) -> _WebhookFailure:
     return _WebhookFailure(
         f"HTTP {status}: {text[:200]}",
-        is_unreachable=status in UNREACHABLE_STATUS,
-        retryable=status in RETRY_STATUS,
+        is_unreachable=status in TRANSIENT_STATUS,
+        retryable=status in TRANSIENT_STATUS,
     )
 
 
@@ -293,6 +367,22 @@ def _configured_modes(event_hook: object) -> list[str] | None:
     else:
         return None
     return list(dict.fromkeys(names)) or None
+
+
+#: The call types whose route answers a `ModifyResponseException` as a reply in the caller's
+#: own API format. Every other caller of `apply_guardrail` (embeddings, the standalone
+#: /guardrails/apply_guardrail check and others) turns it into HTTP 500.
+_REPLY_CALL_SURFACES: Final = frozenset(
+    {
+        CallTypes.completion.value,
+        CallTypes.acompletion.value,
+        CallTypes.text_completion.value,
+        CallTypes.atext_completion.value,
+        CallTypes.anthropic_messages.value,
+        CallTypes.responses.value,
+        CallTypes.aresponses.value,
+    }
+)
 
 
 def _resolve_call_surface(logging_obj: LiteLLMLoggingObj | None, request_data: dict) -> str:
@@ -781,14 +871,25 @@ def _v3_user(envelope: StraikerWebhookRequest) -> str | None:
     return None
 
 
+def _v3_user_agent_comment(user_agent: str) -> frozenset[str]:
+    """The comma-separated fields inside a User-Agent's first `( ... )`, e.g. `cli`."""
+    _, _, rest = user_agent.partition("(")
+    return frozenset(field.strip() for field in rest.partition(")")[0].split(",") if field.strip())
+
+
 def _v3_client_from_user_agent(request_data: Mapping[str, object]) -> tuple[str, str] | None:
-    """`(client, agent name)` for a User-Agent this gateway recognises, else None."""
-    user_agent: Final = (_request_header(request_data, "user-agent") or "").lower()
+    """`(client, agent name)` for a User-Agent this gateway recognises, else None.
+
+    The prefix alone is not enough: the entrypoint inside the parentheses has to be one of the
+    product's own, so a client that shares the prefix is left unnamed.
+    """
+    user_agent: Final = (_request_header(request_data, "user-agent") or "").strip().lower()
+    comment: Final = _v3_user_agent_comment(user_agent)
     return next(
         (
             (client, f"{display} ({V3_GATEWAY_NAME})")
-            for prefix, client, display in _V3_CLIENT_BY_USER_AGENT
-            if user_agent.startswith(prefix)
+            for prefix, entrypoints, client, display in _V3_CLIENT_BY_USER_AGENT
+            if user_agent.startswith(prefix) and not comment.isdisjoint(entrypoints)
         ),
         None,
     )
@@ -803,13 +904,15 @@ def _v3_headers(
     """Per-call routing hints, the unified Kong plugin's set. All optional.
 
     `x-s6r-agent` names ONE application when a gateway fronts several: the route's
-    `agent_ref`, else the caller's own header, else the agent this gateway names from the
-    User-Agent. The operator's value comes first because the header is caller-supplied, and
-    honouring it over a pinned route would let any key file its traffic under another
-    application's agent and controls. `x-s6r-client` is the route's `client` config, else
-    the client the User-Agent names. `x-s6r-format` comes from config alone. Claude Code's own session header is
-    forwarded when the client sent it, which is how a coding session groups the way the
-    native hook would.
+    `agent_ref`, else the caller's own header, else the agent this gateway names from a Claude
+    Code User-Agent. The operator's value comes first because the header is caller-supplied,
+    and honouring it over a pinned route would let any key file its traffic under another
+    application's agent and controls. `x-s6r-client` is the route's `client` config, else the
+    client the User-Agent names. Cowork, Chat and Claude Agent SDK applications share Claude
+    Code's User-Agent prefix but not its entrypoints, so they get neither header and Straiker
+    identifies them from the request. `x-s6r-format` comes from config alone. Claude Code's own
+    session header is forwarded when the client sent it, which is how a coding session groups
+    the way the native hook would.
     """
     session: Final = _request_header(request_data, V3_SESSION_HEADER)
     recognised: Final = _v3_client_from_user_agent(request_data)
@@ -844,9 +947,18 @@ def _v3_decision(body: Mapping[str, object]) -> tuple[str | None, Mapping[str, o
     return (action.lower() if isinstance(action, str) and action else None), verdict
 
 
-def _v3_blocked_by(verdict: Mapping[str, object]) -> tuple[str, ...]:
-    raw: Final = verdict.get("blocked_by")
+def _v3_control_list(verdict: Mapping[str, object], key: Literal["controls", "blocked_by"]) -> tuple[str, ...]:
+    raw: Final = verdict.get(key)
     return tuple(sorted(str(control) for control in raw)) if isinstance(raw, list) else ()
+
+
+def _v3_blocked_by(verdict: Mapping[str, object]) -> tuple[str, ...]:
+    return _v3_control_list(verdict, "blocked_by")
+
+
+def _v3_events_scored(verdict: Mapping[str, object]) -> int | None:
+    raw: Final = verdict.get("events_scored")
+    return raw if isinstance(raw, int) and not isinstance(raw, bool) else None
 
 
 def _v3_response(body: Mapping[str, object]) -> StraikerWebhookResponse | None:
@@ -871,11 +983,17 @@ def _v3_response(body: Mapping[str, object]) -> StraikerWebhookResponse | None:
         if blocked
         else None
     )
+    stated_action: Final = verdict.get("action")
+    detected: Final = isinstance(stated_action, str) and stated_action.lower() == "detect"
     return StraikerWebhookResponse(
         action="BLOCKED" if blocked else "NONE",
         blocked_reason=reason,
         blocked_by=blocked_by,
         turnId=_as_optional_str(verdict.get("turn_id")) or _as_optional_str(body.get("turn_id")),
+        verdict="block" if blocked else ("detect" if detected else "allow"),
+        controls=_v3_control_list(verdict, "controls"),
+        events_scored=_v3_events_scored(verdict),
+        session_id=_as_optional_str(verdict.get("session_id")),
     )
 
 
@@ -907,6 +1025,7 @@ class StraikerGuardrail(CustomGuardrail):
         unreachable_fallback: Literal["fail_open", "fail_closed"] = "fail_closed",
         fail_on_error: bool = True,
         max_payload_bytes: int = DEFAULT_MAX_PAYLOAD_BYTES,
+        stream_mode: StraikerStreamMode = "buffered",
         custom_headers: dict[str, str] | None = None,
         metadata: dict[str, str] | None = None,
         verbose: bool = False,
@@ -917,6 +1036,8 @@ class StraikerGuardrail(CustomGuardrail):
             raise ValueError("api_key must be non-empty")
         if unreachable_fallback not in ("fail_open", "fail_closed"):
             raise ValueError(f"unreachable_fallback must be 'fail_open' or 'fail_closed'; got {unreachable_fallback!r}")
+        if stream_mode not in ("buffered", "streaming"):
+            raise ValueError(f"stream_mode must be 'buffered' or 'streaming'; got {stream_mode!r}")
         if api_version not in (None, "v1", "v3"):
             raise ValueError(f"api_version must be 'v1' or 'v3'; got {api_version!r}")
         # The v1 webhook rejects an sk_agt_ key, so an sk_agt_ key always means v3. Guardrails
@@ -953,8 +1074,15 @@ class StraikerGuardrail(CustomGuardrail):
         self.default_metadata = dict(metadata) if metadata else {}
         self.verbose = bool(verbose)
 
+        # Both modes check a streamed response once, assembled, at the end of the stream:
+        # LiteLLM's per-chunk sampling would post a growing partial answer every few chunks.
+        # `buffered` withholds every chunk until that check passes. `streaming` releases chunks
+        # as they arrive and holds back only the stream's final frames, which a block replaces
+        # with the block message. These are the flags LiteLLM's streaming hook reads; they are
+        # set from `stream_mode` alone rather than exposed as options of their own.
+        self.stream_mode: StraikerStreamMode = stream_mode
         self.streaming_end_of_stream_only = True
-        self.streaming_buffer_until_moderated = True
+        self.streaming_buffer_until_moderated = stream_mode == "buffered"
 
         self.async_handler = async_handler or get_async_httpx_client(
             llm_provider=httpxSpecialProvider.GuardrailCallback,
@@ -1104,7 +1232,12 @@ class StraikerGuardrail(CustomGuardrail):
             resp: Final = await self.async_handler.post(url, content=body, headers=headers, timeout=self.timeout)
         except httpx.HTTPStatusError as status_error:
             return None, _status_failure(status_error.response.status_code, _error_response_text(status_error.response))
-        except (httpx.RequestError, asyncio.TimeoutError, Timeout) as e:
+        except (httpx.TimeoutException, asyncio.TimeoutError, Timeout) as e:
+            # Unreachable, but not retried: the attempt has already waited the whole `timeout`,
+            # so a retry would multiply the delay before a verdict rather than shorten it.
+            # Before httpx.RequestError, which httpx.TimeoutException subclasses.
+            return None, _WebhookFailure(f"{type(e).__name__}: {e}", is_unreachable=True)
+        except httpx.RequestError as e:
             return None, _WebhookFailure(f"{type(e).__name__}: {e}", is_unreachable=True, retryable=True)
         except (json.JSONDecodeError, TypeError, ValueError) as e:
             return None, _WebhookFailure(f"{type(e).__name__}: {e}", is_unreachable=False)
@@ -1130,7 +1263,9 @@ class StraikerGuardrail(CustomGuardrail):
         except (ValidationError, json.JSONDecodeError) as ve:
             return None, _WebhookFailure(f"invalid response schema: {ve}", is_unreachable=False)
         if parsed is None:
-            return None, _WebhookFailure("invalid response schema: no allow or block decision", is_unreachable=False)
+            return None, _WebhookFailure(
+                "invalid response schema: no allow or block decision", is_unreachable=False, no_verdict=True
+            )
         if self.verbose:
             verbose_proxy_logger.info(
                 json.dumps(
@@ -1155,6 +1290,65 @@ class StraikerGuardrail(CustomGuardrail):
             straiker_hidden: Final = hidden.setdefault("straiker", {})
             if isinstance(straiker_hidden, dict):
                 straiker_hidden.update({"action": parsed.action, "turn_id": parsed.turn_id})
+
+    def _log_v3_phase(
+        self,
+        *,
+        request_data: dict[str, object],  # mutable-ok: the logging helper appends to it in place
+        input_type: Literal["request", "response"],
+        action: _V3LogAction,
+        started: float,
+        session: str | None,
+        parsed: StraikerWebhookResponse | None = None,
+        replay_of: _RememberedBlock | None = None,
+    ) -> None:
+        """Add this phase's verdict to LiteLLM's standard logging payload, which every logging
+        callback and the spend logs read, with the field names and labels Straiker's other gateway
+        integrations log. It takes the place of the generic entry `log_guardrail_information`
+        would otherwise write, which reads `allow` even when the guardrail failed open.
+
+        `guardrail_response` holds the session, the action and the turn's details. The action
+        and the controls are also set as `guardrail_action` and `violation_categories`, which
+        spend logs keep when they redact `guardrail_response`.
+        """
+        entry: Final = {
+            key: value
+            for key, value in (
+                ("session_id", (parsed.session_id if parsed is not None else None) or session),
+                ("action", action),
+                *_v3_log_details(parsed, replay_of),
+            )
+            if value is not None
+        }
+        fired: Final = parsed.controls if parsed is not None else ()
+        blocked_by: Final = (
+            parsed.blocked_by if parsed is not None else (replay_of.blocked_by if replay_of is not None else ())
+        )
+        violations: Final = sorted({*fired, *blocked_by})
+        tracing: Final[GuardrailTracingDetail] = (
+            {"guardrail_action": action, "violation_categories": violations}
+            if violations
+            else {"guardrail_action": action}
+        )
+        ended: Final = time.time()
+        # Logging must never decide the request: if this fails, the decorator writes its
+        # generic entry instead and the verdict is enforced as usual.
+        try:
+            self.add_standard_logging_guardrail_information_to_request_data(
+                guardrail_json_response=entry,
+                request_data=request_data,
+                guardrail_status=_V3_LOG_STATUS[action],
+                start_time=started,
+                end_time=ended,
+                duration=ended - started,
+                guardrail_provider=GUARDRAIL_NAME,
+                event_type=GuardrailEventHooks.pre_call if input_type == "request" else GuardrailEventHooks.post_call,
+                tracing_detail=tracing,
+            )
+        except Exception as error:  # noqa: BLE001  # a logging failure must not change the verdict
+            verbose_proxy_logger.warning(
+                json.dumps({"event": "straiker.log_failed", "input_type": input_type, "error": str(error)})
+            )
 
     def _fail(
         self,
@@ -1192,21 +1386,32 @@ class StraikerGuardrail(CustomGuardrail):
         input_type: Literal["request", "response"],
         message: str,
         blocked_content: bool = False,
+        logging_obj: LiteLLMLoggingObj | None = None,
     ) -> NoReturn:
-        if input_type == "request":
+        # A verdict on the prompt is answered as a reply, the way an answer-side block already
+        # is. GuardrailRaisedException reaches the client as HTTP 400, which some clients
+        # report as a malformed request without the reason. A backend failure stays an error,
+        # so a consumer can still tell an outage from a verdict, and so does a verdict on a
+        # route that has no reply to give.
+        replies: Final = blocked_content and _resolve_call_surface(logging_obj, request_data) in _REPLY_CALL_SURFACES
+        if input_type == "request" and not replies:
             raise GuardrailRaisedException(
                 guardrail_name=self.guardrail_name or GUARDRAIL_NAME,
                 message=message,
                 should_wrap_with_default_message=False,
                 blocked_content=blocked_content,
             )
-        raise ModifyResponseException(
+        reply: Final = ModifyResponseException(
             message=message,
             model=request_data.get("model", "unknown") or "unknown",
             request_data=request_data,
             guardrail_name=self.guardrail_name or GUARDRAIL_NAME,
-            original_response=request_data.get("response"),
+            original_response=request_data.get("response") if input_type == "response" else None,
         )
+        # A route that cannot send a reply maps this exception to an HTTP error and reads the
+        # status from it. Without one the block is reported as a 500.
+        reply.status_code = 400  # pyright: ignore[reportAttributeAccessIssue]  # the class declares no status
+        raise reply
 
     @staticmethod
     def _intervened_inputs(
@@ -1223,11 +1428,12 @@ class StraikerGuardrail(CustomGuardrail):
         self,
         *,
         inputs: GenericGuardrailAPIInputs,
-        request_data: dict,
+        request_data: dict[str, object],
         input_type: Literal["request", "response"],
         logging_obj: LiteLLMLoggingObj | None,
     ) -> GenericGuardrailAPIInputs:
-        """One phase of a turn against /api/v3/detect: relay, read the decision, enforce."""
+        """One phase of a turn against /api/v3/detect: relay, read the decision, log it, enforce."""
+        started: Final = time.time()
         try:
             envelope: Final = self._build_envelope(
                 inputs=inputs,
@@ -1248,6 +1454,9 @@ class StraikerGuardrail(CustomGuardrail):
             scope: Final = f"{principal or ''}\0{session or ''}" if session or principal else ""
             prefixes: Final = _v3_conversation_prefixes(request_body) if scope else ()
         except (ValidationError, TypeError, ValueError) as error:
+            self._log_v3_phase(
+                request_data=request_data, input_type=input_type, action="degraded", started=started, session=None
+            )
             return self._fail(
                 inputs=inputs,
                 request_data=request_data,
@@ -1258,10 +1467,31 @@ class StraikerGuardrail(CustomGuardrail):
 
         replayed: Final = self._v3_replayed_block(scope, prefixes) if input_type == "request" else None
         if replayed is not None:
-            self._block(request_data=request_data, input_type=input_type, message=replayed, blocked_content=True)
+            self._log_v3_phase(
+                request_data=request_data,
+                input_type=input_type,
+                action="block",
+                started=started,
+                session=session,
+                replay_of=replayed,
+            )
+            self._block(
+                request_data=request_data,
+                input_type=input_type,
+                message=replayed.message,
+                blocked_content=True,
+                logging_obj=logging_obj,
+            )
 
         parsed, failure = await self._post_webhook(payload, headers)
         if failure is not None or parsed is None:
+            self._log_v3_phase(
+                request_data=request_data,
+                input_type=input_type,
+                action="unknown" if failure is not None and failure.no_verdict else "degraded",
+                started=started,
+                session=session,
+            )
             return self._fail(
                 inputs=inputs,
                 request_data=request_data,
@@ -1270,6 +1500,14 @@ class StraikerGuardrail(CustomGuardrail):
                 is_unreachable=failure.is_unreachable if failure is not None else False,
             )
         self._record(request_data=request_data, logging_obj=logging_obj, parsed=parsed)
+        self._log_v3_phase(
+            request_data=request_data,
+            input_type=input_type,
+            action=_v3_log_action(parsed),
+            started=started,
+            session=session,
+            parsed=parsed,
+        )
         if parsed.action == "BLOCKED":
             message: Final = parsed.blocked_reason or DEFAULT_BLOCK_MESSAGE
             # Only a block that names a control is remembered. The same words are the same
@@ -1278,21 +1516,29 @@ class StraikerGuardrail(CustomGuardrail):
             # would keep refusing a conversation the platform now allows. A blocked answer is
             # not remembered: the question that produced it may be harmless.
             if input_type == "request" and prefixes and parsed.blocked_by:
-                self._v3_blocked_turns.set_cache(f"{scope}\0{prefixes[-1]}", message)
-            self._block(request_data=request_data, input_type=input_type, message=message, blocked_content=True)
+                self._v3_blocked_turns.set_cache(
+                    f"{scope}\0{prefixes[-1]}", _RememberedBlock(message, parsed.blocked_by, parsed.turn_id)
+                )
+            self._block(
+                request_data=request_data,
+                input_type=input_type,
+                message=message,
+                blocked_content=True,
+                logging_obj=logging_obj,
+            )
         return inputs
 
-    def _v3_replayed_block(self, scope: str, prefixes: tuple[str, ...]) -> str | None:
-        """The block message a conversation already earned, when this request repeats or
-        extends a conversation this process blocked in the same scope (session or principal)."""
+    def _v3_replayed_block(self, scope: str, prefixes: tuple[str, ...]) -> _RememberedBlock | None:
+        """The block a conversation already earned, when this request repeats or extends a
+        conversation this process blocked in the same scope (session or principal)."""
         for prefix in prefixes:
-            message: str | None = self._v3_blocked_turns.get_cache(f"{scope}\0{prefix}")
-            if message is not None:
+            remembered: object = self._v3_blocked_turns.get_cache(f"{scope}\0{prefix}")
+            if isinstance(remembered, _RememberedBlock):
                 if self.verbose:
                     verbose_proxy_logger.info(
                         json.dumps({"event": "straiker.replay_blocked", "scope": scope, "prefix": prefix})
                     )
-                return message
+                return remembered
         return None
 
     @log_guardrail_information
@@ -1361,6 +1607,7 @@ class StraikerGuardrail(CustomGuardrail):
                 input_type=input_type,
                 message=parsed.blocked_reason or DEFAULT_BLOCK_MESSAGE,
                 blocked_content=True,
+                logging_obj=logging_obj,
             )
         if parsed.action == "GUARDRAIL_INTERVENED":
             is_streamed_response: Final = input_type == "response" and _is_streamed_request(request_data)
@@ -1370,6 +1617,7 @@ class StraikerGuardrail(CustomGuardrail):
                     input_type=input_type,
                     message=parsed.blocked_reason or DEFAULT_BLOCK_MESSAGE,
                     blocked_content=True,
+                    logging_obj=logging_obj,
                 )
             return self._intervened_inputs(inputs, parsed)
         return inputs
