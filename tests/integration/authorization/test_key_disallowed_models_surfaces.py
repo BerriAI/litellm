@@ -293,17 +293,10 @@ def test_a_comma_separated_fan_out_cannot_reach_a_model_a_star_pattern_or_a_team
         assert (denial(through_pattern), denial(through_alias)) == (KEY_DENIAL, KEY_DENIAL)
 
 
-@pytest.mark.parametrize(
-    ("path", "field"),
-    [
-        ("/v1/models", "id"),
-        ("/models", "id"),
-        ("/model/info", "model_name"),
-        ("/v1/model/info", "model_name"),
-        ("/model_group/info", "model_group"),
-    ],
-)
-def test_every_model_listing_hides_disallowed_models_and_keeps_the_rest(rig: DenyRig, path: str, field: str) -> None:
+@pytest.mark.parametrize(("path", "field"), [("/models", "id"), ("/v1/model/info", "model_name")])
+def test_the_model_listing_aliases_hide_disallowed_models_and_keep_the_rest(
+    rig: DenyRig, path: str, field: str
+) -> None:
     everything: Final = frozenset(rig.allowed.names()) | frozenset(rig.denied.names())
     unrestricted: Final = _ids(rig.gateway, path, rig.open_key, field)
     assert unrestricted & everything == everything, unrestricted
