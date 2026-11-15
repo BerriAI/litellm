@@ -95,6 +95,10 @@ def _utc_date(moment: datetime) -> date:
     return moment.astimezone(timezone.utc).date()
 
 
+def _is_usable(rate: float) -> bool:
+    return math.isfinite(rate) and rate > 0
+
+
 def _parse_quote(cube: ET.Element) -> tuple[str, float] | EcbFeedRejected:
     code: Final = cube.get("currency")
     text: Final = cube.get("rate")
@@ -105,7 +109,7 @@ def _parse_quote(cube: ET.Element) -> tuple[str, float] | EcbFeedRejected:
     if _RATE.fullmatch(text) is None:
         return EcbFeedRejected(f"invalid rate {text!r} for {code}")
     rate: Final = float(text)
-    if not math.isfinite(rate) or rate <= 0:
+    if not _is_usable(rate):
         return EcbFeedRejected(f"unusable rate {text!r} for {code}")
     return code, rate
 
@@ -122,10 +126,17 @@ def _parse_rate_date(text: str | None) -> date | None:
 def parse_ecb_daily_feed(body: bytes, today: date) -> EcbRateSnapshot | EcbFeedRejected:
     if len(body) > ECB_MAX_FEED_BYTES:
         return EcbFeedRejected("feed exceeds the size limit")
-    if b"<!DOCTYPE" in body:
+    try:
+        text: Final = body.decode("utf-8")
+    except UnicodeDecodeError:
+        return EcbFeedRejected("feed is not UTF-8")
+    # expat detects UTF-16 and UTF-32 from NUL bytes even when the parser encoding is forced
+    if "\x00" in text:
+        return EcbFeedRejected("feed is not UTF-8")
+    if "<!DOCTYPE" in text:
         return EcbFeedRejected("feed declares a DOCTYPE")
     try:
-        root: Final = ET.fromstring(body)
+        root: Final = ET.fromstring(body, parser=ET.XMLParser(encoding="utf-8"))
     except ET.ParseError as e:
         return EcbFeedRejected(f"feed is not well-formed XML: {e}")
     dated: Final = root.findall(f"{_CUBE}/{_CUBE}[@time]")
@@ -136,6 +147,8 @@ def parse_ecb_daily_feed(body: bytes, today: date) -> EcbRateSnapshot | EcbFeedR
         return EcbFeedRejected("invalid rate date")
     if rate_date > today:
         return EcbFeedRejected(f"rate date {rate_date} is after {today}")
+    if (today - rate_date).days > ECB_MAX_RATE_AGE_DAYS:
+        return EcbFeedRejected(f"rate date {rate_date} is more than {ECB_MAX_RATE_AGE_DAYS} days before {today}")
     parsed: Final = tuple(map(_parse_quote, dated[0]))
     failures: Final = tuple(entry for entry in parsed if isinstance(entry, EcbFeedRejected))
     if failures:
@@ -148,7 +161,12 @@ def parse_ecb_daily_feed(body: bytes, today: date) -> EcbRateSnapshot | EcbFeedR
         return EcbFeedRejected("EUR listed as a quote currency")
     if "USD" not in codes:
         return EcbFeedRejected("USD rate missing")
-    return EcbRateSnapshot(rate_date=rate_date, units_per_eur=MappingProxyType({"EUR": 1.0, **dict(quotes)}))
+    units_per_eur: Final = MappingProxyType({"EUR": 1.0, **dict(quotes)})
+    usd_per_eur: Final = units_per_eur["USD"]
+    unusable: Final = tuple(code for code, units in units_per_eur.items() if not _is_usable(usd_per_eur / units))
+    if unusable:
+        return EcbFeedRejected(f"USD cross rate out of range for {unusable[0]}")
+    return EcbRateSnapshot(rate_date=rate_date, units_per_eur=units_per_eur)
 
 
 async def fetch_ecb_daily_feed(http: "AsyncHTTPHandler") -> bytes | EcbFetchFailed:
@@ -160,7 +178,7 @@ async def fetch_ecb_daily_feed(http: "AsyncHTTPHandler") -> bytes | EcbFetchFail
             timeout=ECB_FETCH_TIMEOUT_SECONDS,
         )
     except (httpx.HTTPError, ValueError, asyncio.TimeoutError) as e:
-        return EcbFetchFailed(f"{type(e).__name__}: {e}")
+        return EcbFetchFailed(type(e).__name__)
     if response.status_code != httpx.codes.OK:
         return EcbFetchFailed(f"HTTP {response.status_code}")
     return response.content
