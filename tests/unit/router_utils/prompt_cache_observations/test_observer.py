@@ -42,8 +42,6 @@ from litellm.router_utils.prompt_cache_observations.types import (
     CacheIntent,
     ClientSurface,
     ObservationPath,
-    ObservedCall,
-    OutgoingPrefix,
     PromptCacheObservation,
     ProviderFamily,
     Runtime,
@@ -83,16 +81,16 @@ _ZERO_USAGE_RESPONSE = json.dumps(
 
 class _RecordingSink:
     def __init__(self) -> None:
-        self.calls: tuple[ObservedCall, ...] = ()
+        self.calls: tuple[PromptCacheObservation, ...] = ()
         self.recorded = asyncio.Event()
 
-    async def record(self, call: ObservedCall) -> None:
-        self.calls = (*self.calls, call)
+    async def record(self, observation: PromptCacheObservation) -> None:
+        self.calls = (*self.calls, observation)
         self.recorded.set()
 
     @property
     def observations(self) -> tuple[PromptCacheObservation, ...]:
-        return tuple(call.observation for call in self.calls)
+        return self.calls
 
 
 def _observer(
@@ -154,10 +152,10 @@ def _deployment(settings: DeploymentCacheSettings | None = _ATTEMPT_SETTINGS):
     )
 
 
-def _outgoing(body: Mapping[str, JsonValue] = _MARKED_BODY) -> OutgoingPrefix:
-    outgoing = outgoing_cacheable_prefix(WireShape.ANTHROPIC_MESSAGES, body, _KEY)
-    assert isinstance(outgoing, OutgoingPrefix)
-    return outgoing
+def _prefix(body: Mapping[str, JsonValue] = _MARKED_BODY) -> CacheablePrefix:
+    prefix = outgoing_cacheable_prefix(WireShape.ANTHROPIC_MESSAGES, body, _KEY)
+    assert isinstance(prefix, CacheablePrefix)
+    return prefix
 
 
 def _observation(
@@ -174,26 +172,14 @@ async def test_verified_path_records_the_upstream_counters_for_the_attempts_depl
     sink = _RecordingSink()
     await _observer(sink).async_log_success_event(_kwargs(), ModelResponse(), None, None)
     assert sink.calls == (
-        ObservedCall(
-            observation=_observation(
-                Assessed(path=_PATH, prefix=_outgoing().prefix, usage=CacheCounters(read_tokens=0, write_tokens=0))
-            ),
-            count_request=_outgoing().count_request,
-        ),
+        _observation(Assessed(path=_PATH, prefix=_prefix(), usage=CacheCounters(read_tokens=0, write_tokens=0))),
     )
 
 
-async def test_unverified_path_is_recorded_as_unassessed_without_a_count_request() -> None:
+async def test_unverified_path_is_recorded_as_unassessed_without_reading_usage() -> None:
     sink = _RecordingSink()
     await _observer(sink, verified=frozenset()).async_log_success_event(_kwargs(), ModelResponse(), None, None)
-    assert sink.calls == (
-        ObservedCall(
-            observation=_observation(
-                Unassessed(UnassessedReason.PATH_NOT_VERIFIED, path=_PATH, prefix=_outgoing().prefix)
-            ),
-            count_request=None,
-        ),
-    )
+    assert sink.calls == (_observation(Unassessed(UnassessedReason.PATH_NOT_VERIFIED, path=_PATH, prefix=_prefix())),)
 
 
 async def test_without_a_shared_salt_key_nothing_is_assessable() -> None:
@@ -219,7 +205,7 @@ async def test_attempt_without_its_own_cache_settings_is_unassessed(settings: De
     await _observer(sink).async_log_success_event(_kwargs(settings=settings), ModelResponse(), None, None)
     assert sink.observations == (
         _observation(
-            Unassessed(UnassessedReason.DEPLOYMENT_SETTINGS_UNAVAILABLE, path=_PATH, prefix=_outgoing().prefix),
+            Unassessed(UnassessedReason.DEPLOYMENT_SETTINGS_UNAVAILABLE, path=_PATH, prefix=_prefix()),
             settings=None,
         ),
     )
@@ -267,7 +253,7 @@ async def test_messages_attempt_reads_the_sent_request_and_raw_body_kept_on_the_
         None,
     )
     assert sink.observations == (
-        _observation(Assessed(path=messages_path, prefix=_outgoing().prefix, usage=CacheCounters(0, 0))),
+        _observation(Assessed(path=messages_path, prefix=_prefix(), usage=CacheCounters(0, 0))),
     )
 
 
@@ -339,7 +325,7 @@ async def test_stream_usage_is_read_from_the_raw_events_and_absence_stays_unknow
         await observer.async_log_success_event(
             _kwargs(stream=True, stream_usage=stream_usage), ModelResponse(), None, None
         )
-    prefix = _outgoing().prefix
+    prefix = _prefix()
     assert sink.observations == (
         _observation(Assessed(path=_STREAM_PATH, prefix=prefix, usage=CacheCounters(read_tokens=0, write_tokens=0))),
         _observation(Assessed(path=_STREAM_PATH, prefix=prefix, usage=UsageUnknown(UsageUnknownReason.MISSING))),
@@ -353,7 +339,7 @@ async def test_failed_attempt_is_unassessed_for_its_prefix() -> None:
     sink = _RecordingSink()
     await _observer(sink).async_log_failure_event(_kwargs(original_response=None), None, None, None)
     assert sink.observations == (
-        _observation(Unassessed(UnassessedReason.UPSTREAM_FAILED, path=_PATH, prefix=_outgoing().prefix)),
+        _observation(Unassessed(UnassessedReason.UPSTREAM_FAILED, path=_PATH, prefix=_prefix())),
     )
 
 
@@ -362,7 +348,7 @@ async def test_failed_stream_attempt_keeps_its_stream_path() -> None:
     kwargs = {**_kwargs(original_response=None), "stream": True}
     await _observer(sink, verified=frozenset({_STREAM_PATH})).async_log_failure_event(kwargs, None, None, None)
     assert sink.observations == (
-        _observation(Unassessed(UnassessedReason.UPSTREAM_FAILED, path=_STREAM_PATH, prefix=_outgoing().prefix)),
+        _observation(Unassessed(UnassessedReason.UPSTREAM_FAILED, path=_STREAM_PATH, prefix=_prefix())),
     )
 
 
@@ -420,12 +406,12 @@ async def test_a_second_hook_pass_on_the_attempt_keeps_the_injection_settings_th
 async def test_observation_log_keeps_a_bounded_tail_and_counts_every_outcome() -> None:
     log = ObservationLog(capacity=2)
     observations = (
-        _observation(Assessed(path=_PATH, prefix=_outgoing().prefix, usage=CacheCounters(0, 0))),
+        _observation(Assessed(path=_PATH, prefix=_prefix(), usage=CacheCounters(0, 0))),
         _observation(Unassessed(UnassessedReason.PATH_NOT_VERIFIED, path=_PATH, prefix=None)),
-        _observation(Assessed(path=_PATH, prefix=_outgoing().prefix, usage=UsageUnknown(UsageUnknownReason.MISSING))),
+        _observation(Assessed(path=_PATH, prefix=_prefix(), usage=UsageUnknown(UsageUnknownReason.MISSING))),
     )
     for observation in observations:
-        await log.record(ObservedCall(observation=observation, count_request=_outgoing().count_request))
+        await log.record(observation)
     assert log.recent == observations[1:]
     assert dict(log.coverage) == {
         "assessed:counters": 1,

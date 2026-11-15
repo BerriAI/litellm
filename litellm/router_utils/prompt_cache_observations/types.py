@@ -1,9 +1,6 @@
-from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import TypeAlias
-
-from pydantic import JsonValue
 
 
 class ProviderFamily(StrEnum):
@@ -100,22 +97,6 @@ class CacheablePrefix:
 
 
 @dataclass(frozen=True, slots=True)
-class PrefixCountRequest:
-    """Ephemeral. Holds the prompt prefix itself so a provider count can run for this request, and must never
-    be persisted, logged or kept past the request. Only `PromptCacheObservation` is retained evidence."""
-
-    prefix_fingerprint: str
-    wire: WireShape
-    body: Mapping[str, JsonValue]
-
-
-@dataclass(frozen=True, slots=True)
-class OutgoingPrefix:
-    prefix: CacheablePrefix
-    count_request: PrefixCountRequest
-
-
-@dataclass(frozen=True, slots=True)
 class NoCacheBreakpoint:
     pass
 
@@ -125,7 +106,7 @@ class PrefixUnassessed:
     reason: UnassessedReason
 
 
-PrefixEvidence: TypeAlias = OutgoingPrefix | NoCacheBreakpoint | PrefixUnassessed
+PrefixEvidence: TypeAlias = CacheablePrefix | NoCacheBreakpoint | PrefixUnassessed
 
 
 @dataclass(frozen=True, slots=True)
@@ -160,9 +141,3 @@ class PromptCacheObservation:
     intent: CacheIntent
     observed_at: float
     outcome: Assessed | Unassessed
-
-
-@dataclass(frozen=True, slots=True)
-class ObservedCall:
-    observation: PromptCacheObservation
-    count_request: PrefixCountRequest | None

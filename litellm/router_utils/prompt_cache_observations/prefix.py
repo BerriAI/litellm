@@ -13,8 +13,6 @@ from ..prompt_caching_cache import PROMPT_CACHE_ONE_HOUR_PIN_TTL_SECONDS, PROMPT
 from .types import (
     CacheablePrefix,
     NoCacheBreakpoint,
-    OutgoingPrefix,
-    PrefixCountRequest,
     PrefixEvidence,
     PrefixUnassessed,
     UnassessedReason,
@@ -37,9 +35,6 @@ _REDACTION_MARK: Final = json.dumps(REDACTED_BY_LITELLM).encode()
 class _Segment:
     identity: JsonValue
     marker: JsonValue
-    kind: str
-    index: int
-    position: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,22 +63,15 @@ def _flattened(groups: tuple[_Segments, ...]) -> _Segments:
 
 
 def _envelope(body: Mapping[str, JsonValue], excluded: frozenset[str], extra: JsonValue = None) -> _Segment:
-    return _Segment(
-        identity=["envelope", _without(body, excluded), extra], marker=None, kind="envelope", index=0, position=0
-    )
+    return _Segment(identity=["envelope", _without(body, excluded), extra], marker=None)
 
 
 def _anthropic_segment(kind: str, index: int, position: int, envelope: JsonValue, item: JsonValue) -> _Segment:
     if not isinstance(item, dict):
-        return _Segment(
-            identity=[kind, index, envelope, position, item], marker=None, kind=kind, index=index, position=position
-        )
+        return _Segment(identity=[kind, index, envelope, position, item], marker=None)
     return _Segment(
         identity=[kind, index, envelope, position, _without(item, _CACHE_CONTROL)],
         marker=item.get("cache_control"),
-        kind=kind,
-        index=index,
-        position=position,
     )
 
 
@@ -150,9 +138,6 @@ def _converse_segments_of(kind: str, index: int, envelope: JsonValue, blocks: tu
         _Segment(
             identity=[kind, index, envelope, ordinal, blocks[position]],
             marker=_following_cache_point(blocks, position),
-            kind=kind,
-            index=index,
-            position=position,
         )
         for ordinal, position in enumerate(content)
     )
@@ -220,56 +205,6 @@ def _fingerprint(key: bytes, segments: tuple[_Segment, ...]) -> str | None:
     return hashlib.blake2b(canonical, key=key, digest_size=32).hexdigest()
 
 
-def _truncated_messages(messages: tuple[JsonValue, ...], end: _Segment) -> JsonValue:
-    last: Final = messages[end.index]
-    content: Final = last.get("content") if isinstance(last, dict) else None
-    cut: Final = (
-        {**last, "content": content[: end.position + 1]}
-        if isinstance(last, dict) and isinstance(content, list)
-        else last
-    )
-    return [*messages[: end.index], cut]
-
-
-def _present(parts: Mapping[str, JsonValue]) -> Mapping[str, JsonValue]:
-    return {key: value for key, value in parts.items() if value not in (None, [], {})}
-
-
-def _anthropic_count_body(body: Mapping[str, JsonValue], end: _Segment | None) -> Mapping[str, JsonValue]:
-    tools: Final = list(_listed(body.get("tools")) or ())
-    system: Final = body.get("system")
-    messages: Final = _listed(body.get("messages")) or ()
-    match end:
-        case None:
-            return _present({"tools": tools, "system": system, "messages": list(messages)})
-        case _Segment(kind="tool", index=index):
-            return _present({"tools": tools[: index + 1]})
-        case _Segment(kind="system", index=index):
-            return _present({"tools": tools, "system": system[: index + 1] if isinstance(system, list) else system})
-        case _Segment():
-            return _present({"tools": tools, "system": system, "messages": _truncated_messages(messages, end)})
-
-
-def _converse_count_body(body: Mapping[str, JsonValue], end: _Segment) -> Mapping[str, JsonValue]:
-    tool_config: Final = _converse_tool_config(body)
-    tools: Final = list(_listed(tool_config.get("tools")) or ()) if isinstance(tool_config, Mapping) else []
-    system: Final = list(_listed(body.get("system")) or ())
-    messages: Final = _listed(body.get("messages")) or ()
-    match end:
-        case _Segment(kind="tool", position=position):
-            return _present({"toolConfig": {"tools": tools[: position + 1]}})
-        case _Segment(kind="system", position=position):
-            return _present({"toolConfig": {"tools": tools} if tools else None, "system": system[: position + 1]})
-        case _Segment():
-            return _present(
-                {
-                    "toolConfig": {"tools": tools} if tools else None,
-                    "system": system,
-                    "messages": _truncated_messages(messages, end),
-                }
-            )
-
-
 def outgoing_cacheable_prefix(wire: WireShape, body: Mapping[str, JsonValue], key: bytes) -> PrefixEvidence:
     """The prefix ends at the last breakpoint in tools, system, messages order, or at the end of the prompt
     when Anthropic's top-level cache_control asks the provider to place it. Its TTL is that breakpoint's,
@@ -289,16 +224,7 @@ def outgoing_cacheable_prefix(wire: WireShape, body: Mapping[str, JsonValue], ke
     if failure is not None:
         return PrefixUnassessed(failure)
     seconds: Final = tuple(ttl for ttl in ttls if isinstance(ttl, int))
-    end: Final = None if automatic is not None else segments[marked[-1]]
-    fingerprint: Final = _fingerprint(key, segments if end is None else segments[: marked[-1] + 1])
+    fingerprint: Final = _fingerprint(key, segments if automatic is not None else segments[: marked[-1] + 1])
     if fingerprint is None:
         return PrefixUnassessed(UnassessedReason.REQUEST_REDACTED)
-    count_body: Final = (
-        _anthropic_count_body(body, end)
-        if wire is WireShape.ANTHROPIC_MESSAGES or end is None
-        else _converse_count_body(body, end)
-    )
-    return OutgoingPrefix(
-        prefix=CacheablePrefix(fingerprint=fingerprint, ttl_seconds=seconds[-1], breakpoints=len(ttls)),
-        count_request=PrefixCountRequest(prefix_fingerprint=fingerprint, wire=wire, body=count_body),
-    )
+    return CacheablePrefix(fingerprint=fingerprint, ttl_seconds=seconds[-1], breakpoints=len(ttls))

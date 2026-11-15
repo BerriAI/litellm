@@ -37,14 +37,12 @@ from .paths import classify_path, upstream_wire
 from .prefix import outgoing_cacheable_prefix
 from .types import (
     Assessed,
+    CacheablePrefix,
     CacheIntent,
     ClientSurface,
     DeploymentCacheIdentity,
     NoCacheBreakpoint,
     ObservationPath,
-    ObservedCall,
-    OutgoingPrefix,
-    PrefixCountRequest,
     PrefixUnassessed,
     PromptCacheObservation,
     ProviderFamily,
@@ -78,7 +76,7 @@ _BREAKPOINT_MARKERS: Final = ('"cache_control"', '"cachePoint"')
 
 
 class ObservationSink(Protocol):
-    async def record(self, call: ObservedCall) -> None: ...
+    async def record(self, observation: PromptCacheObservation) -> None: ...
 
 
 class _LoggedRequest(BaseModel):
@@ -204,21 +202,25 @@ def _usage(call: _Call, path: ObservationPath) -> UpstreamCacheUsage:
     return upstream_cache_usage(path.wire, _raw_response(call.logged))
 
 
-def _assessed(call: _Call, path: ObservationPath, outgoing: OutgoingPrefix) -> Assessed | Unassessed:
+def _assessed(
+    settings: ObserverSettings, call: _Call, path: ObservationPath, prefix: CacheablePrefix
+) -> Assessed | Unassessed:
     if not call.succeeded:
-        return Unassessed(UnassessedReason.UPSTREAM_FAILED, path=path, prefix=outgoing.prefix)
+        return Unassessed(UnassessedReason.UPSTREAM_FAILED, path=path, prefix=prefix)
     if call.settings is None:
-        return Unassessed(UnassessedReason.DEPLOYMENT_SETTINGS_UNAVAILABLE, path=path, prefix=outgoing.prefix)
-    return Assessed(path=path, prefix=outgoing.prefix, usage=_usage(call, path))
+        return Unassessed(UnassessedReason.DEPLOYMENT_SETTINGS_UNAVAILABLE, path=path, prefix=prefix)
+    if path not in settings.verified_paths:
+        return Unassessed(UnassessedReason.PATH_NOT_VERIFIED, path=path, prefix=prefix)
+    return Assessed(path=path, prefix=prefix, usage=_usage(call, path))
 
 
-_Outcome: TypeAlias = tuple[Assessed | Unassessed, PrefixCountRequest | None]
+_Outcome: TypeAlias = Assessed | Unassessed
 
 
 def _without_prefix(
     call: _Call, reason: UnassessedReason, path: ObservationPath | None, marked: bool = False
 ) -> _Outcome | None:
-    return None if call.intent is None and not marked else (Unassessed(reason, path=path, prefix=None), None)
+    return None if call.intent is None and not marked else Unassessed(reason, path=path, prefix=None)
 
 
 def _carries_breakpoint(body: Mapping[str, JsonValue]) -> bool:
@@ -250,15 +252,9 @@ def _outcome(settings: ObserverSettings, call: _Call) -> _Outcome | None:
         case NoCacheBreakpoint():
             return _without_prefix(call, UnassessedReason.CACHE_INTENT_NOT_SENT, path)
         case PrefixUnassessed(reason=reason):
-            return Unassessed(reason, path=path, prefix=None), None
-        case OutgoingPrefix() as outgoing:
-            assessed: Final = _assessed(call, path, outgoing)
-            verified: Final = (
-                assessed
-                if not isinstance(assessed, Assessed) or path in settings.verified_paths
-                else Unassessed(UnassessedReason.PATH_NOT_VERIFIED, path=path, prefix=outgoing.prefix)
-            )
-            return verified, outgoing.count_request if isinstance(verified, Assessed) else None
+            return Unassessed(reason, path=path, prefix=None)
+        case CacheablePrefix() as prefix:
+            return _assessed(settings, call, path, prefix)
 
 
 def _attempt_settings(logged: _LoggedCall) -> DeploymentCacheSettings | None:
@@ -279,7 +275,7 @@ def _selected(logged: _LoggedCall, settings: DeploymentCacheSettings | None) -> 
 
 def observe_call(
     settings: ObserverSettings, kwargs: Mapping[str, object], response: object, succeeded: bool, observed_at: float
-) -> ObservedCall | None:
+) -> PromptCacheObservation | None:
     """One observation for an opted-in deployment's attempt. The request is the body that attempt sent, so
     provider translation and gateway injection are applied, while intent is what the client sent and what the
     gateway recorded for the attempt, so a breakpoint lost on the way is visible."""
@@ -311,19 +307,15 @@ def observe_call(
         settings=attempt_settings,
     )
     intent: Final = cache_intent(logged.litellm_params, selected.deployment_id)
-    result: Final = _outcome(settings, _Call(logged, body, deployment, attempt_settings, intent, response, succeeded))
-    if result is None:
+    outcome: Final = _outcome(settings, _Call(logged, body, deployment, attempt_settings, intent, response, succeeded))
+    if outcome is None:
         return None
-    outcome, count_request = result
-    return ObservedCall(
-        observation=PromptCacheObservation(
-            call_id=payload.litellm_call_id or payload.id,
-            deployment=deployment,
-            intent=intent or CacheIntent.UNATTRIBUTED,
-            observed_at=observed_at,
-            outcome=outcome,
-        ),
-        count_request=count_request,
+    return PromptCacheObservation(
+        call_id=payload.litellm_call_id or payload.id,
+        deployment=deployment,
+        intent=intent or CacheIntent.UNATTRIBUTED,
+        observed_at=observed_at,
+        outcome=outcome,
     )
 
 
@@ -338,8 +330,7 @@ def _coverage_key(observation: PromptCacheObservation) -> str:
 
 
 class ObservationLog:
-    """Bounded retained output: the most recent observations and a count per outcome and reason. The
-    ephemeral count request is dropped here, so no prompt content is kept."""
+    """Bounded retained output: the most recent observations and a count per outcome and reason."""
 
     def __init__(self, capacity: int) -> None:
         self._capacity: Final = capacity
@@ -354,8 +345,7 @@ class ObservationLog:
     def coverage(self) -> Mapping[str, int]:
         return self._coverage
 
-    async def record(self, call: ObservedCall) -> None:
-        observation: Final = call.observation
+    async def record(self, observation: PromptCacheObservation) -> None:
         key: Final = _coverage_key(observation)
         self._recent = (*self._recent, observation)[-self._capacity :]
         self._coverage = MappingProxyType({**self._coverage, key: self._coverage.get(key, 0) + 1})
