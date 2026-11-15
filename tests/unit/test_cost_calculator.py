@@ -2335,6 +2335,73 @@ def test_per_query_priced_rerank_deployment_completion_cost_is_nonzero():
 
 
 @pytest.mark.parametrize(
+    "model,custom_llm_provider,billed_units,model_info,expected_cost",
+    (
+        (
+            "cohere/token-priced-rerank-repro",
+            "cohere",
+            {"input_tokens": 1000},
+            {"litellm_provider": "cohere", "mode": "rerank", "input_cost_per_token": 0.00001},
+            0.01,
+        ),
+        (
+            "azure_ai/token-priced-rerank-repro",
+            "azure_ai",
+            {"input_tokens": 1000},
+            {"litellm_provider": "azure_ai", "mode": "rerank", "input_cost_per_token": 0.00001},
+            0.01,
+        ),
+        (
+            "fireworks_ai/token-priced-rerank-repro",
+            "fireworks_ai",
+            {"input_tokens": 1000, "search_units": 1000},
+            {"litellm_provider": "fireworks_ai", "mode": "rerank", "input_cost_per_token": 0.00001},
+            0.01,
+        ),
+        (
+            "cohere/query-priced-rerank-repro",
+            "cohere",
+            {"search_units": 1},
+            {"litellm_provider": "cohere", "mode": "rerank", "input_cost_per_query": 0.01},
+            0.01,
+        ),
+        (
+            "cohere/dual-priced-rerank-repro",
+            "cohere",
+            {"input_tokens": 1000, "search_units": 3},
+            {
+                "litellm_provider": "cohere",
+                "mode": "rerank",
+                "input_cost_per_token": 0.00001,
+                "input_cost_per_query": 0.01,
+            },
+            0.03,
+        ),
+    ),
+)
+def test_token_priced_rerank_completion_cost_uses_reported_input_tokens(
+    model: str,
+    custom_llm_provider: str,
+    billed_units: dict[str, int],
+    model_info: dict[str, object],
+    expected_cost: float,
+    _local_model_cost_map: None,
+) -> None:
+    litellm.register_model({model: model_info})
+
+    response: Final = RerankResponse(id="rerank-pricing-repro", results=[], meta={"billed_units": billed_units})
+
+    cost: Final = completion_cost(
+        completion_response=response,
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        call_type="arerank",
+    )
+
+    assert cost == pytest.approx(expected_cost)
+
+
+@pytest.mark.parametrize(
     "model",
     (
         "vertex_ai/semantic-ranker-default",
