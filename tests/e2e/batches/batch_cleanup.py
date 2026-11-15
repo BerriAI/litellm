@@ -87,7 +87,6 @@ def cleanup_batch(
     wait: Callable[[float], None] = sleep,
     clock: Callable[[], float] = monotonic,
 ) -> None:
-    needs_terminal_state: Final = is_managed_id(batch_id)
     fetched: Final = _require_cleanup_success(
         cleanup_result(lambda: client.retrieve_batch(batch_id, key=key, provider=provider)),
         f"Retrieve batch {batch_id} for cleanup",
@@ -96,13 +95,9 @@ def cleanup_batch(
         if delete_output_files:
             _cleanup_batch_outputs(client, fetched, key=key, provider=provider)
         return
-    if fetched.status == "cancelling" and not needs_terminal_state:
+    if fetched.status == "cancelling":
         return
-    result: Final = (
-        Success(status_code=200, data=fetched)
-        if fetched.status == "cancelling"
-        else cleanup_result(lambda: client.cancel_batch(batch_id, key=key, provider=provider))
-    )
+    result: Final = cleanup_result(lambda: client.cancel_batch(batch_id, key=key, provider=provider))
     conflicted: Final = isinstance(result, UnknownApiError) and result.status_code in {400, 409}
     if not conflicted:
         cancelled: Final = _require_cleanup_success(result, f"Cancel batch {batch_id}")
@@ -113,7 +108,7 @@ def cleanup_batch(
             if delete_output_files:
                 _cleanup_batch_outputs(client, cancelled, key=key, provider=provider)
             return
-        if cancelled.status == "cancelling" and not needs_terminal_state:
+        if cancelled.status == "cancelling":
             return
     deadline: Final = clock() + BATCH_CANCEL_TIMEOUT_SECONDS
     for current in (
@@ -130,19 +125,12 @@ def cleanup_batch(
         assert current.status in ({"cancelling"} if conflicted else BATCH_PENDING_STATUSES), (
             f"Cancel batch {batch_id} left status {current.status}"
         )
-        if current.status == "cancelling" and not needs_terminal_state:
+        if current.status == "cancelling":
             return
-        if clock() >= deadline:
-            assert current.status == "cancelling", (
-                f"Batch {batch_id} cancellation did not finish within {BATCH_CANCEL_TIMEOUT_SECONDS}s, "
-                f"last status {current.status}"
-            )
-            warnings.warn(
-                f"Left batch {batch_id} cancelling after {BATCH_CANCEL_TIMEOUT_SECONDS}s for the provider to finish",
-                UserWarning,
-                stacklevel=2 + STEP_FRAMES,
-            )
-            return
+        assert clock() < deadline, (
+            f"Batch {batch_id} cancellation did not finish within {BATCH_CANCEL_TIMEOUT_SECONDS}s, "
+            f"last status {current.status}"
+        )
         wait(BATCH_CANCEL_POLL_SECONDS)
 
 
