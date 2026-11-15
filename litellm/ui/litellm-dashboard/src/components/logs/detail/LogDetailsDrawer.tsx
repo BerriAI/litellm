@@ -227,7 +227,7 @@ export function LogDetailsDrawer({
   // Reset transient UI state when the drawer opens or closes.
   useEffect(() => {
     if (open) {
-      setIsSidebarCollapsed(false);
+      setIsSidebarCollapsed(window.innerWidth < 768);
     } else {
       if (isSessionMode) setSelectedSessionRequestId(null);
       setSessionSortMode("duration");
