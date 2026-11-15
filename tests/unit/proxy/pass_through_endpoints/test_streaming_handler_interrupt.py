@@ -20,6 +20,7 @@ from litellm.proxy.pass_through_endpoints.llm_provider_handlers.tinyfish_passthr
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.litellm_core_utils.upstream_cache_evidence import UPSTREAM_STREAM_USAGE_KEY, AnthropicStreamUsage
 from litellm.llms.anthropic.messages.native.streaming_iterator import aclose_superseded_attempt
 from litellm.proxy.pass_through_endpoints.streaming_handler import (
     PassThroughStreamingHandler,
@@ -1598,3 +1599,38 @@ async def test_chunk_processor_leaves_the_budget_reservation_for_the_request_end
             pass
 
     assert reservation["callback_bound"] is False
+
+
+async def _route_messages_stream(logging_obj: LiteLLMLoggingObj, frames: tuple[bytes, ...]) -> None:
+    await PassThroughStreamingHandler.route_streaming_logging_to_handler(
+        litellm_logging_obj=logging_obj,
+        passthrough_success_handler_obj=MagicMock(),
+        url_route="/v1/messages",
+        request_body={"model": "claude-sonnet-5", "stream": True},
+        endpoint_type=EndpointType.ANTHROPIC,
+        start_time=datetime(2026, 1, 1),
+        raw_bytes=frames,
+        end_time=datetime(2026, 1, 1),
+    )
+
+
+@pytest.mark.asyncio
+async def test_messages_stream_keeps_the_raw_usage_its_frames_reported() -> None:
+    logging_obj = _anthropic_messages_logging_obj(_EventRecorder(), "raw-usage-frames")
+    await _route_messages_stream(logging_obj, (_anthropic_message_start_frame(), *_anthropic_completed_stream_tail()))
+    assert logging_obj.model_call_details[UPSTREAM_STREAM_USAGE_KEY] == AnthropicStreamUsage(
+        opening={"input_tokens": 52, "output_tokens": 1},
+        closing={"output_tokens": 3},
+        stop_reason="end_turn",
+        starts=1,
+        stopped=True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_messages_stream_never_replaces_the_raw_usage_a_provider_decoder_recorded() -> None:
+    logging_obj = _anthropic_messages_logging_obj(_EventRecorder(), "raw-usage-decoder")
+    decoded = AnthropicStreamUsage(opening={"cache_read_input_tokens": 0, "cache_creation_input_tokens": 0}, starts=1)
+    logging_obj.record_upstream_stream_usage(decoded)
+    await _route_messages_stream(logging_obj, (_anthropic_message_start_frame(), *_anthropic_completed_stream_tail()))
+    assert logging_obj.model_call_details[UPSTREAM_STREAM_USAGE_KEY] is decoded

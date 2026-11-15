@@ -17,6 +17,10 @@ from litellm.litellm_core_utils.core_helpers import (
 )
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.litellm_core_utils.upstream_cache_evidence import (
+    UPSTREAM_STREAM_USAGE_KEY,
+    anthropic_stream_usage_from_sse,
+)
 from litellm.llms.anthropic.common_utils import anthropic_error_frame_exception
 from litellm.proxy._types import PassThroughEndpointLoggingResultValues
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
@@ -360,6 +364,8 @@ class PassThroughStreamingHandler:
         complete_frames, incomplete_tail = split_complete_sse_frames(
             b"".join(raw_bytes) if endpoint_type == EndpointType.ANTHROPIC else b""
         )
+        if UPSTREAM_STREAM_USAGE_KEY not in litellm_logging_obj.model_call_details:
+            litellm_logging_obj.record_upstream_stream_usage(anthropic_stream_usage_from_sse(complete_frames))
         litellm_logging_obj.model_call_details[  # rebind-ok: stamp evidence on the per-request state read by callbacks
             "prompt_cache_response_complete"
         ] = (

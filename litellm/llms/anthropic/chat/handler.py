@@ -23,7 +23,7 @@ from litellm.anthropic_beta_headers_manager import (
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.litellm_core_utils.json_fragment_accumulator import JSONFragmentAccumulator
-from litellm.litellm_core_utils.upstream_stream_usage import AnthropicStreamUsage, recorded_anthropic_stream_event
+from litellm.litellm_core_utils.upstream_cache_evidence import AnthropicStreamUsage, recorded_anthropic_stream_event
 from litellm.llms.base_llm.base_utils import (
     RESPONSE_FORMAT_ENVELOPE_NAME_KEYS,
     ResponseFormatSchema,
@@ -1008,6 +1008,10 @@ class ModelResponseIterator:
     def chunk_parser(self, chunk: dict) -> ModelResponseStream:
         try:
             type_chunk: Final = chunk.get("type", "") or ""
+            if type_chunk == "message_stop":
+                self.upstream_stream_usage = recorded_anthropic_stream_event(
+                    self.upstream_stream_usage, {"type": "message_stop"}
+                )
 
             text = ""
             tool_use: ChatCompletionToolCallChunk | None = None

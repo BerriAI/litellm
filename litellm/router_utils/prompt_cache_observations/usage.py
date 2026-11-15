@@ -4,7 +4,7 @@ from typing import Final
 
 from pydantic import JsonValue, TypeAdapter, ValidationError
 
-from litellm.litellm_core_utils.upstream_stream_usage import AnthropicStreamUsage
+from litellm.litellm_core_utils.upstream_cache_evidence import AnthropicStreamUsage, ConverseStreamUsage
 
 from .types import CacheCounters, UpstreamCacheUsage, UsageUnknown, UsageUnknownReason, WireShape
 
@@ -133,21 +133,39 @@ def upstream_cache_usage(wire: WireShape, raw_response: object) -> UpstreamCache
             return _converse_usage(body)
 
 
-_ANTHROPIC_CACHE_COUNTERS: Final = ("cache_read_input_tokens", "cache_creation_input_tokens")
-
-
 def _reported(usage: JsonValue) -> Mapping[str, JsonValue]:
     return {key: value for key, value in usage.items() if value is not None} if isinstance(usage, dict) else {}
 
 
-def anthropic_stream_cache_usage(stream: AnthropicStreamUsage) -> UpstreamCacheUsage:
-    """`message_delta` usage is cumulative but may leave out a counter `message_start` reported, so a counter
-    is taken from the last event that reported it, and the two disagreeing is contradictory."""
-    opening: Final = _reported(stream.opening)
-    closing: Final = _reported(stream.closing)
-    disagree: Final = any(
-        key in opening and key in closing and opening[key] != closing[key] for key in _ANTHROPIC_CACHE_COUNTERS
-    )
-    if disagree:
+def _anthropic_stream_usage(stream: AnthropicStreamUsage) -> UpstreamCacheUsage:
+    """Only a stream that opened once, closed with `message_stop` after its final `message_delta` and reported
+    nothing out of order counts. A counter comes from the last event that reported it, and two events that
+    disagree make the usage contradictory."""
+    if stream.starts != 1 or not stream.stopped:
+        return UsageUnknown(UsageUnknownReason.INCOMPLETE)
+    if stream.out_of_order:
+        return UsageUnknown(UsageUnknownReason.MALFORMED)
+    if stream.conflicting:
         return UsageUnknown(UsageUnknownReason.CONTRADICTORY)
-    return _anthropic_usage({"stop_reason": stream.stop_reason, "usage": {**opening, **closing}})
+    merged: Final = {**_reported(stream.opening), **_reported(stream.closing), **_reported(stream.final)}
+    return _anthropic_usage({"stop_reason": stream.stop_reason, "usage": merged})
+
+
+def _converse_stream_usage(stream: ConverseStreamUsage) -> UpstreamCacheUsage:
+    if stream.stops != 1 or stream.usage_events != 1:
+        return UsageUnknown(UsageUnknownReason.INCOMPLETE)
+    if stream.out_of_order:
+        return UsageUnknown(UsageUnknownReason.MALFORMED)
+    return _converse_usage({"stopReason": stream.stop_reason, "usage": stream.usage})
+
+
+def stream_cache_usage(wire: WireShape, stream: object) -> UpstreamCacheUsage:
+    """The record must match the wire the request went out on: a Converse request answered by an Anthropic-shaped
+    record means the stream was translated, and a translated stream carries synthesized counters."""
+    match wire, stream:
+        case WireShape.ANTHROPIC_MESSAGES, AnthropicStreamUsage():
+            return _anthropic_stream_usage(stream)
+        case WireShape.BEDROCK_CONVERSE, ConverseStreamUsage():
+            return _converse_stream_usage(stream)
+        case _:
+            return UsageUnknown(UsageUnknownReason.STREAM_USAGE_NOT_CAPTURED)

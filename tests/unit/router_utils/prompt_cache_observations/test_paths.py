@@ -26,6 +26,7 @@ def _classify(
     body: dict[str, JsonValue] = _BODY,
     stream: bool = False,
     response: object = None,
+    served_runtime: object = "python",
 ) -> ObservationPath | UnassessedReason:
     return classify_path(
         provider=provider,
@@ -35,6 +36,7 @@ def _classify(
         body=body,
         stream=stream,
         response=ModelResponse() if response is None else response,
+        served_runtime=served_runtime,
     )
 
 
@@ -82,15 +84,6 @@ _DICT_RESPONSE = {"id": "msg"}
             None,
             UnassessedReason.WIRE_SHAPE_UNRECOGNIZED,
         ),
-        (
-            "vertex_ai",
-            "claude-test",
-            "anthropic_messages",
-            None,
-            _BODY,
-            _DICT_RESPONSE,
-            UnassessedReason.RUNTIME_UNKNOWN,
-        ),
     ],
 )
 def test_paths_that_cannot_be_classified_are_unassessed(
@@ -106,16 +99,17 @@ def test_paths_that_cannot_be_classified_are_unassessed(
 
 
 @pytest.mark.parametrize(
-    ("provider", "call_type", "response", "runtime"),
+    ("call_type", "response", "served_runtime", "expected"),
     [
-        ("anthropic", "acompletion", mark_rust_response(ModelResponse(), Route.CHAT_COMPLETIONS), Runtime.RUST),
-        ("anthropic", "acompletion", ModelResponse(), Runtime.PYTHON),
-        ("anthropic", "anthropic_messages", {"id": "msg"}, Runtime.RUST),
-        ("azure_ai", "anthropic_messages", {"id": "msg"}, Runtime.RUST),
+        ("acompletion", ModelResponse(), "python", Runtime.PYTHON),
+        ("anthropic_messages", _DICT_RESPONSE, "rust", Runtime.RUST),
+        ("acompletion", mark_rust_response(ModelResponse(), Route.CHAT_COMPLETIONS), None, Runtime.RUST),
+        ("acompletion", ModelResponse(), None, UnassessedReason.RUNTIME_UNKNOWN),
+        ("anthropic_messages", _DICT_RESPONSE, None, UnassessedReason.RUNTIME_UNKNOWN),
     ],
 )
-def test_runtime_is_rust_only_when_rust_served_the_call(
-    provider: str, call_type: str, response: object, runtime: Runtime
+def test_runtime_comes_from_the_attempts_stamp_and_absence_is_never_python(
+    call_type: str, response: object, served_runtime: object, expected: Runtime | UnassessedReason
 ) -> None:
-    path = _classify(provider=provider, call_type=call_type, response=response)
-    assert isinstance(path, ObservationPath) and path.runtime is runtime
+    path = _classify(call_type=call_type, response=response, served_runtime=served_runtime)
+    assert (path.runtime if isinstance(path, ObservationPath) else path) == expected

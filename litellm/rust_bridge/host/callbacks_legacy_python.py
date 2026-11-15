@@ -150,6 +150,8 @@ class LoggingSurface(Protocol):
         self, input: object, api_key: object, model: object = None, additional_args: dict[str, object] = ...
     ) -> object: ...
 
+    def mark_served_by_rust(self) -> None: ...
+
     def post_call(
         self,
         original_response: object,
@@ -268,6 +270,7 @@ def pre_call(
     additional_args: dict[str, object],
 ) -> None:
     logger.pre_call(input=input, api_key=api_key, additional_args=additional_args)
+    logger.mark_served_by_rust()
 
 
 @functools.cache

@@ -1,3 +1,4 @@
+import copy
 from collections.abc import Iterator, Mapping
 
 import pytest
@@ -5,31 +6,72 @@ import pytest
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.model_cost_table import published
 from litellm.router_utils.prompt_cache_observations.deployment import (
+    DeploymentCacheSettings,
     SelectedDeployment,
     deployment_cache_identity,
+    deployment_cache_settings,
     effective_destination,
     exact_min_prefix_tokens,
     selected_deployment,
+    served_model,
 )
 
-_KEY = b"deployment-identity-test-key"
 _SELECTED = SelectedDeployment(deployment_id="deployment-1", base_model=None)
 _BEDROCK_EAST = "https://bedrock-runtime.us-east-1.amazonaws.com/model/us.anthropic.claude-test-v1:0"
+_ATTEMPT: dict[str, object] = {
+    "model": "bedrock/us.anthropic.claude-test-v1:0",
+    "aws_region_name": "us-east-1",
+    "model_info": {"id": "deployment-1", "prompt_cache_observation": True},
+}
+
+
+def _settings(attempt: Mapping[str, object] = _ATTEMPT) -> DeploymentCacheSettings:
+    settings = deployment_cache_settings(attempt)
+    assert settings is not None
+    return settings
 
 
 def _fingerprint(
     destination: str | None = _BEDROCK_EAST,
     model: str = "us.anthropic.claude-test-v1:0",
     selected: SelectedDeployment = _SELECTED,
+    attempt: Mapping[str, object] = _ATTEMPT,
 ) -> str:
     return deployment_cache_identity(
         selected=selected,
         provider="bedrock",
         provider_model=model,
         destination=destination,
-        fingerprint_key=_KEY,
+        settings=_settings(attempt),
         min_prefix_tokens=lambda _model, _provider: 1024,
     ).config_fingerprint
+
+
+def test_fingerprint_needs_no_secret_so_every_worker_derives_the_same_identity() -> None:
+    assert _fingerprint() == _fingerprint()
+
+
+def test_attempt_settings_unrelated_to_caching_keep_the_same_fingerprint() -> None:
+    noisy = {**_ATTEMPT, "api_key": "rotated", "timeout": 5, "rpm": 99, "metadata": {"tags": ["blue"]}}
+    assert _fingerprint(attempt=noisy) == _fingerprint()
+
+
+@pytest.mark.parametrize(
+    "changed",
+    [
+        {"cache_control_injection_points": [{"location": "message", "role": "system"}]},
+        {"aws_region_name": "eu-west-1"},
+        {"api_base": "https://bedrock-runtime.example"},
+        {"model": "bedrock/us.anthropic.claude-test-v2:0"},
+    ],
+)
+def test_cache_settings_sent_with_the_attempt_change_the_fingerprint(changed: Mapping[str, object]) -> None:
+    assert _fingerprint(attempt={**_ATTEMPT, **changed}) != _fingerprint()
+
+
+def test_settings_are_only_captured_for_an_opted_in_deployment() -> None:
+    assert deployment_cache_settings({**_ATTEMPT, "model_info": {"id": "deployment-1"}}) is None
+    assert _settings().selected == SelectedDeployment(deployment_id="deployment-1", base_model=None)
 
 
 def test_streaming_and_non_streaming_calls_to_one_destination_share_a_fingerprint() -> None:
@@ -137,3 +179,22 @@ def test_unlisted_or_upgraded_model_has_no_minimum_instead_of_a_neighbours() -> 
     model, _ = _model_with_minimum("anthropic")
     assert exact_min_prefix_tokens(f"{model}-next", "anthropic") is None
     assert exact_min_prefix_tokens("claude-model-that-is-not-in-the-cost-map", "anthropic") is None
+
+
+def test_settings_survive_the_deep_copy_logging_makes_of_call_details() -> None:
+    settings = _settings({**_ATTEMPT, "cache_control_injection_points": [{"location": "message", "role": "system"}]})
+    assert copy.deepcopy(settings) == settings
+
+
+@pytest.mark.parametrize(
+    ("provider", "logged_model", "served"),
+    [
+        ("bedrock", "bedrock/converse/us.anthropic.claude-test-v1:0", "us.anthropic.claude-test-v1:0"),
+        ("bedrock", "bedrock/invoke/us.anthropic.claude-test-v1:0", "us.anthropic.claude-test-v1:0"),
+        ("anthropic", "anthropic/claude-test", "claude-test"),
+        ("vertex_ai", "vertex_ai/claude-test", "claude-test"),
+        ("azure_ai", "claude-test", "claude-test"),
+    ],
+)
+def test_logged_model_names_resolve_to_the_served_model(provider: str, logged_model: str, served: str) -> None:
+    assert served_model(provider, logged_model) == served

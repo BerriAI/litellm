@@ -1,20 +1,34 @@
 import hashlib
+import json
 import os
-import secrets
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Final, Protocol
+from typing import Final, Protocol, TypeAlias
 
-from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationError
+import httpx
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_router_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.token_counter import offload_token_count
-from litellm.litellm_core_utils.upstream_stream_usage import UPSTREAM_STREAM_USAGE_KEY, AnthropicStreamUsage
+from litellm.litellm_core_utils.upstream_cache_evidence import (
+    DEPLOYMENT_CACHE_SETTINGS_KEY,
+    SERVED_RUNTIME_KEY,
+    UPSTREAM_STREAM_USAGE_KEY,
+    RecordsDeploymentCacheSettings,
+)
+from litellm.types.utils import CallTypes
 
-from .deployment import deployment_cache_identity, effective_destination, selected_deployment
+from .deployment import (
+    DeploymentCacheSettings,
+    SelectedDeployment,
+    deployment_cache_identity,
+    deployment_cache_settings,
+    effective_destination,
+    selected_deployment,
+)
 from .intent import cache_intent
 from .paths import classify_path
 from .prefix import outgoing_cacheable_prefix
@@ -33,15 +47,14 @@ from .types import (
     UnassessedReason,
     UpstreamCacheUsage,
     UsageUnknown,
-    UsageUnknownReason,
-    WireShape,
 )
-from .usage import anthropic_stream_cache_usage, upstream_cache_usage
+from .usage import stream_cache_usage, upstream_cache_usage
 
 VERIFIED_PATHS: Final[frozenset[ObservationPath]] = frozenset()
 OBSERVATION_LOG_CAPACITY: Final = 1000
 
-_REQUEST_BODY: Final = TypeAdapter(dict[str, JsonValue])
+_JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
+_BREAKPOINT_MARKERS: Final = ('"cache_control"', '"cachePoint"')
 
 
 class ObservationSink(Protocol):
@@ -62,9 +75,10 @@ class _LoggedPayload(BaseModel):
     id: str
     call_type: str
     stream: bool | None = None
-    model_id: str | None = None
     model: str = ""
     custom_llm_provider: str | None = None
+    api_base: str | None = None
+    model_id: str | None = None
 
 
 class _LoggedCall(BaseModel):
@@ -72,107 +86,204 @@ class _LoggedCall(BaseModel):
 
     standard_logging_object: _LoggedPayload
     additional_args: _LoggedRequest = _LoggedRequest()
-    litellm_params: Mapping[str, object] = MappingProxyType({})
+    litellm_params: Mapping[str, object] = Field(default_factory=dict)
     original_response: object = None
-    upstream_stream_usage: AnthropicStreamUsage | None = None
+    httpx_response: object = None
+    upstream_stream_usage: object = None
+    served_runtime: object = None
+    deployment_settings: object = None
 
 
 @dataclass(frozen=True, slots=True)
 class ObserverSettings:
+    """`fingerprint_key` keys the prompt-prefix fingerprint. Without a key shared by every worker, prefixes from
+    different workers could not be compared, so the observer records nothing assessable."""
+
     verified_paths: frozenset[ObservationPath]
-    fingerprint_key: bytes
+    fingerprint_key: bytes | None
 
 
 @dataclass(frozen=True, slots=True)
 class _Call:
     logged: _LoggedCall
     deployment: DeploymentCacheIdentity
+    settings: DeploymentCacheSettings | None
     intent: CacheIntent | None
     response: object
     succeeded: bool
 
 
-def _request_body(raw: object) -> Mapping[str, JsonValue] | None:
+def _json_object(raw: object) -> Mapping[str, JsonValue] | None:
     try:
-        return _REQUEST_BODY.validate_python(raw) if isinstance(raw, dict) else None
+        match raw:
+            case str() | bytes():
+                return _JSON_OBJECT.validate_json(raw)
+            case dict():
+                return _JSON_OBJECT.validate_python(raw)
+            case _:
+                return None
     except ValidationError:
         return None
 
 
+def _wire_request(response: object) -> httpx.Request | None:
+    if not isinstance(response, httpx.Response):
+        return None
+    try:
+        return response.request
+    except RuntimeError:
+        return None
+
+
+def _wire_request_body(response: object) -> Mapping[str, JsonValue] | None:
+    request: Final = _wire_request(response)
+    try:
+        return _json_object(request.content) if request is not None else None
+    except httpx.RequestNotRead:
+        return None
+
+
+def _outgoing_body(logged: _LoggedCall) -> Mapping[str, JsonValue] | None:
+    """The body the attempt sent. Messages paths replace the logged body after sending, so the request kept on
+    the provider response is read when the logged one is empty."""
+    logged_body: Final = _json_object(logged.additional_args.complete_input_dict)
+    return logged_body if logged_body else _wire_request_body(logged.httpx_response)
+
+
+def _destination(logged: _LoggedCall) -> str | None:
+    """The URL the attempt went to. `post_call` replaces the pre-call arguments on several paths, so the
+    endpoint the standard log and the attempt's params recorded come first."""
+    params_base: Final = logged.litellm_params.get("api_base")
+    request: Final = _wire_request(logged.httpx_response)
+    candidates: Final = (
+        logged.standard_logging_object.api_base,
+        params_base if isinstance(params_base, str) else None,
+        logged.additional_args.api_base,
+        str(request.url) if request is not None else None,
+    )
+    return next((candidate for candidate in candidates if candidate), None)
+
+
+def _raw_response(logged: _LoggedCall) -> object:
+    if _json_object(logged.original_response) is not None:
+        return logged.original_response
+    response: Final = logged.httpx_response
+    if not isinstance(response, httpx.Response):
+        return logged.original_response
+    try:
+        return response.content
+    except httpx.ResponseNotRead:
+        return logged.original_response
+
+
 def _usage(call: _Call, path: ObservationPath) -> UpstreamCacheUsage:
-    if not path.stream:
-        return upstream_cache_usage(path.wire, call.logged.original_response)
-    stream_usage: Final = call.logged.upstream_stream_usage
-    if path.wire is not WireShape.ANTHROPIC_MESSAGES or stream_usage is None:
-        return UsageUnknown(UsageUnknownReason.STREAM_USAGE_NOT_CAPTURED)
-    return anthropic_stream_cache_usage(stream_usage)
+    if path.stream:
+        return stream_cache_usage(path.wire, call.logged.upstream_stream_usage)
+    return upstream_cache_usage(path.wire, _raw_response(call.logged))
 
 
-def _assessed(
-    settings: ObserverSettings, call: _Call, path: ObservationPath, outgoing: OutgoingPrefix
-) -> Assessed | Unassessed:
+def _assessed(call: _Call, path: ObservationPath, outgoing: OutgoingPrefix) -> Assessed | Unassessed:
     if not call.succeeded:
         return Unassessed(UnassessedReason.UPSTREAM_FAILED, path=path, prefix=outgoing.prefix)
-    if path not in settings.verified_paths:
-        return Unassessed(UnassessedReason.PATH_NOT_VERIFIED, path=path, prefix=outgoing.prefix)
+    if call.settings is None:
+        return Unassessed(UnassessedReason.DEPLOYMENT_SETTINGS_UNAVAILABLE, path=path, prefix=outgoing.prefix)
     return Assessed(path=path, prefix=outgoing.prefix, usage=_usage(call, path))
 
 
-def _outcome(settings: ObserverSettings, call: _Call) -> tuple[Assessed | Unassessed, PrefixCountRequest | None] | None:
-    """None when the call neither asked for caching nor sent a breakpoint, so it says nothing about caching.
-    Every other call is recorded, with the reason when it cannot be assessed."""
-    body: Final = _request_body(call.logged.additional_args.complete_input_dict)
+_Outcome: TypeAlias = tuple[Assessed | Unassessed, PrefixCountRequest | None]
+
+
+def _without_prefix(
+    call: _Call, reason: UnassessedReason, path: ObservationPath | None, marked: bool = False
+) -> _Outcome | None:
+    return None if call.intent is None and not marked else (Unassessed(reason, path=path, prefix=None), None)
+
+
+def _carries_breakpoint(body: Mapping[str, JsonValue]) -> bool:
+    serialized: Final = json.dumps(body)
+    return any(marker in serialized for marker in _BREAKPOINT_MARKERS)
+
+
+def _outcome(settings: ObserverSettings, call: _Call) -> _Outcome | None:
+    """None when the attempt neither asked for caching nor sent a breakpoint, so it says nothing about caching.
+    Every other attempt is recorded, with the reason when it cannot be assessed."""
+    body: Final = _outgoing_body(call.logged)
     if body is None:
-        return (
-            None if call.intent is None else (Unassessed(UnassessedReason.REQUEST_BODY_UNAVAILABLE, None, None), None)
-        )
+        return _without_prefix(call, UnassessedReason.REQUEST_BODY_UNAVAILABLE, None)
     path: Final = classify_path(
         provider=call.deployment.provider,
         provider_model=call.deployment.provider_model,
         call_type=call.logged.standard_logging_object.call_type,
-        api_base=call.logged.additional_args.api_base,
+        api_base=_destination(call.logged),
         body=body,
         stream=call.logged.standard_logging_object.stream is True,
         response=call.response,
+        served_runtime=call.logged.served_runtime,
     )
     if isinstance(path, UnassessedReason):
-        return None if call.intent is None else (Unassessed(path, path=None, prefix=None), None)
+        return _without_prefix(call, path, None, _carries_breakpoint(body))
+    if settings.fingerprint_key is None:
+        return _without_prefix(call, UnassessedReason.PREFIX_KEY_UNAVAILABLE, path, _carries_breakpoint(body))
     match outgoing_cacheable_prefix(path.wire, body, settings.fingerprint_key):
         case NoCacheBreakpoint():
-            lost: Final = Unassessed(UnassessedReason.CACHE_INTENT_NOT_SENT, path=path, prefix=None)
-            return None if call.intent is None else (lost, None)
+            return _without_prefix(call, UnassessedReason.CACHE_INTENT_NOT_SENT, path)
         case PrefixUnassessed(reason=reason):
             return Unassessed(reason, path=path, prefix=None), None
         case OutgoingPrefix() as outgoing:
-            assessed: Final = _assessed(settings, call, path, outgoing)
-            return assessed, outgoing.count_request if isinstance(assessed, Assessed) else None
+            assessed: Final = _assessed(call, path, outgoing)
+            verified: Final = (
+                assessed
+                if not isinstance(assessed, Assessed) or path in settings.verified_paths
+                else Unassessed(UnassessedReason.PATH_NOT_VERIFIED, path=path, prefix=outgoing.prefix)
+            )
+            return verified, outgoing.count_request if isinstance(verified, Assessed) else None
+
+
+def _attempt_settings(logged: _LoggedCall) -> DeploymentCacheSettings | None:
+    """Settings the deployment hook stamped for this attempt's own deployment. The standard log names the
+    deployment on every route, while `litellm_params.model_info` is absent on some Rust-served ones."""
+    settings: Final = logged.deployment_settings
+    model_id: Final = logged.standard_logging_object.model_id
+    if isinstance(settings, DeploymentCacheSettings) and settings.selected.deployment_id == model_id:
+        return settings
+    return None
+
+
+def _selected(logged: _LoggedCall, settings: DeploymentCacheSettings | None) -> SelectedDeployment | None:
+    return settings.selected if settings is not None else selected_deployment(logged.litellm_params.get("model_info"))
 
 
 def observe_call(
     settings: ObserverSettings, kwargs: Mapping[str, object], response: object, succeeded: bool, observed_at: float
 ) -> ObservedCall | None:
-    """One observation for a selected deployment's attempt. The request is read from the body litellm sent
-    upstream, so provider translation and gateway injection are applied, while intent is read from what the
-    client sent and what the gateway recorded for this attempt, so a breakpoint lost on the way is visible."""
+    """One observation for an opted-in deployment's attempt. The request is the body that attempt sent, so
+    provider translation and gateway injection are applied, while intent is what the client sent and what the
+    gateway recorded for the attempt, so a breakpoint lost on the way is visible."""
     try:
         logged: Final = _LoggedCall.model_validate(
-            {**kwargs, "upstream_stream_usage": kwargs.get(UPSTREAM_STREAM_USAGE_KEY)}
+            {
+                **kwargs,
+                "upstream_stream_usage": kwargs.get(UPSTREAM_STREAM_USAGE_KEY),
+                "served_runtime": kwargs.get(SERVED_RUNTIME_KEY),
+                "deployment_settings": kwargs.get(DEPLOYMENT_CACHE_SETTINGS_KEY),
+            }
         )
     except ValidationError:
         return None
     payload: Final = logged.standard_logging_object
-    selected: Final = selected_deployment(logged.litellm_params.get("model_info"))
+    attempt_settings: Final = _attempt_settings(logged)
+    selected: Final = _selected(logged, attempt_settings)
     if selected is None:
         return None
     deployment: Final = deployment_cache_identity(
         selected=selected,
         provider=payload.custom_llm_provider or "",
         provider_model=payload.model,
-        destination=effective_destination(logged.additional_args.api_base),
-        fingerprint_key=settings.fingerprint_key,
+        destination=effective_destination(_destination(logged)),
+        settings=attempt_settings,
     )
     intent: Final = cache_intent(logged.litellm_params, selected.deployment_id)
-    result: Final = _outcome(settings, _Call(logged, deployment, intent, response, succeeded))
+    result: Final = _outcome(settings, _Call(logged, deployment, attempt_settings, intent, response, succeeded))
     if result is None:
         return None
     outcome, count_request = result
@@ -245,6 +356,13 @@ class PromptCacheObserver(CustomLogger):
     def exempt_from_message_redaction(self) -> bool:
         return True
 
+    async def async_pre_call_deployment_hook(self, kwargs: Mapping[str, object], call_type: CallTypes | None) -> None:
+        """Runs once per attempt, before the gateway consumes the deployment's cache settings."""
+        settings: Final = deployment_cache_settings(kwargs)
+        logging_obj: Final = kwargs.get("litellm_logging_obj")
+        if settings is not None and isinstance(logging_obj, RecordsDeploymentCacheSettings):
+            logging_obj.record_deployment_cache_settings(settings)
+
     async def _observe(self, kwargs: Mapping[str, object], response: object, succeeded: bool) -> None:
         observed: Final = await offload_token_count(observe_call)(
             self._settings, kwargs, response, succeeded, self._clock()
@@ -263,18 +381,14 @@ class PromptCacheObserver(CustomLogger):
         await self._observe(kwargs, response_obj, succeeded=False)
 
 
-def _fingerprint_key(salt: str | None) -> bytes:
-    """Keyed from the deployment's salt key so every worker derives the same fingerprints. Without one, the
-    key is random per process: fingerprints still compare within a worker, never across workers."""
-    if not salt:
-        return secrets.token_bytes(32)
-    return hashlib.blake2b(salt.encode(), digest_size=32, person=b"prompt-cache").digest()
+def prefix_fingerprint_key(salt: str | None) -> bytes | None:
+    return hashlib.blake2b(salt.encode(), digest_size=32, person=b"prompt-cache").digest() if salt else None
 
 
 def prompt_cache_observer() -> PromptCacheObserver:
     return PromptCacheObserver(
         settings=ObserverSettings(
-            verified_paths=VERIFIED_PATHS, fingerprint_key=_fingerprint_key(os.getenv("LITELLM_SALT_KEY"))
+            verified_paths=VERIFIED_PATHS, fingerprint_key=prefix_fingerprint_key(os.getenv("LITELLM_SALT_KEY"))
         ),
         sink=ObservationLog(capacity=OBSERVATION_LOG_CAPACITY),
     )

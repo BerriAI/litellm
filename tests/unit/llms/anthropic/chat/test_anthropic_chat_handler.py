@@ -19,7 +19,7 @@ from litellm.constants import NON_LLM_CONNECTION_TIMEOUT, RESPONSE_FORMAT_TOOL_N
 from litellm.litellm_core_utils.prompt_templates import image_handling
 from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import message_field, parts_of
-from litellm.litellm_core_utils.upstream_stream_usage import AnthropicStreamUsage
+from litellm.litellm_core_utils.upstream_cache_evidence import AnthropicStreamUsage
 from litellm.llms.anthropic.chat.handler import ModelResponseIterator, _envelope_verdict, make_call, make_sync_call
 from litellm.llms.anthropic.common_utils import anthropic_server_tool_call_params
 from litellm.llms.base_llm.base_utils import response_format_schema, unwrap_response_format_envelope
@@ -4432,7 +4432,7 @@ def test_anthropic_chat_completion_picks_the_beta_row_by_api_base(
     assert frozenset(",".join(upstream.anthropic_beta).split(",")) == forwarded_betas
 
 
-def test_stream_iterator_keeps_the_raw_usage_the_provider_sent() -> None:
+def test_stream_iterator_keeps_the_raw_usage_the_provider_sent_and_sees_message_stop() -> None:
     iterator = ModelResponseIterator(streaming_response=MagicMock(), sync_stream=True, json_mode=False)
     iterator.chunk_parser(
         chunk={
@@ -4451,6 +4451,13 @@ def test_stream_iterator_keeps_the_raw_usage_the_provider_sent() -> None:
     iterator.chunk_parser(
         chunk={"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 4}}
     )
+    before_stop = iterator.upstream_stream_usage
+    iterator.chunk_parser(chunk={"type": "message_stop"})
+    assert before_stop is not None and before_stop.stopped is False
     assert iterator.upstream_stream_usage == AnthropicStreamUsage(
-        opening={"input_tokens": 9, "output_tokens": 1}, closing={"output_tokens": 4}, stop_reason="end_turn"
+        opening={"input_tokens": 9, "output_tokens": 1},
+        closing={"output_tokens": 4},
+        stop_reason="end_turn",
+        starts=1,
+        stopped=True,
     )

@@ -88,7 +88,9 @@ def make_sync_call(
     else:
         decoder: Final = AWSEventStreamDecoder(model=model, json_mode=json_mode)
         completion_stream = decoder.iter_bytes(
-            response.iter_bytes(chunk_size=stream_chunk_size), response_headers=response.headers
+            response.iter_bytes(chunk_size=stream_chunk_size),
+            response_headers=response.headers,
+            publish_usage=logging_obj.record_upstream_stream_usage,
         )
 
     # LOGGING

@@ -193,6 +193,13 @@ from litellm.litellm_core_utils.served_output_texts import (
     overlay_served_output_texts,
 )
 from litellm.litellm_core_utils.thread_pool_executor import executor
+from litellm.litellm_core_utils.upstream_cache_evidence import (
+    DEPLOYMENT_CACHE_SETTINGS_KEY,
+    SERVED_RUNTIME_KEY,
+    UPSTREAM_STREAM_USAGE_KEY,
+    AnthropicStreamUsage,
+    ConverseStreamUsage,
+)
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from litellm.llms.base_llm.search.transformation import SearchResponse
 from litellm.responses.utils import ResponseAPILoggingUtils, ResponsesAPIRequestUtils
@@ -1895,6 +1902,8 @@ class Logging(LiteLLMLoggingBaseClass):
         self.model_call_details["api_key"] = api_key
         self.model_call_details["additional_args"] = additional_args
         self.model_call_details["log_event_type"] = "pre_api_call"
+        self.model_call_details[SERVED_RUNTIME_KEY] = "python"
+        self.model_call_details.pop(UPSTREAM_STREAM_USAGE_KEY, None)
         if is_classifier_call(self.call_type, self.model_call_details.get("litellm_params") or EMPTY_MAPPING):
             self.classifier_input = (
                 None
@@ -1908,6 +1917,16 @@ class Logging(LiteLLMLoggingBaseClass):
         self.model_call_details["litellm_params"]["api_base"] = self._get_masked_api_base(
             additional_args.get("api_base", "")
         )
+
+    def mark_served_by_rust(self) -> None:
+        self.model_call_details[SERVED_RUNTIME_KEY] = "rust"
+
+    def record_upstream_stream_usage(self, usage: object) -> None:
+        if isinstance(usage, AnthropicStreamUsage | ConverseStreamUsage):
+            self.model_call_details[UPSTREAM_STREAM_USAGE_KEY] = usage
+
+    def record_deployment_cache_settings(self, settings: object) -> None:
+        self.model_call_details[DEPLOYMENT_CACHE_SETTINGS_KEY] = settings
 
     def pre_call(self, input, api_key, model=None, additional_args={}):
         # Log the exact input to the LLM API

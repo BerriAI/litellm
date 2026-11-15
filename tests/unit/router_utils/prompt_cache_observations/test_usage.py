@@ -10,8 +10,8 @@ from litellm.router_utils.prompt_cache_observations.types import (
     UsageUnknownReason,
     WireShape,
 )
-from litellm.litellm_core_utils.upstream_stream_usage import AnthropicStreamUsage
-from litellm.router_utils.prompt_cache_observations.usage import anthropic_stream_cache_usage, upstream_cache_usage
+from litellm.litellm_core_utils.upstream_cache_evidence import AnthropicStreamUsage, ConverseStreamUsage
+from litellm.router_utils.prompt_cache_observations.usage import stream_cache_usage, upstream_cache_usage
 
 
 def _anthropic_body(usage: JsonValue, stop_reason: JsonValue = "end_turn") -> str:
@@ -234,58 +234,115 @@ def test_any_positive_cache_read_or_write_counts_as_cache_activity(counters: Cac
     assert counters.active is active
 
 
+_ZEROS: dict[str, JsonValue] = {"input_tokens": 9, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0}
+
+
+def _stream(
+    opening: JsonValue = None,
+    closing: JsonValue = None,
+    final: JsonValue = None,
+    starts: int = 1,
+    stopped: bool = True,
+    out_of_order: bool = False,
+    conflicting: bool = False,
+) -> AnthropicStreamUsage:
+    return AnthropicStreamUsage(
+        opening=opening,
+        closing=closing,
+        final=final,
+        stop_reason="end_turn",
+        starts=starts,
+        stopped=stopped,
+        out_of_order=out_of_order,
+        conflicting=conflicting,
+    )
+
+
 @pytest.mark.parametrize(
     ("stream", "expected"),
     [
+        (_stream(opening=_ZEROS, closing={"output_tokens": 4}), CacheCounters(read_tokens=0, write_tokens=0)),
         (
-            AnthropicStreamUsage(
-                opening={"input_tokens": 9, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0},
-                closing={"output_tokens": 4},
-                stop_reason="end_turn",
-            ),
-            CacheCounters(read_tokens=0, write_tokens=0),
-        ),
-        (
-            AnthropicStreamUsage(
-                opening={"input_tokens": 9, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0},
-                closing={"output_tokens": 4, "cache_read_input_tokens": 2048, "cache_creation_input_tokens": 0},
-                stop_reason="end_turn",
-            ),
-            UsageUnknown(UsageUnknownReason.CONTRADICTORY),
-        ),
-        (
-            AnthropicStreamUsage(
+            _stream(
                 opening={"input_tokens": 9},
                 closing={"output_tokens": 4, "cache_read_input_tokens": 2048, "cache_creation_input_tokens": 0},
-                stop_reason="end_turn",
             ),
             CacheCounters(read_tokens=2048, write_tokens=0),
         ),
         (
-            AnthropicStreamUsage(
-                opening={"input_tokens": 9, "cache_read_input_tokens": None},
-                closing={"output_tokens": 4},
-                stop_reason="end_turn",
-            ),
+            _stream(opening={"input_tokens": 9}, closing={"output_tokens": 4}, final=_ZEROS),
+            CacheCounters(read_tokens=0, write_tokens=0),
+        ),
+        (
+            _stream(opening={"input_tokens": 9, "cache_read_input_tokens": None}, closing={"output_tokens": 4}),
             UsageUnknown(UsageUnknownReason.MISSING),
         ),
         (
-            AnthropicStreamUsage(
-                opening={"input_tokens": 9, "cache_read_input_tokens": 0},
-                closing={"output_tokens": 4},
-                stop_reason="end_turn",
-            ),
+            _stream(opening={"input_tokens": 9, "cache_read_input_tokens": 0}, closing={"output_tokens": 4}),
             UsageUnknown(UsageUnknownReason.PARTIAL),
         ),
         (
-            AnthropicStreamUsage(
-                opening={"cache_read_input_tokens": 0, "cache_creation_input_tokens": 0}, closing=None, stop_reason=None
-            ),
+            _stream(opening=_ZEROS, closing={"output_tokens": 4}, stopped=False),
             UsageUnknown(UsageUnknownReason.INCOMPLETE),
+        ),
+        (_stream(opening=_ZEROS, closing={"output_tokens": 4}, starts=2), UsageUnknown(UsageUnknownReason.INCOMPLETE)),
+        (
+            _stream(opening=_ZEROS, closing={"output_tokens": 4}, out_of_order=True),
+            UsageUnknown(UsageUnknownReason.MALFORMED),
+        ),
+        (
+            _stream(opening=_ZEROS, closing={"output_tokens": 4}, conflicting=True),
+            UsageUnknown(UsageUnknownReason.CONTRADICTORY),
         ),
     ],
 )
-def test_stream_usage_comes_from_the_raw_events_and_never_reads_absence_as_zero(
+def test_anthropic_stream_usage_counts_only_a_completed_stream_and_never_reads_absence_as_zero(
     stream: AnthropicStreamUsage, expected: UpstreamCacheUsage
 ) -> None:
-    assert anthropic_stream_cache_usage(stream) == expected
+    assert stream_cache_usage(WireShape.ANTHROPIC_MESSAGES, stream) == expected
+
+
+_CONVERSE_ZEROS: dict[str, JsonValue] = {"inputTokens": 9, "cacheReadInputTokens": 0, "cacheWriteInputTokens": 0}
+
+
+@pytest.mark.parametrize(
+    ("stream", "expected"),
+    [
+        (
+            ConverseStreamUsage(stop_reason="end_turn", usage=_CONVERSE_ZEROS, stops=1, usage_events=1),
+            CacheCounters(read_tokens=0, write_tokens=0),
+        ),
+        (
+            ConverseStreamUsage(stop_reason="end_turn", usage={"inputTokens": 9}, stops=1, usage_events=1),
+            UsageUnknown(UsageUnknownReason.MISSING),
+        ),
+        (
+            ConverseStreamUsage(stop_reason="end_turn", usage=None, stops=1, usage_events=0),
+            UsageUnknown(UsageUnknownReason.INCOMPLETE),
+        ),
+        (
+            ConverseStreamUsage(stop_reason="end_turn", usage=_CONVERSE_ZEROS, stops=1, usage_events=2),
+            UsageUnknown(UsageUnknownReason.INCOMPLETE),
+        ),
+        (
+            ConverseStreamUsage(
+                stop_reason="end_turn", usage=_CONVERSE_ZEROS, stops=1, usage_events=1, out_of_order=True
+            ),
+            UsageUnknown(UsageUnknownReason.MALFORMED),
+        ),
+    ],
+)
+def test_converse_stream_usage_needs_exactly_one_stop_then_one_usage_event(
+    stream: ConverseStreamUsage, expected: UpstreamCacheUsage
+) -> None:
+    assert stream_cache_usage(WireShape.BEDROCK_CONVERSE, stream) == expected
+
+
+def test_a_record_from_another_wire_is_never_read_as_this_ones_usage() -> None:
+    translated = _stream(opening=_ZEROS, closing={"output_tokens": 4})
+    converse = ConverseStreamUsage(stop_reason="end_turn", usage=_CONVERSE_ZEROS, stops=1, usage_events=1)
+    assert (
+        stream_cache_usage(WireShape.BEDROCK_CONVERSE, translated),
+        stream_cache_usage(WireShape.ANTHROPIC_MESSAGES, converse),
+        stream_cache_usage(WireShape.ANTHROPIC_MESSAGES, None),
+    ) == (UsageUnknown(UsageUnknownReason.STREAM_USAGE_NOT_CAPTURED),) * 3

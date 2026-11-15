@@ -48,6 +48,8 @@ class UnassessedReason(StrEnum):
     BREAKPOINT_UNRECOGNIZED = "breakpoint_unrecognized"
     TTL_UNRECOGNIZED = "ttl_unrecognized"
     CACHE_INTENT_NOT_SENT = "cache_intent_not_sent"
+    PREFIX_KEY_UNAVAILABLE = "prefix_key_unavailable"
+    DEPLOYMENT_SETTINGS_UNAVAILABLE = "deployment_settings_unavailable"
     UPSTREAM_FAILED = "upstream_failed"
 
 

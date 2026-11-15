@@ -30,7 +30,6 @@ _BEDROCK_OPERATIONS: Final = MappingProxyType(
         "invoke-with-response-stream": WireShape.ANTHROPIC_MESSAGES,
     }
 )
-_RUST_ONLY_MESSAGES_PROVIDERS: Final = frozenset((ProviderFamily.ANTHROPIC, ProviderFamily.AZURE_AI))
 _RUST_RESPONSE_HEADER: Final = "x-litellm-rust"
 
 
@@ -41,15 +40,14 @@ def _wire(provider: ProviderFamily, api_base: str | None, body: Mapping[str, Jso
     return WireShape.ANTHROPIC_MESSAGES if isinstance(body.get("messages"), list) else None
 
 
-def _runtime(response: object, surface: ClientSurface, provider: ProviderFamily) -> Runtime | None:
-    """Rust stamps `x-litellm-rust` on every non-dict response it serves, and Messages for Anthropic
-    and Azure AI has no Python path. A dict response without the stamp could have come from either."""
+def _runtime(response: object, served_runtime: object) -> Runtime | None:
+    """`Logging.pre_call` stamps every attempt Python sends and the Rust host stamps the attempts Rust sends, so
+    an attempt without a stamp is unknown rather than Python. Rust's response header, when a callback can see
+    it, agrees with the stamp."""
     headers: Final = as_str_mapping(get_hidden_params_dict(response).get("additional_headers"))
-    if headers is not None and headers.get(_RUST_RESPONSE_HEADER) == "true":
+    if served_runtime == "rust" or (headers is not None and headers.get(_RUST_RESPONSE_HEADER) == "true"):
         return Runtime.RUST
-    if surface is ClientSurface.MESSAGES and provider in _RUST_ONLY_MESSAGES_PROVIDERS:
-        return Runtime.RUST
-    return None if isinstance(response, dict) else Runtime.PYTHON
+    return Runtime.PYTHON if served_runtime == "python" else None
 
 
 def classify_path(
@@ -60,6 +58,7 @@ def classify_path(
     body: Mapping[str, JsonValue],
     stream: bool,
     response: object,
+    served_runtime: object,
 ) -> ObservationPath | UnassessedReason:
     family: Final = _PROVIDERS.get(provider)
     if family is None:
@@ -72,7 +71,7 @@ def classify_path(
     wire: Final = _wire(family, api_base, body)
     if wire is None:
         return UnassessedReason.WIRE_SHAPE_UNRECOGNIZED
-    runtime: Final = _runtime(response, surface, family)
+    runtime: Final = _runtime(response, served_runtime)
     if runtime is None:
         return UnassessedReason.RUNTIME_UNKNOWN
     return ObservationPath(provider=family, wire=wire, surface=surface, stream=stream, runtime=runtime)

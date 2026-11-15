@@ -56,6 +56,12 @@ from litellm.types.integrations.custom_logger_v2 import UsageRecord as V2UsageRe
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.custom_llm import CustomLLM, CustomLLMError
 from litellm.litellm_core_utils import litellm_logging, streaming_handler
+from litellm.litellm_core_utils.upstream_cache_evidence import (
+    SERVED_RUNTIME_KEY,
+    UPSTREAM_STREAM_USAGE_KEY,
+    AnthropicStreamUsage,
+    ConverseStreamUsage,
+)
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
 from litellm.litellm_core_utils.token_counter import token_counter
 from litellm.litellm_core_utils.litellm_logging import (
@@ -16502,3 +16508,19 @@ async def test_a_sync_failure_on_the_loop_alone_still_delivers_v2_attempt_ended_
 
     assert journal == [("sync", "failure", None), ("async", "failure", None)]
     assert submitted == ["RequestScope._deliver_off_path"]
+
+
+def test_each_pre_call_starts_an_attempt_with_no_stream_usage_from_the_previous_one(logging_obj):
+    previous = AnthropicStreamUsage(opening={"cache_read_input_tokens": 5}, starts=1, stopped=True)
+    logging_obj.record_upstream_stream_usage(previous)
+    logging_obj.pre_call(input="hi", api_key=None, additional_args={})
+    assert UPSTREAM_STREAM_USAGE_KEY not in logging_obj.model_call_details
+    assert logging_obj.model_call_details[SERVED_RUNTIME_KEY] == "python"
+
+
+def test_only_upstream_stream_usage_records_are_kept(logging_obj):
+    logging_obj.record_upstream_stream_usage(MagicMock())
+    assert UPSTREAM_STREAM_USAGE_KEY not in logging_obj.model_call_details
+    recorded = ConverseStreamUsage(stop_reason="end_turn", stops=1)
+    logging_obj.record_upstream_stream_usage(recorded)
+    assert logging_obj.model_call_details[UPSTREAM_STREAM_USAGE_KEY] is recorded

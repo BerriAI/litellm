@@ -13,6 +13,7 @@ from pydantic import TypeAdapter
 from litellm._internal_context import is_internal_call
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.litellm_core_utils.upstream_cache_evidence import SERVED_RUNTIME_KEY
 from litellm.rust_bridge.host import callbacks_legacy_python as legacy
 from litellm.rust_bridge.host.callbacks_legacy_python import failure_handler, setup
 from litellm.types.utils import ModelResponse
@@ -551,3 +552,11 @@ def test_a_stream_logs_the_flag_python_logs(requested: object, keeps_requested: 
 
     assert logger.model_call_details["stream"] == expected
     assert logger.stream == expected
+
+
+def test_rust_pre_call_stamps_the_attempt_as_served_by_rust() -> None:
+    logger = _supplied_logger()
+    legacy.pre_call(logger, "hi", None, {"complete_input_dict": {"model": "claude-test"}, "api_base": "https://x"})
+    assert logger.model_call_details[SERVED_RUNTIME_KEY] == "rust"
+    logger.pre_call(input="hi", api_key=None, additional_args={"complete_input_dict": {}})
+    assert logger.model_call_details[SERVED_RUNTIME_KEY] == "python"

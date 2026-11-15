@@ -52,11 +52,7 @@ from litellm.litellm_core_utils.model_response_utils import (
 )
 from litellm.litellm_core_utils.redact_messages import LiteLLMLoggingObject, drop_token_ids
 from litellm.litellm_core_utils.thread_pool_executor import executor
-from litellm.litellm_core_utils.upstream_stream_usage import (
-    UPSTREAM_STREAM_USAGE_KEY,
-    AnthropicStreamUsage,
-    RecordsUpstreamStreamUsage,
-)
+from litellm.litellm_core_utils.upstream_cache_evidence import RecordsUpstreamStreamUsage
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.ollama.common_utils import OllamaResponseIdNormalizer
 from litellm.types.llms.base import LiteLLMBaseModel
@@ -2722,11 +2718,8 @@ class CustomStreamWrapper:
             self._log_stream_failure_and_raise(e)
 
     def _record_upstream_stream_usage(self) -> None:
-        if not isinstance(self.completion_stream, RecordsUpstreamStreamUsage):
-            return
-        usage: Final = self.completion_stream.upstream_stream_usage
-        if isinstance(usage, AnthropicStreamUsage):
-            self.logging_obj.model_call_details[UPSTREAM_STREAM_USAGE_KEY] = usage
+        if isinstance(self.completion_stream, RecordsUpstreamStreamUsage):
+            self.logging_obj.record_upstream_stream_usage(self.completion_stream.upstream_stream_usage)
 
     async def _finalize_completed_stream(self, cache_hit: bool) -> "ModelResponseStream":
         if self.sent_last_chunk is True:
