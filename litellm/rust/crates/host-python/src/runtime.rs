@@ -8,6 +8,7 @@ use crate::fork_gate::{ForkGate, Refused, RuntimeAlreadyStarted};
 use crate::{Error, Pythonized, panic_to_pyerr, release_gil};
 use futures_util::FutureExt;
 use litellm_error::Report;
+use pyo3::IntoPyObjectExt;
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use serde::Serialize;
@@ -95,15 +96,29 @@ where
     pyo3_async_runtimes::tokio::future_into_py(py, future)
 }
 
+fn loop_future(py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
+    py.import("asyncio")?
+        .call_method0("get_running_loop")?
+        .call_method0("create_future")
+}
+
 pub fn ready_future<'py>(
     py: Python<'py>,
     value: &Bound<'py, PyAny>,
 ) -> PyResult<Bound<'py, PyAny>> {
-    let future = py
-        .import("asyncio")?
-        .call_method0("get_running_loop")?
-        .call_method0("create_future")?;
+    let future = loop_future(py)?;
     future.call_method1("set_result", (value,))?;
+    Ok(future)
+}
+
+fn settle<'py>(
+    future: Bound<'py, PyAny>,
+    result: PyResult<Bound<'py, PyAny>>,
+) -> PyResult<Bound<'py, PyAny>> {
+    match result {
+        Ok(value) => future.call_method1("set_result", (value,))?,
+        Err(error) => future.call_method1("set_exception", (error.into_value(future.py()),))?,
+    };
     Ok(future)
 }
 
@@ -181,7 +196,18 @@ where
     T: for<'py> IntoPyObject<'py> + Send + 'static,
     F: Future<Output = PyResult<T>> + Send + 'static,
 {
-    future_into_py(py, async move { catch_future_panic(future).await? })
+    let settled = loop_future(py)?;
+    let mut future = Box::pin(async move { Ok(catch_future_panic(future).await.flatten()) });
+    // If the future is already done (e.g. in-memory read), just poll once to
+    // return it instead of relying on a separate thread to wakeup.  This saves
+    // ~100 microseconds per call
+    match poll_async_value(py, future.as_mut())? {
+        Poll::Ready(result) => settle(
+            settled,
+            result.and_then(|value| value.into_bound_py_any(py)),
+        ),
+        Poll::Pending => future_into_py(py, async move { future.await? }),
+    }
 }
 
 pub fn poll_async_value<T, F>(py: Python<'_>, future: Pin<&mut F>) -> PyResult<Poll<T>>
@@ -517,6 +543,83 @@ asyncio.run(exercise())
                 Some(&locals),
                 Some(&locals),
             ).unwrap();
+        });
+    }
+
+    #[pyfunction]
+    fn inline_value(py: Python<'_>, mode: String) -> PyResult<Bound<'_, PyAny>> {
+        let caller = thread::current().id();
+        run_async_value(py, async move {
+            match mode.as_str() {
+                "error" => Err(PyLookupError::new_err("inline failure")),
+                "pending" => {
+                    tokio::task::yield_now().await;
+                    Ok(thread::current().id() == caller)
+                }
+                _ => Ok(thread::current().id() == caller),
+            }
+        })
+    }
+
+    #[rstest]
+    #[case::ready("ready", "done and await future is True")]
+    #[case::error("error", "done and await future is LookupError")]
+    #[case::pending("pending", "not done and await future is False")]
+    fn an_async_value_settles_inline_only_when_its_first_poll_completes(
+        #[from(initialized_python)] python: &InitializedPython,
+        #[case] mode: &str,
+        #[case] expected: &str,
+    ) {
+        python.attach(|py| {
+            let locals = PyDict::new(py);
+            locals
+                .set_item("inline_value", wrap_pyfunction!(inline_value, py).unwrap())
+                .unwrap();
+            locals.set_item("mode", mode).unwrap();
+            py.run(
+                c"
+import asyncio
+
+async def exercise():
+    future = inline_value(mode)
+    assert future.get_loop() is asyncio.get_running_loop()
+    state = 'done' if future.done() else 'not done'
+    try:
+        value = repr(await asyncio.wait_for(future, 2))
+    except LookupError:
+        value = 'LookupError'
+    return f'{state} and await future is {value}'
+
+result = asyncio.run(exercise())
+",
+                Some(&locals),
+                Some(&locals),
+            )
+            .unwrap();
+            let result: String = locals
+                .get_item("result")
+                .unwrap()
+                .unwrap()
+                .extract()
+                .unwrap();
+            assert_eq!(result, expected);
+        });
+    }
+
+    #[rstest]
+    fn an_async_value_without_a_running_loop_fails_before_running_the_future(
+        #[from(initialized_python)] python: &InitializedPython,
+    ) {
+        python.attach(|py| {
+            let ran = Arc::new(AtomicBool::new(false));
+            let flag = Arc::clone(&ran);
+            let error = run_async_value(py, async move {
+                flag.store(true, Ordering::SeqCst);
+                Ok(())
+            })
+            .unwrap_err();
+            assert!(error.is_instance_of::<PyRuntimeError>(py));
+            assert!(!ran.load(Ordering::SeqCst));
         });
     }
 
