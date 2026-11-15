@@ -52,7 +52,7 @@ from functools import lru_cache, partial
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, TypeAlias, cast  # noqa: TID251  # entries as a caller wrote them
 
-from pydantic import BaseModel, TypeAdapter
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 from litellm import exceptions as litellm_exceptions
 from litellm import get_secret_str
@@ -128,6 +128,7 @@ from litellm.types.utils import (
     CustomPricingLiteLLMParams,
     LlmProviders,
     LlmProvidersSet,
+    MirroredPricingParams,
     is_server_derived_pricing_key,
     shared_backend_model_info,
 )
@@ -671,33 +672,60 @@ def _params_of(entry: Mapping[str, object]) -> Mapping[str, object]:
 
 
 _NO_PROMOTED_FIELDS: Final[Mapping[str, object]] = MappingProxyType({})
-_NESTED_MODEL_INFO_WARNING: Final = (
-    "model=%s: 'model_info' is nested inside 'litellm_params'. It belongs at the deployment "
-    "level; applying it anyway, but please move it."
+_NESTED_MODEL_INFO: Final = (
+    "model=%s: 'model_info' is nested inside 'litellm_params'. It belongs at the deployment level. "
 )
+_NESTED_PRICING_APPLIED: Final = _NESTED_MODEL_INFO + "Applying its pricing fields %s anyway, but please move it."
+_NESTED_PRICING_INVALID: Final = _NESTED_MODEL_INFO + "Not applying its pricing, which is invalid in %s."
+
+
+class _NestedPricing(MirroredPricingParams):
+    """The fields a nested `model_info` block may set, which are the pricing fields Deployment mirrors onto
+    model_info. They are validated by type, and a float field must be finite. Every other nested key is ignored."""
+
+    model_config = ConfigDict(allow_inf_nan=False, extra="ignore", frozen=True)
 
 
 def _model_info_nested_under_litellm_params(
     litellm_params: Mapping[str, object], model_info: Mapping[str, object]
 ) -> Mapping[str, object]:
     """
-    Fields from a `model_info` block misplaced inside `litellm_params`, which would otherwise
+    Pricing from a `model_info` block misplaced inside `litellm_params`, which would otherwise
     be dropped: `model_info` is a declared field on GenericLiteLLMParams, so the misplaced
     block validates and is then ignored by every cost path.
 
-    Deployment-level values win, and a nested `id` never displaces the generated
-    deployment id.
+    Only the mirrored pricing fields are taken, each only where neither `litellm_params` nor
+    the deployment-level `model_info` sets it. Raises ValidationError when that pricing does
+    not validate.
     """
     nested: Final = litellm_params.get("model_info")
     if not isinstance(nested, dict):
         return _NO_PROMOTED_FIELDS
+    pricing: Final = _NestedPricing.model_validate(nested).model_dump(exclude_none=True)
     return MappingProxyType(
         {
-            key: value
-            for key, value in _MODEL_INFO_ADAPTER.validate_python(nested).items()
-            if key != "id" and value is not None and model_info.get(key) is None
+            field: value
+            for field, value in pricing.items()
+            if litellm_params.get(field) is None and model_info.get(field) is None
         }
     )
+
+
+def _nested_pricing_to_apply(
+    model_name: str, litellm_params: Mapping[str, object], model_info: Mapping[str, object]
+) -> Mapping[str, object]:
+    """The nested pricing to write onto the deployment's model_info, with a warning naming the
+    fields it applies. Pricing that does not validate is ignored, and the warning names its
+    fields but not their values."""
+    try:
+        promoted: Final = _model_info_nested_under_litellm_params(litellm_params, model_info)
+    except ValidationError as error:
+        invalid: Final = ", ".join(dict.fromkeys(str(detail["loc"][0]) for detail in error.errors()))
+        verbose_router_logger.warning(_NESTED_PRICING_INVALID, model_name, invalid)
+        return _NO_PROMOTED_FIELDS
+    if promoted:
+        verbose_router_logger.warning(_NESTED_PRICING_APPLIED, model_name, ", ".join(promoted))
+    return promoted
 
 
 def _renamed(entry: UntypedEntry, model_name: str) -> UntypedEntry:
@@ -1212,10 +1240,6 @@ class HostRegistry(HostModelInfo):
         model_name: Final = entry.model_name
         litellm_params: Final = entry.litellm_params
         model_info: Final = entry.model_info
-        _promoted_model_info: Final = _model_info_nested_under_litellm_params(litellm_params, model_info)
-        if _promoted_model_info:
-            verbose_router_logger.warning(_NESTED_MODEL_INFO_WARNING, model_name)
-            model_info.update(_promoted_model_info)
         config_sourced: Final = model_info.get("db_model") is not True
         identity_error: Final = (
             ptu_identity_error(
@@ -1248,6 +1272,7 @@ class HostRegistry(HostModelInfo):
         merged_params: Final[Mapping[str, object]] = (
             litellm_params if zeroed_pricing is None else MappingProxyType({**litellm_params, **zeroed_pricing})
         )
+        model_info.update(_nested_pricing_to_apply(model_name, merged_params, model_info))
         params: Final[LiteLLM_Params] = validate_litellm_params_strictly(LiteLLM_Params, dict(**merged_params))
         declared_params: Final = _LITELLM_PARAMS_ADAPTER.validate_python(litellm_params)
         warn_on_provider_credential_mismatch(model_name=model_name, litellm_params=declared_params)
@@ -1289,19 +1314,18 @@ class HostRegistry(HostModelInfo):
         declared_params: Final = deployment.litellm_params.model_dump(exclude_none=True)
         warn_on_provider_credential_mismatch(model_name=deployment.model_name, litellm_params=declared_params)
         warn_on_ignored_model_capability_flags(model_name=deployment.model_name, litellm_params=declared_params)
-
-        _promoted_model_info: Final = _model_info_nested_under_litellm_params(
-            deployment.litellm_params.model_dump(), deployment.model_info.model_dump()
+        nested_pricing: Final = _nested_pricing_to_apply(
+            deployment.model_name, declared_params, deployment.model_info.model_dump()
         )
-        if _promoted_model_info:
-            verbose_router_logger.warning(_NESTED_MODEL_INFO_WARNING, deployment.model_name)
-            for _key, _value in _promoted_model_info.items():
-                setattr(deployment.model_info, _key, _value)
-
+        added: Final = (
+            deployment.model_copy(update={"model_info": deployment.model_info.model_copy(update=nested_pricing)})
+            if nested_pricing
+            else deployment
+        )
         warn_on_unenforced_endpoint_flag(
             model_name=deployment.model_name, model_info=deployment.model_info.model_dump()
         )
-        served: Final = with_admin_api_key_secret_reference(without_model_capability_flags(deployment))
+        served: Final = with_admin_api_key_secret_reference(without_model_capability_flags(added))
         build.pending = served  # rebind-ok: the build's state, which each step advances
         build.stored = served.to_json(exclude_none=True)  # rebind-ok: the build's state, which each step advances
         refuse_unservable_numbers(build.stored)

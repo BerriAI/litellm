@@ -1,9 +1,12 @@
+import logging
+
 import pytest
 
 import litellm
 from litellm import Router
+from litellm.router_api import ChangeSet
 from litellm.router_rust.surface.registry import _model_info_nested_under_litellm_params
-from litellm.types.router import Deployment, LiteLLM_Params
+from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
 
 BACKEND_MODEL = "deepinfra/deepseek-ai/DeepSeek-V4-Flash-0731"
 PUBLIC_MODEL = "deepseek-ai/DeepSeek-V4-Flash-0731"
@@ -235,3 +238,270 @@ def test_add_deployment_keeps_deployment_level_values_and_id():
     assert model_info.get("id") == DEPLOYMENT_ID
     assert router.has_model_id(DEPLOYMENT_ID)
     assert not router.has_model_id("nested-id-should-be-ignored")
+
+
+PROTECTED_MODEL_INFO = {"id": DEPLOYMENT_ID, "team_id": "team-a", "blocked": True, "db_model": True}
+NESTED_INPUT_COST = 9.9e-07
+ABOVE_1HR_CACHE_WRITE = "cache_creation_input_token_cost_above_1hr"
+NO_PRICING = dict.fromkeys(_pricing_model_info())
+
+
+def _overwriting_dunder_dict():
+    """A nested `__dict__` holding a complete, valid ModelInfo with every protected field changed."""
+    return {"__dict__": ModelInfo(id="attacker-id", team_id="team-b", blocked=False, db_model=False).model_dump()}
+
+
+def _protected_fields(model_info):
+    return {key: model_info.get(key) for key in PROTECTED_MODEL_INFO}
+
+
+NESTED_NON_PRICING = {
+    "team_id": "team-b",
+    "blocked": False,
+    "db_model": True,
+    "created_by": "someone-else",
+    "access_groups": ["other-group"],
+    "access_via_team_ids": ["team-b"],
+    "team_public_model_name": "other-public-name",
+    "member_auto_router": True,
+    "ptu_count": 5,
+    "mode": "embedding",
+    "base_model": "azure/gpt-4o",
+    "my_custom_key": "custom",
+    **_overwriting_dunder_dict(),
+    "self": "x",
+    "MAX_PTU_COUNT": 5,
+}
+
+
+def _config_router(nested, deployment_info=None, params=None):
+    """Router(model_list=...) with one deployment whose litellm_params nest `nested`."""
+    config = _nested_config()
+    config["model_info"] = {"id": DEPLOYMENT_ID, **(deployment_info or {})}
+    config["litellm_params"].update(params or {}, model_info=nested)
+    return Router(model_list=[config])
+
+
+def _added_router(nested, deployment_info=None, params=None):
+    """Router.add_deployment with the same deployment."""
+    config = _nested_config()
+    router = Router(model_list=[])
+    router.add_deployment(
+        Deployment(
+            model_name=PUBLIC_MODEL,
+            litellm_params=LiteLLM_Params.model_validate(
+                {**config["litellm_params"], **(params or {}), "model_info": nested}
+            ),
+            model_info={"id": DEPLOYMENT_ID, **(deployment_info or {})},
+        )
+    )
+    return router
+
+
+INSTALLS = pytest.mark.parametrize("install", (_config_router, _added_router), ids=("router_init", "add_deployment"))
+
+
+def _db_deployment(api_key, nested=None):
+    """A team model as a proxy pod loads it from the DB, paused by a proxy admin."""
+    litellm_params = {"model": BACKEND_MODEL, "api_key": api_key}
+    return Deployment(
+        model_name=PUBLIC_MODEL,
+        litellm_params=LiteLLM_Params.model_validate(
+            litellm_params if nested is None else {**litellm_params, "model_info": nested}
+        ),
+        model_info=dict(PROTECTED_MODEL_INFO),
+    )
+
+
+def _updated_router(nested):
+    """A pod's router after one DB reload installs the row and the next installs an update to it
+    that rotates its key and nests `nested`, upserted as the proxy upserts DB rows."""
+    router = Router(model_list=[], ignore_invalid_deployments=True)
+    router.apply(ChangeSet(upsert=[_db_deployment("key-old")]))
+    router.apply(ChangeSet(upsert=[_db_deployment("key-new", nested)]))
+    return router
+
+
+def _served(router):
+    return router.registry().deployment(DEPLOYMENT_ID)
+
+
+def _served_pricing(router):
+    model_info = _served(router).model_info
+    return {field: model_info.get(field) for field in NO_PRICING}
+
+
+def _nested_warnings(caplog):
+    return tuple(
+        record.getMessage()
+        for record in caplog.records
+        if record.name == "LiteLLM Router" and "nested inside 'litellm_params'" in record.getMessage()
+    )
+
+
+@pytest.mark.parametrize("key", NESTED_NON_PRICING)
+def test_promotes_only_mirrored_pricing_fields(key):
+    """Only the pricing fields Deployment mirrors onto model_info leave a nested block."""
+    promoted = _model_info_nested_under_litellm_params(
+        {"model_info": {**_pricing_model_info(), key: NESTED_NON_PRICING[key]}}, {}
+    )
+
+    assert promoted == _pricing_model_info()
+
+
+@pytest.mark.parametrize("key", NESTED_NON_PRICING)
+def test_router_init_ignores_nested_non_pricing_fields(key):
+    """Every other nested field is ignored: the deployment serves what its pricing alone gives it."""
+    expected = _served(_config_router(_pricing_model_info())).model_info.model_dump()
+
+    served = _served(_config_router({**_pricing_model_info(), key: NESTED_NON_PRICING[key]}))
+    assert served.model_info.model_dump() == expected
+
+
+@pytest.mark.parametrize("key", [key for key in NESTED_NON_PRICING if key not in ("db_model", "member_auto_router")])
+def test_add_deployment_ignores_nested_non_pricing_fields(key):
+    """As on the config path. A built Deployment always sets db_model and member_auto_router, so no nested value
+    could fill them, and they are left out here."""
+    expected = _served(_added_router(_pricing_model_info())).model_info.model_dump()
+
+    served = _served(_added_router({**_pricing_model_info(), key: NESTED_NON_PRICING[key]}))
+    assert served.model_info.model_dump() == expected
+
+
+def test_add_deployment_nested_dunder_dict_keeps_protected_fields():
+    """A nested `__dict__` must not replace id, team_id, blocked or db_model of a DB-loaded deployment."""
+    deployment = _nested_deployment(dict(PROTECTED_MODEL_INFO))
+    deployment.litellm_params.model_info.update(_overwriting_dunder_dict())
+
+    router = Router(model_list=[])
+    router.add_deployment(deployment)
+
+    model_info = _deployment_pricing(router)
+    assert _protected_fields(model_info) == PROTECTED_MODEL_INFO
+    assert model_info.get("input_cost_per_token") == INPUT_COST
+    assert router.registry().has_deployment(DEPLOYMENT_ID)
+    assert not router.registry().has_deployment("attacker-id")
+
+
+def test_update_with_nested_dunder_dict_keeps_the_admin_block():
+    """A nested `__dict__` in a model update: the paused row stays the only copy, still blocked, keyed and owned
+    as the DB says, and the update itself applies."""
+    router = _updated_router({**_pricing_model_info(), **_overwriting_dunder_dict()})
+
+    assert [dict(entry["model_info"]).get("blocked") for entry in router.registry().all()] == [True]
+    served = _served(router)
+    assert _protected_fields(served.model_info) == PROTECTED_MODEL_INFO
+    assert served.litellm_params.api_key == "key-new"
+
+
+INVALID_NESTED_PRICING = {
+    "a string": ("input_cost_per_token", "not-a-number"),
+    "a list": ("output_cost_per_token", [OUTPUT_COST]),
+    "a dict": ("cache_read_input_token_cost", {"per_token": CACHE_READ_COST}),
+}
+
+
+def _warned_about_invalid(caplog, field, value):
+    (warning,) = _nested_warnings(caplog)
+    return f"model={PUBLIC_MODEL}:" in warning and field in warning and str(value) not in warning
+
+
+@INSTALLS
+@pytest.mark.parametrize(("field", "value"), INVALID_NESTED_PRICING.values(), ids=INVALID_NESTED_PRICING)
+def test_invalid_nested_pricing_is_ignored_with_a_warning(install, field, value, caplog):
+    """A nested value that does not validate never stops the deployment loading. Nothing from the block applies,
+    and the warning names the deployment and the field, not the value."""
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Router"):
+        router = install({**_pricing_model_info(), field: value})
+
+    assert _served_pricing(router) == NO_PRICING
+    assert _warned_about_invalid(caplog, field, value)
+
+
+@pytest.mark.parametrize(("field", "value"), INVALID_NESTED_PRICING.values(), ids=INVALID_NESTED_PRICING)
+def test_update_with_invalid_nested_pricing_still_takes_effect(field, value, caplog):
+    """An update that also nests invalid pricing still rotates the key."""
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Router"):
+        router = _updated_router({**_pricing_model_info(), field: value})
+
+    assert _served(router).litellm_params.api_key == "key-new"
+    assert _served_pricing(router) == NO_PRICING
+    assert _warned_about_invalid(caplog, field, value)
+
+
+WRONG_SHAPE_TIERS = {
+    "a dict": {"range": [0, 1000], "input_cost_per_token": INPUT_COST},
+    "a list of numbers": [INPUT_COST, OUTPUT_COST],
+}
+
+
+@INSTALLS
+@pytest.mark.parametrize("tiers", WRONG_SHAPE_TIERS.values(), ids=WRONG_SHAPE_TIERS)
+def test_nested_tiered_pricing_of_the_wrong_shape_is_ignored(install, tiers):
+    router = install({**_pricing_model_info(), "tiered_pricing": tiers})
+
+    assert _served(router).model_info.tiered_pricing is None
+    assert _served_pricing(router) == NO_PRICING
+
+
+@INSTALLS
+@pytest.mark.parametrize("cost", ("inf", "nan", "1e400", float("inf")), ids=repr)
+def test_non_finite_nested_cost_is_never_applied(install, cost):
+    """Refused where the router's finite-cost rule reads the nested value, and never applied where that rule
+    does not look."""
+    with pytest.raises(ValueError, match="cannot be served"):
+        install({"input_cost_per_token": cost})
+    install(_pricing_model_info())
+    expected = litellm.model_cost[DEPLOYMENT_ID].get(ABOVE_1HR_CACHE_WRITE)
+
+    router = install({**_pricing_model_info(), ABOVE_1HR_CACHE_WRITE: cost})
+    assert _served(router).model_info.get(ABOVE_1HR_CACHE_WRITE) is None
+    assert litellm.model_cost[DEPLOYMENT_ID].get(ABOVE_1HR_CACHE_WRITE) == expected
+
+
+PRECEDENCE = {
+    "a deployment-level value wins": ({"input_cost_per_token": INPUT_COST}, {}, INPUT_COST, ("output_cost_per_token",)),
+    "a litellm_params value wins": ({}, {"input_cost_per_token": INPUT_COST}, INPUT_COST, ("output_cost_per_token",)),
+    "an explicit None is filled": (
+        {"input_cost_per_token": None},
+        {},
+        NESTED_INPUT_COST,
+        ("input_cost_per_token", "output_cost_per_token"),
+    ),
+}
+
+
+@INSTALLS
+@pytest.mark.parametrize(("deployment_info", "params", "input_cost", "applied"), PRECEDENCE.values(), ids=PRECEDENCE)
+def test_nested_pricing_fills_only_fields_nothing_else_sets(
+    install, deployment_info, params, input_cost, applied, caplog
+):
+    """The warning names exactly the fields it applies."""
+    nested = {"input_cost_per_token": NESTED_INPUT_COST, "output_cost_per_token": OUTPUT_COST}
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Router"):
+        router = install(nested, deployment_info, params)
+
+    model_info = _served(router).model_info
+    assert model_info.input_cost_per_token == input_cost
+    assert model_info.output_cost_per_token == OUTPUT_COST
+    (warning,) = _nested_warnings(caplog)
+    assert tuple(field for field in nested if field in warning) == applied
+
+
+RESERVED_CAPACITY = {
+    "team_id": "team-a",
+    "ptu_count": 2,
+    "cost_per_ptu_per_hour": 1.0,
+    "ptu_effective_from": "2026-01-01T00:00:00Z",
+}
+
+
+def test_nested_pricing_is_not_applied_under_reserved_capacity(monkeypatch, caplog):
+    """A config deployment billed for reserved capacity serves its token pricing at zero, which outranks a nested
+    block, so nothing from the block applies and no warning says it does."""
+    monkeypatch.setenv("LITELLM_ENABLE_PTU_COST_ATTRIBUTION", "true")
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Router"):
+        router = _config_router(_pricing_model_info(), RESERVED_CAPACITY)
+
+    assert _served_pricing(router) == dict.fromkeys(NO_PRICING, 0.0)
+    assert _nested_warnings(caplog) == ()
