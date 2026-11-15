@@ -235,8 +235,11 @@ def alerts_once_a_later_key_alert_lands(
     """Alerts naming a watched id, read after a key soft budget alert sent later has reached the sink."""
     alias: Final = f"sentinel-{uuid.uuid4().hex}"
     gateway.chat(model, key=scenario.key(key_alias=alias, soft_budget=SOFT_BUDGET, spend=SPEND))
-    (sentinel, *_) = alerts_naming(alerts, alias)
-    assert "Soft Budget Crossed" in slack_text(sentinel), sentinel
+    eventually(
+        lambda: alerts.naming(alias),
+        lambda found: any("Soft Budget Crossed" in slack_text(body) for body in found),
+        seconds=ALERT_SECONDS,
+    )
     return tuple(body for body in alerts.bodies() if any(marker in body for marker in watched))
 
 
