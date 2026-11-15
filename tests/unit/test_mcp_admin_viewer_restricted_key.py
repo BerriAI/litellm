@@ -40,6 +40,12 @@ def test_is_restricted_virtual_key_request_admin_roles():
     )
     assert _is_restricted_virtual_key_request(admin_viewer_group) is False
 
+    admin_viewer_combined_mcp = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+        allowed_routes=["mcp_routes"],
+    )
+    assert _is_restricted_virtual_key_request(admin_viewer_combined_mcp) is False
+
     proxy_admin_mgmt = UserAPIKeyAuth(
         user_role=LitellmUserRoles.PROXY_ADMIN,
         allowed_routes=["/v1/mcp/server"],
@@ -77,9 +83,10 @@ def test_is_restricted_virtual_key_request_inference_scoped_admin_keys():
     assert _is_restricted_virtual_key_request(chat_admin_key) is True
 
 
-def test_user_is_full_admin_route_restricted_safety():
-    """Only an unrestricted PROXY_ADMIN receives full admin access. Route-restricted keys
-    (even if PROXY_ADMIN) must not be treated as full admin.
+def test_user_is_full_admin_privilege():
+    """_user_is_full_admin returns True for PROXY_ADMIN, preserving review fields and
+    management workflows across all allowed_routes configurations, while PROXY_ADMIN_VIEW_ONLY
+    and non-admin roles return False.
     """
     unrestricted_admin = UserAPIKeyAuth(
         user_role=LitellmUserRoles.PROXY_ADMIN,
@@ -97,13 +104,25 @@ def test_user_is_full_admin_route_restricted_safety():
         user_role=LitellmUserRoles.PROXY_ADMIN,
         allowed_routes=["/v1/mcp/server"],
     )
-    assert _user_is_full_admin(route_restricted_admin) is False
+    assert _user_is_full_admin(route_restricted_admin) is True
+
+    route_restricted_admin_mcp = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        allowed_routes=["mcp_routes"],
+    )
+    assert _user_is_full_admin(route_restricted_admin_mcp) is True
 
     admin_viewer = UserAPIKeyAuth(
         user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
         allowed_routes=None,
     )
     assert _user_is_full_admin(admin_viewer) is False
+
+    admin_viewer_scoped = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+        allowed_routes=["/v1/mcp/server"],
+    )
+    assert _user_is_full_admin(admin_viewer_scoped) is False
 
 
 def test_is_restricted_virtual_key_request_non_admin_roles():

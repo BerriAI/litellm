@@ -748,19 +748,13 @@ if MCP_AVAILABLE:
         return [_redact_mcp_credentials(server) for server in mcp_servers]
 
     def _user_is_full_admin(user_api_key_dict: UserAPIKeyAuth) -> bool:
-        """True only for unrestricted ``PROXY_ADMIN``; ``PROXY_ADMIN_VIEW_ONLY`` or
-        route-scoped admin keys return False.
+        """True only for ``PROXY_ADMIN``; ``PROXY_ADMIN_VIEW_ONLY`` returns False.
 
         Global env var secrets pre-fill the admin edit form, so a full admin
-        must see them, but a read-only admin or route-scoped key gets the same
-        redacted view as any other non-managing caller.
+        must see them, but a read-only admin gets the same redacted view as
+        any other non-managing caller.
         """
-        if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
-            return False
-        allowed_routes = getattr(user_api_key_dict, "allowed_routes", None)
-        if isinstance(allowed_routes, list) and len(allowed_routes) > 0:
-            return False
-        return True
+        return user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
 
     def _resolve_credential_target_user_id(user_api_key_dict: UserAPIKeyAuth, requested_user_id: str | None) -> str:
         """The user whose stored MCP credential a request acts on.
@@ -791,6 +785,7 @@ if MCP_AVAILABLE:
         """
         mcp_server_mgmt_exact: Final = {
             "mcp_management_routes",
+            "mcp_routes",
             "management_routes",
             "/v1/mcp/server",
             "/v1/mcp/server/*",
