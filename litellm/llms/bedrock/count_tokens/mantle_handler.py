@@ -8,9 +8,12 @@ from typing_extensions import NotRequired, ReadOnly, TypedDict
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.url_utils import join_api_base
+from litellm.llms.anthropic.common_utils import AnthropicModelInfo, context_management_betas, tools_without_custom_field
 from litellm.llms.anthropic.count_tokens.transformation import COUNT_TOKEN_OPTION_NAMES, AnthropicCountTokensConfig
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM, run_aws_signing
 from litellm.llms.bedrock.common_utils import BedrockError, build_mantle_messages_url
+from litellm.llms.bedrock.count_tokens.handler import BedrockCountTokensRequestError
+from litellm.llms.bedrock.count_tokens.transformation import count_tokens_messages_problem
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, get_async_httpx_client
 
 MANTLE_COUNT_TOKENS_SUFFIX: Final = "/count_tokens"
@@ -21,11 +24,13 @@ class MantleCountTokensRequest(TypedDict):
     messages: ReadOnly[list[dict[str, JsonValue]]]
     system: ReadOnly[NotRequired[JsonValue]]
     tools: ReadOnly[NotRequired[list[dict[str, JsonValue]]]]
+    context_management: ReadOnly[NotRequired[JsonValue]]
 
 
 _COUNT_REQUEST: Final = TypeAdapter(MantleCountTokensRequest)
 _COUNT_RESPONSE: Final = TypeAdapter(dict[str, JsonValue])
 _COUNT_OPTIONS: Final[TypeAdapter[Mapping[str, JsonValue]]] = TypeAdapter(Mapping[str, JsonValue])
+_TOOLS: Final = TypeAdapter(list[dict[str, JsonValue]])
 
 
 class BedrockMantleCountTokensHandler(BaseAWSLLM):
@@ -55,25 +60,42 @@ class BedrockMantleCountTokensHandler(BaseAWSLLM):
     ) -> dict[str, JsonValue]:
         try:
             request: Final = _COUNT_REQUEST.validate_python(request_data)
+            problem: Final = count_tokens_messages_problem(request["messages"])
+            if problem is not None:
+                raise BedrockCountTokensRequestError(problem)
             aws_region_name: Final = await run_aws_signing(
                 self.get_aws_region_name, optional_params=litellm_params, model=resolved_model, model_id=None
             )
             endpoint_url: Final = await run_aws_signing(self.get_mantle_count_tokens_endpoint, aws_region_name)
+            tools: Final = request.get("tools")
             body: Final = self._anthropic_config.transform_request_to_count_tokens(
                 model=resolved_model,
                 messages=request["messages"],
-                tools=request.get("tools"),
+                tools=None
+                if tools is None
+                else _TOOLS.validate_python(
+                    tools_without_custom_field(tools, hoist_defer_loading=True, drop_custom=True)
+                ),
                 system=request.get("system"),
                 optional_params=_COUNT_OPTIONS.validate_python(
                     {name: value for name, value in request_data.items() if name in COUNT_TOKEN_OPTION_NAMES}
                 ),
+                context_management=request.get("context_management"),
+            )
+            betas: Final = (
+                *context_management_betas(request.get("context_management")),
+                *AnthropicModelInfo().thinking_betas(request_data.get("thinking")),
             )
             verbose_logger.debug("Making bedrock-mantle count_tokens request to: %s", endpoint_url)
             api_key: Final = litellm_params.get("api_key")
             signed_headers, signed_body = await run_aws_signing(
                 self._sign_request,
                 service_name="bedrock",
-                headers={"Content-Type": "application/json", "anthropic-version": MANTLE_ANTHROPIC_VERSION},
+                headers={
+                    "Content-Type": "application/json",
+                    "anthropic-version": MANTLE_ANTHROPIC_VERSION,
+                    **({"anthropic-beta": ",".join(betas)} if betas else {}),
+                },
                 optional_params=litellm_params,
                 request_data=body,
                 api_base=endpoint_url,

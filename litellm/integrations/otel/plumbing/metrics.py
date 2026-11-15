@@ -11,6 +11,7 @@ identical metrics. The attribute cardinality filter is reused from v1 by import
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
+from types import MappingProxyType
 from typing import Any, Final, Literal, Protocol, TypeAlias
 
 from opentelemetry.metrics import Histogram, Meter
@@ -26,6 +27,7 @@ from litellm.integrations.opentelemetry import (
 )
 from litellm.integrations.otel.model.metadata import time_to_first_chunk_seconds
 from litellm.integrations.otel.model.semconv import (
+    PASSTHROUGH_OPERATION_KEY,
     Error,
     GenAI,
     Metric,
@@ -33,6 +35,7 @@ from litellm.integrations.otel.model.semconv import (
     resolve_provider,
 )
 from litellm.integrations.otel.model.utils import to_seconds
+from litellm.litellm_core_utils.core_helpers import attribute_or_none, require_attributes
 from litellm.litellm_core_utils.internal_call_metadata import is_unbilled_non_inference_call_from_params
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 
@@ -176,7 +179,14 @@ class _MetricKwargs(TypedDict, total=False):
     end_time: ReadOnly[datetime | float | str | None]
 
 
-def resolve_error_type(kwargs: Mapping[str, Any]) -> str:
+class _SupportsGet(Protocol):
+    def get(self, key: str, /) -> object: ...
+
+
+_NO_FIELDS: Final[Mapping[str, object]] = MappingProxyType({})
+
+
+def resolve_error_type(kwargs: Mapping[str, object]) -> str:
     """The ``error.type`` value for a failed request.
 
     Bounded by construction: the mapped provider exception's class name (the same
@@ -187,8 +197,13 @@ def resolve_error_type(kwargs: Mapping[str, Any]) -> str:
     span and its exception event, where high cardinality is free.
     """
     std_log: Final = kwargs.get("standard_logging_object")
-    info: Final = getattr(std_log, "error_information", None) or (std_log or {}).get("error_information") or {}
-    error_class: Final = info.get("error_class") or info.get("error_code")
+    info: Final = (
+        attribute_or_none(std_log, "error_information")
+        or require_attributes(std_log or _NO_FIELDS, _SupportsGet, "get").get("error_information")
+        or _NO_FIELDS
+    )
+    info_fields: Final = require_attributes(info, _SupportsGet, "get")
+    error_class: Final = info_fields.get("error_class") or info_fields.get("error_code")
     if error_class:
         return str(error_class)
     exception: Final = kwargs.get("exception")
@@ -280,7 +295,9 @@ class GenAIMetricRecorder:
     def _common_attributes(self, kwargs: Mapping[str, Any]) -> dict:
         params: Final = kwargs.get("litellm_params") or {}
         common_attrs: Final[dict] = {
-            GenAI.OPERATION_NAME: resolve_operation(kwargs.get("call_type")).value,
+            GenAI.OPERATION_NAME: resolve_operation(
+                kwargs.get("call_type"), kwargs.get(PASSTHROUGH_OPERATION_KEY)
+            ).value,
             **_provider_attributes(params.get("custom_llm_provider")),
             GenAI.REQUEST_MODEL: kwargs.get("model"),
             "gen_ai.framework": "litellm",

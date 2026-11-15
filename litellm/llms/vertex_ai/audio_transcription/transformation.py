@@ -172,7 +172,7 @@ class VertexAIAudioTranscriptionConfig(BaseAudioTranscriptionConfig, VertexBase)
         except ValueError:
             raise VertexAIError(
                 status_code=raw_response.status_code,
-                message=f"Received non-JSON response from Google Speech-to-Text: {raw_response.text}",
+                message="Received non-JSON response from Google Speech-to-Text",
             )
         parsed: Final = VertexSpeechToTextRecognizeResponse.model_validate(response_json)
         transcripts: Final = tuple(

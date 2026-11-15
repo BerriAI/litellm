@@ -123,7 +123,9 @@ class FocusLiteLLMDatabase:
         ORDER BY ordinal_position;
         """
         try:
-            columns_response: Final = await client.db.query_raw(info_query)
+            from litellm.proxy.utils import query_raw_rows
+
+            columns_response: Final = await query_raw_rows(client.db, info_query)
             return {"columns": columns_response, "table_name": "LiteLLM_DailyUserSpend"}
         except Exception as exc:
             raise RuntimeError(f"Error getting table info: {exc}") from exc

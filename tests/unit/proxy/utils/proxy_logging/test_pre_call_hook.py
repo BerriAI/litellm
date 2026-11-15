@@ -170,8 +170,9 @@ async def test_pre_call_hook_processes_guardrail_metadata_when_no_overrides(prox
     proxy_logging.slack_alerting_instance = MagicMock(alerting=None)
     invoked = {}
 
-    def fake_process(d):
+    def fake_process(d: object, *, skip_guardrails: bool) -> None:
         invoked["data"] = d
+        invoked["skip_guardrails"] = skip_guardrails
 
     proxy_logging._process_guardrail_metadata = fake_process  # type: ignore[assignment]
     out = await proxy_logging.pre_call_hook(
@@ -180,7 +181,7 @@ async def test_pre_call_hook_processes_guardrail_metadata_when_no_overrides(prox
         call_type="completion",
     )
     assert out is data
-    assert invoked["data"] is data
+    assert invoked == {"data": data, "skip_guardrails": False}
 
 
 @pytest.mark.asyncio
@@ -453,6 +454,7 @@ def test_every_pre_call_customlogger_is_deliberately_classified():
         "_PROXY_BatchRedisRequests",
         "_PROXY_SensitiveDataRoutingHandler",
         "ResponsesIDSecurity",
+        "MessageThreadOwnership",
         "SkillsInjectionHook",
         "_PROXY_LiteLLMManagedFiles",
         "_PROXY_LiteLLMManagedVectorStores",
@@ -462,8 +464,8 @@ def test_every_pre_call_customlogger_is_deliberately_classified():
 
     registered = dict(PROXY_HOOKS)
     for name, cls in (
-        ("banned_keywords", _load("enterprise.enterprise_hooks.banned_keywords", "ENTERPRISE_BannedKeywords")),
-        ("blocked_user_check", _load("enterprise.enterprise_hooks.blocked_user_list", "ENTERPRISE_BlockedUserList")),
+        ("banned_keywords", _load("litellm.enterprise.enterprise_hooks.banned_keywords", "ENTERPRISE_BannedKeywords")),
+        ("blocked_user_check", _load("litellm.enterprise.enterprise_hooks.blocked_user_list", "ENTERPRISE_BlockedUserList")),
         ("detect_prompt_injection", _load("litellm.proxy.hooks.prompt_injection_detection", "OPTIONAL_PromptInjectionDetection")),
         ("azure_content_safety", _load("litellm.proxy.hooks.azure_content_safety", "PROXY_AzureContentSafety")),
     ):
@@ -995,3 +997,21 @@ async def test_guardrails_only_and_skip_guardrails_are_mutually_exclusive(
             guardrails_only=True,
             skip_guardrails=True,
         )
+
+
+@pytest.mark.parametrize(
+    "request_data, expected",
+    [
+        ({"metadata": {"_guardrail_pipelines": ["p1"]}}, True),
+        ({"metadata": {"user_id": "u"}, "litellm_metadata": {"_guardrail_pipelines": ["p1"]}}, True),
+        ({"metadata": {"_guardrail_pipelines": 5}}, True),
+        ({"metadata": {"user_id": "u"}}, False),
+    ],
+    ids=["pipeline-in-metadata", "pipeline-in-litellm-metadata", "non-list-pipeline-value", "no-pipeline"],
+)
+def test_request_has_pre_call_guardrails_reads_pipelines_from_both_metadata_buckets(
+    proxy_logging, monkeypatch, request_data, expected
+):
+    monkeypatch.setattr(litellm, "callbacks", [])
+
+    assert proxy_logging.request_has_pre_call_guardrails(request_data) is expected

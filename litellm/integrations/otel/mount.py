@@ -22,6 +22,7 @@ from litellm.integrations.otel.model.config import is_otel_v2_enabled
 if TYPE_CHECKING:
     from fastapi import FastAPI
     from opentelemetry.trace import Span, TracerProvider
+    from starlette.types import ASGIApp, Receive, Scope, Send
 
 # Routes excluded from server-span tracing by default: high-frequency pollers and
 # static UI/docs assets, none of which are LLM traffic. Entries are substring-matched
@@ -43,6 +44,33 @@ _DEFAULT_EXCLUDED_ROUTES: Final = (
     "/.well-known",  # UI config discovery
 )
 _DEFAULT_EXCLUDED_URLS: Final = ",".join(_DEFAULT_EXCLUDED_ROUTES)
+
+
+class _RequestTraceExclusionMiddleware:
+    def __init__(self, app: "ASGIApp", excluded_urls: str) -> None:
+        from opentelemetry.util.http import parse_excluded_urls
+
+        self.app = app
+        self.excluded_urls = parse_excluded_urls(excluded_urls)
+
+    async def __call__(self, scope: "Scope", receive: "Receive", send: "Send") -> None:
+        if scope["type"] not in ("http", "websocket"):
+            await self.app(scope, receive, send)
+            return
+        from opentelemetry.instrumentation.asgi import (  # pyright: ignore[reportMissingTypeStubs]  # upstream ships no py.typed marker
+            get_host_port_url_tuple,  # pyright: ignore[reportUnknownVariableType]  # upstream URL helper has no annotations
+        )
+
+        from litellm.integrations.otel.plumbing.context import (
+            request_trace_scope,
+            request_traces_excluded,
+        )
+
+        url: Final = str(get_host_port_url_tuple(scope)[2])  # pyright: ignore[reportUnknownArgumentType]  # upstream constructs a str URL but leaves its return type unannotated
+        excluded: Final = request_traces_excluded() or self.excluded_urls.url_disabled(url)
+        with request_trace_scope(excluded):
+            await self.app(scope, receive, send)
+
 
 # Passthrough routes are catch-alls (e.g. "/openai/{endpoint:path}"), so the
 # default OTel server-span name "{method} {route}" collapses every upstream
@@ -129,6 +157,8 @@ def instrument_fastapi_app(app: "FastAPI", tracer_provider: "TracerProvider | No
         if app.middleware_stack is not None:
             verbose_logger.debug("Skipping OTel V2 FastAPI instrumentation: the app has already started")
             return
+        if getattr(app, "_is_instrumented_by_opentelemetry", False):
+            return
 
         # Lazy: only the V2-enabled path needs the optional
         # ``opentelemetry-instrumentation-fastapi`` package, which is not part of the
@@ -151,11 +181,7 @@ def instrument_fastapi_app(app: "FastAPI", tracer_provider: "TracerProvider | No
                 claim_server_span(span)
             _passthrough_span_name_hook(span, scope)
 
-        excluded_urls: Final = (
-            os.environ.get("OTEL_PYTHON_FASTAPI_EXCLUDED_URLS")
-            if "OTEL_PYTHON_FASTAPI_EXCLUDED_URLS" in os.environ
-            else _DEFAULT_EXCLUDED_URLS
-        )
+        excluded_urls: Final = os.environ.get("OTEL_PYTHON_FASTAPI_EXCLUDED_URLS", _DEFAULT_EXCLUDED_URLS)
         FastAPIInstrumentor.instrument_app(
             app,
             tracer_provider=tracer_provider,
@@ -166,6 +192,12 @@ def instrument_fastapi_app(app: "FastAPI", tracer_provider: "TracerProvider | No
             # template in their name, which can't be rewritten from a hook.
             exclude_spans=["receive", "send"],
         )
+        instrumented_stack: Final = app.build_middleware_stack
+
+        def build_middleware_stack() -> "ASGIApp":
+            return _RequestTraceExclusionMiddleware(instrumented_stack(), excluded_urls)
+
+        app.build_middleware_stack = build_middleware_stack  # rebind-ok: wrap the complete ASGI stack
         if get_global_response_propagator() is None:
             set_global_response_propagator(UpstreamFirstTraceResponsePropagator())
     except Exception as e:

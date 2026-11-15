@@ -23,7 +23,7 @@ from litellm.exceptions import GuardrailRaisedException
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.llms.anthropic.pass_through.messages.streaming_iterator import (
+from litellm.llms.anthropic.messages.native.streaming_iterator import (
     BaseAnthropicMessagesStreamingIterator,
 )
 from litellm.proxy._types import UserAPIKeyAuth
@@ -563,8 +563,12 @@ async def test_native_messages_stream_logging_fires_after_guardrail_end_of_strea
         request_data=request_data,
     ):
         pass
-    await asyncio.sleep(0)
-    await asyncio.sleep(0)
+
+    async def logging_dispatched() -> None:
+        while len(events) < 2:
+            await asyncio.sleep(0.01)
+
+    await asyncio.wait_for(logging_dispatched(), timeout=5)
 
     assert events == ["scan_appended", ("logging_dispatched", "post_call_entry_visible", True)]
 

@@ -45,7 +45,7 @@ def _clients(stack: ExitStack, base_url: str, count: int) -> tuple[httpx.Client,
 def _post(client: httpx.Client, key: str, marker: str) -> int:
     body: Final = safeguarded(messages_body(ANTHROPIC_DEPLOYMENT, marker), list(SAFEGUARDS))
     response: Final = client.post("/v1/messages", json=body, headers={"Authorization": f"Bearer {key}"})
-    assert response.status_code != 200 or rust_routed(response.headers), dict(response.headers)
+    assert response.status_code != 200 or not rust_routed(response.headers), dict(response.headers)
     return response.status_code
 
 

@@ -1,5 +1,6 @@
 import copy
 import json
+import logging
 import sys
 from types import ModuleType, SimpleNamespace
 from typing import Final
@@ -21,6 +22,7 @@ from litellm.proxy.common_utils.callback_utils import (
     get_logging_caching_headers,
     get_remaining_tokens_and_requests_from_request_data,
     initialize_callbacks_on_proxy,
+    key_logging_entries,
     normalize_callback_names,
     process_callback,
     sanitize_openai_provider_metadata,
@@ -28,6 +30,7 @@ from litellm.proxy.common_utils.callback_utils import (
 )
 from litellm.proxy.utils import ProxyLogging
 from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.utils import CredentialItem
 
 
 def test_get_remaining_tokens_and_requests_from_request_data():
@@ -47,6 +50,19 @@ def test_get_remaining_tokens_and_requests_from_request_data():
         f"x-litellm-key-remaining-requests-{expected_name}": 100,
         f"x-litellm-key-remaining-tokens-{expected_name}": 200,
     }
+
+
+@pytest.mark.parametrize("client_model_group", [7, ["embed-only"], {"name": "embed-only"}])
+def test_remaining_limit_headers_ignore_a_model_group_that_is_not_a_string(client_model_group: object):
+    casedata: Final = {
+        "metadata": {
+            "model_group": client_model_group,
+            f"litellm-key-remaining-requests-{client_model_group}": 100,
+            f"litellm-key-remaining-tokens-{client_model_group}": 200,
+        }
+    }
+
+    assert get_remaining_tokens_and_requests_from_request_data(casedata) == {}
 
 
 @patch(
@@ -762,3 +778,114 @@ def test_initialize_callbacks_on_proxy_accepts_instance_non_list_value(probe_con
 
     assert len(litellm.callbacks) == 1
     assert isinstance(litellm.callbacks[0], CustomLogger)
+
+
+def _credential(name: str, values: dict[str, object]) -> CredentialItem:
+    return CredentialItem(credential_name=name, credential_values=values, credential_info={})
+
+
+def test_key_logging_entries_merges_each_referenced_credential_under_its_entry(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            _credential("space-a", {"arize_api_key": "key-a", "arize_space_id": "space-a", "api_base": "x"}),
+            _credential("space-b", {"arize_api_key": "key-b", "arize_space_id": "space-b"}),
+        ],
+    )
+    entries: Final = [
+        {"callback_name": "langfuse", "callback_vars": {"langfuse_public_key": "pk"}},
+        {"callback_name": "arize", "litellm_credential_name": "space-a", "callback_vars": {"arize_space_id": "own"}},
+        {"callback_name": "arize", "litellm_credential_name": "space-b", "callback_vars": {}},
+    ]
+
+    resolved: Final = key_logging_entries({"logging": entries})
+
+    assert resolved is not None
+    assert [entry["callback_vars"] for entry in resolved] == [
+        {"langfuse_public_key": "pk"},
+        {"arize_api_key": "key-a", "arize_space_id": "own"},
+        {"arize_api_key": "key-b", "arize_space_id": "space-b"},
+    ]
+
+
+@pytest.mark.parametrize(
+    "credential_values",
+    [{"api_key": "sk-model-key"}, {"arize_api_key": None}],
+    ids=["model-credential", "null-values"],
+)
+def test_key_logging_entries_drops_an_entry_whose_credential_supplies_no_logging_values(
+    monkeypatch: pytest.MonkeyPatch, credential_values: dict[str, object]
+) -> None:
+    monkeypatch.setattr(litellm, "credential_list", [_credential("model-only", credential_values)])
+    kept: Final = {"callback_name": "langfuse", "callback_vars": {"langfuse_public_key": "pk"}}
+    entries: Final = [
+        kept,
+        {"callback_name": "arize", "litellm_credential_name": "model-only", "callback_vars": {}},
+    ]
+
+    assert key_logging_entries({"logging": entries}) == (kept,)
+
+
+def test_a_dropped_credential_reference_is_logged_as_an_error_so_key_health_reports_it(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setattr(litellm, "credential_list", [])
+    entry: Final = {"callback_name": "arize", "litellm_credential_name": "missing", "callback_vars": {}}
+
+    with caplog.at_level(logging.WARNING):
+        key_logging_entries({"logging": [entry]})
+
+    assert [record.levelno for record in caplog.records if "missing" in record.getMessage()] == [logging.ERROR]
+
+
+def test_key_logging_entries_drops_an_entry_whose_credential_is_not_defined(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "credential_list", [_credential("space-a", {"arize_api_key": "key-a"})])
+    kept: Final = {"callback_name": "langfuse", "callback_vars": {"langfuse_public_key": "pk"}}
+    entries: Final = [
+        kept,
+        {"callback_name": "arize", "litellm_credential_name": "missing", "callback_vars": {}},
+    ]
+
+    assert key_logging_entries({"logging": entries}) == (kept,)
+
+
+@pytest.mark.parametrize(
+    "logging_value",
+    [
+        pytest.param("abc", id="string"),
+        pytest.param({"callback_name": "arize"}, id="object"),
+        pytest.param(5, id="number"),
+        pytest.param(["x"], id="list-with-string"),
+        pytest.param([{"callback_name": "langfuse", "callback_vars": {}}, None], id="list-with-null"),
+    ],
+)
+def test_key_logging_entries_fails_on_non_object_logging_like_the_request_path_always_has(
+    logging_value: object,
+) -> None:
+    with pytest.raises(TypeError):
+        key_logging_entries({"logging": logging_value})
+
+
+@pytest.mark.parametrize(
+    ("logging_value", "expected"),
+    [
+        pytest.param("", (), id="empty-string"),
+        pytest.param({}, (), id="empty-object"),
+        pytest.param([], (), id="empty-list"),
+        pytest.param([{"bad": 1}], ({"bad": 1},), id="object-with-unknown-fields"),
+    ],
+)
+def test_key_logging_entries_passes_empty_and_object_entries_through(
+    logging_value: object, expected: tuple[dict[str, object], ...]
+) -> None:
+    assert key_logging_entries({"logging": logging_value}) == expected
+
+
+def test_key_logging_entries_leaves_an_entry_with_a_non_string_credential_name_as_written(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "credential_list", [_credential("5", {"arize_api_key": "k"})])
+    entry: Final = {"callback_name": "arize", "litellm_credential_name": 5, "callback_vars": {}}
+
+    assert key_logging_entries({"logging": [entry]}) == (entry,)
