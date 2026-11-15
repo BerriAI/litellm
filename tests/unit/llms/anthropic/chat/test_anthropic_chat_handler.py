@@ -4519,3 +4519,27 @@ async def test_draining_reads_the_terminal_frame_a_caller_stopped_before() -> No
         stopped=True,
     )
     assert await stream.__anext__() is not None
+
+
+@pytest.mark.parametrize(
+    "terminal",
+    [
+        ("event: error", 'data: {"type": "error", "error": {"type": "overloaded_error", "message": "busy"}}', ""),
+        ("event: message_stop", 'data: {"type": "message_st', ""),
+        ("event: message_stop",),
+    ],
+    ids=["provider-error", "malformed", "header-only"],
+)
+async def test_draining_never_raises_or_counts_a_frame_that_is_not_a_complete_message_stop(
+    terminal: tuple[str, ...],
+) -> None:
+    async def lines() -> AsyncIterator[str]:
+        for line in (*_START_LINES, *terminal):
+            yield line
+
+    iterator = ModelResponseIterator(streaming_response=lines(), sync_stream=False, json_mode=False)
+    stream = iterator.__aiter__()
+    for _ in _START_LINES:
+        await stream.__anext__()
+    await iterator.adrain_terminal_frames(max_lines=16)
+    assert iterator.upstream_stream_usage is not None and iterator.upstream_stream_usage.stopped is False

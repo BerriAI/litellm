@@ -90,6 +90,7 @@ class _LoggedCall(BaseModel):
     litellm_params: Mapping[str, object] = Field(default_factory=dict)
     original_response: object = None
     httpx_response: object = None
+    stream: bool | None = None
     upstream_stream_usage: object = None
     served_runtime: object = None
     deployment_settings: object = None
@@ -217,7 +218,7 @@ def _outcome(settings: ObserverSettings, call: _Call) -> _Outcome | None:
         call_type=call.logged.standard_logging_object.call_type,
         api_base=_destination(call.logged),
         body=body,
-        stream=call.logged.standard_logging_object.stream is True,
+        stream=call.logged.stream is True or call.logged.standard_logging_object.stream is True,
         response=call.response,
         served_runtime=call.logged.served_runtime,
     )

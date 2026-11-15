@@ -11,6 +11,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Union, cast
 
 import httpx
+from pydantic import JsonValue, TypeAdapter, ValidationError
 
 import litellm
 import litellm.litellm_core_utils
@@ -702,6 +703,16 @@ class AnthropicChatCompletion(BaseLLM):
 _SSE_FRAME_TERMINATORS: Final = ("\n\n", "\r\n\r\n")
 
 
+_TERMINAL_EVENT: Final = TypeAdapter(Mapping[str, JsonValue])
+
+
+def _terminal_event_type(payload: str) -> JsonValue:
+    try:
+        return _TERMINAL_EVENT.validate_json(payload).get("type")
+    except ValidationError:
+        return None
+
+
 class ModelResponseIterator:
     def __init__(
         self,
@@ -726,6 +737,7 @@ class ModelResponseIterator:
         self.upstream_stream_usage: AnthropicStreamUsage | None = None
         self._sse_framed = False
         self._message_stop_frame_open = False
+        self._draining = False
         # rewritten-name -> caller's original. Built per-request from the
         # forward map in AnthropicConfig._build_request_tool_name_maps; only
         # contains entries we actually rewrote, so a tool legitimately named
@@ -1027,16 +1039,34 @@ class ModelResponseIterator:
         usage: Final = self.upstream_stream_usage
         return usage is not None and isinstance(usage.stop_reason, str) and not usage.stopped
 
+    def _observe_terminal_line(self, line: str) -> None:
+        if not line.strip():
+            self._end_of_sse_frame()
+            return
+        data_at: Final = line.find("data:")
+        if data_at == -1:
+            return
+        self._message_stop_frame_open = _terminal_event_type(line[data_at + len("data:") :]) == "message_stop"
+        if line.endswith(_SSE_FRAME_TERMINATORS):
+            self._end_of_sse_frame()
+
     async def adrain_terminal_frames(self, max_lines: int) -> None:
-        """Reads what is left of a stream the caller stopped consuming after the stop reason, up to `max_lines`
-        lines, so a `message_stop` the provider did send is recorded. Nothing read here is returned to anyone."""
-        for _ in range(max_lines):
-            if not self.awaits_terminal_event:
-                return
-            try:
-                await self.__anext__()
-            except StopAsyncIteration:
-                return
+        """Reads lines left on a stream the caller stopped consuming after the stop reason, up to `max_lines`, so a
+        `message_stop` frame the provider did send is recorded. While draining, lines are only inspected and never
+        parsed into chunks, so a provider error or malformed event cannot raise or reach anyone."""
+        if self._json_buffer:
+            return
+        self._draining = True
+        try:
+            for _ in range(max_lines):
+                if not self.awaits_terminal_event:
+                    return
+                try:
+                    await self.__anext__()
+                except StopAsyncIteration:
+                    return
+        finally:
+            self._draining = False
 
     def chunk_parser(self, chunk: dict) -> ModelResponseStream:
         try:
@@ -1666,6 +1696,12 @@ class ModelResponseIterator:
                     if index != -1:
                         str_line = str_line[index:]
 
+                if self._draining:
+                    if isinstance(str_line, str):
+                        self._observe_terminal_line(str_line)
+                    return GenericStreamingChunk(
+                        text="", is_finished=False, finish_reason="", usage=None, index=0, tool_use=None
+                    )
                 if str_line.startswith("data:"):
                     result = self._parse_sse_data(str_line)
                     if result is not None:

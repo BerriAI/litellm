@@ -352,6 +352,15 @@ async def test_failed_attempt_is_unassessed_for_its_prefix() -> None:
     )
 
 
+async def test_failed_stream_attempt_keeps_its_stream_path() -> None:
+    sink = _RecordingSink()
+    kwargs = {**_kwargs(original_response=None), "stream": True}
+    await _observer(sink, verified=frozenset({_STREAM_PATH})).async_log_failure_event(kwargs, None, None, None)
+    assert sink.observations == (
+        _observation(Unassessed(UnassessedReason.UPSTREAM_FAILED, path=_STREAM_PATH, prefix=_outgoing().prefix)),
+    )
+
+
 async def test_calls_with_no_cache_signal_or_no_opt_in_record_nothing() -> None:
     sink = _RecordingSink()
     observer = _observer(sink)
@@ -569,3 +578,40 @@ async def test_router_check_observes_only_opted_in_deployments_and_never_trusts_
             assert (reason, path, ttl, breakpoints) == (UnassessedReason.PATH_NOT_VERIFIED, _PATH, 300, 1)
         case outcome:
             pytest.fail(f"expected an unverified-path observation with its prefix, got {outcome}")
+
+
+async def _client_stream(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, stream_body: str, model_info: Mapping[str, object]
+) -> list[tuple[str | None, str | None]]:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "callbacks", [_observer(_RecordingSink(), verified=frozenset({_STREAM_PATH}))])
+    respx_mock.post(_API_BASE).mock(
+        return_value=httpx.Response(200, text=stream_body, headers={"content-type": "text/event-stream"})
+    )
+    response = await litellm.acompletion(
+        model="anthropic/claude-test",
+        messages=[
+            {"role": "user", "content": [{"type": "text", "text": "shared", "cache_control": {"type": "ephemeral"}}]}
+        ],
+        stream=True,
+        api_key="sk-unit-test",
+        model_info=model_info,
+    )
+    assert isinstance(response, CustomStreamWrapper)
+    return [
+        (chunk.choices[0].delta.content, chunk.choices[0].finish_reason) async for chunk in response if chunk.choices
+    ]
+
+
+async def test_observed_stream_with_a_provider_error_after_its_final_delta_streams_as_unobserved(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    zeros = {"input_tokens": 9, "output_tokens": 1, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0}
+    body = _anthropic_stream(
+        zeros,
+        {"output_tokens": 2},
+        terminal='event: error\ndata: {"type": "error", "error": {"type": "overloaded_error", "message": "busy"}}\n\n',
+    )
+    unobserved = await _client_stream(monkeypatch, respx_mock, body, {"id": "claude-east"})
+    observed = await _client_stream(monkeypatch, respx_mock, body, _MODEL_INFO)
+    assert observed == unobserved
