@@ -9,6 +9,8 @@ from pydantic import TypeAdapter
 
 import litellm
 from litellm.litellm_core_utils.allowed_tools_tool_choice import unenforced_allowed_tools_tool_choice
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.tool_fields import LoggedFullToolNames
 from litellm.responses.additional_tools import hoist_additional_tools
 from litellm.responses.litellm_completion_transformation.streaming_iterator import (
     LiteLLMCompletionStreamingIterator,
@@ -41,6 +43,18 @@ def _with_the_tool_choice_sent(
     ):
         return responses_api_request
     return {**responses_api_request, "tool_choice": None}
+
+
+def _log_full_tool_names(
+    request_kwargs: Mapping[str, object], responses_api_request: ResponsesAPIOptionalRequestParams
+) -> None:
+    logging_obj: Final = request_kwargs.get("litellm_logging_obj")
+    chat_names: Final = LiteLLMCompletionResponsesConfig.member_chat_names(
+        LiteLLMCompletionResponsesConfig.request_tools(responses_api_request)
+    )
+    shortened: Final = {sent_name: full_name for full_name, sent_name in chat_names.items() if sent_name != full_name}
+    if shortened and isinstance(logging_obj, LiteLLMLoggingObj):
+        logging_obj.model_call_details.update(LoggedFullToolNames(full_tool_names=shortened))
 
 
 class LiteLLMCompletionTransformationHandler:
@@ -139,6 +153,7 @@ class LiteLLMCompletionTransformationHandler:
         acompletion_args.update(litellm_completion_request)
         acompletion_args["_skip_responses_api_bridge"] = True
 
+        _log_full_tool_names(_REQUEST_KWARGS_ADAPTER.validate_python(kwargs), responses_api_request)
         litellm_completion_response: Final[ModelResponse | litellm.CustomStreamWrapper] = await litellm.acompletion(
             **acompletion_args,
         )

@@ -2517,8 +2517,6 @@ class LiteLLMCompletionResponsesConfig:
                 llm_provider="",
             )
 
-    _validate_namespace_name_collisions = validate_namespace_name_collisions
-
     @staticmethod
     def _responses_tool_to_chat_form(
         tool: Mapping[str, object], member_name: Callable[[str, str], str]
@@ -2655,6 +2653,12 @@ class LiteLLMCompletionResponsesConfig:
                 # mcp or other: pass through unchanged
                 result.append(dict(tool))
         return result
+
+    @staticmethod
+    def request_tools(responses_api_request: Mapping[str, object] | None) -> ResponseTools:
+        """The request's tools, keeping the entries that are objects."""
+        raw_tools: Final = responses_api_request.get("tools") if responses_api_request is not None else None
+        return _tool_mappings(raw_tools) if raw_tools is not None else None
 
     @staticmethod
     def _namespace_entries(tools: ResponseTools) -> tuple[tuple[str, str], ...]:

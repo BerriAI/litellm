@@ -19,6 +19,13 @@ OPENAI_MAX_TOOL_NAME_LENGTH: Final = 64
 TOOL_NAME_HASH_LENGTH: Final = 8
 TOOL_NAME_PREFIX_LENGTH: Final = OPENAI_MAX_TOOL_NAME_LENGTH - TOOL_NAME_HASH_LENGTH - 1  # 55
 
+
+class LoggedFullToolNames(TypedDict, total=False):
+    full_tool_names: ReadOnly[Mapping[str, str]]
+
+
+LOGGED_FULL_TOOL_NAMES: Final[TypeAdapter[LoggedFullToolNames | None]] = TypeAdapter(LoggedFullToolNames | None)
+
 ROUTES_WITH_TOOLS: Final = frozenset(
     {
         "acompletion",
