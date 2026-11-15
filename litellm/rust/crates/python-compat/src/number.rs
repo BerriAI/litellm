@@ -1,6 +1,9 @@
 use std::{str::FromStr, time::Duration};
 
 use num_bigint::BigInt;
+use serde::{Deserialize, Serialize, Serializer};
+
+use crate::{format::fixed, repr::float_repr};
 
 /// `int(text)` in base 10, or `None` where Python raises `ValueError`.
 pub fn int(text: &str) -> Option<BigInt> {
@@ -59,6 +62,47 @@ pub fn seconds(value: f64) -> Result<Duration, SecondsError> {
         value if value.is_nan() => Err(SecondsError::NotANumber),
         value if value.is_infinite() => Err(SecondsError::Overflow),
         value => Duration::try_from_secs_f64(value.max(0.0)).map_err(|_| SecondsError::Overflow),
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq)]
+#[serde(untagged)]
+/// A Python `int` or `float`, kept apart so it prints as `str(value)` does.
+pub enum PyNumber {
+    Int(i64),
+    Float(f64),
+}
+
+impl PyNumber {
+    /// `float(value)`.
+    pub fn value(self) -> f64 {
+        match self {
+            #[allow(clippy::cast_precision_loss)]
+            Self::Int(value) => value as f64,
+            Self::Float(value) => value,
+        }
+    }
+
+    /// `str(value)`.
+    pub fn text(self) -> String {
+        match self {
+            Self::Int(value) => value.to_string(),
+            Self::Float(value) => float_repr(value),
+        }
+    }
+
+    /// `format(value, f".{precision}f")`.
+    pub fn fixed(self, precision: usize) -> String {
+        fixed(self.value(), precision)
+    }
+}
+
+impl Serialize for PyNumber {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Self::Int(value) => serializer.serialize_i64(*value),
+            Self::Float(value) => serializer.serialize_f64(*value),
+        }
     }
 }
 
