@@ -4461,3 +4461,24 @@ def test_stream_iterator_keeps_the_raw_usage_the_provider_sent_and_sees_message_
         starts=1,
         stopped=True,
     )
+
+
+def test_stream_iterator_counts_the_message_stop_event_line_once() -> None:
+    lines = (
+        "event: message_start",
+        'data: {"type": "message_start", "message": {"id": "m", "usage": {"input_tokens": 9}}}',
+        "event: message_delta",
+        'data: {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 2}}',
+        "event: message_stop",
+        'data: {"type": "message_stop"}',
+    )
+    iterator = ModelResponseIterator(streaming_response=iter(lines), sync_stream=True, json_mode=False)
+    consumed = list(iterator)
+    assert len(consumed) == len(lines)
+    assert iterator.upstream_stream_usage == AnthropicStreamUsage(
+        opening={"input_tokens": 9},
+        closing={"output_tokens": 2},
+        stop_reason="end_turn",
+        starts=1,
+        stopped=True,
+    )

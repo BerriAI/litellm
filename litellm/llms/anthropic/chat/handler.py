@@ -699,6 +699,9 @@ class AnthropicChatCompletion(BaseLLM):
         pass
 
 
+_MESSAGE_STOP_EVENT_LINE: Final = "event: message_stop"
+
+
 class ModelResponseIterator:
     def __init__(
         self,
@@ -721,6 +724,7 @@ class ModelResponseIterator:
         self.speed = speed
         self._cumulative_usage: Mapping[str, object] = MappingProxyType({})
         self.upstream_stream_usage: AnthropicStreamUsage | None = None
+        self._message_stop_line_seen = False
         # rewritten-name -> caller's original. Built per-request from the
         # forward map in AnthropicConfig._build_request_tool_name_maps; only
         # contains entries we actually rewrote, so a tool legitimately named
@@ -1005,13 +1009,19 @@ class ModelResponseIterator:
             )
         return results
 
+    def _record_message_stop(self) -> None:
+        """The stream wrapper ends a stream at the first empty chunk after the finish reason, which is the
+        `event: message_stop` line, before its `data:` line is read, so the event line counts as the stop."""
+        self._message_stop_line_seen = True
+        self.upstream_stream_usage = recorded_anthropic_stream_event(
+            self.upstream_stream_usage, {"type": "message_stop"}
+        )
+
     def chunk_parser(self, chunk: dict) -> ModelResponseStream:
         try:
             type_chunk: Final = chunk.get("type", "") or ""
-            if type_chunk == "message_stop":
-                self.upstream_stream_usage = recorded_anthropic_stream_event(
-                    self.upstream_stream_usage, {"type": "message_stop"}
-                )
+            if type_chunk == "message_stop" and not self._message_stop_line_seen:
+                self._record_message_stop()
 
             text = ""
             tool_use: ChatCompletionToolCallChunk | None = None
@@ -1580,6 +1590,8 @@ class ModelResponseIterator:
                         return result
                     # If None, continue loop to get more chunks for accumulation
                 else:
+                    if isinstance(str_line, str) and str_line.strip() == _MESSAGE_STOP_EVENT_LINE:
+                        self._record_message_stop()
                     return GenericStreamingChunk(
                         text="",
                         is_finished=False,
@@ -1629,6 +1641,8 @@ class ModelResponseIterator:
                         return result
                     # If None, continue loop to get more chunks for accumulation
                 else:
+                    if isinstance(str_line, str) and str_line.strip() == _MESSAGE_STOP_EVENT_LINE:
+                        self._record_message_stop()
                     return GenericStreamingChunk(
                         text="",
                         is_finished=False,
