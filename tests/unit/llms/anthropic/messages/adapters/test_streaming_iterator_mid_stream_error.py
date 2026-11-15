@@ -282,7 +282,7 @@ def _make_logging_obj(
     )
 
 
-async def _proxy_boundary_hook(exc: Exception) -> None:
+async def _proxy_boundary_hook(logging_obj: LiteLLMLoggingObj, exc: Exception) -> None:
     return None
 
 

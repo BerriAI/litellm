@@ -1384,7 +1384,11 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 yield chunk
 
     async def aclose(self) -> None:
-        await self._combined_chunk_splitter.aclose()
+        try:
+            await self._combined_chunk_splitter.aclose()
+        finally:
+            if self.litellm_logging_obj is not None:
+                self.litellm_logging_obj.on_detached_stream_failure = None
 
     async def async_anthropic_sse_wrapper(self) -> AsyncIterator[bytes]:
         """

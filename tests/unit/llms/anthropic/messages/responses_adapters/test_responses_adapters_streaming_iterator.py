@@ -707,11 +707,11 @@ class _FailureHookRecorder:
     def __init__(self) -> None:
         self.received: tuple[Exception, ...] = ()
 
-    async def __call__(self, failure: Exception) -> None:
+    async def __call__(self, logging_obj: LitellmLogging, failure: Exception) -> None:
         self.received = (*self.received, failure)
 
 
-def _logging_obj_with_failure_hook(on_failure: Callable[[Exception], Awaitable[None]]) -> LitellmLogging:
+def _logging_obj_with_failure_hook(on_failure: Callable[[LitellmLogging, Exception], Awaitable[None]]) -> LitellmLogging:
     logging_obj = LitellmLogging(
         model="m",
         messages=[{"role": "user", "content": "hi"}],
@@ -740,7 +740,7 @@ class _DeliveryCountingConsumer:
         self.delivered: tuple[dict[str, object], ...] = ()
         self.delivered_when_hook_fired: tuple[int, ...] = ()
 
-    async def hook(self, failure: Exception) -> None:
+    async def hook(self, logging_obj: LitellmLogging, failure: Exception) -> None:
         self.delivered_when_hook_fired = (*self.delivered_when_hook_fired, len(self.delivered))
 
     async def drain(self, wrapper: AnthropicResponsesStreamWrapper) -> None:
@@ -759,6 +759,31 @@ def _failing_after_one_delta() -> AsyncIterator[dict[str, object]]:
 
 
 class TestUpstreamFailureReachesTheProxyFailureHook:
+    def test_a_superseded_attempt_preserves_the_replacement_failure_report(self):
+        recorder: Final = _FailureHookRecorder()
+        logging_obj: Final = _logging_obj_with_failure_hook(recorder)
+
+        async def run() -> None:
+            superseded: Final = AnthropicResponsesStreamWrapper(
+                responses_stream=_failing_after_one_delta(), model="m", litellm_logging_obj=logging_obj
+            )
+            old_stream: Final = superseded.async_anthropic_sse_wrapper()
+            async for frame in old_stream:
+                if frame.startswith(b"event: error\n"):
+                    await aclose_superseded_attempt(old_stream)
+                    break
+            assert recorder.received == ()
+
+            replacement: Final = AnthropicResponsesStreamWrapper(
+                responses_stream=_failing_after_one_delta(), model="m", litellm_logging_obj=logging_obj
+            )
+            frames: Final = [frame async for frame in replacement.async_anthropic_sse_wrapper()]
+            assert frames[-1].startswith(b"event: error\n")
+            assert recorder.received == (replacement.stream_failure,)
+            assert logging_obj.on_detached_stream_failure is None
+
+        asyncio.run(run())
+
     def test_raised_upstream_failure_reaches_the_hook_unwrapped_once_the_error_event_was_consumed(self):
         rate_limit = litellm.RateLimitError(message="You have no credits remaining.", llm_provider="openai", model="m")
         wrapped = MidStreamFallbackError(
@@ -806,7 +831,7 @@ class TestUpstreamFailureReachesTheProxyFailureHook:
         assert "Rate limit reached for gpt-5.5, try again in 20s." in failure.message
 
     def test_a_raising_hook_never_hides_the_error_event_from_the_client(self):
-        async def _exploding_hook(failure: Exception) -> None:
+        async def _exploding_hook(logging_obj: LitellmLogging, failure: Exception) -> None:
             raise RuntimeError("spend writer is down")
 
         logging_obj = _logging_obj_with_failure_hook(_exploding_hook)
@@ -872,7 +897,7 @@ class TestUpstreamFailureReachesTheProxyFailureHook:
         hook_released = anyio.Event()
         finished: list[Exception] = []
 
-        async def _held_hook(failure: Exception) -> None:
+        async def _held_hook(logging_obj: LitellmLogging, failure: Exception) -> None:
             hook_started.set()
             await hook_released.wait()
             finished.append(failure)

@@ -109,6 +109,8 @@ def _call(gateway: Gateway, path: str, stream: bool) -> None:
     response: Final = gateway.request("POST", path, body)
     assert response.status_code == 200, response.text
     assert "Hi!" in response.text, response.text
+    if stream:
+        assert "event: message_stop" in response.text, response.text
 
 
 @pytest.mark.parametrize(

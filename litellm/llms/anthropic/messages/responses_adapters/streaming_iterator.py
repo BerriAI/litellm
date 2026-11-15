@@ -486,14 +486,14 @@ class AnthropicResponsesStreamWrapper:
         if failure is None:
             return
         self._unreported_failure = None
-        on_failure: Final[Callable[[Exception], Awaitable[None]] | None] = getattr(
+        on_failure: Final[Callable[[LiteLLMLoggingObject, Exception], Awaitable[None]] | None] = getattr(
             self.litellm_logging_obj, "_on_detached_stream_failure", None
         )
-        if on_failure is None:
+        if on_failure is None or self.litellm_logging_obj is None:
             return
         try:
             with anyio.CancelScope(shield=True):
-                await on_failure(failure)
+                await on_failure(self.litellm_logging_obj, failure)
         except Exception as hook_failure:  # noqa: BLE001  # a failing proxy hook must not hide the error event from the client
             verbose_logger.warning(
                 "AnthropicResponsesStreamWrapper: stream failure hook raised: %s(%s)",
@@ -608,7 +608,11 @@ class AnthropicResponsesStreamWrapper:
             from litellm.llms.anthropic.messages.native.streaming_iterator import closing_superseded_attempt
 
             if not closing_superseded_attempt():
-                await self._report_unreported_failure()
+                try:
+                    await self._report_unreported_failure()
+                finally:
+                    if self.litellm_logging_obj is not None:
+                        self.litellm_logging_obj.on_detached_stream_failure = None
 
     def partial_response_on_disconnect(self) -> "ResponseIncompleteEvent | None":
         return partial_responses_incomplete_event_on_disconnect(self.responses_stream)

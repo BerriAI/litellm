@@ -13525,7 +13525,7 @@ class TestDetachedStreamFailureHook:
         )
 
         failure = RuntimeError("upstream died after the client left")
-        await logging_obj.on_detached_stream_failure(failure)
+        await logging_obj.on_detached_stream_failure(logging_obj, failure)
 
         assert recorder.calls == [
             {
@@ -13535,6 +13535,46 @@ class TestDetachedStreamFailureHook:
                 "dispatched_call_type": "anthropic_messages",
             }
         ]
+
+    @pytest.mark.asyncio
+    async def test_detached_failure_reporting_preserves_the_live_request_logging_object(self):
+        from litellm.proxy._types import UserAPIKeyAuth as RealUserAPIKeyAuth
+
+        logging_obj: Final = self._logging_obj()
+        processing_obj: Final = ProxyBaseLLMRequestProcessing(
+            data={"litellm_logging_obj": logging_obj, "model": "original", "stream": True}
+        )
+        proxy_logging_obj: Final = ProxyLogging(user_api_key_cache=UserApiKeyCache())
+        processing_obj._arm_detached_stream_failure_hook(
+            logging_obj=logging_obj,
+            user_api_key_dict=RealUserAPIKeyAuth(api_key="sk-test"),
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+        await logging_obj.on_detached_stream_failure(logging_obj, RuntimeError("detached failure"))
+
+        assert processing_obj.data.get("litellm_logging_obj") is logging_obj
+
+    @pytest.mark.asyncio
+    async def test_detached_failure_hook_sees_request_fields_changed_after_arming(self):
+        from litellm.proxy._types import UserAPIKeyAuth as RealUserAPIKeyAuth
+
+        recorder: Final = _FailureHookRecorder()
+        logging_obj: Final = self._logging_obj()
+        processing_obj: Final = ProxyBaseLLMRequestProcessing(
+            data={"litellm_logging_obj": logging_obj, "model": "original"}
+        )
+        processing_obj._arm_detached_stream_failure_hook(
+            logging_obj=logging_obj,
+            user_api_key_dict=RealUserAPIKeyAuth(api_key="sk-test"),
+            proxy_logging_obj=self._proxy_logging_obj(recorder),
+        )
+        processing_obj.data.update(model="updated", added_after_arming="new")
+
+        await logging_obj.on_detached_stream_failure(logging_obj, RuntimeError("detached failure"))
+
+        assert recorder.calls[0]["request_data"]["model"] == "updated"
+        assert recorder.calls[0]["request_data"]["added_after_arming"] == "new"
 
     @pytest.mark.asyncio
     async def test_detached_failure_hook_drops_the_replacement_error_it_cannot_deliver(self):
@@ -13550,7 +13590,7 @@ class TestDetachedStreamFailureHook:
         )
         failure = RuntimeError("upstream died after the client left")
 
-        await logging_obj.on_detached_stream_failure(failure)
+        await logging_obj.on_detached_stream_failure(logging_obj, failure)
 
         assert [call["original_exception"] for call in recorder.calls] == [failure]
 
@@ -13593,7 +13633,7 @@ class TestDetachedStreamFailureHook:
         def iterator_hook_for(logging_obj):
             async def iterator_hook(**_kwargs):
                 yield b"event: message_start\n\n"
-                await logging_obj.on_detached_stream_failure(upstream_failure)
+                await logging_obj.on_detached_stream_failure(logging_obj, upstream_failure)
                 yield b"event: error\n\n"
                 yield b"event: message_stop\n\n"
                 if after_report is not None:
@@ -13602,6 +13642,36 @@ class TestDetachedStreamFailureHook:
             return iterator_hook
 
         return iterator_hook_for
+
+
+    @pytest.mark.asyncio
+    async def test_reported_detached_failure_frees_the_logging_object_without_a_gc_pass(self):
+        class FailureHookRecorder(_FailureHookRecorder):
+            async def post_call_failure_hook(self, **kwargs):
+                self.reported.set()
+
+        async def iterator_hook(**_kwargs):
+            yield b"event: message_start\n\n"
+            yield b"event: message_stop\n\n"
+
+        async def disconnect_and_report():
+            recorder: Final = FailureHookRecorder()
+            logging_obj, stream = self._armed_stream(recorder, lambda _logging_obj: iterator_hook)
+            reference: Final = weakref.ref(logging_obj)
+            await stream.__anext__()
+            await stream.aclose()
+            await logging_obj.on_detached_stream_failure(logging_obj, RuntimeError("detached failure"))
+            assert recorder.reported.is_set()
+            return reference
+
+        was_enabled: Final = gc.isenabled()
+        gc.disable()
+        try:
+            reference: Final = await asyncio.create_task(disconnect_and_report())
+            assert reference() is None
+        finally:
+            if was_enabled:
+                gc.enable()
 
     @pytest.mark.asyncio
     async def test_iterator_hook_failure_after_a_bridged_failure_is_the_one_the_failure_hook_gets(self):
@@ -13694,9 +13764,10 @@ class TestDetachedStreamFailureHook:
             yield b"event: message_start\n\n"
 
         logging_obj, stream = self._armed_stream(recorder, lambda _logging_obj: iterator_hook)
+        report: Final = logging_obj.on_detached_stream_failure
 
         frames = [frame async for frame in stream]
-        await logging_obj.on_detached_stream_failure(upstream_failure)
+        await report(logging_obj, upstream_failure)
 
         assert frames == ["data: chunk\n\n"]
         assert [call["original_exception"] for call in recorder.calls] == [upstream_failure]
@@ -13731,9 +13802,10 @@ class TestDetachedStreamFailureHook:
             raise hook_failure
 
         logging_obj, stream = self._armed_stream(recorder, lambda _logging_obj: iterator_hook)
+        report: Final = logging_obj.on_detached_stream_failure
 
         frames = [frame async for frame in stream]
-        await logging_obj.on_detached_stream_failure(upstream_failure)
+        await report(logging_obj, upstream_failure)
 
         assert frames == ["data: chunk\n\n", "data: error\n\n"]
         assert [call["original_exception"] for call in recorder.calls] == [hook_failure]
