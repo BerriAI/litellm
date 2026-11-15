@@ -897,3 +897,126 @@ async def test_an_isolated_retry_that_accepts_everything_applies_once_without_a_
     assert delivery_database.execute('SELECT delivery_id, state::text FROM "LiteLLM_SpendLogDelivery"').fetchall() == [
         ("oversized", "applied")
     ]
+
+
+async def _charge_reject(
+    transaction: LedgerTransaction, delivery: DeliveryProjection
+) -> "tuple[None, tuple[Contribution, ...]]":
+    await _charge(transaction, (delivery,))
+    return None, ((_rejected(_incompressible(6)),) if delivery.row["request_id"] == "oversized" else ())
+
+
+def _states(connection: psycopg.Connection[tuple[object, ...]]) -> list[tuple[object, ...]]:
+    return connection.execute(
+        'SELECT delivery_id, state::text, attempts FROM "LiteLLM_SpendLogDelivery" ORDER BY delivery_id'
+    ).fetchall()
+
+
+@pytest.mark.parametrize(
+    ("allowance", "applied_first", "pending_first"),
+    [
+        ((), ("a-first",), ("b-second", "oversized", "z-last")),
+        ((True,), ("a-first", "b-second"), ("oversized", "z-last")),
+    ],
+    ids=["exhausted-at-entry", "expires-after-first-subset"],
+)
+@pytest.mark.asyncio
+async def test_an_exhausted_recovery_budget_still_makes_progress_and_leaves_the_rest_untouched(
+    delivery_database: psycopg.Connection[tuple[object, ...]],
+    delivery_client: Prisma,
+    allowance: tuple[bool, ...],
+    applied_first: tuple[str, ...],
+    pending_first: tuple[str, ...],
+) -> None:
+    delivery_database.execute("CREATE TABLE indexed (value text PRIMARY KEY)")
+    _insert(delivery_database, tuple(_row(name) for name in ("a-first", "b-second", "oversized", "z-last")))
+    remaining: Final = iter(allowance)
+    repository: Final = AccountingDeliveryRepository(delivery_client)
+
+    bounded: Final = await repository.apply_pending(
+        _charge_then_index, isolate=_charge_reject, continue_splitting=lambda: next(remaining, False)
+    )
+
+    assert (bounded.applied, bounded.failed, bounded.repaired) == (len(applied_first), 0, ())
+    assert delivery_database.execute("SELECT spend FROM totals").fetchone() == (0.5 * len(applied_first),)
+    assert _states(delivery_database) == sorted(
+        [*((name, "applied", 0) for name in applied_first), *((name, "pending", 0) for name in pending_first)]
+    )
+
+    finished: Final = await repository.apply_pending(_charge_then_index, isolate=_charge_reject)
+
+    assert finished.applied == len(pending_first)
+    assert finished.repaired == ("oversized:index-repair",)
+    assert delivery_database.execute("SELECT spend FROM totals").fetchone() == (2.0,)
+    assert (await repository.apply_pending(_charge_then_index, isolate=_charge_reject)).applied == 0
+
+
+@pytest.mark.asyncio
+async def test_a_cancelled_split_still_reports_the_subset_it_already_committed(
+    delivery_database: psycopg.Connection[tuple[object, ...]], delivery_client: Prisma
+) -> None:
+    delivery_database.execute("CREATE TABLE indexed (value text PRIMARY KEY)")
+    _insert(delivery_database, tuple(_row(name) for name in ("a-first", "b-second", "oversized", "z-last")))
+    entered: Final = asyncio.Event()
+    hold: Final = asyncio.Event()
+    reported: Final[asyncio.Queue[tuple[str, ...]]] = asyncio.Queue()
+
+    async def gated(transaction: LedgerTransaction, rows: tuple[DeliveryProjection, ...]) -> tuple[str, ...]:
+        names: Final = tuple(str(row.row["request_id"]) for row in rows)
+        await _charge_then_index(transaction, rows)
+        if names == ("z-last",):
+            entered.set()
+            await hold.wait()
+        return names
+
+    async def isolate(
+        transaction: LedgerTransaction, delivery: DeliveryProjection
+    ) -> "tuple[tuple[str, ...], tuple[Contribution, ...]]":
+        await _charge(transaction, (delivery,))
+        return (str(delivery.row["request_id"]),), (_rejected(_incompressible(7)),)
+
+    async def on_commit(applied: tuple[str, ...], rejected: "tuple[Contribution, ...]") -> None:
+        await reported.put(applied)
+
+    repository: Final = AccountingDeliveryRepository(delivery_client)
+    task: Final = asyncio.create_task(repository.apply_pending(gated, isolate=isolate, on_commit=on_commit))
+    try:
+        await asyncio.wait_for(entered.wait(), timeout=10)
+    finally:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    assert [reported.get_nowait() for _ in range(reported.qsize())] == [("a-first", "b-second"), ("oversized",)]
+    assert delivery_database.execute("SELECT spend FROM totals").fetchone() == (1.5,)
+    assert _states(delivery_database) == [
+        ("a-first", "applied", 0),
+        ("b-second", "applied", 0),
+        ("oversized", "applied", 0),
+        ("oversized:index-repair", "parked", 1),
+        ("z-last", "pending", 0),
+    ]
+
+    restarted: Final = await repository.apply_pending(_charge_then_index, isolate=_charge_reject)
+
+    assert restarted.applied == 1
+    assert delivery_database.execute("SELECT spend FROM totals").fetchone() == (2.0,)
+
+
+@pytest.mark.asyncio
+async def test_a_failing_commit_notification_never_reapplies_the_committed_charge(
+    delivery_database: psycopg.Connection[tuple[object, ...]], delivery_client: Prisma
+) -> None:
+    _insert(delivery_database, (_row("notified"),))
+
+    async def failing(applied: None, rejected: "tuple[Contribution, ...]") -> None:
+        raise RuntimeError("cache invalidation failed")
+
+    repository: Final = AccountingDeliveryRepository(delivery_client)
+    with pytest.raises(RuntimeError, match="cache invalidation failed"):
+        await repository.apply_pending(_charge, on_commit=failing)
+
+    assert delivery_database.execute("SELECT spend FROM totals").fetchone() == (0.5,)
+    assert _states(delivery_database) == [("notified", "applied", 0)]
+    assert (await repository.apply_pending(_charge, on_commit=failing)).applied == 0
+    assert delivery_database.execute("SELECT spend FROM totals").fetchone() == (0.5,)

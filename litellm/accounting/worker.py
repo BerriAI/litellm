@@ -1,6 +1,5 @@
 import os
 import time
-from itertools import chain
 from typing import (
     TYPE_CHECKING,
     Final,
@@ -38,11 +37,11 @@ class _AccountingAlerts(Protocol):
 _JOB: Final = "accounting_delivery"
 
 
-def _filled(result: DeliveryBatchResult[object], batch_size: int) -> bool:
+def _filled(result: DeliveryBatchResult, batch_size: int) -> bool:
     return result.applied + len(result.parked) >= batch_size
 
 
-def _progressed(result: DeliveryBatchResult[object]) -> bool:
+def _progressed(result: DeliveryBatchResult) -> bool:
     return bool(result.applied or result.failed)
 
 
@@ -72,18 +71,23 @@ async def flush_accounting_deliveries(
     started: Final = time.monotonic()
     batch_size: Final = int(os.environ.get("LITELLM_ACCOUNTING_DELIVERY_BATCH_SIZE", "500"))
 
-    async def run_batch(*, retry_only: bool) -> DeliveryBatchResult[tuple[Contribution, ...]]:
+    async def committed(applied: tuple[Contribution, ...], rejected_here: tuple[Contribution, ...]) -> None:
         nonlocal rejected
-        result: Final = await repository.apply_pending(
-            apply, isolate=isolate, batch_size=batch_size, retry_only=retry_only
+        rejected = (*rejected, *rejected_here)  # rebind-ok: one repair alert per flush
+        await writer.invalidate_accounting_entities(applied, proxy_logging_obj)
+        await CustomerBudgetAlerting.detect_committed_batch(
+            entity_transactions(applied), prisma_client, proxy_logging_obj.internal_usage_cache.dual_cache
         )
-        committed: Final = tuple(chain.from_iterable(result.committed))
-        if committed:
-            await writer.invalidate_accounting_entities(committed, proxy_logging_obj)
-            await CustomerBudgetAlerting.detect_committed_batch(
-                entity_transactions(committed), prisma_client, proxy_logging_obj.internal_usage_cache.dual_cache
-            )
-        rejected = (*rejected, *result.rejected)  # rebind-ok: one repair alert per flush
+
+    async def run_batch(*, retry_only: bool, deadline: float) -> DeliveryBatchResult:
+        result: Final = await repository.apply_pending(
+            apply,
+            isolate=isolate,
+            on_commit=committed,
+            continue_splitting=lambda: time.monotonic() < deadline,
+            batch_size=batch_size,
+            retry_only=retry_only,
+        )
         if result.parked:
             verbose_proxy_logger.error(
                 "Accounting delivery parked %d requests after isolated failures", len(result.parked)
@@ -94,16 +98,23 @@ async def flush_accounting_deliveries(
             )
         return result
 
-    fresh_deadline: Final = time.monotonic() + 5
-    for _ in range(batch_size):
-        if not _filled(await run_batch(retry_only=False), batch_size) or time.monotonic() >= fresh_deadline:
-            break
-    retry_deadline: Final = time.monotonic() + 5
-    for _ in range(batch_size):
-        if time.monotonic() >= retry_deadline or not _progressed(await run_batch(retry_only=True)):
-            break
-    if rejected:
-        await _alert_repair(proxy_logging_obj, rejected)
+    try:
+        fresh_deadline: Final = time.monotonic() + 5
+        for _ in range(batch_size):
+            if (
+                not _filled(await run_batch(retry_only=False, deadline=fresh_deadline), batch_size)
+                or time.monotonic() >= fresh_deadline
+            ):
+                break
+        retry_deadline: Final = time.monotonic() + 5
+        for _ in range(batch_size):
+            if time.monotonic() >= retry_deadline or not _progressed(
+                await run_batch(retry_only=True, deadline=retry_deadline)
+            ):
+                break
+    finally:
+        if rejected:
+            await _alert_repair(proxy_logging_obj, rejected)
     acquired: Final = await writer.pod_lock_manager.acquire_lock(cronjob_id=_JOB, allow_reentrant=False)
     if acquired is False:
         return
