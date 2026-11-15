@@ -32,7 +32,7 @@ BUCKETS: Final = (
 )
 OTHER: Final = "other"
 MIN_SHARE: Final = 0.004
-MAX_DEPTH: Final = 60
+MAX_DEPTH: Final = 512
 
 _PROCESS: Final = re.compile(r'process \d+:"[^"]*";?')
 _LINE: Final = re.compile(r":\d+\)$")
