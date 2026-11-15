@@ -1,0 +1,121 @@
+import pytest
+from pydantic import JsonValue
+
+from litellm.router_utils.prompt_cache_observations.paths import classify_path
+from litellm.router_utils.prompt_cache_observations.types import (
+    ClientSurface,
+    ObservationPath,
+    ProviderFamily,
+    Runtime,
+    UnassessedReason,
+    WireShape,
+)
+from litellm.rust_bridge.catalog import Route
+from litellm.rust_bridge.response_metadata import mark_rust_response
+from litellm.types.utils import ModelResponse
+
+_BODY: dict[str, JsonValue] = {"messages": [{"role": "user", "content": "hi"}]}
+_BEDROCK_BASE = "https://bedrock-runtime.us-east-1.amazonaws.com/model/us.anthropic.claude-test-v1:0"
+
+
+def _classify(
+    provider: str = "anthropic",
+    model: str = "claude-test",
+    call_type: str = "acompletion",
+    api_base: str | None = None,
+    body: dict[str, JsonValue] = _BODY,
+    stream: bool = False,
+    response: object = None,
+) -> ObservationPath | UnassessedReason:
+    return classify_path(
+        provider=provider,
+        provider_model=model,
+        call_type=call_type,
+        api_base=api_base,
+        body=body,
+        stream=stream,
+        response=ModelResponse() if response is None else response,
+    )
+
+
+@pytest.mark.parametrize(
+    ("api_base", "wire"),
+    [
+        (f"{_BEDROCK_BASE}/converse", WireShape.BEDROCK_CONVERSE),
+        (f"{_BEDROCK_BASE}/converse-stream", WireShape.BEDROCK_CONVERSE),
+        (f"{_BEDROCK_BASE}/invoke", WireShape.ANTHROPIC_MESSAGES),
+        (f"{_BEDROCK_BASE}/invoke-with-response-stream", WireShape.ANTHROPIC_MESSAGES),
+    ],
+)
+def test_bedrock_wire_shape_follows_the_operation_actually_called(api_base: str, wire: WireShape) -> None:
+    assert _classify(provider="bedrock", model="us.anthropic.claude-test-v1:0", api_base=api_base) == ObservationPath(
+        provider=ProviderFamily.BEDROCK, wire=wire, surface=ClientSurface.CHAT, stream=False, runtime=Runtime.PYTHON
+    )
+
+
+_CONVERSE_COUNT = f"{_BEDROCK_BASE}/count-tokens"
+_DICT_RESPONSE = {"id": "msg"}
+
+
+@pytest.mark.parametrize(
+    ("provider", "model", "call_type", "api_base", "body", "response", "reason"),
+    [
+        ("openai", "gpt-test", "acompletion", None, _BODY, None, UnassessedReason.PROVIDER_OUT_OF_SCOPE),
+        ("azure_ai", "mistral-large", "acompletion", None, _BODY, None, UnassessedReason.MODEL_OUT_OF_SCOPE),
+        ("vertex_ai", "gemini-test", "acompletion", None, _BODY, None, UnassessedReason.MODEL_OUT_OF_SCOPE),
+        ("anthropic", "claude-test", "aembedding", None, _BODY, None, UnassessedReason.SURFACE_OUT_OF_SCOPE),
+        (
+            "bedrock",
+            "us.anthropic.claude-test-v1:0",
+            "acompletion",
+            _CONVERSE_COUNT,
+            _BODY,
+            None,
+            UnassessedReason.WIRE_SHAPE_UNRECOGNIZED,
+        ),
+        (
+            "vertex_ai",
+            "claude-test",
+            "acompletion",
+            None,
+            {"contents": []},
+            None,
+            UnassessedReason.WIRE_SHAPE_UNRECOGNIZED,
+        ),
+        (
+            "vertex_ai",
+            "claude-test",
+            "anthropic_messages",
+            None,
+            _BODY,
+            _DICT_RESPONSE,
+            UnassessedReason.RUNTIME_UNKNOWN,
+        ),
+    ],
+)
+def test_paths_that_cannot_be_classified_are_unassessed(
+    provider: str,
+    model: str,
+    call_type: str,
+    api_base: str | None,
+    body: dict[str, JsonValue],
+    response: object,
+    reason: UnassessedReason,
+) -> None:
+    assert _classify(provider, model, call_type, api_base, body, response=response) == reason
+
+
+@pytest.mark.parametrize(
+    ("provider", "call_type", "response", "runtime"),
+    [
+        ("anthropic", "acompletion", mark_rust_response(ModelResponse(), Route.CHAT_COMPLETIONS), Runtime.RUST),
+        ("anthropic", "acompletion", ModelResponse(), Runtime.PYTHON),
+        ("anthropic", "anthropic_messages", {"id": "msg"}, Runtime.RUST),
+        ("azure_ai", "anthropic_messages", {"id": "msg"}, Runtime.RUST),
+    ],
+)
+def test_runtime_is_rust_only_when_rust_served_the_call(
+    provider: str, call_type: str, response: object, runtime: Runtime
+) -> None:
+    path = _classify(provider=provider, call_type=call_type, response=response)
+    assert isinstance(path, ObservationPath) and path.runtime is runtime
