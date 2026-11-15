@@ -17300,25 +17300,6 @@ def _enrich_model_info_with_litellm_data(
     llm_router: Router | None = None,
     caller_aliases: CallerAliases = GLOBAL_ALIASES_ONLY,
 ) -> dict[str, Any]:
-    """The model row as configured, its currency-priced prices back in their source currency, enriched with
-    litellm model info (pricing, context window, etc.) and stripped of sensitive information."""
-    configured_params, configured_info = source_currency_view(
-        model.get("litellm_params") or {}, model.get("model_info") or {}
-    )
-    return _enrich_configured_model(
-        {**model, "litellm_params": dict(configured_params), "model_info": dict(configured_info)},
-        debug=debug,
-        llm_router=llm_router,
-        caller_aliases=caller_aliases,
-    )
-
-
-def _enrich_configured_model(
-    model: dict[str, Any],
-    debug: bool = False,
-    llm_router: Router | None = None,
-    caller_aliases: CallerAliases = GLOBAL_ALIASES_ONLY,
-) -> dict[str, Any]:
     """
     Enrich a model dictionary with litellm model info (pricing, context window, etc.)
     and remove sensitive information.
@@ -17332,19 +17313,23 @@ def _enrich_configured_model(
     Returns:
         Enriched model dictionary with sensitive info removed
     """
-    model_info: Final = model.get("model_info", {})
+    configured_params, configured_info = source_currency_view(
+        model.get("litellm_params") or {}, model.get("model_info") or {}
+    )
+    configured: Final = {**model, "litellm_params": dict(configured_params), "model_info": dict(configured_info)}
+    model_info: Final = configured["model_info"]
     if debug is True:
         _openai_client = "None"
         if llm_router is not None:
-            _openai_client = llm_router.registry().client(model, client_type="async") or "None"
+            _openai_client = llm_router.registry().client(configured, client_type="async") or "None"
         else:
             _openai_client = "llm_router_is_None"
         openai_client: Final = str(_openai_client)
-        model["openai_client"] = openai_client
+        configured["openai_client"] = openai_client
 
     # read litellm model_prices_and_context_window.json to get the following:
     # input_cost_per_token, output_cost_per_token, max_tokens
-    priced_as: Final = wildcard_row_priced_model(model, llm_router, caller_aliases)
+    priced_as: Final = wildcard_row_priced_model(configured, llm_router, caller_aliases)
     billed_model: Final = priced_as.model if isinstance(priced_as, OtherDeploymentsBill) else priced_as
     lookup_model_info: Final = (
         {k: v for k, v in model_info.items() if k != "base_model"}
@@ -17352,9 +17337,13 @@ def _enrich_configured_model(
         else model_info
     )
     priced_model: Final = (
-        {**model, "litellm_params": {**model["litellm_params"], "model": billed_model}, "model_info": lookup_model_info}
+        {
+            **configured,
+            "litellm_params": {**configured["litellm_params"], "model": billed_model},
+            "model_info": lookup_model_info,
+        }
         if isinstance(billed_model, str)
-        else model
+        else configured
     )
     priced_litellm_model: Final = priced_model.get("litellm_params", {}).get("model")
     litellm_model_info: Final[Mapping[str, object]] = (
@@ -17374,7 +17363,7 @@ def _enrich_configured_model(
     )
     unpriced: Final = cost_map_omits_token_price(model_info.get("id"), litellm_model_info.get("key"))
     stamped_model_info: Final = MappingProxyType(
-        {**model_info, **_pricing_override_stamps(model_info, model.get("litellm_params") or MappingProxyType({}))}
+        {**model_info, **_pricing_override_stamps(model_info, configured.get("litellm_params") or MappingProxyType({}))}
     )
     merged_model_info: Final = {
         **stamped_model_info,
@@ -17390,7 +17379,7 @@ def _enrich_configured_model(
             "supports_bedrock_native_structured_output_by_default"
         ),
     }
-    model["model_info"] = (
+    configured["model_info"] = (
         {**merged_model_info, "supports_native_structured_output": native_structured_output_support(native_output_info)}
         if "supports_native_structured_output" in merged_model_info
         and "supports_native_structured_output" not in stamped_model_info
@@ -17398,8 +17387,7 @@ def _enrich_configured_model(
     )
     # don't return the api key / vertex credentials
     # don't return the llm credentials
-    model = remove_sensitive_info_from_deployment(model, excluded_keys={"litellm_credential_name"})
-    return model
+    return remove_sensitive_info_from_deployment(configured, excluded_keys={"litellm_credential_name"})
 
 
 async def _get_caller_byok_team_scope(

@@ -1880,15 +1880,7 @@ describe("ModelInfoView", () => {
           tags: [],
           guardrails: [],
         },
-        model_info: {
-          id: "123",
-          created_by: "123",
-          created_at: "2024-01-01T00:00:00Z",
-          db_model: true,
-          input_cost_per_token: 0.00003,
-          output_cost_per_token: 0.00006,
-          access_groups: [],
-        },
+        model_info: { access_groups: [] },
       });
     });
 
@@ -2483,31 +2475,22 @@ describe("ModelInfoView", () => {
       return save(user);
     };
 
-    it.fails(
-      "leaves max_input_tokens off the wire when only the input cost is edited (expected to fail until the forms revamp, tri-state PATCH tracker)",
-      async () => {
-        const payload = await savePayloadAfterCostEditOnResolvedModel();
+    it("leaves max_input_tokens off the wire when only the input cost is edited", async () => {
+      const payload = await savePayloadAfterCostEditOnResolvedModel();
 
-        expect(payload.model_info).not.toHaveProperty("max_input_tokens");
-      },
-    );
+      expect(payload.model_info).not.toHaveProperty("max_input_tokens");
+    });
 
-    it.fails(
-      "leaves mode off the wire when only the input cost is edited (expected to fail until the forms revamp, tri-state PATCH tracker)",
-      async () => {
-        const payload = await savePayloadAfterCostEditOnResolvedModel();
+    it("leaves mode off the wire when only the input cost is edited", async () => {
+      const payload = await savePayloadAfterCostEditOnResolvedModel();
 
-        expect(payload.model_info).not.toHaveProperty("mode");
-      },
-    );
+      expect(payload.model_info).not.toHaveProperty("mode");
+    });
 
-    it.fails(
-      "leaves every supports_ capability off the wire when only the input cost is edited (expected to fail until the forms revamp, tri-state PATCH tracker)",
-      async () => {
-        const payload = await savePayloadAfterCostEditOnResolvedModel();
+    it("leaves every supports_ capability off the wire when only the input cost is edited", async () => {
+      const payload = await savePayloadAfterCostEditOnResolvedModel();
 
-        expect(Object.keys(payload.model_info).filter((key) => key.startsWith("supports_"))).toStrictEqual([]);
-      },
-    );
+      expect(Object.keys(payload.model_info).filter((key) => key.startsWith("supports_"))).toStrictEqual([]);
+    });
   });
 });

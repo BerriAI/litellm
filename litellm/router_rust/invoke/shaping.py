@@ -396,11 +396,21 @@ def _clientside_deployment(
 # --- the deployment --------------------------------------------------------------------------
 
 
-def _selected_pricing_snapshot(deployment: Mapping[str, object]) -> str | None:
+def _selected_pricing_snapshot(deployment: Mapping[str, object]) -> Mapping[str, object]:
+    """The metadata entry freezing the selected currency-priced deployment's prices for the call, else nothing."""
     from litellm.router_python_host import PythonHost
     from litellm.router_rust.surface.registry import selected_pricing_snapshot
 
-    return selected_pricing_snapshot(PythonHost(), deployment)
+    snapshot: Final = selected_pricing_snapshot(PythonHost(), deployment)
+    return MappingProxyType({} if snapshot is None else {PRICING_SNAPSHOT: snapshot})
+
+
+def _without_stale_pricing_snapshot(kwargs: Mapping[str, object], bucket: str) -> Mapping[str, object]:
+    """The other metadata bucket without a snapshot an earlier attempt left there, else nothing to change."""
+    stale: Final = kwargs.get(bucket)
+    if not isinstance(stale, Mapping) or PRICING_SNAPSHOT not in stale:
+        return MappingProxyType({})
+    return MappingProxyType({bucket: {key: value for key, value in as_dict(stale).items() if key != PRICING_SNAPSHOT}})
 
 
 def update_kwargs_with_deployment(
@@ -466,17 +476,10 @@ def update_kwargs_with_deployment(
             KUBERNETES_POD_ROUTING_KEY: routing,
         }
     )
-    pricing_snapshot: Final = _selected_pricing_snapshot(deployment)
-    if pricing_snapshot is None:
-        metadata.pop(PRICING_SNAPSHOT, None)
-    else:
-        metadata[PRICING_SNAPSHOT] = pricing_snapshot
+    metadata.pop(PRICING_SNAPSHOT, None)
+    metadata.update(_selected_pricing_snapshot(deployment))
     other_bucket: Final = "metadata" if metadata_variable_name == "litellm_metadata" else "litellm_metadata"
-    stale_snapshot_bucket: Final = kwargs.get(other_bucket)
-    if isinstance(stale_snapshot_bucket, Mapping) and PRICING_SNAPSHOT in stale_snapshot_bucket:
-        kwargs[other_bucket] = {  # rebind-ok: the request kwargs are shaped in place, as the Python router shapes them
-            key: value for key, value in as_dict(stale_snapshot_bucket).items() if key != PRICING_SNAPSHOT
-        }
+    kwargs.update(_without_stale_pricing_snapshot(kwargs, other_bucket))
     other_bucket_metadata: Final = kwargs.get(other_bucket)
     if isinstance(other_bucket_metadata, Mapping) and KUBERNETES_POD_ROUTING_KEY in other_bucket_metadata:
         kwargs[other_bucket] = {**as_dict(other_bucket_metadata), KUBERNETES_POD_ROUTING_KEY: routing}  # pyright: ignore[reportUnknownArgumentType]  # litellm's untyped helpers and request values  # rebind-ok: the request kwargs are shaped in place, as the Python router shapes them
