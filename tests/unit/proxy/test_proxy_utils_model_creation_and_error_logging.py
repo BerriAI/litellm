@@ -1373,6 +1373,7 @@ class TestPostCallFailureHookEstimatesDispatchedInputTokens:
 from typing import cast
 
 import litellm
+from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.proxy.utils import create_model_info_response
 from litellm.types.router import DeploymentModelListingInfo
 from litellm.types.utils import ModelInfo, ModelResponse, Usage
@@ -3299,3 +3300,80 @@ async def test_a_carried_partial_lifted_onto_a_priced_failure_keeps_the_failures
         {"azure_model_router_flat_cost": 0.00014, "mid_stream_partial_cost": 0.001}
     )
     assert (breakdown["total_cost"], row["spend"]) == pytest.approx((0.00414, 0.00414))
+
+
+_CONTINUATION_START: Final = real_datetime.datetime(2026, 1, 1)
+
+
+def _streamed_logging_carrying_a_partial(partial: Usage, partial_cost: float) -> Logging:
+    logging_obj: Final = Logging(
+        model="litellm-hook-rejected-continuation",
+        messages=ONE_USER_MESSAGE,
+        stream=True,
+        call_type="aresponses",
+        start_time=_CONTINUATION_START,
+        litellm_call_id="hook-rejected-continuation",
+        function_id="hook-rejected-continuation",
+    )
+    logging_obj.update_environment_variables(
+        model="litellm-hook-rejected-continuation",
+        user=None,
+        optional_params={},
+        litellm_params={"litellm_call_id": "hook-rejected-continuation", "metadata": {}},
+        custom_llm_provider="openai",
+    )
+    logging_obj.record_continued_partial(usage=partial, response_cost=partial_cost)
+    return logging_obj
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("disable_error_logs", [False, True], ids=["error_rows_written", "error_logs_disabled"])
+async def test_a_failure_hook_running_before_the_success_log_bills_a_carried_partial_once_across_written_rows(
+    monkeypatch, disable_error_logs
+):
+    from litellm.proxy import proxy_server
+    from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
+    from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
+    from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+
+    monkeypatch.setitem(proxy_server.general_settings, "disable_error_logs", disable_error_logs)
+    writer: Final = MagicMock(spec=DBSpendUpdateWriter)
+    writer.update_database = AsyncMock()
+    monkeypatch.setattr(litellm, "callbacks", [ProxyDBLogger(spend_writer=lambda: writer)])
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    partial: Final = Usage(prompt_tokens=40, completion_tokens=7, total_tokens=47)
+    logging_obj: Final = _streamed_logging_carrying_a_partial(partial, 0.001)
+    continuation: Final = ModelResponse(
+        model="litellm-hook-rejected-continuation",
+        choices=[{"index": 0, "message": {"role": "assistant", "content": "Hello"}, "finish_reason": "stop"}],
+        usage={"prompt_tokens": 5, "completion_tokens": 2, "total_tokens": 7},
+    )
+
+    await ProxyLogging(user_api_key_cache=DualCache()).post_call_failure_hook(
+        request_data={"litellm_logging_obj": logging_obj, "model": "gpt-4o", "metadata": {}},
+        original_exception=Exception("a post-call hook rejected the finished stream"),
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", request_route="/v1/responses"),
+    )
+    await logging_obj.async_success_handler(
+        result=continuation, start_time=_CONTINUATION_START, end_time=_CONTINUATION_START
+    )
+
+    failure_rows: Final = [
+        (
+            get_logging_payload(call.kwargs["kwargs"], {}, _CONTINUATION_START, _CONTINUATION_START),
+            call.kwargs["response_cost"],
+        )
+        for call in writer.update_database.call_args_list
+    ]
+    success_row: Final = get_logging_payload(
+        dict(logging_obj.model_call_details), continuation, _CONTINUATION_START, _CONTINUATION_START
+    )
+    success_partial_cost: Final = (
+        (logging_obj.cost_breakdown or {}).get("additional_costs", {}).get("mid_stream_partial_cost", 0.0)
+    )
+    assert len(failure_rows) == int(not disable_error_logs)
+    assert (
+        success_row["prompt_tokens"] + sum(row["prompt_tokens"] for row, _ in failure_rows),
+        success_row["completion_tokens"] + sum(row["completion_tokens"] for row, _ in failure_rows),
+        success_partial_cost + sum(cost for _, cost in failure_rows),
+    ) == pytest.approx((5 + partial.prompt_tokens, 2 + partial.completion_tokens, 0.001))

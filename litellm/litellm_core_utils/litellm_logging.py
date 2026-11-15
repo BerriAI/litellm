@@ -10,6 +10,7 @@ import os
 import re
 import subprocess
 import sys
+import threading
 import time
 import traceback
 from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping, Sequence
@@ -569,6 +570,23 @@ def _timestamp_seconds(moment: object) -> float | None:
     return None
 
 
+class _ContinuedPartial:
+    def __init__(self, usage: Usage, response_cost: float) -> None:
+        self.usage: Final = usage
+        self.response_cost: Final = response_cost
+        self._claim_lock: Final = threading.Lock()
+        self._billed_on: Literal["success", "failure"] | None = None
+
+    @property
+    def billed_on(self) -> Literal["success", "failure"] | None:
+        return self._billed_on
+
+    def claim(self, row: Literal["success", "failure"]) -> bool:
+        with self._claim_lock:
+            self._billed_on = self._billed_on or row
+            return self._billed_on == row
+
+
 class Logging(LiteLLMLoggingBaseClass):
     global \
         supabaseClient, \
@@ -782,8 +800,7 @@ class Logging(LiteLLMLoggingBaseClass):
         self.enqueue_deferred_logging: Callable[[], None] | None = None
         self._async_success_scheduled: bool = False
         self._async_success_enqueued: bool = False
-        self._continued_partial: tuple[Usage, float] | None = None
-        self._continued_partial_billed: bool = False
+        self._continued_partial: _ContinuedPartial | None = None
         self.on_detached_stream_failure: Callable[[Exception], Awaitable[None]] | None = None
         self.shadow_eval_request_snapshot: GuardrailRequestSnapshot | None = None
 
@@ -2318,15 +2335,22 @@ class Logging(LiteLLMLoggingBaseClass):
 
     def record_continued_partial(self, usage: Usage, response_cost: float) -> None:
         self.model_call_details.pop("combined_usage_object", None)
-        self._continued_partial = (usage, response_cost)
+        self._continued_partial = _ContinuedPartial(usage, response_cost)
 
     @property
     def continued_partial(self) -> tuple[Usage, float] | None:
-        return None if self._continued_partial_billed else self._continued_partial
+        partial: Final = self._continued_partial
+        return None if partial is None or partial.billed_on is not None else (partial.usage, partial.response_cost)
 
     @property
     def continued_partial_billed(self) -> bool:
-        return self._continued_partial_billed
+        return self._continued_partial is not None and self._continued_partial.billed_on == "success"
+
+    def claim_continued_partial(self, row: Literal["success", "failure"]) -> tuple[Usage, float] | None:
+        partial: Final = self._continued_partial
+        if partial is None or not partial.claim(row):
+            return None
+        return partial.usage, partial.response_cost
 
     def _add_continued_partial_spend(self, response: object) -> None:
         own_usage: Final = (
@@ -2335,13 +2359,15 @@ class Logging(LiteLLMLoggingBaseClass):
             else getattr(response, "usage", None)
         )
         own_cost: Final = self.model_call_details.get("response_cost")
-        if self._continued_partial is None or not isinstance(own_usage, Usage):
+        if not isinstance(own_usage, Usage):
             return
-        partial_usage, partial_cost = self._continued_partial
+        claimed: Final = self.claim_continued_partial("success")
+        if claimed is None:
+            return
+        partial_usage, partial_cost = claimed
         self.model_call_details["combined_usage_object"] = BaseTokenUsageProcessor.combine_usage_objects(
             usage_objects=[own_usage, partial_usage]
         )
-        self._continued_partial_billed = True
         prior_breakdown: Final = self.cost_breakdown or CostBreakdown()
         self.cost_breakdown = prior_breakdown | CostBreakdown(
             additional_costs={**prior_breakdown.get("additional_costs", {}), MID_STREAM_PARTIAL_COST_KEY: partial_cost}

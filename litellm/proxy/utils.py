@@ -1611,7 +1611,23 @@ def _proxy_only_error_log_fields(
     )
 
 
-def _failure_fields_to_lift(request_data: Mapping[str, object], provider_billed: bool = False) -> Mapping[str, object]:
+def error_spend_rows_tracked() -> bool:
+    from litellm.proxy.proxy_server import general_settings
+
+    return general_settings.get("disable_error_logs") is not True
+
+
+def _continued_partial_for_failure_row(logging_obj: object, writes_failure_row: bool) -> tuple[Usage, float] | None:
+    if not isinstance(logging_obj, Logging):
+        return None
+    if not writes_failure_row:
+        return logging_obj.continued_partial
+    return logging_obj.claim_continued_partial("failure")
+
+
+def _failure_fields_to_lift(
+    request_data: Mapping[str, object], provider_billed: bool = False, writes_failure_row: bool = True
+) -> Mapping[str, object]:
     """Failure-path callbacks run after ``litellm_logging_obj`` is popped from
     request_data (it is not serialisable), so the caller merges these fields
     onto request_data first: the request start and first-handoff instants for
@@ -1628,7 +1644,7 @@ def _failure_fields_to_lift(request_data: Mapping[str, object], provider_billed:
     _deployment_id: Final = _logging_obj.get_router_model_id() if isinstance(_logging_obj, Logging) else None
     _success_already_logged: Final = isinstance(_logging_obj, Logging) and _logging_obj.async_success_log_enqueued
     _billed: Final = provider_billed and not _success_already_logged
-    _continued_partial: Final = _logging_obj.continued_partial if isinstance(_logging_obj, Logging) else None
+    _continued_partial: Final = _continued_partial_for_failure_row(_logging_obj, writes_failure_row)
     _usage_to_lift: Final = _failure_usage_to_lift(
         model_call_details=_model_call_details,
         request_body=request_data,
@@ -3906,7 +3922,9 @@ class ProxyLogging:
 
         request_data.update(
             await offload_token_count(_failure_fields_to_lift)(
-                request_data, provider_billed=_provider_billed_the_failure(original_exception)
+                request_data,
+                provider_billed=_provider_billed_the_failure(original_exception),
+                writes_failure_row=error_spend_rows_tracked(),
             )
         )
 

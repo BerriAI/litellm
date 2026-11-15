@@ -59,7 +59,7 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (  # noqa: F401  #
     sanitize_error_information_for_spend_logs,
     should_store_prompts_and_responses_in_spend_logs,
 )
-from litellm.proxy.utils import BilledFailedAttempt, ProxyUpdateSpend
+from litellm.proxy.utils import BilledFailedAttempt, ProxyUpdateSpend, error_spend_rows_tracked
 from litellm.types.router import Deployment
 from litellm.types.utils import (
     CallTypes,
@@ -344,7 +344,7 @@ class _ProxyDBLogger(CustomLogger):
 
         request_route: Final = user_api_key_dict.request_route
         if (
-            ProxyDBLogger._should_track_errors_in_db() is False
+            not error_spend_rows_tracked()
             or request_route is not None
             and not (
                 RouteChecks.is_llm_api_route(route=request_route) or RouteChecks.is_info_route(route=request_route)
@@ -795,21 +795,6 @@ class _ProxyDBLogger(CustomLogger):
                     team_id,
                 )
         return metadata
-
-    @staticmethod
-    def _should_track_errors_in_db():
-        """
-        Returns True if errors should be tracked in the database
-
-        By default, errors are tracked in the database
-
-        If users want to disable error tracking, they can set the disable_error_logs flag in the general_settings
-        """
-        from litellm.proxy.proxy_server import general_settings
-
-        if general_settings.get("disable_error_logs") is True:
-            return False
-        return
 
 
 ProxyDBLogger: Final = _ProxyDBLogger
