@@ -1143,9 +1143,9 @@ class TestLiteLLMCompletionResponsesConfig:
         namespace: Final = "mcp__codex_apps__codex_document_control"
         member: Final = "_get_document_tool_schemas"
         with pytest.raises(
-            ValueError,
+            litellm.BadRequestError,
             match=f"Top-level function names conflict with flattened namespace tools: {namespace}__{member}",
-        ):
+        ) as exc_info:
             LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
                 tools=[
                     {"type": "function", "name": f"{namespace}__{member}", "parameters": {"type": "object"}},
@@ -1156,12 +1156,13 @@ class TestLiteLLMCompletionResponsesConfig:
                     },
                 ]
             )
+        assert exc_info.value.status_code == 400
 
     def test_transform_tools_rejects_a_namespace_member_named_like_another_members_shortened_name(self) -> None:
         namespace: Final = "mcp__codex_apps__codex_document_control"
         long_member: Final = "_get_document_tool_schemas"
         shortened: Final = chat_member_name(namespace, long_member)
-        with pytest.raises(ValueError, match=f"Flattened namespace tools share a name: {shortened}"):
+        with pytest.raises(litellm.BadRequestError, match=f"Flattened namespace tools share a name: {shortened}"):
             LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
                 tools=[
                     {
@@ -3349,7 +3350,7 @@ class TestToolTransformation:
         ]
 
         with pytest.raises(
-            ValueError,
+            litellm.BadRequestError,
             match="Top-level function names conflict with flattened namespace tools: admin__run",
         ):
             LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(tools=tools)
