@@ -15,6 +15,7 @@ ownership checks can reject low-privilege roles, and a self-revoke endpoint
 that takes no body cannot be aimed at other keys.
 """
 
+import os
 from datetime import datetime
 from typing import TYPE_CHECKING, Annotated, Final, cast
 
@@ -40,7 +41,7 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (  # noq
 from litellm.repositories.verification_token_repository import (
     VerificationTokenRepository,
 )
-from litellm.secret_managers.main import get_secret_bool
+from litellm.secret_managers.main import str_to_bool
 
 if TYPE_CHECKING:
     from prisma import types as prisma_types
@@ -67,9 +68,9 @@ async def revoke_ui_session_keys(
     ``keep_hashed_token`` (the caller's own session on a self-service password
     change; the other password-write paths revoke all).
 
-    ``only_older_than_kept`` spares sessions created after the kept one, and
-    revokes nothing once the kept one is gone, so of two overlapping sign-ins
-    the newer one survives.
+    ``only_older_than_kept`` spares sessions ranked after the kept one (by
+    creation time, then token), and revokes nothing once the kept one is gone,
+    so of two overlapping sign-ins exactly one survives.
 
     Best-effort: the password write this runs after has already committed, so a
     revocation failure is logged loudly rather than failing the request — the
@@ -91,10 +92,10 @@ async def revoke_ui_session_keys(
             "tuple[LiteLLM_VerificationToken, ...]",
             tuple(await VerificationTokenRepository(prisma_client).table.find_many(where=where_user_sessions)),
         )
-        kept_created_at: Final = next((row.created_at for row in rows if row.token == keep_hashed_token), None)
-        if only_older_than_kept and kept_created_at is None:
+        kept_rank: Final = next((_rank(row) for row in rows if row.token == keep_hashed_token), None)
+        if only_older_than_kept and kept_rank is None:
             return 0
-        cutoff: Final = kept_created_at if only_older_than_kept else None
+        cutoff: Final = kept_rank if only_older_than_kept else None
         revoked_rows: Final = tuple(row for row in rows if _is_revoked(row, keep_hashed_token, cutoff))
         if not revoked_rows:
             return 0
@@ -127,15 +128,24 @@ async def revoke_ui_session_keys(
         return 0
 
 
-def _is_revoked(row: LiteLLM_VerificationToken, keep_hashed_token: str | None, cutoff: datetime | None) -> bool:
+def _rank(row: LiteLLM_VerificationToken) -> tuple[datetime, str] | None:
+    return None if row.created_at is None or row.token is None else (row.created_at, row.token)
+
+
+def _is_revoked(
+    row: LiteLLM_VerificationToken, keep_hashed_token: str | None, cutoff: tuple[datetime, str] | None
+) -> bool:
     if row.token is None or row.token == keep_hashed_token:
         return False
-    return cutoff is None or (row.created_at is not None and row.created_at < cutoff)
+    if cutoff is None:
+        return True
+    rank: Final = _rank(row)
+    return rank is not None and rank < cutoff
 
 
 async def end_earlier_ui_sessions(user_id: str, new_key: str) -> None:
     """One session per user: once a sign-in has succeeded, end the user's sessions older than ``new_key``."""
-    if not get_secret_bool("LITELLM_UI_ALLOW_MULTIPLE_SESSIONS"):
+    if str_to_bool(os.getenv("LITELLM_UI_ALLOW_MULTIPLE_SESSIONS")) is not True:
         await revoke_ui_session_keys(
             user_id, UserAPIKeyAuth(user_id=user_id), keep_hashed_token=hash_token(new_key), only_older_than_kept=True
         )

@@ -13,11 +13,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import HTTPException, Request, Response
 
+import litellm
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
 from litellm.proxy._types import LiteLLM_VerificationToken, UserAPIKeyAuth, hash_token
 from litellm.proxy.auth.login_throttle import LoginThrottle
-from litellm.proxy.auth.login_utils import authenticate_user
+from litellm.proxy.auth.login_utils import authenticate_user, end_earlier_sessions
 from litellm.proxy.management_endpoints.session_endpoints import (
     end_earlier_ui_sessions,
     revoke_ui_session_keys,
@@ -25,6 +26,7 @@ from litellm.proxy.management_endpoints.session_endpoints import (
 )
 from litellm.proxy.management_endpoints.types import CustomOpenID
 from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
+from litellm.types.secret_managers.main import KeyManagementSettings, KeyManagementSystem
 
 HASHED_TOKEN = "hashed-session-token"
 USER_ID = "user-123"
@@ -396,13 +398,14 @@ async def _admin_login(table: _SessionKeyTable, monkeypatch: pytest.MonkeyPatch)
             "litellm.proxy.auth.login_utils.user_update", AsyncMock()
         ),  # test-quality-ok: the admin row write is the DB boundary
     ):
-        await authenticate_user(
+        signed_in = await authenticate_user(
             username="admin",
             password="admin-password",
             master_key="sk-master",
             prisma_client=None,
             throttle=_unlimited_throttle(),
         )
+    await end_earlier_sessions(signed_in)
 
 
 async def _password_login(table: _SessionKeyTable, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -423,7 +426,7 @@ async def _password_login(table: _SessionKeyTable, monkeypatch: pytest.MonkeyPat
             "litellm.proxy.auth.login_utils.generate_key_helper_fn", table.mint
         ),  # test-quality-ok: the key write is the DB boundary
     ):
-        await authenticate_user(
+        signed_in = await authenticate_user(
             username="u@example.com",
             password="right",
             master_key="sk-master",
@@ -431,6 +434,7 @@ async def _password_login(table: _SessionKeyTable, monkeypatch: pytest.MonkeyPat
             throttle=_unlimited_throttle(),
             general_settings={"password_policy_check_breached_passwords": False},
         )
+    await end_earlier_sessions(signed_in)
 
 
 async def _sso_login(
@@ -558,3 +562,38 @@ async def test_overlapping_sign_ins_keep_only_the_newer_session(
             await end_earlier_ui_sessions(USER_ID, new_key)
 
     assert table.tokens() == ["session-2"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("finishing_order", [("sk-a", "sk-b"), ("sk-b", "sk-a")])
+async def test_sign_ins_created_in_the_same_instant_keep_exactly_one_session(
+    finishing_order: tuple[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("LITELLM_UI_ALLOW_MULTIPLE_SESSIONS", raising=False)
+    table: Final = _SessionKeyTable()
+    table.add("a", hash_token("sk-a"), USER_ID, _FIRST_SIGN_IN)
+    table.add("b", hash_token("sk-b"), USER_ID, _FIRST_SIGN_IN)
+    survivor: Final = "a" if hash_token("sk-a") > hash_token("sk-b") else "b"
+
+    with _session_db(table):
+        for new_key in finishing_order:
+            await end_earlier_ui_sessions(USER_ID, new_key)
+
+    assert table.tokens() == [survivor]
+
+
+@pytest.mark.asyncio
+async def test_the_opt_out_is_read_from_the_environment_with_a_secret_manager_configured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LITELLM_UI_ALLOW_MULTIPLE_SESSIONS", "true")
+    monkeypatch.setattr(litellm, "secret_manager_client", SimpleNamespace(get_secret=lambda **_: None))
+    monkeypatch.setattr(litellm, "_key_management_settings", KeyManagementSettings())
+    monkeypatch.setattr(litellm, "_key_management_system", KeyManagementSystem.AWS_SECRET_MANAGER)
+    table: Final = _SessionKeyTable()
+
+    with _session_db(table):
+        await _password_login(table, monkeypatch)
+        await _password_login(table, monkeypatch)
+
+    assert table.tokens() == ["session-1", "session-2"]

@@ -208,6 +208,8 @@ class LoginResult:
     user_role: str
     login_method: Literal["sso", "username_password"]
     password_reset_required: bool
+    session_owner: str | None
+    session_key: str | None
 
     def __init__(
         self,
@@ -217,6 +219,8 @@ class LoginResult:
         user_role: str,
         login_method: Literal["sso", "username_password"] = "username_password",
         password_reset_required: bool = False,
+        session_owner: str | None = None,
+        session_key: str | None = None,
     ):
         self.user_id = user_id
         self.key = key
@@ -224,6 +228,14 @@ class LoginResult:
         self.user_role = user_role
         self.login_method = login_method
         self.password_reset_required = password_reset_required
+        self.session_owner = session_owner
+        self.session_key = session_key
+
+
+async def end_earlier_sessions(login_result: LoginResult) -> None:
+    """Each sign-in route calls this after its last step that can fail."""
+    if login_result.session_owner is not None and login_result.session_key is not None:
+        await end_earlier_ui_sessions(login_result.session_owner, login_result.session_key)
 
 
 async def authenticate_user(
@@ -399,7 +411,6 @@ async def _sign_in(
 
             key = ExperimentalUIJWTToken.get_experimental_ui_login_jwt_auth_token(user_info)
 
-        await end_earlier_ui_sessions(key_user_id, cast(str, response["token"]))  # cast-ok: the new raw key
         await attempt.succeeded()
 
         return LoginResult(
@@ -408,6 +419,8 @@ async def _sign_in(
             user_email=None,
             user_role=user_role,
             login_method="username_password",
+            session_owner=key_user_id,
+            session_key=cast(str, response["token"]),  # cast-ok: the new raw key
         )
 
     elif _user_row is not None:
@@ -464,7 +477,6 @@ async def _sign_in(
                 )
 
             key = response["token"]
-            await end_earlier_ui_sessions(user_id, cast(str, response["token"]))  # cast-ok: the new raw key
 
             await attempt.succeeded()
 
@@ -475,6 +487,8 @@ async def _sign_in(
                 user_role=cast(str, user_role),
                 login_method="username_password",
                 password_reset_required=password_reset_required,
+                session_owner=user_id,
+                session_key=cast(str, response["token"]),  # cast-ok: the new raw key
             )
         else:
             await attempt.failed()

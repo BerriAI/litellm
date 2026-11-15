@@ -10,13 +10,16 @@ Routes covered:
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from collections.abc import Callable
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
+
+from litellm.proxy._types import LiteLLM_VerificationToken, hash_token
 
 from .conftest import normalize
 
@@ -36,12 +39,11 @@ def _install_login_mocks(monkeypatch, raise_on_auth: bool = False) -> None:
     async def _fake_auth(username, password, master_key, prisma_client, throttle=None, general_settings=None):
         if raise_on_auth:
             raise Exception("boom-auth-failure")
-        fake = MagicMock()
-        fake.user_id = "u-1"
-        fake.user_email = "test@example.invalid"
-        fake.user_role = "proxy_admin"
-        fake.key = "sk-fake-ui-key"
-        return fake
+        from litellm.proxy.auth.login_utils import LoginResult
+
+        return LoginResult(
+            user_id="u-1", key="sk-fake-ui-key", user_email="test@example.invalid", user_role="proxy_admin"
+        )
 
     def _fake_token_object(login_result, general_settings, premium_user):
         return {
@@ -728,3 +730,109 @@ def test_sign_in_succeeds_again_once_the_block_is_cleared(client, monkeypatch, r
 
     reset_login_throttle()
     assert _json_login(client, "/v2/login") == 401
+
+
+class _SessionRows:
+    """In-memory dashboard session rows: ``mint`` stands in for the key write, the rest for the token table."""
+
+    def __init__(self) -> None:
+        self.rows: list[LiteLLM_VerificationToken] = []
+        self.raw_keys: dict[str, str] = {}
+
+    async def mint(self, **key_fields: object) -> dict[str, object]:
+        raw_key: Final = f"sk-session-{len(self.raw_keys) + 1}"
+        user_id: Final = str(key_fields["user_id"])
+        self.raw_keys[hash_token(raw_key)] = raw_key
+        self.rows.append(
+            LiteLLM_VerificationToken(
+                token=hash_token(raw_key),
+                user_id=user_id,
+                team_id=str(key_fields["team_id"]),
+                created_at=datetime(2026, 1, 1, tzinfo=timezone.utc) + timedelta(seconds=len(self.raw_keys)),
+            )
+        )
+        return {"token": raw_key, "user_id": user_id}
+
+    async def find_many(self, where: dict[str, object]) -> list[LiteLLM_VerificationToken]:
+        return [row for row in self.rows if row.user_id == where["user_id"] and row.team_id == where["team_id"]]
+
+    async def delete_many(self, where: dict[str, dict[str, list[str]]]) -> int:
+        ended: Final = set(where["token"]["in"])
+        self.rows = [row for row in self.rows if row.token not in ended]
+        return len(ended)
+
+    def names(self) -> list[str]:
+        return [self.raw_keys[str(row.token)] for row in self.rows]
+
+
+def _admin_sign_in_against(monkeypatch: pytest.MonkeyPatch, rows: _SessionRows, **settings: object) -> None:
+    """The real sign-in routes for the UI_USERNAME admin, with the key write and token table faked."""
+    from litellm.proxy import proxy_server as ps
+
+    _install_real_auth(monkeypatch, **settings)
+    monkeypatch.delenv("LITELLM_UI_ALLOW_MULTIPLE_SESSIONS", raising=False)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://stub")
+    db: Final = SimpleNamespace(
+        litellm_verificationtoken=rows,
+        litellm_usertable=SimpleNamespace(find_first=AsyncMock(return_value=None)),
+        litellm_deletedverificationtoken=SimpleNamespace(create_many=AsyncMock()),
+    )
+    monkeypatch.setattr(ps, "prisma_client", SimpleNamespace(db=db))
+    monkeypatch.setattr(ps, "proxy_logging_obj", None)
+    monkeypatch.setattr(ps, "redis_usage_cache", None)
+    monkeypatch.setattr("litellm.proxy.auth.login_utils.generate_key_helper_fn", rows.mint)
+    monkeypatch.setattr("litellm.proxy.auth.login_utils.user_update", AsyncMock())
+
+
+def _form_sign_in(client: TestClient) -> int:
+    return _form_login(client, password="right-password")
+
+
+def _v2_sign_in(client: TestClient) -> int:
+    return _json_login(client, "/v2/login", password="right-password")
+
+
+def _v3_sign_in(client: TestClient) -> int:
+    return _json_login(client, "/v3/login", password="right-password")
+
+
+@pytest.mark.parametrize(
+    ("sign_in", "settings", "status"),
+    [
+        pytest.param(_form_sign_in, {}, 303, id="login-form"),
+        pytest.param(_v2_sign_in, {}, 200, id="v2-login"),
+        pytest.param(_v3_sign_in, {"control_plane_url": "https://cp.example.invalid"}, 200, id="v3-login"),
+    ],
+)
+def test_signing_in_again_ends_the_earlier_session(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    reset_login_throttle: None,
+    sign_in: Callable[[TestClient], int],
+    settings: dict[str, object],
+    status: int,
+) -> None:
+    rows: Final = _SessionRows()
+    _admin_sign_in_against(monkeypatch, rows, **settings)
+
+    statuses: Final = (sign_in(client), sign_in(client))
+
+    assert statuses == (status, status)
+    assert rows.names() == ["sk-session-2"]
+
+
+def test_a_v3_login_whose_code_cannot_be_stored_keeps_the_earlier_session(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, reset_login_throttle: None
+) -> None:
+    from litellm.proxy import proxy_server as ps
+
+    rows: Final = _SessionRows()
+    _admin_sign_in_against(monkeypatch, rows, control_plane_url="https://cp.example.invalid")
+    first: Final = _v3_sign_in(client)
+    failing_cache: Final = SimpleNamespace(async_set_cache=AsyncMock(side_effect=RuntimeError("cache unavailable")))
+    monkeypatch.setattr(ps, "user_api_key_cache", failing_cache)
+
+    second: Final = _v3_sign_in(client)
+
+    assert (first, second) == (200, 500)
+    assert rows.names() == ["sk-session-1", "sk-session-2"]
