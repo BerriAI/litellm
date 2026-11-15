@@ -1029,6 +1029,7 @@ async def get_all_team_memberships(
     if user_id is not None:
         where_obj["user_id"] = {"in": [user_id]}
     elif user_ids is not None:
+        # bounded-ok: the only caller passes one members-list page, capped at 100 by TEAM_MEMBERS_LIST_SPEC
         where_obj["user_id"] = {"in": list(user_ids)}
     # if user_id is None:
     #     where_obj = {"team_id": {"in": team_id}}

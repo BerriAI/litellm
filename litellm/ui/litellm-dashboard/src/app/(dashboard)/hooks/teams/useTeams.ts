@@ -172,7 +172,7 @@ export const useTeam = (teamId?: string) => {
         throw new Error("Missing auth or teamId");
       }
 
-      const { team_info } = (await teamInfoCall(accessToken, teamId, { includeMembers: false })) as {
+      const { team_info } = (await teamInfoCall(accessToken, teamId, { includeMembers: false, keyLimit: 1 })) as {
         team_info: Team;
       };
       return team_info;

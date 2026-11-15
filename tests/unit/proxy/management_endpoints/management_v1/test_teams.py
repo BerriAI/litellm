@@ -929,3 +929,121 @@ async def test_the_members_list_binds_the_team_and_every_caller_value_and_pages_
             "budget_source": "team_default",
         }
     ]
+
+
+class _RosterDb:
+    """The team, membership and budget tables plus the roster rows the members-list SQL would return."""
+
+    def __init__(self, tables: _Db, roster: Sequence[Mapping[str, object]]) -> None:
+        self.litellm_teamtable = tables.litellm_teamtable
+        self.litellm_budgettable = tables.litellm_budgettable
+        self.litellm_teammembership = tables.litellm_teammembership
+        self._roster = roster
+
+    async def query_raw(self, sql: str, *params: object) -> Sequence[Mapping[str, object]]:
+        return [{"count": len(self._roster)}] if "COUNT(" in sql else self._roster
+
+
+class _RosterPrisma:
+    def __init__(self, tables: _FakePrisma, roster: Sequence[Mapping[str, object]]) -> None:
+        self.db = _RosterDb(tables.db, roster)
+
+
+MEMBERS_PATH: Final = f"{MANAGEMENT_V1_PREFIX}/teams/{TEAM_ID}/members"
+
+
+def _roster_row(user_id: str | None) -> Mapping[str, object]:
+    return {"user_id": user_id, "user_email": f"{user_id}@example.com", "user_alias": None, "role": "user"}
+
+
+@pytest.fixture
+def roster_prisma(monkeypatch):
+    tables: Final = _FakePrisma(
+        teams=[_team("own-budget", "on-default", "no-membership", default_budget_id="team-default")],
+        memberships=[
+            _MembershipRow(user_id="own-budget", team_id=TEAM_ID, budget_id="priv", spend=2.0, total_spend=5.0),
+            _MembershipRow(user_id="on-default", team_id=TEAM_ID, budget_id="team-default", spend=3.0),
+            _MembershipRow(user_id="own-budget", team_id="another-team", budget_id="team-default", spend=99.0),
+        ],
+        budgets=[_budget("priv", max_budget=7.0), _budget("team-default", max_budget=1.0)],
+    )
+    fake: Final = _RosterPrisma(tables, [_roster_row("own-budget"), _roster_row("on-default"), _roster_row(None)])
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", fake)
+    return fake
+
+
+def test_each_listed_member_carries_their_own_membership_spend_budget_and_budget_source(roster_prisma, as_proxy_admin):
+    response: Final = client.get(MEMBERS_PATH)
+
+    assert response.status_code == 200, response.text
+    assert response.json()["meta"]["total_count"] == 3
+    assert [
+        (
+            row["user_id"],
+            row["team_id"],
+            row["spend"],
+            row["total_spend"],
+            row["budget_id"],
+            (row["litellm_budget_table"] or {}).get("max_budget"),
+            row["budget_source"],
+        )
+        for row in response.json()["data"]
+    ] == [
+        ("own-budget", TEAM_ID, 2.0, 5.0, "priv", 7.0, "custom"),
+        ("on-default", TEAM_ID, 3.0, 3.0, "team-default", 1.0, "team_default"),
+        (None, TEAM_ID, 0.0, 0.0, None, None, "team_default"),
+    ]
+
+
+def test_a_team_whose_default_budget_row_is_gone_lists_members_without_one_as_having_no_budget(
+    monkeypatch, as_proxy_admin
+):
+    tables: Final = _FakePrisma(teams=[_team("m1", default_budget_id="deleted-budget")])
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", _RosterPrisma(tables, [_roster_row("m1")]))
+
+    response: Final = client.get(MEMBERS_PATH)
+
+    assert response.status_code == 200, response.text
+    assert [
+        (row["user_id"], row["spend"], row["budget_id"], row["budget_source"]) for row in response.json()["data"]
+    ] == [("m1", 0.0, None, "none")]
+
+
+def test_listing_the_members_of_an_unknown_team_is_a_404_problem_document(roster_prisma, as_proxy_admin):
+    response: Final = client.get(f"{MANAGEMENT_V1_PREFIX}/teams/nope/members")
+
+    assert response.status_code == 404
+    assert response.headers["content-type"] == "application/problem+json"
+    assert response.json()["type"] == "urn:litellm:error:team-not-found"
+
+
+def test_a_caller_who_cannot_read_the_team_is_a_403_problem_document_and_sees_no_member(roster_prisma, as_outsider):
+    response: Final = client.get(MEMBERS_PATH)
+
+    assert response.status_code == 403
+    assert response.headers["content-type"] == "application/problem+json"
+    assert response.json()["type"] == "urn:litellm:error:forbidden"
+    assert "own-budget" not in response.text
+
+
+def test_listing_members_without_a_database_is_a_503_problem_document(monkeypatch, as_proxy_admin):
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+
+    response: Final = client.get(MEMBERS_PATH)
+
+    assert response.status_code == 503
+    assert response.headers["content-type"] == "application/problem+json"
+    assert response.json()["type"] == "urn:litellm:error:database-not-connected"
+
+
+def test_a_driver_error_while_listing_members_is_a_500_problem_document_without_the_exception(
+    monkeypatch, as_proxy_admin
+):
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", _UnreachablePrisma())
+
+    response: Final = client.get(MEMBERS_PATH)
+
+    assert response.status_code == 500
+    assert response.headers["content-type"] == "application/problem+json"
+    assert response.json()["type"] == "urn:litellm:error:internal-server-error"
+    assert "connection reset by peer" not in response.text

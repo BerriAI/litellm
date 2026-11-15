@@ -353,7 +353,7 @@ describe("useTeam", () => {
 
     expect(result.current.data).toEqual(mockTeams[0]);
     expect(result.current.error).toBeNull();
-    expect(teamInfoCall).toHaveBeenCalledWith("test-access-token", "team-1", { includeMembers: false });
+    expect(teamInfoCall).toHaveBeenCalledWith("test-access-token", "team-1", { includeMembers: false, keyLimit: 1 });
     expect(teamInfoCall).toHaveBeenCalledTimes(1);
   });
 
@@ -374,7 +374,7 @@ describe("useTeam", () => {
 
     expect(result.current.error).toEqual(testError);
     expect(result.current.data).toBeUndefined();
-    expect(teamInfoCall).toHaveBeenCalledWith("test-access-token", "team-1", { includeMembers: false });
+    expect(teamInfoCall).toHaveBeenCalledWith("test-access-token", "team-1", { includeMembers: false, keyLimit: 1 });
     expect(teamInfoCall).toHaveBeenCalledTimes(1);
   });
 
