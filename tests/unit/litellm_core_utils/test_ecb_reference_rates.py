@@ -8,6 +8,7 @@ import pytest
 
 from litellm.litellm_core_utils.ecb_reference_rates import (
     ECB_DAILY_RATES_URL,
+    ECB_FETCH_TIMEOUT_SECONDS,
     ECB_MAX_FEED_BYTES,
     EcbFeedRejected,
     EcbFetchFailed,
@@ -139,6 +140,60 @@ async def test_fetch_failures_are_values_without_error_details(
 
 def _no_request_allowed(request: httpx.Request) -> httpx.Response:
     raise AssertionError(f"offline mode sent {request.method} {request.url}")
+
+
+class _SkippableClockLoop(asyncio.SelectorEventLoop):
+    def __init__(self) -> None:
+        self.skipped_seconds = 0.0
+        super().__init__()
+
+    def time(self) -> float:
+        return super().time() + self.skipped_seconds
+
+    def skip(self, seconds: float) -> None:
+        self.skipped_seconds += seconds
+
+
+class _StalledGet:
+    def __init__(self) -> None:
+        self.entered = asyncio.Event()
+        self.cancelled = asyncio.Event()
+        self.released = asyncio.Event()
+
+    async def get(self, url: str, *, timeout: float, max_response_bytes: int) -> httpx.Response:
+        self.entered.set()
+        try:
+            await self.released.wait()
+        except asyncio.CancelledError:
+            self.cancelled.set()
+            raise
+        return httpx.Response(200, content=_feed())
+
+
+def test_stalled_fetch_is_cancelled_at_the_overall_deadline(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("LITELLM_OFFLINE_MODE", raising=False)
+    loop: Final = _SkippableClockLoop()
+
+    async def fetch_past_the_deadline() -> tuple[bytes | EcbFetchFailed, bool]:
+        http: Final = _StalledGet()
+        fetch: Final = asyncio.create_task(fetch_ecb_daily_feed(http))
+        try:
+            await asyncio.wait_for(http.entered.wait(), DEADLOCK_GUARD_SECONDS)
+            loop.skip(ECB_FETCH_TIMEOUT_SECONDS + 1)
+            result: Final = await asyncio.wait_for(asyncio.shield(fetch), DEADLOCK_GUARD_SECONDS)
+            return result, http.cancelled.is_set()
+        finally:
+            http.released.set()
+            fetch.cancel()
+            await asyncio.gather(fetch, return_exceptions=True)
+
+    try:
+        result, get_was_cancelled = loop.run_until_complete(fetch_past_the_deadline())
+    finally:
+        loop.close()
+
+    assert result == EcbFetchFailed("TimeoutError")
+    assert get_was_cancelled
 
 
 async def test_fetch_in_offline_mode_sends_no_request(monkeypatch: pytest.MonkeyPatch) -> None:
