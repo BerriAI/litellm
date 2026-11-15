@@ -972,6 +972,8 @@ def _pkce_login(base_url: str, config_claude: bool, vault: SecretVault, team: st
         click.echo(f"Authentication failed: {credential.reason}")
         return
     stored: Final = _replace_stored_token(pkce_token_record(base_url, credential), http, vault)
+    if team:
+        click.echo(f"Requested team '{team}'. This login is for team ID '{credential.team_id}'.")
     _finish_login(base_url, credential.access_token, config_claude, stored, renews=True)
 
 

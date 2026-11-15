@@ -1874,6 +1874,23 @@ class TestPkceLoginCommand:
         self.runner = CliRunner()
         _FakeSession.instances.clear()
 
+    @pytest.mark.parametrize(
+        ("args", "named"),
+        [(["--pkce", "--team", "Team A"], True), (["--pkce"], False)],
+        ids=["team-requested", "no-team-requested"],
+    )
+    def test_pkce_login_names_the_granted_team_when_a_team_was_requested(self, args, named):
+        with (
+            patch("litellm.proxy.client.cli.commands.auth.run_pkce_login", return_value=_pkce_credential()),
+            patch("litellm.proxy.client.cli.commands.auth.load_token", return_value=None),
+            patch("litellm.proxy.client.cli.commands.auth.save_token", return_value=SecretStored()),
+            patch("litellm.proxy.client.cli.interface.show_commands"),
+        ):
+            result = self.runner.invoke(login, args, obj={"base_url": PKCE_BASE_URL})
+
+        assert result.exit_code == 0, result.output
+        assert ("Requested team 'Team A'. This login is for team ID 'team-b'." in result.output) is named
+
     def test_pkce_login_saves_the_new_record_then_revokes_the_refresh_token_it_replaced(self):
         posts_when_saved = []
 
