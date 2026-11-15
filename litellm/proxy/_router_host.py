@@ -45,6 +45,18 @@ class ProxyRouterHost(RouterHost):
             llm_router=llm_router,
         )
 
+    def authorize_routed_model(
+        self,
+        model: str,
+        request_kwargs: Mapping[str, object],
+        llm_router: "Router",
+    ) -> None:
+        from litellm.proxy.auth import auto_router_checks
+
+        auto_router_checks.ensure_key_may_call_routed_model(
+            model=model, request_kwargs=request_kwargs, llm_router=llm_router
+        )
+
     def compression_policy(
         self,
         llm_router: "Router | None",

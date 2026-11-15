@@ -225,6 +225,27 @@ def test_a_key_alias_to_a_router_alias_cannot_reach_a_disallowed_model(gateway: 
         _assert_denied(gateway, key, {"model": key_alias}, key_alias)
 
 
+def test_a_complexity_router_cannot_send_a_key_to_a_disallowed_tier(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        keyword: Final = f"simple-{uuid.uuid4().hex}"
+        tier_upstream: Final = f"tier-{uuid.uuid4().hex[:8]}"
+        disallowed: Final = scenario.model(model=f"openai/{tier_upstream}")
+        other_tier: Final = scenario.model()
+        router: Final = scenario.model(
+            model="auto_router/complexity_router",
+            complexity_router_config={
+                "classifier_type": "heuristic",
+                "keyword_tier_rules": [{"keywords": [keyword], "tier": "SIMPLE"}],
+                "tiers": {"SIMPLE": disallowed, "MEDIUM": other_tier, "COMPLEX": other_tier, "REASONING": other_tier},
+            },
+        )
+        body: Final[dict[str, JsonValue]] = {"model": router, "messages": [{"role": "user", "content": keyword}]}
+        served: Final = _chat(gateway, scenario.key(), body)
+        assert served.status_code == 200, f"{served.status_code} {served.text}"
+        assert tier_upstream in _observed_models(gateway)
+        _assert_denied(gateway, scenario.key(disallowed_models=[disallowed]), body, disallowed)
+
+
 def _deleted_disallowed_models(keys: tuple[str, ...]) -> list[dict[str, JsonValue]]:
     return read_rows(
         'SELECT disallowed_models FROM "LiteLLM_DeletedVerificationToken" WHERE token = ANY(%s) ORDER BY key_alias',

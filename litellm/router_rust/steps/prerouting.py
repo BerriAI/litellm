@@ -921,6 +921,12 @@ class PreRouter:
             call_type=call_type,
         )
         hooked: Final[PreRoutingHookResponse | None] = routed
+        if routed is not None:
+            router_host().authorize_routed_model(
+                model=routed.model,
+                request_kwargs=request_kwargs,
+                llm_router=public_router,  # pyright: ignore[reportArgumentType]  # the litellm.Router this core serves
+            )
         traced: Final = (
             hooked.model_copy(update={"routing_decision": {**provenance, **hooked.routing_decision}})
             if hooked is not None and hooked.routing_decision is not None

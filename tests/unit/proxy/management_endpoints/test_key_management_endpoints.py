@@ -2144,6 +2144,66 @@ async def test_update_key_keeps_a_due_budget_reset_when_the_duration_is_resent(
 
 
 @pytest.mark.asyncio
+async def test_update_key_with_null_disallowed_models_clears_the_stored_deny_list() -> None:
+    existing_key: Final = LiteLLM_VerificationToken(token="hashed", disallowed_models=("claude-*",))
+
+    updated: Final = await prepare_key_update_data(
+        data=UpdateKeyRequest(key="sk-1", disallowed_models=None), existing_key_row=existing_key
+    )
+
+    assert updated["disallowed_models"] == []
+
+
+_DENY_LIST_TEAM: Final = LiteLLM_TeamTableCachedObj(
+    team_id="team-1",
+    members_with_roles=[Member(user_id="team-admin", role="admin"), Member(user_id="member", role="user")],
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("caller_id", "key_team_id", "requested", "allowed"),
+    [
+        ("team-admin", "team-1", ["claude-*"], True),
+        ("member", "team-1", ["claude-*"], False),
+        ("member", None, ["claude-*"], False),
+        ("member", "team-1", ["claude-*", "gpt-denied", "another"], True),
+    ],
+    ids=["team-admin-removes", "team-member-removes", "no-team-removes", "team-member-only-adds"],
+)
+async def test_only_admins_of_the_keys_team_may_remove_disallowed_models(
+    monkeypatch: pytest.MonkeyPatch, caller_id: str, key_team_id: str | None, requested: list[str], allowed: bool
+) -> None:
+    from litellm.proxy.management_endpoints.key_management_endpoints import check_disallowed_models_caller_permission
+
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.get_team_object",
+        AsyncMock(return_value=_DENY_LIST_TEAM),
+    )
+
+    async def check() -> None:
+        await check_disallowed_models_caller_permission(
+            data=UpdateKeyRequest(key="sk-1", disallowed_models=requested),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.INTERNAL_USER, api_key="sk-caller", user_id=caller_id
+            ),
+            existing_key_row=LiteLLM_VerificationToken(
+                token="hashed", team_id=key_team_id, disallowed_models=("claude-*", "gpt-denied")
+            ),
+            prisma_client=MagicMock(),
+            user_api_key_cache=MagicMock(),
+        )
+
+    if allowed:
+        await check()
+        return
+    with pytest.raises(HTTPException) as refused:
+        await check()
+    assert refused.value.status_code == 403
+    assert "gpt-denied" in str(refused.value.detail)
+
+
+@pytest.mark.asyncio
 async def test_update_key_clears_end_user_budget_id_with_empty_string():
     """Sending an empty end_user_budget_id detaches the key default without touching any budget row,
     so auth falls back to the proxy-wide default for that key's customers."""
