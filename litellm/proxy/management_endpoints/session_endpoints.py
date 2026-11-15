@@ -30,7 +30,6 @@ from litellm.proxy._types import (
     LiteLLM_VerificationToken,
     SessionLogoutResponse,
     UserAPIKeyAuth,
-    hash_token,
 )
 from litellm.proxy.auth.auth_checks import delete_cache_key_objects
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -143,11 +142,11 @@ def _is_revoked(
     return rank is not None and rank < cutoff
 
 
-async def end_earlier_ui_sessions(user_id: str, new_key: str) -> None:
-    """One session per user: once a sign-in has succeeded, end the user's sessions older than ``new_key``."""
-    if str_to_bool(os.getenv("LITELLM_UI_ALLOW_MULTIPLE_SESSIONS")) is not True:
+async def end_earlier_ui_sessions(user_id: str, new_token_id: str | None) -> None:
+    """One session per user: once a sign-in has succeeded, end the user's sessions older than ``new_token_id``."""
+    if new_token_id is not None and str_to_bool(os.getenv("LITELLM_UI_ALLOW_MULTIPLE_SESSIONS")) is not True:
         await revoke_ui_session_keys(
-            user_id, UserAPIKeyAuth(user_id=user_id), keep_hashed_token=hash_token(new_key), only_older_than_kept=True
+            user_id, UserAPIKeyAuth(user_id=user_id), keep_hashed_token=new_token_id, only_older_than_kept=True
         )
 
 

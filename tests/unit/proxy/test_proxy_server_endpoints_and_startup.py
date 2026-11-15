@@ -49,6 +49,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.login_throttle import LoginThrottle
+from litellm.proxy.auth.login_utils import LoginResult
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.banner import LITELLM_BANNER
 from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import WindowSpendUpdateQueue
@@ -112,6 +113,10 @@ def client_no_auth():
     return TestClient(app)
 
 
+def _signed_in() -> LoginResult:
+    return LoginResult(user_id="test-user", key="sk-test-session", user_email=None, user_role="proxy_admin")
+
+
 def test_cors_exposes_cache_key_header_to_browser_js():
     from fastapi.middleware.cors import CORSMiddleware
 
@@ -123,7 +128,7 @@ def test_cors_exposes_cache_key_header_to_browser_js():
 
 
 def test_login_v2_returns_redirect_url_and_sets_cookie(monkeypatch):
-    mock_login_result = {"user_id": "test-user"}
+    mock_login_result = _signed_in()
     mock_prisma_client = MagicMock()
     mock_authenticate_user = AsyncMock(return_value=mock_login_result)
     mock_create_ui_token_object = MagicMock(return_value={"user_id": "test-user"})
@@ -185,7 +190,7 @@ def test_login_v2_returns_redirect_url_and_sets_cookie(monkeypatch):
 def _mock_login_v2_deps(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "litellm.proxy.auth.login_utils.authenticate_user",
-        AsyncMock(return_value={"user_id": "test-user"}),
+        AsyncMock(return_value=_signed_in()),
     )
     monkeypatch.setattr(
         "litellm.proxy.auth.login_utils.create_ui_token_object",
@@ -376,7 +381,7 @@ def test_login_v3_returns_code(monkeypatch):
     mock_prisma_client = MagicMock()
     monkeypatch.setattr(
         "litellm.proxy.auth.login_utils.authenticate_user",
-        AsyncMock(return_value={"user_id": "test-user"}),
+        AsyncMock(return_value=_signed_in()),
     )
     monkeypatch.setattr(
         "litellm.proxy.auth.login_utils.create_ui_token_object",
@@ -414,7 +419,7 @@ def test_login_v3_exchange_happy_path(monkeypatch):
     mock_prisma_client = MagicMock()
     monkeypatch.setattr(
         "litellm.proxy.auth.login_utils.authenticate_user",
-        AsyncMock(return_value={"user_id": "test-user"}),
+        AsyncMock(return_value=_signed_in()),
     )
     monkeypatch.setattr(
         "litellm.proxy.auth.login_utils.create_ui_token_object",
@@ -462,7 +467,7 @@ def test_login_v3_exchange_sets_secure_cookie_behind_trusted_tls_terminating_pro
     mock_prisma_client = MagicMock()
     monkeypatch.setattr(
         "litellm.proxy.auth.login_utils.authenticate_user",
-        AsyncMock(return_value={"user_id": "test-user"}),
+        AsyncMock(return_value=_signed_in()),
     )
     monkeypatch.setattr(
         "litellm.proxy.auth.login_utils.create_ui_token_object",
@@ -506,7 +511,7 @@ def test_login_v3_exchange_single_use(monkeypatch):
     mock_prisma_client = MagicMock()
     monkeypatch.setattr(
         "litellm.proxy.auth.login_utils.authenticate_user",
-        AsyncMock(return_value={"user_id": "test-user"}),
+        AsyncMock(return_value=_signed_in()),
     )
     monkeypatch.setattr(
         "litellm.proxy.auth.login_utils.create_ui_token_object",

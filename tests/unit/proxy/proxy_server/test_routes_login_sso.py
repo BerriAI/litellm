@@ -751,7 +751,7 @@ class _SessionRows:
                 created_at=datetime(2026, 1, 1, tzinfo=timezone.utc) + timedelta(seconds=len(self.raw_keys)),
             )
         )
-        return {"token": raw_key, "user_id": user_id}
+        return {"token": raw_key, "token_id": hash_token(raw_key), "user_id": user_id}
 
     async def find_many(self, where: dict[str, object]) -> list[LiteLLM_VerificationToken]:
         return [row for row in self.rows if row.user_id == where["user_id"] and row.team_id == where["team_id"]]

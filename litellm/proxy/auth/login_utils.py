@@ -209,7 +209,7 @@ class LoginResult:
     login_method: Literal["sso", "username_password"]
     password_reset_required: bool
     session_owner: str | None
-    session_key: str | None
+    session_token_id: str | None
 
     def __init__(
         self,
@@ -220,7 +220,7 @@ class LoginResult:
         login_method: Literal["sso", "username_password"] = "username_password",
         password_reset_required: bool = False,
         session_owner: str | None = None,
-        session_key: str | None = None,
+        session_token_id: str | None = None,
     ):
         self.user_id = user_id
         self.key = key
@@ -229,13 +229,13 @@ class LoginResult:
         self.login_method = login_method
         self.password_reset_required = password_reset_required
         self.session_owner = session_owner
-        self.session_key = session_key
+        self.session_token_id = session_token_id
 
 
 async def end_earlier_sessions(login_result: LoginResult) -> None:
     """Each sign-in route calls this after its last step that can fail."""
-    if login_result.session_owner is not None and login_result.session_key is not None:
-        await end_earlier_ui_sessions(login_result.session_owner, login_result.session_key)
+    if login_result.session_owner is not None:
+        await end_earlier_ui_sessions(login_result.session_owner, login_result.session_token_id)
 
 
 async def authenticate_user(
@@ -420,7 +420,7 @@ async def _sign_in(
             user_role=user_role,
             login_method="username_password",
             session_owner=key_user_id,
-            session_key=cast(str, response["token"]),  # cast-ok: the new raw key
+            session_token_id=cast("dict[str, str | None]", response).get("token_id"),  # cast-ok: set on insert
         )
 
     elif _user_row is not None:
@@ -488,7 +488,7 @@ async def _sign_in(
                 login_method="username_password",
                 password_reset_required=password_reset_required,
                 session_owner=user_id,
-                session_key=cast(str, response["token"]),  # cast-ok: the new raw key
+                session_token_id=cast("dict[str, str | None]", response).get("token_id"),  # cast-ok: set on insert
             )
         else:
             await attempt.failed()

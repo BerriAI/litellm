@@ -345,7 +345,7 @@ class _SessionKeyTable:
         raw_key: Final = f"sk-{name}"
         user_id: Final = cast(str, key_fields["user_id"])
         self.add(name, hash_token(raw_key), user_id, _FIRST_SIGN_IN + timedelta(seconds=self.logins))
-        return {"token": raw_key, "user_id": user_id}
+        return {"token": raw_key, "token_id": hash_token(raw_key), "user_id": user_id}
 
     def add(self, name: str, hashed: str, user_id: str, created_at: datetime) -> None:
         self.names[hashed] = name
@@ -559,7 +559,7 @@ async def test_overlapping_sign_ins_keep_only_the_newer_session(
 
     with _session_db(table):
         for new_key in finishing_order:
-            await end_earlier_ui_sessions(USER_ID, new_key)
+            await end_earlier_ui_sessions(USER_ID, hash_token(new_key))
 
     assert table.tokens() == ["session-2"]
 
@@ -577,7 +577,7 @@ async def test_sign_ins_created_in_the_same_instant_keep_exactly_one_session(
 
     with _session_db(table):
         for new_key in finishing_order:
-            await end_earlier_ui_sessions(USER_ID, new_key)
+            await end_earlier_ui_sessions(USER_ID, hash_token(new_key))
 
     assert table.tokens() == [survivor]
 
