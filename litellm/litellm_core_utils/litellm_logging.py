@@ -25,7 +25,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, Protocol, Typ
 from httpx import Response, Timeout
 from openai import AsyncStream as OpenAIAsyncStream
 from openai import Stream as OpenAIStream
-from pydantic import BaseModel, JsonValue, TypeAdapter
+from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
 from typing_extensions import TypedDict
 
 import litellm
@@ -756,6 +756,13 @@ class _MetadataUpdate(Protocol):
 
 class _ExceptionHeaders(Protocol):
     headers: object
+
+
+def _failure_callback_mapping(value: object) -> Mapping[str, object]:
+    try:
+        return _LITELLM_PARAMS.validate_python(value or {})
+    except ValidationError:
+        return {}
 
 
 def _callback_control_params(litellm_params: object) -> dict[str, object]:
@@ -3043,9 +3050,9 @@ class Logging(LiteLLMLoggingBaseClass):
         attempt: Final = self.attempt_scoped_copy()
         attempt.model_call_details.pop("standard_logging_object", None)
         attempt.model_call_details.pop(FAILED_PROMPT_TOKEN_ESTIMATE_KEY, None)
-        params: Final = _LITELLM_PARAMS.validate_python(self._model_call_details_view.get("litellm_params") or {})
-        metadata: Final = _LITELLM_PARAMS.validate_python(params.get("metadata") or {})
-        internal: Final = _LITELLM_PARAMS.validate_python(metadata.get("_otel_internal") or {})
+        params: Final = _failure_callback_mapping(self._model_call_details_view.get("litellm_params"))
+        metadata: Final = _failure_callback_mapping(params.get("metadata"))
+        internal: Final = _failure_callback_mapping(metadata.get("_otel_internal"))
         spans_logged: Final[object] = internal.get("spans_logged") or {}
         attempt.model_call_details["litellm_params"] = {
             **params,
@@ -5260,8 +5267,8 @@ class Logging(LiteLLMLoggingBaseClass):
         """
         from litellm.types.router import RouterErrors
 
-        litellm_params: Final[dict] = self.model_call_details.get("litellm_params") or {}
-        metadata: Final = litellm_params.get("metadata") or {}
+        litellm_params: Final = _failure_callback_mapping(self._model_call_details_view.get("litellm_params"))
+        metadata: Final = _failure_callback_mapping(litellm_params.get("metadata"))
 
         ## BASE CASE ## check if rate limit error for model group size 1
         is_base_case = False
@@ -5280,7 +5287,7 @@ class Logging(LiteLLMLoggingBaseClass):
             if isinstance(callback, CustomLogger):  # custom logger class
                 await callback.log_model_group_rate_limit_error(
                     exception=exception,
-                    original_model_group=model_group,
+                    original_model_group=model_group if isinstance(model_group, str) else None,
                     kwargs=self.model_call_details,
                 )
 

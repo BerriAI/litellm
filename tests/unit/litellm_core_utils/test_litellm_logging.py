@@ -253,6 +253,47 @@ async def test_reused_logging_dispatches_only_opted_in_loggers_for_each_failed_a
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "retry_params",
+    [
+        "bogus",
+        {"metadata": "bogus"},
+        {"metadata": {"_otel_internal": "bogus"}},
+        {"metadata": {"_otel_internal": ["bogus"]}},
+        {"metadata": {"_otel_internal": {1: "bogus"}}},
+        {"metadata": {}},
+    ],
+)
+async def test_invalid_retry_metadata_never_escapes_failure_handler(
+    monkeypatch: pytest.MonkeyPatch, retry_params: object
+) -> None:
+    telemetry: Final = _EveryFailureAttemptRecorder()
+    monkeypatch.setattr(litellm, "_async_failure_callback", [telemetry])
+    start: Final = datetime.datetime(2026, 1, 1)
+    logging_obj: Final = Logging(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "hello"}],
+        stream=False,
+        call_type="acompletion",
+        start_time=start,
+        litellm_call_id="invalid-retry-metadata",
+        function_id="fn",
+    )
+    error: Final = litellm.ServiceUnavailableError("outage", model="gpt-4o", llm_provider="openai")
+    logging_obj.model_call_details["litellm_params"] = {"custom_llm_provider": "openai", "metadata": {}}
+    logging_obj.model_call_details["current_attempt_api_call_start_time"] = start
+    await logging_obj.async_failure_handler(error, "trace", start, start)
+    logging_obj.model_call_details["litellm_params"] = retry_params
+    logging_obj.model_call_details["current_attempt_api_call_start_time"] = start + datetime.timedelta(seconds=1)
+
+    await logging_obj.async_failure_handler(error, "trace", start, start + datetime.timedelta(seconds=2))
+
+    assert len(telemetry.payloads) == 2
+    assert all(payload["status"] == "failure" for payload in telemetry.payloads)
+    assert logging_obj.model_call_details["litellm_params"] is retry_params
+
+
+@pytest.mark.asyncio
 async def test_retry_spans_preserve_request_failure_metric_count(monkeypatch: pytest.MonkeyPatch) -> None:
     from opentelemetry.sdk.metrics import MeterProvider
     from opentelemetry.sdk.metrics.export import InMemoryMetricReader

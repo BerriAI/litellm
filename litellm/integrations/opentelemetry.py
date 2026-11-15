@@ -2500,11 +2500,15 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                 raise ValueError("standard_logging_object not found in kwargs")
 
             api_base: Final = _JSON_OBJECT.validate_python(standard_logging_payload).get("api_base")
-            destination: Final = urlparse(api_base if isinstance(api_base, str) else "")
-            if destination.hostname:
-                span.set_attribute("server.address", destination.hostname)
-            if destination.port:
-                span.set_attribute("server.port", destination.port)
+            try:
+                destination: Final = urlparse(api_base if isinstance(api_base, str) else "")
+                if destination.hostname:
+                    span.set_attribute("server.address", destination.hostname)
+                port: Final = destination.port
+                if port is not None:
+                    span.set_attribute("server.port", port)
+            except ValueError:
+                pass
 
             # https://github.com/open-telemetry/semantic-conventions/blob/main/model/registry/gen-ai.yaml
             # Following Conventions here: https://github.com/open-telemetry/semantic-conventions/blob/main/docs/gen-ai/llm-spans.md

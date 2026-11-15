@@ -8389,6 +8389,41 @@ async def test_failed_non_chat_span_gets_no_failure_usage_flags(
     assert ESTIMATED_INPUT_TOKENS_ATTRIBUTE not in attributes
 
 
+@pytest.mark.parametrize(
+    ("api_base", "hostname", "port"),
+    [
+        ("http://127.0.0.1:abc/v1", "127.0.0.1", None),
+        ("http://127.0.0.1:99999/v1", "127.0.0.1", None),
+        ("http://[::1/v1", None, None),
+        ("http://[not-ipv6]/v1", None, None),
+        ("http://127.0.0.1:8080/v1", "127.0.0.1", 8080),
+        ("", None, None),
+    ],
+)
+def test_malformed_destination_preserves_other_span_attributes(
+    in_memory_otel: tuple[OpenTelemetry, InMemorySpanExporter],
+    api_base: str,
+    hostname: str | None,
+    port: int | None,
+) -> None:
+    otel, exporter = in_memory_otel
+    data_dir: Final = Path(__file__).parent / "open_telemetry" / "data"
+    captured: Final = json.loads((data_dir / "captured_kwargs.json").read_text())
+    kwargs: Final = {
+        **captured,
+        "standard_logging_object": {**captured["standard_logging_object"], "api_base": api_base},
+    }
+    response: Final = json.loads((data_dir / "captured_response.json").read_text())
+
+    otel.log_success_event(kwargs, response, _FIXED_START, _FIXED_START + timedelta(seconds=1))
+
+    span: Final = next(span for span in exporter.get_finished_spans() if span.name == LITELLM_REQUEST_SPAN_NAME)
+    attributes: Final = dict(span.attributes or {})
+    assert attributes["gen_ai.request.model"] == captured["model"]
+    assert attributes.get("server.address") == hostname
+    assert attributes.get("server.port") == port
+
+
 def test_successful_span_reports_provider_usage_without_failure_usage_flags(
     in_memory_otel: tuple[OpenTelemetry, InMemorySpanExporter],
 ) -> None:
