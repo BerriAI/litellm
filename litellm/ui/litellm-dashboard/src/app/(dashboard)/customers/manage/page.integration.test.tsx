@@ -117,6 +117,46 @@ function BrowserNavigationProbe() {
 }
 
 describe("customer hierarchy management", () => {
+  it.each(["", "Member One"])(
+    "moves a member through its row menu with search %j without editing budgets",
+    async (search) => {
+      const user = userEvent.setup();
+      const moved = { ...member, parent_team_ids: ["team-b"] };
+      fetchMock.mockImplementation(async (input, init) => {
+        const url = requestUrl(input);
+        const method = input instanceof Request ? input.method : init?.method;
+        if (url.pathname === "/management/v1/customer_members/member-a" && method === "PATCH") return json(moved);
+        return serve(input);
+      });
+      const options = { searchParams: `?org=org-1&tab=members&memberSearch=${encodeURIComponent(search)}` };
+      renderWithProviders(<CustomerHierarchyManager />, options);
+      await user.click(await screen.findByRole("button", { name: "Actions for Member One" }));
+      expect(screen.getAllByRole("searchbox", { name: "Search customer members by name or ID" })).toHaveLength(1);
+      expect(screen.getByRole("searchbox", { name: "Search customer members by name or ID" })).toHaveValue(search);
+      expect(
+        requestedUrls()
+          .find((url) => url.pathname === "/management/v1/customer_members")
+          ?.searchParams.get("search"),
+      ).toBe(search || null);
+      await user.keyboard("{ArrowDown}");
+      await user.click(await screen.findByRole("menuitem", { name: "Move teams" }));
+      const dialog = screen.getByRole("dialog", { name: "Move teams" });
+      const teams = within(dialog).getByRole("combobox", { name: "Choose teams" });
+      await waitFor(() => expect(teams).toBeEnabled());
+      await user.click(teams);
+      await user.click(screen.getByRole("option", { name: /Operations/ }));
+      await user.click(screen.getByRole("option", { name: /Product/ }));
+      await user.keyboard("{Escape}");
+      await user.click(within(dialog).getByRole("button", { name: "Move teams" }));
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+      const write = fetchMock.mock.calls
+        .map(([input]) => input)
+        .find((input) => input instanceof Request && input.method === "PATCH");
+      expect(write).toBeInstanceOf(Request);
+      expect(await (write as Request).clone().json()).toEqual({ parent_team_ids: ["team-b"] });
+    },
+  );
+
   it.each(["teams", "members"] as const)(
     "should show usage-style budgets, spend share, tokens and actions for customer %s",
     async (kind) => {
@@ -195,7 +235,9 @@ describe("customer hierarchy management", () => {
       );
       expect(within(table).getByRole("cell", { name: "250" })).toBeInTheDocument();
       expect(within(table).getByText("Within budget")).toBeInTheDocument();
-      expect(within(table).getByRole("button", { name: `Edit ${label}` })).toBeEnabled();
+      expect(
+        within(table).getByRole("button", { name: kind === "teams" ? `Edit ${label}` : `Actions for ${label}` }),
+      ).toBeEnabled();
       const validRow = within(table).getByRole("row", { name: new RegExp(label) });
       expect(within(validRow).getByRole("link", { name: "View usage" })).toHaveAttribute(
         "href",
@@ -541,7 +583,9 @@ describe("customer hierarchy management", () => {
         .find((url) => url.pathname === "/management/v1/customer_members")
         ?.searchParams.get("parent_team_id"),
     ).toBe("team-a");
-    await user.click(within(members).getByRole("button", { name: "Edit Member One" }));
+    await user.click(within(members).getByRole("button", { name: "Actions for Member One" }));
+    await user.keyboard("{ArrowDown}");
+    await user.click(await screen.findByRole("menuitem", { name: "Settings" }));
     expect(await screen.findByRole("heading", { name: "Member One" })).toBeInTheDocument();
     expect(screen.getByText("Manage settings and budget for this customer member.")).toBeInTheDocument();
     const usage = screen.getByRole("link", { name: "Usage" });

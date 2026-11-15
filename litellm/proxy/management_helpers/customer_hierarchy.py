@@ -29,6 +29,7 @@ from litellm.types.proxy.management_endpoints.customer_hierarchy import (
     BudgetTemplate,
     CustomerMember,
     MemberCreate,
+    MemberFields,
     MemberPatch,
     Organization,
     OrganizationBudget,
@@ -371,7 +372,7 @@ def team_response(row: PrismaRecord, now: datetime) -> Team:
 
 
 def override_expiry(
-    row: Team | CustomerMember | None, payload: TeamPatch | MemberPatch, override_id: str | None
+    row: Team | CustomerMember | None, payload: TeamPatch | MemberFields, override_id: str | None
 ) -> datetime | None:
     if override_id is None:
         return None
@@ -1001,9 +1002,20 @@ class CustomerHierarchyStore:
         return await self.update_budget(current_id, payload.budget_override, actor)
 
     async def update_member(self, member_id: str, payload: MemberPatch, actor: str) -> CustomerMember | Failure:
+        if payload.parent_team_ids is not None:
+            await self.lock_customer_identities()
         member: Final = await self.get_member(member_id)
         if isinstance(member, Failure):
             return member
+        if payload.parent_team_ids is not None:
+            teams: Final = await find_many_in(self.teams, "customer_team_id", payload.parent_team_ids)
+            if len(teams) != len(payload.parent_team_ids):
+                return Failure(ErrorCode.PARENT_NOT_FOUND)
+            if any(team.model_dump()["parent_org_id"] != member.parent_org_id for team in teams):
+                return Failure(ErrorCode.CUSTOMER_ORG_MISMATCH)
+            added: Final = tuple(team for team in payload.parent_team_ids if team not in member.parent_team_ids)
+            if await self.member_capacity_reached(added):
+                return Failure(ErrorCode.FREE_TIER_LIMIT)
         selected: Final = await self.member_template_patch(member, payload)
         if isinstance(selected, Failure):
             return selected
@@ -1018,6 +1030,7 @@ class CustomerHierarchyStore:
             where={"customer_member_id": member_id},
             data={
                 **alias_patch(payload),
+                **({"parent_team_ids": payload.parent_team_ids} if payload.parent_team_ids is not None else {}),
                 **({"budget_id": selected} if "budget_id" in payload.model_fields_set else {}),
                 **(
                     {
@@ -1158,6 +1171,7 @@ class CustomerHierarchyStore:
         return None
 
     async def delete_team(self, team_id: str, *, cascade: bool = False) -> None | Failure:
+        await self.lock_customer_identities()
         team: Final = await self.get_team(team_id)
         if isinstance(team, Failure):
             return team
@@ -1170,6 +1184,7 @@ class CustomerHierarchyStore:
         return None
 
     async def delete_organization(self, organization_id: str, *, cascade: bool = False) -> None | Failure:
+        await self.lock_customer_identities()
         organization: Final = await self.get_organization(organization_id)
         if isinstance(organization, Failure):
             return organization
