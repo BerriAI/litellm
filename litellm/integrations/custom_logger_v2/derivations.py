@@ -37,6 +37,7 @@ from litellm.types.integrations.custom_logger_v2 import (
     RateLimitState,
     RateLimitStatuses,
     ReservationEntry,
+    RouterLimits,
     ScalarItem,
     Stringified,
     Usage,
@@ -722,6 +723,23 @@ def router_ref(_args: HookArgs) -> object:
     return remaining_usage_ref(llm_router)
 
 
+def router_limits(args: HookArgs) -> RouterLimits | None:
+    """What the router reference's read of the logged model group needs from Python, as Prometheus
+    reads it: ``None`` with no Rust router or a model group that is not a ``str``, and what resolving
+    the limits raised as its error."""
+    payload: Final = payload_of(args)
+    model_group: Final[object] = None if payload is None else payload.get("model_group")
+    llm_router: Final[object] = getattr(sys.modules.get("litellm.proxy.proxy_server"), "llm_router", None)
+    if llm_router is None or type(model_group) is not str:
+        return None
+    from litellm.router_rust.core import router_limits_of
+
+    try:
+        return router_limits_of(llm_router, model_group)
+    except Exception as error:  # noqa: BLE001  # the port carries what the read raised, as prometheus logs it
+        return RouterLimits(error_type=type(error).__name__, error_text=str(error))
+
+
 RECORD_TYPES: Final[Mapping[Field, object]] = MappingProxyType(
     {
         Field.key_identity: KeyIdentity,
@@ -750,6 +768,7 @@ RECORD_TYPES: Final[Mapping[Field, object]] = MappingProxyType(
         Field.prometheus_settings: PrometheusSettings,
         Field.logged_deployment_labels: Mapping[str, JsonValue],
         Field.logged_wall_clock: MomentInput,
+        Field.router_limits: RouterLimits,
     }
 )
 
@@ -781,6 +800,7 @@ DERIVED_ATTEMPT_FIELDS: Final[Mapping[Field, FieldSource]] = MappingProxyType(
         Field.logged_deployment_labels: derived(logged_deployment_labels),
         Field.router_ref: derived(router_ref),
         Field.logged_wall_clock: derived(logged_wall_clock),
+        Field.router_limits: derived(router_limits),
     }
 )
 DERIVED_AUTH_FIELDS: Final[Mapping[Field, FieldSource]] = MappingProxyType({Field.key_identity: derived(key_identity)})
@@ -846,6 +866,7 @@ __all__ = [
     "prometheus_settings",
     "rate_limit_state",
     "request_tags",
+    "router_limits",
     "router_ref",
     "usage",
     "usage_record",

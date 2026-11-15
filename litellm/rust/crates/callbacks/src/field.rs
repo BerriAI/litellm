@@ -112,6 +112,7 @@ fields! {
     LoggedDeploymentLabels = 49, SmallRecord, serde_json::Map<std::string::String, serde_json::Value>;
     RouterRef = 50, Compatibility, u64;
     LoggedWallClock = 51, SmallRecord, crate::record::Moment;
+    RouterLimits = 52, SmallRecord, crate::record::RouterLimits;
 }
 
 impl Field {
@@ -154,6 +155,7 @@ pub const DERIVED_ONLY: FieldSet = FieldSet::of(&[
     Field::LoggedDeploymentLabels,
     Field::RouterRef,
     Field::LoggedWallClock,
+    Field::RouterLimits,
 ]);
 
 pub const BY_REFERENCE: FieldSet =
@@ -248,7 +250,8 @@ mod tests {
     #[case::typed(Field::KeyLimits, 30, "key_limits")]
     #[case::limiter(Field::LimiterRequest, 46, "limiter_request")]
     #[case::router(Field::RouterRef, 50, "router_ref")]
-    #[case::last(Field::LoggedWallClock, 51, "logged_wall_clock")]
+    #[case::wall_clock(Field::LoggedWallClock, 51, "logged_wall_clock")]
+    #[case::last(Field::RouterLimits, 52, "router_limits")]
     fn a_field_keeps_its_bit_and_its_snake_case_name(
         #[case] field: Field,
         #[case] bit: u8,

@@ -290,6 +290,7 @@ if TYPE_CHECKING:
         _RustRouterRef,  # pyright: ignore[reportPrivateUsage]  # the stub's router reference
         _SuccessReportSteps,  # pyright: ignore[reportPrivateUsage]  # see above
     )
+    from litellm.types.integrations.custom_logger_v2 import RouterLimits
     from litellm.types.router import (
         CustomRoutingStrategyBase,
         DeploymentTypedDict,
@@ -1281,14 +1282,27 @@ _REBOUND_STATE: Final = MappingProxyType(
 )
 
 
-def remaining_usage_ref(router: object) -> "_RustRouterRef | None":
-    from litellm.rust_bridge._native import router_usage_ref
-
+def _rust_core_of(router: object) -> "RustCore | None":
     attributes: Final[object] = getattr(router, "__dict__", None)
     core: Final = router if isinstance(router, RustCore) else (as_str_mapping(attributes) or {}).get("_core")
-    if not isinstance(core, RustCore):
-        return None
-    return router_usage_ref(core._hosted._core_remaining_usage_reads)  # pyright: ignore[reportPrivateUsage]  # the reads health().usage(kind="remaining") makes
+    return core if isinstance(core, RustCore) else None
+
+
+def remaining_usage_ref(router: object) -> "_RustRouterRef | None":
+    """A reference that reads ``router``'s remaining usage in Rust, from the usage store its core
+    writes; ``None`` for a router no Rust core with a Rust usage store runs."""
+    from litellm.rust_bridge._native import router_usage_ref
+
+    core: Final = _rust_core_of(router)
+    native: Final = None if core is None else core._hosted._core_usage_store.native  # pyright: ignore[reportPrivateUsage]  # the store health().usage(kind="remaining") reads
+    return None if native is None else router_usage_ref(native)
+
+
+def router_limits_of(router: object, model_group: str) -> "RouterLimits | None":
+    """What ``remaining_usage_ref``'s read of ``model_group`` needs from Python, resolved as
+    ``health().usage(kind="remaining")`` resolves it; raises what that raises."""
+    core: Final = _rust_core_of(router)
+    return None if core is None else core._hosted._core_router_limits(model_group)  # pyright: ignore[reportPrivateUsage]  # see above
 
 
 _HEALTH_SERVED: Final = frozenset(

@@ -501,6 +501,11 @@
       "name": "logged_wall_clock",
       "bit": 51,
       "tier": "small_record"
+    },
+    {
+      "name": "router_limits",
+      "bit": 52,
+      "tier": "small_record"
     }
   ],
   "tiers": [
@@ -544,6 +549,7 @@
     "prometheus_settings",
     "rate_limit_state",
     "request_tags",
+    "router_limits",
     "router_ref",
     "standard_logging_payload_ref",
     "usage"

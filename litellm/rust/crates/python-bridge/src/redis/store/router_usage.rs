@@ -104,6 +104,12 @@ impl NativeUsageRead {
     }
 }
 
+impl NativeRouterUsage {
+    pub(crate) fn store(&self) -> Arc<RouterUsage> {
+        Arc::clone(&self.0)
+    }
+}
+
 #[pymethods]
 impl NativeRouterUsage {
     #[new]

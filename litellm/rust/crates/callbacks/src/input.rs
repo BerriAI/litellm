@@ -271,6 +271,7 @@ mod tests {
         fn remaining(
             &self,
             _model_group: &str,
+            _limits: &crate::RouterLimits,
         ) -> futures_util::future::BoxFuture<
             'static,
             Result<crate::RemainingUsage, crate::RouterReadError>,

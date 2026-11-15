@@ -242,12 +242,15 @@ def _deployment_model_provider(deployment: object) -> str:
 
 
 async def _router_remaining_usage(llm_router: Router, model_group: str) -> Mapping[str, int]:
-    from litellm.router_rust.core import remaining_usage_ref
+    """``health().usage(model_group, kind="remaining")``: for a Rust router, the limits resolved here
+    and the counter reads and arithmetic done in Rust."""
+    from litellm.router_rust.core import remaining_usage_ref, router_limits_of
 
     router_ref: Final = remaining_usage_ref(llm_router) if type(model_group) is str else None
-    if router_ref is None:
+    limits: Final = None if router_ref is None else router_limits_of(llm_router, model_group)
+    if router_ref is None or limits is None:
         return await llm_router.health().usage(model_group, kind="remaining")
-    return await router_ref.remaining(model_group)
+    return await router_ref.remaining(model_group, limits.model_dump(mode="json"))
 
 
 def _number_or_none(value: object, limit: TypeAdapter[_SeriesLimitT]) -> _SeriesLimitT | None:

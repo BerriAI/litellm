@@ -1,7 +1,9 @@
 use std::sync::Arc;
 
-use litellm_callbacks::{RemainingUsage, RouterReadError, RouterRef, RouterUsage, UsageAmount};
-use litellm_host_python::run_async_value;
+use litellm_callbacks::{
+    RemainingUsage, RouterLimits, RouterReadError, RouterRef, RouterUsage, UsageAmount,
+};
+use litellm_host_python::{from_py, run_async_value};
 use pyo3::{
     exceptions::{PyRuntimeError, PyTypeError},
     prelude::*,
@@ -23,8 +25,16 @@ impl PyRouterRef {
 
 #[pymethods]
 impl PyRouterRef {
-    fn remaining<'py>(&self, py: Python<'py>, model_group: &str) -> PyResult<Bound<'py, PyAny>> {
-        let read = self.0.remaining(model_group);
+    /// The group's remaining usage from the limits Python resolved for it (a `RouterLimits`
+    /// record's `model_dump(mode="json")`), read and computed in Rust.
+    fn remaining<'py>(
+        &self,
+        py: Python<'py>,
+        model_group: &str,
+        limits: &Bound<'py, PyAny>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let limits: RouterLimits = from_py(limits)?;
+        let read = self.0.remaining(model_group, &limits);
         run_async_value(py, async move {
             let remaining = read.await.map_err(raised)?;
             Python::attach(|py| headers(py, &remaining).map(Bound::unbind))

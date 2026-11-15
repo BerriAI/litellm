@@ -492,5 +492,43 @@
     "second": 15,
     "microsecond": 250,
     "utc_offset_seconds": -18000
+  },
+  "router_limits": {
+    "rejected": [
+      "member"
+    ],
+    "limits": {
+      "tpm": {
+        "kind": "other",
+        "text": "text"
+      },
+      "rpm": {
+        "kind": "other",
+        "text": "text"
+      },
+      "itpm": {
+        "kind": "other",
+        "text": "text"
+      },
+      "otpm": {
+        "kind": "other",
+        "text": "text"
+      }
+    },
+    "members": [
+      {
+        "deployment_id": "text",
+        "model": "text"
+      }
+    ],
+    "io_members": [
+      {
+        "deployment_id": "text",
+        "model": "text"
+      }
+    ],
+    "reset": 7,
+    "error_type": "text",
+    "error_text": "text"
   }
 }

@@ -17,7 +17,7 @@ from litellm.redis.stores.router_usage.types import (
     CounterScope,
     UsageCounter,
 )
-from litellm.rust_bridge._native import NativeRedisStoreError
+from litellm.rust_bridge._native import NativeRedisStoreError, NativeRouterUsage
 
 if TYPE_CHECKING:
     from litellm.redis.stores.connection import RedisStores
@@ -68,6 +68,8 @@ class RouterUsage(Protocol):
     def get_many_sync(self, counters: Sequence[UsageCounter]) -> Sequence[float | None]: ...
     @property
     def has_redis(self) -> bool: ...
+    @property
+    def native(self) -> NativeRouterUsage | None: ...
     def usage(self, counters: Sequence[UsageCounter], *, batch: Batch) -> UsageRead: ...
     async def increment_pipeline(self, increments: Sequence[CounterIncrement]) -> Sequence[float] | None: ...
     async def increment_post_call(self, increments: Sequence[CounterIncrement]) -> None: ...
@@ -89,6 +91,11 @@ class RouterUsageStore:
     @property
     def has_redis(self) -> bool:
         return self._handle.has_redis
+
+    @property
+    def native(self) -> NativeRouterUsage | None:
+        """The Rust store this one wraps, which the router's remaining usage reads in Rust."""
+        return self._handle if isinstance(self._handle, NativeRouterUsage) else None
 
     def attach_redis(self, redis: RedisStores) -> None:
         """Adds the Redis tier once, keeping this router's memory counts, as ``DualCache.attach_redis_cache`` does."""

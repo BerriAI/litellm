@@ -3,6 +3,8 @@ use std::{error::Error, fmt, sync::Arc};
 use futures_util::future::BoxFuture;
 use num_bigint::BigInt;
 
+use crate::record::RouterLimits;
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum UsageAmount {
     Int(BigInt),
@@ -25,10 +27,13 @@ impl RemainingUsage {
 
 pub type RouterReadError = Box<dyn Error + Send + Sync>;
 
+/// Reads a group's remaining usage from the limits Python resolved for it: the counter keys, the
+/// store reads and the arithmetic, with no call back into Python.
 pub trait RouterUsage: Send + Sync + 'static {
     fn remaining(
         &self,
         model_group: &str,
+        limits: &RouterLimits,
     ) -> BoxFuture<'static, Result<RemainingUsage, RouterReadError>>;
 }
 
@@ -43,8 +48,9 @@ impl RouterRef {
     pub fn remaining(
         &self,
         model_group: &str,
+        limits: &RouterLimits,
     ) -> BoxFuture<'static, Result<RemainingUsage, RouterReadError>> {
-        self.0.remaining(model_group)
+        self.0.remaining(model_group, limits)
     }
 }
 
@@ -73,10 +79,11 @@ mod tests {
         fn remaining(
             &self,
             model_group: &str,
+            limits: &RouterLimits,
         ) -> BoxFuture<'static, Result<RemainingUsage, RouterReadError>> {
             let headers = vec![(
                 format!("x-{model_group}"),
-                UsageAmount::Int(BigInt::from(7)),
+                UsageAmount::Int(BigInt::from(limits.reset.unwrap_or_default())),
             )];
             Box::pin(async move { Ok(RemainingUsage { headers }) })
         }
@@ -86,7 +93,13 @@ mod tests {
     fn a_router_reference_reads_through_the_trait_object() {
         let router = RouterRef::new(Arc::new(Fixed));
         let remaining = router
-            .remaining("g")
+            .remaining(
+                "g",
+                &RouterLimits {
+                    reset: Some(7),
+                    ..RouterLimits::default()
+                },
+            )
             .now_or_never()
             .unwrap_or_else(|| panic!("the fixed router answers at once"))
             .unwrap_or_else(|error| panic!("{error}"));

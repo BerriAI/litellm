@@ -5,7 +5,7 @@ use std::{
 
 use futures_util::future::BoxFuture;
 use litellm_callbacks::{
-    Callback, Field, FieldSet, Hook, HookInput, HookOutput, Manifest, RemainingUsage,
+    Callback, Field, FieldSet, Hook, HookInput, HookOutput, Manifest, RemainingUsage, RouterLimits,
     RouterReadError, RouterUsage, Selection, Subscription, UsageAmount,
 };
 use litellm_callbacks_python::{RustCallback, router::PyRouterRef};
@@ -19,6 +19,7 @@ impl RouterUsage for Limited {
     fn remaining(
         &self,
         model_group: &str,
+        limits: &RouterLimits,
     ) -> BoxFuture<'static, Result<RemainingUsage, RouterReadError>> {
         let headers = vec![
             (
@@ -37,6 +38,7 @@ impl RouterUsage for Limited {
         let failure: Option<RouterReadError> = match model_group {
             "broken" => Some(Box::new(PyValueError::new_err("router boom"))),
             "text" => Some("no python error".into()),
+            _ if limits.reset != Some(0) => Some("the limits did not arrive".into()),
             _ => None,
         };
         Box::pin(async move { failure.map_or(Ok(RemainingUsage { headers }), Err) })
@@ -62,9 +64,20 @@ impl Callback for Reader {
     ) -> BoxFuture<'a, HookOutput> {
         Box::pin(async move {
             let remaining = match input.fields.router()? {
-                Some(router) => Some(router.remaining("group").await.map_err(|error| {
-                    litellm_callbacks::CallbackError::Failed(error.to_string())
-                })?),
+                Some(router) => Some(
+                    router
+                        .remaining(
+                            "group",
+                            &RouterLimits {
+                                reset: Some(0),
+                                ..RouterLimits::default()
+                            },
+                        )
+                        .await
+                        .map_err(|error| {
+                            litellm_callbacks::CallbackError::Failed(error.to_string())
+                        })?,
+                ),
                 None => None,
             };
             self.read
@@ -164,14 +177,17 @@ import asyncio
 
 async def read(group):
     try:
-        return await router.remaining(group)
+        return await router.remaining(group, limits)
     except Exception as error:
         return type(error).__name__, str(error)
 
 
+limits = {"reset": 0}
 answered = asyncio.run(read("group"))
 broken = asyncio.run(read("broken"))
 text = asyncio.run(read("text"))
+limits = {"reset": 0, "unknown": 1}
+undecoded = asyncio.run(read("group"))
 "#;
 
 #[rstest]
@@ -208,5 +224,10 @@ fn a_router_reference_awaited_from_python_answers_its_headers_or_raises_the_read
         );
         assert_eq!(repr("broken"), "('ValueError', 'router boom')");
         assert_eq!(repr("text"), "('RuntimeError', 'no python error')");
+        assert!(
+            repr("undecoded").contains("unknown field `unknown`"),
+            "{}",
+            repr("undecoded")
+        );
     });
 }

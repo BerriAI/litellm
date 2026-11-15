@@ -397,6 +397,52 @@ class InputSequenceLength(Record):
     error_text: str | None = None
 
 
+class RouterLimitKind(str, Enum):
+    """What a router limit is in Python: an ``int`` (a ``bool`` counts as one), a ``float``, or
+    anything else, which subtracting raises on."""
+
+    whole = "int"
+    real = "float"
+    other = "other"
+
+
+class RouterLimit(Strict):
+    """A limit by its decimal digits, its float ``repr``, or its type name."""
+
+    kind: RouterLimitKind
+    text: str
+
+
+class RouterGroupLimits(Strict):
+    """A group's limits as ``ModelGroupInfo`` resolves them."""
+
+    tpm: RouterLimit | None = None
+    rpm: RouterLimit | None = None
+    itpm: RouterLimit | None = None
+    otpm: RouterLimit | None = None
+
+
+class UsageMember(Strict):
+    """A deployment a usage counter is keyed by; ``None`` is a value that is not a ``str``, which the
+    usage store refuses."""
+
+    deployment_id: str | None = None
+    model: str | None = None
+
+
+class RouterLimits(Record):
+    """A group's limits and the deployments its counters are keyed by, resolved in Python for the
+    Rust read: ``members`` is ``None`` when no deployment matches, ``io_members`` when the model
+    list is ``None``, and ``reset`` the seconds left in the minute."""
+
+    limits: RouterGroupLimits | None = None
+    members: tuple[UsageMember, ...] | None = None
+    io_members: tuple[UsageMember, ...] | None = None
+    reset: I64 | None = None
+    error_type: str | None = None
+    error_text: str | None = None
+
+
 class LoggedRequest(Record):
     client_ip: Scalar | None = None
     user_agent: Scalar | None = None
@@ -515,11 +561,16 @@ __all__ = [
     "RateLimitStatuses",
     "Record",
     "ReservationEntry",
+    "RouterGroupLimits",
+    "RouterLimit",
+    "RouterLimitKind",
+    "RouterLimits",
     "Scalar",
     "ScalarItem",
     "Strict",
     "Stringified",
     "Usage",
+    "UsageMember",
     "UsageRecord",
     "ZeroCost",
     "coerce_record",

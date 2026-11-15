@@ -30,7 +30,8 @@ pub use record::{
     EstimatedOutputTokens, GuardrailEntry, InputSequenceLength, KeyIdentity, KeyLimits,
     LimiterRequest, LoggedKeyIdentity, LoggedModelGroup, LoggedRequest, McpToolCall, MetadataKind,
     MetadataLabel, ModelInfo, Moment, Outcome, OutputCap, PrometheusSettings, RateLimitState,
-    RateLimitStatus, RateLimitStatuses, ReservationEntry, Usage, UsageRecord, ZeroCost,
+    RateLimitStatus, RateLimitStatuses, ReservationEntry, RouterGroupLimits, RouterLimit,
+    RouterLimitKind, RouterLimits, Usage, UsageMember, UsageRecord, ZeroCost,
 };
 pub use router::{RemainingUsage, RouterReadError, RouterRef, RouterUsage, UsageAmount};
 pub use scalar::Scalar;
