@@ -1352,9 +1352,10 @@ def test_lite_login_team_hint_preselects_that_team_on_the_consent_page(gateway: 
         assert _preselected_teams(by_id.text) == [hinted_team], by_id.text
         by_alias: Final = consent({"team": hinted_alias})
         assert _preselected_teams(by_alias.text) == [hinted_team], by_alias.text
+        (preselected_team,) = _preselected_teams(by_alias.text)
         approved: Final = gateway.client.post(
             "/authorize/complete",
-            data={**_consent_form_fields(by_alias.text), "team_id": hinted_team, "decision": "approve"},
+            data={**_consent_form_fields(by_alias.text), "team_id": preselected_team, "decision": "approve"},
             cookies={**cookies, **dict(by_alias.cookies)},
         )
         assert approved.status_code == 303, approved.text

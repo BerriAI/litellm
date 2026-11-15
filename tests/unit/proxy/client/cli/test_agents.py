@@ -2950,6 +2950,19 @@ class TestAgentCommands:
 
         assert reached == [(flow, team)], result.output
 
+    def test_an_invalid_pkce_env_var_is_named_in_the_error_lite_claude_shows(self, secret_vault_factory):
+        with patch(f"{AGENTS_MODULE}.run_agent"):
+            result = self.runner.invoke(
+                _agent_command("claude"),
+                [],
+                obj={"base_url": "http://localhost:4000", "api_key": None, "secret_vault": secret_vault_factory()},
+                env={"LITELLM_PROXY_LOGIN_PKCE": "maybe"},
+            )
+
+        assert result.exit_code != 0
+        assert "LITELLM_PROXY_LOGIN_PKCE" in result.output
+        assert "'maybe' is not a valid boolean" in result.output
+
     def test_child_exit_code_reaches_the_shell(self):
         with patch(f"{AGENTS_MODULE}.run_agent", side_effect=SystemExit(42)):
             result = self.runner.invoke(

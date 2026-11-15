@@ -957,7 +957,10 @@ def login_team_from_env() -> str | None:
 
 def login_pkce_from_env(default: bool) -> bool:
     raw: Final = os.environ.get(_LOGIN_PKCE_ENVVAR)
-    return click.BOOL.convert(raw, None, None) if raw else default
+    if not raw:
+        return default
+    pkce_option: Final = next(param for param in login.params if param.name == "pkce")
+    return click.BOOL.convert(raw, pkce_option, None)
 
 
 def _pkce_login(base_url: str, config_claude: bool, vault: SecretVault, team: str | None = None) -> None:

@@ -663,6 +663,19 @@ class TestUpCanInvokeTheRealLoginCommand:
 
         assert reached == [(flow, team)], result.output
 
+    def test_an_invalid_pkce_env_var_is_named_in_the_error_lite_up_shows(self):
+        with (
+            patch(f"{UP_MODULE}.load_token", return_value=None),
+            patch(f"{UP_MODULE}.get_stored_api_key", return_value=None),
+        ):
+            result = CliRunner().invoke(
+                up, obj={"base_url": "http://localhost:4000"}, env={"LITELLM_PROXY_LOGIN_PKCE": "maybe"}
+            )
+
+        assert result.exit_code != 0
+        assert "LITELLM_PROXY_LOGIN_PKCE" in result.output
+        assert "'maybe' is not a valid boolean" in result.output
+
     def test_ctx_invoke_leaves_claude_settings_alone(self, tmp_path):
         from litellm.proxy.client.cli.commands.auth import login as real_login
 
