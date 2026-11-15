@@ -1,10 +1,13 @@
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Sized
 from typing import TYPE_CHECKING, Final
+
+from pydantic import TypeAdapter
 
 import litellm
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.custom_httpx.http_handler import get_httpx_client
+from litellm.llms.custom_httpx.sse_lines import iter_sse_lines
 from litellm.utils import EmbeddingResponse, ModelResponse, Usage
 
 from ..common_utils import OobaboogaError
@@ -14,6 +17,13 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 oobabooga_config: Final = OobaboogaConfig()
+_DECODED_JSON: Final = TypeAdapter(object)
+
+
+def _json_len(value: object) -> int:
+    if isinstance(value, Sized):
+        return len(value)
+    raise TypeError(f"object of type '{type(value).__name__}' has no len()")
 
 
 def completion(
@@ -74,7 +84,7 @@ def completion(
         stream=optional_params["stream"] if "stream" in optional_params else False,
     )
     if "stream" in optional_params and optional_params["stream"] is True:
-        return response.iter_lines()
+        return iter_sse_lines(response.iter_text())
     else:
         return oobabooga_config.transform_response(
             model=model,
@@ -148,7 +158,7 @@ def embedding(
         }
     ]
 
-    num_tokens: Final = len(completion_response["data"][0]["embedding"])
+    num_tokens: Final = _json_len(_DECODED_JSON.validate_python(completion_response["data"][0]["embedding"]))
     # Adding metadata to response
     setattr(
         model_response,

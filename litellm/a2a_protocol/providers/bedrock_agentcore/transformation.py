@@ -19,6 +19,7 @@ from litellm.a2a_protocol.utils import (
 )
 from litellm.exceptions import BadRequestError
 from litellm.llms.bedrock.chat.agentcore.transformation import AmazonAgentCoreConfig
+from litellm.llms.custom_httpx.sse_lines import aiter_sse_lines
 
 RUNTIME_SESSION_ID_MIN_LENGTH: Final = 33
 RUNTIME_SESSION_ID_MAX_LENGTH: Final = 256
@@ -50,7 +51,7 @@ _RESERVED_PREFIX_HEADERS: Final[tuple[str, ...]] = (
 class _SSELineSource(Protocol):
     """Minimal streaming-response surface used to read SSE lines."""
 
-    def aiter_lines(self) -> AsyncIterator[str]: ...
+    def aiter_text(self) -> AsyncIterator[str]: ...
 
 
 def _filter_reserved_headers(
@@ -244,7 +245,7 @@ class BedrockAgentCoreA2ATransformation:
         Yields:
             Parsed JSON dicts from SSE data lines
         """
-        async for line in response.aiter_lines():
+        async for line in aiter_sse_lines(response.aiter_text()):
             line = line.strip()
             if not line:
                 continue

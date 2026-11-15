@@ -10,7 +10,6 @@ export enum Page {
   Teams = "teams",
   Organizations = "organizations",
   AdminPanel = "admin-panel",
-  ApiRef = "api_ref",
   LoggingAndAlerts = "logging-and-alerts",
   Budgets = "budgets",
   Guardrails = "guardrails",
@@ -30,5 +29,4 @@ export enum Page {
   TagManagement = "tag-management",
   VectorStores = "vector-stores",
   NewUsage = "new_usage",
-  Usage = "usage",
 }

@@ -1,8 +1,10 @@
 import datetime
 import json
+from collections.abc import Mapping
 from typing import Final
 
 import httpx
+import openai
 import pytest
 import respx
 
@@ -22,7 +24,12 @@ def _httpx_only_transport(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
 
 
-def _assistants_api(thread_id: str, answer: str, project_path: str = "/api/projects/litellm-test") -> respx.MockRouter:
+def _assistants_api(
+    thread_id: str,
+    answer: str,
+    project_path: str = "/api/projects/litellm-test",
+    run: Mapping[str, object] | None = None,
+) -> respx.MockRouter:
     thread_path: Final = f"{project_path}/threads/{thread_id}"
     router: Final = respx.mock(assert_all_called=False)
     router.post(path=f"{project_path}/threads").respond(
@@ -42,7 +49,10 @@ def _assistants_api(thread_id: str, answer: str, project_path: str = "/api/proje
         },
     )
     router.get(path=f"{thread_path}/runs/run_1").respond(
-        200, json={"id": "run_1", "object": "thread.run", "thread_id": thread_id, "status": "completed"}
+        200,
+        json={"id": "run_1", "object": "thread.run", "thread_id": thread_id, "status": "completed"}
+        if run is None
+        else run,
     )
     router.get(path=f"{thread_path}/messages").respond(
         200,
@@ -172,8 +182,52 @@ async def test_handler_acompletion_with_thread_id_reuses_that_thread() -> None:
     assert response._hidden_params["thread_id"] == "thread_existing"
 
 
+async def _complete(sync_mode: bool, request: Mapping[str, object]) -> object:
+    if sync_mode:
+        return litellm.completion(**request)
+    return await litellm.acompletion(**request)
+
+
+@pytest.mark.parametrize("status", ["failed", "cancelled", "expired"])
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_a_run_that_ends_without_completing_raises_its_last_error_and_reads_no_messages(
+    sync_mode: bool, status: str
+) -> None:
+    router: Final = _assistants_api(
+        "thread_new",
+        "never read",
+        run={
+            "id": "run_1",
+            "object": "thread.run",
+            "thread_id": "thread_new",
+            "status": status,
+            "last_error": {"code": "server_error", "message": "Sorry, something went wrong."},
+        },
+    )
+    request: Final = {
+        "model": f"azure_ai/agents/{AGENT_ID}",
+        "messages": [{"role": "user", "content": "hi"}],
+        "api_base": API_BASE,
+        "api_key": "azure-ad-token",
+        "stream": False,
+    }
+
+    with router:
+        with pytest.raises(openai.APIError) as raised:
+            await _complete(sync_mode, request)
+        recorded: Final = _recorded(router)
+
+    assert raised.value.status_code == 500
+    assert f"Run {status}: Sorry, something went wrong." in raised.value.message
+    assert [(method, url.split("?")[0]) for method, url, _, _ in recorded][-1] == (
+        "GET",
+        "/api/projects/litellm-test/threads/thread_new/runs/run_1",
+    )
+
+
 def _sse(event: str, data: dict[str, object] | str) -> str:
-    return f"event: {event}\ndata: {data if isinstance(data, str) else json.dumps(data)}\n\n"
+    return f"event: {event}\ndata: {data if isinstance(data, str) else json.dumps(data, ensure_ascii=False)}\n\n"
 
 
 def _message_delta(text: str) -> dict[str, object]:
@@ -222,3 +276,24 @@ async def test_acompletion_stream_yields_agent_message_deltas_then_stop(respx_mo
         "thread": {"messages": [{"role": "user", "content": "Hi Agent, what is 10 + 5?"}]},
     }
     assert chunks == [("10 + 5", None), (" = 15", None), (None, "stop")]
+
+
+@pytest.mark.asyncio
+async def test_acompletion_stream_keeps_unicode_line_separators_inside_a_delta(respx_mock: respx.MockRouter) -> None:
+    separated_text: Final = "before\u2028between\u2029after"
+    _ = respx_mock.post(f"{API_BASE}/threads/runs").respond(
+        200,
+        text=_sse("thread.message.delta", _message_delta(separated_text)) + _sse("done", "[DONE]"),
+        headers={"content-type": "text/event-stream"},
+    )
+
+    response: Final = await litellm.acompletion(
+        model=f"azure_ai/agents/{AGENT_ID}",
+        messages=[{"role": "user", "content": "Say it with separators"}],
+        api_base=API_BASE,
+        api_key="azure-ad-token",
+        stream=True,
+    )
+    chunks: Final = [(chunk.choices[0].delta.content, chunk.choices[0].finish_reason) async for chunk in response]
+
+    assert chunks == [(separated_text, None), (None, "stop")]

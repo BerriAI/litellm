@@ -1,6 +1,4 @@
 from collections.abc import AsyncIterator, Generator
-from importlib import import_module
-from typing import Final
 
 import pytest
 import pytest_asyncio
@@ -21,16 +19,6 @@ async def isolate_test_state() -> AsyncIterator[None]:
 def recording_server() -> Generator[RecordingServer]:
     with recording_service() as server:
         yield server
-
-
-def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
-    try:
-        import_module("litellm.rust_bridge._native")
-    except ImportError:
-        skip: Final = pytest.mark.skip(reason="requires a compiled litellm.rust_bridge._native extension")
-        for item in items:
-            if "test_litellm_rust" in item.path.parts:
-                item.add_marker(skip)
 
 
 @pytest.fixture

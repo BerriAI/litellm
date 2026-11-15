@@ -8,7 +8,7 @@ Vertex deployments — which never populate those headers — silently produced 
 data even when the proxy router had `tpm`/`rpm` configured.
 
 `_async_set_router_remaining_metrics` adds a provider-agnostic fallback that
-asks `Router.get_remaining_model_group_usage` for the same model_group and
+asks `Router.health().usage(..., kind="remaining")` for the same model_group and
 emits the gauges with `configured_limit - current_usage`.
 
 Tests cover:
@@ -90,7 +90,7 @@ class TestRouterFallbackEmitsForBedrock:
         enum_values = _enum_values()
 
         fake_router = MagicMock()
-        fake_router.get_remaining_model_group_usage = AsyncMock(
+        fake_router.health.return_value.usage = AsyncMock(
             return_value={
                 "x-ratelimit-remaining-tokens": 75,
                 "x-ratelimit-limit-tokens": 100,
@@ -108,9 +108,7 @@ class TestRouterFallbackEmitsForBedrock:
                 enum_values=enum_values,
             )
 
-        fake_router.get_remaining_model_group_usage.assert_awaited_once_with(
-            "bedrock-claude-group"
-        )
+        fake_router.health.return_value.usage.assert_awaited_once_with("bedrock-claude-group", kind="remaining")
         prometheus_logger.litellm_remaining_tokens_metric.labels.assert_called_once()
         prometheus_logger.litellm_remaining_tokens_metric.labels().set.assert_called_once_with(
             75
@@ -133,7 +131,7 @@ class TestRouterFallbackEmitsForVertex:
         enum_values = _enum_values(model_group="vertex-gemini-group")
 
         fake_router = MagicMock()
-        fake_router.get_remaining_model_group_usage = AsyncMock(
+        fake_router.health.return_value.usage = AsyncMock(
             return_value={
                 "x-ratelimit-remaining-tokens": 12345,
                 "x-ratelimit-remaining-requests": 50,
@@ -149,9 +147,7 @@ class TestRouterFallbackEmitsForVertex:
                 enum_values=enum_values,
             )
 
-        fake_router.get_remaining_model_group_usage.assert_awaited_once_with(
-            "vertex-gemini-group"
-        )
+        fake_router.health.return_value.usage.assert_awaited_once_with("vertex-gemini-group", kind="remaining")
         prometheus_logger.litellm_remaining_tokens_metric.labels().set.assert_called_once_with(
             12345
         )
@@ -173,7 +169,7 @@ class TestExistingHeadersShortCircuit:
         )
 
         fake_router = MagicMock()
-        fake_router.get_remaining_model_group_usage = AsyncMock()
+        fake_router.health.return_value.usage = AsyncMock()
 
         prometheus_logger.litellm_remaining_tokens_metric = MagicMock()
         prometheus_logger.litellm_remaining_requests_metric = MagicMock()
@@ -184,7 +180,7 @@ class TestExistingHeadersShortCircuit:
                 enum_values=_enum_values(),
             )
 
-        fake_router.get_remaining_model_group_usage.assert_not_called()
+        fake_router.health.return_value.usage.assert_not_called()
         prometheus_logger.litellm_remaining_tokens_metric.labels.assert_not_called()
         prometheus_logger.litellm_remaining_requests_metric.labels.assert_not_called()
 
@@ -199,7 +195,7 @@ class TestExistingHeadersShortCircuit:
         )
 
         fake_router = MagicMock()
-        fake_router.get_remaining_model_group_usage = AsyncMock(
+        fake_router.health.return_value.usage = AsyncMock(
             return_value={
                 "x-ratelimit-remaining-tokens": 555,
                 "x-ratelimit-remaining-requests": 999,
@@ -244,7 +240,7 @@ class TestRouterFallbackDefensivePaths:
         payload["model_group"] = None
 
         fake_router = MagicMock()
-        fake_router.get_remaining_model_group_usage = AsyncMock()
+        fake_router.health.return_value.usage = AsyncMock()
 
         prometheus_logger.litellm_remaining_tokens_metric = MagicMock()
         prometheus_logger.litellm_remaining_requests_metric = MagicMock()
@@ -255,7 +251,7 @@ class TestRouterFallbackDefensivePaths:
                 enum_values=_enum_values(),
             )
 
-        fake_router.get_remaining_model_group_usage.assert_not_called()
+        fake_router.health.return_value.usage.assert_not_called()
         prometheus_logger.litellm_remaining_tokens_metric.labels.assert_not_called()
 
     @pytest.mark.asyncio
@@ -263,7 +259,7 @@ class TestRouterFallbackDefensivePaths:
         payload = _build_payload()
 
         fake_router = MagicMock()
-        fake_router.get_remaining_model_group_usage = AsyncMock(return_value={})
+        fake_router.health.return_value.usage = AsyncMock(return_value={})
 
         prometheus_logger.litellm_remaining_tokens_metric = MagicMock()
         prometheus_logger.litellm_remaining_requests_metric = MagicMock()
@@ -282,7 +278,7 @@ class TestRouterFallbackDefensivePaths:
         payload = _build_payload()
 
         fake_router = MagicMock()
-        fake_router.get_remaining_model_group_usage = AsyncMock(
+        fake_router.health.return_value.usage = AsyncMock(
             side_effect=RuntimeError("router boom")
         )
 

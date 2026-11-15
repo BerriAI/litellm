@@ -32,7 +32,7 @@ litellm_settings:
       - host: 127.0.0.1
         port: 6379
     ssl: true
-  callbacks: ["arize_phoenix", "datadog", "smtp_email", "prometheus", "otel", "websearch_interception"]
+  callbacks: ["datadog", "smtp_email", "prometheus", "otel", "websearch_interception"]
   websearch_interception_params:
     enabled_providers: ["bedrock"]
     search_tool_name: e2e-search
@@ -97,9 +97,3 @@ files_settings:
 finetune_settings:
   - custom_llm_provider: openai
     api_key: os.environ/OPENAI_API_KEY
-
-mcp_servers:
-  devin:
-    url: "https://mcp.devin.ai/mcp"
-    auth_type: api_key
-    auth_value: os.environ/DEVIN_API_KEY

@@ -803,7 +803,7 @@ async def test_daily_reports_unit_test(slack_alerting):
 @pytest.mark.asyncio
 async def test_send_daily_reports_ignores_zero_values():
     router = MagicMock()
-    router.get_model_ids.return_value = ["model1", "model2", "model3"]
+    router.registry.return_value.names.return_value = ["model1", "model2", "model3"]
 
     slack_alerting = SlackAlerting(internal_usage_cache=MagicMock())
     # model1:failed=None, model2:failed=0, model3:failed=10, model1:latency=0; model2:latency=0; model3:latency=None
@@ -812,7 +812,7 @@ async def test_send_daily_reports_ignores_zero_values():
     )
     slack_alerting.internal_usage_cache.async_set_cache_pipeline = AsyncMock()
 
-    router.get_model_info.side_effect = lambda x: {"litellm_params": {"model": x}}
+    router.registry.return_value.deployment_dict.side_effect = lambda x: {"litellm_params": {"model": x}}
 
     with patch.object(slack_alerting, "send_alert", new=AsyncMock()) as mock_send_alert:
         result = await slack_alerting.send_daily_reports(router)
@@ -831,7 +831,7 @@ async def test_send_daily_reports_ignores_zero_values():
 @pytest.mark.asyncio
 async def test_send_daily_reports_all_zero_or_none():
     router = MagicMock()
-    router.get_model_ids.return_value = ["model1", "model2", "model3"]
+    router.registry.return_value.names.return_value = ["model1", "model2", "model3"]
 
     slack_alerting = SlackAlerting(internal_usage_cache=MagicMock())
     slack_alerting.internal_usage_cache.async_batch_get_cache = AsyncMock(

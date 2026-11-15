@@ -2,6 +2,8 @@ import base64
 import json
 import uuid
 from types import SimpleNamespace
+from typing import Final
+from unittest.mock import MagicMock
 
 import httpx
 import pytest
@@ -243,3 +245,54 @@ async def test_mantle_claude_async_completion_streams_a_wrapped_json_schema_answ
     chunks = tuple([chunk async for chunk in stream])
 
     assert _streamed_answer(chunks) == BARE_STREAMED_ANSWER
+
+
+def _json_tool_message(request: httpx.Request) -> httpx.Response:
+    return httpx.Response(
+        200,
+        json={
+            "id": "msg_1",
+            "type": "message",
+            "role": "assistant",
+            "model": "anthropic.claude-opus-5-5",
+            "content": [{"type": "tool_use", "id": "toolu_1", "name": "json_tool_call", "input": RISK_ANSWER}],
+            "stop_reason": "tool_use",
+            "stop_sequence": None,
+            "usage": {"input_tokens": 1, "output_tokens": 9},
+        },
+    )
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize("model", ("bedrock_mantle/anthropic.claude-opus-5-5", "bedrock/mantle/anthropic.claude-opus-5-5"))
+def test_mantle_claude_that_cannot_force_a_tool_keeps_json_schema_on_the_json_tool(model: str) -> None:
+    respond: Final = MagicMock(wraps=_json_tool_message)
+
+    response: Final = litellm.completion(
+        **{**_json_schema_stream_kwargs(model), "stream": False},
+        client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond))),
+    )
+
+    sent: Final = tuple(json.loads(call.args[0].content) for call in respond.call_args_list)
+    assert json.loads(response.choices[0].message.content) == RISK_ANSWER
+    assert [(body.get("output_config", {}).get("format"), [tool["name"] for tool in body["tools"]]) for body in sent] == [
+        (None, ["json_tool_call"])
+    ]
+
+
+def test_mantle_claude_default_max_tokens_comes_from_the_mantle_row(local_model_cost_map):
+    from litellm.constants import DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS
+    from litellm.llms.bedrock.chat.mantle.transformation import AmazonMantleConfig
+
+    mapped_cap: Final = litellm.get_max_tokens("bedrock_mantle/anthropic.claude-haiku-4-5")
+    assert mapped_cap != DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS, "the model's mapped cap must differ from the fallback"
+
+    body: Final = AmazonMantleConfig().transform_request(
+        model="mantle/anthropic.claude-haiku-4-5",
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert body["max_tokens"] == mapped_cap, f"Mantle should send its mapped cap, got {body['max_tokens']}"

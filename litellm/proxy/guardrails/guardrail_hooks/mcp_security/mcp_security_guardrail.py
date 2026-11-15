@@ -104,12 +104,23 @@ class MCPSecurityGuardrail(CustomGuardrail):
         if not requested_servers:
             return frozenset()
 
-        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        from litellm.proxy.mcp_server.mcp_server_manager import (
             global_mcp_server_manager,
         )
+        from litellm.proxy.proxy_server import prisma_client
 
         async with global_mcp_server_manager.catalog.operation():
-            registry: Final = global_mcp_server_manager.get_registry()
-            registered_names: Final = set(registry.keys())
-
-            return frozenset(requested_servers - registered_names)
+            not_servers: Final = frozenset(
+                name
+                for name in requested_servers
+                if global_mcp_server_manager.get_mcp_server_by_identifier(name) is None
+            )
+            if prisma_client is None:
+                return not_servers
+            return frozenset(
+                [
+                    name
+                    for name in not_servers
+                    if await global_mcp_server_manager.get_toolset_by_name_cached(prisma_client, name) is None
+                ]
+            )

@@ -1,7 +1,7 @@
 # stdlib imports
 import re
 from collections import defaultdict
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final, Literal
@@ -10,11 +10,16 @@ from typing import TYPE_CHECKING, Any, Final, Literal
 import click
 import rich
 import yaml
+from pydantic import TypeAdapter
 from typing_extensions import NotRequired, ReadOnly, TypedDict
+
+from litellm.litellm_core_utils.core_helpers import json_contains, subscript
 
 # local imports
 from ... import Client
 from ._cli_context import cli_context_values
+
+_DECODED_YAML: Final = TypeAdapter(object)
 
 if TYPE_CHECKING:
     from rich.console import JustifyMethod
@@ -59,6 +64,10 @@ def _get_model_info_obj_from_yaml(model: dict[str, Any]) -> ModelYamlInfo:
         access_groups=access_groups,
         provider=provider,
     )
+
+
+def _str_field(model: Mapping[str, object], key: str, default: str) -> str:
+    return str(model.get(key, default))
 
 
 def format_iso_datetime_str(iso_datetime_str: str | None) -> str:
@@ -142,10 +151,10 @@ def list_models(ctx: click.Context, output_format: Literal["table", "json"]) -> 
                 created = int(created)
 
             table.add_row(
-                str(model.get("id", "")),
-                str(model.get("object", "model")),
+                _str_field(model, "id", ""),
+                _str_field(model, "object", "model"),
                 (format_timestamp(created) if isinstance(created, int) else format_iso_datetime_str(created)),
-                str(model.get("owned_by", "")),
+                _str_field(model, "owned_by", ""),
             )
 
         rich.print(table)
@@ -381,10 +390,10 @@ def _print_summary_table(provider_counts):
 def get_model_list_from_yaml_file(yaml_file: str) -> list[dict[str, object]]:
     """Load and validate the model list from a YAML file."""
     with open(yaml_file, "r") as f:
-        data: Final = yaml.safe_load(f)
-    if not data or "model_list" not in data:
+        data: Final = _DECODED_YAML.validate_python(yaml.safe_load(f))
+    if not data or not json_contains(data, "model_list"):
         raise click.ClickException("YAML file must contain a 'model_list' key with a list of models.")
-    model_list: Final = data["model_list"]
+    model_list: Final = subscript(data, "model_list")
     if not isinstance(model_list, list):
         raise click.ClickException("'model_list' must be a list of model definitions.")
     return model_list

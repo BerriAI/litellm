@@ -5,8 +5,10 @@ and transform_audio_transcription_response.
 
 import io
 import json
+import traceback
 from unittest.mock import MagicMock
 
+import httpx
 import pytest
 
 from litellm.llms.openai.transcriptions.whisper_transformation import (
@@ -104,3 +106,10 @@ class TestWhisperTransformResponse:
                     is_json=False,
                 )
             )
+
+    def test_json_object_without_transcription_fields_keeps_the_body_out_of_the_error(self):
+        config = OpenAIWhisperAudioTranscriptionConfig()
+        raw_response = httpx.Response(200, json={"segments": [{"text": "sensitive"}]})
+        with pytest.raises(ValueError, match="Invalid response format") as exc_info:
+            config.transform_audio_transcription_response(raw_response)
+        assert "sensitive" not in "".join(traceback.format_exception(exc_info.value))

@@ -11,6 +11,7 @@ import time
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from functools import reduce
+from importlib.machinery import PathFinder
 from pathlib import Path
 from types import MappingProxyType, ModuleType
 from typing import Final
@@ -45,6 +46,33 @@ from tests.integration._support.process import (
 )
 
 TESTS_DIR: Final = Path(__file__).resolve().parents[2]
+
+
+@pytest.mark.parametrize(
+    ("inherited", "explicit", "remaining"),
+    (
+        (None, None, ()),
+        ("inherited", None, ("inherited",)),
+        ("inherited", "explicit", ("explicit",)),
+        ("inherited", "", ()),
+    ),
+)
+def test_gateway_children_find_moved_launcher_and_keep_the_effective_pythonpath(
+    process_module: ModuleType, inherited: str | None, explicit: str | None, remaining: tuple[str, ...]
+) -> None:
+    with httpx.Client(base_url="http://127.0.0.1:1", trust_env=False) as client:
+        environment: Final = process_module._gateway_environment(
+            Gateway(client, "owned-test-key", "http://127.0.0.1:1"),
+            {} if explicit is None else {"PYTHONPATH": explicit},
+            {} if inherited is None else {"PYTHONPATH": inherited},
+        )
+    root: Final = TESTS_DIR.parent
+    paths: Final = tuple(environment["PYTHONPATH"].split(os.pathsep))
+    assert paths == (str(root / "litellm/runtime"), str(TESTS_DIR), str(root), *remaining)
+    package: Final = PathFinder.find_spec("gateway", paths)
+    assert package is not None
+    launcher: Final = PathFinder.find_spec("gateway.launch", package.submodule_search_locations)
+    assert launcher is not None and launcher.origin == str(root / "litellm/runtime/gateway/launch.py")
 
 
 @pytest.mark.parametrize("config_contents", ("[]\n", "general_settings: []\n", "general_settings: {}\n"))
@@ -366,6 +394,19 @@ def test_owned_writer_keeps_only_a_reader_paired_with_its_database(
         )
     assert environment["DATABASE_URL"] == writer
     assert environment.get("DATABASE_URL_READ_REPLICA") == expected_reader
+
+
+@pytest.mark.parametrize("inherited", (None, "", "0"))
+@pytest.mark.parametrize("override", (None, ""))
+def test_owned_proxies_always_record_fatal_signal_stacks(inherited: str | None, override: str | None) -> None:
+    with httpx.Client(base_url="http://127.0.0.1:1", trust_env=False) as client:
+        environment: Final = _proxy_environment(
+            Gateway(client, "owned-test-key", "http://127.0.0.1:1"),
+            {} if override is None else {"PYTHONFAULTHANDLER": override},
+            (),
+            {} if inherited is None else {"PYTHONFAULTHANDLER": inherited},
+        )
+    assert environment["PYTHONFAULTHANDLER"] == "1"
 
 
 @pytest.mark.parametrize("explicit", (False, True))
