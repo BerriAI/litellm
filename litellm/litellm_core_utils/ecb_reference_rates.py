@@ -11,15 +11,13 @@ import xml.etree.ElementTree as ET
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
+from http import HTTPStatus
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Literal, TypeAlias
+from typing import Final, Literal, Protocol, TypeAlias
 
 import httpx
 
 from litellm.litellm_core_utils.offline_mode import is_offline_mode
-
-if TYPE_CHECKING:
-    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
 ECB_DAILY_RATES_URL: Final = "https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml"
 ECB_FETCH_TIMEOUT_SECONDS: Final = 5.0
@@ -169,7 +167,11 @@ def parse_ecb_daily_feed(body: bytes, today: date) -> EcbRateSnapshot | EcbFeedR
     return EcbRateSnapshot(rate_date=rate_date, units_per_eur=units_per_eur)
 
 
-async def fetch_ecb_daily_feed(http: "AsyncHTTPHandler") -> bytes | EcbFetchFailed:
+class EcbFeedHttpClient(Protocol):
+    async def get(self, url: str, *, timeout: float, max_response_bytes: int) -> httpx.Response: ...
+
+
+async def fetch_ecb_daily_feed(http: EcbFeedHttpClient) -> bytes | EcbFetchFailed:
     if is_offline_mode():
         return EcbFetchFailed("LITELLM_OFFLINE_MODE is set")
     try:
@@ -179,7 +181,7 @@ async def fetch_ecb_daily_feed(http: "AsyncHTTPHandler") -> bytes | EcbFetchFail
         )
     except (httpx.HTTPError, ValueError, asyncio.TimeoutError) as e:
         return EcbFetchFailed(type(e).__name__)
-    if response.status_code != httpx.codes.OK:
+    if response.status_code != HTTPStatus.OK:
         return EcbFetchFailed(f"HTTP {response.status_code}")
     return response.content
 
