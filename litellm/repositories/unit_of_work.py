@@ -165,70 +165,6 @@ class TeamSpendResetWrites:
         )
 
 
-CustomerSpendEntity: TypeAlias = Literal["member", "team", "org"]
-
-_CUSTOMER_RESET_QUERIES: Final = {
-    "member": 'UPDATE "LiteLLM_CustomerMemberTable"'
-    + _SPEND_RESET_SET
-    + " WHERE customer_member_id = $1"
-    + _SPEND_RESET_WHERE,
-    "team": 'UPDATE "LiteLLM_CustomerTeamTable"'
-    + _SPEND_RESET_SET
-    + " WHERE customer_team_id = $1"
-    + _SPEND_RESET_WHERE,
-    "org": 'UPDATE "LiteLLM_CustomerOrganizationTable"'
-    + _SPEND_RESET_SET
-    + " WHERE customer_org_id = $1"
-    + _SPEND_RESET_WHERE,
-}
-
-
-@dataclass(frozen=True, slots=True)
-class CustomerSpendResetWrites:
-    entity: CustomerSpendEntity
-    table: BatchTable
-    batch: PrismaBatch
-
-    def queue_spend_reset(
-        self,
-        identity: str,
-        budget_reset_at: datetime | None,
-        spend_decrement: float,
-        expected_reset_at: datetime | None,
-        spend_after_reset: float = 0.0,
-    ) -> None:
-        if _queue_guarded_spend_reset(
-            self.batch,
-            _CUSTOMER_RESET_QUERIES[self.entity],
-            identity,
-            budget_reset_at,
-            spend_decrement,
-            expected_reset_at,
-            spend_after_reset,
-        ):
-            return
-        self.table.update_many(
-            where={f"customer_{self.entity}_id": identity, "budget_reset_at": expected_reset_at},
-            data=_spend_reset_data(budget_reset_at, spend_decrement),
-        )
-
-
-@asynccontextmanager
-async def customer_spend_reset_unit_of_work(
-    new_batch: Callable[[], PrismaBatch], entity: CustomerSpendEntity
-) -> AsyncGenerator[CustomerSpendResetWrites, None]:
-    batch: Final = new_batch()
-    table: Final = (
-        batch.litellm_customermembertable
-        if entity == "member"
-        else batch.litellm_customerteamtable
-        if entity == "team"
-        else batch.litellm_customerorganizationtable
-    )
-    yield CustomerSpendResetWrites(entity=entity, table=table, batch=batch)
-    await batch.commit()
-
-
 @runtime_checkable
 class SpendResetWrites(Protocol):
     def queue_spend_zero(self, where: Mapping[str, object]) -> None: ...
@@ -250,6 +186,43 @@ class LinkedSpendResetWrites:
             where=where,
             data={"spend": {"decrement": amount}},
         )
+
+
+@dataclass(frozen=True, slots=True)
+class WindowedSpendResetWrites:
+    """End-user and customer team and member pages commit ahead of the window
+    advance, so a failed advance replays them. Each reset stamps the tier window
+    it closes and skips rows already stamped with it: replaying the cap
+    predicate would zero a carried overage, and replaying the zero would erase
+    spend accrued since. Without a window the resets are unguarded."""
+
+    table: BatchTable
+
+    def queue_spend_zero(self, where: Mapping[str, object], window: str | None) -> None:
+        self.table.update_many(where=_not_reset_in(window, where), data=_stamped(window, {"spend": 0}))
+
+    def queue_spend_decrement(self, where: Mapping[str, object], amount: float, window: str | None) -> None:
+        self.table.update_many(
+            where=_not_reset_in(window, where),
+            data=_stamped(window, {"spend": {"decrement": amount}}),
+        )
+
+
+def _stamped(window: str | None, data: Mapping[str, object]) -> Mapping[str, object]:
+    if window is None:
+        return data
+    return {**data, "spend_reset_window": window}
+
+
+def _not_reset_in(window: str | None, where: Mapping[str, object]) -> Mapping[str, object]:
+    if window is None:
+        return where
+    return {
+        "AND": [
+            {**where},
+            {"OR": [{"spend_reset_window": None}, {"spend_reset_window": {"not": window}}]},
+        ]
+    }
 
 
 # Membership rows written before total_spend existed (migration 20260421135425, default 0) hold their
@@ -300,6 +273,10 @@ _LOCK_BUDGET_ACCESS_GROUPS_SQL: Final = (
     'SELECT 1 AS locked FROM "LiteLLM_ModelAccessGroupBudgetTable" WHERE budget_id = ANY($1::text[]) '
     'ORDER BY access_group_name COLLATE "C" FOR UPDATE'
 )
+_LOCK_BUDGET_CUSTOMER_ORGS_SQL: Final = (
+    'SELECT 1 AS locked FROM "LiteLLM_CustomerOrganizationTable" WHERE budget_id = ANY($1::text[]) '
+    'ORDER BY customer_org_id COLLATE "C" FOR UPDATE'
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -314,6 +291,7 @@ class BudgetLinkedRowLocks:
         self.batch.execute_raw(_LOCK_BUDGET_PROJECTS_SQL, list(budget_ids))
         self.batch.execute_raw(_LOCK_BUDGET_TAGS_SQL, list(budget_ids))
         self.batch.execute_raw(_LOCK_BUDGET_ACCESS_GROUPS_SQL, list(budget_ids))
+        self.batch.execute_raw(_LOCK_BUDGET_CUSTOMER_ORGS_SQL, list(budget_ids))
 
 
 @dataclass(frozen=True, slots=True)
@@ -322,8 +300,12 @@ class BudgetWindowWrites:
 
     def queue_window_advance(self, budget_id: str, budget_reset_at: datetime) -> None:
         """``update_many`` so a tier deleted between the read and the commit is a
-        no-op row count instead of a P2025 that aborts the whole chunk."""
-        self.table.update_many(where={"budget_id": budget_id}, data={"budget_reset_at": budget_reset_at})
+        no-op row count instead of a P2025 that aborts the whole chunk. The
+        count names the tier's windows for the end-user reset stamps."""
+        self.table.update_many(
+            where={"budget_id": budget_id},
+            data={"budget_reset_at": budget_reset_at, "budget_reset_count": {"increment": 1}},
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -351,6 +333,7 @@ class BudgetCascadeUnitOfWork:
     tags: LinkedSpendResetWrites
     model_access_groups: LinkedSpendResetWrites
     projects: LinkedSpendResetWrites
+    customer_organizations: LinkedSpendResetWrites
     budgets: BudgetWindowWrites
 
 
@@ -380,17 +363,32 @@ async def budget_cascade_unit_of_work(
         tags=LinkedSpendResetWrites(table=batch.litellm_tagtable),
         model_access_groups=LinkedSpendResetWrites(table=batch.litellm_modelaccessgroupbudgettable),
         projects=LinkedSpendResetWrites(table=batch.litellm_projecttable),
+        customer_organizations=LinkedSpendResetWrites(table=batch.litellm_customerorganizationtable),
         budgets=BudgetWindowWrites(table=batch.litellm_budgettable),
     )
+    await batch.commit()
+
+
+CustomerSpendTable: TypeAlias = Literal["litellm_customerteamtable", "litellm_customermembertable"]
+
+
+@asynccontextmanager
+async def customer_spend_reset_unit_of_work(
+    new_batch: Callable[[], PrismaBatch], table: CustomerSpendTable
+) -> AsyncGenerator[WindowedSpendResetWrites, None]:
+    """One page of customer team or member spend resets, committed on its own like end users: an aliased request
+    can register a member, so the rows a template governs are unbounded."""
+    batch: Final = new_batch()
+    yield WindowedSpendResetWrites(table=getattr(batch, table))
     await batch.commit()
 
 
 @asynccontextmanager
 async def enduser_spend_reset_unit_of_work(
     new_batch: Callable[[], PrismaBatch],
-) -> AsyncGenerator[LinkedSpendResetWrites, None]:
+) -> AsyncGenerator[WindowedSpendResetWrites, None]:
     """One page of end-user spend resets, committed on its own so a statement
     never grows with the end-user population."""
     batch: Final = new_batch()
-    yield LinkedSpendResetWrites(table=batch.litellm_endusertable)
+    yield WindowedSpendResetWrites(table=batch.litellm_endusertable)
     await batch.commit()

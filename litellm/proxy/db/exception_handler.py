@@ -776,8 +776,17 @@ def db_write_failure_is_requeue_safe(e: Exception) -> bool:
 
 
 def db_write_never_sent(e: Exception) -> bool:
-    """Whether the database could not take the write at all, because it was unreachable (P1001),
-    refusing connections (57P03) or full (53300, P2024), so even a non-idempotent write can be sent again."""
+    """Whether the database could not take the write at all, because the client had no query engine to send it
+    to (ClientNotConnectedError, NotConnectedError, ConnectError), it was unreachable (P1001), refusing connections
+    (57P03) or full (53300, P2024), so even a non-idempotent write can be sent again."""
+    import prisma
+    import prisma.engine.errors
+
+    unsent_types: Final = _exception_types(
+        prisma.errors.ClientNotConnectedError, prisma.engine.errors.NotConnectedError
+    )
+    if isinstance(e, (*DB_RETRY_SAFE_ERROR_TYPES, *unsent_types)):
+        return True
     if PrismaDBExceptionHandler.is_database_not_accepting_connections_error(e):
         return True
     if PrismaDBExceptionHandler.is_database_capacity_error(e):

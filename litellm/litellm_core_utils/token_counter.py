@@ -50,7 +50,10 @@ from litellm.constants import (
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping
 from litellm.litellm_core_utils.prompt_templates.chat_template_tools import (
+    OPENAI_TOOL_CHOICE_TOKENS,
     ChatTemplateToolSection,
+    ToolChoiceTokens,
+    chat_template_tool_choice_tokens,
     chat_template_tool_section,
 )
 from litellm.litellm_core_utils.tokenizer import HuggingFaceTokenizer, OpenAIEncoding
@@ -816,7 +819,7 @@ class _MessageCountParams:
         model: str,
         custom_tokenizer: dict | SelectTokenizerResponse | None,
     ):
-        from litellm.utils import print_verbose
+        from litellm.utils import huggingface_tokenizer_kind, print_verbose
 
         actual_model: Final = _fix_model_name(model)
         if uses_legacy_message_accounting(model):
@@ -831,11 +834,27 @@ class _MessageCountParams:
             self.tokens_per_name = 1
         self.count_function = _get_count_function(model, custom_tokenizer)
         self.tool_section = chat_template_tool_section(model)
+        self.tool_choice_tokens = _tool_choice_tokens(
+            model or "",
+            self.tool_section,
+            bills_no_tool_choice=huggingface_tokenizer_kind(model or "") == "deepseek"
+            or "gemini" in (model or "").lower(),
+        )
         self._model = model
 
     @cached_property
     def pdf_pricing(self) -> PdfPagePricing:
         return pdf_page_pricing(self._model)
+
+
+def _tool_choice_tokens(
+    model: str, tool_section: ChatTemplateToolSection | None, bills_no_tool_choice: bool
+) -> ToolChoiceTokens | None:
+    if tool_section is not None:
+        return chat_template_tool_choice_tokens(model, tool_section)
+    if bills_no_tool_choice:
+        return None
+    return OPENAI_TOOL_CHOICE_TOKENS
 
 
 def _is_openai_chat_model(model: str) -> bool:
@@ -951,7 +970,12 @@ def token_counter(
         if count_response_tokens is False:
             includes_system_message: Final = any(message.get("role", None) == "system" for message in new_messages)
             num_tokens += _count_extra(
-                params.count_function, tools, tool_choice, includes_system_message, params.tool_section
+                params.count_function,
+                tools,
+                tool_choice,
+                includes_system_message,
+                params.tool_section,
+                params.tool_choice_tokens,
             )
 
     else:
@@ -987,7 +1011,9 @@ def messages_reach_token_count(
     )
     running_totals: Final = accumulate(
         per_message_counts,
-        initial=_count_extra(params.count_function, tools, None, includes_system_message, params.tool_section),
+        initial=_count_extra(
+            params.count_function, tools, None, includes_system_message, params.tool_section, params.tool_choice_tokens
+        ),
     )
     return any(total >= threshold for total in running_totals)
 
@@ -1101,6 +1127,7 @@ def _count_extra(
     tool_choice: str | Mapping[str, object] | None,
     includes_system_message: bool,
     tool_section: ChatTemplateToolSection | None,
+    tool_choice_tokens: ToolChoiceTokens | None,
 ) -> int:
     """Count extra tokens for function definitions and tool choices.
     Args:
@@ -1109,17 +1136,13 @@ def _count_extra(
         tool_choice (Optional[ChatCompletionNamedToolChoiceParam]): The tool choice.
         includes_system_message (bool): Whether the messages include a system message.
         tool_section (Optional[ChatTemplateToolSection]): How the model's chat template renders tools, if known.
+        tool_choice_tokens (Optional[ToolChoiceTokens]): What the model's chat template adds per tool choice, if any.
     """
     reply_primer_tokens: Final = 3
-    tool_choice_tokens: Final = (
-        _count_tool_choice(count_function, tool_choice)
-        if tool_section is None or tool_section.counts_tool_choice
-        else 0
-    )
     return (
         reply_primer_tokens
         + _count_tool_definitions(count_function, tools, includes_system_message, tool_section)
-        + tool_choice_tokens
+        + (_count_tool_choice(count_function, tool_choice, tool_choice_tokens) if tools else 0)
     )
 
 
@@ -1140,16 +1163,17 @@ def _count_tool_definitions(
 def _count_tool_choice(
     count_function: TokenCounterFunction,
     tool_choice: str | Mapping[str, object] | None,
+    tool_choice_tokens: ToolChoiceTokens | None,
 ) -> int:
+    if tool_choice_tokens is None:
+        return 0
     match tool_choice:
-        case "none":
-            return 1
-        case {"function": {"name": str() as name}}:
-            return 7 + count_function(name)
-        case {"type": "none"}:
-            return 1
-        case {"name": str() as name}:
-            return 7 + count_function(name)
+        case "none" | {"type": "none"}:
+            return tool_choice_tokens.none
+        case "required" | {"type": "any"}:
+            return tool_choice_tokens.required
+        case {"function": {"name": str() as name}} | {"name": str() as name}:
+            return tool_choice_tokens.named + count_function(name)
         case _:
             return 0
 

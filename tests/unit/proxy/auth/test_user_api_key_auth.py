@@ -18,6 +18,12 @@ import litellm.proxy
 import litellm.proxy.proxy_server
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import LiteLLM_AccessGroupTable, LiteLLM_UserTable, LitellmUserRoles, ProxyException
+from litellm.proxy.auth.customer_hierarchy_auth import (
+    CustomerBudgetExceededError,
+    customer_member_cache_key,
+    customer_org_alias_cache_key,
+    resolve_customer_hierarchy,
+)
 from litellm.proxy.auth.user_api_key_auth import (
     UserAPIKeyAuth,
     _authorize_authenticated_request,
@@ -25,7 +31,119 @@ from litellm.proxy.auth.user_api_key_auth import (
     user_api_key_auth,
 )
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.types.proxy.auth.customer_hierarchy import CustomerHierarchyAuth, CustomerRequestIdentity, CustomerScopeAuth
 from tests._master_key import MASTER_KEY
+from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "denial,code",
+    (
+        ("scope", "403"),
+        ("mismatch", "403"),
+        ("unknown", "403"),
+        ("model", "403"),
+        ("model_budget", "403"),
+        ("budget", "422"),
+    ),
+)
+async def test_customer_identity_is_retained_only_after_ownership_authorization(
+    monkeypatch: pytest.MonkeyPatch, denial: str, code: str
+) -> None:
+    server: Final = litellm.proxy.proxy_server
+    cache: Final = UserApiKeyCache()
+    hierarchy: Final = CustomerHierarchyAuth(
+        customer_org_id="customer-org-b",
+        customer_org_alias="customer-b",
+        customer_team_id="customer-team-b",
+        customer_member_id="customer-member-b",
+        scopes=(
+            CustomerScopeAuth(
+                key="customer_org",
+                entity_id="customer-org-b",
+                spend=1,
+                max_budget=10 if denial == "model" else 0,
+                allowed_models=("other-model",) if denial in ("model", "model_budget") else (),
+            ),
+        ),
+    )
+    await cache.async_set_cache(key=customer_member_cache_key("customer-member-b"), value=hierarchy)
+    await cache.async_set_cache(
+        key=customer_org_alias_cache_key("customer-a"),
+        value=CustomerHierarchyAuth(customer_org_id="customer-org-a", customer_org_alias="customer-a", scopes=()),
+    )
+    database: Final = MagicMock()
+    database.db.litellm_customerorganizationtable.find_many = AsyncMock(return_value=[])
+    monkeypatch.setattr(server, "prisma_client", database)
+    monkeypatch.setattr(server, "user_api_key_cache", cache)
+    monkeypatch.setattr(server, "llm_router", None)
+    monkeypatch.setattr(server, "general_settings", {})
+    identity: Final = UserAPIKeyAuth(
+        token="verified-customer-key",
+        metadata={
+            "customer_org_id": "customer-org-b" if denial in ("budget", "model", "model_budget") else "customer-org-a"
+        },
+        customer_hierarchy=hierarchy,
+    )
+    headers: Final = ((b"x-litellm-customer-member-id", b"customer-member-b"),) + (
+        ((b"x-litellm-customer-org-alias", b"customer-a" if denial == "mismatch" else b"unknown-customer"),)
+        if denial in ("mismatch", "unknown")
+        else ()
+    )
+    request: Final = StarletteRequest({"type": "http", "method": "POST", "path": "/v1/responses", "headers": headers})
+    with pytest.raises(ProxyException) as denied:
+        await _authorize_authenticated_request(
+            user_api_key_auth_obj=identity,
+            request=request,
+            request_data={"model": "qa-model", "input": "Hello"},
+            route="/v1/responses",
+            api_key="verified-customer-key",
+        )
+    assert denied.value.code == code
+    assert identity.customer_hierarchy == (hierarchy if denial == "budget" else None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route", ("/v1/responses", "/v1/chat/completions", "/v1/messages"))
+async def test_budget_denial_persists_the_hierarchy_used_by_the_common_resolver(
+    monkeypatch: pytest.MonkeyPatch, route: str
+) -> None:
+    server: Final = litellm.proxy.proxy_server
+    cache: Final = UserApiKeyCache()
+    hierarchy: Final = CustomerHierarchyAuth(
+        customer_org_id="customer-org-b",
+        customer_member_id="customer-member-b",
+        scopes=(CustomerScopeAuth(key="customer_org", entity_id="customer-org-b", spend=1, max_budget=0.5),),
+    )
+    await cache.async_set_cache(key=customer_member_cache_key("customer-member-b"), value=hierarchy)
+    store: Final = FakeSpendCounters().store()
+    await store.increment("spend:customer_org:customer-org-b:lifetime", 2)
+    database: Final = MagicMock()
+    monkeypatch.setattr(server, "prisma_client", database)
+    monkeypatch.setattr(server, "user_api_key_cache", cache)
+    monkeypatch.setattr(server, "spend_counter_store", store)
+    monkeypatch.setattr(server, "llm_router", None)
+    monkeypatch.setattr(server, "general_settings", {})
+    with pytest.raises(CustomerBudgetExceededError) as resolved:
+        await resolve_customer_hierarchy(
+            CustomerRequestIdentity(customer_member_id="customer-member-b"), database, cache, None, "qa-model", route
+        )
+    identity: Final = UserAPIKeyAuth(token="verified-customer-key")
+    request: Final = StarletteRequest(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": route,
+            "headers": ((b"x-litellm-customer-member-id", b"customer-member-b"),),
+        }
+    )
+    with pytest.raises(ProxyException) as denied:
+        await _authorize_authenticated_request(
+            identity, request, {"model": "qa-model", "input": "Hello"}, route, "verified-customer-key"
+        )
+    assert denied.value.code == "422"
+    assert identity.customer_hierarchy == resolved.value.customer_hierarchy
 
 
 class Request:
@@ -421,6 +539,46 @@ async def test_aaauser_personal_budgets(key_ownership):
         assert exc_info.value.type == ProxyErrorTypes.budget_exceeded
     else:
         await user_api_key_auth(request=request, api_key="Bearer " + user_key)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("spend,expect_refusal", [(5.0, True), (0.5, False)], ids=["over_budget", "under_budget"])
+async def test_virtual_key_max_budget_decides_a_queued_chat_call(monkeypatch, spend, expect_refusal):
+    import time
+
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    from litellm.proxy._types import ProxyErrorTypes, ProxyException, UserAPIKeyAuth
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.proxy.proxy_server import hash_token, user_api_key_cache
+
+    route: Final = "/queue/chat/completions"
+    key: Final = "sk-queued-chat-budget"
+    user_api_key_cache.set_cache(
+        key=hash_token(key),
+        value=UserAPIKeyAuth(
+            token=hash_token(key),
+            last_refreshed_at=time.time(),
+            allowed_routes=[route],
+            max_budget=1.0,
+            spend=spend,
+        ),
+    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "prisma_client", _NoMembershipRowPrisma())
+
+    request: Final = Request(scope={"type": "http", "method": "POST", "path": route, "headers": []})
+    request._url = URL(url=route)
+
+    if not expect_refusal:
+        served: Final = await user_api_key_auth(request=request, api_key="Bearer " + key)
+        assert served.token == hash_token(key)
+        return
+    with pytest.raises(ProxyException) as exc_info:
+        await user_api_key_auth(request=request, api_key="Bearer " + key)
+    assert exc_info.value.type == ProxyErrorTypes.budget_exceeded
 
 
 @pytest.mark.asyncio

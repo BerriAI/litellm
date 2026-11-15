@@ -5,11 +5,13 @@ Tests for AnthropicResponsesStreamWrapper
 
 import asyncio
 import datetime
+import itertools
 import json
 import os
 import sys
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Iterator, Mapping
 from types import SimpleNamespace
+from typing import Final
 
 import anyio
 import pytest
@@ -629,6 +631,78 @@ class TestUpstreamFailureEndsStreamWithErrorEvent:
         assert chunks[1]["error"] == {"type": "api_error", "message": INCOMPLETE_STREAM_ERROR_MESSAGE}
 
 
+def _text_then_completed() -> Iterator[Mapping[str, object]]:
+    yield {"type": "response.created"}
+    yield {"type": "response.output_item.added", "item": {"type": "message", "id": "msg_1"}}
+    yield {"type": "response.output_text.delta", "item_id": "msg_1", "delta": "Hi"}
+    yield {"type": "response.output_item.done", "item": {"type": "message", "id": "msg_1"}}
+    yield {"type": "response.completed"}
+
+
+def _text_then_transport_error() -> Iterator[Mapping[str, object]]:
+    yield {"type": "response.created"}
+    yield {"type": "response.output_item.added", "item": {"type": "message", "id": "msg_1"}}
+    yield {"type": "response.output_text.delta", "item_id": "msg_1", "delta": "Hi"}
+    raise ConnectionResetError("Response payload is not completed")
+
+
+def _text_without_a_terminal_event() -> Iterator[Mapping[str, object]]:
+    yield {"type": "response.created"}
+    yield {"type": "response.output_item.added", "item": {"type": "message", "id": "msg_1"}}
+    yield {"type": "response.output_text.delta", "item_id": "msg_1", "delta": "Hi"}
+
+
+def _failed_then_pulled_again() -> Iterator[Mapping[str, object]]:
+    yield {"type": "response.created"}
+    yield {
+        "type": "response.failed",
+        "response": {"status": "failed", "output": [], "error": {"code": "server_error", "message": "boom"}},
+    }
+    raise AssertionError("upstream was pulled again after the failure")
+
+
+def _message_start_without_id(chunk: Mapping[str, object]) -> Mapping[str, object]:
+    message: Final = chunk.get("message")
+    if chunk["type"] != "message_start" or not isinstance(message, Mapping):
+        return chunk
+    return {**chunk, "message": {**message, "id": None}}
+
+
+def _without_message_id(chunks: Iterable[Mapping[str, object]]) -> tuple[Mapping[str, object], ...]:
+    return tuple(_message_start_without_id(chunk) for chunk in chunks)
+
+
+@pytest.mark.parametrize(
+    ("upstream", "last_event"),
+    [
+        (_text_then_completed, "message_stop"),
+        (_text_then_transport_error, "error"),
+        (_text_without_a_terminal_event, "error"),
+        (_failed_then_pulled_again, "error"),
+        (lambda: iter(()), "error"),
+    ],
+    ids=["completed", "transport-error", "no-terminal-event", "response-failed", "no-events"],
+)
+def test_a_for_loop_gets_the_events_an_async_caller_gets(
+    upstream: Callable[[], Iterator[Mapping[str, object]]], last_event: str
+) -> None:
+    sync_chunks: Final = tuple(AnthropicResponsesStreamWrapper(responses_stream=upstream(), model="m"))
+
+    assert _without_message_id(sync_chunks) == _without_message_id(_collect(upstream()))
+    assert sync_chunks[0]["type"] == "message_start"
+    assert sync_chunks[-1]["type"] == last_event
+
+
+def test_a_for_loop_reads_the_upstream_only_as_far_as_the_caller_has_read() -> None:
+    upstream: Final = _text_then_completed()
+    stream: Final = AnthropicResponsesStreamWrapper(responses_stream=upstream, model="m")
+
+    first_three: Final = tuple(chunk["type"] for chunk in itertools.islice(stream, 3))
+
+    assert first_three == ("message_start", "content_block_start", "content_block_delta")
+    assert next(upstream)["type"] == "response.output_item.done"
+
+
 class _FailureHookRecorder:
     def __init__(self) -> None:
         self.received: tuple[Exception, ...] = ()
@@ -779,7 +853,9 @@ class TestUpstreamFailureReachesTheProxyFailureHook:
 
         async def _close_on_the_error_event() -> None:
             wrapper = AnthropicResponsesStreamWrapper(
-                responses_stream=_failing_after_one_delta(), model="m", litellm_logging_obj=_logging_obj_with_failure_hook(recorder)
+                responses_stream=_failing_after_one_delta(),
+                model="m",
+                litellm_logging_obj=_logging_obj_with_failure_hook(recorder),
             )
             sse = wrapper.async_anthropic_sse_wrapper()
             async for frame in sse:
@@ -803,7 +879,9 @@ class TestUpstreamFailureReachesTheProxyFailureHook:
 
         async def _disconnect_mid_hook() -> None:
             wrapper = AnthropicResponsesStreamWrapper(
-                responses_stream=_failing_after_one_delta(), model="m", litellm_logging_obj=_logging_obj_with_failure_hook(_held_hook)
+                responses_stream=_failing_after_one_delta(),
+                model="m",
+                litellm_logging_obj=_logging_obj_with_failure_hook(_held_hook),
             )
 
             async def _consume() -> None:

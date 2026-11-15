@@ -228,4 +228,22 @@ describe("CreateVectorStore submit payload characterization", () => {
 
     expect(networking.ragIngestCall).not.toHaveBeenCalled();
   });
+
+  it("should cancel the delayed form reset when the form is unmounted", async () => {
+    const { unmount } = render(<CreateVectorStore accessToken="test-token" />);
+    try {
+      await uploadFile();
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      await clickCreate();
+      act(() => vi.advanceTimersByTime(2999));
+      expect(screen.getByText("Uploaded Documents (1)")).toBeInTheDocument();
+      expect(vi.getTimerCount()).toBeGreaterThan(0);
+      unmount();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      unmount();
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
 });

@@ -35,13 +35,19 @@ def test_shortening_budget_duration_moves_reset_at_onto_the_new_schedule(gateway
 
 
 BUDGET_COLUMNS: Final = (
-    "budget_id, max_budget, soft_budget, max_parallel_requests, tpm_limit, rpm_limit, tpd_limit, model_max_budget, "
-    "model_tpm_limit, model_rpm_limit, budget_duration, allowed_models, temp_budget_increase, temp_budget_expiry, "
-    "created_by, updated_by"
+    "budget_id, name, max_budget, soft_budget, max_parallel_requests, tpm_limit, rpm_limit, tpd_limit, "
+    "model_max_budget, model_tpm_limit, model_rpm_limit, budget_duration, budget_limits, cap_policy, "
+    "budget_reset_count, allowed_models, temp_budget_increase, temp_budget_expiry, created_by, updated_by"
 )
 VOLATILE_INFO_FIELDS: Final = frozenset({"created_at", "updated_at", "budget_reset_at"})
 UNLOADED_RELATIONS: Final[dict[str, JsonValue]] = dict.fromkeys(
     (
+        "customer_organization_defaults",
+        "customer_organizations",
+        "customer_teams",
+        "customer_members",
+        "customer_member_overrides",
+        "customer_team_overrides",
         "organization",
         "projects",
         "keys",
@@ -122,6 +128,7 @@ def test_partial_update_keeps_sibling_budget_fields(gateway: Gateway) -> None:
         creator: Final = string_value(_budget_row(budget_id)["created_by"])
         expected: Final[dict[str, JsonValue]] = {
             "budget_id": budget_id,
+            "name": None,
             "max_budget": 10.0,
             "soft_budget": 5.0,
             "max_parallel_requests": None,
@@ -132,6 +139,9 @@ def test_partial_update_keeps_sibling_budget_fields(gateway: Gateway) -> None:
             "model_tpm_limit": None,
             "model_rpm_limit": None,
             "budget_duration": "30d",
+            "budget_limits": None,
+            "cap_policy": None,
+            "budget_reset_count": 0,
             "allowed_models": [],
             "temp_budget_increase": None,
             "temp_budget_expiry": None,

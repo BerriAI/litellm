@@ -13,6 +13,7 @@ litellm-cost = { workspace = true, features = ["serde"] }
 litellm-error.workspace = true
 litellm-tracing.workspace = true
 
+encoding_rs = "0.8.35"
 indexmap = { version = "2.14.0", features = ["serde"] }
 jiff = { version = "0.2.37", default-features = false, features = ["std", "tzdb-bundle-always"] }
 macro_rules_attribute.workspace = true

@@ -140,7 +140,7 @@ from litellm.router_rust.routing_stores import (
     RoutingStores,
     service_target_of,
 )
-from litellm.router_rust.steps.access import caller_fields, selection_refusal
+from litellm.router_rust.steps.access import caller_fields, pinned_deployment_wildcard_grant, selection_refusal
 from litellm.router_rust.steps.callbacks import OptionalChecks, RustOptionalChecks
 from litellm.router_rust.steps.plugins import SYNC_PATH_MESSAGE, candidate_models, run_plugins
 from litellm.router_rust.steps.precall import (
@@ -2900,6 +2900,11 @@ class RustCore(
         )
         fields: dict[str, object] = dict(_start_fields(request))  # mutable-ok: built up below  # rebind-ok: same
         fields.update(self._group_policy_fields(request))
+        pinned_grant: Final = pinned_deployment_wildcard_grant(
+            request.get("model"), fields.get("allowed_models"), get_request_team_id(request), self.registry()
+        )
+        if pinned_grant is not None:
+            fields["allowed_models"] = list(pinned_grant)
         if filter_tags:
             fields["filter_tags"] = True
         if request_carries_image(messages, request):
