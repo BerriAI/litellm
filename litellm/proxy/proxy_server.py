@@ -14211,6 +14211,14 @@ from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
 
 
+def _with_user_profile_id(counter: BaseTokenCounter | None, user_profile_id: str | None) -> BaseTokenCounter | None:
+    from litellm.llms.anthropic.count_tokens.token_counter import AnthropicTokenCounter
+
+    if not user_profile_id or not isinstance(counter, AnthropicTokenCounter):
+        return counter
+    return AnthropicTokenCounter(user_profile_id=user_profile_id)
+
+
 def _get_provider_token_counter(
     deployment: dict, model_to_use: str
 ) -> tuple[BaseTokenCounter | None, str | None, str | None]:
@@ -14715,6 +14723,7 @@ async def count_request_tokens(
     output_format: JsonValue = None,
     context_management: JsonValue = None,
     request_litellm_params: Mapping[str, JsonValue] = MappingProxyType({}),
+    user_profile_id: str | None = None,
 ) -> TokenCountResponse:
     prompt: Final = request.prompt
     messages: Final = request.messages
@@ -14767,7 +14776,8 @@ async def count_request_tokens(
     custom_llm_provider: str | None = None
     if call_endpoint is True and deployment is not None:
         # Auto-route to the correct provider based on model
-        provider_counter, _model, custom_llm_provider = _get_provider_token_counter(deployment, model_to_use)
+        routed_counter, _model, custom_llm_provider = _get_provider_token_counter(deployment, model_to_use)
+        provider_counter = _with_user_profile_id(routed_counter, user_profile_id)
         if _model is not None:
             model_to_use = _model
 

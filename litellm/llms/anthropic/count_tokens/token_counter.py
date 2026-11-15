@@ -2,6 +2,8 @@
 Anthropic Token Counter implementation using the CountTokens API.
 """
 
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Any, Final
 
 from pydantic import JsonValue
@@ -11,14 +13,22 @@ from litellm._logging import verbose_logger
 from litellm.exceptions import AuthenticationError
 from litellm.llms.anthropic.count_tokens.handler import AnthropicCountTokensHandler
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
+from litellm.types.llms.anthropic import ANTHROPIC_USER_PROFILE_ID_HEADER
 from litellm.types.utils import CountContextManagement, LlmProviders, TokenCountMessagesFormat, TokenCountResponse
 
 # Global handler instance - reuse across all token counting requests
 anthropic_count_tokens_handler: Final = AnthropicCountTokensHandler()
 
+_NO_HEADERS: Final[Mapping[str, str]] = MappingProxyType({})
+
 
 class AnthropicTokenCounter(BaseTokenCounter):
     """Token counter implementation for Anthropic provider using the CountTokens API."""
+
+    def __init__(self, user_profile_id: str | None = None) -> None:
+        self.user_profile_headers: Final = (
+            MappingProxyType({ANTHROPIC_USER_PROFILE_ID_HEADER: user_profile_id}) if user_profile_id else _NO_HEADERS
+        )
 
     def should_use_token_counting_api(
         self,
@@ -85,7 +95,7 @@ class AnthropicTokenCounter(BaseTokenCounter):
             result: Final = await anthropic_count_tokens_handler.handle_count_tokens_request(
                 model=model_to_use,
                 messages=messages,
-                auth_header=auth_header,
+                auth_header={**auth_header, **self.user_profile_headers},
                 api_base=api_base,
                 tools=tools,
                 system=system,

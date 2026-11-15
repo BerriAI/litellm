@@ -5,9 +5,11 @@ Test for anthropic_endpoints/endpoints.py, focusing on handling dictionary objec
 import json
 import logging
 import unittest
+from collections.abc import Mapping
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -613,6 +615,73 @@ async def test_count_tokens_drops_malformed_tools_the_counted_deployment_drops_e
 
     assert response == {"input_tokens": 7}
     assert counter.await_args.kwargs["request"].tools is None
+
+
+@pytest.mark.parametrize(
+    "key_metadata,client_headers,sent_profile_id",
+    [
+        ({}, {"anthropic-user-profile-id": "uprof_client"}, "uprof_client"),
+        ({"anthropic_user_profile_id": "uprof_pinned"}, {"anthropic-user-profile-id": "uprof_client"}, "uprof_pinned"),
+        ({"anthropic_user_profile_id": "uprof_pinned"}, {}, "uprof_pinned"),
+        ({}, {}, None),
+    ],
+    ids=["client_header", "key_pin_over_client", "key_pin_alone", "neither"],
+)
+def test_count_tokens_sends_the_user_profile_id_inference_would_send(
+    monkeypatch: pytest.MonkeyPatch,
+    key_metadata: Mapping[str, str],
+    client_headers: Mapping[str, str],
+    sent_profile_id: str | None,
+) -> None:
+    from fastapi import FastAPI
+
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm.llms.anthropic.count_tokens import handler as anthropic_count_tokens_handler
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.anthropic_endpoints.endpoints import router
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    def peer(request: httpx.Request) -> httpx.Response:
+        received: Final = request.headers.get("anthropic-user-profile-id")
+        return (
+            httpx.Response(200, json={"input_tokens": 77}, request=request)
+            if received == sent_profile_id
+            else httpx.Response(
+                400,
+                json={"type": "error", "error": {"type": "invalid_request_error", "message": f"got {received}"}},
+                request=request,
+            )
+        )
+
+    monkeypatch.setattr(
+        proxy_server,
+        "llm_router",
+        Router(
+            model_list=[
+                {
+                    "model_name": "count-profile-claude",
+                    "litellm_params": {"model": "anthropic/claude-zeta-9", "api_key": "test-key"},
+                }
+            ]
+        ),
+    )
+    monkeypatch.setattr(
+        anthropic_count_tokens_handler,
+        "get_async_httpx_client",
+        lambda *args, **kwargs: AsyncHTTPHandler(transport=httpx.MockTransport(peer)),
+    )
+    app: Final = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(metadata=dict(key_metadata))
+
+    response: Final = TestClient(app).post(
+        "/v1/messages/count_tokens",
+        json={"model": "count-profile-claude", "messages": [{"role": "user", "content": "Hello"}]},
+        headers=dict(client_headers),
+    )
+
+    assert response.json() == {"input_tokens": 77, "litellm_count_source": "provider"}, response.text
 
 
 class TestEventLoggingBatchEndpoint:
