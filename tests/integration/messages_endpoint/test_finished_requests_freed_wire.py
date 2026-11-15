@@ -129,5 +129,6 @@ def test_finished_calls_are_freed_without_a_cleanup_pass(
     )
     assert after <= before + _SLACK, (
         f"{after - before} of {_CALLS} finished {'streamed ' if stream else ''}{path} calls still hold their log "
-        "record with Python's cycle collector held off, so each one waits for a full cleanup pass before its memory comes back"
+        "record with Python's cycle collector held off, so each one waits for a full cleanup pass "
+        "before its memory comes back"
     )
