@@ -27,8 +27,6 @@ from litellm.types.proxy.native_budgets import BudgetCheck, NativeSettlement
 if TYPE_CHECKING:
     from litellm.rust_bridge._native import NativeBudgets
 
-NATIVE_CALL_ID_KEY: Final = "native_call_id"
-
 
 def new_reservation_id() -> str:
     return uuid.uuid4().hex
@@ -195,7 +193,6 @@ async def reserve_native(
     }
     identity.budget_reservation = reservation
     write_budget_reservation(HookArgs(auth=identity), held)
-    reservation[NATIVE_CALL_ID_KEY] = record.reservation_id or new_reservation_id()
     from litellm.proxy.spend_tracking.budget_reservation import start_reservation_lease_renewal
 
     start_reservation_lease_renewal(
@@ -282,10 +279,6 @@ async def settle_native_reservation(
         PendingSpendIncrement(counter_key=pending.counter_key, increment=pending.increment)
         for pending in settled.pending
     )
-
-
-def is_native_reservation(reservation: Mapping[str, object] | None) -> bool:
-    return reservation is not None and NATIVE_CALL_ID_KEY in reservation
 
 
 class BudgetDecision(BaseModel):

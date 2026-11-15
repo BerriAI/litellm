@@ -165,7 +165,6 @@ async def _run(proxy: Proxy, exit_path: Exit) -> Run:
     auth, data = await _admit(proxy, "call-path")
     reservation: Final = auth.budget_reservation
     assert reservation is not None
-    assert native_budgets.is_native_reservation(reservation)
     entries: Final = [
         {key: entry[key] for key in ("counter_key", "entity_type", "reserved_cost")}
         for entry in reservation["entries"]  # pyright: ignore[reportGeneralTypeIssues]  # the entries list the reservation carries
@@ -264,15 +263,10 @@ async def test_the_native_owner_holds_a_websocket_admission_at_connect_like_pyth
 ) -> None:
     native: Final = await _websocket_auth(proxy, *route)
 
-    assert native_budgets.is_native_reservation(native.budget_reservation)
     assert native.budget_reservation is not None
-    held: Final = (_python_shaped(native.budget_reservation), dict(proxy.store.snapshot()))
+    held: Final = (dict(native.budget_reservation), dict(proxy.store.snapshot()))
     assert held[1][KEY_COUNTER] > 0.0, "the native owner must hold the admission at connect"
     assert golden.canonical(held) == golden.recorded("python", held)
-
-
-def _python_shaped(reservation: Mapping[str, object]) -> Mapping[str, object]:
-    return {key: value for key, value in reservation.items() if key != native_budgets.NATIVE_CALL_ID_KEY}
 
 
 async def _second_turn(_auth: UserAPIKeyAuth, _data: RequestData) -> None:
@@ -319,9 +313,8 @@ async def test_a_route_without_a_native_pre_call_is_admitted_at_auth_by_the_nati
     _use_native(proxy)
     native: Final = await _authenticate(proxy, max_budget=1.0, path=path, body=body)
 
-    assert native_budgets.is_native_reservation(native.budget_reservation)
     assert native.budget_reservation is not None
-    held: Final = (_python_shaped(native.budget_reservation), dict(proxy.store.snapshot()))
+    held: Final = (dict(native.budget_reservation), dict(proxy.store.snapshot()))
     assert held[1][KEY_COUNTER] > 0.0, "the native owner must hold the admission at auth"
     assert golden.canonical(held) == golden.recorded("python", held)
 

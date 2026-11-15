@@ -148,7 +148,7 @@ async def _admitted(store: SpendCounterStore, arguments: Mapping[str, object]) -
             abort_status=getattr(refusal, "status_code", None),
         )
     return Admitted(
-        reservation=reservation if reservation is not None and "native_call_id" in reservation else None,
+        reservation=reservation,
         refusal=None,
         counters=_snapshot(store),
     )

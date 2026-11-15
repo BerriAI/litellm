@@ -247,7 +247,7 @@ async def native_reservation(
         reservation: Final = await native_budgets.reserve_native(plan, auth, {})
     finally:
         proxy_server.spend_counter_store = installed
-    assert reservation is not None and native_budgets.is_native_reservation(reservation)
+    assert reservation is not None
     return reservation
 
 
@@ -285,6 +285,4 @@ async def reserve_budget_for_request(
         raw_body=raw_body,
         path_params=path_params,
     )
-    if plan is None or valid_token is None:
-        return plan
-    return plan if native_budgets.is_native_reservation(plan) else None
+    return plan
