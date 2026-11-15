@@ -251,11 +251,12 @@ class PrismaDBExceptionHandler:
         """True iff Postgres refused a value too large for an index entry, not any other program limit (class 54)."""
         import prisma
 
+        links: Final = tuple(link for link in exception_chain(e) if isinstance(link, Exception))
         return any(
             isinstance(link, _exception_types(prisma.errors.DataError))
             and PrismaDBExceptionHandler.postgres_sqlstate(link) in ("54000", None)
             and _INDEX_ROW_SIZE_MESSAGE.search(str(link)) is not None
-            for link in exception_chain(e)
+            for link in links
         )
 
     @staticmethod

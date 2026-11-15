@@ -20,6 +20,8 @@ from litellm.repositories.spend_log_insert import spend_log_insert_statement
 from tests.integration._support.database import scratch_database
 
 if TYPE_CHECKING:
+    from datetime import timedelta
+
     from litellm.accounting.projection import Contribution
 
 _MIGRATIONS: Final = Path(__file__).resolve().parents[3] / "litellm/proxy-extras/litellm_proxy_extras/migrations"
@@ -780,3 +782,76 @@ async def test_a_cancelled_isolation_commits_nothing_and_a_restart_charges_once(
     )
     assert (await repository.apply_pending(_charge_then_index, isolate=complete)).applied == 0
     assert delivery_database.execute("SELECT spend FROM totals").fetchone() == (0.5,)
+
+
+@pytest.mark.asyncio
+async def test_a_row_already_at_the_repair_id_rolls_the_delivery_back_until_it_is_removed(
+    delivery_database: psycopg.Connection[tuple[object, ...]], delivery_client: Prisma
+) -> None:
+    delivery_database.execute("CREATE TABLE indexed (value text PRIMARY KEY)")
+    _insert(delivery_database, (_row("oversized"),))
+    delivery_database.execute(
+        'INSERT INTO "LiteLLM_SpendLogDelivery" (delivery_id, request_id, state, accounting_payload, is_batch) '
+        "VALUES ('oversized:index-repair', 'unrelated', 'parked', '{\"unrelated\": true}', false)"
+    )
+
+    async def isolate(transaction: LedgerTransaction, delivery: DeliveryProjection) -> "tuple[Contribution, ...]":
+        await _charge(transaction, (delivery,))
+        return (_rejected(_incompressible(5)),)
+
+    repository: Final = AccountingDeliveryRepository(delivery_client)
+    blocked: Final = await repository.apply_pending(_charge_then_index, isolate=isolate)
+
+    assert (blocked.applied, blocked.failed, blocked.repaired) == (0, 1, ())
+    assert delivery_database.execute("SELECT spend FROM totals").fetchone() == (0.0,)
+    assert delivery_database.execute(
+        'SELECT delivery_id, request_id, state::text, attempts FROM "LiteLLM_SpendLogDelivery" ORDER BY delivery_id'
+    ).fetchall() == [("oversized", "oversized", "pending", 1), ("oversized:index-repair", "unrelated", "parked", 0)]
+
+    delivery_database.execute("DELETE FROM \"LiteLLM_SpendLogDelivery\" WHERE request_id = 'unrelated'")
+    delivery_database.execute('UPDATE "LiteLLM_SpendLogDelivery" SET next_attempt_at = CURRENT_TIMESTAMP')
+    retried: Final = await repository.apply_pending(_charge_then_index, isolate=isolate)
+
+    assert retried.repaired == ("oversized:index-repair",)
+    assert delivery_database.execute("SELECT spend FROM totals").fetchone() == (0.5,)
+
+
+class _ClaimedElsewhereBeforeIsolation:
+    """Delegates transactions to the client, but lets another worker claim the delivery between the failed batch
+    and the isolated retry."""
+
+    def __init__(self, client: Prisma, other_worker: psycopg.Connection[tuple[object, ...]]) -> None:
+        self._client = client
+        self._other_worker = other_worker
+        self._opened = 0
+
+    def tx(self, *, timeout: "timedelta") -> object:
+        self._opened += 1
+        if self._opened == 2:
+            self._other_worker.execute('UPDATE "LiteLLM_SpendLogDelivery" SET attempts = attempts + 1')
+        return self._client.tx(timeout=timeout)
+
+
+@pytest.mark.asyncio
+async def test_an_isolated_retry_skips_a_delivery_another_worker_claimed_meanwhile(
+    delivery_database: psycopg.Connection[tuple[object, ...]], delivery_client: Prisma
+) -> None:
+    delivery_database.execute("CREATE TABLE indexed (value text PRIMARY KEY)")
+    _insert(delivery_database, (_row("oversized"),))
+    isolated: Final[asyncio.Queue[str]] = asyncio.Queue()
+
+    async def isolate(transaction: LedgerTransaction, delivery: DeliveryProjection) -> "tuple[Contribution, ...]":
+        await isolated.put(str(delivery.row["request_id"]))
+        return ()
+
+    repository: Final = AccountingDeliveryRepository(
+        _ClaimedElsewhereBeforeIsolation(delivery_client, delivery_database)
+    )
+    result: Final = await repository.apply_pending(_charge_then_index, isolate=isolate)
+
+    assert (result.applied, result.failed, result.parked, result.repaired) == (0, 0, (), ())
+    assert isolated.empty()
+    assert delivery_database.execute("SELECT spend FROM totals").fetchone() == (0.0,)
+    assert delivery_database.execute(
+        'SELECT delivery_id, state::text, attempts FROM "LiteLLM_SpendLogDelivery"'
+    ).fetchall() == [("oversized", "pending", 1)]

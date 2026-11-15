@@ -231,7 +231,12 @@ class AccountingDeliveryRepository:
         except Exception as error:  # noqa: BLE001  # roll back all destinations before recording a retry
             if not claimed:
                 raise
-            if isolate is not None and len(claimed) == 1 and _is_index_row_size_failure(error):
+            if (
+                isolate is not None
+                and len(claimed) == 1
+                and len(projections) == 1
+                and _is_index_row_size_failure(error)
+            ):
                 return await self._apply_isolated(claimed[0], projections[0], isolate, max_attempts)
             return await self._record_failure(claimed, error, max_attempts)
 
@@ -250,13 +255,8 @@ class AccountingDeliveryRepository:
                     return DeliveryBatchResult()
                 rejected: Final = await isolate(transaction, projection)
                 repair_id: Final = repair_delivery_id(delivery.delivery_id)
-                recorded: Final = (
+                if rejected:
                     await transaction.execute_raw(_REPAIR, delivery.delivery_id, repair_id, _repair_payload(rejected))
-                    if rejected
-                    else 1
-                )
-                if recorded != 1:
-                    raise RuntimeError("Could not record the rejected contributions of an accounting delivery")
                 await transaction.execute_raw(_APPLIED, (delivery.delivery_id,))
             return DeliveryBatchResult(applied=1, repaired=(repair_id,) if rejected else ())
         except Exception as error:  # noqa: BLE001  # roll back all destinations before recording a retry

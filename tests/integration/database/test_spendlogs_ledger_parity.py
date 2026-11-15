@@ -1950,6 +1950,38 @@ async def test_customer_budget_reset_is_not_undone_by_an_organization_alias_load
         await client.db.disconnect()
 
 
+_OVERSIZED_TOKEN: Final = "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683"
+
+
+def _insert_oversized_delivery(database: str, field: str, value: str) -> None:
+    payload: Final = {
+        "request_id": "oversized",
+        "startTime": _NOW.isoformat(),
+        "api_key": _OVERSIZED_TOKEN,
+        "user": "user",
+        "team_id": "team",
+        "model": "projection-model",
+        "model_group": "projection-model",
+        "custom_llm_provider": "openai",
+        "spend": 0.25,
+        **({"end_user": value} if field == "end_user" else {"request_tags": json.dumps([value])}),
+        "metadata": {
+            "accounting_entities": {
+                "api_key": _OVERSIZED_TOKEN,
+                "user": "user",
+                "team_id": "team",
+                **({"end_user": value} if field == "end_user" else {}),
+            }
+        },
+    }
+    with psycopg.connect(database, autocommit=True) as connection:
+        connection.execute(
+            'INSERT INTO "LiteLLM_SpendLogDelivery" (delivery_id, request_id, accounting_payload, is_batch) '
+            "VALUES ('oversized', 'oversized', %s::jsonb, false)",
+            (json.dumps(payload),),
+        )
+
+
 def _unindexable(seed: int) -> str:
     import random
     import string
@@ -1988,35 +2020,10 @@ async def test_worker_keeps_budgeted_spend_when_the_database_cannot_index_a_long
         async def alerting_handler(self, message: str, level: str, alert_type: object) -> None:
             await self.messages.put(message)
 
-    token: Final = "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683"
+    token: Final = _OVERSIZED_TOKEN
     value: Final = _unindexable(51870)
-    payload: Final = {
-        "request_id": "oversized",
-        "startTime": _NOW.isoformat(),
-        "api_key": token,
-        "user": "user",
-        "team_id": "team",
-        "model": "projection-model",
-        "model_group": "projection-model",
-        "custom_llm_provider": "openai",
-        "spend": 0.25,
-        **({"end_user": value} if field == "end_user" else {"request_tags": json.dumps([value])}),
-        "metadata": {
-            "accounting_entities": {
-                "api_key": token,
-                "user": "user",
-                "team_id": "team",
-                **({"end_user": value} if field == "end_user" else {}),
-            }
-        },
-    }
     monkeypatch.setenv("DATABASE_URL", parity_database)
-    with psycopg.connect(parity_database, autocommit=True) as connection:
-        connection.execute(
-            'INSERT INTO "LiteLLM_SpendLogDelivery" (delivery_id, request_id, accounting_payload, is_batch) '
-            "VALUES ('oversized', 'oversized', %s::jsonb, false)",
-            (json.dumps(payload),),
-        )
+    _insert_oversized_delivery(parity_database, field, value)
     client: Final = PrismaClient(database_url=parity_database, proxy_logging_obj=proxy_server.proxy_logging_obj)
     alerts: Final = _CapturedAlerts()
     await client.db.connect()
@@ -2065,3 +2072,42 @@ async def test_worker_keeps_budgeted_spend_when_the_database_cannot_index_a_long
     assert ("LiteLLM_EndUserTable was not applied" in alert) is (field == "end_user")
     assert value not in alert
     assert all(value not in record.getMessage() for record in caplog.records if record.levelno >= logging.WARNING)
+
+
+@pytest.mark.asyncio
+async def test_another_database_error_while_isolating_rolls_back_every_destination(
+    parity_database: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.accounting.worker import flush_accounting_deliveries
+
+    monkeypatch.setenv("DATABASE_URL", parity_database)
+    _insert_oversized_delivery(parity_database, "request_tags", _unindexable(51871))
+    with psycopg.connect(parity_database, autocommit=True) as connection:
+        connection.execute(
+            "CREATE FUNCTION reject_team_rollup() RETURNS trigger LANGUAGE plpgsql AS "
+            "$$ BEGIN RAISE EXCEPTION 'team rollup rejected' USING ERRCODE = '22023'; END $$"
+        )
+        connection.execute(
+            'CREATE TRIGGER reject_team_rollup BEFORE INSERT ON "LiteLLM_DailyTeamSpend" '
+            "FOR EACH ROW EXECUTE FUNCTION reject_team_rollup()"
+        )
+    client: Final = PrismaClient(database_url=parity_database, proxy_logging_obj=proxy_server.proxy_logging_obj)
+    await client.db.connect()
+    try:
+        await flush_accounting_deliveries(DBSpendUpdateWriter(), client, proxy_server.proxy_logging_obj)
+        with psycopg.connect(parity_database) as connection:
+            spend: Final = connection.execute(
+                'SELECT (SELECT spend FROM "LiteLLM_VerificationToken" WHERE token = %s), '
+                "(SELECT spend FROM \"LiteLLM_UserTable\" WHERE user_id = 'user'), "
+                "(SELECT spend FROM \"LiteLLM_TeamTable\" WHERE team_id = 'team'), "
+                '(SELECT COUNT(*) FROM "LiteLLM_DailyUserSpend")',
+                (_OVERSIZED_TOKEN,),
+            ).fetchone()
+            deliveries: Final = connection.execute(
+                'SELECT delivery_id, state::text, attempts FROM "LiteLLM_SpendLogDelivery"'
+            ).fetchall()
+    finally:
+        await client.db.disconnect()
+
+    assert spend == (0.0, 0.0, 0.0, 0)
+    assert deliveries == [("oversized", "pending", 1)]
