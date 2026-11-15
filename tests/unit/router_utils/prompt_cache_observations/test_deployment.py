@@ -5,6 +5,7 @@ import pytest
 
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.model_cost_table import published
+from litellm.router_utils.prompt_cache_observations.types import WireShape
 from litellm.router_utils.prompt_cache_observations.deployment import (
     DeploymentCacheSettings,
     SelectedDeployment,
@@ -37,12 +38,14 @@ def _fingerprint(
     model: str = "us.anthropic.claude-test-v1:0",
     selected: SelectedDeployment = _SELECTED,
     attempt: Mapping[str, object] = _ATTEMPT,
+    wire: WireShape = WireShape.BEDROCK_CONVERSE,
 ) -> str:
     return deployment_cache_identity(
         selected=selected,
         provider="bedrock",
         provider_model=model,
         destination=destination,
+        wire=wire,
         settings=_settings(attempt),
         min_prefix_tokens=lambda _model, _provider: 1024,
     ).config_fingerprint
@@ -216,3 +219,7 @@ def test_a_second_hook_pass_keeps_settings_the_first_pass_saw() -> None:
 def test_settings_for_another_deployment_are_replaced_not_merged() -> None:
     other = _settings({**_ATTEMPT, "model_info": {"id": "other", "prompt_cache_observation": True}})
     assert merged_cache_settings(other, _settings()) == _settings()
+
+
+def test_the_upstream_api_is_part_of_the_identity() -> None:
+    assert _fingerprint(wire=WireShape.ANTHROPIC_MESSAGES) != _fingerprint(wire=WireShape.BEDROCK_CONVERSE)

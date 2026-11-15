@@ -33,6 +33,12 @@ _BEDROCK_OPERATIONS: Final = MappingProxyType(
 _RUST_RESPONSE_HEADER: Final = "x-litellm-rust"
 
 
+def upstream_wire(provider: str, api_base: str | None, body: Mapping[str, JsonValue] | None) -> WireShape | None:
+    """The provider API the attempt was actually sent to, independent of the client route that reached it."""
+    family: Final = _PROVIDERS.get(provider)
+    return None if family is None else _wire(family, api_base, body or {})
+
+
 def _wire(provider: ProviderFamily, api_base: str | None, body: Mapping[str, JsonValue]) -> WireShape | None:
     if provider is ProviderFamily.BEDROCK:
         operation: Final = (api_base or "").split("?", 1)[0].rstrip("/").rsplit("/", 1)[-1]

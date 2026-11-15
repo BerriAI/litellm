@@ -11,7 +11,7 @@ from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationEr
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.model_cost_table import published
 
-from .types import DeploymentCacheIdentity
+from .types import DeploymentCacheIdentity, WireShape
 
 MinPrefixTokens: TypeAlias = Callable[[str, str], int | None]
 
@@ -149,6 +149,7 @@ def deployment_cache_identity(
     provider: str,
     provider_model: str,
     destination: str | None,
+    wire: WireShape | None,
     settings: DeploymentCacheSettings | None,
     min_prefix_tokens: MinPrefixTokens = exact_min_prefix_tokens,
 ) -> DeploymentCacheIdentity:
@@ -159,6 +160,7 @@ def deployment_cache_identity(
             "provider": provider,
             "model": served_model(provider, provider_model),
             "destination": destination,
+            "wire": wire.value if wire is not None else None,
             "base_model": selected.base_model,
             "settings": dict(settings.settings) if settings is not None else None,
         },

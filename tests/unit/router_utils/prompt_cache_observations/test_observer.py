@@ -1,6 +1,7 @@
 import asyncio
 import datetime
 import json
+from itertools import product
 from collections.abc import Mapping
 
 import httpx
@@ -148,6 +149,7 @@ def _deployment(settings: DeploymentCacheSettings | None = _ATTEMPT_SETTINGS):
         provider="anthropic",
         provider_model="claude-test",
         destination=effective_destination(_API_BASE),
+        wire=WireShape.ANTHROPIC_MESSAGES,
         settings=settings,
     )
 
@@ -657,3 +659,48 @@ async def test_paths_without_executed_evidence_stay_unassessed_in_the_shipped_ob
             pass
         case recent:
             pytest.fail(f"expected the path to stay unassessed, got {recent}")
+
+
+_BEDROCK_MODEL_URL = "https://bedrock-runtime.us-east-1.amazonaws.com/model/us.anthropic.claude-test-v1:0"
+_CONVERSE_BODY: dict[str, JsonValue] = {
+    "messages": [{"role": "user", "content": [{"text": "shared"}, {"cachePoint": {"type": "default"}}]}],
+}
+_INVOKE_BODY: dict[str, JsonValue] = {"anthropic_version": "bedrock-2023-05-31", **_MARKED_BODY}
+
+
+async def _bedrock_fingerprint(operation: str, body: Mapping[str, JsonValue], call_type: str, stream: bool) -> str:
+    sink = _RecordingSink()
+    await _observer(sink).async_log_success_event(
+        _kwargs(
+            body=dict(body),
+            call_type=call_type,
+            stream=stream,
+            provider="bedrock",
+            model="us.anthropic.claude-test-v1:0",
+            api_base=f"{_BEDROCK_MODEL_URL}/{operation}",
+        ),
+        ModelResponse(),
+        None,
+        None,
+    )
+    (observation,) = sink.observations
+    return observation.deployment.config_fingerprint
+
+
+async def test_one_deployment_keeps_one_identity_across_client_routes_and_stream_modes() -> None:
+    routes = product(
+        ("acompletion", "anthropic_messages", "aresponses"), (("converse", False), ("converse-stream", True))
+    )
+    fingerprints = {
+        await _bedrock_fingerprint(operation, _CONVERSE_BODY, call_type, stream)
+        for call_type, (operation, stream) in routes
+    }
+    assert len(fingerprints) == 1
+
+
+async def test_the_same_deployment_switching_upstream_api_gets_a_new_identity() -> None:
+    converse = await _bedrock_fingerprint("converse", _CONVERSE_BODY, "acompletion", False)
+    invoke = await _bedrock_fingerprint("invoke", _INVOKE_BODY, "acompletion", False)
+    invoke_stream = await _bedrock_fingerprint("invoke-with-response-stream", _INVOKE_BODY, "anthropic_messages", True)
+    assert converse != invoke
+    assert invoke == invoke_stream

@@ -33,7 +33,7 @@ from .deployment import (
     selected_deployment,
 )
 from .intent import cache_intent
-from .paths import classify_path
+from .paths import classify_path, upstream_wire
 from .prefix import outgoing_cacheable_prefix
 from .types import (
     Assessed,
@@ -127,6 +127,7 @@ class ObserverSettings:
 @dataclass(frozen=True, slots=True)
 class _Call:
     logged: _LoggedCall
+    body: Mapping[str, JsonValue] | None
     deployment: DeploymentCacheIdentity
     settings: DeploymentCacheSettings | None
     intent: CacheIntent | None
@@ -228,7 +229,7 @@ def _carries_breakpoint(body: Mapping[str, JsonValue]) -> bool:
 def _outcome(settings: ObserverSettings, call: _Call) -> _Outcome | None:
     """None when the attempt neither asked for caching nor sent a breakpoint, so it says nothing about caching.
     Every other attempt is recorded, with the reason when it cannot be assessed."""
-    body: Final = _outgoing_body(call.logged)
+    body: Final = call.body
     if body is None:
         return _without_prefix(call, UnassessedReason.REQUEST_BODY_UNAVAILABLE, None)
     path: Final = classify_path(
@@ -298,15 +299,19 @@ def observe_call(
     selected: Final = _selected(logged, attempt_settings)
     if selected is None:
         return None
+    provider: Final = payload.custom_llm_provider or ""
+    body: Final = _outgoing_body(logged)
+    destination: Final = _destination(logged)
     deployment: Final = deployment_cache_identity(
         selected=selected,
-        provider=payload.custom_llm_provider or "",
+        provider=provider,
         provider_model=payload.model,
-        destination=effective_destination(_destination(logged)),
+        destination=effective_destination(destination),
+        wire=upstream_wire(provider, destination, body),
         settings=attempt_settings,
     )
     intent: Final = cache_intent(logged.litellm_params, selected.deployment_id)
-    result: Final = _outcome(settings, _Call(logged, deployment, attempt_settings, intent, response, succeeded))
+    result: Final = _outcome(settings, _Call(logged, body, deployment, attempt_settings, intent, response, succeeded))
     if result is None:
         return None
     outcome, count_request = result
