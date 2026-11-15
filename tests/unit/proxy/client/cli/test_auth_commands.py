@@ -2014,6 +2014,28 @@ class TestPkceLoginCommand:
         )
 
         assert login_edges.login_reached == [("pkce", team)], result.output
+        before_browser: Final = result.output.partition("Opening browser to:")[0]
+        assert (f"Requested team '{team}'. The consent page preselects it only when" in before_browser) is bool(team)
+        assert ("Requested team" in result.output) is bool(team)
+
+    def test_login_names_the_pkce_env_var_when_its_value_is_not_a_boolean(self, secret_vault_factory, login_edges):
+        result = self.runner.invoke(
+            login,
+            [],
+            obj={"base_url": PKCE_BASE_URL, "secret_vault": secret_vault_factory()},
+            env={"LITELLM_PROXY_LOGIN_PKCE": "maybe"},
+        )
+
+        assert result.exit_code != 0
+        assert "LITELLM_PROXY_LOGIN_PKCE" in result.output
+        assert "'maybe' is not a valid boolean" in result.output
+        assert login_edges.login_reached == []
+
+    def test_login_help_names_both_login_env_vars(self):
+        result = self.runner.invoke(login, ["--help"])
+
+        assert "LITELLM_PROXY_LOGIN_PKCE" in " ".join(result.output.split())
+        assert "LITELLM_PROXY_TEAM" in " ".join(result.output.split())
 
     def test_pkce_login_saves_the_refreshable_record_and_skips_the_sso_poll(self):
         with (

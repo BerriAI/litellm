@@ -959,8 +959,10 @@ def login_pkce_from_env(default: bool) -> bool:
     raw: Final = os.environ.get(_LOGIN_PKCE_ENVVAR)
     if not raw:
         return default
-    pkce_option: Final = next(param for param in login.params if param.name == "pkce")
-    return click.BOOL.convert(raw, pkce_option, None)
+    try:
+        return click.BOOL.convert(raw, None, None)
+    except click.BadParameter as e:
+        raise click.BadParameter(e.message, param_hint=f"'--pkce' (env var: '{_LOGIN_PKCE_ENVVAR}')")
 
 
 def _pkce_login(base_url: str, config_claude: bool, vault: SecretVault, team: str | None = None) -> None:
@@ -987,12 +989,11 @@ def _pkce_login(base_url: str, config_claude: bool, vault: SecretVault, team: st
 @click.option(
     "--pkce/--no-pkce",
     default=None,
-    envvar=_LOGIN_PKCE_ENVVAR,
-    show_envvar=True,
     help=(
         "Sign in with OAuth authorization code + PKCE through your system browser (loopback redirect), "
         "with a refresh token that renews the key automatically. Requires a proxy that serves "
-        "/.well-known/litellm-cli-auth. Make it the default with `lite config set pkce true`."
+        "/.well-known/litellm-cli-auth. Make it the default with `lite config set pkce true`. "
+        f"[env var: {_LOGIN_PKCE_ENVVAR}]"
     ),
 )
 @click.option(
@@ -1020,7 +1021,7 @@ def login(ctx: click.Context, config_claude: bool, pkce: bool | None, team: str 
             raise click.ClickException(f"Cannot configure Claude Code, so not logging in: {e}")
 
     try:
-        if pkce if pkce is not None else pkce_default():
+        if pkce if pkce is not None else login_pkce_from_env(default=pkce_default()):
             _pkce_login(base_url, config_claude, context_secret_vault(ctx), team)
             return
         cli_sso_flow: Final = _start_cli_sso_flow(base_url=base_url)

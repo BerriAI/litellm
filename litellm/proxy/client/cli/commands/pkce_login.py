@@ -461,6 +461,11 @@ def run_pkce_login(
         if isinstance(client_id, PkceFailure):
             return client_id
         url: Final = authorize_url(contract, client_id, server.redirect_uri, state, challenge, team)
+        if team:
+            echo(
+                f"Requested team '{team}'. The consent page preselects it only when it is one of your teams, "
+                "so check the team before you click Approve."
+            )
         echo(f"Opening browser to: {url}")
         echo("Approve the sign-in in your browser. Waiting...")
         threading.Thread(target=open_browser, args=(url,), name="lite-login-browser", daemon=True).start()
