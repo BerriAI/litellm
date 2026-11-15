@@ -741,3 +741,15 @@ async def test_user_info_explains_missing_admin_mcp_dependency(
             mcp_path=None,
         )
     assert exc.value.code == "503"
+
+
+def test_gateway_serves_every_operation_id_the_connector_pins() -> None:
+    from litellm_admin_mcp.catalog import OPERATIONS
+
+    paths: Final = proxy_server.app.openapi()["paths"]
+    served: Final = {
+        operation.name: paths.get(operation.path, {}).get(operation.method.lower(), {}).get("operationId")
+        for operation in OPERATIONS
+    }
+
+    assert served == {operation.name: operation.operation_id for operation in OPERATIONS}
