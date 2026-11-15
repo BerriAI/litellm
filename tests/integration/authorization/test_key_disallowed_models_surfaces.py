@@ -369,6 +369,83 @@ def test_bulk_update_writes_disallowed_models_and_they_are_enforced(rig: DenyRig
         assert denial(fresh_chat(rig.gateway, rig.denied.chat, key, uuid.uuid4().hex)) == KEY_DENIAL
 
 
+def test_a_non_admin_key_owner_cannot_remove_disallowed_models_through_bulk_update(rig: DenyRig) -> None:
+    with rig.gateway.scenario() as scenario:
+        owner: Final = scenario.user(user_role="internal_user")
+        key: Final = scenario.key(user_id=owner, disallowed_models=[rig.denied.chat])
+        refused: Final = rig.gateway.request(
+            "POST", "/key/bulk_update", {"keys": [{"key": key, "disallowed_models": []}]}, key=key
+        )
+        assert refused.status_code == DENIED, f"{refused.status_code} {refused.text}"
+        assert _stored(key) == [{"disallowed_models": [rig.denied.chat]}]
+        assert denial(fresh_chat(rig.gateway, rig.denied.chat, key, uuid.uuid4().hex)) == KEY_DENIAL
+
+
+def test_a_bulk_update_item_without_disallowed_models_leaves_the_stored_list_untouched(rig: DenyRig) -> None:
+    with rig.gateway.scenario() as scenario:
+        key: Final = scenario.key(disallowed_models=[rig.denied.chat, "other-*"])
+        updated: Final = rig.gateway.post("/key/bulk_update", {"keys": [{"key": key, "max_budget": 7.5}]})
+        assert updated["failed_updates"] == [], updated
+        assert read_rows(
+            'SELECT disallowed_models, max_budget FROM "LiteLLM_VerificationToken" WHERE token=%s',
+            (sha256(key.encode()).hexdigest(),),
+        ) == [{"disallowed_models": [rig.denied.chat, "other-*"], "max_budget": 7.5}]
+        assert denial(fresh_chat(rig.gateway, rig.denied.chat, key, uuid.uuid4().hex)) == KEY_DENIAL
+
+
+@pytest.mark.parametrize("cleared", [[], None], ids=["empty", "null"])
+def test_a_proxy_admin_clears_disallowed_models_through_bulk_update(rig: DenyRig, cleared: JsonValue) -> None:
+    with rig.gateway.scenario() as scenario:
+        key: Final = scenario.key(disallowed_models=[rig.denied.chat])
+        updated: Final = rig.gateway.post("/key/bulk_update", {"keys": [{"key": key, "disallowed_models": cleared}]})
+        assert updated["failed_updates"] == [], updated
+        assert _stored(key) == [{"disallowed_models": []}]
+        served: Final = fresh_chat(rig.gateway, rig.denied.chat, key, uuid.uuid4().hex)
+        assert served.status_code == 200, served.text
+
+
+def test_a_bulk_update_batch_writes_each_keys_own_disallowed_models(rig: DenyRig) -> None:
+    with rig.gateway.scenario() as scenario:
+        narrowed: Final = scenario.key()
+        widened: Final = scenario.key(disallowed_models=[rig.denied.chat])
+        untouched: Final = scenario.key(disallowed_models=[rig.denied.chat])
+        updated: Final = rig.gateway.post(
+            "/key/bulk_update",
+            {
+                "keys": [
+                    {"key": narrowed, "disallowed_models": [rig.denied.chat]},
+                    {"key": widened, "disallowed_models": []},
+                    {"key": untouched, "tags": ["bulk"]},
+                ]
+            },
+        )
+        assert updated["failed_updates"] == [], updated
+        assert [_stored(key) for key in (narrowed, widened, untouched)] == [
+            [{"disallowed_models": [rig.denied.chat]}],
+            [{"disallowed_models": []}],
+            [{"disallowed_models": [rig.denied.chat]}],
+        ]
+        statuses: Final = [
+            fresh_chat(rig.gateway, rig.denied.chat, key, uuid.uuid4().hex).status_code
+            for key in (narrowed, widened, untouched)
+        ]
+        assert statuses == [DENIED, 200, DENIED]
+
+
+@pytest.mark.parametrize("malformed", [7, "not-a-list", [7]], ids=["int", "string", "list-of-int"])
+def test_a_malformed_bulk_update_disallowed_models_value_is_rejected_and_changes_nothing(
+    rig: DenyRig, malformed: JsonValue
+) -> None:
+    with rig.gateway.scenario() as scenario:
+        key: Final = scenario.key(disallowed_models=[rig.denied.chat])
+        rejected: Final = rig.gateway.request(
+            "POST", "/key/bulk_update", {"keys": [{"key": key, "disallowed_models": malformed}]}
+        )
+        assert rejected.status_code == 422, f"{rejected.status_code} {rejected.text}"
+        assert _stored(key) == [{"disallowed_models": [rig.denied.chat]}]
+        assert denial(fresh_chat(rig.gateway, rig.denied.chat, key, uuid.uuid4().hex)) == KEY_DENIAL
+
+
 def test_a_service_account_key_stores_and_enforces_disallowed_models(rig: DenyRig) -> None:
     with rig.gateway.scenario() as scenario:
         created: Final = rig.gateway.post(
