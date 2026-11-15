@@ -1252,6 +1252,37 @@ USER_PROFILE_ID_HEADER: Final = "anthropic-user-profile-id"
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("metadata", [{"anthropic_user_profile_id": "uprof_admin"}, {}])
+@pytest.mark.parametrize("nested", [True, False])
+async def test_profile_mapping_cannot_be_replaced_through_extra_body(metadata: dict[str, str], nested: bool) -> None:
+    overrides: Final = {
+        "user_profile_id": "uprof_other",
+        "additionalModelRequestFields": {"user_profile_id": "uprof_other", "other": 1},
+        "other": 2,
+    }
+    updated: Final = await _request_data_added_by_the_proxy(
+        {"extra_body": overrides} if nested else overrides,
+        {},
+        {},
+        UserAPIKeyAuth(api_key="hashed-key", metadata=metadata),
+    )
+    received: Final = (
+        updated["extra_body"] if nested else {name: updated[name] for name in overrides if name in updated}
+    )
+    assert received == (
+        {"additionalModelRequestFields": {"other": 1}, "other": 2}
+        if metadata
+        else {
+            "user_profile_id": "uprof_other",
+            "additionalModelRequestFields": {"user_profile_id": "uprof_other", "other": 1},
+            "other": 2,
+        }
+    )
+    if metadata:
+        assert "user_profile_id" not in updated
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("metadata_slot", ["key", "team"])
 @pytest.mark.parametrize("header_slot", ["headers", "extra_headers"])
 @pytest.mark.parametrize("caller_value", ["uprof_other", ""])

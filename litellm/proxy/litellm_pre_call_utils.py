@@ -850,11 +850,34 @@ def _key_or_team_metadata_flag_is_true(
     return any(value is True for value in _key_then_team_metadata_values(user_api_key_dict, metadata_key))
 
 
-def _anthropic_user_profile_id(user_api_key_dict: UserAPIKeyAuth, headers: Mapping[str, str]) -> str | None:
+def anthropic_user_profile_id(user_api_key_dict: UserAPIKeyAuth, headers: Mapping[str, str]) -> str | None:
     admin_mapped: Final = _key_then_team_metadata_values(user_api_key_dict, _ANTHROPIC_USER_PROFILE_ID_METADATA_KEY)
     return next(
         (value for value in admin_mapped if isinstance(value, str) and value),
         headers.get(ANTHROPIC_USER_PROFILE_ID_HEADER),
+    )
+
+
+def _without_caller_profile_body_fields(fields: Mapping[str, object]) -> Mapping[str, object]:
+    return MappingProxyType(
+        {
+            **{
+                name: value
+                for name, value in fields.items()
+                if name not in ("user_profile_id", "additionalModelRequestFields")
+            },
+            **(
+                {
+                    "additionalModelRequestFields": {
+                        name: value
+                        for name, value in _request_fields(fields["additionalModelRequestFields"]).items()
+                        if name != "user_profile_id"
+                    }
+                }
+                if "additionalModelRequestFields" in fields
+                else {}
+            ),
+        }
     )
 
 
@@ -3047,7 +3070,7 @@ async def add_litellm_data_to_request(
     if dynamic_api_version is not None:  # only pass, if set
         data["api_version"] = dynamic_api_version
 
-    if _anthropic_user_profile_id(user_api_key_dict, {}) is not None:
+    if anthropic_user_profile_id(user_api_key_dict, {}) is not None:
         for field in ("extra_headers", "headers"):
             if field in data:
                 data[field] = {  # rebind-ok: data is an out-param
@@ -3055,10 +3078,20 @@ async def add_litellm_data_to_request(
                     for name, value in _request_fields(data[field]).items()  # pyright: ignore[reportUnknownArgumentType]  # legacy request data is a bare dict
                     if name.lower() != ANTHROPIC_USER_PROFILE_ID_HEADER
                 }
+        caller_body: Final = _without_caller_profile_body_fields(_REQUEST_FIELDS.validate_python(data))
+        data.pop("user_profile_id", None)
+        if "additionalModelRequestFields" in data:
+            data["additionalModelRequestFields"] = (  # rebind-ok: data is an out-param
+                caller_body["additionalModelRequestFields"]
+            )
+        if "extra_body" in data:
+            data["extra_body"] = dict(  # rebind-ok: data is an out-param
+                _without_caller_profile_body_fields(_request_fields(caller_body.get("extra_body")))
+            )
 
     ## Forward any LLM API Provider specific headers in extra_headers
     data[_metadata_variable_name]["used_client_oauth_token"] = add_provider_specific_headers_to_request(
-        data=data, headers=_headers, user_profile_id=_anthropic_user_profile_id(user_api_key_dict, _headers)
+        data=data, headers=_headers, user_profile_id=anthropic_user_profile_id(user_api_key_dict, _headers)
     )
     caller_fields: Final = _caller_credential_fields(_REQUEST_FIELDS.validate_python(data))
     data["proxy_server_request"]["caller_credential_fields"] = caller_fields  # rebind-ok: data is an out-param

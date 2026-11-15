@@ -146,6 +146,7 @@ from litellm.proxy.common_utils.token_count_log import (
     logged_provider_token_count,
     rejected_token_count,
 )
+from litellm.proxy.litellm_pre_call_utils import anthropic_user_profile_id
 from litellm.proxy.pass_through_endpoints.injected_stream_usage import (
     stream_usage_relay,
     without_injected_usage_frames,
@@ -182,6 +183,7 @@ from litellm.proxy.vector_store_endpoints.utils import (
     normalize_litellm_params,
 )
 from litellm.secret_managers.main import get_secret_str, normalize_nonempty_secret_str, str_to_bool
+from litellm.types.llms.anthropic import ANTHROPIC_USER_PROFILE_ID_HEADER
 from litellm.types.passthrough_endpoints.eu_jev import EuJevDecisionRequest, EuJevDecisionResponse
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
@@ -3295,10 +3297,12 @@ def _upstream_headers_for_anthropic_route(
     caller_headers: Final = _caller_headers_without_litellm_secrets(
         request, user_api_key_dict, _HEADERS_NEVER_FORWARDED_TO_ANTHROPIC
     )
+    profile_id: Final = anthropic_user_profile_id(user_api_key_dict, caller_headers)
+    profile_header: Final = {ANTHROPIC_USER_PROFILE_ID_HEADER: profile_id} if profile_id else {}
     if proxy_auth_header is None:
         if _ANTHROPIC_UPSTREAM_CREDENTIAL_HEADERS.isdisjoint(caller_headers):
             raise HTTPException(status_code=401, detail=_CREDENTIALLESS_ANTHROPIC_MISSING_CREDENTIAL_DETAIL)
-        return caller_headers
+        return MappingProxyType({**caller_headers, **profile_header})
     forwarded: Final = MappingProxyType(
         {name: value for name, value in caller_headers.items() if name not in _ANTHROPIC_UPSTREAM_CREDENTIAL_HEADERS}
     )
@@ -3308,7 +3312,7 @@ def _upstream_headers_for_anthropic_route(
         if caller_beta and credential_beta
         else {}
     )
-    return MappingProxyType({**forwarded, **proxy_auth_header, **merged_beta})
+    return MappingProxyType({**forwarded, **proxy_auth_header, **merged_beta, **profile_header})
 
 
 def _upstream_headers_for_bedrock_agent_runtime_route(

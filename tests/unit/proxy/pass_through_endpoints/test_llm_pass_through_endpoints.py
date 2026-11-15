@@ -7262,6 +7262,33 @@ class TestAnthropicProxyRoute:
 _HAIKU_PRICING: Final = MappingProxyType({"input_cost_per_token": 1e-07, "output_cost_per_token": 5e-07})
 
 
+@pytest.mark.parametrize(
+    "metadata,team_metadata,expected",
+    [
+        ({"anthropic_user_profile_id": "uprof_key"}, {"anthropic_user_profile_id": "uprof_team"}, "uprof_key"),
+        ({}, {"anthropic_user_profile_id": "uprof_team"}, "uprof_team"),
+        ({}, {}, "uprof_client"),
+    ],
+)
+@pytest.mark.parametrize("proxy_auth", [None, {"x-api-key": "sk-upstream"}])
+def test_anthropic_passthrough_honors_profile_mapping(
+    metadata: dict[str, str], team_metadata: dict[str, str], expected: str, proxy_auth: dict[str, str] | None
+) -> None:
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import _upstream_headers_for_anthropic_route
+
+    request: Final = Request(
+        {
+            "type": "http",
+            "headers": [(b"anthropic-user-profile-id", b"uprof_client"), (b"x-api-key", b"sk-caller-upstream")],
+        }
+    )
+    headers: Final = _upstream_headers_for_anthropic_route(
+        request, UserAPIKeyAuth(api_key="hashed-key", metadata=metadata, team_metadata=team_metadata), proxy_auth
+    )
+    assert headers["anthropic-user-profile-id"] == expected
+
+
 def _anthropic_deployment(
     deployment_id: str,
     model_name: str = "claude-haiku-5-5",
@@ -8219,7 +8246,6 @@ class TestRouterModelRelayUpstreamContract:
         assert (response.status_code, response.headers.get("retry-after")) == (429, "7")
         assert not deployment_route.called
 
-
     @pytest.mark.asyncio
     async def test_azure_relay_keeps_a_later_deployment_failure_after_an_entra_rejection(
         self, monkeypatch: pytest.MonkeyPatch
@@ -8259,9 +8285,9 @@ class TestRouterModelRelayUpstreamContract:
         self._install_router(monkeypatch, router, {"model": "gpt-5", "stream": False})
 
         with respx.mock:
-            unreachable_route: Final = respx.post(url__startswith="https://litellm-qa-unreachable.openai.azure.com").mock(
-                side_effect=httpx.ConnectError("Connection refused")
-            )
+            unreachable_route: Final = respx.post(
+                url__startswith="https://litellm-qa-unreachable.openai.azure.com"
+            ).mock(side_effect=httpx.ConnectError("Connection refused"))
             with pytest.raises(BaseLLMException) as excinfo:
                 await azure_proxy_route(
                     endpoint="openai/deployments/gpt-5/chat/completions",
@@ -8664,7 +8690,9 @@ async def test_bedrock_native_count_tokens_for_a_bare_region_prefix_answers_bedr
     respx_mock.post(host="bedrock-runtime.us-east-1.amazonaws.com", path=f"/model/{model_id}/count-tokens").mock(
         return_value=httpx.Response(400, json=invalid_model)
     )
-    request: Final = Request({"type": "http", "method": "POST", "path": f"/bedrock/model/{model}/count-tokens", "headers": []})
+    request: Final = Request(
+        {"type": "http", "method": "POST", "path": f"/bedrock/model/{model}/count-tokens", "headers": []}
+    )
 
     with pytest.raises(HTTPException) as exc_info:
         await handle_bedrock_count_tokens(
@@ -9885,11 +9913,8 @@ class TestVertexPassthroughAuthenticatesOncePerRequest:
         assert recorder.served_user_ids == ()
         assert not google.called
 
-
     @pytest.mark.parametrize("path", [f"/vertex_ai/{GENERATE_CONTENT}", f"/vertex_ai/discovery/{DISCOVERY_SEARCH}"])
-    def test_request_without_a_key_hands_custom_auth_none(
-        self, monkeypatch: pytest.MonkeyPatch, path: str
-    ) -> None:
+    def test_request_without_a_key_hands_custom_auth_none(self, monkeypatch: pytest.MonkeyPatch, path: str) -> None:
         custom_auth: Final = _CountingCustomAuth(only_accepts=self.VIRTUAL_KEY)
         with respx.mock(assert_all_called=False) as upstream:
             google: Final = upstream.route().mock(return_value=httpx.Response(200))
@@ -9900,6 +9925,7 @@ class TestVertexPassthroughAuthenticatesOncePerRequest:
         assert custom_auth.api_keys_seen == (None,)
         assert recorder.served_user_ids == ()
         assert not google.called
+
 
 class TestTypeSafePassthroughRoute:
     @staticmethod
@@ -10240,9 +10266,7 @@ class TestEuJevPassthroughRoute:
         monkeypatch.setattr(proxy_server, "llm_router", team_router)
         with respx.mock(assert_all_called=False) as upstream:
             team_server: Final = upstream.route(host="team-a-server.example").respond(200, json={"answers": {}})
-            eu_jev: Final = upstream.post("https://eu-jev.example/base/v1/systemone").respond(
-                200, json={"answers": {}}
-            )
+            eu_jev: Final = upstream.post("https://eu-jev.example/base/v1/systemone").respond(200, json={"answers": {}})
             response: Final = client.post("/eu_jev/v1/systemone", json={"state": "team b data"})
 
         assert response.status_code == 200
@@ -10443,7 +10467,9 @@ class TestEuJevPassthroughRoute:
 
         monkeypatch.setitem(app.dependency_overrides, user_api_key_auth, add_the_pass_through_after_routing)
         with respx.mock(assert_all_called=False) as upstream, TestClient(app) as client:
-            built_in: Final = upstream.post("https://eu-jev.example/base/v1/systemone").respond(200, json={"answers": {}})
+            built_in: Final = upstream.post("https://eu-jev.example/base/v1/systemone").respond(
+                200, json={"answers": {}}
+            )
             operator: Final = upstream.route(host="operator.example").respond(200, json={"operator": True})
             response: Final = client.post("/eu_jev/v1/systemone", json={"model": "eu-jeff-latest", "state": "x"})
 
@@ -11737,7 +11763,11 @@ class TestOpenSearchProxyRoute:
                 id="multipart-parameter",
             ),
             pytest.param(
-                "_doc", "application/json; boundary=x", b'{"title":"a"}', "application/json", id="content-type-parameter"
+                "_doc",
+                "application/json; boundary=x",
+                b'{"title":"a"}',
+                "application/json",
+                id="content-type-parameter",
             ),
             pytest.param("_doc?pipeline=reroute", JSON_TYPE, b'{"title":"a"}', "pipeline", id="pipeline-query"),
             pytest.param("_search", JSON_TYPE, b'{/*c*/"query":{"match_all":{}}}', "could not parse", id="comment"),
