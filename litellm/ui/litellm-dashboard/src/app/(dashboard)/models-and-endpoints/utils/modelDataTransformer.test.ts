@@ -200,11 +200,12 @@ describe("transformModelData with a source currency", () => {
       () => "openai",
     );
 
-    expect(result.data[0]).toMatchObject({
+    const usdRates = {
       input_cost: "2.00",
       output_cost: "4.00",
       output_cost_per_second: 1,
       output_cost_per_second_tiers: [{ resolution: "720p", cost: 2 }],
-    });
+    };
+    expect(result.data[0]).toMatchObject(usdRates);
   });
 });

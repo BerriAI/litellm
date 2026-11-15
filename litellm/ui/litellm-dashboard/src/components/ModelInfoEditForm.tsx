@@ -5,7 +5,7 @@ import { CircleHelp } from "lucide-react";
 import type { Dayjs } from "dayjs";
 import type { ParseKeys, TFunction } from "i18next";
 import * as React from "react";
-import { useForm, type Resolver } from "react-hook-form";
+import { useForm, useWatch, type Resolver } from "react-hook-form";
 import { useTranslation } from "react-i18next";
 import { z } from "zod";
 
@@ -417,7 +417,7 @@ const ModelInfoEditForm: React.FC<ModelInfoEditFormProps> = ({
     })(event);
 
   const storedSetting = storedCurrencySetting(localModelData.litellm_params, localModelData.model_info);
-  const watchedValues = form.watch();
+  const watchedValues = useWatch({ control: form.control });
   const editedSetting = formCurrencySetting(watchedValues);
   const currencySuffix = editedSetting.currency === "USD" ? "" : ` (${editedSetting.currency})`;
   const previewRows = pricePreview(
