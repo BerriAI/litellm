@@ -5576,6 +5576,7 @@ class _Driver:
     def finish(self, step: Mapping[str, object]) -> object:
         """The response with the router's headers, in the order ``make_call`` and the wrappers above it
         stamp them: a usage read that raises leaves the counts off."""
+        self.clear_errors()
         if not self._plan.sets_headers:
             self.log_outcomes_sync()
             return self._last_response
@@ -5596,6 +5597,7 @@ class _Driver:
 
     async def finish_async(self, step: Mapping[str, object]) -> object:
         """``finish``, with the usage read on the call's own loop."""
+        self.clear_errors()
         if not self._plan.sets_headers:
             await await_all(self.outcomes.take_pending())
             return self._last_response
@@ -5617,6 +5619,12 @@ class _Driver:
         return self._request.get("messages") is not None or self._request.get("input") is not None
 
     def failed(self, step: Mapping[str, object]) -> BaseException:
+        try:
+            return self._failure(step)
+        finally:
+            self.clear_errors()
+
+    def _failure(self, step: Mapping[str, object]) -> BaseException:
         model: Final = str(self._request.get("model"))
         primary: Final = self._level_errors.get(self._base_level)
         if primary is None:
