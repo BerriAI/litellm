@@ -79,6 +79,7 @@ from litellm.redis.stores.spend_counters import (
     team_member_counter,
     team_window_counter,
     user_counter,
+    user_window_counter,
 )
 from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.organization_repository import OrganizationRepository
@@ -103,6 +104,7 @@ from litellm.repositories.unit_of_work import (
     enduser_spend_reset_unit_of_work,
     spend_reset_unit_of_work,
 )
+from litellm.repositories.user_repository import UserRepository
 from litellm.repositories.verification_token_repository import (
     VerificationTokenRepository,
 )
@@ -611,6 +613,14 @@ async def _write_key_windows(prisma_client: PrismaClient, row_id: str, payload: 
         )
 
 
+async def _write_user_windows(prisma_client: PrismaClient, row_id: str, payload: str) -> None:
+    async with db_span("write_budget_windows", "LiteLLM_UserTable"):
+        await UserRepository(prisma_client).table.update(
+            where={"user_id": row_id},
+            data={"budget_limits": payload},
+        )
+
+
 async def _write_team_windows(prisma_client: PrismaClient, row_id: str, payload: str) -> None:
     async with db_span("write_budget_windows", "LiteLLM_TeamTable"):
         await TeamRepository(prisma_client).table.update(
@@ -647,6 +657,15 @@ class _WindowSource:
 
 
 _WINDOW_SOURCES: Final[tuple[_WindowSource, ...]] = (
+    _WindowSource(
+        table="LiteLLM_UserTable",
+        id_column="user_id",
+        entity_type=Litellm_EntityType.USER,
+        window_counter=user_window_counter,
+        log_subject="users",
+        retry_subject="user",
+        write=_write_user_windows,
+    ),
     _WindowSource(
         table="LiteLLM_VerificationToken",
         id_column="token",

@@ -553,3 +553,69 @@ def test_gemini_completion_reports_a_tool_call_it_cannot_convert_as_a_gemini_bad
 
     assert exc_info.value.llm_provider == "gemini"
     assert "must be a JSON string, got dict" in str(exc_info.value)
+
+
+_LOOKUP_TOOL: Final = {
+    "type": "function",
+    "function": {
+        "name": "lookup",
+        "parameters": {
+            "anyOf": [
+                {"type": "object", "properties": {"a": {"type": "integer", "enum": [1, 2]}}, "required": ["a"]},
+                {"type": "object", "properties": {"b": {"type": "string"}}, "required": ["b"]},
+            ]
+        },
+    },
+}
+_WEATHER_TOOL: Final = {
+    "type": "function",
+    "function": {
+        "name": "weather",
+        "parameters": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]},
+    },
+}
+
+
+def _declarations(model: str, tool_choice: str, extra_body: dict[str, object] | None) -> list[dict[str, object]]:
+    optional_params: Final = VertexGeminiConfig().map_openai_params(
+        non_default_params={"tools": [_LOOKUP_TOOL, _WEATHER_TOOL], "tool_choice": tool_choice},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+    body: Final = transformation.transform_request_body(
+        messages=[{"role": "user", "content": "Find the record named Atlas"}],
+        model=model,
+        optional_params={**optional_params, **({} if extra_body is None else {"extra_body": extra_body})},
+        custom_llm_provider="gemini",
+        litellm_params={},
+        cached_content=None,
+    )
+    return body["tools"][0]["function_declarations"]
+
+
+@pytest.mark.parametrize(
+    ("extra_body", "forced"),
+    [
+        ({"toolConfig": {"functionCallingConfig": {"mode": "ANY"}}}, True),
+        ({"tool_config": {"function_calling_config": {"mode": "VALIDATED"}}}, True),
+        ({"toolConfig": {"functionCallingConfig": {"mode": "any"}}}, True),
+        ({"toolConfig": {"functionCallingConfig": {"mode": "ANY", "allowedFunctionNames": ["lookup"]}}}, True),
+        ({"toolConfig": {"functionCallingConfig": {"mode": "ANY", "allowed_function_names": ["weather"]}}}, False),
+        ({"toolConfig": {"functionCallingConfig": {"mode": "AUTO"}}}, False),
+        ({"toolConfig": {"retrievalConfig": {"languageCode": "en"}}}, False),
+        (None, False),
+    ],
+    ids=["any", "validated-snake-case", "lowercase-any", "any-named-union-tool", "any-named-other-tool", "auto", "no-mode", "none"],
+)
+@pytest.mark.parametrize("model", ["gemini-2.5-flash", "gemini-4-argon"])
+def test_a_tool_call_forced_through_extra_body_keeps_a_bare_root_union_tool_as_tool_choice_does(
+    model: str, extra_body: dict[str, object] | None, forced: bool
+) -> None:
+    lookup, weather = _declarations(model, "auto", extra_body)
+    forced_lookup, forced_weather = _declarations(model, "required", None)
+    free_lookup, _ = _declarations(model, "auto", None)
+
+    assert "parameters" in forced_lookup and "parametersJsonSchema" in free_lookup
+    assert lookup == (forced_lookup if forced else free_lookup)
+    assert weather == forced_weather

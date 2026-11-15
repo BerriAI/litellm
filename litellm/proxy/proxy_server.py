@@ -57,6 +57,7 @@ from typing import (
     get_origin,
     get_type_hints,
 )
+from urllib.parse import urlparse
 
 import anyio
 import anyio.lowlevel
@@ -108,12 +109,17 @@ from litellm.litellm_core_utils.bug_report import (
     bug_report_notice,
     should_report_bug,
 )
+from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider
 from litellm.litellm_core_utils.litellm_logging import (
     _init_custom_logger_compatible_class,
     initialize_sentry,
 )
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER, LoggingWorker
-from litellm.litellm_core_utils.prompt_templates.chat_template_tools import chat_template_tool_section
+from litellm.litellm_core_utils.prompt_templates.chat_template_tools import (
+    ChatTemplateToolSection,
+    chat_template_tool_choice_tokens,
+    chat_template_tool_section,
+)
 from litellm.litellm_core_utils.routing_common_utils import resolve_model_group_alias
 from litellm.litellm_core_utils.routing_groups import parse_routing_groups
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
@@ -239,6 +245,7 @@ if TYPE_CHECKING:
     from prisma import models as prisma_models
 
     from litellm.integrations.opentelemetry import OpenTelemetry
+    from litellm.proxy.common_utils.key_expiry_alert_manager import KeyExpiryAlertManager
     from litellm.proxy.health_check_utils.shared_health_check_manager import SharedHealthCheckManager
     from litellm.types.proxy.model_listing import ModelInfoResponse
 
@@ -373,6 +380,7 @@ from litellm.constants import (
     SPEND_CAPTURE_RATE_CHECK_JOB_ID,
     USER_SPEND_ALERTS_JOB_ID,
     WEEKLY_SPEND_REPORT_JOB_ID,
+    XAI_API_BASE,
 )
 from litellm.exceptions import RejectedRequestError
 from litellm.integrations.custom_guardrail import CustomGuardrail, ModifyResponseException
@@ -388,6 +396,7 @@ from litellm.litellm_core_utils.audio_utils.transcription_streaming import (
 )
 from litellm.litellm_core_utils.audio_utils.utils import resolve_speech_media_type
 from litellm.litellm_core_utils.core_helpers import (
+    as_object_list,
     as_str_mapping,
     drop_params_flag,
     get_litellm_metadata_from_kwargs,
@@ -517,10 +526,12 @@ from litellm.proxy.common_request_processing import (  # noqa: F401, RUF100  # l
     open_sse_before_first_byte,
     proxy_exception_from_http_exception,
     proxy_exception_from_route_error,
+    refuse_s3_media_the_key_may_not_read,
     resolve_litellm_call_id,
     should_return_raw_model_name,
     sse_error_payload,
     ttft_keepalive_interval,
+    withheld_provider_output,
 )
 from litellm.proxy.common_utils.anthropic_error_payload import (
     anthropic_error_json_response,
@@ -581,7 +592,9 @@ from litellm.proxy.common_utils.model_listing_utils import (
     caller_alias_maps,
     claude_code_view_ids,
     configured_display_names,
+    dispatched_model,
     label_entries,
+    unlisted_alias_targets,
 )
 from litellm.proxy.common_utils.openai_endpoint_utils import (
     remove_sensitive_info_from_deployment,
@@ -668,6 +681,7 @@ from litellm.proxy.config_resolvers.settings_rules import (
 from litellm.proxy.config_resolvers.sso import SSO_FIELD_ENV_VARS
 from litellm.proxy.container_endpoints.endpoints import router as container_router
 from litellm.proxy.credential_endpoints.endpoints import router as credential_router
+from litellm.proxy.db.connection_budget import RUST_RESERVED_CONNECTIONS
 from litellm.proxy.db.create_views import SupportsRawQueries
 from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
 from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import (
@@ -922,6 +936,7 @@ from litellm.redis.stores.spend_counters import (
     team_member_counter,
     team_window_counter,
     user_counter,
+    user_window_counter,
 )
 from litellm.router import router_arguments
 from litellm.router_config import build_router_config
@@ -1004,6 +1019,7 @@ from litellm.proxy.spend_tracking.budget_reservation import (
     BudgetCounter,
     customer_window_counters,
     get_budget_window_start,
+    release_cancelled_budget_reservation,
     release_unbound_budget_reservation,
     stamp_budget_reservation_actual_cost,
 )
@@ -1605,7 +1621,12 @@ async def _connect_to_count_stored_values(resources: AsyncExitStack) -> Supports
 async def _own_database(resources: AsyncExitStack, client: PrismaClient | None) -> database_runtime.Database | None:
     if client is None:
         return None
-    database: Final = await database_runtime.Database.open(client)
+    database: Final = await database_runtime.Database.open(
+        client,
+        os.environ["DATABASE_URL"],
+        os.environ.get("DATABASE_URL_READ_REPLICA") or None,
+        RUST_RESERVED_CONNECTIONS,
+    )
     resources.push_async_callback(database.aclose)
     return database
 
@@ -3773,7 +3794,7 @@ def _cached_budget_limits(cached: object) -> object:
 
 
 def _has_budget_windows(budget_limits: object) -> bool:
-    return isinstance(budget_limits, list) and budget_limits != []
+    return isinstance(budget_limits, (list, tuple)) and budget_limits not in ([], ())
 
 
 def _budget_windows_absent_marker(absent_key: str) -> object:
@@ -3826,12 +3847,14 @@ async def accounting_window_keys(
     token: str | None,
     team_id: str | None,
     customer_counters: Sequence[BudgetCounter] = (),
+    user_id: str | None = None,
 ) -> tuple[Mapping[str, object], ...]:
     scopes: Final = tuple(
         (entity_type, entity_id, cache_key)
         for entity_type, entity_id, cache_key in (
             (Litellm_EntityType.KEY, token, token),
             (Litellm_EntityType.TEAM, team_id, f"team_id:{team_id}"),
+            (Litellm_EntityType.USER, user_id, user_id),
         )
         if entity_id is not None and cache_key is not None
     )
@@ -3864,7 +3887,7 @@ async def _accounting_scope_windows(
     limits: Final = (
         await _stored_budget_limits(entity_type, entity_id) if cached is None else _cached_budget_limits(cached)
     )
-    if not isinstance(limits, list):
+    if not isinstance(limits, (list, tuple)):
         return ()
     windows: Final = TypeAdapter(tuple[object, ...]).validate_python(limits)
     return tuple(
@@ -3892,6 +3915,8 @@ async def _stored_budget_limits(entity_type: Litellm_EntityType, entity_id: str)
         row: Final[SupportsModelDump | None] = (
             await VerificationTokenRepository(prisma_client).table.find_unique(where={"token": entity_id})
             if entity_type == Litellm_EntityType.KEY
+            else await UserRepository(prisma_client).table.find_unique(where={"user_id": entity_id})
+            if entity_type == Litellm_EntityType.USER
             else await TeamRepository(prisma_client).table.find_unique(where={"team_id": entity_id})
         )
     except Exception as e:  # noqa: BLE001  # spend tracking must never fail the cost callback
@@ -3960,7 +3985,7 @@ async def _increment_spend_counters_batched(
                 counter_key=window_counter,
                 entity_type=(
                     entity_type.value.capitalize()
-                    if entity_type in (Litellm_EntityType.KEY, Litellm_EntityType.TEAM)
+                    if entity_type in (Litellm_EntityType.KEY, Litellm_EntityType.TEAM, Litellm_EntityType.USER)
                     else entity_type.value
                 ),
                 entity_id=entity_id,
@@ -3989,13 +4014,16 @@ async def _increment_spend_counters_batched(
         duration: Final = (
             window["budget_duration"] if isinstance(window, dict) else getattr(window, "budget_duration", None)
         )
+        duration_text: Final = TypeAdapter(str).validate_python(duration)
         window_reset_at: Final = (
             window.get("reset_at") if isinstance(window, dict) else getattr(window, "reset_at", None)
         )
         window_counter: Final = (
-            key_window_counter(entity_id, str(duration))
+            key_window_counter(entity_id, duration_text)
             if entity_type is Litellm_EntityType.KEY
-            else team_window_counter(entity_id, str(duration))
+            else user_window_counter(entity_id, duration_text)
+            if entity_type is Litellm_EntityType.USER
+            else team_window_counter(entity_id, duration_text)
         )
         return await _resolved_window_increment(
             entity_type, entity_id, window_counter, duration, get_budget_window_start(window), window_reset_at
@@ -4022,7 +4050,7 @@ async def _increment_spend_counters_batched(
     async def _window_increments(
         entity_type: Litellm_EntityType, entity_id: str, budget_limits: object
     ) -> tuple[PendingSpendIncrement | BaseException, ...]:
-        if not isinstance(budget_limits, list):
+        if not isinstance(budget_limits, (list, tuple)):
             return ()
         window_pending: Final = await asyncio.gather(
             *(_window_increment(entity_type, entity_id, window) for window in budget_limits), return_exceptions=True
@@ -4103,17 +4131,20 @@ async def _increment_spend_counters_batched(
             ),
         )
 
-    async def _user_scope(scope_user_id: str) -> tuple[PendingSpendIncrement | BaseException, ...]:
+    async def _user_scope(scope_user_id: str) -> tuple[_SpendScopeItem, ...]:
         user_counter_key: Final = user_counter(scope_user_id)
-        if user_counter_key in reserved_counter_keys:
-            return ()
-        return (
-            await _prepare_spend_counter_increment(
-                counter_key=user_counter_key,
-                source_cache_key=scope_user_id,
-                increment=cost,
-            ),
+        pending: Final = (
+            ()
+            if user_counter_key in reserved_counter_keys
+            else (
+                await _prepare_spend_counter_increment(
+                    counter_key=user_counter_key,
+                    source_cache_key=scope_user_id,
+                    increment=cost,
+                ),
+            )
         )
+        return pending + await _cached_window_increments(Litellm_EntityType.USER, scope_user_id, scope_user_id)
 
     scope_coros: Final = tuple(
         coro
@@ -7405,6 +7436,10 @@ class ProxyConfig:
                     litellm.drop_params = drop_params_flag(value, "litellm_settings.drop_params", verbose_proxy_logger)
                 elif key == "suppress_startup_output":
                     continue
+                elif key == "model_fallbacks":
+                    verbose_proxy_logger.warning(
+                        "litellm_settings.model_fallbacks has no effect on the proxy, set router_settings.fallbacks instead"
+                    )
                 else:
                     verbose_proxy_logger.debug(
                         "%s setting litellm.%s=%s%s",
@@ -7417,7 +7452,7 @@ class ProxyConfig:
                     if key == "request_timeout":
                         litellm.request_timeout_explicitly_set = True
                     if key in {"s3_audit_callback_params", "s3_callback_params"}:
-                        from litellm.integrations.s3_v2 import S3Logger as S3V2Logger
+                        from litellm.integrations.s3_v3 import S3Logger as S3V2Logger
                         from litellm.litellm_core_utils.litellm_logging import (
                             _in_memory_loggers,
                         )
@@ -10999,6 +11034,7 @@ async def async_data_generator(
     )
     stream_source: AsyncIterator[object] | None = None  # rebind-ok: bound once the keepalive policy resolves
     stream_started: bool = False  # rebind-ok: set once a ping or a hook-cleared chunk is sent, then errors go in-band
+    provider_output_started: bool = False  # rebind-ok: set on the first provider chunk, which partial billing settles
     try:
         error_message: str | None = None
         requested_model_from_client: Final = _get_client_requested_model_for_streaming(request_data=request_data)
@@ -11062,6 +11098,7 @@ async def async_data_generator(
                 yield ": ping\n\n"
                 continue
             chunk = item
+            provider_output_started = True
             chunk_received_at = time.perf_counter()
             if needs_per_chunk_hook:
                 ### CALL HOOKS ### - modify outgoing data
@@ -11253,6 +11290,9 @@ async def async_data_generator(
             client_disconnected=client_disconnected,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
+            release_reservation_if_unbilled=client_disconnected
+            and not provider_output_started
+            and not withheld_provider_output(_UNTYPED_VALUE.validate_python(response)),
         )
 
 
@@ -12353,7 +12393,57 @@ class ProxyStartupEvent:
         else:
             verbose_proxy_logger.debug("Key rotation disabled (set LITELLM_KEY_ROTATION_ENABLED=true to enable)")
 
+        expiry_alert_manager: Final = cls._build_key_expiry_alert_manager()
+        if expiry_alert_manager is not None:
+            from litellm.constants import LITELLM_KEY_EXPIRY_ALERT_CHECK_INTERVAL_SECONDS
+
+            scheduler.add_job(  # pyright: ignore[reportUnknownMemberType]  # APScheduler stubs are incomplete
+                expiry_alert_manager.process_alerts,
+                "interval",
+                seconds=LITELLM_KEY_EXPIRY_ALERT_CHECK_INTERVAL_SECONDS,
+                id="key_expiry_alert_job",
+            )
         await cls._initialize_expired_ui_session_key_cleanup_background_job(scheduler=scheduler)
+
+    @classmethod
+    def _build_key_expiry_alert_manager(cls) -> "KeyExpiryAlertManager | None":
+        """The expiry email job, or None when it is off or misconfigured. Setup errors are logged, never raised,
+        so the background jobs registered after it still start."""
+        if premium_user is not True or prisma_client is None:
+            return None
+        try:
+            from litellm_enterprise.enterprise_callbacks.send_emails.base_email import (
+                BaseEmailLogger,  # pyright: ignore[reportUnknownVariableType]  # litellm_enterprise is absent from the type-check venv
+            )
+
+            from litellm.proxy.common_utils.key_expiry_alert_manager import (
+                KeyExpiryAlertManager,
+                KeyExpiryEmailLogger,
+            )
+            from litellm.proxy.common_utils.key_expiry_alerts import configured_key_expiry_alert_days
+
+            expiry_email_loggers: Final = litellm.logging_callback_manager.get_custom_loggers_for_type(
+                callback_type=BaseEmailLogger  # pyright: ignore[reportUnknownArgumentType]  # litellm_enterprise is absent from the type-check venv
+            )
+            expiry_alerting_config: Final = _GENERAL_SETTINGS_VIEW.validate_python(general_settings).get("alerting")
+            if not expiry_email_loggers and "email" not in (as_object_list(expiry_alerting_config) or ()):
+                return None
+            expiry_email_logger: Final = next(
+                (logger for logger in expiry_email_loggers if isinstance(logger, KeyExpiryEmailLogger)),
+                proxy_logging_obj.email_logging_instance,
+            )
+            if not isinstance(expiry_email_logger, KeyExpiryEmailLogger):
+                return None
+            return KeyExpiryAlertManager(
+                prisma_client=prisma_client,
+                cache=proxy_logging_obj.internal_usage_cache.dual_cache,
+                email_logger=expiry_email_logger,
+                default_days=lambda: configured_key_expiry_alert_days(_current_general_settings()),
+                pod_lock_manager=proxy_logging_obj.db_spend_update_writer.pod_lock_manager,
+            )
+        except Exception:  # noqa: BLE001  # a setup failure must not stop later background jobs registering
+            verbose_proxy_logger.exception("Failed to set up key expiry alert job")
+            return None
 
     @classmethod
     async def _initialize_expired_ui_session_key_cleanup_background_job(cls, scheduler: AsyncIOScheduler):
@@ -12767,7 +12857,10 @@ class ProxyStartupEvent:
 async def _names_hidden_by_listing_callbacks(
     user_api_key_dict: UserAPIKeyAuth, model_names: Sequence[str]
 ) -> frozenset[str]:
-    hidden: Final = await proxy_logging_obj.hidden_by_listing_callbacks(user_api_key_dict, model_names)
+    return _with_router_aliases_to(await proxy_logging_obj.hidden_by_listing_callbacks(user_api_key_dict, model_names))
+
+
+def _with_router_aliases_to(hidden: frozenset[str]) -> frozenset[str]:
     if not hidden or llm_router is None:
         return hidden
     aliases: Final = llm_router.registry().aliases()
@@ -12780,11 +12873,47 @@ async def _names_hidden_by_listing_callbacks(
     )
 
 
+@dataclass(frozen=True, slots=True)
+class _ListingCallbackVerdict:
+    hid: frozenset[str]
+    hidden: frozenset[str]
+    kept_alias_targets: frozenset[str]
+
+
+async def _listing_callback_verdict(
+    user_api_key_dict: UserAPIKeyAuth,
+    listed_names: Sequence[str],
+    alias_targets: Sequence[str],
+    internal_to_public: Mapping[str, str],
+) -> _ListingCallbackVerdict:
+    router_aliases: Final = llm_router.registry().aliases() if llm_router is not None else {}
+    target_reads: Final = MappingProxyType(
+        {
+            target: frozenset(
+                internal_to_public.get(name, name)
+                for name in (target, resolve_model_group_alias(router_aliases, target))
+                if name is not None
+            )
+            for target in alias_targets
+        }
+    )
+    offered_hid: Final = await proxy_logging_obj.hidden_by_listing_callbacks(
+        user_api_key_dict, tuple(dict.fromkeys((*listed_names, *chain.from_iterable(target_reads.values()))))
+    )
+    hid: Final = offered_hid.intersection(listed_names)
+    return _ListingCallbackVerdict(
+        hid,
+        _with_router_aliases_to(hid),
+        frozenset(target for target, names in target_reads.items() if offered_hid.isdisjoint(names)),
+    )
+
+
 def _describable_model_groups(
     listed_entries: Sequence[tuple[str, str]],
     hidden_names: frozenset[str] | set[str],
     user_api_key_dict: UserAPIKeyAuth,
     team_id: str | None,
+    kept_alias_targets: frozenset[str],
 ) -> DeployedModelGroups:
     listing_team_id: Final = team_id or user_api_key_dict.team_id
     return DeployedModelGroups(
@@ -12792,8 +12921,8 @@ def _describable_model_groups(
         hidden_names | undiscoverable_model_groups(llm_router, user_api_key_dict, listing_team_id),
         listing_team_id,
         (
-            frozenset(lookup_id for _, lookup_id in listed_entries)
-            if ProxyLogging.callback_capabilities().listed_models_filters
+            frozenset((*(lookup_id for _, lookup_id in listed_entries), *kept_alias_targets))
+            if ProxyLogging.filters_listed_models()
             else None
         ),
     )
@@ -12895,16 +13024,26 @@ async def _key_model_listing(
     excluded: Final = hidden_names | undiscoverable_model_names(
         names, llm_router, user_api_key_dict, team_id or user_api_key_dict.team_id
     )
-    listed_entries: Final = await _entries_kept_by_listing_callbacks(
-        TeamModelNameTranslator.listing_entries(
-            [name for name in names if name not in excluded], llm_router, general_settings_view()
-        ),
-        user_api_key_dict,
+    translated_entries: Final = TeamModelNameTranslator.listing_entries(
+        [name for name in names if name not in excluded], llm_router, general_settings_view()
     )
-    entries: Final = alias_listing_entries(
-        listed_entries,
-        caller_aliases,
-        _describable_model_groups(listed_entries, hidden_names, user_api_key_dict, team_id),
+    verdict: Final = await _listing_callback_verdict(
+        user_api_key_dict,
+        tuple(response_id for response_id, _ in translated_entries),
+        unlisted_alias_targets(translated_entries, caller_aliases),
+        TeamModelNameTranslator.build_internal_to_public_map(llm_router, general_settings_view()),
+    )
+    listed_entries: Final = tuple(entry for entry in translated_entries if entry[0] not in verdict.hidden)
+    entries: Final = tuple(
+        entry
+        for entry in alias_listing_entries(
+            listed_entries,
+            caller_aliases,
+            _describable_model_groups(
+                listed_entries, hidden_names, user_api_key_dict, team_id, verdict.kept_alias_targets
+            ),
+        )
+        if entry[0] not in verdict.hid
     )
     return _KeyModelListing(
         rows=tuple(
@@ -13247,18 +13386,18 @@ async def model_info(
     hidden_names: Final = blocked_names | unhealthy_names
     internal_to_public: Final = TeamModelNameTranslator.build_internal_to_public_map(llm_router, settings)
     caller_aliases: Final = await request_caller_aliases(user_api_key_dict, team_id)
-    callback_hidden_names: Final = await _names_hidden_by_listing_callbacks(
-        user_api_key_dict,
-        tuple(
-            response_id
-            for response_id, _ in TeamModelNameTranslator.listing_entries(
-                tuple(m for m in all_models if m not in hidden_names), llm_router, settings
-            )
-        ),
+    offered_entries: Final = TeamModelNameTranslator.listing_entries(
+        tuple(m for m in all_models if m not in hidden_names), llm_router, settings
     )
-    if hidden_names or callback_hidden_names:
+    verdict: Final = await _listing_callback_verdict(
+        user_api_key_dict,
+        tuple(response_id for response_id, _ in offered_entries),
+        unlisted_alias_targets(offered_entries, caller_aliases),
+        internal_to_public,
+    )
+    if hidden_names or verdict.hidden:
         all_models = [
-            m for m in all_models if m not in hidden_names and internal_to_public.get(m, m) not in callback_hidden_names
+            m for m in all_models if m not in hidden_names and internal_to_public.get(m, m) not in verdict.hidden
         ]
     undiscoverable_names: Final = undiscoverable_model_names(
         all_models, llm_router, user_api_key_dict, team_id or user_api_key_dict.team_id
@@ -13267,11 +13406,17 @@ async def model_info(
     listed_entries: Final = TeamModelNameTranslator.listing_entries(
         tuple(m for m in all_models if m not in undiscoverable_names), llm_router, settings
     )
-    aliased_model_id: Final = alias_target(
-        model_id,
-        caller_aliases,
-        listed_entries,
-        _describable_model_groups(listed_entries, hidden_names, user_api_key_dict, team_id),
+    aliased_model_id: Final = (
+        None
+        if model_id in verdict.hid
+        else alias_target(
+            model_id,
+            caller_aliases,
+            listed_entries,
+            _describable_model_groups(
+                listed_entries, hidden_names, user_api_key_dict, team_id, verdict.kept_alias_targets
+            ),
+        )
     )
     resolved_model_id: Final = TeamModelNameTranslator.resolve_public_name(
         model_id=aliased_model_id or model_id,
@@ -15826,6 +15971,7 @@ async def _local_token_estimate(
     prompt: str | None,
     messages: Sequence[AllMessageValues] | None,
     tools: list[ChatCompletionToolParam] | None,
+    tool_choice: str | Mapping[str, object] | None,
     custom_tokenizer: CustomHuggingfaceTokenizer | None,
     provider_failure: ProviderCountFailure | None,
 ) -> _LocalTokenEstimate:
@@ -15839,6 +15985,7 @@ async def _local_token_estimate(
         text=prompt,
         messages=messages,
         tools=tools,
+        tool_choice=tool_choice,
         custom_tokenizer=tokenizer,
     )
     total_tokens: Final = await (
@@ -15858,17 +16005,19 @@ async def _kimi_k3_count(
     model: str,
     messages: Sequence[AllMessageValues],
     tools: Sequence[ChatCompletionToolParam] | None,
+    tool_choice: str | Mapping[str, object] | None,
 ) -> int | None:
     encoding: Final = await _KIMI_K3_ENCODINGS.encoding(TOKENIZER_LOAD_WAIT_SECONDS)
     if encoding is None:
         return None
     match messages_format:
         case "anthropic":
+            fields: Final = request.model_dump(include={"messages", "system", "tools"}, exclude_none=True)
             return await offload_token_count(kimi_k3_anthropic_tokens)(
-                encoding, model, request.model_dump(include={"messages", "system", "tools"}, exclude_none=True)
+                encoding, model, fields if tool_choice is None else {**fields, "tool_choice": tool_choice}
             )
         case "openai":
-            return await offload_token_count(kimi_k3_tokens)(encoding, model, messages, tools)
+            return await offload_token_count(kimi_k3_tokens)(encoding, model, messages, tools, tool_choice)
 
 
 class _TokenCountDeployment(TypedDict, total=False):
@@ -15981,6 +16130,7 @@ def _count_context_management(
 
 
 _GATEWAY_EDIT_ROUTES: Final = frozenset({Target.CHAT_COMPLETIONS, Target.RESPONSES})
+_MESSAGES_ROUTES: Final = frozenset({Target.MESSAGES, Target.MESSAGES_PASSTHROUGH})
 
 
 def _messages_route(deployment: _TokenCountDeployment, request_model: str) -> Target:
@@ -16111,15 +16261,59 @@ def _deployment_api_base(
 def _deployment_provider(
     deployment: _TokenCountDeployment, request_model: str, responses_request: Mapping[str, object] | None
 ) -> str | None:
-    params: Final = deployment.get("litellm_params", {})
+    resolved: Final = _deployment_llm_provider(deployment, request_model, responses_request)
+    return None if resolved is None else resolved[1]
+
+
+def _deployment_served_model(
+    deployment: _TokenCountDeployment, request_model: str, responses_request: Mapping[str, object] | None
+) -> str | None:
+    resolved: Final = _deployment_llm_provider(deployment, request_model, responses_request)
+    if resolved is None:
+        return None
+    model, provider = resolved
+    served_by: Final = "xai" if _is_xai_api_base(_deployment_api_base(deployment, responses_request)) else provider
+    return f"{served_by}/{model}"
+
+
+def _is_xai_api_base(api_base: str | None) -> bool:
+    if api_base is None:
+        return False
     try:
-        return litellm.get_llm_provider(
-            model=_non_empty_str(params.get("model")) or request_model,
-            custom_llm_provider=_non_empty_str(params.get("custom_llm_provider")),
+        return urlparse(api_base).hostname == urlparse(XAI_API_BASE).hostname
+    except ValueError:
+        return False
+
+
+def _deployment_llm_provider(
+    deployment: _TokenCountDeployment, request_model: str, responses_request: Mapping[str, object] | None
+) -> tuple[str, str] | None:
+    params: Final = deployment.get("litellm_params", {})
+    model: Final = _non_empty_str(params.get("model")) or request_model
+    custom_llm_provider: Final = _non_empty_str(params.get("custom_llm_provider"))
+    declared: Final = declared_authenticating_provider(model, custom_llm_provider)
+    if declared is not None:
+        return model.removeprefix(f"{declared}/"), declared
+    try:
+        resolved_model, provider, _, _ = litellm.get_llm_provider(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
             api_base=_deployment_api_base(deployment, responses_request),
-        )[1]
+        )
     except litellm.BadRequestError:
         return None
+    return resolved_model, provider
+
+
+def _xai_tool_choice_off_xai(
+    template_model: str, tool_section: ChatTemplateToolSection | None, served_model: str | None
+) -> bool:
+    return (
+        tool_section is not None
+        and served_model is not None
+        and chat_template_tool_choice_tokens(template_model, tool_section) is not None
+        and chat_template_tool_choice_tokens(served_model, tool_section) is None
+    )
 
 
 def _serves_native_responses(
@@ -16184,7 +16378,16 @@ async def token_counter(
     """
     call_id: Final = resolve_litellm_call_id(litellm_call_id)
     return await answered_with_litellm_call_id(
-        count_request_tokens(request=request, call_endpoint=call_endpoint, litellm_call_id=call_id),
+        count_request_tokens(
+            request=request,
+            call_endpoint=call_endpoint,
+            request_litellm_params=MappingProxyType(
+                {}
+                if request.additional_drop_params is None
+                else {"additional_drop_params": request.additional_drop_params}
+            ),
+            litellm_call_id=call_id,
+        ),
         call_id,
         http_request,
         fastapi_response,
@@ -16244,12 +16447,13 @@ async def _routed_count_deployment(
     if llm_router is None:
         return None
     try:
-        return await llm_router.select(model, dict(_responses_routing_kwargs(responses_request)))
+        routed: Final = await llm_router.select(model, dict(_responses_routing_kwargs(responses_request)))
     except Exception:
         verbose_proxy_logger.exception(
             "litellm.proxy.proxy_server.token_counter(): Exception occured while getting deployment"
         )
         return None
+    return routed if isinstance(routed, Mapping) else None
 
 
 def _with_chat_timeout(litellm_params: Mapping[str, object]) -> Mapping[str, object]:
@@ -16465,7 +16669,7 @@ async def _count_request_tokens(
 
     local_view: Final = (
         None
-        if route is not Target.MESSAGES or context_edits is None or request_messages is None
+        if route not in _MESSAGES_ROUTES or context_edits is None or request_messages is None
         else await _bridged_request_view(
             request_messages,
             system,
@@ -16509,6 +16713,17 @@ async def _count_request_tokens(
     openai_model: Final = deployment_openai_model(deployment_view)
     template_model: Final = openai_model or _deployment_base_model(deployment_view) or model_to_use
     tool_section: Final = chat_template_tool_section(template_model)
+    count_policy: Final = _count_drop_policy(deployment_view, {**request_litellm_params, **(responses_request or {})})
+    counted_tool_choice: Final = (
+        request.tool_choice
+        if counted_messages is not None
+        and isinstance(request.tool_choice, (str, Mapping))
+        and "tool_choice" not in count_policy.additional_drop_params
+        and not _xai_tool_choice_off_xai(
+            template_model, tool_section, _deployment_served_model(deployment_view, request.model, responses_request)
+        )
+        else None
+    )
     counted_tools: Final = (
         cast(list[ChatCompletionToolParam], list(_with_strict_by_default(sent_tools)))  # cast-ok: strict added
         if sent_tools is not None
@@ -16535,6 +16750,7 @@ async def _count_request_tokens(
             model_to_use,
             kimi_k3_messages,
             counted_tools,
+            counted_tool_choice,
         )
         if kimi_k3_messages is not None and custom_tokenizer is None
         else None
@@ -16553,6 +16769,7 @@ async def _count_request_tokens(
         prompt=prompt if counted_messages is None else None,
         messages=counted_messages,
         tools=counted_tools,
+        tool_choice=counted_tool_choice,
         custom_tokenizer=custom_tokenizer,
         provider_failure=ladder,
     )
@@ -16585,8 +16802,6 @@ async def supported_openai_params(model: str):
         --header "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
     """
-    from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider
-
     global llm_router
     try:
         resolved_models: Final = (
@@ -19313,37 +19528,121 @@ async def model_group_info(
     undiscoverable_group_names: Final = undiscoverable_model_names(
         all_models_str, llm_router, user_api_key_dict, user_api_key_dict.team_id
     )
-    listed_group_names: Final = tuple(name for name in all_models_str if name not in undiscoverable_group_names)
+    caller_aliases: Final = await request_caller_aliases(user_api_key_dict)
+    requested_names: Final = (
+        None
+        if model_group is None
+        else _names_a_model_group_row_reads(model_group, caller_aliases, llm_router.registry().aliases())
+    )
+    internal_to_public: Final = TeamModelNameTranslator.build_internal_to_public_map(llm_router, general_settings)
+    listed_group_names: Final = tuple(
+        dict.fromkeys(
+            name
+            for name in all_models_str
+            if name not in undiscoverable_group_names
+            and (requested_names is None or not requested_names.isdisjoint((name, internal_to_public.get(name, name))))
+        )
+    )
 
-    # Append A2A agents to model groups
     from litellm.proxy.agent_endpoints.model_list_helpers import (
         append_agents_to_model_group,
     )
 
-    model_groups: Final = await append_agents_to_model_group(
-        model_groups=get_model_group_info(
-            llm_router=llm_router,
-            all_models_str=listed_group_names,
-            model_group=model_group,
-            team_id=user_api_key_dict.team_id,
+    agent_groups: Final = await append_agents_to_model_group(model_groups=[], user_api_key_dict=user_api_key_dict)
+    verdict: Final = await _listing_callback_verdict(
+        user_api_key_dict,
+        tuple(
+            dict.fromkeys(
+                (
+                    *(internal_to_public.get(name, name) for name in listed_group_names),
+                    *(group.model_group for group in agent_groups),
+                )
+            )
         ),
-        user_api_key_dict=user_api_key_dict,
+        unlisted_alias_targets(
+            TeamModelNameTranslator.public_name_entries(listed_group_names, internal_to_public), caller_aliases
+        ),
+        internal_to_public,
     )
-    internal_to_public: Final = TeamModelNameTranslator.build_internal_to_public_map(llm_router, general_settings)
-    public_group_names: Final = tuple(
-        internal_to_public.get(group.model_group, group.model_group) for group in model_groups
+    kept_entries: Final = tuple(
+        (name, name) for name in listed_group_names if internal_to_public.get(name, name) not in verdict.hidden
     )
-    callback_hidden_names: Final = await _names_hidden_by_listing_callbacks(
-        user_api_key_dict, tuple(dict.fromkeys(public_group_names))
+    blocked_names: Final = llm_router.health().fully_blocked_model_names()
+    requested_entries: Final = tuple(
+        entry
+        for entry in _listing_with_aliases_to_unpaused_models(
+            kept_entries,
+            TeamModelNameTranslator.public_name_entries(
+                tuple(name for name, _ in kept_entries if name not in blocked_names), internal_to_public
+            ),
+            caller_aliases,
+            _describable_model_groups(kept_entries, blocked_names, user_api_key_dict, None, verdict.kept_alias_targets),
+        )
+        if (model_group is None or entry[0] == model_group) and entry[0] not in verdict.hid
+    )
+    lookup_ids: Final = tuple(dict.fromkeys(lookup_id for _, lookup_id in requested_entries))
+    groups_by_lookup_id: Final = MappingProxyType(
+        dict(
+            zip(
+                lookup_ids,
+                get_model_group_info(
+                    llm_router=llm_router,
+                    all_models_str=lookup_ids,
+                    model_group=None,
+                    team_id=user_api_key_dict.team_id,
+                ),
+                strict=True,
+            )
+        )
     )
 
     return {
         "data": [
-            group
-            for group, public_name in zip(model_groups, public_group_names, strict=True)
-            if public_name not in callback_hidden_names
+            *(
+                _model_group_row_listed_as(groups_by_lookup_id[lookup_id], listed_name, lookup_id)
+                for listed_name, lookup_id in requested_entries
+            ),
+            *(group for group in agent_groups if group.model_group not in verdict.hidden),
         ]
     }
+
+
+def _names_a_model_group_row_reads(model_group: str, aliases: CallerAliases, router_aliases: object) -> frozenset[str]:
+    return frozenset(
+        name
+        for name in (
+            model_group,
+            dispatched_model(model_group, aliases),
+            resolve_model_group_alias(router_aliases, model_group),
+        )
+        if name is not None
+    )
+
+
+def _listing_with_aliases_to_unpaused_models(
+    listed_entries: Sequence[tuple[str, str]],
+    unpaused_public_entries: Sequence[tuple[str, str]],
+    aliases: CallerAliases,
+    deployed: Container[str],
+) -> tuple[tuple[str, str], ...]:
+    described: Final = alias_listing_entries(unpaused_public_entries, aliases, deployed)
+    lookup_by_name: Final = MappingProxyType(dict(described))
+    shown_names: Final = frozenset(name for name, _ in (*listed_entries, *unpaused_public_entries))
+    return (
+        *((name, lookup_by_name.get(name, lookup_id)) for name, lookup_id in listed_entries),
+        *(entry for entry in described if entry[0] not in shown_names),
+    )
+
+
+def _model_group_row_listed_as(row: ModelGroupInfoProxy, listed_name: str, lookup_id: str) -> ModelGroupInfoProxy:
+    if listed_name == lookup_id:
+        return row
+    return row.model_copy(
+        update={
+            "model_group": listed_name,
+            "is_public_model_group": listed_name in (litellm.public_model_groups or ()),
+        }
+    )
 
 
 @router.get(
@@ -19540,11 +19839,15 @@ async def async_queue_request(
 
     Now using a FastAPI background task + /chat/completions compatible endpoint
     """
+    litellm_call_id: Final = resolve_litellm_call_id(request.headers.get(LITELLM_CALL_ID_HEADER))
     data = {}
     try:
         data = await request.json()
         data.pop("_litellm_strip_stream_usage", None)
         data.pop(STREAM_USAGE_INJECTED_FIELD, None)
+        await refuse_s3_media_the_key_may_not_read(
+            data, user_api_key_dict, general_settings, proxy_logging_obj.get_proxy_hook("managed_files")
+        )
 
         # Include original request and headers in the data
         data["proxy_server_request"] = {
@@ -19566,10 +19869,14 @@ async def async_queue_request(
             # if users are using user_api_key_auth, set `user` in `data`
             data["user"] = user_api_key_dict.user_id
 
-        if not isinstance(data.get("metadata"), dict):
-            # Covers both missing and JSON-string metadata (multipart /
-            # extra_body); see above for the same guard upstream.
-            data["metadata"] = {}
+        data["litellm_call_id"] = litellm_call_id
+
+        caller_litellm_metadata: Final = LiteLLMProxyRequestSetup.caller_metadata(data.pop("litellm_metadata", None))
+        queued_metadata: Final = {
+            **caller_litellm_metadata,
+            **LiteLLMProxyRequestSetup.caller_metadata(data.get("metadata")),
+        }
+        data["metadata"] = queued_metadata
         logged_api_key: Final = LiteLLMProxyRequestSetup.get_logged_api_key(user_api_key_dict)
         data["metadata"]["user_api_key"] = logged_api_key
         data["metadata"]["user_api_key_hash"] = logged_api_key
@@ -19585,6 +19892,22 @@ async def async_queue_request(
             user_api_key_dict, "team_object_permission_id", None
         )
         data["metadata"]["endpoint"] = str(request.url)
+        LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+            headers=_headers, data=data, _metadata_variable_name="metadata"
+        )
+        queued_tags: Final = LiteLLMProxyRequestSetup.merged_request_tags(
+            request=request,
+            metadata_buckets=(queued_metadata, caller_litellm_metadata),
+            body_tags=data.get("tags"),
+            user_api_key_dict=user_api_key_dict,
+        )
+        if queued_tags:
+            data["metadata"]["tags"] = list(queued_tags)
+        data["metadata"]["inherited_tags"] = LiteLLMProxyRequestSetup.get_inherited_tags(user_api_key_dict)
+        data["metadata"]["user_api_key_budget_reservation"] = user_api_key_dict.budget_reservation
+        LiteLLMProxyRequestSetup.apply_authenticated_baggage_tags(
+            request=request, request_data=data, metadata_key="metadata"
+        )
 
         global user_temperature, user_request_timeout, user_max_tokens, user_api_base
         # override with user settings, these are params passed via cli
@@ -19607,18 +19930,31 @@ async def async_queue_request(
             )
         )
         queued_priority, _ = router.health().split_priority(data["model"], data)
+        queued_headers: Final = {"x-litellm-priority": str(queued_priority), LITELLM_CALL_ID_HEADER: litellm_call_id}
+
+        async def schedule_queued_call() -> object:
+            try:
+                return _UNTYPED_VALUE.validate_python(await router.schedule_acompletion(**data))
+            except asyncio.CancelledError:
+                await release_cancelled_budget_reservation(user_api_key_dict.budget_reservation)
+                raise
+
         if "stream" in data and data["stream"] is True:  # use generate_responses to stream responses
 
-            async def produce_queue_stream() -> StreamingResponse:
-                return StreamingResponse(
-                    async_data_generator(
+            async def produce_queue_stream() -> StreamingResponse | JSONResponse:
+                queued_stream: Final = await schedule_queued_call()
+                data["litellm_logging_obj"] = getattr(queued_stream, "logging_obj", None)
+                return await create_response(
+                    generator=async_data_generator(
                         user_api_key_dict=user_api_key_dict,
-                        response=_UNTYPED_VALUE.validate_python(await router.schedule_acompletion(**data)),
+                        response=queued_stream,
                         request_data=data,
                         request=request,
                     ),
                     media_type="text/event-stream",
-                    headers={"x-litellm-priority": str(queued_priority)},
+                    headers=queued_headers,
+                    request=request,
+                    general_settings=general_settings_view(),
                 )
 
             async def audit_late_failure(exc: Exception) -> HTTPException | None:
@@ -19632,20 +19968,26 @@ async def async_queue_request(
                 on_late_failure=audit_late_failure,
             )
 
-        response: Final = _UNTYPED_VALUE.validate_python(await router.schedule_acompletion(**data))
-        fastapi_response.headers.update({"x-litellm-priority": str(queued_priority)})
+        response: Final = await schedule_queued_call()
+        fastapi_response.headers.update(queued_headers)
         return response
     except Exception as e:
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
-        if isinstance(e, litellm.BadRequestError):
-            raise ProxyException(
-                message=e.message, type="invalid_request_error", param=getattr(e, "param", None), code=e.status_code
-            ) from e
-        if isinstance(e, ProxyException):
+        failure: Final = _queued_call_failure(e)
+        failure.headers = {**failure.headers, LITELLM_CALL_ID_HEADER: litellm_call_id}
+        if failure is e:
             raise
-        raise proxy_exception_for(e, default_status_code=status.HTTP_400_BAD_REQUEST) from e
+        raise failure from e
+
+
+def _queued_call_failure(e: Exception) -> ProxyException:
+    if isinstance(e, litellm.BadRequestError):
+        return ProxyException(
+            message=e.message, type="invalid_request_error", param=getattr(e, "param", None), code=e.status_code
+        )
+    return proxy_exception_for(e, default_status_code=status.HTTP_400_BAD_REQUEST)
 
 
 @app.get("/fallback/login", tags=["experimental"], include_in_schema=False)

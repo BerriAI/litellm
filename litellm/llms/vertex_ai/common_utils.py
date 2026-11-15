@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Final, Literal, TypeVar, cast, get_type_hints
 
 import httpx
 from pydantic import JsonValue, TypeAdapter, ValidationError
+from pydantic_core import to_jsonable_python
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
@@ -24,14 +25,27 @@ from litellm.llms.gemini.common_utils import (
     GEMINI_IMAGE_SIZE_TO_ASPECT_RATIO,
     map_openai_size_to_gemini_image_config,
 )
+from litellm.llms.vertex_ai.request_labels import (
+    VERTEX_REQUEST_LABELS_MAX,
+    resolve_vertex_request_labels,
+    string_labels,
+    vertex_metadata_sources,
+    vertex_request_label_fields,
+)
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.llms.vertex_ai import (
     VERTEX_AI_PROVIDER_METADATA_FIELDS,
     PartType,
     Schema,
 )
+from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import CountContextManagement, TokenCountMessagesFormat, TokenCountResponse
-from litellm.utils import supports_response_schema, supports_system_messages
+from litellm.utils import (
+    remove_additional_properties,
+    remove_strict_from_schema,
+    supports_response_schema,
+    supports_system_messages,
+)
 
 if TYPE_CHECKING:
     from litellm.llms.anthropic.count_tokens.transformation import AnthropicCountFields
@@ -200,8 +214,12 @@ def redact_vertex_ai_metadata_from_litellm_params(model_call_details: dict) -> N
             hidden_params.pop(field, None)
 
 
+_LITELLM_PARAMS: Final = TypeAdapter(Mapping[str, object])
+_CALLER_LABELS: Final = TypeAdapter(object)
+
+
 def vertex_request_labels_from_litellm_params(
-    litellm_params: dict | None,
+    litellm_params: Mapping[str, object] | None,
 ) -> dict[str, str] | None:
     """
     Build Vertex/GCP billing labels from LiteLLM user metadata on ``litellm_params``:
@@ -209,23 +227,23 @@ def vertex_request_labels_from_litellm_params(
     using ``requester_metadata`` string key-value pairs (same convention as Gemini).
     ``metadata`` is tried first when both are present.
     """
-    if not litellm_params:
-        return None
-    for key in ("metadata", "litellm_metadata"):
-        if key not in litellm_params:
-            continue
-        metadata = litellm_params[key]
-        if metadata is None or not isinstance(metadata, dict):
-            continue
-        if "requester_metadata" not in metadata:
-            continue
-        rm = metadata["requester_metadata"]
-        if not isinstance(rm, dict):
-            continue
-        labels = {k: v for k, v in rm.items() if isinstance(v, str)}
-        if labels:
-            return labels
-    return None
+    sources: Final = vertex_metadata_sources(litellm_params or {})
+    candidates: Final = (dict(string_labels(source.get("requester_metadata"))) for source in sources)
+    return next((labels for labels in candidates if labels), None)
+
+
+def pop_vertex_caller_labels(
+    optional_params: dict | None,
+    litellm_params: Mapping[str, object] | None,
+) -> dict[str, str] | None:
+    """
+    Pop the caller's optional ``labels`` (Gemini-style), falling back to ``requester_metadata``
+    on ``litellm_params["metadata"]`` / ``litellm_params["litellm_metadata"]``.
+    """
+    raw: Final = (
+        _CALLER_LABELS.validate_python(optional_params.pop("labels", None)) if optional_params is not None else None
+    )
+    return dict(string_labels(raw)) or vertex_request_labels_from_litellm_params(litellm_params)
 
 
 def pop_vertex_request_labels(
@@ -233,18 +251,29 @@ def pop_vertex_request_labels(
     litellm_params: dict | None,
 ) -> dict[str, str] | None:
     """
-    Resolve labels from optional ``labels`` (Gemini-style) and/or
-    ``litellm_params["metadata"]`` / ``litellm_params["litellm_metadata"]``
-    (``requester_metadata``). Pops ``labels`` from optional_params when present.
+    The caller's labels from ``pop_vertex_caller_labels``, plus the proxy identity
+    ``litellm.vertex_request_label_fields`` allows.
     """
-    labels: dict[str, str] | None = None
-    if optional_params is not None and "labels" in optional_params:
-        raw: Final = optional_params.pop("labels")
-        if isinstance(raw, dict):
-            labels = {k: v for k, v in raw.items() if isinstance(v, str)}
-    if not labels:
-        labels = vertex_request_labels_from_litellm_params(litellm_params)
-    return labels if labels else None
+    request_params: Final = _LITELLM_PARAMS.validate_python(litellm_params or {})
+    labels: Final = pop_vertex_caller_labels(optional_params, request_params)
+    allowed_fields: Final = vertex_request_label_fields()
+    if not allowed_fields:
+        return labels
+    resolved: Final = resolve_vertex_request_labels(allowed_fields, labels, request_params, VERTEX_REQUEST_LABELS_MAX)
+    return dict(resolved) if resolved else None
+
+
+def vertex_top_level_request_fields(
+    request_fields: Mapping[str, object] | None,
+    litellm_params: GenericLiteLLMParams,
+) -> Mapping[str, object] | None:
+    """The caller's top-level body fields with ``labels`` replaced by ``pop_vertex_request_labels`` while the setting is on."""
+    if not vertex_request_label_fields():
+        return request_fields
+    fields: Final = request_fields or {}
+    unlabelled: Final = {name: value for name, value in fields.items() if name != "labels"}
+    labels: Final = pop_vertex_request_labels({"labels": fields.get("labels")}, dict(litellm_params))
+    return {**unlabelled, "labels": labels} if labels else unlabelled
 
 
 class VertexAIModelRoute(str, Enum):
@@ -892,6 +921,132 @@ def build_vertex_schema(
 
 
 _build_vertex_schema = build_vertex_schema
+
+_VERTEX_PARAMETERS_UNSUPPORTED_ROOT_KEYWORDS: Final = ("anyOf", "oneOf", "allOf")
+_ROOT_DEFS_REF_PREFIX: Final = "#/$defs/"
+_JSON_SCHEMA: Final = TypeAdapter(Mapping[str, JsonValue])
+
+
+def _is_absent_or_object_type(schema_type: object) -> bool:
+    match schema_type:
+        case None:
+            return True
+        case str():
+            return schema_type.lower() == "object"
+        case [str() as only_type]:
+            return only_type.lower() == "object"
+        case _:
+            return False
+
+
+def _root_cannot_be_vertex_parameters(root: Mapping[str, object]) -> bool:
+    return any(
+        keyword in root for keyword in _VERTEX_PARAMETERS_UNSUPPORTED_ROOT_KEYWORDS
+    ) or not _is_absent_or_object_type(root.get("type"))
+
+
+def _root_ref_def_name(schema: Mapping[str, JsonValue], def_names: Mapping[str, str]) -> str | None:
+    match schema.get("$ref"):
+        case str() as ref if ref.startswith(_ROOT_DEFS_REF_PREFIX):
+            return def_names.get(ref.removeprefix(_ROOT_DEFS_REF_PREFIX))
+        case _:
+            return None
+
+
+def _root_ref_chain(
+    schema: Mapping[str, JsonValue], defs: Mapping[str, JsonValue]
+) -> tuple[Mapping[str, JsonValue], ...] | None:
+    object_defs: Final = MappingProxyType({name: value for name, value in defs.items() if isinstance(value, dict)})
+    def_names: Final = MappingProxyType({name: name for name in object_defs})
+    next_names: Final = ((name, _root_ref_def_name(value, def_names)) for name, value in object_defs.items())
+    next_def: Final = MappingProxyType({name: target for name, target in next_names if target is not None})
+    first: Final = _root_ref_def_name(schema, def_names)
+    if first is None:
+        return (schema,)
+    names: Final = tuple(accumulate(range(len(next_def)), lambda name, _: next_def.get(name, name), initial=first))
+    return None if names[-1] in next_def else (schema, *(object_defs[name] for name in frozenset(names)))
+
+
+def needs_parameters_json_schema(parameters: Mapping[str, JsonValue]) -> bool:
+    defs: Final = parameters.get("$defs")
+    chain: Final = _root_ref_chain(parameters, defs if isinstance(defs, dict) else {})
+    return chain is not None and any(_root_cannot_be_vertex_parameters(schema) for schema in chain)
+
+
+def _is_union(schema: Mapping[str, JsonValue]) -> bool:
+    return "anyOf" in schema or "oneOf" in schema
+
+
+def has_bare_root_union(json_schema: Mapping[str, JsonValue]) -> bool:
+    defs: Final = json_schema.get("$defs")
+    chain: Final = _root_ref_chain(json_schema, defs if isinstance(defs, dict) else {}) or (json_schema,)
+    return any(map(_is_union, chain)) and not any("properties" in schema for schema in chain)
+
+
+_FORCING_MODES: Final = frozenset({"ANY", "VALIDATED"})
+
+
+def _forces(function_calling_config: JsonValue, name: JsonValue) -> bool:
+    match function_calling_config:
+        case {"mode": str() as mode, "allowed_function_names": [*names]} | {
+            "mode": str() as mode,
+            "allowedFunctionNames": [*names],
+        } if mode.upper() in _FORCING_MODES:
+            return name in names
+        case {"mode": str() as mode} if mode.upper() in _FORCING_MODES:
+            return True
+        case _:
+            return False
+
+
+def _vertex_parameters(json_schema: Mapping[str, JsonValue], send_integer_enums: bool) -> Mapping[str, JsonValue]:
+    stripped: Final = remove_strict_from_schema(remove_additional_properties(deepcopy(dict(json_schema))))
+    return _JSON_SCHEMA.validate_python(build_vertex_schema(stripped, send_integer_enums=send_integer_enums))
+
+
+def _declaration_for(declaration: JsonValue, function_calling_config: JsonValue, send_integer_enums: bool) -> JsonValue:
+    if not isinstance(declaration, dict):
+        return declaration
+    json_schema: Final = declaration.get("parametersJsonSchema")
+    if not isinstance(json_schema, dict) or not has_bare_root_union(json_schema):
+        return declaration
+    if not _forces(function_calling_config, declaration.get("name")):
+        return declaration
+    kept: Final = {key: value for key, value in declaration.items() if key != "parametersJsonSchema"}
+    return {**kept, "parameters": dict(_vertex_parameters(json_schema, send_integer_enums))}
+
+
+def _tool_for(tool: JsonValue, function_calling_config: JsonValue, send_integer_enums: bool) -> JsonValue:
+    declarations: Final = tool.get("function_declarations") if isinstance(tool, dict) else None
+    if not isinstance(tool, dict) or not isinstance(declarations, list):
+        return tool
+    return {
+        **tool,
+        "function_declarations": [
+            _declaration_for(item, function_calling_config, send_integer_enums) for item in declarations
+        ],
+    }
+
+
+def with_forced_bare_root_unions_on_parameters(
+    tools: JsonValue, tool_config: JsonValue, send_integer_enums: bool
+) -> JsonValue:
+    match tool_config:
+        case {"functionCallingConfig": function_calling_config} | {"function_calling_config": function_calling_config}:
+            return (
+                [_tool_for(tool, function_calling_config, send_integer_enums) for tool in tools]
+                if isinstance(tools, list)
+                else tools
+            )
+        case _:
+            return tools
+
+
+def parameters_json_schema_for(parameters: Mapping[str, object]) -> Mapping[str, JsonValue] | None:
+    if "$ref" not in parameters and not _root_cannot_be_vertex_parameters(parameters):
+        return None
+    json_schema: Final = _JSON_SCHEMA.validate_python(to_jsonable_python(parameters))
+    return json_schema if needs_parameters_json_schema(json_schema) else None
 
 
 def build_json_schema(parameters: dict) -> dict:
@@ -1633,7 +1788,7 @@ class VertexAITokenCounter(BaseTokenCounter):
             if isinstance(request_view, InferenceRequestViewError):
                 return count_context_error_response(request_view, request_model, model_to_use)
             count_context: Final = vertex_gemini_count_context(
-                system=request_view.system, tools=tools, model=model_to_use
+                system=request_view.system, tools=tools, model=model_to_use, allow_parameters_json_schema=False
             )
             if isinstance(count_context, VertexGeminiCountContextError):
                 return count_context_error_response(count_context, request_model, model_to_use)

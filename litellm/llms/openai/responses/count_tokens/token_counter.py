@@ -18,7 +18,7 @@ from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.tool_fields import DropPolicy
 from litellm.llms.anthropic.messages.context_management import AnthropicContextManagementError
 from litellm.llms.anthropic.messages.convertible_blocks import deployment_drops_params, unconvertible_blocks_error
-from litellm.llms.anthropic.messages.responses_adapters.handler import count_view_messages
+from litellm.llms.anthropic.messages.responses_adapters.handler import count_messages_as_sent
 from litellm.llms.anthropic.messages.responses_adapters.transformation import (
     LiteLLMAnthropicToResponsesAPIAdapter,
 )
@@ -101,32 +101,6 @@ def _count_error(model_to_use: str, request_model: str, message: str, status_cod
     )
 
 
-async def _sent_messages(
-    model: str,
-    messages: Sequence[Mapping[str, object]],
-    tools: Sequence[Mapping[str, object]] | None,
-    system: object,
-    messages_format: TokenCountMessagesFormat,
-    context_management: CountContextManagement | None,
-) -> Sequence[Mapping[str, object]] | AnthropicContextManagementError:
-    match messages_format:
-        case "openai":
-            return messages
-        case "anthropic":
-            try:
-                return await count_view_messages(
-                    model=model,
-                    messages=messages,
-                    tools=tools,
-                    system=system,
-                    context_management=context_management,
-                )
-            except AnthropicContextManagementError as error:
-                return error
-        case _:
-            assert_never(messages_format)
-
-
 class OpenAITokenCounter(BaseTokenCounter):
     """Token counter implementation for OpenAI provider using the Responses API."""
 
@@ -135,12 +109,6 @@ class OpenAITokenCounter(BaseTokenCounter):
         custom_llm_provider: str | None = None,
     ) -> bool:
         return custom_llm_provider == LlmProviders.OPENAI.value
-
-    @staticmethod
-    def _system_instructions(system: object) -> str | None:
-        if system is None or isinstance(system, str):
-            return system
-        return LiteLLMAnthropicToResponsesAPIAdapter.system_blocks_to_instructions(system) or None
 
     @staticmethod
     def _responses_request_parts(
@@ -160,7 +128,7 @@ class OpenAITokenCounter(BaseTokenCounter):
                 input_items, instructions = OpenAICountTokensConfig.messages_to_responses_input(
                     [dict(message) for message in messages]
                 )
-                fallback_instructions: Final = OpenAITokenCounter._system_instructions(system)
+                fallback_instructions: Final = LiteLLMAnthropicToResponsesAPIAdapter.system_instructions(system)
                 return OpenAICountTokensConfig.count_request_parts(
                     input_items, instructions if instructions is not None else fallback_instructions, tools
                 )
@@ -208,8 +176,13 @@ class OpenAITokenCounter(BaseTokenCounter):
                 rejected_before_provider_call=True,
             )
 
-        sent_messages: Final = await _sent_messages(
-            model_to_use, messages, tools, system, messages_format, context_management
+        sent_messages: Final = await count_messages_as_sent(
+            model=model_to_use,
+            messages=messages,
+            tools=tools,
+            system=system,
+            messages_format=messages_format,
+            context_management=context_management,
         )
         if isinstance(sent_messages, AnthropicContextManagementError):
             return TokenCountResponse(
