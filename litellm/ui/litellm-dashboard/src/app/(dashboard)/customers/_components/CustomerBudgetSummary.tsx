@@ -1,6 +1,6 @@
 import { useTranslation } from "react-i18next";
 import type { CustomerUsageEntity } from "./customerUsageApi";
-import CustomerBudgetSpend, { CustomerBudgetWindow } from "./CustomerBudgetSpend";
+import { CustomerBudgetWindow } from "./CustomerBudgetSpend";
 import { CUSTOMER_BUDGET_LABELS, customerBudgetPeriod, customerBudgetUsage } from "./customerBudgetUsage";
 
 export default function CustomerBudgetSummary({
@@ -35,10 +35,10 @@ export default function CustomerBudgetSummary({
           </div>
         );
       })}
-      {budgets.length === 0 && (
-        <CustomerBudgetSpend spend={entity.spend} limit={null} label={t("customerPortal.analytics.budgetSummary")} />
+      {budgets.length === 0 && <p className="text-muted-foreground">{t("customerPortal.analytics.noBudget")}</p>}
+      {budgets.length > 0 && (
+        <p className="text-[11px] text-muted-foreground">{t("customerPortal.analytics.budgetUsageHint")}</p>
       )}
-      <p className="text-[11px] text-muted-foreground">{t("customerPortal.analytics.budgetUsageHint")}</p>
     </section>
   );
 }
