@@ -921,29 +921,36 @@ class TeamMemberBudgetHandler:
 
     @staticmethod
     async def member_budgets_on_team_reset_window(
-        team_id: str, team_member_budget_id: str, prisma_client: PrismaClient
-    ) -> tuple[str, ...]:
-        """Budgets of members who take their cap from the team default and reset on a copy of its window."""
-        team_default: Final = await _budget_db(prisma_client).find_unique(where={"budget_id": team_member_budget_id})
-        if team_default is None:
-            return ()
+        team_id: str, team_member_budget_id: str | None, prisma_client: PrismaClient
+    ) -> tuple[str | None, tuple[str, ...]]:
+        """The team default's reset window, and the budgets of members who take their cap from it and reset on a copy."""
+        team_default: Final = (
+            await _budget_db(prisma_client).find_unique(where={"budget_id": team_member_budget_id})
+            if team_member_budget_id is not None
+            else None
+        )
+        team_window: Final = team_default.budget_duration if team_default is not None else None
         memberships: Final = await _team_membership_db(prisma_client).find_many(
             where={"team_id": team_id, "budget_id": {"not": team_member_budget_id}},
             include={"litellm_budget_table": True},
         )
-        return tuple(
+        return team_window, tuple(
             m.litellm_budget_table.budget_id
             for m in memberships
             if m.litellm_budget_table is not None
             and m.litellm_budget_table.max_budget is None
-            and m.litellm_budget_table.budget_duration == team_default.budget_duration
+            and m.litellm_budget_table.budget_duration == team_window
         )
 
     @staticmethod
-    async def move_member_budgets_to_reset_window(
-        budget_ids: tuple[str, ...], budget_duration: str | None, prisma_client: PrismaClient
+    async def move_members_to_team_reset_window(
+        team_id: str, team_member_budget_id: str | None, budget_duration: str | None, prisma_client: PrismaClient
     ) -> None:
-        if not budget_ids:
+        """Runs before the team default is written, so a retry after a failure still finds the members left behind."""
+        team_window, budget_ids = await TeamMemberBudgetHandler.member_budgets_on_team_reset_window(
+            team_id=team_id, team_member_budget_id=team_member_budget_id, prisma_client=prisma_client
+        )
+        if team_window == budget_duration or not budget_ids:
             return
         _ = await update_many_in(
             _budget_db(prisma_client),
@@ -2863,14 +2870,13 @@ async def update_team(
                 }
 
         _current_member_budget_id: Final = (existing_team_row.metadata or {}).get("team_member_budget_id")
-        _budgets_on_team_reset_window: Final = (
-            await TeamMemberBudgetHandler.member_budgets_on_team_reset_window(
-                team_id=data.team_id, team_member_budget_id=_current_member_budget_id, prisma_client=prisma_client
+        if "team_member_budget_duration" in _team_member_fields_in_request:
+            await TeamMemberBudgetHandler.move_members_to_team_reset_window(
+                team_id=data.team_id,
+                team_member_budget_id=_current_member_budget_id if isinstance(_current_member_budget_id, str) else None,
+                budget_duration=data.team_member_budget_duration,
+                prisma_client=prisma_client,
             )
-            if "team_member_budget_duration" in _team_member_fields_in_request
-            and isinstance(_current_member_budget_id, str)
-            else ()
-        )
 
         if _team_member_fields_in_request and TeamMemberBudgetHandler.should_create_budget(
             team_member_budget=data.team_member_budget,
@@ -2916,12 +2922,6 @@ async def update_team(
             )
         else:
             TeamMemberBudgetHandler.clean_team_member_fields(updated_kv)
-
-        await TeamMemberBudgetHandler.move_member_budgets_to_reset_window(
-            budget_ids=_budgets_on_team_reset_window,
-            budget_duration=data.team_member_budget_duration,
-            prisma_client=prisma_client,
-        )
 
         # Check object permission
         if data.object_permission is not None:

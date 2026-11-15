@@ -3447,6 +3447,7 @@ async def test_update_team_with_team_member_budget_duration(
         mock_existing_team.metadata = {"team_member_budget_id": "budget_123"}
         mock_existing_team.members_with_roles = []
         mock_prisma_client.db.litellm_budgettable.find_unique = AsyncMock(return_value=None)
+        mock_prisma_client.db.litellm_teammembership.find_many = AsyncMock(return_value=[])
         mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(
             return_value=mock_existing_team
         )
@@ -13973,6 +13974,7 @@ async def _drive_team_write(
         ),
     ):
         pc.db.litellm_budgettable.find_unique = AsyncMock(return_value=None)
+        pc.db.litellm_teammembership.find_many = AsyncMock(return_value=[])
         pc.db.litellm_teamtable.find_unique = AsyncMock(
             return_value=None if find_returns_none else existing
         )
@@ -19712,14 +19714,14 @@ async def test_team_reset_window_change_reaches_only_members_resetting_on_the_te
     )
     mock_prisma.db.litellm_budgettable.update_many = AsyncMock(return_value=1)
 
-    budget_ids: Final = await TeamMemberBudgetHandler.member_budgets_on_team_reset_window(
-        team_id="team-1", team_member_budget_id="team-default", prisma_client=mock_prisma
+    await TeamMemberBudgetHandler.move_members_to_team_reset_window(
+        team_id="team-1", team_member_budget_id="team-default", budget_duration="1d", prisma_client=mock_prisma
     )
-    await TeamMemberBudgetHandler.move_member_budgets_to_reset_window(
-        budget_ids=budget_ids, budget_duration=None, prisma_client=mock_prisma
-    )
+    mock_prisma.db.litellm_budgettable.update_many.assert_not_awaited()
 
-    assert budget_ids == ("on-team-window",)
+    await TeamMemberBudgetHandler.move_members_to_team_reset_window(
+        team_id="team-1", team_member_budget_id="team-default", budget_duration=None, prisma_client=mock_prisma
+    )
     mock_prisma.db.litellm_budgettable.update_many.assert_awaited_once_with(
         data={"budget_duration": None, "budget_reset_at": None},
         where={"budget_id": {"in": ["on-team-window"]}},
