@@ -142,6 +142,15 @@ class BatchTable(Protocol):
 
 class PrismaBatch(Protocol):
     @property
+    def litellm_customermembertable(self) -> BatchTable: ...
+
+    @property
+    def litellm_customerteamtable(self) -> BatchTable: ...
+
+    @property
+    def litellm_customerorganizationtable(self) -> BatchTable: ...
+
+    @property
     def litellm_verificationtoken(self) -> BatchTable: ...
 
     @property

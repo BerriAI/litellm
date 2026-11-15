@@ -224,7 +224,20 @@ class StandardBuiltInToolCostTracking:
             web_search_options=standard_built_in_tools_params.get("web_search_options", None),
             model_info=model_info,
         )
-        return per_call_cost * StandardBuiltInToolCostTracking._count_web_search_calls(response_object)
+        return per_call_cost * StandardBuiltInToolCostTracking._billable_web_search_calls(
+            resolved_usage, response_object
+        )
+
+    @staticmethod
+    def _billable_web_search_calls(usage: Usage | None, response_object: object) -> int:
+        """
+        Providers without their own calculator but whose usage carries server_tool_use.web_search_requests
+        (OpenAI-compatible providers that report a per-tool count) are billed that many calls on the per-call path.
+        """
+        reported: Final = None if usage is None else get_web_search_requests_from_usage(usage)
+        if isinstance(reported, int) and not isinstance(reported, bool) and reported > 0:
+            return reported
+        return StandardBuiltInToolCostTracking._count_web_search_calls(response_object)
 
     @staticmethod
     def _count_web_search_calls(response_object: object) -> int:

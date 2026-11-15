@@ -10,7 +10,7 @@ from typing_extensions import ReadOnly, TypedDict
 import litellm
 from litellm._logging import verbose_logger
 from litellm.exceptions import UnsupportedParamsError
-from litellm.litellm_core_utils.core_helpers import drops_unsupported_params, normalize_drop_params
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupported_params, normalize_drop_params
 
 ROUTES_WITH_TOOLS: Final = frozenset(
     {
@@ -56,6 +56,19 @@ class _ToolEntry(TypedDict, total=False):
 
 _TOOL_ENTRY: Final = TypeAdapter(_ToolEntry)
 _WEB_SEARCH_OPTIONS: Final = TypeAdapter(dict[str, object] | None, config=ConfigDict(strict=True))
+
+
+def declared_function_name(tool: object) -> str | None:
+    fields: Final = as_str_mapping(tool)
+    if fields is None:
+        return None
+    function: Final = as_str_mapping(fields.get("function"))
+    name: Final = (fields if function is None else function).get("name")
+    return name if isinstance(name, str) and name else None
+
+
+def qualified_member_name(namespace: str, name: str) -> str:
+    return f"{namespace}__{name}"
 
 
 @dataclass(frozen=True, slots=True)

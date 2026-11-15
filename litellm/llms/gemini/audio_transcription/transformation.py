@@ -138,13 +138,13 @@ class GeminiAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         except ValueError:
             raise GeminiError(
                 status_code=raw_response.status_code,
-                message=f"Received non-JSON response from Gemini Interactions API: {raw_response.text}",
+                message="Received non-JSON response from Gemini Interactions API",
             )
         parsed: Final = GeminiTranscriptionInteractionResponse.model_validate(response_json)
         if parsed.status != "completed":
             raise GeminiError(
                 status_code=raw_response.status_code,
-                message=f"Gemini transcription interaction did not complete (status={parsed.status}): {raw_response.text}",
+                message=f"Gemini transcription interaction did not complete (status={parsed.status})",
             )
         text_contents: Final = tuple(
             content

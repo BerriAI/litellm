@@ -12,7 +12,12 @@ from contextlib import contextmanager, suppress
 from contextvars import ContextVar, Token
 from datetime import datetime, timezone
 from functools import wraps
-from typing import Final, ParamSpec, TypeVar, cast
+from typing import TYPE_CHECKING, Final, ParamSpec, TypeVar, cast
+
+if TYPE_CHECKING:
+    from opentelemetry.trace import Span
+else:
+    Span: Final = object
 
 _P = ParamSpec("_P")
 _R = TypeVar("_R")
@@ -31,13 +36,12 @@ _billing_time: Final[ContextVar[datetime | None]] = ContextVar("billing_time", d
 _post_response: Final[ContextVar[bool]] = ContextVar("post_response", default=False)
 
 _service_target: Final[ContextVar[str | None]] = ContextVar("service_target", default=None)
-# Event-metadata key under which a Redis pipeline reports the sorted, comma-joined families its ops were
-# declared under when they span more than one.
-REDIS_FAMILIES_METADATA_KEY: Final = "families"
-
-_service_caller: Final[ContextVar[str | None]] = ContextVar("service_caller", default=None)
 
 _mirrored_call: Final[ContextVar[bool]] = ContextVar("mirrored_call", default=False)
+
+_resent_on: Final[ContextVar[Callable[[Exception], bool] | None]] = ContextVar("resent_on", default=None)
+
+_request_parent_otel_span: Final[ContextVar[Span | None]] = ContextVar("request_parent_otel_span", default=None)
 
 
 @contextmanager
@@ -98,8 +102,15 @@ def current_service_target() -> str | None:
     return _service_target.get()
 
 
-def with_service_target(target: str) -> Callable[[Callable[_P, _R]], Callable[_P, _R]]:
-    """Run every call of the decorated function, coroutine functions included, under ``service_target(target)``."""
+def with_service_target(
+    target: str, *, preserve_existing: bool = False
+) -> Callable[[Callable[_P, _R]], Callable[_P, _R]]:
+    """Run calls under the target, or the inherited target when ``preserve_existing`` is true."""
+
+    def call_target() -> str:
+        if preserve_existing:
+            return current_service_target() or target
+        return target
 
     def decorate(fn: Callable[_P, _R]) -> Callable[_P, _R]:
         if inspect.iscoroutinefunction(fn):
@@ -109,35 +120,19 @@ def with_service_target(target: str) -> Callable[[Callable[_P, _R]], Callable[_P
 
             @wraps(fn)
             async def run_async(*args: _P.args, **kwargs: _P.kwargs) -> object:
-                with service_target(target):
+                with service_target(call_target()):
                     return await awaitable_fn(*args, **kwargs)
 
             return cast("Callable[_P, _R]", run_async)  # cast-ok: same coroutine-returning signature as ``fn``
 
         @wraps(fn)
         def run(*args: _P.args, **kwargs: _P.kwargs) -> _R:
-            with service_target(target):
+            with service_target(call_target()):
                 return fn(*args, **kwargs)
 
         return run
 
     return decorate
-
-
-@contextmanager
-def service_caller(caller: str | None) -> Generator[None]:
-    """Name the litellm code a datastore call was issued for when its own frames cannot: an operation
-    declared in one task and run in another (a batch op retried on the flush) carries the chain captured
-    where it was declared."""
-    token: Final = _service_caller.set(caller)
-    try:
-        yield
-    finally:
-        _restore(_service_caller, token)
-
-
-def current_service_caller() -> str | None:
-    return _service_caller.get()
 
 
 @contextmanager
@@ -152,6 +147,47 @@ def mirrored_call() -> Generator[None]:
 
 def in_mirrored_call() -> bool:
     return _mirrored_call.get()
+
+
+@contextmanager
+def resent_on(rejection: Callable[[Exception], bool]) -> Generator[None]:
+    """An attempt its caller sends again when it fails with ``rejection``. That failure is not the request's
+    outcome, so it is neither logged as the request's failure nor retried, and its budget reservation and rate-limit
+    slot stay with the attempt sent again."""
+    token: Final = _resent_on.set(rejection)
+    try:
+        yield
+    finally:
+        _restore(_resent_on, token)
+
+
+def is_resent_failure(error: Exception) -> bool:
+    rejection: Final = _resent_on.get()
+    return rejection is not None and rejection(error)
+
+
+def set_request_parent_otel_span(span: Span) -> None:
+    """Anchor the proxy request's OTEL span for datastore service spans that no call site passes a parent to.
+    Never reset: it dies with the request task and rides the tasks it spawns, like ``request.state``."""
+    _request_parent_otel_span.set(span)
+
+
+def current_request_parent_otel_span() -> Span | None:
+    return _request_parent_otel_span.get()
+
+
+@contextmanager
+def request_parent_otel_span(span: Span | None) -> Generator[None]:
+    """Anchor the datastore service spans made inside this block, and by the tasks it starts, under the span an SDK
+    caller passed. A request that already anchored its own, as the proxy does at auth, keeps it."""
+    if span is None or _request_parent_otel_span.get() is not None:
+        yield
+        return
+    token: Final = _request_parent_otel_span.set(span)
+    try:
+        yield
+    finally:
+        _restore(_request_parent_otel_span, token)
 
 
 @contextmanager
