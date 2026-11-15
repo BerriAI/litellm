@@ -3078,8 +3078,6 @@ class LiteLLMCompletionResponsesConfig:
                 llm_provider="",
             )
 
-    _validate_namespace_name_collisions = validate_namespace_name_collisions
-
     @staticmethod
     def _responses_tool_to_chat_form(
         tool: Mapping[str, object], member_name: Callable[[str, str], str]
