@@ -106,6 +106,7 @@ pub mod routing_groups;
 pub mod routing_plugins;
 pub mod select;
 pub mod settings;
+pub mod shape;
 pub mod strategy;
 pub mod weights;
 

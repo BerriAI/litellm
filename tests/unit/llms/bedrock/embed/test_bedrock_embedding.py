@@ -1,6 +1,7 @@
 import json
 import asyncio
 import os
+from datetime import datetime, timezone
 from typing import Final
 from unittest.mock import Mock, patch
 from unittest.mock import AsyncMock, MagicMock
@@ -2221,6 +2222,39 @@ def test_bedrock_nova_embedding_sends_extra_body_fields_in_the_request_body(resp
 
 
 @pytest.mark.parametrize(
+    ("model_id", "extra_body", "mapped_field"),
+    [
+        ("amazon.nova-2-multimodal-embeddings-v1:0", {"segmentationConfig": {"durationSeconds": 10}}, "taskType"),
+        ("twelvelabs.marengo-embed-2-7-v1:0", {"minClipSec": 4}, "inputText"),
+    ],
+)
+def test_bedrock_async_invoke_embedding_sends_extra_body_fields_inside_model_input(
+    respx_mock: respx.MockRouter, model_id: str, extra_body: dict[str, object], mapped_field: str
+) -> None:
+    route: Final = respx_mock.post("https://bedrock-runtime.us-east-1.amazonaws.com/async-invoke").mock(
+        return_value=httpx.Response(
+            200, json={"invocationArn": "arn:aws:bedrock:us-east-1:123456789012:async-invoke/abc123"}
+        )
+    )
+    request_fields: Final = {"clientRequestToken": "retry-1", "tags": [{"key": "team", "value": "search"}]}
+    request: Final = {
+        "model": f"bedrock/async_invoke/{model_id}",
+        "input": [test_input],
+        "api_key": "test-bearer-token",
+        "aws_region_name": "us-east-1",
+        "output_s3_uri": "s3://my-bucket/out/",
+    }
+
+    litellm.embedding(**request)
+    plain: Final = json.loads(route.calls.last.request.read())
+    litellm.embedding(**request, extra_body={**extra_body, **request_fields, mapped_field: "from extra_body"})
+    body: Final = json.loads(route.calls.last.request.read())
+
+    assert plain.keys() == {"modelId", "modelInput", "outputDataConfig"}
+    assert body == {**plain, **request_fields, "modelInput": {**plain["modelInput"], **extra_body}}
+
+
+@pytest.mark.parametrize(
     ("extra_body", "field", "expected"),
     [
         ({"dimensions": 512}, "dimensions", 256),
@@ -2247,11 +2281,15 @@ def test_bedrock_embedding_extra_body_cannot_replace_the_input_or_a_mapped_param
     assert json.loads(route.calls.last.request.read())[field] == expected
 
 
-def test_bedrock_embedding_signs_the_body_it_sends(respx_mock: respx.MockRouter) -> None:
+def test_bedrock_embedding_signs_the_body_it_sends(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
     from botocore.auth import SigV4Auth
     from botocore.awsrequest import AWSRequest
     from botocore.credentials import Credentials
 
+    signing_time: Final = datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+    monkeypatch.setattr("botocore.auth.get_current_datetime", lambda remove_tzinfo=True: signing_time)
     route = respx_mock.post(
         "https://bedrock-runtime.us-east-1.amazonaws.com/model/amazon.titan-embed-text-v2:0/invoke"
     ).mock(return_value=httpx.Response(200, json=titan_embedding_response))
@@ -2270,10 +2308,10 @@ def test_bedrock_embedding_signs_the_body_it_sends(respx_mock: respx.MockRouter)
     replay: Final = AWSRequest(
         method="POST", url=str(sent.url), data=sent.content, headers={"Content-Type": "application/json"}
     )
-    replay.context["timestamp"] = sent.headers["x-amz-date"]
     SigV4Auth(
         Credentials("AKIAIOSFODNN7EXAMPLE", "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"), "bedrock", "us-east-1"
     ).add_auth(replay)
 
+    assert sent.headers["x-amz-date"] == "20260102T030405Z"
     assert json.loads(sent.content)["dimensions"] == 256
     assert replay.headers["Authorization"] == sent.headers["authorization"]

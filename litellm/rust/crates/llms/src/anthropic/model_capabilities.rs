@@ -1,0 +1,546 @@
+use std::sync::LazyLock;
+
+use crate::base_llm::messages::context::{MessagesModelCapabilities, SupportedEffortTiers};
+use crate::bedrock::common_utils::{
+    bedrock_base_model, is_bedrock_application_inference_profile_arn, without_routing_prefixes,
+};
+use fancy_regex::Regex;
+use litellm_auth_aws::is_bedrock_region;
+use litellm_core_utils::get_llm_provider_logic::get_custom_llm_provider;
+use litellm_model_catalog::{Catalog, wire::Fields};
+
+const SAMPLING_RESTRICTED_NAMES: [&str; 9] = [
+    "fable", "opus-4-7", "opus_4_7", "opus-4.7", "opus_4.7", "opus-4-8", "opus_4_8", "opus-4.8",
+    "opus_4.8",
+];
+const SAMPLING_TOLERANT_PROVIDERS: [&str; 1] = ["openrouter"];
+const BACKSTOP_PREFIXES: [&str; 4] = [
+    "bedrock/converse/",
+    "bedrock/invoke/",
+    "bedrock/",
+    "vertex_ai/",
+];
+
+static VERSION_SUFFIX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"-v\d+(?::\d+)?$").expect("valid regex"));
+static PROFILE_MINOR: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r":\d+$").expect("valid regex"));
+static DATED_RELEASE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"-\d{8}$").expect("valid regex"));
+static DOTTED_VERSION: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(\d)\.(\d)").expect("valid regex"));
+static TRAILING_NUMBER: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"-\d+$").expect("valid regex"));
+static TRAILING_DATE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"-\d{4}-\d{2}-\d{2}$").expect("valid regex"));
+
+pub fn anthropic_model_capabilities(
+    catalog: &Catalog,
+    model: &str,
+    custom_llm_provider: Option<&str>,
+    base_model: Option<&str>,
+    declared: &dyn Fn(&str) -> Option<bool>,
+) -> MessagesModelCapabilities {
+    let (resolved, provider) = get_custom_llm_provider(model, custom_llm_provider)
+        .map_or((model, "anthropic"), |resolved| {
+            (resolved.model, resolved.custom_llm_provider)
+        });
+    let (model, name) = match base_model.map(without_routing_prefixes) {
+        Some(base)
+            if is_bedrock(provider) && is_bedrock_application_inference_profile_arn(resolved) =>
+        {
+            (base, base)
+        }
+        _ => (model, resolved),
+    };
+    let probe = Probe {
+        catalog,
+        declared,
+        fallbacks: backstop_candidates(model),
+        info: catalog.model_info(
+            &candidate_names(name, provider)
+                .each_ref()
+                .map(String::as_str),
+            provider,
+        ),
+        bare: catalog.lookup(name).map(|found| found.entry.fields()),
+    };
+    let thinking_always_on = probe.supports("thinking_always_on");
+    MessagesModelCapabilities {
+        supports_reasoning: probe.supports("supports_reasoning"),
+        supports_adaptive_thinking: probe.supports("supports_adaptive_thinking"),
+        thinking_always_on,
+        thinking_on_by_default: thinking_always_on || probe.supports("thinking_on_by_default"),
+        supports_legacy_thinking: probe.supports("supports_legacy_thinking"),
+        supports_output_config: probe.supports("supports_output_config"),
+        supports_sampling_params: declared("supports_sampling_params").unwrap_or_else(|| {
+            SAMPLING_TOLERANT_PROVIDERS.contains(&provider)
+                || backstop(
+                    catalog,
+                    &backstop_candidates(name),
+                    "supports_sampling_params",
+                )
+                .unwrap_or_else(|| {
+                    let lowered = name.to_lowercase();
+                    !SAMPLING_RESTRICTED_NAMES
+                        .iter()
+                        .any(|restricted| lowered.contains(restricted))
+                })
+        }),
+        supports_speed: provider == "anthropic"
+            && flag(exact(catalog, name), "supports_speed") == Some(true),
+        supports_mid_conversation_system: probe.supports("supports_mid_conversation_system"),
+        effort_tiers: SupportedEffortTiers {
+            minimal: probe.supports("supports_minimal_reasoning_effort"),
+            low: probe.supports("supports_low_reasoning_effort"),
+            medium: probe.supports("supports_medium_reasoning_effort"),
+            high: probe.supports("supports_high_reasoning_effort"),
+            xhigh: probe.supports("supports_xhigh_reasoning_effort"),
+            max: probe.supports("supports_max_reasoning_effort"),
+        },
+    }
+}
+
+struct Probe<'a> {
+    catalog: &'a Catalog,
+    declared: &'a dyn Fn(&str) -> Option<bool>,
+    fallbacks: Vec<String>,
+    info: Option<Fields>,
+    bare: Option<&'a Fields>,
+}
+
+impl Probe<'_> {
+    fn supports(&self, capability: &str) -> bool {
+        if let Some(supported) = (self.declared)(capability) {
+            return supported;
+        }
+        if let Some(supported) = flag(self.info.as_ref(), capability) {
+            return supported;
+        }
+        if self.info.is_some() && flag(self.bare, capability) == Some(true) {
+            return true;
+        }
+        backstop(self.catalog, &self.fallbacks, capability) == Some(true)
+    }
+}
+
+fn flag(fields: Option<&Fields>, capability: &str) -> Option<bool> {
+    fields?.get(capability)?.as_bool()
+}
+
+fn exact<'a>(catalog: &'a Catalog, name: &str) -> Option<&'a Fields> {
+    catalog
+        .lookup(name)
+        .filter(|found| found.matched_key == name)
+        .map(|found| found.entry.fields())
+}
+
+fn is_bedrock(provider: &str) -> bool {
+    matches!(provider, "bedrock" | "bedrock_converse")
+}
+
+fn candidate_names(model: &str, provider: &str) -> [String; 6] {
+    let split = split_model(model, provider);
+    let combined = format!("{provider}/{model}");
+    let (region_free_combined, combined_stripped) = if provider == "bedrock_mantle" {
+        (
+            format!("{provider}/{split}"),
+            format!("{provider}/{}", stripped_model(split, provider)),
+        )
+    } else {
+        (
+            combined.clone(),
+            format!("{provider}/{}", stripped_model(model, provider)),
+        )
+    };
+    [
+        combined,
+        model.to_owned(),
+        region_free_combined,
+        split.to_owned(),
+        combined_stripped,
+        stripped_model(model, provider),
+    ]
+}
+
+fn split_model<'a>(model: &'a str, provider: &str) -> &'a str {
+    if provider == "bedrock_mantle" {
+        return without_region(model);
+    }
+    if !is_bedrock(provider) {
+        return model;
+    }
+    let routed = without_routing_prefixes(model);
+    let region_free = without_region(routed);
+    if !region_free.starts_with("arn:") {
+        return routed;
+    }
+    region_free.rsplit('/').next().unwrap_or(region_free)
+}
+
+fn without_region(model: &str) -> &str {
+    match model.split_once('/') {
+        Some((region, rest)) if is_bedrock_region(region) => rest,
+        _ => model,
+    }
+}
+
+fn stripped_model(model: &str, provider: &str) -> String {
+    match provider {
+        provider if is_bedrock(provider) => bedrock_base_model(model).to_owned(),
+        "vertex_ai" | "gemini" | "databricks" => TRAILING_NUMBER.replace(model, "").into_owned(),
+        _ => TRAILING_DATE.replace(model, "").into_owned(),
+    }
+}
+
+fn backstop(catalog: &Catalog, candidates: &[String], capability: &str) -> Option<bool> {
+    candidates
+        .iter()
+        .find_map(|name| flag(exact(catalog, name), capability))
+}
+
+fn backstop_candidates(model: &str) -> Vec<String> {
+    let base = bedrock_base_model(model);
+    let primary: Vec<String> = std::iter::once(model)
+        .chain(
+            BACKSTOP_PREFIXES
+                .iter()
+                .filter_map(|prefix| model.strip_prefix(prefix)),
+        )
+        .map(str::to_owned)
+        .chain([base.to_owned(), format!("bedrock/{base}")])
+        .collect();
+    let normalized: Vec<String> = primary
+        .iter()
+        .flat_map(|name| normalized_names(name))
+        .collect();
+    primary.into_iter().chain(normalized).collect()
+}
+
+fn normalized_names(name: &str) -> [String; 6] {
+    let undotted = DOTTED_VERSION.replace_all(name, "$1-$2");
+    let unversioned = VERSION_SUFFIX.replace(&undotted, "").into_owned();
+    [
+        VERSION_SUFFIX.replace(name, "").into_owned(),
+        PROFILE_MINOR.replace(name, "").into_owned(),
+        DATED_RELEASE.replace(name, "").into_owned(),
+        undotted.into_owned(),
+        DATED_RELEASE.replace(&unversioned, "").into_owned(),
+        name.rfind('@')
+            .filter(|at| *at > 0)
+            .map_or(name, |at| &name[..at])
+            .to_owned(),
+    ]
+}
+
+#[cfg(test)]
+mod tests {
+    use litellm_model_catalog::{BUNDLED_REGISTRY, Catalog};
+    use rstest::{fixture, rstest};
+    use serde_json::Value;
+
+    use super::anthropic_model_capabilities;
+
+    const CATALOG: &str = r#"{
+        "claude-test-5": {
+            "litellm_provider": "anthropic",
+            "mode": "chat",
+            "supports_reasoning": true,
+            "supports_speed": true,
+            "supports_xhigh_reasoning_effort": true,
+            "aliases": ["claude-test-5-latest"]
+        },
+        "claude-slow-5": {
+            "litellm_provider": "anthropic",
+            "mode": "chat",
+            "supports_reasoning": false,
+            "supports_adaptive_thinking": false
+        },
+        "claude-embed-5": {"litellm_provider": "anthropic", "mode": "embedding"},
+        "claude-nosample-5": {"litellm_provider": "anthropic", "mode": "chat", "supports_sampling_params": false},
+        "anthropic/claude-nosample-5": {"litellm_provider": "anthropic", "mode": "chat", "supports_sampling_params": false},
+        "claude-default-think-5": {"litellm_provider": "anthropic", "mode": "chat", "thinking_on_by_default": true},
+        "claude-always-think-5": {"litellm_provider": "anthropic", "mode": "chat", "thinking_always_on": true},
+        "anthropic/claude-split-5": {"litellm_provider": "anthropic", "mode": "chat"},
+        "claude-split-5": {"litellm_provider": "anthropic", "mode": "chat", "supports_reasoning": true},
+        "anthropic.claude-test-5-v1:0": {
+            "litellm_provider": "bedrock_converse",
+            "mode": "chat",
+            "supports_reasoning": true,
+            "supports_speed": true
+        },
+        "bedrock_mantle/anthropic.claude-mantle-5": {
+            "litellm_provider": "bedrock_mantle",
+            "mode": "chat",
+            "supports_reasoning": true,
+            "supports_adaptive_thinking": true
+        },
+        "vertex_ai/claude-test-5": {
+            "litellm_provider": "vertex_ai-anthropic_models",
+            "mode": "chat",
+            "supports_reasoning": true,
+            "supports_speed": true
+        },
+        "fallback_generalizations": {
+            "rules": [
+                {"name": "routing", "pattern": "claude", "model_info": {"litellm_provider": "anthropic", "supports_reasoning": true}},
+                {"name": "derived", "pattern": "claude", "extends": "fill", "model_info": {"supports_reasoning": true}},
+                {"name": "new-family", "pattern": "claude-(?=newfamily)", "model_info": {"supports_reasoning": true}},
+                {
+                    "name": "fill",
+                    "pattern": "claude",
+                    "model_info": {"supports_adaptive_thinking": true},
+                    "fill_missing_for_providers": ["anthropic"]
+                }
+            ]
+        }
+    }"#;
+
+    #[fixture]
+    fn catalog() -> Catalog {
+        Catalog::parse(CATALOG.as_bytes()).unwrap().value
+    }
+
+    #[rstest]
+    #[case::row("anthropic/claude-test-5", None, (true, true, true, true))]
+    #[case::alias("anthropic/claude-test-5-latest", None, (true, true, true, true))]
+    #[case::bare_name("claude-test-5", None, (true, true, true, true))]
+    #[case::configured_provider("claude-test-5", Some("anthropic"), (true, true, true, true))]
+    #[case::other_casing("anthropic/Claude-Test-5", None, (true, true, false, true))]
+    #[case::row_over_fill("anthropic/claude-slow-5", None, (false, false, false, true))]
+    #[case::fill_skips_other_modes("anthropic/claude-embed-5", None, (false, false, false, true))]
+    #[case::bare_row_under_prefixed_row("anthropic/claude-split-5", None, (true, true, false, true))]
+    #[case::other_provider_row("azure_ai/claude-test-5", None, (false, false, false, true))]
+    #[case::unknown_family("anthropic/claude-newfamily-6", None, (true, true, false, true))]
+    #[case::unknown_model_skips_routing_and_extends_rules("anthropic/claude-other-7", None, (false, true, false, true))]
+    #[case::cross_region_bedrock("bedrock/us.anthropic.claude-test-5-v1:0", None, (true, false, false, true))]
+    #[case::region_path_bedrock("bedrock/us-east-1/anthropic.claude-test-5-v1:0", None, (true, false, false, true))]
+    #[case::region_path_mantle("bedrock_mantle/us-east-1/anthropic.claude-mantle-5", None, (true, true, false, true))]
+    #[case::converse_bedrock("bedrock/converse/anthropic.claude-test-5-v1:0", None, (true, false, false, true))]
+    #[case::vertex_version("vertex_ai/claude-test-5@20261001", None, (true, true, false, true))]
+    #[case::sampling_restricted_name("anthropic/claude-fable-test", None, (false, true, false, false))]
+    fn reads_capabilities_from_the_catalog(
+        catalog: Catalog,
+        #[case] model: &str,
+        #[case] custom_llm_provider: Option<&str>,
+        #[case] expected: (bool, bool, bool, bool),
+    ) {
+        let capabilities =
+            anthropic_model_capabilities(&catalog, model, custom_llm_provider, None, &|_| None);
+
+        assert_eq!(
+            (
+                capabilities.supports_reasoning,
+                capabilities.supports_adaptive_thinking,
+                capabilities.supports_speed,
+                capabilities.supports_sampling_params,
+            ),
+            expected
+        );
+    }
+
+    #[rstest]
+    #[case::default_on("anthropic/claude-default-think-5", true)]
+    #[case::always_on("anthropic/claude-always-think-5", true)]
+    #[case::off("anthropic/claude-test-5", false)]
+    fn thinking_on_by_default_follows_the_row(
+        catalog: Catalog,
+        #[case] model: &str,
+        #[case] expected: bool,
+    ) {
+        assert_eq!(
+            anthropic_model_capabilities(&catalog, model, None, None, &|_| None)
+                .thinking_on_by_default,
+            expected
+        );
+    }
+
+    #[rstest]
+    fn effort_tiers_follow_the_row(catalog: Catalog) {
+        let tiers =
+            anthropic_model_capabilities(&catalog, "anthropic/claude-test-5", None, None, &|_| {
+                None
+            })
+            .effort_tiers;
+
+        assert_eq!((tiers.xhigh, tiers.low), (true, false));
+    }
+
+    #[rstest]
+    #[case::declares_a_model_the_map_lacks(
+        "anthropic/claude-other-7",
+        &[("supports_reasoning", true)],
+        (true, true, false, true)
+    )]
+    #[case::turns_off_a_filled_flag(
+        "anthropic/claude-test-5",
+        &[("supports_adaptive_thinking", false)],
+        (true, false, true, true)
+    )]
+    #[case::turns_off_sampling("anthropic/claude-test-5", &[("supports_sampling_params", false)], (true, true, true, false))]
+    #[case::speed_still_needs_its_row("anthropic/claude-slow-5", &[("supports_speed", true)], (false, false, false, true))]
+    #[case::undeclared_keeps_the_row("anthropic/claude-test-5", &[], (true, true, true, true))]
+    fn declared_flags_win_over_the_catalog(
+        catalog: Catalog,
+        #[case] model: &str,
+        #[case] declared: &[(&str, bool)],
+        #[case] expected: (bool, bool, bool, bool),
+    ) {
+        let lookup = |capability: &str| {
+            declared
+                .iter()
+                .find(|(name, _)| *name == capability)
+                .map(|(_, supported)| *supported)
+        };
+        let capabilities = anthropic_model_capabilities(&catalog, model, None, None, &lookup);
+
+        assert_eq!(
+            (
+                capabilities.supports_reasoning,
+                capabilities.supports_adaptive_thinking,
+                capabilities.supports_speed,
+                capabilities.supports_sampling_params,
+            ),
+            expected
+        );
+    }
+
+    #[rstest]
+    #[case::anthropic_row("anthropic/claude-nosample-5", &[], false)]
+    #[case::anthropic_name("anthropic/claude-fable-test", &[], false)]
+    #[case::openrouter_row("openrouter/anthropic/claude-nosample-5", &[], true)]
+    #[case::openrouter_name("openrouter/anthropic/claude-fable-test", &[], true)]
+    #[case::openrouter_declared_off(
+        "openrouter/anthropic/claude-fable-test",
+        &[("supports_sampling_params", false)],
+        false
+    )]
+    fn sampling_params_are_gated_only_where_the_provider_rejects_them(
+        catalog: Catalog,
+        #[case] model: &str,
+        #[case] declared: &[(&str, bool)],
+        #[case] expected: bool,
+    ) {
+        let lookup = |capability: &str| {
+            declared
+                .iter()
+                .find(|(name, _)| *name == capability)
+                .map(|(_, supported)| *supported)
+        };
+
+        assert_eq!(
+            anthropic_model_capabilities(&catalog, model, None, None, &lookup)
+                .supports_sampling_params,
+            expected
+        );
+    }
+
+    const PROFILE_ARN: &str =
+        "bedrock/arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123";
+
+    #[rstest]
+    #[case::base_model_names_the_profile(PROFILE_ARN, Some("anthropic.claude-test-5-v1:0"), true)]
+    #[case::prefixed_base_model(PROFILE_ARN, Some("bedrock/anthropic.claude-test-5-v1:0"), true)]
+    #[case::profile_without_base_model(PROFILE_ARN, None, false)]
+    #[case::named_model_keeps_its_own_row(
+        "bedrock/anthropic.claude-test-5-v1:0",
+        Some("anthropic.claude-slow-5"),
+        true
+    )]
+    fn application_inference_profile_reads_its_base_model(
+        catalog: Catalog,
+        #[case] model: &str,
+        #[case] base_model: Option<&str>,
+        #[case] expected: bool,
+    ) {
+        assert_eq!(
+            anthropic_model_capabilities(&catalog, model, None, base_model, &|_| None)
+                .supports_reasoning,
+            expected
+        );
+    }
+
+    #[rstest]
+    fn every_bundled_anthropic_row_shapes_with_its_own_flags() {
+        let catalog = Catalog::parse(BUNDLED_REGISTRY).unwrap().value;
+        let mismatches: Vec<String> = catalog
+            .served()
+            .filter(|(name, fields)| {
+                !name.contains('/')
+                    && fields.get("litellm_provider").and_then(Value::as_str) == Some("anthropic")
+            })
+            .flat_map(|(name, fields)| {
+                let capabilities = anthropic_model_capabilities(
+                    &catalog,
+                    &format!("anthropic/{name}"),
+                    None,
+                    None,
+                    &|_| None,
+                );
+                [
+                    ("supports_reasoning", capabilities.supports_reasoning),
+                    (
+                        "supports_adaptive_thinking",
+                        capabilities.supports_adaptive_thinking,
+                    ),
+                    (
+                        "supports_output_config",
+                        capabilities.supports_output_config,
+                    ),
+                    (
+                        "supports_sampling_params",
+                        capabilities.supports_sampling_params,
+                    ),
+                    ("supports_speed", capabilities.supports_speed),
+                    (
+                        "supports_legacy_thinking",
+                        capabilities.supports_legacy_thinking,
+                    ),
+                    ("thinking_always_on", capabilities.thinking_always_on),
+                    (
+                        "thinking_on_by_default",
+                        capabilities.thinking_on_by_default,
+                    ),
+                    (
+                        "supports_minimal_reasoning_effort",
+                        capabilities.effort_tiers.minimal,
+                    ),
+                    (
+                        "supports_low_reasoning_effort",
+                        capabilities.effort_tiers.low,
+                    ),
+                    (
+                        "supports_medium_reasoning_effort",
+                        capabilities.effort_tiers.medium,
+                    ),
+                    (
+                        "supports_high_reasoning_effort",
+                        capabilities.effort_tiers.high,
+                    ),
+                    (
+                        "supports_mid_conversation_system",
+                        capabilities.supports_mid_conversation_system,
+                    ),
+                    (
+                        "supports_xhigh_reasoning_effort",
+                        capabilities.effort_tiers.xhigh,
+                    ),
+                    (
+                        "supports_max_reasoning_effort",
+                        capabilities.effort_tiers.max,
+                    ),
+                ]
+                .into_iter()
+                .filter(|(flag, shaped)| {
+                    fields
+                        .get(*flag)
+                        .and_then(Value::as_bool)
+                        .is_some_and(|row| row != *shaped)
+                })
+                .map(move |(flag, _)| format!("{name} {flag}"))
+            })
+            .collect();
+
+        assert_eq!(mismatches, Vec::<String>::new());
+    }
+}

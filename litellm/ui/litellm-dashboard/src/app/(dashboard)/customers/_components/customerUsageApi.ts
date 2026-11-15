@@ -27,7 +27,10 @@ export interface CustomerUsageEntity {
   label: string;
   spend: number;
   budgetLimit: number | null;
+  budgetDuration: string | null;
+  budgetLimits: components["schemas"]["BudgetLimit"][];
   budgetResetAt: string | null;
+  budgetUsage?: components["schemas"]["CustomerBudgetUsage"][] | null;
 }
 
 export interface CustomerHierarchyUsage extends ReturnType<typeof mergeCustomerActivityPages> {
@@ -40,6 +43,9 @@ export interface CustomerHierarchyUsage extends ReturnType<typeof mergeCustomerA
   teamResults: ReturnType<typeof mergeCustomerActivityPages>["results"];
   memberResults: ReturnType<typeof mergeCustomerActivityPages>["results"];
   memberBudgets: CustomerUsageEntity[];
+  monthlyOrganizationSpend: number;
+  monthlyMembers: UsageRow[];
+  yearlyMembers: UsageRow[];
 }
 
 interface CustomerUsageRequest {
@@ -47,6 +53,10 @@ interface CustomerUsageRequest {
   accessToken: string;
   startDate: string;
   endDate: string;
+  monthStartDate: string;
+  monthEndDate: string;
+  yearStartDate: string;
+  yearEndDate: string;
   signal?: AbortSignal;
 }
 
@@ -60,8 +70,11 @@ const ID_FILTER: Record<Collection, string> = {
   customer_members: "customer_member_ids",
 };
 
+export const isCustomerUsageIdentifier = (id: string): boolean => id.length > 0 && !id.includes(",");
+
 const assertIdentifiers = (ids: readonly string[]) => {
-  if (ids.some((id) => !id || id.includes(","))) throw new Error(i18n.t("customerPortal.analytics.invalidIdentifier"));
+  if (ids.some((id) => !isCustomerUsageIdentifier(id)))
+    throw new Error(i18n.t("customerPortal.analytics.invalidIdentifier"));
 };
 
 const batches = async <T, R>(items: readonly T[], task: (item: T) => Promise<R>): Promise<R[]> => {
@@ -103,7 +116,7 @@ const descendants = async (scope: ResolvedScope, request: CustomerUsageRequest) 
     ? [[scope.member]]
     : await batches(teams, async (team) => {
         const members = await listAll<Member>("customer_members", { parent_team_id: team.customer_team_id }, request);
-        if (members.some((member) => member.parent_team_id !== team.customer_team_id))
+        if (members.some((member) => !member.parent_team_ids.includes(team.customer_team_id)))
           throw new Error(i18n.t("customerPortal.analytics.scopeMismatch"));
         return members;
       });
@@ -113,7 +126,11 @@ const descendants = async (scope: ResolvedScope, request: CustomerUsageRequest) 
   };
 };
 
-const activityPages = async (resource: Collection, ids: readonly string[], request: CustomerUsageRequest) => {
+const activityPages = async (
+  resource: Collection,
+  ids: readonly string[],
+  request: Pick<CustomerUsageRequest, "accessToken" | "startDate" | "endDate" | "signal">,
+) => {
   assertIdentifiers(ids);
   const pages: DailyActivityAggregatedResponse[] = [];
   for (let page = 1; page <= MAX_PAGES; page++) {
@@ -135,8 +152,63 @@ const activityPages = async (resource: Collection, ids: readonly string[], reque
   throw new Error(i18n.t("customerPortal.analytics.incompletePages"));
 };
 
+const organizationActivityTotals = async (
+  organizationId: string,
+  request: Pick<CustomerUsageRequest, "accessToken" | "startDate" | "endDate" | "signal">,
+) => {
+  const result = await apiClient.get<DailyActivityAggregatedResponse>(
+    `${PREFIX}/customer_organizations/daily/activity/aggregated`,
+    {
+      accessToken: request.accessToken,
+      signal: request.signal,
+      query: {
+        start_date: request.startDate,
+        end_date: request.endDate,
+        customer_org_id: organizationId,
+      },
+    },
+  );
+  if (!result.metadata) throw new Error(i18n.t("customerPortal.analytics.incompletePages"));
+  return { ...result, metadata: result.metadata };
+};
+
+export const customerChildSpendCall = async ({
+  organizationId,
+  kind,
+  entities,
+  ...request
+}: Pick<
+  CustomerUsageRequest,
+  "accessToken" | "monthStartDate" | "monthEndDate" | "yearStartDate" | "yearEndDate" | "signal"
+> & {
+  organizationId: string;
+  kind: "teams" | "members";
+  entities: readonly CustomerUsageEntity[];
+}) => {
+  const ids = entities.map((item) => item.id).filter(isCustomerUsageIdentifier);
+  if (ids.length === 0) return { monthly: [], yearly: [], organizationSpend: 0 };
+  if (!organizationId) throw new Error(i18n.t("customerPortal.analytics.invalidIdentifier"));
+  const resource = kind === "teams" ? "customer_teams" : "customer_members";
+  const monthRequest = { ...request, startDate: request.monthStartDate, endDate: request.monthEndDate };
+  const yearRequest = { ...request, startDate: request.yearStartDate, endDate: request.yearEndDate };
+  const [monthlyPages, yearlyPages, organizationActivity] = await Promise.all([
+    activityPages(resource, ids, monthRequest),
+    activityPages(resource, ids, yearRequest),
+    organizationActivityTotals(organizationId, monthRequest),
+  ]);
+  const monthly = mergeCustomerActivityPages(monthlyPages);
+  const yearly = mergeCustomerActivityPages(yearlyPages);
+  const labels = new Map(entities.map((item) => [item.id, item.label]));
+  const options = { unassignedLabel: "" };
+  return {
+    monthly: customerEntityRankings(monthly.results, labels, monthly.metadata, options),
+    yearly: customerEntityRankings(yearly.results, labels, yearly.metadata, options),
+    organizationSpend: organizationActivity.metadata.total_spend,
+  };
+};
+
 interface ActivityJob {
-  dimension: "scope" | "teams" | "members";
+  dimension: "scope" | "teams" | "members" | "monthlyOrganization" | "monthlyMembers" | "yearlyMembers";
   resource: Collection;
   ids: readonly string[];
 }
@@ -148,19 +220,40 @@ const chunkJobs = (resource: Collection, dimension: ActivityJob["dimension"], id
     ids: ids.slice(index * PAGE_SIZE, (index + 1) * PAGE_SIZE),
   }));
 
-const entity = (id: string, record: Organization | Team | Member): CustomerUsageEntity => ({
-  id,
-  label: record.alias || id,
-  spend: record.spend,
-  budgetLimit: ("effective_budget" in record ? record.effective_budget : record.budget)?.max_budget ?? null,
-  budgetResetAt: record.budget_reset_at ?? null,
-});
+export const customerUsageEntity = (id: string, record: Organization | Team | Member): CustomerUsageEntity => {
+  const budget = "effective_budget" in record ? record.effective_budget : record.budget;
+  return {
+    id,
+    label: record.alias || id,
+    spend: record.spend,
+    budgetLimit: budget?.max_budget ?? null,
+    budgetDuration: budget?.budget_duration ?? null,
+    budgetLimits: budget?.budget_limits ?? [],
+    budgetResetAt: record.budget_reset_at ?? null,
+    budgetUsage: record.budget_usage,
+  };
+};
 
 const selectedResource = (scope: ResolvedScope): Collection => {
   if (scope.member) return "customer_members";
   if (scope.team) return "customer_teams";
   return "customer_organizations";
 };
+
+const monthlyJobs = (
+  isCurrentMonth: boolean,
+  resource: Collection,
+  organizationId: string,
+  memberIds: readonly string[],
+): ActivityJob[] => [
+  ...(!isCurrentMonth || resource !== "customer_organizations"
+    ? chunkJobs("customer_organizations", "monthlyOrganization", [organizationId])
+    : []),
+  ...(!isCurrentMonth ? chunkJobs("customer_members", "monthlyMembers", memberIds) : []),
+];
+
+const isSelectedRange = (request: CustomerUsageRequest, startDate: string, endDate: string): boolean =>
+  request.startDate === startDate && request.endDate === endDate;
 
 export const customerHierarchyUsageCall = async (request: CustomerUsageRequest): Promise<CustomerHierarchyUsage> => {
   assertIdentifiers([
@@ -171,6 +264,8 @@ export const customerHierarchyUsageCall = async (request: CustomerUsageRequest):
   const children = await descendants(selected, request);
   const resource = selectedResource(selected);
   const selectedId = selected.member?.customer_member_id ?? selected.team?.customer_team_id ?? request.scope.org;
+  const isCurrentMonth = isSelectedRange(request, request.monthStartDate, request.monthEndDate);
+  const isCurrentYear = isSelectedRange(request, request.yearStartDate, request.yearEndDate);
   const jobs: ActivityJob[] = [
     { dimension: "scope", resource, ids: [selectedId] },
     ...(!selected.team
@@ -187,10 +282,36 @@ export const customerHierarchyUsageCall = async (request: CustomerUsageRequest):
           children.members.map((member) => member.customer_member_id),
         )
       : []),
+    ...monthlyJobs(
+      isCurrentMonth,
+      resource,
+      request.scope.org,
+      children.members.map((member) => member.customer_member_id),
+    ),
+    ...(!isCurrentYear
+      ? chunkJobs(
+          "customer_members",
+          "yearlyMembers",
+          children.members.map((member) => member.customer_member_id),
+        )
+      : []),
   ];
+  const monthRequest = { ...request, startDate: request.monthStartDate, endDate: request.monthEndDate };
+  const yearRequest = { ...request, startDate: request.yearStartDate, endDate: request.yearEndDate };
+  const requests: Record<ActivityJob["dimension"], CustomerUsageRequest> = {
+    scope: request,
+    teams: request,
+    members: request,
+    monthlyOrganization: monthRequest,
+    monthlyMembers: monthRequest,
+    yearlyMembers: yearRequest,
+  };
   const activity = await batches(jobs, async (job) => ({
     dimension: job.dimension,
-    pages: await activityPages(job.resource, job.ids, request),
+    pages:
+      job.dimension === "monthlyOrganization"
+        ? [await organizationActivityTotals(request.scope.org, monthRequest)]
+        : await activityPages(job.resource, job.ids, requests[job.dimension]),
   }));
   const primary = mergeCustomerActivityPages(
     activity.filter((result) => result.dimension === "scope").flatMap((result) => result.pages),
@@ -205,6 +326,22 @@ export const customerHierarchyUsageCall = async (request: CustomerUsageRequest):
     : mergeCustomerActivityPages(
         activity.filter((result) => result.dimension === "members").flatMap((result) => result.pages),
       ).results;
+  const monthlyOrganization =
+    isCurrentMonth && resource === "customer_organizations"
+      ? primary
+      : mergeCustomerActivityPages(
+          activity.filter((result) => result.dimension === "monthlyOrganization").flatMap((result) => result.pages),
+        );
+  const monthlyMemberDays = isCurrentMonth
+    ? memberDays
+    : mergeCustomerActivityPages(
+        activity.filter((result) => result.dimension === "monthlyMembers").flatMap((result) => result.pages),
+      ).results;
+  const yearlyMemberActivity = isCurrentYear
+    ? { results: memberDays, metadata: primary.metadata }
+    : mergeCustomerActivityPages(
+        activity.filter((result) => result.dimension === "yearlyMembers").flatMap((result) => result.pages),
+      );
   const teamLabels = new Map(
     children.teams.map((team) => [team.customer_team_id, team.alias || team.customer_team_id]),
   );
@@ -213,9 +350,9 @@ export const customerHierarchyUsageCall = async (request: CustomerUsageRequest):
   );
   return {
     ...primary,
-    organization: entity(selected.organization.customer_org_id, selected.organization),
-    team: selected.team ? entity(selected.team.customer_team_id, selected.team) : null,
-    member: selected.member ? entity(selected.member.customer_member_id, selected.member) : null,
+    organization: customerUsageEntity(selected.organization.customer_org_id, selected.organization),
+    team: selected.team ? customerUsageEntity(selected.team.customer_team_id, selected.team) : null,
+    member: selected.member ? customerUsageEntity(selected.member.customer_member_id, selected.member) : null,
     teams: customerEntityRankings(teamDays, teamLabels, primary.metadata, {
       unassignedLabel: i18n.t("customerPortal.analytics.unassignedTeam"),
       onlyEntityId: selected.member ? selected.team?.customer_team_id : undefined,
@@ -231,6 +368,13 @@ export const customerHierarchyUsageCall = async (request: CustomerUsageRequest):
       selected.member ? selected.team?.customer_team_id : undefined,
     ),
     memberResults: customerEntityDailyData(primary.results, memberDays, memberLabels),
-    memberBudgets: children.members.map((member) => entity(member.customer_member_id, member)),
+    memberBudgets: children.members.map((member) => customerUsageEntity(member.customer_member_id, member)),
+    monthlyOrganizationSpend: monthlyOrganization.metadata.total_spend,
+    monthlyMembers: customerEntityRankings(monthlyMemberDays, memberLabels, monthlyOrganization.metadata, {
+      unassignedLabel: i18n.t("customerPortal.analytics.unassignedMember"),
+    }),
+    yearlyMembers: customerEntityRankings(yearlyMemberActivity.results, memberLabels, yearlyMemberActivity.metadata, {
+      unassignedLabel: i18n.t("customerPortal.analytics.unassignedMember"),
+    }),
   };
 };

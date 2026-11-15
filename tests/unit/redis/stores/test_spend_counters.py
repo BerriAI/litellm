@@ -47,6 +47,12 @@ _KEYS: Final = (
     (project_counter("proj-1"), "spend:project:proj-1"),
     (model_access_group_counter("gpt-group"), "spend:model_access_group:gpt-group"),
     (shadow_eval_counter("job-7"), "spend:shadow_eval:job-7"),
+    ("spend:customer_org:tenant:lifetime", "spend:customer_org:tenant:lifetime"),
+    (
+        "spend:customer_team:tenant:team:2026-01-01T00:00:00+00:00",
+        "spend:customer_team:tenant:team:2026-01-01T00:00:00+00:00",
+    ),
+    ("spend:customer_member:user@example.com:lifetime", "spend:customer_member:user@example.com:lifetime"),
     (committed_counter(key_counter("88dc28d0")), "spend:committed:key:88dc28d0"),
     (committed_counter(team_counter("team-a")), "spend:committed:team:team-a"),
     (committed_counter(user_counter("user@example.com")), "spend:committed:user:user@example.com"),
