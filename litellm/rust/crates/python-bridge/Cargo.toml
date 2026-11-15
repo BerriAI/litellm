@@ -21,6 +21,7 @@ tiktoken = ["litellm-token-counter/tiktoken"]
 [dependencies]
 rustls.workspace = true
 litellm-secret-value.workspace = true
+litellm-db.workspace = true
 fancy-regex.workspace = true
 litellm-tracing.workspace = true
 litellm-spend-clickhouse.workspace = true
@@ -49,6 +50,7 @@ litellm-callbacks.workspace = true
 litellm-callbacks-legacy-python.workspace = true
 litellm-callbacks-prometheus.workspace = true
 litellm-callbacks-python.workspace = true
+litellm-callbacks-s3-log.workspace = true
 litellm-inference.workspace = true
 litellm-inference-transcription.workspace = true
 litellm-inference-responses.workspace = true

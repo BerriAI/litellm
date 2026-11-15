@@ -6,8 +6,10 @@ import httpx
 from pydantic import JsonValue
 from typing_extensions import disjoint_base
 
+from litellm.integrations.custom_logger_v2.rust import RustHandle
 from litellm.redis.store_settings import RedisBreakerSettings, RedisStoreSettings
 from litellm.redis.stores.router_session_pins.keys import PinKey
+from litellm.rust_bridge.database import NativeDatabaseEndpoint, NativeDatabaseEvents
 from litellm.rust_bridge.execution import Execution
 from litellm.rust_bridge.public_call import NativeCall
 
@@ -18,6 +20,11 @@ class RustUpstreamError(Exception): ...
 class ForkedAfterNativeRuntimeStarted(RuntimeError): ...
 class ProcessReservedForForking(RuntimeError): ...
 class NativeRedisStoreError(Exception): ...
+
+class NativeDatabaseFailure(Exception):
+    kind: str
+    unavailable: bool
+    requeue_safe: bool
 
 def trace_encode_error(message: str) -> bytes: ...
 def bundled_model_cost_map() -> bytes: ...
@@ -137,6 +144,35 @@ class NativeModelCostMap:
 
 @final
 class NativeModelCostMapState: ...
+
+class _S3LogHost(Protocol):
+    def callback_failed(self) -> None: ...
+    def web_identity_token(self, reference: str) -> str: ...
+
+@final
+class NativeS3Log:
+    def __new__(
+        cls,
+        params: dict[str, object],
+        constants: Mapping[str, object],
+        host: _S3LogHost,
+        cold_storage_is_s3_v2: bool,
+        region_from_environment: str | None,
+    ) -> NativeS3Log: ...
+    @property
+    def s3_path(self) -> str | None: ...
+    @property
+    def s3_bucket_name(self) -> str | None: ...
+    @property
+    def strip_base64_files(self) -> bool: ...
+    def callback(self) -> RustHandle: ...
+    def stashed(self) -> int: ...
+    def partition_granularity(self) -> Literal["day", "hour"]: ...
+    def queued_keys(self) -> list[str]: ...
+    def submit_audit(self, audit_log: dict[str, object], id: str) -> Future[tuple[int, int, int] | None]: ...
+    def upload_line_items(self, key: str, body: str, download_name: str) -> Future[bool]: ...
+    def download(self, key: str) -> Future[str | None]: ...
+    def flush(self) -> Future[tuple[int, int, int] | None]: ...
 
 @final
 class NativeClickHouseSpendConfig:
@@ -585,8 +621,18 @@ class NativeSpendCounters:
 @final
 class NativeDatabase:
     @staticmethod
-    def connect() -> Future[NativeDatabase]: ...
+    def connect(
+        events: NativeDatabaseEvents, writer: NativeDatabaseEndpoint, reader: NativeDatabaseEndpoint | None = None
+    ) -> Future[NativeDatabase]: ...
+    def set_writer_password(self, password: str) -> None: ...
+    def set_reader_password(self, password: str) -> None: ...
+    def health_check(self) -> Future[None]: ...
     def close(self) -> Future[None]: ...
+
+@final
+class NativeTokenRedactor:
+    def __new__(cls, minimum_custom_key_length: int, word_ranges: Sequence[tuple[int, int]]) -> NativeTokenRedactor: ...
+    def redact(self, text: str, replacement: str) -> str | None: ...
 
 @final
 class NativeDiagnosticProcessor:
@@ -768,6 +814,7 @@ def reserve_process_for_forking() -> None: ...
 __all__ = [
     "AtomicApplied",
     "AtomicOverLimit",
+    "AttemptShape",
     "ForkedAfterNativeRuntimeStarted",
     "GaugeOverLimit",
     "GaugesAcquired",
@@ -780,6 +827,7 @@ __all__ = [
     "NativeClickHouseSpendStorage",
     "NativeCostMapSource",
     "NativeDatabase",
+    "NativeDatabaseFailure",
     "NativeDeploymentHealth",
     "NativeDiagnosticProcessor",
     "NativeFetchFailed",
@@ -802,10 +850,12 @@ __all__ = [
     "NativeRouterCooldowns",
     "NativeRouterSessionPins",
     "NativeRouterUsage",
+    "NativeS3Log",
     "NativeSend",
     "NativeSensitiveRoutePins",
     "NativeSpendCounters",
     "NativeTableSwapped",
+    "NativeTokenRedactor",
     "NativeUsageRead",
     "PostCallSettlement",
     "ProcessReservedForForking",
@@ -927,6 +977,16 @@ class _Event(TypedDict):
 class _Step(TypedDict):
     events: list[_Event]
 
+# router-core's decisions for the fallback-hop parts of an attempt's kwargs.
+@final
+class AttemptShape:
+    @property
+    def fallback_model_group(self) -> str | None: ...
+    @property
+    def is_fallback(self) -> bool: ...
+    @property
+    def drops_mock_timeout(self) -> bool: ...
+
 class _AttemptStep(_Step):
     kind: Literal["attempt"]
     deployment_id: str
@@ -947,6 +1007,7 @@ class _AttemptStep(_Step):
     scope: int
     max_retries: int
     model_group_size: int
+    shape: AttemptShape
 
 class _SleepStep(_Step):
     kind: Literal["sleep"]
