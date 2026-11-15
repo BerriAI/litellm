@@ -148,6 +148,34 @@
     "default_model_placeholder": "gpt-3.5-turbo"
   },
   {
+    "provider": "AIGROW",
+    "provider_display_name": "AIGROW",
+    "litellm_provider": "aigrow",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://aigrow.gg/v1",
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "aigrow/claude-sonnet-5.5"
+  },
+  {
     "provider": "AIOHTTP_OPENAI",
     "provider_display_name": "Aiohttp Openai",
     "litellm_provider": "aiohttp_openai",

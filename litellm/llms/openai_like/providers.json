@@ -314,5 +314,21 @@
       "supports_function_calling": true,
       "supports_reasoning": true
     }
+  },
+  "aigrow": {
+    "base_url": "https://aigrow.gg/v1",
+    "api_key_env": "AIGROW_API_KEY",
+    "api_base_env": "AIGROW_API_BASE",
+    "provider_info": {
+      "supports_function_calling": true,
+      "supports_reasoning": true
+    },
+    "supported_endpoints": ["/v1/chat/completions"],
+    "model_supported_endpoints": {
+      "claude-fable-5.2": ["/v1/messages"],
+      "claude-fable-5.1": ["/v1/messages"],
+      "claude-opus-5.5": ["/v1/messages"],
+      "claude-sonnet-5.5": ["/v1/messages"]
+    }
   }
 }
