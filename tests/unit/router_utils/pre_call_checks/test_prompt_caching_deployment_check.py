@@ -776,7 +776,7 @@ async def test_async_filter_deployments_counts_the_prompt_off_the_event_loop():
     warm_tokenizer("anthropic/claude-fable-5")
     check = PromptCachingDeploymentCheck(cache=DualCache())
     deployments = _deployments("anthropic/claude-fable-5", "anthropic/claude-fable-5")
-    messages = cast(list[AllMessageValues], [{"role": "user", "content": text * 100}])
+    messages = cast(list[AllMessageValues], [{"role": "user", "content": "filtered deployments " + text * 100}])
 
     result, took, lags = await timed_with_loop_lags(
         lambda: check.async_filter_deployments(
@@ -802,7 +802,14 @@ async def test_async_log_success_event_counts_the_prompt_off_the_event_loop():
     check = PromptCachingDeploymentCheck(cache=cache)
     messages = cast(
         list[AllMessageValues],
-        [{"role": "user", "content": [{"type": "text", "text": text * 100, "cache_control": {"type": "ephemeral"}}]}],
+        [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "logged success " + text * 100, "cache_control": {"type": "ephemeral"}}
+                ],
+            }
+        ],
     )
     standard_logging_object = {
         "call_type": "acompletion",
