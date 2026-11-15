@@ -1,9 +1,15 @@
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
 from litellm.accounting.delivery_projection import entity_transactions, project_deliveries
 from litellm.accounting.projection import Contribution
 from litellm.proxy.db.budget_window_spend_writer import commit_window_spend_updates
-from litellm.proxy.db.daily_spend_bulk_upsert import DAILY_SPEND_TABLES, build_bulk_upsert, merge_by_conflict_key
+from litellm.proxy.db.daily_spend_bulk_upsert import (
+    DAILY_SPEND_TABLES,
+    build_bulk_upsert,
+    conflict_key,
+    merge_by_conflict_key,
+)
 from litellm.proxy.db.db_span import db_span
 from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import WindowSpendTransaction
 from litellm.proxy.db.model_usage_rollup import queue_model_usage_upsert
@@ -16,6 +22,9 @@ if TYPE_CHECKING:
 
 
 _SAVEPOINT: Final = "accounting_contribution"
+_DAILY_TABLES_BY_NAME: Final = MappingProxyType({table.name: table for table in DAILY_SPEND_TABLES.values()})
+_DAILY_TABLE_ORDER: Final = tuple(sorted(_DAILY_TABLES_BY_NAME))
+_LATER_PHASES: Final = ("LiteLLM_DailyModelUsage", "LiteLLM_DailyGuardrailUsageUnits", "LiteLLM_BudgetWindowSpend")
 
 
 async def apply_deliveries(
@@ -44,7 +53,7 @@ async def apply_delivery_isolated(
 ) -> tuple[tuple[Contribution, ...], tuple[Contribution, ...]]:
     """Applies one delivery a contribution at a time, so a value Postgres cannot index loses only its own
     contribution. Returns the applied and the rejected contributions; any other failure propagates."""
-    contributions: Final = project_deliveries((delivery,))
+    contributions: Final = tuple(sorted(project_deliveries((delivery,)), key=_write_order))
     await apply_rollup_lock_timeout(transaction)
     await writer.lock_charged_teams(transaction, entity_transactions(contributions))
     outcomes: Final = tuple(
@@ -61,6 +70,19 @@ async def apply_delivery_isolated(
     applied: Final = tuple(item for item, was_applied in outcomes if was_applied)
     rejected: Final = tuple(item for item, was_applied in outcomes if not was_applied)
     return applied, rejected
+
+
+def _write_order(contribution: Contribution) -> tuple[int, int, tuple[str, ...]]:
+    """Where the batched path writes this contribution, so an isolated retry takes row locks in the same order."""
+    from litellm.proxy.db.db_spend_update_writer import ENTITY_TABLES_IN_COMMIT_ORDER
+
+    if contribution.table in ENTITY_TABLES_IN_COMMIT_ORDER:
+        return (0, ENTITY_TABLES_IN_COMMIT_ORDER.index(contribution.table), tuple(v for _, v in contribution.key))
+    daily: Final = _DAILY_TABLES_BY_NAME.get(contribution.table)
+    if daily is not None:
+        row: Final = {**dict(contribution.key), **dict(contribution.values), **dict(contribution.increments)}
+        return (1, _DAILY_TABLE_ORDER.index(contribution.table), conflict_key(daily, row))
+    return (2, _LATER_PHASES.index(contribution.table), tuple(v for _, v in contribution.key))
 
 
 async def _applied_within_savepoint(
