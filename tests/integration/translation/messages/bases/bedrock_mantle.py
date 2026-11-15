@@ -467,6 +467,22 @@ BEDROCK_MANTLE_OPENAI_RESPONSES_MESSAGES_RESPONSE: Final[Mapping[str, JsonValue]
 }
 
 
+GPT_6_1_SOL_ENCRYPTED_CONTENT: Final = (
+    "rsn_rru6BQHgUc/VWS5vRIAlHwIFeB+Lw/sASAOaRTS5iOdUyDiwGqyLb6EJDqxBCdFOQvGfAF8AAQAVYXdzLWNyeXB0by1wdWJs"
+    "aWMta2V5AERBaTJyR044dmNxUGt3TndhZkNmeTBpOEFUWlBHSGN4L2s3U1E0UGpyUEp0bUdlZVhXVDREVy9tS2FPdStQUFd6OGc9"
+    "PQABABFhd3Mta21zLWhpZXJhcmNoeQAKYmVybS1zdG9yZQBcJ5O6OH7BzhGiCKEzUwANq0bcBtwE7aXPWBjYzgTyexPQO0PepR8j"
+    "RQ3zVYRhZpm6K2TOk2lvrp72PZ5N5jG3KGRkWT2Y2jsL9pnkWwE5kN16+aY2OKOY9ZlzQukCAAAQACDHXld1blcGog/Y0exPb0n+"
+    "8Vo0dT1X9pL401/Nv3/uQlT6BC0wwixOAufgfaY+ev////8AAAABAAAAAAAAAAAAAAABAAABrRdgMGsGAKubmJ7dCj1A9UQgYVFb"
+    "1O6+NB+Aom8IGUy3Y6E3c63eWNkWXxN8APSjWFwq012VWZ9Q11DzJmGSwM8gtV25ckYezPfNn46VmSj2idcLs2TxTSxP89NAOfSM"
+    "zWRnW6Dr3lSlx72uQKBrHWYPyAskoHTw4E6CfnFhXotCshAmT5dgImjniqdLFu4CWh2xpQcmYkFbxXakTBsK80TEI8fpJVjGYQbo"
+    "mlrZTwAb8bdyEp0/05xVeMVYC47F0tBY5zFOeZ0Nk0ps2PFteD1HQ5GEt7MRMb+VTGGSbq0wmjY7pvdC0f31cs+0GhEZ1N/3707c"
+    "GjuMevEMn17YYxJ0oelPOatqdAeSSxBGkEKLmzos0tDcisqwWU/94DL2hmTJWacHamboEN74xZ+KwOjKEoyEr0HOL7n5+B9Oojl7"
+    "MPdWgBnyGUwCsB3BH8t+h5MwMtMJY451PvO4hgl3qK2cN4WfgoYHRvWM2+rj2iJqYBXFPLo5yqWd3XIIimuTGltinK/0sr1uC/AM"
+    "Q2Qa0qEB0J4Zxla83H7HCEBg4e8wde2qlXZCG9AxVpPQVd1LijTvn7sPIJgYsmSMwKYAZzBlAjBvywiP8Kq5WqQ+kknoQv+bn4Ot"
+    "wISL+sXhXE+9JK6hhjn02Xd9iSkC/h6IGxAc22UCMQCBBpc3UEvXQSZAxGDy1xUr3JoG4X3sj2Y4yB3SHvBVcxmAWoVo+QAUVMNu"
+    "lgqXbwU="
+)
+
 GPT_6_1_SOL_TEST_CASE: Final = TranslationTestCase(
     scenario="basic",
     litellm_endpoint="/v1/messages",
@@ -492,7 +508,7 @@ GPT_6_1_SOL_TEST_CASE: Final = TranslationTestCase(
         "output": [
             {
                 "content": [],
-                "encrypted_content": "rsn_rru6BQHgUc/VWS5vRIAlHwIFeB+Lw/sASAOaRTS5iOdUyDiwGqyLb6EJDqxBCdFOQvGfAF8AAQAVYXdzLWNyeXB0by1wdWJsaWMta2V5AERBaTJyR044dmNxUGt3TndhZkNmeTBpOEFUWlBHSGN4L2s3U1E0UGpyUEp0bUdlZVhXVDREVy9tS2FPdStQUFd6OGc9PQABABFhd3Mta21zLWhpZXJhcmNoeQAKYmVybS1zdG9yZQBcJ5O6OH7BzhGiCKEzUwANq0bcBtwE7aXPWBjYzgTyexPQO0PepR8jRQ3zVYRhZpm6K2TOk2lvrp72PZ5N5jG3KGRkWT2Y2jsL9pnkWwE5kN16+aY2OKOY9ZlzQukCAAAQACDHXld1blcGog/Y0exPb0n+8Vo0dT1X9pL401/Nv3/uQlT6BC0wwixOAufgfaY+ev////8AAAABAAAAAAAAAAAAAAABAAABrRdgMGsGAKubmJ7dCj1A9UQgYVFb1O6+NB+Aom8IGUy3Y6E3c63eWNkWXxN8APSjWFwq012VWZ9Q11DzJmGSwM8gtV25ckYezPfNn46VmSj2idcLs2TxTSxP89NAOfSMzWRnW6Dr3lSlx72uQKBrHWYPyAskoHTw4E6CfnFhXotCshAmT5dgImjniqdLFu4CWh2xpQcmYkFbxXakTBsK80TEI8fpJVjGYQbomlrZTwAb8bdyEp0/05xVeMVYC47F0tBY5zFOeZ0Nk0ps2PFteD1HQ5GEt7MRMb+VTGGSbq0wmjY7pvdC0f31cs+0GhEZ1N/3707cGjuMevEMn17YYxJ0oelPOatqdAeSSxBGkEKLmzos0tDcisqwWU/94DL2hmTJWacHamboEN74xZ+KwOjKEoyEr0HOL7n5+B9Oojl7MPdWgBnyGUwCsB3BH8t+h5MwMtMJY451PvO4hgl3qK2cN4WfgoYHRvWM2+rj2iJqYBXFPLo5yqWd3XIIimuTGltinK/0sr1uC/AMQ2Qa0qEB0J4Zxla83H7HCEBg4e8wde2qlXZCG9AxVpPQVd1LijTvn7sPIJgYsmSMwKYAZzBlAjBvywiP8Kq5WqQ+kknoQv+bn4OtwISL+sXhXE+9JK6hhjn02Xd9iSkC/h6IGxAc22UCMQCBBpc3UEvXQSZAxGDy1xUr3JoG4X3sj2Y4yB3SHvBVcxmAWoVo+QAUVMNulgqXbwU=",
+                "encrypted_content": GPT_6_1_SOL_ENCRYPTED_CONTENT,
                 "id": "rs_187e1b0bc4995fc9b7fd2796a1889637",
                 "summary": [],
                 "type": "reasoning",
@@ -537,6 +553,10 @@ GPT_6_1_SOL_TEST_CASE: Final = TranslationTestCase(
         "usage": {"input_tokens": 309, "output_tokens": 141},
         "content": [
             {
+                "type": "redacted_thinking",
+                "data": "litellm_encrypted_reasoning:" + GPT_6_1_SOL_ENCRYPTED_CONTENT,
+            },
+            {
                 "type": "text",
                 "text": "I’ll read `shop/validation.py` first to check how it handles zero, negative, and "
                 "non-integer quantities.\n",
@@ -549,6 +569,21 @@ GPT_6_1_SOL_TEST_CASE: Final = TranslationTestCase(
             },
         ],
     },
+)
+
+GPT_6_LUNA_ENCRYPTED_CONTENT: Final = (
+    "rsn_rru6BQHgUc/VWS5vRIAlHwIFeJWGzSslRfiCKfPUzG9PfxThM9nB8cV14wc1iKvcbztDAF8AAQAVYXdzLWNyeXB0by1wdWJs"
+    "aWMta2V5AERBb2ZiS1dnQ24waEpudTVSZGtlLyt3emJKY2VIUXlCeU9rWGd6enJDYU5ydXZYMEFmV1NwK01vVEUwZzhHWnpWb0E9"
+    "PQABABFhd3Mta21zLWhpZXJhcmNoeQAKYmVybS1zdG9yZQBcJhapxvTAKRUzTqbKGUoTlXJqSZjSljHkimXkxwTyexPQO0PepR8j"
+    "RQ3zVYQcb1ucdG8HiPjq86SsgccbqbIEmYllOUwDws5V0DtxxRnqoVEhkF3h+EG4I5uuB2kCAAAQABDKdaE231TqbLUInCwHGBD9"
+    "+U9x7lXzuoVQNhj0KATZ6U5+Ki+ZDt6KLjrNb/LM2v////8AAAABAAAAAAAAAAAAAAABAAABdglH8KRxssIDHD4kcMUX0rX0yogE"
+    "2V0AOj4vmUzgN+tpKEUhA0/BNphpi42nYRZK61EgLzZk42sWn6sJhR5/WKHHn/7N7FppZkt6kFCDTyhRfPimhQT0S7NiACE4511F"
+    "HXE/WbRGd2/3uuLOx6PfMFlxuKgJHYQuMEttkYRZz1lwzMrtQTyTtghKKz0QaNtp7umhKHlaFVetqVsKqLD7JpKyBxjbe5VojoKm"
+    "MQEY3dExNYgvCnOBPb8uLhZCcBemLq1ZQzinbMRyRO1bhQmfGsx4GgFbuA4cyJlyzHe+Af4VqcRM94bELBMXiU64UveyqRkWBdoc"
+    "sPfPFpVWa+Hnvl37fgn4jBTnhG1xqNuoVCXX2nV/GAMYHdPwsKweIhxg9I8EcrsXOcTWv26hwDRpmdoHHtJkSqKSbudxEs1F5kr5"
+    "ELytEFS2OWJwwsMvDfBAlC4boaYtxUBG5sREazNwDNRkhFWHb8MwsXBpOqwOBtu1L2n953WUP2I2tHE6WcZ3DpoD2dP3pwBnMGUC"
+    "MQDonP31z1HPHjm2mGf7SINbrdFZ5xl5ztMBj3g8hJmIpdWtN/W5dJkc7kfNSErvVrQCMDGAL4pNuVt19O4BfjAmLKnNyz5x/z1F"
+    "PLGJDz2j+9b0Y0FYBIqafypg88wJ6XSc0Q=="
 )
 
 GPT_6_LUNA_TEST_CASE: Final = TranslationTestCase(
@@ -578,7 +613,7 @@ GPT_6_LUNA_TEST_CASE: Final = TranslationTestCase(
         "output": [
             {
                 "content": [],
-                "encrypted_content": "rsn_rru6BQHgUc/VWS5vRIAlHwIFeJWGzSslRfiCKfPUzG9PfxThM9nB8cV14wc1iKvcbztDAF8AAQAVYXdzLWNyeXB0by1wdWJsaWMta2V5AERBb2ZiS1dnQ24waEpudTVSZGtlLyt3emJKY2VIUXlCeU9rWGd6enJDYU5ydXZYMEFmV1NwK01vVEUwZzhHWnpWb0E9PQABABFhd3Mta21zLWhpZXJhcmNoeQAKYmVybS1zdG9yZQBcJhapxvTAKRUzTqbKGUoTlXJqSZjSljHkimXkxwTyexPQO0PepR8jRQ3zVYQcb1ucdG8HiPjq86SsgccbqbIEmYllOUwDws5V0DtxxRnqoVEhkF3h+EG4I5uuB2kCAAAQABDKdaE231TqbLUInCwHGBD9+U9x7lXzuoVQNhj0KATZ6U5+Ki+ZDt6KLjrNb/LM2v////8AAAABAAAAAAAAAAAAAAABAAABdglH8KRxssIDHD4kcMUX0rX0yogE2V0AOj4vmUzgN+tpKEUhA0/BNphpi42nYRZK61EgLzZk42sWn6sJhR5/WKHHn/7N7FppZkt6kFCDTyhRfPimhQT0S7NiACE4511FHXE/WbRGd2/3uuLOx6PfMFlxuKgJHYQuMEttkYRZz1lwzMrtQTyTtghKKz0QaNtp7umhKHlaFVetqVsKqLD7JpKyBxjbe5VojoKmMQEY3dExNYgvCnOBPb8uLhZCcBemLq1ZQzinbMRyRO1bhQmfGsx4GgFbuA4cyJlyzHe+Af4VqcRM94bELBMXiU64UveyqRkWBdocsPfPFpVWa+Hnvl37fgn4jBTnhG1xqNuoVCXX2nV/GAMYHdPwsKweIhxg9I8EcrsXOcTWv26hwDRpmdoHHtJkSqKSbudxEs1F5kr5ELytEFS2OWJwwsMvDfBAlC4boaYtxUBG5sREazNwDNRkhFWHb8MwsXBpOqwOBtu1L2n953WUP2I2tHE6WcZ3DpoD2dP3pwBnMGUCMQDonP31z1HPHjm2mGf7SINbrdFZ5xl5ztMBj3g8hJmIpdWtN/W5dJkc7kfNSErvVrQCMDGAL4pNuVt19O4BfjAmLKnNyz5x/z1FPLGJDz2j+9b0Y0FYBIqafypg88wJ6XSc0Q==",
+                "encrypted_content": GPT_6_LUNA_ENCRYPTED_CONTENT,
                 "id": "rs_8de42923e05d5521b0dbd93c1adcea91",
                 "summary": [],
                 "type": "reasoning",
@@ -623,6 +658,10 @@ GPT_6_LUNA_TEST_CASE: Final = TranslationTestCase(
         "usage": {"input_tokens": 309, "output_tokens": 119},
         "content": [
             {
+                "type": "redacted_thinking",
+                "data": "litellm_encrypted_reasoning:" + GPT_6_LUNA_ENCRYPTED_CONTENT,
+            },
+            {
                 "type": "text",
                 "text": "I’ll read `shop/validation.py` first to check the behavior for zero, negative, and "
                 "non-integer quantities.",
@@ -635,6 +674,21 @@ GPT_6_LUNA_TEST_CASE: Final = TranslationTestCase(
             },
         ],
     },
+)
+
+GPT_6_ASTRA_ENCRYPTED_CONTENT: Final = (
+    "rsn_rru6BQHgUc/VWS5vRIAlHwIFeK6rtxWPF9TjmgBuzPaPZhcqwiqUtYeqNCEyD/fgEZAfAF8AAQAVYXdzLWNyeXB0by1wdWJs"
+    "aWMta2V5AERBaUE5eUozT3MzTE1rRFhLWGRuWUFYRjdZU2Q3OStjT3V5LzBIRUNnZXBUWDloQXZncVppTC9qVUc3Y2h3dlQ5QVE9"
+    "PQABABFhd3Mta21zLWhpZXJhcmNoeQAKYmVybS1zdG9yZQBcuTxMV80kCzRfLH6n87syGDT8XBcjqEaE8tDuSQTyexPQO0PepR8j"
+    "RQ3zVYTdphRKCdq3CJr491CVE1gdVwCTcbqsK/1k7shfoHg93E2fCZXYKq0tnNLGBKhnl90CAAAQAHNHMusCy4BS4gUSPEf8T3Dw"
+    "PC4nfHsYIw/8I2M8N4Z4dxH0a/6ULM8Zaf5qgZInLv////8AAAABAAAAAAAAAAAAAAABAAABmFno3HYlCh8skcb8d7DvpK045XzP"
+    "/rPTF9J1TXQEj+Oam1ybdDFFN5bbUrMUhvhaAKoUdhp0TPWFBQnQD7rM1QSBtZY60vbMXdscVeDkmAPh7MsZ6OLAY1olCWPsid7O"
+    "qATdHKm+S6UfnqnvNLJQ0Hp12YYilLOhW5+BLnmqdm04wkU2kvH4G4vxgRK0hFGMGaoKlCIKRvAmwre2DGXdWx85E9jsq2j1ta1X"
+    "T6/2eCr7zyXn8+tRI69tNwFVRTcaHu8DvSS1LBzdO7ZwNwUr6PbksO44r/sXeNstFU4u3ZQnUhWz8JNym0ydaia57zXQG3/pl8rJ"
+    "aA3IshV+Gm+Ie7N3qySlcIEonqN+cYhQN669G4oBuvCKARc2LFdRB1OXhErskZ8c2c3NA9Xt/dXBbclKY9i/I3Usp46t46mALqz7"
+    "rA2ft/cGLtX3gNoPPEKL2+i1ZDa0EB1Y7agcESa5pYLKgajhUDbaxupsVQ93wZiCcDTr7SlEfMrBkNFGijc3kpdn1avRFEzVC3H/"
+    "Ys1cPPYJ93hOUYO42b/RibFpBlkLnKtNf//v81kAZzBlAjAdmUn/WQ5cOGyMLQF2CQxoUrAO9HhKULmwznaURUbjukpBRw8v6Pwf"
+    "lSA+mmU8iv0CMQCASBvNjVVmEd4/s4jH27TFub4sikcdi7+LR5HeitoRhyEJIfB41mRciDxhY80hp6s="
 )
 
 GPT_6_ASTRA_TEST_CASE: Final = TranslationTestCase(
@@ -664,7 +718,7 @@ GPT_6_ASTRA_TEST_CASE: Final = TranslationTestCase(
         "output": [
             {
                 "content": [],
-                "encrypted_content": "rsn_rru6BQHgUc/VWS5vRIAlHwIFeK6rtxWPF9TjmgBuzPaPZhcqwiqUtYeqNCEyD/fgEZAfAF8AAQAVYXdzLWNyeXB0by1wdWJsaWMta2V5AERBaUE5eUozT3MzTE1rRFhLWGRuWUFYRjdZU2Q3OStjT3V5LzBIRUNnZXBUWDloQXZncVppTC9qVUc3Y2h3dlQ5QVE9PQABABFhd3Mta21zLWhpZXJhcmNoeQAKYmVybS1zdG9yZQBcuTxMV80kCzRfLH6n87syGDT8XBcjqEaE8tDuSQTyexPQO0PepR8jRQ3zVYTdphRKCdq3CJr491CVE1gdVwCTcbqsK/1k7shfoHg93E2fCZXYKq0tnNLGBKhnl90CAAAQAHNHMusCy4BS4gUSPEf8T3DwPC4nfHsYIw/8I2M8N4Z4dxH0a/6ULM8Zaf5qgZInLv////8AAAABAAAAAAAAAAAAAAABAAABmFno3HYlCh8skcb8d7DvpK045XzP/rPTF9J1TXQEj+Oam1ybdDFFN5bbUrMUhvhaAKoUdhp0TPWFBQnQD7rM1QSBtZY60vbMXdscVeDkmAPh7MsZ6OLAY1olCWPsid7OqATdHKm+S6UfnqnvNLJQ0Hp12YYilLOhW5+BLnmqdm04wkU2kvH4G4vxgRK0hFGMGaoKlCIKRvAmwre2DGXdWx85E9jsq2j1ta1XT6/2eCr7zyXn8+tRI69tNwFVRTcaHu8DvSS1LBzdO7ZwNwUr6PbksO44r/sXeNstFU4u3ZQnUhWz8JNym0ydaia57zXQG3/pl8rJaA3IshV+Gm+Ie7N3qySlcIEonqN+cYhQN669G4oBuvCKARc2LFdRB1OXhErskZ8c2c3NA9Xt/dXBbclKY9i/I3Usp46t46mALqz7rA2ft/cGLtX3gNoPPEKL2+i1ZDa0EB1Y7agcESa5pYLKgajhUDbaxupsVQ93wZiCcDTr7SlEfMrBkNFGijc3kpdn1avRFEzVC3H/Ys1cPPYJ93hOUYO42b/RibFpBlkLnKtNf//v81kAZzBlAjAdmUn/WQ5cOGyMLQF2CQxoUrAO9HhKULmwznaURUbjukpBRw8v6PwflSA+mmU8iv0CMQCASBvNjVVmEd4/s4jH27TFub4sikcdi7+LR5HeitoRhyEJIfB41mRciDxhY80hp6s=",
+                "encrypted_content": GPT_6_ASTRA_ENCRYPTED_CONTENT,
                 "id": "rs_e6237911ea3e5775acee304296484fab",
                 "summary": [],
                 "type": "reasoning",
@@ -709,6 +763,10 @@ GPT_6_ASTRA_TEST_CASE: Final = TranslationTestCase(
         "usage": {"input_tokens": 309, "output_tokens": 138},
         "content": [
             {
+                "type": "redacted_thinking",
+                "data": "litellm_encrypted_reasoning:" + GPT_6_ASTRA_ENCRYPTED_CONTENT,
+            },
+            {
                 "type": "text",
                 "text": "I’ll read `shop/validation.py` first to check how it handles zero, negative, and "
                 "non-integer quantities.\n",
@@ -721,6 +779,20 @@ GPT_6_ASTRA_TEST_CASE: Final = TranslationTestCase(
             },
         ],
     },
+)
+
+GPT_5_6_TERRA_ENCRYPTED_CONTENT: Final = (
+    "rsn_rru6BQHgUc/VWS5vRIAlHwIFeCIDnqsrWiO+hx6u0oBst+OnJIA0RIm1eTWC5ORgkFFNAF8AAQAVYXdzLWNyeXB0by1wdWJs"
+    "aWMta2V5AERBMEZqYXRRMkhMSEw1clFlcythQm0wc1Bid2hBWHJhN3ZZOFdGenRwOXlsd0NqSkxBOGxWd2loU2dleHhmTFN0Snc9"
+    "PQABABFhd3Mta21zLWhpZXJhcmNoeQAKYmVybS1zdG9yZQBcWxvahbwUWb5zEZ4mn/Ri1V5Z4KCuYAzvlyiI2ATyexPQO0PepR8j"
+    "RQ3zVYTwOcBo7nb2ZZfI77C2nwtaEjD275c1LF19dmrCUZ7VPKIYQCMlismkx7f2X1LE4xUCAAAQAPc8v4U/p6fjgu2ZpZgPQUfp"
+    "PsrIs2TWrckQcNPOhJmhKYDB5gthEp93h1Hf2+ad3P////8AAAABAAAAAAAAAAAAAAABAAABHw7y8mi4YLItPYN81mZNbuQhK0FT"
+    "G04aQuvQ0966UQxFIMfbeJe+qtyO7uHmyKoz58NNb0ud67KhOPoip6wfSxVcw2RTBCAljj+gkLciZdZlGDiLyutdaHfCRh6StNZD"
+    "tXG0xPgbn0mN93xnE0hDa05mjcNsNckDaS2KkTMzoXF0tqWoi+Vl0fMSK3CF/49QKyGXYsDeOPB0b8XghpfF1PvMqMI/Ua9Sd98l"
+    "999mYu71TaBKvgRS9yLWBXg9YcmfZx2hulOUkK2a9aCQ5aN661B0MTdykIm+CokaKogZCv6e/MXncHPPtBeqtuQtsggedinoW/qD"
+    "09HU+rLUysC+vbHT65YqoVL9wW42XZa79V5QBFYIQL787eVy54qbPxrryWKuTOsN9xRFqaSOv1L10ABnMGUCMFnJHyhVr8ujzWTw"
+    "nSQCuS+zKrvPgXQfEePxJOR/KFHa7CUXZ8kBuEoW0kVxx3biLgIxAK+8PazVOuepKMy5cuKKsJChOnvQ1Npz7Gpmrx0CXO7X2sIN"
+    "1WJTlhdNHEclLuwoSQ=="
 )
 
 GPT_5_6_TERRA_TEST_CASE: Final = TranslationTestCase(
@@ -750,7 +822,7 @@ GPT_5_6_TERRA_TEST_CASE: Final = TranslationTestCase(
         "output": [
             {
                 "content": [],
-                "encrypted_content": "rsn_rru6BQHgUc/VWS5vRIAlHwIFeCIDnqsrWiO+hx6u0oBst+OnJIA0RIm1eTWC5ORgkFFNAF8AAQAVYXdzLWNyeXB0by1wdWJsaWMta2V5AERBMEZqYXRRMkhMSEw1clFlcythQm0wc1Bid2hBWHJhN3ZZOFdGenRwOXlsd0NqSkxBOGxWd2loU2dleHhmTFN0Snc9PQABABFhd3Mta21zLWhpZXJhcmNoeQAKYmVybS1zdG9yZQBcWxvahbwUWb5zEZ4mn/Ri1V5Z4KCuYAzvlyiI2ATyexPQO0PepR8jRQ3zVYTwOcBo7nb2ZZfI77C2nwtaEjD275c1LF19dmrCUZ7VPKIYQCMlismkx7f2X1LE4xUCAAAQAPc8v4U/p6fjgu2ZpZgPQUfpPsrIs2TWrckQcNPOhJmhKYDB5gthEp93h1Hf2+ad3P////8AAAABAAAAAAAAAAAAAAABAAABHw7y8mi4YLItPYN81mZNbuQhK0FTG04aQuvQ0966UQxFIMfbeJe+qtyO7uHmyKoz58NNb0ud67KhOPoip6wfSxVcw2RTBCAljj+gkLciZdZlGDiLyutdaHfCRh6StNZDtXG0xPgbn0mN93xnE0hDa05mjcNsNckDaS2KkTMzoXF0tqWoi+Vl0fMSK3CF/49QKyGXYsDeOPB0b8XghpfF1PvMqMI/Ua9Sd98l999mYu71TaBKvgRS9yLWBXg9YcmfZx2hulOUkK2a9aCQ5aN661B0MTdykIm+CokaKogZCv6e/MXncHPPtBeqtuQtsggedinoW/qD09HU+rLUysC+vbHT65YqoVL9wW42XZa79V5QBFYIQL787eVy54qbPxrryWKuTOsN9xRFqaSOv1L10ABnMGUCMFnJHyhVr8ujzWTwnSQCuS+zKrvPgXQfEePxJOR/KFHa7CUXZ8kBuEoW0kVxx3biLgIxAK+8PazVOuepKMy5cuKKsJChOnvQ1Npz7Gpmrx0CXO7X2sIN1WJTlhdNHEclLuwoSQ==",
+                "encrypted_content": GPT_5_6_TERRA_ENCRYPTED_CONTENT,
                 "id": "rs_a4e6e9898f225c88b4d948b6488bfacc",
                 "summary": [],
                 "type": "reasoning",
@@ -795,6 +867,10 @@ GPT_5_6_TERRA_TEST_CASE: Final = TranslationTestCase(
         "model": "bedrock_mantle/openai.gpt-5.6-terra",
         "usage": {"input_tokens": 309, "output_tokens": 109},
         "content": [
+            {
+                "type": "redacted_thinking",
+                "data": "litellm_encrypted_reasoning:" + GPT_5_6_TERRA_ENCRYPTED_CONTENT,
+            },
             {
                 "type": "text",
                 "text": "I’ll read `shop/validation.py` first to verify the current handling of zero, "

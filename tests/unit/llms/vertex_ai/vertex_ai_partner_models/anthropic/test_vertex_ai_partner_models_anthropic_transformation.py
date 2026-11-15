@@ -640,36 +640,16 @@ async def test_vertex_ai_anthropic_prompt_caching_does_not_add_beta_header(
     assert "anthropic_beta" not in json.loads(request.content)
 
 
-def test_vertex_ai_partner_models_anthropic_remove_prompt_caching_scope_beta_header():
-    """
-    Test that remove_unsupported_beta correctly filters out prompt-caching-scope-2026-01-05
-    from the anthropic-beta headers.
-    """
+def test_vertex_ai_partner_models_anthropic_forwards_prompt_caching_scope_beta_header(
+    local_beta_headers_config: None,
+) -> None:
+    """A live Vertex rawPredict probe on 2026-10-28 accepted prompt-caching-scope-2026-01-05, so it goes upstream
+    while a beta missing from the vertex_ai column is still dropped."""
+    headers: Final = update_headers_with_filtered_beta(
+        {"anthropic-beta": "other-feature,prompt-caching-scope-2026-01-05,web-search-2025-03-05"}, "vertex_ai"
+    )
 
-    # This beta header should be removed
-    PROMPT_CACHING_BETA_HEADER = "prompt-caching-scope-2026-01-05"
-    headers = {
-        "anthropic-beta": f"other-feature,{PROMPT_CACHING_BETA_HEADER},web-search-2025-03-05"
-    }
-
-    headers = update_headers_with_filtered_beta(headers, "vertex_ai")
-
-    beta_header = headers.get("anthropic-beta")
-    assert PROMPT_CACHING_BETA_HEADER not in (
-        beta_header or ""
-    ), f"{PROMPT_CACHING_BETA_HEADER} should be filtered out"
-    assert "other-feature" not in (
-        beta_header or ""
-    ), "Other non-excluded beta headers should remain"
-    assert "web-search-2025-03-05" in (
-        beta_header or ""
-    ), "Other non-excluded beta headers should remain"
-    # If prompt-caching was the only value, header should be removed completely
-    headers2 = {"anthropic-beta": PROMPT_CACHING_BETA_HEADER}
-    headers2 = update_headers_with_filtered_beta(headers2, "vertex_ai")
-    assert (
-        "anthropic-beta" not in headers2
-    ), "Header should be removed if no supported values remain"
+    assert headers == {"anthropic-beta": "prompt-caching-scope-2026-01-05,web-search-2025-03-05"}
 
 
 def test_vertex_ai_anthropic_output_config_effort_only_forwarded():
@@ -1526,3 +1506,52 @@ def test_beta_detection_preserves_unrecognized_thinking(thinking: object) -> Non
 
     assert result["thinking"] == thinking
     assert ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER not in headers.get("anthropic-beta", "").split(",")
+
+
+@pytest.mark.parametrize(
+    ("cost_map_rows", "litellm_params", "expected_max_tokens"),
+    (
+        pytest.param({"vertex_ai/claude-unit-test@20990101": 1234}, {}, 1234, id="vertex-row-fills-unmapped-bare-id"),
+        pytest.param(
+            {"claude-unit-test@20990101": 4321, "vertex_ai/claude-unit-test@20990101": 1234},
+            {},
+            4321,
+            id="own-row-first",
+        ),
+        pytest.param(
+            {"claude-unit-test": 4321, "vertex_ai/claude-unit-test@20990101": 1234},
+            {},
+            4321,
+            id="unversioned-row-before-vertex-row",
+        ),
+        pytest.param(
+            {"vertex_ai/claude-unit-test@20990101": 1234},
+            {"model_info": {"max_output_tokens": 500}},
+            500,
+            id="deployment-cap-first",
+        ),
+        pytest.param({}, {}, None, id="no-row-keeps-default"),
+    ),
+)
+def test_vertex_ai_anthropic_default_max_tokens_reads_vertex_row(
+    monkeypatch: pytest.MonkeyPatch,
+    cost_map_rows: Mapping[str, int],
+    litellm_params: Mapping[str, object],
+    expected_max_tokens: int | None,
+) -> None:
+    from litellm.constants import DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS
+
+    for key, max_output_tokens in cost_map_rows.items():
+        monkeypatch.setitem(litellm.model_cost, key, {"max_output_tokens": max_output_tokens})
+
+    result: Final = VertexAIAnthropicConfig().transform_request(
+        model="claude-unit-test@20990101",
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={},
+        litellm_params=dict(litellm_params),
+        headers={},
+    )
+
+    assert result["max_tokens"] == (
+        DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS if expected_max_tokens is None else expected_max_tokens
+    )

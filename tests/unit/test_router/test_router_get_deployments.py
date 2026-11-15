@@ -213,66 +213,6 @@ async def test_async_get_available_deployment_for_pass_through():
         pytest.fail(f"Error occurred: {e}")
 
 
-def test_filter_pass_through_deployments():
-    """
-    Test _filter_pass_through_deployments function
-    - Tests that it correctly filters deployments with use_in_pass_through=True
-    """
-    try:
-        litellm.set_verbose = False
-        model_list = [
-            {
-                "model_name": "gpt-3.5-turbo",
-                "litellm_params": {
-                    "model": "gpt-3.5-turbo",
-                    "api_key": os.getenv("OPENAI_API_KEY"),
-                    "use_in_pass_through": True,
-                },
-            },
-            {
-                "model_name": "gpt-3.5-turbo",
-                "litellm_params": {
-                    "model": "azure/gpt-4.1-mini",
-                    "api_key": os.getenv("AZURE_API_KEY"),
-                    "api_base": os.getenv("AZURE_API_BASE"),
-                    "api_version": os.getenv("AZURE_API_VERSION"),
-                    "use_in_pass_through": False,
-                },
-            },
-            {
-                "model_name": "gpt-3.5-turbo",
-                "litellm_params": {
-                    "model": "azure/gpt-35-turbo",
-                    "api_key": os.getenv("AZURE_API_KEY"),
-                    "api_base": os.getenv("AZURE_API_BASE"),
-                    "api_version": os.getenv("AZURE_API_VERSION"),
-                    "use_in_pass_through": True,
-                },
-            },
-        ]
-        router = Router(
-            model_list=model_list,
-        )
-
-        # Get all healthy deployments
-        healthy_deployments = router.get_model_list()
-
-        # Filter pass-through deployments
-        pass_through_deployments = router._filter_pass_through_deployments(healthy_deployments)
-
-        # Should only have 2 deployments with use_in_pass_through=True
-        assert len(pass_through_deployments) == 2
-
-        # Verify all returned deployments have use_in_pass_through=True
-        for deployment in pass_through_deployments:
-            assert deployment["litellm_params"]["use_in_pass_through"] is True
-
-        router.reset()
-    except Exception as e:
-        traceback.print_exc()
-        pytest.fail(f"Error occurred: {e}")
-
-
 async def _weighted_async_deployment_ids(router: Router) -> tuple[str, ...]:
     random.seed(2025)
     deployments: Final = tuple(

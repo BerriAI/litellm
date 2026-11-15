@@ -8,13 +8,13 @@ on:
       - main
       - "litellm_**"
     paths:
-      - "vscode-extension/**"
+      - "litellm/vscode-extension/**"
       - ".github/workflows/test-vscode-extension.yml"
   push:
     branches:
       - main
     paths:
-      - "vscode-extension/**"
+      - "litellm/vscode-extension/**"
       - ".github/workflows/test-vscode-extension.yml"
 
 concurrency:
@@ -27,7 +27,7 @@ jobs:
     timeout-minutes: 10
     defaults:
       run:
-        working-directory: vscode-extension
+        working-directory: litellm/vscode-extension
 
     steps:
       - name: Checkout repository
@@ -41,7 +41,7 @@ jobs:
         with:
           node-version: "24"
           cache: npm
-          cache-dependency-path: vscode-extension/package-lock.json
+          cache-dependency-path: litellm/vscode-extension/package-lock.json
 
       - name: Install dependencies
         run: npm ci
@@ -59,5 +59,5 @@ jobs:
         uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1 # v4.6.1
         with:
           name: litellm-vscode
-          path: vscode-extension/*.vsix
+          path: litellm/vscode-extension/*.vsix
           if-no-files-found: error
