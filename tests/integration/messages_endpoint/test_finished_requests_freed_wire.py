@@ -6,9 +6,17 @@ from typing import Final
 import pytest
 import yaml
 from integration._support.anthropic_sse import message_json
-from integration._support.client import JSON_OBJECT, Gateway, eventually, gateway_from_environment
+from integration._support.client import (
+    JSON_OBJECT,
+    Gateway,
+    eventually,
+    gateway_from_environment,
+    object_value,
+    string_value,
+)
 from integration._support.process import owned_proxy
 from integration._support.wire import Reply, Request, wire_server
+from pydantic import JsonValue
 
 _MODEL: Final = "claude-haiku-5-5"
 _API_KEY: Final = "synthetic-anthropic-key"
@@ -22,9 +30,13 @@ def _log_records(gateway: Gateway) -> int:
         "GET", "/debug/memory/details", params={"top_n": "100000", "include_process_info": "false"}
     )
     assert response.status_code == 200, response.text
-    top_types: Final = JSON_OBJECT.validate_python(response.json())["objects"]
-    counts: Final = {entry["type"]: entry["count"] for entry in top_types["top_types"]}  # type: ignore[index]
-    return int(counts.get("Logging", 0))
+    objects: Final = object_value(JSON_OBJECT.validate_python(response.json())["objects"])
+    top_types: Final = objects["top_types"]
+    assert isinstance(top_types, list), objects
+    counts: Final = {string_value(object_value(entry)["type"]): object_value(entry)["count"] for entry in top_types}
+    count: Final = counts.get("Logging", 0)
+    assert isinstance(count, int), counts
+    return count
 
 
 _CONFIG_MODEL: Final = "freed-config-model"
@@ -61,7 +73,10 @@ def no_cleanup_pass(uncached_gateway: Gateway) -> Iterator[None]:
     gateway: Final = uncached_gateway
     configured: Final = gateway.request("POST", "/debug/memory/gc/configure", params={"generation_0": str(_NEVER)})
     assert configured.status_code == 200, configured.text
-    previous: Final = [part.strip() for part in str(configured.json()["previous_thresholds"]).split(",")]
+    previous: Final = [
+        part.strip()
+        for part in string_value(JSON_OBJECT.validate_python(configured.json())["previous_thresholds"]).split(",")
+    ]
     try:
         yield
     finally:
@@ -79,8 +94,8 @@ def _answer(request: Request) -> Reply:
 
 
 def _call(gateway: Gateway, path: str, model: str) -> None:
-    messages: Final = [{"role": "user", "content": f"Say hi {uuid.uuid4().hex}"}]
-    body: Final = (
+    messages: Final[list[JsonValue]] = [{"role": "user", "content": f"Say hi {uuid.uuid4().hex}"}]
+    body: Final[dict[str, JsonValue]] = (
         {"model": model, "max_tokens": 16, "messages": messages}
         if path == "/v1/messages"
         else {"model": model, "messages": messages}
