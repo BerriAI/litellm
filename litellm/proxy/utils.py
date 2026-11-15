@@ -2039,6 +2039,13 @@ def routes_through_apply_guardrail(callback: CustomGuardrail) -> bool:
     )
 
 
+def scans_mcp_tool_results(callback: CustomGuardrail) -> bool:
+    return routes_through_apply_guardrail(callback) or (
+        subclass_overrides_hook(type(callback), "apply_guardrail", CustomGuardrail)
+        and GuardrailEventHooks.post_mcp_call in (type(callback).get_supported_event_hooks() or ())
+    )
+
+
 def _overrides_moderation_hook(callback: CustomLogger) -> bool:
     return _overrides_hook(callback, "async_moderation_hook")
 
@@ -4961,7 +4968,7 @@ class ProxyLogging:
     ) -> None:
         if not isinstance(callback, CustomGuardrail):
             return
-        if not routes_through_apply_guardrail(callback):
+        if not scans_mcp_tool_results(callback):
             return
         if callback.should_run_guardrail(data=request_data, event_type=GuardrailEventHooks.post_mcp_call) is not True:
             return

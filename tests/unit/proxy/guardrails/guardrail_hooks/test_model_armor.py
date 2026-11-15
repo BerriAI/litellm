@@ -5359,3 +5359,198 @@ async def test_apply_guardrail_raises_on_flagged_when_not_logging_only():
     entries = request_data["metadata"]["standard_logging_guardrail_information"]
     flagged = [e for e in entries if e["guardrail_status"] == "guardrail_flagged"]
     assert len(flagged) == 1
+
+
+def _deidentified_armor_response(sanitized: str) -> dict[str, object]:
+    return {
+        "sanitizationResult": {
+            "filterMatchState": "MATCH_FOUND",
+            "filterResults": {
+                "sdp": {
+                    "sdpFilterResult": {"deidentifyResult": {"matchState": "MATCH_FOUND", "data": {"text": sanitized}}}
+                }
+            },
+        }
+    }
+
+
+def _post_mcp_call_guardrail(
+    responses: Sequence[dict[str, object] | Exception],
+    *,
+    mask_response_content: bool = True,
+    fail_on_error: bool = True,
+    event_hook: GuardrailEventHooks = GuardrailEventHooks.post_mcp_call,
+) -> ModelArmorGuardrail:
+    return ModelArmorGuardrail(
+        template_id="test-template",
+        project_id="test-project",
+        location="us-central1",
+        guardrail_name="model-armor-mcp",
+        event_hook=event_hook,
+        mask_response_content=mask_response_content,
+        fail_on_error=fail_on_error,
+        async_handler=_FakeArmorHandler(responses),
+        access_token_provider=_async_token_provider,
+    )
+
+
+def _scanned_texts(guardrail: ModelArmorGuardrail) -> list[object]:
+    return [
+        cast(dict[str, object], call["modelResponseData"])["text"]
+        for call in cast(_FakeArmorHandler, guardrail.async_handler).calls
+    ]
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_masks_a_deidentified_response_text():
+    guardrail = _post_mcp_call_guardrail(
+        [_deidentified_armor_response("ssn [REDACTED]"), _deidentified_armor_response("ssn [REDACTED]")]
+    )
+
+    result = await guardrail.apply_guardrail(
+        inputs={"texts": ["ssn 078-05-1120"]}, request_data={"metadata": {}}, input_type="response"
+    )
+
+    assert result == {"texts": ["ssn [REDACTED]"]}
+    assert _scanned_texts(guardrail) == ["ssn 078-05-1120", "ssn 078-05-1120"]
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_masks_each_response_text_on_its_own_and_keeps_count_and_order():
+    guardrail = _post_mcp_call_guardrail(
+        [
+            _deidentified_armor_response("ssn [REDACTED]\nplain\nphone [REDACTED]"),
+            _deidentified_armor_response("ssn [REDACTED]"),
+            _clean_armor_response(),
+            _deidentified_armor_response("phone [REDACTED]"),
+        ]
+    )
+
+    result = await guardrail.apply_guardrail(
+        inputs={"texts": ["ssn 078-05-1120", "", "plain", "phone 555-0100"]},
+        request_data={"metadata": {}},
+        input_type="response",
+    )
+
+    assert result == {"texts": ["ssn [REDACTED]", "", "plain", "phone [REDACTED]"]}
+    assert _scanned_texts(guardrail) == [
+        "ssn 078-05-1120\nplain\nphone 555-0100",
+        "ssn 078-05-1120",
+        "plain",
+        "phone 555-0100",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_returns_the_inputs_after_one_scan_when_nothing_needs_masking():
+    guardrail = _post_mcp_call_guardrail([_clean_armor_response()])
+    inputs = {"texts": ["plain one", "plain two"]}
+
+    result = await guardrail.apply_guardrail(inputs=inputs, request_data={"metadata": {}}, input_type="response")
+
+    assert result is inputs
+    assert _scanned_texts(guardrail) == ["plain one\nplain two"]
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_blocks_a_deidentified_response_when_masking_is_off():
+    guardrail = _post_mcp_call_guardrail([_deidentified_armor_response("ssn [REDACTED]")], mask_response_content=False)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["ssn 078-05-1120"]}, request_data={"metadata": {}}, input_type="response"
+        )
+
+    assert exc_info.value.status_code == 400
+    assert _scanned_texts(guardrail) == ["ssn 078-05-1120"]
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_blocks_when_a_single_response_text_is_flagged_during_masking():
+    guardrail = _post_mcp_call_guardrail([_deidentified_armor_response("ssn [REDACTED]"), _flagged_armor_response()])
+
+    with pytest.raises(HTTPException) as exc_info:
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["ssn 078-05-1120"]}, request_data={"metadata": {}}, input_type="response"
+        )
+
+    assert exc_info.value.status_code == 400
+    assert _scanned_texts(guardrail) == ["ssn 078-05-1120", "ssn 078-05-1120"]
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_in_logging_only_mode_leaves_a_flagged_maskable_response_untouched():
+    flagged_and_deidentified = {
+        "sanitizationResult": {
+            "filterMatchState": "MATCH_FOUND",
+            "filterResults": {
+                **_flagged_armor_response()["sanitizationResult"]["filterResults"],
+                **_deidentified_armor_response("ssn [REDACTED]")["sanitizationResult"]["filterResults"],
+            },
+        }
+    }
+    guardrail = _post_mcp_call_guardrail([flagged_and_deidentified], event_hook=GuardrailEventHooks.logging_only)
+    inputs = {"texts": ["ssn 078-05-1120"]}
+
+    result = await guardrail.apply_guardrail(inputs=inputs, request_data={"metadata": {}}, input_type="response")
+
+    assert result is inputs
+    assert _scanned_texts(guardrail) == ["ssn 078-05-1120"]
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_does_not_mask_request_text():
+    handler = _FakeArmorHandler([_deidentified_armor_response("ssn [REDACTED]")])
+    guardrail = ModelArmorGuardrail(
+        template_id="test-template",
+        project_id="test-project",
+        location="us-central1",
+        guardrail_name="model-armor-mcp",
+        event_hook=GuardrailEventHooks.pre_mcp_call,
+        mask_request_content=True,
+        mask_response_content=True,
+        async_handler=handler,
+        access_token_provider=_async_token_provider,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["ssn 078-05-1120"]}, request_data={"metadata": {}}, input_type="request"
+        )
+
+    assert exc_info.value.status_code == 400
+    assert len(handler.calls) == 1
+
+
+@pytest.mark.parametrize("error", [ModelArmorAPIError("model armor is down"), httpx.ConnectError("boom")])
+@pytest.mark.asyncio
+async def test_apply_guardrail_raises_a_model_armor_failure_when_fail_on_error_is_true(error: Exception):
+    guardrail = _post_mcp_call_guardrail([error])
+    request_data: Final[dict] = {"metadata": {}}
+
+    with pytest.raises(type(error)):
+        await guardrail.apply_guardrail(inputs={"texts": ["tool output"]}, request_data=request_data, input_type="response")
+
+    entries: Final = request_data["metadata"]["standard_logging_guardrail_information"]
+    assert [entry["guardrail_status"] for entry in entries] == ["guardrail_failed_to_respond"]
+
+
+@pytest.mark.parametrize(
+    ("fail_on_error", "event_hook"),
+    [(False, GuardrailEventHooks.post_mcp_call), (True, GuardrailEventHooks.logging_only)],
+)
+@pytest.mark.asyncio
+async def test_apply_guardrail_returns_the_inputs_on_a_model_armor_failure_when_failing_open(
+    fail_on_error: bool, event_hook: GuardrailEventHooks
+):
+    guardrail = _post_mcp_call_guardrail(
+        [httpx.ConnectError("boom")], fail_on_error=fail_on_error, event_hook=event_hook
+    )
+    request_data: Final[dict] = {"metadata": {}}
+    inputs = {"texts": ["tool output"]}
+
+    result = await guardrail.apply_guardrail(inputs=inputs, request_data=request_data, input_type="response")
+
+    assert result is inputs
+    entries: Final = request_data["metadata"]["standard_logging_guardrail_information"]
+    assert [entry["guardrail_status"] for entry in entries] == ["guardrail_failed_to_respond"]

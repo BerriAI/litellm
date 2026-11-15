@@ -195,6 +195,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
             GuardrailEventHooks.post_call,
             GuardrailEventHooks.pre_mcp_call,
             GuardrailEventHooks.during_mcp_call,
+            GuardrailEventHooks.post_mcp_call,
             GuardrailEventHooks.logging_only,
         ]
 
@@ -282,7 +283,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
             return f"Model Armor API error (upstream {status_code})"
         return f"Model Armor API error (upstream {status_code}): {response_text}"
 
-    def _build_block_error_detail(self, message: str, armor_response: Mapping[str, object]) -> dict:
+    def _build_block_error_detail(self, message: str, armor_response: Mapping[str, object]) -> dict[str, object]:
         if self.sanitize_error_detail:
             return {"error": message}
         return {"error": message, "model_armor_response": armor_response}
@@ -1332,9 +1333,14 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
                 end_time=error_end_time,
                 duration=error_end_time - start_time,
             )
+            if self.optional_params.get("fail_on_error", True) and not self._event_hook_is_event_type(
+                GuardrailEventHooks.logging_only
+            ):
+                raise
             return inputs
 
-        flagged: Final = self._should_block_content(armor_response, allow_sanitization=False)
+        mask: Final = input_type == "response" and self.mask_response_content
+        flagged: Final = self._should_block_content(armor_response, allow_sanitization=mask)
         end_time: Final = time.time()
         self.add_standard_logging_guardrail_information_to_request_data(
             guardrail_json_response=self._build_logging_response(armor_response),
@@ -1353,7 +1359,21 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
                     armor_response,
                 ),
             )
-        return inputs
+        if flagged or not mask or (self._get_sanitized_content(armor_response) or content) == content:
+            return inputs
+
+        async def sanitized(text: str) -> str:
+            text_response: Final = await self.make_model_armor_request(
+                content=text, source="model_response", request_data=request_data
+            )
+            if self._should_block_content(text_response, allow_sanitization=True):
+                raise HTTPException(
+                    status_code=400,
+                    detail=self._build_block_error_detail("Response blocked by Model Armor", text_response),
+                )
+            return self._get_sanitized_content(text_response) or text
+
+        return {**inputs, "texts": [await sanitized(text) if text else text for text in inputs.get("texts") or ()]}
 
     @staticmethod
     def get_config_model() -> type["GuardrailConfigModel"] | None:
