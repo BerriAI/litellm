@@ -229,8 +229,12 @@ def _parse_duration(duration: str) -> tuple[int | None, str | None]:
     if not match:
         return None, None
 
-    value, unit = match.groups()
-    return int(value), unit
+    value: Final = int(match.group(1))
+    spelled_unit: Final = match.group(2)
+    unit: Final = _extract_from_regex(duration)[1] or spelled_unit
+    if unit == "mo" and spelled_unit != "mo" and value not in (1, 12):
+        return value, spelled_unit
+    return value, unit
 
 
 def _apply_time_of_day(dt: datetime, reset_time_of_day: time) -> datetime:

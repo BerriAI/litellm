@@ -4,11 +4,13 @@
 
 import json
 import logging
+import warnings
 from typing import Dict, Final, List, Mapping, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException, WebSocket, status
+from pydantic import PydanticDeprecatedSince20
 from starlette.datastructures import URL
 from starlette.requests import Request as StarletteRequest
 from starlette.types import Message
@@ -42,7 +44,7 @@ from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
     (
         ("scope", "403"),
         ("mismatch", "403"),
-        ("unknown", "401"),
+        ("unknown", "403"),
         ("model", "403"),
         ("model_budget", "403"),
         ("budget", "422"),
@@ -377,7 +379,7 @@ async def test_check_blocked_team():
         last_refreshed_at=time.time(),
     )
     await asyncio.sleep(1)
-    team_obj = LiteLLM_TeamTableCachedObj(team_id=_team_id, blocked=False, last_refreshed_at=time.time())
+    team_obj = LiteLLM_TeamTableCachedObj(team_id=_team_id, blocked=False, tpm_limit=123, last_refreshed_at=time.time())
     hashed_token = hash_token(user_key)
     print(f"STORING TOKEN UNDER KEY={hashed_token}")
     user_api_key_cache.set_cache(key=hashed_token, value=valid_token)
@@ -390,7 +392,12 @@ async def test_check_blocked_team():
     request = Request(scope={"type": "http", "method": "POST", "path": "/chat/completions", "headers": []})
     request._url = URL(url="/chat/completions")
 
-    await user_api_key_auth(request=request, api_key="Bearer " + user_key)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", PydanticDeprecatedSince20)
+        result = await user_api_key_auth(request=request, api_key="Bearer " + user_key)
+
+    assert result.team_blocked is False
+    assert result.team_tpm_limit == 123
 
 
 @pytest.mark.asyncio
@@ -539,6 +546,46 @@ async def test_aaauser_personal_budgets(key_ownership):
         assert exc_info.value.type == ProxyErrorTypes.budget_exceeded
     else:
         await user_api_key_auth(request=request, api_key="Bearer " + user_key)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("spend,expect_refusal", [(5.0, True), (0.5, False)], ids=["over_budget", "under_budget"])
+async def test_virtual_key_max_budget_decides_a_queued_chat_call(monkeypatch, spend, expect_refusal):
+    import time
+
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    from litellm.proxy._types import ProxyErrorTypes, ProxyException, UserAPIKeyAuth
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.proxy.proxy_server import hash_token, user_api_key_cache
+
+    route: Final = "/queue/chat/completions"
+    key: Final = "sk-queued-chat-budget"
+    user_api_key_cache.set_cache(
+        key=hash_token(key),
+        value=UserAPIKeyAuth(
+            token=hash_token(key),
+            last_refreshed_at=time.time(),
+            allowed_routes=[route],
+            max_budget=1.0,
+            spend=spend,
+        ),
+    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "prisma_client", _NoMembershipRowPrisma())
+
+    request: Final = Request(scope={"type": "http", "method": "POST", "path": route, "headers": []})
+    request._url = URL(url=route)
+
+    if not expect_refusal:
+        served: Final = await user_api_key_auth(request=request, api_key="Bearer " + key)
+        assert served.token == hash_token(key)
+        return
+    with pytest.raises(ProxyException) as exc_info:
+        await user_api_key_auth(request=request, api_key="Bearer " + key)
+    assert exc_info.value.type == ProxyErrorTypes.budget_exceeded
 
 
 @pytest.mark.asyncio

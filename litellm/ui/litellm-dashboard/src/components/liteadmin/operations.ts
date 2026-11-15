@@ -25,7 +25,7 @@ export type ActionResult = { status: "completed"; key?: string } | { status: "un
 
 export type AriaAccess =
   | { mode: "admin" }
-  | { mode: "usage"; scope: { type: "global" } | { type: "user"; userId: string } };
+  | { mode: "usage"; scope: { type: "global" } | { type: "user" | "user_and_teams"; userId: string } };
 
 export interface OperationContext {
   access: AriaAccess;
@@ -225,10 +225,24 @@ export function createLiteAdminOperations(context: OperationContext) {
       return zodFunction(definition);
     };
 
-  if (context.access.mode === "usage" && context.access.scope.type === "user") {
+  if (context.access.mode === "usage" && context.access.scope.type !== "global") {
     const userId = context.access.scope.userId;
     return [
       renderChart,
+      ...(context.access.scope.type === "user_and_teams"
+        ? [
+            operation("read", "usage")(
+              "get_team_usage_data",
+              "View dated usage for your teams. Select comma-separated team_ids to query specific teams, or omit for all your teams. Query teams you administer separately to see their full permitted totals. The gateway enforces team membership and usage permissions.",
+              dated({ team_ids: optionalText }),
+              (a) =>
+                apiClient.get<unknown>("/team/daily/activity/aggregated", {
+                  ...auth,
+                  query: { ...a, api_key_limit: 20 },
+                }),
+            ),
+          ]
+        : []),
       operation("read", "usage")(
         "get_usage_data",
         "View your dated usage totals, daily trends, and top models, providers and keys with prompt, completion, cache-read and cache-creation token counts when available. Do not add cache counts to total_tokens",
