@@ -3536,8 +3536,7 @@ class Router:
         return event.model_copy(update={"response": unpriced})
 
     @staticmethod
-    def _carry_partial_spend_to_fallback(fallback_response: object, cut_partial: tuple[Usage, float] | None) -> None:
-        fallback_logging: Final = getattr(fallback_response, "logging_obj", None)
+    def _carry_partial_spend_to_fallback(fallback_logging: object, cut_partial: tuple[Usage, float] | None) -> None:
         if cut_partial is None or not isinstance(fallback_logging, LiteLLMLogging):
             return
         fallback_logging.record_continued_partial(usage=cut_partial[0], response_cost=cut_partial[1])
@@ -3934,7 +3933,8 @@ class Router:
             )
             prepared_fallback_hidden_params: Final = adopt_headers(fallback_response)
             if hasattr(fallback_response, "__aiter__"):
-                Router._carry_partial_spend_to_fallback(fallback_response, cut_partial)
+                fallback_logging: Final[object] = getattr(fallback_response, "logging_obj", None)
+                Router._carry_partial_spend_to_fallback(fallback_logging, cut_partial)
                 async for fallback_item in fallback_response:
                     Router._apply_fallback_hidden_params_to_item(fallback_item, prepared_fallback_hidden_params)
                     if partial_usage is not None:
@@ -3946,6 +3946,8 @@ class Router:
                 yield fallback_response
         except Exception as fallback_error:
             verbose_router_logger.error("Responses streaming fallback also failed: %s", fallback_error)
+            if fallback_response is None:
+                Router._carry_partial_spend_to_fallback(initial_kwargs.get("litellm_logging_obj"), cut_partial)
             if not fallback_yielded:
                 for held_event in held_lifecycle_events:
                     yield held_event

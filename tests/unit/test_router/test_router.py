@@ -27662,12 +27662,14 @@ def _backup_responses_cost() -> float:
     return prompt_cost + completion_cost
 
 
-def _relayed_cut_tokens(failed_usage: Mapping[str, int] | None) -> tuple[int, int]:
+def _relayed_cut_tokens(
+    failed_usage: Mapping[str, int] | None, relayed_text: str = "Once upon a time there"
+) -> tuple[int, int]:
     if failed_usage is not None:
         return failed_usage["input_tokens"], failed_usage["output_tokens"]
     return (
         litellm.token_counter(model="gpt-4o", messages=[{"role": "user", "content": "Tell me a story"}]),
-        litellm.token_counter(model="gpt-4o", text="Once upon a time there", count_response_tokens=True),
+        litellm.token_counter(model="gpt-4o", text=relayed_text, count_response_tokens=True),
     )
 
 
@@ -27716,7 +27718,11 @@ async def test_responses_fallback_sharing_the_proxy_logging_object_bills_the_cut
     )
 
 
-def _cut_primary_router(respx_mock: respx.MockRouter, primary: Literal["bridged", "native"]) -> Router:
+def _cut_primary_router(
+    respx_mock: respx.MockRouter,
+    primary: Literal["bridged", "native"],
+    failed_usage: Mapping[str, int] | None = _PROVIDER_REPORTED_CUT_USAGE,
+) -> Router:
     if primary == "bridged":
         respx_mock.post(host="api.mistral.ai").mock(
             return_value=httpx.Response(200, headers={"content-type": "text/event-stream"}, stream=_CutSSE("Once upon"))
@@ -27726,7 +27732,7 @@ def _cut_primary_router(respx_mock: respx.MockRouter, primary: Literal["bridged"
             return_value=httpx.Response(
                 200,
                 headers={"content-type": "text/event-stream"},
-                text=_cut_responses_sse("resp_primary", ("Once ", "upon"), _PROVIDER_REPORTED_CUT_USAGE),
+                text=_cut_responses_sse("resp_primary", ("Once ", "upon"), failed_usage),
             )
         )
     primary_params: Final = (
@@ -27959,7 +27965,7 @@ async def test_a_hook_failing_while_the_fallback_streams_bills_the_cut_partial_o
 
 
 @pytest.mark.asyncio
-async def test_a_fallback_that_also_fails_mid_stream_bills_the_provider_reported_cut_partial_once(
+async def test_a_fallback_that_also_fails_mid_stream_bills_each_cut_partial_once(
     monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
@@ -27984,6 +27990,46 @@ async def test_a_fallback_that_also_fails_mid_stream_bills_the_provider_reported
 
     cut_prompt: Final = _PROVIDER_REPORTED_CUT_USAGE["input_tokens"]
     cut_completion: Final = _PROVIDER_REPORTED_CUT_USAGE["output_tokens"]
+    final_prompt, final_completion, final_spend = _final_failure_row(shared_logging)
+    backup_prompt: Final = final_prompt - cut_prompt
+    backup_completion: Final = litellm.token_counter(model="gpt-4o", text=" lived", count_response_tokens=True)
+    backup_input_cost, backup_output_cost = litellm.cost_per_token(
+        model="gpt-4o", prompt_tokens=backup_prompt, completion_tokens=backup_completion
+    )
+    assert backup_prompt > 0
+    assert final_completion == cut_completion + backup_completion
+    assert final_spend == pytest.approx(
+        cut_prompt * 0.001 + cut_completion * 0.002 + backup_input_cost + backup_output_cost
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "failed_usage",
+    [None, _PROVIDER_REPORTED_CUT_USAGE],
+    ids=["estimated_partial", "provider_reported_partial"],
+)
+async def test_a_fallback_that_fails_before_it_streams_bills_the_cut_partial_once(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, failed_usage: Mapping[str, int] | None
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    respx_mock.post("https://backup.example/v1/responses").mock(
+        return_value=httpx.Response(500, json={"error": {"message": "backup is down", "type": "server_error"}})
+    )
+    shared_logging: Final = _shared_responses_logging()
+    response: Final = await _cut_primary_router(respx_mock, "native", failed_usage).aresponses(
+        model="primary",
+        input="Tell me a story",
+        stream=True,
+        litellm_call_id="shared-call",
+        litellm_logging_obj=shared_logging,
+    )
+
+    with pytest.raises(litellm.InternalServerError):
+        _ = [event async for event in response]
+
+    cut_prompt, cut_completion = _relayed_cut_tokens(failed_usage, "Once upon")
+    assert cut_completion > 0
     assert _final_failure_row(shared_logging) == pytest.approx(
         (cut_prompt, cut_completion, cut_prompt * 0.001 + cut_completion * 0.002)
     )
