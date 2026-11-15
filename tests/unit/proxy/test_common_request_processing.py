@@ -2,9 +2,11 @@ import asyncio
 import contextvars
 import copy
 import datetime
+import gc
 import gzip
 import json
 import time
+import weakref
 from base64 import urlsafe_b64encode
 from collections.abc import AsyncIterable, Awaitable, Coroutine, Mapping
 from types import MappingProxyType, SimpleNamespace
@@ -13698,6 +13700,25 @@ class TestDetachedStreamFailureHook:
 
         assert frames == ["data: chunk\n\n"]
         assert [call["original_exception"] for call in recorder.calls] == [upstream_failure]
+
+    @pytest.mark.asyncio
+    async def test_finished_stream_frees_the_logging_object_without_a_gc_pass(self) -> None:
+        recorder: Final = _FailureHookRecorder()
+
+        async def iterator_hook(**_kwargs: object) -> AsyncGenerator[bytes, None]:
+            yield b"event: message_start\n\n"
+
+        logging_obj, stream = self._armed_stream(recorder, lambda _logging_obj: iterator_hook)
+        logging_ref: Final = weakref.ref(logging_obj)
+        frames: Final = [frame async for frame in stream]
+
+        gc.disable()
+        try:
+            del logging_obj, stream
+            assert frames == ["data: chunk\n\n"]
+            assert logging_ref() is None
+        finally:
+            gc.enable()
 
     @pytest.mark.asyncio
     async def test_failure_reported_by_an_iterator_hook_is_not_reported_again_when_the_stream_closes(self):

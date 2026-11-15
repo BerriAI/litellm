@@ -1,3 +1,4 @@
+import json
 import uuid
 from collections.abc import Iterator
 from pathlib import Path
@@ -5,7 +6,7 @@ from typing import Final
 
 import pytest
 import yaml
-from integration._support.anthropic_sse import message_json
+from integration._support.anthropic_sse import message_json, message_stream, stream_reply
 from integration._support.client import (
     JSON_OBJECT,
     Gateway,
@@ -90,33 +91,44 @@ def no_cleanup_pass(uncached_gateway: Gateway) -> Iterator[None]:
 
 def _answer(request: Request) -> Reply:
     assert request.method == "POST" and request.target == "/v1/messages"
-    return Reply(body=message_json("msg_freed", _MODEL, "Hi!"))
+    streamed: Final = JSON_OBJECT.validate_python(json.loads(request.body)).get("stream") is True
+    return (
+        stream_reply(message_stream("msg_freed", _MODEL, "Hi!"))
+        if streamed
+        else Reply(body=message_json("msg_freed", _MODEL, "Hi!"))
+    )
 
 
-def _call(gateway: Gateway, path: str, model: str) -> None:
+def _call(gateway: Gateway, path: str, stream: bool) -> None:
     messages: Final[list[JsonValue]] = [{"role": "user", "content": f"Say hi {uuid.uuid4().hex}"}]
     body: Final[dict[str, JsonValue]] = (
-        {"model": model, "max_tokens": 16, "messages": messages}
+        {"model": _CONFIG_MODEL, "max_tokens": 16, "messages": messages, "stream": stream}
         if path == "/v1/messages"
-        else {"model": model, "messages": messages}
+        else {"model": _CONFIG_MODEL, "messages": messages, "stream": stream}
     )
     response: Final = gateway.request("POST", path, body)
     assert response.status_code == 200, response.text
+    assert "Hi!" in response.text, response.text
 
 
-@pytest.mark.parametrize("path", ("/v1/messages", "/v1/chat/completions"))
+@pytest.mark.parametrize(
+    ("path", "stream"),
+    (("/v1/messages", False), ("/v1/messages", True), ("/v1/chat/completions", False)),
+    ids=("messages", "streamed-messages", "chat-completions"),
+)
 def test_finished_calls_are_freed_without_a_cleanup_pass(
-    uncached_gateway: Gateway, no_cleanup_pass: None, path: str
+    uncached_gateway: Gateway, no_cleanup_pass: None, path: str, stream: bool
 ) -> None:
     gateway: Final = uncached_gateway
-    _call(gateway, path, _CONFIG_MODEL)
+    _call(gateway, path, stream)
     before: Final = _log_records(gateway)
     for _ in range(_CALLS):
-        _call(gateway, path, _CONFIG_MODEL)
+        _call(gateway, path, stream)
     after: Final = eventually(
         lambda: _log_records(gateway), lambda count: count <= before + _SLACK, seconds=15, return_last_on_timeout=True
     )
     assert after <= before + _SLACK, (
-        f"{after - before} of {_CALLS} finished {path} calls still hold their log record with Python's cycle "
-        "collector held off, so each one waits for a full cleanup pass before its memory comes back"
+        f"{after - before} of {_CALLS} finished {'streamed ' if stream else ''}{path} calls still hold their log "
+        "record with Python's cycle collector held off, so each one waits for a full cleanup pass "
+        "before its memory comes back"
     )
