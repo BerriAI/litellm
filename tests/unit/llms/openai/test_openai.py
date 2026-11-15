@@ -2815,3 +2815,119 @@ async def test_sync_batch_list_given_an_async_client_returns_a_page_the_caller_c
         )
 
         assert [(batch.id, batch.status) for batch in (await page).data] == [("batch_5f8dac", "pending")]
+
+
+_STREAM_CHUNK_BASE: Final = {
+    "id": "chatcmpl-decode",
+    "object": "chat.completion.chunk",
+    "created": 1700000000,
+    "model": "gpt-5.5",
+}
+_STREAM_CHUNK_PAYLOADS: Final = (
+    {
+        **_STREAM_CHUNK_BASE,
+        "system_fingerprint": "fp_1",
+        "choices": [
+            {"index": 0, "delta": {"role": "assistant", "content": "hi"}, "logprobs": None, "finish_reason": None}
+        ],
+    },
+    {
+        **_STREAM_CHUNK_BASE,
+        "choices": [
+            {
+                "index": 0,
+                "delta": {
+                    "tool_calls": [
+                        {"index": 0, "id": "call_1", "type": "function", "function": {"name": "f", "arguments": ""}},
+                        {"index": 1, "type": None, "function": {"arguments": None}},
+                    ]
+                },
+                "finish_reason": None,
+            }
+        ],
+    },
+    {
+        **_STREAM_CHUNK_BASE,
+        "choices": [],
+        "usage": {
+            "prompt_tokens": 9,
+            "completion_tokens": 2,
+            "total_tokens": 11,
+            "prompt_tokens_details": {"cached_tokens": 3},
+            "cost": 0.5,
+        },
+    },
+    {
+        **_STREAM_CHUNK_BASE,
+        "choices": [
+            {
+                "index": 0,
+                "delta": {"content": "a"},
+                "logprobs": {"content": [{"token": "a", "logprob": 0, "bytes": [97], "top_logprobs": []}]},
+                "finish_reason": "stop",
+            }
+        ],
+    },
+    {
+        **_STREAM_CHUNK_BASE,
+        "provider": "upstream",
+        "citations": ["https://e.example"],
+        "choices": [
+            {
+                "index": 0,
+                "delta": {"content": "", "reasoning_content": "think", "provider_specific_fields": {"k": 1}},
+                "finish_reason": None,
+                "stop_reason": 128009,
+            }
+        ],
+    },
+    {
+        **_STREAM_CHUNK_BASE,
+        "created": "1700000000",
+        "choices": [{"index": 0, "delta": {"content": "numeric string"}, "finish_reason": None}],
+    },
+    {
+        **_STREAM_CHUNK_BASE,
+        "object": "chat.completion",
+        "choices": [{"index": 0, "delta": {"content": "loose"}, "finish_reason": "eos"}],
+    },
+    {**_STREAM_CHUNK_BASE, "created": 1700000000.5, "choices": [{"index": "0", "delta": None}]},
+)
+
+
+def _model_state(value: object) -> object:
+    if isinstance(value, BaseModel):
+        return (
+            type(value),
+            {key: _model_state(item) for key, item in value.__dict__.items()},
+            {key: _model_state(item) for key, item in (value.__pydantic_extra__ or {}).items()},
+            frozenset(value.model_fields_set & type(value).model_fields.keys()),
+        )
+    if isinstance(value, list):
+        return [_model_state(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _model_state(item) for key, item in value.items()}
+    return (type(value), value)
+
+
+@pytest.mark.asyncio
+async def test_streamed_chat_chunks_decode_exactly_like_the_sdk_for_strict_and_loose_payloads():
+    from openai._models import construct_type
+    from openai.types.chat import ChatCompletionChunk
+
+    body: Final = b"".join(f"data: {json.dumps(p)}\n\n".encode() for p in _STREAM_CHUNK_PAYLOADS) + b"data: [DONE]\n\n"
+    transport: Final = httpx.MockTransport(
+        lambda _request: httpx.Response(200, content=body, headers={"content-type": "text/event-stream"})
+    )
+    async with httpx.AsyncClient(transport=transport) as http_client:
+        _, stream = await OpenAIChatCompletion().make_openai_chat_completion_request(
+            openai_aclient=AsyncOpenAI(api_key="transport-only", http_client=http_client),
+            data={"model": "gpt-5.5", "messages": [{"role": "user", "content": "q"}], "stream": True},
+            timeout=10,
+            logging_obj=MagicMock(),
+        )
+        decoded: Final = [chunk async for chunk in stream]
+
+    assert [_model_state(chunk) for chunk in decoded] == [
+        _model_state(construct_type(type_=ChatCompletionChunk, value=payload)) for payload in _STREAM_CHUNK_PAYLOADS
+    ]
