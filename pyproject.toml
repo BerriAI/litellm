@@ -445,6 +445,7 @@ members = ["litellm/enterprise", "litellm/proxy-extras", "litellm/packaging/lite
 version = "1.111.0"
 version_files = [
     "pyproject.toml:^version",
+    "litellm/packaging/litellm-proxy/pyproject.toml:^version",
 ]
 
 [tool.pytest.ini_options]
