@@ -1,3 +1,4 @@
+import json
 from collections.abc import Iterator
 from typing import Final
 
@@ -505,6 +506,72 @@ def test_a_failure_only_entry_rejects_excluded_services() -> None:
 _REFERENCE: Final = {"callback_name": "arize", "callback_type": "success", "litellm_credential_name": "space-a"}
 _INLINE: Final = {"callback_name": "langfuse", "callback_vars": {"langfuse_public_key": "pk"}}
 _SIBLING: Final = {"callback_name": "arize", "callback_vars": {"arize_endpoint": "http://attacker.example/v1/traces"}}
+
+
+@pytest.mark.parametrize("value", ["not json", '{"a":1}', "[null]", {"bad": 1}, 3])
+def test_logging_metadata_validation_rejects_invalid_shapes(value: object) -> None:
+    error: Final = logging_metadata_config_error({"logging": value})
+    assert error is not None and "metadata.logging must be a list of objects" in error
+
+
+@pytest.mark.parametrize("serialized", [False, True])
+def test_json_string_logging_cannot_bypass_callback_configuration_validation(serialized: bool) -> None:
+    entries: Final = [{"callback_name": "langfuse", "callback_vars": {"langfuse_environment": "Production"}}]
+    error: Final = logging_metadata_config_error({"logging": json.dumps(entries) if serialized else entries})
+    assert error is not None and "langfuse_environment" in error
+
+
+@pytest.mark.parametrize("is_proxy_admin, expected_status", [(False, 403), (True, 400)])
+def test_json_string_logging_cannot_bypass_credential_authorization(is_proxy_admin: bool, expected_status: int) -> None:
+    rejection: Final = credential_reference_rejection(
+        {"logging": json.dumps([_REFERENCE])}, None, is_proxy_admin=is_proxy_admin, is_defined=lambda _: False
+    )
+    assert rejection is not None and rejection.status_code == expected_status
+
+
+@pytest.mark.parametrize("stored_as_string", [False, True])
+def test_credential_reference_round_trip_requires_reapproval_for_legacy_strings(stored_as_string: bool) -> None:
+    rejection: Final = credential_reference_rejection(
+        {"logging": [_REFERENCE] if stored_as_string else json.dumps([_REFERENCE])},
+        json.dumps([_REFERENCE]) if stored_as_string else [_REFERENCE],
+        is_proxy_admin=False,
+        is_defined=lambda _: False,
+    )
+    assert (rejection.status_code if rejection is not None else None) == (403 if stored_as_string else None)
+
+
+def test_non_admin_can_resave_a_legacy_string_without_credential_references() -> None:
+    entries: Final = [{"callback_name": "langfuse", "callback_vars": {}}]
+    assert (
+        credential_reference_rejection(
+            {"logging": entries}, json.dumps(entries), is_proxy_admin=False, is_defined=lambda _: False
+        )
+        is None
+    )
+
+
+@pytest.mark.parametrize("defined, expected_status", [(False, 400), (True, None)])
+def test_admin_reapproving_a_legacy_reference_must_use_a_defined_credential(
+    defined: bool, expected_status: int | None
+) -> None:
+    rejection: Final = credential_reference_rejection(
+        {"logging": [_REFERENCE]}, json.dumps([_REFERENCE]), is_proxy_admin=True, is_defined=lambda _: defined
+    )
+    assert (rejection.status_code if rejection is not None else None) == expected_status
+
+
+@pytest.mark.parametrize("stored_logging", ["not json", {"bad": 1}, [None]])
+@pytest.mark.parametrize(
+    "is_proxy_admin, references, expected_status",
+    [(False, [], None), (False, [_REFERENCE], 403), (True, [_REFERENCE], 400)],
+)
+def test_invalid_stored_logging_does_not_break_credential_authorization(
+    stored_logging: object, is_proxy_admin: bool, references: list[dict[str, object]], expected_status: int | None
+) -> None:
+    rejection: Final = credential_reference_rejection(
+        {"logging": references}, stored_logging, is_proxy_admin=is_proxy_admin, is_defined=lambda _: False
+    )
+    assert (rejection.status_code if rejection is not None else None) == expected_status
 
 
 @pytest.mark.parametrize(

@@ -132,6 +132,11 @@ from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
     evict_shared,
     publish_auth_cache_invalidation,
 )
+from litellm.proxy.common_utils.callback_config_validation import (
+    InvalidLoggingMetadata,
+    normalize_logging_entries,
+    string_keyed,
+)
 from litellm.proxy.common_utils.callback_utils import encrypt_callback_vars
 from litellm.proxy.common_utils.json_merge_patch import apply_json_merge_patch
 from litellm.proxy.common_utils.openai_error_payload import proxy_exception_for
@@ -297,6 +302,12 @@ class _TeamIdKeyCount(TypedDict):
 class _TeamIdGroupRow(TypedDict):
     team_id: str
     _count: _TeamIdKeyCount
+
+
+def raise_on_invalid_team_logging_shape(metadata: object) -> None:
+    entries: Final = normalize_logging_entries(string_keyed(metadata).get("logging"))
+    if isinstance(entries, InvalidLoggingMetadata):
+        raise HTTPException(status_code=400, detail={"error": entries.message})
 
 
 def _as_object(value: object) -> object:
@@ -1929,6 +1940,7 @@ async def new_team(
         if isinstance(data.metadata, dict):
             TeamMemberBudgetHandler.strip_system_managed_metadata_keys(data.metadata)
 
+        raise_on_invalid_team_logging_shape(data.metadata)
         await validate_team_metadata_if_configured(
             operation="create",
             metadata=data.metadata,
@@ -2772,6 +2784,7 @@ async def update_team(
             TeamMemberBudgetHandler.strip_system_managed_metadata_keys(metadata_update)
 
         if "metadata" in updated_kv:
+            raise_on_invalid_team_logging_shape(updated_kv.get("metadata"))
             stored_metadata: Final[Mapping[str, JsonValue] | None] = (
                 {
                     key: value

@@ -53,6 +53,7 @@ from litellm.proxy.management_endpoints.team_admin_field_permissions import (
     SUPPORTED_TEAM_ADMIN_PERMISSIONS,
 )
 from litellm.proxy.management_endpoints.team_endpoints import (
+    raise_on_invalid_team_logging_shape,
     _LOCK_DELETED_TEAM_MEMBERS_SQL,
     _STRIP_DELETED_TEAMS_FROM_USERS_SQL,
     DeletedTeams,
@@ -19686,3 +19687,16 @@ async def test_update_team_rejects_an_added_unregistered_guardrail(mock_db_clien
     assert "typo" in str(exc.value.message)
     assert "stale" not in str(exc.value.message)
     mock_db_client.db.litellm_teamtable.update.assert_not_awaited()
+
+
+@pytest.mark.parametrize("value", ["not json", '{"a":1}', "null", "[null]", [1], {"bad": 1}])
+def test_team_logging_shape_rejects_non_object_lists(value: object) -> None:
+    with pytest.raises(HTTPException) as error:
+        raise_on_invalid_team_logging_shape({"logging": value})
+    assert error.value.status_code == 400
+    assert "metadata.logging must be a list of objects" in str(error.value.detail)
+
+
+@pytest.mark.parametrize("value", [None, "", {}, [], "[]", [{"callback_name": "newrelic", "callback_vars": {}}]])
+def test_team_logging_shape_preserves_empty_and_previously_accepted_object_configs(value: object) -> None:
+    assert raise_on_invalid_team_logging_shape({"logging": value}) is None
