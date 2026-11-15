@@ -2982,6 +2982,24 @@ class TestLoggingOnlyApplyGuardrail:
         assert [e["guardrail_status"] for e in entries] == expected_statuses
 
     @pytest.mark.asyncio
+    async def test_a_request_rewrite_the_endpoint_cannot_apply_keeps_the_response_scan(self):
+        class _ExtraTextObserver(_ApplyOnlyObserver):
+            @log_guardrail_information
+            async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+                texts = list(inputs.get("texts") or [])
+                self.calls.append((input_type, texts))
+                return GenericGuardrailAPIInputs(texts=[*texts, "extra"] if input_type == "request" else texts)
+
+        guardrail: Final = _ExtraTextObserver()
+        kwargs, response = _logged_call([{"role": "user", "content": "hello there"}])
+
+        out_kwargs, _ = await guardrail.async_logging_hook(kwargs, response, CallTypes.acompletion.value)
+
+        assert guardrail.calls == [("request", ["hello there"]), ("response", ["general kenobi"])]
+        entries: Final = out_kwargs["standard_logging_object"]["guardrail_information"]
+        assert [entry["guardrail_status"] for entry in entries] == ["success", "success"]
+
+    @pytest.mark.asyncio
     async def test_call_type_without_translation_is_skipped(self):
         guardrail = _ApplyOnlyObserver()
         kwargs, response = _logged_call([{"role": "user", "content": "hello there"}])

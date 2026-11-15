@@ -430,6 +430,7 @@ def _input_item_provenance(
         LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
             input=cast("ResponseInputParam", [item]),  # cast-ok: items checked as Mappings above
             responses_api_request=_EMPTY_RESPONSES_REQUEST,
+            member_name=qualified_member_name,
         )
         for item in raw_input
     )
@@ -437,6 +438,7 @@ def _input_item_provenance(
         LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
             input=cast("ResponseInputParam", list(raw_input)),  # cast-ok: items checked as Mappings above
             responses_api_request=_EMPTY_RESPONSES_REQUEST,
+            member_name=qualified_member_name,
         )
     )
     if full_conversion != tuple(expected_messages):
@@ -449,6 +451,7 @@ def _input_item_provenance(
             LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
                 input=cast("ResponseInputParam", list(raw_input[start:end])),  # cast-ok: checked as Mappings above
                 responses_api_request=_EMPTY_RESPONSES_REQUEST,
+                member_name=qualified_member_name,
             )
         )
         for start, end in units
