@@ -83,7 +83,13 @@ export const customerDateSelection = (params: DateParams, now = new Date()) => {
   if (typeof params.range === "string") {
     return { dateValue: customerPresetRange(params.range, now), preset: params.range };
   }
-  if (params.range) return { dateValue: params.range, preset: params.period };
+  if (params.range) {
+    const preset =
+      params.period && customerRangeParser.eq(params.range, customerPresetRange(params.period, now))
+        ? params.period
+        : null;
+    return { dateValue: params.range, preset };
+  }
   const custom = params.from && params.to ? customerRangeParser.parse(`${params.from}..${params.to}`) : null;
   if (custom) return { dateValue: custom, preset: null };
   return { dateValue: customerPresetRange("month", now), preset: "month" };

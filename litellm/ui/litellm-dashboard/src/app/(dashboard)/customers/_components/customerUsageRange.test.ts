@@ -44,6 +44,14 @@ describe("customer usage calendar ranges", () => {
     expect(selection.preset).toBe(preset);
   });
 
+  it("keeps saved calendar dates when their preset label is stale", () => {
+    const now = new Date("2024-06-01T12:00:00Z");
+    const selection = customerDateSelection(loadDates("?range=2024-02-01..2024-02-29&period=previous"), now);
+    expect(selection.preset).toBeNull();
+    const expected = { range: null, period: null, from: "2024-02-01", to: "2024-02-29" };
+    expect(customerDatePatch(selection.dateValue, selection.preset)).toEqual(expected);
+  });
+
   it("replaces a previous preset with the exact calendar selection", () => {
     const value = { from: new Date(2024, 2, 9), to: new Date(2024, 2, 11) };
     const custom = { range: null, period: null, from: "2024-03-09", to: "2024-03-11" };
