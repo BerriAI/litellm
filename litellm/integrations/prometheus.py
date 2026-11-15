@@ -601,8 +601,9 @@ def _bounded_requested_model_label(requested_model: object, router_originated: b
     return UNRECOGNIZED_REQUESTED_MODEL_LABEL
 
 
-def _background_probe_deployment_id(payload: StandardLoggingPayload) -> str | None:
-    return None if payload.get("model_id") else payload.get("deployment_id")
+def _background_probe_deployment_id(payload: Mapping[str, object]) -> str | None:
+    probed: Final = payload.get("deployment_id")
+    return probed if isinstance(probed, str) and not payload.get("model_id") else None
 
 
 class PrometheusLogger(CustomLogger):
@@ -3532,7 +3533,9 @@ class PrometheusLogger(CustomLogger):
                     api_base=api_base,
                     api_provider=llm_provider or "",
                 )
-            probed_deployment_id: Final = _background_probe_deployment_id(standard_logging_payload)
+            probed_deployment_id: Final = _background_probe_deployment_id(
+                _LOGGED_FIELDS.validate_python(standard_logging_payload)
+            )
             deployment_values: Final = (
                 replace(
                     enum_values,
@@ -3724,7 +3727,9 @@ class PrometheusLogger(CustomLogger):
             llm_provider: Final = _litellm_params.get("custom_llm_provider", None)
             _model_info: Final = _metadata.get("model_info") or {}
             model_id: Final = _model_info.get("id", None)
-            probed_deployment_id: Final = _background_probe_deployment_id(standard_logging_payload)
+            probed_deployment_id: Final = _background_probe_deployment_id(
+                _LOGGED_FIELDS.validate_python(standard_logging_payload)
+            )
             deployment_values: Final = (
                 replace(enum_values, model_id=probed_deployment_id) if probed_deployment_id else enum_values
             )
