@@ -238,6 +238,7 @@ class ConfigSyncSubscriber:
         "_last_resync_at",
         "_min_resync_interval_seconds",
         "_monotonic",
+        "_pending_callbacks",
         "_redis_cache",
         "_resync_callbacks",
         "_resync_required",
@@ -274,6 +275,7 @@ class ConfigSyncSubscriber:
         self._task: asyncio.Task[None] | None = None
         self._last_resync_at: float | None = None
         self._resync_required = False
+        self._pending_callbacks: tuple[Callable[[], Awaitable[None]], ...] = resync_callbacks
 
     def start(self) -> None:
         if self._task is not None:
@@ -300,6 +302,7 @@ class ConfigSyncSubscriber:
                 try:
                     await pubsub.subscribe(config_sync_channel(self._redis_cache))
                     if self._resync_required:
+                        self._pending_callbacks = self._resync_callbacks
                         await self._debounce_and_resync(pubsub)
                     backoff_seconds = self._backoff_initial_seconds
                     await self._consume(pubsub)
@@ -325,17 +328,21 @@ class ConfigSyncSubscriber:
                     await self._debounce_and_resync(pubsub)
                 continue
             self._resync_required = True
+            self._pending_callbacks = self._resync_callbacks
             await self._apply(pubsub, message)
             await self._debounce_and_resync(pubsub)
 
     async def _debounce_and_resync(self, pubsub: ConfigSyncPubSub) -> None:
-        await self._apply_until(
+        saw_message: Final = await self._apply_until(
             pubsub, self._monotonic() + self._debounce_seconds + self._rng.uniform(0.0, self._jitter_max_seconds)
         )
-        await self._apply_until(pubsub, self._next_resync_at())
-        await self._drain_pending(pubsub)
-        if await self._run_resync_callbacks():
-            self._last_resync_at = self._monotonic()
+        throttled_message: Final = await self._apply_until(pubsub, self._next_resync_at())
+        drained_message: Final = await self._drain_pending(pubsub)
+        if saw_message or throttled_message or drained_message:
+            self._pending_callbacks = self._resync_callbacks
+        succeeded: Final = await self._run_resync_callbacks()
+        self._last_resync_at = self._monotonic()
+        if succeeded:
             self._resync_required = False
 
     def _next_resync_at(self) -> float:
@@ -350,21 +357,25 @@ class ConfigSyncSubscriber:
             )
         return next_resync_at
 
-    async def _apply_until(self, pubsub: ConfigSyncPubSub, deadline: float) -> None:
+    async def _apply_until(self, pubsub: ConfigSyncPubSub, deadline: float) -> bool:
+        saw_message = False  # rebind-ok: loop accumulator for whether any message arrived before the deadline
         while True:
             remaining = deadline - self._monotonic()
             if remaining <= 0:
-                return
+                return saw_message
             message = await pubsub.get_message(
                 ignore_subscribe_messages=True, timeout=min(remaining, _POLL_TIMEOUT_SECONDS)
             )
             if message is not None:
+                saw_message = True
                 await self._apply(pubsub, message)
 
     @staticmethod
-    async def _drain_pending(pubsub: ConfigSyncPubSub) -> None:
+    async def _drain_pending(pubsub: ConfigSyncPubSub) -> bool:
+        drained = False  # rebind-ok: loop accumulator for whether any pending message was drained
         while await pubsub.get_message(ignore_subscribe_messages=True, timeout=0) is not None:
-            pass
+            drained = True
+        return drained
 
     @staticmethod
     async def _ready_messages(pubsub: ConfigSyncPubSub) -> AsyncIterator[object]:
@@ -400,12 +411,14 @@ class ConfigSyncSubscriber:
         callbacks: tuple[Callable[[], Awaitable[None]], ...] | None = None,
         attempt: int = 0,
     ) -> bool:
-        pending: Final = self._resync_callbacks if callbacks is None else callbacks
+        pending: Final = self._pending_callbacks if callbacks is None else callbacks
         failed: Final = tuple([callback async for callback in self._failed_resync_callbacks(pending)])
         if not failed:
+            self._pending_callbacks = ()
             return True
         if attempt + 1 >= _RESYNC_RETRY_ATTEMPTS:
             verbose_proxy_logger.warning("config sync reload attempts exhausted; reconciliation remains pending")
+            self._pending_callbacks = failed
             return False
         retry_delay: Final = min(self._backoff_initial_seconds * 2**attempt, self._backoff_max_seconds)
         await self._sleep(retry_delay)

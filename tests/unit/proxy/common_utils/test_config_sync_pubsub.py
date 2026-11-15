@@ -812,7 +812,36 @@ async def test_reload_recovers_without_another_notification(failures: int, after
         await subscriber.stop()
 
     assert reload_callback.await_count == failures + 1
-    assert successful_callback.await_count == (1 if failures < 3 else 2)
+    assert successful_callback.await_count == 1
+
+
+async def test_stop_cancels_a_reload_waiting_between_retries() -> None:
+    clock: Final = _FakeClock()
+    pubsub: Final = _VirtualTimePubSub(clock, deliveries=((clock.now, "change"),))
+    cache: Final = _FakeRedisCache(_ScriptedPubSubRedisClient((pubsub,)))
+    attempted: Final = asyncio.Event()
+
+    async def reload() -> None:
+        attempted.set()
+        raise ConnectionError("database unavailable")
+
+    reload_callback: Final = AsyncMock(side_effect=reload)
+    subscriber: Final = ConfigSyncSubscriber(
+        redis_cache=cache,
+        resync_callbacks=(reload_callback,),
+        debounce_seconds=0.0,
+        jitter_max_seconds=0.0,
+        min_resync_interval_seconds=0.0,
+        backoff_initial_seconds=60.0,
+        backoff_max_seconds=60.0,
+        monotonic=clock,
+    )
+
+    subscriber.start()
+    await asyncio.wait_for(attempted.wait(), timeout=1)
+    await asyncio.wait_for(subscriber.stop(), timeout=1)
+
+    assert reload_callback.await_count == 1
 
 
 async def test_subscriber_subscribes_on_cluster_derived_pubsub_client() -> None:

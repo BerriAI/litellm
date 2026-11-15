@@ -4614,7 +4614,7 @@ async def test_ProxyConfig_add_deployment_loads_db_credentials_before_reconcilin
         ]
         return [MagicMock()]
 
-    async def install_models(new_models: object, proxy_logging_obj: object) -> None:
+    async def install_models(new_models: object, proxy_logging_obj: object, *, raise_on_error: bool = False) -> None:
         installed(credential=CredentialAccessor.get_credential_values("openai-cred"))
 
     monkeypatch.setattr(pc, "get_models_from_db", read_models_while_a_credential_lands)
@@ -6517,8 +6517,82 @@ async def test_database_reload_failure_is_visible_to_recovery_callers(require_re
     client.db.litellm_uisettings.find_unique = AsyncMock(return_value=None)
     client.db.litellm_config.find_many = AsyncMock(side_effect=ConnectionError("database unavailable"))
     if require_recovery:
-        with pytest.raises(ConnectionError, match="database unavailable"):
+        with pytest.raises(RuntimeError, match="could not fetch models"):
             await config.add_deployment(prisma_client=client, proxy_logging_obj=MagicMock(), raise_on_error=True)
         return
     result: Final = await config.add_deployment(prisma_client=client, proxy_logging_obj=MagicMock())
     assert result.still_desired is None
+
+
+def _stub_reload_for_strict_checks(monkeypatch: pytest.MonkeyPatch, pc: ProxyConfig) -> MagicMock:
+    from litellm.proxy import proxy_server
+
+    fake_prisma: Final = MagicMock()
+    _stub_add_deployment_collaborators(monkeypatch, pc, fake_prisma)
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    monkeypatch.setattr(proxy_server, "sync_ui_settings_to_general_settings", AsyncMock(return_value={}))
+    monkeypatch.setattr(pc, "get_credentials", AsyncMock())
+    monkeypatch.setattr(pc, "_delete_deployment", AsyncMock(return_value=frozenset()))
+    monkeypatch.setattr(pc, "_add_deployment", MagicMock())
+    monkeypatch.setattr(pc, "_add_router_settings_from_db_config", AsyncMock())
+    monkeypatch.setattr(pc, "_add_callbacks_from_db_config", MagicMock())
+    return fake_prisma
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("require_recovery", (False, True))
+async def test_database_reload_model_fetch_failure_is_visible_to_recovery_callers(
+    monkeypatch: pytest.MonkeyPatch, require_recovery: bool
+) -> None:
+    pc: Final = ProxyConfig()
+    fake_prisma: Final = _stub_reload_for_strict_checks(monkeypatch, pc)
+    monkeypatch.setattr(pc, "get_models_from_db", AsyncMock(return_value=None))
+
+    if require_recovery:
+        with pytest.raises(RuntimeError, match="could not fetch models"):
+            await pc.add_deployment(prisma_client=fake_prisma, proxy_logging_obj=MagicMock(), raise_on_error=True)
+        return
+    result: Final = await pc.add_deployment(prisma_client=fake_prisma, proxy_logging_obj=MagicMock())
+    assert result.still_desired is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("require_recovery", (False, True))
+async def test_database_reload_router_failure_is_visible_to_recovery_callers(
+    monkeypatch: pytest.MonkeyPatch, require_recovery: bool
+) -> None:
+    pc: Final = ProxyConfig()
+    fake_prisma: Final = _stub_reload_for_strict_checks(monkeypatch, pc)
+    monkeypatch.setattr(pc, "get_models_from_db", AsyncMock(return_value=[]))
+    monkeypatch.setattr(pc, "_delete_deployment", AsyncMock(side_effect=ConnectionError("router update failed")))
+
+    if require_recovery:
+        with pytest.raises(ConnectionError, match="router update failed"):
+            await pc.add_deployment(prisma_client=fake_prisma, proxy_logging_obj=MagicMock(), raise_on_error=True)
+        return
+    result: Final = await pc.add_deployment(prisma_client=fake_prisma, proxy_logging_obj=MagicMock())
+    assert result.still_desired is None
+
+
+@pytest.mark.asyncio
+async def test_database_reload_ui_settings_failure_does_not_block_model_reload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from fastapi import HTTPException
+
+    from litellm.proxy import proxy_server
+
+    pc: Final = ProxyConfig()
+    fake_prisma: Final = _stub_reload_for_strict_checks(monkeypatch, pc)
+    monkeypatch.setattr(
+        proxy_server,
+        "sync_ui_settings_to_general_settings",
+        AsyncMock(side_effect=HTTPException(status_code=503, detail="ui settings unavailable")),
+    )
+    get_models: Final = AsyncMock(return_value=[])
+    monkeypatch.setattr(pc, "get_models_from_db", get_models)
+
+    with pytest.raises(HTTPException, match="ui settings unavailable"):
+        await pc.add_deployment(prisma_client=fake_prisma, proxy_logging_obj=MagicMock(), raise_on_error=True)
+
+    assert get_models.await_count == 1
