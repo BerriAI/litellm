@@ -16502,3 +16502,28 @@ async def test_a_sync_failure_on_the_loop_alone_still_delivers_v2_attempt_ended_
 
     assert journal == [("sync", "failure", None), ("async", "failure", None)]
     assert submitted == ["RequestScope._deliver_off_path"]
+
+
+@pytest.mark.parametrize("stream", (False, True))
+def test_printed_logging_stream_flag_keeps_container_field_free(
+    stream: bool, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from pydantic import TypeAdapter
+
+    from litellm.litellm_core_utils.litellm_logging import (
+        create_dummy_standard_logging_payload,
+        emit_standard_logging_payload,
+    )
+    from litellm.types.utils import StandardLoggingPayload
+
+    payload: Final[StandardLoggingPayload] = {**create_dummy_standard_logging_payload(), "stream": stream}
+    original: Final = copy.deepcopy(payload)
+    monkeypatch.setenv("LITELLM_PRINT_STANDARD_LOGGING_PAYLOAD", "true")
+
+    emit_standard_logging_payload(payload)
+
+    printed: Final = TypeAdapter(Mapping[str, object]).validate_json(capsys.readouterr().out)
+    assert printed["is_stream"] is stream
+    assert "stream" not in printed
+    assert printed["id"] == payload["id"]
+    assert payload == original

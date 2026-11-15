@@ -8868,7 +8868,8 @@ def get_standard_logging_object_payload(
 def emit_standard_logging_payload(payload: StandardLoggingPayload):
     if os.getenv("LITELLM_PRINT_STANDARD_LOGGING_PAYLOAD"):
         try:
-            print(json.dumps(payload, indent=4, default=str), flush=True)  # noqa: T201
+            printed_payload: Final = {"is_stream" if key == "stream" else key: value for key, value in payload.items()}
+            print(json.dumps(printed_payload, indent=4, default=str), flush=True)  # noqa: T201  # explicit debug output
         except Exception as e:  # noqa: BLE001 # Safe catch-all for verbose logging
             verbose_logger.exception("Error serializing standard logging payload for debug output: %s", e)
 
