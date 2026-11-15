@@ -3,6 +3,7 @@ Helper util for handling perplexity-specific cost calculation
 - e.g.: citation tokens, search queries
 """
 
+import math
 from datetime import datetime
 from typing import Final
 
@@ -59,7 +60,7 @@ def cost_per_token(model: str, usage: Usage, current_time: datetime | None = Non
         TokenRates(
             input_rate=_safe_float_cast(model_info.get("input_cost_per_token")),
             output_rate=_safe_float_cast(model_info.get("output_cost_per_token")),
-            cache_read_rate=_safe_float_cast(cache_read_cost_value),
+            cache_read_rate=math.nan if cache_read_cost_value is None else _safe_float_cast(cache_read_cost_value),
             cache_creation_rate=0.0,
             reasoning_rate=None,
         ),
@@ -71,7 +72,9 @@ def cost_per_token(model: str, usage: Usage, current_time: datetime | None = Non
     prompt_tokens: Final = usage.prompt_tokens or 0
     reported_cached_tokens: Final = getattr(usage.prompt_tokens_details, "cached_tokens", 0) or 0
     cached_tokens: Final = min(prompt_tokens, reported_cached_tokens)
-    cache_read_cost_per_token: Final = input_cost_per_token if cache_read_cost_value is None else rates.cache_read_rate
+    cache_read_cost_per_token: Final = (
+        input_cost_per_token if math.isnan(rates.cache_read_rate) else rates.cache_read_rate
+    )
     prompt_cost: float = (
         prompt_tokens - cached_tokens
     ) * input_cost_per_token + cached_tokens * cache_read_cost_per_token
