@@ -69,8 +69,9 @@ def _read_providers_file(path: str) -> Mapping[str, Mapping[str, object]]:
 class SimpleProviderConfig:
     """Simple data class for JSON provider config"""
 
-    def __init__(self, slug: str, data: Mapping[str, object]):
+    def __init__(self, slug: str, data: Mapping[str, object], *, external: bool = False):
         self.slug = slug
+        self.external = external
         self.base_url: str = _STR_ADAPTER.validate_python(data["base_url"])
         self.api_key_env: str = _STR_ADAPTER.validate_python(data["api_key_env"])
         self.api_base_env: str | None = _optional_str(data.get("api_base_env"))
@@ -99,6 +100,15 @@ class SimpleProviderConfig:
             _PROVIDER_INFO_ADAPTER.validate_python(data["provider_info"]) if "provider_info" in data else {}
         )
 
+
+    def resolve_api_key(self, api_key: str | None) -> str | None:
+        from litellm.secret_managers.main import get_secret_str
+
+        resolved: Final = api_key or get_secret_str(self.api_key_env)
+        if self.external and not resolved:
+            raise ValueError(f"Provider {self.slug} requires an explicit api_key or the secret {self.api_key_env}")
+        return resolved
+
     def default_base_url(self, model: str | None) -> str:
         if model is None:
             return self.base_url
@@ -124,7 +134,7 @@ class SimpleProviderConfig:
 
 
 def _provider_configs(parsed: Mapping[str, Mapping[str, object]]) -> dict[str, SimpleProviderConfig]:
-    return {slug: SimpleProviderConfig(slug, entry) for slug, entry in parsed.items()}
+    return {slug: SimpleProviderConfig(slug, entry, external=True) for slug, entry in parsed.items()}
 
 
 class JSONProviderRegistry:

@@ -162,7 +162,7 @@ def create_config_class(provider: SimpleProviderConfig):
                 or (get_secret_str(provider.api_base_env) if provider.api_base_env else None)
                 or provider.default_base_url(model)
             )
-            resolved_key: Final = api_key or get_secret_str(provider.api_key_env)
+            resolved_key: Final = provider.resolve_api_key(api_key)
             return resolved_base, resolved_key
 
         def get_complete_url(
@@ -325,7 +325,7 @@ def create_responses_config_class(provider: SimpleProviderConfig) -> "type[OpenA
             litellm_params: GenericLiteLLMParams | None,
         ) -> dict:
             litellm_params = litellm_params or GenericLiteLLMParams()
-            api_key: Final = litellm_params.api_key or get_secret_str(provider.api_key_env)
+            api_key: Final = provider.resolve_api_key(litellm_params.api_key)
             if api_key:
                 headers["Authorization"] = f"Bearer {api_key}"
             return headers

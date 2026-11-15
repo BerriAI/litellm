@@ -181,6 +181,43 @@ def test_external_providers_file_resolves_base_url_and_api_key(tmp_path: Path, m
     assert api_key == "sk-external"
 
 
+def test_external_provider_missing_key_never_uses_openai_credentials(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+    path: Final = _providers_file(tmp_path / "providers.json", _external_provider())
+    monkeypatch.delenv(_EXTERNAL_KEY_ENV, raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "unrelated-openai-env-key")
+    monkeypatch.setattr(litellm, "openai_key", "unrelated-openai-global-key")
+    monkeypatch.setattr(litellm, "api_key", None)
+    with _registry_snapshot():
+        JSONProviderRegistry.load_file(str(path))
+        with respx.mock() as upstream:
+            route: Final = upstream.post(f"{_EXTERNAL_BASE}/chat/completions").respond(200, json={})
+            with pytest.raises(Exception, match="requires an explicit api_key"):
+                litellm.completion(
+                    model=f"{_EXTERNAL_SLUG}/demo-model", messages=[{"role": "user", "content": "hello"}]
+                )
+            assert not route.called
+
+
+def test_external_provider_explicit_key_wins_without_configured_secret(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+    from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+    path: Final = _providers_file(tmp_path / "providers.json", _external_provider())
+    monkeypatch.delenv(_EXTERNAL_KEY_ENV, raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "unrelated-openai-env-key")
+    with _registry_snapshot():
+        JSONProviderRegistry.load_file(str(path))
+        _, _, key, base = get_llm_provider(f"{_EXTERNAL_SLUG}/demo-model", api_key="explicit-external-key")
+    assert key == "explicit-external-key"
+    assert base == _EXTERNAL_BASE
+
+
 def test_later_providers_file_replaces_the_same_slug(tmp_path: Path) -> None:
     from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 
