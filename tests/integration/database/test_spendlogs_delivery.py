@@ -22,6 +22,8 @@ from tests.integration._support.database import scratch_database
 if TYPE_CHECKING:
     from datetime import timedelta
 
+    from prisma.client import TransactionManager
+
     from litellm.accounting.projection import Contribution
 
 _MIGRATIONS: Final = Path(__file__).resolve().parents[3] / "litellm/proxy-extras/litellm_proxy_extras/migrations"
@@ -825,7 +827,7 @@ class _ClaimedElsewhereBeforeIsolation:
         self._other_worker = other_worker
         self._opened = 0
 
-    def tx(self, *, timeout: "timedelta") -> object:
+    def tx(self, *, timeout: "timedelta") -> "TransactionManager":
         self._opened += 1
         if self._opened == 2:
             self._other_worker.execute('UPDATE "LiteLLM_SpendLogDelivery" SET attempts = attempts + 1')
@@ -855,3 +857,26 @@ async def test_an_isolated_retry_skips_a_delivery_another_worker_claimed_meanwhi
     assert delivery_database.execute(
         'SELECT delivery_id, state::text, attempts FROM "LiteLLM_SpendLogDelivery"'
     ).fetchall() == [("oversized", "pending", 1)]
+
+
+@pytest.mark.asyncio
+async def test_an_isolated_retry_that_accepts_everything_applies_once_without_a_repair_record(
+    delivery_database: psycopg.Connection[tuple[object, ...]], delivery_client: Prisma
+) -> None:
+    delivery_database.execute("CREATE TABLE indexed (value text PRIMARY KEY)")
+    _insert(delivery_database, (_row("oversized"),))
+
+    async def accept_all(transaction: LedgerTransaction, delivery: DeliveryProjection) -> "tuple[Contribution, ...]":
+        await _charge(transaction, (delivery,))
+        return ()
+
+    repository: Final = AccountingDeliveryRepository(delivery_client)
+    first: Final = await repository.apply_pending(_charge_then_index, isolate=accept_all)
+    again: Final = await repository.apply_pending(_charge_then_index, isolate=accept_all)
+
+    assert (first.applied, first.failed, first.repaired) == (1, 0, ())
+    assert (again.applied, again.failed) == (0, 0)
+    assert delivery_database.execute("SELECT spend FROM totals").fetchone() == (0.5,)
+    assert delivery_database.execute('SELECT delivery_id, state::text FROM "LiteLLM_SpendLogDelivery"').fetchall() == [
+        ("oversized", "applied")
+    ]
