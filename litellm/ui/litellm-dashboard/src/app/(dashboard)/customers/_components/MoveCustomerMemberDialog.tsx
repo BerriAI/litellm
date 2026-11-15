@@ -20,18 +20,15 @@ import {
 } from "@/components/ui/dialog";
 import type { Team, Member } from "./customerHierarchyForms";
 
-async function teamChoices(organizationId: string, signal: AbortSignal): Promise<Team[]> {
-  const teams: Team[] = [];
-  for (let page = 1; page <= 1_000; page++) {
-    const response = await fetchClient.GET("/management/v1/customer_teams", {
-      params: { query: { parent_org_id: organizationId, page, page_size: 100 } },
-      signal,
-    });
-    if (!response.data) throw new Error("Missing customer teams response");
-    teams.push(...response.data.data);
-    if (page >= response.data.meta.total_pages) return teams;
-  }
-  throw new Error("Customer team list is incomplete");
+async function teamChoices(organizationId: string, signal: AbortSignal, page = 1): Promise<Team[]> {
+  if (page > 1_000) throw new Error("Customer team list is incomplete");
+  const response = await fetchClient.GET("/management/v1/customer_teams", {
+    params: { query: { parent_org_id: organizationId, page, page_size: 100 } },
+    signal,
+  });
+  if (!response.data) throw new Error("Missing customer teams response");
+  if (page >= response.data.meta.total_pages) return response.data.data;
+  return [...response.data.data, ...(await teamChoices(organizationId, signal, page + 1))];
 }
 
 function CustomerMemberTeams({
