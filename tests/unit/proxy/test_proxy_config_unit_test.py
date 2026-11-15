@@ -18,6 +18,9 @@ import io
 import asyncio
 import logging
 
+import yaml
+
+import litellm
 from litellm.proxy.proxy_server import ProxyConfig
 
 INVALID_FILES = ["config_with_missing_include.yaml"]
@@ -355,3 +358,23 @@ async def test_load_config_rejects_unknown_mcp_disabled_capability(tmp_path: Pat
 
     with pytest.raises(ValidationError):
         await ProxyConfig().load_config(router=None, config_file_path=str(config_path))
+
+
+@pytest.mark.asyncio
+async def test_proxy_config_model_fallbacks_never_becomes_the_sdk_global_fallback_list(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "model_fallbacks", None)
+    config_file: Final = tmp_path / "config.yaml"
+    _ = config_file.write_text(
+        yaml.safe_dump(
+            {
+                "model_list": [{"model_name": "gpt-5.4-nano", "litellm_params": {"model": "openai/gpt-5.4-nano"}}],
+                "litellm_settings": {"model_fallbacks": ["anthropic/claude-haiku-5-5"]},
+            }
+        )
+    )
+
+    _ = await ProxyConfig().load_config(router=None, config_file_path=str(config_file))
+
+    assert litellm.model_fallbacks is None

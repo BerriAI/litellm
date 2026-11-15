@@ -3098,13 +3098,10 @@ US_ANTHROPIC_CLAUDE_OPUS_5_5_INPUT_TEXT: Final = CostTrackingTestCase(
             "output": {"message": {"role": "assistant", "content": [{"text": "Hello."}]}},
             "stopReason": "end_turn",
             "usage": {
-                "cacheReadInputTokenCount": 0,
                 "cacheReadInputTokens": 0,
-                "cacheWriteInputTokenCount": 0,
                 "cacheWriteInputTokens": 0,
                 "inputTokens": 1840,
                 "outputTokens": 412,
-                "serverToolUsage": {},
                 "totalTokens": 2252,
             },
             "metrics": {"latencyMs": 42},
@@ -3410,13 +3407,10 @@ US_ANTHROPIC_CLAUDE_SONNET_5_5_INPUT_TEXT: Final = CostTrackingTestCase(
             "output": {"message": {"content": [{"text": "scripted answer 1a50e720f40a"}], "role": "assistant"}},
             "stopReason": "end_turn",
             "usage": {
-                "cacheReadInputTokenCount": 0,
                 "cacheReadInputTokens": 0,
-                "cacheWriteInputTokenCount": 0,
                 "cacheWriteInputTokens": 0,
                 "inputTokens": 1840,
                 "outputTokens": 412,
-                "serverToolUsage": {},
                 "totalTokens": 2252,
             },
         },
@@ -3470,7 +3464,13 @@ US_ANTHROPIC_CLAUDE_SONNET_5_5_STREAM: Final = CostTrackingTestCase(
                 event_type="metadata",
                 payload={
                     "metrics": {"latencyMs": 883},
-                    "usage": {"inputTokens": 1840, "outputTokens": 412, "serverToolUsage": {}, "totalTokens": 2252},
+                    "usage": {
+                        "cacheReadInputTokens": 0,
+                        "cacheWriteInputTokens": 0,
+                        "inputTokens": 1840,
+                        "outputTokens": 412,
+                        "totalTokens": 2252,
+                    },
                 },
             ),
         ),
@@ -3517,13 +3517,10 @@ US_ANTHROPIC_CLAUDE_SONNET_5_5_CACHE_READ: Final = CostTrackingTestCase(
             "output": {"message": {"content": [{"text": "scripted answer 5eff7f685f14"}], "role": "assistant"}},
             "stopReason": "end_turn",
             "usage": {
-                "cacheReadInputTokenCount": 12288,
                 "cacheReadInputTokens": 12288,
-                "cacheWriteInputTokenCount": 0,
                 "cacheWriteInputTokens": 0,
                 "inputTokens": 640,
                 "outputTokens": 380,
-                "serverToolUsage": {},
                 "totalTokens": 13308,
             },
         },
@@ -3937,7 +3934,13 @@ US_ANTHROPIC_CLAUDE_OPUS_5_5_STREAM: Final = CostTrackingTestCase(
                 event_type="metadata",
                 payload={
                     "metrics": {"latencyMs": 883},
-                    "usage": {"inputTokens": 1840, "outputTokens": 412, "serverToolUsage": {}, "totalTokens": 2252},
+                    "usage": {
+                        "cacheReadInputTokens": 0,
+                        "cacheWriteInputTokens": 0,
+                        "inputTokens": 1840,
+                        "outputTokens": 412,
+                        "totalTokens": 2252,
+                    },
                 },
             ),
         ),
@@ -3984,13 +3987,10 @@ US_ANTHROPIC_CLAUDE_OPUS_5_5_CACHE_READ: Final = CostTrackingTestCase(
             "output": {"message": {"content": [{"text": "scripted answer bbd4da2e326b"}], "role": "assistant"}},
             "stopReason": "end_turn",
             "usage": {
-                "cacheReadInputTokenCount": 12288,
                 "cacheReadInputTokens": 12288,
-                "cacheWriteInputTokenCount": 0,
                 "cacheWriteInputTokens": 0,
                 "inputTokens": 640,
                 "outputTokens": 380,
-                "serverToolUsage": {},
                 "totalTokens": 13308,
             },
         },
@@ -4138,13 +4138,10 @@ US_ANTHROPIC_CLAUDE_HAIKU_5_5_INPUT_TEXT: Final = CostTrackingTestCase(
             "output": {"message": {"content": [{"text": "scripted answer 8ff4d0ccb5a5"}], "role": "assistant"}},
             "stopReason": "end_turn",
             "usage": {
-                "cacheReadInputTokenCount": 0,
                 "cacheReadInputTokens": 0,
-                "cacheWriteInputTokenCount": 0,
                 "cacheWriteInputTokens": 0,
                 "inputTokens": 1840,
                 "outputTokens": 412,
-                "serverToolUsage": {},
                 "totalTokens": 2252,
             },
         },
@@ -4198,7 +4195,13 @@ US_ANTHROPIC_CLAUDE_HAIKU_5_5_STREAM: Final = CostTrackingTestCase(
                 event_type="metadata",
                 payload={
                     "metrics": {"latencyMs": 883},
-                    "usage": {"inputTokens": 1840, "outputTokens": 412, "serverToolUsage": {}, "totalTokens": 2252},
+                    "usage": {
+                        "cacheReadInputTokens": 0,
+                        "cacheWriteInputTokens": 0,
+                        "inputTokens": 1840,
+                        "outputTokens": 412,
+                        "totalTokens": 2252,
+                    },
                 },
             ),
         ),
@@ -4245,13 +4248,10 @@ US_ANTHROPIC_CLAUDE_HAIKU_5_5_CACHE_READ: Final = CostTrackingTestCase(
             "output": {"message": {"content": [{"text": "scripted answer cf757e3e24df"}], "role": "assistant"}},
             "stopReason": "end_turn",
             "usage": {
-                "cacheReadInputTokenCount": 12288,
                 "cacheReadInputTokens": 12288,
-                "cacheWriteInputTokenCount": 0,
                 "cacheWriteInputTokens": 0,
                 "inputTokens": 640,
                 "outputTokens": 380,
-                "serverToolUsage": {},
                 "totalTokens": 13308,
             },
         },
@@ -4672,6 +4672,57 @@ US_ANTHROPIC_CLAUDE_FABLE_5_1_INPUT_TEXT: Final = CostTrackingTestCase(
         spend=0.0702, input_cost=0.03312, output_cost=0.03708, prompt_tokens=1840, completion_tokens=412
     ),
 )
+US_ANTHROPIC_CLAUDE_FABLE_5_2_INPUT_TEXT: Final = CostTrackingTestCase(
+    name="us.anthropic.claude-fable-5-2-input_text",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="us.anthropic.claude-fable-5-2",
+    request={
+        "model": "$MODEL",
+        "messages": [
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line.",
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "a5b0ca93d2e1 summarize the attached material in one line and name the city weather",
+                    }
+                ],
+            },
+        ],
+        "stream": False,
+        "allowed_openai_params": [],
+    },
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "metrics": {"latencyMs": 878},
+            "output": {"message": {"content": [{"text": "scripted answer a5b0ca93d2e1"}], "role": "assistant"}},
+            "stopReason": "end_turn",
+            "usage": {
+                "cacheReadInputTokenCount": 0,
+                "cacheReadInputTokens": 0,
+                "cacheWriteInputTokenCount": 0,
+                "cacheWriteInputTokens": 0,
+                "inputTokens": 1840,
+                "outputTokens": 412,
+                "serverToolUsage": {},
+                "totalTokens": 2252,
+            },
+        },
+    ),
+    expected=ExactExpected(
+        spend=0.05616, input_cost=0.026496, output_cost=0.029664, prompt_tokens=1840, completion_tokens=412
+    ),
+)
 
 US_ANTHROPIC_CLAUDE_FABLE_5_1_STREAM: Final = CostTrackingTestCase(
     name="us.anthropic.claude-fable-5-1-stream",
@@ -4724,6 +4775,59 @@ US_ANTHROPIC_CLAUDE_FABLE_5_1_STREAM: Final = CostTrackingTestCase(
     ),
     expected=ExactExpected(
         spend=0.0702, input_cost=0.03312, output_cost=0.03708, prompt_tokens=1840, completion_tokens=412
+    ),
+)
+US_ANTHROPIC_CLAUDE_FABLE_5_2_STREAM: Final = CostTrackingTestCase(
+    name="us.anthropic.claude-fable-5-2-stream",
+    covers="quota_management.spend_tracking.scripted_wire.logs_cost",
+    model="us.anthropic.claude-fable-5-2",
+    request={
+        "model": "$MODEL",
+        "messages": [
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line.",
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "d62b383256ff summarize the attached material in one line and name the city weather",
+                    }
+                ],
+            },
+        ],
+        "stream": True,
+        "stream_options": {"include_usage": True},
+        "allowed_openai_params": [],
+    },
+    response=EventStreamResponse(
+        content_type="application/vnd.amazon.eventstream",
+        events=(
+            EventStreamEvent(event_type="messageStart", payload={"role": "assistant"}),
+            EventStreamEvent(
+                event_type="contentBlockDelta",
+                payload={"contentBlockIndex": 0, "delta": {"text": "scripted answer d62b383256ff"}},
+            ),
+            EventStreamEvent(event_type="contentBlockStop", payload={"contentBlockIndex": 0}),
+            EventStreamEvent(event_type="messageStop", payload={"stopReason": "end_turn"}),
+            EventStreamEvent(
+                event_type="metadata",
+                payload={
+                    "metrics": {"latencyMs": 883},
+                    "usage": {"inputTokens": 1840, "outputTokens": 412, "serverToolUsage": {}, "totalTokens": 2252},
+                },
+            ),
+        ),
+    ),
+    expected=ExactExpected(
+        spend=0.05616, input_cost=0.026496, output_cost=0.029664, prompt_tokens=1840, completion_tokens=412
     ),
 )
 
@@ -4779,6 +4883,58 @@ US_ANTHROPIC_CLAUDE_FABLE_5_1_CACHE_READ: Final = CostTrackingTestCase(
         spend=0.0678384, input_cost=0.0336384, output_cost=0.0342, prompt_tokens=12928, completion_tokens=380
     ),
 )
+US_ANTHROPIC_CLAUDE_FABLE_5_2_CACHE_READ: Final = CostTrackingTestCase(
+    name="us.anthropic.claude-fable-5-2-cache_read",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="us.anthropic.claude-fable-5-2",
+    request={
+        "model": "$MODEL",
+        "messages": [
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line.",
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "1a5a397f1134 summarize the attached material in one line and name the city weather",
+                    }
+                ],
+            },
+        ],
+        "stream": False,
+        "allowed_openai_params": [],
+    },
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "metrics": {"latencyMs": 878},
+            "output": {"message": {"content": [{"text": "scripted answer 1a5a397f1134"}], "role": "assistant"}},
+            "stopReason": "end_turn",
+            "usage": {
+                "cacheReadInputTokenCount": 12288,
+                "cacheReadInputTokens": 12288,
+                "cacheWriteInputTokenCount": 0,
+                "cacheWriteInputTokens": 0,
+                "inputTokens": 640,
+                "outputTokens": 380,
+                "serverToolUsage": {},
+                "totalTokens": 13308,
+            },
+        },
+    ),
+    expected=ExactExpected(
+        spend=0.05427072, input_cost=0.02691072, output_cost=0.02736, prompt_tokens=12928, completion_tokens=380
+    ),
+)
 
 US_ANTHROPIC_CLAUDE_FABLE_5_1_CACHE_WRITE_5M: Final = CostTrackingTestCase(
     name="us.anthropic.claude-fable-5-1-cache_write_5m",
@@ -4830,6 +4986,56 @@ US_ANTHROPIC_CLAUDE_FABLE_5_1_CACHE_WRITE_5M: Final = CostTrackingTestCase(
         spend=0.248076, input_cost=0.216576, output_cost=0.0315, prompt_tokens=9728, completion_tokens=350
     ),
 )
+US_ANTHROPIC_CLAUDE_FABLE_5_2_CACHE_WRITE_5M: Final = CostTrackingTestCase(
+    name="us.anthropic.claude-fable-5-2-cache_write_5m",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="us.anthropic.claude-fable-5-2",
+    request={
+        "model": "$MODEL",
+        "messages": [
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line.",
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "3481bca67e1a summarize the attached material in one line and name the city weather",
+                    }
+                ],
+            },
+        ],
+        "stream": False,
+        "allowed_openai_params": [],
+    },
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "metrics": {"latencyMs": 878},
+            "output": {"message": {"content": [{"text": "scripted answer 3481bca67e1a"}], "role": "assistant"}},
+            "stopReason": "end_turn",
+            "usage": {
+                "inputTokens": 512,
+                "outputTokens": 350,
+                "totalTokens": 10078,
+                "cacheReadInputTokens": 0,
+                "cacheWriteInputTokens": 9216,
+                "cacheDetails": [{"ttl": "5m", "inputTokens": 9216}],
+            },
+        },
+    ),
+    expected=ExactExpected(
+        spend=0.1984608, input_cost=0.1732608, output_cost=0.0252, prompt_tokens=9728, completion_tokens=350
+    ),
+)
 
 US_ANTHROPIC_CLAUDE_FABLE_5_1_CACHE_WRITE_1H: Final = CostTrackingTestCase(
     name="us.anthropic.claude-fable-5-1-cache_write_1h",
@@ -4879,6 +5085,56 @@ US_ANTHROPIC_CLAUDE_FABLE_5_1_CACHE_WRITE_1H: Final = CostTrackingTestCase(
     ),
     expected=ExactExpected(
         spend=0.372492, input_cost=0.340992, output_cost=0.0315, prompt_tokens=9728, completion_tokens=350
+    ),
+)
+US_ANTHROPIC_CLAUDE_FABLE_5_2_CACHE_WRITE_1H: Final = CostTrackingTestCase(
+    name="us.anthropic.claude-fable-5-2-cache_write_1h",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="us.anthropic.claude-fable-5-2",
+    request={
+        "model": "$MODEL",
+        "messages": [
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line.",
+                        "cache_control": {"type": "ephemeral", "ttl": "1h"},
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "3f037d5317b0 summarize the attached material in one line and name the city weather",
+                    }
+                ],
+            },
+        ],
+        "stream": False,
+        "allowed_openai_params": [],
+    },
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "metrics": {"latencyMs": 878},
+            "output": {"message": {"content": [{"text": "scripted answer 3f037d5317b0"}], "role": "assistant"}},
+            "stopReason": "end_turn",
+            "usage": {
+                "inputTokens": 512,
+                "outputTokens": 350,
+                "totalTokens": 10078,
+                "cacheReadInputTokens": 0,
+                "cacheWriteInputTokens": 9216,
+                "cacheDetails": [{"ttl": "1h", "inputTokens": 9216}],
+            },
+        },
+    ),
+    expected=ExactExpected(
+        spend=0.2979936, input_cost=0.2727936, output_cost=0.0252, prompt_tokens=9728, completion_tokens=350
     ),
 )
 
@@ -5155,13 +5411,10 @@ US_ANTHROPIC_CLAUDE_SONNET_5_5_THINKING: Final = CostTrackingTestCase(
             "output": {"message": {"role": "assistant", "content": [{"text": "scripted answer fe9c9714d04d"}]}},
             "stopReason": "end_turn",
             "usage": {
-                "cacheReadInputTokenCount": 0,
                 "cacheReadInputTokens": 0,
-                "cacheWriteInputTokenCount": 0,
                 "cacheWriteInputTokens": 0,
                 "inputTokens": 1240,
                 "outputTokens": 412,
-                "serverToolUsage": {},
                 "totalTokens": 1652,
             },
             "metrics": {"latencyMs": 2071},
@@ -5452,13 +5705,10 @@ US_ANTHROPIC_CLAUDE_OPUS_5_5_THINKING: Final = CostTrackingTestCase(
             },
             "stopReason": "end_turn",
             "usage": {
-                "cacheReadInputTokenCount": 0,
                 "cacheReadInputTokens": 0,
-                "cacheWriteInputTokenCount": 0,
                 "cacheWriteInputTokens": 0,
                 "inputTokens": 1240,
                 "outputTokens": 4040,
-                "serverToolUsage": {},
                 "totalTokens": 5280,
             },
             "metrics": {"latencyMs": 2071},
@@ -5587,13 +5837,10 @@ US_ANTHROPIC_CLAUDE_HAIKU_5_5_THINKING: Final = CostTrackingTestCase(
             "output": {"message": {"role": "assistant", "content": [{"text": "scripted answer 90a6bb1996a5"}]}},
             "stopReason": "end_turn",
             "usage": {
-                "cacheReadInputTokenCount": 0,
                 "cacheReadInputTokens": 0,
-                "cacheWriteInputTokenCount": 0,
                 "cacheWriteInputTokens": 0,
                 "inputTokens": 1240,
                 "outputTokens": 412,
-                "serverToolUsage": {},
                 "totalTokens": 1652,
             },
             "metrics": {"latencyMs": 2071},
@@ -5832,6 +6079,87 @@ US_ANTHROPIC_CLAUDE_FABLE_5_1_TOOL_CALL: Final = CostTrackingTestCase(
         spend=0.0702, input_cost=0.03312, output_cost=0.03708, prompt_tokens=1840, completion_tokens=412
     ),
 )
+US_ANTHROPIC_CLAUDE_FABLE_5_2_TOOL_CALL: Final = CostTrackingTestCase(
+    name="us.anthropic.claude-fable-5-2-tool_call",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="us.anthropic.claude-fable-5-2",
+    request={
+        "model": "$MODEL",
+        "messages": [
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line.",
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "7f97ab74e808 summarize the attached material in one line and name the city weather",
+                    }
+                ],
+            },
+        ],
+        "stream": False,
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "description": "Get the current weather and a short forecast for a city.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "city": {"type": "string", "description": "City name"},
+                            "days": {"type": "integer", "description": "Forecast horizon in days"},
+                            "units": {"type": "string", "enum": ["metric", "imperial"]},
+                        },
+                        "required": ["city"],
+                    },
+                },
+            }
+        ],
+        "tool_choice": "auto",
+        "allowed_openai_params": ["tool_choice"],
+    },
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "output": {
+                "message": {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "toolUse": {
+                                "toolUseId": "tooluse_$REQUEST_ID",
+                                "name": "get_weather",
+                                "input": {"city": "Berlin", "days": 7, "units": "metric"},
+                                "type": "tool_use",
+                            }
+                        }
+                    ],
+                }
+            },
+            "stopReason": "tool_use",
+            "usage": {
+                "inputTokens": 1840,
+                "outputTokens": 412,
+                "totalTokens": 2252,
+                "cacheReadInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+            },
+            "metrics": {"latencyMs": 2071},
+        },
+    ),
+    expected=ExactExpected(
+        spend=0.05616, input_cost=0.026496, output_cost=0.029664, prompt_tokens=1840, completion_tokens=412
+    ),
+)
 
 US_ANTHROPIC_CLAUDE_FABLE_5_1_THINKING: Final = CostTrackingTestCase(
     name="us.anthropic.claude-fable-5-1-thinking",
@@ -5883,6 +6211,58 @@ US_ANTHROPIC_CLAUDE_FABLE_5_1_THINKING: Final = CostTrackingTestCase(
     ),
     expected=ExactExpected(
         spend=0.0594, input_cost=0.02232, output_cost=0.03708, prompt_tokens=1240, completion_tokens=412
+    ),
+)
+US_ANTHROPIC_CLAUDE_FABLE_5_2_THINKING: Final = CostTrackingTestCase(
+    name="us.anthropic.claude-fable-5-2-thinking",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="us.anthropic.claude-fable-5-2",
+    request={
+        "model": "$MODEL",
+        "messages": [
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line.",
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "bca700fd52a2 summarize the attached material in one line and name the city weather",
+                    }
+                ],
+            },
+        ],
+        "stream": False,
+        "reasoning_effort": "medium",
+        "allowed_openai_params": ["reasoning_effort"],
+    },
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "output": {"message": {"role": "assistant", "content": [{"text": "scripted answer bca700fd52a2"}]}},
+            "stopReason": "end_turn",
+            "usage": {
+                "cacheReadInputTokenCount": 0,
+                "cacheReadInputTokens": 0,
+                "cacheWriteInputTokenCount": 0,
+                "cacheWriteInputTokens": 0,
+                "inputTokens": 1240,
+                "outputTokens": 412,
+                "serverToolUsage": {},
+                "totalTokens": 1652,
+            },
+            "metrics": {"latencyMs": 2071},
+        },
+    ),
+    expected=ExactExpected(
+        spend=0.04752, input_cost=0.017856, output_cost=0.029664, prompt_tokens=1240, completion_tokens=412
     ),
 )
 
@@ -6014,6 +6394,13 @@ US_ANTHROPIC_CLAUDE_FABLE_5_1_RESPONSES_BRIDGED_JSON: Final = US_ANTHROPIC_CLAUD
         "request": {"model": "$MODEL", "input": "summarize the attached material in one line"},
     }
 )
+US_ANTHROPIC_CLAUDE_FABLE_5_2_RESPONSES_BRIDGED_JSON: Final = US_ANTHROPIC_CLAUDE_FABLE_5_2_INPUT_TEXT.model_copy(
+    update={
+        "name": "us.anthropic.claude-fable-5-2-responses_bridged_json",
+        "endpoint": "/v1/responses",
+        "request": {"model": "$MODEL", "input": "summarize the attached material in one line"},
+    }
+)
 
 US_ANTHROPIC_CLAUDE_HAIKU_5_5_TIERED_INPUT_ABOVE_100K: Final = with_usage(
     US_ANTHROPIC_CLAUDE_HAIKU_5_5_INPUT_TEXT,
@@ -6088,6 +6475,7 @@ US_ANTHROPIC_CLAUDE_HAIKU_5_5_TIERED_CACHE_WRITE_1H_ABOVE_100K: Final = with_usa
     ),
 )
 
+
 def _us_anthropic_messages_bridge_pairs(
     input_case: CostTrackingTestCase, stream_case: CostTrackingTestCase
 ) -> tuple[BridgeCostParityTestCase, ...]:
@@ -6125,6 +6513,11 @@ US_ANTHROPIC_CLAUDE_FABLE_5_1_RESPONSES_BRIDGED_STREAM: Final = _us_anthropic_re
     US_ANTHROPIC_CLAUDE_FABLE_5_1_STREAM,
     "us.anthropic.claude-fable-5-1-responses_bridged_stream",
 )
+US_ANTHROPIC_CLAUDE_FABLE_5_2_RESPONSES_BRIDGED_STREAM: Final = _us_anthropic_responses_stream_case(
+    US_ANTHROPIC_CLAUDE_FABLE_5_2_RESPONSES_BRIDGED_JSON,
+    US_ANTHROPIC_CLAUDE_FABLE_5_2_STREAM,
+    "us.anthropic.claude-fable-5-2-responses_bridged_stream",
+)
 US_ANTHROPIC_CLAUDE_HAIKU_5_5_RESPONSES_BRIDGED_STREAM: Final = _us_anthropic_responses_stream_case(
     US_ANTHROPIC_CLAUDE_HAIKU_5_5_RESPONSES_BRIDGED_JSON,
     US_ANTHROPIC_CLAUDE_HAIKU_5_5_STREAM,
@@ -6142,6 +6535,9 @@ US_ANTHROPIC_CLAUDE_SONNET_5_5_RESPONSES_BRIDGED_STREAM: Final = _us_anthropic_r
 )
 _US_ANTHROPIC_FABLE_5_1_MESSAGES_PAIRS: Final = _us_anthropic_messages_bridge_pairs(
     US_ANTHROPIC_CLAUDE_FABLE_5_1_INPUT_TEXT, US_ANTHROPIC_CLAUDE_FABLE_5_1_STREAM
+)
+_US_ANTHROPIC_FABLE_5_2_MESSAGES_PAIRS: Final = _us_anthropic_messages_bridge_pairs(
+    US_ANTHROPIC_CLAUDE_FABLE_5_2_INPUT_TEXT, US_ANTHROPIC_CLAUDE_FABLE_5_2_STREAM
 )
 _US_ANTHROPIC_HAIKU_5_5_MESSAGES_PAIRS: Final = _us_anthropic_messages_bridge_pairs(
     US_ANTHROPIC_CLAUDE_HAIKU_5_5_INPUT_TEXT, US_ANTHROPIC_CLAUDE_HAIKU_5_5_STREAM
@@ -6161,6 +6557,7 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     US_ANTHROPIC_CLAUDE_HAIKU_5_5_RESPONSES_BRIDGED_JSON,
     US_ANTHROPIC_CLAUDE_FABLE_5_RESPONSES_BRIDGED_JSON,
     US_ANTHROPIC_CLAUDE_FABLE_5_1_RESPONSES_BRIDGED_JSON,
+    US_ANTHROPIC_CLAUDE_FABLE_5_2_RESPONSES_BRIDGED_JSON,
     US_ANTHROPIC_CLAUDE_HAIKU_5_5_TIERED_INPUT_ABOVE_100K,
     US_ANTHROPIC_CLAUDE_HAIKU_5_5_TIERED_AT_100K_BOUNDARY,
     US_ANTHROPIC_CLAUDE_HAIKU_5_5_TIERED_CACHE_READ_ABOVE_100K,
@@ -6255,10 +6652,15 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     US_ANTHROPIC_CLAUDE_FABLE_5_CACHE_WRITE_5M,
     US_ANTHROPIC_CLAUDE_FABLE_5_CACHE_WRITE_1H,
     US_ANTHROPIC_CLAUDE_FABLE_5_1_INPUT_TEXT,
+    US_ANTHROPIC_CLAUDE_FABLE_5_2_INPUT_TEXT,
     US_ANTHROPIC_CLAUDE_FABLE_5_1_STREAM,
+    US_ANTHROPIC_CLAUDE_FABLE_5_2_STREAM,
     US_ANTHROPIC_CLAUDE_FABLE_5_1_CACHE_READ,
+    US_ANTHROPIC_CLAUDE_FABLE_5_2_CACHE_READ,
     US_ANTHROPIC_CLAUDE_FABLE_5_1_CACHE_WRITE_5M,
+    US_ANTHROPIC_CLAUDE_FABLE_5_2_CACHE_WRITE_5M,
     US_ANTHROPIC_CLAUDE_FABLE_5_1_CACHE_WRITE_1H,
+    US_ANTHROPIC_CLAUDE_FABLE_5_2_CACHE_WRITE_1H,
     US_ANTHROPIC_CLAUDE_SONNET_5_TOOL_CALL,
     US_ANTHROPIC_CLAUDE_SONNET_5_THINKING,
     US_ANTHROPIC_CLAUDE_SONNET_5_5_TOOL_CALL,
@@ -6272,14 +6674,18 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     US_ANTHROPIC_CLAUDE_FABLE_5_TOOL_CALL,
     US_ANTHROPIC_CLAUDE_FABLE_5_THINKING,
     US_ANTHROPIC_CLAUDE_FABLE_5_1_TOOL_CALL,
+    US_ANTHROPIC_CLAUDE_FABLE_5_2_TOOL_CALL,
     US_ANTHROPIC_CLAUDE_FABLE_5_1_THINKING,
+    US_ANTHROPIC_CLAUDE_FABLE_5_2_THINKING,
     US_ANTHROPIC_CLAUDE_OPUS_5_5_UPSTREAM_400_ZERO_SPEND,
     US_ANTHROPIC_CLAUDE_OPUS_5_5_INPUT_TEXT_ROLLUPS,
     US_ANTHROPIC_CLAUDE_FABLE_5_1_RESPONSES_BRIDGED_STREAM,
+    US_ANTHROPIC_CLAUDE_FABLE_5_2_RESPONSES_BRIDGED_STREAM,
     US_ANTHROPIC_CLAUDE_HAIKU_5_5_RESPONSES_BRIDGED_STREAM,
     US_ANTHROPIC_CLAUDE_OPUS_5_5_RESPONSES_BRIDGED_STREAM,
     US_ANTHROPIC_CLAUDE_SONNET_5_5_RESPONSES_BRIDGED_STREAM,
     *tuple(pair.bridged for pair in _US_ANTHROPIC_FABLE_5_1_MESSAGES_PAIRS),
+    *tuple(pair.bridged for pair in _US_ANTHROPIC_FABLE_5_2_MESSAGES_PAIRS),
     *tuple(pair.bridged for pair in _US_ANTHROPIC_HAIKU_5_5_MESSAGES_PAIRS),
     *tuple(pair.bridged for pair in _US_ANTHROPIC_OPUS_5_5_MESSAGES_PAIRS),
     *tuple(pair.bridged for pair in _US_ANTHROPIC_SONNET_5_5_MESSAGES_PAIRS),
@@ -6308,9 +6714,14 @@ PARITY: Final[tuple[StreamParityTestCase, ...]] = (
     StreamParityTestCase(plain=US_ANTHROPIC_CLAUDE_HAIKU_5_5_INPUT_TEXT, streamed=US_ANTHROPIC_CLAUDE_HAIKU_5_5_STREAM),
     StreamParityTestCase(plain=US_ANTHROPIC_CLAUDE_FABLE_5_INPUT_TEXT, streamed=US_ANTHROPIC_CLAUDE_FABLE_5_STREAM),
     StreamParityTestCase(plain=US_ANTHROPIC_CLAUDE_FABLE_5_1_INPUT_TEXT, streamed=US_ANTHROPIC_CLAUDE_FABLE_5_1_STREAM),
+    StreamParityTestCase(plain=US_ANTHROPIC_CLAUDE_FABLE_5_2_INPUT_TEXT, streamed=US_ANTHROPIC_CLAUDE_FABLE_5_2_STREAM),
     StreamParityTestCase(
         plain=US_ANTHROPIC_CLAUDE_FABLE_5_1_RESPONSES_BRIDGED_JSON,
         streamed=US_ANTHROPIC_CLAUDE_FABLE_5_1_RESPONSES_BRIDGED_STREAM,
+    ),
+    StreamParityTestCase(
+        plain=US_ANTHROPIC_CLAUDE_FABLE_5_2_RESPONSES_BRIDGED_JSON,
+        streamed=US_ANTHROPIC_CLAUDE_FABLE_5_2_RESPONSES_BRIDGED_STREAM,
     ),
     StreamParityTestCase(
         plain=US_ANTHROPIC_CLAUDE_HAIKU_5_5_RESPONSES_BRIDGED_JSON,
@@ -6327,6 +6738,10 @@ PARITY: Final[tuple[StreamParityTestCase, ...]] = (
     StreamParityTestCase(
         plain=_US_ANTHROPIC_FABLE_5_1_MESSAGES_PAIRS[0].bridged,
         streamed=_US_ANTHROPIC_FABLE_5_1_MESSAGES_PAIRS[1].bridged,
+    ),
+    StreamParityTestCase(
+        plain=_US_ANTHROPIC_FABLE_5_2_MESSAGES_PAIRS[0].bridged,
+        streamed=_US_ANTHROPIC_FABLE_5_2_MESSAGES_PAIRS[1].bridged,
     ),
     StreamParityTestCase(
         plain=_US_ANTHROPIC_HAIKU_5_5_MESSAGES_PAIRS[0].bridged,
@@ -6373,8 +6788,15 @@ BRIDGE_COST_PARITY: Final[tuple[BridgeCostParityTestCase, ...]] = (
         native=US_ANTHROPIC_CLAUDE_FABLE_5_1_INPUT_TEXT, bridged=US_ANTHROPIC_CLAUDE_FABLE_5_1_RESPONSES_BRIDGED_JSON
     ),
     BridgeCostParityTestCase(
+        native=US_ANTHROPIC_CLAUDE_FABLE_5_2_INPUT_TEXT, bridged=US_ANTHROPIC_CLAUDE_FABLE_5_2_RESPONSES_BRIDGED_JSON
+    ),
+    BridgeCostParityTestCase(
         native=US_ANTHROPIC_CLAUDE_FABLE_5_1_STREAM,
         bridged=US_ANTHROPIC_CLAUDE_FABLE_5_1_RESPONSES_BRIDGED_STREAM,
+    ),
+    BridgeCostParityTestCase(
+        native=US_ANTHROPIC_CLAUDE_FABLE_5_2_STREAM,
+        bridged=US_ANTHROPIC_CLAUDE_FABLE_5_2_RESPONSES_BRIDGED_STREAM,
     ),
     BridgeCostParityTestCase(
         native=US_ANTHROPIC_CLAUDE_HAIKU_5_5_STREAM,
@@ -6389,6 +6811,7 @@ BRIDGE_COST_PARITY: Final[tuple[BridgeCostParityTestCase, ...]] = (
         bridged=US_ANTHROPIC_CLAUDE_SONNET_5_5_RESPONSES_BRIDGED_STREAM,
     ),
     *_US_ANTHROPIC_FABLE_5_1_MESSAGES_PAIRS,
+    *_US_ANTHROPIC_FABLE_5_2_MESSAGES_PAIRS,
     *_US_ANTHROPIC_HAIKU_5_5_MESSAGES_PAIRS,
     *_US_ANTHROPIC_OPUS_5_5_MESSAGES_PAIRS,
     *_US_ANTHROPIC_SONNET_5_5_MESSAGES_PAIRS,

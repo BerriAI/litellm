@@ -1,5 +1,6 @@
 import json
 from datetime import datetime, timezone
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -15,8 +16,10 @@ from litellm.llms.base_llm.vector_store.transformation import (
     RouterVectorStoreEmbeddingExecutor,
 )
 from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth
+from litellm.vector_stores.search_query import with_caller_query_params
 from litellm.proxy.vector_store_endpoints.endpoints import (
     _update_request_data_with_litellm_managed_vector_store_registry,
+    build_request_data_from_managed_vector_store,
     index_create,
     index_list,
 )
@@ -3052,15 +3055,24 @@ def test_vector_store_search_rejects_caller_embedding_selection_params(blocked_k
 
 
 @pytest.mark.parametrize(
-    ("provider", "expected_status", "expected_searches"),
-    [("opensearch", 400, 0), ("opensearch/x", 400, 0), ("openai", 200, 1)],
+    ("store_key", "provider", "expected_status", "expected_searches"),
+    [
+        ("opensearch_index_name", "opensearch", 400, 0),
+        ("opensearch_index_name", "opensearch/x", 400, 0),
+        ("opensearch_index_name", "openai", 200, 1),
+        ("opensearch_search_pipeline", "opensearch", 400, 0),
+        ("opensearch_hybrid_search", "opensearch/x", 400, 0),
+        ("opensearch_search_pipeline", "openai", 200, 1),
+        ("opensearch_text_field", "opensearch", 200, 1),
+        ("opensearch_embedding_field", "opensearch/x", 200, 1),
+    ],
 )
-def test_vector_store_search_rejects_caller_opensearch_index_name_only_on_opensearch_stores(
-    provider, expected_status, expected_searches
+def test_vector_store_search_rejects_caller_opensearch_store_params_only_on_opensearch_stores(
+    store_key, provider, expected_status, expected_searches
 ):
     """
-    Regression: a caller must not pick the index an OpenSearch store searches, while
-    other providers keep ignoring the key as they did before OpenSearch support.
+    Regression: a caller must not change which index, pipeline, or hybrid mode an OpenSearch store
+    searches with, while the field keys and other providers' requests pass through as before.
     """
     from fastapi.testclient import TestClient
 
@@ -3094,13 +3106,91 @@ def test_vector_store_search_rejects_caller_opensearch_index_name_only_on_opense
             with patch("litellm.proxy.proxy_server.llm_router", router):  # test-quality-ok: router built over the fake search
                 response = TestClient(app).post(
                     "/v1/vector_stores/kb/search",
-                    json={"query": "q", "opensearch_index_name": "another-teams-index"},
+                    json={"query": "q", store_key: "_none"},
                 )
     finally:
         app.dependency_overrides = original_overrides
 
     assert response.status_code == expected_status, response.json()
-    assert fake_search.await_count == expected_searches
+    assert [call.kwargs.get(store_key) for call in fake_search.await_args_list] == ["_none"] * expected_searches
+    assert expected_status == 200 or store_key in str(response.json())
+
+
+def test_vector_store_search_accepts_a_query_image_without_a_query():
+    from fastapi.testclient import TestClient
+
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.proxy.proxy_server import app
+    from litellm.types.vector_stores import VectorStoreSearchResponse
+
+    query_image: Final = {"type": "base64", "media_type": "image/png", "data": "iVBORw0KGgo="}
+    store: Final = {
+        "vector_store_id": "kb",
+        "custom_llm_provider": "bedrock",
+        "litellm_params": {"vector_store_id": "kb", "custom_llm_provider": "bedrock"},
+    }
+    registry: Final = MagicMock()
+    registry.get_litellm_managed_vector_store_from_registry.return_value = store
+    fake_search: Final = AsyncMock(
+        return_value=VectorStoreSearchResponse(object="vector_store.search_results.page", search_query="", data=[])
+    )
+    mock_auth: Final = UserAPIKeyAuth(user_id="test_internal_user", user_role=LitellmUserRoles.INTERNAL_USER.value)
+    original_overrides: Final = app.dependency_overrides.copy()
+    app.dependency_overrides[user_api_key_auth] = lambda: mock_auth
+    try:
+        with (
+            patch("litellm.vector_stores.main.asearch", new=fake_search),  # test-quality-ok: the search boundary under test
+            patch.object(litellm, "vector_store_registry", registry),  # test-quality-ok: seeds the store under test
+            patch(  # test-quality-ok: store access is not under test, so the request reaches the search boundary
+                "litellm.proxy.vector_store_endpoints.utils.can_user_access_vector_store",
+                new=AsyncMock(return_value=True),
+            ),
+        ):
+            router: Final = litellm.Router(model_list=[])
+            with patch("litellm.proxy.proxy_server.llm_router", router):  # test-quality-ok: router built over the fake search
+                response: Final = TestClient(app).post("/v1/vector_stores/kb/search", json={"query_image": query_image})
+    finally:
+        app.dependency_overrides = original_overrides
+
+    assert response.status_code == 200, response.json()
+    assert fake_search.await_args.kwargs["query_image"] == query_image
+
+
+@pytest.mark.parametrize("retrieval_query_param", ["retrievalQuery", "retrieval_query"])
+def test_a_stored_raw_retrieval_query_never_reaches_the_search_request(retrieval_query_param: str):
+    request_data: Final = build_request_data_from_managed_vector_store(
+        {
+            "vector_store_id": "kb",
+            "custom_llm_provider": "bedrock",
+            "litellm_params": {"aws_region_name": "us-west-2", retrieval_query_param: {"text": "from the store"}},
+        }
+    )
+
+    assert request_data == {"custom_llm_provider": "bedrock", "aws_region_name": "us-west-2"}
+
+
+@pytest.mark.parametrize("retrieval_query_param", ["retrievalQuery", "retrieval_query"])
+def test_a_raw_retrieval_query_in_a_stores_extra_body_never_reaches_the_search_request(retrieval_query_param: str):
+    request_data: Final = build_request_data_from_managed_vector_store(
+        {
+            "vector_store_id": "kb",
+            "custom_llm_provider": "bedrock",
+            "litellm_params": {"extra_body": {retrieval_query_param: {"text": "from the store"}, "kept": "value"}},
+        }
+    )
+
+    assert request_data == {"custom_llm_provider": "bedrock", "extra_body": {"kept": "value"}}
+
+
+@pytest.mark.parametrize("caller_param", ["query_image", "retrievalQuery", "retrieval_query"])
+def test_a_callers_query_survives_a_stores_own_extra_body(caller_param: str):
+    caller_value: Final = {"type": "base64", "media_type": "image/png", "data": "iVBORw0KGgo="}
+    request_data: Final = with_caller_query_params(
+        {"custom_llm_provider": "bedrock", "extra_body": {"retrievalConfiguration": "from the store"}},
+        {caller_param: caller_value, "retrievalConfiguration": "from the caller", "other": "from the caller"},
+    )
+
+    assert request_data["extra_body"] == {"retrievalConfiguration": "from the store", caller_param: caller_value}
 
 
 class TestConfigOwnedVectorStores:

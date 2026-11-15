@@ -2,8 +2,8 @@
 Tests for the DeepSeek Search provider (POST https://api.deepseek.com/v1/tools/search).
 """
 
-from typing import Final
 import re
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest

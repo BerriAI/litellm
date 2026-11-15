@@ -10,6 +10,7 @@ import respx
 
 import litellm
 from litellm import ChatCompletionUsageBlock, stream_chunk_builder
+from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.streaming_chunk_builder_utils import (
     ChunkProcessor,
     stream_chunk_builder_text_completion,
@@ -29,6 +30,84 @@ from litellm.types.utils import (
     TextCompletionResponse,
     Usage,
 )
+
+
+@pytest.mark.parametrize("routed_provider", (False, True))
+@pytest.mark.parametrize(
+    ("profile_rates", "registered_rates", "expected_cost"),
+    [
+        (
+            {"input_cost_per_token": 0.01, "output_cost_per_token": 0.02},
+            {"input_cost_per_token": 0.0, "output_cost_per_token": 0.0},
+            0.0,
+        ),
+        (
+            {"input_cost_per_token": 0.01, "output_cost_per_token": 0.02},
+            {"input_cost_per_token": 0.001, "output_cost_per_token": 0.002},
+            0.02,
+        ),
+        ({"input_cost_per_token": 0.01, "output_cost_per_token": 0.02}, {"input_cost_per_token": 0.0}, 0.1),
+        ({"input_cost_per_token": 0.0}, {"input_cost_per_token": 0.0}, None),
+    ],
+)
+def test_bedrock_stream_cost_uses_registered_rates_over_profile_prices(
+    monkeypatch: pytest.MonkeyPatch,
+    profile_rates: dict[str, float],
+    registered_rates: dict[str, float],
+    expected_cost: float | None,
+    routed_provider: bool,
+) -> None:
+    model: Final = "openai.stream-pricing-test"
+    profile: Final = f"us.{model}"
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            **litellm.model_cost,
+            profile: {"litellm_provider": "bedrock", "mode": "chat", **profile_rates},
+        },
+    )
+    litellm.register_model({model: registered_rates}, persist_across_reloads=False)
+    logging_obj: Final = Logging(
+        model=model,
+        messages=[],
+        stream=True,
+        call_type="completion",
+        start_time=1.0,
+        litellm_call_id="bedrock-free-stream",
+        function_id="test",
+    )
+    logging_obj.optional_params = {}
+    logging_obj.litellm_params = (
+        {"metadata": {"model_info": {"pricing_provider": "bedrock"}}} if routed_provider else {}
+    )
+    logging_obj.model_call_details.update(
+        custom_llm_provider="openai" if routed_provider else "bedrock", model_id=profile
+    )
+    chunks: Final = [
+        ModelResponseStream(
+            id="bedrock-free-stream",
+            created=1,
+            model=model,
+            choices=[StreamingChoices(index=0, delta=Delta(content="hi"), finish_reason="stop")],
+        ),
+        ModelResponseStream(
+            id="bedrock-free-stream",
+            created=1,
+            model=model,
+            choices=[],
+            usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
+        ),
+    ]
+
+    response: Final = stream_chunk_builder(chunks, logging_obj=logging_obj)
+
+    assert response is not None
+    assert response.usage.prompt_tokens == 10
+    assert response.usage.completion_tokens == 5
+    assert getattr(response.usage, "cost", None) == (
+        pytest.approx(expected_cost) if expected_cost is not None else None
+    )
 
 
 def test_get_combined_tool_content():
@@ -1270,6 +1349,32 @@ def test_anthropic_speed_and_geo_survive_stream_assembly():
     fast_cost = sum(cost_per_token(model="claude-opus-4-8", usage=fast_usage))
     standard_cost = sum(cost_per_token(model="claude-opus-4-8", usage=standard_usage))
     assert fast_cost == pytest.approx(standard_cost * 2.0)
+
+
+def test_pricing_fields_take_last_reported_value_across_stream_chunks():
+    def _chunk(usage: Usage | None) -> ModelResponseStream:
+        return ModelResponseStream(
+            id="chatcmpl-1",
+            created=1745513206,
+            model="claude-opus-4-8",
+            choices=[StreamingChoices(index=0, delta=Delta(content="Hi"))],
+            usage=usage,
+        )
+
+    first_usage: Final = Usage(prompt_tokens=10, completion_tokens=1, total_tokens=11)
+    first_usage.speed = "fast"
+    first_usage.inference_geo = "us"
+    last_usage: Final = Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15)
+    last_usage.inference_geo = "eu"
+    chunks: Final = [_chunk(first_usage), _chunk(None), _chunk(last_usage), _chunk(None)]
+
+    usage: Final = ChunkProcessor(chunks=chunks).calculate_usage(
+        chunks=chunks, model="claude-opus-4-8", completion_output="HiHiHiHi"
+    )
+
+    assert usage.speed == "fast"
+    assert usage.inference_geo == "eu"
+    assert usage.completion_tokens == 5
 
 
 def test_prompt_tokens_details_survive_later_usage_chunk_without_details():

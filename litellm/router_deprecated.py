@@ -345,6 +345,7 @@ class DeprecatedRouterMembers:
     )
     fallback_access_check = _setting("fallback_access_check", lambda r: r.settings().fallback_access_check)
     fallback_budget_check = _setting("fallback_budget_check", lambda r: r.settings().fallback_budget_check)
+    fallback_rate_limit_check = _setting("fallback_rate_limit_check", lambda r: r.settings().fallback_rate_limit_check)
     # These three are declared with the attribute type Router gave them rather than the descriptor's:
     # protocols in router_utils and the proxy match Router on them, and protocol matching does not
     # see through a descriptor. Reads and writes still go through _setting at runtime.

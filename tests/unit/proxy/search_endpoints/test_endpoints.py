@@ -142,6 +142,7 @@ def test_direct_search_body_tool_name_is_denied_under_search_tool_deny_by_defaul
 def _json_request(body: dict[str, object]) -> MagicMock:
     request = MagicMock()
     request.body = AsyncMock(return_value=orjson.dumps(body))
+    request.headers = {}
     return request
 
 

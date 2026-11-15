@@ -1,18 +1,25 @@
+import re
 from collections.abc import Mapping
 from copy import deepcopy
+from itertools import chain, product
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Protocol, cast, runtime_checkable
 from urllib.parse import urlparse
 
 import httpx
+from pydantic import TypeAdapter, ValidationError
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.core_helpers import decoded_json_object
+from litellm.exceptions import BadRequestError
+from litellm.litellm_core_utils.core_helpers import decoded_json_object, drops_unsupported_params, keyword_arguments
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base
 from litellm.llms.base_llm.vector_store.transformation import BaseVectorStoreConfig
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.types.integrations.rag.bedrock_knowledgebase import (
     BedrockKBContent,
+    BedrockKBImageFormat,
     BedrockKBResponse,
     BedrockKBRetrievalConfiguration,
     BedrockKBRetrievalQuery,
@@ -20,11 +27,20 @@ from litellm.types.integrations.rag.bedrock_knowledgebase import (
 )
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.vector_stores import (
+    RETRIEVAL_QUERY_PARAMS,
     VECTOR_STORE_OPENAI_PARAMS,
     BaseVectorStoreAuthCredentials,
+    OpenAIComparisonFilter,
+    OpenAICompoundFilter,
+    OpenAIEqualityFilter,
+    OpenAIMembershipFilter,
+    OpenAIRangeFilter,
+    OpenAIVectorStoreFilter,
     VectorStoreIndexEndpoints,
     VectorStoreResultContent,
+    VectorStoreSearchImageMediaType,
     VectorStoreSearchOptionalRequestParams,
+    VectorStoreSearchQueryImage,
     VectorStoreSearchResponse,
     VectorStoreSearchResult,
 )
@@ -33,6 +49,88 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+_AWS_COMPARISON_OPERATORS: Final = MappingProxyType(
+    {
+        "eq": "equals",
+        "ne": "notEquals",
+        "gt": "greaterThan",
+        "gte": "greaterThanOrEquals",
+        "lt": "lessThan",
+        "lte": "lessThanOrEquals",
+        "in": "in",
+        "nin": "notIn",
+    }
+)
+_AWS_LOGICAL_OPERATORS: Final = MappingProxyType({"and": "andAll", "or": "orAll"})
+_NUMERIC_MEMBERSHIP: Final = MappingProxyType({"in": ("or", "eq"), "nin": ("and", "ne")})
+_AWS_FILTER_KEYS: Final = frozenset(
+    (
+        *_AWS_COMPARISON_OPERATORS.values(),
+        *_AWS_LOGICAL_OPERATORS.values(),
+        "startsWith",
+        "listContains",
+        "stringContains",
+    )
+)
+_OPENAI_FILTER: Final[TypeAdapter[OpenAIComparisonFilter | OpenAICompoundFilter]] = TypeAdapter(OpenAIVectorStoreFilter)
+_MAX_REASON_CHARS: Final = 2000
+_REASON_END_CHARS: Final = _MAX_REASON_CHARS // 2
+
+
+def _aws_retrieval_filter(openai_filter: OpenAIComparisonFilter | OpenAICompoundFilter) -> Mapping[str, object]:
+    match openai_filter:
+        case OpenAICompoundFilter():
+            return _aws_logical_filter(openai_filter.type, openai_filter.filters)
+        case OpenAIMembershipFilter() if _expands_to_logical_filter(openai_filter):
+            return _aws_logical_filter(_NUMERIC_MEMBERSHIP[openai_filter.type][0], (openai_filter,))
+        case OpenAIMembershipFilter():
+            return _aws_comparison(openai_filter.type, openai_filter.key, list(openai_filter.value))
+        case OpenAIEqualityFilter() | OpenAIRangeFilter():
+            return _aws_comparison(openai_filter.type, openai_filter.key, openai_filter.value)
+
+
+def _aws_logical_filter(
+    operator: str, members: tuple[OpenAIComparisonFilter | OpenAICompoundFilter, ...]
+) -> Mapping[str, object]:
+    aws_members: Final = tuple(chain.from_iterable(_aws_group_members(operator, member) for member in members))
+    if len(aws_members) == 1:
+        return aws_members[0]
+    return {_AWS_LOGICAL_OPERATORS[operator]: list(aws_members)}
+
+
+def _aws_group_members(
+    operator: str, member: OpenAIComparisonFilter | OpenAICompoundFilter
+) -> tuple[Mapping[str, object], ...]:
+    match member:
+        case OpenAICompoundFilter() if member.type == operator:
+            return tuple(chain.from_iterable(_aws_group_members(operator, nested) for nested in member.filters))
+        case OpenAIMembershipFilter() if (
+            _expands_to_logical_filter(member) and _NUMERIC_MEMBERSHIP[member.type][0] == operator
+        ):
+            return tuple(
+                _aws_comparison(_NUMERIC_MEMBERSHIP[member.type][1], member.key, item) for item in member.value
+            )
+        case _:
+            return (_aws_retrieval_filter(member),)
+
+
+def _expands_to_logical_filter(membership: OpenAIMembershipFilter) -> bool:
+    return not all(isinstance(item, str) for item in membership.value)
+
+
+def _aws_comparison(operator: str, key: str, value: str | float | list[str | float]) -> Mapping[str, object]:
+    return {_AWS_COMPARISON_OPERATORS[operator]: {"key": key, "value": value}}
+
+
+def _validation_reason(error: ValidationError) -> str:
+    reason: Final = "; ".join(
+        ".".join(("filters", *(str(part) for part in detail["loc"]))) + f": {detail['msg']}"
+        for detail in error.errors()
+    )
+    return (
+        reason if len(reason) <= _MAX_REASON_CHARS else f"{reason[:_REASON_END_CHARS]}...{reason[-_REASON_END_CHARS:]}"
+    )
 
 
 @runtime_checkable
@@ -61,6 +159,71 @@ def _vector_search_configuration(retrieval_config: object) -> Mapping[str, objec
     return decoded_json_object(decoded_json_object(retrieval_config).get("vectorSearchConfiguration", {}))
 
 
+_DECODED_JSON: Final = TypeAdapter(object)
+
+
+class _KBResponseFields(TypedDict, total=False, extra_items=object):
+    pass
+
+
+_BEDROCK_IMAGE_FORMATS: Final[Mapping[VectorStoreSearchImageMediaType, BedrockKBImageFormat]] = MappingProxyType(
+    {"image/jpeg": "jpeg", "image/png": "png", "image/gif": "gif", "image/webp": "webp"}
+)
+_BASE64_DATA_URI: Final = re.compile(r"data:(?P<media_type>[^;,]*)[^,]*;base64,(?P<data>.*)", re.DOTALL)
+_SOURCE_FILE_MIME_TYPE_KEY: Final = "x-amz-bedrock-kb-source-file-mime-type"
+_UNKNOWN_MEDIA_TYPE: Final = "application/octet-stream"
+_RETRIEVAL_QUERY_UNSUPPORTED: Final = (
+    "bedrock vector stores do not take retrievalQuery. Send query, or query_image to search by image. To drop it, "
+    "set `litellm.drop_params=True` or for proxy:\n\n`litellm_settings:\n drop_params: true`\n"
+)
+
+
+class _QueryImageParams(TypedDict, total=False):
+    query_image: ReadOnly[VectorStoreSearchQueryImage | None]
+
+
+def _retrieval_query(query: str, params: _QueryImageParams) -> BedrockKBRetrievalQuery:
+    query_image: Final = params.get("query_image")
+    if query_image is None:
+        return BedrockKBRetrievalQuery(text=query)
+    return BedrockKBRetrievalQuery(
+        type="IMAGE",
+        image={"format": _BEDROCK_IMAGE_FORMATS[query_image["media_type"]], "inlineContent": query_image["data"]},
+    )
+
+
+def _image_content(byte_content: str, metadata: Mapping[str, object]) -> VectorStoreResultContent:
+    data_uri: Final = _BASE64_DATA_URI.fullmatch(byte_content)
+    declared_media_type: Final = data_uri.group("media_type") if data_uri is not None else ""
+    source_file_media_type: Final = metadata.get(_SOURCE_FILE_MIME_TYPE_KEY)
+    return VectorStoreResultContent(
+        type="image",
+        source={
+            "type": "base64",
+            "media_type": (
+                source_file_media_type
+                if isinstance(source_file_media_type, str) and source_file_media_type.startswith("image/")
+                else declared_media_type or _UNKNOWN_MEDIA_TYPE
+            ),
+            "data": data_uri.group("data") if data_uri is not None else byte_content,
+        },
+    )
+
+
+def _result_content(
+    content: BedrockKBContent | None, metadata: Mapping[str, object], include_images: bool
+) -> VectorStoreResultContent | None:
+    if content is None:
+        return None
+    text: Final = content.get("text")
+    if text is not None:
+        return VectorStoreResultContent(text=text, type="text")
+    byte_content: Final = content.get("byteContent")
+    if not include_images or content.get("type") != "IMAGE" or not byte_content:
+        return None
+    return _image_content(byte_content, metadata)
+
+
 class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
     """Vector store configuration for AWS Bedrock Knowledge Bases."""
 
@@ -86,37 +249,10 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
         }
 
     def get_supported_openai_params(self, model: str) -> list[VECTOR_STORE_OPENAI_PARAMS]:
-        return ["filters", "max_num_results", "ranking_options"]
+        return ["filters", "max_num_results", "ranking_options", "query_image"]
 
     def _map_operator_to_aws(self, operator: str) -> str:
-        """
-        Map OpenAI-style operators to AWS Bedrock operator names.
-
-        OpenAI uses: eq, ne, gt, gte, lt, lte, in, nin
-        AWS uses: equals, notEquals, greaterThan, greaterThanOrEquals, lessThan, lessThanOrEquals, in, notIn, startsWith, listContains, stringContains
-        """
-        operator_mapping: Final = {
-            "eq": "equals",
-            "ne": "notEquals",
-            "gt": "greaterThan",
-            "gte": "greaterThanOrEquals",
-            "lt": "lessThan",
-            "lte": "lessThanOrEquals",
-            "in": "in",
-            "nin": "notIn",
-            # AWS-specific operators (pass through)
-            "equals": "equals",
-            "notEquals": "notEquals",
-            "greaterThan": "greaterThan",
-            "greaterThanOrEquals": "greaterThanOrEquals",
-            "lessThan": "lessThan",
-            "lessThanOrEquals": "lessThanOrEquals",
-            "notIn": "notIn",
-            "startsWith": "startsWith",
-            "listContains": "listContains",
-            "stringContains": "stringContains",
-        }
-        return operator_mapping.get(operator, operator)
+        return _AWS_COMPARISON_OPERATORS.get(operator, operator)
 
     def _map_operator_filter(self, filter_dict: dict) -> dict:
         """
@@ -181,7 +317,7 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
+        non_default_params: Mapping[str, object],
         optional_params: dict,
         drop_params: bool,
     ) -> dict:
@@ -189,26 +325,36 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
             if param == "max_num_results":
                 optional_params["numberOfResults"] = value
             elif param == "filters" and value is not None:
-                # map the openai filters to the aws kb filters format
-                # openai filters = {"key": <key>, "value": <value>, "operator": <operator>} OR {"and" | "or": [{"key": <key>, "value": <value>, "operator": <operator>}]}
-                # aws kb filters = {"operator": {"<key>": <value>}} OR {"andAll | orAll": [{"operator": {"<key>": <value>}}]}
-                # 1. check if filter is in openai format
-                # 2. if it is, map it to the aws kb filters format
-                # 3. if it is not, assume it is in aws kb filters format and add it to the optional_params
-                aws_filters: dict | None = None
-
-                if isinstance(value, dict):
-                    if "operator" in value:
-                        # Single operator - map directly (no wrapping needed)
-                        aws_filters = self._map_operator_filter(value)
-                    elif "and" in value or "or" in value:
-                        aws_filters = self._map_and_or_filters(value)
-                    else:
-                        # Assume it's already in AWS KB format
-                        aws_filters = value
-                optional_params["filters"] = aws_filters
+                optional_params["filters"] = self._aws_filters(value, drop_params=drop_params)
 
         return optional_params
+
+    def _aws_filters(self, filters: object, drop_params: bool) -> Mapping[str, object] | None:
+        if not isinstance(filters, dict):
+            return self._invalid_filters(f"filters must be an object, got {type(filters).__name__}", drop_params)
+        if not filters:
+            return self._invalid_filters("filters must not be empty", drop_params)
+        if "operator" in filters:
+            return self._map_operator_filter(filters)
+        if "and" in filters or "or" in filters:
+            return self._map_and_or_filters(filters)
+        if "type" in filters and filters.keys().isdisjoint(_AWS_FILTER_KEYS):
+            try:
+                return _aws_retrieval_filter(_OPENAI_FILTER.validate_python(filters))
+            except ValidationError as error:
+                return self._invalid_filters(_validation_reason(error), drop_params)
+        return filters
+
+    @staticmethod
+    def _invalid_filters(reason: str, drop_params: bool) -> None:
+        if not drop_params:
+            raise BadRequestError(
+                message=f"Invalid filters for the Bedrock vector store: {reason}. "
+                "Fix the filter, or set drop_params to drop it.",
+                model=None,
+                llm_provider="bedrock",
+            ) from None
+        verbose_logger.debug("Dropping invalid Bedrock vector store filters under drop_params: %s", reason)
 
     def validate_environment(self, headers: dict, litellm_params: GenericLiteLLMParams | None) -> dict:
         headers = headers or {}
@@ -241,8 +387,14 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
         encoded_vector_store_id: Final = encode_url_path_segment(vector_store_id, field_name="vector_store_id")
         url: Final = join_api_base(api_base, f"{encoded_vector_store_id}/retrieve")
 
+        caller_params: Final = decoded_json_object(litellm_params)
+        caller_sources: Final = self._caller_sources(extra_body=extra_body, litellm_params=caller_params)
+        if self._caller_value(caller_sources, RETRIEVAL_QUERY_PARAMS) is not None and not drops_unsupported_params(
+            caller_params.get("drop_params")
+        ):
+            raise BadRequestError(message=_RETRIEVAL_QUERY_UNSUPPORTED, model="", llm_provider="bedrock")
         request_body: Final[dict[str, object]] = {
-            "retrievalQuery": BedrockKBRetrievalQuery(text=query),
+            "retrievalQuery": _retrieval_query(query, vector_store_search_optional_params),
         }
 
         retrieval_config: Final[object] = (
@@ -274,7 +426,7 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
             ] = filters
         if retrieval_config:
             request_body["retrievalConfiguration"] = cast(BedrockKBRetrievalConfiguration, retrieval_config)
-        user_context: Final = self._user_context(extra_body=extra_body, litellm_params=litellm_params)
+        user_context: Final = self._user_context(caller_sources)
         if user_context is not None:
             request_body["userContext"] = user_context
 
@@ -282,19 +434,18 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
         return url, request_body
 
     @staticmethod
-    def _user_context(
+    def _caller_sources(
         extra_body: Mapping[str, object] | None, litellm_params: Mapping[str, object]
-    ) -> BedrockKBUserContext | None:
-        sources: Final = tuple(source for source in (extra_body, litellm_params) if isinstance(source, Mapping))
-        found: Final = next(
-            (
-                source[key]
-                for source in sources
-                for key in ("userContext", "user_context")
-                if source.get(key) is not None
-            ),
-            None,
-        )
+    ) -> tuple[Mapping[str, object], ...]:
+        return tuple(source for source in (extra_body, litellm_params) if isinstance(source, Mapping))
+
+    @staticmethod
+    def _caller_value(sources: tuple[Mapping[str, object], ...], keys: tuple[str, ...]) -> object:
+        return next((source[key] for source, key in product(sources, keys) if source.get(key) is not None), None)
+
+    @staticmethod
+    def _user_context(sources: tuple[Mapping[str, object], ...]) -> BedrockKBUserContext | None:
+        found: Final = BedrockVectorStoreConfig._caller_value(sources, ("userContext", "user_context"))
         return None if found is None else cast(BedrockKBUserContext, found)
 
     def sign_request(
@@ -361,16 +512,19 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
         self, response: httpx.Response, litellm_logging_obj: LiteLLMLoggingObj
     ) -> VectorStoreSearchResponse:
         try:
-            response_data: Final = BedrockKBResponse(**response.json())
+            response_data: Final = BedrockKBResponse(
+                **_KBResponseFields(
+                    **keyword_arguments(_DECODED_JSON.validate_python(response.json()), BedrockKBResponse)
+                )
+            )
+            include_images: Final = litellm_logging_obj.model_call_details.get("query_image") is not None
             results: Final[list[VectorStoreSearchResult]] = []
             for item in response_data.get("retrievalResults", []) or []:
-                content: BedrockKBContent | None = item.get("content")
-                text = content.get("text") if content else None
-                if text is None:
+                metadata = item.get("metadata", {}) or {}
+                result_content = _result_content(item.get("content"), metadata, include_images)
+                if result_content is None:
                     continue
 
-                # Extract metadata and use helper functions
-                metadata = item.get("metadata", {}) or {}
                 file_id = self._get_file_id_from_metadata(metadata)
                 filename = self._get_filename_from_metadata(metadata)
                 attributes = self._get_attributes_from_metadata(metadata)
@@ -378,7 +532,7 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
                 results.append(
                     VectorStoreSearchResult(
                         score=item.get("score"),
-                        content=[VectorStoreResultContent(text=text, type="text")],
+                        content=[result_content],
                         file_id=file_id,
                         filename=filename,
                         attributes=attributes,
