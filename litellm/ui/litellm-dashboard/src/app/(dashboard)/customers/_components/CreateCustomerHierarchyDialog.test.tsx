@@ -164,7 +164,9 @@ describe("CreateCustomerHierarchyDialog", () => {
   });
 
   it.each(["team", "member"] as const)("surfaces the free-tier 403 detail when creating a %s", async (kind) => {
-    fetchMock.mockResolvedValue(json({ detail: "Customer Management free tier limit reached. Upgrade to Enterprise." }, 403));
+    fetchMock.mockResolvedValue(
+      json({ detail: "Customer Management free tier limit reached. Upgrade to Enterprise." }, 403),
+    );
     render(
       <CreateCustomerHierarchyDialog
         kind={kind}

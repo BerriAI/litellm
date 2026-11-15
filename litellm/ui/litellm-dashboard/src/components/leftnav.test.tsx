@@ -772,7 +772,10 @@ describe("getBreadcrumb", () => {
       section: "Customer Management",
       title: "Customer organizations",
     });
-    expect(getBreadcrumb("/ui/customers/")).toEqual({ section: "Customer Management", title: "Customer organizations" });
+    expect(getBreadcrumb("/ui/customers/")).toEqual({
+      section: "Customer Management",
+      title: "Customer organizations",
+    });
   });
   it("resolves a top-level route to its section + title", () => {
     expect(getBreadcrumb("/ui/api-keys")).toEqual({ section: "AI Gateway", title: "Virtual Keys" });
