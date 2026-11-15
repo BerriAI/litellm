@@ -82,6 +82,13 @@ from litellm.proxy.common_utils.config_sync_pubsub import (
     coordination_redis_cache,
     publish_config_change,
 )
+from litellm.proxy.common_utils.customer_usage import (
+    CustomerUsageFailure,
+    customer_usage_fields,
+    customer_usage_http_status,
+    normalize_customer_key_metadata,
+)
+from litellm.proxy.common_utils.key_expiry_alerts import key_expiry_alert_metadata_error
 from litellm.proxy.common_utils.openai_error_payload import openai_error_param, proxy_exception_for
 from litellm.proxy.common_utils.rbac_utils import check_org_admin_can_generate_keys
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time, keeps_due_budget_reset
@@ -153,7 +160,7 @@ from litellm.proxy.management_helpers.object_permission_utils import (  # noqa: 
 from litellm.proxy.management_helpers.team_member_permission_checks import (
     TeamMemberPermissionChecks,
 )
-from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
+from litellm.proxy.management_helpers.utils import management_endpoint_wrapper, validate_scalar_budget_attachment
 from litellm.proxy.mcp_server.db import (
     rotate_mcp_server_credentials_master_key,
     rotate_mcp_user_credentials_master_key,
@@ -953,6 +960,19 @@ def raise_on_invalid_key_logging_config(metadata: Mapping[str, object] | None) -
         raise HTTPException(status_code=400, detail={"error": error})
 
 
+def raise_on_invalid_key_expiry_alert_days(metadata: Mapping[str, object] | None) -> None:
+    """metadata.key_expiry_alert_days must be a day count the expiry alert job can act on."""
+    error: Final = key_expiry_alert_metadata_error(metadata)
+    if error is not None:
+        raise HTTPException(status_code=400, detail={"error": error})
+
+
+def raise_on_invalid_key_metadata(metadata: Mapping[str, object] | None) -> None:
+    """Every key metadata check that rejects a write: logging config and expiry alert days."""
+    raise_on_invalid_key_logging_config(metadata)
+    raise_on_invalid_key_expiry_alert_days(metadata)
+
+
 def raise_on_logging_credential_change(
     requested_metadata: object, existing_key_row: LiteLLM_VerificationToken | None, user_api_key_dict: UserAPIKeyAuth
 ) -> None:
@@ -1479,6 +1499,25 @@ async def _stored_user_role(prisma_client: PrismaClient | None, user_id: str | N
     return user_row.user_role if user_row is not None else None
 
 
+def validated_customer_key_metadata(
+    metadata: object,
+    existing_metadata: object,
+    actor: UserAPIKeyAuth | None,
+) -> Mapping[str, object] | None:
+    binding: Final = normalize_customer_key_metadata(
+        customer_usage_fields(metadata) if metadata is not None else None,
+        customer_usage_fields(existing_metadata) if existing_metadata is not None else None,
+        administrator=actor is not None and actor.user_role == LitellmUserRoles.PROXY_ADMIN.value,
+    )
+    if isinstance(binding, CustomerUsageFailure):
+        raise HTTPException(status_code=customer_usage_http_status(binding.error), detail=binding.error.value)
+    return binding
+
+
+def customer_key_actor(value: object) -> UserAPIKeyAuth | None:
+    return value if isinstance(value, UserAPIKeyAuth) else None
+
+
 async def _common_key_generation_helper(
     data: GenerateKeyRequest,
     user_api_key_dict: UserAPIKeyAuth,
@@ -1492,6 +1531,8 @@ async def _common_key_generation_helper(
         premium_user,
         prisma_client,
     )
+
+    validated_customer_key_metadata(data.metadata, None, user_api_key_dict)
 
     acting_as_team_admin: Final = _team_admin_requests_member_key(
         data=data,
@@ -1520,7 +1561,9 @@ async def _common_key_generation_helper(
     )
 
     validate_budget_duration(data.budget_duration)
-    raise_on_invalid_key_logging_config(data.metadata)
+    if prisma_client is not None:
+        await validate_scalar_budget_attachment(prisma_client, data.budget_id)
+    raise_on_invalid_key_metadata(data.metadata)
     raise_on_logging_credential_change(data.metadata, None, user_api_key_dict)
 
     if data.throttle_on_budget_exceeded is True and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value:
@@ -1857,7 +1900,7 @@ async def _common_key_generation_helper(
 
     try:
         response = await generate_key_helper_fn(
-            request_type="key", **data_json, table_name="key", llm_router=llm_router
+            request_type="key", **data_json, table_name="key", llm_router=llm_router, actor=user_api_key_dict
         )
     except KeyProjectBindingError:
         if prisma_client is not None:
@@ -2781,7 +2824,7 @@ def prepare_metadata_fields(data: BaseModel, non_default_values: dict, existing_
     """
     Check LiteLLM_ManagementEndpoint_MetadataFields (proxy/_types.py) for fields that are allowed to be updated
     """
-    raise_on_invalid_key_logging_config(non_default_values.get("metadata"))
+    raise_on_invalid_key_metadata(non_default_values.get("metadata"))
 
     if "metadata" not in non_default_values:  # allow user to set metadata to none
         non_default_values["metadata"] = existing_metadata.copy()
@@ -3062,6 +3105,7 @@ async def prepare_key_update_data(
     *,
     prisma_client: PrismaClient | None = None,
     llm_router: Router | None = None,
+    user_api_key_dict: UserAPIKeyAuth | None = None,
 ):
     if data.router_settings is not None or (
         "router_settings" not in data.model_fields_set
@@ -3080,6 +3124,13 @@ async def prepare_key_update_data(
             llm_router=llm_router,
         )
     data_json: Final[dict] = data.model_dump(exclude_unset=True)
+    if "metadata" in data_json:
+        customer_binding: Final = validated_customer_key_metadata(
+            data.metadata,
+            _StoredKeyMetadata.model_validate(existing_key_row, from_attributes=True).metadata,
+            user_api_key_dict,
+        )
+        data_json["metadata"] = dict(customer_binding) if customer_binding is not None else None
     data_json.pop("key", None)
     data_json.pop("new_key", None)
     data_json.pop("grace_period", None)  # Request-only param, not a DB column
@@ -3477,7 +3528,11 @@ async def _process_single_key_update(
     # Prepare update data
     raise_on_logging_credential_change(key_request.metadata, existing_key_row, user_api_key_dict)
     non_default_values = await prepare_key_update_data(
-        data=key_request, existing_key_row=existing_key_row, prisma_client=prisma_client, llm_router=llm_router
+        data=key_request,
+        existing_key_row=existing_key_row,
+        prisma_client=prisma_client,
+        llm_router=llm_router,
+        user_api_key_dict=user_api_key_dict,
     )
 
     await _enforce_custom_key_policy(
@@ -3665,7 +3720,9 @@ async def _validate_end_user_budget_id_change(
         raise HTTPException(status_code=403, detail=forbidden_detail)
     if requested_budget_id == "":
         return
-    budget_row: Final = await BudgetRepository(_require_prisma_client(prisma_client)).find_by_id(requested_budget_id)
+    budget_row: Final = await validate_scalar_budget_attachment(
+        _require_prisma_client(prisma_client), requested_budget_id
+    )
     if budget_row is None:
         missing_detail: Final = {"error": f"end_user_budget_id={requested_budget_id} does not match any budget."}
         raise HTTPException(status_code=400, detail=missing_detail)
@@ -3896,6 +3953,7 @@ async def _validate_update_key_data(
         user_api_key_dict=user_api_key_dict,
         prisma_client=checked_prisma_client,
     )
+    await validate_scalar_budget_attachment(checked_prisma_client, data.budget_id)
 
     enforce_output_token_estimates_are_admin_only(
         data=data,
@@ -4231,7 +4289,11 @@ async def update_key_fn(
         _enforce_upperbound_key_params(data, fill_defaults=False)
         raise_on_logging_credential_change(data.metadata, existing_key_row, user_api_key_dict)
         non_default_values: Final = await prepare_key_update_data(
-            data=data, existing_key_row=existing_key_row, prisma_client=prisma_client, llm_router=llm_router
+            data=data,
+            existing_key_row=existing_key_row,
+            prisma_client=prisma_client,
+            llm_router=llm_router,
+            user_api_key_dict=user_api_key_dict,
         )
 
         # Only validate key_alias format if it's actually being changed
@@ -5384,7 +5446,9 @@ async def generate_key_helper_fn(
     budget_limits: list | None = None,  # multiple concurrent budget windows
     *,
     llm_router: Router | None = None,
+    actor: UserAPIKeyAuth | None = None,
 ):
+    customer_metadata: Final = validated_customer_key_metadata(_DECODED_JSON.validate_python(metadata), None, actor)
     from litellm.proxy.proxy_server import premium_user, prisma_client
 
     if prisma_client is None:
@@ -5436,7 +5500,7 @@ async def generate_key_helper_fn(
     router_settings_json: Final = safe_dumps(router_settings) if router_settings is not None else safe_dumps({})
 
     metadata_json: Final = metadata_json_with_limits(
-        metadata,
+        customer_metadata,
         model_rpm_limit=model_rpm_limit,
         model_tpm_limit=model_tpm_limit,
         mcp_rpm_limit=mcp_rpm_limit,
@@ -5478,6 +5542,8 @@ async def generate_key_helper_fn(
         }
         if teams is not None:
             user_data["teams"] = teams
+        if request_type == "user" and budget_limits_json is not None:
+            user_data["budget_limits"] = budget_limits_json
         if model_max_budget:
             # Only when supplied: the SSO and default-key callers reach this with the
             # empty default, and writing that would clear an existing user's budgets.
@@ -5509,7 +5575,7 @@ async def generate_key_helper_fn(
             "organization_id": organization_id,
             "budget_id": budget_id,
             "blocked": blocked,
-            "budget_limits": budget_limits_json,
+            "budget_limits": None if request_type == "user" and team_id is None else budget_limits_json,
             "created_by": created_by,
             "updated_by": updated_by,
             "allowed_routes": allowed_routes or [],
@@ -6419,7 +6485,11 @@ async def _execute_virtual_key_regeneration(
         _enforce_upperbound_key_params(data, fill_defaults=False)
         raise_on_logging_credential_change(data.metadata, key_in_db, user_api_key_dict)
         non_default_values = await prepare_key_update_data(
-            data=data, existing_key_row=key_in_db, prisma_client=prisma_client, llm_router=llm_router
+            data=data,
+            existing_key_row=key_in_db,
+            prisma_client=prisma_client,
+            llm_router=llm_router,
+            user_api_key_dict=user_api_key_dict,
         )
         # Only validate key_alias format if it's actually being changed
         new_key_alias: Final = non_default_values.get("key_alias")

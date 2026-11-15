@@ -1,5 +1,6 @@
 use std::future::Future;
 
+use bytes::Bytes;
 use serde_json::Value;
 
 /// The provider request as it is about to leave, offered to the host for rewriting.
@@ -40,7 +41,7 @@ pub struct RequestContext {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RawResponse {
     pub body: String,
-    /// The provider's HTTP status and headers, when the route forwards them to logging.
+    /// The provider's HTTP exchange, when the route forwards it to logging.
     pub head: Option<ResponseHead>,
 }
 
@@ -48,6 +49,8 @@ pub struct RawResponse {
 pub struct ResponseHead {
     pub status: u16,
     pub headers: Vec<(String, String)>,
+    pub sent_body: Bytes,
+    pub streamed: bool,
 }
 
 impl RawResponse {

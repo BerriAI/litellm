@@ -4,7 +4,7 @@ import json
 import os
 import time
 import weakref
-from collections.abc import Awaitable, Callable, Iterator, Mapping
+from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
@@ -17,16 +17,17 @@ from pydantic import BaseModel
 
 import litellm
 from litellm import Router
-from litellm.caching.caching import DualCache, InMemoryCache
 from litellm.constants import DEFAULT_AUTO_ROUTER_MAX_INPUT_CHARS, ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+from litellm.redis.stores.connection import RedisStores
+from litellm.redis.stores.router_usage import CounterIncrement, RouterUsageStore, UsageCounter
 from litellm.responses.streaming_iterator import ResponsesWsTurnAdmission, ResponsesWsTurnUsageRecorder
 from litellm.router import router_arguments
-from litellm.router_config import RouterConfig, build_router_config
+from litellm.router_config import build_router_config
 from litellm.router_python_host import PythonHost
 from litellm.router_strategy.adaptive_router.hooks import AdaptiveRouterPostCallHook
 from litellm.types.litellm_params import RoutingStrategyName
@@ -40,11 +41,9 @@ from litellm.types.utils import (
     StandardLoggingPayload,
 )
 
-
 if TYPE_CHECKING:
-    from opentelemetry.trace import Span
 
-    from tests.unit.conftest import RouterRedis
+    pass
 
 
 def create_standard_logging_payload() -> StandardLoggingPayload:
@@ -475,25 +474,24 @@ async def test_usage_based_routing_counts_an_http_call_once(monkeypatch: pytest.
     await asyncio.sleep(0)
     await GLOBAL_LOGGING_WORKER.flush()
 
-    tpm_keys, _ = router.lowesttpm_logger_v2.usage_counter_keys(router.get_model_list(model_name="http-tpm-v2"))
-    assert await router.cache.async_get_cache(key=tpm_keys[0]) == response.usage.total_tokens
+    selector: Final = router.lowesttpm_logger_v2
+    tpm_counters, _ = selector.usage_counters(router.get_model_list(model_name="http-tpm-v2"))
+    assert selector.usage.get_local(tpm_counters[0]) == response.usage.total_tokens
 
 
-class _FirstTpmCountFails(DualCache):
+class _FirstTpmCountFails(RouterUsageStore):
     failed: bool = False
 
-    async def async_increment_cache_post_call(
-        self, key: str, value: float, ttl: int | None, parent_otel_span: "Span | None" = None
-    ) -> None:
-        if self.failed or ":tpm:" not in key:
-            return await super().async_increment_cache_post_call(key, value, ttl, parent_otel_span)
+    async def increment_post_call(self, increments: Sequence[CounterIncrement]) -> None:
+        if self.failed or all(increment.counter.kind != "tpm" for increment in increments):
+            return await super().increment_post_call(increments)
         self.failed = True
         raise RuntimeError("routing cache unavailable")
 
 
 class _HostWhoseFirstTpmCountFails(PythonHost):
-    def routing_cache(self, config: RouterConfig) -> DualCache:
-        return _FirstTpmCountFails(in_memory_cache=InMemoryCache())
+    def router_usage(self, redis: RedisStores) -> RouterUsageStore:
+        return _FirstTpmCountFails(redis.router_usage())
 
 
 @pytest.mark.asyncio
@@ -617,8 +615,9 @@ def _io_limited_router(kind: str, **litellm_params: object) -> Router:
     )
 
 
-def _minutes_counter_key(kind: str, minute: datetime, model: str = "openai/ws-io-unpriced") -> str:
-    return f"global_router:ws-io-dep:{model}:{kind}:{minute.strftime('%H-%M')}"
+def _minutes_count(router: Router, kind: str, minute: datetime, model: str = "openai/ws-io-unpriced") -> object:
+    usage: Final = router._core._usage  # pyright: ignore[reportPrivateUsage, reportAttributeAccessIssue]  # the store the router counts io tokens in
+    return usage.get_local(UsageCounter("global_router", "ws-io-dep", model, minute.strftime("%H-%M"), kind))
 
 
 _PROVIDER_RESPONSE: Final = {
@@ -674,7 +673,7 @@ async def test_responses_call_sends_the_provider_only_the_client_metadata_and_se
 
     assert [json.loads(call.request.read()).get("metadata") for call in provider.calls] == [client_metadata]
     assert [
-        await router.cache.async_get_cache(key=_minutes_counter_key(kind, router_minute_pinned))
+        _minutes_count(router, kind, router_minute_pinned)
         for kind in ("itpm", "otpm")
     ] == [10, 5]
 
@@ -781,7 +780,7 @@ async def test_retried_call_settles_deployment_io_tokens_to_the_successful_attem
 
     assert provider.call_count == 2
     assert [
-        await router.cache.async_get_cache(key=_minutes_counter_key(kind, router_minute_pinned, model))
+        _minutes_count(router, kind, router_minute_pinned, model)
         for kind in ("itpm", "otpm")
     ] == [10, 5]
 
@@ -1199,7 +1198,6 @@ async def test_get_model_group_io_token_usage_sums_across_deployments():
     in the model group (not just the first), reading the same per-deployment
     cache keys the pre-call reservation writes to.
     """
-    from litellm.types.router import RouterCacheEnum
     from litellm.utils import get_utc_datetime
 
     router = Router(
@@ -1226,26 +1224,14 @@ async def test_get_model_group_io_token_usage_sums_across_deployments():
     )
 
     minute = get_utc_datetime().strftime("%H-%M")
-    keys_and_values = [
-        (
-            RouterCacheEnum.ITPM.value.format(id="io-usage-dep-1", model="openai/gpt-4o-mini", current_minute=minute),
-            30,
-        ),
-        (
-            RouterCacheEnum.OTPM.value.format(id="io-usage-dep-1", model="openai/gpt-4o-mini", current_minute=minute),
-            10,
-        ),
-        (
-            RouterCacheEnum.ITPM.value.format(id="io-usage-dep-2", model="openai/gpt-4o", current_minute=minute),
-            70,
-        ),
-        (
-            RouterCacheEnum.OTPM.value.format(id="io-usage-dep-2", model="openai/gpt-4o", current_minute=minute),
-            20,
-        ),
-    ]
-    for key, value in keys_and_values:
-        await router.cache.async_increment_cache(key=key, value=value, ttl=60)
+    usage = router._core._usage  # pyright: ignore[reportPrivateUsage, reportAttributeAccessIssue]  # the store the router counts io tokens in
+    for deployment_id, model, kind, value in (
+        ("io-usage-dep-1", "openai/gpt-4o-mini", "itpm", 30),
+        ("io-usage-dep-1", "openai/gpt-4o-mini", "otpm", 10),
+        ("io-usage-dep-2", "openai/gpt-4o", "itpm", 70),
+        ("io-usage-dep-2", "openai/gpt-4o", "otpm", 20),
+    ):
+        usage.set_local(UsageCounter("global_router", deployment_id, model, minute, kind), value)
 
     current_itpm, current_otpm = await router.get_model_group_io_token_usage("opus")
 

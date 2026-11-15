@@ -16,6 +16,7 @@ mod python_settings;
 mod redis;
 mod router;
 mod routes;
+mod s3_log;
 mod secrets;
 mod tokenizer;
 
@@ -26,7 +27,7 @@ mod _native {
     use pyo3::{prelude::*, types::PyModule};
 
     #[pymodule_export]
-    use crate::db::NativeDatabase;
+    use crate::db::{NativeDatabase, NativeDatabaseFailure};
     #[cfg(feature = "panic-test")]
     #[pymodule_export]
     use crate::diagnostics::_panic_for_test;
@@ -37,7 +38,7 @@ mod _native {
     #[pymodule_export]
     use crate::http::unsupported_tls_settings;
     #[pymodule_export]
-    use crate::logger::NativeDiagnosticProcessor;
+    use crate::logger::{NativeDiagnosticProcessor, NativeTokenRedactor};
     #[pymodule_export]
     use crate::model_cost::{
         NativeCostMapSource, NativeFetchFailed, NativeFetchPolicy, NativeFetched, NativeInstalled,
@@ -53,6 +54,8 @@ mod _native {
     #[pymodule_export]
     use crate::redis::store::auth_cache::{NativeAuthCache, PyLocalSizes};
     #[pymodule_export]
+    use crate::redis::store::deployment_health::NativeDeploymentHealth;
+    #[pymodule_export]
     use crate::redis::store::rate_limits::{
         NativeRateLimits, PyAtomicApplied, PyAtomicOverLimit, PyGaugeOverLimit, PyGaugesAcquired,
         PyGuardedReply, PyWindowCount,
@@ -60,7 +63,9 @@ mod _native {
     #[pymodule_export]
     use crate::redis::store::request::{NativeRequestRedis, NativeSend};
     #[pymodule_export]
-    use crate::redis::store::router_usage::NativeRouterUsage;
+    use crate::redis::store::router_session_pins::NativeRouterSessionPins;
+    #[pymodule_export]
+    use crate::redis::store::router_usage::{NativeRouterUsage, NativeUsageRead};
     #[pymodule_export]
     use crate::redis::store::sensitive_route_pins::NativeSensitiveRoutePins;
     #[pymodule_export]
@@ -72,7 +77,7 @@ mod _native {
         NativePending, NativeRedisStoreError, router_cooldowns::NativeRouterCooldowns,
     };
     #[pymodule_export]
-    use crate::router::{RouterCall, RouterCoreHandle};
+    use crate::router::{AttemptShape, RouterCall, RouterCoreHandle};
     #[pymodule_export]
     use crate::routes::audio_transcription::{atranscription, transcription};
     #[pymodule_export]
@@ -93,6 +98,8 @@ mod _native {
     use crate::routes::token_counter::TokenCounter;
     #[pymodule_export]
     use crate::routes::traces::trace_encode_error;
+    #[pymodule_export]
+    use crate::s3_log::NativeS3Log;
     #[cfg(feature = "huggingface")]
     #[pymodule_export]
     use crate::tokenizer::HuggingFaceEncoding;
@@ -147,12 +154,15 @@ mod tests {
                 "aresponses",
                 "ResponsesWebSocketConnection",
                 "NativeDiagnosticProcessor",
+                "NativeTokenRedactor",
                 "NativeRedisClient",
                 "NativeRedisBreaker",
                 "NativeAdmission",
                 "NativeRequestRedis",
                 "NativeSend",
                 "NativeAuthCache",
+                "NativeDeploymentHealth",
+                "NativeRouterSessionPins",
                 "NativeRateLimits",
                 "WindowCount",
                 "AtomicApplied",
@@ -163,6 +173,7 @@ mod tests {
                 "NativePending",
                 "NativeRouterCooldowns",
                 "NativeRouterUsage",
+                "NativeUsageRead",
                 "NativeSensitiveRoutePins",
                 "NativeRedisStoreError",
                 "NativeSpendCounters",
@@ -173,6 +184,7 @@ mod tests {
                 "NativeClickHouseSpendConfig",
                 "NativeClickHouseSpendStorage",
                 "NativeDatabase",
+                "NativeDatabaseFailure",
                 "trace_encode_error",
                 "bundled_model_cost_map",
                 "NativeModelCostMap",
@@ -190,10 +202,12 @@ mod tests {
                 "Tokenizer",
                 "RouterCoreHandle",
                 "RouterCall",
+                "AttemptShape",
                 "gil_stats",
                 "process_state_started",
                 "reserve_process_for_forking",
                 "unsupported_tls_settings",
+                "NativeS3Log",
             ];
             #[cfg(feature = "huggingface")]
             expected.push("HuggingFaceEncoding");

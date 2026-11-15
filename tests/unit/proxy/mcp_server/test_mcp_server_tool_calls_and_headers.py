@@ -1241,6 +1241,7 @@ async def test_mcp_read_resource_success():
         oauth2_headers=None,
         raw_headers=None,
         user_api_key_auth=user_api_key_auth,
+        scope_servers=(server,),
     )
     mock_manager.read_resource_from_server.assert_awaited_once_with(
         server=server,
@@ -1303,35 +1304,6 @@ async def test_read_resource_preserves_content_metadata(_mcp_request_ctx, kind, 
             }
         ],
     }
-
-
-@pytest.mark.asyncio
-async def test_mcp_read_resource_multiple_servers_error():
-    try:
-        from litellm.proxy.mcp_server.server import mcp_read_resource
-    except ImportError:
-        pytest.skip("MCP server not available")
-
-    user_api_key_auth = UserAPIKeyAuth(api_key="key", user_id="user")
-
-    server_a = MagicMock()
-    server_b = MagicMock()
-    server_a.name = "server_a"
-    server_b.name = "server_b"
-
-    with patch(
-        "litellm.proxy.mcp_server.operations._get_allowed_mcp_servers",
-        AsyncMock(return_value=[server_a, server_b]),
-    ) as mock_allowed:
-        with pytest.raises(HTTPException) as exc_info:
-            await mcp_read_resource(
-                url="https://example.com/resource",
-                user_api_key_auth=user_api_key_auth,
-            )
-
-    mock_allowed.assert_awaited_once()
-    assert exc_info.value.status_code == 400
-    assert "Multiple MCP servers" in str(exc_info.value.detail)
 
 
 @pytest.mark.asyncio

@@ -77,6 +77,24 @@ class PrismaTableRepository(Generic[RowT_co]):
         return wrap_table_actions_for_config_sync(actions=actions, table_name=self.table_name)
 
 
+class CustomerOrganizationRepository(PrismaTableRepository["prisma_models.LiteLLM_CustomerOrganizationTable"]):
+    table_name = "litellm_customerorganizationtable"
+
+
+class CustomerMemberRepository(PrismaTableRepository["prisma_models.LiteLLM_CustomerMemberTable"]):
+    table_name = "litellm_customermembertable"
+
+
+class CustomerTeamRepository(PrismaTableRepository["prisma_models.LiteLLM_CustomerTeamTable"]):
+    table_name = "litellm_customerteamtable"
+
+
+class CustomerBudgetIncreaseRequestRepository(
+    PrismaTableRepository["prisma_models.LiteLLM_CustomerBudgetIncreaseRequest"]
+):
+    table_name = "litellm_customerbudgetincreaserequest"
+
+
 class PolicyRepository(PrismaTableRepository["prisma_models.LiteLLM_PolicyTable"]):
     table_name = "litellm_policytable"
 
