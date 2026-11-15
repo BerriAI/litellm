@@ -106,7 +106,7 @@ describe("ViewSwitcher", () => {
     expect(assignSpy).not.toHaveBeenCalled();
   });
 
-  it("should open the Customer Management at the customers page and come back to the gateway", async () => {
+  it("should open Customer Management at the customers page and come back to the gateway", async () => {
     const user = userEvent.setup();
     renderSwitcher();
 

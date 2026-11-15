@@ -164,7 +164,7 @@ describe("CreateCustomerHierarchyDialog", () => {
   });
 
   it.each(["team", "member"] as const)("surfaces the free-tier 403 detail when creating a %s", async (kind) => {
-    fetchMock.mockResolvedValue(json({ detail: "Free customer management limit reached. Upgrade to Enterprise." }, 403));
+    fetchMock.mockResolvedValue(json({ detail: "Customer Management free tier limit reached. Upgrade to Enterprise." }, 403));
     render(
       <CreateCustomerHierarchyDialog
         kind={kind}
@@ -178,7 +178,7 @@ describe("CreateCustomerHierarchyDialog", () => {
     fireEvent.change(screen.getByRole("textbox", { name: "Display name" }), { target: { value: "Example" } });
     fireEvent.click(screen.getByRole("button", { name: "Create" }));
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      "Free customer management limit reached. Upgrade to Enterprise.",
+      "Customer Management free tier limit reached. Upgrade to Enterprise.",
     );
     expect(onOpenChange).not.toHaveBeenCalled();
     expect(onCreated).not.toHaveBeenCalled();

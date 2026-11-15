@@ -40,7 +40,7 @@ beforeEach(() => {
         creations.push(await request.json());
         if (freeTierReached)
           return Response.json(
-            { detail: "Free customer management limit reached. Upgrade to Enterprise." },
+            { detail: "Customer Management free tier limit reached. Upgrade to Enterprise." },
             { status: 403 },
           );
         return rejectCreation
@@ -65,7 +65,7 @@ describe("CreateCustomerDialog", () => {
     fireEvent.click(screen.getByRole("button", { name: "Create customer" }));
     await waitFor(() =>
       expect(toast.error).toHaveBeenCalledWith(
-        expect.stringContaining("Free customer management limit reached. Upgrade to Enterprise."),
+        expect.stringContaining("Customer Management free tier limit reached. Upgrade to Enterprise."),
       ),
     );
   });
