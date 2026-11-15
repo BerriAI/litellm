@@ -907,7 +907,7 @@ def test_lite_login_pkce_env_var_opens_the_consent_page_on_the_team_env_var(gate
                 assert delivered.status_code == 200, delivered.text
             printed: Final = run.printed_once_exited()
         assert "Login successful!" in printed, printed
-        assert f"Requested team '{hinted_alias}'" in printed, printed
+        assert f"Requested team '{hinted_alias}'. This login is for team ID '{hinted_team}'." in printed, printed
         stored: Final = JSON_OBJECT.validate_json((tmp_path / ".litellm" / "token.json").read_bytes())
         assert (stored["user_id"], stored["team_id"]) == (subject, hinted_team), stored
 
