@@ -119,6 +119,55 @@ async def test_native_foundry_embeddings_accept_deployment_names_and_endpoint_fo
     assert response.data == [{"object": "embedding", "index": 0, "embedding": [0.5]}]
 
 
+@pytest.mark.usefixtures("native_azure_embedding_transport")
+@pytest.mark.respx(assert_all_called=True)
+async def test_native_foundry_embeddings_use_env_resolved_base_for_custom_deployments(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "api_base", None)
+    monkeypatch.setenv("AZURE_AI_API_BASE", "https://foundry.services.ai.azure.com/providers/cohere")
+    route: Final = respx_mock.post("https://foundry.services.ai.azure.com/providers/cohere/v2/embed").mock(
+        return_value=httpx.Response(200, json={"embeddings": {"float": [[0.25]]}})
+    )
+
+    response: Final = await litellm.aembedding(
+        model="azure_ai/custom-embed-deployment", input=["query"], api_key="azure-key", dimensions=256
+    )
+
+    assert json.loads(route.calls.last.request.content)["model"] == "custom-embed-deployment"
+    assert response.data == [{"object": "embedding", "index": 0, "embedding": [0.25]}]
+
+
+@pytest.mark.parametrize(
+    "model",
+    ["Cohere-embed-v3-english", "Cohere-embed-v3-multilingual", "cohere-embed-v4", "text-embedding-ada-002"],
+)
+def test_legacy_and_generic_azure_ai_models_stay_off_the_native_route(
+    monkeypatch: pytest.MonkeyPatch, model: str
+) -> None:
+    from litellm.utils import ProviderConfigManager
+
+    monkeypatch.setattr(litellm, "api_base", None)
+    monkeypatch.delenv("AZURE_AI_API_BASE", raising=False)
+
+    config: Final = ProviderConfigManager.get_provider_embedding_config(
+        model=model, provider=litellm.LlmProviders.AZURE_AI, api_base="https://foundry.services.ai.azure.com"
+    )
+
+    assert config is None
+
+
+def test_native_foundry_route_matches_endpoint_path_case_insensitively() -> None:
+    from litellm.llms.azure_ai.embed.cohere_transformation import AzureAICohereNativeEmbeddingConfig
+
+    api_base: Final = "https://foundry.services.ai.azure.com/Providers/Cohere"
+    assert AzureAICohereNativeEmbeddingConfig.supports_model("custom-embed-deployment", api_base)
+    complete_url: Final = AzureAICohereNativeEmbeddingConfig().get_complete_url(
+        api_base, None, "custom-embed-deployment", {}, {}
+    )
+    assert complete_url == "https://foundry.services.ai.azure.com/Providers/Cohere/v2/embed"
+
+
 def test_azure_ai_cohere_request_splits_images_from_text_and_keeps_order():
     config: Final = AzureAICohereConfig()
     image_request, text_request, image_indexes = config.transform_request(

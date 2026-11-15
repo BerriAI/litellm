@@ -24,7 +24,8 @@ from litellm.utils import is_base64_encoded
 class AzureAICohereNativeEmbeddingConfig(CohereEmbeddingConfig):
     @staticmethod
     def supports_model(model: str, api_base: str | None = None) -> bool:
-        path: Final = urlsplit(api_base or "").path.rstrip("/")
+        resolved_base: Final = AzureFoundryModelInfo.get_api_base(api_base)
+        path: Final = urlsplit(resolved_base or "").path.rstrip("/").lower()
         name: Final = model.lower().removeprefix("azure_ai/")
         return path.endswith(("/providers/cohere", "/providers/cohere/v2", "/providers/cohere/v2/embed")) or (
             name.startswith("cohere-embed-") and not name.startswith(("cohere-embed-v3", "cohere-embed-v4"))
@@ -44,14 +45,16 @@ class AzureAICohereNativeEmbeddingConfig(CohereEmbeddingConfig):
             raise ValueError("Azure AI API base is required for native Cohere embeddings")
         parts: Final = urlsplit(resolved_base)
         path: Final = parts.path.rstrip("/")
+        lowered_path: Final = path.lower()
+        resource_root: Final = path[: -len("/models")] if lowered_path.endswith("/models") else path
         endpoint: Final = (
             path
-            if path.endswith("/providers/cohere/v2/embed")
+            if lowered_path.endswith("/providers/cohere/v2/embed")
             else f"{path}/embed"
-            if path.endswith("/providers/cohere/v2")
+            if lowered_path.endswith("/providers/cohere/v2")
             else f"{path}/v2/embed"
-            if path.endswith("/providers/cohere")
-            else f"{path.removesuffix('/models')}/providers/cohere/v2/embed"
+            if lowered_path.endswith("/providers/cohere")
+            else f"{resource_root}/providers/cohere/v2/embed"
         )
         return urlunsplit((parts.scheme, parts.netloc, endpoint, parts.query, parts.fragment))
 
