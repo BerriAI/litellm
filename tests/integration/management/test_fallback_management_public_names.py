@@ -238,6 +238,70 @@ def test_consecutive_creates_within_the_cache_window_keep_every_rule(gateway: Ga
         assert frozenset(primaries) <= covered, (primaries, covered)
 
 
+def _create_over_a_fresh_connection(instance: Gateway, model: str, target: str) -> httpx.Response:
+    with httpx.Client(base_url=instance.client.base_url, timeout=30, trust_env=False) as client:
+        return Gateway(client, instance.key, instance.upstream_url).request(
+            "POST", "/fallback", _fallback_body(model, [target])
+        )
+
+
+def _delete_over_a_fresh_connection(instance: Gateway, model: str) -> httpx.Response:
+    with httpx.Client(base_url=instance.client.base_url, timeout=30, trust_env=False) as client:
+        return Gateway(client, instance.key, instance.upstream_url).request(
+            "DELETE", f"/fallback/{model}", params={"fallback_type": "general"}
+        )
+
+
+def test_concurrent_writes_through_both_instances_keep_every_rule(gateway: Gateway, peer: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        target: Final = scenario.model(model=f"openai/n7t-{uuid.uuid4().hex}")
+        primaries: Final = tuple(scenario.model(model=f"openai/n7{tag}-{uuid.uuid4().hex}") for tag in "abcdefgh")
+        for instance in (gateway, peer):
+            for model in (target, *primaries):
+                _wait_until_served(instance, model)
+        for primary in primaries:
+            scenario.cleanups.callback(_forget_fallback, gateway, primary, "general")
+        instances: Final = tuple(gateway if index % 2 == 0 else peer for index in range(len(primaries)))
+        with ThreadPoolExecutor(max_workers=len(primaries)) as pool:
+            created: Final = tuple(
+                pool.map(partial(_create_over_a_fresh_connection, target=target), instances, primaries)
+            )
+        assert all(response.status_code == 200 for response in created), [response.text for response in created]
+        assert frozenset(primaries) <= _covered_models(_stored_fallbacks())
+
+        dropped: Final = primaries[::2]
+        with ThreadPoolExecutor(max_workers=len(dropped)) as pool:
+            removed: Final = tuple(pool.map(_delete_over_a_fresh_connection, instances[1::2], dropped))
+        assert all(response.status_code == 200 for response in removed), [response.text for response in removed]
+        covered: Final = _covered_models(_stored_fallbacks()) & frozenset(primaries)
+        assert covered == frozenset(primaries[1::2]), covered
+
+
+def _read_fallback(instance: Gateway, model: str) -> httpx.Response:
+    return instance.request("GET", f"/fallback/{model}", params={"fallback_type": "general"})
+
+
+def test_the_other_instance_reads_each_write_immediately(gateway: Gateway, peer: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        primary: Final = scenario.model(model=f"openai/n8p-{uuid.uuid4().hex}")
+        first: Final = scenario.model(model=f"openai/n8a-{uuid.uuid4().hex}")
+        second: Final = scenario.model(model=f"openai/n8b-{uuid.uuid4().hex}")
+        for model in (primary, first, second):
+            _wait_until_served(gateway, model)
+        scenario.cleanups.callback(_forget_fallback, gateway, primary, "general")
+
+        assert gateway.request("POST", "/fallback", _fallback_body(primary, [first])).status_code == 200
+        created: Final = _read_fallback(peer, primary)
+        assert gateway.request("POST", "/fallback", _fallback_body(primary, [second, first])).status_code == 200
+        updated: Final = _read_fallback(peer, primary)
+        assert gateway.request("DELETE", f"/fallback/{primary}", params={"fallback_type": "general"}).status_code == 200
+        deleted: Final = _read_fallback(peer, primary)
+
+        assert created.status_code == 200 and _fallback_models(created) == [first], created.text
+        assert updated.status_code == 200 and _fallback_models(updated) == [second, first], updated.text
+        assert deleted.status_code == 404, deleted.text
+
+
 def test_unknown_model_404_lists_team_public_and_internal_names(gateway: Gateway) -> None:
     with gateway.scenario() as scenario:
         team: Final = scenario.team()

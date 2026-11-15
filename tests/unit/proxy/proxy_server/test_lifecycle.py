@@ -25,6 +25,7 @@ import os
 import subprocess
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -1391,6 +1392,25 @@ async def test_monthly_spend_report_sent_when_the_lock_is_free_or_absent(acquire
     await jobs["monthly_spend_report_job"]()
 
     proxy_logging_obj.slack_alerting_instance.send_monthly_spend_report.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
+async def test_weekly_spend_report_first_run_is_minutes_ahead_when_the_scheduler_zone_differs_from_the_clock():
+    """TZ=Asia/Calcutta on a host without the legacy alias puts the scheduler on IST through tzdata while
+    datetime.now() stays on UTC, so a naive first run landed hours in the past, past the misfire grace."""
+    local_offset: Final = datetime.now().astimezone().utcoffset() or timedelta(0)
+    scheduler: Final = AsyncIOScheduler(timezone=timezone(local_offset + timedelta(hours=5, minutes=30)))
+    registered_after: Final = datetime.now(timezone.utc)
+
+    await ProxyStartupEvent._initialize_slack_alerting_jobs(
+        scheduler=scheduler,
+        general_settings={},
+        proxy_logging_obj=_make_slack_alerting_proxy_logging(acquire_lock_result=True),
+        prisma_client=MagicMock(),
+    )
+
+    first_run: Final = scheduler.get_job("weekly_spend_report_job").next_run_time
+    assert registered_after < first_run < datetime.now(timezone.utc) + timedelta(seconds=311)
 
 
 @pytest.mark.asyncio

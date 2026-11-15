@@ -1,0 +1,3 @@
+{{- if and (include "litellm.gateway.render" .) .Values.gateway.keda.enabled }}
+{{- include "litellm.workload.keda" . }}
+{{- end }}

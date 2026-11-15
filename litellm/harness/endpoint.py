@@ -37,7 +37,7 @@ from litellm.constants import (
 from litellm.harness.context import GatewayTarget
 from litellm.harness.errors import HarnessError, HarnessInstallFailed
 from litellm.harness.types import Harness, Usage
-from litellm.litellm_core_utils.core_helpers import has_attributes
+from litellm.litellm_core_utils.core_helpers import decoded_json_object, has_attributes
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.types.litellm_params import STREAM_USAGE_INJECTED_FIELD
 from litellm.types.llms.custom_http import httpxSpecialProvider
@@ -722,7 +722,7 @@ class ModelEndpoint:
             return await litellm.anthropic.messages.acreate(**kwargs)
         if route == ROUTE_CHAT:
             if not kwargs.get("stream"):
-                return await litellm.acompletion(**kwargs)
+                return await litellm.acompletion(**decoded_json_object(kwargs))
             stream_options = kwargs.get("stream_options") or {}  # mutable-ok: empty default for a JSON field
             return await litellm.acompletion(
                 **{
@@ -731,7 +731,7 @@ class ModelEndpoint:
                     STREAM_USAGE_INJECTED_FIELD: "include_usage" not in stream_options,
                 }
             )
-        return await litellm.aresponses(**kwargs)
+        return await litellm.aresponses(**decoded_json_object(kwargs))
 
     async def _call_sdk(self, route: str, body: Mapping[str, object]) -> Response:
         kwargs = self._sdk_kwargs(body)

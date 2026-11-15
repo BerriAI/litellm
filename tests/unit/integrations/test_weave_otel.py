@@ -1,6 +1,6 @@
 import json
 import os
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Final
 from unittest.mock import MagicMock, patch
 
@@ -12,9 +12,10 @@ from litellm.integrations.weave.weave_otel import (
     WeaveLLMObsOTELAttributes,
     _set_weave_specific_attributes,
     get_weave_otel_config,
+    set_weave_otel_attributes,
 )
 from litellm.types.integrations.weave_otel import WeaveOtelConfig, WeaveSpanAttributes
-from litellm.types.utils import ModelResponse
+from litellm.types.utils import Message, ModelResponse
 
 
 def test_get_weave_otel_config():
@@ -205,3 +206,67 @@ def test_weave_output_value_is_the_dumped_model_response() -> None:
     output: Final = json.loads(str(span.attributes[OpenInferenceSpanAttributes.OUTPUT_VALUE]))
     assert output["id"] == "chatcmpl-1"
     assert output["choices"][0]["message"]["content"] == "Sunny."
+
+
+NOT_JSON_ENCODABLE: Final = object()
+NON_UTF8_BYTES: Final = b"\x80"
+
+
+@pytest.mark.parametrize(
+    ("messages", "expected_messages"),
+    [
+        (
+            (Message(role="user", content="weather in SF?"), Message(role="assistant", content="Sunny.")),
+            [
+                Message(role="user", content="weather in SF?").model_dump(),
+                Message(role="assistant", content="Sunny.").model_dump(),
+            ],
+        ),
+        (
+            (Message(role="user", content="weather in SF?", trace_handle=NOT_JSON_ENCODABLE),),
+            [{**Message(role="user", content="weather in SF?").model_dump(), "trace_handle": str(NOT_JSON_ENCODABLE)}],
+        ),
+        (
+            (Message(role="user", content="weather in SF?", audio_bytes=NON_UTF8_BYTES),),
+            [str(Message(role="user", content="weather in SF?", audio_bytes=NON_UTF8_BYTES))],
+        ),
+    ],
+    ids=["litellm_messages", "litellm_message_with_value_json_cannot_encode", "litellm_message_with_non_utf8_bytes"],
+)
+def test_weave_span_keeps_input_and_token_usage_when_messages_are_litellm_messages(
+    messages: tuple[Message, ...], expected_messages: Sequence[object]
+) -> None:
+    span: Final = _TRACER.start_span("litellm_request")
+    response: Final = ModelResponse(
+        model="gpt-4o",
+        choices=[{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "Still sunny."}}],
+        usage={"prompt_tokens": 7, "completion_tokens": 3, "total_tokens": 10},
+    )
+
+    set_weave_otel_attributes(span, {"messages": messages, "standard_logging_object": {}}, response)
+
+    attributes: Final = span.attributes or {}
+    assert json.loads(str(attributes[OpenInferenceSpanAttributes.INPUT_VALUE])) == {"messages": expected_messages}
+    assert {
+        key: attributes.get(key)
+        for key in (
+            OpenInferenceSpanAttributes.LLM_TOKEN_COUNT_PROMPT,
+            OpenInferenceSpanAttributes.LLM_TOKEN_COUNT_COMPLETION,
+            OpenInferenceSpanAttributes.LLM_TOKEN_COUNT_TOTAL,
+        )
+    } == {
+        OpenInferenceSpanAttributes.LLM_TOKEN_COUNT_PROMPT: 7,
+        OpenInferenceSpanAttributes.LLM_TOKEN_COUNT_COMPLETION: 3,
+        OpenInferenceSpanAttributes.LLM_TOKEN_COUNT_TOTAL: 10,
+    }
+
+
+def test_weave_span_input_keeps_dict_message_content_exactly_as_sent() -> None:
+    span: Final = _TRACER.start_span("litellm_request")
+    messages: Final = ({"role": "user", "content": "before\x00after", "metadata": {1: "one"}},)
+
+    set_weave_otel_attributes(span, {"messages": messages, "standard_logging_object": {}}, ModelResponse(model="gpt-4o"))
+
+    assert json.loads(str((span.attributes or {})[OpenInferenceSpanAttributes.INPUT_VALUE])) == {
+        "messages": [{"role": "user", "content": "before\x00after", "metadata": {"1": "one"}}]
+    }

@@ -32,8 +32,9 @@ AWS_CREDENTIAL_KWARGS_KEYS: Final = frozenset(
 )
 
 PROVIDER_AFFINITY_HEADER_KWARG_KEY: Final = "provider_affinity_header"
+AGENTIC_LOOP_TOOL_CHOICE_KEY: Final = "_agentic_loop_tool_choice"
 AGENTIC_LOOP_CONTROL_KWARGS_KEYS: Final = frozenset(
-    {"_agentic_loop_depth", "_agentic_loop_fingerprints", "max_agentic_loops"}
+    {"_agentic_loop_depth", "_agentic_loop_fingerprints", "max_agentic_loops", AGENTIC_LOOP_TOOL_CHOICE_KEY}
 )
 OAUTH_TOKEN_EXCHANGE_KWARGS_KEYS: Final = frozenset(
     {
@@ -62,6 +63,7 @@ OPTIONAL_KWARGS_KEYS: Final = (
             "bucket_name",
             "s3_bucket_name",
             "s3_output_bucket_name",
+            "stored_s3_bucket_name",
             "allow_legacy_cloud_file_ids",
             "s3_endpoint_url",
             "s3_region_name",
@@ -87,6 +89,9 @@ OPTIONAL_KWARGS_KEYS: Final = (
             "chatgpt_auth_file",
             "github_copilot_auth_type",
             "github_copilot_host",
+            "github_copilot_app_id",
+            "github_copilot_app_installation_id",
+            "github_copilot_app_private_key_ref",
             "github_copilot_user_session",
             "fireworks_forward_user_id",
             "thought_signature_in_tool_call_id",

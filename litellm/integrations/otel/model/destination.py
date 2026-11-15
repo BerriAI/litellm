@@ -61,6 +61,13 @@ class OtelDestination(LiteLLMBaseModel):
         default=None,
         description="An explicit set replaces the global database-span exclusions; ``None`` follows the global set.",
     )
+    metadata_keys: tuple[str, ...] = Field(
+        default=(),
+        description=(
+            "``requester_metadata.<key>`` paths exported as ``litellm.metadata.<key>`` on this destination's "
+            "spans only, on top of the global ``baggage_metadata_keys``."
+        ),
+    )
 
     def captures_content(self, default: str) -> bool:
         setting: Final = self.capture_message_content
@@ -79,8 +86,8 @@ class OtelDestination(LiteLLMBaseModel):
     def cache_key(self) -> tuple[str, tuple[tuple[str, str], ...], tuple[tuple[str, str], ...], str | None]:
         """Identity for processor reuse, so one destination means one exporter.
 
-        ``span_scope``, the sampling rates, ``capture_message_content`` and
-        ``excluded_db_systems`` are left out on purpose: they decide which spans reach
+        ``span_scope``, the sampling rates, ``capture_message_content``,
+        ``excluded_db_systems`` and ``metadata_keys`` are left out on purpose: they decide which spans reach
         the processor and what they carry, not how the processor exports them, so two
         views of the same account share one exporter.
         """
