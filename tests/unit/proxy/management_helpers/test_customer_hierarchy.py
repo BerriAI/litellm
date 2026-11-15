@@ -89,12 +89,19 @@ def matches_where(row: Mapping[str, object], where: Mapping[str, object]) -> boo
 
 
 class Table:
-    def __init__(self, id_field: str, database: "Database", *, create_error: DataError | None = None) -> None:
+    def __init__(
+        self,
+        id_field: str,
+        database: "Database",
+        *,
+        create_error: DataError | None = None,
+        hydration_limit: int | None = None,
+    ) -> None:
         self.id_field = id_field
         self.database = database
         self.create_error = create_error
         self.rows: Mapping[str, Record] = {}
-        self.hydration_limit: int | None = None
+        self.hydration_limit = hydration_limit
 
     async def include(self, row: Record, include: Mapping[str, object] | None) -> Record:
         if not include:
@@ -282,17 +289,20 @@ class Database:
         source: "Database | None" = None,
         *,
         team_create_error: DataError | None = None,
+        hydration_limit: int | None = None,
     ) -> None:
         self.litellm_customerorganizationtable = (
             Table("customer_org_id", self) if source is None else source.litellm_customerorganizationtable
         )
         self.litellm_customerteamtable = (
-            Table("customer_team_id", self, create_error=team_create_error)
+            Table("customer_team_id", self, create_error=team_create_error, hydration_limit=hydration_limit)
             if source is None
             else source.litellm_customerteamtable
         )
         self.litellm_customermembertable = (
-            Table("customer_member_id", self) if source is None else source.litellm_customermembertable
+            Table("customer_member_id", self, hydration_limit=hydration_limit)
+            if source is None
+            else source.litellm_customermembertable
         )
         self.litellm_budgettable = Table("budget_id", self) if source is None else source.litellm_budgettable
         self.litellm_budgetwindowspend = (

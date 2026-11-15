@@ -1035,7 +1035,7 @@ def test_member_list_searches_id_and_alias_within_its_parent_before_paginating(s
 @pytest.mark.parametrize("collection", ("customer_teams", "customer_members"))
 @pytest.mark.parametrize("sort", ("budget_asc", "budget_desc"))
 def test_list_sorts_effective_budget_before_pagination_with_uncapped_last(collection: str, sort: str) -> None:
-    database: Final = Database()
+    database: Final = Database(hydration_limit=2)
     http: Final = client(database=database)
     org: Final = http.post("/management/v1/customer_organizations", json={"customer_org_id": "sort-org"})
     assert org.status_code == 201, org.text
@@ -1067,10 +1067,6 @@ def test_list_sorts_effective_budget_before_pagination_with_uncapped_last(collec
         else ("annual", "expensive", "cheap", "same", "zero", "empty")
     )
     expected: Final = (*budget_order, "parent") if collection == "customer_teams" else budget_order
-    table: Final = (
-        database.litellm_customerteamtable if collection == "customer_teams" else database.litellm_customermembertable
-    )
-    table.hydration_limit = 2
     for page in range(1, (len(expected) + 1) // 2 + 1):
         response: Final = http.get(
             f"/management/v1/{collection}", params={**scope, "sort": sort, "page_size": 2, "page": page}

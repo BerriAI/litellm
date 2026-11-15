@@ -8,7 +8,6 @@ from typing import TYPE_CHECKING, Final, Generic, Literal, Protocol, TypeAlias, 
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
-from typing_extensions import LiteralString
 
 from litellm.models.budget import BudgetLimit, BudgetLimits, LiteLLM_BudgetTable, initialize_budget_limits
 from litellm.proxy.common_utils.timezone_utils import (
@@ -21,7 +20,7 @@ from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.list_api.common import escape_like
 from litellm.proxy.management_helpers.customer_budget_usage import customer_budget_usage
 from litellm.repositories.budget_repository import create_budget_row, update_budget_row
-from litellm.repositories.chunked_in import count_in, delete_many_in, find_many_in
+from litellm.repositories.chunked_in import IN_LIST_CHUNK_SIZE, count_in, delete_many_in, find_many_in
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.types.proxy.management_endpoints.customer_hierarchy import (
     Budget,
@@ -1109,24 +1108,29 @@ class CustomerHierarchyStore:
         count: Final = await self.teams.count(where=where)
         if sort is not None:
             ids: Final = await self._budget_sort_ids(
-                "SELECT customer_team_id AS entity_id, budget_id, budget_override_id, budget_override_expires_at "
-                'FROM "LiteLLM_CustomerTeamTable" WHERE ($1::text IS NULL OR parent_org_id = $1) '
-                "ORDER BY created_at ASC, customer_team_id ASC",
-                (parent_org_id,),
+                await self.db.query_raw(
+                    "SELECT customer_team_id AS entity_id, budget_id, budget_override_id, budget_override_expires_at "
+                    'FROM "LiteLLM_CustomerTeamTable" WHERE ($1::text IS NULL OR parent_org_id = $1) '
+                    "ORDER BY created_at ASC, customer_team_id ASC",
+                    parent_org_id,
+                ),
                 sort,
                 page,
                 page_size,
             )
-            rows_by_id: Final = (
-                {
-                    _ID.validate_python(row.model_dump()["customer_team_id"]): row
-                    for row in await self.teams.find_many(
-                        where={"customer_team_id": {"in": list(ids)}}, include=_MEMBER_INCLUDE
+            chunks: Final = tuple(
+                [
+                    await self.teams.find_many(
+                        # bounded-ok: Each slice has at most IN_LIST_CHUNK_SIZE ids.
+                        where={"customer_team_id": {"in": list(ids[start : start + IN_LIST_CHUNK_SIZE])}},
+                        include=_MEMBER_INCLUDE,
                     )
-                }
-                if ids
-                else {}
+                    for start in range(0, len(ids), IN_LIST_CHUNK_SIZE)
+                ]
             )
+            rows_by_id: Final = {
+                _ID.validate_python(row.model_dump()["customer_team_id"]): row for row in chain.from_iterable(chunks)
+            }
             return Page(
                 await customer_budget_usage(
                     tuple(
@@ -1175,26 +1179,33 @@ class CustomerHierarchyStore:
         count: Final = await self.members.count(where=where)
         if sort is not None:
             ids: Final = await self._budget_sort_ids(
-                "SELECT customer_member_id AS entity_id, budget_id, budget_override_id, budget_override_expires_at "
-                'FROM "LiteLLM_CustomerMemberTable" WHERE ($1::text IS NULL OR parent_org_id = $1) '
-                "AND ($2::text IS NULL OR parent_team_ids @> ARRAY[$2]::text[]) "
-                "AND ($3 = '' OR alias ILIKE $3 OR customer_member_id ILIKE $3) "
-                "ORDER BY created_at ASC, customer_member_id ASC",
-                (parent_org_id, parent_team_id, f"%{escape_like(search)}%" if search else ""),
+                await self.db.query_raw(
+                    "SELECT customer_member_id AS entity_id, budget_id, budget_override_id, budget_override_expires_at "
+                    'FROM "LiteLLM_CustomerMemberTable" WHERE ($1::text IS NULL OR parent_org_id = $1) '
+                    "AND ($2::text IS NULL OR parent_team_ids @> ARRAY[$2]::text[]) "
+                    "AND ($3 = '' OR alias ILIKE $3 OR customer_member_id ILIKE $3) "
+                    "ORDER BY created_at ASC, customer_member_id ASC",
+                    parent_org_id,
+                    parent_team_id,
+                    f"%{escape_like(search)}%" if search else "",
+                ),
                 sort,
                 page,
                 page_size,
             )
-            rows_by_id: Final = (
-                {
-                    _ID.validate_python(row.model_dump()["customer_member_id"]): row
-                    for row in await self.members.find_many(
-                        where={"customer_member_id": {"in": list(ids)}}, include=_MEMBER_INCLUDE
+            chunks: Final = tuple(
+                [
+                    await self.members.find_many(
+                        # bounded-ok: Each slice has at most IN_LIST_CHUNK_SIZE ids.
+                        where={"customer_member_id": {"in": list(ids[start : start + IN_LIST_CHUNK_SIZE])}},
+                        include=_MEMBER_INCLUDE,
                     )
-                }
-                if ids
-                else {}
+                    for start in range(0, len(ids), IN_LIST_CHUNK_SIZE)
+                ]
             )
+            rows_by_id: Final = {
+                _ID.validate_python(row.model_dump()["customer_member_id"]): row for row in chain.from_iterable(chunks)
+            }
             return Page(
                 await customer_budget_usage(
                     tuple(
@@ -1225,12 +1236,8 @@ class CustomerHierarchyStore:
             count,
         )
 
-    async def _budget_sort_ids(
-        self, query: LiteralString, parameters: tuple[object, ...], sort: BudgetSort, page: int, page_size: int
-    ) -> tuple[str, ...]:
-        candidates: Final = TypeAdapter(tuple[_BudgetSortRow, ...]).validate_python(
-            await self.db.query_raw(query, *parameters)
-        )
+    async def _budget_sort_ids(self, rows: object, sort: BudgetSort, page: int, page_size: int) -> tuple[str, ...]:
+        candidates: Final = TypeAdapter(tuple[_BudgetSortRow, ...]).validate_python(rows)
         references: Final = chain.from_iterable((row.budget_id, row.budget_override_id) for row in candidates)
         budgets: Final = {
             _ID.validate_python(row.model_dump()["budget_id"]): row.model_dump()
