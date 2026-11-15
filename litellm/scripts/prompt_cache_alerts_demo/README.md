@@ -12,7 +12,7 @@ Alerts page that reviews the result. It makes no model calls and needs no provid
 | `notifier` | A Slack webhook stand-in that keeps the posts it receives, at <http://localhost:4101/received> |
 | `driver` | Sends the demo requests through the proxy and checks the outcome |
 
-`config.yaml` turns everything on the way a gateway would. It adds `prompt_cache_observations` to
+`demo_proxy_config.yaml` turns everything on the way a gateway would. It adds `prompt_cache_observations` to
 `router_settings.optional_pre_call_checks`, sets `model_info.prompt_cache_observation: true` on three deployments,
 points `router_settings` and `general_settings.coordination_redis` at the same Redis, and sets
 `general_settings.prompt_cache_alerts` and `prompt_cache_alert_notifications`.

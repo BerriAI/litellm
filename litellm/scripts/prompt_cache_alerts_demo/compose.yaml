@@ -26,7 +26,7 @@ services:
       labels:
         org.opencontainers.image.revision: ${DEMO_COMMIT}
     pull_policy: build
-    command: ["--config", "/demo/config.yaml", "--port", "4000", "--num_workers", "2"]
+    command: ["--config", "/demo/demo_proxy_config.yaml", "--port", "4000", "--num_workers", "2"]
     ports:
       - "127.0.0.1:${DEMO_PROXY_PORT:-4100}:4000"
     env_file: *demo-credentials

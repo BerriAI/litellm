@@ -1,0 +1,40 @@
+model_list:
+  - model_name: claude-demo-east
+    litellm_params:
+      model: anthropic/claude-opus-5-5
+      api_base: http://upstream:8080
+      api_key: demo-key-for-the-scripted-upstream
+    model_info:
+      id: claude-demo-east
+      prompt_cache_observation: true
+  - model_name: claude-demo-healthy
+    litellm_params:
+      model: anthropic/claude-opus-5-5
+      api_base: http://upstream:8080
+      api_key: demo-key-for-the-scripted-upstream
+    model_info:
+      id: claude-demo-healthy
+      prompt_cache_observation: true
+  - model_name: claude-demo-unproven
+    litellm_params:
+      model: anthropic/claude-opus-5-5
+      api_base: http://upstream:8080
+      api_key: demo-key-for-the-scripted-upstream
+    model_info:
+      id: claude-demo-unproven
+      prompt_cache_observation: true
+
+router_settings:
+  optional_pre_call_checks: ["prompt_cache_observations"]
+  redis_host: redis
+  redis_port: 6379
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+  coordination_redis:
+    host: redis
+    port: 6379
+  prompt_cache_alerts: true
+  prompt_cache_alert_notifications: true
+  alerting: ["slack"]
+  alert_types: ["performance_alerts"]
