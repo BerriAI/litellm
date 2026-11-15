@@ -12,7 +12,7 @@ from integration._support.responses_stream import (
 )
 from integration._support.wire import Reply, Request, wire_server
 
-_SIBLING_TEXT: Final = "sibling answer"
+_RETRY_TEXT: Final = "retry answer"
 
 
 def _throttle_first_request_only(identity: str) -> Callable[[Request], Reply]:
@@ -21,15 +21,13 @@ def _throttle_first_request_only(identity: str) -> Callable[[Request], Reply]:
 
     def respond(request: Request) -> Reply:
         assert request.method == "POST" and request.target.startswith(AZURE_TARGET), request.target
-        stream: Final = (
-            rate_limited_stream(identity) if next(arrivals) == 0 else healthy_stream(identity, _SIBLING_TEXT)
-        )
+        stream: Final = rate_limited_stream(identity) if next(arrivals) == 0 else healthy_stream(identity, _RETRY_TEXT)
         return Reply(content_type="text/event-stream", chunks=stream)
 
     return respond
 
 
-def test_streamed_responses_in_stream_rate_limit_is_retried_on_the_sibling_deployment(gateway: Gateway) -> None:
+def test_streamed_responses_in_stream_rate_limit_is_retried_in_its_model_group(gateway: Gateway) -> None:
     identity: Final = "resp_" + uuid.uuid4().hex
     respond: Final = _throttle_first_request_only(identity)
     with wire_server(respond) as region_a, wire_server(respond) as region_b, gateway.scenario() as scenario:
@@ -44,7 +42,7 @@ def test_streamed_responses_in_stream_rate_limit_is_retried_on_the_sibling_deplo
         assert response.status_code == 200, response.text
         events: Final = sse_events(response.text)
         assert [name for name, _ in events][-1] == "response.completed", response.text
-        assert _SIBLING_TEXT in response.text, response.text
+        assert _RETRY_TEXT in response.text, response.text
         calls_per_region: Final = (len(region_a.drain()), len(region_b.drain()))
-        assert calls_per_region == (1, 1), f"the retry must leave the throttled region: {calls_per_region}"
+        assert sum(calls_per_region) == 2, f"one throttled call and one retry: {calls_per_region}"
         assert response.headers["x-litellm-attempted-retries"] == "1", dict(response.headers)

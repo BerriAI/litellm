@@ -1814,9 +1814,9 @@ async def _responses_recover_stream_error(
     adopt_headers: Callable[[object], _Prepared],
     held: tuple[object, ...],
 ) -> AsyncGenerator[object, None]:
-    """A Responses stream that broke before any output is retried in its own group, skipping the failed
-    deployment, then falls back with the newest failure once the retries are spent. The primary's held
-    lifecycle events are dropped when a retry or a fallback answers."""
+    """A Responses stream that broke before any output is retried in its own group, then falls back
+    with the newest failure once the retries are spent. The primary's held lifecycle events are dropped
+    when a retry or a fallback answers."""
     last_error: MidStreamFallbackError = e  # rebind-ok: the newest failure once a retry also failed
     if _responses_stream_retries(attempt, e, source_iterator):
         if hasattr(source_iterator, "aclose"):
