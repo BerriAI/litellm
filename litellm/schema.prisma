@@ -85,6 +85,8 @@ model LiteLLM_CustomerTeamTable {
   updated_at DateTime @default(now()) @updatedAt
   updated_by String
   @@index([parent_org_id])
+  @@index([budget_id])
+  @@index([budget_override_id])
   @@index([spend])
 }
 
@@ -107,6 +109,9 @@ model LiteLLM_CustomerMemberTable {
   updated_at DateTime @default(now()) @updatedAt
   updated_by String
   @@index([parent_org_id])
+  @@index([parent_team_ids], type: Gin)
+  @@index([budget_id])
+  @@index([budget_override_id])
   @@index([spend])
 }
 
