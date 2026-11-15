@@ -2419,3 +2419,33 @@ def test_v2_model_info_access_group_paginates_over_the_filtered_set(client, auth
     assert _model_names(payload) == ["openai/*"]
     assert payload["total_count"] == 2
     assert payload["total_pages"] == 2
+
+
+
+def test_model_info_reads_a_currency_priced_row_back_as_configured_with_its_usd_rates_beside_it() -> None:
+    from litellm.types.router import Deployment
+
+    built: Final = Deployment(
+        model_name="eur-model",
+        litellm_params={  # pyright: ignore[reportArgumentType]  # a config entry
+            "model": "openai/eur-currency-demo",
+            "pricing_currency": "EUR",
+            "usd_per_currency_unit": "1.20",
+            "input_cost_per_token": 1.8e-06,
+        },
+        model_info={"id": "eur-model", "output_cost_per_token": 3.6e-06},
+    ).to_json(exclude_none=True)
+    routed: Final = copy.deepcopy(built)
+
+    info: Final = proxy_server._enrich_model_info_with_litellm_data(routed)
+
+    assert routed == built
+    assert (info["litellm_params"]["pricing_currency"], info["litellm_params"]["usd_per_currency_unit"]) == (
+        "EUR",
+        "1.20",
+    )
+    assert info["litellm_params"]["input_cost_per_token"] == 1.8e-06
+    assert info["model_info"]["output_cost_per_token"] == 3.6e-06
+    assert info["model_info"]["usd_pricing"] == pytest.approx(
+        {"input_cost_per_token": 2.16e-06, "output_cost_per_token": 4.32e-06}, rel=1e-12
+    )

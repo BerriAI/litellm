@@ -49,6 +49,7 @@ from litellm.proxy.proxy_server import (
     _reload_settings_store,
     _scrub_db_overlay_remote_module_loads,
     _scrub_guardrail_inner,
+    deployment_pricing_model_info,
     resolve_complexity_router_plugins,
     resolve_routing_plugins,
     validate_auto_router_capability_limits,
@@ -6505,3 +6506,35 @@ async def test_proxy_config_validates_advertised_mcp_versions_at_load(tmp_path, 
         return
     with pytest.raises(ValidationError):
         await ProxyConfig().load_config(router=None, config_file_path=str(config))
+
+
+def test_a_config_currency_the_deployment_build_would_reject_fails_startup_naming_the_model():
+    model = {
+        "model_name": "eur-model",
+        "litellm_params": {"model": "openai/eur", "pricing_currency": "EUR", "input_cost_per_token": 1e-6},
+    }
+
+    with pytest.raises(ValueError, match="usd_per_currency_unit") as exc_info:
+        deployment_pricing_model_info(model)
+
+    assert "eur-model" in str(exc_info.value)
+
+
+def test_a_currency_record_planted_in_a_config_file_is_dropped_and_configured_prices_kept():
+    model = {
+        "model_name": "huf-model",
+        "litellm_params": {"model": "openai/huf"},
+        "model_info": {
+            "pricing_currency": "HUF",
+            "usd_per_currency_unit": "0.003",
+            "input_cost_per_token": 0.00072,
+            "pricing_source": {"currency": "EUR", "usd_per_currency_unit": "9"},
+            "usd_pricing": {"input_cost_per_token": 1.0},
+        },
+    }
+
+    assert deployment_pricing_model_info(model) == {
+        "pricing_currency": "HUF",
+        "usd_per_currency_unit": "0.003",
+        "input_cost_per_token": 0.00072,
+    }
