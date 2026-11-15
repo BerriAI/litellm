@@ -94,6 +94,7 @@ class Table:
         self.database = database
         self.create_error = create_error
         self.rows: Mapping[str, Record] = {}
+        self.hydration_limit: int | None = None
 
     async def include(self, row: Record, include: Mapping[str, object] | None) -> Record:
         if not include:
@@ -190,6 +191,8 @@ class Table:
             matches,
         )
         selected: Final = ordered[skip : skip + take] if take is not None else ordered[skip:]
+        if include and self.hydration_limit is not None:
+            assert len(selected) <= self.hydration_limit
         return tuple([await self.include(row, include) for row in selected])
 
     async def count(self, where: Mapping[str, object] | None = None) -> int:
@@ -330,7 +333,58 @@ class Database:
         self.held_locks = (*self.held_locks, lock)
         return ()
 
+    def budget_sort_rows(self, query: str, args: Sequence[object]) -> Sequence[Mapping[str, object]]:
+        table: Final = (
+            self.litellm_customerteamtable
+            if '"LiteLLM_CustomerTeamTable"' in query
+            else self.litellm_customermembertable
+        )
+        fields: Final = (
+            table.id_field,
+            "parent_org_id",
+            "alias",
+            "created_at",
+            "budget_id",
+            "budget_override_id",
+            "budget_override_expires_at",
+            "parent_team_ids",
+        )
+        with sqlite3.connect(":memory:") as connection:
+            connection.row_factory = sqlite3.Row
+            name: Final = (
+                "LiteLLM_CustomerTeamTable"
+                if table is self.litellm_customerteamtable
+                else "LiteLLM_CustomerMemberTable"
+            )
+            connection.execute(f'CREATE TABLE "{name}" ({", ".join(fields)})')
+            connection.executemany(
+                f'INSERT INTO "{name}" VALUES ({", ".join("?" for _ in fields)})',
+                tuple(
+                    tuple(
+                        json.dumps(row.model_dump().get(field))
+                        if field == "parent_team_ids"
+                        else None
+                        if row.model_dump().get(field) is None
+                        else str(row.model_dump()[field])
+                        for field in fields
+                    )
+                    for row in table.rows.values()
+                ),
+            )
+            sql: Final = (
+                query.replace(
+                    "parent_team_ids @> ARRAY[$2]::text[]",
+                    "EXISTS (SELECT 1 FROM json_each(parent_team_ids) WHERE value = $2)",
+                )
+                .replace("::text", "")
+                .replace("ILIKE $3", "LIKE $3 ESCAPE '\\' COLLATE NOCASE")
+            )
+            parameters: Final = {str(index): None if arg is None else str(arg) for index, arg in enumerate(args, 1)}
+            return tuple(dict(row) for row in connection.execute(sql, parameters))
+
     async def query_raw(self, query: str, *args: object) -> Sequence[Mapping[str, object]]:
+        if " AS entity_id" in query:
+            return self.budget_sort_rows(query, args)
         if "set_config('lock_timeout'" in query:
             return ()
         if "pg_advisory_xact_lock" in query:

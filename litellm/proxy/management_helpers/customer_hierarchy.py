@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
 from itertools import chain
-from typing import TYPE_CHECKING, Final, Generic, Literal, Protocol, TypeAlias, TypeVar
+from typing import TYPE_CHECKING, Final, Generic, Literal, LiteralString, Protocol, TypeAlias, TypeVar
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
@@ -47,7 +47,6 @@ if TYPE_CHECKING:
 
 
 BudgetSort: TypeAlias = Literal["budget_asc", "budget_desc"]
-Child: Final = TypeVar("Child", Team, CustomerMember)
 
 
 def customer_budget_limit(budget: Budget | None) -> float | None:
@@ -81,11 +80,13 @@ def _budget_sort_key(budget: Budget | None, sort: BudgetSort) -> tuple[bool, flo
     return limit is None, (limit or 0) * (-1 if sort == "budget_desc" else 1)
 
 
-def _budget_page(rows: tuple[Child, ...], sort: BudgetSort | None, page: int, page_size: int) -> tuple[Child, ...]:
-    if sort is None:
-        return rows
-    ordered: Final = sorted(rows, key=lambda row: _budget_sort_key(row.effective_budget, sort))
-    return tuple(ordered[(page - 1) * page_size : page * page_size])
+class _BudgetSortRow(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    entity_id: str
+    budget_id: str | None
+    budget_override_id: str | None
+    budget_override_expires_at: datetime | None
 
 
 class ErrorCode(str, Enum):
@@ -1105,16 +1106,49 @@ class CustomerHierarchyStore:
     ) -> Page[Team]:
         where: Final = {"parent_org_id": parent_org_id} if parent_org_id is not None else {}
         count: Final = await self.teams.count(where=where)
+        if sort is not None:
+            ids: Final = await self._budget_sort_ids(
+                "SELECT customer_team_id AS entity_id, budget_id, budget_override_id, budget_override_expires_at "
+                'FROM "LiteLLM_CustomerTeamTable" WHERE ($1::text IS NULL OR parent_org_id = $1) '
+                "ORDER BY created_at ASC, customer_team_id ASC",
+                (parent_org_id,),
+                sort,
+                page,
+                page_size,
+            )
+            rows_by_id: Final = (
+                {
+                    _ID.validate_python(row.model_dump()["customer_team_id"]): row
+                    for row in await self.teams.find_many(
+                        where={"customer_team_id": {"in": list(ids)}}, include=_MEMBER_INCLUDE
+                    )
+                }
+                if ids
+                else {}
+            )
+            return Page(
+                await customer_budget_usage(
+                    tuple(
+                        team_response(rows_by_id[identifier], self.now)
+                        for identifier in ids
+                        if identifier in rows_by_id
+                    ),
+                    self.window_spend,
+                    self.now,
+                    self.settings,
+                ),
+                count,
+            )
         rows: Final = await self.teams.find_many(
             where=where,
-            skip=(page - 1) * page_size if sort is None else None,
-            take=page_size if sort is None else None,
+            skip=(page - 1) * page_size,
+            take=page_size,
             order=[{"created_at": "asc"}, {"customer_team_id": "asc"}],
             include=_MEMBER_INCLUDE,
         )
         return Page(
             await customer_budget_usage(
-                _budget_page(tuple(team_response(row, self.now) for row in rows), sort, page, page_size),
+                tuple(team_response(row, self.now) for row in rows),
                 self.window_spend,
                 self.now,
                 self.settings,
@@ -1138,22 +1172,83 @@ class CustomerHierarchyStore:
             **_search_filter(search, ("alias", "customer_member_id")),
         }
         count: Final = await self.members.count(where=where)
+        if sort is not None:
+            ids: Final = await self._budget_sort_ids(
+                "SELECT customer_member_id AS entity_id, budget_id, budget_override_id, budget_override_expires_at "
+                'FROM "LiteLLM_CustomerMemberTable" WHERE ($1::text IS NULL OR parent_org_id = $1) '
+                "AND ($2::text IS NULL OR parent_team_ids @> ARRAY[$2]::text[]) "
+                "AND ($3 = '' OR alias ILIKE $3 OR customer_member_id ILIKE $3) "
+                "ORDER BY created_at ASC, customer_member_id ASC",
+                (parent_org_id, parent_team_id, f"%{escape_like(search)}%" if search else ""),
+                sort,
+                page,
+                page_size,
+            )
+            rows_by_id: Final = (
+                {
+                    _ID.validate_python(row.model_dump()["customer_member_id"]): row
+                    for row in await self.members.find_many(
+                        where={"customer_member_id": {"in": list(ids)}}, include=_MEMBER_INCLUDE
+                    )
+                }
+                if ids
+                else {}
+            )
+            return Page(
+                await customer_budget_usage(
+                    tuple(
+                        member_response(rows_by_id[identifier], self.now)
+                        for identifier in ids
+                        if identifier in rows_by_id
+                    ),
+                    self.window_spend,
+                    self.now,
+                    self.settings,
+                ),
+                count,
+            )
         rows: Final = await self.members.find_many(
             where=where,
-            skip=(page - 1) * page_size if sort is None else None,
-            take=page_size if sort is None else None,
+            skip=(page - 1) * page_size,
+            take=page_size,
             order=[{"created_at": "asc"}, {"customer_member_id": "asc"}],
             include=_MEMBER_INCLUDE,
         )
         return Page(
             await customer_budget_usage(
-                _budget_page(tuple(member_response(row, self.now) for row in rows), sort, page, page_size),
+                tuple(member_response(row, self.now) for row in rows),
                 self.window_spend,
                 self.now,
                 self.settings,
             ),
             count,
         )
+
+    async def _budget_sort_ids(
+        self, query: LiteralString, parameters: tuple[object, ...], sort: BudgetSort, page: int, page_size: int
+    ) -> tuple[str, ...]:
+        candidates: Final = TypeAdapter(tuple[_BudgetSortRow, ...]).validate_python(
+            await self.db.query_raw(query, *parameters)
+        )
+        references: Final = chain.from_iterable((row.budget_id, row.budget_override_id) for row in candidates)
+        budgets: Final = {
+            _ID.validate_python(row.model_dump()["budget_id"]): row.model_dump()
+            for row in await find_many_in(self.budgets, "budget_id", (ref for ref in references if ref is not None))
+        }
+
+        def key(row: _BudgetSortRow) -> tuple[bool, float]:
+            template: Final = related_budget(budgets.get(row.budget_id or ""), self.now)
+            override: Final = related_budget(
+                budgets.get(row.budget_override_id or ""),
+                self.now,
+                template.max_budget if template is not None else None,
+            )
+            return _budget_sort_key(
+                effective_member_budget(template, override, row.budget_override_expires_at, self.now), sort
+            )
+
+        ordered: Final = sorted(candidates, key=key)
+        return tuple(row.entity_id for row in ordered[(page - 1) * page_size : page * page_size])
 
     async def _delete_unused_budgets(self, budget_ids: Sequence[str]) -> None:
         where: Final[Mapping[str, object]] = {field: {"none": {}} for field in _BUDGET_REFERENCE_FIELDS}

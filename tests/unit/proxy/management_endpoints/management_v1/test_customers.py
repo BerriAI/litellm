@@ -978,7 +978,8 @@ def test_organization_list_counts_all_members_and_searches_before_paginating() -
     assert literal.json()["meta"]["total_count"] == 1
 
 
-def test_member_list_searches_id_and_alias_within_its_parent_before_paginating() -> None:
+@pytest.mark.parametrize("sort", (None, "budget_asc", "budget_desc"))
+def test_member_list_searches_id_and_alias_within_its_parent_before_paginating(sort: str | None) -> None:
     http: Final = client()
     family(http)
     parents: Final = (
@@ -1014,7 +1015,9 @@ def test_member_list_searches_id_and_alias_within_its_parent_before_paginating()
         assert created.status_code == 201, created.text
 
     def found(params: Mapping[str, str | int]) -> tuple[tuple[str, ...], int]:
-        response: Final = http.get("/management/v1/customer_members", params=params)
+        response: Final = http.get(
+            "/management/v1/customer_members", params={**params, **({"sort": sort} if sort is not None else {})}
+        )
         assert response.status_code == 200, response.text
         ids: Final = tuple(row["customer_member_id"] for row in response.json()["data"])
         return ids, response.json()["meta"]["total_count"]
@@ -1032,7 +1035,8 @@ def test_member_list_searches_id_and_alias_within_its_parent_before_paginating()
 @pytest.mark.parametrize("collection", ("customer_teams", "customer_members"))
 @pytest.mark.parametrize("sort", ("budget_asc", "budget_desc"))
 def test_list_sorts_effective_budget_before_pagination_with_uncapped_last(collection: str, sort: str) -> None:
-    http: Final = client()
+    database: Final = Database()
+    http: Final = client(database=database)
     org: Final = http.post("/management/v1/customer_organizations", json={"customer_org_id": "sort-org"})
     assert org.status_code == 201, org.text
     parent: Final = http.post(
@@ -1063,6 +1067,10 @@ def test_list_sorts_effective_budget_before_pagination_with_uncapped_last(collec
         else ("annual", "expensive", "cheap", "same", "zero", "empty")
     )
     expected: Final = (*budget_order, "parent") if collection == "customer_teams" else budget_order
+    table: Final = (
+        database.litellm_customerteamtable if collection == "customer_teams" else database.litellm_customermembertable
+    )
+    table.hydration_limit = 2
     for page in range(1, (len(expected) + 1) // 2 + 1):
         response: Final = http.get(
             f"/management/v1/{collection}", params={**scope, "sort": sort, "page_size": 2, "page": page}
@@ -1084,7 +1092,9 @@ def test_budget_sort_uses_inherited_cap_after_override_expiry(collection: str) -
     default_budget: Final = family_default_budget_id(http)
     id_field: Final = "customer_team_id" if collection == "customer_teams" else "customer_member_id"
     for identifier, cap in (("low", 7), ("expired", 20)):
-        template: Final = {"budget": {"max_budget": cap}} if collection == "customer_teams" else {"budget_id": default_budget}
+        template: Final = (
+            {"budget": {"max_budget": cap}} if collection == "customer_teams" else {"budget_id": default_budget}
+        )
         parent: Final = {"parent_org_id": "org"} if collection == "customer_teams" else {"parent_team_ids": ["team"]}
         overrides: Final = (
             {"budget_override": {"max_budget": 1}, "budget_override_expires_at": (NOW - timedelta(days=1)).isoformat()}
