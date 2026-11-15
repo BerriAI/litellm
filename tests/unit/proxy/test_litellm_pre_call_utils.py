@@ -1292,6 +1292,51 @@ async def test_anthropic_user_profile_id_prefers_the_admin_mapping_over_the_clie
     assert forwarded.get(USER_PROFILE_ID_HEADER) == expected
 
 
+_PROXY_AND_PROVIDER_KEYS: Final = {"x-litellm-api-key": "Bearer sk-virtual-key", "x-api-key": "sk-ant-api03-caller"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "sent,request_headers,general_settings,custom_llm_provider,expected",
+    [
+        ({"api_key": "sk-ant-api03-caller"}, {}, {}, "anthropic", "uprof_client"),
+        ({}, _PROXY_AND_PROVIDER_KEYS, {"forward_llm_provider_auth_headers": True}, "anthropic", "uprof_client"),
+        ({}, _PROXY_AND_PROVIDER_KEYS, {}, "anthropic", "uprof_key"),
+        ({"api_key": " "}, {}, {}, "anthropic", "uprof_key"),
+        ({"api_key": "sk-ant-api03-caller"}, {}, {}, "azure_ai", "uprof_key"),
+        ({"api_key": "sk-ant-api03-caller"}, {}, {}, "bedrock_mantle", "uprof_key"),
+        ({"api_key": "sk-ant-api03-caller"}, {}, {}, "vertex_ai", "uprof_key"),
+    ],
+    ids=[
+        "body-api-key-on-anthropic",
+        "forwarded-x-api-key-on-anthropic",
+        "x-api-key-not-forwarded",
+        "blank-body-api-key",
+        "body-api-key-on-azure-ai",
+        "body-api-key-on-bedrock-mantle",
+        "body-api-key-on-vertex-ai",
+    ],
+)
+async def test_a_caller_anthropic_api_key_keeps_its_own_profile_id_only_on_anthropic(
+    sent: dict[str, object],
+    request_headers: dict[str, str],
+    general_settings: dict[str, object],
+    custom_llm_provider: str,
+    expected: str,
+) -> None:
+    updated: Final = await _request_data_added_by_the_proxy(
+        sent,
+        {USER_PROFILE_ID_HEADER: "uprof_client", **request_headers},
+        general_settings,
+        UserAPIKeyAuth(api_key="hashed-key", user_id="test-user", metadata={"anthropic_user_profile_id": "uprof_key"}),
+    )
+
+    forwarded: Final = ProviderSpecificHeaderUtils.get_provider_specific_headers(
+        provider_specific_header=updated.get("provider_specific_header"), custom_llm_provider=custom_llm_provider
+    )
+    assert forwarded.get(USER_PROFILE_ID_HEADER) == expected
+
+
 def test_initial_snapshot_refresh_clears_a_previous_guardrail_checkpoint() -> None:
     from litellm.integrations.shadow_eval_logger import GuardrailRequestSnapshot
     from litellm.litellm_core_utils.litellm_logging import Logging

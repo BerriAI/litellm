@@ -4800,6 +4800,12 @@ _ANTHROPIC_USER_PROFILE_ID_PROVIDERS: Final = frozenset(
 )
 _ANTHROPIC_OAUTH_CREDENTIAL_PROVIDERS: Final = ",".join(sorted(ANTHROPIC_OAUTH_FORWARD_PROVIDERS))
 _CHATGPT_OAUTH_CREDENTIAL_PROVIDERS: Final = LlmProviders.CHATGPT.value
+_CALLER_API_KEY_PROVIDERS: Final = frozenset((LlmProviders.ANTHROPIC.value,))
+
+
+def _carries_a_caller_api_key(data: Mapping[str, object]) -> bool:
+    api_key: Final = data.get("api_key")
+    return isinstance(api_key, str) and bool(api_key.strip())
 
 
 def _user_profile_id_header(providers: frozenset[str], user_profile_id: str | None) -> ProviderSpecificHeader:
@@ -4826,6 +4832,10 @@ def add_provider_specific_headers_to_request(
     chatgpt_oauth_credential_headers: Final = dict(select_chatgpt_client_credential_headers(headers))
     caller_credential_providers: Final = (
         ANTHROPIC_OAUTH_FORWARD_PROVIDERS if anthropic_oauth_credential_headers else frozenset[str]()
+    ) | (
+        _CALLER_API_KEY_PROVIDERS
+        if _carries_a_caller_api_key(_REQUEST_FIELDS.validate_python(data))
+        else frozenset[str]()
     )
 
     typesafe_danger_zone_headers: Final = {
