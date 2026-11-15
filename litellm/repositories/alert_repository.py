@@ -16,6 +16,7 @@ from typing_extensions import LiteralString
 
 from litellm._logging import verbose_proxy_logger
 from litellm.models.alert import (
+    METRIC_ALERT_TYPES,
     Alert,
     AlertDetection,
     AlertFilter,
@@ -26,6 +27,7 @@ from litellm.models.alert import (
     AlertStatus,
     AlertSummary,
     AlertView,
+    RecordedAlert,
 )
 from litellm.repositories.prisma_protocols import PrismaRecord, TableActions
 
@@ -203,14 +205,20 @@ class AlertRepository:
                 LEFT JOIN "LiteLLM_VerificationToken" k ON a.resource_type = 'key' AND k.token = a.resource_id
                 LEFT JOIN "LiteLLM_TeamTable" t ON a.resource_type = 'team' AND t.team_id = a.resource_id
                 LEFT JOIN "LiteLLM_UserTable" u ON a.resource_type = 'user' AND u.user_id = a.resource_id
-                WHERE a.id > $1 AND a.id <= $2 AND a.status = 'open' AND a.type != 'model_deprecation'
+                WHERE a.id > $1 AND a.id <= $2 AND a.status = 'open' AND a.type = ANY($3::text[])
                 ORDER BY a.id DESC LIMIT 5""",
                 after,
                 through,
+                list(METRIC_ALERT_TYPES),
             )
         return _SUMMARIES.validate_python(rows)
 
     async def record(self, detection: AlertDetection) -> Alert:
+        return (await self.record_once(detection)).alert
+
+    async def record_once(self, detection: AlertDetection) -> RecordedAlert:
+        """The insert that wins the unique detection key is the only one that reports `created`, so a caller
+        acting once per new alert acts once however many workers record the same detection."""
         from prisma import Json
         from prisma.errors import UniqueViolationError
 
@@ -223,18 +231,18 @@ class AlertRepository:
                     "evidence": Json(detection.evidence.model_dump(mode="json")),
                 }
             )
-            return _alert(row)
+            return RecordedAlert(alert=_alert(row), created=True)
         except UniqueViolationError:
             existing: Final = await self._table.find_unique(where={"detection_key": key})
             if existing is None:
                 raise
-            return _alert(existing)
+            return RecordedAlert(alert=_alert(existing), created=False)
 
     async def list(
         self, status: AlertStatus, limit: int, cursor: int | None, alert_type: AlertFilter | None = None
     ) -> AlertPage:
         size: Final = max(1, min(limit, 100))
-        category: Final = {"not": "model_deprecation"} if alert_type == "performance" else alert_type
+        category: Final = {"in": list(METRIC_ALERT_TYPES)} if alert_type == "performance" else alert_type
         rows: Final = await self._table.find_many(
             where={
                 "status": status,
@@ -269,11 +277,13 @@ class AlertRepository:
                 "start": (alert.window_start.date() - timedelta(days=7)).isoformat(),
             }
             for alert in alerts
-            if alert.type != "model_deprecation"
+            if alert.type in METRIC_ALERT_TYPES
         )
         if not requested:
             return tuple(AlertView.model_validate(alert.model_dump()) for alert in alerts)
-        scopes: Final = frozenset[AlertResourceType](alert.resource_type for alert in alerts)
+        scopes: Final = frozenset[AlertResourceType](
+            alert.resource_type for alert in alerts if alert.type in METRIC_ALERT_TYPES
+        )
         histories: Final = " UNION ALL ".join(_history_sql(scope) for scope in scopes)
         query: Final = f"""WITH requested AS (
             SELECT * FROM jsonb_to_recordset($1::jsonb)

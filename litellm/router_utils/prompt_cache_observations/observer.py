@@ -11,6 +11,7 @@ import httpx
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_router_logger
+from litellm.caching.redis_cache import RedisCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.token_counter import offload_token_count
@@ -31,9 +32,11 @@ from .deployment import (
     merged_cache_settings,
     selected_deployment,
 )
+from .incidents import PROMPT_CACHE_INCIDENTS, PromptCacheIncidentDetector
 from .intent import cache_requested
 from .paths import classify_path
 from .prefix import outgoing_cacheable_prefix
+from .streaks import STREAK_SCRIPT, InMemoryStreakStore, RedisStreakStore, StreakStore
 from .types import (
     Assessed,
     CacheablePrefix,
@@ -392,10 +395,25 @@ def prefix_fingerprint_key(salt: str | None) -> bytes | None:
     return hashlib.blake2b(salt.encode(), digest_size=32, person=b"prompt-cache").digest() if salt else None
 
 
-def prompt_cache_observer() -> PromptCacheObserver:
+class ObservationFanout:
+    def __init__(self, sinks: tuple[ObservationSink, ...]) -> None:
+        self.sinks: Final = sinks
+
+    async def record(self, observation: PromptCacheObservation) -> None:
+        for sink in self.sinks:
+            await sink.record(observation)
+
+
+def _streak_store(redis: RedisCache | None) -> StreakStore:
+    return InMemoryStreakStore() if redis is None else RedisStreakStore(redis.async_register_script(STREAK_SCRIPT))
+
+
+def prompt_cache_observer(redis: RedisCache | None = None) -> PromptCacheObserver:
     return PromptCacheObserver(
         settings=ObserverSettings(
             verified_paths=VERIFIED_PATHS, fingerprint_key=prefix_fingerprint_key(os.getenv("LITELLM_SALT_KEY"))
         ),
-        sink=DiagnosticLog(),
+        sink=ObservationFanout(
+            (DiagnosticLog(), PromptCacheIncidentDetector(_streak_store(redis), PROMPT_CACHE_INCIDENTS.current))
+        ),
     )

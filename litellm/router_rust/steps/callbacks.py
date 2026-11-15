@@ -335,7 +335,7 @@ class OptionalChecks:
             elif name == "enforce_model_rate_limits":
                 callback = ModelRateLimitingCheck(usage=self._usage)
             elif name == "prompt_cache_observations":
-                callback = prompt_cache_observer()
+                callback = prompt_cache_observer(self._cache.redis_cache)
             if callback is None:
                 continue
             if self.optional_callbacks is not None and any(

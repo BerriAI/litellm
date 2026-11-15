@@ -12129,6 +12129,15 @@ class ProxyStartupEvent:
                 ConfigRepository(prisma_client, use_writer=True), AlertRepository(prisma_client)
             ).run(slack)
 
+        from litellm.proxy.common_utils.prompt_cache_incidents import attach_prompt_cache_incidents
+
+        attach_prompt_cache_incidents(
+            _current_general_settings(),
+            prisma_client,
+            proxy_logging_obj.slack_alerting_instance,
+            os.getenv("PROXY_BASE_URL", "").rstrip("/"),
+        )
+
         scheduler.add_job(  # pyright: ignore[reportUnknownMemberType]  # APScheduler does not provide typed job methods
             send_performance_alert_summaries,
             "interval",
