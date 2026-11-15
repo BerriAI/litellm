@@ -1326,3 +1326,35 @@ def test_budget_email_escapes_user_id() -> None:
 
     assert "<a href" not in html
     assert "&lt;a href=&quot;https://evil.example&quot;&gt;click&lt;/a&gt;" in html
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("event_group", "recipients"), [(Litellm_EntityType.USER, []), (Litellm_EntityType.KEY, ["u1@example.com"])]
+)
+async def test_user_soft_budget_crossing_leaves_email_to_the_soft_budget_email_logger(
+    monkeypatch: pytest.MonkeyPatch, event_group: Litellm_EntityType, recipients: list[str]
+) -> None:
+    import litellm.proxy.utils as proxy_utils
+    from litellm.proxy._types import WebhookEvent
+
+    sent: Final[list[str]] = []
+
+    async def record_email(receiver_email: str, subject: str, html: str) -> None:
+        sent.append(receiver_email)
+
+    monkeypatch.setattr(proxy_utils, "send_email", record_email)
+    event: Final = WebhookEvent(
+        spend=6,
+        soft_budget=5,
+        user_id="u1",
+        user_email="u1@example.com",
+        token="hashed-token",
+        event="soft_budget_crossed",
+        event_group=event_group,
+        event_message="Soft budget crossed",
+    )
+
+    await SlackAlerting(alerting=["email"]).send_email_alert_using_smtp(webhook_event=event, alert_type="budget_alerts")
+
+    assert sent == recipients

@@ -1422,6 +1422,8 @@ Model Info:
 
         Returns -> True if sent, False if not.
         """
+        if webhook_event.event == "soft_budget_crossed" and webhook_event.event_group == Litellm_EntityType.USER:
+            return False
         from litellm.proxy.proxy_server import premium_user
         from litellm.proxy.utils import send_email
 
