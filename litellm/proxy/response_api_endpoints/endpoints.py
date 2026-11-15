@@ -92,6 +92,7 @@ from litellm.proxy.litellm_pre_call_utils import (
     _CLIENT_PRICING_METADATA_FIELDS,  # pyright: ignore[reportPrivateUsage]  # the HTTP path's own strip list
     _UNTRUSTED_METADATA_CONTROL_FIELDS,  # pyright: ignore[reportPrivateUsage]  # the HTTP path's own strip list
     add_guardrails_from_policy_engine,
+    anthropic_user_profile_id,
     is_chat_completions_body,
 )
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.batch_attribution import (
@@ -1529,6 +1530,7 @@ class _TokenCounter(Protocol):
         call_endpoint: bool,
         responses_request: Mapping[str, object] | None,
         litellm_call_id: str | None,
+        user_profile_id: str | None,
     ) -> Awaitable[TokenCountResponse]: ...
 
 
@@ -1897,6 +1899,7 @@ async def _responses_input_tokens(
             call_endpoint=True,
             responses_request=responses_request,
             litellm_call_id=litellm_call_id,
+            user_profile_id=anthropic_user_profile_id(user_api_key_dict, request.headers),
         )
     except ProxyException as e:
         if e.type != _PROVIDER_COUNT_ERROR_TYPE:

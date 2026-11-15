@@ -33,7 +33,9 @@ from litellm.llms.vertex_ai.common_utils import (
     vertex_request_labels_from_litellm_params,
 )
 from litellm.llms.vertex_ai.count_tokens import handler as vertex_count_tokens_handler
+from litellm.llms.vertex_ai.vertex_ai_partner_models.count_tokens import handler as partner_count_tokens_handler
 from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation import VertexAIAnthropicConfig
+from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.types.utils import CountContextManagement, TokenCountMessagesFormat, TokenCountResponse
 
 
@@ -2289,6 +2291,40 @@ async def test_vertex_ai_token_counter_routes_gemini_models():
         assert result is not None
         assert isinstance(result, TokenCountResponse)
         assert result.total_tokens == 50
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model", "sent_profile_id"),
+    (
+        ("claude-sonnet-5-5", "uprof_pinned"),
+        ("gemini-4-argon", None),
+        ("meta/llama-4-scout-17b-128e-instruct-maas", None),
+    ),
+    ids=("claude", "gemini", "non_anthropic_partner"),
+)
+async def test_vertex_count_sends_the_user_profile_id_only_to_claude(model: str, sent_profile_id: str | None) -> None:
+    peer: Final = _VertexCountTokensPeer(200)
+    client: Final = AsyncHTTPHandler(transport=httpx.MockTransport(peer))
+    with (
+        patch.object(gemini_count_tokens_handler, "get_async_httpx_client", return_value=client),
+        patch.object(partner_count_tokens_handler, "get_async_httpx_client", return_value=client),
+        patch.object(
+            VertexBase, "_ensure_access_token_async", new=AsyncMock(return_value=("fake-token", "test-project"))
+        ),
+    ):
+        result: Final = await VertexAITokenCounter(user_profile_id="uprof_pinned").count_tokens(
+            model_to_use=model,
+            messages=[{"role": "user", "content": "Hello"}],
+            contents=None,
+            deployment=_VERTEX_DEPLOYMENT,
+            request_model=f"vertex_ai/{model}",
+        )
+
+    assert result is not None
+    assert result.error is False, result.error_message
+    (sent,) = peer.requests
+    assert sent.headers.get("anthropic-user-profile-id") == sent_profile_id
 
 
 @pytest.mark.asyncio

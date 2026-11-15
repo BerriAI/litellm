@@ -20,6 +20,7 @@ from litellm.llms.anthropic.count_tokens.transformation import (
     anthropic_count_fields,
     malformed_message_error,
     messages_count_options,
+    user_profile_id_headers,
 )
 from litellm.llms.base_llm.base_utils import (
     BaseTokenCounter,
@@ -27,13 +28,10 @@ from litellm.llms.base_llm.base_utils import (
     deployment_timeout,
     optional_str,
 )
-from litellm.types.llms.anthropic import ANTHROPIC_USER_PROFILE_ID_HEADER
 from litellm.types.utils import CountContextManagement, LlmProviders, TokenCountMessagesFormat, TokenCountResponse
 
 # Global handler instance - reuse across all token counting requests
 anthropic_count_tokens_handler: Final = AnthropicCountTokensHandler()
-
-_NO_HEADERS: Final[Mapping[str, str]] = MappingProxyType({})
 
 
 class AnthropicTokenCounter(BaseTokenCounter):
@@ -41,9 +39,7 @@ class AnthropicTokenCounter(BaseTokenCounter):
 
     def __init__(self, client_oauth_token: str | None = None, user_profile_id: str | None = None) -> None:
         self.client_oauth_token: Final = client_oauth_token
-        self.user_profile_headers: Final = (
-            MappingProxyType({ANTHROPIC_USER_PROFILE_ID_HEADER: user_profile_id}) if user_profile_id else _NO_HEADERS
-        )
+        self.user_profile_headers: Final = user_profile_id_headers(user_profile_id)
 
     def should_use_token_counting_api(
         self,

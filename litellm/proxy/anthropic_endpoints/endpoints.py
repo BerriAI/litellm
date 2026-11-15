@@ -420,8 +420,9 @@ async def _count_tokens(
             messages_format="anthropic",
             litellm_call_id=litellm_call_id,
             client_oauth_token=client_oauth_token,
-            user_profile_id=anthropic_user_profile_id(
-                user_api_key_dict, request.headers, caller_credential=client_oauth_token is not None
+            user_profile_id=anthropic_user_profile_id(user_api_key_dict, request.headers),
+            client_user_profile_id=anthropic_user_profile_id(
+                user_api_key_dict, request.headers, caller_credential=True
             ),
             **_count_tokens_body_options(data, auto_drop_params),
         )

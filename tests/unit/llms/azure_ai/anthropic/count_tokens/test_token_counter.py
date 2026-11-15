@@ -346,6 +346,27 @@ async def test_count_sends_the_tool_change_beta_when_the_history_adds_a_tool(mon
     assert route.calls.last.request.headers["anthropic-beta"] == "mid-conversation-tool-changes-2026-07-01,token-counting-2024-11-01"
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("user_profile_id", "sent_profile_id"), (("uprof_pinned", "uprof_pinned"), (None, None)))
+async def test_count_sends_the_user_profile_id_the_counter_was_built_with(
+    monkeypatch: pytest.MonkeyPatch, user_profile_id: str | None, sent_profile_id: str | None
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    with respx.mock:
+        route: Final = respx.post(COUNT_URL).mock(return_value=httpx.Response(200, json={"input_tokens": 9}))
+        result: Final = await AzureAIAnthropicTokenCounter(user_profile_id=user_profile_id).count_tokens(
+            model_to_use="claude-sonnet-5-5",
+            messages=[{"role": "user", "content": "hi"}],
+            contents=None,
+            deployment={"litellm_params": {"api_key": "azure-key", "api_base": API_BASE}},
+            request_model="azure_ai/claude-sonnet-5-5",
+        )
+    assert result is not None
+    assert (result.error, result.total_tokens) == (False, 9)
+    sent: Final = route.calls.last.request.headers
+    assert (sent.get("anthropic-user-profile-id"), sent["x-api-key"]) == (sent_profile_id, "azure-key")
+
+
 async def _betas_azure_inference_sends(context_management: Mapping[str, object]) -> frozenset[str]:
     with respx.mock:
         route: Final = respx.post(f"{API_BASE}/anthropic/v1/messages").mock(

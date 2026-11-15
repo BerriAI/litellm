@@ -19,6 +19,7 @@ from litellm.llms.anthropic.count_tokens.transformation import (
     anthropic_count_fields,
     malformed_message_error,
     messages_count_options,
+    user_profile_id_headers,
 )
 from litellm.llms.azure_ai.anthropic.count_tokens.handler import (
     AzureAIAnthropicCountTokensHandler,
@@ -52,6 +53,9 @@ def _missing_api_base_response(request_model: str, model_to_use: str) -> TokenCo
 
 class AzureAIAnthropicTokenCounter(BaseTokenCounter):
     """Token counter implementation for Azure AI Anthropic provider using the CountTokens API."""
+
+    def __init__(self, user_profile_id: str | None = None) -> None:
+        self.user_profile_headers: Final = user_profile_id_headers(user_profile_id)
 
     def should_use_token_counting_api(
         self,
@@ -173,6 +177,7 @@ class AzureAIAnthropicTokenCounter(BaseTokenCounter):
                 optional_params=count_options,
                 context_management=None if context_management is None else context_management.spec,
                 timeout=deployment_timeout(litellm_params),
+                extra_headers=self.user_profile_headers,
             )
 
             if result is not None:

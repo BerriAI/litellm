@@ -16,11 +16,11 @@ from datetime import datetime, timezone
 from enum import Enum
 from functools import partial
 from types import MappingProxyType
-from typing import Final, NamedTuple, Protocol, Union, cast
+from typing import Annotated, Final, NamedTuple, Protocol, Union, cast
 
 import anyio
 import fastapi
-from fastapi import HTTPException, Request, WebSocket, status
+from fastapi import Depends, HTTPException, Request, WebSocket, status
 from fastapi.security.api_key import APIKeyHeader
 from pydantic import TypeAdapter, ValidationError
 from starlette.exceptions import WebSocketException
@@ -186,6 +186,7 @@ from litellm.proxy.db.db_span import db_span
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.litellm_pre_call_utils import (
     LiteLLMProxyRequestSetup,
+    anthropic_user_profile_id,
     pre_call_served_model,
     request_served_model,
 )
@@ -4914,6 +4915,12 @@ async def user_api_key_auth(
         verbose_proxy_logger.warning("Principal projection at auth seam failed (non-fatal): %s", e)
 
     return user_api_key_auth_obj
+
+
+async def request_anthropic_user_profile_id(
+    request: Request, user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)]
+) -> str | None:
+    return anthropic_user_profile_id(user_api_key_dict, request.headers)
 
 
 async def _return_user_api_key_auth_obj(

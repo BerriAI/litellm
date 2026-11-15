@@ -39,7 +39,7 @@ from litellm.llms.anthropic.common_utils import (
     tools_without_custom_field,
 )
 from litellm.llms.anthropic.wif import resolve_anthropic_base
-from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES
+from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES, ANTHROPIC_USER_PROFILE_ID_HEADER
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionImageObject, ValidUserMessageContentTypes
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import TokenCountMessagesFormat, TokenCountResponse
@@ -58,6 +58,10 @@ COUNT_TOKEN_OPTION_NAMES: Final = ("thinking", "tool_choice", "output_config")
 _PLAIN_MESSAGE_KEYS: Final = frozenset({"role", "content"})
 _CHAT_ROLES_WITHOUT_CONTENT: Final = frozenset({"user", "assistant"})
 _NULL_CONTENT_CHAT_ROLES: Final = frozenset({"user", "assistant", "system"})
+
+
+def user_profile_id_headers(user_profile_id: str | None) -> Mapping[str, str]:
+    return MappingProxyType({ANTHROPIC_USER_PROFILE_ID_HEADER: user_profile_id} if user_profile_id else {})
 
 
 def _count_image(block: JsonValue) -> JsonValue:

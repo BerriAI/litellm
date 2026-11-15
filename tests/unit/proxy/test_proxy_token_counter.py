@@ -65,6 +65,7 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.gemini.count_tokens import handler as gemini_count_tokens_handler
 from litellm.llms.mistral.count_tokens import handler as mistral_count_tokens_http
 from litellm.llms.openai.responses.count_tokens import handler as openai_count_tokens_http
+from litellm.llms.vertex_ai.vertex_ai_partner_models.count_tokens import handler as vertex_partner_count_tokens_http
 from litellm.llms.vertex_ai.vertex_ai_partner_models.count_tokens.handler import VertexAIPartnerModelsTokenCounter
 from litellm.proxy._types import ProxyException, TokenCountRequest, UserAPIKeyAuth
 from litellm.proxy.anthropic_endpoints.endpoints import (
@@ -443,6 +444,7 @@ async def test_anthropic_messages_count_tokens_endpoint():
         client_oauth_token=None,
         count_options=None,
         user_profile_id=None,
+        client_user_profile_id=None,
     ):
         assert call_endpoint == True, "Should be called with call_endpoint=True for Anthropic endpoint"
         assert request.model == "claude-3-sonnet-20240229"
@@ -527,6 +529,7 @@ async def test_anthropic_messages_count_tokens_with_non_anthropic_model():
         client_oauth_token=None,
         count_options=None,
         user_profile_id=None,
+        client_user_profile_id=None,
     ):
         assert call_endpoint == True, "Should be called with call_endpoint=True for Anthropic endpoint"
         assert request.model == "gpt-4"
@@ -1351,6 +1354,7 @@ async def test_anthropic_endpoint_returns_anthropic_error_format():
         client_oauth_token=None,
         count_options=None,
         user_profile_id=None,
+        client_user_profile_id=None,
     ):
         raise ProxyException(
             message='{"detail":{"message":"Input is too long for requested model."}}',
@@ -1412,6 +1416,7 @@ async def test_anthropic_endpoint_403_permission_error_format():
         client_oauth_token=None,
         count_options=None,
         user_profile_id=None,
+        client_user_profile_id=None,
     ):
         raise ProxyException(
             message='{"Message":"Bearer Token has expired"}',
@@ -1473,6 +1478,7 @@ async def test_anthropic_endpoint_429_rate_limit_error_format():
         client_oauth_token=None,
         count_options=None,
         user_profile_id=None,
+        client_user_profile_id=None,
     ):
         raise ProxyException(
             message="Rate limit exceeded",
@@ -4937,7 +4943,7 @@ class _PartnerCountRequest(BaseModel):
 
 
 async def _vertex_partner_word_count(
-    model: str, request_data: JsonValue, litellm_params: JsonValue
+    model: str, request_data: JsonValue, litellm_params: JsonValue, extra_headers: Mapping[str, str]
 ) -> dict[str, JsonValue]:
     body: Final = _PartnerCountRequest.model_validate(request_data)
     return {"input_tokens": sum(len(message.content.split()) for message in body.messages)}
@@ -5799,6 +5805,102 @@ def _utils_token_counter(
     )
 
 
+_CLAUDE_COUNT_DEPLOYMENTS: Final = (
+    pytest.param(
+        {"model": "anthropic/claude-sonnet-5-5", "api_key": "test-key", "api_base": "https://count-tokens.test"},
+        id="anthropic",
+    ),
+    pytest.param(
+        {"model": "azure_ai/claude-sonnet-5-5", "api_key": "test-key", "api_base": "https://count-tokens.test"},
+        id="azure_ai",
+    ),
+    pytest.param(
+        {"model": "vertex_ai/claude-sonnet-5-5", "vertex_project": "test-project", "vertex_location": "us-east5"},
+        id="vertex_ai",
+    ),
+)
+
+
+_HELLO_COUNT_ROUTES: Final = (
+    pytest.param(
+        "/utils/token_counter?call_endpoint=true",
+        {"model": "provider-counted", "messages": [{"role": "user", "content": "Hello"}]},
+        "total_tokens",
+        id="utils_token_counter",
+    ),
+    pytest.param(
+        "/v1/responses/input_tokens",
+        {"model": "provider-counted", "input": "Hello"},
+        "input_tokens",
+        id="responses_input_tokens",
+    ),
+    pytest.param(
+        "/v1beta/models/provider-counted:countTokens",
+        {"contents": [{"role": "user", "parts": [{"text": "Hello"}]}]},
+        "totalTokens",
+        id="google_count_tokens",
+    ),
+)
+
+
+@pytest.mark.parametrize("litellm_params", _CLAUDE_COUNT_DEPLOYMENTS)
+@pytest.mark.parametrize(("path", "body", "count_field"), _HELLO_COUNT_ROUTES)
+@pytest.mark.parametrize(
+    ("key_metadata", "sent_profile_id"),
+    (({"anthropic_user_profile_id": "uprof_pinned"}, "uprof_pinned"), ({}, "uprof_client")),
+    ids=("key_pin_over_client_header", "client_header"),
+)
+def test_count_routes_send_the_claude_count_api_the_user_profile_id_inference_would_send(
+    litellm_params: dict[str, JsonValue],
+    path: str,
+    body: Mapping[str, JsonValue],
+    count_field: str,
+    key_metadata: Mapping[str, str],
+    sent_profile_id: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from fastapi.testclient import TestClient
+
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.proxy.proxy_server import app
+
+    def count_api(request: httpx.Request) -> httpx.Response:
+        received: Final = request.headers.get("anthropic-user-profile-id")
+        if received == sent_profile_id:
+            return httpx.Response(200, json={"input_tokens": 41}, request=request)
+        return httpx.Response(
+            400,
+            json={"type": "error", "error": {"type": "invalid_request_error", "message": f"got {received}"}},
+            request=request,
+        )
+
+    _route_to_one_deployment(litellm_params, monkeypatch)
+    monkeypatch.setitem(
+        app.dependency_overrides,
+        user_api_key_auth,
+        lambda: UserAPIKeyAuth(api_key="sk-test", metadata=dict(key_metadata)),
+    )
+    with (
+        _count_apis_answering(count_api),
+        patch.object(
+            vertex_partner_count_tokens_http,
+            "get_async_httpx_client",
+            return_value=AsyncHTTPHandler(transport=httpx.MockTransport(count_api)),
+        ),
+        patch.object(
+            VertexAIPartnerModelsTokenCounter,
+            "_ensure_access_token_async",
+            new=AsyncMock(return_value=("fake-token", "test-project")),
+        ),
+    ):
+        response: Final = TestClient(app, raise_server_exceptions=False).post(
+            path, json=body, headers={"anthropic-user-profile-id": "uprof_client"}
+        )
+
+    assert response.status_code == 200, response.text
+    assert response.json()[count_field] == 41
+
+
 def test_utils_token_counter_logs_one_line_with_the_callers_call_id_model_and_count(
     monkeypatch: pytest.MonkeyPatch, token_count_log_lines: Callable[[], tuple[dict[str, object], ...]]
 ) -> None:
@@ -6475,6 +6577,7 @@ async def _utils_route_count(tool_choice: Mapping[str, JsonValue], model: str = 
         ),
         http_request=_json_request({}, "python-httpx/0.28.1"),
         fastapi_response=Response(),
+        user_api_key_dict=UserAPIKeyAuth(),
     )
     return response.total_tokens
 
@@ -6758,11 +6861,13 @@ async def test_utils_token_counter_counts_a_bare_prompt_with_a_tool_choice_like_
         request=TokenCountRequest(model="no-count-api", prompt=_TOOL_CHOICE_QUESTION, tool_choice="required"),
         http_request=_json_request({}, "python-httpx/0.28.1"),
         fastapi_response=Response(),
+        user_api_key_dict=UserAPIKeyAuth(),
     )
     prompt_alone: Final = await token_counter(
         request=TokenCountRequest(model="no-count-api", prompt=_TOOL_CHOICE_QUESTION),
         http_request=_json_request({}, "python-httpx/0.28.1"),
         fastapi_response=Response(),
+        user_api_key_dict=UserAPIKeyAuth(),
     )
 
     assert (with_choice.error, with_choice.total_tokens) == (False, prompt_alone.total_tokens)
