@@ -11,7 +11,7 @@ import itertools
 import traceback
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, BinaryIO, Final, NoReturn, TypedDict, cast, get_args
+from typing import Any, BinaryIO, Final, NoReturn, Protocol, TypedDict, cast, get_args
 
 import httpx
 from fastapi import (
@@ -35,7 +35,7 @@ from litellm.constants import ANTHROPIC_DEFAULT_FILE_LIST_LIMIT
 from litellm.litellm_core_utils.cloud_storage_security import (
     is_managed_cloud_storage_uri,
 )
-from litellm.litellm_core_utils.core_helpers import get_or_create_metadata_bucket
+from litellm.litellm_core_utils.core_helpers import get_or_create_metadata_bucket, has_attributes
 from litellm.llms.base_llm.files.litellm_db_storage_backend import LITELLM_DB_STORAGE_BACKEND_NAME
 from litellm.llms.base_llm.files.transformation import BaseFileEndpoints, FileListModelScope
 from litellm.llms.base_llm.managed_resources.isolation import build_list_page
@@ -183,6 +183,11 @@ async def _litellm_executed_batch_input_model(
 _MAX_BATCH_FILE_SIZE_MB_ADAPTER: Final = TypeAdapter(int | None)
 _LISTED_FILES_ADAPTER: Final = TypeAdapter(list[OpenAIFileObject])
 _REQUEST_BODY_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+
+
+class _CarriesPrismaClient(Protocol):
+    @property
+    def prisma_client(self) -> PrismaClient: ...
 
 
 class UploadedFileInfo(TypedDict):
@@ -1067,8 +1072,11 @@ async def get_file_content(
                 )
 
             # Check if file is stored in a storage backend (check DB)
-            if hasattr(managed_files_obj, "prisma_client") and getattr(managed_files_obj, "prisma_client", None):
-                prisma_client: Final[PrismaClient] = getattr(managed_files_obj, "prisma_client")
+            if (
+                has_attributes(managed_files_obj, _CarriesPrismaClient, "prisma_client")
+                and managed_files_obj.prisma_client
+            ):
+                prisma_client: Final = managed_files_obj.prisma_client
                 db_file: Final = await ManagedFileRepository(prisma_client).table.find_first(
                     where={"unified_file_id": file_id}
                 )
@@ -1356,6 +1364,7 @@ async def get_file(
             data=data,
             user_api_key_dict=user_api_key_dict,
             check_file_id_encoding=True,
+            resolves_managed_file_ids=proxy_logging_obj.get_proxy_hook("managed_files") is not None,
         )
 
         if should_route and credentials is not None:
@@ -1569,6 +1578,7 @@ async def delete_file(
             data=data,
             user_api_key_dict=user_api_key_dict,
             check_file_id_encoding=True,
+            resolves_managed_file_ids=proxy_logging_obj.get_proxy_hook("managed_files") is not None,
         )
 
         if should_route and credentials is not None:

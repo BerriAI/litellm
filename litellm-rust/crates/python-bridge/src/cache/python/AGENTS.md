@@ -1,9 +1,0 @@
-# Python cache delegation
-
-This directory lets Rust inference use a selected Python cache. `service.rs` implements the injected Rust response-cache service and yields typed cache operations. `host.rs` calls the Python cache's sync or async API and delivers the result back to Rust.
-
-Keep the shared inference protocol wrapper and adapter selection in the parent module. Receive the configured cache and prepared arguments from the parent module. Do not discover global configuration, choose native backends, or move inference to Python. Core remains independent of Python objects and cache implementation details
-
-Await asynchronous cache operations through the existing host driver in the caller's task. Do not create another asyncio task or event loop. The one exception is the asynchronous unary messages store: Python's `_async_set_cache` writes the returned response from `create_cache_write_task` after the router has stamped its `_hidden_params`, so `host.rs` defers that store until the deployment transform has returned the response the caller receives and hands that response to `litellm.rust_bridge.host.cache.store_response`, which schedules the same write task. Lookups, sync stores and stream stores stay in the caller's task. Cancellation must prevent subsequent provider requests and cache writes. Preserve ordinary cache failure handling without swallowing cancellation or other Python base exceptions
-
-Traverse retained Python references for GC and release pending replies when the call closes. Regression tests must require native inference with Python fallback disabled and assert observable hits, provider request counts, cache-key headers, task identity and cancellation

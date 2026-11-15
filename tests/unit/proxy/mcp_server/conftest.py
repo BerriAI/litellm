@@ -1,11 +1,15 @@
 import asyncio
-import importlib
 import os
+from typing import Final
 
 import pytest
 
 import litellm
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from tests._module_state import collect_flushable_caches, flush_caches, restore_mutable_state, snapshot_mutable_state
+
+_LITELLM_STATE: Final = snapshot_mutable_state(litellm)
+_FLUSHABLE_CACHES: Final = collect_flushable_caches((litellm,))
 
 
 @pytest.fixture(scope="session")
@@ -20,11 +24,8 @@ def event_loop():
 
 @pytest.fixture(scope="function", autouse=True)
 def setup_and_teardown():
-    """
-    This fixture reloads litellm before every function. To speed up testing by removing callbacks being chained.
-    """
-    importlib.reload(litellm)
-    import asyncio
+    restore_mutable_state(litellm, _LITELLM_STATE)
+    flush_caches(_FLUSHABLE_CACHES)
 
     loop = asyncio.get_event_loop_policy().new_event_loop()
     asyncio.set_event_loop(loop)

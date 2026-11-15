@@ -5,14 +5,14 @@ Based on Google's GenAI Kit dotprompt implementation: https://google.github.io/d
 import re
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, Final
+from typing import Any, Final, Protocol
 
 import yaml
 from jinja2 import DictLoader, select_autoescape
 from jinja2.sandbox import ImmutableSandboxedEnvironment
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, require_attributes
 
 
 class _PromptFileJson(TypedDict):
@@ -25,6 +25,14 @@ class _PromptFileJson(TypedDict):
 class PromptJsonEntry(TypedDict):
     content: ReadOnly[str]
     metadata: ReadOnly[dict[str, object]]
+
+
+class _SupportsGet(Protocol):
+    def get(self, key: str, default: object = None, /) -> object: ...
+
+
+def _metadata_section(metadata: Mapping[str, object], name: str) -> _SupportsGet:
+    return require_attributes(metadata.get(name, {}), _SupportsGet, "get")
 
 
 def strip_version_suffix(prompt_id: str) -> str | None:
@@ -51,8 +59,8 @@ class PromptTemplate:
         restricted_keys: Final = ["model", "input", "output"]
         self.model = self.metadata.get("model")
         self.input_schema = self.metadata.get("input", {}).get("schema", {})
-        self.output_format = self.metadata.get("output", {}).get("format")
-        self.output_schema = self.metadata.get("output", {}).get("schema", {})
+        self.output_format = _metadata_section(self.metadata, "output").get("format")
+        self.output_schema = _metadata_section(self.metadata, "output").get("schema", {})
         self.optional_params = {}
         for key in self.metadata:
             if key not in restricted_keys:

@@ -24,7 +24,7 @@ from litellm.constants import (
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
     SINGLE_DEPLOYMENT_TRAFFIC_FAILURE_THRESHOLD,
 )
-from litellm.exceptions import MidStreamFallbackError
+from litellm.exceptions import MidStreamFallbackError, MissingMessageRoleError
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.litellm_logging import mask_api_base_credentials
 from litellm.router_deprecated import renamed_router_param
@@ -83,8 +83,10 @@ def mark_deployment_selection_failure(exception: BaseException) -> None:
 
 
 def is_failure_outside_selected_deployment(exception: BaseException | None) -> bool:
-    return is_advisor_orchestration_failure(exception) or bool(
-        getattr(exception, _DEPLOYMENT_SELECTION_FAILURE_ATTR, False)
+    return (
+        is_advisor_orchestration_failure(exception)
+        or isinstance(exception, MissingMessageRoleError)
+        or bool(getattr(exception, _DEPLOYMENT_SELECTION_FAILURE_ATTR, False))
     )
 
 
@@ -147,7 +149,7 @@ _EXCEPTION_POLICY_FIELDS: Final[tuple[tuple[type, str], ...]] = (
 )
 
 
-def _first_present(*sources: Mapping[str, Any] | None, key: str) -> int | float | None:
+def _first_present(*sources: Mapping[str, object] | None, key: str) -> int | float | None:
     """Return *key* from the first source mapping where it's set, so callers can
     support a setting living in more than one deployment config location. Sources
     are checked in order from most to least specific to that setting. Only a number
@@ -331,13 +333,11 @@ def _is_cooldown_required(
 
 def _is_per_user_provider_request(request_kwargs: Mapping[str, object]) -> bool:
     from litellm.llms.github_copilot.per_user_auth import (
-        github_copilot_user_session_from,
         is_github_copilot_per_user_request,
     )
 
-    return (
-        is_github_copilot_per_user_request(request_kwargs)
-        or github_copilot_user_session_from(request_kwargs.get("litellm_params")) is not None
+    return is_github_copilot_per_user_request(request_kwargs) or is_github_copilot_per_user_request(
+        request_kwargs.get("litellm_params")
     )
 
 

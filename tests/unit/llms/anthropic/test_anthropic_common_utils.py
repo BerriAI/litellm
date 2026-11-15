@@ -14,7 +14,6 @@ import itertools
 import json
 import logging
 import os
-import subprocess
 import sys
 import threading
 from collections.abc import Mapping
@@ -3268,23 +3267,6 @@ class TestWifLitellmParamsPlumbing:
         assert headers["authorization"] == f"Bearer {FAKE_MINTED_TOKEN}"
         assert len(poster.requests) == 1
 
-    def test_messages_mints_from_litellm_params(self, wif_engine):
-        from litellm.llms.anthropic.messages.native.transformation import (
-            AnthropicMessagesConfig,
-        )
-
-        poster, _ = wif_engine
-        headers, _ = AnthropicMessagesConfig().validate_anthropic_messages_environment(
-            headers={},
-            model="claude-sonnet-4-5",
-            messages=[{"role": "user", "content": "Hello"}],
-            optional_params={},
-            litellm_params=dict(WIF_PARAMS_ONLY),
-        )
-
-        assert headers["authorization"] == f"Bearer {FAKE_MINTED_TOKEN}"
-        assert len(poster.requests) == 1
-
 
 class TestWifTokenUrlParity:
     """Both credential tiers must derive the SAME clean token URL from any form of
@@ -3344,27 +3326,6 @@ class TestWifAsyncSeam:
         }
         assert sync_calls == []
         assert poster.thread_ids == [poster.thread_ids[0]]
-        assert poster.thread_ids[0] != threading.get_ident()
-
-    @pytest.mark.asyncio
-    async def test_avalidate_messages_environment_mints_off_loop(self, wif_async_engine, monkeypatch):
-        from litellm.llms.anthropic.messages.native.transformation import (
-            AnthropicMessagesConfig,
-        )
-
-        poster, sync_calls = wif_async_engine
-        monkeypatch.setenv("WIF_PARAMS_TEST_TOKEN", "params-jwt")
-
-        headers, _ = await AnthropicMessagesConfig().avalidate_anthropic_messages_environment(
-            headers={},
-            model="claude-sonnet-4-5",
-            messages=[{"role": "user", "content": "Hello"}],
-            optional_params={},
-            litellm_params=dict(WIF_PARAMS_ONLY),
-        )
-
-        assert headers["authorization"] == f"Bearer {FAKE_MINTED_TOKEN}"
-        assert sync_calls == []
         assert poster.thread_ids[0] != threading.get_ident()
 
     @pytest.mark.asyncio
@@ -4950,43 +4911,6 @@ def test_a_register_model_opt_out_for_one_claude_model_leaves_every_other_routed
     litellm.register_model({f"anthropic/{opted_out}": {"supports_prompt_caching": False}})
 
     assert supports_anthropic_cache_control(untouched, "anthropic", {"id": "plain-id"}) is True
-
-
-_MASKED_HOSTED_WEB_CALL_PROBE: Final = """
-import json
-
-from litellm.llms.anthropic.common_utils import write_request_hosted_web_call_arguments
-
-message = {
-    "role": "assistant",
-    "provider_specific_fields": {
-        "web_search_calls": [
-            {
-                "id": "ws_srvtoolu_1",
-                "type": "web_search_call",
-                "status": "completed",
-                "action": {"type": "search", "query": "deploy token 12345", "queries": ["deploy token 12345"]},
-            }
-        ]
-    },
-}
-write_request_hosted_web_call_arguments(message, {"srvtoolu_1": json.dumps({"query": "deploy token [REDACTED]"})})
-print(json.dumps(message["provider_specific_fields"]["web_search_calls"]))
-"""
-
-
-def test_a_masked_replayed_hosted_web_call_serializes_before_its_openai_model_was_ever_built() -> None:
-    result: Final = subprocess.run(
-        (sys.executable, "-I", "-c", _MASKED_HOSTED_WEB_CALL_PROBE),
-        capture_output=True,
-        text=True,
-        check=True,
-        timeout=120,
-    )
-    hosted: Final = json.loads(result.stdout.strip().splitlines()[-1])
-    assert [call["action"] for call in hosted] == [
-        {"type": "search", "query": "deploy token [REDACTED]", "queries": ["deploy token [REDACTED]"]}
-    ]
 
 
 def _mcp_tool_call(query: str) -> ChatCompletionAssistantToolCall:

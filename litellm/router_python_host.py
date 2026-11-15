@@ -23,6 +23,7 @@ from pydantic import TypeAdapter
 from typing_extensions import overload
 
 import litellm
+from litellm.litellm_core_utils.fallback_utils import without_global_fallbacks_around
 from litellm.router_config import RouterConfig, RouterDynamicConfig, live_dynamic_config
 
 if TYPE_CHECKING:
@@ -111,7 +112,7 @@ class PythonHost:
             raise AttributeError(f"litellm has no endpoint {op!r}")
         if not callable(endpoint):
             raise TypeError(f"litellm.{op} is not an endpoint")
-        return endpoint
+        return without_global_fallbacks_around(endpoint)
 
     def sleep(self, seconds: float) -> Awaitable[None]:
         return asyncio.sleep(seconds)

@@ -3102,3 +3102,71 @@ def test_anthropic_passthrough_stream_bills_a_bedrock_guardrail_trace_whose_json
     )
     (entry,) = _recorded_guardrail_entries(mock_logging_obj)
     assert entry["guardrail_usage"] == {"topicPolicyUnits": 3, "contentPolicyUnits": 3}
+
+
+_DEPLOYMENT_PRICING: Final = {"input_cost_per_token": 3e-03, "output_cost_per_token": 7e-03}
+
+
+def _deployment_priced_logging_obj(monkeypatch: pytest.MonkeyPatch, stream: bool) -> LiteLLMLoggingObj:
+    monkeypatch.setattr(litellm, "model_cost", {"sonnet-dep": {"litellm_provider": "anthropic", **_DEPLOYMENT_PRICING}})
+    logging_obj: Final = LiteLLMLoggingObj(
+        model="claude-sonnet-4-5",
+        messages=[],
+        stream=stream,
+        call_type="pass_through_endpoint",
+        start_time=datetime(2025, 1, 1),
+        litellm_call_id="deployment-priced",
+        function_id="1",
+    )
+    litellm_params: Final = {"metadata": {"model_info": {"id": "sonnet-dep", **_DEPLOYMENT_PRICING}}}
+    logging_obj.litellm_params = litellm_params
+    logging_obj.model_call_details["litellm_params"] = litellm_params
+    logging_obj.model_call_details["custom_llm_provider"] = "anthropic"
+    logging_obj.model_call_details["stream"] = stream
+    return logging_obj
+
+
+def _deployment_price_of(usage: litellm.Usage) -> float:
+    return (
+        usage.prompt_tokens * _DEPLOYMENT_PRICING["input_cost_per_token"]
+        + usage.completion_tokens * _DEPLOYMENT_PRICING["output_cost_per_token"]
+    )
+
+
+def test_a_response_naming_a_dated_snapshot_is_billed_at_the_resolved_deployment_price(
+    monkeypatch, mock_httpx_response
+):
+    logging_obj: Final = _deployment_priced_logging_obj(monkeypatch, stream=False)
+
+    result: Final = AnthropicPassthroughLoggingHandler.anthropic_passthrough_handler(
+        httpx_response=mock_httpx_response,
+        response_body=mock_httpx_response.json(),
+        logging_obj=logging_obj,
+        url_route="/v1/messages",
+        result="success",
+        start_time=datetime(2025, 1, 1),
+        end_time=datetime(2025, 1, 1),
+        cache_hit=False,
+        request_body={"model": "claude-sonnet-4-5", "messages": []},
+    )
+
+    assert result["result"].usage.prompt_tokens > 0
+    assert result["kwargs"]["response_cost"] == pytest.approx(_deployment_price_of(result["result"].usage))
+
+
+def test_a_stream_naming_a_dated_snapshot_is_billed_at_the_resolved_deployment_price(monkeypatch, all_chunks):
+    logging_obj: Final = _deployment_priced_logging_obj(monkeypatch, stream=True)
+
+    result: Final = AnthropicPassthroughLoggingHandler.handle_logging_anthropic_collected_chunks(
+        litellm_logging_obj=logging_obj,
+        passthrough_success_handler_obj=MagicMock(),
+        url_route="/v1/messages",
+        request_body={"model": "claude-sonnet-4-5", "stream": True, "messages": []},
+        endpoint_type=MagicMock(),
+        start_time=datetime(2025, 1, 1),
+        all_chunks=all_chunks,
+        end_time=datetime(2025, 1, 1),
+    )
+
+    assert result["result"].usage.prompt_tokens > 0
+    assert result["kwargs"]["response_cost"] == pytest.approx(_deployment_price_of(result["result"].usage))

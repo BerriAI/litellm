@@ -42,6 +42,7 @@ from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude_trans
     AmazonAnthropicClaudeMessagesStreamDecoder,
 )
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.llms.custom_httpx.stream_close import aclose_if_supported
 
 REASONING_BODY_ADAPTER: Final = TypeAdapter(dict[str, object])
 
@@ -1545,6 +1546,112 @@ def test_bedrock_messages_preserves_compact_context_management_and_adds_beta():
     assert result.get("context_management") == {"edits": [{"type": "compact_20260112"}]}
     assert "compact-2026-01-12" in result.get("anthropic_beta", [])
     assert result["max_tokens"] == 4096
+
+
+@pytest.mark.usefixtures("local_beta_headers_config")
+def test_bedrock_messages_keeps_compaction_param_and_adds_beta():
+    """
+    The ``compact-2026-09-04`` beta uses a top-level ``compaction`` parameter, not a
+    ``context_management`` edit. Bedrock InvokeModel accepts it with that beta and
+    returns one signed compaction block. Before this fix the top-level allowlist
+    dropped ``compaction``, so the request reached Bedrock as an ordinary turn.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/claude-messages-compaction.html
+    """
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    messages = [
+        {"role": "user", "content": [{"type": "text", "text": "Is CHG-TR-0042 Type IB in TR-TITCK?"}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "Type IB."}]},
+        {"role": "user", "content": [{"type": "text", "text": "Now KR-MFDS."}]},
+    ]
+    optional_params = {"max_tokens": 1024, "compaction": {"type": "summarize", "instructions": "Keep rule ids."}}
+
+    result = cfg.transform_anthropic_messages_request(
+        model="anthropic.claude-opus-5",
+        messages=messages,
+        anthropic_messages_optional_request_params=optional_params,
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert result["compaction"] == {"type": "summarize", "instructions": "Keep rule ids."}
+    assert "compact-2026-09-04" in result["anthropic_beta"]
+    assert "context_management" not in result
+    assert set(result).issubset(cfg.BEDROCK_INVOKE_ALLOWED_TOP_LEVEL_FIELDS)
+
+
+@pytest.mark.usefixtures("local_beta_headers_config")
+def test_bedrock_messages_keeps_compact_2026_09_04_beta_for_adopting_request():
+    """
+    A request that adopts the signed block sends it first in ``messages`` and must
+    carry the ``compact-2026-09-04`` beta again. The bedrock beta map has to keep it.
+    """
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    block = {"type": "compaction", "content": "<summary>TR-TITCK: Type IB.</summary>", "signature": "sig"}
+    messages = [{"role": "user", "content": [block, {"type": "text", "text": "Now KR-MFDS."}]}]
+
+    result = cfg.transform_anthropic_messages_request(
+        model="anthropic.claude-opus-5",
+        messages=messages,
+        anthropic_messages_optional_request_params={"max_tokens": 512},
+        litellm_params=GenericLiteLLMParams(),
+        headers={"anthropic-beta": "compact-2026-09-04"},
+    )
+
+    assert "compact-2026-09-04" in result["anthropic_beta"]
+    assert result["messages"][0]["content"][0] == block
+
+
+@pytest.mark.usefixtures("local_beta_headers_config")
+def test_bedrock_messages_adds_compact_2026_09_04_beta_for_signed_block_without_client_header():
+    """
+    A client that adopts the signed block but sends no anthropic-beta header still
+    needs ``compact-2026-09-04``; the Anthropic route adds it for the block, and so
+    does Bedrock Invoke.
+    """
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    block = {"type": "compaction", "content": "<summary>TR-TITCK: Type IB.</summary>", "signature": "sig"}
+    messages = [{"role": "user", "content": [block, {"type": "text", "text": "Now KR-MFDS."}]}]
+
+    result = cfg.transform_anthropic_messages_request(
+        model="anthropic.claude-opus-5",
+        messages=messages,
+        anthropic_messages_optional_request_params={"max_tokens": 512},
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert result["anthropic_beta"] == ["compact-2026-09-04"]
+    assert result["messages"][0]["content"][0] == block
+
+
+@pytest.mark.usefixtures("local_beta_headers_config")
+@pytest.mark.parametrize("compaction", [None, "summarize", []])
+def test_bedrock_messages_drops_compaction_that_is_not_an_object(compaction: object):
+    """
+    Only an object ``compaction`` gets the beta. Any other value is dropped, as it
+    was before the field was allowed, instead of reaching Bedrock without its beta.
+    """
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+
+    result = cfg.transform_anthropic_messages_request(
+        model="anthropic.claude-opus-5",
+        messages=[{"role": "user", "content": [{"type": "text", "text": "Hi"}]}],
+        anthropic_messages_optional_request_params={"max_tokens": 512, "compaction": compaction},
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert "compaction" not in result
+    assert "compact-2026-09-04" not in result.get("anthropic_beta", [])
 
 
 def test_bedrock_messages_filters_unsupported_context_management_edits():
@@ -4630,7 +4737,10 @@ async def test_bedrock_messages_fallback_to_anthropic_sends_the_tool_names_bedro
     unnamed_tool_extras: dict[str, object],
     sent_extras: dict[str, object],
 ) -> None:
+    from litellm.llms.anthropic.messages.native import handler as python_messages
+
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "anthropic_messages", python_messages.anthropic_messages)
     upstream: Final = BedrockDownAnthropicUp()
     respx_mock.post(url__regex=r"https://.*").mock(side_effect=upstream)
     router: Final = litellm.Router(
@@ -4709,3 +4819,98 @@ async def test_bedrock_chat_fallback_to_anthropic_sends_the_tool_bedrock_cleaned
 
     (body,) = upstream.anthropic_bodies
     assert body["tools"] == [{"name": "get_weather", "input_schema": schema, **sent_extras}]
+
+
+@pytest.mark.asyncio
+async def test_bedrock_messages_abort_on_detached_drain_cap_closes_httpx_response_and_stops_upstream_reads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import litellm.llms.anthropic.messages.native.streaming_iterator as streaming_iterator_module
+
+    monkeypatch.setattr(streaming_iterator_module, "ANTHROPIC_MESSAGES_MAX_DETACHED_STREAM_DRAINS", 0)
+    monkeypatch.setattr(streaming_iterator_module, "ANTHROPIC_MESSAGES_STREAM_RELAY_QUEUE_MAXSIZE", 2)
+
+    class _TrackedByteStream(httpx.AsyncByteStream):
+        def __init__(self) -> None:
+            self.closed: Final = asyncio.Event()
+            self.frames_sent = 0
+
+        async def __aiter__(self) -> AsyncIterator[bytes]:
+            self.frames_sent += 1
+            yield _bedrock_event_frame(
+                {
+                    "type": "message_start",
+                    "message": {
+                        "id": "msg_abort_test",
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [],
+                        "model": "us.anthropic.claude-sonnet-4-6",
+                        "usage": {"input_tokens": 4, "output_tokens": 1},
+                    },
+                }
+            )
+            for idx in range(50):
+                await asyncio.sleep(0.005)
+                if self.closed.is_set():
+                    break
+                self.frames_sent += 1
+                yield _bedrock_event_frame(
+                    {
+                        "type": "content_block_delta",
+                        "index": 0,
+                        "delta": {"type": "text_delta", "text": f"token_{idx} "},
+                    }
+                )
+
+        async def aclose(self) -> None:
+            self.closed.set()
+
+    tracked_stream: Final = _TrackedByteStream()
+    response: Final = httpx.Response(200, stream=tracked_stream)
+    iterator: Final = AmazonAnthropicClaudeMessagesConfig().get_async_streaming_response_iterator(
+        model="us.anthropic.claude-sonnet-4-6",
+        httpx_response=response,
+        request_body={"model": "us.anthropic.claude-sonnet-4-6"},
+        litellm_logging_obj=LiteLLMLoggingObj(
+            model="bedrock/us.anthropic.claude-sonnet-4-6",
+            messages=[{"role": "user", "content": "Count to 50"}],
+            stream=True,
+            call_type="chat",
+            start_time=datetime(2026, 1, 1),
+            litellm_call_id="test_bedrock_abort_closes_httpx_response",
+            function_id="test_bedrock_abort_closes_httpx_response",
+        ),
+    )
+
+    first_frame: Final = await asyncio.wait_for(anext(iterator), timeout=5)
+    assert first_frame.startswith(b"event: message_start\n"), first_frame
+    assert not tracked_stream.closed.is_set()
+
+    await iterator.aclose()
+    await asyncio.wait_for(tracked_stream.closed.wait(), timeout=5)
+
+    assert tracked_stream.closed.is_set(), (
+        "Expected httpx.Response stream to be closed when detached-drain cap aborts upstream"
+    )
+    assert tracked_stream.frames_sent < 10, (
+        f"Expected upstream to stop generating after abort, but {tracked_stream.frames_sent} frames were read"
+    )
+
+
+@pytest.mark.asyncio
+async def test_promote_message_stop_usage_closes_its_source_on_aclose() -> None:
+    source_closed: Final = asyncio.Event()
+
+    async def _source() -> AsyncIterator[dict[str, object]]:
+        try:
+            yield {"type": "message_start", "message": {"id": "msg_1", "usage": {"input_tokens": 1}}}
+            yield {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "hi"}}
+        finally:
+            source_closed.set()
+
+    source: Final = _source()
+    promoted: Final = AmazonAnthropicClaudeMessagesConfig._promote_message_stop_usage(source)
+    await anext(promoted)
+    await aclose_if_supported(promoted)
+    assert source_closed.is_set()
