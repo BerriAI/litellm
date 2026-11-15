@@ -13,7 +13,7 @@ from types import MappingProxyType
 from typing import Final, NoReturn, SupportsFloat, SupportsIndex, SupportsInt, TypeAlias, cast
 
 from fastapi import HTTPException, status
-from pydantic import ConfigDict, TypeAdapter
+from pydantic import BaseModel, ConfigDict, TypeAdapter
 
 import litellm
 from litellm._internal_context import with_service_target
@@ -1548,7 +1548,9 @@ def _estimate_request_max_cost_for_model(
     input_tokens: int | None = None,
 ) -> float | None:
     model_infos: Final = _get_model_cost_infos(model=model, llm_router=llm_router)
-    modes: Final = _completion_max_output_token_modes(
+    request_payload: Final = _MODEL_INFO_MAPPING_ADAPTER.validate_python(request_body)
+    modes: Final = _output_token_field_modes(
+        request_body=request_payload,
         route=route,
         model=model,
         llm_router=llm_router,
@@ -1561,9 +1563,9 @@ def _estimate_request_max_cost_for_model(
             model=model,
             model_info=model_info,
             input_tokens=input_tokens,
-            include_max_output_tokens=include_max_output_tokens,
+            include_all_output_token_fields=include_all_output_token_fields,
         )
-        for model_info, include_max_output_tokens in product(model_infos, modes)
+        for model_info, include_all_output_token_fields in product(model_infos, modes)
     ]
     valid_estimates: Final = [estimate for estimate in estimates if estimate is not None]
     return max(valid_estimates) if valid_estimates else None
@@ -1576,7 +1578,7 @@ def _max_cost_for_cost_info(
     model_info: Mapping[str, object],
     input_tokens: int | None = None,
     *,
-    include_max_output_tokens: bool | None = None,
+    include_all_output_token_fields: bool | None = None,
 ) -> float | None:
     image_cost: Final = _estimate_image_generation_cost(
         request_body=request_body,
@@ -1596,7 +1598,7 @@ def _max_cost_for_cost_info(
         request_body=request_body,
         route=route,
         model_info=model_info,
-        include_max_output_tokens=include_max_output_tokens,
+        include_all_output_token_fields=include_all_output_token_fields,
     )
     if estimated_input_tokens is None or output_tokens is None:
         return None
@@ -1830,20 +1832,25 @@ def _estimate_output_tokens(
     route: str,
     model_info: Mapping[str, object],
     *,
-    include_max_output_tokens: bool | None = None,
+    include_all_output_token_fields: bool | None = None,
 ) -> int | None:
     if _is_input_only_route(route=route):
         return 0
 
-    resolved_include_max_output: Final = (
-        _backend_supports_chat_max_output_tokens(model=None, model_info=model_info)
-        if include_max_output_tokens is None
-        else include_max_output_tokens
+    request_payload: Final = _MODEL_INFO_MAPPING_ADAPTER.validate_python(request_body)
+    resolved_include_all: Final = (
+        _default_include_all_output_token_fields(
+            request_body=request_payload,
+            route=route,
+            model_info=model_info,
+        )
+        if include_all_output_token_fields is None
+        else include_all_output_token_fields
     )
     requested: Final = _requested_output_tokens(
         request_body,
         route=route,
-        include_completion_max_output_tokens=resolved_include_max_output,
+        include_all_output_token_fields=resolved_include_all,
     )
 
     # Clamp at min(requested-or-default, model_max-or-default). Two purposes:
@@ -1940,6 +1947,102 @@ def _backend_supports_chat_max_output_tokens(
     return info_provider in _GEMINI_MODEL_INFO_PROVIDERS if info_provider else False
 
 
+_RESPONSES_BRIDGE_OVERRIDE_KEYS: Final = ("use_chat_completions_api", "custom_llm_provider", "api_base")
+_MODEL_INFO_MAPPING_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
+
+
+def _as_model_info_dict(model_info: object) -> Mapping[str, object] | None:
+    raw_info: Final = model_info.model_dump() if isinstance(model_info, BaseModel) else model_info
+    if not isinstance(raw_info, Mapping):
+        return None
+    try:
+        return _MODEL_INFO_MAPPING_ADAPTER.validate_python(raw_info)
+    except ValueError:
+        return None
+
+
+def _router_default_litellm_params(llm_router: Router | None) -> Mapping[str, object]:
+    if llm_router is None:
+        return MappingProxyType({})
+    raw_defaults: Final = _get_value(llm_router.settings(), "default_litellm_params")
+    return MappingProxyType(
+        {key: value for key in _RESPONSES_BRIDGE_OVERRIDE_KEYS if (value := _get_value(raw_defaults, key)) is not None}
+    )
+
+
+def _first_non_none_field(key: str, sources: tuple[object, ...]) -> object:
+    return next((val for src in sources if (val := _get_value(src, key)) is not None), None)
+
+
+def _backend_bridges_responses_to_chat(
+    model: str,
+    request_body: object,
+    deployment_params: object = None,
+    default_litellm_params: Mapping[str, object] = MappingProxyType({}),
+    model_info: object = None,
+) -> bool:
+    from litellm.responses.main import provider_stores_the_conversation
+
+    sources: Final[tuple[object, ...]] = (request_body, default_litellm_params, deployment_params)
+    if not model:
+        return True
+    merged: Final = {
+        key: value
+        for key in _RESPONSES_BRIDGE_OVERRIDE_KEYS
+        if (value := _first_non_none_field(key, sources)) is not None
+    }
+    raw_provider: Final = merged.get("custom_llm_provider")
+    custom_llm_provider: Final = raw_provider if isinstance(raw_provider, str) and raw_provider else None
+    raw_kwargs: Final = {
+        key: value
+        for key, value in (
+            ("use_chat_completions_api", merged.get("use_chat_completions_api")),
+            ("api_base", merged.get("api_base")),
+            ("model_info", _as_model_info_dict(model_info)),
+        )
+        if value is not None
+    }
+    try:
+        return not provider_stores_the_conversation(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            kwargs=raw_kwargs,
+        )
+    except (ValueError, litellm.BadRequestError):
+        return True
+
+
+def _deployment_bridges_responses_to_chat(
+    deployment: object,
+    fallback_model: str,
+    request_body: object,
+    default_litellm_params: Mapping[str, object],
+) -> bool:
+    litellm_params: Final = _get_value(deployment, "litellm_params")
+    return _backend_bridges_responses_to_chat(
+        model=_string_field(litellm_params, "model") or fallback_model,
+        request_body=request_body,
+        deployment_params=litellm_params,
+        default_litellm_params=default_litellm_params,
+        model_info=_get_value(deployment, "model_info"),
+    )
+
+
+def _default_include_all_output_token_fields(
+    request_body: object,
+    route: str,
+    model_info: Mapping[str, object],
+) -> bool:
+    call_types: Final = get_call_types_for_route(route) if route else None
+    if call_types and any(call_type in _RESPONSES_CALL_TYPES for call_type in call_types):
+        return _backend_bridges_responses_to_chat(
+            model=_string_field(request_body, "model") or "",
+            request_body=request_body,
+            model_info=model_info,
+        )
+    return _backend_supports_chat_max_output_tokens(model=None, model_info=model_info)
+
+
 def _deployment_supports_chat_max_output_tokens(deployment: object, fallback_model: str) -> bool:
     litellm_params: Final = _get_value(deployment, "litellm_params")
     return _backend_supports_chat_max_output_tokens(
@@ -1949,14 +2052,62 @@ def _deployment_supports_chat_max_output_tokens(deployment: object, fallback_mod
     )
 
 
-def _completion_max_output_token_modes(
+def _responses_bridge_modes(
+    request_body: object,
+    model: str,
+    llm_router: Router | None,
+    model_infos: Sequence[Mapping[str, object]],
+) -> tuple[bool, ...]:
+    default_litellm_params: Final = _router_default_litellm_params(llm_router)
+    deployments: Final = llm_router.registry().deployments(model) if llm_router is not None else ()
+    if deployments:
+        bridged_modes: Final = frozenset(
+            _deployment_bridges_responses_to_chat(
+                deployment=deployment,
+                fallback_model=model,
+                request_body=request_body,
+                default_litellm_params=default_litellm_params,
+            )
+            for deployment in deployments
+        )
+        return tuple(sorted(bridged_modes))
+
+    info_modes: Final = frozenset(
+        _backend_bridges_responses_to_chat(
+            model=model,
+            request_body=request_body,
+            default_litellm_params=default_litellm_params,
+            model_info=info,
+        )
+        for info in model_infos
+    )
+    return tuple(sorted(info_modes)) or (
+        _backend_bridges_responses_to_chat(
+            model=model,
+            request_body=request_body,
+            default_litellm_params=default_litellm_params,
+        ),
+    )
+
+
+def _output_token_field_modes(
+    request_body: object,
     route: str,
     model: str,
     llm_router: Router | None,
     model_infos: Sequence[Mapping[str, object]],
 ) -> tuple[bool | None, ...]:
     call_types: Final = get_call_types_for_route(route) if route else None
-    if not call_types or not any(call_type in _COMPLETION_CALL_TYPES for call_type in call_types):
+    if not call_types:
+        return (None,)
+    if any(call_type in _RESPONSES_CALL_TYPES for call_type in call_types):
+        return _responses_bridge_modes(
+            request_body=request_body,
+            model=model,
+            llm_router=llm_router,
+            model_infos=model_infos,
+        )
+    if not any(call_type in _COMPLETION_CALL_TYPES for call_type in call_types):
         return (None,)
 
     deployments: Final = llm_router.registry().deployments(model) if llm_router is not None else ()
@@ -1976,7 +2127,7 @@ def _completion_max_output_token_modes(
 def _output_token_fields_for_route(
     route: str | None,
     *,
-    include_completion_max_output_tokens: bool = False,
+    include_all_output_token_fields: bool = False,
 ) -> tuple[tuple[str, ...], bool]:
     if not route:
         return _OUTPUT_TOKEN_FIELDS, True
@@ -1984,12 +2135,15 @@ def _output_token_fields_for_route(
     if not call_types:
         return _OUTPUT_TOKEN_FIELDS, True
     if any(call_type in _RESPONSES_CALL_TYPES for call_type in call_types):
-        return _RESPONSES_OUTPUT_TOKEN_FIELDS, False
+        return (
+            (_OUTPUT_TOKEN_FIELDS if include_all_output_token_fields else _RESPONSES_OUTPUT_TOKEN_FIELDS),
+            False,
+        )
     if any(call_type in _ANTHROPIC_MESSAGES_CALL_TYPES for call_type in call_types):
         return _COMPLETION_OUTPUT_TOKEN_FIELDS, False
     if any(call_type in _COMPLETION_CALL_TYPES for call_type in call_types):
         return (
-            (_OUTPUT_TOKEN_FIELDS if include_completion_max_output_tokens else _COMPLETION_OUTPUT_TOKEN_FIELDS),
+            (_OUTPUT_TOKEN_FIELDS if include_all_output_token_fields else _COMPLETION_OUTPUT_TOKEN_FIELDS),
             False,
         )
     return _OUTPUT_TOKEN_FIELDS, True
@@ -1999,11 +2153,11 @@ def _requested_output_tokens(
     request_body: Mapping[str, object],
     route: str | None = None,
     *,
-    include_completion_max_output_tokens: bool = False,
+    include_all_output_token_fields: bool = False,
 ) -> int | None:
     fields, allow_inference_config = _output_token_fields_for_route(
         route,
-        include_completion_max_output_tokens=include_completion_max_output_tokens,
+        include_all_output_token_fields=include_all_output_token_fields,
     )
     inference_config: Final = request_body.get("inferenceConfig")
     candidates: Final = (

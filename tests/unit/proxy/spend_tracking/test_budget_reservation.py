@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import math
+from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Final
@@ -1179,7 +1180,7 @@ async def test_gemini_chat_completions_concurrent_reservations_reserve_high_max_
     proxy_logging_obj: Final = ProxyLogging(user_api_key_cache=DualCache())
     token_id: Final = "gemini-high-max-output-tokens"
     valid_token: Final = UserAPIKeyAuth(api_key=token_id, token=token_id, max_budget=1.0, spend=0.0)
-    body: Final[dict[str, object]] = {
+    body: Final[Mapping[str, object]] = {
         "model": "priced-model",
         "messages": [{"role": "user", "content": "hi"}],
         "max_output_tokens": 65536,
@@ -1208,3 +1209,234 @@ async def test_gemini_chat_completions_concurrent_reservations_reserve_high_max_
     assert admitted == 2
     assert rejected == 8
     assert spend_counter_store.get_local(f"spend:key:{token_id}") == pytest.approx(1.0)
+
+
+def _bridged_responses_router(
+    backend_model: str,
+    *,
+    input_cost: float = 0.0001,
+    output_cost: float = 0.0002,
+    max_output_tokens: int = 65536,
+    deployment_use_chat: bool = False,
+    default_use_chat: bool = False,
+) -> Router:
+    litellm_params: Final = LiteLLM_Params(
+        model=backend_model,
+        api_key="sk-fake",
+        use_chat_completions_api=deployment_use_chat if deployment_use_chat else None,
+    )
+    defaults: Final[Mapping[str, object] | None] = {"use_chat_completions_api": True} if default_use_chat else None
+    return Router(
+        model_list=[
+            Deployment(
+                model_name="priced-model",
+                litellm_params=litellm_params,
+                model_info=ModelInfo(
+                    id=f"{backend_model}-bridged-deployment",
+                    input_cost_per_token=input_cost,
+                    output_cost_per_token=output_cost,
+                    max_output_tokens=max_output_tokens,
+                ),
+            ).model_dump()
+        ],
+        default_litellm_params=defaults,
+    )
+
+
+@pytest.mark.parametrize("cap_field", ["max_completion_tokens", "max_tokens"])
+@pytest.mark.parametrize(
+    ("mode", "backend_model"),
+    [
+        ("deployment_flag", "openai/gpt-5.4"),
+        ("router_default", "openai/gpt-5.4"),
+        ("request_flag", "openai/gpt-5.4"),
+        ("model_prefix", "openai/chat_completions/gpt-5.4"),
+        ("non_native_provider", "anthropic/claude-opus-4-6"),
+    ],
+)
+def test_bridged_responses_reserves_chat_completion_output_caps(
+    cap_field: str,
+    mode: str,
+    backend_model: str,
+) -> None:
+    router: Final = _bridged_responses_router(
+        backend_model,
+        deployment_use_chat=mode == "deployment_flag",
+        default_use_chat=mode == "router_default",
+    )
+    request_bridge: Final[Mapping[str, object]] = {"use_chat_completions_api": True} if mode == "request_flag" else {}
+    base_body: Final[Mapping[str, object]] = {"model": "priced-model", "input": "hi", **request_bridge}
+
+    uncapped: Final = estimate_request_max_cost(request_body=base_body, route="/v1/responses", llm_router=router)
+    expected_high: Final = estimate_request_max_cost(
+        request_body={**base_body, "max_output_tokens": 32768},
+        route="/v1/responses",
+        llm_router=router,
+    )
+    bridged_high: Final = estimate_request_max_cost(
+        request_body={**base_body, cap_field: 32768},
+        route="/v1/responses",
+        llm_router=router,
+    )
+    bridged_paired: Final = estimate_request_max_cost(
+        request_body={**base_body, "max_output_tokens": 1, cap_field: 32768},
+        route="/v1/responses",
+        llm_router=router,
+    )
+
+    assert uncapped is not None and expected_high is not None
+    assert expected_high > uncapped
+    assert bridged_high == pytest.approx(expected_high)
+    assert bridged_paired == pytest.approx(expected_high)
+
+
+def test_direct_bridged_and_native_responses_select_matching_cap_fields() -> None:
+    bridged_request_cost: Final = estimate_request_max_cost(
+        request_body={
+            "model": "openai/gpt-5.4",
+            "input": "hi",
+            "use_chat_completions_api": True,
+            "max_completion_tokens": 32768,
+        },
+        route="/v1/responses",
+        llm_router=None,
+    )
+    bridged_uncapped_cost: Final = estimate_request_max_cost(
+        request_body={"model": "openai/gpt-5.4", "input": "hi", "use_chat_completions_api": True},
+        route="/v1/responses",
+        llm_router=None,
+    )
+    bridged_expected_cost: Final = estimate_request_max_cost(
+        request_body={
+            "model": "openai/gpt-5.4",
+            "input": "hi",
+            "use_chat_completions_api": True,
+            "max_output_tokens": 32768,
+        },
+        route="/v1/responses",
+        llm_router=None,
+    )
+    native_decoy_cost: Final = estimate_request_max_cost(
+        request_body={"model": "openai/gpt-5.4", "input": "hi", "max_completion_tokens": 32768},
+        route="/v1/responses",
+        llm_router=None,
+    )
+    native_uncapped_cost: Final = estimate_request_max_cost(
+        request_body={"model": "openai/gpt-5.4", "input": "hi"},
+        route="/v1/responses",
+        llm_router=None,
+    )
+
+    assert bridged_uncapped_cost is not None and bridged_expected_cost is not None
+    assert bridged_expected_cost > bridged_uncapped_cost
+    assert bridged_request_cost == pytest.approx(bridged_expected_cost)
+    assert native_uncapped_cost is not None
+    assert native_decoy_cost == pytest.approx(native_uncapped_cost)
+
+
+def test_mixed_native_and_bridged_responses_group_reserves_worst_case() -> None:
+    router: Final = Router(
+        model_list=[
+            Deployment(
+                model_name="mixed-responses",
+                litellm_params=LiteLLM_Params(model="openai/gpt-5.4", api_key="sk-native"),
+                model_info=ModelInfo(
+                    id="native-deployment",
+                    input_cost_per_token=0.0001,
+                    output_cost_per_token=0.0002,
+                    max_output_tokens=65536,
+                ),
+            ).model_dump(),
+            Deployment(
+                model_name="mixed-responses",
+                litellm_params=LiteLLM_Params(
+                    model="openai/gpt-5.4",
+                    api_key="sk-bridged",
+                    use_chat_completions_api=True,
+                ),
+                model_info=ModelInfo(
+                    id="bridged-deployment",
+                    input_cost_per_token=0.0001,
+                    output_cost_per_token=0.0002,
+                    max_output_tokens=65536,
+                ),
+            ).model_dump(),
+        ]
+    )
+    base_body: Final[Mapping[str, object]] = {"model": "mixed-responses", "input": "hi"}
+
+    uncapped: Final = estimate_request_max_cost(request_body=base_body, route="/v1/responses", llm_router=router)
+    decoy_small: Final = estimate_request_max_cost(
+        request_body={**base_body, "max_completion_tokens": 1},
+        route="/v1/responses",
+        llm_router=router,
+    )
+    high_output: Final = estimate_request_max_cost(
+        request_body={**base_body, "max_output_tokens": 32768},
+        route="/v1/responses",
+        llm_router=router,
+    )
+    high_completion: Final = estimate_request_max_cost(
+        request_body={**base_body, "max_completion_tokens": 32768},
+        route="/v1/responses",
+        llm_router=router,
+    )
+    paired_low_output_high_completion: Final = estimate_request_max_cost(
+        request_body={**base_body, "max_output_tokens": 1, "max_completion_tokens": 32768},
+        route="/v1/responses",
+        llm_router=router,
+    )
+
+    assert uncapped is not None and high_output is not None
+    assert high_output > uncapped
+    assert decoy_small == pytest.approx(uncapped)
+    assert high_completion == pytest.approx(high_output)
+    assert paired_low_output_high_completion == pytest.approx(high_output)
+
+
+@pytest.mark.asyncio
+async def test_bridged_responses_concurrent_reservations_reserve_max_completion_tokens(
+    spend_counter_store: SpendCounterStore,
+) -> None:
+    output_cost: Final = 0.00001
+    router: Final = _bridged_responses_router(
+        "openai/gpt-5.4",
+        input_cost=0.0,
+        output_cost=output_cost,
+        max_output_tokens=65536,
+        deployment_use_chat=True,
+    )
+    cache: Final = UserApiKeyCache()
+    proxy_logging_obj: Final = ProxyLogging(user_api_key_cache=DualCache())
+    token_id: Final = "bridged-responses-max-completion-tokens"
+    max_budget: Final = 1.25 * 32768 * output_cost
+    valid_token: Final = UserAPIKeyAuth(api_key=token_id, token=token_id, max_budget=max_budget, spend=0.0)
+    body: Final[Mapping[str, object]] = {
+        "model": "priced-model",
+        "input": "hi",
+        "max_completion_tokens": 32768,
+    }
+
+    outcomes: Final = await asyncio.gather(
+        *(
+            reserve_budget_for_request(
+                request_body=dict(body),
+                route="/v1/responses",
+                llm_router=router,
+                valid_token=valid_token,
+                team_object=None,
+                user_object=None,
+                prisma_client=None,
+                user_api_key_cache=cache,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+            for _ in range(10)
+        ),
+        return_exceptions=True,
+    )
+
+    admitted: Final = sum(1 for item in outcomes if isinstance(item, dict))
+    rejected: Final = sum(1 for item in outcomes if isinstance(item, litellm.BudgetExceededError))
+    assert admitted == 2
+    assert rejected == 8
+    assert spend_counter_store.get_local(f"spend:key:{token_id}") == pytest.approx(max_budget)
