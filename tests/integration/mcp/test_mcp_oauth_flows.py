@@ -8,6 +8,7 @@ import textwrap
 import time
 import uuid
 from collections.abc import Iterator, Mapping
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from pathlib import Path
@@ -39,7 +40,7 @@ from integration._support.mcp import (
 )
 from integration._support.mcp_grants import create_toolset
 from integration._support.oauth_server import AuthorizationServer, oauth_server
-from integration._support.process import owned_proxy
+from integration._support.process import owned_proxy, owned_proxy_process
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import TypeAdapter
 
@@ -47,6 +48,7 @@ pytestmark: Final = pytest.mark.shares_worker_state
 
 ADD: Final = {"a": 2, "b": 3}
 CLIENT_REDIRECT: Final = "http://127.0.0.1:9/cb"
+_CONSENT_BURST: Final = 40
 ACCEPT: Final = {"Accept": "application/json, text/event-stream"}
 
 
@@ -1372,6 +1374,299 @@ def test_lite_login_team_hint_preselects_that_team_on_the_consent_page(gateway: 
         )
         assert issued.status_code == 200, issued.text
         assert _response_object(issued)["team_id"] == hinted_team, issued.text
+
+
+def _native_client_query(gateway: Gateway, client_id: str, pkce: _Pkce) -> dict[str, str]:
+    return {
+        "response_type": "code",
+        "client_id": client_id,
+        "redirect_uri": CLIENT_REDIRECT,
+        "state": "lite-login-team-hint",
+        "code_challenge": pkce.challenge,
+        "code_challenge_method": "S256",
+        "resource": _base(gateway),
+    }
+
+
+def _member_of_every_team(gateway: Gateway, scenario: Scenario, teams: tuple[str, ...]) -> str:
+    member: Final = scenario.member(teams[0])
+    for team in teams[1:]:
+        gateway.post("/team/member_add", {"team_id": team, "member": {"role": "user", "user_id": member}})
+    return member
+
+
+def _offered_teams(page: str) -> set[str]:
+    return set(re.findall(r'<option value="([^"]*)"', page))
+
+
+def _credential_for_the_submitted_team(
+    gateway: Gateway, cookies: Mapping[str, str], consent: httpx.Response, pkce: _Pkce, team_id: str | None
+) -> httpx.Response:
+    approved: Final = gateway.client.post(
+        "/authorize/complete",
+        data={
+            **_consent_form_fields(consent.text),
+            **({} if team_id is None else {"team_id": team_id}),
+            "decision": "approve",
+        },
+        cookies={**cookies, **dict(consent.cookies)},
+    )
+    assert approved.status_code == 303, approved.text
+    return gateway.client.post(
+        "/token",
+        data={
+            "grant_type": "authorization_code",
+            "code": parse_qs(urlsplit(approved.headers["location"]).query)["code"][0],
+            "redirect_uri": CLIENT_REDIRECT,
+            "client_id": parse_qs(urlsplit(str(consent.request.url)).query)["client_id"][0],
+            "code_verifier": pkce.verifier,
+            "resource": _base(gateway),
+        },
+    )
+
+
+def test_lite_login_team_hint_that_names_no_single_team_preselects_nothing(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        hinted_alias: Final = f"hinted-{uuid.uuid4().hex}"
+        shared_alias: Final = f"shared-{uuid.uuid4().hex}"
+        teams: Final = (
+            scenario.team(),
+            scenario.team(team_alias=hinted_alias),
+            scenario.team(team_alias=shared_alias),
+            scenario.team(team_alias=shared_alias),
+        )
+        cookies: Final = _ui_session_cookie(scenario, _member_of_every_team(gateway, scenario, teams))
+        query: Final = _native_client_query(gateway, _registered_dcr_client(gateway), _Pkce(secrets.token_urlsafe(64)))
+        markup: Final = '"><script>alert(1)</script>'
+        for hint in ("", "x" * 5120, markup, hinted_alias.upper(), f" {hinted_alias}", shared_alias):
+            page = gateway.client.get("/authorize", params={**query, "team": hint}, cookies=cookies)
+            assert page.status_code == 200, f"{hint[:40]!r}: {page.text}"
+            assert _offered_teams(page.text) == set(teams), page.text
+            assert _preselected_teams(page.text) == [], f"{hint[:40]!r}: {page.text}"
+            assert hint in ("", shared_alias) or hint not in page.text, f"{hint[:40]!r} was reflected: {page.text}"
+
+
+def test_lite_login_team_hint_sent_twice_preselects_the_team_once(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        teams: Final = (scenario.team(), scenario.team())
+        cookies: Final = _ui_session_cookie(scenario, _member_of_every_team(gateway, scenario, teams))
+        query: Final = _native_client_query(gateway, _registered_dcr_client(gateway), _Pkce(secrets.token_urlsafe(64)))
+        page: Final = gateway.client.get(
+            "/authorize", params=(*query.items(), ("team", teams[1]), ("team", teams[1])), cookies=cookies
+        )
+        assert page.status_code == 200, page.text
+        assert _preselected_teams(page.text) == [teams[1]], page.text
+
+
+def test_lite_login_team_hint_prefers_a_team_id_over_another_teams_alias(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        named_by_id: Final = scenario.team()
+        named_by_alias: Final = scenario.team(team_alias=named_by_id)
+        teams: Final = (scenario.team(), named_by_alias, named_by_id)
+        cookies: Final = _ui_session_cookie(scenario, _member_of_every_team(gateway, scenario, teams))
+        pkce: Final = _Pkce(secrets.token_urlsafe(64))
+        query: Final = _native_client_query(gateway, _registered_dcr_client(gateway), pkce)
+        page: Final = gateway.client.get("/authorize", params={**query, "team": named_by_id}, cookies=cookies)
+        assert page.status_code == 200, page.text
+        assert _preselected_teams(page.text) == [named_by_id], page.text
+        issued: Final = _credential_for_the_submitted_team(gateway, cookies, page, pkce, named_by_id)
+        assert issued.status_code == 200, issued.text
+        assert _response_object(issued)["team_id"] == named_by_id, issued.text
+
+
+def test_lite_login_team_hint_changes_nothing_for_a_member_of_one_team(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        only_team: Final = scenario.team()
+        other_alias: Final = f"other-{uuid.uuid4().hex}"
+        scenario.team(team_alias=other_alias)
+        cookies: Final = _ui_session_cookie(scenario, scenario.member(only_team))
+        pkce: Final = _Pkce(secrets.token_urlsafe(64))
+        query: Final = _native_client_query(gateway, _registered_dcr_client(gateway), pkce)
+        for hint in ({}, {"team": only_team}, {"team": other_alias}):
+            page = gateway.client.get("/authorize", params={**query, **hint}, cookies=cookies)
+            assert page.status_code == 200, page.text
+            assert "<select" not in page.text and other_alias not in page.text, page.text
+            assert _consent_form_fields(page.text)["team_id"] == only_team, page.text
+        issued: Final = _credential_for_the_submitted_team(gateway, cookies, page, pkce, None)
+        assert issued.status_code == 200, issued.text
+        assert _response_object(issued)["team_id"] == only_team, issued.text
+
+
+def test_lite_login_team_hint_survives_the_sign_in_redirect(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        hinted_alias: Final = f"hinted-{uuid.uuid4().hex}"
+        scenario.team(team_alias=hinted_alias)
+        query: Final = _native_client_query(gateway, _registered_dcr_client(gateway), _Pkce(secrets.token_urlsafe(64)))
+        with httpx.Client(base_url=_base(gateway), trust_env=False, timeout=30) as signed_out:
+            redirected: Final = signed_out.get("/authorize", params={**query, "team": hinted_alias})
+        assert redirected.status_code == 303, redirected.text
+        location: Final = urlsplit(redirected.headers["location"])
+        assert f"{location.scheme}://{location.netloc}{location.path}" == f"{_base(gateway)}/sso/key/generate"
+        return_to: Final = urlsplit(parse_qs(location.query)["return_to"][0])
+        assert return_to.path == "/authorize", redirected.headers["location"]
+        assert {name: values[0] for name, values in parse_qs(return_to.query).items()} == {
+            **query,
+            "team": hinted_alias,
+        }, redirected.headers["location"]
+
+
+def test_lite_login_team_hint_is_only_a_default_the_consent_form_can_change(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        other_team: Final = scenario.team()
+        hinted_team: Final = scenario.team()
+        outsider_team: Final = scenario.team()
+        cookies: Final = _ui_session_cookie(
+            scenario, _member_of_every_team(gateway, scenario, (other_team, hinted_team))
+        )
+        pkce: Final = _Pkce(secrets.token_urlsafe(64))
+        query: Final = _native_client_query(gateway, _registered_dcr_client(gateway), pkce)
+
+        def hinted_consent() -> httpx.Response:
+            page: Final = gateway.client.get("/authorize", params={**query, "team": hinted_team}, cookies=cookies)
+            assert page.status_code == 200, page.text
+            assert _preselected_teams(page.text) == [hinted_team], page.text
+            return page
+
+        changed: Final = _credential_for_the_submitted_team(gateway, cookies, hinted_consent(), pkce, other_team)
+        assert changed.status_code == 200, changed.text
+        assert _response_object(changed)["team_id"] == other_team, changed.text
+
+        forged: Final = _credential_for_the_submitted_team(gateway, cookies, hinted_consent(), pkce, outsider_team)
+        assert forged.status_code == 400, forged.text
+        assert _response_object(forged)["error"] == "invalid_grant", forged.text
+
+        refused_page: Final = hinted_consent()
+        denied: Final = gateway.client.post(
+            "/authorize/complete",
+            data={**_consent_form_fields(refused_page.text), "team_id": hinted_team, "decision": "deny"},
+            cookies={**cookies, **dict(refused_page.cookies)},
+        )
+        assert denied.status_code == 303, denied.text
+        assert parse_qs(urlsplit(denied.headers["location"]).query) == {
+            "error": ["access_denied"],
+            "state": [query["state"]],
+        }, denied.headers["location"]
+
+
+def test_team_hint_is_ignored_by_every_authorize_branch_that_renders_no_consent_page(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        teams: Final = (scenario.team(), scenario.team())
+        cookies: Final = _ui_session_cookie(scenario, _member_of_every_team(gateway, scenario, teams))
+        query: Final = _native_client_query(gateway, _registered_dcr_client(gateway), _Pkce(secrets.token_urlsafe(64)))
+        hint: Final = {"team": teams[1]}
+
+        aggregate: Final = {name: value for name, value in query.items() if name != "resource"}
+        connect: Final = gateway.client.get("/authorize", params={**aggregate, **hint}, cookies=cookies)
+        assert connect.status_code == 303, connect.text
+        connect_page: Final = urlsplit(connect.headers["location"])
+        assert connect_page.path == "/ui/connect", connect.headers["location"]
+        assert list(parse_qs(connect_page.query)) == ["connect_flow"], connect.headers["location"]
+
+        hosted: Final = gateway.client.post(
+            "/register", json={"redirect_uris": ["https://client.example/cb"], "client_name": "integration"}
+        )
+        assert hosted.status_code in (200, 201), hosted.text
+        refused_requests: Final = (
+            {**query, "code_challenge_method": "plain"},
+            {**query, "response_type": "token"},
+            {**query, "redirect_uri": "http://127.0.0.1:9/unregistered"},
+            {
+                **query,
+                "client_id": str(_response_object(hosted)["client_id"]),
+                "redirect_uri": "https://client.example/cb",
+            },
+        )
+        for refused in refused_requests:
+            unhinted = gateway.client.get("/authorize", params=refused, cookies=cookies)
+            hinted = gateway.client.get("/authorize", params={**refused, **hint}, cookies=cookies)
+            assert unhinted.status_code == 400, unhinted.text
+            assert (hinted.status_code, hinted.json()) == (400, unhinted.json()), hinted.text
+            assert teams[1] not in hinted.text, hinted.text
+
+
+def test_team_hint_on_a_per_server_authorize_is_not_relayed_to_the_upstream_authorization_server(
+    gateway: Gateway,
+) -> None:
+    with mcp_peer() as peer, oauth_server() as auth, gateway.scenario() as scenario:
+        alias: Final = "th" + uuid.uuid4().hex[:8]
+        identity: Final = _register_oauth(
+            scenario,
+            peer,
+            auth,
+            alias,
+            auth_type="oauth2",
+            oauth2_flow="authorization_code",
+            credentials={"client_id": "ac-client", "client_secret": "ac-secret", "scopes": ["tools.call"]},
+        )
+        team: Final = scenario.team()
+        key: Final = scenario.key(user_id=scenario.member(team), object_permission={"mcp_servers": [identity]})
+        registered: Final = gateway.client.post(
+            f"/{alias}/register", json={"redirect_uris": [CLIENT_REDIRECT], "client_name": "integration"}
+        )
+        assert registered.status_code in (200, 201), registered.text
+        started: Final = gateway.client.get(
+            f"/{alias}/authorize",
+            params={
+                "client_id": str(_response_object(registered)["client_id"]),
+                "redirect_uri": CLIENT_REDIRECT,
+                "response_type": "code",
+                "state": "client-state",
+                "code_challenge": _Pkce(secrets.token_urlsafe(32)).challenge,
+                "code_challenge_method": "S256",
+                "scope": "tools.call",
+                "team": team,
+            },
+            headers={"x-litellm-api-key": key},
+        )
+        assert started.status_code in (302, 307), started.text
+        upstream: Final = started.headers["location"]
+        assert upstream.startswith(auth.issuer + "/authorize"), upstream
+        assert "team" not in parse_qs(urlsplit(upstream).query) and team not in upstream, upstream
+
+
+@pytest.mark.timeout(900)
+def test_consent_pages_keep_their_own_team_hint_while_a_worker_is_killed_mid_burst(tmp_path: Path) -> None:
+    with gateway_from_environment() as rig, owned_proxy_process(rig, tmp_path, {}, workers=2) as owned:
+        gateway: Final = owned.gateway
+        with gateway.scenario() as scenario:
+            aliases: Final = tuple(f"burst-{index}-{uuid.uuid4().hex}" for index in range(4))
+            teams: Final = tuple(scenario.team(team_alias=alias) for alias in aliases)
+            cookies: Final = _ui_session_cookie(scenario, _member_of_every_team(gateway, scenario, teams))
+            pkce: Final = _Pkce(secrets.token_urlsafe(64))
+            query: Final = _native_client_query(gateway, _registered_dcr_client(gateway), pkce)
+            burst: Final = tuple(
+                ((teams, aliases)[index % 2][index % 4], teams[index % 4]) for index in range(_CONSENT_BURST)
+            )
+
+            def consent(hint: str) -> httpx.Response | None:
+                try:
+                    with httpx.Client(base_url=_base(gateway), trust_env=False, timeout=60) as browser:
+                        return browser.get("/authorize", params={**query, "team": hint}, cookies=cookies)
+                except httpx.TransportError:
+                    return None
+
+            before_the_kill: Final = consent(aliases[0])
+            assert before_the_kill is not None and before_the_kill.status_code == 200
+            assert _preselected_teams(before_the_kill.text) == [teams[0]], before_the_kill.text
+            workers: Final = eventually(owned.worker_pids, lambda pids: len(pids) == 2, seconds=60)
+            with ThreadPoolExecutor(max_workers=_CONSENT_BURST) as pool:
+                with owned.replacing_worker(min(workers)) as kill:
+                    first_half: Final = tuple(pool.submit(consent, hint) for hint, _ in burst[: _CONSENT_BURST // 2])
+                    kill()
+                    second_half: Final = tuple(pool.submit(consent, hint) for hint, _ in burst[_CONSENT_BURST // 2 :])
+                    pages: Final = tuple(pending.result() for pending in (*first_half, *second_half))
+            answered: Final = tuple((page, team) for page, (_, team) in zip(pages, burst) if page is not None)
+            assert answered, "no consent page was served while one worker was down"
+            for page, team in answered:
+                assert page.status_code == 200, page.text
+                assert _preselected_teams(page.text) == [team], page.text
+            for hint, team in (asked for page, asked in zip(pages, burst) if page is None):
+                retried = eventually(lambda: consent(hint), lambda page: page is not None, seconds=60)
+                assert retried is not None and retried.status_code == 200
+                assert _preselected_teams(retried.text) == [team], retried.text
+            issued: Final = _credential_for_the_submitted_team(gateway, cookies, before_the_kill, pkce, teams[0])
+            assert issued.status_code == 200, issued.text
+            assert _response_object(issued)["team_id"] == teams[0], issued.text
 
 
 def _toolset_rpc(

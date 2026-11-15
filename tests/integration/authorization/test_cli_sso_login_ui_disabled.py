@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import base64
 import json
-import re
 import os
+import pty
+import re
 import secrets
 import subprocess
 import sys
 import threading
+import time
 import uuid
 from collections.abc import Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
@@ -27,6 +29,7 @@ from pydantic import JsonValue
 from tests.integration._support.client import (
     JSON_OBJECT,
     Gateway,
+    Scenario,
     eventually,
     gateway_from_environment,
     object_value,
@@ -710,51 +713,265 @@ def test_cli_session_token_is_denied_once_its_team_budget_is_exhausted(
         assert provider.received() == ()
 
 
+TEAM_PROMPT: Final = "Select a team by entering the index number"
+LITE: Final = (sys.executable, "-P", "-c", "from litellm.proxy.client.cli import cli; cli()")
+
+
+@dataclass(frozen=True, slots=True)
+class LiteRun:
+    process: subprocess.Popen[bytes]
+    output: Path
+
+    def printed(self) -> str:
+        return self.output.read_text()
+
+    def printed_once_exited(self) -> str:
+        eventually(self.process.poll, lambda code: code is not None, seconds=60, return_last_on_timeout=True)
+        return self.printed()
+
+
+@contextmanager
+def _lite(
+    proxy: Gateway,
+    home: Path,
+    arguments: Sequence[str],
+    environment: Mapping[str, str],
+    *,
+    typed: bytes | None = None,
+    terminal: bool = False,
+) -> Iterator[LiteRun]:
+    output: Final = home / f"lite-{uuid.uuid4().hex}.out"
+    terminal_ends: Final = pty.openpty() if terminal else ()
+    piped: Final = subprocess.DEVNULL if typed is None else subprocess.PIPE
+    with output.open("w") as sink:
+        process: Final = subprocess.Popen(
+            [*LITE, *arguments],
+            env={
+                **os.environ,
+                "HOME": str(home),
+                "BROWSER": "true",
+                "PYTHONUNBUFFERED": "1",
+                "LITELLM_PROXY_URL": _proxy_url(proxy),
+                **environment,
+            },
+            stdin=terminal_ends[1] if terminal_ends else piped,
+            stdout=sink,
+            stderr=subprocess.STDOUT,
+        )
+    try:
+        if typed is not None and process.stdin is not None:
+            process.stdin.write(typed)
+            process.stdin.close()
+        yield LiteRun(process, output)
+    finally:
+        stop_child(process)
+        for end in terminal_ends:
+            os.close(end)
+
+
+def _subject_in_teams(proxy: Gateway, scenario: Scenario, teams: Sequence[str]) -> str:
+    subject: Final = f"cli-sso-team-hint-{uuid.uuid4().hex[:12]}"
+    scenario.user(user_id=subject, user_email=f"{subject}@example.com", user_role="internal_user")
+    for team in teams:
+        added = proxy.request(
+            "POST", "/team/member_add", {"team_id": team, "member": {"user_id": subject, "role": "user"}}
+        )
+        assert added.status_code == 200, added.text
+    return subject
+
+
+def _sign_in_from_the_terminal(one_worker: OneWorkerProxy, run: LiteRun, subject: str) -> None:
+    started: Final = eventually(
+        lambda: re.search(r"Verification code: (\S+).*\nSession ID: (\S+)", run.printed()),
+        lambda match: match is not None or run.process.poll() is not None,
+        seconds=60,
+    )
+    assert started is not None, run.printed()
+    with _browser() as browser:
+        _sign_in(
+            one_worker.owned.gateway,
+            one_worker.idp,
+            browser,
+            CliSession(started.group(2), "", started.group(1)),
+            subject=subject,
+        )
+
+
+def _claude_on_the_path(home: Path) -> Mapping[str, str]:
+    directory: Final = home / "bin"
+    directory.mkdir(exist_ok=True)
+    claude: Final = directory / "claude"
+    claude.write_text("#!/bin/sh\nexit 0\n")
+    claude.chmod(0o755)
+    return {"PATH": f"{directory}{os.pathsep}{os.environ.get('PATH', '')}"}
+
+
 def test_lite_login_with_a_team_env_var_skips_the_terminal_team_pick(
     one_worker: OneWorkerProxy, tmp_path: Path
 ) -> None:
     proxy: Final = one_worker.owned.gateway
-    subject: Final = f"cli-sso-team-hint-{uuid.uuid4().hex[:12]}"
     with proxy.scenario() as scenario:
-        first_team: Final = scenario.team()
         hinted_alias: Final = f"hinted-{uuid.uuid4().hex}"
         hinted_team: Final = scenario.team(team_alias=hinted_alias)
-        scenario.user(user_id=subject, user_email=f"{subject}@example.com", user_role="internal_user")
-        for team in (first_team, hinted_team):
-            added = proxy.request(
-                "POST", "/team/member_add", {"team_id": team, "member": {"user_id": subject, "role": "user"}}
-            )
-            assert added.status_code == 200, added.text
-        output: Final = tmp_path / "lite-login.out"
-        with output.open("w") as sink:
-            lite_login: Final = subprocess.Popen(
-                [sys.executable, "-P", "-c", "from litellm.proxy.client.cli import cli; cli()", "login"],
-                env={
-                    **os.environ,
-                    "HOME": str(tmp_path),
-                    "BROWSER": "true",
-                    "PYTHONUNBUFFERED": "1",
-                    "LITELLM_PROXY_URL": _proxy_url(proxy),
-                    "LITELLM_PROXY_TEAM": hinted_alias,
-                },
-                stdin=subprocess.DEVNULL,
-                stdout=sink,
-                stderr=subprocess.STDOUT,
-            )
-        try:
-            started: Final = eventually(
-                lambda: re.search(r"Verification code: (\S+).*\nSession ID: (\S+)", output.read_text()),
-                lambda match: match is not None or lite_login.poll() is not None,
+        subject: Final = _subject_in_teams(proxy, scenario, (scenario.team(), hinted_team))
+        with _lite(proxy, tmp_path, ("login",), {"LITELLM_PROXY_TEAM": hinted_alias}) as run:
+            _sign_in_from_the_terminal(one_worker, run, subject)
+            printed: Final = run.printed_once_exited()
+        assert f"Successfully generated JWT for team: {hinted_team}" in printed, printed
+        assert TEAM_PROMPT not in printed, printed
+
+
+def test_lite_login_team_flag_beats_the_env_var_and_the_spend_lands_on_that_team(
+    one_worker: OneWorkerProxy, provider: SharedProvider, tmp_path: Path
+) -> None:
+    proxy: Final = one_worker.owned.gateway
+    with proxy.scenario() as scenario:
+        env_team: Final = scenario.team()
+        flag_team: Final = scenario.team()
+        subject: Final = _subject_in_teams(proxy, scenario, (env_team, flag_team))
+        with _lite(proxy, tmp_path, ("login", "--team", flag_team), {"LITELLM_PROXY_TEAM": env_team}) as run:
+            _sign_in_from_the_terminal(one_worker, run, subject)
+            printed: Final = run.printed_once_exited()
+        assert f"Successfully generated JWT for team: {flag_team}" in printed, printed
+        assert TEAM_PROMPT not in printed, printed
+        with _lite(proxy, tmp_path, ("auth", "print-token"), {}) as helper:
+            token: Final = helper.printed_once_exited().strip()
+            assert helper.process.poll() == 0, token
+        message_id: Final = _send_message(proxy, provider, token)
+        rows: Final = eventually(
+            lambda: read_rows('SELECT team_id, "user" FROM "LiteLLM_SpendLogs" WHERE request_id = %s', (message_id,)),
+            lambda values: len(values) == 1,
+            seconds=70,
+        )
+        assert rows == [{"team_id": flag_team, "user": subject}], rows
+
+
+@pytest.mark.parametrize("hint", ("a_team_the_user_is_not_in", "an_alias_two_of_the_users_teams_share"))
+def test_lite_login_with_a_team_that_names_no_single_team_of_the_user_still_asks(
+    one_worker: OneWorkerProxy, tmp_path: Path, hint: str
+) -> None:
+    proxy: Final = one_worker.owned.gateway
+    with proxy.scenario() as scenario:
+        shared_alias: Final = f"shared-{uuid.uuid4().hex}"
+        teams: Final = (scenario.team(team_alias=shared_alias), scenario.team(team_alias=shared_alias))
+        requested: Final = scenario.team() if hint == "a_team_the_user_is_not_in" else shared_alias
+        subject: Final = _subject_in_teams(proxy, scenario, teams)
+        with _lite(proxy, tmp_path, ("login", "--team", requested), {}, typed=b"1\n") as run:
+            _sign_in_from_the_terminal(one_worker, run, subject)
+            printed: Final = run.printed_once_exited()
+        assert f"Team '{requested}' was not found among your teams, pick one below." in printed, printed
+        assert TEAM_PROMPT in printed, printed
+        signed_in_to: Final = re.search(r"Successfully generated JWT for team: (\S+)", printed)
+        assert signed_in_to is not None and signed_in_to.group(1) in teams, printed
+
+
+def test_lite_login_pkce_env_var_opens_the_consent_page_on_the_team_env_var(gateway: Gateway, tmp_path: Path) -> None:
+    with gateway.scenario() as scenario:
+        hinted_alias: Final = f"hinted-{uuid.uuid4().hex}"
+        hinted_team: Final = scenario.team(team_alias=hinted_alias)
+        subject: Final = _subject_in_teams(gateway, scenario, (scenario.team(), hinted_team))
+        session: Final = {
+            "user_id": subject,
+            "key": scenario.key(user_id=subject, duration="10m"),
+            "login_method": "username_password",
+            "exp": int(time.time()) + 600,
+        }
+        cookies: Final = {"token": jwt.encode(session, gateway.key, algorithm="HS256")}
+        environment: Final = {"LITELLM_PROXY_LOGIN_PKCE": "true", "LITELLM_PROXY_TEAM": hinted_alias}
+        with _lite(gateway, tmp_path, ("login",), environment) as run:
+            opened: Final = eventually(
+                lambda: re.search(r"Opening browser to: (\S+)", run.printed()),
+                lambda match: match is not None or run.process.poll() is not None,
                 seconds=60,
             )
-            assert started is not None, output.read_text()
+            assert opened is not None, run.printed()
+            authorize: Final = urlparse(opened.group(1))
+            assert authorize.path == "/authorize", opened.group(1)
+            assert parse_qs(authorize.query).get("team") == [hinted_alias], opened.group(1)
             with _browser() as browser:
-                _sign_in(
-                    proxy, one_worker.idp, browser, CliSession(started.group(2), "", started.group(1)), subject=subject
+                consent: Final = browser.get(opened.group(1), cookies=cookies)
+                assert consent.status_code == 200, consent.text
+                preselected: Final = re.findall(r'<option value="([^"]*)" selected>', consent.text)
+                assert preselected == [hinted_team], consent.text
+                approved: Final = browser.post(
+                    f"{_proxy_url(gateway)}/authorize/complete",
+                    data={
+                        **dict(re.findall(r'<input type="hidden" name="([^"]+)" value="([^"]*)">', consent.text)),
+                        "team_id": preselected[0],
+                        "decision": "approve",
+                    },
+                    cookies={**cookies, **dict(consent.cookies)},
                 )
-            eventually(lite_login.poll, lambda code: code is not None, seconds=60)
-        finally:
-            stop_child(lite_login)
-        printed: Final = output.read_text()
+                assert approved.status_code == 303, approved.text
+                delivered: Final = browser.get(approved.headers["location"])
+                assert delivered.status_code == 200, delivered.text
+            printed: Final = run.printed_once_exited()
+        assert "Login successful!" in printed, printed
+        assert f"Requested team '{hinted_alias}'" in printed, printed
+        stored: Final = JSON_OBJECT.validate_json((tmp_path / ".litellm" / "token.json").read_bytes())
+        assert (stored["user_id"], stored["team_id"]) == (subject, hinted_team), stored
+
+
+def test_no_pkce_flag_beats_the_pkce_env_var(one_worker: OneWorkerProxy, tmp_path: Path) -> None:
+    proxy: Final = one_worker.owned.gateway
+    with _lite(proxy, tmp_path, ("login", "--no-pkce"), {"LITELLM_PROXY_LOGIN_PKCE": "true"}) as run:
+        printed: Final = eventually(
+            run.printed,
+            lambda text: "Verification code:" in text or run.process.poll() is not None,
+            seconds=60,
+            return_last_on_timeout=True,
+        )
+    assert "Verification code:" in printed and "/authorize?" not in printed, printed
+
+
+@pytest.mark.parametrize("command", ("login", "up", "claude"))
+def test_a_pkce_env_var_that_is_not_a_boolean_is_refused_as_a_usage_error(
+    one_worker: OneWorkerProxy, tmp_path: Path, command: str
+) -> None:
+    proxy: Final = one_worker.owned.gateway
+    environment: Final = {"LITELLM_PROXY_LOGIN_PKCE": "sometimes", **_claude_on_the_path(tmp_path)}
+    with _lite(proxy, tmp_path, (command,), environment) as run:
+        printed: Final = run.printed_once_exited()
+        exit_code: Final = run.process.poll()
+    assert exit_code == 2, printed
+    assert "sometimes" in printed and "Verification code:" not in printed, printed
+
+
+@pytest.mark.parametrize(
+    ("command", "pkce", "login_command"),
+    (("up", "true", "lite login --pkce"), ("up", "false", "lite login"), ("claude", "true", "lite login --pkce")),
+)
+def test_auto_login_without_a_terminal_names_the_login_the_pkce_env_var_selects(
+    one_worker: OneWorkerProxy, tmp_path: Path, command: str, pkce: str, login_command: str
+) -> None:
+    proxy: Final = one_worker.owned.gateway
+    environment: Final = {"LITELLM_PROXY_LOGIN_PKCE": pkce, **_claude_on_the_path(tmp_path)}
+    with _lite(proxy, tmp_path, (command,), environment) as run:
+        printed: Final = run.printed_once_exited()
+        exit_code: Final = run.process.poll()
+    assert exit_code == 1, printed
+    assert f"`{login_command}`" in printed, printed
+
+
+@pytest.mark.parametrize("command", ("up", "claude"))
+def test_auto_login_from_a_terminal_signs_in_to_the_team_env_var_without_a_team_pick(
+    one_worker: OneWorkerProxy, tmp_path: Path, command: str
+) -> None:
+    proxy: Final = one_worker.owned.gateway
+    with proxy.scenario() as scenario:
+        hinted_alias: Final = f"hinted-{uuid.uuid4().hex}"
+        hinted_team: Final = scenario.team(team_alias=hinted_alias)
+        subject: Final = _subject_in_teams(proxy, scenario, (scenario.team(), hinted_team))
+        environment: Final = {"LITELLM_PROXY_TEAM": hinted_alias, **_claude_on_the_path(tmp_path)}
+        with _lite(proxy, tmp_path, (command,), environment, terminal=True) as run:
+            _sign_in_from_the_terminal(one_worker, run, subject)
+            printed: Final = eventually(
+                run.printed,
+                lambda text: (
+                    "Successfully generated JWT" in text or TEAM_PROMPT in text or run.process.poll() is not None
+                ),
+                seconds=60,
+                return_last_on_timeout=True,
+            )
         assert f"Successfully generated JWT for team: {hinted_team}" in printed, printed
-        assert "Select a team by entering the index number" not in printed, printed
+        assert TEAM_PROMPT not in printed, printed
