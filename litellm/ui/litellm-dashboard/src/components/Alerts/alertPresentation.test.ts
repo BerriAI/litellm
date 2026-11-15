@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { activityLink, presentAlert, type SavedAlert } from "./alertPresentation";
+import {
+  activityLink,
+  listedAlertType,
+  presentAlert,
+  type SavedAlert,
+} from "./alertPresentation";
 
 const saved: SavedAlert = {
   id: "1",
@@ -30,6 +35,59 @@ describe("alert presentation", () => {
     expect(presentation.title).toContain(`${label} on example-team`);
     expect(presentation.description).toContain(formatted);
     expect(presentation.baseline).toBe(baseline);
+  });
+  it("presents a prompt cache incident without reading it as a metric or deprecation alert", () => {
+    const presentation = presentAlert({
+      source: "performance",
+      alert: {
+        ...saved,
+        type: "prompt_cache",
+        resource_type: "deployment",
+        resource_id: "claude-east",
+        evidence: {
+          config_fingerprint: "config-1",
+          prefix_fingerprint: "prefix-1",
+          provider: "anthropic",
+          provider_model: "claude-test",
+          consecutive_misses: 3,
+          proven_write_tokens: 2048,
+          ttl_seconds: 300,
+        },
+      },
+    });
+    expect(presentation.title).toBe("Prompt caching stopped on claude-east");
+    expect(presentation.description).toContain("3 requests in a row to claude-test");
+    expect(presentation.description).not.toContain("prefix-1");
+    expect([presentation.resourceType, presentation.href, presentation.history]).toEqual([
+      "deployment",
+      undefined,
+      null,
+    ]);
+    expect(presentation.promptCache).toEqual({
+      deploymentId: "claude-east",
+      model: "claude-test",
+      misses: 3,
+      provenWriteTokens: 2048,
+      ttlSeconds: 300,
+      firstMiss: saved.window_start,
+      lastMiss: saved.window_end,
+    });
+  });
+  it("keeps metric alerts on their chart", () => {
+    expect(presentAlert({ source: "performance", alert: saved }).promptCache).toBeNull();
+  });
+  it.each([
+    ["all", "performance"],
+    ["performance", "performance"],
+    ["model-deprecations", null],
+    ["spend", "spend"],
+  ] as const)("lists %s through the %s alert query", (filter, type) => {
+    expect(listedAlertType(filter)).toBe(type);
+  });
+  it("does not read a record whose type, resource and evidence disagree as a metric alert", () => {
+    const presentation = presentAlert({ source: "performance", alert: { ...saved, resource_type: "deployment" } });
+    expect(presentation.title).toBe("This alert can't be shown in this version of the dashboard.");
+    expect([presentation.href, presentation.history, presentation.baseline]).toEqual([undefined, null, undefined]);
   });
   it("links to the resource with an inclusive eight-day window", () => {
     expect(activityLink(saved)).toBe(

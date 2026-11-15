@@ -5868,6 +5868,25 @@
       },
       "retiredTitle": "{{name}} retired on {{date}}",
       "retiresTitle": "{{name}} retires on {{date}}",
+      "promptCache": {
+        "title": "Prompt caching stopped on {{name}}",
+        "description": "{{misses}} requests in a row to {{model}} read and wrote no cache for a prefix the provider had cached before.",
+        "evidenceHeading": "What was observed",
+        "deployment": "Deployment",
+        "model": "Model",
+        "misses": "Requests in a row with no cache read or write",
+        "provenWrite": "Earlier cache write that proved the prefix",
+        "provenWriteTokens_one": "{{count}} token",
+        "provenWriteTokens_other": "{{count}} tokens",
+        "ttl": "Cache lifetime",
+        "ttlMinutes_one": "{{count}} minute",
+        "ttlMinutes_other": "{{count}} minutes",
+        "ttlHours_one": "{{count}} hour",
+        "ttlHours_other": "{{count}} hours",
+        "window": "Misses observed",
+        "windowValue": "{{start}} to {{end}} UTC",
+        "scope": "This alert only covers a prompt prefix that the provider had already written to its cache on this deployment and configuration. A prefix that was never cached, including when caching was off from the first request, is not checked, and nothing here watches every request or deployment."
+      },
       "deprecationDescription": "{{requests}} recorded requests. Last used {{date}} UTC.",
       "retired": "Retired",
       "retires": "Retires",
@@ -5913,7 +5932,9 @@
           "milliseconds": "Mean response time per day",
           "ratio": "Daily error rate"
         }
-      }
+      },
+      "unrecognized": "This alert can't be shown in this version of the dashboard.",
+      "promptCacheError": "Could not load prompt cache alerts."
     },
     "page": {
       "tabs": {

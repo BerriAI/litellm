@@ -1,10 +1,11 @@
-import { ArrowLeft, KeyRound, Network, Server, User, Users } from "lucide-react";
+import { ArrowLeft, Cpu, KeyRound, Network, Server, User, Users } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { buttonVariants } from "@/components/ui/button";
 import RecommendedReplacement from "@/components/ModelDeprecationAlerts/RecommendedReplacement";
 import { migrationHref } from "@/components/ModelDeprecationAlerts/migrationRoute";
 import AlertActions from "./AlertActions";
 import AlertChart from "./AlertChart";
+import PromptCacheEvidence from "./PromptCacheEvidence";
 import { AlertItem, dateLabel, presentAlert } from "./alertPresentation";
 
 export default function AlertDetail({
@@ -18,7 +19,14 @@ export default function AlertDetail({
 }) {
   const { t } = useTranslation();
   const alert = presentAlert(item);
-  const Icon = { key: KeyRound, team: Users, user: User, model: Network, gateway: Server }[alert.resourceType];
+  const Icon = {
+    key: KeyRound,
+    team: Users,
+    user: User,
+    model: Network,
+    gateway: Server,
+    deployment: Cpu,
+  }[alert.resourceType];
   return (
     <div className="min-w-0 space-y-6">
       <button
@@ -38,7 +46,11 @@ export default function AlertDetail({
           </div>
           <p className="text-base leading-relaxed text-muted-foreground">{alert.description}</p>
         </header>
-        <AlertChart alert={alert} />
+        {alert.promptCache ? (
+          <PromptCacheEvidence details={alert.promptCache} />
+        ) : (
+          <AlertChart alert={alert} />
+        )}
         <section className="space-y-2 border-t border-border pt-5">
           <h2 className="text-sm font-medium">{t("alerts.unified.resourceHeading")}</h2>
           <ul className="divide-y divide-border">

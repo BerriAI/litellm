@@ -66,3 +66,56 @@ def test_identity_uses_instants_not_timezone_or_evidence() -> None:
         }
     )
     assert original.identity() == revised.identity()
+
+
+CACHE_EVIDENCE: Final[Mapping[str, object]] = {
+    "config_fingerprint": "config-1",
+    "prefix_fingerprint": "prefix-1",
+    "provider": "anthropic",
+    "provider_model": "claude-test",
+    "consecutive_misses": 3,
+    "proven_write_tokens": 2048,
+    "ttl_seconds": 300,
+}
+PROMPT_CACHE: Final[Mapping[str, object]] = {
+    "type": "prompt_cache",
+    "resource_type": "deployment",
+    "resource_id": "claude-east",
+    "window_start": "2026-01-08T00:00:00Z",
+    "window_end": "2026-01-08T00:00:03Z",
+    "evidence": CACHE_EVIDENCE,
+}
+
+
+@pytest.mark.parametrize(
+    "change",
+    (
+        {"resource_type": "model"},
+        {"evidence": DETECTION["evidence"]},
+        {"type": "spend"},
+        {"evidence": {**CACHE_EVIDENCE, "consecutive_misses": 0}},
+        {"evidence": {**CACHE_EVIDENCE, "prompt": "never retained"}},
+    ),
+)
+def test_prompt_cache_detection_requires_its_deployment_resource_and_bounded_evidence(
+    change: Mapping[str, object],
+) -> None:
+    with pytest.raises(ValidationError):
+        AlertDetection.model_validate({**PROMPT_CACHE, **change})
+
+
+def test_prompt_cache_identity_is_one_per_deployment_configuration_whatever_window_found_it() -> None:
+    first: Final = AlertDetection.model_validate(PROMPT_CACHE)
+    later: Final = AlertDetection.model_validate(
+        {
+            **PROMPT_CACHE,
+            "window_start": "2026-02-08T00:00:00Z",
+            "window_end": "2026-02-08T00:00:09Z",
+            "evidence": {**CACHE_EVIDENCE, "prefix_fingerprint": "prefix-2", "consecutive_misses": 4},
+        }
+    )
+    upgraded: Final = AlertDetection.model_validate(
+        {**PROMPT_CACHE, "evidence": {**CACHE_EVIDENCE, "config_fingerprint": "config-2"}}
+    )
+    assert first.identity() == later.identity()
+    assert first.identity() != upgraded.identity()
