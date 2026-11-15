@@ -35,6 +35,15 @@ pub trait RouterUsage: Send + Sync + 'static {
         model_group: &str,
         limits: &RouterLimits,
     ) -> BoxFuture<'static, Result<RemainingUsage, RouterReadError>>;
+
+    /// `remaining`, for a caller that blocks on the read instead of awaiting it.
+    fn remaining_blocking(
+        &self,
+        model_group: &str,
+        limits: &RouterLimits,
+    ) -> BoxFuture<'static, Result<RemainingUsage, RouterReadError>> {
+        self.remaining(model_group, limits)
+    }
 }
 
 #[derive(Clone)]
@@ -51,6 +60,14 @@ impl RouterRef {
         limits: &RouterLimits,
     ) -> BoxFuture<'static, Result<RemainingUsage, RouterReadError>> {
         self.0.remaining(model_group, limits)
+    }
+
+    pub fn remaining_blocking(
+        &self,
+        model_group: &str,
+        limits: &RouterLimits,
+    ) -> BoxFuture<'static, Result<RemainingUsage, RouterReadError>> {
+        self.0.remaining_blocking(model_group, limits)
     }
 }
 

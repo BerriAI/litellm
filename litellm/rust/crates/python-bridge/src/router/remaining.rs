@@ -225,21 +225,31 @@ struct ReadCalls {
     usage: RedisCall,
 }
 
+#[derive(Clone, Copy)]
+enum Caller {
+    Awaiting,
+    Blocking,
+}
+
 impl ReadCalls {
-    fn of_caller(py: Python<'_>, store: &UsageStore) -> PyResult<Self> {
+    fn of_caller(py: Python<'_>, store: &UsageStore, caller: Caller) -> PyResult<Self> {
         let target: String = py
             .import(ROUTER_USAGE_TARGET.0)?
             .getattr(ROUTER_USAGE_TARGET.1)?
             .extract()?;
         // The Python store awaited the remote read, or read memory through its sync method.
-        let call_type = if store.has_redis() {
+        let awaited = if store.has_redis() {
             "async_batch_get_cache"
         } else {
             "batch_get_cache"
         };
+        let usage = match caller {
+            Caller::Awaiting => awaited,
+            Caller::Blocking => "batch_get_cache",
+        };
         Ok(Self {
-            io: targeted_call(py, call_type, &target)?,
-            usage: targeted_call(py, call_type, &target)?,
+            io: targeted_call(py, awaited, &target)?,
+            usage: targeted_call(py, usage, &target)?,
         })
     }
 }
@@ -314,7 +324,11 @@ struct HostedRouterUsage {
 impl HostedRouterUsage {
     /// What the read needs from the Python stack it is called on: the limits as values, and the
     /// caller's context for the store's service events. `None` reads nothing.
-    fn prepared(&self, limits: &RouterLimits) -> PyResult<Option<(ReadCalls, GroupLimits)>> {
+    fn prepared(
+        &self,
+        limits: &RouterLimits,
+        caller: Caller,
+    ) -> PyResult<Option<(ReadCalls, GroupLimits)>> {
         if let Some(error_type) = &limits.error_type {
             let error_text = limits.error_text.clone().unwrap_or_default();
             return Err(Python::attach(|py| {
@@ -333,18 +347,18 @@ impl HostedRouterUsage {
             // A group with no limits answers no headers, as `remaining_usage` would.
             return Ok(None);
         }
-        let calls = Python::attach(|py| ReadCalls::of_caller(py, &self.store))?;
+        let calls = Python::attach(|py| ReadCalls::of_caller(py, &self.store, caller))?;
         Ok(Some((calls, group_limits)))
     }
 }
 
-impl RouterUsage for HostedRouterUsage {
-    fn remaining(
+impl HostedRouterUsage {
+    fn read(
         &self,
-        _model_group: &str,
         limits: &RouterLimits,
+        caller: Caller,
     ) -> BoxFuture<'static, Result<RemainingUsage, RouterReadError>> {
-        let prepared = self.prepared(limits);
+        let prepared = self.prepared(limits, caller);
         let store = Arc::clone(&self.store);
         let limits = limits.clone();
         Box::pin(async move {
@@ -357,6 +371,24 @@ impl RouterUsage for HostedRouterUsage {
             };
             answered.map_err(|error| Box::new(error) as RouterReadError)
         })
+    }
+}
+
+impl RouterUsage for HostedRouterUsage {
+    fn remaining(
+        &self,
+        _model_group: &str,
+        limits: &RouterLimits,
+    ) -> BoxFuture<'static, Result<RemainingUsage, RouterReadError>> {
+        self.read(limits, Caller::Awaiting)
+    }
+
+    fn remaining_blocking(
+        &self,
+        _model_group: &str,
+        limits: &RouterLimits,
+    ) -> BoxFuture<'static, Result<RemainingUsage, RouterReadError>> {
+        self.read(limits, Caller::Blocking)
     }
 }
 

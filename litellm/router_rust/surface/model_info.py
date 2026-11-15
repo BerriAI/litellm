@@ -919,13 +919,29 @@ class HostModelInfo:
         return _remaining_reads(info, io_usage, usage)
 
     def _core_get_remaining_model_group_usage_sync(
-        self, model_group: str, read_io_usage: Callable[[str], tuple[int | None, int | None]]
+        self, model_group: str
     ) -> dict[str, int]:  # mutable-ok: what the async read returns
-        """``_core_get_remaining_model_group_usage`` for a sync call; ``read_io_usage`` reads the routing cache."""
-        info: Final = self._cached_get_model_group_info(model_group)
-        io_usage: Final = read_io_usage(model_group) if _limits_io(info) else None
-        usage: Final = self._core_get_model_group_usage_sync(model_group) if _limits_usage(info) else None
-        return router_remaining_usage(_remaining_reads(info, io_usage, usage))
+        """``_core_get_remaining_model_group_usage`` for a sync call, blocking on the Rust read."""
+        native: Final = self._core_usage_store.native
+        if native is None:
+            info: Final = self._cached_get_model_group_info(model_group)
+            io_usage: Final = self._io_token_usage_sync(model_group) if _limits_io(info) else None
+            usage: Final = self._core_get_model_group_usage_sync(model_group) if _limits_usage(info) else None
+            return router_remaining_usage(_remaining_reads(info, io_usage, usage))
+        limits: Final = self._core_router_limits(model_group)
+        return router_usage_ref(native).remaining_sync(model_group, limits.model_dump(mode="json"))
+
+    def _io_token_usage_sync(self, model_group: str) -> tuple[int | None, int | None]:
+        members: Final = self._io_usage_members(model_group)
+        if members is None:
+            return None, None
+        minute: Final = get_utc_datetime().strftime("%H-%M")
+        counters: Final = tuple(
+            UsageCounter("global_router", f"{member.deployment_id}", member.model, minute, kind)
+            for kind in ("itpm", "otpm")
+            for member in members
+        )
+        return router_usage_totals(self._core_usage_store.get_many_sync(counters), len(members))
 
     async def set_response_headers(
         self,

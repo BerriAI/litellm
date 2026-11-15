@@ -188,6 +188,18 @@ broken = asyncio.run(read("broken"))
 text = asyncio.run(read("text"))
 limits = {"reset": 0, "unknown": 1}
 undecoded = asyncio.run(read("group"))
+
+
+def read_sync(group, limits):
+    try:
+        return router.remaining_sync(group, limits)
+    except Exception as error:
+        return type(error).__name__, str(error)
+
+
+blocked = read_sync("group", {"reset": 0})
+blocked_broken = read_sync("broken", {"reset": 0})
+blocked_text = read_sync("text", {"reset": 0})
 "#;
 
 #[rstest]
@@ -229,5 +241,8 @@ fn a_router_reference_awaited_from_python_answers_its_headers_or_raises_the_read
             "{}",
             repr("undecoded")
         );
+        assert_eq!(repr("blocked"), repr("answered"));
+        assert_eq!(repr("blocked_broken"), "('ValueError', 'router boom')");
+        assert_eq!(repr("blocked_text"), "('RuntimeError', 'no python error')");
     });
 }

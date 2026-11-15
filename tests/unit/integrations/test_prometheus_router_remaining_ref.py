@@ -377,6 +377,67 @@ async def test_a_limit_past_any_machine_int_is_read_exactly(monkeypatch: pytest.
     assert remaining == {"x-ratelimit-remaining-tokens": 10**40 - 1, "x-ratelimit-limit-tokens": 10**40}
 
 
+def _remaining_sync(router: litellm.Router, group: str) -> object:
+    read: Final = _attribute(_hosted(router), "_core_get_remaining_model_group_usage_sync")
+    assert callable(read)
+    return read(group)
+
+
+@pytest.mark.parametrize(
+    ("limits", "used"),
+    [
+        ({"tpm": 100, "rpm": 10}, {"tpm": 25, "rpm": 1}),
+        ({"itpm": 300, "otpm": 40}, {"itpm": 7}),
+        ({"tpm": 100, "itpm": 300}, {"tpm": 3, "itpm": 7}),
+        ({}, {}),
+    ],
+    ids=["tpm-rpm", "io", "both", "no-limits"],
+)
+@pytest.mark.asyncio
+async def test_the_sync_headers_read_answers_what_the_async_one_does_without_python_store_reads(
+    monkeypatch: pytest.MonkeyPatch, limits: dict[str, int], used: dict[CounterKind, int]
+) -> None:
+    router: Final = _router(limits=limits, used=used)
+    monkeypatch.setattr(model_info, "seconds_until_minute_reset", lambda: 17)
+    store_reads: Final = _python_store_reads(monkeypatch)
+
+    blocked: Final = _remaining_sync(router, "bedrock-claude-group")
+    awaited: Final = await router.health().usage("bedrock-claude-group", kind="remaining")
+
+    assert store_reads == []
+    assert blocked == awaited
+
+
+def test_the_sync_headers_read_raises_what_the_async_one_raises() -> None:
+    router: Final = _router(limits={"tpm": 100})
+    object.__setattr__(_group_info(router), "tpm", "100")
+
+    with pytest.raises(TypeError, match=r"unsupported operand type\(s\) for -: 'str' and 'int'"):
+        _ = _remaining_sync(router, "bedrock-claude-group")
+
+
+def test_a_sync_completion_stamps_the_headers_the_rust_read_answers(monkeypatch: pytest.MonkeyPatch) -> None:
+    router: Final = _router(limits={"tpm": 100, "rpm": 10})
+    rust_reads: Final[list[object]] = []
+    original: Final = _attribute(_hosted(router), "_core_router_limits")
+    assert callable(original)
+
+    def resolved(group: str) -> object:
+        rust_reads.append(group)
+        return original(group)
+
+    monkeypatch.setattr(_hosted(router), "_core_router_limits", resolved)
+
+    response: Final = router.completion(
+        model="bedrock-claude-group", messages=[{"role": "user", "content": "hi"}], mock_response="hello"
+    )
+
+    headers: Final = cast("dict[str, object]", _attribute(response, "_hidden_params")["additional_headers"])  # pyright: ignore[reportIndexIssue]
+    assert rust_reads == ["bedrock-claude-group"]
+    assert headers["x-ratelimit-limit-tokens"] == 100
+    assert headers["x-ratelimit-limit-requests"] == 10
+
+
 def _derived(group: object) -> object:
     return derivations.router_limits(HookArgs(request={"standard_logging_object": {"model_group": group}}))
 
