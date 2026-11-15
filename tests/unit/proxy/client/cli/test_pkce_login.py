@@ -542,22 +542,16 @@ def test_run_pkce_login_reports_a_denied_sign_in_without_touching_the_token_endp
 
 
 def test_run_pkce_login_sends_the_requested_team_to_the_authorize_page():
-    seen = {}
+    echoed = []
     http = _FakeHttp(
         {
             ("GET", DISCOVERY_URL): _FakeResponse(200, CONTRACT_DOC),
             ("POST", f"{BASE}/register"): _FakeResponse(201, {"client_id": "llm_dcrc_abc"}),
         }
     )
-    run_pkce_login(
-        BASE,
-        http,
-        open_browser=_blocking_browser(seen, "error=access_denied"),
-        echo=lambda _: None,
-        timeout_seconds=10,
-        team="Team A",
-    )
-    assert seen["authorize"]["team"] == ["Team A"]
+    run_pkce_login(BASE, http, open_browser=lambda _: None, echo=echoed.append, timeout_seconds=0, team="Team A")
+    opened = [line.removeprefix("Opening browser to: ") for line in echoed if line.startswith("Opening browser to: ")]
+    assert [parse_qs(urlparse(url).query)["team"] for url in opened] == [["Team A"]]
 
 
 def test_run_pkce_login_stops_before_the_browser_when_registration_fails():
