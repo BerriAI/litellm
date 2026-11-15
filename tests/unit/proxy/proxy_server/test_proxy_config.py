@@ -9,15 +9,17 @@ Pins covered:
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
 import os
 import re
+import ssl
 import sys
 from collections.abc import Awaitable, Callable, Mapping
 from contextlib import nullcontext
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from types import MappingProxyType, SimpleNamespace
 from typing import Any, Dict, Final
@@ -25,18 +27,26 @@ from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.asymmetric import padding, rsa
+from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey, RSAPublicKey
 from prisma.errors import DataError
 from pydantic import JsonValue, TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import turn_on_json
+from litellm.constants import DEFAULT_SSL_CIPHERS
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.proxy._types import CommonProxyErrors, ConfigGeneralSettings
 from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
+from litellm.proxy.common_utils.fips import enforce_fips_mode
+from litellm.proxy.config_resolvers.settings_store import SettingsStore
 from litellm.router_api import ApplyResult, RouterSettings
 from litellm.types.router import Deployment, LiteLLM_Params
 from litellm.proxy.proxy_server import (
     ProxyConfig,
     _is_remote_module_url,
+    _reload_settings_store,
     _scrub_db_overlay_remote_module_loads,
     _scrub_guardrail_inner,
     resolve_complexity_router_plugins,
@@ -68,6 +78,15 @@ def _db_model(model_id: str, model_name: str = "gpt-3.5-turbo") -> SimpleNamespa
         litellm_params={"model": encrypt_value_helper("openai/gpt-3.5-turbo")},
         blocked=False,
     )
+
+
+def test_yaml_settings_reload_keeps_db_general_settings_until_sync() -> None:
+    settings: Final = SettingsStore("general_settings")
+    settings.apply_db_row("general_settings", {"max_file_downloads_per_minute": 2})
+
+    _reload_settings_store("general_settings", settings, {})
+
+    assert settings["max_file_downloads_per_minute"] == 2
 
 
 @pytest.mark.asyncio
@@ -102,7 +121,9 @@ def test_proxy_config_upserts_existing_deployment_without_duplicating_it(monkeyp
 
 
 @pytest.mark.asyncio
-async def test_proxy_config_preserves_models_when_config_read_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_proxy_config_preserves_models_when_config_read_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     from litellm.proxy import proxy_server
 
     router = litellm.Router(model_list=[_deployment("config-deployment").to_json(exclude_none=True)])
@@ -135,6 +156,8 @@ async def test_proxy_config_keeps_database_models_and_deletes_stale_models(
 
     assert desired == frozenset({"kept-deployment"})
     assert router.get_model_ids() == ["kept-deployment"]
+
+
 from tests._master_key import MASTER_KEY
 
 
@@ -148,7 +171,6 @@ async def test_proxy_config_loads_lens_store_from_yaml(tmp_path, monkeypatch) ->
 
     _, _, settings = await ProxyConfig().load_config(router=None, config_file_path=str(config_file))
     assert is_lens_tracing_enabled(settings["tracing"], {}) is True
-
 
 
 @pytest.mark.asyncio
@@ -176,7 +198,9 @@ async def test_tracing_config_automatically_exports_spend_without_a_storage_depe
     outcome: Final = pytest.raises(RuntimeError, match="shutdown failure") if shutdown_error else nullcontext()
     with outcome:
         async with manage_tracing(enabled=True, client_factory=client):
-            logger: Final = next(callback for callback in litellm._async_success_callback if isinstance(callback, LensExporter))
+            logger: Final = next(
+                callback for callback in litellm._async_success_callback if isinstance(callback, LensExporter)
+            )
             await logger.async_log_success_event(
                 {"standard_logging_object": {"id": "response-1", "response_cost": 0.25}}, None, None, None
             )
@@ -1880,6 +1904,73 @@ async def test_ProxyConfig_get_config_reuses_an_already_initialized_secret_manag
     } == {"client_reused": True, "master_key": "master-from-vault"}
 
 
+TLS_RECORDING_SECRET_MANAGER_MODULE = """
+import os
+
+from litellm.integrations.custom_secret_manager import CustomSecretManager
+from litellm.llms.custom_httpx.http_handler import get_ssl_configuration
+
+
+class TlsRecordingSecretManager(CustomSecretManager):
+    def sync_read_secret(self, secret_name, optional_params=None, timeout=None, **kwargs):
+        offers_rsa = any(c["kea"] == "kx-rsa" for c in get_ssl_configuration().get_ciphers())
+        with open(os.environ["RSA_OFFER_LOG"], "a") as f:
+            f.write(f"{secret_name} {offers_rsa}\\n")
+        return "provider-from-vault"
+
+    async def async_read_secret(self, secret_name, optional_params=None, timeout=None, **kwargs):
+        return self.sync_read_secret(secret_name)
+"""
+
+TLS_RECORDING_CONFIG = """
+model_list:
+  - model_name: my-model
+    litellm_params:
+      model: openai/gpt-4o-mini
+      api_key: os.environ/MY_PROVIDER_KEY
+
+general_settings:
+  fips_mode: {fips_mode}
+  key_management_system: custom
+  key_management_settings:
+    custom_secret_manager: tls_recording_secret_manager.TlsRecordingSecretManager
+    hosted_keys:
+      - MY_PROVIDER_KEY
+"""
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "fips_mode, rsa_offered",
+    [("true", False), ('"true"', False), ("false", True)],
+    ids=["fips-mode", "fips-mode-from-a-string", "standard-mode"],
+)
+async def test_ProxyConfig_get_config_reads_secrets_without_rsa_key_exchange_in_fips_mode(
+    tmp_path, monkeypatch, fips_mode: str, rsa_offered: bool
+):
+    """Secret reads during get_config run before enforce_fips_mode, so fips_mode already excludes RSA key exchange."""
+    default_cipher_list: Final = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    default_cipher_list.set_ciphers(DEFAULT_SSL_CIPHERS)
+    if not any(cipher["kea"] == "kx-rsa" for cipher in default_cipher_list.get_ciphers()):
+        pytest.skip("this OpenSSL offers no RSA key exchange suite from DEFAULT_SSL_CIPHERS")
+    config_file_path = _write_vault_backed_config(
+        tmp_path, monkeypatch, TLS_RECORDING_CONFIG.format(fips_mode=fips_mode)
+    )
+    (tmp_path / "tls_recording_secret_manager.py").write_text(TLS_RECORDING_SECRET_MANAGER_MODULE)
+    rsa_offer_log: Final = tmp_path / "rsa_offers.log"
+    monkeypatch.setenv("RSA_OFFER_LOG", str(rsa_offer_log))
+
+    try:
+        cfg = await ProxyConfig().get_config(config_file_path=config_file_path)
+    finally:
+        enforce_fips_mode({})
+
+    assert {
+        "reads": set(rsa_offer_log.read_text().splitlines()),
+        "api_key": cfg["model_list"][0]["litellm_params"]["api_key"],
+    } == {"reads": {f"MY_PROVIDER_KEY {rsa_offered}"}, "api_key": "provider-from-vault"}
+
+
 @pytest.mark.asyncio
 async def test_ProxyConfig_get_config_without_key_management_system_leaves_secret_manager_unset(tmp_path, monkeypatch):
     """No ``key_management_system`` means no manager, an unresolvable reference stays None, and
@@ -2263,7 +2354,6 @@ def test_ProxyConfig_merge_config_and_db_search_tools_prefers_db_duplicate():
 @pytest.mark.asyncio
 async def test_ProxyConfig__init_search_tools_in_db_loads_merged_tools(monkeypatch):
     from litellm.proxy import proxy_server
-    from litellm.router_utils.search_api_router import SearchAPIRouter
 
     pc = ProxyConfig()
     pc.update_config_state(
@@ -2289,28 +2379,24 @@ async def test_ProxyConfig__init_search_tools_in_db_loads_merged_tools(monkeypat
             },
         }
     ]
-    fake_router = MagicMock()
+    router = litellm.Router()
     mock_get_db_tools = AsyncMock(return_value=db_tools)
-    mock_update_router = AsyncMock()
 
-    monkeypatch.setattr(proxy_server, "llm_router", fake_router)
+    monkeypatch.setattr(proxy_server, "llm_router", router)
     monkeypatch.setattr(
         "litellm.proxy.search_endpoints.search_tool_registry.SearchToolRegistry.get_all_search_tools_from_db",
         mock_get_db_tools,
     )
-    monkeypatch.setattr(SearchAPIRouter, "update_router_search_tools", mock_update_router)
 
     await pc._init_search_tools_in_db(prisma_client=MagicMock())
 
     mock_get_db_tools.assert_awaited_once()
-    mock_update_router.assert_awaited_once()
-    update_kwargs = mock_update_router.await_args.kwargs
-    assert update_kwargs["router_instance"] is fake_router
-    assert [tool["search_tool_name"] for tool in update_kwargs["search_tools"]] == [
+    loaded_tools = router.settings().search_tools
+    assert [tool["search_tool_name"] for tool in loaded_tools] == [
         "config-only",
         "shared-search",
     ]
-    assert update_kwargs["search_tools"][1]["litellm_params"]["api_key"] == "fake-db-key"
+    assert loaded_tools[1]["litellm_params"]["api_key"] == "fake-db-key"
 
 
 @pytest.mark.asyncio
@@ -2320,11 +2406,10 @@ async def test_ProxyConfig__init_search_tools_in_db_clears_router_when_last_tool
 
     pc = ProxyConfig()
     pc.update_config_state({})
-    fake_router = MagicMock()
-    fake_router.search_tools = [{"search_tool_name": "deleted-search", "litellm_params": {}}]
+    router = litellm.Router(search_tools=[{"search_tool_name": "deleted-search", "litellm_params": {}}])
     mock_get_db_tools = AsyncMock(return_value=[])
 
-    monkeypatch.setattr(proxy_server, "llm_router", fake_router)
+    monkeypatch.setattr(proxy_server, "llm_router", router)
     monkeypatch.setattr(
         "litellm.proxy.search_endpoints.search_tool_registry.SearchToolRegistry.get_all_search_tools_from_db",
         mock_get_db_tools,
@@ -2333,7 +2418,7 @@ async def test_ProxyConfig__init_search_tools_in_db_clears_router_when_last_tool
     await pc._init_search_tools_in_db(prisma_client=MagicMock())
 
     mock_get_db_tools.assert_awaited_once()
-    assert fake_router.search_tools == []
+    assert router.settings().search_tools == []
 
 
 @pytest.mark.asyncio
@@ -2347,8 +2432,7 @@ async def test_ProxyConfig__init_search_tools_in_db_keeps_loaded_tools_whose_par
         "search_tool_name": "rotated-search",
         "litellm_params": {"search_provider": "perplexity", "api_key": "pplx-loaded"},
     }
-    fake_router = MagicMock()
-    fake_router.settings.return_value = RouterSettings(
+    router = litellm.Router(
         search_tools=[
             loaded_tool,
             {
@@ -2378,7 +2462,7 @@ async def test_ProxyConfig__init_search_tools_in_db_keeps_loaded_tools_whose_par
             "litellm_params": {"search_provider": "Tavily", "api_key": "tvly-edited"},
         },
     ]
-    monkeypatch.setattr(proxy_server, "llm_router", fake_router)
+    monkeypatch.setattr(proxy_server, "llm_router", router)
     monkeypatch.setattr(
         "litellm.proxy.search_endpoints.search_tool_registry.SearchToolRegistry.get_all_search_tools_from_db",
         AsyncMock(return_value=db_tools),
@@ -2386,7 +2470,7 @@ async def test_ProxyConfig__init_search_tools_in_db_keeps_loaded_tools_whose_par
 
     await pc._init_search_tools_in_db(prisma_client=MagicMock())
 
-    assert [tool["litellm_params"] for tool in fake_router.search_tools] == [
+    assert [tool["litellm_params"] for tool in router.settings().search_tools] == [
         {"search_provider": "perplexity", "api_key": "pplx-loaded"},
         {"search_provider": "tavily", "api_key": "tvly-fresh"},
         {"search_provider": "Tavily", "api_key": "tvly-edited"},
@@ -2663,6 +2747,213 @@ async def test_load_config_logs_disabled_budget_reservation_once(tmp_path, monke
 
 
 @pytest.mark.asyncio
+async def test_load_config_refuses_allowed_ips_without_a_license(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    config_file: Final = tmp_path / "allowed_ips.yaml"
+    config_file.write_text('model_list: []\nlitellm_settings: {}\ngeneral_settings:\n  allowed_ips: ["127.0.0.1"]\n')
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", False)
+    monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
+
+    expected_message: Final = (
+        "allowed_ips is an Enterprise Feature. Please add a valid LITELLM_LICENSE to your environment."
+    )
+    with pytest.raises(ValueError, match=f"^{re.escape(expected_message)}$"):
+        await ProxyConfig().load_config(router=None, config_file_path=str(config_file))
+
+
+def _signed_test_license(private_key: RSAPrivateKey, max_users: int) -> str:
+    message: Final = json.dumps({"expiration_date": "9999-12-31", "user_id": "test", "max_users": max_users}).encode()
+    signature: Final = private_key.sign(
+        message,
+        padding.PSS(mgf=padding.MGF1(hashes.SHA256()), salt_length=padding.PSS.MAX_LENGTH),
+        hashes.SHA256(),
+    )
+    return base64.b64encode(message + b"." + signature).decode()
+
+
+def _write_config(path: Path, general_settings: dict[str, object], litellm_settings: dict[str, object]) -> str:
+    path.write_text(
+        json.dumps({"model_list": [], "litellm_settings": litellm_settings, "general_settings": general_settings})
+    )
+    return str(path)
+
+
+def _boot_proxy(
+    monkeypatch: pytest.MonkeyPatch,
+    public_key: RSAPublicKey,
+    env_license: str | None,
+    license_server_urls: list[str],
+    server_accepted_license: str | None = None,
+) -> None:
+    from litellm.proxy import proxy_server
+
+    def _license_server(request: httpx.Request) -> httpx.Response:
+        license_server_urls.append(str(request.url))
+        return httpx.Response(
+            200, json={"verify": server_accepted_license is not None and server_accepted_license in str(request.url)}
+        )
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
+    monkeypatch.setattr("litellm.proxy.proxy_server._license_check.public_key", public_key)
+    monkeypatch.setattr("litellm.proxy.proxy_server._license_check.airgapped_license_data", None)
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server._license_check.http_handler",
+        HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_license_server))),
+    )
+    monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
+    if env_license is None:
+        monkeypatch.delenv("LITELLM_LICENSE", raising=False)
+    else:
+        monkeypatch.setenv("LITELLM_LICENSE", env_license)
+    monkeypatch.setattr("litellm.proxy.proxy_server._license_check.license_str", env_license)
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", proxy_server._license_check.is_premium())
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.premium_user_data", proxy_server._license_check.airgapped_license_data
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "gated_config",
+    [
+        {"general_settings": {"allowed_ips": ["127.0.0.1"]}},
+        {"general_settings": {"enforced_params": ["user"]}},
+        {"litellm_settings": {"callbacks": ["openai_moderations"]}},
+    ],
+)
+async def test_load_config_lets_a_config_license_unlock_its_enterprise_gates(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, gated_config: dict[str, dict[str, list[str]]]
+):
+    from litellm.proxy import proxy_server
+
+    private_key: Final = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    license_key: Final = _signed_test_license(private_key, max_users=10)
+    config_file: Final = _write_config(
+        tmp_path / "licensed.yaml",
+        {"litellm_license": license_key, **gated_config.get("general_settings", {})},
+        dict(gated_config.get("litellm_settings", {})),
+    )
+    _boot_proxy(monkeypatch, private_key.public_key(), env_license=None, license_server_urls=[])
+
+    await ProxyConfig().load_config(router=None, config_file_path=config_file)
+
+    assert proxy_server.premium_user is True
+
+
+@pytest.mark.asyncio
+async def test_load_config_keeps_a_valid_env_license_when_the_config_license_is_invalid(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from litellm.proxy import proxy_server
+
+    private_key: Final = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    config_file: Final = _write_config(
+        tmp_path / "stale_license.yaml", {"litellm_license": "not-a-valid-license", "allowed_ips": ["127.0.0.1"]}, {}
+    )
+    _boot_proxy(
+        monkeypatch,
+        private_key.public_key(),
+        env_license=_signed_test_license(private_key, max_users=5),
+        license_server_urls=[],
+    )
+
+    await ProxyConfig().load_config(router=None, config_file_path=config_file)
+
+    assert proxy_server.premium_user is True
+    assert proxy_server._license_check.user_seat_limit() == 5
+
+
+@pytest.mark.asyncio
+async def test_load_config_prefers_the_config_license_when_both_licenses_are_valid(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.health_endpoints._health_endpoints import health_license_endpoint
+
+    private_key: Final = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    config_file: Final = _write_config(
+        tmp_path / "licensed.yaml", {"litellm_license": _signed_test_license(private_key, max_users=100)}, {}
+    )
+    _boot_proxy(
+        monkeypatch,
+        private_key.public_key(),
+        env_license=_signed_test_license(private_key, max_users=5),
+        license_server_urls=[],
+    )
+
+    await ProxyConfig().load_config(router=None, config_file_path=config_file)
+
+    assert proxy_server._license_check.user_seat_limit() == 100
+    assert (await health_license_endpoint(user_api_key_dict=UserAPIKeyAuth()))["limits"]["max_users"] == 100
+
+
+@pytest.mark.asyncio
+async def test_load_config_still_reports_an_invalid_config_license_as_configured(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.health_endpoints._health_endpoints import health_license_endpoint
+
+    private_key: Final = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    config_file: Final = _write_config(tmp_path / "stale_license.yaml", {"litellm_license": "not-a-valid-license"}, {})
+    _boot_proxy(monkeypatch, private_key.public_key(), env_license=None, license_server_urls=[])
+
+    await ProxyConfig().load_config(router=None, config_file_path=config_file)
+
+    license_status: Final = await health_license_endpoint(user_api_key_dict=UserAPIKeyAuth())
+    assert (license_status["has_license"], license_status["license_type"]) == (True, "community")
+
+
+@pytest.mark.asyncio
+async def test_load_config_does_not_recheck_an_env_license_that_failed_at_boot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from litellm.proxy import proxy_server
+
+    private_key: Final = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    config_file: Final = _write_config(tmp_path / "stale_license.yaml", {"litellm_license": "not-a-valid-license"}, {})
+    license_server_urls: Final[list[str]] = []
+    _boot_proxy(monkeypatch, private_key.public_key(), "also-not-a-valid-license", license_server_urls)
+    asked_at_boot: Final = len(license_server_urls)
+
+    await ProxyConfig().load_config(router=None, config_file_path=config_file)
+
+    assert proxy_server.premium_user is False
+    assert [url for url in license_server_urls[asked_at_boot:] if "also-not-a-valid-license" in url] == []
+    assert any("not-a-valid-license" in url for url in license_server_urls[asked_at_boot:])
+
+
+@pytest.mark.asyncio
+async def test_load_config_keeps_the_boot_verdict_of_a_server_checked_env_license(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from litellm.proxy import proxy_server
+
+    private_key: Final = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    config_file: Final = _write_config(
+        tmp_path / "stale_license.yaml", {"litellm_license": "not-a-valid-license", "allowed_ips": ["127.0.0.1"]}, {}
+    )
+    license_server_urls: Final[list[str]] = []
+    _boot_proxy(
+        monkeypatch,
+        private_key.public_key(),
+        "server-checked-license",
+        license_server_urls,
+        server_accepted_license="server-checked-license",
+    )
+    asked_at_boot: Final = len(license_server_urls)
+
+    await ProxyConfig().load_config(router=None, config_file_path=config_file)
+
+    assert proxy_server.premium_user is True
+    assert proxy_server._license_check.license_str == "server-checked-license"
+    assert [url for url in license_server_urls[asked_at_boot:] if "server-checked-license" in url] == []
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "setting", ["vector_store_deny_by_default", "search_tool_deny_by_default", "claude_code_marketplace_auth_required"]
 )
@@ -2700,7 +2991,6 @@ async def test_load_config_rejects_non_boolean_deny_by_default(
         await ProxyConfig().load_config(router=None, config_file_path=str(config_file))
 
 
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "yaml_value", ["files-api-2025-04-14", "[files-api-2025-04-14, 7]"], ids=["bare-string", "non-string-entry"]
@@ -2719,6 +3009,7 @@ async def test_load_config_rejects_a_malformed_vertex_drop_anthropic_betas_list(
 
     with pytest.raises(ValidationError, match="vertex_ai_pass_through_drop_anthropic_betas"):
         await ProxyConfig().load_config(router=None, config_file_path=str(config_file))
+
 
 @pytest.mark.asyncio
 async def test_ProxyConfig_load_config_resolves_router_settings_plugins(tmp_path, monkeypatch):
@@ -4427,29 +4718,8 @@ async def test_ProxyConfig__reschedule_spend_log_cleanup_job_no_scheduler(monkey
 
 
 @pytest.mark.asyncio
-async def test_ProxyConfig__reschedule_spend_log_cleanup_job_invalid_cron(monkeypatch):
-    fake_scheduler = MagicMock()
-    fake_scheduler.remove_job = MagicMock()
-    fake_scheduler.add_job = MagicMock()
-    monkeypatch.setattr("litellm.proxy.proxy_server.scheduler", fake_scheduler)
-    monkeypatch.setattr(
-        "litellm.proxy.proxy_server.general_settings",
-        {
-            "maximum_spend_logs_retention_period": "1d",
-            "maximum_spend_logs_cleanup_cron": "INVALID CRON STRING",
-        },
-    )
-    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
-    pc = ProxyConfig()
-    # Invalid cron is caught and logged — does not raise outward.
-    await pc._reschedule_spend_log_cleanup_job()
-    # But add_job should not have been called for the invalid cron path.
-    assert fake_scheduler.add_job.call_count == 0
-
-
-@pytest.mark.asyncio
 async def test_ProxyConfig__reschedule_spend_log_cleanup_job_health_check_retention(monkeypatch):
-    fake_scheduler = MagicMock()
+    fake_scheduler = MagicMock(**{"get_job.return_value": None})
     monkeypatch.setattr("litellm.proxy.proxy_server.scheduler", fake_scheduler)
     monkeypatch.setattr(
         "litellm.proxy.proxy_server.general_settings",
@@ -4475,6 +4745,86 @@ async def test_ProxyConfig__update_general_settings_updates_health_check_retenti
 
     assert proxy_server.general_settings["maximum_health_check_retention_period"] == "30d"
     reschedule.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig__update_general_settings_ignores_a_stored_key_no_settings_api_manages_and_warns_once(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+    pc: Final = ProxyConfig()
+    stored_row: Final = {"enforce_user_param": True, "store_prompts_in_spend_logs": True}
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        await pc._update_general_settings(stored_row)
+        await pc._update_general_settings(stored_row)
+    from litellm.proxy import proxy_server
+
+    assert proxy_server.general_settings["store_prompts_in_spend_logs"] is True
+    assert "enforce_user_param" not in proxy_server.general_settings
+    warnings: Final = [record.getMessage() for record in caplog.records if "enforce_user_param" in record.getMessage()]
+    assert warnings == [
+        "general_settings.enforce_user_param is stored in the database, but the proxy does not apply that stored "
+        "value, so it is ignored. Set it in the config file to use it, or remove it with POST /config/field/delete."
+    ]
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig__update_general_settings_warns_about_an_ignored_stored_key_the_config_file_also_sets(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    pc: Final = ProxyConfig()
+    pc._load_yaml_settings_stores({"general_settings": {"enforce_user_param": False}})
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", pc.settings)
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        await pc._update_general_settings({"enforce_user_param": True})
+    from litellm.proxy import proxy_server
+
+    assert proxy_server.general_settings["enforce_user_param"] is False
+    warnings: Final = [record.getMessage() for record in caplog.records if "enforce_user_param" in record.getMessage()]
+    assert warnings == [
+        "general_settings.enforce_user_param is stored in the database, but the proxy does not apply that stored "
+        "value, so it is ignored. The config file's value applies. Remove the stored copy with POST "
+        "/config/field/delete."
+    ]
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig__update_general_settings_does_not_warn_about_a_stored_copy_of_an_admin_ui_field(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    pc: Final = ProxyConfig()
+    pc._load_yaml_settings_stores({"general_settings": {}})
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", pc.settings)
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        await pc._update_general_settings({"budget_rollover": True, "enforce_user_param": True})
+
+    warned: Final = [record.getMessage().split(" ")[0] for record in caplog.records if "is ignored" in record.getMessage()]
+    assert warned == ["general_settings.enforce_user_param"]
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig__update_general_settings_warns_once_each_time_the_stored_row_stops_being_an_object(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    pc: Final = ProxyConfig()
+    pc._load_yaml_settings_stores({"general_settings": {}})
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", pc.settings)
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        await pc._update_general_settings(None)
+        await pc._update_general_settings('{"store_prompts_in_spend_logs": true}')
+        await pc._update_general_settings('{"store_prompts_in_spend_logs": true}')
+        await pc._update_general_settings({"store_prompts_in_spend_logs": True})
+        await pc._update_general_settings('{"store_prompts_in_spend_logs": true}')
+
+    warnings: Final = [record.getMessage() for record in caplog.records if "JSON object" in record.getMessage()]
+    assert warnings == [
+        "general_settings is stored in the database as something other than a JSON object, so the proxy ignores "
+        "every stored general setting."
+    ] * 2
 
 
 def _paused_scheduler(monkeypatch):
@@ -4518,7 +4868,7 @@ async def test_ProxyConfig__reschedule_spend_log_cleanup_job_daily_tag_spend_ret
         await pc._reschedule_spend_log_cleanup_job()
         job = real_scheduler.get_job("spend_log_cleanup_job")
         assert job is not None, "daily tag spend retention alone did not schedule the cleanup job"
-        assert job.func.__name__ == "cleanup_old_spend_logs"
+        assert job.func.__name__ == "tick"
     finally:
         real_scheduler.shutdown(wait=False)
 
@@ -4554,33 +4904,6 @@ async def test_ProxyConfig__update_general_settings_schedules_cleanup_when_db_ro
 
 
 @pytest.mark.asyncio
-async def test_ProxyConfig__update_general_settings_retries_a_failed_schedule_once_per_settings_value(
-    monkeypatch, caplog
-):
-    """An unparseable cron leaves no job behind; reloads must not retry it every tick, only when the
-    cron or a retention value changes."""
-    real_scheduler = _paused_scheduler(monkeypatch)
-    pc = ProxyConfig()
-    bad_cron = {"maximum_daily_tag_spend_retention_period": "90d", "maximum_spend_logs_cleanup_cron": "not a cron"}
-    pc.settings.apply_db_row("general_settings", bad_cron)
-    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", pc.settings)
-    try:
-        with caplog.at_level(logging.ERROR, logger="LiteLLM Proxy"):
-            for _ in range(3):
-                await pc._update_general_settings(bad_cron)
-        assert real_scheduler.get_job("spend_log_cleanup_job") is None
-        cron_errors = [r for r in caplog.records if "maximum_spend_logs_cleanup_cron" in r.getMessage()]
-        assert len(cron_errors) == 1, f"invalid cron was retried on every reload: {len(cron_errors)} error lines"
-
-        await pc._update_general_settings({**bad_cron, "maximum_spend_logs_cleanup_cron": "* * * * *"})
-        job = real_scheduler.get_job("spend_log_cleanup_job")
-        assert job is not None, "a corrected cron did not schedule cleanup"
-        assert "minute='*'" in str(job.trigger)
-    finally:
-        real_scheduler.shutdown(wait=False)
-
-
-@pytest.mark.asyncio
 async def test_ProxyConfig__update_general_settings_retries_a_schedule_that_raised(monkeypatch):
     """A transient add_job failure must not be remembered as a completed attempt; the next
     reload with the same settings tries again."""
@@ -4594,29 +4917,6 @@ async def test_ProxyConfig__update_general_settings_retries_a_schedule_that_rais
         assert real_scheduler.get_job("spend_log_cleanup_job") is None
         await pc._update_general_settings(retention)
         assert real_scheduler.get_job("spend_log_cleanup_job") is not None, "raised add_job was not retried"
-    finally:
-        real_scheduler.shutdown(wait=False)
-
-
-@pytest.mark.asyncio
-async def test_ProxyConfig__update_general_settings_retries_a_failed_replacement_of_the_live_job(monkeypatch):
-    """A cron change whose add_job raised keeps the old job running, so the next reload with the
-    same settings must try the replacement again instead of leaving the new cron unapplied."""
-    real_scheduler = _scheduler_whose_first_add_job_raises(monkeypatch)
-    pc = ProxyConfig()
-    pc.settings.load_yaml({"maximum_daily_tag_spend_retention_period": "90d"})
-    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", pc.settings)
-    real_scheduler.raised = True
-    await pc._reschedule_spend_log_cleanup_job()
-    real_scheduler.raised = False
-    try:
-        new_cron = {"maximum_spend_logs_cleanup_cron": "0 3 * * *"}
-        await pc._update_general_settings(new_cron)
-        assert "hour='3'" not in str(real_scheduler.get_job("spend_log_cleanup_job").trigger), "old job was lost"
-        await pc._update_general_settings(new_cron)
-        assert "hour='3'" in str(real_scheduler.get_job("spend_log_cleanup_job").trigger), (
-            "failed replacement was not retried on the next sync"
-        )
     finally:
         real_scheduler.shutdown(wait=False)
 
@@ -4657,34 +4957,6 @@ async def test_ProxyConfig__update_general_settings_leaves_first_registration_to
 
 
 @pytest.mark.asyncio
-async def test_ProxyConfig__update_general_settings_runtime_interval_job_carries_the_stagger_offset(monkeypatch):
-    """Once the scheduler is running the sync owns registration and the job it adds is staggered."""
-    from apscheduler.schedulers.asyncio import AsyncIOScheduler
-    from apscheduler.triggers.interval import IntervalTrigger
-
-    from litellm.proxy.common_utils.scheduled_job_stagger import _OffsetTrigger
-
-    real_scheduler = AsyncIOScheduler()
-    real_scheduler.start(paused=True)
-    monkeypatch.setattr("litellm.proxy.proxy_server.scheduler", real_scheduler)
-    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
-    pc = ProxyConfig()
-    pc.settings.load_yaml({"scheduled_job_stagger": {"offsets": {"spend_log_cleanup_job": 120}}})
-    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", pc.settings)
-    try:
-        await pc._update_general_settings({"maximum_daily_tag_spend_retention_period": "90d"})
-        jobs = real_scheduler.get_jobs()
-        assert [job.id for job in jobs] == ["spend_log_cleanup_job"]
-        trigger: Final = jobs[0].trigger
-        assert isinstance(trigger, _OffsetTrigger), repr(trigger)
-        assert trigger.offset == timedelta(seconds=120)
-        assert isinstance(trigger.base, IntervalTrigger)
-        assert trigger.base.interval == timedelta(days=1)
-    finally:
-        real_scheduler.shutdown(wait=False)
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "bad_schedule",
     [
@@ -4719,89 +4991,6 @@ async def test_ProxyConfig__update_general_settings_keeps_the_live_cleanup_job_w
         assert live_job is not None, "invalid schedule removed the cleanup job"
         assert live_job.trigger is old_trigger
         assert ssrf_sync.call_count == 2, "schedule error blocked the rest of the settings sync"
-    finally:
-        real_scheduler.shutdown(wait=False)
-
-
-@pytest.mark.asyncio
-async def test_ProxyConfig__update_general_settings_logs_an_overflowing_interval_once(monkeypatch, caplog):
-    """An interval that parses but overflows the trigger must keep the live job and log one
-    error, not a traceback on every sync."""
-    from apscheduler.schedulers.asyncio import AsyncIOScheduler
-
-    real_scheduler = AsyncIOScheduler()
-    real_scheduler.start(paused=True)
-    monkeypatch.setattr("litellm.proxy.proxy_server.scheduler", real_scheduler)
-    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
-    pc = ProxyConfig()
-    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", pc.settings)
-    try:
-        await pc._update_general_settings({"maximum_daily_tag_spend_retention_period": "90d"})
-        old_trigger = real_scheduler.get_job("spend_log_cleanup_job").trigger
-        overflowing = {
-            "maximum_daily_tag_spend_retention_period": "90d",
-            "maximum_spend_logs_retention_interval": "99999999999d",
-        }
-        with caplog.at_level(logging.ERROR, logger="LiteLLM Proxy"):
-            for _ in range(5):
-                await pc._update_general_settings(overflowing)
-        errors = [record for record in caplog.records if record.levelno >= logging.ERROR]
-        assert len(errors) == 1, [record.getMessage() for record in errors]
-        assert real_scheduler.get_job("spend_log_cleanup_job").trigger is old_trigger
-    finally:
-        real_scheduler.shutdown(wait=False)
-
-
-@pytest.mark.asyncio
-async def test_ProxyConfig__update_general_settings_reschedules_when_only_the_cron_changes(monkeypatch):
-    real_scheduler = _paused_scheduler(monkeypatch)
-    pc = ProxyConfig()
-    pc.settings.load_yaml({"maximum_daily_tag_spend_retention_period": "90d"})
-    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", pc.settings)
-    await pc._reschedule_spend_log_cleanup_job()
-    try:
-        interval_job = real_scheduler.get_job("spend_log_cleanup_job")
-        assert interval_job is not None and "hour='3'" not in str(interval_job.trigger)
-
-        await pc._update_general_settings({"maximum_spend_logs_cleanup_cron": "0 3 * * *"})
-        cron_job = real_scheduler.get_job("spend_log_cleanup_job")
-        assert "hour='3'" in str(cron_job.trigger), "cron-only change did not reschedule"
-
-        await pc._update_general_settings({"maximum_spend_logs_cleanup_cron": "0 3 * * *"})
-        assert real_scheduler.get_job("spend_log_cleanup_job") is cron_job, "unchanged cron replaced the job"
-    finally:
-        real_scheduler.shutdown(wait=False)
-
-
-@pytest.mark.asyncio
-async def test_ProxyConfig__update_general_settings_reschedules_a_cron_edit_the_reload_path_already_applied(
-    monkeypatch,
-):
-    """The periodic reload applies the DB row through _update_config_from_db before
-    _update_general_settings snapshots the previous schedule, so a cron edited in the DB must
-    still replace the live job's trigger."""
-    from apscheduler.schedulers.asyncio import AsyncIOScheduler
-
-    real_scheduler = AsyncIOScheduler()
-    real_scheduler.start(paused=True)
-    monkeypatch.setattr("litellm.proxy.proxy_server.scheduler", real_scheduler)
-    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
-    pc = ProxyConfig()
-    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", pc.settings)
-    try:
-        first_row = {"maximum_daily_tag_spend_retention_period": "90d", "maximum_spend_logs_cleanup_cron": "0 3 * * *"}
-        pc.settings.apply_db_row("general_settings", first_row)
-        await pc._update_general_settings(first_row)
-        assert "hour='3'" in str(real_scheduler.get_job("spend_log_cleanup_job").trigger)
-
-        edited_row = {**first_row, "maximum_spend_logs_cleanup_cron": "0 5 * * *"}
-        pc.settings.apply_db_row("general_settings", edited_row)
-        await pc._update_general_settings(edited_row)
-        assert "hour='5'" in str(real_scheduler.get_job("spend_log_cleanup_job").trigger), "DB cron edit was ignored"
-
-        pc.settings.apply_db_row("general_settings", edited_row)
-        await pc._update_general_settings(edited_row)
-        assert "hour='5'" in str(real_scheduler.get_job("spend_log_cleanup_job").trigger)
     finally:
         real_scheduler.shutdown(wait=False)
 
@@ -4925,9 +5114,6 @@ async def test_ProxyConfig__update_general_settings_none_input_noop():
     # None input returns early.
     result = await pc._update_general_settings(db_general_settings=None)
     assert result is None
-    # Error-style: dict() will fail on non-mapping non-None input.
-    with pytest.raises(TypeError):
-        await pc._update_general_settings(db_general_settings=12345)  # type: ignore[arg-type]
 
 
 @pytest.mark.asyncio
@@ -5063,6 +5249,30 @@ async def test_ProxyConfig__update_config_from_db_resolves_through_settings_stor
 
 
 @pytest.mark.asyncio
+async def test_ProxyConfig_get_config_reload_keeps_db_pass_through_endpoints_without_store_model_in_db(
+    tmp_path, monkeypatch
+):
+    from litellm.proxy import proxy_server
+
+    config_file: Final = tmp_path / "config.yaml"
+    config_file.write_text(
+        "general_settings:\n  pass_through_endpoints:\n    - path: /config\n      target: http://config.test\n"
+    )
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(proxy_server, "store_model_in_db", False)
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    monkeypatch.setattr(proxy_server, "initialize_pass_through_endpoints", AsyncMock())
+    monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
+    pc: Final = ProxyConfig()
+    await pc.get_config(config_file_path=str(config_file))
+    await pc._update_general_settings({"pass_through_endpoints": [{"path": "/db", "target": "http://db.test"}]})
+
+    await pc.get_config(config_file_path=str(config_file))
+
+    assert [endpoint["path"] for endpoint in pc.settings["pass_through_endpoints"]] == ["/db", "/config"]
+
+
+@pytest.mark.asyncio
 async def test_ProxyConfig__update_config_from_db_keeps_keys_the_config_file_omits(monkeypatch):
     pc = ProxyConfig()
     config = {"general_settings": {"max_file_size_mb": 7}, "router_settings": {"num_retries": 1}}
@@ -5087,7 +5297,9 @@ async def test_ProxyConfig__update_config_from_db_keeps_keys_the_config_file_omi
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("ui_settings_already_synced", [False, True])
-async def test_ProxyConfig_add_deployment_continues_after_null_pass_through_endpoints(monkeypatch, ui_settings_already_synced):
+async def test_ProxyConfig_add_deployment_continues_after_null_pass_through_endpoints(
+    monkeypatch: pytest.MonkeyPatch, ui_settings_already_synced: bool
+) -> None:
     from litellm.proxy import proxy_server
 
     pc = ProxyConfig()
@@ -5111,6 +5323,32 @@ async def test_ProxyConfig_add_deployment_continues_after_null_pass_through_endp
 
     non_llm_initialization.assert_awaited_once()
     assert settings_refresh.await_count == (0 if ui_settings_already_synced else 1)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "stored_row, rebuilds_routes",
+    [({"pass_through_endpoints": []}, True), ('{"pass_through_endpoints": []}', False), ([], False)],
+    ids=["object", "json-string", "array"],
+)
+async def test_ProxyConfig_add_deployment_rebuilds_pass_through_routes_only_from_an_object_general_settings_row(
+    monkeypatch: pytest.MonkeyPatch, stored_row: object, rebuilds_routes: bool
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.pass_through_endpoints import pass_through_endpoints
+
+    pc: Final = ProxyConfig()
+    rebuild_routes: Final = AsyncMock()
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    monkeypatch.setattr(proxy_server, "prefetch_config_params", AsyncMock())
+    monkeypatch.setattr(proxy_server, "get_config_param", AsyncMock(return_value=SimpleNamespace(param_value=stored_row)))
+    monkeypatch.setattr(pass_through_endpoints, "initialize_pass_through_endpoints_in_db", rebuild_routes)
+    monkeypatch.setattr(pc, "_should_load_db_object", lambda *, object_type: object_type == "pass_through_endpoints")
+    monkeypatch.setattr(pc, "get_credentials", AsyncMock())
+
+    await pc.add_deployment(prisma_client=MagicMock(), proxy_logging_obj=MagicMock(), ui_settings_already_synced=True)
+
+    assert rebuild_routes.await_count == (1 if rebuilds_routes else 0)
 
 
 # ---------------------------------------------------------------------------
@@ -5292,9 +5530,7 @@ def revision_test_environment(monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv(key)
 
 
-def _environment_variables_row(
-    values: Mapping[str, str | None] | None, revision: int | None
-) -> SimpleNamespace | None:
+def _environment_variables_row(values: Mapping[str, str | None] | None, revision: int | None) -> SimpleNamespace | None:
     if values is None:
         return None
     return SimpleNamespace(
@@ -5480,9 +5716,7 @@ async def test_environment_variables_row_read_before_an_overlapping_newer_sync_i
         await newer_sync_finished.wait()
 
     older_sync: Final = asyncio.create_task(
-        _sync_from(
-            pc, _config_database(read_older_row, AsyncMock(return_value=older_row), wait_for_the_newer_sync)
-        )
+        _sync_from(pc, _config_database(read_older_row, AsyncMock(return_value=older_row), wait_for_the_newer_sync))
     )
     await older_environment_row_read.wait()
     await _sync_from(pc, _rows_database(newer_row, newer_row))

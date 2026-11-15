@@ -9,10 +9,10 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 import litellm
 from litellm.exceptions import BadRequestError
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider, is_openai_compatible_endpoint
+from litellm.litellm_core_utils.pattern_match_deployments import PatternMatchRouter, PatternUtils
+from litellm.litellm_core_utils.routing_common_utils import provider_for_generic_call
 from litellm.llms.azure.ptu_capacity import is_str_keyed_mapping
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
-from litellm.router_utils.common_utils import provider_for_generic_call
-from litellm.router_utils.pattern_match_deployments import PatternMatchRouter, PatternUtils
 from litellm.secret_managers.main import get_secret_str
 
 if TYPE_CHECKING:

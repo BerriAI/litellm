@@ -1,10 +1,10 @@
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from enum import Enum
 from types import MappingProxyType
 from typing import Annotated, Final, Literal, TypeAlias, cast
 
-from pydantic import ConfigDict, Field, field_validator, model_validator
+from pydantic import ConfigDict, Field, JsonValue, field_validator, model_validator
 from pydantic.fields import FieldInfo
 from typing_extensions import ReadOnly, Required, TypedDict
 
@@ -163,6 +163,7 @@ class SupportedGuardrailIntegrations(Enum):
     AIRIA = "airia"
     WINGBACK = "wingback"
     DECISION_MODEL = "decision_model"
+    COLLIEAI = "collieai"
 
 
 class Role(Enum):
@@ -604,6 +605,11 @@ class BedrockChecksConfigModel(LiteLLMBaseModel):
         return self
 
 
+class BedrockGuardrailOutputScope(Enum):
+    INTERVENTIONS = "INTERVENTIONS"
+    FULL = "FULL"
+
+
 class BedrockGuardrailConfigModel(LiteLLMBaseModel):
     """Configuration parameters for the AWS Bedrock guardrail"""
 
@@ -611,6 +617,11 @@ class BedrockGuardrailConfigModel(LiteLLMBaseModel):
     guardrailVersion: str | None = Field(
         default=None,
         description="The version of your Bedrock guardrail (e.g., DRAFT or version number)",
+    )
+    outputScope: BedrockGuardrailOutputScope | None = Field(
+        default=None,
+        description="ApplyGuardrail response scope. FULL includes detected and non-detected findings. "
+        "Omit to retain Bedrock's default of returning detected findings only.",
     )
     disable_exception_on_block: bool | None = Field(
         default=False,
@@ -1040,6 +1051,14 @@ GuardrailNumRetries: TypeAlias = Annotated[
 
 
 class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch update guardrails
+    mcp_block_behavior: Literal["tool_result", "raise"] | None = Field(
+        default=None,
+        description=(
+            "How to handle guardrail blocks when executing MCP tools for an LLM request. "
+            "'raise' propagates the guardrail error to the client. 'tool_result' or None "
+            "returns the block as a tool result and lets the LLM continue."
+        ),
+    )
     api_key: str | None = Field(default=None, description="API key for the guardrail service")
     api_base: str | None = Field(default=None, description="Base URL for the guardrail service API")
 
@@ -1152,12 +1171,13 @@ class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch up
         description=(
             "For /v1/realtime sessions: 'warn' speaks the violation message and continues; "
             "'end_session' speaks the message and closes the connection. "
+            "Bedrock Nova Sonic cannot cancel a spoken turn's answer, so a blocked spoken turn always ends its session. "
             "For guardrail='mcp_security': 'block' rejects the request; 'alert' only logs a warning."
         ),
     )
     realtime_violation_message: str | None = Field(
         default=None,
-        description="The message the bot speaks aloud when a /v1/realtime guardrail fires. Falls back to violation_message_template if not set.",
+        description="The message the bot speaks aloud when a /v1/realtime guardrail fires. Falls back to the guardrail's block reason if not set.",
     )
 
     # Model Armor params
@@ -1540,6 +1560,14 @@ class PresidioPerRequestConfig(LiteLLMBaseModel):
     entities: list[PiiEntityType] | None = None
 
 
+NativeGuardrailResponse: TypeAlias = Mapping[str, JsonValue] | Sequence[JsonValue]
+
+
+class GuardrailResponseFormat(Enum):
+    STANDARD = "standard"
+    NATIVE = "native"
+
+
 class ApplyGuardrailRequest(LiteLLMBaseModel):
     guardrail_name: str
     text: str
@@ -1548,6 +1576,7 @@ class ApplyGuardrailRequest(LiteLLMBaseModel):
     input_type: str = "request"
     messages: list[dict[str, object]] | None = None
     metadata: dict[str, object] | None = None
+    response_format: GuardrailResponseFormat = GuardrailResponseFormat.STANDARD
 
 
 class ApplyGuardrailResponse(LiteLLMBaseModel):

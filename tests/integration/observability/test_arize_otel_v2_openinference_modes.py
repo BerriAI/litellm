@@ -24,6 +24,7 @@ from _openinference_support import (
     _rig,
 )
 from integration._support.client import Gateway
+from integration._support.process import graceful_stop_seconds
 from integration._support.wire import Reply, Request
 
 _DEFAULT_METADATA: Final = {
@@ -411,7 +412,7 @@ def test_arize_otel_v2_c9_upstream_failures_are_recorded(failure_status: int, ga
         assert not any(".tool_calls." in key for key in attributes), attributes
 
 
-@pytest.mark.timeout(180)
+@pytest.mark.timeout(4 * graceful_stop_seconds() + 120)
 def test_arize_otel_v2_c10_attribute_limit_keeps_tool_prefix(gateway: Gateway, tmp_path: Path) -> None:
     marker: Final = "c10-" + uuid.uuid4().hex
     calls: Final = _response_tool_calls(marker, ("Paris", "Berlin", "Rome", "Tokyo", "Oslo", "Lima", "Accra", "Delhi"))

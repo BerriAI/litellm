@@ -2,7 +2,7 @@ import pytest
 
 import litellm
 from litellm import Router
-from litellm.router import _model_info_nested_under_litellm_params
+from litellm.router_rust.surface.registry import _model_info_nested_under_litellm_params
 from litellm.types.router import Deployment, LiteLLM_Params
 
 BACKEND_MODEL = "deepinfra/deepseek-ai/DeepSeek-V4-Flash-0731"

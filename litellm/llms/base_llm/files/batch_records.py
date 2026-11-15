@@ -11,7 +11,7 @@ def _frozen_mapping(items: Iterable[tuple[str, object]]) -> Mapping[str, object]
 
 
 @cache
-def _responses_request_keys() -> frozenset[str]:
+def responses_request_keys() -> frozenset[str]:
     return frozenset(get_type_hints(ResponsesAPIOptionalRequestParams))
 
 
@@ -19,6 +19,8 @@ def responses_batch_body_to_chat_body(
     openai_request_body: Mapping[str, object],
     custom_llm_provider: str | None = None,
     drop_params: bool | None = None,
+    *,
+    caller_input: str | ResponseInputParam | None = None,
 ) -> dict[str, object]:  # mutable-ok: provider transforms take the bridged chat body as a plain dict
     """
     Rewrite the body of an OpenAI `/v1/responses` batch record as a Chat Completions body.
@@ -44,7 +46,7 @@ def responses_batch_body_to_chat_body(
     chat_input: Final = cast(str | ResponseInputParam, responses_input)  # cast-ok: forwarded as sent
     responses_request: Final = cast(  # cast-ok: client-supplied fields forwarded verbatim, as real time does
         ResponsesAPIOptionalRequestParams,
-        _frozen_mapping((key, value) for key, value in openai_request_body.items() if key in _responses_request_keys()),
+        _frozen_mapping((key, value) for key, value in openai_request_body.items() if key in responses_request_keys()),
     )
     return LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # transformer declares a bare dict return
         model=model if isinstance(model, str) else "",
@@ -52,5 +54,6 @@ def responses_batch_body_to_chat_body(
         responses_api_request=responses_request,
         custom_llm_provider=custom_llm_provider,
         drop_params=drop_params,
+        caller_input=caller_input,
         metadata=openai_request_body.get("metadata"),
     )

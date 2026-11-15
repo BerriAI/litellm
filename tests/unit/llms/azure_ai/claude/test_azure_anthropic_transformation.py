@@ -5,10 +5,12 @@ sys.path.insert(
     0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../.."))
 )
 
+from typing import Final
 from unittest.mock import MagicMock, patch
 
 import pytest
 
+from litellm.anthropic_beta_headers_manager import update_headers_with_filtered_beta
 from litellm.llms.azure_ai.anthropic.transformation import AzureAnthropicConfig
 from litellm.types.router import GenericLiteLLMParams
 
@@ -484,3 +486,85 @@ def test_chat_flagged_model_keeps_mid_conversation_system_role_in_place(local_mo
         "role": "system",
         "content": [{"type": "text", "text": "<system-reminder>Answer with exactly one word.</system-reminder>"}],
     }
+
+
+@pytest.mark.parametrize(
+    ("optional_params", "messages", "expected"),
+    [
+        ({"compaction": {"type": "summarize"}}, [{"role": "user", "content": "Hello"}], True),
+        (
+            {},
+            [
+                {"role": "assistant", "content": [{"type": "compaction", "content": "Summary.", "signature": "sig"}]},
+                {"role": "user", "content": "Go on"},
+            ],
+            True,
+        ),
+        ({}, [{"role": "user", "content": "Hello"}], False),
+    ],
+    ids=["compaction_param", "signed_compaction_block", "no_compaction"],
+)
+def test_azure_chat_compaction_sends_the_compact_2026_09_04_beta(
+    local_beta_headers_config: None, optional_params: dict[str, object], messages: list[object], expected: bool
+) -> None:
+    headers: Final = AzureAnthropicConfig().update_headers_with_optional_anthropic_beta(
+        headers={}, optional_params=optional_params, messages=messages
+    )
+
+    filtered: Final = update_headers_with_filtered_beta(headers=headers, provider="azure_ai")
+
+    assert ("compact-2026-09-04" in filtered.get("anthropic-beta", "").split(",")) is expected
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize("thinking_type", ("adaptive", "enabled"))
+@pytest.mark.parametrize("display", ("summarized", "omitted", "updates"))
+def test_chat_preserves_thinking_display_and_beta(thinking_type: str, display: str) -> None:
+    from typing import Final
+
+    from litellm.llms.azure_ai.anthropic.transformation import AzureAnthropicConfig
+    from litellm.types.llms.anthropic import ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER
+
+    config: Final = AzureAnthropicConfig()
+    optional_params: Final = config.map_openai_params(
+        non_default_params={"thinking": {"type": thinking_type, "display": display, "budget_tokens": 2048}},
+        optional_params={},
+        model="claude-fable-5-1",
+        drop_params=False,
+    )
+    headers: Final = config.validate_environment(
+        headers={"anthropic-beta": "existing-beta"},
+        model="claude-fable-5-1",
+        messages=[{"role": "user", "content": "Reply with OK"}],
+        optional_params=optional_params,
+        litellm_params={},
+        api_key="test-key",
+    )
+    result: Final = config.transform_request(
+        model="claude-fable-5-1",
+        messages=[{"role": "user", "content": "Reply with OK"}],
+        optional_params=optional_params,
+        litellm_params={},
+        headers=headers,
+    )
+
+    assert result["thinking"]["type"] == "adaptive"
+    assert result["thinking"]["display"] == display
+    assert (ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER in headers["anthropic-beta"].split(",")) == (display == "updates")
+    assert "existing-beta" in headers["anthropic-beta"].split(",")
+
+
+@pytest.mark.parametrize("thinking", ("enabled", {"type": "bogus"}, {"type": "adaptive", "display": "future-mode"}))
+def test_beta_detection_preserves_unrecognized_thinking(thinking: object) -> None:
+    from typing import Final
+
+    from litellm.types.llms.anthropic import ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER
+
+    params: Final = {"thinking": thinking}
+    headers: Final = AzureAnthropicConfig().validate_environment(
+        headers={}, model="claude-fable-5-1", messages=[], optional_params=params,
+        litellm_params={}, api_key="test-key",
+    )
+
+    assert params["thinking"] == thinking
+    assert ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER not in headers.get("anthropic-beta", "").split(",")

@@ -38,7 +38,6 @@ import litellm
 from litellm import get_secret_str
 from litellm.files.streaming import FileContentStreamingResponse
 from litellm.files.types import FileContentProvider, FileContentStreamingResult, FileRetrieveProvider
-from litellm.litellm_core_utils.get_litellm_params import add_trusted_model_credentials_to_litellm_params
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.azure.common_utils import get_azure_credentials
@@ -422,10 +421,6 @@ def file_retrieve(
             )
             if provider_config is not None:
                 litellm_params_dict: Final = get_litellm_params(**kwargs)
-                add_trusted_model_credentials_to_litellm_params(
-                    litellm_params_dict=litellm_params_dict,
-                    kwargs=kwargs,
-                )
                 litellm_params_dict["api_key"] = optional_params.api_key
                 litellm_params_dict["api_base"] = optional_params.api_base
 
@@ -544,10 +539,6 @@ def file_delete(
             pass
         optional_params: Final = GenericLiteLLMParams(**kwargs)
         litellm_params_dict: Final = get_litellm_params(**kwargs)
-        add_trusted_model_credentials_to_litellm_params(
-            litellm_params_dict=litellm_params_dict,
-            kwargs=kwargs,
-        )
         ### TIMEOUT LOGIC ###
         timeout = optional_params.timeout or kwargs.get("request_timeout", 600) or 600
         # set timeout for 10 minutes by default
@@ -737,10 +728,6 @@ def file_list(
         )
         if provider_config is not None:
             litellm_params_dict: Final = get_litellm_params(**kwargs)
-            add_trusted_model_credentials_to_litellm_params(
-                litellm_params_dict=litellm_params_dict,
-                kwargs=kwargs,
-            )
             litellm_params_dict["api_key"] = optional_params.api_key
             litellm_params_dict["api_base"] = optional_params.api_base
 
@@ -890,10 +877,6 @@ def file_content(
     try:
         optional_params: Final = GenericLiteLLMParams(**kwargs)
         litellm_params_dict: Final = get_litellm_params(**kwargs)
-        add_trusted_model_credentials_to_litellm_params(
-            litellm_params_dict=litellm_params_dict,
-            kwargs=kwargs,
-        )
         ### TIMEOUT LOGIC ###
         timeout = optional_params.timeout or kwargs.get("request_timeout", 600) or 600
         client: Final = kwargs.get("client")
@@ -1108,10 +1091,10 @@ def file_content_streaming(
             client=client if isinstance(client, (OpenAI, AsyncOpenAI)) else None,
             litellm_params=optional_params.model_dump(exclude_none=True),
         )
-    elif custom_llm_provider == LlmProviders.VERTEX_AI.value:
+    elif custom_llm_provider in (LlmProviders.VERTEX_AI.value, LlmProviders.GEMINI.value):
         if not _is_async:
             raise litellm.exceptions.BadRequestError(
-                message="Streaming 'file_content' for vertex_ai is only supported through 'afile_content'.",
+                message=f"Streaming 'file_content' for {custom_llm_provider} is only supported through 'afile_content'.",
                 model="n/a",
                 llm_provider=custom_llm_provider,
                 response=httpx.Response(
@@ -1120,14 +1103,14 @@ def file_content_streaming(
                     request=httpx.Request(method="file_content", url="https://github.com/BerriAI/litellm"),
                 ),
             )
-        vertex_files_config: Final = ProviderConfigManager.get_provider_files_config(
+        google_files_config: Final = ProviderConfigManager.get_provider_files_config(
             model="",
-            provider=LlmProviders.VERTEX_AI,
+            provider=LlmProviders(custom_llm_provider),
         )
-        assert vertex_files_config is not None
+        assert google_files_config is not None
         response = base_llm_http_handler.async_retrieve_file_content_streaming(
             file_content_request=file_content_request,
-            provider_config=vertex_files_config,
+            provider_config=google_files_config,
             litellm_params=litellm_params,
             headers=extra_headers or {},
             logging_obj=logging_obj,

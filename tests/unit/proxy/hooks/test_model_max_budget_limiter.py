@@ -12,6 +12,7 @@ import pytest
 
 import litellm
 from litellm.caching.caching import DualCache
+from litellm.litellm_core_utils.model_latest_aliases import get_model_latest_aliases
 from litellm.proxy._types import Litellm_EntityType, UserAPIKeyAuth
 from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import WindowSpendTransaction
 from litellm.proxy.hooks.model_budget_shared_windows import DatabaseSharedWindows, SharedWindows
@@ -27,6 +28,8 @@ from litellm.proxy.hooks.model_max_budget_limiter import (
 from litellm.router import Router
 from litellm.types.caching import RedisPipelineIncrementOperation
 from litellm.types.utils import LiteLLMBatch, Usage
+from litellm.types.videos.main import VideoObject
+from litellm.types.videos.utils import POLLED_VIDEO_STATUS_KWARG
 
 KEY_HASH: Final = "key-hash-batch"
 USER_ID: Final = "user-batch"
@@ -47,6 +50,7 @@ def _batch(batch_id: str, status: str) -> LiteLLMBatch:
         input_file_id="file-batch",
         object="batch",
         status=status,
+        output_file_id="file-output",
         usage=Usage(prompt_tokens=20, completion_tokens=18, total_tokens=38),
     )
 
@@ -57,12 +61,14 @@ def _event(
     team_member_model_max_budget: Mapping[str, object] | None = None,
     user_id: str = USER_ID,
     team_id: str = TEAM_ID,
+    guardrail_information: tuple[Mapping[str, object], ...] = (),
 ) -> dict[str, object]:
     return {
         "call_type": call_type,
         "standard_logging_object": {
             "call_type": call_type,
             "response_cost": response_cost,
+            "guardrail_information": guardrail_information,
             "model": "openai/gpt-5.4-mini",
             "model_group": MODEL_GROUP,
             "metadata": {
@@ -326,6 +332,57 @@ async def test_a_batch_polled_within_every_budget_window_is_never_charged_again(
     assert _local_spend(limiter, KEY_SPEND_KEY) == pytest.approx(BATCH_COST)
 
 
+async def _poll_video(
+    limiter: PROXY_VirtualKeyModelMaxBudgetLimiter, video_id: str, status: str, response_cost: float
+) -> None:
+    await _log_success(
+        limiter,
+        {**_event("avideo_status", response_cost), POLLED_VIDEO_STATUS_KWARG: status},
+        response_obj=VideoObject(id=video_id, object="video", status=status),
+    )
+
+
+@pytest.mark.asyncio
+async def test_polls_of_a_finished_video_charge_each_per_model_budget_once():
+    limiter: Final = PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=DualCache())
+
+    await _poll_video(limiter, "video_first", "in_progress", response_cost=0)
+    for _ in range(3):
+        await _poll_video(limiter, "video_first", "completed", response_cost=BATCH_COST)
+    await _poll_video(limiter, "video_second", "completed", response_cost=BATCH_COST)
+    await _poll(limiter, _batch("video_first", "completed"), response_cost=BATCH_COST)
+
+    assert await _spend(limiter, KEY_SPEND_KEY) == pytest.approx(3 * BATCH_COST)
+    assert await _spend(limiter, USER_SPEND_KEY) == pytest.approx(3 * BATCH_COST)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("call_type", "polled", "guardrail_charges"),
+    (
+        ("avideo_status", lambda status: VideoObject(id="job_first", object="video", status=status), 4),
+        ("aretrieve_batch", lambda status: _batch("job_first", status), 1),
+    ),
+)
+async def test_only_the_finished_poll_pays_the_job_and_only_a_video_repoll_pays_its_guardrail(
+    call_type, polled, guardrail_charges
+):
+    """A running video poll pays its guardrail like any request, while a batch retrieve before its cost is final
+    charges nothing, as key spend defers it, so the retrieve that settles the batch pays the only guardrail."""
+    limiter: Final = PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=DualCache())
+    guardrail_cost: Final = 0.01
+    priced: Final = ({"guardrail_name": "priced", "guardrail_cost": guardrail_cost},)
+
+    def poll(status: str, response_cost: float) -> dict[str, object]:
+        return {**_event(call_type, response_cost, guardrail_information=priced), POLLED_VIDEO_STATUS_KWARG: status}
+
+    await _log_success(limiter, poll("in_progress", guardrail_cost), polled("in_progress"))
+    for _ in range(3):
+        await _log_success(limiter, poll("completed", BATCH_COST + guardrail_cost), polled("completed"))
+
+    assert await _spend(limiter, KEY_SPEND_KEY) == pytest.approx(BATCH_COST + guardrail_charges * guardrail_cost)
+
+
 OPUS_GROUP: Final = "claude-opus"
 OPUS_GROUP_MEMBERS: Final = MappingProxyType(
     {"claude-opus-4-8": frozenset({OPUS_GROUP}), "claude-opus-5-5": frozenset({OPUS_GROUP})}
@@ -429,6 +486,91 @@ def _family_limiter(
 
 def _key(model_max_budget: Mapping[str, object]) -> UserAPIKeyAuth:
     return UserAPIKeyAuth(token=KEY_HASH, key_alias="opus-family", model_max_budget=dict(model_max_budget))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scope", ("key", "team"))
+@pytest.mark.parametrize("prefix", ("", "anthropic/"))
+@pytest.mark.parametrize("budget_alias", (False, True))
+async def test_latest_alias_is_blocked_by_either_model_budget(scope: str, prefix: str, budget_alias: bool) -> None:
+    target: Final = get_model_latest_aliases()["anthropic"]["claude-opus-latest"]
+    name: Final = "claude-opus-latest" if budget_alias else target
+    budget: Final = {f"{prefix}{name}": {"max_budget": 0, "budget_duration": "1d"}}
+    limiter: Final = _family_limiter()
+    admission: Final = (
+        limiter.is_key_within_model_budget(_key(budget), "anthropic/claude-opus-latest")
+        if scope == "key"
+        else limiter.is_team_within_model_budget(TEAM_ID, budget, None, "anthropic/claude-opus-latest")
+    )
+    with pytest.raises(litellm.BudgetExceededError, match="exceeded budget"):
+        await admission
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", ("anthropic/claude-opus-5-5", "anthropic/unknown-model"))
+async def test_latest_alias_budget_does_not_govern_other_requests(model: str) -> None:
+    limiter: Final = _family_limiter()
+    budget: Final = {"anthropic/claude-opus-latest": {"max_budget": 0, "budget_duration": "1d"}}
+    assert await limiter.is_key_within_model_budget(_key(budget), model)
+    assert await limiter.is_team_within_model_budget(TEAM_ID, budget, None, model)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scope", (Litellm_EntityType.KEY, Litellm_EntityType.TEAM))
+@pytest.mark.parametrize(
+    "entries",
+    (
+        ("anthropic/claude-opus-latest", "claude-opus-5-5"),
+        ("claude-opus*",),
+        ("anthropic/claude-opus-5-5",),
+        ("claude-opus-5-5",),
+    ),
+)
+@pytest.mark.parametrize("requested", ("anthropic/claude-opus-latest", "anthropic/claude-opus-5-5"))
+async def test_latest_alias_spend_charges_each_governing_counter_once(
+    scope: Litellm_EntityType, entries: tuple[str, ...], requested: str
+) -> None:
+    budget: Final = {entry: FAMILY_CAP for entry in entries}
+    cache: Final = DualCache()
+    limiter: Final = _family_limiter(dual_cache=cache)
+    await _log_success(
+        limiter,
+        {
+            "call_type": "acompletion",
+            "standard_logging_object": {
+                "model": "claude-opus-5-5",
+                "model_group": requested,
+                "response_cost": CHAT_COST,
+                "metadata": {"user_api_key_hash": KEY_HASH, "user_api_key_team_id": TEAM_ID},
+            },
+            "litellm_params": {
+                "metadata": {
+                    "user_api_key_model_max_budget": budget if scope == Litellm_EntityType.KEY else {},
+                    "user_api_key_team_model_max_budget": budget if scope == Litellm_EntityType.TEAM else {},
+                }
+            },
+        },
+    )
+    for entry in entries:
+        spend_key: Final = model_budget_spend_cache_key(
+            entity_type=scope,
+            entity_id=KEY_HASH if scope == Litellm_EntityType.KEY else TEAM_ID,
+            budget_model=entry,
+            budget_duration="1d",
+        )
+        expected: Final = (
+            CHAT_COST
+            if requested == "anthropic/claude-opus-latest" or entry != "anthropic/claude-opus-latest"
+            else None
+        )
+        assert await cache.async_get_cache(spend_key, local_only=True) == expected
+    admission: Final = (
+        limiter.is_key_within_model_budget(_key(budget), requested)
+        if scope == Litellm_EntityType.KEY
+        else limiter.is_team_within_model_budget(TEAM_ID, budget, None, requested)
+    )
+    with pytest.raises(litellm.BudgetExceededError, match="exceeded budget"):
+        await admission
 
 
 async def _spend_on(
