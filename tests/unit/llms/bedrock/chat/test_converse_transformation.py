@@ -12343,3 +12343,47 @@ def test_converse_sends_a_proxy_user_profile_id_only_to_claude(
     model_fields: Final = json.loads(request.content).get("additionalModelRequestFields", {})
     assert request.url.path.endswith("/converse")
     assert {key: model_fields[key] for key in ("user_profile_id",) if key in model_fields} == expected_fields
+
+
+@pytest.mark.parametrize(
+    "profile_id,base_model,expected_fields",
+    [
+        (None, None, {}),
+        ("", None, {}),
+        ("uprof_admin", "anthropic.claude-haiku-4-5-20251001-v1:0", {"user_profile_id": "uprof_admin"}),
+        ("uprof_admin", "amazon.nova-pro-v1:0", {}),
+    ],
+)
+def test_converse_application_profile_uses_its_configured_model_for_attribution(
+    profile_id: str | None, base_model: str | None, expected_fields: dict[str, str]
+) -> None:
+    respond: Final = MagicMock(wraps=_converse_ok)
+    litellm.completion(
+        model=f"bedrock/converse/{_APPLICATION_PROFILE_ARN}",
+        base_model=base_model,
+        messages=[{"role": "user", "content": "hi"}],
+        extra_headers={"anthropic-user-profile-id": profile_id} if profile_id is not None else {},
+        aws_access_key_id="AKIAEXAMPLE",
+        aws_secret_access_key="fake-secret",
+        aws_region_name="us-west-2",
+        client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond))),
+    )
+    payload: Final = json.loads(respond.call_args.args[0].content)
+    fields: Final = payload.get("additionalModelRequestFields", {})
+    assert fields == expected_fields
+    assert "user_profile_id" not in payload
+
+
+def test_converse_profile_on_an_unidentified_application_arn_fails_before_sending() -> None:
+    respond: Final = MagicMock(wraps=_converse_ok)
+    with pytest.raises(litellm.BadRequestError, match="base_model"):
+        litellm.completion(
+            model=f"bedrock/converse/{_APPLICATION_PROFILE_ARN}",
+            messages=[{"role": "user", "content": "hi"}],
+            extra_headers={"anthropic-user-profile-id": "uprof_admin"},
+            aws_access_key_id="AKIAEXAMPLE",
+            aws_secret_access_key="fake-secret",
+            aws_region_name="us-west-2",
+            client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond))),
+        )
+    assert respond.call_count == 0

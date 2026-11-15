@@ -1283,6 +1283,25 @@ async def test_profile_mapping_cannot_be_replaced_through_extra_body(metadata: d
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("pinned", [True, False])
+@pytest.mark.parametrize("nested", [True, False])
+async def test_profile_pin_rejects_client_model_hints_even_with_custom_pricing(pinned: bool, nested: bool) -> None:
+    fields: Final = {"base_model": "amazon.nova-pro-v1:0"}
+    metadata: Final = {
+        "allow_client_pricing_override": True,
+        **({"anthropic_user_profile_id": "uprof_admin"} if pinned else {}),
+    }
+    updated: Final = await _request_data_added_by_the_proxy(
+        {"extra_body": fields} if nested else fields,
+        {},
+        {},
+        UserAPIKeyAuth(api_key="hashed-key", metadata=metadata),
+    )
+    received: Final = updated["extra_body"] if nested else updated
+    assert received.get("base_model") == (None if pinned else "amazon.nova-pro-v1:0")
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("metadata_slot", ["key", "team"])
 @pytest.mark.parametrize("header_slot", ["headers", "extra_headers"])
 @pytest.mark.parametrize("caller_value", ["uprof_other", ""])

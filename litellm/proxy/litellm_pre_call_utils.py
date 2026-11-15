@@ -864,7 +864,7 @@ def _without_caller_profile_body_fields(fields: Mapping[str, object]) -> Mapping
             **{
                 name: value
                 for name, value in fields.items()
-                if name not in ("user_profile_id", "additionalModelRequestFields")
+                if name not in ("user_profile_id", "base_model", "additionalModelRequestFields")
             },
             **(
                 {
@@ -3088,6 +3088,7 @@ async def add_litellm_data_to_request(
                 }
         caller_body: Final = _without_caller_profile_body_fields(_REQUEST_FIELDS.validate_python(data))
         data.pop("user_profile_id", None)
+        data.pop("base_model", None)  # pyright: ignore[reportUnknownMemberType]  # legacy request data is a bare dict
         if "additionalModelRequestFields" in data:
             data["additionalModelRequestFields"] = (  # rebind-ok: data is an out-param
                 caller_body["additionalModelRequestFields"]

@@ -2271,8 +2271,15 @@ class AmazonConverseConfig(BaseConfig):
             for config_name, config_class in self.get_config_blocks().items()
         )
 
+        requested_profile_fields: Final = bedrock_user_profile_fields(REQUEST_HEADERS.validate_python(headers or {}))
+        if requested_profile_fields and is_bedrock_application_inference_profile_arn(model):
+            raise BedrockError(
+                status_code=400,
+                message="Set base_model on the deployment to identify the underlying model before using "
+                "anthropic-user-profile-id with an application inference profile ARN",
+            )
         user_profile_fields: Final[Mapping[str, str]] = (
-            bedrock_user_profile_fields(REQUEST_HEADERS.validate_python(headers or {}))
+            requested_profile_fields
             if BedrockModelInfo.get_base_model(model).startswith("anthropic")
             else types.MappingProxyType({})
         )
