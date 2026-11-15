@@ -1371,6 +1371,16 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
                 content=text, source="model_response", request_data=request_data
             )
             if self._should_block_content(text_response, allow_sanitization=True):
+                rescan_end_time: Final = time.time()
+                self.add_standard_logging_guardrail_information_to_request_data(
+                    guardrail_json_response=self._build_logging_response(text_response),
+                    request_data=request_data,
+                    guardrail_status="guardrail_flagged",
+                    guardrail_provider="model_armor",
+                    start_time=start_time,
+                    end_time=rescan_end_time,
+                    duration=rescan_end_time - start_time,
+                )
                 raise HTTPException(
                     status_code=400,
                     detail=self._build_block_error_detail("Response blocked by Model Armor", text_response),
