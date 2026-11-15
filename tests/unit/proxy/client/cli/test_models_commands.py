@@ -2,6 +2,8 @@
 import json
 import os
 import time
+from pathlib import Path
+from typing import Final
 from unittest.mock import patch
 
 import pytest
@@ -245,6 +247,32 @@ def test_models_info_table_format(mock_models_info, cli_runner):
         base_url="http://localhost:4000", api_key="sk-test"
     )
     mock_models_info.return_value.models.info.assert_called_once()
+
+
+@pytest.mark.parametrize("access_filter", (False, True))
+def test_models_import_dry_run_accepts_null_metadata(
+    tmp_path: Path, cli_runner: CliRunner, access_filter: bool
+) -> None:
+    yaml_file: Final = tmp_path / "models.yaml"
+    yaml_file.write_text(
+        "model_list:\n"
+        "  - model_name: null-metadata\n"
+        "    litellm_params:\n"
+        "      model: openai/import-control\n"
+        "    model_info: null\n"
+        "  - model_name: with-group\n"
+        "    litellm_params:\n"
+        "      model: openai/import-control\n"
+        "    model_info:\n"
+        "      access_groups: [production]\n",
+        encoding="utf-8",
+    )
+    options: Final = ("--only-access-groups-matching-regex", "^production$") if access_filter else ()
+    result: Final = cli_runner.invoke(cli, ("models", "import", str(yaml_file), "--dry-run", *options))
+
+    assert result.exit_code == 0, repr(result.exception)
+    assert "with-group" in result.output
+    assert result.output.count("null-metadata") == (0 if access_filter else 1)
 
 
 def test_models_import_only_models_matching_regex(tmp_path, mock_client, cli_runner):

@@ -52,7 +52,7 @@ def _get_model_info_obj_from_yaml(model: dict[str, Any]) -> ModelYamlInfo:
     """Extract model info from a model dict and return as ModelYamlInfo dataclass."""
     model_name: Final[str] = model["model_name"]
     model_params: Final[dict[str, Any]] = model["litellm_params"]
-    model_info: Final[dict[str, Any]] = model.get("model_info", {})
+    model_info: Final[dict[str, Any]] = model.get("model_info") or {}
     model_id: Final[str] = model_params["model"]
     access_groups: Final = model_info.get("access_groups", [])
     provider: Final = model_id.split("/", 1)[0] if "/" in model_id else model_id
@@ -344,7 +344,7 @@ def update_model(ctx: click.Context, model_id: str, param: tuple[str, ...], info
 def _filter_model(model, model_regex, access_group_regex):
     model_name: Final = model.get("model_name")
     model_params: Final = model.get("litellm_params")
-    model_info: Final = model.get("model_info", {})
+    model_info: Final = model.get("model_info") or {}
     if not model_name or not model_params:
         return False
     model_id: Final = model_params.get("model")
