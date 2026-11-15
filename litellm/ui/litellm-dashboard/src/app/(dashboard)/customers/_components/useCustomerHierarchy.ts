@@ -157,6 +157,10 @@ function useChildSpend(
   });
 }
 
+function memberSearchForTab(kind: ChildList["kind"], search: string): string {
+  return kind === "members" ? search.trim() : "";
+}
+
 export default function useCustomerHierarchy() {
   const { accessToken, userRole, isLoading } = useAuthorized();
   const canManage = isProxyAdminRole(userRole);
@@ -180,7 +184,7 @@ export default function useCustomerHierarchy() {
   const childContext = selected && !selected.member ? selected : null;
   const showChildren = tab === "teams" || tab === "members";
   const page = Math.max(1, params.hierarchyPage);
-  const memberSearch = childTab === "members" ? params.memberSearch.trim() : "";
+  const memberSearch = memberSearchForTab(childTab, params.memberSearch);
   const children = useQuery({
     queryKey: [
       "customer-hierarchy",
