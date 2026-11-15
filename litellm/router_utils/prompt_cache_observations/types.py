@@ -1,6 +1,9 @@
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import TypeAlias
+
+from pydantic import JsonValue
 
 
 class ProviderFamily(StrEnum):
@@ -26,6 +29,13 @@ class Runtime(StrEnum):
     RUST = "rust"
 
 
+class CacheIntent(StrEnum):
+    CLIENT = "client"
+    GATEWAY = "gateway"
+    CLIENT_AND_GATEWAY = "client_and_gateway"
+    UNATTRIBUTED = "unattributed"
+
+
 class UnassessedReason(StrEnum):
     PROVIDER_OUT_OF_SCOPE = "provider_out_of_scope"
     MODEL_OUT_OF_SCOPE = "model_out_of_scope"
@@ -37,6 +47,7 @@ class UnassessedReason(StrEnum):
     REQUEST_REDACTED = "request_redacted"
     BREAKPOINT_UNRECOGNIZED = "breakpoint_unrecognized"
     TTL_UNRECOGNIZED = "ttl_unrecognized"
+    CACHE_INTENT_NOT_SENT = "cache_intent_not_sent"
     UPSTREAM_FAILED = "upstream_failed"
 
 
@@ -83,6 +94,23 @@ UpstreamCacheUsage: TypeAlias = CacheCounters | UsageUnknown
 class CacheablePrefix:
     fingerprint: str
     ttl_seconds: int
+    breakpoints: int
+
+
+@dataclass(frozen=True, slots=True)
+class PrefixCountRequest:
+    """Ephemeral. Holds the prompt prefix itself so a provider count can run for this request, and must never
+    be persisted, logged or kept past the request. Only `PromptCacheObservation` is retained evidence."""
+
+    prefix_fingerprint: str
+    wire: WireShape
+    body: Mapping[str, JsonValue]
+
+
+@dataclass(frozen=True, slots=True)
+class OutgoingPrefix:
+    prefix: CacheablePrefix
+    count_request: PrefixCountRequest
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,7 +123,7 @@ class PrefixUnassessed:
     reason: UnassessedReason
 
 
-PrefixEvidence: TypeAlias = CacheablePrefix | NoCacheBreakpoint | PrefixUnassessed
+PrefixEvidence: TypeAlias = OutgoingPrefix | NoCacheBreakpoint | PrefixUnassessed
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,7 +133,6 @@ class DeploymentCacheIdentity:
     provider: str
     provider_model: str
     min_prefix_tokens: int | None
-    gateway_injects_breakpoints: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -124,7 +151,16 @@ class Unassessed:
 
 @dataclass(frozen=True, slots=True)
 class PromptCacheObservation:
+    """Retained evidence: opaque identities, counters and reasons only, never prompt content."""
+
     call_id: str
     deployment: DeploymentCacheIdentity
+    intent: CacheIntent
     observed_at: float
     outcome: Assessed | Unassessed
+
+
+@dataclass(frozen=True, slots=True)
+class ObservedCall:
+    observation: PromptCacheObservation
+    count_request: PrefixCountRequest | None

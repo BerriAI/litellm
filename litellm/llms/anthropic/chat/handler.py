@@ -23,6 +23,7 @@ from litellm.anthropic_beta_headers_manager import (
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.litellm_core_utils.json_fragment_accumulator import JSONFragmentAccumulator
+from litellm.litellm_core_utils.upstream_stream_usage import AnthropicStreamUsage, recorded_anthropic_stream_event
 from litellm.llms.base_llm.base_utils import (
     RESPONSE_FORMAT_ENVELOPE_NAME_KEYS,
     ResponseFormatSchema,
@@ -719,6 +720,7 @@ class ModelResponseIterator:
         self.json_mode = json_mode
         self.speed = speed
         self._cumulative_usage: Mapping[str, object] = MappingProxyType({})
+        self.upstream_stream_usage: AnthropicStreamUsage | None = None
         # rewritten-name -> caller's original. Built per-request from the
         # forward map in AnthropicConfig._build_request_tool_name_maps; only
         # contains entries we actually rewrote, so a tool legitimately named
@@ -1230,6 +1232,9 @@ class ModelResponseIterator:
                 }
                 """
                 message_start_block: Final = MessageStartBlock(**chunk)
+                self.upstream_stream_usage = recorded_anthropic_stream_event(
+                    self.upstream_stream_usage, message_start_block
+                )
                 start_message: Final = message_start_block["message"]
                 if "model" in start_message:
                     self.served_model = start_message["model"]
@@ -1448,6 +1453,7 @@ class ModelResponseIterator:
             Tuple of (finish_reason, usage, container)
         """
         message_delta: Final = MessageBlockDelta(**chunk)
+        self.upstream_stream_usage = recorded_anthropic_stream_event(self.upstream_stream_usage, message_delta)
         provider_finish_reason: Final = map_finish_reason(
             finish_reason=message_delta["delta"].get("stop_reason", "stop") or "stop"
         )

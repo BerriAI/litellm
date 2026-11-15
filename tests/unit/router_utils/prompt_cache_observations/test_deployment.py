@@ -1,109 +1,139 @@
 from collections.abc import Iterator, Mapping
 
 import pytest
-from pydantic import JsonValue
 
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.model_cost_table import published
-
 from litellm.router_utils.prompt_cache_observations.deployment import (
+    SelectedDeployment,
     deployment_cache_identity,
+    effective_destination,
     exact_min_prefix_tokens,
+    selected_deployment,
 )
-from litellm.router_utils.prompt_cache_observations.types import DeploymentCacheIdentity
 
 _KEY = b"deployment-identity-test-key"
-_BASE_PARAMS: dict[str, JsonValue] = {
-    "model": "bedrock/us.anthropic.claude-test-v1:0",
-    "aws_region_name": "us-east-1",
-    "api_key": "first-key",
-    "rpm": 10,
-    "timeout": 30,
-}
+_SELECTED = SelectedDeployment(deployment_id="deployment-1", base_model=None)
+_BEDROCK_EAST = "https://bedrock-runtime.us-east-1.amazonaws.com/model/us.anthropic.claude-test-v1:0"
 
 
-def _identity(params: Mapping[str, JsonValue], model: str = "us.anthropic.claude-test-v1:0") -> DeploymentCacheIdentity:
+def _fingerprint(
+    destination: str | None = _BEDROCK_EAST,
+    model: str = "us.anthropic.claude-test-v1:0",
+    selected: SelectedDeployment = _SELECTED,
+) -> str:
     return deployment_cache_identity(
-        deployment_id="deployment-1",
+        selected=selected,
         provider="bedrock",
         provider_model=model,
-        base_model=None,
-        litellm_params=params,
+        destination=destination,
         fingerprint_key=_KEY,
         min_prefix_tokens=lambda _model, _provider: 1024,
+    ).config_fingerprint
+
+
+def test_streaming_and_non_streaming_calls_to_one_destination_share_a_fingerprint() -> None:
+    assert effective_destination(f"{_BEDROCK_EAST}/converse") == effective_destination(
+        f"{_BEDROCK_EAST}/converse-stream"
+    )
+    assert _fingerprint(effective_destination(f"{_BEDROCK_EAST}/invoke")) == _fingerprint(
+        effective_destination(f"{_BEDROCK_EAST}/invoke-with-response-stream")
     )
 
 
-def test_config_changes_unrelated_to_caching_keep_the_same_fingerprint() -> None:
-    changed: dict[str, JsonValue] = {
-        **_BASE_PARAMS,
-        "api_key": "rotated-key",
-        "rpm": 99,
-        "timeout": 5,
-        "tags": ["blue"],
-    }
-    assert _identity(changed) == _identity(_BASE_PARAMS)
+def test_vertex_stream_and_non_stream_operations_share_a_destination() -> None:
+    base = "https://us-east5-aiplatform.googleapis.com/v1/projects/p/locations/us-east5/publishers/anthropic/models/claude-test"
+    assert effective_destination(f"{base}:rawPredict") == effective_destination(f"{base}:streamRawPredict") == base
+
+
+def test_destination_drops_the_query_string() -> None:
+    assert effective_destination("https://example.services.ai.azure.com/anthropic/v1/messages?api-key=secret") == (
+        "https://example.services.ai.azure.com/anthropic/v1/messages"
+    )
 
 
 @pytest.mark.parametrize(
-    ("params", "model"),
+    ("destination", "model", "selected"),
     [
-        ({**_BASE_PARAMS, "aws_region_name": "eu-west-1"}, "us.anthropic.claude-test-v1:0"),
-        (_BASE_PARAMS, "us.anthropic.claude-test-v2:0"),
-        ({**_BASE_PARAMS, "api_base": "https://bedrock-runtime.example"}, "us.anthropic.claude-test-v1:0"),
-        (
-            {**_BASE_PARAMS, "cache_control_injection_points": [{"location": "message", "role": "system"}]},
-            "us.anthropic.claude-test-v1:0",
-        ),
+        ("https://bedrock-runtime.eu-west-1.amazonaws.com/model/us.anthropic.claude-test-v1:0", None, _SELECTED),
+        (_BEDROCK_EAST, "us.anthropic.claude-test-v2:0", _SELECTED),
+        (_BEDROCK_EAST, None, SelectedDeployment(deployment_id="deployment-1", base_model="claude-test")),
     ],
 )
-def test_cache_relevant_config_changes_change_the_fingerprint(params: Mapping[str, JsonValue], model: str) -> None:
-    assert _identity(params, model).config_fingerprint != _identity(_BASE_PARAMS).config_fingerprint
+def test_region_resolved_at_request_time_model_and_base_model_change_the_fingerprint(
+    destination: str, model: str | None, selected: SelectedDeployment
+) -> None:
+    changed = _fingerprint(destination, model or "us.anthropic.claude-test-v1:0", selected)
+    assert changed != _fingerprint()
 
 
-def test_gateway_injection_is_recorded_from_the_deployment_config() -> None:
-    injected: dict[str, JsonValue] = {
-        **_BASE_PARAMS,
-        "cache_control_injection_points": [{"location": "message", "role": "system"}],
-    }
-    assert _identity(injected).gateway_injects_breakpoints is True
-    assert _identity(_BASE_PARAMS).gateway_injects_breakpoints is False
+@pytest.mark.parametrize(
+    ("model_info", "expected"),
+    [
+        ({"id": "d1", "prompt_cache_observation": True}, SelectedDeployment(deployment_id="d1", base_model=None)),
+        (
+            {"id": "d1", "prompt_cache_observation": True, "base_model": "claude-test", "rpm": 10},
+            SelectedDeployment(deployment_id="d1", base_model="claude-test"),
+        ),
+        ({"id": "d1"}, None),
+        ({"id": "d1", "prompt_cache_observation": False}, None),
+        ({"prompt_cache_observation": True}, None),
+        (None, None),
+    ],
+)
+def test_only_deployments_that_opt_in_are_observed(model_info: object, expected: SelectedDeployment | None) -> None:
+    assert selected_deployment(model_info) == expected
 
 
-def test_minimum_is_looked_up_for_the_base_model_when_one_is_configured() -> None:
-    looked_up: list[tuple[str, str]] = []
-
-    def minimum(model: str, provider: str) -> int | None:
-        looked_up.append((model, provider))
-        return 2048
-
-    identity = deployment_cache_identity(
-        deployment_id="deployment-1",
-        provider="azure_ai",
-        provider_model="my-claude-deployment",
-        base_model="claude-test",
-        litellm_params={"model": "azure_ai/my-claude-deployment"},
-        fingerprint_key=_KEY,
-        min_prefix_tokens=minimum,
-    )
-    assert (identity.min_prefix_tokens, looked_up) == (2048, [("claude-test", "azure_ai")])
-
-
-def _anthropic_cost_rows() -> Iterator[tuple[str, Mapping[str, object]]]:
+def _rows_of(provider: str) -> Iterator[tuple[str, Mapping[str, object]]]:
     for name, row in published().items():
         info = as_str_mapping(row)
-        if info is not None and info.get("litellm_provider") == "anthropic":
+        if info is not None and info.get("litellm_provider") == provider:
             yield name, info
 
 
-def test_exact_minimum_matches_the_cost_map_entry_for_the_model() -> None:
-    model, minimum = next(
-        (name, info.get("prompt_cache_min_tokens"))
-        for name, info in _anthropic_cost_rows()
-        if isinstance(info.get("prompt_cache_min_tokens"), int)
+def _model_with_minimum(provider: str, prefix: str = "") -> tuple[str, object]:
+    return next(
+        (name.removeprefix(prefix), info.get("prompt_cache_min_tokens"))
+        for name, info in _rows_of(provider)
+        if isinstance(info.get("prompt_cache_min_tokens"), int) and name.startswith(prefix)
     )
-    assert exact_min_prefix_tokens(model, "anthropic") == minimum
 
 
-def test_unknown_model_has_no_minimum_instead_of_the_generic_default() -> None:
+@pytest.mark.parametrize(
+    ("provider", "cost_map_provider", "prefix"),
+    [
+        ("anthropic", "anthropic", ""),
+        ("azure_ai", "azure_ai", "azure_ai/"),
+        ("vertex_ai", "vertex_ai-anthropic_models", "vertex_ai/"),
+        ("bedrock", "bedrock_converse", ""),
+    ],
+)
+def test_exact_minimum_is_the_cost_map_row_for_the_served_model(
+    provider: str, cost_map_provider: str, prefix: str
+) -> None:
+    model, minimum = _model_with_minimum(cost_map_provider, prefix)
+    assert exact_min_prefix_tokens(model, provider) == minimum
+
+
+def test_bedrock_route_prefix_names_the_same_model() -> None:
+    model, minimum = _model_with_minimum("bedrock_converse")
+    assert exact_min_prefix_tokens(f"converse/{model}", "bedrock") == minimum
+    assert exact_min_prefix_tokens(f"invoke/{model}", "bedrock") == minimum
+
+
+@pytest.mark.parametrize("provider", ["azure_ai", "vertex_ai", "bedrock"])
+def test_a_row_for_another_provider_never_supplies_the_minimum(provider: str) -> None:
+    table = published()
+    model = next(
+        name
+        for name, info in _rows_of("anthropic")
+        if isinstance(info.get("prompt_cache_min_tokens"), int) and f"{provider}/{name}" not in table
+    )
+    assert exact_min_prefix_tokens(model, provider) is None
+
+
+def test_unlisted_or_upgraded_model_has_no_minimum_instead_of_a_neighbours() -> None:
+    model, _ = _model_with_minimum("anthropic")
+    assert exact_min_prefix_tokens(f"{model}-next", "anthropic") is None
     assert exact_min_prefix_tokens("claude-model-that-is-not-in-the-cost-map", "anthropic") is None

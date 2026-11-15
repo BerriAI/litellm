@@ -60,6 +60,7 @@ from litellm.router_utils.pre_call_checks.prompt_caching_deployment_check import
     PromptCachingDeploymentCheck,
     new_responses_pins_in_flight,
 )
+from litellm.router_utils.prompt_cache_observations.observer import PromptCacheObserver, prompt_cache_observer
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging
@@ -83,6 +84,7 @@ _RUNTIME_TOGGLEABLE: Final[Mapping[str, type[CustomLogger]]] = {
     "prompt_caching": PromptCachingDeploymentCheck,
     "enforce_model_rate_limits": ModelRateLimitingCheck,
     "encrypted_content_affinity": EncryptedContentAffinityCheck,
+    "prompt_cache_observations": PromptCacheObserver,
 }
 
 
@@ -332,6 +334,8 @@ class OptionalChecks:
                 self.router_budget_logger = callback
             elif name == "enforce_model_rate_limits":
                 callback = ModelRateLimitingCheck(usage=self._usage)
+            elif name == "prompt_cache_observations":
+                callback = prompt_cache_observer()
             if callback is None:
                 continue
             if self.optional_callbacks is not None and any(

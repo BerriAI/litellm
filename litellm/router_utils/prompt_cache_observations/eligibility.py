@@ -4,6 +4,8 @@ from typing import TypeAlias
 
 from litellm.types.utils import TokenCountResponse
 
+from .types import CacheablePrefix, CacheCounters
+
 
 class CountFailure(StrEnum):
     NO_RESPONSE = "no_response"
@@ -60,11 +62,18 @@ def accepted_prefix_count(response: TokenCountResponse | None, expected_tokenize
     return CountedPrefixTokens(tokens=response.total_tokens)
 
 
-def assess_eligibility(minimum: int | None, provider_activity_seen: bool, count: PrefixCount | None) -> Eligibility:
-    """A cache read or write on this prefix and configuration is the provider's own proof that the prefix
-    meets its minimum, so it needs no count. Otherwise only a provider count against the model's exact
-    minimum decides, and a generic default minimum never stands in for an unknown one."""
-    if provider_activity_seen:
+def write_proves_prefix_eligible(prefix: CacheablePrefix, counters: CacheCounters) -> bool:
+    """Only a cache write on a request with a single breakpoint proves this prefix met the minimum. With
+    several breakpoints the counters are a total over all of them, so an earlier, shorter prefix can account
+    for every token, and a read can be served from an earlier entry without this prefix ever being cached."""
+    return prefix.breakpoints == 1 and counters.write_tokens > 0
+
+
+def assess_eligibility(minimum: int | None, provider_proof_seen: bool, count: PrefixCount | None) -> Eligibility:
+    """A write that `write_proves_prefix_eligible` accepts is the provider's own proof, so it needs no count.
+    Otherwise only a provider count against the model's exact minimum decides, and a generic default minimum
+    never stands in for an unknown one."""
+    if provider_proof_seen:
         return Eligible(proven_by_provider_activity=True)
     if minimum is None:
         return EligibilityUnassessed(EligibilityUnassessedReason.MINIMUM_UNKNOWN)

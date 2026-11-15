@@ -52,6 +52,11 @@ from litellm.litellm_core_utils.model_response_utils import (
 )
 from litellm.litellm_core_utils.redact_messages import LiteLLMLoggingObject, drop_token_ids
 from litellm.litellm_core_utils.thread_pool_executor import executor
+from litellm.litellm_core_utils.upstream_stream_usage import (
+    UPSTREAM_STREAM_USAGE_KEY,
+    AnthropicStreamUsage,
+    RecordsUpstreamStreamUsage,
+)
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.ollama.common_utils import OllamaResponseIdNormalizer
 from litellm.types.llms.base import LiteLLMBaseModel
@@ -411,7 +416,8 @@ _DECODED_JSON: Final = TypeAdapter(object)
 
 
 def _provider_response_model(chunk: object) -> str | None:
-    model: Final[object] = chunk.get("model") if isinstance(chunk, Mapping) else getattr(chunk, "model", None)
+    mapping: Final = as_str_mapping(chunk)
+    model: Final[object] = mapping.get("model") if mapping is not None else getattr(chunk, "model", None)
     return model if isinstance(model, str) and model else None
 
 
@@ -2501,6 +2507,7 @@ class CustomStreamWrapper:
                 self.close()
                 self._handle_stream_fallback_error(error)
             if self.sent_last_chunk is True:
+                self._record_upstream_stream_usage()
                 complete_streaming_response: Final = self._build_complete_streaming_response()
                 response = self._new_usage_chunk()
                 logs_stream_end: Final = not self.sent_stream_usage
@@ -2714,8 +2721,16 @@ class CustomStreamWrapper:
             await self.aclose()
             self._log_stream_failure_and_raise(e)
 
+    def _record_upstream_stream_usage(self) -> None:
+        if not isinstance(self.completion_stream, RecordsUpstreamStreamUsage):
+            return
+        usage: Final = self.completion_stream.upstream_stream_usage
+        if isinstance(usage, AnthropicStreamUsage):
+            self.logging_obj.model_call_details[UPSTREAM_STREAM_USAGE_KEY] = usage
+
     async def _finalize_completed_stream(self, cache_hit: bool) -> "ModelResponseStream":
         if self.sent_last_chunk is True:
+            self._record_upstream_stream_usage()
             complete_streaming_response: Final = await self._async_build_complete_streaming_response()
             response: Final = self._new_usage_chunk()
             if complete_streaming_response is not None:

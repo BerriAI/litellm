@@ -12,7 +12,9 @@ from litellm.router_utils.prompt_cache_observations.eligibility import (
     PrefixCount,
     accepted_prefix_count,
     assess_eligibility,
+    write_proves_prefix_eligible,
 )
+from litellm.router_utils.prompt_cache_observations.types import CacheablePrefix, CacheCounters
 from litellm.types.token_count import TokenCountSource
 from litellm.types.utils import TokenCountResponse
 
@@ -72,3 +74,20 @@ def test_eligibility_needs_provider_evidence_against_the_exact_minimum(
     minimum: int | None, activity_seen: bool, count: PrefixCount | None, expected: Eligibility
 ) -> None:
     assert assess_eligibility(minimum, activity_seen, count) == expected
+
+
+@pytest.mark.parametrize(
+    ("breakpoints", "counters", "proves"),
+    [
+        (1, CacheCounters(read_tokens=0, write_tokens=2048), True),
+        (1, CacheCounters(read_tokens=2048, write_tokens=0), False),
+        (2, CacheCounters(read_tokens=0, write_tokens=2048), False),
+        (3, CacheCounters(read_tokens=4096, write_tokens=10), False),
+        (1, CacheCounters(read_tokens=0, write_tokens=0), False),
+    ],
+)
+def test_only_a_write_on_a_single_breakpoint_proves_the_prefix_met_the_minimum(
+    breakpoints: int, counters: CacheCounters, proves: bool
+) -> None:
+    prefix = CacheablePrefix(fingerprint="prefix", ttl_seconds=300, breakpoints=breakpoints)
+    assert write_proves_prefix_eligible(prefix, counters) is proves

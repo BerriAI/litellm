@@ -9,6 +9,8 @@ from litellm.router_utils.prompt_cache_observations.prefix import outgoing_cache
 from litellm.router_utils.prompt_cache_observations.types import (
     CacheablePrefix,
     NoCacheBreakpoint,
+    OutgoingPrefix,
+    PrefixCountRequest,
     PrefixEvidence,
     PrefixUnassessed,
     UnassessedReason,
@@ -39,10 +41,14 @@ def _anthropic(
     }
 
 
-def _anthropic_prefix(body: Mapping[str, JsonValue], key: bytes = _KEY) -> CacheablePrefix:
+def _anthropic_outgoing(body: Mapping[str, JsonValue], key: bytes = _KEY) -> OutgoingPrefix:
     evidence = outgoing_cacheable_prefix(WireShape.ANTHROPIC_MESSAGES, body, key)
-    assert isinstance(evidence, CacheablePrefix), evidence
+    assert isinstance(evidence, OutgoingPrefix), evidence
     return evidence
+
+
+def _anthropic_prefix(body: Mapping[str, JsonValue], key: bytes = _KEY) -> CacheablePrefix:
+    return _anthropic_outgoing(body, key).prefix
 
 
 def _marked_turn(question: str) -> list[JsonValue]:
@@ -161,8 +167,14 @@ def _converse(system: list[JsonValue], question: str, tools: list[JsonValue] | N
     }
 
 
-def _converse_prefix(body: Mapping[str, JsonValue]) -> PrefixEvidence:
+def _converse_evidence(body: Mapping[str, JsonValue]) -> PrefixEvidence:
     return outgoing_cacheable_prefix(WireShape.BEDROCK_CONVERSE, body, _KEY)
+
+
+def _converse_prefix(body: Mapping[str, JsonValue]) -> CacheablePrefix:
+    evidence = _converse_evidence(body)
+    assert isinstance(evidence, OutgoingPrefix), evidence
+    return evidence.prefix
 
 
 def test_converse_cache_point_marks_the_block_before_it() -> None:
@@ -170,7 +182,6 @@ def test_converse_cache_point_marks_the_block_before_it() -> None:
     first = _converse_prefix(_converse(system, "one"))
     second = _converse_prefix(_converse(system, "two"))
     changed = _converse_prefix(_converse([{"text": "other rules"}, {"cachePoint": {"type": "default"}}], "one"))
-    assert isinstance(first, CacheablePrefix) and isinstance(changed, CacheablePrefix)
     assert first == second
     assert first.ttl_seconds == 300
     assert first.fingerprint != changed.fingerprint
@@ -179,8 +190,7 @@ def test_converse_cache_point_marks_the_block_before_it() -> None:
 def test_converse_cache_point_ttl_is_read_from_the_last_cache_point() -> None:
     system: list[JsonValue] = [{"text": "rules"}, {"cachePoint": {"type": "default", "ttl": "1h"}}]
     tools: list[JsonValue] = [{"toolSpec": {"name": "lookup"}}, {"cachePoint": {"type": "default"}}]
-    evidence = _converse_prefix(_converse(system, "q", tools))
-    assert isinstance(evidence, CacheablePrefix) and evidence.ttl_seconds == 3600
+    assert _converse_prefix(_converse(system, "q", tools)).ttl_seconds == 3600
 
 
 @pytest.mark.parametrize(
@@ -209,4 +219,43 @@ def test_converse_cache_point_ttl_is_read_from_the_last_cache_point() -> None:
 def test_converse_prefix_that_cannot_be_compared_is_not_assessed(
     system: list[JsonValue], expected: PrefixEvidence
 ) -> None:
-    assert _converse_prefix(_converse(system, "q")) == expected
+    assert _converse_evidence(_converse(system, "q")) == expected
+
+
+def test_output_settings_do_not_split_an_identical_prefix() -> None:
+    short = _anthropic(_marked_turn("q"), system="be terse", envelope={"max_tokens": 16, "temperature": 0.2})
+    long = _anthropic(_marked_turn("q"), system="be terse", envelope={"max_tokens": 4096, "stream": True})
+    assert _anthropic_prefix(short) == _anthropic_prefix(long)
+
+
+def test_breakpoints_are_counted_so_aggregate_usage_is_not_read_as_proof_for_the_last_one() -> None:
+    system: list[JsonValue] = [_text("rules", dict(_EPHEMERAL))]
+    tools: list[JsonValue] = [{"name": "lookup", "input_schema": {}, "cache_control": dict(_EPHEMERAL)}]
+    assert _anthropic_prefix(_anthropic(_marked_turn("q"), system=system, tools=tools)).breakpoints == 3
+    assert _anthropic_prefix(_anthropic(_marked_turn("q"))).breakpoints == 1
+    assert (
+        _anthropic_prefix(_anthropic(_marked_turn("q"), envelope={"cache_control": dict(_EPHEMERAL)})).breakpoints == 2
+    )
+
+
+def test_count_request_holds_only_the_prefix_up_to_the_last_breakpoint() -> None:
+    tools: list[JsonValue] = [{"name": "lookup", "input_schema": {}}]
+    marked: dict[str, JsonValue] = _text("doc", dict(_EPHEMERAL))
+    messages: list[JsonValue] = [
+        {"role": "user", "content": [_text("intro"), marked, _text("after the breakpoint")]},
+        {"role": "assistant", "content": "later turn"},
+    ]
+    outgoing = _anthropic_outgoing(_anthropic(messages, system="rules", tools=tools))
+    assert outgoing.count_request == PrefixCountRequest(
+        prefix_fingerprint=outgoing.prefix.fingerprint,
+        wire=WireShape.ANTHROPIC_MESSAGES,
+        body={"tools": tools, "system": "rules", "messages": [{"role": "user", "content": [_text("intro"), marked]}]},
+    )
+
+
+def test_converse_count_request_stops_at_the_cache_point() -> None:
+    system: list[JsonValue] = [{"text": "rules"}, {"cachePoint": {"type": "default"}}, {"text": "late rules"}]
+    tools: list[JsonValue] = [{"toolSpec": {"name": "lookup"}}]
+    evidence = _converse_evidence(_converse(system, "q", tools))
+    assert isinstance(evidence, OutgoingPrefix)
+    assert evidence.count_request.body == {"toolConfig": {"tools": tools}, "system": [{"text": "rules"}]}

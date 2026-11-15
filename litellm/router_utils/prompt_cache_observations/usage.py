@@ -1,7 +1,10 @@
 from collections.abc import Mapping
-from typing import Final, TypeAlias
+from dataclasses import dataclass
+from typing import Final
 
 from pydantic import JsonValue, TypeAdapter, ValidationError
+
+from litellm.litellm_core_utils.upstream_stream_usage import AnthropicStreamUsage
 
 from .types import CacheCounters, UpstreamCacheUsage, UsageUnknown, UsageUnknownReason, WireShape
 
@@ -12,9 +15,7 @@ def _counter(usage: Mapping[str, JsonValue], key: str) -> int | UsageUnknownReas
     value: Final = usage.get(key)
     if value is None:
         return UsageUnknownReason.MISSING
-    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-        return UsageUnknownReason.MALFORMED
-    return value
+    return value if isinstance(value, int) and _is_count(value) else UsageUnknownReason.MALFORMED
 
 
 def _counters(usage: Mapping[str, JsonValue], read_key: str, write_key: str) -> UpstreamCacheUsage:
@@ -29,22 +30,37 @@ def _counters(usage: Mapping[str, JsonValue], read_key: str, write_key: str) -> 
             return UsageUnknown(UsageUnknownReason.PARTIAL)
 
 
-_Breakdown: TypeAlias = int | None | UsageUnknownReason
+@dataclass(frozen=True, slots=True)
+class _Breakdown:
+    total: int
+    complete: bool
 
 
-def _breakdown_total(item: JsonValue, keys: tuple[str, ...]) -> _Breakdown:
+def _is_count(value: JsonValue) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def _breakdown(item: JsonValue, keys: tuple[str, ...]) -> _Breakdown | UsageUnknownReason:
     if not isinstance(item, dict):
         return UsageUnknownReason.MALFORMED
-    values: Final = tuple(item.get(key, 0) for key in keys)
-    counted: Final = tuple(value for value in values if isinstance(value, int) and not isinstance(value, bool))
-    return sum(counted) if len(counted) == len(values) else UsageUnknownReason.MALFORMED
+    present: Final = tuple(item[key] for key in keys if item.get(key) is not None)
+    counts: Final = tuple(value for value in present if isinstance(value, int) and _is_count(value))
+    if len(counts) != len(present):
+        return UsageUnknownReason.MALFORMED
+    return _Breakdown(total=sum(counts), complete=len(counts) == len(keys))
 
 
-def _checked_against(usage: UpstreamCacheUsage, breakdown: _Breakdown) -> UpstreamCacheUsage:
+def _checked_against(
+    usage: UpstreamCacheUsage, breakdown: _Breakdown | UsageUnknownReason | None
+) -> UpstreamCacheUsage:
+    """A breakdown only ever confirms the top-level write counter. A partial one cannot stand in for the keys
+    it leaves out, so it is only held to not exceeding the total."""
     match usage, breakdown:
         case CacheCounters(), UsageUnknownReason():
             return UsageUnknown(UsageUnknownReason.CONTRADICTORY)
-        case CacheCounters(write_tokens=write), int() as total if total != write:
+        case CacheCounters(write_tokens=write), _Breakdown(total=total, complete=True) if total != write:
+            return UsageUnknown(UsageUnknownReason.CONTRADICTORY)
+        case CacheCounters(write_tokens=write), _Breakdown(total=total, complete=False) if total > write:
             return UsageUnknown(UsageUnknownReason.CONTRADICTORY)
         case _:
             return usage
@@ -64,18 +80,20 @@ def _anthropic_usage(body: Mapping[str, JsonValue]) -> UpstreamCacheUsage:
         _counters(usage, "cache_read_input_tokens", "cache_creation_input_tokens"),
         None
         if breakdown is None
-        else _breakdown_total(breakdown, ("ephemeral_5m_input_tokens", "ephemeral_1h_input_tokens")),
+        else _breakdown(breakdown, ("ephemeral_5m_input_tokens", "ephemeral_1h_input_tokens")),
     )
 
 
-def _converse_details_total(details: JsonValue) -> _Breakdown:
+def _converse_details_total(details: JsonValue) -> _Breakdown | UsageUnknownReason | None:
     if details is None:
         return None
     if not isinstance(details, list):
         return UsageUnknownReason.MALFORMED
-    totals: Final = tuple(_breakdown_total(detail, ("inputTokens",)) for detail in details)
-    counted: Final = tuple(total for total in totals if isinstance(total, int))
-    return sum(counted) if len(counted) == len(totals) else UsageUnknownReason.MALFORMED
+    totals: Final = tuple(_breakdown(detail, ("inputTokens",)) for detail in details)
+    complete: Final = tuple(total.total for total in totals if isinstance(total, _Breakdown) and total.complete)
+    return (
+        _Breakdown(total=sum(complete), complete=True) if len(complete) == len(totals) else UsageUnknownReason.MALFORMED
+    )
 
 
 def _converse_usage(body: Mapping[str, JsonValue]) -> UpstreamCacheUsage:
@@ -113,3 +131,23 @@ def upstream_cache_usage(wire: WireShape, raw_response: object) -> UpstreamCache
             return _anthropic_usage(body)
         case WireShape.BEDROCK_CONVERSE:
             return _converse_usage(body)
+
+
+_ANTHROPIC_CACHE_COUNTERS: Final = ("cache_read_input_tokens", "cache_creation_input_tokens")
+
+
+def _reported(usage: JsonValue) -> Mapping[str, JsonValue]:
+    return {key: value for key, value in usage.items() if value is not None} if isinstance(usage, dict) else {}
+
+
+def anthropic_stream_cache_usage(stream: AnthropicStreamUsage) -> UpstreamCacheUsage:
+    """`message_delta` usage is cumulative but may leave out a counter `message_start` reported, so a counter
+    is taken from the last event that reported it, and the two disagreeing is contradictory."""
+    opening: Final = _reported(stream.opening)
+    closing: Final = _reported(stream.closing)
+    disagree: Final = any(
+        key in opening and key in closing and opening[key] != closing[key] for key in _ANTHROPIC_CACHE_COUNTERS
+    )
+    if disagree:
+        return UsageUnknown(UsageUnknownReason.CONTRADICTORY)
+    return _anthropic_usage({"stop_reason": stream.stop_reason, "usage": {**opening, **closing}})
