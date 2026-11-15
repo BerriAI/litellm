@@ -2789,6 +2789,12 @@ def _complete_hosted_vllm(ctx: CompletionDispatchContext) -> _CompletionDispatch
     return response
 
 
+_NO_OPENAI_CREDENTIAL_FALLBACK_PROVIDERS: Final = {
+    "bigmodel": "BIGMODEL_API_KEY",
+    "cedarllm": "CEDARLLM_API_KEY",
+}
+
+
 def _complete_custom_openai(
     ctx: CompletionDispatchContext,
 ) -> _CompletionDispatchResult:
@@ -2816,13 +2822,20 @@ def _complete_custom_openai(
 
     # for deepinfra/perplexity/anyscale/groq/friendliai we check in get_llm_provider and pass in the api base from there
     api_base = _resolve_openai_api_base(api_base)
-    if custom_llm_provider == "bigmodel" and not api_key:
+    # Providers that must never inherit OpenAI's key/organization when their own key is unset.
+    if custom_llm_provider in _NO_OPENAI_CREDENTIAL_FALLBACK_PROVIDERS and not api_key:
         raise litellm.AuthenticationError(
-            message="Set BIGMODEL_API_KEY or pass api_key", llm_provider="bigmodel", model=model
+            message=f"Set {_NO_OPENAI_CREDENTIAL_FALLBACK_PROVIDERS[custom_llm_provider]} or pass api_key",
+            llm_provider=custom_llm_provider,
+            model=model,
         )
     organization = (
         organization
-        or (None if custom_llm_provider == "bigmodel" else litellm.organization or get_secret("OPENAI_ORGANIZATION"))
+        or (
+            None
+            if custom_llm_provider in _NO_OPENAI_CREDENTIAL_FALLBACK_PROVIDERS
+            else litellm.organization or get_secret("OPENAI_ORGANIZATION")
+        )
         or None  # default - https://github.com/openai/openai-python/blob/284c1799070c723c6a553337134148a7ab088dd8/openai/util.py#L105
     )
     openai.organization = organization

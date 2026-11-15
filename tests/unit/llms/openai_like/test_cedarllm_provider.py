@@ -128,3 +128,50 @@ def test_cedarllm_chat_completion_request():
     assert body["max_tokens"] == 32
     assert "max_completion_tokens" not in body
     assert response.choices[0].message.content == "Hello from CedarLLM"
+
+
+_CEDARLLM_OK: Final = {
+    "id": "chatcmpl-cedarllm",
+    "object": "chat.completion",
+    "created": 1_794_199_800,
+    "model": "qwen3.8-27b",
+    "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+}
+
+
+def test_cedarllm_missing_key_never_sends_openai_credentials(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("CEDARLLM_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "unrelated-openai-key")
+    monkeypatch.setattr(litellm, "api_key", None)
+    monkeypatch.setattr(litellm, "openai_key", None)
+
+    with respx.mock(assert_all_called=False) as upstream:
+        route: Final = upstream.post("https://api.cedarllm.com/v1/chat/completions").respond(200, json=_CEDARLLM_OK)
+        with pytest.raises(litellm.AuthenticationError, match="CEDARLLM_API_KEY"):
+            litellm.completion(
+                model="cedarllm/qwen3.8-27b",
+                messages=[{"role": "user", "content": "Say hello"}],
+                num_retries=0,
+            )
+
+    assert route.call_count == 0
+
+
+def test_cedarllm_explicit_key_is_used_without_openai_organization(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("CEDARLLM_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "unrelated-openai-key")
+    monkeypatch.setenv("OPENAI_ORGANIZATION", "org-openai-only")
+    monkeypatch.setattr(litellm, "organization", None)
+
+    with respx.mock() as upstream:
+        route: Final = upstream.post("https://api.cedarllm.com/v1/chat/completions").respond(200, json=_CEDARLLM_OK)
+        litellm.completion(
+            model="cedarllm/qwen3.8-27b",
+            messages=[{"role": "user", "content": "Say hello"}],
+            api_key="cedarllm-explicit-key",
+        )
+
+    request: Final = route.calls.last.request
+    assert request.headers["authorization"] == "Bearer cedarllm-explicit-key"
+    assert "openai-organization" not in request.headers
