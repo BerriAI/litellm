@@ -15,10 +15,12 @@ use tracing::{
 mod layer;
 mod processing;
 mod redaction;
+mod token_redaction;
 
 pub use layer::sink_layer;
 pub use processing::{DiagnosticInput, DiagnosticOutput, Policy, Processor};
 pub use redaction::{REDACTED, SecretRedactor};
+pub use token_redaction::TokenRedactor;
 pub use tracing::{Level, Metadata, debug, error, info, trace, warn};
 
 pub struct ByteChunk<'a>(&'a [u8]);

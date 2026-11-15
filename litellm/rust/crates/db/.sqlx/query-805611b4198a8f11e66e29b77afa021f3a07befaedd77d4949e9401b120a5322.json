@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT set_config('lock_timeout', '5000ms', true)",
+  "query": "SELECT set_config('lock_timeout', $1::text, true)",
   "describe": {
     "columns": [
       {
@@ -11,11 +11,13 @@
       }
     ],
     "parameters": {
-      "Left": []
+      "Left": [
+        "Text"
+      ]
     },
     "nullable": [
       null
     ]
   },
-  "hash": "5c74f47a2b84574133c520d235192bf33e16fea1dbb0c32cf89a376a874927f4"
+  "hash": "805611b4198a8f11e66e29b77afa021f3a07befaedd77d4949e9401b120a5322"
 }

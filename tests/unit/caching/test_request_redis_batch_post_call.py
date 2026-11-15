@@ -127,6 +127,7 @@ async def test_post_call_owners_declare_on_the_native_post_call_batch_until_the_
         await limiter.async_increment_tokens_with_ttl_preservation(_token_ops(_K1))
         await limiter._release_stashed_parallel_slot(_slot_stash("slot-1", _K1), None, in_logging_callback=True)
         await flush_post_call_redis_batches()
+        await fakes.settle()
 
     assert fakes.post_call == ["token_increment", "parallel_release"]
     assert calls == [
@@ -228,6 +229,7 @@ async def test_a_released_slot_is_free_locally_at_once_and_the_older_redis_count
         assert limiter.rate_limits.local((_K1.gauge,)) == ({"slot-2": 1.0, "slot-3": 1.0},)
         limiter.rate_limits.set_local(_K1.gauge, {"slot-2": 1.0, "slot-3": 1.0, "slot-4": 1.0}, None)
         await flush_post_call_redis_batches()
+        await fakes.settle()
 
     assert calls == [("script", ["{api_key:k1}:max_parallel_requests"], ["slot-1"])]
     assert limiter.rate_limits.local((_K1.gauge,)) == ({"slot-2": 1.0, "slot-3": 1.0, "slot-4": 1.0},)

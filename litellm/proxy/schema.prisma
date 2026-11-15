@@ -2308,7 +2308,7 @@ enum AccountingDeliveryState {
 }
 
 model LiteLLM_SpendLogDelivery {
-  delivery_id        String                  @id @default(dbgenerated("(gen_random_uuid())::text"))
+  delivery_id        String                  @id @default(uuid())
   request_id         String
   state              AccountingDeliveryState @default(pending)
   accounting_payload Json

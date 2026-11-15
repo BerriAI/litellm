@@ -101933,6 +101933,32 @@
         "supports_reasoning": true,
         "supports_vision": true
     },
+    "fal_ai/bytedance/seedream/v5/pro/us/edit": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per output image by total pixel area at the default image_size auto_2K with one input image; outputs up to and including 1536x1536 pixels are $0.0675 and outputs above that up to 2048x2048 are $0.135; the first input image is free and each additional input image adds $0.0045 per output, which is not modeled; fal calls this pricing tentative"},
+        "mode": "image_generation",
+        "output_cost_per_image": 0.135,
+        "output_cost_per_image_1K": 0.0675,
+        "output_cost_per_image_2K": 0.135,
+        "source": "https://fal.ai/models/bytedance/seedream/v5/pro/us/edit",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/bytedance/seedream/v5/pro/us/text-to-image": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per output image by total pixel area at the default image_size auto_2K; outputs up to and including 1536x1536 pixels are $0.0675 and outputs above that up to 2048x2048 are $0.135, so 1.5K has no catalog field"},
+        "mode": "image_generation",
+        "output_cost_per_image": 0.135,
+        "output_cost_per_image_1K": 0.0675,
+        "output_cost_per_image_2K": 0.135,
+        "source": "https://fal.ai/models/bytedance/seedream/v5/pro/us/text-to-image",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
     "aigrow/claude-fable-5.1": {
         "cache_creation_input_token_cost": 8e-06,
         "cache_read_input_token_cost": 2.5e-07,
