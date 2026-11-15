@@ -238,7 +238,7 @@ from litellm.proxy.utils import (
 )
 from litellm.redis.stores.spend_counters import team_counter
 from litellm.repositories.budget_repository import BudgetRepository
-from litellm.repositories.chunked_in import delete_many_in, find_many_in
+from litellm.repositories.chunked_in import delete_many_in, find_many_in, update_many_in
 from litellm.repositories.daily_activity_buckets import api_key_from_bucket
 from litellm.repositories.organization_repository import OrganizationRepository
 from litellm.repositories.prisma_protocols import TableActions
@@ -918,6 +918,43 @@ class TeamMemberBudgetHandler:
 
         TeamMemberBudgetHandler.clean_team_member_fields(updated_kv)
         return updated_kv
+
+    @staticmethod
+    async def member_budgets_on_team_reset_window(
+        team_id: str, team_member_budget_id: str, prisma_client: PrismaClient
+    ) -> tuple[str, ...]:
+        """Budgets of members who take their cap from the team default and reset on a copy of its window."""
+        team_default: Final = await _budget_db(prisma_client).find_unique(where={"budget_id": team_member_budget_id})
+        if team_default is None:
+            return ()
+        memberships: Final = await _team_membership_db(prisma_client).find_many(
+            where={"team_id": team_id, "budget_id": {"not": team_member_budget_id}},
+            include={"litellm_budget_table": True},
+        )
+        return tuple(
+            m.litellm_budget_table.budget_id
+            for m in memberships
+            if m.litellm_budget_table is not None
+            and m.litellm_budget_table.max_budget is None
+            and m.litellm_budget_table.budget_duration == team_default.budget_duration
+        )
+
+    @staticmethod
+    async def move_member_budgets_to_reset_window(
+        budget_ids: tuple[str, ...], budget_duration: str | None, prisma_client: PrismaClient
+    ) -> None:
+        if not budget_ids:
+            return
+        _ = await update_many_in(
+            _budget_db(prisma_client),
+            "budget_id",
+            budget_ids,
+            data={
+                "budget_duration": budget_duration,
+                "budget_reset_at": get_budget_reset_time(budget_duration) if budget_duration else None,
+            },
+            atomicity="per_chunk_ok",
+        )
 
     @staticmethod
     async def backfill_team_member_budget_entries(
@@ -2825,6 +2862,16 @@ async def update_team(
                     },
                 }
 
+        _current_member_budget_id: Final = (existing_team_row.metadata or {}).get("team_member_budget_id")
+        _budgets_on_team_reset_window: Final = (
+            await TeamMemberBudgetHandler.member_budgets_on_team_reset_window(
+                team_id=data.team_id, team_member_budget_id=_current_member_budget_id, prisma_client=prisma_client
+            )
+            if "team_member_budget_duration" in _team_member_fields_in_request
+            and isinstance(_current_member_budget_id, str)
+            else ()
+        )
+
         if _team_member_fields_in_request and TeamMemberBudgetHandler.should_create_budget(
             team_member_budget=data.team_member_budget,
             team_member_rpm_limit=data.team_member_rpm_limit,
@@ -2869,6 +2916,12 @@ async def update_team(
             )
         else:
             TeamMemberBudgetHandler.clean_team_member_fields(updated_kv)
+
+        await TeamMemberBudgetHandler.move_member_budgets_to_reset_window(
+            budget_ids=_budgets_on_team_reset_window,
+            budget_duration=data.team_member_budget_duration,
+            prisma_client=prisma_client,
+        )
 
         # Check object permission
         if data.object_permission is not None:
