@@ -9,8 +9,14 @@ import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import type { CustomerHierarchyUsage } from "./customerUsageApi";
 import { CustomerSpendCells, CustomerSpendHeaders, CustomerSpendIdentity } from "./CustomerSpendCells";
+import { compareCustomerBudgets, customerBudgetLimit, customerBudgetSortParser } from "./customerBudgetUsage";
+import { CustomerBudgetLimitCell, CustomerBudgetSortHeader } from "./CustomerBudgetColumn";
 
-const MEMBER_TABLE_PARSERS = { memberSearch: parseAsString.withDefault(""), memberPage: parseAsInteger.withDefault(1) };
+const MEMBER_TABLE_PARSERS = {
+  memberSearch: parseAsString.withDefault(""),
+  memberPage: parseAsInteger.withDefault(1),
+  budgetSort: customerBudgetSortParser,
+};
 const PAGE_SIZE = 20;
 export default function CustomerMemberSpend({
   data,
@@ -32,8 +38,12 @@ export default function CustomerMemberSpend({
       data.memberBudgets
         .filter((member) => member.label.toLocaleLowerCase().includes(search.toLocaleLowerCase()))
         .map((member) => ({ ...member, monthlyUsage: usage.get(member.id) }))
-        .sort((a, b) => (b.monthlyUsage?.spend ?? 0) - (a.monthlyUsage?.spend ?? 0) || a.label.localeCompare(b.label)),
-    [data.memberBudgets, search, usage],
+        .sort((a, b) =>
+          table.budgetSort
+            ? compareCustomerBudgets(a, b, table.budgetSort === "budget_desc")
+            : (b.monthlyUsage?.spend ?? 0) - (a.monthlyUsage?.spend ?? 0) || a.label.localeCompare(b.label),
+        ),
+    [data.memberBudgets, search, usage, table.budgetSort],
   );
 
   const lastPage = Math.max(1, Math.ceil(members.length / PAGE_SIZE));
@@ -62,6 +72,15 @@ export default function CustomerMemberSpend({
           <TableRow>
             <TableHead className="pl-0">{t("customerPortal.analytics.member")}</TableHead>
             <CustomerSpendHeaders />
+            <CustomerBudgetSortHeader
+              sort={table.budgetSort}
+              onSort={() =>
+                void setTable(
+                  { budgetSort: table.budgetSort === "budget_asc" ? "budget_desc" : "budget_asc", memberPage: null },
+                  { history: "push" },
+                )
+              }
+            />
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -77,11 +96,12 @@ export default function CustomerMemberSpend({
                 tokens={member.monthlyUsage?.tokens ?? 0}
                 organizationSpend={data.monthlyOrganizationSpend}
               />
+              <CustomerBudgetLimitCell limit={customerBudgetLimit(member)} />
             </TableRow>
           ))}
           {members.length === 0 && (
             <TableRow>
-              <TableCell colSpan={6} className="py-10 text-center text-muted-foreground">
+              <TableCell colSpan={7} className="py-10 text-center text-muted-foreground">
                 {t(search ? "customerPortal.analytics.noMatches" : "customerPortal.analytics.noMembers")}
               </TableCell>
             </TableRow>
