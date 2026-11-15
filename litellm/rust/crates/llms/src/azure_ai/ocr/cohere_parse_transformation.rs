@@ -15,6 +15,15 @@ use crate::{
 use litellm_llms_types::formats::ocr::{LiteLLMOcrResponse, OcrDocument, OcrResponseFormat};
 
 pub const AZURE_COHERE_PARSE_PATH: [&str; 4] = ["providers", "cohere", "v2", "parse"];
+pub const AZURE_COHERE_DEDICATED_PARSE_PATH: [&str; 2] = ["v2", "parse"];
+
+fn is_dedicated_host(host: &str) -> bool {
+    let host = host.trim_end_matches('.');
+    host.ends_with(".models.ai.azure.com")
+        || host
+            .strip_suffix(".inference.ai.azure.com")
+            .is_some_and(|endpoint| endpoint.contains('.'))
+}
 
 #[derive(Default)]
 pub struct AzureAICohereParseConfig;
@@ -131,11 +140,8 @@ impl AzureAICohereParseConfig {
             return Ok(url.into());
         }
         url.set_path(path.strip_suffix("/models").unwrap_or(&path));
-        let parse_path = if url
-            .host_str()
-            .is_some_and(|host| host.ends_with(".models.ai.azure.com"))
-        {
-            &["v2", "parse"][..]
+        let parse_path = if url.host_str().is_some_and(is_dedicated_host) {
+            &AZURE_COHERE_DEDICATED_PARSE_PATH[..]
         } else {
             &AZURE_COHERE_PARSE_PATH[..]
         };
@@ -175,7 +181,21 @@ mod tests {
     }
 
     #[rstest]
+    #[case::trailing_dot("https://parse.eastus.models.ai.azure.com.")]
+    #[case::inference("https://parse.eastus.inference.ai.azure.com")]
+    fn dedicated_host_forms_use_the_parse_path(#[case] base: &str) {
+        assert_eq!(
+            AzureAICohereParseConfig.get_complete_url(base).unwrap(),
+            format!("{base}/v2/parse")
+        );
+    }
+
+    #[rstest]
     #[case::resource("https://example.com", "/providers/cohere/v2/parse")]
+    #[case::inference_resource(
+        "https://resource.inference.ai.azure.com",
+        "/providers/cohere/v2/parse"
+    )]
     #[case::similar_host(
         "https://models.ai.azure.com.example.com",
         "/providers/cohere/v2/parse"
