@@ -913,6 +913,32 @@ def _customer_member(member_id, spend, template_cap=10.0, override_cap=None, ove
     )
 
 
+@pytest.mark.parametrize("max_budget", [None, 0.0, 10.0])
+def test_uncapped_tier_preserves_customer_spend_but_resets_endusers_and_tags(
+    reset_budget_job, mock_prisma_client, monkeypatch, max_budget
+):
+    _quiet_customer_evictions(monkeypatch)
+    mock_prisma_client.data["budget"] = [
+        _budget_row(budget_id="tier", budget_duration="7d", max_budget=max_budget)
+    ]
+    mock_prisma_client.db.litellm_customermembertable.set_find_many_results([_customer_member("member", 1.0)])
+    mock_prisma_client.db.litellm_customerteamtable.set_find_many_results(
+        [types.SimpleNamespace(**{**vars(_customer_member("member", 1.0)), "customer_team_id": "team"})]
+    )
+    mock_prisma_client.db.litellm_endusertable.set_find_many_results(
+        [types.SimpleNamespace(user_id="enduser", budget_id="tier", spend=1.0)]
+    )
+
+    asyncio.run(reset_budget_job.reset_budget_for_litellm_budget_table())
+
+    assert bool(_batch_writes(mock_prisma_client, "customer_org")) is (max_budget is not None)
+    assert bool(_page_writes(mock_prisma_client, "customer_team")) is (max_budget is not None)
+    assert bool(_page_writes(mock_prisma_client, "customer_member")) is (max_budget is not None)
+    assert _replay_spend_writes(_enduser_writes(mock_prisma_client), 1.0) == 0.0
+    assert _replay_spend_writes(_batch_writes(mock_prisma_client, "tag"), 1.0) == 0.0
+    assert _batch_writes(mock_prisma_client, "budget")[0]["data"]["budget_reset_at"] is not None
+
+
 def test_budget_table_reset_zeroes_customer_hierarchy_rows_on_the_budget_window(
     reset_budget_job, mock_prisma_client, monkeypatch
 ):

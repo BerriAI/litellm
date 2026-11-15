@@ -3,7 +3,7 @@ import json
 import math
 import time
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 from itertools import chain
@@ -505,6 +505,10 @@ class _BudgetCascade:
     windows: Mapping[str, str] = field(default_factory=lambda: MappingProxyType({}))
     customer_ids: Mapping[CustomerSpendEntity, tuple[str, ...]] = field(default_factory=lambda: MappingProxyType({}))
     customer_org_alias_keys: tuple[str, ...] = ()
+
+    @property
+    def customer_budget_ids(self) -> tuple[str, ...]:
+        return tuple(b.budget_id for b in self.budgets if b.max_budget is not None and b.budget_id in self.budget_ids)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1198,10 +1202,10 @@ class ResetBudgetJob:
         Paged like ``_reset_enduser_spend``: an aliased request can register a member, so the rows on one
         template are unbounded. Each row carries its own rollover cap, read with its budget rows, because an
         override may set the limit while the template owns the reset clock, or the other way round."""
-        if not cascade.budget_ids:
+        if not cascade.customer_budget_ids:
             return
         now: Final = datetime.now(timezone.utc)
-        where: Final = _customer_due_where(cascade.budget_ids, now)
+        where: Final = _customer_due_where(cascade.customer_budget_ids, now)
         cursor: str | None = ""  # rebind-ok: keyset cursor advances one committed page at a time
         while cursor is not None:
             rows: tuple[_CustomerRowT, ...] = tuple(
@@ -1280,7 +1284,11 @@ class ResetBudgetJob:
             _queue_budget_linked_resets(uow.projects, cascade, extra=_SPENT_ROWS_WHERE)
             _queue_budget_linked_resets(uow.tags, cascade, extra=_SPENT_ROWS_WHERE)
             _queue_budget_linked_resets(uow.model_access_groups, cascade, extra=_SPENT_ROWS_WHERE)
-            _queue_budget_linked_resets(uow.customer_organizations, cascade, extra=_SPENT_ROWS_WHERE)
+            _queue_budget_linked_resets(
+                uow.customer_organizations,
+                replace(cascade, budget_ids=cascade.customer_budget_ids),
+                extra=_SPENT_ROWS_WHERE,
+            )
             for budget_id, budget_reset_at in cascade.budget_resets:
                 uow.budgets.queue_window_advance(budget_id=budget_id, budget_reset_at=budget_reset_at)
 
