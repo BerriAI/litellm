@@ -239,6 +239,25 @@ async def test_same_day_feed_counts_as_the_daily_check() -> None:
     assert isinstance(await rates.arefresh(_serve(_feed())), EcbRefreshNotDue)
 
 
+async def test_same_day_correction_applies_at_the_next_daily_refresh() -> None:
+    clock: Final = _Clock(_at(DAY))
+    rates: Final = await _rates_holding(_feed(quotes=(("USD", "1.2"), ("GBP", "0.5"))), clock)
+    held: Final = rates.usd_per_unit("EUR")
+    corrected: Final = _feed(quotes=(("USD", "1.5"), ("GBP", "0.5")))
+
+    clock.now = _at(DAY, hour=20)
+    not_due: Final = await rates.arefresh(_serve(corrected))
+    still_held: Final = rates.usd_per_unit("EUR")
+    clock.now = _at(NEXT_DAY)
+    due: Final = await rates.arefresh(_serve(corrected))
+
+    assert isinstance(not_due, EcbRefreshNotDue)
+    assert still_held == UsdRate(currency="EUR", usd_per_unit=1.2, rate_date=DAY, source="ecb")
+    assert isinstance(due, EcbRefreshed)
+    assert rates.usd_per_unit("EUR") == UsdRate(currency="EUR", usd_per_unit=1.5, rate_date=DAY, source="ecb")
+    assert held == UsdRate(currency="EUR", usd_per_unit=1.2, rate_date=DAY, source="ecb")
+
+
 async def test_first_refresh_failure_leaves_only_usd_available() -> None:
     rates: Final = EcbReferenceRates(clock=_Clock(_at(DAY)))
 

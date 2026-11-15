@@ -213,11 +213,8 @@ class EcbReferenceRates:
         current: Final = self._state
         if current is not None and parsed.rate_date < current.snapshot.rate_date:
             return EcbFeedRejected(f"rate date {parsed.rate_date} is older than held {current.snapshot.rate_date}")
-        snapshot: Final = (
-            parsed if current is None or current.snapshot.rate_date != parsed.rate_date else current.snapshot
-        )
-        self._state = _CacheState(snapshot=snapshot, checked_at=checked_at)
-        return EcbRefreshed(snapshot)
+        self._state = _CacheState(snapshot=parsed, checked_at=checked_at)
+        return EcbRefreshed(parsed)
 
     def usd_per_unit(self, currency: str) -> UsdRateLookup:
         if currency == "USD":
