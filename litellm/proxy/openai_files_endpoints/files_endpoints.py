@@ -122,6 +122,20 @@ from litellm.types.utils import LlmProviders
 
 router: Final = APIRouter()
 
+_EXCLUDED_FILE_CONTENT_RESPONSE_HEADERS: Final[frozenset[str]] = frozenset(
+    {
+        "content-encoding",
+        "content-length",
+        "transfer-encoding",
+        "connection",
+        "keep-alive",
+        "proxy-authenticate",
+        "proxy-authorization",
+        "server",
+        "set-cookie",
+    }
+)
+
 
 def _names_a_litellm_executed_provider(llm_router: Router, candidate: str, team_id: str | None) -> bool:
     credentials: Final = llm_router.registry().credentials(candidate, form="with_provider", team_id=team_id)
@@ -1244,10 +1258,14 @@ async def get_file_content(
         if httpx_response is None:
             raise ValueError(f"Invalid response - response.response is None - got {response}")
 
+        headers: Final = {
+            k: v for k, v in httpx_response.headers.items() if k.lower() not in _EXCLUDED_FILE_CONTENT_RESPONSE_HEADERS
+        }
+
         return Response(
             content=httpx_response.content,
             status_code=httpx_response.status_code,
-            headers=httpx_response.headers,
+            headers=headers,
         )
 
     except Exception as e:
