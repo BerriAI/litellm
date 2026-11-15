@@ -7584,7 +7584,7 @@ class TestAnthropicProxyRouteCallerAuthHeaders:
 
         return Request(scope, receive)
 
-    async def _upstream_headers(self, request: Request) -> dict:
+    async def _upstream_headers(self, request: Request, caller: UserAPIKeyAuth | None = None) -> dict:
         from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
             anthropic_proxy_route,
         )
@@ -7619,7 +7619,7 @@ class TestAnthropicProxyRouteCallerAuthHeaders:
                 endpoint="v1/messages",
                 request=request,
                 fastapi_response=MagicMock(spec=Response),
-                user_api_key_dict=UserAPIKeyAuth(api_key="sk-caller-virtual-key"),
+                user_api_key_dict=caller or UserAPIKeyAuth(api_key="sk-caller-virtual-key"),
             )
 
         assert httpx_client.send.called
@@ -7742,6 +7742,40 @@ class TestAnthropicProxyRouteCallerAuthHeaders:
         assert sent["x-api-key"] == "sk-ant-caller-owned"
         assert sent["anthropic-version"] == "2023-06-01"
         assert "authorization" not in sent
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "metadata,team_metadata,sent_profile_id",
+        [
+            ({"anthropic_user_profile_id": "uprof_key"}, {"anthropic_user_profile_id": "uprof_team"}, "uprof_key"),
+            ({}, {"anthropic_user_profile_id": "uprof_team"}, "uprof_team"),
+            ({}, {}, "uprof_caller"),
+        ],
+        ids=["key_pin", "team_pin", "no_pin"],
+    )
+    async def test_server_credential_sends_the_pinned_user_profile_id_over_the_callers(
+        self, monkeypatch, metadata: Mapping[str, str], team_metadata: Mapping[str, str], sent_profile_id: str
+    ):
+        self._clear_anthropic_env(monkeypatch)
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-server-owned")
+
+        sent: Final = await self._upstream_headers(
+            self._request({"content-type": "application/json", "Anthropic-User-Profile-Id": "uprof_caller"}),
+            UserAPIKeyAuth(api_key="sk-caller-virtual-key", metadata=dict(metadata), team_metadata=dict(team_metadata)),
+        )
+
+        assert sent["anthropic-user-profile-id"] == sent_profile_id
+
+    @pytest.mark.asyncio
+    async def test_byok_caller_keeps_its_own_user_profile_id_over_a_key_pin(self, monkeypatch):
+        self._clear_anthropic_env(monkeypatch)
+
+        sent: Final = await self._upstream_headers(
+            self._request({"x-api-key": "sk-ant-caller-owned", "anthropic-user-profile-id": "uprof_caller"}),
+            UserAPIKeyAuth(api_key="sk-caller-virtual-key", metadata={"anthropic_user_profile_id": "uprof_key"}),
+        )
+
+        assert sent["anthropic-user-profile-id"] == "uprof_caller"
 
 
 class TestPassthroughRouterModelBudgetReservation:

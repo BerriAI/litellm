@@ -182,6 +182,7 @@ from litellm.proxy.vector_store_endpoints.utils import (
     normalize_litellm_params,
 )
 from litellm.secret_managers.main import get_secret_str, normalize_nonempty_secret_str, str_to_bool
+from litellm.types.llms.anthropic import ANTHROPIC_USER_PROFILE_ID_HEADER
 from litellm.types.passthrough_endpoints.eu_jev import EuJevDecisionRequest, EuJevDecisionResponse
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
@@ -3308,7 +3309,16 @@ def _upstream_headers_for_anthropic_route(
         if caller_beta and credential_beta
         else {}
     )
-    return MappingProxyType({**forwarded, **proxy_auth_header, **merged_beta})
+    return MappingProxyType(
+        {**forwarded, **proxy_auth_header, **merged_beta, **_pinned_profile_header(user_api_key_dict)}
+    )
+
+
+def _pinned_profile_header(user_api_key_dict: UserAPIKeyAuth) -> Mapping[str, str]:
+    from litellm.proxy.litellm_pre_call_utils import pinned_anthropic_user_profile_id
+
+    pinned: Final = pinned_anthropic_user_profile_id(user_api_key_dict)
+    return {ANTHROPIC_USER_PROFILE_ID_HEADER: pinned} if pinned else {}
 
 
 def _upstream_headers_for_bedrock_agent_runtime_route(

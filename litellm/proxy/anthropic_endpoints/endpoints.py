@@ -54,6 +54,7 @@ from litellm.proxy.common_utils.token_count_log import answered_with_litellm_cal
 from litellm.proxy.common_utils.token_count_settings import count_source_fields
 from litellm.proxy.hooks.proxy_track_cost_callback import failure_row_response_cost
 from litellm.proxy.litellm_pre_call_utils import (
+    anthropic_user_profile_id,
     forwarded_anthropic_oauth_token,
     should_auto_drop_params_for_agentic_cli,
 )
@@ -418,6 +419,7 @@ async def _count_tokens(
             messages_format="anthropic",
             litellm_call_id=litellm_call_id,
             client_oauth_token=forwarded_anthropic_oauth_token(request.headers),
+            user_profile_id=anthropic_user_profile_id(user_api_key_dict, request.headers),
             **_count_tokens_body_options(data, auto_drop_params),
         )
     except HTTPException as e:

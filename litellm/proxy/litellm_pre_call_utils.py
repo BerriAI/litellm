@@ -853,12 +853,13 @@ def _key_or_team_metadata_flag_is_true(
     return any(value is True for value in _key_then_team_metadata_values(user_api_key_dict, metadata_key))
 
 
-def _anthropic_user_profile_id(user_api_key_dict: UserAPIKeyAuth, headers: Mapping[str, str]) -> str | None:
+def pinned_anthropic_user_profile_id(user_api_key_dict: UserAPIKeyAuth) -> str | None:
     admin_mapped: Final = _key_then_team_metadata_values(user_api_key_dict, ANTHROPIC_USER_PROFILE_ID_METADATA_KEY)
-    return next(
-        (value for value in admin_mapped if isinstance(value, str) and value),
-        headers.get(ANTHROPIC_USER_PROFILE_ID_HEADER),
-    )
+    return next((value for value in admin_mapped if isinstance(value, str) and value), None)
+
+
+def anthropic_user_profile_id(user_api_key_dict: UserAPIKeyAuth, headers: Mapping[str, str]) -> str | None:
+    return pinned_anthropic_user_profile_id(user_api_key_dict) or headers.get(ANTHROPIC_USER_PROFILE_ID_HEADER)
 
 
 def _key_or_team_allows_client_mock_response(
@@ -3052,7 +3053,7 @@ async def add_litellm_data_to_request(
 
     ## Forward any LLM API Provider specific headers in extra_headers
     data[_metadata_variable_name]["used_client_oauth_token"] = add_provider_specific_headers_to_request(
-        data=data, headers=_headers, user_profile_id=_anthropic_user_profile_id(user_api_key_dict, _headers)
+        data=data, headers=_headers, user_profile_id=anthropic_user_profile_id(user_api_key_dict, _headers)
     )
     caller_fields: Final = _caller_credential_fields(_REQUEST_FIELDS.validate_python(data))
     data["proxy_server_request"]["caller_credential_fields"] = caller_fields  # rebind-ok: data is an out-param

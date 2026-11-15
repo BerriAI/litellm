@@ -1082,6 +1082,7 @@ def _count_on_claude(
     peer: Callable[[httpx.Request], httpx.Response],
     headers: Mapping[str, str],
     extra_body: Mapping[str, object] = MappingProxyType({}),
+    caller: UserAPIKeyAuth | None = None,
 ) -> httpx.Response:
     from fastapi import FastAPI
 
@@ -1118,7 +1119,7 @@ def _count_on_claude(
     )
     app: Final = FastAPI()
     app.include_router(router)
-    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth()
+    app.dependency_overrides[user_api_key_auth] = lambda: caller or UserAPIKeyAuth()
     return TestClient(app).post(
         "/v1/messages/count_tokens",
         json={"model": "count-log-claude", "messages": [{"role": "user", "content": "Hello"}], **extra_body},
@@ -1165,6 +1166,41 @@ def test_count_tokens_returns_the_context_management_the_provider_applied(monkey
         "context_management": applied,
         "litellm_count_source": "provider",
     }, response.text
+
+
+@pytest.mark.parametrize(
+    "key_metadata,client_headers,sent_profile_id",
+    [
+        ({}, {"anthropic-user-profile-id": "uprof_client"}, "uprof_client"),
+        ({"anthropic_user_profile_id": "uprof_pinned"}, {"anthropic-user-profile-id": "uprof_client"}, "uprof_pinned"),
+        ({"anthropic_user_profile_id": "uprof_pinned"}, {}, "uprof_pinned"),
+        ({}, {}, None),
+    ],
+    ids=["client_header", "key_pin_over_client", "key_pin_alone", "neither"],
+)
+def test_count_tokens_sends_the_user_profile_id_inference_would_send(
+    monkeypatch: pytest.MonkeyPatch,
+    key_metadata: Mapping[str, str],
+    client_headers: Mapping[str, str],
+    sent_profile_id: str | None,
+) -> None:
+    def peer(request: httpx.Request) -> httpx.Response:
+        received: Final = request.headers.get("anthropic-user-profile-id")
+        return (
+            httpx.Response(200, json={"input_tokens": 77}, request=request)
+            if received == sent_profile_id
+            else httpx.Response(
+                400,
+                json={"type": "error", "error": {"type": "invalid_request_error", "message": f"got {received}"}},
+                request=request,
+            )
+        )
+
+    response: Final = _count_on_claude(
+        monkeypatch, peer, client_headers, caller=UserAPIKeyAuth(metadata=dict(key_metadata))
+    )
+
+    assert response.json() == {"input_tokens": 77, "litellm_count_source": "provider"}, response.text
 
 
 def test_count_tokens_provider_rejection_logs_its_status_and_answers_the_same_error(
