@@ -22,6 +22,7 @@ from litellm.constants import (
     INVALID_VIRTUAL_KEY_ERROR_MARKER,
     MINIMUM_CUSTOM_KEY_LENGTH,
     MODEL_BATCH_ENQUEUED_TOKEN_LIMIT_METADATA_KEY,
+    MODEL_LIMIT_MAX_BORROW_MULTIPLE_METADATA_KEY,
     STANDARD_CUSTOMER_ID_HEADERS,
 )
 from litellm.litellm_core_utils.clientside_credential_handler import (
@@ -1925,7 +1926,19 @@ class BatchLimitRequest(Protocol):
 _ADMIN_ONLY_METADATA_KEYS: Final = (
     *ADMIN_ONLY_BATCH_LIMIT_METADATA_KEYS,
     TEAM_S3_BUCKET_ALLOWLIST_METADATA_KEY,
+    MODEL_LIMIT_MAX_BORROW_MULTIPLE_METADATA_KEY,
     "anthropic_user_profile_id",
+)
+_ADMIN_ONLY_METADATA_REASONS: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        TEAM_S3_BUCKET_ALLOWLIST_METADATA_KEY: (
+            "It lets the holder read and write those buckets with the proxy's AWS credentials."
+        ),
+        MODEL_LIMIT_MAX_BORROW_MULTIPLE_METADATA_KEY: (
+            "It caps how far the holder borrows idle model capacity, so the holder cannot raise or remove it."
+        ),
+        "anthropic_user_profile_id": "It binds upstream profile attribution selected by the proxy admin.",
+    }
 )
 
 
@@ -1959,10 +1972,9 @@ def enforce_batch_limits_are_admin_only(
     )
     if changed is None:
         return
-    reason: Final = {
-        TEAM_S3_BUCKET_ALLOWLIST_METADATA_KEY: "It lets the holder read and write those buckets with the proxy's AWS credentials.",
-        "anthropic_user_profile_id": "It binds upstream profile attribution selected by the proxy admin.",
-    }.get(changed, "It limits what the holder can do with batches, so the holder cannot raise it.")
+    reason: Final = _ADMIN_ONLY_METADATA_REASONS.get(
+        changed, "It limits what the holder can do with batches, so the holder cannot raise it."
+    )
     raise HTTPException(
         status_code=403,
         detail={"error": f"Only proxy admins can set {changed} on a {entity}. {reason}"},

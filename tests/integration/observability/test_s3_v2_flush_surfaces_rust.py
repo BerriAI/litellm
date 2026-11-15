@@ -21,6 +21,7 @@ from integration._support.process import owned_proxy
 from integration._support.wire import wire_server
 from integration.caching.response_cache_case import entry_keys, redis_store
 
+
 pytestmark: Final = pytest.mark.shares_worker_state
 
 PER_REQUEST_KEY: Final = re.compile(rf"^/{BUCKET}/{PREFIX}/\d{{4}}-\d{{2}}-\d{{2}}/.+\.json$")
@@ -29,7 +30,6 @@ BATCH_KEY: Final = re.compile(
 )
 
 
-@pytest.mark.covers("other.observability.s3_v2.mixed_surface_burst_bounds_puts_one_object_per_response_id")
 def test_s3_v2_mixed_surface_burst_bounds_puts_one_object_per_response_id(gateway: Gateway, tmp_path: Path) -> None:
     marker: Final = "s3mix" + uuid.uuid4().hex[:8]
     sink: Final = RecordingS3Sink()
@@ -54,7 +54,6 @@ def test_s3_v2_mixed_surface_burst_bounds_puts_one_object_per_response_id(gatewa
     assert matched_ids(payloads, answered)
 
 
-@pytest.mark.covers("other.observability.s3_v2.mixed_surface_batch_writes_ndjson_lines_per_response_id")
 def test_s3_v2_mixed_surface_batch_writes_ndjson_lines_per_response_id(gateway: Gateway, tmp_path: Path) -> None:
     marker: Final = "s3mixb" + uuid.uuid4().hex[:8]
     sink: Final = RecordingS3Sink()
@@ -80,7 +79,6 @@ def test_s3_v2_mixed_surface_batch_writes_ndjson_lines_per_response_id(gateway: 
     assert len(payloads) == 48
 
 
-@pytest.mark.covers("other.observability.s3_v2.sink_outage_mid_mixed_burst_recovers_every_response_id")
 def test_s3_v2_sink_outage_mid_mixed_burst_recovers_every_response_id(gateway: Gateway, tmp_path: Path) -> None:
     marker: Final = "s3mixo" + uuid.uuid4().hex[:8]
     sink: Final = RecordingS3Sink(fail_attempts=30, fail_status=503, delay_seconds=0.2)

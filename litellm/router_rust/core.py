@@ -283,6 +283,7 @@ if TYPE_CHECKING:
     from litellm.router_utils.cooldown_cache import CooldownCache
     from litellm.router_utils.health_state_cache import DeploymentHealthCache
     from litellm.rust_bridge._native import (
+        AttemptShape,
         RouterCall,
         RouterCoreHandle,
         _CallSteps,  # pyright: ignore[reportPrivateUsage]  # the stub's step shapes
@@ -4433,6 +4434,13 @@ def _log_attempt(plan: Plan, model_name: object, error: BaseException | None = N
         verbose_router_logger.info("%s(model=%s)\x1b[32m 200 OK\x1b[0m", served_name, model_name)
 
 
+def _params_base_model(core: RustCore, deployment_id: str) -> str | None:
+    """``_deployment_params_base_model``: the ``base_model`` under the deployment's ``litellm_params``."""
+    record: Final = as_str_mapping(core._handle.deployment(deployment_id)) or {}  # pyright: ignore[reportPrivateUsage]  # the driver serves its own core
+    base_model: Final = (as_str_mapping(record.get("litellm_params")) or {}).get("base_model")
+    return base_model if isinstance(base_model, str) else None
+
+
 class _Driver:
     """Answers the attempt and fallback steps of one call, and shapes its result.
 
@@ -4495,7 +4503,7 @@ class _Driver:
         self._route_phase: contextlib.ExitStack | None = None
         self._route_model: str = ""
         self._walk: Final = WalkMetadata(
-            request, plan.metadata_field, self._params_base_model, live=fresh and not plan.single_attempt
+            request, plan.metadata_field, partial(_params_base_model, core), live=fresh and not plan.single_attempt
         )
         self.outcomes: Final = FallbackOutcomes(request)
         # The fallback level the walk is at, from its fallback events.
@@ -4546,12 +4554,6 @@ class _Driver:
         stamp_error(self._plan, error, deployment, call.served)
         endpoints.counters.retract_success(self._plan, call)
         endpoints.attempt_failed(self._plan, error, deployment, call, call.group)
-
-    def _params_base_model(self, deployment_id: str) -> str | None:
-        """``_deployment_params_base_model``: the ``base_model`` under the deployment's ``litellm_params``."""
-        record: Final = as_str_mapping(self._core._handle.deployment(deployment_id)) or {}  # pyright: ignore[reportPrivateUsage]  # the driver serves its own core
-        base_model: Final = (as_str_mapping(record.get("litellm_params")) or {}).get("base_model")
-        return base_model if isinstance(base_model, str) else None
 
     def _logged_error(self, event: Mapping[str, object]) -> BaseException | None:
         """The error a ``retry_logged`` event records."""
@@ -4955,7 +4957,11 @@ class _Driver:
         deployment = _with_live_params(self._core, deployment)
         self._attempts += 1
         self._attempt_started = datetime.now()  # noqa: DTZ005  # naive to match the logging pipeline's api_call_start_time
-        level: Final = step.get("fallback_level")
+        from litellm.rust_bridge._native import AttemptShape
+
+        shape: Final = step.get("shape")
+        if not isinstance(shape, AttemptShape):
+            raise TypeError(f"the attempt step carries no AttemptShape: {shape!r}")
         # The request params the walk's dict targets merged in (`kwargs.update(target)`).
         params: Final = as_str_mapping(step.get("params"))
         call: Final = attempt_call(
@@ -4965,12 +4971,12 @@ class _Driver:
             deployment,
             group=requested,
             requested=requested,
-            fallback_level=level if isinstance(level, int) else 0,
+            fallback_model_group=shape.fallback_model_group,
         )
-        self._strip_undecryptable_reasoning(step, deployment, call.kwargs)
+        self._strip_undecryptable_reasoning(step, shape, deployment, call.kwargs)
         shaped: Final = shape_attempt_kwargs(call.kwargs, deployment)
         # The walk's metadata for the attempt's level (retries, fallback hops) and its hop kwargs.
-        call.kwargs = self._walk.stamp(step, shaped, deployment) if self._plan.stamps_walk else shaped
+        call.kwargs = self._walk.stamp(step, shaped, shape) if self._plan.stamps_walk else shaped
         field: Final = self._plan.metadata_field
         if isinstance(call.served, dict) and field in call.kwargs:
             call.served[field] = call.kwargs[field]
@@ -4981,13 +4987,16 @@ class _Driver:
         return deployment, call
 
     def _strip_undecryptable_reasoning(
-        self, step: Mapping[str, object], deployment: Mapping[str, object], kwargs: Mapping[str, object]
+        self,
+        step: Mapping[str, object],
+        shape: "AttemptShape",
+        deployment: Mapping[str, object],
+        kwargs: Mapping[str, object],
     ) -> None:
         """``_update_kwargs_with_deployment`` on a fallback hop (``_is_fallback_hop``): the encrypted
         reasoning the target cannot decrypt is dropped; reasoning with no origin marker came from
         the deployment that just failed."""
-        depth: Final = step.get("fallback_depth")
-        if not isinstance(depth, int) or depth <= 0:
+        if not shape.is_fallback:
             return
         EncryptedContentAffinityCheck.strip_reasoning_the_targets_cannot_decrypt(
             RoutingContext(self._core),  # pyright: ignore[reportArgumentType]  # the check reads registry()

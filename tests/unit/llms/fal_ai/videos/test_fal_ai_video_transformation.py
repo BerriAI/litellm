@@ -343,7 +343,7 @@ class TestFalAIVideoTransformation:
             custom_llm_provider="fal_ai",
             request_data={"duration": "auto"},
         )
-        assert auto_video.usage == {"video_resolution": "720p"}
+        assert auto_video.usage == {}
         assert auto_video.seconds is None
         assert auto_video.size is None
 
@@ -383,6 +383,39 @@ class TestFalAIVideoTransformation:
             assert default_video_cost_calculator(model, 5, "fal_ai", video_resolution="540p") == (
                 5 * row["output_cost_per_second"]
             ), model
+
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "google/gemini-omni-flash/v1.2/upscale",
+            "wan/v2.6/text-to-video",
+            "xai/grok-imagine-video/reference-to-video",
+            MODEL,
+        ],
+    )
+    def test_request_without_resolution_bills_the_rows_default_rate(
+        self, model: str, local_model_cost_map: None
+    ) -> None:
+        response: Final = Mock(spec=httpx.Response)
+        response.json.return_value = {"request_id": "abc"}
+
+        video: Final = self.config.transform_video_create_response(
+            model=model,
+            raw_response=response,
+            logging_obj=self.logging_obj,
+            custom_llm_provider="fal_ai",
+            request_data={"duration": "10"},
+        )
+
+        assert video.usage is not None
+        row: Final = litellm.model_cost[f"fal_ai/{model}"]
+        assert default_video_cost_calculator(
+            model=model,
+            duration_seconds=video.usage["duration_seconds"],
+            custom_llm_provider="fal_ai",
+            model_info=None,
+            video_resolution=video.usage.get("video_resolution"),
+        ) == pytest.approx(row["output_cost_per_second"] * 10.0)
 
     def test_transform_video_create_response_h3_max_leaves_default_resolution_to_cost_map(
         self, local_model_cost_map: None

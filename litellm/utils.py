@@ -106,6 +106,12 @@ from litellm.litellm_core_utils.fallback_generalizations import (
     match_capability_generalizations,
     match_fill_missing_generalizations,
 )
+from litellm.litellm_core_utils.fallback_utils import (
+    checked_fallback_attempt,
+    report_failed_sync_fallback_attempt,
+    uses_fallbacks,
+    without_global_fallbacks,
+)
 from litellm.litellm_core_utils.get_model_cost_map import (
     GetModelCostMap,
     fetch_registration_document,
@@ -2360,7 +2366,11 @@ def client(original_function):
 
             clamp_max_tokens(model, args, kwargs, call_type)
             # MODEL CALL
-            result = original_function(*args, **kwargs)
+            try:
+                result = original_function(*args, **kwargs)
+            except Exception as deployment_error:
+                report_failed_sync_fallback_attempt(kwargs, call_type, deployment_error)
+                raise
             end_time = datetime.datetime.now()
             if _returns_requested_stream(kwargs, call_type, result) or _is_converted_stream_result(result):
                 if "complete_response" in kwargs and kwargs["complete_response"] is True:
@@ -2414,17 +2424,18 @@ def client(original_function):
                 original_function=original_function,
                 rules_obj=rules_obj,
             )
+            checked_result: Final = checked_fallback_attempt(kwargs, call_type, result)
 
             # [OPTIONAL] ADD TO CACHE
             _llm_caching_handler.sync_set_cache(
-                result=result,
+                result=checked_result,
                 args=args,
                 kwargs=kwargs,
             )
 
             _update_response_metadata: Final[_ResponseMetadataUpdater] = litellm_utils.update_response_metadata
             _update_response_metadata(
-                result=result,
+                result=checked_result,
                 logging_obj=logging_obj,
                 model=model,
                 kwargs=kwargs,
@@ -2434,7 +2445,8 @@ def client(original_function):
 
             # LOG SUCCESS - handle streaming success logging in the _next_ object, remove `handle_success` once it's deprecated
             verbose_logger.info("Wrapper: Completed Call, calling success_handler")
-            if not is_internal_call.get():
+            logged_by_fallback_attempt: Final = call_type == CallTypes.completion.value and uses_fallbacks(kwargs)
+            if not is_internal_call.get() and not logged_by_fallback_attempt:
                 # Copy the current context to propagate it to the background thread
                 # This is essential for OpenTelemetry span context propagation
                 ctx: Final = contextvars.copy_context()
@@ -2442,12 +2454,12 @@ def client(original_function):
                 executor.submit(
                     ctx.run,
                     logging_obj.success_handler,
-                    result,
+                    checked_result,
                     start_time,
                     end_time,
                 )
             # RETURN RESULT
-            return result
+            return checked_result
         except Exception as e:
             if call_type == CallTypes.completion.value:
                 num_retries = kwargs.get("num_retries", None) or litellm.num_retries or None
@@ -2546,7 +2558,7 @@ def client(original_function):
             kwargs["litellm_call_id"] = str(uuid.uuid4())
 
         model: Final[str | None] = args[0] if len(args) > 0 else kwargs.get("model", None)
-        is_completion_with_fallbacks: Final = kwargs.get("fallbacks") is not None
+        is_completion_with_fallbacks: Final = bool(kwargs.get("fallbacks"))
         kwargs.pop("_is_litellm_internal_call", None)  # discard if injected
         _is_litellm_internal_call: Final = is_internal_call.get()
         _deployment_call_end_time: datetime.datetime | None = None
@@ -4307,13 +4319,24 @@ def native_structured_output_support(model_info: Mapping[str, object]) -> bool |
     return declared if isinstance(declared, bool) else None
 
 
-def _base_fields_replaced_by(value: Mapping[str, object]) -> frozenset[str]:
-    return (
+def _sets_video_price_per_second(value: Mapping[str, object]) -> bool:
+    return any(value.get(name) is not None for name in ("output_cost_per_second", "output_cost_per_video_per_second"))
+
+
+def base_fields_replaced_by(value: Mapping[str, object]) -> frozenset[str]:
+    """Base-row fields a registration supersedes without naming them."""
+    explicit_cache_read: Final[frozenset[str]] = (
         frozenset({"explicit_cache_read_input_token_cost"})
         if value.get("cache_read_input_token_cost") is not None
         and value.get("explicit_cache_read_input_token_cost") is None
         else frozenset()
     )
+    flat_video_price: Final[frozenset[str]] = (
+        frozenset({"output_cost_per_video"})
+        if value.get("output_cost_per_video") is None and _sets_video_price_per_second(value)
+        else frozenset()
+    )
+    return explicit_cache_read | flat_video_price
 
 
 def model_cost_registration_write(
@@ -4330,7 +4353,7 @@ def model_cost_registration_write(
     }
     entry: Final = {
         **update_dictionary(existing_model, registration),
-        **dict.fromkeys(_base_fields_replaced_by(registration)),
+        **dict.fromkeys(base_fields_replaced_by(registration)),
     }
     names: Final = current.names if isinstance(current, AliasedCostEntry) else ()
     previous_fields: Final[frozenset[str]] = (
@@ -8501,7 +8524,8 @@ def check_valid_key(model: str, api_key: str):
     """
     messages: Final = [{"role": "user", "content": "Hey, how's it going?"}]
     try:
-        litellm.completion(model=model, messages=messages, api_key=api_key, max_tokens=10)
+        with without_global_fallbacks():
+            litellm.completion(model=model, messages=messages, api_key=api_key, max_tokens=10)
         return True
     except AuthenticationError:
         return False

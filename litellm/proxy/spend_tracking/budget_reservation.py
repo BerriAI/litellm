@@ -23,6 +23,7 @@ from litellm.litellm_core_utils.duration_parser import (
     duration_in_seconds,
     get_annual_budget_window_start,
     is_annual_budget_duration,
+    normalize_budget_window_start,
 )
 from litellm.litellm_core_utils.duration_parser import (
     get_budget_window_start as calendar_budget_window_start,
@@ -1416,10 +1417,10 @@ def get_budget_window_start(window: object, reset_settings: BudgetResetSettings 
 
     reset_at = _coerce_datetime(window_dict.get("reset_at"))
     if reset_at is None:
-        return datetime.now(timezone.utc) - timedelta(seconds=duration_seconds)
+        return normalize_budget_window_start(datetime.now(timezone.utc) - timedelta(seconds=duration_seconds))
     if reset_at.tzinfo is None:
         reset_at = reset_at.replace(tzinfo=timezone.utc)
-    return reset_at - timedelta(seconds=duration_seconds)
+    return normalize_budget_window_start(reset_at - timedelta(seconds=duration_seconds))
 
 
 def _coerce_datetime(value: object) -> datetime | None:

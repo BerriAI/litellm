@@ -5,7 +5,9 @@ Every test builds its core through ``make_core`` on the ``host`` fixture, so it 
 """
 
 import datetime
+import gc
 import io
+import weakref
 from collections.abc import AsyncIterator, Callable, Coroutine, Mapping
 from typing import Final
 
@@ -448,3 +450,29 @@ async def test_streaming_acompletion_yields_the_host_stream_chunks_with_routing_
     assert stream._hidden_params["model_id"] == "d1"
     assert stream._hidden_params["additional_headers"]["x-litellm-model-group"] == "g"
     assert (host.calls[0].op, host.calls[0].kwargs["stream"]) == ("acompletion", True)
+
+
+class _RequestState:
+    pass
+
+
+async def _request_state_after_a_call(
+    core: RouterCore, host: ScriptedHost, endpoint: str
+) -> "weakref.ref[_RequestState]":
+    state: Final = _RequestState()
+    _ = await core.call(endpoint, {"model": "g", "messages": MESSAGES, "max_tokens": 5, "metadata": {"state": state}})
+    host.calls.clear()
+    return weakref.ref(state)
+
+
+@pytest.mark.parametrize("endpoint", ["acompletion", "aanthropic_messages", "completion"])
+async def test_a_finished_call_frees_its_request_without_a_gc_pass(
+    make_core: MakeCore, host: ScriptedHost, endpoint: str
+):
+    core: Final = _one_group(make_core)
+    gc.disable()
+    try:
+        state: Final = await _request_state_after_a_call(core, host, endpoint)
+        assert state() is None, "the finished call's request stays in a reference cycle until the next gc pass"
+    finally:
+        gc.enable()
