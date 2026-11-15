@@ -941,6 +941,7 @@ def test_stalled_alert_sink_does_not_hold_the_request_or_duplicate_the_alert(ale
             alerting.sink.stalling.clear()
             alerting.sink.release.set()
         try:
+            eventually(alerting.alerts.wire.open_connections, lambda still_open: still_open == 0, seconds=ALERT_SECONDS)
             later_id: Final = crossing_user(scenario)
             gateway.chat(model, key=scenario.key(user_id=later_id))
             for user_id in (later_id, stalled_id):
