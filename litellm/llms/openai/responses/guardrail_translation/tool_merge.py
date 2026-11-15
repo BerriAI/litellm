@@ -90,38 +90,78 @@ class _Match:
     rebuilt: bool
 
 
-def _view_matches(
-    kept: Sequence[int], candidates: Sequence[int], top_level: Sequence[Tool] | None
-) -> tuple[tuple[int, _Match], ...] | None:
-    if len(kept) == len(candidates):
-        return tuple((index, _Match(ordinal, rebuilt=False)) for index, ordinal in zip(kept, candidates))
-    if len(kept) > len(candidates) or top_level is None:
-        return None
-    rebuilt: Final = any(top_level[candidate] != top_level[candidates[0]] for candidate in candidates)
+@dataclass(frozen=True, slots=True)
+class _Resolution:
+    pairs: tuple[tuple[int, _Match], ...] = ()
+    passed: tuple[int, ...] = ()
+    remaining: tuple[int, ...] = ()
+
+
+def _paired(kept: Sequence[int], candidates: Sequence[int], *, rebuilt: bool) -> tuple[tuple[int, _Match], ...]:
     return tuple((index, _Match(ordinal, rebuilt)) for index, ordinal in zip(kept, candidates))
 
 
-def _alignment(
-    originals: Sequence[Tool], kept: Sequence[Tool], top_level: Sequence[Tool] | None, *, with_description: bool
-) -> tuple[_Match, ...] | None:
-    candidates: Final = _key_positions(tuple(_view(tool, with_description=with_description) for tool in originals))
-    kept_positions: Final = _key_positions(tuple(_view(tool, with_description=with_description) for tool in kept))
-    matches: Final = tuple(
-        _view_matches(indexes, candidates.get(view, ()), top_level) for view, indexes in kept_positions.items()
-    )
-    if any(match is None for match in matches):
+def _class_resolution(
+    kept: tuple[int, ...], candidates: tuple[int, ...], top_level: Sequence[Tool | None]
+) -> _Resolution | None:
+    if not kept or len(kept) >= len(candidates):
+        return _Resolution(
+            pairs=_paired(kept, candidates, rebuilt=False),
+            passed=kept[len(candidates) :],
+            remaining=candidates[len(kept) :],
+        )
+    if any(top_level[candidate] is None for candidate in candidates):
         return None
-    match_by_index: Final = dict(chain.from_iterable(match for match in matches if match))
-    return tuple(map(match_by_index.__getitem__, range(len(kept))))
+    rebuilt: Final = any(top_level[candidate] != top_level[candidates[0]] for candidate in candidates)
+    return _Resolution(pairs=_paired(kept, candidates, rebuilt=rebuilt), remaining=candidates[len(kept) :])
 
 
-def _kept_matches(
-    flattened: Sequence[Tool], guardrailed: Sequence[Tool], top_level: Sequence[Tool] | None
-) -> tuple[_Match, ...] | None:
-    exact: Final = _alignment(flattened, guardrailed, top_level, with_description=True)
-    if exact is not None:
-        return exact
-    return _alignment(flattened, guardrailed, top_level, with_description=False)
+def _classes(tools: Sequence[Tool], indexes: Sequence[int], *, with_description: bool) -> Mapping[str, tuple[int, ...]]:
+    views: Final = tuple(_view(tools[index], with_description=with_description) for index in indexes)
+    return MappingProxyType(
+        {view: tuple(map(indexes.__getitem__, positions)) for view, positions in _key_positions(views).items()}
+    )
+
+
+def _round(
+    originals: Sequence[Tool],
+    guardrailed: Sequence[Tool],
+    top_level: Sequence[Tool | None],
+    previous: _Resolution,
+    *,
+    with_description: bool,
+) -> _Resolution | None:
+    candidate_classes: Final = _classes(originals, previous.remaining, with_description=with_description)
+    kept_classes: Final = _classes(guardrailed, previous.passed, with_description=with_description)
+    resolved: Final = tuple(
+        _class_resolution(kept, candidate_classes.get(view, ()), top_level) for view, kept in kept_classes.items()
+    )
+    if any(resolution is None for resolution in resolved):
+        return None
+    results: Final = tuple(resolution for resolution in resolved if resolution is not None)
+    unclaimed: Final = (candidates for view, candidates in candidate_classes.items() if view not in kept_classes)
+    return _Resolution(
+        pairs=(*previous.pairs, *chain.from_iterable(result.pairs for result in results)),
+        passed=tuple(sorted(chain.from_iterable(result.passed for result in results))),
+        remaining=tuple(sorted(chain(chain.from_iterable(result.remaining for result in results), *unclaimed))),
+    )
+
+
+def _content_matches(
+    originals: Sequence[Tool], guardrailed: Sequence[Tool], top_level: Sequence[Tool | None]
+) -> tuple[_Match | None, ...] | None:
+    start: Final = _Resolution(passed=tuple(range(len(guardrailed))), remaining=tuple(range(len(originals))))
+    exact: Final = _round(originals, guardrailed, top_level, start, with_description=True)
+    if exact is None:
+        return None
+    loose: Final = _round(originals, guardrailed, top_level, exact, with_description=False)
+    if loose is None:
+        return None
+    leftover: Final = _class_resolution(loose.passed, loose.remaining, top_level)
+    if leftover is None:
+        return None
+    match_by_index: Final = MappingProxyType(dict(chain(loose.pairs, leftover.pairs)))
+    return tuple(map(match_by_index.get, range(len(guardrailed))))
 
 
 def _positioned_matches(
@@ -131,15 +171,24 @@ def _positioned_matches(
     guardrailed_positions: Sequence[int],
     top_level_functions: Mapping[int, Tool],
 ) -> tuple[tuple[int, _Match], ...] | None:
-    top_level: Final = tuple(
-        top_level_functions[position] for position in flattened_positions if position in top_level_functions
-    )
-    matches: Final = _kept_matches(
+    matches: Final = _content_matches(
         tuple(map(flattened.__getitem__, flattened_positions)),
         tuple(map(guardrailed.__getitem__, guardrailed_positions)),
-        top_level if len(top_level) == len(flattened_positions) else None,
+        tuple(map(top_level_functions.get, flattened_positions)),
     )
-    return None if matches is None else tuple(zip(guardrailed_positions, matches))
+    if matches is None:
+        return None
+    unmatched: Final = tuple(position for position, match in zip(guardrailed_positions, matches) if match is None)
+    added: Final = MappingProxyType(
+        {
+            position: _Match(len(flattened_positions) + offset, rebuilt=False)
+            for offset, position in enumerate(unmatched)
+        }
+    )
+    return tuple(
+        (position, added[position] if match is None else match)
+        for position, match in zip(guardrailed_positions, matches)
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -159,7 +208,7 @@ def _guardrailed_keys(
     realigned: Final = tuple(
         _positioned_matches(flattened, guardrailed, flattened_positions[key], kept, top_level_functions)
         for key, kept in positions.items()
-        if len(kept) < len(flattened_positions.get(key, ()))
+        if len(flattened_positions.get(key, ())) > 1
     )
     if any(group is None for group in realigned):
         return None
