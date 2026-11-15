@@ -12351,6 +12351,7 @@ def test_converse_sends_a_proxy_user_profile_id_only_to_claude(
         (None, None, {}),
         ("", None, {}),
         ("uprof_admin", "anthropic.claude-haiku-4-5-20251001-v1:0", {"user_profile_id": "uprof_admin"}),
+        ("uprof_admin", "claude-haiku-4-5-20251001", {"user_profile_id": "uprof_admin"}),
         ("uprof_admin", "amazon.nova-pro-v1:0", {}),
     ],
 )

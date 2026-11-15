@@ -2280,7 +2280,7 @@ class AmazonConverseConfig(BaseConfig):
             )
         user_profile_fields: Final[Mapping[str, str]] = (
             requested_profile_fields
-            if BedrockModelInfo.get_base_model(model).startswith("anthropic")
+            if BedrockModelInfo.get_base_model(model).startswith(("anthropic", "claude"))
             else types.MappingProxyType({})
         )
         data: Final[CommonRequestObject] = {
