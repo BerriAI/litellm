@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from hashlib import sha256
 from typing import Final
@@ -21,7 +22,12 @@ from tests.integration._support.client import (
 )
 from tests.integration._support.database import read_rows
 from tests.integration._support.upstream import delete_scenario, register_scenario
-from tests.integration.authorization._hidden_alias_budget import install_aliases, remove_aliases
+from tests.integration.authorization._hidden_alias_budget import (
+    install_aliases,
+    remove_aliases,
+    upstream_hits,
+    upstream_requests,
+)
 from tests.integration.cost_calculation.cost_tracking_case import JsonResponse, RoutedResponse, TextResponse
 
 
@@ -300,6 +306,116 @@ def test_a_complexity_router_cannot_send_a_key_to_a_disallowed_tier(
         _assert_denied(
             gateway, scenario.key(allowed_routes=[path], disallowed_models=[disallowed]), body, disallowed, path
         )
+
+
+def _complexity_router(scenario: Scenario, keyword: str, simple_tier: str) -> str:
+    other_tier: Final = scenario.model()
+    return scenario.model(
+        model="auto_router/complexity_router",
+        complexity_router_config={
+            "classifier_type": "heuristic",
+            "keyword_tier_rules": [{"keywords": [keyword], "tier": "SIMPLE"}],
+            "tiers": {"SIMPLE": simple_tier, "MEDIUM": other_tier, "COMPLEX": other_tier, "REASONING": other_tier},
+        },
+    )
+
+
+_QUEUE: Final = "/queue/chat/completions"
+
+
+@pytest.mark.parametrize("streaming", [{}, {"stream": True}], ids=["json", "stream"])
+def test_a_queued_request_is_served_for_keys_that_do_not_disallow_its_model(
+    gateway: Gateway, streaming: dict[str, JsonValue]
+) -> None:
+    with gateway.scenario() as scenario:
+        upstream_name: Final = f"queued-{uuid.uuid4().hex[:8]}"
+        model: Final = scenario.model(model=f"openai/{upstream_name}")
+        other: Final = scenario.model()
+        keys: Final = (
+            scenario.key(allowed_routes=[_QUEUE]),
+            scenario.key(allowed_routes=[_QUEUE], disallowed_models=[other]),
+        )
+        for key in keys:
+            served = _chat(gateway, key, {"model": model, "priority": 0, **streaming}, _QUEUE)
+            assert served.status_code == 200, f"{served.status_code} {served.text}"
+        assert _observed_models(gateway).count(upstream_name) == len(keys)
+
+
+def test_a_queued_request_naming_a_disallowed_model_is_refused_before_the_provider(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        disallowed: Final = scenario.model()
+        key: Final = scenario.key(allowed_routes=[_QUEUE], disallowed_models=[disallowed])
+        _assert_denied(gateway, key, {"model": disallowed, "priority": 0}, disallowed, _QUEUE)
+
+
+def test_a_queued_complexity_router_still_serves_a_key_whose_disallowed_models_miss_the_tier(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        keyword: Final = f"simple-{uuid.uuid4().hex}"
+        tier_upstream: Final = f"tier-{uuid.uuid4().hex[:8]}"
+        tier: Final = scenario.model(model=f"openai/{tier_upstream}")
+        router: Final = _complexity_router(scenario, keyword, tier)
+        key: Final = scenario.key(allowed_routes=[_QUEUE], disallowed_models=[scenario.model()])
+        served: Final = _chat(
+            gateway, key, {"model": router, "messages": [{"role": "user", "content": keyword}], "priority": 0}, _QUEUE
+        )
+        assert served.status_code == 200, f"{served.status_code} {served.text}"
+        assert tier_upstream in _observed_models(gateway)
+
+
+@pytest.mark.parametrize("path", ["/v1/chat/completions", _QUEUE])
+@pytest.mark.parametrize(
+    "extra",
+    [{"stream": True}, {"litellm_metadata": {}}, {"metadata": {"user_api_key_auth": None}}],
+    ids=["stream", "caller-litellm-metadata", "caller-forged-actor"],
+)
+def test_a_complexity_router_refuses_a_disallowed_tier_whatever_the_caller_adds_to_the_body(
+    gateway: Gateway, path: str, extra: dict[str, JsonValue]
+) -> None:
+    with gateway.scenario() as scenario:
+        keyword: Final = f"simple-{uuid.uuid4().hex}"
+        disallowed: Final = scenario.model()
+        router: Final = _complexity_router(scenario, keyword, disallowed)
+        body: Final[dict[str, JsonValue]] = {
+            "model": router,
+            "messages": [{"role": "user", "content": keyword}],
+            **({"priority": 0} if path == _QUEUE else {}),
+            **extra,
+        }
+        _assert_denied(
+            gateway, scenario.key(allowed_routes=[path], disallowed_models=[disallowed]), body, disallowed, path
+        )
+
+
+def test_a_concurrent_queued_burst_refuses_every_disallowed_tier_and_serves_every_other_request_once(
+    gateway: Gateway,
+) -> None:
+    with gateway.scenario() as scenario:
+        keyword: Final = f"simple-{uuid.uuid4().hex}"
+        disallowed: Final = scenario.model()
+        router: Final = _complexity_router(scenario, keyword, disallowed)
+        denied_key: Final = scenario.key(allowed_routes=[_QUEUE], disallowed_models=[disallowed])
+        open_key: Final = scenario.key(allowed_routes=[_QUEUE])
+        calls: Final = tuple(
+            (f"{keyword} {kind}-{uuid.uuid4().hex}", key)
+            for kind, key in (("refused", denied_key), ("served", open_key))
+            for _ in range(20)
+        )  # comprehension-ok: twenty calls for each of the two keys
+
+        def queued(call: tuple[str, str]) -> httpx.Response:
+            return gateway.request(
+                "POST",
+                _QUEUE,
+                {"model": router, "messages": [{"role": "user", "content": call[0]}], "priority": 0},
+                key=call[1],
+            )
+
+        with ThreadPoolExecutor(max_workers=len(calls)) as pool:
+            responses: Final = tuple(pool.map(queued, calls))
+        assert [response.status_code for response in responses] == [403] * 20 + [200] * 20, [
+            response.text for response in responses
+        ]
+        observed: Final = upstream_requests(gateway.upstream_url)
+        assert [upstream_hits(observed, content) for content, _ in calls] == [0] * 20 + [1] * 20
 
 
 def _deleted_disallowed_models(keys: tuple[str, ...]) -> list[dict[str, JsonValue]]:
