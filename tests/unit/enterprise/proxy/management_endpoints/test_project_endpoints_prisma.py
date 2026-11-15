@@ -1241,9 +1241,9 @@ async def test_new_project_flag_on_missing_rpm_tpm_returns_400(monkeypatch):
     assert "rpm/tpm quota" in str(exc_info.value)
 
 
-def _project_update_mocks(monkeypatch, stored_metadata: dict) -> mock.MagicMock:
+def _project_update_mocks(monkeypatch, stored_metadata: dict, team_id: str | None = None) -> mock.MagicMock:
     existing_row = mock.MagicMock(
-        team_id=None, budget_id=None, object_permission_id=None, metadata=stored_metadata
+        team_id=team_id, budget_id=None, object_permission_id=None, metadata=stored_metadata
     )
     mock_prisma = mock.MagicMock()
     mock_prisma.jsonify_object = lambda data: data
@@ -1251,7 +1251,7 @@ def _project_update_mocks(monkeypatch, stored_metadata: dict) -> mock.MagicMock:
     mock_prisma.db.litellm_projecttable.update = mock.AsyncMock(return_value=mock.MagicMock())
     mock_prisma.writer_db = mock.MagicMock()
     mock_prisma.writer_db.litellm_projecttable.find_unique = mock.AsyncMock(
-        return_value={"project_id": "project-update-test", "team_id": None}
+        return_value={"project_id": "project-update-test", "team_id": team_id}
     )
     mock_prisma.writer_db.litellm_verificationtoken.count = mock.AsyncMock(return_value=0)
 
@@ -2411,3 +2411,163 @@ async def test_project_writes_reject_an_unregistered_guardrail(monkeypatch, oper
     assert str(getattr(exc.value, "code", None) or getattr(exc.value, "status_code", "")) == "400"
     mock_prisma.db.litellm_projecttable.create.assert_not_awaited()
     mock_prisma.db.litellm_projecttable.update.assert_not_awaited()
+
+
+_TEAM_ADMIN: Final = UserAPIKeyAuth(
+    user_role=LitellmUserRoles.INTERNAL_USER, api_key="hashed-team-admin-key", user_id="team-admin"
+)
+_PROXY_ADMIN: Final = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, api_key=MASTER_KEY, user_id="1234")
+_PROJECT_BATCH_LIMIT_REFUSAL: Final = "Only proxy admins can set model_batch_enqueued_token_limit on a project"
+
+
+def _stored_project_metadata() -> dict[str, object]:
+    return {"owner": "platform", "model_batch_enqueued_token_limit": {"gpt-5.5": 1000}}
+
+
+def _team_admins_manage_projects(monkeypatch: pytest.MonkeyPatch, prisma: mock.MagicMock) -> None:
+    team: Final = LiteLLM_TeamTable(
+        team_id="test-team", members_with_roles=[Member(user_id=_TEAM_ADMIN.user_id, role="admin")]
+    )
+    prisma.db.litellm_teamtable.find_unique = mock.AsyncMock(return_value=team)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "general_settings", {"team_admin_editable_team_fields": ["projects"]})
+
+
+@pytest.mark.asyncio
+async def test_team_admin_cannot_put_a_model_batch_enqueued_token_limit_on_a_new_project(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prisma: Final = mock.MagicMock()
+    _team_admins_manage_projects(monkeypatch, prisma)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "prisma_client", prisma)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "premium_user", True)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", None)
+
+    with pytest.raises(ProxyException) as exc:
+        await new_project(
+            data=NewProjectRequest(
+                team_id="test-team", metadata={"model_batch_enqueued_token_limit": {"gpt-5.5": 1000}}
+            ),
+            http_request=Request(scope={"type": "http"}),
+            user_api_key_dict=_TEAM_ADMIN,
+        )
+
+    assert exc.value.code == "403"
+    assert _PROJECT_BATCH_LIMIT_REFUSAL in exc.value.message
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "requested_metadata",
+    [{"owner": "platform", "model_batch_enqueued_token_limit": {"gpt-5.5": 999_999}}, {"owner": "platform"}],
+    ids=["raises the limit", "drops the limit"],
+)
+async def test_team_admin_cannot_change_a_project_model_batch_enqueued_token_limit(
+    monkeypatch: pytest.MonkeyPatch, requested_metadata: dict[str, object]
+) -> None:
+    mock_prisma: Final = _project_update_mocks(monkeypatch, _stored_project_metadata(), team_id="test-team")
+    _team_admins_manage_projects(monkeypatch, mock_prisma)
+
+    with pytest.raises(ProxyException) as exc:
+        await update_project(
+            data=UpdateProjectRequest(project_id=f"project-{uuid.uuid4()}", metadata=requested_metadata),
+            http_request=Request(scope={"type": "http"}),
+            user_api_key_dict=_TEAM_ADMIN,
+        )
+
+    assert exc.value.code == "403"
+    assert _PROJECT_BATCH_LIMIT_REFUSAL in exc.value.message
+    mock_prisma.db.litellm_projecttable.update.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("caller", "requested_limit"),
+    [(_TEAM_ADMIN, {"gpt-5.5": 1000}), (_PROXY_ADMIN, {"gpt-5.5": 5000})],
+    ids=["team admin resends the stored limit", "proxy admin changes the limit"],
+)
+async def test_project_update_keeps_an_allowed_model_batch_enqueued_token_limit(
+    monkeypatch: pytest.MonkeyPatch, caller: UserAPIKeyAuth, requested_limit: dict[str, int]
+) -> None:
+    mock_prisma: Final = _project_update_mocks(monkeypatch, _stored_project_metadata(), team_id="test-team")
+    _team_admins_manage_projects(monkeypatch, mock_prisma)
+
+    await update_project(
+        data=UpdateProjectRequest(
+            project_id=f"project-{uuid.uuid4()}",
+            metadata={"owner": "renamed", "model_batch_enqueued_token_limit": requested_limit},
+        ),
+        http_request=Request(scope={"type": "http"}),
+        user_api_key_dict=caller,
+    )
+
+    written_metadata: Final = _written_project_data(mock_prisma)["metadata"]
+    assert written_metadata["owner"] == "renamed"
+    assert written_metadata["model_batch_enqueued_token_limit"] == requested_limit
+
+
+@pytest.mark.asyncio
+async def test_team_admin_can_write_batch_keys_a_project_does_not_enforce(monkeypatch: pytest.MonkeyPatch) -> None:
+    mock_prisma: Final = _project_update_mocks(monkeypatch, _stored_project_metadata(), team_id="test-team")
+    _team_admins_manage_projects(monkeypatch, mock_prisma)
+    requested_metadata: Final = {
+        **_stored_project_metadata(),
+        "batch_enqueued_token_limit": 50,
+        "max_batch_file_records": 10,
+        "allowed_s3_buckets": ["team-bucket"],
+    }
+
+    await update_project(
+        data=UpdateProjectRequest(project_id=f"project-{uuid.uuid4()}", metadata=requested_metadata),
+        http_request=Request(scope={"type": "http"}),
+        user_api_key_dict=_TEAM_ADMIN,
+    )
+
+    assert _written_project_data(mock_prisma)["metadata"] == requested_metadata
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "requested_limit",
+    [{"gpt-5.5": 1000, "gpt-5.4": 0}, {"gpt-5.5": "lots"}, [1000], {"gpt-5.5": True}, {"gpt-5.5": "2000"}],
+    ids=["one model at zero", "a non-numeric limit", "not a model map", "a boolean limit", "a numeric string limit"],
+)
+async def test_project_update_rejects_a_model_batch_enqueued_token_limit_it_cannot_enforce(
+    monkeypatch: pytest.MonkeyPatch, requested_limit: object
+) -> None:
+    mock_prisma: Final = _project_update_mocks(monkeypatch, _stored_project_metadata(), team_id="test-team")
+    _team_admins_manage_projects(monkeypatch, mock_prisma)
+
+    with pytest.raises(ProxyException) as exc:
+        await update_project(
+            data=UpdateProjectRequest(
+                project_id=f"project-{uuid.uuid4()}", metadata={"model_batch_enqueued_token_limit": requested_limit}
+            ),
+            http_request=Request(scope={"type": "http"}),
+            user_api_key_dict=_PROXY_ADMIN,
+        )
+
+    assert exc.value.code == "400"
+    assert "model_batch_enqueued_token_limit must map each model name to a positive integer" in exc.value.message
+    mock_prisma.db.litellm_projecttable.update.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "top_level_fields",
+    [{"model_tpm_limit": {"gpt-5.5": 2000}}, {"tags": ["batch"]}],
+    ids=["a per-model limit", "a premium metadata field"],
+)
+@pytest.mark.parametrize("caller", [_TEAM_ADMIN, _PROXY_ADMIN], ids=["team admin", "proxy admin"])
+async def test_project_update_with_only_top_level_fields_keeps_the_stored_metadata(
+    monkeypatch: pytest.MonkeyPatch, top_level_fields: dict[str, object], caller: UserAPIKeyAuth
+) -> None:
+    mock_prisma: Final = _project_update_mocks(monkeypatch, _stored_project_metadata(), team_id="test-team")
+    _team_admins_manage_projects(monkeypatch, mock_prisma)
+
+    await update_project(
+        data=UpdateProjectRequest(project_id=f"project-{uuid.uuid4()}", **top_level_fields),
+        http_request=Request(scope={"type": "http"}),
+        user_api_key_dict=caller,
+    )
+
+    assert _written_project_data(mock_prisma)["metadata"] == {**_stored_project_metadata(), **top_level_fields}

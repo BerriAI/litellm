@@ -520,6 +520,13 @@ def _is_decisions_model(model: str, custom_llm_provider: str) -> bool:
     return is_decisions_model_mode(model_mode)
 
 
+def usage_reported_cost(response: DecisionsIRResponse) -> float | None:
+    cost: Final = response.usage.extra.get("cost") if response.usage is not None else None
+    if not isinstance(cost, (int, float)):
+        return None
+    return float(cost)
+
+
 @dataclass(frozen=True, slots=True)
 class DecisionsInputLimits:
     max_request_tokens: int | None = None

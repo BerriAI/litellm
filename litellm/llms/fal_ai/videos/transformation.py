@@ -49,6 +49,7 @@ class _ModelProfile:
     integer_duration: bool
     reference_key: str
     reference_as_list: bool
+    default_duration: str | None = None
 
 
 _SEEDANCE_PROFILE: Final[_ModelProfile] = _ModelProfile(
@@ -58,6 +59,15 @@ _SEEDANCE_PROFILE: Final[_ModelProfile] = _ModelProfile(
     integer_duration=False,
     reference_key="image_url",
     reference_as_list=False,
+)
+_PIXVERSE_PROFILE: Final[_ModelProfile] = _ModelProfile(
+    resolutions=frozenset({"360p", "540p", "720p", "1080p"}),
+    resolution_tiers=((360, "360p"), (540, "540p"), (720, "720p"), (sys.maxsize, "1080p")),
+    default_resolution="720p",
+    integer_duration=False,
+    reference_key="image_url",
+    reference_as_list=False,
+    default_duration="5",  # https://fal.ai/models/pixverse/v6/text-to-video/api (2026-11-13)
 )
 _H3_PROFILE: Final[_ModelProfile] = _ModelProfile(
     resolutions=frozenset({"480P", "768P", "2K", "4K"}),
@@ -122,6 +132,8 @@ def _duration_value(value: object) -> str | None:
 
 
 def _profile_for_model(model: str) -> _ModelProfile:
+    if model.removeprefix("fal_ai/").removeprefix("fal-ai/").startswith("pixverse/"):
+        return _PIXVERSE_PROFILE
     if model.startswith("minimax/h3/"):
         return _H3_PROFILE
     if model.startswith("minimax/h3-max"):
@@ -356,8 +368,8 @@ class FalAIVideoConfig(BaseVideoConfig):
         )
         duration_params: Final[Mapping[str, object]] = (
             MappingProxyType({})
-            if "seconds" not in video_create_optional_params
-            else self._duration_params(video_create_optional_params["seconds"], profile)
+            if "seconds" not in video_create_optional_params and profile.default_duration is None
+            else self._duration_params(video_create_optional_params.get("seconds", profile.default_duration), profile)
         )
         size_params: Final[Mapping[str, str]] = (
             _size_params(video_create_optional_params["size"], profile)

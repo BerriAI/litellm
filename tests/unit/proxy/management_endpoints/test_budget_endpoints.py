@@ -36,6 +36,7 @@ def client_and_mocks(monkeypatch):
     mock_prisma.db = types.SimpleNamespace(
         litellm_budgettable=mock_table,
         litellm_customermembertable=types.SimpleNamespace(find_many=AsyncMock(return_value=[])),
+        litellm_customerteamtable=types.SimpleNamespace(find_many=AsyncMock(return_value=[])),
         litellm_customerorganizationtable=types.SimpleNamespace(find_many=AsyncMock(return_value=[])),
         litellm_dailyspend=mock_table,
         query_raw=AsyncMock(return_value=[{"referenced": False}]),
@@ -141,6 +142,26 @@ def test_budget_edit_evicts_members_and_organization_aliases(
     assert response.status_code == 200, response.text
     assert cache.get_cache(member_key, local_only=True) is None
     assert cache.get_cache(alias_key, local_only=True) is None
+
+
+def test_budget_edit_evicts_a_members_inherited_team_budget(
+    client_and_mocks: tuple[TestClient, MagicMock, MagicMock], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, database, _ = client_and_mocks
+    cache: Final = UserApiKeyCache(in_memory_cache=InMemoryCache())
+    member_key: Final = "customer_member_id:through-team"
+    other_key: Final = "customer_member_id:unrelated"
+    cache.set_cache(member_key, {"max_budget": 10}, local_only=True)
+    cache.set_cache(other_key, {"max_budget": 20}, local_only=True)
+    monkeypatch.setattr(ps, "user_api_key_cache", cache)
+    database.db.litellm_customerteamtable.find_many.return_value = [types.SimpleNamespace(customer_team_id="team")]
+    database.db.litellm_customermembertable.find_many.side_effect = [
+        [], [types.SimpleNamespace(customer_member_id="through-team")],
+    ]
+    response: Final = client.post("/budget/update", json={"budget_id": "team-budget", "max_budget": 3})
+    assert response.status_code == 200, response.text
+    assert cache.get_cache(member_key, local_only=True) is None
+    assert cache.get_cache(other_key, local_only=True) == {"max_budget": 20}
 
 
 @pytest.mark.asyncio

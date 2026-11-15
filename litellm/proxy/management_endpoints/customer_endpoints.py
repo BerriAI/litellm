@@ -12,7 +12,6 @@ All /customer management endpoints
 #### END-USER/CUSTOMER MANAGEMENT ####
 from collections.abc import Mapping, Sequence
 from collections.abc import Set as AbstractSet
-from datetime import datetime, timedelta
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Final, NamedTuple, Protocol, TypeVar, overload
 
@@ -28,9 +27,9 @@ if TYPE_CHECKING:
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy.common_utils.user_api_key_cache import (
     end_user_cache_key,
     end_user_restricted_registry_cache_key,
@@ -288,9 +287,7 @@ def new_budget_request(data: NewCustomerRequest) -> BudgetNewRequest | None:
         budget_request: Final = BudgetNewRequest.model_validate(budget_kv_pairs)
         validate_budget_duration(budget_request.budget_duration)
         if budget_request.budget_reset_at is None and budget_request.budget_duration is not None:
-            budget_request.budget_reset_at = datetime.utcnow() + timedelta(
-                seconds=duration_in_seconds(duration=budget_request.budget_duration)
-            )
+            budget_request.budget_reset_at = get_budget_reset_time(budget_duration=budget_request.budget_duration)
         return budget_request
     return None
 

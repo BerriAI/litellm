@@ -1,5 +1,6 @@
 # What is this?
 ## Helper utils for the management endpoints (keys/users/teams)
+import json
 from collections.abc import Awaitable, Callable, Mapping, MutableMapping, Sequence
 from collections.abc import Set as AbstractSet
 from datetime import datetime
@@ -18,6 +19,7 @@ from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.integrations.otel.model.config import is_otel_v2_enabled
 from litellm.litellm_core_utils.core_helpers import attribute_or_none, require_attributes
+from litellm.models.team import BudgetLimitEntry
 from litellm.proxy._types import (  # key request types; user request types; team request types; customer request types
     BudgetNewRequest,
     DeleteCustomerRequest,
@@ -226,6 +228,35 @@ async def _create_user_row(
     return await prisma_client.insert_data(data=user_data, table_name="user")
 
 
+BUDGET_WINDOWS_ADAPTER: Final = TypeAdapter(tuple[BudgetLimitEntry, ...])
+
+
+def budget_windows_json(requested: Sequence[BudgetLimitEntry] | None, stored: Sequence[BudgetLimitEntry] | None) -> str:
+    if not requested:
+        return json.dumps(None)
+    stored_reset_at: Final = MappingProxyType(
+        {window.budget_duration: window.reset_at for window in stored or () if window.reset_at is not None}
+    )
+    return json.dumps(
+        [
+            {
+                **window.model_dump(),
+                "reset_at": (
+                    stored_reset_at.get(window.budget_duration)
+                    or get_budget_reset_time(budget_duration=window.budget_duration)
+                ).isoformat(),
+            }
+            for window in requested
+        ]
+    )
+
+
+def initial_budget_windows_json(raw_windows: object) -> str:
+    return budget_windows_json(
+        None if raw_windows is None else BUDGET_WINDOWS_ADAPTER.validate_python(raw_windows), stored=None
+    )
+
+
 def get_new_internal_user_defaults(user_id: str, user_email: str | None = None) -> dict[str, object]:
     user_info: Final = litellm.default_internal_user_params or {}
 
@@ -242,7 +273,14 @@ def get_new_internal_user_defaults(user_id: str, user_email: str | None = None) 
     for k, v in returned_dict.items():
         if v is not None:
             non_null_dict[k] = v
-    return non_null_dict
+    return {
+        **non_null_dict,
+        **(
+            {"budget_limits": initial_budget_windows_json(user_info["budget_limits"])}
+            if "budget_limits" in user_info
+            else {}
+        ),
+    }
 
 
 async def handle_budget_for_entity(
