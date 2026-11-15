@@ -34,6 +34,7 @@ from litellm.litellm_core_utils.streaming_handler import (
     _ProviderChunkEarlyReturn,
     _ProviderChunkParsed,
 )
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.upstream_cache_evidence import (
     DEPLOYMENT_CACHE_SETTINGS_KEY,
     UPSTREAM_STREAM_USAGE_KEY,
@@ -10173,7 +10174,7 @@ async def test_a_terminal_frame_read_that_fails_ends_the_stream_normally_and_sta
         completion_stream=AnthropicModelResponseIterator(
             streaming_response=_lines_then(_anthropic_sse_lines(events), error), sync_stream=False
         ),
-        model="claude-sonnet-4-5",
+        model="claude-sonnet-5-5",
         custom_llm_provider="anthropic",
         logging_obj=logging_obj,
     )
@@ -10181,6 +10182,7 @@ async def test_a_terminal_frame_read_that_fails_ends_the_stream_normally_and_sta
     received: Final = await _collect(wrapper, sync_mode=False)
 
     assert [c.choices[0].finish_reason for c in received if c.choices and c.choices[0].finish_reason] == ["stop"]
-    recorded: Final[object] = logging_obj.model_call_details[UPSTREAM_STREAM_USAGE_KEY]
+    details: Final = as_str_mapping(logging_obj.model_call_details)
+    recorded: Final = details.get(UPSTREAM_STREAM_USAGE_KEY) if details is not None else None
     assert isinstance(recorded, AnthropicStreamUsage) and recorded.stop_reason == "end_turn"
     assert recorded.stopped is False

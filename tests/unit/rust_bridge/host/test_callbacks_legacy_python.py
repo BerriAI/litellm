@@ -554,10 +554,13 @@ def test_a_stream_logs_the_flag_python_logs(requested: object, keeps_requested: 
     assert logger.stream == expected
 
 
+def _start_python_attempt(attempt: legacy.LoggingSurface) -> None:
+    attempt.pre_call(input="hi", api_key=None, additional_args={"complete_input_dict": {}})
+
+
 def test_rust_pre_call_stamps_the_attempt_as_served_by_rust() -> None:
     logger = _supplied_logger()
     legacy.pre_call(logger, "hi", None, {"complete_input_dict": {"model": "claude-test"}, "api_base": "https://x"})
     assert logger.model_call_details[SERVED_RUNTIME_KEY] == "rust"
-    next_attempt: legacy.LoggingSurface = logger
-    next_attempt.pre_call(input="hi", api_key=None, additional_args={"complete_input_dict": {}})
+    _start_python_attempt(logger)
     assert logger.model_call_details[SERVED_RUNTIME_KEY] == "python"

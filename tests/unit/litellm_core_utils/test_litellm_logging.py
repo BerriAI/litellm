@@ -16510,13 +16510,16 @@ async def test_a_sync_failure_on_the_loop_alone_still_delivers_v2_attempt_ended_
     assert submitted == ["RequestScope._deliver_off_path"]
 
 
+def _start_attempt(attempt: LoggingSurface) -> None:
+    attempt.pre_call(input="hi", api_key=None, additional_args={})
+
+
 def test_each_pre_call_starts_an_attempt_with_no_stream_usage_from_the_previous_one(
     logging_obj: LitellmLogging,
 ) -> None:
     previous = AnthropicStreamUsage(opening={"cache_read_input_tokens": 5}, starts=1, stopped=True)
     logging_obj.record_upstream_stream_usage(previous)
-    attempt: LoggingSurface = logging_obj
-    attempt.pre_call(input="hi", api_key=None, additional_args={})
+    _start_attempt(logging_obj)
     assert UPSTREAM_STREAM_USAGE_KEY not in logging_obj.model_call_details
     assert logging_obj.model_call_details[SERVED_RUNTIME_KEY] == "python"
 
