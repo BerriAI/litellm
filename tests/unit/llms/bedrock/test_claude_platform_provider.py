@@ -683,6 +683,59 @@ async def test_anthropic_messages_claude_platform_sends_exact_body_through_stric
     _assert_gateway_accepted(requests[0], auth_kwargs)
 
 
+def _proxy_user_profile_header(user_profile_id: str) -> object:
+    from litellm.proxy.litellm_pre_call_utils import add_provider_specific_headers_to_request
+
+    data: Final[dict] = {}
+    add_provider_specific_headers_to_request(data=data, headers={}, user_profile_id=user_profile_id)
+    return data["provider_specific_header"]
+
+
+@pytest.mark.parametrize("auth_kwargs", [API_KEY_KWARGS, SIGV4_KWARGS], ids=["api_key", "sigv4"])
+def test_chat_completion_claude_platform_forwards_the_proxy_user_profile_id(auth_kwargs):
+    import litellm
+
+    requests: list[dict] = []
+
+    litellm.completion(
+        model="bedrock/claude_platform/claude-sonnet-4-6",
+        messages=[{"role": "user", "content": "hello"}],
+        max_tokens=10,
+        client=_sync_gateway_client(requests),
+        workspace_id="wrkspc_test",
+        provider_specific_header=_proxy_user_profile_header("uprof_platform"),
+        **auth_kwargs,
+    )
+
+    assert len(requests) == 1, requests
+    assert requests[0]["headers"]["anthropic-user-profile-id"] == "uprof_platform"
+    assert requests[0]["body"] == EXPECTED_CHAT_BODY
+    _assert_gateway_accepted(requests[0], auth_kwargs)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("auth_kwargs", [API_KEY_KWARGS, SIGV4_KWARGS], ids=["api_key", "sigv4"])
+async def test_anthropic_messages_claude_platform_forwards_the_proxy_user_profile_id(auth_kwargs):
+    import litellm
+
+    requests: list[dict] = []
+
+    await litellm.anthropic_messages(
+        model="bedrock/claude_platform/claude-sonnet-4-6",
+        messages=[{"role": "user", "content": "hello"}],
+        max_tokens=10,
+        client=_async_gateway_client(requests),
+        workspace_id="wrkspc_test",
+        provider_specific_header=_proxy_user_profile_header("uprof_platform"),
+        **auth_kwargs,
+    )
+
+    assert len(requests) == 1, requests
+    assert requests[0]["headers"]["anthropic-user-profile-id"] == "uprof_platform"
+    assert requests[0]["body"] == EXPECTED_NATIVE_BODY
+    _assert_gateway_accepted(requests[0], auth_kwargs)
+
+
 def test_chat_completion_claude_platform_drops_context_management_and_gateway_accepts():
     import litellm
 
