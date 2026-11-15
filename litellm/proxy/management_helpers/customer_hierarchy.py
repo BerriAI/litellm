@@ -486,6 +486,12 @@ _MEMBER_INCLUDE: Final = {"budget": True, "budget_override": True}
 _ID: Final = TypeAdapter(str)
 
 
+def _search_filter(search: str, fields: tuple[str, ...]) -> Mapping[str, object]:
+    if not search:
+        return {}
+    return {"OR": tuple({field: {"contains": escape_like(search), "mode": "insensitive"}} for field in fields)}
+
+
 def _member_ids(rows: Sequence[PrismaRecord]) -> tuple[str, ...]:
     return tuple(_ID.validate_python(row.model_dump()["customer_member_id"]) for row in rows)
 
@@ -1028,16 +1034,7 @@ class CustomerHierarchyStore:
         return await self.get_member(member_id)
 
     async def list_organizations(self, page: int, page_size: int, search: str = "") -> Page[Organization]:
-        where: Final = (
-            {
-                "OR": tuple(
-                    {field: {"contains": escape_like(search), "mode": "insensitive"}}
-                    for field in ("alias", "customer_org_id")
-                )
-            }
-            if search
-            else {}
-        )
+        where: Final = _search_filter(search, ("alias", "customer_org_id"))
         count: Final = await self.organizations.count(where=where)
         rows: Final = await self.organizations.find_many(
             where=where,
@@ -1066,11 +1063,18 @@ class CustomerHierarchyStore:
         )
 
     async def list_members(
-        self, parent_team_id: str | None, page: int, page_size: int, *, parent_org_id: str | None = None
+        self,
+        parent_team_id: str | None,
+        page: int,
+        page_size: int,
+        *,
+        parent_org_id: str | None = None,
+        search: str = "",
     ) -> Page[CustomerMember]:
         where: Final[Mapping[str, object]] = {
             **({"parent_team_ids": {"has": parent_team_id}} if parent_team_id is not None else {}),
             **({"parent_org_id": parent_org_id} if parent_org_id is not None else {}),
+            **_search_filter(search, ("alias", "customer_member_id")),
         }
         count: Final = await self.members.count(where=where)
         rows: Final = await self.members.find_many(
@@ -1283,10 +1287,18 @@ class CustomerHierarchy:
         return await self.transaction(lambda store: store.list_teams(parent_org_id, page, page_size))
 
     async def list_members(
-        self, parent_team_id: str | None = None, page: int = 1, page_size: int = 50, *, parent_org_id: str | None = None
+        self,
+        parent_team_id: str | None = None,
+        page: int = 1,
+        page_size: int = 50,
+        *,
+        parent_org_id: str | None = None,
+        search: str = "",
     ) -> Page[CustomerMember] | Failure:
         return await self.transaction(
-            lambda store: store.list_members(parent_team_id, page, page_size, parent_org_id=parent_org_id)
+            lambda store: store.list_members(
+                parent_team_id, page, page_size, parent_org_id=parent_org_id, search=search
+            )
         )
 
     async def add_template(self, organization_id: str, payload: BudgetTemplate, actor: str) -> Organization | Failure:

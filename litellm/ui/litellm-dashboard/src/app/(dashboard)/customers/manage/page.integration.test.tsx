@@ -304,6 +304,67 @@ describe("customer hierarchy management", () => {
     ]);
   });
 
+  it("should search customer members on the server from the first page and ignore a slower earlier search", async () => {
+    const slow = Promise.withResolvers<Response>();
+    fetchMock.mockImplementation(async (input) => {
+      const url = requestUrl(input);
+      const search = url.searchParams.get("search");
+      if (url.pathname !== "/management/v1/customer_members" || search === null) return serve(input);
+      if (search === "one") return slow.promise;
+      const data = search === "two" ? [supportMember] : [];
+      return json({ data, meta: { total_count: data.length, page: 1, page_size: 20, total_pages: 1 } });
+    });
+    const onUrlUpdate = vi.fn();
+    renderWithProviders(<CustomerHierarchyManager />, {
+      searchParams: "?org=org-1&tab=members&hierarchyPage=2",
+      onUrlUpdate,
+    });
+    const table = await screen.findByRole("table", { name: "Customer members" });
+    expect(within(table).queryByRole("button", { name: "Member One" })).not.toBeInTheDocument();
+    const search = screen.getByRole("searchbox", { name: "Search customer members by name or ID" });
+    const searches = () =>
+      requestedUrls()
+        .filter((url) => url.pathname === "/management/v1/customer_members" && url.searchParams.has("search"))
+        .map((url) => [
+          url.searchParams.get("search"),
+          url.searchParams.get("parent_org_id"),
+          url.searchParams.get("page"),
+        ]);
+
+    fireEvent.change(search, { target: { value: " one " } });
+    await waitFor(() => expect(searches()).toEqual([["one", "org-1", "1"]]));
+    expect(onUrlUpdate).toHaveBeenLastCalledWith(
+      expect.objectContaining({ queryString: "?org=org-1&tab=members&memberSearch=one" }),
+    );
+    fireEvent.change(search, { target: { value: "two" } });
+    expect(await screen.findByRole("button", { name: "Member Two" })).toBeInTheDocument();
+    slow.resolve(json({ data: [member], meta: { total_count: 1, page: 1, page_size: 20, total_pages: 1 } }));
+    await act(async () => {
+      await slow.promise;
+    });
+    expect(screen.queryByRole("button", { name: "Member One" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Member Two" })).toBeInTheDocument();
+
+    fireEvent.change(search, { target: { value: "nobody" } });
+    expect(await screen.findByText("No customer members match your search.")).toBeInTheDocument();
+    expect(search).toHaveValue("nobody");
+    fireEvent.change(search, { target: { value: "" } });
+    expect(await screen.findByRole("button", { name: "Member One" })).toBeInTheDocument();
+    expect(onUrlUpdate).toHaveBeenLastCalledWith(expect.objectContaining({ queryString: "?org=org-1&tab=members" }));
+    expect(searches().map(([value]) => value)).toEqual(["one", "two", "nobody"]);
+  });
+
+  it("should restore a customer member search from the URL within the selected customer team", async () => {
+    renderWithProviders(<CustomerHierarchyManager />, { searchParams: "?org=org-1&team=team-a&memberSearch=Member" });
+    expect(await screen.findByRole("button", { name: "Member One" })).toBeInTheDocument();
+    expect(screen.getByRole("searchbox", { name: "Search customer members by name or ID" })).toHaveValue("Member");
+    expect(
+      requestedUrls()
+        .filter((url) => url.pathname === "/management/v1/customer_members")
+        .map((url) => [url.searchParams.get("parent_team_id"), url.searchParams.get("search")]),
+    ).toEqual([["team-a", "Member"]]);
+  });
+
   it.each([2, 0])(
     "should reset an out-of-range hierarchy deep link when the collection has %i pages",
     async (totalPages) => {

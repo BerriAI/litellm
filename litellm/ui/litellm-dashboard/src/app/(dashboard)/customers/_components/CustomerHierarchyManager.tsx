@@ -14,6 +14,7 @@ import CustomerHierarchyNavigation, { customerHierarchyHref } from "./CustomerHi
 import CustomerHierarchySettings from "./CustomerHierarchySettings";
 import CustomerBudgetGroups from "./CustomerBudgetGroups";
 import CustomerBudgetSummary from "./CustomerBudgetSummary";
+import CustomerMemberSearch from "./CustomerMemberSearch";
 import type { CustomerUsageEntity } from "./customerUsageApi";
 import CreateCustomerHierarchyDialog from "./CreateCustomerHierarchyDialog";
 import { customerEntityId, customerEntityLabel, type CreatedCustomerHierarchyEntity } from "./customerHierarchyForms";
@@ -177,13 +178,10 @@ function HierarchyCreateAction({ hierarchy, selected, scope }: ScopeProps) {
   );
 }
 
-function HierarchyChildTable(props: ScopeProps) {
+function HierarchyChildRows(props: ScopeProps & { childLabel: string; showTeam: boolean }) {
   const { t } = useTranslation();
-  const { hierarchy } = props;
+  const { hierarchy, childLabel, showTeam } = props;
   const { children, childTab, page } = hierarchy;
-  const showTeam = childTab === "members" && props.selected.team === null;
-  const hint = showTeam ? "customerPortal.hierarchy.organizationMembersHint" : CHILD_HINTS[childTab];
-  const childLabel = childTab === "teams" ? t("customerPortal.hierarchy.teams") : t("customerPortal.hierarchy.members");
   if (children.isError)
     return (
       <ErrorState
@@ -204,15 +202,11 @@ function HierarchyChildTable(props: ScopeProps) {
     );
   const rows = hierarchyRows(props);
   const pages = Math.max(1, children.data.meta.total_pages);
+  const emptyMembers = hierarchy.memberSearch
+    ? "customerPortal.hierarchy.noMemberMatches"
+    : "customerPortal.hierarchy.emptyMembers";
   return (
     <>
-      <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h2 className="text-base font-medium tracking-tight">{childLabel}</h2>
-          <p className="mt-1 text-sm text-muted-foreground">{t(hint)}</p>
-        </div>
-        <HierarchyCreateAction hierarchy={hierarchy} selected={props.selected} scope={props.scope} />
-      </div>
       <Table aria-label={childLabel}>
         <TableHeader>
           <TableRow>
@@ -274,11 +268,7 @@ function HierarchyChildTable(props: ScopeProps) {
           {rows.length === 0 && (
             <TableRow>
               <TableCell colSpan={showTeam ? 5 : 4} className="py-12 text-center text-sm text-muted-foreground">
-                {t(
-                  childTab === "teams"
-                    ? "customerPortal.hierarchy.emptyTeams"
-                    : "customerPortal.hierarchy.emptyMembers",
-                )}
+                {t(childTab === "teams" ? "customerPortal.hierarchy.emptyTeams" : emptyMembers)}
               </TableCell>
             </TableRow>
           )}
@@ -297,6 +287,30 @@ function HierarchyChildTable(props: ScopeProps) {
           </div>
         </div>
       )}
+    </>
+  );
+}
+
+function HierarchyChildTable(props: ScopeProps) {
+  const { t } = useTranslation();
+  const { hierarchy } = props;
+  const { childTab } = hierarchy;
+  const showTeam = childTab === "members" && props.selected.team === null;
+  const hint = showTeam ? "customerPortal.hierarchy.organizationMembersHint" : CHILD_HINTS[childTab];
+  const childLabel = childTab === "teams" ? t("customerPortal.hierarchy.teams") : t("customerPortal.hierarchy.members");
+  return (
+    <>
+      <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 className="text-base font-medium tracking-tight">{childLabel}</h2>
+          <p className="mt-1 text-sm text-muted-foreground">{t(hint)}</p>
+        </div>
+        <HierarchyCreateAction hierarchy={hierarchy} selected={props.selected} scope={props.scope} />
+      </div>
+      {childTab === "members" && (
+        <CustomerMemberSearch value={hierarchy.memberSearch} onSearch={hierarchy.setMemberSearch} />
+      )}
+      <HierarchyChildRows {...props} childLabel={childLabel} showTeam={showTeam} />
     </>
   );
 }
