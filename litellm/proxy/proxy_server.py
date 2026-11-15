@@ -19903,6 +19903,7 @@ async def async_queue_request(
             data["metadata"]["tags"] = list(queued_tags)
         data["metadata"]["inherited_tags"] = LiteLLMProxyRequestSetup.get_inherited_tags(user_api_key_dict)
         data["metadata"]["user_api_key_budget_reservation"] = user_api_key_dict.budget_reservation
+        data["metadata"]["user_api_key_auth"] = LiteLLMProxyRequestSetup.auth_for_request_metadata(user_api_key_dict)
         LiteLLMProxyRequestSetup.apply_authenticated_baggage_tags(
             request=request, request_data=data, metadata_key="metadata"
         )

@@ -46,10 +46,10 @@ def _observed_models(gateway: Gateway) -> tuple[str, ...]:
     return tuple(str(object_value(object_value(entry).get("body") or {}).get("model")) for entry in requests)
 
 
-def _chat(gateway: Gateway, key: str, body: dict[str, JsonValue]) -> httpx.Response:
+def _chat(gateway: Gateway, key: str, body: dict[str, JsonValue], path: str = "/v1/chat/completions") -> httpx.Response:
     return gateway.request(
         "POST",
-        "/v1/chat/completions",
+        path,
         {"messages": [{"role": "user", "content": f"disallowed {uuid.uuid4().hex}"}], **body},
         key=key,
     )
@@ -60,9 +60,11 @@ def _assert_served(gateway: Gateway, key: str, model: str) -> None:
     assert response.status_code == 200, f"{model}: {response.status_code} {response.text}"
 
 
-def _assert_denied(gateway: Gateway, key: str, body: dict[str, JsonValue], denied: str) -> None:
+def _assert_denied(
+    gateway: Gateway, key: str, body: dict[str, JsonValue], denied: str, path: str = "/v1/chat/completions"
+) -> None:
     before: Final = _observed_models(gateway)
-    response: Final = _chat(gateway, key, body)
+    response: Final = _chat(gateway, key, body, path)
     assert response.status_code == 403, f"{response.status_code} {response.text}"
     error: Final = object_value(JSON_OBJECT.validate_json(response.content)["error"])
     assert error["type"] == "key_model_access_denied", response.text
@@ -268,7 +270,12 @@ def test_a_comma_separated_fan_out_cannot_reach_a_disallowed_model(gateway: Gate
         _assert_denied(gateway, key, {"model": f"{allowed}, {disallowed}"}, disallowed)
 
 
-def test_a_complexity_router_cannot_send_a_key_to_a_disallowed_tier(gateway: Gateway) -> None:
+@pytest.mark.parametrize(
+    ("path", "queueing"), [("/v1/chat/completions", {}), ("/queue/chat/completions", {"priority": 0})]
+)
+def test_a_complexity_router_cannot_send_a_key_to_a_disallowed_tier(
+    gateway: Gateway, path: str, queueing: dict[str, JsonValue]
+) -> None:
     with gateway.scenario() as scenario:
         keyword: Final = f"simple-{uuid.uuid4().hex}"
         tier_upstream: Final = f"tier-{uuid.uuid4().hex[:8]}"
@@ -282,11 +289,17 @@ def test_a_complexity_router_cannot_send_a_key_to_a_disallowed_tier(gateway: Gat
                 "tiers": {"SIMPLE": disallowed, "MEDIUM": other_tier, "COMPLEX": other_tier, "REASONING": other_tier},
             },
         )
-        body: Final[dict[str, JsonValue]] = {"model": router, "messages": [{"role": "user", "content": keyword}]}
-        served: Final = _chat(gateway, scenario.key(), body)
+        body: Final[dict[str, JsonValue]] = {
+            "model": router,
+            "messages": [{"role": "user", "content": keyword}],
+            **queueing,
+        }
+        served: Final = _chat(gateway, scenario.key(allowed_routes=[path]), body, path)
         assert served.status_code == 200, f"{served.status_code} {served.text}"
         assert tier_upstream in _observed_models(gateway)
-        _assert_denied(gateway, scenario.key(disallowed_models=[disallowed]), body, disallowed)
+        _assert_denied(
+            gateway, scenario.key(allowed_routes=[path], disallowed_models=[disallowed]), body, disallowed, path
+        )
 
 
 def _deleted_disallowed_models(keys: tuple[str, ...]) -> list[dict[str, JsonValue]]:

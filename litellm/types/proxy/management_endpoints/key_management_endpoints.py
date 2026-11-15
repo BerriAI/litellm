@@ -37,6 +37,7 @@ class BulkUpdateKeyRequestItem(LiteLLMBaseModel):
     max_budget: float | None = None  # Max budget for key
     team_id: str | None = None  # Team ID associated with key
     tags: list[str] | None = None  # Tags for organizing keys
+    disallowed_models: tuple[str, ...] | None = None
     object_permission: LiteLLM_ObjectPermissionBase | None = None
 
 

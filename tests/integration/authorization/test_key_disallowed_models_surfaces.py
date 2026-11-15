@@ -359,7 +359,6 @@ def test_a_non_admin_team_member_cannot_remove_disallowed_models_from_a_team_key
 
 
 def test_bulk_update_writes_disallowed_models_and_they_are_enforced(rig: DenyRig) -> None:
-    pytest.skip("BUG: /key/bulk_update documents disallowed_models but drops it and reports the update as successful")
     with rig.gateway.scenario() as scenario:
         key: Final = scenario.key()
         updated: Final = rig.gateway.post(
