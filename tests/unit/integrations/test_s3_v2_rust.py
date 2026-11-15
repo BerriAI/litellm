@@ -16,7 +16,7 @@ from urllib.parse import quote, unquote, urlsplit, urlunsplit
 
 import pytest
 import requests
-from tests.unit.integrations.s3_v3_rust_support import (
+from tests.unit.integrations.s3_v2_rust_support import (
     DROP,
     Received,
     ScriptedBucket,
@@ -27,8 +27,8 @@ from tests.unit.integrations.s3_v3_rust_support import (
 )
 
 import litellm
-from litellm.integrations import s3_v3
-from litellm.integrations.s3_v3 import S3Logger
+from litellm.integrations import s3_v2
+from litellm.integrations.s3_v2 import S3Logger
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.rust_bridge import _native
 from litellm.types.integrations.s3_v2 import S3LoggerSettings
@@ -83,7 +83,7 @@ async def _upload(logger: S3Logger, payload: Mapping[str, object], start_time: d
 
 
 def _failures() -> object:
-    return patch.object(s3_v3._Host, "callback_failed")
+    return patch.object(s3_v2._Host, "callback_failed")
 
 
 def _uploaded(put: Received) -> dict[str, object]:
@@ -2117,14 +2117,14 @@ async def test_batch_line_items_are_serialized_and_hashed_off_the_event_loop(
     import threading
 
     logger: Final = _s3_logger_answering(monkeypatch, bucket, 200, "cold/")
-    serialize: Final = s3_v3.batch_line_items_ndjson
+    serialize: Final = s3_v2.batch_line_items_ndjson
     threads: Final[dict[str, threading.Thread]] = {}
 
     def _serialize(payload: object) -> str:
         threads["serialize"] = threading.current_thread()
         return serialize(payload)
 
-    monkeypatch.setattr(s3_v3, "batch_line_items_ndjson", _serialize)
+    monkeypatch.setattr(s3_v2, "batch_line_items_ndjson", _serialize)
 
     await logger.async_log_batch_line_items(_batch_line_items_payload())
 

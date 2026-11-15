@@ -22,7 +22,7 @@ from litellm.proxy.management_helpers.audit_logs import (
     is_audit_logging_enabled,
 )
 from litellm.types.utils import StandardAuditLogPayload
-from tests.unit.integrations.s3_v3_rust_support import scripted_bucket
+from tests.unit.integrations.s3_v2_rust_support import scripted_bucket
 
 
 @pytest.fixture(autouse=True)

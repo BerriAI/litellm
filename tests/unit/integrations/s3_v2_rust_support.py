@@ -16,7 +16,7 @@ from litellm.integrations.custom_logger_v2.enforcement import FieldView
 from litellm.integrations.custom_logger_v2.field_sources import HookArgs, with_sources
 from litellm.integrations.custom_logger_v2.legacy import KwargsFields
 from litellm.integrations.custom_logger_v2.rust import WireManifest
-from litellm.integrations.s3_v3 import S3Logger
+from litellm.integrations.s3_v2 import S3Logger
 from litellm.litellm_core_utils.litellm_logging import LOGGING_KEYS, V2_ASYNC_LOGGING_LINE
 from litellm.types.integrations.custom_logger_v2 import Outcome
 
