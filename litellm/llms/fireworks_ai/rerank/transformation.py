@@ -271,7 +271,9 @@ class FireworksAIRerankConfig(FireworksAIMixin, BaseRerankConfig):
             rerank_results.append(rerank_result)
 
         usage_fields: Final = _FireworksAIUsageFields.model_validate(usage)
-        _billed_units: Final = RerankBilledUnits(search_units=usage_fields.total_tokens)
+        _billed_units: Final = RerankBilledUnits(
+            search_units=usage_fields.total_tokens, input_tokens=usage_fields.prompt_tokens
+        )
         _tokens: Final = RerankTokens(
             input_tokens=usage_fields.prompt_tokens,
             output_tokens=usage_fields.completion_tokens,

@@ -2170,6 +2170,7 @@ def completion_cost(
                         rerank_billed_units = RerankBilledUnits(
                             search_units=billed_units.get("search_units"),
                             total_tokens=billed_units.get("total_tokens"),
+                            input_tokens=billed_units.get("input_tokens"),
                         )
 
                         search_units = billed_units.get("search_units") or 1  # cohere charges per request by default.
