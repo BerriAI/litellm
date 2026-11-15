@@ -526,18 +526,19 @@ async def test_add_new_member_budget_duration_only_clones_default_max_budget():
     [
         pytest.param(
             True,
-            {"max_budget": 100.0, "tpm_limit": 1000, "budget_duration": "1d", "allowed_models": ["gpt-4o-mini"]},
-            id="team-default-budget-supplies-the-cap-and-reset",
+            {"budget_duration": "1d", "allowed_models": ["gpt-4o-mini"]},
+            id="team-default-budget-supplies-the-reset-and-keeps-the-cap-to-itself",
         ),
         pytest.param(False, {"allowed_models": ["gpt-4o-mini"]}, id="missing-team-default-budget-keeps-the-models"),
     ],
 )
 @pytest.mark.asyncio
-async def test_add_new_member_with_only_allowed_models_keeps_the_team_default_cap_and_reset(
+async def test_add_new_member_with_only_allowed_models_resets_on_the_team_default_window(
     default_budget_exists: bool, expected_budget: dict[str, object]
 ) -> None:
-    """A team's default_team_member_models reach here as allowed_models with no max_budget_in_team. A fresh
-    models-only row would drop the team default's cap and reset, leaving the member uncapped."""
+    """A team's default_team_member_models reach here as allowed_models with no max_budget_in_team. The
+    cap is read from the team default at auth time, so it is not copied and later /team/update changes
+    still apply, but spend is only reset for a row with a reset date of its own."""
     prisma_client: Final = AsyncMock()
     user_row: Final = MagicMock()
     user_row.model_dump.return_value = {

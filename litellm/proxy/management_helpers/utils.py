@@ -394,7 +394,6 @@ async def _clone_team_default_budget_for_member(
     user_api_key_dict: UserAPIKeyAuth,
     litellm_proxy_admin_name: str,
     budget_duration_override: str | None = None,
-    allowed_models_override: Sequence[str] | None = None,
     tx: MemberWriteTx | None = None,
 ) -> str | None:
     """
@@ -403,12 +402,12 @@ async def _clone_team_default_budget_for_member(
     no longer exists in the DB.
 
     Used when adding a new team member with a per-member ``budget_duration``
-    or ``allowed_models`` but no per-member cap, so the member keeps the team
-    default's other values in their own private budget row.
+    but no other per-member limit, so the member keeps the team default's
+    values in their own private budget row while the reset window differs.
 
-    The overrides replace the default's reset window and models for this
-    member while keeping the default's other limits, so neither discards the
-    team default's max_budget.
+    ``budget_duration_override`` replaces the default's reset window for this
+    member while keeping the default's other limits, so an admin can set a
+    member's reset cadence without discarding the team default's max_budget.
     """
     budget_table: Final[_PrismaBudgetTable] = _budget_table(prisma_client, tx)
     default_budget: Final = await budget_table.find_unique(where={"budget_id": default_team_budget_id})
@@ -417,27 +416,27 @@ async def _clone_team_default_budget_for_member(
 
     default_budget_dict: Final = default_budget.model_dump()
     reject_budget_windows(default_budget_dict)
-    overrides: Final = {"budget_duration": budget_duration_override, "allowed_models": allowed_models_override}
-    member_values: Final = {
-        **default_budget_dict,
-        **{field: value for field, value in overrides.items() if value is not None},
-    }
-    # Empty lists (e.g. allowed_models = []) are skipped so the cloned row
-    # matches the "no value set" shape rather than carrying a default.
-    limits: Final[Mapping[str, object]] = {
-        field: member_values[field]
-        for field in _CLONABLE_BUDGET_FIELDS
-        if member_values.get(field) is not None and member_values[field] != []
-    }
-    duration: Final = limits.get("budget_duration")
-    # Start the member's budget window at clone time, not the pool's reset
-    # timestamp — otherwise a member joining mid-cycle inherits a stale reset.
-    cloned_data: Final[Mapping[str, object]] = {
+    cloned_data: Final[dict] = {
         "created_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
         "updated_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
-        **limits,
-        **({"budget_reset_at": get_budget_reset_time(duration)} if isinstance(duration, str) and duration else {}),
     }
+    for field in _CLONABLE_BUDGET_FIELDS:
+        value = default_budget_dict.get(field)
+        if value is None:
+            continue
+        # Skip empty list defaults (e.g. allowed_models = []) so the cloned
+        # row matches the "no value set" shape rather than carrying a default.
+        if isinstance(value, list) and len(value) == 0:
+            continue
+        cloned_data[field] = value
+
+    if budget_duration_override is not None:
+        cloned_data["budget_duration"] = budget_duration_override
+
+    # Start the member's budget window at clone time, not the pool's reset
+    # timestamp — otherwise a member joining mid-cycle inherits a stale reset.
+    if cloned_data.get("budget_duration"):
+        cloned_data["budget_reset_at"] = get_budget_reset_time(cloned_data["budget_duration"])
 
     new_budget: Final[_PrismaBudgetRecord] = await budget_table.create(data=cloned_data)
     return new_budget.budget_id
@@ -459,9 +458,10 @@ async def _resolve_member_budget_id(
     Explicit per-member limits create a fresh budget. Otherwise the member is
     linked to the team's shared default member budget, so later ``/team/update``
     changes reach them; ``/team/member_update`` clones that row on first write.
-    A ``budget_duration`` or ``allowed_models`` with no ``max_budget_in_team`` clones
-    the default with those overridden, so the member keeps the team's cap and reset,
-    or creates a budget holding only them when there is no team default.
+    A lone ``budget_duration`` clones the default with the reset window
+    overridden, or creates a window-only budget when there is no team default.
+    ``allowed_models`` with no cap creates a budget that takes the default's reset
+    window and leaves the cap to the default.
     With nothing set the member gets no budget, though ``add_new_member`` still writes its membership row.
     """
     has_explicit_limit: Final = max_budget_in_team is not None or allowed_models is not None
@@ -474,18 +474,15 @@ async def _resolve_member_budget_id(
             reject_budget_windows(default_budget.model_dump())
         return default_team_budget_id if default_budget is not None else None
 
-    if max_budget_in_team is None and default_team_budget_id is not None:
-        cloned_budget_id: Final = await _clone_team_default_budget_for_member(
+    if not has_explicit_limit and default_team_budget_id is not None:
+        return await _clone_team_default_budget_for_member(
             prisma_client=prisma_client,
             default_team_budget_id=default_team_budget_id,
             user_api_key_dict=user_api_key_dict,
             litellm_proxy_admin_name=litellm_proxy_admin_name,
             budget_duration_override=budget_duration,
-            allowed_models_override=allowed_models,
             tx=tx,
         )
-        if cloned_budget_id is not None or allowed_models is None:
-            return cloned_budget_id
 
     if not has_explicit_limit and budget_duration is None:
         return None
@@ -498,12 +495,32 @@ async def _resolve_member_budget_id(
         budget_data["max_budget"] = max_budget_in_team
     if allowed_models is not None:
         budget_data["allowed_models"] = allowed_models
-    if budget_duration is not None:
-        budget_data["budget_duration"] = budget_duration
-        budget_data["budget_reset_at"] = get_budget_reset_time(budget_duration=budget_duration)
+    member_budget_duration: Final = budget_duration or (
+        await _team_default_budget_duration(prisma_client, default_team_budget_id, tx)
+        if max_budget_in_team is None and default_team_budget_id is not None
+        else None
+    )
+    if member_budget_duration is not None:
+        budget_data["budget_duration"] = member_budget_duration
+        budget_data["budget_reset_at"] = get_budget_reset_time(budget_duration=member_budget_duration)
     budget_table: Final[_PrismaBudgetTable] = _budget_table(prisma_client, tx)
     response: Final = await budget_table.create(data=budget_data)
     return response.budget_id
+
+
+async def _team_default_budget_duration(
+    prisma_client: PrismaClient, default_team_budget_id: str, tx: MemberWriteTx | None
+) -> str | None:
+    """The reset period a member with models of their own and no cap of their own must carry.
+
+    Their cap is read from the team default at auth time, but spend is only reset for a
+    member whose own budget row has a reset date.
+    """
+    default_budget: Final = await _budget_table(prisma_client, tx).find_unique(
+        where={"budget_id": default_team_budget_id}
+    )
+    duration: Final = default_budget.model_dump().get("budget_duration") if default_budget is not None else None
+    return duration if isinstance(duration, str) and duration else None
 
 
 async def _append_team_id_if_absent(
