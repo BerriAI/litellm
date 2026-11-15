@@ -2820,6 +2820,10 @@ def _complete_custom_openai(
         raise litellm.AuthenticationError(
             message="Set BIGMODEL_API_KEY or pass api_key", llm_provider="bigmodel", model=model
         )
+    if custom_llm_provider == "axforge" and not api_key and client is None:
+        raise litellm.AuthenticationError(
+            message="Set AXFORGE_API_KEY or pass api_key", llm_provider="axforge", model=model
+        )
     organization = (
         organization
         or (None if custom_llm_provider == "bigmodel" else litellm.organization or get_secret("OPENAI_ORGANIZATION"))

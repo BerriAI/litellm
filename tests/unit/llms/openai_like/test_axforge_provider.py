@@ -100,3 +100,15 @@ def test_axforge_key_and_base_come_from_axforge_env_vars(monkeypatch: pytest.Mon
     monkeypatch.setenv("AXFORGE_API_BASE", "https://axforge.internal.example/v1")
 
     assert get_llm_provider(model="axforge/glm-5.3-flash")[3] == "https://axforge.internal.example/v1"
+
+
+def test_missing_axforge_key_never_sends_the_openai_key(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("AXFORGE_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "unrelated-openai-key")
+
+    with respx.mock(assert_all_called=False) as upstream:
+        route: Final = upstream.post(f"{AXFORGE_API_BASE}/chat/completions").respond(200, json={})
+        with pytest.raises(litellm.AuthenticationError, match="AXFORGE_API_KEY"):
+            litellm.completion(model="axforge/glm-5.3-flash", messages=[{"role": "user", "content": "hello"}])
+
+    assert not route.called
