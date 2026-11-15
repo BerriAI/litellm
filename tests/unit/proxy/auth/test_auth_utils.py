@@ -5,14 +5,14 @@ Unit tests for auth_utils functions related to rate limiting and customer ID ext
 import base64
 import logging
 from collections.abc import Callable, Mapping
-from typing import Final, Optional
+from typing import Final, Literal, Optional
 from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi import HTTPException, Request
 
 import litellm
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import (
     _allow_model_level_clientside_configurable_parameters,
     _get_customer_id_from_standard_headers,
@@ -5306,3 +5306,45 @@ def test_get_end_user_id_from_request_body_backwards_compatibility():
     )
     for request_body, expected_end_user_id in cases:
         assert get_end_user_id_from_request_body(request_body) == expected_end_user_id
+
+
+@pytest.mark.parametrize("entity", ["key", "team"])
+@pytest.mark.parametrize(
+    "role,stored,sent,refused",
+    [
+        (LitellmUserRoles.PROXY_ADMIN, "uprof_pinned", "uprof_other", False),
+        (LitellmUserRoles.INTERNAL_USER, None, "uprof_other", True),
+        (LitellmUserRoles.INTERNAL_USER, "uprof_pinned", "uprof_other", True),
+        (LitellmUserRoles.INTERNAL_USER, "uprof_pinned", None, True),
+        (LitellmUserRoles.INTERNAL_USER, "uprof_pinned", "uprof_pinned", False),
+    ],
+)
+def test_only_proxy_admins_change_the_anthropic_user_profile_id_of_a_key_or_team(
+    entity: Literal["key", "team"], role: LitellmUserRoles, stored: str | None, sent: str | None, refused: bool
+) -> None:
+    from litellm.proxy._types import UpdateKeyRequest, UpdateTeamRequest
+    from litellm.proxy.auth.auth_utils import enforce_batch_limits_are_admin_only
+
+    existing: Final = {"project": "x"} if stored is None else {"anthropic_user_profile_id": stored, "project": "x"}
+    metadata: Final = {"project": "x"} if sent is None else {"anthropic_user_profile_id": sent, "project": "x"}
+    request: Final = (
+        UpdateKeyRequest(key="sk-holder", metadata=metadata)
+        if entity == "key"
+        else UpdateTeamRequest(team_id="t1", metadata=metadata)
+    )
+    caller: Final = UserAPIKeyAuth(user_role=role, user_id="u1")
+
+    if not refused:
+        enforce_batch_limits_are_admin_only(
+            data=request, existing_metadata=existing, user_api_key_dict=caller, entity=entity
+        )
+        return
+    with pytest.raises(HTTPException) as rejection:
+        enforce_batch_limits_are_admin_only(
+            data=request, existing_metadata=existing, user_api_key_dict=caller, entity=entity
+        )
+    assert rejection.value.status_code == 403
+    assert (
+        f"Only proxy admins can set anthropic_user_profile_id on a {entity}. It picks the Anthropic user profile"
+        in str(rejection.value.detail)
+    )

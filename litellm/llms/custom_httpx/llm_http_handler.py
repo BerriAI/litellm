@@ -6,6 +6,7 @@ import ssl
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Coroutine, Iterator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from functools import lru_cache, partial, reduce
+from itertools import chain
 from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
@@ -58,6 +59,7 @@ from litellm.litellm_core_utils.chat_completion_agentic_loop import (
 from litellm.litellm_core_utils.core_helpers import set_provider_response_headers_in_hidden_params
 from litellm.litellm_core_utils.dot_notation_indexing import delete_nested_value
 from litellm.litellm_core_utils.get_litellm_params import AWS_CREDENTIAL_KWARGS_KEYS
+from litellm.litellm_core_utils.get_provider_specific_headers import override_headers
 from litellm.litellm_core_utils.llm_request_utils import serialize_multipart_form_fields
 from litellm.litellm_core_utils.realtime_errors import (
     close_after_upstream_handshake_refusal,
@@ -531,6 +533,21 @@ def _unwrap_provider_error(error: Exception) -> Exception:
             return current
         current = current.__cause__
     return error
+
+
+def _without_anthropic_beta(source: Mapping[str, object] | None) -> Mapping[str, object]:
+    return {name: value for name, value in (source or {}).items() if name.lower() != "anthropic-beta"}
+
+
+def _anthropic_beta_entries(source: Mapping[str, object] | None) -> Iterator[tuple[str, object]]:
+    return ((name, value) for name, value in (source or {}).items() if name.lower() == "anthropic-beta")
+
+
+def _merge_messages_header_sources(
+    *sources: Mapping[str, object] | None,
+) -> dict[str, object]:  # mutable-ok: passed on as the request's headers dict
+    without_beta: Final[Mapping[str, object]] = reduce(override_headers, map(_without_anthropic_beta, sources), {})
+    return {**without_beta, **dict(chain.from_iterable(map(_anthropic_beta_entries, sources)))}
 
 
 class BaseLLMHTTPHandler:
@@ -2325,14 +2342,9 @@ class BaseLLMHTTPHandler:
         forwarded_headers: Final = kwargs.get("headers", None)
         # Also check for extra_headers in kwargs (from config or direct calls)
         extra_headers_from_kwargs: Final = kwargs.get("extra_headers", None)
-        # Merge all header sources: forwarded < extra_headers < provider_specific
-        merged_headers: Final = {}
-        if forwarded_headers:
-            merged_headers.update(forwarded_headers)
-        if extra_headers_from_kwargs:
-            merged_headers.update(extra_headers_from_kwargs)
-        if provider_specific_headers:
-            merged_headers.update(provider_specific_headers)
+        merged_headers: Final = _merge_messages_header_sources(
+            forwarded_headers, extra_headers_from_kwargs, provider_specific_headers
+        )
         request_params: Final = reduce(
             delete_nested_value,
             litellm_params.get("additional_drop_params") or (),

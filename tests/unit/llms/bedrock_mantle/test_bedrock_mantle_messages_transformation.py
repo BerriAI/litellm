@@ -326,7 +326,7 @@ class TestWireRequest:
         "extra_headers,expected_fields",
         [
             ({"Anthropic-User-Profile-Id": "uprof_sdk"}, {"user_profile_id": "uprof_sdk"}),
-            ({"anthropic-user-profile-id": ""}, {}),
+            ({"Anthropic-User-Profile-Id": ""}, {}),
             ({}, {}),
         ],
         ids=["sdk-header-in-any-case", "empty-sdk-header", "no-profile"],

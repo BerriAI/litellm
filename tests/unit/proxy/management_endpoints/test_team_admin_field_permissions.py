@@ -322,6 +322,7 @@ _PROXY_READ_TEAM_METADATA_KEYS: Final = (
     "allowed_vector_store_indexes",
     "enforced_file_expires_after",
     "enforced_batch_output_expires_after",
+    "anthropic_user_profile_id",
     "require_trace_id",
     "allowed_passthrough_routes",
     "denied_passthrough_routes",

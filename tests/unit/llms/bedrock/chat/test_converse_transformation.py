@@ -10961,3 +10961,26 @@ def test_converse_sends_a_proxy_user_profile_id_only_to_claude(
     model_fields: Final = json.loads(request.content).get("additionalModelRequestFields", {})
     assert request.url.path.endswith("/converse")
     assert {key: model_fields[key] for key in ("user_profile_id",) if key in model_fields} == expected_fields
+
+
+def test_converse_sends_the_proxy_user_profile_id_over_a_caller_header_in_another_case() -> None:
+    from litellm.proxy.litellm_pre_call_utils import add_provider_specific_headers_to_request
+
+    proxy_request_data: Final[dict] = {}  # mutable-ok: the function under test writes into it
+    add_provider_specific_headers_to_request(data=proxy_request_data, headers={}, user_profile_id="uprof_pinned")
+    respond: Final = MagicMock(wraps=_converse_ok)
+
+    litellm.completion(
+        model="bedrock/us.anthropic.claude-sonnet-5-5",
+        messages=[{"role": "user", "content": "hi"}],
+        extra_headers={"Anthropic-User-Profile-Id": "uprof_other"},
+        aws_access_key_id="AKIAEXAMPLE",
+        aws_secret_access_key="fake-secret",
+        aws_region_name="us-east-1",
+        client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond))),
+        **proxy_request_data,
+    )
+
+    request: Final = respond.call_args.args[0]
+    assert json.loads(request.content)["additionalModelRequestFields"]["user_profile_id"] == "uprof_pinned"
+    assert request.headers.get_list("anthropic-user-profile-id") == ["uprof_pinned"]

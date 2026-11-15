@@ -772,6 +772,7 @@ ANTHROPIC_API_ONLY_HEADERS: Final = {  # fails if calling anthropic on vertex ai
 }
 
 ANTHROPIC_USER_PROFILE_ID_HEADER: Final = "anthropic-user-profile-id"
+ANTHROPIC_USER_PROFILE_ID_METADATA_KEY: Final = "anthropic_user_profile_id"
 
 
 class AnthropicThinkingBlockBinding(TypedDict, total=False):

@@ -38,6 +38,7 @@ from litellm.router_utils.clientside_credential_handler import (
     _ADMIN_CONFIG_FIELDS_TO_CLEAR_ON_BASE_OVERRIDE,  # pyright: ignore[reportPrivateUsage]  # one canonical list of deployment credential fields
     clientside_credential_keys,
 )
+from litellm.types.llms.anthropic import ANTHROPIC_USER_PROFILE_ID_METADATA_KEY
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_ENDPOINT_MARKER,
 )
@@ -1578,18 +1579,29 @@ class BatchLimitRequest(Protocol):
     def model_fields_set(self) -> Collection[str]: ...
 
 
+_ADMIN_ONLY_METADATA_KEYS: Final = (*ADMIN_ONLY_BATCH_LIMIT_METADATA_KEYS, ANTHROPIC_USER_PROFILE_ID_METADATA_KEY)
+_ADMIN_ONLY_METADATA_REASONS: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        ANTHROPIC_USER_PROFILE_ID_METADATA_KEY: (
+            "It picks the Anthropic user profile a safety action applies to, so the holder cannot change it."
+        ),
+    }
+)
+
+
 def enforce_batch_limits_are_admin_only(
     data: BatchLimitRequest,
     existing_metadata: Mapping[str, object] | None,
     user_api_key_dict: UserAPIKeyAuth,
     entity: Literal["key", "team"],
 ) -> None:
-    """Only a proxy admin may change a key or team's batch limits.
+    """Only a proxy admin may change a key or team's batch limits or Anthropic user profile id.
 
     Every key in ``ADMIN_ONLY_BATCH_LIMIT_METADATA_KEYS`` caps what the holder
     may do with batches, so a holder-writable copy would let a caller lift their
-    own quota. Gated on the resulting value rather than on presence, so a form
-    resending the stored value stays a no-op.
+    own quota, and the Anthropic user profile id picks which end user an
+    Anthropic safety action applies to. Gated on the resulting value rather
+    than on presence, so a form resending the stored value stays a no-op.
     """
     if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
         return
@@ -1598,17 +1610,17 @@ def enforce_batch_limits_are_admin_only(
         (data.metadata or EMPTY_MAPPING) if "metadata" in data.model_fields_set else stored
     )
     changed: Final = next(
-        (key for key in ADMIN_ONLY_BATCH_LIMIT_METADATA_KEYS if requested.get(key) != stored.get(key)),
+        (key for key in _ADMIN_ONLY_METADATA_KEYS if requested.get(key) != stored.get(key)),
         None,
     )
     if changed is None:
         return
+    reason: Final = _ADMIN_ONLY_METADATA_REASONS.get(
+        changed, "It limits what the holder can do with batches, so the holder cannot raise it."
+    )
     raise HTTPException(
         status_code=403,
-        detail={
-            "error": f"Only proxy admins can set {changed} on a {entity}. "
-            "It limits what the holder can do with batches, so the holder cannot raise it."
-        },
+        detail={"error": f"Only proxy admins can set {changed} on a {entity}. {reason}"},
     )
 
 
