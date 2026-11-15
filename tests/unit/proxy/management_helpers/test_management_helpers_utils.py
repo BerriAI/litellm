@@ -538,8 +538,8 @@ async def test_add_new_member_with_only_allowed_models_keeps_the_team_default_ca
 ) -> None:
     """A team's default_team_member_models reach here as allowed_models with no max_budget_in_team. A fresh
     models-only row would drop the team default's cap and reset, leaving the member uncapped."""
-    prisma_client = AsyncMock()
-    user_row = MagicMock()
+    prisma_client: Final = AsyncMock()
+    user_row: Final = MagicMock()
     user_row.model_dump.return_value = {
         "user_id": "models-only-user",
         "user_email": None,
@@ -548,7 +548,7 @@ async def test_add_new_member_with_only_allowed_models_keeps_the_team_default_ca
     }
     prisma_client.db.litellm_usertable.upsert = AsyncMock(return_value=user_row)
     prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=user_row)
-    default_budget_row = MagicMock()
+    default_budget_row: Final = MagicMock()
     default_budget_row.model_dump.return_value = {
         "budget_id": "default-mo",
         "max_budget": 100.0,
@@ -563,10 +563,10 @@ async def test_add_new_member_with_only_allowed_models_keeps_the_team_default_ca
     prisma_client.db.litellm_budgettable.find_unique = AsyncMock(
         return_value=default_budget_row if default_budget_exists else None
     )
-    created_budget_row = MagicMock()
+    created_budget_row: Final = MagicMock()
     created_budget_row.budget_id = "member-mo"
     prisma_client.db.litellm_budgettable.create = AsyncMock(return_value=created_budget_row)
-    membership_row = MagicMock()
+    membership_row: Final = MagicMock()
     membership_row.model_dump.return_value = {
         "team_id": "team-mo",
         "user_id": "models-only-user",
