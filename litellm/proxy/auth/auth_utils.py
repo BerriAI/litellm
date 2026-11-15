@@ -1954,6 +1954,12 @@ def enforce_batch_limits_are_admin_only(
     so that is the one key gated there. Gated on the resulting value rather than
     on presence, so a form resending the stored value stays a no-op.
     """
+    sent_profile_id: Final = data.metadata.get(ANTHROPIC_USER_PROFILE_ID_METADATA_KEY) if data.metadata else None
+    if sent_profile_id is not None and not isinstance(sent_profile_id, str):
+        raise HTTPException(
+            status_code=400,
+            detail={"error": f"{ANTHROPIC_USER_PROFILE_ID_METADATA_KEY} on a {entity} must be a string like uprof_..."},
+        )
     if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
         return
     stored: Final[Mapping[str, object]] = existing_metadata or EMPTY_MAPPING

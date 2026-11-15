@@ -337,6 +337,30 @@ class TestWireRequest:
     @pytest.mark.asyncio
     @respx.mock
     @pytest.mark.parametrize(
+        "model", ["bedrock_mantle/anthropic.claude-sonnet-5", "bedrock/mantle/anthropic.claude-sonnet-5"]
+    )
+    async def test_the_proxy_user_profile_id_beats_a_caller_header_in_another_case(self, model: str) -> None:
+        from litellm.proxy.litellm_pre_call_utils import add_provider_specific_headers_to_request
+
+        proxy_request_data: Final[dict] = {}  # mutable-ok: the function under test writes into it
+        add_provider_specific_headers_to_request(data=proxy_request_data, headers={}, user_profile_id="uprof_pinned")
+        route: Final = _mantle_messages_route("us-east-1").mock(return_value=_anthropic_response())
+
+        await litellm.anthropic_messages(
+            model=model,
+            messages=[{"role": "user", "content": "ping"}],
+            max_tokens=8,
+            api_key="test-bearer",
+            aws_region_name="us-east-1",
+            extra_headers={"Anthropic-User-Profile-Id": "uprof_other"},
+            **proxy_request_data,
+        )
+
+        assert _sent_body(route)["user_profile_id"] == "uprof_pinned"
+
+    @pytest.mark.asyncio
+    @respx.mock
+    @pytest.mark.parametrize(
         "extra_headers,expected_fields",
         [
             ({"Anthropic-User-Profile-Id": "uprof_sdk"}, {"user_profile_id": "uprof_sdk"}),

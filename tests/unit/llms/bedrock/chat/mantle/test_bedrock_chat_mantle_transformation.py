@@ -337,3 +337,27 @@ def test_mantle_claude_completion_sends_a_proxy_user_profile_id_in_the_body(
 
     body: Final = json.loads(respond.call_args.args[0].content)
     assert {key: body[key] for key in ("user_profile_id",) if key in body} == expected_fields
+
+
+@pytest.mark.parametrize("model", MANTLE_CLAUDE_ROUTES)
+def test_mantle_claude_completion_sends_the_proxy_user_profile_id_over_a_caller_header_in_another_case(
+    model: str,
+) -> None:
+    from litellm.proxy.litellm_pre_call_utils import add_provider_specific_headers_to_request
+
+    proxy_request_data: Final[dict] = {}  # mutable-ok: the function under test writes into it
+    add_provider_specific_headers_to_request(data=proxy_request_data, headers={}, user_profile_id="uprof_pinned")
+    respond: Final = MagicMock(wraps=_text_message)
+
+    litellm.completion(
+        model=model,
+        messages=[{"role": "user", "content": "hi"}],
+        extra_headers={"Anthropic-User-Profile-Id": "uprof_other"},
+        aws_access_key_id="AKIAEXAMPLE",
+        aws_secret_access_key="fake-secret",
+        aws_region_name="us-east-1",
+        client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond))),
+        **proxy_request_data,
+    )
+
+    assert json.loads(respond.call_args.args[0].content)["user_profile_id"] == "uprof_pinned"

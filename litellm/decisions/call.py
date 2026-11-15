@@ -14,7 +14,7 @@ import litellm
 from litellm.cost_calculator import cost_map_key_prices_anything
 from litellm.litellm_core_utils.core_helpers import RESPONSE_COST_HEADER, normalize_drop_params
 from litellm.litellm_core_utils.decisions_pricing import QUERY_PRICED_DECISIONS_PROVIDERS
-from litellm.litellm_core_utils.get_provider_specific_headers import ProviderSpecificHeaderUtils
+from litellm.litellm_core_utils.get_provider_specific_headers import ProviderSpecificHeaderUtils, override_headers
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.prompt_templates.image_handling import (
     async_convert_url_to_base64,
@@ -492,7 +492,7 @@ def decisions_outbound_headers(
         ),
         custom_llm_provider=custom_llm_provider,
     )
-    return MappingProxyType({**(extra_headers or {}), **forwarded})
+    return MappingProxyType(override_headers(extra_headers or {}, forwarded))
 
 
 _LOGGED_FIELDS_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
