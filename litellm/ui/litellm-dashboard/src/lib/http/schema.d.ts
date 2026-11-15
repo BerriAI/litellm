@@ -40897,7 +40897,7 @@ export interface components {
              * Parent Team Ids
              * @description Replace the member's teams within its existing organization. First team is the default. Omit to keep current teams. Member identity, budgets and historical usage are retained.
              */
-            parent_team_ids?: string[] | null;
+            parent_team_ids?: string[];
         };
         /** MemberUpsert */
         MemberUpsert: {

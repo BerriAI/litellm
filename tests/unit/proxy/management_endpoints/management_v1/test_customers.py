@@ -1996,6 +1996,21 @@ def test_member_team_replacement_rejects_invalid_parents_atomically(teams: objec
     assert http.get("/management/v1/customer_members/moving").json() == original.json()
 
 
+def test_member_team_replacement_schema_allows_omission_but_not_null() -> None:
+    http: Final = client()
+    response: Final = http.get("/openapi.json")
+    assert response.status_code == 200, response.text
+    spec: Final = response.json()
+    request_schema: Final = spec["paths"]["/management/v1/customer_members/{customer_member_id}"]["patch"][
+        "requestBody"
+    ]["content"]["application/json"]["schema"]
+    member_patch: Final = spec["components"]["schemas"][request_schema["$ref"].rsplit("/", 1)[-1]]
+    parent_teams: Final = member_patch["properties"]["parent_team_ids"]
+    assert parent_teams["type"] == "array"
+    assert parent_teams["items"] == {"type": "string"}
+    assert "parent_team_ids" not in member_patch.get("required", ())
+
+
 @pytest.mark.parametrize("premium", (False, True))
 def test_member_team_replacement_checks_only_added_team_capacity(premium: bool) -> None:
     http: Final = client(premium_user=premium)

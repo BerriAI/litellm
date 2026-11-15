@@ -2,7 +2,7 @@ from collections.abc import Mapping
 from datetime import datetime
 from hashlib import sha256
 from json import dumps
-from typing import Final, Literal, TypeAlias
+from typing import Annotated, Final, Literal, TypeAlias
 
 from pydantic import (
     AwareDatetime,
@@ -14,6 +14,7 @@ from pydantic import (
     field_validator,
     model_validator,
 )
+from pydantic.json_schema import SkipJsonSchema
 
 from litellm.models.budget import BudgetLimits
 from litellm.proxy.common_utils.timezone_utils import budget_duration_error
@@ -126,9 +127,8 @@ class MemberFields(BaseModel):
 
 
 class MemberPatch(MemberFields):
-    parent_team_ids: tuple[str, ...] | None = Field(
+    parent_team_ids: Annotated[tuple[str, ...], Field(min_length=1)] | SkipJsonSchema[None] = Field(
         default=None,
-        min_length=1,
         description="Replace the member's teams within its existing organization. First team is the default. "
         "Omit to keep current teams. Member identity, budgets and historical usage are retained.",
     )
