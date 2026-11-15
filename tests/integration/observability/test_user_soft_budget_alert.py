@@ -907,7 +907,7 @@ def test_alert_sink_refusing_the_alert_never_fails_the_request(alerting: Alertin
 
 
 def test_alert_queued_while_the_sink_stalls_is_delivered_once_the_sink_answers(alerting: AlertingProxy) -> None:
-    pytest.skip("BUG: a Slack alert queued while an earlier alert is still being posted is dropped and never sent")
+    pytest.skip("BUG: LIT-5231 a Slack alert queued while an earlier alert is still being posted is dropped")
     gateway: Final = alerting.gateway
     with gateway.scenario() as scenario:
         model: Final = scenario.model()
@@ -1017,7 +1017,7 @@ def test_key_soft_budget_still_sends_the_generic_and_the_api_key_email(mailing: 
 
 
 def test_key_soft_budget_of_an_owner_without_an_email_reaches_the_webhook_once(mailing: MailingProxy) -> None:
-    pytest.skip("BUG: a key soft budget crossing whose owner has no email re-sends the webhook event on every request")
+    pytest.skip("BUG: LIT-10808 a key soft budget crossing whose owner has no email re-sends the webhook each request")
     gateway: Final = mailing.gateway
     with gateway.scenario() as scenario:
         model: Final = scenario.model()
