@@ -508,6 +508,20 @@ class TestContentFilterGuardrail:
         )
         assert guardrail._check_patterns("IBAN: DE89370400440532013000") is not None
 
+    def test_overlapping_rejected_candidate_does_not_hide_valid_card(self):
+        patterns = [
+            ContentFilterPattern(
+                pattern_type="prebuilt",
+                pattern_name="credit_card",
+                action=ContentFilterAction.BLOCK,
+            ),
+        ]
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-overlapping-cards",
+            patterns=patterns,
+        )
+        assert guardrail._check_patterns("4111 4003 6000 0000 0014") is not None
+
     @pytest.mark.asyncio
     async def test_credit_card_masking_with_luhn(self):
         patterns = [

@@ -985,14 +985,29 @@ class ContentFilterGuardrail(CustomGuardrail):
         validator: Final = pattern_entry.get("validator")
         match_spans: Final[list[tuple[int, int]]] = []
 
-        for match in regex.finditer(text):
-            if validator is not None and not validator(text[match.start() : match.end()]):
-                continue
-            if keyword_matches is not None and not self._match_near_keyword(
-                match.start(), match.end(), keyword_matches, text
-            ):
-                continue
-            match_spans.append((match.start(), match.end()))
+        if validator is None:
+            for match in regex.finditer(text):
+                if keyword_matches is not None and not self._match_near_keyword(
+                    match.start(), match.end(), keyword_matches, text
+                ):
+                    continue
+                match_spans.append((match.start(), match.end()))
+        else:
+            search_pos: int = 0  # rebind-ok: candidate scan pointer
+            while search_pos < len(text):
+                match = regex.search(text, search_pos)
+                if match is None:
+                    break
+                if not validator(text[match.start() : match.end()]):
+                    search_pos = match.start() + 1
+                    continue
+                if keyword_matches is not None and not self._match_near_keyword(
+                    match.start(), match.end(), keyword_matches, text
+                ):
+                    search_pos = max(match.end(), match.start() + 1)
+                    continue
+                match_spans.append((match.start(), match.end()))
+                search_pos = max(match.end(), match.start() + 1)
 
         if allow_word_numbers:
             for word_match in WORD_NUMBER_SEQUENCE_PATTERN.finditer(text):
