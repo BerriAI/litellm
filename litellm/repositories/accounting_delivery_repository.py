@@ -3,7 +3,7 @@ from dataclasses import asdict, dataclass
 from datetime import timedelta
 from itertools import chain
 from types import TracebackType
-from typing import TYPE_CHECKING, Final, Generic, Literal, Protocol, TypeVar
+from typing import TYPE_CHECKING, Final, Generic, Literal, Protocol, TypeAlias, TypeVar
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter
 
@@ -66,7 +66,7 @@ class DeliveryProjection:
     row: Mapping[str, object]
 
 
-_Applied = TypeVar("_Applied")
+_Applied: Final = TypeVar("_Applied")
 
 
 @dataclass(frozen=True, slots=True)
@@ -181,8 +181,10 @@ def _repair_payload(rejected: "tuple[Contribution, ...]") -> str:
     )
 
 
-_Isolate = Callable[[LedgerTransaction, DeliveryProjection], Awaitable["tuple[_Applied, tuple[Contribution, ...]]"]]
-_OnCommit = Callable[[_Applied, "tuple[Contribution, ...]"], Awaitable[None]]
+_Isolate: TypeAlias = Callable[
+    [LedgerTransaction, DeliveryProjection], Awaitable["tuple[_Applied, tuple[Contribution, ...]]"]
+]
+_OnCommit: TypeAlias = Callable[[_Applied, "tuple[Contribution, ...]"], Awaitable[None]]
 
 
 def _rows(claimed: tuple[tuple[_Delivery, DeliveryProjection], ...]) -> tuple[_Delivery, ...]:
