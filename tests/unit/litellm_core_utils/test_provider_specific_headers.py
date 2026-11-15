@@ -2,6 +2,7 @@ import pytest
 
 from litellm.litellm_core_utils.get_provider_specific_headers import (
     ProviderSpecificHeaderUtils,
+    override_headers,
 )
 from litellm.types.utils import ProviderSpecificHeader
 
@@ -146,3 +147,15 @@ class TestProviderSpecificHeaderUtils:
         """An empty list of scoped entries contributes nothing."""
         result = ProviderSpecificHeaderUtils.get_provider_specific_headers([], "anthropic")
         assert result == {}
+
+    def test_override_headers_replaces_any_casing_but_keeps_a_caller_beta(self):
+        merged = override_headers(
+            {"Anthropic-Beta": "caller-beta", "Anthropic-User-Profile-Id": "uprof_other"},
+            {"anthropic-beta": "client-header-beta", "anthropic-user-profile-id": "uprof_pinned"},
+        )
+
+        assert merged == {
+            "Anthropic-Beta": "caller-beta",
+            "anthropic-beta": "client-header-beta",
+            "anthropic-user-profile-id": "uprof_pinned",
+        }
