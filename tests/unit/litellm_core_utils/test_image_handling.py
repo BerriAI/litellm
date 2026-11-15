@@ -295,6 +295,15 @@ def test_convert_url_to_base64_infers_the_type_when_the_server_sends_octet_strea
     assert result.startswith("data:image/png;base64,")
 
 
+@pytest.mark.parametrize("content_type", ["application/octet-stream", None])
+def test_convert_url_to_base64_detects_pdf_bytes_when_the_server_sends_no_type(monkeypatch, content_type):
+    monkeypatch.setattr(litellm, "module_level_client", _stub_image_client(b"%PDF-1.4\n%body", content_type))
+
+    result = convert_url_to_base64(f"https://docs.example/download?id={uuid.uuid4()}")
+
+    assert result.startswith("data:application/pdf;base64,")
+
+
 def test_convert_url_to_base64_keeps_a_real_content_type(monkeypatch):
     monkeypatch.setattr(litellm, "module_level_client", _stub_image_client(REAL_PNG_BYTES, "image/jpeg"))
 
