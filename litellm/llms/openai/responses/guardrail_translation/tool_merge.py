@@ -62,6 +62,9 @@ def _kept_ordinal(flattened: Sequence[Tool], guardrailed: Sequence[Tool], index:
     kept: Final = guardrailed[index]
     occurrence: Final = sum(tool == kept for tool in guardrailed[:index])
     matches: Final = tuple(ordinal for ordinal, tool in enumerate(flattened) if tool == kept)
+    kept_copies: Final = sum(tool == kept for tool in guardrailed)
+    if kept_copies < len(matches):
+        return None
     return matches[occurrence] if occurrence < len(matches) else None
 
 
