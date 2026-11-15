@@ -12,7 +12,10 @@ from tests.unit.conftest import StreamClock
 
 def _expired() -> MidStreamFallbackError:
     return MidStreamFallbackError(
-        message="no output", model="test", llm_provider="openai", is_pre_first_chunk=True,
+        message="no output",
+        model="test",
+        llm_provider="openai",
+        is_pre_first_chunk=True,
         original_exception=litellm.Timeout(message="no output", model="test", llm_provider="openai"),
     )
 
@@ -24,11 +27,13 @@ async def test_first_output_deadline_raises_provider_timeout(stream_clock: Strea
         await stream_clock.elapse(0.2)
         yield "output"
 
-    deadline: Final = anyio.current_time() + (-0.1 if already_expired else 0.1)
+    started: Final = anyio.current_time()
+    deadline: Final = started + (-0.1 if already_expired else 0.1)
     with pytest.raises(MidStreamFallbackError) as raised:
         _ = tuple([item async for item in _until_first_output(source(), deadline, bool, _expired)])
     assert raised.value.is_pre_first_chunk is True
     assert isinstance(raised.value.original_exception, litellm.Timeout)
+    assert stream_clock() - started == (0.0 if already_expired else pytest.approx(0.1, abs=0.02))
 
 
 @pytest.mark.asyncio
@@ -52,8 +57,11 @@ async def test_first_output_disables_deadline_for_remaining_items(stream_clock: 
         await stream_clock.elapse(0.3)
         yield "later"
 
-    assert tuple([item async for item in _until_first_output(source(), anyio.current_time() + 0.1, bool, _expired)]) == (
-        "output", "later",
+    assert tuple(
+        [item async for item in _until_first_output(source(), anyio.current_time() + 0.1, bool, _expired)]
+    ) == (
+        "output",
+        "later",
     )
 
 
@@ -63,4 +71,6 @@ async def test_empty_source_ends_without_timeout(stream_clock: StreamClock) -> N
         for item in ():
             yield item
 
-    assert tuple([item async for item in _until_first_output(source(), anyio.current_time() + 0.1, bool, _expired)]) == ()
+    assert (
+        tuple([item async for item in _until_first_output(source(), anyio.current_time() + 0.1, bool, _expired)]) == ()
+    )

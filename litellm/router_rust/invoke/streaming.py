@@ -300,12 +300,12 @@ async def _until_first_output(
     expired: Callable[[], MidStreamFallbackError],
 ) -> AsyncGenerator[_ItemT, None]:
     while True:
-        remaining: Final = deadline - anyio.current_time()
+        remaining: float = deadline - anyio.current_time()
         if remaining <= 0:
             raise expired()
         try:
             with anyio.fail_after(remaining):
-                item: Final = await items.__anext__()
+                item: _ItemT = await items.__anext__()
         except StopAsyncIteration:
             return
         except TimeoutError as error:
@@ -1723,7 +1723,9 @@ def wrap_responses_stream(  # noqa: C901  # one function per Python wrapper it p
             source: Final = cast("AsyncIterator[object]", source_iterator)  # cast-ok: an async stream
             items: Final = (
                 _until_first_output(
-                    source, deadline, lambda item: getattr(item, "type", None) not in PRE_OUTPUT_LIFECYCLE_EVENT_TYPES,
+                    source,
+                    deadline,
+                    lambda item: getattr(item, "type", None) not in PRE_OUTPUT_LIFECYCLE_EVENT_TYPES,
                     expired,
                 )
                 if deadline is not None and expired is not None
@@ -2015,17 +2017,16 @@ def _reported_transcription_stream(attempt: StreamAttempt, response: object) -> 
 async def open_attempt_stream(attempt: StreamAttempt, response: object) -> object:
     """What an attempt returns once its stream is wrapped: a chat stream's first chunk is read here, so
     a stream that fails before any token raises inside the attempt."""
-    from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
-
-    from litellm.router_rust.invoke.shaping import stream_ttft_timeout
     from litellm.litellm_core_utils.get_llm_provider_logic import inferred_provider
+    from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
+    from litellm.router_rust.invoke.shaping import stream_ttft_timeout
 
     seconds: Final = stream_ttft_timeout(attempt.kwargs, {})
     deadline: Final = anyio.current_time() + seconds if seconds is not None else None
-    model: Final = str(attempt.kwargs.get("model", attempt.group))
-    provider: Final = str(attempt.kwargs.get("custom_llm_provider") or inferred_provider(model) or "")
 
     def expired() -> MidStreamFallbackError:
+        model: Final = str(attempt.kwargs.get("model", attempt.group))
+        provider: Final = str(attempt.kwargs.get("custom_llm_provider") or inferred_provider(model) or "")
         return _stream_pre_content_error(
             litellm_exceptions.Timeout(
                 message=f"No model output within stream_ttft_timeout={seconds}s", model=model, llm_provider=provider
@@ -2063,7 +2064,10 @@ async def open_attempt_stream(attempt: StreamAttempt, response: object) -> objec
         )
     if attempt.op in ("aanthropic_messages", "anthropic_messages") and hasattr(response, "__aiter__"):
         return wrap_anthropic_stream(
-            attempt, cast("AsyncIterator[bytes]", response), deadline, expired  # cast-ok: a byte stream
+            attempt,
+            cast("AsyncIterator[bytes]", response),  # cast-ok: a byte stream
+            deadline,
+            expired,
         )
     return response
 

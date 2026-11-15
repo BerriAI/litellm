@@ -3,10 +3,11 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-from datetime import datetime, timedelta
+import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping
+from datetime import datetime, timedelta
 from typing import Final
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import httpx
 import openai
@@ -20,9 +21,6 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.router_utils.cooldown_handlers import is_caller_timeout_408
 from litellm.types.integrations.custom_logger import WEBSEARCH_INTERCEPTION_PREFIX, as_converted_stream
 from litellm.types.llms.openai import AllMessageValues
-import time
-from unittest.mock import patch, MagicMock
-
 from tests.unit.conftest import StreamClock
 from tests.unit.llms.bedrock.slow_upstream import (
     CONVERSE_ANSWER,
@@ -674,31 +672,57 @@ class _TTFTObserver(CustomLogger):
 
 
 def _ttft_chat_chunk(delta: Mapping[str, object], finish: str | None = None) -> bytes:
-    return ("data: " + json.dumps({
-        "id": "chatcmpl-ttft", "object": "chat.completion.chunk", "created": 1, "model": "ttft-model",
-        "choices": [{"index": 0, "delta": delta, "finish_reason": finish}],
-    }) + "\n\n").encode()
+    return (
+        "data: "
+        + json.dumps(
+            {
+                "id": "chatcmpl-ttft",
+                "object": "chat.completion.chunk",
+                "created": 1,
+                "model": "ttft-model",
+                "choices": [{"index": 0, "delta": delta, "finish_reason": finish}],
+            }
+        )
+        + "\n\n"
+    ).encode()
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("request_value, expected", ((None, 0.2), ("0.3", 0.3)))
 async def test_stream_ttft_timeout_is_resolved_per_attempt_and_kept_out_of_provider_body(
-    request_value: str | None, expected: float, respx_mock: respx.MockRouter, ttft_httpx_transport: None, monkeypatch: pytest.MonkeyPatch,
+    request_value: str | None,
+    expected: float,
+    respx_mock: respx.MockRouter,
+    ttft_httpx_transport: None,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     observer: Final = _TTFTObserver()
     monkeypatch.setattr(litellm, "callbacks", [observer])
     route: Final = respx_mock.post("https://ttft.invalid/v1/chat/completions").respond(
-        200, content=_ttft_chat_chunk({"content": "answer"}, "stop") + b"data: [DONE]\n\n",
+        200,
+        content=_ttft_chat_chunk({"content": "answer"}, "stop") + b"data: [DONE]\n\n",
     )
-    router: Final = Router(model_list=[{
-        "model_name": "ttft", "litellm_params": {
-            "model": "openai/ttft-model", "api_key": "fake", "api_base": "https://ttft.invalid/v1", "stream_ttft_timeout": "0.2",
-        },
-    }], num_retries=0)
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "ttft",
+                "litellm_params": {
+                    "model": "openai/ttft-model",
+                    "api_key": "fake",
+                    "api_base": "https://ttft.invalid/v1",
+                    "stream_ttft_timeout": "0.2",
+                },
+            }
+        ],
+        num_retries=0,
+    )
     request: Final = {} if request_value is None else {"stream_ttft_timeout": request_value}
     response: Final = await router.acompletion(
-        model="ttft", messages=[{"role": "user", "content": "hi"}], stream=True, **request,
+        model="ttft",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        **request,
     )
     assert "".join([chunk.choices[0].delta.content or "" async for chunk in response]) == "answer"
     assert observer.timeout == expected
@@ -721,43 +745,69 @@ def _ttft_router(
     provider: str = "openai", *, enabled: bool = True, fallback: bool = True, messages: bool = False
 ) -> Router:
     return Router(
-        model_list=[{
-            "model_name": name,
-            "litellm_params": {
-                "model": f"{provider}/ttft-{name}", "api_key": "fake", "api_base": "https://ttft.invalid/v1", "stream_timeout": 5,
-                **({"stream_ttft_timeout": 0.1} if enabled else {}),
-            },
-            "model_info": {"id": f"ttft-{name}", **({"supported_endpoints": ["/v1/messages"]} if messages else {})},
-        } for name in ("primary", "fallback")],
+        model_list=[
+            {
+                "model_name": name,
+                "litellm_params": {
+                    "model": f"{provider}/ttft-{name}",
+                    "api_key": "fake",
+                    "api_base": "https://ttft.invalid/v1",
+                    "stream_timeout": 5,
+                    **({"stream_ttft_timeout": 0.1} if enabled else {}),
+                },
+                "model_info": {"id": f"ttft-{name}", **({"supported_endpoints": ["/v1/messages"]} if messages else {})},
+            }
+            for name in ("primary", "fallback")
+        ],
         fallbacks=[{"primary": ["fallback"]}] if fallback else [],
-        num_retries=0, allowed_fails=100,
+        num_retries=0,
+        allowed_fails=100,
     )
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("prefix", ("role", "keepalive", "fetch"))
 async def test_stream_ttft_chat_stall_falls_back_and_records_failure(
-    prefix: str, stream_clock: StreamClock, respx_mock: respx.MockRouter, ttft_httpx_transport: None, monkeypatch: pytest.MonkeyPatch,
+    prefix: str,
+    stream_clock: StreamClock,
+    respx_mock: respx.MockRouter,
+    ttft_httpx_transport: None,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     frames: Final = (
         ((0.0, _ttft_chat_chunk({"role": "assistant"})),)
-        if prefix == "role" else ((0.04, b": ping\n\n"),) * 3 if prefix == "keepalive" else ()
+        if prefix == "role"
+        else ((0.04, b": ping\n\n"),) * 3
+        if prefix == "keepalive"
+        else ()
     )
 
     async def slow(_request: httpx.Request) -> httpx.Response:
         if prefix == "fetch":
             await stream_clock.elapse(0.3)
-        return httpx.Response(200, stream=_TTFTByteStream(stream_clock, (
-            *frames, (0.3, _ttft_chat_chunk({"content": "primary"}, "stop")), (0.0, b"data: [DONE]\n\n"),
-        )))
+        return httpx.Response(
+            200,
+            stream=_TTFTByteStream(
+                stream_clock,
+                (
+                    *frames,
+                    (0.3, _ttft_chat_chunk({"content": "primary"}, "stop")),
+                    (0.0, b"data: [DONE]\n\n"),
+                ),
+            ),
+        )
 
-    route: Final = respx_mock.post("https://ttft.invalid/v1/chat/completions").mock(side_effect=[
-        slow,
-        httpx.Response(200, content=_ttft_chat_chunk({"content": "fallback"}, "stop") + b"data: [DONE]\n\n"),
-    ])
+    route: Final = respx_mock.post("https://ttft.invalid/v1/chat/completions").mock(
+        side_effect=[
+            slow,
+            httpx.Response(200, content=_ttft_chat_chunk({"content": "fallback"}, "stop") + b"data: [DONE]\n\n"),
+        ]
+    )
     router: Final = _ttft_router()
-    response: Final = await router.acompletion(model="primary", messages=[{"role": "user", "content": "hi"}], stream=True)
+    response: Final = await router.acompletion(
+        model="primary", messages=[{"role": "user", "content": "hi"}], stream=True
+    )
     assert "".join([chunk.choices[0].delta.content or "" async for chunk in response]) == "fallback"
     assert route.call_count == 2
     assert router.health().failures_this_minute("ttft-primary") == 1
@@ -766,34 +816,56 @@ async def test_stream_ttft_chat_stall_falls_back_and_records_failure(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("enabled, output_first", ((True, True), (False, False)), ids=("R5-output", "R6-disabled"))
 async def test_stream_ttft_chat_allows_output_pause_and_disabled_deadline(
-    enabled: bool, output_first: bool, stream_clock: StreamClock, respx_mock: respx.MockRouter, ttft_httpx_transport: None,
+    enabled: bool,
+    output_first: bool,
+    stream_clock: StreamClock,
+    respx_mock: respx.MockRouter,
+    ttft_httpx_transport: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    route: Final = respx_mock.post("https://ttft.invalid/v1/chat/completions").respond(200, stream=_TTFTByteStream(
-        stream_clock, (
-            (0.0, _ttft_chat_chunk({"content": "first"} if output_first else {"role": "assistant"})),
-            (0.3, _ttft_chat_chunk({"content": "last"}, "stop")), (0.0, b"data: [DONE]\n\n"),
+    route: Final = respx_mock.post("https://ttft.invalid/v1/chat/completions").respond(
+        200,
+        stream=_TTFTByteStream(
+            stream_clock,
+            (
+                (0.0, _ttft_chat_chunk({"content": "first"} if output_first else {"role": "assistant"})),
+                (0.3, _ttft_chat_chunk({"content": "last"}, "stop")),
+                (0.0, b"data: [DONE]\n\n"),
+            ),
         ),
-    ))
+    )
     router: Final = _ttft_router(enabled=enabled)
-    response: Final = await router.acompletion(model="primary", messages=[{"role": "user", "content": "hi"}], stream=True)
-    assert "".join([chunk.choices[0].delta.content or "" async for chunk in response]) == ("firstlast" if output_first else "last")
+    response: Final = await router.acompletion(
+        model="primary", messages=[{"role": "user", "content": "hi"}], stream=True
+    )
+    assert "".join([chunk.choices[0].delta.content or "" async for chunk in response]) == (
+        "firstlast" if output_first else "last"
+    )
     assert route.call_count == 1
 
 
 @pytest.mark.asyncio
 async def test_stream_ttft_chat_without_fallback_raises_provider_timeout(
-    stream_clock: StreamClock, respx_mock: respx.MockRouter, ttft_httpx_transport: None, monkeypatch: pytest.MonkeyPatch,
+    stream_clock: StreamClock,
+    respx_mock: respx.MockRouter,
+    ttft_httpx_transport: None,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    respx_mock.post("https://ttft.invalid/v1/chat/completions").respond(200, stream=_TTFTByteStream(
-        stream_clock, ((0.0, _ttft_chat_chunk({"role": "assistant"})), (0.3, _ttft_chat_chunk({"content": "late"}, "stop"))),
-    ))
+    respx_mock.post("https://ttft.invalid/v1/chat/completions").respond(
+        200,
+        stream=_TTFTByteStream(
+            stream_clock,
+            ((0.0, _ttft_chat_chunk({"role": "assistant"})), (0.3, _ttft_chat_chunk({"content": "late"}, "stop"))),
+        ),
+    )
     router: Final = _ttft_router(fallback=False)
     started: Final = stream_clock()
     with pytest.raises(litellm.Timeout, match="stream_ttft_timeout"):
-        response: Final = await router.acompletion(model="primary", messages=[{"role": "user", "content": "hi"}], stream=True)
+        response: Final = await router.acompletion(
+            model="primary", messages=[{"role": "user", "content": "hi"}], stream=True
+        )
         _ = tuple([chunk async for chunk in response])
     assert stream_clock() - started == pytest.approx(0.1, abs=0.02)
 
@@ -804,21 +876,41 @@ def _ttft_anthropic_frame(kind: str, **fields: object) -> bytes:
 
 @pytest.mark.asyncio
 async def test_stream_ttft_messages_forwards_pings_then_falls_back_without_duplicate_start(
-    stream_clock: StreamClock, respx_mock: respx.MockRouter, ttft_httpx_transport: None, monkeypatch: pytest.MonkeyPatch,
+    stream_clock: StreamClock,
+    respx_mock: respx.MockRouter,
+    ttft_httpx_transport: None,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     start: Final = _ttft_anthropic_frame("message_start", message={"id": "msg-ttft"})
     ping: Final = _ttft_anthropic_frame("ping")
-    output: Final = _ttft_anthropic_frame("content_block_delta", index=0, delta={"type": "text_delta", "text": "fallback"})
-    route: Final = respx_mock.post("https://ttft.invalid/v1/messages").mock(side_effect=[
-        httpx.Response(200, stream=_TTFTByteStream(stream_clock, (
-            (0.0, start), (0.04, ping), (0.04, ping), (0.04, ping), (0.0, output),
-        ))),
-        httpx.Response(200, content=start + output + _ttft_anthropic_frame("message_stop")),
-    ])
+    output: Final = _ttft_anthropic_frame(
+        "content_block_delta", index=0, delta={"type": "text_delta", "text": "fallback"}
+    )
+    route: Final = respx_mock.post("https://ttft.invalid/v1/messages").mock(
+        side_effect=[
+            httpx.Response(
+                200,
+                stream=_TTFTByteStream(
+                    stream_clock,
+                    (
+                        (0.0, start),
+                        (0.04, ping),
+                        (0.04, ping),
+                        (0.04, ping),
+                        (0.0, output),
+                    ),
+                ),
+            ),
+            httpx.Response(200, content=start + output + _ttft_anthropic_frame("message_stop")),
+        ]
+    )
     router: Final = _ttft_router(messages=True)
     response: Final = await router.aanthropic_messages(
-        model="primary", messages=[{"role": "user", "content": "hi"}], max_tokens=10, stream=True,
+        model="primary",
+        messages=[{"role": "user", "content": "hi"}],
+        max_tokens=10,
+        stream=True,
     )
     assert await anext(response) == ping
     body: Final = b"".join([chunk async for chunk in response])
@@ -831,30 +923,65 @@ async def test_stream_ttft_messages_forwards_pings_then_falls_back_without_dupli
 @pytest.mark.asyncio
 @pytest.mark.parametrize("fallback, lifecycle_count", ((False, 1), (True, 201)), ids=("no-policy", "buffer-cap"))
 async def test_stream_ttft_messages_deadline_ignores_wrapper_commit_flag(
-    fallback: bool, lifecycle_count: int, stream_clock: StreamClock, respx_mock: respx.MockRouter, ttft_httpx_transport: None,
+    fallback: bool,
+    lifecycle_count: int,
+    stream_clock: StreamClock,
+    respx_mock: respx.MockRouter,
+    ttft_httpx_transport: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    respx_mock.post("https://ttft.invalid/v1/messages").respond(200, stream=_TTFTByteStream(stream_clock, (
-        *((0.0, _ttft_anthropic_frame("content_block_start", index=0, content_block={"type": "text", "text": ""})),) * lifecycle_count,
-        (0.3, _ttft_anthropic_frame("message_stop")),
-    )))
+    respx_mock.post("https://ttft.invalid/v1/messages").respond(
+        200,
+        stream=_TTFTByteStream(
+            stream_clock,
+            (
+                *(
+                    (
+                        0.0,
+                        _ttft_anthropic_frame(
+                            "content_block_start", index=0, content_block={"type": "text", "text": ""}
+                        ),
+                    ),
+                )
+                * lifecycle_count,
+                (0.3, _ttft_anthropic_frame("message_stop")),
+            ),
+        ),
+    )
     router: Final = _ttft_router(fallback=fallback, messages=True)
     with pytest.raises(litellm.Timeout, match="stream_ttft_timeout"):
         response: Final = await router.aanthropic_messages(
-            model="primary", messages=[{"role": "user", "content": "hi"}], max_tokens=10, stream=True,
+            model="primary",
+            messages=[{"role": "user", "content": "hi"}],
+            max_tokens=10,
+            stream=True,
         )
         _ = tuple([chunk async for chunk in response])
 
 
 def _ttft_response_event(kind: str, model: str, *, background: bool = False) -> bytes:
     response: Final = {
-        "id": f"resp_{model}", "object": "response", "created_at": 1, "model": model,
-        "status": "completed" if kind == "response.completed" else "in_progress", "output": [],
-        "parallel_tool_calls": True, "tool_choice": "auto", "tools": [], "background": background,
+        "id": f"resp_{model}",
+        "object": "response",
+        "created_at": 1,
+        "model": model,
+        "status": "completed" if kind == "response.completed" else "in_progress",
+        "output": [],
+        "parallel_tool_calls": True,
+        "tool_choice": "auto",
+        "tools": [],
+        "background": background,
     }
     event: Final = (
-        {"type": kind, "delta": model, "item_id": "msg-ttft", "output_index": 0, "content_index": 0, "sequence_number": 1}
+        {
+            "type": kind,
+            "delta": model,
+            "item_id": "msg-ttft",
+            "output_index": 0,
+            "content_index": 0,
+            "sequence_number": 1,
+        }
         if kind == "response.output_text.delta"
         else {"type": kind, "response": response, "sequence_number": 2 if kind == "response.completed" else 0}
     )
@@ -864,24 +991,45 @@ def _ttft_response_event(kind: str, model: str, *, background: bool = False) -> 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("background", (False, True), ids=("R4-fallback", "background-exempt"))
 async def test_stream_ttft_responses_holds_lifecycle_until_output_and_exempts_background_runs(
-    background: bool, stream_clock: StreamClock, respx_mock: respx.MockRouter, ttft_httpx_transport: None,
+    background: bool,
+    stream_clock: StreamClock,
+    respx_mock: respx.MockRouter,
+    ttft_httpx_transport: None,
 ) -> None:
-    route: Final = respx_mock.post("https://ttft.invalid/v1/responses").mock(side_effect=[
-        httpx.Response(200, stream=_TTFTByteStream(stream_clock, (
-            (0.0, _ttft_response_event("response.created", "primary", background=background)),
-            (0.3, _ttft_response_event("response.output_text.delta", "primary")),
-            (0.0, _ttft_response_event("response.completed", "primary")),
-        ))),
-        httpx.Response(200, stream=_TTFTByteStream(stream_clock, (
-            (0.0, _ttft_response_event("response.created", "fallback")),
-            (0.05, _ttft_response_event("response.output_text.delta", "fallback")),
-            (0.3, _ttft_response_event("response.completed", "fallback")),
-        ))),
-    ])
+    route: Final = respx_mock.post("https://ttft.invalid/v1/responses").mock(
+        side_effect=[
+            httpx.Response(
+                200,
+                stream=_TTFTByteStream(
+                    stream_clock,
+                    (
+                        (0.0, _ttft_response_event("response.created", "primary", background=background)),
+                        (0.3, _ttft_response_event("response.output_text.delta", "primary")),
+                        (0.0, _ttft_response_event("response.completed", "primary")),
+                    ),
+                ),
+            ),
+            httpx.Response(
+                200,
+                stream=_TTFTByteStream(
+                    stream_clock,
+                    (
+                        (0.0, _ttft_response_event("response.created", "fallback")),
+                        (0.05, _ttft_response_event("response.output_text.delta", "fallback")),
+                        (0.3, _ttft_response_event("response.completed", "fallback")),
+                    ),
+                ),
+            ),
+        ]
+    )
     router: Final = _ttft_router()
     response: Final = await router.aresponses(model="primary", input="hi", stream=True, background=background)
     events: Final = tuple([event async for event in response])
-    assert tuple(event.type for event in events) == ("response.created", "response.output_text.delta", "response.completed")
+    assert tuple(event.type for event in events) == (
+        "response.created",
+        "response.output_text.delta",
+        "response.completed",
+    )
     assert tuple(event.delta for event in events if event.type == "response.output_text.delta") == (
         "primary" if background else "fallback",
     )
