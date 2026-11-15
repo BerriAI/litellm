@@ -1683,7 +1683,9 @@ async def test_new_user_default_teams_flow(mocker):
     mock_prisma_client.db.litellm_teamtable.find_many = mocker.AsyncMock(
         return_value=[
             SimpleNamespace(
-                team_id="96fed65b-0182-4ff4-8429-2721cd7d42af", metadata={"team_member_budget_id": "team-budget"}
+                team_id="96fed65b-0182-4ff4-8429-2721cd7d42af",
+                metadata={"team_member_budget_id": "team-budget"},
+                default_team_member_models=[],
             )
         ]
     )
@@ -4690,11 +4692,18 @@ async def test_resolve_user_email_metadata_skips_db_when_no_user_ids(mocker):
 
 
 @pytest.mark.parametrize(
-    ("teams_are_defaults", "team_metadata", "expected_max_budget_in_team"),
+    ("teams_are_defaults", "team_metadata", "default_team_member_models", "expected_max_budget_in_team"),
     [
-        pytest.param(True, {"team_member_budget_id": "team-budget"}, None, id="default-team-with-a-member-budget"),
-        pytest.param(True, {}, 25.0, id="default-team-without-a-member-budget"),
-        pytest.param(False, {"team_member_budget_id": "team-budget"}, 25.0, id="team-named-in-the-request"),
+        pytest.param(True, {"team_member_budget_id": "team-budget"}, [], None, id="default-team-with-a-member-budget"),
+        pytest.param(True, {}, [], 25.0, id="default-team-without-a-member-budget"),
+        pytest.param(
+            True,
+            {"team_member_budget_id": "team-budget"},
+            ["gpt-5"],
+            25.0,
+            id="default-team-whose-member-models-give-each-member-a-private-budget",
+        ),
+        pytest.param(False, {"team_member_budget_id": "team-budget"}, [], 25.0, id="team-named-in-the-request"),
     ],
 )
 @pytest.mark.asyncio
@@ -4702,6 +4711,7 @@ async def test_add_new_user_to_default_team_only_drops_the_cap_the_team_member_b
     mocker: MockerFixture,
     teams_are_defaults: bool,
     team_metadata: dict[str, str],
+    default_team_member_models: list[str],
     expected_max_budget_in_team: float | None,
 ) -> None:
     """A private copy of a default team's cap has no budget_duration and never resets, so the member
@@ -4718,7 +4728,11 @@ async def test_add_new_user_to_default_team_only_drops_the_cap_the_team_member_b
     )
     prisma_client: Final = mocker.MagicMock()
     prisma_client.db.litellm_teamtable.find_many = mocker.AsyncMock(
-        return_value=[SimpleNamespace(team_id="budgeted-team", metadata=team_metadata)]
+        return_value=[
+            SimpleNamespace(
+                team_id="budgeted-team", metadata=team_metadata, default_team_member_models=default_team_member_models
+            )
+        ]
     )
 
     await add_new_user_to_default_team(
