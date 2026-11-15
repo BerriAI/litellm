@@ -22,6 +22,8 @@ from litellm.router_utils.prompt_cache_observations.streaks import (
     Unproven,
 )
 
+pytestmark = pytest.mark.asyncio(loop_scope="session")
+
 _TTL_MS: Final = 300_000
 _T0: Final = 1_700_000_000_000
 

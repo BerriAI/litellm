@@ -6,6 +6,14 @@ import { keyDetailHref, teamDetailHref, userDetailHref, modelGroupHref } from "@
 import { uiHref } from "@/utils/uiHref";
 
 export type SavedAlert = components["schemas"]["AlertView"];
+type MetricAlert = SavedAlert & {
+  type: Exclude<SavedAlert["type"], "prompt_cache">;
+  resource_type: Exclude<SavedAlert["resource_type"], "deployment">;
+  evidence: components["schemas"]["MetricEvidence"];
+};
+function isMetricAlert(alert: SavedAlert): alert is MetricAlert {
+  return "value" in alert.evidence && alert.type !== "prompt_cache" && alert.resource_type !== "deployment";
+}
 export type AlertItem =
   | { source: "performance"; alert: SavedAlert }
   | { source: "deprecation"; alert: DeprecationAlert };
@@ -127,7 +135,8 @@ export function presentAlert(item: AlertItem) {
       chartTitle: i18n.t("alerts.usageChart.title"),
     };
   }
-  if (!("value" in alert.evidence)) {
+  if (isMetricAlert(alert)) return presentMetricAlert(alert, name);
+  if ("deprecation_date" in alert.evidence) {
     return {
       id: alert.id,
       title: i18n.t("alerts.unified.retiresTitle", { name, date: dateLabel(alert.evidence.deprecation_date) }),
@@ -145,6 +154,24 @@ export function presentAlert(item: AlertItem) {
       chartTitle: i18n.t("alerts.usageChart.title"),
     };
   }
+  return {
+    id: alert.id,
+    title: i18n.t("alerts.unified.unrecognized"),
+    description: "",
+    status: alert.status,
+    resourceType: alert.resource_type,
+    resourceName: name,
+    href: undefined,
+    linkLabel: "",
+    unit: "requests" as MetricUnit,
+    history: null,
+    baseline: undefined,
+    observed: alert.window_start.slice(0, 10),
+    dates: [[i18n.t("alerts.unified.firstDetected"), alert.created_at]],
+    chartTitle: i18n.t("alerts.usageChart.title"),
+  };
+}
+function presentMetricAlert(alert: MetricAlert, name: string) {
   const evidence = alert.evidence;
   const observed = alert.window_start.slice(0, 10);
   const label = i18n.t(`alerts.unified.metrics.${alert.type}`);

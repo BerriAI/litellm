@@ -59,6 +59,11 @@ describe("alert presentation", () => {
       null,
     ]);
   });
+  it("does not read a record whose type, resource and evidence disagree as a metric alert", () => {
+    const presentation = presentAlert({ source: "performance", alert: { ...saved, resource_type: "deployment" } });
+    expect(presentation.title).toBe("This alert can't be shown in this version of the dashboard.");
+    expect([presentation.href, presentation.history, presentation.baseline]).toEqual([undefined, null, undefined]);
+  });
   it("links to the resource with an inclusive eight-day window", () => {
     expect(activityLink(saved)).toBe(
       "/ui/teams?team=example-team&detail_tab=activity&activity_from=2026-01-01&activity_to=2026-01-08",

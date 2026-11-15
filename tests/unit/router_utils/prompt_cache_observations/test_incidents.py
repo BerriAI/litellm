@@ -232,6 +232,9 @@ async def test_while_the_scope_break_cannot_be_delivered_no_later_evidence_count
     ]
 
 
+_DEADLOCK_GUARD_SECONDS = 5
+
+
 class _HeldBreakStore:
     """Fails the first update, holds the first scope break until released, fails the second scope break and
     accepts everything after. Every update that lands is recorded in order."""
@@ -261,10 +264,15 @@ async def test_evidence_lost_while_an_older_break_is_in_flight_is_still_broken_b
     detector = _detector(_Recorder(), store)
     await detector.record(_observation("lost-1", _READ, _START + 11))
     first_flush = asyncio.create_task(detector.record(_observation("next", _MISS, _START + 20)))
-    await store.held.wait()
-    await detector.record(_observation("lost-2", _READ, _START + 15))
-    store.release.set()
-    await first_flush
+    try:
+        await asyncio.wait_for(store.held.wait(), timeout=_DEADLOCK_GUARD_SECONDS)
+        await detector.record(_observation("lost-2", _READ, _START + 15))
+        store.release.set()
+        await asyncio.wait_for(first_flush, timeout=_DEADLOCK_GUARD_SECONDS)
+    finally:
+        store.release.set()
+        first_flush.cancel()
+        await asyncio.gather(first_flush, return_exceptions=True)
     assert store.applied == (
         ScopeBreak(_SCOPE, int((_START + 11 + _DURATION) * 1000)),
         ScopeBreak(_SCOPE, int((_START + 15 + _DURATION) * 1000)),

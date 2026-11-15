@@ -5917,7 +5917,8 @@
           "milliseconds": "Mean response time per day",
           "ratio": "Daily error rate"
         }
-      }
+      },
+      "unrecognized": "This alert can't be shown in this version of the dashboard."
     },
     "page": {
       "tabs": {
