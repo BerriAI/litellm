@@ -1,17 +1,20 @@
 import json
 import re
 from collections.abc import Iterable, Mapping
+from itertools import chain
 from types import MappingProxyType
-from typing import Final, Literal
+from typing import Final, Literal, Protocol
 
 from fastapi import HTTPException, Request
 from pydantic import ConfigDict, TypeAdapter
+from typing_extensions import TypedDict
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping
 from litellm.proxy._types import (
     LiteLLM_ObjectPermissionTable,
+    LiteLLM_TeamTable,
     LitellmUserRoles,
     UserAPIKeyAuth,
 )
@@ -25,6 +28,18 @@ from litellm.types.vector_stores import LiteLLM_ManagedVectorStore
 from litellm.utils import ProviderConfigManager
 
 _JSON_OBJECT: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_in_errors=True))
+
+
+class _ManagedVectorStoreFields(TypedDict, total=False, extra_items=object):
+    pass
+
+
+class _DumpableRow(Protocol):
+    def model_dump(self) -> Mapping[str, object]: ...
+
+
+def _managed_vector_store_from_row(row: _DumpableRow) -> LiteLLM_ManagedVectorStore:
+    return LiteLLM_ManagedVectorStore(**_ManagedVectorStoreFields(**row.model_dump()))
 
 
 def normalize_litellm_params(
@@ -168,6 +183,8 @@ async def can_user_access_vector_store(
     4. The caller's team-level object_permission.vector_stores explicitly lists
        this vector store id.
     5. The caller's team_id matches the vector store's team_id.
+    6. An access group of the caller's key or team lists this vector store id,
+       which counts exactly like rules 3 and 4.
 
     A dashboard session credential is evaluated against the same effective
     contexts as listing (its own grants plus each real team of the user).
@@ -180,7 +197,9 @@ async def can_user_access_vector_store(
         return True
 
     auth_contexts: Final = await _vector_store_auth_contexts(user_api_key_dict)
-    return await _is_vector_store_granted_to_any(vector_store, auth_contexts)
+    return await _is_vector_store_granted_to_any(vector_store, auth_contexts) or (
+        vector_store.get("vector_store_id") in await _access_group_vector_store_ids(auth_contexts)
+    )
 
 
 async def _is_vector_store_granted(
@@ -253,16 +272,54 @@ async def _is_vector_store_granted_to_any(
     return False
 
 
+async def _team_or_none(auth_context: UserAPIKeyAuth) -> LiteLLM_TeamTable | None:
+    """A team that cannot be read has no access groups here, as it has no own list."""
+    from litellm.proxy.auth.auth_checks import get_team_object
+    from litellm.proxy.proxy_server import prisma_client, proxy_logging_obj, user_api_key_cache
+
+    if auth_context.team_id is None:
+        return None
+    try:
+        return await get_team_object(
+            team_id=auth_context.team_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=auth_context.parent_otel_span,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+    except Exception as e:  # noqa: BLE001  # no groups, per the docstring
+        verbose_proxy_logger.debug("Could not read team id=%s for its access groups: %s", auth_context.team_id, e)
+        return None
+
+
+async def _access_group_vector_store_ids(auth_contexts: tuple[UserAPIKeyAuth, ...]) -> frozenset[str]:
+    """Groups only add access here, so a group that cannot be read lists nothing."""
+    from litellm.proxy.auth.auth_checks import access_group_vector_stores
+
+    listed: Final = [
+        await access_group_vector_stores(auth_context, await _team_or_none(auth_context))
+        for auth_context in auth_contexts
+    ]
+    return frozenset(chain.from_iterable(chain.from_iterable(stores.values()) for stores in listed))
+
+
 async def filter_listable_vector_stores(
     vector_stores: Iterable[LiteLLM_ManagedVectorStore],
     user_api_key_dict: UserAPIKeyAuth,
 ) -> tuple[LiteLLM_ManagedVectorStore, ...]:
-    """Non-admins only see stores their key, one of their teams' object_permission, or team ownership grants."""
+    """Non-admins only see stores their key, a team's object_permission, team ownership or access groups grant."""
     if _is_proxy_admin(user_api_key_dict):
         return tuple(vector_stores)
 
     auth_contexts: Final = await _vector_store_auth_contexts(user_api_key_dict)
-    return tuple([vs for vs in vector_stores if await _is_vector_store_granted_to_any(vs, auth_contexts)])
+    group_store_ids: Final = await _access_group_vector_store_ids(auth_contexts)
+    return tuple(
+        [
+            vs
+            for vs in vector_stores
+            if vs.get("vector_store_id") in group_store_ids or await _is_vector_store_granted_to_any(vs, auth_contexts)
+        ]
+    )
 
 
 async def get_litellm_managed_vector_store(
@@ -316,7 +373,7 @@ async def get_litellm_managed_vector_store(
         )
         if not rows:
             return None
-        return normalize_litellm_params(LiteLLM_ManagedVectorStore(**rows[0].model_dump()))
+        return normalize_litellm_params(_managed_vector_store_from_row(rows[0]))
     except Exception as e:
         verbose_proxy_logger.warning(
             "Failed to resolve vector store id=%s from shared cache: %s",

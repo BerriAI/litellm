@@ -11,7 +11,7 @@ from litellm.proxy.common_utils.user_api_key_cache import is_user_key_cache_key
 from litellm.redis.stores.auth_cache import AuthCacheSettings, AuthCacheStore
 from litellm.redis.stores.connection import connect
 from litellm.rust_bridge._native import LocalSizes, NativeAuthCache
-from tests.unit.caching.test_redis_batch import FakeNatives, fake_send
+from tests.unit.caching.redis_batch_double import FakeNatives, fake_send
 
 from .auth_cache_double import FakeAuthCache
 
@@ -134,7 +134,7 @@ async def test_a_key_the_request_read_found_absent_is_answered_without_another_r
         refilled = await store.get("team_id:absent")
         store.declare_delete("team_id:hit")
         deleted = await store.get("team_id:hit")
-        await request.flush_all()
+        await request.flush_pre_call()
 
     assert found == {"team_id:absent": None, "team_id:hit": {"team_id": "hit"}}
     assert absent is None

@@ -22,6 +22,8 @@ from integration._support.tls import server_context, write_self_signed_cert
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue
 
+from tests.integration._support.ports import allocate_port
+
 CHATGPT_AUTH_HOST: Final = "auth.openai.com"
 GITHUB_HOST: Final = "github.com"
 GITHUB_API_HOST: Final = "api.github.com"
@@ -366,7 +368,7 @@ def _tunnel(
                 _pipe(upstream, self.request)
                 outbound.join(timeout=12)
 
-    with _TunnelServer(("127.0.0.1", 0), Tunnel) as server:
+    with _TunnelServer(("127.0.0.1", allocate_port()), Tunnel) as server:
         thread: Final = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05})
         thread.start()
         try:
@@ -378,9 +380,7 @@ def _tunnel(
 
 
 @contextmanager
-def device_login_peers(
-    directory: Path, provider: Callable[[Request], Reply] | None = None
-) -> Generator[Peers]:
+def device_login_peers(directory: Path, provider: Callable[[Request], Reply] | None = None) -> Generator[Peers]:
     cert, key = write_self_signed_cert(directory, (*AUTH_HOSTS, COPILOT_API_HOST))
     switches: Final = Switches(threading.Event(), threading.Event(), threading.Event(), threading.Event())
     authorities: Final[SimpleQueue[str]] = SimpleQueue()

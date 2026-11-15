@@ -1,10 +1,11 @@
 import asyncio
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from collections.abc import Set as AbstractSet
+from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from types import MappingProxyType
-from typing import Final, Literal, TypeVar
+from typing import Final, Literal, Protocol, TypeVar
 
 from pydantic import ConfigDict, TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
@@ -168,6 +169,16 @@ async def _db_or_empty(
         return None
 
 
+class _SpendLogTransaction(Protocol):
+    async def execute_raw(self, query: str, /) -> int: ...
+
+    async def query_raw(self, query: str, /, *args: object) -> object: ...
+
+
+def _spend_log_transaction(prisma_client: PrismaClient) -> AbstractAsyncContextManager[_SpendLogTransaction]:
+    return prisma_client.db.tx(timeout=_SPEND_LOG_TRANSACTION_TIMEOUT)
+
+
 async def _rows_within_the_statement_timeout(
     prisma_client: PrismaClient,
     sql: str,
@@ -177,7 +188,7 @@ async def _rows_within_the_statement_timeout(
 ) -> Sequence[Mapping[str, object]]:
     async with (
         db_span("recover_key_metadata", table),
-        prisma_client.db.tx(timeout=_SPEND_LOG_TRANSACTION_TIMEOUT) as transaction,
+        _spend_log_transaction(prisma_client) as transaction,
     ):
         await transaction.execute_raw(_SPEND_LOG_STATEMENT_TIMEOUT_SQL)
         for setting in planner_settings:

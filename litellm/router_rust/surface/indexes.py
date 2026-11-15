@@ -308,8 +308,9 @@ class HostedPatternRouter(PatternMatchRouter):
 
         if not isinstance(model, str):  # pyright: ignore[reportUnnecessaryIsInstance]  # a caller's non-string model goes to the base class
             return super().get_models_by_pattern(model, custom_llm_provider)
-        provider: Final = custom_llm_provider or inferred_provider(model)
-        return self._owner.models_by_pattern(self._team, [model, f"{provider}/{model}"])
+        return self._owner.models_by_pattern(self._team, [model]) or self._owner.models_by_pattern(
+            self._team, [f"{custom_llm_provider or inferred_provider(model)}/{model}"]
+        )
 
 
 class _TeamRouters(dict[str, HostedPatternRouter]):
