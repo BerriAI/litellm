@@ -257,6 +257,24 @@ def _adds_environment_reference(value: object, stored: object) -> bool:
     )
 
 
+@dataclass(frozen=True, slots=True)
+class _EnvironmentReferenceDenied:
+    field: str
+
+
+def _raise_environment_reference_denied(denial: _EnvironmentReferenceDenied | None) -> None:
+    match denial:
+        case None:
+            return
+        case _EnvironmentReferenceDenied(field=field):
+            raise ProxyException(
+                message=f"Only proxy admins can set an os.environ/ reference on a model ({field!r}).",
+                type=ProxyErrorTypes.auth_error.value,
+                code=status.HTTP_403_FORBIDDEN,
+                param=field,
+            )
+
+
 async def update_team(*args, **kwargs):
     """
     Backward-compatible shim for tests/legacy call sites that patch this symbol.
@@ -2879,25 +2897,25 @@ class ModelManagementAuthChecks:
         )
 
     @staticmethod
-    def _reject_non_admin_environment_reference(
+    def _non_admin_environment_reference(
         *,
         incoming_params: Mapping[str, object] | None,
         stored_params: GenericLiteLLMParams | None,
         user_api_key_dict: UserAPIKeyAuth,
-    ) -> None:
+    ) -> _EnvironmentReferenceDenied | None:
         if incoming_params is None or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
-            return
+            return None
         stored: Final[Mapping[str, object]] = (
             MappingProxyType({}) if stored_params is None else _decrypted_litellm_params(stored_params)
         )
-        for name, value in incoming_params.items():
-            if _adds_environment_reference(value, stored.get(name)):
-                raise ProxyException(
-                    message=f"Only proxy admins can set an os.environ/ reference on a model ({name!r}).",
-                    type=ProxyErrorTypes.auth_error.value,
-                    code=status.HTTP_403_FORBIDDEN,
-                    param=name,
-                )
+        return next(
+            (
+                _EnvironmentReferenceDenied(name)
+                for name, value in incoming_params.items()
+                if _adds_environment_reference(value, stored.get(name))
+            ),
+            None,
+        )
 
     @staticmethod
     async def can_user_make_model_call(
@@ -2986,10 +3004,12 @@ class ModelManagementAuthChecks:
                 team_obj=team_obj,
                 premium_user=premium_user,
             )
-            ModelManagementAuthChecks._reject_non_admin_environment_reference(
-                incoming_params=incoming_params,
-                stored_params=model_params.litellm_params if member_operation == "update" else None,
-                user_api_key_dict=user_api_key_dict,
+            _raise_environment_reference_denied(
+                ModelManagementAuthChecks._non_admin_environment_reference(
+                    incoming_params=incoming_params,
+                    stored_params=model_params.litellm_params if member_operation == "update" else None,
+                    user_api_key_dict=user_api_key_dict,
+                )
             )
             return team_write
         ## Check non-team model auth
