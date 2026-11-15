@@ -5,24 +5,21 @@ from litellm.router_utils.prompt_cache_observations.paths import classify_path
 from litellm.router_utils.prompt_cache_observations.types import (
     ClientSurface,
     ObservationPath,
-    ProviderFamily,
     Runtime,
     UnassessedReason,
-    WireShape,
 )
 from litellm.rust_bridge.catalog import Route
 from litellm.rust_bridge.response_metadata import mark_rust_response
 from litellm.types.utils import ModelResponse
 
 _BODY: dict[str, JsonValue] = {"messages": [{"role": "user", "content": "hi"}]}
-_BEDROCK_BASE = "https://bedrock-runtime.us-east-1.amazonaws.com/model/us.anthropic.claude-test-v1:0"
+_DICT_RESPONSE = {"id": "msg"}
 
 
 def _classify(
     provider: str = "anthropic",
     model: str = "claude-test",
     call_type: str = "acompletion",
-    api_base: str | None = None,
     body: dict[str, JsonValue] = _BODY,
     stream: bool = False,
     response: object = None,
@@ -32,7 +29,6 @@ def _classify(
         provider=provider,
         provider_model=model,
         call_type=call_type,
-        api_base=api_base,
         body=body,
         stream=stream,
         response=ModelResponse() if response is None else response,
@@ -41,61 +37,35 @@ def _classify(
 
 
 @pytest.mark.parametrize(
-    ("api_base", "wire"),
+    ("call_type", "surface"),
     [
-        (f"{_BEDROCK_BASE}/converse", WireShape.BEDROCK_CONVERSE),
-        (f"{_BEDROCK_BASE}/converse-stream", WireShape.BEDROCK_CONVERSE),
-        (f"{_BEDROCK_BASE}/invoke", WireShape.ANTHROPIC_MESSAGES),
-        (f"{_BEDROCK_BASE}/invoke-with-response-stream", WireShape.ANTHROPIC_MESSAGES),
+        ("anthropic_messages", ClientSurface.MESSAGES),
+        ("acompletion", ClientSurface.CHAT),
+        ("aresponses", ClientSurface.RESPONSES),
     ],
 )
-def test_bedrock_wire_shape_follows_the_operation_actually_called(api_base: str, wire: WireShape) -> None:
-    assert _classify(provider="bedrock", model="us.anthropic.claude-test-v1:0", api_base=api_base) == ObservationPath(
-        provider=ProviderFamily.BEDROCK, wire=wire, surface=ClientSurface.CHAT, stream=False, runtime=Runtime.PYTHON
+def test_each_client_surface_on_native_anthropic_is_classified(call_type: str, surface: ClientSurface) -> None:
+    assert _classify(call_type=call_type, stream=True) == ObservationPath(
+        surface=surface, stream=True, runtime=Runtime.PYTHON
     )
 
 
-_CONVERSE_COUNT = f"{_BEDROCK_BASE}/count-tokens"
-_DICT_RESPONSE = {"id": "msg"}
-
-
 @pytest.mark.parametrize(
-    ("provider", "model", "call_type", "api_base", "body", "response", "reason"),
+    ("provider", "model", "call_type", "body", "reason"),
     [
-        ("openai", "gpt-test", "acompletion", None, _BODY, None, UnassessedReason.PROVIDER_OUT_OF_SCOPE),
-        ("azure_ai", "mistral-large", "acompletion", None, _BODY, None, UnassessedReason.MODEL_OUT_OF_SCOPE),
-        ("vertex_ai", "gemini-test", "acompletion", None, _BODY, None, UnassessedReason.MODEL_OUT_OF_SCOPE),
-        ("anthropic", "claude-test", "aembedding", None, _BODY, None, UnassessedReason.SURFACE_OUT_OF_SCOPE),
-        (
-            "bedrock",
-            "us.anthropic.claude-test-v1:0",
-            "acompletion",
-            _CONVERSE_COUNT,
-            _BODY,
-            None,
-            UnassessedReason.WIRE_SHAPE_UNRECOGNIZED,
-        ),
-        (
-            "vertex_ai",
-            "claude-test",
-            "acompletion",
-            None,
-            {"contents": []},
-            None,
-            UnassessedReason.WIRE_SHAPE_UNRECOGNIZED,
-        ),
+        ("bedrock", "us.anthropic.claude-test-v1:0", "acompletion", _BODY, UnassessedReason.PROVIDER_OUT_OF_SCOPE),
+        ("vertex_ai", "claude-test", "acompletion", _BODY, UnassessedReason.PROVIDER_OUT_OF_SCOPE),
+        ("azure_ai", "claude-test", "acompletion", _BODY, UnassessedReason.PROVIDER_OUT_OF_SCOPE),
+        ("openai", "gpt-test", "acompletion", _BODY, UnassessedReason.PROVIDER_OUT_OF_SCOPE),
+        ("anthropic", "not-a-claude-model", "acompletion", _BODY, UnassessedReason.MODEL_OUT_OF_SCOPE),
+        ("anthropic", "claude-test", "aembedding", _BODY, UnassessedReason.SURFACE_OUT_OF_SCOPE),
+        ("anthropic", "claude-test", "acompletion", {"contents": []}, UnassessedReason.WIRE_SHAPE_UNRECOGNIZED),
     ],
 )
 def test_paths_that_cannot_be_classified_are_unassessed(
-    provider: str,
-    model: str,
-    call_type: str,
-    api_base: str | None,
-    body: dict[str, JsonValue],
-    response: object,
-    reason: UnassessedReason,
+    provider: str, model: str, call_type: str, body: dict[str, JsonValue], reason: UnassessedReason
 ) -> None:
-    assert _classify(provider, model, call_type, api_base, body, response=response) == reason
+    assert _classify(provider, model, call_type, body) == reason
 
 
 @pytest.mark.parametrize(

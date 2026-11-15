@@ -4,9 +4,9 @@ from typing import Final
 
 from pydantic import JsonValue, TypeAdapter, ValidationError
 
-from litellm.litellm_core_utils.upstream_cache_evidence import AnthropicStreamUsage, ConverseStreamUsage
+from litellm.litellm_core_utils.upstream_cache_evidence import AnthropicStreamUsage
 
-from .types import CacheCounters, UpstreamCacheUsage, UsageUnknown, UsageUnknownReason, WireShape
+from .types import CacheCounters, UpstreamCacheUsage, UsageUnknown, UsageUnknownReason
 
 _BODY: Final = TypeAdapter(dict[str, JsonValue])
 
@@ -84,31 +84,6 @@ def _anthropic_usage(body: Mapping[str, JsonValue]) -> UpstreamCacheUsage:
     )
 
 
-def _converse_details_total(details: JsonValue) -> _Breakdown | UsageUnknownReason | None:
-    if details is None:
-        return None
-    if not isinstance(details, list):
-        return UsageUnknownReason.MALFORMED
-    totals: Final = tuple(_breakdown(detail, ("inputTokens",)) for detail in details)
-    complete: Final = tuple(total.total for total in totals if isinstance(total, _Breakdown) and total.complete)
-    return (
-        _Breakdown(total=sum(complete), complete=True) if len(complete) == len(totals) else UsageUnknownReason.MALFORMED
-    )
-
-
-def _converse_usage(body: Mapping[str, JsonValue]) -> UpstreamCacheUsage:
-    stop_reason: Final = body.get("stopReason")
-    if not isinstance(stop_reason, str) or not stop_reason:
-        return UsageUnknown(UsageUnknownReason.INCOMPLETE)
-    usage: Final = body.get("usage")
-    if not isinstance(usage, dict):
-        return UsageUnknown(UsageUnknownReason.MISSING)
-    return _checked_against(
-        _counters(usage, "cacheReadInputTokens", "cacheWriteInputTokens"),
-        _converse_details_total(usage.get("cacheDetails")),
-    )
-
-
 def _response_body(raw: object) -> Mapping[str, JsonValue] | UsageUnknown:
     try:
         match raw:
@@ -122,15 +97,9 @@ def _response_body(raw: object) -> Mapping[str, JsonValue] | UsageUnknown:
         return UsageUnknown(UsageUnknownReason.BODY_MALFORMED)
 
 
-def upstream_cache_usage(wire: WireShape, raw_response: object) -> UpstreamCacheUsage:
+def upstream_cache_usage(raw_response: object) -> UpstreamCacheUsage:
     body: Final = _response_body(raw_response)
-    if isinstance(body, UsageUnknown):
-        return body
-    match wire:
-        case WireShape.ANTHROPIC_MESSAGES:
-            return _anthropic_usage(body)
-        case WireShape.BEDROCK_CONVERSE:
-            return _converse_usage(body)
+    return body if isinstance(body, UsageUnknown) else _anthropic_usage(body)
 
 
 def _reported(usage: JsonValue) -> Mapping[str, JsonValue]:
@@ -151,21 +120,7 @@ def _anthropic_stream_usage(stream: AnthropicStreamUsage) -> UpstreamCacheUsage:
     return _anthropic_usage({"stop_reason": stream.stop_reason, "usage": merged})
 
 
-def _converse_stream_usage(stream: ConverseStreamUsage) -> UpstreamCacheUsage:
-    if stream.stops != 1 or stream.usage_events != 1:
-        return UsageUnknown(UsageUnknownReason.INCOMPLETE)
-    if stream.out_of_order:
-        return UsageUnknown(UsageUnknownReason.MALFORMED)
-    return _converse_usage({"stopReason": stream.stop_reason, "usage": stream.usage})
-
-
-def stream_cache_usage(wire: WireShape, stream: object) -> UpstreamCacheUsage:
-    """The record must match the wire the request went out on: a Converse request answered by an Anthropic-shaped
-    record means the stream was translated, and a translated stream carries synthesized counters."""
-    match wire, stream:
-        case WireShape.ANTHROPIC_MESSAGES, AnthropicStreamUsage():
-            return _anthropic_stream_usage(stream)
-        case WireShape.BEDROCK_CONVERSE, ConverseStreamUsage():
-            return _converse_stream_usage(stream)
-        case _:
-            return UsageUnknown(UsageUnknownReason.STREAM_USAGE_NOT_CAPTURED)
+def stream_cache_usage(stream: object) -> UpstreamCacheUsage:
+    if not isinstance(stream, AnthropicStreamUsage):
+        return UsageUnknown(UsageUnknownReason.STREAM_USAGE_NOT_CAPTURED)
+    return _anthropic_stream_usage(stream)

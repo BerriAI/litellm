@@ -9,9 +9,9 @@ from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.llms.anthropic.common_utils import is_claude_model_target
 from litellm.types.utils import CallTypes
 
-from .types import ClientSurface, ObservationPath, ProviderFamily, Runtime, UnassessedReason, WireShape
+from .types import ClientSurface, ObservationPath, Runtime, UnassessedReason
 
-_PROVIDERS: Final = MappingProxyType({provider.value: provider for provider in ProviderFamily})
+_ANTHROPIC: Final = "anthropic"
 _SURFACES: Final = MappingProxyType(
     {
         CallTypes.anthropic_messages.value: ClientSurface.MESSAGES,
@@ -22,28 +22,7 @@ _SURFACES: Final = MappingProxyType(
         CallTypes.aresponses.value: ClientSurface.RESPONSES,
     }
 )
-_BEDROCK_OPERATIONS: Final = MappingProxyType(
-    {
-        "converse": WireShape.BEDROCK_CONVERSE,
-        "converse-stream": WireShape.BEDROCK_CONVERSE,
-        "invoke": WireShape.ANTHROPIC_MESSAGES,
-        "invoke-with-response-stream": WireShape.ANTHROPIC_MESSAGES,
-    }
-)
 _RUST_RESPONSE_HEADER: Final = "x-litellm-rust"
-
-
-def upstream_wire(provider: str, api_base: str | None, body: Mapping[str, JsonValue] | None) -> WireShape | None:
-    """The provider API the attempt was actually sent to, independent of the client route that reached it."""
-    family: Final = _PROVIDERS.get(provider)
-    return None if family is None else _wire(family, api_base, body or {})
-
-
-def _wire(provider: ProviderFamily, api_base: str | None, body: Mapping[str, JsonValue]) -> WireShape | None:
-    if provider is ProviderFamily.BEDROCK:
-        operation: Final = (api_base or "").split("?", 1)[0].rstrip("/").rsplit("/", 1)[-1]
-        return _BEDROCK_OPERATIONS.get(operation)
-    return WireShape.ANTHROPIC_MESSAGES if isinstance(body.get("messages"), list) else None
 
 
 def _runtime(response: object, served_runtime: object) -> Runtime | None:
@@ -60,24 +39,22 @@ def classify_path(
     provider: str,
     provider_model: str,
     call_type: str,
-    api_base: str | None,
     body: Mapping[str, JsonValue],
     stream: bool,
     response: object,
     served_runtime: object,
 ) -> ObservationPath | UnassessedReason:
-    family: Final = _PROVIDERS.get(provider)
-    if family is None:
+    """Only native Anthropic is observed. Claude served through any other provider is out of scope."""
+    if provider != _ANTHROPIC:
         return UnassessedReason.PROVIDER_OUT_OF_SCOPE
     if not is_claude_model_target(provider, provider_model):
         return UnassessedReason.MODEL_OUT_OF_SCOPE
     surface: Final = _SURFACES.get(call_type)
     if surface is None:
         return UnassessedReason.SURFACE_OUT_OF_SCOPE
-    wire: Final = _wire(family, api_base, body)
-    if wire is None:
+    if not isinstance(body.get("messages"), list):
         return UnassessedReason.WIRE_SHAPE_UNRECOGNIZED
     runtime: Final = _runtime(response, served_runtime)
     if runtime is None:
         return UnassessedReason.RUNTIME_UNKNOWN
-    return ObservationPath(provider=family, wire=wire, surface=surface, stream=stream, runtime=runtime)
+    return ObservationPath(surface=surface, stream=stream, runtime=runtime)

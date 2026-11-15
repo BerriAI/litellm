@@ -198,7 +198,6 @@ from litellm.litellm_core_utils.upstream_cache_evidence import (
     SERVED_RUNTIME_KEY,
     UPSTREAM_STREAM_USAGE_KEY,
     AnthropicStreamUsage,
-    ConverseStreamUsage,
 )
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from litellm.llms.base_llm.search.transformation import SearchResponse
@@ -1922,7 +1921,7 @@ class Logging(LiteLLMLoggingBaseClass):
         self.model_call_details[SERVED_RUNTIME_KEY] = "rust"
 
     def record_upstream_stream_usage(self, usage: object) -> None:
-        if isinstance(usage, AnthropicStreamUsage | ConverseStreamUsage):
+        if isinstance(usage, AnthropicStreamUsage):
             self.model_call_details[UPSTREAM_STREAM_USAGE_KEY] = usage
 
     def record_deployment_cache_settings(self, settings: object) -> None:

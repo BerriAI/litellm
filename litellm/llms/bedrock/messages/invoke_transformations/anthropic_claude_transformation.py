@@ -15,10 +15,6 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET,
 )
-from litellm.litellm_core_utils.upstream_cache_evidence import (
-    AnthropicStreamUsage,
-    recorded_anthropic_stream_text,
-)
 from litellm.llms.anthropic.chat.transformation import (
     DROP_UNSUPPORTED_OUTPUT_CONFIG_WARNING,
     AnthropicConfig,
@@ -939,7 +935,6 @@ class AmazonAnthropicClaudeMessagesConfig(
         completion_stream: Final = aws_decoder.aiter_bytes(
             aiter_bytes_then_close(httpx_response),
             response_headers=httpx_response.headers,
-            publish_usage=litellm_logging_obj.record_upstream_stream_usage,
         )
         # Convert decoded Bedrock events to Server-Sent Events expected by Anthropic clients.
         return self.bedrock_sse_wrapper(
@@ -1090,16 +1085,6 @@ class AmazonAnthropicClaudeMessagesConfig(
 
 
 class AmazonAnthropicClaudeMessagesStreamDecoder(AWSEventStreamDecoder):
-    def __init__(self, model: str, json_mode: bool | None = False) -> None:
-        super().__init__(model=model, json_mode=json_mode)
-        self._anthropic_stream_usage: AnthropicStreamUsage | None = None
-
-    def _record_stream_text(self, message: str) -> None:
-        self._anthropic_stream_usage = recorded_anthropic_stream_text(self._anthropic_stream_usage, message)
-
-    def recorded_stream_usage(self) -> AnthropicStreamUsage | None:
-        return self._anthropic_stream_usage
-
     def _chunk_parser(self, chunk_data: dict) -> GChunk | ModelResponseStream | dict:
         """
         Parse the chunk data into anthropic /messages format

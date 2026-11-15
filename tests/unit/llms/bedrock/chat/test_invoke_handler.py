@@ -6,7 +6,7 @@ import itertools
 import json
 import re
 import struct
-from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Mapping, Sequence
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
@@ -19,11 +19,6 @@ from litellm.exceptions import MidStreamFallbackError
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.litellm_logging import _get_provider_request_id
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
-from litellm.litellm_core_utils.upstream_cache_evidence import (
-    UPSTREAM_STREAM_USAGE_KEY,
-    AnthropicStreamUsage,
-    ConverseStreamUsage,
-)
 from litellm.llms.bedrock.chat.invoke_handler import (
     AmazonAnthropicClaudeStreamDecoder,
     AmazonOpenAICompatibleStreamDecoder,
@@ -2229,98 +2224,3 @@ async def test_aws_event_stream_decoder_aiter_bytes_closes_its_source_on_aclose(
     await anext(stream)
     await aclose_if_supported(stream)
     assert source_closed.is_set()
-
-
-def _stream_logging_obj() -> LiteLLMLoggingObj:
-    return LiteLLMLoggingObj(
-        model=CONVERSE_MODEL,
-        messages=[{"role": "user", "content": "hi"}],
-        stream=True,
-        call_type="completion",
-        start_time=datetime.datetime(2026, 1, 1),
-        litellm_call_id="raw-usage",
-        function_id="raw-usage",
-    )
-
-
-_CONVERSE_RAW_USAGE: Final = {"inputTokens": 9, "outputTokens": 2, "totalTokens": 11}
-
-
-def _converse_frames(*, with_metadata: bool) -> list[bytes]:
-    frames: Final = [
-        _converse_event_frame("messageStart", {"role": "assistant"}),
-        _converse_event_frame("contentBlockDelta", {"contentBlockIndex": 0, "delta": {"text": "ok"}}),
-        _converse_event_frame("contentBlockStop", {"contentBlockIndex": 0}),
-        _converse_event_frame("messageStop", {"stopReason": "end_turn"}),
-    ]
-    metadata: Final = [_converse_event_frame("metadata", {"usage": _CONVERSE_RAW_USAGE, "metrics": {"latencyMs": 1}})]
-    return [*frames, *(metadata if with_metadata else [])]
-
-
-def test_converse_stream_publishes_its_raw_terminal_usage_only_once_the_stream_has_ended() -> None:
-    logging_obj = _stream_logging_obj()
-    stream = AWSEventStreamDecoder(model=CONVERSE_MODEL).iter_bytes(
-        iter(_converse_frames(with_metadata=True)), publish_usage=logging_obj.record_upstream_stream_usage
-    )
-    next(stream)
-    assert UPSTREAM_STREAM_USAGE_KEY not in logging_obj.model_call_details
-    list(stream)
-    assert logging_obj.model_call_details[UPSTREAM_STREAM_USAGE_KEY] == ConverseStreamUsage(
-        stop_reason="end_turn", usage=_CONVERSE_RAW_USAGE, stops=1, usage_events=1
-    )
-
-
-def test_converse_stream_without_metadata_publishes_a_record_that_shows_it() -> None:
-    logging_obj = _stream_logging_obj()
-    list(
-        AWSEventStreamDecoder(model=CONVERSE_MODEL).iter_bytes(
-            iter(_converse_frames(with_metadata=False)), publish_usage=logging_obj.record_upstream_stream_usage
-        )
-    )
-    assert logging_obj.model_call_details[UPSTREAM_STREAM_USAGE_KEY] == ConverseStreamUsage(
-        stop_reason="end_turn", usage=None, stops=1, usage_events=0
-    )
-
-
-def test_converse_stream_that_breaks_mid_way_publishes_nothing() -> None:
-    logging_obj = _stream_logging_obj()
-
-    def breaking() -> Iterator[bytes]:
-        yield from _converse_frames(with_metadata=False)
-        raise httpx.ReadError("upstream closed the connection")
-
-    stream = AWSEventStreamDecoder(model=CONVERSE_MODEL).iter_bytes(
-        breaking(), publish_usage=logging_obj.record_upstream_stream_usage
-    )
-    with pytest.raises(httpx.ReadError):
-        list(stream)
-    assert UPSTREAM_STREAM_USAGE_KEY not in logging_obj.model_call_details
-
-
-async def test_invoke_claude_stream_publishes_the_raw_anthropic_events_it_decoded() -> None:
-    logging_obj = _stream_logging_obj()
-    events = (
-        {
-            "type": "message_start",
-            "message": {"id": "m", "role": "assistant", "content": [], "usage": {"input_tokens": 9}},
-        },
-        {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 2}},
-        {
-            "type": "message_stop",
-            "amazon-bedrock-invocationMetrics": {"inputTokenCount": 9, "cacheReadInputTokenCount": 0},
-        },
-    )
-
-    async def frames() -> AsyncIterator[bytes]:
-        for event in events:
-            yield _bedrock_event_stream_frame(event)
-
-    decoder = AmazonAnthropicClaudeStreamDecoder(model=CONVERSE_MODEL, sync_stream=False)
-    _ = [chunk async for chunk in decoder.aiter_bytes(frames(), publish_usage=logging_obj.record_upstream_stream_usage)]
-    assert logging_obj.model_call_details[UPSTREAM_STREAM_USAGE_KEY] == AnthropicStreamUsage(
-        opening={"input_tokens": 9},
-        closing={"output_tokens": 2},
-        stop_reason="end_turn",
-        starts=1,
-        stopped=True,
-    )

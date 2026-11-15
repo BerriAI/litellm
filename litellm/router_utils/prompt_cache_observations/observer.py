@@ -5,7 +5,6 @@ import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from itertools import product
-from types import MappingProxyType
 from typing import Final, Protocol, TypeAlias
 
 import httpx
@@ -32,47 +31,38 @@ from .deployment import (
     merged_cache_settings,
     selected_deployment,
 )
-from .intent import cache_intent
-from .paths import classify_path, upstream_wire
+from .intent import cache_requested
+from .paths import classify_path
 from .prefix import outgoing_cacheable_prefix
 from .types import (
     Assessed,
     CacheablePrefix,
-    CacheIntent,
     ClientSurface,
     DeploymentCacheIdentity,
     NoCacheBreakpoint,
     ObservationPath,
     PrefixUnassessed,
     PromptCacheObservation,
-    ProviderFamily,
     Runtime,
     Unassessed,
     UnassessedReason,
     UpstreamCacheUsage,
     UsageUnknown,
-    WireShape,
 )
 from .usage import stream_cache_usage, upstream_cache_usage
 
-_ALL_SURFACES: Final = (ClientSurface.MESSAGES, ClientSurface.CHAT, ClientSurface.RESPONSES)
 _EXECUTED_CELLS: Final = (
-    (ProviderFamily.ANTHROPIC, WireShape.ANTHROPIC_MESSAGES, ClientSurface.MESSAGES, Runtime.RUST),
-    (ProviderFamily.ANTHROPIC, WireShape.ANTHROPIC_MESSAGES, ClientSurface.CHAT, Runtime.PYTHON),
-    (ProviderFamily.ANTHROPIC, WireShape.ANTHROPIC_MESSAGES, ClientSurface.RESPONSES, Runtime.PYTHON),
-    *((ProviderFamily.BEDROCK, WireShape.ANTHROPIC_MESSAGES, surface, Runtime.PYTHON) for surface in _ALL_SURFACES),
-    *((ProviderFamily.BEDROCK, WireShape.BEDROCK_CONVERSE, surface, Runtime.PYTHON) for surface in _ALL_SURFACES),
-    *((ProviderFamily.VERTEX_AI, WireShape.ANTHROPIC_MESSAGES, surface, Runtime.PYTHON) for surface in _ALL_SURFACES),
+    (ClientSurface.MESSAGES, Runtime.RUST),
+    (ClientSurface.CHAT, Runtime.PYTHON),
+    (ClientSurface.RESPONSES, Runtime.PYTHON),
 )
 VERIFIED_PATHS: Final[frozenset[ObservationPath]] = frozenset(
-    ObservationPath(provider=provider, wire=wire, surface=surface, stream=stream, runtime=runtime)
-    for (provider, wire, surface, runtime), stream in product(_EXECUTED_CELLS, (False, True))
+    ObservationPath(surface=surface, stream=stream, runtime=runtime)
+    for (surface, runtime), stream in product(_EXECUTED_CELLS, (False, True))
 )
 
-OBSERVATION_LOG_CAPACITY: Final = 1000
-
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
-_BREAKPOINT_MARKERS: Final = ('"cache_control"', '"cachePoint"')
+_BREAKPOINT_MARKER: Final = '"cache_control"'
 
 
 class ObservationSink(Protocol):
@@ -128,7 +118,7 @@ class _Call:
     body: Mapping[str, JsonValue] | None
     deployment: DeploymentCacheIdentity
     settings: DeploymentCacheSettings | None
-    intent: CacheIntent | None
+    requested: bool
     response: object
     succeeded: bool
 
@@ -198,8 +188,8 @@ def _raw_response(logged: _LoggedCall) -> object:
 
 def _usage(call: _Call, path: ObservationPath) -> UpstreamCacheUsage:
     if path.stream:
-        return stream_cache_usage(path.wire, call.logged.upstream_stream_usage)
-    return upstream_cache_usage(path.wire, _raw_response(call.logged))
+        return stream_cache_usage(call.logged.upstream_stream_usage)
+    return upstream_cache_usage(_raw_response(call.logged))
 
 
 def _assessed(
@@ -220,12 +210,11 @@ _Outcome: TypeAlias = Assessed | Unassessed
 def _without_prefix(
     call: _Call, reason: UnassessedReason, path: ObservationPath | None, marked: bool = False
 ) -> _Outcome | None:
-    return None if call.intent is None and not marked else Unassessed(reason, path=path, prefix=None)
+    return None if not call.requested and not marked else Unassessed(reason, path=path, prefix=None)
 
 
 def _carries_breakpoint(body: Mapping[str, JsonValue]) -> bool:
-    serialized: Final = json.dumps(body)
-    return any(marker in serialized for marker in _BREAKPOINT_MARKERS)
+    return _BREAKPOINT_MARKER in json.dumps(body)
 
 
 def _outcome(settings: ObserverSettings, call: _Call) -> _Outcome | None:
@@ -238,7 +227,6 @@ def _outcome(settings: ObserverSettings, call: _Call) -> _Outcome | None:
         provider=call.deployment.provider,
         provider_model=call.deployment.provider_model,
         call_type=call.logged.standard_logging_object.call_type,
-        api_base=_destination(call.logged),
         body=body,
         stream=call.logged.stream is True or call.logged.standard_logging_object.stream is True,
         response=call.response,
@@ -248,7 +236,7 @@ def _outcome(settings: ObserverSettings, call: _Call) -> _Outcome | None:
         return _without_prefix(call, path, None, _carries_breakpoint(body))
     if settings.fingerprint_key is None:
         return _without_prefix(call, UnassessedReason.PREFIX_KEY_UNAVAILABLE, path, _carries_breakpoint(body))
-    match outgoing_cacheable_prefix(path.wire, body, settings.fingerprint_key):
+    match outgoing_cacheable_prefix(body, settings.fingerprint_key):
         case NoCacheBreakpoint():
             return _without_prefix(call, UnassessedReason.CACHE_INTENT_NOT_SENT, path)
         case PrefixUnassessed(reason=reason):
@@ -277,7 +265,7 @@ def observe_call(
     settings: ObserverSettings, kwargs: Mapping[str, object], response: object, succeeded: bool, observed_at: float
 ) -> PromptCacheObservation | None:
     """One observation for an opted-in deployment's attempt. The request is the body that attempt sent, so
-    provider translation and gateway injection are applied, while intent is what the client sent and what the
+    gateway injection is applied, while whether caching was requested comes from what the client sent and what the
     gateway recorded for the attempt, so a breakpoint lost on the way is visible."""
     try:
         logged: Final = _LoggedCall.model_validate(
@@ -297,29 +285,28 @@ def observe_call(
         return None
     provider: Final = payload.custom_llm_provider or ""
     body: Final = _outgoing_body(logged)
-    destination: Final = _destination(logged)
     deployment: Final = deployment_cache_identity(
         selected=selected,
         provider=provider,
         provider_model=payload.model,
-        destination=effective_destination(destination),
-        wire=upstream_wire(provider, destination, body),
+        destination=effective_destination(_destination(logged)),
         settings=attempt_settings,
     )
-    intent: Final = cache_intent(logged.litellm_params, selected.deployment_id)
-    outcome: Final = _outcome(settings, _Call(logged, body, deployment, attempt_settings, intent, response, succeeded))
+    requested: Final = cache_requested(logged.litellm_params, selected.deployment_id)
+    outcome: Final = _outcome(
+        settings, _Call(logged, body, deployment, attempt_settings, requested, response, succeeded)
+    )
     if outcome is None:
         return None
     return PromptCacheObservation(
         call_id=payload.litellm_call_id or payload.id,
         deployment=deployment,
-        intent=intent or CacheIntent.UNATTRIBUTED,
         observed_at=observed_at,
         outcome=outcome,
     )
 
 
-def _coverage_key(observation: PromptCacheObservation) -> str:
+def _outcome_label(observation: PromptCacheObservation) -> str:
     match observation.outcome:
         case Assessed(usage=UsageUnknown(reason=reason)):
             return f"assessed:usage_unknown:{reason.value}"
@@ -329,32 +316,15 @@ def _coverage_key(observation: PromptCacheObservation) -> str:
             return f"unassessed:{reason.value}"
 
 
-class ObservationLog:
-    """Bounded retained output: the most recent observations and a count per outcome and reason."""
-
-    def __init__(self, capacity: int) -> None:
-        self._capacity: Final = capacity
-        self._recent: tuple[PromptCacheObservation, ...] = ()
-        self._coverage: Mapping[str, int] = MappingProxyType({})
-
-    @property
-    def recent(self) -> tuple[PromptCacheObservation, ...]:
-        return self._recent
-
-    @property
-    def coverage(self) -> Mapping[str, int]:
-        return self._coverage
+class DiagnosticLog:
+    """Writes each observation to the debug log and keeps nothing, so a worker never holds observation history."""
 
     async def record(self, observation: PromptCacheObservation) -> None:
-        key: Final = _coverage_key(observation)
-        self._recent = (*self._recent, observation)[-self._capacity :]
-        self._coverage = MappingProxyType({**self._coverage, key: self._coverage.get(key, 0) + 1})
         verbose_router_logger.debug(
-            "prompt cache observation deployment=%s config=%s outcome=%s intent=%s",
+            "prompt cache observation deployment=%s config=%s outcome=%s",
             observation.deployment.deployment_id,
             observation.deployment.config_fingerprint,
-            key,
-            observation.intent.value,
+            _outcome_label(observation),
         )
 
 
@@ -366,10 +336,6 @@ class PromptCacheObserver(CustomLogger):
         self._settings: Final = settings
         self._sink: Final = sink
         self._clock: Final = clock
-
-    @property
-    def sink(self) -> ObservationSink:
-        return self._sink
 
     def exempt_from_message_redaction(self) -> bool:
         return True
@@ -410,5 +376,5 @@ def prompt_cache_observer() -> PromptCacheObserver:
         settings=ObserverSettings(
             verified_paths=VERIFIED_PATHS, fingerprint_key=prefix_fingerprint_key(os.getenv("LITELLM_SALT_KEY"))
         ),
-        sink=ObservationLog(capacity=OBSERVATION_LOG_CAPACITY),
+        sink=DiagnosticLog(),
     )

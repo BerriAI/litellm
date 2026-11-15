@@ -8,7 +8,7 @@ and settings only, never prompt content, and are never added to a response.
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from functools import reduce
-from typing import Final, Protocol, TypeAlias, runtime_checkable
+from typing import Final, Protocol, runtime_checkable
 
 from pydantic import JsonValue, TypeAdapter, ValidationError
 
@@ -24,13 +24,12 @@ _JSON: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
 _EVENT: Final[TypeAdapter[Mapping[str, JsonValue]]] = TypeAdapter(Mapping[str, JsonValue])
 _ANTHROPIC_LIFECYCLE: Final = ("message_start", "message_delta", "message_stop", '"error"')
 _ANTHROPIC_CACHE_COUNTERS: Final = ("cache_read_input_tokens", "cache_creation_input_tokens")
-_CONVERSE_TERMINAL: Final = ('"stopReason"', '"usage"')
 
 
 @dataclass(frozen=True, slots=True)
 class AnthropicStreamUsage:
-    """The usage an Anthropic-wire stream reported, as sent: `message_start`, the last `message_delta`, and the
-    usage some providers repeat on `message_stop`. `stopped` is only set by `message_stop`, since a stream cut
+    """The usage an Anthropic stream reported, as sent: `message_start`, the last `message_delta`, and any
+    usage repeated on `message_stop`. `stopped` is only set by `message_stop`, since a stream cut
     after its final `message_delta` already carries a stop reason without having completed."""
 
     opening: JsonValue = None
@@ -44,24 +43,9 @@ class AnthropicStreamUsage:
     errored: bool = False
 
 
-@dataclass(frozen=True, slots=True)
-class ConverseStreamUsage:
-    """The Converse `messageStop` reason and `metadata` usage, as sent. Converse closes a stream with exactly one
-    of each, the stop first."""
-
-    stop_reason: JsonValue = None
-    usage: JsonValue = None
-    stops: int = 0
-    usage_events: int = 0
-    out_of_order: bool = False
-
-
-UpstreamStreamUsage: TypeAlias = AnthropicStreamUsage | ConverseStreamUsage
-
-
 @runtime_checkable
 class RecordsUpstreamStreamUsage(Protocol):
-    upstream_stream_usage: UpstreamStreamUsage | None
+    upstream_stream_usage: AnthropicStreamUsage | None
 
 
 @runtime_checkable
@@ -153,25 +137,6 @@ def recorded_anthropic_stream_text(current: AnthropicStreamUsage | None, text: s
         return current
     event: Final = _parsed_event(text)
     return current if event is None else recorded_anthropic_stream_event(current, event)
-
-
-def recorded_converse_stream_text(current: ConverseStreamUsage | None, text: str) -> ConverseStreamUsage | None:
-    if not any(name in text for name in _CONVERSE_TERMINAL):
-        return current
-    event: Final = _parsed_event(text)
-    if event is None:
-        return current
-    state: Final = current or ConverseStreamUsage()
-    if "stopReason" in event:
-        return replace(
-            state,
-            stop_reason=event["stopReason"],
-            stops=state.stops + 1,
-            out_of_order=state.out_of_order or state.usage_events > 0,
-        )
-    if "usage" in event:
-        return replace(state, usage=event["usage"], usage_events=state.usage_events + 1)
-    return current
 
 
 def anthropic_stream_usage_from_sse(frames: bytes) -> AnthropicStreamUsage | None:

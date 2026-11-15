@@ -4432,37 +4432,6 @@ def test_anthropic_chat_completion_picks_the_beta_row_by_api_base(
     assert frozenset(",".join(upstream.anthropic_beta).split(",")) == forwarded_betas
 
 
-def test_stream_iterator_keeps_the_raw_usage_the_provider_sent_and_sees_message_stop() -> None:
-    iterator = ModelResponseIterator(streaming_response=MagicMock(), sync_stream=True, json_mode=False)
-    iterator.chunk_parser(
-        chunk={
-            "type": "message_start",
-            "message": {
-                "id": "msg_1",
-                "type": "message",
-                "role": "assistant",
-                "model": "claude-test",
-                "content": [],
-                "stop_reason": None,
-                "usage": {"input_tokens": 9, "output_tokens": 1},
-            },
-        }
-    )
-    iterator.chunk_parser(
-        chunk={"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 4}}
-    )
-    before_stop = iterator.upstream_stream_usage
-    iterator.chunk_parser(chunk={"type": "message_stop"})
-    assert before_stop is not None and before_stop.stopped is False
-    assert iterator.upstream_stream_usage == AnthropicStreamUsage(
-        opening={"input_tokens": 9, "output_tokens": 1},
-        closing={"output_tokens": 4},
-        stop_reason="end_turn",
-        starts=1,
-        stopped=True,
-    )
-
-
 _START_LINES: Final = (
     "event: message_start",
     'data: {"type": "message_start", "message": {"id": "m", "usage": {"input_tokens": 9}}}',
@@ -4477,6 +4446,19 @@ def _stopped_after(lines: tuple[str, ...]) -> bool:
     iterator = ModelResponseIterator(streaming_response=iter(lines), sync_stream=True, json_mode=False)
     _ = list(iterator)
     return iterator.upstream_stream_usage is not None and iterator.upstream_stream_usage.stopped
+
+
+def test_stream_iterator_keeps_the_raw_usage_the_provider_sent() -> None:
+    lines = (*_START_LINES, "event: message_stop", 'data: {"type": "message_stop"}', "")
+    iterator = ModelResponseIterator(streaming_response=iter(lines), sync_stream=True, json_mode=False)
+    _ = list(iterator)
+    assert iterator.upstream_stream_usage == AnthropicStreamUsage(
+        opening={"input_tokens": 9},
+        closing={"output_tokens": 2},
+        stop_reason="end_turn",
+        starts=1,
+        stopped=True,
+    )
 
 
 @pytest.mark.parametrize(

@@ -1,6 +1,6 @@
 import json
 import types
-from collections.abc import AsyncIterator, Callable, Iterator, Mapping
+from collections.abc import AsyncIterator, Iterator, Mapping
 from typing import TYPE_CHECKING, Final, TypeVar
 
 import httpx
@@ -18,11 +18,6 @@ from litellm.litellm_core_utils.llm_response_utils.get_headers import provider_r
 from litellm.litellm_core_utils.optional_imports import ensure_optional_import
 from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
     native_redacted_thinking_data,
-)
-from litellm.litellm_core_utils.upstream_cache_evidence import (
-    ConverseStreamUsage,
-    UpstreamStreamUsage,
-    recorded_converse_stream_text,
 )
 from litellm.llms.anthropic.chat.handler import (
     ModelResponseIterator as AnthropicModelResponseIterator,
@@ -305,9 +300,7 @@ async def make_call(
                 response_format_schema=response_format_schema_from_request(data, json_mode),
             )
             completion_stream = decoder.aiter_bytes(
-                aiter_bytes_then_close(response, chunk_size=stream_chunk_size),
-                response_headers=response.headers,
-                publish_usage=logging_obj.record_upstream_stream_usage,
+                aiter_bytes_then_close(response, chunk_size=stream_chunk_size), response_headers=response.headers
             )
 
         # LOGGING
@@ -403,9 +396,7 @@ def make_sync_call(
                 response_format_schema=response_format_schema_from_request(data, json_mode),
             )
             completion_stream = decoder.iter_bytes(
-                response.iter_bytes(chunk_size=stream_chunk_size),
-                response_headers=response.headers,
-                publish_usage=logging_obj.record_upstream_stream_usage,
+                response.iter_bytes(chunk_size=stream_chunk_size), response_headers=response.headers
             )
 
         # LOGGING
@@ -520,13 +511,6 @@ class AWSEventStreamDecoder:
         self._thinking_block_index = -1
         self._thinking_content_block_index: int | None = None
         self._provider_reasoning_tokens: int | None = None
-        self._converse_stream_usage: ConverseStreamUsage | None = None
-
-    def _record_stream_text(self, message: str) -> None:
-        self._converse_stream_usage = recorded_converse_stream_text(self._converse_stream_usage, message)
-
-    def recorded_stream_usage(self) -> UpstreamStreamUsage | None:
-        return self._converse_stream_usage
 
     def check_empty_tool_call_args(self) -> bool:
         """
@@ -870,11 +854,7 @@ class AWSEventStreamDecoder:
         return self._chunk_parser(chunk_data)
 
     def iter_bytes(
-        self,
-        iterator: Iterator[bytes],
-        *,
-        response_headers: Mapping[str, str] | None = None,
-        publish_usage: Callable[[UpstreamStreamUsage | None], None] | None = None,
+        self, iterator: Iterator[bytes], *, response_headers: Mapping[str, str] | None = None
     ) -> Iterator[GChunk | ModelResponseStream | dict[str, object]]:
         """Given an iterator that yields lines, iterate over it & yield every event encountered"""
         from botocore.eventstream import EventStreamBuffer
@@ -889,25 +869,18 @@ class AWSEventStreamDecoder:
             for event in event_stream_buffer:
                 message = self._decode_event(event, tally, request_id_headers)
                 if message:
-                    self._record_stream_text(message)
                     # sse_event = ServerSentEvent(data=message, event="completion")
                     _data = json.loads(message)
                     yield _with_served_service_tier(self.chunk_parser(chunk_data=_data), served_tier)
         undecoded_stream_error: Final = tally.undecoded_stream_error(response_headers)
         if undecoded_stream_error is not None:
             raise undecoded_stream_error
-        if publish_usage is not None:
-            publish_usage(self.recorded_stream_usage())
         stream_end_chunk: Final = self._stream_end_chunk()
         if stream_end_chunk is not None:
             yield stream_end_chunk
 
     async def aiter_bytes(
-        self,
-        iterator: AsyncIterator[bytes],
-        *,
-        response_headers: Mapping[str, str] | None = None,
-        publish_usage: Callable[[UpstreamStreamUsage | None], None] | None = None,
+        self, iterator: AsyncIterator[bytes], *, response_headers: Mapping[str, str] | None = None
     ) -> AsyncIterator[GChunk | ModelResponseStream | dict]:
         """Given an async iterator that yields lines, iterate over it & yield every event encountered"""
         from botocore.eventstream import EventStreamBuffer
@@ -923,7 +896,6 @@ class AWSEventStreamDecoder:
                 for event in event_stream_buffer:
                     message = self._decode_event(event, tally, request_id_headers)
                     if message:
-                        self._record_stream_text(message)
                         _data = json.loads(message)
                         yield _with_served_service_tier(self.chunk_parser(chunk_data=_data), served_tier)
         finally:
@@ -931,8 +903,6 @@ class AWSEventStreamDecoder:
         undecoded_stream_error: Final = tally.undecoded_stream_error(response_headers)
         if undecoded_stream_error is not None:
             raise undecoded_stream_error
-        if publish_usage is not None:
-            publish_usage(self.recorded_stream_usage())
         stream_end_chunk: Final = self._stream_end_chunk()
         if stream_end_chunk is not None:
             yield stream_end_chunk
@@ -1031,12 +1001,6 @@ class AmazonAnthropicClaudeStreamDecoder(AWSEventStreamDecoder):
 
     def _stream_end_chunk(self) -> ModelResponseStream | None:
         return self.anthropic_model_response_iterator.cut_stream_chunk()
-
-    def _record_stream_text(self, message: str) -> None:
-        return None
-
-    def recorded_stream_usage(self) -> UpstreamStreamUsage | None:
-        return self.anthropic_model_response_iterator.upstream_stream_usage
 
 
 class AmazonDeepSeekR1StreamDecoder(AWSEventStreamDecoder):

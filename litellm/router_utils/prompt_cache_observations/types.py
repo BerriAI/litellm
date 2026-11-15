@@ -3,18 +3,6 @@ from enum import StrEnum
 from typing import TypeAlias
 
 
-class ProviderFamily(StrEnum):
-    ANTHROPIC = "anthropic"
-    BEDROCK = "bedrock"
-    VERTEX_AI = "vertex_ai"
-    AZURE_AI = "azure_ai"
-
-
-class WireShape(StrEnum):
-    ANTHROPIC_MESSAGES = "anthropic_messages"
-    BEDROCK_CONVERSE = "bedrock_converse"
-
-
 class ClientSurface(StrEnum):
     MESSAGES = "messages"
     CHAT = "chat"
@@ -24,13 +12,6 @@ class ClientSurface(StrEnum):
 class Runtime(StrEnum):
     PYTHON = "python"
     RUST = "rust"
-
-
-class CacheIntent(StrEnum):
-    CLIENT = "client"
-    GATEWAY = "gateway"
-    CLIENT_AND_GATEWAY = "client_and_gateway"
-    UNATTRIBUTED = "unattributed"
 
 
 class UnassessedReason(StrEnum):
@@ -64,8 +45,6 @@ class UsageUnknownReason(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class ObservationPath:
-    provider: ProviderFamily
-    wire: WireShape
     surface: ClientSurface
     stream: bool
     runtime: Runtime
@@ -115,7 +94,6 @@ class DeploymentCacheIdentity:
     config_fingerprint: str
     provider: str
     provider_model: str
-    min_prefix_tokens: int | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -138,6 +116,5 @@ class PromptCacheObservation:
 
     call_id: str
     deployment: DeploymentCacheIdentity
-    intent: CacheIntent
     observed_at: float
     outcome: Assessed | Unassessed

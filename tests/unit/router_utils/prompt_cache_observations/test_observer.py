@@ -1,8 +1,9 @@
 import asyncio
 import datetime
 import json
+import logging
+from collections.abc import AsyncIterator, Mapping
 from itertools import product
-from collections.abc import Mapping
 
 import httpx
 import pytest
@@ -10,6 +11,7 @@ import respx
 from pydantic import JsonValue
 
 import litellm
+from litellm.router_rust.steps import callbacks as router_callbacks
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.responses.streaming_iterator import drain_logging_tasks
@@ -28,28 +30,25 @@ from litellm.router_utils.prompt_cache_observations.deployment import (
     effective_destination,
 )
 from litellm.router_utils.prompt_cache_observations.observer import (
-    ObservationLog,
+    VERIFIED_PATHS,
+    DiagnosticLog,
     ObserverSettings,
     PromptCacheObserver,
     prefix_fingerprint_key,
-    prompt_cache_observer,
 )
 from litellm.router_utils.prompt_cache_observations.prefix import outgoing_cacheable_prefix
 from litellm.router_utils.prompt_cache_observations.types import (
     Assessed,
     CacheablePrefix,
     CacheCounters,
-    CacheIntent,
     ClientSurface,
     ObservationPath,
     PromptCacheObservation,
-    ProviderFamily,
     Runtime,
     Unassessed,
     UnassessedReason,
     UsageUnknown,
     UsageUnknownReason,
-    WireShape,
 )
 from litellm.types.utils import ModelResponse
 
@@ -59,15 +58,11 @@ _API_BASE = "https://api.anthropic.com/v1/messages"
 _MODEL_INFO: Mapping[str, object] = {"id": "claude-east", "prompt_cache_observation": True}
 _ATTEMPT_SETTINGS = deployment_cache_settings({"model": "anthropic/claude-test", "model_info": _MODEL_INFO})
 _PATH = ObservationPath(
-    provider=ProviderFamily.ANTHROPIC,
-    wire=WireShape.ANTHROPIC_MESSAGES,
     surface=ClientSurface.CHAT,
     stream=False,
     runtime=Runtime.PYTHON,
 )
-_STREAM_PATH = ObservationPath(
-    provider=_PATH.provider, wire=_PATH.wire, surface=_PATH.surface, stream=True, runtime=_PATH.runtime
-)
+_STREAM_PATH = ObservationPath(surface=_PATH.surface, stream=True, runtime=_PATH.runtime)
 _MARKED_BLOCK: dict[str, JsonValue] = {"type": "text", "text": "shared", "cache_control": {"type": "ephemeral"}}
 _MARKED_BODY: dict[str, JsonValue] = {
     "model": "claude-test",
@@ -147,25 +142,20 @@ def _deployment(settings: DeploymentCacheSettings | None = _ATTEMPT_SETTINGS):
         provider="anthropic",
         provider_model="claude-test",
         destination=effective_destination(_API_BASE),
-        wire=WireShape.ANTHROPIC_MESSAGES,
         settings=settings,
     )
 
 
 def _prefix(body: Mapping[str, JsonValue] = _MARKED_BODY) -> CacheablePrefix:
-    prefix = outgoing_cacheable_prefix(WireShape.ANTHROPIC_MESSAGES, body, _KEY)
+    prefix = outgoing_cacheable_prefix(body, _KEY)
     assert isinstance(prefix, CacheablePrefix)
     return prefix
 
 
 def _observation(
-    outcome: Assessed | Unassessed,
-    intent: CacheIntent = CacheIntent.UNATTRIBUTED,
-    settings: DeploymentCacheSettings | None = _ATTEMPT_SETTINGS,
+    outcome: Assessed | Unassessed, settings: DeploymentCacheSettings | None = _ATTEMPT_SETTINGS
 ) -> PromptCacheObservation:
-    return PromptCacheObservation(
-        call_id="call-1", deployment=_deployment(settings), intent=intent, observed_at=_NOW, outcome=outcome
-    )
+    return PromptCacheObservation(call_id="call-1", deployment=_deployment(settings), observed_at=_NOW, outcome=outcome)
 
 
 async def test_verified_path_records_the_upstream_counters_for_the_attempts_deployment() -> None:
@@ -224,17 +214,13 @@ async def test_client_breakpoint_lost_before_the_upstream_call_is_reported_not_d
         _kwargs(body=_UNMARKED_BODY, client_body=client_body), ModelResponse(), None, None
     )
     assert sink.observations == (
-        _observation(
-            Unassessed(UnassessedReason.CACHE_INTENT_NOT_SENT, path=_PATH, prefix=None), intent=CacheIntent.CLIENT
-        ),
+        _observation(Unassessed(UnassessedReason.CACHE_INTENT_NOT_SENT, path=_PATH, prefix=None)),
     )
 
 
 async def test_messages_attempt_reads_the_sent_request_and_raw_body_kept_on_the_provider_response() -> None:
     sink = _RecordingSink()
-    messages_path = ObservationPath(
-        provider=_PATH.provider, wire=_PATH.wire, surface=ClientSurface.MESSAGES, stream=False, runtime=Runtime.RUST
-    )
+    messages_path = ObservationPath(surface=ClientSurface.MESSAGES, stream=False, runtime=Runtime.RUST)
     response = httpx.Response(
         200,
         content=_ZERO_USAGE_RESPONSE.encode(),
@@ -257,6 +243,58 @@ async def test_messages_attempt_reads_the_sent_request_and_raw_body_kept_on_the_
     )
 
 
+async def _unread_body() -> AsyncIterator[bytes]:
+    yield json.dumps(_MARKED_BODY).encode()
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        httpx.Response(200, content=_ZERO_USAGE_RESPONSE.encode()),
+        httpx.Response(
+            200, content=_ZERO_USAGE_RESPONSE.encode(), request=httpx.Request("POST", _API_BASE, content=_unread_body())
+        ),
+    ],
+    ids=["no-request-on-response", "request-body-not-read"],
+)
+async def test_a_caching_attempt_whose_sent_body_cannot_be_read_is_unassessed(response: httpx.Response) -> None:
+    sink = _RecordingSink()
+    await _observer(sink).async_log_success_event(
+        _kwargs(body={}, client_body=_MARKED_BODY, httpx_response=response), ModelResponse(), None, None
+    )
+    assert sink.observations == (
+        _observation(Unassessed(UnassessedReason.REQUEST_BODY_UNAVAILABLE, path=None, prefix=None)),
+    )
+
+
+async def test_a_breakpoint_the_prefix_cannot_compare_is_unassessed_without_a_prefix() -> None:
+    sink = _RecordingSink()
+    block = {**_MARKED_BLOCK, "cache_control": {"type": "ephemeral", "ttl": "2h"}}
+    body = {**_MARKED_BODY, "messages": [{"role": "user", "content": [block]}]}
+    await _observer(sink).async_log_success_event(_kwargs(body=body), ModelResponse(), None, None)
+    assert sink.observations == (_observation(Unassessed(UnassessedReason.TTL_UNRECOGNIZED, path=_PATH, prefix=None)),)
+
+
+@pytest.mark.parametrize(
+    "httpx_response",
+    [None, httpx.Response(200, stream=httpx.ByteStream(_ZERO_USAGE_RESPONSE.encode()))],
+    ids=["no-provider-response", "provider-body-not-read"],
+)
+async def test_a_response_body_that_is_not_json_is_never_read_as_zero_usage(
+    httpx_response: httpx.Response | None,
+) -> None:
+    sink = _RecordingSink()
+    await _observer(sink).async_log_success_event(
+        _kwargs(original_response="first stream response received", httpx_response=httpx_response),
+        ModelResponse(),
+        None,
+        None,
+    )
+    assert sink.observations == (
+        _observation(Assessed(path=_PATH, prefix=_prefix(), usage=UsageUnknown(UsageUnknownReason.BODY_MALFORMED))),
+    )
+
+
 async def test_rust_messages_attempt_without_model_info_is_selected_by_its_stamped_settings() -> None:
     sink = _RecordingSink()
     kwargs = _kwargs(model_info={}, served_runtime="rust")
@@ -273,39 +311,6 @@ async def test_rust_messages_attempt_without_model_info_is_selected_by_its_stamp
             )
         case observations:
             pytest.fail(f"expected the stamped deployment to be observed, got {observations}")
-
-
-async def test_bedrock_destination_comes_from_the_logged_endpoint_when_pre_call_arguments_were_replaced() -> None:
-    sink = _RecordingSink()
-    converse_url = "https://bedrock-runtime.us-east-1.amazonaws.com/model/us.anthropic.claude-test-v1:0/converse"
-    converse_path = ObservationPath(
-        provider=ProviderFamily.BEDROCK,
-        wire=WireShape.BEDROCK_CONVERSE,
-        surface=ClientSurface.CHAT,
-        stream=False,
-        runtime=Runtime.PYTHON,
-    )
-    body: dict[str, JsonValue] = {
-        "messages": [{"role": "user", "content": [{"text": "shared"}, {"cachePoint": {"type": "default"}}]}],
-        "inferenceConfig": {"maxTokens": 64},
-    }
-    kwargs = _kwargs(
-        body=json.dumps(body),
-        original_response=json.dumps(
-            {"stopReason": "end_turn", "usage": {"cacheReadInputTokens": 0, "cacheWriteInputTokens": 0}}
-        ),
-        provider="bedrock",
-        model="us.anthropic.claude-test-v1:0",
-        api_base=converse_url,
-    )
-    await _observer(sink, verified=frozenset({converse_path})).async_log_success_event(
-        kwargs, ModelResponse(), None, None
-    )
-    match sink.observations:
-        case (PromptCacheObservation(outcome=Assessed(path=path, usage=usage), deployment=deployment),):
-            assert (path, usage, deployment.provider) == (converse_path, CacheCounters(0, 0), "bedrock")
-        case observations:
-            pytest.fail(f"expected one assessed Converse observation, got {observations}")
 
 
 async def test_stream_usage_is_read_from_the_raw_events_and_absence_stays_unknown() -> None:
@@ -403,21 +408,28 @@ async def test_a_second_hook_pass_on_the_attempt_keeps_the_injection_settings_th
     assert dict(recorded.settings)["cache_control_injection_points"] == points
 
 
-async def test_observation_log_keeps_a_bounded_tail_and_counts_every_outcome() -> None:
-    log = ObservationLog(capacity=2)
-    observations = (
-        _observation(Assessed(path=_PATH, prefix=_prefix(), usage=CacheCounters(0, 0))),
-        _observation(Unassessed(UnassessedReason.PATH_NOT_VERIFIED, path=_PATH, prefix=None)),
-        _observation(Assessed(path=_PATH, prefix=_prefix(), usage=UsageUnknown(UsageUnknownReason.MISSING))),
+@pytest.mark.parametrize(
+    ("outcome", "label"),
+    [
+        (Assessed(path=_PATH, prefix=_prefix(), usage=CacheCounters(0, 0)), "assessed:counters"),
+        (
+            Assessed(path=_PATH, prefix=_prefix(), usage=UsageUnknown(UsageUnknownReason.MISSING)),
+            "assessed:usage_unknown:missing",
+        ),
+        (Unassessed(UnassessedReason.PATH_NOT_VERIFIED, path=_PATH, prefix=None), "unassessed:path_not_verified"),
+    ],
+)
+async def test_diagnostic_log_names_the_deployment_and_outcome_without_prompt_content(
+    caplog: pytest.LogCaptureFixture, outcome: Assessed | Unassessed, label: str
+) -> None:
+    observation = _observation(outcome)
+    with caplog.at_level(logging.DEBUG, logger="LiteLLM Router"):
+        await DiagnosticLog().record(observation)
+    (message,) = (record.getMessage() for record in caplog.records if "prompt cache observation" in record.getMessage())
+    assert message == (
+        f"prompt cache observation deployment=claude-east config={observation.deployment.config_fingerprint} "
+        f"outcome={label}"
     )
-    for observation in observations:
-        await log.record(observation)
-    assert log.recent == observations[1:]
-    assert dict(log.coverage) == {
-        "assessed:counters": 1,
-        "unassessed:path_not_verified": 1,
-        "assessed:usage_unknown:missing": 1,
-    }
 
 
 def _sse(events: tuple[Mapping[str, object], ...]) -> str:
@@ -535,7 +547,8 @@ async def test_router_check_observes_only_opted_in_deployments_and_reads_absent_
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     monkeypatch.setattr(litellm, "callbacks", [])
-    monkeypatch.setenv("LITELLM_SALT_KEY", "router-test-salt")
+    sink = _RecordingSink()
+    monkeypatch.setattr(router_callbacks, "prompt_cache_observer", lambda: _observer(sink, verified=VERIFIED_PATHS))
     respx_mock.post(_API_BASE).mock(
         return_value=httpx.Response(
             200,
@@ -567,8 +580,6 @@ async def test_router_check_observes_only_opted_in_deployments_and_reads_absent_
     )
     observers = tuple(cb for cb in router.optional_callbacks or () if isinstance(cb, PromptCacheObserver))
     assert len(observers) == 1, router.optional_callbacks
-    log = observers[0].sink
-    assert isinstance(log, ObservationLog)
     for model in ("unobserved", "observed"):
         await router.acompletion(
             model=model,
@@ -581,8 +592,8 @@ async def test_router_check_observes_only_opted_in_deployments_and_reads_absent_
         )
         await drain_logging_tasks()
         await GLOBAL_LOGGING_WORKER.flush()
-    assert [observation.deployment.deployment_id for observation in log.recent] == ["observed-deployment"]
-    match log.recent[0].outcome:
+    assert [observation.deployment.deployment_id for observation in sink.observations] == ["observed-deployment"]
+    match sink.observations[0].outcome:
         case Assessed(path=path, prefix=CacheablePrefix(ttl_seconds=ttl, breakpoints=breakpoints), usage=usage):
             assert (path, ttl, breakpoints, usage) == (_PATH, 300, 1, UsageUnknown(UsageUnknownReason.MISSING))
         case outcome:
@@ -627,66 +638,37 @@ async def test_observed_stream_with_a_provider_error_after_its_final_delta_strea
 
 
 @pytest.mark.parametrize(
-    ("provider", "model", "served_runtime"),
-    [("azure_ai", "claude-test", "python"), ("anthropic", "claude-test", "rust")],
+    ("provider", "model", "served_runtime", "reason"),
+    [
+        ("bedrock", "us.anthropic.claude-test-v1:0", "python", UnassessedReason.PROVIDER_OUT_OF_SCOPE),
+        ("vertex_ai", "claude-test", "python", UnassessedReason.PROVIDER_OUT_OF_SCOPE),
+        ("azure_ai", "claude-test", "python", UnassessedReason.PROVIDER_OUT_OF_SCOPE),
+        ("anthropic", "claude-test", "rust", UnassessedReason.PATH_NOT_VERIFIED),
+    ],
 )
-async def test_paths_without_executed_evidence_stay_unassessed_in_the_shipped_observer(
-    monkeypatch: pytest.MonkeyPatch, provider: str, model: str, served_runtime: str
+async def test_paths_without_executed_evidence_stay_unassessed(
+    provider: str, model: str, served_runtime: str, reason: UnassessedReason
 ) -> None:
-    monkeypatch.setenv("LITELLM_SALT_KEY", "shipped-observer-salt")
-    observer = prompt_cache_observer()
-    await observer.async_log_success_event(
+    sink = _RecordingSink()
+    await _observer(sink, verified=VERIFIED_PATHS).async_log_success_event(
         _kwargs(provider=provider, model=model, served_runtime=served_runtime), ModelResponse(), None, None
     )
-    log = observer.sink
-    assert isinstance(log, ObservationLog)
-    match log.recent:
-        case (PromptCacheObservation(outcome=Unassessed(reason=UnassessedReason.PATH_NOT_VERIFIED)),):
-            pass
+    match sink.observations:
+        case (PromptCacheObservation(outcome=Unassessed(reason=recorded)),):
+            assert recorded == reason
         case recent:
             pytest.fail(f"expected the path to stay unassessed, got {recent}")
 
 
-_BEDROCK_MODEL_URL = "https://bedrock-runtime.us-east-1.amazonaws.com/model/us.anthropic.claude-test-v1:0"
-_CONVERSE_BODY: dict[str, JsonValue] = {
-    "messages": [{"role": "user", "content": [{"text": "shared"}, {"cachePoint": {"type": "default"}}]}],
-}
-_INVOKE_BODY: dict[str, JsonValue] = {"anthropic_version": "bedrock-2023-05-31", **_MARKED_BODY}
-
-
-async def _bedrock_fingerprint(operation: str, body: Mapping[str, JsonValue], call_type: str, stream: bool) -> str:
+@pytest.mark.parametrize(
+    ("call_type", "stream"), list(product(("acompletion", "anthropic_messages", "aresponses"), (False, True)))
+)
+async def test_one_deployment_keeps_one_identity_across_client_routes_and_stream_modes(
+    call_type: str, stream: bool
+) -> None:
     sink = _RecordingSink()
     await _observer(sink).async_log_success_event(
-        _kwargs(
-            body=dict(body),
-            call_type=call_type,
-            stream=stream,
-            provider="bedrock",
-            model="us.anthropic.claude-test-v1:0",
-            api_base=f"{_BEDROCK_MODEL_URL}/{operation}",
-        ),
-        ModelResponse(),
-        None,
-        None,
+        _kwargs(call_type=call_type, stream=stream), ModelResponse(), None, None
     )
     (observation,) = sink.observations
-    return observation.deployment.config_fingerprint
-
-
-async def test_one_deployment_keeps_one_identity_across_client_routes_and_stream_modes() -> None:
-    routes = product(
-        ("acompletion", "anthropic_messages", "aresponses"), (("converse", False), ("converse-stream", True))
-    )
-    fingerprints = {
-        await _bedrock_fingerprint(operation, _CONVERSE_BODY, call_type, stream)
-        for call_type, (operation, stream) in routes
-    }
-    assert len(fingerprints) == 1
-
-
-async def test_the_same_deployment_switching_upstream_api_gets_a_new_identity() -> None:
-    converse = await _bedrock_fingerprint("converse", _CONVERSE_BODY, "acompletion", False)
-    invoke = await _bedrock_fingerprint("invoke", _INVOKE_BODY, "acompletion", False)
-    invoke_stream = await _bedrock_fingerprint("invoke-with-response-stream", _INVOKE_BODY, "anthropic_messages", True)
-    assert converse != invoke
-    assert invoke == invoke_stream
+    assert observation.deployment == _deployment()

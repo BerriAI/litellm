@@ -10,8 +10,6 @@ from litellm.types.integrations.anthropic_cache_control_hook import (
     GATEWAY_INJECTED_FOR_EVERY_DEPLOYMENT,
 )
 
-from .types import CacheIntent
-
 _METADATA_BUCKETS: Final = ("litellm_metadata", "metadata")
 _OBJECTS: Final = TypeAdapter(tuple[object, ...])
 
@@ -43,18 +41,8 @@ def _gateway_marked(litellm_params: Mapping[str, object], deployment_id: str) ->
     )
 
 
-def cache_intent(litellm_params: Mapping[str, object], deployment_id: str) -> CacheIntent | None:
+def cache_requested(litellm_params: Mapping[str, object], deployment_id: str) -> bool:
     """Caching asked for before any transformation: breakpoints in the body the client sent the proxy, or
-    breakpoints the gateway injected for this attempt's deployment. None when neither is known."""
+    breakpoints the gateway injected for this attempt's deployment."""
     body: Final = _client_body(litellm_params)
-    client: Final = body is not None and _client_marks_cache(body)
-    gateway: Final = _gateway_marked(litellm_params, deployment_id)
-    match client, gateway:
-        case True, True:
-            return CacheIntent.CLIENT_AND_GATEWAY
-        case True, False:
-            return CacheIntent.CLIENT
-        case False, True:
-            return CacheIntent.GATEWAY
-        case _:
-            return None
+    return (body is not None and _client_marks_cache(body)) or _gateway_marked(litellm_params, deployment_id)

@@ -3,14 +3,11 @@ import json
 from collections.abc import Mapping
 from functools import reduce
 
-from pydantic import JsonValue
-
 from litellm.litellm_core_utils.upstream_cache_evidence import (
     AnthropicStreamUsage,
-    ConverseStreamUsage,
     anthropic_stream_usage_from_sse,
     recorded_anthropic_stream_event,
-    recorded_converse_stream_text,
+    recorded_anthropic_stream_text,
 )
 
 _ZEROS = {"input_tokens": 9, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0}
@@ -101,35 +98,9 @@ def test_sse_frames_without_lifecycle_events_record_nothing() -> None:
     assert anthropic_stream_usage_from_sse(b"") is None
 
 
-def _converse(*events: Mapping[str, object]) -> ConverseStreamUsage | None:
-    return reduce(recorded_converse_stream_text, (json.dumps(event) for event in events), None)
-
-
-def test_converse_records_the_stop_and_metadata_usage_as_sent() -> None:
-    usage: dict[str, JsonValue] = {"inputTokens": 9, "outputTokens": 2, "totalTokens": 11}
-    assert _converse(
-        {"role": "assistant"},
-        {"contentBlockIndex": 0, "delta": {"text": "ok"}},
-        {"stopReason": "end_turn"},
-        {"usage": usage, "metrics": {"latencyMs": 5}},
-    ) == ConverseStreamUsage(stop_reason="end_turn", usage=usage, stops=1, usage_events=1)
-
-
-def test_converse_usage_before_the_stop_is_out_of_order() -> None:
-    recorded = _converse({"usage": {"inputTokens": 9}}, {"stopReason": "end_turn"})
-    assert recorded is not None and recorded.out_of_order is True
-
-
-def test_converse_text_that_is_not_json_leaves_the_record_unchanged() -> None:
-    assert recorded_converse_stream_text(None, '{"stopReason": ') is None
-
-
 def test_records_survive_the_deep_copy_logging_makes_of_call_details() -> None:
-    records = (
-        _recorded(_start(), _delta({"output_tokens": 2}), _STOP),
-        _converse({"stopReason": "end_turn"}, {"usage": {"inputTokens": 9}}),
-    )
-    assert copy.deepcopy({"records": records}) == {"records": records}
+    record = _recorded(_start(), _delta({"output_tokens": 2}), _STOP)
+    assert copy.deepcopy({"record": record}) == {"record": record}
 
 
 def test_an_error_event_marks_the_stream_even_when_a_stop_follows() -> None:
@@ -144,3 +115,8 @@ def test_an_sse_comment_quoting_a_stop_is_not_an_event() -> None:
     frames = _sse((_start(), _delta({"output_tokens": 2}))) + b': data: {"type": "message_stop"}\n\n'
     recorded = anthropic_stream_usage_from_sse(frames)
     assert recorded is not None and recorded.stopped is False
+
+
+def test_lifecycle_text_that_is_not_a_json_event_leaves_the_record_unchanged() -> None:
+    started = _recorded(_start())
+    assert recorded_anthropic_stream_text(started, '{"type": "message_stop"') == started

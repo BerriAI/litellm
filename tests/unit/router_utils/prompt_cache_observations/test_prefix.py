@@ -12,7 +12,6 @@ from litellm.router_utils.prompt_cache_observations.types import (
     PrefixEvidence,
     PrefixUnassessed,
     UnassessedReason,
-    WireShape,
 )
 
 _KEY = b"prompt-cache-observation-test-key"
@@ -40,7 +39,7 @@ def _anthropic(
 
 
 def _anthropic_prefix(body: Mapping[str, JsonValue], key: bytes = _KEY) -> CacheablePrefix:
-    evidence = outgoing_cacheable_prefix(WireShape.ANTHROPIC_MESSAGES, body, key)
+    evidence = outgoing_cacheable_prefix(body, key)
     assert isinstance(evidence, CacheablePrefix), evidence
     return evidence
 
@@ -140,6 +139,7 @@ def test_top_level_cache_control_covers_the_whole_prompt() -> None:
             PrefixUnassessed(UnassessedReason.BREAKPOINT_UNRECOGNIZED),
         ),
         (_anthropic([]), PrefixUnassessed(UnassessedReason.BREAKPOINT_UNRECOGNIZED)),
+        (_anthropic([{"role": "user", "content": 5}]), PrefixUnassessed(UnassessedReason.BREAKPOINT_UNRECOGNIZED)),
         (
             _anthropic([{"role": "user", "content": [_text(REDACTED_BY_LITELLM, dict(_EPHEMERAL))]}]),
             PrefixUnassessed(UnassessedReason.REQUEST_REDACTED),
@@ -149,71 +149,7 @@ def test_top_level_cache_control_covers_the_whole_prompt() -> None:
 def test_anthropic_prefix_that_cannot_be_compared_is_not_assessed(
     body: dict[str, JsonValue], expected: PrefixEvidence
 ) -> None:
-    assert outgoing_cacheable_prefix(WireShape.ANTHROPIC_MESSAGES, body, _KEY) == expected
-
-
-def _converse(system: list[JsonValue], question: str, tools: list[JsonValue] | None = None) -> dict[str, JsonValue]:
-    return {
-        "system": system,
-        "messages": [{"role": "user", "content": [{"text": question}]}],
-        "inferenceConfig": {"maxTokens": 64},
-        **({"toolConfig": {"tools": tools}} if tools is not None else {}),
-    }
-
-
-def _converse_evidence(body: Mapping[str, JsonValue]) -> PrefixEvidence:
-    return outgoing_cacheable_prefix(WireShape.BEDROCK_CONVERSE, body, _KEY)
-
-
-def _converse_prefix(body: Mapping[str, JsonValue]) -> CacheablePrefix:
-    evidence = _converse_evidence(body)
-    assert isinstance(evidence, CacheablePrefix), evidence
-    return evidence
-
-
-def test_converse_cache_point_marks_the_block_before_it() -> None:
-    system: list[JsonValue] = [{"text": "rules"}, {"cachePoint": {"type": "default"}}]
-    first = _converse_prefix(_converse(system, "one"))
-    second = _converse_prefix(_converse(system, "two"))
-    changed = _converse_prefix(_converse([{"text": "other rules"}, {"cachePoint": {"type": "default"}}], "one"))
-    assert first == second
-    assert first.ttl_seconds == 300
-    assert first.fingerprint != changed.fingerprint
-
-
-def test_converse_cache_point_ttl_is_read_from_the_last_cache_point() -> None:
-    system: list[JsonValue] = [{"text": "rules"}, {"cachePoint": {"type": "default", "ttl": "1h"}}]
-    tools: list[JsonValue] = [{"toolSpec": {"name": "lookup"}}, {"cachePoint": {"type": "default"}}]
-    assert _converse_prefix(_converse(system, "q", tools)).ttl_seconds == 3600
-
-
-@pytest.mark.parametrize(
-    ("system", "expected"),
-    [
-        ([{"text": "rules"}], NoCacheBreakpoint()),
-        (
-            [{"cachePoint": {"type": "default"}}, {"text": "rules"}],
-            PrefixUnassessed(UnassessedReason.BREAKPOINT_UNRECOGNIZED),
-        ),
-        ([{"text": "rules"}, {"cachePoint": None}], PrefixUnassessed(UnassessedReason.BREAKPOINT_UNRECOGNIZED)),
-        (
-            [{"text": "rules"}, {"cachePoint": {"type": "default"}}, {"cachePoint": {"type": "default"}}],
-            PrefixUnassessed(UnassessedReason.BREAKPOINT_UNRECOGNIZED),
-        ),
-        (
-            [{"text": "rules"}, {"cachePoint": {"type": "ephemeral"}}],
-            PrefixUnassessed(UnassessedReason.BREAKPOINT_UNRECOGNIZED),
-        ),
-        (
-            [{"text": "rules"}, {"cachePoint": {"type": "default", "ttl": "2h"}}],
-            PrefixUnassessed(UnassessedReason.TTL_UNRECOGNIZED),
-        ),
-    ],
-)
-def test_converse_prefix_that_cannot_be_compared_is_not_assessed(
-    system: list[JsonValue], expected: PrefixEvidence
-) -> None:
-    assert _converse_evidence(_converse(system, "q")) == expected
+    assert outgoing_cacheable_prefix(body, _KEY) == expected
 
 
 def test_output_settings_do_not_split_an_identical_prefix() -> None:
