@@ -17,6 +17,10 @@ use pyo3::{
     types::{PyDateTime, PyDict, PyList, PyString},
 };
 use serde_json::Value;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 
 use crate::{
     DeploymentHooks, LegacyCallbacks, PublicCall, PythonLogger, SentRequest,
@@ -61,7 +65,21 @@ pub struct LegacyLogging {
     /// When the provider request went out, until its window is recorded (Messages only).
     api_started: Option<f64>,
     host_answered: bool,
+    /// Whether the call's Messages stream starts only on its first read, as Python's iterator
+    /// does. Only `azure_ai`: by the owner's ruling `anthropic` keeps main's billing of an
+    /// unread stream.
+    stream_starts_on_first_read: bool,
+    /// Set once the route sends through the host's own client, whose timed `post` already
+    /// reports the exchange.
+    host_client: Arc<AtomicBool>,
 }
+
+/// The one provider whose unread Messages stream bills nothing, as Python's does.
+const STREAM_STARTS_ON_FIRST_READ_PROVIDER: &str = "azure_ai";
+
+/// The one provider whose exchange through the host's client is timed only by that client, as
+/// Python's is. By the owner's ruling `anthropic` keeps main's second report.
+const HOST_CLIENT_TIMED_PROVIDER: &str = "azure_ai";
 
 fn retry_reason(reason: &RetryReason) -> Value {
     match reason {
@@ -102,6 +120,17 @@ impl LegacyLogging {
             cache_key: None,
             api_started: None,
             host_answered: false,
+            stream_starts_on_first_read: false,
+            host_client: Arc::default(),
+        }
+    }
+
+    /// Shares the flag the route host sets when the call sends through its own client.
+    #[must_use]
+    pub fn with_host_client(self, host_client: Arc<AtomicBool>) -> Self {
+        Self {
+            host_client,
+            ..self
         }
     }
 
@@ -416,6 +445,11 @@ impl LegacyLogging {
         stream: &DeliveredStream,
         teardown: bool,
     ) -> PyResult<()> {
+        // Python's Messages stream iterator starts on the first read, so a stream the caller
+        // closed or dropped unread bills nothing.
+        if self.stream_starts_on_first_read && stream.first_chunk.is_none() {
+            return Ok(());
+        }
         let logger = self.logger()?;
         let billing = self.stream_billing().ok_or(HostError::MissingState)?;
         let billed = Streaming::Success.call(
@@ -641,6 +675,8 @@ impl LegacyLogging {
         )?;
         if self.operation == LoggingOperation::Messages
             && self.asynchronous
+            && !(context.custom_llm_provider == HOST_CLIENT_TIMED_PROVIDER
+                && self.host_client.load(Ordering::Acquire))
             && self.times_provider_exchange(py)?
         {
             self.api_started = Some(epoch_seconds());
@@ -693,6 +729,8 @@ impl LegacyLogging {
     ) -> PyResult<HookStep<Self, ()>> {
         use litellm_host::interceptors::{Cost, ResultSource};
 
+        self.stream_starts_on_first_read =
+            facts.provider.provider == STREAM_STARTS_ON_FIRST_READ_PROVIDER;
         self.cache_key = match &facts.source {
             ResultSource::Provider => None,
             ResultSource::Cache { key } => Some(key.clone()),
@@ -2627,10 +2665,16 @@ assert chunks[1] is last
     }
 
     #[rstest]
-    #[case::cancelled_mid_stream(None, &["stamp_stream_head", "stream_opened", "stream_success", "restore"])]
-    #[case::after_success(Some(true), &["stamp_stream_head", "stream_opened", "stream_success", "restore"])]
-    #[case::after_failure(Some(false), &["stamp_stream_head", "stream_opened", "stream_failure", "restore"])]
+    #[case::cancelled_mid_stream(true, true, None, &["stamp_stream_head", "stream_opened", "stream_success", "restore"])]
+    #[case::dropped_unread(true, false, None, &["stamp_stream_head", "stream_opened", "restore"])]
+    #[case::closed_unread(true, false, Some(true), &["stamp_stream_head", "stream_opened", "restore"])]
+    #[case::dropped_unread_billed_where_the_stream_starts_on_open(false, false, None, &["stamp_stream_head", "stream_opened", "stream_success", "restore"])]
+    #[case::closed_unread_billed_where_the_stream_starts_on_open(false, false, Some(true), &["stamp_stream_head", "stream_opened", "stream_success", "restore"])]
+    #[case::after_success(true, true, Some(true), &["stamp_stream_head", "stream_opened", "stream_success", "restore"])]
+    #[case::after_failure(true, true, Some(false), &["stamp_stream_head", "stream_opened", "stream_failure", "restore"])]
     fn closing_an_unfinished_stream_bills_its_delivered_chunks_once(
+        #[case] starts_on_first_read: bool,
+        #[case] read: bool,
         #[case] ended: Option<bool>,
         #[case] expected: &[&str],
     ) {
@@ -2642,14 +2686,17 @@ assert chunks[1] is last
             );
             let mut logging = LegacyLogging {
                 operation: crate::LoggingOperation::Messages,
+                stream_starts_on_first_read: starts_on_first_read,
                 ..logged(py, &locals, true)
             };
             logging
                 .on_stream_open(py, &local(&locals, "head").unbind())
                 .unwrap();
-            logging
-                .on_stream_chunk(py, &local(&locals, "first").unbind())
-                .unwrap();
+            if read {
+                logging
+                    .on_stream_chunk(py, &local(&locals, "first").unbind())
+                    .unwrap();
+            }
             match ended {
                 Some(true) => drop(succeed(py, &locals, &mut logging)),
                 Some(false) => drop(fail(py, &locals, &mut logging)),

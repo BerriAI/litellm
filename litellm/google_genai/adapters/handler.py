@@ -8,12 +8,13 @@ import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.types.google_genai.adapters import GenerateContentCompletionKwargs
 from litellm.types.router import GenericLiteLLMParams
-from litellm.types.utils import ModelResponse
+from litellm.types.utils import CustomPricingLiteLLMParams, ModelResponse
 
 from .transformation import GoogleGenAIAdapter
 
 # Initialize adapter
 GOOGLE_GENAI_ADAPTER: Final = GoogleGenAIAdapter()
+CUSTOM_PRICING_PARAMS: Final = frozenset(CustomPricingLiteLLMParams.model_fields)
 
 
 class _TranslatedCompletionKwargs(TypedDict, total=False, extra_items=object):
@@ -48,6 +49,7 @@ class GenerateContentToCompletionHandler:
         stream: bool = False,
         litellm_params: GenericLiteLLMParams | None = None,
         extra_kwargs: Mapping[str, object] | None = None,
+        custom_logging_obj: LiteLLMLoggingObj | None = None,
     ) -> GenerateContentCompletionKwargs:
         """Prepare kwargs for litellm.completion/acompletion"""
 
@@ -75,6 +77,13 @@ class GenerateContentToCompletionHandler:
             if "litellm_metadata" in extra_kwargs:
                 completion_kwargs["litellm_metadata"] = extra_kwargs["litellm_metadata"]
 
+        if isinstance(custom_logging_obj, LiteLLMLoggingObj):
+            completion_kwargs["litellm_logging_obj"] = custom_logging_obj
+            completion_kwargs["litellm_call_id"] = custom_logging_obj.litellm_call_id
+            completion_kwargs.update(
+                {key: value for key, value in (extra_kwargs or {}).items() if key in CUSTOM_PRICING_PARAMS}
+            )
+
         if stream:
             completion_kwargs["stream"] = stream
             stream_options: Final = _adapter_stream_options((extra_kwargs or {}).get("stream_options"))
@@ -90,6 +99,7 @@ class GenerateContentToCompletionHandler:
         litellm_params: GenericLiteLLMParams,
         config: dict[str, object] | None = None,
         stream: bool = False,
+        custom_logging_obj: LiteLLMLoggingObj | None = None,
         **kwargs: object,
     ) -> dict[str, object] | AsyncIterator[bytes]:
         """Handle generate_content call asynchronously using completion adapter"""
@@ -101,6 +111,7 @@ class GenerateContentToCompletionHandler:
             stream=stream,
             litellm_params=litellm_params,
             extra_kwargs=kwargs,
+            custom_logging_obj=custom_logging_obj,
         )
 
         try:
@@ -141,6 +152,7 @@ class GenerateContentToCompletionHandler:
         config: dict[str, object] | None = None,
         stream: bool = False,
         _is_async: bool = False,
+        custom_logging_obj: LiteLLMLoggingObj | None = None,
         **kwargs: object,
     ) -> dict[str, object] | AsyncIterator[bytes] | Coroutine[None, None, dict[str, object] | AsyncIterator[bytes]]:
         """Handle generate_content call using completion adapter"""
@@ -152,6 +164,7 @@ class GenerateContentToCompletionHandler:
                 config=config,
                 stream=stream,
                 litellm_params=litellm_params,
+                custom_logging_obj=custom_logging_obj,
                 **kwargs,
             )
 
@@ -162,6 +175,7 @@ class GenerateContentToCompletionHandler:
             stream=stream,
             litellm_params=litellm_params,
             extra_kwargs=kwargs,
+            custom_logging_obj=custom_logging_obj,
         )
 
         try:

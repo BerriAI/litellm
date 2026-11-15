@@ -199,6 +199,12 @@ pub enum ErrorDetail {
         left: &'static str,
         right: &'static str,
     },
+    /// Python's azure_ai Messages `get_complete_url` raises this bare `ValueError` when neither the
+    /// call nor `AZURE_API_BASE` names a base.
+    #[error(
+        "Missing Azure API Base - Please set `api_base` or `AZURE_API_BASE` environment variable. Expected format: https://<resource-name>.services.ai.azure.com/anthropic"
+    )]
+    MissingAzureApiBase,
     #[error(
         "Missing API Base - A call is being made to LLM Provider but no api base is set either in the environment variables ({{LLM_PROVIDER}}_API_KEY) or via params"
     )]

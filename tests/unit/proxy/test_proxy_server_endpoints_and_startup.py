@@ -1702,6 +1702,7 @@ async def test_aaaproxy_startup_master_key(mock_prisma, monkeypatch, tmp_path):
 
     # Mock the Prisma import
     monkeypatch.setattr("litellm.proxy.proxy_server.PrismaClient", MockPrisma)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://nobody:nothing@127.0.0.1:1/unreachable")
 
     # Create test app
     app = FastAPI()
@@ -1932,6 +1933,7 @@ async def test_proxy_startup_stops_when_the_requested_migration_fails(monkeypatc
     _boot_with_general_settings(monkeypatch, tmp_path, {"master_key": "sk-a-safe-master-key"})
     prisma: Final = _PrismaClientWhoseDatabaseRejectsQueries()
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://nobody:nothing@127.0.0.1:1/unreachable")
     monkeypatch.setenv("LITELLM_MIGRATE_FROM_MASTER_KEY", PUBLICLY_KNOWN_KEY)
 
     with (
@@ -1955,12 +1957,14 @@ async def test_proxy_startup_after_a_failed_migration_does_not_reuse_the_closed_
 
     _boot_with_general_settings(monkeypatch, tmp_path, {"master_key": "sk-a-safe-master-key"})
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", _PrismaClientWhoseDatabaseRejectsQueries())
+    monkeypatch.setenv("DATABASE_URL", "postgresql://nobody:nothing@127.0.0.1:1/unreachable")
     monkeypatch.setenv("LITELLM_MIGRATE_FROM_MASTER_KEY", PUBLICLY_KNOWN_KEY)
     with pytest.raises(RuntimeError, match="permission denied"):
         async with proxy_startup_event(FastAPI()):
             pass
 
     monkeypatch.setenv("LITELLM_MIGRATE_FROM_MASTER_KEY", "")
+    monkeypatch.delenv("DATABASE_URL")
     async with proxy_startup_event(FastAPI()) as state:
         assert state["database"] is None
 
@@ -2023,6 +2027,7 @@ async def test_proxy_shutdown_stops_database_background_tasks(monkeypatch, tmp_p
         yaml.dump({"general_settings": {"master_key": MASTER_KEY}}, f)
     monkeypatch.setenv("CONFIG_FILE_PATH", str(config_path))
     monkeypatch.setattr(proxy_server_module, "prisma_client", fake_prisma)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://nobody:nothing@127.0.0.1:1/unreachable")
     monkeypatch.setattr(proxy_server_module, "store_model_in_db", False)
 
     async with proxy_startup_event(FastAPI()):
