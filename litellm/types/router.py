@@ -614,6 +614,7 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     timeout: float | str | httpx.Timeout | SDKTimeout | None = None  # if str, pass in as os.environ/
     # read timeout of a live stream, a faked stream takes the longer of this and timeout. If str, pass in as os.environ/
     stream_timeout: float | str | None = None
+    stream_ttft_timeout: float | str | None = None
     # per service_tier overrides of timeout / stream_timeout, used when the request's service_tier matches a key
     timeout_by_service_tier: Mapping[str, float] | None = None
     stream_timeout_by_service_tier: Mapping[str, float] | None = None

@@ -650,3 +650,47 @@ def test_azure_router_timeout_raises_after_httpx_read_timeout(
         )
 
     assert route.call_count == 1
+
+
+class _TTFTObserver(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.timeout: object = None
+
+    async def async_pre_call_deployment_hook(
+        self, kwargs: dict[str, object], call_type: object
+    ) -> dict[str, object] | None:
+        self.timeout = kwargs.get("stream_ttft_timeout")
+        return None
+
+
+def _ttft_chat_chunk(delta: Mapping[str, object], finish: str | None = None) -> bytes:
+    return ("data: " + json.dumps({
+        "id": "chatcmpl-ttft", "object": "chat.completion.chunk", "created": 1, "model": "ttft-model",
+        "choices": [{"index": 0, "delta": delta, "finish_reason": finish}],
+    }) + "\n\n").encode()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("request_value, expected", ((None, 0.2), ("0.3", 0.3)))
+async def test_stream_ttft_timeout_is_resolved_per_attempt_and_kept_out_of_provider_body(
+    request_value: str | None, expected: float, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    observer: Final = _TTFTObserver()
+    monkeypatch.setattr(litellm, "callbacks", [observer])
+    route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").respond(
+        200, content=_ttft_chat_chunk({"content": "answer"}, "stop") + b"data: [DONE]\n\n",
+    )
+    router: Final = Router(model_list=[{
+        "model_name": "ttft", "litellm_params": {
+            "model": "openai/ttft-model", "api_key": "fake", "stream_ttft_timeout": "0.2",
+        },
+    }], num_retries=0)
+    request: Final = {} if request_value is None else {"stream_ttft_timeout": request_value}
+    response: Final = await router.acompletion(
+        model="ttft", messages=[{"role": "user", "content": "hi"}], stream=True, **request,
+    )
+    assert "".join([chunk.choices[0].delta.content or "" async for chunk in response]) == "answer"
+    assert observer.timeout == expected
+    assert "stream_ttft_timeout" not in json.loads(route.calls.last.request.content)
