@@ -122,6 +122,14 @@ def test_request_http_error(client):
     assert exc_info.value.response.status_code == 401
 
 
+@pytest.mark.parametrize("status", (200, 204))
+@responses.activate
+def test_request_returns_none_for_empty_success_response(client: HTTPClient, status: int) -> None:
+    responses.add(responses.OPTIONS, "http://localhost:4000/health/liveness", status=status)
+
+    assert client.request("OPTIONS", "/health/liveness") is None
+
+
 @responses.activate
 def test_request_invalid_json(client):
     """Test handling of invalid JSON responses."""

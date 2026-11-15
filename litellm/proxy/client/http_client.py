@@ -55,7 +55,7 @@ class HTTPClient:
             **kwargs: Additional keyword arguments to pass to the request.
 
         Returns:
-            Parsed JSON response from the server
+            Parsed JSON response from the server, or None for an empty successful response
 
         Raises:
             requests.exceptions.RequestException: If the request fails
@@ -100,6 +100,9 @@ class HTTPClient:
 
         # Raise for HTTP errors
         response.raise_for_status()
+
+        if 200 <= response.status_code < 300 and not response.content:
+            return None
 
         # Parse and return JSON response
         return _DECODED_JSON.validate_python(response.json())
