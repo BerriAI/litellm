@@ -17,6 +17,7 @@ from litellm.litellm_core_utils.decisions_pricing import QUERY_PRICED_DECISIONS_
 from litellm.litellm_core_utils.get_provider_specific_headers import ProviderSpecificHeaderUtils
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.prompt_templates.image_handling import (
+    async_convert_url_to_base64,
     async_convert_urls_to_base64,
     convert_url_to_base64,
 )
@@ -28,6 +29,7 @@ from litellm.llms.base_llm.decisions.transformation import (
     image_media_type,
     image_param,
     input_images,
+    ir_to_systemone_request,
     ir_to_systemone_response,
     remote_image_urls,
     systemone_request_to_ir,
@@ -233,6 +235,18 @@ def get_decisions_provider_config(model: str, custom_llm_provider: str) -> BaseD
             llm_provider=custom_llm_provider,
         )
     return provider_config
+
+
+def validate_router_connection(model: str, provider: str | None, request: Mapping[str, object]) -> None:
+    api_base: Final = request.get("api_base") or request.get("base_url")
+    if provider is None or not isinstance(api_base, str) or not api_base:
+        return
+    api_key: Final = request.get("api_key")
+    provider_config: Final = get_decisions_provider_config(model, provider)
+    try:
+        provider_config.validate_client_connection(api_base, api_key if isinstance(api_key, str) else None)
+    except ValueError as error:
+        raise litellm.BadRequestError(message=str(error), model=model, llm_provider=provider) from error
 
 
 def _ir_request(request: DecisionsRequestFormat, safety_identifier: str | None) -> DecisionsIRRequest:
@@ -649,10 +663,44 @@ def _with_data_urls(call: DecisionsCall, data_urls: Mapping[str, str]) -> Decisi
     )
 
 
+def _remaining_image_bytes(call: DecisionsCall) -> int | None:
+    total: Final = call.provider_config.max_total_image_bytes
+    if call.custom_llm_provider != "gemini" or total is None:
+        return None
+    _checked_image_sizes(call)
+    return total - sum(_decoded_image_bytes(image) for image in input_images(call.ir_request.input))
+
+
+def _bounded_remote_images(
+    urls: tuple[str, ...], remaining: int, timeout: float | httpx.Timeout | None
+) -> tuple[str, ...]:
+    state: tuple[int, tuple[str, ...]] = (remaining, ())  # rebind-ok: sequential budget without recursion
+    for url in urls:
+        available, images = state
+        image = convert_url_to_base64(url, timeout=timeout, max_bytes=available)
+        state = (available - _decoded_image_bytes(image), (*images, image))
+    return state[1]
+
+
+async def _async_bounded_remote_images(
+    urls: tuple[str, ...], remaining: int, timeout: float | httpx.Timeout | None
+) -> tuple[str, ...]:
+    state: tuple[int, tuple[str, ...]] = (remaining, ())  # rebind-ok: sequential budget without recursion
+    for url in urls:
+        available, images = state
+        image = await async_convert_url_to_base64(url, timeout=timeout, max_bytes=available)
+        state = (available - _decoded_image_bytes(image), (*images, image))
+    return state[1]
+
+
 def _with_remote_images_inlined(call: DecisionsCall) -> DecisionsCall:
     remote_urls: Final = _remote_image_urls(call)
     if not remote_urls:
         return call
+    remaining: Final = _remaining_image_bytes(call)
+    if remaining is not None:
+        images: Final = _bounded_remote_images(remote_urls, remaining, call.timeout)
+        return _with_data_urls(call, MappingProxyType(dict(zip(remote_urls, images, strict=True))))
     return _with_data_urls(
         call, MappingProxyType({url: convert_url_to_base64(url, timeout=call.timeout) for url in remote_urls})
     )
@@ -662,7 +710,12 @@ async def _async_with_remote_images_inlined(call: DecisionsCall) -> DecisionsCal
     remote_urls: Final = _remote_image_urls(call)
     if not remote_urls:
         return call
-    data_urls: Final = await async_convert_urls_to_base64(remote_urls, timeout=call.timeout)
+    remaining: Final = _remaining_image_bytes(call)
+    data_urls: Final = (
+        await async_convert_urls_to_base64(remote_urls, timeout=call.timeout)
+        if remaining is None
+        else await _async_bounded_remote_images(remote_urls, remaining, call.timeout)
+    )
     return _with_data_urls(call, MappingProxyType(dict(zip(remote_urls, data_urls, strict=True))))
 
 
@@ -753,6 +806,12 @@ def _request_body(call: DecisionsCall) -> Mapping[str, object]:
     return body
 
 
+def _logged_request_body(call: DecisionsCall) -> Mapping[str, object]:
+    if call.custom_llm_provider == "gemini":
+        return ir_to_systemone_request(call.model, call.ir_request)
+    return _request_body(call)
+
+
 def _pricing_model(response: DecisionsIRResponse, call: DecisionsCall) -> str:
     returned: Final = get_model_cost_key(f"{call.custom_llm_provider}/{response.model}")
     if returned is not None and cost_map_key_prices_anything(returned):
@@ -828,7 +887,7 @@ async def asend(call: DecisionsCall) -> DecisionsResponse | OpenAIDecisionRespon
             provider_config=inlined.provider_config,
             request=inlined.ir_request,
             body=body,
-            logged_body=body if inlined is supported else _request_body(supported),
+            logged_body=body if inlined is supported else _logged_request_body(supported),
             api_base=inlined.api_base,
             api_key=inlined.api_key,
             headers=inlined.headers,
@@ -852,7 +911,7 @@ def send(call: DecisionsCall) -> DecisionsResponse | OpenAIDecisionResponse:
             provider_config=inlined.provider_config,
             request=inlined.ir_request,
             body=body,
-            logged_body=body if inlined is supported else _request_body(supported),
+            logged_body=body if inlined is supported else _logged_request_body(supported),
             api_base=inlined.api_base,
             api_key=inlined.api_key,
             headers=inlined.headers,

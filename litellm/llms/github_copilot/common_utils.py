@@ -46,18 +46,6 @@ class GetAccessTokenError(GithubCopilotError):
     pass
 
 
-class APIKeyExpiredError(GithubCopilotError):
-    pass
-
-
-class RefreshAPIKeyError(GithubCopilotError):
-    pass
-
-
-class GetAPIKeyError(GithubCopilotError):
-    pass
-
-
 def get_copilot_default_headers(
     api_key: str,
 ) -> dict[str, str]:  # mutable-ok: callers merge caller headers into the returned dict
@@ -83,6 +71,7 @@ def get_copilot_default_headers(
 def pin_session_authorization(
     headers: MutableMapping[str, str],  # mutable-ok: the helper fixes caller-owned headers in place
     session_token: str,
+    integration_id: str | None = None,
 ) -> None:
     """The stored per-user session token owns Authorization outright: drop every
     caller-supplied bearer header (any casing) so it can never displace the
@@ -90,3 +79,7 @@ def pin_session_authorization(
     for key in tuple(k for k in headers if k.lower() == "authorization"):
         del headers[key]
     headers["Authorization"] = f"Bearer {session_token}"
+    if integration_id is not None:
+        for key in tuple(k for k in headers if k.lower() == "copilot-integration-id"):
+            del headers[key]  # rebind-ok: pin the authenticated identity in caller-owned headers
+        headers["copilot-integration-id"] = integration_id  # rebind-ok: pin the authenticated identity

@@ -5,9 +5,40 @@ Verifies that reasoning_effort=None returns None for all models,
 including Claude Opus 4.6.
 """
 
+from typing import Final
+
 import pytest
 
+from litellm.exceptions import BadRequestError
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+
+
+@pytest.mark.parametrize(
+    "model, expected",
+    [
+        ("claude-sonnet-5", {"type": "disabled"}),
+        ("claude-opus-5", {"type": "disabled"}),
+        ("claude-haiku-5-5", {"type": "disabled"}),
+        ("claude-haiku-4-5", None),
+        ("claude-sonnet-5-5", None),
+        ("claude-opus-5-5", None),
+        ("claude-fable-5", None),
+        ("claude-mythos-5", None),
+    ],
+)
+def test_none_disables_only_optional_default_thinking(model: str, expected: dict[str, str] | None) -> None:
+    mapped: Final = AnthropicConfig().map_openai_params({"reasoning_effort": "none"}, {}, model, False)
+    assert mapped.get("thinking") == expected
+    assert "output_config" not in mapped
+
+
+@pytest.mark.parametrize("effort", [None, "bogus"])
+def test_default_thinking_preserves_absent_and_invalid_effort(effort: str | None) -> None:
+    if effort is None:
+        assert AnthropicConfig.map_reasoning_effort(effort, "claude-sonnet-5", "anthropic") is None
+    else:
+        with pytest.raises(BadRequestError, match="Invalid reasoning_effort"):
+            AnthropicConfig().map_openai_params({"reasoning_effort": effort}, {}, "claude-sonnet-5", False)
 
 
 class TestMapReasoningEffort:

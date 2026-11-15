@@ -14,7 +14,7 @@ Opt-in: with ``SERVER_ROOT_PATHS`` unset the middleware is not added at all.
 import os
 from collections.abc import Sequence
 from contextvars import ContextVar
-from typing import Final
+from typing import Final, Literal, Protocol
 
 from starlette.types import ASGIApp, Receive, Scope, Send
 
@@ -89,6 +89,14 @@ def get_server_root_paths() -> tuple[str, ...]:
     return normalize_root_paths(configured.split(","))
 
 
+class _RootPathFields(Protocol):
+    def get(self, key: Literal["path", "root_path"], default: str, /) -> str: ...
+
+
+def _root_path_fields(scope: _RootPathFields) -> _RootPathFields:
+    return scope
+
+
 class PerRequestRootPathMiddleware:
     """Sets ``scope["root_path"]`` to the configured prefix matching the
     request path on a whole-segment boundary. ``scope["path"]`` is left
@@ -104,7 +112,7 @@ class PerRequestRootPathMiddleware:
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] in ("http", "websocket"):
-            path: Final[str] = scope.get("path", "")
+            path: Final[str] = _root_path_fields(scope).get("path", "")
             for prefix in self.root_paths:
                 if path == prefix or path.startswith(prefix + "/"):
                     scope["root_path"] = prefix  # rebind-ok: ASGI middleware contract; Router and base_url read it
@@ -113,7 +121,7 @@ class PerRequestRootPathMiddleware:
             # existing value when nothing matched — i.e. FastAPI's scalar
             # SERVER_ROOT_PATH) so code that emits URLs off the request path
             # picks the same prefix the router will resolve the request under.
-            token: Final = _request_root_path_var.set(str(scope.get("root_path", "")))
+            token: Final = _request_root_path_var.set(str(_root_path_fields(scope).get("root_path", "")))
             try:
                 await self.app(scope, receive, send)
             finally:

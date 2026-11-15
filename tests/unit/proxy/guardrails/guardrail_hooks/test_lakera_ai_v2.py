@@ -2683,3 +2683,38 @@ class TestBedrockPassthroughBody:
         assert logger.error.call_args.args[1] == (
             "a /bedrock pass-through body, which has no write-back path for the redacted content"
         )
+
+
+class _RecordingLakeraClient:
+    def __init__(self, body: dict[str, object]) -> None:
+        self.body = body
+        self.posts: list[dict[str, object]] = []
+
+    async def post(self, **kwargs: object) -> httpx.Response:
+        self.posts.append(kwargs)
+        return httpx.Response(200, json=self.body)
+
+
+@pytest.mark.asyncio
+async def test_call_v2_guard_returns_the_lakera_verdict_and_logs_it_without_the_payload() -> None:
+    guardrail: Final = LakeraAIGuardrail(api_key="test_key", guardrail_name="lakera-guard")
+    verdict: Final = {
+        "payload": [{"detector_type": "pii/email", "start": 0, "end": 16, "message_id": 0}],
+        "flagged": True,
+        "breakdown": [{"detector_type": "pii/email", "detected": True, "message_id": 0}],
+    }
+    client: Final = _RecordingLakeraClient(verdict)
+    guardrail.async_handler = client
+    request_data: Final[dict[str, object]] = {"metadata": {}}
+
+    response, masked_entity_count = await guardrail.call_v2_guard(
+        messages=[{"role": "user", "content": "test@example.com"}],
+        request_data=request_data,
+        event_type="pre_call",
+    )
+
+    assert (response, masked_entity_count) == (verdict, {})
+    assert client.posts[0]["url"] == "https://api.lakera.ai/v2/guard"
+    logged: Final = request_data["metadata"]["standard_logging_guardrail_information"][0]
+    assert logged["guardrail_status"] == "success"
+    assert logged["guardrail_response"] == {"flagged": True, "breakdown": verdict["breakdown"]}

@@ -139,6 +139,7 @@ _PROVIDERS: Final = (
         False,
         "databricks/databricks-openjev-qwen35-4b",
     ),
+    _Provider("empiriolabs", "empiriolabs/aplomb-test", "/v1/decisions", "aplomb-test", _API_KEY, False, None),
 )
 _LOCAL_PROVIDERS: Final = (
     pytest.param(
@@ -581,7 +582,16 @@ def test_ollama_decisions_sdk_respects_environment_and_explicit_auth(
             authorization,
             {"model": provider.body_model, "state": _STATE, "questions": _QUESTIONS},
         )
-        assert _upstream_calls(gateway, unused) == []
+        unused_calls: Final = _upstream_calls(gateway, unused)
+        assert tuple(
+            request
+            for request in unused_calls
+            if not (
+                request["method"] == "POST"
+                and request["path"] == f"/{unused.scenario_id}/api/show"
+                and request["body"] == {"name": provider.body_model}
+            )
+        ) == (), unused_calls
 
 
 def test_test_connection_evaluation_mode_uses_typesafe_decisions_path(gateway: Gateway) -> None:

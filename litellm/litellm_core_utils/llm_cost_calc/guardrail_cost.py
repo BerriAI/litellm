@@ -311,6 +311,12 @@ def guardrail_information_cost(guardrail_information: object) -> float:
     return _validated_entry_cost(guardrail_information)
 
 
+def guardrail_share_of_spend(spend_log_metadata: Mapping[str, object], spend: float) -> float:
+    """The part of a spend row's ``spend`` billed for its guardrails, priced the way success and failure rows add
+    it to spend and capped at the row's spend, since an allowance discount or a repeat job poll can charge less."""
+    return min(guardrail_information_cost(spend_log_metadata.get("guardrail_information")), max(spend, 0.0))
+
+
 def cost_breakdown_with_guardrail(cost_breakdown: CostBreakdown | None, guardrail_cost: float) -> CostBreakdown | None:
     if guardrail_cost <= 0.0:
         return cost_breakdown

@@ -398,7 +398,7 @@ async def test_a_sub_call_reserves_nothing_against_the_callers_budget(
     proxy_auth_state.serve(_classifier_router(cost_per_token=0.001))
     caller: Final = UserAPIKeyAuth(api_key="sk-live", spend=0.0, max_budget=10.0)
     counter_key: Final = f"spend:key:{caller.token}"
-    await proxy_server.spend_counter_cache.async_set_cache(counter_key, 0.0)
+    proxy_server.spend_counter_store.set_local(counter_key, 0.0)
     request: Final = Request(
         scope={"type": "http", "method": "POST", "path": "/v1/messages", "headers": [], "query_string": b""}
     )
@@ -410,7 +410,7 @@ async def test_a_sub_call_reserves_nothing_against_the_callers_budget(
 
     await run_centralized_common_checks(caller, request, priced_body, "/v1/messages", sub_call=sub_call)
 
-    counter: Final = await proxy_server.spend_counter_cache.async_get_cache(counter_key)
+    counter: Final = proxy_server.spend_counter_store.get_local(counter_key)
     assert (counter > 0, caller.budget_reservation is not None) == (reserved, reserved)
 
 
