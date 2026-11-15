@@ -101958,5 +101958,61 @@
         "supported_endpoints": [
             "/v1/images/generations"
         ]
+    },
+    "fal_ai/bytedance/seedance-2.5/flash/image-to-video": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second of generated video by resolution; output_cost_per_second is the default resolution 720p rate"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.3094,
+        "output_cost_per_second_480p": 0.1442,
+        "output_cost_per_second_720p": 0.3094,
+        "source": "https://fal.ai/models/bytedance/seedance-2.5/flash/image-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/bytedance/seedance-2.5/flash/reference-to-video": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second of generated video by resolution; output_cost_per_second is the default resolution 720p rate; with video references fal bills input and output duration and multiplies by 0.614, about 0.1901 per second at 720p, not modeled"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.3094,
+        "output_cost_per_second_480p": 0.1442,
+        "output_cost_per_second_720p": 0.3094,
+        "source": "https://fal.ai/models/bytedance/seedance-2.5/flash/reference-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/bytedance/seedance-2.5/flash/text-to-video": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second of generated video by resolution; output_cost_per_second is the default resolution 720p rate"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.3094,
+        "output_cost_per_second_480p": 0.1442,
+        "output_cost_per_second_720p": 0.3094,
+        "source": "https://fal.ai/models/bytedance/seedance-2.5/flash/text-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
     }
 }
