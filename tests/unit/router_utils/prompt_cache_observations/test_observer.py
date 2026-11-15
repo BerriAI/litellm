@@ -1,4 +1,5 @@
 import asyncio
+import datetime
 import json
 from collections.abc import Mapping
 
@@ -8,6 +9,7 @@ import respx
 from pydantic import JsonValue
 
 import litellm
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.responses.streaming_iterator import drain_logging_tasks
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
@@ -372,16 +374,20 @@ async def test_calls_with_no_cache_signal_or_no_opt_in_record_nothing() -> None:
     assert sink.calls == ()
 
 
-class _AttemptLogging:
-    def __init__(self) -> None:
-        self.settings: object = None
-
-    def record_deployment_cache_settings(self, settings: object) -> None:
-        self.settings = settings
+def _attempt_logging() -> LiteLLMLoggingObj:
+    return LiteLLMLoggingObj(
+        model="anthropic/claude-test",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="acompletion",
+        start_time=datetime.datetime(2026, 1, 1),
+        litellm_call_id="call-1",
+        function_id="call-1",
+    )
 
 
 async def test_deployment_hook_keeps_the_attempts_cache_settings_before_the_gateway_consumes_them() -> None:
-    logging_obj = _AttemptLogging()
+    logging_obj = _attempt_logging()
     points = [{"location": "message", "role": "system"}]
     attempt = {
         "model": "anthropic/claude-test",
@@ -390,9 +396,23 @@ async def test_deployment_hook_keeps_the_attempts_cache_settings_before_the_gate
         "litellm_logging_obj": logging_obj,
     }
     await _observer(_RecordingSink()).async_pre_call_deployment_hook(attempt, None)
-    assert logging_obj.settings == deployment_cache_settings(attempt)
-    assert isinstance(logging_obj.settings, DeploymentCacheSettings)
-    assert dict(logging_obj.settings.settings)["cache_control_injection_points"] == points
+    recorded = logging_obj.recorded_deployment_cache_settings()
+    assert recorded == deployment_cache_settings(attempt)
+    assert isinstance(recorded, DeploymentCacheSettings)
+    assert dict(recorded.settings)["cache_control_injection_points"] == points
+
+
+async def test_a_second_hook_pass_on_the_attempt_keeps_the_injection_settings_the_first_saw() -> None:
+    logging_obj = _attempt_logging()
+    points = [{"location": "message", "role": "system"}]
+    outer = {"model_info": _MODEL_INFO, "cache_control_injection_points": points, "litellm_logging_obj": logging_obj}
+    inner = {"model_info": _MODEL_INFO, "litellm_logging_obj": logging_obj}
+    observer = _observer(_RecordingSink())
+    await observer.async_pre_call_deployment_hook(outer, None)
+    await observer.async_pre_call_deployment_hook(inner, None)
+    recorded = logging_obj.recorded_deployment_cache_settings()
+    assert isinstance(recorded, DeploymentCacheSettings)
+    assert dict(recorded.settings)["cache_control_injection_points"] == points
 
 
 async def test_observation_log_keeps_a_bounded_tail_and_counts_every_outcome() -> None:
