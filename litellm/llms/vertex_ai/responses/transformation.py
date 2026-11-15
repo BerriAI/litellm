@@ -100,6 +100,27 @@ def _muse_tools(tools: object) -> tuple[object, ...] | None:
     return tuple(tool for tool in _OBJECTS.validate_python(tools) if _keeps_muse_tool(tool))
 
 
+def _unsupported_muse_tool_type(tool: object) -> str | None:
+    if not isinstance(tool, Mapping):
+        return None
+    tool_type: Final = _FIELDS.validate_python(tool).get("type")
+    return None if tool_type in _MUSE_TOOL_TYPES else str(tool_type)
+
+
+def _unsupported_muse_tool_types(tools: object) -> tuple[str, ...]:
+    if not isinstance(tools, list | tuple):
+        return ()
+    return tuple(
+        sorted(
+            frozenset(
+                tool_type
+                for tool_type in map(_unsupported_muse_tool_type, _OBJECTS.validate_python(tools))
+                if tool_type is not None
+            )
+        )
+    )
+
+
 def _refused_reasoning_effort(model: str, reasoning: Mapping[str, object]) -> str | None:
     from litellm.utils import is_explicitly_disabled_factory
 
@@ -227,10 +248,12 @@ class VertexAIMuseResponsesAPIConfig(OpenAIResponsesAPIConfig):
         return {**headers, "Content-Type": "application/json", "Authorization": f"Bearer {token}"}
 
     def get_complete_url(self, api_base: str | None, litellm_params: Mapping[str, object]) -> str:
-        explicit_project: Final = VertexBase.safe_get_vertex_ai_project(  # pyright: ignore[reportUnknownMemberType]  # untyped bag
-            dict(litellm_params)
+        project: Final = (
+            VertexBase.safe_get_vertex_ai_project(  # pyright: ignore[reportUnknownMemberType]  # untyped bag
+                dict(litellm_params)
+            )
+            or self._access_token(litellm_params)[1]
         )
-        project: Final = explicit_project or self._access_token(litellm_params)[1]
         default_url: Final = (
             f"https://aiplatform.googleapis.com/v1/projects/{encode_url_path_segment(project)}"
             "/locations/global/publishers/meta/v1/responses"
@@ -288,7 +311,10 @@ class VertexAIMuseResponsesAPIConfig(OpenAIResponsesAPIConfig):
         if tool_choice is not None and tool_choice != "auto" and not drops_unsupported:
             raise UnsupportedParamsError(
                 status_code=400,
-                message="Vertex Muse supports only tool_choice='auto'. Set drop_params=True to normalize unsupported choices.",
+                message=(
+                    "Vertex Muse supports only tool_choice='auto'. "
+                    "Set drop_params=True to normalize unsupported choices."
+                ),
             )
         reasoning: Final = _reasoning_fields(response_api_optional_request_params.get("reasoning"))
         refused_effort: Final = _refused_reasoning_effort(model, reasoning)
@@ -296,6 +322,16 @@ class VertexAIMuseResponsesAPIConfig(OpenAIResponsesAPIConfig):
             raise UnsupportedParamsError(
                 status_code=400,
                 message=unsupported_reasoning_effort_message("reasoning.effort", refused_effort, model),
+            )
+        unsupported_tool_types: Final = _unsupported_muse_tool_types(response_api_optional_request_params.get("tools"))
+        if unsupported_tool_types and not drops_unsupported:
+            raise UnsupportedParamsError(
+                status_code=400,
+                message=(
+                    "Vertex Muse supports only function and namespace tools, got "
+                    + ", ".join(unsupported_tool_types)
+                    + ". Set drop_params=True to omit them."
+                ),
             )
         kept_reasoning: Final = {key: value for key, value in reasoning.items() if key != "effort"}
         kept_tools: Final = (
@@ -351,6 +387,7 @@ class VertexAIMuseResponsesAPIConfig(OpenAIResponsesAPIConfig):
     ) -> ResponsesAPIStreamingResponse:
         carries_items: Final = "item" in parsed_chunk or "response" in parsed_chunk
         namespaces: Final = _sent_namespaces(logging_obj) if carries_items else _NO_NAMESPACES
-        return super().transform_streaming_response(  # pyright: ignore[reportUnknownMemberType]  # base takes an untyped dict
-            model, dict(_namespaced_event(parsed_chunk, namespaces) if namespaces else parsed_chunk), logging_obj
+        chunk: Final = dict(_namespaced_event(parsed_chunk, namespaces) if namespaces else parsed_chunk)
+        return super().transform_streaming_response(  # pyright: ignore[reportUnknownMemberType]  # untyped dict
+            model, chunk, logging_obj
         )
