@@ -5586,6 +5586,15 @@ class _Driver:
         return self._request.get("messages") is not None or self._request.get("input") is not None
 
     def failed(self, step: Mapping[str, object]) -> BaseException:
+        try:
+            return self._failure(step)
+        finally:
+            self._last_error = None
+            self._level_errors.clear()
+            self._hop_first.clear()
+            self._level_picks.clear()
+
+    def _failure(self, step: Mapping[str, object]) -> BaseException:
         model: Final = str(self._request.get("model"))
         primary: Final = self._level_errors.get(self._base_level)
         if primary is None:
