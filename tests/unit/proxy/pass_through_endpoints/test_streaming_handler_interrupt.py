@@ -1602,16 +1602,9 @@ async def test_chunk_processor_leaves_the_budget_reservation_for_the_request_end
 
 
 async def _route_messages_stream(logging_obj: LiteLLMLoggingObj, frames: tuple[bytes, ...]) -> None:
-    await PassThroughStreamingHandler.route_streaming_logging_to_handler(
-        litellm_logging_obj=logging_obj,
-        passthrough_success_handler_obj=MagicMock(),
-        url_route="/v1/messages",
-        request_body={"model": "claude-sonnet-5", "stream": True},
-        endpoint_type=EndpointType.ANTHROPIC,
-        start_time=datetime(2026, 1, 1),
-        raw_bytes=frames,
-        end_time=datetime(2026, 1, 1),
-    )
+    async for _ in _anthropic_messages_attempt(logging_obj, _anthropic_stream_of(frames)):
+        pass
+    await GLOBAL_LOGGING_WORKER.flush()
 
 
 @pytest.mark.asyncio

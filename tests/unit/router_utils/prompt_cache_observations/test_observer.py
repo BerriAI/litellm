@@ -35,6 +35,7 @@ from litellm.router_utils.prompt_cache_observations.observer import (
     ObserverSettings,
     PromptCacheObserver,
     prefix_fingerprint_key,
+    prompt_cache_observer,
 )
 from litellm.router_utils.prompt_cache_observations.prefix import outgoing_cacheable_prefix
 from litellm.router_utils.prompt_cache_observations.types import (
@@ -451,6 +452,22 @@ async def test_diagnostic_log_reports_what_was_observed_without_prompt_content(
         assert logged["prefix"] and _prefix().fingerprint.startswith(logged["prefix"])
         assert len(logged["prefix"]) < len(_prefix().fingerprint)
     assert "shared" not in message
+
+
+@pytest.mark.parametrize(
+    ("salt", "outcome"), [("shipped-observer-salt", "assessed:counters"), (None, "unassessed:prefix_key_unavailable")]
+)
+async def test_the_shipped_observer_assesses_verified_paths_only_with_a_shared_salt(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, salt: str | None, outcome: str
+) -> None:
+    if salt is None:
+        monkeypatch.delenv("LITELLM_SALT_KEY", raising=False)
+    else:
+        monkeypatch.setenv("LITELLM_SALT_KEY", salt)
+    with caplog.at_level(logging.DEBUG, logger="LiteLLM Router"):
+        await prompt_cache_observer().async_log_success_event(_kwargs(), ModelResponse(), None, None)
+    (message,) = (record.getMessage() for record in caplog.records if "prompt cache observation" in record.getMessage())
+    assert "deployment=claude-east " in message and f"outcome={outcome} " in message
 
 
 def _sse(events: tuple[Mapping[str, object], ...]) -> str:

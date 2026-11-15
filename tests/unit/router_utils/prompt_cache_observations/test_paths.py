@@ -57,7 +57,7 @@ def test_each_client_surface_on_native_anthropic_is_classified(call_type: str, s
         ("vertex_ai", "claude-test", "acompletion", _BODY, UnassessedReason.PROVIDER_OUT_OF_SCOPE),
         ("azure_ai", "claude-test", "acompletion", _BODY, UnassessedReason.PROVIDER_OUT_OF_SCOPE),
         ("openai", "gpt-test", "acompletion", _BODY, UnassessedReason.PROVIDER_OUT_OF_SCOPE),
-        ("anthropic", "not-a-claude-model", "acompletion", _BODY, UnassessedReason.MODEL_OUT_OF_SCOPE),
+        ("anthropic", "some-other-model", "acompletion", _BODY, UnassessedReason.MODEL_OUT_OF_SCOPE),
         ("anthropic", "claude-test", "aembedding", _BODY, UnassessedReason.SURFACE_OUT_OF_SCOPE),
         ("anthropic", "claude-test", "acompletion", {"contents": []}, UnassessedReason.WIRE_SHAPE_UNRECOGNIZED),
     ],

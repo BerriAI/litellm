@@ -10181,6 +10181,6 @@ async def test_a_terminal_frame_read_that_fails_ends_the_stream_normally_and_sta
     received: Final = await _collect(wrapper, sync_mode=False)
 
     assert [c.choices[0].finish_reason for c in received if c.choices and c.choices[0].finish_reason] == ["stop"]
-    recorded: Final = logging_obj.model_call_details[UPSTREAM_STREAM_USAGE_KEY]
+    recorded: Final[object] = logging_obj.model_call_details[UPSTREAM_STREAM_USAGE_KEY]
     assert isinstance(recorded, AnthropicStreamUsage) and recorded.stop_reason == "end_turn"
     assert recorded.stopped is False

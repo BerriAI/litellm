@@ -62,6 +62,7 @@ from litellm.litellm_core_utils.upstream_cache_evidence import (
     AnthropicStreamUsage,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
+from litellm.rust_bridge.host.callbacks_legacy_python import LoggingSurface
 from litellm.litellm_core_utils.token_counter import token_counter
 from litellm.litellm_core_utils.litellm_logging import (
     BilledRoundsSpend,
@@ -16514,7 +16515,8 @@ def test_each_pre_call_starts_an_attempt_with_no_stream_usage_from_the_previous_
 ) -> None:
     previous = AnthropicStreamUsage(opening={"cache_read_input_tokens": 5}, starts=1, stopped=True)
     logging_obj.record_upstream_stream_usage(previous)
-    logging_obj.pre_call(input="hi", api_key=None, additional_args={})
+    attempt: LoggingSurface = logging_obj
+    attempt.pre_call(input="hi", api_key=None, additional_args={})
     assert UPSTREAM_STREAM_USAGE_KEY not in logging_obj.model_call_details
     assert logging_obj.model_call_details[SERVED_RUNTIME_KEY] == "python"
 

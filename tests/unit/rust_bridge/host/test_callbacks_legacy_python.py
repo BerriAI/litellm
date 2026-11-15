@@ -558,5 +558,6 @@ def test_rust_pre_call_stamps_the_attempt_as_served_by_rust() -> None:
     logger = _supplied_logger()
     legacy.pre_call(logger, "hi", None, {"complete_input_dict": {"model": "claude-test"}, "api_base": "https://x"})
     assert logger.model_call_details[SERVED_RUNTIME_KEY] == "rust"
-    logger.pre_call(input="hi", api_key=None, additional_args={"complete_input_dict": {}})
+    next_attempt: legacy.LoggingSurface = logger
+    next_attempt.pre_call(input="hi", api_key=None, additional_args={"complete_input_dict": {}})
     assert logger.model_call_details[SERVED_RUNTIME_KEY] == "python"

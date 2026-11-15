@@ -120,3 +120,9 @@ def test_an_sse_comment_quoting_a_stop_is_not_an_event() -> None:
 def test_lifecycle_text_that_is_not_a_json_event_leaves_the_record_unchanged() -> None:
     started = _recorded(_start())
     assert recorded_anthropic_stream_text(started, '{"type": "message_stop"') == started
+
+
+def test_usage_that_is_not_json_is_kept_as_absent_rather_than_failing_the_stream() -> None:
+    recorded = _recorded(_start(object()), _delta(object()), _STOP)
+    assert recorded is not None
+    assert (recorded.opening, recorded.closing, recorded.starts, recorded.stopped) == (None, None, 1, True)
