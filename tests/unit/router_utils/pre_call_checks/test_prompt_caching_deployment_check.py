@@ -25,7 +25,6 @@ from litellm.router_utils.pre_call_checks.prompt_caching_deployment_check import
     PromptCachingDeploymentCheck,
     _honors_one_hour_cache_ttl,
     _get_min_token_count_for_deployments,
-    _responses_prompt,
 )
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.router_utils.prompt_caching_cache import PROMPT_CACHE_PIN_TTL_SECONDS, PromptCachingCache
@@ -1633,21 +1632,25 @@ def _responses_router(model: str) -> litellm.Router:
     )
 
 
-async def _serve_response(router: litellm.Router, request_input: object) -> str:
+async def _serve_response(
+    router: litellm.Router, request_input: object, tools: tuple[object, ...] = (_RESPONSES_TOOL,)
+) -> str:
     response = await router.aresponses(
         model=MODEL_GROUP_ALIAS,
         input=copy.deepcopy(request_input),
         instructions="Be terse.",
-        tools=[_RESPONSES_TOOL],
+        tools=copy.deepcopy(list(tools)),
         mock_response="ok",
     )
     return response._hidden_params["model_id"]
 
 
-async def _deployments_serving_repeats(router: litellm.Router, request_input: object) -> set[str]:
-    await _serve_response(router, request_input)
+async def _deployments_serving_repeats(
+    router: litellm.Router, request_input: object, tools: tuple[object, ...] = (_RESPONSES_TOOL,)
+) -> set[str]:
+    await _serve_response(router, request_input, tools)
     assert await _eventually(lambda: router.prompt_caching_pin_cache.in_memory_cache.cache_dict)
-    return {await _serve_response(router, request_input) for _ in range(8)}
+    return {await _serve_response(router, request_input, tools) for _ in range(8)}
 
 
 @pytest.mark.asyncio
@@ -2516,16 +2519,16 @@ async def test_responses_request_with_a_malformed_tool_is_left_to_the_provider(b
     assert pinned == ("dep-1", "dep-2")
 
 
-def test_responses_prompt_with_a_flattened_namespace_name_collision_has_no_chat_form():
-    namespace_tool: Final = {
-        "type": "namespace",
-        "name": "admin",
-        "tools": [{"type": "function", "name": "run", "parameters": {"type": "object"}}],
-    }
-    colliding: Final = {
-        "input": "hello",
-        "tools": [{"type": "function", "name": "admin__run", "parameters": {"type": "object"}}, namespace_tool],
-    }
+@pytest.mark.asyncio
+async def test_native_responses_request_whose_flattened_tool_names_collide_still_pins():
+    colliding_tools: Final = (
+        {"type": "function", "name": "admin__run", "parameters": {"type": "object"}},
+        {
+            "type": "namespace",
+            "name": "admin",
+            "tools": [{"type": "function", "name": "run", "parameters": {"type": "object"}}],
+        },
+    )
+    router: Final = _responses_router(RESPONSES_NATIVE_MODEL)
 
-    assert _responses_prompt(colliding) is None
-    assert _responses_prompt({"input": "hello", "tools": [namespace_tool]}) is not None
+    assert len(await _deployments_serving_repeats(router, _marked_responses_input(), colliding_tools)) == 1

@@ -193,6 +193,7 @@ from litellm.litellm_core_utils.served_output_texts import (
     overlay_served_output_texts,
 )
 from litellm.litellm_core_utils.thread_pool_executor import executor
+from litellm.litellm_core_utils.tool_fields import BRIDGED_TOOL_NAMES_KWARG, with_full_tool_call_names
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from litellm.llms.base_llm.search.transformation import SearchResponse
 from litellm.responses.utils import ResponseAPILoggingUtils, ResponsesAPIRequestUtils
@@ -1123,6 +1124,7 @@ class Logging(LiteLLMLoggingBaseClass):
         self.client_facing_stream_model: str | None = None
         self.client_facing_response_id: str | None = None
         self.bridged_chat_request: BridgedChatRequest | None = None
+        self.bridged_tool_names: Mapping[str, str] = {}
         self.zero_cost_warned: bool = False
         self.llm_caching_handler: LLMCachingHandler | None = None
 
@@ -1498,6 +1500,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 **additional_params,
             }
         )
+        self._log_bridged_tool_names()
 
         ## check if stream options is set ##  - used by CustomStreamWrapper for easy instrumentation
         if "stream_options" in additional_params:
@@ -3644,10 +3647,15 @@ class Logging(LiteLLMLoggingBaseClass):
             return response
         return response.model_copy(update={"model": model})
 
+    def _with_full_tool_names(self, response: _LoggedResponse) -> _LoggedResponse | ModelResponse:
+        if not isinstance(response, ModelResponse):
+            return response
+        return with_full_tool_call_names(response, self.bridged_tool_names)
+
     def _as_served_chat_response(self, response: _LoggedResponse) -> _LoggedResponse | ModelResponse:
         request: Final = self.bridged_chat_request
         if request is None or not isinstance(response, ResponsesAPIResponse):
-            return response
+            return self._with_full_tool_names(response)
         return self._bridged_chat_response(response, request)
 
     def _as_served_response(
@@ -3655,7 +3663,7 @@ class Logging(LiteLLMLoggingBaseClass):
     ) -> _LoggedResponse | ModelResponse | TextCompletionResponse:
         request: Final = self.bridged_chat_request
         if request is None or not isinstance(response, ResponsesAPIResponse):
-            return response
+            return self._with_full_tool_names(response)
         served: Final = self._bridged_chat_response(response, request)
         if self.call_type not in (CallTypes.text_completion.value, CallTypes.atext_completion.value):  # pyright: ignore[reportUnknownMemberType]  # Logging.call_type is untyped
             return served
@@ -4200,7 +4208,7 @@ class Logging(LiteLLMLoggingBaseClass):
             include_v2: Final = not for_async_request and not (
                 bool(self.stream) and complete_streaming_response is None
             )
-            prepared: Final = _LogHookRun(details=call_details, result=result)
+            prepared: Final = _LogHookRun(details=call_details, result=self._with_full_tool_names(result))
             _run_callbacks_sync(
                 Hook.log_prepare,
                 hook_callbacks,
@@ -4857,7 +4865,7 @@ class Logging(LiteLLMLoggingBaseClass):
 
         hook_callbacks: Final = tuple(dict.fromkeys((*callbacks, *delivery_callbacks)))
         include_v2: Final = self.stream is not True or delivers_final_stream_log
-        prepared: Final = _LogHookRun(details=self.model_call_details, result=result)
+        prepared: Final = _LogHookRun(details=self.model_call_details, result=self._with_full_tool_names(result))
         await _run_callbacks(
             Hook.log_prepare,
             hook_callbacks,
@@ -5972,6 +5980,16 @@ class Logging(LiteLLMLoggingBaseClass):
         self.bridged_chat_request = BridgedChatRequest(
             MappingProxyType(dict(optional_params)), MappingProxyType(dict(litellm_params))
         )
+
+    def record_bridged_tool_names(self, full_names_by_sent_name: Mapping[str, str]) -> None:
+        self.bridged_tool_names = dict(full_names_by_sent_name)
+        self._log_bridged_tool_names()
+
+    def _log_bridged_tool_names(self) -> None:
+        if not self.bridged_tool_names:
+            self.model_call_details.pop(BRIDGED_TOOL_NAMES_KWARG, None)
+            return
+        self.model_call_details[BRIDGED_TOOL_NAMES_KWARG] = dict(self.bridged_tool_names)
 
     def record_bridged_responses_api_response(self, response: ResponsesAPIResponse) -> None:
         self.record_bridged_model_response(self._translate_responses_api_response_to_model_response(response))

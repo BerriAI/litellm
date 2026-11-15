@@ -14,7 +14,6 @@ from litellm.litellm_core_utils.allowed_tools_tool_choice import unenforced_allo
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.model_param_helper import embeds_thought_signature_in_tool_call_id
-from litellm.litellm_core_utils.tool_fields import LoggedFullToolNames
 from litellm.responses.additional_tools import HoistedAdditionalTools, hoist_additional_tools
 from litellm.responses.litellm_completion_transformation.client_tool_search import bridge_client_tool_search
 from litellm.responses.litellm_completion_transformation.compaction_items import holds_compaction_summary
@@ -100,7 +99,7 @@ def _log_full_tool_names(
     )
     shortened: Final = {sent_name: full_name for full_name, sent_name in chat_names.items() if sent_name != full_name}
     if shortened and isinstance(logging_obj, LiteLLMLoggingObj):
-        logging_obj.model_call_details.update(LoggedFullToolNames(full_tool_names=shortened))
+        logging_obj.record_bridged_tool_names(shortened)
 
 
 class LiteLLMCompletionTransformationHandler:

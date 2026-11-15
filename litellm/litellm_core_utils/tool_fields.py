@@ -12,6 +12,13 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.exceptions import UnsupportedParamsError
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupported_params, normalize_drop_params
+from litellm.types.utils import (
+    ChatCompletionMessageCustomToolCall,
+    ChatCompletionMessageToolCall,
+    Choices,
+    ModelResponse,
+    StreamingChoices,
+)
 
 # OpenAI has a 64-character limit for function/tool names
 # Anthropic does not have this limit, so we need to truncate long names
@@ -20,11 +27,7 @@ TOOL_NAME_HASH_LENGTH: Final = 8
 TOOL_NAME_PREFIX_LENGTH: Final = OPENAI_MAX_TOOL_NAME_LENGTH - TOOL_NAME_HASH_LENGTH - 1  # 55
 
 
-class LoggedFullToolNames(TypedDict, total=False):
-    full_tool_names: ReadOnly[Mapping[str, str]]
-
-
-LOGGED_FULL_TOOL_NAMES: Final[TypeAdapter[LoggedFullToolNames | None]] = TypeAdapter(LoggedFullToolNames | None)
+BRIDGED_TOOL_NAMES_KWARG: Final = "litellm_bridged_tool_names"
 
 ROUTES_WITH_TOOLS: Final = frozenset(
     {
@@ -83,6 +86,34 @@ def declared_function_name(tool: object) -> str | None:
 
 def qualified_member_name(namespace: str, name: str) -> str:
     return f"{namespace}__{name}"
+
+
+def with_full_tool_call_names(response: ModelResponse, full_names: Mapping[str, str]) -> ModelResponse:
+    if not full_names:
+        return response
+    return response.model_copy(
+        update={"choices": [_choice_with_full_tool_call_names(choice, full_names) for choice in response.choices]}
+    )
+
+
+def _choice_with_full_tool_call_names(
+    choice: Choices | StreamingChoices, full_names: Mapping[str, str]
+) -> Choices | StreamingChoices:
+    if not isinstance(choice, Choices) or not choice.message.tool_calls:
+        return choice
+    tool_calls: Final = [_tool_call_with_full_name(tool_call, full_names) for tool_call in choice.message.tool_calls]
+    return choice.model_copy(update={"message": choice.message.model_copy(update={"tool_calls": tool_calls})})
+
+
+def _tool_call_with_full_name(
+    tool_call: ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall, full_names: Mapping[str, str]
+) -> ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall:
+    if not isinstance(tool_call, ChatCompletionMessageToolCall):
+        return tool_call
+    full_name: Final = full_names.get(tool_call.function.name or "")
+    if full_name is None:
+        return tool_call
+    return tool_call.model_copy(update={"function": tool_call.function.model_copy(update={"name": full_name})})
 
 
 def truncate_tool_name(name: str) -> str:

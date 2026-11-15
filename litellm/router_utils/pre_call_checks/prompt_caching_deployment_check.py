@@ -123,7 +123,6 @@ def _responses_prompt(request_data: Mapping[str, object]) -> _ResponsesPrompt | 
             item_cache_control=True,
             only_since_compaction=True,
         )
-        LiteLLMCompletionResponsesConfig.validate_namespace_name_collisions(convertible_tools)
         forms: Final = LiteLLMCompletionResponsesConfig.responses_tools_to_chat_forms(convertible_tools)
     except Exception as error:  # noqa: BLE001  # the provider judges the input, a routing preference never does
         verbose_logger.debug("Prompt Caching: skipping an input with no chat form: %s", type(error).__name__)
