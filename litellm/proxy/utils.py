@@ -61,6 +61,7 @@ from litellm.constants import (
     LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED,
     LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL,
     MAX_TEAM_LIST_LIMIT,
+    MID_STREAM_PARTIAL_COST_KEY,
     PROXY_REJECTED_BEFORE_ROUTING_KEY,
     REDIS_SPEND_LOGS_BUFFER_DEQUEUE_COUNT,
     SPEND_LOG_QUEUE_MAX_BYTES,
@@ -1172,6 +1173,26 @@ def _with_continued_partial(
     )
 
 
+def _with_continued_partial_breakdown(standard_logging_object: object, row_cost: object) -> object:
+    logged: Final = _as_str_mapping(standard_logging_object)
+    if not logged or not isinstance(row_cost, (int, float)):
+        return standard_logging_object
+    failure_breakdown: Final = _as_str_mapping(logged.get("cost_breakdown"))
+    failure_total: Final = failure_breakdown.get("total_cost")
+    failure_priced_cost: Final = failure_total if isinstance(failure_total, (int, float)) else 0.0
+    return {
+        **logged,
+        "cost_breakdown": {
+            **failure_breakdown,
+            "additional_costs": {
+                **_as_str_mapping(failure_breakdown.get("additional_costs")),
+                MID_STREAM_PARTIAL_COST_KEY: row_cost - failure_priced_cost,
+            },
+            "total_cost": row_cost,
+        },
+    }
+
+
 def _estimated_prompt_usage(
     model_call_details: Mapping[str, object], request_body: Mapping[str, object]
 ) -> Usage | None:
@@ -1607,6 +1628,7 @@ def _failure_fields_to_lift(request_data: Mapping[str, object], provider_billed:
     _deployment_id: Final = _logging_obj.get_router_model_id() if isinstance(_logging_obj, Logging) else None
     _success_already_logged: Final = isinstance(_logging_obj, Logging) and _logging_obj.async_success_log_enqueued
     _billed: Final = provider_billed and not _success_already_logged
+    _continued_partial: Final = _logging_obj.continued_partial if isinstance(_logging_obj, Logging) else None
     _usage_to_lift: Final = _failure_usage_to_lift(
         model_call_details=_model_call_details,
         request_body=request_data,
@@ -1614,9 +1636,11 @@ def _failure_fields_to_lift(request_data: Mapping[str, object], provider_billed:
         provider_billed=_billed,
         deployment_id=_deployment_id,
         base_model=_base_model,
-        continued_partial=_logging_obj.continued_partial if isinstance(_logging_obj, Logging) else None,
+        continued_partial=_continued_partial,
         continued_partial_billed=isinstance(_logging_obj, Logging) and _logging_obj.continued_partial_billed,
     )
+    _lifted_cost: Final = None if _usage_to_lift is None else (_usage_to_lift[1] or 0.0)
+    _logged_failure: Final[object] = _model_call_details.get("standard_logging_object")
     _prompt_estimate: Final = (
         _estimated_prompt_usage(_model_call_details, request_data)
         if _billed and _first_handoff is not None and not _model_call_details.get("failed_attempts_usage")
@@ -1632,8 +1656,13 @@ def _failure_fields_to_lift(request_data: Mapping[str, object], provider_billed:
         ("first_api_call_start_time", _first_handoff),
         ("call_type", _model_call_details.get("call_type")),
         ("combined_usage_object", None if _usage_to_lift is None else _usage_to_lift[0]),
-        ("response_cost", None if _usage_to_lift is None else (_usage_to_lift[1] or 0.0)),
-        ("standard_logging_object", _model_call_details.get("standard_logging_object")),
+        ("response_cost", _lifted_cost),
+        (
+            "standard_logging_object",
+            _logged_failure
+            if _continued_partial is None
+            else _with_continued_partial_breakdown(_logged_failure, _lifted_cost),
+        ),
         ("billed_failed_attempts", _earlier_attempts or None),
     )
     return MappingProxyType({key: value for key, value in _entries if value is not None})

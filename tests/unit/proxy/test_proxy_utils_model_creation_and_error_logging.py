@@ -1,4 +1,5 @@
 import datetime as real_datetime
+import json
 import smtplib
 from typing import Final
 
@@ -3255,3 +3256,46 @@ async def test_a_cut_stream_without_a_carried_partial_bills_its_relayed_tokens_o
         )
     )
 
+
+
+@pytest.mark.asyncio
+async def test_a_carried_partial_lifted_onto_a_priced_failure_keeps_the_failures_costs_and_adds_the_partial():
+    from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+    from litellm.proxy.utils import _failure_fields_to_lift
+
+    logging_obj, _ = litellm.utils.function_setup(
+        original_function="aresponses",
+        rules_obj=litellm.utils.Rules(),
+        start_time=real_datetime.datetime.now(),
+        model="gpt-4o",
+        input="Tell me a story",
+        stream=True,
+        litellm_call_id="priced-failure",
+    )
+    logging_obj.record_continued_partial(
+        usage=Usage(prompt_tokens=40, completion_tokens=7, total_tokens=47), response_cost=0.001
+    )
+    logging_obj.record_partial_usage_for_failure(Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15), 0.00314)
+    logging_obj.set_cost_breakdown(
+        input_cost=0.002,
+        output_cost=0.001,
+        total_cost=0.00314,
+        cost_for_built_in_tools_cost_usd_dollar=0.0,
+        additional_costs={"azure_model_router_flat_cost": 0.00014},
+    )
+    await logging_obj.async_failure_handler(InternalServerError("cut", "openai", "gpt-4o"), "traceback")
+
+    row: Final = get_logging_payload(
+        dict(_failure_fields_to_lift({"litellm_logging_obj": logging_obj})),
+        None,
+        real_datetime.datetime.now(),
+        real_datetime.datetime.now(),
+    )
+    breakdown: Final = json.loads(row["metadata"])["cost_breakdown"]
+
+    assert (row["prompt_tokens"], row["completion_tokens"]) == (50, 12)
+    assert (breakdown["input_cost"], breakdown["output_cost"]) == (0.002, 0.001)
+    assert breakdown["additional_costs"] == pytest.approx(
+        {"azure_model_router_flat_cost": 0.00014, "mid_stream_partial_cost": 0.001}
+    )
+    assert (breakdown["total_cost"], row["spend"]) == pytest.approx((0.00414, 0.00414))

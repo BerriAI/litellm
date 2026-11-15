@@ -43,7 +43,14 @@ from litellm.llms.anthropic.pass_through.messages.agentic_streaming_iterator imp
 )
 from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.models.access_group import LiteLLM_AccessGroupTable
-from litellm.proxy._types import LiteLLM_TeamTable, LitellmUserRoles, Member, ProxyException, UserAPIKeyAuth
+from litellm.proxy._types import (
+    LiteLLM_TeamTable,
+    LitellmUserRoles,
+    Member,
+    ProxyException,
+    SpendLogsPayload,
+    UserAPIKeyAuth,
+)
 from litellm.router import (
     MAX_BUFFERED_PRE_CONTENT_ANTHROPIC_CHUNKS,
     MAX_HELD_PRE_OUTPUT_RESPONSES_EVENTS,
@@ -27898,13 +27905,27 @@ def _cut_leg_row(recorder: _SpendRecorder) -> tuple[int, int, float]:
     return cut_leg["prompt_tokens"], cut_leg["completion_tokens"], cut_leg["response_cost"]
 
 
-def _final_failure_row(shared_logging: LiteLLMLogging) -> tuple[int, int, float]:
+def _final_failure_spend_row(shared_logging: LiteLLMLogging) -> SpendLogsPayload:
     from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
     from litellm.proxy.utils import _failure_fields_to_lift
 
     lifted: Final = _failure_fields_to_lift({"litellm_logging_obj": shared_logging})
-    row: Final = get_logging_payload(dict(lifted), None, datetime.now(), datetime.now())
+    return get_logging_payload(dict(lifted), None, datetime.now(), datetime.now())
+
+
+def _final_failure_row(shared_logging: LiteLLMLogging) -> tuple[int, int, float]:
+    row: Final = _final_failure_spend_row(shared_logging)
     return row["prompt_tokens"], row["completion_tokens"], row["spend"]
+
+
+def _input_output_partial_and_total_costs(row: SpendLogsPayload) -> tuple[float, float, float, float]:
+    breakdown: Final = json.loads(row["metadata"])["cost_breakdown"]
+    return (
+        breakdown["input_cost"],
+        breakdown["output_cost"],
+        breakdown["additional_costs"]["mid_stream_partial_cost"],
+        breakdown["total_cost"],
+    )
 
 
 @pytest.mark.asyncio
@@ -27990,7 +28011,12 @@ async def test_a_fallback_that_also_fails_mid_stream_bills_each_cut_partial_once
 
     cut_prompt: Final = _PROVIDER_REPORTED_CUT_USAGE["input_tokens"]
     cut_completion: Final = _PROVIDER_REPORTED_CUT_USAGE["output_tokens"]
-    final_prompt, final_completion, final_spend = _final_failure_row(shared_logging)
+    final_row: Final = _final_failure_spend_row(shared_logging)
+    final_prompt, final_completion, final_spend = (
+        final_row["prompt_tokens"],
+        final_row["completion_tokens"],
+        final_row["spend"],
+    )
     backup_prompt: Final = final_prompt - cut_prompt
     backup_completion: Final = litellm.token_counter(model="gpt-4o", text=" lived", count_response_tokens=True)
     backup_input_cost, backup_output_cost = litellm.cost_per_token(
@@ -28000,6 +28026,9 @@ async def test_a_fallback_that_also_fails_mid_stream_bills_each_cut_partial_once
     assert final_completion == cut_completion + backup_completion
     assert final_spend == pytest.approx(
         cut_prompt * 0.001 + cut_completion * 0.002 + backup_input_cost + backup_output_cost
+    )
+    assert _input_output_partial_and_total_costs(final_row) == pytest.approx(
+        (cut_prompt * 0.001, cut_completion * 0.002, backup_input_cost + backup_output_cost, final_spend)
     )
 
 
@@ -28029,8 +28058,16 @@ async def test_a_fallback_that_fails_before_it_streams_bills_the_cut_partial_onc
         _ = [event async for event in response]
 
     cut_prompt, cut_completion = _relayed_cut_tokens(failed_usage, "Once upon")
+    cut_cost: Final = cut_prompt * 0.001 + cut_completion * 0.002
+    priced_by_the_failure: Final = (
+        (cut_prompt * 0.001, cut_completion * 0.002) if failed_usage is not None else (0.0, 0.0)
+    )
+    final_row: Final = _final_failure_spend_row(shared_logging)
     assert cut_completion > 0
-    assert _final_failure_row(shared_logging) == pytest.approx(
-        (cut_prompt, cut_completion, cut_prompt * 0.001 + cut_completion * 0.002)
+    assert (final_row["prompt_tokens"], final_row["completion_tokens"], final_row["spend"]) == pytest.approx(
+        (cut_prompt, cut_completion, cut_cost)
+    )
+    assert _input_output_partial_and_total_costs(final_row) == pytest.approx(
+        (*priced_by_the_failure, cut_cost - sum(priced_by_the_failure), cut_cost)
     )
 
