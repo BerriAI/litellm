@@ -84,7 +84,7 @@ def _process_image_response(response: Response, url: str) -> str:
             f"Error: Unable to determine image content type from the server's headers, the URL, or the image bytes. url={url}"
         ) from e
 
-    result: Final = f"data:{img_type};base64,{base64_image}"
+    result: Final = f"data:{_canonical_media_type(img_type)};base64,{base64_image}"
     in_memory_cache.set_cache(url, result)
     return result
 
@@ -214,6 +214,13 @@ def inline_remote_image_urls(media: RemoteMedia) -> bool:
 
 def inline_remote_files(media: RemoteMedia) -> bool:
     return media.part_type == "file"
+
+
+_PDF_MEDIA_TYPES: Final = frozenset({"application/pdf", "application/x-pdf"})
+
+
+def _canonical_media_type(media_type: str) -> str:
+    return "application/pdf" if media_type.split(";", 1)[0].strip().lower() in _PDF_MEDIA_TYPES else media_type
 
 
 def inline_remote_pdf_files(media: RemoteMedia) -> bool:
