@@ -64,11 +64,13 @@ from litellm.proxy.hooks.batch_enqueued_tokens import (
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     PROJECT_ITPM_DESCRIPTOR_KEY,
     PROJECT_OTPM_DESCRIPTOR_KEY,
+    RateLimitResponse,
+    RequestRateLimiterStash,
     ReservationWindowIdentity,
     WindowGuardedIncrement,
     get_or_create_request_stash,
 )
-from litellm.proxy.hooks.rate_limiter_utils import resolve_llm_provider_for_rate_limit
+from litellm.proxy.hooks.rate_limiter_utils import finish_despite_cancellation, resolve_llm_provider_for_rate_limit
 from litellm.redis.stores.rate_limits import RATE_LIMITS_TARGET, CounterIncrement, RateLimitScope
 from litellm.types.llms.base import LiteLLMBaseModel
 
@@ -645,16 +647,29 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         persist it (keyed by the provider batch id) and refund it when the
         batch reaches a terminal state.
         """
-        outcome: Final = await self.parallel_request_limiter.batch_enqueued_token_store.reserve(
-            tokens=batch_usage.total_tokens,
-            scopes=scopes,
-            litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
+        outcome: Final = await finish_despite_cancellation(
+            self._reserve_enqueued_tokens_onto_stash(
+                get_or_create_request_stash(), batch_usage.total_tokens, scopes, user_api_key_dict.parent_otel_span
+            )
         )
-        match outcome:
-            case BatchEnqueuedTokenOverLimit():
-                self._raise_enqueued_limit_error(over_limit=outcome, data=data, batch_usage=batch_usage)
-            case BatchEnqueuedTokenReservation():
-                get_or_create_request_stash().batch_enqueued_reservation = outcome
+        if isinstance(outcome, BatchEnqueuedTokenOverLimit):
+            self._raise_enqueued_limit_error(over_limit=outcome, data=data, batch_usage=batch_usage)
+
+    async def _reserve_enqueued_tokens_onto_stash(
+        self,
+        stash: RequestRateLimiterStash,
+        tokens: int,
+        scopes: tuple[BatchEnqueuedTokenScope, ...],
+        parent_otel_span: "Span | None",
+    ) -> BatchEnqueuedTokenReservation | BatchEnqueuedTokenOverLimit:
+        outcome: Final = await self.parallel_request_limiter.batch_enqueued_token_store.reserve(
+            tokens=tokens,
+            scopes=scopes,
+            litellm_parent_otel_span=parent_otel_span,
+        )
+        if isinstance(outcome, BatchEnqueuedTokenReservation):
+            stash.batch_enqueued_reservation = outcome  # rebind-ok: records the reservation for its refund
+        return outcome
 
     async def _refund_enqueued_reservation_if_rejected(
         self, user_api_key_dict: UserAPIKeyAuth, check: Awaitable[None]
@@ -853,14 +868,15 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         descriptors = [*descriptors, *project_io_descriptors]
         increments = [*increments, *project_io_increments]
 
-        rate_limit_response: Final = await self.parallel_request_limiter.atomic_check_and_increment_by_n(
-            descriptors=descriptors,
-            increments=increments,
-            parent_otel_span=user_api_key_dict.parent_otel_span,
+        rate_limit_response: Final = await finish_despite_cancellation(
+            self._increment_batch_counters_onto_stash(
+                get_or_create_request_stash(),
+                descriptors,
+                increments,
+                batch_usage.total_tokens,
+                user_api_key_dict.parent_otel_span,
+            )
         )
-
-        stash: Final = get_or_create_request_stash()
-        stash.batch_tpd_refund_ops = ()
         if rate_limit_response["overall_code"] == "OVER_LIMIT":
             requested_model: Final = data.get("model") if data else None
             for status in rate_limit_response["statuses"]:
@@ -876,11 +892,29 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                         ),
                     )
 
-        stash.batch_tpd_refund_ops = self._build_tpd_refund_ops(
+    async def _increment_batch_counters_onto_stash(
+        self,
+        stash: RequestRateLimiterStash,
+        descriptors: list["RateLimitDescriptor"],  # mutable-ok: atomic_check_and_increment_by_n takes a list
+        increments: list[IncrementAmounts],  # mutable-ok: atomic_check_and_increment_by_n takes a list
+        tokens: int,
+        parent_otel_span: "Span | None",
+    ) -> RateLimitResponse:
+        response: Final = await self.parallel_request_limiter.atomic_check_and_increment_by_n(
             descriptors=descriptors,
-            tokens=batch_usage.total_tokens,
-            reservation_windows=rate_limit_response.get("reservation_windows", frozenset()),
+            increments=increments,
+            parent_otel_span=parent_otel_span,
         )
+        stash.batch_tpd_refund_ops = (  # rebind-ok: records the counters the failure path refunds
+            ()
+            if response["overall_code"] == "OVER_LIMIT"
+            else self._build_tpd_refund_ops(
+                descriptors=descriptors,
+                tokens=tokens,
+                reservation_windows=response.get("reservation_windows", frozenset()),
+            )
+        )
+        return response
 
     async def _read_tpd_window_start(self, status: "RateLimitStatus", parent_otel_span: "Span | None") -> int | None:
         descriptor_key: Final = status.get("descriptor_key") or ""

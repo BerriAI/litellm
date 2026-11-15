@@ -82,7 +82,7 @@ from litellm.types.utils import (
     Usage,
 )
 from tests._support.clock_loops import AutojumpClockLoop
-from tests.unit.redis.stores.fake_rate_limits import FakeRateLimits, scope_key
+from tests.unit.redis.stores.fake_rate_limits import FakeRateLimits, ReplyHeldRedis, scope_key
 
 
 class TimeController:
@@ -8401,6 +8401,133 @@ async def test_request_capacity_finishes_admission_and_release_despite_repeated_
         await asyncio.wait_for(task, timeout=2)
     async with handler.request_capacity(auth, "test-model"):
         pass
+
+
+class _SlotRegistryRedis:
+    """Holds each acquired slot from the moment the acquire script runs, before its reply reaches the limiter."""
+
+    def __init__(self) -> None:
+        self.slots: Final[dict[str, set[object]]] = {}
+        self.acquired: Final = asyncio.Event()
+        self.deliver_reply: Final = asyncio.Event()
+        self.fakes: Final = FakeRateLimits(parallel_acquire_script=self._acquire, parallel_release_script=self._release)
+
+    async def _acquire(self, keys: list[str], args: list[object]) -> list[object]:
+        slot_id: Final = args[2]
+        for index, (key, limit) in enumerate(zip(keys, args[::3])):
+            in_flight = len(self.slots.get(key, ()))
+            if in_flight >= int(str(limit)):
+                return [1, index + 1, in_flight, limit]
+        for key in keys:
+            self.slots.setdefault(key, set()).add(slot_id)
+        self.acquired.set()
+        await self.deliver_reply.wait()
+        return [0, *[len(self.slots[key]) for key in keys]]
+
+    async def _release(self, keys: list[str], args: list[object]) -> list[int]:
+        for key, slot_id in zip(keys, args):
+            self.slots.get(key, set()).discard(slot_id)
+        return [len(self.slots.get(key, ())) for key in keys]
+
+
+@pytest.mark.asyncio
+async def test_pre_call_cancelled_before_its_acquire_reply_arrives_leaves_the_slot_free():
+    redis = _SlotRegistryRedis()
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(DualCache()), rate_limit_store=redis.fakes.store()
+    )
+    auth = UserAPIKeyAuth(api_key=hash_token("sk-cancelled-admission"), max_parallel_requests=1)
+
+    async def disconnected_request() -> None:
+        try:
+            await handler.async_pre_call_hook(
+                user_api_key_dict=auth, cache=DualCache(), data={"model": "test-model"}, call_type=""
+            )
+        except asyncio.CancelledError:
+            await handler.async_post_call_failure_hook(
+                request_data={},
+                original_exception=HTTPException(status_code=499, detail="Client disconnected the request"),
+                user_api_key_dict=auth,
+            )
+            raise
+
+    task = asyncio.create_task(disconnected_request())
+    await asyncio.wait_for(redis.acquired.wait(), timeout=2)
+    task.cancel()
+    await asyncio.sleep(0)
+    redis.deliver_reply.set()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(task, timeout=2)
+
+    await handler.async_pre_call_hook(
+        user_api_key_dict=auth, cache=DualCache(), data={"model": "test-model"}, call_type=""
+    )
+
+    held = get_request_stash().parallel_slot
+    assert held is not None
+    assert list(redis.slots.values()) == [{held["slot_id"]}]
+
+
+async def _admit_then_fail_as_disconnected(handler, auth) -> None:
+    """The proxy's 499 path: a cancelled pre-call is followed by the failure hook in the same request."""
+    try:
+        await _admit(handler, auth)
+    except asyncio.CancelledError:
+        await handler.async_post_call_failure_hook(
+            request_data={},
+            original_exception=HTTPException(status_code=499, detail="Client disconnected the request"),
+            user_api_key_dict=auth,
+        )
+        raise
+
+
+@pytest.mark.asyncio
+async def test_pre_call_cancelled_before_its_tpm_reservation_reply_arrives_gets_the_tokens_back():
+    redis = ReplyHeldRedis()
+    handler = _handler_with_redis(redis.fakes)
+    auth = UserAPIKeyAuth(api_key=hash_token("sk-cancelled-tpm"), tpm_limit=1000)
+    tokens = scope_key(RateLimitScope("api_key", auth.api_key), "tokens")
+
+    await redis.cancel_once_applied(_admit_then_fail_as_disconnected(handler, auth))
+
+    assert redis.reserved[tokens] > 0
+    assert redis.count(tokens) == 0
+
+
+@pytest.mark.asyncio
+async def test_pre_call_cancelled_before_its_project_token_reservation_reply_arrives_gets_the_tokens_back():
+    redis = ReplyHeldRedis()
+    handler = _handler_with_redis(redis.fakes)
+    auth = UserAPIKeyAuth(
+        api_key=hash_token("sk-cancelled-project-io"),
+        project_id="proj",
+        project_metadata={"model_itpm_limit": {"test-model": 1000}, "model_otpm_limit": {"test-model": 1000}},
+    )
+    input_tokens = scope_key(RateLimitScope("model_per_project_itpm", "proj:test-model"), "tokens")
+    output_tokens = scope_key(RateLimitScope("model_per_project_otpm", "proj:test-model"), "tokens")
+
+    await redis.cancel_once_applied(_admit_then_fail_as_disconnected(handler, auth))
+
+    assert redis.reserved[input_tokens] > 0
+    assert [redis.count(input_tokens), redis.count(output_tokens)] == [0, 0]
+
+
+@pytest.mark.asyncio
+async def test_pre_call_cancelled_while_refunding_a_refused_requests_tpm_reservation_refunds_it_once():
+    redis = ReplyHeldRedis(hold="refund", refuse_key="model_per_project_otpm")
+    handler = _handler_with_redis(redis.fakes)
+    auth = UserAPIKeyAuth(
+        api_key=hash_token("sk-cancelled-refund"),
+        tpm_limit=1000,
+        project_id="proj",
+        project_metadata={"model_otpm_limit": {"test-model": 1000}},
+    )
+    tokens = scope_key(RateLimitScope("api_key", auth.api_key), "tokens")
+
+    await redis.cancel_once_applied(_admit_then_fail_as_disconnected(handler, auth))
+
+    assert redis.reserved[tokens] > 0
+    assert redis.count(tokens) == 0
 
 
 @pytest.mark.asyncio

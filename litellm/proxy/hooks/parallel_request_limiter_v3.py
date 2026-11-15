@@ -92,7 +92,11 @@ from litellm.proxy.hooks.batch_enqueued_tokens import (
     batch_response_view,
     canonical_provider_batch_id,
 )
-from litellm.proxy.hooks.rate_limiter_utils import resolve_llm_provider_for_rate_limit, socket_session_usage
+from litellm.proxy.hooks.rate_limiter_utils import (
+    finish_despite_cancellation,
+    resolve_llm_provider_for_rate_limit,
+    socket_session_usage,
+)
 from litellm.proxy.spend_tracking.input_tokens import (
     inline_pdf_file_count,
     models_counted_for,
@@ -669,6 +673,62 @@ class RequestRateLimiterStash:
             self.itpm_reserved_tokens = 0
             self.otpm_reserved_tokens = 0
             self.io_reservation_released = False
+
+    def record_borrowing_team_reservation(
+        self,
+        share_tokens: int,
+        cap_tokens: int,
+        share_window: ReservationWindowIdentity | None,
+        cap_window: ReservationWindowIdentity | None,
+    ) -> None:
+        self.borrowing_team_model_reserved_tokens = share_tokens
+        self.borrowing_team_model_cap_reserved_tokens = cap_tokens
+        self.borrowing_team_model_reserved_window = share_window
+        self.borrowing_team_model_cap_reserved_window = cap_window
+
+    def record_tpm_reservation(
+        self,
+        tokens: int,
+        ptu_tokens: int,
+        reservation_windows: frozenset[ReservationWindowIdentity],
+        model: RateLimitedModel | None,
+        scopes: frozenset[tuple[str, str]],
+    ) -> None:
+        """Scopes are the exact (key, value) pairs the reservation incremented, so post-call reconciliation
+        applies only the (actual - reserved) delta to them and charges unreserved scopes the full usage."""
+        self.discard_released_tpm_reservation()
+        self.reserved_tokens = tokens
+        self.ptu_reserved_tokens = ptu_tokens
+        self.ptu_reserved_window_identities = frozenset(
+            identity for identity in reservation_windows if identity[0].scope.descriptor_key == PTU_TEAM_DESCRIPTOR_KEY
+        )
+        self.reserved_model = model
+        self.reserved_scopes = scopes
+
+    def record_io_reservation(
+        self,
+        itpm_tokens: int,
+        otpm_tokens: int,
+        scopes: Sequence[tuple[str, str]],
+        reservation_windows: frozenset[ReservationWindowIdentity],
+    ) -> None:
+        self.discard_released_io_reservation()
+        if itpm_tokens > 0:
+            self.itpm_reserved_tokens = itpm_tokens
+            self.itpm_reserved_scopes = frozenset(scope for scope in scopes if scope[0] == PROJECT_ITPM_DESCRIPTOR_KEY)
+            self.itpm_reserved_window_identities = frozenset(
+                identity
+                for identity in reservation_windows
+                if identity[0].scope.descriptor_key == PROJECT_ITPM_DESCRIPTOR_KEY
+            )
+        if otpm_tokens > 0:
+            self.otpm_reserved_tokens = otpm_tokens
+            self.otpm_reserved_scopes = frozenset(scope for scope in scopes if scope[0] == PROJECT_OTPM_DESCRIPTOR_KEY)
+            self.otpm_reserved_window_identities = frozenset(
+                identity
+                for identity in reservation_windows
+                if identity[0].scope.descriptor_key == PROJECT_OTPM_DESCRIPTOR_KEY
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -3827,6 +3887,81 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             )
             return estimated_input_tokens + audio_token_estimate
 
+    async def _reserve_tpm_tokens_onto_stash(
+        self,
+        stash: RequestRateLimiterStash,
+        descriptors: list[RateLimitDescriptor],  # mutable-ok: reserve_tpm_tokens takes the hook's descriptor list
+        estimated_tokens: int,
+        ptu_estimated_tokens: int,
+        requested_model: str | None,
+        parent_otel_span: Span | None,
+    ) -> RateLimitResponse:
+        tpm_response: Final = await self.reserve_tpm_tokens(
+            descriptors=descriptors,
+            estimated_tokens=estimated_tokens,
+            parent_otel_span=parent_otel_span,
+            scope_estimates=MappingProxyType({PTU_TEAM_DESCRIPTOR_KEY: ptu_estimated_tokens}),
+        )
+        if tpm_response["overall_code"] == "OVER_LIMIT":
+            return tpm_response
+        stash.record_tpm_reservation(
+            estimated_tokens,
+            ptu_estimated_tokens,
+            tpm_response.get("reservation_windows", frozenset()),
+            self._rate_limited_model(requested_model),
+            frozenset(
+                (d["key"], d["value"])
+                for d in descriptors
+                if d["key"] not in (PROJECT_ITPM_DESCRIPTOR_KEY, PROJECT_OTPM_DESCRIPTOR_KEY)
+                and (d.get("rate_limit") or {}).get("tokens_per_unit") is not None
+            ),
+        )
+        return tpm_response
+
+    async def _refund_tpm_reservation_on_stash(
+        self,
+        stash: RequestRateLimiterStash,
+        tpm_reservation_scopes: Sequence[tuple[str, str]],
+        tpm_reservation_amount: int,
+        parent_otel_span: Span | None,
+    ) -> None:
+        await self._refund_reserved_tokens(
+            scopes=tuple(scope for scope in tpm_reservation_scopes if scope[0] != PTU_TEAM_DESCRIPTOR_KEY),
+            amount=tpm_reservation_amount,
+            parent_otel_span=parent_otel_span,
+        )
+        await self._refund_reserved_tokens(
+            scopes=tuple(scope for scope in tpm_reservation_scopes if scope[0] == PTU_TEAM_DESCRIPTOR_KEY),
+            amount=stash.ptu_reserved_tokens,
+            reservation_windows=stash.ptu_reserved_window_identities,
+            parent_otel_span=parent_otel_span,
+        )
+        stash.reservation_released = True  # rebind-ok: marks the refunded reservation so the failure hook skips it
+
+    async def _reserve_io_tokens_onto_stash(
+        self,
+        stash: RequestRateLimiterStash,
+        io_token_descriptors: Sequence[RateLimitDescriptor],
+        estimated_input_tokens: int,
+        estimated_output_tokens: int,
+        parent_otel_span: Span | None,
+    ) -> tuple[RateLimitResponse, int, int]:
+        io_response, itpm_reserved, otpm_reserved = await self.reserve_io_tokens(
+            descriptors=io_token_descriptors,
+            estimated_input_tokens=estimated_input_tokens,
+            estimated_output_tokens=estimated_output_tokens,
+            parent_otel_span=parent_otel_span,
+        )
+        if io_response["overall_code"] == "OVER_LIMIT":
+            return io_response, itpm_reserved, otpm_reserved
+        stash.record_io_reservation(
+            itpm_reserved,
+            otpm_reserved,
+            tuple((d["key"], d["value"]) for d in io_token_descriptors),
+            io_response.get("reservation_windows", frozenset()),
+        )
+        return io_response, itpm_reserved, otpm_reserved
+
     async def _reserve_project_io_tokens_or_raise(
         self,
         descriptors: Sequence[RateLimitDescriptor],
@@ -3891,11 +4026,14 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             endpoint_type=endpoint_type,
         )
 
-        io_response, itpm_reserved, otpm_reserved = await self.reserve_io_tokens(
-            descriptors=io_token_descriptors,
-            estimated_input_tokens=estimated_input_tokens,
-            estimated_output_tokens=estimated_output_tokens,
-            parent_otel_span=user_api_key_dict.parent_otel_span,
+        io_response, itpm_reserved, otpm_reserved = await finish_despite_cancellation(
+            self._reserve_io_tokens_onto_stash(
+                stash,
+                io_token_descriptors,
+                estimated_input_tokens,
+                estimated_output_tokens,
+                user_api_key_dict.parent_otel_span,
+            )
         )
 
         if io_response["overall_code"] == "OVER_LIMIT":
@@ -3906,48 +4044,17 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             # a second time when async_post_call_failure_hook sees the same
             # (still-stashed) reservation and refunds it again.
             if tpm_reservation_amount > 0:
-                await self._refund_reserved_tokens(
-                    scopes=tuple(scope for scope in tpm_reservation_scopes if scope[0] != PTU_TEAM_DESCRIPTOR_KEY),
-                    amount=tpm_reservation_amount,
-                    parent_otel_span=user_api_key_dict.parent_otel_span,
+                await finish_despite_cancellation(
+                    self._refund_tpm_reservation_on_stash(
+                        stash, tpm_reservation_scopes, tpm_reservation_amount, user_api_key_dict.parent_otel_span
+                    )
                 )
-                await self._refund_reserved_tokens(
-                    scopes=tuple(scope for scope in tpm_reservation_scopes if scope[0] == PTU_TEAM_DESCRIPTOR_KEY),
-                    amount=stash.ptu_reserved_tokens,
-                    reservation_windows=stash.ptu_reserved_window_identities,
-                    parent_otel_span=user_api_key_dict.parent_otel_span,
-                )
-                stash.reservation_released = True
             if not reuses_request_slot:
                 await self._release_stashed_parallel_slot(stash, user_api_key_dict.parent_otel_span)
             self._handle_rate_limit_error(
                 response=io_response,
                 descriptors=descriptors,
                 requested_model=requested_model,
-            )
-
-        stash.discard_released_io_reservation()
-        if itpm_reserved > 0:
-            itpm_scopes: Final = tuple(
-                (d["key"], d["value"]) for d in io_token_descriptors if d["key"] == PROJECT_ITPM_DESCRIPTOR_KEY
-            )
-            stash.itpm_reserved_tokens = itpm_reserved
-            stash.itpm_reserved_scopes = frozenset(itpm_scopes)
-            stash.itpm_reserved_window_identities = frozenset(
-                identity
-                for identity in io_response.get("reservation_windows", frozenset())
-                if identity[0].scope.descriptor_key == PROJECT_ITPM_DESCRIPTOR_KEY
-            )
-        if otpm_reserved > 0:
-            otpm_scopes: Final = tuple(
-                (d["key"], d["value"]) for d in io_token_descriptors if d["key"] == PROJECT_OTPM_DESCRIPTOR_KEY
-            )
-            stash.otpm_reserved_tokens = otpm_reserved
-            stash.otpm_reserved_scopes = frozenset(otpm_scopes)
-            stash.otpm_reserved_window_identities = frozenset(
-                identity
-                for identity in io_response.get("reservation_windows", frozenset())
-                if identity[0].scope.descriptor_key == PROJECT_OTPM_DESCRIPTOR_KEY
             )
 
         if stash.rate_limit_response is not None:
@@ -4039,6 +4146,21 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         if response["overall_code"] == "OK":
             await self._release_parallel_request_slots(acquisition, user_api_key_dict.parent_otel_span)
 
+    async def _admit_releasing_capacity_on_cancellation(
+        self,
+        admission: asyncio.Task[RateLimitResponse],
+        acquisition: ParallelSlotAcquisition,
+        user_api_key_dict: UserAPIKeyAuth,
+    ) -> RateLimitResponse:
+        """A cancelled caller never records the slot its admission may already hold, so nothing could release it."""
+        try:
+            return await asyncio.shield(admission)
+        except asyncio.CancelledError:
+            await finish_despite_cancellation(
+                self._release_request_capacity_when_admitted(admission, acquisition, user_api_key_dict)
+            )
+            raise
+
     async def async_fallback_target_allowed(
         self,
         user_api_key_dict: UserAPIKeyAuth,
@@ -4100,18 +4222,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 self._handle_rate_limit_error(response, descriptors, model)
             yield
         finally:
-            cleanup: Final = asyncio.create_task(
+            await finish_despite_cancellation(
                 self._release_request_capacity_when_admitted(admission, acquisition, user_api_key_dict)
             )
-            cancellation: asyncio.CancelledError | None = None  # rebind-ok: retain cancellation until cleanup finishes
-            while not cleanup.done():
-                try:
-                    await asyncio.shield(cleanup)
-                except asyncio.CancelledError as exc:
-                    cancellation = exc
-            cleanup.result()
-            if cancellation is not None:
-                raise cancellation
 
     @with_service_target(RATE_LIMITS_TARGET)
     @total_timeout_held()
@@ -4188,7 +4301,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     if (d.get("rate_limit") or {}).get("max_parallel_requests") is not None
                 )
             )
-            parallel_slot_id: Final = uuid.uuid4().hex if parallel_gauges else None
+            parallel_slot: Final = (
+                ParallelSlotAcquisition(slot_id=uuid.uuid4().hex, gauges=parallel_gauges) if parallel_gauges else None
+            )
 
             first_pass_descriptors: Final = (
                 descriptors
@@ -4197,12 +4312,19 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     d for d in descriptors if d["key"] not in (PROJECT_ITPM_DESCRIPTOR_KEY, PROJECT_OTPM_DESCRIPTOR_KEY)
                 )
             )
-            response: Final = await self.should_rate_limit(
+            admission: Final = self.should_rate_limit(
                 descriptors=first_pass_descriptors,
                 parent_otel_span=user_api_key_dict.parent_otel_span,
                 skip_tpm_check=self.tpm_reservation_enabled,
-                parallel_slot_id=parallel_slot_id,
+                parallel_slot_id=None if parallel_slot is None else parallel_slot["slot_id"],
                 skip_parallel_check=reuses_request_slot,
+            )
+            response: Final = await (
+                admission
+                if parallel_slot is None
+                else self._admit_releasing_capacity_on_cancellation(
+                    asyncio.create_task(admission), parallel_slot, user_api_key_dict
+                )
             )
 
             if response["overall_code"] == "OVER_LIMIT":
@@ -4214,11 +4336,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             else:
                 if not reuses_request_slot:
                     stash.rate_limit_response = response
-                if parallel_slot_id is not None:
-                    stash.parallel_slot = ParallelSlotAcquisition(
-                        slot_id=parallel_slot_id,
-                        gauges=parallel_gauges,
-                    )
+                if parallel_slot is not None:
+                    stash.parallel_slot = parallel_slot
 
             # ----------------------------------------------------------------
             # TPM token reservation
@@ -4316,11 +4435,15 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     if not reuses_request_slot:
                         await self._release_stashed_parallel_slot(stash, user_api_key_dict.parent_otel_span)
                     raise PTUShareExceededError(stash.ptu_ceiling, ptu_estimated_tokens)
-                tpm_response: Final = await self.reserve_tpm_tokens(
-                    descriptors=descriptors,
-                    estimated_tokens=estimated_tokens,
-                    parent_otel_span=user_api_key_dict.parent_otel_span,
-                    scope_estimates=MappingProxyType({PTU_TEAM_DESCRIPTOR_KEY: ptu_estimated_tokens}),
+                tpm_response: Final = await finish_despite_cancellation(
+                    self._reserve_tpm_tokens_onto_stash(
+                        stash,
+                        descriptors,
+                        estimated_tokens,
+                        ptu_estimated_tokens,
+                        requested_model,
+                        user_api_key_dict.parent_otel_span,
+                    )
                 )
 
                 if tpm_response["overall_code"] == "OVER_LIMIT":
@@ -4332,25 +4455,6 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                         requested_model=requested_model,
                     )
                 else:
-                    # Capture the exact (key, value) scopes the reservation
-                    # incremented so post-call reconciliation only applies
-                    # the (actual - reserved) delta to those — unreserved
-                    # scopes get charged the full actual usage instead.
-                    stash.discard_released_tpm_reservation()
-                    stash.reserved_tokens = estimated_tokens
-                    stash.ptu_reserved_tokens = ptu_estimated_tokens
-                    stash.ptu_reserved_window_identities = frozenset(
-                        identity
-                        for identity in tpm_response.get("reservation_windows", frozenset())
-                        if identity[0].scope.descriptor_key == PTU_TEAM_DESCRIPTOR_KEY
-                    )
-                    stash.reserved_model = self._rate_limited_model(requested_model)
-                    stash.reserved_scopes = frozenset(
-                        (d["key"], d["value"])
-                        for d in descriptors
-                        if d["key"] not in (PROJECT_ITPM_DESCRIPTOR_KEY, PROJECT_OTPM_DESCRIPTOR_KEY)
-                        and (d.get("rate_limit") or {}).get("tokens_per_unit") is not None
-                    )
                     tpm_reservation_scopes = tuple(  # rebind-ok: record successful reservation scopes
                         stash.reserved_scopes
                     )

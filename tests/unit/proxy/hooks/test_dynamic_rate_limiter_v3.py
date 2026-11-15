@@ -13,6 +13,7 @@ from typing import Final
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from fastapi import HTTPException
 from prometheus_client import CollectorRegistry
 
 import litellm
@@ -33,7 +34,7 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
 from litellm.proxy.hooks.priority_class_share import pool_member
 from litellm.redis.stores.rate_limits import LocalValue, RateLimitCounter, RateLimitEntry, RateLimitScope
 from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
-from tests.unit.redis.stores.fake_rate_limits import FakeRateLimits, Resolved, counter_pairs
+from tests.unit.redis.stores.fake_rate_limits import FakeRateLimits, ReplyHeldRedis, Resolved, counter_pairs
 
 
 class TimeController:
@@ -2479,6 +2480,65 @@ async def test_a_saturated_fallback_target_refuses_a_prompt_larger_than_the_team
     assert await _team_tokens_remaining(handler) < 70
     await _settle_tokens(handler, 5)
     assert await _team_tokens_remaining(handler) == 95
+
+
+def _team_share_tokens_on_redis(handler: _PROXY_DynamicRateLimitHandlerV3) -> ReplyHeldRedis:
+    """Puts the handler on a Redis that holds the reply of the script reserving the team's share of tokens."""
+    redis: Final = ReplyHeldRedis(hold_key="model_per_team_saturated")
+    handler.v3_limiter = PROXY_MaxParallelRequestsHandler_v3(
+        handler.internal_usage_cache, rate_limit_store=redis.fakes.store()
+    )
+    return redis
+
+
+def _team_share_token_counts(redis: ReplyHeldRedis) -> tuple[tuple[float, float], ...]:
+    """What each team-share token counter had reserved, and what Redis holds for it now."""
+    return tuple(
+        (reserved, redis.count(key))
+        for key, reserved in redis.reserved.items()
+        if "model_per_team_saturated" in key and key.endswith(":tokens")
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_request_cancelled_before_its_team_share_reservation_reply_arrives_gets_the_tokens_back(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler = _borrowing_handler(monkeypatch, borrows=True)
+    redis: Final = _team_share_tokens_on_redis(handler)
+
+    async def disconnected_request() -> None:
+        try:
+            await _check(handler, _team_key(), saturation=0.5, data=_prompt(20))
+        except asyncio.CancelledError:
+            await handler.async_post_call_failure_hook(
+                request_data={},
+                original_exception=HTTPException(status_code=499, detail="Client disconnected the request"),
+                user_api_key_dict=_team_key(),
+            )
+            raise
+
+    await redis.cancel_once_applied(disconnected_request())
+
+    ((reserved, held),) = _team_share_token_counts(redis)
+    assert reserved > 0
+    assert held == 0
+
+
+@pytest.mark.asyncio
+async def test_a_fallback_cancelled_before_its_team_share_reservation_reply_arrives_gets_the_tokens_back(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler = _borrowing_handler(monkeypatch, borrows=True, saturation_threshold=0.0)
+    redis: Final = _team_share_tokens_on_redis(handler)
+
+    await redis.cancel_once_applied(
+        handler.async_fallback_target_allowed(_team_key(), "shared-model", _fallback_prompt(30))
+    )
+
+    ((reserved, held),) = _team_share_token_counts(redis)
+    assert reserved > 0
+    assert held == 0
 
 
 @pytest.mark.asyncio

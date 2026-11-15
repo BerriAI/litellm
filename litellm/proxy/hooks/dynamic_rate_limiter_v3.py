@@ -2,12 +2,13 @@
 Dynamic rate limiter v3 - Saturation-aware priority-based rate limiting
 """
 
+import asyncio
 import os
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Literal
+from typing import TYPE_CHECKING, Final
 
 from fastapi import HTTPException
 from pydantic import BaseModel, ConfigDict, ValidationError
@@ -68,6 +69,7 @@ from litellm.proxy.hooks.priority_class_share import (
 )
 from litellm.proxy.hooks.rate_limiter_utils import (
     convert_priority_to_percent,
+    finish_despite_cancellation,
     resolve_llm_provider_for_rate_limit,
     socket_session_usage,
 )
@@ -1031,24 +1033,18 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         if team_cap is not None:
             enforced_descriptors.append(team_cap)
 
-        per_request_increment: Final[dict[Literal["requests", "tokens"], int]] = {
-            "requests": 1,
-            "tokens": 0,
-        }
         team_reservation: Final = (
             await self._team_token_reservation(team_share.share, data, model, call_type, user_api_key_dict)
             if team_share is not None and held_team_share is not None
             else 0
         )
-        atomic_response: Final = await self.v3_limiter.atomic_check_and_increment_by_n(
-            descriptors=enforced_descriptors,
-            increments=[
-                {"requests": 1, "tokens": team_reservation}
-                if descriptor is enforced_team_share or descriptor is team_cap
-                else per_request_increment
-                for descriptor in enforced_descriptors
-            ],
-            parent_otel_span=user_api_key_dict.parent_otel_span,
+        atomic_response: Final = await self._reserve_team_share(
+            get_or_create_request_stash(),
+            enforced_descriptors,
+            enforced_team_share,
+            team_cap,
+            team_reservation,
+            user_api_key_dict,
         )
 
         verbose_proxy_logger.debug("Atomic check+increment response: %s", atomic_response)
@@ -1151,15 +1147,6 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         # priority allocation has accurate usage when it later becomes
         # enforced. The increment-then-check semantics of should_rate_limit
         # are fine because we ignore the OVER_LIMIT response.
-        stash: Final = get_or_create_request_stash()
-        stash.borrowing_team_model_reserved_tokens = team_reservation if enforced_team_share is not None else 0
-        stash.borrowing_team_model_cap_reserved_tokens = team_reservation if team_cap is not None else 0
-        stash.borrowing_team_model_reserved_window = (
-            _reserved_window(atomic_response, enforced_team_share) if team_reservation else None
-        )
-        stash.borrowing_team_model_cap_reserved_window = (
-            _reserved_window(atomic_response, team_cap) if team_reservation else None
-        )
         self._cap_admitted_output(None if team_share is None else team_share.share, team_reservation, data, call_type)
         if priority_descriptors and share is not None and not should_enforce_priority:
             get_or_create_request_stash().rate_limit_response = atomic_response
@@ -1257,13 +1244,20 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         model_wide_descriptor: Final = self._create_model_tracking_descriptor(
             model=model, model_group_info=model_group_info, high_limit_multiplier=1
         )
-        response: Final = await self.v3_limiter.atomic_check_and_increment_by_n(
+        admission: Final = self.v3_limiter.atomic_check_and_increment_by_n(
             descriptors=[model_wide_descriptor, *team_descriptors],
             increments=[
                 {"requests": 1, "tokens": 0},
                 *({"requests": 1, "tokens": reservation} for _ in team_descriptors),
             ],
             parent_otel_span=user_api_key_dict.parent_otel_span,
+        )
+        response: Final = await (
+            self._admit_refunding_team_tokens_on_cancellation(
+                asyncio.create_task(admission), team_descriptors, reservation
+            )
+            if reservation
+            else admission
         )
         if response["overall_code"] == "OVER_LIMIT":
             return False
@@ -1278,6 +1272,81 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
             _reserved_window(response, cap),
         )
         return True
+
+    async def _reserve_team_share(
+        self,
+        stash: RequestRateLimiterStash,
+        descriptors: list[RateLimitDescriptor],  # mutable-ok: atomic_check_and_increment_by_n takes a list
+        team_share: RateLimitDescriptor | None,
+        team_cap: RateLimitDescriptor | None,
+        team_reservation: int,
+        user_api_key_dict: UserAPIKeyAuth,
+    ) -> RateLimitResponse:
+        """A held team share is recorded even if the caller is cancelled, so the failure path can give it back."""
+        step: Final = self._reserve_team_share_onto_stash(
+            stash, descriptors, team_share, team_cap, team_reservation, user_api_key_dict
+        )
+        return await (finish_despite_cancellation(step) if team_reservation else step)
+
+    async def _reserve_team_share_onto_stash(
+        self,
+        stash: RequestRateLimiterStash,
+        descriptors: list[RateLimitDescriptor],  # mutable-ok: atomic_check_and_increment_by_n takes a list
+        team_share: RateLimitDescriptor | None,
+        team_cap: RateLimitDescriptor | None,
+        team_reservation: int,
+        user_api_key_dict: UserAPIKeyAuth,
+    ) -> RateLimitResponse:
+        reserved: Final = await self.v3_limiter.atomic_check_and_increment_by_n(
+            descriptors=descriptors,
+            increments=[
+                {"requests": 1, "tokens": team_reservation}
+                if descriptor is team_share or descriptor is team_cap
+                else {"requests": 1, "tokens": 0}
+                for descriptor in descriptors
+            ],
+            parent_otel_span=user_api_key_dict.parent_otel_span,
+        )
+        if reserved["overall_code"] != "OVER_LIMIT":
+            stash.record_borrowing_team_reservation(
+                team_reservation if team_share is not None else 0,
+                team_reservation if team_cap is not None else 0,
+                _reserved_window(reserved, team_share) if team_reservation else None,
+                _reserved_window(reserved, team_cap) if team_reservation else None,
+            )
+        return reserved
+
+    async def _admit_refunding_team_tokens_on_cancellation(
+        self,
+        admission: asyncio.Task[RateLimitResponse],
+        team_descriptors: Sequence[RateLimitDescriptor],
+        reservation: int,
+    ) -> RateLimitResponse:
+        """A cancelled fallback attempt never runs, so none of its callbacks would settle the tokens held for it."""
+        try:
+            return await asyncio.shield(admission)
+        except asyncio.CancelledError:
+            await finish_despite_cancellation(
+                self._refund_team_tokens_when_admitted(admission, team_descriptors, reservation)
+            )
+            raise
+
+    async def _refund_team_tokens_when_admitted(
+        self,
+        admission: asyncio.Task[RateLimitResponse],
+        team_descriptors: Sequence[RateLimitDescriptor],
+        reservation: int,
+    ) -> None:
+        response: Final = await admission
+        if response["overall_code"] == "OVER_LIMIT":
+            return
+        for descriptor in team_descriptors:
+            await self.v3_limiter.async_increment_reservation_aware_tokens(
+                pipeline_operations=_window_guarded(
+                    _team_model_token_increment(descriptor, -reservation, self.v3_limiter.window_size),
+                    _reserved_window(response, descriptor),
+                )
+            )
 
     async def _share_has_room(
         self, descriptor: RateLimitDescriptor, tokens: int, user_api_key_dict: UserAPIKeyAuth

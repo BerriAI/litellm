@@ -5,10 +5,10 @@ answering ``main``'s raw replies. Tests keep asserting the wire shape while the 
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Coroutine, Sequence
 from dataclasses import dataclass, field
 from itertools import chain
-from typing import Final, Generic, TypeVar
+from typing import Final, Generic, Literal, TypeVar
 
 from pydantic import TypeAdapter
 
@@ -305,3 +305,74 @@ class FakeRateLimits:
     def increment_many_post_call(self, request: object, increments: Sequence[CounterIncrement]) -> None:
         self.post_call.append("increment_many")
         self.deferred.append(asyncio.ensure_future(self.increment_many(increments)))
+
+
+class ReplyHeldRedis:
+    """A Redis that counts a reservation when its script runs and holds that script's reply until ``deliver_reply``
+    is set, so a test can cancel the caller after Redis applied the write and before the limiter hears of it.
+
+    ``hold`` picks the script whose reply is held, ``hold_key`` narrows it to calls touching a matching counter,
+    and a reservation on a counter matching ``refuse_key`` is answered as over the limit."""
+
+    def __init__(
+        self, hold: Literal["reserve", "refund"] = "reserve", hold_key: str = "", refuse_key: str | None = None
+    ) -> None:
+        self.counters: Final[dict[str, float]] = {}
+        self.reserved: Final[dict[str, float]] = {}
+        self.applied: Final = asyncio.Event()
+        self.deliver_reply: Final = asyncio.Event()
+        self._hold: Final = hold
+        self._hold_key: Final = hold_key
+        self._refuse_key: Final = refuse_key
+        self.fakes: Final = FakeRateLimits(
+            check_and_increment_by_n_script=self._reserve,
+            window_guarded_token_increment_script=self._guarded_increment,
+            token_increment_script=self._increment,
+        )
+
+    def count(self, key: str) -> float:
+        """What Redis holds for ``key``: what the scripts wrote plus the plain increments the store sent."""
+        return self.counters.get(key, 0) + sum(
+            amount for name, amount, _ttl in self.fakes.redis_increments if name == key
+        )
+
+    async def cancel_once_applied(self, request: Coroutine[object, object, object]) -> None:
+        """Runs ``request`` until the held script has applied its write, cancels it, then lets the reply through."""
+        task: Final = asyncio.ensure_future(request)
+        await asyncio.wait_for(self.applied.wait(), timeout=2)
+        task.cancel()
+        await asyncio.sleep(0)
+        self.deliver_reply.set()
+        try:
+            await asyncio.wait_for(task, timeout=2)
+        except asyncio.CancelledError:
+            return
+        raise AssertionError("the cancelled request finished instead of staying cancelled")
+
+    async def _reply_when_delivered(self, kind: str, keys: Sequence[str]) -> None:
+        if kind == self._hold and any(self._hold_key in key for key in keys):
+            self.applied.set()
+            await self.deliver_reply.wait()
+
+    async def _reserve(self, keys: list[str], args: list[float]) -> list[RawValue]:
+        counters: Final = keys[1::2]
+        amounts: Final = args[1::4]
+        for index, (key, limit, amount) in enumerate(zip(counters, args[::4], amounts)):
+            held = self.counters.get(key, 0)
+            if (self._refuse_key is not None and self._refuse_key in key) or held + amount > limit:
+                return [1, index + 1, int(held), int(limit)]
+        for key, amount in zip(counters, amounts):
+            self.counters[key] = self.counters.get(key, 0) + amount
+            self.reserved[key] = self.reserved.get(key, 0) + amount
+        await self._reply_when_delivered("reserve", counters)
+        return [0, *chain.from_iterable((int(self.counters[key]), 1234) for key in counters)]
+
+    async def _guarded_increment(self, keys: list[str], args: list[float]) -> list[RawValue]:
+        self.counters[keys[1]] = self.counters.get(keys[1], 0) + float(args[1])
+        return [1, int(self.counters[keys[1]])]
+
+    async def _increment(self, keys: list[str], args: list[float]) -> list[RawValue]:
+        for key, amount in zip(keys, args[::2]):
+            self.counters[key] = self.counters.get(key, 0) + amount
+        await self._reply_when_delivered("refund", keys)
+        return [self.counters[key] for key in keys]
