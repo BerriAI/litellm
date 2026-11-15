@@ -11517,3 +11517,73 @@ async def test_sso_login_still_joins_the_team_and_warns_when_creating_it_fails(
     warnings: Final = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
     assert events == [("join", "finance")]
     assert len(warnings) == 1 and "finance" in warnings[0] and str(create_error.detail) in warnings[0]
+
+
+@pytest.mark.asyncio
+async def test_get_user_info_from_db_skips_insert_when_admin_only_and_user_not_in_db() -> None:
+    """When ui_access_mode='admin_only', an uninvited SSO user without an admin role must not be inserted into LiteLLM_UserTable."""
+    from litellm.proxy._types import SSOUserDefinedValues
+    from litellm.proxy.management_endpoints.ui_sso import get_user_info_from_db
+
+    result: Final = CustomOpenID(
+        id="uninvited-google-sub",
+        email="uninvited@example.com",
+        first_name="Uninvited",
+        last_name="User",
+        display_name="Uninvited User",
+        provider="google",
+        team_ids=[],
+    )
+    user_defined_values: Final = SSOUserDefinedValues(
+        models=[],
+        user_id="uninvited-google-sub",
+        user_email="uninvited@example.com",
+        user_role=None,
+        max_budget=None,
+        budget_duration=None,
+    )
+    mock_upsert: Final = AsyncMock()
+    with (
+        patch(  # test-quality-ok: unit test stubs DB lookup boundary
+            "litellm.proxy.management_endpoints.ui_sso.get_existing_user_info_from_db",
+            AsyncMock(return_value=None),
+        ) as mock_get_existing,
+        patch.object(SSOAuthenticationHandler, "upsert_sso_user", mock_upsert),
+    ):
+        user_info: Final = await get_user_info_from_db(
+            result=result,
+            prisma_client=MagicMock(),
+            user_api_key_cache=MagicMock(),
+            proxy_logging_obj=MagicMock(),
+            user_email="uninvited@example.com",
+            user_defined_values=user_defined_values,
+            ui_access_mode="admin_only",
+        )
+
+    assert user_info is None
+    mock_get_existing.assert_awaited_once()
+    mock_upsert.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_redirect_from_openid_admin_only_rejects_non_admin_before_key_mint() -> None:
+    """When ui_access_mode='admin_only', a non-admin SSO login must raise 401 before minting a UI session key."""
+    user_info_from_db: Final = AsyncMock(return_value=None)
+    generate_key: Final = AsyncMock(side_effect=AssertionError("Non-admin login must not mint a UI key"))
+    mock_request, stack = _empty_identity_redirect_patches(None, user_info_from_db, generate_key)
+
+    with stack, pytest.raises(HTTPException) as exc_info:
+        await SSOAuthenticationHandler.get_redirect_response_from_openid(
+            result=CustomOpenID(id="uninvited-sub", email="uninvited@example.com", provider="google", team_ids=[]),
+            request=mock_request,
+            received_response=None,
+            generic_client_id=None,
+            ui_access_mode="admin_only",  # type: ignore[arg-type]
+        )
+
+    assert exc_info.value.status_code == 401
+    assert "User not allowed to access proxy" in str(exc_info.value.detail)
+    user_info_from_db.assert_awaited_once()
+    assert user_info_from_db.await_args.kwargs["ui_access_mode"] == "admin_only"
+    generate_key.assert_not_awaited()
+
