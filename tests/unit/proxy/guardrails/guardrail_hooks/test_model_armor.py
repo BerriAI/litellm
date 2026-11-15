@@ -5554,3 +5554,43 @@ async def test_apply_guardrail_returns_the_inputs_on_a_model_armor_failure_when_
     assert result is inputs
     entries: Final = request_data["metadata"]["standard_logging_guardrail_information"]
     assert [entry["guardrail_status"] for entry in entries] == ["guardrail_failed_to_respond"]
+
+
+@pytest.mark.parametrize("error", [ModelArmorAPIError("model armor is down"), httpx.ConnectError("boom")])
+@pytest.mark.asyncio
+async def test_apply_guardrail_raises_a_model_armor_failure_on_a_single_text_rescan_when_fail_on_error_is_true(
+    error: Exception,
+):
+    guardrail = _post_mcp_call_guardrail([_deidentified_armor_response("ssn [REDACTED]"), error])
+    request_data: Final[dict] = {"metadata": {}}
+
+    with pytest.raises(type(error)):
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["ssn 078-05-1120"]}, request_data=request_data, input_type="response"
+        )
+
+    entries: Final = request_data["metadata"]["standard_logging_guardrail_information"]
+    assert [entry["guardrail_status"] for entry in entries] == ["success", "guardrail_failed_to_respond"]
+
+
+@pytest.mark.parametrize(
+    ("fail_on_error", "event_hook"),
+    [(False, GuardrailEventHooks.post_mcp_call), (True, GuardrailEventHooks.logging_only)],
+)
+@pytest.mark.asyncio
+async def test_apply_guardrail_returns_the_unmasked_inputs_on_a_single_text_rescan_failure_when_failing_open(
+    fail_on_error: bool, event_hook: GuardrailEventHooks
+):
+    guardrail = _post_mcp_call_guardrail(
+        [_deidentified_armor_response("ssn [REDACTED]"), httpx.ConnectError("boom")],
+        fail_on_error=fail_on_error,
+        event_hook=event_hook,
+    )
+    request_data: Final[dict] = {"metadata": {}}
+    inputs = {"texts": ["ssn 078-05-1120"]}
+
+    result = await guardrail.apply_guardrail(inputs=inputs, request_data=request_data, input_type="response")
+
+    assert result is inputs
+    entries: Final = request_data["metadata"]["standard_logging_guardrail_information"]
+    assert [entry["guardrail_status"] for entry in entries] == ["success", "guardrail_failed_to_respond"]

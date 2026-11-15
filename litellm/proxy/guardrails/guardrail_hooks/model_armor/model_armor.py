@@ -1318,14 +1318,11 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
             "user_prompt" if input_type == "request" else "model_response"
         )
         start_time: Final = time.time()
-        try:
-            armor_response: Final = await self.make_model_armor_request(
-                content=content, source=source, request_data=request_data
-            )
-        except (ModelArmorAPIError, httpx.HTTPError) as e:
+
+        def fails_open(error: Exception) -> bool:
             error_end_time: Final = time.time()
             self.add_standard_logging_guardrail_information_to_request_data(
-                guardrail_json_response=str(e),
+                guardrail_json_response=str(error),
                 request_data=request_data,
                 guardrail_status="guardrail_failed_to_respond",
                 guardrail_provider="model_armor",
@@ -1333,9 +1330,16 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
                 end_time=error_end_time,
                 duration=error_end_time - start_time,
             )
-            if self.optional_params.get("fail_on_error", True) and not self._event_hook_is_event_type(
+            return not self.optional_params.get("fail_on_error", True) or self._event_hook_is_event_type(
                 GuardrailEventHooks.logging_only
-            ):
+            )
+
+        try:
+            armor_response: Final = await self.make_model_armor_request(
+                content=content, source=source, request_data=request_data
+            )
+        except (ModelArmorAPIError, httpx.HTTPError) as e:
+            if not fails_open(e):
                 raise
             return inputs
 
@@ -1373,7 +1377,12 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
                 )
             return self._get_sanitized_content(text_response) or text
 
-        return {**inputs, "texts": [await sanitized(text) if text else text for text in inputs.get("texts") or ()]}
+        try:
+            return {**inputs, "texts": [await sanitized(text) if text else text for text in inputs.get("texts") or ()]}
+        except (ModelArmorAPIError, httpx.HTTPError) as e:
+            if not fails_open(e):
+                raise
+            return inputs
 
     @staticmethod
     def get_config_model() -> type["GuardrailConfigModel"] | None:
