@@ -1975,7 +1975,7 @@ class TestStripEncryptedReasoningFromInput:
                 "type": "reasoning",
                 "summary": [{"type": "summary_text", "text": "thought about it"}],
             },
-            {"type": "message", "id": "msg_1", "role": "assistant", "content": "hi"},
+            {"type": "message", "role": "assistant", "content": "hi"},
             {"role": "user", "content": "second turn"},
         ]
 
@@ -2021,6 +2021,59 @@ class TestStripEncryptedReasoningFromInput:
             {"type": "reasoning", "id": "keep", "encrypted_content": wrapped, "summary": "keep"},
             {"type": "reasoning", "summary": "strip"},
         ]
+
+    def test_items_of_a_stripped_turn_lose_their_ids_so_a_region_switch_is_accepted(self):
+        """#51930: after an overflow the history holds turns from two regions. When both turns' reasoning is
+        stripped, the newer region's message must not keep its id, or that region rejects the request with
+        "was provided without its required 'reasoning' item"."""
+        region_a = ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id("gAAAAA-a", "deployment-a")
+        region_b = ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id("gAAAAA-b", "deployment-b")
+        request_input = [
+            {"role": "user", "content": "check the weather in two cities"},
+            {"type": "reasoning", "id": "rs_a", "encrypted_content": region_a, "summary": []},
+            {"type": "function_call", "id": "fc_a", "call_id": "call_1", "name": "get_weather", "arguments": "{}"},
+            {"type": "function_call_output", "call_id": "call_1", "output": "sunny"},
+            {"type": "reasoning", "id": "rs_b", "encrypted_content": region_b, "summary": []},
+            {"type": "message", "id": "msg_b", "role": "assistant", "content": "Both are sunny."},
+            {"role": "user", "content": "which one is warmer?"},
+        ]
+
+        ResponsesAPIRequestUtils.strip_encrypted_reasoning_from_input(request_input)
+
+        assert request_input == [
+            {"role": "user", "content": "check the weather in two cities"},
+            {"type": "function_call", "call_id": "call_1", "name": "get_weather", "arguments": "{}"},
+            {"type": "function_call_output", "call_id": "call_1", "output": "sunny"},
+            {"type": "message", "role": "assistant", "content": "Both are sunny."},
+            {"role": "user", "content": "which one is warmer?"},
+        ]
+
+    def test_a_turn_whose_reasoning_is_kept_keeps_its_item_ids(self):
+        region_a = ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id("gAAAAA-a", "deployment-a")
+        region_b = ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id("gAAAAA-b", "deployment-b")
+        stripped_turn = [
+            {"type": "reasoning", "id": "rs_a", "encrypted_content": region_a, "summary": []},
+            {"type": "function_call", "id": "fc_a", "call_id": "call_1", "name": "get_weather", "arguments": "{}"},
+            {"type": "item_reference", "id": "msg_stored"},
+            {"type": "function_call_output", "call_id": "call_1", "output": "sunny"},
+        ]
+        kept_turn = [
+            {"type": "reasoning", "id": "rs_b", "encrypted_content": region_b, "summary": []},
+            {"type": "message", "id": "msg_b", "role": "assistant", "content": "Both are sunny."},
+        ]
+        request_input = [*stripped_turn, *kept_turn]
+
+        ResponsesAPIRequestUtils.strip_encrypted_reasoning_from_input(
+            request_input, should_strip=lambda item: item["encrypted_content"] == region_a
+        )
+
+        assert request_input == [
+            {"type": "function_call", "call_id": "call_1", "name": "get_weather", "arguments": "{}"},
+            {"type": "item_reference", "id": "msg_stored"},
+            {"type": "function_call_output", "call_id": "call_1", "output": "sunny"},
+            *kept_turn,
+        ]
+        assert stripped_turn[1]["id"] == "fc_a"
 
 
 @pytest.mark.asyncio

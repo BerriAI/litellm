@@ -59,6 +59,7 @@ _PROVIDER_SPECIFIC_HEADER_ADAPTER: Final[
 ] = TypeAdapter(ProviderSpecificHeader | Sequence[ProviderSpecificHeader] | None)
 _REASONING_FIELDS_ONLY_ITS_ORIGIN_RESOLVES: Final = frozenset({"encrypted_content", "id", "status"})
 _ENCRYPTED_OUTPUT_ITEM_TYPES: Final = frozenset({"reasoning", "compaction"})
+_TURN_STARTING_ROLES: Final = frozenset({"user", "system", "developer"})
 _OUTPUT_ITEM_EVENT_TYPES: Final = frozenset({"response.output_item.added", "response.output_item.done"})
 _REASONING_ITEM_EVENT_TYPES: Final = frozenset(
     {
@@ -771,20 +772,49 @@ class ResponsesAPIRequestUtils:
     ) -> None:
         """Drop reasoning items the routed deployment cannot decrypt, keeping their readable summary.
 
+        The items that follow a dropped reasoning item in the same model turn (its message, function
+        calls, ...) lose their ``id`` and keep everything else, ``call_id`` included. A provider rejects
+        an item id it minted once the reasoning item that produced it is gone ("was provided without its
+        required 'reasoning' item"); without an id the item is plain history. Turns whose reasoning is
+        kept are left as they are, since a kept reasoning item needs its following items.
+
         Mutates ``request_input`` in place: the router's fallback snapshot shares this
         list object, so a rebound list would replay the stripped items on the fallback hop.
         """
         if not isinstance(request_input, list):
             return
         items: Final = cast(list[object], request_input)  # cast-ok: untyped client json
-        stripped: Final = tuple(
-            ResponsesAPIRequestUtils.readable_reasoning(reasoning)
-            if (reasoning := ResponsesAPIRequestUtils._encrypted_reasoning_item(item)) is not None
-            and (should_strip is None or should_strip(reasoning))
-            else item
-            for item in items
-        )
-        items[:] = (item for item in stripped if item is not None)
+        rebuilt: Final[list[object]] = []  # mutable-ok: the new item list, written back in place below
+        in_stripped_turn = False  # rebind-ok: whether the current model turn lost its reasoning item
+        for item in items:
+            reasoning = ResponsesAPIRequestUtils._encrypted_reasoning_item(item)
+            if reasoning is not None and (should_strip is None or should_strip(reasoning)):
+                in_stripped_turn = True
+                if (readable := ResponsesAPIRequestUtils.readable_reasoning(reasoning)) is not None:
+                    rebuilt.append(readable)
+                continue
+            if ResponsesAPIRequestUtils._starts_new_turn(item):
+                in_stripped_turn = False
+            rebuilt.append(ResponsesAPIRequestUtils._without_item_id(item) if in_stripped_turn else item)
+        items[:] = rebuilt
+
+    @staticmethod
+    def _starts_new_turn(item: object) -> bool:
+        """A reasoning or compaction item, or a message the model did not write: the item opens a new turn."""
+        if not isinstance(item, dict):
+            return False
+        fields: Final = cast(Mapping[str, object], item)  # cast-ok: untyped client json
+        return fields.get("type") in _ENCRYPTED_OUTPUT_ITEM_TYPES or fields.get("role") in _TURN_STARTING_ROLES
+
+    @staticmethod
+    def _without_item_id(item: object) -> object:
+        """The item without its ``id``; an ``item_reference`` keeps it, since the id is all it carries."""
+        if not isinstance(item, dict):
+            return item
+        fields: Final = cast(Mapping[str, object], item)  # cast-ok: untyped client json
+        if "id" not in fields or fields.get("type") == "item_reference":
+            return fields
+        return {key: value for key, value in fields.items() if key != "id"}
 
     @staticmethod
     def _encrypted_reasoning_item(item: object) -> Mapping[str, object] | None:
