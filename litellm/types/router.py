@@ -74,18 +74,20 @@ from .utils import (
     API_KEY_SECRET_REFERENCE_REJECTION as _API_KEY_SECRET_REFERENCE_REJECTION,
 )
 from .utils import (
-    MONETARY_PRICING_FIELDS,
-    CooldownDeploymentInfo,
-    CustomPricingLiteLLMParams,
-    MirroredPricingParams,
-    ModelResponse,
-    StandardLoggingRoutingDecision,
+    MONETARY_PRICING_FIELDS as _MONETARY_PRICING_FIELDS,
 )
 from .utils import (
     OIDC_SECRET_REFERENCE_PREFIX as _OIDC_SECRET_REFERENCE_PREFIX,
 )
 from .utils import (
     AdminApiKeySecretReference as _AdminApiKeySecretReference,
+)
+from .utils import (
+    CooldownDeploymentInfo,
+    CustomPricingLiteLLMParams,
+    MirroredPricingParams,
+    ModelResponse,
+    StandardLoggingRoutingDecision,
 )
 from .utils import (
     github_copilot_oauth_litellm_params as _github_copilot_oauth_litellm_params,
@@ -964,7 +966,7 @@ def boolean_price_fields(data: object) -> frozenset[str]:
     if section is None:
         return frozenset()
     return frozenset(
-        field for field, value in section.items() if isinstance(value, bool) and field in MONETARY_PRICING_FIELDS
+        field for field, value in section.items() if isinstance(value, bool) and field in _MONETARY_PRICING_FIELDS
     )
 
 
