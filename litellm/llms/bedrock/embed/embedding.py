@@ -79,6 +79,18 @@ def _without_region_path(model: str) -> str:
     return model if region is None else model_id
 
 
+_ASYNC_INVOKE_REQUEST_FIELDS: Final = frozenset({"clientRequestToken", "tags"})
+
+
+def _split_async_invoke_extra_body(
+    extra_body: Mapping[str, object],
+) -> tuple[Mapping[str, object], Mapping[str, object]]:
+    return (
+        {key: value for key, value in extra_body.items() if key in _ASYNC_INVOKE_REQUEST_FIELDS},
+        {key: value for key, value in extra_body.items() if key not in _ASYNC_INVOKE_REQUEST_FIELDS},
+    )
+
+
 class BedrockEmbedding(BaseAWSLLM):
     _web_identity_session_policy: ClassVar[WebIdentitySessionPolicy] = BEDROCK_EMBEDDING_SESSION_POLICY
 
@@ -296,8 +308,9 @@ class BedrockEmbedding(BaseAWSLLM):
         extra_body: Mapping[str, object] = MappingProxyType({}),
     ):
         responses: Final[list[dict]] = []
+        request_fields, model_fields = _split_async_invoke_extra_body(extra_body)
         for data in (
-            {**item, "modelInput": {**extra_body, **item["modelInput"]}}
+            {**request_fields, **item, "modelInput": {**model_fields, **item["modelInput"]}}
             if "modelInput" in item
             else {**extra_body, **item}
             for item in batch_data
@@ -371,8 +384,9 @@ class BedrockEmbedding(BaseAWSLLM):
         extra_body: Mapping[str, object] = MappingProxyType({}),
     ):
         responses: Final[list[dict]] = []
+        request_fields, model_fields = _split_async_invoke_extra_body(extra_body)
         for data in (
-            {**item, "modelInput": {**extra_body, **item["modelInput"]}}
+            {**request_fields, **item, "modelInput": {**model_fields, **item["modelInput"]}}
             if "modelInput" in item
             else {**extra_body, **item}
             for item in batch_data
