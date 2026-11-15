@@ -138,6 +138,7 @@ class CompiledPatternEntry(TypedDict):
     action: ContentFilterAction
     keyword_regex: Pattern[str] | None
     allow_word_numbers: bool
+    validator: Callable[[str], bool] | None
 
 
 class _PatternExtraLookup(TypedDict):
@@ -889,12 +890,14 @@ class ContentFilterGuardrail(CustomGuardrail):
         """
         try:
             extra_config: _PatternExtraLookup = {"keyword_pattern": None, "allow_word_numbers": False}
+            validator: Callable[[str], bool] | None = None
             if pattern_config.pattern_type == "prebuilt":
                 if not pattern_config.pattern_name:
                     raise ValueError("pattern_name is required for prebuilt patterns")
                 compiled = get_compiled_pattern(pattern_config.pattern_name)
                 pattern_name = pattern_config.pattern_name
                 extra_config = self._lookup_pattern_extra(pattern_name)
+                validator = PATTERN_VALIDATORS.get(pattern_name)
             elif pattern_config.pattern_type == "regex":
                 if not pattern_config.pattern:
                     raise ValueError("pattern is required for regex patterns")
@@ -913,6 +916,7 @@ class ContentFilterGuardrail(CustomGuardrail):
                     "action": pattern_config.action,
                     "keyword_regex": keyword_regex,
                     "allow_word_numbers": extra_config["allow_word_numbers"],
+                    "validator": validator,
                 }
             )
             verbose_proxy_logger.debug("Added pattern: %s with action %s", pattern_name, pattern_config.action)
@@ -978,7 +982,7 @@ class ContentFilterGuardrail(CustomGuardrail):
         if keyword_matches is not None and not keyword_matches:
             return []
 
-        validator: Final = PATTERN_VALIDATORS.get(pattern_entry["pattern_name"])
+        validator: Final = pattern_entry.get("validator")
         match_spans: Final[list[tuple[int, int]]] = []
 
         for match in regex.finditer(text):

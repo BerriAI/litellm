@@ -13,8 +13,10 @@ def validate_luhn(candidate: str) -> bool:
 
 
 def validate_iban(candidate: str) -> bool:
-    cleaned: Final = "".join(char for char in candidate if char.isalnum()).upper()
+    cleaned: Final = "".join(char for char in candidate if not char.isspace()).upper()
     if len(cleaned) < 15 or len(cleaned) > 34:
+        return False
+    if any(char not in "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ" for char in cleaned):
         return False
     if not (cleaned[:2].isalpha() and cleaned[2:4].isdigit()):
         return False

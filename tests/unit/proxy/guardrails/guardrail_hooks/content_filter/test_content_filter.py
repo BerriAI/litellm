@@ -493,6 +493,21 @@ class TestContentFilterGuardrail:
         assert guardrail._check_patterns("Bank account DE89370400440532013000") is not None
         assert guardrail._check_patterns("Cable RS232SERIALCABLE12345") is None
 
+    def test_custom_regex_with_pattern_name_not_restricted_by_prebuilt_validator(self):
+        patterns = [
+            ContentFilterPattern(
+                pattern_type="regex",
+                name="iban",
+                pattern=r"IBAN:\s*([A-Z]{2}\d{2}[A-Z0-9]{11,30})\b",
+                action=ContentFilterAction.BLOCK,
+            ),
+        ]
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-custom-iban-regex",
+            patterns=patterns,
+        )
+        assert guardrail._check_patterns("IBAN: DE89370400440532013000") is not None
+
     @pytest.mark.asyncio
     async def test_credit_card_masking_with_luhn(self):
         patterns = [
@@ -3878,6 +3893,7 @@ def test_validate_luhn(card_number: str, expected: bool) -> None:
         ("", False),
         ("DE12", False),
         ("12345678901234567890", False),
+        ("DE89\u0130370400440532013000", False),
         ("DE89 3704 0044 0532 0130 000000000000000", False),
     ),
 )
