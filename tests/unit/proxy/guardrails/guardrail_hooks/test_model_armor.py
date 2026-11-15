@@ -5590,18 +5590,26 @@ async def test_apply_guardrail_raises_a_model_armor_failure_on_a_single_text_res
     assert [entry["guardrail_status"] for entry in entries] == ["success", "guardrail_failed_to_respond"]
 
 
-@pytest.mark.parametrize(
-    ("fail_on_error", "event_hook"),
-    [(False, GuardrailEventHooks.post_mcp_call), (True, GuardrailEventHooks.logging_only)],
-)
 @pytest.mark.asyncio
-async def test_apply_guardrail_returns_the_unmasked_inputs_on_a_single_text_rescan_failure_when_failing_open(
-    fail_on_error: bool, event_hook: GuardrailEventHooks
-):
+async def test_apply_guardrail_in_logging_only_mode_logs_a_deidentified_response_as_flagged_after_one_scan():
     guardrail = _post_mcp_call_guardrail(
-        [_deidentified_armor_response("ssn [REDACTED]"), httpx.ConnectError("boom")],
-        fail_on_error=fail_on_error,
-        event_hook=event_hook,
+        [_deidentified_armor_response("ssn [REDACTED]")], event_hook=GuardrailEventHooks.logging_only
+    )
+    request_data: Final[dict] = {"metadata": {}}
+    inputs = {"texts": ["ssn 078-05-1120"]}
+
+    result = await guardrail.apply_guardrail(inputs=inputs, request_data=request_data, input_type="response")
+
+    assert result is inputs
+    assert _scanned_texts(guardrail) == ["ssn 078-05-1120"]
+    entries: Final = request_data["metadata"]["standard_logging_guardrail_information"]
+    assert [entry["guardrail_status"] for entry in entries] == ["guardrail_flagged"]
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_returns_the_unmasked_inputs_on_a_single_text_rescan_failure_when_failing_open():
+    guardrail = _post_mcp_call_guardrail(
+        [_deidentified_armor_response("ssn [REDACTED]"), httpx.ConnectError("boom")], fail_on_error=False
     )
     request_data: Final[dict] = {"metadata": {}}
     inputs = {"texts": ["ssn 078-05-1120"]}

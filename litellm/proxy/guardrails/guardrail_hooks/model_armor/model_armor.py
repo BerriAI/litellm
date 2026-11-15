@@ -1343,7 +1343,8 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
                 raise
             return inputs
 
-        mask: Final = input_type == "response" and self.mask_response_content
+        logging_only: Final = self._event_hook_is_event_type(GuardrailEventHooks.logging_only)
+        mask: Final = input_type == "response" and self.mask_response_content and not logging_only
         flagged: Final = self._should_block_content(armor_response, allow_sanitization=mask)
         end_time: Final = time.time()
         self.add_standard_logging_guardrail_information_to_request_data(
@@ -1355,7 +1356,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
             end_time=end_time,
             duration=end_time - start_time,
         )
-        if flagged and not self._event_hook_is_event_type(GuardrailEventHooks.logging_only):
+        if flagged and not logging_only:
             raise HTTPException(
                 status_code=400,
                 detail=self._build_block_error_detail(
