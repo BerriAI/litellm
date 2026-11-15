@@ -338,6 +338,36 @@ def test_chat_does_not_send_the_openai_organization_to_powerspring(monkeypatch: 
     assert "openai-organization" not in route.calls.last.request.headers
 
 
+@pytest.mark.parametrize("stream", [False, True])
+def test_chat_does_not_send_the_openai_sdk_tenant_defaults_to_powerspring(
+    monkeypatch: pytest.MonkeyPatch, stream: bool
+):
+    monkeypatch.setenv("OPENAI_ORG_ID", "org-openai-only")
+    monkeypatch.setenv("OPENAI_PROJECT_ID", "proj-openai-only")
+    with respx.mock() as upstream:
+        route: Final = (
+            upstream.post(_CHAT_COMPLETIONS_URL).respond(
+                200,
+                text=f"data: {json.dumps(_CHAT_COMPLETION | {'object': 'chat.completion.chunk'})}\n\ndata: [DONE]\n\n",
+                headers={"content-type": "text/event-stream"},
+            )
+            if stream
+            else upstream.post(_CHAT_COMPLETIONS_URL).respond(200, json=_CHAT_COMPLETION)
+        )
+        response = litellm.completion(
+            model="powerspring/gpt-oss-120b",
+            messages=[{"role": "user", "content": "Say hello"}],
+            api_key="powerspring-tenant-test-key",
+            stream=stream,
+        )
+        if stream:
+            tuple(response)
+
+    headers: Final = route.calls.last.request.headers
+    assert "openai-organization" not in headers
+    assert "openai-project" not in headers
+
+
 def test_missing_powerspring_key_does_not_send_openai_credentials_on_responses(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.delenv("POWERSPRING_API_KEY", raising=False)
     monkeypatch.setenv("OPENAI_API_KEY", "unrelated-openai-key")

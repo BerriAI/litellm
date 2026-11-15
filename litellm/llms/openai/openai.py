@@ -28,7 +28,7 @@ from typing_extensions import overload
 import litellm
 from litellm import LlmProviders
 from litellm._logging import WarningLogger, verbose_logger
-from litellm.constants import DEFAULT_MAX_RETRIES
+from litellm.constants import DEFAULT_MAX_RETRIES, PROVIDERS_WITHOUT_OPENAI_CREDENTIAL_FALLBACK
 from litellm.exceptions import UnsupportedParamsError
 from litellm.files.types import FileContentStreamingResult
 from litellm.litellm_core_utils.chat_completion_agentic_loop import (
@@ -502,6 +502,10 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                         organization=organization,
                     )
                 )
+            if (litellm_params or {}).get("custom_llm_provider") in PROVIDERS_WITHOUT_OPENAI_CREDENTIAL_FALLBACK:
+                # The SDK falls back to OPENAI_ORG_ID and OPENAI_PROJECT_ID when these are None.
+                _new_client.organization = organization
+                _new_client.project = None
 
             ## SAVE CACHE KEY
             self.set_cached_openai_client(

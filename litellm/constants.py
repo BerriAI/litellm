@@ -1200,6 +1200,9 @@ openai_compatible_providers: Final[list[str]] = [
 
 OPENAI_AUDIO_TRANSCRIPTION_PROVIDERS: Final = frozenset({"openai"} | frozenset(openai_compatible_providers))
 
+# These providers must not get OpenAI's key, organization or project, which would send OpenAI tenant credentials to them.
+PROVIDERS_WITHOUT_OPENAI_CREDENTIAL_FALLBACK: Final = frozenset({"bigmodel", "powerspring"})
+
 openai_text_completion_compatible_providers: Final[list] = [  # providers that support `/v1/completions`
     "together_ai",
     "fireworks_ai",
