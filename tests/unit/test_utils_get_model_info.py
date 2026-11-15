@@ -13,7 +13,8 @@ from litellm import get_model_info
 from litellm.llms.bedrock.common_utils import BedrockModelInfo
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.types.utils import ModelInfoBase
-from litellm.utils import _invalidate_model_cost_lowercase_map, supports_native_structured_output
+from litellm.utils import supports_native_structured_output
+from litellm.litellm_core_utils.model_cost_table import publish
 import os
 from unittest.mock import MagicMock, patch
 
@@ -23,7 +24,7 @@ def isolate_model_info_state(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     monkeypatch.setattr(litellm, "model_cost", dict(litellm.model_cost))
     monkeypatch.setattr(litellm, "custom_provider_map", list(litellm.custom_provider_map))
     yield
-    _invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
 
 
 def test_get_model_info_simple_model_name():
@@ -119,7 +120,7 @@ def test_get_model_info_bedrock_region(monkeypatch):
         key: value for key, value in litellm.get_model_cost_map(url="").items() if key != regional_model
     }
     monkeypatch.setattr(litellm, "model_cost", model_cost_without_regional_entry)
-    _invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
     info = litellm.get_model_info(model=regional_model, custom_llm_provider="bedrock")
     print("info", info)
     assert info["key"] == "anthropic.claude-haiku-4-5-20251001-v1:0"
@@ -171,7 +172,7 @@ def _enforce_bedrock_converse_models(
 
 
 def _read_whitelisted_bedrock_models() -> tuple[str, ...]:
-    path: Final = Path(__file__).resolve().parents[2] / "whitelisted_bedrock_models.txt"
+    path: Final = Path(__file__).with_name("whitelisted_bedrock_models.txt")
     return tuple(path.read_text().splitlines())
 
 
@@ -190,7 +191,7 @@ def test_model_info_bedrock_converse(monkeypatch):
     litellm.model_cost = litellm.get_model_cost_map(url="")
     try:
         # Load whitelist models from file
-        with open("whitelisted_bedrock_models.txt", "r") as file:
+        with open(Path(__file__).with_name("whitelisted_bedrock_models.txt"), "r") as file:
             whitelist_models = [line.strip() for line in file.readlines()]
     except FileNotFoundError:
         pytest.skip("whitelisted_bedrock_models.txt not found")
@@ -216,7 +217,7 @@ def test_model_info_bedrock_converse_enforcement(monkeypatch):
 
     try:
         # Load whitelist models from file
-        with open("whitelisted_bedrock_models.txt", "r") as file:
+        with open(Path(__file__).with_name("whitelisted_bedrock_models.txt"), "r") as file:
             whitelist_models = [line.strip() for line in file.readlines()]
 
         # Check for unwhitelisted models

@@ -13,7 +13,7 @@ import pytest
 
 import litellm
 import litellm.utils
-from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
+from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap, get_model_cost_map
 from litellm.litellm_core_utils.model_latest_aliases import get_model_latest_aliases
 from litellm.llms.moonshot.chat.transformation import MoonshotChatConfig
 
@@ -715,7 +715,8 @@ class TestMoonshotReasoningEffort:
 
     @pytest.fixture(autouse=True)
     def force_local_model_cost(self, monkeypatch):
-        monkeypatch.setattr(litellm, "model_cost", GetModelCostMap.load_local_model_cost_map())
+        monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+        monkeypatch.setattr(litellm, "model_cost", get_model_cost_map(url=litellm.model_cost_map_url))
 
     @pytest.mark.parametrize("model", ["kimi-k3", "kimi-k2.5", "kimi-k2.6"])
     def test_reasoning_model_supports_reasoning_effort(self, model):

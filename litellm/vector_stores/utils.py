@@ -5,6 +5,7 @@ from typing import Final, cast, get_type_hints
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 from litellm.constants import ROUTING_REQUEST_TAGS_METADATA_KEY, VECTOR_STORE_CALLER_METADATA_KWARG
+from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.llms.base_llm.vector_store.transformation import BaseVectorStoreConfig
 from litellm.types.vector_stores import (
     VectorStoreCreateOptionalRequestParams,
@@ -111,7 +112,7 @@ class VectorStoreRequestUtils:
         optional_params: Final = vector_store_provider_config.map_openai_params(
             non_default_params=params,
             optional_params=filtered_params,
-            drop_params=False,
+            drop_params=drops_unsupported_params(params.get("drop_params")),
         )
 
         return cast(VectorStoreSearchOptionalRequestParams, optional_params)
