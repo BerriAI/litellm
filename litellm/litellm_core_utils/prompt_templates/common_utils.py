@@ -1975,6 +1975,9 @@ def infer_content_type_from_url_and_content(
             if detected_type in type_to_mime:
                 return type_to_mime[detected_type]
 
+    if content.startswith(b"%PDF-"):
+        return "application/pdf"
+
     # If all fallbacks failed, raise error
     raise ValueError(f"Unable to determine content type from URL: {url}. Response content-type: {current_content_type}")
 
