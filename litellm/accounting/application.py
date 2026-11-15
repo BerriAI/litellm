@@ -21,7 +21,9 @@ if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient, ProxyLogging
 
 
-_SAVEPOINT: Final = "accounting_contribution"
+_SAVEPOINT: Final = "SAVEPOINT accounting_contribution"
+_ROLLBACK_TO_SAVEPOINT: Final = "ROLLBACK TO SAVEPOINT accounting_contribution"
+_RELEASE_SAVEPOINT: Final = "RELEASE SAVEPOINT accounting_contribution"
 _DAILY_TABLES_BY_NAME: Final = MappingProxyType({table.name: table for table in DAILY_SPEND_TABLES.values()})
 _DAILY_TABLE_ORDER: Final = tuple(sorted(_DAILY_TABLES_BY_NAME))
 _LATER_PHASES: Final = ("LiteLLM_DailyModelUsage", "LiteLLM_DailyGuardrailUsageUnits", "LiteLLM_BudgetWindowSpend")
@@ -95,7 +97,7 @@ async def _applied_within_savepoint(
 ) -> bool:
     from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 
-    await transaction.execute_raw(f"SAVEPOINT {_SAVEPOINT}")
+    await _savepoint_command(transaction, _SAVEPOINT)
     try:
         await _apply_contributions(
             transaction,
@@ -107,11 +109,16 @@ async def _applied_within_savepoint(
     except Exception as error:
         if not PrismaDBExceptionHandler.is_index_row_size_error(error):
             raise
-        await transaction.execute_raw(f"ROLLBACK TO SAVEPOINT {_SAVEPOINT}")
-        await transaction.execute_raw(f"RELEASE SAVEPOINT {_SAVEPOINT}")
+        await _savepoint_command(transaction, _ROLLBACK_TO_SAVEPOINT)
+        await _savepoint_command(transaction, _RELEASE_SAVEPOINT)
         return False
-    await transaction.execute_raw(f"RELEASE SAVEPOINT {_SAVEPOINT}")
+    await _savepoint_command(transaction, _RELEASE_SAVEPOINT)
     return True
+
+
+async def _savepoint_command(transaction: LedgerTransaction, statement: str) -> None:
+    async with db_span("accounting_contribution_savepoint", None):
+        await transaction.execute_raw(statement)
 
 
 async def _apply_contributions(

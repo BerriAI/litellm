@@ -473,6 +473,7 @@ _POSTGRES_OPERATION_BY_CALL_TYPE: Final[Mapping[str, PostgresOperation]] = Mappi
         "latest_health_checks": PostgresOperation("select", None),
         "prefetch_auth_objects": PostgresOperation("select", "auth_objects", _AUTH_OBJECT_RELATIONS),
         "baseline_accounting": PostgresOperation("transaction", "LiteLLM_AutoRouterBaselineComparison"),
+        "accounting_contribution_savepoint": PostgresOperation("transaction", "LiteLLM_SpendLogDelivery"),
         "write_autorouter_turn": PostgresOperation("upsert", None),
         "team_user_spend": PostgresOperation("select", "LiteLLM_SpendLogs"),
         "daily_activity_query": PostgresOperation("select", None),
