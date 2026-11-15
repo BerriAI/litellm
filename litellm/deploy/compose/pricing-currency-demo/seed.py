@@ -210,8 +210,7 @@ def _send_traffic(already_sent: int) -> None:
             _fail(f"synthetic request {index + 1} to {group}", status, body)
         _record_progress(index + 1)
         print(
-            f"{group}: served by {headers.get('x-litellm-model-id')} for "
-            f"${headers.get('x-litellm-response-cost')} USD"
+            f"{group}: served by {headers.get('x-litellm-model-id')} for ${headers.get('x-litellm-response-cost')} USD"
         )
 
 
