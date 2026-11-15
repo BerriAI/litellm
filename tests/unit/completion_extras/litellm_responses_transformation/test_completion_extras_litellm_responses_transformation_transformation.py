@@ -893,6 +893,75 @@ def test_chunk_parser_function_call_added_produces_tool_use():
     assert choice.finish_reason is None
 
 
+def test_chunk_parser_function_call_done_without_deltas_emits_arguments():
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+    from litellm.types.llms.openai import ResponsesAPIStreamEvents
+    from litellm.types.utils import ModelResponseStream
+
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
+
+    added = iterator.chunk_parser(
+        {
+            "type": ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
+            "output_index": 1,
+            "item": {"type": "function_call", "name": "simple_add", "call_id": "call-spark", "arguments": ""},
+        }
+    )
+    assert added.choices[0].delta.tool_calls[0].function.arguments == ""
+
+    done = iterator.chunk_parser(
+        {
+            "type": ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DONE,
+            "output_index": 1,
+            "arguments": '{"a": 5, "b": 7}',
+        }
+    )
+
+    assert isinstance(done, ModelResponseStream)
+    choice = done.choices[0]
+    assert choice.delta.tool_calls is not None
+    assert len(choice.delta.tool_calls) == 1
+    tool_call = choice.delta.tool_calls[0]
+    assert tool_call.index == added.choices[0].delta.tool_calls[0].index
+    assert tool_call.function.name is None
+    assert tool_call.function.arguments == '{"a": 5, "b": 7}'
+    assert choice.finish_reason is None
+
+
+def test_chunk_parser_function_call_done_after_deltas_adds_nothing():
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+    from litellm.types.llms.openai import ResponsesAPIStreamEvents
+    from litellm.types.utils import ModelResponseStream
+
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
+
+    delta = iterator.chunk_parser(
+        {
+            "type": ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA,
+            "output_index": 0,
+            "delta": '{"a": ',
+        }
+    )
+    assert delta.choices[0].delta.tool_calls[0].function.arguments == '{"a": '
+
+    done = iterator.chunk_parser(
+        {
+            "type": ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DONE,
+            "output_index": 0,
+            "arguments": '{"a": 5, "b": 7}',
+        }
+    )
+
+    assert isinstance(done, ModelResponseStream)
+    choice = done.choices[0]
+    assert choice.delta.tool_calls is None
+    assert choice.finish_reason is None
+
+
 def test_streamed_function_call_namespace_replays_on_next_turn():
     from unittest.mock import Mock
 
