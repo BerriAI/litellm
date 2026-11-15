@@ -936,11 +936,13 @@ class HostModelInfo:
         if members is None:
             return None, None
         minute: Final = get_utc_datetime().strftime("%H-%M")
-        counters: Final = tuple(
-            UsageCounter("global_router", f"{member.deployment_id}", member.model, minute, kind)
-            for kind in ("itpm", "otpm")
-            for member in members
+        itpm: Final = tuple(
+            UsageCounter("global_router", f"{member.deployment_id}", member.model, minute, "itpm") for member in members
         )
+        otpm: Final = tuple(
+            UsageCounter("global_router", f"{member.deployment_id}", member.model, minute, "otpm") for member in members
+        )
+        counters: Final = (*itpm, *otpm)
         return router_usage_totals(self._core_usage_store.get_many_sync(counters), len(members))
 
     async def set_response_headers(
