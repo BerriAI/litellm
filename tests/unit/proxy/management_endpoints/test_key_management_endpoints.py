@@ -13532,7 +13532,9 @@ async def test_execute_virtual_key_regeneration_rejects_over_limit_duration(
                 now=now,
             )
     assert exc_info.value.status_code == 400
-    assert "duration" in str(exc_info.value.detail)
+    detail: Final = TypeAdapter(Mapping[str, object]).validate_python(exc_info.value.detail)
+    expected_field: Final = "expires" if use_absolute_expiration else "duration"
+    assert str(detail["error"]).startswith(f"{expected_field} is over max limit")
     # Rejected regenerate must not reach the DB update.
     persist_deleted_verification_tokens.assert_not_awaited()
     assert mock_prisma_client.db.litellm_verificationtoken.update.await_count == 0
@@ -20557,6 +20559,35 @@ async def test_key_generate_expiration_overrides_default_duration(
     key_row: Final = await _generate_key_and_get_persisted_row(GenerateKeyRequest(expires=expires), insert_data, now=now)
 
     assert key_row["expires"] == expires
+
+
+@pytest.mark.asyncio
+async def test_key_generate_duration_takes_precedence_over_expiration_in_persisted_row(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    insert_data: Final = _wire_key_generation_prisma(monkeypatch)
+    explicit: Final = datetime(2030, 1, 1, tzinfo=timezone.utc)
+    before: Final = datetime.now(timezone.utc)
+
+    key_row: Final = await _generate_key_and_get_persisted_row(
+        GenerateKeyRequest(duration="1h", expires=explicit), insert_data
+    )
+
+    after: Final = datetime.now(timezone.utc)
+    persisted: Final = key_row["expires"]
+    assert persisted != explicit
+    assert isinstance(persisted, datetime) and before + timedelta(hours=1) <= persisted <= after + timedelta(hours=1)
+
+
+@pytest.mark.asyncio
+async def test_key_generate_naive_expiration_is_persisted_as_utc(monkeypatch: pytest.MonkeyPatch) -> None:
+    insert_data: Final = _wire_key_generation_prisma(monkeypatch)
+    naive: Final = datetime(2026, 1, 1)  # noqa: DTZ001  # a client payload without a timezone is the case under test
+
+    key_row: Final = await _generate_key_and_get_persisted_row(GenerateKeyRequest(expires=naive), insert_data)
+
+    assert key_row["expires"] == naive.replace(tzinfo=timezone.utc)
+    assert UpdateKeyRequest(key="test-token", expires=naive).expires == naive.replace(tzinfo=timezone.utc)
 
 
 @pytest.mark.asyncio

@@ -1,6 +1,6 @@
 import enum
 from collections.abc import Iterator, Mapping
-from datetime import datetime
+from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import Any, Final, Literal  # noqa: TID251  # allowed_routes and metadata stay Any for existing callers
 
@@ -25,7 +25,10 @@ def _fallback_targets(rules: ContentPolicyFallbackRules) -> Iterator[object]:
 
 class KeyRequestBase(GenerateRequestBase):
     key: str | None = None
-    expires: datetime | None = None
+    expires: datetime | None = Field(
+        default=None,
+        description="Absolute expiration time for the key. A value without a timezone is interpreted as UTC.",
+    )
     tpd_limit: int | None = None
     default_estimated_output_tokens: PositiveInt | None = None
     default_estimated_output_tokens_per_model: Mapping[str, PositiveInt] | None = None
@@ -48,6 +51,11 @@ class KeyRequestBase(GenerateRequestBase):
     )
     router_settings: UpdateRouterConfig | None = None
     access_group_ids: list[str] | None = None
+
+    @field_validator("expires")
+    @classmethod
+    def expiration_without_timezone_is_utc(cls, expires: datetime | None) -> datetime | None:
+        return expires if expires is None or expires.tzinfo is not None else expires.replace(tzinfo=timezone.utc)
 
     @field_validator("router_settings")
     @classmethod

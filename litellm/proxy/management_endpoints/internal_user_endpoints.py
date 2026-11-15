@@ -632,6 +632,7 @@ async def new_user(
             data_json=data_json, prisma_client=prisma_client
         )
         data_json.pop("password", None)
+        data_json.pop("expires", None)
         teams = data.teams
         if teams is None:
             teams = check_if_default_team_set()
