@@ -992,3 +992,54 @@ describe("TeamInfoView - model settings", () => {
     expect(screen.queryByRole("option", { name: "gpt-4o" })).not.toBeInTheDocument();
   });
 });
+
+describe("TeamInfoView - vector stores from access groups", () => {
+  beforeEach(() => {
+    seedDefaultMocks();
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(networking.vectorStoreListCall).mockResolvedValue({ data: [] });
+  });
+
+  it("lists the stores a team gets through its access groups and names the group", async () => {
+    const user = userEvent.setup({ delay: null });
+    vi.mocked(networking.vectorStoreListCall).mockResolvedValue({
+      data: [{ vector_store_id: "store-a", vector_store_name: "Parks knowledge base" }],
+    });
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(
+      createMockTeamData({
+        access_group_ids: ["ag-1"],
+        access_group_vector_store_ids: ["store-a"],
+        access_group_details: [
+          { access_group_id: "ag-1", access_group_name: "kb-readers", models: [], vector_store_ids: ["store-a"] },
+        ],
+      }) as TeamData,
+    );
+
+    renderWithProviders(
+      <TeamInfoView
+        teamId="123"
+        onUpdate={vi.fn()}
+        onClose={vi.fn()}
+        accessToken="test-token"
+        is_team_admin
+        is_proxy_admin
+        editTeam={false}
+        userModels={[]}
+      />,
+    );
+
+    expect(await screen.findByTitle("Granted via access group kb-readers. Full ID: store-a")).toHaveTextContent(
+      "Parks knowledge base (store-a) (access group)",
+    );
+    expect(screen.queryByText("No vector stores configured")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("tab", { name: "Settings" }));
+
+    await waitFor(() =>
+      expect(screen.getAllByTitle("Granted via access group kb-readers. Full ID: store-a")).toHaveLength(2),
+    );
+  });
+});

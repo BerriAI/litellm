@@ -178,8 +178,7 @@ impl RouterSessionPins {
     }
 
     fn replace_local(&self, key: &str, value: Value, ttl: Duration) -> Result<(), Error> {
-        self.pins.memory().delete(key)?;
-        Ok(self.pins.memory().set(key, value, Some(ttl))?)
+        Ok(self.pins.memory().refresh(key, value, ttl)?)
     }
 }
 

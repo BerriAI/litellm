@@ -8,6 +8,9 @@ from litellm.proxy.management.users.endpoints import router as current_user_rout
 from litellm.proxy.management_endpoints.management_v1.budgets import (
     router as budgets_router,
 )
+from litellm.proxy.management_endpoints.management_v1.customer_budget_increase_requests import (
+    router as customer_budget_increase_requests_router,
+)
 from litellm.proxy.management_endpoints.management_v1.customer_usage import (
     router as customer_usage_router,
 )
@@ -27,6 +30,7 @@ from litellm.proxy.management_endpoints.management_v1.users import (
 router: Final = APIRouter()
 router.include_router(budgets_router)
 router.include_router(customers_router)
+router.include_router(customer_budget_increase_requests_router)
 router.include_router(customer_usage_router)
 router.include_router(spend_logs_router)
 router.include_router(teams_router)

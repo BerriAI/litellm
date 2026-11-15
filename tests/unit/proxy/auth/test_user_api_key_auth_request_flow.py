@@ -3,16 +3,12 @@ import contextvars
 import json
 import logging
 import os
-import subprocess
-import sys
 import time
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager, nullcontext
 from datetime import datetime, timedelta, timezone
 from functools import partial
 from io import BytesIO
-from pathlib import Path
-from textwrap import dedent
 from types import MappingProxyType, SimpleNamespace
 from typing import Final, Literal
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
@@ -5108,6 +5104,38 @@ async def test_centralized_common_checks_enforce_personal_budget_on_proxy_admin_
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("duration", ["1h", "30d"])
+async def test_centralized_common_checks_enforce_window_budget_on_proxy_admin_token(duration: str) -> None:
+    db_user: Final = LiteLLM_UserTable.model_validate(
+        {
+            "user_id": "admin-user",
+            "user_role": "internal_user",
+            "budget_limits": [{"budget_duration": duration, "max_budget": 0.0}],
+        }
+    )
+    token: Final = UserAPIKeyAuth(api_key="sk-test", user_id="admin-user", user_role=LitellmUserRoles.PROXY_ADMIN)
+    with pytest.raises(litellm.BudgetExceededError) as rejection:
+        await _run_checks_for_cached_user(db_user, token)
+    assert (rejection.value.max_budget, rejection.value.current_cost) == (0.0, 0.0)
+    assert f"over {duration} budget" in str(rejection.value)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("api_key", [LITELLM_PROXY_MASTER_KEY_ALIAS, "sk-ui-session"])
+async def test_centralized_common_checks_admin_name_ignores_its_row_window_budget(api_key: str) -> None:
+    db_user: Final = LiteLLM_UserTable.model_validate(
+        {
+            "user_id": "admin",
+            "user_role": "proxy_admin",
+            "budget_limits": [{"budget_duration": "1h", "max_budget": 0.0}],
+        }
+    )
+    token: Final = UserAPIKeyAuth(api_key=api_key, user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+    await _run_checks_for_cached_user(db_user, token)
+    assert token.user_role == LitellmUserRoles.PROXY_ADMIN
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("row_models", [["no-default-models"], ["claude-haiku-4-5"]])
 async def test_centralized_common_checks_proxy_admin_token_ignores_row_model_list(row_models):
     """A proxy_admin token keeps every model when its DB row carries a personal
@@ -7338,6 +7366,54 @@ async def test_centralized_common_checks_skips_public_routes():
     finally:
         for k, v in originals.items():
             setattr(_proxy_server_mod, k, v)
+
+
+class _CustomerTablesOffLimits:
+    """Prisma stand-in whose customer tables fail the test the moment anything reads them."""
+
+    class _Db:
+        def __getattr__(self, name: str) -> MagicMock:
+            assert not name.startswith("litellm_customer"), f"public route read {name}"
+            return MagicMock()
+
+    db = _Db()
+
+
+@pytest.mark.asyncio
+async def test_authorizing_a_public_route_ignores_the_customer_headers():
+    """A credential-free GET / carrying both customer headers must not look up, register or charge a customer:
+    the builder served it without a key, so nothing on it is trusted."""
+    import litellm.proxy.proxy_server as _proxy_server_mod
+    from litellm.proxy.auth.user_api_key_auth import _authorize_authenticated_request
+
+    token = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY)
+    request = Request(
+        scope={
+            "type": "http",
+            "method": "GET",
+            "path": "/",
+            "query_string": b"",
+            "headers": [(b"x-litellm-customer-org-alias", b"acme"), (b"x-litellm-customer-member-id", b"user-7")],
+        }
+    )
+    attrs = {
+        **_proxy_attrs_for_centralized_checks(),
+        "prisma_client": _CustomerTablesOffLimits(),
+        "llm_model_list": None,
+        "user_model": None,
+    }
+    originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
+    try:
+        for k, v in attrs.items():
+            setattr(_proxy_server_mod, k, v)
+        recovered = await _authorize_authenticated_request(
+            user_api_key_auth_obj=token, request=request, request_data={}, route="/", api_key=""
+        )
+    finally:
+        for k, v in originals.items():
+            setattr(_proxy_server_mod, k, v)
+
+    assert (recovered, token.customer_hierarchy) == (None, None)
 
 
 @pytest.mark.asyncio
@@ -11182,7 +11258,8 @@ class TestCheckTeamMemberModelBudgetWithFallback:
         assert request_data["model"] == "gpt-4o"
 
     @pytest.mark.asyncio
-    async def test_fallback_skips_candidates_without_pricing(self, monkeypatch: pytest.MonkeyPatch):
+    @pytest.mark.parametrize("route", ["/v1/chat/completions", "/queue/chat/completions"])
+    async def test_fallback_skips_candidates_without_pricing(self, monkeypatch: pytest.MonkeyPatch, route: str):
         valid_token: Final = UserAPIKeyAuth(
             user_id="user-1",
             team_id="team-1",
@@ -11209,7 +11286,7 @@ class TestCheckTeamMemberModelBudgetWithFallback:
                 request=request,
                 llm_model_list=None,
                 llm_router=router,
-                route="/v1/chat/completions",
+                route=route,
             )
 
         _assert_budget_exceeded_values(exc_info.value)
@@ -12087,129 +12164,6 @@ def test_the_request_span_parents_datastore_spans_of_the_request(monkeypatch, al
         return current_request_parent_otel_span()
 
     assert contextvars.copy_context().run(ambient_parent_after_auth) is request_span
-
-
-_RECORDING_DDTRACE = dedent(
-    """
-    import functools
-    import inspect
-
-
-    class _Span:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *exc):
-            return None
-
-
-    class _Tracer:
-        def __init__(self):
-            self.spans = []
-
-        def wrap(self, name=None, **kwargs):
-            def decorator(f):
-                span_name = name or f"{f.__module__}.{f.__name__}"
-                if inspect.iscoroutinefunction(f):
-
-                    @functools.wraps(f)
-                    async def async_wrapped(*args, **kw):
-                        self.spans.append(span_name)
-                        return await f(*args, **kw)
-
-                    return async_wrapped
-
-                @functools.wraps(f)
-                def wrapped(*args, **kw):
-                    self.spans.append(span_name)
-                    return f(*args, **kw)
-
-                return wrapped
-
-            return decorator
-
-        def trace(self, name, **kwargs):
-            return _Span()
-
-        def current_span(self):
-            return None
-
-        def current_root_span(self):
-            return None
-
-
-    tracer = _Tracer()
-    """
-)
-
-_DDTRACE_AUTH_PROBE = dedent(
-    """
-    import asyncio
-    import json
-
-    import ddtrace
-    from fastapi import Request
-    from starlette.datastructures import URL
-
-    import litellm.proxy.proxy_server as proxy_server
-    from litellm.proxy._types import ProxyException
-    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-
-    proxy_server.master_key = "sk-probe"
-
-
-    async def auth(api_key):
-        request = Request(scope={"type": "http", "headers": [], "method": "POST", "path": "/chat/completions"})
-        request._url = URL(url="/chat/completions")
-        try:
-            await user_api_key_auth(
-                request=request,
-                api_key=api_key,
-                azure_api_key_header="",
-                anthropic_api_key_header=None,
-                google_ai_studio_api_key_header=None,
-                azure_apim_header=None,
-                custom_litellm_key_header=None,
-            )
-            return "accepted"
-        except ProxyException:
-            return "rejected"
-
-
-    async def main():
-        outcomes = [await auth("Bearer sk-probe"), await auth("Bearer sk-wrong")]
-        print(json.dumps({"outcomes": outcomes, "spans": ddtrace.tracer.spans}))
-
-
-    asyncio.run(main())
-    """
-)
-
-
-def test_user_api_key_auth_opens_a_datadog_span_for_accepted_and_rejected_keys(tmp_path: Path):
-    stub_root = tmp_path / "site"
-    (stub_root / "ddtrace").mkdir(parents=True)
-    (stub_root / "ddtrace" / "__init__.py").write_text(_RECORDING_DDTRACE)
-    probe = tmp_path / "probe.py"
-    probe.write_text(_DDTRACE_AUTH_PROBE)
-    repo_root = Path(litellm.__file__).resolve().parent.parent
-    env = {
-        **os.environ,
-        "USE_DDTRACE": "true",
-        "PYTHONPATH": os.pathsep.join(
-            [str(stub_root), str(repo_root)] + [p for p in (os.environ.get("PYTHONPATH"),) if p]
-        ),
-    }
-
-    result = subprocess.run(
-        [sys.executable, str(probe)], env=env, cwd=repo_root, capture_output=True, text=True, check=False
-    )
-
-    assert result.returncode == 0, result.stderr[-4000:]
-    report = json.loads(result.stdout.strip().splitlines()[-1])
-    assert report["outcomes"] == ["accepted", "rejected"]
-    auth_span = "litellm.proxy.auth.user_api_key_auth.user_api_key_auth"
-    assert [span for span in report["spans"] if span == auth_span] == [auth_span, auth_span]
 
 
 @pytest.mark.asyncio

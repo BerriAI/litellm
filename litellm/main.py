@@ -233,14 +233,18 @@ from litellm.utils import (
 from ._logging import WarningLogger, verbose_logger
 from .caching.caching import disable_cache, enable_cache, update_cache
 from .litellm_core_utils.core_helpers import (
+    allowed_openai_param_names,
     as_str_mapping,
     drops_unsupported_params,
     normalize_drop_params,
     safe_deep_copy,
+    without,
 )
 from .litellm_core_utils.fallback_utils import (
     async_completion_with_fallbacks,
     completion_with_fallbacks,
+    resolve_fallbacks,
+    without_global_fallbacks,
 )
 from .litellm_core_utils.prompt_templates.common_utils import (
     add_system_prompt_to_messages,
@@ -767,7 +771,6 @@ async def acompletion(
         - The `completion` function is called using `run_in_executor` to execute synchronously in the event loop.
         - If `stream` is True, the function returns an async generator that yields completion lines.
     """
-    fallbacks: Final = kwargs.get("fallbacks", None) or litellm.model_fallbacks
     mock_timeout = kwargs.get("mock_timeout", None)
 
     if mock_timeout is True:
@@ -785,6 +788,7 @@ async def acompletion(
     _ = _resolve_control_options(kwargs, model)
     caller_kwargs: Final = cast("Mapping[str, object]", {**kwargs})  # cast-ok: acompletion takes untyped kwargs
     _reject_decisions_only_chat_completion(model, kwargs.get("model_info"))
+    fallbacks: Final = resolve_fallbacks(caller_kwargs)
 
     ## PROMPT MANAGEMENT HOOKS ##
     #########################################################
@@ -829,27 +833,29 @@ async def acompletion(
         prompt_management_logger, AnthropicCacheControlHook
     )
 
-    if (
-        isinstance(litellm_logging_obj, LiteLLMLoggingObj)
+    prompt_hook_result: Final = (
+        cast(  # cast-ok: the hook returns a bare dict of request params
+            "tuple[str, list[AllMessageValues], Mapping[str, object]]",
+            await litellm_logging_obj.async_get_chat_completion_prompt(
+                model=model,
+                messages=messages,
+                non_default_params=kwargs,
+                prompt_id=prompt_id,
+                prompt_variables=kwargs.get("prompt_variables", None),
+                prompt_management_logger=prompt_management_logger,
+                tools=tools,
+                prompt_label=kwargs.get("prompt_label", None),
+                prompt_version=kwargs.get("prompt_version", None),
+                request_kwargs=kwargs,
+            ),
+        )
+        if isinstance(litellm_logging_obj, LiteLLMLoggingObj)
         and prompt_management_logger is not None
         and not each_fallback_writes_its_own_cache_dialect
-    ):
-        (
-            model,
-            messages,
-            _,
-        ) = await litellm_logging_obj.async_get_chat_completion_prompt(
-            model=model,
-            messages=messages,
-            non_default_params=kwargs,
-            prompt_id=prompt_id,
-            prompt_variables=kwargs.get("prompt_variables", None),
-            prompt_management_logger=prompt_management_logger,
-            tools=tools,
-            prompt_label=kwargs.get("prompt_label", None),
-            prompt_version=kwargs.get("prompt_version", None),
-            request_kwargs=kwargs,
-        )
+        else None
+    )
+    if prompt_hook_result is not None:
+        model, messages, _ = prompt_hook_result
         #########################################################
         # if the chat completion logging hook removed all tools,
         # set tools to None
@@ -918,8 +924,14 @@ async def acompletion(
         "shared_session": shared_session,
         "enable_json_schema_validation": enable_json_schema_validation,
     }
+    request_kwargs: Final = cast("Mapping[str, object]", kwargs)  # cast-ok: untyped request kwargs
+    prompt_params: Final[Mapping[str, object]] = prompt_hook_result[2] if prompt_hook_result is not None else {}
+    prompt_overrides: Final = {
+        key: value
+        for key, value in prompt_params.items()
+        if key not in request_kwargs or request_kwargs[key] is not value
+    }
     if custom_llm_provider is None:
-        request_kwargs: Final = cast("Mapping[str, object]", kwargs)  # cast-ok: untyped request kwargs
         _, custom_llm_provider, _, _ = get_llm_provider(
             model=model,
             custom_llm_provider=custom_llm_provider,
@@ -934,7 +946,7 @@ async def acompletion(
 
     if fallbacks is not None:
         response = await async_completion_with_fallbacks(
-            **completion_kwargs, kwargs={"fallbacks": fallbacks, **caller_kwargs}
+            **completion_kwargs, kwargs={**caller_kwargs, "fallbacks": fallbacks}
         )
         if response is None:
             raise Exception(
@@ -958,7 +970,9 @@ async def acompletion(
     try:
         # Use a partial function to pass your keyword arguments
         kwargs.pop("acompletion", None)
-        func: Final = partial(completion, **completion_kwargs, **kwargs)
+        func: Final = partial(
+            completion, **{**completion_kwargs, **prompt_overrides}, **without(request_kwargs, *prompt_overrides)
+        )
 
         # Add the context to the function
         ctx: Final = contextvars.copy_context()
@@ -999,7 +1013,7 @@ async def acompletion(
                     messages=messages,
                     optional_params={
                         k: v
-                        for k, v in completion_kwargs.items()
+                        for k, v in {**completion_kwargs, **prompt_overrides}.items()
                         if v is not None
                         and k
                         not in (
@@ -1032,7 +1046,7 @@ async def acompletion(
             model=model,
             custom_llm_provider=custom_llm_provider,
             original_exception=e,
-            completion_kwargs=completion_kwargs,
+            completion_kwargs={**completion_kwargs, **prompt_overrides},
             extra_kwargs=kwargs,
         )
 
@@ -2843,11 +2857,6 @@ def _complete_custom_openai(
     )
 
     headers = headers or litellm.headers
-    outbound_headers: Final = (
-        headers
-        if provider_config is None
-        else with_attribution_headers(provider_config.get_attribution_headers(), headers)
-    )
 
     # Add GitHub Copilot headers (same as /responses endpoint does)
     if custom_llm_provider == "github_copilot":
@@ -2864,13 +2873,27 @@ def _complete_custom_openai(
         copilot_headers: Final = get_copilot_default_headers(
             user_session.token if user_session is not None else Authenticator().get_api_key()
         )
+        is_app_session: Final = user_session is not None and user_session.is_app
+        if headers and is_app_session:
+            copilot_headers.update(
+                cast("dict[str, str]", headers)  # cast-ok: HTTP request headers have string names and values
+            )
         if extra_headers:
             copilot_headers.update(
                 cast("dict[str, str]", extra_headers)  # cast-ok: extra_headers is a str-valued request dict
             )
         if user_session is not None:
-            pin_session_authorization(copilot_headers, user_session.token)
+            pin_session_authorization(copilot_headers, user_session.token, user_session.integration_id)
         extra_headers = copilot_headers
+        if is_app_session:
+            headers = dict[str, object](copilot_headers)  # rebind-ok: pin App headers in both transports
+
+    request_headers: Final = cast("dict[str, object] | None", headers)  # cast-ok: untyped request header boundary
+    outbound_headers: Final = (
+        request_headers
+        if provider_config is None
+        else with_attribution_headers(provider_config.get_attribution_headers(), request_headers)
+    )
 
     use_base_llm_http_handler: Final = get_secret_bool("EXPERIMENTAL_OPENAI_BASE_LLM_HTTP_HANDLER")
 
@@ -5786,7 +5809,6 @@ def completion(
     metadata: Final = kwargs.get("metadata", None)
     model_info: Final = kwargs.get("model_info", None)
     proxy_server_request: Final = kwargs.get("proxy_server_request", None)
-    fallbacks = kwargs.get("fallbacks", None)
     provider_specific_header: Final = cast(
         ProviderSpecificHeader | Sequence[ProviderSpecificHeader] | None,
         kwargs.get("provider_specific_header", None),
@@ -5919,10 +5941,14 @@ def completion(
         elif num_retries is not None:
             max_retries = num_retries
         logging: Final[LiteLLMLoggingObj] = cast(LiteLLMLoggingObj, litellm_logging_obj)
-        fallbacks = fallbacks or litellm.model_fallbacks
+        routing_kwargs: Final = cast("Mapping[str, object]", kwargs)  # cast-ok: kwargs is the untyped request dict
+        fallbacks: Final = resolve_fallbacks(routing_kwargs)
         if fallbacks is not None:
-            return completion_with_fallbacks(  # pyright: ignore[reportReturnType]  # fallback runner is untyped; resolves to ModelResponse|CustomStreamWrapper at runtime
-                **args
+            fallback_runner: Final = (
+                async_completion_with_fallbacks if acompletion is True else completion_with_fallbacks
+            )
+            return fallback_runner(  # pyright: ignore[reportReturnType]  # fallback runner is untyped; resolves to ModelResponse|CustomStreamWrapper (or its coroutine) at runtime
+                **{**args, "kwargs": {**kwargs, "fallbacks": fallbacks}}
             )
         if model_list is not None:
             deployments: Final = [m["litellm_params"] for m in model_list if m["model_name"] == model]
@@ -5942,7 +5968,6 @@ def completion(
         if deployment_id is not None:  # azure llms
             model = deployment_id
             custom_llm_provider = "azure"
-        routing_kwargs: Final = cast("Mapping[str, object]", kwargs)  # cast-ok: kwargs is the untyped request dict
         requested_model: Final = model
         model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(
             model=model,
@@ -6097,7 +6122,7 @@ def completion(
             responses_api_model_info.get("mode") == "responses" and not skip_responses_api_bridge
         )
         allowed_openai_params: Final[list[str] | None] = (
-            [*(kwargs.get("allowed_openai_params") or []), "reasoning_effort"]
+            [*allowed_openai_param_names(kwargs.get("allowed_openai_params")), "reasoning_effort"]
             if bridges_to_responses_api
             or reasoning_effort_needs_allowing(
                 chat_reasoning.effort,
@@ -6318,6 +6343,9 @@ def completion(
                     *AGENTIC_LOOP_CONTROL_KWARGS_KEYS,
                     "github_copilot_auth_type",
                     "github_copilot_host",
+                    "github_copilot_app_id",
+                    "github_copilot_app_installation_id",
+                    "github_copilot_app_private_key_ref",
                     "github_copilot_user_session",
                     PROVIDER_AFFINITY_HEADER_KWARG_KEY,
                     "fireworks_forward_user_id",
@@ -6740,6 +6768,16 @@ def _is_not_resent_failure(error: BaseException) -> bool:
     return isinstance(error, Exception) and not is_resent_failure(error)
 
 
+class _RetryCallState(Protocol):
+    kwargs: Mapping[str, object]
+
+
+def _carry_failed_attempt(retry_state: _RetryCallState) -> None:
+    logging_obj: Final = retry_state.kwargs.get("litellm_logging_obj")
+    if isinstance(logging_obj, LiteLLMLoggingObj):
+        logging_obj.carry_failed_attempt_usage()
+
+
 def completion_with_retries(*args, **kwargs):
     """
     Executes a litellm.completion() with 3 retries
@@ -6759,12 +6797,14 @@ def completion_with_retries(*args, **kwargs):
         retryer = tenacity.Retrying(
             wait=tenacity.wait_exponential(multiplier=1, max=10),
             stop=tenacity.stop_after_attempt(num_retries),
+            before=_carry_failed_attempt,
             retry=tenacity.retry_if_exception(_is_not_resent_failure),
             reraise=True,
         )
     else:
         retryer = tenacity.Retrying(
             stop=tenacity.stop_after_attempt(num_retries),
+            before=_carry_failed_attempt,
             retry=tenacity.retry_if_exception(_is_not_resent_failure),
             reraise=True,
         )
@@ -6790,12 +6830,14 @@ async def acompletion_with_retries(*args, **kwargs):
         retryer = tenacity.AsyncRetrying(
             wait=tenacity.wait_exponential(multiplier=1, max=10),
             stop=tenacity.stop_after_attempt(num_retries),
+            before=_carry_failed_attempt,
             retry=tenacity.retry_if_exception(_is_not_resent_failure),
             reraise=True,
         )
     else:
         retryer = tenacity.AsyncRetrying(
             stop=tenacity.stop_after_attempt(num_retries),
+            before=_carry_failed_attempt,
             retry=tenacity.retry_if_exception(_is_not_resent_failure),
             reraise=True,
         )
@@ -6823,12 +6865,14 @@ def responses_with_retries(*args, **kwargs):
         retryer = tenacity.Retrying(
             wait=tenacity.wait_exponential(multiplier=1, max=10),
             stop=tenacity.stop_after_attempt(num_retries),
+            before=_carry_failed_attempt,
             retry=tenacity.retry_if_exception(_is_not_resent_failure),
             reraise=True,
         )
     else:
         retryer = tenacity.Retrying(
             stop=tenacity.stop_after_attempt(num_retries),
+            before=_carry_failed_attempt,
             retry=tenacity.retry_if_exception(_is_not_resent_failure),
             reraise=True,
         )
@@ -6855,12 +6899,14 @@ async def aresponses_with_retries(*args, **kwargs):
         retryer = tenacity.AsyncRetrying(
             wait=tenacity.wait_exponential(multiplier=1, max=10),
             stop=tenacity.stop_after_attempt(num_retries),
+            before=_carry_failed_attempt,
             retry=tenacity.retry_if_exception(_is_not_resent_failure),
             reraise=True,
         )
     else:
         retryer = tenacity.AsyncRetrying(
             stop=tenacity.stop_after_attempt(num_retries),
+            before=_carry_failed_attempt,
             retry=tenacity.retry_if_exception(_is_not_resent_failure),
             reraise=True,
         )
@@ -6897,6 +6943,7 @@ async def aembedding(*args, **kwargs) -> EmbeddingResponse:
             model=model,
             custom_llm_provider=custom_llm_provider,
             api_base=kwargs.get("api_base", None),
+            litellm_params=GenericLiteLLMParams(**kwargs),  # pyright: ignore[reportUnknownArgumentType]  # kwargs is the existing untyped SDK boundary
         )
 
         # Await normally
@@ -8423,7 +8470,7 @@ async def aadapter_generate_content(
 
     coro: Final = cast(
         Coroutine[object, object, dict[str, object] | AsyncIterator[bytes]],
-        GenerateContentToCompletionHandler.generate_content_handler(**kwargs, _is_async=True),
+        GenerateContentToCompletionHandler.generate_content_handler(**kwargs, _is_async=True, custom_logging_obj=None),
     )
     return await coro
 
@@ -9599,12 +9646,13 @@ async def ahealth_check(
             "batch": ("alist_batches" if custom_llm_provider in LIST_BATCHES_SUPPORTED_PROVIDERS else "acompletion"),
         }.get("decisions" if is_decisions_model_mode(mode) else mode, "acompletion")
         if "*" in model:
-            return await HealthCheckHelpers.ahealth_check_wildcard_models(
-                model=model,
-                custom_llm_provider=custom_llm_provider,
-                model_params=model_params,
-                litellm_logging_obj=litellm_logging_obj,
-            )
+            with without_global_fallbacks():
+                return await HealthCheckHelpers.ahealth_check_wildcard_models(
+                    model=model,
+                    custom_llm_provider=custom_llm_provider,
+                    model_params=model_params,
+                    litellm_logging_obj=litellm_logging_obj,
+                )
 
         mode_handlers: Final = HealthCheckHelpers.get_mode_handlers(
             model=model,
@@ -9616,7 +9664,8 @@ async def ahealth_check(
 
         handler_mode: Final = "decisions" if is_decisions_model_mode(mode) else mode
         if handler_mode in mode_handlers:
-            _response: Final = await mode_handlers[handler_mode]()
+            with without_global_fallbacks():
+                _response: Final = await mode_handlers[handler_mode]()
             _response_headers: Final = cast(  # cast-ok: provider headers are stored as a string-keyed mapping
                 Mapping[str, object], (get_hidden_params(_response) or {}).get("headers", {}) or {}
             )

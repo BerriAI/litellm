@@ -164,19 +164,18 @@ class LangfuseObservationList(BaseModel):
     data: list[LangfuseObservation] = []
 
 
-class LangfuseOtelMetadata(BaseModel):
-    """Langfuse stores every OTel span attribute under metadata.attributes."""
-
-    model_config = ConfigDict(extra="ignore")
-
-    attributes: dict[str, str] = {}
+_FLATTENED_ATTRIBUTE_PREFIX: Final = "attributes."
 
 
-def otel_attributes(obs: LangfuseObservation) -> dict[str, str]:
-    try:
-        return LangfuseOtelMetadata.model_validate(obs.metadata).attributes
-    except ValidationError:
-        return {}
+def otel_attributes(obs: LangfuseObservation) -> dict[str, JsonValue]:
+    metadata: Final = obs.metadata if isinstance(obs.metadata, dict) else {}
+    nested: Final = metadata.get("attributes")
+    flattened: Final = {
+        key.removeprefix(_FLATTENED_ATTRIBUTE_PREFIX): value
+        for key, value in metadata.items()
+        if key.startswith(_FLATTENED_ATTRIBUTE_PREFIX)
+    }
+    return (nested if isinstance(nested, dict) else {}) | flattened
 
 
 def is_otel_v2_generation(obs: LangfuseObservation, *, key_alias: str) -> bool:

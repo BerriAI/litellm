@@ -17,7 +17,7 @@ from pydantic import JsonValue, ValidationError
 
 import litellm
 from litellm.caching.in_memory_cache import InMemoryCache
-from litellm.constants import PROXY_DB_LOOKUP_STALL_WINDOW_SECONDS
+from litellm.constants import KEY_EXPIRY_ALERT_MAX_DAYS, PROXY_DB_LOOKUP_STALL_WINDOW_SECONDS
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
 from litellm.models.project import LiteLLM_ProjectTable
@@ -102,6 +102,8 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
     persist_deleted_verification_tokens,
     prepare_key_update_data,
     prepare_metadata_fields,
+    raise_on_invalid_key_expiry_alert_days,
+    raise_on_invalid_key_logging_config,
     raise_on_logging_credential_change,
     reset_key_spend_fn,
     update_key_fn,
@@ -1857,6 +1859,7 @@ def _key_generation_prisma_client(
 
     budget_table: Final = MagicMock()
     budget_table.create = AsyncMock(return_value=MagicMock(budget_id="created-budget-id"))
+    budget_table.find_unique = AsyncMock(return_value=LiteLLM_BudgetTable(budget_id="caller-budget-id"))
     budget_table.delete = AsyncMock()
     object_permission_table: Final = MagicMock()
     object_permission_table.create = AsyncMock(
@@ -1865,6 +1868,7 @@ def _key_generation_prisma_client(
     object_permission_table.delete = AsyncMock()
 
     prisma_client.db.litellm_budgettable = budget_table
+    prisma_client.writer_db.litellm_budgettable = budget_table
     prisma_client.db.litellm_objectpermissiontable = object_permission_table
     prisma_client.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
     prisma_client.writer_db.litellm_projecttable.find_unique = AsyncMock(return_value=project_record)
@@ -2045,6 +2049,7 @@ async def test_generate_key_end_user_budget_id_must_name_an_existing_budget():
     """A typo in end_user_budget_id would silently leave new customers on the proxy-wide default,
     so key creation rejects an id that matches no budget row."""
     mock_prisma_client = MagicMock()
+    mock_prisma_client.writer_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_budgettable.find_unique = AsyncMock(return_value=None)
     with pytest.raises(HTTPException) as exc:
         await _validate_end_user_budget_id_change(
@@ -2066,6 +2071,7 @@ async def test_generate_key_end_user_budget_id_lands_in_key_metadata():
     budget_row = MagicMock()
     budget_row.model_dump.return_value = {"budget_id": "svc-a-budget", "max_budget": 0.5}
     mock_prisma_client = MagicMock()
+    mock_prisma_client.writer_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_budgettable.find_unique = AsyncMock(return_value=budget_row)
     with (
         patch(  # test-quality-ok: the helper reads proxy_server globals, no seam
@@ -9697,6 +9703,10 @@ async def test_key_with_budget_id_does_not_store_budget_duration():
     from unittest.mock import AsyncMock, MagicMock, patch
 
     mock_prisma = MagicMock()
+    mock_prisma.writer_db = mock_prisma.db
+    mock_budget = MagicMock()
+    mock_budget.model_dump.return_value = {"budget_id": "7d-budget-tier", "budget_duration": "7d"}
+    mock_prisma.db.litellm_budgettable.find_unique = AsyncMock(return_value=mock_budget)
 
     mock_generate_key = AsyncMock(
         return_value={
@@ -9741,10 +9751,6 @@ async def test_key_with_budget_id_does_not_store_budget_duration():
         f"budget_duration; got: {call_kwargs.get('key_budget_duration')}"
     )
 
-    # No budget tier lookup - we don't copy budget_duration onto the key
-    mock_prisma.db.litellm_budgettable.find_unique.assert_not_called()
-
-
 @pytest.mark.asyncio
 async def test_key_does_not_override_explicit_budget_duration():
     """
@@ -9755,9 +9761,11 @@ async def test_key_does_not_override_explicit_budget_duration():
     from unittest.mock import AsyncMock, MagicMock, patch
 
     mock_prisma = MagicMock()
+    mock_prisma.writer_db = mock_prisma.db
     # The budget tier has budget_duration="7d"
     mock_budget_row = MagicMock()
     mock_budget_row.budget_duration = "7d"
+    mock_budget_row.model_dump.return_value = {"budget_id": "7d-budget-tier", "budget_duration": "7d"}
     mock_prisma.db.litellm_budgettable.find_unique = AsyncMock(
         return_value=mock_budget_row
     )
@@ -9805,8 +9813,6 @@ async def test_key_does_not_override_explicit_budget_duration():
         f"but got: {call_kwargs.get('key_budget_duration')}"
     )
 
-    # The budget tier should NOT have been looked up since budget_duration was explicit
-    mock_prisma.db.litellm_budgettable.find_unique.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -24618,6 +24624,40 @@ def test_user_new_without_a_key_does_not_check_guardrail_names(spend_permission_
 
     assert response.status_code == 200, response.text
     find_many.assert_not_awaited()
+
+
+@pytest.mark.parametrize("value", [1, 7, KEY_EXPIRY_ALERT_MAX_DAYS])
+def test_key_expiry_metadata_accepts_day_counts(value: int) -> None:
+    assert raise_on_invalid_key_expiry_alert_days({"key_expiry_alert_days": value}) is None
+    assert raise_on_invalid_key_expiry_alert_days({}) is None
+
+
+@pytest.mark.parametrize("value", [None, "7", True, 7.0, {}, [], [7], [7, 1], 0, -1, KEY_EXPIRY_ALERT_MAX_DAYS + 1])
+def test_key_expiry_metadata_rejects_invalid_thresholds(value: object) -> None:
+    with pytest.raises(HTTPException) as exc:
+        raise_on_invalid_key_expiry_alert_days({"key_expiry_alert_days": value})
+    assert exc.value.status_code == 400
+    assert "key_expiry_alert_days" in str(exc.value.detail)
+
+
+def test_key_generate_accepts_expiry_alert_opt_in(spend_permission_client: TestClient) -> None:
+    response: Final = spend_permission_client.post("/key/generate", json={"metadata": {"key_expiry_alert_days": 7}})
+    assert response.status_code == 200, response.text
+    assert response.json()["metadata"]["key_expiry_alert_days"] == 7
+
+
+@pytest.mark.parametrize("route", ["/key/generate", "/key/update"])
+def test_key_writes_reject_invalid_expiry_alert_days(spend_permission_client: TestClient, route: str) -> None:
+    from litellm.proxy import proxy_server
+
+    proxy_server.prisma_client.db.litellm_verificationtoken.find_unique.return_value = LiteLLM_VerificationToken(
+        token=hash_token("sk-test"), metadata={}
+    )
+    response: Final = spend_permission_client.post(
+        route, json={"key": "sk-test", "metadata": {"key_expiry_alert_days": [7, 1]}}
+    )
+    assert response.status_code == 400, response.text
+    assert "key_expiry_alert_days" in response.text
 
 
 @pytest.mark.asyncio

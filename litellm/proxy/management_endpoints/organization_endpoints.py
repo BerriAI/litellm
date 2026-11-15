@@ -507,6 +507,9 @@ async def new_organization(
         except Exception:
             pass
 
+    from litellm.proxy.management_helpers.utils import validate_scalar_budget_attachment
+
+    await validate_scalar_budget_attachment(prisma_client, data.budget_id)
     if data.budget_id is None:
         """
         Every organization needs a budget attached.

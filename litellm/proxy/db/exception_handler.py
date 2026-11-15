@@ -14,6 +14,7 @@ from litellm.proxy._types import (
     ProxyException,
 )
 from litellm.proxy.db.db_lookup_gate import DBLookupDeadlineExceeded
+from litellm.rust_bridge._native import NativeDatabaseFailure
 from litellm.secret_managers.main import str_to_bool
 
 # Bounds the __cause__/__context__ walk in find_database_service_unavailable_error_in_chain.
@@ -175,6 +176,8 @@ class PrismaDBExceptionHandler:
         """
         import prisma.engine.errors
 
+        if isinstance(e, NativeDatabaseFailure):
+            return e.unavailable
         if isinstance(e, (*DB_CONNECTION_ERROR_TYPES, DBLookupDeadlineExceeded)):
             return True
         if isinstance(e, _exception_types(prisma.engine.errors.EngineConnectionError)):
@@ -769,6 +772,8 @@ _DATA_REJECTED_SQLSTATE_CLASSES: Final = frozenset({"22", "23"})
 
 def db_write_failure_is_requeue_safe(e: Exception) -> bool:
     """Whether a failed write provably never applied, so its rows can be sent again without double counting."""
+    if isinstance(e, NativeDatabaseFailure):
+        return e.requeue_safe
     if isinstance(e, DB_CONNECTION_ERROR_TYPES):
         return isinstance(e, DB_RETRY_SAFE_ERROR_TYPES)
     sqlstate: Final = PrismaDBExceptionHandler.postgres_sqlstate(e)
@@ -776,8 +781,17 @@ def db_write_failure_is_requeue_safe(e: Exception) -> bool:
 
 
 def db_write_never_sent(e: Exception) -> bool:
-    """Whether the database could not take the write at all, because it was unreachable (P1001),
-    refusing connections (57P03) or full (53300, P2024), so even a non-idempotent write can be sent again."""
+    """Whether the database could not take the write at all, because the client had no query engine to send it
+    to (ClientNotConnectedError, NotConnectedError, ConnectError), it was unreachable (P1001), refusing connections
+    (57P03) or full (53300, P2024), so even a non-idempotent write can be sent again."""
+    import prisma
+    import prisma.engine.errors
+
+    unsent_types: Final = _exception_types(
+        prisma.errors.ClientNotConnectedError, prisma.engine.errors.NotConnectedError
+    )
+    if isinstance(e, (*DB_RETRY_SAFE_ERROR_TYPES, *unsent_types)):
+        return True
     if PrismaDBExceptionHandler.is_database_not_accepting_connections_error(e):
         return True
     if PrismaDBExceptionHandler.is_database_capacity_error(e):

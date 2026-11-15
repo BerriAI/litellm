@@ -71,7 +71,7 @@ from e2e_http import (
     unwrap,
 )
 from lifecycle import ResourceManager
-from models import KeyGenerateBody, KeyMetadata, LiteLLMParamsBody, SpendLogRow
+from models import KeyGenerateBody, KeyMetadata, LiteLLMParamsBody, SpendLogRow, TeamNewBody
 from pydantic import BaseModel, Field
 
 pytestmark = pytest.mark.e2e
@@ -169,7 +169,7 @@ def render_jsonl(model: str) -> bytes:
         "body": {
             "model": model,
             "messages": [{"role": "user", "content": "ping"}],
-            "max_tokens": 8,
+            "max_completion_tokens": 8,
         },
     }
     return (json.dumps(line) + "\n").encode()
@@ -248,6 +248,16 @@ def assert_batch_object(batch: BatchObject) -> None:
     ), "batch.created_at missing"
 
 
+def key_in_team_limited_to(client: BatchClient, resources: ResourceManager, model: str) -> str:
+    team_id: Final = client.proxy.create_team(
+        TeamNewBody(team_alias=f"e2e-batch-lifecycle-{unique_marker()}", models=[model])
+    )
+    resources.defer(lambda: client.proxy.delete_team(team_id))
+    key: Final = client.proxy.generate_key(KeyGenerateBody(team_id=team_id, user_id="e2e-test-user"))
+    resources.defer(lambda: client.proxy.delete_key(key))
+    return key
+
+
 @pytest.mark.parametrize(
     "cap",
     [
@@ -265,7 +275,7 @@ def test_batch_lifecycle(
     resources: ResourceManager,
     batch_deployments: None,
 ) -> None:
-    key = resources.key()
+    key = key_in_team_limited_to(client, resources, cap.model)
     provider = op_provider(cap)
 
     file = unwrap(upload_for_scenario(client, cap, render_jsonl(cap.jsonl_model), key))
@@ -792,7 +802,7 @@ def _multi_request_jsonl(model: str, n: int) -> bytes:
                 "body": {
                     "model": model,
                     "messages": [{"role": "user", "content": "ping"}],
-                    "max_tokens": 8,
+                    "max_completion_tokens": 8,
                 },
             }
         )

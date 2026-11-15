@@ -1,6 +1,7 @@
 import json
 import asyncio
 import os
+from datetime import datetime, timezone
 from typing import Final
 from unittest.mock import Mock, patch
 from unittest.mock import AsyncMock, MagicMock
@@ -2247,11 +2248,15 @@ def test_bedrock_embedding_extra_body_cannot_replace_the_input_or_a_mapped_param
     assert json.loads(route.calls.last.request.read())[field] == expected
 
 
-def test_bedrock_embedding_signs_the_body_it_sends(respx_mock: respx.MockRouter) -> None:
+def test_bedrock_embedding_signs_the_body_it_sends(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
     from botocore.auth import SigV4Auth
     from botocore.awsrequest import AWSRequest
     from botocore.credentials import Credentials
 
+    signing_time: Final = datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+    monkeypatch.setattr("botocore.auth.get_current_datetime", lambda remove_tzinfo=True: signing_time)
     route = respx_mock.post(
         "https://bedrock-runtime.us-east-1.amazonaws.com/model/amazon.titan-embed-text-v2:0/invoke"
     ).mock(return_value=httpx.Response(200, json=titan_embedding_response))
@@ -2270,10 +2275,10 @@ def test_bedrock_embedding_signs_the_body_it_sends(respx_mock: respx.MockRouter)
     replay: Final = AWSRequest(
         method="POST", url=str(sent.url), data=sent.content, headers={"Content-Type": "application/json"}
     )
-    replay.context["timestamp"] = sent.headers["x-amz-date"]
     SigV4Auth(
         Credentials("AKIAIOSFODNN7EXAMPLE", "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"), "bedrock", "us-east-1"
     ).add_auth(replay)
 
+    assert sent.headers["x-amz-date"] == "20260102T030405Z"
     assert json.loads(sent.content)["dimensions"] == 256
     assert replay.headers["Authorization"] == sent.headers["authorization"]

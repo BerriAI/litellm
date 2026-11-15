@@ -5,10 +5,10 @@ import UsageStatStrip from "@/app/(dashboard)/usage/_components/components/overv
 import { ErrorState } from "@/components/shared/ErrorState";
 import { Button } from "@/components/ui/button";
 import { extractProxyErrorMessage } from "@/lib/http/client";
-import { uiHref } from "@/utils/uiHref";
 import CustomerMemberSpend from "../_components/CustomerMemberSpend";
 import CustomerUsageHeader from "../_components/CustomerUsageHeader";
-import CustomerHierarchyNavigation from "../_components/CustomerHierarchyNavigation";
+import CustomerHierarchyNavigation, { useCustomerHierarchyLinks } from "../_components/CustomerHierarchyNavigation";
+import CustomerBudgetSummary from "../_components/CustomerBudgetSummary";
 import CustomerUsageRankings from "../_components/CustomerUsageRankings";
 import CustomerUsageTrend from "../_components/CustomerUsageTrend";
 import useCustomerHierarchyUsage from "../_components/useCustomerHierarchyUsage";
@@ -26,6 +26,7 @@ const TOP_DIMENSION_LABELS = {
 
 export default function CustomerHierarchyUsagePage() {
   const { t } = useTranslation();
+  const { customerHierarchyHref, customersHref } = useCustomerHierarchyLinks();
   const {
     params,
     scope,
@@ -48,13 +49,15 @@ export default function CustomerHierarchyUsagePage() {
     setPage,
   } = useCustomerHierarchyUsage();
   const metricLabel = t(METRIC_LABELS[params.metric]);
+  const budgetEntity = data?.member ?? data?.team ?? data?.organization;
+  const budgetSettingsHref = scope ? `${customerHierarchyHref("manage", scope)}&tab=settings` : null;
 
   if (!scope)
     return (
       <div className="px-8 py-12">
         <h1 className="text-xl font-semibold">{t("customerPortal.analytics.title")}</h1>
         <p className="mt-2 text-sm text-muted-foreground">{t("customerPortal.analytics.selectOrganization")}</p>
-        <a className="mt-5 inline-block text-sm font-medium text-primary hover:underline" href={uiHref("customers")}>
+        <a className="mt-5 inline-block text-sm font-medium text-primary hover:underline" href={customersHref}>
           {t("customerPortal.analytics.backToCustomers")}
         </a>
       </div>
@@ -90,6 +93,10 @@ export default function CustomerHierarchyUsagePage() {
             requestCountsPending={usage.isPending}
             budget={null}
             showBudgetHint={false}
+            spendDetails={
+              budgetEntity &&
+              budgetSettingsHref && <CustomerBudgetSummary entity={budgetEntity} settingsHref={budgetSettingsHref} />
+            }
           />
           <CustomerUsageTrend
             data={data}
@@ -103,6 +110,7 @@ export default function CustomerHierarchyUsagePage() {
             onMetricChange={setMetric}
             onBucketChange={setBucket}
           />
+          {data && <CustomerMemberSpend data={data} onMemberClick={(id) => drillDown("members", id)} />}
           {!usage.isPending && (
             <>
               <div className="flex flex-wrap items-baseline justify-between gap-2">
@@ -124,7 +132,6 @@ export default function CustomerHierarchyUsagePage() {
               />
             </>
           )}
-          {data && <CustomerMemberSpend data={data} onMemberClick={(id) => drillDown("members", id)} />}
           {(params.team || params.member) && (
             <Button variant="link" className="h-auto p-0 text-xs text-muted-foreground" onClick={selectOrganization}>
               {t("customerPortal.analytics.allOrganizationUsage")}
