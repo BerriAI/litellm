@@ -169,7 +169,7 @@ class DualCache(BaseCache):
         key,
         parent_otel_span: Span | None = None,
         local_only: bool = False,
-        **kwargs,
+        **kwargs: object,
     ):
         # Try to fetch from in-memory cache first
         try:
@@ -245,7 +245,7 @@ class DualCache(BaseCache):
         key,
         parent_otel_span: Span | None = None,
         local_only: bool = False,
-        **kwargs,
+        **kwargs: object,
     ):
         # Try to fetch from in-memory cache first
         try:
@@ -451,7 +451,7 @@ class DualCache(BaseCache):
             with_traceback=True,
         )
 
-    async def async_set_cache(self, key, value, local_only: bool = False, **kwargs):
+    async def async_set_cache(self, key, value, local_only: bool = False, **kwargs: object):
         print_verbose("async set cache: cache key: %s; local_only: %s; value: %s", key, local_only, value)
         try:
             if self.in_memory_cache is not None:
