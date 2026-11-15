@@ -459,8 +459,6 @@ async def test_the_primary_and_fallback_streams_are_closed(make_core: MakeCore, 
     assert [stream.closed for stream in opened] == [True, True]
 
 
-# --- same-group retries before output --------------------------------------------------
-
 GROUP_A_TWICE: Final = [deployment("a", "a1"), deployment("a", "a2")]
 
 
@@ -531,6 +529,14 @@ async def test_a_second_failed_stream_counts_as_a_second_retry(make_core: MakeCo
     assert await collect_event_types(stream) == [CREATED, TEXT_DELTA, COMPLETED]
     assert len(host.deployments_called()) == 3
     assert hidden(stream)["additional_headers"]["x-litellm-attempted-retries"] == 2
+
+
+async def test_a_retried_stream_keeps_the_model_group_header(make_core: MakeCore, host: ScriptedHost) -> None:
+    host.answer("*", responses_stream(Event(CREATED), error=cut()), retried_ok())
+    stream = await open_stream(make_core(model_list=GROUP_A_TWICE, num_retries=1))
+    served_as: Final = hidden(stream)["additional_headers"]["x-litellm-model-group"]
+    assert await collect_event_types(stream) == [CREATED, TEXT_DELTA, COMPLETED]
+    assert hidden(stream)["additional_headers"]["x-litellm-model-group"] == served_as
 
 
 async def test_the_failed_stream_is_closed_before_the_retry_is_opened(make_core: MakeCore, host: ScriptedHost) -> None:

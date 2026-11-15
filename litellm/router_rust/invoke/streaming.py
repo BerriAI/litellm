@@ -561,6 +561,10 @@ def _prepare_fallback_hidden_params(
     return fallback_hidden_params, cast("dict[str, object]", fallback_headers)  # cast-ok: a dict of headers
 
 
+def _additional_headers(response: object) -> dict[str, object]:
+    return _prepare_fallback_hidden_params(response)[1]
+
+
 def _apply_fallback_hidden_params_to_item(
     fallback_item: object,
     prepared_fallback_hidden_params: _Prepared,
@@ -1852,8 +1856,12 @@ async def _responses_yield_retried(
         inner_attempt.attempted_retries = attempted
         inner_attempt.committed_budget = budget
 
+    served_as: Final = _additional_headers(wrapper).get("x-litellm-model-group")
+
     def follow_source() -> _Prepared:
         prepared: Final = adopt_headers(response)
+        if served_as is not None:
+            _additional_headers(wrapper).setdefault("x-litellm-model-group", served_as)
         newest: Final = prepared[1].get("x-litellm-attempted-retries")
         _ = add_retry_headers_to_response(
             response=wrapper,
