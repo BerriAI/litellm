@@ -4479,7 +4479,7 @@ class ProxyBaseLLMRequestProcessing:
         so the failed spend is still written and the budget reservation released;
         a replacement error the hook raises has no client left to reach.
         """
-        request_data: Final = self.data
+        request_data: Final = cast(dict[str, object], self._request_fields())  # cast-ok: live legacy request dict
         route_type: Final = self.route_type
 
         async def _on_detached_stream_failure(failed_logging_obj: LiteLLMLoggingObj, exc: Exception) -> None:
