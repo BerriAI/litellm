@@ -5,21 +5,13 @@ import { parseAsString, parseAsInteger, useQueryStates } from "nuqs";
 import { Button } from "@/components/ui/button";
 import { useTranslation } from "react-i18next";
 import { Search } from "lucide-react";
-import { formatCompact, formatUsd } from "@/app/(dashboard)/usage/_components/components/overview/overviewData";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { cn } from "@/lib/cva.config";
-import type { CustomerHierarchyUsage, CustomerUsageEntity } from "./customerUsageApi";
+import type { CustomerHierarchyUsage } from "./customerUsageApi";
+import { CustomerSpendCells, CustomerSpendHeaders, CustomerSpendIdentity } from "./CustomerSpendCells";
 
 const MEMBER_TABLE_PARSERS = { memberSearch: parseAsString.withDefault(""), memberPage: parseAsInteger.withDefault(1) };
 const PAGE_SIZE = 20;
-const memberStatus = (member: CustomerUsageEntity) => {
-  if (member.budgetLimit === null) return "customerPortal.analytics.noCap" as const;
-  if (member.spend > member.budgetLimit) return "customerPortal.analytics.overBudget" as const;
-  if (member.spend === member.budgetLimit) return "customerPortal.analytics.atBudget" as const;
-  return "customerPortal.analytics.withinBudget" as const;
-};
-
 export default function CustomerMemberSpend({
   data,
   onMemberClick,
@@ -30,13 +22,17 @@ export default function CustomerMemberSpend({
   const { t } = useTranslation();
   const [table, setTable] = useQueryStates(MEMBER_TABLE_PARSERS);
   const search = table.memberSearch;
-  const usage = useMemo(() => new Map(data.members.map((member) => [member.id, member])), [data.members]);
+  const usage = useMemo(() => new Map(data.monthlyMembers.map((member) => [member.id, member])), [data.monthlyMembers]);
+  const yearlyUsage = useMemo(
+    () => new Map(data.yearlyMembers.map((member) => [member.id, member.spend])),
+    [data.yearlyMembers],
+  );
   const members = useMemo(
     () =>
       data.memberBudgets
         .filter((member) => member.label.toLocaleLowerCase().includes(search.toLocaleLowerCase()))
-        .map((member) => ({ ...member, rangeUsage: usage.get(member.id) }))
-        .sort((a, b) => (b.rangeUsage?.spend ?? 0) - (a.rangeUsage?.spend ?? 0) || a.label.localeCompare(b.label)),
+        .map((member) => ({ ...member, monthlyUsage: usage.get(member.id) }))
+        .sort((a, b) => (b.monthlyUsage?.spend ?? 0) - (a.monthlyUsage?.spend ?? 0) || a.label.localeCompare(b.label)),
     [data.memberBudgets, search, usage],
   );
 
@@ -44,7 +40,7 @@ export default function CustomerMemberSpend({
   const page = Math.max(1, Math.min(table.memberPage, lastPage));
   const start = (page - 1) * PAGE_SIZE;
   return (
-    <section className="border-t pt-6" aria-label={t("customerPortal.analytics.memberSpend")}>
+    <section className="border-b pb-6" aria-label={t("customerPortal.analytics.memberSpend")}>
       <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
         <div>
           <h2 className="text-base font-medium tracking-tight">{t("customerPortal.analytics.memberSpend")}</h2>
@@ -65,67 +61,27 @@ export default function CustomerMemberSpend({
         <TableHeader>
           <TableRow>
             <TableHead className="pl-0">{t("customerPortal.analytics.member")}</TableHead>
-            <TableHead className="text-right">{t("customerPortal.analytics.spend")}</TableHead>
-            <TableHead className="text-right">{t("customerPortal.analytics.tokens")}</TableHead>
-            <TableHead className="text-right">{t("customerPortal.analytics.currentBudget")}</TableHead>
-            <TableHead className="pr-0 text-right">{t("customerPortal.analytics.status")}</TableHead>
+            <CustomerSpendHeaders />
           </TableRow>
         </TableHeader>
         <TableBody>
-          {members.slice(start, start + PAGE_SIZE).map((member) => {
-            const atLimit = member.budgetLimit !== null && member.spend >= member.budgetLimit;
-            return (
-              <TableRow key={member.id}>
-                <TableCell className="py-4 pl-0">
-                  <div className="flex items-center gap-3">
-                    <span
-                      aria-hidden="true"
-                      className="flex size-8 shrink-0 items-center justify-center rounded-full bg-muted text-xs font-medium"
-                    >
-                      {member.label
-                        .split(/\s+/)
-                        .slice(0, 2)
-                        .map((part) => part.charAt(0))
-                        .join("")
-                        .toLocaleUpperCase()}
-                    </span>
-                    <div className="min-w-0">
-                      <button
-                        type="button"
-                        className="block text-left font-medium hover:text-primary focus-visible:outline-2 focus-visible:outline-ring"
-                        onClick={() => onMemberClick(member.id)}
-                      >
-                        {member.label}
-                      </button>
-                      <span className="block font-mono text-[11px] text-muted-foreground">{member.id}</span>
-                    </div>
-                  </div>
-                </TableCell>
-                <TableCell className="text-right tabular-nums">{formatUsd(member.rangeUsage?.spend ?? 0)}</TableCell>
-                <TableCell className="text-right tabular-nums">
-                  {formatCompact(member.rangeUsage?.tokens ?? 0)}
-                </TableCell>
-                <TableCell className="text-right text-xs tabular-nums">
-                  {member.budgetLimit === null
-                    ? t("customerPortal.analytics.noBudget")
-                    : `${formatUsd(member.spend)} / ${formatUsd(member.budgetLimit)}`}
-                </TableCell>
-                <TableCell className="pr-0 text-right">
-                  <span
-                    className={cn(
-                      "inline-flex rounded-full bg-muted px-2 py-0.5 text-xs",
-                      atLimit && "bg-destructive/10 text-destructive",
-                    )}
-                  >
-                    {t(memberStatus(member))}
-                  </span>
-                </TableCell>
-              </TableRow>
-            );
-          })}
+          {members.slice(start, start + PAGE_SIZE).map((member) => (
+            <TableRow key={member.id}>
+              <TableCell className="py-4 pl-0">
+                <CustomerSpendIdentity entity={member} onClick={() => onMemberClick(member.id)} />
+              </TableCell>
+              <CustomerSpendCells
+                entity={member}
+                monthlySpend={member.monthlyUsage?.spend ?? 0}
+                yearlySpend={yearlyUsage.get(member.id) ?? 0}
+                tokens={member.monthlyUsage?.tokens ?? 0}
+                organizationSpend={data.monthlyOrganizationSpend}
+              />
+            </TableRow>
+          ))}
           {members.length === 0 && (
             <TableRow>
-              <TableCell colSpan={5} className="py-10 text-center text-muted-foreground">
+              <TableCell colSpan={6} className="py-10 text-center text-muted-foreground">
                 {t(search ? "customerPortal.analytics.noMatches" : "customerPortal.analytics.noMembers")}
               </TableCell>
             </TableRow>
