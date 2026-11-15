@@ -19,6 +19,7 @@ from pydantic import JsonValue
 
 _MODEL: Final = "bytedance/seedance-2.5/text-to-video"
 _H3_MODEL: Final = "minimax/h3/text-to-video"
+_UPSCALE_MODEL: Final = "google/gemini-omni-flash/v1.2/upscale"
 _MP4: Final = b"\x00\x00\x00\x18ftypmp42" + uuid.uuid4().bytes * 4
 _OVERSIZED_SIDE: Final = "9" * 30
 
@@ -485,3 +486,24 @@ def test_deployment_per_second_price_bills_a_fal_model_the_catalog_prices_per_vi
         )
         assert created.status_code == 200, created.text
         settled_spend(key, 5 * per_second_rate)
+
+
+def test_fal_video_without_a_resolution_bills_the_rows_default_rate(gateway: Gateway) -> None:
+    request_id: Final = "fal-upscale-req-" + uuid.uuid4().hex
+    source_video: Final = "https://example.com/source.mp4"
+
+    def respond(request: Request) -> Reply:
+        assert (request.method, request.target) == ("POST", f"/{_UPSCALE_MODEL}")
+        assert json.loads(request.body) == {"prompt": "sharpen the clip", "duration": "10", "video_url": source_video}
+        return _h3_queue_reply(request_id)
+
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(model=f"fal_ai/{_UPSCALE_MODEL}", api_base=wire.url, api_key="synthetic-fal-key")
+        key: Final = scenario.key(models=[model])
+        created: Final = gateway.post(
+            "/v1/videos",
+            {"model": model, "prompt": "sharpen the clip", "seconds": "10", "video_url": source_video},
+            key=key,
+        )
+        assert created["status"] == "queued"
+        settled_spend(key, 10 * rate("fal_ai", "output_cost_per_second", _UPSCALE_MODEL))
