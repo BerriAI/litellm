@@ -216,6 +216,22 @@ describe("customer hierarchy management", () => {
     testQueryClient.clear();
   });
 
+  it("keeps usage dates while opening team settings and returning to usage", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<CustomerHierarchyManager />, { searchParams: "?org=org-1&from=2026-11-01&to=2026-11-03" });
+    await screen.findByRole("table", { name: "Customer teams" });
+    await user.click(screen.getByRole("button", { name: "Edit Product" }));
+    await screen.findByRole("heading", { name: "Product" });
+    expect(screen.getByRole("link", { name: "Usage", exact: true })).toHaveAttribute(
+      "href",
+      `${uiHref("customers/usage")}?org=org-1&team=team-a&from=2026-11-01&to=2026-11-03`,
+    );
+    expect(screen.getByRole("link", { name: "Customer organizations", exact: true })).toHaveAttribute(
+      "href",
+      `${uiHref("customers")}?from=2026-11-01&to=2026-11-03`,
+    );
+  });
+
   it("should render the selected organization and request its paginated teams", async () => {
     const user = userEvent.setup();
     renderWithProviders(<CustomerHierarchyManager />, { searchParams: "?org=org-1" });

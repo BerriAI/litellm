@@ -9,8 +9,7 @@ import { ErrorState } from "@/components/shared/ErrorState";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { extractProxyErrorMessage } from "@/lib/http/client";
-import { uiHref } from "@/utils/uiHref";
-import CustomerHierarchyNavigation, { customerHierarchyHref } from "./CustomerHierarchyNavigation";
+import CustomerHierarchyNavigation, { useCustomerHierarchyLinks } from "./CustomerHierarchyNavigation";
 import CustomerHierarchySettings from "./CustomerHierarchySettings";
 import CustomerBudgetGroups from "./CustomerBudgetGroups";
 import CustomerBudgetSummary from "./CustomerBudgetSummary";
@@ -39,6 +38,7 @@ const DESCRIPTION_KEYS = {
 
 function HierarchyHeader({ hierarchy, selected }: Pick<ScopeProps, "hierarchy" | "selected">) {
   const { t } = useTranslation();
+  const { customerHierarchyHref, customersHref } = useCustomerHierarchyLinks();
   const entity = selected.entity;
   const team = selected.team;
   const label = customerEntityLabel(entity);
@@ -70,7 +70,7 @@ function HierarchyHeader({ hierarchy, selected }: Pick<ScopeProps, "hierarchy" |
         aria-label={t("customerPortal.analytics.breadcrumb")}
         className="mb-5 flex flex-wrap items-center gap-2 text-xs text-muted-foreground"
       >
-        <a href={uiHref("customers")} className="hover:text-foreground">
+        <a href={customersHref} className="hover:text-foreground">
           {t("customerPortal.entities.organizations")}
         </a>
         <ChevronRight aria-hidden="true" className="size-3" />
@@ -147,6 +147,7 @@ function hierarchyRows({ hierarchy, selected, scope }: ScopeProps) {
 }
 
 function HierarchyCreateAction({ hierarchy, selected, scope }: ScopeProps) {
+  const { customerHierarchyHref } = useCustomerHierarchyLinks();
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   if (hierarchy.childTab === "members" && selected.team === null)
@@ -178,6 +179,7 @@ function HierarchyCreateAction({ hierarchy, selected, scope }: ScopeProps) {
 }
 
 function HierarchyChildTable(props: ScopeProps) {
+  const { customerHierarchyHref } = useCustomerHierarchyLinks();
   const { t } = useTranslation();
   const { hierarchy } = props;
   const { children, childTab, page } = hierarchy;
@@ -302,6 +304,7 @@ function HierarchyChildTable(props: ScopeProps) {
 }
 
 export default function CustomerHierarchyManager() {
+  const { customersHref } = useCustomerHierarchyLinks();
   const { t } = useTranslation();
   const router = useRouter();
   const hierarchy = useCustomerHierarchy();
@@ -319,7 +322,7 @@ export default function CustomerHierarchyManager() {
       <div className="space-y-3 px-8 py-12">
         <h1 className="text-xl font-semibold">{t("customerPortal.hierarchy.title")}</h1>
         <p className="text-sm text-muted-foreground">{t("customerPortal.hierarchy.missingOrganization")}</p>
-        <a href={uiHref("customers")} className="text-sm text-primary hover:underline">
+        <a href={customersHref} className="text-sm text-primary hover:underline">
           {t("customerPortal.hierarchy.backToCustomers")}
         </a>
       </div>
@@ -349,7 +352,7 @@ export default function CustomerHierarchyManager() {
     hierarchy.refresh();
     if (selected.member && selected.team) hierarchy.openTeam(selected.team.customer_team_id);
     else if (selected.team) hierarchy.openOrganization();
-    else router.push(uiHref("customers"));
+    else router.push(customersHref);
   };
 
   return (
