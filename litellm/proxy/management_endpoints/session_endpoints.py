@@ -33,6 +33,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.auth_checks import delete_cache_key_objects
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient
 from litellm.proxy.management_endpoints.key_management_endpoints import (  # noqa: F401  # legacy module exports
     _persist_deleted_verification_tokens,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     persist_deleted_verification_tokens,
@@ -69,7 +70,8 @@ async def revoke_ui_session_keys(
 
     ``only_older_than_kept`` spares sessions ranked after the kept one (by
     creation time, then token), and revokes nothing once the kept one is gone,
-    so of two overlapping sign-ins exactly one survives.
+    so of two overlapping sign-ins exactly one survives. It reads the writer,
+    since the kept session was written moments ago.
 
     Best-effort: the password write this runs after has already committed, so a
     revocation failure is logged loudly rather than failing the request — the
@@ -83,13 +85,14 @@ async def revoke_ui_session_keys(
         return 0
 
     try:
+        session_reader: Final = WriterPinnedClient(prisma_client.db) if only_older_than_kept else prisma_client
         where_user_sessions: Final[prisma_types.LiteLLM_VerificationTokenWhereInput] = {
             "user_id": user_id,
             "team_id": UI_SESSION_TOKEN_TEAM_ID,
         }
         rows: Final = cast(  # cast-ok: find_many returns prisma rows shaped like the pydantic model
             "tuple[LiteLLM_VerificationToken, ...]",
-            tuple(await VerificationTokenRepository(prisma_client).table.find_many(where=where_user_sessions)),
+            tuple(await VerificationTokenRepository(session_reader).table.find_many(where=where_user_sessions)),
         )
         kept_rank: Final = next((_rank(row) for row in rows if row.token == keep_hashed_token), None)
         if only_older_than_kept and kept_rank is None:

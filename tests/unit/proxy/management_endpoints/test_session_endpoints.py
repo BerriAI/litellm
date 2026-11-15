@@ -19,6 +19,7 @@ from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
 from litellm.proxy._types import LiteLLM_VerificationToken, UserAPIKeyAuth, hash_token
 from litellm.proxy.auth.login_throttle import LoginThrottle
 from litellm.proxy.auth.login_utils import authenticate_user, end_earlier_sessions
+from litellm.proxy.db.routing_prisma_wrapper import RoutingPrismaWrapper
 from litellm.proxy.management_endpoints.session_endpoints import (
     end_earlier_ui_sessions,
     revoke_ui_session_keys,
@@ -329,8 +330,6 @@ _FIRST_SIGN_IN: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
 
 
 class _SessionKeyTable:
-    """In-memory UI session key rows; ``mint`` stands in for the key a login writes."""
-
     def __init__(self) -> None:
         self.rows: list[LiteLLM_VerificationToken] = []
         self.names: dict[str, str] = {}
@@ -354,6 +353,9 @@ class _SessionKeyTable:
                 token=hashed, team_id=UI_SESSION_TOKEN_TEAM_ID, user_id=user_id, created_at=created_at
             )
         )
+
+    async def create(self, data: Mapping[str, object]) -> None:
+        raise AssertionError("session keys are written through mint")
 
     async def find_many(self, where: Mapping[str, object]) -> list[LiteLLM_VerificationToken]:
         return [row for row in self.rows if row.user_id == where["user_id"] and row.team_id == where["team_id"]]
@@ -597,3 +599,29 @@ async def test_the_opt_out_is_read_from_the_environment_with_a_secret_manager_co
         await _password_login(table, monkeypatch)
 
     assert table.tokens() == ["session-1", "session-2"]
+
+
+@pytest.mark.asyncio
+async def test_a_sign_in_ends_earlier_sessions_while_the_read_replica_lags(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("LITELLM_UI_ALLOW_MULTIPLE_SESSIONS", raising=False)
+    writer: Final = _SessionKeyTable()
+    replica: Final = _SessionKeyTable()
+    await writer.mint(user_id=USER_ID)
+    replica.rows = list(writer.rows)
+    replica.names = dict(writer.names)
+    new_session: Final = await writer.mint(user_id=USER_ID)
+    routed: Final = RoutingPrismaWrapper(
+        writer=SimpleNamespace(
+            litellm_verificationtoken=writer,
+            litellm_deletedverificationtoken=SimpleNamespace(create_many=AsyncMock()),
+        ),
+        reader=SimpleNamespace(litellm_verificationtoken=replica),
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", SimpleNamespace(db=routed)),  # test-quality-ok: DB global
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", None),  # test-quality-ok: no shared cache
+    ):
+        await end_earlier_ui_sessions(USER_ID, cast(str, new_session["token_id"]))
+
+    assert writer.tokens() == ["session-2"]

@@ -733,8 +733,6 @@ def test_sign_in_succeeds_again_once_the_block_is_cleared(client, monkeypatch, r
 
 
 class _SessionRows:
-    """In-memory dashboard session rows: ``mint`` stands in for the key write, the rest for the token table."""
-
     def __init__(self) -> None:
         self.rows: list[LiteLLM_VerificationToken] = []
         self.raw_keys: dict[str, str] = {}
@@ -766,7 +764,6 @@ class _SessionRows:
 
 
 def _admin_sign_in_against(monkeypatch: pytest.MonkeyPatch, rows: _SessionRows, **settings: object) -> None:
-    """The real sign-in routes for the UI_USERNAME admin, with the key write and token table faked."""
     from litellm.proxy import proxy_server as ps
 
     _install_real_auth(monkeypatch, **settings)
