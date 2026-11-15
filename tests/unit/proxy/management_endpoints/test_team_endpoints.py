@@ -14978,7 +14978,7 @@ async def test_team_info_without_members_returns_an_empty_roster_and_reads_neith
 @pytest.mark.parametrize(
     ("email", "user_rows", "expected", "user_lookups"),
     [
-        pytest.param("stored@example.com", [], "on-roster", 0, id="roster email wins without a user lookup"),
+        pytest.param("stored@example.com", [], "on-roster", 1, id="roster email"),
         pytest.param(
             "row@example.com",
             [("outsider", "row@example.com"), ("no-email-on-roster", "row@example.com")],
@@ -15015,6 +15015,23 @@ async def test_roster_user_id_for_email_matches_what_team_info_shows(email, user
     assert find_many.await_count == user_lookups
     if user_lookups:
         assert find_many.await_args.kwargs["where"] == {"user_email": email}
+
+
+@pytest.mark.asyncio
+async def test_roster_user_id_for_email_returns_the_first_roster_entry_showing_that_email():
+    from litellm.proxy.management_endpoints import team_endpoints
+
+    roster = (
+        Member(user_id="earlier-email-on-user-row", role="user"),
+        Member(user_id="later-email-on-roster", user_email="shared@example.com", role="user"),
+    )
+    find_many = AsyncMock(return_value=[_user_row("earlier-email-on-user-row", "shared@example.com")])
+
+    with patch.object(team_endpoints, "UserRepository") as repo:
+        repo.return_value.table.find_many = find_many
+        resolved = await team_endpoints._roster_user_id_for_email(MagicMock(), roster, "shared@example.com")
+
+    assert resolved == "earlier-email-on-user-row"
 
 
 def _user_row(user_id: str, user_email: str | None, user_alias: str | None = None) -> LiteLLM_UserTable:

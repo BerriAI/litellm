@@ -4153,16 +4153,19 @@ async def _team_member_delete(
 async def _roster_user_id_for_email(
     prisma_client: PrismaClient, roster: Sequence[Member], user_email: str | None
 ) -> str | None:
-    """The member `/team/info` shows with this email: the roster entry carrying it, else the roster
-    entry without an email whose user row has it."""
+    """The first roster entry `/team/info` shows with this email: its roster email, else its user row's."""
     if user_email is None:
         return None
-    by_roster_email: Final = next((m.user_id for m in roster if m.user_email == user_email), None)
-    if by_roster_email is not None:
-        return by_roster_email
     users_with_email: Final = await _user_db(prisma_client).find_many(where={"user_email": user_email})
     user_ids_with_email: Final = frozenset(user.user_id for user in users_with_email)
-    return next((m.user_id for m in roster if not m.user_email and m.user_id in user_ids_with_email), None)
+    return next(
+        (
+            m.user_id
+            for m in roster
+            if m.user_email == user_email or (not m.user_email and m.user_id in user_ids_with_email)
+        ),
+        None,
+    )
 
 
 @router.post(
