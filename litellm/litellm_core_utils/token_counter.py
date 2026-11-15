@@ -1,7 +1,6 @@
 # What is this?
 ## Helper utilities for token counting
 import base64
-import hashlib
 import io
 import math
 import re
@@ -1236,14 +1235,14 @@ def _evenly_spaced_samples(text: str, total_chars: int) -> tuple[str, ...]:
     )
 
 
-_MemoKey: TypeAlias = tuple[int, int, bytes]
+_MemoKey: TypeAlias = tuple[int, int, int]
 _MemoEntry: TypeAlias = tuple[object, int]
 
 
 class TokenCountMemo:
     """Least recently used token counts of long texts, so a conversation resent with one more turn only tokenizes
-    the new turn. Entries are keyed by the tokenizer's id and a digest of the text, never the text itself, and hold
-    their tokenizer so that id cannot be reused by another one while the entry lives."""
+    the new turn. Entries are keyed by the tokenizer's id and the text's length and hash, never the text itself, and
+    hold their tokenizer so that id cannot be reused by another one while the entry lives."""
 
     __slots__ = ("_counts", "_lock", "_max_entries", "_min_chars")
 
@@ -1257,8 +1256,7 @@ class TokenCountMemo:
         def count_tokens(text: str) -> int:
             if len(text) < self._min_chars:
                 return count(text)
-            digest: Final = hashlib.blake2b(text.encode("utf-8", "surrogatepass"), digest_size=16).digest()
-            key: Final = (id(tokenizer), len(text), digest)
+            key: Final = (id(tokenizer), len(text), hash(text))
             with self._lock:
                 cached: Final = self._counts.get(key)
                 if cached is not None:
