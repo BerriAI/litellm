@@ -225,6 +225,21 @@ def test_a_key_alias_to_a_router_alias_cannot_reach_a_disallowed_model(gateway: 
         _assert_denied(gateway, key, {"model": key_alias}, key_alias)
 
 
+def test_a_comma_separated_fan_out_cannot_reach_a_disallowed_model(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        allowed: Final = scenario.model()
+        tier_upstream: Final = f"fanout-{uuid.uuid4().hex[:8]}"
+        disallowed: Final = scenario.model(model=f"openai/{tier_upstream}")
+        alias: Final = f"alias-{uuid.uuid4().hex[:8]}"
+        aliases: Final = {alias: f"{allowed},{disallowed}"}
+        served: Final = _chat(gateway, scenario.key(aliases=aliases), {"model": alias})
+        assert served.status_code == 200, f"{served.status_code} {served.text}"
+        assert tier_upstream in _observed_models(gateway)
+        key: Final = scenario.key(aliases=aliases, disallowed_models=[disallowed])
+        _assert_denied(gateway, key, {"model": alias}, alias)
+        _assert_denied(gateway, key, {"model": f"{allowed}, {disallowed}"}, disallowed)
+
+
 def test_a_complexity_router_cannot_send_a_key_to_a_disallowed_tier(gateway: Gateway) -> None:
     with gateway.scenario() as scenario:
         keyword: Final = f"simple-{uuid.uuid4().hex}"

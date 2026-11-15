@@ -1,11 +1,13 @@
 from collections.abc import Collection, Iterable
 from fnmatch import fnmatchcase
+from itertools import chain as flatten
 from typing import Final
 
 from fastapi import status
 from pydantic import BaseModel
 
 import litellm
+from litellm.litellm_core_utils.routing_common_utils import comma_separated_models
 from litellm.proxy._types import ModelAccessDeniedProxyException, ProxyErrorTypes, UserAPIKeyAuth
 from litellm.proxy.auth.model_access_denied import model_access_denied_client_message
 from litellm.proxy.common_utils.model_listing_utils import alias_map
@@ -37,7 +39,8 @@ def _names_model_resolves_through(
     after_key_alias: Final = key_aliases.get(after_team_alias, after_team_alias)
     after_global_alias: Final = litellm.model_alias_map.get(after_key_alias, after_key_alias)
     dispatched: Final = key_aliases.get(after_global_alias, after_global_alias)
-    aliased: Final = frozenset((model, after_team_alias, after_key_alias, after_global_alias, dispatched))
+    unsplit: Final = (model, after_team_alias, after_key_alias, after_global_alias, dispatched)
+    aliased: Final = frozenset(unsplit) | frozenset(flatten.from_iterable(map(comma_separated_models, unsplit)))
     router_alias_targets: Final = (
         ()
         if llm_router is None

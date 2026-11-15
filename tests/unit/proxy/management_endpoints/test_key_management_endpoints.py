@@ -2172,14 +2172,12 @@ _DENY_LIST_TEAM: Final = LiteLLM_TeamTableCachedObj(
     ids=["team-admin-removes", "team-member-removes", "no-team-removes", "team-member-only-adds"],
 )
 async def test_only_admins_of_the_keys_team_may_remove_disallowed_models(
-    monkeypatch: pytest.MonkeyPatch, caller_id: str, key_team_id: str | None, requested: list[str], allowed: bool
+    caller_id: str, key_team_id: str | None, requested: list[str], allowed: bool
 ) -> None:
     from litellm.proxy.management_endpoints.key_management_endpoints import check_disallowed_models_caller_permission
 
-    monkeypatch.setattr(
-        "litellm.proxy.management_endpoints.key_management_endpoints.get_team_object",
-        AsyncMock(return_value=_DENY_LIST_TEAM),
-    )
+    async def team_lookup(**_: object) -> LiteLLM_TeamTableCachedObj:
+        return _DENY_LIST_TEAM
 
     async def check() -> None:
         await check_disallowed_models_caller_permission(
@@ -2192,6 +2190,7 @@ async def test_only_admins_of_the_keys_team_may_remove_disallowed_models(
             ),
             prisma_client=MagicMock(),
             user_api_key_cache=MagicMock(),
+            team_lookup=team_lookup,
         )
 
     if allowed:

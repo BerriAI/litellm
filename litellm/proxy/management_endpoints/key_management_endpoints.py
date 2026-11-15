@@ -3386,12 +3386,13 @@ async def check_disallowed_models_caller_permission(
     existing_key_row: LiteLLM_VerificationToken,
     prisma_client: PrismaClient | None,
     user_api_key_cache: UserApiKeyCache,
+    team_lookup: Callable[..., Awaitable[LiteLLM_TeamTableCachedObj | None]] = get_team_object,
 ) -> None:
     removed: Final = disallowed_models_removed_by(data, existing_key_row.disallowed_models)
     if not removed or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
         return
     team_table: Final = (
-        await get_team_object(
+        await team_lookup(
             team_id=existing_key_row.team_id,
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,

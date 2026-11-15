@@ -683,3 +683,7 @@ def _owner_team(deployment: Mapping[str, object]) -> object:
     """The team a deployment belongs to (``model_info.team_id``), or None."""
     model_info: Final = deployment.get("model_info")
     return model_info.get("team_id") if isinstance(model_info, Mapping) else None  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # a deployment dict's model_info
+
+
+def comma_separated_models(model: str) -> tuple[str, ...]:
+    return tuple(name.strip() for name in model.split(","))
