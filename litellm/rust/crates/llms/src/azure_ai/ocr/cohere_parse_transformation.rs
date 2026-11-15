@@ -131,8 +131,16 @@ impl AzureAICohereParseConfig {
             return Ok(url.into());
         }
         url.set_path(path.strip_suffix("/models").unwrap_or(&path));
+        let parse_path = if url
+            .host_str()
+            .is_some_and(|host| host.ends_with(".models.ai.azure.com"))
+        {
+            &["v2", "parse"][..]
+        } else {
+            &AZURE_COHERE_PARSE_PATH[..]
+        };
         ApiUrl::parse(url.as_str())
-            .and_then(|url| url.complete_path(&AZURE_COHERE_PARSE_PATH))
+            .and_then(|url| url.complete_path(parse_path))
             .map(|url| url.into_string())
             .map_err(|error| Error::request_field("api_base", error))
     }
@@ -147,7 +155,37 @@ fn invalid_api_base() -> Error {
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
+
     use super::*;
+
+    #[rstest]
+    #[case::root("", "")]
+    #[case::models("/models", "")]
+    #[case::prefix("/gateway", "/gateway")]
+    #[case::version("/v2", "")]
+    #[case::complete("/v2/parse", "")]
+    fn dedicated_endpoints_use_the_parse_path(#[case] suffix: &str, #[case] prefix: &str) {
+        let base = format!("https://parse.eastus.models.ai.azure.com{suffix}?tenant=a");
+
+        assert_eq!(
+            AzureAICohereParseConfig.get_complete_url(&base).unwrap(),
+            format!("https://parse.eastus.models.ai.azure.com{prefix}/v2/parse?tenant=a")
+        );
+    }
+
+    #[rstest]
+    #[case::resource("https://example.com", "/providers/cohere/v2/parse")]
+    #[case::similar_host(
+        "https://models.ai.azure.com.example.com",
+        "/providers/cohere/v2/parse"
+    )]
+    fn resource_endpoints_keep_the_provider_path(#[case] base: &str, #[case] path: &str) {
+        assert_eq!(
+            AzureAICohereParseConfig.get_complete_url(base).unwrap(),
+            format!("{base}{path}")
+        );
+    }
 
     #[test]
     fn completes_foundry_urls_without_duplicate_paths_and_preserves_queries() {
