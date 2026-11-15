@@ -869,6 +869,7 @@ class OpenAIResponsesHandler(BaseTranslation):
             input=input_data,
             responses_api_request=data,
             replay_tool_search=True,
+            member_name=qualified_member_name,
         )
         return cast(list[AllMessageValues], messages) if messages else None
 

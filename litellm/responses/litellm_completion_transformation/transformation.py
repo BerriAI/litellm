@@ -1462,6 +1462,7 @@ class LiteLLMCompletionResponsesConfig:
         only_since_compaction: bool = False,
         replay_tool_search: bool = False,
         caller_input: str | ResponseInputParam | None = None,
+        member_name: Callable[[str, str], str] = chat_member_name,
     ) -> list[
         AllMessageValues
         | GenericChatCompletionMessage
@@ -1529,7 +1530,8 @@ class LiteLLMCompletionResponsesConfig:
             replay_reasoning=replay_reasoning,
             native_compaction=native_compaction,
             self_named_namespace_members=LiteLLMCompletionResponsesConfig.self_named_namespace_members(request_tools),
-            member_chat_names=LiteLLMCompletionResponsesConfig.member_chat_names(request_tools),
+            member_chat_names=LiteLLMCompletionResponsesConfig.member_chat_names(request_tools, member_name),
+            member_name=member_name,
         )
         try:
             converted: Final = (
@@ -1713,6 +1715,7 @@ class LiteLLMCompletionResponsesConfig:
         native_compaction: bool = False,
         self_named_namespace_members: frozenset[str] = frozenset(),
         member_chat_names: Mapping[str, str] = MappingProxyType({}),
+        member_name: Callable[[str, str], str] = chat_member_name,
     ) -> list[
         AllMessageValues | GenericChatCompletionMessage | ChatCompletionMessageToolCall | ChatCompletionResponseMessage
     ]:
@@ -1741,6 +1744,7 @@ class LiteLLMCompletionResponsesConfig:
                         native_compaction=native_compaction,
                         self_named_namespace_members=self_named_namespace_members,
                         member_chat_names=member_chat_names,
+                        member_name=member_name,
                     )
                 )
 
@@ -2455,6 +2459,7 @@ class LiteLLMCompletionResponsesConfig:
         native_compaction: bool = False,
         self_named_namespace_members: frozenset[str] = frozenset(),
         member_chat_names: Mapping[str, str] = MappingProxyType({}),
+        member_name: Callable[[str, str], str] = chat_member_name,
     ) -> list[AllMessageValues | GenericChatCompletionMessage | ChatCompletionResponseMessage]:
         """
         Transform a Responses API input item into a Chat Completion message
@@ -2511,6 +2516,7 @@ class LiteLLMCompletionResponsesConfig:
                 ),
                 self_named_namespace_members=self_named_namespace_members,
                 member_chat_names=member_chat_names,
+                member_name=member_name,
             )
         elif input_item.get("type") == "compaction":
             return list(
@@ -2781,6 +2787,7 @@ class LiteLLMCompletionResponsesConfig:
         function_call: Mapping[str, str],
         self_named_namespace_members: frozenset[str] = frozenset(),
         member_chat_names: Mapping[str, str] = MappingProxyType({}),
+        member_name: Callable[[str, str], str] = chat_member_name,
     ) -> list[AllMessageValues | GenericChatCompletionMessage | ChatCompletionResponseMessage]:
         """
         Transform a Responses API function_call into a Chat Completion message with tool calls
@@ -2814,7 +2821,7 @@ class LiteLLMCompletionResponsesConfig:
         qualify: Final = bool(namespace) and not deferred_top_level and function_call.get("type") != "custom_tool_call"
         tool_call_id: Final = function_call.get("call_id") or function_call.get("id") or ""
         tool_call_function: Final = ChatCompletionToolCallFunctionChunk(
-            name=chat_member_name(namespace, raw_name) if qualify else member_chat_names.get(raw_name, raw_name),
+            name=member_name(namespace, raw_name) if qualify else member_chat_names.get(raw_name, raw_name),
             arguments=serialize_tool_call_arguments(raw_arguments),
         )
         function_call_cache_control: Final = _input_item_cache_control(function_call)
@@ -3257,10 +3264,12 @@ class LiteLLMCompletionResponsesConfig:
         )
 
     @staticmethod
-    def member_chat_names(tools: ResponseTools) -> Mapping[str, str]:
+    def member_chat_names(
+        tools: ResponseTools, member_name: Callable[[str, str], str] = chat_member_name
+    ) -> Mapping[str, str]:
         return MappingProxyType(
             {
-                qualified_member_name(namespace, member): chat_member_name(namespace, member)
+                qualified_member_name(namespace, member): member_name(namespace, member)
                 for namespace, member in LiteLLMCompletionResponsesConfig._namespace_entries(tools)
             }
         )
