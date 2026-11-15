@@ -58,26 +58,62 @@ def _indexed_keys(tools: Sequence[Tool]) -> tuple[IndexedKey, ...]:
     return tuple((key, ordinal_by_position[position]) for position, key in enumerate(keys))
 
 
+def _kept_ordinal(flattened: Sequence[Tool], guardrailed: Sequence[Tool], index: int) -> int | None:
+    kept: Final = guardrailed[index]
+    occurrence: Final = sum(tool == kept for tool in guardrailed[:index])
+    matches: Final = tuple(ordinal for ordinal, tool in enumerate(flattened) if tool == kept)
+    return matches[occurrence] if occurrence < len(matches) else None
+
+
 def _kept_ordinals(flattened: Sequence[Tool], guardrailed: Sequence[Tool]) -> tuple[int | None, ...]:
     if len(guardrailed) >= len(flattened):
         return tuple(range(len(guardrailed)))
-    remaining: Final = iter(enumerate(flattened))
-    return tuple(next((ordinal for ordinal, tool in remaining if tool == kept), None) for kept in guardrailed)
+    return tuple(_kept_ordinal(flattened, guardrailed, index) for index in range(len(guardrailed)))
 
 
-def _same_key_tools(tools: Sequence[Tool], key: str) -> tuple[Tool, ...]:
-    return tuple(tool for tool in tools if _chat_tool_key(tool) == key)
+def _positions_by_key(keys: Sequence[str]) -> Mapping[str, tuple[int, ...]]:
+    ordered: Final = sorted(range(len(keys)), key=keys.__getitem__)
+    return MappingProxyType({key: tuple(positions) for key, positions in groupby(ordered, key=keys.__getitem__)})
+
+
+def _ordinals_for_key(
+    flattened: Sequence[Tool],
+    guardrailed: Sequence[Tool],
+    flattened_positions: Mapping[str, tuple[int, ...]],
+    key: str,
+    positions: tuple[int, ...],
+) -> Iterable[tuple[int, int | None]]:
+    flattened_group: Final = tuple(flattened[position] for position in flattened_positions.get(key, ()))
+    guardrailed_group: Final = tuple(guardrailed[position] for position in positions)
+    return zip(positions, _kept_ordinals(flattened_group, guardrailed_group))
+
+
+def _ordinals_by_guardrailed_position(
+    flattened: Sequence[Tool],
+    guardrailed: Sequence[Tool],
+    flattened_positions: Mapping[str, tuple[int, ...]],
+    guardrailed_positions: Mapping[str, tuple[int, ...]],
+) -> Iterable[tuple[int, int | None]]:
+    return chain.from_iterable(
+        _ordinals_for_key(flattened, guardrailed, flattened_positions, key, positions)
+        for key, positions in guardrailed_positions.items()
+    )
 
 
 def _guardrailed_keys(flattened: Sequence[Tool], guardrailed: Sequence[Tool]) -> tuple[IndexedKey, ...] | None:
-    keys: Final = tuple(_chat_tool_key(tool) for tool in guardrailed)
-    ordinals_by_key: Final = MappingProxyType(
-        {
-            key: iter(_kept_ordinals(_same_key_tools(flattened, key), _same_key_tools(guardrailed, key)))
-            for key in frozenset(keys)
-        }
+    flattened_keys: Final = tuple(_chat_tool_key(tool) for tool in flattened)
+    guardrailed_keys: Final = tuple(_chat_tool_key(tool) for tool in guardrailed)
+    ordinals_by_position: Final = MappingProxyType(
+        dict(
+            _ordinals_by_guardrailed_position(
+                flattened,
+                guardrailed,
+                _positions_by_key(flattened_keys),
+                _positions_by_key(guardrailed_keys),
+            )
+        )
     )
-    indexed: Final = tuple((key, next(ordinals_by_key[key])) for key in keys)
+    indexed: Final = tuple((key, ordinals_by_position[position]) for position, key in enumerate(guardrailed_keys))
     if any(ordinal is None for _, ordinal in indexed):
         return None
     return tuple((key, ordinal) for key, ordinal in indexed if ordinal is not None)

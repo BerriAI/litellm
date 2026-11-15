@@ -4582,7 +4582,7 @@ class TestOpenAIResponsesHandlerNamespaceTools:
             else [{"type": "namespace", "name": namespace, "tools": [long_member, colliding]}]
         )
 
-        def drop_first_and_edit_second(chat_tools: list[dict]) -> list[dict]:
+        def drop_first_and_edit_second(chat_tools: list[dict[str, object]]) -> list[dict[str, object]]:
             kept: Final = chat_tools[1]
             return [{**kept, "function": {**kept["function"], "description": "edited"}}]
 
