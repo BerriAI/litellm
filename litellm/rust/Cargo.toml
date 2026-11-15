@@ -38,6 +38,7 @@ litellm-host-native = { path = "crates/host-native" }
 litellm-callbacks = { path = "crates/callbacks" }
 litellm-callbacks-legacy-python = { path = "crates/callbacks-legacy-python" }
 litellm-callbacks-python = { path = "crates/callbacks-python" }
+litellm-callbacks-s3-log = { path = "crates/callbacks-s3-log" }
 litellm-framer = { path = "crates/framer" }
 litellm-auth = { path = "crates/auth" }
 litellm-auth-types = { path = "crates/auth-types" }

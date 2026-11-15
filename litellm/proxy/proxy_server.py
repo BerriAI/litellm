@@ -681,6 +681,7 @@ from litellm.proxy.config_resolvers.settings_rules import (
 from litellm.proxy.config_resolvers.sso import SSO_FIELD_ENV_VARS
 from litellm.proxy.container_endpoints.endpoints import router as container_router
 from litellm.proxy.credential_endpoints.endpoints import router as credential_router
+from litellm.proxy.db.connection_budget import RUST_RESERVED_CONNECTIONS
 from litellm.proxy.db.create_views import SupportsRawQueries
 from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
 from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import (
@@ -1620,7 +1621,12 @@ async def _connect_to_count_stored_values(resources: AsyncExitStack) -> Supports
 async def _own_database(resources: AsyncExitStack, client: PrismaClient | None) -> database_runtime.Database | None:
     if client is None:
         return None
-    database: Final = await database_runtime.Database.open(client)
+    database: Final = await database_runtime.Database.open(
+        client,
+        os.environ["DATABASE_URL"],
+        os.environ.get("DATABASE_URL_READ_REPLICA") or None,
+        RUST_RESERVED_CONNECTIONS,
+    )
     resources.push_async_callback(database.aclose)
     return database
 
@@ -7446,7 +7452,7 @@ class ProxyConfig:
                     if key == "request_timeout":
                         litellm.request_timeout_explicitly_set = True
                     if key in {"s3_audit_callback_params", "s3_callback_params"}:
-                        from litellm.integrations.s3_v2 import S3Logger as S3V2Logger
+                        from litellm.integrations.s3_v3 import S3Logger as S3V2Logger
                         from litellm.litellm_core_utils.litellm_logging import (
                             _in_memory_loggers,
                         )
@@ -16441,12 +16447,13 @@ async def _routed_count_deployment(
     if llm_router is None:
         return None
     try:
-        return await llm_router.select(model, dict(_responses_routing_kwargs(responses_request)))
+        routed: Final = await llm_router.select(model, dict(_responses_routing_kwargs(responses_request)))
     except Exception:
         verbose_proxy_logger.exception(
             "litellm.proxy.proxy_server.token_counter(): Exception occured while getting deployment"
         )
         return None
+    return routed if isinstance(routed, Mapping) else None
 
 
 def _with_chat_timeout(litellm_params: Mapping[str, object]) -> Mapping[str, object]:
