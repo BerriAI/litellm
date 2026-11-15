@@ -13,10 +13,10 @@ import re
 import secrets
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
-from typing import Final, NamedTuple, Protocol, Union, cast
+from typing import Annotated, Final, NamedTuple, Protocol, Union, cast
 
 import fastapi
-from fastapi import HTTPException, Request, WebSocket, status
+from fastapi import Depends, HTTPException, Request, WebSocket, status
 from fastapi.security.api_key import APIKeyHeader
 from starlette.exceptions import WebSocketException
 
@@ -163,7 +163,7 @@ from litellm.proxy.common_utils.user_api_key_cache import (
 from litellm.proxy.db.db_lookup_gate import bounded_db_lookup
 from litellm.proxy.db.db_span import db_span
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
-from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup, anthropic_user_profile_id
 from litellm.proxy.spend_tracking.carried_budget_state import carry_team_and_user_budget_state
 from litellm.proxy.spend_tracking.spend_counter_batch import (
     bind_admission_counter_keys,
@@ -4294,6 +4294,12 @@ async def user_api_key_auth(
         verbose_proxy_logger.warning("Principal projection at auth seam failed (non-fatal): %s", e)
 
     return user_api_key_auth_obj
+
+
+async def request_anthropic_user_profile_id(
+    request: Request, user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)]
+) -> str | None:
+    return anthropic_user_profile_id(user_api_key_dict, request.headers)
 
 
 async def _return_user_api_key_auth_obj(

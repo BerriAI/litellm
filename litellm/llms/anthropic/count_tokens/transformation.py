@@ -17,12 +17,17 @@ from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import 
 )
 from litellm.llms.anthropic.common_utils import merge_anthropic_beta_headers
 from litellm.llms.anthropic.wif import resolve_anthropic_base
+from litellm.types.llms.anthropic import ANTHROPIC_USER_PROFILE_ID_HEADER
 from litellm.types.llms.openai import ChatCompletionImageObject
 
 _COUNT_REQUEST: Final = TypeAdapter(dict[str, JsonValue])
 _SYSTEM_BLOCKS: Final = TypeAdapter(list[JsonValue])
 _IMAGE_BLOCK: Final = TypeAdapter(ChatCompletionImageObject)
 COUNT_TOKEN_OPTION_NAMES: Final = ("thinking", "tool_choice", "output_config")
+
+
+def user_profile_id_headers(user_profile_id: str | None) -> Mapping[str, str]:
+    return MappingProxyType({ANTHROPIC_USER_PROFILE_ID_HEADER: user_profile_id} if user_profile_id else {})
 
 
 def _count_image(block: JsonValue) -> JsonValue:

@@ -424,6 +424,7 @@ from litellm.proxy.auth.password_policy import validate_password_not_breached, v
 from litellm.proxy.auth.user_api_key_auth import (  # noqa: F401, RUF100  # legacy module exports
     _fetch_global_spend_with_event_coordination,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     fetch_global_spend_with_event_coordination,
+    request_anthropic_user_profile_id,
     user_api_key_auth,
     user_api_key_auth_accepted_websocket_for_model,
     user_api_key_auth_live_websocket,
@@ -14213,10 +14214,18 @@ from litellm.repositories.user_repository import UserRepository
 
 def _with_user_profile_id(counter: BaseTokenCounter | None, user_profile_id: str | None) -> BaseTokenCounter | None:
     from litellm.llms.anthropic.count_tokens.token_counter import AnthropicTokenCounter
+    from litellm.llms.azure_ai.anthropic.count_tokens.token_counter import AzureAIAnthropicTokenCounter
+    from litellm.llms.vertex_ai.common_utils import VertexAITokenCounter
 
-    if not user_profile_id or not isinstance(counter, AnthropicTokenCounter):
-        return counter
-    return AnthropicTokenCounter(user_profile_id=user_profile_id)
+    match counter:
+        case AnthropicTokenCounter() if user_profile_id:
+            return AnthropicTokenCounter(user_profile_id=user_profile_id)
+        case AzureAIAnthropicTokenCounter() if user_profile_id:
+            return AzureAIAnthropicTokenCounter(user_profile_id=user_profile_id)
+        case VertexAITokenCounter() if user_profile_id:
+            return VertexAITokenCounter(user_profile_id=user_profile_id)
+        case _:
+            return counter
 
 
 def _get_provider_token_counter(
@@ -14704,7 +14713,11 @@ def _system_message(system: object) -> ChatCompletionSystemMessage | None:
     dependencies=[Depends(user_api_key_auth)],
     response_model=TokenCountResponse,
 )
-async def token_counter(request: TokenCountRequest, call_endpoint: bool = False):
+async def token_counter(
+    request: TokenCountRequest,
+    call_endpoint: bool = False,
+    user_profile_id: Annotated[str | None, Depends(request_anthropic_user_profile_id)] = None,
+):
     """
     Args:
         request: TokenCountRequest
@@ -14713,7 +14726,7 @@ async def token_counter(request: TokenCountRequest, call_endpoint: bool = False)
     Returns:
         TokenCountResponse
     """
-    return await count_request_tokens(request=request, call_endpoint=call_endpoint)
+    return await count_request_tokens(request=request, call_endpoint=call_endpoint, user_profile_id=user_profile_id)
 
 
 async def count_request_tokens(

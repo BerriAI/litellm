@@ -307,6 +307,7 @@ class VertexAIPartnerModels(VertexBase):
         vertex_credentials=None,
         system: object | None = None,
         tools: list[dict[str, object]] | None = None,
+        extra_headers: Mapping[str, str] = MappingProxyType({}),
     ):
         """
         Count tokens for Vertex AI partner models (Anthropic Claude, Mistral, etc.)
@@ -360,6 +361,7 @@ class VertexAIPartnerModels(VertexBase):
                 model=model,
                 request_data=request_data,
                 litellm_params=_litellm_params,
+                extra_headers=extra_headers,
             )
 
             return result

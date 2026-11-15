@@ -1278,6 +1278,11 @@ class VertexAIModelInfo(BaseLLMModelInfo):
 class VertexAITokenCounter(BaseTokenCounter):
     """Token counter implementation for Google AI Studio provider."""
 
+    def __init__(self, user_profile_id: str | None = None) -> None:
+        from litellm.llms.anthropic.count_tokens.transformation import user_profile_id_headers
+
+        self.user_profile_headers: Final = user_profile_id_headers(user_profile_id)
+
     def should_use_token_counting_api(
         self,
         custom_llm_provider: str | None = None,
@@ -1366,6 +1371,11 @@ class VertexAITokenCounter(BaseTokenCounter):
                     vertex_credentials=vertex_credentials,
                     system=system,
                     tools=tools,
+                    extra_headers=(
+                        self.user_profile_headers
+                        if count_tokens_publisher(model_to_use) == "anthropic"
+                        else MappingProxyType({})
+                    ),
                 )
             except (PartnerVertexAIError, httpx.HTTPStatusError) as e:
                 status_code: Final = e.response.status_code

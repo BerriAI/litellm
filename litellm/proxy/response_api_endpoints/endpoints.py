@@ -68,6 +68,7 @@ from litellm.proxy.common_utils.openai_error_payload import (
 )
 from litellm.proxy.common_utils.token_count_settings import count_source_fields
 from litellm.proxy.hooks.responses_id_security import ResponsesIDSecurity, decrypted_response_id
+from litellm.proxy.litellm_pre_call_utils import anthropic_user_profile_id
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.batch_attribution import (
     request_tags_from_request_data,
 )
@@ -1381,7 +1382,9 @@ class _TokenCountPayload(TypedDict):
 
 
 class _TokenCounter(Protocol):
-    def __call__(self, request: TokenCountRequest, call_endpoint: bool) -> Awaitable[TokenCountResponse]: ...
+    def __call__(
+        self, request: TokenCountRequest, call_endpoint: bool, user_profile_id: str | None
+    ) -> Awaitable[TokenCountResponse]: ...
 
 
 def _proxy_token_counter() -> _TokenCounter:
@@ -1598,7 +1601,11 @@ async def responses_input_tokens(
         )
 
     try:
-        token_response: Final = await token_counter(request=token_request, call_endpoint=True)
+        token_response: Final = await token_counter(
+            request=token_request,
+            call_endpoint=True,
+            user_profile_id=anthropic_user_profile_id(user_api_key_dict, request.headers),
+        )
     except ProxyException as e:
         if e.type != _PROVIDER_COUNT_ERROR_TYPE:
             raise

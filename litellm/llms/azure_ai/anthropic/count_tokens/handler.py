@@ -4,6 +4,8 @@ Azure AI Anthropic CountTokens API handler.
 Uses httpx for HTTP requests with Azure authentication.
 """
 
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Final
 
 import httpx
@@ -36,6 +38,7 @@ class AzureAIAnthropicCountTokensHandler(AzureAIAnthropicCountTokensConfig):
         timeout: float | httpx.Timeout | None = None,
         tools: list[dict[str, JsonValue]] | None = None,
         system: object = None,
+        extra_headers: Mapping[str, str] = MappingProxyType({}),
     ) -> dict[str, object]:
         """
         Handle a CountTokens request using httpx with Azure authentication.
@@ -76,10 +79,13 @@ class AzureAIAnthropicCountTokensHandler(AzureAIAnthropicCountTokensConfig):
             verbose_logger.debug("Making request to: %s", endpoint_url)
 
             # Get required headers with Azure authentication
-            headers: Final = self.get_required_headers(
-                api_key=api_key,
-                litellm_params=litellm_params,
-            )
+            headers: Final = {
+                **self.get_required_headers(
+                    api_key=api_key,
+                    litellm_params=litellm_params,
+                ),
+                **extra_headers,
+            }
             if not {"x-api-key", "Authorization"} & headers.keys():
                 raise AnthropicError(
                     status_code=401,
