@@ -7,7 +7,7 @@ import logging
 import time
 from collections.abc import Callable, Mapping
 from types import SimpleNamespace
-from typing import Final, Optional
+from typing import Final, Literal, Optional
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -6612,6 +6612,46 @@ def test_only_proxy_admins_change_a_teams_s3_bucket_list(
         )
     assert rejection.value.status_code == 403
     assert "Only proxy admins can set allowed_s3_buckets on a team." in str(rejection.value.detail)
+
+
+@pytest.mark.parametrize("entity", ["key", "team"])
+@pytest.mark.parametrize("stored,sent", [(None, "uprof_other"), ("uprof_admin", "uprof_other"), ("uprof_admin", None)])
+def test_profile_mapping_changes_require_a_proxy_admin(
+    entity: Literal["key", "team"], stored: str | None, sent: str | None
+) -> None:
+    from litellm.proxy._types import UpdateKeyRequest
+    from litellm.proxy.auth.auth_utils import enforce_batch_limits_are_admin_only
+
+    request: Final = UpdateKeyRequest(key="key", metadata={} if sent is None else {"anthropic_user_profile_id": sent})
+    with pytest.raises(HTTPException, match="anthropic_user_profile_id") as rejection:
+        enforce_batch_limits_are_admin_only(
+            request,
+            {} if stored is None else {"anthropic_user_profile_id": stored},
+            UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER),
+            entity=entity,
+        )
+    assert rejection.value.status_code == 403
+
+
+@pytest.mark.parametrize(
+    "role,stored,sent",
+    [
+        (LitellmUserRoles.PROXY_ADMIN, "uprof_admin", "uprof_other"),
+        (LitellmUserRoles.INTERNAL_USER, "uprof_admin", "uprof_admin"),
+        (LitellmUserRoles.INTERNAL_USER, None, None),
+    ],
+)
+def test_profile_mapping_admin_edits_and_unchanged_values_are_allowed(
+    role: LitellmUserRoles, stored: str | None, sent: str | None
+) -> None:
+    from litellm.proxy._types import UpdateKeyRequest
+    from litellm.proxy.auth.auth_utils import enforce_batch_limits_are_admin_only
+
+    request: Final = UpdateKeyRequest(key="key", metadata={} if sent is None else {"anthropic_user_profile_id": sent})
+    enforce_batch_limits_are_admin_only(
+        request, {} if stored is None else {"anthropic_user_profile_id": stored}, UserAPIKeyAuth(user_role=role), "key"
+    )
+    assert request.metadata == ({} if sent is None else {"anthropic_user_profile_id": sent})
 
 
 def _request_with_content_length(content_length: int) -> Request:

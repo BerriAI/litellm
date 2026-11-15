@@ -1252,6 +1252,38 @@ USER_PROFILE_ID_HEADER: Final = "anthropic-user-profile-id"
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("metadata_slot", ["key", "team"])
+@pytest.mark.parametrize("header_slot", ["headers", "extra_headers"])
+@pytest.mark.parametrize("caller_value", ["uprof_other", ""])
+@pytest.mark.parametrize("provider", ["anthropic", "vertex_ai", "azure_ai", "bedrock", "bedrock_mantle"])
+async def test_profile_mapping_removes_caller_header_variants(
+    metadata_slot: str, header_slot: str, caller_value: str, provider: str
+) -> None:
+    mapping: Final = {"anthropic_user_profile_id": "uprof_admin"}
+    updated: Final = await _request_data_added_by_the_proxy(
+        {header_slot: {"Anthropic-User-Profile-Id": caller_value, "x-other": "keep"}},
+        {},
+        {},
+        UserAPIKeyAuth(
+            api_key="hashed-key",
+            metadata=mapping if metadata_slot == "key" else {},
+            team_metadata=mapping if metadata_slot == "team" else {},
+        ),
+    )
+    forwarded: Final = dict(updated[header_slot])
+    forwarded.update(
+        ProviderSpecificHeaderUtils.get_provider_specific_headers(
+            provider_specific_header=updated.get("provider_specific_header"), custom_llm_provider=provider
+        )
+    )
+    assert forwarded == {"x-other": "keep", USER_PROFILE_ID_HEADER: "uprof_admin"}
+    if provider in ("bedrock", "bedrock_mantle"):
+        from litellm.llms.bedrock.common_utils import bedrock_user_profile_fields
+
+        assert bedrock_user_profile_fields(forwarded) == {"user_profile_id": "uprof_admin"}
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "key_metadata,team_metadata,request_headers,expected",
     [
@@ -11921,7 +11953,10 @@ def test_pre_call_served_model_applies_aliases_in_request_preparation_order(
 def test_request_served_model_ignores_a_malformed_alias_like_request_preparation_does(
     token_fields: dict[str, object], expected: str
 ) -> None:
-    from litellm.proxy.litellm_pre_call_utils import _update_model_if_key_alias_exists, _update_model_if_team_alias_exists
+    from litellm.proxy.litellm_pre_call_utils import (
+        _update_model_if_key_alias_exists,
+        _update_model_if_team_alias_exists,
+    )
     from litellm.proxy.litellm_pre_call_utils import request_served_model
 
     valid_token: Final = UserAPIKeyAuth(**token_fields)

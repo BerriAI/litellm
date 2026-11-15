@@ -3047,6 +3047,15 @@ async def add_litellm_data_to_request(
     if dynamic_api_version is not None:  # only pass, if set
         data["api_version"] = dynamic_api_version
 
+    if _anthropic_user_profile_id(user_api_key_dict, {}) is not None:
+        for field in ("extra_headers", "headers"):
+            if field in data:
+                data[field] = {  # rebind-ok: data is an out-param
+                    name: value
+                    for name, value in _request_fields(data[field]).items()  # pyright: ignore[reportUnknownArgumentType]  # legacy request data is a bare dict
+                    if name.lower() != ANTHROPIC_USER_PROFILE_ID_HEADER
+                }
+
     ## Forward any LLM API Provider specific headers in extra_headers
     data[_metadata_variable_name]["used_client_oauth_token"] = add_provider_specific_headers_to_request(
         data=data, headers=_headers, user_profile_id=_anthropic_user_profile_id(user_api_key_dict, _headers)

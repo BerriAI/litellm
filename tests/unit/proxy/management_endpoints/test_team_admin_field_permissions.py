@@ -44,6 +44,19 @@ from litellm.proxy.management_endpoints.team_admin_field_permissions import (
 _SUPPORTED = frozenset({"tpm_limit", "rpm_limit", "team_alias"})
 
 
+@pytest.mark.parametrize("stored,sent", [(None, "uprof_other"), ("uprof_admin", "uprof_other"), ("uprof_admin", None)])
+def test_team_admin_cannot_change_profile_mapping(stored: str | None, sent: str | None) -> None:
+    data: Final = UpdateTeamRequest(
+        team_id="team-1", metadata={} if sent is None else {"anthropic_user_profile_id": sent}
+    )
+    existing: Final = LiteLLM_TeamTable(
+        team_id="team-1", metadata={} if stored is None else {"anthropic_user_profile_id": stored}
+    )
+    assert team_admin_edit_verdict(data, existing, frozenset({"metadata"})) == TeamAdminMetadataKeyProxyControlled(
+        key="anthropic_user_profile_id"
+    )
+
+
 def _team(**overrides):
     return LiteLLM_TeamTable(team_id="team-1", **overrides)
 

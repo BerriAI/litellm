@@ -99,6 +99,7 @@ PROXY_CONTROLLED_TEAM_METADATA_KEYS: Final[frozenset[str]] = frozenset(
         "zguard_policy_id",
         "allowed_tools",
         TEAM_S3_BUCKET_ALLOWLIST_METADATA_KEY,
+        "anthropic_user_profile_id",
         "allow_client_mock_response",
         "allow_client_message_redaction_opt_out",
         "allow_client_pricing_override",

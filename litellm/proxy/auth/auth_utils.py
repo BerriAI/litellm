@@ -1922,7 +1922,11 @@ class BatchLimitRequest(Protocol):
     def model_fields_set(self) -> Collection[str]: ...
 
 
-_ADMIN_ONLY_METADATA_KEYS: Final = (*ADMIN_ONLY_BATCH_LIMIT_METADATA_KEYS, TEAM_S3_BUCKET_ALLOWLIST_METADATA_KEY)
+_ADMIN_ONLY_METADATA_KEYS: Final = (
+    *ADMIN_ONLY_BATCH_LIMIT_METADATA_KEYS,
+    TEAM_S3_BUCKET_ALLOWLIST_METADATA_KEY,
+    "anthropic_user_profile_id",
+)
 
 
 def enforce_batch_limits_are_admin_only(
@@ -1955,11 +1959,10 @@ def enforce_batch_limits_are_admin_only(
     )
     if changed is None:
         return
-    reason: Final = (
-        "It lets the holder read and write those buckets with the proxy's AWS credentials."
-        if changed == TEAM_S3_BUCKET_ALLOWLIST_METADATA_KEY
-        else "It limits what the holder can do with batches, so the holder cannot raise it."
-    )
+    reason: Final = {
+        TEAM_S3_BUCKET_ALLOWLIST_METADATA_KEY: "It lets the holder read and write those buckets with the proxy's AWS credentials.",
+        "anthropic_user_profile_id": "It binds upstream profile attribution selected by the proxy admin.",
+    }.get(changed, "It limits what the holder can do with batches, so the holder cannot raise it.")
     raise HTTPException(
         status_code=403,
         detail={"error": f"Only proxy admins can set {changed} on a {entity}. {reason}"},
