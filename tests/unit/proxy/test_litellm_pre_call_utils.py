@@ -30,6 +30,7 @@ from litellm.constants import (
 )
 from litellm.integrations.otel.model.config import is_otel_v2_enabled
 from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs
+from litellm.litellm_core_utils.ecb_reference_rates import EcbReferenceRates
 from litellm.litellm_core_utils.get_provider_specific_headers import (
     ProviderSpecificHeaderUtils,
 )
@@ -65,6 +66,7 @@ from litellm.proxy.litellm_pre_call_utils import (
     move_guardrails_to_metadata,
     resolve_tenant_otel_destinations,
 )
+from litellm.proxy.pricing_currency import ReferenceRateLookup
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
 from litellm.types.caching import LiteLLMCacheType
 from litellm.types.litellm_params import AGENTIC_LOOP_KWARG_NAMES
@@ -9509,6 +9511,81 @@ async def test_add_litellm_data_to_request_strips_router_reserved_stamps_despite
     assert "attempted_fallbacks" not in updated["metadata"]
     assert "original_model_group" not in updated["metadata"]
     assert "request_retry_count" not in updated["metadata"]
+
+
+def _eur_rates() -> ReferenceRateLookup:
+    async def fetch() -> bytes:
+        return (
+            "<gesmes:Envelope xmlns:gesmes='http://www.gesmes.org/xml/2002-08-01'"
+            " xmlns='http://www.ecb.int/vocabulary/2002-08-01/eurofxref'><Cube><Cube time='2026-11-13'>"
+            "<Cube currency='USD' rate='1.25'/></Cube></Cube></gesmes:Envelope>"
+        ).encode()
+
+    return ReferenceRateLookup(EcbReferenceRates(clock=lambda: datetime(2026, 11, 13, 16, tzinfo=timezone.utc)), fetch)
+
+
+@pytest.mark.parametrize(
+    ("key_metadata", "body", "expected"),
+    [
+        pytest.param(
+            {"allow_client_pricing_override": True},
+            {"pricing_currency": "EUR", "input_cost_per_token": 0.5},
+            {"input_cost_per_token": 0.625},
+            id="trusted-eur-input-only",
+        ),
+        pytest.param(
+            {"allow_client_pricing_override": True},
+            {"input_cost_per_token": 0.5, "output_cost_per_token": 0.25},
+            {"input_cost_per_token": 0.5, "output_cost_per_token": 0.25},
+            id="trusted-omitted-currency-stays-usd",
+        ),
+        pytest.param({}, {"pricing_currency": "EUR", "input_cost_per_token": 0.5}, {}, id="untrusted-stripped"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_add_litellm_data_to_request_prices_chat_completions_in_usd_only_for_trusted_keys(
+    key_metadata: dict, body: dict, expected: dict
+) -> None:
+    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+
+    updated = await add_litellm_data_to_request(
+        data={"model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}], **body},
+        request=_reserved_stamp_request("/v1/chat/completions"),
+        user_api_key_dict=_reserved_stamp_key(key_metadata),
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+        pricing_rates=_eur_rates(),
+    )
+
+    assert "pricing_currency" not in updated
+    assert {
+        field: updated[field] for field in ("input_cost_per_token", "output_cost_per_token") if field in updated
+    } == expected
+
+
+@pytest.mark.asyncio
+async def test_add_litellm_data_to_request_rejects_pricing_currency_outside_chat_completions() -> None:
+    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+
+    with pytest.raises(ProxyException) as rejected:
+        await add_litellm_data_to_request(
+            data={
+                "model": "text-embedding-3-small",
+                "input": "hi",
+                "pricing_currency": "EUR",
+                "input_cost_per_token": 0.5,
+            },
+            request=_reserved_stamp_request("/v1/embeddings"),
+            user_api_key_dict=_reserved_stamp_key({"allow_client_pricing_override": True}),
+            proxy_config=MagicMock(),
+            general_settings={},
+            version="test-version",
+            pricing_rates=_eur_rates(),
+        )
+
+    assert rejected.value.code == "400"
+    assert rejected.value.param == "pricing_currency"
 
 
 @pytest.mark.asyncio

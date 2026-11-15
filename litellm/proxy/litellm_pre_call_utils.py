@@ -406,6 +406,13 @@ def sanitize_for_log(value: object) -> str:
 
 
 from litellm.litellm_core_utils.routing_common_utils import resolve_model_group_alias
+from litellm.proxy.pricing_currency import (
+    PRICING_CURRENCY_FIELD,
+    PricingCurrencyRejected,
+    ReferenceRateLookup,
+    reference_rates,
+    usd_request_prices,
+)
 from litellm.router import Router
 from litellm.secret_managers.main import get_secret_bool
 from litellm.types.litellm_params import AGENTIC_LOOP_KWARG_NAMES, STREAM_USAGE_INJECTED_FIELD
@@ -613,7 +620,10 @@ _ALLOW_CLIENT_MESSAGE_REDACTION_OPT_OUT_METADATA_KEY: Final = "allow_client_mess
 # reach the call path. Built from the Pydantic model so newly-added pricing
 # fields are covered automatically. ``base_model`` selects which cost-map entry
 # prices the row, so a caller naming a cheaper model lowers their own spend.
-_CLIENT_PRICING_CONTROL_FIELDS: Final = frozenset(CustomPricingLiteLLMParams.model_fields.keys()) | {"base_model"}
+_CLIENT_PRICING_CONTROL_FIELDS: Final = frozenset(CustomPricingLiteLLMParams.model_fields.keys()) | {
+    "base_model",
+    PRICING_CURRENCY_FIELD,
+}
 # ``model_info`` carries the same pricing fields when read by
 # ``use_custom_pricing_for_model``; strip from metadata for the same reason.
 _CLIENT_PRICING_METADATA_FIELDS: Final = frozenset({"model_info"})
@@ -921,6 +931,28 @@ def _strip_client_callback_credentials(
             "Configure these on the team or key callback settings instead.",
             ", ".join(sorted(stripped)),
         )
+
+
+async def _convert_request_prices_to_usd(
+    data: dict[str, object],  # mutable-ok: rewrites prices in place on the threaded request body
+    route: str,
+    rates: ReferenceRateLookup,
+) -> None:
+    if data.get(PRICING_CURRENCY_FIELD) is None:
+        data.pop(PRICING_CURRENCY_FIELD, None)
+        return
+    prices: Final = await usd_request_prices(data, route, rates)
+    data.pop(PRICING_CURRENCY_FIELD)
+    if isinstance(prices, PricingCurrencyRejected):
+        raise ProxyException(
+            message=prices.message,
+            type=ProxyErrorTypes.bad_request_error
+            if prices.status_code == 400
+            else ProxyErrorTypes.internal_server_error,
+            param=PRICING_CURRENCY_FIELD,
+            code=prices.status_code,
+        )
+    data.update(prices)
 
 
 def _strip_client_pricing_overrides(data: dict[str, object]) -> None:
@@ -2853,6 +2885,7 @@ async def add_litellm_data_to_request(
     proxy_config: ProxyConfig,
     general_settings: dict[str, Any] | None = None,
     version: str | None = None,
+    pricing_rates: ReferenceRateLookup = reference_rates,
 ):
     """
     Adds LiteLLM-specific data to the request.
@@ -3087,6 +3120,7 @@ async def add_litellm_data_to_request(
     # would silently skip the field.
     if not _key_or_team_allows_client_pricing_override(user_api_key_dict):
         _strip_client_pricing_overrides(data)
+    await _convert_request_prices_to_usd(data, get_request_route(request), pricing_rates)
     strip_client_guardrail_information(data)
     _strip_router_reserved_metadata(data)
 
