@@ -3539,9 +3539,7 @@ class PrometheusLogger(CustomLogger):
                     litellm_model_name=litellm_model_name,
                     model_id=probed_deployment_id,
                     api_base=api_base,
-                    api_provider=self._extract_deployment_api_provider(
-                        _LOGGED_FIELDS.validate_python(request_kwargs)
-                    ),
+                    api_provider=self._extract_deployment_api_provider(_LOGGED_FIELDS.validate_python(request_kwargs)),
                 )
                 if probed_deployment_id
                 else enum_values

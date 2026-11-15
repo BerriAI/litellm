@@ -8834,11 +8834,14 @@ def get_standard_logging_object_payload(
             api_base=StandardLoggingPayloadSetup.strip_trailing_slash(litellm_params.get("api_base", "")) or "",
             model_group=_model_group,
             model_id=_model_id,
-            deployment_id=_model_id
-            or (
-                metadata.get("health_check_deployment_id")
-                if clean_metadata.get("user_api_key_hash") == LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME
-                else None
+            deployment_id=cast(
+                "str | None",
+                _model_id
+                or (
+                    cast("Mapping[str, object]", metadata).get("health_check_deployment_id")
+                    if clean_metadata["user_api_key_hash"] == LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME
+                    else None
+                ),
             ),
             requester_ip_address=clean_metadata.get("requester_ip_address", None),
             user_agent=clean_metadata.get("user_agent", None),
