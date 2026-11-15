@@ -1539,9 +1539,14 @@ async def test_expiry_email_contains_alias_utc_expiry_and_dashboard_link_without
     ],
 )
 async def test_soft_budget_alert_email_names_what_crossed_the_budget(
-    base_email_logger, mock_send_email, mock_lookup_user_email, event_group, owner_line, other_line
-):
-    event = WebhookEvent(
+    base_email_logger: BaseEmailLogger,
+    mock_send_email: mock.MagicMock,
+    mock_lookup_user_email: mock.MagicMock,
+    event_group: Litellm_EntityType,
+    owner_line: str,
+    other_line: str,
+) -> None:
+    event: Final = WebhookEvent(
         user_id="test_user",
         user_email="test@example.com",
         token="hashed-token",
@@ -1555,6 +1560,6 @@ async def test_soft_budget_alert_email_names_what_crossed_the_budget(
     with mock.patch.dict(os.environ, {"PROXY_BASE_URL": "http://test.com"}):
         await base_email_logger.send_soft_budget_alert_email(event)
 
-    html_body = mock_send_email.call_args[1]["html_body"]
+    html_body: Final[str] = mock_send_email.call_args[1]["html_body"]
     assert owner_line in html_body
     assert other_line not in html_body
