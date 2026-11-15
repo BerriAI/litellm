@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { activityLink, presentAlert, type SavedAlert } from "./alertPresentation";
+import {
+  activityLink,
+  listedAlertType,
+  presentAlert,
+  showsPromptCacheIncidents,
+  type SavedAlert,
+} from "./alertPresentation";
 
 const saved: SavedAlert = {
   id: "1",
@@ -58,6 +64,27 @@ describe("alert presentation", () => {
       undefined,
       null,
     ]);
+    expect(presentation.promptCache).toEqual({
+      deploymentId: "claude-east",
+      model: "claude-test",
+      misses: 3,
+      provenWriteTokens: 2048,
+      ttlSeconds: 300,
+      firstMiss: saved.window_start,
+      lastMiss: saved.window_end,
+    });
+  });
+  it("keeps metric alerts on their chart", () => {
+    expect(presentAlert({ source: "performance", alert: saved }).promptCache).toBeNull();
+  });
+  it.each([
+    ["all", "performance", true],
+    ["performance", "performance", false],
+    ["prompt-cache", "prompt_cache", true],
+    ["model-deprecations", null, false],
+    ["spend", "spend", false],
+  ] as const)("lists %s through the %s alert query", (filter, type, withPromptCache) => {
+    expect([listedAlertType(filter), showsPromptCacheIncidents(filter)]).toEqual([type, withPromptCache]);
   });
   it("does not read a record whose type, resource and evidence disagree as a metric alert", () => {
     const presentation = presentAlert({ source: "performance", alert: { ...saved, resource_type: "deployment" } });

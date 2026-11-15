@@ -24,6 +24,26 @@ function statusMessage(data: components["schemas"]["AlertMonitoring"]) {
   return "alerts.monitoring.allowance";
 }
 
+const PROMPT_CACHE_STEPS = ["observe", "shared", "save", "notify"] as const;
+
+function PromptCacheSetup() {
+  const { t } = useTranslation();
+  return (
+    <section aria-labelledby="prompt-cache-setup" className="space-y-2 border-t border-border pt-4 text-sm">
+      <h3 id="prompt-cache-setup" className="font-medium">
+        {t("alerts.monitoring.promptCache.title")}
+      </h3>
+      <p className="text-muted-foreground">{t("alerts.monitoring.promptCache.description")}</p>
+      <ol className="list-decimal space-y-1 pl-5 text-muted-foreground">
+        {PROMPT_CACHE_STEPS.map((step) => (
+          <li key={step}>{t(`alerts.monitoring.promptCache.${step}`)}</li>
+        ))}
+      </ol>
+      <p className="text-muted-foreground">{t("alerts.monitoring.promptCache.scope")}</p>
+    </section>
+  );
+}
+
 export default function ManageAlerts({ scope, readOnly }: { scope: string; readOnly: boolean }) {
   const { t } = useTranslation();
   const client = useQueryClient();
@@ -137,6 +157,7 @@ export default function ManageAlerts({ scope, readOnly }: { scope: string; readO
             <a href={uiHref("logging-and-alerts")} className="text-sm underline underline-offset-4">
               {t("alerts.monitoring.connections")}
             </a>
+            <PromptCacheSetup />
           </DialogContent>
         </Dialog>
       </div>

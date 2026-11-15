@@ -1,0 +1,133 @@
+# Prompt cache alerts demo. Start it through demo.sh, which pins the proxy image to the checked-out commit.
+# Everything here belongs to the litellm-prompt-cache-demo project: one Postgres volume, no other state, and
+# no provider keys. The Anthropic API and the Slack webhook are local scripted stand-ins.
+name: litellm-prompt-cache-demo
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+x-demo-image: &demo-image
+  image: litellm-prompt-cache-demo:${DEMO_COMMIT:?run through demo.sh}
+  pull_policy: never
+
+services:
+  proxy:
+    <<: *demo-image
+    build:
+      context: ../../..
+      dockerfile: litellm/deploy/docker/Dockerfile
+      target: runtime
+      labels:
+        org.opencontainers.image.revision: ${DEMO_COMMIT}
+    pull_policy: build
+    command: ["--config", "/demo/config.yaml", "--port", "4000", "--num_workers", "1"]
+    ports:
+      - "127.0.0.1:${DEMO_PROXY_PORT:-4100}:4000"
+    environment:
+      LITELLM_MASTER_KEY: sk-prompt-cache-demo
+      LITELLM_SALT_KEY: prompt-cache-demo-salt
+      UI_USERNAME: admin
+      UI_PASSWORD: sk-prompt-cache-demo
+      DATABASE_URL: postgresql://demo:demo@db:5432/litellm
+      LITELLM_MIGRATION_DIR: /tmp/litellm-migrations
+      SLACK_WEBHOOK_URL: http://notifier:8080/webhook
+      PROXY_BASE_URL: http://localhost:${DEMO_PROXY_PORT:-4100}
+    volumes:
+      - ./:/demo:ro
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m,mode=1777
+      - /app/.cache:rw,noexec,nosuid,nodev,size=128m,mode=1777
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      upstream:
+        condition: service_healthy
+      notifier:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - python3 -c "import urllib.request; urllib.request.urlopen('http://localhost:4000/health/readiness')"
+      interval: 2s
+      timeout: 5s
+      retries: 150
+    logging: *logging
+
+  upstream:
+    <<: *demo-image
+    command: ["python3", "/demo/servers.py", "anthropic"]
+    volumes:
+      - ./:/demo:ro
+    read_only: true
+    healthcheck: &server-health
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8080/health')\""]
+      interval: 1s
+      timeout: 5s
+      retries: 30
+    logging: *logging
+
+  notifier:
+    <<: *demo-image
+    command: ["python3", "/demo/servers.py", "slack"]
+    ports:
+      - "127.0.0.1:${DEMO_NOTIFIER_PORT:-4101}:8080"
+    volumes:
+      - ./:/demo:ro
+    read_only: true
+    healthcheck: *server-health
+    logging: *logging
+
+  db:
+    image: postgres:16@sha256:e17e86066e5ef83e0952a9347f5c792b7ece00972e2aa787a6986f471b3dd3d5
+    environment:
+      POSTGRES_DB: litellm
+      POSTGRES_USER: demo
+      POSTGRES_PASSWORD: demo
+    volumes:
+      - postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -d litellm -U demo"]
+      interval: 1s
+      timeout: 5s
+      retries: 60
+    logging: *logging
+
+  redis:
+    image: redis:7-alpine@sha256:7aec734b2bb298a1d769fd8729f13b8514a41bf90fcdd1f38ec52267fbaa8ee6
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 1s
+      timeout: 5s
+      retries: 30
+    logging: *logging
+
+  driver:
+    <<: *demo-image
+    profiles: ["driver"]
+    command: ["python3", "/demo/drive.py"]
+    environment:
+      PROXY_URL: http://proxy:4000
+      LITELLM_MASTER_KEY: sk-prompt-cache-demo
+      REDIS_HOST: redis
+      NOTIFIER_URL: http://notifier:8080
+      UI_URL: http://localhost:${DEMO_PROXY_PORT:-4100}/ui/alerts?type=prompt-cache
+    volumes:
+      - ./:/demo:ro
+    read_only: true
+    depends_on:
+      proxy:
+        condition: service_healthy
+    logging: *logging
+
+volumes:
+  postgres:
+    name: litellm_prompt_cache_demo_postgres
+    labels:
+      com.litellm.demo: prompt-cache-alerts

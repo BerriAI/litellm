@@ -1,4 +1,4 @@
-import type { components } from "@/lib/http/schema";
+import type { components, operations } from "@/lib/http/schema";
 import i18n from "@/i18n/i18n";
 import type { DeprecationAlert } from "@/components/ModelDeprecationAlerts/deprecationAlerts";
 import { effectiveAlertStatus } from "@/components/ModelDeprecationAlerts/migrationState";
@@ -19,20 +19,39 @@ export type AlertItem =
   | { source: "deprecation"; alert: DeprecationAlert };
 export type MetricUnit = "usd" | "requests" | "milliseconds" | "ratio";
 export type HistoryPoint = { date: string; value: number | null };
+export type PromptCacheDetails = {
+  deploymentId: string;
+  model: string;
+  misses: number;
+  provenWriteTokens: number;
+  ttlSeconds: number;
+  firstMiss: string;
+  lastMiss: string;
+};
 export const ALERT_TYPES = [
   "all",
   "performance",
   "model-deprecations",
+  "prompt-cache",
   "spend",
   "traffic",
   "latency",
   "reliability",
 ] as const;
 export type AlertFilter = (typeof ALERT_TYPES)[number];
+type ListedAlertType = NonNullable<NonNullable<operations["list_alerts_alerts_get"]["parameters"]["query"]>["type"]>;
+export function listedAlertType(filter: AlertFilter): ListedAlertType | null {
+  if (filter === "model-deprecations") return null;
+  if (filter === "all" || filter === "performance") return "performance";
+  if (filter === "prompt-cache") return "prompt_cache";
+  return filter;
+}
+export const showsPromptCacheIncidents = (filter: AlertFilter) => filter === "all" || filter === "prompt-cache";
 export const TYPE_LABEL_KEYS = {
   all: "alerts.unified.types.all",
   performance: "alerts.unified.types.performance",
   "model-deprecations": "alerts.page.tabs.modelDeprecations",
+  "prompt-cache": "alerts.unified.types.promptCache",
   spend: "alerts.unified.types.spend",
   traffic: "alerts.unified.types.traffic",
   latency: "alerts.unified.types.latency",
@@ -106,6 +125,7 @@ export function presentAlert(item: AlertItem) {
         [i18n.t("alerts.unified.lastUsed"), alert.lastUsedDate],
       ],
       chartTitle: i18n.t("alerts.usageChart.title"),
+      promptCache: null,
     };
   }
   const alert = item.alert;
@@ -115,12 +135,22 @@ export function presentAlert(item: AlertItem) {
       ? i18n.t("alerts.unified.keyFallback", { id: alert.resource_id.slice(0, 8) })
       : alert.resource_id);
   if ("consecutive_misses" in alert.evidence) {
+    const evidence = alert.evidence;
+    const promptCache: PromptCacheDetails = {
+      deploymentId: alert.resource_id,
+      model: evidence.provider_model,
+      misses: evidence.consecutive_misses,
+      provenWriteTokens: evidence.proven_write_tokens,
+      ttlSeconds: evidence.ttl_seconds,
+      firstMiss: alert.window_start,
+      lastMiss: alert.window_end,
+    };
     return {
       id: alert.id,
       title: i18n.t("alerts.unified.promptCache.title", { name }),
       description: i18n.t("alerts.unified.promptCache.description", {
-        misses: alert.evidence.consecutive_misses.toLocaleString(),
-        model: alert.evidence.provider_model,
+        misses: evidence.consecutive_misses.toLocaleString(),
+        model: evidence.provider_model,
       }),
       status: alert.status,
       resourceType: alert.resource_type,
@@ -133,6 +163,7 @@ export function presentAlert(item: AlertItem) {
       observed: alert.window_start.slice(0, 10),
       dates: [[i18n.t("alerts.unified.firstDetected"), alert.created_at]],
       chartTitle: i18n.t("alerts.usageChart.title"),
+      promptCache,
     };
   }
   if (isMetricAlert(alert)) return presentMetricAlert(alert, name);
@@ -152,6 +183,7 @@ export function presentAlert(item: AlertItem) {
       observed: alert.window_start.slice(0, 10),
       dates: [[i18n.t("alerts.unified.retires"), alert.evidence.deprecation_date]],
       chartTitle: i18n.t("alerts.usageChart.title"),
+      promptCache: null,
     };
   }
   return {
@@ -169,6 +201,7 @@ export function presentAlert(item: AlertItem) {
     observed: alert.window_start.slice(0, 10),
     dates: [[i18n.t("alerts.unified.firstDetected"), alert.created_at]],
     chartTitle: i18n.t("alerts.usageChart.title"),
+    promptCache: null,
   };
 }
 function presentMetricAlert(alert: MetricAlert, name: string) {
@@ -209,6 +242,7 @@ function presentMetricAlert(alert: MetricAlert, name: string) {
       [i18n.t("alerts.unified.firstDetected"), alert.created_at],
     ],
     chartTitle: i18n.t(`alerts.unified.chart.titles.${evidence.unit}`),
+    promptCache: null,
   };
 }
 export type AlertPresentation = ReturnType<typeof presentAlert>;

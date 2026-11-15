@@ -5864,13 +5864,31 @@
         "spend": "Spend",
         "traffic": "Traffic",
         "latency": "Latency",
-        "reliability": "Reliability"
+        "reliability": "Reliability",
+        "promptCache": "Prompt caching"
       },
       "retiredTitle": "{{name}} retired on {{date}}",
       "retiresTitle": "{{name}} retires on {{date}}",
       "promptCache": {
         "title": "Prompt caching stopped on {{name}}",
-        "description": "{{misses}} requests in a row to {{model}} read and wrote no cache for a prefix the provider had cached before."
+        "description": "{{misses}} requests in a row to {{model}} read and wrote no cache for a prefix the provider had cached before.",
+        "evidenceHeading": "What was observed",
+        "deployment": "Deployment",
+        "deploymentInGroup": "{{id}} in {{group}}",
+        "model": "Model",
+        "misses": "Requests in a row with no cache read or write",
+        "provenWrite": "Earlier cache write that proved the prefix",
+        "provenWriteTokens_one": "{{count}} token",
+        "provenWriteTokens_other": "{{count}} tokens",
+        "ttl": "Cache lifetime",
+        "ttlMinutes_one": "{{count}} minute",
+        "ttlMinutes_other": "{{count}} minutes",
+        "ttlHours_one": "{{count}} hour",
+        "ttlHours_other": "{{count}} hours",
+        "window": "Misses observed",
+        "windowValue": "{{start}} to {{end}} UTC",
+        "modelLink": "View model routing",
+        "scope": "This alert only covers a prompt prefix that the provider had already written to its cache on this deployment and configuration. A prefix that was never cached, including when caching was off from the first request, is not checked, and nothing here watches every request or deployment."
       },
       "deprecationDescription": "{{requests}} recorded requests. Last used {{date}} UTC.",
       "retired": "Retired",
@@ -5918,7 +5936,8 @@
           "ratio": "Daily error rate"
         }
       },
-      "unrecognized": "This alert can't be shown in this version of the dashboard."
+      "unrecognized": "This alert can't be shown in this version of the dashboard.",
+      "promptCacheError": "Could not load prompt cache alerts."
     },
     "page": {
       "tabs": {
@@ -6082,7 +6101,16 @@
       "disabledByConfig": "Disabled in proxy settings.",
       "upgrade": "Upgrade to Enterprise",
       "loadError": "Could not load monitoring settings.",
-      "saveError": "Could not save monitoring settings. Try again."
+      "saveError": "Could not save monitoring settings. Try again.",
+      "promptCache": {
+        "title": "Prompt cache alerts",
+        "description": "Turned on in the proxy config file and applied when the proxy restarts. This page can't tell whether they are on.",
+        "scope": "Only Claude on the Anthropic API is checked, and only for a prompt prefix the provider already cached once.",
+        "observe": "Add prompt_cache_observations to router_settings.optional_pre_call_checks, and set model_info.prompt_cache_observation: true on each deployment to watch.",
+        "shared": "Set the same LITELLM_SALT_KEY on every proxy instance and connect Redis. Without Redis, requests are observed but never turn into alerts.",
+        "save": "Connect a database and set general_settings.prompt_cache_alerts: true to save alerts on this page.",
+        "notify": "Optionally set general_settings.prompt_cache_alert_notifications: true to post each new alert once to the Slack webhook used for Performance Alerts."
+      }
     }
   },
   "caching": {
