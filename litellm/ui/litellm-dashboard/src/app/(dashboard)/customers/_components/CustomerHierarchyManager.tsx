@@ -1,20 +1,28 @@
 "use client";
 
 import { useState } from "react";
-import { ChevronRight, Pencil, Plus } from "lucide-react";
+import { ChevronRight, MoreHorizontal, Pencil, Plus } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useTranslation } from "react-i18next";
-import { formatUsd } from "@/app/(dashboard)/usage/_components/components/overview/overviewData";
 import { ErrorState } from "@/components/shared/ErrorState";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import MoveCustomerMemberDialog from "./MoveCustomerMemberDialog";
+import type { Member } from "./customerHierarchyForms";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { extractProxyErrorMessage } from "@/lib/http/client";
-import { uiHref } from "@/utils/uiHref";
-import CustomerHierarchyNavigation, { customerHierarchyHref } from "./CustomerHierarchyNavigation";
+import CustomerHierarchyNavigation, { useCustomerHierarchyLinks } from "./CustomerHierarchyNavigation";
 import CustomerHierarchySettings from "./CustomerHierarchySettings";
 import CustomerBudgetGroups from "./CustomerBudgetGroups";
 import CustomerBudgetSummary from "./CustomerBudgetSummary";
-import type { CustomerUsageEntity } from "./customerUsageApi";
+import CustomerMemberSearch from "./CustomerMemberSearch";
+import { customerUsageEntity, isCustomerUsageIdentifier, type CustomerUsageEntity } from "./customerUsageApi";
+import { CustomerSpendCells, CustomerSpendHeaders, CustomerSpendIdentity } from "./CustomerSpendCells";
 import CreateCustomerHierarchyDialog from "./CreateCustomerHierarchyDialog";
 import { customerEntityId, customerEntityLabel, type CreatedCustomerHierarchyEntity } from "./customerHierarchyForms";
 import useCustomerHierarchy, { type CustomerHierarchyContext } from "./useCustomerHierarchy";
@@ -39,6 +47,7 @@ const DESCRIPTION_KEYS = {
 
 function HierarchyHeader({ hierarchy, selected }: Pick<ScopeProps, "hierarchy" | "selected">) {
   const { t } = useTranslation();
+  const { customerHierarchyHref, customersHref } = useCustomerHierarchyLinks();
   const entity = selected.entity;
   const team = selected.team;
   const label = customerEntityLabel(entity);
@@ -70,7 +79,7 @@ function HierarchyHeader({ hierarchy, selected }: Pick<ScopeProps, "hierarchy" |
         aria-label={t("customerPortal.analytics.breadcrumb")}
         className="mb-5 flex flex-wrap items-center gap-2 text-xs text-muted-foreground"
       >
-        <a href={uiHref("customers")} className="hover:text-foreground">
+        <a href={customersHref} className="hover:text-foreground">
           {t("customerPortal.entities.organizations")}
         </a>
         <ChevronRight aria-hidden="true" className="size-3" />
@@ -123,10 +132,10 @@ function hierarchyRows({ hierarchy, selected, scope }: ScopeProps) {
     return list.data.map((team) => ({
       id: team.customer_team_id,
       label: team.alias || team.customer_team_id,
-      spend: team.spend,
-      budget: team.budget?.max_budget,
+      entity: customerUsageEntity(team.customer_team_id, team),
       open: () => hierarchy.openTeam(team.customer_team_id),
       edit: () => hierarchy.openTeam(team.customer_team_id, true),
+      member: null,
       parentTeamId: null,
       openParentTeam: () => hierarchy.openTeam(team.customer_team_id),
       usageScope: { org: scope.org, team: team.customer_team_id, member: null },
@@ -135,10 +144,10 @@ function hierarchyRows({ hierarchy, selected, scope }: ScopeProps) {
     return list.data.map((member) => ({
       id: member.customer_member_id,
       label: member.alias || member.customer_member_id,
-      spend: member.spend,
-      budget: member.effective_budget.max_budget,
+      entity: customerUsageEntity(member.customer_member_id, member),
       open: () => hierarchy.openMember(member.customer_member_id, member.parent_team_ids[0] ?? ""),
       edit: () => hierarchy.openMember(member.customer_member_id, member.parent_team_ids[0] ?? ""),
+      member,
       parentTeamId: member.parent_team_ids[0] ?? "",
       openParentTeam: () => hierarchy.openTeam(member.parent_team_ids[0] ?? ""),
       usageScope: { org: scope.org, team: selected.team?.customer_team_id ?? null, member: member.customer_member_id },
@@ -147,6 +156,7 @@ function hierarchyRows({ hierarchy, selected, scope }: ScopeProps) {
 }
 
 function HierarchyCreateAction({ hierarchy, selected, scope }: ScopeProps) {
+  const { customerHierarchyHref } = useCustomerHierarchyLinks();
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   if (hierarchy.childTab === "members" && selected.team === null)
@@ -177,13 +187,12 @@ function HierarchyCreateAction({ hierarchy, selected, scope }: ScopeProps) {
   );
 }
 
-function HierarchyChildTable(props: ScopeProps) {
+function HierarchyChildRows(props: ScopeProps & { childLabel: string; showTeam: boolean }) {
+  const { customerHierarchyHref } = useCustomerHierarchyLinks();
+  const [movingMember, setMovingMember] = useState<Member | null>(null);
   const { t } = useTranslation();
-  const { hierarchy } = props;
-  const { children, childTab, page } = hierarchy;
-  const showTeam = childTab === "members" && props.selected.team === null;
-  const hint = showTeam ? "customerPortal.hierarchy.organizationMembersHint" : CHILD_HINTS[childTab];
-  const childLabel = childTab === "teams" ? t("customerPortal.hierarchy.teams") : t("customerPortal.hierarchy.members");
+  const { hierarchy, childLabel, showTeam } = props;
+  const { children, childUsage, childTab, page } = hierarchy;
   if (children.isError)
     return (
       <ErrorState
@@ -204,22 +213,23 @@ function HierarchyChildTable(props: ScopeProps) {
     );
   const rows = hierarchyRows(props);
   const pages = Math.max(1, children.data.meta.total_pages);
+  const emptyMembers = hierarchy.memberSearch
+    ? "customerPortal.hierarchy.noMemberMatches"
+    : "customerPortal.hierarchy.emptyMembers";
+  const monthly = new Map(childUsage.data?.monthly.map((row) => [row.id, row]));
+  const yearly = new Map(childUsage.data?.yearly.map((row) => [row.id, row.spend]));
   return (
     <>
-      <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h2 className="text-base font-medium tracking-tight">{childLabel}</h2>
-          <p className="mt-1 text-sm text-muted-foreground">{t(hint)}</p>
-        </div>
-        <HierarchyCreateAction hierarchy={hierarchy} selected={props.selected} scope={props.scope} />
-      </div>
+      {childUsage.isError && (
+        <ErrorState message={extractProxyErrorMessage(childUsage.error)} onRetry={() => void childUsage.refetch()} />
+      )}
+      <p className="mb-4 text-xs text-muted-foreground">{t("customerPortal.analytics.memberSpendHint")}</p>
       <Table aria-label={childLabel}>
         <TableHeader>
           <TableRow>
             <TableHead className="pl-0">{t("customerPortal.hierarchy.name")}</TableHead>
             {showTeam && <TableHead>{t("customerPortal.hierarchy.team")}</TableHead>}
-            <TableHead className="text-right">{t("customerPortal.hierarchy.spend")}</TableHead>
-            <TableHead className="text-right">{t("customerPortal.hierarchy.budget")}</TableHead>
+            <CustomerSpendHeaders />
             <TableHead className="pr-0">
               <span className="sr-only">{t("customerPortal.hierarchy.settings")}</span>
             </TableHead>
@@ -229,10 +239,7 @@ function HierarchyChildTable(props: ScopeProps) {
           {rows.map((row) => (
             <TableRow key={row.id}>
               <TableCell className="py-4 pl-0">
-                <button type="button" onClick={row.open} className="block text-left font-medium hover:text-primary">
-                  {row.label}
-                </button>
-                <span className="mt-1 block font-mono text-[11px] text-muted-foreground">{row.id}</span>
+                <CustomerSpendIdentity entity={row.entity} onClick={row.open} />
               </TableCell>
               {showTeam && (
                 <TableCell>
@@ -245,10 +252,23 @@ function HierarchyChildTable(props: ScopeProps) {
                   </button>
                 </TableCell>
               )}
-              <TableCell className="text-right tabular-nums">{formatUsd(row.spend)}</TableCell>
-              <TableCell className="text-right tabular-nums">
-                {row.budget == null ? t("customerPortal.hierarchy.noBudget") : formatUsd(row.budget)}
-              </TableCell>
+              {childUsage.data && isCustomerUsageIdentifier(row.id) ? (
+                <CustomerSpendCells
+                  entity={row.entity}
+                  monthlySpend={monthly.get(row.id)?.spend ?? 0}
+                  yearlySpend={yearly.get(row.id) ?? 0}
+                  tokens={monthly.get(row.id)?.tokens ?? 0}
+                  organizationSpend={childUsage.data.organizationSpend}
+                />
+              ) : (
+                <TableCell colSpan={5} className="text-center text-xs text-muted-foreground" role="status">
+                  {t(
+                    childUsage.isError || !isCustomerUsageIdentifier(row.id)
+                      ? "customerPortal.analytics.unknownSpend"
+                      : "customerPortal.hierarchy.loading",
+                  )}
+                </TableCell>
+              )}
               <TableCell className="pr-0 text-right">
                 <div className="flex justify-end gap-2">
                   <a
@@ -257,33 +277,58 @@ function HierarchyChildTable(props: ScopeProps) {
                   >
                     {t("customerPortal.hierarchy.viewUsage")}
                   </a>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    onClick={row.edit}
-                    aria-label={`${t("customerPortal.hierarchy.edit")} ${row.label}`}
-                  >
-                    <Pencil aria-hidden="true" className="size-3.5" />
-                    {t("customerPortal.hierarchy.edit")}
-                  </Button>
+                  {row.member ? (
+                    <DropdownMenu>
+                      <DropdownMenuTrigger
+                        render={
+                          <Button
+                            variant="ghost"
+                            size="icon-sm"
+                            aria-label={t("customerPortal.hierarchy.memberActions", { name: row.label })}
+                          />
+                        }
+                      >
+                        <MoreHorizontal className="size-4" />
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end">
+                        <DropdownMenuItem onClick={row.edit}>{t("customerPortal.hierarchy.settings")}</DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => setMovingMember(row.member)}>
+                          {t("customerPortal.hierarchy.moveTeams")}
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  ) : (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={row.edit}
+                      aria-label={`${t("customerPortal.hierarchy.edit")} ${row.label}`}
+                    >
+                      <Pencil aria-hidden="true" className="size-3.5" />
+                      {t("customerPortal.hierarchy.edit")}
+                    </Button>
+                  )}
                 </div>
               </TableCell>
             </TableRow>
           ))}
           {rows.length === 0 && (
             <TableRow>
-              <TableCell colSpan={showTeam ? 5 : 4} className="py-12 text-center text-sm text-muted-foreground">
-                {t(
-                  childTab === "teams"
-                    ? "customerPortal.hierarchy.emptyTeams"
-                    : "customerPortal.hierarchy.emptyMembers",
-                )}
+              <TableCell colSpan={showTeam ? 8 : 7} className="py-12 text-center text-sm text-muted-foreground">
+                {t(childTab === "teams" ? "customerPortal.hierarchy.emptyTeams" : emptyMembers)}
               </TableCell>
             </TableRow>
           )}
         </TableBody>
       </Table>
+      {movingMember && (
+        <MoveCustomerMemberDialog
+          member={movingMember}
+          organizationId={props.scope.org}
+          onClose={() => setMovingMember(null)}
+        />
+      )}
       {pages > 1 && (
         <div className="mt-4 flex items-center justify-between border-t pt-4 text-xs text-muted-foreground">
           <span>{t("customerPortal.hierarchy.pagination", { page, pages })}</span>
@@ -301,7 +346,36 @@ function HierarchyChildTable(props: ScopeProps) {
   );
 }
 
+function HierarchyChildTable(props: ScopeProps) {
+  const { t } = useTranslation();
+  const { hierarchy } = props;
+  const { childTab } = hierarchy;
+  const showTeam = childTab === "members" && props.selected.team === null;
+  const hint = showTeam ? "customerPortal.hierarchy.organizationMembersHint" : CHILD_HINTS[childTab];
+  const childLabel = childTab === "teams" ? t("customerPortal.hierarchy.teams") : t("customerPortal.hierarchy.members");
+  return (
+    <>
+      <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 className="text-base font-medium tracking-tight">{childLabel}</h2>
+          <p className="mt-1 text-sm text-muted-foreground">{t(hint)}</p>
+        </div>
+        <HierarchyCreateAction hierarchy={hierarchy} selected={props.selected} scope={props.scope} />
+      </div>
+      {childTab === "members" && (
+        <CustomerMemberSearch
+          key={props.selected.team?.customer_team_id ?? ""}
+          value={hierarchy.memberSearch}
+          onSearch={hierarchy.setMemberSearch}
+        />
+      )}
+      <HierarchyChildRows {...props} childLabel={childLabel} showTeam={showTeam} />
+    </>
+  );
+}
+
 export default function CustomerHierarchyManager() {
+  const { customersHref } = useCustomerHierarchyLinks();
   const { t } = useTranslation();
   const router = useRouter();
   const hierarchy = useCustomerHierarchy();
@@ -319,7 +393,7 @@ export default function CustomerHierarchyManager() {
       <div className="space-y-3 px-8 py-12">
         <h1 className="text-xl font-semibold">{t("customerPortal.hierarchy.title")}</h1>
         <p className="text-sm text-muted-foreground">{t("customerPortal.hierarchy.missingOrganization")}</p>
-        <a href={uiHref("customers")} className="text-sm text-primary hover:underline">
+        <a href={customersHref} className="text-sm text-primary hover:underline">
           {t("customerPortal.hierarchy.backToCustomers")}
         </a>
       </div>
@@ -349,7 +423,7 @@ export default function CustomerHierarchyManager() {
     hierarchy.refresh();
     if (selected.member && selected.team) hierarchy.openTeam(selected.team.customer_team_id);
     else if (selected.team) hierarchy.openOrganization();
-    else router.push(uiHref("customers"));
+    else router.push(customersHref);
   };
 
   return (

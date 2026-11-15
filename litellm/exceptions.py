@@ -229,6 +229,10 @@ class CallerCredentialAuthenticationError(AuthenticationError):
     caller's credential, so routers must not cool down the shared deployment."""
 
 
+class DeploymentCredentialAuthenticationError(AuthenticationError):
+    pass
+
+
 # raise when invalid models passed, example gpt-8
 class NotFoundError(openai.NotFoundError):
     def __init__(
@@ -607,6 +611,24 @@ class CallerCredentialRateLimitError(RateLimitError):
     """429 raised when a per-user credential exchange is rate limited by the
     provider (e.g. GitHub's token endpoint). Scoped to one caller's
     credential, so routers must not cool down the shared deployment."""
+
+
+class RequestOverDeploymentTpmError(RateLimitError):
+    """429 raised when one request alone is estimated over the tpm limit of every deployment
+    it could route to, unavailable ones included, so a retry can never clear it. Loggers and
+    Prometheus keep naming it ``RateLimitError``, as they named this refusal before."""
+
+    logged_error_class: Final = "RateLimitError"
+    prometheus_exception_class_name: Final = "RateLimitError"
+
+
+class SyncRequestOverDeploymentTpmError(RequestOverDeploymentTpmError, ValueError):
+    """The sync ``Router``'s form, still a ``ValueError`` as the sync refusal was before."""
+
+
+def logged_class_name(error: BaseException) -> str:
+    logged: Final[object] = getattr(error, "logged_error_class", None)
+    return logged if isinstance(logged, str) else type(error).__name__
 
 
 # sub class of rate limit error - meant to give more granularity for error handling context window exceeded errors

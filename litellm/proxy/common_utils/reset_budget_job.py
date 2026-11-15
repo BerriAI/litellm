@@ -3,7 +3,7 @@ import json
 import math
 import time
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from enum import Enum
 from itertools import chain
@@ -36,6 +36,7 @@ from litellm.litellm_core_utils.duration_parser import (
     get_annual_budget_window_start,
     get_budget_window_start_from_reset,
     is_annual_budget_duration,
+    normalize_budget_window_start,
 )
 from litellm.proxy._types import (
     DB_RETRY_SAFE_ERROR_TYPES,
@@ -378,9 +379,15 @@ def _customer_reset_key(
 def _customer_ids_by_reset(
     rows: Sequence[_CustomerScopedRow], ids: Sequence[str], now: datetime, windows: Mapping[str, str]
 ) -> Mapping[tuple[float | None, str | None], tuple[str, ...]]:
-    keys: Final = tuple(_customer_reset_key(row, now, windows) for row in rows)
+    capped: Final = tuple(
+        (row_id, row) for row_id, row in zip(ids, rows) if _customer_effective_cap(row, now) is not None
+    )
+    keys: Final = tuple(_customer_reset_key(row, now, windows) for _, row in capped)
     return MappingProxyType(
-        {key: tuple(row_id for row_id, row_key in zip(ids, keys) if row_key == key) for key in dict.fromkeys(keys)}
+        {
+            key: tuple(row_id for (row_id, _), row_key in zip(capped, keys) if row_key == key)
+            for key in dict.fromkeys(keys)
+        }
     )
 
 
@@ -505,6 +512,10 @@ class _BudgetCascade:
     windows: Mapping[str, str] = field(default_factory=lambda: MappingProxyType({}))
     customer_ids: Mapping[CustomerSpendEntity, tuple[str, ...]] = field(default_factory=lambda: MappingProxyType({}))
     customer_org_alias_keys: tuple[str, ...] = ()
+
+    @property
+    def customer_budget_ids(self) -> tuple[str, ...]:
+        return tuple(b.budget_id for b in self.budgets if b.max_budget is not None and b.budget_id in self.budget_ids)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1280,7 +1291,11 @@ class ResetBudgetJob:
             _queue_budget_linked_resets(uow.projects, cascade, extra=_SPENT_ROWS_WHERE)
             _queue_budget_linked_resets(uow.tags, cascade, extra=_SPENT_ROWS_WHERE)
             _queue_budget_linked_resets(uow.model_access_groups, cascade, extra=_SPENT_ROWS_WHERE)
-            _queue_budget_linked_resets(uow.customer_organizations, cascade, extra=_SPENT_ROWS_WHERE)
+            _queue_budget_linked_resets(
+                uow.customer_organizations,
+                replace(cascade, budget_ids=cascade.customer_budget_ids),
+                extra=_SPENT_ROWS_WHERE,
+            )
             for budget_id, budget_reset_at in cascade.budget_resets:
                 uow.budgets.queue_window_advance(budget_id=budget_id, budget_reset_at=budget_reset_at)
 
@@ -1933,7 +1948,7 @@ class ResetBudgetJob:
                 entity_type=entity_type.value,
                 entity_id=entity_id,
                 window_duration=budget_duration,
-                new_window_start=window_start,
+                new_window_start=normalize_budget_window_start(window_start),
             )
         except Exception as e:  # noqa: BLE001  # the row is best effort; counter resets must still land
             verbose_proxy_logger.warning(

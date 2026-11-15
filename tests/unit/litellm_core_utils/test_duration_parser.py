@@ -271,8 +271,6 @@ def test_long_unit_spelling_resets_on_the_schedule_it_is_charged_for(long_spelli
 
 def test_long_month_spelling_without_a_calendar_schedule_keeps_its_nightly_reset() -> None:
     now: Final = datetime(2026, 11, 13, 18, 0, tzinfo=timezone.utc)
-    with pytest.raises(ValueError, match="1 month or 12 month"):
-        get_next_standardized_reset_time("3mo", now, "UTC")
     reset: Final = get_next_standardized_reset_time("3months", now, "UTC")
     assert reset == datetime(2026, 11, 14, tzinfo=timezone.utc)
     assert get_budget_window_start("3months", reset) == datetime(2026, 11, 13, tzinfo=timezone.utc)
@@ -300,6 +298,16 @@ def test_annual_window_survives_timestamp_storage(
     }[storage]
 
     assert get_annual_budget_window_start(stored, zone) == datetime.fromisoformat(expected)
+
+
+@pytest.mark.parametrize("microsecond", (0, 123000, 123456, 123999, 999999))
+@pytest.mark.parametrize("duration", ("1s", "1h", "1d", "1w", "30d", "1mo", "12mo"))
+def test_calendar_window_start_matches_database_millisecond_precision(duration: str, microsecond: int) -> None:
+    reset: Final = datetime(2026, 11, 15, 5, 48, 2, microsecond, tzinfo=timezone.utc)
+    expected: Final = get_budget_window_start(duration, reset.replace(microsecond=0)).replace(
+        microsecond=microsecond // 1000 * 1000
+    )
+    assert get_budget_window_start(duration, reset) == expected
 
 
 class TestResetTimeOfDay(unittest.TestCase):

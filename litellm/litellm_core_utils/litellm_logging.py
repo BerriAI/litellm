@@ -15,6 +15,7 @@ import time
 import traceback
 from collections.abc import Awaitable, Callable, Coroutine, Iterable, Iterator, Mapping, Sequence
 from contextlib import AbstractContextManager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime as dt_object
 from enum import Enum
@@ -74,6 +75,7 @@ from litellm.cost_calculator import (
 )
 from litellm.exceptions import (
     BudgetExceededError,
+    logged_class_name,
     validate_rate_limit_category,
     validate_rate_limit_type,
 )
@@ -304,7 +306,6 @@ from ..integrations.pointfive import PointFiveLogger
 from ..integrations.posthog import PostHogLogger
 from ..integrations.prompt_layer import PromptLayerLogger
 from ..integrations.s3 import S3Logger
-from ..integrations.s3_v2 import S3Logger as S3V2Logger
 from ..integrations.supabase import Supabase
 from ..integrations.traceloop import TraceloopLogger
 from ..integrations.zerobus import ZerobusLogger
@@ -767,6 +768,16 @@ def _callback_control_params(litellm_params: object) -> dict[str, object]:
     return litellm_params.model_dump() if isinstance(litellm_params, BaseModel) else {}
 
 
+def callback_disabled_dynamically(
+    callback: object, litellm_params: object, standard_callback_dynamic_params: StandardCallbackDynamicParams
+) -> bool:
+    return EnterpriseCallbackControls is not None and EnterpriseCallbackControls.is_callback_disabled_dynamically(
+        callback=callback,
+        litellm_params=_callback_control_params(litellm_params),
+        standard_callback_dynamic_params=standard_callback_dynamic_params,
+    )
+
+
 LOGGING_KEYS: Final[Mapping[Field, str]] = MappingProxyType(
     {
         Field.model: "model",
@@ -780,6 +791,9 @@ LOGGING_KEYS: Final[Mapping[Field, str]] = MappingProxyType(
 
 def _holds_v2(callbacks: Iterable[object]) -> bool:
     return any(isinstance(callback, CustomLoggerV2) for callback in callbacks)
+
+
+V2_ASYNC_LOGGING_LINE: Final[ContextVar[bool]] = ContextVar("v2_async_logging_line", default=False)
 
 
 _HOOK_DERIVED_FIELDS: Final[Mapping[Hook, Mapping[Field, FieldSource]]] = MappingProxyType(
@@ -838,15 +852,19 @@ async def _run_callbacks(
     args: HookArgs | None = None,
 ) -> None:
     if include_v2 and _holds_v2(callbacks):
-        _ = kwargs_after(
-            await run_subscribers(
-                hook_subscribers(hook, callbacks, admit=Admit.every_entry),
-                _logging_fields(hook, kwargs, args, owner),
-                binding,
-                call=_v2_call(owner, args),
-                scope=None if owner is None else owner.v2_logging_scope(),
+        line: Final = V2_ASYNC_LOGGING_LINE.set(True)
+        try:
+            _ = kwargs_after(
+                await run_subscribers(
+                    hook_subscribers(hook, callbacks, admit=Admit.every_entry),
+                    _logging_fields(hook, kwargs, args, owner),
+                    binding,
+                    call=_v2_call(owner, args),
+                    scope=None if owner is None else owner.v2_logging_scope(),
+                )
             )
-        )
+        finally:
+            V2_ASYNC_LOGGING_LINE.reset(line)
         return
     for callback in callbacks:
         if isinstance(callback, CustomLoggerV2):
@@ -2426,7 +2444,7 @@ class Logging(LiteLLMLoggingBaseClass):
         )
 
         result_hidden_params: Final = getattr(priced_result, HIDDEN_PARAMS_ATTR, None) or MappingProxyType({})
-        if isinstance(priced_result, (BaseModel, HttpxBinaryResponseContent)) and hasattr(
+        if isinstance(priced_result, (BaseModel, HttpxBinaryResponseContent, litellm.CustomStreamWrapper)) and hasattr(
             priced_result, "_hidden_params"
         ):
             hidden_params: Final = result_hidden_params
@@ -3003,6 +3021,9 @@ class Logging(LiteLLMLoggingBaseClass):
         self.record_partial_usage_for_failure(spend.usage, spend.cost)
         self.cost_breakdown = spend.cost_breakdown
 
+    def record_every_round_breakdown(self, cost_breakdown: CostBreakdown | None) -> None:
+        self.cost_breakdown = cost_breakdown
+
     def attempt_scoped_copy(self) -> "Logging":
         """A copy with its own model_call_details, so logging one attempt of a request through it leaves
         the state the request's other attempts share untouched."""
@@ -3082,11 +3103,8 @@ class Logging(LiteLLMLoggingBaseClass):
         """A billed response the router discards after its success log was parked (a safeguard refusal it falls
         back from) is owed by whichever attempt ends the request, instead of being logged in its place."""
         parked: Final = self.deferred_success_result
-        if parked is None or self.enqueue_deferred_logging is None:
+        if parked is None or not self.unpark_success_log():
             return False
-        self.deferred_success_result = None
-        self.enqueue_deferred_logging = None
-        self._async_success_scheduled = False
         served: Final = self.served_round(parked[0])
         if served is None:
             return True
@@ -3095,6 +3113,14 @@ class Logging(LiteLLMLoggingBaseClass):
             served,
         )
         self._failed_attempts_owed_on_success = (*self._failed_attempts_owed_on_success, served)
+        return True
+
+    def unpark_success_log(self) -> bool:
+        if self.deferred_success_result is None or self.enqueue_deferred_logging is None:
+            return False
+        self.deferred_success_result = None
+        self.enqueue_deferred_logging = None
+        self._async_success_scheduled = False
         return True
 
     def mark_stash_billed_by_continuation(self) -> None:
@@ -3274,9 +3300,9 @@ class Logging(LiteLLMLoggingBaseClass):
                 return False
 
         # Check for dynamically disabled callbacks via headers
-        if EnterpriseCallbackControls is not None and EnterpriseCallbackControls.is_callback_disabled_dynamically(
+        if callback_disabled_dynamically(
             callback=callback,
-            litellm_params=_callback_control_params(litellm_params),
+            litellm_params=litellm_params,
             standard_callback_dynamic_params=self.standard_callback_dynamic_params,
         ):
             verbose_logger.debug(
@@ -6510,6 +6536,8 @@ def build_custom_logger_compatible_class(
         _in_memory_loggers.append(_gcs_bucket_logger)
         return _gcs_bucket_logger
     elif logging_integration == "s3_v2":
+        from litellm.integrations.s3_v2 import S3Logger as S3V2Logger
+
         for callback in _in_memory_loggers:
             if isinstance(callback, S3V2Logger):
                 return callback
@@ -7332,6 +7360,8 @@ def get_custom_logger_compatible_class(
                 if isinstance(callback, GCSBucketLogger):
                     return callback
         elif logging_integration == "s3_v2":
+            from litellm.integrations.s3_v2 import S3Logger as S3V2Logger
+
             for callback in _in_memory_loggers:
                 if isinstance(callback, S3V2Logger):
                     return callback
@@ -8037,6 +8067,8 @@ class StandardLoggingPayloadSetup:
                 )
                 if custom_logger and hasattr(custom_logger, "s3_path") and getattr(custom_logger, "s3_path"):
                     s3_path = getattr(custom_logger, "s3_path")
+                from litellm.integrations.s3_v2 import S3Logger as S3V2Logger
+
                 if isinstance(custom_logger, S3V2Logger):
                     partition_granularity = custom_logger.resolve_partition_granularity()
             except Exception:
@@ -8075,7 +8107,7 @@ class StandardLoggingPayloadSetup:
                 response_attr: Final[object] = getattr(original_exception, "response", None)
                 status_code_attr = getattr(response_attr, "status_code", None)
             error_status = str(status_code_attr) if status_code_attr is not None else ""
-        error_class: Final[str] = str(original_exception.__class__.__name__) if original_exception else ""
+        error_class: Final[str] = logged_class_name(original_exception) if original_exception else ""
         _llm_provider_in_exception: Final = getattr(original_exception, "llm_provider", "")
 
         traceback_info = traceback_str or ""

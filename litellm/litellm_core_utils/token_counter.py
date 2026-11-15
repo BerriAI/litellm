@@ -1884,9 +1884,11 @@ def _count_anthropic_content(
         except Exception as e:
             if default_token_count is not None:
                 return default_token_count
-            raise (UnsupportedContentTypeError if isinstance(e, UnsupportedContentTypeError) else ValueError)(
-                f"Error counting field '{field_name}': {e}"
-            )
+            raise (
+                UnsupportedContentTypeError
+                if server_fields is not None or isinstance(e, UnsupportedContentTypeError)
+                else ValueError
+            )(f"Error counting field '{field_name}': {e}")
     return tokens
 
 
@@ -2095,7 +2097,7 @@ def _format_single_function_definition(function: Mapping[str, object]) -> tuple[
     if not function_name:
         return ()
     function_description: Final = function.get("description")
-    parameters_value: Final = function.get("parameters") or {}
+    parameters_value: Final = function.get("parameters") or function.get("parametersJsonSchema") or {}
     parameters: Final = parameters_value if isinstance(parameters_value, Mapping) else {}
     properties: Final = parameters.get("properties")
     if isinstance(properties, Mapping) and properties:

@@ -171,8 +171,12 @@ def is_annual_budget_duration(duration: str) -> bool:
     return _parse_duration(normalize_duration(duration)) == (12, "mo")
 
 
+def normalize_budget_window_start(moment: datetime) -> datetime:
+    return moment.replace(microsecond=moment.microsecond // 1000 * 1000)
+
+
 def get_annual_budget_window_start(reset_at: datetime, timezone_str: str) -> datetime:
-    boundary: Final = _setup_timezone(reset_at, timezone_str)[0]
+    boundary: Final = _setup_timezone(normalize_budget_window_start(reset_at), timezone_str)[0]
     return _shift_months(boundary, -12).astimezone(timezone.utc)
 
 
@@ -211,24 +215,25 @@ def get_budget_window_start(duration: str, reset_at: datetime) -> datetime:
     """Start of the budget period that ends at `reset_at`, under the same rules
     `get_next_standardized_reset_time` used to pick it: `30d` and `Nmo` span calendar
     months and a duration it does not recognize resets at the next midnight."""
+    boundary: Final = normalize_budget_window_start(reset_at)
     value, unit = _parse_duration(normalize_duration(duration))
     if value is None:
-        return reset_at - timedelta(days=1)
+        return boundary - timedelta(days=1)
     match unit:
         case "mo":
-            return _shift_months(reset_at, -value)
+            return _shift_months(boundary, -value)
         case "d":
-            return _shift_months(reset_at, -1) if value == 30 else reset_at - timedelta(days=value)
+            return _shift_months(boundary, -1) if value == 30 else boundary - timedelta(days=value)
         case "w":
-            return reset_at - timedelta(weeks=value)
+            return boundary - timedelta(weeks=value)
         case "h":
-            return reset_at - timedelta(hours=value)
+            return boundary - timedelta(hours=value)
         case "m":
-            return reset_at - timedelta(minutes=value)
+            return boundary - timedelta(minutes=value)
         case "s":
-            return reset_at - timedelta(seconds=value)
+            return boundary - timedelta(seconds=value)
         case _:
-            return reset_at - timedelta(days=1)
+            return boundary - timedelta(days=1)
 
 
 def _setup_timezone(current_time: datetime, timezone_str: str = "UTC") -> tuple[datetime, tzinfo]:
