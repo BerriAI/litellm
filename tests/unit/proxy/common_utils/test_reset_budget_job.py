@@ -69,8 +69,10 @@ async def test_annual_window_reset_waits_for_the_saved_instant(reset_at: str, no
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("today", ["2028-03-01", "2029-03-01"])
+@pytest.mark.parametrize("microsecond", (0, 123456))
 async def test_annual_reset_persists_the_same_calendar_start_as_admission(  # test-quality-ok: the SQL write is the reset job's observable persistence contract
     today: str,
+    microsecond: int,
 ) -> None:
     client: Final = MagicMock(spec=PrismaClient)
     client.db = MagicMock()
@@ -82,7 +84,7 @@ async def test_annual_reset_persists_the_same_calendar_start_as_admission(  # te
             entity_type=reset_budget_job_module.Litellm_EntityType.KEY,
             entity_id="annual-key",
             budget_duration="12mo",
-            next_reset_at=datetime(2029, 1, 1, tzinfo=timezone.utc),
+            next_reset_at=datetime(2029, 1, 1, microsecond=microsecond, tzinfo=timezone.utc),
             reset_settings=BudgetResetSettings(),
         )
 
@@ -91,11 +93,30 @@ async def test_annual_reset_persists_the_same_calendar_start_as_admission(  # te
         "key",
         "annual-key",
         "12mo",
-        datetime(2028, 1, 1),
+        datetime(2028, 1, 1, microsecond=microsecond // 1000 * 1000),
     )
     assert get_budget_window_start(
-        {"budget_duration": "12mo", "reset_at": datetime(2029, 1, 1, tzinfo=timezone.utc)}
+        {"budget_duration": "12mo", "reset_at": datetime(2029, 1, 1, microsecond=microsecond, tzinfo=timezone.utc)}
     ) == client.db.execute_raw.await_args.args[4].replace(tzinfo=timezone.utc)
+
+
+@pytest.mark.asyncio
+async def test_hourly_reset_persists_millisecond_window_start() -> None:  # test-quality-ok: the SQL write is the reset job's observable persistence contract
+    client: Final = MagicMock(spec=PrismaClient)
+    client.db = MagicMock()
+    client.db.execute_raw = AsyncMock(return_value=1)
+
+    await ResetBudgetJob._roll_window_spend_row(
+        prisma_client=client,
+        entity_type=reset_budget_job_module.Litellm_EntityType.KEY,
+        entity_id="fractional-key",
+        budget_duration="1h",
+        next_reset_at=datetime(2026, 11, 15, 5, 48, 2, 123456, tzinfo=timezone.utc),
+    )
+
+    assert client.db.execute_raw.await_args.args[1:5] == (
+        "key", "fractional-key", "1h", datetime(2026, 11, 15, 4, 48, 2, 123000),
+    )
 
 
 # Mock classes for testing
