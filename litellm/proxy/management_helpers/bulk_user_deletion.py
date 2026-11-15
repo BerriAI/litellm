@@ -135,7 +135,7 @@ class _DeletedUserRows:
     users: int
 
 
-def _team_not_found(team_id: str) -> ManagementProblem:
+def team_not_found(team_id: str) -> ManagementProblem:
     return ManagementProblem(
         ProblemDetail(
             type=f"{PROBLEM_TYPE_BASE}team-not-found",
@@ -146,7 +146,7 @@ def _team_not_found(team_id: str) -> ManagementProblem:
     )
 
 
-def _forbidden(detail: str) -> ManagementProblem:
+def forbidden(detail: str) -> ManagementProblem:
     return ManagementProblem(
         ProblemDetail(type=f"{PROBLEM_TYPE_BASE}forbidden", title="Forbidden", status=403, detail=detail)
     )
@@ -246,7 +246,7 @@ async def _remove_members_from_team(
     await tx.query_raw(TEAM_ADVISORY_LOCK_SQL, team_id)
     roster: Final = await TeamRepository(prisma_client).get_members_with_roles_locked(tx, team_id)
     if roster is None:
-        raise _team_not_found(team_id)
+        raise team_not_found(team_id)
 
     requested_ids: Final = frozenset(r.user_id for r in members if r.user_id is not None)
     requested_emails: Final = frozenset(r.user_email for r in members if r.user_id is None and r.user_email)
@@ -343,10 +343,10 @@ async def bulk_remove_team_members(
 ) -> tuple[TeamMemberDeleteResult, ...]:
     team: Final = await TeamRepository(prisma_client).find_by_id(team_id)
     if team is None:
-        raise _team_not_found(team_id)
+        raise team_not_found(team_id)
 
     if not await get_team_access().allows(user_api_key_dict, team, TEAM_OR_ORG_ADMIN):
-        raise _forbidden(
+        raise forbidden(
             "Call not allowed. User not proxy admin OR team admin OR org admin for this team. "
             f"route='/management/v1/teams/{team_id}/members/bulk_delete'"
         )
@@ -677,7 +677,7 @@ async def bulk_delete_users(
     caller_is_proxy_admin: Final = user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
     caller_admin_org_ids: Final = await _caller_admin_org_ids(prisma_client, user_api_key_dict)
     if not caller_is_proxy_admin and not caller_admin_org_ids:
-        raise _forbidden("Only PROXY_ADMIN or ORG_ADMIN users may delete users.")
+        raise forbidden("Only PROXY_ADMIN or ORG_ADMIN users may delete users.")
 
     unique_ids: Final = frozenset(data.user_ids)
     rows: Final = await UserRepository(prisma_client).table.find_many(where=_in_filter("user_id", unique_ids))

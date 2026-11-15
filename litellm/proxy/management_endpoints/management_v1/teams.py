@@ -28,9 +28,9 @@ from litellm.proxy.list_api.list_framework import (
 from litellm.proxy.management_endpoints.management_v1.common import MANAGEMENT_V1_PREFIX
 from litellm.proxy.management_helpers.bulk_team_member_budgets import bulk_update_team_member_budgets
 from litellm.proxy.management_helpers.bulk_user_deletion import (
-    _forbidden,  # pyright: ignore[reportPrivateUsage]  # same problem shape as members/bulk_delete
-    _team_not_found,  # pyright: ignore[reportPrivateUsage]  # same problem shape as members/bulk_delete
     bulk_remove_team_members,
+    forbidden,
+    team_not_found,
 )
 from litellm.proxy.management_helpers.utils import (
     management_endpoint_wrapper,  # pyright: ignore[reportUnknownVariableType]  # legacy decorator is untyped
@@ -59,8 +59,6 @@ class _RosterEntry(LiteLLMBaseModel):
 
 
 class TeamMemberListItem(_RosterEntry):
-    """One roster entry with the same membership fields `/team/info` reports in `team_memberships`."""
-
     model_config = ConfigDict(frozen=True)
 
     team_id: str
@@ -80,8 +78,6 @@ class _RowCount(LiteLLMBaseModel):
 _ROSTER_ENTRIES: Final = TypeAdapter(tuple[_RosterEntry, ...])
 _ROW_COUNTS: Final = TypeAdapter(tuple[_RowCount, ...])
 
-# One row per entry of the team's roster JSON, in roster order. `$1` is the team id; the roster is
-# unnested and joined in Postgres so that filtering, sorting and paging never leave the database.
 _TEAM_ROSTER: Final = """(
     SELECT roster.position AS "position",
         roster.member->>'user_id' AS "user_id",
@@ -106,9 +102,6 @@ _TEAM_ROSTER: Final = """(
 
 @dataclass(frozen=True, slots=True)
 class PrismaTeamMemberListExecutor:
-    """The database half of the team members list. The team id and every caller-supplied value are
-    bound to placeholders; only the spec's own column names reach the SQL text."""
-
     prisma_client: PrismaClient
     team_id: str
     active_default_budget_id: str | None
@@ -143,7 +136,7 @@ class PrismaTeamMemberListExecutor:
 
     def _item(self, entry: _RosterEntry, membership: LiteLLM_TeamMembership | None) -> TeamMemberListItem:
         from litellm.proxy.management_endpoints.team_endpoints import (
-            _member_budget_source,  # pyright: ignore[reportPrivateUsage]  # the rule /team/info applies, not a copy of it
+            member_budget_source,
         )
 
         membership_fields: Final[Mapping[str, object]] = (
@@ -153,7 +146,7 @@ class PrismaTeamMemberListExecutor:
             {
                 **membership_fields,
                 **entry.model_dump(),
-                "budget_source": _member_budget_source(
+                "budget_source": member_budget_source(
                     membership.budget_id if membership is not None else None, self.active_default_budget_id
                 ),
             }
@@ -236,7 +229,7 @@ async def list_team_members(
     """
     try:
         from litellm.proxy.management_endpoints.team_endpoints import (
-            _existing_team_default_budget_id,  # pyright: ignore[reportPrivateUsage]  # the active-default rule /team/info applies
+            existing_team_default_budget_id,
             validate_membership,
         )
         from litellm.proxy.proxy_server import prisma_client
@@ -253,18 +246,18 @@ async def list_team_members(
 
         team: Final = await TeamRepository(prisma_client).find_by_id(team_id)
         if team is None:
-            raise _team_not_found(team_id)
+            raise team_not_found(team_id)
         try:
             await validate_membership(user_api_key_dict=user_api_key_dict, team_table=team)
         except HTTPException as denied:
-            raise _forbidden(f"Not authorized to read the members of team={team_id}.") from denied
+            raise forbidden(f"Not authorized to read the members of team={team_id}.") from denied
 
         return await handle_list(
             spec=TEAM_MEMBERS_LIST_SPEC,
             executor=PrismaTeamMemberListExecutor(
                 prisma_client=prisma_client,
                 team_id=team_id,
-                active_default_budget_id=await _existing_team_default_budget_id(team, prisma_client),
+                active_default_budget_id=await existing_team_default_budget_id(team, prisma_client),
             ),
             request=request,
             caller=user_api_key_dict,

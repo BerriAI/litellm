@@ -14995,6 +14995,7 @@ async def test_team_info_without_members_returns_an_empty_roster_and_reads_neith
         ),
         pytest.param("nobody@example.com", [], None, 1, id="unknown email"),
         pytest.param(None, [], None, 0, id="no email"),
+        pytest.param("", [("blank-email-on-roster", None)], None, 0, id="a blank email is no email"),
     ],
 )
 @pytest.mark.asyncio
@@ -15004,6 +15005,7 @@ async def test_roster_user_id_for_email_matches_what_team_info_shows(email, user
     roster = (
         Member(user_id="on-roster", user_email="stored@example.com", role="user"),
         Member(user_id="no-email-on-roster", role="user"),
+        Member(user_id="blank-email-on-roster", user_email="", role="user"),
     )
     find_many = AsyncMock(return_value=[_user_row(user_id, user_email) for user_id, user_email in user_rows])
 

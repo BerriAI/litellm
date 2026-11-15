@@ -38,10 +38,6 @@ MAX_PAGE_SIZE: Final = 100
 CONCURRENT_NUDGES: Final = 16
 DEFAULT_PAGE_SIZE: Final = 50
 
-# Member n (1-based) is `<prefix>-<n padded to 5>`. Even members carry an email in the roster JSON (their
-# user row holds the same local part at another domain) and odd ones only on their user row. Every 1000th
-# is a team admin, aliases run opposite to the ids, and the last roster entry has no user_id at all, which
-# `/team/member_add` allows for an email-only member.
 SEED_ROSTER_SQL: Final = """
 UPDATE "LiteLLM_TeamTable"
 SET members_with_roles = (
@@ -71,9 +67,6 @@ UNION ALL
 SELECT %s || '-budget-own', 100 + %s::int %% %s::int, '30d',
        TIMESTAMP '2030-01-01' + ((%s::int %% %s::int) || ' days')::interval, 'seed', 'seed'
 """
-# Members up to WITH_MEMBERSHIP have a row: n % 4 == 0 on a custom budget shared with others, n % 4 == 1
-# on the team default, the rest on none. OWN_BUDGET_MEMBER has a budget nobody shares, with the limits its
-# shared one would have had. Every third row predates `total_spend` and holds its history only in `spend`.
 SEED_MEMBERSHIPS_SQL: Final = """
 INSERT INTO "LiteLLM_TeamMembership" (user_id, team_id, spend, total_spend, budget_id)
 SELECT %s || '-' || lpad(n::text, 5, '0'), %s, n * 0.5, CASE WHEN n %% 3 = 0 THEN 0 ELSE n * 0.5 + 1 END,
@@ -89,7 +82,6 @@ FROM pg_stat_user_tables WHERE relname = %s
 
 
 def _email_rank(n: int) -> int:
-    """A fixed shuffle of the members, so that email order differs from id, alias and roster order."""
     return n * 37 % 5003
 
 
@@ -150,13 +142,13 @@ def large_team(session_gateway: Gateway) -> Iterator[LargeTeam]:
 
 def _page(
     gateway: Gateway, team: LargeTeam, params: Mapping[str, str], *, key: str | None = None
-) -> dict[str, JsonValue]:
+) -> Mapping[str, JsonValue]:
     response: Final = gateway.request("GET", team.path, params=params, key=key)
     assert response.status_code == 200, f"GET {team.path} {dict(params)}: {response.status_code} {response.text}"
     return object_value(response.json())
 
 
-def _rows(page: Mapping[str, JsonValue]) -> tuple[dict[str, JsonValue], ...]:
+def _rows(page: Mapping[str, JsonValue]) -> tuple[Mapping[str, JsonValue], ...]:
     return tuple(object_value(row) for row in list_value(page["data"]))
 
 
@@ -164,7 +156,7 @@ def _user_ids(page: Mapping[str, JsonValue]) -> list[JsonValue]:
     return [row["user_id"] for row in _rows(page)]
 
 
-def _every_page(gateway: Gateway, team: LargeTeam, params: Mapping[str, str]) -> tuple[dict[str, JsonValue], ...]:
+def _every_page(gateway: Gateway, team: LargeTeam, params: Mapping[str, str]) -> tuple[Mapping[str, JsonValue], ...]:
     first: Final = _page(gateway, team, {**params, "page_size": str(MAX_PAGE_SIZE)})
     total_pages: Final = object_value(first["meta"])["total_pages"]
     assert isinstance(total_pages, int)
@@ -175,12 +167,11 @@ def _every_page(gateway: Gateway, team: LargeTeam, params: Mapping[str, str]) ->
     return tuple(chain.from_iterable(_rows(page) for page in (first, *rest)))
 
 
-def _team_info_rows(team_info: Mapping[str, JsonValue], team: LargeTeam) -> list[dict[str, JsonValue]]:
-    """What `/team/info` says about each roster entry, in roster order, in the shape the list route serves."""
+def _team_info_rows(team_info: Mapping[str, JsonValue], team: LargeTeam) -> list[Mapping[str, JsonValue]]:
     memberships: Final = {
         object_value(row)["user_id"]: object_value(row) for row in list_value(team_info["team_memberships"])
     }
-    without_membership: Final[dict[str, JsonValue]] = {
+    without_membership: Final[Mapping[str, JsonValue]] = {
         "team_id": team.team_id,
         "spend": 0.0,
         "total_spend": 0.0,
@@ -280,7 +271,6 @@ SORTED_MEMBERS: Final[Mapping[str, Sequence[int]]] = {
     "user_id": range(1, ROSTER + 1),
     "-user_id": range(ROSTER, 0, -1),
     "user_email": sorted(range(1, ROSTER + 1), key=_email_rank),
-    # Member 0 stands for the roster entry without a user_id, whose email sorts after every numbered one.
     "-user_email": (0, *sorted(range(1, ROSTER + 1), key=_email_rank, reverse=True)),
     "user_alias": range(ROSTER, 0, -1),
     "-user_alias": range(1, ROSTER + 1),
@@ -293,7 +283,6 @@ SORTED_MEMBERS: Final[Mapping[str, Sequence[int]]] = {
     ),
     "-max_budget": sorted(range(1, ROSTER + 1), key=lambda n: (-_effective_max_budget(n), n)),
     "max_budget": sorted(range(1, ROSTER + 1), key=lambda n: (_effective_max_budget(n), n)),
-    # Custom budget k resets k days after 2030-01-01; the default budget and no budget have no reset date.
     "-budget_reset_at": sorted(
         (n for n in range(1, WITH_MEMBERSHIP + 1) if n % 4 == 0), key=lambda n: (-(n % CUSTOM_BUDGETS), n)
     ),
@@ -387,22 +376,14 @@ def test_member_update_reads_a_handful_of_rows_not_the_roster(gateway: Gateway, 
     tables: Final = ("LiteLLM_TeamMembership", "LiteLLM_UserTable")
 
     def rows_read() -> tuple[int, ...]:
-        # A backend reports its counters when it next goes idle, so each poll runs a statement on as many of the
-        # proxy's pooled connections as it can reach at once.
+        # A backend flushes its counters when it next goes idle, so nudge every pooled connection before reading.
         with ThreadPoolExecutor(max_workers=CONCURRENT_NUDGES) as pool:
             tuple(
                 pool.map(lambda _: gateway.get("/management/v1/budgets", {"page_size": "1"}), range(CONCURRENT_NUDGES))
             )
         return tuple(_rows_read(table) for table in tables)
 
-    seen: Final[list[tuple[int, ...]]] = []
-
-    def unchanged(counts: tuple[int, ...]) -> bool:
-        seen.append(counts)
-        return len(seen) > 1 and seen[-2] == counts
-
-    # Reads earlier tests caused must have landed before the update is measured.
-    before: Final = held(rows_read, unchanged, holding=2, seconds=60)
+    _, before = held(lambda: (rows_read(), rows_read()), lambda reads: reads[0] == reads[1], holding=2, seconds=60)
     updated: Final = gateway.post(
         "/team/member_update", {"team_id": large_team.team_id, "user_id": target, "max_budget_in_team": 77.0}
     )

@@ -4154,7 +4154,7 @@ async def _roster_user_id_for_email(
     prisma_client: PrismaClient, roster: Sequence[Member], user_email: str | None
 ) -> str | None:
     """The first roster entry `/team/info` shows with this email: its roster email, else its user row's."""
-    if user_email is None:
+    if not user_email:
         return None
     users_with_email: Final = await _user_db(prisma_client).find_many(where={"user_email": user_email})
     user_ids_with_email: Final = frozenset(user.user_id for user in users_with_email)
@@ -4462,7 +4462,7 @@ def _team_default_budget_id(team: LiteLLM_TeamTable) -> str | None:
     return raw if isinstance(raw, str) else None
 
 
-async def _existing_team_default_budget_id(team: LiteLLM_TeamTable, prisma_client: PrismaClient) -> str | None:
+async def existing_team_default_budget_id(team: LiteLLM_TeamTable, prisma_client: PrismaClient) -> str | None:
     budget_id: Final = _team_default_budget_id(team)
     if budget_id is None:
         return None
@@ -4472,7 +4472,7 @@ async def _existing_team_default_budget_id(team: LiteLLM_TeamTable, prisma_clien
     return budget_id if row is not None else None
 
 
-def _member_budget_source(budget_id: str | None, team_default_budget_id: str | None) -> TeamMemberBudgetSource:
+def member_budget_source(budget_id: str | None, team_default_budget_id: str | None) -> TeamMemberBudgetSource:
     if budget_id is not None and budget_id != team_default_budget_id:
         return "custom"
     return "team_default" if team_default_budget_id is not None else "none"
@@ -4517,7 +4517,7 @@ async def reset_team_member_budget_fn(
     if membership_row is None:
         _raise_reset_spend_error(status.HTTP_404_NOT_FOUND, f"User {user_id} is not a member of team {team_id}.")
 
-    team_default_budget_id: Final = await _existing_team_default_budget_id(team_obj, prisma_client)
+    team_default_budget_id: Final = await existing_team_default_budget_id(team_obj, prisma_client)
     budget_link: Final = (
         {"connect": {"budget_id": team_default_budget_id}}
         if team_default_budget_id is not None
@@ -4538,7 +4538,7 @@ async def reset_team_member_budget_fn(
         user_id=user_id,
         budget_id=team_default_budget_id,
         previous_budget_id=membership_row.budget_id,
-        budget_source=_member_budget_source(team_default_budget_id, team_default_budget_id),
+        budget_source=member_budget_source(team_default_budget_id, team_default_budget_id),
     )
 
 
@@ -5579,7 +5579,7 @@ async def team_info(
                     MappingProxyType(
                         {
                             **tm.model_dump(),
-                            "budget_source": _member_budget_source(tm.budget_id, active_default_budget_id),
+                            "budget_source": member_budget_source(tm.budget_id, active_default_budget_id),
                         }
                     )
                 )

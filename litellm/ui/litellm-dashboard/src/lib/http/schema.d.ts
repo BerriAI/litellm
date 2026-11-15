@@ -50402,10 +50402,7 @@ export interface components {
             /** User Id */
             user_id: string;
         };
-        /**
-         * TeamMemberListItem
-         * @description One roster entry with the same membership fields `/team/info` reports in `team_memberships`.
-         */
+        /** TeamMemberListItem */
         TeamMemberListItem: {
             /** Budget Id */
             budget_id?: string | null;
