@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import uuid
+from types import MappingProxyType
 from typing import Final
 
 import openai
@@ -65,6 +66,11 @@ def test_responses_compact_routes_forward_complete_request_and_typed_items(gatew
         "call_id": "call_previous",
         "output": "The record is ready.",
     }
+    saved_compaction_item: Final = {
+        "id": f"cmp_{uuid.uuid4().hex}",
+        "type": "compaction",
+        "encrypted_content": "synthetic-saved-state",
+    }
     requests: Final = (
         {
             "input": "Compact this conversation.",
@@ -74,6 +80,20 @@ def test_responses_compact_routes_forward_complete_request_and_typed_items(gatew
             "instructions": "Preserve the latest decision.",
             "tools": [_FUNCTION_TOOL],
         },
+    )
+    saved_compaction_request: Final = {
+        "input": [{**saved_compaction_item, "created_by": None}, {**function_output_item, "created_by": None}],
+        "instructions": "Compact the saved conversation again.",
+    }
+    forwarded_bodies: Final = MappingProxyType(
+        {
+            None: requests[0],
+            requests[1]["instructions"]: requests[1],
+            saved_compaction_request["instructions"]: {
+                **saved_compaction_request,
+                "input": [saved_compaction_item, function_output_item],
+            },
+        }
     )
     output_items: Final = [
         {
@@ -98,18 +118,7 @@ def test_responses_compact_routes_forward_complete_request_and_typed_items(gatew
         assert request.method == "POST"
         assert request.headers["authorization"] == f"Bearer {_API_KEY}", dict(request.headers)
         body: Final = _JSON_OBJECT.validate_json(request.body)
-        compact_params: Final = (
-            {
-                "model": _MODEL,
-                **requests[0],
-            }
-            if body.get("input") == requests[0]["input"]
-            else {
-                "model": _MODEL,
-                **requests[1],
-            }
-        )
-        assert body == compact_params, request.body
+        assert body == {"model": _MODEL, **forwarded_bodies[body.get("instructions")]}, request.body
         return Reply(
             body=json.dumps(
                 {
@@ -128,16 +137,20 @@ def test_responses_compact_routes_forward_complete_request_and_typed_items(gatew
             ).encode()
         )
 
+    sent_bodies: Final = (*requests, saved_compaction_request)
     with wire_server(respond) as wire, gateway.scenario() as scenario:
         model: Final = _deployment(scenario, wire)
         for alias in _ALIASES:
-            for request_body in requests:
+            for request_body in sent_bodies:
                 response: Final = gateway.request(
                     "POST",
                     alias,
                     {"model": model, **request_body},
                 )
                 assert response.status_code == 200, response.text
+                wire_output: Final = _JSON_OBJECT.validate_json(response.content)["output"]
+                assert isinstance(wire_output, list), response.text
+                assert [item for item in wire_output if not isinstance(item, dict) or "created_by" in item] == []
                 compacted: Final = CompactedResponse.model_validate_json(response.content)
                 assert compacted.id != completed_id, compacted.model_dump_json()
                 assert same_response(compacted.id, completed_id), compacted.model_dump_json()
@@ -201,7 +214,7 @@ def test_responses_compact_routes_forward_complete_request_and_typed_items(gatew
                     "user": None,
                     "store": None,
                 }, response.text
-        assert [request.target for request in drain_contract_requests(wire)] == ["/v1/responses/compact"] * 6
+        assert [request.target for request in drain_contract_requests(wire)] == ["/v1/responses/compact"] * (len(_ALIASES) * len(sent_bodies))
 
 
 @pytest.mark.parametrize("prefix", ("/v1", "", "/openai/v1"))

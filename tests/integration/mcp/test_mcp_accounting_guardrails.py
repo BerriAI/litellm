@@ -510,7 +510,7 @@ def test_pre_call_mask_reaches_the_peer_and_post_call_mask_reaches_the_caller_on
         assert _spend_row(generic["litellm_call_id"])["status"] == "success"
 
 
-def test_call_time_description_and_schema_come_from_the_catalog_of_the_worker_that_served_the_listing(
+def test_call_time_description_and_schema_are_guarded_on_a_worker_that_never_served_the_listing(
     hooks_rig: HooksRig,
 ) -> None:
     with (
@@ -536,8 +536,19 @@ def test_call_time_description_and_schema_come_from_the_catalog_of_the_worker_th
             elsewhere: Final = hooks_rig.sunk()
             unlisted: Final = _only(_native(elsewhere, "pre"))
             assert unlisted["pid"] == second_worker, unlisted
-            assert (unlisted["mcp_tool_description"], unlisted["mcp_input_schema"]) == (None, None), unlisted
-            assert _scan(elsewhere, unlisted["litellm_call_id"])["texts"] == ["r-2"], elsewhere
+            assert (unlisted["mcp_tool_description"], unlisted["mcp_input_schema"]) == (
+                LOOKUP_DESCRIPTION,
+                LOOKUP_SCHEMA,
+            ), unlisted
+            scans: Final = tuple(
+                scan
+                for scan in _generic(elsewhere, "request")
+                if scan["litellm_call_id"] == unlisted["litellm_call_id"]
+            )
+            assert tuple(scan["texts"] for scan in scans) == (
+                [LOOKUP_DESCRIPTION, "record identifier"],
+                [LOOKUP_DESCRIPTION, "record identifier", "r-2"],
+            ), scans
             assert lister.call(name, {"record": "r-3"}).text == "found"
             assert _worker(first) == first_worker
             at_lister: Final = hooks_rig.sunk()

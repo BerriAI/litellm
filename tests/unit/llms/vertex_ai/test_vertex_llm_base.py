@@ -5,14 +5,22 @@ import logging
 import os
 import pathlib
 import re
+import time
 import traceback
-from typing import Final
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta
+from functools import partial
+from threading import Event, Semaphore
+from typing import Final, Literal, NoReturn
 from unittest.mock import MagicMock, call, patch
 
 import google.auth.exceptions
 import pytest
+import requests
+import responses
 
-from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
+from litellm.constants import DEFAULT_MAX_LRU_CACHE_SIZE, DEFAULT_MAX_RECURSE_DEPTH
 
 
 import litellm
@@ -2589,3 +2597,392 @@ def test_get_access_token_reraises_malformed_service_account_credentials_without
     assert [record.getMessage().split(". Error: ")[0] for record in caplog.records] == [
         "Failed to load vertex credentials. Check to see if credentials containing partial/invalid information"
     ]
+
+
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+@pytest.mark.asyncio
+async def test_expired_credentials_shared_by_an_inferred_and_an_explicit_project_refresh_once(is_async: bool) -> None:
+    vertex: Final = VertexBase()
+    now: Final = datetime(2025, 1, 1)
+    credentials: Final = _authorized_user_cache_credentials("shared")
+    with patch("google.auth._helpers.utcnow", return_value=now) as clock, responses.RequestsMock() as oauth:
+        def token_response(request: requests.PreparedRequest) -> tuple[int, dict[str, str], str]:
+            if len(oauth.calls) == 1:
+                time.sleep(0.3)
+            return 200, {}, json.dumps({"access_token": f"token-{len(oauth.calls) + 1}", "expires_in": 3600})
+
+        oauth.add_callback(responses.POST, "https://oauth2.googleapis.com/token", callback=token_response)
+        assert vertex.get_access_token(credentials, None) == ("token-1", "shared")
+        clock.return_value = now + timedelta(seconds=7200)
+        fetch: Final = vertex.get_access_token_async if is_async else partial(asyncio.to_thread, vertex.get_access_token)
+        tokens: Final = tuple(await asyncio.gather(*(fetch(credentials, project) for project in (None, "shared"))))
+
+        assert tokens == (("token-2", "shared"), ("token-2", "shared"))
+        assert len(oauth.calls) == 2
+
+
+def test_callers_that_join_a_rejected_google_token_fetch_share_its_error_and_the_next_call_retries() -> None:
+    vertex: Final = VertexBase()
+    credentials: Final = _authorized_user_cache_credentials("revoked")
+    leader_fetching: Final = Event()
+    followers_calling: Final = Semaphore(0)
+
+    def follow() -> tuple[str, str]:
+        followers_calling.release()
+        return vertex.get_access_token(credentials, "unit-project")
+
+    def revoked_token_response(request: requests.PreparedRequest) -> tuple[int, dict[str, str], str]:
+        if not leader_fetching.is_set():
+            leader_fetching.set()
+            assert all(followers_calling.acquire(timeout=5) for _ in range(4))
+            time.sleep(0.2)
+        return 400, {}, json.dumps({"error": "invalid_grant", "error_description": "Token has been expired or revoked."})
+
+    with responses.RequestsMock() as oauth, ThreadPoolExecutor(max_workers=5) as pool:
+        oauth.add_callback(responses.POST, "https://oauth2.googleapis.com/token", callback=revoked_token_response)
+        leader: Final = pool.submit(vertex.get_access_token, credentials, "unit-project")
+        assert leader_fetching.wait(timeout=5)
+        followers: Final = tuple(pool.submit(follow) for _ in range(4))
+        errors: Final = tuple(call.exception(timeout=10) for call in (leader, *followers))
+
+        assert len(oauth.calls) == 1
+        assert all(isinstance(error, google.auth.exceptions.RefreshError) for error in errors)
+        with pytest.raises(google.auth.exceptions.RefreshError, match="invalid_grant"):
+            vertex.get_access_token(credentials, "unit-project")
+        assert len(oauth.calls) == 2
+
+
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("project", ["unit-project", None], ids=["explicit", "inferred"])
+@pytest.mark.asyncio
+async def test_callers_reload_a_rotated_key_file_once_when_google_rejects_the_old_key(
+    tmp_path: pathlib.Path, is_async: bool, project: str | None
+) -> None:
+    vertex: Final = VertexBase()
+    now: Final = datetime(2025, 1, 1)
+    key_file: Final = tmp_path / "vertex-key.json"
+    key_file.write_text(_authorized_user_cache_credentials("old-key", quota_project="unit-project"))
+    old_key_revoked: Final = Event()
+
+    def token_response(request: requests.PreparedRequest) -> tuple[int, dict[str, str], str]:
+        form: Final = request.body.decode() if isinstance(request.body, bytes) else str(request.body)
+        is_old_key: Final = "old-key" in form
+        if is_old_key and old_key_revoked.is_set():
+            return 400, {}, json.dumps({"error": "invalid_grant", "error_description": "Token has been expired or revoked."})
+        return 200, {}, json.dumps({"access_token": "old-token" if is_old_key else "new-token", "expires_in": 3600})
+
+    fetch: Final = vertex.get_access_token_async if is_async else partial(asyncio.to_thread, vertex.get_access_token)
+    with patch("google.auth._helpers.utcnow", return_value=now) as clock, responses.RequestsMock() as oauth:
+        oauth.add_callback(responses.POST, "https://oauth2.googleapis.com/token", callback=token_response)
+        assert await fetch(str(key_file), project) == ("old-token", "unit-project")
+        _rewrite_keeping_its_version(
+            key_file, _authorized_user_cache_credentials("new-key", quota_project="unit-project")
+        )
+        old_key_revoked.set()
+        clock.return_value = now + timedelta(seconds=7200)
+        assert await fetch(str(key_file), project) == ("new-token", "unit-project")
+        assert await fetch(str(key_file), project) == ("new-token", "unit-project")
+        assert len(oauth.calls) == 3
+
+
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    ("outage_status", "outage_body"),
+    [
+        (503, json.dumps({"error": "server_error", "error_description": "Service unavailable."})),
+        (502, "<html>Bad Gateway</html>"),
+    ],
+    ids=["503", "502"],
+)
+@pytest.mark.asyncio
+async def test_a_google_outage_during_refresh_keeps_the_cached_key_instead_of_reloading_it(
+    tmp_path: pathlib.Path, is_async: bool, outage_status: int, outage_body: str
+) -> None:
+    vertex: Final = VertexBase()
+    now: Final = datetime(2025, 1, 1)
+    key_file: Final = tmp_path / "vertex-key.json"
+    key_file.write_text(_authorized_user_cache_credentials("old-key"))
+    google_down: Final = Event()
+
+    def token_response(request: requests.PreparedRequest) -> tuple[int, dict[str, str], str]:
+        if google_down.is_set():
+            return outage_status, {}, outage_body
+        return 200, {}, json.dumps({"access_token": "old-token", "expires_in": 3600})
+
+    fetch: Final = vertex.get_access_token_async if is_async else partial(asyncio.to_thread, vertex.get_access_token)
+    with (
+        patch("google.auth._helpers.utcnow", return_value=now) as clock,
+        patch("google.auth._exponential_backoff.time"),
+        responses.RequestsMock() as oauth,
+    ):
+        oauth.add_callback(responses.POST, "https://oauth2.googleapis.com/token", callback=token_response)
+        assert await fetch(str(key_file), "unit-project") == ("old-token", "unit-project")
+        _rewrite_keeping_its_version(key_file, _authorized_user_cache_credentials("new-key"))
+        google_down.set()
+        clock.return_value = now + timedelta(seconds=7200)
+        with pytest.raises(google.auth.exceptions.RefreshError):
+            await fetch(str(key_file), "unit-project")
+        assert not any("new-key" in str(call.request.body) for call in oauth.calls)
+
+
+def _rewrite_keeping_its_version(key_file: pathlib.Path, contents: str) -> None:
+    before: Final = key_file.stat()
+    key_file.write_text(contents)
+    os.utime(key_file, ns=(before.st_atime_ns, before.st_mtime_ns))
+
+
+def _move_into_place(key_file: pathlib.Path, contents: str) -> None:
+    before: Final = key_file.stat()
+    staged: Final = key_file.with_name("staged-key.json")
+    staged.write_text(contents)
+    os.utime(staged, ns=(before.st_atime_ns, before.st_mtime_ns))
+    os.replace(staged, key_file)
+
+
+def _rewrite_later(key_file: pathlib.Path, contents: str) -> None:
+    before: Final = key_file.stat()
+    key_file.write_text(contents)
+    os.utime(key_file, ns=(before.st_atime_ns, before.st_mtime_ns + 1_000_000_000))
+
+
+def _rewrite_longer(key_file: pathlib.Path, contents: str) -> None:
+    _rewrite_keeping_its_version(key_file, contents.replace("new-key", "new-key-v2"))
+
+
+def _old_or_new_token_response(request: requests.PreparedRequest) -> tuple[int, dict[str, str], str]:
+    form: Final = request.body.decode() if isinstance(request.body, bytes) else str(request.body)
+    return 200, {}, json.dumps({"access_token": "old-token" if "old-key" in form else "new-token", "expires_in": 3600})
+
+
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("from_adc_env", [False, True], ids=["vertex_credentials", "GOOGLE_APPLICATION_CREDENTIALS"])
+@pytest.mark.parametrize(
+    "swap_key_file",
+    [_move_into_place, _rewrite_later, _rewrite_longer],
+    ids=["moved_into_place", "rewritten_later", "rewritten_longer"],
+)
+@pytest.mark.asyncio
+async def test_a_swapped_key_file_is_used_on_the_next_call_while_the_old_key_still_works(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    is_async: bool,
+    from_adc_env: bool,
+    swap_key_file: Callable[[pathlib.Path, str], None],
+) -> None:
+    vertex: Final = VertexBase()
+    key_file: Final = tmp_path / "vertex-key.json"
+    key_file.write_text(_authorized_user_cache_credentials("old-key", quota_project="unit-project"))
+    if from_adc_env:
+        monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", str(key_file))
+    credentials: Final = None if from_adc_env else str(key_file)
+
+    fetch: Final = vertex.get_access_token_async if is_async else partial(asyncio.to_thread, vertex.get_access_token)
+    with responses.RequestsMock() as oauth:
+        oauth.add_callback(responses.POST, "https://oauth2.googleapis.com/token", callback=_old_or_new_token_response)
+        assert await fetch(credentials, "unit-project") == ("old-token", "unit-project")
+        swap_key_file(key_file, _authorized_user_cache_credentials("new-key", quota_project="unit-project"))
+        assert await fetch(credentials, "unit-project") == ("new-token", "unit-project")
+        assert await fetch(credentials, "unit-project") == ("new-token", "unit-project")
+        assert len(oauth.calls) == 2
+
+
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+@pytest.mark.asyncio
+async def test_a_key_file_replaced_by_one_that_does_not_load_keeps_the_earlier_key_until_it_is_fixed(
+    tmp_path: pathlib.Path, is_async: bool
+) -> None:
+    vertex: Final = VertexBase()
+    key_file: Final = tmp_path / "vertex-key.json"
+    key_file.write_text(_authorized_user_cache_credentials("old-key", quota_project="unit-project"))
+
+    fetch: Final = vertex.get_access_token_async if is_async else partial(asyncio.to_thread, vertex.get_access_token)
+    with responses.RequestsMock() as oauth:
+        oauth.add_callback(responses.POST, "https://oauth2.googleapis.com/token", callback=_old_or_new_token_response)
+        assert await fetch(str(key_file), "unit-project") == ("old-token", "unit-project")
+        _move_into_place(key_file, '{"type": "authorized_user", "client_id": "half-wri')
+        assert await fetch(str(key_file), "unit-project") == ("old-token", "unit-project")
+        _move_into_place(key_file, _authorized_user_cache_credentials("repaired-key", quota_project="unit-project"))
+        assert await fetch(str(key_file), "unit-project") == ("new-token", "unit-project")
+        assert len(oauth.calls) == 2
+
+
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+@pytest.mark.asyncio
+async def test_a_key_file_that_does_not_load_raises_once_google_rejects_the_earlier_key(
+    tmp_path: pathlib.Path, is_async: bool
+) -> None:
+    vertex: Final = VertexBase()
+    now: Final = datetime(2025, 1, 1)
+    key_file: Final = tmp_path / "vertex-key.json"
+    key_file.write_text(_authorized_user_cache_credentials("old-key", quota_project="unit-project"))
+    old_key_revoked: Final = Event()
+
+    def token_response(request: requests.PreparedRequest) -> tuple[int, dict[str, str], str]:
+        if old_key_revoked.is_set():
+            return 400, {}, json.dumps({"error": "invalid_grant", "error_description": "Token has been expired or revoked."})
+        return _old_or_new_token_response(request)
+
+    fetch: Final = vertex.get_access_token_async if is_async else partial(asyncio.to_thread, vertex.get_access_token)
+    with patch("google.auth._helpers.utcnow", return_value=now) as clock, responses.RequestsMock() as oauth:
+        oauth.add_callback(responses.POST, "https://oauth2.googleapis.com/token", callback=token_response)
+        assert await fetch(str(key_file), "unit-project") == ("old-token", "unit-project")
+        _move_into_place(key_file, '{"type": "authorized_user", "client_id": "half-wri')
+        old_key_revoked.set()
+        clock.return_value = now + timedelta(seconds=7200)
+        with pytest.raises(google.auth.exceptions.RefreshError, match="invalid_grant"):
+            await fetch(str(key_file), "unit-project")
+
+
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    "google_unavailable",
+    [
+        lambda: (503, {}, json.dumps({"error": "server_error", "error_description": "Service unavailable."})),
+        lambda: _raise(requests.exceptions.ConnectionError("oauth2.googleapis.com is unreachable")),
+    ],
+    ids=["503", "unreachable"],
+)
+@pytest.mark.asyncio
+async def test_a_swapped_key_file_whose_first_token_fetch_fails_is_tried_again_on_the_next_call(
+    tmp_path: pathlib.Path, is_async: bool, google_unavailable: Callable[[], tuple[int, dict[str, str], str]]
+) -> None:
+    vertex: Final = VertexBase()
+    key_file: Final = tmp_path / "vertex-key.json"
+    key_file.write_text(_authorized_user_cache_credentials("old-key", quota_project="unit-project"))
+    google_down: Final = Event()
+
+    def token_response(request: requests.PreparedRequest) -> tuple[int, dict[str, str], str]:
+        return google_unavailable() if google_down.is_set() else _old_or_new_token_response(request)
+
+    fetch: Final = vertex.get_access_token_async if is_async else partial(asyncio.to_thread, vertex.get_access_token)
+    with patch("google.auth._exponential_backoff.time"), responses.RequestsMock() as oauth:
+        oauth.add_callback(responses.POST, "https://oauth2.googleapis.com/token", callback=token_response)
+        assert await fetch(str(key_file), "unit-project") == ("old-token", "unit-project")
+        _move_into_place(key_file, _authorized_user_cache_credentials("new-key", quota_project="unit-project"))
+        google_down.set()
+        with pytest.raises((google.auth.exceptions.RefreshError, google.auth.exceptions.TransportError)):
+            await fetch(str(key_file), "unit-project")
+        google_down.clear()
+        assert await fetch(str(key_file), "unit-project") == ("new-token", "unit-project")
+        assert await fetch(str(key_file), "unit-project") == ("new-token", "unit-project")
+
+
+def _raise(error: Exception) -> NoReturn:
+    raise error
+
+
+def _authorized_user_cache_credentials(identity: str, quota_project: str | None = None) -> str:
+    return json.dumps(
+        {
+            "type": "authorized_user",
+            "client_id": identity,
+            "client_secret": "synthetic-secret",
+            "refresh_token": identity,
+            "quota_project_id": quota_project or identity,
+        }
+    )
+
+
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("inferred_project", [False, True], ids=["explicit", "inferred"])
+@pytest.mark.asyncio
+async def test_credential_cache_bounds_retention_and_reloads_least_recently_used(
+    is_async: bool, inferred_project: bool
+) -> None:
+    vertex: Final = VertexBase()
+    limit: Final = max(0, DEFAULT_MAX_LRU_CACHE_SIZE)
+    with (
+        patch("google.auth._helpers.utcnow", return_value=datetime(2025, 1, 1)),
+        responses.RequestsMock() as oauth,
+    ):
+        def token_response(request: requests.PreparedRequest) -> tuple[int, dict[str, str], str]:
+            return 200, {}, json.dumps({"access_token": f"token-{len(oauth.calls) + 1}", "expires_in": 3600})
+
+        oauth.add_callback(responses.POST, "https://oauth2.googleapis.com/token", callback=token_response)
+
+        async def access(index: int, infer: bool = False) -> tuple[str, str]:
+            identity: Final = f"project-{index}"
+            credentials: Final = _authorized_user_cache_credentials(identity)
+            project: Final = None if infer else identity
+            result: Final = (
+                await vertex.get_access_token_async(credentials, project)
+                if is_async
+                else vertex.get_access_token(credentials, project)
+            )
+            assert result[1] == identity
+            assert len(vertex._credentials_project_mapping) <= limit
+            return result
+
+        if limit == 0:
+            assert await access(0, inferred_project) == ("token-1", "project-0")
+            assert await access(0, inferred_project) == ("token-2", "project-0")
+            return
+
+        for index in range(limit):
+            assert await access(index) == (f"token-{index + 1}", f"project-{index}")
+        assert await access(0) == ("token-1", "project-0")
+        assert len(oauth.calls) == limit
+        assert await access(limit, inferred_project) == (f"token-{limit + 1}", f"project-{limit}")
+        assert len(oauth.calls) == limit + 1
+        if limit > (2 if inferred_project else 1):
+            assert await access(0) == ("token-1", "project-0")
+            assert len(oauth.calls) == limit + 1
+        evicted: Final = 1 if limit > 1 else 0
+        assert await access(evicted) == (f"token-{limit + 2}", f"project-{evicted}")
+        assert len(oauth.calls) == limit + 2
+
+
+@pytest.mark.parametrize("mode", ["sync", "async", "background"])
+@pytest.mark.skipif(DEFAULT_MAX_LRU_CACHE_SIZE < 2, reason="Eviction during refresh requires two retained entries")
+@pytest.mark.asyncio
+async def test_evicted_credentials_finish_refresh_without_being_readmitted(
+    mode: Literal["sync", "async", "background"],
+) -> None:
+    vertex: Final = VertexBase()
+    limit: Final = DEFAULT_MAX_LRU_CACHE_SIZE
+    now: Final = datetime(2025, 1, 1)
+    refresh_started: Final = Event()
+    release_refresh: Final = Event()
+    donor: Final = _authorized_user_cache_credentials("donor")
+    target: Final = _authorized_user_cache_credentials("target")
+    with patch("google.auth._helpers.utcnow", return_value=now) as clock, responses.RequestsMock() as oauth:
+        def token_response(request: requests.PreparedRequest) -> tuple[int, dict[str, str], str]:
+            body: Final = request.body.decode() if isinstance(request.body, bytes) else request.body
+            assert isinstance(body, str)
+            is_target: Final = "refresh_token=target" in body
+            if is_target and len(oauth.calls) == limit:
+                refresh_started.set()
+                assert release_refresh.wait(5), "OAuth refresh was not released"
+            return 200, {}, json.dumps(
+                {"access_token": f"token-{len(oauth.calls) + 1}", "expires_in": 3600 if is_target else 86400}
+            )
+
+        oauth.add_callback(responses.POST, "https://oauth2.googleapis.com/token", callback=token_response)
+        assert vertex.get_access_token(donor, None) == ("token-1", "donor")
+        assert vertex.get_access_token(donor, None) == ("token-1", "donor")
+        for index in range(limit - 2):
+            assert vertex.get_access_token(donor, f"filler-{index}") == (f"token-{index + 2}", f"filler-{index}")
+        assert vertex.get_access_token(target, "target") == (f"token-{limit}", "target")
+        clock.return_value = now + timedelta(seconds=3550 if mode == "background" else 7200)
+        refresh: Final = asyncio.create_task(
+            asyncio.to_thread(vertex.get_access_token, target, "target")
+            if mode == "sync"
+            else vertex.get_access_token_async(target, "target")
+        )
+        try:
+            assert await asyncio.to_thread(refresh_started.wait, 5), "OAuth refresh did not start"
+            for index in range(limit - 2):
+                assert vertex.get_access_token(donor, f"filler-{index}") == (f"token-{index + 2}", f"filler-{index}")
+            assert vertex.get_access_token(donor, None) == ("token-1", "donor")
+            assert len(vertex._credentials_project_mapping) == limit
+            assert (target, "target") not in vertex._credentials_project_mapping
+        finally:
+            release_refresh.set()
+            completed: Final = await refresh
+            await asyncio.gather(*tuple(vertex._background_refresh_tasks.values()))
+        expected_token: Final = f"token-{limit if mode == 'background' else limit + 1}"
+        assert completed == (expected_token, "target")
+        assert len(oauth.calls) == limit + 1
+        assert (target, "target") not in vertex._credentials_project_mapping
+        assert vertex.get_access_token(target, "target") == (f"token-{limit + 2}", "target")
+        assert len(vertex._credentials_project_mapping) == limit

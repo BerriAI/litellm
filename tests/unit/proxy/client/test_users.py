@@ -5,7 +5,6 @@ import pytest
 import requests
 
 
-
 from litellm.proxy.client.users import (
     NotFoundError,
     UnauthorizedError,
@@ -72,9 +71,9 @@ def test_create_user_unauthorized(mock_post, client):
 @patch("requests.post")
 def test_delete_user_success(mock_post, client):
     mock_post.return_value.status_code = 200
-    mock_post.return_value.json.return_value = {"deleted": 1}
+    mock_post.return_value.json.return_value = 1
     result = client.delete_user(["u1"])
-    assert result["deleted"] == 1
+    assert result == 1
     mock_post.assert_called_once()
 
 

@@ -13,8 +13,10 @@ This module has no dependencies on proxy code and can be safely imported at the 
 """
 
 import math
+import os
 import time
 from collections.abc import Mapping
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
@@ -42,6 +44,7 @@ from litellm.litellm_core_utils.private_json import (
     ensure_private_dir,
     overwrite_private_json,
     stage_private_json,
+    write_private_bytes,
     write_private_json,
 )
 from litellm.types.llms.base_model import LiteLLMBaseModel
@@ -79,9 +82,21 @@ class CredentialNotCleared:
     detail: str
 
 
+@dataclass(frozen=True, slots=True)
+class LoginRecordNotMoved:
+    """The token file of a login the keychain kept could not be moved aside as the note.
+
+    The file holds no secret, but it is the record a later logout pairs with the keychain entry to
+    revoke that login, so deleting it would leave the login live. It stays until its directory
+    takes the rename.
+    """
+
+    detail: str
+
+
 SecretSave: TypeAlias = SecretWrite | CredentialNotSaved | CredentialNotRecorded
 
-SecretClear: TypeAlias = SecretErase | CredentialNotCleared
+SecretClear: TypeAlias = SecretErase | CredentialNotCleared | LoginRecordNotMoved
 
 
 class CliTokenRecord(LiteLLMBaseModel):
@@ -159,6 +174,7 @@ def save_cli_token(record: CliTokenRecord, *, vault: SecretVault = SYSTEM_KEYRIN
     keychain has already taken the new secret, and it reports itself as such rather than claiming
     the previous login survived.
     """
+    replaced: Final = _read_token_file()
     stamped: Final = _stamped_past_every_stored_login(record, vault)
     staged: Final = _stage_token_file(_without_secret(stamped))
     if isinstance(staged, CredentialNotSaved):
@@ -167,7 +183,22 @@ def save_cli_token(record: CliTokenRecord, *, vault: SecretVault = SYSTEM_KEYRIN
     if isinstance(outcome, SecretStored):
         return outcome if _commit_token_file(staged) else CredentialNotRecorded()
     discard_staged_json(staged)
-    return _keep_the_secret_in_the_file(stamped, outcome)
+    kept: Final = _keep_the_secret_in_the_file(stamped, outcome)
+    if not isinstance(kept, CredentialNotSaved):
+        _note_the_login_left_in_the_keychain(replaced)
+    return kept
+
+
+def _note_the_login_left_in_the_keychain(replaced: CliTokenRecord | None) -> None:
+    """Keep the login a save could not take out of the keychain revocable once the keychain answers.
+
+    Its token file record is about to be overwritten by one that holds its own secret, so the note
+    is the only record left of the login whose refresh token the keychain still holds.
+    """
+    if replaced is None or _holds_a_secret(replaced):
+        return
+    with suppress(OSError):
+        _write_keychain_not_cleared_note(_keychain_not_cleared_note_path(), replaced)
 
 
 def _stamped_past_every_stored_login(record: CliTokenRecord, vault: SecretVault) -> CliTokenRecord:
@@ -220,25 +251,60 @@ def _keep_the_secret_in_the_file(record: CliTokenRecord, outcome: SecretWrite) -
 def clear_cli_token(*, vault: SecretVault = SYSTEM_KEYRING) -> SecretClear:
     """Remove the credential from both stores. Reports whether the keychain is now free of it.
 
-    A logout the keychain never answered keeps the token file, with its secret taken out, because
-    that file is the only remaining record that something may still be in there to remove. It is
-    what lets a later run tell a machine with a credential it cannot reach apart from one that never
-    had a login at all, and taking it away would leave the next logout answering the warning this
-    one just issued with a false all-clear. The secret goes either way, and a file that will give up
-    neither its copy nor itself is removed rather than kept, with the note written again afterwards
-    so the warning still outlives this run.
+    The token file goes whatever the keychain answers, so nothing left on disk reads as a login. A
+    keychain that could not be checked, or that would not give up its entry, may still hold a
+    credential of ours, so a logout that had something to end leaves a note beside the file, and the
+    next logout warns again instead of reading the missing file as a clean keychain. Only a keychain
+    that confirms the erase takes the note away. A file that will not go has its secret taken out
+    where it lies instead.
     """
     outcome: Final = vault.erase()
     record: Final = _read_token_file()
     settled: Final = _nothing_left_behind(outcome, record)
-    if not settled and _keep_the_unchecked_keychain_on_record(outcome, record):
-        return outcome
-    removal: Final = _remove_token_file()
-    if removal is not None and record is not None and not _scrub_file_secret(record):
-        return removal
-    if removal is None and record is not None and _the_keychain_went_unchecked(outcome):
-        _write_the_note_the_removal_took_with_it(record)
+    left_on_disk: Final = _end_the_local_login(outcome, record)
+    if left_on_disk is not None:
+        return left_on_disk
     return SecretErased() if settled else outcome
+
+
+def _end_the_local_login(
+    outcome: SecretErase, record: CliTokenRecord | None
+) -> CredentialNotCleared | LoginRecordNotMoved | None:
+    if _names_a_login_the_keychain_kept(outcome, record):
+        return _move_token_file_to_note()
+    left_on_disk: Final = _remove_token_file_or_its_secret(record)
+    _note_what_the_keychain_answered(outcome, record)
+    return left_on_disk
+
+
+def _names_a_login_the_keychain_kept(outcome: SecretErase, record: CliTokenRecord | None) -> bool:
+    match outcome:
+        case KeyringDisabled() | KeyringNotInstalled() | KeyringUnreachable():
+            return record is not None and not _holds_a_secret(record)
+        case SecretErased() | SecretStranded():
+            return False
+
+
+def _move_token_file_to_note() -> LoginRecordNotMoved | None:
+    """Turn the token file of a login the keychain could not be asked to end into the note that ends it later.
+
+    The file holds no secret, so it is already the record a later logout or login pairs with the
+    keychain entry to revoke the login, and renaming it needs no free space on a full disk. The file
+    never stays behind as a login that signs the user back in once the keychain unlocks: a note path
+    that will not take it leaves the file where it is, and the logout says so.
+    """
+    try:
+        os.replace(get_cli_token_file_path(), _keychain_not_cleared_note_path())
+    except OSError as error:
+        return LoginRecordNotMoved(str(error))
+    return None
+
+
+def _remove_token_file_or_its_secret(record: CliTokenRecord | None) -> CredentialNotCleared | None:
+    removal: Final = _remove_token_file()
+    if removal is None or record is None or _scrub_file_secret(record):
+        return None
+    return removal
 
 
 def _remove_token_file() -> CredentialNotCleared | None:
@@ -249,54 +315,87 @@ def _remove_token_file() -> CredentialNotCleared | None:
     return None
 
 
-def _write_the_note_the_removal_took_with_it(record: CliTokenRecord) -> None:
-    """Put the secret-free note back after the file carrying it had to go to get the secret off disk.
+def _keychain_not_cleared_note_path() -> Path:
+    return Path(get_cli_token_file_path()).with_name("keychain_not_cleared")
 
-    Reaching here means neither rewrite would take, so the file went instead, and its absence is
-    what the next logout would read as a keychain already known to be clean. Removing it is also
-    what frees the room the rewrite was refused for, so the note usually lands on this second try.
-    When it does not, the warning this logout printed is the only one the user gets.
+
+def load_cli_token_left_in_keychain(*, vault: SecretVault = SYSTEM_KEYRING) -> CliTokenRecord | None:
+    """The login an earlier logout could not erase from the keychain, once the keychain answers again.
+
+    The token file went with that logout, so its note is the only record of the login, and the
+    refresh token that revokes it is only in the keychain. A keychain entry from any other sign-in
+    is never paired with the note, since the endpoints it names belong to that one login.
     """
-    staged: Final = _stage_scrubbed_file(record)
-    if staged is not None:
-        _commit_token_file(staged)
+    note: Final = _read_keychain_not_cleared_note()
+    if note is None:
+        return None
+    secret: Final = _stored_secret(note.base_url, vault)
+    if secret is None or secret.timestamp != note.timestamp:
+        return None
+    return note.model_copy(
+        update=MappingProxyType(
+            {"key": secret.key, "jwt_token": secret.jwt_token, "refresh_token": secret.refresh_token}
+        )
+    )
 
 
-def _keep_the_unchecked_keychain_on_record(outcome: SecretErase, record: CliTokenRecord | None) -> bool:
-    """Whether the token file, stripped of its secret, is worth keeping as the note that says so.
-
-    Only a keychain that could not be reached leaves the question open. One that answered for itself
-    is remembered without any help from the file, and a file it can still pair a live entry with
-    would leave the machine signed in to the login that was just ended. A copy that will give up
-    its secret neither to a staged replacement nor to an overwrite is not kept either, because the
-    secret goes first.
-    """
-    if record is None or not _the_keychain_went_unchecked(outcome):
+def _holds_the_noted_login(blob: str) -> bool:
+    """Whether the keychain entry is the login an earlier logout could not end, which only it can revoke"""
+    note: Final = _read_keychain_not_cleared_note()
+    if note is None:
         return False
-    return _scrub_file_secret(record)
+    secret: Final = _decode_secret(blob, note.base_url)
+    return secret is not None and secret.timestamp == note.timestamp
 
 
-def _the_keychain_went_unchecked(outcome: SecretErase) -> bool:
-    """Whether the keychain neither confirmed the erase nor answered that it still holds the secret"""
-    match outcome:
-        case SecretErased() | SecretStranded():
-            return False
-        case KeyringDisabled() | KeyringNotInstalled() | KeyringUnreachable():
-            return True
+def _read_keychain_not_cleared_note() -> CliTokenRecord | None:
+    try:
+        return CliTokenRecord.model_validate_json(_keychain_not_cleared_note_path().read_bytes())
+    except (OSError, ValidationError):
+        return None
+
+
+def _note_what_the_keychain_answered(outcome: SecretErase, record: CliTokenRecord | None) -> None:
+    """Keep the note that a logout left the keychain uncleared for exactly as long as that is true.
+
+    A keychain that would not give up its entry had already handed this logout the refresh token,
+    so its note holds nothing to revoke again. A login that kept its secret in the file never
+    reached the keychain, so the note an earlier logout left still names the login the keychain
+    holds and stays, and a logout with no file to end keeps it too.
+
+    The secret is off disk by the time this runs, so a note that will not be written or removed is
+    no reason to fail the logout. The warning printed now is then the only one the user gets.
+    """
+    note: Final = _keychain_not_cleared_note_path()
+    with suppress(OSError):
+        match outcome:
+            case SecretErased():
+                note.unlink(missing_ok=True)
+            case SecretStranded():
+                _write_keychain_not_cleared_note(note, None)
+            case KeyringDisabled() | KeyringNotInstalled() | KeyringUnreachable():
+                if record is not None and not note.exists():
+                    _write_keychain_not_cleared_note(note, None)
+
+
+def _write_keychain_not_cleared_note(note: Path, record: CliTokenRecord | None) -> None:
+    """Record the login a later command can still revoke, or only that the keychain was left uncleared"""
+    ensure_private_dir(note.parent)
+    if record is None:
+        write_private_bytes(str(note), b"")
+        return
+    write_private_json(str(note), _without_secret(record).model_dump(exclude_none=True))
 
 
 def _nothing_left_behind(outcome: SecretErase, record: CliTokenRecord | None) -> bool:
     """Whether the keychain can be trusted to hold no credential of ours once the file is gone.
 
-    A machine with no token file has no stored login to end, and `clear_cli_token` keeps one behind
-    whenever the keychain is left unconfirmed, taking the secret out in place when it cannot stage a
-    replacement and writing the note again when the file holding it had to go, so a missing file is
-    real evidence rather than the absence of it. Past that, a
-    keychain that could not be reached is never trusted, whatever the file looks like. Even a file
-    holding its own secret says only that the login which wrote it had no keychain to write to, and
-    the login before it may well have had one: the entry that login left outlives both the
-    uninstalled package and the file that replaced it. `SecretStranded` is
-    the keychain answering for itself and outranks the file.
+    A keychain that could not be reached is trusted only on a machine with nothing to end: no token
+    file, and no note from an earlier logout that left the keychain uncleared. Even a file holding
+    its own secret says only that the login which wrote it had no keychain to write to, and the
+    login before it may well have had one: the entry that login left outlives both the uninstalled
+    package and the file that replaced it. `SecretStranded` is the keychain answering for itself and
+    outranks the file.
     """
     match outcome:
         case SecretErased():
@@ -304,7 +403,7 @@ def _nothing_left_behind(outcome: SecretErase, record: CliTokenRecord | None) ->
         case SecretStranded():
             return False
         case KeyringDisabled() | KeyringNotInstalled() | KeyringUnreachable():
-            return record is None
+            return record is None and not os.path.exists(_keychain_not_cleared_note_path())
 
 
 def get_litellm_gateway_api_key(
@@ -353,9 +452,9 @@ def is_cli_token_fresh(
     buffer_hours: float = CLI_TOKEN_FRESHNESS_BUFFER_SECONDS / 3600,
 ) -> bool:
     """Check whether a cached CLI token is still within its expiration window.
-    Used by `lite auth print-token` to fail fast, without a network round trip,
-    once the cached token is past `LITELLM_CLI_JWT_EXPIRATION_HOURS`. A `--pkce`
-    credential carries its own `expires_at`, which is authoritative when present."""
+    Used by `lite auth print-token` to skip asking the proxy while the cached token
+    is younger than `LITELLM_CLI_JWT_EXPIRATION_HOURS`. A `--pkce` credential
+    carries its own `expires_at`, which is authoritative when present."""
     from litellm.constants import CLI_JWT_EXPIRATION_HOURS
 
     expires_at: Final = (
@@ -407,7 +506,14 @@ def _apply_vault_secret(record: CliTokenRecord, blob: str, vault: SecretVault) -
     than counting as a clean sweep. Rolling the vault back the way a migration does is not the
     answer here, because the two stores hold different credentials and the rollback would hand the
     superseded one back out.
+
+    A keychain entry an earlier logout could not end is left alone whatever the stamps say. Its note
+    pairs only with that entry, so the next login or logout can still revoke it, while serving it
+    would sign an ended login back in and moving the file's secret over it would leave its refresh
+    token live with nothing on this machine able to revoke it.
     """
+    if _holds_a_secret(record) and _holds_the_noted_login(blob):
+        return record
     secret: Final = _decode_secret(blob, record.base_url)
     if secret is None or (_holds_a_secret(record) and secret.timestamp <= record.timestamp):
         return _migrate_file_secret(_rejoined(record, secret), vault, replacing=secret)

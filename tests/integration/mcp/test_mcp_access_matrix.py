@@ -181,7 +181,6 @@ def test_same_tool_name_on_two_servers_routes_by_prefix(gateway: Gateway) -> Non
 
 _PROBE: Final = "catalog-probe"
 _ECHO: Final = "catalog-echo"
-_UNLISTED: Final = ""
 _GUARDRAIL_CODE: Final = (
     "def apply_guardrail(inputs, request_data, input_type):\n"
     f'    if "{_PROBE}" not in list(inputs.get("texts") or []):\n'
@@ -217,13 +216,26 @@ def _echoed_description(outcome: Outcome) -> str:
     return found.group(1)
 
 
+def _add_described_anew_per_fetch(described: str) -> ScriptedTool:
+    return ScriptedTool("add", lambda _: text_result("3"), description=lambda _: f"{described} {uuid.uuid4().hex}")
+
+
+def _fetched(described: str) -> re.Pattern[str]:
+    return re.compile(rf"{re.escape(described)} [0-9a-f]{{32}}")
+
+
+def _listed_description(listing: Outcome, described: str) -> str:
+    found: Final = _fetched(described).search(listing.raw)
+    assert found is not None, listing.raw
+    return found.group(0)
+
+
 @pytest.mark.parametrize("subject", SUBJECTS)
 def test_each_subjects_call_is_evaluated_only_against_the_catalog_its_own_listing_served(
     echo_rig: Gateway, subject: Subject
 ) -> None:
     described: Final = "Adds under grant " + uuid.uuid4().hex[:8]
-    tool: Final = ScriptedTool("add", lambda _: text_result("3"), description=described)
-    with scripted_peer(tool) as peer, echo_rig.scenario() as scenario:
+    with scripted_peer(_add_described_anew_per_fetch(described)) as peer, echo_rig.scenario() as scenario:
         group: Final = "grp" + uuid.uuid4().hex[:8]
         alias: Final = "cat" + uuid.uuid4().hex[:8]
         identity: Final = register_mcp(scenario, peer, alias, mcp_access_groups=[group])
@@ -235,8 +247,10 @@ def test_each_subjects_call_is_evaluated_only_against_the_catalog_its_own_listin
         cold: Final = _echoed_description(reach.call(f"{alias}-add", {"probe": _PROBE}))
         listed: Final = reach.list_tools()
         assert listed.ok and f"{alias}-add" in listed.tools, listed.raw
+        served: Final = _listed_description(listed, described)
         warm: Final = _echoed_description(reach.call(f"{alias}-add", {"probe": _PROBE}))
-        assert (cold, warm) == (_UNLISTED, described), (cold, warm)
+        assert _fetched(described).fullmatch(cold) and cold != served, (cold, served)
+        assert warm == served, (cold, served, warm)
         assert tool_calls(peer.drain()) == (), "a blocked probe reached the peer"
 
 
@@ -244,8 +258,7 @@ def test_end_users_of_one_key_share_its_catalog_slot_because_the_identity_exclud
     echo_rig: Gateway,
 ) -> None:
     described: Final = "Adds for end users " + uuid.uuid4().hex[:8]
-    tool: Final = ScriptedTool("add", lambda _: text_result("3"), description=described)
-    with scripted_peer(tool) as peer, echo_rig.scenario() as scenario:
+    with scripted_peer(_add_described_anew_per_fetch(described)) as peer, echo_rig.scenario() as scenario:
         alias: Final = "eu" + uuid.uuid4().hex[:8]
         identity: Final = register_mcp(scenario, peer, alias)
         granted: Final = grant(scenario, "end_user", (identity,), (identity,))
@@ -254,10 +267,12 @@ def test_end_users_of_one_key_share_its_catalog_slot_because_the_identity_exclud
             echo_rig, granted.key, "mcp", alias, {"x-litellm-end-user-id": "integration-" + uuid.uuid4().hex[:10]}
         )
         assert second.initialize().ok
-        assert _echoed_description(second.call(f"{alias}-add", {"probe": _PROBE})) == _UNLISTED
+        cold: Final = _echoed_description(second.call(f"{alias}-add", {"probe": _PROBE}))
         listed: Final = first.list_tools()
         assert listed.ok and f"{alias}-add" in listed.tools, listed.raw
-        assert _echoed_description(second.call(f"{alias}-add", {"probe": _PROBE})) == described, (
+        served: Final = _listed_description(listed, described)
+        assert _fetched(described).fullmatch(cold) and cold != served, (cold, served)
+        assert _echoed_description(second.call(f"{alias}-add", {"probe": _PROBE})) == served, (
             "the end-user header is intentionally not part of the catalog identity: one key, one slot"
         )
         assert tool_calls(peer.drain()) == (), "a blocked probe reached the peer"

@@ -16,7 +16,7 @@ import json
 import re
 import sys
 import time
-from collections.abc import AsyncGenerator, Mapping, Sequence
+from collections.abc import AsyncGenerator, AsyncIterable, Mapping, Sequence
 from datetime import datetime, timezone
 from itertools import accumulate, groupby
 from types import MappingProxyType
@@ -33,7 +33,12 @@ from litellm.constants import BEDROCK_APPLY_GUARDRAIL_CHUNK_BUDGET_CHARS
 from litellm.exceptions import ModifyResponseException
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_for_route
-from litellm.litellm_core_utils.core_helpers import redact_nested_match_and_regex_keys
+from litellm.litellm_core_utils.core_helpers import (
+    as_str_mapping,
+    decoded_json_object,
+    iter_items,
+    redact_nested_match_and_regex_keys,
+)
 from litellm.litellm_core_utils.litellm_logging import (
     get_masked_values,
 )
@@ -49,6 +54,7 @@ from litellm.llms.base_llm.guardrail_translation.utils import (
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM, bedrock_bearer_token, run_aws_signing
 from litellm.llms.bedrock.guardrail_attachments import find_request_attachments
 from litellm.llms.custom_httpx.http_handler import (
+    AsyncHTTPHandler,
     get_async_httpx_client,
     httpxSpecialProvider,
 )
@@ -64,6 +70,7 @@ from litellm.proxy.guardrails.anthropic_sse import (
 )
 from litellm.types.guardrails import (
     BedrockChecksConfigModel,
+    BedrockGuardrailOutputScope,
     BedrockGuardrailStreamingParams,
     GuardrailEventHooks,
     LitellmParams,
@@ -286,9 +293,14 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         streaming_sampling_rate: int | None = None,
         streaming_end_of_stream_only: bool | None = None,
         streaming_buffer_release_on_scan: bool | None = None,
+        streaming_scan_in_background: bool | None = None,
+        async_handler: AsyncHTTPHandler | None = None,
+        outputScope: BedrockGuardrailOutputScope | None = None,
         **kwargs,
     ):
-        self.async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
+        self.async_handler = async_handler or get_async_httpx_client(
+            llm_provider=httpxSpecialProvider.GuardrailCallback
+        )
         self._set_streaming_params(
             BedrockGuardrailStreamingParams.from_extras(
                 MappingProxyType(
@@ -297,12 +309,14 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                         "streaming_sampling_rate": streaming_sampling_rate,
                         "streaming_end_of_stream_only": streaming_end_of_stream_only,
                         "streaming_buffer_release_on_scan": streaming_buffer_release_on_scan,
+                        "streaming_scan_in_background": streaming_scan_in_background,
                     }
                 )
             )
         )
         self.guardrailIdentifier = guardrailIdentifier
         self.guardrailVersion = guardrailVersion
+        self.outputScope = outputScope
         self.guardrail_provider = "bedrock"
         self.chunk_budget_chars = chunk_budget_chars
         self.contextual_grounding_from_messages = contextual_grounding_from_messages
@@ -362,6 +376,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         self.streaming_sampling_rate = streaming_params.streaming_sampling_rate
         self.streaming_end_of_stream_only = streaming_params.streaming_end_of_stream_only
         self.streaming_buffer_release_on_scan = streaming_params.streaming_buffer_release_on_scan
+        self.streaming_scan_in_background = streaming_params.streaming_scan_in_background
 
     def update_in_memory_litellm_params(self, litellm_params: LitellmParams) -> None:
         super().update_in_memory_litellm_params(litellm_params)
@@ -1273,10 +1288,10 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         AWS billed them to ``completed_chunk_usages``, and the attempt log sums those
         with the blocking call's own usage.
         """
-        bedrock_request_data: Final = {
-            **base_request_data,
-            "content": content,
-        }
+        bedrock_request_data: Final = dict(base_request_data)
+        bedrock_request_data["content"] = content
+        if self.outputScope is not None and "outputScope" not in bedrock_request_data:
+            bedrock_request_data["outputScope"] = self.outputScope.value
         prepared_request: Final = await run_aws_signing(
             self._prepare_request,
             credentials=credentials,
@@ -1304,12 +1319,13 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         )
 
         if httpx_response.status_code == 200:
-            _json_response: Final = httpx_response.json()
+            raw_json_response: Final = httpx_response.json()
             # check if the response was flagged
             verbose_proxy_logger.debug(
                 "Bedrock AI response : %s",
-                redact_nested_match_and_regex_keys(_json_response),
+                redact_nested_match_and_regex_keys(raw_json_response),
             )
+            _json_response: Final[BedrockGuardrailResponse] = raw_json_response
             bedrock_guardrail_response = BedrockGuardrailResponse(**_json_response)
             if self._should_raise_guardrail_blocked_exception(bedrock_guardrail_response):
                 self._log_apply_guardrail_attempt(
@@ -1340,7 +1356,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
     def _log_apply_guardrail_attempt(
         self,
         httpx_response: httpx.Response,
-        json_response: dict,  # mutable-ok: raw AWS JSON payload
+        json_response: BedrockGuardrailResponse,
         request_data: dict | None,  # mutable-ok: proxy request body dict, mutated by the logging helper
         event_type: GuardrailEventHooks,
         start_time: "datetime",
@@ -1355,7 +1371,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         billed_usages: Final[tuple[BedrockGuardrailUsage, ...]] = tuple(completed_chunk_usages) + (
             (blocking_usage,) if isinstance(blocking_usage, dict) else ()
         )
-        logged_json_response: Final = (
+        logged_json_response: Final[BedrockGuardrailResponse] = (
             {
                 **json_response,
                 "usage": self._sum_usage_counters(billed_usages),
@@ -2096,12 +2112,14 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         response: BedrockGuardrailChecksResponse,
     ) -> dict[str, object]:
         """Strip PII location offsets from a checks response before it is logged."""
-        sanitized: Final[dict[str, Any]] = copy.deepcopy(dict(response))
-        sensitive: Final = (sanitized.get("results") or {}).get("sensitiveInformation") or {}
-        for entry in sensitive.get("results") or []:
-            if isinstance(entry, dict):
+        sanitized: Final = copy.deepcopy(dict(response))
+        sensitive: Final = decoded_json_object(
+            decoded_json_object(sanitized.get("results") or {}).get("sensitiveInformation") or {}
+        )
+        for entry in iter_items(sensitive.get("results") or []):
+            if isinstance(pii_entry := as_str_mapping(entry), dict):
                 for key in _BEDROCK_CHECKS_PII_LOCATION_KEYS:
-                    entry.pop(key, None)
+                    pii_entry.pop(key, None)
         return sanitized
 
     @staticmethod
@@ -2195,7 +2213,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
             # Check if the guardrail would block content
             try:
-                _json_response: Final = response.json()
+                _json_response: Final[BedrockGuardrailResponse] = response.json()
                 bedrock_guardrail_response: Final = BedrockGuardrailResponse(**_json_response)
                 if self._should_raise_guardrail_blocked_exception(bedrock_guardrail_response):
                     return "guardrail_intervened"
@@ -2908,7 +2926,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
     async def async_post_call_streaming_iterator_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
-        response: Any,
+        response: AsyncIterable[object],
         request_data: dict,
     ) -> AsyncGenerator[ModelResponseStream, None]:
         """
@@ -2960,7 +2978,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
         # Collect all chunks to process them together
         started_at: Final = time.monotonic()
-        all_chunks: Final[list[ModelResponseStream]] = []
+        all_chunks: Final[list[object]] = []
         async for chunk in response:
             all_chunks.append(chunk)
 
@@ -3069,18 +3087,18 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             # Return the reconstructed stream
             async for chunk in mock_response:
                 yield chunk
-        elif raw_sse:
-            # Forwarding an unscannable stream would silently disable the guardrail, so fail closed.
-            # A raise cannot reach the client once a keepalive ping has flushed the headers, so the
-            # refusal travels as a frame, matching how a block is delivered above
-            for error_frame in anthropic_sse_error_frames(
-                f"{self.guardrail_name}: streamed response could not be assembled for scanning, blocking it"
-            ):
-                yield error_frame
-            return
         else:
-            for chunk in all_chunks:
-                yield chunk
+            for unassembled_chunk in (
+                # Forwarding an unscannable stream would silently disable the guardrail, so fail closed.
+                # A raise cannot reach the client once a keepalive ping has flushed the headers, so the
+                # refusal travels as a frame, matching how a block is delivered above
+                anthropic_sse_error_frames(
+                    f"{self.guardrail_name}: streamed response could not be assembled for scanning, blocking it"
+                )
+                if raw_sse
+                else all_chunks
+            ):
+                yield unassembled_chunk
 
     def _extract_masked_texts_from_response(self, bedrock_guardrail_response: BedrockGuardrailResponse) -> list[str]:
         """

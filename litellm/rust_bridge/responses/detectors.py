@@ -12,11 +12,12 @@ import litellm
 from litellm.llms.opencode.common_utils import is_opencode_api_base
 from litellm.rust_bridge.detectors import api_base, call_callbacks, overridden, present
 from litellm.rust_bridge.public_call import NativeCall, optional_mapping, optional_sequence, optional_str
+from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams
 
 if TYPE_CHECKING:
     from openai.types.responses import ResponseInputParam
 
-    from litellm.types.llms.openai import ALL_RESPONSES_API_TOOL_PARAMS, ResponsesAPIOptionalRequestParams
+    from litellm.types.llms.openai import ALL_RESPONSES_API_TOOL_PARAMS
 
 
 def client_headers(request: NativeCall) -> bool:
@@ -67,7 +68,7 @@ def _tools(request: NativeCall) -> Sequence[object]:
 
 def managed_resource_ids(request: NativeCall) -> bool:
     """Python replaces managed file IDs in Responses input and tools with provider IDs."""
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
         update_responses_input_with_model_file_ids,
         update_responses_tools_with_model_file_ids,
     )
@@ -160,9 +161,12 @@ _PARAMS: Final = TypeAdapter(dict[str, object])
 def model_param_gating(request: NativeCall) -> bool:
     """Python clamps, drops or remaps Responses params according to the model's capabilities."""
     from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
-    from litellm.rust_bridge.host.routes.responses import PARAMETERS
 
-    params: Final = {name: request.resolved[name] for name in PARAMETERS if request.resolved.get(name) is not None}
+    params: Final = {
+        name: request.resolved[name]
+        for name in ResponsesAPIOptionalRequestParams.__annotations__
+        if request.resolved.get(name) is not None
+    }
     mapped: Final = _PARAMS.validate_python(
         OpenAIResponsesAPIConfig().map_openai_params(  # pyright: ignore[reportUnknownMemberType]  # returns a bare dict
             cast("ResponsesAPIOptionalRequestParams", params),  # cast-ok: the handler passes these kwargs

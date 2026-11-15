@@ -10,6 +10,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, Optional, Protocol, TypeAlias, TypeVar, cast
 
 from pydantic import BaseModel, TypeAdapter, ValidationError
+from typing_extensions import TypedDict
 
 import litellm
 from litellm import Router
@@ -17,6 +18,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH, GUARDRAIL_ROTATION_ATTEMPTS
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, keyword_arguments, subscript
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.llms.base_llm.guardrail_translation.utils import (
     effective_scan_only_tool_results_for_guardrail,
@@ -100,6 +102,10 @@ def _as_json_object(value: object) -> dict[str, object] | None:
 
 def _as_json_array(value: object) -> list[object] | None:
     return _JSON_ARRAY.validate_python(value) if isinstance(value, list) else None
+
+
+class _CategoryThresholdFields(TypedDict, total=False, extra_items=object):
+    pass
 
 
 def _extra_param_items(litellm_params: LitellmParams) -> Iterable[tuple[str, object]]:
@@ -644,6 +650,9 @@ def _configure_callback_scoping(
         )
     logging_only_scope: Final = None if logging_only_scope_error is not None else litellm_params.logging_only_scope
     custom_guardrail_callback.logging_only_scope = logging_only_scope
+    custom_guardrail_callback.mcp_block_behavior = (  # rebind-ok: initialize provider-independent callback configuration
+        litellm_params.mcp_block_behavior
+    )
     custom_guardrail_callback.logging_only_continue_on_input_failure = (
         logging_only_continue_error is None
         and logging_only_scope is None
@@ -674,6 +683,24 @@ def _configure_callback_scoping(
 
 
 _ParamsT = TypeVar("_ParamsT", bound=BaseModel)
+
+
+SECRET_REFERENCE_PARAMS: Final = ("api_key", "api_base")
+
+
+def resolve_secret_reference(value: str | None) -> str | None:
+    return str(get_secret(value)) if value and value.startswith("os.environ/") else value
+
+
+def _with_resolved_secret_references(params: Mapping[str, object]) -> Mapping[str, object]:
+    return {
+        **params,
+        **{
+            key: resolve_secret_reference(value)
+            for key in SECRET_REFERENCE_PARAMS
+            if isinstance(value := params.get(key), str)
+        },
+    }
 
 
 def parse_tolerant_litellm_params(
@@ -772,14 +799,15 @@ class InMemoryGuardrailHandler:
             litellm_params = litellm_params_data
 
         if "category_thresholds" in litellm_params_data and litellm_params_data["category_thresholds"]:
-            lakera_category_thresholds: Final = LakeraCategoryThresholds(**litellm_params_data["category_thresholds"])
+            lakera_category_thresholds: Final = LakeraCategoryThresholds(
+                **_CategoryThresholdFields(
+                    **keyword_arguments(subscript(litellm_params_data, "category_thresholds"), LakeraCategoryThresholds)
+                )
+            )
             litellm_params.category_thresholds = lakera_category_thresholds
 
-        if litellm_params.api_key and litellm_params.api_key.startswith("os.environ/"):
-            litellm_params.api_key = str(get_secret(litellm_params.api_key))
-
-        if litellm_params.api_base and litellm_params.api_base.startswith("os.environ/"):
-            litellm_params.api_base = str(get_secret(litellm_params.api_base))
+        litellm_params.api_key = resolve_secret_reference(litellm_params.api_key)
+        litellm_params.api_base = resolve_secret_reference(litellm_params.api_base)
 
         guardrail_type: Final = litellm_params.guardrail
 
@@ -868,7 +896,8 @@ class InMemoryGuardrailHandler:
         params: Final = guardrail.get("litellm_params")
         if not isinstance(params, (dict, LitellmParams)):
             return
-        litellm_params: Final = LitellmParams(**params) if isinstance(params, dict) else params
+        params_mapping: Final = as_str_mapping(params)
+        litellm_params: Final = LitellmParams(**params_mapping) if params_mapping is not None else params
         guardrail_name: Final = guardrail.get("guardrail_name", "Unknown")
         for custom_guardrail_callback in self._tracked_callbacks(guardrail_id):
             for error in (
@@ -1054,7 +1083,9 @@ class InMemoryGuardrailHandler:
             return params.model_dump()
         if isinstance(params, dict):
             try:
-                return parse_tolerant_litellm_params(with_tolerated_stream_scope(params), guardrail_name).model_dump()
+                return _with_resolved_secret_references(
+                    parse_tolerant_litellm_params(with_tolerated_stream_scope(params), guardrail_name).model_dump()
+                )
             except ValidationError as e:
                 verbose_proxy_logger.warning(
                     "Could not normalize guardrail litellm_params for comparison; treating the guardrail as changed. Error: %s",

@@ -49,6 +49,7 @@ from litellm.interactions.utils import (
     InteractionsAPIRequestUtils,
     get_provider_interactions_api_config,
 )
+from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.types.interactions import (
     CancelInteractionResult,
@@ -94,12 +95,15 @@ async def acreate(
     response_mime_type: str | None = None,
     # Continuation
     previous_interaction_id: str | None = None,
+    continuation_token: str | None = None,
     # Extra params
     extra_headers: dict[str, str] | None = None,
     extra_body: Mapping[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     # LiteLLM params
     custom_llm_provider: str | None = None,
+    *,
+    agent_config: Mapping[str, object] | None = None,
     **kwargs,
 ) -> InteractionsAPIResponse | AsyncIterator[InteractionsAPIStreamingResponse]:
     """
@@ -121,10 +125,12 @@ async def acreate(
             string, or a config object such as
             ``{"type": "remote", "sources": [...]}`` /
             ``{"type": "remote", "network": {...}}``
+        agent_config: Agent runtime config, e.g. ``{"type": "antigravity", "model": "gemini-3.8-flash"}``
         response_modalities: Requested response modalities (TEXT, IMAGE, AUDIO)
         response_format: JSON schema for response format
         response_mime_type: MIME type of the response
         previous_interaction_id: ID of previous interaction for continuation
+        continuation_token: Token from a `requires_continuation` interaction to resume its long decode
         extra_headers: Additional headers
         extra_body: Additional body parameters
         timeout: Request timeout
@@ -155,10 +161,12 @@ async def acreate(
             store=store,
             background=background,
             environment=environment,
+            agent_config=agent_config,
             response_modalities=response_modalities,
             response_format=response_format,
             response_mime_type=response_mime_type,
             previous_interaction_id=previous_interaction_id,
+            continuation_token=continuation_token,
             extra_headers=extra_headers,
             extra_body=extra_body,
             timeout=timeout,
@@ -219,12 +227,15 @@ def create(
     response_mime_type: str | None = None,
     # Continuation
     previous_interaction_id: str | None = None,
+    continuation_token: str | None = None,
     # Extra params
     extra_headers: dict[str, str] | None = None,
     extra_body: Mapping[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     # LiteLLM params
     custom_llm_provider: str | None = None,
+    *,
+    agent_config: Mapping[str, object] | None = None,
     **kwargs,
 ) -> (
     InteractionsAPIResponse
@@ -250,10 +261,12 @@ def create(
             string, or a config object such as
             ``{"type": "remote", "sources": [...]}`` /
             ``{"type": "remote", "network": {...}}``
+        agent_config: Agent runtime config, e.g. ``{"type": "antigravity", "model": "gemini-3.8-flash"}``
         response_modalities: Requested response modalities (TEXT, IMAGE, AUDIO)
         response_format: JSON schema for response format
         response_mime_type: MIME type of the response
         previous_interaction_id: ID of previous interaction for continuation
+        continuation_token: Token from a `requires_continuation` interaction to resume its long decode
         extra_headers: Additional headers
         extra_body: Additional body parameters
         timeout: Request timeout
@@ -287,6 +300,26 @@ def create(
             )
         else:
             custom_llm_provider = custom_llm_provider or "gemini"
+        if agent and model and model != agent:
+            raise litellm.BadRequestError(
+                message=(
+                    f"agent '{agent}' can only run on a deployment of that agent, but the model is '{model}'. "
+                    "Configure a deployment whose model is the agent and send its model group."
+                ),
+                model=model,
+                llm_provider=custom_llm_provider,
+            )
+        if extra_body and (
+            ("agent" in extra_body and extra_body["agent"] != agent) or (agent and "model" in extra_body)
+        ):
+            raise litellm.BadRequestError(
+                message=(
+                    "extra_body cannot set a different agent or add a model to an agent interaction. "
+                    "Send the agent and model as top-level fields."
+                ),
+                model=model,
+                llm_provider=custom_llm_provider,
+            )
 
         interactions_api_config: Final = get_provider_interactions_api_config(
             provider=custom_llm_provider,
@@ -300,6 +333,15 @@ def create(
         # Check if this is a bridge provider (litellm_responses) - similar to responses API
         # Either provider is explicitly "litellm_responses" or no config found (bridge to responses)
         if custom_llm_provider == "litellm_responses" or interactions_api_config is None:
+            if optional_params.get("agent_config") is not None and not drops_unsupported_params(
+                kwargs.get("drop_params")
+            ):
+                raise litellm.UnsupportedParamsError(
+                    message=f"'agent_config' is not supported for {custom_llm_provider} interactions. "
+                    "Set drop_params to drop it.",
+                    llm_provider=custom_llm_provider,
+                    model=model,
+                )
             # Bridge to litellm.responses() for non-native providers
             from litellm.interactions.litellm_responses_transformation.handler import (
                 LiteLLMResponsesInteractionsHandler,
@@ -318,7 +360,7 @@ def create(
 
         litellm_logging_obj.update_from_kwargs(
             kwargs=kwargs,
-            model=model,
+            model=agent or model,
             optional_params=dict(optional_params),
             litellm_params={"litellm_call_id": litellm_call_id},
             custom_llm_provider=custom_llm_provider,

@@ -1,31 +1,73 @@
 from collections.abc import AsyncGenerator, AsyncIterator, Callable, Mapping
 from typing import TYPE_CHECKING, Final
 
+from opentelemetry.sdk.trace import ReadableSpan
+
 from litellm._logging import verbose_logger
+from litellm.integrations.otel.emitter import attribute_budget, carried_keys
 from litellm.integrations.otel.logger import OpenTelemetryV2
 from litellm.integrations.otel.mappers.langfuse import (
     LANGFUSE_OBSERVATION_INPUT,
     LANGFUSE_OBSERVATION_OUTPUT,
+    LANGFUSE_RELEASE,
+    LANGFUSE_TRACE_NAME,
+    LANGFUSE_VERSION,
     LangfuseMapper,
 )
+from litellm.integrations.otel.model.metadata import internal_call_origin
 from litellm.integrations.otel.model.request_io import request_input, response_output, stream_output
 from litellm.integrations.otel.model.trace_controls import caller_trace_controls
+from litellm.integrations.otel.model.utils import as_str
 from litellm.integrations.otel.plumbing.context import request_root_span
 
 if TYPE_CHECKING:
+    from opentelemetry.trace import Span
+
+    from litellm.caching.dual_cache import DualCache
     from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
-    from litellm.types.utils import ModelResponseStream
+    from litellm.types.utils import CallTypesLiteral, ModelResponseStream
 
 
 class LangfuseOpenTelemetryV2(OpenTelemetryV2):
     """Stamps the caller's trace controls (name, user, session, tags) on the request. Langfuse reads them off
     the root observation, and the proxy's root span is still recording when the LLM call starts."""
 
+    async def async_pre_call_hook(
+        self,
+        user_api_key_dict: "UserAPIKeyAuth",
+        cache: "DualCache",
+        data: dict,
+        call_type: "CallTypesLiteral",
+    ) -> dict:
+        # Through v1.111.0 the proxy's leaf-only override check never ran OpenTelemetryV2's pre-call identity
+        # seeding for the Langfuse subclasses. The MRO-aware check that replaced it would, so this no-op keeps them
+        # as they were.
+        return data
+
     def log_pre_api_call(self, model: str, messages: object, kwargs: Mapping[str, object]) -> None:
         root: Final = request_root_span()
         if root is not None and root.is_recording():
-            root.set_attributes(LangfuseMapper.trace_attributes(caller_trace_controls(kwargs)))
+            stamped: Final = LangfuseMapper.trace_attributes(
+                caller_trace_controls(kwargs),
+                as_str(kwargs.get("call_type")) if self._derives_trace_name(root, kwargs) else None,
+            )
+            room: Final = attribute_budget(root, 0)
+            fits: Final = room is None or len(stamped.keys() - carried_keys(root)) <= room
+            root.set_attributes(
+                stamped
+                if fits
+                else {key: value for key, value in stamped.items() if key not in (LANGFUSE_RELEASE, LANGFUSE_VERSION)}
+            )
         super().log_pre_api_call(model, messages, kwargs)
+
+    def _derives_trace_name(self, root: "Span", kwargs: Mapping[str, object]) -> bool:
+        return (
+            internal_call_origin(None, kwargs) is None
+            and isinstance(root, ReadableSpan)
+            and root.parent is None
+            and root.resource is self.tracer_provider.resource
+            and LANGFUSE_TRACE_NAME not in (root.attributes or {})
+        )
 
 
 class LangfuseContentOpenTelemetryV2(LangfuseOpenTelemetryV2):

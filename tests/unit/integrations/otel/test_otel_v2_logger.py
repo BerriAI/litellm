@@ -207,6 +207,11 @@ def test_routing_diagnostics_reach_llm_spans_without_promoting_prompt_text(fail:
         "classifier_cost": 0.001,
         "classifier_failure_reason": "timeout",
         "classifier_error_type": "TimeoutError",
+        "classifier_input_budget_tokens": 24576,
+        "classifier_input_tokens": 23000,
+        "classifier_input_count_method": "estimated_tokens",
+        "classifier_input_truncated": True,
+        "classifier_input_budget_status": "truncated",
         "escalated": False,
     }
     payload: Final = _payload(
@@ -1786,6 +1791,54 @@ def test_pre_call_hook_seeds_baggage_onto_server_and_child_spans():
         for s in (redis, srv)
         for k in s.attributes
     )
+
+
+@pytest.mark.parametrize("guardrails_only", [False, True])
+def test_proxy_pre_call_hook_seeds_request_metadata_without_a_listed_otel_callback(monkeypatch, guardrails_only):
+    """A V2 logger that is registered but not in ``litellm.callbacks`` (a team-only destination) still gets the
+    caller's allowlisted ``requester_metadata`` from the proxy pre-call hook, keeps the model auth seeded, and a
+    ``guardrails_only`` scan seeds nothing."""
+    import litellm
+    from litellm.caching.caching import DualCache
+    from litellm.proxy import proxy_server
+    from litellm.proxy.utils import ProxyLogging
+
+    cfg: Final = OpenTelemetryV2Config(exporter="in_memory", baggage_metadata_keys=["requester_metadata.trace_id"])
+    exporter: Final = InMemorySpanExporter()
+    logger: Final = OpenTelemetryV2(config=cfg, tracer_provider=providers.build_tracer_provider(cfg, exporter=exporter))
+    monkeypatch.setattr(proxy_server, "open_telemetry_logger", logger)
+    monkeypatch.setattr(litellm, "callbacks", [])
+    server: Final = logger._emitter.start_span(SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME)
+    data: Final = {
+        "model": "resolved-deployment",
+        "metadata": {"requester_metadata": {"trace_id": "abc", "other": "x"}},
+    }
+
+    async def _flow():
+        logger.seed_request_identity(_Auth(), model="client-alias")
+        await ProxyLogging(user_api_key_cache=DualCache()).pre_call_hook(
+            user_api_key_dict=_Auth(), data=data, call_type="completion", guardrails_only=guardrails_only
+        )
+        await logger.async_service_success_hook(payload=_ServicePayload("redis", "set"), parent_otel_span=server)
+
+    with trace.use_span(server, end_on_exit=False):
+        asyncio.run(_flow())
+    server.end()
+
+    spans: Final = {s.name: s for s in exporter.get_finished_spans()}
+    seeded: Final = None if guardrails_only else "abc"
+    observed: Final = {
+        name: (
+            spans[name].attributes.get(f"{LiteLLM.METADATA_PREFIX}trace_id"),
+            spans[name].attributes.get("gen_ai.request.model"),
+        )
+        for name in (LITELLM_PROXY_REQUEST_SPAN_NAME, "redis set")
+    }
+    assert observed == {
+        LITELLM_PROXY_REQUEST_SPAN_NAME: (seeded, "client-alias"),
+        "redis set": (seeded, "client-alias"),
+    }, observed
+    assert not any(any(k.endswith("other") for k in s.attributes) for s in spans.values()), sorted(spans)
 
 
 def test_pre_call_hook_promotes_nested_request_metadata_key():
@@ -3484,20 +3537,21 @@ _REDIS_CACHE_MODULES = (
     "litellm/caching/redis_cluster_cache.py",
     "litellm/caching/redis_semantic_cache.py",
     "litellm/caching/dual_cache.py",
-    "litellm/caching/redis_batch.py",
 )
+_NATIVE_REQUEST_BATCHES = "litellm/rust/crates/python-bridge/src/redis/store/request.rs"
 
 
 def _redis_call_types_emitted_by_the_cache_layer():
     """Every ``call_type`` literal the Redis cache layer hands to the service logger, plus the
-    two ``RedisBatch`` names it passes as ``call_type=self.name``."""
+    names the native request batches report their flushes under."""
     import re
     from pathlib import Path
 
     repo = Path(__file__).resolve().parents[4]
     sources = "\n".join((repo / module).read_text() for module in _REDIS_CACHE_MODULES)
     literal = frozenset(re.findall(r'call_type="([a-z_]+)"', sources))
-    batch_names = frozenset(re.findall(r'RedisBatch\([^)]*name="([a-z_]+)"', sources))
+    native_request = (repo / _NATIVE_REQUEST_BATCHES).read_text()
+    batch_names = frozenset(re.findall(r'call\(py, "([a-z_]+)"\)', native_request))
     return sorted(literal | batch_names)
 
 
@@ -3518,31 +3572,6 @@ def test_no_call_type_the_redis_cache_layer_emits_can_fall_back_to_the_raw_metho
         if not service_span_name(ServiceSpanData(service_name="redis", call_type=call_type)).startswith("redis.")
     ]
     assert fallbacks == []
-
-
-def test_mixed_pipeline_families_land_on_their_own_bounded_attribute():
-    """A flush that carried several owners' ops is ``redis.pipeline mixed``; the sorted family
-    list goes to ``litellm.redis.families`` (not under ``litellm.metadata.``) while ``op_count``
-    stays an int on ``litellm.metadata.op_count``, and the legacy vocabulary keeps the bare keys."""
-    logger, exporter = _logger()
-    parent = _service_parent(logger)
-    try:
-        asyncio.run(
-            logger.async_service_success_hook(
-                payload=_ServicePayload("redis", "request_redis_batch", target="mixed"),
-                parent_otel_span=parent,
-                event_metadata={"op_count": 3, "families": "auth_objects,spend_counters"},
-            )
-        )
-    finally:
-        parent.end()
-    (span,) = [s for s in exporter.get_finished_spans() if s.name.startswith("redis")]
-    assert span.name == "redis.pipeline mixed"
-    assert span.attributes[LiteLLM.REDIS_FAMILIES] == "auth_objects,spend_counters"
-    assert span.attributes["families"] == "auth_objects,spend_counters"
-    assert f"{LiteLLM.METADATA_PREFIX}families" not in span.attributes
-    assert span.attributes[f"{LiteLLM.METADATA_PREFIX}op_count"] == 3
-    assert type(span.attributes[f"{LiteLLM.METADATA_PREFIX}op_count"]) is int
 
 
 def test_deferred_close_starts_at_the_provider_handoff_not_the_logging_objects_birth():

@@ -75,6 +75,24 @@ class BlockingPostCallGuardrail(CustomGuardrail):
         raise HTTPException(status_code=400, detail="blocked by the hook-count guardrail")
 
 
+class UsageRecordingPostCallGuardrail(CustomGuardrail):
+    """Records the token usage of the response it is handed in the request's guardrail information, so the spend row
+    shows which response the guardrail saw."""
+
+    async def async_post_call_success_hook(
+        self, data: dict[str, object], user_api_key_dict: object, response: object
+    ) -> None:
+        usage: Final = getattr(response, "usage", None)
+        self.add_standard_logging_guardrail_information_to_request_data(
+            guardrail_json_response={
+                "prompt_tokens": getattr(usage, "prompt_tokens", None),
+                "completion_tokens": getattr(usage, "completion_tokens", None),
+            },
+            request_data=data,
+            guardrail_status="success",
+        )
+
+
 probe: Final = HookCountProbe()
 sync_only_probe: Final = SyncOnlyHookCountProbe()
 

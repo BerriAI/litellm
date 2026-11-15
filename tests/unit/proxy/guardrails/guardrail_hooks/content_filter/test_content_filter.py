@@ -4,6 +4,7 @@ Tests for the Content Filter Guardrail
 
 import json
 import os
+from collections.abc import AsyncGenerator, AsyncIterator, Callable
 from typing import Final
 from unittest.mock import MagicMock
 
@@ -30,7 +31,17 @@ from litellm.types.proxy.guardrails.guardrail_hooks.litellm_content_filter impor
     ContentFilterCategoryConfig,
     ContentFilterDetection,
 )
-from litellm.types.utils import StandardLoggingGuardrailInformation
+from litellm.llms.base_llm.guardrail_translation.utils import stream_item_field
+from litellm.types.llms.openai import OutputTextDeltaEvent, ResponsesAPIStreamEvents
+from litellm.types.utils import (
+    Delta,
+    ModelResponseStream,
+    StandardLoggingGuardrailInformation,
+    StreamingChoices,
+    TextChoices,
+    TextCompletionResponse,
+    Usage,
+)
 
 
 class TestContentFilterGuardrail:
@@ -235,6 +246,88 @@ class TestContentFilterGuardrail:
         assert len(result) == 1
         assert "[EMAIL_REDACTED]" in result[0]
         assert "test@example.com" not in result[0]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "pattern_names",
+        [("aws_secret_key", "openai_api_key"), ("openai_api_key", "aws_secret_key")],
+    )
+    async def test_apply_guardrail_masks_whole_key_when_another_pattern_matches_inside_it(
+        self, pattern_names: tuple[str, str]
+    ):
+        guardrail: Final = ContentFilterGuardrail(
+            guardrail_name="test-overlapping-patterns",
+            patterns=[
+                ContentFilterPattern(pattern_type="prebuilt", pattern_name=name, action=ContentFilterAction.MASK)
+                for name in pattern_names
+            ],
+        )
+        openai_key: Final = "sk-proj-" + "Ab3" * 13 + "x-" + "Cd4" * 11 + "T3BlbkFJ" + "Ef5" * 24 + "gh"
+        aws_secret_key: Final = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+
+        guardrailed_inputs: Final = await guardrail.apply_guardrail(
+            inputs={"texts": [f"key {openai_key} and secret {aws_secret_key}"]},
+            request_data={},
+            input_type="request",
+        )
+
+        assert guardrailed_inputs.get("texts") == [
+            "key [OPENAI_API_KEY_REDACTED] and secret [AWS_SECRET_KEY_REDACTED]"
+        ]
+
+    @pytest.mark.asyncio
+    async def test_apply_guardrail_does_not_block_a_match_an_earlier_mask_pattern_already_covers(self):
+        guardrail: Final = ContentFilterGuardrail(
+            guardrail_name="test-mask-then-block",
+            patterns=[
+                ContentFilterPattern(
+                    pattern_type="prebuilt", pattern_name="generic_api_key", action=ContentFilterAction.MASK
+                ),
+                ContentFilterPattern(
+                    pattern_type="prebuilt", pattern_name="aws_secret_key", action=ContentFilterAction.BLOCK
+                ),
+            ],
+        )
+        guardrailed_inputs: Final = await guardrail.apply_guardrail(
+            inputs={"texts": ["config api_key=" + "A1b2C3d4E5" * 4]},
+            request_data={},
+            input_type="request",
+        )
+        assert guardrailed_inputs.get("texts") == ["config [GENERIC_API_KEY_REDACTED]"]
+
+    @pytest.mark.asyncio
+    async def test_apply_guardrail_masks_a_contextual_match_an_earlier_mask_moved_next_to_its_keyword(self):
+        guardrail: Final = ContentFilterGuardrail(
+            guardrail_name="test-contextual-after-mask",
+            patterns=[
+                ContentFilterPattern(pattern_type="prebuilt", pattern_name="email", action=ContentFilterAction.MASK),
+                ContentFilterPattern(pattern_type="prebuilt", pattern_name="au_tfn", action=ContentFilterAction.MASK),
+            ],
+        )
+        guardrailed_inputs: Final = await guardrail.apply_guardrail(
+            inputs={"texts": ["TFN jane.doe@example.com 123456782"]},
+            request_data={},
+            input_type="request",
+        )
+        assert guardrailed_inputs.get("texts") == ["TFN [EMAIL_REDACTED] [AU_TFN_REDACTED]"]
+
+    @pytest.mark.asyncio
+    async def test_apply_guardrail_counts_only_the_unnamed_regex_that_matched(self):
+        guardrail: Final = ContentFilterGuardrail(
+            guardrail_name="test-unnamed-regex-count",
+            patterns=[
+                ContentFilterPattern(pattern_type="regex", pattern=r"Key\d+", action=ContentFilterAction.MASK),
+                ContentFilterPattern(pattern_type="regex", pattern=r"Token\d+", action=ContentFilterAction.MASK),
+            ],
+        )
+        request_data: Final = {"metadata": {}}
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["use Key1 here"]},
+            request_data=request_data,
+            input_type="request",
+        )
+        entry: Final = request_data["metadata"]["standard_logging_guardrail_information"][0]
+        assert entry["masked_entity_count"] == {"custom_regex": 1}
 
     @pytest.mark.asyncio
     async def test_apply_guardrail_blocked_word_mask(self):
@@ -908,12 +1001,21 @@ class TestContentFilterGuardrail:
         # masked_entity_count for email is the real count, not N×.
         assert entry["masked_entity_count"].get("email") == 1
 
-    @staticmethod
+    @classmethod
     async def _collect_streamed_text(
+        cls,
         guardrail: ContentFilterGuardrail,
         chunks: list[str],
         metadata: dict[str, list[StandardLoggingGuardrailInformation]],
     ) -> str:
+        return "".join(await cls._collect_streamed_deltas(guardrail, chunks, metadata))
+
+    @staticmethod
+    async def _collect_streamed_deltas(
+        guardrail: ContentFilterGuardrail,
+        chunks: list[str],
+        metadata: dict[str, list[StandardLoggingGuardrailInformation]],
+    ) -> list[str]:
         from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
 
         async def mock_stream():
@@ -940,7 +1042,7 @@ class TestContentFilterGuardrail:
             request_data={"messages": [], "model": "gpt-4o", "metadata": metadata},
         ):
             yielded.append(chunk.choices[0].delta.content or "")
-        return "".join(yielded)
+        return yielded
 
     @pytest.mark.asyncio
     async def test_streaming_hook_scans_bounded_window_per_chunk(self):
@@ -1056,6 +1158,53 @@ class TestContentFilterGuardrail:
         entry: Final = metadata["standard_logging_guardrail_information"][0]
         assert entry["guardrail_status"] == "guardrail_intervened"
         assert [d["keyword"] for d in entry["guardrail_response"]] == [phrase]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("pattern_name", "key"),
+        [
+            ("openai_api_key", "sk-proj-" + "a" * 74 + "T3BlbkFJ" + "b" * 74),
+            ("openai_api_key", "sk-svcacct-" + "a" * 200 + "T3BlbkFJ" + "b" * 200),
+            ("anthropic_api_key", "sk-ant-api03-" + "a" * 93 + "AA"),
+            ("gemini_api_key", "AQ." + "a" * 55),
+        ],
+    )
+    async def test_streaming_hook_masks_whole_provider_key_split_across_chunks(self, pattern_name: str, key: str):
+        guardrail: Final = ContentFilterGuardrail(
+            guardrail_name="test-streaming-provider-key",
+            patterns=[
+                ContentFilterPattern(
+                    pattern_type="prebuilt",
+                    pattern_name=pattern_name,
+                    action=ContentFilterAction.MASK,
+                )
+            ],
+            event_hook=GuardrailEventHooks.post_call,
+        )
+        text: Final = f"Use {key} to call the API."
+        chunks: Final = [text[i : i + 4] for i in range(0, len(text), 4)]
+
+        streamed: Final = await self._collect_streamed_text(guardrail, chunks, {})
+
+        assert streamed == f"Use [{pattern_name.upper()}_REDACTED] to call the API."
+
+    @pytest.mark.asyncio
+    async def test_streaming_hook_keeps_default_holdback_without_provider_key_patterns(self):
+        guardrail: Final = ContentFilterGuardrail(
+            guardrail_name="test-streaming-older-credential-patterns",
+            patterns=[
+                ContentFilterPattern(pattern_type="prebuilt", pattern_name=name, action=ContentFilterAction.MASK)
+                for name in ("aws_access_key", "aws_secret_key", "github_token", "slack_token", "generic_api_key")
+            ],
+            event_hook=GuardrailEventHooks.post_call,
+        )
+        text: Final = "plain words with nothing secret in them. " * 12
+        chunks: Final = [text[i : i + 10] for i in range(0, len(text), 10)]
+
+        deltas: Final = await self._collect_streamed_deltas(guardrail, chunks, {})
+
+        assert "".join(deltas) == text
+        assert len(next(delta for delta in reversed(deltas) if delta)) <= CONTENT_FILTER_STREAMING_HOLDBACK_CHARS
 
     @pytest.mark.asyncio
     async def test_streaming_hook_blocks_keyword_longer_than_scan_context(self):
@@ -3523,3 +3672,180 @@ async def test_image_whose_description_is_clean_passes_through_unchanged():
     )
 
     assert result == {"images": ["https://example.com/desk.png"], "texts": []}
+
+
+def _fruit_word_filter() -> ContentFilterGuardrail:
+    return ContentFilterGuardrail(
+        guardrail_name="fruit-filter",
+        blocked_words=[
+            BlockedWord(keyword="persimmon", action=ContentFilterAction.MASK),
+            BlockedWord(keyword="kumquat", action=ContentFilterAction.BLOCK),
+        ],
+        event_hook=GuardrailEventHooks.post_call,
+    )
+
+
+async def _text_completion_stream(*parts: tuple[str | None, str | None]):
+    for text, finish_reason in parts:
+        yield TextCompletionResponse(
+            id="cmpl-stream",
+            model="gpt-3.5-turbo-instruct",
+            object="text_completion",
+            choices=[TextChoices(index=0, text=text, finish_reason=finish_reason)],
+        )
+
+
+@pytest.mark.asyncio
+async def test_streaming_hook_masks_a_word_split_across_text_completion_chunks():
+    request_data: Final[dict] = {}
+
+    delivered: Final = [
+        chunk
+        async for chunk in _fruit_word_filter().async_post_call_streaming_iterator_hook(
+            user_api_key_dict=MagicMock(),
+            response=_text_completion_stream(("A pers", None), ("immon tart", None), (None, "stop")),
+            request_data=request_data,
+        )
+    ]
+
+    assert "".join(chunk.choices[0].text or "" for chunk in delivered) == "A [KEYWORD_REDACTED] tart"
+    assert request_data["metadata"]["standard_logging_guardrail_information"][0]["guardrail_status"] == "success"
+
+
+_LONG_TAIL: Final = "the quick brown fox jumps over the lazy dog and then eats a ripe persimmon"
+
+
+async def _text_completion_n2_stream_without_choice_1_finish() -> AsyncGenerator[TextCompletionResponse, None]:
+    for index, text, finish_reason in (
+        (0, "A short answer", None),
+        (1, _LONG_TAIL[:30], None),
+        (1, _LONG_TAIL[30:], None),
+        (0, None, "stop"),
+    ):
+        yield TextCompletionResponse(
+            id="cmpl-stream",
+            model="gpt-3.5-turbo-instruct",
+            object="text_completion",
+            choices=[TextChoices(index=index, text=text, finish_reason=finish_reason)],
+        ).model_copy(update={"usage": None})
+
+
+async def _chat_n2_stream_without_choice_1_finish() -> AsyncGenerator[ModelResponseStream, None]:
+    for index, content, finish_reason in (
+        (0, "A short answer", None),
+        (1, _LONG_TAIL[:30], None),
+        (1, _LONG_TAIL[30:], None),
+        (0, None, "stop"),
+    ):
+        yield ModelResponseStream(
+            id="chatcmpl-stream",
+            model="gpt-4.1-mini",
+            choices=[StreamingChoices(index=index, delta=Delta(content=content), finish_reason=finish_reason)],
+        )
+
+
+def _streamed_text(chunk: ModelResponseStream | TextCompletionResponse, index: int) -> str:
+    return "".join(_choice_text(choice) for choice in chunk.choices if choice.index == index)
+
+
+def _choice_text(choice: TextChoices | StreamingChoices) -> str:
+    content: Final = stream_item_field(choice, "text") if isinstance(choice, TextChoices) else choice.delta.content
+    return content if isinstance(content, str) else ""
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "stream", [_text_completion_n2_stream_without_choice_1_finish, _chat_n2_stream_without_choice_1_finish]
+)
+async def test_streaming_hook_releases_the_held_tail_of_a_choice_the_stream_never_finished(
+    stream: Callable[[], AsyncIterator[ModelResponseStream | TextCompletionResponse]],
+) -> None:
+    delivered: Final = [
+        chunk
+        async for chunk in _fruit_word_filter().async_post_call_streaming_iterator_hook(
+            user_api_key_dict=MagicMock(), response=stream(), request_data={}
+        )
+    ]
+
+    assert "".join(_streamed_text(chunk, 0) for chunk in delivered) == "A short answer"
+    assert "".join(_streamed_text(chunk, 1) for chunk in delivered) == _LONG_TAIL.replace(
+        "persimmon", "[KEYWORD_REDACTED]"
+    )
+    assert all(getattr(chunk, "usage", None) is None for chunk in delivered)
+
+
+_STREAM_USAGE: Final = Usage(prompt_tokens=5, completion_tokens=20, total_tokens=25)
+
+
+async def _then_usage_chunk(
+    stream: Callable[[], AsyncIterator[ModelResponseStream | TextCompletionResponse]],
+    usage_chunk: ModelResponseStream | TextCompletionResponse,
+) -> AsyncGenerator[ModelResponseStream | TextCompletionResponse, None]:
+    async for chunk in stream():
+        yield chunk
+    yield usage_chunk
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("stream", "usage_chunk"),
+    [
+        (
+            _text_completion_n2_stream_without_choice_1_finish,
+            TextCompletionResponse(id="cmpl-stream", object="text_completion", choices=[], usage=_STREAM_USAGE),
+        ),
+        (_chat_n2_stream_without_choice_1_finish, ModelResponseStream(id="chatcmpl-stream", choices=[], usage=_STREAM_USAGE)),
+    ],
+)
+async def test_streaming_hook_keeps_the_usage_chunk_last_after_releasing_a_held_tail(
+    stream: Callable[[], AsyncIterator[ModelResponseStream | TextCompletionResponse]],
+    usage_chunk: ModelResponseStream | TextCompletionResponse,
+) -> None:
+    delivered: Final = [
+        chunk
+        async for chunk in _fruit_word_filter().async_post_call_streaming_iterator_hook(
+            user_api_key_dict=MagicMock(), response=_then_usage_chunk(stream, usage_chunk), request_data={}
+        )
+    ]
+
+    assert delivered[-1] is usage_chunk
+    assert "".join(_streamed_text(chunk, 1) for chunk in delivered[:-1]) == _LONG_TAIL.replace(
+        "persimmon", "[KEYWORD_REDACTED]"
+    )
+
+
+@pytest.mark.asyncio
+async def test_streaming_hook_relays_each_responses_api_event_as_it_arrives() -> None:
+    timeline: Final[list[str]] = []
+
+    async def responses_api_events() -> AsyncGenerator[OutputTextDeltaEvent, None]:
+        for delta in ("first", "second"):
+            timeline.append(f"upstream sent {delta}")
+            yield OutputTextDeltaEvent(
+                type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA,
+                item_id="msg_1",
+                output_index=0,
+                content_index=0,
+                delta=delta,
+            )
+
+    async for event in _fruit_word_filter().async_post_call_streaming_iterator_hook(
+        user_api_key_dict=MagicMock(), response=responses_api_events(), request_data={}
+    ):
+        timeline.append(f"client got {event.delta}")
+
+    assert timeline == ["upstream sent first", "client got first", "upstream sent second", "client got second"]
+
+
+@pytest.mark.asyncio
+async def test_streaming_hook_blocks_a_word_split_across_text_completion_chunks():
+    with pytest.raises(HTTPException) as exc_info:
+        async for _ in _fruit_word_filter().async_post_call_streaming_iterator_hook(
+            user_api_key_dict=MagicMock(),
+            response=_text_completion_stream(("A kum", None), ("quat tart", None), (None, "stop")),
+            request_data={},
+        ):
+            pass
+
+    assert exc_info.value.status_code == 400
+    assert "kumquat" in str(exc_info.value.detail)

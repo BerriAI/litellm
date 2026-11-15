@@ -1,16 +1,15 @@
 from collections.abc import Mapping
-from typing import Final
 from types import SimpleNamespace
-
-from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
+from typing import Final
 
 import pytest
 
+from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
 from litellm.proxy.management_helpers.auto_router_availability import (
     auto_router_availability,
     build_auto_router_catalog,
 )
-from litellm.router_utils.auto_router_tuning_baseline import snapshot_tuning_baselines
+from litellm.router_strategy.auto_router.auto_router_tuning_baseline import snapshot_tuning_baselines
 
 
 def deployment(

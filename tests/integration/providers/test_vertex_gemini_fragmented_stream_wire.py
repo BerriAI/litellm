@@ -102,7 +102,6 @@ def _scripted_vertex(fragments: tuple[bytes, ...]) -> Callable[[Request], Reply]
         assert request.headers["authorization"] == "Bearer scripted-token"
         body: Final = _JSON_OBJECT.validate_json(request.body)
         assert body["contents"] == [{"role": "user", "parts": [{"text": _PROMPT}]}]
-        assert body["generationConfig"] == {"temperature": 0.0}
         return Reply(content_type="text/event-stream", chunks=fragments)
 
     return respond
@@ -127,7 +126,6 @@ def _streamed_lines(gateway: Gateway, model: str) -> tuple[str, ...]:
             "model": model,
             "messages": [{"role": "user", "content": _PROMPT}],
             "stream": True,
-            "temperature": 0.0,
         },
         headers={"Authorization": f"Bearer {gateway.key}"},
         timeout=_STREAM_BUDGET_SECONDS,

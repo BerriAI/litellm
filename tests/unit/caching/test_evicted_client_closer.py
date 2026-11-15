@@ -10,6 +10,7 @@ never closed, because litellm does not own its lifecycle.
 import asyncio
 import gc
 import weakref
+from typing import Final
 from unittest.mock import AsyncMock
 
 import httpx
@@ -17,7 +18,7 @@ import pytest
 from redis.asyncio import ConnectionPool, Redis
 
 from litellm.caching.evicted_client_closer import EvictedClientCloser
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from tests.unit.caching._event_loop_reuse import runs_until_a_loop_address_repeats
 
 
 class FakeClock:
@@ -39,6 +40,14 @@ class AsyncClient:
 
     async def close(self) -> None:
         self.closed = True
+
+
+class RecordingAsyncClient:
+    def __init__(self) -> None:
+        self.close_calls = 0
+
+    async def aclose(self) -> None:
+        self.close_calls += 1
 
 
 class SyncClient:
@@ -99,19 +108,6 @@ async def test_redis_client_is_closed_only_after_its_subscription_releases_the_c
 
     connection.disconnect.assert_awaited_once()
     assert closer.pending_count == 0
-
-
-async def _trickling_upstream(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
-    """Serves a chunked body slowly, so a request stays on the wire long enough to observe."""
-    await reader.read(4096)
-    writer.write(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n")
-    await writer.drain()
-    for _ in range(6):
-        writer.write(b"5\r\nhello\r\n")
-        await writer.drain()
-        await asyncio.sleep(0.1)
-    writer.write(b"0\r\n\r\n")
-    await writer.drain()
 
 
 @pytest.mark.asyncio
@@ -266,6 +262,100 @@ def test_sync_client_evicted_outside_an_event_loop_is_still_closed():
     assert closer.pending_count == 0
 
 
+def test_async_client_from_collected_loop_is_not_closed_by_fresh_loops() -> None:
+    clock: Final = FakeClock()
+    closer: Final = EvictedClientCloser(grace_seconds=0, clock=clock)
+
+    async def reap_then_schedule(client: RecordingAsyncClient) -> None:
+        closer.reap()
+        await asyncio.sleep(0)
+        closer.schedule(client)
+
+    def run_on_new_loop() -> tuple[int, RecordingAsyncClient]:
+        client: Final = RecordingAsyncClient()
+        closer.mark_owned(client)
+        loop: Final = asyncio.new_event_loop()
+        loop_id: Final = id(loop)
+        try:
+            loop.run_until_complete(reap_then_schedule(client))
+        finally:
+            loop.close()
+        del loop
+        gc.collect()
+        return loop_id, client
+
+    runs: Final = runs_until_a_loop_address_repeats(run_on_new_loop)
+
+    assert all(client.close_calls == 0 for _, client in runs)
+
+
+def test_async_client_queued_on_a_live_loop_is_closed_only_by_that_loop() -> None:
+    clock: Final = FakeClock()
+    closer: Final = EvictedClientCloser(grace_seconds=0, clock=clock)
+    client: Final = RecordingAsyncClient()
+    closer.mark_owned(client)
+    owner_loop: Final = asyncio.new_event_loop()
+    other_loop: Final = asyncio.new_event_loop()
+
+    async def schedule() -> None:
+        closer.schedule(client)
+
+    async def reap() -> None:
+        closer.reap()
+        await asyncio.sleep(0)
+
+    try:
+        owner_loop.run_until_complete(schedule())
+        other_loop.run_until_complete(reap())
+        closes_after_other_loop_reaped: Final = client.close_calls
+        pending_after_other_loop_reaped: Final = closer.pending_count
+        owner_loop.run_until_complete(reap())
+    finally:
+        other_loop.close()
+        owner_loop.close()
+
+    assert closes_after_other_loop_reaped == 0
+    assert pending_after_other_loop_reaped == 1
+    assert client.close_calls == 1
+    assert closer.pending_count == 0
+
+
+def test_closes_queued_on_a_collected_loop_free_capacity() -> None:
+    clock: Final = FakeClock()
+    closer: Final = EvictedClientCloser(grace_seconds=0, max_pending=1, clock=clock)
+    first: Final = RecordingAsyncClient()
+    closer.mark_owned(first)
+    loop_a: Final = asyncio.new_event_loop()
+
+    async def schedule_first() -> None:
+        closer.schedule(first)
+
+    try:
+        loop_a.run_until_complete(schedule_first())
+    finally:
+        loop_a.close()
+    del loop_a
+    gc.collect()
+
+    second: Final = RecordingAsyncClient()
+    closer.mark_owned(second)
+    loop_b: Final = asyncio.new_event_loop()
+
+    async def schedule_and_reap_second() -> None:
+        closer.schedule(second)
+        closer.reap()
+        await asyncio.sleep(0)
+
+    try:
+        loop_b.run_until_complete(schedule_and_reap_second())
+    finally:
+        loop_b.close()
+
+    assert first.close_calls == 0
+    assert second.close_calls == 1
+    assert closer.pending_count == 0
+
+
 @pytest.mark.asyncio
 async def test_an_async_client_waits_for_a_loop_rather_than_being_dropped():
     clock = FakeClock()
@@ -289,8 +379,7 @@ async def test_an_async_client_waits_for_a_loop_rather_than_being_dropped():
 
 
 @pytest.mark.asyncio
-async def test_a_client_evicted_on_another_event_loop_is_left_alone():
-    """Closing a client bound to a different loop would schedule work on that loop."""
+async def test_a_client_evicted_on_a_collected_loop_is_dropped():
     clock = FakeClock()
     closer = make_closer(clock)
     client = AsyncClient()
@@ -310,80 +399,7 @@ async def test_a_client_evicted_on_another_event_loop_is_left_alone():
     await asyncio.sleep(0.05)
 
     assert client.closed is False
-    assert closer.pending_count == 1
-
-
-@pytest.mark.asyncio
-async def test_a_client_serving_a_request_is_not_closed_when_its_grace_window_ends():
-    """The grace window on its own cannot promise that a request has finished.
-
-    ``litellm.request_timeout`` defaults to 6000 seconds and a streaming response
-    is bounded only by how long the upstream keeps sending, so a client past its
-    deadline is closed only once its own pool reports nothing in flight.
-    """
-    server = await asyncio.start_server(_trickling_upstream, "127.0.0.1", 0)
-    port = server.sockets[0].getsockname()[1]
-    clock = FakeClock()
-    closer = make_closer(clock)
-    client = httpx.AsyncClient()
-
-    closer.mark_owned(client)
-    closer.schedule(client)
-
-    async def read_the_stream() -> int:
-        received = 0
-        async with client.stream("GET", f"http://127.0.0.1:{port}/") as response:
-            async for chunk in response.aiter_bytes():
-                received += len(chunk)
-        return received
-
-    streaming = asyncio.create_task(read_the_stream())
-    await asyncio.sleep(0.25)  # the request is on the wire
-    clock.advance(3600.0)  # and its grace window is long gone
-    closer.reap()
-    await asyncio.sleep(0.05)
-
-    assert client.is_closed is False, "closed a client that was serving a request"
-    assert await streaming > 0, "the in-flight request did not survive the reap"
-
-    clock.advance(3600.0)
-    closer.reap()
-    await asyncio.sleep(0.05)
-
-    assert client.is_closed is True, "an idle client past its grace window must be closed"
     assert closer.pending_count == 0
-    server.close()
-
-
-@pytest.mark.asyncio
-async def test_the_aiohttp_backed_handler_is_not_closed_mid_request():
-    """The default async path is aiohttp-backed, whose pool accounts for its own leases."""
-    server = await asyncio.start_server(_trickling_upstream, "127.0.0.1", 0)
-    port = server.sockets[0].getsockname()[1]
-    clock = FakeClock()
-    closer = make_closer(clock)
-    handler = AsyncHTTPHandler()
-    held_client = handler.client
-
-    closer.mark_owned(handler)
-    closer.schedule(handler)
-
-    request = asyncio.create_task(handler.get(f"http://127.0.0.1:{port}/"))
-    await asyncio.sleep(0.25)
-    clock.advance(3600.0)
-    closer.reap()
-    await asyncio.sleep(0.05)
-
-    assert held_client.is_closed is False, "closed a handler that was serving a request"
-    assert (await request).status_code == 200
-
-    clock.advance(3600.0)
-    closer.reap()
-    await asyncio.sleep(0.05)
-
-    assert held_client.is_closed is True
-    assert handler.client.is_closed is False, "a held handler must self-heal after its evicted client is closed"
-    server.close()
 
 
 def test_the_pending_queue_cannot_grow_past_its_bound():

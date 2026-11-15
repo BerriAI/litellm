@@ -21,9 +21,9 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = REPO_ROOT / ".github" / "scripts" / "detect_changes.sh"
-CLASSIFIER = REPO_ROOT / ".circleci" / "scripts" / "classify_changes.sh"
+CLASSIFIER = REPO_ROOT / ".github" / "scripts" / "ci" / "classify_changes.sh"
 
-UI_FILE = "ui/litellm-dashboard/src/components/Teams.tsx"
+UI_FILE = "litellm/ui/litellm-dashboard/src/components/Teams.tsx"
 BACKEND_FILE = "litellm/proxy/proxy_server.py"
 
 
@@ -65,9 +65,9 @@ def _scripts_tree(tmp_path: Path, classifier_body: str | None = None) -> Path:
     """Copy the scripts into a throwaway tree, preserving their relative layout."""
     root = tmp_path / "tree"
     (root / ".github" / "scripts").mkdir(parents=True)
-    (root / ".circleci" / "scripts").mkdir(parents=True)
+    (root / ".github" / "scripts" / "ci").mkdir(parents=True)
     shutil.copy(SCRIPT, root / ".github" / "scripts" / SCRIPT.name)
-    target = root / ".circleci" / "scripts" / CLASSIFIER.name
+    target = root / ".github" / "scripts" / "ci" / CLASSIFIER.name
     if classifier_body is None:
         shutil.copy(CLASSIFIER, target)
     else:

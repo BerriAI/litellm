@@ -18,10 +18,11 @@ import time
 import traceback
 from collections.abc import Mapping, Sequence
 from types import MappingProxyType
-from typing import Final, TypeVar
+from typing import Final, Protocol, TypeVar
 from urllib.parse import urlparse
 
 import httpx
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_logger
 from litellm.integrations.batch_utils import (
@@ -50,6 +51,19 @@ MONITOR_SCOPE_BY_AUTHORITY_HOST: Final[Mapping[str, str]] = MappingProxyType(
         "login.microsoftonline.us": "https://monitor.azure.us/.default",
     }
 )
+
+
+class _OAuthTokenBody(TypedDict, total=False):
+    access_token: ReadOnly[str]
+    expires_in: ReadOnly[int]
+
+
+class _OAuthTokenResponse(Protocol):
+    def json(self) -> _OAuthTokenBody: ...
+
+
+def _oauth_token_body(response: _OAuthTokenResponse) -> _OAuthTokenBody:
+    return response.json()
 
 
 class AzureSentinelLogger(CustomBatchLogger):
@@ -226,7 +240,7 @@ class AzureSentinelLogger(CustomBatchLogger):
         if response.status_code != 200:
             raise Exception(f"Failed to get OAuth2 token: {response.status_code} - {response.text}")
 
-        token_response: Final = response.json()
+        token_response: Final = _oauth_token_body(response)
         self.oauth_token = token_response.get("access_token")
         expires_in: Final = token_response.get("expires_in", 3600)
 

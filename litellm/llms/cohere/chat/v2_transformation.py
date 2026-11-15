@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any, Final
 import httpx
 
 import litellm
+from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.types.llms.cohere import CohereV2ChatResponse
@@ -159,7 +160,7 @@ class CohereV2ChatConfig(OpenAIGPTConfig):
             if param == "presence_penalty":
                 optional_params["presence_penalty"] = value
             if param == "stop":
-                optional_params["stop_sequences"] = value
+                optional_params["stop_sequences"] = [value] if isinstance(value, str) else value
             if param == "tools":
                 optional_params["tools"] = value
             if param == "seed":
@@ -248,6 +249,9 @@ class CohereV2ChatConfig(OpenAIGPTConfig):
         prompt_tokens: Final = token_usage.get("input_tokens", 0)
         completion_tokens: Final = token_usage.get("output_tokens", 0)
 
+        model_response.choices[0].finish_reason = map_finish_reason(  # rebind-ok: ModelResponse is filled in place
+            cohere_v2_chat_response.get("finish_reason", "COMPLETE")
+        )
         model_response.created = int(time.time())
         model_response.model = model
         usage: Final = Usage(

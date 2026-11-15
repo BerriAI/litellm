@@ -100,6 +100,7 @@ def _deployment(
     location: Mapping[str, JsonValue],
     multiplier: JsonValue = 1.1,
     backend: str = _IMAGE_BACKEND,
+    clientside_params: tuple[str, ...] = (),
 ) -> str:
     return scenario.model(
         model=f"vertex_ai/{backend}",
@@ -111,6 +112,7 @@ def _deployment(
         output_cost_per_token=4e-5,
         output_cost_per_image=0.05,
         **({} if multiplier is None else {"regional_endpoint_uplift_multiplier": multiplier}),
+        **({"configurable_clientside_auth_params": list(clientside_params)} if clientside_params else {}),
         **location,
     )
 
@@ -240,7 +242,7 @@ def test_image_generation_bills_the_deployment_location(
     [
         pytest.param("global", False, _GLOBAL_IMAGE_COST, id="global-edit"),
         pytest.param(_REGION, False, _REGIONAL_IMAGE_COST, id="regional-edit"),
-        pytest.param(_REGION, True, _REGIONAL_IMAGE_COST, id="regional-edit-usage-is-per-image"),
+        pytest.param(_REGION, True, _REGIONAL_TOKEN_COST, id="regional-edit-usage-bills-tokens"),
     ],
 )
 def test_image_edit_bills_the_deployment_location(
@@ -380,7 +382,13 @@ def test_request_body_location_overrides_the_deployment(
     gateway: Gateway, deployment_location: str, extra: Mapping[str, JsonValue], expected: float
 ) -> None:
     with wire_server(_scripted()) as wire, gateway.scenario() as scenario:
-        model: Final = _deployment(gateway, scenario, wire, location={"vertex_location": deployment_location})
+        model: Final = _deployment(
+            gateway,
+            scenario,
+            wire,
+            location={"vertex_location": deployment_location},
+            clientside_params=("vertex_location", "vertex_ai_location"),
+        )
         call_id, response = _generate(gateway, model, extra=extra)
         _assert_images(response, call_id, expected)
         _assert_one_upstream_image_call(wire)
@@ -481,8 +489,8 @@ def _burst_calls(global_model: str, regional_model: str) -> tuple[_Call, ...]:
     kinds: Final = (
         ("/v1/images/generations", global_model, _GLOBAL_TOKEN_COST),
         ("/v1/images/generations", regional_model, _REGIONAL_TOKEN_COST),
-        ("/v1/images/edits", global_model, _GLOBAL_IMAGE_COST),
-        ("/v1/images/edits", regional_model, _REGIONAL_IMAGE_COST),
+        ("/v1/images/edits", global_model, _GLOBAL_TOKEN_COST),
+        ("/v1/images/edits", regional_model, _REGIONAL_TOKEN_COST),
     )
     return tuple(
         _Call(call_id=uuid.uuid4().hex, route=route, model=model, expected=expected)
