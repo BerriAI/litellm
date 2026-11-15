@@ -86,6 +86,7 @@ def _prefix_event(
         event=event,
         call_id=observation.call_id,
         started_ms=_epoch_ms(observation.started_at),
+        ended_ms=_epoch_ms(observation.ended_at),
         ttl_ms=prefix.ttl_seconds * 1000,
         write_tokens=tokens,
     )
@@ -101,7 +102,7 @@ def streak_update(observation: PromptCacheObservation) -> StreakUpdate:
     outcome: Final = observation.outcome
     prefix: Final = outcome.prefix
     if prefix is None:
-        return ScopeBreak(scope=scope, started_ms=_epoch_ms(observation.started_at))
+        return ScopeBreak(scope=scope, ended_ms=_epoch_ms(observation.ended_at))
     usage: Final = outcome.usage if isinstance(outcome, Assessed) else None
     if isinstance(usage, CacheCounters):
         return _prefix_event(observation, scope, prefix, _event(usage, prefix), usage.write_tokens)
@@ -128,7 +129,7 @@ def incident_detection(observation: PromptCacheObservation, triggered: Triggered
         resource_type="deployment",
         resource_id=deployment.deployment_id,
         window_start=start,
-        window_end=max(_moment(_epoch_ms(observation.started_at)), start) + timedelta(milliseconds=1),
+        window_end=max(_moment(_epoch_ms(observation.ended_at)), start) + timedelta(milliseconds=1),
         evidence=PromptCacheEvidence(
             config_fingerprint=deployment.config_fingerprint,
             prefix_fingerprint=prefix.fingerprint,
@@ -146,7 +147,7 @@ class PromptCacheIncidentDetector:
     times in a row. Redis or database trouble skips the evidence instead of failing the request it came from.
 
     Evidence this worker could not deliver may have been the hit that ended a streak, so before anything else
-    reaches Redis again the lost evidence's scope is broken as of the lost request's start. Lost callbacks on
+    reaches Redis again the lost evidence's scope is broken as of the lost request's end. Lost callbacks on
     other workers, or ones that never ran, stay invisible."""
 
     def __init__(
@@ -163,13 +164,13 @@ class PromptCacheIncidentDetector:
         self._lost: Mapping[StreakScope, int] = MappingProxyType({})
 
     def _remember(self, update: StreakUpdate) -> None:
-        started: Final = max(self._lost.get(update.scope, update.started_ms), update.started_ms)
-        self._lost = MappingProxyType({**self._lost, update.scope: started})
+        ended: Final = max(self._lost.get(update.scope, update.ended_ms), update.ended_ms)
+        self._lost = MappingProxyType({**self._lost, update.scope: ended})
 
     async def _break_lost_scopes(self, now_ms: int) -> bool:
-        for scope, started in tuple(self._lost.items()):
+        for scope, ended in tuple(self._lost.items()):
             try:
-                await self._streaks.apply(ScopeBreak(scope=scope, started_ms=started), now_ms)
+                await self._streaks.apply(ScopeBreak(scope=scope, ended_ms=ended), now_ms)
             except self._failures as error:
                 verbose_router_logger.warning("prompt cache streak unavailable (%s)", type(error).__name__)
                 return False

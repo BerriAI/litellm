@@ -28,6 +28,7 @@ def _miss(prefix: str = "prefix-1", scope: StreakScope = _SCOPE) -> PrefixEvent:
         event=StreakEvent.MISS,
         call_id="a",
         started_ms=1_700_000_001_000,
+        ended_ms=1_700_000_001_500,
         ttl_ms=300_000,
     )
 
@@ -88,14 +89,37 @@ async def test_each_deployment_configuration_has_its_own_streaks() -> None:
 @pytest.mark.parametrize(
     ("update", "args"),
     [
-        (_miss(), ("miss", 1_700_000_001_000, _NOW_MS, 300_000, "a", 0, MISSES_TO_OPEN_INCIDENT, SCOPE_BREAK_TTL_MS)),
+        (
+            _miss(),
+            (
+                "miss",
+                1_700_000_001_000,
+                1_700_000_001_500,
+                _NOW_MS,
+                300_000,
+                "a",
+                0,
+                MISSES_TO_OPEN_INCIDENT,
+                SCOPE_BREAK_TTL_MS,
+            ),
+        ),
         (
             ScopeBreak(_SCOPE, 1_700_000_002_000),
-            ("break", 1_700_000_002_000, _NOW_MS, 0, "", 0, MISSES_TO_OPEN_INCIDENT, SCOPE_BREAK_TTL_MS),
+            (
+                "break",
+                1_700_000_002_000,
+                1_700_000_002_000,
+                _NOW_MS,
+                0,
+                "",
+                0,
+                MISSES_TO_OPEN_INCIDENT,
+                SCOPE_BREAK_TTL_MS,
+            ),
         ),
     ],
 )
-async def test_the_script_gets_the_requests_own_start_and_the_workers_clock(
+async def test_the_script_gets_the_requests_own_start_and_end_and_the_workers_clock(
     update: StreakUpdate, args: tuple[str | int, ...]
 ) -> None:
     script = _ScriptCall([b"unproven"])

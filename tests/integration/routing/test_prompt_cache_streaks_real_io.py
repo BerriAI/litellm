@@ -38,6 +38,7 @@ class _Streaks:
         started_ms: int,
         prefix: str = "prefix-1",
         scope: StreakScope | None = None,
+        ended_ms: int | None = None,
     ) -> PrefixEvent:
         return PrefixEvent(
             scope=scope or self.scope,
@@ -45,13 +46,14 @@ class _Streaks:
             event=event,
             call_id=call_id,
             started_ms=started_ms,
+            ended_ms=started_ms if ended_ms is None else ended_ms,
             ttl_ms=_TTL_MS,
             write_tokens=2048 if event is StreakEvent.PROOF else 0,
         )
 
     async def apply(self, *updates: StreakUpdate, now_ms: int | None = None) -> tuple[StreakOutcome, ...]:
         return tuple(
-            [await self.store.apply(update, update.started_ms if now_ms is None else now_ms) for update in updates]
+            [await self.store.apply(update, update.ended_ms if now_ms is None else now_ms) for update in updates]
         )
 
     async def proof(self, started_ms: int = _T0) -> None:
@@ -76,6 +78,26 @@ async def test_three_distinct_misses_after_a_proving_write_trigger_once(streaks:
     await streaks.proof()
     outcomes = await streaks.apply(*streaks.misses("a", "b", "c"))
     assert outcomes == (Counting(1), Counting(2), Triggered(MISSES_TO_OPEN_INCIDENT, 2048, _T0 + 1_000))
+
+
+async def test_requests_already_in_flight_while_the_proving_write_was_made_never_count(streaks: _Streaks) -> None:
+    """The proving request starts at 0 and returns its write at 10. Requests that started at 1, 2 and 3 may have
+    reached the provider before the entry existed, so their zero counters say nothing about caching stopping."""
+    await streaks.apply(streaks.event(StreakEvent.PROOF, "proof", _T0, ended_ms=_T0 + 10_000))
+    in_flight = tuple(
+        streaks.event(StreakEvent.MISS, call_id, _T0 + index, ended_ms=_T0 + 11_000 + index)
+        for index, call_id in enumerate(("a", "b", "c"), start=1)
+    )
+    assert await streaks.apply(*in_flight) == (Unproven(),) * 3
+    outcomes = await streaks.apply(*streaks.misses("d", "e", "f", start=_T0 + 10_001))
+    assert outcomes[-1] == Triggered(MISSES_TO_OPEN_INCIDENT, 2048, _T0 + 10_001)
+
+
+async def test_a_hit_ends_every_miss_that_started_before_it_returned(streaks: _Streaks) -> None:
+    await streaks.proof()
+    a, b = streaks.misses("a", "b", start=_T0 + 2_000)
+    await streaks.apply(a, b, streaks.event(StreakEvent.HIT, "x", _T0 + 1_000, ended_ms=_T0 + 3_000))
+    assert await streaks.apply(*streaks.misses("c", start=_T0 + 3_001)) == (Counting(1),)
 
 
 async def test_a_request_logged_twice_counts_once(streaks: _Streaks) -> None:
@@ -139,13 +161,13 @@ async def test_a_hit_keeps_the_entry_alive_for_another_ttl(streaks: _Streaks) ->
 async def test_an_unreadable_caching_request_ends_every_streak_of_its_scope(streaks: _Streaks) -> None:
     await streaks.proof()
     a, b = streaks.misses("a", "b")
-    await streaks.apply(a, b, ScopeBreak(scope=streaks.scope, started_ms=_T0 + 1_500))
+    await streaks.apply(a, b, ScopeBreak(scope=streaks.scope, ended_ms=_T0 + 1_500))
     assert await streaks.apply(*streaks.misses("c", start=_T0 + 1_600)) == (Counting(1),)
 
 
 async def test_a_scope_break_before_the_misses_leaves_them_counting(streaks: _Streaks) -> None:
     await streaks.proof()
-    await streaks.apply(ScopeBreak(scope=streaks.scope, started_ms=_T0 + 500))
+    await streaks.apply(ScopeBreak(scope=streaks.scope, ended_ms=_T0 + 500))
     outcomes = await streaks.apply(*streaks.misses("a", "b", "c"))
     assert outcomes[-1] == Triggered(MISSES_TO_OPEN_INCIDENT, 2048, _T0 + 1_000)
 
@@ -153,7 +175,7 @@ async def test_a_scope_break_before_the_misses_leaves_them_counting(streaks: _St
 async def test_a_scope_break_stays_inside_its_deployment_configuration(streaks: _Streaks) -> None:
     await streaks.proof()
     other = StreakScope(deployment_id=streaks.scope.deployment_id, config_fingerprint="config-2")
-    await streaks.apply(ScopeBreak(scope=other, started_ms=_T0 + 1_500))
+    await streaks.apply(ScopeBreak(scope=other, ended_ms=_T0 + 1_500))
     outcomes = await streaks.apply(*streaks.misses("a", "b", "c", start=_T0 + 1_000))
     assert outcomes[-1] == Triggered(MISSES_TO_OPEN_INCIDENT, 2048, _T0 + 1_000)
 

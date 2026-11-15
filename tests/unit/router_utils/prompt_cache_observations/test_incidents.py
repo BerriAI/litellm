@@ -40,6 +40,7 @@ from litellm.router_utils.prompt_cache_observations.types import (
 )
 
 _START = 1_700_000_000.0
+_DURATION = 0.5
 _PATH = ObservationPath(
     provider=ProviderFamily.ANTHROPIC,
     wire=WireShape.ANTHROPIC_MESSAGES,
@@ -72,6 +73,7 @@ def _observation(
         deployment=_deployment(config),
         intent=CacheIntent.CLIENT,
         started_at=at,
+        ended_at=at + _DURATION,
         outcome=Assessed(path=_PATH, prefix=prefix, usage=usage),
     )
 
@@ -89,6 +91,7 @@ def _unassessed(call_id: str, at: float, prefix: CacheablePrefix | None) -> Prom
         deployment=_deployment(),
         intent=CacheIntent.CLIENT,
         started_at=at,
+        ended_at=at + _DURATION,
         outcome=Unassessed(UnassessedReason.REQUEST_BODY_UNAVAILABLE, path=_PATH, prefix=prefix),
     )
 
@@ -100,6 +103,7 @@ def _event(event: StreakEvent, call_id: str, at: float, write_tokens: int = 0) -
         event=event,
         call_id=call_id,
         started_ms=int(at * 1000),
+        ended_ms=int((at + _DURATION) * 1000),
         ttl_ms=300_000,
         write_tokens=write_tokens,
     )
@@ -155,11 +159,12 @@ async def _feed(detector: PromptCacheIncidentDetector, *observations: PromptCach
                 deployment=_deployment(),
                 intent=CacheIntent.CLIENT,
                 started_at=_START,
+                ended_at=_START + _DURATION,
                 outcome=Unassessed(UnassessedReason.UPSTREAM_FAILED, path=_PATH, prefix=_PREFIX),
             ),
             _event(StreakEvent.UNKNOWN, "f", _START),
         ),
-        (_unassessed("x", _START + 0.25, None), ScopeBreak(_SCOPE, int(_START * 1000) + 250)),
+        (_unassessed("x", _START + 0.25, None), ScopeBreak(_SCOPE, int((_START + 0.25 + _DURATION) * 1000))),
         (
             _observation("w2", _WRITE, _START, prefix=CacheablePrefix("prefix-1", 300, breakpoints=2)),
             _event(StreakEvent.HIT, "w2", _START),
@@ -167,7 +172,7 @@ async def _feed(detector: PromptCacheIncidentDetector, *observations: PromptCach
     ],
     ids=["proving-write", "read", "miss", "unknown-usage", "failed-attempt", "unreadable-prefix", "multi-breakpoint"],
 )
-async def test_each_observation_reaches_its_streak_as_of_the_requests_own_start(
+async def test_each_observation_reaches_its_streak_with_the_requests_own_start_and_end(
     observation: PromptCacheObservation, update: StreakUpdate
 ) -> None:
     store = _ScriptedStore()
@@ -188,7 +193,7 @@ async def test_a_triggered_streak_opens_one_incident_for_the_deployment_configur
             resource_type="deployment",
             resource_id="claude-east",
             window_start=datetime.fromtimestamp(_START + 10, tz=timezone.utc),
-            window_end=datetime.fromtimestamp(_START + 12, tz=timezone.utc) + timedelta(milliseconds=1),
+            window_end=datetime.fromtimestamp(_START + 12 + _DURATION, tz=timezone.utc) + timedelta(milliseconds=1),
             evidence=PromptCacheEvidence(
                 config_fingerprint="config-1",
                 prefix_fingerprint="prefix-1",
@@ -214,13 +219,13 @@ async def test_without_an_attached_recorder_a_trigger_saves_nothing() -> None:
 
 async def test_evidence_redis_lost_ends_its_scopes_streaks_before_anything_else_counts() -> None:
     """A hit lost to a Redis error may be what ended the streak, so the next update first breaks the scope as of
-    that hit's start. Without it, miss, miss, lost hit, miss would open an incident."""
+    that hit's end. Without it, miss, miss, lost hit, miss would open an incident."""
     store = _ScriptedStore(failing=frozenset({1}))
     hit = _observation("r", _READ, _START + 11)
     await _feed(_detector(_Recorder(), store), *_misses("a"), hit, *_misses("c", start=_START + 12))
     assert [update for update, _ in store.applied] == [
         _event(StreakEvent.MISS, "a", _START + 10),
-        ScopeBreak(_SCOPE, int((_START + 11) * 1000)),
+        ScopeBreak(_SCOPE, int((_START + 11 + _DURATION) * 1000)),
         _event(StreakEvent.MISS, "c", _START + 12),
     ]
 
@@ -229,7 +234,7 @@ async def test_while_the_scope_break_cannot_be_delivered_no_later_evidence_count
     store = _ScriptedStore(failing=frozenset({0, 1}))
     await _feed(_detector(_Recorder(), store), _observation("r", _READ, _START + 11), *_misses("c", "d"))
     assert [update for update, _ in store.applied] == [
-        ScopeBreak(_SCOPE, int((_START + 11) * 1000)),
+        ScopeBreak(_SCOPE, int((_START + 11 + _DURATION) * 1000)),
         _event(StreakEvent.MISS, "d", _START + 11),
     ]
 

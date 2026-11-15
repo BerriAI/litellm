@@ -91,6 +91,7 @@ class _LoggedPayload(BaseModel):
     api_base: str | None = None
     model_id: str | None = None
     startTime: float
+    endTime: float
 
 
 class _LoggedCall(BaseModel):
@@ -306,6 +307,7 @@ def observe_call(
         call_id=payload.litellm_call_id or payload.id,
         deployment=deployment,
         started_at=payload.startTime,
+        ended_at=payload.endTime,
         outcome=outcome,
     )
 
