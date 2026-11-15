@@ -9107,6 +9107,7 @@ class ProxyConfig:
         proxy_logging_obj: ProxyLogging,
         *,
         ui_settings_already_synced: bool = False,
+        raise_on_error: bool = False,
     ) -> ReconcileOutcome:
         """
         - Check db for new models
@@ -9130,15 +9131,19 @@ class ProxyConfig:
         setting written through one pod reaches the others without waiting on a model reconcile.
         """
         if not ui_settings_already_synced:
-            await sync_ui_settings_to_general_settings(prisma_client)
+            await sync_ui_settings_to_general_settings(prisma_client, require_fresh=raise_on_error)
 
         async with DB_RECONCILE_LOCK:
-            return await self.add_deployment_locked(prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj)
+            return await self.add_deployment_locked(
+                prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj, raise_on_error=raise_on_error
+            )
 
     async def add_deployment_locked(
         self,
         prisma_client: PrismaClient,
         proxy_logging_obj: ProxyLogging,
+        *,
+        raise_on_error: bool = False,
     ) -> ReconcileOutcome:
         """add_deployment's body, minus the locking. DB_RECONCILE_LOCK MUST already
         be held. Split out for clear_cache, which already holds the lock and would
@@ -9186,6 +9191,8 @@ class ProxyConfig:
 
         except Exception as e:
             verbose_proxy_logger.exception("litellm.proxy.proxy_server.py::ProxyConfig:add_deployment - %s", e)
+            if raise_on_error:
+                raise
 
         # Read while the lock is still held: once it is released the next reconcile can
         # begin, and clear_cache's leading wipe would make this look like a mass drop.
@@ -9206,7 +9213,9 @@ class ProxyConfig:
             return
 
         async def _resync_config_from_db() -> None:
-            await self.add_deployment(prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj)
+            await self.add_deployment(
+                prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj, raise_on_error=True
+            )
 
         subscriber: Final = ConfigSyncSubscriber(
             redis_cache=redis_cache,

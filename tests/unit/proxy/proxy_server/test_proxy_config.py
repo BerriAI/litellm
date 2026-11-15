@@ -6505,3 +6505,20 @@ async def test_proxy_config_validates_advertised_mcp_versions_at_load(tmp_path, 
         return
     with pytest.raises(ValidationError):
         await ProxyConfig().load_config(router=None, config_file_path=str(config))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("require_recovery", (False, True))
+async def test_database_reload_failure_is_visible_to_recovery_callers(require_recovery: bool) -> None:
+    config: Final = ProxyConfig()
+    client: Final = MagicMock()
+    client.writer_db = client.db
+    client.get_generic_data = AsyncMock(side_effect=ConnectionError("database unavailable"))
+    client.db.litellm_uisettings.find_unique = AsyncMock(return_value=None)
+    client.db.litellm_config.find_many = AsyncMock(side_effect=ConnectionError("database unavailable"))
+    if require_recovery:
+        with pytest.raises(ConnectionError, match="database unavailable"):
+            await config.add_deployment(prisma_client=client, proxy_logging_obj=MagicMock(), raise_on_error=True)
+        return
+    result: Final = await config.add_deployment(prisma_client=client, proxy_logging_obj=MagicMock())
+    assert result.still_desired is None

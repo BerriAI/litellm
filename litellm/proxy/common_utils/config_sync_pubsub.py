@@ -48,6 +48,7 @@ CONFIG_SYNC_MIN_RESYNC_INTERVAL_SECONDS: Final = 10.0
 _POLL_TIMEOUT_SECONDS: Final = 1.0
 _BACKOFF_INITIAL_SECONDS: Final = 5.0
 _BACKOFF_MAX_SECONDS: Final = 60.0
+_RESYNC_RETRY_ATTEMPTS: Final = 3
 
 _WRITE_ACTION_NAMES: Final[frozenset[str]] = frozenset(
     {"create", "create_many", "update", "update_many", "upsert", "delete", "delete_many"}
@@ -300,7 +301,6 @@ class ConfigSyncSubscriber:
                     await pubsub.subscribe(config_sync_channel(self._redis_cache))
                     if self._resync_required:
                         await self._debounce_and_resync(pubsub)
-                        self._resync_required = False
                     backoff_seconds = self._backoff_initial_seconds
                     await self._consume(pubsub)
                 finally:
@@ -321,7 +321,10 @@ class ConfigSyncSubscriber:
         while True:
             message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=_POLL_TIMEOUT_SECONDS)
             if message is None:
+                if self._resync_required:
+                    await self._debounce_and_resync(pubsub)
                 continue
+            self._resync_required = True
             await self._apply(pubsub, message)
             await self._debounce_and_resync(pubsub)
 
@@ -331,8 +334,9 @@ class ConfigSyncSubscriber:
         )
         await self._apply_until(pubsub, self._next_resync_at())
         await self._drain_pending(pubsub)
-        await self._run_resync_callbacks()
-        self._last_resync_at = self._monotonic()
+        if await self._run_resync_callbacks():
+            self._last_resync_at = self._monotonic()
+            self._resync_required = False
 
     def _next_resync_at(self) -> float:
         if self._last_resync_at is None:
@@ -380,12 +384,32 @@ class ConfigSyncSubscriber:
         except Exception as e:  # noqa: BLE001  # the debounced full resync retries what a targeted apply could not
             verbose_proxy_logger.warning("config sync targeted apply of %s failed: %s", model_ids, e)
 
-    async def _run_resync_callbacks(self) -> None:
-        for callback in self._resync_callbacks:
+    @staticmethod
+    async def _failed_resync_callbacks(
+        callbacks: tuple[Callable[[], Awaitable[None]], ...],
+    ) -> AsyncIterator[Callable[[], Awaitable[None]]]:
+        for callback in callbacks:
             try:
                 await callback()
             except Exception as e:  # noqa: BLE001  # one failing resync callback must not kill the subscriber
                 verbose_proxy_logger.warning("config sync resync callback failed: %s", e)
+                yield callback
+
+    async def _run_resync_callbacks(
+        self,
+        callbacks: tuple[Callable[[], Awaitable[None]], ...] | None = None,
+        attempt: int = 0,
+    ) -> bool:
+        pending: Final = self._resync_callbacks if callbacks is None else callbacks
+        failed: Final = tuple([callback async for callback in self._failed_resync_callbacks(pending)])
+        if not failed:
+            return True
+        if attempt + 1 >= _RESYNC_RETRY_ATTEMPTS:
+            verbose_proxy_logger.warning("config sync reload attempts exhausted; reconciliation remains pending")
+            return False
+        retry_delay: Final = min(self._backoff_initial_seconds * 2**attempt, self._backoff_max_seconds)
+        await self._sleep(retry_delay)
+        return await self._run_resync_callbacks(failed, attempt + 1)
 
     @staticmethod
     async def _close_pubsub(pubsub: ConfigSyncPubSub) -> None:

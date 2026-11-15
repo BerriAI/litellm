@@ -736,6 +736,8 @@ async def test_failing_resync_callback_does_not_kill_subscriber() -> None:
         debounce_seconds=0.01,
         jitter_max_seconds=0.0,
         min_resync_interval_seconds=0.0,
+        backoff_initial_seconds=0.0,
+        backoff_max_seconds=0.0,
     )
 
     subscriber.start()
@@ -771,6 +773,46 @@ async def test_stop_before_start_is_a_noop() -> None:
     subscriber = ConfigSyncSubscriber(redis_cache=cache, resync_callbacks=())
 
     await subscriber.stop()
+
+
+@pytest.mark.parametrize("failures", (1, 3))
+@pytest.mark.parametrize("after_reconnect", (False, True))
+async def test_reload_recovers_without_another_notification(failures: int, after_reconnect: bool) -> None:
+    clock: Final = _FakeClock()
+    deliveries: Final = () if after_reconnect else ((clock.now, "change"),)
+    pubsub: Final = _VirtualTimePubSub(clock, deliveries=deliveries)
+    connections: Final = (_BrokenPubSub(), pubsub) if after_reconnect else (pubsub,)
+    cache: Final = _FakeRedisCache(_ScriptedPubSubRedisClient(connections))
+    recovered: Final = asyncio.Event()
+    outcomes: Final = iter((*((ConnectionError("database unavailable"),) * failures), None))
+
+    async def reload() -> None:
+        outcome: Final = next(outcomes)
+        if outcome is not None:
+            raise outcome
+        recovered.set()
+
+    reload_callback: Final = AsyncMock(side_effect=reload)
+    successful_callback: Final = AsyncMock()
+    subscriber: Final = ConfigSyncSubscriber(
+        redis_cache=cache,
+        resync_callbacks=(reload_callback, successful_callback),
+        debounce_seconds=0.0,
+        jitter_max_seconds=0.0,
+        min_resync_interval_seconds=0.0,
+        backoff_initial_seconds=0.0,
+        backoff_max_seconds=0.0,
+        monotonic=clock,
+    )
+
+    subscriber.start()
+    try:
+        await asyncio.wait_for(recovered.wait(), timeout=1)
+    finally:
+        await subscriber.stop()
+
+    assert reload_callback.await_count == failures + 1
+    assert successful_callback.await_count == (1 if failures < 3 else 2)
 
 
 async def test_subscriber_subscribes_on_cluster_derived_pubsub_client() -> None:
@@ -1147,7 +1189,9 @@ async def test_proxy_config_subscriber_resyncs_deployments_only() -> None:
     proxy_logging_obj = MagicMock()
     calls: List[Tuple[str, object, object]] = []
 
-    async def fake_add_deployment(prisma_client: object, proxy_logging_obj: object) -> None:
+    async def fake_add_deployment(
+        prisma_client: object, proxy_logging_obj: object, *, raise_on_error: bool = False
+    ) -> None:
         calls.append(("add_deployment", prisma_client, proxy_logging_obj))
 
     async def fake_get_credentials(prisma_client: object) -> None:
