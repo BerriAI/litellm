@@ -6536,7 +6536,7 @@ def build_custom_logger_compatible_class(
         _in_memory_loggers.append(_gcs_bucket_logger)
         return _gcs_bucket_logger
     elif logging_integration == "s3_v2":
-        from litellm.integrations.s3_v3 import S3Logger as S3V2Logger
+        from litellm.integrations.s3_v2 import S3Logger as S3V2Logger
 
         for callback in _in_memory_loggers:
             if isinstance(callback, S3V2Logger):
@@ -7360,7 +7360,7 @@ def get_custom_logger_compatible_class(
                 if isinstance(callback, GCSBucketLogger):
                     return callback
         elif logging_integration == "s3_v2":
-            from litellm.integrations.s3_v3 import S3Logger as S3V2Logger
+            from litellm.integrations.s3_v2 import S3Logger as S3V2Logger
 
             for callback in _in_memory_loggers:
                 if isinstance(callback, S3V2Logger):
@@ -8067,7 +8067,7 @@ class StandardLoggingPayloadSetup:
                 )
                 if custom_logger and hasattr(custom_logger, "s3_path") and getattr(custom_logger, "s3_path"):
                     s3_path = getattr(custom_logger, "s3_path")
-                from litellm.integrations.s3_v3 import S3Logger as S3V2Logger
+                from litellm.integrations.s3_v2 import S3Logger as S3V2Logger
 
                 if isinstance(custom_logger, S3V2Logger):
                     partition_granularity = custom_logger.resolve_partition_granularity()
