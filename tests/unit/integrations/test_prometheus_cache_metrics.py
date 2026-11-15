@@ -139,13 +139,11 @@ class TestPrometheusCacheMetrics:
         # Verify cache misses metric was NOT called
         mock_logger.litellm_cache_misses_metric.labels.assert_not_called()
 
-        # Verify provider prompt caching metrics were incremented
-        mock_logger.litellm_provider_cache_read_input_tokens_metric.labels().inc.assert_called_once_with(
-            25
-        )
-        mock_logger.litellm_provider_cache_creation_input_tokens_metric.labels().inc.assert_called_once_with(
-            10
-        )
+        # A response-cache hit replays the stored usage without a provider
+        # request, so provider prompt caching metrics must NOT be incremented
+        # (issue #51909: replaying them double-counts the original request).
+        mock_logger.litellm_provider_cache_read_input_tokens_metric.labels.assert_not_called()
+        mock_logger.litellm_provider_cache_creation_input_tokens_metric.labels.assert_not_called()
 
     def test_increment_cache_metrics_on_cache_miss(self, sample_enum_values):
         """Test that cache miss increments the correct metrics"""

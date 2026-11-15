@@ -2075,13 +2075,25 @@ class PrometheusLogger(CustomLogger):
         prompt_details: Final = usage_object.get("prompt_tokens_details") or {}
         completion_details: Final = usage_object.get("completion_tokens_details") or {}
 
-        cache_creation_detail_tokens: Final = PrometheusLogger._resolve_cache_write_tokens(prompt_details)
+        # On a response-cache hit the usage object is replayed from the stored
+        # response, so the provider prompt-cache details in it describe the
+        # original request, not this one. Skip the two provider-cache counters
+        # there; the remaining detail counters are served-volume accounting.
+        served_from_cache: Final = standard_logging_payload.get("cache_hit") is True
+
+        cache_creation_detail_tokens: Final = (
+            None if served_from_cache else PrometheusLogger._resolve_cache_write_tokens(prompt_details)
+        )
 
         detail_metrics: Final[list[tuple[_MetricLike, DEFINED_PROMETHEUS_METRICS, object]]] = [
             (
                 self.litellm_input_cached_tokens_metric,
                 "litellm_input_cached_tokens_metric",
-                (prompt_details.get("cached_tokens") if isinstance(prompt_details, dict) else None),
+                (
+                    None
+                    if served_from_cache
+                    else (prompt_details.get("cached_tokens") if isinstance(prompt_details, dict) else None)
+                ),
             ),
             (
                 self.litellm_input_cache_creation_tokens_metric,
@@ -2214,6 +2226,12 @@ class PrometheusLogger(CustomLogger):
                     label_context=label_context,
                     amount=float(total_tokens),
                 )
+
+            # The usage object on a cache-hit payload is the stored one. Emitting
+            # its provider prompt-cache details again would count the original
+            # request's provider cache activity a second time, for a request that
+            # never reached the provider.
+            return
         else:
             # cache_hit is False - increment cache misses counter
             PrometheusLogger._inc_labeled_counter(
@@ -2224,7 +2242,10 @@ class PrometheusLogger(CustomLogger):
                 label_context=label_context,
             )
 
-        # Provider prompt caching metrics are independent of LiteLLM cache_hit.
+        # Reached for cache misses and for calls with no response-cache lookup.
+        # Provider prompt caching metrics describe tokens the provider read
+        # from or wrote to its own prompt cache; a response-cache hit replays
+        # the stored usage without a provider request, so it returns above.
         usage_obj: Final = (standard_logging_payload.get("metadata", {}) or {}).get("usage_object")
         if isinstance(usage_obj, dict):
             (
