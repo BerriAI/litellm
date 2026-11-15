@@ -280,3 +280,23 @@ def test_a_compaction_item_counts_only_its_summary(model: str) -> None:
     assert count_input_tokens_for_model(request_body=padded_body, model=model) == count_input_tokens_for_model(
         request_body=plain_body, model=model
     )
+
+def test_count_input_tokens_for_model_gemini_contents() -> None:
+    """Verify Gemini native contents and systemInstruction schema counts tokens properly."""
+    body = {
+        "contents": [{"role": "user", "parts": [{"text": "Hello from Gemini Vertex AI passthrough"}]}],
+        "systemInstruction": {"parts": [{"text": "You are an assistant"}]},
+    }
+    tokens = count_input_tokens_for_model(request_body=body, model="gpt-4o")
+    assert tokens is not None
+    assert tokens > 0
+
+
+def test_requested_output_tokens_gemini_generation_config() -> None:
+    """Verify generationConfig.maxOutputTokens is properly parsed for Gemini models."""
+    from litellm.proxy.spend_tracking.budget_reservation import _requested_output_tokens
+
+    body = {
+        "generationConfig": {"maxOutputTokens": 4096}
+    }
+    assert _requested_output_tokens(body) == 4096
