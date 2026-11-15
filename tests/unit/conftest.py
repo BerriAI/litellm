@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Final, Literal, TypeAlias
 import boto3
 import httpx
 import pytest
+import pytest_asyncio
 from pytest_socket import enable_socket, socket_allow_hosts
 
 if TYPE_CHECKING:
@@ -604,3 +605,27 @@ def in_operator_error(value: Container[object]) -> str:
     with pytest.raises(TypeError) as native:
         _ = "key" in value
     return str(native.value)
+
+
+class StreamClock:
+    __slots__ = ("now",)
+
+    def __init__(self, now: float) -> None:
+        self.now = now
+
+    def __call__(self) -> float:
+        return self.now
+
+    async def elapse(self, seconds: float) -> None:
+        self.now += seconds
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+
+@pytest_asyncio.fixture(loop_scope="function")
+async def stream_clock(monkeypatch: pytest.MonkeyPatch) -> StreamClock:
+    loop: Final = asyncio.get_running_loop()
+    clock: Final = StreamClock(loop.time())
+    monkeypatch.setattr(loop, "time", clock)
+    return clock

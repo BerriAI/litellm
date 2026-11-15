@@ -293,6 +293,30 @@ def _record_now(recording: Callable[[], object]) -> None:
 _ItemT: Final = TypeVar("_ItemT")
 
 
+async def _until_first_output(
+    items: AsyncIterator[_ItemT],
+    deadline: float,
+    has_output: Callable[[_ItemT], bool],
+    expired: Callable[[], MidStreamFallbackError],
+) -> AsyncGenerator[_ItemT, None]:
+    while True:
+        remaining: Final = deadline - anyio.current_time()
+        if remaining <= 0:
+            raise expired()
+        try:
+            with anyio.fail_after(remaining):
+                item: Final = await items.__anext__()
+        except StopAsyncIteration:
+            return
+        except TimeoutError as error:
+            raise expired() from error
+        yield item
+        if has_output(item):
+            async for following in items:
+                yield following
+            return
+
+
 async def _areported(
     attempt: StreamAttempt,
     items: AsyncIterable[_ItemT],
