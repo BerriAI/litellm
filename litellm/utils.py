@@ -2298,7 +2298,7 @@ def client(original_function):
             kwargs["litellm_call_id"] = str(uuid.uuid4())
 
         model: Final[str | None] = args[0] if len(args) > 0 else kwargs.get("model", None)
-        _raise_on_request_pricing_currency(kwargs)
+        _raise_on_request_pricing_currency(kwargs)  # pyright: ignore[reportUnknownArgumentType]  # the untyped SDK call kwargs
 
         try:
             if logging_obj is None:
@@ -2570,7 +2570,7 @@ def client(original_function):
         kwargs.pop("_is_litellm_internal_call", None)  # discard if injected
         _is_litellm_internal_call: Final = is_internal_call.get()
         _deployment_call_end_time: datetime.datetime | None = None
-        _raise_on_request_pricing_currency(kwargs)
+        _raise_on_request_pricing_currency(kwargs)  # pyright: ignore[reportUnknownArgumentType]  # the untyped SDK call kwargs
 
         try:
             if logging_obj is None:

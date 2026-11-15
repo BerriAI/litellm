@@ -1614,12 +1614,12 @@ def update_db_model(
     currency_sent_in_params: Final = (
         frozenset(updated_patch.litellm_params.model_fields_set) & CURRENCY_FIELDS
         if updated_patch.litellm_params
-        else frozenset()
+        else frozenset[str]()
     )
     currency_sent_in_info: Final = (
         frozenset(updated_patch.model_info.model_fields_set) & CURRENCY_FIELDS
         if updated_patch.model_info
-        else frozenset()
+        else frozenset[str]()
     )
     for setting in currency_sent_in_params - currency_sent_in_info:
         merged_model_info.pop(setting, None)

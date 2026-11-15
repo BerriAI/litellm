@@ -50,6 +50,7 @@ from litellm._uuid import uuid
 from litellm.litellm_core_utils.completion_timeout import CompletionTimeout
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, normalize_drop_params
 from litellm.litellm_core_utils.pricing_currency import (
+    NormalizedPricing,
     PricingCurrencyError,
     boolean_price_error,
     needs_pricing_normalization,
@@ -967,18 +968,19 @@ def boolean_price_fields(data: object) -> frozenset[str]:
     )
 
 
-def _usd_priced(
-    litellm_params: "LiteLLM_Params | Mapping[str, object]", model_info: "ModelInfo"
-) -> "tuple[LiteLLM_Params | Mapping[str, object], ModelInfo]":
+def _boolean_prices_of(litellm_params: object) -> frozenset[str]:
+    if isinstance(litellm_params, GenericLiteLLMParams):
+        return litellm_params.boolean_prices
+    return boolean_price_fields(litellm_params)
+
+
+def _usd_priced(litellm_params: "LiteLLM_Params", model_info: "ModelInfo") -> "tuple[LiteLLM_Params, ModelInfo]":
+    """The deployment's USD projection. ``litellm_params`` is also a raw dict when a stored entry is rebuilt."""
     if not needs_pricing_normalization(litellm_params, model_info):
         return litellm_params, model_info
     params: Final[Mapping[str, object]] = dict(litellm_params)
     info: Final[Mapping[str, object]] = dict(model_info)
-    sent_booleans: Final = model_info.boolean_prices | (
-        litellm_params.boolean_prices
-        if isinstance(litellm_params, GenericLiteLLMParams)
-        else boolean_price_fields(litellm_params)
-    )
+    sent_booleans: Final = model_info.boolean_prices | _boolean_prices_of(litellm_params)
     boolean_error: Final = boolean_price_error(sent_booleans, params, info)
     if boolean_error is not None:
         raise ValueError(boolean_error)
@@ -986,6 +988,8 @@ def _usd_priced(
     match normalized:
         case PricingCurrencyError(message=message):
             raise ValueError(message)
+        case NormalizedPricing():
+            pass
     return (
         litellm_params
         if normalized.litellm_params is params

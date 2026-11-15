@@ -33,9 +33,10 @@ def _deployment_cost_map_rates(deployment: object) -> tuple[float | None, float 
     return _as_rate(row.get("input_cost_per_token")), _as_rate(row.get("output_cost_per_token"))
 
 
-def _configured_rate(deployment: Mapping[str, object], field: str) -> float | None:
+def _configured_rate(deployment: object, field: str) -> float | None:
     """The deployment's own price for ``field``, ``litellm_params`` first, so a configured zero ranks as free."""
-    sections: Final = (as_str_mapping(deployment.get("litellm_params")), as_str_mapping(deployment.get("model_info")))
+    record: Final = as_str_mapping(deployment) or {}
+    sections: Final = (as_str_mapping(record.get("litellm_params")), as_str_mapping(record.get("model_info")))
     rates: Final = (_as_rate(section.get(field)) for section in sections if section is not None)
     return next((rate for rate in rates if rate is not None), None)
 
@@ -288,8 +289,8 @@ class LowestCostLoggingHandler(CustomLogger):
             deployment_view: object = _deployment
             map_input_cost, map_output_cost = _deployment_cost_map_rates(deployment_view)
 
-            item_input_cost = _configured_rate(_deployment, "input_cost_per_token")
-            item_output_cost = _configured_rate(_deployment, "output_cost_per_token")
+            item_input_cost = _configured_rate(_deployment, "input_cost_per_token")  # pyright: ignore[reportUnknownArgumentType]  # the legacy untyped deployment dict
+            item_output_cost = _configured_rate(_deployment, "output_cost_per_token")  # pyright: ignore[reportUnknownArgumentType]  # same
 
             if item_input_cost is None:
                 item_input_cost = map_input_cost if map_input_cost is not None else 5.0

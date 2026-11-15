@@ -87,7 +87,7 @@ class NormalizedPricing:
 
 
 class _ReadsFields(Protocol):
-    def get(self, key: str, default: object = None, /) -> object: ...
+    def get(self, key: str, /) -> object: ...
 
 
 def needs_pricing_normalization(litellm_params: _ReadsFields, model_info: _ReadsFields) -> bool:

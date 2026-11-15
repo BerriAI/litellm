@@ -2717,12 +2717,15 @@ def _deployment_model_info(
 ) -> ModelInfo | None:
     if not custom_pricing:
         return None
-    routed_snapshot: Final = routed_pricing_snapshot(
-        litellm_logging_obj.litellm_params if litellm_logging_obj is not None else None
+    logged_params: Final = (
+        _LOGGED_LITELLM_PARAMS.validate_python(litellm_logging_obj.litellm_params or {})
+        if litellm_logging_obj is not None
+        else None
     )
+    routed_snapshot: Final = routed_pricing_snapshot(logged_params)
     if routed_snapshot is not None:
         return cast(ModelInfo, routed_snapshot)  # cast-ok: the entry captured when the deployment was selected
-    stamped_model_info: Final = _stamped_deployment_model_info(litellm_logging_obj)
+    stamped_model_info: Final = _stamped_deployment_model_info(logged_params)
     registered_deployment_info: Final = _raw_cost_map_entry(router_model_id) if router_model_id is not None else None
     if registered_deployment_info is not None:
         return cast(ModelInfo, registered_deployment_info)  # cast-ok: router registers deployment prices under its id
@@ -2731,18 +2734,12 @@ def _deployment_model_info(
     return cast(ModelInfo, stamped_model_info)  # cast-ok: the model_info the router stamped on the call
 
 
-def _stamped_deployment_model_info(litellm_logging_obj: LitellmLoggingObject | None) -> Mapping[str, object] | None:
-    litellm_params: Final = litellm_logging_obj.litellm_params if litellm_logging_obj is not None else None
+def _stamped_deployment_model_info(litellm_params: Mapping[str, object] | None) -> Mapping[str, object] | None:
     if not litellm_params:
         return None
-    return next(
-        (
-            model_info
-            for metadata_key in ("metadata", "litellm_metadata")
-            if (metadata := litellm_params.get(metadata_key)) and (model_info := metadata.get("model_info")) is not None
-        ),
-        None,
-    )
+    buckets: Final = (as_str_mapping(litellm_params.get(key)) for key in ("metadata", "litellm_metadata"))
+    model_infos: Final = (as_str_mapping(bucket.get("model_info")) for bucket in buckets if bucket)
+    return next((model_info for model_info in model_infos if model_info is not None), None)
 
 
 def _ocr_model_info(
