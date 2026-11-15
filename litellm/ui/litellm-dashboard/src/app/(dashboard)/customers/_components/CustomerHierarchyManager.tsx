@@ -1,11 +1,19 @@
 "use client";
 
 import { useState } from "react";
-import { ChevronRight, Pencil, Plus } from "lucide-react";
+import { ChevronRight, MoreHorizontal, Pencil, Plus } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useTranslation } from "react-i18next";
 import { ErrorState } from "@/components/shared/ErrorState";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import MoveCustomerMemberDialog from "./MoveCustomerMemberDialog";
+import type { Member } from "./customerHierarchyForms";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { extractProxyErrorMessage } from "@/lib/http/client";
 import CustomerHierarchyNavigation, { useCustomerHierarchyLinks } from "./CustomerHierarchyNavigation";
@@ -126,6 +134,7 @@ function hierarchyRows({ hierarchy, selected, scope }: ScopeProps) {
       entity: customerUsageEntity(team.customer_team_id, team),
       open: () => hierarchy.openTeam(team.customer_team_id),
       edit: () => hierarchy.openTeam(team.customer_team_id, true),
+      member: null,
       parentTeamId: null,
       openParentTeam: () => hierarchy.openTeam(team.customer_team_id),
       usageScope: { org: scope.org, team: team.customer_team_id, member: null },
@@ -137,6 +146,7 @@ function hierarchyRows({ hierarchy, selected, scope }: ScopeProps) {
       entity: customerUsageEntity(member.customer_member_id, member),
       open: () => hierarchy.openMember(member.customer_member_id, member.parent_team_ids[0] ?? ""),
       edit: () => hierarchy.openMember(member.customer_member_id, member.parent_team_ids[0] ?? ""),
+      member,
       parentTeamId: member.parent_team_ids[0] ?? "",
       openParentTeam: () => hierarchy.openTeam(member.parent_team_ids[0] ?? ""),
       usageScope: { org: scope.org, team: selected.team?.customer_team_id ?? null, member: member.customer_member_id },
@@ -178,6 +188,7 @@ function HierarchyCreateAction({ hierarchy, selected, scope }: ScopeProps) {
 
 function HierarchyChildTable(props: ScopeProps) {
   const { customerHierarchyHref } = useCustomerHierarchyLinks();
+  const [movingMember, setMovingMember] = useState<Member | null>(null);
   const { t } = useTranslation();
   const { hierarchy } = props;
   const { children, childUsage, childTab, page } = hierarchy;
@@ -272,16 +283,38 @@ function HierarchyChildTable(props: ScopeProps) {
                   >
                     {t("customerPortal.hierarchy.viewUsage")}
                   </a>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    onClick={row.edit}
-                    aria-label={`${t("customerPortal.hierarchy.edit")} ${row.label}`}
-                  >
-                    <Pencil aria-hidden="true" className="size-3.5" />
-                    {t("customerPortal.hierarchy.edit")}
-                  </Button>
+                  {row.member ? (
+                    <DropdownMenu>
+                      <DropdownMenuTrigger
+                        render={
+                          <Button
+                            variant="ghost"
+                            size="icon-sm"
+                            aria-label={t("customerPortal.hierarchy.memberActions", { name: row.label })}
+                          />
+                        }
+                      >
+                        <MoreHorizontal className="size-4" />
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end">
+                        <DropdownMenuItem onClick={row.edit}>{t("customerPortal.hierarchy.settings")}</DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => setMovingMember(row.member)}>
+                          {t("customerPortal.hierarchy.moveTeams")}
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  ) : (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={row.edit}
+                      aria-label={`${t("customerPortal.hierarchy.edit")} ${row.label}`}
+                    >
+                      <Pencil aria-hidden="true" className="size-3.5" />
+                      {t("customerPortal.hierarchy.edit")}
+                    </Button>
+                  )}
                 </div>
               </TableCell>
             </TableRow>
@@ -299,6 +332,13 @@ function HierarchyChildTable(props: ScopeProps) {
           )}
         </TableBody>
       </Table>
+      {movingMember && (
+        <MoveCustomerMemberDialog
+          member={movingMember}
+          organizationId={props.scope.org}
+          onClose={() => setMovingMember(null)}
+        />
+      )}
       {pages > 1 && (
         <div className="mt-4 flex items-center justify-between border-t pt-4 text-xs text-muted-foreground">
           <span>{t("customerPortal.hierarchy.pagination", { page, pages })}</span>

@@ -20775,7 +20775,17 @@
       "deleteOrganizationMessage": "This deletes this customer organization and its customer teams and customer members.",
       "deleteTeamMessage": "This deletes this customer team and its customer members.",
       "deleteMemberMessage": "This deletes this customer member.",
-      "deleteInformationTitle": "{{kind}} details"
+      "deleteInformationTitle": "{{kind}} details",
+      "teamsRequired": "Select at least one team.",
+      "memberTeamsHint": "Changing teams keeps this member’s ID, budgets and spend history. Past usage stays with the original team.",
+      "defaultTeam": "Default team",
+      "defaultTeamHint": "Requests without a team use this team.",
+      "retryTeams": "Retry",
+      "chooseTeams": "Choose teams",
+      "moveTeams": "Move teams",
+      "moving": "Moving…",
+      "memberMoved": "Member teams updated.",
+      "memberActions": "Actions for {{name}}"
     },
     "switcher": {
       "label": "Customer Management",

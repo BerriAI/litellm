@@ -9761,7 +9761,7 @@ export interface paths {
         head?: never;
         /**
          * Update Customer Member
-         * @description Update a customer member and its budgets. Proxy admins only.
+         * @description Update a customer member and its budgets. Supply parent_team_ids to replace its teams within the same organization, with the first team as default. Identity, budget counters and historical usage are retained. Historical usage stays attributed to the original team. Proxy admins only.
          */
         patch: operations["update_customer_member_management_v1_customer_members__customer_member_id__patch"];
         trace?: never;
@@ -40893,6 +40893,11 @@ export interface components {
             budget_override?: components["schemas"]["Budget"] | null;
             /** Budget Override Expires At */
             budget_override_expires_at?: string | null;
+            /**
+             * Parent Team Ids
+             * @description Replace the member's teams within its existing organization. First team is the default. Omit to keep current teams. Member identity, budgets and historical usage are retained.
+             */
+            parent_team_ids?: string[];
         };
         /** MemberUpsert */
         MemberUpsert: {
