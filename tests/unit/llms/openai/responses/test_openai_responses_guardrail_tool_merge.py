@@ -202,6 +202,54 @@ def test_an_edited_member_is_matched_by_parameters_after_the_unchanged_tools_are
     assert merged[1] is original[1]
 
 
+def test_dropped_and_reordered_same_name_tools_keep_the_surviving_originals():
+    original = [_function("dup", "a"), _function("dup", "b"), _function("dup", "c")]
+    groups = _groups(original)
+    flat = _flat(groups)
+
+    merged = merge_guardrailed_tools(original, groups, [flat[2], flat[0]])
+
+    assert merged is not None
+    assert list(merged) == [original[0], original[2]]
+    assert merged[0] is original[0] and merged[1] is original[2]
+
+
+def test_dropping_one_of_two_identical_chat_forms_sends_neither_originals_hidden_fields():
+    original = [
+        {**_function("dup", "same"), "x_vendor": "first"},
+        {**_function("dup", "same"), "x_vendor": "second"},
+    ]
+    groups = _groups(original)
+    flat = _flat(groups)
+    assert flat[0] == flat[1]
+
+    merged = merge_guardrailed_tools(original, groups, flat[1:])
+
+    assert merged == tuple(
+        LiteLLMCompletionResponsesConfig.transform_chat_completion_tool_params_to_responses_api_tools(flat[1:])
+    )
+    assert "x_vendor" not in merged[0]
+    assert list(merge_guardrailed_tools(original, groups, flat)) == original
+
+
+def test_merging_many_tools_reads_each_tool_a_bounded_number_of_times():
+    reads = []
+
+    class CountingTool(dict):
+        def get(self, key, default=None):
+            reads.append(key)
+            return super().get(key, default)
+
+    tool_count = 200
+    original = [_function(f"tool-{index}") for index in range(tool_count)]
+    groups = [[CountingTool(tool) for tool in group] for group in _groups(original)]
+
+    merged = merge_guardrailed_tools(original, groups, _flat(_groups(original)))
+
+    assert list(merged) == original
+    assert len(reads) <= 8 * tool_count
+
+
 def test_edited_mcp_tool_is_rewritten():
     original = [{"type": "mcp", "server_label": "deepwiki", "server_url": "https://mcp.deepwiki.com/mcp"}]
     groups = _groups(original)

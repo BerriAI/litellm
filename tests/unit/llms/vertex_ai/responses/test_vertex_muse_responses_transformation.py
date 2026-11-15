@@ -367,9 +367,16 @@ def test_muse_drop_params_omits_builtin_tools_vertex_refuses(
         },
     ]
     route: Final = respx_mock.post(ENDPOINT).mock(return_value=httpx.Response(200, json=_response("muse-ember-1.0")))
+    if not drop_params:
+        with pytest.raises(litellm.UnsupportedParamsError, match="only function and namespace tools"):
+            _sent_tools(route, [builtin, *accepted], drop_params)
+        with pytest.raises(litellm.UnsupportedParamsError, match="only function and namespace tools"):
+            _sent_tools(route, [builtin], drop_params)
+        assert not route.called
+        return
     with_accepted: Final = _sent_tools(route, [builtin, *accepted], drop_params)
     alone: Final = _sent_tools(route, [builtin], drop_params)
-    assert (with_accepted, alone) == ((accepted, None) if drop_params else ([builtin, *accepted], [builtin]))
+    assert (with_accepted, alone) == (accepted, None)
 
 
 NAMESPACED_TOOLS: Final[list[ToolParam]] = [

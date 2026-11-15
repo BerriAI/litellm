@@ -25,6 +25,7 @@ from litellm.router_utils.pre_call_checks.prompt_caching_deployment_check import
     PromptCachingDeploymentCheck,
     _honors_one_hour_cache_ttl,
     _get_min_token_count_for_deployments,
+    _responses_prompt,
 )
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.router_utils.prompt_caching_cache import PROMPT_CACHE_PIN_TTL_SECONDS, PromptCachingCache
@@ -2513,3 +2514,18 @@ async def test_responses_request_with_a_malformed_tool_is_left_to_the_provider(b
     pinned = await _read_responses_pin(PromptCachingDeploymentCheck(cache=DualCache()), request)
 
     assert pinned == ("dep-1", "dep-2")
+
+
+def test_responses_prompt_with_a_flattened_namespace_name_collision_has_no_chat_form():
+    namespace_tool: Final = {
+        "type": "namespace",
+        "name": "admin",
+        "tools": [{"type": "function", "name": "run", "parameters": {"type": "object"}}],
+    }
+    colliding: Final = {
+        "input": "hello",
+        "tools": [{"type": "function", "name": "admin__run", "parameters": {"type": "object"}}, namespace_tool],
+    }
+
+    assert _responses_prompt(colliding) is None
+    assert _responses_prompt({"input": "hello", "tools": [namespace_tool]}) is not None
