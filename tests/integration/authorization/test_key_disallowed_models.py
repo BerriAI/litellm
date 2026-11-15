@@ -21,6 +21,7 @@ from tests.integration._support.client import (
 )
 from tests.integration._support.database import read_rows
 from tests.integration._support.upstream import delete_scenario, register_scenario
+from tests.integration.authorization._hidden_alias_budget import install_aliases, remove_aliases
 from tests.integration.cost_calculation.cost_tracking_case import JsonResponse, RoutedResponse, TextResponse
 
 
@@ -204,6 +205,48 @@ def test_a_key_alias_to_a_deployment_id_cannot_reach_a_disallowed_model(gateway:
         alias: Final = f"alias-{uuid.uuid4().hex[:8]}"
         key: Final = scenario.key(aliases={alias: deployment_id}, disallowed_models=[disallowed])
         _assert_denied(gateway, key, {"model": alias}, alias)
+
+
+def test_a_key_alias_to_a_router_alias_cannot_reach_a_disallowed_model(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        disallowed: Final = scenario.model()
+        router_alias: Final = f"router-alias-{uuid.uuid4().hex[:8]}"
+        key_alias: Final = f"alias-{uuid.uuid4().hex[:8]}"
+        install_aliases(gateway, {router_alias: disallowed})
+        scenario.cleanups.callback(remove_aliases, gateway, frozenset({router_alias}))
+        unrestricted: Final = scenario.key(aliases={key_alias: router_alias})
+        served: Final = eventually(
+            lambda: tuple(_chat(gateway, unrestricted, {"model": key_alias}).status_code for _ in range(6)),
+            lambda statuses: frozenset(statuses) == {200},
+            seconds=60,
+        )
+        assert frozenset(served) == {200}, served
+        key: Final = scenario.key(aliases={key_alias: router_alias}, disallowed_models=[disallowed])
+        _assert_denied(gateway, key, {"model": key_alias}, key_alias)
+
+
+def _deleted_disallowed_models(keys: tuple[str, ...]) -> list[dict[str, JsonValue]]:
+    return read_rows(
+        'SELECT disallowed_models FROM "LiteLLM_DeletedVerificationToken" WHERE token = ANY(%s) ORDER BY key_alias',
+        ([sha256(key.encode()).hexdigest() for key in keys],),
+    )
+
+
+@pytest.mark.parametrize("count", [1, 2], ids=["one-key", "two-keys"])
+def test_deleting_keys_keeps_their_disallowed_models_on_the_deleted_records(gateway: Gateway, count: int) -> None:
+    prefix: Final = f"deleted-disallowed-{uuid.uuid4().hex[:8]}"
+    keys: Final = tuple(
+        string_value(
+            gateway.post("/key/generate", {"key_alias": f"{prefix}-{index}", "disallowed_models": ["a", f"b-{index}"]})[
+                "key"
+            ]
+        )
+        for index in range(count)
+    )
+    deleted: Final = gateway.request("POST", "/key/delete", {"keys": list(keys)})
+    assert deleted.status_code == 200, f"{deleted.status_code} {deleted.text}"
+    assert _deleted_disallowed_models(keys) == [{"disallowed_models": ["a", f"b-{index}"]} for index in range(count)]
+    assert [row for key in keys for row in _stored_disallowed_models(key)] == []
 
 
 def test_a_team_deployments_routing_name_cannot_reach_a_disallowed_model(gateway: Gateway) -> None:

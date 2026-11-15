@@ -37,16 +37,17 @@ def _names_model_resolves_through(
     after_key_alias: Final = key_aliases.get(after_team_alias, after_team_alias)
     after_global_alias: Final = litellm.model_alias_map.get(after_key_alias, after_key_alias)
     dispatched: Final = key_aliases.get(after_global_alias, after_global_alias)
-    router_alias_target: Final = (
-        llm_router.registry().resolve(model, kind="alias")
-        if llm_router is not None and model in llm_router.registry().aliases()
-        else None
+    aliased: Final = frozenset((model, after_team_alias, after_key_alias, after_global_alias, dispatched))
+    router_alias_targets: Final = (
+        ()
+        if llm_router is None
+        else (
+            llm_router.registry().resolve(name, kind="alias")
+            for name in aliased
+            if name in llm_router.registry().aliases()
+        )
     )
-    chain: Final = frozenset(
-        name
-        for name in (model, after_team_alias, after_key_alias, after_global_alias, dispatched, router_alias_target)
-        if name is not None
-    )
+    chain: Final = aliased | frozenset(target for target in router_alias_targets if target is not None)
     return chain | frozenset(
         resolved
         for name in chain
