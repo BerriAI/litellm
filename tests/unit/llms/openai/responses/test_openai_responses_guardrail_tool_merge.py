@@ -5,6 +5,8 @@ Responses API request tools they were flattened from
 
 import copy
 
+import pytest
+
 from litellm.llms.openai.responses.guardrail_translation.tool_merge import merge_guardrailed_tools
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
@@ -55,6 +57,47 @@ def test_duplicate_function_names_are_matched_by_ordinal():
     merged = merge_guardrailed_tools(original, groups, _flat(groups)[:1])
 
     assert list(merged) == [original[0]]
+
+
+def test_kept_tools_that_differ_in_parameters_match_their_originals_in_any_order():
+    original = [
+        {**_function("lookup_city"), "parameters": {"type": "object", "properties": {"city": {}}}},
+        {**_function("lookup_city"), "parameters": {"type": "object", "properties": {"name": {}, "country": {}}}},
+        {**_function("lookup_city"), "parameters": {"type": "object", "properties": {"city": {}, "region": {}}}},
+    ]
+    groups = _groups(original)
+    flat = _flat(groups)
+
+    merged = merge_guardrailed_tools(original, groups, [flat[2], flat[0]])
+
+    assert merged == (original[0], original[2])
+
+
+@pytest.mark.parametrize(
+    "twin,sends_original",
+    [({}, True), ({"strict": False}, False)],
+    ids=["identical_twins", "twins_differing_only_in_strict"],
+)
+def test_a_kept_tool_matching_several_twins_keeps_an_original_only_when_the_twins_are_identical(
+    twin, sends_original
+):
+    original = [
+        _function("lookup_city", "first"),
+        _function("lookup_city", "twin"),
+        {**_function("lookup_city", "twin"), **twin},
+    ]
+    groups = _groups(original)
+    flat = _flat(groups)
+    guardrails_own_tool = LiteLLMCompletionResponsesConfig.transform_chat_completion_tool_params_to_responses_api_tools(
+        [flat[2]]
+    )[0]
+
+    merged = merge_guardrailed_tools(original, groups, [flat[2]])
+
+    assert merged is not None
+    assert len(merged) == 1
+    assert (merged[0] is original[1]) is sends_original
+    assert merged[0] == (original[1] if sends_original else guardrails_own_tool)
 
 
 def test_interleaved_duplicate_names_keep_their_own_ordinals():

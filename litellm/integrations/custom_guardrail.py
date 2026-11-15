@@ -1,3 +1,4 @@
+import contextlib
 import contextvars
 import copy
 import hashlib
@@ -23,6 +24,7 @@ from litellm.litellm_core_utils.core_helpers import (
     redact_nested_match_and_regex_keys,
     require_attributes,
 )
+from litellm.llms.base_llm.guardrail_translation.utils import UnappliableRequestRewrite
 from litellm.secret_managers.main import str_to_bool
 from litellm.types.guardrails import (
     DEFAULT_GUARDRAIL_STREAM_SCOPE,
@@ -1332,7 +1334,8 @@ class CustomGuardrail(CustomLogger):
                 except Exception as e:  # noqa: BLE001  # one direction's scan failure must not drop the other direction's verdict
                     verbose_logger.warning("Guardrail %s: logging_only scan raised: %s", self.guardrail_name, e)
             else:
-                await translation.process_input_messages(data=scratch_request, guardrail_to_apply=self)
+                with contextlib.suppress(UnappliableRequestRewrite):
+                    await translation.process_input_messages(data=scratch_request, guardrail_to_apply=self)
         if response is None or self.logging_only_scope == "input":
             return
         await output_translation.process_output_response(

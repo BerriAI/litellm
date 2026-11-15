@@ -4475,6 +4475,27 @@ def _replayed_tool_calls(messages: list[dict]) -> list[dict]:
     return list(chain.from_iterable(message.get("tool_calls") or [] for message in messages))
 
 
+_LONG_NAMESPACE: Final = "mcp__codex_apps__codex_document_control"
+_LONG_MEMBER: Final = "_get_document_tool_schemas"
+_LONG_MEMBER_TOOLS: Final = (
+    {
+        "type": "namespace",
+        "name": _LONG_NAMESPACE,
+        "description": "Document tools",
+        "tools": [{"type": "function", "name": _LONG_MEMBER, "description": "Get schemas", "parameters": {}}],
+    },
+)
+
+
+def _replayed_long_member_call_input(call: dict) -> list[dict]:
+    return [
+        {"type": "message", "role": "user", "content": "Get the schemas"},
+        call,
+        {"type": "function_call_output", "call_id": call["call_id"], "output": "the schemas"},
+        {"type": "message", "role": "user", "content": "Thanks"},
+    ]
+
+
 def _function_tool_descriptions(tools: list[dict]) -> list[tuple[str | None, str, str]]:
     return [
         (tool["name"] if tool["type"] == "namespace" else None, function["name"], function["description"])
@@ -4724,32 +4745,43 @@ class TestOpenAIResponsesHandlerNamespaceTools:
 
     @pytest.mark.asyncio
     async def test_a_guardrail_sees_a_replayed_long_member_call_under_the_name_it_sees_the_tool_by(self):
-        namespace: Final = "mcp__codex_apps__codex_document_control"
-        member: Final = "_get_document_tool_schemas"
-        tools: Final = [
-            {
-                "type": "namespace",
-                "name": namespace,
-                "description": "Document tools",
-                "tools": [{"type": "function", "name": member, "description": "Get schemas", "parameters": {}}],
-            }
-        ]
-        input_items: Final = [
-            {"type": "message", "role": "user", "content": "Get the schemas"},
-            {"type": "function_call", "namespace": namespace, "name": member, "call_id": "call_1", "arguments": "{}"},
-            {"type": "function_call_output", "call_id": "call_1", "output": "the schemas"},
-            {"type": "message", "role": "user", "content": "Thanks"},
-        ]
+        call: Final = {
+            "type": "function_call",
+            "namespace": _LONG_NAMESPACE,
+            "name": _LONG_MEMBER,
+            "call_id": "call_1",
+            "arguments": "{}",
+        }
         guardrail: Final = MockRecordingGuardrail(guardrail_name="test")
 
         await OpenAIResponsesHandler().process_input_messages(
-            {**_codex_request(input_items), "tools": tools}, guardrail
+            {**_codex_request(_replayed_long_member_call_input(call)), "tools": list(_LONG_MEMBER_TOOLS)}, guardrail
         )
 
         seen: Final = guardrail.seen_inputs[0]
         tool_names: Final = [tool["function"]["name"] for tool in seen["tools"]]
         call_names: Final = [call["function"]["name"] for call in _replayed_tool_calls(seen["structured_messages"])]
-        assert call_names == tool_names == [f"{namespace}__{member}"]
+        assert call_names == tool_names == [f"{_LONG_NAMESPACE}__{_LONG_MEMBER}"]
+
+    @pytest.mark.asyncio
+    async def test_a_message_rewrite_resends_a_replayed_long_member_call_as_it_came(self):
+        call: Final = {
+            "type": "function_call",
+            "namespace": _LONG_NAMESPACE,
+            "name": _LONG_MEMBER,
+            "call_id": "call_1",
+            "arguments": "{}",
+            "id": "fc_1",
+            "status": "completed",
+        }
+
+        result: Final = await OpenAIResponsesHandler().process_input_messages(
+            {**_codex_request(_replayed_long_member_call_input(call)), "tools": list(_LONG_MEMBER_TOOLS)},
+            StructuredRewriteGuardrail(guardrail_name="test"),
+        )
+
+        assert result["input"][0]["content"] == COMPRESSED_MARKER
+        assert [item for item in result["input"] if item.get("type") == "function_call"] == [call]
 
     @pytest.mark.asyncio
     async def test_a_function_only_guardrail_keeps_the_tool_search_tool_it_never_scans(self):

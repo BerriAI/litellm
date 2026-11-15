@@ -1,5 +1,7 @@
+import json
 from collections.abc import Iterable, Mapping, Sequence
-from itertools import accumulate, chain, groupby
+from dataclasses import dataclass
+from itertools import accumulate, chain, groupby, repeat
 from types import MappingProxyType
 from typing import Final, TypeAlias
 
@@ -78,70 +80,98 @@ def _comparable(tool: Tool, *, with_description: bool) -> Tool:
     return {**fields, "function": function}
 
 
-def _leftmost_alignment(originals: Sequence[Tool], kept: Sequence[Tool]) -> tuple[int, ...] | None:
-    remaining: Final = iter(enumerate(originals))
-    aligned: Final = tuple(next((ordinal for ordinal, original in remaining if original == tool), -1) for tool in kept)
-    return None if -1 in aligned else aligned
+def _view(tool: Tool, *, with_description: bool) -> str:
+    return json.dumps(_comparable(tool, with_description=with_description), sort_keys=True, default=str)
+
+
+@dataclass(frozen=True, slots=True)
+class _Match:
+    ordinal: int
+    rebuilt: bool
+
+
+def _view_matches(
+    kept: Sequence[int], candidates: Sequence[int], top_level: Sequence[Tool] | None
+) -> tuple[tuple[int, _Match], ...] | None:
+    if len(kept) == len(candidates):
+        return tuple((index, _Match(ordinal, rebuilt=False)) for index, ordinal in zip(kept, candidates))
+    if len(kept) > len(candidates) or top_level is None:
+        return None
+    rebuilt: Final = any(top_level[candidate] != top_level[candidates[0]] for candidate in candidates)
+    return tuple((index, _Match(ordinal, rebuilt)) for index, ordinal in zip(kept, candidates))
 
 
 def _alignment(
-    originals: Sequence[Tool], kept: Sequence[Tool], *, with_description: bool, interchangeable: bool
-) -> tuple[int, ...] | None:
-    original_views: Final = tuple(_comparable(tool, with_description=with_description) for tool in originals)
-    kept_views: Final = tuple(_comparable(tool, with_description=with_description) for tool in kept)
-    leftmost: Final = _leftmost_alignment(original_views, kept_views)
-    if leftmost is None or interchangeable:
-        return leftmost
-    rightmost: Final = _leftmost_alignment(original_views[::-1], kept_views[::-1])
-    if rightmost is None:
+    originals: Sequence[Tool], kept: Sequence[Tool], top_level: Sequence[Tool] | None, *, with_description: bool
+) -> tuple[_Match, ...] | None:
+    candidates: Final = _key_positions(tuple(_view(tool, with_description=with_description) for tool in originals))
+    kept_positions: Final = _key_positions(tuple(_view(tool, with_description=with_description) for tool in kept))
+    matches: Final = tuple(
+        _view_matches(indexes, candidates.get(view, ()), top_level) for view, indexes in kept_positions.items()
+    )
+    if any(match is None for match in matches):
         return None
-    return leftmost if leftmost == tuple(len(originals) - 1 - ordinal for ordinal in reversed(rightmost)) else None
+    match_by_index: Final = dict(chain.from_iterable(match for match in matches if match))
+    return tuple(map(match_by_index.__getitem__, range(len(kept))))
 
 
-def _kept_ordinals(
-    flattened: Sequence[Tool], guardrailed: Sequence[Tool], *, interchangeable: bool
-) -> tuple[int, ...] | None:
-    exact: Final = _alignment(flattened, guardrailed, with_description=True, interchangeable=interchangeable)
+def _kept_matches(
+    flattened: Sequence[Tool], guardrailed: Sequence[Tool], top_level: Sequence[Tool] | None
+) -> tuple[_Match, ...] | None:
+    exact: Final = _alignment(flattened, guardrailed, top_level, with_description=True)
     if exact is not None:
         return exact
-    return _alignment(flattened, guardrailed, with_description=False, interchangeable=interchangeable)
+    return _alignment(flattened, guardrailed, top_level, with_description=False)
 
 
-def _positioned_ordinals(
+def _positioned_matches(
     flattened: Sequence[Tool],
     guardrailed: Sequence[Tool],
     flattened_positions: Sequence[int],
     guardrailed_positions: Sequence[int],
-    top_level_functions: frozenset[int],
-) -> tuple[tuple[int, int], ...] | None:
-    ordinals: Final = _kept_ordinals(
+    top_level_functions: Mapping[int, Tool],
+) -> tuple[tuple[int, _Match], ...] | None:
+    top_level: Final = tuple(
+        top_level_functions[position] for position in flattened_positions if position in top_level_functions
+    )
+    matches: Final = _kept_matches(
         tuple(map(flattened.__getitem__, flattened_positions)),
         tuple(map(guardrailed.__getitem__, guardrailed_positions)),
-        interchangeable=top_level_functions.issuperset(flattened_positions),
+        top_level if len(top_level) == len(flattened_positions) else None,
     )
-    return None if ordinals is None else tuple(zip(guardrailed_positions, ordinals))
+    return None if matches is None else tuple(zip(guardrailed_positions, matches))
+
+
+@dataclass(frozen=True, slots=True)
+class _GuardrailedKeys:
+    keys: tuple[IndexedKey, ...]
+    rebuilt: frozenset[IndexedKey]
 
 
 def _guardrailed_keys(
     flattened: Sequence[Tool],
     flattened_positions: Mapping[str, tuple[int, ...]],
     guardrailed: Sequence[Tool],
-    top_level_functions: frozenset[int],
-) -> tuple[IndexedKey, ...] | None:
+    top_level_functions: Mapping[int, Tool],
+) -> _GuardrailedKeys | None:
     keys: Final = tuple(map(_chat_tool_key, guardrailed))
     positions: Final = _key_positions(keys)
     realigned: Final = tuple(
-        _positioned_ordinals(flattened, guardrailed, flattened_positions[key], kept, top_level_functions)
+        _positioned_matches(flattened, guardrailed, flattened_positions[key], kept, top_level_functions)
         for key, kept in positions.items()
         if len(kept) < len(flattened_positions.get(key, ()))
     )
     if any(group is None for group in realigned):
         return None
+    matches: Final = tuple(chain.from_iterable(group for group in realigned if group))
     ordinal_by_position: Final = {
         **_positional_ordinals(positions),
-        **dict(chain.from_iterable(group for group in realigned if group)),
+        **{position: match.ordinal for position, match in matches},
     }
-    return tuple((key, ordinal_by_position[position]) for position, key in enumerate(keys))
+    indexed: Final = tuple((key, ordinal_by_position[position]) for position, key in enumerate(keys))
+    return _GuardrailedKeys(
+        keys=indexed, rebuilt=frozenset(indexed[position] for position, match in matches if match.rebuilt)
+    )
 
 
 def _namespace_members(namespace: Tool) -> tuple[Tool, ...]:
@@ -232,11 +262,12 @@ def _merged_original(
     flattened_group: Sequence[Tool],
     group_keys: Sequence[IndexedKey],
     guardrailed_by_key: Mapping[IndexedKey, Tool],
+    rebuilt_keys: frozenset[IndexedKey],
 ) -> tuple[Tool, ...]:
     if not group_keys:
         return (original,)
     guardrailed_group: Final = tuple(guardrailed_by_key[key] for key in group_keys if key in guardrailed_by_key)
-    if guardrailed_group == tuple(flattened_group):
+    if guardrailed_group == tuple(flattened_group) and rebuilt_keys.isdisjoint(group_keys):
         return (original,)
     members: Final = _namespace_members(original) if original.get("type") == "namespace" else ()
     if members and sum(map(_has_chat_tool, members)) == len(flattened_group):
@@ -248,13 +279,15 @@ def _merged_original(
     )
 
 
-def _top_level_function_positions(
+def _top_level_functions(
     original_tools: Sequence[Tool], flattened_groups: Sequence[Sequence[Tool]]
-) -> frozenset[int]:
-    is_function: Final = chain.from_iterable(
-        (original.get("type") == "function",) * len(group) for original, group in zip(original_tools, flattened_groups)
+) -> Mapping[int, Tool]:
+    owners: Final = chain.from_iterable(
+        repeat(original, len(group)) for original, group in zip(original_tools, flattened_groups)
     )
-    return frozenset(position for position, function in enumerate(is_function) if function)
+    return MappingProxyType(
+        {position: original for position, original in enumerate(owners) if original.get("type") == "function"}
+    )
 
 
 def merge_guardrailed_tools(
@@ -267,18 +300,19 @@ def merge_guardrailed_tools(
     flattened_names: Final = tuple(map(_chat_tool_key, flattened))
     flattened_positions: Final = _key_positions(flattened_names)
     flattened_keys: Final = _indexed_keys(flattened_names, flattened_positions)
-    guardrailed_keys: Final = _guardrailed_keys(
-        flattened, flattened_positions, guardrailed, _top_level_function_positions(original_tools, flattened_groups)
+    realigned: Final = _guardrailed_keys(
+        flattened, flattened_positions, guardrailed, _top_level_functions(original_tools, flattened_groups)
     )
-    if guardrailed_keys is None:
+    if realigned is None:
         return None
+    guardrailed_keys: Final = realigned.keys
     guardrailed_by_key: Final = MappingProxyType(dict(zip(guardrailed_keys, guardrailed)))
     group_ends: Final = tuple(accumulate(len(group) for group in flattened_groups))
     group_key_slices: Final = tuple(
         flattened_keys[end - len(group) : end] for group, end in zip(flattened_groups, group_ends)
     )
     merged_originals: Final = chain.from_iterable(
-        _merged_original(original, group, group_keys, guardrailed_by_key)
+        _merged_original(original, group, group_keys, guardrailed_by_key, realigned.rebuilt)
         for original, group, group_keys in zip(original_tools, flattened_groups, group_key_slices)
     )
     owned_keys: Final = frozenset(flattened_keys)
