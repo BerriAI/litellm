@@ -37,6 +37,7 @@ from .prefix import outgoing_cacheable_prefix
 from .types import (
     Assessed,
     CacheablePrefix,
+    CacheCounters,
     ClientSurface,
     DeploymentCacheIdentity,
     NoCacheBreakpoint,
@@ -316,15 +317,35 @@ def _outcome_label(observation: PromptCacheObservation) -> str:
             return f"unassessed:{reason.value}"
 
 
+_PREFIX_ID_LENGTH: Final = 12
+_UNKNOWN: Final = "-"
+
+
+def _prefix_of(observation: PromptCacheObservation) -> CacheablePrefix | None:
+    return observation.outcome.prefix
+
+
+def _counters_of(observation: PromptCacheObservation) -> CacheCounters | None:
+    outcome: Final = observation.outcome
+    return outcome.usage if isinstance(outcome, Assessed) and isinstance(outcome.usage, CacheCounters) else None
+
+
 class DiagnosticLog:
-    """Writes each observation to the debug log and keeps nothing, so a worker never holds observation history."""
+    """Writes each observation to the debug log and keeps nothing, so a worker never holds observation history.
+    The prefix is named by the start of its keyed fingerprint, which cannot be turned back into prompt content."""
 
     async def record(self, observation: PromptCacheObservation) -> None:
+        prefix: Final = _prefix_of(observation)
+        counters: Final = _counters_of(observation)
         verbose_router_logger.debug(
-            "prompt cache observation deployment=%s config=%s outcome=%s",
+            "prompt cache observation deployment=%s config=%s outcome=%s prefix=%s ttl=%s read=%s write=%s",
             observation.deployment.deployment_id,
             observation.deployment.config_fingerprint,
             _outcome_label(observation),
+            prefix.fingerprint[:_PREFIX_ID_LENGTH] if prefix is not None else _UNKNOWN,
+            prefix.ttl_seconds if prefix is not None else _UNKNOWN,
+            counters.read_tokens if counters is not None else _UNKNOWN,
+            counters.write_tokens if counters is not None else _UNKNOWN,
         )
 
 

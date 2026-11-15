@@ -108,7 +108,9 @@ def recorded_anthropic_stream_event(
                 closing=closing,
                 stop_reason=_as_json(_field(event.get("delta"), "stop_reason")),
                 out_of_order=state.out_of_order or state.starts == 0,
-                conflicting=state.conflicting or _disagrees(state.closing, closing),
+                conflicting=state.conflicting
+                or _disagrees(state.closing, closing)
+                or _disagrees(state.opening, closing),
             )
         case "error":
             return replace(state, errored=True)

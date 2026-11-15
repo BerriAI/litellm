@@ -1,4 +1,6 @@
 import json
+from collections.abc import Mapping
+from functools import reduce
 
 import pytest
 from pydantic import JsonValue
@@ -9,7 +11,7 @@ from litellm.router_utils.prompt_cache_observations.types import (
     UsageUnknown,
     UsageUnknownReason,
 )
-from litellm.litellm_core_utils.upstream_cache_evidence import AnthropicStreamUsage
+from litellm.litellm_core_utils.upstream_cache_evidence import AnthropicStreamUsage, recorded_anthropic_stream_event
 from litellm.router_utils.prompt_cache_observations.usage import stream_cache_usage, upstream_cache_usage
 
 
@@ -250,3 +252,35 @@ def test_anthropic_stream_usage_counts_only_a_completed_stream_and_never_reads_a
 
 def test_a_missing_stream_record_is_never_read_as_usage() -> None:
     assert stream_cache_usage(None) == UsageUnknown(UsageUnknownReason.STREAM_USAGE_NOT_CAPTURED)
+
+
+def _cache(read: int, write: int) -> dict[str, JsonValue]:
+    return {"input_tokens": 9, "cache_read_input_tokens": read, "cache_creation_input_tokens": write}
+
+
+def _streamed(opening: JsonValue, closing: JsonValue) -> UpstreamCacheUsage:
+    events: tuple[Mapping[str, object], ...] = (
+        {"type": "message_start", "message": {"id": "msg_1", "usage": opening}},
+        {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": closing},
+        {"type": "message_stop"},
+    )
+    return stream_cache_usage(reduce(recorded_anthropic_stream_event, events, None))
+
+
+@pytest.mark.parametrize(
+    ("opening", "closing", "expected"),
+    [
+        (_cache(100, 0), _cache(0, 0), UsageUnknown(UsageUnknownReason.CONTRADICTORY)),
+        (_cache(0, 0), _cache(50, 0), UsageUnknown(UsageUnknownReason.CONTRADICTORY)),
+        (_cache(0, 10), _cache(0, 0), UsageUnknown(UsageUnknownReason.CONTRADICTORY)),
+        (_cache(0, 0), {"output_tokens": 2}, CacheCounters(read_tokens=0, write_tokens=0)),
+        (_cache(100, 0), {**_cache(100, 0), "output_tokens": 2}, CacheCounters(read_tokens=100, write_tokens=0)),
+    ],
+    ids=["read-then-zero", "zero-then-read", "write-then-zero", "closing-omits-counters", "closing-repeats-them"],
+)
+def test_a_closing_delta_that_changes_an_opening_cache_counter_is_never_read_as_final(
+    opening: JsonValue, closing: JsonValue, expected: UpstreamCacheUsage
+) -> None:
+    """A stream that opened reporting a 100-token read and closed reporting zero once came out as an
+    authoritative miss, because the closing counters replaced the opening ones unchecked."""
+    assert _streamed(opening, closing) == expected

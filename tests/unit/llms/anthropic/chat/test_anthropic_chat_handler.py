@@ -4503,6 +4503,20 @@ async def test_draining_reads_the_terminal_frame_a_caller_stopped_before() -> No
     assert await stream.__anext__() is not None
 
 
+async def test_draining_leaves_the_stream_alone_while_a_split_event_is_still_being_joined() -> None:
+    async def lines() -> AsyncIterator[str]:
+        for line in (*_START_LINES, 'data: {"type": "message_st', "", "unread"):
+            yield line
+
+    iterator = ModelResponseIterator(streaming_response=lines(), sync_stream=False, json_mode=False)
+    stream = iterator.__aiter__()
+    for _ in range(len(_START_LINES) + 1):
+        await stream.__anext__()
+    await iterator.adrain_terminal_frames(max_lines=16)
+    assert iterator.upstream_stream_usage is not None and iterator.upstream_stream_usage.stopped is False
+    assert await stream.__anext__() is not None
+
+
 @pytest.mark.parametrize(
     ("terminal", "stopped", "errored"),
     [

@@ -34,6 +34,11 @@ from litellm.litellm_core_utils.streaming_handler import (
     _ProviderChunkEarlyReturn,
     _ProviderChunkParsed,
 )
+from litellm.litellm_core_utils.upstream_cache_evidence import (
+    DEPLOYMENT_CACHE_SETTINGS_KEY,
+    UPSTREAM_STREAM_USAGE_KEY,
+    AnthropicStreamUsage,
+)
 from litellm.llms.anthropic.chat.handler import ModelResponseIterator as AnthropicModelResponseIterator
 from litellm.llms.custom_httpx.http_handler import HTTPHandler, MaskedHTTPStatusError
 from litellm.llms.hosted_vllm.chat.transformation import HostedVLLMChatConfig
@@ -10143,3 +10148,39 @@ async def test_generic_tool_use_streams_as_a_function_call_when_the_caller_passe
         (delta.function_call.name, delta.function_call.arguments) for delta in deltas if delta.function_call is not None
     ] == [("get_weather", '{"city": "Paris"}')]
     assert [delta.tool_calls for delta in deltas if delta.tool_calls] == []
+
+
+async def _lines_then(lines: Sequence[str], error: Exception) -> AsyncIterator[str]:
+    for line in lines:
+        yield line
+    raise error
+
+
+@pytest.mark.parametrize(
+    "error",
+    [TimeoutError(), httpx.ReadError("connection cut"), RuntimeError("stream closed")],
+    ids=["timeout", "http-error", "closed-stream"],
+)
+@pytest.mark.asyncio
+async def test_a_terminal_frame_read_that_fails_ends_the_stream_normally_and_stays_incomplete(
+    logging_obj: Logging, error: Exception
+) -> None:
+    """The observer drains the frames after the final delta to find message_stop. That read failing must not reach
+    the caller, and the stream it could not finish reading must not be recorded as completed."""
+    events: Final = (*_ANTHROPIC_PARTIAL_EVENTS[:2], *_ANTHROPIC_TERMINAL_EVENTS[:2])
+    logging_obj.model_call_details[DEPLOYMENT_CACHE_SETTINGS_KEY] = object()
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=AnthropicModelResponseIterator(
+            streaming_response=_lines_then(_anthropic_sse_lines(events), error), sync_stream=False
+        ),
+        model="claude-sonnet-4-5",
+        custom_llm_provider="anthropic",
+        logging_obj=logging_obj,
+    )
+
+    received: Final = await _collect(wrapper, sync_mode=False)
+
+    assert [c.choices[0].finish_reason for c in received if c.choices and c.choices[0].finish_reason] == ["stop"]
+    recorded: Final = logging_obj.model_call_details[UPSTREAM_STREAM_USAGE_KEY]
+    assert isinstance(recorded, AnthropicStreamUsage) and recorded.stop_reason == "end_turn"
+    assert recorded.stopped is False

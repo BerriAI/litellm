@@ -2724,7 +2724,8 @@ class CustomStreamWrapper:
             self._log_stream_failure_and_raise(e)
 
     def _upstream_evidence_stream(self) -> RecordsUpstreamStreamUsage | None:
-        return self.completion_stream if isinstance(self.completion_stream, RecordsUpstreamStreamUsage) else None
+        stream: Final = cast(object, self.completion_stream)  # cast-ok: completion_stream is untyped
+        return stream if isinstance(stream, RecordsUpstreamStreamUsage) else None
 
     async def _adrain_terminal_frames(self) -> None:
         """A stream ends here at the first empty chunk after the finish reason, before the provider's terminal

@@ -409,27 +409,48 @@ async def test_a_second_hook_pass_on_the_attempt_keeps_the_injection_settings_th
 
 
 @pytest.mark.parametrize(
-    ("outcome", "label"),
+    ("outcome", "fields"),
     [
-        (Assessed(path=_PATH, prefix=_prefix(), usage=CacheCounters(0, 0)), "assessed:counters"),
+        (
+            Assessed(path=_PATH, prefix=_prefix(), usage=CacheCounters(read_tokens=0, write_tokens=2048)),
+            {"outcome": "assessed:counters", "ttl": "300", "read": "0", "write": "2048"},
+        ),
         (
             Assessed(path=_PATH, prefix=_prefix(), usage=UsageUnknown(UsageUnknownReason.MISSING)),
-            "assessed:usage_unknown:missing",
+            {"outcome": "assessed:usage_unknown:missing", "ttl": "300", "read": "-", "write": "-"},
         ),
-        (Unassessed(UnassessedReason.PATH_NOT_VERIFIED, path=_PATH, prefix=None), "unassessed:path_not_verified"),
+        (
+            Unassessed(UnassessedReason.UPSTREAM_FAILED, path=_PATH, prefix=_prefix()),
+            {"outcome": "unassessed:upstream_failed", "ttl": "300", "read": "-", "write": "-"},
+        ),
+        (
+            Unassessed(UnassessedReason.PATH_NOT_VERIFIED, path=_PATH, prefix=None),
+            {"outcome": "unassessed:path_not_verified", "prefix": "-", "ttl": "-", "read": "-", "write": "-"},
+        ),
     ],
 )
-async def test_diagnostic_log_names_the_deployment_and_outcome_without_prompt_content(
-    caplog: pytest.LogCaptureFixture, outcome: Assessed | Unassessed, label: str
+async def test_diagnostic_log_reports_what_was_observed_without_prompt_content(
+    caplog: pytest.LogCaptureFixture, outcome: Assessed | Unassessed, fields: dict[str, str]
 ) -> None:
+    """Observation mode has no other output, so one debug line has to say which prefix was seen, its TTL and the
+    counters the provider reported, while naming the prefix only by an opaque fingerprint."""
     observation = _observation(outcome)
     with caplog.at_level(logging.DEBUG, logger="LiteLLM Router"):
         await DiagnosticLog().record(observation)
     (message,) = (record.getMessage() for record in caplog.records if "prompt cache observation" in record.getMessage())
-    assert message == (
-        f"prompt cache observation deployment=claude-east config={observation.deployment.config_fingerprint} "
-        f"outcome={label}"
-    )
+    logged = dict(pair.split("=", 1) for pair in message.removeprefix("prompt cache observation ").split(" "))
+    expected_prefix = fields.get("prefix")
+    assert {key: value for key, value in logged.items() if key != "prefix"} == {
+        "deployment": "claude-east",
+        "config": observation.deployment.config_fingerprint,
+        **{key: value for key, value in fields.items() if key != "prefix"},
+    }
+    if expected_prefix is not None:
+        assert logged["prefix"] == expected_prefix
+    else:
+        assert logged["prefix"] and _prefix().fingerprint.startswith(logged["prefix"])
+        assert len(logged["prefix"]) < len(_prefix().fingerprint)
+    assert "shared" not in message
 
 
 def _sse(events: tuple[Mapping[str, object], ...]) -> str:
