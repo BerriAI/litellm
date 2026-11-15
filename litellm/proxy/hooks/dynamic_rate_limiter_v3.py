@@ -1161,9 +1161,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
             _reserved_window(atomic_response, team_cap) if team_reservation else None
         )
         self._cap_admitted_output(None if team_share is None else team_share.share, team_reservation, data, call_type)
-        if priority_descriptors and share is not None and not should_enforce_priority:
-            get_or_create_request_stash().rate_limit_response = atomic_response
-        elif priority_descriptors and not should_enforce_priority:
+        if priority_descriptors and not should_enforce_priority:
             priority_tracking_response: Final = await self.v3_limiter.should_rate_limit(
                 descriptors=priority_descriptors,
                 parent_otel_span=user_api_key_dict.parent_otel_span,
