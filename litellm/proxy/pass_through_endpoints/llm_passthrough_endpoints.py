@@ -1336,6 +1336,7 @@ async def anthropic_proxy_route(
         target=str(updated_url),
         custom_headers=_upstream_headers_for_anthropic_route(request, user_api_key_dict, auth_header),
         is_streaming_request=is_streaming_request,
+        upstream_headers_filter=partial(_with_anthropic_profile_mapping, user_api_key_dict=user_api_key_dict),
     )  # dynamically construct pass-through endpoint based on incoming path
     received_value: Final = await endpoint_func(
         request,
@@ -3300,6 +3301,20 @@ def _forwarded_headers_for_credentialless_vertex_passthrough(
     if _VERTEX_UPSTREAM_CREDENTIAL_HEADERS.isdisjoint(forwarded):
         raise HTTPException(status_code=401, detail=_CREDENTIALLESS_VERTEX_MISSING_CREDENTIAL_DETAIL)
     return forwarded
+
+
+def _with_anthropic_profile_mapping(
+    headers: Mapping[str, str], *, user_api_key_dict: UserAPIKeyAuth
+) -> Mapping[str, str]:
+    profile_id: Final = anthropic_user_profile_id(user_api_key_dict, {})
+    if profile_id is None:
+        return headers
+    return MappingProxyType(
+        {
+            **{name: value for name, value in headers.items() if name.lower() != ANTHROPIC_USER_PROFILE_ID_HEADER},
+            ANTHROPIC_USER_PROFILE_ID_HEADER: profile_id,
+        }
+    )
 
 
 def _upstream_headers_for_anthropic_route(

@@ -5412,7 +5412,8 @@ class TestAnthropicPassthroughVirtualKeyLeak:
             headers=dict(captured["custom_headers"] or {}),
             forward_headers=captured.get("_forward_headers", False),
         )
-        return raised, upstream
+        filtered: Final = captured.get("upstream_headers_filter", lambda headers: headers)(upstream)
+        return raised, filtered
 
     @staticmethod
     def _blob(forwarded: dict) -> str:
@@ -5670,6 +5671,44 @@ class TestAnthropicPassthroughVirtualKeyLeak:
         assert "content-length" not in forwarded
         assert "host" not in forwarded
         assert "accept-encoding" not in forwarded
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "metadata,team_metadata,pinned",
+        [
+            ({"anthropic_user_profile_id": "uprof_key"}, {"anthropic_user_profile_id": "uprof_team"}, "uprof_key"),
+            ({}, {"anthropic_user_profile_id": "uprof_team"}, "uprof_team"),
+            ({}, {}, None),
+        ],
+    )
+    @pytest.mark.parametrize("override", [b"uprof_other", b""])
+    @pytest.mark.parametrize("proxy_api_key", [None, "sk-ant-api03-proxy-key"])
+    async def test_expanded_profile_headers_cannot_replace_an_admin_pin(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        metadata: dict[str, str],
+        team_metadata: dict[str, str],
+        pinned: str | None,
+        override: bytes,
+        proxy_api_key: str | None,
+    ) -> None:
+        raised, forwarded = await self._run(
+            monkeypatch,
+            [
+                (b"x-api-key", b"sk-ant-api03-caller-own-key"),
+                (b"anthropic-user-profile-id", b"uprof_client"),
+                (b"x-pass-anthropic-user-profile-id", override),
+                (b"x-pass-anthropic-beta", b"interleaved-thinking-2025-05-14"),
+            ],
+            proxy_api_key=proxy_api_key,
+            authenticated=UserAPIKeyAuth(api_key=self.VKEY, metadata=metadata, team_metadata=team_metadata),
+        )
+        assert raised is None
+        assert forwarded is not None
+        assert [value for name, value in forwarded.items() if name.lower() == "anthropic-user-profile-id"] == [
+            pinned if pinned is not None else override.decode()
+        ]
+        assert forwarded["anthropic-beta"] == "interleaved-thinking-2025-05-14"
 
 
 class TestVertexPassthroughDefaultLocationOnShortRoutes:
