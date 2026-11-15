@@ -7789,7 +7789,7 @@ class ProxyConfig:
                 validate_deployment_max_agentic_loops(model)
                 validate_deployment_complexity_router_placement(model)
                 validate_deployment_access_windows(model)
-                if (pricing_model_info := deployment_pricing_model_info(model)) is not None:
+                if (pricing_model_info := deployment_pricing_model_info(model)) is not None:  # pyright: ignore[reportUnknownArgumentType]  # an untyped config entry
                     model["model_info"] = dict(pricing_model_info)
                 pin_complexity_router_model_id(model)
                 complexity_router_config = model["litellm_params"].get("complexity_router_config")
@@ -17357,7 +17357,7 @@ def _enrich_model_info_with_litellm_data(
         )
     )
     discovered_model_info: Final = (
-        llm_router.registry().discovered_model_info(model_info.get("id"))
+        llm_router.registry().discovered_model_info(model.get("model_info", {}).get("id"))
         if llm_router is not None
         else MappingProxyType({})
     )

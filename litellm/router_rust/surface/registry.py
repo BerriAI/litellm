@@ -129,6 +129,7 @@ from litellm.types.router import (
     validate_litellm_params_strictly,
 )
 from litellm.types.utils import (
+    COST_MAP_LOOKUP_KEY,
     DEPLOYMENT_SCOPED_TOKEN_LIMIT_FIELDS,
     SHARED_ONLY_WHEN_TRUE_CAPABILITY_FIELDS,
     CustomPricingLiteLLMParams,
@@ -588,9 +589,9 @@ def selected_pricing_snapshot(host: "PythonHost", deployment: Mapping[str, objec
     registered_entry: Final = as_str_mapping(host.dynamic().model_cost.get(model_id))
     registered_source: Final = pricing_source_of(registered_entry)
     if registered_entry is not None and registered_source is not None and registered_source.revision == source.revision:
-        return frozen_pricing_snapshot(registered_entry)
+        return frozen_pricing_snapshot({COST_MAP_LOOKUP_KEY: model_id, **registered_entry})
     selected: Final = Deployment(**deployment)  # pyright: ignore[reportArgumentType]  # a router record
-    return frozen_pricing_snapshot(deployment_model_cost_payload(host, selected))
+    return frozen_pricing_snapshot({COST_MAP_LOOKUP_KEY: model_id, **deployment_model_cost_payload(host, selected)})
 
 
 def _entry_section(entry: Mapping[str, object], section: str) -> Mapping[str, object]:

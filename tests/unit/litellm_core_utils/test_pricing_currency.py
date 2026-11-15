@@ -638,3 +638,29 @@ def test_currency_settings_read_back_in_the_section_that_set_them() -> None:
         model_name="g", litellm_params=params, model_info={k: v for k, v in info.items() if k != USD_PRICING}
     )  # pyright: ignore[reportArgumentType]  # a saved read
     assert rebuilt.model_info.input_cost_per_token == pytest.approx(2.16e-06, rel=1e-15)
+
+
+@pytest.mark.asyncio
+async def test_a_free_currency_priced_deployment_logs_a_known_zero_cost(monkeypatch: pytest.MonkeyPatch) -> None:
+    recorder: Final = _Recorder(expected=1)
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    router: Final = Router(
+        model_list=[
+            _priced(
+                "free",
+                "free",
+                pricing_currency="EUR",
+                usd_per_currency_unit=EUR_RATE,
+                input_cost_per_token=0.0,
+                output_cost_per_token=0.0,
+            )
+        ]
+    )
+
+    await router.acompletion(model="free", messages=MESSAGES, mock_response="free answer")
+    await recorder.done.wait()
+
+    payload: Final = recorder.payloads[0]
+    assert payload["response_cost"] == 0.0
+    breakdown: Final = payload["cost_breakdown"]
+    assert isinstance(breakdown, Mapping) and breakdown["pricing_currency"] == "EUR"
