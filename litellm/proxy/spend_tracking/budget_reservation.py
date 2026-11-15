@@ -1951,12 +1951,12 @@ _RESPONSES_BRIDGE_OVERRIDE_KEYS: Final = ("use_chat_completions_api", "custom_ll
 _MODEL_INFO_MAPPING_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 
 
-def _as_model_info_dict(model_info: object) -> Mapping[str, object] | None:
-    raw_info: Final = model_info.model_dump() if isinstance(model_info, BaseModel) else model_info
-    if not isinstance(raw_info, Mapping):
+def _as_mapping(value: object) -> Mapping[str, object] | None:
+    raw: Final = value.model_dump() if isinstance(value, BaseModel) else value
+    if not isinstance(raw, Mapping):
         return None
     try:
-        return _MODEL_INFO_MAPPING_ADAPTER.validate_python(raw_info)
+        return _MODEL_INFO_MAPPING_ADAPTER.validate_python(raw)
     except ValueError:
         return None
 
@@ -1974,12 +1974,27 @@ def _first_non_none_field(key: str, sources: tuple[object, ...]) -> object:
     return next((val for src in sources if (val := _get_value(src, key)) is not None), None)
 
 
+def _deployment_generic_provider(litellm_params: object, fallback_model: str) -> str | None:
+    from litellm.litellm_core_utils.routing_common_utils import provider_for_generic_call
+
+    as_mapping: Final = _as_mapping(litellm_params)
+    if as_mapping is None:
+        return provider_for_generic_call({"model": fallback_model})
+    params: Final = (
+        as_mapping
+        if isinstance(as_mapping.get("model"), str) and as_mapping.get("model")
+        else {**as_mapping, "model": fallback_model}
+    )
+    return provider_for_generic_call(params)
+
+
 def _backend_bridges_responses_to_chat(
     model: str,
     request_body: object,
     deployment_params: object = None,
     default_litellm_params: Mapping[str, object] = MappingProxyType({}),
     model_info: object = None,
+    resolved_provider: str | None = None,
 ) -> bool:
     from litellm.responses.main import provider_stores_the_conversation
 
@@ -1992,13 +2007,18 @@ def _backend_bridges_responses_to_chat(
         if (value := _first_non_none_field(key, sources)) is not None
     }
     raw_provider: Final = merged.get("custom_llm_provider")
-    custom_llm_provider: Final = raw_provider if isinstance(raw_provider, str) and raw_provider else None
+    custom_llm_provider: Final = (
+        resolved_provider
+        if resolved_provider is not None
+        else (raw_provider if isinstance(raw_provider, str) and raw_provider else None)
+    )
+    raw_use_chat: Final = merged.get("use_chat_completions_api")
     raw_kwargs: Final = {
         key: value
         for key, value in (
-            ("use_chat_completions_api", merged.get("use_chat_completions_api")),
+            ("use_chat_completions_api", bool(raw_use_chat) if raw_use_chat is not None else None),
             ("api_base", merged.get("api_base")),
-            ("model_info", _as_model_info_dict(model_info)),
+            ("model_info", _as_mapping(model_info)),
         )
         if value is not None
     }
@@ -2019,12 +2039,14 @@ def _deployment_bridges_responses_to_chat(
     default_litellm_params: Mapping[str, object],
 ) -> bool:
     litellm_params: Final = _get_value(deployment, "litellm_params")
+    deployment_model: Final = _string_field(litellm_params, "model") or fallback_model
     return _backend_bridges_responses_to_chat(
-        model=_string_field(litellm_params, "model") or fallback_model,
+        model=deployment_model,
         request_body=request_body,
         deployment_params=litellm_params,
         default_litellm_params=default_litellm_params,
         model_info=_get_value(deployment, "model_info"),
+        resolved_provider=_deployment_generic_provider(litellm_params=litellm_params, fallback_model=deployment_model),
     )
 
 

@@ -1440,3 +1440,98 @@ async def test_bridged_responses_concurrent_reservations_reserve_max_completion_
     assert admitted == 2
     assert rejected == 8
     assert spend_counter_store.get_local(f"spend:key:{token_id}") == pytest.approx(max_budget)
+
+
+def test_responses_router_ignores_spoofed_custom_llm_provider_override() -> None:
+    native_router: Final = _bridged_responses_router("openai/gpt-5.4", max_output_tokens=65536)
+    native_base: Final[Mapping[str, object]] = {"model": "priced-model", "input": "hi"}
+    native_uncapped: Final = estimate_request_max_cost(
+        request_body=native_base,
+        route="/v1/responses",
+        llm_router=native_router,
+    )
+    native_spoofed_max_tokens: Final = estimate_request_max_cost(
+        request_body={**native_base, "custom_llm_provider": "anthropic", "max_tokens": 1},
+        route="/v1/responses",
+        llm_router=native_router,
+    )
+    native_spoofed_completion_cap: Final = estimate_request_max_cost(
+        request_body={**native_base, "custom_llm_provider": "anthropic", "max_completion_tokens": 1},
+        route="/v1/responses",
+        llm_router=native_router,
+    )
+
+    assert native_uncapped is not None
+    assert native_spoofed_max_tokens == pytest.approx(native_uncapped)
+    assert native_spoofed_completion_cap == pytest.approx(native_uncapped)
+
+    bridged_router: Final = _bridged_responses_router("anthropic/claude-opus-4-6", max_output_tokens=65536)
+    bridged_uncapped: Final = estimate_request_max_cost(
+        request_body=native_base,
+        route="/v1/responses",
+        llm_router=bridged_router,
+    )
+    bridged_expected: Final = estimate_request_max_cost(
+        request_body={**native_base, "max_output_tokens": 32768},
+        route="/v1/responses",
+        llm_router=bridged_router,
+    )
+    bridged_spoofed_openai: Final = estimate_request_max_cost(
+        request_body={**native_base, "custom_llm_provider": "openai", "max_completion_tokens": 32768},
+        route="/v1/responses",
+        llm_router=bridged_router,
+    )
+
+    assert bridged_uncapped is not None and bridged_expected is not None
+    assert bridged_expected > bridged_uncapped
+    assert bridged_spoofed_openai == pytest.approx(bridged_expected)
+
+
+@pytest.mark.asyncio
+async def test_responses_native_deployment_concurrent_rejects_spoofed_custom_llm_provider_and_max_tokens(
+    spend_counter_store: SpendCounterStore,
+) -> None:
+    from litellm.proxy.spend_tracking.budget_reservation import DEFAULT_MAX_OUTPUT_TOKENS_FALLBACK
+
+    output_cost: Final = 0.00001
+    router: Final = _bridged_responses_router(
+        "openai/gpt-5.4",
+        input_cost=0.0,
+        output_cost=output_cost,
+        max_output_tokens=65536,
+    )
+    cache: Final = UserApiKeyCache()
+    proxy_logging_obj: Final = ProxyLogging(user_api_key_cache=DualCache())
+    token_id: Final = "native-responses-spoofed-provider"
+    max_budget: Final = 1.5 * DEFAULT_MAX_OUTPUT_TOKENS_FALLBACK * output_cost
+    valid_token: Final = UserAPIKeyAuth(api_key=token_id, token=token_id, max_budget=max_budget, spend=0.0)
+    body: Final[Mapping[str, object]] = {
+        "model": "priced-model",
+        "input": "hi",
+        "custom_llm_provider": "anthropic",
+        "max_tokens": 1,
+    }
+
+    outcomes: Final = await asyncio.gather(
+        *(
+            reserve_budget_for_request(
+                request_body=dict(body),
+                route="/v1/responses",
+                llm_router=router,
+                valid_token=valid_token,
+                team_object=None,
+                user_object=None,
+                prisma_client=None,
+                user_api_key_cache=cache,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+            for _ in range(10)
+        ),
+        return_exceptions=True,
+    )
+
+    admitted: Final = sum(1 for item in outcomes if isinstance(item, dict))
+    rejected: Final = sum(1 for item in outcomes if isinstance(item, litellm.BudgetExceededError))
+    assert admitted == 2
+    assert rejected == 8
+    assert spend_counter_store.get_local(f"spend:key:{token_id}") == pytest.approx(max_budget)
