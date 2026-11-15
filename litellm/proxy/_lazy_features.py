@@ -291,7 +291,16 @@ LAZY_FEATURES: Final[tuple[LazyFeature, ...]] = (
     LazyFeature(
         name="decisions",
         module_path="litellm.proxy.decisions_endpoints.endpoints",
-        path_prefixes=("/v1/decisions", "/decisions", "/v1/systemone", "/systemone", "/v1/extraction", "/extraction"),
+        path_prefixes=(
+            "/v1/decisions",
+            "/decisions",
+            "/openai/v1/decisions",
+            "/openai/decisions",
+            "/v1/systemone",
+            "/systemone",
+            "/v1/extraction",
+            "/extraction",
+        ),
     ),
     LazyFeature(
         name="skill_hub",
