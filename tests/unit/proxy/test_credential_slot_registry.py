@@ -138,6 +138,8 @@ DEPLOYMENT_PARAM_CLASSIFICATION: Final[Mapping[str, Classification]] = MappingPr
         "anthropic_keycloak_client_secret_ref": Unplanted(),
         "anthropic_keycloak_scope": NotSecret("OAuth scope string"),
         "openai_identity_token_file": Unplanted(),
+        "github_copilot_app_private_key": Unplanted(),
+        "github_copilot_app_private_key_ref": Unplanted(),
     }
 )
 
@@ -147,8 +149,6 @@ REQUEST_BODY_PARAM_CLASSIFICATION: Final[Mapping[str, Classification]] = Mapping
         "aws_access_key_id": Unplanted(),
         "aws_secret_access_key": Unplanted(),
         "aws_session_token": Unplanted(),
-        "azure_password": Unplanted(),
-        "client_secret": Unplanted(),
         "s3_access_key_id": Unplanted(),
         "s3_secret_access_key": Unplanted(),
         "valkey_password": Unplanted(),

@@ -1,4 +1,5 @@
 import json
+import logging
 from typing import Final
 from unittest.mock import MagicMock, patch
 
@@ -125,6 +126,65 @@ def test_get_optional_params_with_allowed_openai_params():
     assert optional_params["tools"] == tools
     assert optional_params["response_format"] == response_format
     assert optional_params["reasoning_effort"] == reasoning_effort
+
+
+@pytest.mark.parametrize(
+    "allowlist",
+    ["user", "seed, user", "seed user", '["user"]', {"user": True}],
+    ids=["bare-string", "comma-separated", "space-separated", "json-list-string", "dict"],
+)
+def test_get_optional_params_reads_param_names_from_a_string_or_dict_allowlist(
+    monkeypatch: pytest.MonkeyPatch, allowlist: str | dict[str, bool]
+):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    optional_params: Final = get_optional_params(
+        model="cf/llama-3.1-70b-instruct",
+        custom_llm_provider="cloudflare",
+        allowed_openai_params=allowlist,
+        user="end-user-1",
+    )
+
+    assert optional_params["user"] == "end-user-1"
+
+
+def test_get_optional_params_an_allowlist_that_is_no_string_mapping_or_sequence_allowlists_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    optional_params: Final = get_optional_params(
+        model="cf/llama-3.1-70b-instruct",
+        custom_llm_provider="cloudflare",
+        allowed_openai_params=5,
+        user="end-user-1",
+    )
+
+    assert "user" not in optional_params
+
+
+@pytest.mark.parametrize(
+    "allowlist",
+    [
+        ["dimensions"],
+        "dimensions",
+        "dimensions,user",
+        "dimensions encoding_format",
+        '["dimensions"]',
+        {"dimensions": True},
+    ],
+    ids=["list", "bare-string", "comma-separated", "space-separated", "json-list-string", "dict"],
+)
+def test_get_optional_params_embeddings_keeps_dimensions_the_allowlist_names(
+    allowlist: list[str] | str | dict[str, bool],
+):
+    optional_params: Final = get_optional_params_embeddings(
+        model="text-embedding-ada-002",
+        custom_llm_provider="openai",
+        dimensions=256,
+        allowed_openai_params=allowlist,
+        drop_params=False,
+    )
+
+    assert optional_params["dimensions"] == 256
 
 
 def test_allowed_openai_params_does_not_forward_unset_params():
@@ -2097,3 +2157,146 @@ def test_supports_system_message_merges_system_prompt_into_user_message() -> Non
     ]
 
     assert map_system_message_pt(messages=messages) == [{"role": "user", "content": "Listen here! Hello there!"}]
+
+
+def test_dropping_an_unsupported_reasoning_effort_logs_one_warning(
+    local_model_cost_map: None, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        optional_params: Final = get_optional_params(
+            model="terra-ptu", custom_llm_provider="azure", reasoning_effort="none", drop_params=True
+        )
+
+    assert "reasoning_effort" not in optional_params
+    drop_warnings: Final = [
+        record.getMessage() for record in caplog.records if "Dropping reasoning_effort" in record.getMessage()
+    ]
+    assert len(drop_warnings) == 1
+    assert all(fragment in drop_warnings[0] for fragment in ("'none'", "terra-ptu", "model_info.base_model"))
+
+
+@pytest.mark.parametrize("provider", ["ollama", "ollama_chat", "lemonade", "huggingface"])
+def test_dropping_thinking_for_an_unmapped_local_model_sends_no_request(
+    local_model_cost_map: None, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch, provider: str
+) -> None:
+    outbound: Final = respx.MockRouter(assert_all_mocked=False)
+    monkeypatch.setattr(
+        litellm, "module_level_client", HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(outbound.handler)))
+    )
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        optional_params: Final = get_optional_params(
+            model="unmapped-local-model", custom_llm_provider=provider, thinking={"type": "disabled"}, drop_params=True
+        )
+
+    assert "thinking" not in optional_params
+    assert len([record for record in caplog.records if "Dropping thinking" in record.getMessage()]) == 1
+    assert not outbound.calls
+
+
+def test_dropping_an_unsupported_thinking_logs_one_warning(
+    local_model_cost_map: None, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        optional_params: Final = get_optional_params(
+            model="terra-ptu", custom_llm_provider="azure", thinking={"type": "disabled"}, drop_params=True
+        )
+
+    assert "thinking" not in optional_params
+    drop_warnings: Final = [
+        record.getMessage() for record in caplog.records if "Dropping thinking" in record.getMessage()
+    ]
+    assert len(drop_warnings) == 1
+    assert all(fragment in drop_warnings[0] for fragment in ("'disabled'", "terra-ptu", "model_info.base_model"))
+
+
+@pytest.mark.parametrize(
+    ("reasoning_kwargs", "warns"),
+    [
+        ({"reasoning_effort": "none"}, False),
+        ({"thinking": {"type": "disabled"}}, False),
+        ({"reasoning_effort": "high"}, True),
+        ({"thinking": {"type": "enabled", "budget_tokens": 1024}}, True),
+    ],
+)
+def test_reasoning_drop_warns_unless_a_mapped_non_reasoning_model_was_asked_for_none(
+    local_model_cost_map: None,
+    caplog: pytest.LogCaptureFixture,
+    reasoning_kwargs: dict[str, object],
+    warns: bool,
+) -> None:
+    litellm.register_model(
+        {
+            "azure/plain-chat-test-deployment": {
+                "litellm_provider": "azure",
+                "mode": "chat",
+                "max_tokens": 1024,
+                "input_cost_per_token": 0.0,
+                "output_cost_per_token": 0.0,
+                "supports_reasoning": False,
+            }
+        }
+    )
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        optional_params: Final = get_optional_params(
+            model="plain-chat-test-deployment", custom_llm_provider="azure", drop_params=True, **reasoning_kwargs
+        )
+
+    assert not set(reasoning_kwargs) & set(optional_params)
+    assert any("Dropping" in record.getMessage() for record in caplog.records) is warns
+
+
+@pytest.mark.parametrize("reasoning_kwargs", [{"reasoning_effort": "none"}, {"thinking": {"type": "disabled"}}])
+def test_turning_reasoning_off_warns_when_only_custom_pricing_describes_the_model(
+    local_model_cost_map: None, caplog: pytest.LogCaptureFixture, reasoning_kwargs: dict[str, object]
+) -> None:
+    litellm.register_model(
+        {
+            "azure/pricing-only-test-deployment": {
+                "litellm_provider": "azure",
+                "mode": "chat",
+                "input_cost_per_token": 0.000001,
+                "output_cost_per_token": 0.000002,
+            }
+        }
+    )
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        optional_params: Final = get_optional_params(
+            model="pricing-only-test-deployment", custom_llm_provider="azure", drop_params=True, **reasoning_kwargs
+        )
+
+    assert not set(reasoning_kwargs) & set(optional_params)
+    drop_warnings: Final = [record.getMessage() for record in caplog.records if "Dropping" in record.getMessage()]
+    assert len(drop_warnings) == 1
+    assert all(fragment in drop_warnings[0] for fragment in ("pricing-only-test-deployment", "model_info.base_model"))
+
+
+def test_dropping_reasoning_for_a_catalog_reasoning_model_does_not_suggest_base_model(
+    local_model_cost_map: None, caplog: pytest.LogCaptureFixture
+) -> None:
+    assert litellm.model_cost["azure/gpt-5.6-sol"].get("supports_reasoning") is True
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        optional_params: Final = get_optional_params(
+            model="gpt-5.6-sol", custom_llm_provider="azure", thinking={"type": "disabled"}, drop_params=True
+        )
+
+    assert "thinking" not in optional_params
+    drop_warnings: Final = [
+        record.getMessage() for record in caplog.records if "Dropping thinking" in record.getMessage()
+    ]
+    assert len(drop_warnings) == 1
+    assert "model_info.base_model" not in drop_warnings[0]
+
+
+def test_turning_reasoning_off_for_a_catalog_non_reasoning_model_drops_it_silently(
+    local_model_cost_map: None, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        optional_params: Final = get_optional_params(
+            model="gpt-4o", custom_llm_provider="azure", reasoning_effort="none", drop_params=True
+        )
+
+    assert "reasoning_effort" not in optional_params
+    assert not [record for record in caplog.records if "Dropping" in record.getMessage()]

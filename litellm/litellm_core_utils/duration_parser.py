@@ -22,7 +22,7 @@ _BUDGET_DURATION_WORD_ALIASES: Final[dict[str, str]] = {
 }
 
 
-def _normalize_duration(duration: str) -> str:
+def normalize_duration(duration: str) -> str:
     return _BUDGET_DURATION_WORD_ALIASES.get(duration.strip().lower(), duration)
 
 
@@ -61,7 +61,7 @@ def duration_in_seconds(duration: str) -> int:
 
     Returns time in seconds till when budget needs to be reset
     """
-    value, unit = _extract_from_regex(duration=_normalize_duration(duration))
+    value, unit = _extract_from_regex(duration=normalize_duration(duration))
 
     if unit == "s":
         return value
@@ -89,7 +89,7 @@ def duration_in_seconds_from(start: datetime, duration: str) -> int:
     month of a different length needs its own start to know when it ends. Every other
     unit is a fixed length and ignores `start`.
     """
-    value, unit = _extract_from_regex(duration=_normalize_duration(duration))
+    value, unit = _extract_from_regex(duration=normalize_duration(duration))
     if unit == "mo":
         return _months_in_seconds(start=start, months=value)
     return duration_in_seconds(duration)
@@ -129,7 +129,7 @@ def get_next_standardized_reset_time(
     current_time, _ = _setup_timezone(current_time, timezone_str)
 
     # Parse duration
-    value, unit = _parse_duration(_normalize_duration(duration))
+    value, unit = _parse_duration(normalize_duration(duration))
     if value is None:
         verbose_logger.warning(
             "Unrecognized budget_duration %r; falling back to a next-midnight reset. "
@@ -167,11 +167,20 @@ def _shift_months(moment: datetime, months: int) -> datetime:
     return moment.replace(year=year, month=month, day=min(moment.day, get_last_day_of_month(year, month)))
 
 
+def is_annual_budget_duration(duration: str) -> bool:
+    return _parse_duration(normalize_duration(duration)) == (12, "mo")
+
+
+def get_annual_budget_window_start(reset_at: datetime, timezone_str: str) -> datetime:
+    boundary: Final = _setup_timezone(reset_at, timezone_str)[0]
+    return _shift_months(boundary, -12).astimezone(timezone.utc)
+
+
 def get_budget_window_start(duration: str, reset_at: datetime) -> datetime:
     """Start of the budget period that ends at `reset_at`, under the same rules
     `get_next_standardized_reset_time` used to pick it: `30d` and `Nmo` span calendar
     months and a duration it does not recognize resets at the next midnight."""
-    value, unit = _parse_duration(_normalize_duration(duration))
+    value, unit = _parse_duration(normalize_duration(duration))
     if value is None:
         return reset_at - timedelta(days=1)
     match unit:
@@ -220,8 +229,12 @@ def _parse_duration(duration: str) -> tuple[int | None, str | None]:
     if not match:
         return None, None
 
-    value, unit = match.groups()
-    return int(value), unit
+    value: Final = int(match.group(1))
+    spelled_unit: Final = match.group(2)
+    unit: Final = _extract_from_regex(duration)[1] or spelled_unit
+    if unit == "mo" and spelled_unit != "mo" and value not in (1, 12):
+        return value, spelled_unit
+    return value, unit
 
 
 def _apply_time_of_day(dt: datetime, reset_time_of_day: time) -> datetime:
@@ -390,14 +403,22 @@ def _handle_month_reset(
     Args:
         current_time: Current datetime
         base_midnight: Midnight of current day
-        value: Number of months (currently only supports 1 month resets)
+        value: Number of months, 1 for monthly or 12 for annual resets
         reset_time_of_day: Wall-clock time the reset lands on
 
     Returns:
         datetime: First day of the next reset month at `reset_time_of_day`
     """
+    if value == 12:
+        first_of_year: Final = base_midnight.replace(month=1, day=1)
+        annual_candidate: Final = _apply_time_of_day(first_of_year, reset_time_of_day)
+        return (
+            annual_candidate.replace(year=annual_candidate.year + 1)
+            if annual_candidate <= current_time
+            else annual_candidate
+        )
     if value != 1:
-        raise ValueError("Monthly resets currently only support 1 month intervals")
+        raise ValueError("Calendar resets support 1 month or 12 month intervals")
 
     first_of_this_month: Final = base_midnight.replace(day=1)
     candidate: Final = _apply_time_of_day(first_of_this_month, reset_time_of_day)

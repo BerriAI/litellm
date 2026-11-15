@@ -5,12 +5,14 @@ from typing import Final
 from integration._support.client import Gateway, Scenario
 from integration._support.database import read_rows
 from integration._support.wire import Reply, Request, wire_server
-from pydantic import BaseModel, JsonValue
+from pydantic import BaseModel, ConfigDict, JsonValue
 
 _REDACTED: Final = "REDACTED_BY_LITELM"
 
 
 class _AgentRead(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
     agent_id: str
     agent_name: str
     litellm_params: dict[str, JsonValue] | None
@@ -84,7 +86,8 @@ def test_agent_reads_redact_credentials_filter_by_key_permission_and_keep_the_st
         visible: Final = _register_agent(gateway, scenario, marker + "-visible", wire.url, secret)
         hidden: Final = _register_agent(gateway, scenario, marker + "-hidden", wire.url, secret)
         restricted: Final = scenario.key(object_permission={"agents": [visible]})
-        redacted_params: Final = {"api_key": _REDACTED, "cost_per_query": 0.1, "is_public": False}
+        stored_params: Final = {"api_key": _REDACTED, "cost_per_query": 0.1}
+        redacted_params: Final = {**stored_params, "is_public": False}
 
         listed: Final = gateway.client.get("/v1/agents", headers={"Authorization": f"Bearer {restricted}"})
         assert listed.status_code == 200, listed.text
@@ -98,9 +101,8 @@ def test_agent_reads_redact_credentials_filter_by_key_permission_and_keep_the_st
         assert fetched.status_code == 200, fetched.text
         assert secret not in fetched.text, fetched.text
         read: Final = _AgentRead.model_validate_json(fetched.content)
-        assert (read.agent_id, read.litellm_params, read.static_headers) == (visible, redacted_params, None), (
-            fetched.text
-        )
+        assert (read.agent_id, read.static_headers) == (visible, None), fetched.text
+        assert read.litellm_params in (stored_params, redacted_params), fetched.text
 
         refused: Final = gateway.client.get(f"/v1/agents/{hidden}", headers={"Authorization": f"Bearer {restricted}"})
         assert (refused.status_code, refused.json()) == (

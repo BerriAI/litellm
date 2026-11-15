@@ -271,7 +271,7 @@ COHERE_RERANK_V4_TOTAL_TOKENS_FALLBACK: Final = CostTrackingTestCase(
             "meta": {"billed_units": {"total_tokens": 99}},
         },
     ),
-    expected=ExactExpected(spend=0.0, input_cost=0.0, output_cost=0.0, prompt_tokens=0, completion_tokens=0),
+    expected=ExactExpected(spend=0.0, input_cost=0.0, output_cost=0.0, prompt_tokens=99, completion_tokens=0),
 )
 
 
@@ -493,8 +493,8 @@ OPENROUTER_ANTHROPIC_CLAUDE_SONNET_5_PROVIDER_REPORTED_COST: Final = CostTrackin
     ),
     expected=ExactExpected(
         spend=0.0421,
-        input_cost=0.0,
-        output_cost=0.0421,
+        input_cost=0.0421 * (1840 * 3.2e-06) / (1840 * 3.2e-06 + 412 * 1.6e-05),
+        output_cost=0.0421 * (412 * 1.6e-05) / (1840 * 3.2e-06 + 412 * 1.6e-05),
         prompt_tokens=1840,
         completion_tokens=412,
         breakdown_persisted=False,
@@ -551,6 +551,30 @@ PERPLEXITY_SONAR_NEXT_NO_SEARCH: Final = CostTrackingTestCase(
     expected=ExactExpected(
         spend=0.0025118, input_cost=0.0020792, output_cost=0.0004326, prompt_tokens=1840, completion_tokens=412
     ),
+)
+
+PERPLEXITY_SONAR_NEXT_CACHED_PROMPT_NO_REPORTED_COST: Final = PERPLEXITY_SONAR_NEXT_NO_SEARCH.model_copy(
+    update={
+        "name": "perplexity-sonar-next-cached_prompt_no_reported_cost",
+        "response": JsonResponse(
+            content_type="application/json",
+            body={
+                "id": "chatcmpl-$REQUEST_ID",
+                "object": "chat.completion",
+                "model": "sonar-next",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+                "usage": {
+                    "prompt_tokens": 1840,
+                    "completion_tokens": 412,
+                    "total_tokens": 2252,
+                    "prompt_tokens_details": {"cached_tokens": 1200},
+                },
+            },
+        ),
+        "expected": ExactExpected(
+            spend=0.0012914, input_cost=0.0008588, output_cost=0.0004326, prompt_tokens=1840, completion_tokens=412
+        ),
+    }
 )
 
 
@@ -2130,6 +2154,7 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     OPENROUTER_ANTHROPIC_CLAUDE_SONNET_5_PROVIDER_REPORTED_COST,
     OPENROUTER_ANTHROPIC_CLAUDE_SONNET_5_TOKEN_PRICED,
     PERPLEXITY_SONAR_NEXT_NO_SEARCH,
+    PERPLEXITY_SONAR_NEXT_CACHED_PROMPT_NO_REPORTED_COST,
     DEEPSEEK_DEEPSEEK_V4_CHAT_PROMPT_CACHE_HIT,
     DEEPSEEK_DEEPSEEK_V4_CHAT_NO_CACHE_FIELDS_BILLS_ZERO_CACHE,
     XAI_GROK_5_REASONING_FOLDED_INTO_COMPLETION,

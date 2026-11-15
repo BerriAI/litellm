@@ -1,0 +1,345 @@
+{
+  "python": "3.14.6",
+  "quote": [
+    {
+      "text": "",
+      "safe": "/",
+      "quoted": ""
+    },
+    {
+      "text": "",
+      "safe": "",
+      "quoted": ""
+    },
+    {
+      "text": "",
+      "safe": ":/",
+      "quoted": ""
+    },
+    {
+      "text": "plain",
+      "safe": "/",
+      "quoted": "plain"
+    },
+    {
+      "text": "plain",
+      "safe": "",
+      "quoted": "plain"
+    },
+    {
+      "text": "plain",
+      "safe": ":/",
+      "quoted": "plain"
+    },
+    {
+      "text": "a/b/c",
+      "safe": "/",
+      "quoted": "a/b/c"
+    },
+    {
+      "text": "a/b/c",
+      "safe": "",
+      "quoted": "a%2Fb%2Fc"
+    },
+    {
+      "text": "a/b/c",
+      "safe": ":/",
+      "quoted": "a/b/c"
+    },
+    {
+      "text": "a b",
+      "safe": "/",
+      "quoted": "a%20b"
+    },
+    {
+      "text": "a b",
+      "safe": "",
+      "quoted": "a%20b"
+    },
+    {
+      "text": "a b",
+      "safe": ":/",
+      "quoted": "a%20b"
+    },
+    {
+      "text": "a+b=c&d",
+      "safe": "/",
+      "quoted": "a%2Bb%3Dc%26d"
+    },
+    {
+      "text": "a+b=c&d",
+      "safe": "",
+      "quoted": "a%2Bb%3Dc%26d"
+    },
+    {
+      "text": "a+b=c&d",
+      "safe": ":/",
+      "quoted": "a%2Bb%3Dc%26d"
+    },
+    {
+      "text": "~_.-",
+      "safe": "/",
+      "quoted": "~_.-"
+    },
+    {
+      "text": "~_.-",
+      "safe": "",
+      "quoted": "~_.-"
+    },
+    {
+      "text": "~_.-",
+      "safe": ":/",
+      "quoted": "~_.-"
+    },
+    {
+      "text": "100%",
+      "safe": "/",
+      "quoted": "100%25"
+    },
+    {
+      "text": "100%",
+      "safe": "",
+      "quoted": "100%25"
+    },
+    {
+      "text": "100%",
+      "safe": ":/",
+      "quoted": "100%25"
+    },
+    {
+      "text": "a/b:c d%#?+=&~\u00e9\"q",
+      "safe": "/",
+      "quoted": "a/b%3Ac%20d%25%23%3F%2B%3D%26~%C3%A9%22q"
+    },
+    {
+      "text": "a/b:c d%#?+=&~\u00e9\"q",
+      "safe": "",
+      "quoted": "a%2Fb%3Ac%20d%25%23%3F%2B%3D%26~%C3%A9%22q"
+    },
+    {
+      "text": "a/b:c d%#?+=&~\u00e9\"q",
+      "safe": ":/",
+      "quoted": "a/b:c%20d%25%23%3F%2B%3D%26~%C3%A9%22q"
+    },
+    {
+      "text": "id-\u00e9-\ud83d\ude00",
+      "safe": "/",
+      "quoted": "id-%C3%A9-%F0%9F%98%80"
+    },
+    {
+      "text": "id-\u00e9-\ud83d\ude00",
+      "safe": "",
+      "quoted": "id-%C3%A9-%F0%9F%98%80"
+    },
+    {
+      "text": "id-\u00e9-\ud83d\ude00",
+      "safe": ":/",
+      "quoted": "id-%C3%A9-%F0%9F%98%80"
+    },
+    {
+      "text": "\u65e5\u672c",
+      "safe": "/",
+      "quoted": "%E6%97%A5%E6%9C%AC"
+    },
+    {
+      "text": "\u65e5\u672c",
+      "safe": "",
+      "quoted": "%E6%97%A5%E6%9C%AC"
+    },
+    {
+      "text": "\u65e5\u672c",
+      "safe": ":/",
+      "quoted": "%E6%97%A5%E6%9C%AC"
+    },
+    {
+      "text": "\u0000\u001f\u007f",
+      "safe": "/",
+      "quoted": "%00%1F%7F"
+    },
+    {
+      "text": "\u0000\u001f\u007f",
+      "safe": "",
+      "quoted": "%00%1F%7F"
+    },
+    {
+      "text": "\u0000\u001f\u007f",
+      "safe": ":/",
+      "quoted": "%00%1F%7F"
+    },
+    {
+      "text": "!*'();:@&=+$,/?#[]",
+      "safe": "/",
+      "quoted": "%21%2A%27%28%29%3B%3A%40%26%3D%2B%24%2C/%3F%23%5B%5D"
+    },
+    {
+      "text": "!*'();:@&=+$,/?#[]",
+      "safe": "",
+      "quoted": "%21%2A%27%28%29%3B%3A%40%26%3D%2B%24%2C%2F%3F%23%5B%5D"
+    },
+    {
+      "text": "!*'();:@&=+$,/?#[]",
+      "safe": ":/",
+      "quoted": "%21%2A%27%28%29%3B:%40%26%3D%2B%24%2C/%3F%23%5B%5D"
+    },
+    {
+      "text": "<>\\^`{|}",
+      "safe": "/",
+      "quoted": "%3C%3E%5C%5E%60%7B%7C%7D"
+    },
+    {
+      "text": "<>\\^`{|}",
+      "safe": "",
+      "quoted": "%3C%3E%5C%5E%60%7B%7C%7D"
+    },
+    {
+      "text": "<>\\^`{|}",
+      "safe": ":/",
+      "quoted": "%3C%3E%5C%5E%60%7B%7C%7D"
+    }
+  ],
+  "utc": [
+    {
+      "seconds": 0,
+      "micros": 0,
+      "fields": [
+        1970,
+        1,
+        1,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "seconds": 1,
+      "micros": 999999,
+      "fields": [
+        1970,
+        1,
+        1,
+        0,
+        0,
+        1,
+        999999
+      ]
+    },
+    {
+      "seconds": 59,
+      "micros": 0,
+      "fields": [
+        1970,
+        1,
+        1,
+        0,
+        0,
+        59,
+        0
+      ]
+    },
+    {
+      "seconds": 86399,
+      "micros": 123456,
+      "fields": [
+        1970,
+        1,
+        1,
+        23,
+        59,
+        59,
+        123456
+      ]
+    },
+    {
+      "seconds": 86400,
+      "micros": 0,
+      "fields": [
+        1970,
+        1,
+        2,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "seconds": 951782400,
+      "micros": 0,
+      "fields": [
+        2000,
+        2,
+        29,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "seconds": 951868800,
+      "micros": 0,
+      "fields": [
+        2000,
+        3,
+        1,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "seconds": 1700000000,
+      "micros": 42,
+      "fields": [
+        2023,
+        11,
+        14,
+        22,
+        13,
+        20,
+        42
+      ]
+    },
+    {
+      "seconds": 1757840707,
+      "micros": 42,
+      "fields": [
+        2025,
+        9,
+        14,
+        9,
+        5,
+        7,
+        42
+      ]
+    },
+    {
+      "seconds": 4102444800,
+      "micros": 0,
+      "fields": [
+        2100,
+        1,
+        1,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "seconds": 253402300799,
+      "micros": 999999,
+      "fields": [
+        9999,
+        12,
+        31,
+        23,
+        59,
+        59,
+        999999
+      ]
+    }
+  ]
+}

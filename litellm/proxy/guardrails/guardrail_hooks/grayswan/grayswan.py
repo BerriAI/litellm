@@ -15,6 +15,7 @@ from litellm.integrations.custom_guardrail import (
     ModifyResponseException,
     log_guardrail_information,
 )
+from litellm.litellm_core_utils.core_helpers import require_attributes
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.llms.base_llm.guardrail_translation.utils import (
@@ -51,6 +52,10 @@ class _CustomGuardrailOptions(TypedDict, total=False, extra_items=object):
     pass
 
 
+class _SupportsGet(Protocol):
+    def get(self, key: str, default: object = None, /) -> object: ...
+
+
 class _GraySwanMonitorHTTPResponse(Protocol):
     def raise_for_status(self) -> object: ...
 
@@ -80,6 +85,22 @@ def _as_plain_dict(item: object) -> Mapping[str, object]:
     if isinstance(item, BaseModel):
         return TypeAdapter(dict[str, object]).validate_python(item.model_dump(mode="json"))
     return cast("Mapping[str, object]", item)  # cast-ok: wire rows are message/tool-call dicts
+
+
+_STR_KEYED_MAPPING: Final = TypeAdapter(Mapping[str, object])
+
+
+def _str_keyed(value: object) -> Mapping[str, object]:
+    return _STR_KEYED_MAPPING.validate_python(value) if isinstance(value, Mapping) else {}
+
+
+def _request_route(request_data: Mapping[str, object]) -> str | None:
+    litellm_metadata: Final = request_data.get("litellm_metadata")
+    metadata_bucket: Final = _str_keyed(
+        litellm_metadata if litellm_metadata is not None else request_data.get("metadata")
+    )
+    route: Final = metadata_bucket.get("user_api_key_request_route")
+    return route if isinstance(route, str) else None
 
 
 class GraySwanGuardrailMissingSecrets(Exception):
@@ -598,9 +619,12 @@ class GraySwanGuardrail(CustomGuardrail):
         if not headers:
             headers = (request_data.get("metadata") or {}).get("headers")
         if not headers and logging_obj and getattr(logging_obj, "model_call_details", None):
-            headers = (
-                (logging_obj.model_call_details or {}).get("litellm_params", {}).get("metadata", {}).get("headers")
+            litellm_params: Final = require_attributes(
+                _DECODED_JSON.validate_python((logging_obj.model_call_details or {}).get("litellm_params", {})),
+                _SupportsGet,
+                "get",
             )
+            headers = require_attributes(litellm_params.get("metadata", {}), _SupportsGet, "get").get("headers")
         if not isinstance(headers, dict):
             return None
 
@@ -625,11 +649,8 @@ class GraySwanGuardrail(CustomGuardrail):
         from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_for_route
         from litellm.llms import load_guardrail_translation_mappings
 
-        litellm_metadata: Final = request_data.get("litellm_metadata")
-        request_route: Final = (
-            litellm_metadata.get("user_api_key_request_route") if isinstance(litellm_metadata, Mapping) else None
-        )
-        route_call_types: Final = get_call_types_for_route(request_route) if isinstance(request_route, str) else None
+        request_route: Final = _request_route(request_data)
+        route_call_types: Final = get_call_types_for_route(request_route) if request_route is not None else None
         call_type: Final = (
             (route_call_types[0].value if route_call_types else None)
             or (logging_obj.call_type if logging_obj is not None else None)
@@ -698,13 +719,12 @@ class GraySwanGuardrail(CustomGuardrail):
 
         inbound_headers: Final = self._extract_inbound_headers(request_data, logging_obj)
 
-        litellm_metadata: Final = request_data.get("litellm_metadata")
-        cleaned_litellm_metadata: Final = dict(litellm_metadata) if isinstance(litellm_metadata, dict) else {}
-        if inbound_headers:
-            existing_headers: Final = cleaned_litellm_metadata.get("headers")
-            cleaned_litellm_metadata["headers"] = (
-                {**existing_headers, **inbound_headers} if isinstance(existing_headers, dict) else inbound_headers
-            )
+        litellm_metadata: Final = _str_keyed(request_data.get("litellm_metadata"))
+        cleaned_litellm_metadata: Final = (
+            {**litellm_metadata, "headers": {**_str_keyed(litellm_metadata.get("headers")), **inbound_headers}}
+            if inbound_headers
+            else litellm_metadata
+        )
         if cleaned_litellm_metadata:
             sanitized: Final = _DECODED_JSON.validate_python(
                 safe_json_loads(safe_dumps(cleaned_litellm_metadata), default={})

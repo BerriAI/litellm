@@ -25,7 +25,7 @@ from pydantic import JsonValue, TypeAdapter
 
 _INLINE_TOOLS: Final = "inline-tools-2026-09-15"
 _THINKING: Final = "interleaved-thinking-2025-05-14"
-_VERTEX_UNSUPPORTED: Final = "effort-2025-11-24"
+_VERTEX_UNSUPPORTED: Final = "skills-2025-10-02"
 _UNKNOWN: Final = "not-a-beta-2099-01-01"
 _BACKEND: Final = "claude-opus-5-5"
 _PROJECT: Final = "scripted-project"

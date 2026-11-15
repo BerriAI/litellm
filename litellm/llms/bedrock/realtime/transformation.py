@@ -11,15 +11,16 @@ import math
 import uuid as uuid_lib
 from collections.abc import Mapping, Sequence
 from types import MappingProxyType
-from typing import Final, Literal
+from typing import Final
 
 import httpx
 from pydantic import ConfigDict, JsonValue, TypeAdapter
 
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
+from litellm.litellm_core_utils.core_helpers import decoded_json_object, subscript
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
+from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig, RealtimeSessionUpdateRejection
 from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.llms.bedrock.realtime.trigger_audio import ready_trigger_pcm
 from litellm.types.llms.base import LiteLLMBaseModel
@@ -53,6 +54,7 @@ from litellm.types.realtime import (
     RealtimeResponseTypedDict,
 )
 
+_JSON_OBJECT_MESSAGE: Final = TypeAdapter(dict[str, JsonValue], config=ConfigDict(strict=True))
 _JSON_VALUE: Final = TypeAdapter(object)
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object])
 
@@ -193,13 +195,6 @@ def _malformed_settings(session_config: Mapping[str, JsonValue]) -> tuple[tuple[
         ),
     )
     return tuple((name, expected) for name, expected, is_malformed in malformed if is_malformed)
-
-
-@dataclasses.dataclass(frozen=True, slots=True)
-class BedrockSessionUpdateRejection:
-    code: Literal["invalid_type", "invalid_value", "session_update_not_applied"]
-    message: str
-    param: str
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -532,7 +527,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
             max_tokens=max_tokens,
         )
 
-    def session_update_rejection(self, json_message: Mapping[str, JsonValue]) -> BedrockSessionUpdateRejection | None:
+    def session_update_rejection(self, json_message: Mapping[str, JsonValue]) -> RealtimeSessionUpdateRejection | None:
         """The error for a session.update this session cannot apply, or None when it applies."""
         session_config: Final = json_message.get("session")
         if not isinstance(session_config, Mapping):
@@ -540,7 +535,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
         malformed: Final = () if self.drop_params else _malformed_settings(session_config)
         if malformed:
             name, expected = malformed[0]
-            return BedrockSessionUpdateRejection(
+            return RealtimeSessionUpdateRejection(
                 code="invalid_type",
                 message=(
                     f"Invalid type for 'session.{name}': Bedrock Nova Sonic needs {expected} there. "
@@ -550,7 +545,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
             )
         unplayable_voice: Final = None if self.drop_params else _unplayable_voice(session_config)
         if unplayable_voice is not None:
-            return BedrockSessionUpdateRejection(
+            return RealtimeSessionUpdateRejection(
                 code="invalid_value",
                 message=(
                     f"Invalid value for 'session.voice': '{unplayable_voice}' is not a Bedrock Nova Sonic voice. "
@@ -561,7 +556,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
         if not self.prompt_started:
             return None
         if self._apply_locked_settings(session_config, self._started_settings) != self._started_settings:
-            return BedrockSessionUpdateRejection(
+            return RealtimeSessionUpdateRejection(
                 code="session_update_not_applied",
                 message="Bedrock Nova Sonic cannot change tools, instructions, voice, output audio format, temperature or max output tokens after the session has started, so this session.update was not applied",
                 param="session",
@@ -856,7 +851,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
             List of Bedrock format messages (JSON strings)
         """
         try:
-            json_message: Final[dict[str, JsonValue]] = json.loads(message)
+            json_message: Final = _JSON_OBJECT_MESSAGE.validate_python(json.loads(message))
         except json.JSONDecodeError:
             verbose_logger.warning("Invalid JSON message: %s", message[:200])
             return []
@@ -924,7 +919,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
 
     def transform_content_start_event(
         self,
-        event: dict,
+        event: object,
         current_response_id: str | None,
         current_output_item_id: str | None,
         current_conversation_id: str | None,
@@ -948,7 +943,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
         Returns:
             Tuple of (events, response_id, output_item_id, conversation_id, delta_type)
         """
-        content_start: Final = event["contentStart"]
+        content_start: Final = decoded_json_object(subscript(event, "contentStart"))
         role: Final = content_start.get("role")
 
         if role != "ASSISTANT":
@@ -1234,7 +1229,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
 
     def transform_content_end_event(
         self,
-        event: dict,
+        event: object,
         current_output_item_id: str | None,
         current_response_id: str | None,
         current_delta_type: str | None,
@@ -1253,7 +1248,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
         Returns:
             Tuple of (events, reset_delta_chunks)
         """
-        content_end: Final = event["contentEnd"]
+        content_end: Final = subscript(event, "contentEnd")
         verbose_logger.debug("Handling contentEnd: %s", content_end)
 
         if self._assistant_final_text_active:
@@ -1344,7 +1339,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
 
     def transform_prompt_end_event(
         self,
-        event: dict,
+        event: object,
         current_response_id: str | None,
         current_conversation_id: str | None,
     ) -> tuple[
@@ -1406,7 +1401,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
 
     def transform_tool_use_event(
         self,
-        event: dict,
+        event: object,
         current_response_id: str | None,
         current_conversation_id: str | None,
     ) -> tuple[list[OpenAIRealtimeEvents], str, str]:
@@ -1422,7 +1417,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
             Tuple of (events, response_id, conversation_id)
         """
         verbose_logger.debug("Handling toolUse")
-        tool_use: Final = BedrockToolUse.model_validate(event["toolUse"])
+        tool_use: Final = BedrockToolUse.model_validate(subscript(event, "toolUse"))
         verbose_logger.debug("Tool use event: %s (ID: %s)", tool_use.toolName, tool_use.toolUseId)
 
         response_id: Final = current_response_id or f"resp_{uuid.uuid4()}"
@@ -1674,7 +1669,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
                 current_conversation_id,
                 current_delta_type,
             ) = self.transform_content_start_event(
-                event,
+                _JSON_VALUE.validate_python(event),
                 current_response_id,
                 current_output_item_id,
                 current_conversation_id,
@@ -1716,7 +1711,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
 
         elif "contentEnd" in event:
             events, current_delta_chunks = self.transform_content_end_event(
-                event,
+                _JSON_VALUE.validate_python(event),
                 current_output_item_id,
                 current_response_id,
                 current_delta_type,
@@ -1741,7 +1736,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
 
         elif "toolUse" in event:
             events, current_response_id, current_conversation_id = self.transform_tool_use_event(
-                event, current_response_id, current_conversation_id
+                _JSON_VALUE.validate_python(event), current_response_id, current_conversation_id
             )
             returned_messages.extend(events)
 
@@ -1751,7 +1746,9 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
                 current_output_item_id,
                 current_response_id,
                 current_delta_type,
-            ) = self.transform_prompt_end_event(event, current_response_id, current_conversation_id)
+            ) = self.transform_prompt_end_event(
+                _JSON_VALUE.validate_python(event), current_response_id, current_conversation_id
+            )
             returned_messages.extend(events)
 
         return {

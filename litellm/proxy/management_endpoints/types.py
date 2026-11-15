@@ -93,5 +93,6 @@ def get_litellm_user_role(role_str: object) -> LitellmUserRoles | None:
 
 class CustomOpenID(OpenID):
     team_ids: list[str]
+    team_id_to_upsert: str | None = None
     user_role: LitellmUserRoles | None = None
     extra_fields: dict[str, object] | None = None

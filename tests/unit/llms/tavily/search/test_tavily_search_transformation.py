@@ -100,7 +100,7 @@ def _transform(payload: object) -> SearchResponse:
     )
 
 
-def test_tavily_results_keep_provider_order_and_ignore_answer_and_usage_metadata():
+def test_tavily_results_keep_provider_order_and_carry_raw_content_score_favicon_and_response_envelope():
     response = _transform(
         {
             "query": "litellm",
@@ -124,16 +124,55 @@ def test_tavily_results_keep_provider_order_and_ignore_answer_and_usage_metadata
         }
     )
 
-    assert response.object == "search"
-    assert response.results == [
-        SearchResult(title="LiteLLM", url="https://example.com/litellm", snippet="Call every LLM API"),
-        SearchResult(title="Docs", url="https://example.com/docs", snippet="Docs"),
-    ]
+    assert response.model_dump() == {
+        "object": "search",
+        "results": [
+            {
+                "title": "LiteLLM",
+                "url": "https://example.com/litellm",
+                "snippet": "Call every LLM API",
+                "date": None,
+                "last_updated": None,
+                "raw_content": None,
+                "score": 0.81,
+                "favicon": "https://example.com/favicon.ico",
+            },
+            {
+                "title": "Docs",
+                "url": "https://example.com/docs",
+                "snippet": "Docs",
+                "date": None,
+                "last_updated": None,
+                "raw_content": "Raw docs",
+            },
+        ],
+        "provider_metadata": {
+            "query": "litellm",
+            "answer": "LiteLLM is a gateway.",
+            "follow_up_questions": None,
+            "images": [{"url": "https://example.com/image.png", "description": "logo"}],
+            "response_time": 1.67,
+            "usage": {"credits": 1},
+            "request_id": "123e4567-e89b-12d3-a456-426614174111",
+        },
+    }
+
+
+def test_tavily_result_without_extras_gains_no_extra_keys():
+    response = _transform({"results": [{"title": "T", "url": "https://example.com", "content": "S"}]})
+
+    assert response.results[0].model_dump() == {
+        "title": "T",
+        "url": "https://example.com",
+        "snippet": "S",
+        "date": None,
+        "last_updated": None,
+    }
 
 
 def test_tavily_result_without_title_url_or_content_gets_empty_strings():
     assert _transform({"results": [{"score": 0.5, "raw_content": None}]}).results == [
-        SearchResult(title="", url="", snippet="", date=None, last_updated=None)
+        SearchResult(title="", url="", snippet="", date=None, last_updated=None, score=0.5, raw_content=None)
     ]
 
 

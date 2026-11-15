@@ -1,5 +1,8 @@
 import asyncio
+import copy
 import json
+from collections.abc import Mapping
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -29,6 +32,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import INVALID_VIRTUAL_KEY_ERROR_MARKER
 from litellm.exceptions import BudgetExceededError
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import (
     ModelAccessDeniedProxyException,
     ProxyErrorTypes,
@@ -36,7 +40,13 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.auth_exception_handler import UserAPIKeyAuthExceptionHandler, _as_proxy_exception
+from litellm.proxy.auth.auth_utils import is_invalid_virtual_key_error
 from litellm.proxy.auth.model_access_denied import ModelAccessDeniedHTTPException
+from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
+from litellm.proxy.db.request_error_tracking import RequestErrorAccumulator
+from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
+from litellm.proxy.utils import PrismaClient, dequeue_spend_logs
+from litellm.responses.streaming_iterator import drain_logging_tasks
 
 
 class _EngineHttp500:
@@ -665,7 +675,7 @@ async def test_expired_key_error_log_names_the_key_owner(
     ):
         verbose_proxy_logger.propagate = True
         try:
-            with caplog.at_level("ERROR", logger="LiteLLM Proxy"), pytest.raises(ProxyException):
+            with caplog.at_level("WARNING", logger="LiteLLM Proxy"), pytest.raises(ProxyException):
                 await handler.handle_authentication_error(
                     expired_key_error,
                     MagicMock(),
@@ -711,8 +721,8 @@ async def test_expired_key_error_log_names_the_key_owner(
 async def test_unknown_key_error_log_keeps_the_operator_wording_the_401_hides(
     looked_up, logged_fragment, absent_fragment, caplog
 ):
-    """A wrong key gets a generic 401, while the one auth failure log line keeps the
-    operator wording and the hash that was looked up, next to the requester IP."""
+    """A wrong key gets a generic 401, while the one auth failure log line, a WARNING with no
+    traceback, keeps the operator wording and the hash that was looked up, next to the requester IP."""
     from litellm.constants import INVALID_API_KEY_ERROR_MESSAGE
     from litellm.proxy.auth.resolvers.exceptions import KeyNotFoundError
 
@@ -730,7 +740,7 @@ async def test_unknown_key_error_log_keeps_the_operator_wording_the_401_hides(
     ):
         verbose_proxy_logger.propagate = True
         try:
-            with caplog.at_level("ERROR", logger="LiteLLM Proxy"), pytest.raises(ProxyException) as exc_info:
+            with caplog.at_level("WARNING", logger="LiteLLM Proxy"), pytest.raises(ProxyException) as exc_info:
                 await UserAPIKeyAuthExceptionHandler().handle_authentication_error(
                     KeyNotFoundError(looked_up),
                     MagicMock(),
@@ -745,6 +755,7 @@ async def test_unknown_key_error_log_keeps_the_operator_wording_the_401_hides(
     assert exc_info.value.message == INVALID_API_KEY_ERROR_MESSAGE
     records = [r for r in caplog.records if "user_api_key_auth(): Exception occured" in r.getMessage()]
     assert len(records) == 1, [r.getMessage() for r in caplog.records]
+    assert records[0].levelname == "WARNING" and records[0].exc_info is None
     logged = records[0].getMessage()
     assert "Requester IP Address:" in logged and logged_fragment in logged, logged
     if absent_fragment is not None:
@@ -810,6 +821,65 @@ def _http_request(client_host: str | None = "10.1.2.3", headers: dict[str, str] 
             "headers": [(k.lower().encode(), v.encode()) for k, v in (headers or {}).items()],
         }
     )
+
+
+class _AuthFailureRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.data: dict[str, object] | None = None
+        self.error: Exception | None = None
+
+    async def async_post_call_failure_hook(
+        self,
+        request_data: dict[str, object],
+        original_exception: Exception,
+        user_api_key_dict: UserAPIKeyAuth,
+        traceback_str: str | None = None,
+    ) -> HTTPException | None:
+        self.data = dict(request_data)
+        self.error = original_exception
+        return None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("request_data", [[], None, "metadata", 1, True])
+@pytest.mark.parametrize("error_kind", ["auth", "budget", "database"])
+async def test_auth_error_preserves_classification_with_non_object_context(
+    monkeypatch: pytest.MonkeyPatch, request_data: object, error_kind: str
+) -> None:
+    import litellm.proxy.proxy_server as proxy_server
+
+    monkeypatch.setattr(litellm, "budget_exceeded_status_code", 429)
+    errors: Final = {
+        "auth": HTTPException(status_code=401, detail="Invalid API key"),
+        "budget": BudgetExceededError(current_cost=2, max_budget=1),
+        "database": httpx.ConnectError("Database unavailable"),
+    }
+    error: Final = errors[error_kind]
+    expected: Final = _as_proxy_exception(error)
+    recorder: Final = _AuthFailureRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    monkeypatch.setattr(proxy_server, "general_settings", {"allow_requests_on_db_unavailable": False})
+
+    with pytest.raises(ProxyException) as exc_info:
+        await UserAPIKeyAuthExceptionHandler.handle_authentication_error(
+            error,
+            _http_request(headers={"user-agent": "shape-regression"}),
+            request_data,
+            "/key/info",
+            None,
+            "sk-test",
+        )
+
+    assert exc_info.value.code == expected.code
+    assert exc_info.value.type == expected.type
+    assert exc_info.value.message == expected.message
+    assert recorder.error is error
+    assert recorder.data is not None
+    metadata: Final = recorder.data["metadata"]
+    assert isinstance(metadata, Mapping)
+    assert metadata["requester_ip_address"] == "10.1.2.3"
+    assert metadata["user_agent"] == "shape-regression"
 
 
 @pytest.mark.asyncio
@@ -1077,6 +1147,159 @@ def _marked_malformed_key_error() -> HTTPException:
     return error
 
 
+async def _reject_and_read_failure_row(
+    monkeypatch: pytest.MonkeyPatch,
+    error: Exception,
+    route: str,
+    headers: dict[str, str],
+    request_data: dict[str, object],
+    recorder: _AuthFailureRecorder | None = None,
+) -> tuple[ProxyException, Mapping[str, object]]:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.db import db_spend_update_writer as writer_module
+
+    database: Final = PrismaClient(database_url="postgresql://unused", proxy_logging_obj=proxy_server.proxy_logging_obj)
+    monkeypatch.setattr(database, "spend_log_transactions", [])
+    monkeypatch.setattr(database, "_spend_log_transactions_lock", asyncio.Lock())
+    spend_writer: Final = DBSpendUpdateWriter()
+    monkeypatch.setattr(writer_module, "request_error_accumulator", RequestErrorAccumulator())
+    monkeypatch.setattr(proxy_server, "prisma_client", database)
+    monkeypatch.setattr(proxy_server, "disable_spend_logs", False)
+    monkeypatch.setattr(
+        litellm,
+        "callbacks",
+        [*([recorder] if recorder is not None else []), ProxyDBLogger(spend_writer=lambda: spend_writer)],
+    )
+    monkeypatch.setattr(proxy_server, "general_settings", {"allow_requests_on_db_unavailable": False})
+    try:
+        with pytest.raises(ProxyException) as exc_info:
+            await UserAPIKeyAuthExceptionHandler.handle_authentication_error(
+                error, _http_request(headers=headers), request_data, route, None, "sk-test"
+            )
+    finally:
+        await drain_logging_tasks()
+        rows: Final = await dequeue_spend_logs(database, len(database.spend_log_transactions))
+    (row,) = rows
+    row_metadata: Final = json.loads(row["metadata"])
+    assert isinstance(row_metadata, dict)
+    return exc_info.value, row_metadata
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "error_kind, expect_invalid_key",
+    [("budget", False), ("unauthorized", False), ("malformed_key", True)],
+)
+async def test_auth_failure_row_keeps_spend_logs_metadata_header(
+    monkeypatch: pytest.MonkeyPatch, error_kind: str, expect_invalid_key: bool
+) -> None:
+    monkeypatch.setattr(litellm, "budget_exceeded_status_code", 429)
+    errors: Final = {
+        "budget": BudgetExceededError(current_cost=2, max_budget=1),
+        "unauthorized": HTTPException(status_code=401, detail="Invalid API key"),
+        "malformed_key": _marked_malformed_key_error(),
+    }
+    error: Final = errors[error_kind]
+    expected: Final = _as_proxy_exception(error)
+
+    raised, row_metadata = await _reject_and_read_failure_row(
+        monkeypatch,
+        error,
+        "/v1/chat/completions",
+        {"x-litellm-spend-logs-metadata": '{"marker": "rejected-call", "attempt": 2}'},
+        {"model": "gpt-4o"},
+    )
+
+    assert (raised.code, raised.type, raised.message) == (expected.code, expected.type, expected.message)
+    assert is_invalid_virtual_key_error(raised) is expect_invalid_key
+    assert row_metadata["status"] == "failure"
+    assert row_metadata["spend_logs_metadata"] == {"marker": "rejected-call", "attempt": 2}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "header, body, expected",
+    [
+        pytest.param(
+            '{"marker": "header"}',
+            {"metadata": {"spend_logs_metadata": {"marker": "body"}}},
+            {"marker": "header"},
+            id="header_overrides_body_like_successful_requests",
+        ),
+        pytest.param(
+            '{"marker": "header"}',
+            {"metadata": {}, "litellm_metadata": {"spend_logs_metadata": {"marker": "body"}}},
+            {"marker": "header"},
+            id="chat_body_with_both_metadata_buckets",
+        ),
+        pytest.param("{}", {"metadata": {"spend_logs_metadata": {"marker": "body"}}}, {}, id="empty_object_header"),
+        pytest.param(
+            "{not json", {"metadata": {"spend_logs_metadata": {"marker": "body"}}}, {"marker": "body"}, id="malformed"
+        ),
+        pytest.param(
+            '["marker"]', {"metadata": {"spend_logs_metadata": {"marker": "body"}}}, {"marker": "body"}, id="non_object"
+        ),
+        pytest.param(None, {"metadata": {"spend_logs_metadata": {"marker": "body"}}}, {"marker": "body"}, id="missing"),
+        pytest.param("{not json", {"metadata": {}}, None, id="malformed_without_body_value"),
+        pytest.param(None, {"metadata": {}}, None, id="missing_without_body_value"),
+    ],
+)
+async def test_auth_failure_row_spend_logs_metadata_precedence(
+    monkeypatch: pytest.MonkeyPatch,
+    header: str | None,
+    body: dict[str, object],
+    expected: dict[str, object] | None,
+) -> None:
+    request_data: Final[dict[str, object]] = {"model": "gpt-4o", **body}
+    original_request_data: Final = copy.deepcopy(request_data)
+
+    _, row_metadata = await _reject_and_read_failure_row(
+        monkeypatch,
+        HTTPException(status_code=401, detail="Invalid API key"),
+        "/v1/chat/completions",
+        {"x-litellm-spend-logs-metadata": header} if header is not None else {},
+        request_data,
+    )
+
+    assert row_metadata["spend_logs_metadata"] == expected
+    assert request_data == original_request_data
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "route, body",
+    [
+        pytest.param("/v1/responses", {"input": "hi", "metadata": {"native": "keep-me"}}, id="responses"),
+        pytest.param("/v1/messages", {"messages": [], "metadata": {"native": "keep-me"}}, id="messages"),
+    ],
+)
+async def test_auth_failure_row_keeps_spend_logs_metadata_header_on_litellm_metadata_routes(
+    monkeypatch: pytest.MonkeyPatch, route: str, body: dict[str, object]
+) -> None:
+    request_data: Final[dict[str, object]] = {"model": "gpt-4o", **body}
+    original_request_data: Final = copy.deepcopy(request_data)
+    recorder: Final = _AuthFailureRecorder()
+
+    _, row_metadata = await _reject_and_read_failure_row(
+        monkeypatch,
+        BudgetExceededError(current_cost=2, max_budget=1),
+        route,
+        {"x-litellm-spend-logs-metadata": '{"marker": "routed"}'},
+        request_data,
+        recorder,
+    )
+
+    assert row_metadata["spend_logs_metadata"] == {"marker": "routed"}
+    assert recorder.data is not None
+    litellm_metadata: Final = recorder.data["litellm_metadata"]
+    metadata: Final = recorder.data["metadata"]
+    assert isinstance(litellm_metadata, Mapping)
+    assert isinstance(metadata, Mapping)
+    assert litellm_metadata["spend_logs_metadata"] == {"marker": "routed"}
+    assert metadata["native"] == "keep-me"
+    assert request_data == original_request_data
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "auth_error,expect_traceback,expect_level",
@@ -1086,10 +1309,16 @@ def _marked_malformed_key_error() -> HTTPException:
                 message="Authentication Error", type=ProxyErrorTypes.auth_error, param=None, code=401
             ),
             False,
-            "ERROR",
-            id="expected_401_no_traceback",
+            "WARNING",
+            id="proxy_exception_401_warning_no_traceback",
         ),
         pytest.param(ValueError("unexpected internal error"), True, "ERROR", id="unexpected_error_keeps_traceback"),
+        pytest.param(
+            Exception("No api key passed in."),
+            True,
+            "ERROR",
+            id="bare_exception_coerced_to_401_still_keeps_traceback",
+        ),
         pytest.param(
             _marked_malformed_key_error(),
             False,
@@ -1099,8 +1328,14 @@ def _marked_malformed_key_error() -> HTTPException:
         pytest.param(
             HTTPException(status_code=401, detail="LiteLLM Virtual Key expected. Received=test"),
             False,
+            "WARNING",
+            id="http_exception_401_warning_no_traceback",
+        ),
+        pytest.param(
+            ProxyException(message="Forbidden", type=ProxyErrorTypes.auth_error, param=None, code=403),
+            False,
             "ERROR",
-            id="phrase_without_marker_stays_loud",
+            id="403_stays_error_without_traceback",
         ),
     ],
 )
@@ -1127,7 +1362,7 @@ async def test_handle_authentication_error_traceback_only_for_unexpected_errors(
         try:
             try:
                 raise auth_error
-            except (ProxyException, ValueError, HTTPException) as caught:
+            except Exception as caught:
                 with caplog.at_level(expect_level, logger="LiteLLM Proxy"), pytest.raises((ProxyException, HTTPException)):
                     await handler.handle_authentication_error(
                         caught,
@@ -1223,3 +1458,17 @@ def test_as_proxy_exception_keeps_jwt_scope_denial_message_shape():
 
     assert converted.to_dict() == plain.to_dict()
     assert converted.internal_message == denial.internal_message
+
+
+@pytest.mark.parametrize(
+    "auth_failure",
+    [
+        pytest.param(HTTPException(status_code=401, detail="Authentication Error, invalid key"), id="http_exception"),
+        pytest.param(Exception("Invalid proxy server token passed"), id="bare_exception"),
+    ],
+)
+def test_auth_failure_error_body_carries_a_json_null_param(auth_failure: Exception) -> None:
+    body = json.loads(json.dumps({"error": _as_proxy_exception(auth_failure).to_dict()}))
+
+    assert body["error"]["type"] == ProxyErrorTypes.auth_error.value
+    assert body["error"]["param"] is None

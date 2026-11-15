@@ -153,7 +153,9 @@ def _shed_order(groups: Mapping[tuple[str, int, int], tuple[str, ...]]) -> tuple
 _METADATA_KEY: Final = "metadata"
 
 
-def fit_indexed_messages(attrs: Mapping[str, AttrValue], budget: int | None) -> Mapping[str, AttrValue]:
+def fit_indexed_messages(
+    attrs: Mapping[str, AttrValue], budget: int | None, shed_first: frozenset[str] = frozenset()
+) -> Mapping[str, AttrValue]:
     """``attrs`` with indexed message attributes shed, least valuable first, until at most ``budget`` keys remain.
 
     ``None`` means the span has no attribute count limit. Every message still rides the ``input.value`` and
@@ -161,12 +163,14 @@ def fit_indexed_messages(attrs: Mapping[str, AttrValue], budget: int | None) -> 
     after every indexed message attribute: message attributes are the indexed, queryable view (the blobs
     carry no per-index keys), so a count-squeezed span keeps them and the single metadata key absorbs only
     the residual shortfall. Shedding happens here, before ``span.set_attribute``, so the fit is exact and
-    the SDK's dropped-attributes counter never silently masks the choice.
+    the SDK's dropped-attributes counter never silently masks the choice. ``shed_first`` keys shed one at a
+    time before anything else, so they never cost the span any other attribute.
     """
     if budget is None or len(attrs) <= budget:
         return attrs
     groups: Final = _message_key_groups(attrs)
-    sheddable: Final = (*(groups[group] for group in _shed_order(groups)),)
+    leading: Final = tuple((key,) for key in attrs if key in shed_first)
+    sheddable: Final = (*leading, *(groups[group] for group in _shed_order(groups)))
     flex: Final = (_METADATA_KEY,) if _METADATA_KEY in attrs else ()
     candidates: Final = (*sheddable, flex) if flex else sheddable
     running: Final = tuple(accumulate(len(candidate) for candidate in candidates))

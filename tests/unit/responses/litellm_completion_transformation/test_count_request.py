@@ -86,12 +86,30 @@ async def test_claude_count_request_counts_additional_tools_input_items_as_tools
     policy: Final = DropPolicy(drop_params=False, additional_drop_params=frozenset())
 
     hoisted: Final = await _claude_count(
-        {"input": [{"type": "additional_tools", "tools": [_WEATHER_TOOL]}, _QUESTION]}, policy
+        {
+            "input": [
+                {"type": "additional_tools", "role": "developer", "content": "Reply PINEAPPLE.", "tools": [_WEATHER_TOOL]},
+                _QUESTION,
+            ]
+        },
+        policy,
     )
 
     assert isinstance(hoisted, ChatCountRequest)
     assert hoisted.tools is not None
     assert hoisted == await _claude_count({"input": [_QUESTION], "tools": [_WEATHER_TOOL]}, policy)
+
+
+@pytest.mark.asyncio
+async def test_claude_count_request_counts_a_tool_list_repeated_on_every_turn_once_under_drop_params() -> None:
+    policy: Final = DropPolicy(drop_params=True, additional_drop_params=frozenset())
+    tool_list: Final[dict[str, JsonValue]] = {"type": "additional_tools", "tools": [_WEATHER_TOOL]}
+
+    repeated: Final = await _claude_count(
+        {"input": [tool_list, _QUESTION, tool_list, _QUESTION], "tools": [_WEATHER_TOOL]}, policy
+    )
+
+    assert repeated == await _claude_count({"input": [_QUESTION, _QUESTION], "tools": [_WEATHER_TOOL]}, policy)
 
 
 @pytest.mark.asyncio
@@ -115,6 +133,17 @@ async def test_claude_count_request_rejects_a_malformed_tool_flag_without_drop_p
 
     assert isinstance(flagged, ChatCountBridgeError)
     assert "defer_loading" in flagged.message
+
+
+@pytest.mark.asyncio
+async def test_claude_count_request_leaves_a_non_string_role_for_the_count_endpoint_to_judge() -> None:
+    counted: Final = await _claude_count(
+        {"input": [{"type": "additional_tools", "tools": [_WEATHER_TOOL]}, _QUESTION, {"role": ["user"], "content": "?"}]},
+        DropPolicy(drop_params=False, additional_drop_params=frozenset()),
+    )
+
+    assert isinstance(counted, ChatCountRequest)
+    assert [message.get("role") for message in counted.messages] == ["user", ["user"]]
 
 
 @pytest.mark.asyncio

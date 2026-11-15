@@ -46,21 +46,37 @@ async def test_bounded_db_lookup_returns_a_prompt_answer_without_recording_a_sta
     assert tracker.stalled_within(30) is False
 
 
+class _PendingLookups:
+    def __init__(self) -> None:
+        self.pending = 0
+        self.peak = 0
+
+    async def never_answers(self) -> None:
+        self.pending += 1
+        self.peak = max(self.peak, self.pending)
+        try:
+            await asyncio.Event().wait()
+        finally:
+            self.pending -= 1
+
+
 @pytest.mark.asyncio
 async def test_bounded_db_lookup_fails_a_whole_stalled_burst_within_one_deadline():
     tracker: Final = DBLookupStallTracker()
     burst: Final = 200
-    started: Final = time.monotonic()
+    lookups: Final = _PendingLookups()
 
     results: Final = await asyncio.gather(
         *(
-            bounded_db_lookup(_never_answers(), name=f"key-{i}", deadline_seconds=0.1, tracker=tracker)
+            bounded_db_lookup(lookups.never_answers(), name=f"key-{i}", deadline_seconds=0.1, tracker=tracker)
             for i in range(burst)
         ),
         return_exceptions=True,
     )
 
-    assert time.monotonic() - started < 2
+    assert lookups.peak == burst, (
+        f"only {lookups.peak} of {burst} stalled lookups were waiting on their deadline together"
+    )
     assert len(results) == burst
     assert all(isinstance(result, DBLookupDeadlineExceeded) for result in results)
     assert tracker.stalled_within(30) is True

@@ -75,24 +75,24 @@ def _router() -> Router:
     return Router(model_list=ROUTER_MODEL_LIST)
 
 
-class RecordingRouter(Router):
+def _recording_router(classified_tier: str) -> tuple[Router, list[dict]]:
     """A real router that records the classifier calls the endpoint makes instead of sending them.
 
     Injected at the same `proxy_server.llm_router` boundary the endpoint reads, so model resolution
     and the key's model-access checks still run against a genuine Router.
     """
+    recorded_calls: Final[list[dict]] = []
 
-    def __init__(self, classified_tier: str) -> None:
-        super().__init__(model_list=ROUTER_MODEL_LIST)
-        self.classified_tier = classified_tier
-        self.recorded_calls: list[dict] = []
-
-    async def acompletion(self, model, messages, stream=False, **kwargs):
-        self.recorded_calls.append({"model": model, "messages": messages, **kwargs})
+    async def record(model, messages, stream=False, **kwargs):
+        recorded_calls.append({"model": model, "messages": messages, **kwargs})
         return ModelResponse(
-            choices=[Choices(message=Message(content=f'{{"tier": "{self.classified_tier}"}}'))],
+            choices=[Choices(message=Message(content=f'{{"tier": "{classified_tier}"}}'))],
             model=model,
         )
+
+    router: Final = Router(model_list=ROUTER_MODEL_LIST)
+    router.acompletion = AsyncMock(side_effect=record)
+    return router, recorded_calls
 
 
 def _request_from(body: Mapping[str, object], **config_overrides: object) -> AutoRouterRoutingTestRequest:
@@ -137,7 +137,7 @@ async def _classifier_user_payload(body: Mapping[str, object], monkeypatch: pyte
     """The variable half of the classifier call this body produces."""
     from litellm.proxy import proxy_server
 
-    router = RecordingRouter("SIMPLE")
+    router, recorded_calls = _recording_router("SIMPLE")
     monkeypatch.setattr(proxy_server, "llm_router", router)
 
     await preview_auto_router_routing(
@@ -145,7 +145,7 @@ async def _classifier_user_payload(body: Mapping[str, object], monkeypatch: pyte
         data=_request_from(body, classifier_type="llm", classifier_llm_config={"model": "classifier-model"}),
         user_api_key_dict=ADMIN,
     )
-    return router.recorded_calls[0]["messages"][1]["content"]
+    return recorded_calls[0]["messages"][1]["content"]
 
 
 @pytest.mark.parametrize(
@@ -170,7 +170,7 @@ async def test_preview_and_serving_share_default_model_resolution(
     explicit_default: str | None,
     expected: str,
 ):
-    from litellm.router_utils.auto_router_model_naming import validate_complexity_router_config_write
+    from litellm.router_strategy.auto_router.auto_router_model_naming import validate_complexity_router_config_write
     from litellm.types.management_endpoints.auto_router_endpoints import ComplexityRouterConfigValidationRequest
 
     config: Final = {
@@ -197,7 +197,7 @@ async def test_preview_and_serving_share_default_model_resolution(
             model_info={"id": "default-parity"},
         )
     )
-    strategy: Final = serving.complexity_routers["default-parity"][0].strategy
+    strategy: Final = serving.registry().plugins("complexity")["default-parity"][0].strategy
     assert strategy.config.default_model == expected
     decision: Final = await strategy.async_pre_routing_hook(
         model="default-parity", messages=[{"role": "user", "content": "hello"}], request_kwargs={}
@@ -739,7 +739,9 @@ class TestAutoRouterBenchmarks:
         from litellm.proxy.management_endpoints.auto_router_endpoints import get_auto_router_benchmarks
 
         monkeypatch.setattr(proxy_server, "prisma_client", _benchmark_db(rows, recorded))
-        monkeypatch.setattr(proxy_server, "llm_router", type("R", (), {"model_list": model_list})())
+        monkeypatch.setattr(
+            proxy_server, "llm_router", SimpleNamespace(registry=lambda: SimpleNamespace(all=lambda: model_list))
+        )
         return await get_auto_router_benchmarks(
             user_api_key_dict=ADMIN,
             start_date="2026-07-01",
@@ -1240,7 +1242,7 @@ class TestAutoRouterBenchmarks:
     def test_the_listed_kinds_match_the_router_types_traffic_can_record(self):
         from typing import get_args, get_type_hints
 
-        from litellm.router_utils.auto_router_model_naming import StrategyRouterKind
+        from litellm.router_strategy.auto_router.auto_router_model_naming import StrategyRouterKind
         from litellm.types.utils import StandardLoggingRoutingDecision
 
         readonly_router_type: Final = get_type_hints(StandardLoggingRoutingDecision, include_extras=True)["router_type"]
@@ -1337,6 +1339,7 @@ class TestAutoRouterSession:
             "turns": turns,
             "last_model": "anthropic/claude-sonnet-5",
             "spend": spend,
+            "total_spend": None,
             "saved_spend": 0.24,
             "savings_estimated_turns": 3 if estimated else 0,
             "savings_estimated_actual_spend": 0.14 if estimated else 0.0,
@@ -1347,6 +1350,42 @@ class TestAutoRouterSession:
             "baseline_model": "anthropic/claude-opus-5",
             "baseline_models": {"anthropic/claude-opus-5": 3},
         }
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(("recorded", "expected"), [((0.5, 0.25), 0.75), ((), None)], ids=["counted", "none"])
+    async def test_the_session_reports_the_spend_billed_to_its_key_under_the_session(
+        self, monkeypatch: pytest.MonkeyPatch, recorded: tuple[float, ...], expected: float | None
+    ) -> None:
+        from litellm.proxy import proxy_server
+        from litellm.proxy.management_endpoints.auto_router_endpoints import get_auto_router_session
+        from litellm.proxy.spend_tracking.session_spend_total import SessionSpendTotals
+
+        class _Redis:
+            def __init__(self) -> None:
+                self.values: dict[str, float] = {}  # mutable-ok: stands in for Redis state
+
+            async def async_increment(
+                self, key: str, value: float, ttl: int | None = None, refresh_ttl: bool = False
+            ) -> float:
+                self.values[key] = self.values.get(key, 0.0) + value
+                return self.values[key]
+
+            async def async_get_cache(self, key: str) -> object:
+                return self.values.get(key)
+
+        redis: Final = _Redis()
+        totals: Final = SessionSpendTotals(lambda: redis)
+        caller = UserAPIKeyAuth(api_key="sk-caller")
+        for spend in recorded:
+            await totals.record(caller.api_key or "", "sess-1", spend)
+        await totals.record(UserAPIKeyAuth(api_key="sk-other").api_key or "", "sess-1", 9.0)
+        monkeypatch.setattr(proxy_server.proxy_logging_obj, "session_spend_totals", totals)
+        self._rig(monkeypatch, [{**self.ROW, "api_key": caller.api_key, "session_id": "sess-1"}])
+
+        response = await get_auto_router_session(user_api_key_dict=caller, session_id="sess-1")
+
+        assert response.total_spend == expected
+        assert response.spend == self.ROW["spend"]
 
     @pytest.mark.asyncio
     async def test_another_keys_session_is_a_404_even_for_an_admin(self, monkeypatch: pytest.MonkeyPatch):
@@ -2708,7 +2747,7 @@ async def test_list_shadow_eval_jobs_collapses_legs_into_jobs_newest_first(monke
 async def test_jev_test_routing_authorizes_paid_evaluation_before_contacting_typesafe(
     monkeypatch: pytest.MonkeyPatch, denial: str | None
 ) -> None:
-    router: Final = RecordingRouter("SIMPLE")
+    router, recorded_calls = _recording_router("SIMPLE")
     monkeypatch.setattr(proxy_server, "llm_router", router)
     monkeypatch.setenv("TYPESAFE_API_KEY", "test")
     monkeypatch.setenv("TYPESAFE_API_BASE", "https://typesafe.test")
@@ -2763,21 +2802,28 @@ async def test_jev_test_routing_authorizes_paid_evaluation_before_contacting_typ
             assert response.routing_decision["cause"] == "jev_classifier"
             assert response.routed_model == "cheap-model"
             assert evaluation.call_count == 1
-        assert router.recorded_calls == []
+        assert recorded_calls == []
         await handler.client.aclose()
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "case", ["allowed", "credential-free", "missing", "blocked", "key", "budget", "team", "not-router"]
+    "case",
+    ["allowed", "credential-free", "team-admin-environment", "missing", "blocked", "key", "budget", "team", "not-router"],
 )
 async def test_saved_jev_probe_uses_authorized_server_configuration(monkeypatch: pytest.MonkeyPatch, case: str) -> None:
-    router: Final = RecordingRouter("SIMPLE")
+    router, recorded_calls = _recording_router("SIMPLE")
     stored_key: Final = "synthetic-server-jev-key"
+    monkeypatch.setenv("SAVED_JEV_KEY", stored_key)
+    monkeypatch.setenv("SAVED_JEV_BASE", "https://saved-jev.test")
     stored_config: Final = {
         "classifier_type": "jev",
         "tiers": TIERS,
-        "jev_classifier_config": {"api_key": stored_key, "api_base": "https://saved-jev.test"},
+        "jev_classifier_config": (
+            {"api_key": "os.environ/SAVED_JEV_KEY", "api_base": "os.environ/SAVED_JEV_BASE"}
+            if case == "team-admin-environment"
+            else {"api_key": stored_key, "api_base": "https://saved-jev.test"}
+        ),
     }
     router.add_deployment(
         Deployment.model_validate(
@@ -2790,7 +2836,10 @@ async def test_saved_jev_probe_uses_authorized_server_configuration(monkeypatch:
                 "model_info": {
                     "id": "saved-jev-id",
                     "blocked": case == "blocked",
-                    "team_id": "owner-team" if case == "team" else None,
+                    "team_id": (
+                        "owner-team" if case == "team"
+                        else "admin-preview-team" if case == "team-admin-environment" else None
+                    ),
                 },
             }
         )
@@ -2799,6 +2848,8 @@ async def test_saved_jev_probe_uses_authorized_server_configuration(monkeypatch:
     actor: Final = (
         _configure_member_preview(monkeypatch)
         if case == "team"
+        else _configure_team_admin_preview(monkeypatch)
+        if case == "team-admin-environment"
         else UserAPIKeyAuth(
             user_role=LitellmUserRoles.PROXY_ADMIN,
             api_key="sk-probe",
@@ -2812,12 +2863,17 @@ async def test_saved_jev_probe_uses_authorized_server_configuration(monkeypatch:
         {
             "prompt": "what is 2+2",
             "saved_model_id": "missing-id" if case == "missing" else "saved-jev-id",
-            "team_id": "member-preview-team" if case == "team" else None,
+            "team_id": (
+                "member-preview-team" if case == "team"
+                else "admin-preview-team" if case == "team-admin-environment" else None
+            ),
         },
         classifier_type="jev",
         jev_classifier_config=(
             {"model": "jev-latest", "timeout_ms": 3000}
             if case == "credential-free"
+            else {"api_key": "os.environ/IGNORED_BROWSER_KEY", "api_base": "https://browser-override.test"}
+            if case == "team-admin-environment"
             else {"api_key": "masked-key", "api_base": "https://browser-override.test"}
         ),
     )
@@ -2856,8 +2912,8 @@ async def test_saved_jev_probe_uses_authorized_server_configuration(monkeypatch:
             assert result.routed_model == "cheap-model"
             assert evaluation.calls.last.request.headers["authorization"] == f"Bearer {stored_key}"
             assert stored_key not in result.model_dump_json()
-        assert evaluation.call_count == (1 if case in ("allowed", "credential-free") else 0)
-        assert router.recorded_calls == []
+        assert evaluation.call_count == (1 if case in ("allowed", "credential-free", "team-admin-environment") else 0)
+        assert recorded_calls == []
         await handler.client.aclose()
 
 
@@ -3378,6 +3434,54 @@ async def test_validate_config_gates_like_the_write_it_rehearses(monkeypatch: py
     assert not_their_team.value.status_code == 403
 
 
+def _configure_team_admin_preview(monkeypatch: pytest.MonkeyPatch) -> UserAPIKeyAuth:
+    from litellm.proxy._types import LiteLLM_TeamTable
+
+    team: Final = LiteLLM_TeamTable(
+        team_id="admin-preview-team",
+        models=["saved-jev", "typesafe/jev-latest", *[TIERS[name][0] for name in TIERS]],
+        members_with_roles=[{"role": "admin", "user_id": "preview-admin"}],
+    )
+    database: Final = MagicMock()
+    database.db.litellm_teamtable.find_unique = AsyncMock(return_value=team)
+    monkeypatch.setattr(proxy_server, "prisma_client", database)
+    monkeypatch.setattr(proxy_server, "premium_user", True)
+    return UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="preview-admin", api_key="sk-preview")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("legacy", [False, True])
+@pytest.mark.parametrize("field", ["api_key", "api_base"])
+async def test_team_admin_cannot_preview_or_validate_environment_references(
+    monkeypatch: pytest.MonkeyPatch, legacy: bool, field: str
+) -> None:
+    from litellm.types.management_endpoints.auto_router_endpoints import ComplexityRouterConfigValidationRequest
+
+    actor: Final = _configure_team_admin_preview(monkeypatch)
+    monkeypatch.setattr(proxy_server, "llm_router", _router())
+    config: Final = {
+        "tiers": TIERS,
+        "classifier_type": "jev" if legacy else "oss_classifier",
+        "jev_classifier_config" if legacy else "opensource_classifier_config": {
+            "api_key": "caller-key", "api_base": "https://denied-jev.test", field: "os.environ/PRIVATE_JEV_VALUE",
+        },
+    }
+    validation: Final = ComplexityRouterConfigValidationRequest(
+        team_id="admin-preview-team", complexity_router_config=config
+    )
+    with pytest.raises(HTTPException) as denied_validation:
+        await auto_router_endpoints.validate_complexity_router_config(validation, actor)
+    assert denied_validation.value.status_code == 403
+    with respx.mock(assert_all_called=False) as http, pytest.raises(HTTPException) as denied_preview:
+        await preview_auto_router_routing(
+            _request_from({"prompt": "what is 2+2", "team_id": "admin-preview-team"}, **config),
+            actor,
+            ROUTING_HTTP_REQUEST,
+        )
+    assert denied_preview.value.status_code == 403
+    assert len(http.calls) == 0
+
+
 def _configure_member_preview(monkeypatch: pytest.MonkeyPatch, *, allowed: bool = True) -> UserAPIKeyAuth:
     from litellm.proxy import proxy_server
     from litellm.proxy._types import UI_TEAM_ID, LiteLLM_TeamTable
@@ -3446,7 +3550,7 @@ async def test_member_billable_preview_checks_and_charges_destination_team(
 
     auth_module: Final = importlib.import_module("litellm.proxy.auth.user_api_key_auth")
     actor: Final = _configure_member_preview(monkeypatch).model_copy(update={"metadata": {"tags": ["key-tag"]}})
-    router: Final = RecordingRouter("SIMPLE")
+    router, recorded_calls = _recording_router("SIMPLE")
     monkeypatch.setattr(proxy_server, "llm_router", router)
 
     async def check_and_tag(
@@ -3480,13 +3584,13 @@ async def test_member_billable_preview_checks_and_charges_destination_team(
     if over_budget:
         with pytest.raises(litellm.BudgetExceededError):
             await preview_auto_router_routing(data, actor, http_request)
-        assert router.recorded_calls == []
+        assert recorded_calls == []
     else:
         await preview_auto_router_routing(data, actor, http_request)
-        assert len(router.recorded_calls) == 1
-        assert router.recorded_calls[0]["metadata"]["user_api_key_team_id"] == "member-preview-team"
-        assert router.recorded_calls[0]["metadata"]["user_api_key_user_id"] == "preview-member"
-        assert set(router.recorded_calls[0]["metadata"]["tags"]) == {"key-tag", "header-tag"}
+        assert len(recorded_calls) == 1
+        assert recorded_calls[0]["metadata"]["user_api_key_team_id"] == "member-preview-team"
+        assert recorded_calls[0]["metadata"]["user_api_key_user_id"] == "preview-member"
+        assert set(recorded_calls[0]["metadata"]["tags"]) == {"key-tag", "header-tag"}
     checks.assert_awaited_once()
     assert checks.await_args.kwargs["user_api_key_auth_obj"].team_id == "member-preview-team"
     assert checks.await_args.kwargs["route"] == "/auto_router/test_routing"
@@ -3829,7 +3933,13 @@ async def test_availability_counts_db_and_yaml_without_disclosing_router_names(m
         SimpleNamespace(db=SimpleNamespace(litellm_proxymodeltable=SimpleNamespace(find_many=find_many))),
     )
     monkeypatch.setattr(proxy_server.proxy_config, "auto_router_db_catalog", build_auto_router_catalog((row,)))
-    monkeypatch.setattr(proxy_server, "llm_router", SimpleNamespace(config_deployments=lambda: (yaml_row,)))
+    monkeypatch.setattr(
+        proxy_server,
+        "llm_router",
+        SimpleNamespace(
+            registry=lambda: SimpleNamespace(deployments=lambda *, source: (yaml_row,) if source == "config" else None)
+        ),
+    )
     monkeypatch.setattr(proxy_server, "_license_check", SimpleNamespace(auto_router_capability_limit=lambda: 1))
     monkeypatch.setattr(proxy_server, "heuristic_v1_tuning_baselines", {})
     result = await auto_router_endpoints.get_auto_router_availability(AutoRouterAvailabilityRequest(), ADMIN)
@@ -3873,7 +3983,13 @@ async def test_availability_denies_another_teams_edit_exemption(monkeypatch):
         SimpleNamespace(db=SimpleNamespace(litellm_proxymodeltable=SimpleNamespace(find_many=find_many))),
     )
     monkeypatch.setattr(proxy_server.proxy_config, "auto_router_db_catalog", build_auto_router_catalog((row,)))
-    monkeypatch.setattr(proxy_server, "llm_router", SimpleNamespace(config_deployments=lambda: ()))
+    monkeypatch.setattr(
+        proxy_server,
+        "llm_router",
+        SimpleNamespace(
+            registry=lambda: SimpleNamespace(deployments=lambda *, source: () if source == "config" else None)
+        ),
+    )
     monkeypatch.setattr(auto_router_endpoints, "_authorize_router_dry_run", AsyncMock(return_value=None))
     with pytest.raises(HTTPException) as error:
         await auto_router_endpoints.get_auto_router_availability(
@@ -3888,7 +4004,13 @@ async def test_availability_waits_for_the_first_complete_catalog(monkeypatch):
     from litellm.types.management_endpoints.auto_router_endpoints import AutoRouterAvailabilityRequest
 
     monkeypatch.setattr(proxy_server.proxy_config, "auto_router_db_catalog", None)
-    monkeypatch.setattr(proxy_server, "llm_router", SimpleNamespace(config_deployments=lambda: ()))
+    monkeypatch.setattr(
+        proxy_server,
+        "llm_router",
+        SimpleNamespace(
+            registry=lambda: SimpleNamespace(deployments=lambda *, source: () if source == "config" else None)
+        ),
+    )
     with pytest.raises(HTTPException) as error:
         await auto_router_endpoints.get_auto_router_availability(AutoRouterAvailabilityRequest(), ADMIN)
     assert error.value.status_code == 503

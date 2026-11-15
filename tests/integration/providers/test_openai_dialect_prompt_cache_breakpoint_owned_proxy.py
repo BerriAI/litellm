@@ -153,15 +153,16 @@ def _foundry_deployment(rig: _Rig, scenario: Scenario, *, bare: bool) -> str:
     return name
 
 
-def _assert_foundry_chat_wire(received: Request, prompt: str, *, options: JsonValue | None) -> None:
+def _assert_foundry_chat_wire(received: Request, user_content: JsonValue, *, options: JsonValue | None) -> None:
     body: Final = body_of(received)
+    marked_system: Final = [{"type": "text", "text": SYSTEM, "prompt_cache_breakpoint": EXPLICIT}]
     assert urlsplit(received.target).netloc == _FOUNDRY_HOST, received.target
     assert urlsplit(received.target).path == _FOUNDRY_CHAT_PATH, received.target
-    assert "prompt_cache_breakpoint" not in received.body.decode(), received.body
     assert body["model"] == _FOUNDRY_MODEL, received.body
-    assert body["messages"] == [{"role": "system", "content": SYSTEM}, {"role": "user", "content": prompt}], (
-        received.body
-    )
+    assert body["messages"] == [
+        {"role": "system", "content": marked_system},
+        {"role": "user", "content": user_content},
+    ], received.body
     assert body.get("prompt_cache_options") == options, received.body
 
 
@@ -185,7 +186,7 @@ def test_b9_b12_foundry_gpt6_responses_reach_the_openai_dialect_on_the_foundry_h
 
 
 @pytest.mark.timeout(_CELL_TIMEOUT)
-def test_b10_foundry_gpt6_messages_bridge_to_chat_without_a_breakpoint(rig: _Rig) -> None:
+def test_b10_foundry_gpt6_messages_bridge_to_chat_keeps_the_injected_breakpoint(rig: _Rig) -> None:
     marker: Final = fresh_marker()
     with rig.gateway.scenario() as scenario:
         name: Final = _foundry_deployment(rig, scenario, bare=False)
@@ -193,12 +194,12 @@ def test_b10_foundry_gpt6_messages_bridge_to_chat_without_a_breakpoint(rig: _Rig
             rig.gateway, rig.wire, "messages", request_body("messages", name, prompt_text(marker))
         )
         assert_answered(outcome, marker)
-        _assert_foundry_chat_wire(received, prompt_text(marker), options=IMPLICIT)
+        _assert_foundry_chat_wire(received, [{"type": "text", "text": prompt_text(marker)}], options=IMPLICIT)
         success_row(name, marker)
 
 
 @pytest.mark.timeout(_CELL_TIMEOUT)
-def test_b11_foundry_gpt6_chat_stays_on_the_plain_chat_wire(rig: _Rig) -> None:
+def test_b11_foundry_gpt6_chat_stays_on_the_chat_wire_with_the_injected_breakpoint(rig: _Rig) -> None:
     marker: Final = fresh_marker()
     with rig.gateway.scenario() as scenario:
         name: Final = _foundry_deployment(rig, scenario, bare=False)
