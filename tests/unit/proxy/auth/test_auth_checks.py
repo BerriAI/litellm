@@ -109,7 +109,7 @@ async def _run_team_trace_id_check(
 
 @pytest.mark.parametrize(
     "route",
-    ["/chat/completions", "/v1/messages", "/mcp/", "/a2a/my-agent"],
+    ["/chat/completions", "/queue/chat/completions", "/v1/messages", "/mcp/", "/a2a/my-agent"],
 )
 @pytest.mark.asyncio
 async def test_team_require_trace_id_rejects_llm_mcp_and_agent_requests(route: str) -> None:
@@ -2469,3 +2469,25 @@ async def test_bulk_eviction_broadcasts_while_the_usage_cache_redis_is_wedged(
 
     assert usage_redis.finished
     assert {json.loads(message)["cache_key"] for message in client.published} == set(hashed_tokens)
+
+
+@pytest.mark.parametrize("route", ("/v1/chat/completions", "/queue/chat/completions"))
+def test_chat_routes_require_the_user_param_when_enforced(route: str) -> None:
+    from starlette.requests import Request
+
+    from litellm.proxy.auth.auth_checks import _enforce_user_param_check
+
+    request: Final = Request({"type": "http", "method": "POST", "path": route})
+    with pytest.raises(Exception, match="'user' param not passed"):
+        _enforce_user_param_check({"enforce_user_param": True}, request, {}, route)
+    _enforce_user_param_check({"enforce_user_param": True}, request, {"user": "u"}, route)
+
+
+@pytest.mark.parametrize("route", ("/v1/chat/completions", "/queue/chat/completions"))
+def test_spent_proxy_budget_refuses_chat_routes(monkeypatch: pytest.MonkeyPatch, route: str) -> None:
+    from litellm.proxy.auth.auth_checks import _global_proxy_budget_check
+
+    monkeypatch.setattr(litellm, "max_budget", 0.5)
+    _global_proxy_budget_check(global_proxy_spend=0.4, skip_budget_checks=False, route=route)
+    with pytest.raises(litellm.BudgetExceededError):
+        _global_proxy_budget_check(global_proxy_spend=1.0, skip_budget_checks=False, route=route)

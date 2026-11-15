@@ -320,8 +320,8 @@ class _ExplainedReads:
         self.rows_scanned: tuple[int, ...] = ()
 
     @asynccontextmanager
-    async def tx(self, *, timeout: timedelta) -> AsyncIterator["_ExplainedReads"]:
-        async with self.database.tx(timeout=timeout) as transaction:
+    async def tx(self, *, max_wait: timedelta, timeout: timedelta) -> AsyncIterator["_ExplainedReads"]:
+        async with self.database.tx(max_wait=max_wait, timeout=timeout) as transaction:
             reads: Final = _ExplainedReads(transaction)
             try:
                 yield reads

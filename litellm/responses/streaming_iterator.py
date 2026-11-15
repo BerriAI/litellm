@@ -47,7 +47,7 @@ from litellm.litellm_core_utils.core_helpers import (
     set_response_cost_in_hidden_params,
     stamp_litellm_bill_on_usage,
 )
-from litellm.litellm_core_utils.exception_mapping_utils import with_deployment_api_base
+from litellm.litellm_core_utils.exception_mapping_utils import mapped_stream_exception, with_deployment_debug_info
 from litellm.litellm_core_utils.internal_call_metadata import (
     is_background_response,
     requests_background,
@@ -344,27 +344,21 @@ def map_stream_error_to_exception(
     return _mapped_exception(provider_exception, model, custom_llm_provider, logging_obj)
 
 
+def _logged_litellm_params(logging_obj: LiteLLMLoggingObj | None) -> object:
+    return (
+        None
+        if logging_obj is None
+        else _typed_gets_litellm_params(logging_obj.model_call_details.get)("litellm_params", {})
+    )
+
+
 def _mapped_exception(
     original_exception: Exception,
     model: str,
     custom_llm_provider: str,
     logging_obj: LiteLLMLoggingObj | None,
 ) -> Exception:
-    litellm_params: Final = (
-        None
-        if logging_obj is None
-        else _typed_gets_litellm_params(logging_obj.model_call_details.get)("litellm_params", {})
-    )
-    try:
-        return litellm.exception_type(
-            model=model,
-            custom_llm_provider=custom_llm_provider,
-            original_exception=original_exception,
-            completion_kwargs={},
-            extra_kwargs=with_deployment_api_base(litellm_params),
-        )
-    except Exception as mapped_exception:
-        return mapped_exception
+    return mapped_stream_exception(original_exception, model, custom_llm_provider, _logged_litellm_params(logging_obj))
 
 
 def _event_field(event: object, name: str) -> object:
@@ -504,10 +498,16 @@ class BaseResponsesAPIStreamingIterator:
                         "type": ResponsesAPIStreamEvents.ERROR.value,
                     }
                 )
-                openai_responses_api_chunk: Final = self.responses_api_provider_config.transform_streaming_response(
+                transformed_chunk: Final = self.responses_api_provider_config.transform_streaming_response(
                     model=self.model,
                     parsed_chunk=typed_chunk,
                     logging_obj=self.logging_obj,
+                )
+                affinity_model_id: Final = ResponsesAPIRequestUtils.affinity_model_id(self.litellm_metadata)
+                openai_responses_api_chunk: Final = (
+                    transformed_chunk
+                    if affinity_model_id is None
+                    else ResponsesAPIRequestUtils.encode_stream_event_for_affinity(transformed_chunk, affinity_model_id)
                 )
 
                 # Only when the SSE JSON carries a response body (delta events do not).
@@ -576,27 +576,6 @@ class BaseResponsesAPIStreamingIterator:
                                 self.custom_llm_provider,
                                 _stream_model_id,
                             )
-
-                # Wrap encrypted_content in streaming events (output_item.added, output_item.done)
-                if self.litellm_metadata and self.litellm_metadata.get("encrypted_content_affinity_enabled"):
-                    openai_types = get_openai_response_types()
-                    event_type: Final = getattr(openai_responses_api_chunk, "type", None)
-                    if event_type in (
-                        openai_types.ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
-                        openai_types.ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
-                    ):
-                        item: Final[object | None] = getattr(openai_responses_api_chunk, "item", None)
-                        if item:
-                            encrypted_content: Final = getattr(item, "encrypted_content", None)
-                            if encrypted_content and isinstance(encrypted_content, str):
-                                model_id: Final = _model_id_from_metadata(self.litellm_metadata)
-                                if model_id:
-                                    wrapped_content: Final = (
-                                        ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id(
-                                            encrypted_content, model_id
-                                        )
-                                    )
-                                    setattr(item, "encrypted_content", wrapped_content)
 
                 # Store the completed response (also for incomplete/failed so logging still fires)
                 _chunk_type: Final = getattr(openai_responses_api_chunk, "type", None)
@@ -1219,12 +1198,17 @@ class BaseResponsesAPIStreamingIterator:
             model=self.model or "",
         )
 
+    def _with_deployment_debug_info(self, error: Exception) -> Exception:
+        return with_deployment_debug_info(
+            error, self.model or "", self.custom_llm_provider or "", _logged_litellm_params(self.logging_obj)
+        )
+
     def _raise_if_ended_without_terminal_event(self) -> None:
         if self.completed_response is not None:
             return
         if self._replays_stored_stream and not self._yielded_first_chunk:
             return
-        error: Final = self._stream_ended_early_error()
+        error: Final = self._with_deployment_debug_info(self._stream_ended_early_error())
         self._handle_failure(error)
         if self._output_started:
             raise error
@@ -1236,10 +1220,11 @@ class BaseResponsesAPIStreamingIterator:
         raise _mapped_exception(error, self.model or "", self.custom_llm_provider or "", self.logging_obj) from error
 
     def _raise_for_transport_error(self, error: httpx.ReadError | httpx.RemoteProtocolError) -> NoReturn:
-        self._handle_failure(error)
+        described: Final = self._with_deployment_debug_info(error)
+        self._handle_failure(described)
         if self._output_started:
-            raise error
-        raise self._fallback_error(error) from error
+            raise described
+        raise self._fallback_error(described) from described
 
 
 async def call_post_streaming_hooks_for_testing(
@@ -1341,14 +1326,9 @@ class ResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
                 self.finished = True
                 raise StopAsyncIteration from e
             self._raise_for_transport_timeout(e)
-        except httpx.HTTPError as e:
-            # Handle HTTP errors
-            self.finished = True
-            self._handle_failure(e)
-            raise e
         except Exception as e:
             self.finished = True
-            self._handle_failure(e)
+            self._handle_failure(self._with_deployment_debug_info(e))
             raise e
 
     def _handle_logging_completed_response(self):
@@ -1434,14 +1414,9 @@ class SyncResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
                 self.finished = True
                 raise StopIteration from e
             self._raise_for_transport_timeout(e)
-        except httpx.HTTPError as e:
-            # Handle HTTP errors
-            self.finished = True
-            self._handle_failure(e)
-            raise e
         except Exception as e:
             self.finished = True
-            self._handle_failure(e)
+            self._handle_failure(self._with_deployment_debug_info(e))
             raise e
 
     def _handle_logging_completed_response(self):
@@ -1931,7 +1906,11 @@ def stamp_responses_usage_cost(
         return
     if isinstance(bill, bool) or not isinstance(bill, (int, float)):
         return
-    if bill > 0 or isinstance(usage_obj.cost, (int, float)):
+    if (
+        bill > 0
+        or isinstance(usage_obj.cost, (int, float))
+        or (bill == 0 and logging_obj.is_usage_explicitly_free(priced))
+    ):
         stamp_litellm_bill_on_usage(response_obj, usage_obj, float(bill))
 
 
@@ -2499,9 +2478,6 @@ class _ResponsesWsTurn:
         )
 
 
-_RESPONSES_WS_OUTPUT_ITEM_EVENT_TYPES: Final = frozenset({"response.output_item.added", "response.output_item.done"})
-
-
 def _ws_event_error(event: Mapping[str, object]) -> object:
     if event.get("type") == "error":
         return _error_event_error_object(event)
@@ -2539,24 +2515,6 @@ def _restore_wrapped_ids_in_response_create(msg_obj: Mapping[str, object]) -> di
         {"response": {**nested, **nested_fields}} if _is_json_object(nested) and nested_fields else EMPTY_MAPPING
     )
     return {**msg_obj, **top_fields, **restored_nested}
-
-
-def _wrap_output_item_encrypted_content(
-    event_obj: Mapping[str, object], litellm_metadata: Mapping[str, object]
-) -> dict[str, object] | None:
-    if not litellm_metadata.get("encrypted_content_affinity_enabled"):
-        return None
-    model_id: Final = _model_id_from_metadata(litellm_metadata)
-    item: Final = event_obj.get("item")
-    if model_id is None or not _is_json_object(item):
-        return None
-    encrypted_content: Final = item.get("encrypted_content")
-    if not isinstance(encrypted_content, str) or not encrypted_content:
-        return None
-    wrapped_content: Final = ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id(
-        encrypted_content=encrypted_content, model_id=model_id
-    )
-    return {**event_obj, "item": {**item, "encrypted_content": wrapped_content}}
 
 
 class ResponsesWebSocketStreaming:
@@ -2764,9 +2722,12 @@ class ResponsesWebSocketStreaming:
                 litellm_metadata=self.litellm_metadata,
             )
             return json.dumps({**event_obj, "response": wrapped_response})
-        if event_obj.get("type") not in _RESPONSES_WS_OUTPUT_ITEM_EVENT_TYPES:
-            return response_str
-        wrapped_event: Final = _wrap_output_item_encrypted_content(event_obj, self.litellm_metadata)
+        affinity_model_id: Final = ResponsesAPIRequestUtils.affinity_model_id(self.litellm_metadata)
+        wrapped_event: Final = (
+            None
+            if affinity_model_id is None
+            else ResponsesAPIRequestUtils.affinity_encoded_stream_event(event_obj, affinity_model_id)
+        )
         return response_str if wrapped_event is None else json.dumps(wrapped_event)
 
     async def backend_to_client(self) -> None:
