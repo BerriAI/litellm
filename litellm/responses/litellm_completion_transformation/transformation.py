@@ -2416,6 +2416,7 @@ class LiteLLMCompletionResponsesConfig:
         namespace_description: str,
         namespace_tool: NamespaceTool,
         nested: bool,
+        member_name: Callable[[str, str], str],
     ) -> ChatCompletionToolParam | None:
         tool_type: Final = namespace_tool.get("type")
         if nested and tool_type not in NAMESPACE_MEMBER_TYPES_WITH_CHAT_TOOLS:
@@ -2440,7 +2441,7 @@ class LiteLLMCompletionResponsesConfig:
             parameters if parameters and "type" in parameters else MappingProxyType({**parameters, "type": "object"})
         )
         tool_name: Final = str(namespace_tool.get("name") or "")
-        chat_tool_name: Final = chat_member_name(namespace, tool_name) if nested else tool_name
+        chat_tool_name: Final = member_name(namespace, tool_name) if nested else tool_name
         function: Final = ChatCompletionToolParamFunctionChunk(
             name=chat_tool_name,
             description=description,
@@ -2454,7 +2455,9 @@ class LiteLLMCompletionResponsesConfig:
         )
 
     @staticmethod
-    def _namespace_chat_tools(tool: NamespaceTool) -> tuple[ChatCompletionToolParam, ...]:
+    def _namespace_chat_tools(
+        tool: NamespaceTool, member_name: Callable[[str, str], str]
+    ) -> tuple[ChatCompletionToolParam, ...]:
         namespace: Final = str(tool.get("name") or "")
         namespace_description: Final = str(tool.get("description") or "")
         namespace_tools: Final = tool.get("tools")
@@ -2469,12 +2472,13 @@ class LiteLLMCompletionResponsesConfig:
                         namespace_description,
                         raw_tool,
                         True,
+                        member_name,
                     )
                 )
                 is not None
             )
         flat_tool: Final = LiteLLMCompletionResponsesConfig._build_ns_chat_tool(
-            namespace, namespace_description, tool, False
+            namespace, namespace_description, tool, False, member_name
         )
         return (flat_tool,) if flat_tool is not None else ()
 
@@ -2498,7 +2502,9 @@ class LiteLLMCompletionResponsesConfig:
             raise ValueError("Flattened namespace tools share a name: " + ", ".join(shared_chat_names))
 
     @staticmethod
-    def _responses_tool_to_chat_form(tool: Mapping[str, object]) -> ResponsesToolChatForm:
+    def _responses_tool_to_chat_form(
+        tool: Mapping[str, object], member_name: Callable[[str, str], str]
+    ) -> ResponsesToolChatForm:
         tool_type: Final = tool.get("type")
         if tool_type == "mcp":
             return ResponsesToolChatForm(chat_tools=(cast(OpenAIMcpServerTool, tool),), web_search_options=None)
@@ -2546,7 +2552,8 @@ class LiteLLMCompletionResponsesConfig:
             )
         if tool_type == "namespace":
             return ResponsesToolChatForm(
-                chat_tools=LiteLLMCompletionResponsesConfig._namespace_chat_tools(tool), web_search_options=None
+                chat_tools=LiteLLMCompletionResponsesConfig._namespace_chat_tools(tool, member_name),
+                web_search_options=None,
             )
         if tool_type == "custom":
             converted: Final = convert_custom_tool_to_function_tool(tool)
@@ -2563,8 +2570,12 @@ class LiteLLMCompletionResponsesConfig:
         return ResponsesToolChatForm(chat_tools=(cast(ChatToolParam, tool),), web_search_options=None)
 
     @staticmethod
-    def responses_tools_to_chat_forms(tools: ResponseTools) -> tuple[ResponsesToolChatForm, ...]:
-        return tuple(LiteLLMCompletionResponsesConfig._responses_tool_to_chat_form(tool) for tool in tools or ())
+    def responses_tools_to_chat_forms(
+        tools: ResponseTools, member_name: Callable[[str, str], str] = chat_member_name
+    ) -> tuple[ResponsesToolChatForm, ...]:
+        return tuple(
+            LiteLLMCompletionResponsesConfig._responses_tool_to_chat_form(tool, member_name) for tool in tools or ()
+        )
 
     @staticmethod
     def transform_responses_api_tools_to_chat_completion_tools(

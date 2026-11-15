@@ -47,6 +47,7 @@ from litellm.completion_extras.litellm_responses_transformation.transformation i
     OpenAiResponsesToChatCompletionStreamIterator,
     tool_call_dict_from_output_item,
 )
+from litellm.litellm_core_utils.tool_fields import qualified_member_name
 from litellm.llms.base_llm.guardrail_translation.base_translation import (
     BaseTranslation,
     StreamingScanKey,
@@ -626,7 +627,7 @@ class OpenAIResponsesHandler(BaseTranslation):
             () if is_server_tool_search_tool(tool) else form.chat_tools
             for tool, form in zip(
                 scanned_tools,
-                LiteLLMCompletionResponsesConfig.responses_tools_to_chat_forms(scanned_tools),
+                LiteLLMCompletionResponsesConfig.responses_tools_to_chat_forms(scanned_tools, qualified_member_name),
                 strict=True,
             )
         )

@@ -17,6 +17,7 @@ Tool: TypeAlias = Mapping[str, object]
 IndexedKey: TypeAlias = tuple[str, int]
 
 _TOOL_ADAPTER: Final = TypeAdapter(dict[str, object])
+_DEFAULT_FUNCTION_FIELDS: Final = (("strict", False), ("description", ""))
 _CHAT_TOOL_TOP_LEVEL_KEYS: Final = frozenset({"type", "function"})
 
 
@@ -48,38 +49,87 @@ def _chat_tool_key(tool: Tool) -> str:
     return f"{tool_type}:{tool.get('server_label') or tool.get('name') or ''}"
 
 
-def _indexed_keys(tools: Sequence[Tool]) -> tuple[IndexedKey, ...]:
-    keys: Final = tuple(_chat_tool_key(tool) for tool in tools)
-    positions_by_key: Final = groupby(sorted(range(len(keys)), key=keys.__getitem__), key=keys.__getitem__)
-    ordinal_by_position: Final = MappingProxyType(
-        {position: ordinal for _, positions in positions_by_key for ordinal, position in enumerate(positions)}
-    )
+def _key_positions(keys: Sequence[str]) -> Mapping[str, tuple[int, ...]]:
+    ordered: Final = sorted(range(len(keys)), key=keys.__getitem__)
+    return MappingProxyType({key: tuple(positions) for key, positions in groupby(ordered, key=keys.__getitem__)})
+
+
+def _positional_ordinals(positions: Mapping[str, tuple[int, ...]]) -> Mapping[int, int]:
+    return {position: ordinal for ordinal, position in chain.from_iterable(map(enumerate, positions.values()))}
+
+
+def _indexed_keys(keys: Sequence[str], positions: Mapping[str, tuple[int, ...]]) -> tuple[IndexedKey, ...]:
+    ordinal_by_position: Final = _positional_ordinals(positions)
     return tuple((key, ordinal_by_position[position]) for position, key in enumerate(keys))
 
 
-def _kept_ordinals(flattened: Sequence[Tool], guardrailed: Sequence[Tool]) -> tuple[int | None, ...]:
-    if len(guardrailed) >= len(flattened):
-        return tuple(range(len(guardrailed)))
-    remaining: Final = iter(enumerate(flattened))
-    return tuple(next((ordinal for ordinal, tool in remaining if tool == kept), None) for kept in guardrailed)
+def _comparable(tool: Tool, *, with_description: bool) -> Tool:
+    fields: Final = {key: value for key, value in tool.items() if value is not None and key != "function"}
+    if "function" not in tool:
+        return fields
+    function: Final = {
+        key: value
+        for key, value in _function_fields(tool).items()
+        if value is not None
+        and (key, value) not in _DEFAULT_FUNCTION_FIELDS
+        and (with_description or key != "description")
+    }
+    return {**fields, "function": function}
 
 
-def _same_key_tools(tools: Sequence[Tool], key: str) -> tuple[Tool, ...]:
-    return tuple(tool for tool in tools if _chat_tool_key(tool) == key)
+def _leftmost_alignment(originals: Sequence[Tool], kept: Sequence[Tool]) -> tuple[int, ...] | None:
+    remaining: Final = iter(enumerate(originals))
+    aligned: Final = tuple(next((ordinal for ordinal, original in remaining if original == tool), -1) for tool in kept)
+    return None if -1 in aligned else aligned
 
 
-def _guardrailed_keys(flattened: Sequence[Tool], guardrailed: Sequence[Tool]) -> tuple[IndexedKey, ...] | None:
-    keys: Final = tuple(_chat_tool_key(tool) for tool in guardrailed)
-    ordinals_by_key: Final = MappingProxyType(
-        {
-            key: iter(_kept_ordinals(_same_key_tools(flattened, key), _same_key_tools(guardrailed, key)))
-            for key in frozenset(keys)
-        }
-    )
-    indexed: Final = tuple((key, next(ordinals_by_key[key])) for key in keys)
-    if any(ordinal is None for _, ordinal in indexed):
+def _unique_alignment(
+    originals: Sequence[Tool], kept: Sequence[Tool], *, with_description: bool
+) -> tuple[int, ...] | None:
+    original_views: Final = tuple(_comparable(tool, with_description=with_description) for tool in originals)
+    kept_views: Final = tuple(_comparable(tool, with_description=with_description) for tool in kept)
+    leftmost: Final = _leftmost_alignment(original_views, kept_views)
+    rightmost: Final = _leftmost_alignment(original_views[::-1], kept_views[::-1])
+    if leftmost is None or rightmost is None:
         return None
-    return tuple((key, ordinal) for key, ordinal in indexed if ordinal is not None)
+    return leftmost if leftmost == tuple(len(originals) - 1 - ordinal for ordinal in reversed(rightmost)) else None
+
+
+def _kept_ordinals(flattened: Sequence[Tool], guardrailed: Sequence[Tool]) -> tuple[int, ...] | None:
+    exact: Final = _unique_alignment(flattened, guardrailed, with_description=True)
+    return exact if exact is not None else _unique_alignment(flattened, guardrailed, with_description=False)
+
+
+def _positioned_ordinals(
+    flattened: Sequence[Tool],
+    guardrailed: Sequence[Tool],
+    flattened_positions: Sequence[int],
+    guardrailed_positions: Sequence[int],
+) -> tuple[tuple[int, int], ...] | None:
+    ordinals: Final = _kept_ordinals(
+        tuple(map(flattened.__getitem__, flattened_positions)),
+        tuple(map(guardrailed.__getitem__, guardrailed_positions)),
+    )
+    return None if ordinals is None else tuple(zip(guardrailed_positions, ordinals))
+
+
+def _guardrailed_keys(
+    flattened: Sequence[Tool], flattened_positions: Mapping[str, tuple[int, ...]], guardrailed: Sequence[Tool]
+) -> tuple[IndexedKey, ...] | None:
+    keys: Final = tuple(map(_chat_tool_key, guardrailed))
+    positions: Final = _key_positions(keys)
+    realigned: Final = tuple(
+        _positioned_ordinals(flattened, guardrailed, flattened_positions[key], kept)
+        for key, kept in positions.items()
+        if len(kept) < len(flattened_positions.get(key, ()))
+    )
+    if any(group is None for group in realigned):
+        return None
+    ordinal_by_position: Final = {
+        **_positional_ordinals(positions),
+        **dict(chain.from_iterable(group for group in realigned if group)),
+    }
+    return tuple((key, ordinal_by_position[position]) for position, key in enumerate(keys))
 
 
 def _namespace_members(namespace: Tool) -> tuple[Tool, ...]:
@@ -193,8 +243,10 @@ def merge_guardrailed_tools(
 ) -> tuple[Tool, ...] | None:
     guardrailed: Final = _validated_tools(guardrailed_tools)
     flattened: Final = tuple(chain.from_iterable(flattened_groups))
-    flattened_keys: Final = _indexed_keys(flattened)
-    guardrailed_keys: Final = _guardrailed_keys(flattened, guardrailed)
+    flattened_names: Final = tuple(map(_chat_tool_key, flattened))
+    flattened_positions: Final = _key_positions(flattened_names)
+    flattened_keys: Final = _indexed_keys(flattened_names, flattened_positions)
+    guardrailed_keys: Final = _guardrailed_keys(flattened, flattened_positions, guardrailed)
     if guardrailed_keys is None:
         return None
     guardrailed_by_key: Final = MappingProxyType(dict(zip(guardrailed_keys, guardrailed)))
