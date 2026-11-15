@@ -1020,3 +1020,43 @@ async def test_a_failing_commit_notification_never_reapplies_the_committed_charg
     assert _states(delivery_database) == [("notified", "applied", 0)]
     assert (await repository.apply_pending(_charge, on_commit=failing)).applied == 0
     assert delivery_database.execute("SELECT spend FROM totals").fetchone() == (0.5,)
+
+
+class _ClaimedElsewhereBeforeFailureRecording:
+    """Delegates transactions to the client, but lets another worker lock one claimed delivery after the batch
+    rolled back and before its failure is recorded."""
+
+    def __init__(self, client: Prisma, other_worker: psycopg.Connection[tuple[object, ...]], delivery_id: str) -> None:
+        self._client = client
+        self._other_worker = other_worker
+        self._delivery_id = delivery_id
+        self._opened = 0
+
+    def tx(self, *, timeout: "timedelta") -> "TransactionManager":
+        self._opened += 1
+        if self._opened == 2:
+            self._other_worker.execute(
+                'SELECT 1 FROM "LiteLLM_SpendLogDelivery" WHERE delivery_id = %s FOR UPDATE', (self._delivery_id,)
+            )
+        return self._client.tx(timeout=timeout)
+
+
+@pytest.mark.asyncio
+async def test_recording_a_failure_skips_a_delivery_another_worker_holds(
+    delivery_database: psycopg.Connection[tuple[object, ...]], delivery_client: Prisma
+) -> None:
+    _insert(delivery_database, (_row("free"), _row("held")))
+    url: Final = urlunsplit(urlsplit(os.environ["DATABASE_URL"])._replace(path=f"/{delivery_database.info.dbname}"))
+
+    async def rejected_batch(transaction: LedgerTransaction, rows: tuple[DeliveryProjection, ...]) -> None:
+        raise ValueError("Invalid projected destination")
+
+    with psycopg.connect(url) as other_worker:
+        try:
+            repository: Final = AccountingDeliveryRepository(
+                _ClaimedElsewhereBeforeFailureRecording(delivery_client, other_worker, "held")
+            )
+            await asyncio.wait_for(repository.apply_pending(rejected_batch), timeout=30)
+            assert _states(delivery_database) == [("free", "pending", 1), ("held", "pending", 0)]
+        finally:
+            other_worker.rollback()

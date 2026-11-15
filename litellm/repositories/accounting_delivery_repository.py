@@ -135,7 +135,10 @@ _FAILED: Final = """UPDATE "LiteLLM_SpendLogDelivery"
 SET attempts = attempts + 1, last_error = $3,
     next_attempt_at = CURRENT_TIMESTAMP + make_interval(secs => LEAST(300, power(2, LEAST(attempts, 8)) * (0.5 + random()))),
     state = $4::"AccountingDeliveryState"
-WHERE delivery_id = $1 AND state = 'pending' AND attempts = $2::integer
+WHERE delivery_id = (
+    SELECT delivery_id FROM "LiteLLM_SpendLogDelivery"
+    WHERE delivery_id = $1 AND state = 'pending' AND attempts = $2::integer FOR UPDATE SKIP LOCKED
+)
 RETURNING delivery_id, attempts"""
 _BACKLOG: Final = """SELECT COUNT(*) FILTER (WHERE state = 'pending') AS pending_count,
     COUNT(*) FILTER (WHERE state = 'parked') AS parked_count,
@@ -146,7 +149,7 @@ WHERE state IN ('pending', 'parked')"""
 _STORAGE: Final = """SELECT (SELECT COUNT(*) FROM "LiteLLM_SpendLogDelivery" WHERE is_batch) AS batch_count,
     pg_total_relation_size('"LiteLLM_SpendLogDelivery"') AS table_bytes"""
 _RELOCK: Final = """SELECT delivery_id, attempts FROM "LiteLLM_SpendLogDelivery"
-WHERE delivery_id = ANY($1::text[]) AND state = 'pending'
+WHERE (delivery_id, attempts) IN (SELECT * FROM unnest($1::text[], $2::integer[])) AND state = 'pending'
 ORDER BY delivery_id FOR UPDATE SKIP LOCKED"""
 _REPAIR: Final = """INSERT INTO "LiteLLM_SpendLogDelivery"
     (delivery_id, request_id, state, attempts, last_error, accounting_payload, is_batch)
@@ -204,11 +207,16 @@ async def _relocked(
 ) -> tuple[tuple[_Delivery, DeliveryProjection], ...]:
     """The claims still pending at the attempt count they were claimed at, locked for this transaction. Another
     worker that took one in the meantime changed its state or attempts, so it is left to that worker."""
+    rows: Final = _rows(claimed)
     locked: Final = frozenset(
-        (row.delivery_id, row.attempts)
-        for row in _DELIVERIES.validate_python(await transaction.query_raw(_RELOCK, list(_delivery_ids(claimed))))
+        row.delivery_id
+        for row in _DELIVERIES.validate_python(
+            await transaction.query_raw(
+                _RELOCK, tuple(row.delivery_id for row in rows), tuple(row.attempts for row in rows)
+            )
+        )
     )
-    return tuple(pair for pair in claimed if (pair[0].delivery_id, pair[0].attempts) in locked)
+    return tuple(pair for pair in claimed if pair[0].delivery_id in locked)
 
 
 def _is_index_row_size_failure(error: Exception) -> bool:
