@@ -4467,6 +4467,18 @@ def _tool_named(tools, name):
     return next(tool for tool in tools if tool.get("name") == name)
 
 
+def _with_description(chat_tool: dict, description: str) -> dict:
+    return {**chat_tool, "function": {**chat_tool["function"], "description": description}}
+
+
+def _function_tool_descriptions(tools: list[dict]) -> list[tuple[str | None, str, str]]:
+    return [
+        (tool["name"] if tool["type"] == "namespace" else None, function["name"], function["description"])
+        for tool in tools
+        for function in (tool["tools"] if tool["type"] == "namespace" else [tool])
+    ]
+
+
 class TestOpenAIResponsesHandlerNamespaceTools:
     """Codex sends MCP tools as ``namespace`` tools; a guardrail must never flatten them (GH #39183)"""
 
@@ -4528,10 +4540,14 @@ class TestOpenAIResponsesHandlerNamespaceTools:
         result: Final = await OpenAIResponsesHandler().process_input_messages(data, guardrail)
 
         assert result["tools"] == expected_tools
-        assert [tool["function"]["name"] for tool in guardrail.seen_inputs[0]["tools"]] == [shortened, shortened]
+        assert [tool["function"]["name"] for tool in guardrail.seen_inputs[0]["tools"]] == (
+            [shortened, f"{namespace}__{long_member['name']}"]
+            if top_level
+            else [f"{namespace}__{long_member['name']}", shortened]
+        )
 
     @staticmethod
-    def _tools_sharing_a_chat_name(top_level: bool) -> tuple[dict, dict, str]:
+    def _tools_sharing_a_shortened_name(top_level: bool) -> tuple[list[dict], dict, dict, str]:
         namespace: Final = "mcp__codex_apps__codex_document_control"
         long_member: Final = {
             "type": "function",
@@ -4546,19 +4562,19 @@ class TestOpenAIResponsesHandlerNamespaceTools:
             "description": "Fetch the raw bytes of a document",
             "parameters": {"type": "object"},
         }
-        return long_member, colliding, namespace
-
-    @pytest.mark.asyncio
-    @pytest.mark.parametrize("top_level", [False, True], ids=["sibling_member", "top_level_function"])
-    async def test_a_guardrail_dropping_the_first_of_two_tools_sharing_a_chat_name_keeps_the_second(
-        self, top_level: bool
-    ):
-        long_member, colliding, namespace = self._tools_sharing_a_chat_name(top_level)
         tools: Final = (
             [colliding, {"type": "namespace", "name": namespace, "tools": [long_member]}]
             if top_level
             else [{"type": "namespace", "name": namespace, "tools": [long_member, colliding]}]
         )
+        return tools, long_member, colliding, namespace
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("top_level", [False, True], ids=["sibling_member", "top_level_function"])
+    async def test_a_guardrail_dropping_the_first_of_two_tools_sharing_a_shortened_name_keeps_the_second(
+        self, top_level: bool
+    ):
+        tools, long_member, colliding, namespace = self._tools_sharing_a_shortened_name(top_level)
         expected_tools: Final = (
             [{"type": "namespace", "name": namespace, "tools": [long_member]}]
             if top_level
@@ -4574,19 +4590,110 @@ class TestOpenAIResponsesHandlerNamespaceTools:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("top_level", [False, True], ids=["sibling_member", "top_level_function"])
-    async def test_a_guardrail_dropping_and_editing_tools_sharing_a_chat_name_is_rejected(self, top_level: bool):
-        long_member, colliding, namespace = self._tools_sharing_a_chat_name(top_level)
-        tools: Final = (
-            [colliding, {"type": "namespace", "name": namespace, "tools": [long_member]}]
+    async def test_a_guardrail_dropping_one_tool_sharing_a_shortened_name_edits_the_one_it_kept(self, top_level: bool):
+        tools, long_member, colliding, namespace = self._tools_sharing_a_shortened_name(top_level)
+        expected_tools: Final = (
+            [{"type": "namespace", "name": namespace, "tools": [{**long_member, "description": "edited"}]}]
             if top_level
-            else [{"type": "namespace", "name": namespace, "tools": [long_member, colliding]}]
+            else [{"type": "namespace", "name": namespace, "tools": [{**colliding, "description": "edited"}]}]
+        )
+        guardrail: Final = ToolEditingGuardrail(
+            edit=lambda chat_tools: [_with_description(chat_tools[1], "edited")], guardrail_name="test"
         )
 
-        def drop_first_and_edit_second(chat_tools: list[dict]) -> list[dict]:
-            kept: Final = chat_tools[1]
-            return [{**kept, "function": {**kept["function"], "description": "edited"}}]
+        result: Final = await OpenAIResponsesHandler().process_input_messages(
+            {**_codex_request("hi"), "tools": tools}, guardrail
+        )
 
-        guardrail: Final = ToolEditingGuardrail(edit=drop_first_and_edit_second, guardrail_name="test")
+        assert result["tools"] == expected_tools
+
+    @staticmethod
+    def _top_level_function_named_like_a_member(member_parameters: dict) -> list[dict]:
+        return [
+            {
+                "type": "function",
+                "name": "mcp__docs__get_document",
+                "description": "Top-level document getter",
+                "parameters": {"type": "object", "properties": {"doc_id": {"type": "string"}}},
+            },
+            {
+                "type": "namespace",
+                "name": "mcp__docs",
+                "tools": [
+                    {
+                        "type": "function",
+                        "name": "get_document",
+                        "description": "Namespace document getter",
+                        "parameters": member_parameters,
+                    }
+                ],
+            },
+        ]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "dropped, expected",
+        [
+            (0, [("mcp__docs", "get_document", "edited")]),
+            (1, [(None, "mcp__docs__get_document", "edited")]),
+        ],
+        ids=["drop_top_level", "drop_member"],
+    )
+    async def test_a_guardrail_dropping_one_of_two_same_named_tools_edits_the_one_it_kept(
+        self, dropped: int, expected: list[tuple[str | None, str, str]]
+    ):
+        tools: Final = self._top_level_function_named_like_a_member(
+            {"type": "object", "properties": {"path": {"type": "string"}}}
+        )
+        guardrail: Final = ToolEditingGuardrail(
+            edit=lambda chat_tools: [_with_description(chat_tools[1 - dropped], "edited")], guardrail_name="test"
+        )
+
+        result: Final = await OpenAIResponsesHandler().process_input_messages(
+            {**_codex_request("hi"), "tools": tools}, guardrail
+        )
+
+        assert _function_tool_descriptions(result["tools"]) == expected
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "dropped, expected",
+        [
+            (0, [("mcp__docs", "get_document", "Namespace document getter")]),
+            (1, [(None, "mcp__docs__get_document", "Top-level document getter")]),
+        ],
+        ids=["drop_top_level", "drop_member"],
+    )
+    async def test_a_guardrail_dropping_one_of_two_same_named_tools_and_stripping_defaults_keeps_the_right_one(
+        self, dropped: int, expected: list[tuple[str | None, str, str]]
+    ):
+        tools: Final = self._top_level_function_named_like_a_member(
+            {"type": "object", "properties": {"doc_id": {"type": "string"}}}
+        )
+
+        def drop_and_strip_defaults(chat_tools: list[dict]) -> list[dict]:
+            kept: Final = chat_tools[1 - dropped]
+            function: Final = {key: value for key, value in kept["function"].items() if key != "strict"}
+            return [{**kept, "function": function}]
+
+        guardrail: Final = ToolEditingGuardrail(edit=drop_and_strip_defaults, guardrail_name="test")
+
+        result: Final = await OpenAIResponsesHandler().process_input_messages(
+            {**_codex_request("hi"), "tools": tools}, guardrail
+        )
+
+        assert _function_tool_descriptions(result["tools"]) == expected
+
+    @pytest.mark.asyncio
+    async def test_a_guardrail_dropping_one_of_two_same_named_tools_and_rewriting_the_other_beyond_recognition_is_rejected(
+        self,
+    ):
+        tools: Final = self._top_level_function_named_like_a_member(
+            {"type": "object", "properties": {"doc_id": {"type": "string"}}}
+        )
+        guardrail: Final = ToolEditingGuardrail(
+            edit=lambda chat_tools: [_with_description(chat_tools[1], "edited")], guardrail_name="test"
+        )
 
         with pytest.raises(UnappliableRequestRewrite):
             await OpenAIResponsesHandler().process_input_messages({**_codex_request("hi"), "tools": tools}, guardrail)
