@@ -59,6 +59,7 @@ from litellm.constants import (
     INTERNAL_CALLBACK_NAMES,
     KUBERNETES_POD_ROUTING_KEY,
     LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL,
+    LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME,
     PROVIDER_REQUEST_ID_HEADERS,
     REALTIME_METERED_USAGE_KEY,
     REDACTED_BY_LITELLM,
@@ -8833,6 +8834,12 @@ def get_standard_logging_object_payload(
             api_base=StandardLoggingPayloadSetup.strip_trailing_slash(litellm_params.get("api_base", "")) or "",
             model_group=_model_group,
             model_id=_model_id,
+            deployment_id=_model_id
+            or (
+                metadata.get("health_check_deployment_id")
+                if clean_metadata.get("user_api_key_hash") == LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME
+                else None
+            ),
             requester_ip_address=clean_metadata.get("requester_ip_address", None),
             user_agent=clean_metadata.get("user_agent", None),
             messages=(

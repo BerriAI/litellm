@@ -2606,7 +2606,9 @@ async def test_model_connection(
             )
 
         # Get model name from litellm_params
-        request_litellm_params: Final = litellm_params or {}
+        request_litellm_params: Final = {
+            key: value for key, value in (litellm_params or {}).items() if key != "litellm_metadata"
+        }
         # Reject request-supplied os.environ/ references. Config values are
         # already resolved before reaching this endpoint; any remaining
         # reference must have come from the request body.

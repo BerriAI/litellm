@@ -3988,6 +3988,7 @@ class StandardLoggingPayload(ClassifierAudit):
     model_map_information: StandardLoggingModelInformation
     model: str
     model_id: str | None
+    deployment_id: ReadOnly[NotRequired[str | None]]
     model_group: str | None
     api_base: str
     metadata: StandardLoggingMetadata

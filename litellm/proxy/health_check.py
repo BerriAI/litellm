@@ -601,10 +601,14 @@ async def _run_model_health_check(model: dict):
     probe_params: Final = (
         {**litellm_params, "model_info": {"mode": model_info["mode"]}} if "mode" in model_info else litellm_params
     )
+    deployment_id: Final = _deployment_id(model)
+    identity: Final[Mapping[str, object]] = (
+        {} if deployment_id is None else {"litellm_metadata": {"health_check_deployment_id": deployment_id}}
+    )
 
     return await run_with_timeout(
         litellm.ahealth_check(
-            probe_params,
+            {**probe_params, **identity},
             mode=mode,
             prompt=DEFAULT_HEALTH_CHECK_PROMPT,
             input=["test from litellm"],
