@@ -396,11 +396,9 @@ const ModelInfoEditForm: React.FC<ModelInfoEditFormProps> = ({
 }) => {
   const { t } = useTranslation();
   // Neither RHF's blur-based touchedFields nor its resettable dirtyFields matches antd's touched-on-change.
-  const touchedRef = React.useRef<ReadonlySet<string>>(new Set<string>());
-  const isFieldTouched = React.useCallback((field: TouchedPricingField) => touchedRef.current.has(field), []);
-  const markTouched = (field: string) => {
-    touchedRef.current = new Set([...touchedRef.current, field]);
-  };
+  const [touchedFields, setTouchedFields] = React.useState<ReadonlySet<string>>(() => new Set<string>());
+  const isFieldTouched = (field: TouchedPricingField) => touchedFields.has(field);
+  const markTouched = (field: string) => setTouchedFields((current) => new Set([...current, field]));
 
   // react-hook-form refreshes control._options every render, so this rebuild is what the next submit runs.
   const resolver: Resolver<ModelEditFormValues, unknown, ModelEditSubmitValues> = (values, context, options) =>
@@ -429,7 +427,7 @@ const ModelInfoEditForm: React.FC<ModelInfoEditFormProps> = ({
 
   const cancel = () => {
     form.reset(toModelEditFormValues(localModelData, isWildcardModel));
-    touchedRef.current = new Set<string>();
+    setTouchedFields(new Set<string>());
     onCancel();
   };
 
