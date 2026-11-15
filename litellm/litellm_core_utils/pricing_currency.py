@@ -160,8 +160,6 @@ def _converted_rates(
 
 
 def _converted_tiers(field: str, value: object, rate: Decimal) -> object | PricingCurrencyError:
-    if value is None:
-        return None
     if isinstance(value, (str, Mapping)) or not isinstance(value, Sequence):
         return PricingCurrencyError("invalid_price", f"{field} must be a list of tiers, got {value!r}")
     tiers: Final = tuple(
@@ -173,8 +171,6 @@ def _converted_tiers(field: str, value: object, rate: Decimal) -> object | Prici
 
 
 def _converted_video_clips(field: str, value: object, rate: Decimal) -> object | PricingCurrencyError:
-    if value is None:
-        return None
     clips: Final = _str_mapping(value)
     if clips is None:
         return PricingCurrencyError("invalid_price", f"{field} must be a mapping of clip prices, got {value!r}")

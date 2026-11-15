@@ -14,11 +14,13 @@ from litellm.litellm_core_utils.pricing_currency import (
     PRICING_SOURCE,
     USD_PRICING,
     NormalizedPricing,
+    PricingCurrency,
     PricingCurrencyError,
     boolean_price_error,
     frozen_pricing_snapshot,
     normalize_deployment_pricing,
     pricing_configuration_error,
+    pricing_revision,
     request_pricing_currency_error,
     routed_pricing_snapshot,
     source_currency_view,
@@ -664,3 +666,114 @@ async def test_a_free_currency_priced_deployment_logs_a_known_zero_cost(monkeypa
     assert payload["response_cost"] == 0.0
     breakdown: Final = payload["cost_breakdown"]
     assert isinstance(breakdown, Mapping) and breakdown["pricing_currency"] == "EUR"
+
+
+def test_routing_a_call_drops_a_pricing_snapshot_left_in_its_other_metadata_bucket() -> None:
+    from litellm.router_rust.invoke.shaping import Shaping, update_kwargs_with_deployment
+
+    selected: Final = Deployment(
+        model_name="g",
+        litellm_params={  # pyright: ignore[reportArgumentType]  # a config entry
+            "model": "openai/currency-demo",
+            "api_key": "sk-test",
+            "pricing_currency": "EUR",
+            "usd_per_currency_unit": EUR_RATE,
+            "input_cost_per_token": 4e-06,
+        },
+        model_info={"id": "eur-batch"},
+    ).to_json(exclude_none=True)
+    stale: Final = frozen_pricing_snapshot({**selected["model_info"], "input_cost_per_token": 9.0})
+    kwargs: Final = {"metadata": {"model_info": selected["model_info"], PRICING_SNAPSHOT: stale}}
+    shaping: Final = Shaping(
+        default_litellm_params={},
+        timeout=None,
+        explicit_timeout=None,
+        request_timeout=None,
+        stream_timeout=None,
+        cache_responses=False,
+    )
+
+    update_kwargs_with_deployment(shaping, selected, kwargs, usage=None, function_name="_acreate_batch")
+
+    other_bucket: Final = kwargs["metadata"]
+    assert isinstance(other_bucket, Mapping) and PRICING_SNAPSHOT not in other_bucket
+    entry: Final = routed_pricing_snapshot(kwargs)
+    assert entry is not None and entry["input_cost_per_token"] == USD_INPUT
+
+
+@pytest.mark.parametrize(
+    "model_info",
+    [
+        {"tiered_pricing": {"range": [0, 10], "input_cost_per_token": 1.0}},
+        {"off_peak_pricing": "half price at night"},
+        {"output_cost_per_video_clip": {"720p": "cheap"}},
+    ],
+    ids=["tiers-not-a-list", "off-peak-not-a-table", "clip-not-a-table"],
+)
+def test_a_malformed_price_table_is_refused_with_a_reason(model_info: Mapping[str, object]) -> None:
+    assert _error({"pricing_currency": "EUR", "usd_per_currency_unit": 1.1}, model_info).kind == "invalid_price"
+
+
+def test_an_unset_rate_inside_a_price_table_stays_unset() -> None:
+    result: Final = _normalized(
+        {"pricing_currency": "EUR", "usd_per_currency_unit": EUR_RATE},
+        {"output_cost_per_video_clip": {"720p": None, "1080p": {"5s": 4.0}}},
+    )
+    assert result.model_info["output_cost_per_video_clip"] == {"720p": None, "1080p": {"5s": 2.0}}
+
+
+@pytest.mark.parametrize(
+    ("rate", "hashed_rate", "litellm_params"),
+    [("not a rate", "1", {"input_cost_per_token": 4e-06}), ("0.5", "0.5", {"input_cost_per_token": "free"})],
+    ids=["invalid-rate", "unconvertible-price"],
+)
+def test_a_self_consistent_provenance_record_with_bad_values_is_dropped(
+    rate: str, hashed_rate: str, litellm_params: Mapping[str, object]
+) -> None:
+    revision: Final = pricing_revision(PricingCurrency.EUR, Decimal(hashed_rate), litellm_params, {})
+    record: Final = {
+        "currency": "EUR",
+        "usd_per_currency_unit": rate,
+        "revision": revision,
+        "litellm_params": dict(litellm_params),
+        "model_info": {},
+    }
+    rebuilt: Final = _normalized({"input_cost_per_token": USD_INPUT}, {PRICING_SOURCE: record})
+    assert rebuilt.source is None and PRICING_SOURCE not in rebuilt.model_info
+
+
+def test_a_snapshot_on_a_deployment_without_a_currency_record_is_ignored() -> None:
+    usd_info: Final = {"id": "usd", "input_cost_per_token": USD_INPUT}
+    snapshot: Final = frozen_pricing_snapshot({**usd_info, "input_cost_per_token": 9.0})
+    assert routed_pricing_snapshot({"metadata": {"model_info": usd_info, PRICING_SNAPSHOT: snapshot}}) is None
+    assert routed_pricing_snapshot(None) is None
+
+
+def test_building_a_deployment_with_an_invalid_currency_raises_its_reason() -> None:
+    with pytest.raises(ValueError, match="pricing_currency must be one of EUR, HUF, USD"):
+        Deployment(
+            model_name="g",
+            litellm_params={"model": "openai/currency-demo", "pricing_currency": "GBP", "input_cost_per_token": 1e-6},  # pyright: ignore[reportArgumentType]  # a config entry
+        )
+
+
+def test_a_selected_record_is_priced_from_itself_once_the_cost_map_moved_to_a_newer_revision() -> None:
+    from litellm.router_python_host import PythonHost
+    from litellm.router_rust.surface.registry import selected_pricing_snapshot
+
+    def eur(rate: str) -> dict[str, object]:  # mutable-ok: a model_list entry
+        return _priced(
+            "eur", "eur-rebuilt", pricing_currency="EUR", usd_per_currency_unit=rate, input_cost_per_token=4e-06
+        )
+
+    router: Final = Router(model_list=[eur(EUR_RATE)])
+    selected: Final = Deployment(**eur(EUR_RATE)).to_json(exclude_none=True)  # pyright: ignore[reportArgumentType]  # a config entry
+    router.apply(ChangeSet(upsert=[Deployment(**eur("5"))]))  # pyright: ignore[reportArgumentType]  # a config entry
+
+    snapshot: Final = selected_pricing_snapshot(PythonHost(), selected)
+
+    assert snapshot is not None
+    entry: Final = routed_pricing_snapshot(
+        {"metadata": {"model_info": selected["model_info"], PRICING_SNAPSHOT: snapshot}}
+    )
+    assert entry is not None and entry["input_cost_per_token"] == USD_INPUT
