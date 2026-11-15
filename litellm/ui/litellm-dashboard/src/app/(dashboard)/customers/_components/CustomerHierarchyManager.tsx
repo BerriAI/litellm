@@ -308,7 +308,11 @@ function HierarchyChildTable(props: ScopeProps) {
         <HierarchyCreateAction hierarchy={hierarchy} selected={props.selected} scope={props.scope} />
       </div>
       {childTab === "members" && (
-        <CustomerMemberSearch value={hierarchy.memberSearch} onSearch={hierarchy.setMemberSearch} />
+        <CustomerMemberSearch
+          key={props.selected.team?.customer_team_id ?? ""}
+          value={hierarchy.memberSearch}
+          onSearch={hierarchy.setMemberSearch}
+        />
       )}
       <HierarchyChildRows {...props} childLabel={childLabel} showTeam={showTeam} />
     </>

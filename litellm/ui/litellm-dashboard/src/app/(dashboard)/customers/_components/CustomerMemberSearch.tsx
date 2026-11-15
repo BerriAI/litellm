@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Search } from "lucide-react";
-import { useDebouncedCallback } from "@tanstack/react-pacer/debouncer";
+import { useDebouncer } from "@tanstack/react-pacer/debouncer";
 import { useTranslation } from "react-i18next";
 import { Input } from "@/components/ui/input";
 import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
@@ -17,7 +17,7 @@ export default function CustomerMemberSearch({
   const { t } = useTranslation();
   const [draft, setDraft] = useState(value);
   const submitted = useRef(value);
-  const submit = useDebouncedCallback(
+  const debouncer = useDebouncer(
     (next: string) => {
       submitted.current = next;
       onSearch(next);
@@ -26,9 +26,10 @@ export default function CustomerMemberSearch({
   );
   useEffect(() => {
     if (submitted.current === value) return;
+    debouncer.cancel();
     submitted.current = value;
     setDraft(value);
-  }, [value]);
+  }, [debouncer, value]);
   return (
     <div className="relative mb-4 w-full max-w-xs">
       <Search aria-hidden="true" className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
@@ -38,7 +39,7 @@ export default function CustomerMemberSearch({
         value={draft}
         onChange={(event) => {
           setDraft(event.target.value);
-          submit(event.target.value.trim());
+          debouncer.maybeExecute(event.target.value.trim());
         }}
         aria-label={t("customerPortal.hierarchy.searchMembers")}
         placeholder={t("customerPortal.hierarchy.searchMembers")}
