@@ -1244,10 +1244,12 @@ async def get_file_content(
         if httpx_response is None:
             raise ValueError(f"Invalid response - response.response is None - got {response}")
 
+        from litellm.proxy.pass_through_endpoints.pass_through_endpoints import HttpPassThroughEndpointHelpers
+
         return Response(
             content=httpx_response.content,
             status_code=httpx_response.status_code,
-            headers=httpx_response.headers,
+            headers=HttpPassThroughEndpointHelpers.get_response_headers(headers=httpx_response.headers),
         )
 
     except Exception as e:
