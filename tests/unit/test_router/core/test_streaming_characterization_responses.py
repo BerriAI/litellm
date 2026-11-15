@@ -18,6 +18,7 @@ import litellm
 from litellm.exceptions import MidStreamFallbackError
 from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
 from litellm.router_core import RouterCore
+from litellm.types.router import RetryPolicy
 from litellm.types.llms.openai import (
     OutputTextDeltaEvent,
     ResponseAPIUsage,
@@ -456,3 +457,63 @@ async def test_the_primary_and_fallback_streams_are_closed(make_core: MakeCore, 
     core = build(make_core)
     await collect_event_types(await open_stream(core))
     assert [stream.closed for stream in opened] == [True, True]
+
+
+# --- same-group retries before output --------------------------------------------------
+
+GROUP_A_TWICE: Final = [deployment("a", "a1"), deployment("a", "a2")]
+
+
+def retried_ok() -> Callable[..., ScriptedResponsesStream]:
+    return responses_stream(
+        Event(CREATED), Event(TEXT_DELTA), Event(COMPLETED), hidden_params={"model_id": "retry-stream"}
+    )
+
+
+async def test_a_rate_limit_before_output_is_retried_on_the_other_deployment_of_the_group(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    host.answer("*", responses_stream(Event(CREATED), Event(IN_PROGRESS), error=cut()), retried_ok())
+    core = make_core(model_list=GROUP_A_TWICE, num_retries=1)
+    stream = await open_stream(core)
+    assert await collect_event_types(stream) == [CREATED, TEXT_DELTA, COMPLETED]
+    first, retried = host.deployments_called()
+    assert retried != first
+    assert hidden(stream)["model_id"] == "retry-stream"
+    assert hidden(stream)["additional_headers"]["x-litellm-attempted-retries"] == 1
+
+
+async def test_a_rate_limit_retry_policy_retries_a_responses_stream_when_num_retries_is_zero(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    host.answer("*", responses_stream(Event(CREATED), error=cut()), retried_ok())
+    core = make_core(model_list=GROUP_A_TWICE, num_retries=0, retry_policy=RetryPolicy(RateLimitErrorRetries=2))
+    stream = await open_stream(core)
+    assert await collect_event_types(stream) == [CREATED, TEXT_DELTA, COMPLETED]
+    assert len(host.deployments_called()) == 2
+    assert hidden(stream)["additional_headers"]["x-litellm-max-retries"] == 2
+
+
+async def test_once_the_stream_retries_are_spent_the_fallback_answers(make_core: MakeCore, host: ScriptedHost) -> None:
+    host.answer("openai/a", responses_stream(Event(CREATED), error=cut()))
+    host.answer("openai/b", fallback_ok())
+    core = build(make_core, num_retries=1)
+    stream = await open_stream(core)
+    events = [event async for event in stream]  # pyright: ignore[reportGeneralTypeIssues]  # an async stream
+    assert [event.type for event in events] == [CREATED, TEXT_DELTA, COMPLETED]
+    called = host.deployments_called()
+    assert called[-1] == "b"
+    assert called.count("a") == 2
+    assert hidden(stream)["model_id"] == "b-stream"
+    assert all(event._hidden_params["model_id"] == "b-stream" for event in events)
+
+
+async def test_after_text_the_stream_is_not_retried_in_the_group(make_core: MakeCore, host: ScriptedHost) -> None:
+    host.answer("*", responses_stream(Event(CREATED), Event(TEXT_DELTA), error=cut("Hel")), retried_ok())
+    core = make_core(model_list=GROUP_A_TWICE, num_retries=1)
+    stream = await open_stream(core)
+    seen: list[object] = []
+    with pytest.raises(litellm.RateLimitError, match="stream cut"):
+        await drain_into(stream, seen)
+    assert [getattr(event, "type") for event in seen] == [CREATED, TEXT_DELTA]
+    assert len(host.deployments_called()) == 1
