@@ -17,7 +17,6 @@ import { sessionSpendLogsCall } from "../../networking";
 import { useQuery } from "@tanstack/react-query";
 import { getSpendString } from "@/utils/dataUtils";
 import { normalizeGuardrailEntries, sortSessionLogs, SessionLogSortMode } from "./utils";
-import { DRAWER_WIDTH } from "./constants";
 import { useLogDetails } from "@/app/(dashboard)/hooks/logDetails/useLogDetails";
 import { useUserLookup } from "@/app/(dashboard)/hooks/users/useUsers";
 
@@ -314,8 +313,7 @@ export function LogDetailsDrawer({
       <SheetContent
         side="right"
         showCloseButton={false}
-        className="gap-0 overflow-hidden p-0 data-[side=right]:sm:max-w-none"
-        style={{ width: DRAWER_WIDTH }}
+        className="gap-0 overflow-hidden p-0 data-[side=right]:sm:max-w-none w-full sm:w-[60%]"
       >
         <SheetTitle className="sr-only">
           {logEntry?.request_id
