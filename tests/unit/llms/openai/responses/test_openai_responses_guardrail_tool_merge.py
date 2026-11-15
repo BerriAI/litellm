@@ -118,6 +118,90 @@ def test_interleaved_duplicate_names_keep_their_own_ordinals():
     assert all(merged[position] is original[position] for position in (0, 1, 2, 4))
 
 
+_DOC_ID = {"type": "object", "properties": {"doc_id": {"type": "string"}}}
+
+
+def _doc_getter(name, description):
+    return {**_function(name, description), "parameters": _DOC_ID}
+
+
+def _top_level_and_member_sharing_a_name():
+    return [
+        _doc_getter("mcp__docs__get_document", "Top-level document getter."),
+        {
+            "type": "namespace",
+            "name": "mcp__docs",
+            "description": "Docs tools",
+            "tools": [_doc_getter("get_document", "Namespace document getter.")],
+        },
+    ]
+
+
+def test_reordered_tools_sharing_a_name_keep_their_own_descriptions():
+    original = _top_level_and_member_sharing_a_name()
+    groups = _groups(original)
+
+    merged = merge_guardrailed_tools(original, groups, list(reversed(_flat(groups))))
+
+    assert merged == tuple(original)
+    assert all(merged_tool is original_tool for merged_tool, original_tool in zip(merged, original))
+
+
+def test_a_replacement_for_a_dropped_tool_sharing_a_name_takes_the_dropped_tools_place():
+    original = _top_level_and_member_sharing_a_name()
+    groups = _groups(original)
+    replacement = {
+        "type": "function",
+        "function": {"name": "mcp__docs__get_document", "description": "Replacement", "parameters": _DOC_ID},
+    }
+
+    merged = merge_guardrailed_tools(original, groups, [_flat(groups)[1], replacement])
+
+    assert merged == (
+        LiteLLMCompletionResponsesConfig.transform_chat_completion_tool_params_to_responses_api_tools([replacement])[0],
+        original[1],
+    )
+    assert merged[1] is original[1]
+
+
+def test_a_member_sharing_a_name_keeps_its_place_when_the_guardrail_edits_its_parameters():
+    original = _top_level_and_member_sharing_a_name()
+    groups = _groups(original)
+    flat = _flat(groups)
+    narrowed = {"type": "object", "properties": {"doc_id": {"type": "string", "pattern": "^N-"}}}
+    edited = {**flat[1], "function": {**flat[1]["function"], "parameters": narrowed}}
+
+    merged = merge_guardrailed_tools(original, groups, [edited, flat[0]])
+
+    assert merged == (original[0], {**original[1], "tools": [{**original[1]["tools"][0], "parameters": narrowed}]})
+    assert merged[0] is original[0]
+
+
+def test_an_edited_member_is_matched_by_parameters_after_the_unchanged_tools_are_matched():
+    member = _doc_getter("get_document", "Namespace document getter.")
+    original = [
+        {"type": "namespace", "name": "mcp__docs", "description": "Docs tools", "tools": [member]},
+        {
+            "type": "namespace",
+            "name": "mcp",
+            "description": "MCP tools",
+            "tools": [_doc_getter("docs__get_document", "Second namespace document getter.")],
+        },
+        {
+            **_function("mcp__docs__get_document", "Top-level document getter."),
+            "parameters": {"type": "object", "properties": {"name": {}, "country": {}}},
+        },
+    ]
+    groups = _groups(original)
+    flat = _flat(groups)
+    edited = {**flat[0], "function": {**flat[0]["function"], "description": "edited by the guardrail"}}
+
+    merged = merge_guardrailed_tools(original, groups, [flat[1], edited])
+
+    assert merged == ({**original[0], "tools": [{**member, "description": "edited by the guardrail"}]}, original[1])
+    assert merged[1] is original[1]
+
+
 def test_edited_mcp_tool_is_rewritten():
     original = [{"type": "mcp", "server_label": "deepwiki", "server_url": "https://mcp.deepwiki.com/mcp"}]
     groups = _groups(original)
