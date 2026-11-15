@@ -94,7 +94,7 @@ def _process_image_response(response: Response, url: str, download_budget: int |
             f"Error: Unable to determine image content type from the server's headers, the URL, or the image bytes. url={url}"
         ) from e
 
-    result: Final = f"data:{img_type};base64,{base64_image}"
+    result: Final = f"data:{_canonical_media_type(img_type)};base64,{base64_image}"
     in_memory_cache.set_cache(url, result)
     return result
 
@@ -272,6 +272,10 @@ def _bare_media_type(media_type: str) -> str:
 
 def is_pdf_media_type(media_type: str) -> bool:
     return _bare_media_type(media_type) in _PDF_MEDIA_TYPES
+
+
+def _canonical_media_type(media_type: str) -> str:
+    return "application/pdf" if is_pdf_media_type(media_type) else media_type
 
 
 def is_unformatted_pdf_link(url: str, image_format: str | None) -> bool:

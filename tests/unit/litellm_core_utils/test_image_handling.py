@@ -321,6 +321,11 @@ def test_convert_url_to_base64_keeps_a_real_content_type(monkeypatch):
             "application/octet-stream; charset=binary",
             "data:application/pdf;base64,cGRm",
         ),
+        (
+            "https://docs.example/download?id=7",
+            "application/x-pdf",
+            "data:application/pdf;base64,cGRm",
+        ),
     ],
 )
 def test_convert_url_to_base64_uses_bare_content_type(
