@@ -14,7 +14,7 @@ use litellm_host::interceptors::{
     ResponseHead, ResultSource, WireRequest,
 };
 use litellm_llms::base_llm::{
-    auth::{Authenticated, ValidatedEnvironment, resolve_auth},
+    auth::{Authenticated, AzureAdTokenHosts, ValidatedEnvironment, resolve_auth},
     messages::{
         context::MessagesTransformContext,
         streaming::{self, ByteStream, StreamDecoder},
@@ -25,13 +25,12 @@ use litellm_llms_types::formats::messages::{
     MessagesOptionalParams, MessagesRequest, MessagesResponse,
 };
 use litellm_secrets::source::Secrets;
-use litellm_tracing::ByteChunk;
+use litellm_tracing::{ByteChunk, REDACTED};
 use serde_json::{Map, Value};
 
 use super::{
     Delivered, Error, HostAnswer, MessagesBody, MessagesCall, MessagesCallResponse, MessagesRoute,
-    Transport, TransportBody, TransportRequest, TransportResponse, UnencodableHeader,
-    WorkloadIdentity,
+    Transport, TransportRequest, TransportResponse, UnencodableHeader, WorkloadIdentity,
     common_utils::{MessagesProvider, merge_messages_header_sources, string_headers},
     constants::{
         MESSAGES_HTTP_ERROR_ATTEMPTS, MESSAGES_STREAM_ERROR_BODY_READ_SECS, MESSAGES_TIMEOUT_SECS,
@@ -42,7 +41,7 @@ use super::{
 use litellm_inference::{
     caching::{CacheRequest, CallCache},
     context::CallContext,
-    outbound::raw_leaf_outbound_request,
+    outbound::{raw_leaf_body, serialized_outbound_request},
 };
 
 struct ProviderCall {
@@ -180,8 +179,12 @@ pub(super) async fn execute(
 ) -> Result<MessagesCallResponse, Error> {
     let caller_keyed = caller_keyed(route).is_some();
     let request = provider_call(
-        &route.auth,
-        route.workload_identity.as_deref(),
+        CallerCredentials {
+            auth: &route.auth,
+            workload_identity: route.workload_identity.as_deref(),
+            azure_ad_token_hosts: route.azure_ad_token_hosts.clone(),
+            deferred_secrets: Some(route.secrets.as_ref()),
+        },
         provider,
         model,
         call,
@@ -246,9 +249,17 @@ fn execution_facts(
     }
 }
 
+/// What a provider call may authenticate with beyond its config: the shared token caches, a
+/// workload identity federation host and the Entra ID token sources of the caller and host.
+struct CallerCredentials<'a> {
+    auth: &'a AuthServices,
+    workload_identity: Option<&'a dyn WorkloadIdentity>,
+    azure_ad_token_hosts: AzureAdTokenHosts,
+    deferred_secrets: Option<&'a dyn litellm_secrets::source::SecretSource>,
+}
+
 async fn provider_call(
-    auth: &AuthServices,
-    workload_identity: Option<&dyn WorkloadIdentity>,
+    credentials: CallerCredentials<'_>,
     provider: MessagesProvider,
     model: String,
     call: MessagesCall,
@@ -279,6 +290,7 @@ async fn provider_call(
     )?;
     let transform_context = MessagesTransformContext {
         drops_unsupported_params: shaping.settings.drops_unsupported_params,
+        logs_dropped_params: config.logs_dropped_params(),
         ..MessagesTransformContext::new(shaping.capabilities, shaping.settings.drop_params)
     };
     let dropped_keys = top_level_paths(&shaping.settings.additional_drop_params);
@@ -294,9 +306,33 @@ async fn provider_call(
         extra_headers.unwrap_or_default(),
         scoped,
     ])))?;
+    let configured_key = api_key.as_deref().filter(|key| !key.is_empty()).or(shaping
+        .settings
+        .module_api_key
+        .as_ref()
+        .map(SecretValue::expose));
+    let deferred = match (
+        credentials.deferred_secrets,
+        config.deferred_secret_names(
+            credentials.azure_ad_token_hosts.host.is_some(),
+            &forwarded,
+            configured_key,
+            api_base.as_deref(),
+            &connection_params,
+            &env_lookup,
+        ),
+    ) {
+        (Some(source), names) if !names.is_empty() => Some(source.resolve(names).await?),
+        _ => None,
+    };
+    let env_lookup = |key: &str| {
+        secrets
+            .get(key)
+            .or_else(|| deferred.as_ref().and_then(|deferred| deferred.get(key)))
+    };
     let validated = match config.validate_federated_environment(
         forwarded,
-        api_key.as_deref(),
+        configured_key,
         &trimmed.model,
         &trimmed.params,
         &connection_params,
@@ -307,7 +343,7 @@ async fn provider_call(
             headers,
             missing,
             federate,
-        } => match workload_identity {
+        } => match credentials.workload_identity {
             Some(identity) => match identity
                 .token(&connection_params, api_base.as_deref())
                 .await?
@@ -317,7 +353,8 @@ async fn provider_call(
             },
             None => return Err(missing.into()),
         },
-    };
+    }
+    .with_azure_ad_token_hosts(credentials.azure_ad_token_hosts)?;
 
     let tool_custom_field = config.tool_custom_field(&trimmed.model);
     let requested_output_format = trimmed.params.output_format.clone();
@@ -346,6 +383,7 @@ async fn provider_call(
         ),
         auth: validated.auth,
     };
+    let body = config.finalize_request(body, &environment.headers, &transform_context);
 
     let request_context = RequestContext {
         model: body.model.clone(),
@@ -354,7 +392,10 @@ async fn provider_call(
         secret_fields: Vec::new(),
         api_key: api_key.map(SecretValue::new),
     };
-    let authenticated = resolve_auth(auth, environment, &|key| std::env::var(key).ok()).await?;
+    let authenticated = resolve_auth(credentials.auth, environment, &|key| {
+        std::env::var(key).ok()
+    })
+    .await?;
     let identity = ProviderIdentity {
         model: request_context.model.clone(),
         provider: request_context.custom_llm_provider.clone(),
@@ -505,9 +546,13 @@ async fn call_provider(
     let timeout = request
         .timeout
         .unwrap_or(Duration::from_secs(MESSAGES_TIMEOUT_SECS));
-    let response = match send_recovering(http, transport, &request, timeout, context).await? {
+    let (upstream, sent_body) =
+        send_recovering(http, transport, &request, timeout, context).await?;
+    let response = match upstream {
         Upstream::Native(response) => response,
-        Upstream::Hosted(response) => return hosted_response(response, request, context).await,
+        Upstream::Hosted(response) => {
+            return hosted_response(response, sent_body, request, context).await;
+        }
     };
     let ProviderCall {
         identity,
@@ -522,6 +567,8 @@ async fn call_provider(
     let head = ResponseHead {
         status: response.status().as_u16(),
         headers: super::encoding::header_pairs(response.headers()),
+        sent_body,
+        streamed: stream,
     };
     if stream {
         context
@@ -556,6 +603,7 @@ async fn call_provider(
 
 async fn hosted_response(
     response: TransportResponse,
+    sent_body: Bytes,
     request: ProviderCall,
     context: &CallContext<'_, impl Interceptors<Error>>,
 ) -> Result<MessagesCallResponse, Error> {
@@ -579,6 +627,8 @@ async fn hosted_response(
                 .raw_response_received(RawResponse::new(String::new()).with_head(ResponseHead {
                     status,
                     headers: headers.clone(),
+                    sent_body,
+                    streamed: true,
                 }))
                 .await?;
             let streamed =
@@ -593,9 +643,12 @@ async fn hosted_response(
     };
     log_response_body(&text);
     context
-        .raw_response_received(
-            RawResponse::new(text.clone()).with_head(ResponseHead { status, headers }),
-        )
+        .raw_response_received(RawResponse::new(text.clone()).with_head(ResponseHead {
+            status,
+            headers,
+            sent_body,
+            streamed: false,
+        }))
         .await?;
     if serde_json::from_str::<serde::de::IgnoredAny>(&text).is_err() {
         return Err(litellm_http::Error::upstream(status, text).into());
@@ -606,14 +659,14 @@ async fn hosted_response(
 fn hosted_request(
     authenticated: Authenticated,
     url: &str,
-    body: &Value,
+    body: Bytes,
     stream: bool,
 ) -> Result<TransportRequest, Error> {
     if authenticated.signer.is_none() {
         return Ok(TransportRequest {
             url: url.to_owned(),
             headers: authenticated.headers,
-            body: TransportBody::Json(body.clone()),
+            body,
             stream,
         });
     }
@@ -622,7 +675,7 @@ fn hosted_request(
         .iter()
         .map(|(name, _)| name.clone())
         .collect();
-    let signed = raw_leaf_outbound_request(authenticated, url, body, None)?;
+    let signed = serialized_outbound_request(authenticated, url, body.clone(), None)?;
     let headers = signed
         .headers()
         .iter()
@@ -635,15 +688,10 @@ fn hosted_request(
             Some((spelled, value.to_str().ok()?.to_owned()))
         })
         .collect();
-    let bytes = signed
-        .body()
-        .and_then(reqwest::Body::as_bytes)
-        .map(Bytes::copy_from_slice)
-        .unwrap_or_default();
     Ok(TransportRequest {
         url: signed.url().to_string(),
         headers,
-        body: TransportBody::Signed(bytes),
+        body,
         stream,
     })
 }
@@ -654,7 +702,7 @@ async fn send_recovering(
     request: &ProviderCall,
     timeout: Duration,
     context: &CallContext<'_, impl Interceptors<Error>>,
-) -> Result<Upstream, Error> {
+) -> Result<(Upstream, Bytes), Error> {
     let config = request.provider.config();
     let mut body = std::borrow::Cow::Borrowed(&request.wire.body);
     let mut attempt = 1;
@@ -680,16 +728,24 @@ async fn send_recovering(
             headers: request.wire.headers.clone(),
             signer: request.signer.clone(),
         };
+        let sent_body = raw_leaf_body(&body)?;
         let response = match transport {
             None => Upstream::Native(
-                send(http, authenticated, &request.wire.url, &body, timeout).await?,
+                send(
+                    http,
+                    authenticated,
+                    &request.wire.url,
+                    sent_body.clone(),
+                    timeout,
+                )
+                .await?,
             ),
             Some(transport) => Upstream::Hosted(
                 transport
                     .send(hosted_request(
                         authenticated,
                         &request.wire.url,
-                        &body,
+                        sent_body.clone(),
                         request.stream,
                     )?)
                     .await?,
@@ -703,7 +759,7 @@ async fn send_recovering(
         }
         let failure = match response {
             Upstream::Native(response) if response.status().is_success() => {
-                return Ok(Upstream::Native(response));
+                return Ok((Upstream::Native(response), sent_body));
             }
             Upstream::Native(response) => {
                 provider_failure(response, timeout, request.stream).await?
@@ -721,7 +777,7 @@ async fn send_recovering(
                     raised: Some(error),
                 }
             }
-            hosted @ Upstream::Hosted(_) => return Ok(hosted),
+            hosted @ Upstream::Hosted(_) => return Ok((hosted, sent_body)),
         };
         let retried = if attempt == MESSAGES_HTTP_ERROR_ATTEMPTS {
             None
@@ -756,10 +812,10 @@ async fn send(
     http: &litellm_http::Client,
     authenticated: Authenticated,
     url: &str,
-    body: &Value,
+    body: Bytes,
     timeout: Duration,
 ) -> Result<reqwest::Response, Error> {
-    let request = raw_leaf_outbound_request(authenticated, url, body, None)?;
+    let request = serialized_outbound_request(authenticated, url, body, None)?;
     tokio::time::timeout(timeout, litellm_inference::outbound::send(request, http))
         .await
         .map_err(litellm_http::Error::read_timeout)?
@@ -1014,7 +1070,31 @@ fn decoded_chunks(
 }
 
 fn log_request_body(provider: &str, stream: bool, body: &serde_json::Value) {
-    tracing::debug!(provider, stream, body = %body, "provider request");
+    tracing::debug!(provider, stream, body = %without_mcp_tokens(body), "provider request");
+}
+
+fn without_mcp_tokens(body: &Value) -> std::borrow::Cow<'_, Value> {
+    let Some(servers) = body.get("mcp_servers").and_then(Value::as_array) else {
+        return std::borrow::Cow::Borrowed(body);
+    };
+    let mut redacted = body.clone();
+    redacted["mcp_servers"] = servers.iter().map(without_mcp_token).collect();
+    std::borrow::Cow::Owned(redacted)
+}
+
+fn without_mcp_token(server: &Value) -> Value {
+    match server {
+        Value::Object(fields) if fields.contains_key("authorization_token") => Value::Object(
+            fields
+                .iter()
+                .map(|(key, value)| match key.as_str() {
+                    "authorization_token" => (key.clone(), Value::from(REDACTED)),
+                    _ => (key.clone(), value.clone()),
+                })
+                .collect(),
+        ),
+        other => other.clone(),
+    }
 }
 
 fn log_response_body(body: &str) {
@@ -1077,8 +1157,12 @@ mod tests {
         let interceptors = ();
         let context = CallContext::new(&interceptors, litellm_inference::CallOptions::default());
         provider_call(
-            &AuthServices::default(),
-            workload_identity,
+            CallerCredentials {
+                auth: &AuthServices::default(),
+                workload_identity,
+                azure_ad_token_hosts: AzureAdTokenHosts::default(),
+                deferred_secrets: None,
+            },
             config,
             model,
             call,
@@ -1746,13 +1830,13 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(call.wire.url, format!("{base}{path}"));
-        let signed = raw_leaf_outbound_request(
+        let signed = serialized_outbound_request(
             Authenticated {
                 headers: call.wire.headers,
                 signer: call.signer,
             },
             &call.wire.url,
-            &call.wire.body,
+            raw_leaf_body(&call.wire.body).unwrap(),
             None,
         )
         .unwrap();

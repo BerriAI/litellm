@@ -2,14 +2,24 @@ use std::time::Duration;
 
 use bytes::Bytes;
 
+use litellm_auth_gcp::{CredentialSource, GcpAuth};
 use litellm_http::Client;
 use litellm_s3::S3Uri;
 use litellm_s3::sdk::config::retry::RetryConfig;
 use litellm_s3::sdk::config::timeout::TimeoutConfig;
+use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
 use reqwest::header::{ETAG, HeaderMap, RETRY_AFTER};
 use url::Url;
 
-use crate::{Error, RETRYABLE_STATUSES, S3Access};
+use crate::{Error, GcsAccess, GcsUri, RETRYABLE_STATUSES, S3Access};
+
+const GCS_ENDPOINT: &str = "https://storage.googleapis.com";
+
+const OBJECT_NAME_ENCODE_SET: &AsciiSet = &NON_ALPHANUMERIC
+    .remove(b'-')
+    .remove(b'_')
+    .remove(b'.')
+    .remove(b'~');
 
 pub(crate) const MAX_BODY_BYTES: u64 = 100 * 1024 * 1024;
 
@@ -46,14 +56,19 @@ impl Rejected {
 pub(crate) async fn http(
     client: &Client,
     url: Url,
+    bearer: Option<&str>,
     timeout: Duration,
 ) -> Result<Fetched, Rejected> {
+    let request = match bearer {
+        Some(token) => client.get(url).bearer_auth(token),
+        None => client.get(url),
+    };
     let transport = |error: litellm_http::Error| Rejected {
         cause: Cause::Transport(Error::from(error)),
         retryable: true,
         retry_after: None,
     };
-    let mut response = tokio::time::timeout(timeout, client.get(url).send())
+    let mut response = tokio::time::timeout(timeout, request.send())
         .await
         .map_err(litellm_http::Error::read_timeout)
         .and_then(|sent| sent.map_err(litellm_http::Error::from))
@@ -133,6 +148,78 @@ pub(crate) async fn s3(
         Ok::<_, Error>(Fetched { body, etag })
     };
     fetched.await.map_err(Rejected::fatal)
+}
+
+pub(crate) async fn gcs(
+    client: &Client,
+    gcs: &GcsAccess,
+    object: &GcsUri,
+    timeout: Duration,
+) -> Result<Fetched, Rejected> {
+    let started = tokio::time::Instant::now();
+    let (endpoint, token) = match gcs {
+        GcsAccess::Environment => {
+            match emulator_endpoint(std::env::var("STORAGE_EMULATOR_HOST").ok()) {
+                Some(emulator) => (emulator, None),
+                None => (
+                    GCS_ENDPOINT.to_owned(),
+                    Some(
+                        bounded_token(
+                            timeout,
+                            GcpAuth::default().access_token(CredentialSource::application_default(
+                                &|name| std::env::var(name).ok(),
+                            )),
+                        )
+                        .await?,
+                    ),
+                ),
+            }
+        }
+        GcsAccess::Config {
+            endpoint,
+            token_source,
+        } => (
+            endpoint.clone(),
+            Some(bounded_token(timeout, token_source.token()).await?),
+        ),
+    };
+    let url = Url::parse(&format!(
+        "{}/storage/v1/b/{}/o/{}?alt=media",
+        endpoint.trim_end_matches('/'),
+        object.bucket,
+        utf8_percent_encode(&object.object, OBJECT_NAME_ENCODE_SET),
+    ))
+    .map_err(|error| Rejected::fatal(Error::from(error)))?;
+    http(
+        client,
+        url,
+        token.as_ref().map(|token| token.expose()),
+        timeout.saturating_sub(started.elapsed()),
+    )
+    .await
+}
+
+async fn bounded_token<T>(
+    timeout: Duration,
+    token: impl Future<Output = Result<T, litellm_auth_types::Error>>,
+) -> Result<T, Rejected> {
+    let retryable = |error| Rejected {
+        cause: Cause::Transport(error),
+        retryable: true,
+        retry_after: None,
+    };
+    tokio::time::timeout(timeout, token)
+        .await
+        .map_err(|elapsed| retryable(Error::gcs_token_timeout(elapsed)))?
+        .map_err(|error| retryable(Error::gcs_token(error)))
+}
+
+fn emulator_endpoint(host: Option<String>) -> Option<String> {
+    match host {
+        Some(host) if host.contains("://") => Some(host),
+        Some(host) if !host.is_empty() => Some(format!("http://{host}")),
+        _ => None,
+    }
 }
 
 fn append(body: &mut Vec<u8>, chunk: &Bytes) -> Result<(), Error> {

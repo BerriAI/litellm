@@ -1,44 +1,25 @@
-//! Health-check-driven routing: the background health checks' results, kept in the shared
-//! [`RouterCache`](crate::cache::RouterCache) under one key as Python's `DeploymentHealthCache`
-//! writes them, and the filter `_async_filter_health_check_unhealthy_deployments` /
+//! Health-check-driven routing: the background health checks' results, read from the host's
+//! [`RouterCache`](crate::cache::RouterCache) as Python's `DeploymentHealthCache` writes them, and
+//! the filter `_async_filter_health_check_unhealthy_deployments` /
 //! `_filter_health_check_unhealthy_deployments` run before the cooldown filter.
 
-use std::{collections::BTreeSet, sync::Arc, time::UNIX_EPOCH};
+use std::{
+    collections::{BTreeSet, HashMap},
+    sync::Arc,
+    time::UNIX_EPOCH,
+};
 
-use serde_json::Value;
-
-use crate::{health::Health, registry::Deployment, settings::Settings};
-
-/// `DeploymentHealthCache.CACHE_KEY`.
-pub const HEALTH_STATE_KEY: &str = "litellm:health_check:deployment_health_state";
+use crate::{cache::HealthState, health::Health, registry::Deployment, settings::Settings};
 
 /// `_extract_unhealthy_ids`: the ids marked unhealthy whose result is younger than `staleness`.
-pub fn unhealthy_ids(raw: Option<&Value>, now: f64, staleness: f64) -> BTreeSet<String> {
-    let Some(Value::Object(states)) = raw else {
-        return BTreeSet::new();
-    };
+pub fn unhealthy_ids(
+    states: &HashMap<String, HealthState>,
+    now: f64,
+    staleness: f64,
+) -> BTreeSet<String> {
     states
         .iter()
-        .filter(|(_, state)| {
-            let Value::Object(state) = state else {
-                return false;
-            };
-            // `not state.get("is_healthy", True)`: any falsy value is unhealthy.
-            let unhealthy = match state.get("is_healthy") {
-                None => false,
-                Some(Value::Null) => true,
-                Some(Value::Bool(value)) => !value,
-                Some(Value::Number(value)) => value.as_f64() == Some(0.0),
-                Some(Value::String(value)) => value.is_empty(),
-                Some(Value::Array(value)) => value.is_empty(),
-                Some(Value::Object(value)) => value.is_empty(),
-            };
-            let timestamp = state
-                .get("timestamp")
-                .and_then(Value::as_f64)
-                .unwrap_or(0.0);
-            unhealthy && now - timestamp < staleness
-        })
+        .filter(|(_, state)| !state.is_healthy && now - state.timestamp < staleness)
         .map(|(id, _)| id.clone())
         .collect()
 }
@@ -71,22 +52,13 @@ impl Health {
             return deployments;
         }
         // A read that fails counts as no health state.
-        let raw = self
-            .cache()
-            .async_get_cache(HEALTH_STATE_KEY)
-            .await
-            .ok()
-            .flatten();
+        let states = self.cache().health_states().await.unwrap_or_default();
         let now = self
             .now_time()
             .duration_since(UNIX_EPOCH)
             .map(|elapsed| elapsed.as_secs_f64())
             .unwrap_or_default();
-        let unhealthy = unhealthy_ids(
-            raw.as_ref(),
-            now,
-            settings.health_check_staleness.as_secs_f64(),
-        );
+        let unhealthy = unhealthy_ids(&states, now, settings.health_check_staleness.as_secs_f64());
         if unhealthy.is_empty() {
             return deployments;
         }
@@ -109,18 +81,24 @@ impl Health {
 #[cfg(test)]
 mod tests {
     use rstest::rstest;
-    use serde_json::json;
 
     use super::*;
 
     #[rstest]
-    #[case::fresh_unhealthy(json!({"a": {"is_healthy": false, "timestamp": 95.0}}), vec!["a"])]
-    #[case::stale(json!({"a": {"is_healthy": false, "timestamp": 50.0}}), vec![])]
-    #[case::healthy(json!({"a": {"is_healthy": true, "timestamp": 95.0}}), vec![])]
-    #[case::no_flag(json!({"a": {"timestamp": 95.0}}), vec![])]
-    #[case::not_a_dict(json!({"a": 1}), vec![])]
-    fn unhealthy_ids_follow_python(#[case] raw: Value, #[case] expected: Vec<&str>) {
-        let ids = unhealthy_ids(Some(&raw), 100.0, 10.0);
+    #[case::fresh_unhealthy(false, 95.0, vec!["a"])]
+    #[case::stale(false, 50.0, vec![])]
+    #[case::healthy(true, 95.0, vec![])]
+    fn unhealthy_ids_follow_python(
+        #[case] is_healthy: bool,
+        #[case] timestamp: f64,
+        #[case] expected: Vec<&str>,
+    ) {
+        let state = HealthState {
+            is_healthy,
+            timestamp,
+        };
+        let states = HashMap::from([("a".to_owned(), state)]);
+        let ids = unhealthy_ids(&states, 100.0, 10.0);
         assert_eq!(ids.iter().map(String::as_str).collect::<Vec<_>>(), expected);
     }
 }

@@ -1702,6 +1702,7 @@ async def test_aaaproxy_startup_master_key(mock_prisma, monkeypatch, tmp_path):
 
     # Mock the Prisma import
     monkeypatch.setattr("litellm.proxy.proxy_server.PrismaClient", MockPrisma)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://nobody:nothing@127.0.0.1:1/unreachable")
 
     # Create test app
     app = FastAPI()
@@ -1932,6 +1933,7 @@ async def test_proxy_startup_stops_when_the_requested_migration_fails(monkeypatc
     _boot_with_general_settings(monkeypatch, tmp_path, {"master_key": "sk-a-safe-master-key"})
     prisma: Final = _PrismaClientWhoseDatabaseRejectsQueries()
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://nobody:nothing@127.0.0.1:1/unreachable")
     monkeypatch.setenv("LITELLM_MIGRATE_FROM_MASTER_KEY", PUBLICLY_KNOWN_KEY)
 
     with (
@@ -1955,12 +1957,14 @@ async def test_proxy_startup_after_a_failed_migration_does_not_reuse_the_closed_
 
     _boot_with_general_settings(monkeypatch, tmp_path, {"master_key": "sk-a-safe-master-key"})
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", _PrismaClientWhoseDatabaseRejectsQueries())
+    monkeypatch.setenv("DATABASE_URL", "postgresql://nobody:nothing@127.0.0.1:1/unreachable")
     monkeypatch.setenv("LITELLM_MIGRATE_FROM_MASTER_KEY", PUBLICLY_KNOWN_KEY)
     with pytest.raises(RuntimeError, match="permission denied"):
         async with proxy_startup_event(FastAPI()):
             pass
 
     monkeypatch.setenv("LITELLM_MIGRATE_FROM_MASTER_KEY", "")
+    monkeypatch.delenv("DATABASE_URL")
     async with proxy_startup_event(FastAPI()) as state:
         assert state["database"] is None
 
@@ -2023,6 +2027,7 @@ async def test_proxy_shutdown_stops_database_background_tasks(monkeypatch, tmp_p
         yaml.dump({"general_settings": {"master_key": MASTER_KEY}}, f)
     monkeypatch.setenv("CONFIG_FILE_PATH", str(config_path))
     monkeypatch.setattr(proxy_server_module, "prisma_client", fake_prisma)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://nobody:nothing@127.0.0.1:1/unreachable")
     monkeypatch.setattr(proxy_server_module, "store_model_in_db", False)
 
     async with proxy_startup_event(FastAPI()):
@@ -13933,12 +13938,13 @@ async def _drain(queue):
 
 
 @pytest.mark.asyncio
-async def test_key_window_spend_row_is_enqueued_with_the_actual_cost():
+@pytest.mark.parametrize("duration", ("30d", "12mo"))
+async def test_key_window_spend_row_is_enqueued_with_the_actual_cost(duration: str):
     from litellm.proxy.proxy_server import increment_spend_counters
 
-    reset_at = datetime.now(timezone.utc) + timedelta(days=10)
+    reset_at: Final = datetime(2029, 1, 1, tzinfo=timezone.utc)
     key_obj = MagicMock()
-    key_obj.budget_limits = [{"budget_duration": "30d", "max_budget": 100.0, "reset_at": reset_at.isoformat()}]
+    key_obj.budget_limits = [{"budget_duration": duration, "max_budget": 100.0, "reset_at": reset_at.isoformat()}]
 
     with _window_spend_enqueue_env({"hashed-token": key_obj}) as queue:
         await increment_spend_counters(token="hashed-token", team_id=None, user_id=None, response_cost=0.25)
@@ -13947,9 +13953,10 @@ async def test_key_window_spend_row_is_enqueued_with_the_actual_cost():
     assert len(enqueued) == 1
     assert enqueued[0]["entity_type"] == "key"
     assert enqueued[0]["entity_id"] == "hashed-token"
-    assert enqueued[0]["window_duration"] == "30d"
+    assert enqueued[0]["window_duration"] == duration
     assert enqueued[0]["spend"] == pytest.approx(0.25)
-    assert enqueued[0]["window_start"] == (reset_at - timedelta(days=30)).astimezone(timezone.utc).replace(
+    expected_start: Final = datetime(2028, 1, 1, tzinfo=timezone.utc) if duration == "12mo" else reset_at - timedelta(days=30)
+    assert enqueued[0]["window_start"] == expected_start.astimezone(timezone.utc).replace(
         tzinfo=None
     ).isoformat(timespec="microseconds")
 

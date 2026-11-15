@@ -1,6 +1,6 @@
 SET LOCAL lock_timeout = '10s';
 CREATE TABLE IF NOT EXISTS "LiteLLM_SpendLogDelivery" (
-    "delivery_id" TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+    "delivery_id" TEXT PRIMARY KEY,
     "request_id" TEXT NOT NULL,
     "state" "AccountingDeliveryState" NOT NULL DEFAULT 'pending',
     "attempts" INTEGER NOT NULL DEFAULT 0,

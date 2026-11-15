@@ -1,4 +1,5 @@
 mod error;
+pub mod signed;
 mod transport;
 mod uri;
 
