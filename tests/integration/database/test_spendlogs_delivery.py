@@ -1,7 +1,6 @@
 import asyncio
 import os
 from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
-from itertools import chain
 from pathlib import Path
 from typing import TYPE_CHECKING, Final
 from urllib.parse import urlsplit, urlunsplit
@@ -617,10 +616,12 @@ async def test_an_index_size_rejection_commits_the_rest_once_and_parks_what_was_
     value: Final = _incompressible(2)
     isolated: Final[asyncio.Queue[str]] = asyncio.Queue()
 
-    async def isolate(transaction: LedgerTransaction, delivery: DeliveryProjection) -> "tuple[Contribution, ...]":
+    async def isolate(
+        transaction: LedgerTransaction, delivery: DeliveryProjection
+    ) -> "tuple[None, tuple[Contribution, ...]]":
         await isolated.put(str(delivery.row["request_id"]))
         await _charge(transaction, (delivery,))
-        return (_rejected(value),)
+        return None, (_rejected(value),)
 
     repository: Final = AccountingDeliveryRepository(delivery_client)
     result: Final = await repository.apply_pending(_charge_then_index, isolate=isolate)
@@ -670,32 +671,34 @@ async def test_an_index_size_rejection_commits_the_rest_once_and_parks_what_was_
 
 
 @pytest.mark.asyncio
-async def test_a_batch_that_hits_the_index_limit_retries_each_delivery_and_charges_each_once(
+async def test_a_batch_that_hits_the_index_limit_applies_every_sibling_in_the_same_flush(
     delivery_database: psycopg.Connection[tuple[object, ...]], delivery_client: Prisma
 ) -> None:
     delivery_database.execute("CREATE TABLE indexed (value text PRIMARY KEY)")
-    _insert(delivery_database, (_row("oversized"), _row("sibling")))
+    _insert(delivery_database, tuple(_row(name) for name in ("a-first", "b-second", "oversized", "z-last")))
 
-    async def isolate(transaction: LedgerTransaction, delivery: DeliveryProjection) -> "tuple[Contribution, ...]":
+    async def isolate(
+        transaction: LedgerTransaction, delivery: DeliveryProjection
+    ) -> "tuple[None, tuple[Contribution, ...]]":
         await _charge(transaction, (delivery,))
-        return (_rejected(_incompressible(3)),)
+        return None, (_rejected(_incompressible(3)),)
 
     repository: Final = AccountingDeliveryRepository(delivery_client)
-    batch: Final = await repository.apply_pending(_charge_then_index, isolate=isolate)
-    assert (batch.applied, batch.failed, batch.repaired) == (0, 2, ())
-    assert delivery_database.execute("SELECT spend FROM totals").fetchone() == (0.0,)
-    delivery_database.execute('UPDATE "LiteLLM_SpendLogDelivery" SET next_attempt_at = CURRENT_TIMESTAMP')
-    retries: Final = (
-        await repository.apply_pending(_charge_then_index, isolate=isolate, retry_only=True),
-        await repository.apply_pending(_charge_then_index, isolate=isolate, retry_only=True),
-        await repository.apply_pending(_charge_then_index, isolate=isolate, retry_only=True),
-    )
-    assert sum(result.applied for result in retries) == 2
-    assert tuple(chain.from_iterable(result.repaired for result in retries)) == ("oversized:index-repair",)
-    assert delivery_database.execute("SELECT spend FROM totals").fetchone() == (1.0,)
+    result: Final = await repository.apply_pending(_charge_then_index, isolate=isolate)
+
+    assert (result.applied, result.failed, result.parked) == (4, 0, ())
+    assert result.repaired == ("oversized:index-repair",)
+    assert delivery_database.execute("SELECT spend FROM totals").fetchone() == (2.0,)
     assert delivery_database.execute(
-        'SELECT delivery_id, state::text FROM "LiteLLM_SpendLogDelivery" ORDER BY delivery_id'
-    ).fetchall() == [("oversized", "applied"), ("oversized:index-repair", "parked"), ("sibling", "applied")]
+        'SELECT delivery_id, state::text, attempts FROM "LiteLLM_SpendLogDelivery" ORDER BY delivery_id'
+    ).fetchall() == [
+        ("a-first", "applied", 0),
+        ("b-second", "applied", 0),
+        ("oversized", "applied", 0),
+        ("oversized:index-repair", "parked", 1),
+        ("z-last", "applied", 0),
+    ]
+    assert (await repository.apply_pending(_charge_then_index, isolate=isolate)).applied == 0
 
 
 @pytest.mark.parametrize("failure", ["transient", "data"])
@@ -706,7 +709,9 @@ async def test_a_failure_while_isolating_rolls_everything_back_for_the_normal_re
     delivery_database.execute("CREATE TABLE indexed (value text PRIMARY KEY)")
     _insert(delivery_database, (_row("oversized"),))
 
-    async def isolate(transaction: LedgerTransaction, delivery: DeliveryProjection) -> "tuple[Contribution, ...]":
+    async def isolate(
+        transaction: LedgerTransaction, delivery: DeliveryProjection
+    ) -> "tuple[None, tuple[Contribution, ...]]":
         await _charge(transaction, (delivery,))
         if failure == "transient":
             raise OSError("database connection lost while isolating")
@@ -736,9 +741,11 @@ async def test_other_database_errors_never_take_the_isolation_path(
         await _charge(transaction, rows)
         await transaction.execute_raw("INSERT INTO unique_value (value) VALUES ('taken')")
 
-    async def isolate(transaction: LedgerTransaction, delivery: DeliveryProjection) -> "tuple[Contribution, ...]":
+    async def isolate(
+        transaction: LedgerTransaction, delivery: DeliveryProjection
+    ) -> "tuple[None, tuple[Contribution, ...]]":
         await isolated.put(str(delivery.row["request_id"]))
-        return ()
+        return None, ()
 
     result: Final = await AccountingDeliveryRepository(delivery_client).apply_pending(conflicting, isolate=isolate)
 
@@ -756,11 +763,13 @@ async def test_a_cancelled_isolation_commits_nothing_and_a_restart_charges_once(
     charged: Final = asyncio.Event()
     hold: Final = asyncio.Event()
 
-    async def interrupted(transaction: LedgerTransaction, delivery: DeliveryProjection) -> "tuple[Contribution, ...]":
+    async def interrupted(
+        transaction: LedgerTransaction, delivery: DeliveryProjection
+    ) -> "tuple[None, tuple[Contribution, ...]]":
         await _charge(transaction, (delivery,))
         charged.set()
         await hold.wait()
-        return (_rejected(_incompressible(4)),)
+        return None, (_rejected(_incompressible(4)),)
 
     repository: Final = AccountingDeliveryRepository(delivery_client)
     task: Final = asyncio.create_task(repository.apply_pending(_charge_then_index, isolate=interrupted))
@@ -775,9 +784,11 @@ async def test_a_cancelled_isolation_commits_nothing_and_a_restart_charges_once(
         'SELECT delivery_id, state::text, attempts FROM "LiteLLM_SpendLogDelivery"'
     ).fetchall() == [("oversized", "pending", 0)]
 
-    async def complete(transaction: LedgerTransaction, delivery: DeliveryProjection) -> "tuple[Contribution, ...]":
+    async def complete(
+        transaction: LedgerTransaction, delivery: DeliveryProjection
+    ) -> "tuple[None, tuple[Contribution, ...]]":
         await _charge(transaction, (delivery,))
-        return (_rejected(_incompressible(4)),)
+        return None, (_rejected(_incompressible(4)),)
 
     assert (await repository.apply_pending(_charge_then_index, isolate=complete)).repaired == (
         "oversized:index-repair",
@@ -797,9 +808,11 @@ async def test_a_row_already_at_the_repair_id_rolls_the_delivery_back_until_it_i
         "VALUES ('oversized:index-repair', 'unrelated', 'parked', '{\"unrelated\": true}', false)"
     )
 
-    async def isolate(transaction: LedgerTransaction, delivery: DeliveryProjection) -> "tuple[Contribution, ...]":
+    async def isolate(
+        transaction: LedgerTransaction, delivery: DeliveryProjection
+    ) -> "tuple[None, tuple[Contribution, ...]]":
         await _charge(transaction, (delivery,))
-        return (_rejected(_incompressible(5)),)
+        return None, (_rejected(_incompressible(5)),)
 
     repository: Final = AccountingDeliveryRepository(delivery_client)
     blocked: Final = await repository.apply_pending(_charge_then_index, isolate=isolate)
@@ -842,9 +855,11 @@ async def test_an_isolated_retry_skips_a_delivery_another_worker_claimed_meanwhi
     _insert(delivery_database, (_row("oversized"),))
     isolated: Final[asyncio.Queue[str]] = asyncio.Queue()
 
-    async def isolate(transaction: LedgerTransaction, delivery: DeliveryProjection) -> "tuple[Contribution, ...]":
+    async def isolate(
+        transaction: LedgerTransaction, delivery: DeliveryProjection
+    ) -> "tuple[None, tuple[Contribution, ...]]":
         await isolated.put(str(delivery.row["request_id"]))
-        return ()
+        return None, ()
 
     repository: Final = AccountingDeliveryRepository(
         _ClaimedElsewhereBeforeIsolation(delivery_client, delivery_database)
@@ -866,9 +881,11 @@ async def test_an_isolated_retry_that_accepts_everything_applies_once_without_a_
     delivery_database.execute("CREATE TABLE indexed (value text PRIMARY KEY)")
     _insert(delivery_database, (_row("oversized"),))
 
-    async def accept_all(transaction: LedgerTransaction, delivery: DeliveryProjection) -> "tuple[Contribution, ...]":
+    async def accept_all(
+        transaction: LedgerTransaction, delivery: DeliveryProjection
+    ) -> "tuple[None, tuple[Contribution, ...]]":
         await _charge(transaction, (delivery,))
-        return ()
+        return None, ()
 
     repository: Final = AccountingDeliveryRepository(delivery_client)
     first: Final = await repository.apply_pending(_charge_then_index, isolate=accept_all)

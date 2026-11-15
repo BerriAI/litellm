@@ -1220,3 +1220,19 @@ def test_an_index_row_size_error_is_found_behind_a_wrapping_error() -> None:
     wrapped: Final = RuntimeError("applying the delivery failed")
     wrapped.__cause__ = cause
     assert PrismaDBExceptionHandler.is_index_row_size_error(wrapped) is True
+
+
+def test_an_error_raised_while_handling_an_index_row_size_error_is_not_one() -> None:
+    handled: Final = RawQueryError(
+        data={"user_facing_error": {"error_code": "P2010", "meta": {"code": "54000", "message": _INDEX_ROW_SIZE}}}
+    )
+    lock_timeout: Final = RawQueryError(
+        data={
+            "user_facing_error": {
+                "error_code": "P2010",
+                "meta": {"code": "55P03", "message": "canceling statement due to lock timeout"},
+            }
+        }
+    )
+    lock_timeout.__context__ = handled
+    assert PrismaDBExceptionHandler.is_index_row_size_error(lock_timeout) is False

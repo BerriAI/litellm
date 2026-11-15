@@ -3,7 +3,7 @@ from dataclasses import asdict, dataclass
 from datetime import timedelta
 from itertools import chain
 from types import TracebackType
-from typing import TYPE_CHECKING, Final, Literal, Protocol
+from typing import TYPE_CHECKING, Final, Generic, Literal, Protocol, TypeVar
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter
 
@@ -66,13 +66,33 @@ class DeliveryProjection:
     row: Mapping[str, object]
 
 
+_Applied = TypeVar("_Applied")
+_Committed = TypeVar("_Committed", covariant=True)
+
+
 @dataclass(frozen=True, slots=True)
-class DeliveryBatchResult:
+class DeliveryBatchResult(Generic[_Committed]):
     applied: int = 0
     failed: int = 0
     parked: tuple[str, ...] = ()
     error: str | None = None
     repaired: tuple[str, ...] = ()
+    committed: tuple[_Committed, ...] = ()
+    rejected: "tuple[Contribution, ...]" = ()
+
+
+def _merged(
+    first: DeliveryBatchResult[_Applied], second: DeliveryBatchResult[_Applied]
+) -> DeliveryBatchResult[_Applied]:
+    return DeliveryBatchResult(
+        applied=first.applied + second.applied,
+        failed=first.failed + second.failed,
+        parked=first.parked + second.parked,
+        error=first.error or second.error,
+        repaired=first.repaired + second.repaired,
+        committed=first.committed + second.committed,
+        rejected=first.rejected + second.rejected,
+    )
 
 
 class DeliveryBacklog(BaseModel):
@@ -117,7 +137,8 @@ WHERE state IN ('pending', 'parked')"""
 _STORAGE: Final = """SELECT (SELECT COUNT(*) FROM "LiteLLM_SpendLogDelivery" WHERE is_batch) AS batch_count,
     pg_total_relation_size('"LiteLLM_SpendLogDelivery"') AS table_bytes"""
 _RELOCK: Final = """SELECT delivery_id, attempts FROM "LiteLLM_SpendLogDelivery"
-WHERE delivery_id = $1 AND state = 'pending' AND attempts = $2::integer FOR UPDATE SKIP LOCKED"""
+WHERE delivery_id = ANY($1::text[]) AND state = 'pending'
+ORDER BY delivery_id FOR UPDATE SKIP LOCKED"""
 _REPAIR: Final = """INSERT INTO "LiteLLM_SpendLogDelivery"
     (delivery_id, request_id, state, attempts, last_error, accounting_payload, is_batch)
 SELECT $2, $2, 'parked', 1, 'IndexRowSizeExceeded',
@@ -149,6 +170,33 @@ def _repair_payload(rejected: "tuple[Contribution, ...]") -> str:
     return safe_dumps(
         {"reason": "IndexRowSizeExceeded", "rejected": [asdict(item) for item in rejected]}, non_finite_as_null=True
     )
+
+
+_Isolate = Callable[[LedgerTransaction, DeliveryProjection], Awaitable["tuple[_Applied, tuple[Contribution, ...]]"]]
+
+
+def _rows(claimed: tuple[tuple[_Delivery, DeliveryProjection], ...]) -> tuple[_Delivery, ...]:
+    return tuple(row for row, _ in claimed)
+
+
+def _projections(claimed: tuple[tuple[_Delivery, DeliveryProjection], ...]) -> tuple[DeliveryProjection, ...]:
+    return tuple(projection for _, projection in claimed)
+
+
+def _delivery_ids(claimed: tuple[tuple[_Delivery, DeliveryProjection], ...]) -> tuple[str, ...]:
+    return tuple(row.delivery_id for row, _ in claimed)
+
+
+async def _relocked(
+    transaction: LedgerTransaction, claimed: tuple[tuple[_Delivery, DeliveryProjection], ...]
+) -> tuple[tuple[_Delivery, DeliveryProjection], ...]:
+    """The claims still pending at the attempt count they were claimed at, locked for this transaction. Another
+    worker that took one in the meantime changed its state or attempts, so it is left to that worker."""
+    locked: Final = frozenset(
+        (row.delivery_id, row.attempts)
+        for row in _DELIVERIES.validate_python(await transaction.query_raw(_RELOCK, list(_delivery_ids(claimed))))
+    )
+    return tuple(pair for pair in claimed if (pair[0].delivery_id, pair[0].attempts) in locked)
 
 
 def _is_index_row_size_failure(error: Exception) -> bool:
@@ -194,17 +242,16 @@ class AccountingDeliveryRepository:
 
     async def apply_pending(
         self,
-        apply: Callable[[LedgerTransaction, tuple[DeliveryProjection, ...]], Awaitable[None]],
+        apply: Callable[[LedgerTransaction, tuple[DeliveryProjection, ...]], Awaitable[_Applied]],
         *,
-        isolate: "Callable[[LedgerTransaction, DeliveryProjection], Awaitable[tuple[Contribution, ...]]] | None" = None,
+        isolate: "_Isolate[_Applied] | None" = None,
         batch_size: int = 100,
         max_attempts: int = 5,
         retry_only: bool | None = None,
-    ) -> DeliveryBatchResult:
+    ) -> DeliveryBatchResult[_Applied]:
         if batch_size < 1 or max_attempts < 1:
             raise ValueError("Delivery batch size and maximum attempts must be positive")
-        claimed: tuple[_Delivery, ...] = ()  # rebind-ok: preserve claims for retry accounting after rollback
-        projections: tuple[DeliveryProjection, ...] = ()  # rebind-ok: preserve claims for isolation after rollback
+        claimed: tuple[tuple[_Delivery, DeliveryProjection], ...] = ()  # rebind-ok: claims survive the rollback
         try:
             async with self._database.tx(timeout=_TIMEOUT) as transaction:
                 retries: Final = (
@@ -219,52 +266,87 @@ class AccountingDeliveryRepository:
                 )
                 decoded: Final = tuple((row, _decoded(row)) for row in rows)
                 undecodable: Final = tuple(row.delivery_id for row, projection in decoded if projection is None)
-                applicable: Final = tuple((row, projection) for row, projection in decoded if projection is not None)
                 if undecodable:
                     await transaction.execute_raw(_UNDECODABLE, undecodable)
-                claimed = tuple(row for row, _ in applicable)  # rebind-ok: retain claimed identities after rollback
-                projections = tuple(projection for _, projection in applicable)  # rebind-ok: retained after rollback
+                claimed = tuple(  # rebind-ok: retain claimed identities after rollback
+                    (row, projection) for row, projection in decoded if projection is not None
+                )
+                committed: Final = (await apply(transaction, _projections(claimed)),) if claimed else ()
                 if claimed:
-                    await apply(transaction, tuple(projection for _, projection in applicable))
-                    await transaction.execute_raw(_APPLIED, tuple(row.delivery_id for row in claimed))
-            return DeliveryBatchResult(applied=len(claimed), parked=undecodable)
+                    await transaction.execute_raw(_APPLIED, _delivery_ids(claimed))
+            return DeliveryBatchResult(applied=len(claimed), parked=undecodable, committed=committed)
         except Exception as error:  # noqa: BLE001  # roll back all destinations before recording a retry
             if not claimed:
                 raise
-            if (
-                isolate is not None
-                and len(claimed) == 1
-                and len(projections) == 1
-                and _is_index_row_size_failure(error)
-            ):
-                return await self._apply_isolated(claimed[0], projections[0], isolate, max_attempts)
-            return await self._record_failure(claimed, error, max_attempts)
+            if isolate is None or not _is_index_row_size_failure(error):
+                return await self._record_failure(_rows(claimed), error, max_attempts)
+        return await self._isolate_index_failure(claimed, apply, isolate, max_attempts)
+
+    async def _isolate_index_failure(
+        self,
+        claimed: tuple[tuple[_Delivery, DeliveryProjection], ...],
+        apply: Callable[[LedgerTransaction, tuple[DeliveryProjection, ...]], Awaitable[_Applied]],
+        isolate: "_Isolate[_Applied]",
+        max_attempts: int,
+    ) -> DeliveryBatchResult[_Applied]:
+        """Halves a batch Postgres refused for an oversized index entry until the delivery carrying it is alone,
+        so its siblings apply in this flush and only that delivery is retried contribution by contribution."""
+        if len(claimed) == 1:
+            return await self._apply_isolated(claimed[0], isolate, max_attempts)
+        middle: Final = len(claimed) // 2
+        first: Final = await self._apply_subset(claimed[:middle], apply, isolate, max_attempts)
+        second: Final = await self._apply_subset(claimed[middle:], apply, isolate, max_attempts)
+        return _merged(first, second)
+
+    async def _apply_subset(
+        self,
+        claimed: tuple[tuple[_Delivery, DeliveryProjection], ...],
+        apply: Callable[[LedgerTransaction, tuple[DeliveryProjection, ...]], Awaitable[_Applied]],
+        isolate: "_Isolate[_Applied]",
+        max_attempts: int,
+    ) -> DeliveryBatchResult[_Applied]:
+        try:
+            async with self._database.tx(timeout=_TIMEOUT) as transaction:
+                held: Final = await _relocked(transaction, claimed)
+                committed: Final = (await apply(transaction, _projections(held)),) if held else ()
+                if held:
+                    await transaction.execute_raw(_APPLIED, _delivery_ids(held))
+            return DeliveryBatchResult(applied=len(held), committed=committed)
+        except Exception as error:  # noqa: BLE001  # roll back all destinations before recording a retry
+            if not _is_index_row_size_failure(error):
+                return await self._record_failure(_rows(claimed), error, max_attempts)
+        return await self._isolate_index_failure(claimed, apply, isolate, max_attempts)
 
     async def _apply_isolated(
         self,
-        delivery: _Delivery,
-        projection: DeliveryProjection,
-        isolate: "Callable[[LedgerTransaction, DeliveryProjection], Awaitable[tuple[Contribution, ...]]]",
+        claimed: tuple[_Delivery, DeliveryProjection],
+        isolate: "_Isolate[_Applied]",
         max_attempts: int,
-    ) -> DeliveryBatchResult:
+    ) -> DeliveryBatchResult[_Applied]:
         """Commits what Postgres accepts together with a parked record of what it rejected and the delivery's
         receipt, so the delivery is never charged twice and nothing rejected is silently lost."""
+        delivery, projection = claimed
         try:
             async with self._database.tx(timeout=_TIMEOUT) as transaction:
-                if not await transaction.query_raw(_RELOCK, delivery.delivery_id, delivery.attempts):
+                if not await _relocked(transaction, (claimed,)):
                     return DeliveryBatchResult()
-                rejected: Final = await isolate(transaction, projection)
+                applied, rejected = await isolate(transaction, projection)
                 repair_id: Final = repair_delivery_id(delivery.delivery_id)
                 if rejected:
                     await transaction.execute_raw(_REPAIR, delivery.delivery_id, repair_id, _repair_payload(rejected))
                 await transaction.execute_raw(_APPLIED, (delivery.delivery_id,))
-            return DeliveryBatchResult(applied=1, repaired=(repair_id,) if rejected else ())
+            return DeliveryBatchResult(
+                applied=1,
+                repaired=(repair_id,) if rejected else (),
+                committed=(applied,),
+                rejected=rejected,
+            )
         except Exception as error:  # noqa: BLE001  # roll back all destinations before recording a retry
             return await self._record_failure((delivery,), error, max_attempts)
 
     async def _record_failure(
         self, claimed: tuple[_Delivery, ...], error: Exception, max_attempts: int
-    ) -> DeliveryBatchResult:
+    ) -> "DeliveryBatchResult[_Applied]":
         parks: Final = len(claimed) == 1 and _is_permanent_failure(error)
         async with self._database.tx(timeout=_TIMEOUT) as transaction:
             updates: Final = tuple(

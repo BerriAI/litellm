@@ -1,5 +1,6 @@
 import os
 import time
+from itertools import chain
 from typing import (
     TYPE_CHECKING,
     Final,
@@ -37,32 +38,32 @@ class _AccountingAlerts(Protocol):
 _JOB: Final = "accounting_delivery"
 
 
-def _filled(result: DeliveryBatchResult, batch_size: int) -> bool:
+def _filled(result: DeliveryBatchResult[object], batch_size: int) -> bool:
     return result.applied + len(result.parked) >= batch_size
 
 
-def _progressed(result: DeliveryBatchResult) -> bool:
+def _progressed(result: DeliveryBatchResult[object]) -> bool:
     return bool(result.applied or result.failed)
 
 
 async def flush_accounting_deliveries(
     writer: "DBSpendUpdateWriter", prisma_client: "PrismaClient", proxy_logging_obj: "ProxyLogging"
 ) -> None:
-    applied: tuple[Contribution, ...] = ()  # rebind-ok: keep committed contributions for cache invalidation
-    rejected: tuple[Contribution, ...] = ()  # rebind-ok: keep rejected contributions for the repair alert
+    rejected: tuple[Contribution, ...] = ()  # rebind-ok: collect a flush's rejected contributions for one alert
 
-    async def apply(transaction: LedgerTransaction, deliveries: tuple[DeliveryProjection, ...]) -> None:
-        nonlocal applied
-        applied = await apply_deliveries(  # rebind-ok: invalidate caches only after the outer transaction commits
+    async def apply(
+        transaction: LedgerTransaction, deliveries: tuple[DeliveryProjection, ...]
+    ) -> tuple[Contribution, ...]:
+        return await apply_deliveries(
             transaction, deliveries, prisma_client=prisma_client, writer=writer, proxy_logging_obj=proxy_logging_obj
         )
 
-    async def isolate(transaction: LedgerTransaction, delivery: DeliveryProjection) -> tuple[Contribution, ...]:
-        nonlocal applied, rejected
-        applied, rejected = await apply_delivery_isolated(  # rebind-ok: read only after the outer transaction commits
+    async def isolate(
+        transaction: LedgerTransaction, delivery: DeliveryProjection
+    ) -> tuple[tuple[Contribution, ...], tuple[Contribution, ...]]:
+        return await apply_delivery_isolated(
             transaction, delivery, prisma_client=prisma_client, writer=writer, proxy_logging_obj=proxy_logging_obj
         )
-        return rejected
 
     database: Final = cast(  # cast-ok: PrismaClient.tx owns writer routing and yields the generated transaction
         LedgerDatabase, prisma_client
@@ -71,17 +72,18 @@ async def flush_accounting_deliveries(
     started: Final = time.monotonic()
     batch_size: Final = int(os.environ.get("LITELLM_ACCOUNTING_DELIVERY_BATCH_SIZE", "500"))
 
-    async def run_batch(*, retry_only: bool) -> DeliveryBatchResult:
+    async def run_batch(*, retry_only: bool) -> DeliveryBatchResult[tuple[Contribution, ...]]:
+        nonlocal rejected
         result: Final = await repository.apply_pending(
             apply, isolate=isolate, batch_size=batch_size, retry_only=retry_only
         )
-        if result.applied:
-            await writer.invalidate_accounting_entities(applied, proxy_logging_obj)
+        committed: Final = tuple(chain.from_iterable(result.committed))
+        if committed:
+            await writer.invalidate_accounting_entities(committed, proxy_logging_obj)
             await CustomerBudgetAlerting.detect_committed_batch(
-                entity_transactions(applied), prisma_client, proxy_logging_obj.internal_usage_cache.dual_cache
+                entity_transactions(committed), prisma_client, proxy_logging_obj.internal_usage_cache.dual_cache
             )
-        if result.repaired:
-            await _alert_repair(proxy_logging_obj, rejected)
+        rejected = (*rejected, *result.rejected)  # rebind-ok: one repair alert per flush
         if result.parked:
             verbose_proxy_logger.error(
                 "Accounting delivery parked %d requests after isolated failures", len(result.parked)
@@ -100,6 +102,8 @@ async def flush_accounting_deliveries(
     for _ in range(batch_size):
         if time.monotonic() >= retry_deadline or not _progressed(await run_batch(retry_only=True)):
             break
+    if rejected:
+        await _alert_repair(proxy_logging_obj, rejected)
     acquired: Final = await writer.pod_lock_manager.acquire_lock(cronjob_id=_JOB, allow_reentrant=False)
     if acquired is False:
         return

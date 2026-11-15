@@ -1953,9 +1953,9 @@ async def test_customer_budget_reset_is_not_undone_by_an_organization_alias_load
 _OVERSIZED_TOKEN: Final = "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683"
 
 
-def _insert_oversized_delivery(database: str, field: str, value: str) -> None:
+def _insert_oversized_delivery(database: str, field: str, value: str, request_id: str = "oversized") -> None:
     payload: Final = {
-        "request_id": "oversized",
+        "request_id": request_id,
         "startTime": _NOW.isoformat(),
         "api_key": _OVERSIZED_TOKEN,
         "user": "user",
@@ -1977,8 +1977,8 @@ def _insert_oversized_delivery(database: str, field: str, value: str) -> None:
     with psycopg.connect(database, autocommit=True) as connection:
         connection.execute(
             'INSERT INTO "LiteLLM_SpendLogDelivery" (delivery_id, request_id, accounting_payload, is_batch) '
-            "VALUES ('oversized', 'oversized', %s::jsonb, false)",
-            (json.dumps(payload),),
+            "VALUES (%s, %s, %s::jsonb, false)",
+            (request_id, request_id, json.dumps(payload)),
         )
 
 
@@ -2111,3 +2111,49 @@ async def test_another_database_error_while_isolating_rolls_back_every_destinati
 
     assert spend == (0.0, 0.0, 0.0, 0)
     assert deliveries == [("oversized", "pending", 1)]
+
+
+@pytest.mark.asyncio
+async def test_one_flush_charges_every_delivery_once_and_alerts_once_for_several_oversized_values(
+    parity_database: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.accounting.worker import flush_accounting_deliveries
+
+    class _CapturedAlerts:
+        def __init__(self) -> None:
+            self.call_details: Final = proxy_server.proxy_logging_obj.call_details
+            self.internal_usage_cache: Final = proxy_server.proxy_logging_obj.internal_usage_cache
+            self.messages: Final[asyncio.Queue[str]] = asyncio.Queue()
+
+        async def alerting_handler(self, message: str, level: str, alert_type: object) -> None:
+            await self.messages.put(message)
+
+    monkeypatch.setenv("DATABASE_URL", parity_database)
+    _insert_oversized_delivery(parity_database, "request_tags", _unindexable(51872), "first-oversized")
+    _insert_oversized_delivery(parity_database, "request_tags", "short-tag", "in-between")
+    _insert_oversized_delivery(parity_database, "request_tags", _unindexable(51873), "second-oversized")
+    client: Final = PrismaClient(database_url=parity_database, proxy_logging_obj=proxy_server.proxy_logging_obj)
+    alerts: Final = _CapturedAlerts()
+    await client.db.connect()
+    try:
+        await flush_accounting_deliveries(DBSpendUpdateWriter(), client, alerts)
+        with psycopg.connect(parity_database) as connection:
+            key_spend: Final = connection.execute(
+                'SELECT spend FROM "LiteLLM_VerificationToken" WHERE token = %s', (_OVERSIZED_TOKEN,)
+            ).fetchone()
+            deliveries: Final = connection.execute(
+                'SELECT delivery_id, state::text, attempts FROM "LiteLLM_SpendLogDelivery" ORDER BY delivery_id'
+            ).fetchall()
+    finally:
+        await client.db.disconnect()
+
+    assert key_spend == (0.75,)
+    assert deliveries == [
+        ("first-oversized", "applied", 0),
+        ("first-oversized:index-repair", "parked", 1),
+        ("in-between", "applied", 0),
+        ("second-oversized", "applied", 0),
+        ("second-oversized:index-repair", "parked", 1),
+    ]
+    assert alerts.messages.qsize() == 1
+    assert "Accounting delivery kept 2 contributions to LiteLLM_DailyTagSpend" in alerts.messages.get_nowait()

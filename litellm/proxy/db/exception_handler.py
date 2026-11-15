@@ -69,6 +69,16 @@ def exception_chain(e: BaseException) -> Iterator[BaseException]:
         current = following
 
 
+def _cause_chain(e: BaseException) -> Iterator[BaseException]:
+    """``e`` and the errors it was explicitly raised from, never one it merely occurred while handling."""
+    current = e  # rebind-ok: advances one link per iteration of the bounded walk
+    for _ in range(_MAX_EXCEPTION_CHAIN_DEPTH):
+        yield current
+        if current.__cause__ is None:
+            return
+        current = current.__cause__
+
+
 def _database_service_unavailable_errors(e: BaseException) -> tuple[Exception, ...]:
     return tuple(
         link
@@ -251,7 +261,7 @@ class PrismaDBExceptionHandler:
         """True iff Postgres refused a value too large for an index entry, not any other program limit (class 54)."""
         import prisma
 
-        links: Final = tuple(link for link in exception_chain(e) if isinstance(link, Exception))
+        links: Final = tuple(link for link in _cause_chain(e) if isinstance(link, Exception))
         return any(
             isinstance(link, _exception_types(prisma.errors.DataError))
             and PrismaDBExceptionHandler.postgres_sqlstate(link) in ("54000", None)
