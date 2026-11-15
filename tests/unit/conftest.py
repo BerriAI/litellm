@@ -13,7 +13,6 @@ from typing import TYPE_CHECKING, Final, Literal, TypeAlias
 import boto3
 import httpx
 import pytest
-import pytest_asyncio
 from pytest_socket import enable_socket, socket_allow_hosts
 
 if TYPE_CHECKING:
@@ -135,6 +134,7 @@ os.environ["PYTHON_DOTENV_DISABLED"] = "1"
 os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
 
 import litellm  # noqa: E402  # litellm reads LITELLM_LOCAL_MODEL_COST_MAP at import
+from litellm.litellm_core_utils.model_cost_table import publish  # noqa: E402  # same import-time dependency
 from litellm._logging import ALL_LOGGERS  # noqa: E402  # same import-time dependency
 from litellm.anthropic_beta_headers_manager import (
     reload_beta_headers_config,  # noqa: E402  # same import-time dependency
@@ -143,7 +143,6 @@ from litellm.litellm_core_utils.get_model_cost_map import (  # noqa: E402  # sam
     model_cost_inputs,
 )
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER  # noqa: E402  # same import-time dependency
-from litellm.litellm_core_utils.model_cost_table import publish  # noqa: E402  # same import-time dependency
 from litellm.litellm_core_utils.prompt_templates import (
     factory as prompt_factory_module,  # noqa: E402  # same import-time dependency
 )
@@ -605,29 +604,3 @@ def in_operator_error(value: Container[object]) -> str:
     with pytest.raises(TypeError) as native:
         _ = "key" in value
     return str(native.value)
-
-
-class StreamClock:
-    __slots__ = ("now",)
-
-    def __init__(self, now: float) -> None:
-        self.now = now
-
-    def __call__(self) -> float:
-        return self.now
-
-    async def elapse(self, seconds: float) -> None:
-        steps: Final = max(1, round(seconds / 0.01))
-        for _ in range(steps):
-            self.now += seconds / steps
-            await asyncio.sleep(0)
-            await asyncio.sleep(0)
-            await asyncio.sleep(0)
-
-
-@pytest_asyncio.fixture(loop_scope="function")
-async def stream_clock(monkeypatch: pytest.MonkeyPatch) -> StreamClock:
-    loop: Final = asyncio.get_running_loop()
-    clock: Final = StreamClock(loop.time())
-    monkeypatch.setattr(loop, "time", clock)
-    return clock

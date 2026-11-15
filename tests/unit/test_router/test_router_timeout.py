@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 import httpx
 import openai
 import pytest
+import pytest_asyncio
 import respx
 
 import litellm
@@ -21,7 +22,6 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.router_utils.cooldown_handlers import is_caller_timeout_408
 from litellm.types.integrations.custom_logger import WEBSEARCH_INTERCEPTION_PREFIX, as_converted_stream
 from litellm.types.llms.openai import AllMessageValues
-from tests.unit.conftest import StreamClock
 from tests.unit.llms.bedrock.slow_upstream import (
     CONVERSE_ANSWER,
     STREAM_TIMEOUT_SECONDS,
@@ -651,6 +651,32 @@ def test_azure_router_timeout_raises_after_httpx_read_timeout(
     assert route.call_count == 1
 
 
+class _ManualClock:
+    __slots__ = ("now",)
+
+    def __init__(self, now: float) -> None:
+        self.now = now
+
+    def __call__(self) -> float:
+        return self.now
+
+    async def elapse(self, seconds: float) -> None:
+        steps: Final = max(1, round(seconds / 0.01))
+        for _ in range(steps):
+            self.now += seconds / steps
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+
+
+@pytest_asyncio.fixture(loop_scope="function")
+async def stream_clock(monkeypatch: pytest.MonkeyPatch) -> _ManualClock:
+    loop: Final = asyncio.get_running_loop()
+    clock: Final = _ManualClock(loop.time())
+    monkeypatch.setattr(loop, "time", clock)
+    return clock
+
+
 @pytest.fixture
 def ttft_httpx_transport(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
@@ -730,7 +756,7 @@ async def test_stream_ttft_timeout_is_resolved_per_attempt_and_kept_out_of_provi
 
 
 class _TTFTByteStream(httpx.AsyncByteStream):
-    def __init__(self, clock: StreamClock, frames: tuple[tuple[float, bytes], ...]) -> None:
+    def __init__(self, clock: _ManualClock, frames: tuple[tuple[float, bytes], ...]) -> None:
         self.clock: Final = clock
         self.frames: Final = frames
 
@@ -769,7 +795,7 @@ def _ttft_router(
 @pytest.mark.parametrize("prefix", ("role", "keepalive", "fetch"))
 async def test_stream_ttft_chat_stall_falls_back_and_records_failure(
     prefix: str,
-    stream_clock: StreamClock,
+    stream_clock: _ManualClock,
     respx_mock: respx.MockRouter,
     ttft_httpx_transport: None,
     monkeypatch: pytest.MonkeyPatch,
@@ -818,7 +844,7 @@ async def test_stream_ttft_chat_stall_falls_back_and_records_failure(
 async def test_stream_ttft_chat_allows_output_pause_and_disabled_deadline(
     enabled: bool,
     output_first: bool,
-    stream_clock: StreamClock,
+    stream_clock: _ManualClock,
     respx_mock: respx.MockRouter,
     ttft_httpx_transport: None,
     monkeypatch: pytest.MonkeyPatch,
@@ -847,7 +873,7 @@ async def test_stream_ttft_chat_allows_output_pause_and_disabled_deadline(
 
 @pytest.mark.asyncio
 async def test_stream_ttft_chat_without_fallback_raises_provider_timeout(
-    stream_clock: StreamClock,
+    stream_clock: _ManualClock,
     respx_mock: respx.MockRouter,
     ttft_httpx_transport: None,
     monkeypatch: pytest.MonkeyPatch,
@@ -876,7 +902,7 @@ def _ttft_anthropic_frame(kind: str, **fields: object) -> bytes:
 
 @pytest.mark.asyncio
 async def test_stream_ttft_messages_forwards_pings_then_falls_back_without_duplicate_start(
-    stream_clock: StreamClock,
+    stream_clock: _ManualClock,
     respx_mock: respx.MockRouter,
     ttft_httpx_transport: None,
     monkeypatch: pytest.MonkeyPatch,
@@ -925,7 +951,7 @@ async def test_stream_ttft_messages_forwards_pings_then_falls_back_without_dupli
 async def test_stream_ttft_messages_deadline_ignores_wrapper_commit_flag(
     fallback: bool,
     lifecycle_count: int,
-    stream_clock: StreamClock,
+    stream_clock: _ManualClock,
     respx_mock: respx.MockRouter,
     ttft_httpx_transport: None,
     monkeypatch: pytest.MonkeyPatch,
@@ -992,7 +1018,7 @@ def _ttft_response_event(kind: str, model: str, *, background: bool = False) -> 
 @pytest.mark.parametrize("background", (False, True), ids=("R4-fallback", "background-exempt"))
 async def test_stream_ttft_responses_holds_lifecycle_until_output_and_exempts_background_runs(
     background: bool,
-    stream_clock: StreamClock,
+    stream_clock: _ManualClock,
     respx_mock: respx.MockRouter,
     ttft_httpx_transport: None,
 ) -> None:
