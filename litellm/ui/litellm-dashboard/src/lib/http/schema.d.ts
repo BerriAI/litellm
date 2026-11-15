@@ -68946,6 +68946,8 @@ export interface operations {
                 parent_org_id?: string | null;
                 /** @description Case-insensitive substring of the customer member ID or alias */
                 search?: string;
+                /** @description Sort by displayed budget limit, with uncapped rows last. */
+                sort?: ("budget_asc" | "budget_desc") | null;
             };
             header?: never;
             path?: never;
@@ -69610,6 +69612,8 @@ export interface operations {
                 page?: number;
                 page_size?: number;
                 parent_org_id?: string | null;
+                /** @description Sort by displayed budget limit, with uncapped rows last. */
+                sort?: ("budget_asc" | "budget_desc") | null;
             };
             header?: never;
             path?: never;

@@ -3,7 +3,12 @@ import { apiClient } from "@/components/networking";
 import type { DailyActivityAggregatedResponse } from "@/components/UsagePage/dailyActivityApi";
 import type { components } from "@/lib/http/schema";
 import i18n from "@/i18n/i18n";
-import { customerBudgetPeriod, customerBudgetStatus, customerBudgetUsage } from "./customerBudgetUsage";
+import {
+  customerBudgetLimit,
+  customerBudgetPeriod,
+  customerBudgetStatus,
+  customerBudgetUsage,
+} from "./customerBudgetUsage";
 import { mergeCustomerActivityPages } from "./customerUsageData";
 import { customerUsageTotals } from "./customerUsageTotals";
 
@@ -12,7 +17,7 @@ type OrganizationList = components["schemas"]["ListResponse_Organization_"];
 type Activity = ReturnType<typeof mergeCustomerActivityPages>;
 
 export const CUSTOMER_ORGANIZATION_TABLE = {
-  sortFields: ["created_at", "customer", "spend", "share", "status"],
+  sortFields: ["created_at", "customer", "spend", "budget", "share", "status"],
   defaultSort: { id: "created_at", desc: true },
   defaultPageSize: 25,
   filterColumns: [],
@@ -99,6 +104,7 @@ export const customerOrganizationRows = (organizations: readonly CustomerOrganiz
       organization,
       monthlySpend,
       monthlyBudgets,
+      budgetLimit: customerBudgetLimit(budgetEntity),
       displaySpend: monthlyBudgets.length > 0 ? monthlyBudgets[0].spend : monthlySpend,
       share: monthlyUsage.metadata.total_spend > 0 ? monthlySpend / monthlyUsage.metadata.total_spend : 0,
       status: customerBudgetStatus(budgets),
@@ -123,6 +129,8 @@ const sortValue = (row: CustomerOrganizationRow, field: string): string | number
       return row.displaySpend;
     case "share":
       return row.share;
+    case "budget":
+      return row.budgetLimit;
     case "status":
       return STATUS_ORDER[row.status];
     default:
@@ -152,7 +160,9 @@ export function sortCustomerOrganizations(
       const comparison = typeof a === "string" && typeof b === "string" ? a.localeCompare(b) : Number(a) - Number(b);
       return (
         comparison * (active.desc ? -1 : 1) ||
-        left.organization.customer_org_id.localeCompare(right.organization.customer_org_id)
+        (active.id === "budget"
+          ? 0
+          : left.organization.customer_org_id.localeCompare(right.organization.customer_org_id))
       );
     });
 }

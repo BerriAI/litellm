@@ -1,8 +1,10 @@
 import type { components } from "@/lib/http/schema";
+import { parseAsStringLiteral } from "nuqs";
 import type { CustomerUsageEntity } from "./customerUsageApi";
 
 export type CustomerBudgetUsage = components["schemas"]["CustomerBudgetUsage"];
 export type CustomerBudgetPeriod = "monthly" | "yearly" | "other";
+export const customerBudgetSortParser = parseAsStringLiteral(["budget_asc", "budget_desc"] as const);
 
 export const CUSTOMER_BUDGET_LABELS = {
   monthly: "customerPortal.analytics.monthlySpend",
@@ -38,6 +40,21 @@ export const customerBudgetUsage = (entity: CustomerUsageEntity): CustomerBudget
       reset_at: limit.reset_at,
     })),
   ];
+
+export const customerBudgetLimit = (entity: CustomerUsageEntity): number | null =>
+  entity.budgetLimits.find((limit) => customerBudgetPeriod(limit.budget_duration) === "monthly")?.max_budget ??
+  entity.budgetLimit ??
+  entity.budgetLimits.find((limit) => customerBudgetPeriod(limit.budget_duration) === "yearly")?.max_budget ??
+  null;
+
+export const compareCustomerBudgets = (left: CustomerUsageEntity, right: CustomerUsageEntity, descending: boolean) => {
+  const a = customerBudgetLimit(left);
+  const b = customerBudgetLimit(right);
+  if (a === null && b === null) return 0;
+  if (a === null) return 1;
+  if (b === null) return -1;
+  return (a - b) * (descending ? -1 : 1);
+};
 
 export const customerBudgetStatus = (usage: CustomerBudgetUsage[]) => {
   if (usage.some((budget) => budget.spend !== null && budget.spend >= budget.max_budget))

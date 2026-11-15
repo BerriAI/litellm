@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
 from itertools import chain
-from typing import TYPE_CHECKING, Final, Generic, Protocol, TypeVar
+from typing import TYPE_CHECKING, Final, Generic, Literal, Protocol, TypeAlias, TypeVar
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
@@ -44,6 +44,48 @@ from litellm.types.proxy.management_endpoints.customer_hierarchy import (
 if TYPE_CHECKING:
     from prisma import Json, Prisma
     from prisma.models import LiteLLM_BudgetWindowSpend
+
+
+BudgetSort: TypeAlias = Literal["budget_asc", "budget_desc"]
+Child: Final = TypeVar("Child", Team, CustomerMember)
+
+
+def customer_budget_limit(budget: Budget | None) -> float | None:
+    if budget is None:
+        return None
+    limits: Final = budget.budget_limits or ()
+    monthly: Final = next(
+        (
+            limit.max_budget
+            for limit in limits
+            if limit.budget_duration.strip().lower() in ("1mo", "1month", "1months", "30d", "30days", "monthly")
+        ),
+        None,
+    )
+    if monthly is not None:
+        return monthly
+    if budget.max_budget is not None:
+        return budget.max_budget
+    return next(
+        (
+            limit.max_budget
+            for limit in limits
+            if limit.budget_duration.strip().lower() in ("12mo", "12month", "12months")
+        ),
+        None,
+    )
+
+
+def _budget_sort_key(budget: Budget | None, sort: BudgetSort) -> tuple[bool, float]:
+    limit: Final = customer_budget_limit(budget)
+    return limit is None, (limit or 0) * (-1 if sort == "budget_desc" else 1)
+
+
+def _budget_page(rows: tuple[Child, ...], sort: BudgetSort | None, page: int, page_size: int) -> tuple[Child, ...]:
+    if sort is None:
+        return rows
+    ordered: Final = sorted(rows, key=lambda row: _budget_sort_key(row.effective_budget, sort))
+    return tuple(ordered[(page - 1) * page_size : page * page_size])
 
 
 class ErrorCode(str, Enum):
@@ -1058,19 +1100,24 @@ class CustomerHierarchyStore:
         )
         return Page(await self.organization_responses(rows), count)
 
-    async def list_teams(self, parent_org_id: str | None, page: int, page_size: int) -> Page[Team]:
+    async def list_teams(
+        self, parent_org_id: str | None, page: int, page_size: int, sort: BudgetSort | None = None
+    ) -> Page[Team]:
         where: Final = {"parent_org_id": parent_org_id} if parent_org_id is not None else {}
         count: Final = await self.teams.count(where=where)
         rows: Final = await self.teams.find_many(
             where=where,
-            skip=(page - 1) * page_size,
-            take=page_size,
+            skip=(page - 1) * page_size if sort is None else None,
+            take=page_size if sort is None else None,
             order=[{"created_at": "asc"}, {"customer_team_id": "asc"}],
             include=_MEMBER_INCLUDE,
         )
         return Page(
             await customer_budget_usage(
-                tuple(team_response(row, self.now) for row in rows), self.window_spend, self.now, self.settings
+                _budget_page(tuple(team_response(row, self.now) for row in rows), sort, page, page_size),
+                self.window_spend,
+                self.now,
+                self.settings,
             ),
             count,
         )
@@ -1083,6 +1130,7 @@ class CustomerHierarchyStore:
         *,
         parent_org_id: str | None = None,
         search: str = "",
+        sort: BudgetSort | None = None,
     ) -> Page[CustomerMember]:
         where: Final[Mapping[str, object]] = {
             **({"parent_team_ids": {"has": parent_team_id}} if parent_team_id is not None else {}),
@@ -1092,14 +1140,17 @@ class CustomerHierarchyStore:
         count: Final = await self.members.count(where=where)
         rows: Final = await self.members.find_many(
             where=where,
-            skip=(page - 1) * page_size,
-            take=page_size,
+            skip=(page - 1) * page_size if sort is None else None,
+            take=page_size if sort is None else None,
             order=[{"created_at": "asc"}, {"customer_member_id": "asc"}],
             include=_MEMBER_INCLUDE,
         )
         return Page(
             await customer_budget_usage(
-                tuple(member_response(row, self.now) for row in rows), self.window_spend, self.now, self.settings
+                _budget_page(tuple(member_response(row, self.now) for row in rows), sort, page, page_size),
+                self.window_spend,
+                self.now,
+                self.settings,
             ),
             count,
         )
@@ -1297,9 +1348,9 @@ class CustomerHierarchy:
         return await self.transaction(lambda store: store.list_organizations(page, page_size, search))
 
     async def list_teams(
-        self, parent_org_id: str | None = None, page: int = 1, page_size: int = 50
+        self, parent_org_id: str | None = None, page: int = 1, page_size: int = 50, sort: BudgetSort | None = None
     ) -> Page[Team] | Failure:
-        return await self.transaction(lambda store: store.list_teams(parent_org_id, page, page_size))
+        return await self.transaction(lambda store: store.list_teams(parent_org_id, page, page_size, sort))
 
     async def list_members(
         self,
@@ -1309,10 +1360,11 @@ class CustomerHierarchy:
         *,
         parent_org_id: str | None = None,
         search: str = "",
+        sort: BudgetSort | None = None,
     ) -> Page[CustomerMember] | Failure:
         return await self.transaction(
             lambda store: store.list_members(
-                parent_team_id, page, page_size, parent_org_id=parent_org_id, search=search
+                parent_team_id, page, page_size, parent_org_id=parent_org_id, search=search, sort=sort
             )
         )
 

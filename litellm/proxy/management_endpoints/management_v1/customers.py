@@ -17,6 +17,7 @@ from litellm.proxy.list_api.common import (
 )
 from litellm.proxy.management_endpoints.management_v1.common import MANAGEMENT_V1_PREFIX
 from litellm.proxy.management_helpers.customer_hierarchy import (
+    BudgetSort,
     CustomerHierarchy,
     CustomerPortalLimits,
     ErrorCode,
@@ -408,9 +409,12 @@ async def list_customer_teams(
     page: Annotated[int, Query(ge=1)] = 1,
     page_size: Annotated[int, Query(ge=1)] = 50,
     parent_org_id: str | None = None,
+    sort: Annotated[
+        BudgetSort | None, Query(description="Sort by displayed budget limit, with uncapped rows last.")
+    ] = None,
 ) -> ListResponse[Team]:
     size: Final = min(page_size, 100)
-    result: Final = resolve(await hierarchy.list_teams(parent_org_id, page, size))
+    result: Final = resolve(await hierarchy.list_teams(parent_org_id, page, size, sort))
     return list_response(result, request, page, size)
 
 
@@ -522,10 +526,15 @@ async def list_customer_members(
     parent_team_id: str | None = None,
     parent_org_id: str | None = None,
     search: Annotated[str, Query(description="Case-insensitive substring of the customer member ID or alias")] = "",
+    sort: Annotated[
+        BudgetSort | None, Query(description="Sort by displayed budget limit, with uncapped rows last.")
+    ] = None,
 ) -> ListResponse[CustomerMember]:
     size: Final = min(page_size, 100)
     result: Final = resolve(
-        await hierarchy.list_members(parent_team_id, page, size, parent_org_id=parent_org_id, search=search.strip())
+        await hierarchy.list_members(
+            parent_team_id, page, size, parent_org_id=parent_org_id, search=search.strip(), sort=sort
+        )
     )
     return list_response(result, request, page, size)
 
