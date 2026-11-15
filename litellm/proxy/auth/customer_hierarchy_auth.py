@@ -553,7 +553,7 @@ async def _register_organization(
     if isinstance(registered, Failure):
         if registered.code is ErrorCode.FREE_TIER_LIMIT:
             verbose_proxy_logger.warning(
-                "CUSTOMER TRACKING OFF for organization %s because the free customer portal limit was reached. "
+                "CUSTOMER TRACKING OFF for organization %s because the free customer management limit was reached. "
                 "Upgrade to Enterprise to remove the limits: https://www.litellm.ai/enterprise",
                 customer_org_alias,
             )
@@ -620,7 +620,7 @@ async def _register_member(
     if isinstance(registered, Failure):
         if registered.code is ErrorCode.FREE_TIER_LIMIT:
             verbose_proxy_logger.warning(
-                "CUSTOMER TRACKING OFF for member %s because the free customer portal limit was reached. "
+                "CUSTOMER TRACKING OFF for member %s because the free customer management limit was reached. "
                 "Upgrade to Enterprise to remove the limits: https://www.litellm.ai/enterprise",
                 customer_member_id,
             )

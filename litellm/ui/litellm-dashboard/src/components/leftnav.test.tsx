@@ -178,7 +178,7 @@ describe("Sidebar (leftnav)", () => {
     expect(screen.getByRole("link", { name: /litellm home/i })).toHaveAttribute("href", "/ui");
   });
 
-  it("should make customer organizations reachable from the Customer Portal sidebar", () => {
+  it("should make customer organizations reachable from the Customer Management sidebar", () => {
     localStorage.setItem("litellm_plugin_mode", "customer-portal");
     navState.pathname = "/ui/customers/manage";
     renderWithProviders(
@@ -765,14 +765,14 @@ describe("Sidebar (leftnav)", () => {
 describe("getBreadcrumb", () => {
   it("should identify the customer organizations list and its hierarchy routes", () => {
     expect(getBreadcrumb("/ui/customers/usage")).toEqual({
-      section: "Customer Portal",
+      section: "Customer Management",
       title: "Customer organizations",
     });
     expect(getBreadcrumb("/ui/customers/manage")).toEqual({
-      section: "Customer Portal",
+      section: "Customer Management",
       title: "Customer organizations",
     });
-    expect(getBreadcrumb("/ui/customers/")).toEqual({ section: "Customer Portal", title: "Customer organizations" });
+    expect(getBreadcrumb("/ui/customers/")).toEqual({ section: "Customer Management", title: "Customer organizations" });
   });
   it("resolves a top-level route to its section + title", () => {
     expect(getBreadcrumb("/ui/api-keys")).toEqual({ section: "AI Gateway", title: "Virtual Keys" });

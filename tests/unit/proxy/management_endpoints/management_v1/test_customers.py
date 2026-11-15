@@ -78,7 +78,7 @@ def test_customer_portal_limits_and_free_tier_problem(premium: bool) -> None:
     assert sixth.status_code == (201 if premium else 403), sixth.text
     if not premium:
         assert sixth.json()["detail"] == (
-            "Free customer portal limit reached: up to 5 customer organizations, 5 teams per organization and "
+            "Free customer management limit reached: up to 5 customer organizations, 5 teams per organization and "
             "5 members per team without a LiteLLM Enterprise license. Upgrade to Enterprise to remove the limits: "
             "https://www.litellm.ai/enterprise"
         )
@@ -161,9 +161,9 @@ def test_capacity_contention_is_retryable_without_hiding_other_database_errors(e
     assert response.status_code == 503, response.text
     assert response.json() == {
         "type": "urn:litellm:error:customer-hierarchy-capacity-busy",
-        "title": "Customer portal busy",
+        "title": "Customer management busy",
         "status": 503,
-        "detail": "Customer portal capacity is being updated. Retry the request.",
+        "detail": "Customer management capacity is being updated. Retry the request.",
     }
     assert http.get("/management/v1/customer_members/blocked").status_code == 404
 
@@ -197,9 +197,9 @@ def test_team_model_write_contention_is_retryable_and_rolls_back(error: DataErro
         assert response.status_code == 503, response.text
         assert response.json() == {
             "type": "urn:litellm:error:customer-hierarchy-capacity-busy",
-            "title": "Customer portal busy",
+            "title": "Customer management busy",
             "status": 503,
-            "detail": "Customer portal capacity is being updated. Retry the request.",
+            "detail": "Customer management capacity is being updated. Retry the request.",
         }
     assert http.get("/management/v1/customer_teams/blocked").status_code == 404
     assert not database.litellm_budgettable.rows

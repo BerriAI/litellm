@@ -8164,7 +8164,7 @@
         "accessControl": "ACCESS CONTROL",
         "developerTools": "DEVELOPER TOOLS",
         "settings": "SETTINGS",
-        "customerPortal": "CUSTOMER PORTAL"
+        "customerPortal": "CUSTOMER MANAGEMENT"
       },
       "sections": {
         "aiGateway": "AI Gateway",
@@ -8172,7 +8172,7 @@
         "accessControl": "Access Control",
         "developerTools": "Developer Tools",
         "settings": "Settings",
-        "customerPortal": "Customer Portal"
+        "customerPortal": "Customer Management"
       },
       "items": {
         "home": "Home",
@@ -20672,8 +20672,8 @@
     },
     "limits": {
       "byline": "Free tier: up to 5 customers, 5 teams per customer, 5 members per team. LiteLLM <enterprise>Enterprise</enterprise> removes these limits.",
-      "reachedTitle": "Free customer portal limit reached",
-      "reachedDescription": "New customers, teams and members can't be created. Requests from new customers or members still go through but are not tracked in the customer portal.",
+      "reachedTitle": "Free customer management limit reached",
+      "reachedDescription": "New customers, teams and members can't be created. Requests from new customers or members still go through but are not tracked in the customer management.",
       "upgrade": "Upgrade to Enterprise"
     },
     "hierarchy": {
@@ -20778,7 +20778,7 @@
       "deleteInformationTitle": "{{kind}} details"
     },
     "switcher": {
-      "label": "Customer Portal",
+      "label": "Customer Management",
       "description": "Customer organizations and usage"
     },
     "status": {

@@ -8,7 +8,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe("Customer portal limits", () => {
+describe("Customer management limits", () => {
   it.each([
     { limitsApply: true, reached: false },
     { limitsApply: true, reached: true },
@@ -50,7 +50,7 @@ describe("Customer portal limits", () => {
       expect(screen.queryByText(/Free tier:/)).not.toBeInTheDocument();
     }
     if (limitsApply && reached) {
-      expect(await screen.findByRole("alert")).toHaveTextContent("Free customer portal limit reached");
+      expect(await screen.findByRole("alert")).toHaveTextContent("Free customer management limit reached");
       expect(screen.getByRole("alert")).toHaveTextContent(
         "Requests from new customers or members still go through but are not tracked",
       );

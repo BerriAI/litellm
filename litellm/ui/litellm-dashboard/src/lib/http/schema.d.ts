@@ -9934,8 +9934,8 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Get Customer Portal Limits
-         * @description Get customer portal free-tier limits and current capacity. Proxy admins only.
+         * Get Customer Management Limits
+         * @description Get customer management free-tier limits and current capacity. Proxy admins only.
          */
         get: operations["get_customer_portal_limits_management_v1_customer_portal_limits_get"];
         put?: never;

@@ -385,7 +385,7 @@ describe("CustomerHierarchySettings", () => {
         />
       </CustomersLayout>,
     );
-    expect(await screen.findByRole("alert")).toHaveTextContent("Free customer portal limit reached");
+    expect(await screen.findByRole("alert")).toHaveTextContent("Free customer management limit reached");
     fireEvent.click(screen.getByRole("button", { name: "Delete customer member" }));
     const dialog = await screen.findByRole("dialog", { name: "Delete customer member" });
     fireEvent.change(within(dialog).getByPlaceholderText("member-1"), { target: { value: "member-1" } });

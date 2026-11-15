@@ -54,13 +54,13 @@ _ERROR_DETAILS: Final[Mapping[ErrorCode, tuple[int, str, str]]] = MappingProxyTy
     {
         ErrorCode.CAPACITY_BUSY: (
             503,
-            "Customer portal busy",
-            "Customer portal capacity is being updated. Retry the request.",
+            "Customer management busy",
+            "Customer management capacity is being updated. Retry the request.",
         ),
         ErrorCode.FREE_TIER_LIMIT: (
             403,
-            "Free customer portal limit reached",
-            "Free customer portal limit reached: up to 5 customer organizations, 5 teams per organization and "
+            "Free customer management limit reached",
+            "Free customer management limit reached: up to 5 customer organizations, 5 teams per organization and "
             "5 members per team without a LiteLLM Enterprise license. Upgrade to Enterprise to remove the limits: "
             "https://www.litellm.ai/enterprise",
         ),
@@ -213,7 +213,8 @@ AuthCache: TypeAlias = Annotated[UserApiKeyCache, Depends(get_user_api_key_cache
 @router.get(
     "/customer_portal/limits",
     response_model=CustomerPortalLimits,
-    description="Get customer portal free-tier limits and current capacity. Proxy admins only.",
+    summary="Get Customer Management Limits",
+    description="Get customer management free-tier limits and current capacity. Proxy admins only.",
 )
 @management_endpoint_wrapper
 async def get_customer_portal_limits(

@@ -106,23 +106,23 @@ describe("ViewSwitcher", () => {
     expect(assignSpy).not.toHaveBeenCalled();
   });
 
-  it("should open the Customer Portal at the customers page and come back to the gateway", async () => {
+  it("should open the Customer Management at the customers page and come back to the gateway", async () => {
     const user = userEvent.setup();
     renderSwitcher();
 
     await user.click(screen.getByRole("button", { name: "Switch workspace, current: AI Gateway" }));
-    await user.click(await screen.findByRole("menuitem", { name: /Customer Portal/ }));
+    await user.click(await screen.findByRole("menuitem", { name: /Customer Management/ }));
     expect(pushMock).toHaveBeenCalledWith("/ui/customers");
     expect(assignSpy).not.toHaveBeenCalled();
     expect(localStorage.getItem("litellm_plugin_mode")).toBeNull();
   });
 
-  it("should route back to the gateway from Customer Portal mode instead of only flipping the mode", async () => {
+  it("should route back to the gateway from Customer Management mode instead of only flipping the mode", async () => {
     localStorage.setItem("litellm_plugin_mode", "customer-portal");
     const user = userEvent.setup();
     renderSwitcher();
 
-    await user.click(await screen.findByRole("button", { name: "Switch workspace, current: Customer Portal" }));
+    await user.click(await screen.findByRole("button", { name: "Switch workspace, current: Customer Management" }));
     await user.click(await screen.findByRole("menuitem", { name: /^AI Gateway/ }));
     expect(pushMock).toHaveBeenCalledWith("/ui/api-keys");
   });
