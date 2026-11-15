@@ -4,10 +4,11 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
 from itertools import chain
-from typing import TYPE_CHECKING, Final, Generic, Literal, LiteralString, Protocol, TypeAlias, TypeVar
+from typing import TYPE_CHECKING, Final, Generic, Literal, Protocol, TypeAlias, TypeVar
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
+from typing_extensions import LiteralString
 
 from litellm.models.budget import BudgetLimit, BudgetLimits, LiteLLM_BudgetTable, initialize_budget_limits
 from litellm.proxy.common_utils.timezone_utils import (
