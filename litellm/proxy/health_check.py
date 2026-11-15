@@ -9,7 +9,7 @@ import time
 from collections.abc import Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, TypeVar, cast
+from typing import TYPE_CHECKING, Final, TypeVar
 
 from pydantic import TypeAdapter, ValidationError
 
@@ -601,7 +601,7 @@ async def _run_model_health_check(model: dict):
     probe_params: Final = (
         {**litellm_params, "model_info": {"mode": model_info["mode"]}} if "mode" in model_info else litellm_params
     )
-    deployment_id: Final = _deployment_id(cast("Mapping[str, object]", model))
+    deployment_id: Final = _deployment_id(_MODEL_INFO_ADAPTER.validate_python(model))
     identity: Final[Mapping[str, object]] = (
         {} if deployment_id is None else {"litellm_metadata": {"health_check_deployment_id": deployment_id}}
     )
