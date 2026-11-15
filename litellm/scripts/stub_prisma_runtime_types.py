@@ -33,15 +33,18 @@ def stub_runtime_types(prisma_dir: Path) -> bool:
     return True
 
 
-def installed_prisma_dir() -> Path:
-    spec: Final = importlib.util.find_spec("prisma")
+def installed_package_dir(package: str) -> Path | None:
+    spec: Final = importlib.util.find_spec(package)
     if spec is None or not spec.submodule_search_locations:
-        raise SystemExit("prisma is not installed in this interpreter")
+        return None
     return Path(next(iter(spec.submodule_search_locations)))
 
 
-def main() -> int:
-    prisma_dir: Final = installed_prisma_dir()
+def main(package: str = "prisma") -> int:
+    prisma_dir: Final = installed_package_dir(package)
+    if prisma_dir is None:
+        _ = sys.stderr.write(f"{package} is not installed in this interpreter\n")
+        return 1
     changed: Final = stub_runtime_types(prisma_dir)
     _ = sys.stdout.write(f"{prisma_dir / 'types.py'}: {'stubbed' if changed else 'already stubbed'}\n")
     return 0
