@@ -1302,7 +1302,10 @@ def _anthropic_recoverable_frame_error(
 
 
 def wrap_anthropic_stream(
-    attempt: StreamAttempt, response: AsyncIterator[bytes]
+    attempt: StreamAttempt,
+    response: AsyncIterator[bytes],
+    deadline: float | None = None,
+    expired: Callable[[], MidStreamFallbackError] | None = None,
 ) -> FallbackAwareAnthropicMessagesStream:
     """``_aanthropic_messages_streaming_iterator``: lifecycle frames are held while a retry or a fallback
     can still take over; an error frame, a raised error or a safeguard refusal before content is
@@ -1311,6 +1314,7 @@ def wrap_anthropic_stream(
     from litellm.llms.anthropic.messages.native.streaming_iterator import (
         aclose_if_supported,
         aclose_superseded_attempt,
+        is_anthropic_content_delta_chunk,
         parse_anthropic_error_event,
         parse_anthropic_refusal_stop_details,
     )
@@ -1337,7 +1341,12 @@ def wrap_anthropic_stream(
         )
         buffered: tuple[bytes, ...] = ()  # rebind-ok: flushed once committed or on decline
         try:
-            async for chunk in _areported(attempt, source_iterator, usage.total_tokens, usage.observe):
+            items: Final = (
+                _until_first_output(source_iterator, deadline, is_anthropic_content_delta_chunk, expired)
+                if deadline is not None and expired is not None
+                else source_iterator
+            )
+            async for chunk in _areported(attempt, items, usage.total_tokens, usage.observe):
                 if _anthropic_stream_forwards_ping_live(chunk, has_generated_content):
                     yield chunk
                     continue
@@ -2035,7 +2044,9 @@ async def open_attempt_stream(attempt: StreamAttempt, response: object) -> objec
             return response
         return wrap_responses_stream(attempt, response)
     if attempt.op in ("aanthropic_messages", "anthropic_messages") and hasattr(response, "__aiter__"):
-        return wrap_anthropic_stream(attempt, cast("AsyncIterator[bytes]", response))  # cast-ok: a byte stream
+        return wrap_anthropic_stream(
+            attempt, cast("AsyncIterator[bytes]", response), deadline, expired  # cast-ok: a byte stream
+        )
     return response
 
 
