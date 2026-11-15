@@ -617,10 +617,12 @@ class StreamClock:
         return self.now
 
     async def elapse(self, seconds: float) -> None:
-        self.now += seconds
-        await asyncio.sleep(0)
-        await asyncio.sleep(0)
-        await asyncio.sleep(0)
+        steps: Final = max(1, round(seconds / 0.01))
+        for _ in range(steps):
+            self.now += seconds / steps
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
 
 
 @pytest_asyncio.fixture(loop_scope="function")

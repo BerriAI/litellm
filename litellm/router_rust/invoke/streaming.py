@@ -443,11 +443,21 @@ def _mid_stream_retry_trigger(error: MidStreamFallbackError) -> Exception:
     return error.original_exception if error.original_exception is not None else error
 
 
-async def _aread_first_chunk(stream: CustomStreamWrapper) -> _FirstChunk[AsyncIterator[object]]:
+async def _aread_first_chunk(
+    stream: CustomStreamWrapper,
+    deadline: float | None = None,
+    expired: Callable[[], MidStreamFallbackError] | None = None,
+) -> _FirstChunk[AsyncIterator[object]]:
     """Read the first chunk while the attempt still holds the request, so a stream that fails before
     any token fails the attempt. Iterates the way ``async for`` does: one ``__aiter__`` call, then
     ``__anext__`` on what it returned."""
-    rest: Final = stream.__aiter__()
+    rest: Final = (
+        _until_first_output(
+            stream.__aiter__(), deadline, lambda chunk: _stream_chunks_have_generated_content((chunk,)), expired
+        )
+        if deadline is not None and expired is not None
+        else stream.__aiter__()
+    )
     try:
         return _FirstChunk(chunk=await rest.__anext__(), rest=rest)
     except StopAsyncIteration:
@@ -1982,10 +1992,34 @@ async def open_attempt_stream(attempt: StreamAttempt, response: object) -> objec
     a stream that fails before any token raises inside the attempt."""
     from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
 
+    from litellm.router_rust.invoke.shaping import stream_ttft_timeout
+    from litellm.litellm_core_utils.get_llm_provider_logic import inferred_provider
+
+    seconds: Final = stream_ttft_timeout(attempt.kwargs, {})
+    deadline: Final = anyio.current_time() + seconds if seconds is not None else None
+    model: Final = str(attempt.kwargs.get("model", attempt.group))
+    provider: Final = str(attempt.kwargs.get("custom_llm_provider") or inferred_provider(model) or "")
+
+    def expired() -> MidStreamFallbackError:
+        return _stream_pre_content_error(
+            litellm_exceptions.Timeout(
+                message=f"No model output within stream_ttft_timeout={seconds}s", model=model, llm_provider=provider
+            ),
+            model,
+            provider,
+        )
+
     if attempt.op == "acompletion" and isinstance(response, CustomStreamWrapper):
         if response.completion_stream is None and response.make_call is not None:  # pyright: ignore[reportUnknownMemberType]  # untyped attributes
-            await response.fetch_stream()
-        first_chunk: Final = await _aread_first_chunk(response)
+            if deadline is None:
+                await response.fetch_stream()
+            else:
+                try:
+                    with anyio.fail_after(max(0.0, deadline - anyio.current_time())):
+                        await response.fetch_stream()
+                except TimeoutError as error:
+                    raise _mid_stream_retry_trigger(expired()) from error
+        first_chunk: Final = await _aread_first_chunk(response, deadline, expired)
         held_slot: Final = attempt.slot.pop_all() if attempt.slot is not None else contextlib.ExitStack()
         return wrap_chat_stream(attempt, response, first_chunk, held_slot)
     if not attempt.kwargs.get("stream"):
