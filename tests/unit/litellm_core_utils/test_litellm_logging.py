@@ -16504,9 +16504,9 @@ async def test_a_sync_failure_on_the_loop_alone_still_delivers_v2_attempt_ended_
     assert submitted == ["RequestScope._deliver_off_path"]
 
 
-@pytest.mark.parametrize("stream", (False, True))
+@pytest.mark.parametrize("stream", (False, True, None))
 def test_printed_logging_stream_flag_keeps_container_field_free(
-    stream: bool, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    stream: bool | None, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     from pydantic import TypeAdapter
 
@@ -16525,5 +16525,6 @@ def test_printed_logging_stream_flag_keeps_container_field_free(
     printed: Final = TypeAdapter(Mapping[str, object]).validate_json(capsys.readouterr().out)
     assert printed["is_stream"] is stream
     assert "stream" not in printed
+    assert printed["model_parameters"] == original["model_parameters"]
     assert printed["id"] == payload["id"]
     assert payload == original
