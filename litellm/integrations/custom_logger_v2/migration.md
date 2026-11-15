@@ -9,7 +9,7 @@ The Python proxy can use Rust components such as the router while it continues t
 1. Capture the callback's behavior using synthetic requests. Include requests that should pass, requests that should be rejected, any request mutations, and streaming output if applicable.
 2. Profile the callback on the Python proxy. If local computation dominates, you can move that function into an extension you own and call it from the existing Python callback. Keep app configuration and callback registration as they are for this step.
 3. Repeat the same tests and compare pre-call latency with and without the extension. Include data conversion and any thread scheduling in the measurement. If your callback makes network calls, measure their time separately.
-4. For a native gateway port, first check which hooks, fields and outcomes the target LiteLLM version exposes. Follow [the proposed native callback contract](https://github.com/BerriAI/litellm/pull/51526) for work in progress. Verify registration and request eligibility on the gateway before expecting the full request to run in Rust.
+4. For a native gateway port, first check which hooks, fields and outcomes the target LiteLLM version exposes. See [the native callback contract](https://github.com/BerriAI/litellm/pull/51526) for the merged interface. Verify registration and request eligibility on the gateway before expecting the full request to run in Rust.
 
 For a callback that blocks outgoing content, include a test in which an earlier callback adds that content. Assert both that the request is rejected and that the provider receives zero calls. Keep the Python path available until the native path covers all the callbacks required by that request.
 
