@@ -187,6 +187,18 @@ def test_aigrow_chat_completion_forwards_tools_and_reasoning_effort(model: str) 
     assert response.choices[0].message.content == "Hello from AIGROW"
 
 
+def test_aigrow_without_its_own_key_never_sends_the_openai_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("AIGROW_API_KEY", raising=False)
+    monkeypatch.delenv("AIGROW_API_BASE", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "openai-only-key")
+    with respx.mock(assert_all_called=False) as upstream:
+        route: Final = upstream.post(_CHAT_COMPLETIONS_URL).respond(200, json=_CHAT_COMPLETION)
+        with pytest.raises(litellm.AuthenticationError, match="AIGROW_API_KEY"):
+            _ = litellm.completion(model="aigrow/gpt-6.1-sol", messages=[{"role": "user", "content": "Say hello"}])
+
+    assert route.call_count == 0
+
+
 def test_aigrow_responses_request_is_bridged_to_chat_completions() -> None:
     with respx.mock() as upstream:
         route: Final = upstream.post(_CHAT_COMPLETIONS_URL).respond(200, json=_CHAT_COMPLETION)
