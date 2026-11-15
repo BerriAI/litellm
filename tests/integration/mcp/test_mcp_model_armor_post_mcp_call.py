@@ -6,7 +6,7 @@ The scripted MCP server and the Model Armor and Google token endpoints are the o
 import json
 import os
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
@@ -123,6 +123,61 @@ def _note_tool() -> ScriptedTool:
     )
 
 
+def _lookup_tool() -> ScriptedTool:
+    return ScriptedTool(
+        "lookup",
+        lambda params: {
+            "content": [{"type": "text", "text": f"{params['arguments']['record']} {params['arguments']['marker']}"}],
+            "isError": False,
+        },
+    )
+
+
+def _model_calling_lookup(alias: str, record: str, marker: str, seen: list[str]) -> Callable[[Request], Reply]:
+    def respond(request: Request) -> Reply:
+        if request.method == "GET" and request.target.endswith("/models"):
+            return Reply(body=b'{"object":"list","data":[]}')
+        assert request.target.endswith("/responses"), request.target
+        seen.append(request.body.decode())
+        answered: Final = any(
+            isinstance(item, dict) and item.get("type") == "function_call_output"
+            for item in json.loads(request.body).get("input", ())
+        )
+        output: Final[dict[str, object]] = (
+            {
+                "type": "message",
+                "id": "msg_done",
+                "role": "assistant",
+                "status": "completed",
+                "content": [{"type": "output_text", "text": "done", "annotations": []}],
+            }
+            if answered
+            else {
+                "type": "function_call",
+                "id": "fc_lookup",
+                "call_id": "call_lookup",
+                "name": f"{alias}-lookup",
+                "arguments": json.dumps({"record": record, "marker": marker}),
+                "status": "completed",
+            }
+        )
+        return Reply(
+            body=json.dumps(
+                {
+                    "id": "resp_lookup",
+                    "object": "response",
+                    "created_at": 1,
+                    "status": "completed",
+                    "model": "gpt-4o-mini",
+                    "output": [output],
+                    "usage": {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
+                }
+            ).encode()
+        )
+
+    return respond
+
+
 def _tool_result(outcome: Outcome) -> dict[str, object]:
     data: Final = tuple(line[5:].strip() for line in outcome.raw.splitlines() if line.startswith("data:"))
     body: Final = json.loads(data[-1] if data else outcome.raw)
@@ -147,6 +202,41 @@ class Rig:
             f"{self.alias}-note", {"note": note}, server_id=self.server_id
         )
 
+    def respond_with_lookup(
+        self, record: str, marker: str, guardrails: tuple[str, ...], requested: tuple[str, ...] = ()
+    ) -> tuple[str, str]:
+        seen: Final[list[str]] = []
+        with wire_server(_model_calling_lookup(self.alias, record, marker, seen)) as model_wire:
+            model: Final = self.scenario.model(model="openai/responses/gpt-4o-mini", api_base=model_wire.url + "/v1")
+            key: Final = self.scenario.key(
+                object_permission={"mcp_servers": [self.server_id]},
+                **({"metadata": {"guardrails": list(guardrails)}} if guardrails else {}),
+            )
+            response: Final = self.proxy.client.post(
+                "/v1/responses",
+                headers={"Authorization": f"Bearer {key}"},
+                json={
+                    "model": model,
+                    "input": "look up the record",
+                    **({"guardrails": list(requested)} if requested else {}),
+                    "tools": [
+                        {
+                            "type": "mcp",
+                            "server_url": "litellm_proxy",
+                            "server_label": "litellm",
+                            "require_approval": "never",
+                        }
+                    ],
+                },
+                timeout=90,
+            )
+        assert len(seen) == 2, f"the model must be asked again with the tool result: {response.text} {seen}"
+        outputs: Final = [
+            item["output"] for item in json.loads(seen[1])["input"] if item.get("type") == "function_call_output"
+        ]
+        assert len(outputs) == 1, seen[1]
+        return response.text, str(outputs[0])
+
     def scans(self, marker: str) -> list[tuple[str, str]]:
         return [
             (request.target, next(iter(json.loads(request.body).values()))["text"])
@@ -166,7 +256,7 @@ def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
     with (
         gateway_from_environment() as gateway,
         wire_server(_model_armor) as armor,
-        scripted_peer(_note_tool()) as peer,
+        scripted_peer(_note_tool(), _lookup_tool()) as peer,
         owned_proxy_process(gateway, root, {}, config=_config(armor.url, root)) as owned,
         owned.gateway.scenario() as scenario,
     ):
@@ -251,4 +341,43 @@ def test_a_default_off_guardrail_is_not_called_for_a_key_that_does_not_name_it(r
     outcome: Final = rig.call_note(entry, note, ())
 
     assert (outcome.error, outcome.text) == (None, note), outcome.raw
+    assert rig.scans(marker) == []
+
+
+def test_a_flagged_tool_result_is_withheld_from_the_model_and_client_on_the_responses_api(rig: Rig) -> None:
+    marker: Final = "mark-" + uuid.uuid4().hex
+    flagged: Final = f"{BLOCK_MARK} {marker}"
+
+    client_body, tool_output = rig.respond_with_lookup(BLOCK_MARK, marker, (STRICT,))
+
+    assert "Response blocked by Model Armor" in tool_output and flagged not in tool_output, tool_output
+    assert flagged not in client_body, f"the flagged tool result reached the client: {client_body}"
+    assert rig.scans(marker) == [(_sanitize_target(STRICT), flagged)]
+
+
+def test_a_deidentify_match_is_masked_for_the_model_and_client_on_the_responses_api(rig: Rig) -> None:
+    marker: Final = "mark-" + uuid.uuid4().hex
+    record: Final = f"account {SENSITIVE}"
+
+    client_body, tool_output = rig.respond_with_lookup(record, marker, (STRICT,))
+
+    assert tool_output == f"account {REDACTED} {marker}"
+    assert f"{record} {marker}" not in client_body, f"the unmasked tool result reached the client: {client_body}"
+    assert {target for target, _ in rig.scans(marker)} == {_sanitize_target(STRICT)}
+
+
+def test_a_guardrail_named_on_the_request_masks_the_tool_result_on_the_responses_api(rig: Rig) -> None:
+    marker: Final = "mark-" + uuid.uuid4().hex
+
+    _, tool_output = rig.respond_with_lookup(f"account {SENSITIVE}", marker, (), requested=(STRICT,))
+
+    assert tool_output == f"account {REDACTED} {marker}"
+
+
+def test_a_default_off_guardrail_is_not_called_on_the_responses_api_for_a_key_that_does_not_name_it(rig: Rig) -> None:
+    marker: Final = "mark-" + uuid.uuid4().hex
+
+    _, tool_output = rig.respond_with_lookup(BLOCK_MARK, marker, ())
+
+    assert tool_output == f"{BLOCK_MARK} {marker}"
     assert rig.scans(marker) == []
