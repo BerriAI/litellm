@@ -508,7 +508,10 @@ async def delete_customer_member(
     "/customer_members",
     response_model=ListResponse[CustomerMember],
     dependencies=(Depends(reject_duplicate_list_params),),
-    description="List customer members with page-number pagination and resolved budgets. Proxy admins only.",
+    description=(
+        "List customer members with page-number pagination and resolved budgets. "
+        "search filters by customer member ID or alias before paginating. Proxy admins only."
+    ),
 )
 @management_endpoint_wrapper
 async def list_customer_members(
@@ -518,9 +521,12 @@ async def list_customer_members(
     page_size: Annotated[int, Query(ge=1)] = 50,
     parent_team_id: str | None = None,
     parent_org_id: str | None = None,
+    search: Annotated[str, Query(description="Case-insensitive substring of the customer member ID or alias")] = "",
 ) -> ListResponse[CustomerMember]:
     size: Final = min(page_size, 100)
-    result: Final = resolve(await hierarchy.list_members(parent_team_id, page, size, parent_org_id=parent_org_id))
+    result: Final = resolve(
+        await hierarchy.list_members(parent_team_id, page, size, parent_org_id=parent_org_id, search=search.strip())
+    )
     return list_response(result, request, page, size)
 
 

@@ -23,6 +23,7 @@ const MANAGE_PARSERS = {
   member: parseAsString,
   tab: parseAsStringLiteral(["teams", "members", "budget_groups", "settings"] as const),
   hierarchyPage: parseAsInteger.withDefault(1),
+  memberSearch: parseAsString.withDefault(""),
 };
 
 export interface CustomerHierarchyContext {
@@ -56,13 +57,14 @@ export async function customerHierarchyContext(
 async function customerHierarchyChildren(
   context: CustomerHierarchyContext,
   kind: ChildList["kind"],
-  page: number,
+  { page, search }: { page: number; search: string },
   signal?: AbortSignal,
 ): Promise<ChildList> {
   if (kind === "members") {
-    const query = context.team
-      ? { parent_team_id: context.team.customer_team_id, page, page_size: 20 }
-      : { parent_org_id: context.organization.customer_org_id, page, page_size: 20 };
+    const parent = context.team
+      ? { parent_team_id: context.team.customer_team_id }
+      : { parent_org_id: context.organization.customer_org_id };
+    const query = { ...parent, page, page_size: 20, ...(search ? { search } : {}) };
     const response = await fetchClient.GET("/management/v1/customer_members", {
       params: { query },
       signal,
@@ -155,6 +157,10 @@ function useChildSpend(
   });
 }
 
+function memberSearchForTab(kind: ChildList["kind"], search: string): string {
+  return kind === "members" ? search.trim() : "";
+}
+
 export default function useCustomerHierarchy() {
   const { accessToken, userRole, isLoading } = useAuthorized();
   const canManage = isProxyAdminRole(userRole);
@@ -178,6 +184,7 @@ export default function useCustomerHierarchy() {
   const childContext = selected && !selected.member ? selected : null;
   const showChildren = tab === "teams" || tab === "members";
   const page = Math.max(1, params.hierarchyPage);
+  const memberSearch = memberSearchForTab(childTab, params.memberSearch);
   const children = useQuery({
     queryKey: [
       "customer-hierarchy",
@@ -186,10 +193,11 @@ export default function useCustomerHierarchy() {
       selected?.organization.customer_org_id,
       selected?.team?.customer_team_id,
       page,
+      memberSearch,
     ],
     queryFn:
       enabled && childContext && showChildren
-        ? ({ signal }) => customerHierarchyChildren(childContext, childTab, page, signal)
+        ? ({ signal }) => customerHierarchyChildren(childContext, childTab, { page, search: memberSearch }, signal)
         : skipToken,
   });
   const childUsage = useChildSpend(children.data, scope, accessToken, enabled && showChildren);
@@ -199,15 +207,21 @@ export default function useCustomerHierarchy() {
     void setParams({ hierarchyPage: null });
   }, [children.isSuccess, children.data, page, setParams]);
   const openOrganization = () => {
-    const parent = { team: null, member: null, tab: null, hierarchyPage: null };
+    const parent = { team: null, member: null, tab: null, hierarchyPage: null, memberSearch: null };
     void setParams(parent, { history: "push" });
   };
   const openTeam = (id: string, settings = false) => {
-    const next = { team: id, member: null, tab: settings ? ("settings" as const) : null, hierarchyPage: null };
+    const next = {
+      team: id,
+      member: null,
+      tab: settings ? ("settings" as const) : null,
+      hierarchyPage: null,
+      memberSearch: null,
+    };
     void setParams(next, { history: "push" });
   };
   const openMember = (id: string, teamId: string) => {
-    const next = { team: teamId, member: id, tab: null, hierarchyPage: null };
+    const next = { team: teamId, member: id, tab: null, hierarchyPage: null, memberSearch: null };
     void setParams(next, { history: "push" });
   };
   const openCreatedScope = (parent: CustomerHierarchyScope, created: CreatedCustomerHierarchyEntity) =>
@@ -222,6 +236,7 @@ export default function useCustomerHierarchy() {
           member: created.kind === "member" ? created.record.customer_member_id : null,
           tab: created.kind === "team" ? ("settings" as const) : null,
           hierarchyPage: null,
+          memberSearch: null,
         };
       },
       { history: "push" },
@@ -248,6 +263,7 @@ export default function useCustomerHierarchy() {
     tab,
     childTab,
     page,
+    memberSearch,
     canManage,
     isLoading,
     openOrganization,
@@ -257,5 +273,7 @@ export default function useCustomerHierarchy() {
     refresh,
     organizationSaved,
     setPage: (hierarchyPage: number) => void setParams({ hierarchyPage }),
+    setMemberSearch: (search: string) =>
+      void setParams({ memberSearch: search || null, hierarchyPage: null }, { history: "push" }),
   };
 }

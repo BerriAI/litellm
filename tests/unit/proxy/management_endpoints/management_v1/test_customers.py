@@ -978,6 +978,57 @@ def test_organization_list_counts_all_members_and_searches_before_paginating() -
     assert literal.json()["meta"]["total_count"] == 1
 
 
+def test_member_list_searches_id_and_alias_within_its_parent_before_paginating() -> None:
+    http: Final = client()
+    family(http)
+    parents: Final = (
+        (
+            "customer_organizations",
+            {
+                "customer_org_id": "other-org",
+                "default_budgets": [{"name": "standard", "max_budget": 1}],
+                "default_budget_template": "standard",
+            },
+        ),
+        ("customer_teams", {"customer_team_id": "other-team", "parent_org_id": "org"}),
+        ("customer_teams", {"customer_team_id": "outside-team", "parent_org_id": "other-org"}),
+    )
+    members: Final = (
+        ("user-1", "Filler One", "team"),
+        ("user-2", "Filler Two", "team"),
+        ("user-3", "Zed Target", "team"),
+        ("zed_4", "Filler Four", "team"),
+        ("zedx4", "100% Filler", "team"),
+        ("user-6", "Zed Elsewhere", "other-team"),
+        ("user-7", "Zed Outside", "outside-team"),
+    )
+    rows: Final = (
+        *parents,
+        *(
+            ("customer_members", {"customer_member_id": identifier, "alias": alias, "parent_team_ids": [team]})
+            for identifier, alias, team in members
+        ),
+    )
+    for collection, body in rows:
+        created: Final = http.post(f"/management/v1/{collection}", json=body)
+        assert created.status_code == 201, created.text
+
+    def found(params: Mapping[str, str | int]) -> tuple[tuple[str, ...], int]:
+        response: Final = http.get("/management/v1/customer_members", params=params)
+        assert response.status_code == 200, response.text
+        ids: Final = tuple(row["customer_member_id"] for row in response.json()["data"])
+        return ids, response.json()["meta"]["total_count"]
+
+    assert found({"parent_team_id": "team", "page_size": 2})[0] == ("user-1", "user-2")
+    assert found({"parent_team_id": "team", "page_size": 2, "search": " ZED "}) == (("user-3", "zed_4"), 3)
+    assert found({"parent_team_id": "team", "page_size": 2, "page": 2, "search": "zed"}) == (("zedx4",), 3)
+    assert found({"parent_org_id": "org", "search": "zed"}) == (("user-3", "user-6", "zed_4", "zedx4"), 4)
+    assert found({"search": "zed"})[1] == 5
+    assert found({"parent_team_id": "team", "search": "zed_"}) == (("zed_4",), 1)
+    assert found({"parent_team_id": "team", "search": "%"}) == (("zedx4",), 1)
+    assert found({"parent_team_id": "team", "search": "nobody"}) == ((), 0)
+
+
 def created_member(http: TestClient, member_id: str, team_id: str, *, override: bool = False) -> CustomerMember:
     response: Final = http.post(
         "/management/v1/customer_members",
@@ -1800,7 +1851,7 @@ def test_grouped_configuration_keeps_window_clocks_and_invalidates_member_cache(
     )
     assert windows.status_code == 200, windows.text
     advanced: Final = http.patch(
-        f'/management/v1/customer_organizations/org/default_budgets/{first["budget_id"]}',
+        f"/management/v1/customer_organizations/org/default_budgets/{first['budget_id']}",
         json={
             "budget_limits": [
                 {**row, "reset_at": "2028-01-15T00:00:00Z"}
@@ -1912,9 +1963,11 @@ def test_list_and_detail_expose_each_effective_budget_with_its_own_recorded_spen
     created: Final = http.post(
         "/management/v1/customer_members",
         json={
-            "customer_member_id": "window-member", "parent_team_ids": ["team"],
+            "customer_member_id": "window-member",
+            "parent_team_ids": ["team"],
             "budget_override": {
-                "max_budget": 50, "budget_duration": "1mo",
+                "max_budget": 50,
+                "budget_duration": "1mo",
                 "budget_limits": [{"budget_duration": "1mo", "max_budget": 10}],
             },
         },
@@ -1922,8 +1975,11 @@ def test_list_and_detail_expose_each_effective_budget_with_its_own_recorded_spen
     assert created.status_code == 201, created.text
     database.litellm_budgetwindowspend.rows = {
         "window-member": Record(
-            entity_type="customer_member", entity_id="window-member", window_duration="1mo",
-            window_start=NOW, spend=8,
+            entity_type="customer_member",
+            entity_id="window-member",
+            window_duration="1mo",
+            window_start=NOW,
+            spend=8,
         ),
     }
     detail: Final = http.get("/management/v1/customer_members/window-member")

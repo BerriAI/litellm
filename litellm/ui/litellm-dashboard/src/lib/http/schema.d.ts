@@ -9683,7 +9683,7 @@ export interface paths {
         };
         /**
          * List Customer Members
-         * @description List customer members with page-number pagination and resolved budgets. Proxy admins only.
+         * @description List customer members with page-number pagination and resolved budgets. search filters by customer member ID or alias before paginating. Proxy admins only.
          */
         get: operations["list_customer_members_management_v1_customer_members_get"];
         put?: never;
@@ -68944,6 +68944,8 @@ export interface operations {
                 page_size?: number;
                 parent_team_id?: string | null;
                 parent_org_id?: string | null;
+                /** @description Case-insensitive substring of the customer member ID or alias */
+                search?: string;
             };
             header?: never;
             path?: never;

@@ -20703,6 +20703,8 @@
       "membersHint": "Choose a customer member to manage their settings and budget.",
       "emptyTeams": "No customer teams in this customer organization.",
       "emptyMembers": "No customer members in this customer team.",
+      "searchMembers": "Search customer members by name or ID",
+      "noMemberMatches": "No customer members match your search.",
       "error": "Unable to load customer",
       "scopeMismatch": "This customer team or customer member does not belong to the selected customer organization.",
       "missingOrganization": "Choose a customer organization to manage.",
