@@ -105,7 +105,9 @@ def streak_update(observation: PromptCacheObservation) -> StreakUpdate:
         return ScopeBreak(scope=scope, ended_ms=_epoch_ms(observation.ended_at))
     usage: Final = outcome.usage if isinstance(outcome, Assessed) else None
     if isinstance(usage, CacheCounters):
-        return _prefix_event(observation, scope, prefix, _event(usage, prefix), usage.write_tokens)
+        event: Final = _event(usage, prefix)
+        proven_tokens: Final = usage.write_tokens if event is StreakEvent.PROOF else 0
+        return _prefix_event(observation, scope, prefix, event, proven_tokens)
     return _prefix_event(observation, scope, prefix, StreakEvent.UNKNOWN, 0)
 
 
@@ -168,13 +170,17 @@ class PromptCacheIncidentDetector:
         self._lost = MappingProxyType({**self._lost, update.scope: ended})
 
     async def _break_lost_scopes(self, now_ms: int) -> bool:
-        for scope, ended in tuple(self._lost.items()):
+        """Another callback can lose newer evidence for the same scope while a break is in flight, so a scope is
+        only forgotten once the break that landed is still the latest one, and a newer one is applied first."""
+        while self._lost:
+            scope, ended = next(iter(self._lost.items()))
             try:
                 await self._streaks.apply(ScopeBreak(scope=scope, ended_ms=ended), now_ms)
             except self._failures as error:
                 verbose_router_logger.warning("prompt cache streak unavailable (%s)", type(error).__name__)
                 return False
-            self._lost = MappingProxyType({key: value for key, value in self._lost.items() if key != scope})
+            if self._lost.get(scope) == ended:
+                self._lost = MappingProxyType({key: value for key, value in self._lost.items() if key != scope})
         return True
 
     async def _apply(self, update: StreakUpdate) -> StreakOutcome | None:

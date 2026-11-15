@@ -5868,6 +5868,10 @@
       },
       "retiredTitle": "{{name}} retired on {{date}}",
       "retiresTitle": "{{name}} retires on {{date}}",
+      "promptCache": {
+        "title": "Prompt caching stopped on {{name}}",
+        "description": "{{misses}} requests in a row to {{model}} read and wrote no cache for a prefix the provider had cached before."
+      },
       "deprecationDescription": "{{requests}} recorded requests. Last used {{date}} UTC.",
       "retired": "Retired",
       "retires": "Retires",

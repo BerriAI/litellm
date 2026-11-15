@@ -36,6 +36,19 @@ class _Row:
         return self._values
 
 
+def _saved(detection: AlertDetection, status: str = "open") -> Alert:
+    return Alert.model_validate(
+        {
+            **detection.model_dump(),
+            "id": "7",
+            "status": status,
+            "created_at": _START,
+            "updated_at": _START,
+            "updated_by": None,
+        }
+    )
+
+
 def _row(detection: AlertDetection, status: str) -> _Row:
     return _Row(
         {
@@ -109,7 +122,7 @@ async def test_daily_summaries_only_read_metric_alerts() -> None:
 async def test_history_is_only_looked_up_for_metric_alerts() -> None:
     transaction = _Transaction()
     repository, _ = _repository(transaction)
-    incident = Alert.model_validate(_row(_DETECTION, "open").dict() | {"id": "7"})
+    incident = _saved(_DETECTION)
     views = await repository.enrich((incident,))
     assert transaction.queries == ()
     assert views[0].id == "7" and views[0].history is None
@@ -118,7 +131,7 @@ async def test_history_is_only_looked_up_for_metric_alerts() -> None:
 async def test_a_mixed_page_looks_up_history_only_for_its_metric_resources() -> None:
     transaction = _Transaction()
     repository, _ = _repository(transaction)
-    incident = Alert.model_validate(_row(_DETECTION, "open").dict() | {"id": "7"})
+    incident = _saved(_DETECTION)
     spend = Alert.model_validate(
         {
             "id": "8",

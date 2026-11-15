@@ -404,7 +404,7 @@ class ObservationFanout:
 def _sinks(redis: RedisCache | None) -> tuple[ObservationSink, ...]:
     """Streaks are only kept in Redis. Workers keeping their own would each miss what the others saw, and a hit
     seen by one worker between misses seen by another would go unnoticed, so without Redis nothing is detected."""
-    log: Final = ObservationLog(capacity=OBSERVATION_LOG_CAPACITY)
+    log: Final = DiagnosticLog()
     if redis is None:
         return (log,)
     streaks: Final = RedisStreakStore(redis.async_register_script(STREAK_SCRIPT))

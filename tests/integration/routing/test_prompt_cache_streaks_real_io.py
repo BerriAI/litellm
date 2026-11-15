@@ -63,15 +63,26 @@ class _Streaks:
         return tuple(self.event(StreakEvent.MISS, call_id, start + index) for index, call_id in enumerate(call_ids))
 
 
+_CONFIGURATIONS: Final = ("config-1", "config-2", "config-3")
+
+
 @pytest.fixture
 async def streaks() -> AsyncIterator[_Streaks]:
+    """Every configuration these tests touch belongs to one fresh deployment id, so teardown removes exactly the
+    keys this test created and closes the client it opened."""
     cache: Final = RedisCache(host=os.environ["REDIS_HOST"], port=int(os.environ["REDIS_PORT"]))
-    scope: Final = StreakScope(deployment_id=f"claude-{uuid.uuid4()}", config_fingerprint="config-1")
+    deployment_id: Final = f"claude-{uuid.uuid4()}"
+    scope: Final = StreakScope(deployment_id=deployment_id, config_fingerprint=_CONFIGURATIONS[0])
     yield _Streaks(RedisStreakStore(cache.async_register_script(STREAK_SCRIPT)), scope)
     client: Final = cache.init_async_client()
-    stale: Final = [key async for key in client.scan_iter(match=f"*{scope.slot()[len('prompt_cache_streak:') :]}*")]
-    if stale:
-        await client.delete(*stale)
+    tags: Final = tuple(
+        StreakScope(deployment_id=deployment_id, config_fingerprint=config).slot()[len("prompt_cache_streak:") :]
+        for config in _CONFIGURATIONS
+    )
+    owned: Final = [key for tag in tags async for key in client.scan_iter(match=f"*{tag}*")]
+    if owned:
+        await client.delete(*owned)
+    await cache.disconnect()
 
 
 async def test_three_distinct_misses_after_a_proving_write_trigger_once(streaks: _Streaks) -> None:

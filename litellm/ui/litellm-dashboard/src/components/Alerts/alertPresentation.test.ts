@@ -31,6 +31,34 @@ describe("alert presentation", () => {
     expect(presentation.description).toContain(formatted);
     expect(presentation.baseline).toBe(baseline);
   });
+  it("presents a prompt cache incident without reading it as a metric or deprecation alert", () => {
+    const presentation = presentAlert({
+      source: "performance",
+      alert: {
+        ...saved,
+        type: "prompt_cache",
+        resource_type: "deployment",
+        resource_id: "claude-east",
+        evidence: {
+          config_fingerprint: "config-1",
+          prefix_fingerprint: "prefix-1",
+          provider: "anthropic",
+          provider_model: "claude-test",
+          consecutive_misses: 3,
+          proven_write_tokens: 2048,
+          ttl_seconds: 300,
+        },
+      },
+    });
+    expect(presentation.title).toBe("Prompt caching stopped on claude-east");
+    expect(presentation.description).toContain("3 requests in a row to claude-test");
+    expect(presentation.description).not.toContain("prefix-1");
+    expect([presentation.resourceType, presentation.href, presentation.history]).toEqual([
+      "deployment",
+      undefined,
+      null,
+    ]);
+  });
   it("links to the resource with an inclusive eight-day window", () => {
     expect(activityLink(saved)).toBe(
       "/ui/teams?team=example-team&detail_tab=activity&activity_from=2026-01-01&activity_to=2026-01-08",

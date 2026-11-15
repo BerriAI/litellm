@@ -1,4 +1,4 @@
-import { ArrowLeft, KeyRound, Network, Server, User, Users } from "lucide-react";
+import { ArrowLeft, Cpu, KeyRound, Network, Server, User, Users } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { buttonVariants } from "@/components/ui/button";
 import RecommendedReplacement from "@/components/ModelDeprecationAlerts/RecommendedReplacement";
@@ -18,7 +18,14 @@ export default function AlertDetail({
 }) {
   const { t } = useTranslation();
   const alert = presentAlert(item);
-  const Icon = { key: KeyRound, team: Users, user: User, model: Network, gateway: Server }[alert.resourceType];
+  const Icon = {
+    key: KeyRound,
+    team: Users,
+    user: User,
+    model: Network,
+    gateway: Server,
+    deployment: Cpu,
+  }[alert.resourceType];
   return (
     <div className="min-w-0 space-y-6">
       <button

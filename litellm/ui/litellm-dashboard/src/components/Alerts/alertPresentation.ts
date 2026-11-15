@@ -106,6 +106,27 @@ export function presentAlert(item: AlertItem) {
     (alert.resource_type === "key"
       ? i18n.t("alerts.unified.keyFallback", { id: alert.resource_id.slice(0, 8) })
       : alert.resource_id);
+  if ("consecutive_misses" in alert.evidence) {
+    return {
+      id: alert.id,
+      title: i18n.t("alerts.unified.promptCache.title", { name }),
+      description: i18n.t("alerts.unified.promptCache.description", {
+        misses: alert.evidence.consecutive_misses.toLocaleString(),
+        model: alert.evidence.provider_model,
+      }),
+      status: alert.status,
+      resourceType: alert.resource_type,
+      resourceName: name,
+      href: undefined,
+      linkLabel: "",
+      unit: "requests" as MetricUnit,
+      history: null,
+      baseline: undefined,
+      observed: alert.window_start.slice(0, 10),
+      dates: [[i18n.t("alerts.unified.firstDetected"), alert.created_at]],
+      chartTitle: i18n.t("alerts.usageChart.title"),
+    };
+  }
   if (!("value" in alert.evidence)) {
     return {
       id: alert.id,

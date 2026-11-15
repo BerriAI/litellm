@@ -1,3 +1,4 @@
+import asyncio
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -16,6 +17,7 @@ from litellm.router_utils.prompt_cache_observations.streaks import (
     StreakEvent,
     StreakOutcome,
     StreakScope,
+    StreakStore,
     StreakUpdate,
     Triggered,
     Unproven,
@@ -24,26 +26,21 @@ from litellm.router_utils.prompt_cache_observations.types import (
     Assessed,
     CacheablePrefix,
     CacheCounters,
-    CacheIntent,
     ClientSurface,
     DeploymentCacheIdentity,
     ObservationPath,
     PromptCacheObservation,
-    ProviderFamily,
     Runtime,
     Unassessed,
     UnassessedReason,
     UpstreamCacheUsage,
     UsageUnknown,
     UsageUnknownReason,
-    WireShape,
 )
 
 _START = 1_700_000_000.0
 _DURATION = 0.5
 _PATH = ObservationPath(
-    provider=ProviderFamily.ANTHROPIC,
-    wire=WireShape.ANTHROPIC_MESSAGES,
     surface=ClientSurface.CHAT,
     stream=False,
     runtime=Runtime.PYTHON,
@@ -57,7 +54,6 @@ def _deployment(config: str = "config-1") -> DeploymentCacheIdentity:
         config_fingerprint=config,
         provider="anthropic",
         provider_model="claude-test",
-        min_prefix_tokens=1024,
     )
 
 
@@ -71,7 +67,6 @@ def _observation(
     return PromptCacheObservation(
         call_id=call_id,
         deployment=_deployment(config),
-        intent=CacheIntent.CLIENT,
         started_at=at,
         ended_at=at + _DURATION,
         outcome=Assessed(path=_PATH, prefix=prefix, usage=usage),
@@ -89,7 +84,6 @@ def _unassessed(call_id: str, at: float, prefix: CacheablePrefix | None) -> Prom
     return PromptCacheObservation(
         call_id=call_id,
         deployment=_deployment(),
-        intent=CacheIntent.CLIENT,
         started_at=at,
         ended_at=at + _DURATION,
         outcome=Unassessed(UnassessedReason.REQUEST_BODY_UNAVAILABLE, path=_PATH, prefix=prefix),
@@ -135,7 +129,7 @@ class _ScriptedStore:
         return self.outcomes[len(self.applied) - 1] if len(self.applied) <= len(self.outcomes) else Unproven()
 
 
-def _detector(recorder: _Recorder | None, store: _ScriptedStore) -> PromptCacheIncidentDetector:
+def _detector(recorder: _Recorder | None, store: StreakStore) -> PromptCacheIncidentDetector:
     slot = IncidentSlot()
     slot.attach(recorder)
     return PromptCacheIncidentDetector(store, slot.current, clock=lambda: _CLOCK_MS / 1000)
@@ -157,7 +151,6 @@ async def _feed(detector: PromptCacheIncidentDetector, *observations: PromptCach
             PromptCacheObservation(
                 call_id="f",
                 deployment=_deployment(),
-                intent=CacheIntent.CLIENT,
                 started_at=_START,
                 ended_at=_START + _DURATION,
                 outcome=Unassessed(UnassessedReason.UPSTREAM_FAILED, path=_PATH, prefix=_PREFIX),
@@ -237,6 +230,46 @@ async def test_while_the_scope_break_cannot_be_delivered_no_later_evidence_count
         ScopeBreak(_SCOPE, int((_START + 11 + _DURATION) * 1000)),
         _event(StreakEvent.MISS, "d", _START + 11),
     ]
+
+
+class _HeldBreakStore:
+    """Fails the first update, holds the first scope break until released, fails the second scope break and
+    accepts everything after. Every update that lands is recorded in order."""
+
+    def __init__(self) -> None:
+        self.held = asyncio.Event()
+        self.release = asyncio.Event()
+        self.calls = 0
+        self.applied: tuple[StreakUpdate, ...] = ()
+
+    async def apply(self, update: StreakUpdate, now_ms: int) -> StreakOutcome:
+        position = self.calls
+        self.calls += 1
+        if position == 0 or position == 2:
+            raise RedisConnectionError("redis is down")
+        if position == 1:
+            self.held.set()
+            await self.release.wait()
+        self.applied = (*self.applied, update)
+        return Unproven()
+
+
+async def test_evidence_lost_while_an_older_break_is_in_flight_is_still_broken_before_later_evidence() -> None:
+    """A break for the first lost hit is held in Redis while another callback loses a later hit on the same scope.
+    Dropping the scope once the older break lands would let misses after the first hit count over the second."""
+    store = _HeldBreakStore()
+    detector = _detector(_Recorder(), store)
+    await detector.record(_observation("lost-1", _READ, _START + 11))
+    first_flush = asyncio.create_task(detector.record(_observation("next", _MISS, _START + 20)))
+    await store.held.wait()
+    await detector.record(_observation("lost-2", _READ, _START + 15))
+    store.release.set()
+    await first_flush
+    assert store.applied == (
+        ScopeBreak(_SCOPE, int((_START + 11 + _DURATION) * 1000)),
+        ScopeBreak(_SCOPE, int((_START + 15 + _DURATION) * 1000)),
+        _event(StreakEvent.MISS, "next", _START + 20),
+    )
 
 
 async def test_redis_trouble_skips_the_evidence_instead_of_failing_the_request() -> None:

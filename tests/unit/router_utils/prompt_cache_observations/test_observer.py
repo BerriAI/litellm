@@ -595,7 +595,9 @@ async def test_router_check_observes_only_opted_in_deployments_and_reads_absent_
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     monkeypatch.setattr(litellm, "callbacks", [])
     sink = _RecordingSink()
-    monkeypatch.setattr(router_callbacks, "prompt_cache_observer", lambda: _observer(sink, verified=VERIFIED_PATHS))
+    monkeypatch.setattr(
+        router_callbacks, "prompt_cache_observer", lambda redis: _observer(sink, verified=VERIFIED_PATHS)
+    )
     respx_mock.post(_API_BASE).mock(
         return_value=httpx.Response(
             200,
