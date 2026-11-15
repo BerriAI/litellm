@@ -11,7 +11,7 @@ from urllib.parse import urlsplit
 import httpx
 import pytest
 import yaml
-from integration._support.client import Gateway, eventually, gateway_from_environment
+from integration._support.client import Gateway, eventually, gateway_from_environment, held
 from integration._support.forward_proxy import tunnelling_forward_proxy
 from integration._support.process import graceful_stop_seconds, owned_proxy
 from integration._support.tls import server_context, write_self_signed_cert
@@ -50,6 +50,7 @@ _GEMINI_USAGE: Final = {
 _DEPLOYMENT_LOCATIONS: Final = MappingProxyType({"audit-vertex-global": "global", "audit-vertex-us": "us"})
 _GEMINI_ACTIONS: Final = ("generateContent", "streamGenerateContent?alt=sse")
 _CONFIGURED_GATEWAY_PATH: Final = "/google-egress"
+_SPEND_HOLD_SECONDS: Final = 10
 
 
 @dataclass(frozen=True, slots=True)
@@ -157,9 +158,40 @@ def _openai_reply(request: Request) -> Reply:
     return Reply(chunks=(*encoded, b"data: [DONE]\n\n"), content_type="text/event-stream")
 
 
+def _finished_background_response(request: Request) -> Reply:
+    return Reply(
+        body=json.dumps(
+            {
+                "id": urlsplit(request.target).path.rsplit("/", 1)[-1],
+                "object": "response",
+                "created_at": 1,
+                "status": "completed",
+                "background": True,
+                "model": _OPENAI_MODEL,
+                "output": [
+                    {
+                        "id": f"msg_{uuid.uuid4().hex}",
+                        "type": "message",
+                        "status": "completed",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "scripted", "annotations": []}],
+                    }
+                ],
+                "usage": {
+                    "input_tokens": _PROMPT_TOKENS,
+                    "output_tokens": _COMPLETION_TOKENS,
+                    "total_tokens": _PROMPT_TOKENS + _COMPLETION_TOKENS,
+                },
+            }
+        ).encode()
+    )
+
+
 def _upstream(request: Request) -> Reply:
     if request.target.startswith("/v1/chat/completions"):
         return _openai_reply(request)
+    if request.target.startswith("/v1/responses/"):
+        return _finished_background_response(request)
     if "/publishers/anthropic/models/" in request.target:
         assert f"/v1/projects/{_PROJECT}/locations/" in request.target, request.target
         return _claude_reply(request)
@@ -298,6 +330,15 @@ def _spend_row(gateway: Gateway, key: str) -> dict[str, JsonValue]:
         seconds=70,
     )
     return rows[0]
+
+
+def _key_spend(gateway: Gateway, key: str) -> float:
+    rows: Final = gateway.rows(
+        'SELECT spend FROM "LiteLLM_VerificationToken" WHERE token=%s', (sha256(key.encode()).hexdigest(),)
+    )
+    spend: Final = rows[0]["spend"]
+    assert isinstance(spend, float), rows
+    return spend
 
 
 def _spend_for_key(gateway: Gateway, key: str) -> float:
@@ -446,6 +487,23 @@ def test_openai_passthrough_stream_cut_off_after_its_usage_bills_what_the_finish
         }
     list_price: Final = _list_price(_OPENAI_MODEL)
     assert spend == pytest.approx({"finished": list_price, "cut off": list_price})
+
+
+def test_an_openai_passthrough_background_response_read_three_times_bills_one_read(rig: _Rig) -> None:
+    response_path: Final = f"/openai_passthrough/v1/responses/resp_{uuid.uuid4().hex}"
+    with rig.proxy.scenario() as scenario:
+        key: Final = scenario.key()
+        statuses: Final = [
+            rig.proxy.client.get(response_path, headers={"Authorization": f"Bearer {key}"}).status_code
+            for _ in range(3)
+        ]
+        assert statuses == [200, 200, 200]
+        held(
+            lambda: _key_spend(rig.proxy, key),
+            lambda spend: spend == pytest.approx(_list_price(_OPENAI_MODEL)),
+            holding=_SPEND_HOLD_SECONDS,
+            seconds=70,
+        )
 
 
 def _caller_headers(route: str, key: str) -> Mapping[str, str]:

@@ -18,7 +18,7 @@ import traceback
 from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from itertools import chain
 from types import MappingProxyType
 from typing import (
@@ -135,12 +135,14 @@ from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
 from litellm.proxy.common_utils.callback_utils import encrypt_callback_vars
 from litellm.proxy.common_utils.json_merge_patch import apply_json_merge_patch
 from litellm.proxy.common_utils.openai_error_payload import proxy_exception_for
+from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time, keeps_due_budget_reset
 from litellm.proxy.common_utils.user_api_key_cache import (
     UserApiKeyCache,
     team_membership_auth_cache_key,
     team_membership_reservation_cache_key,
 )
 from litellm.proxy.db.db_span import db_span
+from litellm.proxy.guardrails.guardrail_helpers import validate_guardrail_names
 from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
 from litellm.proxy.hooks.model_max_budget_limiter import (
     RoutedModels,
@@ -227,6 +229,7 @@ from litellm.proxy.management_helpers.utils import (
     management_endpoint_wrapper,
 )
 from litellm.proxy.spend_tracking.committed_spend import drop_committed_spend
+from litellm.proxy.spend_tracking.spend_log_api_key_scope import spend_log_api_keys_for_teams
 from litellm.proxy.utils import (
     PrismaClient,
     ProxyLogging,
@@ -618,7 +621,7 @@ async def refresh_cached_team(
     )
     batches: Final = active_request_redis_batches()
     if batches is not None:
-        await batches.flush_all()
+        await batches.flush_pre_call()
     await publish_auth_cache_invalidation(cache_key=f"team_id:{team_row.team_id}")
     if team_table.team_alias is not None:
         await publish_auth_cache_invalidation(cache_key=f"team_alias:{team_table.team_alias}")
@@ -1915,6 +1918,13 @@ async def new_team(
             user_api_key_dict,
             metadata_sent="metadata" in data.model_fields_set,
         )
+        await validate_guardrail_names(
+            data.guardrails,
+            data.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # request models declare `metadata` as bare dict
+            None,
+            prisma_client,
+            license_first=True,
+        )
 
         if isinstance(data.metadata, dict):
             TeamMemberBudgetHandler.strip_system_managed_metadata_keys(data.metadata)
@@ -2635,6 +2645,13 @@ async def update_team(
             metadata_sent="metadata" in data.model_fields_set,
             existing_metadata=_existing_team_metadata if isinstance(_existing_team_metadata, dict) else None,  # pyright: ignore[reportUnknownArgumentType]  # existing_team_row.metadata is a bare dict
         )
+        await validate_guardrail_names(
+            data.guardrails,
+            data.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # request models declare `metadata` as bare dict
+            _existing_team_metadata if isinstance(_existing_team_metadata, dict) else None,  # pyright: ignore[reportUnknownArgumentType]  # existing_team_row.metadata is a bare dict
+            prisma_client,
+            license_first=True,
+        )
 
         if data.soft_budget is not None:
             max_budget_to_check = data.max_budget if data.max_budget is not None else existing_team_row.max_budget
@@ -2774,7 +2791,7 @@ async def update_team(
             )
 
         # Check budget_duration and budget_reset_at
-        _set_budget_reset_at(data, updated_kv)
+        _set_budget_reset_at(data, updated_kv, existing_team)
 
         _team_member_fields_in_request: Final = {
             field
@@ -3002,19 +3019,16 @@ async def patch_team(
         raise handle_exception_on_proxy(e)
 
 
-def _set_budget_reset_at(data: UpdateTeamRequest, updated_kv: dict) -> None:
+def _set_budget_reset_at(data: UpdateTeamRequest, updated_kv: dict, existing_team: LiteLLM_TeamTable) -> None:
     """Set budget_reset_at in updated_kv if budget_duration is provided."""
-    if data.budget_duration is not None:
-        from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
-
-        reset_at: Final = get_budget_reset_time(budget_duration=data.budget_duration)
-        updated_kv["budget_reset_at"] = reset_at
+    if data.budget_duration is not None and not keeps_due_budget_reset(
+        data.budget_duration, existing_team.budget_duration, existing_team.budget_reset_at
+    ):
+        updated_kv["budget_reset_at"] = get_budget_reset_time(budget_duration=data.budget_duration)
     elif "budget_duration" in updated_kv and updated_kv["budget_duration"] is None:
         updated_kv["budget_reset_at"] = None
 
     if data.budget_limits is not None and len(data.budget_limits) > 0:
-        from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
-
         initialized_windows: Final = []
         for window in data.budget_limits:
             w = window if isinstance(window, dict) else window.model_dump()
@@ -5389,6 +5403,9 @@ async def _resolve_team_access_group_resources(
             ),
             "access_group_agent_ids": list({a for group in resolved_groups for a in (group.access_agent_ids or [])}),
             "access_group_skill_names": _effective_access_group_skill_names(resolved_groups, unresolved_ids),
+            "access_group_vector_store_ids": tuple(
+                dict.fromkeys(chain.from_iterable(group.access_vector_store_ids or () for group in resolved_groups))
+            ),
             "unresolved_access_group_ids": unresolved_ids,
             "access_group_details": tuple(
                 TeamAccessGroupModelGrant(
@@ -5398,6 +5415,7 @@ async def _resolve_team_access_group_resources(
                     mcp_server_ids=tuple(group.access_mcp_server_ids or ()),
                     agent_ids=tuple(group.access_agent_ids or ()),
                     skill_names=tuple(group.access_skill_names or ()),
+                    vector_store_ids=tuple(group.access_vector_store_ids or ()),
                 )
                 for group in resolved_groups
             ),
@@ -7465,9 +7483,11 @@ def aggregated_date_range_error(start_date: str | None, end_date: str | None) ->
     return None
 
 
-def _team_user_spend_sql(*, team_count: int, restrict_to_user: bool) -> str:
+def _team_user_spend_sql(*, team_count: int, restrict_to_user: bool, narrow_to_api_keys: bool) -> str:
     team_placeholders: Final = ", ".join(f"${i}" for i in range(3, 3 + team_count))
     user_clause: Final = f' AND sl."user" = ${3 + team_count}' if restrict_to_user else ""
+    api_key_placeholder: Final = 3 + team_count + (1 if restrict_to_user else 0)
+    api_key_clause: Final = f" AND sl.api_key = ANY(${api_key_placeholder}::text[])" if narrow_to_api_keys else ""
     return f"""
         SELECT
             sl.team_id,
@@ -7485,7 +7505,7 @@ def _team_user_spend_sql(*, team_count: int, restrict_to_user: bool) -> str:
         LEFT JOIN "LiteLLM_UserTable" u ON u.user_id = sl."user"
         WHERE sl."startTime" >= $1::timestamp
             AND sl."startTime" < $2::timestamp + INTERVAL '1 day'
-            AND sl.team_id IN ({team_placeholders}){user_clause}
+            AND sl.team_id IN ({team_placeholders}){user_clause}{api_key_clause}
         GROUP BY sl.team_id, sl."user", u.user_email, u.user_alias
         ORDER BY spend DESC, sl.team_id, sl."user"
     """
@@ -7557,15 +7577,24 @@ async def get_team_spend_by_user(
 
     own_user_only: Final = scope.api_key_filter is not None
     user_param: Final = (user_api_key_dict.user_id or "",) if own_user_only else ()
+    scoped_api_keys: Final = await spend_log_api_keys_for_teams(
+        prisma_client, scoped_team_ids, date.fromisoformat(start_date), date.fromisoformat(end_date)
+    )
+    api_key_param: Final = (list(scoped_api_keys),) if scoped_api_keys is not None else ()
     async with db_span("team_user_spend", "LiteLLM_SpendLogs"):
         rows: Final = _TEAM_USER_SPEND_ROWS.validate_python(
             await query_raw_within_statement_timeout(
                 prisma_client,
-                _team_user_spend_sql(team_count=len(scoped_team_ids), restrict_to_user=own_user_only),
+                _team_user_spend_sql(
+                    team_count=len(scoped_team_ids),
+                    restrict_to_user=own_user_only,
+                    narrow_to_api_keys=scoped_api_keys is not None,
+                ),
                 start_date,
                 end_date,
                 *scoped_team_ids,
                 *user_param,
+                *api_key_param,
                 what="Spend per user",
             )
         )

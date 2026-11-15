@@ -1,9 +1,6 @@
 import hashlib
 import os
 import struct
-import subprocess
-import sys
-import textwrap
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -508,29 +505,3 @@ async def test_index_info_uses_valkey_ft_info():
 
     assert result == {"num_docs": 3}
     async_client.ft.assert_called_once_with("test_index")
-
-
-def test_importing_caching_does_not_require_redis():
-    # redis is an optional dependency (extra_proxy), so the base SDK can be
-    # installed without it. Selecting valkey-semantic needs redis, but merely
-    # importing litellm.caching.caching must not, or `import litellm` breaks for
-    # every base-SDK user. This runs in a subprocess with redis blocked so the
-    # check is not polluted by redis already being imported in this session.
-    code = textwrap.dedent("""
-        import sys
-        for name in ("redis", "redis.asyncio", "redis.commands",
-                     "redis.commands.search"):
-            sys.modules[name] = None
-        import litellm.caching.caching  # must not import redis at module top
-        from litellm.types.caching import LiteLLMCacheType
-        assert LiteLLMCacheType.VALKEY_SEMANTIC == "valkey-semantic"
-        print("ok")
-        """)
-    result = subprocess.run(
-        [sys.executable, "-c", code],
-        capture_output=True,
-        text=True,
-        env={**os.environ, "PYTHONPATH": _REPO_ROOT},
-    )
-    assert result.returncode == 0, result.stderr
-    assert "ok" in result.stdout

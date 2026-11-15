@@ -5,6 +5,7 @@ Test the audio utils functionality in litellm_core_utils/audio_utils/utils.py
 import base64
 import io
 import os
+import struct
 import tempfile
 from pathlib import Path
 from typing import Final
@@ -336,6 +337,17 @@ class TestCalculateRequestDuration:
 
         # Verify the file position was restored
         assert file_obj.tell() == len(wav_header), "File position should be restored to original position"
+
+
+def _unsized_flac() -> bytes:
+    streaminfo: Final = (
+        struct.pack(">HH", 4096, 4096) + bytes(6) + ((16000 << 44) | (15 << 36)).to_bytes(8, "big") + bytes(16)
+    )
+    return b"fLaC" + b"\x80" + len(streaminfo).to_bytes(3, "big") + streaminfo
+
+
+def test_duration_is_unknown_for_a_flac_that_does_not_state_its_length() -> None:
+    assert calculate_request_duration(_unsized_flac()) is None
 
 
 class TestGetAudioFileContentHash:
