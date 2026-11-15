@@ -9683,7 +9683,7 @@ export interface paths {
         };
         /**
          * List Customer Members
-         * @description List customer members with page-number pagination and resolved budgets. Proxy admins only.
+         * @description List customer members with page-number pagination and resolved budgets. search filters by customer member ID or alias before paginating. Proxy admins only.
          */
         get: operations["list_customer_members_management_v1_customer_members_get"];
         put?: never;
@@ -9761,7 +9761,7 @@ export interface paths {
         head?: never;
         /**
          * Update Customer Member
-         * @description Update a customer member and its budgets. Proxy admins only.
+         * @description Update a customer member and its budgets. Supply parent_team_ids to replace its teams within the same organization, with the first team as default. Identity, budget counters and historical usage are retained. Historical usage stays attributed to the original team. Proxy admins only.
          */
         patch: operations["update_customer_member_management_v1_customer_members__customer_member_id__patch"];
         trace?: never;
@@ -9934,8 +9934,8 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Get Customer Portal Limits
-         * @description Get customer portal free-tier limits and current capacity. Proxy admins only.
+         * Get Customer Management Limits
+         * @description Get Customer Management free-tier limits and current capacity. Proxy admins only.
          */
         get: operations["get_customer_portal_limits_management_v1_customer_portal_limits_get"];
         put?: never;
@@ -40893,6 +40893,11 @@ export interface components {
             budget_override?: components["schemas"]["Budget"] | null;
             /** Budget Override Expires At */
             budget_override_expires_at?: string | null;
+            /**
+             * Parent Team Ids
+             * @description Replace the member's teams within its existing organization. First team is the default. Omit to keep current teams. Member identity, budgets and historical usage are retained.
+             */
+            parent_team_ids?: string[];
         };
         /** MemberUpsert */
         MemberUpsert: {
@@ -68939,6 +68944,8 @@ export interface operations {
                 page_size?: number;
                 parent_team_id?: string | null;
                 parent_org_id?: string | null;
+                /** @description Case-insensitive substring of the customer member ID or alias */
+                search?: string;
             };
             header?: never;
             path?: never;
