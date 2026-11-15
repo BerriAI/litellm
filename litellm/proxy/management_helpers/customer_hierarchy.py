@@ -29,6 +29,7 @@ from litellm.types.proxy.management_endpoints.customer_hierarchy import (
     BudgetTemplate,
     CustomerMember,
     MemberCreate,
+    MemberFields,
     MemberPatch,
     Organization,
     OrganizationBudget,
@@ -371,7 +372,7 @@ def team_response(row: PrismaRecord, now: datetime) -> Team:
 
 
 def override_expiry(
-    row: Team | CustomerMember | None, payload: TeamPatch | MemberPatch, override_id: str | None
+    row: Team | CustomerMember | None, payload: TeamPatch | MemberFields, override_id: str | None
 ) -> datetime | None:
     if override_id is None:
         return None
@@ -484,6 +485,12 @@ def default_template_patch(
 _BUDGET_INCLUDE: Final = {"budget": True}
 _MEMBER_INCLUDE: Final = {"budget": True, "budget_override": True}
 _ID: Final = TypeAdapter(str)
+
+
+def _search_filter(search: str, fields: tuple[str, ...]) -> Mapping[str, object]:
+    if not search:
+        return {}
+    return {"OR": tuple({field: {"contains": escape_like(search), "mode": "insensitive"}} for field in fields)}
 
 
 def _member_ids(rows: Sequence[PrismaRecord]) -> tuple[str, ...]:
@@ -995,9 +1002,20 @@ class CustomerHierarchyStore:
         return await self.update_budget(current_id, payload.budget_override, actor)
 
     async def update_member(self, member_id: str, payload: MemberPatch, actor: str) -> CustomerMember | Failure:
+        if payload.parent_team_ids is not None:
+            await self.lock_customer_identities()
         member: Final = await self.get_member(member_id)
         if isinstance(member, Failure):
             return member
+        if payload.parent_team_ids is not None:
+            teams: Final = await find_many_in(self.teams, "customer_team_id", payload.parent_team_ids)
+            if len(teams) != len(payload.parent_team_ids):
+                return Failure(ErrorCode.PARENT_NOT_FOUND)
+            if any(team.model_dump()["parent_org_id"] != member.parent_org_id for team in teams):
+                return Failure(ErrorCode.CUSTOMER_ORG_MISMATCH)
+            added: Final = tuple(team for team in payload.parent_team_ids if team not in member.parent_team_ids)
+            if await self.member_capacity_reached(added):
+                return Failure(ErrorCode.FREE_TIER_LIMIT)
         selected: Final = await self.member_template_patch(member, payload)
         if isinstance(selected, Failure):
             return selected
@@ -1012,6 +1030,7 @@ class CustomerHierarchyStore:
             where={"customer_member_id": member_id},
             data={
                 **alias_patch(payload),
+                **({"parent_team_ids": payload.parent_team_ids} if payload.parent_team_ids is not None else {}),
                 **({"budget_id": selected} if "budget_id" in payload.model_fields_set else {}),
                 **(
                     {
@@ -1028,16 +1047,7 @@ class CustomerHierarchyStore:
         return await self.get_member(member_id)
 
     async def list_organizations(self, page: int, page_size: int, search: str = "") -> Page[Organization]:
-        where: Final = (
-            {
-                "OR": tuple(
-                    {field: {"contains": escape_like(search), "mode": "insensitive"}}
-                    for field in ("alias", "customer_org_id")
-                )
-            }
-            if search
-            else {}
-        )
+        where: Final = _search_filter(search, ("alias", "customer_org_id"))
         count: Final = await self.organizations.count(where=where)
         rows: Final = await self.organizations.find_many(
             where=where,
@@ -1066,11 +1076,18 @@ class CustomerHierarchyStore:
         )
 
     async def list_members(
-        self, parent_team_id: str | None, page: int, page_size: int, *, parent_org_id: str | None = None
+        self,
+        parent_team_id: str | None,
+        page: int,
+        page_size: int,
+        *,
+        parent_org_id: str | None = None,
+        search: str = "",
     ) -> Page[CustomerMember]:
         where: Final[Mapping[str, object]] = {
             **({"parent_team_ids": {"has": parent_team_id}} if parent_team_id is not None else {}),
             **({"parent_org_id": parent_org_id} if parent_org_id is not None else {}),
+            **_search_filter(search, ("alias", "customer_member_id")),
         }
         count: Final = await self.members.count(where=where)
         rows: Final = await self.members.find_many(
@@ -1154,6 +1171,7 @@ class CustomerHierarchyStore:
         return None
 
     async def delete_team(self, team_id: str, *, cascade: bool = False) -> None | Failure:
+        await self.lock_customer_identities()
         team: Final = await self.get_team(team_id)
         if isinstance(team, Failure):
             return team
@@ -1166,6 +1184,7 @@ class CustomerHierarchyStore:
         return None
 
     async def delete_organization(self, organization_id: str, *, cascade: bool = False) -> None | Failure:
+        await self.lock_customer_identities()
         organization: Final = await self.get_organization(organization_id)
         if isinstance(organization, Failure):
             return organization
@@ -1283,10 +1302,18 @@ class CustomerHierarchy:
         return await self.transaction(lambda store: store.list_teams(parent_org_id, page, page_size))
 
     async def list_members(
-        self, parent_team_id: str | None = None, page: int = 1, page_size: int = 50, *, parent_org_id: str | None = None
+        self,
+        parent_team_id: str | None = None,
+        page: int = 1,
+        page_size: int = 50,
+        *,
+        parent_org_id: str | None = None,
+        search: str = "",
     ) -> Page[CustomerMember] | Failure:
         return await self.transaction(
-            lambda store: store.list_members(parent_team_id, page, page_size, parent_org_id=parent_org_id)
+            lambda store: store.list_members(
+                parent_team_id, page, page_size, parent_org_id=parent_org_id, search=search
+            )
         )
 
     async def add_template(self, organization_id: str, payload: BudgetTemplate, actor: str) -> Organization | Failure:
