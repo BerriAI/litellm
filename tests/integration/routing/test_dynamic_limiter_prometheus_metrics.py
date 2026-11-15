@@ -172,3 +172,26 @@ def test_a_team_under_its_share_borrows_nothing(saturated_model: tuple[Gateway, 
     assert tuple(_team_series(samples, "litellm_dynamic_limiter_share_tokens", team).values()) == (TEAM_TPM,)
     assert tuple(_team_series(samples, "litellm_dynamic_limiter_borrowed_tokens", team).values()) == (0,)
     assert not _team_series(samples, "litellm_dynamic_limiter_throttled_total", team)
+
+
+def test_a_team_served_while_the_model_is_idle_publishes_its_share_with_nothing_borrowed(
+    saturated_model: tuple[Gateway, str],
+) -> None:
+    owned, upstream = saturated_model
+    with owned.scenario() as scenario:
+        model: Final = scenario.model(
+            model=f"openai/{OPENAI_MODEL}", api_base=f"{upstream}/v1", api_key="synthetic-openai-key", tpm=MODEL_TPM
+        )
+        team: Final = scenario.team(metadata={"model_tpm_limit": {model: TEAM_TPM}})
+        _settled_calls(owned, model, team, scenario.key(team_id=team), IDLE_CALLS)
+        samples: Final = eventually(
+            lambda: scrape(owned),
+            lambda scraped: bool(_team_series(scraped, "litellm_dynamic_limiter_share_tokens", team)),
+            seconds=30,
+            return_last_on_timeout=True,
+        )
+    assert IDLE_CALLS * REPLY_TOKENS > TEAM_TPM
+    assert IDLE_CALLS * REPLY_TOKENS < MODEL_TPM * SATURATION_THRESHOLD
+    assert tuple(_team_series(samples, "litellm_dynamic_limiter_share_tokens", team).values()) == (TEAM_TPM,)
+    assert tuple(_team_series(samples, "litellm_dynamic_limiter_borrowed_tokens", team).values()) == (0,)
+    assert not _team_series(samples, "litellm_dynamic_limiter_throttled_total", team)

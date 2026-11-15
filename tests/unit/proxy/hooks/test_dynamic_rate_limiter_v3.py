@@ -3567,6 +3567,60 @@ async def test_a_capped_idle_teams_borrowing_is_read_against_its_share_not_the_w
 
 
 @pytest.mark.asyncio
+async def test_an_uncapped_team_served_while_the_model_is_idle_publishes_its_share_with_nothing_borrowed(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler = _borrowing_handler(monkeypatch, borrows=True)
+    registry = _prometheus_sink(monkeypatch)
+    await _admit_at_the_hook(handler, _team_key(), tokens=150)
+    assert _sample(registry, "litellm_dynamic_limiter_share_tokens", **TEAM_LABELS) == 100
+    assert _sample(registry, "litellm_dynamic_limiter_borrowed_tokens", **TEAM_LABELS) == 0
+
+
+@pytest.mark.asyncio
+async def test_an_idle_fallback_served_for_an_uncapped_team_publishes_its_share_on_the_fallback_model(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler = _borrowing_handler(monkeypatch, borrows=True)
+    registry = _prometheus_sink(monkeypatch)
+    team: Final = _team_key(team_limits={"model_tpm_limit": {"other-model": 40, "shared-model": 100}})
+    assert await handler.async_pre_call_hook(team, DualCache(), {"model": "other-model"}, "completion") is None
+    assert await handler.async_fallback_target_allowed(team, "shared-model", {}) is True
+    await _settle_tokens(handler, 150, model_group="shared-model")
+    shared: Final = {"model_group": "shared-model", "team": "team-a", "priority": "default"}
+    assert _sample(registry, "litellm_dynamic_limiter_share_tokens", **shared) == 100
+    assert _sample(registry, "litellm_dynamic_limiter_borrowed_tokens", **shared) == 0
+
+
+@pytest.mark.asyncio
+async def test_an_uncapped_alias_request_served_while_the_model_is_idle_publishes_its_share(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler = _borrowing_handler(monkeypatch, borrows=True, model_group_alias={"alias-model": "shared-model"})
+    registry = _prometheus_sink(monkeypatch)
+    assert await handler.async_pre_call_hook(_team_key(), DualCache(), {"model": "alias-model"}, "completion") is None
+    await _settle_tokens(handler, 150, model_group="alias-model")
+    alias: Final = {"model_group": "alias-model", "team": "team-a", "priority": "default"}
+    assert _sample(registry, "litellm_dynamic_limiter_share_tokens", **alias) == 100
+    assert _sample(registry, "litellm_dynamic_limiter_borrowed_tokens", **alias) == 0
+
+
+@pytest.mark.asyncio
+async def test_an_idle_fallback_to_a_model_the_team_has_no_share_on_publishes_no_share_there(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler = _borrowing_handler(monkeypatch, borrows=True)
+    registry = _prometheus_sink(monkeypatch)
+    team: Final = _team_key(team_limits={"model_tpm_limit": {"other-model": 40}})
+    assert await handler.async_pre_call_hook(team, DualCache(), {"model": "other-model"}, "completion") is None
+    assert await handler.async_fallback_target_allowed(team, "shared-model", {}) is True
+    await _settle_tokens(handler, 150, model_group="shared-model")
+    shared: Final = {"model_group": "shared-model", "team": "team-a"}
+    assert _sample(registry, "litellm_dynamic_limiter_share_tokens", **shared) is None
+    assert _sample(registry, "litellm_dynamic_limiter_borrowed_tokens", **shared) is None
+
+
+@pytest.mark.asyncio
 async def test_an_idle_fallback_served_for_a_capped_team_still_publishes_its_borrowing(monkeypatch: pytest.MonkeyPatch):
     handler = _borrowing_handler(monkeypatch, borrows=True)
     registry = _prometheus_sink(monkeypatch)

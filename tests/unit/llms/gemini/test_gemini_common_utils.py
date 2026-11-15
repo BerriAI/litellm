@@ -83,6 +83,37 @@ async def test_google_ai_studio_count_tokens_forwards_system_and_tools() -> None
 
 
 @pytest.mark.asyncio
+async def test_google_ai_studio_count_tokens_sends_a_union_root_tool_as_parameters_json_schema() -> None:
+    union_root: Final = {
+        "type": "object",
+        "properties": {"a": {"type": "string"}, "b": {"type": "string"}},
+        "anyOf": [{"required": ["a"]}, {"required": ["b"]}],
+    }
+    peer: Final = _GeminiCountTokensPeer()
+    client: Final = AsyncHTTPHandler(transport=httpx.MockTransport(peer))
+
+    with patch.object(gemini_count_tokens_handler, "get_async_httpx_client", return_value=client):
+        result: Final = await GoogleAIStudioTokenCounter().count_tokens(
+            model_to_use="gemini-2.5-flash",
+            messages=None,
+            contents=[{"role": "user", "parts": [{"text": "Look up Atlas."}]}],
+            deployment={"litellm_params": {"api_key": "test-key", "api_base": "https://count-tokens.test"}},
+            request_model="gemini/gemini-2.5-flash",
+            tools=[{"name": "lookup", "input_schema": union_root}],
+        )
+
+    assert result is not None
+    assert result.total_tokens == 11
+    assert peer.request_body == {
+        "generateContentRequest": {
+            "model": "models/gemini-2.5-flash",
+            "contents": [{"role": "user", "parts": [{"text": "Look up Atlas."}]}],
+            "tools": [{"functionDeclarations": [{"name": "lookup", "parametersJsonSchema": union_root}]}],
+        }
+    }
+
+
+@pytest.mark.asyncio
 async def test_google_ai_studio_count_tokens_rejects_image_system_without_request() -> None:
     peer: Final = _GeminiCountTokensPeer()
     client: Final = AsyncHTTPHandler(transport=httpx.MockTransport(peer))
