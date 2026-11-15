@@ -90,6 +90,7 @@ _SPECIAL_HEADERS_CACHE: Final = frozenset(str(v.value).lower() for v in SpecialH
 
 _REDACTED_HEADER_VALUE: Final = "***REDACTED***"
 _DECODED_JSON: Final = TypeAdapter(object)
+_REQUEST_FIELDS: Final = TypeAdapter(Mapping[str, object])
 _CREDENTIAL_HEADER_NAMES: Final = SpecialHeaders.litellm_credential_header_names() | frozenset(
     {"cookie", "proxy-authorization"}
 )
@@ -4073,6 +4074,12 @@ _ANTHROPIC_USER_PROFILE_ID_PROVIDERS: Final = frozenset(
     )
 )
 _ANTHROPIC_OAUTH_CREDENTIAL_PROVIDERS: Final = ",".join(sorted(ANTHROPIC_OAUTH_FORWARD_PROVIDERS))
+_CALLER_API_KEY_PROVIDERS: Final = frozenset((LlmProviders.ANTHROPIC.value,))
+
+
+def _carries_a_caller_api_key(data: Mapping[str, object]) -> bool:
+    api_key: Final = data.get("api_key")
+    return isinstance(api_key, str) and bool(api_key.strip())
 
 
 def _user_profile_id_header(providers: frozenset[str], user_profile_id: str | None) -> ProviderSpecificHeader:
@@ -4097,6 +4104,10 @@ def add_provider_specific_headers_to_request(
     }
     caller_credential_providers: Final = (
         ANTHROPIC_OAUTH_FORWARD_PROVIDERS if anthropic_oauth_credential_headers else frozenset[str]()
+    ) | (
+        _CALLER_API_KEY_PROVIDERS
+        if _carries_a_caller_api_key(_REQUEST_FIELDS.validate_python(data))
+        else frozenset[str]()
     )
     typesafe_danger_zone_headers: Final = {
         header: value
