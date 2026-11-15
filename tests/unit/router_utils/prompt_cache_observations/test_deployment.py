@@ -10,6 +10,7 @@ from litellm.router_utils.prompt_cache_observations.deployment import (
     SelectedDeployment,
     deployment_cache_identity,
     deployment_cache_settings,
+    merged_cache_settings,
     effective_destination,
     exact_min_prefix_tokens,
     selected_deployment,
@@ -61,8 +62,6 @@ def test_attempt_settings_unrelated_to_caching_keep_the_same_fingerprint() -> No
     [
         {"cache_control_injection_points": [{"location": "message", "role": "system"}]},
         {"aws_region_name": "eu-west-1"},
-        {"api_base": "https://bedrock-runtime.example"},
-        {"model": "bedrock/us.anthropic.claude-test-v2:0"},
     ],
 )
 def test_cache_settings_sent_with_the_attempt_change_the_fingerprint(changed: Mapping[str, object]) -> None:
@@ -198,3 +197,22 @@ def test_settings_survive_the_deep_copy_logging_makes_of_call_details() -> None:
 )
 def test_logged_model_names_resolve_to_the_served_model(provider: str, logged_model: str, served: str) -> None:
     assert served_model(provider, logged_model) == served
+
+
+def test_route_specific_model_spellings_keep_one_identity_per_deployment() -> None:
+    assert _fingerprint(model="bedrock/converse/us.anthropic.claude-test-v1:0") == _fingerprint(
+        model="us.anthropic.claude-test-v1:0"
+    )
+
+
+def test_a_second_hook_pass_keeps_settings_the_first_pass_saw() -> None:
+    points = [{"location": "message", "role": "system"}]
+    outer = _settings({**_ATTEMPT, "cache_control_injection_points": points})
+    inner = _settings({**_ATTEMPT, "aws_region_name": None})
+    merged = dict(merged_cache_settings(outer, inner).settings)
+    assert (merged["cache_control_injection_points"], merged["aws_region_name"]) == (points, "us-east-1")
+
+
+def test_settings_for_another_deployment_are_replaced_not_merged() -> None:
+    other = _settings({**_ATTEMPT, "model_info": {"id": "other", "prompt_cache_observation": True}})
+    assert merged_cache_settings(other, _settings()) == _settings()

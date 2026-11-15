@@ -29,6 +29,7 @@ from litellm.router_utils.prompt_cache_observations.observer import (
     ObserverSettings,
     PromptCacheObserver,
     prefix_fingerprint_key,
+    prompt_cache_observer,
 )
 from litellm.router_utils.prompt_cache_observations.prefix import outgoing_cacheable_prefix
 from litellm.router_utils.prompt_cache_observations.types import (
@@ -521,7 +522,7 @@ async def test_live_stream_without_a_complete_message_stop_frame_never_reads_as_
             pytest.fail(f"a stream without message_stop must not be authoritative, got {outcome}")
 
 
-async def test_router_check_observes_only_opted_in_deployments_and_never_trusts_config_as_verification(
+async def test_router_check_observes_only_opted_in_deployments_and_reads_absent_counters_as_unknown(
     monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
@@ -574,10 +575,10 @@ async def test_router_check_observes_only_opted_in_deployments_and_never_trusts_
         await GLOBAL_LOGGING_WORKER.flush()
     assert [observation.deployment.deployment_id for observation in log.recent] == ["observed-deployment"]
     match log.recent[0].outcome:
-        case Unassessed(reason=reason, path=path, prefix=CacheablePrefix(ttl_seconds=ttl, breakpoints=breakpoints)):
-            assert (reason, path, ttl, breakpoints) == (UnassessedReason.PATH_NOT_VERIFIED, _PATH, 300, 1)
+        case Assessed(path=path, prefix=CacheablePrefix(ttl_seconds=ttl, breakpoints=breakpoints), usage=usage):
+            assert (path, ttl, breakpoints, usage) == (_PATH, 300, 1, UsageUnknown(UsageUnknownReason.MISSING))
         case outcome:
-            pytest.fail(f"expected an unverified-path observation with its prefix, got {outcome}")
+            pytest.fail(f"expected an assessed observation of the verified path, got {outcome}")
 
 
 async def _client_stream(
@@ -615,3 +616,24 @@ async def test_observed_stream_with_a_provider_error_after_its_final_delta_strea
     unobserved = await _client_stream(monkeypatch, respx_mock, body, {"id": "claude-east"})
     observed = await _client_stream(monkeypatch, respx_mock, body, _MODEL_INFO)
     assert observed == unobserved
+
+
+@pytest.mark.parametrize(
+    ("provider", "model", "served_runtime"),
+    [("azure_ai", "claude-test", "python"), ("anthropic", "claude-test", "rust")],
+)
+async def test_paths_without_executed_evidence_stay_unassessed_in_the_shipped_observer(
+    monkeypatch: pytest.MonkeyPatch, provider: str, model: str, served_runtime: str
+) -> None:
+    monkeypatch.setenv("LITELLM_SALT_KEY", "shipped-observer-salt")
+    observer = prompt_cache_observer()
+    await observer.async_log_success_event(
+        _kwargs(provider=provider, model=model, served_runtime=served_runtime), ModelResponse(), None, None
+    )
+    log = observer.sink
+    assert isinstance(log, ObservationLog)
+    match log.recent:
+        case (PromptCacheObservation(outcome=Unassessed(reason=UnassessedReason.PATH_NOT_VERIFIED)),):
+            pass
+        case recent:
+            pytest.fail(f"expected the path to stay unassessed, got {recent}")

@@ -76,6 +76,8 @@ class DrainsTerminalFrames(Protocol):
 class RecordsDeploymentCacheSettings(Protocol):
     def record_deployment_cache_settings(self, settings: object) -> None: ...
 
+    def recorded_deployment_cache_settings(self) -> object: ...
+
 
 def _as_json(value: object) -> JsonValue:
     try:

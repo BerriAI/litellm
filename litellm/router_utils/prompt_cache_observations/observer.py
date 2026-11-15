@@ -4,6 +4,7 @@ import os
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from itertools import product
 from types import MappingProxyType
 from typing import Final, Protocol, TypeAlias
 
@@ -28,6 +29,7 @@ from .deployment import (
     deployment_cache_identity,
     deployment_cache_settings,
     effective_destination,
+    merged_cache_settings,
     selected_deployment,
 )
 from .intent import cache_intent
@@ -36,6 +38,7 @@ from .prefix import outgoing_cacheable_prefix
 from .types import (
     Assessed,
     CacheIntent,
+    ClientSurface,
     DeploymentCacheIdentity,
     NoCacheBreakpoint,
     ObservationPath,
@@ -44,14 +47,30 @@ from .types import (
     PrefixCountRequest,
     PrefixUnassessed,
     PromptCacheObservation,
+    ProviderFamily,
+    Runtime,
     Unassessed,
     UnassessedReason,
     UpstreamCacheUsage,
     UsageUnknown,
+    WireShape,
 )
 from .usage import stream_cache_usage, upstream_cache_usage
 
-VERIFIED_PATHS: Final[frozenset[ObservationPath]] = frozenset()
+_ALL_SURFACES: Final = (ClientSurface.MESSAGES, ClientSurface.CHAT, ClientSurface.RESPONSES)
+_EXECUTED_CELLS: Final = (
+    (ProviderFamily.ANTHROPIC, WireShape.ANTHROPIC_MESSAGES, ClientSurface.MESSAGES, Runtime.RUST),
+    (ProviderFamily.ANTHROPIC, WireShape.ANTHROPIC_MESSAGES, ClientSurface.CHAT, Runtime.PYTHON),
+    (ProviderFamily.ANTHROPIC, WireShape.ANTHROPIC_MESSAGES, ClientSurface.RESPONSES, Runtime.PYTHON),
+    *((ProviderFamily.BEDROCK, WireShape.ANTHROPIC_MESSAGES, surface, Runtime.PYTHON) for surface in _ALL_SURFACES),
+    *((ProviderFamily.BEDROCK, WireShape.BEDROCK_CONVERSE, surface, Runtime.PYTHON) for surface in _ALL_SURFACES),
+    *((ProviderFamily.VERTEX_AI, WireShape.ANTHROPIC_MESSAGES, surface, Runtime.PYTHON) for surface in _ALL_SURFACES),
+)
+VERIFIED_PATHS: Final[frozenset[ObservationPath]] = frozenset(
+    ObservationPath(provider=provider, wire=wire, surface=surface, stream=stream, runtime=runtime)
+    for (provider, wire, surface, runtime), stream in product(_EXECUTED_CELLS, (False, True))
+)
+
 OBSERVATION_LOG_CAPACITY: Final = 1000
 
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
@@ -365,7 +384,9 @@ class PromptCacheObserver(CustomLogger):
         settings: Final = deployment_cache_settings(kwargs)
         logging_obj: Final = kwargs.get("litellm_logging_obj")
         if settings is not None and isinstance(logging_obj, RecordsDeploymentCacheSettings):
-            logging_obj.record_deployment_cache_settings(settings)
+            logging_obj.record_deployment_cache_settings(
+                merged_cache_settings(logging_obj.recorded_deployment_cache_settings(), settings)
+            )
 
     async def _observe(self, kwargs: Mapping[str, object], response: object, succeeded: bool) -> None:
         observed: Final = await offload_token_count(observe_call)(

@@ -1928,6 +1928,9 @@ class Logging(LiteLLMLoggingBaseClass):
     def record_deployment_cache_settings(self, settings: object) -> None:
         self.model_call_details[DEPLOYMENT_CACHE_SETTINGS_KEY] = settings
 
+    def recorded_deployment_cache_settings(self) -> object:
+        return self.model_call_details.get(DEPLOYMENT_CACHE_SETTINGS_KEY)
+
     def pre_call(self, input, api_key, model=None, additional_args={}):
         # Log the exact input to the LLM API
         try:

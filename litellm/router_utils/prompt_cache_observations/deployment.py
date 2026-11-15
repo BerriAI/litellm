@@ -17,9 +17,6 @@ MinPrefixTokens: TypeAlias = Callable[[str, str], int | None]
 
 _JSON: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
 _CACHE_RELEVANT_PARAMS: Final = (
-    "model",
-    "custom_llm_provider",
-    "api_base",
     "api_version",
     "aws_region_name",
     "aws_bedrock_runtime_endpoint",
@@ -81,6 +78,18 @@ def _json_or_none(value: object) -> JsonValue:
         return _JSON.validate_python(value)
     except ValidationError:
         return None
+
+
+def merged_cache_settings(earlier: object, later: DeploymentCacheSettings) -> DeploymentCacheSettings:
+    """An attempt can pass the deployment hook twice, once per layer of a translated call, and the inner layer
+    may already have consumed settings the outer one saw, so each setting keeps the first value reported."""
+    if not isinstance(earlier, DeploymentCacheSettings) or earlier.selected != later.selected:
+        return later
+    reported: Final = dict(later.settings)
+    return DeploymentCacheSettings(
+        selected=later.selected,
+        settings=tuple((key, value if value is not None else reported.get(key)) for key, value in earlier.settings),
+    )
 
 
 def deployment_cache_settings(kwargs: Mapping[str, object]) -> DeploymentCacheSettings | None:
@@ -148,7 +157,7 @@ def deployment_cache_identity(
     canonical: Final = json.dumps(
         {
             "provider": provider,
-            "model": provider_model,
+            "model": served_model(provider, provider_model),
             "destination": destination,
             "base_model": selected.base_model,
             "settings": dict(settings.settings) if settings is not None else None,
