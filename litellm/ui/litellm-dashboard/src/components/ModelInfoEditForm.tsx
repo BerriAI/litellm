@@ -493,7 +493,12 @@ const ModelInfoEditForm: React.FC<ModelInfoEditFormProps> = ({
           <Select
             items={PRICING_CURRENCIES.map((currency) => ({ value: currency, label: currency }))}
             value={(value as string | undefined) ?? "USD"}
-            onValueChange={(next: string | null) => onChange(next ?? "USD")}
+            onValueChange={(next: string | null) => {
+              if ((next ?? "USD") !== value) {
+                form.setValue("usd_per_currency_unit", "");
+              }
+              onChange(next ?? "USD");
+            }}
           >
             <SelectTrigger id={id} className="w-full" onBlur={onBlur}>
               <SelectValue />

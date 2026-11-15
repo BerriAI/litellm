@@ -2,11 +2,13 @@
 
 Every chat completion reports 1000 prompt and 500 completion tokens, so a deployment's bill is fixed by its prices
 alone. A model name containing "reported-cost" also reports a provider cost of 9.99 USD, which a deployment with
-custom prices must ignore. Responses are synthetic and say so, and no model is called.
+custom prices must ignore. Each response gets its own id, since the proxy keys spend logs by it. Responses are
+synthetic and say so, and no model is called.
 """
 
 import json
 import sys
+import uuid
 from typing import Final
 
 import uvicorn
@@ -26,7 +28,7 @@ async def chat_completions(request: Request) -> JSONResponse:
     model: Final = str(body.get("model", "synthetic"))
     return JSONResponse(
         {
-            "id": "chatcmpl-synthetic-demo",
+            "id": f"chatcmpl-synthetic-demo-{uuid.uuid4().hex}",
             "object": "chat.completion",
             "created": CREATED,
             "model": model,

@@ -257,6 +257,26 @@ describe("ModelInfoEditForm price currency", () => {
     expect(onSubmit.mock.calls[0][0]).toMatchObject({ pricing_currency: "EUR", usd_per_currency_unit: "1.08" });
   });
 
+  it("empties the rate when the currency changes so a HUF rate is never applied to EUR prices", async () => {
+    const onSubmit = vi.fn().mockResolvedValue(undefined);
+    const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
+    renderForm({ ...hufModel, onSubmit });
+
+    await user.click(screen.getByRole("combobox", { name: "Price currency" }));
+    await user.click(await screen.findByRole("option", { name: "EUR" }));
+
+    expect(screen.getByLabelText("USD per 1 EUR")).toHaveValue("");
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+    expect(await screen.findByText("Enter the USD value of 1 EUR")).toBeInTheDocument();
+    expect(onSubmit).not.toHaveBeenCalled();
+
+    fireEvent.change(screen.getByLabelText("USD per 1 EUR"), { target: { value: "1.20" } });
+    expect(screen.getByRole("table", { name: "USD preview of EUR prices" })).toHaveTextContent("USD 960 per 1M tokens");
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+    await vi.waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(onSubmit.mock.calls[0][0]).toMatchObject({ pricing_currency: "EUR", usd_per_currency_unit: "1.20" });
+  });
+
   it("labels a HUF model's saved prices and says spend stays in USD when not editing", () => {
     renderForm({ ...hufModel, isEditing: false });
 
