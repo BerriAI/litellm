@@ -2638,6 +2638,26 @@ def test_token_counter_counts_server_tool_errors(tool: str) -> None:
     assert _count_content_list(len, [block], False, None) == len("unavailable")
 
 
+@pytest.mark.parametrize(
+    "block",
+    (
+        {"type": "web_search_tool_result", "tool_use_id": "srv_1", "content": [{"url": "https://example.invalid"}]},
+        {"type": "code_execution_tool_result", "tool_use_id": "srv_1", "content": {"type": "future_result"}},
+        {"type": "web_fetch_tool_result", "tool_use_id": "srv_1", "content": {"url": "https://example.invalid"}},
+    ),
+    ids=("result-without-type", "unknown-result-type", "mapping-without-type"),
+)
+@pytest.mark.parametrize("nested", (False, True), ids=("assistant-content", "tool-result"))
+def test_malformed_server_tool_block_is_unsupported_content(block: Mapping[str, object], nested: bool) -> None:
+    from litellm.litellm_core_utils.token_counter import UnsupportedContentTypeError, _count_content_list
+
+    content: Final = [{"type": "tool_result", "tool_use_id": "toolu_1", "content": [block]}] if nested else [block]
+
+    with pytest.raises(UnsupportedContentTypeError):
+        _count_content_list(len, content, False, None)
+    assert _count_content_list(len, content, False, 7) == 7
+
+
 def test_token_counter_counts_anthropic_search_result_text() -> None:
     from litellm.litellm_core_utils.token_counter import _count_content_list
 

@@ -113,8 +113,20 @@ def test_local_messages_count_accepts_search_result_text(gateway: Gateway, neste
     (
         ({"type": "future_block", "future_block": {"value": "ignore me"}}, 400, "invalid_request_error", "future_block"),
         ({"type": "image"}, 500, "api_error", "source"),
+        (
+            {"type": "web_search_tool_result", "tool_use_id": "srv_1", "content": [{"url": "https://example.invalid"}]},
+            400,
+            "invalid_request_error",
+            "content",
+        ),
+        (
+            {"type": "code_execution_tool_result", "tool_use_id": "srv_1", "content": {"type": "future_result"}},
+            400,
+            "invalid_request_error",
+            "future_result",
+        ),
     ),
-    ids=("unknown-block", "unrelated-counting-error"),
+    ids=("unknown-block", "unrelated-counting-error", "server-result-without-type", "unknown-server-result-type"),
 )
 def test_local_messages_count_classifies_only_unsupported_content_as_an_invalid_request(
     gateway: Gateway, nested: bool, block: JsonValue, status: int, error_type: str, message: str
