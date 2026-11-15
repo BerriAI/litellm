@@ -1970,8 +1970,8 @@ def _router_default_litellm_params(llm_router: Router | None) -> Mapping[str, ob
     )
 
 
-def _first_non_none_field(key: str, sources: tuple[object, ...]) -> object:
-    return next((val for src in sources if (val := _get_value(src, key)) is not None), None)
+def _first_present_field(key: str, sources: tuple[Mapping[str, object], ...]) -> object:
+    return next((mapping[key] for mapping in sources if key in mapping), None)
 
 
 def _deployment_generic_provider(litellm_params: object, fallback_model: str) -> str | None:
@@ -1998,13 +1998,17 @@ def _backend_bridges_responses_to_chat(
 ) -> bool:
     from litellm.responses.main import provider_stores_the_conversation
 
-    sources: Final[tuple[object, ...]] = (request_body, default_litellm_params, deployment_params)
     if not model:
         return True
+    mapped_sources: Final = tuple(
+        mapping
+        for src in (request_body, default_litellm_params, deployment_params)
+        if (mapping := _as_mapping(src)) is not None
+    )
     merged: Final = {
         key: value
         for key in _RESPONSES_BRIDGE_OVERRIDE_KEYS
-        if (value := _first_non_none_field(key, sources)) is not None
+        if (value := _first_present_field(key, mapped_sources)) is not None
     }
     raw_provider: Final = merged.get("custom_llm_provider")
     custom_llm_provider: Final = (
