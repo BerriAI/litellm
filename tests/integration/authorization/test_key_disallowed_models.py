@@ -71,11 +71,15 @@ def _assert_denied(gateway: Gateway, key: str, body: dict[str, JsonValue], denie
     assert _observed_models(gateway) == before
 
 
-def _listed_models(gateway: Gateway, key: str) -> frozenset[str]:
-    response: Final = gateway.request("GET", "/v1/models", key=key)
+def _listed_names(gateway: Gateway, key: str, path: str, name_field: str) -> frozenset[str]:
+    response: Final = gateway.request("GET", path, key=key)
     assert response.status_code == 200, response.text
     entries: Final = list_value(JSON_OBJECT.validate_json(response.content)["data"])
-    return frozenset(string_value(object_value(entry)["id"]) for entry in entries)
+    return frozenset(string_value(object_value(entry)[name_field]) for entry in entries)
+
+
+def _listed_models(gateway: Gateway, key: str) -> frozenset[str]:
+    return _listed_names(gateway, key, "/v1/models", "id")
 
 
 def _stored_disallowed_models(key: str) -> list[dict[str, JsonValue]]:
@@ -98,6 +102,30 @@ def test_a_key_inheriting_a_team_access_group_cannot_call_or_list_its_disallowed
             seconds=30,
         )
         assert grant.allowed in listed
+        assert grant.disallowed not in listed
+
+
+@pytest.mark.parametrize(
+    ("path", "name_field"),
+    [("/v1/models", "id"), ("/model/info", "model_name"), ("/model_group/info", "model_group")],
+    ids=["v1-models", "model-info", "model-group-info"],
+)
+def test_a_keys_model_listings_leave_out_its_disallowed_models(gateway: Gateway, path: str, name_field: str) -> None:
+    with gateway.scenario() as scenario:
+        grant: Final = _team_grant(scenario)
+        granted: Final = frozenset((grant.allowed, grant.disallowed))
+        unrestricted: Final = scenario.key(team_id=grant.team_id)
+        eventually(
+            lambda: _listed_names(gateway, unrestricted, path, name_field),
+            lambda names: granted <= names,
+            seconds=30,
+        )
+        key: Final = scenario.key(team_id=grant.team_id, disallowed_models=[grant.disallowed])
+        listed: Final = eventually(
+            lambda: _listed_names(gateway, key, path, name_field),
+            lambda names: grant.allowed in names,
+            seconds=30,
+        )
         assert grant.disallowed not in listed
 
 

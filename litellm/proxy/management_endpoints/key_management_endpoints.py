@@ -2467,7 +2467,7 @@ async def generate_key_fn(
     - budget_id: Optional[str] - The budget id associated with the key. Created by calling `/budget/new`.
     - end_user_budget_id: Optional[str] - Proxy admin only. Budget id applied to end users first seen through this key that carry no budget of their own. Takes precedence over `litellm_settings.max_end_user_budget_id`.
     - models: Optional[list] - Model_name's a user is allowed to call. (if empty, key is allowed to call all models)
-    - disallowed_models: Optional[List[str]] - Model names, aliases, deployment ids or `*` patterns the key can never call, even when `models`, its team or an access group would allow them.
+    - disallowed_models: Optional[List[str]] - Model names, aliases or `*` patterns the key can never call, even when `models`, its team or an access group would allow them. A deployment id entry blocks requests that name that id.
     - aliases: Optional[dict] - Any alias mappings, on top of anything in the config.yaml model list. - https://docs.litellm.ai/docs/proxy/virtual_keys#managing-auth---upgradedowngrade-models
     - config: Optional[dict] - any key-specific configs, overrides config in config.yaml
     - spend: Optional[int] - Amount spent by key. Default is 0. Will be updated by proxy whenever key is used. https://docs.litellm.ai/docs/proxy/virtual_keys#managing-auth---tracking-spend
@@ -2682,7 +2682,7 @@ async def generate_service_account_key_fn(
     - budget_id: Optional[str] - The budget id associated with the key. Created by calling `/budget/new`.
     - end_user_budget_id: Optional[str] - Proxy admin only. Budget id applied to end users first seen through this key that carry no budget of their own. Omit to keep the current value, pass an empty string to clear it.
     - models: Optional[list] - Model_name's a user is allowed to call. (if empty, key is allowed to call all models)
-    - disallowed_models: Optional[List[str]] - Model names, aliases, deployment ids or `*` patterns the key can never call, even when `models`, its team or an access group would allow them.
+    - disallowed_models: Optional[List[str]] - Model names, aliases or `*` patterns the key can never call, even when `models`, its team or an access group would allow them. A deployment id entry blocks requests that name that id.
     - aliases: Optional[dict] - Any alias mappings, on top of anything in the config.yaml model list. - https://docs.litellm.ai/docs/proxy/virtual_keys#managing-auth---upgradedowngrade-models
     - config: Optional[dict] - any key-specific configs, overrides config in config.yaml
     - spend: Optional[int] - Amount spent by key. Default is 0. Will be updated by proxy whenever key is used. https://docs.litellm.ai/docs/proxy/virtual_keys#managing-auth---tracking-spend
@@ -4223,7 +4223,7 @@ async def update_key_fn(
     - budget_id: Optional[str] - The budget id associated with the key. Created by calling `/budget/new`.
     - end_user_budget_id: Optional[str] - Proxy admin only. Budget id applied to end users first seen through this key that carry no budget of their own. Omit to keep the current value, pass an empty string to clear it.
     - models: Optional[list] - Model_name's a user is allowed to call
-    - disallowed_models: Optional[List[str]] - Model names, aliases, deployment ids or `*` patterns the key can never call, even when `models`, its team or an access group would allow them. Only a proxy admin or an admin of the key's team can remove entries.
+    - disallowed_models: Optional[List[str]] - Model names, aliases or `*` patterns the key can never call, even when `models`, its team or an access group would allow them. A deployment id entry blocks requests that name that id. Only a proxy admin or an admin of the key's team can remove entries.
     - tags: Optional[List[str]] - Tags for organizing keys (Enterprise only)
     - prompts: Optional[List[str]] - List of prompts that the key is allowed to use.
     - enforced_params: Optional[List[str]] - List of enforced params for the key (Enterprise only). [Docs](https://docs.litellm.ai/docs/enterprise#governance-and-cost)
@@ -4513,7 +4513,7 @@ async def bulk_update_keys(
         - max_budget: Optional[float] - Max budget for key
         - team_id: Optional[str] - Team ID associated with key
         - tags: Optional[List[str]] - Tags for organizing keys
-        - disallowed_models: Optional[List[str]] - Model names, aliases, deployment ids or `*` patterns the key can never call, even when `models`, its team or an access group would allow them. Only a proxy admin or an admin of the key's team can remove entries.
+        - disallowed_models: Optional[List[str]] - Model names, aliases or `*` patterns the key can never call, even when `models`, its team or an access group would allow them. A deployment id entry blocks requests that name that id. Only a proxy admin or an admin of the key's team can remove entries.
         - object_permission: Optional[LiteLLM_ObjectPermissionBase] - key-specific object permission, as on /key/update
 
     Only the fields an item carries are written: a field left out keeps its current value, and a field
@@ -6707,7 +6707,7 @@ async def regenerate_key_fn(
         - user_id: Optional[str] - User ID associated with key
         - team_id: Optional[str] - Team ID associated with key
         - models: Optional[list] - Model_name's a user is allowed to call
-        - disallowed_models: Optional[List[str]] - Model names, aliases, deployment ids or `*` patterns the key can never call, even when `models`, its team or an access group would allow them. Only a proxy admin or an admin of the key's team can remove entries.
+        - disallowed_models: Optional[List[str]] - Model names, aliases or `*` patterns the key can never call, even when `models`, its team or an access group would allow them. A deployment id entry blocks requests that name that id. Only a proxy admin or an admin of the key's team can remove entries.
         - tags: Optional[List[str]] - Tags for organizing keys (Enterprise only)
         - spend: Optional[float] - Amount spent by key
         - max_budget: Optional[float] - Max budget for key
