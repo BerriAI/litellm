@@ -1593,14 +1593,21 @@ def _params_sent_to_deployment(attempt: StreamAttempt, deployment_id: object) ->
 
 
 def wrap_responses_stream(  # noqa: C901  # one function per Python wrapper it ports
-    attempt: StreamAttempt, response: "BaseResponsesAPIStreamingIterator"
+    attempt: StreamAttempt,
+    response: "BaseResponsesAPIStreamingIterator",
+    deadline: float | None = None,
+    expired: Callable[[], MidStreamFallbackError] | None = None,
 ) -> "BaseResponsesAPIStreamingIterator":
     """``_aresponses_streaming_iterator``: pre-output lifecycle events are held while a fallback can take
     over; a mid-stream error falls back through the core, continuing after text."""
     import time
     from datetime import datetime, timezone
 
-    from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator, get_openai_response_types
+    from litellm.responses.streaming_iterator import (
+        PRE_OUTPUT_LIFECYCLE_EVENT_TYPES,
+        BaseResponsesAPIStreamingIterator,
+        get_openai_response_types,
+    )
 
     source_iterator: Final = response
     attempt.take_outcome()
@@ -1713,9 +1720,18 @@ def wrap_responses_stream(  # noqa: C901  # one function per Python wrapper it p
         held: tuple[object, ...] = ()  # rebind-ok: flushed at first output, dropped on fallback
         response_id_exposed = False  # rebind-ok: set once, before an early-released event is yielded
         try:
+            source: Final = cast("AsyncIterator[object]", source_iterator)  # cast-ok: an async stream
+            items: Final = (
+                _until_first_output(
+                    source, deadline, lambda item: getattr(item, "type", None) not in PRE_OUTPUT_LIFECYCLE_EVENT_TYPES,
+                    expired,
+                )
+                if deadline is not None and expired is not None
+                else source
+            )
             async for item in _areported(
                 attempt,
-                cast("AsyncIterator[object]", source_iterator),  # cast-ok: an async stream
+                items,
                 lambda last: _responses_total_tokens(last, source_iterator),
             ):
                 if not response_id_exposed and background_stream_can_release(item):
@@ -2042,7 +2058,9 @@ async def open_attempt_stream(attempt: StreamAttempt, response: object) -> objec
         # deployment's own `stream` setting forced.
         if not attempt.request.get("stream"):
             return response
-        return wrap_responses_stream(attempt, response)
+        return wrap_responses_stream(
+            attempt, response, None if attempt.request.get("background") is True else deadline, expired
+        )
     if attempt.op in ("aanthropic_messages", "anthropic_messages") and hasattr(response, "__aiter__"):
         return wrap_anthropic_stream(
             attempt, cast("AsyncIterator[bytes]", response), deadline, expired  # cast-ok: a byte stream

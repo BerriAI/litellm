@@ -845,3 +845,44 @@ async def test_stream_ttft_messages_deadline_ignores_wrapper_commit_flag(
             model="primary", messages=[{"role": "user", "content": "hi"}], max_tokens=10, stream=True,
         )
         _ = tuple([chunk async for chunk in response])
+
+
+def _ttft_response_event(kind: str, model: str, *, background: bool = False) -> bytes:
+    response: Final = {
+        "id": f"resp_{model}", "object": "response", "created_at": 1, "model": model,
+        "status": "completed" if kind == "response.completed" else "in_progress", "output": [],
+        "parallel_tool_calls": True, "tool_choice": "auto", "tools": [], "background": background,
+    }
+    event: Final = (
+        {"type": kind, "delta": model, "item_id": "msg-ttft", "output_index": 0, "content_index": 0, "sequence_number": 1}
+        if kind == "response.output_text.delta"
+        else {"type": kind, "response": response, "sequence_number": 2 if kind == "response.completed" else 0}
+    )
+    return f"data: {json.dumps(event)}\n\n".encode()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("background", (False, True), ids=("R4-fallback", "background-exempt"))
+async def test_stream_ttft_responses_holds_lifecycle_until_output_and_exempts_background_runs(
+    background: bool, stream_clock: StreamClock, respx_mock: respx.MockRouter, ttft_httpx_transport: None,
+) -> None:
+    route: Final = respx_mock.post("https://ttft.invalid/v1/responses").mock(side_effect=[
+        httpx.Response(200, stream=_TTFTByteStream(stream_clock, (
+            (0.0, _ttft_response_event("response.created", "primary", background=background)),
+            (0.3, _ttft_response_event("response.output_text.delta", "primary")),
+            (0.0, _ttft_response_event("response.completed", "primary")),
+        ))),
+        httpx.Response(200, stream=_TTFTByteStream(stream_clock, (
+            (0.0, _ttft_response_event("response.created", "fallback")),
+            (0.05, _ttft_response_event("response.output_text.delta", "fallback")),
+            (0.3, _ttft_response_event("response.completed", "fallback")),
+        ))),
+    ])
+    router: Final = _ttft_router()
+    response: Final = await router.aresponses(model="primary", input="hi", stream=True, background=background)
+    events: Final = tuple([event async for event in response])
+    assert tuple(event.type for event in events) == ("response.created", "response.output_text.delta", "response.completed")
+    assert tuple(event.delta for event in events if event.type == "response.output_text.delta") == (
+        "primary" if background else "fallback",
+    )
+    assert route.call_count == (1 if background else 2)
