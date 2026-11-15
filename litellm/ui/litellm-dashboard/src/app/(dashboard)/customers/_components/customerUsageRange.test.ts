@@ -51,14 +51,10 @@ describe("customer usage calendar ranges", () => {
     ["2026-10-31T23:30:00-02:00", "2026-11-01..2026-11-01"],
   ])("defaults an absent date query to UTC month to date at %s", (now, expected) => {
     const selection = customerDateSelection(loadDates(""), new Date(now));
+    const expectedPatch = { range: "MTD", period: null, from: null, to: null };
     expect(customerRangeParser.serialize(selection.dateValue)).toBe(expected);
     expect(selection.preset).toBe("MTD");
-    expect(customerDatePatch(selection.dateValue, selection.preset)).toEqual({
-      range: "MTD",
-      period: null,
-      from: null,
-      to: null,
-    });
+    expect(customerDatePatch(selection.dateValue, selection.preset)).toEqual(expectedPatch);
   });
 
   it("keeps saved calendar dates when their preset label is stale", () => {
