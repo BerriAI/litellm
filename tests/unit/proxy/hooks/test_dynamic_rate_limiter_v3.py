@@ -4260,3 +4260,28 @@ async def test_a_keys_own_max_borrow_multiple_replaces_the_configured_one(monkey
     raised: Final = _service_key(model_limit_max_borrow_multiple=4)
     await _use(handler, raised, 300)
     await _check(handler, raised, saturation=0.0)
+
+
+@pytest.mark.asyncio
+async def test_a_fallback_target_the_team_has_no_limit_on_leaves_its_share_on_the_failed_model_untouched(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler: Final = _borrowing_handler(monkeypatch, borrows=True, saturation_threshold=0.0)
+    key: Final = _team_key(team_limits={"model_tpm_limit": {"shared-model": 100}})
+    await _check(handler, key, saturation=1.0, data=_fallback_prompt(30))
+    assert await handler.async_fallback_target_allowed(key, "other-model", _fallback_prompt(30)) is True
+    await _settle_tokens(handler, 90, model_group="other-model")
+    assert await _team_tokens_remaining(handler, key, "shared-model") == 100
+
+
+@pytest.mark.asyncio
+async def test_a_fallback_target_only_the_key_has_a_limit_on_leaves_the_customer_orgs_share_on_the_failed_model(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler: Final = _key_and_org_handler(monkeypatch, "key", "customer_organization")
+    caller: Final = _org_caller(share=100, metadata={"model_tpm_limit": {"other-model": 200}})
+    await _check(handler, caller, saturation=0.5, data=_fallback_prompt(30))
+    assert await handler.async_fallback_target_allowed(caller, "other-model", _fallback_prompt(30)) is True
+    await _settle_tokens(handler, 90, model_group="other-model")
+    await _use(handler, caller, 80, saturation=0.5)
+    await _check(handler, caller, saturation=0.5)

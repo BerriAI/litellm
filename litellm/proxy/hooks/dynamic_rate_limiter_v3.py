@@ -1492,6 +1492,8 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         """
         borrowing: Final = self._borrowing_shares(model=model, user_api_key_dict=user_api_key_dict)
         model_group_info: Final = self.llm_router.registry().group(model)
+        if commit:
+            self._hold_fallback_for_borrowers_without_a_share(model, borrowing)
         if not borrowing or model_group_info is None:
             return True
         saturation: Final = await self._check_model_saturation(model, model_group_info)
@@ -1563,6 +1565,17 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
             and (status["rate_limit_type"] != "tokens" or (status["limit_remaining"] or 0) >= tokens)
             for status in checked["statuses"]
         )
+
+    def _hold_fallback_for_borrowers_without_a_share(
+        self, model: str, borrowing: Mapping[BorrowerKind, _BorrowingTeamShare]
+    ) -> None:
+        """A borrower with no limit on the target takes an empty hold, so the target's usage never settles to its
+        share on the admitting model."""
+        resolved: Final = self.v3_limiter.rate_limited_model(model)
+        names: Final = (model,) if resolved is None else (model, resolved.group)
+        for kind, state in get_or_create_request_stash().borrowing_shares.items():
+            if kind not in borrowing and model not in state.fallback_limits:
+                state.hold_fallback(names, BorrowingTeamModelHold(descriptor=None))
 
     def _hold_fallback_share(
         self,
