@@ -845,6 +845,7 @@ class _FakePrismaClient:
         self.db = SimpleNamespace(
             litellm_budgettable=self.budget_table,
             litellm_customermembertable=SimpleNamespace(find_many=AsyncMock(return_value=[])),
+            litellm_customerteamtable=SimpleNamespace(find_many=AsyncMock(return_value=[])),
             litellm_customerorganizationtable=SimpleNamespace(find_many=AsyncMock(return_value=[])),
             litellm_modelaccessgroupbudgettable=self.access_group_budget_table,
             litellm_proxymodeltable=self.model_table,
