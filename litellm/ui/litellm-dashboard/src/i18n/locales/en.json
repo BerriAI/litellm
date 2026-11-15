@@ -8164,7 +8164,7 @@
         "accessControl": "ACCESS CONTROL",
         "developerTools": "DEVELOPER TOOLS",
         "settings": "SETTINGS",
-        "customerPortal": "CUSTOMER PORTAL"
+        "customerPortal": "CUSTOMER MANAGEMENT"
       },
       "sections": {
         "aiGateway": "AI Gateway",
@@ -8172,7 +8172,7 @@
         "accessControl": "Access Control",
         "developerTools": "Developer Tools",
         "settings": "Settings",
-        "customerPortal": "Customer Portal"
+        "customerPortal": "Customer Management"
       },
       "items": {
         "home": "Home",
@@ -20672,15 +20672,15 @@
     },
     "limits": {
       "byline": "Free tier: up to 5 customers, 5 teams per customer, 5 members per team. LiteLLM <enterprise>Enterprise</enterprise> removes these limits.",
-      "reachedTitle": "Free customer portal limit reached",
-      "reachedDescription": "New customers, teams and members can't be created. Requests from new customers or members still go through but are not tracked in the customer portal.",
+      "reachedTitle": "Customer Management free tier limit reached",
+      "reachedDescription": "New customers, teams and members can't be created. Requests from new customers or members still go through but are not tracked in Customer Management.",
       "upgrade": "Upgrade to Enterprise"
     },
     "hierarchy": {
       "customerNavigation": "Customer navigation",
       "usage": "Usage",
       "manage": "Manage",
-      "title": "Customer management",
+      "title": "Customer Management",
       "subtitle": "Manage customer teams, customer members, and settings for this customer organization.",
       "teamSubtitle": "Manage customer members and settings for this customer team.",
       "memberSubtitle": "Manage settings and budget for this customer member.",
@@ -20780,7 +20780,7 @@
       "deleteInformationTitle": "{{kind}} details"
     },
     "switcher": {
-      "label": "Customer Portal",
+      "label": "Customer Management",
       "description": "Customer organizations and usage"
     },
     "status": {
