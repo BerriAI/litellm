@@ -1,6 +1,5 @@
-# Prompt cache alerts demo. Start it through demo.sh, which pins the proxy image to the checked-out commit.
-# Everything here belongs to the litellm-prompt-cache-demo project: one Postgres volume, no other state, and
-# no provider keys. The Anthropic API and the Slack webhook are local scripted stand-ins.
+# Prompt cache alerts demo. Start it through demo.sh, which pins the proxy image to the checked-out commit and
+# generates the demo credentials outside the checkout.
 name: litellm-prompt-cache-demo
 
 x-logging: &logging
@@ -13,6 +12,10 @@ x-demo-image: &demo-image
   image: litellm-prompt-cache-demo:${DEMO_COMMIT:?run through demo.sh}
   pull_policy: never
 
+x-demo-credentials: &demo-credentials
+  - path: ${DEMO_ENV_FILE:?run through demo.sh}
+    required: true
+
 services:
   proxy:
     <<: *demo-image
@@ -23,14 +26,12 @@ services:
       labels:
         org.opencontainers.image.revision: ${DEMO_COMMIT}
     pull_policy: build
-    command: ["--config", "/demo/config.yaml", "--port", "4000", "--num_workers", "1"]
+    command: ["--config", "/demo/config.yaml", "--port", "4000", "--num_workers", "2"]
     ports:
       - "127.0.0.1:${DEMO_PROXY_PORT:-4100}:4000"
+    env_file: *demo-credentials
     environment:
-      LITELLM_MASTER_KEY: sk-prompt-cache-demo
-      LITELLM_SALT_KEY: prompt-cache-demo-salt
       UI_USERNAME: admin
-      UI_PASSWORD: sk-prompt-cache-demo
       DATABASE_URL: postgresql://demo:demo@db:5432/litellm
       LITELLM_MIGRATION_DIR: /tmp/litellm-migrations
       SLACK_WEBHOOK_URL: http://notifier:8080/webhook
@@ -61,7 +62,8 @@ services:
 
   upstream:
     <<: *demo-image
-    command: ["python3", "/demo/servers.py", "anthropic"]
+    entrypoint: ["python3"]
+    command: ["/demo/servers.py", "anthropic"]
     volumes:
       - ./:/demo:ro
     read_only: true
@@ -74,7 +76,8 @@ services:
 
   notifier:
     <<: *demo-image
-    command: ["python3", "/demo/servers.py", "slack"]
+    entrypoint: ["python3"]
+    command: ["/demo/servers.py", "slack"]
     ports:
       - "127.0.0.1:${DEMO_NOTIFIER_PORT:-4101}:8080"
     volumes:
@@ -111,10 +114,11 @@ services:
   driver:
     <<: *demo-image
     profiles: ["driver"]
-    command: ["python3", "/demo/drive.py"]
+    entrypoint: ["python3"]
+    command: ["/demo/drive.py"]
+    env_file: *demo-credentials
     environment:
       PROXY_URL: http://proxy:4000
-      LITELLM_MASTER_KEY: sk-prompt-cache-demo
       REDIS_HOST: redis
       NOTIFIER_URL: http://notifier:8080
       UI_URL: http://localhost:${DEMO_PROXY_PORT:-4100}/ui/alerts?type=prompt-cache

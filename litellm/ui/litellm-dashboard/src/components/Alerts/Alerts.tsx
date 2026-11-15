@@ -115,7 +115,7 @@ function AlertsInbox({ auth }: { auth: ReturnType<typeof useAuthorized> }) {
   const list = useAlerts(scope, showPerformance, params.state, params.type);
   const promptCache = useAlerts(scope, showPromptCache, params.state, "prompt-cache");
   const deprecations = useDeprecationAlerts(showDeprecations ? auth.accessToken : null);
-  const retirementItems: AlertItem[] = (deprecations.data ?? [])
+  const retirementItems: AlertItem[] = (showDeprecations ? (deprecations.data ?? []) : [])
     .filter((alert) => effectiveAlertStatus(alert) === params.state)
     .map((alert) => ({ source: "deprecation", alert }));
   const savedItems = (query: typeof list, shown: boolean): AlertItem[] =>

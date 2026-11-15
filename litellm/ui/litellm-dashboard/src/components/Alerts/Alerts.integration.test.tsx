@@ -44,6 +44,13 @@ const cacheIncident: SavedAlert = {
   },
 };
 let cacheIncidents: SavedAlert[] = [];
+const retiringModel = {
+  model_name: "support",
+  litellm_model: "anthropic/claude-sonnet-4-5",
+  deprecation_date: "2026-11-30",
+  status: "imminent",
+};
+let retiringModels: (typeof retiringModel)[] = [];
 const calls: { path: string; query: URLSearchParams; method: string; body: unknown }[] = [];
 let status = "open";
 let rejectWrite = false;
@@ -77,6 +84,7 @@ describe("Alerts", () => {
     };
     role = "proxy_admin";
     cacheIncidents = [];
+    retiringModels = [];
     document.cookie = `token=${btoa(JSON.stringify({ alg: "none" }))}.${btoa(JSON.stringify({ key: "example-session", exp: 4102444800 }))}.example; path=/`;
     vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
       const request = input instanceof Request ? input : new Request(input);
@@ -86,7 +94,17 @@ describe("Alerts", () => {
       calls.push(call);
       if (url.pathname === "/litellm/.well-known/litellm-ui-config") return response({});
       if (url.pathname === "/management/v1/users/me") return response({ user_id: "example-admin", user_role: role });
-      if (url.pathname === "/model/deprecations") return response({ deprecated: [], imminent: [] });
+      if (url.pathname === "/model/deprecations") return response({ deprecated: [], imminent: retiringModels });
+      if (url.pathname === "/user/daily/activity/aggregated")
+        return response({
+          results: [
+            {
+              date: "2026-11-04",
+              breakdown: { models: { [retiringModel.litellm_model]: { metrics: { api_requests: 10 } } } },
+            },
+          ],
+        });
+      if (url.pathname === "/alerting/model-deprecations/state") return response({ status: "open" });
       if (url.pathname === "/alerts/monitoring") {
         if (rejectMonitoring) return response({ detail: "Unavailable" }, 503);
         if (request.method === "PATCH") {
@@ -204,6 +222,18 @@ describe("Alerts", () => {
         .map((call) => call.query.get("type"))
         .sort(),
     ).toEqual(["performance", "prompt_cache"]);
+  });
+
+  it("drops retirements already loaded for All once the Prompt caching filter is chosen", async () => {
+    cacheIncidents = [cacheIncident];
+    retiringModels = [retiringModel];
+    const user = userEvent.setup();
+    renderWithProviders(<Alerts />);
+    expect(await screen.findByRole("button", { name: /anthropic\/claude-sonnet-4-5 retires on/ })).toBeInTheDocument();
+    await user.click(screen.getByRole("combobox", { name: "Alert type" }));
+    await user.click(await screen.findByRole("option", { name: "Prompt caching" }));
+    expect(await screen.findByRole("button", { name: "Prompt caching stopped on claude-east-1" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /retires on/ })).not.toBeInTheDocument();
   });
 
   it.each([
