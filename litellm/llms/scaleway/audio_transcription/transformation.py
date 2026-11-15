@@ -134,7 +134,7 @@ class ScalewayAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
             response_json: Final = raw_response.json()
         except Exception:
             raise ScalewayAudioTranscriptionException(
-                message=raw_response.text,
+                message="Received non-JSON response from Scaleway audio transcription",
                 status_code=raw_response.status_code,
                 headers=raw_response.headers,
             )

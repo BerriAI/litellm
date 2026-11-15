@@ -133,7 +133,7 @@ class MistralAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
             response_json: Final = raw_response.json()
         except Exception:
             raise MistralAudioTranscriptionException(
-                message=raw_response.text,
+                message="Received non-JSON response from Mistral audio transcription",
                 status_code=raw_response.status_code,
                 headers=raw_response.headers,
             )

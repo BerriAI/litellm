@@ -7,6 +7,7 @@ import pytest
 from prisma.errors import UniqueViolationError
 from pydantic import BaseModel, ConfigDict, ValidationError
 
+import litellm
 from litellm.caching.caching import DualCache
 from litellm.proxy._types import LiteLLM_TeamTable, LitellmUserRoles, Member, UserAPIKeyAuth
 from litellm.proxy.list_api.common import ManagementProblem
@@ -15,6 +16,7 @@ from litellm.types.proxy.management_endpoints.internal_user_endpoints import (
     BulkNewUserItem,
     BulkNewUserRequest,
 )
+from litellm.types.utils import CredentialItem
 
 ADMIN: Final = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
 INTERNAL: Final = UserAPIKeyAuth(user_id="someone", user_role=LitellmUserRoles.INTERNAL_USER)
@@ -189,6 +191,19 @@ async def _run(prisma, users, caller=ADMIN, license=None, generate_key=_no_keys)
         user_api_key_cache=DualCache(),
         generate_key=generate_key,
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("user_id", [None, "", "  employee-42  ", " \t"])
+async def test_bulk_keeps_existing_user_id_generation_and_whitespace_behavior(user_id: str | None) -> None:
+    prisma: Final = _FakePrisma()
+    response: Final = await _run(prisma, [{"user_id": user_id}])
+    result: Final = response.data[0]
+    assert result.success
+    assert result.user_id
+    assert result.user_id in prisma.db.litellm_usertable.rows
+    if user_id:
+        assert result.user_id == user_id
 
 
 @pytest.mark.asyncio
@@ -419,6 +434,39 @@ async def test_only_proxy_admin_sets_batch_limits_on_a_created_key():
     assert [r.key for r in admin_response.data] == ["sk-u1"]
     assert calls[-1]["user_id"] == "u1"
     assert calls[-1]["metadata"] == limits
+
+
+@pytest.mark.asyncio
+async def test_only_proxy_admin_creates_a_key_whose_logging_references_a_credential(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [CredentialItem(credential_name="space-a", credential_values={"arize_api_key": "k"}, credential_info={})],
+    )
+    reference: Final = {"logging": [{"callback_name": "arize", "litellm_credential_name": "space-a", "callback_vars": {}}]}
+    calls: list[dict[str, object]] = []
+
+    async def generate_key(**kwargs: object) -> dict[str, object]:
+        calls.append(kwargs)
+        return {"token": f"sk-{kwargs['user_id']}"}
+
+    rows: Final = [
+        {"user_id": "u1", "auto_create_key": True, "metadata": reference},
+        {"user_id": "u2", "auto_create_key": True},
+    ]
+
+    response = await _run(_FakePrisma(), rows, caller=INTERNAL, generate_key=generate_key)
+
+    assert [r.success for r in response.data] == [False, True]
+    assert "litellm_credential_name" in (response.data[0].error or "")
+    assert [call["user_id"] for call in calls] == ["u2"]
+
+    admin_response = await _run(_FakePrisma(), rows[:1], caller=ADMIN, generate_key=generate_key)
+
+    assert [r.key for r in admin_response.data] == ["sk-u1"]
+    assert calls[-1]["metadata"] == reference
 
 
 @pytest.mark.asyncio

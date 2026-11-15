@@ -1,6 +1,6 @@
-"""Tests for scripts/openapi_docs_gate.py.
+"""Tests for litellm/scripts/openapi_docs_gate.py.
 
-The blame rule lives in scripts/lint_base_counts.py and is tested there; what is tested
+The blame rule lives in litellm/scripts/lint_base_counts.py and is tested there; what is tested
 here is the checker output parse and `introduced`, the diff scan that names the new
 endpoint behind a breach.
 """

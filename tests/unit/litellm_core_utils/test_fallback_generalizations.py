@@ -9,7 +9,8 @@ resolution (get_model_info) including the shipped rules in the bundled cost map.
 
 import json
 import logging
-from collections.abc import Callable
+import re
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Final
 
@@ -563,6 +564,23 @@ def test_shipped_rules_flag_unmapped_fable_as_always_on_thinking(shipped_cost_ma
 
 
 @pytest.mark.parametrize(
+    ("model", "provider", "on_by_default"),
+    [
+        ("claude-opus-5-9", "anthropic", True),
+        ("claude-newfamily-6", "anthropic", True),
+        ("us.anthropic.claude-sonnet-5-9", "bedrock", True),
+        ("claude-opus-4-9", "anthropic", None),
+    ],
+)
+def test_shipped_rules_flag_unmapped_claude_5_and_later_as_thinking_by_default(
+    shipped_cost_map, model, provider, on_by_default
+):
+    assert model not in litellm.model_cost
+    info = litellm.get_model_info(model, custom_llm_provider=provider)
+    assert info.get("thinking_on_by_default") is on_by_default
+
+
+@pytest.mark.parametrize(
     "model,provider",
     [
         ("claude-opus-4-9@20260101", "vertex_ai"),
@@ -792,6 +810,35 @@ def test_shipped_wandb_rule_is_anchored_to_the_wandb_namespace(shipped_cost_map)
         assert matched is None or not matched.get("supports_reasoning"), foreign
 
 
+@pytest.mark.parametrize("model", ["minimax/MiniMax-M3.2", "minimax/MiniMax-Text-02"])
+def test_shipped_rules_flag_unmapped_minimax_ids_as_reasoning(shipped_cost_map, model):
+    """MiniMax ships reasoning models faster than the registry names them. The rule
+    carries no mode and no pricing, so cost stays on the standard unpriced behavior."""
+    assert model not in litellm.model_cost
+
+    info = litellm.get_model_info(model, custom_llm_provider="minimax")
+    assert info["litellm_provider"] == "minimax"
+    assert info["supports_reasoning"] is True
+    assert info.get("mode") is None
+    assert not info.get("input_cost_per_token")
+    assert not info.get("output_cost_per_token")
+
+
+def test_shipped_minimax_rule_is_anchored_to_the_minimax_namespace(shipped_cost_map):
+    """``^minimax/`` is anchored, so it cannot leak onto another provider's ids."""
+    assert match_capability_generalizations("minimax/some-new-model") == {"supports_reasoning": True}
+    for foreign in ("openrouter/minimax/minimax-m3", "notminimax/MiniMax-M3", "together_ai/minimax/MiniMax-M3"):
+        matched = match_capability_generalizations(foreign)
+        assert matched is None or not matched.get("supports_reasoning"), foreign
+
+
+@pytest.mark.parametrize("model", ["speech-02-hd", "MiniMax-H3"])
+def test_shipped_minimax_rule_leaves_mapped_entries_alone(shipped_cost_map, model):
+    assert f"minimax/{model}" in litellm.model_cost
+    assert match_fill_missing_generalizations(f"minimax/{model}", "minimax") is None
+    assert litellm.supports_reasoning(model=model, custom_llm_provider="minimax") is False
+
+
 def test_shipped_wandb_rule_keeps_reasoning_effort_on_an_unmapped_model(shipped_cost_map):
     """End to end through the provider config: the gate WandbConfig applies reads the
     rule, so reasoning_effort is advertised and survives get_optional_params rather than
@@ -915,6 +962,7 @@ def test_shipped_claude_thinking_rules_backfill_only_anthropic(shipped_cost_map)
     assert info.get("supports_legacy_thinking") is None
     assert info.get("max_input_tokens") is None
     assert match_fill_missing_generalizations("claude-sonnet-4-6", "anthropic") == {
+        **_claude_baseline()["model_info"],
         "supports_adaptive_thinking": True,
         "supports_legacy_thinking": True,
         "supports_tool_search": True,
@@ -961,3 +1009,63 @@ def test_shipped_tool_search_rule_fills_mapped_claude_entries_without_flag(shipp
     assert match_fill_missing_generalizations("claude-opus-5", "bedrock")["supports_tool_search"] is True
     assert match_fill_missing_generalizations("claude-opus-5", "azure_ai")["supports_tool_search"] is True
     assert match_fill_missing_generalizations("claude-opus-5", "perplexity") is None
+
+
+CLAUDE_BASELINE_FILL_PROVIDERS: Final = (
+    "anthropic",
+    "azure_ai",
+    "bedrock",
+    "bedrock_converse",
+    "vertex_ai-anthropic_models",
+)
+
+
+def _claude_baseline() -> Mapping[str, object]:
+    return next(rule for rule in get_fallback_generalization_rules() if rule["name"] == "claude-family-baseline")
+
+
+def _mapped_claude_chat_entries() -> tuple[tuple[str, Mapping[str, object]], ...]:
+    pattern: Final = re.compile(_claude_baseline()["pattern"], re.IGNORECASE)
+    return tuple(
+        (key, entry)
+        for key, entry in litellm.model_cost.items()
+        if isinstance(entry, dict) and entry.get("mode") == "chat" and pattern.search(key) is not None
+    )
+
+
+def _fields_overriding_baseline(entry: Mapping[str, object], baseline: Mapping[str, object]) -> frozenset[str]:
+    return frozenset(field for field in entry.keys() & baseline.keys() if entry[field] != baseline[field])
+
+
+@pytest.mark.parametrize("provider", CLAUDE_BASELINE_FILL_PROVIDERS)
+def test_shipped_claude_baseline_fills_only_missing_keys_on_mapped_entries(shipped_cost_map, provider):
+    """A mapped Claude entry from a first-party host gets each baseline key it leaves out,
+    while every baseline key the entry sets keeps the entry's own value."""
+    baseline: Final = _claude_baseline()["model_info"]
+    entries: Final = tuple(
+        (key, entry) for key, entry in _mapped_claude_chat_entries() if entry["litellm_provider"] == provider
+    )
+    assert any(baseline.keys() - entry.keys() for _, entry in entries)
+    assert any(_fields_overriding_baseline(entry, baseline) for _, entry in entries)
+
+    for key, entry in entries:
+        info = litellm.get_model_info(key)
+        assert info["key"] == key
+        assert {field: info[field] for field in baseline} == {
+            field: entry.get(field, value) for field, value in baseline.items()
+        }, key
+
+
+def test_shipped_claude_baseline_leaves_other_providers_entries_unfilled(shipped_cost_map):
+    baseline: Final = _claude_baseline()["model_info"]
+    entries: Final = tuple(
+        (key, entry)
+        for key, entry in _mapped_claude_chat_entries()
+        if entry["litellm_provider"] not in CLAUDE_BASELINE_FILL_PROVIDERS
+    )
+    assert any("supports_parallel_function_calling" not in entry for _, entry in entries)
+
+    for key, entry in entries:
+        info = litellm.get_model_info(key)
+        missing = baseline.keys() - entry.keys()
+        assert {field: info.get(field) for field in missing} == dict.fromkeys(missing), key

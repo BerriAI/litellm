@@ -18,8 +18,9 @@ from litellm.constants import (
     STREAM_FINISH_CHOICE_FIELDS,
     VLLM_CHOICE_FIELDS,
 )
+from litellm.litellm_core_utils.core_helpers import iter_items, subscript
 from litellm.litellm_core_utils.hidden_params import get_hidden_params
-from litellm.litellm_core_utils.prompt_templates.common_utils import (
+from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
     extract_reasoning_content,
 )
 from litellm.llms.ollama.common_utils import OllamaResponseIdNormalizer
@@ -66,6 +67,14 @@ _MODEL_RESPONSE_FIELDS: Final[frozenset] = frozenset(ModelResponse.model_fields.
 
 
 _ANNOTATION_ENTRIES: Final = TypeAdapter(tuple[object, ...])
+
+
+class _ImageResponseFields(TypedDict, total=False, extra_items=object):
+    pass
+
+
+def _image_response_from_fields(fields: Mapping[str, object]) -> ImageResponse:
+    return ImageResponse(**_ImageResponseFields(**fields))
 
 
 def _is_provider_specific_annotation(annotation: object) -> bool:
@@ -639,7 +648,7 @@ class LiteLLMResponseObjectHandler:
             model_response_dict: Final = model_response_object.model_dump()
 
             model_response_dict.update(response_object)
-            model_response_object = ImageResponse(**model_response_dict)
+            model_response_object = _image_response_from_fields(model_response_dict)
             return model_response_object
 
     @staticmethod
@@ -683,12 +692,12 @@ class LiteLLMResponseObjectHandler:
         choices_list: Final[list[TextChoices]] = []
 
         # Convert each choice to TextChoices
-        for choice in response["choices"]:
+        for choice in iter_items(subscript(response, "choices")):
             text_choices = TextChoices()
-            text_choices["text"] = choice["message"]["content"]
-            text_choices["index"] = choice["index"]
+            text_choices["text"] = subscript(subscript(choice, "message"), "content")
+            text_choices["index"] = subscript(choice, "index")
             text_choices["logprobs"] = transformed_logprobs
-            text_choices["finish_reason"] = choice["finish_reason"]
+            text_choices["finish_reason"] = subscript(choice, "finish_reason")
             choices_list.append(text_choices)
 
         text_completion_response["choices"] = choices_list
@@ -1072,13 +1081,18 @@ def convert_to_model_response_object(
         if isinstance(e, APIError):
             raise
 
+        hide_reply: Final = response_type == "audio_transcription"
         received_args: Final = dict(
-            response_object=response_object,
-            model_response_object=model_response_object,
+            response_object="<hidden>" if hide_reply else response_object,
+            model_response_object="<hidden>" if hide_reply else model_response_object,
             response_type=response_type,
             stream=stream,
             start_time=start_time,
             end_time=end_time,
             convert_tool_call_to_json_mode=convert_tool_call_to_json_mode,
         )
-        raise Exception(f"Invalid response object {traceback.format_exc()}\n\nreceived_args={received_args}")
+        # The conversion's own traceback, without the errors being handled when it ran: a router
+        # retry runs inside the handler of the attempt before it, and that attempt's error text
+        # (a rate limit) would otherwise decide how this one is classified.
+        own_traceback: Final = "".join(traceback.format_exception(type(e), e, e.__traceback__, chain=False))
+        raise Exception(f"Invalid response object {own_traceback}\n\nreceived_args={received_args}")
