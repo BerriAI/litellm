@@ -1,0 +1,219 @@
+<title>Rust Messages Baseline</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one reading column for findings, full-width bands for the drift strips and the flame graph */
+:root {
+  --bg: #f9f9f7; --surface: #fcfcfb; --fg: #0b0b0b; --fg2: #52514e; --muted: #898781;
+  --grid: #e1e0d9; --axis: #c3c2b7; --accent: #2a78d6; --line: #e6e5df;
+  --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100; --s5: #e87ba4; --s6: #008300; --s7: #6250d6; --s8: #e34948; --s9: #b3b1a8;
+  --font: "IBM Plex Sans", system-ui, sans-serif; --mono: "IBM Plex Mono", ui-monospace, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #0d0d0d; --surface: #1a1a19; --fg: #f0efec; --fg2: #c3c2b7; --muted: #898781; --grid: #2c2c2a; --axis: #383835; --accent: #3987e5; --line: #2c2c2a;
+  --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181; --s6: #0ca30c; --s7: #9085e9; --s8: #e66767; --s9: #5f5e59; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #0d0d0d; --surface: #1a1a19; --fg: #f0efec; --fg2: #c3c2b7; --muted: #898781; --grid: #2c2c2a; --axis: #383835; --accent: #3987e5; --line: #2c2c2a;
+  --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181; --s6: #0ca30c; --s7: #9085e9; --s8: #e66767; --s9: #5f5e59; color-scheme: dark }
+body { background: var(--bg); color: var(--fg); font: 15px/1.55 var(--font); }
+main { max-width: 1080px; margin: 0 auto; padding-block: 32px 64px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); display: grid; gap: 40px; }
+h1 { font-size: 28px; font-weight: 600; margin: 0; text-wrap: balance; letter-spacing: -0.01em; }
+h2 { font-size: 19px; font-weight: 600; margin: 0 0 4px; text-wrap: balance; }
+p { margin: 0; max-width: 68ch; color: var(--fg2); }
+.lede { display: grid; gap: 10px; }
+.meta { font: 12.5px var(--mono); color: var(--muted); display: flex; flex-wrap: wrap; gap: 6px 18px; }
+section { display: grid; gap: 14px; min-width: 0; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; }
+.tile { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; display: grid; gap: 2px; }
+.tile .k { font-size: 12px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); }
+.tile .v { font: 500 26px var(--mono); font-variant-numeric: tabular-nums; }
+.tile .v small { font-size: 14px; color: var(--fg2); }
+.tile .ci { font: 12px var(--mono); color: var(--fg2); }
+.scroll { overflow-x: auto; }
+table { border-collapse: collapse; font-variant-numeric: tabular-nums; width: 100%; font-size: 13.5px; }
+th, td { padding: 6px 10px; border-bottom: 1px solid var(--line); text-align: right; white-space: nowrap; }
+th:first-child, td:first-child { text-align: left; }
+th { font-weight: 500; color: var(--muted); font-size: 12px; letter-spacing: 0.03em; text-transform: uppercase; }
+td.num { font-family: var(--mono); }
+.strips { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; }
+.strip { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px 6px; min-width: 0; }
+.strip h3 { margin: 0; font-size: 13.5px; font-weight: 500; }
+.strip .sub { font: 12px var(--mono); color: var(--muted); }
+.strip svg { width: 100%; height: auto; display: block; }
+.legend { display: flex; gap: 16px; font-size: 13px; color: var(--fg2); flex-wrap: wrap; }
+.sw { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; vertical-align: -1px; }
+.sq { display: inline-block; width: 11px; height: 11px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
+#flamewrap { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+#flamebar { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; padding: 10px 12px; border-bottom: 1px solid var(--line); font-size: 13px; }
+#flamebar button { font: 500 13px var(--font); background: var(--bg); color: var(--fg); border: 1px solid var(--axis); border-radius: 6px; padding: 4px 10px; cursor: pointer; }
+#flamebar button:focus-visible, #flame .n:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+#crumb { font: 12.5px var(--mono); color: var(--fg2); min-width: 0; overflow-wrap: anywhere; }
+#flame { position: relative; height: 620px; overflow-y: auto; overflow-x: hidden; }
+#flame .n { position: absolute; height: 17px; box-sizing: border-box; border-right: 1px solid var(--surface); border-bottom: 1px solid var(--surface); font: 11px/17px var(--mono); color: #fff; padding: 0 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
+#flame .n.b4 { color: #0b0b0b; }
+#flame .n:hover { filter: brightness(1.12); }
+#tip { position: fixed; pointer-events: none; z-index: 5; max-width: min(520px, 90vw); background: var(--fg); color: var(--bg); border-radius: 6px; padding: 8px 10px; font: 12px/1.45 var(--mono); overflow-wrap: anywhere; }
+.findings { display: grid; gap: 14px; }
+.finding { display: grid; grid-template-columns: 76px 1fr; gap: 14px; align-items: baseline; border-top: 1px solid var(--line); padding-top: 12px; }
+.finding .ms { font: 500 18px var(--mono); font-variant-numeric: tabular-nums; text-align: right; }
+.finding .ms small { display: block; font-size: 11px; color: var(--muted); font-weight: 400; }
+.finding h3 { margin: 0 0 4px; font-size: 15px; font-weight: 600; }
+code { font: 13px var(--mono); background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; overflow-wrap: anywhere; }
+.note { font-size: 13.5px; }
+@media (max-width: 520px) { .finding { grid-template-columns: 1fr; gap: 4px; } .finding .ms { text-align: left; } #flame { height: 520px; } }
+@media (prefers-reduced-motion: no-preference) { #flame .n { transition: left .18s, width .18s; } }
+</style>
+
+<main>
+  <header class="lede">
+    <h1>Rust /v1/messages baseline on main</h1>
+    <p>Overnight benchmark of the newest main on the Rust Messages path, with S3 and Prometheus logging on. Every number below is the median across 48 runs of the same frozen traffic, with a bootstrap 95% interval. The flame graph merges 7 profiled runs taken at the same load.</p>
+    <div class="meta"><span>main 91fc6c2071 (Nov 14 21:41 PT, includes #51487)</span><span>2026-11-15 06:33 to 15:37 UTC</span><span>2 workers on 2 pinned cores, 4 vCPU host</span></div>
+  </header>
+
+  <section>
+    <h2>Under load, 5 requests a second</h2>
+    <p>Open-loop arrivals, 60 s warmup then 240 s measured per run. Requests use a 45k to 55k token input with tools and stream 1k to 4k output tokens from a mock that paces tokens at 12.5 ms. 1,474 requests per run, all 70,752 succeeded and were counted in both S3 and Prometheus.</p>
+    <div class="tiles" id="loadTiles"></div>
+  </section>
+
+  <section>
+    <h2>One request at a time</h2>
+    <p>One user and an instant mock, 300 warmup then 1,500 measured requests per run. This isolates CPU per request. The next request starts the moment the previous stream ends, so logging work that runs after the stream closes lands on the next request's pre-upstream time. That is why time to first token is higher here than under load.</p>
+    <div class="tiles" id="seqTiles"></div>
+  </section>
+
+  <section>
+    <h2>How stable the numbers are</h2>
+    <p>Each dot is one run, in the order they ran overnight. Blue and orange are two names for the same build, interleaved, so any gap between them is pure machine noise. They agree within 0.4% on every metric. The machine itself got about 2.5% slower in the second half of the night, visible in both kinds of runs, so absolute numbers carry roughly that much host drift.</p>
+    <div class="legend"><span><span class="sw" style="background:var(--s1)"></span>N</span><span><span class="sw" style="background:var(--s2)"></span>Nb (same build)</span><span><span class="sq" style="background:var(--axis);height:2px;vertical-align:3px"></span>median of all 48</span></div>
+    <div class="strips" id="strips"></div>
+  </section>
+
+  <section>
+    <h2>Where the CPU goes</h2>
+    <p>Merged py-spy profile of 7 runs at 5 req/s and 50 Hz, about 75k CPU samples after dropping parked threads and GIL waits. Widths are scaled to the measured 91.0 ms of CPU per request under load. Click a frame to zoom into it, click the top bar or Reset to zoom out. Colors mark the subsystem the frame belongs to.</p>
+    <div class="legend" id="flameLegend"></div>
+    <div id="flamewrap">
+      <div id="flamebar"><button id="reset" type="button">Reset zoom</button><span id="crumb">all CPU, 91.0 ms per request</span></div>
+      <div id="flame" role="tree" aria-label="Flame graph"></div>
+    </div>
+    <div class="scroll"><table id="buckets"></table></div>
+    <p class="note">The spread column is the standard deviation across the 7 profiled runs. Subsystems are assigned from the innermost frame that matches, the same rules as <code>flame.py</code>.</p>
+  </section>
+
+  <section>
+    <h2>What stands out</h2>
+    <div class="findings">
+      <div class="finding"><div class="ms">18.1<small>ms / req</small></div><div><h3>Rebuilding the streamed response for logging is a fifth of all CPU</h3><p><code>build_complete_streaming_response</code> reassembles every streamed chunk into one response for the logging callbacks. #51487 moved it off the client's critical path, but it still costs 18 ms per request, 12.6 ms of it in <code>stream_chunk_builder</code>. This is the largest single target.</p></div></div>
+      <div class="finding"><div class="ms">6.3<small>ms / req</small></div><div><h3>Pydantic attribute misses inside that rebuild</h3><p><code>pydantic.BaseModel.__getattr__</code> runs for every <code>in</code>, <code>.get</code> and field probe on the chunk objects that misses a declared field. The hot callers are <code>_assembled_message_fields</code>, <code>extract_usage_chunk</code> and <code>_field_of</code> in <code>streaming_chunk_builder_utils.py</code>, going through <code>__contains__</code> and <code>__getitem__</code> in <code>types/utils.py</code>. Reading fields directly or caching which fields exist would remove most of it.</p></div></div>
+      <div class="finding"><div class="ms">10.3<small>ms / req</small></div><div><h3>Success logging callbacks</h3><p><code>async_success_handler</code> and what it calls, including Prometheus at 5.0 ms and S3 at 1.0 ms. Prometheus label sanitising alone is 0.6 ms of self time.</p></div></div>
+      <div class="finding"><div class="ms">5.4<small>ms / req</small></div><div><h3>Auth before the model call</h3><p>FastAPI dependency resolution takes 5.4 ms, and 5.0 ms of that is <code>user_api_key_auth</code>, with a virtual-key cache and no database. Router selection on the Python side adds 7.0 ms by subsystem.</p></div></div>
+      <div class="finding"><div class="ms">1.1<small>ms / req</small></div><div><h3>A database error is raised and handled twice per request with no database configured</h3><p>The Prometheus user budget metric (<code>_assemble_user_object</code>) and auth (<code>_safe_fetch</code>) both go through the DB metrics wrapper, which catches an exception and runs <code>is_exception_related_to_db</code>. That does a module lookup with filesystem stats every time. A cheap fix is to skip the lookup when no database is set up.</p></div></div>
+      <div class="finding"><div class="ms">1.1<small>ms / req</small></div><div><h3>The Rust logger takes the GIL to check whether logging is enabled</h3><p><code>_native::logger::enabled</code> attaches to the interpreter on each log call from <code>_settle</code> and the stream iterator. Caching the level on the Rust side would remove the GIL round trips.</p></div></div>
+      <div class="finding"><div class="ms">23.4<small>ms / req</small></div><div><h3>Rust code and the crossing into Python</h3><p>Rust itself is 20.2 ms, mostly JSON serialisation and payload building. Converting values between Python and Rust (<code>pythonize</code>, <code>json_from_py</code>) is another 3.3 ms.</p></div></div>
+    </div>
+    <p class="note">These rows overlap where one function calls another, so they don't sum to the total.</p>
+  </section>
+
+  <section>
+    <h2>Method and caveats</h2>
+    <p>Each round ran a load pair (N then Nb, order shuffled) and a sequential pair, with a profiled run after every third round, so all three kinds share the night's drift. Every run starts a fresh proxy, mock, S3 server and Prometheus directory. The proxy is pinned to cores 0 and 1, Locust to core 2 and the mock and S3 to core 3. Locust stayed under 9% of its core. Every streamed response carried the Rust header, and the non-streaming ones are served by Rust as well because the Python handler for this deployment only refuses.</p>
+    <p>Profiled runs are never measured runs. py-spy slows the proxy, so the flame graph gives shares and the milliseconds come from the unprofiled load runs. The first profiled run lost 23 in-flight streams the moment py-spy attached and is left out of the merge. While building this I found that <code>flame.py</code> cut stacks at 60 frames, which charged about 30% of samples to the wrong frames. It now keeps 512 frames.</p>
+    <p>CPU per request is higher under load (91 ms) than one at a time (71 ms). At 5 req/s, fixed background work such as timers and metrics collection is spread over fewer requests, and concurrent streams add scheduling overhead.</p>
+  </section>
+  <section>
+    <h2>Data</h2>
+    <p>Per-run metrics for all 96 measured runs with the pooled medians, intervals and drift: <a href="data/load_pool.json">load_pool.json</a> and <a href="data/seq_pool.json">seq_pool.json</a>. The A/A comparison from <code>report.py</code>: <a href="data/report_load_aa.json">report_load_aa.json</a> and <a href="data/report_seq_aa.json">report_seq_aa.json</a>. The merged flame tree, subsystem table and top functions: <a href="data/flame.json">flame.json</a>.</p>
+  </section>
+</main>
+<div id="tip" hidden></div>
+
+<script>
+const DATA = __DATA__;
+const tip = document.getElementById("tip");
+function showTip(e, html) { tip.innerHTML = html; tip.hidden = false; const x = Math.min(e.clientX + 14, innerWidth - tip.offsetWidth - 8); const y = e.clientY + 16 + tip.offsetHeight > innerHeight ? e.clientY - tip.offsetHeight - 10 : e.clientY + 16; tip.style.left = x + "px"; tip.style.top = y + "px"; }
+function hideTip() { tip.hidden = true; }
+const esc = s => s.replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const f1 = v => v.toFixed(1), f2 = v => v.toFixed(2);
+
+function tiles(el, s, items) {
+  el.innerHTML = items.map(([k, label, unit]) => {
+    const m = s[k];
+    return `<div class="tile"><span class="k">${label}</span><span class="v">${f1(m.median)} <small>${unit}</small></span><span class="ci">95% CI ${f1(m.ci95[0])} to ${f1(m.ci95[1])}</span></div>`;
+  }).join("");
+}
+const tileSet = [["cpu_ms_per_request","CPU per request","ms"],["overhead_p50_ms","Added latency p50","ms"],["overhead_p95_ms","Added latency p95","ms"],["overhead_p99_ms","Added latency p99","ms"],["ttft_overhead_p50_ms","Added time to first token p50","ms"],["header_overhead_p50_ms","Response headers added p50","ms"],["tail_p50_ms","Wait after last token p50","ms"],["peak_rss_mb","Peak memory, 2 workers","MB"]];
+tiles(document.getElementById("loadTiles"), DATA.load.summary, tileSet);
+tiles(document.getElementById("seqTiles"), DATA.seq.summary, tileSet.filter(t => t[0] !== "peak_rss_mb"));
+
+function strip(title, sub, runs, key, median) {
+  const W = 480, H = 150, L = 40, R = 10, T = 10, B = 24;
+  const vals = runs.map(r => r[key]);
+  const lo = Math.min(...vals), hi = Math.max(...vals), pad = (hi - lo) * 0.12 || 1;
+  const y0 = Math.floor((lo - pad)), y1 = Math.ceil((hi + pad));
+  const xs = r => L + (r.round - 1) / 23 * (W - L - R) + (r.run.startsWith("Nb") ? 3 : -3);
+  const ys = v => T + (1 - (v - y0) / (y1 - y0)) * (H - T - B);
+  const step = Math.max(1, Math.round((y1 - y0) / 4));
+  const ticks = []; for (let t = Math.ceil(y0 / step) * step; t <= y1; t += step) ticks.push(t);
+  const grid = ticks.map(t => `<line x1="${L}" x2="${W - R}" y1="${ys(t)}" y2="${ys(t)}" stroke="var(--grid)" stroke-width="1"/><text x="${L - 6}" y="${ys(t) + 4}" text-anchor="end" font-size="11" fill="var(--muted)" font-family="var(--mono)">${t}</text>`).join("");
+  const xt = [1, 6, 12, 18, 24].map(r => `<text x="${L + (r - 1) / 23 * (W - L - R)}" y="${H - 6}" text-anchor="middle" font-size="11" fill="var(--muted)" font-family="var(--mono)">r${r}</text>`).join("");
+  const med = `<line x1="${L}" x2="${W - R}" y1="${ys(median)}" y2="${ys(median)}" stroke="var(--fg2)" stroke-width="1.5" stroke-dasharray="4 3"/>`;
+  const dots = runs.map(r => `<circle cx="${xs(r)}" cy="${ys(r[key])}" r="4" fill="${r.run.startsWith("Nb") ? "var(--s2)" : "var(--s1)"}" stroke="var(--surface)" stroke-width="1.5"/><circle class="hit" cx="${xs(r)}" cy="${ys(r[key])}" r="9" fill="transparent" data-t="${esc(r.run)} · round ${r.round}<br>${f2(r[key])} ms"/>`).join("");
+  return `<div class="strip"><h3>${title}</h3><div class="sub">${sub}</div><svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${title} per run">${grid}${xt}${med}${dots}</svg></div>`;
+}
+const S = DATA.load.summary, Q = DATA.seq.summary;
+document.getElementById("strips").innerHTML = [
+  strip("CPU per request, under load", `median ${f1(S.cpu_ms_per_request.median)} ms, run-to-run CV ${f1(S.cpu_ms_per_request.cv_pct)}%`, DATA.load.runs, "cpu_ms_per_request", S.cpu_ms_per_request.median),
+  strip("Added latency p50, under load", `median ${f1(S.overhead_p50_ms.median)} ms, CV ${f1(S.overhead_p50_ms.cv_pct)}%`, DATA.load.runs, "overhead_p50_ms", S.overhead_p50_ms.median),
+  strip("Added latency p99, under load", `median ${f1(S.overhead_p99_ms.median)} ms, CV ${f1(S.overhead_p99_ms.cv_pct)}%`, DATA.load.runs, "overhead_p99_ms", S.overhead_p99_ms.median),
+  strip("CPU per request, one at a time", `median ${f1(Q.cpu_ms_per_request.median)} ms, CV ${f1(Q.cpu_ms_per_request.cv_pct)}%`, DATA.seq.runs, "cpu_ms_per_request", Q.cpu_ms_per_request.median),
+].join("");
+document.querySelectorAll(".hit").forEach(c => { c.addEventListener("mousemove", e => showTip(e, c.dataset.t)); c.addEventListener("mouseleave", hideTip); });
+
+const COLORS = ["--s8","--s1","--s6","--s7","--s4","--s5","--s3","--s2","--s9"];
+const colorOf = i => `var(${COLORS[i]})`;
+document.getElementById("flameLegend").innerHTML = DATA.bucketNames.map((n, i) => `<span><span class="sq" style="background:${colorOf(i)}"></span>${esc(n)}</span>`).join("");
+const bt = DATA.buckets.slice().sort((a, b) => b.ms - a.ms);
+document.getElementById("buckets").innerHTML = `<tr><th>Subsystem</th><th>ms per request</th><th>share</th><th>spread</th></tr>` + bt.map(b => `<tr><td><span class="sq" style="background:${colorOf(DATA.bucketNames.indexOf(b.name))}"></span>${esc(b.name)}</td><td class="num">${f2(b.ms)}</td><td class="num">${(100 * b.ms / DATA.cpu_ms).toFixed(1)}%</td><td class="num">± ${f2(b.sd)}</td></tr>`).join("") + `<tr><td><b>Total</b></td><td class="num"><b>${f2(bt.reduce((a, b) => a + b.ms, 0))}</b></td><td></td><td></td></tr>`;
+
+const nodes = DATA.tree.map(([id, parent, label, ms, self, b, full]) => ({ id, parent, label, ms, self, b, full, kids: [] }));
+const byId = new Map(nodes.map(n => [n.id, n]));
+const roots = [];
+nodes.forEach(n => (n.parent === -1 ? roots : byId.get(n.parent).kids).push(n));
+nodes.forEach(n => n.kids.sort((a, b) => b.ms - a.ms));
+const ROOT = { id: -1, label: "all CPU", ms: roots.reduce((a, n) => a + n.ms, 0), self: 0, b: 8, full: "all CPU", kids: roots.sort((a, b) => b.ms - a.ms), parent: null };
+roots.forEach(n => n.up = ROOT); nodes.forEach(n => n.kids.forEach(k => k.up = n));
+const flame = document.getElementById("flame"), crumb = document.getElementById("crumb");
+let focus = ROOT;
+function render() {
+  const W = flame.clientWidth, ROW = 18, MIN = 0.6;
+  const parts = [];
+  const chain = []; for (let n = focus; n; n = n.up) chain.unshift(n);
+  chain.forEach((n, d) => parts.push([n, 0, W, d]));
+  const base = chain.length;
+  const walk = (n, x, w, d) => {
+    let cx = x;
+    for (const k of n.kids) {
+      const kw = w * k.ms / n.ms;
+      if (kw >= MIN) { parts.push([k, cx, kw, d]); walk(k, cx, kw, d + 1); }
+      cx += kw;
+    }
+  };
+  walk(focus, 0, W, base);
+  flame.innerHTML = parts.map(([n, x, w, d]) => `<div class="n b${n.b}" role="treeitem" tabindex="0" data-id="${n.id}" style="left:${x}px;width:${w}px;top:${d * ROW}px;background:${colorOf(n.b)}">${w > 30 ? esc(n.label) : ""}</div>`).join("");
+  flame.style.setProperty("--h", "0");
+  const depth = parts.reduce((a, p) => Math.max(a, p[3]), 0);
+  const pad = document.createElement("div"); pad.style.height = (depth + 2) * ROW + "px"; flame.appendChild(pad);
+  crumb.textContent = focus === ROOT ? `all CPU, ${f1(DATA.cpu_ms)} ms per request` : `${focus.label}, ${f2(focus.ms)} ms per request (${(100 * focus.ms / DATA.cpu_ms).toFixed(1)}% of CPU)`;
+}
+const find = id => id === -1 ? ROOT : byId.get(id);
+flame.addEventListener("click", e => { const el = e.target.closest(".n"); if (!el) return; const n = find(+el.dataset.id); focus = n === focus && n.up ? n.up : n; render(); });
+flame.addEventListener("keydown", e => { if (e.key !== "Enter" && e.key !== " ") return; const el = e.target.closest(".n"); if (!el) return; e.preventDefault(); focus = find(+el.dataset.id); render(); });
+flame.addEventListener("mousemove", e => { const el = e.target.closest(".n"); if (!el) return hideTip(); const n = find(+el.dataset.id); showTip(e, `${esc(n.full)}<br><b>${f2(n.ms)} ms</b> per request, ${(100 * n.ms / DATA.cpu_ms).toFixed(2)}% of CPU${n.self ? `<br>self ${f2(n.self)} ms` : ""}<br>${esc(DATA.bucketNames[n.b])}`); });
+flame.addEventListener("mouseleave", hideTip);
+document.getElementById("reset").addEventListener("click", () => { focus = ROOT; render(); });
+addEventListener("resize", render);
+render();
+</script>
