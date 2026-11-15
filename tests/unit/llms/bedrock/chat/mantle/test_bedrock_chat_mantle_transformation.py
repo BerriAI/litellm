@@ -1,6 +1,7 @@
 import base64
 import json
 import uuid
+from collections.abc import Mapping
 from types import SimpleNamespace
 from typing import Final
 from unittest.mock import MagicMock
@@ -340,8 +341,16 @@ def test_mantle_claude_completion_sends_a_proxy_user_profile_id_in_the_body(
 
 
 @pytest.mark.parametrize("model", MANTLE_CLAUDE_ROUTES)
-def test_mantle_claude_completion_sends_the_proxy_user_profile_id_over_a_caller_header_in_another_case(
-    model: str,
+@pytest.mark.parametrize(
+    "caller_value",
+    [
+        {"extra_headers": {"Anthropic-User-Profile-Id": "uprof_other"}},
+        {"extra_body": {"user_profile_id": "uprof_other"}},
+    ],
+    ids=["header_in_another_case", "extra_body"],
+)
+def test_mantle_claude_completion_sends_the_proxy_user_profile_id_over_a_caller_value(
+    model: str, caller_value: Mapping[str, Mapping[str, str]]
 ) -> None:
     from litellm.proxy.litellm_pre_call_utils import add_provider_specific_headers_to_request
 
@@ -352,7 +361,7 @@ def test_mantle_claude_completion_sends_the_proxy_user_profile_id_over_a_caller_
     litellm.completion(
         model=model,
         messages=[{"role": "user", "content": "hi"}],
-        extra_headers={"Anthropic-User-Profile-Id": "uprof_other"},
+        **caller_value,
         aws_access_key_id="AKIAEXAMPLE",
         aws_secret_access_key="fake-secret",
         aws_region_name="us-east-1",

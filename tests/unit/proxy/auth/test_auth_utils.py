@@ -6743,3 +6743,32 @@ def test_a_non_string_anthropic_user_profile_id_on_a_key_or_team_answers_400(
 
     assert rejection.value.status_code == 400
     assert f"anthropic_user_profile_id on a {entity} must be a string" in str(rejection.value.detail)
+
+
+@pytest.mark.parametrize(
+    "entity,stored",
+    [("key", {"anthropic_user_profile_id": 12345}), ("team", {"anthropic_user_profile_id": 12345}), ("project", None)],
+    ids=["key_resends_stored", "team_resends_stored", "project_never_reads_it"],
+)
+def test_a_non_string_anthropic_user_profile_id_passes_when_unchanged_or_on_a_project(
+    entity: Literal["key", "team", "project"], stored: Mapping[str, object] | None
+) -> None:
+    from litellm.proxy._types import UpdateKeyRequest, UpdateProjectRequest, UpdateTeamRequest
+    from litellm.proxy.auth.auth_utils import enforce_batch_limits_are_admin_only
+
+    metadata: Final = {"anthropic_user_profile_id": 12345, "note": "edited"}
+    request: Final = (
+        UpdateKeyRequest(key="sk-holder", metadata=metadata)
+        if entity == "key"
+        else UpdateTeamRequest(team_id="t1", metadata=metadata)
+        if entity == "team"
+        else UpdateProjectRequest(project_id="p1", metadata=metadata)
+    )
+    admin: Final = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin")
+
+    assert (
+        enforce_batch_limits_are_admin_only(
+            data=request, existing_metadata=stored, user_api_key_dict=admin, entity=entity
+        )
+        is None
+    )

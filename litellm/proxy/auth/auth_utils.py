@@ -1952,10 +1952,18 @@ def enforce_batch_limits_are_admin_only(
     own credentials, and the Anthropic user profile id picks which end user an
     Anthropic safety action applies to. A project only enforces ``model_batch_enqueued_token_limit``,
     so that is the one key gated there. Gated on the resulting value rather than
-    on presence, so a form resending the stored value stays a no-op.
+    on presence, so a form resending the stored value stays a no-op. A key or
+    team that sets a non-string Anthropic user profile id answers 400 for every role.
     """
     sent_profile_id: Final = data.metadata.get(ANTHROPIC_USER_PROFILE_ID_METADATA_KEY) if data.metadata else None
-    if sent_profile_id is not None and not isinstance(sent_profile_id, str):
+    stored_profile_id: Final = (
+        existing_metadata.get(ANTHROPIC_USER_PROFILE_ID_METADATA_KEY) if existing_metadata else None
+    )
+    if (
+        entity != "project"
+        and sent_profile_id not in (None, stored_profile_id)
+        and not isinstance(sent_profile_id, str)
+    ):
         raise HTTPException(
             status_code=400,
             detail={"error": f"{ANTHROPIC_USER_PROFILE_ID_METADATA_KEY} on a {entity} must be a string like uprof_..."},
