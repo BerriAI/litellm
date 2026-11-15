@@ -13525,7 +13525,7 @@ class TestDetachedStreamFailureHook:
         )
 
         failure = RuntimeError("upstream died after the client left")
-        await logging_obj.on_detached_stream_failure(failure)
+        await logging_obj.on_detached_stream_failure(logging_obj, failure)
 
         assert recorder.calls == [
             {
@@ -13550,7 +13550,7 @@ class TestDetachedStreamFailureHook:
         )
         failure = RuntimeError("upstream died after the client left")
 
-        await logging_obj.on_detached_stream_failure(failure)
+        await logging_obj.on_detached_stream_failure(logging_obj, failure)
 
         assert [call["original_exception"] for call in recorder.calls] == [failure]
 
@@ -13593,7 +13593,7 @@ class TestDetachedStreamFailureHook:
         def iterator_hook_for(logging_obj):
             async def iterator_hook(**_kwargs):
                 yield b"event: message_start\n\n"
-                await logging_obj.on_detached_stream_failure(upstream_failure)
+                await logging_obj.on_detached_stream_failure(logging_obj, upstream_failure)
                 yield b"event: error\n\n"
                 yield b"event: message_stop\n\n"
                 if after_report is not None:
@@ -13602,6 +13602,7 @@ class TestDetachedStreamFailureHook:
             return iterator_hook
 
         return iterator_hook_for
+
 
     @pytest.mark.asyncio
     async def test_iterator_hook_failure_after_a_bridged_failure_is_the_one_the_failure_hook_gets(self):
@@ -13696,7 +13697,7 @@ class TestDetachedStreamFailureHook:
         logging_obj, stream = self._armed_stream(recorder, lambda _logging_obj: iterator_hook)
 
         frames = [frame async for frame in stream]
-        await logging_obj.on_detached_stream_failure(upstream_failure)
+        await logging_obj.on_detached_stream_failure(logging_obj, upstream_failure)
 
         assert frames == ["data: chunk\n\n"]
         assert [call["original_exception"] for call in recorder.calls] == [upstream_failure]
@@ -13733,7 +13734,7 @@ class TestDetachedStreamFailureHook:
         logging_obj, stream = self._armed_stream(recorder, lambda _logging_obj: iterator_hook)
 
         frames = [frame async for frame in stream]
-        await logging_obj.on_detached_stream_failure(upstream_failure)
+        await logging_obj.on_detached_stream_failure(logging_obj, upstream_failure)
 
         assert frames == ["data: chunk\n\n", "data: error\n\n"]
         assert [call["original_exception"] for call in recorder.calls] == [hook_failure]

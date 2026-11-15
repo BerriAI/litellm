@@ -903,7 +903,7 @@ class BaseAnthropicMessagesStreamingIterator:
         if on_detached_failure is None:
             return
         try:
-            await on_detached_failure(exc)
+            await on_detached_failure(self.litellm_logging_obj, exc)
         except Exception as hook_failure:  # noqa: BLE001  # a failing proxy hook must not crash the detached pump
             verbose_proxy_logger.warning(
                 "async_sse_wrapper detached failure hook raised: %s(%s)", type(hook_failure).__name__, hook_failure

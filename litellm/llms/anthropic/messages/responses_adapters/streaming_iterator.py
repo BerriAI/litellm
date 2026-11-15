@@ -486,14 +486,14 @@ class AnthropicResponsesStreamWrapper:
         if failure is None:
             return
         self._unreported_failure = None
-        on_failure: Final[Callable[[Exception], Awaitable[None]] | None] = getattr(
+        on_failure: Final[Callable[[LiteLLMLoggingObject, Exception], Awaitable[None]] | None] = getattr(
             self.litellm_logging_obj, "_on_detached_stream_failure", None
         )
-        if on_failure is None:
+        if on_failure is None or self.litellm_logging_obj is None:
             return
         try:
             with anyio.CancelScope(shield=True):
-                await on_failure(failure)
+                await on_failure(self.litellm_logging_obj, failure)
         except Exception as hook_failure:  # noqa: BLE001  # a failing proxy hook must not hide the error event from the client
             verbose_logger.warning(
                 "AnthropicResponsesStreamWrapper: stream failure hook raised: %s(%s)",

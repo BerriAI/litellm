@@ -5,7 +5,6 @@ import json
 import logging
 import math
 import time
-import weakref
 from collections.abc import (
     AsyncGenerator,
     AsyncIterator,
@@ -2735,7 +2734,7 @@ async def _no_stream_failure_to_release() -> None:
 @dataclass(slots=True)
 class _ClientStreamFailureReport:
     logging_obj: LiteLLMLoggingObj
-    report: Callable[[Exception], Awaitable[None]]
+    report: Callable[[LiteLLMLoggingObj, Exception], Awaitable[None]]
     held: Exception | None = None
 
     @classmethod
@@ -2748,7 +2747,7 @@ class _ClientStreamFailureReport:
         self.logging_obj.on_detached_stream_failure = self.hold
         return self.release
 
-    async def hold(self, failure: Exception) -> None:
+    async def hold(self, logging_obj: LiteLLMLoggingObj, failure: Exception) -> None:
         if self.held is None:
             self.held = failure
 
@@ -2764,7 +2763,7 @@ class _ClientStreamFailureReport:
 
     async def _report_held(self, failure: Exception) -> None:
         try:
-            await self.report(failure)
+            await self.report(self.logging_obj, failure)
         except Exception as hook_failure:  # noqa: BLE001  # a failing failure hook must not skip the stream cleanup
             verbose_proxy_logger.warning(
                 "Stream failure hook raised: %s(%s)", type(hook_failure).__name__, sanitize_for_log(hook_failure)
@@ -4479,23 +4478,18 @@ class ProxyBaseLLMRequestProcessing:
         so the failed spend is still written and the budget reservation released;
         a replacement error the hook raises has no client left to reach.
         """
-        # The closure lives on the logging object until the logging object dies, so it must not
-        # hold the logging object, or a request stays alive until a full GC pass (#51277)
-        logging_obj_ref: Final = weakref.ref(logging_obj)
-        request_data: Final = {
-            key: value for key, value in self._request_fields().items() if key != "litellm_logging_obj"
-        }
+        request_fields: Final = cast(Mapping[str, object], self.data)  # cast-ok: legacy request dict has string keys
+        request_data: Final = {key: value for key, value in request_fields.items() if key != "litellm_logging_obj"}
         route_type: Final = self.route_type
 
-        async def _on_detached_stream_failure(exc: Exception) -> None:
-            live_logging_obj: Final = logging_obj_ref()
-            if live_logging_obj is None or not live_logging_obj.claim_stream_failure_report():
+        async def _on_detached_stream_failure(failed_logging_obj: LiteLLMLoggingObj, exc: Exception) -> None:
+            if not failed_logging_obj.claim_stream_failure_report():
                 return
             try:
                 await proxy_logging_obj.post_call_failure_hook(
                     user_api_key_dict=user_api_key_dict,
                     original_exception=exc,
-                    request_data={**request_data, "litellm_logging_obj": live_logging_obj},
+                    request_data={**request_data, "litellm_logging_obj": failed_logging_obj},
                     dispatched_call_type=route_type,
                 )
             except HTTPException:

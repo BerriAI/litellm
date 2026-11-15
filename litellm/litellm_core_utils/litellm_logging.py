@@ -990,11 +990,11 @@ class Logging(LiteLLMLoggingBaseClass):
         self.llm_caching_handler = value
 
     @property
-    def _on_detached_stream_failure(self) -> Callable[[Exception], Awaitable[None]] | None:
+    def _on_detached_stream_failure(self) -> Callable[["Logging", Exception], Awaitable[None]] | None:
         return self.on_detached_stream_failure
 
     @_on_detached_stream_failure.setter
-    def _on_detached_stream_failure(self, value: Callable[[Exception], Awaitable[None]] | None) -> None:
+    def _on_detached_stream_failure(self, value: Callable[["Logging", Exception], Awaitable[None]] | None) -> None:
         self.on_detached_stream_failure = value
 
     @property
@@ -1175,7 +1175,7 @@ class Logging(LiteLLMLoggingBaseClass):
         self._async_success_scheduled: bool = False
         self._async_success_enqueued: bool = False
         self._sync_success_scheduled: bool = False
-        self.on_detached_stream_failure: Callable[[Exception], Awaitable[None]] | None = None
+        self.on_detached_stream_failure: Callable[[Logging, Exception], Awaitable[None]] | None = None
         self._stream_failure_claimed: bool = False
         self._stash_owed_on_success: bool = False
         self._stash_billed_by_continuation: bool = False
