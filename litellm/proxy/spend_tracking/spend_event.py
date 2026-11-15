@@ -23,7 +23,6 @@ from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
-from litellm.litellm_core_utils.tool_fields import LOGGED_FULL_TOOL_NAMES
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.db.spend_log_tool_index import logged_full_tool_names, response_tool_call_names
 from litellm.types.interactions import InteractionsAPIResponse
@@ -356,7 +355,7 @@ def build_spend_event(
     cache_key: Final = preset_spend_log_cache_key(litellm_params)
     response_cost: Final = sl_object.get("response_cost") if sl_object is not None else kwargs.get("response_cost")
     combined_usage: Final = kwargs.get("combined_usage_object")
-    full_names: Final = logged_full_tool_names(LOGGED_FULL_TOOL_NAMES.validate_python(raw_kwargs))
+    full_names: Final = logged_full_tool_names(raw_kwargs)
     event: Final = SpendEvent(
         version=SPEND_EVENT_VERSION,
         litellm_call_id=kwargs.get("litellm_call_id"),

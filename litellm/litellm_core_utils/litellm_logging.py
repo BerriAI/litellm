@@ -16,7 +16,7 @@ from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping, Se
 from datetime import datetime as dt_object
 from functools import lru_cache
 from types import MappingProxyType, TracebackType
-from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, TypeVar, cast
 
 from httpx import Response
 from pydantic import BaseModel, JsonValue, TypeAdapter
@@ -122,6 +122,7 @@ from litellm.litellm_core_utils.served_output_texts import (
     overlay_served_output_texts,
 )
 from litellm.litellm_core_utils.thread_pool_executor import executor
+from litellm.litellm_core_utils.tool_fields import BRIDGED_TOOL_NAMES_KWARG, with_full_tool_call_names
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from litellm.llms.base_llm.search.transformation import SearchResponse
 from litellm.responses.utils import ResponseAPILoggingUtils
@@ -331,6 +332,7 @@ def _get_provider_request_id(original_exception: Exception) -> str | None:
 
 # Cache custom pricing keys as frozenset for O(1) lookups instead of looping through 49 keys
 _CUSTOM_PRICING_KEYS: Final[frozenset[str]] = frozenset(CustomPricingLiteLLMParams.model_fields.keys())
+_LoggedResponse: Final = TypeVar("_LoggedResponse")
 _MODEL_INFO_CUSTOM_PRICING_KEYS: Final[frozenset[str]] = _CUSTOM_PRICING_KEYS | DEPLOYMENT_SCOPED_PRICING_FIELDS
 _UNSERIALIZABLE_METADATA_KEYS: Final[frozenset[str]] = frozenset(
     ("user_api_key_auth", "user_api_key_budget_reservation")
@@ -738,6 +740,7 @@ class Logging(LiteLLMLoggingBaseClass):
         # The model the proxy shows the client on streamed chunks. The logged streamed response carries it
         # once that response is priced, the same way a non-streamed response is logged
         self.client_facing_stream_model: str | None = None
+        self.bridged_tool_names: Mapping[str, str] = {}
         self.zero_cost_warned: bool = False
         self.llm_caching_handler: LLMCachingHandler | None = None
 
@@ -1036,6 +1039,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 **additional_params,
             }
         )
+        self._log_bridged_tool_names()
 
         ## check if stream options is set ##  - used by CustomStreamWrapper for easy instrumentation
         if "stream_options" in additional_params:
@@ -2659,6 +2663,11 @@ class Logging(LiteLLMLoggingBaseClass):
             return response
         return response.model_copy(update={"model": model})
 
+    def _with_full_tool_names(self, response: _LoggedResponse) -> _LoggedResponse | ModelResponse:
+        if not isinstance(response, ModelResponse):
+            return response
+        return with_full_tool_call_names(response, self.bridged_tool_names)
+
     def _success_handler_helper_fn(
         self,
         result: object = None,
@@ -2719,6 +2728,7 @@ class Logging(LiteLLMLoggingBaseClass):
             elif self.call_type == CallTypes.asend_message.value or self.call_type == CallTypes.send_message.value:
                 result = self._handle_a2a_response_logging(result=result)
 
+            result = self._with_full_tool_names(result)  # rebind-ok: logs tool calls under the names the client sent
             logging_result: Final = self.normalize_logging_result(result=result)
 
             if isinstance(result, Response) and isinstance(
@@ -3048,7 +3058,9 @@ class Logging(LiteLLMLoggingBaseClass):
                     result=complete_streaming_response
                 )
                 self._merge_hidden_params_from_response_into_metadata(complete_streaming_response)
-                logged_streaming_response: Final = self._with_client_facing_stream_model(complete_streaming_response)
+                logged_streaming_response: Final = self._with_full_tool_names(
+                    self._with_client_facing_stream_model(complete_streaming_response)
+                )
                 self.model_call_details["complete_streaming_response"] = logged_streaming_response
                 ## STANDARDIZED LOGGING PAYLOAD
                 if not for_async_request:
@@ -3625,7 +3637,9 @@ class Logging(LiteLLMLoggingBaseClass):
 
             await self._prepare_baseline_cache_estimate(complete_streaming_response)
 
-            logged_streaming_response: Final = self._with_client_facing_stream_model(complete_streaming_response)
+            logged_streaming_response: Final = self._with_full_tool_names(
+                self._with_client_facing_stream_model(complete_streaming_response)
+            )
             self.model_call_details["async_complete_streaming_response"] = logged_streaming_response
 
             ## STANDARDIZED LOGGING PAYLOAD
@@ -4488,6 +4502,16 @@ class Logging(LiteLLMLoggingBaseClass):
         The Anthropic shape served to the caller has no field for reasoning tokens, so the spend
         row is built from this response rather than re-parsed from the served body."""
         self.bridged_model_response = response
+
+    def record_bridged_tool_names(self, full_names_by_sent_name: Mapping[str, str]) -> None:
+        self.bridged_tool_names = dict(full_names_by_sent_name)
+        self._log_bridged_tool_names()
+
+    def _log_bridged_tool_names(self) -> None:
+        if not self.bridged_tool_names:
+            self.model_call_details.pop(BRIDGED_TOOL_NAMES_KWARG, None)
+            return
+        self.model_call_details[BRIDGED_TOOL_NAMES_KWARG] = dict(self.bridged_tool_names)
 
     def record_bridged_responses_api_response(self, response: ResponsesAPIResponse) -> None:
         self.record_bridged_model_response(self._translate_responses_api_response_to_model_response(response))

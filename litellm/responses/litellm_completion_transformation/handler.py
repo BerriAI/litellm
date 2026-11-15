@@ -10,7 +10,6 @@ from pydantic import TypeAdapter
 import litellm
 from litellm.litellm_core_utils.allowed_tools_tool_choice import unenforced_allowed_tools_tool_choice
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.litellm_core_utils.tool_fields import LoggedFullToolNames
 from litellm.responses.additional_tools import hoist_additional_tools
 from litellm.responses.litellm_completion_transformation.streaming_iterator import (
     LiteLLMCompletionStreamingIterator,
@@ -54,7 +53,7 @@ def _log_full_tool_names(
     )
     shortened: Final = {sent_name: full_name for full_name, sent_name in chat_names.items() if sent_name != full_name}
     if shortened and isinstance(logging_obj, LiteLLMLoggingObj):
-        logging_obj.model_call_details.update(LoggedFullToolNames(full_tool_names=shortened))
+        logging_obj.record_bridged_tool_names(shortened)
 
 
 class LiteLLMCompletionTransformationHandler:
