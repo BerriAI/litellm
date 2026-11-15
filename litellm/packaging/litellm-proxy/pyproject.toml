@@ -1,6 +1,6 @@
 [project]
 name = "litellm-proxy"
-version = "1.109.0"
+version = "1.111.0"
 description = "Opt-in Rust HTTP forwarding server for the LiteLLM Python proxy"
 requires-python = ">=3.10, <3.16"
 license = "MIT"

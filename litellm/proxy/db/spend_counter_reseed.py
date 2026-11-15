@@ -51,6 +51,7 @@ from litellm.repositories.verification_token_repository import (
 )
 
 if TYPE_CHECKING:
+    from prisma.models import LiteLLM_BudgetWindowSpend
     from prisma.types import LiteLLM_EndUserTableWhereUniqueInput
 
     from litellm.proxy.utils import PrismaClient
@@ -60,6 +61,7 @@ _WINDOW_SPEND_ENTITY_TYPES: Final[Mapping[str, str]] = MappingProxyType(
     {
         "Key": Litellm_EntityType.KEY.value,
         "Team": Litellm_EntityType.TEAM.value,
+        "User": Litellm_EntityType.USER.value,
         "customer_org": Litellm_EntityType.CUSTOMER_ORG.value,
         "customer_team": Litellm_EntityType.CUSTOMER_TEAM.value,
         "customer_member": Litellm_EntityType.CUSTOMER_MEMBER.value,
@@ -70,12 +72,23 @@ _WINDOW_SPEND_LOG_FIELDS: Final[Mapping[str, str]] = MappingProxyType(
     {
         "Key": "api_key",
         "Team": "team_id",
+        "User": "user",
     }
 )
 
 
 def _as_utc(value: datetime) -> datetime:
     return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+
+
+def recorded_window_spend(
+    row: "LiteLLM_BudgetWindowSpend | None", entity_type: str, expected_window_start: datetime | None
+) -> float | None:
+    if expected_window_start is None:
+        return None
+    if row is None or _as_utc(row.window_start) < _as_utc(expected_window_start):
+        return 0.0 if entity_type.startswith("customer_") else None
+    return float(row.spend or 0.0)
 
 
 _CUSTOMER_OVERRIDE_INCLUDE: Final = MappingProxyType({"budget": True, "budget_override": True})
@@ -369,11 +382,7 @@ class SpendCounterReseed:
             )
             return None
 
-        if row is None or _as_utc(row.window_start) < _as_utc(expected_window_start):
-            # Customer windows are new maintained balances, with no historical
-            # SpendLogs aggregate. A missing period starts at zero, a failed read above does not.
-            return 0.0 if entity_type.startswith("customer_") else None
-        return float(row.spend or 0.0)
+        return recorded_window_spend(row, entity_type, expected_window_start)
 
     @staticmethod
     async def window_from_db(

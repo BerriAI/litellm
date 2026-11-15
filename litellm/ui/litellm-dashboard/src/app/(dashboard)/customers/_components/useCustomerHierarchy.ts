@@ -7,6 +7,8 @@ import i18n from "@/i18n/i18n";
 import { isProxyAdminRole } from "@/utils/roles";
 import type { components } from "@/lib/http/schema";
 import { resolveCustomerHierarchy, type CustomerHierarchyScope } from "./customerHierarchyApi";
+import { customerChildSpendCall, customerUsageEntity } from "./customerUsageApi";
+import { calendarDate, customerPresetRange } from "./customerUsageRange";
 import type {
   CreatedCustomerHierarchyEntity,
   CustomerHierarchyEntity,
@@ -19,8 +21,9 @@ const MANAGE_PARSERS = {
   org: parseAsString,
   team: parseAsString,
   member: parseAsString,
-  tab: parseAsStringLiteral(["teams", "members", "settings"] as const),
+  tab: parseAsStringLiteral(["teams", "members", "budget_groups", "settings"] as const),
   hierarchyPage: parseAsInteger.withDefault(1),
+  memberSearch: parseAsString.withDefault(""),
 };
 
 export interface CustomerHierarchyContext {
@@ -54,13 +57,14 @@ export async function customerHierarchyContext(
 async function customerHierarchyChildren(
   context: CustomerHierarchyContext,
   kind: ChildList["kind"],
-  page: number,
+  { page, search }: { page: number; search: string },
   signal?: AbortSignal,
 ): Promise<ChildList> {
   if (kind === "members") {
-    const query = context.team
-      ? { parent_team_id: context.team.customer_team_id, page, page_size: 20 }
-      : { parent_org_id: context.organization.customer_org_id, page, page_size: 20 };
+    const parent = context.team
+      ? { parent_team_id: context.team.customer_team_id }
+      : { parent_org_id: context.organization.customer_org_id };
+    const query = { ...parent, page, page_size: 20, ...(search ? { search } : {}) };
     const response = await fetchClient.GET("/management/v1/customer_members", {
       params: { query },
       signal,
@@ -89,10 +93,72 @@ async function customerHierarchyChildren(
 
 function childView(
   selected: CustomerHierarchyContext | undefined,
-  requested: "teams" | "members" | "settings" | null,
+  requested: "teams" | "members" | "budget_groups" | "settings" | null,
 ): ChildList["kind"] {
   if (selected?.team) return "members";
   return requested === "members" ? "members" : "teams";
+}
+
+function organizationView(
+  requested: "teams" | "members" | "budget_groups" | "settings" | null,
+  team: string | null,
+  children: ChildList["kind"],
+) {
+  return requested === "budget_groups" && !team ? "budget_groups" : children;
+}
+
+function useChildSpend(
+  list: ChildList | undefined,
+  scope: CustomerHierarchyScope | null,
+  accessToken: string | null,
+  enabled: boolean,
+) {
+  const childEntities =
+    list?.kind === "teams"
+      ? list.data.map((team) => customerUsageEntity(team.customer_team_id, team))
+      : list?.data.map((member) => customerUsageEntity(member.customer_member_id, member)) ?? [];
+  const month = customerPresetRange("month");
+  const year = customerPresetRange("YTD");
+  const monthStartDate = calendarDate(month.from);
+  const monthEndDate = calendarDate(month.to);
+  const yearStartDate = calendarDate(year.from);
+  const yearEndDate = calendarDate(year.to);
+  const activeList = enabled ? list : undefined;
+  return useQuery({
+    queryKey: [
+      "customer-hierarchy",
+      "child-spend",
+      scope?.org,
+      scope?.team,
+      list?.kind,
+      childEntities.map((entity) => entity.id),
+      monthStartDate,
+      monthEndDate,
+      yearStartDate,
+      yearEndDate,
+    ],
+    queryFn:
+      activeList && accessToken && scope
+        ? ({ signal }) => {
+            const request = {
+              organizationId: scope.org,
+              kind: activeList.kind,
+              entities: childEntities,
+              accessToken,
+              monthStartDate,
+              monthEndDate,
+              yearStartDate,
+              yearEndDate,
+              signal,
+            };
+            return customerChildSpendCall(request);
+          }
+        : skipToken,
+  });
+}
+
+function memberSearchForTab(kind: ChildList["kind"], search: string): string {
+  return kind === "members" ? search.trim() : "";
 }
 
 export default function useCustomerHierarchy() {
@@ -113,9 +179,12 @@ export default function useCustomerHierarchy() {
   const selected = context.data;
   const childTab = childView(selected, params.tab);
   const showSettings = params.member !== null || params.tab === "settings";
-  const tab: "teams" | "members" | "settings" = showSettings ? "settings" : childTab;
+  const organizationTab = organizationView(params.tab, params.team, childTab);
+  const tab: "teams" | "members" | "budget_groups" | "settings" = showSettings ? "settings" : organizationTab;
   const childContext = selected && !selected.member ? selected : null;
+  const showChildren = tab === "teams" || tab === "members";
   const page = Math.max(1, params.hierarchyPage);
+  const memberSearch = memberSearchForTab(childTab, params.memberSearch);
   const children = useQuery({
     queryKey: [
       "customer-hierarchy",
@@ -124,27 +193,35 @@ export default function useCustomerHierarchy() {
       selected?.organization.customer_org_id,
       selected?.team?.customer_team_id,
       page,
+      memberSearch,
     ],
     queryFn:
-      enabled && childContext && tab !== "settings"
-        ? ({ signal }) => customerHierarchyChildren(childContext, childTab, page, signal)
+      enabled && childContext && showChildren
+        ? ({ signal }) => customerHierarchyChildren(childContext, childTab, { page, search: memberSearch }, signal)
         : skipToken,
   });
+  const childUsage = useChildSpend(children.data, scope, accessToken, enabled && showChildren);
   useEffect(() => {
     if (!children.isSuccess) return;
     if (page <= Math.max(1, children.data.meta.total_pages)) return;
     void setParams({ hierarchyPage: null });
   }, [children.isSuccess, children.data, page, setParams]);
   const openOrganization = () => {
-    const parent = { team: null, member: null, tab: null, hierarchyPage: null };
+    const parent = { team: null, member: null, tab: null, hierarchyPage: null, memberSearch: null };
     void setParams(parent, { history: "push" });
   };
   const openTeam = (id: string, settings = false) => {
-    const next = { team: id, member: null, tab: settings ? ("settings" as const) : null, hierarchyPage: null };
+    const next = {
+      team: id,
+      member: null,
+      tab: settings ? ("settings" as const) : null,
+      hierarchyPage: null,
+      memberSearch: null,
+    };
     void setParams(next, { history: "push" });
   };
   const openMember = (id: string, teamId: string) => {
-    const next = { team: teamId, member: id, tab: null, hierarchyPage: null };
+    const next = { team: teamId, member: id, tab: null, hierarchyPage: null, memberSearch: null };
     void setParams(next, { history: "push" });
   };
   const openCreatedScope = (parent: CustomerHierarchyScope, created: CreatedCustomerHierarchyEntity) =>
@@ -159,19 +236,34 @@ export default function useCustomerHierarchy() {
           member: created.kind === "member" ? created.record.customer_member_id : null,
           tab: created.kind === "team" ? ("settings" as const) : null,
           hierarchyPage: null,
+          memberSearch: null,
         };
       },
       { history: "push" },
     );
   const refresh = () => void queryClient.invalidateQueries({ queryKey: ["customer-hierarchy"] });
+  const organizationSaved = async (organization: Organization) => {
+    const queryKey = ["customer-hierarchy", "manage", organization.customer_org_id, null, null];
+    await queryClient.cancelQueries({ queryKey });
+    const saved: CustomerHierarchyContext = {
+      organization,
+      team: null,
+      member: null,
+      entity: { kind: "organization", record: organization },
+    };
+    queryClient.setQueryData(queryKey, saved);
+    refresh();
+  };
   return {
     scope,
     context,
     children,
+    childUsage,
     selected,
     tab,
     childTab,
     page,
+    memberSearch,
     canManage,
     isLoading,
     openOrganization,
@@ -179,6 +271,9 @@ export default function useCustomerHierarchy() {
     openMember,
     openCreatedScope,
     refresh,
+    organizationSaved,
     setPage: (hierarchyPage: number) => void setParams({ hierarchyPage }),
+    setMemberSearch: (search: string) =>
+      void setParams({ memberSearch: search || null, hierarchyPage: null }, { history: "push" }),
   };
 }

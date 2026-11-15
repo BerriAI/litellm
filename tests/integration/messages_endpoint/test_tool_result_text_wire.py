@@ -24,6 +24,7 @@ _CLAUDE_CODE: Final = MappingProxyType({"user-agent": "claude-cli/2.1.0 (externa
 _OPENAI_COUNT: Final = 4242
 _GOOGLE_COUNT: Final = 777
 _ANTHROPIC_COUNT: Final = 58
+_MISTRAL_COUNT: Final = 2929
 _BEDROCK_COUNT: Final = 1345
 _GEMINI: Final = "gemini-4-argon"
 _VERTEX_PROJECT: Final = "scripted-project"
@@ -119,7 +120,9 @@ def _openai_peer(request: Request) -> Reply:
     return Reply(status=404, body=json.dumps({"error": request.target}).encode())
 
 
-def _chat_peer(request: Request) -> Reply:
+def _mistral_peer(request: Request) -> Reply:
+    if request.target.endswith("/responses/input_tokens"):
+        return Reply(body=json.dumps({"object": "response.input_tokens", "input_tokens": _MISTRAL_COUNT}).encode())
     if request.target.endswith("/chat/completions"):
         return Reply(body=_chat_reply())
     return Reply(status=404, body=json.dumps({"error": request.target}).encode())
@@ -286,8 +289,8 @@ def test_explicit_drop_params_false_wins_on_both_routes(gateway: Gateway) -> Non
         assert wire.drain() == ()
 
 
-def test_chat_bridge_and_local_count_reject_a_non_string_tool_result_text(gateway: Gateway) -> None:
-    with wire_server(_chat_peer) as wire, gateway.scenario() as scenario:
+def test_chat_bridge_and_count_reject_a_non_string_tool_result_text(gateway: Gateway) -> None:
+    with wire_server(_mistral_peer) as wire, gateway.scenario() as scenario:
         model: Final = _mistral_model(scenario, wire)
         body: Final = _body(model, _NULL_TEXT)
         _assert_field_rejection(gateway, "/v1/messages", {**body, "max_tokens": 64})
@@ -299,14 +302,17 @@ def test_chat_bridge_and_local_count_reject_a_non_string_tool_result_text(gatewa
 @pytest.mark.parametrize("source", ("deployment", "body"))
 def test_chat_bridge_drop_params_drops_the_malformed_text(gateway: Gateway, source: str) -> None:
     deployment, extra, _ = _DROP_SOURCES[source]
-    with wire_server(_chat_peer) as wire, gateway.scenario() as scenario:
+    with wire_server(_mistral_peer) as wire, gateway.scenario() as scenario:
         model: Final = _mistral_model(scenario, wire, **deployment)
         body: Final = _body(model, _NUMBER_THEN_WEATHER, **extra)
         created: Final = gateway.request("POST", "/v1/messages", {**body, "max_tokens": 64})
         counted: Final = gateway.request("POST", "/v1/messages/count_tokens", body)
         assert created.status_code == 200, created.text
         assert counted.status_code == 200, counted.text
-        assert _tool_message_text(_only(wire.drain(), "/chat/completions")) == _WEATHER
+        assert _JSON_OBJECT.validate_json(counted.content)["input_tokens"] == _MISTRAL_COUNT, counted.text
+        requests: Final = wire.drain()
+        assert _tool_message_text(_only(requests, "/chat/completions")) == _WEATHER
+        assert _function_call_output(_only(requests, "/responses/input_tokens")) == _WEATHER
 
 
 def test_count_without_a_deployment_rejects_and_honors_body_drop_params(gateway: Gateway) -> None:
@@ -386,7 +392,7 @@ def test_bedrock_count_with_a_claude_code_user_agent_still_counts(gateway: Gatew
 
 @pytest.mark.parametrize("provider", ("openai", "mistral"))
 def test_valid_tool_result_text_reaches_the_upstream(gateway: Gateway, provider: str) -> None:
-    peer: Final = _openai_peer if provider == "openai" else _chat_peer
+    peer: Final = _openai_peer if provider == "openai" else _mistral_peer
     with wire_server(peer) as wire, gateway.scenario() as scenario:
         model: Final = (_openai_model if provider == "openai" else _mistral_model)(scenario, wire)
         body: Final = _body(model, _WEATHER_THEN_MISSING)
@@ -399,7 +405,11 @@ def test_valid_tool_result_text_reaches_the_upstream(gateway: Gateway, provider:
             assert _function_call_output(_only(requests, "/responses")) == f"{_WEATHER}\n"
             assert _function_call_output(_only(requests, "/responses/input_tokens")) == f"{_WEATHER}\n"
         else:
-            assert _tool_message_text(_only(requests, "/chat/completions")) == _WEATHER
+            assert (
+                _function_call_output(_only(requests, "/responses/input_tokens"))
+                == _tool_message_text(_only(requests, "/chat/completions"))
+                == _WEATHER
+            )
 
 
 def _rewritten(content: JsonValue, rewrite: Callable[[str], str]) -> JsonValue:
@@ -626,7 +636,7 @@ def test_rewriting_guardrail_leaves_the_rejection_to_the_chat_bridge_for_any_too
     gateway: Gateway, tool_use_id: str
 ) -> None:
     with (
-        wire_server(_chat_peer) as provider,
+        wire_server(_mistral_peer) as provider,
         wire_server(_guardrail_peer) as guard,
         gateway.scenario() as scenario,
     ):
@@ -734,7 +744,7 @@ def _forwarded_chat_turns(wire: Wire) -> tuple[dict[str, JsonValue], ...]:
 
 
 def test_mistral_receives_the_tool_reply_whose_only_text_drop_params_dropped(gateway: Gateway) -> None:
-    with wire_server(_chat_peer) as wire, gateway.scenario() as scenario:
+    with wire_server(_mistral_peer) as wire, gateway.scenario() as scenario:
         model: Final = _mistral_model(scenario, wire)
         created: Final = gateway.request(
             "POST", "/v1/messages", _body(model, _NULL_TEXT, max_tokens=64, drop_params=True)
@@ -764,7 +774,7 @@ def test_mistral_chat_completions_keeps_an_empty_tool_reply(gateway: Gateway) ->
         {"role": "tool", "tool_call_id": "call_weather", "content": ""},
         {"role": "user", "content": ""},
     ]
-    with wire_server(_chat_peer) as wire, gateway.scenario() as scenario:
+    with wire_server(_mistral_peer) as wire, gateway.scenario() as scenario:
         model: Final = _mistral_model(scenario, wire)
         response: Final = gateway.request("POST", "/v1/chat/completions", {"model": model, "messages": messages})
         assert response.status_code == 200, response.text
@@ -787,7 +797,7 @@ def test_mistral_chat_completions_drops_an_orphan_tool_message_and_sends_a_null_
         {"role": "assistant", "content": None, "tool_calls": [_WEATHER_CALL]},
         {"role": "tool", "tool_call_id": "call_weather", "content": None},
     ]
-    with wire_server(_chat_peer) as wire, gateway.scenario() as scenario:
+    with wire_server(_mistral_peer) as wire, gateway.scenario() as scenario:
         model: Final = _mistral_model(scenario, wire)
         response: Final = gateway.request("POST", "/v1/chat/completions", {"model": model, "messages": messages})
         assert response.status_code == 200, response.text

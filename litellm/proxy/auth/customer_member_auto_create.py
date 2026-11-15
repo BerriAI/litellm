@@ -2,8 +2,9 @@
 
 Customers send a shared service key with ``x-litellm-customer-org-alias`` and ``x-litellm-customer-member-id``
 on every call, and their users appear for the first time on their first request. The member is created under
-the organization's ``default`` team, so it inherits the organization's default budget. An organization without
-a default budget cannot host an unregistered member, because a member must have some budget to be charged to.
+the organization's ``default`` team, so it inherits the organization's default budget. In an organization without
+a default budget the member is registered with no budget: its spend is tracked and nothing caps it until an admin
+assigns one.
 """
 
 from typing import TYPE_CHECKING, Final
@@ -50,12 +51,16 @@ async def ensure_customer_member(
 ) -> CustomerMember | Failure:
     """The member row for ``customer_member_id`` in ``customer_org_id``'s default team, created when absent.
     Two workers registering the same member at once both end up with the one row."""
-    hierarchy: Final = CustomerHierarchy(prisma_client)
+    from litellm.proxy.proxy_server import premium_user
+
+    hierarchy: Final = CustomerHierarchy(prisma_client, premium_user=premium_user)
     team: Final = await _default_team(hierarchy, customer_org_id)
     if isinstance(team, Failure):
         return team
     created: Final = await hierarchy.create_member(
-        MemberCreate(customer_member_id=customer_member_id, parent_team_ids=(team.customer_team_id,)), AUTO_CREATE_ACTOR
+        MemberCreate(customer_member_id=customer_member_id, parent_team_ids=(team.customer_team_id,)),
+        AUTO_CREATE_ACTOR,
+        budget_required=False,
     )
     if isinstance(created, Failure) and created.code is ErrorCode.ALREADY_EXISTS:
         return await hierarchy.get_member(customer_member_id)
@@ -75,7 +80,9 @@ async def ensure_customer_organization(
     """The organization row carrying ``customer_org_alias``, created with the alias as its id when absent, so a
     customer's first request is charged to it. Two workers registering the same alias at once both end up with
     the one row."""
-    hierarchy: Final = CustomerHierarchy(prisma_client)
+    from litellm.proxy.proxy_server import premium_user
+
+    hierarchy: Final = CustomerHierarchy(prisma_client, premium_user=premium_user)
     created: Final = await hierarchy.create_organization(
         OrganizationCreate(customer_org_id=customer_org_alias, alias=customer_org_alias), AUTO_CREATE_ORG_ACTOR
     )

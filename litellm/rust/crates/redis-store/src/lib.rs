@@ -14,6 +14,8 @@ pub mod router_session_pins;
 pub mod router_usage;
 pub mod sensitive_route_pins;
 pub mod spend_counters;
+#[cfg(test)]
+mod test_support;
 mod value;
 
 pub use codec::DecodeError;
