@@ -1,16 +1,21 @@
 import asyncio
 import copy
 import io
+import itertools
 import json
 import logging
-from typing import Final
+from dataclasses import dataclass
+from typing import Final, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 import respx
+from prometheus_client import REGISTRY
 
 import litellm
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.prometheus import PrometheusLogger
 from litellm.litellm_core_utils.health_check_helpers import HealthCheckHelpers
 from litellm.litellm_core_utils.llm_request_utils import RankedChatModel
 from litellm.proxy import health_check as hc_module
@@ -1646,3 +1651,198 @@ async def test_run_model_health_check_reports_why_a_string_configurable_clientsi
 
     assert "configurable_clientside_auth_params" in result["error"]
     invoke_endpoint.assert_not_called()
+
+
+_PROBE_BASE: Final = "https://probe-upstream.invalid/v1"
+_PROBE_OK: Final = {
+    "id": "chatcmpl-probe",
+    "object": "chat.completion",
+    "created": 1,
+    "model": "provider-a-model",
+    "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+}
+_PROBE_DENIED: Final = {"error": {"message": "invalid key", "type": "invalid_request_error", "code": "invalid_api_key"}}
+_PROBED_DEPLOYMENT: Final = {
+    "model_name": "plain",
+    "litellm_params": {
+        "model": "openai/provider-a-model",
+        "api_base": _PROBE_BASE,
+        "api_key": "sk-fake",
+        "tpm": 1000,
+        "rpm": 10,
+    },
+    "model_info": {"id": "standby-deployment", "mode": "chat"},
+}
+
+
+class _CallRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.logged: list[dict[str, object]] = []  # mutable-ok: the logging worker appends each call it delivers
+
+    async def async_log_success_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self.logged.append(kwargs)
+
+    async def async_log_failure_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self.logged.append(kwargs)
+
+    async def only_call(self) -> dict[str, object]:
+        for _ in range(500):
+            if self.logged:
+                return self.logged[0]
+            await asyncio.sleep(0.01)
+        pytest.fail("no call was logged")
+
+
+@dataclass(frozen=True, slots=True)
+class _Observed:
+    prometheus: PrometheusLogger
+    calls: _CallRecorder
+
+    def series(self, name: str) -> list[dict[str, str]]:
+        samples: Final = itertools.chain.from_iterable(metric.samples for metric in REGISTRY.collect())
+        return [dict(sample.labels) for sample in samples if sample.name == name]
+
+    def states(self) -> dict[str, float]:
+        samples: Final = itertools.chain.from_iterable(
+            metric.samples for metric in self.prometheus.litellm_deployment_state.collect()
+        )
+        return {sample.labels["model_id"]: sample.value for sample in samples}
+
+    async def logged_payload(self) -> dict[str, object]:
+        call: Final = await self.calls.only_call()
+        for _ in range(500):
+            if self.series("litellm_deployment_total_requests_total"):
+                break
+            await asyncio.sleep(0.01)
+        return cast(dict[str, object], call["standard_logging_object"])
+
+
+@pytest.fixture
+def observed(monkeypatch: pytest.MonkeyPatch) -> _Observed:
+    monkeypatch.setattr(REGISTRY, "_collector_to_names", {})  # pyright: ignore[reportPrivateUsage]  # the registry's whole state
+    monkeypatch.setattr(REGISTRY, "_names_to_collectors", {})  # pyright: ignore[reportPrivateUsage]  # the registry's whole state
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    watching: Final = _Observed(PrometheusLogger(), _CallRecorder())
+    monkeypatch.setattr(litellm, "_async_success_callback", [watching.prometheus, watching.calls])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [watching.prometheus, watching.calls])
+    return watching
+
+
+_DEPLOYMENT_GAUGES: Final = ("litellm_deployment_state", "litellm_deployment_tpm_limit", "litellm_deployment_rpm_limit")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("upstream_reply", "counter", "outcome"),
+    [
+        (httpx.Response(200, json=_PROBE_OK), "litellm_deployment_success_responses_total", "success"),
+        (httpx.Response(401, json=_PROBE_DENIED), "litellm_deployment_failure_responses_total", "failure"),
+    ],
+)
+async def test_a_background_probe_is_labeled_with_its_deployment_only_through_deployment_id(
+    observed: _Observed, upstream_reply: httpx.Response, counter: str, outcome: str
+) -> None:
+    with respx.mock(assert_all_called=True) as upstream:
+        chat_route: Final = upstream.post(f"{_PROBE_BASE}/chat/completions").mock(return_value=upstream_reply)
+        await hc_module._run_model_health_check(copy.deepcopy(_PROBED_DEPLOYMENT))
+    payload: Final = await observed.logged_payload()
+
+    assert (payload["status"], payload["deployment_id"], payload["model_id"], payload["model_group"]) == (
+        outcome,
+        "standby-deployment",
+        "",
+        "",
+    )
+    sent: Final = chat_route.calls.last.request
+    assert not {"metadata", "litellm_metadata", "model_info"} & json.loads(sent.content).keys()
+    assert b"standby-deployment" not in sent.content
+    call_params: Final = cast(dict[str, dict[str, object]], observed.calls.logged[0]["litellm_params"])
+    assert call_params["model_info"].get("id") is None, "the router's cooldown callbacks key on this id"
+    labels: Final = [
+        (series["model_id"], series["model_group"], series["api_provider"], series["api_base"])
+        for series in itertools.chain(observed.series(counter), observed.series("litellm_deployment_total_requests_total"))
+    ]
+    assert labels == [("standby-deployment", "", "openai", _PROBE_BASE)] * 2
+    assert "provider-a-model" in observed.series(counter)[0]["litellm_model_name"]
+    assert [observed.series(gauge) for gauge in _DEPLOYMENT_GAUGES] == [[], [], []]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("upstream_reply", "state"),
+    [(httpx.Response(200, json=_PROBE_OK), 0.0), (httpx.Response(401, json=_PROBE_DENIED), 1.0)],
+)
+async def test_test_connection_logs_matching_ids_and_still_sets_deployment_state(
+    observed: _Observed, upstream_reply: httpx.Response, state: float
+) -> None:
+    with respx.mock(assert_all_called=True) as upstream:
+        upstream.post(f"{_PROBE_BASE}/chat/completions").mock(return_value=upstream_reply)
+        await litellm.ahealth_check(
+            {**_PROBED_DEPLOYMENT["litellm_params"], "model_info": _PROBED_DEPLOYMENT["model_info"]},
+            mode="chat",
+            prompt="test",
+            input=["test"],
+        )
+    payload: Final = await observed.logged_payload()
+
+    assert payload["deployment_id"] == payload["model_id"] == "standby-deployment"
+    assert observed.states() == {"standby-deployment": state}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "forged_metadata",
+    [
+        {"health_check_deployment_id": "forged"},
+        {"health_check_deployment_id": "forged", "user_api_key_hash": "sk-someone-else"},
+    ],
+)
+async def test_a_call_outside_the_health_check_account_cannot_set_deployment_id(
+    observed: _Observed, forged_metadata: dict[str, str]
+) -> None:
+    with respx.mock(assert_all_called=True) as upstream:
+        upstream.post(f"{_PROBE_BASE}/chat/completions").respond(200, json=_PROBE_OK)
+        await litellm.acompletion(
+            model="openai/provider-a-model",
+            api_base=_PROBE_BASE,
+            api_key="sk-fake",
+            messages=[{"role": "user", "content": "hi"}],
+            metadata=forged_metadata,
+        )
+    payload: Final = await observed.logged_payload()
+
+    assert not payload["deployment_id"]
+    assert payload["model_id"] == ""
+    assert "forged" not in {series["model_id"] for series in observed.series("litellm_deployment_total_requests_total")}
+
+
+@pytest.mark.asyncio
+async def test_an_image_probe_still_retries_a_transient_upstream_error(observed: _Observed) -> None:
+    with respx.mock(assert_all_called=True) as upstream:
+        image_route: Final = upstream.post("https://flaky-upstream.invalid/v1/images/generations").mock(
+            side_effect=[
+                httpx.Response(503, json={"error": {"message": "overloaded"}}),
+                httpx.Response(200, json={"created": 1, "data": [{"b64_json": "iVBORw0KGgo="}]}),
+            ]
+        )
+        result: Final = await hc_module._run_model_health_check(
+            {
+                "model_name": "images",
+                "litellm_params": {
+                    "model": "openai/provider-a-image",
+                    "api_base": "https://flaky-upstream.invalid/v1",
+                    "api_key": "sk-fake",
+                },
+                "model_info": {"id": "provider-a-image", "mode": "image_generation"},
+            }
+        )
+
+    assert "error" not in result, result
+    assert image_route.call_count == 2

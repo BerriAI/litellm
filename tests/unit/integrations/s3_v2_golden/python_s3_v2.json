@@ -171,6 +171,7 @@
     "model": "gpt-4o",
     "model_group": "",
     "model_id": "",
+    "deployment_id": null,
     "model_map_information": {
      "model_map_key": "",
      "model_map_value": null
@@ -236,6 +237,7 @@
     "api_base",
     "model_group",
     "model_id",
+    "deployment_id",
     "requester_ip_address",
     "user_agent",
     "messages",
@@ -553,6 +555,7 @@
     "model": "gpt-4o",
     "model_group": "",
     "model_id": "",
+    "deployment_id": null,
     "model_map_information": {
      "model_map_key": "gpt-4o",
      "model_map_value": {
@@ -898,6 +901,7 @@
     "api_base",
     "model_group",
     "model_id",
+    "deployment_id",
     "requester_ip_address",
     "user_agent",
     "messages",
@@ -1073,6 +1077,7 @@
     "model": "gpt-4o",
     "model_group": "",
     "model_id": "",
+    "deployment_id": null,
     "model_map_information": {
      "model_map_key": "gpt-4o",
      "model_map_value": {
@@ -1406,6 +1411,7 @@
     "api_base",
     "model_group",
     "model_id",
+    "deployment_id",
     "requester_ip_address",
     "user_agent",
     "messages",
@@ -1555,6 +1561,7 @@
     "model": "gpt-4o",
     "model_group": "",
     "model_id": "",
+    "deployment_id": null,
     "model_map_information": {
      "model_map_key": "gpt-4o",
      "model_map_value": {
@@ -1888,6 +1895,7 @@
     "api_base",
     "model_group",
     "model_id",
+    "deployment_id",
     "requester_ip_address",
     "user_agent",
     "messages",
@@ -2037,6 +2045,7 @@
     "model": "gpt-4o",
     "model_group": "",
     "model_id": "",
+    "deployment_id": null,
     "model_map_information": {
      "model_map_key": "gpt-4o",
      "model_map_value": {
@@ -2370,6 +2379,7 @@
     "api_base",
     "model_group",
     "model_id",
+    "deployment_id",
     "requester_ip_address",
     "user_agent",
     "messages",
@@ -2519,6 +2529,7 @@
     "model": "gpt-4o",
     "model_group": "",
     "model_id": "",
+    "deployment_id": null,
     "model_map_information": {
      "model_map_key": "gpt-4o",
      "model_map_value": {
@@ -2852,6 +2863,7 @@
     "api_base",
     "model_group",
     "model_id",
+    "deployment_id",
     "requester_ip_address",
     "user_agent",
     "messages",
@@ -3003,6 +3015,7 @@
     "model": "gpt-4o",
     "model_group": "",
     "model_id": "",
+    "deployment_id": null,
     "model_map_information": {
      "model_map_key": "gpt-4o",
      "model_map_value": {
@@ -3336,6 +3349,7 @@
     "api_base",
     "model_group",
     "model_id",
+    "deployment_id",
     "requester_ip_address",
     "user_agent",
     "messages",
@@ -3485,6 +3499,7 @@
     "model": "gpt-4o",
     "model_group": "",
     "model_id": "",
+    "deployment_id": null,
     "model_map_information": {
      "model_map_key": "gpt-4o",
      "model_map_value": {
@@ -3818,6 +3833,7 @@
     "api_base",
     "model_group",
     "model_id",
+    "deployment_id",
     "requester_ip_address",
     "user_agent",
     "messages",
@@ -5234,6 +5250,7 @@
     "model": "gpt-4o",
     "model_group": "",
     "model_id": "",
+    "deployment_id": null,
     "model_map_information": {
      "model_map_key": "gpt-4o",
      "model_map_value": {
@@ -5541,6 +5558,7 @@
     "api_base",
     "model_group",
     "model_id",
+    "deployment_id",
     "requester_ip_address",
     "user_agent",
     "model_parameters",
@@ -5668,6 +5686,7 @@
     "model": "gpt-4o",
     "model_group": "",
     "model_id": "",
+    "deployment_id": null,
     "model_map_information": {
      "model_map_key": "",
      "model_map_value": null
@@ -5733,6 +5752,7 @@
     "api_base",
     "model_group",
     "model_id",
+    "deployment_id",
     "requester_ip_address",
     "user_agent",
     "messages",

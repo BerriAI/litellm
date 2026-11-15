@@ -211,6 +211,37 @@ def test_update_model_params_with_health_check_tracking_information():
             assert call_args[1]["_metadata_variable_name"] == "litellm_metadata"
 
 
+def test_health_check_tracking_keeps_only_the_probed_deployment_id_from_incoming_metadata():
+    result = HealthCheckHelpers.update_model_params_with_health_check_tracking_information(
+        {
+            "model": "gpt-3.5-turbo",
+            "api_key": "test_key",
+            "litellm_metadata": {
+                "health_check_deployment_id": "standby-deployment",
+                "model_info": {"id": "forged"},
+                "model_group": "forged",
+                "user_api_key_team_id": "forged",
+            },
+        }
+    )
+
+    metadata = result["litellm_metadata"]
+    assert metadata["health_check_deployment_id"] == "standby-deployment"
+    assert metadata["model_info"] == {}
+    assert "model_group" not in metadata
+    assert metadata["user_api_key_team_id"] != "forged"
+    assert metadata["user_api_key_hash"] == LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME
+
+
+def test_health_check_tracking_adds_no_deployment_id_when_none_is_incoming():
+    result = HealthCheckHelpers.update_model_params_with_health_check_tracking_information(
+        {"model": "gpt-3.5-turbo", "api_key": "test_key", "litellm_metadata": {"model_group": "forged"}}
+    )
+
+    assert "health_check_deployment_id" not in result["litellm_metadata"]
+    assert "model_group" not in result["litellm_metadata"]
+
+
 def test_get_metadata_for_health_check_call():
     """Test _get_metadata_for_health_check_call returns correct metadata structure."""
     result = HealthCheckHelpers._get_metadata_for_health_check_call()

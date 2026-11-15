@@ -6260,3 +6260,28 @@ async def test_unsaved_chatgpt_account_probe_requires_proxy_admin(
                 await call
             assert error.value.code == "403"
             assert len(upstream.calls) == 0
+
+
+@pytest.mark.asyncio
+async def test_test_model_connection_drops_caller_supplied_litellm_metadata() -> None:
+    deployment: Final = {
+        "model_name": "plain",
+        "litellm_params": {"model": "openai/provider-a-model", "api_key": "sk-fake"},
+        "model_info": {"id": "tested-deployment"},
+    }
+    with _test_connection_probe(deployment) as ahealth_check:
+        await health_test_model_connection(
+            request=MagicMock(),
+            mode="chat",
+            litellm_params={
+                "litellm_metadata": {"health_check_deployment_id": "forged", "model_info": {"id": "forged"}},
+                "temperature": 0.25,
+            },
+            model_info={"id": "tested-deployment"},
+            user_api_key_dict=MagicMock(),
+        )
+
+    probed: Final = ahealth_check.call_args.kwargs["model_params"]
+    assert "litellm_metadata" not in probed
+    assert probed["model_info"]["id"] == "tested-deployment"
+    assert probed["temperature"] == 0.25
