@@ -3542,6 +3542,16 @@ class Router:
         fallback_logging.record_continued_partial(usage=cut_partial[0], response_cost=cut_partial[1])
 
     @staticmethod
+    def _carry_partial_spend_to_failed_request(
+        request_logging: object, cut_partial: tuple[Usage, float] | None
+    ) -> None:
+        if isinstance(request_logging, LiteLLMLogging) and isinstance(
+            request_logging.model_call_details.get("combined_usage_object"), Usage
+        ):
+            return
+        Router._carry_partial_spend_to_fallback(request_logging, cut_partial)
+
+    @staticmethod
     def _combine_responses_fallback_usage(
         fallback_item: "BaseLiteLLMOpenAIResponseObject",
         partial_usage: "ResponseAPIUsage",
@@ -3947,7 +3957,7 @@ class Router:
         except Exception as fallback_error:
             verbose_router_logger.error("Responses streaming fallback also failed: %s", fallback_error)
             if fallback_response is None:
-                Router._carry_partial_spend_to_fallback(initial_kwargs.get("litellm_logging_obj"), cut_partial)
+                Router._carry_partial_spend_to_failed_request(initial_kwargs.get("litellm_logging_obj"), cut_partial)
             if not fallback_yielded:
                 for held_event in held_lifecycle_events:
                     yield held_event

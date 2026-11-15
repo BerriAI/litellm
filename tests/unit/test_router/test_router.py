@@ -27729,6 +27729,7 @@ def _cut_primary_router(
     respx_mock: respx.MockRouter,
     primary: Literal["bridged", "native"],
     failed_usage: Mapping[str, int] | None = _PROVIDER_REPORTED_CUT_USAGE,
+    with_fallback: bool = True,
 ) -> Router:
     if primary == "bridged":
         respx_mock.post(host="api.mistral.ai").mock(
@@ -27767,7 +27768,7 @@ def _cut_primary_router(
                 },
             },
         ],
-        fallbacks=[{"primary": ["backup"]}],
+        fallbacks=[{"primary": ["backup"]}] if with_fallback else [],
         num_retries=0,
     )
 
@@ -27923,7 +27924,7 @@ def _input_output_partial_and_total_costs(row: SpendLogsPayload) -> tuple[float,
     return (
         breakdown["input_cost"],
         breakdown["output_cost"],
-        breakdown["additional_costs"]["mid_stream_partial_cost"],
+        breakdown.get("additional_costs", {}).get("mid_stream_partial_cost", 0.0),
         breakdown["total_cost"],
     )
 
@@ -28071,3 +28072,40 @@ async def test_a_fallback_that_fails_before_it_streams_bills_the_cut_partial_onc
         (*priced_by_the_failure, cut_cost - sum(priced_by_the_failure), cut_cost)
     )
 
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("primary", ["bridged", "native"])
+@pytest.mark.parametrize("with_fallback", [False, True], ids=["no_fallback", "fallback_fails_before_streaming"])
+async def test_a_cut_whose_fallback_chain_ends_without_a_stream_prices_its_failure_event_like_its_row(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    primary: Literal["bridged", "native"],
+    with_fallback: bool,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    respx_mock.post("https://backup.example/v1/responses").mock(
+        return_value=httpx.Response(500, json={"error": {"message": "backup is down", "type": "server_error"}})
+    )
+    shared_logging: Final = _shared_responses_logging()
+    response: Final = await _cut_primary_router(respx_mock, primary, with_fallback=with_fallback).aresponses(
+        model="primary",
+        input="Tell me a story",
+        stream=True,
+        litellm_call_id="shared-call",
+        litellm_logging_obj=shared_logging,
+    )
+
+    with pytest.raises((litellm.APIConnectionError, litellm.InternalServerError)):
+        _ = [event async for event in response]
+    await asyncio.wait_for(
+        _until(lambda: shared_logging.model_call_details.get("standard_logging_object") is not None), timeout=10
+    )
+
+    failure_event: Final = shared_logging.model_call_details["standard_logging_object"]
+    row_prompt, row_completion, row_spend = _final_failure_row(shared_logging)
+    assert row_completion > 0
+    assert (
+        failure_event["prompt_tokens"],
+        failure_event["completion_tokens"],
+        failure_event["response_cost"],
+    ) == pytest.approx((row_prompt, row_completion, row_spend))
