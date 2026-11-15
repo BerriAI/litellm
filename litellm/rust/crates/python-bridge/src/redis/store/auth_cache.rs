@@ -109,6 +109,32 @@ impl NativeAuthCache {
         })
     }
 
+    fn lease<'py>(&self, py: Python<'py>, key: String) -> PyResult<Bound<'py, PyAny>> {
+        let store = self.0.clone();
+        redis_async(py, "async_get_cache", kind_error, async move {
+            Ok::<_, litellm_redis_store::Error>(store.lease(&key).await)
+        })
+    }
+
+    /// The Redis write alone, `False` when a delete on any pod voided `lease`.
+    #[pyo3(signature = (key, lease, value, ttl_seconds = None))]
+    fn set_leased<'py>(
+        &self,
+        py: Python<'py>,
+        key: String,
+        lease: Option<String>,
+        value: PyValue,
+        ttl_seconds: Option<f64>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let store = self.0.clone();
+        let ttl = ttl(ttl_seconds)?;
+        redis_async(py, "async_set_cache", kind_error, async move {
+            Ok::<_, litellm_redis_store::Error>(
+                store.set_leased(&key, lease.as_deref(), value.0, ttl).await,
+            )
+        })
+    }
+
     /// Memory now and the `SET` on the batch `send` picks.
     #[pyo3(signature = (key, value, ttl_seconds, send))]
     fn declare_set(

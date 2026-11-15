@@ -128,6 +128,10 @@ def _tightest_of(*shares: tuple[RateLimitDescriptor, int] | None) -> tuple[RateL
     return min((share for share in shares if share is not None), key=lambda share: share[1], default=None)
 
 
+def _share_on_model(share: RateLimitDescriptor | None, team: str, model_group: str) -> RateLimitDescriptor | None:
+    return share if share is not None and share["value"] == f"{team}:{model_group}" else None
+
+
 def _capped_idle_share(
     share: RateLimitDescriptor | None, cap: RateLimitDescriptor | None
 ) -> tuple[RateLimitDescriptor, int] | None:
@@ -688,6 +692,19 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
                 else _tightest_of(
                     _tightest_team_share((stash.borrowing_team_model_limit, stash.priority_class_share)),
                     _capped_idle_share(stash.borrowing_team_model_share, stash.borrowing_team_model_cap),
+                )
+            ) or _tightest_team_share(
+                (
+                    hold.share
+                    if hold is not None
+                    else _share_on_model(
+                        stash.borrowing_team_model_share,
+                        settlement.user_api_key_team_id,
+                        (
+                            self.v3_limiter.rate_limited_model(model_group)
+                            or RateLimitedModel(requested=model_group, group=model_group)
+                        ).group,
+                    ),
                 )
             )
             if share is None:
