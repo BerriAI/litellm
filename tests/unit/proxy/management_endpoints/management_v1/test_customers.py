@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Final, cast
 import pytest
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
-from prisma.errors import DataError, RawQueryError
+from prisma.errors import DataError, RawQueryError, TransactionExpiredError
 
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.customer_hierarchy_auth import customer_member_cache_key, customer_org_alias_cache_key
@@ -1143,6 +1143,89 @@ def test_team_cascade_removes_only_its_members_and_owned_budgets() -> None:
     assert fetched.status_code == 200, fetched.text
     assert fetched.json() == {**organization, "member_count": 1}
     assert http.get("/management/v1/customer_members/sibling-member").status_code == 200
+
+
+@pytest.mark.parametrize("with_members", (False, True))
+def test_organization_cascade_completes_with_many_teams_within_a_bounded_query_budget(with_members: bool) -> None:
+    database: Final = Database(member_read_limit=20)
+    http: Final = client(database=database)
+    family(http)
+    created_member(http, "member", "team", override=True)
+    team: Final = database.litellm_customerteamtable.rows["team"]
+    member: Final = database.litellm_customermembertable.rows["member"]
+    team_budget_id: Final = str(team.model_dump()["budget_id"])
+    member_budget_id: Final = str(member.model_dump()["budget_override_id"])
+    database.litellm_customerteamtable.rows = {
+        **database.litellm_customerteamtable.rows,
+        **{
+            f"team-{index}": team.model_copy(
+                update={"customer_team_id": f"team-{index}", "budget_id": f"team-budget-{index}"}
+            )
+            for index in range(204)
+        },
+    }
+    database.litellm_customermembertable.rows = (
+        {
+            **database.litellm_customermembertable.rows,
+            **{
+                f"member-{index}": member.model_copy(
+                    update={
+                        "customer_member_id": f"member-{index}",
+                        "parent_team_ids": [f"team-{index}", f"team-{(index + 1) % 204}"],
+                        "budget_override_id": f"member-budget-{index}",
+                    }
+                )
+                for index in range(204)
+            },
+        }
+        if with_members
+        else {}
+    )
+    database.litellm_budgettable.rows = {
+        **database.litellm_budgettable.rows,
+        **{
+            f"team-budget-{index}": database.litellm_budgettable.rows[team_budget_id].model_copy(
+                update={"budget_id": f"team-budget-{index}"}
+            )
+            for index in range(204)
+        },
+        **{
+            f"member-budget-{index}": database.litellm_budgettable.rows[member_budget_id].model_copy(
+                update={"budget_id": f"member-budget-{index}"}
+            )
+            for index in range(204)
+            if with_members
+        },
+    }
+    response: Final = http.delete("/management/v1/customer_organizations/org?cascade=true")
+    assert response.status_code == 204, response.text
+    assert not database.litellm_customerorganizationtable.rows
+    assert not database.litellm_customerteamtable.rows
+    assert not database.litellm_customermembertable.rows
+    assert frozenset(database.litellm_budgettable.rows) == (frozenset() if with_members else {member_budget_id})
+
+
+def test_organization_cascade_expiry_reports_timeout_and_rolls_back_children_and_budgets() -> None:
+    database: Final = Database(organization_delete_error=TransactionExpiredError("Transaction already closed"))
+    http: Final = client(database=database)
+    family(http)
+    created_member(http, "member", "team", override=True)
+    tables: Final = (
+        database.litellm_customerorganizationtable,
+        database.litellm_customerteamtable,
+        database.litellm_customermembertable,
+        database.litellm_budgettable,
+    )
+    snapshots: Final = tuple(table.rows for table in tables)
+    response: Final = http.delete("/management/v1/customer_organizations/org?cascade=true")
+    assert response.status_code == 504, response.text
+    assert response.json() == {
+        "type": "urn:litellm:error:customer-hierarchy-transaction-timeout",
+        "title": "Customer Management operation timed out",
+        "status": 504,
+        "detail": "Customer Management operation timed out. The transaction was rolled back. Retry the request.",
+    }
+    assert tuple(table.rows for table in tables) == snapshots
 
 
 def test_organization_cascade_preserves_the_sibling_customer_and_its_budgets() -> None:

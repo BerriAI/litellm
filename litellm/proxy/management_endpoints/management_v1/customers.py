@@ -58,6 +58,11 @@ _ERROR_DETAILS: Final[Mapping[ErrorCode, tuple[int, str, str]]] = MappingProxyTy
             "Customer Management busy",
             "Customer Management capacity is being updated. Retry the request.",
         ),
+        ErrorCode.TRANSACTION_TIMEOUT: (
+            504,
+            "Customer Management operation timed out",
+            "Customer Management operation timed out. The transaction was rolled back. Retry the request.",
+        ),
         ErrorCode.FREE_TIER_LIMIT: (
             403,
             "Customer Management free tier limit reached",
