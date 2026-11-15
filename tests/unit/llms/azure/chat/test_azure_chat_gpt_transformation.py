@@ -1,7 +1,11 @@
-import asyncio, httpx, importlib, json, os
+import asyncio
+import importlib
+import json
+import os
 import sys
 from typing import Final
 
+import httpx
 import pytest
 from pydantic import TypeAdapter
 
@@ -9,19 +13,22 @@ sys.path.insert(
     0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../.."))
 )
 
-import litellm
-from litellm.litellm_core_utils.prompt_templates.common_utils import TOOL_RESULT_IMAGE_BOUNDARY
-from litellm.llms.azure.chat.gpt_reasoning_transformation import AzureOpenAIGPT5Config
-from litellm.llms.azure.chat.gpt_transformation import AzureOpenAIConfig
-from litellm.utils import _invalidate_model_cost_lowercase_map, get_optional_params
 from datetime import datetime
-from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-from litellm.router import Router
+from unittest.mock import AsyncMock
+
 from openai.types.chat import ChatCompletionMessage
 from openai.types.chat.chat_completion import ChatCompletion, Choice
 from respx import MockRouter
+
+import litellm
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.litellm_core_utils.prompt_templates.common_utils import TOOL_RESULT_IMAGE_BOUNDARY
+from litellm.llms.azure.chat.gpt_reasoning_transformation import AzureOpenAIGPT5Config
+from litellm.llms.azure.chat.gpt_transformation import AzureOpenAIConfig
+from litellm.router import Router
+from litellm.utils import get_optional_params
+from litellm.litellm_core_utils.model_cost_table import publish
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
-from unittest.mock import AsyncMock
 
 _MAPPED_PARAMS: Final = TypeAdapter(dict[str, object])
 _SUPPORTED_PARAMS: Final = TypeAdapter(list[str])
@@ -92,10 +99,21 @@ def test_map_openai_params_drop_params_still_drops_a_named_tool_choice_on_old_ap
     assert "tool_choice" not in mapped
 
 
-def test_map_openai_params_drop_params_never_drops_allowed_tools_on_old_api_version():
-    with pytest.raises(litellm.UnsupportedParamsError, match="allowed_tools") as exc:
-        _map_tool_choice_on_pre_tool_choice_api_version(
-            {"type": "allowed_tools", "allowed_tools": {"mode": "auto", "tools": [{"type": "function"}]}}
+def test_map_openai_params_drop_params_drops_allowed_tools_on_old_api_version():
+    mapped: Final = _map_tool_choice_on_pre_tool_choice_api_version(
+        {"type": "allowed_tools", "allowed_tools": {"mode": "auto", "tools": [{"type": "function"}]}}
+    )
+    assert "tool_choice" not in mapped
+
+
+def test_map_openai_params_allowed_tools_on_old_api_version_is_a_400_without_drop_params():
+    with pytest.raises(litellm.UnsupportedParamsError, match="2023-12-01-preview") as exc:
+        AzureOpenAIConfig().map_openai_params(
+            {"tool_choice": {"type": "allowed_tools", "allowed_tools": {"mode": "auto", "tools": [{"type": "function"}]}}},
+            {},
+            "gpt-4o",
+            drop_params=False,
+            api_version="2023-07-01-preview",
         )
     assert exc.value.status_code == 400
 
@@ -505,7 +523,7 @@ async def test_azure_gpt5_async_transform_drops_tool_choice_without_tools() -> N
 def test_transform_request_strips_litellm_format_from_managed_file_id():
     import base64
 
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
         update_messages_with_model_file_ids,
     )
 
@@ -592,7 +610,7 @@ def isolate_litellm_state():
     for attr, original_value in original_state.items():
         if hasattr(litellm, attr):
             setattr(litellm, attr, original_value)
-    _invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
 
 _SCALAR_DEFAULTS = {
     "num_retries": getattr(litellm, "num_retries", None),

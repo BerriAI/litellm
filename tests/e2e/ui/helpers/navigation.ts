@@ -79,7 +79,7 @@ export async function setAriaHidden(page: PlaywrightPage, hidden: boolean): Prom
   }
   await page.keyboard.press("Escape");
   await expect(panel).toBeHidden();
-  const aria = page.getByRole("banner").getByRole("button", { name: "Aria Agent", exact: true });
+  const aria = sidebarLink(page, "Aria Agent");
   if (premium && hidden) {
     await expect(aria).toBeHidden();
   } else {
