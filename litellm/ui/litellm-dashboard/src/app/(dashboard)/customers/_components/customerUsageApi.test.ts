@@ -535,14 +535,21 @@ describe("customerChildSpendCall", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("should reject ambiguous child filters before requesting any management usage", async () => {
-    const childRequest = {
-      ...request,
-      organizationId: "org-1",
-      kind: "teams" as const,
-      entities: [customerUsageEntity("team-a,team-b", teams[0])],
-    };
-    await expect(customerChildSpendCall(childRequest)).rejects.toThrow();
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
+  it.each(["team-a,team-b", ""])(
+    "should avoid unfiltered reads when only an unrepresentable ID %s exists",
+    async (id) => {
+      const childRequest = {
+        ...request,
+        organizationId: "org-1",
+        kind: "teams" as const,
+        entities: [customerUsageEntity(id, teams[0])],
+      };
+      await expect(customerChildSpendCall(childRequest)).resolves.toEqual({
+        monthly: [],
+        yearly: [],
+        organizationSpend: 0,
+      });
+      expect(fetchMock).not.toHaveBeenCalled();
+    },
+  );
 });

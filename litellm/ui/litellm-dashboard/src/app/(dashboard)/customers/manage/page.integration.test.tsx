@@ -131,8 +131,15 @@ describe("customer hierarchy management", () => {
         const url = requestUrl(input);
         if (url.pathname === `/management/v1/${collection}`) {
           return json({
-            data: [{ ...(kind === "teams" ? product : member), budget_usage: budgetUsage }],
-            meta: { total_count: 1, page: 1, page_size: 20, total_pages: 1 },
+            data: [
+              { ...(kind === "teams" ? product : member), budget_usage: budgetUsage },
+              {
+                ...(kind === "teams" ? product : member),
+                [kind === "teams" ? "customer_team_id" : "customer_member_id"]: `${id},other`,
+                alias: "Comma ID",
+              },
+            ],
+            meta: { total_count: 2, page: 1, page_size: 20, total_pages: 1 },
           });
         }
         if (url.pathname.endsWith("/daily/activity/aggregated"))
@@ -189,10 +196,14 @@ describe("customer hierarchy management", () => {
       expect(within(table).getByRole("cell", { name: "250" })).toBeInTheDocument();
       expect(within(table).getByText("Within budget")).toBeInTheDocument();
       expect(within(table).getByRole("button", { name: `Edit ${label}` })).toBeEnabled();
-      expect(within(table).getByRole("link", { name: "View usage" })).toHaveAttribute(
+      const validRow = within(table).getByRole("row", { name: new RegExp(label) });
+      expect(within(validRow).getByRole("link", { name: "View usage" })).toHaveAttribute(
         "href",
         `${uiHref("customers/usage")}?org=org-1&${kind === "teams" ? "team" : "member"}=${id}`,
       );
+      const unavailableRow = within(table).getByRole("row", { name: /Comma ID/ });
+      expect(within(unavailableRow).getByRole("status")).toHaveTextContent("Unavailable");
+      expect(within(unavailableRow).queryByRole("meter")).not.toBeInTheDocument();
       const activity = requestedUrls().filter((url) => url.pathname.endsWith("/daily/activity"));
       expect(activity).toHaveLength(2);
       expect(

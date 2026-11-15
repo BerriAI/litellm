@@ -70,8 +70,11 @@ const ID_FILTER: Record<Collection, string> = {
   customer_members: "customer_member_ids",
 };
 
+export const isCustomerUsageIdentifier = (id: string): boolean => id.length > 0 && !id.includes(",");
+
 const assertIdentifiers = (ids: readonly string[]) => {
-  if (ids.some((id) => !id || id.includes(","))) throw new Error(i18n.t("customerPortal.analytics.invalidIdentifier"));
+  if (ids.some((id) => !isCustomerUsageIdentifier(id)))
+    throw new Error(i18n.t("customerPortal.analytics.invalidIdentifier"));
 };
 
 const batches = async <T, R>(items: readonly T[], task: (item: T) => Promise<R>): Promise<R[]> => {
@@ -182,10 +185,9 @@ export const customerChildSpendCall = async ({
   kind: "teams" | "members";
   entities: readonly CustomerUsageEntity[];
 }) => {
-  const ids = entities.map((item) => item.id);
+  const ids = entities.map((item) => item.id).filter(isCustomerUsageIdentifier);
   if (ids.length === 0) return { monthly: [], yearly: [], organizationSpend: 0 };
   if (!organizationId) throw new Error(i18n.t("customerPortal.analytics.invalidIdentifier"));
-  assertIdentifiers(ids);
   const resource = kind === "teams" ? "customer_teams" : "customer_members";
   const monthRequest = { ...request, startDate: request.monthStartDate, endDate: request.monthEndDate };
   const yearRequest = { ...request, startDate: request.yearStartDate, endDate: request.yearEndDate };

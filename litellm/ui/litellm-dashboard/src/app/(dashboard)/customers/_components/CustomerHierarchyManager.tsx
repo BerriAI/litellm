@@ -13,7 +13,7 @@ import CustomerHierarchyNavigation, { customerHierarchyHref } from "./CustomerHi
 import CustomerHierarchySettings from "./CustomerHierarchySettings";
 import CustomerBudgetGroups from "./CustomerBudgetGroups";
 import CustomerBudgetSummary from "./CustomerBudgetSummary";
-import { customerUsageEntity, type CustomerUsageEntity } from "./customerUsageApi";
+import { customerUsageEntity, isCustomerUsageIdentifier, type CustomerUsageEntity } from "./customerUsageApi";
 import { CustomerSpendCells, CustomerSpendHeaders, CustomerSpendIdentity } from "./CustomerSpendCells";
 import CreateCustomerHierarchyDialog from "./CreateCustomerHierarchyDialog";
 import { customerEntityId, customerEntityLabel, type CreatedCustomerHierarchyEntity } from "./customerHierarchyForms";
@@ -245,7 +245,7 @@ function HierarchyChildTable(props: ScopeProps) {
                   </button>
                 </TableCell>
               )}
-              {childUsage.data ? (
+              {childUsage.data && isCustomerUsageIdentifier(row.id) ? (
                 <CustomerSpendCells
                   entity={row.entity}
                   monthlySpend={monthly.get(row.id)?.spend ?? 0}
@@ -255,7 +255,11 @@ function HierarchyChildTable(props: ScopeProps) {
                 />
               ) : (
                 <TableCell colSpan={5} className="text-center text-xs text-muted-foreground" role="status">
-                  {t(childUsage.isError ? "customerPortal.analytics.unknownSpend" : "customerPortal.hierarchy.loading")}
+                  {t(
+                    childUsage.isError || !isCustomerUsageIdentifier(row.id)
+                      ? "customerPortal.analytics.unknownSpend"
+                      : "customerPortal.hierarchy.loading",
+                  )}
                 </TableCell>
               )}
               <TableCell className="pr-0 text-right">
