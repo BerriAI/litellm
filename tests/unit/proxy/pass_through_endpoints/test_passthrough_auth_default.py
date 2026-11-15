@@ -28,13 +28,14 @@ from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 from starlette.requests import Request
 
-
-from litellm.proxy._types import PassThroughGenericEndpoint, ProxyException
+from litellm.proxy._types import LiteLLMRoutes, PassThroughGenericEndpoint, ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import (
     check_api_key_for_custom_headers_or_pass_through_endpoints,
+    run_centralized_common_checks,
 )
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     _register_pass_through_endpoint,
+    _registered_pass_through_routes,
 )
 from litellm.proxy.proxy_server import openai_exception_handler
 
@@ -150,3 +151,56 @@ async def test_no_eu_jev_route_reads_the_litellm_user_api_key_header(route: str)
     )
 
     assert result == "sk-from-bearer"
+
+
+async def _common_checks_run(route: str) -> bool:
+    request: Final = Request({"type": "http", "method": "GET", "path": route, "headers": [], "query_string": b""})
+    try:
+        await run_centralized_common_checks(
+            UserAPIKeyAuth(api_key="hashed-caller-key", user_role="internal_user"), request, {}, route
+        )
+    except ProxyException:
+        return True
+    return False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("auth", "enforced"),
+    [
+        pytest.param({}, True, id="missing"),
+        pytest.param({"auth": True}, True, id="true"),
+        pytest.param({"auth": "true"}, True, id="true-text"),
+        pytest.param({"auth": None}, True, id="null"),
+        pytest.param({"auth": "maybe"}, True, id="unreadable"),
+        pytest.param({"auth": False}, False, id="false"),
+        pytest.param({"auth": "false"}, False, id="false-text"),
+        pytest.param({"auth": 0}, False, id="zero"),
+    ],
+)
+async def test_every_reader_of_a_config_pass_through_agrees_on_auth(
+    auth: dict[str, object], enforced: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    endpoint: Final[dict[str, object]] = {"path": "/forwarder", "target": "https://example.com", **auth}
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "sk-master")
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {"pass_through_endpoints": [endpoint]})
+    saved_registry: Final = dict(_registered_pass_through_routes)
+    saved_openai_routes: Final = tuple(LiteLLMRoutes.openai_routes.value)
+    try:
+        builder_result: Final = await check_api_key_for_custom_headers_or_pass_through_endpoints(
+            request=Request({"type": "http", "headers": []}),
+            route="/forwarder",
+            pass_through_endpoints=[endpoint],
+            api_key="sk-caller",
+        )
+        common_checks_run: Final = await _common_checks_run("/forwarder")
+        await _register_pass_through_endpoint(
+            endpoint=dict(endpoint), app=FastAPI(), premium_user=False, visited_endpoints=set()
+        )
+        joins_openai_routes: Final = "/forwarder" in LiteLLMRoutes.openai_routes.value
+    finally:
+        _registered_pass_through_routes.clear()
+        _registered_pass_through_routes.update(saved_registry)
+        LiteLLMRoutes.openai_routes.value[:] = saved_openai_routes
+
+    assert (builder_result == "sk-caller", common_checks_run, joins_openai_routes) == (enforced, enforced, enforced)
