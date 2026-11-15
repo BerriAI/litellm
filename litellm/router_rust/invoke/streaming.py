@@ -1819,6 +1819,9 @@ async def _responses_recover_stream_error(
     lifecycle events are dropped when a retry or a fallback answers."""
     last_error: MidStreamFallbackError = e  # rebind-ok: the newest failure once a retry also failed
     if _responses_stream_retries(attempt, e, source_iterator):
+        if hasattr(source_iterator, "aclose"):
+            with anyio.CancelScope(shield=True), contextlib.suppress(Exception):
+                await source_iterator.aclose()  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]  # checked above
         await attempt.failure_recorded()
         trigger: Final = _mid_stream_retry_trigger(e)
         retried: Final = await attempt.retry(trigger)
@@ -1851,7 +1854,12 @@ async def _responses_yield_retried(
 
     def follow_source() -> _Prepared:
         prepared: Final = adopt_headers(response)
-        _ = add_retry_headers_to_response(response=wrapper, attempted_retries=attempted, max_retries=budget)
+        newest: Final = prepared[1].get("x-litellm-attempted-retries")
+        _ = add_retry_headers_to_response(
+            response=wrapper,
+            attempted_retries=max(attempted, newest) if isinstance(newest, int) else attempted,
+            max_retries=budget,
+        )
         return prepared
 
     followed: _Prepared = follow_source()  # rebind-ok: refreshed when the retried stream changes its source

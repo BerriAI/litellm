@@ -25,7 +25,7 @@ from litellm.types.llms.openai import (
     ResponsesAPIResponse,
     ResponsesAPIStreamEvents,
 )
-from litellm.types.router import RetryPolicy
+from litellm.types.router import AllowedFailsPolicy, RetryPolicy
 from tests.unit.test_router.core.scripted_host import (
     ScriptedHost,
     content_policy,
@@ -517,3 +517,31 @@ async def test_after_text_the_stream_is_not_retried_in_the_group(make_core: Make
         await drain_into(stream, seen)
     assert [getattr(event, "type") for event in seen] == [CREATED, TEXT_DELTA]
     assert len(host.deployments_called()) == 1
+
+
+async def test_a_second_failed_stream_counts_as_a_second_retry(make_core: MakeCore, host: ScriptedHost) -> None:
+    broken: Final = responses_stream(Event(CREATED), error=cut())
+    host.answer("*", broken, broken, retried_ok())
+    core = make_core(
+        model_list=[*GROUP_A_TWICE, deployment("a", "a3")],
+        num_retries=2,
+        allowed_fails_policy=AllowedFailsPolicy(RateLimitErrorAllowedFails=1000),
+    )
+    stream = await open_stream(core)
+    assert await collect_event_types(stream) == [CREATED, TEXT_DELTA, COMPLETED]
+    assert len(host.deployments_called()) == 3
+    assert hidden(stream)["additional_headers"]["x-litellm-attempted-retries"] == 2
+
+
+async def test_the_failed_stream_is_closed_before_the_retry_is_opened(make_core: MakeCore, host: ScriptedHost) -> None:
+    opened: list[ScriptedResponsesStream] = []
+    closed_when_retry_opens: list[bool] = []
+
+    def retry(**request: object) -> ScriptedResponsesStream:  # kwargs-ok: the host passes the request kwargs
+        closed_when_retry_opens.append(opened[0].closed)
+        return retried_ok()(**request)
+
+    host.answer("*", responses_stream(Event(CREATED), error=cut(), opened=opened), retry)
+    core = make_core(model_list=GROUP_A_TWICE, num_retries=1)
+    assert await collect_event_types(await open_stream(core)) == [CREATED, TEXT_DELTA, COMPLETED]
+    assert closed_when_retry_opens == [True]
