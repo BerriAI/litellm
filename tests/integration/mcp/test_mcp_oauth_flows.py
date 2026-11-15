@@ -1661,7 +1661,7 @@ def test_consent_pages_keep_their_own_team_hint_while_a_worker_is_killed_mid_bur
                 assert page.status_code == 200, page.text
                 assert _preselected_teams(page.text) == [team], page.text
             for hint, team in (asked for page, asked in zip(pages, burst) if page is None):
-                retried = eventually(lambda: consent(hint), lambda page: page is not None, seconds=60)
+                retried = eventually(lambda hint=hint: consent(hint), lambda page: page is not None, seconds=60)
                 assert retried is not None and retried.status_code == 200
                 assert _preselected_teams(retried.text) == [team], retried.text
             issued: Final = _credential_for_the_submitted_team(gateway, cookies, before_the_kill, pkce, teams[0])
