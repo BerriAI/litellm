@@ -294,6 +294,17 @@ def _stream(
             _stream(opening=_ZEROS, closing={"output_tokens": 4}, conflicting=True),
             UsageUnknown(UsageUnknownReason.CONTRADICTORY),
         ),
+        (
+            AnthropicStreamUsage(
+                opening=_ZEROS,
+                closing={"output_tokens": 4},
+                stop_reason="end_turn",
+                starts=1,
+                stopped=True,
+                errored=True,
+            ),
+            UsageUnknown(UsageUnknownReason.INCOMPLETE),
+        ),
     ],
 )
 def test_anthropic_stream_usage_counts_only_a_completed_stream_and_never_reads_absence_as_zero(

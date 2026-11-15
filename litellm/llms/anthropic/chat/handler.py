@@ -704,6 +704,7 @@ _SSE_FRAME_TERMINATORS: Final = ("\n\n", "\r\n\r\n")
 
 
 _TERMINAL_EVENT: Final = TypeAdapter(Mapping[str, JsonValue])
+_SSE_LINE_BREAK: Final = re.compile(r"\r?\n")
 
 
 def _terminal_event_type(payload: str) -> JsonValue:
@@ -1043,12 +1044,18 @@ class ModelResponseIterator:
         if not line.strip():
             self._end_of_sse_frame()
             return
-        data_at: Final = line.find("data:")
-        if data_at == -1:
+        if not line.startswith("data:"):
             return
-        self._message_stop_frame_open = _terminal_event_type(line[data_at + len("data:") :]) == "message_stop"
-        if line.endswith(_SSE_FRAME_TERMINATORS):
-            self._end_of_sse_frame()
+        event_type: Final = _terminal_event_type(line[len("data:") :])
+        if event_type == "error":
+            self.upstream_stream_usage = recorded_anthropic_stream_event(self.upstream_stream_usage, {"type": "error"})
+        self._message_stop_frame_open = event_type == "message_stop"
+
+    def _observe_terminal_text(self, text: str) -> None:
+        """Lines are inspected as SSE fields: only a line that starts with `data:` carries an event, so a comment
+        that quotes one does not, and a blank line closes the frame."""
+        for line in _SSE_LINE_BREAK.split(text):
+            self._observe_terminal_line(line)
 
     async def adrain_terminal_frames(self, max_lines: int) -> None:
         """Reads lines left on a stream the caller stopped consuming after the stop reason, up to `max_lines`, so a
@@ -1689,6 +1696,17 @@ class ModelResponseIterator:
                 raise RuntimeError(f"Error receiving chunk from stream: {e}")
 
             try:
+                if self._draining:
+                    self._observe_terminal_text(
+                        chunk.decode("utf-8", errors="replace")
+                        if isinstance(chunk, bytes)
+                        else chunk
+                        if isinstance(chunk, str)
+                        else ""
+                    )
+                    return GenericStreamingChunk(
+                        text="", is_finished=False, finish_reason="", usage=None, index=0, tool_use=None
+                    )
                 str_line = chunk
                 if isinstance(chunk, bytes):  # Handle binary data
                     str_line = chunk.decode("utf-8")  # Convert bytes to string
@@ -1696,12 +1714,6 @@ class ModelResponseIterator:
                     if index != -1:
                         str_line = str_line[index:]
 
-                if self._draining:
-                    if isinstance(str_line, str):
-                        self._observe_terminal_line(str_line)
-                    return GenericStreamingChunk(
-                        text="", is_finished=False, finish_reason="", usage=None, index=0, tool_use=None
-                    )
                 if str_line.startswith("data:"):
                     result = self._parse_sse_data(str_line)
                     if result is not None:

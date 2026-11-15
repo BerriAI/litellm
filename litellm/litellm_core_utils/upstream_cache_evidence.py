@@ -22,7 +22,7 @@ TERMINAL_EVENT_MAX_LINES: Final = 16
 
 _JSON: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
 _EVENT: Final[TypeAdapter[Mapping[str, JsonValue]]] = TypeAdapter(Mapping[str, JsonValue])
-_ANTHROPIC_LIFECYCLE: Final = ("message_start", "message_delta", "message_stop")
+_ANTHROPIC_LIFECYCLE: Final = ("message_start", "message_delta", "message_stop", '"error"')
 _ANTHROPIC_CACHE_COUNTERS: Final = ("cache_read_input_tokens", "cache_creation_input_tokens")
 _CONVERSE_TERMINAL: Final = ('"stopReason"', '"usage"')
 
@@ -41,6 +41,7 @@ class AnthropicStreamUsage:
     stopped: bool = False
     out_of_order: bool = False
     conflicting: bool = False
+    errored: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -123,6 +124,8 @@ def recorded_anthropic_stream_event(
                 out_of_order=state.out_of_order or state.starts == 0,
                 conflicting=state.conflicting or _disagrees(state.closing, closing),
             )
+        case "error":
+            return replace(state, errored=True)
         case "message_stop":
             final: Final = _as_json(event.get("usage"))
             return replace(

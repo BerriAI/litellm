@@ -4522,16 +4522,33 @@ async def test_draining_reads_the_terminal_frame_a_caller_stopped_before() -> No
 
 
 @pytest.mark.parametrize(
-    "terminal",
+    ("terminal", "stopped", "errored"),
     [
-        ("event: error", 'data: {"type": "error", "error": {"type": "overloaded_error", "message": "busy"}}', ""),
-        ("event: message_stop", 'data: {"type": "message_st', ""),
-        ("event: message_stop",),
+        (
+            ("event: error", 'data: {"type": "error", "error": {"type": "overloaded_error", "message": "busy"}}', ""),
+            False,
+            True,
+        ),
+        (("event: message_stop", 'data: {"type": "message_st', ""), False, False),
+        (("event: message_stop",), False, False),
+        ((': data: {"type": "message_stop"}', ""), False, False),
+        (
+            (
+                "event: error",
+                'data: {"type": "error", "error": {"type": "overloaded_error", "message": "busy"}}',
+                "",
+                "event: message_stop",
+                'data: {"type": "message_stop"}',
+                "",
+            ),
+            True,
+            True,
+        ),
     ],
-    ids=["provider-error", "malformed", "header-only"],
+    ids=["provider-error", "malformed", "header-only", "comment-quoting-a-stop", "error-then-stop"],
 )
 async def test_draining_never_raises_or_counts_a_frame_that_is_not_a_complete_message_stop(
-    terminal: tuple[str, ...],
+    terminal: tuple[str, ...], stopped: bool, errored: bool
 ) -> None:
     async def lines() -> AsyncIterator[str]:
         for line in (*_START_LINES, *terminal):
@@ -4542,4 +4559,5 @@ async def test_draining_never_raises_or_counts_a_frame_that_is_not_a_complete_me
     for _ in _START_LINES:
         await stream.__anext__()
     await iterator.adrain_terminal_frames(max_lines=16)
-    assert iterator.upstream_stream_usage is not None and iterator.upstream_stream_usage.stopped is False
+    usage = iterator.upstream_stream_usage
+    assert usage is not None and (usage.stopped, usage.errored) == (stopped, errored), usage

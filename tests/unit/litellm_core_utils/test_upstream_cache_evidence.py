@@ -130,3 +130,17 @@ def test_records_survive_the_deep_copy_logging_makes_of_call_details() -> None:
         _converse({"stopReason": "end_turn"}, {"usage": {"inputTokens": 9}}),
     )
     assert copy.deepcopy({"records": records}) == {"records": records}
+
+
+def test_an_error_event_marks_the_stream_even_when_a_stop_follows() -> None:
+    error: Mapping[str, object] = {"type": "error", "error": {"type": "overloaded_error"}}
+    recorded = _recorded(_start(), _delta({"output_tokens": 2}), error, _STOP)
+    from_frames = anthropic_stream_usage_from_sse(_sse((_start(), _delta({"output_tokens": 2}), error, _STOP)))
+    assert recorded is not None and recorded.errored is True
+    assert from_frames == recorded
+
+
+def test_an_sse_comment_quoting_a_stop_is_not_an_event() -> None:
+    frames = _sse((_start(), _delta({"output_tokens": 2}))) + b': data: {"type": "message_stop"}\n\n'
+    recorded = anthropic_stream_usage_from_sse(frames)
+    assert recorded is not None and recorded.stopped is False

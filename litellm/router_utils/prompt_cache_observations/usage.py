@@ -141,7 +141,7 @@ def _anthropic_stream_usage(stream: AnthropicStreamUsage) -> UpstreamCacheUsage:
     """Only a stream that opened once, closed with `message_stop` after its final `message_delta` and reported
     nothing out of order counts. A counter comes from the last event that reported it, and two events that
     disagree make the usage contradictory."""
-    if stream.starts != 1 or not stream.stopped:
+    if stream.starts != 1 or not stream.stopped or stream.errored:
         return UsageUnknown(UsageUnknownReason.INCOMPLETE)
     if stream.out_of_order:
         return UsageUnknown(UsageUnknownReason.MALFORMED)
