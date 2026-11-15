@@ -30179,6 +30179,8 @@ export interface components {
         BulkUpdateKeyRequestItem: {
             /** Budget Id */
             budget_id?: string | null;
+            /** Disallowed Models */
+            disallowed_models?: string[] | null;
             /** Key */
             key: string;
             /** Max Budget */
