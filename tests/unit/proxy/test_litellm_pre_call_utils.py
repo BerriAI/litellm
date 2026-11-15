@@ -7903,6 +7903,33 @@ def test_anthropic_user_profile_id_reaches_every_claude_provider(custom_llm_prov
     assert forwarded == {"anthropic-user-profile-id": "uprof_01"}
 
 
+@pytest.mark.parametrize(
+    "client_headers,custom_llm_provider,expected",
+    [
+        ({"anthropic-user-profile-id": "uprof_caller"}, "anthropic", "uprof_caller"),
+        ({}, "anthropic", None),
+        ({"anthropic-user-profile-id": "uprof_caller"}, "azure_ai", "uprof_pinned"),
+        ({"anthropic-user-profile-id": "uprof_caller"}, "bedrock", "uprof_pinned"),
+        ({"anthropic-user-profile-id": "uprof_caller"}, "bedrock_mantle", "uprof_pinned"),
+        ({"anthropic-user-profile-id": "uprof_caller"}, "vertex_ai", "uprof_pinned"),
+    ],
+)
+def test_a_caller_anthropic_oauth_token_keeps_its_own_profile_id_only_where_the_token_authenticates(
+    client_headers: dict[str, str], custom_llm_provider: str, expected: str | None
+) -> None:
+    data: Final[dict] = {}  # mutable-ok: the function under test writes into it
+    add_provider_specific_headers_to_request(
+        data=data,
+        headers={"authorization": "Bearer sk-ant-oat01-caller", **client_headers},
+        user_profile_id="uprof_pinned",
+    )
+
+    forwarded: Final = ProviderSpecificHeaderUtils.get_provider_specific_headers(
+        provider_specific_header=data["provider_specific_header"], custom_llm_provider=custom_llm_provider
+    )
+    assert forwarded.get("anthropic-user-profile-id") == expected
+
+
 @pytest.mark.parametrize("custom_llm_provider", ["openai", "gemini", "databricks"])
 def test_anthropic_user_profile_id_stays_off_non_claude_providers(custom_llm_provider: str) -> None:
     data: Final[dict] = {}  # mutable-ok: the function under test writes into it

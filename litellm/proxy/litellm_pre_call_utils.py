@@ -4063,7 +4063,7 @@ _ANTHROPIC_API_HEADER_PROVIDERS: Final = ",".join(
         LlmProviders.VERTEX_AI.value,
     )
 )
-_ANTHROPIC_USER_PROFILE_ID_PROVIDERS: Final = ",".join(
+_ANTHROPIC_USER_PROFILE_ID_PROVIDERS: Final = frozenset(
     (
         LlmProviders.ANTHROPIC.value,
         LlmProviders.AZURE_AI.value,
@@ -4073,6 +4073,13 @@ _ANTHROPIC_USER_PROFILE_ID_PROVIDERS: Final = ",".join(
     )
 )
 _ANTHROPIC_OAUTH_CREDENTIAL_PROVIDERS: Final = ",".join(sorted(ANTHROPIC_OAUTH_FORWARD_PROVIDERS))
+
+
+def _user_profile_id_header(providers: frozenset[str], user_profile_id: str | None) -> ProviderSpecificHeader:
+    return ProviderSpecificHeader(
+        custom_llm_provider=",".join(sorted(providers)),
+        extra_headers={ANTHROPIC_USER_PROFILE_ID_HEADER: user_profile_id} if user_profile_id and providers else {},
+    )
 
 
 def add_provider_specific_headers_to_request(
@@ -4088,6 +4095,9 @@ def add_provider_specific_headers_to_request(
         for header, value in headers.items()
         if header.lower() == "authorization" and is_anthropic_oauth_key(value)
     }
+    caller_credential_providers: Final = (
+        ANTHROPIC_OAUTH_FORWARD_PROVIDERS if anthropic_oauth_credential_headers else frozenset[str]()
+    )
     typesafe_danger_zone_headers: Final = {
         header: value
         for header, value in headers.items()
@@ -4095,17 +4105,24 @@ def add_provider_specific_headers_to_request(
     }
 
     scoped_headers: Final = [
-        ProviderSpecificHeader(custom_llm_provider=providers, extra_headers=extra_headers)
-        for providers, extra_headers in (
-            (_ANTHROPIC_API_HEADER_PROVIDERS, anthropic_api_headers),
-            (
-                _ANTHROPIC_USER_PROFILE_ID_PROVIDERS,
-                {ANTHROPIC_USER_PROFILE_ID_HEADER: user_profile_id} if user_profile_id else {},
+        scoped_header
+        for scoped_header in (
+            ProviderSpecificHeader(
+                custom_llm_provider=_ANTHROPIC_API_HEADER_PROVIDERS, extra_headers=anthropic_api_headers
             ),
-            (_ANTHROPIC_OAUTH_CREDENTIAL_PROVIDERS, anthropic_oauth_credential_headers),
-            (LlmProviders.TYPESAFE.value, typesafe_danger_zone_headers),
+            _user_profile_id_header(
+                _ANTHROPIC_USER_PROFILE_ID_PROVIDERS - caller_credential_providers, user_profile_id
+            ),
+            _user_profile_id_header(caller_credential_providers, headers.get(ANTHROPIC_USER_PROFILE_ID_HEADER)),
+            ProviderSpecificHeader(
+                custom_llm_provider=_ANTHROPIC_OAUTH_CREDENTIAL_PROVIDERS,
+                extra_headers=anthropic_oauth_credential_headers,
+            ),
+            ProviderSpecificHeader(
+                custom_llm_provider=LlmProviders.TYPESAFE.value, extra_headers=typesafe_danger_zone_headers
+            ),
         )
-        if extra_headers
+        if scoped_header["extra_headers"]
     ]
 
     if scoped_headers:
