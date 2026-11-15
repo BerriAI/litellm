@@ -515,6 +515,16 @@ def test_annual_window_keeps_all_spend_from_its_reset_boundary(
         assert get_budget_window_start({"budget_duration": duration, "reset_at": reset_at}) == expected
 
 
+@pytest.mark.parametrize("duration", ("1h", "1mo", "12mo"))
+@pytest.mark.parametrize("reset_at", ("2026-11-15T05:48:02.123456Z", "2026-11-15T11:33:02.123456+05:45"))
+def test_legacy_window_start_uses_database_millisecond_precision(duration: str, reset_at: str) -> None:
+    window: Final = {"budget_duration": duration, "reset_at": reset_at}
+    whole_second: Final = {"budget_duration": duration, "reset_at": "2026-11-15T05:48:02Z"}
+    start: Final = get_budget_window_start(whole_second)
+    assert start is not None
+    assert get_budget_window_start(window) == start.replace(microsecond=123000)
+
+
 class _AnnualWindowDatabase:
     def __init__(self) -> None:
         self.db = self

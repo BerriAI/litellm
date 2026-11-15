@@ -1599,14 +1599,14 @@ async def test_should_reserve_image_edit_cost_per_image(
     await release_budget_reservation(reservation)
 
 
-def test_should_start_window_without_reset_at_at_duration_boundary():
-    before = datetime.now(timezone.utc) - timedelta(hours=1)
+@pytest.mark.parametrize("microsecond", (0, 123456, 999999))
+def test_should_start_window_without_reset_at_at_duration_boundary(microsecond: int) -> None:
+    now: Final = datetime(2026, 11, 15, 5, 48, 2, microsecond, tzinfo=timezone.utc)
+    with patch("litellm.proxy.spend_tracking.budget_reservation.datetime") as clock:
+        clock.now.return_value = now
+        window_start: Final = get_budget_window_start({"budget_duration": "1h"})
 
-    window_start = get_budget_window_start({"budget_duration": "1h"})
-
-    after = datetime.now(timezone.utc) - timedelta(hours=1)
-    assert window_start is not None
-    assert before <= window_start <= after
+    assert window_start == now.replace(microsecond=microsecond // 1000 * 1000) - timedelta(hours=1)
 
 
 @pytest.mark.asyncio

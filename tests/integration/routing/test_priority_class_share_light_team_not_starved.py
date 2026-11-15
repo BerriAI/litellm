@@ -44,7 +44,7 @@ def model_saturating_at_forty_percent(tmp_path_factory: pytest.TempPathFactory) 
             "default_priority": 1.0,
             "saturation_threshold": 0.4,
             "saturation_check_cache_ttl": 0,
-            "priority_class_share_splits_equally_among_active_teams": True,
+            "priority_class_share_config": {"split_equally_among_active": ["team"]},
         },
     }
     path: Final = directory / "priority_class_share_borrowed.yaml"
