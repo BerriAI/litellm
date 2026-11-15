@@ -36,6 +36,7 @@ from litellm.litellm_core_utils.duration_parser import (
     duration_in_seconds,
     get_annual_budget_window_start,
     is_annual_budget_duration,
+    normalize_budget_window_start,
 )
 from litellm.proxy._types import (
     DB_RETRY_SAFE_ERROR_TYPES,
@@ -1946,7 +1947,7 @@ class ResetBudgetJob:
                 entity_type=entity_type.value,
                 entity_id=entity_id,
                 window_duration=budget_duration,
-                new_window_start=window_start,
+                new_window_start=normalize_budget_window_start(window_start),
             )
         except Exception as e:  # noqa: BLE001  # the row is best effort; counter resets must still land
             verbose_proxy_logger.warning(
