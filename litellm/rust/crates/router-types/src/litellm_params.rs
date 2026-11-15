@@ -87,6 +87,12 @@ impl Deref for ExtraParams {
     }
 }
 
+impl FromIterator<(String, Value)> for ExtraParams {
+    fn from_iter<I: IntoIterator<Item = (String, Value)>>(entries: I) -> Self {
+        Self(entries.into_iter().collect())
+    }
+}
+
 impl fmt::Debug for ExtraParams {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.debug_list().entries(self.0.keys()).finish()

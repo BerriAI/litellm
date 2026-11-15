@@ -11,7 +11,6 @@ from typing import TYPE_CHECKING, Final, Literal
 
 from fastapi import HTTPException
 from pydantic import BaseModel, ConfigDict, ValidationError
-from redis.exceptions import RedisError
 
 import litellm
 from litellm import Router
@@ -127,6 +126,10 @@ def _tightest_team_share(descriptors: Iterable[RateLimitDescriptor | None]) -> t
 
 def _tightest_of(*shares: tuple[RateLimitDescriptor, int] | None) -> tuple[RateLimitDescriptor, int] | None:
     return min((share for share in shares if share is not None), key=lambda share: share[1], default=None)
+
+
+def _share_on_model(share: RateLimitDescriptor | None, team: str, model_group: str) -> RateLimitDescriptor | None:
+    return share if share is not None and share["value"] == f"{team}:{model_group}" else None
 
 
 def _capped_idle_share(
@@ -526,6 +529,8 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         member: Final = (
             pool_member(priority_class) if user_api_key_dict.team_id is None else team_member(user_api_key_dict.team_id)
         )
+        from redis.exceptions import RedisError
+
         try:
             members: Final = await self.active_teams.touch(model, member, priority_class, self.v3_limiter.window_size)
         except (RedisError, RedisCircuitBreakerOpenError, ValidationError) as e:
@@ -687,6 +692,19 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
                 else _tightest_of(
                     _tightest_team_share((stash.borrowing_team_model_limit, stash.priority_class_share)),
                     _capped_idle_share(stash.borrowing_team_model_share, stash.borrowing_team_model_cap),
+                )
+            ) or _tightest_team_share(
+                (
+                    hold.share
+                    if hold is not None
+                    else _share_on_model(
+                        stash.borrowing_team_model_share,
+                        settlement.user_api_key_team_id,
+                        (
+                            self.v3_limiter.rate_limited_model(model_group)
+                            or RateLimitedModel(requested=model_group, group=model_group)
+                        ).group,
+                    ),
                 )
             )
             if share is None:

@@ -41,6 +41,7 @@ from litellm.responses.main import mock_responses_api_response
 from litellm.types.responses.main import build_web_search_call
 from litellm.types.router import BaselineRouteStamp
 from litellm.types.utils import (
+    ChatCompletionAudioResponse,
     ModelResponse,
     ModelResponseStream,
     ResponsesAPIResponse,
@@ -236,6 +237,44 @@ def test_streaming_redaction_redacts_delta_provider_fields_without_touching_the_
     assert SECRET not in str(response.choices[0].delta), response
     assert response.choices[0].delta.provider_specific_fields["thought_signatures"] == [SIGNATURE]
     assert fields == _provider_fields()
+
+
+def _audio_response() -> ModelResponse:
+    return ModelResponse(
+        choices=[
+            litellm.Choices(
+                message=litellm.Message(
+                    content=None,
+                    audio=ChatCompletionAudioResponse(data=SECRET, expires_at=1, transcript="", id="audio_1"),
+                )
+            )
+        ]
+    )
+
+
+@pytest.mark.parametrize("key", ["complete_streaming_response", "async_complete_streaming_response"])
+def test_redaction_drops_audio_from_logged_response_objects_without_touching_the_client_response(key: str) -> None:
+    client_response: Final = _audio_response()
+    details: Final[dict[str, object]] = {"stream": True, key: _audio_response()}
+
+    redacted: Final = perform_redaction(details, client_response)
+
+    assert SECRET not in str(redacted), redacted
+    assert SECRET not in str(details[key]), details[key]
+    assert client_response.choices[0].message.audio is not None
+    assert client_response.choices[0].message.audio.data == SECRET
+
+
+@pytest.mark.parametrize("key", ["complete_streaming_response", "async_complete_streaming_response"])
+def test_streaming_redaction_drops_delta_audio(key: str) -> None:
+    response: Final = ModelResponseStream(
+        choices=[litellm.utils.StreamingChoices(delta=litellm.utils.Delta(audio={"data": SECRET}))]
+    )
+    details: Final[dict[str, object]] = {"stream": True, key: response}
+
+    perform_redaction(details, None)
+
+    assert SECRET not in str(response.choices[0].delta), response
 
 
 _SECRET_URL: Final = f"https://example.com/?q={SECRET}"
