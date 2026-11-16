@@ -24,6 +24,7 @@ from litellm.constants import OPENAI_CHAT_PDF_FILE_TOKENS, PDF_DATA_URL_PREFIX
 from litellm.litellm_core_utils.deployment_pricing import deployment_pricing_models, str_keyed
 from litellm.litellm_core_utils.token_counter import (
     deployment_openai_model,
+    messages_contain_input_audio_content_blocks,
     pdf_page_pricing,
     reads_pdf_pages,
     unresolved_tokenizer_model,
@@ -221,18 +222,33 @@ def _served_by_openai(deployment: object) -> bool:
     return served_provider == "openai"
 
 
+def _as_object(value: object) -> object:
+    return value
+
+
 def count_input_tokens_for_model(request_body: dict, model: str) -> int | None:
     try:
         if "messages" in request_body:
+            messages: Final = _as_object(request_body.get("messages"))
             try:
-                return litellm.token_counter(
+                counted: Final = litellm.token_counter(
                     model=model,
                     messages=request_body.get("messages") or (),
                     tools=request_body.get("tools"),
                     tool_choice=request_body.get("tool_choice"),
                 )
             except ValueError:
-                return _count_text_tokens(model=model, text=request_body.get("messages"))
+                return _count_text_tokens(model=model, text=messages)
+            # An ``input_audio`` block counts as a size-derived estimate at a
+            # deliberately low assumed bitrate, and this reservation prices it
+            # at the text rate. Before such blocks were countable (#38459) an
+            # audio request RAISED in token_counter and reserved from the
+            # serialised-messages fallback above; floor it there again so a
+            # large or highly compressed audio payload cannot be admitted
+            # against a budget more cheaply than it was before.
+            if messages_contain_input_audio_content_blocks(messages):
+                return max(counted, _count_text_tokens(model=model, text=messages))
+            return counted
         if "prompt" in request_body:
             return _count_text_tokens(model=model, text=request_body.get("prompt"))
         if "input" in request_body:
