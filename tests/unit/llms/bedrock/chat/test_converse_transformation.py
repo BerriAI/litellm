@@ -1431,7 +1431,7 @@ async def test_transform_request_replays_redacted_thinking_only_to_claude(
 
 
 # Synthetic stand-in shaped like the redactedContent Converse returned for openai.gpt-6-luna and
-# openai.gpt-5.6-luna in November 2026: base64 of ASCII "<tag>_<base64>", which is not base64 itself
+# openai.gpt-5.6-luna in November 2026: base64 of ASCII text holding underscores, which is never base64 itself
 _GPT_REDACTED_CONTENT: Final = base64.b64encode(b"abc_" + base64.b64encode(b"synthetic gpt reasoning")).decode()
 
 
