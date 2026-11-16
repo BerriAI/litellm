@@ -2102,6 +2102,70 @@ def test_is_model_cost_zero_judges_an_alias_chain_by_the_deployment_its_entry_ro
     assert {name: is_model_cost_zero(model=name, llm_router=router) for name in order} == expected
 
 
+@pytest.mark.asyncio
+async def test_free_model_bypasses_budget_checks_when_over_budget(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy.auth.auth_checks import common_checks
+
+    monkeypatch.setattr(litellm, "model_cost", dict(litellm.model_cost))
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "local-free-model",
+                "litellm_params": {
+                    "model": "ollama/qwen3:0.6b",
+                    "api_base": "http://localhost:11434",
+                    "input_cost_per_token": 0,
+                    "output_cost_per_token": 0,
+                },
+            },
+            {
+                "model_name": "paid-model",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_key": "fake",
+                    "input_cost_per_token": 3e-06,
+                    "output_cost_per_token": 1.5e-05,
+                },
+            },
+        ],
+    )
+
+    team_object = LiteLLM_TeamTable(team_id="test-team", spend=150.0, max_budget=100.0)
+    valid_token = UserAPIKeyAuth(token="test-token", team_id="test-team", spend=150.0, max_budget=100.0)
+
+    # Free model request is permitted even though budget is exceeded
+    free_result = await common_checks(
+        request_body={"model": "local-free-model", "messages": [{"role": "user", "content": "hi"}]},
+        team_object=team_object,
+        user_object=None,
+        end_user_object=None,
+        global_proxy_spend=None,
+        general_settings={},
+        route="/chat/completions",
+        llm_router=router,
+        proxy_logging_obj=AsyncMock(),
+        valid_token=valid_token,
+        request=MagicMock(),
+    )
+    assert free_result is True
+
+    # Paid model request is blocked by BudgetExceededError
+    with pytest.raises(litellm.BudgetExceededError):
+        await common_checks(
+            request_body={"model": "paid-model", "messages": [{"role": "user", "content": "hi"}]},
+            team_object=team_object,
+            user_object=None,
+            end_user_object=None,
+            global_proxy_spend=None,
+            general_settings={},
+            route="/chat/completions",
+            llm_router=router,
+            proxy_logging_obj=AsyncMock(),
+            valid_token=valid_token,
+            request=MagicMock(),
+        )
+
+
 MCP_DISCOVERY_REST_ROUTES = [
     "/mcp-rest/tools/list",
     "/v1/mcp/tools",

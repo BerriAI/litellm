@@ -717,7 +717,13 @@ def _is_cost_explicitly_configured(deployments: Sequence[DeploymentTypedDict]) -
     lands in the cost map under the deployment id.
     """
     for deployment in deployments:
-        model_id = (deployment.get("model_info") or _EMPTY_COST_ENTRY).get("id")
+        litellm_params = deployment.get("litellm_params") or _EMPTY_COST_ENTRY
+        if "input_cost_per_token" in litellm_params or "output_cost_per_token" in litellm_params:
+            return True
+        model_info = deployment.get("model_info") or _EMPTY_COST_ENTRY
+        if "input_cost_per_token" in model_info or "output_cost_per_token" in model_info:
+            return True
+        model_id = model_info.get("id")
         if model_id is None:
             continue
         raw_entry = litellm.model_cost.get(model_id, _EMPTY_COST_ENTRY)
@@ -1137,7 +1143,7 @@ async def common_checks(
 
     skip_all_budget_checks: Final = (
         skip_budget_checks
-        or route_skips_budget_checks(route=route)
+        or request_skips_budget_checks(route=route, model=_model, llm_router=llm_router)
         or is_mcp_discovery_request(route=route, request_body=_typed_request_body(request_body))
     )
 
