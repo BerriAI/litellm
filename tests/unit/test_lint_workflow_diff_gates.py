@@ -223,10 +223,10 @@ def _changed_files_selected_by(tmp_path: Path, pathspecs: tuple[str, ...], files
     )
 
 
-def test_workflow_still_carries_the_ruff_format_e2e_basedpyright_and_e2e_harness_diff_gates() -> None:
-    assert len(GATES) == 3
+def test_lint_diff_gates_select_python_format_and_e2e_type_checks() -> None:
+    assert len(GATES) == 2
     assert frozenset(gate[0] for gate in GATES) == frozenset(
-        {":(glob)litellm/**/*.py", ":(glob)tests/e2e/**/*.py", "tests/e2e"}
+        {":(glob)litellm/**/*.py", ":(glob)tests/e2e/**/*.py"}
     )
 
 
@@ -261,32 +261,62 @@ def test_e2e_basedpyright_gate_also_fires_on_harness_python_and_pyrightconfig(tm
 
 
 @pytest.mark.parametrize(
-    "trigger",
+    ("event", "label", "expected"),
     (
-        "tests/e2e/claude_code/cron_vm/install_claude_code.sh",
-        "tests/e2e/notes.md",
-        "tests/e2e/pkg/sub/nested_module.py",
-        "tests/e2e_harness/claude_code/test_driver.py",
-        "pyproject.toml",
-        "uv.lock",
-        ".github/workflows/test-linting.yml",
+        ("pull_request", "", False),
+        ("pull_request", "documentation", False),
+        ("pull_request", "run-ci", True),
+        ("merge_group", "", True),
+        ("push", "", True),
+        ("schedule", "", True),
+        ("workflow_dispatch", "", True),
     ),
 )
-def test_e2e_harness_gate_fires_on_any_e2e_or_harness_file_its_dependency_manifests_and_workflow(
-    tmp_path: Path, trigger: str
+def test_integration_tier_runs_the_harness_replay_and_cache_suites_on_the_intended_events(
+    tmp_path: Path, event: str, label: str, expected: bool
 ) -> None:
-    selected = _changed_files_selected_by(
-        tmp_path,
-        _gate_rooted_at("tests/e2e"),
-        (
-            trigger,
-            "tests/e2e/ui/spec.ts",
-            "tests/e2e/ui/pkg/page.py",
-            "elsewhere/pyproject.toml",
-            "tests/e2e_other/module.py",
-        ),
+    workflow: Final = yaml.safe_load((WORKFLOWS_DIR / "test-integration.yml").read_text())
+    job: Final = workflow["jobs"]["e2e-harness"]
+    step: Final = next(step for step in job["steps"] if step.get("name") == "Run the e2e harness tests")
+    tools: Final = tmp_path / "bin"
+    tools.mkdir()
+    _install_tool(
+        tools / "uv",
+        '#!/usr/bin/env bash\nset -eu\n'
+        'if [[ "$*" == *npm_version_resolver.py* ]]; then echo 99.0.0; exit 0; fi\n'
+        ': "${E2E_CACHE_TEST_REDIS_URL:?}"\nprintf "%s\\n" "$@" >> "$RUNNER_TEMP/harness-argv"\n',
     )
-    assert selected == frozenset({trigger})
+    installer: Final = tmp_path / "tests/e2e/claude_code/cron_vm/install_claude_code.sh"
+    installer.parent.mkdir(parents=True)
+    _install_tool(installer, '#!/usr/bin/env bash\nprintf "%s" "$1" > "$RUNNER_TEMP/claude-version"\n')
+    condition: Final = job["if"].replace("github.event_name", '"$EVENT_NAME"').replace(
+        "github.event.label.name", '"$EVENT_LABEL"'
+    )
+    result: Final = subprocess.run(
+        ["bash", "-e", "-c", f'if [[ {condition} ]]; then\n{step["run"]}\nfi'],
+        cwd=tmp_path,
+        env={
+            **os.environ,
+            **step["env"],
+            "PATH": f"{tools}{os.pathsep}{os.environ['PATH']}",
+            "RUNNER_TEMP": str(tmp_path),
+            "EVENT_NAME": event,
+            "EVENT_LABEL": label,
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    recorded: Final = tmp_path / "harness-argv"
+    assert recorded.exists() == expected
+    if not expected:
+        return
+    arguments: Final = recorded.read_text().splitlines()
+    assert "tests/e2e_harness" in arguments
+    assert "tests/code_coverage_tests/test_provider_replay_harness.py" in arguments
+    assert "tests/code_coverage_tests/test_provider_cache.py" in arguments
+    assert (tmp_path / "claude-version").read_text() == "99.0.0"
 
 
 def _event_context(pull_request: Mapping[str, str]) -> Mapping[str, str]:
