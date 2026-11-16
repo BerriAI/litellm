@@ -33,7 +33,7 @@ def _generation_response(model: str) -> dict[str, object]:
 
 
 def test_minimax_image_generation_url_and_body():
-    config = MinimaxImageGenerationConfig()
+    config: Final = MinimaxImageGenerationConfig()
     assert (
         config.get_complete_url(
             api_base=None,
