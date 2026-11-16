@@ -22,7 +22,7 @@ class SimpleProviderConfig:
 
     def __init__(self, slug: str, data: dict):
         self.slug = slug
-        self.base_url = data["base_url"]
+        self.base_url: str = data["base_url"]
         self.api_key_env: str = data["api_key_env"]
         self.api_base_env: str | None = data.get("api_base_env")
         self.base_class = data.get("base_class", "openai_gpt")
@@ -112,7 +112,7 @@ class JSONProviderRegistry:
         return endpoint in provider.supported_endpoints or endpoint in model_endpoints
 
     @classmethod
-    def list_providers(cls) -> list:
+    def list_providers(cls) -> list[str]:
         """List all registered provider slugs"""
         return list(cls._providers.keys())
 

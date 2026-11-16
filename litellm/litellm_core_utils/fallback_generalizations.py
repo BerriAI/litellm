@@ -62,13 +62,13 @@ EXTENDS_FIELD: Final = "extends"
 
 @dataclass(frozen=True, slots=True)
 class _RoutingRule:
-    pattern: re.Pattern
+    pattern: re.Pattern[str]
     provider: str
 
 
 @dataclass(frozen=True, slots=True)
 class _CapabilityRule:
-    pattern: re.Pattern
+    pattern: re.Pattern[str]
     model_info: dict
     fill_missing_for_providers: frozenset[str]
 
@@ -156,7 +156,8 @@ class _FallbackGeneralizations:
 
     def __init__(self) -> None:
         self.rules: list = []
-        self.routing_rules: tuple = ()
+        self.routing_rules: tuple[_RoutingRule, ...] = ()
+        self.routing_table: tuple[tuple[str, str], ...] = ()
         self.capability_rules: tuple = ()
         self.fill_missing_rules: tuple[_CapabilityRule, ...] = ()
 
@@ -165,6 +166,7 @@ class _FallbackGeneralizations:
         compiled: Final = tuple(kind for kind in map(_compile_rule, installed) if kind is not None)
         self.rules = installed
         self.routing_rules = tuple(rule for rule in compiled if isinstance(rule, _RoutingRule))
+        self.routing_table = tuple((rule.pattern.pattern, rule.provider) for rule in self.routing_rules)
         self.capability_rules = tuple(rule for rule in compiled if isinstance(rule, _CapabilityRule))
         self.fill_missing_rules = tuple(rule for rule in self.capability_rules if rule.fill_missing_for_providers)
 
@@ -212,6 +214,11 @@ def set_fallback_generalizations(rules: list | None) -> None:
 def get_fallback_generalization_rules() -> list:
     """Return the raw rule list (read-only view for callers/tests)."""
     return _registry.rules
+
+
+def routing_generalization_rules() -> tuple[tuple[str, str], ...]:
+    """``(pattern, provider)`` of every installed routing rule, in match order."""
+    return _registry.routing_table
 
 
 def match_routing_generalization(model: str) -> str | None:
