@@ -1732,6 +1732,45 @@ def test_optional_params_with_additional_drop_params():
     assert "red" not in optional_params["extra_body"]
 
 
+@pytest.mark.parametrize(
+    ("custom_llm_provider", "model"),
+    [
+        ("openai", "text-embedding-3-small"),
+        ("azure_ai", "embed-v-4-0"),
+        ("nvidia_nim", "nvidia/nv-embed-v1"),
+        ("cohere", "embed-v4.0"),
+        ("mistral", "mistral-embed"),
+        ("jina_ai", "jina-embeddings-v3"),
+        ("vertex_ai", "text-embedding-005"),
+        ("gemini", "gemini-embedding-001"),
+        ("bedrock", "cohere.embed-english-v3"),
+        ("bedrock", "unmapped-embedding-model"),
+        ("voyage", "voyage-3"),
+        ("infinity", "BAAI/bge-small-en-v1.5"),
+        ("ollama", "nomic-embed-text"),
+    ],
+)
+def test_embedding_additional_drop_params_removes_provider_specific_params(custom_llm_provider: str, model: str):
+    without_extras: Final = get_optional_params_embeddings(model=model, custom_llm_provider=custom_llm_provider)
+    forwarded: Final = get_optional_params_embeddings(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        input_type="search_query",
+        truncate="END",
+    )
+    assert forwarded != without_extras, f"{custom_llm_provider} never forwards the extras, so the case proves nothing"
+
+    dropped: Final = get_optional_params_embeddings(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        input_type="search_query",
+        truncate="END",
+        additional_drop_params=["input_type", "truncate"],
+    )
+
+    assert dropped == without_extras
+
+
 def test_azure_ai_cohere_embed_input_type_param():
     optional_params = get_optional_params_embeddings(
         model="embed-v-4-0",

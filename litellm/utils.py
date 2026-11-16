@@ -4874,7 +4874,16 @@ def get_optional_params_embeddings(
     # retrieve all parameters passed to the function
     passed_params: Final = locals()
     passed_params.pop("custom_llm_provider", None)
-    special_params: Final = as_str_mapping(_OPAQUE_VALUE.validate_python(passed_params.pop("kwargs"))) or {}
+    special_params: Final = {
+        k: v
+        for k, v in (as_str_mapping(_OPAQUE_VALUE.validate_python(passed_params.pop("kwargs"))) or {}).items()
+        if _should_drop_param(k=k, additional_drop_params=additional_drop_params) is False
+    }
+    provider_kwargs: Final = {
+        k: v
+        for k, v in kwargs.items()
+        if _should_drop_param(k=k, additional_drop_params=additional_drop_params) is False
+    }
 
     passed_params.pop("drop_params", None)
     drop_params = normalize_drop_params(drop_params)
@@ -4988,7 +4997,7 @@ def get_optional_params_embeddings(
         )
         _check_valid_arg(supported_params=supported_params)
         optional_params = litellm.nvidiaNimEmbeddingConfig.map_openai_params(
-            non_default_params=non_default_params, optional_params={}, kwargs=kwargs
+            non_default_params=non_default_params, optional_params={}, kwargs=provider_kwargs
         )
     elif custom_llm_provider == "vertex_ai" or custom_llm_provider == "gemini":
         # OpenAI SDKs send encoding_format="float" by default; float lists are
@@ -5005,9 +5014,9 @@ def get_optional_params_embeddings(
         _check_valid_arg(supported_params=supported_params)
         (
             optional_params,
-            kwargs,
+            _,
         ) = litellm.VertexAITextEmbeddingConfig().map_openai_params(
-            non_default_params=non_default_params, optional_params={}, kwargs=kwargs
+            non_default_params=non_default_params, optional_params={}, kwargs=provider_kwargs
         )
     elif custom_llm_provider == "lm_studio":
         supported_params = litellm.LmStudioEmbeddingConfig().get_supported_openai_params()
@@ -5039,8 +5048,7 @@ def get_optional_params_embeddings(
         else:  # unmapped model
             supported_params = []
             _check_valid_arg(supported_params=supported_params)
-            final_params = {**kwargs}
-            return final_params
+            return {**provider_kwargs}
 
         supported_params = object.get_supported_openai_params()
         _check_valid_arg(supported_params=supported_params)
@@ -5096,8 +5104,7 @@ def get_optional_params_embeddings(
                 model=model,
                 drop_params=drop_params if drop_params is not None else False,
             )
-        final_params = {**optional_params, **kwargs}
-        return final_params
+        return {**optional_params, **provider_kwargs}
     elif custom_llm_provider == "sap":
         supported_params = get_supported_openai_params(
             model=model,
@@ -5125,8 +5132,7 @@ def get_optional_params_embeddings(
             drop_params=drop_params if drop_params is not None else False,
         )
 
-        final_params = {**optional_params, **kwargs}
-        return final_params
+        return {**optional_params, **provider_kwargs}
 
     elif custom_llm_provider == "fireworks_ai":
         supported_params = get_supported_openai_params(
@@ -5199,7 +5205,7 @@ def get_optional_params_embeddings(
         passed_params=passed_params,
         custom_llm_provider=custom_llm_provider,
         openai_params=list(DEFAULT_EMBEDDING_PARAM_VALUES.keys()),
-        additional_drop_params=kwargs.get("additional_drop_params", None),
+        additional_drop_params=additional_drop_params,
     )
 
     if "extra_body" in final_params and not final_params["extra_body"]:
