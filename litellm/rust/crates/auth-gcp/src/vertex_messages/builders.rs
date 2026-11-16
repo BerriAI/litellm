@@ -1,15 +1,18 @@
 use std::{error::Error as StdError, sync::Arc};
 
-use gcp_auth::CustomServiceAccount;
 use google_cloud_auth::credentials::{
     AccessTokenCredentials, external_account, impersonated, user_account,
 };
-use serde_json::{Map, Value, json};
+use serde_json::{Map, Value};
 
-use super::failure::{GoogleLoginFailure, PythonException};
+use super::{
+    credentials::Loaded,
+    failure::{GoogleLoginFailure, PythonException},
+    service_account::service_account_grant,
+};
 use crate::{
     constants::CLOUD_PLATFORM_SCOPE,
-    identity::{GcpTokenSource, SdkTokenSource, ServiceAccountTokenSource},
+    identity::{GcpTokenSource, SdkTokenSource},
 };
 
 pub(crate) type TokenSource = Arc<dyn GcpTokenSource>;
@@ -26,10 +29,6 @@ fn missing_fields(info: &Map<String, Value>, required: &[&str]) -> Option<String
         .filter(|field| !info.contains_key(*field))
         .collect();
     (!missing.is_empty()).then(|| missing.join(", "))
-}
-
-fn text<'a>(info: &'a Map<String, Value>, field: &str) -> &'a str {
-    info.get(field).and_then(Value::as_str).unwrap_or_default()
 }
 
 fn value_failure(error: impl std::fmt::Display) -> GoogleLoginFailure {
@@ -54,9 +53,7 @@ fn sdk_source(credentials: AccessTokenCredentials) -> TokenSource {
 }
 
 /// google-auth's `service_account.Credentials.from_service_account_info`.
-pub(crate) fn service_account(
-    info: &Map<String, Value>,
-) -> Result<TokenSource, GoogleLoginFailure> {
+pub(crate) fn service_account(info: &Map<String, Value>) -> Result<Loaded, GoogleLoginFailure> {
     if let Some(missing) = missing_fields(info, &SERVICE_ACCOUNT_FIELDS) {
         return Err(GoogleLoginFailure::new(
             PythonException::Malformed,
@@ -71,13 +68,7 @@ pub(crate) fn service_account(
             "The private_key field was not found in the service account info.",
         ));
     }
-    let key = json!({
-        "private_key": text(info, "private_key"),
-        "client_email": text(info, "client_email"),
-        "token_uri": text(info, "token_uri"),
-    });
-    let provider = CustomServiceAccount::from_json(&key.to_string()).map_err(value_failure)?;
-    Ok(Arc::new(ServiceAccountTokenSource(Arc::new(provider))))
+    service_account_grant(info)
 }
 
 /// google-auth's `oauth2.credentials.Credentials.from_authorized_user_info`, which always
@@ -167,7 +158,7 @@ mod tests {
         value.as_object().unwrap().clone()
     }
 
-    fn failure(result: Result<TokenSource, GoogleLoginFailure>) -> GoogleLoginFailure {
+    fn failure<T>(result: Result<T, GoogleLoginFailure>) -> GoogleLoginFailure {
         match result {
             Ok(_) => panic!("the credentials should not build"),
             Err(failure) => failure,

@@ -15,17 +15,15 @@ use serde_json::{Map, Value};
 use time::{OffsetDateTime, PrimitiveDateTime, macros::format_description};
 
 use super::{
-    builders::{TokenSource, token_failure},
+    builders::token_failure,
+    credentials::{Credentials, Expiry, Loaded, Minted, REFRESH_THRESHOLD, RefreshFuture},
     failure::{GoogleLoginFailure, PythonException, python_repr, python_str},
 };
-use crate::{GcpAuthFuture, GcpTokenSource};
 
 const CANNOT_REFRESH: &str = "The credentials do not contain the necessary fields need to refresh the access token. You must specify refresh_token, token_url, client_id, and client_secret.";
-/// `google.auth._helpers.REFRESH_THRESHOLD`.
-const REFRESH_THRESHOLD: Duration = Duration::from_secs(3 * 60 + 45);
 
+/// The token a file holds, known only by when it stops being valid.
 struct Token {
-    value: SecretValue,
     expiry: Option<OffsetDateTime>,
 }
 
@@ -48,8 +46,8 @@ struct Refresh {
 /// token a file holds only decides whether the credentials load.
 struct ExternalAuthorizedUser {
     refresh: Option<Refresh>,
-    /// The token the last refresh granted and the refresh token it rotated to.
-    state: Mutex<(Option<Token>, Option<String>)>,
+    /// The refresh token the last exchange rotated to.
+    rotated: Mutex<Option<String>>,
     pool: HttpClientPool,
 }
 
@@ -77,7 +75,7 @@ fn expiry(text: &str) -> Option<OffsetDateTime> {
 pub(crate) fn external_account_authorized_user(
     info: &Map<String, Value>,
     file: &str,
-) -> Result<TokenSource, GoogleLoginFailure> {
+) -> Result<Loaded, GoogleLoginFailure> {
     let unloadable = || {
         GoogleLoginFailure::new(
             PythonException::DefaultCredentials,
@@ -91,10 +89,7 @@ pub(crate) fn external_account_authorized_user(
     let file_token = info
         .get("token")
         .filter(|token| !token.is_null())
-        .map(|token| Token {
-            value: SecretValue::new(python_str(Some(token))),
-            expiry,
-        });
+        .map(|_| Token { expiry });
     let refresh = match (
         truthy(info, "refresh_token"),
         truthy(info, "token_url"),
@@ -115,7 +110,7 @@ pub(crate) fn external_account_authorized_user(
         return Err(unloadable());
     }
     Ok(Arc::new(ExternalAuthorizedUser {
-        state: Mutex::new((None, None)),
+        rotated: Mutex::new(None),
         refresh,
         pool: HttpClientPool::new(Arc::new(PublicDnsResolver)),
     }))
@@ -147,10 +142,9 @@ fn oauth_error(body: &str) -> GoogleLoginFailure {
 
 impl ExternalAuthorizedUser {
     /// `_perform_refresh_token` through `sts.Client.refresh_token`.
-    async fn refresh(&self, refresh: &Refresh) -> Result<SecretValue, GoogleLoginFailure> {
+    async fn exchange(&self, refresh: &Refresh) -> Result<Minted, GoogleLoginFailure> {
         let refresh_token = self
             .lock()
-            .1
             .clone()
             .unwrap_or_else(|| refresh.refresh_token.clone());
         let client = self
@@ -191,39 +185,32 @@ impl ExternalAuthorizedUser {
                     "unsupported type for timedelta seconds component: NoneType",
                 )
             })?;
-        let value = SecretValue::new(python_str(granted.get("access_token")));
-        let mut state = self.lock();
-        state.0 = Some(Token {
-            value: value.clone(),
-            expiry: Some(OffsetDateTime::now_utc() + Duration::from_secs_f64(lifetime.max(0.0))),
-        });
         if let Some(rotated) = granted.get("refresh_token") {
-            state.1 = Some(python_str(Some(rotated)));
+            *self.lock() = Some(python_str(Some(rotated)));
         }
-        Ok(value)
+        Ok(Minted {
+            value: SecretValue::new(python_str(granted.get("access_token"))),
+            expiry: Expiry::At(
+                OffsetDateTime::now_utc() + Duration::from_secs_f64(lifetime.max(0.0)),
+            ),
+        })
     }
 
-    fn lock(&self) -> std::sync::MutexGuard<'_, (Option<Token>, Option<String>)> {
-        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+    fn lock(&self) -> std::sync::MutexGuard<'_, Option<String>> {
+        self.rotated.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }
 
-impl GcpTokenSource for ExternalAuthorizedUser {
-    fn project_id(&self) -> GcpAuthFuture<'_, String> {
-        Box::pin(async { unreachable!("google-auth names no project for these credentials") })
-    }
-
-    fn token(&self) -> GcpAuthFuture<'_, SecretValue> {
+impl Credentials for ExternalAuthorizedUser {
+    fn refresh(&self) -> RefreshFuture<'_> {
         Box::pin(async {
-            if let Some(token) = self.lock().0.as_ref().filter(|token| token.valid()) {
-                return Ok(token.value.clone());
-            }
             let Some(refresh) = &self.refresh else {
-                return Err(
-                    GoogleLoginFailure::new(PythonException::Refresh, CANNOT_REFRESH).into(),
-                );
+                return Err(GoogleLoginFailure::new(
+                    PythonException::Refresh,
+                    CANNOT_REFRESH,
+                ));
             };
-            self.refresh(refresh).await.map_err(Into::into)
+            self.exchange(refresh).await
         })
     }
 }
@@ -287,8 +274,8 @@ mod tests {
         }))
     }
 
-    async fn failure(source: &TokenSource) -> GoogleLoginFailure {
-        token_failure(&source.token().await.unwrap_err())
+    async fn failure(source: &Loaded) -> GoogleLoginFailure {
+        source.refresh().await.unwrap_err()
     }
 
     #[tokio::test]
@@ -303,16 +290,17 @@ mod tests {
         .await;
         let source = external_account_authorized_user(&refreshable(&url), "/k.json").unwrap();
 
-        let tokens = (
-            source.token().await.unwrap(),
-            source.token().await.unwrap(),
-            source.token().await.unwrap(),
-        );
+        let first = source.refresh().await.unwrap();
+        let second = source.refresh().await.unwrap();
 
         assert_eq!(
-            (tokens.0.expose(), tokens.1.expose(), tokens.2.expose()),
-            ("sts-1", "sts-2", "sts-2")
+            (first.value.expose(), second.value.expose()),
+            ("sts-1", "sts-2")
         );
+        let Expiry::At(expiry) = second.expiry else {
+            panic!("a granted token expires");
+        };
+        assert!(expiry > OffsetDateTime::now_utc() + Duration::from_secs(3500));
         let basic = format!("Basic {}", STANDARD.encode("client:secret"));
         assert_eq!(
             *seen.lock().unwrap(),
