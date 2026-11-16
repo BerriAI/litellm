@@ -2568,6 +2568,41 @@ def test_an_unsupported_param_logs_the_call_flag_python_s_handler_set_first(
     assert params.get("aanthropic_messages") is flagged
 
 
+@pytest.mark.parametrize(
+    ("attributed_model", "llm_provider", "model"),
+    [
+        pytest.param(
+            "claude-sonnet-4-5", "vertex_ai", "claude-sonnet-4-5", id="vertex_version_names_provider_and_model"
+        ),
+        pytest.param(None, None, None, id="unattributed_names_neither"),
+    ],
+)
+def test_an_attributed_unsupported_param_names_the_provider_and_model(
+    attributed_model: str | None, llm_provider: str | None, model: str | None
+) -> None:
+    text: Final = (
+        "claude-sonnet-4-5 does not support anthropic-version=latest. "
+        "To drop unsupported params, set `litellm.drop_params = True`."
+    )
+    rejected: Final = ValueError(text)
+    rejected.messages_request_error = True  # pyright: ignore[reportAttributeAccessIssue]  # marker the native host sets
+    rejected.messages_unsupported_param = True  # pyright: ignore[reportAttributeAccessIssue]  # marker the native host sets
+    if attributed_model is not None:
+        rejected.messages_unsupported_param_model = attributed_model  # pyright: ignore[reportAttributeAccessIssue]  # marker the native host sets
+
+    mapped: Final = messages_host.map_failure(
+        rejected, {"model": "vertex_ai/claude-sonnet-4-5", "messages": []}, "vertex_ai", True
+    )
+
+    assert isinstance(mapped, litellm.UnsupportedParamsError)
+    assert (mapped.llm_provider, mapped.model, mapped.status_code, str(mapped)) == (
+        llm_provider,
+        model,
+        400,
+        f"litellm.UnsupportedParamsError: {text}",
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class _TokenEndpointCertificates:
     ca: str

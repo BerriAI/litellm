@@ -726,6 +726,11 @@ def _rejection(error: Exception, request: Mapping[str, object], request_provider
         return _public_provider_error(rejection, error, request, request_provider)
     if getattr(error, "messages_unsupported_param", False):
         _flag_messages_call(request.get("litellm_logging_obj"), asynchronous)
+        attributed_model: Final = getattr(error, "messages_unsupported_param_model", None)
+        if isinstance(attributed_model, str):
+            return litellm.UnsupportedParamsError(
+                message=str(error), llm_provider=request_provider, model=attributed_model
+            )
         return litellm.UnsupportedParamsError(message=str(error))
     return litellm.BadRequestError(
         message=str(error),
