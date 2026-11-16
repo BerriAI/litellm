@@ -545,7 +545,9 @@ class ContentBlockStartText(TypedDict):
     content_block: TextBlock
 
 
-ContentBlockContentBlockDict = ToolUseBlock | TextBlock | ChatCompletionThinkingBlock
+ContentBlockContentBlockDict = (
+    ToolUseBlock | TextBlock | ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock
+)
 
 ContentBlockStart = ContentBlockStartToolUse | ContentBlockStartText
 

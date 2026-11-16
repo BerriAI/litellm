@@ -75,6 +75,53 @@ def test_map_openai_params_with_preview_api_version():
     )
 
 
+def _map_tool_choice_on_pre_tool_choice_api_version(tool_choice: dict[str, object]) -> dict[str, object]:
+    return AzureOpenAIConfig().map_openai_params(
+        {"tool_choice": tool_choice, "tools": [{"type": "function", "function": {"name": "get_time"}}]},
+        {},
+        "gpt-4o",
+        drop_params=True,
+        api_version="2023-07-01-preview",
+    )
+
+
+def test_map_openai_params_drop_params_still_drops_a_named_tool_choice_on_old_api_version():
+    mapped: Final = _map_tool_choice_on_pre_tool_choice_api_version(
+        {"type": "function", "function": {"name": "get_time"}}
+    )
+    assert "tool_choice" not in mapped
+
+
+def test_map_openai_params_drop_params_drops_allowed_tools_on_old_api_version():
+    mapped: Final = _map_tool_choice_on_pre_tool_choice_api_version(
+        {"type": "allowed_tools", "allowed_tools": {"mode": "auto", "tools": [{"type": "function"}]}}
+    )
+    assert "tool_choice" not in mapped
+
+
+def test_map_openai_params_allowed_tools_on_old_api_version_is_a_400_without_drop_params():
+    with pytest.raises(litellm.UnsupportedParamsError, match="2023-12-01-preview") as exc:
+        AzureOpenAIConfig().map_openai_params(
+            {"tool_choice": {"type": "allowed_tools", "allowed_tools": {"mode": "auto", "tools": [{"type": "function"}]}}},
+            {},
+            "gpt-4o",
+            drop_params=False,
+            api_version="2023-07-01-preview",
+        )
+    assert exc.value.status_code == 400
+
+
+def test_map_openai_params_forwards_allowed_tools_on_current_api_version():
+    tool_choice: Final[dict[str, object]] = {
+        "type": "allowed_tools",
+        "allowed_tools": {"mode": "required", "tools": [{"type": "function", "function": {"name": "get_time"}}]},
+    }
+    mapped: Final = AzureOpenAIConfig().map_openai_params(
+        {"tool_choice": tool_choice}, {}, "gpt-4o", drop_params=True, api_version="2025-04-01-preview"
+    )
+    assert mapped["tool_choice"] == tool_choice
+
+
 def test_transform_request_hoists_tool_message_image():
     """Azure builds its request via convert_to_azure_openai_messages without the
     OpenAIGPTConfig._transform_messages pipeline, so transform_request must hoist

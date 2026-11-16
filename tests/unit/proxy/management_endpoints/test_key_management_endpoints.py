@@ -2098,6 +2098,34 @@ async def test_update_key_end_user_budget_id_folds_into_metadata_and_survives_om
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("stored_duration", "stored_reset_at", "moves_reset"),
+    [
+        ("30d", datetime(2020, 1, 1, tzinfo=timezone.utc), False),
+        ("30d", datetime(2020, 1, 1), False),
+        ("30d", datetime(2099, 1, 1, tzinfo=timezone.utc), True),
+        ("7d", datetime(2020, 1, 1, tzinfo=timezone.utc), True),
+        ("30d", None, True),
+    ],
+)
+async def test_update_key_keeps_a_due_budget_reset_when_the_duration_is_resent(
+    stored_duration: str, stored_reset_at: datetime | None, moves_reset: bool
+) -> None:
+    existing_key: Final = LiteLLM_VerificationToken(
+        token="hashed", budget_duration=stored_duration, budget_reset_at=stored_reset_at
+    )
+
+    updated: Final = await prepare_key_update_data(
+        data=UpdateKeyRequest(key="sk-1", budget_duration="30d"), existing_key_row=existing_key
+    )
+
+    assert updated["budget_duration"] == "30d"
+    reset_at: Final = updated.get("budget_reset_at")
+    assert (isinstance(reset_at, datetime) and reset_at > datetime.now(timezone.utc)) is moves_reset
+    assert ("budget_reset_at" in updated) is moves_reset
+
+
+@pytest.mark.asyncio
 async def test_update_key_clears_end_user_budget_id_with_empty_string():
     """Sending an empty end_user_budget_id detaches the key default without touching any budget row,
     so auth falls back to the proxy-wide default for that key's customers."""

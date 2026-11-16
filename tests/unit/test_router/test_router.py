@@ -9,7 +9,7 @@ import os
 import sys
 import threading
 import warnings
-from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Mapping
+from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Iterator, Mapping
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -105,6 +105,137 @@ if TYPE_CHECKING:
     from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
     from litellm.integrations.otel.logger import OpenTelemetryV2
+
+
+_ROUTER_DECISIONS_RESPONSE: Final[Mapping[str, object]] = {
+    "model": "gpt-6-luna",
+    "answers": [{"type": "predicate", "name": "damaged", "probability": 0.9}],
+    "usage": {
+        "input_tokens": 1,
+        "input_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0},
+        "output_tokens": 1,
+        "output_tokens_details": {"reasoning_tokens": 0},
+        "total_tokens": 2,
+    },
+}
+
+
+_OPENAI_DECISIONS_PARAMS: Final[Mapping[str, object]] = {
+    "model": "openai/gpt-6-luna",
+    "api_base": "https://api.openai.com/v1",
+    "api_key": "k",
+}
+_BEDROCK_DECISIONS_PARAMS: Final[Mapping[str, object]] = {
+    "model": "bedrock/us.openai.gpt-5.6-terra",
+    "aws_access_key_id": "fake",
+    "aws_secret_access_key": "fake",
+    "aws_region_name": "us-east-1",
+}
+
+
+def _decisions_leg(leg_id: str, params: Mapping[str, object], weight: int | None = None) -> dict[str, object]:
+    return {
+        "model_name": "decision-group",
+        "litellm_params": params if weight is None else {**params, "weight": weight},
+        "model_info": {"id": leg_id},
+    }
+
+
+_OPENAI_DECISIONS_LEG: Final = _decisions_leg("openai-leg", _OPENAI_DECISIONS_PARAMS)
+_BEDROCK_DECISIONS_LEG: Final = _decisions_leg("bedrock-leg", _BEDROCK_DECISIONS_PARAMS)
+
+
+def _mixed_decisions_group_router(*legs: dict[str, object]) -> Router:
+    return Router(model_list=list(legs), routing_strategy="simple-shuffle")
+
+
+@pytest.fixture
+def _router_httpx_transport(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    yield
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
+
+@pytest.mark.asyncio
+async def test_decisions_on_a_mixed_group_never_routes_to_a_leg_without_decisions_support(
+    respx_mock: respx.MockRouter,
+    _router_httpx_transport: None,
+) -> None:
+    router: Final = _mixed_decisions_group_router(_OPENAI_DECISIONS_LEG, _BEDROCK_DECISIONS_LEG)
+    route: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(json=_ROUTER_DECISIONS_RESPONSE)
+
+    for _ in range(20):
+        await router.adecisions(
+            model="decision-group",
+            input=[{"role": "user", "content": "The package arrived with a broken screen."}],
+            questions=[
+                {"type": "predicate", "name": "damaged", "instructions": "Does the customer report a damaged item?"}
+            ],
+        )
+
+    assert route.call_count == 20
+
+
+def test_decisions_on_a_mixed_group_never_routes_to_a_leg_without_decisions_support_sync(
+    respx_mock: respx.MockRouter,
+) -> None:
+    router: Final = _mixed_decisions_group_router(_OPENAI_DECISIONS_LEG, _BEDROCK_DECISIONS_LEG)
+    route: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(json=_ROUTER_DECISIONS_RESPONSE)
+
+    for _ in range(20):
+        router.decisions(
+            model="decision-group",
+            input=[{"role": "user", "content": "The package arrived with a broken screen."}],
+            questions=[
+                {"type": "predicate", "name": "damaged", "instructions": "Does the customer report a damaged item?"}
+            ],
+        )
+
+    assert route.call_count == 20
+
+
+@pytest.mark.asyncio
+async def test_decisions_on_a_group_with_no_capable_leg_still_returns_the_provider_error() -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "bedrock-only",
+                "litellm_params": {
+                    "model": "bedrock/us.openai.gpt-5.6-terra",
+                    "aws_access_key_id": "fake",
+                    "aws_secret_access_key": "fake",
+                    "aws_region_name": "us-east-1",
+                },
+                "model_info": {"id": "bedrock-leg"},
+            }
+        ]
+    )
+
+    with pytest.raises(litellm.BadRequestError, match="Unknown Decisions provider 'bedrock'"):
+        await router.adecisions(
+            model="bedrock-only",
+            input=[{"role": "user", "content": "The package arrived with a broken screen."}],
+            questions=[
+                {"type": "predicate", "name": "damaged", "instructions": "Does the customer report a damaged item?"}
+            ],
+        )
+
+
+@pytest.mark.asyncio
+async def test_chat_on_a_mixed_group_still_reaches_the_leg_without_decisions_support() -> None:
+    router: Final = _mixed_decisions_group_router(
+        _decisions_leg("openai-leg", _OPENAI_DECISIONS_PARAMS, weight=0),
+        _decisions_leg("bedrock-leg", _BEDROCK_DECISIONS_PARAMS, weight=1),
+    )
+
+    response: Final = await router.acompletion(
+        model="decision-group",
+        messages=[{"role": "user", "content": "Say hi"}],
+        mock_response="hi",
+    )
+
+    assert response._hidden_params["model_id"] == "bedrock-leg"
 
 
 def test_update_kwargs_does_not_mutate_defaults_and_merges_metadata():
@@ -5079,6 +5210,151 @@ async def test_aresponses_streaming_content_policy_error_event_routes_to_content
 
 
 @pytest.mark.asyncio
+async def test_aresponses_stream_keeps_numbering_after_a_mid_stream_fallback():
+    from litellm.types.llms.openai import OutputTextDeltaEvent, ResponsesAPIStreamEvents
+
+    def delta(sequence_number: int, text: str) -> OutputTextDeltaEvent:
+        return OutputTextDeltaEvent(
+            type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA,
+            item_id="msg_1",
+            output_index=0,
+            content_index=0,
+            delta=text,
+            sequence_number=sequence_number,
+        )
+
+    from litellm.exceptions import MidStreamFallbackError
+
+    router: Final = _InjectedFallbackRouter(_AsyncList([delta(0, "c"), delta(1, "d")]))
+    primary: Final = _make_responses_iterator(
+        chunks=[delta(0, "a"), delta(1, "b")],
+        error=MidStreamFallbackError(
+            message="primary died",
+            model="primary",
+            llm_provider="anthropic",
+            is_pre_first_chunk=False,
+            generated_content="ab",
+        ),
+        model="primary",
+    )
+
+    wrapped: Final = await router._aresponses_streaming_iterator(
+        response=primary,
+        initial_kwargs={"model": "primary", "stream": True, "input": "Hi", "original_generic_function": litellm.aresponses},
+    )
+    events: Final = [event async for event in wrapped]
+
+    assert [(event.delta, event.sequence_number) for event in events] == [("a", 0), ("b", 1), ("c", 2), ("d", 3)]
+
+
+
+@pytest.mark.asyncio
+async def test_aresponses_stream_fallback_keeps_higher_numbers_and_passes_unnumbered_events():
+    from litellm.exceptions import MidStreamFallbackError
+    from litellm.types.llms.openai import OutputTextDeltaEvent, ResponsesAPIStreamEvents
+
+    def delta(text: str) -> OutputTextDeltaEvent:
+        return OutputTextDeltaEvent(
+            type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA, item_id="msg_1", output_index=0, content_index=0, delta=text
+        )
+
+    def numbered(sequence_number: int, text: str) -> OutputTextDeltaEvent:
+        return delta(text).model_copy(update={"sequence_number": sequence_number})
+
+    router: Final = _InjectedFallbackRouter(_AsyncList([numbered(7, "c"), delta("d"), numbered(8, "e")]))
+    primary: Final = _make_responses_iterator(
+        chunks=[numbered(0, "a"), numbered(1, "b")],
+        error=MidStreamFallbackError(
+            message="primary died",
+            model="primary",
+            llm_provider="anthropic",
+            is_pre_first_chunk=False,
+            generated_content="ab",
+        ),
+        model="primary",
+    )
+
+    wrapped: Final = await router._aresponses_streaming_iterator(
+        response=primary,
+        initial_kwargs={"model": "primary", "stream": True, "input": "Hi", "original_generic_function": litellm.aresponses},
+    )
+    events: Final = [event async for event in wrapped]
+
+    assert [(event.delta, event.get("sequence_number")) for event in events] == [
+        ("a", 0),
+        ("b", 1),
+        ("c", 7),
+        ("d", None),
+        ("e", 8),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_aresponses_stream_without_fallback_passes_upstream_numbers_unchanged():
+    from litellm.types.llms.openai import OutputTextDeltaEvent, ResponsesAPIStreamEvents
+
+    def delta(sequence_number: int, text: str) -> OutputTextDeltaEvent:
+        return OutputTextDeltaEvent(
+            type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA,
+            item_id="msg_1",
+            output_index=0,
+            content_index=0,
+            delta=text,
+            sequence_number=sequence_number,
+        )
+
+    router: Final = _InjectedFallbackRouter(_AsyncList([]))
+    primary: Final = _make_responses_iterator(
+        chunks=[delta(0, "a"), delta(1, "b"), delta(1, "c"), delta(0, "d")], model="primary"
+    )
+
+    wrapped: Final = await router._aresponses_streaming_iterator(
+        response=primary,
+        initial_kwargs={"model": "primary", "stream": True, "input": "Hi", "original_generic_function": litellm.aresponses},
+    )
+    events: Final = [event async for event in wrapped]
+
+    assert [(event.delta, event.sequence_number) for event in events] == [("a", 0), ("b", 1), ("c", 1), ("d", 0)]
+
+
+@pytest.mark.asyncio
+async def test_aresponses_stream_fallback_continues_above_the_highest_number_the_primary_sent():
+    from litellm.exceptions import MidStreamFallbackError
+    from litellm.types.llms.openai import OutputTextDeltaEvent, ResponsesAPIStreamEvents
+
+    def delta(sequence_number: int, text: str) -> OutputTextDeltaEvent:
+        return OutputTextDeltaEvent(
+            type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA,
+            item_id="msg_1",
+            output_index=0,
+            content_index=0,
+            delta=text,
+            sequence_number=sequence_number,
+        )
+
+    router: Final = _InjectedFallbackRouter(_AsyncList([delta(0, "d")]))
+    primary: Final = _make_responses_iterator(
+        chunks=[delta(0, "a"), delta(3, "b"), delta(1, "c")],
+        error=MidStreamFallbackError(
+            message="primary died",
+            model="primary",
+            llm_provider="anthropic",
+            is_pre_first_chunk=False,
+            generated_content="abc",
+        ),
+        model="primary",
+    )
+
+    wrapped: Final = await router._aresponses_streaming_iterator(
+        response=primary,
+        initial_kwargs={"model": "primary", "stream": True, "input": "Hi", "original_generic_function": litellm.aresponses},
+    )
+    events: Final = [event async for event in wrapped]
+
+    assert [(event.delta, event.sequence_number) for event in events] == [("a", 0), ("b", 3), ("c", 1), ("d", 4)]
+
+
+@pytest.mark.asyncio
 async def test_aresponses_streaming_iterator_unwraps_content_policy_trigger_for_fallback_dispatch():
     """The fallback dispatch matches on the trigger's own type, so the wrapper must hand it the
     ContentPolicyViolationError carried inside MidStreamFallbackError, not the envelope."""
@@ -7371,7 +7647,8 @@ def test_get_wildcard_deployment_usable_by_team_prefers_the_team_pattern():
         pytest.param(False, "rwild-chat", "team-r", ("team-r-wildcard",), id="team-pattern-when-no-proxy-wide-match"),
         pytest.param(False, "rwild-chat", "team-b", (), id="another-teams-pattern-never-serves"),
         pytest.param(False, "rwild-chat", None, (), id="no-team-no-team-pattern"),
-        pytest.param(True, "rwild-chat", "team-r", ("catch-all",), id="proxy-wide-pattern-beats-the-team-pattern"),
+        pytest.param(True, "rwild-chat", "team-r", ("team-r-wildcard",), id="team-pattern-beats-the-proxy-wide-pattern"),
+        pytest.param(True, "rwild-chat", "team-b", ("catch-all",), id="another-team-falls-through-to-proxy-wide"),
         pytest.param(True, "ptu-chat", "team-r", ("ptu-wildcard",), id="only-the-most-specific-proxy-wide-pattern"),
     ],
 )
@@ -7405,6 +7682,39 @@ def test_wildcard_route_deployments_is_the_one_pattern_routing_serves_from(
 
     assert tuple(Deployment.model_validate(d).model_info.id for d in served) == expected_ids
     assert tuple(Deployment.model_validate(d).model_info.id for d in early_deployments) == expected_ids
+
+
+@pytest.mark.parametrize(
+    ("team_id", "expected_id"),
+    [
+        pytest.param("team-a", "team-a-byok", id="team-key-uses-its-own-byok-wildcard"),
+        pytest.param("team-b", "shared-openrouter", id="team-without-byok-uses-the-shared-wildcard"),
+        pytest.param(None, "shared-openrouter", id="key-without-team-uses-the-shared-wildcard"),
+    ],
+)
+def test_team_byok_wildcard_is_served_before_a_proxy_wide_wildcard_of_the_same_name(
+    team_id: str | None, expected_id: str
+):
+    """Regression: a proxy-wide openrouter/* shadowed a team's own openrouter/* BYOK deployment for that team's keys."""
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "model_name_team-a_internal",
+                "litellm_params": {"model": "openrouter/*", "api_key": "sk-team-a"},
+                "model_info": {"id": "team-a-byok", "team_id": "team-a", "team_public_model_name": "openrouter/*"},
+            },
+            {
+                "model_name": "openrouter/*",
+                "litellm_params": {"model": "openrouter/*", "api_key": "sk-shared"},
+                "model_info": {"id": "shared-openrouter"},
+            },
+        ]
+    )
+    requested: Final = "openrouter/openai/gpt-5-nano"
+
+    served: Final = router.wildcard_route_deployments(requested, team_id)
+
+    assert tuple(Deployment.model_validate(d).model_info.id for d in served) == (expected_id,)
 
 
 def test_get_deployment_credentials_with_provider_aws_bedrock_runtime_endpoint():
