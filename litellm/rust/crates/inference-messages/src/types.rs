@@ -204,6 +204,7 @@ mod tests {
             "drops_unsupported_params": true
         }),
         MessagesShaping {
+            vertex_supported_regions: Vec::new(),
             settings: MessagesSettings {
                 drop_params: true,
                 reasoning_auto_summary: true,
