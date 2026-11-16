@@ -2,8 +2,6 @@
 pub enum Error {
     #[error(transparent)]
     Http(#[from] litellm_http::Error),
-    #[error("environment_variables values must be strings, numbers or booleans")]
-    Environment,
     #[error("MCP host does not yet support configured setting {0}")]
     McpSetting(String),
     #[error("MCP host does not yet support guardrails or policies")]

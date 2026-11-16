@@ -20,7 +20,7 @@ use aws_sdk_secretsmanager::{
 use litellm_auth_aws::constants::{
     AWS_ACCESS_KEY_ID, AWS_REGION, AWS_REGION_NAME, AWS_SECRET_ACCESS_KEY,
 };
-use litellm_core_utils::settings::Lookup;
+use litellm_env::Lookup;
 use litellm_secret_value::SecretValue;
 use litellm_secrets_types::{
     AwsOperationContext, BaseSecretManager, KeyManagementSettings, RotationError, Secret,
