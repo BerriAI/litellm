@@ -551,6 +551,14 @@ async def test_url_with_format_param(model, sync_mode, monkeypatch):
         assert (base64.b64encode(WHITE_PNG).decode() in json_str) is fetches_image
 
 
+def test_completion_empty_model_name_raises():
+    with pytest.raises(litellm.BadRequestError):
+        litellm.completion(
+            model="",
+            messages=[{"role": "user", "content": "hello"}],
+        )
+
+
 def test_bedrock_latency_optimized_inference():
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
