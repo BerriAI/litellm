@@ -65,7 +65,11 @@ litellm-secrets-types.workspace = true
 litellm-llms-types.workspace = true
 litellm-router-types.workspace = true
 litellm-router-core.workspace = true
+litellm-config.workspace = true
+litellm-gateway-auth-core.workspace = true
+http.workspace = true
 litellm-host-python.workspace = true
+parking_lot.workspace = true
 litellm-model-catalog.workspace = true
 litellm-model-catalog-refresh.workspace = true
 litellm-token-counter = { path = "../token-counter", default-features = false }
