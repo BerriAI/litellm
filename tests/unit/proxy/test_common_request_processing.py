@@ -11047,6 +11047,58 @@ class TestStreamingClientDisconnectBilling:
         )
 
     @pytest.mark.asyncio
+    async def test_disconnect_billing_stamps_abort_finish_reason_when_missing_or_default(self):
+        from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+        from litellm.utils import ModelResponseListIterator
+
+        model = "gpt-4o-mini"
+        messages = [{"role": "user", "content": "hi"}]
+        for initial_finish_reason, expected_finish_reason in (
+            (None, "abort"),
+            ("length", "length"),
+        ):
+            recorder = _RecordingSuccessLogger()
+            logging_obj = LiteLLMLoggingObj(
+                model=model,
+                messages=messages,
+                stream=True,
+                call_type="acompletion",
+                start_time=datetime.datetime.now(datetime.timezone.utc),
+                litellm_call_id=f"abort-finish-reason-{initial_finish_reason}",
+                function_id="test",
+                dynamic_async_success_callbacks=[recorder],
+            )
+            logging_obj.update_environment_variables(
+                model=model,
+                user=None,
+                optional_params={},
+                litellm_params={"litellm_call_id": f"abort-finish-reason-{initial_finish_reason}"},
+            )
+            chunks = [StreamingChoices(index=0, delta=Delta(role="assistant", content="partial"))]
+            if initial_finish_reason is not None:
+                chunks.append(StreamingChoices(index=0, delta=Delta(content=""), finish_reason=initial_finish_reason))
+            response = CustomStreamWrapper(
+                completion_stream=ModelResponseListIterator(
+                    model_responses=[
+                        ModelResponseStream(id="chatcmpl-abort", created=1741037890, model=model, choices=[c])
+                        for c in chunks
+                    ]
+                ),
+                model=model,
+                custom_llm_provider="openai",
+                logging_obj=logging_obj,
+                stream_options=None,
+            )
+            stream_iter = response.__aiter__()
+            for _ in chunks:
+                await stream_iter.__anext__()
+            billed = await _bill_partial_streamed_spend_on_disconnect({"litellm_logging_obj": logging_obj}, response)
+            await asyncio.wait_for(recorder.logged.wait(), timeout=5)
+            assert billed is True
+            assert recorder.success_events[0]["response_obj"].choices[0].finish_reason == expected_finish_reason
+
+    @pytest.mark.asyncio
     async def test_completed_stream_does_not_double_bill_on_late_disconnect(self):
         recorder = _RecordingSuccessLogger()
         original_callbacks = litellm.callbacks

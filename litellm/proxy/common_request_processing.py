@@ -613,6 +613,16 @@ async def _bill_partial_streamed_spend_on_disconnect(request_data: dict, respons
     ) and not _assembled_model_is_the_name_the_client_asked_for(request_data, partial_response.model)
     if isinstance(wrapper_model, str) and wrapper_model and not builder_recovered_the_routed_model:
         partial_response.model = wrapper_model
+    # When the client disconnects mid-stream, the proxy closes the upstream
+    # connection before the upstream's abort frame can arrive. The partial
+    # response assembled from earlier chunks therefore has a missing/default
+    # finish_reason ("stop"), which would misreport an aborted generation as
+    # a natural completion in spend logs. Stamp "abort" while preserving any
+    # non-default finish_reason (e.g. "length", "tool_calls") already received.
+    partial_choices: Final = getattr(partial_response, "choices", None) or []
+    for choice in partial_choices:
+        if getattr(choice, "finish_reason", None) in (None, "stop"):
+            choice.finish_reason = "abort"
     partial_usage: Final = getattr(partial_response, "usage", None)
     if isinstance(partial_usage, Usage):
         backfill_missing_cache_usage_fields(partial_usage)
