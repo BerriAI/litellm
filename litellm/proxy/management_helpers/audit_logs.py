@@ -22,7 +22,7 @@ from litellm.repositories.table_repositories import AuditLogRepository
 from litellm.types.utils import StandardAuditLogPayload
 
 if TYPE_CHECKING:
-    from litellm.integrations.s3_v3 import S3Logger
+    from litellm.integrations.s3_v2 import S3Logger
 
 _audit_log_callback_cache: Final[dict[str, "CustomLogger | S3Logger"]] = {}
 ALLOW_LITELLM_CHANGED_BY_HEADER_METADATA_KEY: Final = "allow_litellm_changed_by_header"
@@ -78,9 +78,9 @@ def _resolve_audit_log_callback(name: str) -> "CustomLogger | S3Logger | None":
     instance: CustomLogger | S3Logger | None
     audit_params: Final[Mapping[str, object] | None] = getattr(litellm, "s3_audit_callback_params", None)
     if name == "s3_v2" and audit_params is not None:
-        from litellm.integrations import s3_v3
+        from litellm.integrations import s3_v2
 
-        instance = s3_v3.S3Logger(s3_callback_params_override=audit_params)
+        instance = s3_v2.S3Logger(s3_callback_params_override=audit_params)
     else:
         from litellm.litellm_core_utils.litellm_logging import (
             _init_custom_logger_compatible_class,

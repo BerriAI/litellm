@@ -16,7 +16,7 @@ use serde_json::Value;
 use crate::{
     Error,
     anthropic::{
-        beta_gated_fields::strip_beta_gated_system_messages,
+        beta_gated_fields::strip_beta_gated_request,
         beta_headers::BetaPolicy,
         common_utils::{
             API_KEY_PLACEMENT, existing_betas, map_messages, strip_raw_unsignable_thinking_blocks,
@@ -39,7 +39,7 @@ use crate::{
     base_llm::{
         auth::{AuthScheme, Headers, ValidatedEnvironment},
         messages::{
-            context::{MessagesShapeOptions, MessagesTransformContext, UnparsedMessages},
+            context::{MessagesShapeOptions, MessagesTransformContext},
             normalization::{normalize_system_role_messages, strip_cache_control_scope},
             transformation::BaseMessagesConfig,
         },
@@ -64,10 +64,6 @@ impl BaseMessagesConfig for AzureAnthropicMessagesConfig {
         }
     }
 
-    fn logs_dropped_params(&self) -> bool {
-        true
-    }
-
     fn retry_after_http_error(
         &self,
         status: u16,
@@ -83,7 +79,7 @@ impl BaseMessagesConfig for AzureAnthropicMessagesConfig {
         request: MessagesRequest,
         options: MessagesShapeOptions,
     ) -> Result<MessagesRequest, Error> {
-        shape_anthropic_messages_request(request, options.reading_unparsed_messages())
+        shape_anthropic_messages_request(request, options)
     }
 
     fn request_for_url(&self, request: MessagesRequest, _url: &str) -> MessagesRequest {
@@ -116,12 +112,7 @@ impl BaseMessagesConfig for AzureAnthropicMessagesConfig {
         request: MessagesRequest,
         context: &MessagesTransformContext,
     ) -> Result<MessagesRequest, Error> {
-        transform_messages_request(
-            request,
-            &context
-                .keeping_display_updates()
-                .reading_unparsed_messages(),
-        )
+        transform_messages_request(request, &context.keeping_display_updates())
     }
 
     fn secret_names(&self) -> &'static [&'static str] {
@@ -230,30 +221,25 @@ impl BaseMessagesConfig for AzureAnthropicMessagesConfig {
             headers,
             request,
             BetaProvider::AzureAi,
-            UnparsedMessages::Read,
         ))
     }
 
-    /// Python's transform strips the system fields the final header does not unlock, then
-    /// normalizes system roles and drops `cache_control.scope`, all after the betas were chosen
-    /// from the request as sent.
+    /// Python's transform strips the thinking and system fields the final header does not
+    /// unlock, then normalizes system roles and drops `cache_control.scope`, all after the betas
+    /// were chosen from the request as sent.
     fn finalize_request(
         &self,
         request: MessagesRequest,
-        headers: &Headers,
+        headers: Headers,
         context: &MessagesTransformContext,
-    ) -> MessagesRequest {
-        let stripped = MessagesRequest {
-            messages: strip_beta_gated_system_messages(
-                request.messages,
-                &existing_betas(headers),
-                context.drops_unsupported_params,
-                &request.model,
-                BetaProvider::AzureAi,
-            ),
-            ..request
-        };
-        strip_cache_control_scope(normalize_system_role_messages(
+    ) -> Result<(MessagesRequest, Headers), Error> {
+        let stripped = strip_beta_gated_request(
+            request,
+            &existing_betas(&headers),
+            context.drops_unsupported_params,
+            BetaProvider::AzureAi,
+        );
+        let normalized = strip_cache_control_scope(normalize_system_role_messages(
             stripped,
             context
                 .thinking
@@ -261,7 +247,8 @@ impl BaseMessagesConfig for AzureAnthropicMessagesConfig {
                 .supports_mid_conversation_system,
             context.drops_unsupported_params,
             BetaProvider::AzureAi,
-        ))
+        ));
+        Ok((normalized, headers))
     }
 }
 
@@ -488,7 +475,12 @@ mod tests {
             .iter()
             .map(|(name, value)| (name.to_string(), value.to_string()))
             .collect();
-        to_value(AZURE_ANTHROPIC_MESSAGES_CONFIG.finalize_request(request, &headers, context))
+        to_value(
+            AZURE_ANTHROPIC_MESSAGES_CONFIG
+                .finalize_request(request, headers, context)
+                .expect("finalized request")
+                .0,
+        )
     }
 
     #[rstest]

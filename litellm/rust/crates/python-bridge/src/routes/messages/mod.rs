@@ -1,6 +1,7 @@
 mod agentic;
 mod answer;
 mod host;
+mod model_catalog;
 mod modify_params;
 mod pre_request;
 mod requests_reason;

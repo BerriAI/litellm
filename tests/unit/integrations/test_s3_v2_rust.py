@@ -16,7 +16,7 @@ from urllib.parse import quote, unquote, urlsplit, urlunsplit
 
 import pytest
 import requests
-from tests.unit.integrations.s3_v3_rust_support import (
+from tests.unit.integrations.s3_v2_rust_support import (
     DROP,
     Received,
     ScriptedBucket,
@@ -27,8 +27,8 @@ from tests.unit.integrations.s3_v3_rust_support import (
 )
 
 import litellm
-from litellm.integrations import s3_v3
-from litellm.integrations.s3_v3 import S3Logger
+from litellm.integrations import s3_v2
+from litellm.integrations.s3_v2 import S3Logger
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.rust_bridge import _native
 from litellm.types.integrations.s3_v2 import S3LoggerSettings
@@ -83,7 +83,7 @@ async def _upload(logger: S3Logger, payload: Mapping[str, object], start_time: d
 
 
 def _failures() -> object:
-    return patch.object(s3_v3._Host, "callback_failed")
+    return patch.object(s3_v2._Host, "callback_failed")
 
 
 def _uploaded(put: Received) -> dict[str, object]:
@@ -96,6 +96,20 @@ def _assert_backoff_gaps(puts: list[Received]) -> None:
     gaps: Final = [later.at - earlier.at for earlier, later in zip(puts, puts[1:])]
     for attempt, gap in enumerate(gaps):
         assert (1 << attempt) * 0.5 <= gap < (1 << attempt) * 1.5 + 0.25, (attempt, gap)
+
+
+_LOGGED_BACKOFF: Final = re.compile(r"retrying in (\d+\.\d+)s")
+
+
+def _assert_logged_backoff(puts: list[Received], caplog: pytest.LogCaptureFixture) -> None:
+    waits: Final = [
+        float(match.group(1)) for record in caplog.records if (match := _LOGGED_BACKOFF.search(record.getMessage()))
+    ]
+    gaps: Final = [later.at - earlier.at for earlier, later in zip(puts, puts[1:])]
+    assert len(waits) == len(gaps), (waits, gaps)
+    for attempt, (wait, gap) in enumerate(zip(waits, gaps)):
+        assert (1 << attempt) * 0.5 <= wait <= (1 << attempt) * 1.5, (attempt, wait)
+        assert gap >= wait - 0.005, (attempt, wait, gap)
 
 
 class TestS3V2UnitTests:
@@ -2117,14 +2131,14 @@ async def test_batch_line_items_are_serialized_and_hashed_off_the_event_loop(
     import threading
 
     logger: Final = _s3_logger_answering(monkeypatch, bucket, 200, "cold/")
-    serialize: Final = s3_v3.batch_line_items_ndjson
+    serialize: Final = s3_v2.batch_line_items_ndjson
     threads: Final[dict[str, threading.Thread]] = {}
 
     def _serialize(payload: object) -> str:
         threads["serialize"] = threading.current_thread()
         return serialize(payload)
 
-    monkeypatch.setattr(s3_v3, "batch_line_items_ndjson", _serialize)
+    monkeypatch.setattr(s3_v2, "batch_line_items_ndjson", _serialize)
 
     await logger.async_log_batch_line_items(_batch_line_items_payload())
 
@@ -2590,12 +2604,13 @@ async def test_async_upload_signs_with_one_frozen_credential_snapshot(
 
 @pytest.mark.asyncio
 async def test_async_upload_retries_403_with_fresh_credentials_and_signature(
-    monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket, rotating_profile: str
+    monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket, rotating_profile: str, caplog: pytest.LogCaptureFixture
 ) -> None:
     bucket.reply("_test-403.json", (403, _SIGNATURE_DOES_NOT_MATCH), (200, ""))
     logger: Final = _profile_logger(monkeypatch, bucket, rotating_profile)
 
-    await _upload(logger, _payload("test-403"))
+    with caplog.at_level(logging.DEBUG, logger="LiteLLM"):
+        await _upload(logger, _payload("test-403"))
 
     requests: Final = bucket.puts()
     assert len(requests) == 2
@@ -2605,22 +2620,22 @@ async def test_async_upload_retries_403_with_fresh_credentials_and_signature(
     assert second_key == second_token
     assert int(second_key) > int(first_key)
     assert requests[1].headers["authorization"] != requests[0].headers["authorization"]
-    _assert_backoff_gaps(requests)
+    _assert_logged_backoff(requests, caplog)
     assert logger.sink.queued_keys() == []
 
 
 @pytest.mark.asyncio
 async def test_async_upload_exhausts_403_retries_through_production_http_handler(
-    monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket, rotating_profile: str
+    monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket, rotating_profile: str, caplog: pytest.LogCaptureFixture
 ) -> None:
     bucket.reply("_test-403-exhausted.json", (403, _SIGNATURE_DOES_NOT_MATCH))
     logger: Final = _profile_logger(monkeypatch, bucket, rotating_profile)
 
-    with _failures() as failure:
+    with _failures() as failure, caplog.at_level(logging.DEBUG, logger="LiteLLM"):
         await _upload(logger, _payload("test-403-exhausted"))
 
     assert len(bucket.puts()) == 3
-    _assert_backoff_gaps(bucket.puts())
+    _assert_logged_backoff(bucket.puts(), caplog)
     failure.assert_called_once_with()
 
 

@@ -198,6 +198,7 @@ from litellm.proxy.spend_tracking.committed_spend import (
     committed_spend_tracked,
     read_admission_committed_spend,
 )
+from litellm.proxy.spend_tracking.native_budgets import native_budget_decision
 from litellm.proxy.spend_tracking.spend_counter_batch import (
     bind_admission_counter_keys,
     release_spend_counter_batch,
@@ -2322,12 +2323,22 @@ async def _small_preflight_failure_json(request: Request) -> Mapping[str, object
     }
 
 
+def _is_bodyless_get(request: Request) -> bool:
+    return (
+        request.scope.get("method") == "GET"
+        and request.headers.get("content-length", "0") == "0"
+        and request.headers.get("transfer-encoding") is None
+    )
+
+
 async def _reject_from_headers_before_reading_body(
     request: Request, api_key: str | None, custom_litellm_key_header: str | None, route: str
 ) -> None:
     """Refuse a request its headers already condemn, a blocked key or an exhausted key limit, before reading its body.
 
     Only a key already in the cache is considered, so a miss changes nothing and the full auth path still runs.
+    The limit is only checked where a body is declared and the route is metered, because model listing, token
+    counting and other GET discovery routes never reach the limiter and must keep answering an exhausted key.
     A retry flood of large payloads against a limited key used to buffer every payload just to answer 429.
     """
     if not RouteChecks.is_llm_api_route(route=route):
@@ -2376,6 +2387,8 @@ async def _reject_from_headers_before_reading_body(
             resolved_identity=cached_key,
             dispatched_call_type=str(request_data["call_type"]) if request_data["call_type"] is not None else None,
         )
+        return
+    if RouteChecks.is_unbilled_route(route) or _is_bodyless_get(request):
         return
     limiter: Final = proxy_logging_obj.get_proxy_hook("parallel_request_limiter")
     if not isinstance(limiter, PROXY_MaxParallelRequestsHandler_v3):
@@ -3119,7 +3132,7 @@ async def user_api_key_auth_builder(
 
                     for k, v in team_obj_dict.items():
                         field_name = f"team_{k}"
-                        if field_name in valid_token.__fields__:
+                        if field_name in type(valid_token).model_fields:
                             setattr(valid_token, field_name, v)
             except Exception as e:
                 verbose_logger.debug(e)  # moving from .warning to .debug as it spams logs when team missing from cache.
@@ -3420,7 +3433,16 @@ async def validate_resolved_virtual_key(  # noqa: C901  # Preserve ordering of e
                                 fallback_spend=team_member_spend,
                                 max_budget=team_member_budget,
                             )
-                        if team_member_spend >= team_member_budget:
+                        native: Final = native_budget_decision(
+                            {
+                                "check": "team_member_positive",
+                                "spend": team_member_spend,
+                                "max_budget": team_member_budget,
+                                "user_id": valid_token.user_id,
+                                "team_id": valid_token.team_id,
+                            }
+                        )
+                        if native.refused:
                             # common_checks sends this alert on requests that get past here, so only the
                             # request rejected here sends it from the builder.
                             team_member_max_budget_alert_check(
@@ -3434,17 +3456,7 @@ async def validate_resolved_virtual_key(  # noqa: C901  # Preserve ordering of e
                                 spend=team_member_spend,
                                 max_budget=team_member_budget,
                             )
-                            _entity_id: Final = f"{valid_token.user_id}:{valid_token.team_id}"
-                            raise litellm.BudgetExceededError(
-                                current_cost=team_member_spend,
-                                max_budget=team_member_budget,
-                                message=(
-                                    f"Budget has been exceeded! TeamMember={_entity_id} "
-                                    f"Current cost: {team_member_spend}, Max budget: {team_member_budget}"
-                                ),
-                                entity_type=Litellm_EntityType.TEAM_MEMBER.value,
-                                entity_id=_entity_id,
-                            )
+                            raise native.error()
 
         # Check 3. If token is expired
         if valid_token.expires is not None:

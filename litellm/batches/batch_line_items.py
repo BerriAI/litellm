@@ -24,7 +24,7 @@ from litellm.types.utils import (
 )
 
 if TYPE_CHECKING:
-    from litellm.integrations.s3_v3 import S3Logger
+    from litellm.integrations.s3_v2 import S3Logger
 
 BatchFileProvider: TypeAlias = Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "mistral"]
 
@@ -242,7 +242,7 @@ async def _deliver(
 
 
 def _resolve_logger(callback: "litellm.CALLBACK_TYPES | S3Logger") -> "CustomLogger | S3Logger | None":
-    from litellm.integrations.s3_v3 import S3Logger
+    from litellm.integrations.s3_v2 import S3Logger
 
     match callback:
         case CustomLogger() | S3Logger():

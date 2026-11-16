@@ -146,7 +146,37 @@ def test_empty_constraints_match_nothing() -> None:
     )
 
     assert catalog.decision(RouteContext(Route.OCR), rules) is Decision.PYTHON
-    assert (
-        catalog.decision(RouteContext(Route.OCR, features=frozenset({Feature.STREAMING})), rules)
-        is Decision.PYTHON
+    assert catalog.decision(RouteContext(Route.OCR, features=frozenset({Feature.STREAMING})), rules) is Decision.PYTHON
+
+
+@pytest.mark.parametrize(
+    ("context", "expected"),
+    (
+        (RouteContext(Route.MESSAGES, provider="bedrock", target=Target.BEDROCK_INVOKE), Decision.RUST_REQUIRED),
+        (RouteContext(Route.MESSAGES, provider="bedrock", target=Target.MESSAGES), Decision.PYTHON),
+        (RouteContext(Route.MESSAGES, provider="bedrock", target=Target.CHAT_COMPLETIONS), Decision.PYTHON),
+        (RouteContext(Route.MESSAGES, provider="anthropic", target=Target.BEDROCK_INVOKE), Decision.PYTHON),
+        (
+            RouteContext(
+                Route.MESSAGES,
+                provider="bedrock",
+                target=Target.BEDROCK_INVOKE,
+                features=frozenset({Feature.STREAMING}),
+            ),
+            Decision.PYTHON,
+        ),
+    ),
+)
+def test_a_provider_and_target_rule_admits_only_bedrock_invoke(context: RouteContext, expected: Decision) -> None:
+    rules: Final[Rules] = (
+        RouteRule(Route.MESSAGES, Rollout.PYTHON_ONLY, features=frozenset({Feature.STREAMING})),
+        RouteRule(
+            Route.MESSAGES,
+            Rollout.RUST_REQUIRED,
+            providers=frozenset({"bedrock"}),
+            targets=frozenset({Target.BEDROCK_INVOKE}),
+        ),
+        RouteRule(Route.MESSAGES, Rollout.PYTHON_ONLY),
     )
+
+    assert catalog.decision(context, rules) is expected

@@ -14,13 +14,13 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.custom_logger_v2.enums import Field, Hook
 from litellm.integrations.custom_logger_v2.field_sources import HookArgs
 from litellm.integrations.custom_logger_v2.manifest import build_manifest
-from litellm.integrations.s3_v3 import STRIP_CALLBACK_NAME, S3Logger, S3StripBase64Files
+from litellm.integrations.s3_v2 import STRIP_CALLBACK_NAME, S3Logger, S3StripBase64Files
 from litellm.litellm_core_utils import litellm_logging
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.rust_bridge import _native
 from litellm.types.integrations.custom_logger_v2 import Outcome
 from litellm.types.utils import ModelResponse
-from tests.unit.integrations.s3_v3_rust_support import ScriptedBucket, scripted_bucket
+from tests.unit.integrations.s3_v2_rust_support import ScriptedBucket, scripted_bucket
 
 pytestmark = pytest.mark.skipif(not hasattr(_native, "NativeS3Log"), reason="the built _native has no NativeS3Log")
 

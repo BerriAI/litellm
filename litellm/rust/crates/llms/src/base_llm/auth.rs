@@ -9,7 +9,7 @@ use litellm_auth::{AuthServices, CredentialPlacement, TokenProviderHandle};
 use litellm_auth_azure::AzureAuthInputs;
 use litellm_secret_value::SecretValue;
 
-use litellm_auth_aws::{AwsCredentialSource, SigV4Signer};
+use litellm_auth_aws::{AwsCredentialSource, CallerSigningHeaders, SigV4Signer};
 use litellm_auth_gcp::VertexConfig;
 use litellm_http::request::with_header;
 
@@ -57,6 +57,7 @@ pub enum AuthScheme {
         region: String,
         service: &'static str,
         credentials: Box<AwsCredentialSource>,
+        caller_headers: CallerSigningHeaders,
     },
 }
 
@@ -191,11 +192,13 @@ pub async fn resolve_auth(
             region,
             service,
             credentials,
+            caller_headers,
         } => Ok(Authenticated {
             headers,
             signer: Some(
                 SigV4Signer::resolve(&services.aws, region, service, *credentials, env_lookup)
-                    .await?,
+                    .await?
+                    .with_caller_headers(caller_headers),
             ),
         }),
     }
@@ -445,6 +448,7 @@ mod tests {
                     None,
                     "test",
                 ))),
+                caller_headers: CallerSigningHeaders::Dropped,
             },
         )
         .await;

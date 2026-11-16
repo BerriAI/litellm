@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
 
-use crate::base_llm::messages::context::{MessagesModelCapabilities, UnparsedMessages};
+use crate::base_llm::messages::context::MessagesModelCapabilities;
 use fancy_regex::Regex;
 use litellm_auth::CredentialPlacement;
 use litellm_secret_value::SecretValue;
@@ -322,26 +322,19 @@ pub fn has_advisor_tool(tools: Option<&[Recognized<MessagesTool>]>) -> bool {
 pub fn requires_native_compaction_beta(
     compaction: Option<&Value>,
     messages: &[Recognized<Message>],
-    unparsed: UnparsedMessages,
 ) -> bool {
-    compaction.is_some()
-        || messages
-            .iter()
-            .any(|message| carries_signed_compaction_block(message, unparsed))
+    compaction.is_some() || messages.iter().any(carries_signed_compaction_block)
 }
 
-/// Python's `carries_signed_compaction_block` reads any mapping, so where unparsed messages are
-/// read a message that did not parse is scanned through its raw content too.
-fn carries_signed_compaction_block(
-    message: &Recognized<Message>,
-    unparsed: UnparsedMessages,
-) -> bool {
+/// Python's `carries_signed_compaction_block` reads any mapping, so a message that did not parse
+/// is scanned through its raw content too.
+fn carries_signed_compaction_block(message: &Recognized<Message>) -> bool {
     match message {
         Recognized::Known(message) => message.blocks().iter().any(|block| {
             block.is_type(ContentBlockType::Compaction)
                 && block.signature.as_deref().is_some_and(|s| !s.is_empty())
         }),
-        Recognized::Unrecognized(Value::Object(fields)) if unparsed.read() => matches!(
+        Recognized::Unrecognized(Value::Object(fields)) => matches!(
             fields.get("content"),
             Some(Value::Array(blocks)) if blocks.iter().any(|block| {
                 block.get("type").and_then(Value::as_str) == Some("compaction")
@@ -2881,33 +2874,19 @@ mod tests {
         #[case] messages: Value,
         #[case] expected: bool,
     ) {
-        for unparsed in [UnparsedMessages::Read, UnparsedMessages::Skipped] {
-            assert_eq!(
-                requires_native_compaction_beta(
-                    compaction.as_ref(),
-                    &history(messages.clone()),
-                    unparsed
-                ),
-                expected
-            );
-        }
+        assert_eq!(
+            requires_native_compaction_beta(compaction.as_ref(), &history(messages)),
+            expected
+        );
     }
 
-    #[rstest]
-    #[case::read(UnparsedMessages::Read, true)]
-    #[case::skipped(UnparsedMessages::Skipped, false)]
-    fn a_signed_compaction_block_in_an_unparsed_message_counts_only_where_unparsed_messages_are_read(
-        #[case] unparsed: UnparsedMessages,
-        #[case] expected: bool,
-    ) {
+    #[test]
+    fn a_signed_compaction_block_in_an_unparsed_message_counts() {
         let messages = history(json!([{"role": "assistant", "content": [
             {"type": "text", "text": 5},
             {"type": "compaction", "content": "c", "signature": "s"}
         ]}]));
-        assert_eq!(
-            requires_native_compaction_beta(None, &messages, unparsed),
-            expected
-        );
+        assert!(requires_native_compaction_beta(None, &messages));
     }
 
     #[rstest]
@@ -3083,6 +3062,7 @@ mod tests {
                 supports_speed: false,
                 supports_mid_conversation_system: false,
                 effort_tiers: tiers(false, false, false, false, false, false),
+                bedrock: Default::default(),
             }
         );
         assert_eq!(

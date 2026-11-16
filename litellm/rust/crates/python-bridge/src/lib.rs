@@ -1,3 +1,4 @@
+mod budgets;
 mod cache;
 mod callable;
 mod coercion;
@@ -27,7 +28,11 @@ mod _native {
     use pyo3::{prelude::*, types::PyModule};
 
     #[pymodule_export]
-    use crate::db::NativeDatabase;
+    use crate::budgets::NativeBudgets;
+    #[pymodule_export]
+    use crate::budgets::budget_check_decision;
+    #[pymodule_export]
+    use crate::db::{NativeDatabase, NativeDatabaseFailure};
     #[cfg(feature = "panic-test")]
     #[pymodule_export]
     use crate::diagnostics::_panic_for_test;
@@ -184,6 +189,7 @@ mod tests {
                 "NativeClickHouseSpendConfig",
                 "NativeClickHouseSpendStorage",
                 "NativeDatabase",
+                "NativeDatabaseFailure",
                 "trace_encode_error",
                 "bundled_model_cost_map",
                 "NativeModelCostMap",
@@ -206,6 +212,8 @@ mod tests {
                 "process_state_started",
                 "reserve_process_for_forking",
                 "unsupported_tls_settings",
+                "NativeBudgets",
+                "budget_check_decision",
                 "NativeS3Log",
             ];
             #[cfg(feature = "huggingface")]
