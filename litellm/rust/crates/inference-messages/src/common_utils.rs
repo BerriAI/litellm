@@ -13,6 +13,7 @@ use litellm_llms::{
 };
 use litellm_llms::{
     bedrock::claude_platform::messages::transformation::BEDROCK_CLAUDE_PLATFORM_MESSAGES_CONFIG,
+    bedrock::messages::mantle_transformation::AMAZON_MANTLE_MESSAGES_CONFIG,
     bedrock_mantle::messages::transformation::BEDROCK_MANTLE_MESSAGES_CONFIG,
 };
 use serde_json::{Map, Value};
@@ -57,7 +58,7 @@ pub(crate) fn messages_provider(provider: LlmProviders, model: &str) -> Option<M
         }
         LlmProviders::Bedrock if has_route_prefix(model, "converse/") => return None,
         LlmProviders::Bedrock if has_route_prefix(model, "mantle/") => {
-            &BEDROCK_MANTLE_MESSAGES_CONFIG
+            &AMAZON_MANTLE_MESSAGES_CONFIG
         }
         LlmProviders::Bedrock if model.contains("claude") => &BEDROCK_ANTHROPIC_MESSAGES_CONFIG,
         LlmProviders::Bedrock => return None,
@@ -192,7 +193,7 @@ mod tests {
         use litellm_llms::{
             base_llm::messages::transformation::BaseMessagesConfig,
             bedrock::claude_platform::messages::transformation::BEDROCK_CLAUDE_PLATFORM_MESSAGES_CONFIG,
-            bedrock_mantle::messages::transformation::BEDROCK_MANTLE_MESSAGES_CONFIG,
+            bedrock::messages::mantle_transformation::AMAZON_MANTLE_MESSAGES_CONFIG,
         };
         let params = litellm_router_types::LitellmParams::default();
         let region = |key: &str| {
@@ -210,7 +211,7 @@ mod tests {
             .config());
         assert_eq!(
             (
-                routed == url(&BEDROCK_MANTLE_MESSAGES_CONFIG),
+                routed == url(&AMAZON_MANTLE_MESSAGES_CONFIG),
                 routed == url(&BEDROCK_CLAUDE_PLATFORM_MESSAGES_CONFIG),
             ),
             (mantle, claude_platform)
