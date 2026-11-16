@@ -8447,7 +8447,11 @@ async def _vector_store_grants(
     """Each identity's own grant. The stores its access groups list count as if they were on its own list.
     A strict team layer can only lose grants without its groups, so it keeps auth's stand-in team."""
     try:
-        team: Final = team_object if "team" in strict_layers else await _team_read_again(valid_token, team_object)
+        team: Final = (
+            team_object
+            if "team" in strict_layers or prisma_client is None
+            else await _team_read_again(valid_token, team_object)
+        )
         group_stores: Final = await access_group_vector_stores(valid_token, team, unreadable="raise")
     except Exception as e:
         # Skipping an unreadable team or group could empty a list and lift the restriction.

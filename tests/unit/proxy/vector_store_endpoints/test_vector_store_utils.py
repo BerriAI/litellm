@@ -486,3 +486,42 @@ async def test_config_only_fallback_enforces_loaded_caller_grants_without_databa
         with pytest.raises(ProxyException) as refused:
             await resolve_vector_store_fallback_plan(primary, caller)
         assert refused.value.code == "401"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("strict", [False, True])
+@pytest.mark.parametrize("team_grants,allowed", [(["primary"], False), (["primary", "backup"], True)])
+async def test_config_only_fallback_enforces_loaded_team_grants_without_database(
+    monkeypatch: pytest.MonkeyPatch, team_grants: list[str], allowed: bool, strict: bool
+):
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.vector_store_endpoints.utils import resolve_vector_store_fallback_plan
+    from litellm.types.vector_stores import LiteLLM_ManagedVectorStore
+    from tests.unit.proxy.vector_store_access_group_state import own_permission
+
+    caller: Final = UserAPIKeyAuth(
+        team_id="custom-auth-team",
+        object_permission=own_permission(["primary", "backup"]),
+        team_object_permission=own_permission(team_grants),
+    )
+    primary: Final = LiteLLM_ManagedVectorStore(
+        vector_store_id="primary",
+        custom_llm_provider="openai",
+        team_id="custom-auth-team",
+        litellm_params={"fallbacks": ["backup"]},
+        is_config=True,
+    )
+    backup: Final = LiteLLM_ManagedVectorStore(
+        vector_store_id="backup", custom_llm_provider="openai", team_id="custom-auth-team", is_config=True
+    )
+    monkeypatch.setattr(litellm, "vector_store_registry", VectorStoreRegistry([primary, backup]))
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {"vector_store_deny_by_default": strict})
+    if allowed:
+        plan: Final = await resolve_vector_store_fallback_plan(primary, caller)
+        assert plan is not None
+        assert tuple(target.store_id for target in plan.targets) == ("primary", "backup")
+    else:
+        with pytest.raises(ProxyException) as refused:
+            await resolve_vector_store_fallback_plan(primary, caller)
+        assert refused.value.code == "401"
