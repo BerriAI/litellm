@@ -1942,6 +1942,18 @@ async def _proxy_lifespan(app: FastAPI, resources: AsyncExitStack) -> AsyncGener
         fail_closed_rate_limit_enforcement=fail_closed_rate_limit_enforcement_enabled(general_settings),
         redis_usage_cache=redis_usage_cache,
     )
+    from litellm.integrations.prompt_cache_alerts.detector import prompt_cache_alert_logger
+    from litellm.proxy.common_utils.encrypt_decrypt_utils import get_salt_key
+    from litellm.repositories.alert_repository import AlertRepository
+
+    prompt_cache_alerts: Final = prompt_cache_alert_logger(
+        general_settings,
+        AlertRepository(prisma_client) if prisma_client is not None else None,
+        lambda: redis_usage_cache,
+        get_salt_key(),
+    )
+    if prompt_cache_alerts is not None:
+        litellm.logging_callback_manager.add_litellm_callback(prompt_cache_alerts)
 
     ### START BATCH WRITING DB + CHECKING NEW MODELS###
     worker_heartbeat: Final = (
