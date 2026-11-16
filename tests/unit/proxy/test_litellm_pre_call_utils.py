@@ -1401,6 +1401,35 @@ async def test_a_caller_anthropic_api_key_keeps_its_own_profile_id_only_on_anthr
     assert forwarded.get(USER_PROFILE_ID_HEADER) == expected
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field", ["headers", "extra_headers"])
+@pytest.mark.parametrize("header_name", [USER_PROFILE_ID_HEADER, "Anthropic-User-Profile-Id"])
+@pytest.mark.parametrize("profile", [None, "", "uprof_client", "malformed-profile"])
+@pytest.mark.parametrize("credential", ["api-key", "oauth", "shared"])
+@pytest.mark.parametrize("provider", ["anthropic", "bedrock_mantle"])
+async def test_caller_credentials_keep_body_profiles_without_changing_shared_credential_pins(
+    field: str, header_name: str, profile: str | None, credential: str, provider: str
+) -> None:
+    sent: Final[dict[str, object]] = {
+        field: {} if profile is None else {header_name: profile},
+        **({"api_key": "sk-ant-api03-caller"} if credential == "api-key" else {}),
+    }
+    updated: Final = await _request_data_added_by_the_proxy(
+        sent,
+        {"authorization": "Bearer sk-ant-oat01-caller", "x-litellm-api-key": "Bearer sk-virtual-key"}
+        if credential == "oauth"
+        else {},
+        {},
+        UserAPIKeyAuth(api_key="hashed-key", user_id="test-user", metadata={"anthropic_user_profile_id": "uprof_key"}),
+    )
+    forwarded: Final = ProviderSpecificHeaderUtils.get_provider_specific_headers(
+        provider_specific_header=updated.get("provider_specific_header"), custom_llm_provider=provider
+    )
+    assert forwarded.get(USER_PROFILE_ID_HEADER) == (
+        profile or None if credential != "shared" and provider == "anthropic" else "uprof_key"
+    )
+
+
 def test_initial_snapshot_refresh_clears_a_previous_guardrail_checkpoint() -> None:
     from litellm.integrations.shadow_eval_logger import GuardrailRequestSnapshot
     from litellm.litellm_core_utils.litellm_logging import Logging

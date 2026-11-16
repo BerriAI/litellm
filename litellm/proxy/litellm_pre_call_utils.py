@@ -3087,6 +3087,7 @@ async def add_litellm_data_to_request(
     if dynamic_api_version is not None:  # only pass, if set
         data["api_version"] = dynamic_api_version
 
+    caller_body_profile: Final = _caller_body_anthropic_user_profile_id(_REQUEST_FIELDS.validate_python(data))
     if anthropic_user_profile_id(user_api_key_dict, {}) is not None:
         for field in ("extra_headers", "headers"):
             if field in data:
@@ -3108,7 +3109,10 @@ async def add_litellm_data_to_request(
 
     ## Forward any LLM API Provider specific headers in extra_headers
     data[_metadata_variable_name]["used_client_oauth_token"] = add_provider_specific_headers_to_request(
-        data=data, headers=_headers, user_profile_id=anthropic_user_profile_id(user_api_key_dict, _headers)
+        data=data,
+        headers=_headers,
+        user_profile_id=anthropic_user_profile_id(user_api_key_dict, _headers),
+        caller_user_profile_id=caller_body_profile,
     )
     caller_fields: Final = _caller_credential_fields(_REQUEST_FIELDS.validate_python(data))
     data["proxy_server_request"]["caller_credential_fields"] = caller_fields  # rebind-ok: data is an out-param
@@ -4858,6 +4862,14 @@ def _carries_a_caller_api_key(data: Mapping[str, object]) -> bool:
     return isinstance(api_key, str) and bool(api_key.strip())
 
 
+def _caller_body_anthropic_user_profile_id(data: Mapping[str, object]) -> str | None:
+    for field in ("extra_headers", "headers"):
+        for name, value in reversed(tuple(_request_fields(data.get(field)).items())):
+            if name.lower() == ANTHROPIC_USER_PROFILE_ID_HEADER and isinstance(value, str):
+                return value
+    return None
+
+
 def _user_profile_id_header(providers: frozenset[str], user_profile_id: str | None) -> ProviderSpecificHeader:
     return ProviderSpecificHeader(
         custom_llm_provider=",".join(sorted(providers)),
@@ -4869,6 +4881,7 @@ def add_provider_specific_headers_to_request(
     data: dict,
     headers: Mapping[str, str],
     user_profile_id: str | None = None,
+    caller_user_profile_id: str | None = None,
 ) -> bool:
     from litellm.llms.anthropic.common_utils import is_anthropic_oauth_key
     from litellm.llms.chatgpt.common_utils import select_chatgpt_client_credential_headers
@@ -4887,6 +4900,7 @@ def add_provider_specific_headers_to_request(
         if _carries_a_caller_api_key(_REQUEST_FIELDS.validate_python(data))
         else frozenset[str]()
     )
+    caller_profile: Final = headers.get(ANTHROPIC_USER_PROFILE_ID_HEADER, caller_user_profile_id)
 
     typesafe_danger_zone_headers: Final = {
         header: value
@@ -4908,7 +4922,7 @@ def add_provider_specific_headers_to_request(
             _user_profile_id_header(
                 _ANTHROPIC_USER_PROFILE_ID_PROVIDERS - caller_credential_providers, user_profile_id
             ),
-            _user_profile_id_header(caller_credential_providers, headers.get(ANTHROPIC_USER_PROFILE_ID_HEADER)),
+            _user_profile_id_header(caller_credential_providers, caller_profile),
             ProviderSpecificHeader(
                 custom_llm_provider=_ANTHROPIC_OAUTH_CREDENTIAL_PROVIDERS,
                 extra_headers=anthropic_oauth_credential_headers,
