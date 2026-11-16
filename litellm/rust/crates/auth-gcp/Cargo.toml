@@ -40,6 +40,7 @@ jsonwebtoken = { workspace = true, features = ["rust_crypto", "use_pem"] }
 time = { workspace = true, features = ["formatting"] }
 axum = { workspace = true, features = ["json"] }
 futures-util.workspace = true
+litellm-tracing.workspace = true
 rand = "0.8"
 rsa = { version = "0.9", features = ["pem"] }
 rstest.workspace = true

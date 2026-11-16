@@ -197,14 +197,20 @@ impl Logins {
         let login = self
             .cache
             .try_get_with(key.clone(), async {
-                match load().await {
-                    Ok(login) => Ok(login),
-                    Err(failure) if token_fetch_failed(&failure) => Err(failure),
-                    Err(failure) => match self.earlier_version(key, &failure).await {
-                        Some(login) => Ok(login),
-                        None => Err(failure),
-                    },
+                let failure = match load().await {
+                    Ok(login) => return Ok(login),
+                    Err(failure) => failure,
+                };
+                if !token_fetch_failed(&failure)
+                    && let Some(login) = self.earlier_version(key, &failure).await
+                {
+                    return Ok(login);
                 }
+                tracing::error!(
+                    "Failed to load vertex credentials. Check to see if credentials containing partial/invalid information. Error: {}",
+                    failure.message
+                );
+                Err(failure)
             })
             .await
             .map_err(|failure| (*failure).clone())?;
@@ -283,13 +289,22 @@ impl Logins {
                 ..key.clone()
             })
             .await;
-        let Ok(login) = self.get_or_load(key, load).await else {
-            return Err(failure);
+        let reloaded = match self.get_or_load(key, load).await {
+            Ok(login) => self
+                .serve(&login)
+                .await
+                .map(|token| (token, login.project_id.clone())),
+            Err(retry) => Err(retry),
         };
-        match self.serve(&login).await {
-            Ok(token) => Ok((token, login.project_id.clone())),
-            Err(_) => Err(failure),
-        }
+        reloaded.map_err(|retry| {
+            tracing::error!(
+                "Async reauthentication retry failed for project_id: {}. Original error: {}. Retry error: {}",
+                refused.project_id,
+                failure.message,
+                retry.message
+            );
+            failure
+        })
     }
 }
 
@@ -651,6 +666,122 @@ mod tests {
         assert_eq!(
             (identity.text, identity.version),
             (None, file_version(path))
+        );
+    }
+
+    #[derive(Clone, Default)]
+    struct Recorded(Arc<Mutex<Vec<(litellm_tracing::Level, String, String)>>>);
+
+    impl litellm_tracing::Sink for Recorded {
+        fn enabled(&self, _: &litellm_tracing::Metadata<'_>) -> bool {
+            true
+        }
+
+        fn emit(&self, record: &litellm_tracing::Record) {
+            self.0.lock().unwrap().push((
+                *record.metadata.level(),
+                record.metadata.target().to_owned(),
+                record.message.clone(),
+            ));
+        }
+    }
+
+    /// What `future` logged at warning level and above, as the bridge's sink would deliver it
+    /// to the `LiteLLM` logger.
+    async fn logged<T>(future: impl Future<Output = T>) -> Vec<(litellm_tracing::Level, String)> {
+        let recorded = Recorded::default();
+        litellm_tracing::Logger::new(recorded.clone())
+            .instrument(future)
+            .await;
+        let records = recorded.0.lock().unwrap().clone();
+        records
+            .into_iter()
+            .filter(|(level, target, _)| {
+                *level <= litellm_tracing::Level::WARN && target.starts_with("litellm_")
+            })
+            .map(|(level, _, message)| (level, message))
+            .collect()
+    }
+
+    #[rstest]
+    #[case::unloadable(
+        GoogleLoginFailure::new(PythonException::Value, "Could not resolve project_id"),
+        "Could not resolve project_id"
+    )]
+    #[case::token_fetch_failed(
+        invalid_grant(),
+        "('invalid_grant: Invalid JWT Signature.', {'error': 'invalid_grant'})"
+    )]
+    #[tokio::test]
+    async fn credentials_that_do_not_load_are_logged_as_an_error(
+        #[case] failure: GoogleLoginFailure,
+        #[case] error: &str,
+    ) {
+        let logins = Logins::default();
+        let records =
+            logged(logins.token(key("p"), || std::future::ready(Err(failure.clone())))).await;
+
+        assert_eq!(
+            records,
+            [(
+                litellm_tracing::Level::ERROR,
+                format!(
+                    "Failed to load vertex credentials. Check to see if credentials containing partial/invalid information. Error: {error}"
+                )
+            )]
+        );
+    }
+
+    #[tokio::test]
+    async fn an_earlier_key_file_in_use_is_a_warning_not_an_error() {
+        let logins = Logins::default();
+        let earlier = loader(scripted(vec![]), token("earlier", FRESH), Arc::default());
+        logins.token(versioned("p", 1), &earlier).await.unwrap();
+
+        let records = logged(logins.token(versioned("p", 2), || {
+            std::future::ready(Err(GoogleLoginFailure::new(
+                PythonException::Value,
+                "bad file",
+            )))
+        }))
+        .await;
+
+        assert_eq!(
+            records,
+            [(
+                litellm_tracing::Level::WARN,
+                "Vertex: the replaced credentials file did not load, so the credentials loaded before it stay in use: bad file".to_owned()
+            )]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failed_reload_is_logged_with_both_errors() {
+        let loads = Arc::new(AtomicUsize::new(0));
+        let counted = loads.clone();
+        let load = move || {
+            let login = match counted.fetch_add(1, Ordering::SeqCst) {
+                0 => Ok(Login::new(
+                    scripted(vec![Err(invalid_grant())]),
+                    "project".into(),
+                    token("expired", EXPIRED),
+                )),
+                _ => Err(GoogleLoginFailure::new(
+                    PythonException::Value,
+                    "the reload failed",
+                )),
+            };
+            std::future::ready(login)
+        };
+
+        let records = logged(Logins::default().token(key("p"), &load)).await;
+
+        assert_eq!(
+            records.last().unwrap(),
+            &(
+                litellm_tracing::Level::ERROR,
+                "Async reauthentication retry failed for project_id: project. Original error: ('invalid_grant: Invalid JWT Signature.', {'error': 'invalid_grant'}). Retry error: the reload failed".to_owned()
+            )
         );
     }
 }
