@@ -6096,6 +6096,44 @@
       "upgrade": "Upgrade to Enterprise",
       "loadError": "Could not load monitoring settings.",
       "saveError": "Could not save monitoring settings. Try again."
+    },
+    "bulk": {
+      "resolve": "Resolve all",
+      "dismiss": "Dismiss all",
+      "cancel": "Cancel",
+      "saving": "Updating alerts…",
+      "description": "This updates all open alerts matching “{{type}}”, including results you have not loaded. You can reopen individual alerts later.",
+      "error": "Some alerts could not be updated. Saved changes were kept. Try again to update the remaining open alerts."
+    },
+    "thresholds": {
+      "title": "Performance alert thresholds",
+      "description": "Usual values come from the previous seven days. Both conditions must be met.",
+      "enterpriseOnly": "Editing thresholds requires Enterprise.",
+      "edit": "Edit thresholds",
+      "cancel": "Cancel",
+      "multiplier": "Times the usual value",
+      "rules": {
+        "spend": "Spend",
+        "traffic": "Traffic",
+        "latency": "Latency",
+        "reliability": "Error rate"
+      },
+      "minimum": {
+        "spend": "Minimum increase ($)",
+        "traffic": "Minimum increase (requests)",
+        "latency": "Minimum increase (ms)",
+        "reliability": "Minimum increase (percentage points)"
+      },
+      "summary": {
+        "spend": "At least {{multiplier}}× the usual spend and ${{minimum}} higher.",
+        "traffic": "At least {{multiplier}}× the usual requests and {{minimum}} more requests.",
+        "latency": "At least {{multiplier}}× the usual latency and {{minimum}} ms higher.",
+        "reliability": "At least {{multiplier}}× the usual error rate and {{minimum}} percentage points higher."
+      },
+      "safeguards": "Requires four active baseline days. Latency also needs 100 timed requests; error rate needs 500 requests. Changes apply to future checks.",
+      "save": "Save thresholds",
+      "saving": "Saving…",
+      "saved": "Thresholds saved."
     }
   },
   "caching": {

@@ -14,7 +14,13 @@ from litellm_proxy_extras.request_log_indexes import ensure_request_log_indexes
 from psycopg import sql
 
 from litellm.models.alert import AlertDetection, DeprecationEvidence, PromptCacheEvidence
-from litellm.models.performance_alert import FREE_ALERT_LIMIT, SweepOwnershipLostError, SweepState
+from litellm.models.performance_alert import (
+    DEFAULT_THRESHOLDS,
+    FREE_ALERT_LIMIT,
+    PerformanceAlertThresholds,
+    SweepOwnershipLostError,
+    SweepState,
+)
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.spend_tracking.performance_alerts import run_performance_alerts
 from litellm.proxy.utils import PrismaClient, ProxyLogging
@@ -143,6 +149,38 @@ async def fixture() -> AsyncIterator[Fixture]:
             write_rows('DELETE FROM "LiteLLM_PerformanceAlertState"', ())
         finally:
             await client.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_enterprise_thresholds_persist_and_change_detection_but_free_uses_defaults(fixture: Fixture) -> None:
+    from litellm.repositories.config_repository import ConfigRepository
+
+    config: Final = ConfigRepository(fixture.client, use_writer=True)
+    previous: Final = await config.get_param("performance_alert_thresholds")
+    custom: Final = PerformanceAlertThresholds.model_validate({"spend": {"multiplier": 2, "minimum_increase": 20}})
+    enterprise: Final = PerformanceAlertRepository(fixture.client, enterprise=True)
+    free: Final = PerformanceAlertRepository(fixture.client, enterprise=False)
+    resource: Final = f"{fixture.prefix}-custom-threshold"
+    _seed("team", resource, Day(spend=10), Day(spend=40))
+    try:
+        assert (await enterprise.set_thresholds(custom)).thresholds == custom
+        restarted: Final = PerformanceAlertRepository(fixture.client, enterprise=True)
+        assert (await restarted.monitoring()).thresholds == custom
+        assert (await free.monitoring()).thresholds == DEFAULT_THRESHOLDS
+        with pytest.raises(PermissionError, match="Enterprise"):
+            await free.set_thresholds(custom)
+        claim: Final = await free.claim(timedelta(0))
+        assert claim is not None
+        state: Final = SweepState(day=DAY, scope="team", cursor=fixture.prefix)
+        await free.evaluate_page(claim.owner, state, 25)
+        assert fixture.saved() == {}
+        await restarted.evaluate_page(claim.owner, state, 25)
+        assert fixture.saved() == {(resource, "spend"): ("team", "open")}
+    finally:
+        await config.set_param(
+            "performance_alert_thresholds",
+            previous.param_value if previous else DEFAULT_THRESHOLDS.model_dump(mode="json"),
+        )
 
 
 @pytest.mark.asyncio

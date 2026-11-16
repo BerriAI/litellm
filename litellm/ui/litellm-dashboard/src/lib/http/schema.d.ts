@@ -1019,7 +1019,11 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        patch?: never;
+        /**
+         * Resolve or dismiss matching open alerts
+         * @description Update all matching open saved alerts, including unloaded pages. Only gateway admins can write.
+         */
+        patch: operations["update_open_alerts_alerts_patch"];
         trace?: never;
     };
     "/alerts/monitoring": {
@@ -27750,6 +27754,28 @@ export interface components {
              */
             window_start: string;
         };
+        /** AlertBulkResult */
+        AlertBulkResult: {
+            /**
+             * Updated
+             * @description Number of open saved alerts changed.
+             */
+            updated: number;
+        };
+        /** AlertBulkUpdate */
+        AlertBulkUpdate: {
+            /**
+             * Status
+             * @description Status to apply to every matching open saved alert.
+             * @enum {string}
+             */
+            status: "resolved" | "dismissed";
+            /**
+             * Type
+             * @description Only update this category, or all saved alerts if omitted.
+             */
+            type?: ("spend" | "traffic" | "latency" | "reliability") | ("model_deprecation" | "prompt_cache") | "performance" | null;
+        };
         /** AlertHistoryPoint */
         AlertHistoryPoint: {
             /**
@@ -27792,6 +27818,28 @@ export interface components {
              * @default true
              */
             model_deprecations_enabled: boolean;
+            /**
+             * @description Effective built-in thresholds. Only Enterprise admins can edit them.
+             * @default {
+             *       "latency": {
+             *         "minimum_increase": 500,
+             *         "multiplier": 3
+             *       },
+             *       "reliability": {
+             *         "minimum_increase": 0.02,
+             *         "multiplier": 3
+             *       },
+             *       "spend": {
+             *         "minimum_increase": 50,
+             *         "multiplier": 3
+             *       },
+             *       "traffic": {
+             *         "minimum_increase": 1000,
+             *         "multiplier": 10
+             *       }
+             *     }
+             */
+            thresholds: components["schemas"]["PerformanceAlertThresholds"];
         };
         /** AlertMonitoringUpdate */
         AlertMonitoringUpdate: {
@@ -27800,6 +27848,24 @@ export interface components {
              * @description Enable or disable performance monitoring for this gateway.
              */
             enabled: boolean;
+        };
+        /** AlertThreshold */
+        AlertThreshold: {
+            /**
+             * Minimum Increase
+             * @description Minimum absolute increase above the baseline, in the metric's unit.
+             */
+            minimum_increase: number;
+            /**
+             * Multiplier
+             * @description Minimum multiple of the baseline.
+             */
+            multiplier: number;
+        };
+        /** AlertThresholdsUpdate */
+        AlertThresholdsUpdate: {
+            /** @description Replace the built-in performance thresholds. Enterprise only. */
+            thresholds: components["schemas"]["PerformanceAlertThresholds"];
         };
         /**
          * AlertType
@@ -43769,6 +43835,41 @@ export interface components {
             /** User Id */
             user_id: string;
         };
+        /** PerformanceAlertThresholds */
+        PerformanceAlertThresholds: {
+            /**
+             * @description Average response-time increase in milliseconds over the previous seven-day weighted average.
+             * @default {
+             *       "minimum_increase": 500,
+             *       "multiplier": 3
+             *     }
+             */
+            latency: components["schemas"]["AlertThreshold"];
+            /**
+             * @description Error-rate increase as a fraction, e.g. 0.02 is two percentage points.
+             * @default {
+             *       "minimum_increase": 0.02,
+             *       "multiplier": 3
+             *     }
+             */
+            reliability: components["schemas"]["AlertThreshold"];
+            /**
+             * @description Spend increase in USD over the previous seven-day daily average.
+             * @default {
+             *       "minimum_increase": 50,
+             *       "multiplier": 3
+             *     }
+             */
+            spend: components["schemas"]["AlertThreshold"];
+            /**
+             * @description Request increase over the previous seven-day daily average.
+             * @default {
+             *       "minimum_increase": 1000,
+             *       "multiplier": 10
+             *     }
+             */
+            traffic: components["schemas"]["AlertThreshold"];
+        };
         /**
          * PiiAction
          * @enum {string}
@@ -56356,6 +56457,39 @@ export interface operations {
             };
         };
     };
+    update_open_alerts_alerts_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AlertBulkUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AlertBulkResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_monitoring_alerts_monitoring_get: {
         parameters: {
             query?: never;
@@ -56385,7 +56519,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["AlertMonitoringUpdate"] | components["schemas"]["ModelDeprecationMonitoringUpdate"];
+                "application/json": components["schemas"]["AlertMonitoringUpdate"] | components["schemas"]["ModelDeprecationMonitoringUpdate"] | components["schemas"]["AlertThresholdsUpdate"];
             };
         };
         responses: {
