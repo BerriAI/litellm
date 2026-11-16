@@ -73,6 +73,7 @@ from litellm.litellm_core_utils import logging_utils
 from litellm.litellm_core_utils.add_retry_fallback_headers import get_hidden_params_dict
 from litellm.litellm_core_utils.exception_mapping_utils import with_deployment_debug_info
 from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.litellm_core_utils.rules import Rules
 from litellm.llms.anthropic.messages.native import interceptors as messages_interceptors
 from litellm.llms.anthropic.messages.native.fake_stream_iterator import FakeAnthropicMessagesStreamIterator
 from litellm.llms.anthropic.messages.native.interceptors import MessagesInterceptor
@@ -4468,7 +4469,37 @@ VERTEX_LABELS_CASES: Final = (
     replace(_vertex_stream("vertex_labels_stream", litellm_metadata=dict(_VERTEX_IDENTITY)), settings=_LABEL_FIELDS),
 )
 
+_PROXY_CALL_ID: Final = "0b0c3d4e-proxy-call"
+
+
+class _ProxyLogger:
+    """Each leg gets a logging object built from the request alone, as the proxy builds it before the router adds
+    the deployment's params."""
+
+    def __deepcopy__(self, memo: dict[int, object]) -> object:
+        logging_obj, _ = litellm.utils.function_setup(
+            "anthropic_messages",
+            Rules(),
+            datetime.datetime.now(),
+            model=VERTEX_CLAUDE,
+            messages=[dict(USER)],
+            litellm_call_id=_PROXY_CALL_ID,
+        )
+        return logging_obj
+
+
 VERTEX_REGIONAL_COST_CASES: Final = (
+    Case(
+        "vertex_deployment_global_location_prices_without_the_regional_uplift",
+        _kw(
+            vertex_project="parity-project",
+            vertex_location="global",
+            vertex_credentials=dict(VERTEX_ACCOUNT),
+            litellm_logging_obj=_ProxyLogger(),
+            litellm_call_id=_PROXY_CALL_ID,
+        ),
+        model=VERTEX_CLAUDE,
+    ),
     Case(
         "vertex_global_location_prices_without_the_regional_uplift",
         _kw(vertex_project="parity-project", vertex_location="global", vertex_credentials=dict(VERTEX_ACCOUNT)),
