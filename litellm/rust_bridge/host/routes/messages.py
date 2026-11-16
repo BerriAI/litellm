@@ -15,7 +15,14 @@ import socket
 import ssl
 from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Iterable, Iterator, Mapping, Sequence
 from dataclasses import asdict, dataclass, replace
-from typing import Final, TypeAlias, TypeVar, cast  # noqa: TID251  # narrows native payloads to public TypedDicts
+from types import MappingProxyType
+from typing import (  # noqa: TID251  # narrows native payloads to public TypedDicts
+    Final,
+    Literal,
+    TypeAlias,
+    TypeVar,
+    cast,
+)
 from urllib.parse import SplitResult, urlsplit
 
 import httpx
@@ -111,12 +118,17 @@ from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import (
     _merge_messages_header_sources as _merged_headers,  # pyright: ignore[reportPrivateUsage]  # the handler's own header merge
 )
+from litellm.llms.vertex_ai.common_utils import get_vertex_base_url
+from litellm.llms.vertex_ai.credentials_source import (
+    VertexCredentialsFileInvalid,
+    VertexCredentialsFileUnreadable,
+    raise_vertex_credentials_failure,
+)
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.responses.mcp.tool_precheck import may_name_litellm_mcp_gateway
 from litellm.rust_bridge import detectors, execution, failures
 from litellm.rust_bridge.execution import AsyncStream
 from litellm.rust_bridge.host import cache, callbacks_legacy_python, http_transport
-from litellm.rust_bridge.host.routes import vertex_failures
 from litellm.rust_bridge.messages.entrypoints import MessagesStreamHead
 from litellm.rust_bridge.public_call import NativeCall, known_params, optional_sequence, optional_str
 from litellm.secret_managers.main import get_secret_str
@@ -676,8 +688,11 @@ _UPSTREAM_ARGS: Final = TypeAdapter(tuple[int, str])
 _UPSTREAM_HEADERS: Final = TypeAdapter(list[tuple[str, str]])
 _INVOCATION_METRICS: Final = "amazon-bedrock-invocationMetrics"
 _BODY_CUT: Final = TypeAdapter(tuple[int, int | None, bool])
-_GOOGLE_LOGIN_FAILURE: Final = TypeAdapter(tuple[str, str])
 _ERROR_CLASS: TypeAlias = Callable[..., Exception]
+_GOOGLE_LOGIN_FAILURE: Final = TypeAdapter(tuple[str, str, tuple[Literal["unreadable", "invalid"], str, str] | None])
+_PYTHON_LOGIN_FAILURES: Final[Mapping[str, _ERROR_CLASS]] = MappingProxyType(
+    {"ValueError": ValueError, "TypeError": TypeError, "ImportError": ImportError}
+)
 _validate_metadata: Final = cast(  # cast-ok: the handler's untyped metadata validator
     Callable[[object], object], handler.validate_anthropic_api_metadata
 )
@@ -895,35 +910,38 @@ def _bedrock_credential_failure(error: Exception, request: Mapping[str, object])
     return None
 
 
-_VERTEX_CREDENTIALS: Final = cast(  # cast-ok: the reader's untyped params dict
-    Callable[[dict[str, object]], object], VertexBase.safe_get_vertex_ai_credentials
-)
-
-
-def _vertex_credential_failure(error: Exception, request: Mapping[str, object]) -> Exception | None:
-    return vertex_failures.credential_failure(
-        getattr(error, "messages_gcp_credential_failure", None),
-        _VERTEX_CREDENTIALS(dict(_python_handler_params(request, "vertex_ai"))),
-    )
-
-
 def _google_login_failure(error: Exception) -> Exception | None:
     """The exception Python's `VertexBase.load_auth` raises for a Vertex AI login Rust could not
-    complete, from the class and text Rust names."""
+    complete, from the class, text and credentials file Rust names."""
     try:
-        name, message = _GOOGLE_LOGIN_FAILURE.validate_python(getattr(error, "messages_google_login_failure", None))
+        name, message, file = _GOOGLE_LOGIN_FAILURE.validate_python(
+            getattr(error, "messages_google_login_failure", None)
+        )
     except ValidationError:
         return None
-    if name == "ValueError":
-        return ValueError(message)
-    if name == "TypeError":
-        return TypeError(message)
+    if file is not None:
+        return _credentials_file_failure(*file)
+    python_class: Final = _PYTHON_LOGIN_FAILURES.get(name)
+    if python_class is not None:
+        return python_class(message)
     from google.auth import exceptions as google_exceptions
 
     google_exception: Final = getattr(google_exceptions, name.removeprefix("google.auth.exceptions."), None)
     if not isinstance(google_exception, type) or not issubclass(google_exception, Exception):
         return None
     return google_exception(message)
+
+
+def _credentials_file_failure(kind: Literal["unreadable", "invalid"], path: str, detail: str) -> Exception:
+    failure: Final = (
+        VertexCredentialsFileUnreadable(path, detail)
+        if kind == "unreadable"
+        else VertexCredentialsFileInvalid(path, detail)
+    )
+    try:
+        raise_vertex_credentials_failure(failure)
+    except ValueError as raised:
+        return raised
 
 
 def _sent_base(request: Mapping[str, object], request_provider: str, secrets_read: _SecretsRead) -> str | None:
@@ -939,9 +957,11 @@ def _sent_base(request: Mapping[str, object], request_provider: str, secrets_rea
     if request_provider == "bedrock":
         return _bedrock_url(request)
     if request_provider == "vertex_ai":
-        return vertex_failures.default_base(
-            str(request["model"]).removeprefix("vertex_ai/"),
-            VertexBase.safe_get_vertex_ai_location(dict(_python_handler_params(request, request_provider))),
+        return get_vertex_base_url(
+            VertexBase.get_vertex_region(
+                VertexBase.safe_get_vertex_ai_location(dict(_python_handler_params(request, request_provider))),
+                str(request["model"]).removeprefix("vertex_ai/"),
+            )
         )
     return None
 
@@ -1255,11 +1275,6 @@ def map_failure(
     if credential_failure is not None:
         _log_resolved_call(request, request_provider)
         return map_token_failure(credential_failure, request, request_provider, asynchronous)
-    vertex_credential_failure: Final = (
-        _vertex_credential_failure(error, request) if request_provider == "vertex_ai" else None
-    )
-    if vertex_credential_failure is not None:
-        return map_token_failure(_raised(vertex_credential_failure), request, request_provider, asynchronous)
     provider_error: Final = _provider_error(error, request, request_provider, secrets_read or [])
     if provider_error is None:
         return failures.map_native_failure(
@@ -1902,6 +1917,14 @@ def unencodable_header(value: bytes, received: bool) -> Exception:
     except UnicodeEncodeError as unencodable:
         return unencodable
     return ValueError(text)
+
+
+def unsendable_url(url: str) -> Exception:
+    try:
+        httpx.URL(url)
+    except httpx.InvalidURL as refused:
+        return refused
+    return ValueError(url)
 
 
 def _sent_url(request: Mapping[str, object], url: str) -> str:

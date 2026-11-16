@@ -45,9 +45,51 @@ impl UnencodableHeader {
     }
 }
 
+/// A URL with a non-printable ASCII character, which Python's HTTP client refuses to send.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UnsendableUrl(pub String);
+
+impl std::fmt::Display for UnsendableUrl {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(
+            "the URL holds a non-printable ASCII character, which Python's HTTP client refuses",
+        )
+    }
+}
+
+impl std::error::Error for UnsendableUrl {}
+
+impl UnsendableUrl {
+    pub(crate) fn of(url: &str) -> Option<Self> {
+        url.bytes()
+            .any(|byte| byte.is_ascii() && !(b' '..=b'~').contains(&byte))
+            .then(|| Self(url.to_owned()))
+    }
+}
+
 pub trait Transport: Send + Sync {
     fn send(
         &self,
         request: TransportRequest,
     ) -> BoxFuture<'static, Result<TransportResponse, Error>>;
+}
+
+#[cfg(test)]
+mod tests {
+    use rstest::rstest;
+
+    use super::*;
+
+    #[rstest]
+    #[case::newline("https://us-east5\n-aiplatform.googleapis.com/v1", true)]
+    #[case::tab("https://h/\tpath", true)]
+    #[case::delete("https://h/\u{7f}", true)]
+    #[case::printable("https://us-east5-aiplatform.googleapis.com/v1?a=b c", false)]
+    #[case::non_ascii("https://h/caf\u{e9}", false)]
+    fn a_url_python_s_client_refuses_holds_a_non_printable_ascii_character(
+        #[case] url: &str,
+        #[case] refused: bool,
+    ) {
+        assert_eq!(UnsendableUrl::of(url).is_some(), refused);
+    }
 }
