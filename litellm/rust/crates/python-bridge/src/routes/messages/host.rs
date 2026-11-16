@@ -165,6 +165,7 @@ const AZURE_AI_PROVIDER: &str = "azure_ai";
 const ENABLE_TOKEN_REFRESH: &str = "enable_azure_ad_token_refresh";
 
 const BEDROCK_PROVIDER: &str = "bedrock";
+const VERTEX_AI_PROVIDER: &str = "vertex_ai";
 const BEDROCK_PASSTHROUGH_PARAMS: [&str; 2] = ["model_id", "guardrailConfig"];
 const BEDROCK_METADATA_PARAMS: [&str; 2] = ["metadata", "litellm_metadata"];
 const BEDROCK_SPEND_LOGS_METADATA: &str = "spend_logs_metadata";
@@ -647,8 +648,13 @@ impl MessagesPythonHost {
             capabilities.bedrock =
                 super::model_catalog::bedrock_capabilities(py, &model, argument("model_info")?)?;
         }
+        let vertex_supported_regions = match custom_llm_provider.as_deref() {
+            Some(VERTEX_AI_PROVIDER) => super::model_catalog::vertex_supported_regions(py, &model)?,
+            _ => Vec::new(),
+        };
         let shaping = MessagesShaping {
             capabilities,
+            vertex_supported_regions,
             settings: MessagesSettings {
                 whole_sse_frames: settings.stream_cost_model.is_some(),
                 presanitized,
