@@ -1,14 +1,15 @@
 //! The gateway's router: `model_list` built through router-core's deployment build, with the
 //! environment and the model catalog as the registry host, and `router_settings` read by the core.
 
-use std::collections::HashMap;
+use std::sync::Arc;
 
 use crate::host::{FACTS, NativeBootHost, environment_value};
 use litellm_config::{Config, ENV_REFERENCE_PREFIX, Spelled};
 use litellm_core_utils::{serde_compat::parse_pydantic_bool, settings::Lookup};
+use litellm_gateway_inference::ModelTable;
 use litellm_inference_messages::{MessagesSettings, MessagesShaping};
 use litellm_llms::anthropic::model_capabilities::anthropic_model_capabilities;
-use litellm_model_catalog::Catalog;
+use litellm_model_catalog::CostMap;
 use litellm_router_core::{
     BuildPath, Deployment, Router, RouterConfig, build::Install, registry::DeploymentFilter,
 };
@@ -115,46 +116,71 @@ fn additional_drop_params(deployment: &Deployment) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// How the messages route shapes a call to `deployment`: its `drop_params`, and the
-/// capabilities the catalog and its `model_info` declare.
-fn shaping(
-    deployment: &Deployment,
-    catalog: &Catalog,
-    drops_params_globally: bool,
-    env: &impl Lookup,
-) -> MessagesShaping {
-    let params = &deployment.params;
-    let drop_params = drops_params_globally || is_on(params.drop_params.as_ref(), env);
-    MessagesShaping {
-        settings: MessagesSettings {
-            drop_params,
-            drops_unsupported_params: drop_params,
-            additional_drop_params: additional_drop_params(deployment),
-            ..MessagesSettings::default()
-        },
-        capabilities: anthropic_model_capabilities(
-            catalog,
-            &params.model,
-            params.custom_llm_provider.as_deref(),
-            params.extra.get("base_model").and_then(Value::as_str),
-            &|capability| {
-                deployment
-                    .model_info
-                    .raw
-                    .get(capability)
-                    .and_then(Value::as_bool)
-            },
-        ),
+/// What the messages route needs of each deployment that the cost map does not say: its
+/// `drop_params` settings, read once at boot.
+pub(crate) struct Shaper {
+    deployments: Vec<(Arc<Deployment>, MessagesSettings)>,
+}
+
+impl Shaper {
+    fn new(router: &Router, config: &Config, env: &impl Lookup) -> Self {
+        let drops_params_globally = is_on(config.litellm_settings.drop_params.as_ref(), env);
+        let deployments = router
+            .registry()
+            .deployments(&DeploymentFilter::default())
+            .into_iter()
+            .map(|deployment| {
+                let drop_params =
+                    drops_params_globally || is_on(deployment.params.drop_params.as_ref(), env);
+                let settings = MessagesSettings {
+                    drop_params,
+                    drops_unsupported_params: drop_params,
+                    additional_drop_params: additional_drop_params(&deployment),
+                    ..MessagesSettings::default()
+                };
+                (deployment, settings)
+            })
+            .collect();
+        Self { deployments }
+    }
+
+    /// The model table `cost_map` gives: how the messages route shapes a call to each deployment,
+    /// with the capabilities the catalog and its `model_info` declare.
+    pub(crate) fn table(&self, cost_map: CostMap) -> ModelTable {
+        let shaping = self
+            .deployments
+            .iter()
+            .map(|(deployment, settings)| {
+                let params = &deployment.params;
+                let capabilities = anthropic_model_capabilities(
+                    cost_map.catalog(),
+                    &params.model,
+                    params.custom_llm_provider.as_deref(),
+                    params.extra.get("base_model").and_then(Value::as_str),
+                    &|capability| {
+                        deployment
+                            .model_info
+                            .raw
+                            .get(capability)
+                            .and_then(Value::as_bool)
+                    },
+                );
+                let shaping = MessagesShaping {
+                    settings: settings.clone(),
+                    capabilities,
+                };
+                (deployment.id.clone(), shaping)
+            })
+            .collect();
+        ModelTable { cost_map, shaping }
     }
 }
 
-/// The router `config` describes, and how the messages route shapes a call to each of its
-/// deployments, by id.
+/// The router `config` describes, and what the messages route needs of each of its deployments.
 pub(crate) async fn router(
     config: &Config,
     env: &(impl Lookup + Sync),
-    catalog: &Catalog,
-) -> Result<(Router, HashMap<String, MessagesShaping>), Error> {
+) -> Result<(Router, Shaper), Error> {
     let (settings, dynamic) = RouterConfig::from_settings(&config.router_settings)?;
     let router = Router::new(settings, dynamic, FACTS)?;
     router
@@ -166,33 +192,16 @@ pub(crate) async fn router(
             Install::Replace,
         )
         .await?;
-    let drops_params_globally = is_on(config.litellm_settings.drop_params.as_ref(), env);
-    let shaping = router
-        .registry()
-        .deployments(&DeploymentFilter::default())
-        .iter()
-        .map(|deployment| {
-            (
-                deployment.id.clone(),
-                shaping(deployment, catalog, drops_params_globally, env),
-            )
-        })
-        .collect();
-    Ok((router, shaping))
+    let shaper = Shaper::new(&router, config, env);
+    Ok((router, shaper))
 }
 
 #[cfg(test)]
 mod tests {
     use litellm_config::Config;
-    use litellm_model_catalog::Catalog;
+    use litellm_model_catalog::{CostMap, IntegrityLimits};
     use rstest::rstest;
     use serde_json::{Value, json};
-
-    fn catalog() -> Catalog {
-        Catalog::parse(br#"{"provider-model": {"litellm_provider": "provider"}}"#)
-            .unwrap()
-            .value
-    }
 
     fn environment(name: &str) -> Option<String> {
         match name {
@@ -208,12 +217,17 @@ mod tests {
         yaml: &str,
     ) -> (
         litellm_router_core::Router,
-        super::HashMap<String, super::MessagesShaping>,
+        std::collections::HashMap<String, super::MessagesShaping>,
     ) {
         let config = Config::from_yaml(yaml).unwrap();
-        super::router(&config, &environment, &catalog())
-            .await
-            .unwrap()
+        let (router, shaper) = super::router(&config, &environment).await.unwrap();
+        let cost_map = CostMap::read(
+            br#"{"provider-model": {"litellm_provider": "provider"}}"#,
+            None,
+            IntegrityLimits::UNCHECKED,
+        )
+        .unwrap();
+        (router, shaper.table(cost_map).shaping)
     }
 
     #[rstest]

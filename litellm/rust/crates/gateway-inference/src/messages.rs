@@ -132,7 +132,12 @@ impl<H: Host> RouteAttempt for MessagesAttempt<'_, H> {
             timeout: routing::timeout(attempt),
             ..project(
                 deployment,
-                self.gateway.shaping(&deployment.id),
+                self.gateway
+                    .models()
+                    .shaping
+                    .get(&deployment.id)
+                    .cloned()
+                    .unwrap_or_default(),
                 routing::attempt_body(&self.body, attempt),
                 self.headers,
             )?

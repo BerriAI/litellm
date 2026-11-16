@@ -3,10 +3,12 @@ mod auth;
 mod boot;
 mod error;
 pub mod host;
+mod models;
 mod redis;
 mod secrets;
 pub use admit::{Admission, Refused, Unsupported, unsupported};
 pub use error::Error;
+pub use models::{ModelRefresh, Refreshed};
 pub use redis::RedisClients;
 
 /// The gateway served through the native host.
@@ -30,12 +32,18 @@ use litellm_http::{
     media::PublicDnsResolver,
 };
 use litellm_inference::resources::CoreResources;
-use litellm_model_catalog::{BUNDLED_REGISTRY, Catalog};
+use litellm_model_catalog::CostMap;
 use litellm_secrets::source::EnvironmentSecrets;
 use litellm_tracing::ByteChunk;
 use uuid::Uuid;
 
 pub async fn build_inference(config: &Config) -> Result<Arc<Gateway>, Error> {
+    Ok(build_serving(config).await?.0)
+}
+
+/// The inference gateway on the bundled cost map, and what republishes its model table from
+/// the remote one.
+pub async fn build_serving(config: &Config) -> Result<(Arc<Gateway>, ModelRefresh), Error> {
     let pool = Arc::new(HttpClientPool::new(Arc::new(PublicDnsResolver)));
     let environment = secrets::environment_values(&config.environment_variables)?;
     let lookup = |name: &str| {
@@ -44,8 +52,7 @@ pub async fn build_inference(config: &Config) -> Result<Arc<Gateway>, Error> {
             .map(|value| value.expose().to_owned())
             .or_else(|| std::env::var(name).ok())
     };
-    let catalog = Catalog::parse(BUNDLED_REGISTRY)?.value;
-    let (router, shaping) = boot::router(config, &lookup, &catalog).await?;
+    let (router, shaper) = boot::router(config, &lookup).await?;
     let settings = &config.litellm_settings;
     let http_settings = HttpSettings::from_layers([
         HttpSettingsLayer::from_environment(&lookup),
@@ -68,19 +75,26 @@ pub async fn build_inference(config: &Config) -> Result<Arc<Gateway>, Error> {
     ]);
     let http = Resolution::from(&http_settings).config;
     let client = pool.client(&http, ClientVariant::Provider)?;
+    let refresh = ModelRefresh::new(
+        shaper,
+        &lookup,
+        pool.client(&http, ClientVariant::Provider)?,
+    );
     let secrets = Arc::new(secrets::ConfigSecrets::new(
         environment,
         Arc::new(EnvironmentSecrets::python_compatible(client)),
     ));
     let resources = CoreResources::new(pool);
-    Ok(Arc::new(Gateway::new(
+    let models = refresh.table(CostMap::bundled());
+    let gateway = Arc::new(Gateway::new(
         resources,
         http,
         secrets,
         router,
-        shaping,
+        models,
         host::NativeHost,
-    )?))
+    )?);
+    Ok((gateway, refresh))
 }
 
 pub fn install_crypto_provider() {

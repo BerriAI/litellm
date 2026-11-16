@@ -14,9 +14,10 @@ use litellm_gateway::{
     Gateway,
     host::{FACTS, NativeHost},
 };
-use litellm_gateway_inference::router;
+use litellm_gateway_inference::{ModelTable, router};
 use litellm_http::{HttpClientPool, HttpSettings, Resolution, media::PublicDnsResolver};
 use litellm_inference::resources::CoreResources;
+use litellm_model_catalog::CostMap;
 use litellm_secret_value::SecretValue;
 use litellm_secrets::source::SecretSource;
 
@@ -155,7 +156,10 @@ pub fn group_app(deployments: &[(&str, &str)], router_settings: Value) -> Router
         Resolution::from(&HttpSettings::default()).config,
         Arc::new(NoSecrets),
         models,
-        HashMap::new(),
+        ModelTable {
+            cost_map: CostMap::bundled(),
+            shaping: HashMap::new(),
+        },
         NativeHost,
     )
     .unwrap();
@@ -198,7 +202,10 @@ fn deployment_app(
         http,
         secrets,
         models,
-        HashMap::from([(id, serde_json::from_value(shaping).unwrap())]),
+        ModelTable {
+            cost_map: CostMap::bundled(),
+            shaping: HashMap::from([(id, serde_json::from_value(shaping).unwrap())]),
+        },
         NativeHost,
     )
     .unwrap();
