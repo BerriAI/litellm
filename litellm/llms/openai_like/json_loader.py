@@ -58,12 +58,12 @@ _PROVIDERS_FILE_ADAPTER: Final = TypeAdapter(Mapping[str, Mapping[str, object]])
 def _read_providers_file(path: str) -> Mapping[str, Mapping[str, object]]:
     json_path: Final = Path(path)
     if not json_path.exists():
-        raise Exception(f"Providers file not found: {path}")
+        raise FileNotFoundError(f"Providers file not found: {path}")
     try:
         with open(json_path) as handle:
             return _PROVIDERS_FILE_ADAPTER.validate_python(json.load(handle))
     except Exception as error:
-        raise Exception(f"Error loading providers file {path}: {error}") from error
+        raise ValueError(f"Error loading providers file {path}: {error}") from error
 
 
 class SimpleProviderConfig:
@@ -99,7 +99,6 @@ class SimpleProviderConfig:
         self.provider_info: ProviderSpecificModelInfo = (
             _PROVIDER_INFO_ADAPTER.validate_python(data["provider_info"]) if "provider_info" in data else {}
         )
-
 
     def resolve_api_key(self, api_key: str | None) -> str | None:
         from litellm.secret_managers.main import get_secret_str
@@ -175,7 +174,7 @@ class JSONProviderRegistry:
         try:
             loaded: Final = _provider_configs(parsed)
         except Exception as error:
-            raise Exception(f"Error loading providers file {path}: {error}") from error
+            raise ValueError(f"Error loading providers file {path}: {error}") from error
         cls._providers.update(loaded)
 
     @classmethod
