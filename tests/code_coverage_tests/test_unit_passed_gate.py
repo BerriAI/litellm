@@ -49,7 +49,7 @@ def test_combined_shard_collects_client_dependencies_beside_native_route_package
             continue
         flags: Final = tuple(token for token in tokens if token.startswith("-"))
         result: Final = subprocess.run(
-            [sys.executable, "-m", "pytest", *paths, *flags, "--collect-only", "-q"],
+            [sys.executable, "-P", "-m", "pytest", *paths, *flags, "--collect-only", "-q"],
             cwd=tmp_path,
             env={**os.environ, "PYTHONPATH": str(dependency)},
             capture_output=True,
