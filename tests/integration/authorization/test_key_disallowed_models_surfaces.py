@@ -8,7 +8,7 @@ import anthropic
 import openai
 import pytest
 from integration._support.client import JSON_OBJECT, Gateway, eventually, list_value, object_value, string_value
-from integration._support.database import read_rows
+from integration._support.database import read_rows, write_rows
 from integration.authorization._hidden_alias_budget import (
     anthropic_client,
     async_anthropic_client,
@@ -543,6 +543,24 @@ def test_regenerate_and_service_account_generate_store_500_disallowed_models_and
         assert [denial(response) for response in refused] == [KEY_DENIAL, KEY_DENIAL]
         served: Final = fresh_chat(rig.gateway, rig.allowed.chat, regenerated, uuid.uuid4().hex)
         assert served.status_code == 200, served.text
+
+
+def test_regenerating_a_key_that_already_stores_more_than_500_disallowed_models_returns_the_new_key(
+    rig: DenyRig,
+) -> None:
+    with rig.gateway.scenario() as scenario:
+        over: Final[list[JsonValue]] = [rig.denied.chat, *(f"stored-{index}" for index in range(500))]
+        old: Final = string_value(rig.gateway.post("/key/generate", {"disallowed_models": [rig.denied.chat]})["key"])
+        write_rows(
+            "UPDATE \"LiteLLM_VerificationToken\" SET disallowed_models = string_to_array(%s, ',') WHERE token = %s",
+            (",".join(str(entry) for entry in over), sha256(old.encode()).hexdigest()),
+        )
+        response: Final = rig.gateway.request("POST", "/key/regenerate", {"key": old})
+        assert response.status_code == 200, response.text[:300]
+        regenerated: Final = string_value(JSON_OBJECT.validate_json(response.content)["key"])
+        scenario.cleanups.callback(scenario.delete_key, regenerated)
+        assert _stored(regenerated) == [{"disallowed_models": over}]
+        assert denial(fresh_chat(rig.gateway, rig.denied.chat, regenerated, uuid.uuid4().hex)) == KEY_DENIAL
 
 
 def test_a_star_pattern_among_plain_entries_refuses_a_deployment_id_and_a_starless_glob_entry_matches_nothing(

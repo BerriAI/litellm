@@ -1272,6 +1272,7 @@ from litellm.types.proxy.management_endpoints.request_base import (  # noqa: E40
 
 class GenerateKeyResponse(KeyRequestBase):
     key: str
+    disallowed_models: Sequence[str] | None = None
     key_name: str | None = None
     key_type: str | None = None
     expires: datetime | None = None
