@@ -1133,6 +1133,24 @@ def _mcp_tool_call_name(route: str, request_body: Mapping[str, object]) -> str |
     return string_field(request_body.get("params"), "name")
 
 
+def _costs_of_tools_displayed_as(display_name: str, servers: Sequence["MCPServer"]) -> Iterator[float]:
+    for server in servers:
+        yield from _costs_of_a_servers_tools_displayed_as(display_name, server)
+
+
+def _costs_of_a_servers_tools_displayed_as(display_name: str, server: "MCPServer") -> Iterator[float]:
+    from litellm.proxy.mcp_server.cost_calculator import (  # noqa: PLC0415  # the MCP package imports the auth stack
+        mcp_tool_cost_per_query,
+    )
+
+    cost_info: Final = (server.mcp_info or {}).get("mcp_server_cost_info")
+    return (
+        mcp_tool_cost_per_query(cost_info=cost_info, tool_name=native_name)
+        for native_name, shown_name in (server.tool_name_to_display_name or {}).items()
+        if shown_name == display_name
+    )
+
+
 def is_zero_cost_mcp_tool_call(route: str, request_body: Mapping[str, object]) -> bool:
     """A tool call is free when no MCP server charges, or when every server that could run it is free for it.
 
@@ -1163,24 +1181,26 @@ def is_zero_cost_mcp_tool_call(route: str, request_body: Mapping[str, object]) -
     if tool_name is None:
         return False
     requested_server_id: Final = request_body.get("server_id") if route in MCP_TOOL_CALL_ROUTES else None
-    candidate_servers: Final = tuple(
-        server
-        for server in (
-            global_mcp_server_manager.server_owning_tool_name_prefix(tool_name),
-            (
-                global_mcp_server_manager.get_mcp_server_by_id(requested_server_id)
-                or global_mcp_server_manager.get_mcp_server_by_identifier(requested_server_id)
-            )
-            if isinstance(requested_server_id, str)
-            else None,
+    named_servers: Final = (
+        global_mcp_server_manager.server_owning_tool_name_prefix(tool_name),
+        (
+            global_mcp_server_manager.get_mcp_server_by_id(requested_server_id)
+            or global_mcp_server_manager.get_mcp_server_by_identifier(requested_server_id)
         )
-        if server is not None
+        if isinstance(requested_server_id, str)
+        else None,
     )
-    return bool(candidate_servers) and all(
-        mcp_tool_cost_per_query(cost_info=cost_info_of(server), tool_name=strip_known_server_prefix(tool_name, server))
-        <= 0
-        for server in candidate_servers
+    costs: Final = (
+        *(
+            mcp_tool_cost_per_query(
+                cost_info=cost_info_of(server), tool_name=strip_known_server_prefix(tool_name, server)
+            )
+            for server in named_servers
+            if server is not None
+        ),
+        *_costs_of_tools_displayed_as(tool_name, tuple(global_mcp_server_manager.get_registry().values())),
     )
+    return bool(costs) and all(cost <= 0 for cost in costs)
 
 
 def is_video_retrieval_request(route: str, http_method: str | None) -> bool:

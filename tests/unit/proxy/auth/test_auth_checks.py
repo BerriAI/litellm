@@ -2230,18 +2230,27 @@ def test_is_mcp_discovery_request(route, request_body, expected):
     assert is_mcp_discovery_request(route=route, request_body=request_body) is expected
 
 
-def _mcp_server(server_id: str, name: str, cost_info: dict[str, object] | None) -> MCPServer:
+def _mcp_server(
+    server_id: str, name: str, cost_info: dict[str, object] | None, display_names: dict[str, str] | None = None
+) -> MCPServer:
     return MCPServer(
         server_id=server_id,
         name=name,
         alias=name,
         url="https://example.invalid/mcp",
         transport=MCPTransport.http,
+        tool_name_to_display_name=display_names,
         mcp_info=None if cost_info is None else {"server_name": name, "mcp_server_cost_info": cost_info},
     )
 
 
 _UNPRICED_SERVER = ("unpriced-id", "unpriced_tools", None)
+_RENAMED_PAID_TOOL_SERVER = (
+    "renamed-id",
+    "renamed_tools",
+    {"default_cost_per_query": 0.0, "tool_name_to_cost_per_query": {"premium": 0.5, "other_premium": 0.5}},
+    {"premium": "friendly", "basic": "plain", "other_premium": "unpriced_tools-echo"},
+)
 _ZERO_PRICED_SERVER = ("zero-id", "zero_tools", {"default_cost_per_query": 0.0})
 _PAID_SERVER = (
     "paid-id",
@@ -2353,6 +2362,27 @@ _FREE_DEFAULT_PAID_TOOL_SERVER = ("mixed-id", "mixed_tools", {"tool_name_to_cost
             id="rest-free-prefix-with-a-paid-server-id",
         ),
         pytest.param(
+            (_RENAMED_PAID_TOOL_SERVER,),
+            "/mcp-rest/tools/call",
+            {"name": "friendly", "server_id": "renamed-id"},
+            False,
+            id="rest-call-by-the-display-name-of-a-paid-tool",
+        ),
+        pytest.param(
+            (_RENAMED_PAID_TOOL_SERVER,),
+            "/mcp-rest/tools/call",
+            {"name": "plain", "server_id": "renamed-id"},
+            True,
+            id="rest-call-by-the-display-name-of-a-free-tool",
+        ),
+        pytest.param(
+            (_UNPRICED_SERVER, _RENAMED_PAID_TOOL_SERVER),
+            "/mcp",
+            {"method": "tools/call", "params": {"name": "unpriced_tools-echo"}},
+            False,
+            id="jsonrpc-call-whose-free-looking-name-is-the-display-name-of-a-paid-tool",
+        ),
+        pytest.param(
             (_UNPRICED_SERVER,),
             "/mcp",
             {"method": "resources/read", "params": {"name": "unpriced_tools-echo"}},
@@ -2377,7 +2407,7 @@ def test_request_skips_budget_checks_for_mcp_tool_calls_that_cost_nothing(
     monkeypatch.setattr(  # test-quality-ok: the registry is a module singleton read by the budget check; no injection seam
         global_mcp_server_manager,
         "config_mcp_servers",
-        {server_id: _mcp_server(server_id, name, cost_info) for server_id, name, cost_info in servers},
+        {server[0]: _mcp_server(*server) for server in servers},
     )
 
     assert (
