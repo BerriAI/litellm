@@ -1144,6 +1144,7 @@ openai_compatible_providers: Final[list[str]] = [
     "lm_studio",
     "galadriel",
     "zerogpu",
+    "meragpt",
     "github_copilot",  # GitHub Copilot Chat API
     "chatgpt",  # ChatGPT subscription API
     "novita",
