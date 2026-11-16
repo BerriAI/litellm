@@ -51,7 +51,7 @@ from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.bedrock.request_metadata import bedrock_request_metadata_is_owned
 from litellm.secret_managers.main import get_secret, get_secret_str
 from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES
-from litellm.types.llms.bedrock import AWS_AUTH_PARAM_KEYS, AwsAuthParams
+from litellm.types.llms.bedrock import AWS_AUTH_PARAM_KEYS, AwsAuthParams, BedrockConverseReasoningTarget
 
 if TYPE_CHECKING:
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
@@ -71,6 +71,7 @@ _ERROR_REQUEST_URL: Final = "https://docs.litellm.ai/docs"
 _OPENAI_FAMILY_MODEL_RE: Final = re.compile(r"(^|[./])openai\.")
 _OPENAI_GPT_VERSION_RE: Final = re.compile(r"(^|[./])openai\.gpt-(\d{1,3})(?!\d)(?:\.(\d{1,3})(?!\d))?")
 _BEDROCK_RUNTIME_CHAT_COMPLETIONS_DEFAULT_SINCE: Final = (5, 6)
+_BEDROCK_CONVERSE_GPT_REDACTED_REPLAY_SINCE: Final = (5, 6)
 _XAI_GROK_MODEL_RE: Final = re.compile(r"(^|[./])xai\.grok-")
 _BEDROCK_RUNTIME_CHAT_COMPLETIONS_ENDPOINT: Final = "/v1/chat/completions"
 BedrockRoute = Literal[
@@ -1597,16 +1598,23 @@ def bedrock_model_name_without_provider(model: str) -> str:
     return name if separator and provider.isalnum() else base
 
 
-def bedrock_converse_accepts_redacted_thinking(model: str, base_model: str | None) -> bool:
+def bedrock_converse_reasoning_target(model: str, base_model: str | None) -> BedrockConverseReasoningTarget:
     """
-    Whether ``reasoningContent.redactedContent`` may be replayed to this Converse target.
+    Whose rules a Converse request follows for replayed ``reasoningContent.redactedContent``.
 
-    Only Claude takes it back. Nova, Llama, DeepSeek and gpt-oss 400 on it (checked live in us-west-2 on
-    2026-10-14), so every other target keeps dropping the block. A model id that names its model decides on
-    its own. An ARN that hides its model, like an application inference profile, falls back to the
-    deployment's ``base_model`` and counts as non-Claude without one.
+    Claude takes back base64 of its own ``data``. GPT 5.6 and later take back the ``redactedContent`` Converse
+    returned (gpt-5.6 and gpt-6 accepted it in November 2026). Nova, Llama, DeepSeek and gpt-oss 400 on it (checked
+    live in us-west-2 on 2026-10-14), so every other target drops the block. A model id that names its model
+    decides on its own. An ARN that hides its model, like an application inference profile, falls back to the
+    deployment's ``base_model`` and is ``"other"`` without one.
     """
-    return _is_claude(_converse_target_model(model, base_model))
+    target: Final = _converse_target_model(model, base_model)
+    if _is_claude(target):
+        return "claude"
+    gpt_version: Final = _openai_gpt_version(target)
+    if gpt_version is not None and gpt_version >= _BEDROCK_CONVERSE_GPT_REDACTED_REPLAY_SINCE:
+        return "openai_gpt"
+    return "other"
 
 
 def bedrock_converse_rejects_signed_thinking(model: str, base_model: str | None) -> bool:
