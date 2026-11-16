@@ -818,10 +818,18 @@ async def test_export_redacts_credential_shaped_values_under_any_key_and_in_list
 
 @pytest.mark.asyncio
 @pytest.mark.timeout(5)
-async def test_export_scans_long_credential_free_strings_in_linear_time() -> None:
-    value: Final = "sk-" * 50_000
-
-    assert await _exported_key_metadata({"note": value}) == {"note": value}
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("sk-" * 50_000, "sk-" * 50_000),
+        ("eyJ-" * 30_000, "REDACTED"),
+        ("a." * 60_000, "a." * 60_000),
+        ("x://:" * 24_000, "x://:" * 24_000),
+    ],
+    ids=["sk-run", "jwt-run", "url-scheme-run", "url-userinfo-run"],
+)
+async def test_export_scans_long_adversarial_metadata_in_linear_time(value: str, expected: str) -> None:
+    assert await _exported_key_metadata({"note": value}) == {"note": expected}
 
 
 @pytest.mark.asyncio

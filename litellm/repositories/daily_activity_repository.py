@@ -225,23 +225,27 @@ _EXPORT_CREDENTIAL_KEYS: Final[frozenset[str]] = frozenset(
 _EXPORT_CREDENTIAL_KEY_SUFFIXES: Final = ("connectionstring", "databaseurl", "dsn", "passphrase", "webhookurl")
 _CREDENTIAL_VALUE: Final = re.compile(
     r"^(?i:bearer|basic)\s+[A-Za-z0-9._~+/=-]{8,}$"
-    r"|\bsk-(?=[A-Za-z0-9_-]{0,255}\d)[A-Za-z0-9_-]{10,}"
     r"|\b[sr]k_(?:live|test)_[A-Za-z0-9]{10,}"
     r"|\b(?:AKIA|ASIA)[A-Z0-9]{16}\b"
     r"|\b(?:gh[pousr]|github_pat)_[A-Za-z0-9_]{20,}"
     r"|\bxox[abposr]-[A-Za-z0-9-]{10,}"
-    r"|\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*"
-    r"|\b[a-z][a-z0-9+.-]{0,31}://[^\s/:@]*:[^\s/@]+@"
+    r"|\beyJ[A-Za-z0-9_-]{10,}"
+    r"|\b[a-z][a-z0-9+.-]{0,31}://[^\s/:@]{0,256}:[^\s/@]{1,256}@"
     r"|https://hooks\.slack\.com/"
     r"|https://(?:discord|discordapp)\.com/api/webhooks/"
 )
+_SK_KEY_RUN: Final = re.compile(r"\bsk-[A-Za-z0-9_-]{10,}")
+
+
+def _has_sk_key(value: str) -> bool:
+    return any(any(char.isdigit() for char in run.group()) for run in _SK_KEY_RUN.finditer(value))
 
 
 def _is_export_credential(key: str, value: object) -> bool:
     normalized_key: Final = key.lower().replace("_", "").replace("-", "")
     if normalized_key in _EXPORT_CREDENTIAL_KEYS or normalized_key.endswith(_EXPORT_CREDENTIAL_KEY_SUFFIXES):
         return True
-    return isinstance(value, str) and _CREDENTIAL_VALUE.search(value) is not None
+    return isinstance(value, str) and (_CREDENTIAL_VALUE.search(value) is not None or _has_sk_key(value))
 
 
 def _redacted_metadata(metadata: Mapping[str, object]) -> Mapping[str, object]:
