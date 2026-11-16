@@ -905,8 +905,8 @@ def _presidio_callbacks_in(cb_list: Iterable[object]) -> list[CustomGuardrail]:
 def test_presidio_siblings_are_tracked_and_deleted_together():
     """
     A presidio guardrail scoped to both stages registers the pre_call primary plus
-    the post_call unmask and mask-output siblings. Deleting the guardrail must remove
-    all three from every callback list, not just the primary.
+    the post_call unmask sibling. Deleting the guardrail must remove
+    both from every callback list, not just the primary.
     """
     import litellm
 
@@ -917,7 +917,7 @@ def test_presidio_siblings_are_tracked_and_deleted_together():
         handler.initialize_guardrail(_presidio_db_guardrail({"EMAIL_ADDRESS": "MASK"}))
 
         registered = _presidio_callbacks_in(litellm.callbacks)
-        assert len(registered) == 3
+        assert len(registered) == 2
         primary = handler.guardrail_id_to_custom_guardrail[PRESIDIO_SIBLINGS_GID]
         siblings = handler.guardrail_id_to_sibling_callbacks[PRESIDIO_SIBLINGS_GID]
         assert primary is registered[0]
@@ -975,8 +975,8 @@ def test_update_in_memory_guardrail_rebuilds_presidio_siblings_and_keeps_their_s
         handler.update_in_memory_guardrail(guardrail_id=PRESIDIO_SIBLINGS_GID, guardrail=updated)
 
         rebuilt = _presidio_callbacks_in(litellm.callbacks)
-        assert len(rebuilt) == 3
-        assert [callback.pii_entities_config for callback in rebuilt] == [{"EMAIL_ADDRESS": "MASK"}] * 3
+        assert len(rebuilt) == 2
+        assert [callback.pii_entities_config for callback in rebuilt] == [{"EMAIL_ADDRESS": "MASK"}] * 2
         assert [
             (callback.apply_to_output, callback.output_parse_pii, callback.event_hook) for callback in rebuilt
         ] == roles_before
@@ -993,7 +993,7 @@ def test_repeated_db_sync_replaces_presidio_siblings_instead_of_leaking_stale_on
     The callback manager dedupes custom loggers by their scalar attributes, so a
     leaked post_call sibling blocks the re-initialized sibling from registering and
     keeps serving the previous entity config. After every DB re-sync, each callback
-    list must hold exactly the three current instances, all on the latest config.
+    list must hold exactly the two current instances, all on the latest config.
     """
     import litellm
 
@@ -1010,7 +1010,7 @@ def test_repeated_db_sync_replaces_presidio_siblings_instead_of_leaking_stale_on
 
             for cb_list in lists:
                 current = _presidio_callbacks_in(cb_list)
-                assert len({id(callback) for callback in current}) == 3
+                assert len({id(callback) for callback in current}) == 2
                 assert all(callback.pii_entities_config == latest for callback in current)
     finally:
         for cb_list, snapshot in zip(lists, snapshots):
