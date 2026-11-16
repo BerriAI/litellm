@@ -315,3 +315,20 @@ async def test_unauthorized_primary_does_not_reveal_invalid_fallback_configurati
     with pytest.raises(HTTPException) as denied:
         await resolve_vector_store_fallback_plan(primary, UserAPIKeyAuth(team_id="other-team"))
     assert denied.value.status_code == 403
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("refs", [["missing"], ["primary"], ["backup", "backup"]])
+async def test_invalid_registered_fallback_returns_client_error(monkeypatch: pytest.MonkeyPatch, refs: list[str]):
+    from fastapi import HTTPException
+
+    from litellm.proxy.vector_store_endpoints.utils import resolve_vector_store_fallback_plan
+    from litellm.types.vector_stores import LiteLLM_ManagedVectorStore
+
+    primary: Final = LiteLLM_ManagedVectorStore(
+        vector_store_id="primary", custom_llm_provider="openai", litellm_params={"fallbacks": refs}
+    )
+    monkeypatch.setattr(litellm, "vector_store_registry", VectorStoreRegistry([primary]))
+    with pytest.raises(HTTPException) as invalid:
+        await resolve_vector_store_fallback_plan(primary, UserAPIKeyAuth(user_role="proxy_admin"))
+    assert invalid.value.status_code == 400

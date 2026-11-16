@@ -764,3 +764,38 @@ async def test_raw_native_backend_errors_fail_over_only_for_transport(monkeypatc
                 ]
                 assert backend.aclose.await_count == 2
                 assert response["data"] == []
+
+
+@pytest.mark.asyncio
+async def test_embedding_outage_does_not_fail_over_vector_store(monkeypatch: pytest.MonkeyPatch):
+    from litellm.vector_stores.fallbacks import VectorStoreFallbackPlan, VectorStoreTarget, vector_store_fallback_context
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    primary: Final = VectorStoreTarget(
+        "embedding-failure-primary",
+        "valkey",
+        {
+            "valkey_host": "valkey.example",
+            "litellm_embedding_model": "openai/text-embedding-3-small",
+            "litellm_embedding_config": {"api_base": "https://failed-embedding.example/v1", "api_key": "embedding"},
+        },
+    )
+    backup: Final = VectorStoreTarget(
+        "embedding-failure-backup", "openai", {"api_base": "https://unused-backup.example/v1", "api_key": "backup"}
+    )
+    with respx.mock(assert_all_called=True) as upstream:
+        embedding: Final = upstream.post("https://failed-embedding.example/v1/embeddings").respond(503)
+        with vector_store_fallback_context(VectorStoreFallbackPlan((primary, backup), cooldown_time=0)):
+            with pytest.raises(litellm.ServiceUnavailableError):
+                await vector_stores_main.asearch("embedding-failure-primary", query="q", num_retries=0)
+        assert len(upstream.calls) == len(embedding.calls) > 0
+
+
+@pytest.mark.asyncio
+async def test_sdk_rejects_fallback_configuration_before_sending_request():
+    with respx.mock(assert_all_called=False) as upstream:
+        with pytest.raises(ValueError, match="registered vector store"):
+            await vector_stores_main.asearch("sdk-primary", query="q", fallbacks=["sdk-backup"])
+        with pytest.raises(ValueError, match="registered vector store"):
+            vector_stores_main.search("sdk-primary", query="q", fallbacks=["sdk-backup"])
+        assert len(upstream.calls) == 0

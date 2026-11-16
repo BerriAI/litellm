@@ -671,3 +671,16 @@ def test_nested_fallback_config_is_rejected() -> None:
             ]
         )
     assert registry.vector_stores == []
+
+
+@pytest.mark.parametrize("provider", ["unknown-vector-provider", "anthropic"])
+def test_fallback_provider_without_search_rejects_config_atomically(provider: str):
+    registry: Final = VectorStoreRegistry()
+    with pytest.raises(ValueError, match="provider"):
+        registry.load_vector_stores_from_config(
+            [
+                {"litellm_params": {"vector_store_id": "primary", "custom_llm_provider": "openai", "fallbacks": ["backup"]}},
+                {"litellm_params": {"vector_store_id": "backup", "custom_llm_provider": provider}},
+            ]
+        )
+    assert registry.vector_stores == []

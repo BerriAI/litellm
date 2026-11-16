@@ -199,3 +199,57 @@ def test_terminal_http_status_takes_precedence_over_chained_transport_error():
     error.__cause__ = httpx.ConnectError("earlier transport error")
     outcome: Final = classify_error(primary, error)
     assert outcome == Failed(primary, error, False)
+
+
+@pytest.fixture
+def cooldown_redis(monkeypatch: pytest.MonkeyPatch):
+    from unittest.mock import AsyncMock, MagicMock
+
+    from redis import Redis
+    from redis.asyncio import Redis as AsyncRedis
+
+    from litellm.caching.redis_cache import RedisCache
+
+    monkeypatch.setattr(Redis, "execute_command", lambda *args, **kwargs: {"redis_version": "7.0.0"})
+    cache: Final = RedisCache(host="cooldown.example", port=6379)
+    backend: Final = MagicMock()
+    backend.mget = AsyncMock(return_value=[None, None])
+    backend.set = AsyncMock(return_value=True)
+    monkeypatch.setattr(AsyncRedis, "mget", backend.mget)
+    monkeypatch.setattr(AsyncRedis, "set", backend.set)
+    monkeypatch.setattr(AsyncRedis, "ping", AsyncMock(return_value=True))
+    return cache, backend
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("redis_available", [True, False])
+async def test_cooldown_survives_redis_outage_and_is_visible_to_another_worker(cooldown_redis, redis_available: bool):
+    redis_cache, backend = cooldown_redis
+    clock: Final = Clock()
+    cache: Final = DualCache(in_memory_cache=InMemoryCache(clock=clock), redis_cache=redis_cache)
+    plan: Final = VectorStoreFallbackPlan((target("redis-primary"), target("redis-backup")), cooldown_time=0.25)
+    attempts: Final[list[str]] = []
+    if not redis_available:
+        backend.set.side_effect = ConnectionError("Redis unavailable")
+        backend.mget.side_effect = ConnectionError("Redis unavailable")
+
+    async def attempt(candidate: VectorStoreTarget):
+        attempts.append(candidate.store_id)
+        if candidate == plan.targets[0]:
+            return Failed(candidate, httpx.ConnectError("backend unavailable"), True)
+        return Served(candidate, "results")
+
+    first: Final = await execute_with_vector_store_fallbacks(plan, attempt, cache=cache, clock=clock)
+    if redis_available:
+        backend.mget.return_value = [b"100.25", None]
+    second: Final = await execute_with_vector_store_fallbacks(
+        plan,
+        attempt,
+        cache=DualCache(in_memory_cache=InMemoryCache(clock=clock), redis_cache=redis_cache) if redis_available else cache,
+        clock=clock,
+    )
+    assert first == second == Served(plan.targets[1], "results", 1)
+    assert attempts == ["redis-primary", "redis-backup", "redis-backup"]
+    backend.set.assert_awaited_once_with(
+        name="vector_store_fallback_cooldown:redis-primary", value="100.25", nx=False, ex=1
+    )
