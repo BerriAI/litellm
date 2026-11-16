@@ -13,14 +13,17 @@ const RATES = { source: "ecb", rate_date: "2026-11-13", usd_per_unit: { USD: 1, 
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 
-const renderFresh = (ui: ReactElement) => {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+const newClient = () => new QueryClient({ defaultOptions: { queries: { retry: false } } });
+
+const renderFresh = (ui: ReactElement, client = newClient()) => {
   const wrap = (node: ReactElement) => <QueryClientProvider client={client}>{node}</QueryClientProvider>;
   const rendered = render(wrap(ui));
   return { ...rendered, client, rerender: (next: ReactElement) => rendered.rerender(wrap(next)) };
 };
 
 const trigger = () => screen.getByRole("combobox", { name: "Spend display" });
+
+const UNAVAILABLE = "Reference rates are unavailable, spend is shown in USD";
 
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ["Date"] });
@@ -96,6 +99,44 @@ describe("SpendDisplayCurrency", () => {
     expect(screen.queryByText(/estimated/)).not.toBeInTheDocument();
     expect(trigger()).toHaveTextContent("USD");
     expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("asks for rates again when the selector is reopened after they failed", async () => {
+    const user = userEvent.setup();
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(json({ detail: "unavailable" }, 503))
+      .mockResolvedValue(json(RATES));
+    vi.stubGlobal("fetch", fetch);
+    renderFresh(<SpendDisplayCurrency usdSpend={42.5} loading={false} />);
+    await user.click(trigger());
+    expect(await screen.findByText(UNAVAILABLE)).toBeVisible();
+    await user.keyboard("{Escape}");
+
+    await chooseSelectOption(user, trigger(), /^EUR/);
+
+    expect(await screen.findByText(/≈ EUR 34\.00 estimated/)).toBeVisible();
+    expect(screen.queryByText(UNAVAILABLE)).not.toBeInTheDocument();
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps a failure cached by another card hidden until this card is opened", async () => {
+    const user = userEvent.setup();
+    const fetch = vi.fn().mockResolvedValue(json({ detail: "unavailable" }, 503));
+    vi.stubGlobal("fetch", fetch);
+    const client = newClient();
+    const first = renderFresh(<SpendDisplayCurrency usdSpend={42.5} loading={false} />, client);
+    await user.click(trigger());
+    expect(await screen.findByText(UNAVAILABLE)).toBeVisible();
+    first.unmount();
+
+    renderFresh(<SpendDisplayCurrency usdSpend={42.5} loading={false} />, client);
+
+    expect(screen.queryByText(UNAVAILABLE)).not.toBeInTheDocument();
+    expect(fetch).toHaveBeenCalledTimes(1);
+    await user.click(trigger());
+    expect(await screen.findByText(UNAVAILABLE)).toBeVisible();
+    await waitFor(() => expect(fetch).toHaveBeenCalledTimes(2));
   });
 
   it("cancels the rate request when the overview goes away before it answers", async () => {

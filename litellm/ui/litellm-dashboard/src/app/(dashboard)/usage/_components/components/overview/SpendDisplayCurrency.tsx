@@ -26,7 +26,9 @@ export default function SpendDisplayCurrency({ usdSpend, loading }: SpendDisplay
     usable === undefined || currency === "USD" ? null : estimatedSpend(usdSpend, usable, currency, new Date());
   const shown = estimate === null ? "USD" : currency;
   const estimateMissing = currency !== "USD" && estimate === null;
-  const unavailable = rates.isError || (estimateMissing && !rates.isFetching);
+  const ratesUnusable = rates.isError || (estimateMissing && !rates.isFetching);
+  const unavailable = requested && ratesUnusable;
+  const retryable = requested && rates.isError && !rates.isFetching;
   return (
     <div className="mt-1 grid gap-1 text-xs leading-4 text-muted-foreground">
       <div className="flex items-center gap-2">
@@ -35,7 +37,9 @@ export default function SpendDisplayCurrency({ usdSpend, loading }: SpendDisplay
           value={shown}
           onValueChange={(value) => setCurrency(value ?? "USD")}
           onOpenChange={(open) => {
-            if (open) setRequested(true);
+            if (!open) return;
+            if (retryable) void rates.refetch();
+            setRequested(true);
           }}
         >
           <SelectTrigger size="sm" aria-label={t("usage.statStrip.spendDisplay.label")}>
