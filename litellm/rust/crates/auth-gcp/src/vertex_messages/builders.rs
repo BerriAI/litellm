@@ -36,6 +36,16 @@ fn value_failure(error: impl std::fmt::Display) -> GoogleLoginFailure {
     GoogleLoginFailure::new(PythonException::Value, error.to_string())
 }
 
+/// google-auth keeps a quota project of any JSON type, and the Vertex login only takes the token.
+fn without_quota_project(info: &Map<String, Value>) -> Value {
+    Value::Object(
+        info.iter()
+            .filter(|(field, _)| field.as_str() != "quota_project_id")
+            .map(|(field, value)| (field.clone(), value.clone()))
+            .collect(),
+    )
+}
+
 fn sdk_source(credentials: AccessTokenCredentials) -> TokenSource {
     Arc::new(SdkTokenSource {
         credentials,
@@ -74,7 +84,7 @@ pub(crate) fn authorized_user(info: &Map<String, Value>) -> Result<TokenSource, 
             format!("Authorized user info was not in the expected format, missing fields {missing}."),
         ));
     }
-    user_account::Builder::new(Value::Object(info.clone()))
+    user_account::Builder::new(without_quota_project(info))
         .with_scopes([CLOUD_PLATFORM_SCOPE])
         .build_access_token_credentials()
         .map(sdk_source)
@@ -89,7 +99,7 @@ pub(crate) fn external_account(info: &Map<String, Value>) -> Result<TokenSource,
             NO_CREDENTIAL_SOURCE,
         ));
     }
-    external_account::Builder::new(Value::Object(info.clone()))
+    external_account::Builder::new(without_quota_project(info))
         .with_scopes([CLOUD_PLATFORM_SCOPE])
         .build_access_token_credentials()
         .map(sdk_source)
@@ -100,7 +110,7 @@ pub(crate) fn external_account(info: &Map<String, Value>) -> Result<TokenSource,
 pub(crate) fn impersonated_service_account(
     info: &Map<String, Value>,
 ) -> Result<TokenSource, GoogleLoginFailure> {
-    impersonated::Builder::new(Value::Object(info.clone()))
+    impersonated::Builder::new(without_quota_project(info))
         .with_scopes([CLOUD_PLATFORM_SCOPE])
         .build_access_token_credentials()
         .map(sdk_source)
