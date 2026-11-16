@@ -597,11 +597,30 @@ def _published_pricing(deployment_model: str | None) -> ModelInfo | None:
         return None
 
 
+def _registered_deployment_vertex_location(model_id: str | None) -> str | None:
+    """The vertex_location the router registered for a deployment, if any.
+
+    Registration records a deployment's configured location under its
+    model_info.id in litellm.model_cost (see deployment_model_cost_payload),
+    so a logging object that knows only the serving deployment's id can still
+    price on the location that deployment was configured with.
+    """
+    if model_id is None:
+        return None
+    registered: Final = litellm.model_cost.get(model_id)
+    if not isinstance(registered, dict):
+        return None
+    from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
+
+    return VertexBase.explicit_vertex_ai_location(registered)
+
+
 def resolve_vertex_location_for_cost(
     custom_llm_provider: str | None,
     litellm_params: Mapping[str, object] | None,
     optional_params: Mapping[str, object] | None,
     model: str,
+    model_id: str | None = None,
 ) -> str | None:
     """
     The Vertex AI location a request was served from, resolved the same way
@@ -611,7 +630,10 @@ def resolve_vertex_location_for_cost(
     Chat dispatch reads the location from request kwargs, which reach this
     logging object through optional_params: on the proxy the logging object is
     created before the router picks a deployment, so the deployment's location
-    never lands in litellm_params.
+    never lands in litellm_params. Routes that never carry it there (the
+    messages and responses bridges, cache hits) still know the serving
+    deployment's model_info.id, so the location the router registered for
+    that deployment is consulted before the process-wide default.
     """
     if custom_llm_provider is None or not custom_llm_provider.startswith("vertex_ai"):
         return None
@@ -621,6 +643,7 @@ def resolve_vertex_location_for_cost(
     configured_location: Final = (
         VertexBase.explicit_vertex_ai_location(optional_params or empty)
         or VertexBase.explicit_vertex_ai_location(litellm_params or empty)
+        or _registered_deployment_vertex_location(model_id)
         or VertexBase.safe_get_vertex_ai_location(empty)
     )
     return VertexBase.get_vertex_region(configured_location, model)
@@ -2522,6 +2545,7 @@ class Logging(LiteLLMLoggingBaseClass):
                     litellm_params=(self.litellm_params if hasattr(self, "litellm_params") else None),
                     optional_params=self.optional_params,
                     model=model_value,
+                    model_id=router_model_id,
                 ),
                 "region_name": _resolve_mantle_region_for_cost(
                     custom_llm_provider=cost_custom_llm_provider,
