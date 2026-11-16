@@ -1,6 +1,6 @@
 use std::str::FromStr;
 
-use crate::serde_compat::parse_str_bool;
+use litellm_python_compat::flags::str_to_bool;
 
 pub trait Lookup {
     fn get(&self, name: &str) -> Option<String>;
@@ -11,7 +11,7 @@ pub trait Lookup {
 
     fn enabled(&self, name: &str) -> Option<bool> {
         self.get(name)
-            .is_some_and(|value| parse_str_bool(&value) == Some(true))
+            .is_some_and(|value| str_to_bool(&value) == Some(true))
             .then_some(true)
     }
 
@@ -66,6 +66,8 @@ pub fn merge<L: Layer>(highest_precedence_first: impl IntoIterator<Item = L>) ->
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
+
     use super::*;
 
     fn env_of(values: &'static [(&'static str, &'static str)]) -> impl Fn(&str) -> Option<String> {
@@ -158,5 +160,36 @@ mod tests {
     #[test]
     fn merging_no_layers_yields_the_empty_layer() {
         assert_eq!(merge(Vec::<Pair>::new()), Pair::default());
+    }
+
+    #[rstest]
+    #[case::explicit_wins(Some("  explicit "), &["FIRST", "SECOND"], Some("explicit"))]
+    #[case::absent_falls_back(None, &["FIRST", "SECOND"], Some(" first "))]
+    #[case::blank_falls_back(Some(" \t "), &["BLANK", "SECOND"], Some("second"))]
+    #[case::skips_missing_and_blank(None, &["MISSING", "BLANK", "SECOND"], Some("second"))]
+    #[case::environment_order(None, &["SECOND", "FIRST"], Some("second"))]
+    #[case::missing(None, &["MISSING", "BLANK"], None)]
+    #[case::no_environment(None, &[], None)]
+    fn resolves_explicit_value_then_first_nonblank_environment_value(
+        #[case] value: Option<&str>,
+        #[case] names: &[&str],
+        #[case] expected: Option<&str>,
+    ) {
+        let env = |name: &str| match name {
+            "FIRST" => Some(" first ".to_string()),
+            "SECOND" => Some("second".to_string()),
+            "BLANK" => Some(" \t ".to_string()),
+            _ => None,
+        };
+        assert_eq!(resolve_non_empty(value, &env, names).as_deref(), expected);
+    }
+
+    #[rstest]
+    fn explicit_value_does_not_read_the_environment() {
+        let env = |_: &str| panic!("an explicit value must short-circuit environment lookup");
+        assert_eq!(
+            resolve_non_empty(Some("key"), &env, &["KEY"]).as_deref(),
+            Some("key")
+        );
     }
 }

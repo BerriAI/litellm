@@ -1,7 +1,9 @@
 use serde_json::{Map, Value};
 use serde_with::serde_as;
 
-use crate::serde_compat::{FiniteF64, LaxI64};
+use litellm_python_compat::pydantic::LaxI64;
+
+use crate::serde_compat::FiniteF64;
 
 #[serde_as]
 #[macro_rules_attribute::apply(crate::wire_type)]

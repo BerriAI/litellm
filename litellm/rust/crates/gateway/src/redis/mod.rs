@@ -1,12 +1,14 @@
 use std::{sync::Arc, time::Duration};
 
 use litellm_circuit_breaker::Config as BreakerConfig;
-use litellm_config::{CacheSettings, Config, RedisSettings, Value};
-use litellm_core_utils::settings::Lookup;
+use litellm_config::{CacheSettings, Config, RedisSettings};
+use litellm_env::Lookup;
+use litellm_python_compat::flags::{lower_is_true, str_to_bool_or_truthy};
 use litellm_redis_client::{RedisClient, RedisEvents};
 use litellm_redis_connect::{HostServices, RedisHosts, SharedEnvironment, TracingEvents};
 use litellm_redis_resolve::Expected;
 use litellm_redis_types::Resolution;
+use serde::Deserialize;
 
 use crate::Error;
 
@@ -170,18 +172,12 @@ fn optional_environment(lookup: &dyn Lookup) -> Option<Params> {
 }
 
 fn use_transaction_buffer(config: &Config) -> bool {
-    match config
+    config
         .general_settings
         .additional_fields
         .get("use_redis_transaction_buffer")
-    {
-        Some(Value::Bool(enabled)) => *enabled,
-        Some(Value::String(text)) => matches!(
-            text.to_ascii_lowercase().as_str(),
-            "true" | "1" | "yes" | "on"
-        ),
-        _ => false,
-    }
+        .and_then(|value| litellm_python_compat::Value::deserialize(value).ok())
+        .is_some_and(|value| str_to_bool_or_truthy(&value))
 }
 
 async fn reachable(client: RedisClient) -> Option<RedisClient> {
@@ -209,7 +205,7 @@ fn parse_seconds(text: &str) -> Option<Duration> {
 fn breaker_config(lookup: &dyn Lookup) -> Result<Option<BreakerConfig>, Error> {
     let enabled = lookup
         .get("REDIS_CIRCUIT_BREAKER_ENABLED")
-        .is_none_or(|value| value.eq_ignore_ascii_case("true"));
+        .is_none_or(|value| lower_is_true(&value));
     if !enabled {
         return Ok(None);
     }
@@ -258,7 +254,7 @@ fn environment_value<T>(
 
 #[cfg(test)]
 mod tests {
-    use litellm_core_utils::settings::Lookup;
+    use litellm_env::Lookup;
     use std::{collections::HashMap, time::Duration};
 
     use litellm_config::Config;
@@ -269,7 +265,7 @@ mod tests {
 
     use std::sync::Arc;
 
-    use super::{Params, Plan, Resources, Target, plan};
+    use super::{Params, Plan, Resources, Target, plan, use_transaction_buffer};
     use crate::Error;
 
     async fn connect(config: &Config, lookup: &dyn Lookup) -> Result<super::RedisClients, Error> {
@@ -355,6 +351,30 @@ mod tests {
         #[case] expected: Plan,
     ) {
         assert_eq!(resolved(yaml, environment).unwrap(), expected);
+    }
+
+    /// Expected values from `str_to_bool(value) if isinstance(value, str) else value` read as a condition,
+    /// how `get_transaction_buffer_redis_cache` and `should_commit_spend_updates_to_redis` read the setting.
+    #[rstest]
+    #[case::text_true("\"true\"", true)]
+    #[case::padded_text("\" True \"", true)]
+    #[case::text_false("\"false\"", false)]
+    #[case::yes_is_not_true("\"yes\"", false)]
+    #[case::on_is_not_true("\"on\"", false)]
+    #[case::text_one_is_not_true("\"1\"", false)]
+    #[case::number_one("1", true)]
+    #[case::number_zero("0", false)]
+    #[case::boolean("true", true)]
+    #[case::null("null", false)]
+    fn the_transaction_buffer_flag_reads_like_str_to_bool(
+        #[case] value: &str,
+        #[case] expected: bool,
+    ) {
+        let config = Config::from_yaml(&format!(
+            "general_settings:\n  use_redis_transaction_buffer: {value}"
+        ))
+        .unwrap();
+        assert_eq!(use_transaction_buffer(&config), expected);
     }
 
     #[rstest]
