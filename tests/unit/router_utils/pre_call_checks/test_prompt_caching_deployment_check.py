@@ -765,6 +765,90 @@ async def test_wildcard_route_resolves_underlying_model_minimum(local_model_cost
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("background", [False, True], ids=["routing", "success"])
+@pytest.mark.parametrize(
+    "request_messages,request_kwargs,deployment_params",
+    [
+        ([{"role": "user", "content": "word " * 4000}], {}, {}),
+        ([{"role": "user", "content": [{"type": "text", "text": "word " * 4000}]}], {}, {}),
+        ([{"role": "user", "content": "hello"}], {"system": "word " * 4000}, {}),
+        (
+            [{"role": "user", "content": "hello"}],
+            {"tools": [{"type": "function", "function": {"name": "search", "description": "word " * 4000}}]},
+            {},
+        ),
+        ([], {}, {}),
+        (
+            [{"role": "user", "content": "word " * 4000}],
+            {"cache_control_injection_points": [{"location": "message", "index": -1}]},
+            {},
+        ),
+        (
+            [{"role": "user", "content": "word " * 4000}],
+            {},
+            {"cache_control_injection_points": [{"location": "message", "index": -1}]},
+        ),
+    ],
+    ids=["string", "blocks", "system", "tools", "empty", "request_injections", "deployment_injections"],
+)
+async def test_unmarked_request_does_not_wait_for_token_count_capacity(
+    monkeypatch: pytest.MonkeyPatch,
+    background: bool,
+    request_messages: list[AllMessageValues],
+    request_kwargs: dict[str, object],
+    deployment_params: dict[str, object],
+) -> None:
+    import anyio
+
+    from litellm.litellm_core_utils.token_counter import _count_offload_limiter_for_this_loop
+
+    monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", False)
+    check: Final = PromptCachingDeploymentCheck(cache=DualCache())
+    deployments: Final = [
+        {**deployment, "litellm_params": {**deployment["litellm_params"], **deployment_params}}
+        for deployment in _deployments("anthropic/claude-fable-5", "anthropic/claude-fable-5")
+    ]
+    limiter: Final = _count_offload_limiter_for_this_loop()
+    borrowers: Final = tuple(object() for _ in range(int(limiter.total_tokens)))
+    for borrower in borrowers:
+        limiter.acquire_on_behalf_of_nowait(borrower)
+
+    async def handle_request() -> None:
+        if background:
+            await check.async_log_success_event(
+                kwargs=_success_kwargs(
+                    call_type="acompletion",
+                    model="anthropic/claude-fable-5",
+                    model_id="dep-1",
+                    request_messages=request_messages,
+                    request_kwargs=request_kwargs,
+                ),
+                response_obj=None,
+                start_time=None,
+                end_time=None,
+            )
+            return
+        result: Final = await check.async_filter_deployments(
+            model=MODEL_GROUP_ALIAS,
+            healthy_deployments=deployments,
+            messages=request_messages,
+            request_kwargs=request_kwargs,
+        )
+        assert result is deployments
+
+    task: Final = asyncio.create_task(handle_request())
+    try:
+        await anyio.wait_all_tasks_blocked()
+        assert task.done(), "A request without a cacheable prefix must not wait for token-count capacity"
+        assert task.exception() is None
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        for borrower in borrowers:
+            limiter.release_on_behalf_of(borrower)
+
+
+@pytest.mark.asyncio
 async def test_async_filter_deployments_counts_the_prompt_off_the_event_loop():
     from tests.large_text import text
     from tests.unit.litellm_core_utils.event_loop_lag import (
@@ -776,7 +860,10 @@ async def test_async_filter_deployments_counts_the_prompt_off_the_event_loop():
     warm_tokenizer("anthropic/claude-fable-5")
     check = PromptCachingDeploymentCheck(cache=DualCache())
     deployments = _deployments("anthropic/claude-fable-5", "anthropic/claude-fable-5")
-    messages = cast(list[AllMessageValues], [{"role": "user", "content": text * 100}])
+    messages = cast(
+        list[AllMessageValues],
+        [{"role": "user", "content": [{"type": "text", "text": text * 100, "cache_control": {"type": "ephemeral"}}]}],
+    )
 
     result, took, lags = await timed_with_loop_lags(
         lambda: check.async_filter_deployments(
@@ -1372,6 +1459,36 @@ def _success_kwargs(
             [{"role": "user", "content": "weather?"}],
             {"tools": [_OPENAI_TOOL]},
             id="chat_tool_breakpoint_only",
+        ),
+        pytest.param(
+            "acompletion",
+            [{"role": "user", "content": "weather?"}],
+            {"tools": (_OPENAI_TOOL,)},
+            id="chat_tuple_tool_breakpoint_only",
+        ),
+        pytest.param(
+            "acompletion",
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "word " * 3000, "prompt_cache_breakpoint": {}},
+                    ],
+                }
+            ],
+            {},
+            id="chat_prompt_cache_breakpoint_only",
+        ),
+        pytest.param(
+            "acompletion",
+            [
+                {
+                    "role": "user",
+                    "content": [*({"type": "text", "text": "word"} for _ in range(4096)), _marked("word " * 3000)],
+                }
+            ],
+            {},
+            id="chat_breakpoint_after_large_unmarked_block_list",
         ),
         pytest.param(
             "anthropic_messages",
