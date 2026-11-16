@@ -2239,6 +2239,9 @@ async def test_anthropic_post_retry_reserializes_mutated_body():
     provider_config.max_retry_on_anthropic_messages_http_error = 2
     provider_config.should_retry_anthropic_messages_on_http_error = Mock(return_value=True)
     provider_config.transform_anthropic_messages_request_on_http_error = _mutate
+    provider_config.transform_anthropic_messages_headers_on_http_error = Mock(
+        side_effect=lambda headers, request_data: headers
+    )
     # Re-sign returns no signed body (native anthropic path) -> must re-dump.
     provider_config.sign_request = Mock(return_value=({}, None))
 
@@ -2329,6 +2332,67 @@ async def test_anthropic_post_skips_the_thinking_strip_retry_when_block_binding_
     else:
         assert (await _post()).status_code == 200
     assert http_client.post.await_count == expected_posts
+
+
+@pytest.mark.asyncio
+async def test_anthropic_post_resends_a_conversation_bound_elsewhere_whole_asking_to_drop_mismatched_blocks() -> None:
+    """Stripping every thinking block answers from a history the client never replays, so the
+    client's next turn is bound elsewhere again. The retry keeps the history and the thinking
+    config and asks the API to drop only the mismatched blocks, with the beta that field needs."""
+    import json as _json
+
+    from litellm.llms.anthropic.messages.native.transformation import AnthropicMessagesConfig
+
+    handler = BaseLLMHTTPHandler()
+    request_body = {
+        "model": "claude-opus-5-5",
+        "messages": [
+            {"role": "user", "content": "hi"},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": "plan", "signature": "sig"},
+                    {"type": "text", "text": "hello"},
+                ],
+            },
+            {"role": "user", "content": "again"},
+        ],
+        "thinking": {"type": "adaptive"},
+    }
+    first_body: Final = _json.dumps(request_body)
+    request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+    http_client = Mock()
+    http_client.post = AsyncMock(
+        side_effect=[
+            httpx.Response(400, request=request, text=_BOUND_THINKING_ERROR),
+            httpx.Response(200, request=request, json={"type": "message", "content": []}),
+        ]
+    )
+    logging_obj: Final = Mock(baseline_cache_context=None)
+    logging_obj.model_call_details = {}
+
+    response = await handler._async_post_anthropic_messages_with_http_error_retry(
+        async_httpx_client=http_client,
+        request_url="https://api.anthropic.com/v1/messages",
+        headers={"x-api-key": "k", "anthropic-version": "2023-06-01"},
+        signed_json_body=None,
+        request_body=request_body,
+        stream=False,
+        logging_obj=logging_obj,
+        provider_config=AnthropicMessagesConfig(),
+        litellm_params=GenericLiteLLMParams(),
+        api_key="k",
+        model="claude-opus-5-5",
+    )
+
+    assert response.status_code == 200
+    first, retried = (call.kwargs for call in http_client.post.await_args_list)
+    assert "anthropic-beta" not in first["headers"]
+    assert retried["headers"]["anthropic-beta"] == "thinking-binding-controls-2026-08-01"
+    assert _json.loads(retried["data"]) == {
+        **_json.loads(first_body),
+        "thinking": {"type": "adaptive", "block_binding": {"prefix_mismatch_behavior": "drop_block"}},
+    }
 
 
 def test_base_responses_config_sign_request_is_noop_by_default():

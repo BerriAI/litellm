@@ -776,6 +776,7 @@ async fn send_recovering(
 ) -> Result<(Upstream, Bytes), Error> {
     let config = request.provider.config();
     let mut body = std::borrow::Cow::Borrowed(&request.wire.body);
+    let mut headers = std::borrow::Cow::Borrowed(&request.wire.headers);
     let mut attempt = 1;
     let mut recovered: Vec<(u16, String)> = Vec::new();
     loop {
@@ -786,18 +787,14 @@ async fn send_recovering(
         // The credential header built from the caller's api_key never passes the caller header
         // check, so it is checked on the wire headers as Python's client encodes them.
         if request.ascii_request_headers
-            && let Some((_, value)) = request
-                .wire
-                .headers
-                .iter()
-                .find(|(_, value)| !value.is_ascii())
+            && let Some((_, value)) = headers.iter().find(|(_, value)| !value.is_ascii())
         {
             return Err(Error::transport(UnencodableHeader::Sent(
                 value.as_bytes().to_vec(),
             )));
         }
         let authenticated = Authenticated {
-            headers: request.wire.headers.clone(),
+            headers: headers.to_vec(),
             signer: request.signer.clone(),
         };
         let sent_body = raw_leaf_body(&body)?;
@@ -861,6 +858,9 @@ async fn send_recovering(
         }) {
             let rebuilt = fallback.body(config)?;
             let replayed = replayed_recoveries(config, rebuilt, &recovered, request);
+            headers = std::borrow::Cow::Owned(
+                config.retry_headers_after_http_error(headers.into_owned(), &replayed.body),
+            );
             body = std::borrow::Cow::Owned(replayed.body.clone());
             context.provider_request_retried(replayed).await?;
             continue;
@@ -882,6 +882,9 @@ async fn send_recovering(
         recovered.push((failure.status, failure.text.clone()));
         tracing::debug!(
             "Anthropic /v1/messages: retrying after a recoverable HTTP error (attempt {attempt}/{MESSAGES_HTTP_ERROR_ATTEMPTS})."
+        );
+        headers = std::borrow::Cow::Owned(
+            config.retry_headers_after_http_error(headers.into_owned(), &retried.body),
         );
         body = std::borrow::Cow::Owned(retried.body.clone());
         context.provider_request_retried(retried).await?;

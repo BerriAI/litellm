@@ -1,4 +1,6 @@
-use crate::anthropic::messages::transformation::retry_anthropic_messages_after_http_error;
+use crate::anthropic::messages::transformation::{
+    retry_anthropic_messages_after_http_error, transform_anthropic_messages_headers_on_http_error,
+};
 use litellm_host::interceptors::RetriedRequest;
 use std::sync::LazyLock;
 
@@ -67,6 +69,10 @@ impl BaseMessagesConfig for BedrockMantleAnthropicMessagesConfig {
         context: &MessagesTransformContext,
     ) -> Option<RetriedRequest> {
         retry_anthropic_messages_after_http_error(status, error_text, request_body, context)
+    }
+
+    fn retry_headers_after_http_error(&self, headers: Headers, retried_body: &Value) -> Headers {
+        transform_anthropic_messages_headers_on_http_error(headers, retried_body)
     }
 
     fn validate_environment(

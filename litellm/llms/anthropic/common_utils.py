@@ -2079,6 +2079,40 @@ def anthropic_request_errors_on_thinking_binding_mismatch(request_body: object) 
     return binding is not None and binding.get("prefix_mismatch_behavior") == "error"
 
 
+def thinking_dropping_mismatched_blocks(thinking: object) -> Mapping[object, object] | None:
+    """``thinking`` asking the API to drop the blocks bound to another conversation instead of
+    failing, keeping the rest of the replayed reasoning. None when it can't: only adaptive
+    thinking takes ``block_binding``, and a caller's own ``prefix_mismatch_behavior`` stands."""
+    adaptive: Final = validated_object_mapping(thinking)
+    if adaptive is None or adaptive.get("type") != "adaptive":
+        return None
+    binding: Final = validated_object_mapping(adaptive.get("block_binding", {}))
+    if binding is None or "prefix_mismatch_behavior" in binding:
+        return None
+    return {**adaptive, "block_binding": {**binding, "prefix_mismatch_behavior": "drop_block"}}
+
+
+def block_binding_betas(request_data: Mapping[str, object]) -> tuple[str, ...]:
+    """The beta a request body's ``thinking.block_binding`` needs, empty when it has none."""
+    thinking: Final = validated_object_mapping(request_data.get("thinking"))
+    return (
+        (ANTHROPIC_THINKING_BINDING_CONTROLS_BETA_HEADER,)
+        if thinking is not None and "block_binding" in thinking
+        else ()
+    )
+
+
+def with_anthropic_betas(headers: Mapping[str, str], betas: Sequence[str]) -> Mapping[str, str]:
+    """``headers`` with ``betas`` merged into its ``anthropic-beta`` header, whatever casing it came in."""
+    if not betas:
+        return headers
+    beta_names: Final = frozenset(name for name in headers if name.lower() == "anthropic-beta")
+    return {
+        **{name: value for name, value in headers.items() if name not in beta_names},
+        "anthropic-beta": merge_anthropic_beta_headers([headers[name] for name in sorted(beta_names)], betas),
+    }
+
+
 _CLAUDE_STRICT_TOOLS_REJECTION: Final = re.compile(
     r"Too many strict tools \(\d+\)"
     r"|Schemas contains too many (?:optional parameters|parameters with union types)"

@@ -2557,7 +2557,14 @@ class BaseLLMHTTPHandler:
                 headers, signed_json_body = await run_off_loop_if_aws(
                     provider_config,
                     provider_config.sign_request,
-                    headers=headers,
+                    headers=dict(
+                        provider_config.transform_anthropic_messages_headers_on_http_error(
+                            headers=cast(  # cast-ok: sign_request is declared as a bare dict
+                                "Mapping[str, str]", headers
+                            ),
+                            request_data=request_body,
+                        )
+                    ),
                     optional_params=optional_params_dict,
                     request_data=request_body,
                     api_base=request_url,

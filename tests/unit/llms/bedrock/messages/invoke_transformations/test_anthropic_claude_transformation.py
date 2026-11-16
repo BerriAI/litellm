@@ -4718,6 +4718,51 @@ def test_bedrock_messages_sends_the_binding_beta_with_block_binding_whatever_dro
     assert "thinking-binding-controls-2026-08-01" in result["anthropic_beta"]
 
 
+def test_bedrock_messages_retry_of_a_conversation_bound_elsewhere_asks_for_the_binding_beta_in_the_body() -> None:
+    request: Final = httpx.Request("POST", "https://bedrock-runtime.us-east-1.amazonaws.com/model/m/invoke")
+    bound_elsewhere: Final = httpx.HTTPStatusError(
+        "rejected",
+        request=request,
+        response=httpx.Response(
+            400,
+            request=request,
+            text='{"message": "messages.1.content.0: Invalid `signature` in `thinking` block. '
+            'The block is bound to a different conversation."}',
+        ),
+    )
+    body: Final = {
+        "anthropic_version": "bedrock-2023-05-31",
+        "anthropic_beta": ["interleaved-thinking-2025-05-14"],
+        "max_tokens": 100,
+        "thinking": {"type": "adaptive"},
+        "messages": [
+            {"role": "user", "content": "hi"},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": "plan", "signature": "sig"},
+                    {"type": "text", "text": "ok"},
+                ],
+            },
+            {"role": "user", "content": "continue"},
+        ],
+    }
+    config: Final = AmazonAnthropicClaudeMessagesConfig()
+
+    retried: Final = config.transform_anthropic_messages_request_on_http_error(
+        e=bound_elsewhere, request_data=copy.deepcopy(body)
+    )
+
+    assert retried == {
+        **body,
+        "anthropic_beta": ["interleaved-thinking-2025-05-14", "thinking-binding-controls-2026-08-01"],
+        "thinking": {"type": "adaptive", "block_binding": {"prefix_mismatch_behavior": "drop_block"}},
+    }
+    assert config.transform_anthropic_messages_headers_on_http_error(
+        headers={"Content-Type": "application/json"}, request_data=retried
+    ) == {"Content-Type": "application/json"}
+
+
 @dataclass(slots=True)
 class BedrockDownAnthropicUp:
     anthropic_bodies: tuple[dict[str, object], ...] = ()

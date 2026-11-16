@@ -235,17 +235,31 @@ class BaseAnthropicMessagesConfig(ABC):
     ) -> dict[str, object]:
         """
         Mutates request_data in place when retrying after a recoverable HTTP error.
+
+        A block bound to a different conversation is retried with ``drop_block``, which drops
+        only the mismatched blocks. Stripping every block instead would answer from a history
+        the client never replays, so its next turn fails the same check.
         """
         from litellm.llms.anthropic.common_utils import (
             is_anthropic_invalid_thinking_block_error,
+            is_anthropic_thinking_binding_mismatch_error,
             is_claude_strict_tools_rejection,
             strip_thinking_blocks_from_anthropic_messages_request_dict,
+            thinking_dropping_mismatched_blocks,
             tools_without_strict,
             warn_claude_strict_tools_dropped,
         )
 
         if e.response.status_code == 400 and is_anthropic_invalid_thinking_block_error(e.response.text):
-            strip_thinking_blocks_from_anthropic_messages_request_dict(request_data)
+            dropping_thinking: Final = (
+                thinking_dropping_mismatched_blocks(request_data.get("thinking"))
+                if is_anthropic_thinking_binding_mismatch_error(e.response.text)
+                else None
+            )
+            if dropping_thinking is None:
+                strip_thinking_blocks_from_anthropic_messages_request_dict(request_data)
+            else:
+                request_data["thinking"] = dropping_thinking  # rebind-ok: the retry loop re-signs this same dict
         without_strict: Final = (
             tools_without_strict(request_data.get("tools"))
             if is_claude_strict_tools_rejection(e.response.status_code, e.response.text)
@@ -255,6 +269,17 @@ class BaseAnthropicMessagesConfig(ABC):
             warn_claude_strict_tools_dropped(without_strict.dropped_count)
             request_data["tools"] = list(without_strict.tools)  # rebind-ok: the retry loop re-signs this same dict
         return request_data
+
+    def transform_anthropic_messages_headers_on_http_error(
+        self, headers: Mapping[str, str], request_data: Mapping[str, object]
+    ) -> Mapping[str, str]:
+        """
+        Headers for the attempt after transform_anthropic_messages_request_on_http_error, which
+        can set ``thinking.block_binding``; the API rejects that field without its beta.
+        """
+        from litellm.llms.anthropic.common_utils import block_binding_betas, with_anthropic_betas
+
+        return with_anthropic_betas(headers, block_binding_betas(request_data))
 
     def native_output_fallback_litellm_params(
         self,

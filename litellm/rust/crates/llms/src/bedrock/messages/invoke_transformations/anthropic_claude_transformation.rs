@@ -1,3 +1,4 @@
+use crate::anthropic::common_utils::block_binding_betas;
 use crate::anthropic::messages::transformation::retry_anthropic_messages_after_http_error;
 use litellm_host::interceptors::RetriedRequest;
 
@@ -22,7 +23,8 @@ use litellm_auth_aws::{
 use litellm_llms_types::formats::messages::{MessagesOptionalParams, MessagesRequest};
 use litellm_llms_types::providers::bedrock::{INVOKE_PATH, INVOKE_STREAM_PATH};
 use litellm_router_types::LitellmParams;
-use serde_json::Value;
+use serde_json::{Value, json};
+use std::collections::BTreeSet;
 
 use crate::{
     Error,
@@ -222,7 +224,12 @@ impl BaseMessagesConfig for AmazonAnthropicClaudeMessagesConfig {
         request_body: &Value,
         context: &MessagesTransformContext,
     ) -> Option<RetriedRequest> {
-        retry_anthropic_messages_after_http_error(status, error_text, request_body, context)
+        retry_anthropic_messages_after_http_error(status, error_text, request_body, context).map(
+            |retried| RetriedRequest {
+                body: with_block_binding_body_beta(retried.body),
+                ..retried
+            },
+        )
     }
 
     fn shape_request(
@@ -366,6 +373,29 @@ impl BaseMessagesConfig for AmazonAnthropicClaudeMessagesConfig {
     fn stream_decoder(&self) -> Option<StreamDecoder> {
         Some(stream::get_async_streaming_response_iterator)
     }
+}
+
+/// InvokeModel reads betas from the body's `anthropic_beta`, so a retry that set
+/// `thinking.block_binding` adds the beta that unlocks it there instead of to the headers.
+fn with_block_binding_body_beta(body: Value) -> Value {
+    let added = block_binding_betas(&body);
+    let Value::Object(mut fields) = body else {
+        return body;
+    };
+    if added.is_empty() {
+        return Value::Object(fields);
+    }
+    let betas: BTreeSet<String> = fields
+        .get("anthropic_beta")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::to_owned)
+        .chain(added.into_iter().map(|beta| beta.to_string()))
+        .collect();
+    fields.insert("anthropic_beta".to_owned(), json!(betas));
+    Value::Object(fields)
 }
 
 #[cfg(test)]
@@ -851,6 +881,33 @@ mod tests {
             AmazonAnthropicClaudeMessagesConfig
                 .wire_body(serde_json::json!({"model": "m", "stream": true, "max_tokens": 1})),
             serde_json::json!({"max_tokens": 1})
+        );
+    }
+
+    #[test]
+    fn a_retry_dropping_mismatched_blocks_adds_its_beta_to_the_body_betas() {
+        let body = json!({
+            "anthropic_beta": ["interleaved-thinking-2025-05-14"],
+            "thinking": {"type": "adaptive"},
+            "messages": [{"role": "user", "content": "hi"}]
+        });
+
+        let retried = AmazonAnthropicClaudeMessagesConfig
+            .retry_after_http_error(
+                400,
+                "messages.1.content.0: Invalid `signature` in `thinking` block. The block is bound to a different conversation.",
+                &body,
+                &MessagesTransformContext::default(),
+            )
+            .expect("a binding mismatch is retried");
+
+        assert_eq!(
+            retried.body,
+            json!({
+                "anthropic_beta": ["interleaved-thinking-2025-05-14", "thinking-binding-controls-2026-08-01"],
+                "thinking": {"type": "adaptive", "block_binding": {"prefix_mismatch_behavior": "drop_block"}},
+                "messages": [{"role": "user", "content": "hi"}]
+            })
         );
     }
 }

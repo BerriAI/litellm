@@ -22,6 +22,7 @@ from litellm.llms.anthropic.chat.transformation import (
 from litellm.llms.anthropic.common_utils import (
     OBJECT_MAPPING_ADAPTER,
     AnthropicModelInfo,
+    block_binding_betas,
     carried_thinking_keys,
     carries_signed_compaction_block,
     validated_object_mapping,
@@ -84,6 +85,7 @@ else:
 
 
 _MODEL_INFO: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
+_BODY_BETAS: Final = TypeAdapter(tuple[str, ...])
 _MESSAGE_LIST: Final[TypeAdapter[tuple[object, ...]]] = TypeAdapter(tuple[object, ...])
 
 
@@ -174,6 +176,25 @@ class AmazonAnthropicClaudeMessagesConfig(
             return False
         warn_bedrock_native_output_rejected(model, e.response.text)
         return True
+
+    def transform_anthropic_messages_request_on_http_error(
+        self,
+        e: httpx.HTTPStatusError,
+        request_data: dict[str, object],  # mutable-ok: the base hook edits the retry loop's body in place
+    ) -> dict[str, object]:  # mutable-ok: the base hook returns the same body it edited
+        super().transform_anthropic_messages_request_on_http_error(e=e, request_data=request_data)
+        added_betas: Final = block_binding_betas(request_data)
+        if added_betas:
+            sent_betas: Final = _BODY_BETAS.validate_python(request_data.get("anthropic_beta", ()))
+            merged_betas: Final = sorted({*sent_betas, *added_betas})
+            request_data["anthropic_beta"] = merged_betas  # rebind-ok: the retry loop re-signs this same dict
+        return request_data
+
+    def transform_anthropic_messages_headers_on_http_error(
+        self, headers: Mapping[str, str], request_data: Mapping[str, object]
+    ) -> Mapping[str, str]:
+        """InvokeModel reads betas from the body's ``anthropic_beta``, which the request hook extends."""
+        return headers
 
     def validate_anthropic_messages_environment(
         self,

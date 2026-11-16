@@ -29,15 +29,16 @@ use crate::{
     anthropic::common_utils::{
         ANTHROPIC_API_BASE_ENV, ANTHROPIC_API_KEY_ENV, ANTHROPIC_AUTH_TOKEN_ENV,
         ANTHROPIC_BASE_URL_ENV, OauthHandling,
-        anthropic_request_errors_on_thinking_binding_mismatch, complete_anthropic_url,
-        existing_betas, get_auth_header, has_advisor_tool, has_anthropic_credential,
-        is_anthropic_invalid_thinking_block_error, is_anthropic_thinking_binding_mismatch_error,
-        is_claude_strict_tools_rejection, is_tool_search_used, map_messages, merge_beta_headers,
-        minted_oauth_environment, optionally_handle_anthropic_oauth,
-        requires_native_compaction_beta, strip_advisor_blocks,
+        anthropic_request_errors_on_thinking_binding_mismatch, block_binding_betas,
+        complete_anthropic_url, existing_betas, get_auth_header, has_advisor_tool,
+        has_anthropic_credential, is_anthropic_invalid_thinking_block_error,
+        is_anthropic_thinking_binding_mismatch_error, is_claude_strict_tools_rejection,
+        is_tool_search_used, map_messages, merge_beta_headers, minted_oauth_environment,
+        optionally_handle_anthropic_oauth, requires_native_compaction_beta, strip_advisor_blocks,
         strip_encrypted_reasoning_blocks_restoring_redacted_data, strip_raw_advisor_blocks,
         strip_raw_encrypted_reasoning_blocks,
-        strip_thinking_blocks_from_anthropic_messages_request, tools_without_strict,
+        strip_thinking_blocks_from_anthropic_messages_request, thinking_dropping_mismatched_blocks,
+        tools_without_strict,
     },
     base_llm::{
         auth::AuthScheme,
@@ -161,6 +162,10 @@ impl BaseMessagesConfig for AnthropicMessagesConfig {
         retry_anthropic_messages_after_http_error(status, error_text, request_body, context)
     }
 
+    fn retry_headers_after_http_error(&self, headers: Headers, retried_body: &Value) -> Headers {
+        transform_anthropic_messages_headers_on_http_error(headers, retried_body)
+    }
+
     fn headers_for_url(&self, headers: Headers, url: &str) -> Headers {
         if !is_foundry_url(url) {
             return headers;
@@ -234,7 +239,18 @@ pub fn transform_anthropic_messages_request_on_http_error(
     let mut reasons = Vec::new();
     let mut body = if status == 400 && is_anthropic_invalid_thinking_block_error(error_text) {
         reasons.push(RetryReason::ThinkingSignature);
-        strip_thinking_blocks_from_anthropic_messages_request(request_body)
+        let dropping_thinking = is_anthropic_thinking_binding_mismatch_error(error_text)
+            .then(|| thinking_dropping_mismatched_blocks(request_body.get("thinking")))
+            .flatten();
+        match (dropping_thinking, request_body) {
+            (Some(thinking), Value::Object(mut fields)) => {
+                fields.insert("thinking".to_owned(), thinking);
+                Value::Object(fields)
+            }
+            (_, request_body) => {
+                strip_thinking_blocks_from_anthropic_messages_request(request_body)
+            }
+        }
     } else {
         request_body
     };
@@ -250,6 +266,20 @@ pub fn transform_anthropic_messages_request_on_http_error(
         fields.insert("tools".to_owned(), Value::Array(without_strict.tools));
     }
     RetriedRequest { reasons, body }
+}
+
+/// Python's `transform_anthropic_messages_headers_on_http_error`: a retry that set
+/// `thinking.block_binding` sends the beta the API requires for that field.
+pub fn transform_anthropic_messages_headers_on_http_error(
+    headers: Headers,
+    retried_body: &Value,
+) -> Headers {
+    let added = block_binding_betas(retried_body);
+    if added.is_empty() {
+        headers
+    } else {
+        merge_beta_headers(headers, added)
+    }
 }
 
 pub fn retry_anthropic_messages_after_http_error(
@@ -2029,16 +2059,23 @@ mod tests {
                     error_text,
                     body.clone(),
                 );
-                let expected = if stripped {
-                    RetriedRequest {
+                let expected = match (stripped, case.get("retried_thinking")) {
+                    (true, _) => RetriedRequest {
                         reasons: vec![RetryReason::ThinkingSignature],
                         body: table["stripped_request"].clone(),
+                    },
+                    (false, Some(retried_thinking)) => {
+                        let mut retried_body = body;
+                        retried_body["thinking"] = retried_thinking.clone();
+                        RetriedRequest {
+                            reasons: vec![RetryReason::ThinkingSignature],
+                            body: retried_body,
+                        }
                     }
-                } else {
-                    RetriedRequest {
+                    (false, None) => RetriedRequest {
                         reasons: Vec::new(),
                         body,
-                    }
+                    },
                 };
                 retried != case["retried"].as_bool().unwrap() || transformed != expected
             })
@@ -2100,5 +2137,35 @@ mod tests {
             .map(|case| case["name"].as_str().unwrap())
             .collect();
         assert_eq!(mismatched, Vec::<&str>::new());
+    }
+
+    #[rstest]
+    #[case::drop_block_retry(
+        json!({"thinking": {"type": "adaptive", "block_binding": {"prefix_mismatch_behavior": "drop_block"}}}),
+        vec!["files-api-2025-04-14,thinking-binding-controls-2026-08-01"]
+    )]
+    #[case::stripped_retry(json!({"messages": []}), vec!["files-api-2025-04-14"])]
+    fn a_retried_body_carrying_block_binding_sends_the_beta_it_needs(
+        #[case] retried_body: Value,
+        #[case] betas: Vec<&str>,
+    ) {
+        let headers = vec![
+            ("x-api-key".to_owned(), "sk-ant".to_owned()),
+            (
+                "Anthropic-Beta".to_owned(),
+                "files-api-2025-04-14".to_owned(),
+            ),
+        ];
+
+        let sent = ANTHROPIC_MESSAGES_CONFIG.retry_headers_after_http_error(headers, &retried_body);
+
+        assert_eq!(
+            header_values(&sent, "anthropic-beta").collect::<Vec<_>>(),
+            betas
+        );
+        assert_eq!(
+            header_values(&sent, "x-api-key").collect::<Vec<_>>(),
+            vec!["sk-ant"]
+        );
     }
 }
