@@ -563,6 +563,34 @@ def test_regenerating_a_key_that_already_stores_more_than_500_disallowed_models_
         assert denial(fresh_chat(rig.gateway, rig.denied.chat, regenerated, uuid.uuid4().hex)) == KEY_DENIAL
 
 
+def test_a_key_that_already_stores_more_than_500_disallowed_models_is_still_read_and_updated(rig: DenyRig) -> None:
+    with rig.gateway.scenario() as scenario:
+        over: Final[list[JsonValue]] = [rig.denied.chat, *(f"stored-{index}" for index in range(500))]
+        alias: Final = f"over-cap-{uuid.uuid4().hex}"
+        key: Final = scenario.key(key_alias=alias, disallowed_models=[rig.denied.chat])
+        write_rows(
+            "UPDATE \"LiteLLM_VerificationToken\" SET disallowed_models = string_to_array(%s, ',') WHERE token = %s",
+            (",".join(str(entry) for entry in over), sha256(key.encode()).hexdigest()),
+        )
+        responses: Final = [
+            rig.gateway.request("GET", f"/key/info?key={key}"),
+            rig.gateway.request("POST", "/v2/key/info", {"keys": [key]}),
+            rig.gateway.request("GET", f"/key/list?key_alias={alias}&return_full_object=true"),
+            rig.gateway.request("POST", "/key/update", {"key": key, "max_budget": 5}),
+            rig.gateway.request("POST", "/key/bulk_update", {"keys": [{"key": key, "max_budget": 6}]}),
+        ]
+        assert [response.status_code for response in responses] == [200, 200, 200, 200, 200], [
+            response.text[:300] for response in responses
+        ]
+        info: Final = object_value(JSON_OBJECT.validate_json(responses[0].content)["info"])
+        (listed,) = list_value(JSON_OBJECT.validate_json(responses[2].content)["keys"])
+        assert (info["disallowed_models"], object_value(listed)["disallowed_models"]) == (over, over)
+        assert _stored(key) == [{"disallowed_models": over}]
+        assert denial(fresh_chat(rig.gateway, rig.denied.chat, key, uuid.uuid4().hex)) == KEY_DENIAL
+        served: Final = fresh_chat(rig.gateway, rig.allowed.chat, key, uuid.uuid4().hex)
+        assert served.status_code == 200, served.text
+
+
 def test_a_star_pattern_among_plain_entries_refuses_a_deployment_id_and_a_starless_glob_entry_matches_nothing(
     rig: DenyRig,
 ) -> None:
