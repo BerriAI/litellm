@@ -70,6 +70,7 @@ if event == 'proof' then
   redis.call('HSET', KEYS[2], 'tokens', ARGV[7], 'until', live, 'epoch', fresh)
   redis.call('PEXPIRE', KEYS[2], live - now)
   redis.call('ZREMRANGEBYSCORE', KEYS[3], '-inf', fresh)
+  redis.call('PEXPIRE', KEYS[3], live - now)
   return {}
 end
 if proven_until <= now then
@@ -82,6 +83,7 @@ if event == 'hit' then
   redis.call('HSET', KEYS[2], 'until', proven_until, 'epoch', fresh)
   redis.call('PEXPIRE', KEYS[2], proven_until - now)
   redis.call('ZREMRANGEBYSCORE', KEYS[3], '-inf', fresh)
+  redis.call('PEXPIRE', KEYS[3], proven_until - now)
   return {}
 end
 if started <= epoch then return {} end

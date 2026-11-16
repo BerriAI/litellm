@@ -18,6 +18,7 @@ from litellm.integrations.prompt_cache_alerts.detector import (
     RunScript,
     Triggered,
     Update,
+    _keys,
     apply,
     quiet,
 )
@@ -25,12 +26,14 @@ from litellm.integrations.prompt_cache_alerts.detector import (
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
 _T0: Final = 1_700_000_000_000
+_DEADLINES: Final = "return {redis.call('PEXPIRETIME', KEYS[1]), redis.call('PEXPIRETIME', KEYS[2])}"
 
 
 @dataclass(frozen=True, slots=True)
 class _Streaks:
     run: RunScript
     deployment_id: str
+    deadlines: RunScript
 
     def event(
         self,
@@ -72,7 +75,7 @@ async def streaks() -> AsyncIterator[_Streaks]:
     """Each test uses fresh deployment ids, so teardown removes exactly the keys it created and closes its client."""
     cache: Final = RedisCache(host=os.environ["REDIS_HOST"], port=int(os.environ["REDIS_PORT"]))
     deployment_id: Final = f"claude-{uuid.uuid4()}"
-    yield _Streaks(cache.async_register_script(STREAK_SCRIPT), deployment_id)
+    yield _Streaks(cache.async_register_script(STREAK_SCRIPT), deployment_id, cache.async_register_script(_DEADLINES))
     client: Final = cache.init_async_client()
     tags: Final = tuple(
         hashlib.sha256(deployment.encode()).hexdigest() for deployment in (deployment_id, f"{deployment_id}-other")
@@ -198,6 +201,27 @@ async def test_a_hit_delivered_after_the_stored_proof_expired_leaves_the_prefix_
     await streaks.proof(expired + 20)
     outcomes: Final = await streaks.apply(*streaks.misses("d", "e", "f", start=expired + 21))
     assert outcomes[-1] == Triggered(MISSES_TO_ALERT, 2048, expired + 21)
+
+
+@pytest.mark.parametrize("refresh", ["hit", "proof"])
+async def test_a_late_refresh_keeps_the_misses_after_it_alive_as_long_as_the_proof(
+    streaks: _Streaks, refresh: Literal["hit", "proof"]
+) -> None:
+    """Misses stored 20s before the proof expired expire with it. A refresh that returned before those misses but
+    arrived after them extends the proof, so the misses it keeps must expire at the same moment as the proof."""
+    await streaks.proof()
+    expiry: Final = _T0 + TTL_MS
+    a, b, c = streaks.misses("a", "b", "c", start=expiry - 20_000)
+    await streaks.apply(a, b)
+    late: Final = streaks.event(refresh, "late", expiry - 30_000, ended_ms=expiry - 25_000)
+    await streaks.apply(late, now_ms=expiry - 15_000)
+    _, state, misses, _ = _keys(streaks.deployment_id, "config-1", "prefix-1")
+    match await streaks.deadlines((state, misses), ()):
+        case [int(state_deadline), int(misses_deadline)]:
+            assert misses_deadline == state_deadline > 0
+        case reply:
+            pytest.fail(f"unexpected deadlines {reply!r}")
+    assert await streaks.apply(c, now_ms=expiry - 10_000) == (Triggered(MISSES_TO_ALERT, 2048, a.started_ms),)
 
 
 async def test_a_new_configuration_never_borrows_another_configurations_proof(streaks: _Streaks) -> None:
