@@ -452,7 +452,14 @@ def deployment_model_cost_payload(host: "PythonHost", deployment: Deployment) ->
         else off_peak
     )
     tiers: Final = {**cached, **_inherited_service_tier_pricing(host, cached, backend_model, provider)}
-    return {**tiers, **_inherited_tiered_output_rate(host, tiers, backend_model, provider)}
+    with_tiered_output: Final = {**tiers, **_inherited_tiered_output_rate(host, tiers, backend_model, provider)}
+    from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
+
+    vertex_location: Final = VertexBase.explicit_vertex_ai_location(params)
+    return {
+        **with_tiered_output,
+        **({"vertex_location": vertex_location} if vertex_location is not None else {}),
+    }
 
 
 def _bedrock_profile_pricing(backend_model: str, priced: Mapping[str, object]) -> Mapping[str, object]:
