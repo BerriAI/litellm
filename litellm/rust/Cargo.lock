@@ -4060,11 +4060,9 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "axum-login",
- "futures-util",
  "litellm-config",
  "litellm-error",
  "litellm-secret-value",
- "litellm-secrets",
  "rstest",
  "serde",
  "sha2 0.10.9",
@@ -4179,7 +4177,6 @@ dependencies = [
  "litellm-config",
  "litellm-error",
  "litellm-secret-value",
- "litellm-secrets",
  "moka",
  "rmcp",
  "rstest",
@@ -4831,7 +4828,6 @@ name = "litellm-router"
 version = "0.1.0"
 dependencies = [
  "litellm-config",
- "litellm-env",
  "litellm-inference",
  "litellm-inference-messages",
  "litellm-llms",
