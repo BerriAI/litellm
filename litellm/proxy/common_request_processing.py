@@ -593,6 +593,7 @@ async def _bill_partial_streamed_spend_on_disconnect(request_data: dict, respons
         )
         return await _dispatch_disconnect_billing_event(logging_obj, partial_responses_event)
     chunks: Final[object] = getattr(response, "chunks", None)
+    chunk_source: Final[object] = chunks
     if not isinstance(chunks, list) or not chunks:
         return False
     verbose_proxy_logger.debug(
@@ -625,7 +626,7 @@ async def _bill_partial_streamed_spend_on_disconnect(request_data: dict, respons
         partial_response.choices = list(
             _choices_without_unobserved_finish_reasons(
                 partial_response.choices,
-                ChunkProcessor.choice_indices_with_observed_finish_reason(object_items(chunks)),
+                ChunkProcessor.choice_indices_with_observed_finish_reason(object_items(chunk_source)),
                 held_finish_reason_of(response),
             )
         )
