@@ -1418,7 +1418,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
 
     async def _track_priority_usage(
         self, descriptors: Sequence[RateLimitDescriptor], user_api_key_dict: UserAPIKeyAuth
-    ) -> list[RateLimitStatus]:
+    ) -> tuple[RateLimitStatus, ...]:
         """Count one request against each tracked priority counter. The atomic call writes nothing once any counter
         is full, so a full counter is reported as it stands and the rest are counted without it."""
         tracked: Final = await self.v3_limiter.atomic_check_and_increment_by_n(
@@ -1428,13 +1428,13 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         )
         full: Final = next((status for status in tracked["statuses"] if status["code"] == "OVER_LIMIT"), None)
         if full is None:
-            return tracked["statuses"]
-        return [
+            return tuple(tracked["statuses"])
+        return (
             full,
             *await self._track_priority_usage(
-                [_without_counter(descriptor, full) for descriptor in descriptors], user_api_key_dict
+                tuple(_without_counter(descriptor, full) for descriptor in descriptors), user_api_key_dict
             ),
-        ]
+        )
 
     def _cap_admitted_output(
         self,
