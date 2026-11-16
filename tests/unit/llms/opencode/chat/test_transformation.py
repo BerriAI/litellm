@@ -14,6 +14,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import RESPONSE_COST_HEADER
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+from litellm.llms.openai_like.chat.transformation import OpenAILikeChatConfig
 from litellm.llms.opencode.chat.transformation import OpenCodeGoMessagesChatConfig
 from litellm.llms.opencode.common_utils import go_headers
 from litellm.types.utils import ModelResponseStream
@@ -784,3 +785,102 @@ def test_go_messages_route_carries_prompt_cache_breakpoint_to_cache_control_only
     wire: Final = json.dumps(request)
     assert wire.count('"cache_control"') == cache_marks
     assert "prompt_cache_breakpoint" not in wire
+
+
+@pytest.fixture
+def go_reasoning_catalog(go_catalog: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "opencode_go/fixture-reasoning",
+        {
+            "litellm_provider": "opencode_go",
+            "mode": "chat",
+            "supported_endpoints": ["/v1/chat/completions"],
+            "input_cost_per_token": 0.000002,
+            "output_cost_per_token": 0.000005,
+            "supports_reasoning": True,
+        },
+    )
+
+
+def _chat_upstream_capturing(bodies: list[Mapping[str, object]]) -> respx.MockRouter:  # mutable-ok: test probe
+    def respond(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/inference/go/openai/v1/chat/completions"
+        assert request.headers["x-opencode-session"] == "conversation-1"
+        bodies.append(json.loads(request.content))
+        return httpx.Response(200, json=upstream_reply("chat/completions", "fixture-reasoning"))
+
+    transport: Final = respx.mock(using="httpx")
+    transport.post().mock(side_effect=respond)
+    return transport
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("drop_params", (True, False), ids=("drop", "no-drop"))
+@pytest.mark.parametrize("effort", ("none", "low", "medium", "high"))
+async def test_chat_model_with_reasoning_forwards_reasoning_effort(
+    go_reasoning_catalog: None, drop_params: bool, effort: str
+) -> None:
+    bodies: Final[list[Mapping[str, object]]] = []  # mutable-ok: test probe collects upstream bodies
+    with _chat_upstream_capturing(bodies):
+        response: Final = await litellm.acompletion(
+            model="opencode_go/fixture-reasoning",
+            api_key="fake-go-key",
+            messages=[{"role": "user", "content": "hello"}],
+            reasoning_effort=effort,
+            drop_params=drop_params,
+            litellm_session_id="conversation-1",
+        )
+    assert response.choices[0].message.content == "hello"
+    assert [body.get("reasoning_effort") for body in bodies] == [effort]
+
+
+@pytest.mark.asyncio
+async def test_chat_model_with_reasoning_sends_no_reasoning_effort_when_none_requested(
+    go_reasoning_catalog: None,
+) -> None:
+    bodies: Final[list[Mapping[str, object]]] = []  # mutable-ok: test probe collects upstream bodies
+    with _chat_upstream_capturing(bodies):
+        await litellm.acompletion(
+            model="opencode_go/fixture-reasoning",
+            api_key="fake-go-key",
+            messages=[{"role": "user", "content": "hello"}],
+            litellm_session_id="conversation-1",
+        )
+    assert len(bodies) == 1
+    assert "reasoning_effort" not in bodies[0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", ("fixture-chat", "not-in-catalog-x"))
+async def test_chat_model_without_reasoning_still_drops_or_rejects_reasoning_effort(
+    go_reasoning_catalog: None, model: str
+) -> None:
+    bodies: Final[list[Mapping[str, object]]] = []  # mutable-ok: test probe collects upstream bodies
+    kwargs: Final = {
+        "model": f"opencode_go/{model}",
+        "api_key": "fake-go-key",
+        "messages": [{"role": "user", "content": "hello"}],
+        "reasoning_effort": "high",
+        "litellm_session_id": "conversation-1",
+    }
+    with _chat_upstream_capturing(bodies):
+        await litellm.acompletion(drop_params=True, **kwargs)
+        with pytest.raises(litellm.UnsupportedParamsError, match="reasoning_effort"):
+            await litellm.acompletion(drop_params=False, **kwargs)
+    assert len(bodies) == 1
+    assert "reasoning_effort" not in bodies[0]
+
+
+@pytest.mark.parametrize(
+    ("model", "added"),
+    (("fixture-reasoning", {"reasoning_effort"}), ("fixture-chat", set()), ("not-in-catalog-x", set())),
+)
+def test_chat_supported_params_add_only_reasoning_effort_and_only_for_reasoning_models(
+    go_reasoning_catalog: None, model: str, added: set[str]
+) -> None:
+    supported: Final = litellm.get_supported_openai_params(model=model, custom_llm_provider="opencode_go")
+    openai_like: Final = OpenAILikeChatConfig().get_supported_openai_params(model)
+    assert supported is not None
+    assert set(supported) - set(openai_like) == added
+    assert set(openai_like) <= set(supported)
