@@ -14216,6 +14216,37 @@ def _form_fields_without_file(form_data: Mapping[str, object]) -> Mapping[str, o
     return {key: value for key, value in form_data.items() if key != "file"}
 
 
+def _transcription_error_headers(
+    litellm_call_id: str | None,
+    data: Mapping[str, object],
+    exc: Exception,
+) -> dict[str, str] | None:
+    headers = litellm_call_id_headers(litellm_call_id)
+    model_id: str | None = None
+    logging_obj = data.get("litellm_logging_obj")
+    if isinstance(logging_obj, LiteLLMLoggingObj):
+        model_id = ProxyBaseLLMRequestProcessing(data=dict(data)).maybe_get_model_id(logging_obj)
+    if not model_id:
+        for container in (data, data.get("metadata")):
+            if not isinstance(container, Mapping):
+                continue
+            model_info = container.get("model_info")
+            if isinstance(model_info, Mapping):
+                raw_id = model_info.get("id")
+                if isinstance(raw_id, str) and raw_id:
+                    model_id = raw_id
+                    break
+    if not model_id:
+        exc_headers = getattr(exc, "headers", None)
+        if isinstance(exc_headers, Mapping):
+            raw_id = exc_headers.get("x-litellm-model-id")
+            if isinstance(raw_id, str) and raw_id:
+                model_id = raw_id
+    if model_id:
+        headers = {**(headers or {}), "x-litellm-model-id": model_id}
+    return headers
+
+
 @router.post(
     "/v1/audio/transcriptions",
     dependencies=[Depends(user_api_key_auth)],
@@ -14390,18 +14421,19 @@ async def audio_transcriptions(
             dispatched_call_type=CallTypes.atranscription.value,
         )
         log_llm_api_exception(e, litellm_call_id)
+        error_headers: Final = _transcription_error_headers(litellm_call_id, data, e)
         if isinstance(e, HTTPException):
             raise route_failure_proxy_exception(
                 e,
                 str(attribute_of(e, "message", e.detail)),
                 status.HTTP_400_BAD_REQUEST,
-                headers=litellm_call_id_headers(litellm_call_id),
+                headers=error_headers,
             )
         raise route_failure_proxy_exception(
             e,
             str(attribute_of(e, "message", e)),
             status.HTTP_500_INTERNAL_SERVER_ERROR,
-            headers=litellm_call_id_headers(litellm_call_id),
+            headers=error_headers,
             openai_code=getattr(e, "code", None),
         )
 
