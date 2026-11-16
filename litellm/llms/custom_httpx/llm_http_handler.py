@@ -126,6 +126,7 @@ from litellm.responses.streaming_iterator import (
     ProjectQuotaCallback,
     ResponsesAPIStreamingIterator,
     ResponsesWebSocketStreaming,
+    ResponsesWsFrameCheck,
     SyncResponsesAPIStreamingIterator,
 )
 from litellm.types.containers.main import (
@@ -6933,6 +6934,7 @@ class BaseLLMHTTPHandler:
         custom_llm_provider: str | None = None,
         first_message: str | None = None,
         request_defaults: ResponsesWebSocketRequestDefaults | None = None,
+        frame_check: ResponsesWsFrameCheck | None = None,
         **kwargs: object,
     ) -> Exception | None:
         """
@@ -6965,6 +6967,7 @@ class BaseLLMHTTPHandler:
                 custom_llm_provider=custom_llm_provider,
                 first_message=first_message,
                 quota_callbacks=_ws_quota_callbacks,
+                frame_check=frame_check,
                 **kwargs,
             )
             await handler.run()
@@ -12116,7 +12119,7 @@ class BaseLLMHTTPHandler:
         )
 
         if extra_headers:
-            headers.update(extra_headers)
+            headers.update(generate_content_provider_config.transform_caller_headers(extra_headers))
 
         # Get the request body from the provider config
         data: Final = generate_content_provider_config.transform_generate_content_request(
@@ -12126,9 +12129,12 @@ class BaseLLMHTTPHandler:
             generate_content_config_dict=generate_content_config_dict,
             system_instruction=system_instruction,
         )
+        request_fields: Final = generate_content_provider_config.transform_top_level_request_fields(
+            extra_body, litellm_params
+        )
 
-        if extra_body:
-            data.update(extra_body)
+        if request_fields:
+            data.update(request_fields)
 
         ## LOGGING
         logging_obj.pre_call(
@@ -12231,7 +12237,7 @@ class BaseLLMHTTPHandler:
         )
 
         if extra_headers:
-            headers.update(extra_headers)
+            headers.update(generate_content_provider_config.transform_caller_headers(extra_headers))
 
         # Get the request body from the provider config
         data: Final = generate_content_provider_config.transform_generate_content_request(
@@ -12241,9 +12247,12 @@ class BaseLLMHTTPHandler:
             generate_content_config_dict=generate_content_config_dict,
             system_instruction=system_instruction,
         )
+        request_fields: Final = generate_content_provider_config.transform_top_level_request_fields(
+            extra_body, litellm_params
+        )
 
-        if extra_body:
-            data.update(extra_body)
+        if request_fields:
+            data.update(request_fields)
 
         ## LOGGING
         logging_obj.pre_call(

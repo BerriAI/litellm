@@ -91,6 +91,11 @@ def _delta_has_signed_thinking_block(delta: object) -> bool:
     return any(isinstance(b, dict) and (b.get("signature") or b.get("data")) for b in blocks)
 
 
+def _delta_carries_reasoning_and_answer(delta: ChatCompletionDelta) -> bool:
+    has_reasoning: Final = bool(getattr(delta, "reasoning_content", None)) or _delta_has_signed_thinking_block(delta)
+    return has_reasoning and bool(delta.content or delta.tool_calls)
+
+
 def _delta_carries_output(delta: ChatCompletionDelta) -> bool:
     fields: Final = (
         delta.content,
@@ -552,6 +557,26 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         buffered: Final = self._buffered_chunk
         self._buffered_chunk = None
         return buffered
+
+    def _reasoning_part_first(self, chunk: ModelResponseStream) -> ModelResponseStream:
+        if not chunk.choices or not _delta_carries_reasoning_and_answer(chunk.choices[0].delta):
+            return chunk
+        first_choice: Final = chunk.choices[0]
+        delta: Final = first_choice.delta
+        answer_delta: Final = delta.model_copy(update={"reasoning_content": None, "thinking_blocks": None})
+        self._buffered_chunk = chunk.model_copy(
+            update={"choices": [first_choice.model_copy(update={"delta": answer_delta}), *chunk.choices[1:]]}
+        )
+        reasoning_delta: Final = ChatCompletionDelta(
+            reasoning_content=getattr(delta, "reasoning_content", None),
+            thinking_blocks=delta.thinking_blocks if hasattr(delta, "thinking_blocks") else None,
+        )
+        return chunk.model_copy(
+            update={
+                "provider_specific_fields": None,
+                "choices": [first_choice.model_copy(update={"delta": reasoning_delta, "finish_reason": None})],
+            }
+        )
 
     def _with_encoded_response_id(self, response: ResponsesAPIResponse) -> ResponsesAPIResponse:
         return ResponsesAPIRequestUtils.update_responses_api_response_id_with_model_id(
@@ -1052,7 +1077,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                             raise StopAsyncIteration
                         chunk = await self.litellm_custom_stream_wrapper.__anext__()
                     if chunk is not None:
-                        chunk = cast(ModelResponseStream, chunk)
+                        chunk = self._reasoning_part_first(cast(ModelResponseStream, chunk))
                         for src in (
                             getattr(chunk, "provider_specific_fields", None),
                             getattr(
@@ -1151,11 +1176,11 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                 try:
                     buffered_chunk = self._take_buffered_chunk()
                     if buffered_chunk is not None:
-                        chunk = buffered_chunk
+                        chunk = self._reasoning_part_first(buffered_chunk)
                     elif self._upstream_exhausted:
                         raise StopIteration
                     else:
-                        chunk = self.litellm_custom_stream_wrapper.__next__()
+                        chunk = self._reasoning_part_first(self.litellm_custom_stream_wrapper.__next__())
                     for src in (
                         getattr(chunk, "provider_specific_fields", None),
                         getattr(
