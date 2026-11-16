@@ -23,6 +23,7 @@ class Delivered:
 class Undelivered:
     reason: str
     settled: int = 0
+    rejected: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -139,6 +140,8 @@ class SinkWorker:
         self.inflight = batch
         current_batch: Batch = batch  # rebind-ok: retries advance through immutable unsettled suffixes
         while isinstance(result := await self.sink.deliver(current_batch), Undelivered):
+            if result.rejected:
+                self._record_rejection(result.rejected, result.reason)
             self.failures += 1
             verbose_proxy_logger.warning(
                 "control_plane.audit sink %s failed (%s), retry %d", self.sink.name, result.reason, self.failures
@@ -150,16 +153,19 @@ class SinkWorker:
             await self.sleep(self.backoff.delay(self.failures - 1))
         if isinstance(result, Rejected):
             count: Final = len(current_batch) if result.count is None else result.count
-            self.rejected += count
-            verbose_proxy_logger.error(
-                "control_plane.audit sink %s rejected %d records (%s), total %d",
-                self.sink.name,
-                count,
-                result.reason,
-                self.rejected,
-            )
+            self._record_rejection(count, result.reason)
         self.failures = 0
         self.inflight = None
+
+    def _record_rejection(self, count: int, reason: str) -> None:
+        self.rejected += count
+        verbose_proxy_logger.error(
+            "control_plane.audit sink %s rejected %d records (%s), total %d",
+            self.sink.name,
+            count,
+            reason,
+            self.rejected,
+        )
 
     async def flush_once(self) -> int:
         """Deliver what is queued right now, returns how many records went out. Tests drive this directly."""
