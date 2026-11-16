@@ -93,6 +93,11 @@ pub trait BaseMessagesConfig: Sync {
 
     fn secret_names(&self) -> &'static [&'static str];
 
+    /// The model Python's handler logs the call under, once `get_llm_provider` has resolved it.
+    fn logged_model(&self, model: &str) -> String {
+        model.to_string()
+    }
+
     /// Secrets read only on some paths, as Python's lazy `get_secret_str` calls are: resolved
     /// just before `validate_environment`, and only when this call names them. `python_host` is
     /// whether the route has a Python host for flows only Python runs.
