@@ -107,24 +107,28 @@ def _wait_until(moment: float) -> None:
     time.sleep(max(0.0, moment - time.time()))
 
 
+def _served(rig: Rig, key: str) -> int:
+    replies: Final = tuple(chat(rig.gateway, key, rig.shared, f"warm-{uuid.uuid4().hex}") for _ in range(WARMUP_CALLS))
+    return sum(reply.status_code == 200 for reply in replies)
+
+
 def test_a_fallback_is_served_in_the_window_after_the_team_went_over_its_share(rig: Rig) -> None:
     with rig.gateway.scenario() as scenario:
         team: Final = scenario.team(metadata={"model_tpm_limit": {rig.shared: TEAM_TPM}})
         key: Final = scenario.key(team_id=team)
         other_key: Final = scenario.key(team_id=scenario.team(metadata={"priority": "batch"}))
         model_window_start: Final = time.time()
-        for _ in range(WARMUP_CALLS):
-            chat(rig.gateway, other_key, rig.shared, f"warm-{uuid.uuid4().hex}")
+        first_warm_up: Final = _served(rig, other_key)
         _wait_until(model_window_start + WINDOW_SECONDS / 2)
         over_share: Final = chat(rig.gateway, key, rig.shared, f"over-{uuid.uuid4().hex}")
         share_window_end: Final = time.time() + WINDOW_SECONDS
         _wait_until(model_window_start + WINDOW_SECONDS + 1.5)
         idle: Final = tuple(chat(rig.gateway, key, rig.shared, f"idle-{uuid.uuid4().hex}") for _ in range(IDLE_CALLS))
         _wait_until(share_window_end + 1)
-        for _ in range(WARMUP_CALLS):
-            chat(rig.gateway, other_key, rig.shared, f"warm-{uuid.uuid4().hex}")
+        second_warm_up: Final = _served(rig, other_key)
         fallback: Final = chat(rig.gateway, key, rig.primary, f"fallback-{uuid.uuid4().hex}")
 
+    assert min(first_warm_up, second_warm_up) * REPLY_TOKENS >= MODEL_TPM * SATURATION_THRESHOLD
     assert over_share.status_code == 200, over_share.text
     assert REPLY_TOKENS > TEAM_TPM
     assert tuple(r.status_code for r in idle) == (200,) * IDLE_CALLS, [r.text for r in idle]
