@@ -314,5 +314,11 @@
       "supports_function_calling": true,
       "supports_reasoning": true
     }
+  },
+  "hubris": {
+    "base_url": "https://api.hubris.pw/v1",
+    "api_key_env": "HUBRIS_API_KEY",
+    "api_base_env": "HUBRIS_API_BASE",
+    "supported_endpoints": ["/v1/chat/completions", "/v1/responses", "/v1/messages"]
   }
 }
