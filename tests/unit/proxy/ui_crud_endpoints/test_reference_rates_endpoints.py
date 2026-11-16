@@ -2,7 +2,7 @@ import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from typing import Final
+from typing import Final, Literal
 
 import httpx
 from fastapi import FastAPI
@@ -19,6 +19,7 @@ from litellm.proxy.ui_crud_endpoints.reference_rates_endpoints import (
 )
 
 ROUTE: Final = "/get/reference_exchange_rates"
+DEADLOCK_GUARD_SECONDS: Final = 30.0
 FEED: Final = (
     "<gesmes:Envelope xmlns:gesmes='http://www.gesmes.org/xml/2002-08-01'"
     " xmlns='http://www.ecb.int/vocabulary/2002-08-01/eurofxref'><Cube><Cube time='2026-11-13'>"
@@ -50,14 +51,38 @@ class _Feed:
         return self.bodies[self.fetches - 1]
 
 
+class _GatedFeed:
+    def __init__(self) -> None:
+        self.fetches = 0
+        self.entered = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def __call__(self) -> bytes | EcbFetchFailed:
+        self.fetches += 1
+        self.entered.set()
+        await self.release.wait()
+        return FEED
+
+
+class _WaitSignallingLock(asyncio.Lock):
+    def __init__(self) -> None:
+        super().__init__()
+        self.contended = asyncio.Event()
+
+    async def acquire(self) -> Literal[True]:
+        if self.locked():
+            self.contended.set()
+        return await super().acquire()
+
+
 async def _caller() -> UserAPIKeyAuth:
     return UserAPIKeyAuth(api_key="sk-test", user_id="viewer")
 
 
-def _app(rates: EcbReferenceRates, feed: EcbFeedFetch) -> FastAPI:
+def _app(rates: EcbReferenceRates, feed: EcbFeedFetch, refresh_lock: asyncio.Lock | None = None) -> FastAPI:
     app: Final = FastAPI()
     app.include_router(router)
-    lock: Final = asyncio.Lock()
+    lock: Final = refresh_lock or asyncio.Lock()
     app.dependency_overrides[user_api_key_auth] = _caller
     app.dependency_overrides[_default_rates] = lambda: rates
     app.dependency_overrides[_default_refresh_lock] = lambda: lock
@@ -116,3 +141,24 @@ async def test_stale_rates_with_a_failed_refresh_answer_503_instead_of_stale_rat
         response: Final = await client.get(ROUTE)
 
     assert response.status_code == 503, response.text
+
+
+async def test_concurrent_first_requests_share_one_fetch() -> None:
+    feed: Final = _GatedFeed()
+    lock: Final = _WaitSignallingLock()
+    async with _client(_app(EcbReferenceRates(clock=_clock()), feed, lock)) as client:
+        first: Final = asyncio.create_task(client.get(ROUTE))
+        second: Final = asyncio.create_task(client.get(ROUTE))
+        try:
+            await asyncio.wait_for(feed.entered.wait(), DEADLOCK_GUARD_SECONDS)
+            await asyncio.wait_for(lock.contended.wait(), DEADLOCK_GUARD_SECONDS)
+            feed.release.set()
+            responses: Final = await asyncio.wait_for(asyncio.gather(first, second), DEADLOCK_GUARD_SECONDS)
+        finally:
+            feed.release.set()
+            first.cancel()
+            second.cancel()
+            await asyncio.gather(first, second, return_exceptions=True)
+
+    assert [response.json() for response in responses] == [RATES_BODY, RATES_BODY]
+    assert feed.fetches == 1
