@@ -3,11 +3,6 @@ name: Interactions spec canary
 on:
   schedule:
     - cron: "17 7 * * *"
-  pull_request:
-    paths:
-      - .github/workflows/interactions-spec-canary.yml
-      - tests/unit/interactions/**
-      - litellm/types/interactions/**
   workflow_dispatch:
 
 permissions: {}
