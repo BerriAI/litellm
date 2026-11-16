@@ -27698,7 +27698,7 @@ export interface components {
              * Evidence
              * @description Small saved snapshot explaining the alert.
              */
-            evidence: components["schemas"]["MetricEvidence"] | components["schemas"]["DeprecationEvidence"];
+            evidence: components["schemas"]["MetricEvidence"] | components["schemas"]["DeprecationEvidence"] | components["schemas"]["PromptCacheEvidence"];
             /**
              * Id
              * @description Opaque alert ID, also used as a pagination cursor.
@@ -27714,7 +27714,7 @@ export interface components {
              * @description Kind of affected resource.
              * @enum {string}
              */
-            resource_type: "gateway" | "key" | "team" | "user" | "model";
+            resource_type: "gateway" | "key" | "team" | "user" | "model" | "deployment";
             /**
              * Status
              * @description Current review status.
@@ -27724,9 +27724,8 @@ export interface components {
             /**
              * Type
              * @description Built-in alert category.
-             * @enum {string}
              */
-            type: "spend" | "traffic" | "latency" | "reliability" | "model_deprecation";
+            type: ("spend" | "traffic" | "latency" | "reliability") | ("model_deprecation" | "prompt_cache");
             /**
              * Updated At
              * Format: date-time
@@ -27829,7 +27828,7 @@ export interface components {
              * Evidence
              * @description Small saved snapshot explaining the alert.
              */
-            evidence: components["schemas"]["MetricEvidence"] | components["schemas"]["DeprecationEvidence"];
+            evidence: components["schemas"]["MetricEvidence"] | components["schemas"]["DeprecationEvidence"] | components["schemas"]["PromptCacheEvidence"];
             /**
              * History
              * @description Current Usage values for the seven baseline days and observed day. Null if unavailable.
@@ -27855,7 +27854,7 @@ export interface components {
              * @description Kind of affected resource.
              * @enum {string}
              */
-            resource_type: "gateway" | "key" | "team" | "user" | "model";
+            resource_type: "gateway" | "key" | "team" | "user" | "model" | "deployment";
             /**
              * Status
              * @description Current review status.
@@ -27865,9 +27864,8 @@ export interface components {
             /**
              * Type
              * @description Built-in alert category.
-             * @enum {string}
              */
-            type: "spend" | "traffic" | "latency" | "reliability" | "model_deprecation";
+            type: ("spend" | "traffic" | "latency" | "reliability") | ("model_deprecation" | "prompt_cache");
             /**
              * Updated At
              * Format: date-time
@@ -44680,6 +44678,46 @@ export interface components {
             prompt_id: string;
             prompt_info?: components["schemas"]["PromptInfo"] | null;
         };
+        /** PromptCacheEvidence */
+        PromptCacheEvidence: {
+            /**
+             * Config Fingerprint
+             * @description Cache-relevant deployment settings.
+             */
+            config_fingerprint: string;
+            /**
+             * Consecutive Misses
+             * @description Requests in a row that read and wrote 0.
+             */
+            consecutive_misses: number;
+            /**
+             * Prefix Fingerprint
+             * @description Keyed hash of the cached prefix.
+             */
+            prefix_fingerprint: string;
+            /**
+             * Proven Write Tokens
+             * @description Tokens the proving cache write stored.
+             */
+            proven_write_tokens: number;
+            /**
+             * Provider
+             * @description Provider that served the requests.
+             * @constant
+             */
+            provider: "anthropic";
+            /**
+             * Provider Model
+             * @description Model the provider served.
+             */
+            provider_model: string;
+            /**
+             * Ttl Seconds
+             * @description Cache lifetime of the prefix's breakpoint.
+             * @constant
+             */
+            ttl_seconds: 300;
+        };
         /** PromptCacheOptions */
         PromptCacheOptions: {
             /** Comparison Response Id */
@@ -56290,7 +56328,7 @@ export interface operations {
                 /** @description next_cursor from the preceding page. */
                 cursor?: string | null;
                 /** @description Alert category, or all performance alerts. */
-                type?: ("spend" | "traffic" | "latency" | "reliability" | "model_deprecation") | "performance" | null;
+                type?: ("spend" | "traffic" | "latency" | "reliability") | ("model_deprecation" | "prompt_cache") | "performance" | null;
             };
             header?: never;
             path?: never;
