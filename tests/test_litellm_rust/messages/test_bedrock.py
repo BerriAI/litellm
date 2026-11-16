@@ -19,6 +19,7 @@ from litellm.llms.bedrock.base_aws_llm import AwsAuthError
 from tests.test_litellm_rust.messages.data import MESSAGES, MESSAGES_EVENTS, MESSAGES_RESPONSE, RATE_LIMITED
 from tests.test_litellm_rust.support.isolation import rebound
 from tests.test_litellm_rust.support.recording_server import RecordedRequest, RecordingServer, ResponseSpec, relaxed
+from tests.test_litellm_rust.support.routing import assert_served_natively
 
 pytestmark = pytest.mark.requires_rust_extension
 
@@ -711,3 +712,43 @@ async def test_bedrock_invoke_stream_bills_the_terminal_usage_after_the_caller_d
         _OBJECT.validate_python(_OBJECT.validate_python(rust_logged[1]["response"])["usage"])["completion_tokens"]
         == 412
     )
+
+
+_SPLIT_MODEL: Final = "anthropic.claude-fixture-mantle-split"
+_CLEAR_THINKING: Final = {"edits": [{"type": "clear_thinking_20251015", "keep": "all"}]}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("bedrock_adaptive", "thinking"),
+    [
+        pytest.param(True, {"type": "adaptive"}, id="bedrock-adaptive"),
+        pytest.param(False, None, id="bedrock-not-adaptive"),
+    ],
+)
+async def test_bedrock_mantle_runs_the_invoke_helpers_on_the_bedrock_capabilities(
+    server: RecordingServer, monkeypatch: pytest.MonkeyPatch, bedrock_adaptive: bool, thinking: object
+) -> None:
+    monkeypatch.setitem(
+        litellm.model_cost,
+        _SPLIT_MODEL,
+        {"litellm_provider": "bedrock", "mode": "chat", "supports_adaptive_thinking": bedrock_adaptive},
+    )
+    monkeypatch.setitem(
+        litellm.model_cost,
+        f"bedrock_mantle/{_SPLIT_MODEL}",
+        {"litellm_provider": "bedrock_mantle", "mode": "chat", "supports_adaptive_thinking": not bedrock_adaptive},
+    )
+
+    await _RUST_ENTRY(
+        model=f"bedrock_mantle/{_SPLIT_MODEL}",
+        messages=list(MESSAGES),
+        max_tokens=32000,
+        api_key="test-key",
+        api_base=server.base_url,
+        context_management=_CLEAR_THINKING,
+    )
+
+    assert_served_natively(server)
+    body: Final = _OBJECT.validate_python(server.requests[0].body)
+    assert body.get("thinking") == thinking

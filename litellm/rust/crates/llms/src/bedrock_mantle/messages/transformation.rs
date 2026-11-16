@@ -33,13 +33,16 @@ use crate::{
             },
             mantle_transformation::{
                 AMAZON_MANTLE_REQUEST_SETTINGS, MANTLE_API_BASE_ENV, MANTLE_MESSAGES_PATH,
-                bearer_environment, mantle_headers, mantle_secret_names, mantle_wire_body,
-                sigv4_environment, transform_mantle_messages_request, with_zero_usage,
+                amazon_mantle_model_id, bearer_environment, mantle_headers, mantle_secret_names,
+                mantle_wire_body, sigv4_environment, transform_mantle_messages_request,
+                with_zero_usage,
             },
         },
     },
 };
 
+const BEDROCK_MANTLE: &str = "bedrock_mantle";
+const BEDROCK: &str = "bedrock";
 const BEDROCK_MANTLE_DEFAULT_REGION: &str = "us-east-1";
 /// Python's `AmazonBedrockGlobalConfig().get_all_regions()`, which `BEDROCK_REGIONS` freezes.
 const BEDROCK_REGIONS: [&str; 23] = [
@@ -143,6 +146,41 @@ pub fn mantle_model_id(model: &str) -> String {
     split_mantle_region_prefix(model)
         .1
         .replacen("mantle/", "", 1)
+}
+
+/// The provider and model Python's Mantle Messages configs probe capabilities under: the shared
+/// Anthropic transform reads the route's provider, the Bedrock Invoke helpers read `bedrock`, and
+/// both get the model id the route sends.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MantleCapabilityLookup {
+    pub provider: &'static str,
+    pub model: String,
+}
+
+/// The lookup for `bedrock_mantle/` and `bedrock/mantle/`, `None` on every other route.
+pub fn mantle_capability_lookup(provider: &str, model: &str) -> Option<MantleCapabilityLookup> {
+    match provider {
+        BEDROCK_MANTLE => Some(MantleCapabilityLookup {
+            provider: BEDROCK_MANTLE,
+            model: mantle_model_id(model.strip_prefix("bedrock_mantle/").unwrap_or(model)),
+        }),
+        BEDROCK
+            if !has_route_prefix(model, "claude_platform/")
+                && !has_route_prefix(model, "converse/")
+                && has_route_prefix(model, "mantle/") =>
+        {
+            Some(MantleCapabilityLookup {
+                provider: BEDROCK,
+                model: amazon_mantle_model_id(model.strip_prefix("bedrock/").unwrap_or(model)),
+            })
+        }
+        _ => None,
+    }
+}
+
+/// Python's `BedrockModelInfo._model_has_route_prefix`.
+fn has_route_prefix(model: &str, prefix: &str) -> bool {
+    model.starts_with(prefix) || model.contains(&format!("/{prefix}"))
 }
 
 fn configured_region(litellm_params: &LitellmParams) -> Option<&str> {
@@ -369,6 +407,35 @@ mod tests {
         base_llm::{auth::AuthScheme, messages::context::MessagesModelCapabilities},
         bedrock::messages::mantle_transformation::AMAZON_MANTLE_MESSAGES_CONFIG,
     };
+
+    #[rstest]
+    #[case::bedrock_mantle_region_prefix(
+        "bedrock_mantle",
+        "bedrock_mantle/us-west-2/anthropic.claude-sonnet-5-5",
+        Some(("bedrock_mantle", "anthropic.claude-sonnet-5-5"))
+    )]
+    #[case::bedrock_mantle_route(
+        "bedrock",
+        "bedrock/mantle/anthropic.claude-sonnet-5-5",
+        Some(("bedrock", "anthropic.claude-sonnet-5-5"))
+    )]
+    #[case::invoke("bedrock", "bedrock/us.anthropic.claude-sonnet-5-5", None)]
+    #[case::claude_platform("bedrock", "bedrock/claude_platform/mantle/claude-sonnet-5-5", None)]
+    #[case::converse("bedrock", "bedrock/converse/mantle/claude-sonnet-5-5", None)]
+    #[case::other_provider("anthropic", "mantle/claude-sonnet-5-5", None)]
+    fn mantle_capabilities_are_looked_up_for_the_model_python_transforms(
+        #[case] provider: &str,
+        #[case] model: &str,
+        #[case] expected: Option<(&'static str, &str)>,
+    ) {
+        assert_eq!(
+            mantle_capability_lookup(provider, model),
+            expected.map(|(provider, model)| MantleCapabilityLookup {
+                provider,
+                model: model.to_string(),
+            })
+        );
+    }
 
     fn env(pairs: &'static [(&'static str, &'static str)]) -> impl Fn(&str) -> Option<String> {
         move |name| {

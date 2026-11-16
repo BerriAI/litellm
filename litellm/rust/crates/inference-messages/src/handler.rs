@@ -1307,6 +1307,7 @@ mod tests {
                     ..SupportedEffortTiers::default()
                 },
                 bedrock: BedrockCapabilities {
+                    supports_adaptive_thinking: true,
                     output_config_effort_ceiling: Some(
                         litellm_llms_types::formats::messages::EffortLevel::Max,
                     ),

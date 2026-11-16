@@ -58,6 +58,12 @@ pub struct MessagesModelCapabilities {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BedrockCapabilities {
+    /// Python's `is_adaptive_thinking_model(model, "bedrock")`, which the Invoke helpers read.
+    #[serde(default)]
+    pub supports_adaptive_thinking: bool,
+    /// Python's `model_supports_effort_param(model, "bedrock")`, which the Invoke helpers read.
+    #[serde(default)]
+    pub supports_effort_param: bool,
     #[serde(default)]
     pub output_config_effort_ceiling: Option<EffortLevel>,
     #[serde(default)]
