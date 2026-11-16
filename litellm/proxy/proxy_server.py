@@ -1643,6 +1643,26 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState
             yield state
 
 
+def register_prompt_cache_alerts(
+    settings: Mapping[str, object], prisma: PrismaClient | None, resources: AsyncExitStack
+) -> None:
+    """Off unless `general_settings.prompt_cache_alerts` is true and a database and a shared salt exist. The logger
+    reads the shared Redis at each callback and leaves the callback lists when the lifespan ends."""
+    if settings.get("prompt_cache_alerts") is not True or prisma is None:
+        return
+    from litellm.proxy.common_utils.encrypt_decrypt_utils import get_salt_key
+
+    salt: Final = get_salt_key()
+    if not salt:
+        return
+    from litellm.integrations.prompt_cache_alerts.detector import prompt_cache_alert_logger
+    from litellm.repositories.alert_repository import AlertRepository
+
+    logger: Final = prompt_cache_alert_logger(AlertRepository(prisma), lambda: redis_usage_cache, salt)
+    litellm.logging_callback_manager.add_litellm_callback(logger)
+    resources.callback(litellm.logging_callback_manager.remove_callback_from_all_lists, logger)
+
+
 @asynccontextmanager
 async def _proxy_lifespan(app: FastAPI, resources: AsyncExitStack) -> AsyncGenerator[ProxyLifespanState, None]:
     global \
@@ -1942,6 +1962,7 @@ async def _proxy_lifespan(app: FastAPI, resources: AsyncExitStack) -> AsyncGener
         fail_closed_rate_limit_enforcement=fail_closed_rate_limit_enforcement_enabled(general_settings),
         redis_usage_cache=redis_usage_cache,
     )
+    register_prompt_cache_alerts(general_settings_view(), prisma_client, resources)
 
     ### START BATCH WRITING DB + CHECKING NEW MODELS###
     worker_heartbeat: Final = (
