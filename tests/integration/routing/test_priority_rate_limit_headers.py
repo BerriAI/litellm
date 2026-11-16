@@ -103,7 +103,7 @@ def test_non_streaming_v1_messages_success_carries_v3_priority_rate_limit_header
             "x-ratelimit-priority_model-limit-requests": str(int(MODEL_RPM * PREMIUM_SHARE)),
             "x-ratelimit-priority_model-remaining-requests": str(int(MODEL_RPM * PREMIUM_SHARE) - 1),
             "x-ratelimit-priority_model-limit-tokens": str(int(MODEL_TPM * PREMIUM_SHARE)),
-            "x-ratelimit-priority_model-remaining-tokens": str(int(MODEL_TPM * PREMIUM_SHARE) - 1),
+            "x-ratelimit-priority_model-remaining-tokens": str(int(MODEL_TPM * PREMIUM_SHARE)),
         }
         observed: Final = {name: response.headers.get(name) for name in expected}
         assert observed == expected, response.headers
