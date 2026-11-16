@@ -27,7 +27,9 @@ RUN npm run build
 # ---------- runtime ----------
 FROM nginx:${NGINX_VERSION} AS runtime
 
-RUN apk upgrade --no-cache brotli-libs
+# Upgrade every OS package so fixes Alpine shipped after the pinned base image
+# land in the image. The nginx packages are version-pinned and stay as they are.
+RUN apk upgrade --no-cache
 
 # Drop the upstream default :80 server; we own the config.
 RUN rm -f /etc/nginx/conf.d/default.conf
