@@ -5,7 +5,8 @@ pub use crate::base_llm::base_model_iterator::ByteStream;
 use crate::{Error, base_llm::sse};
 
 pub type EventStream = sse::EventStream<MessagesStreamEvent>;
-pub type StreamDecoder = fn(ByteStream) -> EventStream;
+pub type FrameStream = futures_util::stream::BoxStream<'static, Result<Bytes, Error>>;
+pub type StreamDecoder = fn(ByteStream, Vec<(String, String)>) -> FrameStream;
 
 fn no_control_frames(_: &litellm_framer::sse::SseEvent) -> bool {
     false
@@ -36,7 +37,7 @@ mod tests {
         MessagesContentBlockDelta, MessagesStreamUsage,
     };
     use rstest::rstest;
-    use serde_json::json;
+    use serde_json::{Map, json};
 
     use super::*;
 
@@ -61,6 +62,7 @@ mod tests {
                     output_tokens: Some(7),
                     ..MessagesStreamUsage::default()
                 }),
+                extra: Map::new(),
             },
         ]
     }
@@ -88,7 +90,10 @@ mod tests {
                     text: "hello".into(),
                 },
             },
-            MessagesStreamEvent::MessageStop { usage: None },
+            MessagesStreamEvent::MessageStop {
+                usage: None,
+                extra: Map::new(),
+            },
         ];
         let streamed = event_stream(in_pieces(wire.as_bytes(), size))
             .try_collect::<Vec<_>>()
@@ -138,7 +143,11 @@ mod tests {
 
     #[test]
     fn an_event_is_named_by_its_type() {
-        let encoded = encode(&MessagesStreamEvent::MessageStop { usage: None }).unwrap();
+        let encoded = encode(&MessagesStreamEvent::MessageStop {
+            usage: None,
+            extra: Map::new(),
+        })
+        .unwrap();
         assert_eq!(
             encoded,
             Bytes::from(format!(

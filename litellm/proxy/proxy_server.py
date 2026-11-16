@@ -213,7 +213,7 @@ from litellm.router_strategy.auto_router.auto_router_tuning_baseline import (
     snapshot_tuning_baselines,
     tuning_limit_violation,
 )
-from litellm.rust_bridge.catalog import Target
+from litellm.rust_bridge.catalog import NATIVE_MESSAGES_TARGETS, Target
 from litellm.types.utils import (
     PRICING_OVERRIDES_KEY,
     CallTypes,
@@ -16130,7 +16130,6 @@ def _count_context_management(
 
 
 _GATEWAY_EDIT_ROUTES: Final = frozenset({Target.CHAT_COMPLETIONS, Target.RESPONSES})
-_MESSAGES_ROUTES: Final = frozenset({Target.MESSAGES, Target.MESSAGES_PASSTHROUGH})
 
 
 def _messages_route(deployment: _TokenCountDeployment, request_model: str) -> Target:
@@ -16669,7 +16668,7 @@ async def _count_request_tokens(
 
     local_view: Final = (
         None
-        if route not in _MESSAGES_ROUTES or context_edits is None or request_messages is None
+        if route not in NATIVE_MESSAGES_TARGETS or context_edits is None or request_messages is None
         else await _bridged_request_view(
             request_messages,
             system,
