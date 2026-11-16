@@ -7,8 +7,10 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import ConfigDict
 
 from litellm.litellm_core_utils.ecb_reference_rates import EcbFetchFailed, EcbReferenceRates, fetch_ecb_daily_feed
+from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.types.llms.base import LiteLLMBaseModel
+from litellm.types.llms.custom_http import httpxSpecialProvider
 
 router: Final = APIRouter()
 
@@ -36,9 +38,6 @@ def _default_refresh_lock() -> asyncio.Lock:
 
 
 async def _fetch_on_serving_loop() -> bytes | EcbFetchFailed:
-    from litellm.llms.custom_httpx.http_handler import get_async_httpx_client  # noqa: PLC0415  # heavy, first use only
-    from litellm.types.llms.custom_http import httpxSpecialProvider  # noqa: PLC0415  # imported with the client
-
     return await fetch_ecb_daily_feed(get_async_httpx_client(llm_provider=httpxSpecialProvider.UI))
 
 
