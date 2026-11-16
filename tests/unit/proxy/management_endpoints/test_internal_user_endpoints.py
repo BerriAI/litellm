@@ -6021,12 +6021,15 @@ async def test_fips_user_update_hashes_off_the_event_loop(pbkdf2_on_event_loop: 
 
 
 @pytest.mark.asyncio
-async def test_default_team_memberships_keep_their_configured_cap_when_the_team_table_read_fails(mocker):
+async def test_a_failed_team_table_read_skips_only_the_default_teams_whose_budget_it_decides(
+    mocker: MockerFixture,
+) -> None:
     from litellm.proxy._types import NewUserRequestTeam
     from litellm.proxy.management_endpoints.internal_user_endpoints import _memberships_on_team_member_budget
 
     prisma_client: Final = mocker.MagicMock()
     prisma_client.db.litellm_teamtable.find_many = mocker.AsyncMock(side_effect=ConnectionError("team table down"))
-    configured: Final = (NewUserRequestTeam(team_id="default-team", max_budget_in_team=1500, user_role="user"),)
+    capped: Final = NewUserRequestTeam(team_id="capped-team", max_budget_in_team=1500, user_role="user")
+    uncapped: Final = NewUserRequestTeam(team_id="uncapped-team", user_role="user")
 
-    assert await _memberships_on_team_member_budget(configured, prisma_client) == configured
+    assert await _memberships_on_team_member_budget((capped, uncapped), prisma_client) == (uncapped,)

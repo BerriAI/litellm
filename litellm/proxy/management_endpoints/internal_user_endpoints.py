@@ -492,10 +492,11 @@ async def add_new_user_to_default_team(
 
 async def _readable_team_rows(
     prisma_client: "PrismaClient", team_ids: Sequence[str]
-) -> "tuple[prisma_models.LiteLLM_TeamTable, ...]":
+) -> "tuple[prisma_models.LiteLLM_TeamTable, ...] | None":
     with contextlib.suppress(Exception):
         return await find_many_in(_team_table(prisma_client), "team_id", team_ids)
-    return ()
+    verbose_proxy_logger.warning("Could not read default teams %s, so a new user was not added to them", team_ids)
+    return None
 
 
 async def _memberships_on_team_member_budget(
@@ -506,6 +507,8 @@ async def _memberships_on_team_member_budget(
     if not capped_team_ids:
         return memberships
     team_rows: Final = await _readable_team_rows(prisma_client, capped_team_ids)
+    if team_rows is None:
+        return tuple(m for m in memberships if m.max_budget_in_team is None)
     budgeted_team_ids: Final = frozenset(
         row.team_id
         for row in team_rows
