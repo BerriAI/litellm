@@ -101819,6 +101819,7 @@
         "supports_video_input": true,
         "supports_vision": true,
         "supports_web_search": true,
+        "supports_xhigh_reasoning_effort": true,
         "tpm": 800000.0,
         "web_search_billing_unit": "per_query"
     },
@@ -101878,6 +101879,7 @@
         "supports_video_input": true,
         "supports_vision": true,
         "supports_web_search": true,
+        "supports_xhigh_reasoning_effort": true,
         "web_search_billing_unit": "per_query"
     },
     "together_ai/thinkingmachines/Inkling-2-Small": {
