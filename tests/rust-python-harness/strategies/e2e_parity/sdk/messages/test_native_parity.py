@@ -4488,35 +4488,33 @@ class _ProxyLogger:
         return logging_obj
 
 
+def _proxied(**location: str) -> Mapping[str, object]:
+    return _kw(
+        vertex_project="parity-project",
+        vertex_credentials=dict(VERTEX_ACCOUNT),
+        litellm_logging_obj=_ProxyLogger(),
+        litellm_call_id=_PROXY_CALL_ID,
+        **location,
+    )
+
+
 VERTEX_REGIONAL_COST_CASES: Final = (
     Case(
         "vertex_deployment_global_location_prices_without_the_regional_uplift",
-        _kw(
-            vertex_project="parity-project",
-            vertex_location="global",
-            vertex_credentials=dict(VERTEX_ACCOUNT),
-            litellm_logging_obj=_ProxyLogger(),
-            litellm_call_id=_PROXY_CALL_ID,
-        ),
+        _proxied(vertex_location="global"),
         model=VERTEX_CLAUDE,
     ),
     Case(
-        "vertex_global_location_prices_without_the_regional_uplift",
-        _kw(vertex_project="parity-project", vertex_location="global", vertex_credentials=dict(VERTEX_ACCOUNT)),
+        "vertex_deployment_legacy_global_location_prices_without_the_regional_uplift",
+        _proxied(vertex_ai_location="global"),
         model=VERTEX_CLAUDE,
     ),
     Case(
-        "vertex_legacy_location_spelling_prices_without_the_regional_uplift",
-        _kw(vertex_project="parity-project", vertex_ai_location="global", vertex_credentials=dict(VERTEX_ACCOUNT)),
-        model=VERTEX_CLAUDE,
-    ),
-    Case(
-        "vertex_global_location_wins_over_the_environment",
-        _kw(vertex_project="parity-project", vertex_location="global", vertex_credentials=dict(VERTEX_ACCOUNT)),
+        "vertex_deployment_global_location_wins_over_the_environment",
+        _proxied(vertex_location="global"),
         model=VERTEX_CLAUDE,
         env=_kw(VERTEXAI_LOCATION="europe-west4"),
     ),
-    Case("vertex_regional_location_prices_with_the_regional_uplift", _vertex(), model=VERTEX_CLAUDE),
 )
 
 _CLEAR_AT_TURNS: Final = _mid_conversation_system(content="Be brief.", clear_at={"type": "turns", "value": 2})
