@@ -14,7 +14,9 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
-pub(crate) use fetch::{NativeCostMapSource, NativeFetchFailed, NativeFetchPolicy, NativeFetched};
+pub(crate) use fetch::{
+    NativeCostMapSource, NativeFetchFailed, NativeFetchPolicy, NativeFetched, NativeNotModified,
+};
 use live::LiveDict;
 
 /// The installed document and the `register_model` calls kept above it, each as the dict Python merged

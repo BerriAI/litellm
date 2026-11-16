@@ -7,6 +7,13 @@ The ``lite`` and ``litellm-proxy`` CLI entry points also use the bundled map wit
 ```
 export LITELLM_LOCAL_MODEL_COST_MAP=True
 ```
+
+Importing litellm waits for that fetch. To skip the wait, name a directory to keep the fetched map in. Later imports
+then start from the kept copy when it was confirmed within the last 24 hours, and check the source in the background.
+
+```
+export LITELLM_MODEL_COST_MAP_CACHE_DIR=/var/cache/litellm
+```
 """
 
 import hashlib
@@ -47,6 +54,7 @@ from litellm.rust_bridge._native import (
     NativeFetchPolicy,
     NativeInstalled,
     NativeModelCostMap,
+    NativeNotModified,
     NativeRejected,
 )
 
@@ -202,11 +210,25 @@ class ModelCostMapReloaded:
 
 
 @dataclass(frozen=True, slots=True)
+class ModelCostMapNotModified:
+    """The source still serves the installed document, so nothing was installed and ``litellm.model_cost`` stays."""
+
+    @property
+    def model_count(self) -> int:
+        return len(GetModelCostMap.loaded_model_cost_map())
+
+    @property
+    def model_cost_map(self) -> dict[str, dict[str, object]]:
+        """Compat for main's callers. Use ``GetModelCostMap.loaded_model_cost_map()``."""
+        return model_cost_inputs.loaded()
+
+
+@dataclass(frozen=True, slots=True)
 class ModelCostMapReloadUnavailable:
     reason: str
 
 
-ModelCostMapReloadResult = ModelCostMapReloaded | ModelCostMapReloadUnavailable
+ModelCostMapReloadResult = ModelCostMapReloaded | ModelCostMapNotModified | ModelCostMapReloadUnavailable
 
 
 @dataclass(frozen=True, slots=True)
@@ -311,7 +333,9 @@ def _install(installed: NativeInstalled) -> int:
     return installed.model_count
 
 
-def install_model_cost_map(body: bytes, etag: str | None = None) -> ModelCostMapReloadResult:
+def install_model_cost_map(
+    body: bytes, etag: str | None = None
+) -> ModelCostMapReloaded | ModelCostMapReloadUnavailable:
     """Installs a cost map document as ``litellm.model_cost``, every kept ``register_model`` call written on top."""
     installed: Final = model_cost_inputs.install(body, etag)
     if isinstance(installed, NativeRejected):
@@ -341,6 +365,11 @@ def _warn_rejected(rejected: NativeRejected, url: str) -> None:
     )
 
 
+def _installed_etag(url: str) -> str | None:
+    """The ETag of the installed document when ``url`` is where it came from. Another source's ETag proves nothing."""
+    return model_cost_inputs.provenance.etag if _LastLoad.current.url == url else None
+
+
 def _warn_ignored_fetch_hooks(sleep: object, rng: object, client: object) -> None:
     if (sleep, rng, client) != (None, None, None):
         warnings.warn(
@@ -362,6 +391,10 @@ async def refetch_model_cost_map(
     Re-fetch the model cost map for a runtime reload, retrying transient HTTP
     errors (429/5xx/transport) with Retry-After-aware backoff, and install it.
 
+    The request carries the ETag of the document already installed from ``url``.
+    A source that still serves that document answers 304, and the result is
+    ``ModelCostMapNotModified`` with nothing downloaded, installed or published.
+
     Unlike ``get_model_cost_map`` this never falls back to the packaged backup:
     on failure it returns ``ModelCostMapReloadUnavailable`` and the map already
     installed stays.
@@ -372,12 +405,16 @@ async def refetch_model_cost_map(
         _mark_rows_with_rules_set("local", None, True, None, datetime.now(timezone.utc))
         return ModelCostMapReloaded(model_count=_install(model_cost_inputs.install_bundled()))
 
-    fetched: Final = await cost_map_source(url, use_http_settings=True).fetch(fetch_policy(timeout, max_attempts))
+    fetched: Final = await cost_map_source(url, use_http_settings=True).fetch(
+        fetch_policy(timeout, max_attempts), _installed_etag(url)
+    )
     if isinstance(fetched, NativeFetchFailed):
         verbose_logger.warning(
             "LiteLLM: model cost map reload failed: %s. Keeping the currently loaded map.", fetched.reason
         )
         return ModelCostMapReloadUnavailable(reason=fetched.reason)
+    if isinstance(fetched, NativeNotModified):
+        return ModelCostMapNotModified()
     installed: Final = model_cost_inputs.install(fetched.body, fetched.etag)
     if isinstance(installed, NativeRejected):
         verbose_logger.warning(
@@ -388,19 +425,25 @@ async def refetch_model_cost_map(
     return ModelCostMapReloaded(model_count=_install(installed))
 
 
-def _retry_remote_fetch_in_background(
-    url: str, timeout: int, max_attempts: int, first_failure: NativeFetchFailed
+def _install_remote_in_background(
+    source: NativeCostMapSource,
+    url: str,
+    policy: NativeFetchPolicy,
+    first_failure: NativeFetchFailed | None,
+    held_etag: str | None,
 ) -> None:
+    """The fetch that outlives the import: the retries of a failed first attempt, or the check of a kept copy."""
     try:
-        fetched: Final = cost_map_source(url, use_http_settings=False).fetch_blocking(
-            fetch_policy(timeout, max_attempts), first_failure
-        )
+        fetched: Final = source.fetch_blocking(policy, first_failure, if_none_match=held_etag)
         if isinstance(fetched, NativeFetchFailed):
             verbose_logger.warning(
-                "LiteLLM: Failed to fetch remote model cost map from %s after %d attempts; keeping local backup",
+                "LiteLLM: Failed to fetch remote model cost map from %s: %s. Keeping the map loaded at import.",
                 url,
-                max_attempts,
+                fetched.reason,
             )
+            return
+        if isinstance(fetched, NativeNotModified):
+            source.revalidated()
             return
         _litellm_import_complete.wait()
         installed: Final = model_cost_inputs.install(fetched.body, fetched.etag)
@@ -409,8 +452,9 @@ def _retry_remote_fetch_in_background(
             return
         _mark_rows_with_rules_set("remote", url, False, None, datetime.now(timezone.utc))
         _install(installed)
-    except Exception as e:  # noqa: BLE001  # a failed background retry must not kill the task; the backup stays
-        verbose_logger.warning("LiteLLM: Background model cost map retry failed: %s", e)
+        source.store(fetched.body, fetched.etag)
+    except Exception as e:  # noqa: BLE001  # a failed background fetch must not kill the thread; the loaded map stays
+        verbose_logger.warning("LiteLLM: Background model cost map fetch failed: %s", e)
 
 
 def get_model_cost_map(
@@ -426,7 +470,11 @@ def get_model_cost_map(
 
     1. If ``LITELLM_LOCAL_MODEL_COST_MAP`` is set or this is a ``lite`` /
        ``litellm-proxy`` CLI process, uses the local backup only.
-    2. Otherwise fetches from ``url`` once, retrying transient HTTP errors
+    2. With ``LITELLM_MODEL_COST_MAP_CACHE_DIR`` set and a copy of ``url`` kept
+       there that the source confirmed within 24 hours, returns that copy
+       without waiting and checks the source in a background thread, which
+       installs a changed document as a new ``litellm.model_cost``.
+    3. Otherwise fetches from ``url`` once, retrying transient HTTP errors
        (429/5xx/transport) with Retry-After-aware backoff in a background
        thread, validates integrity, and falls back to the local backup on any
        failure.
@@ -437,12 +485,26 @@ def get_model_cost_map(
         _mark_rows_with_rules_set("local", None, True, None, started)
         return _rows_with_rules_set(model_cost_inputs.install_bundled())
 
-    fetched: Final = cost_map_source(url, use_http_settings=False).fetch_blocking(fetch_policy(timeout, 1))
+    source: Final = cost_map_source(url, use_http_settings=False)
+    kept: Final = source.cached()
+    if kept is not None:
+        kept_installed: Final = model_cost_inputs.install(kept.body, kept.etag)
+        if not isinstance(kept_installed, NativeRejected):
+            _mark_rows_with_rules_set("remote", url, False, None, started)
+            threading.Thread(
+                target=_install_remote_in_background,
+                args=(source, url, fetch_policy(timeout, max_attempts), None, kept.etag),
+                name="litellm-model-cost-map-revalidate",
+                daemon=True,
+            ).start()
+            return _rows_with_rules_set(kept_installed)
+
+    fetched: Final = source.fetch_blocking(fetch_policy(timeout, 1))
     if isinstance(fetched, NativeFetchFailed):
         if fetched.retryable and max_attempts > 1:
             threading.Thread(
-                target=_retry_remote_fetch_in_background,
-                args=(url, timeout, max_attempts, fetched),
+                target=_install_remote_in_background,
+                args=(source, url, fetch_policy(timeout, max_attempts), fetched, None),
                 name="litellm-model-cost-map-retry",
                 daemon=True,
             ).start()
@@ -466,6 +528,7 @@ def get_model_cost_map(
         return _rows_with_rules_set(model_cost_inputs.install_bundled())
 
     _mark_rows_with_rules_set("remote", url, False, None, started)
+    source.store(fetched.body, fetched.etag)
     return _rows_with_rules_set(installed)
 
 

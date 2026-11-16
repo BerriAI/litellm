@@ -13,6 +13,11 @@
   - Registrations land by lookup in the published table, so they are written after publishing
 - Startup and `register_model(url)` fetch with `use_http_settings=False`, which reads env vars only like main's bare httpx. Reload passes `use_http_settings=True`, so Rust layers the configured HTTP settings on top
 - Startup falls back to the bundled map on any failure. Reload never falls back and keeps the current map
+- With `LITELLM_MODEL_COST_MAP_CACHE_DIR` set, startup keeps every remote document it installs and starts from the kept copy without waiting for the network. Rust owns the file, its 24 hour limit and the atomic write. This module only decides when to read, store and revalidate
+  - The kept copy goes through `model_cost_inputs.install` like a fetched one. A rejected copy falls through to the blocking fetch
+  - The background check sends the kept ETag. A 304 renews the copy, a new document is installed and published as a new `litellm.model_cost` once the import has finished, then stored
+  - Bundled-only processes (`LITELLM_LOCAL_MODEL_COST_MAP`, offline mode, the CLI entry points) never read or write the directory. Reload does not write it either
+- Reload sends the installed document's ETag when that document came from the same URL. A 304 is `ModelCostMapNotModified`, and nothing is installed or published
 - `register_model(url)` makes one attempt and registers nothing on failure
 - `utils._register_on_current_map` reruns the whole pass on the new table after `NativeTableSwapped`, and its last attempt passes `rows=None`, so no entry is lost
 - Compat names exist only so code written against main keeps working. New code never calls them, and they never gain behavior of their own
@@ -20,7 +25,7 @@
   - `git_blob_id`, which Rust computes for `source_revision`
   - `FALLBACK_GENERALIZATIONS_KEY`, `RESERVED_TOP_LEVEL_KEYS` and `RETRYABLE_FETCH_STATUS_CODES`, public constants. Rust owns the retry rule
   - `GetModelCostMap.validate_model_cost_map` and `_check_*`, since Rust checks fetched documents
-  - `ModelCostMapReloaded.model_cost_map`, use `GetModelCostMap.loaded_model_cost_map()`
+  - `ModelCostMapReloaded.model_cost_map` and `ModelCostMapNotModified.model_cost_map`, use `GetModelCostMap.loaded_model_cost_map()`
   - the `sleep`, `rng` and `client` parameters, which are ignored with a `DeprecationWarning`
   - `AliasedCostEntry` re-exported here, which now lives in `model_cost_table.py`
 

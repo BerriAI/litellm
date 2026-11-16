@@ -7,6 +7,7 @@ use backon::Retryable;
 use litellm_auth_gcp::GcpTokenSource;
 use litellm_error::Report;
 use litellm_http::Client;
+use reqwest::header::HeaderValue;
 use url::Url;
 
 use crate::attempt::{self, Cause, Fetched, Rejected};
@@ -46,17 +47,21 @@ pub enum Start {
     After(Failed),
 }
 
+/// `if_none_match` is the ETag of the document the caller already holds. A source that still serves it answers
+/// `Fetched::NotModified` without a body. An ETag no header can carry is not sent, so the fetch is a full one
 pub async fn fetch(
     client: &Client,
     s3: &S3Access,
     gcs: &GcsAccess,
     url: &str,
+    if_none_match: Option<&str>,
     policy: RetryPolicy,
     start: Start,
 ) -> Result<Fetched, Failed> {
     let shown = redacted(url);
     let source =
         Source::parse(url).map_err(|error| Failed::of(&shown, &Rejected::fatal(error), 1))?;
+    let if_none_match = if_none_match.filter(|etag| HeaderValue::from_str(etag).is_ok());
     let mut backoff = policy.backoff();
     let made = AtomicU32::new(0);
     if let Start::After(failed) = start {
@@ -71,10 +76,14 @@ pub async fn fetch(
         async {
             match &source {
                 Source::Http(http) => {
-                    attempt::http(client, http.clone(), None, policy.timeout).await
+                    attempt::http(client, http.clone(), None, if_none_match, policy.timeout).await
                 }
-                Source::S3(object) => attempt::s3(client, s3, object, policy.timeout).await,
-                Source::Gcs(object) => attempt::gcs(client, gcs, object, policy.timeout).await,
+                Source::S3(object) => {
+                    attempt::s3(client, s3, object, if_none_match, policy.timeout).await
+                }
+                Source::Gcs(object) => {
+                    attempt::gcs(client, gcs, object, if_none_match, policy.timeout).await
+                }
             }
         }
     };

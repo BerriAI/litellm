@@ -1,7 +1,11 @@
-use std::time::Duration;
+use std::io;
+use std::path::Path;
+use std::time::{Duration, SystemTime};
 
 use litellm_http::{ClientVariant, HttpClientConfig};
-use litellm_model_catalog_refresh::{Failed, Fetched, GcsAccess, RetryPolicy, S3Access, Start};
+use litellm_model_catalog_refresh::{
+    Cache, Cached, Failed, Fetched, GcsAccess, RetryPolicy, S3Access, Start,
+};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
@@ -30,11 +34,14 @@ impl NativeCostMapSource {
         })
     }
 
-    /// Fetches on the shared runtime with a pooled client
+    /// Fetches on the shared runtime with a pooled client. `if_none_match` is the ETag of the document already
+    /// installed from this URL, and a source that still serves it answers `NativeNotModified`
+    #[pyo3(signature = (policy, if_none_match = None))]
     fn fetch<'py>(
         &self,
         py: Python<'py>,
         policy: PyRef<'_, NativeFetchPolicy>,
+        if_none_match: Option<String>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let client = crate::http::pool()
             .client(&self.http, ClientVariant::Provider)
@@ -48,6 +55,7 @@ impl NativeCostMapSource {
                     &s3(),
                     &GcsAccess::Environment,
                     &url,
+                    if_none_match.as_deref(),
                     policy,
                     Start::Fresh,
                 )
@@ -57,13 +65,14 @@ impl NativeCostMapSource {
     }
 
     /// Fetches on a throwaway runtime with a client of its own. `resume_from` continues a fetch whose first attempt
-    /// failed retryably
-    #[pyo3(signature = (policy, resume_from = None))]
+    /// failed retryably. `if_none_match` is the ETag of a document already held from this URL
+    #[pyo3(signature = (policy, resume_from = None, *, if_none_match = None))]
     fn fetch_blocking(
         &self,
         py: Python<'_>,
         policy: PyRef<'_, NativeFetchPolicy>,
         resume_from: Option<PyRef<'_, NativeFetchFailed>>,
+        if_none_match: Option<String>,
     ) -> PyResult<Py<PyAny>> {
         let start = resume_from.map_or(Start::Fresh, |failed| Start::After(failed.0.clone()));
         let (config, url, policy) = (self.http.clone(), self.url.clone(), policy.0);
@@ -78,6 +87,7 @@ impl NativeCostMapSource {
                     &s3(),
                     &GcsAccess::Environment,
                     &url,
+                    if_none_match.as_deref(),
                     policy,
                     start,
                 ))
@@ -86,7 +96,57 @@ impl NativeCostMapSource {
         })?;
         Outcome(fetched).into_pyobject(py).map(Bound::unbind)
     }
+
+    /// The document an earlier process kept for this URL, when `LITELLM_MODEL_COST_MAP_CACHE_DIR` is set and the
+    /// copy is recent enough to serve. It has passed no check yet
+    fn cached(&self, py: Python<'_>) -> PyResult<Option<Py<NativeFetched>>> {
+        let Some(Cached { body, etag }) =
+            self.cache().and_then(|cache| cache.load(SystemTime::now()))
+        else {
+            return Ok(None);
+        };
+        let cached = NativeFetched {
+            body: PyBytes::new(py, &body).unbind(),
+            etag,
+        };
+        Py::new(py, cached).map(Some)
+    }
+
+    /// Keeps a fetched document for later processes. Without a cache directory, or with one that cannot be written,
+    /// nothing is kept
+    #[pyo3(signature = (body, etag = None))]
+    fn store(&self, py: Python<'_>, body: &[u8], etag: Option<&str>) {
+        self.keep(py, |cache| cache.store(body, etag));
+    }
+
+    /// Records that the source just confirmed the kept document
+    fn revalidated(&self, py: Python<'_>) {
+        self.keep(py, |cache| cache.revalidated(SystemTime::now()));
+    }
 }
+
+impl NativeCostMapSource {
+    fn cache(&self) -> Option<Cache> {
+        std::env::var_os(CACHE_DIR)
+            .filter(|directory| !directory.is_empty())
+            .map(|directory| Cache::new(Path::new(&directory), &self.url))
+    }
+
+    fn keep(&self, py: Python<'_>, write: impl FnOnce(&Cache) -> io::Result<()>) {
+        let Some(cache) = self.cache() else {
+            return;
+        };
+        if let Err(error) = write(&cache) {
+            crate::logger::capture(py).scope(|| {
+                litellm_tracing::warn!(
+                    "LiteLLM: the model cost map was not kept in {CACHE_DIR} ({error})"
+                );
+            });
+        }
+    }
+}
+
+const CACHE_DIR: &str = "LITELLM_MODEL_COST_MAP_CACHE_DIR";
 
 fn s3() -> S3Access {
     S3Access::Environment {
@@ -147,6 +207,13 @@ pub(crate) struct NativeFetched {
 
 #[pyclass(
     frozen,
+    name = "NativeNotModified",
+    module = "litellm.rust_bridge._native"
+)]
+pub(crate) struct NativeNotModified;
+
+#[pyclass(
+    frozen,
     skip_from_py_object,
     name = "NativeFetchFailed",
     module = "litellm.rust_bridge._native"
@@ -181,14 +248,15 @@ impl<'py> IntoPyObject<'py> for Outcome {
 
     fn into_pyobject(self, py: Python<'py>) -> PyResult<Self::Output> {
         match self.0 {
-            Ok(fetched) => Bound::new(
+            Ok(Fetched::Document { body, etag }) => Bound::new(
                 py,
                 NativeFetched {
-                    body: PyBytes::new(py, &fetched.body).unbind(),
-                    etag: fetched.etag,
+                    body: PyBytes::new(py, &body).unbind(),
+                    etag,
                 },
             )
             .map(Bound::into_any),
+            Ok(Fetched::NotModified) => Bound::new(py, NativeNotModified).map(Bound::into_any),
             Err(failed) => Bound::new(py, NativeFetchFailed(failed)).map(Bound::into_any),
         }
     }
@@ -237,7 +305,9 @@ mod tests {
             let source = NativeCostMapSource::new(py, url, false).unwrap();
             let policy =
                 Bound::new(py, NativeFetchPolicy::new(3, 30.0, 5.0, 2.0).unwrap()).unwrap();
-            let outcome = source.fetch_blocking(py, policy.borrow(), None).unwrap();
+            let outcome = source
+                .fetch_blocking(py, policy.borrow(), None, None)
+                .unwrap();
             let fetched = outcome.bind(py).cast::<NativeFetched>().unwrap().get();
             assert_eq!(fetched.body.bind(py).as_bytes(), b"{}");
             assert_eq!(fetched.etag.as_deref(), Some("\"v1\""));

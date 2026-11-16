@@ -21,6 +21,7 @@ from integration._support.wire import Reply, Request, wire_server
 import litellm
 from litellm.litellm_core_utils.get_model_cost_map import (
     GetModelCostMap,
+    ModelCostMapNotModified,
     ModelCostMapReloaded,
     ModelCostMapReloadUnavailable,
     get_model_cost_map_loaded_at,
@@ -59,6 +60,7 @@ class _Reply:
     status: int = 200
     body: bytes = _BUNDLED
     headers: Mapping[str, str] = field(default_factory=dict)
+    held_until: threading.Event | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,6 +77,10 @@ class _Server:
         return [request.headers.get("authorization", "") for request in self.received]
 
     @property
+    def validators(self) -> Sequence[str | None]:
+        return [request.headers.get("if-none-match") for request in self.received]
+
+    @property
     def requests(self) -> int:
         return len(self.received)
 
@@ -87,6 +93,8 @@ def _serving(*replies: _Reply, tls: ssl.SSLContext | None = None) -> Generator[_
     def respond(request: Request) -> Reply:
         received.append(request)
         reply: Final = replies[min(len(received), len(replies)) - 1]
+        if reply.held_until is not None:
+            reply.held_until.wait(timeout=30)
         return Reply(status=reply.status, body=reply.body, headers=reply.headers)
 
     with wire_server(respond, tls=tls) as wire:
@@ -443,6 +451,262 @@ def test_reload_records_the_served_bytes_and_etag():
         asyncio.run(refetch_model_cost_map(url=server.url))
 
     assert get_model_cost_map_provenance() == {"source_revision": _blob_id(body), "etag": 'W/"etag"'}
+
+
+_UNCHANGED: Final = _Reply(status=304, body=b"", headers={"ETag": '"v1"'})
+
+
+@pytest.mark.usefixtures("remote_source", "own_model_cost")
+@pytest.mark.parametrize("load", ["boot", "reload"])
+def test_a_reload_of_an_unchanged_source_sends_the_installed_etag_and_installs_nothing(
+    load: Literal["boot", "reload"],
+):
+    with _serving(_Reply(headers={"ETag": '"v1"'}), _UNCHANGED) as server:
+        loaded: Final = _rows_loaded_through(load, server.url)
+        installed: Final = litellm.model_cost
+        provenance: Final = get_model_cost_map_provenance()
+        source: Final = get_model_cost_map_source_info()
+        result: Final = asyncio.run(refetch_model_cost_map(url=server.url))
+
+    assert result == ModelCostMapNotModified()
+    assert result.model_count == len(loaded)
+    assert result.model_cost_map.keys() == loaded.keys()
+    assert server.validators == [None, '"v1"']
+    assert litellm.model_cost is installed
+    assert get_model_cost_map_provenance() == provenance
+    assert get_model_cost_map_source_info() == source
+
+
+@pytest.mark.usefixtures("remote_source", "own_model_cost")
+def test_a_reload_of_a_changed_source_sends_the_installed_etag_and_installs_the_new_document():
+    changed: Final = _document_with(**{"lit-changed-model": {"litellm_provider": "openai", "mode": "chat"}})
+    with _serving(_Reply(headers={"ETag": '"v1"'}), _Reply(body=changed, headers={"ETag": '"v2"'})) as server:
+        asyncio.run(refetch_model_cost_map(url=server.url))
+        installed: Final = litellm.model_cost
+        result: Final = asyncio.run(refetch_model_cost_map(url=server.url))
+
+    assert isinstance(result, ModelCostMapReloaded)
+    assert server.validators == [None, '"v1"']
+    assert litellm.model_cost is not installed
+    assert "lit-changed-model" in litellm.model_cost
+    assert get_model_cost_map_provenance() == {"source_revision": _blob_id(changed), "etag": '"v2"'}
+
+
+@pytest.mark.usefixtures("remote_source", "own_model_cost")
+def test_a_reload_of_a_source_without_an_etag_is_a_full_fetch_every_time():
+    with _serving(_Reply()) as server:
+        asyncio.run(refetch_model_cost_map(url=server.url))
+        installed: Final = litellm.model_cost
+        result: Final = asyncio.run(refetch_model_cost_map(url=server.url))
+
+    assert isinstance(result, ModelCostMapReloaded)
+    assert server.validators == [None, None]
+    assert litellm.model_cost is not installed
+
+
+@pytest.mark.usefixtures("remote_source", "own_model_cost")
+def test_a_reload_from_another_source_does_not_send_the_installed_etag():
+    with _serving(_Reply(headers={"ETag": '"v1"'})) as installed_from, _serving(_Reply()) as other:
+        asyncio.run(refetch_model_cost_map(url=installed_from.url))
+        result: Final = asyncio.run(refetch_model_cost_map(url=other.url))
+
+    assert isinstance(result, ModelCostMapReloaded)
+    assert other.validators == [None]
+
+
+@pytest.mark.usefixtures("remote_source", "own_model_cost")
+def test_a_reload_after_a_boot_that_fell_back_to_the_bundled_map_is_a_full_fetch():
+    with _serving(_Reply(status=404, body=b"missing"), _Reply(headers={"ETag": '"v1"'})) as server:
+        litellm.get_model_cost_map(url=server.url)
+        result: Final = asyncio.run(refetch_model_cost_map(url=server.url))
+
+    assert isinstance(result, ModelCostMapReloaded)
+    assert server.validators == [None, None]
+
+
+_KEPT: Final = _Reply(
+    body=_document_with(**{"lit-kept-model": {"litellm_provider": "openai", "mode": "chat"}}),
+    headers={"ETag": '"v1"'},
+)
+
+
+@pytest.fixture
+def cache_directory(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
+    directory: Final = tmp_path / "cost-map-cache"
+    monkeypatch.setenv("LITELLM_MODEL_COST_MAP_CACHE_DIR", str(directory))
+    return directory
+
+
+def _background_load_finished(name: str) -> None:
+    for thread in threading.enumerate():
+        if thread.name == name:
+            thread.join(timeout=30)
+
+
+@pytest.mark.usefixtures("remote_source", "own_model_cost", "cache_directory")
+def test_a_boot_load_returns_the_kept_copy_before_the_source_answers():
+    released: Final = threading.Event()
+    with _serving(_KEPT, _Reply(status=304, body=b"", headers={"ETag": '"v1"'}, held_until=released)) as server:
+        litellm.get_model_cost_map(url=server.url)
+        rows: Final = litellm.get_model_cost_map(url=server.url)
+        source: Final = get_model_cost_map_source_info()
+        released.set()
+        _background_load_finished("litellm-model-cost-map-revalidate")
+
+    assert "lit-kept-model" in rows
+    assert server.validators == [None, '"v1"']
+    assert (source["source"], source["url"], source["fallback_reason"], source["etag"]) == (
+        "remote",
+        server.url,
+        None,
+        '"v1"',
+    )
+
+
+@pytest.mark.usefixtures("remote_source", "own_model_cost", "cache_directory")
+def test_a_changed_source_replaces_the_kept_copy_after_the_boot_load_returned():
+    changed: Final = _Reply(
+        body=_document_with(**{"lit-changed-model": {"litellm_provider": "openai", "mode": "chat"}}),
+        headers={"ETag": '"v2"'},
+    )
+    with _serving(_KEPT, changed, _Reply(status=304, body=b"", headers={"ETag": '"v2"'})) as server:
+        litellm.get_model_cost_map(url=server.url)
+        published: Final = litellm.model_cost
+        rows: Final = litellm.get_model_cost_map(url=server.url)
+        _background_load_finished("litellm-model-cost-map-revalidate")
+        late: Final = litellm.model_cost
+        next_boot: Final = litellm.get_model_cost_map(url=server.url)
+        _background_load_finished("litellm-model-cost-map-revalidate")
+
+    assert "lit-kept-model" in rows and "lit-changed-model" not in rows
+    assert late is not published
+    assert "lit-changed-model" in late and "lit-kept-model" not in late
+    assert "lit-changed-model" in next_boot
+    assert server.validators == [None, '"v1"', '"v2"']
+    assert get_model_cost_map_provenance()["etag"] == '"v2"'
+
+
+@pytest.mark.usefixtures("remote_source", "own_model_cost")
+def test_a_kept_copy_older_than_a_day_is_ignored_and_a_confirmed_one_is_renewed(cache_directory: Path):
+    with _serving(_KEPT, _Reply(status=304, body=b"", headers={"ETag": '"v1"'}), _KEPT) as server:
+        litellm.get_model_cost_map(url=server.url)
+        (kept_file,) = cache_directory.iterdir()
+        almost_a_day_ago: Final = kept_file.stat().st_mtime - 23 * 3600
+        os.utime(kept_file, (almost_a_day_ago, almost_a_day_ago))
+        litellm.get_model_cost_map(url=server.url)
+        _background_load_finished("litellm-model-cost-map-revalidate")
+        renewed_at: Final = kept_file.stat().st_mtime
+        os.utime(kept_file, (renewed_at - 25 * 3600, renewed_at - 25 * 3600))
+        litellm.get_model_cost_map(url=server.url)
+
+    assert renewed_at > almost_a_day_ago
+    assert server.validators == [None, '"v1"', None]
+
+
+@pytest.mark.usefixtures("remote_source", "own_model_cost", "cache_directory")
+def test_a_boot_load_that_installs_on_a_background_retry_keeps_the_document():
+    with _serving(
+        _Reply(status=503, body=b"busy", headers={"Retry-After": "0"}),
+        _KEPT,
+        _Reply(status=304, body=b"", headers={"ETag": '"v1"'}),
+    ) as server:
+        litellm.get_model_cost_map(url=server.url)
+        _background_load_finished("litellm-model-cost-map-retry")
+        rows: Final = litellm.get_model_cost_map(url=server.url)
+        _background_load_finished("litellm-model-cost-map-revalidate")
+
+    assert "lit-kept-model" in rows
+    assert server.validators == [None, None, '"v1"']
+
+
+@pytest.mark.usefixtures("remote_source", "own_model_cost")
+def test_a_kept_copy_that_fails_the_integrity_limits_falls_through_to_a_fetch(cache_directory: Path):
+    with _serving(_KEPT) as server:
+        litellm.get_model_cost_map(url=server.url)
+        (kept_file,) = cache_directory.iterdir()
+        kept_file.write_bytes(b'"v0"\n' + json.dumps({"only": {"litellm_provider": "openai"}}).encode())
+        rows: Final = litellm.get_model_cost_map(url=server.url)
+
+    assert "lit-kept-model" in rows
+    assert server.validators == [None, None]
+
+
+@pytest.mark.usefixtures("own_model_cost")
+@pytest.mark.parametrize(
+    ("variable", "value"),
+    [("LITELLM_LOCAL_MODEL_COST_MAP", "True"), ("LITELLM_OFFLINE_MODE", "true")],
+)
+def test_a_bundled_only_boot_load_neither_reads_nor_touches_a_kept_copy(
+    monkeypatch: pytest.MonkeyPatch, cache_directory: Path, variable: str, value: str
+):
+    monkeypatch.delenv("LITELLM_LOCAL_MODEL_COST_MAP", raising=False)
+    monkeypatch.setattr(sys, "argv", ["python"])
+    with _serving(_KEPT) as server:
+        litellm.get_model_cost_map(url=server.url)
+        (kept_file,) = cache_directory.iterdir()
+        kept: Final = (kept_file.read_bytes(), kept_file.stat().st_mtime_ns)
+        monkeypatch.setenv(variable, value)
+        rows: Final = litellm.get_model_cost_map(url=server.url)
+
+    assert "lit-kept-model" not in rows
+    assert server.requests == 1
+    assert (kept_file.read_bytes(), kept_file.stat().st_mtime_ns) == kept
+    assert not any(t.name == "litellm-model-cost-map-revalidate" for t in threading.enumerate())
+
+
+@pytest.mark.usefixtures("remote_source", "own_model_cost")
+@pytest.mark.parametrize("cache", ["unset", "unwritable"])
+def test_a_boot_load_with_nowhere_to_keep_the_document_fetches_every_time(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, cache: Literal["unset", "unwritable"]
+):
+    monkeypatch.delenv("LITELLM_MODEL_COST_MAP_CACHE_DIR", raising=False)
+    if cache == "unwritable":
+        blocker: Final = tmp_path / "a-file"
+        blocker.write_bytes(b"")
+        monkeypatch.setenv("LITELLM_MODEL_COST_MAP_CACHE_DIR", str(blocker / "cache"))
+    with _serving(_KEPT) as server:
+        first: Final = litellm.get_model_cost_map(url=server.url)
+        second: Final = litellm.get_model_cost_map(url=server.url)
+
+    assert "lit-kept-model" in first and "lit-kept-model" in second
+    assert server.validators == [None, None]
+    assert [path.name for path in tmp_path.iterdir()] == (["a-file"] if cache == "unwritable" else [])
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="fork is the default start method only on Linux")
+def test_importing_litellm_from_a_kept_copy_leaves_the_process_free_to_fork(tmp_path: Path):
+    script: Final = """
+import os
+import threading
+import litellm
+from litellm.rust_bridge._native import process_state_started, reserve_process_for_forking
+assert "lit-kept-model" in litellm.model_cost
+for thread in threading.enumerate():
+    if thread.name == "litellm-model-cost-map-revalidate":
+        thread.join(timeout=30)
+assert not process_state_started()
+reserve_process_for_forking()
+pid = os.fork()
+if pid == 0:
+    os._exit(0 if "lit-kept-model" in litellm.model_cost else 1)
+_, status = os.waitpid(pid, 0)
+assert os.waitstatus_to_exitcode(status) == 0
+"""
+    environment: Final = {
+        **{key: value for key, value in os.environ.items() if key != "LITELLM_LOCAL_MODEL_COST_MAP"},
+        "LITELLM_MODEL_COST_MAP_CACHE_DIR": str(tmp_path / "cost-map-cache"),
+    }
+    with _serving(_KEPT, _Reply(status=304, body=b"", headers={"ETag": '"v1"'})) as server:
+        fetched: Final = run_child_interpreter(
+            "import litellm", env={**environment, "LITELLM_MODEL_COST_MAP_URL": server.url}, timeout=120
+        )
+        result: Final = run_child_interpreter(
+            script, env={**environment, "LITELLM_MODEL_COST_MAP_URL": server.url}, timeout=120
+        )
+
+    assert fetched.returncode == 0, fetched.stderr
+    assert result.returncode == 0, result.stderr
+    assert server.validators == [None, '"v1"']
 
 
 def _self_signed(directory: Path) -> tuple[ssl.SSLContext, Path]:

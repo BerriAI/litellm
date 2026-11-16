@@ -14,3 +14,4 @@
 - `register` keeps a registration only after its pass finished, so an exception in a host call keeps nothing
 - `rows=None` writes each entry into whichever table is published at that moment and never reports a swap
 - `fetch_blocking` runs on a throwaway runtime with an unpooled client so an importing process can still fork. `fetch` is for workers after the fork
+- `NativeCostMapSource` reads `LITELLM_MODEL_COST_MAP_CACHE_DIR` on every `cached`, `store` and `revalidated` call. Unset or empty means no cache, and a write that fails is a warning, never an error

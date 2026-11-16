@@ -15,6 +15,7 @@ import json
 import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
@@ -41,17 +42,27 @@ def _git_blob_id(body: bytes) -> str:
     return hashlib.sha1(b"blob %d\0" % len(body) + body, usedforsecurity=False).hexdigest()
 
 
+@dataclass(frozen=True, slots=True)
+class _Served:
+    url: str
+    statuses: list[int]
+
+
 @contextmanager
-def _serving(body: bytes, etag: str) -> Iterator[str]:
-    """A local HTTP server that answers every GET with ``body`` and ``etag``, so the native fetch runs for real."""
+def _serving(body: bytes, etag: str) -> Iterator[_Served]:
+    """A local HTTP server that answers a GET with ``body`` and ``etag``, or 304 to a request that already holds
+    ``etag``, so the native fetch runs for real."""
+    statuses: list[int] = []
 
     class _Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
-            self.send_response(200)
+            unchanged = self.headers.get("If-None-Match") == etag
+            statuses.append(304 if unchanged else 200)
+            self.send_response(statuses[-1])
             self.send_header("ETag", etag)
-            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Content-Length", "0" if unchanged else str(len(body)))
             self.end_headers()
-            self.wfile.write(body)
+            self.wfile.write(b"" if unchanged else body)
 
         def log_message(self, format: str, *args: object) -> None:
             return None
@@ -60,7 +71,10 @@ def _serving(body: bytes, etag: str) -> Iterator[str]:
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        yield f"http://127.0.0.1:{server.server_address[1]}/model_prices_and_context_window.json"
+        yield _Served(
+            url=f"http://127.0.0.1:{server.server_address[1]}/model_prices_and_context_window.json",
+            statuses=statuses,
+        )
     finally:
         server.shutdown()
         server.server_close()
@@ -143,8 +157,8 @@ def test_reload_model_cost_map_surfaces_the_blob_id_of_the_bytes_served_on_every
 
     monkeypatch.setattr(ps, "invalidate_config_param", _fake_invalidate)
 
-    with _serving(body, _SERVED_ETAG) as url, auth_as(LitellmUserRoles.PROXY_ADMIN):
-        monkeypatch.setattr(litellm, "model_cost_map_url", url)
+    with _serving(body, _SERVED_ETAG) as served, auth_as(LitellmUserRoles.PROXY_ADMIN):
+        monkeypatch.setattr(litellm, "model_cost_map_url", served.url)
         reload_response = client.post("/reload/model_cost_map")
         source_response = client.get("/model/cost_map/source")
         status_response = client.get("/schedule/model_cost_map_reload/status")
@@ -162,6 +176,46 @@ def test_reload_model_cost_map_surfaces_the_blob_id_of_the_bytes_served_on_every
     assert public_response.status_code == 200
     assert "gpt-4o" in public_response.json()
     assert reload_body["models_count"] == len(litellm.model_cost)
+
+
+def test_reload_model_cost_map_of_an_unchanged_source_answers_success_and_keeps_the_published_table(
+    client, auth_as, monkeypatch, mock_prisma
+):
+    import litellm
+    from litellm.proxy import proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    table = _attach_litellm_config(mock_prisma)
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+    monkeypatch.delenv("LITELLM_LOCAL_MODEL_COST_MAP", raising=False)
+    monkeypatch.setattr("litellm.add_known_models", lambda model_cost_map=None: None)
+    monkeypatch.setattr("litellm.model_cost", {}, raising=False)
+
+    async def _fake_invalidate(name):
+        return None
+
+    monkeypatch.setattr(ps, "invalidate_config_param", _fake_invalidate)
+
+    with _serving(_ROOT_COST_MAP.read_bytes(), _SERVED_ETAG) as served, auth_as(LitellmUserRoles.PROXY_ADMIN):
+        monkeypatch.setattr(litellm, "model_cost_map_url", served.url)
+        changed_response = client.post("/reload/model_cost_map")
+        published = litellm.model_cost
+        unchanged_response = client.post("/reload/model_cost_map")
+
+    assert served.statuses == [200, 304]
+    assert changed_response.status_code == 200
+    models_count = changed_response.json()["models_count"]
+    assert unchanged_response.status_code == 200
+    assert normalize(unchanged_response.json(), volatile=_VOLATILE) == {
+        "message": f"Price data is already up to date. {models_count} models loaded.",
+        "status": "success",
+        "models_count": models_count,
+        "timestamp": "<VOLATILE>",
+        **get_model_cost_map_provenance(),
+    }
+    assert get_model_cost_map_provenance()["etag"] == _SERVED_ETAG
+    assert litellm.model_cost is published
+    assert table.upsert.await_count == 2
 
 
 def test_reload_model_cost_map_fetch_failure_502_keeps_map(

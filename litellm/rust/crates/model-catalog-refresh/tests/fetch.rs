@@ -148,6 +148,7 @@ async fn fetched(url: &str, policy: RetryPolicy, start: Start) -> Result<Fetched
         &S3Access::Environment { region: None },
         &GcsAccess::Environment,
         url,
+        None,
         policy,
         start,
     )
@@ -171,7 +172,7 @@ async fn a_200_returns_the_body_and_its_etags(
     let upstream = Upstream::serve(vec![Answer::Raw(response)]);
     assert_eq!(
         fetched(&upstream.url(), POLICY, Start::Fresh).await,
-        Ok(Fetched {
+        Ok(Fetched::Document {
             body: b"{}".to_vec(),
             etag: etag.map(str::to_owned),
         })
@@ -190,6 +191,7 @@ async fn a_fetch_runs_as_a_task_on_a_multi_thread_runtime() {
             &S3Access::Environment { region: None },
             &GcsAccess::Environment,
             &url,
+            None,
             POLICY,
             Start::Fresh,
         )
@@ -211,7 +213,7 @@ async fn a_redirect_is_not_followed_and_its_body_is_the_document() {
     ]);
     assert_eq!(
         fetched(&upstream.url(), POLICY, Start::Fresh).await,
-        Ok(Fetched {
+        Ok(Fetched::Document {
             body: b"{\"a\":1}".to_vec(),
             etag: None,
         })
@@ -382,6 +384,7 @@ async fn fetched_from_s3(
         &s3(upstream, credentials),
         &GcsAccess::Environment,
         url,
+        None,
         POLICY,
         Start::Fresh,
     )
@@ -394,7 +397,7 @@ async fn an_s3_fetch_sends_a_signed_get_object_to_the_endpoint() {
     let upstream = Upstream::serve(vec![Answer::Raw(OK)]);
     assert_eq!(
         fetched_from_s3("s3://prices/maps/cost.json", &upstream, keys()).await,
-        Ok(Fetched {
+        Ok(Fetched::Document {
             body: b"{}".to_vec(),
             etag: Some("\"v1\"".into()),
         })
@@ -428,6 +431,7 @@ async fn an_s3_body_that_stalls_after_the_headers_times_out() {
             &s3(&upstream, keys()),
             &GcsAccess::Environment,
             url,
+            None,
             policy,
             Start::Fresh,
         ),
@@ -465,11 +469,12 @@ async fn a_body_that_keeps_arriving_finishes_after_the_timeout(
             &access,
             &GcsAccess::Environment,
             &url,
+            None,
             policy,
             Start::Fresh
         )
         .await,
-        Ok(Fetched {
+        Ok(Fetched::Document {
             body: SLOW_BODY.to_vec(),
             etag: Some("\"v1\"".into()),
         })
@@ -558,6 +563,7 @@ async fn fetched_from_gcs(
             token_source: Arc::new(token),
         },
         url,
+        None,
         POLICY,
         Start::Fresh,
     )
@@ -575,7 +581,7 @@ async fn a_gcs_fetch_sends_the_bearer_token_to_the_object_media_url() {
             Token(Ok(GCS_TOKEN))
         )
         .await,
-        Ok(Fetched {
+        Ok(Fetched::Document {
             body: b"{}".to_vec(),
             etag: Some("\"v1\"".into()),
         })
@@ -680,9 +686,14 @@ async fn a_gcs_token_refused_once_is_retried_into_a_fetch() {
         &upstream,
         TokenAfterOneRefusal(AtomicU32::new(0)),
     )
-    .await
-    .unwrap();
-    assert_eq!(fetched.body, b"{}");
+    .await;
+    assert_eq!(
+        fetched,
+        Ok(Fetched::Document {
+            body: b"{}".to_vec(),
+            etag: Some("\"v1\"".into()),
+        })
+    );
     assert_eq!(upstream.heads().len(), 1);
 }
 
@@ -705,6 +716,7 @@ async fn a_gcs_token_that_never_arrives_fails_within_the_attempt_timeout() {
                 token_source: Arc::new(StalledToken),
             },
             url,
+            None,
             once,
             Start::Fresh,
         ),
@@ -756,6 +768,7 @@ async fn a_gcs_attempt_spends_one_timeout_across_the_token_and_the_request() {
             token_source: Arc::new(SlowToken(once.timeout / 2)),
         },
         "gs://prices/cost.json",
+        None,
         once,
         Start::Fresh,
     )
@@ -807,8 +820,159 @@ async fn a_body_of_exactly_100_mib_is_fetched() {
         )
         .into_boxed_str(),
     ))]);
-    let fetched = fetched(&upstream.url(), POLICY, Start::Fresh)
-        .await
-        .unwrap();
-    assert_eq!(fetched.body.len(), 100 * 1024 * 1024);
+    let Ok(Fetched::Document { body, .. }) = fetched(&upstream.url(), POLICY, Start::Fresh).await
+    else {
+        panic!("expected the document");
+    };
+    assert_eq!(body.len(), 100 * 1024 * 1024);
+}
+
+const NOT_MODIFIED: &str = "HTTP/1.1 304 Not Modified\r\nETag: \"v1\"\r\nConnection: close\r\n\r\n";
+
+#[derive(Clone, Copy)]
+enum Via {
+    Http,
+    S3,
+    Gcs,
+}
+
+async fn fetched_via(
+    via: Via,
+    upstream: &Upstream,
+    if_none_match: Option<&str>,
+) -> Result<Fetched, Failed> {
+    let (s3_access, gcs_access, url) = match via {
+        Via::Http => (
+            S3Access::Environment { region: None },
+            GcsAccess::Environment,
+            upstream.url(),
+        ),
+        Via::S3 => (
+            s3(upstream, keys()),
+            GcsAccess::Environment,
+            "s3://prices/cost.json".to_owned(),
+        ),
+        Via::Gcs => (
+            S3Access::Environment { region: None },
+            GcsAccess::Config {
+                endpoint: upstream.base.clone(),
+                token_source: Arc::new(Token(Ok(GCS_TOKEN))),
+            },
+            "gs://prices/cost.json".to_owned(),
+        ),
+    };
+    fetch(
+        &Client::for_test(),
+        &s3_access,
+        &gcs_access,
+        &url,
+        if_none_match,
+        POLICY,
+        Start::Fresh,
+    )
+    .await
+}
+
+fn only_head(upstream: &Upstream) -> String {
+    let heads = upstream.heads();
+    let [head] = heads.as_slice() else {
+        panic!("expected one request, got {heads:?}");
+    };
+    head.clone()
+}
+
+#[rstest]
+#[case::http(Via::Http)]
+#[case::s3(Via::S3)]
+#[case::gcs(Via::Gcs)]
+#[tokio::test]
+async fn a_source_that_still_serves_the_etag_sent_answers_not_modified(#[case] via: Via) {
+    let upstream = Upstream::serve(vec![Answer::Raw(NOT_MODIFIED)]);
+    assert_eq!(
+        fetched_via(via, &upstream, Some("\"v1\"")).await,
+        Ok(Fetched::NotModified)
+    );
+    assert_eq!(
+        header(&only_head(&upstream), "if-none-match"),
+        Some("\"v1\"")
+    );
+}
+
+#[rstest]
+#[case::http(Via::Http)]
+#[case::s3(Via::S3)]
+#[case::gcs(Via::Gcs)]
+#[tokio::test]
+async fn a_source_that_changed_answers_the_etag_sent_with_its_new_document(#[case] via: Via) {
+    let upstream = Upstream::serve(vec![Answer::Raw(
+        "HTTP/1.1 200 OK\r\nETag: \"v2\"\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}",
+    )]);
+    assert_eq!(
+        fetched_via(via, &upstream, Some("\"v1\"")).await,
+        Ok(Fetched::Document {
+            body: b"{}".to_vec(),
+            etag: Some("\"v2\"".into()),
+        })
+    );
+    assert_eq!(
+        header(&only_head(&upstream), "if-none-match"),
+        Some("\"v1\"")
+    );
+}
+
+#[rstest]
+#[case::http_without_an_etag(Via::Http, None)]
+#[case::s3_without_an_etag(Via::S3, None)]
+#[case::gcs_without_an_etag(Via::Gcs, None)]
+#[case::http_etag_no_header_can_carry(Via::Http, Some("\"v1\"\n"))]
+#[case::s3_etag_no_header_can_carry(Via::S3, Some("\"v1\"\n"))]
+#[case::gcs_etag_no_header_can_carry(Via::Gcs, Some("\"v1\"\n"))]
+#[tokio::test]
+async fn a_fetch_with_no_usable_etag_is_a_full_fetch(
+    #[case] via: Via,
+    #[case] if_none_match: Option<&str>,
+) {
+    let upstream = Upstream::serve(vec![Answer::Raw(OK)]);
+    assert_eq!(
+        fetched_via(via, &upstream, if_none_match).await,
+        Ok(Fetched::Document {
+            body: b"{}".to_vec(),
+            etag: Some("\"v1\"".into()),
+        })
+    );
+    assert_eq!(header(&only_head(&upstream), "if-none-match"), None);
+}
+
+#[rstest]
+#[case::http(Via::Http)]
+#[case::s3(Via::S3)]
+#[case::gcs(Via::Gcs)]
+#[tokio::test]
+async fn a_304_to_a_request_that_sent_no_etag_is_never_not_modified(#[case] via: Via) {
+    let upstream = Upstream::serve(vec![Answer::Raw(NOT_MODIFIED)]);
+    assert_ne!(
+        fetched_via(via, &upstream, None).await,
+        Ok(Fetched::NotModified)
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_conditional_request_negotiates_the_encoding_of_the_fetch_that_got_its_etag() {
+    let upstream = Upstream::serve(vec![Answer::Raw(OK), Answer::Raw(NOT_MODIFIED)]);
+    let Ok(Fetched::Document { etag, .. }) = fetched_via(Via::Http, &upstream, None).await else {
+        panic!("expected the document");
+    };
+    assert_eq!(
+        fetched_via(Via::Http, &upstream, etag.as_deref()).await,
+        Ok(Fetched::NotModified)
+    );
+    let heads = upstream.heads();
+    let [first, conditional] = heads.as_slice() else {
+        panic!("expected two requests, got {heads:?}");
+    };
+    assert_eq!(
+        header(first, "accept-encoding"),
+        header(conditional, "accept-encoding")
+    );
 }
