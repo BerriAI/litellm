@@ -4897,6 +4897,7 @@ class LlmProviders(str, Enum):
     STREAMLAKE = "streamlake"
     WALLY = "wally"
     SARVAM = "sarvam"
+    SOVEREIGNEG = "sovereigneg"
     LITELLM_AGENT = "litellm_agent"
     CURSOR = "cursor"
     BEDROCK_MANTLE = "bedrock_mantle"
