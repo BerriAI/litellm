@@ -184,7 +184,9 @@ def test_a_mirrored_call_is_not_mirrored_again_on_the_sync_path(make_core: MakeC
         ]
     )
     threads_before: Final = frozenset(threading.enumerate())
-    core.completion(model="g", messages=MESSAGES)  # pyright: ignore[reportAttributeAccessIssue]
+    core.completion(  # pyright: ignore[reportAttributeAccessIssue]  # endpoint method served by __getattr__
+        model="g", messages=MESSAGES
+    )
     for thread in frozenset(threading.enumerate()) - threads_before:
         thread.join(timeout=5)
     assert sorted(host.deployments_called()) == ["d1", "s1"]
