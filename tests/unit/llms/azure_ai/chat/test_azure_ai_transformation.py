@@ -599,6 +599,18 @@ def test_azure_ai_checks_levels_against_a_register_model_registration(
     assert body.get("reasoning_effort") == sent
 
 
+@pytest.mark.usefixtures("foundry_catalog")
+@pytest.mark.parametrize(("requested", "sent"), [("max", "max"), ("low", None)], ids=["declared", "undeclared"])
+def test_azure_ai_keeps_catalog_levels_under_a_pricing_registration_spelled_in_another_case(
+    respx_mock: respx.MockRouter, requested: str, sent: str | None
+) -> None:
+    litellm.register_model({"azure_ai/qa-cased-up": _foundry_row(input_cost_per_token=1e-6)})
+
+    body: Final = _foundry_request_body(respx_mock, "qa-cased-up", reasoning_effort=requested, drop_params=True)
+
+    assert body.get("reasoning_effort") == sent
+
+
 FOUNDRY_MODELS_CHAT_URL: Final = "https://example-resource.services.ai.azure.com/models/chat/completions"
 FOUNDRY_CHAT_COMPLETION: Final = MappingProxyType(
     {

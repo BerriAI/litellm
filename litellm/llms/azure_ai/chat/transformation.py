@@ -201,9 +201,12 @@ _LEVELS_LEFT_TO_THE_MODEL: Final = frozenset(("default", "auto"))
 
 def _catalog_row(key: str) -> Mapping[str, object] | None:
     catalog: Final = catalog_with_runtime_registrations()
-    exact: Final = catalog.get(key)
     canonical: Final = GetModelCostMap.loaded_model_cost_map_key(key)
-    return exact if exact is not None or canonical is None else catalog.get(canonical)
+    catalog_row: Final = catalog.get(canonical) if canonical is not None else None
+    registered_row: Final = catalog.get(key)
+    if catalog_row is None or registered_row is None:
+        return registered_row if catalog_row is None else catalog_row
+    return {**catalog_row, **registered_row}
 
 
 def _catalog_levels(model: str) -> tuple[str, ...] | None:

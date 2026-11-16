@@ -345,6 +345,8 @@ class TestKimiK3AdvertisesItsDocumentedLevels:
         assert resolve_supported_reasoning_efforts(entry, deployment_is_mapped=True) == ("low", "high", "max")
 
     def test_the_foundry_entry_advertises_every_level_foundry_takes(self, local_model_cost_map):
+        """Foundry's Kimi K3 answered 200 for every level from none to max on a live deployment,
+        checked on 2026-11-14 for PR #51747, so its row declares all seven."""
         entry = dict(litellm.model_cost["azure_ai/FW-Kimi-K3"], key="azure_ai/FW-Kimi-K3")
 
         assert resolve_supported_reasoning_efforts(entry, deployment_is_mapped=True) == (
