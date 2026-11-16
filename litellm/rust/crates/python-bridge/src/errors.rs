@@ -1,5 +1,6 @@
 use std::error::Error as StdError;
 
+use litellm_auth::gcp::vertex_messages::GoogleLoginFailure;
 use litellm_error::{Report, Source};
 use litellm_inference::Error;
 use pyo3::{
@@ -52,6 +53,9 @@ const MESSAGES_PROVIDER_BAD_REQUEST: &str = "messages_provider_bad_request";
 const MESSAGES_CREDENTIAL_FAILURE: &str = "messages_credential_failure";
 /// `(stage, text)` of a Google credential Rust could not acquire, read only for vertex_ai calls.
 const MESSAGES_GCP_CREDENTIAL_FAILURE: &str = "messages_gcp_credential_failure";
+/// The exception class and text Python's Vertex AI login raises for a login Rust could not
+/// complete, which the route raises in its place.
+const MESSAGES_GOOGLE_LOGIN_FAILURE: &str = "messages_google_login_failure";
 
 struct ProviderRejection {
     text: String,
@@ -304,6 +308,12 @@ pub(crate) fn route_failure(
             }
             if let Some(failure) = gcp_credential_failure(&error) {
                 value.setattr(MESSAGES_GCP_CREDENTIAL_FAILURE, failure)?;
+            }
+            if let Some(failure) = litellm_error::find::<GoogleLoginFailure>(&error) {
+                value.setattr(
+                    MESSAGES_GOOGLE_LOGIN_FAILURE,
+                    (<&str>::from(failure.exception), failure.message.as_str()),
+                )?;
             }
             native
         }

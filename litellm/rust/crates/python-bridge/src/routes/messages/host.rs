@@ -737,8 +737,13 @@ impl MessagesPythonHost {
             capabilities.bedrock =
                 super::model_catalog::bedrock_capabilities(py, &model, argument("model_info")?)?;
         }
+        let vertex_supported_regions = match custom_llm_provider.as_deref() {
+            Some(VERTEX_AI_PROVIDER) => super::model_catalog::vertex_supported_regions(py, &model)?,
+            _ => Vec::new(),
+        };
         let shaping = MessagesShaping {
             capabilities,
+            vertex_supported_regions,
             settings: MessagesSettings {
                 whole_sse_frames: settings.stream_cost_model.is_some(),
                 presanitized,

@@ -10,7 +10,8 @@ use litellm_auth_azure::AzureAuthInputs;
 use litellm_secret_value::SecretValue;
 
 use litellm_auth_aws::{AwsCredentialSource, CallerSigningHeaders, SigV4Signer};
-use litellm_auth_gcp::VertexConfig;
+use litellm_auth::VertexParams;
+use litellm_auth_gcp::vertex_messages::{vertex_credentials, vertex_project};
 use litellm_http::request::with_header;
 
 pub type Headers = Vec<(String, String)>;
@@ -48,10 +49,10 @@ pub enum AuthScheme {
         entra: Box<AuthScheme>,
         unhosted: Result<(), litellm_auth::Error>,
     },
-    /// A Google access token for the Vertex AI project the config names, acquired when the
-    /// request is sent through the shared GCP token cache and set under Python's exact
-    /// `Authorization` key.
-    GcpAccessToken { config: Box<VertexConfig> },
+    /// Claude on Vertex AI's Google login, Python's `VertexBase.load_auth`, from the deployment's
+    /// Vertex params. [`log_in_to_vertex`] runs it before the URL is built, since the login can
+    /// name the project the URL is addressed to.
+    GcpAccessToken { params: Box<VertexParams> },
     /// AWS SigV4 over the bytes that go on the wire, so the handler signs after the body is
     /// serialized.
     AwsSigV4 {
@@ -126,6 +127,35 @@ pub struct Authenticated {
     pub signer: Option<SigV4Signer>,
 }
 
+/// Logs a Claude on Vertex AI call in before its URL is built, as Python's
+/// `validate_anthropic_messages_environment` does, reading `VERTEXAI_CREDENTIALS` and
+/// `VERTEXAI_PROJECT` through the host's `secrets`. Returns the call's environment with the
+/// token in hand and the project the login resolved; any other scheme passes through.
+pub async fn log_in_to_vertex(
+    services: &AuthServices,
+    validated: ValidatedEnvironment,
+    secrets: &(dyn Fn(&str) -> Option<String> + Sync),
+) -> Result<(ValidatedEnvironment, Option<String>), litellm_auth::Error> {
+    let ValidatedEnvironment { headers, auth } = validated;
+    let AuthScheme::GcpAccessToken { params } = auth else {
+        return Ok((ValidatedEnvironment { headers, auth }, None));
+    };
+    let login = services
+        .vertex_messages
+        .login(vertex_credentials(&params, secrets), vertex_project(&params, secrets))
+        .await?;
+    Ok((
+        ValidatedEnvironment {
+            headers,
+            auth: AuthScheme::Credential {
+                placement: CredentialPlacement::Bearer,
+                secret: login.token,
+            },
+        },
+        Some(login.project_id),
+    ))
+}
+
 pub async fn resolve_auth(
     services: &AuthServices,
     validated: ValidatedEnvironment,
@@ -184,10 +214,13 @@ pub async fn resolve_auth(
                 subject: "Azure AD token without a Python host",
             },
         )),
-        AuthScheme::GcpAccessToken { config } => {
-            let token = services.gcp.access_token(&config, env_lookup).await?;
+        AuthScheme::GcpAccessToken { params } => {
+            let login = services
+                .vertex_messages
+                .login(vertex_credentials(&params, env_lookup), vertex_project(&params, env_lookup))
+                .await?;
             Ok(Authenticated {
-                headers: with_python_authorization_bearer(headers, &token),
+                headers: with_python_authorization_bearer(headers, login.token.expose()),
                 signer: None,
             })
         }
