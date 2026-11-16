@@ -755,6 +755,7 @@ class _Served:
     status: int = 200
     content_type: str | None = "application/octet-stream"
     body: bytes = PDF_BODY
+    barrier: threading.Barrier | None = None
     respond_after: threading.Event | None = None
 
 
@@ -782,6 +783,8 @@ def probe_server(monkeypatch):
         def do_GET(self):
             served = routes[self.path]
             seen.append((self.path, self.headers.get("Range")))
+            if served.barrier is not None:
+                served.barrier.wait()
             if served.respond_after is not None:
                 served.respond_after.wait(timeout=30)
             self.send_response(served.status)
@@ -830,9 +833,11 @@ async def test_a_stalled_pdf_link_leaves_the_shared_executor_free_for_other_requ
     probe_server: _ProbeServer, monkeypatch: pytest.MonkeyPatch, model: str, provider_kwargs: dict[str, str]
 ) -> None:
     monkeypatch.setenv("GIGACHAT_ACCESS_TOKEN", "fake-token")
-    pdf_host_answers: Final = threading.Event()
+    executor_meets_stalled_pdf_host: Final = threading.Barrier(2, timeout=30)
     pdf_path: Final = f"/{uuid.uuid4().hex}/report.pdf"
-    pdf_link: Final = probe_server.serve(pdf_path, _Served(content_type="application/pdf", respond_after=pdf_host_answers))
+    pdf_link: Final = probe_server.serve(
+        pdf_path, _Served(content_type="application/pdf", barrier=executor_meets_stalled_pdf_host)
+    )
     loop: Final = asyncio.get_running_loop()
     loop.set_default_executor(ThreadPoolExecutor(max_workers=1))
     request: Final = asyncio.create_task(
@@ -845,7 +850,7 @@ async def test_a_stalled_pdf_link_leaves_the_shared_executor_free_for_other_requ
     )
     try:
         await _until_requested(probe_server, pdf_path)
-        assert await asyncio.wait_for(loop.run_in_executor(None, lambda: "served"), timeout=5) == "served"
+        await loop.run_in_executor(None, executor_meets_stalled_pdf_host.wait)
     finally:
-        pdf_host_answers.set()
+        executor_meets_stalled_pdf_host.abort()
         await asyncio.gather(request, return_exceptions=True)

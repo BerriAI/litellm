@@ -2,10 +2,11 @@ import json
 import os
 import time
 from collections.abc import Mapping, Sequence
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Final, Literal, NamedTuple, Optional, cast
 
 from fastapi import HTTPException
-from pydantic import ConfigDict, Field, ValidationError
+from pydantic import ConfigDict, Field, TypeAdapter, ValidationError
 from typing_extensions import override
 
 from litellm._logging import verbose_proxy_logger
@@ -13,6 +14,7 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
+from litellm.litellm_core_utils.prompt_templates.image_handling import remote_pdf_file_link
 from litellm.llms.base_llm.guardrail_translation.utils import (
     effective_skip_system_message_for_guardrail,
     effective_skip_tool_message_for_guardrail,
@@ -36,6 +38,9 @@ from litellm.types.utils import GenericGuardrailAPIInputs
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
+
+_DECODED_JSON: Final = TypeAdapter(object)
+_CONTENT_PARTS: Final = TypeAdapter(list[object])
 
 
 class CrowdStrikeAIDRGuardrailMissingSecrets(Exception):
@@ -124,6 +129,8 @@ def _normalize_content(raw: object) -> str | list[_ContentPart] | None:
             iu = block.get("image_url")
             url = iu if isinstance(iu, str) else str((iu or {}).get("url", ""))
             parts.append(_ImageUrlContentPart(image_url=_ImageUrl(url=url)))
+        elif t == "file" and (pdf_link := remote_pdf_file_link(_DECODED_JSON.validate_python(block))) is not None:
+            parts.append(_ImageUrlContentPart(image_url=_ImageUrl(url=pdf_link)))
 
         # Any other types are not recognized by the CrowdStrike AIDR API.
 
@@ -213,14 +220,27 @@ def _merge_request_transforms(
     return [replacements.get(idx, original) for idx, original in enumerate(original_texts)]
 
 
+def _pdf_link_parts(content: Sequence[object]) -> Mapping[str, object]:
+    return MappingProxyType({link: part for part in content if (link := remote_pdf_file_link(part)) is not None})
+
+
+def _restored_part(part: _ContentPart, pdf_link_parts: Mapping[str, object]) -> object:
+    if isinstance(part, _ImageUrlContentPart) and part.image_url.url in pdf_link_parts:
+        return pdf_link_parts[part.image_url.url]
+    return part.model_dump()
+
+
 def _apply_message_redaction(original: AllMessageValues, redacted: _Message) -> AllMessageValues:
     content: Final = original.get("content")
     if isinstance(content, str):
         return cast(AllMessageValues, {**original, "content": _extract_text_from_message(redacted)})
     if isinstance(content, list) and _extract_text_from_content(content):
         redacted_content: Final = redacted.content
+        pdf_link_parts: Final = _pdf_link_parts(_CONTENT_PARTS.validate_python(content))
         new_content: Final = (
-            [part.model_dump() for part in redacted_content] if isinstance(redacted_content, list) else redacted_content
+            [_restored_part(part, pdf_link_parts) for part in redacted_content]
+            if isinstance(redacted_content, list)
+            else redacted_content
         )
         return cast(AllMessageValues, {**original, "content": new_content})
     return original
