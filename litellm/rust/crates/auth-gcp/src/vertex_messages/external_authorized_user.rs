@@ -7,6 +7,7 @@ use std::{
 };
 
 use base64::{Engine, engine::general_purpose::STANDARD};
+use litellm_python_compat::{json::from_json, repr::to_str, truthy::json_truthy};
 use serde_json::{Map, Value};
 use time::{OffsetDateTime, PrimitiveDateTime, macros::format_description};
 
@@ -48,12 +49,10 @@ struct ExternalAuthorizedUser {
     requests: Requests,
 }
 
-fn truthy(info: &Map<String, Value>, field: &str) -> Option<String> {
-    match info.get(field) {
-        None | Some(Value::Null) | Some(Value::Bool(false)) => None,
-        Some(Value::String(text)) if text.is_empty() => None,
-        value => Some(python_str(value)),
-    }
+/// A field google-auth only uses when it is truthy, as the text it sends for it.
+fn truthy_text(info: &Map<String, Value>, field: &str) -> Option<String> {
+    let value = info.get(field);
+    json_truthy(value).then(|| to_str(&from_json(value.cloned().unwrap_or_default())))
 }
 
 /// `datetime.strptime(expiry.rstrip("Z").split(".")[0], "%Y-%m-%dT%H:%M:%S")`, a naive UTC time.
@@ -88,10 +87,10 @@ pub(crate) fn external_account_authorized_user(
         .filter(|token| !token.is_null())
         .map(|_| Token { expiry });
     let refresh = match (
-        truthy(info, "refresh_token"),
-        truthy(info, "token_url"),
-        truthy(info, "client_id"),
-        truthy(info, "client_secret"),
+        truthy_text(info, "refresh_token"),
+        truthy_text(info, "token_url"),
+        truthy_text(info, "client_id"),
+        truthy_text(info, "client_secret"),
     ) {
         (Some(refresh_token), Some(token_url), Some(client_id), Some(client_secret)) => {
             Some(Refresh {

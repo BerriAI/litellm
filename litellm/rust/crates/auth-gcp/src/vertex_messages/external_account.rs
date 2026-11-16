@@ -6,6 +6,7 @@
 use std::{future::Future, pin::Pin, sync::Arc, time::Duration};
 
 use base64::{Engine, engine::general_purpose::STANDARD};
+use litellm_python_compat::truthy::json_truthy;
 use serde_json::{Map, Value};
 use time::{OffsetDateTime, PrimitiveDateTime, macros::format_description};
 
@@ -60,17 +61,6 @@ pub(crate) fn text(info: &Map<String, Value>, field: &str) -> Option<String> {
         .map(|value| python_str(Some(value)))
 }
 
-pub(crate) fn is_truthy(value: Option<&Value>) -> bool {
-    match value {
-        None | Some(Value::Null) => false,
-        Some(Value::String(text)) => !text.is_empty(),
-        Some(Value::Bool(flag)) => *flag,
-        Some(Value::Number(number)) => number.as_f64().is_some_and(|number| number != 0.0),
-        Some(Value::Array(items)) => !items.is_empty(),
-        Some(Value::Object(fields)) => !fields.is_empty(),
-    }
-}
-
 /// `is_workforce_pool`: an audience naming a workforce pool.
 fn is_workforce_pool(audience: Option<&str>) -> bool {
     audience
@@ -96,16 +86,16 @@ impl Settings {
             impersonation_url: text(info, "service_account_impersonation_url"),
             impersonation_lifetime: info
                 .get("service_account_impersonation")
-                .filter(|options| is_truthy(Some(options)))
+                .filter(|options| json_truthy(Some(options)))
                 .and_then(|options| options.get("token_lifetime_seconds"))
-                .filter(|lifetime| is_truthy(Some(lifetime)))
+                .filter(|lifetime| json_truthy(Some(lifetime)))
                 .map(|lifetime| python_str(Some(lifetime))),
             client_id: text(info, "client_id"),
             client_secret: text(info, "client_secret"),
             workforce_pool_user_project: text(info, "workforce_pool_user_project"),
         };
         if !is_workforce_pool(settings.audience.as_deref())
-            && is_truthy(info.get("workforce_pool_user_project"))
+            && json_truthy(info.get("workforce_pool_user_project"))
         {
             return Err(GoogleLoginFailure::new(
                 PythonException::InvalidValue,
@@ -422,7 +412,7 @@ fn parse_token_data(
             data.get(field).cloned().ok_or_else(unparseable)?
         }
     };
-    if !is_truthy(Some(&token)) {
+    if !json_truthy(Some(&token)) {
         return Err(GoogleLoginFailure::new(
             PythonException::Refresh,
             "Missing subject_token in the credential_source file",
@@ -514,7 +504,7 @@ fn source_format(source: &Map<String, Value>) -> Result<Format, GoogleLoginFailu
     };
     let kind = format
         .get("type")
-        .filter(|kind| is_truthy(Some(kind)))
+        .filter(|kind| json_truthy(Some(kind)))
         .map_or_else(|| "text".to_owned(), |kind| python_str(Some(kind)));
     match kind.as_str() {
         "text" => Ok(Format::Text),
@@ -575,11 +565,11 @@ pub(crate) fn identity_pool(
     }
     let format = source_format(source)?;
     let subject: Box<dyn SubjectToken> = match (file, url) {
-        (Some(path), _) if is_truthy(Some(path)) => Box::new(FileSource {
+        (Some(path), _) if json_truthy(Some(path)) => Box::new(FileSource {
             path: python_str(Some(path)),
             format,
         }),
-        (_, Some(url)) if is_truthy(Some(url)) => Box::new(UrlSource {
+        (_, Some(url)) if json_truthy(Some(url)) => Box::new(UrlSource {
             url: python_str(Some(url)),
             headers: match source.get("headers") {
                 Some(Value::Object(headers)) => headers
@@ -625,7 +615,7 @@ fn executable_subject_token(response: &Value, now: f64) -> Result<String, Google
             "The executable response is missing the success field.",
         ));
     };
-    if !is_truthy(Some(success)) {
+    if !json_truthy(Some(success)) {
         let (Some(code), Some(message)) = (response.get("code"), response.get("message")) else {
             return Err(malformed(
                 "Error code and message fields are required in the response.",
@@ -833,7 +823,7 @@ pub(crate) fn pluggable(
     };
     let executable = source
         .get("executable")
-        .filter(|executable| is_truthy(Some(executable)));
+        .filter(|executable| json_truthy(Some(executable)));
     let Some(executable) = executable else {
         return Err(malformed(
             "Missing credential_source. An 'executable' must be provided.",
@@ -844,14 +834,14 @@ pub(crate) fn pluggable(
     };
     let Some(command) = executable
         .get("command")
-        .filter(|command| is_truthy(Some(command)))
+        .filter(|command| json_truthy(Some(command)))
     else {
         return Err(malformed(
             "Missing command field. Executable command must be provided.",
         ));
     };
     let timeout_millis = match executable.get("timeout_millis") {
-        timeout if !is_truthy(timeout) => 30_000.0,
+        timeout if !json_truthy(timeout) => 30_000.0,
         Some(timeout) => timeout.as_f64().unwrap_or(f64::NAN),
         None => 30_000.0,
     };
@@ -863,7 +853,7 @@ pub(crate) fn pluggable(
     }
     if let Some(interactive) = executable
         .get("interactive_timeout_millis")
-        .filter(|timeout| is_truthy(Some(timeout)))
+        .filter(|timeout| json_truthy(Some(timeout)))
         && !interactive
             .as_f64()
             .is_some_and(|millis| (30_000.0..=1_800_000.0).contains(&millis))
