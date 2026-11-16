@@ -1,12 +1,11 @@
 import copy
 import json
 import math
+import threading
 from datetime import datetime, timezone
 from typing import Final
-from unittest.mock import patch
 
 import pytest
-import tiktoken
 from pydantic import TypeAdapter
 
 from litellm.caching.dual_cache import DualCache
@@ -42,6 +41,28 @@ async def test_shared_prefix_blocks_match_and_later_blocks_diverge() -> None:
     second: Final = await _call({"model": "gpt-4o", "messages": [{"role": "user", "content": prefix + " second"}]})
     assert _hashes(first)[:2] == _hashes(second)[:2]
     assert _hashes(first)[-1] != _hashes(second)[-1]
+
+
+@pytest.mark.asyncio
+async def test_tokenizer_runs_off_the_event_loop_thread() -> None:
+    event_loop_thread: Final = threading.get_ident()
+
+    def tokenizer(model: str, prompt: str) -> tuple[int, ...]:
+        assert threading.get_ident() != event_loop_thread
+        return (1, 2, 3)
+
+    callback: Final = PrefixBlockHashes(tokenizer=tokenizer)
+    data: Final = {"messages": [{"role": "user", "content": "hello"}]}
+    result: Final = await callback.async_pre_call_hook(UserAPIKeyAuth(), DualCache(), data, "completion")
+    assert len(_hashes(result)) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field", ("tool_call_id", "name"))
+async def test_tool_result_identity_changes_hash(field: str) -> None:
+    first: Final = await _call({"messages": [{"role": "tool", "content": "result", field: "first"}]})
+    second: Final = await _call({"messages": [{"role": "tool", "content": "result", field: "second"}]})
+    assert _hashes(first) != _hashes(second)
     assert all(len(value) == 16 and int(value, 16) >= 0 for value in _hashes(first))
 
 
@@ -136,5 +157,37 @@ async def test_serialization_uses_sorted_tools_roles_and_only_text_parts() -> No
 @pytest.mark.asyncio
 async def test_tokenizer_failure_does_not_fail_request() -> None:
     data: Final = {"model": "gpt-4o", "messages": [{"role": "user", "content": "hello"}]}
-    with patch.object(tiktoken.Encoding, "encode", side_effect=RuntimeError("tokenizer unavailable")):
-        assert await _call(data) is data
+
+    def unavailable_tokenizer(model: str, prompt: str) -> tuple[int, ...]:
+        raise RuntimeError("tokenizer unavailable")
+
+    callback: Final = PrefixBlockHashes(tokenizer=unavailable_tokenizer)
+    assert await callback.async_pre_call_hook(UserAPIKeyAuth(), DualCache(), data, "completion") is data
+
+
+@pytest.mark.asyncio
+async def test_tool_call_arguments_change_final_block_id() -> None:
+    def request(arguments: str) -> dict[str, object]:
+        return {
+            "model": "gpt-4o",
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call-1",
+                            "type": "function",
+                            "function": {
+                                "name": "lookup",
+                                "arguments": arguments,
+                            },
+                        }
+                    ],
+                }
+            ],
+        }
+
+    first: Final = await _call(request('{"city":"Paris"}'))
+    second: Final = await _call(request('{"city":"London"}'))
+    assert _hashes(first)[-1] != _hashes(second)[-1]

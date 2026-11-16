@@ -1,7 +1,8 @@
+import asyncio
 import hashlib
 import hmac
 import json
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from itertools import accumulate
 from typing import Final
 
@@ -34,7 +35,19 @@ def _text(content: object) -> str:
 
 def _message_text(message: object) -> str:
     fields: Final = as_str_mapping(message) or {}
-    return f"\n{fields.get('role', '')}\n{_text(fields.get('content'))}"
+    tool_fields: Final = {key: fields[key] for key in ("tool_calls", "tool_call_id", "name") if key in fields}
+    tool_text: Final = json.dumps(tool_fields, sort_keys=True, separators=(",", ":")) if tool_fields else ""
+    return f"\n{fields.get('role', '')}\n{_text(fields.get('content'))}{tool_text}"
+
+
+def _encode_prompt(model: str, prompt: str) -> tuple[int, ...]:
+    return _TOKEN_IDS.validate_python(encode(model=model, text=prompt))
+
+
+def _encode_and_hash(
+    tokenizer: Callable[[str, str], tuple[int, ...]], model: str, prompt: str, key: str
+) -> tuple[str, ...]:
+    return _hash_ids(tokenizer(model, prompt), key)
 
 
 def _hash_ids(tokens: tuple[int, ...], key: str) -> tuple[str, ...]:
@@ -49,6 +62,10 @@ def _hash_ids(tokens: tuple[int, ...], key: str) -> tuple[str, ...]:
 
 
 class PrefixBlockHashes(CustomLogger):
+    def __init__(self, tokenizer: Callable[[str, str], tuple[int, ...]] = _encode_prompt) -> None:
+        super().__init__()  # pyright: ignore[reportUnknownMemberType]  # legacy base accepts untyped optional kwargs
+        self._tokenizer: Final = tokenizer
+
     async def async_pre_call_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
@@ -68,25 +85,25 @@ class PrefixBlockHashes(CustomLogger):
             tools_text: Final = json.dumps(tools, sort_keys=True, separators=(",", ":")) if tools else ""
             prompt: Final = tools_text + "".join(_message_text(message) for message in _ITEMS.validate_python(messages))
             model: Final = data.get("model")
-            tokens: Final = _TOKEN_IDS.validate_python(
-                encode(model=model if isinstance(model, str) else "", text=prompt)
+            hash_ids: Final = await asyncio.to_thread(
+                _encode_and_hash, self._tokenizer, model if isinstance(model, str) else "", prompt, key
             )
             bucket: Final = get_metadata_variable_name_from_kwargs(data)
             metadata: Final[Mapping[str, object]] = as_str_mapping(data.get(bucket)) or {}
             spend_metadata: Final = as_str_mapping(metadata.get("spend_logs_metadata")) or {}
-            return {
-                **data,
-                bucket: {
-                    **metadata,
-                    "spend_logs_metadata": {
-                        **spend_metadata,
-                        "prefix_block_hashes": {
-                            "block_size": PREFIX_BLOCK_HASHES_BLOCK_SIZE,
-                            "hash_ids": _hash_ids(tokens, key),
-                        },
-                    },
-                },
-            }
         except Exception as error:  # noqa: BLE001  # optional observability must never fail a request
             verbose_logger.debug("Prefix block hashing skipped: %s", type(error).__name__)
             return data if isinstance(data, dict) else dict(data)
+        return {
+            **data,
+            bucket: {
+                **metadata,
+                "spend_logs_metadata": {
+                    **spend_metadata,
+                    "prefix_block_hashes": {
+                        "block_size": PREFIX_BLOCK_HASHES_BLOCK_SIZE,
+                        "hash_ids": hash_ids,
+                    },
+                },
+            },
+        }
