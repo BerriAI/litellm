@@ -4507,6 +4507,12 @@ def _conversation_ending_in(shape: str) -> list[AllMessageValues]:
                 {"role": "user", "content": [{"type": "guarded_text", "text": _BLOCKED_QUESTION}]},
                 *_conversation_ending_in("tool_result")[1:],
             ]
+        case "tool_result_right_after_a_plain_question_beside_a_guarded_one":
+            return [
+                {"role": "user", "content": [{"type": "guarded_text", "text": _GUARDED_PART_TEXT}]},
+                question,
+                {"role": "tool", "tool_call_id": "call_1", "content": "Sunny."},
+            ]
         case "guarded_tool_call_after_guarded_question":
             guarded_call: Final = [{"type": "guarded_text", "text": _GUARDED_PART_TEXT}]
             return [
@@ -4596,6 +4602,10 @@ async def test_trailing_system_turn_after_tool_history_without_tools_keeps_the_f
         (
             "guarded_tool_call_after_guarded_question",
             (_BLOCKED_QUESTION, _GUARDED_PART_TEXT, "[tool result for call_1: Sunny.]"),
+        ),
+        (
+            "tool_result_right_after_a_plain_question_beside_a_guarded_one",
+            (_GUARDED_PART_TEXT, _BLOCKED_QUESTION, "[tool result for call_1: Sunny.]"),
         ),
     ],
 )
