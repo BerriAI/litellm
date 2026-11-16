@@ -262,7 +262,7 @@ describe("Alerts", () => {
     const evidence = screen.getByRole("region", { name: "What was observed" });
     expect(within(evidence).getByText("claude-east-1")).toBeInTheDocument();
     expect(within(evidence).getByText("claude-sonnet-5-5")).toBeInTheDocument();
-    expect(within(evidence).getByText("2,048 tokens")).toBeInTheDocument();
+    expect(within(evidence).getByText("2048 tokens")).toBeInTheDocument();
     expect(within(evidence).getByText("5 minutes")).toBeInTheDocument();
     expect(within(evidence).getByText(/to .* UTC$/)).toBeInTheDocument();
     expect(within(evidence).getByText(/Prefixes never confirmed as cached are not assessed/)).toBeInTheDocument();
