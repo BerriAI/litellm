@@ -1,8 +1,8 @@
 use crate::anthropic::messages::transformation::retry_anthropic_messages_after_http_error;
 use litellm_auth::VertexParams;
 use litellm_auth_gcp::{
-    VertexConfig, get_vertex_ai_location, get_vertex_ai_project,
-    get_vertex_ai_project_from_credentials, secret_names,
+    VertexConfig, get_vertex_ai_project, get_vertex_ai_project_from_credentials, secret_names,
+    vertex_messages::{vertex_location, vertex_region},
 };
 use litellm_host::interceptors::RetriedRequest;
 use litellm_http::request::{header_value, without_headers};
@@ -37,7 +37,7 @@ use crate::{
     vertex_ai::common_utils::{get_vertex_base_url, graft_default_vertex_path, join_api_base},
 };
 use litellm_llms_types::providers::vertex_ai::{
-    ANTHROPIC_VERSION, DEFAULT_LOCATION, RAW_PREDICT, STREAM_RAW_PREDICT,
+    ANTHROPIC_VERSION, RAW_PREDICT, STREAM_RAW_PREDICT,
 };
 
 const WEB_SEARCH_TOOL_PREFIX: &str = "web_search";
@@ -90,8 +90,7 @@ impl BaseMessagesConfig for VertexAiPartnerModelsAnthropicMessagesConfig {
         let project = get_vertex_ai_project(&config, env_lookup)
             .or_else(|| get_vertex_ai_project_from_credentials(&config, env_lookup))
             .ok_or_else(|| Error::Auth(VertexParams::PROJECT.missing("Vertex AI")))?;
-        let location = get_vertex_ai_location(&config, env_lookup)
-            .unwrap_or_else(|| DEFAULT_LOCATION.to_string());
+        let location = vertex_region(vertex_location(&litellm_params.vertex, env_lookup), &[]);
         complete_vertex_anthropic_url(api_base, &project, &location, model, stream)
     }
 
@@ -127,11 +126,11 @@ impl BaseMessagesConfig for VertexAiPartnerModelsAnthropicMessagesConfig {
         secret_names()
     }
 
-    /// Python's `_finalize_vertex_messages_environment`: a Google access token for the configured
-    /// credentials (`vertex_credentials`, `VERTEXAI_CREDENTIALS`, `GOOGLE_APPLICATION_CREDENTIALS`,
-    /// then application default credentials) is always acquired when the request is sent and set
-    /// under the exact `Authorization` key, replacing a caller's header of that spelling only. The
-    /// exact `content-type` key is set to JSON the same way.
+    /// Python's `_finalize_vertex_messages_environment`: the call always logs in to Google as
+    /// `VertexBase.load_auth` does, from `vertex_credentials`, `VERTEXAI_CREDENTIALS`, then
+    /// application default credentials, and the token is set under the exact `Authorization` key,
+    /// replacing a caller's header of that spelling only. The exact `content-type` key is set to
+    /// JSON the same way.
     fn validate_environment(
         &self,
         headers: Headers,
@@ -144,7 +143,7 @@ impl BaseMessagesConfig for VertexAiPartnerModelsAnthropicMessagesConfig {
         Ok(ValidatedEnvironment {
             headers: with_exact_header(headers, CONTENT_TYPE_HEADER, JSON_CONTENT_TYPE),
             auth: AuthScheme::GcpAccessToken {
-                config: Box::new(VertexConfig::from_params(&litellm_params.vertex)),
+                params: Box::new(litellm_params.vertex.clone()),
             },
         })
     }
@@ -196,6 +195,31 @@ impl BaseMessagesConfig for VertexAiPartnerModelsAnthropicMessagesConfig {
             fields.remove("model");
         }
         body
+    }
+}
+
+/// The connection params Python's `get_complete_vertex_url` reads: the project the login
+/// resolved, and the region a model the model map lists `supported_regions` for is routed to.
+pub fn vertex_connection_params(
+    params: LitellmParams,
+    logged_in_project: Option<String>,
+    supported_regions: &[String],
+    env_lookup: &dyn Fn(&str) -> Option<String>,
+) -> LitellmParams {
+    let vertex_location = match supported_regions.is_empty() {
+        true => params.vertex.vertex_location.clone(),
+        false => Some(vertex_region(
+            vertex_location(&params.vertex, env_lookup),
+            supported_regions,
+        )),
+    };
+    LitellmParams {
+        vertex: VertexParams {
+            vertex_project: logged_in_project.or(params.vertex.vertex_project.clone()),
+            vertex_location,
+            ..params.vertex.clone()
+        },
+        ..params
     }
 }
 
@@ -577,7 +601,7 @@ mod tests {
     ) {
         assert!(matches!(
             validated(forwarded).auth,
-            AuthScheme::GcpAccessToken { config } if config.project_id() == Some("proj")
+            AuthScheme::GcpAccessToken { params } if params.project().as_deref() == Some("proj")
         ));
     }
 
