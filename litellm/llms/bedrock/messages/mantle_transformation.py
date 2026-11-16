@@ -48,6 +48,8 @@ def _move_betas_into_header(request: Mapping[str, object], headers: dict[str, st
     headers.pop("anthropic-beta", None)
 
 
+# TODO: `bedrock/mantle/` is slated for deprecation in favour of `bedrock_mantle/`. Folding it in must keep its defaults
+# (us-west-2, no BEDROCK_MANTLE_API_KEY, build_mantle_messages_url, no claude gate) or ship with a deprecation notice.
 class AmazonMantleMessagesConfig(AmazonAnthropicClaudeMessagesConfig):
     """
     Config for the bedrock-mantle /messages endpoint (Claude Mythos Preview).
