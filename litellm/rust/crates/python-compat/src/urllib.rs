@@ -20,8 +20,8 @@ pub fn quote(text: &str, safe: &str) -> String {
 
 const UNSAFE_URL_CHARS: [char; 3] = ['\t', '\r', '\n'];
 const USES_PARAMS: [&str; 16] = [
-    "", "ftp", "hdl", "prospero", "http", "imap", "https", "shttp", "rtsp", "rtsps", "rtspu", "sip",
-    "sips", "mms", "sftp", "tel",
+    "", "ftp", "hdl", "prospero", "http", "imap", "https", "shttp", "rtsp", "rtsps", "rtspu",
+    "sip", "sips", "mms", "sftp", "tel",
 ];
 const USES_NETLOC: [&str; 27] = [
     "",
@@ -156,7 +156,9 @@ pub fn urlparse(url: &str) -> ParsedUrl {
     }
     let last_segment = split.path.rfind('/').unwrap_or(0);
     let separator = match split.path.contains('/') {
-        true => split.path[last_segment..].find(';').map(|index| last_segment + index),
+        true => split.path[last_segment..]
+            .find(';')
+            .map(|index| last_segment + index),
         false => split.path.find(';'),
     };
     let Some(separator) = separator else {

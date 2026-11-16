@@ -26,6 +26,9 @@ const MESSAGES_REQUEST_ERROR: &str = "messages_request_error";
 /// The rejection is a parameter the model does not support, which Python raises as
 /// `UnsupportedParamsError`.
 const MESSAGES_UNSUPPORTED_PARAM: &str = "messages_unsupported_param";
+/// The model a provider config names on its `UnsupportedParamsError`, which Python then also
+/// attributes to the request's provider.
+const MESSAGES_UNSUPPORTED_PARAM_MODEL: &str = "messages_unsupported_param_model";
 /// The phase label (`Connection` or `Read`) of a timed-out call, for Python's timeout text, or
 /// `Body` for a streamed body read that timed out after the head arrived.
 const MESSAGES_TIMEOUT: &str = "messages_timeout";
@@ -220,20 +223,34 @@ pub(crate) fn route_failure(
             let native = PyValueError::new_err(Report::new(rejection).to_string());
             let value = native.value(py);
             value.setattr(MESSAGES_REQUEST_ERROR, true)?;
+            let detail = rejection.downcast_ref::<litellm_llms::ErrorDetail>();
             if matches!(
-                rejection.downcast_ref::<litellm_llms::ErrorDetail>(),
+                detail,
                 Some(
                     litellm_llms::ErrorDetail::UnsupportedParameter { .. }
                         | litellm_llms::ErrorDetail::NonNumericThinkingBudget { .. }
+                        | litellm_llms::ErrorDetail::UnsupportedVertexAnthropicVersion { .. }
+                        | litellm_llms::ErrorDetail::NonObjectVertexOutputFormat { .. }
                 )
             ) {
                 value.setattr(MESSAGES_UNSUPPORTED_PARAM, true)?;
             }
             if matches!(
-                rejection.downcast_ref::<litellm_llms::ErrorDetail>(),
-                Some(litellm_llms::ErrorDetail::NonNumericThinkingBudget { .. })
+                detail,
+                Some(
+                    litellm_llms::ErrorDetail::NonNumericThinkingBudget { .. }
+                        | litellm_llms::ErrorDetail::UnsupportedVertexAnthropicVersion { .. }
+                        | litellm_llms::ErrorDetail::NonObjectVertexOutputFormat { .. }
+                )
             ) {
                 value.setattr(MESSAGES_LATE_REJECTION, true)?;
+            }
+            if let Some(litellm_llms::ErrorDetail::UnsupportedVertexAnthropicVersion {
+                model,
+                ..
+            }) = detail
+            {
+                value.setattr(MESSAGES_UNSUPPORTED_PARAM_MODEL, model.as_str())?;
             }
             if let Some(provider) = provider_rejection(rejection) {
                 value.setattr(MESSAGES_PROVIDER_REJECTION, provider.text)?;
@@ -720,6 +737,67 @@ mod tests {
                 assert!(native.is_instance_of::<PyValueError>(py));
                 assert_eq!(native.value(py).to_string(), rejection);
             }
+        });
+    }
+
+    #[rstest::rstest]
+    #[case::vertex_version(
+        litellm_llms::ErrorDetail::UnsupportedVertexAnthropicVersion {
+            model: "claude-sonnet-4-5".into(),
+            value: "latest".into(),
+        },
+        Some("claude-sonnet-4-5")
+    )]
+    #[case::vertex_output_format(
+        litellm_llms::ErrorDetail::NonObjectVertexOutputFormat {
+            model: "claude-sonnet-4-5".into(),
+            actual: "str",
+        },
+        None
+    )]
+    #[case::shared_gate(
+        litellm_llms::ErrorDetail::UnsupportedParameter {
+            model: "claude-sonnet-4-5".into(),
+            param: "top_k".into(),
+            value: "5".into(),
+            hint: String::new(),
+        },
+        None
+    )]
+    fn vertex_transform_refusals_are_late_unsupported_params(
+        #[case] detail: litellm_llms::ErrorDetail,
+        #[case] attributed_model: Option<&str>,
+    ) {
+        let late = !matches!(
+            detail,
+            litellm_llms::ErrorDetail::UnsupportedParameter { .. }
+        );
+        Python::initialize();
+        Python::attach(|py| {
+            let native = route_failure(
+                py,
+                Error::invalid_request(detail),
+                RequestMarker::Messages,
+                Ok,
+            )
+            .unwrap();
+            let value = native.value(py);
+            let flag = |name: &str| {
+                value
+                    .getattr_opt(name)
+                    .unwrap()
+                    .is_some_and(|flag| flag.extract::<bool>().unwrap())
+            };
+            assert!(flag(MESSAGES_UNSUPPORTED_PARAM));
+            assert_eq!(flag(MESSAGES_LATE_REJECTION), late);
+            assert_eq!(
+                value
+                    .getattr_opt(MESSAGES_UNSUPPORTED_PARAM_MODEL)
+                    .unwrap()
+                    .map(|model| model.extract::<String>().unwrap())
+                    .as_deref(),
+                attributed_model
+            );
         });
     }
 

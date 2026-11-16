@@ -1,4 +1,5 @@
 use litellm_llms_types::providers::vertex_ai::{GLOBAL_API_BASE, GLOBAL_LOCATION};
+use litellm_python_compat::urllib::{ParsedUrl, urlparse, urlsplit};
 
 use crate::Error;
 
@@ -42,6 +43,56 @@ pub fn get_vertex_base_url(location: &str) -> Result<String, Error> {
         return Ok(format!("https://aiplatform.{location}.rep.googleapis.com"));
     }
     Ok(format!("https://{location}-aiplatform.googleapis.com"))
+}
+
+/// Python's `_strip_trailing_slashes_keeping_the_scheme`.
+fn strip_trailing_slashes_keeping_the_scheme(api_base: &str) -> String {
+    let stripped = api_base.trim_end_matches('/');
+    let parts = urlsplit(stripped);
+    if !parts.scheme.is_empty()
+        && parts.netloc.is_empty()
+        && parts.path.is_empty()
+        && parts.query.is_empty()
+        && parts.fragment.is_empty()
+    {
+        return api_base.to_string();
+    }
+    if parts.query.is_empty() || !parts.path.ends_with('/') {
+        return stripped.to_string();
+    }
+    let (before_query, query) = stripped.split_once('?').unwrap_or((stripped, ""));
+    format!("{}?{query}", before_query.trim_end_matches('/'))
+}
+
+/// Python's `join_api_base`.
+pub(crate) fn join_api_base(api_base: &str, route: &str) -> String {
+    format!(
+        "{}/{}",
+        strip_trailing_slashes_keeping_the_scheme(api_base),
+        route.trim_start_matches('/')
+    )
+}
+
+/// Python's `graft_default_vertex_path`: the default URL's path, less its leading API version,
+/// appended to the `api_base` path. An `api_base` that is itself a version keeps it, so
+/// `https://h/v1` becomes `https://h/v1/v1/projects/...` as it does in Python.
+pub(crate) fn graft_default_vertex_path(api_base: &str, default_url: &str) -> String {
+    let parsed = urlparse(api_base);
+    let default_path = urlparse(default_url).path;
+    let segments: Vec<&str> = default_path.trim_start_matches('/').split('/').collect();
+    let grafted = match segments.split_first() {
+        Some((first, rest)) if matches!(*first, "v1" | "v1beta1") => rest,
+        _ => &segments[..],
+    };
+    ParsedUrl {
+        path: format!(
+            "{}/{}",
+            parsed.path.trim_end_matches('/'),
+            grafted.join("/")
+        ),
+        ..parsed
+    }
+    .geturl()
 }
 
 #[cfg(test)]
