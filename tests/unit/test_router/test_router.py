@@ -4699,10 +4699,11 @@ async def test_a_chat_pre_call_count_does_not_wait_behind_long_embedding_batches
         ],
         enable_pre_call_checks=True,
     )
-    batch: Final = ["word " * 2100] * 76
     batches: Final = tuple(
-        asyncio.create_task(router.aembedding(model="embed", input=batch))
-        for _ in range(TOKEN_COUNTER_MAX_CONCURRENT_COUNTS)
+        asyncio.create_task(
+            router.aembedding(model="embed", input=[f"{batch} {text} " + "word " * 2100 for text in range(76)])
+        )
+        for batch in range(TOKEN_COUNTER_MAX_CONCURRENT_COUNTS)
     )
     await asyncio.wait_for(_until_every_count_slot_is_taken(), timeout=30)
     chat: Final = asyncio.create_task(router.acompletion(model="chat", messages=[{"role": "user", "content": "hi"}]))

@@ -280,6 +280,40 @@ async fn bedrock_invoke_keeps_the_region_path_and_signs_caller_headers_as_python
 
 #[rstest]
 #[tokio::test]
+async fn bedrock_invoke_signs_an_empty_api_key_without_reading_the_env_bearer(call: MessagesCall) {
+    let upstream = upstream([message_response()]).await;
+    let secrets = Arc::new(RecordingSecrets::new([
+        ("AWS_REGION_NAME", "us-east-1"),
+        ("AWS_BEARER_TOKEN_BEDROCK", "env-token"),
+    ]));
+    run_with(
+        secrets,
+        MessagesCall {
+            api_key: Some(String::new()),
+            api_base: Some(upstream.uri()),
+            litellm_params: litellm_router_types::LitellmParams {
+                aws: litellm_auth::AwsParams {
+                    aws_access_key_id: Some("test-access".into()),
+                    aws_secret_access_key: Some("test-secret".into()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            ..with_model(call, "bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0")
+        },
+    )
+    .await
+    .unwrap();
+    let request = only_request(&upstream).await;
+    assert!(
+        request
+            .header("authorization")
+            .is_some_and(|auth| auth.starts_with("AWS4-HMAC-SHA256 Credential=test-access/"))
+    );
+}
+
+#[rstest]
+#[tokio::test]
 async fn private_mantle_endpoint_is_used_and_signed(call: MessagesCall) {
     let upstream = upstream([message_response()]).await;
     let params = litellm_router_types::LitellmParams {

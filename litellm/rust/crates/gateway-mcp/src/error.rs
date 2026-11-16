@@ -226,8 +226,6 @@ pub enum ConnectError {
         #[source]
         fault: ConfigFault,
     },
-    #[error("could not resolve MCP credentials")]
-    Secret(#[from] litellm_secrets::Error),
     #[error("could not start MCP child process")]
     Process(#[from] std::io::Error),
     #[error("could not initialize MCP upstream {server}")]
@@ -275,8 +273,6 @@ pub enum ConfigFault {
     TokenWithoutAuth,
     #[error("configured auth_type requires authentication_token")]
     AuthWithoutToken,
-    #[error("referenced secret is unavailable")]
-    MissingSecret,
     #[error("upstream credential is empty")]
     EmptyCredential,
     #[error("invalid upstream header name")]

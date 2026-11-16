@@ -101,6 +101,7 @@ from litellm.proxy.common_utils.openai_error_payload import (
 from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
 from litellm.responses.litellm_completion_transformation.compaction_items import messages_since_newest_compaction
 from litellm.responses.mcp.parked_stream_dispatch import held_round_spend
+from litellm.responses.streaming_iterator import spawn_logging_task
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.proxy.model_listing import ModelInfoResponse
 from litellm.types.utils import MCP_GUARDRAIL_CALL_TYPES, CallTypes, CallTypesLiteral, ModelInfo, Usage
@@ -5655,7 +5656,7 @@ class ProxyLogging:
         """
         deferred_logging: Final = ProxyLogging._take_deferred_stream_logging(request_data)
         if deferred_logging is not None:
-            asyncio.create_task(deferred_logging)
+            spawn_logging_task(asyncio.get_running_loop(), deferred_logging, task_name="Deferred stream success log")
 
     _fire_deferred_stream_logging = fire_deferred_stream_logging
 
