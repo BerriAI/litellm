@@ -922,7 +922,12 @@ def test_a_valid_partitioned_parent_index_under_another_name_is_renamed_with_its
     with caplog.at_level("INFO", logger="litellm_proxy_extras"):
         assert ensure_request_log_indexes(partitioned_database, "public") is True
 
-    assert "Building index" not in caplog.text
+    assert caplog.messages == [
+        "Renaming the equivalent index call_id_parent_by_hand on LiteLLM_SpendLogs "
+        f"to {CALL_ID_INDEX} instead of building a second one",
+        "Building index LiteLLM_DailyUserSpend_api_key_date_idx on LiteLLM_DailyUserSpend concurrently",
+        "Request-log indexes are all in place",
+    ]
     oids: Final = _index_oids(partitioned_database)
     assert "call_id_parent_by_hand" not in oids and oids[CALL_ID_INDEX] == hand_built
     assert _attached_children(partitioned_database, CALL_ID_INDEX) == children_before
