@@ -56,7 +56,7 @@ pub trait GcpProviderLoader: Send + Sync {
 
 pub type GcpAuthFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, Error>> + Send + 'a>>;
 
-struct ServiceAccountTokenSource(Arc<dyn TokenProvider>);
+pub(crate) struct ServiceAccountTokenSource(pub(crate) Arc<dyn TokenProvider>);
 
 impl GcpTokenSource for ServiceAccountTokenSource {
     fn project_id(&self) -> GcpAuthFuture<'_, String> {
@@ -80,9 +80,9 @@ impl GcpTokenSource for ServiceAccountTokenSource {
     }
 }
 
-struct SdkTokenSource {
-    credentials: google_cloud_auth::credentials::AccessTokenCredentials,
-    project_id: Option<String>,
+pub(crate) struct SdkTokenSource {
+    pub(crate) credentials: google_cloud_auth::credentials::AccessTokenCredentials,
+    pub(crate) project_id: Option<String>,
 }
 
 impl GcpTokenSource for SdkTokenSource {

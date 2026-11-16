@@ -2,6 +2,7 @@ mod auth;
 mod config;
 pub mod constants;
 mod identity;
+pub mod vertex_messages;
 #[cfg(feature = "google-sdk")]
 mod sdk;
 
