@@ -3145,27 +3145,57 @@ def no_vertex_credentials_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("VERTEXAI_CREDENTIALS", raising=False)
 
 
+_INLINE_KEY: Final = '{"type": "service_account", "private_key": "not a key"}'
+_KEY_FILE: Final = "/etc/vertex/key.json"
+
+
 @pytest.mark.usefixtures("no_vertex_credentials_env")
 @pytest.mark.parametrize(
-    ("stage", "configured", "error_class", "text"),
+    ("stage", "cause", "credentials", "error_class", "text"),
     [
-        ("token_rejected", True, google_auth.RefreshError, "token request failed"),
-        ("token_unreachable", True, google_auth.TransportError, "HTTP request failed: connection refused"),
-        ("unloadable", True, ValueError, "invalid private key in credentials"),
-        ("unloadable", False, google_auth.DefaultCredentialsError, "No such file or directory (os error 2)"),
+        ("token_rejected", "token request failed", _KEY_FILE, google_auth.RefreshError, "token request failed"),
+        (
+            "token_unreachable",
+            "HTTP request failed: connection refused",
+            _INLINE_KEY,
+            google_auth.TransportError,
+            "HTTP request failed: connection refused",
+        ),
+        (
+            "unloadable",
+            "invalid private key in credentials",
+            _INLINE_KEY,
+            ValueError,
+            "invalid private key in credentials",
+        ),
+        (
+            "unloadable",
+            "No such file or directory (os error 2)",
+            _KEY_FILE,
+            ValueError,
+            "Unable to load the vertex credentials file. LiteLLM's log names the path and the reason.",
+        ),
+        (
+            "unloadable",
+            "No such file or directory (os error 2)",
+            None,
+            google_auth.DefaultCredentialsError,
+            "No such file or directory (os error 2)",
+        ),
         (
             "no_default_credentials",
-            False,
+            "no available authentication method found",
+            None,
             google_auth.DefaultCredentialsError,
             "Your default credentials were not found. To set up Application Default Credentials, see "
             "https://cloud.google.com/docs/authentication/external/set-up-adc for more information.",
         ),
     ],
+    ids=("rejected", "unreachable", "inline-unloadable", "file-unloadable", "adc-unloadable", "no-adc"),
 )
 def test_a_vertex_credential_failure_raises_the_class_python_s_token_acquisition_raises(
-    stage: str, configured: bool, error_class: type[Exception], text: str
+    stage: str, cause: str, credentials: str | None, error_class: type[Exception], text: str
 ) -> None:
-    cause: Final = "no available authentication method found" if stage == "no_default_credentials" else text
     logger: Final = Logging(
         model=_VERTEX_CLAUDE,
         messages=[],
@@ -3181,7 +3211,7 @@ def test_a_vertex_credential_failure_raises_the_class_python_s_token_acquisition
         "custom_llm_provider": "vertex_ai",
         "vertex_project": "proj",
         "litellm_logging_obj": logger,
-        **({"vertex_credentials": "/etc/vertex/key.json"} if configured else {}),
+        **({} if credentials is None else {"vertex_credentials": credentials}),
     }
 
     mapped: Final = messages_host.map_failure(_google_credential_failure(stage, cause), request, "vertex_ai", True)
@@ -3241,7 +3271,13 @@ def test_a_vertex_connect_failure_names_the_host_python_reaches(
 
     mapped: Final = messages_host.map_failure(
         native,
-        {"model": _VERTEX_CLAUDE, "messages": [], "custom_llm_provider": "vertex_ai", "vertex_project": "p", **location},
+        {
+            "model": _VERTEX_CLAUDE,
+            "messages": [],
+            "custom_llm_provider": "vertex_ai",
+            "vertex_project": "p",
+            **location,
+        },
         "vertex_ai",
     )
 
