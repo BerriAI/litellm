@@ -155,6 +155,10 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     THOUGHT_SIGNATURE_SEPARATOR,
     convert_to_anthropic_tool_invoke,
 )
+from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import (
+    drop_mid_conversation_system,
+    drops_mid_conversation_system,
+)
 from litellm.litellm_core_utils.prompt_templates.prompt_cache_breakpoint_utils import (
     with_prompt_cache_breakpoint,
 )
@@ -614,10 +618,15 @@ class LiteLLMAnthropicMessagesAdapter:
         route: ChatRouteInputs = _NO_ROUTE_INPUTS,
     ) -> list[AllMessageValues]:
         new_messages: Final[list[AllMessageValues]] = []
-        replayable_messages: Final = (
+        kept_messages: Final = (
             messages
+            if preserve_midturn_system or not drops_mid_conversation_system()
+            else drop_mid_conversation_system(messages)
+        )
+        replayable_messages: Final = (
+            kept_messages
             if _keeps_encrypted_reasoning_for_responses(model, custom_llm_provider, deployment_model_info, route)
-            else strip_encrypted_reasoning_blocks_from_anthropic_messages(messages)
+            else strip_encrypted_reasoning_blocks_from_anthropic_messages(kept_messages)
         )
         leading_count: Final = next(
             (i for i, m in enumerate(replayable_messages) if not is_system_role_message(m)),
