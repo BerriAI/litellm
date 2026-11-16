@@ -1,7 +1,9 @@
 import asyncio
+import base64
 import importlib
 import json
 import os
+import uuid
 import sys
 from typing import Final
 
@@ -552,6 +554,47 @@ def test_transform_request_strips_litellm_format_from_managed_file_id():
     file_part = request["messages"][0]["content"][1]["file"]
     assert "format" not in file_part
     assert file_part["file_id"] == "assistant-xyz"
+
+
+def test_transform_request_inlines_a_remote_pdf_file_part(respx_mock: MockRouter, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "user_url_validation", False)
+    pdf_bytes: Final = b"%PDF-1.4 azure remote file fixture"
+    pdf_url: Final = f"https://docs.example/{uuid.uuid4().hex}.pdf"
+    respx_mock.get(pdf_url).mock(
+        return_value=httpx.Response(200, content=pdf_bytes, headers={"Content-Type": "application/pdf"})
+    )
+    remote_file: Final = {"file_id": pdf_url, "filename": "report.pdf", "format": "application/pdf"}
+
+    request: Final = AzureOpenAIConfig().transform_request(
+        model="gpt-5.4",
+        messages=[{"role": "user", "content": [{"type": "text", "text": "Summarize"}, {"type": "file", "file": remote_file}]}],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert request["messages"][0]["content"][1] == {
+        "type": "file",
+        "file": {"filename": "report.pdf", "file_data": f"data:application/pdf;base64,{base64.b64encode(pdf_bytes).decode()}"},
+    }
+
+
+@pytest.mark.parametrize("file_id", ["https://docs.example/notes.txt", "http://127.0.0.1:8080/photo.png"])
+def test_transform_request_leaves_a_remote_file_part_that_is_not_a_pdf_unfetched(
+    respx_mock: MockRouter, file_id: str
+) -> None:
+    file_part: Final = {"type": "file", "file": {"file_id": file_id}}
+
+    request: Final = AzureOpenAIConfig().transform_request(
+        model="gpt-5.4",
+        messages=[{"role": "user", "content": [{"type": "text", "text": "Summarize"}, file_part]}],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert not respx_mock.calls
+    assert request["messages"][0]["content"][1] == file_part
 
 
 @pytest.fixture()

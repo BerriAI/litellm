@@ -7,13 +7,17 @@ _map_tool_choice, _transform_messages, transform_request, transform_response,
 get_model_response_iterator, and get_error_class.
 """
 
+import base64
 import json
+import uuid
 from typing import Final
 from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
+from respx import MockRouter
 
+import litellm
 from litellm.llms.gigachat.chat.transformation import (
     GigaChatConfig,
     GigaChatError,
@@ -494,10 +498,8 @@ class TestTransformMessages:
                 "image_url": {"url": "https://example.com/img.jpg"},
             },
         ]
-        with patch.object(self.config, "_upload_image", return_value="file-123"):
-            result = self.config._transform_messages([
-                {"role": "user", "content": content}
-            ])
+        config: Final = GigaChatConfig(upload_file=MagicMock(return_value="file-123"))
+        result: Final = config._transform_messages([{"role": "user", "content": content}])
         assert result[0]["content"] == "describe this"
         assert result[0]["attachments"] == ["file-123"]
 
@@ -506,26 +508,84 @@ class TestTransformMessages:
             {"type": "text", "text": "look"},
             {"type": "image_url", "image_url": "https://example.com/img.jpg"},
         ]
-        with patch.object(self.config, "_upload_image", return_value="file-456"):
-            result = self.config._transform_messages([
-                {"role": "user", "content": content}
-            ])
+        config: Final = GigaChatConfig(upload_file=MagicMock(return_value="file-456"))
+        result: Final = config._transform_messages([{"role": "user", "content": content}])
         assert result[0]["content"] == "look"
         assert "file-456" in result[0]["attachments"]
 
-    def test_list_content_with_pdf_file_part_uploads_it_as_an_attachment(self) -> None:
-        pdf_data_url: Final = "data:application/pdf;base64,JVBERi0xLjQK"
+    @pytest.mark.parametrize(
+        ("file", "upload_source"),
+        [
+            pytest.param(
+                {"filename": "report.pdf", "file_data": "data:application/pdf;base64,JVBERi0xLjQK"},
+                "data:application/pdf;base64,JVBERi0xLjQK",
+                id="data_url",
+            ),
+        ],
+    )
+    def test_list_content_with_pdf_file_part_uploads_it_as_an_attachment(
+        self, file: dict[str, str], upload_source: str
+    ) -> None:
         content: Final = [
             {"type": "text", "text": "summarize"},
-            {"type": "file", "file": {"filename": "report.pdf", "file_data": pdf_data_url}},
+            {"type": "file", "file": file},
         ]
-        with patch.object(self.config, "_upload_image", return_value="file-789") as upload:
-            result: Final = self.config._transform_messages([
-                {"role": "user", "content": content}
-            ])
-        upload.assert_called_once_with(pdf_data_url)
+        upload: Final = MagicMock(return_value="file-789")
+        result: Final = GigaChatConfig(upload_file=upload)._transform_messages([{"role": "user", "content": content}])
+        upload.assert_called_once_with(upload_source, None, None)
         assert result[0]["content"] == "summarize"
         assert result[0]["attachments"] == ["file-789"]
+
+    @pytest.mark.parametrize(
+        ("file_name", "file_format"),
+        [("report.pdf", None), ("report", "application/pdf")],
+        ids=["pdf_link", "pdf_format"],
+    )
+    def test_remote_pdf_file_part_uploads_the_fetched_document(
+        self, respx_mock: MockRouter, monkeypatch: pytest.MonkeyPatch, file_name: str, file_format: str | None
+    ) -> None:
+        monkeypatch.setattr(litellm, "user_url_validation", False)
+        pdf_bytes: Final = b"%PDF-1.4 gigachat remote file fixture"
+        pdf_url: Final = f"https://docs.example/{uuid.uuid4().hex}/{file_name}"
+        respx_mock.get(pdf_url).mock(
+            return_value=httpx.Response(200, content=pdf_bytes, headers={"Content-Type": "application/pdf"})
+        )
+        file: Final = {"file_id": pdf_url} | ({"format": file_format} if file_format else {})
+        upload: Final = MagicMock(return_value="file-789")
+        result: Final = GigaChatConfig(upload_file=upload)._transform_messages(
+            [{"role": "user", "content": [{"type": "text", "text": "summarize"}, {"type": "file", "file": file}]}]
+        )
+        upload.assert_called_once_with(f"data:application/pdf;base64,{base64.b64encode(pdf_bytes).decode()}", None, None)
+        assert result[0]["attachments"] == ["file-789"]
+
+    @pytest.mark.parametrize(
+        "url",
+        ["https://docs.example/notes.txt", "http://127.0.0.1:8080/photo.png"],
+        ids=["text_link", "private_image_link"],
+    )
+    def test_remote_file_part_that_is_not_a_pdf_is_left_out_without_a_fetch(
+        self, respx_mock: MockRouter, url: str
+    ) -> None:
+        upload: Final = MagicMock(return_value="file-789")
+        result: Final = GigaChatConfig(upload_file=upload)._transform_messages(
+            [{"role": "user", "content": [{"type": "text", "text": "summarize"}, {"type": "file", "file": {"file_id": url}}]}]
+        )
+        upload.assert_not_called()
+        assert not respx_mock.calls
+        assert result[0]["content"] == "summarize"
+        assert "attachments" not in result[0]
+
+    @pytest.mark.parametrize(
+        "url",
+        ["http://169.254.169.254/latest/meta-data/report.pdf", "http://127.0.0.1:8080/report.pdf"],
+        ids=["cloud_metadata", "loopback"],
+    )
+    def test_remote_pdf_file_part_on_a_private_address_is_refused_before_any_upload(self, url: str) -> None:
+        content: Final = [{"type": "file", "file": {"file_id": url, "format": "application/pdf"}}]
+        upload: Final = MagicMock(return_value="file-789")
+        with pytest.raises(litellm.ImageFetchError):
+            GigaChatConfig(upload_file=upload)._transform_messages([{"role": "user", "content": content}])
+        upload.assert_not_called()
 
 
 class TestTransformRequest:
@@ -882,7 +942,7 @@ class TestUploadImage:
     def setup_method(self):
         self.config = GigaChatConfig()
 
-    @patch(f"{TRANSFORM_MODULE}.upload_file_sync", side_effect=Exception("fail"))
-    def test_upload_image_failure_returns_none(self, mock_upload):
-        result = self.config._upload_image("https://example.com/img.jpg")
+    def test_upload_image_failure_returns_none(self):
+        config: Final = GigaChatConfig(upload_file=MagicMock(side_effect=Exception("fail")))
+        result: Final = config._upload_image("https://example.com/img.jpg")
         assert result is None

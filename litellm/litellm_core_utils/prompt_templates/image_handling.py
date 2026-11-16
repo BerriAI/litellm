@@ -10,9 +10,10 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from functools import partial
 from itertools import accumulate, chain, takewhile, tee
+from pathlib import PurePosixPath
 from types import MappingProxyType
 from typing import Final, TypeVar
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 
 import httpx
 from httpx import USE_CLIENT_DEFAULT, Response
@@ -21,6 +22,11 @@ import litellm
 from litellm import verbose_logger
 from litellm.caching.caching import InMemoryCache
 from litellm.constants import MAX_IMAGE_URL_DOWNLOAD_SIZE_MB, NON_LLM_CONNECTION_TIMEOUT
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    REMOTE_URL_PREFIXES,
+    is_pdf_file_part,
+    is_pdf_link,
+)
 from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
     infer_content_type_from_url_and_content,
 )
@@ -88,7 +94,7 @@ def _process_image_response(response: Response, url: str, download_budget: int |
             f"Error: Unable to determine image content type from the server's headers, the URL, or the image bytes. url={url}"
         ) from e
 
-    result: Final = f"data:{img_type};base64,{base64_image}"
+    result: Final = f"data:{_canonical_media_type(img_type)};base64,{base64_image}"
     in_memory_cache.set_cache(url, result)
     return result
 
@@ -193,9 +199,6 @@ def convert_url_to_base64(
     )
 
 
-_REMOTE_URL_PREFIXES: Final = ("http://", "https://")
-
-
 @dataclass(frozen=True, slots=True)
 class _RemoteImage:
     part: Mapping[str, object]
@@ -215,7 +218,7 @@ def _as_mapping(value: object) -> Mapping[str, object] | None:
 
 
 def _remote_url(candidate: object) -> str | None:
-    return candidate if isinstance(candidate, str) and candidate.startswith(_REMOTE_URL_PREFIXES) else None
+    return candidate if isinstance(candidate, str) and candidate.startswith(REMOTE_URL_PREFIXES) else None
 
 
 _ANTHROPIC_MEDIA_BLOCK_TYPES: Final = frozenset({"document", "image"})
@@ -246,6 +249,10 @@ def inline_remote_image_urls(media: RemoteMedia) -> bool:
     return media.part_type == "image_url"
 
 
+def inline_remote_files(media: RemoteMedia) -> bool:
+    return media.part_type == "file"
+
+
 _PDF_MEDIA_TYPES: Final = frozenset({"application/pdf", "application/x-pdf"})
 _GENERIC_MEDIA_TYPES: Final = frozenset({"application/octet-stream", "binary/octet-stream"})
 _PDF_SIGNATURE: Final = b"%PDF-"
@@ -267,9 +274,12 @@ def is_pdf_media_type(media_type: str) -> bool:
     return _bare_media_type(media_type) in _PDF_MEDIA_TYPES
 
 
+def _canonical_media_type(media_type: str) -> str:
+    return "application/pdf" if is_pdf_media_type(media_type) else media_type
+
+
 def is_unformatted_pdf_link(url: str, image_format: str | None) -> bool:
-    lowered: Final = url.lower()
-    return not image_format and (urlparse(lowered).path.endswith(".pdf") or lowered.endswith(".pdf"))
+    return not image_format and is_pdf_link(url)
 
 
 def is_unformatted_pdf_link_image(media: RemoteMedia) -> bool:
@@ -277,6 +287,10 @@ def is_unformatted_pdf_link_image(media: RemoteMedia) -> bool:
     return inline_remote_image_urls(media) and is_unformatted_pdf_link(
         media.url, image_format if isinstance(image_format, str) else None
     )
+
+
+def inline_remote_pdf_files(media: RemoteMedia) -> bool:
+    return inline_remote_files(media) and is_pdf_file_part({"type": "file", "file": media.fields})
 
 
 def _serves_pdf(response: Response) -> bool:
@@ -453,6 +467,12 @@ def _parse_remote_file(fields: Mapping[str, object]) -> _RemoteFile | None:
     return _RemoteFile(fields, file, url) if file is not None and url is not None else None
 
 
+def remote_pdf_file_link(part: object) -> str | None:
+    fields: Final = _as_mapping(part)
+    remote: Final = _parse_remote_file(fields) if fields is not None else None
+    return remote.url if remote is not None and inline_remote_pdf_files(_remote_media(remote)) else None
+
+
 def _parse_remote_source(fields: Mapping[str, object]) -> _RemoteSource | None:
     source: Final = _as_mapping(fields.get("source")) if fields.get("type") in _ANTHROPIC_MEDIA_BLOCK_TYPES else None
     url: Final = _remote_url(source.get("url")) if source is not None and source.get("type") == "url" else None
@@ -483,13 +503,23 @@ def _inferred_format(file: Mapping[str, object], url: str) -> Mapping[str, str]:
     return _PDF_FORMAT if "format" not in file and url.lower().endswith(".pdf") else MappingProxyType({})
 
 
+_DEFAULT_FILENAME: Final = "document.pdf"
+
+
+def _inferred_filename(file: Mapping[str, object], url: str) -> Mapping[str, str]:
+    if "filename" in file:
+        return MappingProxyType({})
+    url_filename: Final = PurePosixPath(unquote(urlparse(url).path)).name
+    return MappingProxyType({"filename": url_filename if PurePosixPath(url_filename).suffix else _DEFAULT_FILENAME})
+
+
 def _inlined_image_url(image_url: Mapping[str, object] | None, data_url: str) -> Mapping[str, object] | str:
     return {**image_url, "url": data_url} if image_url is not None else data_url
 
 
 def _inlined_file(file: Mapping[str, object], url: str, data_url: str) -> Mapping[str, object]:
     kept: Final = {k: v for k, v in file.items() if k != "file_id"}
-    return {**kept, **_inferred_format(file, url), "file_data": data_url}
+    return {**kept, **_inferred_format(file, url), **_inferred_filename(file, url), "file_data": data_url}
 
 
 def _base64_source(url: str, data_url: str) -> Mapping[str, str]:

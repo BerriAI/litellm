@@ -6,10 +6,11 @@ Transforms OpenAI-format requests to GigaChat format and back.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 import uuid
-from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Iterator, Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
@@ -18,6 +19,12 @@ from pydantic import TypeAdapter
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, decoded_json_object
+from litellm.litellm_core_utils.prompt_templates.image_handling import (
+    async_inline_remote_media,
+    convert_url_to_base64,
+    inline_remote_pdf_files,
+    remote_pdf_file_link,
+)
 from litellm.litellm_core_utils.tool_fields import tool_params_without_hosted_mcp
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
@@ -43,10 +50,12 @@ _JSON_VALUE: Final = TypeAdapter(object)
 _CONTENT_PART: Final = TypeAdapter(Mapping[str, object])
 
 
-def _file_part_data(part: Mapping[str, object]) -> str | None:
+def _file_part_upload_source(part: Mapping[str, object]) -> str | None:
     match part:
         case {"type": "file", "file": {"file_data": str() as file_data}} if file_data:
             return file_data
+        case {"type": "file"} if (pdf_link := remote_pdf_file_link(part)) is not None:
+            return convert_url_to_base64(pdf_link)
         case _:
             return None
 
@@ -93,6 +102,7 @@ class GigaChatConfig(BaseConfig):
         max_tokens: int | None = None,
         repetition_penalty: float | None = None,
         profanity_check: bool | None = None,
+        upload_file: Callable[[str, str | None, str | None], object] = upload_file_sync,
     ) -> None:
         config_params: Final[Mapping[str, float | int | bool | None]] = MappingProxyType(
             {
@@ -109,6 +119,7 @@ class GigaChatConfig(BaseConfig):
         # Instance variables for current request context
         self._current_credentials: str | None = None
         self._current_api_base: str | None = None
+        self._upload_file: Final = upload_file
 
     def get_complete_url(
         self,
@@ -298,11 +309,7 @@ class GigaChatConfig(BaseConfig):
             file_id string or None if upload failed
         """
         try:
-            return upload_file_sync(
-                image_url=image_url,
-                credentials=self._current_credentials,
-                api_base=self._current_api_base,
-            )
+            return self._upload_file(image_url, self._current_credentials, self._current_api_base)
         except Exception as e:
             verbose_logger.error("Failed to upload image: %s", e)
             return None
@@ -334,8 +341,8 @@ class GigaChatConfig(BaseConfig):
                         file_id = self._upload_image(upload_url)
                         if file_id:
                             attachments.append(file_id)
-                elif (file_data := _file_part_data(_CONTENT_PART.validate_python(part))) and (
-                    uploaded_file_id := self._upload_image(file_data)
+                elif (upload_source := _file_part_upload_source(_CONTENT_PART.validate_python(part))) and (
+                    uploaded_file_id := self._upload_image(upload_source)
                 ):
                     attachments.append(uploaded_file_id)
         text: Final = "\n".join(texts) if texts else ""
@@ -348,7 +355,7 @@ class GigaChatConfig(BaseConfig):
         optional_params: Mapping[str, object],
         litellm_params: Mapping[str, object],
         headers: Mapping[str, object],
-    ) -> dict:  # mutable-ok: request payload sent to httpx
+    ) -> dict[str, object]:  # mutable-ok: request payload sent to httpx
         """Transform OpenAI request to GigaChat format."""
         giga_messages: Final = self._transform_messages(messages)
 
@@ -374,6 +381,27 @@ class GigaChatConfig(BaseConfig):
             request_data["function_call"] = optional_params["function_call"]
 
         return request_data
+
+    @property
+    def uses_async_transform_request(self) -> bool:
+        return True
+
+    async def async_transform_request(
+        self,
+        model: str,
+        messages: list[AllMessageValues],  # mutable-ok: BaseConfig signature
+        optional_params: dict[str, object],  # mutable-ok: BaseConfig signature
+        litellm_params: dict[str, object],  # mutable-ok: BaseConfig signature
+        headers: dict[str, object],  # mutable-ok: BaseConfig signature
+    ) -> dict[str, object]:  # mutable-ok: BaseConfig signature
+        return await asyncio.to_thread(
+            self.transform_request,
+            model,
+            await async_inline_remote_media(messages, should_inline=inline_remote_pdf_files),
+            optional_params,
+            litellm_params,
+            headers,
+        )
 
     def _transform_messages(self, messages: Sequence[AllMessageValues]) -> Sequence[dict]:
         """Transform OpenAI messages to GigaChat format."""

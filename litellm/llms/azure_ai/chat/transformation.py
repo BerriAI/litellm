@@ -25,6 +25,12 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     drop_tool_reference_parts_from_tool_messages,
     filter_value_from_dict,
     is_pdf_file_part,
+    message_without_file_formats,
+)
+from litellm.litellm_core_utils.prompt_templates.image_handling import (
+    async_inline_remote_media,
+    inline_remote_media,
+    inline_remote_pdf_files,
 )
 from litellm.litellm_core_utils.prompt_templates.prompt_cache_breakpoint_utils import (
     prompt_cache_breakpoint_for_wire,
@@ -483,7 +489,8 @@ class AzureAIStudioConfig(OpenAIConfig):
             texts = convert_content_list_to_str(message=message)
             if texts:
                 message["content"] = texts
-        return stripped_messages
+        messages_without_formats: Final = [message_without_file_formats(message) for message in stripped_messages]
+        return messages_without_formats
 
     def _is_foundry_model_inference_base(self, api_base: str) -> bool:
         return is_foundry_model_inference_base(api_base)
@@ -526,20 +533,21 @@ class AzureAIStudioConfig(OpenAIConfig):
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
-    ) -> dict:
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
+        headers: dict[str, object],
+    ) -> dict[str, object]:
         extra_body: Final = optional_params.pop("extra_body", {})
         if extra_body and isinstance(extra_body, dict):
             optional_params.update(extra_body)
         optional_params.pop("max_retries", None)
+        inlined_messages: Final = inline_remote_media(messages, should_inline=inline_remote_pdf_files)
         deployment_params: Final = _FIELDS.validate_python(litellm_params)
         base_model: Final = deployment_params.get("base_model")
         return {
             "model": model,
             "messages": self._transform_messages(
-                messages,
+                inlined_messages,
                 model,
                 _deployment_reads_breakpoints(model, deployment_params),
                 bool(litellm_params.get("drop_params") or litellm.drop_params),
@@ -547,6 +555,26 @@ class AzureAIStudioConfig(OpenAIConfig):
             ),
             **optional_params,
         }
+
+    @property
+    def uses_async_transform_request(self) -> bool:
+        return True
+
+    async def async_transform_request(
+        self,
+        model: str,
+        messages: list[AllMessageValues],  # mutable-ok: BaseConfig signature
+        optional_params: dict[str, object],  # mutable-ok: BaseConfig signature
+        litellm_params: dict[str, object],  # mutable-ok: BaseConfig signature
+        headers: dict[str, object],  # mutable-ok: BaseConfig signature
+    ) -> dict[str, object]:  # mutable-ok: BaseConfig signature
+        return self.transform_request(
+            model=model,
+            messages=await async_inline_remote_media(messages, should_inline=inline_remote_pdf_files),
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            headers=headers,
+        )
 
     def transform_response(
         self,

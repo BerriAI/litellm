@@ -150,6 +150,7 @@ from openai.types.chat.chat_completion_chunk import Choice as OpenAIStreamingCho
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     anthropic_inline_document,
+    anthropic_remote_document,
 )
 from litellm.litellm_core_utils.prompt_templates.factory import (
     THOUGHT_SIGNATURE_SEPARATOR,
@@ -1501,12 +1502,22 @@ class LiteLLMAnthropicMessagesAdapter:
         self, document: Mapping[str, object]
     ) -> ChatCompletionFileObject | ChatCompletionImageObject | None:
         inline_document: Final = anthropic_inline_document(document)
-        if inline_document is None:
-            return self._source_image_url_part(document.get("source"))
-        return ChatCompletionFileObject(
-            type="file",
-            file=ChatCompletionFileObjectFile(filename=inline_document.filename, file_data=inline_document.file_data),
-        )
+        if inline_document is not None:
+            return ChatCompletionFileObject(
+                type="file",
+                file=ChatCompletionFileObjectFile(
+                    filename=inline_document.filename, file_data=inline_document.file_data
+                ),
+            )
+        remote_document: Final = anthropic_remote_document(document)
+        if remote_document is not None:
+            return ChatCompletionFileObject(
+                type="file",
+                file=ChatCompletionFileObjectFile(
+                    filename=remote_document.filename, file_id=remote_document.url, format="application/pdf"
+                ),
+            )
+        return self._source_image_url_part(document.get("source"))
 
     def _source_image_url_part(self, image_source: object) -> ChatCompletionImageObject | None:
         if not isinstance(image_source, dict):

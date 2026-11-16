@@ -16,6 +16,11 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 from litellm.litellm_core_utils.prompt_templates.factory import (
     convert_to_azure_openai_messages,
 )
+from litellm.litellm_core_utils.prompt_templates.image_handling import (
+    async_inline_remote_media,
+    inline_remote_media,
+    inline_remote_pdf_files,
+)
 from litellm.litellm_core_utils.prompt_templates.json_schema_utils import (
     flatten_combinators_and_drop_non_python_regex_patterns,
     tool_with_sanitized_parameters,
@@ -292,10 +297,10 @@ class AzureOpenAIConfig(BaseConfig):
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
+        optional_params: dict[str, object],
         litellm_params: Mapping[str, object],
-        headers: dict,
-    ) -> dict:
+        headers: dict[str, object],
+    ) -> dict[str, object]:
         ordered_messages: Final = system_messages_first(messages) if litellm.openai_system_messages_first else messages
         wire_messages: Final = (
             self._with_wire_safe_prompt_cache_breakpoints(model, ordered_messages, litellm_params)
@@ -303,7 +308,8 @@ class AzureOpenAIConfig(BaseConfig):
             else ordered_messages
         )
         stripped_messages: Final = drop_tool_reference_parts_from_tool_messages(wire_messages)
-        azure_messages: Final = convert_to_azure_openai_messages(hoist_images_from_tool_messages(stripped_messages))
+        inlined_messages: Final = inline_remote_media(stripped_messages, should_inline=inline_remote_pdf_files)
+        azure_messages: Final = convert_to_azure_openai_messages(hoist_images_from_tool_messages(inlined_messages))
         request_params: Final = MappingProxyType(
             {
                 key: value
@@ -317,6 +323,22 @@ class AzureOpenAIConfig(BaseConfig):
             **request_params,
             **sanitized_tools_update(optional_params),
         }
+
+    async def async_transform_request(
+        self,
+        model: str,
+        messages: list[AllMessageValues],  # mutable-ok: BaseConfig signature
+        optional_params: dict[str, object],  # mutable-ok: BaseConfig signature
+        litellm_params: Mapping[str, object],
+        headers: dict[str, object],  # mutable-ok: BaseConfig signature
+    ) -> dict[str, object]:  # mutable-ok: BaseConfig signature
+        return self.transform_request(
+            model=model,
+            messages=await async_inline_remote_media(messages, should_inline=inline_remote_pdf_files),
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            headers=headers,
+        )
 
     @staticmethod
     def _with_wire_safe_prompt_cache_breakpoints(

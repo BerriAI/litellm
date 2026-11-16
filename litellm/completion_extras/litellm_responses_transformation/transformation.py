@@ -50,6 +50,7 @@ from litellm.litellm_core_utils.core_helpers import (
     iter_items,
 )
 from litellm.litellm_core_utils.hidden_params import get_hidden_params, get_or_create_hidden_params
+from litellm.litellm_core_utils.prompt_templates.common_utils import REMOTE_URL_PREFIXES
 from litellm.litellm_core_utils.prompt_templates.prompt_cache_breakpoint_utils import (
     prompt_cache_breakpoint_with_readable_mode,
     whole_prompt_cache_breakpoint_or_none,
@@ -855,6 +856,9 @@ def _input_file_from_file_value(file_value: object) -> dict[str, object]:
     if not isinstance(file_value, dict):
         return {"type": "input_file"}
     file_dict: Final = cast("dict[str, object]", file_value)  # cast-ok: runtime dict checked
+    file_id: Final = file_dict.get("file_id")
+    if isinstance(file_id, str) and file_id.startswith(REMOTE_URL_PREFIXES):
+        return {"type": "input_file", "file_url": file_id}
     return {
         "type": "input_file",
         **{key: file_dict[key] for key in ("file_id", "file_data", "filename") if key in file_dict},
