@@ -12,6 +12,7 @@ from litellm.integrations.prompt_cache_alerts.evidence import (
     NotCaching,
     PrefixEvidence,
     Unsupported,
+    _segments,
     cache_counters,
     cacheable_prefix,
     fingerprint_key,
@@ -87,6 +88,29 @@ def test_the_prefix_is_keyed_so_it_cannot_be_recomputed_without_the_shared_salt(
     assert _prefix(_body()) != _prefix(_body(), fingerprint_key("another-salt"))
 
 
+def _marked_turn(
+    name: str = "n" * 32_000, role: str = "user", first: str = "block 0", later: str = "what changed?"
+) -> dict[str, JsonValue]:
+    earlier: Final = tuple({"type": "text", "text": first if i == 0 else f"block {i}"} for i in range(100))
+    marked: Final[dict[str, JsonValue]] = {"type": "text", "text": "last", "cache_control": _MARK}
+    return _body(
+        system_mark=None,
+        messages=[{"role": role, "name": name, "content": [*earlier, marked]}, {"role": "user", "content": later}],
+    )
+
+
+def test_a_marked_message_keeps_its_whole_identity_while_serializing_its_fields_once() -> None:
+    """A large message field shared by many blocks is part of the prefix once, so the canonical prefix grows with
+    the request instead of with fields times blocks."""
+    body: Final = _marked_turn()
+    canonical: Final = json.dumps([segment.identity for segment in _segments(body) or ()], separators=(",", ":"))
+    assert len(canonical) < 2 * len(json.dumps(body))
+    assert _prefix(_marked_turn(later="something else")) == _prefix(body)
+    assert len({_prefix(body), _prefix(_marked_turn(name="m")), _prefix(_marked_turn(role="assistant"))}) == 3
+    assert _prefix(_marked_turn(first="changed")) != _prefix(body)
+    assert cacheable_prefix(_marked_turn(name=REDACTED_BY_LITELLM), _KEY) == Unsupported()
+
+
 @pytest.mark.parametrize(
     ("body", "expected"),
     [
@@ -106,6 +130,7 @@ def test_the_prefix_is_keyed_so_it_cannot_be_recomputed_without_the_shared_salt(
         (_body(messages=[{"role": "user", "content": REDACTED_BY_LITELLM}]), CacheablePrefix(_prefix(_body()))),
         (_body() | {"system": [{"type": "text", "text": REDACTED_BY_LITELLM, "cache_control": _MARK}]}, Unsupported()),
         (_body(messages=[]), Unsupported()),
+        (_body(messages=[{"role": "user", "content": 7}]), Unsupported()),
         ("not json", Unsupported()),
     ],
     ids=[
@@ -119,6 +144,7 @@ def test_the_prefix_is_keyed_so_it_cannot_be_recomputed_without_the_shared_salt(
         "redaction-after-breakpoint",
         "redacted-prefix",
         "no-messages",
+        "malformed-content",
         "unreadable",
     ],
 )

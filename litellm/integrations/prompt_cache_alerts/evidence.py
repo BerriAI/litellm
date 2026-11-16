@@ -82,18 +82,18 @@ class _Segment:
     marker: JsonValue
 
 
-def _blocks(kind: str, index: int, envelope: JsonValue, content: JsonValue) -> tuple[_Segment, ...] | None:
+def _blocks(kind: str, index: int, content: JsonValue) -> tuple[_Segment, ...] | None:
     if isinstance(content, str):
-        return (_Segment([kind, index, envelope, 0, {"type": "text", "text": content}], None),)
+        return (_Segment([kind, index, 0, {"type": "text", "text": content}], None),)
     if not isinstance(content, list):
         return None
     return tuple(
         _Segment(
-            [kind, index, envelope, position, {k: v for k, v in block.items() if k != "cache_control"}],
+            [kind, index, position, {k: v for k, v in block.items() if k != "cache_control"}],
             block.get("cache_control"),
         )
         if isinstance(block, dict)
-        else _Segment([kind, index, envelope, position, block], None)
+        else _Segment([kind, index, position, block], None)
         for position, block in enumerate(content)
     )
 
@@ -101,7 +101,11 @@ def _blocks(kind: str, index: int, envelope: JsonValue, content: JsonValue) -> t
 def _message_segments(index: int, message: JsonValue) -> tuple[_Segment, ...] | None:
     if not isinstance(message, dict) or "cache_control" in message:
         return None
-    return _blocks("message", index, {k: v for k, v in message.items() if k != "content"}, message.get("content"))
+    blocks: Final = _blocks("message", index, message.get("content"))
+    if blocks is None:
+        return None
+    envelope: Final = _Segment(["message_envelope", index, {k: v for k, v in message.items() if k != "content"}], None)
+    return (envelope, *blocks)
 
 
 def _segments(body: Mapping[str, JsonValue]) -> tuple[_Segment, ...] | None:
@@ -111,8 +115,8 @@ def _segments(body: Mapping[str, JsonValue]) -> tuple[_Segment, ...] | None:
     if not isinstance(tools, list) or not isinstance(messages, list) or not messages:
         return None
     groups: Final = (
-        _blocks("tool", 0, None, tools),
-        _blocks("system", 0, None, system),
+        _blocks("tool", 0, tools),
+        _blocks("system", 0, system),
         *(_message_segments(index, message) for index, message in enumerate(messages)),
     )
     if any(group is None for group in groups):
