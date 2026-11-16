@@ -4,7 +4,7 @@ use std::{
 };
 
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
-use litellm_core_utils::settings::Lookup;
+use litellm_env::Lookup;
 use litellm_http::Client;
 use moka::future::Cache;
 use serde::Deserialize;

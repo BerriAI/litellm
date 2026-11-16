@@ -4,6 +4,11 @@ use std::{io, path::PathBuf};
 pub enum Error {
     #[error("could not read config {}", path.display())]
     Read { path: PathBuf, source: io::Error },
+    #[error("invalid YAML in {}", path.display())]
+    LoadFile {
+        path: PathBuf,
+        source: litellm_yaml::Error,
+    },
     #[error("invalid YAML config {}", path.display())]
     ParseFile {
         path: PathBuf,
