@@ -717,7 +717,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
 
     @property
     def held_finish_reason(self) -> str | None:
-        return held_finish_reason_of(self.completion_stream)
+        return self._combined_chunk_splitter.held_finish_reason
 
     @property
     def messages(self) -> "list[AllMessageValues] | None":

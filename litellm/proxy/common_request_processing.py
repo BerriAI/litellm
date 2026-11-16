@@ -110,6 +110,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import (
     guardrail_entries,
     guardrail_information_cost,
+    object_items,
     object_mapping,
 )
 from litellm.litellm_core_utils.llm_response_utils.get_headers import (
@@ -624,7 +625,7 @@ async def _bill_partial_streamed_spend_on_disconnect(request_data: dict, respons
         partial_response.choices = list(
             _choices_without_unobserved_finish_reasons(
                 partial_response.choices,
-                ChunkProcessor.choice_indices_with_observed_finish_reason(chunks),
+                ChunkProcessor.choice_indices_with_observed_finish_reason(object_items(chunks)),
                 held_finish_reason_of(response),
             )
         )

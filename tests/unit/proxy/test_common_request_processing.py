@@ -11048,13 +11048,17 @@ class TestStreamingClientDisconnectBilling:
 
     @staticmethod
     def _recorded_logging_obj(
-        model: str, messages: list[dict[str, str]], call_id: str, recorder: _RecordingSuccessLogger
+        model: str,
+        messages: list[dict[str, str]],
+        call_id: str,
+        recorder: _RecordingSuccessLogger,
+        call_type: str = "acompletion",
     ) -> LiteLLMLoggingObj:
         logging_obj: Final = LiteLLMLoggingObj(
             model=model,
             messages=messages,
             stream=True,
-            call_type="acompletion",
+            call_type=call_type,
             start_time=datetime.datetime(2025, 3, 3, 21, 38, 10),
             litellm_call_id=call_id,
             function_id=call_id,
@@ -11213,20 +11217,38 @@ class TestStreamingClientDisconnectBilling:
 
         await self._assert_disconnect_bills_length(recorder, routed.logging_obj, routed)
 
+    @pytest.mark.parametrize("through_response_cache", [False, True], ids=["uncached", "response-cache-writer"])
     @pytest.mark.asyncio
-    async def test_anthropic_messages_stream_keeps_the_finish_reason_held_on_the_last_content_frame(self):
+    async def test_anthropic_messages_stream_keeps_the_finish_reason_held_on_the_last_content_frame(
+        self, through_response_cache: bool
+    ):
+        from litellm.caching.caching_handler import LLMCachingHandler
         from litellm.llms.anthropic.messages.adapters.streaming_iterator import AnthropicSSEStream
         from litellm.llms.anthropic.messages.adapters.transformation import AnthropicAdapter
+        from litellm.llms.anthropic.messages.native import handler
+        from litellm.llms.anthropic.messages.native.response_cache import AnthropicMessagesStreamCacheWriter
         from litellm.router_rust.invoke.streaming import FallbackAwareAnthropicMessagesStream, StreamAttempt
 
         recorder: Final = _RecordingSuccessLogger()
         routed: Final = await self._router_stream_holding_a_length_finish(recorder)
-        source_iterator: Final = AnthropicAdapter().translate_completion_output_params_streaming(
+        adapted: Final = AnthropicAdapter().translate_completion_output_params_streaming(
             routed, model="gpt-4o", is_async=True, litellm_logging_obj=routed.logging_obj
         )
-        assert isinstance(source_iterator, AnthropicSSEStream)
+        assert isinstance(adapted, AnthropicSSEStream)
+        source_iterator: Final = (
+            AnthropicMessagesStreamCacheWriter(
+                stream=adapted,
+                caching_handler=LLMCachingHandler(
+                    original_function=handler.anthropic_messages,
+                    request_kwargs={},
+                    start_time=datetime.datetime(2025, 3, 3, 21, 38, 10),
+                ),
+            )
+            if through_response_cache
+            else adapted
+        )
         async for frame in source_iterator:
-            if b"partial answer" in frame:
+            if isinstance(frame, bytes) and b"partial answer" in frame:
                 break
 
         async def _sse_frames() -> AsyncGenerator[bytes, None]:
@@ -11238,6 +11260,42 @@ class TestStreamingClientDisconnectBilling:
             prepare_response_for_header_attachment(
                 FallbackAwareAnthropicMessagesStream(_sse_frames(), source_iterator, MagicMock(spec=StreamAttempt))
             ),
+        )
+
+    @pytest.mark.asyncio
+    async def test_disconnect_bills_a_partial_text_completion_without_inventing_a_finish_reason(self):
+        from litellm.types.utils import TextChoices, TextCompletionResponse
+
+        model: Final = "gpt-3.5-turbo-instruct"
+        messages: Final = [{"role": "user", "content": "Say something long"}]
+        recorder: Final = _RecordingSuccessLogger()
+        logging_obj: Final = self._recorded_logging_obj(
+            model, messages, "text-completion-disconnect-call", recorder, call_type="atext_completion"
+        )
+        collected_stream: Final = SimpleNamespace(
+            chunks=[
+                TextCompletionResponse(
+                    id="cmpl-partial", created=1741037890, model=model, choices=[TextChoices(index=0, text=text)]
+                )
+                for text in ("partial ", "answer")
+            ],
+            messages=messages,
+            model=model,
+        )
+
+        billed: Final = await _bill_partial_streamed_spend_on_disconnect(
+            {"litellm_logging_obj": logging_obj}, collected_stream
+        )
+        await asyncio.wait_for(recorder.logged.wait(), timeout=5)
+
+        assert billed is True
+        assert len(recorder.success_events) == 1
+        partial_response: Final = recorder.success_events[0]["response_obj"]
+        assert [(choice.text, choice.finish_reason) for choice in partial_response.choices] == [
+            ("partial answer", None)
+        ]
+        assert partial_response.usage.completion_tokens == litellm.token_counter(
+            model=model, text="partial answer", count_response_tokens=True
         )
 
     @pytest.mark.asyncio
