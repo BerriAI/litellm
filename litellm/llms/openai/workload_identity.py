@@ -41,15 +41,16 @@ _SDK_UPGRADE_MESSAGE: Final = (
 )
 _FEDERATED_BATCH_CREATE_REASON: Final = (
     "OpenAI runs a batch with the token that created it and never refreshes that token. A workload identity "
-    "token expires within an hour, so every request in this batch would fail with token_expired once it ran."
+    "token expires within an hour, so every request OpenAI runs after that fails with token_expired."
 )
 FEDERATED_BATCH_CREATE_MESSAGE: Final = (
-    f"{_FEDERATED_BATCH_CREATE_REASON} Create OpenAI batches on a deployment whose api_key is an OpenAI project "
-    "API key with Batch Write permission."
+    f"{_FEDERATED_BATCH_CREATE_REASON} Create OpenAI batches with an api_key that is an OpenAI project API key "
+    "with Batch Write permission. On the LiteLLM proxy, use a model whose deployments all set that api_key."
 )
 FEDERATED_PASSTHROUGH_BATCH_CREATE_MESSAGE: Final = (
-    f"{_FEDERATED_BATCH_CREATE_REASON} Set OPENAI_API_KEY to an OpenAI project API key with Batch Write "
-    "permission to create batches through the OpenAI pass-through."
+    f"{_FEDERATED_BATCH_CREATE_REASON} Create the batch with POST /v1/batches on a model whose deployments all "
+    "set api_key to an OpenAI project API key with Batch Write permission. Or set use_in_pass_through: true on "
+    "such a deployment, which makes every OpenAI pass-through call use its api_key."
 )
 
 
