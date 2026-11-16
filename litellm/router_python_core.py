@@ -13076,11 +13076,21 @@ class PythonCore(DeprecatedRouterMembers):
 
         try:
             model_info = self._host.invoke("get_model_info")(model=model_info_name)
-        except Exception as e:
+        except litellm_exceptions.ModelNotMappedError as e:
             verbose_router_logger.debug(
-                f"get_model_info failed for model {model_info_name} in _core_get_router_model_info: {e}"
+                f"get_model_info failed for unmapped model {model_info_name} in _core_get_router_model_info: {e}"
             )
             model_info = None
+        except Exception as e:  # noqa: BLE001
+            # Fall back for legacy catalog misses that raise bare Exception with 'mapped' message,
+            # while letting genuine programming errors or host bugs surface.
+            if "mapped" in str(e).lower():
+                verbose_router_logger.debug(
+                    f"get_model_info failed for unmapped model {model_info_name} in _core_get_router_model_info: {e}"
+                )
+                model_info = None
+            else:
+                raise
 
         ## CHECK USER SET MODEL INFO
         raw_user_model_info: Final = deployment.get("model_info")
@@ -13117,8 +13127,6 @@ class PythonCore(DeprecatedRouterMembers):
                 supported_openai_params=supported_openai_params,
                 supports_system_messages=None,
             )
-        elif model_info.get("mode") is None:
-            model_info["mode"] = user_model_info.get("mode") or "chat"
 
         # get_model_info() hands back an lru_cache'd dict, so merge into a copy; unset
         # values are skipped or Deployment's None pricing defaults would erase the map's
@@ -13132,6 +13140,9 @@ class PythonCore(DeprecatedRouterMembers):
             **self._core_get_discovered_model_info((deployment.get("model_info") or {}).get("id")),
             **MappingProxyType({key: value for key, value in user_model_info.items() if value is not None}),
         }
+
+        if merged_model_info.get("mode") is None:
+            merged_model_info["mode"] = user_model_info.get("mode") or "chat"
 
         return merged_model_info
 

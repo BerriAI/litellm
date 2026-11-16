@@ -4,6 +4,9 @@ when a deployment specifies an unmapped/custom model name with user-defined mode
 Regression test for https://github.com/BerriAI/litellm/issues/51452.
 """
 
+import pytest
+
+import litellm
 from litellm import Router
 from litellm.router_strategy.complexity_router.context_compaction import _budget
 
@@ -80,3 +83,66 @@ def test_router_model_info_unmapped_model_without_user_model_info():
     assert info is not None
     assert info["litellm_provider"] == "openai"
     assert info["mode"] == "chat"
+
+
+def test_router_model_info_does_not_mutate_cached_model_info(monkeypatch):
+    """Ensure router_model_info does not mutate the cached dictionary from get_model_info in-place."""
+    fake_cached_dict = {
+        "key": "test-model-without-mode",
+        "max_tokens": 4096,
+        "max_input_tokens": 4096,
+        "max_output_tokens": 4096,
+        "input_cost_per_token": 0.0,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "openai",
+        "mode": None,
+    }
+
+    monkeypatch.setattr(litellm, "get_model_info", lambda model, **kwargs: fake_cached_dict)
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "test-model-without-mode",
+                "litellm_params": {
+                    "model": "openai/test-model-without-mode",
+                    "api_key": "sk-mock",
+                },
+            }
+        ]
+    )
+
+    deployment = router.get_available_deployment("test-model-without-mode")
+    assert deployment is not None
+
+    info = router.registry().router_model_info(deployment=deployment, received_model_name="test-model-without-mode")
+    assert info is not None
+    assert info["mode"] == "chat"
+    # Ensure the original dictionary in get_model_info was not mutated in-place
+    assert fake_cached_dict["mode"] is None
+
+
+def test_router_model_info_propagates_non_mapping_errors(monkeypatch):
+    """Ensure unexpected non-mapping exceptions (e.g. host bugs or RuntimeError) are not swallowed."""
+    def fail_with_unexpected_error(model, **kwargs):
+        raise RuntimeError("Internal host failure")
+
+    monkeypatch.setattr(litellm, "get_model_info", fail_with_unexpected_error)
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "failing-model",
+                "litellm_params": {
+                    "model": "openai/failing-model",
+                    "api_key": "sk-mock",
+                },
+            }
+        ]
+    )
+
+    deployment = router.get_available_deployment("failing-model")
+    assert deployment is not None
+
+    with pytest.raises(RuntimeError, match="Internal host failure"):
+        router.registry().router_model_info(deployment=deployment, received_model_name="failing-model")
