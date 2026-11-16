@@ -5,29 +5,29 @@
 mod adc;
 mod aws_wif;
 mod builders;
+mod credentials;
 mod environment;
 mod external_authorized_user;
 mod failure;
+mod logins;
+mod service_account;
 mod source;
 
 use std::sync::Arc;
 
 use litellm_auth_types::{Error, VertexParams};
 use litellm_secret_value::SecretValue;
-use moka::future::Cache;
 use serde_json::{Map, Value};
-use sha2::{Digest, Sha256};
 
 #[cfg(any(test, feature = "test-support"))]
 pub use environment::OnGce;
 pub use environment::{EnvironmentFuture, GoogleEnvironment, SystemGoogleEnvironment};
 pub use failure::{CredentialsFile, GOOGLE_SDK_MISSING, GoogleLoginFailure, PythonException};
 
-use builders::{TokenSource, token_failure};
+use credentials::{Loaded, managed};
 use failure::python_type;
+use logins::{Login, LoginKey, Logins};
 use source::{CredentialsJson, load_vertex_credentials_source};
-
-const MAX_CACHED_LOGINS: u64 = 64;
 
 /// Python's `a or b or ...`: the first non-empty value, else the last one, which may be empty.
 pub fn python_or(values: impl IntoIterator<Item = Option<String>>) -> Option<String> {
@@ -105,20 +105,9 @@ pub struct VertexLogin {
     pub project_id: String,
 }
 
-#[derive(Clone, Hash, PartialEq, Eq)]
-struct LoginKey {
-    credentials: Option<[u8; 32]>,
-    project: Option<String>,
-}
-
-struct Login {
-    source: TokenSource,
-    project_id: String,
-}
-
 #[derive(Clone)]
 pub struct VertexMessagesAuth {
-    logins: Cache<LoginKey, Arc<Login>>,
+    logins: Arc<Logins>,
     environment: Arc<dyn GoogleEnvironment>,
 }
 
@@ -156,7 +145,7 @@ fn credentials_project(info: &Map<String, Value>) -> Option<Value> {
 impl VertexMessagesAuth {
     pub fn new(environment: Arc<dyn GoogleEnvironment>) -> Self {
         Self {
-            logins: Cache::builder().max_capacity(MAX_CACHED_LOGINS).build(),
+            logins: Arc::default(),
             environment,
         }
     }
@@ -168,32 +157,19 @@ impl VertexMessagesAuth {
         credentials: Option<String>,
         project: Option<String>,
     ) -> Result<VertexLogin, Error> {
+        let application_credentials = self.environment.os_env("GOOGLE_APPLICATION_CREDENTIALS");
         let key = LoginKey {
-            credentials: credentials
-                .as_deref()
-                .map(|text| Sha256::digest(text).into()),
+            identity: logins::identity(credentials.as_deref(), application_credentials.as_deref()),
             project: project.clone(),
         };
-        let login = self
+        let (token, project_id) = self
             .logins
-            .try_get_with(key, self.load(credentials, project))
-            .await
-            .map_err(|error| (*error).clone())?;
-        let token = login
-            .source
-            .token()
-            .await
-            .map_err(|error| Error::from(token_failure(&error)))?;
-        Ok(VertexLogin {
-            token,
-            project_id: login.project_id.clone(),
-        })
+            .token(key, || self.load(credentials.clone(), project.clone()))
+            .await?;
+        Ok(VertexLogin { token, project_id })
     }
 
-    fn explicit_source(
-        &self,
-        credentials: &CredentialsJson,
-    ) -> Result<TokenSource, GoogleLoginFailure> {
+    fn explicit_source(&self, credentials: &CredentialsJson) -> Result<Loaded, GoogleLoginFailure> {
         let info = &credentials.info;
         let built = match info.get("type").and_then(Value::as_str) {
             Some("external_account") if aws_wif::uses_explicit_aws(info) => {
@@ -202,10 +178,12 @@ impl VertexMessagesAuth {
                     info,
                     Arc::new(move |name| environment.os_env(name)),
                 )
+                .map(managed)
             }
-            Some("external_account") => builders::external_account(info),
+            Some("external_account") => builders::external_account(info).map(managed),
             Some("authorized_user") => {
                 builders::authorized_user(info, &self.environment.google_token_endpoint())
+                    .map(managed)
             }
             _ => builders::service_account(info),
         };
@@ -222,7 +200,7 @@ impl VertexMessagesAuth {
         &self,
         credentials: Option<String>,
         project: Option<String>,
-    ) -> Result<Arc<Login>, Error> {
+    ) -> Result<Arc<Login>, GoogleLoginFailure> {
         let (source, credential_project) = match credentials {
             Some(text) => {
                 let json = load_vertex_credentials_source(&text)?;
@@ -237,10 +215,7 @@ impl VertexMessagesAuth {
             }
         };
         let project = project.map(Value::String).or(credential_project);
-        source
-            .token()
-            .await
-            .map_err(|error| Error::from(token_failure(&error)))?;
+        let token = source.refresh().await?;
         let project_id = match project {
             project if !is_truthy(project.as_ref()) => {
                 Err(value_failure("Could not resolve project_id"))
@@ -255,7 +230,7 @@ impl VertexMessagesAuth {
             )),
             None => Err(value_failure("Could not resolve project_id")),
         }?;
-        Ok(Arc::new(Login { source, project_id }))
+        Ok(Login::new(source, project_id, token))
     }
 }
 
@@ -271,6 +246,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+    use crate::vertex_messages::builders::TokenSource;
     use crate::{
         CredentialSource, GcpAuth, VertexAuth, VertexConfig,
         identity::{GcpAuthFuture, GcpTokenSource},
