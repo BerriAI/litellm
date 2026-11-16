@@ -44,7 +44,10 @@ fn live_catalog(py: Python<'_>) -> PyResult<Arc<Catalog>> {
 /// The live model map's `supported_regions` for a Claude on Vertex AI model, read under the key
 /// Python's `VertexBase.get_vertex_region` looks up.
 pub(super) fn vertex_supported_regions(py: Python<'_>, model: &str) -> PyResult<Vec<String>> {
-    let key = format!("vertex_ai/{}", model.strip_prefix("vertex_ai/").unwrap_or(model));
+    let key = format!(
+        "vertex_ai/{}",
+        model.strip_prefix("vertex_ai/").unwrap_or(model)
+    );
     Ok(live_catalog(py)?
         .get(&key)
         .and_then(|fields| fields.get("supported_regions"))

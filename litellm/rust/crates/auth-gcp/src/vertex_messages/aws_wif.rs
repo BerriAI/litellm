@@ -39,9 +39,11 @@ const AWS_CREDENTIAL_KEYS: [&str; 10] = [
     "aws_external_id",
 ];
 const MISSING_REGION: &str = "aws_region_name is required in the WIF credential JSON when using explicit AWS authentication. Add \"aws_region_name\": \"<your-region>\" to your credential file.";
-const CALLER_IDENTITY_URL: &str = "https://sts.{region}.amazonaws.com?Action=GetCallerIdentity&Version=2011-06-15";
+const CALLER_IDENTITY_URL: &str =
+    "https://sts.{region}.amazonaws.com?Action=GetCallerIdentity&Version=2011-06-15";
 const TARGET_RESOURCE_HEADER: &str = "x-goog-cloud-target-resource";
-const IMPERSONATION_URL_PREFIX: &str = "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/";
+const IMPERSONATION_URL_PREFIX: &str =
+    "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/";
 const IMPERSONATION_URL_SUFFIX: &str = ":generateAccessToken";
 const PYTHON_QUOTE_SAFE: &AsciiSet = &NON_ALPHANUMERIC
     .remove(b'_')
@@ -59,7 +61,10 @@ pub(crate) fn uses_explicit_aws(info: &Map<String, Value>) -> bool {
         .and_then(|source| source.get("environment_id"))
         .and_then(Value::as_str)
         .is_some_and(|environment_id| environment_id.contains("aws"));
-    names_aws && AWS_CREDENTIAL_KEYS.iter().any(|key| info.contains_key(*key))
+    names_aws
+        && AWS_CREDENTIAL_KEYS
+            .iter()
+            .any(|key| info.contains_key(*key))
 }
 
 fn text(info: &Map<String, Value>, field: &str) -> Option<String> {
@@ -165,9 +170,14 @@ impl SubjectTokenProvider for SignedCallerIdentity {
             .resolve_credentials(self.config.clone(), &move |name| os_env(name))
             .await
             .map_err(|error| CredentialsError::from_source(false, error))?;
-        caller_identity_subject_token(&credentials, &self.region, &self.audience, SystemTime::now())
-            .map(|token| SubjectTokenBuilder::new(token).build())
-            .map_err(|error| CredentialsError::from_source(false, error))
+        caller_identity_subject_token(
+            &credentials,
+            &self.region,
+            &self.audience,
+            SystemTime::now(),
+        )
+        .map(|token| SubjectTokenBuilder::new(token).build())
+        .map_err(|error| CredentialsError::from_source(false, error))
     }
 }
 
@@ -281,7 +291,10 @@ mod tests {
             .as_object().unwrap().clone(),
         false
     )]
-    fn explicit_aws_is_chosen_as_python_chooses_it(#[case] info: Map<String, Value>, #[case] expected: bool) {
+    fn explicit_aws_is_chosen_as_python_chooses_it(
+        #[case] info: Map<String, Value>,
+        #[case] expected: bool,
+    ) {
         assert_eq!(uses_explicit_aws(&info), expected);
     }
 
@@ -293,12 +306,21 @@ mod tests {
         let Err(failure) = explicit_aws_credentials(&aws_info(extra), Arc::new(|_| None)) else {
             panic!("a credential without aws_region_name should not build");
         };
-        assert_eq!(failure, GoogleLoginFailure::new(PythonException::Value, MISSING_REGION));
+        assert_eq!(
+            failure,
+            GoogleLoginFailure::new(PythonException::Value, MISSING_REGION)
+        );
     }
 
     #[rstest]
     fn the_subject_token_is_google_auth_s_serialized_signed_request() {
-        let credentials = litellm_auth_aws::Credentials::new("AKIDEXAMPLE", "secret", Some("session".into()), None, "test");
+        let credentials = litellm_auth_aws::Credentials::new(
+            "AKIDEXAMPLE",
+            "secret",
+            Some("session".into()),
+            None,
+            "test",
+        );
         let token = caller_identity_subject_token(
             &credentials,
             "us-east-1",
@@ -306,7 +328,9 @@ mod tests {
             UNIX_EPOCH + Duration::from_secs(1_700_000_000),
         )
         .unwrap();
-        let decoded = percent_encoding::percent_decode_str(&token).decode_utf8().unwrap();
+        let decoded = percent_encoding::percent_decode_str(&token)
+            .decode_utf8()
+            .unwrap();
         let request: Value = serde_json::from_str(&decoded).unwrap();
         let keys: Vec<&str> = request["headers"]
             .as_array()
@@ -316,7 +340,13 @@ mod tests {
             .collect();
         assert_eq!(
             keys,
-            ["Authorization", "host", "x-amz-date", "x-amz-security-token", TARGET_RESOURCE_HEADER]
+            [
+                "Authorization",
+                "host",
+                "x-amz-date",
+                "x-amz-security-token",
+                TARGET_RESOURCE_HEADER
+            ]
         );
         assert_eq!(request["method"], "POST");
         assert_eq!(
@@ -339,8 +369,14 @@ mod tests {
         "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/sa@p.iam.gserviceaccount.com:generateAccessToken",
         true
     )]
-    #[case::other_host("https://example.com/v1/projects/-/serviceAccounts/sa:generateAccessToken", false)]
-    fn the_impersonated_principal_comes_from_the_canonical_url(#[case] url: &str, #[case] accepted: bool) {
+    #[case::other_host(
+        "https://example.com/v1/projects/-/serviceAccounts/sa:generateAccessToken",
+        false
+    )]
+    fn the_impersonated_principal_comes_from_the_canonical_url(
+        #[case] url: &str,
+        #[case] accepted: bool,
+    ) {
         assert_eq!(impersonated_principal(url).is_ok(), accepted);
     }
 }

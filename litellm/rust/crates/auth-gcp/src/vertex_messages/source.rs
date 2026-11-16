@@ -112,12 +112,20 @@ mod tests {
     use super::*;
 
     fn message(credentials: &str) -> String {
-        load_vertex_credentials_source(credentials).unwrap_err().message
+        load_vertex_credentials_source(credentials)
+            .unwrap_err()
+            .message
     }
 
     #[rstest]
-    #[case::empty("", "The `vertex_credentials` value is empty. Set it to a readable file path, or to the credentials JSON itself.")]
-    #[case::blank("   ", "The `vertex_credentials` value is empty. Set it to a readable file path, or to the credentials JSON itself.")]
+    #[case::empty(
+        "",
+        "The `vertex_credentials` value is empty. Set it to a readable file path, or to the credentials JSON itself."
+    )]
+    #[case::blank(
+        "   ",
+        "The `vertex_credentials` value is empty. Set it to a readable file path, or to the credentials JSON itself."
+    )]
     #[case::base64(
         "eyJ0eXBlIjogInNlcnZpY2VfYWNjb3VudCJ9",
         "The `vertex_credentials` value is base64-encoded JSON, not the JSON itself. Set it to a readable file path, or to the credentials JSON itself."
@@ -135,7 +143,10 @@ mod tests {
         "The `vertex_credentials` value is JSON but not a JSON object, it may be quoted or encoded twice. Set it to a readable file path, or to the credentials JSON itself."
     )]
     #[case::missing_file("/nonexistent/vertex.json", FILE_FAILURE_MESSAGE)]
-    fn unusable_values_raise_python_s_value_error(#[case] credentials: &str, #[case] expected: &str) {
+    fn unusable_values_raise_python_s_value_error(
+        #[case] credentials: &str,
+        #[case] expected: &str,
+    ) {
         let failure = load_vertex_credentials_source(credentials).unwrap_err();
         assert_eq!(failure.exception, PythonException::Value);
         assert_eq!(failure.message, expected);
@@ -157,14 +168,20 @@ mod tests {
         assert_eq!(
             load_vertex_credentials_source(file.path().to_str().unwrap()).unwrap(),
             CredentialsJson {
-                info: json!({"type": "service_account"}).as_object().unwrap().clone(),
+                info: json!({"type": "service_account"})
+                    .as_object()
+                    .unwrap()
+                    .clone(),
                 from_file: true
             }
         );
         assert_eq!(
             load_vertex_credentials_source(r#" {"type":"authorized_user"}"#).unwrap(),
             CredentialsJson {
-                info: json!({"type": "authorized_user"}).as_object().unwrap().clone(),
+                info: json!({"type": "authorized_user"})
+                    .as_object()
+                    .unwrap()
+                    .clone(),
                 from_file: false
             }
         );
