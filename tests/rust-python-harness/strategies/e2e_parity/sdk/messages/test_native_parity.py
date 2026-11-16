@@ -4244,7 +4244,7 @@ def _vertex_service_account(private_key: str, token_uri: str) -> str:
 
 E2_GOOGLE_AUTH_TEXT: Final = (
     "E2: approved difference, the exception class matches but its text is Google's SDK or HTTP client's own "
-    "(cryptography's PEM error, urllib3's connection error, google.auth's missing-file text), which Rust cannot rebuild"
+    "(cryptography's PEM error, urllib3's connection error), which Rust cannot rebuild"
 )
 
 VERTEX_CREDENTIAL_CASES: Final = tuple(
@@ -4274,7 +4274,6 @@ VERTEX_CREDENTIAL_CASES: Final = tuple(
             "vertex_ai_application_default_credentials_file_that_does_not_exist",
             _kw(**VERTEX_DEPLOYMENT),
             env=MappingProxyType({"GOOGLE_APPLICATION_CREDENTIALS": "/nonexistent/adc.json"}),
-            gaps=_gaps(outcome=E2_GOOGLE_AUTH_TEXT, logged_error=E2_GOOGLE_AUTH_TEXT),
         ),
     )
 )
@@ -4611,6 +4610,16 @@ VERTEX_AUTH_CASES: Final = tuple(
                 vertex_project="p",
                 vertex_location="US EAST",
                 vertex_credentials=dict(_service_account("p3-location")),
+            ),
+            upstream=(),
+        ),
+        Case(
+            "vertex_ai_location_with_one_trailing_newline",
+            _vertex_login(
+                api_base=None,
+                vertex_project="p",
+                vertex_location="us-east5\n",
+                vertex_credentials=dict(_service_account("p3-newline")),
             ),
             upstream=(),
         ),

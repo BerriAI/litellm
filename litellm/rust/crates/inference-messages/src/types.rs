@@ -61,12 +61,22 @@ pub enum MessagesBody {
 pub struct MessagesShaping {
     #[serde(default)]
     pub capabilities: MessagesModelCapabilities,
-    /// The model map's `supported_regions` for a Claude on Vertex AI model, which Python's
-    /// `VertexBase.get_vertex_region` routes the call by.
     #[serde(default)]
-    pub vertex_supported_regions: Vec<String>,
+    pub vertex: VertexShaping,
     #[serde(flatten)]
     pub settings: MessagesSettings,
+}
+
+/// What a Python host knows of a Claude on Vertex AI call that the login and URL depend on.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct VertexShaping {
+    /// The model map's `supported_regions`, which Python's `VertexBase.get_vertex_region`
+    /// routes the call by.
+    #[serde(default)]
+    pub supported_regions: Vec<String>,
+    /// google-auth is not installed, so Python's login raises its `ImportError`.
+    #[serde(default)]
+    pub google_sdk_missing: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -201,7 +211,7 @@ mod tests {
             "drops_unsupported_params": true
         }),
         MessagesShaping {
-            vertex_supported_regions: Vec::new(),
+            vertex: VertexShaping::default(),
             settings: MessagesSettings {
                 drop_params: true,
                 reasoning_auto_summary: true,

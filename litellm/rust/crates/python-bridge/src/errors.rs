@@ -1,6 +1,6 @@
 use std::error::Error as StdError;
 
-use litellm_auth::gcp::vertex_messages::GoogleLoginFailure;
+use litellm_auth::gcp::vertex_messages::{CredentialsFile, GoogleLoginFailure};
 use litellm_error::{Report, Source};
 use litellm_inference::Error;
 use pyo3::{
@@ -51,10 +51,9 @@ const MESSAGES_PROVIDER_BAD_REQUEST: &str = "messages_provider_bad_request";
 /// Which failure Python's AWS signing raises for a credential Rust could not acquire, or `replay`
 /// when only running Python's signing again gives its exception.
 const MESSAGES_CREDENTIAL_FAILURE: &str = "messages_credential_failure";
-/// `(stage, text)` of a Google credential Rust could not acquire, read only for vertex_ai calls.
-const MESSAGES_GCP_CREDENTIAL_FAILURE: &str = "messages_gcp_credential_failure";
-/// The exception class and text Python's Vertex AI login raises for a login Rust could not
-/// complete, which the route raises in its place.
+/// `(class, text, file)` of the exception Python's Vertex AI login raises for a login Rust could
+/// not complete, which the route raises in its place. `file` is `(kind, path, detail)` for a
+/// `vertex_credentials` file Python's `raise_vertex_credentials_failure` logs.
 const MESSAGES_GOOGLE_LOGIN_FAILURE: &str = "messages_google_login_failure";
 
 struct ProviderRejection {
@@ -79,24 +78,16 @@ fn credential_failure(error: &Error) -> Option<&'static str> {
     }
 }
 
-fn gcp_credential_failure(error: &Error) -> Option<(&'static str, String)> {
-    let (Error::Auth(litellm_auth::Error::CredentialAcquisition(detail))
-    | Error::Llm(litellm_llms::Error::Auth(litellm_auth::Error::CredentialAcquisition(detail)))) =
-        error
-    else {
-        return None;
-    };
-    let stage = match litellm_auth_gcp::CredentialFailure::of(detail) {
-        litellm_auth_gcp::CredentialFailure::NoDefaultCredentials => "no_default_credentials",
-        litellm_auth_gcp::CredentialFailure::TokenRejected => "token_rejected",
-        litellm_auth_gcp::CredentialFailure::TokenUnreachable => "token_unreachable",
-        litellm_auth_gcp::CredentialFailure::Unloadable => "unloadable",
-    };
-    let text = match detail {
-        litellm_auth::ErrorDetail::Failed { cause, .. } => Report::new(&**cause).to_string(),
-        other => other.to_string(),
-    };
-    Some((stage, text))
+fn google_login_failure(
+    failure: &GoogleLoginFailure,
+) -> (&'static str, &str, Option<(&'static str, &str, &str)>) {
+    let file = failure.file.as_ref().map(|file| match file {
+        CredentialsFile::Unreadable { path, reason } => {
+            ("unreadable", path.as_str(), reason.as_str())
+        }
+        CredentialsFile::Invalid { path, problem } => ("invalid", path.as_str(), problem.as_str()),
+    });
+    (failure.exception.into(), failure.message.as_str(), file)
 }
 
 fn aws_credential_failure(error: &(dyn StdError + 'static)) -> &'static str {
@@ -306,14 +297,8 @@ pub(crate) fn route_failure(
             if let Some(failure) = credential_failure(&error) {
                 value.setattr(MESSAGES_CREDENTIAL_FAILURE, failure)?;
             }
-            if let Some(failure) = gcp_credential_failure(&error) {
-                value.setattr(MESSAGES_GCP_CREDENTIAL_FAILURE, failure)?;
-            }
             if let Some(failure) = litellm_error::find::<GoogleLoginFailure>(&error) {
-                value.setattr(
-                    MESSAGES_GOOGLE_LOGIN_FAILURE,
-                    (<&str>::from(failure.exception), failure.message.as_str()),
-                )?;
+                value.setattr(MESSAGES_GOOGLE_LOGIN_FAILURE, google_login_failure(failure))?;
             }
             native
         }
@@ -681,38 +666,64 @@ mod tests {
         });
     }
 
+    type Marker = (String, String, Option<(String, String, String)>);
+
     #[rstest::rstest]
-    #[case::auth(Error::Auth(
+    #[case::plain(
+        GoogleLoginFailure::new(PythonException::Type, "Expected project_id to be a str"),
+        ("TypeError".into(), "Expected project_id to be a str".into(), None)
+    )]
+    #[case::unreadable_file(
         GoogleLoginFailure {
-            exception: PythonException::Value,
-            message: "Could not resolve project_id".into(),
-        }
-        .into()
-    ))]
-    #[case::llms(Error::Llm(litellm_llms::Error::Auth(
+            file: Some(CredentialsFile::Unreadable {
+                path: "/k.json".into(),
+                reason: "No such file or directory (FileNotFoundError)".into(),
+            }),
+            ..GoogleLoginFailure::new(PythonException::Value, "file failure")
+        },
+        (
+            "ValueError".into(),
+            "file failure".into(),
+            Some((
+                "unreadable".into(),
+                "/k.json".into(),
+                "No such file or directory (FileNotFoundError)".into()
+            ))
+        )
+    )]
+    #[case::invalid_file(
         GoogleLoginFailure {
-            exception: PythonException::Value,
-            message: "Could not resolve project_id".into(),
-        }
-        .into()
-    )))]
-    fn a_google_login_failure_names_python_s_exception(#[case] error: Error) {
+            file: Some(CredentialsFile::Invalid {
+                path: "/k.json".into(),
+                problem: "is not UTF-8 text".into(),
+            }),
+            ..GoogleLoginFailure::new(PythonException::Value, "file failure")
+        },
+        (
+            "ValueError".into(),
+            "file failure".into(),
+            Some(("invalid".into(), "/k.json".into(), "is not UTF-8 text".into()))
+        )
+    )]
+    fn a_google_login_failure_names_python_s_exception(
+        #[case] failure: GoogleLoginFailure,
+        #[case] expected: Marker,
+        #[values(false, true)] through_llm: bool,
+    ) {
+        let error = match through_llm {
+            true => Error::Llm(litellm_llms::Error::Auth(failure.into())),
+            false => Error::Auth(failure.into()),
+        };
         Python::initialize();
         Python::attach(|py| {
             let native = route_failure(py, error, RequestMarker::Messages, Ok).unwrap();
-            let named: (String, String) = native
+            let named: Marker = native
                 .value(py)
                 .getattr(MESSAGES_GOOGLE_LOGIN_FAILURE)
                 .unwrap()
                 .extract()
                 .unwrap();
-            assert_eq!(
-                named,
-                (
-                    "ValueError".to_string(),
-                    "Could not resolve project_id".to_string()
-                )
-            );
+            assert_eq!(named, expected);
         });
     }
 
@@ -730,52 +741,6 @@ mod tests {
                     .getattr_opt(MESSAGES_CREDENTIAL_FAILURE)
                     .unwrap()
                     .is_none()
-            );
-        });
-    }
-
-    #[rstest::rstest]
-    #[case::failed_load(
-        litellm_auth::Error::CredentialAcquisition(litellm_auth::ErrorDetail::failed(
-            "Google credentials",
-            std::io::Error::new(std::io::ErrorKind::NotFound, "No such file or directory"),
-        )),
-        Some(("unloadable", "No such file or directory"))
-    )]
-    #[case::unresolved(
-        litellm_auth::Error::CredentialAcquisition(litellm_auth::ErrorDetail::Unresolved {
-            subject: "GCP resource project",
-        }),
-        Some(("unloadable", "GCP resource project did not resolve to a value"))
-    )]
-    #[case::invalid_configuration(
-        litellm_auth::Error::InvalidConfiguration(litellm_auth::ErrorDetail::Base64EncodedJson {
-            field: "vertex_credentials",
-        }),
-        None
-    )]
-    fn a_google_credential_failure_names_its_stage_and_cause(
-        #[case] auth: litellm_auth::Error,
-        #[case] expected: Option<(&str, &str)>,
-        #[values(false, true)] through_llm: bool,
-    ) {
-        let error = match through_llm {
-            true => Error::Llm(litellm_llms::Error::Auth(auth)),
-            false => Error::Auth(auth),
-        };
-        Python::initialize();
-        Python::attach(|py| {
-            let native = route_failure(py, error, RequestMarker::Messages, Ok).unwrap();
-            let marked = native
-                .value(py)
-                .getattr_opt(MESSAGES_GCP_CREDENTIAL_FAILURE)
-                .unwrap()
-                .map(|value| value.extract::<(String, String)>().unwrap());
-            assert_eq!(
-                marked
-                    .as_ref()
-                    .map(|(stage, text)| (stage.as_str(), text.as_str())),
-                expected
             );
         });
     }

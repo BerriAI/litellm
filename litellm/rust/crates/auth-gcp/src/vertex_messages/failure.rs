@@ -1,9 +1,17 @@
 use litellm_auth_types::Error;
 use serde_json::Value;
 
+/// Python's `GOOGLE_IMPORT_ERROR_MESSAGE`, which its login raises when google-auth is not installed.
+pub const GOOGLE_SDK_MISSING: &str = "Google Cloud SDK not found. Install it with: pip install 'litellm[google]' or pip install google-cloud-aiplatform";
+
+pub(crate) const FILE_FAILURE_MESSAGE: &str =
+    "Unable to load the vertex credentials file. LiteLLM's log names the path and the reason.";
+
 /// The exception class Python's Vertex AI login raises, by the name a host raises it under.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, strum::IntoStaticStr)]
 pub enum PythonException {
+    #[strum(serialize = "ImportError")]
+    Import,
     #[strum(serialize = "ValueError")]
     Value,
     #[strum(serialize = "TypeError")]
@@ -20,6 +28,14 @@ pub enum PythonException {
     Transport,
 }
 
+/// A `vertex_credentials` file Python's `raise_vertex_credentials_failure` logs by path before it
+/// raises its one file failure text.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CredentialsFile {
+    Unreadable { path: String, reason: String },
+    Invalid { path: String, problem: String },
+}
+
 /// A Vertex AI Messages login failure, as the exception Python's `VertexBase.load_auth` raises
 /// for it: its class and its text.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
@@ -27,13 +43,22 @@ pub enum PythonException {
 pub struct GoogleLoginFailure {
     pub exception: PythonException,
     pub message: String,
+    pub file: Option<CredentialsFile>,
 }
 
 impl GoogleLoginFailure {
-    pub(crate) fn new(exception: PythonException, message: impl Into<String>) -> Self {
+    pub fn new(exception: PythonException, message: impl Into<String>) -> Self {
         Self {
             exception,
             message: message.into(),
+            file: None,
+        }
+    }
+
+    pub(crate) fn credentials_file(file: CredentialsFile) -> Self {
+        Self {
+            file: Some(file),
+            ..Self::new(PythonException::Value, FILE_FAILURE_MESSAGE)
         }
     }
 

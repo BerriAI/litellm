@@ -2997,117 +2997,6 @@ def test_a_credential_failure_text_without_the_marker_keeps_the_native_mapping()
 
 
 _VERTEX_CLAUDE: Final = "vertex_ai/claude-sonnet-4-5"
-_GOOGLE_CREDENTIAL_FAILURE: Final = "credential acquisition failed: Google credentials failed: token request failed"
-
-
-def _google_credential_failure(stage: str, cause: str) -> RuntimeError:
-    native: Final = RuntimeError(_GOOGLE_CREDENTIAL_FAILURE)
-    native.messages_credential_failure = "replay"  # pyright: ignore[reportAttributeAccessIssue]  # set by the native host
-    native.messages_gcp_credential_failure = (stage, cause)  # pyright: ignore[reportAttributeAccessIssue]  # set by the native host
-    return native
-
-
-@pytest.fixture
-def no_vertex_credentials_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("VERTEXAI_CREDENTIALS", raising=False)
-
-
-_INLINE_KEY: Final = '{"type": "service_account", "private_key": "not a key"}'
-_KEY_FILE: Final = "/etc/vertex/key.json"
-
-
-@pytest.mark.usefixtures("no_vertex_credentials_env")
-@pytest.mark.parametrize(
-    ("stage", "cause", "credentials", "error_class", "text"),
-    [
-        ("token_rejected", "token request failed", _KEY_FILE, google_auth.RefreshError, "token request failed"),
-        (
-            "token_unreachable",
-            "HTTP request failed: connection refused",
-            _INLINE_KEY,
-            google_auth.TransportError,
-            "HTTP request failed: connection refused",
-        ),
-        (
-            "unloadable",
-            "invalid private key in credentials",
-            _INLINE_KEY,
-            ValueError,
-            "invalid private key in credentials",
-        ),
-        (
-            "unloadable",
-            "No such file or directory (os error 2)",
-            _KEY_FILE,
-            ValueError,
-            "Unable to load the vertex credentials file. LiteLLM's log names the path and the reason.",
-        ),
-        (
-            "unloadable",
-            "No such file or directory (os error 2)",
-            None,
-            google_auth.DefaultCredentialsError,
-            "No such file or directory (os error 2)",
-        ),
-        (
-            "no_default_credentials",
-            "no available authentication method found",
-            None,
-            google_auth.DefaultCredentialsError,
-            "Your default credentials were not found. To set up Application Default Credentials, see "
-            "https://cloud.google.com/docs/authentication/external/set-up-adc for more information.",
-        ),
-    ],
-    ids=("rejected", "unreachable", "inline-unloadable", "file-unloadable", "adc-unloadable", "no-adc"),
-)
-def test_a_vertex_credential_failure_raises_the_class_python_s_token_acquisition_raises(
-    stage: str, cause: str, credentials: str | None, error_class: type[Exception], text: str
-) -> None:
-    logger: Final = Logging(
-        model=_VERTEX_CLAUDE,
-        messages=[],
-        stream=False,
-        call_type="aanthropic_messages",
-        start_time=None,
-        litellm_call_id="call-1",
-        function_id="fn",
-    )
-    request: Final = {
-        "model": _VERTEX_CLAUDE,
-        "messages": [],
-        "custom_llm_provider": "vertex_ai",
-        "vertex_project": "proj",
-        "litellm_logging_obj": logger,
-        **({} if credentials is None else {"vertex_credentials": credentials}),
-    }
-
-    mapped: Final = messages_host.map_failure(_google_credential_failure(stage, cause), request, "vertex_ai", True)
-
-    assert type(mapped) is error_class
-    assert str(mapped) == text
-    assert mapped.__traceback__ is not None
-    assert logger.model_call_details["litellm_params"]["aanthropic_messages"] is True
-
-
-@pytest.mark.usefixtures("no_aws_credentials")
-@pytest.mark.parametrize(
-    ("model", "provider", "extra"),
-    [
-        ("anthropic/claude-sonnet-4-5", "anthropic", {"api_key": "sk-test"}),
-        (_BEDROCK_INVOKE, "bedrock", {"aws_region_name": "us-east-1"}),
-    ],
-    ids=("anthropic", "bedrock"),
-)
-def test_the_google_credential_stage_is_read_for_vertex_ai_alone(
-    model: str, provider: str, extra: Mapping[str, object]
-) -> None:
-    native: Final = _google_credential_failure("token_rejected", "token request failed")
-    del native.messages_credential_failure
-
-    mapped: Final = messages_host.map_failure(native, {"model": model, "messages": [], **extra}, provider)
-
-    assert isinstance(mapped, litellm.APIConnectionError | litellm.InternalServerError)
-    assert mapped.llm_provider == provider  # pyright: ignore[reportUnknownMemberType]  # the public error leaves llm_provider untyped
 
 
 @pytest.mark.parametrize(
@@ -3153,10 +3042,22 @@ def test_a_vertex_connect_failure_names_the_host_python_reaches(
     assert str(mapped).endswith(f"Cannot connect to host {host}:443 ssl:<ssl> [Name or service not known]")
 
 
-def _google_login_failure(name: str, message: str) -> RuntimeError:
+def _google_login_failure(name: str, message: str, file: tuple[str, str, str] | None = None) -> RuntimeError:
     native: Final = RuntimeError("provider authentication failed: " + message)
-    native.messages_google_login_failure = (name, message)  # pyright: ignore[reportAttributeAccessIssue]  # set by the native host
+    native.messages_google_login_failure = (name, message, file)  # pyright: ignore[reportAttributeAccessIssue]  # set by the native host
     return native
+
+
+def _vertex_logger() -> Logging:
+    return Logging(
+        model=_VERTEX_CLAUDE,
+        messages=[],
+        stream=False,
+        call_type="aanthropic_messages",
+        start_time=None,
+        litellm_call_id="call-1",
+        function_id="fn",
+    )
 
 
 @pytest.mark.parametrize(
@@ -3164,29 +3065,61 @@ def _google_login_failure(name: str, message: str) -> RuntimeError:
     [
         ("ValueError", ValueError),
         ("TypeError", TypeError),
-        ("google.auth.exceptions.DefaultCredentialsError", "DefaultCredentialsError"),
-        ("google.auth.exceptions.MalformedError", "MalformedError"),
-        ("google.auth.exceptions.InvalidValue", "InvalidValue"),
-        ("google.auth.exceptions.RefreshError", "RefreshError"),
-        ("google.auth.exceptions.TransportError", "TransportError"),
+        ("ImportError", ImportError),
+        ("google.auth.exceptions.DefaultCredentialsError", google_auth.DefaultCredentialsError),
+        ("google.auth.exceptions.MalformedError", google_auth.MalformedError),
+        ("google.auth.exceptions.InvalidValue", google_auth.InvalidValue),
+        ("google.auth.exceptions.RefreshError", google_auth.RefreshError),
+        ("google.auth.exceptions.TransportError", google_auth.TransportError),
     ],
 )
 def test_a_vertex_login_failure_raises_the_exception_python_s_load_auth_raises(
-    name: str, error_class: type[Exception] | str
+    name: str, error_class: type[Exception]
 ) -> None:
-    from google.auth import exceptions as google_exceptions
-
-    expected: Final = getattr(google_exceptions, error_class) if isinstance(error_class, str) else error_class
+    logger: Final = _vertex_logger()
 
     mapped: Final = messages_host.map_failure(
         _google_login_failure(name, "Could not resolve project_id"),
-        {"model": "vertex_ai/claude-sonnet-4-5", "messages": []},
+        {"model": _VERTEX_CLAUDE, "messages": [], "litellm_logging_obj": logger},
+        "vertex_ai",
+        True,
+    )
+
+    assert type(mapped) is error_class
+    assert str(mapped) == "Could not resolve project_id"
+    assert mapped.__traceback__ is not None
+    assert logger.model_call_details["litellm_params"]["aanthropic_messages"] is True
+
+
+@pytest.mark.parametrize(
+    ("file", "logged"),
+    [
+        (
+            ("unreadable", "/etc/vertex/key.json", "No such file or directory (FileNotFoundError)"),
+            "Vertex: cannot read the credentials file at '/etc/vertex/key.json': "
+            "No such file or directory (FileNotFoundError)",
+        ),
+        (
+            ("invalid", "/etc/vertex/key.json", "is not UTF-8 text"),
+            "Vertex: the credentials file at '/etc/vertex/key.json' is not UTF-8 text",
+        ),
+    ],
+    ids=("unreadable", "invalid"),
+)
+def test_a_vertex_credentials_file_failure_is_logged_and_raised_as_python_s_file_failure(
+    caplog: pytest.LogCaptureFixture, file: tuple[str, str, str], logged: str
+) -> None:
+    caplog.set_level(logging.ERROR, logger="LiteLLM")
+
+    mapped: Final = messages_host.map_failure(
+        _google_login_failure("ValueError", "a file failure", file),
+        {"model": _VERTEX_CLAUDE, "messages": [], "litellm_logging_obj": _vertex_logger()},
         "vertex_ai",
     )
 
-    assert type(mapped) is expected
-    assert str(mapped) == "Could not resolve project_id"
-    assert mapped.__traceback__ is not None
+    assert type(mapped) is ValueError
+    assert str(mapped) == "Unable to load the vertex credentials file. LiteLLM's log names the path and the reason."
+    assert logged in caplog.messages
 
 
 def test_a_google_login_failure_outside_vertex_ai_keeps_the_native_mapping() -> None:

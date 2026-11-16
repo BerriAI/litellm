@@ -13,7 +13,7 @@ use litellm_host_python::{
 };
 use litellm_inference_messages::{
     DecodingError, Error, MessagesCall, MessagesSettings, MessagesShaping, UnencodableHeader,
-    litellm_params, messages_body,
+    UnsendableUrl, VertexShaping, litellm_params, messages_body,
     route::{Messages, MessagesStreamHead},
 };
 use litellm_llms::{
@@ -27,7 +27,7 @@ use litellm_llms_types::headers::ProviderSpecificHeaders;
 use litellm_router_types::LitellmParams;
 use litellm_secret_value::SecretValue;
 use pyo3::{
-    exceptions::{PyException, PyUnicodeEncodeError},
+    exceptions::{PyException, PyImportError, PyUnicodeEncodeError},
     gc::{PyTraverseError, PyVisit},
     prelude::*,
     sync::PyOnceLock,
@@ -697,13 +697,16 @@ impl MessagesPythonHost {
             capabilities.bedrock =
                 super::model_catalog::bedrock_capabilities(py, &model, argument("model_info")?)?;
         }
-        let vertex_supported_regions = match custom_llm_provider.as_deref() {
-            Some(VERTEX_AI_PROVIDER) => super::model_catalog::vertex_supported_regions(py, &model)?,
-            _ => Vec::new(),
+        let vertex = match custom_llm_provider.as_deref() {
+            Some(VERTEX_AI_PROVIDER) => VertexShaping {
+                supported_regions: super::model_catalog::vertex_supported_regions(py, &model)?,
+                google_sdk_missing: google_sdk_missing(py),
+            },
+            _ => VertexShaping::default(),
         };
         let shaping = MessagesShaping {
             capabilities,
-            vertex_supported_regions,
+            vertex,
             settings: MessagesSettings {
                 whole_sse_frames: settings.stream_cost_model.is_some(),
                 presanitized,
@@ -916,6 +919,13 @@ impl MessagesPythonHost {
                 .import(ROUTE_HOST_MODULE)?
                 .getattr("unencodable_header")?
                 .call1((PyBytes::new(py, value), received))?;
+            return self.map_transport_failure(py, PyErr::from_value(raised));
+        }
+        if let Some(UnsendableUrl(url)) = litellm_error::find::<UnsendableUrl>(&error) {
+            let raised = py
+                .import(ROUTE_HOST_MODULE)?
+                .getattr("unsendable_url")?
+                .call1((url.as_str(),))?;
             return self.map_transport_failure(py, PyErr::from_value(raised));
         }
         if let Some(undecodable) = litellm_error::find::<DecodingError>(&error) {
@@ -1222,6 +1232,13 @@ impl PythonOwned for MessagesPythonHost {
     }
 }
 
+/// Python's Vertex AI login imports google-auth's request transport to refresh every token, and
+/// raises its own `ImportError` when that import does.
+fn google_sdk_missing(py: Python<'_>) -> bool {
+    py.import("google.auth.transport.requests")
+        .is_err_and(|error| error.is_instance_of::<PyImportError>(py))
+}
+
 #[cfg(test)]
 mod tests {
     use litellm_host_python::present;
@@ -1232,6 +1249,36 @@ mod tests {
 
     fn map(value: Value) -> Map<String, Value> {
         serde_json::from_value(value).unwrap()
+    }
+
+    #[rstest]
+    #[case::missing(false, true)]
+    #[case::installed(true, false)]
+    fn google_auth_is_missing_when_its_transport_does_not_import(
+        #[case] installed: bool,
+        #[case] expected: bool,
+    ) {
+        Python::initialize();
+        Python::attach(|py| {
+            let modules = py.import("sys").unwrap().getattr("modules").unwrap();
+            let name = "google.auth.transport.requests";
+            let saved = modules.get_item(name).ok();
+            let stand_in = match installed {
+                true => py
+                    .import("types")
+                    .unwrap()
+                    .call_method1("ModuleType", (name,))
+                    .unwrap(),
+                false => py.None().into_bound(py),
+            };
+            modules.set_item(name, stand_in).unwrap();
+            let missing = google_sdk_missing(py);
+            match saved {
+                Some(module) => modules.set_item(name, module).unwrap(),
+                None => modules.del_item(name).unwrap(),
+            }
+            assert_eq!(missing, expected);
+        });
     }
 
     #[rstest]
