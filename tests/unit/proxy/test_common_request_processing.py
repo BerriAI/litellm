@@ -11047,6 +11047,131 @@ class TestStreamingClientDisconnectBilling:
         )
 
     @pytest.mark.asyncio
+    async def test_disconnect_billed_partial_response_marks_an_unobserved_finish_reason(self):
+        """
+        The upstream terminal frame is unreachable after a client disconnect,
+        so the assembled partial response's "stop" is the Choices constructor
+        default, not provider evidence. Spend logs must record the unobserved
+        sentinel instead of a fabricated natural completion (or an inferred
+        abort).
+        """
+        model: Final = "gpt-4o"
+        messages: Final = [{"role": "user", "content": "Write a long sentence about a fox. " * 30}]
+        text: Final = "The quick brown fox jumps over the lazy dog. " * 20
+        recorder: Final = _RecordingSuccessLogger()
+        logging_obj: Final = LiteLLMLoggingObj(
+            model=model,
+            messages=messages,
+            stream=True,
+            call_type="acompletion",
+            start_time=datetime.datetime(2025, 3, 3, 21, 38, 10),
+            litellm_call_id="unobserved-finish-reason-call",
+            function_id="unobserved-finish-reason-fn",
+            dynamic_async_success_callbacks=[recorder],
+        )
+        logging_obj.update_environment_variables(
+            model=model,
+            user=None,
+            optional_params={},
+            litellm_params={"litellm_call_id": "unobserved-finish-reason-call"},
+        )
+        response: Final = CustomStreamWrapper(
+            completion_stream=ModelResponseListIterator(
+                model_responses=[
+                    ModelResponseStream(
+                        id="chatcmpl-unobserved",
+                        created=1741037890,
+                        model=model,
+                        choices=[StreamingChoices(index=0, delta=Delta(role="assistant", content=text))],
+                    ),
+                    ModelResponseStream(
+                        id="chatcmpl-unobserved",
+                        created=1741037890,
+                        model=model,
+                        choices=[StreamingChoices(index=0, delta=Delta(content="and the story went on"))],
+                    ),
+                ]
+            ),
+            model=model,
+            custom_llm_provider="openai",
+            logging_obj=logging_obj,
+            stream_options=None,
+        )
+        stream_iter: Final = response.__aiter__()
+        await stream_iter.__anext__()
+        await stream_iter.__anext__()
+
+        billed: Final = await _bill_partial_streamed_spend_on_disconnect(
+            {"litellm_logging_obj": logging_obj},
+            response,
+        )
+        await asyncio.wait_for(recorder.logged.wait(), timeout=5)
+
+        assert billed is True
+        assert len(recorder.success_events) == 1
+        partial_response: Final = recorder.success_events[0]["response_obj"]
+        assert partial_response.choices[0].finish_reason == "finish_reason_unspecified"
+
+    @pytest.mark.asyncio
+    async def test_disconnect_billed_partial_response_keeps_a_finish_reason_the_provider_sent(self):
+        model: Final = "gpt-4o"
+        messages: Final = [{"role": "user", "content": "Write a long sentence about a fox. " * 30}]
+        text: Final = "The quick brown fox jumps over the lazy dog. " * 20
+        recorder: Final = _RecordingSuccessLogger()
+        logging_obj: Final = LiteLLMLoggingObj(
+            model=model,
+            messages=messages,
+            stream=True,
+            call_type="acompletion",
+            start_time=datetime.datetime(2025, 3, 3, 21, 38, 10),
+            litellm_call_id="observed-finish-reason-call",
+            function_id="observed-finish-reason-fn",
+            dynamic_async_success_callbacks=[recorder],
+        )
+        logging_obj.update_environment_variables(
+            model=model,
+            user=None,
+            optional_params={},
+            litellm_params={"litellm_call_id": "observed-finish-reason-call"},
+        )
+        response: Final = CustomStreamWrapper(
+            completion_stream=ModelResponseListIterator(
+                model_responses=[
+                    ModelResponseStream(
+                        id="chatcmpl-observed",
+                        created=1741037890,
+                        model=model,
+                        choices=[StreamingChoices(index=0, delta=Delta(role="assistant", content=text))],
+                    ),
+                    ModelResponseStream(
+                        id="chatcmpl-observed",
+                        created=1741037890,
+                        model=model,
+                        choices=[StreamingChoices(index=0, delta=Delta(content=""), finish_reason="length")],
+                    ),
+                ]
+            ),
+            model=model,
+            custom_llm_provider="openai",
+            logging_obj=logging_obj,
+            stream_options=None,
+        )
+        stream_iter: Final = response.__aiter__()
+        await stream_iter.__anext__()
+        await stream_iter.__anext__()
+
+        billed: Final = await _bill_partial_streamed_spend_on_disconnect(
+            {"litellm_logging_obj": logging_obj},
+            response,
+        )
+        await asyncio.wait_for(recorder.logged.wait(), timeout=5)
+
+        assert billed is True
+        assert len(recorder.success_events) == 1
+        partial_response: Final = recorder.success_events[0]["response_obj"]
+        assert partial_response.choices[0].finish_reason == "length"
+
+    @pytest.mark.asyncio
     async def test_completed_stream_does_not_double_bill_on_late_disconnect(self):
         recorder = _RecordingSuccessLogger()
         original_callbacks = litellm.callbacks

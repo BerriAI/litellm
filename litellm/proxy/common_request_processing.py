@@ -119,6 +119,7 @@ from litellm.litellm_core_utils.served_output_texts import (
     record_served_output_texts,
     served_output_texts,
 )
+from litellm.litellm_core_utils.streaming_chunk_builder_utils import ChunkProcessor
 from litellm.litellm_core_utils.streaming_handler import (
     backfill_missing_cache_usage_fields,
 )
@@ -550,6 +551,23 @@ def _assembled_model_is_the_name_the_client_asked_for(
     return isinstance(stamped_model, str) and assembled_model == stamped_model
 
 
+def _observed_finish_reason_indexes(chunks: Sequence[object]) -> frozenset[object]:
+    """
+    Choice indexes whose received chunks carried a finish_reason. After a
+    client disconnect the upstream terminal frame is unreachable, so a
+    finish_reason stream_chunk_builder assembles from silence is the Choices
+    constructor default ("stop"), not provider evidence. Callers stamp
+    unobserved choices with "finish_reason_unspecified" and keep observed
+    reasons untouched.
+    """
+    observed: set[object] = set()
+    for chunk in chunks:
+        for choice in ChunkProcessor._chunk_choices(chunk):
+            if ChunkProcessor._finish_reason_of_choice(choice) is not None:
+                observed.add(getattr(choice, "index", 0))
+    return frozenset(observed)
+
+
 async def _bill_partial_streamed_spend_on_disconnect(request_data: dict, response: object) -> bool:
     """
     A client disconnect throws GeneratorExit/CancelledError into the streaming
@@ -613,6 +631,15 @@ async def _bill_partial_streamed_spend_on_disconnect(request_data: dict, respons
     ) and not _assembled_model_is_the_name_the_client_asked_for(request_data, partial_response.model)
     if isinstance(wrapper_model, str) and wrapper_model and not builder_recovered_the_routed_model:
         partial_response.model = wrapper_model
+    # The upstream terminal frame is unreachable after a disconnect: a
+    # finish_reason assembled from silence is the Choices default ("stop"),
+    # not something the provider sent. Keep observed reasons, mark the rest
+    # unspecified so spend logs record uncertainty, not a fabricated stop.
+    observed_finish_reason_indexes: Final = _observed_finish_reason_indexes(chunks)
+    partial_choices: Final = getattr(partial_response, "choices", None) or ()
+    for choice in partial_choices:
+        if getattr(choice, "index", 0) not in observed_finish_reason_indexes:
+            choice.finish_reason = "finish_reason_unspecified"
     partial_usage: Final = getattr(partial_response, "usage", None)
     if isinstance(partial_usage, Usage):
         backfill_missing_cache_usage_fields(partial_usage)
