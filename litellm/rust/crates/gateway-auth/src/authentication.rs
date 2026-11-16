@@ -9,8 +9,8 @@ use subtle::ConstantTimeEq;
 
 use crate::{
     AuthenticatedCaller, AuthenticatedRequest, Authentication, AuthenticationMethod, Authorizer,
-    Bearer, CredentialExtractor, Error, NoAdditionalPolicy, Permissions, Principal, PrincipalKind,
-    ResolvedIdentity, VerifiedIdentity,
+    Error, NoAdditionalPolicy, Permissions, Principal, PrincipalKind, ResolvedIdentity,
+    VerifiedIdentity,
 };
 
 pub type AuthFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, Error>> + Send + 'a>>;
@@ -74,7 +74,6 @@ impl IdentityResolver for LocalAdministrator {
 
 #[derive(Clone)]
 pub struct Auth {
-    extractor: Arc<dyn CredentialExtractor>,
     authenticator: Arc<dyn Authenticator>,
     identities: Arc<dyn IdentityResolver>,
     authorizer: Arc<dyn Authorizer>,
@@ -89,7 +88,6 @@ impl Auth {
         clock: Arc<dyn Clock>,
     ) -> Self {
         Self {
-            extractor: Arc::new(Bearer),
             authenticator,
             identities,
             authorizer,
@@ -103,21 +101,11 @@ impl Auth {
             secrets,
         });
         Self {
-            extractor: Arc::new(Bearer),
             authenticator: master,
             identities: Arc::new(LocalAdministrator),
             authorizer: Arc::new(NoAdditionalPolicy),
             clock: Arc::new(SystemClock),
         }
-    }
-
-    pub fn with_extractor(self, extractor: Arc<dyn CredentialExtractor>) -> Self {
-        Self { extractor, ..self }
-    }
-
-    pub async fn authenticate_parts(&self, request: &Parts) -> Result<AuthenticatedRequest, Error> {
-        let credential = self.extractor.extract(request)?;
-        self.authenticate_request(&credential, request).await
     }
 
     pub async fn validate(&self) -> Result<(), Error> {

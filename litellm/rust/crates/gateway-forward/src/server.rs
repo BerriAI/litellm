@@ -1,9 +1,10 @@
 use std::{convert::Infallible, io, net::SocketAddr, pin::pin, time::Duration};
 
-use axum::{body::Body, extract::Request};
+use axum::{body::Body, extract::Request, response::Response};
 use hyper::{body::Incoming, server::conn::http1, service::service_fn};
 use hyper_util::rt::{TokioIo, TokioTimer};
 use tokio::net::TcpListener;
+use tower::{Service, ServiceExt};
 
 use crate::{Forward, forward::MAX_HEADERS};
 
@@ -15,13 +16,18 @@ pub(crate) struct ClientSocket {
 }
 
 /// Serves each public connection with hyper directly, because `axum::serve` cannot configure
-/// the connection timeouts uvicorn applied to the same clients.
-pub(crate) async fn serve(
+/// the connection timeouts uvicorn applied to the same clients. Every request reaches `app` with
+/// its `ClientSocket` in the extensions, where `Forward` reads it.
+pub(crate) async fn serve<A>(
     forward: Forward,
+    app: A,
     listener: TcpListener,
     shutdown: impl Future<Output = ()>,
     drain: Duration,
-) {
+) where
+    A: Service<Request, Response = Response, Error = Infallible> + Clone + Send + 'static,
+    A::Future: Send,
+{
     let connections = forward.connections().clone();
     let _close_on_drop = connections.close_on_drop();
     let keepalive = forward.keepalive();
@@ -49,10 +55,11 @@ pub(crate) async fn serve(
             tracing::warn!(%error, "could not disable Nagle on a client connection");
         }
         let socket = ClientSocket { peer, local };
-        let forward = forward.clone();
+        let app = app.clone();
         let service = service_fn(move |request: Request<Incoming>| {
-            let forward = forward.clone();
-            async move { Ok::<_, Infallible>(forward.handle(socket, request.map(Body::new)).await) }
+            let mut request = request.map(Body::new);
+            request.extensions_mut().insert(socket);
+            app.clone().oneshot(request)
         });
         let connection = builder
             .serve_connection(TokioIo::new(stream), service)

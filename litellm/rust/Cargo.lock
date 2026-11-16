@@ -3997,6 +3997,7 @@ dependencies = [
  "litellm-core-utils",
  "litellm-error",
  "litellm-gateway-auth",
+ "litellm-gateway-auth-core",
  "litellm-gateway-forward",
  "litellm-gateway-inference",
  "litellm-gateway-mcp",
@@ -4017,6 +4018,7 @@ dependencies = [
  "rustls 0.23.42",
  "serde",
  "serde_json",
+ "strum",
  "tempfile",
  "thiserror 2.0.19",
  "tokio",
@@ -4087,6 +4089,7 @@ dependencies = [
  "tokio",
  "tokio-tungstenite",
  "tokio-util",
+ "tower",
  "tower-service",
  "tracing",
 ]

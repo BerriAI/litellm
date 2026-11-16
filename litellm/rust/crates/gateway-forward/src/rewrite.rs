@@ -8,6 +8,10 @@ use crate::{Rejection, server::ClientSocket};
 
 pub const PEER_HEADER: &str = "x-litellm-rust-peer";
 
+/// On a response from behind [`Forward::behind`](crate::Forward::behind): `native`, or `python`
+/// with the reason the native app did not answer.
+pub const VERDICT_HEADER: &str = "x-litellm-gateway";
+
 /// The request Python receives: the client's method, target, headers and body unchanged, sent to
 /// `upstream` over HTTP/1.1 without the client connection's own headers, plus the client's TCP
 /// peer in `PEER_HEADER`, which replaces any copy the client sent.
@@ -82,6 +86,12 @@ fn only_chunked(headers: &HeaderMap) -> bool {
 /// The response the client receives: Python's, without the upstream connection's own headers.
 pub(crate) fn downstream_response<B>(mut response: Response<B>) -> Response<B> {
     strip_hop_by_hop(response.headers_mut());
+    response
+}
+
+/// `response` naming who answered it, which replaces any copy the answer carried.
+pub(crate) fn answered_by<B>(mut response: Response<B>, verdict: HeaderValue) -> Response<B> {
+    response.headers_mut().insert(VERDICT_HEADER, verdict);
     response
 }
 

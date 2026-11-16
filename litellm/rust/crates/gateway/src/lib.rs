@@ -1,7 +1,9 @@
+mod admit;
 mod auth;
 mod error;
 mod redis;
 mod secrets;
+pub use admit::{Admission, Refused, Unsupported, unsupported};
 pub use error::Error;
 pub use redis::RedisClients;
 
@@ -158,6 +160,12 @@ pub fn router(
         Some(ui) => inference.merge(ui).merge(health),
         None => inference.merge(health),
     }
+}
+
+/// The inference routes for requests [`Admission::admit`] let in. They carry no authentication
+/// layer of their own, since an admitted request already names its caller.
+pub fn admitted_router(inference: Arc<Gateway>) -> Router {
+    litellm_gateway_inference::router(inference).layer(axum::middleware::from_fn(log_request))
 }
 
 async fn readiness() -> axum::Json<serde_json::Value> {
