@@ -10,6 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
 import i18n from "@/i18n/i18n";
+import { uuid } from "@/utils/uuid";
 import { type ComplexityRouterConfigValue, heuristicScoringRole } from "./ComplexityRouterConfig";
 import {
   dimensionLabel,
@@ -281,7 +282,7 @@ const HeuristicScoringConfig: React.FC<HeuristicScoringConfigProps> = ({ value, 
                         onAdd={() =>
                           changeWeights({
                             type: "add",
-                            row: { id: crypto.randomUUID(), name: "", weight: 0.1, scoring_mode: "match_count" },
+                            row: { id: uuid(), name: "", weight: 0.1, scoring_mode: "match_count" },
                           })
                         }
                         onRemove={(id) => changeWeights({ type: "remove", id })}

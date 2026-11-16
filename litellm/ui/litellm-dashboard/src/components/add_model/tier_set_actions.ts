@@ -1,4 +1,5 @@
 import type { KeywordTierRule } from "./KeywordTierRules";
+import { uuid } from "@/utils/uuid";
 import type { ComplexityRouterConfigValue } from "./ComplexityRouterConfig";
 import { pruneTierModelParams } from "./complexity_router_tiers";
 import {
@@ -135,7 +136,7 @@ const nextTierSetValue = (
       );
     case "add":
       return commitTierRows(
-        [...rows, { id: crypto.randomUUID(), name: "", definition: "", models: [] }],
+        [...rows, { id: uuid(), name: "", definition: "", models: [] }],
         fallbackId,
         asCustomBase(value),
       );

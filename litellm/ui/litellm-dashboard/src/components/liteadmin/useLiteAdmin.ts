@@ -8,6 +8,7 @@ import { extractProxyErrorMessage } from "@/lib/http/client";
 import { toast } from "@/lib/toast";
 import { getCookie } from "@/utils/cookieUtils";
 import { checkTokenValidity } from "@/utils/jwtUtils";
+import { uuid } from "@/utils/uuid";
 import { runLiteAdmin } from "./agent";
 import type { ActionResult, AriaAccess, LiteAdminAction } from "./operations";
 import type { UsageChart } from "./usageChart";
@@ -109,7 +110,7 @@ export function useLiteAdmin(session: LiteAdminSession) {
     if (active.current || !text.trim()) return;
     const turn: ActiveTurn = { controller: new AbortController(), outcome: "none" };
     active.current = turn;
-    const message: ChatMessage = { id: crypto.randomUUID(), role: "user", content: text.trim(), timestamp: Date.now() };
+    const message: ChatMessage = { id: uuid(), role: "user", content: text.trim(), timestamp: Date.now() };
     const history = entries.flatMap<Pick<ChatMessage, "role" | "content">>((entry) => {
       if (entry.kind === "message") return [entry.message];
       if (entry.kind !== "action" || entry.status === "review" || entry.status === "applying") return [];
@@ -135,7 +136,7 @@ export function useLiteAdmin(session: LiteAdminSession) {
         assertCurrent,
         onMessage: (content) => {
           assertCurrent();
-          const reply: ChatMessage = { id: crypto.randomUUID(), role: "assistant", content, timestamp: Date.now() };
+          const reply: ChatMessage = { id: uuid(), role: "assistant", content, timestamp: Date.now() };
           const chart = turn.chart;
           turn.chart = undefined;
           setEntries((current) => [
@@ -176,7 +177,7 @@ export function useLiteAdmin(session: LiteAdminSession) {
         const context = turn.outcome === "completed" ? `${i18n.t("aria.session.completedChangesShown")} ` : "";
         setEntries((current) => [
           ...current,
-          { kind: "error", id: crypto.randomUUID(), text: context + extractProxyErrorMessage(error) },
+          { kind: "error", id: uuid(), text: context + extractProxyErrorMessage(error) },
         ]);
       }
     } finally {
