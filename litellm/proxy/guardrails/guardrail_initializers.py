@@ -135,6 +135,26 @@ def _presidio_output_mode(mode: str | list[str] | Mode, *, include_mcp: bool) ->
     return output_hooks(mode)
 
 
+def _presidio_reversible_input_mode(
+    mode: str | list[str] | Mode,  # mutable-ok: matches the guardrail mode field type
+) -> str | list[str] | Mode:  # mutable-ok: event_hook accepts str or list[str]
+    if GuardrailEventHooks.post_call.value not in configured_event_hooks(mode):
+        return mode
+
+    def input_hooks(hooks: str | list[str]) -> str | list[str]:  # mutable-ok: event_hook accepts str or list[str]
+        kept: Final = tuple(
+            hook for hook in configured_event_hooks(hooks) if hook != GuardrailEventHooks.post_call.value
+        )
+        return kept[0] if len(kept) == 1 else list(kept)
+
+    if isinstance(mode, Mode):
+        return Mode(
+            tags={tag: input_hooks(hooks) for tag, hooks in mode.tags.items()},
+            default=input_hooks(mode.default) if mode.default is not None else None,
+        )
+    return input_hooks(mode)
+
+
 def initialize_presidio(litellm_params: LitellmParams, guardrail: Guardrail) -> tuple[CustomGuardrail, ...]:
     from litellm.proxy.guardrails.guardrail_hooks.presidio import (
         OPTIONAL_PresidioPIIMasking,
@@ -173,7 +193,12 @@ def initialize_presidio(litellm_params: LitellmParams, guardrail: Guardrail) -> 
         litellm.logging_callback_manager.add_litellm_callback(callback)
         return callback
 
-    input_callback: Final = _make_presidio_callback() if run_input else None
+    input_mode: Final = (
+        _presidio_reversible_input_mode(litellm_params.mode) if litellm_params.output_parse_pii else litellm_params.mode
+    )
+    input_callback: Final = (
+        _make_presidio_callback(event_hook=input_mode) if run_input and configured_event_hooks(input_mode) else None
+    )
     mask_output_callback: Final = (
         _make_presidio_callback(
             apply_to_output=True,
