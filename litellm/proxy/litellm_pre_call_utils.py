@@ -3733,21 +3733,11 @@ def _apply_credential_overrides_from_model_config(
     if not project_model_config and not team_model_config:
         return
 
-    # Extract provider hint from model name (e.g. "azure/gpt-4" -> "azure").
-    # A prefix that is not a provider (e.g. "meta-llama/Llama-3.3-70B-Instruct")
-    # is part of a model-group name, so like an unprefixed name it resolves
-    # through the deployment's litellm_params, keeping multi-provider
-    # defaultconfig entries from silently matching the first dict key (#27516).
-    model_prefix: Final = model_name.split("/", 1)[0] if "/" in model_name else None
-    provider: str | None = None
-    if model_prefix in litellm.provider_list:
-        provider = model_prefix
-    elif llm_router is not None:
-        provider = _resolve_provider_from_deployment(
-            llm_router=llm_router,
-            model_name=model_name,
-            pre_alias_model_name=pre_alias_model_name,
-        )
+    provider: Final = _resolve_provider_hint(
+        llm_router=llm_router,
+        model_name=model_name,
+        pre_alias_model_name=pre_alias_model_name,
+    )
 
     credential_name: Final = _resolve_credential_from_model_config(
         model_name=model_name,
@@ -3781,6 +3771,31 @@ def _apply_credential_overrides_from_model_config(
         _safe_cred,
         _safe_model,
     )
+
+
+def _resolve_provider_hint(
+    llm_router: Router | None,
+    model_name: str,
+    pre_alias_model_name: str | None,
+) -> str | None:
+    """
+    A known provider prefix ("azure/gpt-4") wins. Otherwise the deployment
+    decides, since a prefix like "meta-llama/" is part of a model-group name.
+    When no deployment matches (e.g. wildcard routes), the prefix is still the
+    hint, so a multi-provider defaultconfig entry never falls back to its first
+    credential (#27516). Only an unprefixed name with no deployment gets None.
+    """
+    model_prefix: Final = model_name.split("/", 1)[0] if "/" in model_name else None
+    if model_prefix in litellm.provider_list:
+        return model_prefix
+    if llm_router is None:
+        return model_prefix
+    deployment_provider: Final = _resolve_provider_from_deployment(
+        llm_router=llm_router,
+        model_name=model_name,
+        pre_alias_model_name=pre_alias_model_name,
+    )
+    return deployment_provider or model_prefix
 
 
 def _resolve_provider_from_deployment(

@@ -7421,6 +7421,55 @@ def test_apply_overrides_non_provider_prefix_in_model_resolves_provider_from_dep
     assert data["api_key"] == "vllm-key-for-team-1"
 
 
+@pytest.mark.parametrize(
+    ("model", "expected_api_key"),
+    [
+        ("veniceai/venice-uncensored", "venice-key-for-team-1"),
+        ("meta-llama/Llama-3.3-70B-Instruct", None),
+    ],
+)
+def test_apply_overrides_prefixed_model_without_group_match_uses_prefix_as_provider(
+    setup_test_credentials, model, expected_api_key
+):
+    """
+    Wildcard-routed names miss the exact model-group lookup. The prefix must
+    then act as the provider hint instead of falling back to the entry's
+    first credential, which here belongs to openai
+    """
+    litellm.credential_list.extend(
+        [
+            CredentialItem(
+                credential_name="openai-team-1",
+                credential_info={},
+                credential_values={"api_key": "sk-openai-key-for-team-1"},
+            ),
+            CredentialItem(
+                credential_name="venice-team-1",
+                credential_info={},
+                credential_values={"api_key": "venice-key-for-team-1"},
+            ),
+        ]
+    )
+    team_metadata = {
+        "model_config": {
+            "defaultconfig": {
+                "openai": {"litellm_credentials": "openai-team-1"},
+                "veniceai": {"litellm_credentials": "venice-team-1"},
+            }
+        }
+    }
+    router = route_entry_points_to_stubs(MagicMock())
+    router.get_deployment_by_model_group_name.return_value = None
+
+    data = {"model": model}
+    _apply_credential_overrides_from_model_config(
+        data=data,
+        user_api_key_dict=UserAPIKeyAuth(api_key="test-key", team_metadata=team_metadata),
+        llm_router=router,
+    )
+    assert data.get("api_key") == expected_api_key
+
+
 def test_apply_overrides_single_provider_default_does_not_leak_to_other_providers(
     setup_test_credentials,
 ):
