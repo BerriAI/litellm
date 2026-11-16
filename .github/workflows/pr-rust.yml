@@ -158,7 +158,7 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
         run: |
           if [ "$EVENT_NAME" = pull_request ]; then
-            cargo nextest run --workspace --locked -E 'not (rdeps(litellm-redis-testing) | rdeps(litellm-db-testing) | rdeps(testcontainers-modules))'
+            cargo nextest run --workspace --locked -E 'not (rdeps(litellm-redis-testing) | rdeps(litellm-db-testing) | rdeps(litellm-storage-clickhouse) | rdeps(litellm-spend-clickhouse))'
           else
             cargo nextest run --workspace --locked
           fi

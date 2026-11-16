@@ -223,10 +223,10 @@ def _changed_files_selected_by(tmp_path: Path, pathspecs: tuple[str, ...], files
     )
 
 
-def test_workflow_still_carries_the_ruff_format_e2e_basedpyright_and_e2e_harness_diff_gates() -> None:
-    assert len(GATES) == 3
+def test_lint_diff_gates_select_python_format_and_e2e_type_checks() -> None:
+    assert len(GATES) == 2
     assert frozenset(gate[0] for gate in GATES) == frozenset(
-        {":(glob)litellm/**/*.py", ":(glob)tests/e2e/**/*.py", "tests/e2e"}
+        {":(glob)litellm/**/*.py", ":(glob)tests/e2e/**/*.py"}
     )
 
 
@@ -261,32 +261,62 @@ def test_e2e_basedpyright_gate_also_fires_on_harness_python_and_pyrightconfig(tm
 
 
 @pytest.mark.parametrize(
-    "trigger",
+    ("event", "label", "expected"),
     (
-        "tests/e2e/claude_code/cron_vm/install_claude_code.sh",
-        "tests/e2e/notes.md",
-        "tests/e2e/pkg/sub/nested_module.py",
-        "tests/e2e_harness/claude_code/test_driver.py",
-        "pyproject.toml",
-        "uv.lock",
-        ".github/workflows/pr-lint.yml",
+        ("pull_request", "", False),
+        ("pull_request", "documentation", False),
+        ("pull_request", "run-ci", True),
+        ("merge_group", "", True),
+        ("push", "", True),
+        ("schedule", "", True),
+        ("workflow_dispatch", "", True),
     ),
 )
-def test_e2e_harness_gate_fires_on_any_e2e_or_harness_file_its_dependency_manifests_and_workflow(
-    tmp_path: Path, trigger: str
+def test_integration_tier_runs_the_harness_replay_and_cache_suites_on_the_intended_events(
+    tmp_path: Path, event: str, label: str, expected: bool
 ) -> None:
-    selected = _changed_files_selected_by(
-        tmp_path,
-        _gate_rooted_at("tests/e2e"),
-        (
-            trigger,
-            "tests/e2e/ui/spec.ts",
-            "tests/e2e/ui/pkg/page.py",
-            "elsewhere/pyproject.toml",
-            "tests/e2e_other/module.py",
-        ),
+    workflow: Final = yaml.safe_load((WORKFLOWS_DIR / "test-integration.yml").read_text())
+    job: Final = workflow["jobs"]["e2e-harness"]
+    step: Final = next(step for step in job["steps"] if step.get("name") == "Run the e2e harness tests")
+    tools: Final = tmp_path / "bin"
+    tools.mkdir()
+    _install_tool(
+        tools / "uv",
+        '#!/usr/bin/env bash\nset -eu\n'
+        'if [[ "$*" == *npm_version_resolver.py* ]]; then echo 99.0.0; exit 0; fi\n'
+        ': "${E2E_CACHE_TEST_REDIS_URL:?}"\nprintf "%s\\n" "$@" >> "$RUNNER_TEMP/harness-argv"\n',
     )
-    assert selected == frozenset({trigger})
+    installer: Final = tmp_path / "tests/e2e/claude_code/cron_vm/install_claude_code.sh"
+    installer.parent.mkdir(parents=True)
+    _install_tool(installer, '#!/usr/bin/env bash\nprintf "%s" "$1" > "$RUNNER_TEMP/claude-version"\n')
+    condition: Final = job["if"].replace("github.event_name", '"$EVENT_NAME"').replace(
+        "github.event.label.name", '"$EVENT_LABEL"'
+    )
+    result: Final = subprocess.run(
+        ["bash", "-e", "-c", f'if [[ {condition} ]]; then\n{step["run"]}\nfi'],
+        cwd=tmp_path,
+        env={
+            **os.environ,
+            **step["env"],
+            "PATH": f"{tools}{os.pathsep}{os.environ['PATH']}",
+            "RUNNER_TEMP": str(tmp_path),
+            "EVENT_NAME": event,
+            "EVENT_LABEL": label,
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    recorded: Final = tmp_path / "harness-argv"
+    assert recorded.exists() == expected
+    if not expected:
+        return
+    arguments: Final = recorded.read_text().splitlines()
+    assert "tests/e2e_harness" in arguments
+    assert "tests/code_coverage_tests/test_provider_replay_harness.py" in arguments
+    assert "tests/code_coverage_tests/test_provider_cache.py" in arguments
+    assert (tmp_path / "claude-version").read_text() == "99.0.0"
 
 
 def _event_context(pull_request: Mapping[str, str]) -> Mapping[str, str]:
@@ -294,12 +324,19 @@ def _event_context(pull_request: Mapping[str, str]) -> Mapping[str, str]:
         {
             "github.repository": REPOSITORY,
             "github.token": "fake-token",
+            "github.event_name": "pull_request",
+            "github.sha": pull_request["head.sha"],
             **{f"github.event.pull_request.{field}": value for field, value in pull_request.items()},
         }
     )
 
 
 def _context_value(context: Mapping[str, str], expression: str) -> str:
+    first, operator, fallback = expression.partition("||")
+    if operator:
+        return _context_value(context, first.strip()) or _context_value(context, fallback.strip())
+    if expression.startswith(("github.event.pull_request.", "github.event.merge_group.")):
+        return context.get(expression, "")
     if expression not in context:
         pytest.fail(f"the fake runner has no value for ${{{{ {expression} }}}}")
     return context[expression]
@@ -314,8 +351,8 @@ def _install_tool(path: Path, script: str) -> None:
     path.chmod(0o755)
 
 
-def _runner(tmp_path: Path, upstream: StaleBaseUpstream, pull_request: Mapping[str, str], live_base_ref: str) -> Runner:
-    runner: Final = Runner(tmp_path, upstream, live_base_ref, _event_context(pull_request))
+def _runner(tmp_path: Path, upstream: StaleBaseUpstream, context: Mapping[str, str], live_base_ref: str) -> Runner:
+    runner: Final = Runner(tmp_path, upstream, live_base_ref, context)
     runner.tools.mkdir()
     runner.temp.mkdir()
     for name, script in (("gh", FAKE_GH), ("npm", FAKE_ARGV_RECORDER), ("uv", FAKE_ARGV_RECORDER)):
@@ -325,7 +362,7 @@ def _runner(tmp_path: Path, upstream: StaleBaseUpstream, pull_request: Mapping[s
 
 def _check_out_like_the_job(job: WorkflowJob, runner: Runner) -> None:
     checkout: Final = next(step for step in job.steps if step.uses.startswith("actions/checkout@"))
-    ref: Final = _resolved(checkout.with_.get("ref", "${{ github.event.pull_request.head.sha }}"), runner.context)
+    ref: Final = _resolved(checkout.with_.get("ref", "${{ github.sha }}"), runner.context)
     _git(runner.root, "init", "-q", str(runner.checkout))
     _git(runner.checkout, "remote", "add", "origin", f"file://{runner.upstream.path}")
     _git(runner.checkout, "fetch", "-q", "--no-tags", "--depth=1", "origin", ref)
@@ -504,12 +541,48 @@ def test_merge_base_step_hands_its_consumer_the_events_base_unless_that_branch_i
             "user.type": "User",
         }
     )
-    runner: Final = _runner(tmp_path, upstream, pull_request, live_base_ref)
+    runner: Final = _runner(tmp_path, upstream, _event_context(pull_request), live_base_ref)
     _check_out_like_the_job(step.job, runner)
     _run_step(step.step, step.job, runner.context, runner)
     consumer: Final = CONSUMERS[step.job_key]
     measured_ref: Final = event_base_ref if event_base_ref in upstream.tip_by_ref else live_base_ref
     assert consumer.observe(StepRun(step, runner)) == consumer.expect(upstream, measured_ref)
+
+
+@pytest.mark.parametrize(
+    "step",
+    tuple(
+        step
+        for step in MERGE_BASE_STEPS
+        if step.job_key in {"pr-lint.yml:python", "pr-lint.yml:ui", "pr-cost-map-guard.yml:cost-map-guard"}
+    ),
+    ids=lambda step: step.job_key,
+)
+def test_merge_group_steps_use_the_group_revisions_and_lint_all_ui_files(
+    upstream: StaleBaseUpstream, tmp_path: Path, step: MergeBaseStep
+) -> None:
+    context: Final = MappingProxyType(
+        {
+            "github.repository": REPOSITORY,
+            "github.token": "fake-token",
+            "github.event_name": "merge_group",
+            "github.sha": upstream.head,
+            "github.event.merge_group.base_sha": upstream.tip_by_ref["main"],
+            "github.event.merge_group.base_ref": "refs/heads/main",
+            "github.event.merge_group.head_sha": upstream.head,
+            "github.event.merge_group.head_ref": "refs/heads/gh-readonly-queue/main/group",
+        }
+    )
+    runner: Final = _runner(tmp_path, upstream, context, "main")
+    _check_out_like_the_job(step.job, runner)
+    _run_step(step.step, step.job, context, runner)
+    run: Final = StepRun(step, runner)
+    if step.job_key == "pr-lint.yml:ui":
+        files: Final = _git(upstream.path, "ls-tree", "-r", "--name-only", f"{upstream.head}:{UI_DASHBOARD}")
+        assert _ui_files_queued_for_prettier(run) == frozenset(files.splitlines())
+        return
+    consumer: Final = CONSUMERS[step.job_key]
+    assert consumer.observe(run) == consumer.expect(upstream, "main")
 
 
 UI_API_TYPES_DETECT: Final[str] = next(
