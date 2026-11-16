@@ -146,7 +146,7 @@ mcp_servers:
         upstream.url
     ))
     .unwrap();
-    let inference = litellm_gateway::build_inference(&config).unwrap();
+    let inference = litellm_gateway::build_inference(&config).await.unwrap();
     let shutdown = CancellationToken::new();
     let mcp = litellm_gateway::build_mcp(
         &config,
@@ -265,7 +265,7 @@ async fn mcp_tools_are_discovered_through_the_configured_proxy(#[future] upstrea
         "general_settings: {master_key: gateway-key}\nmcp_servers: {docs: {url: 'http://upstream.invalid/mcp', timeout: 2}}",
     )
     .unwrap();
-    let inference = litellm_gateway::build_inference(&config).unwrap();
+    let inference = litellm_gateway::build_inference(&config).await.unwrap();
     let proxy = upstream.url.trim_end_matches("/mcp");
     let http = litellm_http::HttpClientConfig {
         proxies: litellm_http::EnvironmentProxies::from_environment(&|name: &str| {
@@ -318,7 +318,7 @@ async fn mcp_uses_the_configured_ca_bundle() {
         "general_settings: {master_key: gateway-key}\nmcp_servers: {docs: {url: 'http://127.0.0.1:1/mcp'}}",
     )
     .unwrap();
-    let inference = litellm_gateway::build_inference(&config).unwrap();
+    let inference = litellm_gateway::build_inference(&config).await.unwrap();
     let http = litellm_http::HttpClientConfig {
         verify: litellm_http::Verify::CaBundle(missing.clone()),
         ..inference.http.clone()
@@ -370,7 +370,7 @@ async fn rejects_unsupported_or_invalid_settings_before_serving(
     #[case] expected: &str,
 ) {
     let config = Config::from_yaml(&format!("general_settings: {{master_key: gateway-key}}\nmcp_servers:\n  docs:\n    url: http://127.0.0.1:1/mcp\n    {settings}\n")).unwrap();
-    let inference = litellm_gateway::build_inference(&config).unwrap();
+    let inference = litellm_gateway::build_inference(&config).await.unwrap();
     let result = litellm_gateway::build_mcp(
         &config,
         Arc::new(NoSecrets),
@@ -389,7 +389,7 @@ async fn rejects_unsupported_or_invalid_settings_before_serving(
 #[tokio::test]
 async fn mcp_is_optional_and_requires_admission_credentials_when_enabled() {
     let empty = Config::from_yaml("{}").unwrap();
-    let inference = litellm_gateway::build_inference(&empty).unwrap();
+    let inference = litellm_gateway::build_inference(&empty).await.unwrap();
     assert!(
         litellm_gateway::build_mcp(
             &empty,
@@ -431,7 +431,8 @@ impl litellm_secrets::source::SecretSource for NoSecrets {
 }
 
 #[rstest]
-fn applies_configured_http_environment_before_building_clients() {
+#[tokio::test]
+async fn applies_configured_http_environment_before_building_clients() {
     let directory = tempfile::tempdir().unwrap();
     let missing = directory.path().join("missing-ca.pem");
     let config = Config::from_yaml(&format!(
@@ -439,7 +440,10 @@ fn applies_configured_http_environment_before_building_clients() {
         missing.display(),
     ))
     .unwrap();
-    let error = litellm_gateway::build_inference(&config).err().unwrap();
+    let error = litellm_gateway::build_inference(&config)
+        .await
+        .err()
+        .unwrap();
     assert!(matches!(
         &error,
         litellm_gateway::Error::Http(http)
@@ -458,7 +462,7 @@ async fn refuses_unimplemented_global_mcp_policy(#[case] settings: &str) {
         "{settings}\nmcp_servers: {{docs: {{url: 'http://127.0.0.1:1/mcp'}}}}\n"
     ))
     .unwrap();
-    let inference = litellm_gateway::build_inference(&config).unwrap();
+    let inference = litellm_gateway::build_inference(&config).await.unwrap();
     let error = litellm_gateway::build_mcp(
         &config,
         Arc::new(NoSecrets),

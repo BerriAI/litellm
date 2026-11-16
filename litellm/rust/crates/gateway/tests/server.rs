@@ -6,7 +6,8 @@ use std::{
 use axum::{body::Body, http::Request};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use litellm_config::Config;
-use litellm_gateway_inference::{Error, Gateway};
+use litellm_gateway::Gateway;
+use litellm_gateway_inference::Error;
 use litellm_http::ClientVariant;
 use litellm_model_catalog::{BUNDLED_REGISTRY, Catalog};
 use litellm_tracing::{Logger, Metadata, Record, Sink};
@@ -34,8 +35,10 @@ impl Sink for LogSink {
 }
 
 #[fixture]
-fn inference() -> Arc<Gateway> {
-    litellm_gateway::build_inference(&Config::from_yaml("model_list: []").unwrap()).unwrap()
+async fn inference() -> Arc<Gateway> {
+    litellm_gateway::build_inference(&Config::from_yaml("model_list: []").unwrap())
+        .await
+        .unwrap()
 }
 
 #[rstest]
@@ -57,7 +60,7 @@ fn inference() -> Arc<Gateway> {
 #[case::unconfigured("/v1/messages", Some("Bearer gateway-key"), None, 500)]
 #[tokio::test]
 async fn authenticates_before_serving_mounted_inference_routes(
-    inference: Arc<Gateway>,
+    #[future(awt)] inference: Arc<Gateway>,
     #[case] path: &str,
     #[case] authorization: Option<&str>,
     #[case] master_key: Option<&str>,
@@ -123,7 +126,7 @@ async fn authenticates_before_serving_mounted_inference_routes(
 
 #[rstest]
 #[tokio::test]
-async fn logs_request_outcome_without_credentials_or_query(inference: Arc<Gateway>) {
+async fn logs_request_outcome_without_credentials_or_query(#[future(awt)] inference: Arc<Gateway>) {
     let config =
         Config::from_yaml("model_list: []\ngeneral_settings:\n  master_key: gateway-key\n")
             .unwrap();
@@ -156,7 +159,9 @@ async fn logs_request_outcome_without_credentials_or_query(inference: Arc<Gatewa
 
 #[rstest]
 #[tokio::test]
-async fn mounts_ui_without_exposing_credentials_or_authorizing_inference(inference: Arc<Gateway>) {
+async fn mounts_ui_without_exposing_credentials_or_authorizing_inference(
+    #[future(awt)] inference: Arc<Gateway>,
+) {
     let config =
         Config::from_yaml("model_list: []\ngeneral_settings:\n  master_key: inference-secret\n")
             .unwrap();
@@ -276,7 +281,7 @@ async fn mounts_ui_without_exposing_credentials_or_authorizing_inference(inferen
 #[case::discovery("/.well-known/litellm-ui-config", "GET")]
 #[tokio::test]
 async fn ui_routes_are_absent_when_not_mounted(
-    inference: Arc<Gateway>,
+    #[future(awt)] inference: Arc<Gateway>,
     #[case] path: &str,
     #[case] method: &str,
 ) {
@@ -301,7 +306,7 @@ async fn ui_routes_are_absent_when_not_mounted(
 #[case::without_master_key("model_list: []\n")]
 #[tokio::test]
 async fn readiness_answers_without_credentials_like_the_proxy_with_no_database(
-    inference: Arc<Gateway>,
+    #[future(awt)] inference: Arc<Gateway>,
     #[case] yaml: &str,
 ) {
     let config = Config::from_yaml(yaml).unwrap();
@@ -324,6 +329,180 @@ async fn readiness_answers_without_credentials_like_the_proxy_with_no_database(
         serde_json::from_slice::<Value>(&body).unwrap(),
         json!({"status": "healthy", "db": "Not connected"})
     );
+}
+
+fn served_message() -> ResponseTemplate {
+    ResponseTemplate::new(200).set_body_json(json!({
+        "id": "msg_test", "type": "message", "role": "assistant", "model": "claude-unlisted-9",
+        "content": [{"type": "text", "text": "hi"}], "stop_reason": "end_turn",
+        "usage": {"input_tokens": 1, "output_tokens": 1}
+    }))
+}
+
+fn deployment(name: &str, id: &str, upstream: &MockServer) -> String {
+    format!(
+        "  - model_name: {name}\n    litellm_params:\n      model: anthropic/claude-unlisted-9\n      api_base: {}\n      api_key: test-key\n    model_info:\n      id: {id}\n",
+        upstream.uri()
+    )
+}
+
+async fn routed(config: &str, model: &str) -> axum::response::Response {
+    let config = Config::from_yaml(config).unwrap();
+    let request = Request::post("/v1/messages")
+        .header("authorization", "Bearer gateway-key")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({"model": model, "max_tokens": 8, "messages": [{"role": "user", "content": "hi"}]})
+                .to_string(),
+        ))
+        .unwrap();
+    litellm_gateway::router(
+        litellm_gateway::build_inference(&config).await.unwrap(),
+        &config,
+        None,
+        None,
+    )
+    .oneshot(request)
+    .await
+    .unwrap()
+}
+
+fn routing_headers(response: &axum::response::Response) -> Vec<(&str, &str)> {
+    response
+        .headers()
+        .iter()
+        .filter(|(name, _)| name.as_str().starts_with("x-litellm-"))
+        .map(|(name, value)| (name.as_str(), value.to_str().unwrap()))
+        .collect()
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_failed_model_group_falls_back_to_the_configured_group() {
+    let (failing, healthy) = (MockServer::start().await, MockServer::start().await);
+    Mock::given(method("POST"))
+        .respond_with(
+            ResponseTemplate::new(400).set_body_json(json!({"error": {"message": "refused"}})),
+        )
+        .expect(1)
+        .mount(&failing)
+        .await;
+    Mock::given(method("POST"))
+        .respond_with(served_message())
+        .expect(1)
+        .mount(&healthy)
+        .await;
+    let config = format!(
+        "model_list:\n{}{}router_settings:\n  fallbacks:\n    - primary: [backup]\ngeneral_settings:\n  master_key: gateway-key\n",
+        deployment("primary", "primary-1", &failing),
+        deployment("backup", "backup-1", &healthy),
+    );
+
+    let response = routed(&config, "primary").await;
+
+    assert_eq!(response.status().as_u16(), 200);
+    assert_eq!(
+        routing_headers(&response),
+        [
+            ("x-litellm-model-id", "backup-1"),
+            ("x-litellm-model-group", "backup"),
+            ("x-litellm-attempted-retries", "0"),
+            ("x-litellm-attempted-fallbacks", "1"),
+        ]
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_name_no_deployment_serves_routes_to_the_first_default_fallback() {
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(served_message())
+        .expect(1)
+        .mount(&upstream)
+        .await;
+    let config = format!(
+        "model_list:\n{}router_settings:\n  default_fallbacks: [backup]\ngeneral_settings:\n  master_key: gateway-key\n",
+        deployment("backup", "backup-1", &upstream),
+    );
+
+    let response = routed(&config, "unconfigured").await;
+
+    assert_eq!(response.status().as_u16(), 200);
+    assert_eq!(
+        routing_headers(&response)[0],
+        ("x-litellm-model-id", "backup-1")
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_failed_deployment_is_retried_on_another_deployment_of_its_group() {
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(
+            ResponseTemplate::new(500).set_body_json(json!({"error": {"message": "down"}})),
+        )
+        .up_to_n_times(1)
+        .with_priority(1)
+        .mount(&upstream)
+        .await;
+    Mock::given(method("POST"))
+        .respond_with(served_message())
+        .with_priority(2)
+        .mount(&upstream)
+        .await;
+    let config = format!(
+        "model_list:\n{}{}general_settings:\n  master_key: gateway-key\n",
+        deployment("primary", "primary-1", &upstream),
+        deployment("primary", "primary-2", &upstream),
+    );
+
+    let response = routed(&config, "primary").await;
+
+    assert_eq!(response.status().as_u16(), 200);
+    let headers = routing_headers(&response);
+    assert_eq!(
+        (
+            &headers[1..],
+            upstream.received_requests().await.unwrap().len()
+        ),
+        (
+            [
+                ("x-litellm-model-group", "primary"),
+                ("x-litellm-attempted-retries", "1"),
+                ("x-litellm-attempted-fallbacks", "0"),
+                ("x-litellm-max-retries", "2"),
+            ]
+            .as_slice(),
+            2,
+        )
+    );
+}
+
+#[rstest]
+#[case::strategy("routing_strategy: usage-based-routing-v2", "usage-based-routing-v2")]
+#[case::pre_call_checks("enable_pre_call_checks: true", "enable_pre_call_checks")]
+#[case::tag_filtering("enable_tag_filtering: true", "enable_tag_filtering")]
+#[case::health_check_routing("enable_health_check_routing: true", "enable_health_check_routing")]
+#[case::affinity("model_group_affinity_config: {}", "model_group_affinity_config")]
+#[tokio::test]
+async fn a_router_setting_the_gateway_cannot_serve_fails_the_build(
+    #[case] setting: &str,
+    #[case] named: &str,
+) {
+    let config = Config::from_yaml(&format!(
+        "model_list:\n  - model_name: public-model\n    litellm_params:\n      model: anthropic/claude-unlisted-9\nrouter_settings:\n  {setting}\n"
+    ))
+    .unwrap();
+
+    let refused = litellm_gateway::build_inference(&config)
+        .await
+        .err()
+        .map(|error| litellm_error::Report::new(&error).to_string())
+        .unwrap();
+
+    assert!(refused.contains(named), "{refused}");
 }
 
 async fn forwarded_body(deployment_params: &str, client_params: Value) -> Value {
@@ -357,7 +536,7 @@ async fn forwarded_body(deployment_params: &str, client_params: Value) -> Value 
         .unwrap();
 
     let response = litellm_gateway::router(
-        litellm_gateway::build_inference(&config).unwrap(),
+        litellm_gateway::build_inference(&config).await.unwrap(),
         &config,
         None,
         None,
@@ -454,7 +633,7 @@ async fn forwards_a_param_the_catalog_says_the_model_supports(
         .unwrap();
 
     let response = litellm_gateway::router(
-        litellm_gateway::build_inference(&config).unwrap(),
+        litellm_gateway::build_inference(&config).await.unwrap(),
         &config,
         None,
         None,

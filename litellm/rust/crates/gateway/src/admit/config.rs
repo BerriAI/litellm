@@ -1,6 +1,6 @@
-use litellm_config::{
-    AdditionalFields, Config, GeneralSettings, LiteLlmSettings, Model, Object, RouterSettings,
-};
+use std::collections::BTreeMap;
+
+use litellm_config::{Config, GeneralSettings, LiteLlmSettings, Model, Object, RouterSettings};
 
 /// One thing that puts a deployment outside what the gateway is known to serve the way Python
 /// does.
@@ -14,8 +14,14 @@ pub enum Unsupported {
     NoMasterKey,
     #[error("model `{0}` is a wildcard")]
     WildcardModel(String),
-    #[error("model `{0}` has several deployments")]
-    LoadBalancedModel(String),
+    #[error("the router does not serve this configuration: {0}")]
+    Router(String),
+}
+
+impl From<&litellm_router_core::ConfigError> for Unsupported {
+    fn from(refused: &litellm_router_core::ConfigError) -> Self {
+        Self::Router(litellm_error::Report::new(refused).to_string())
+    }
 }
 
 /// Everything in a deployment the gateway is not known to honor the way Python does, each named
@@ -96,9 +102,9 @@ fn unset<const N: usize>(
         .map(move |(name, _)| Unsupported::Setting(format!("{section}{name}")))
 }
 
-fn only(
+fn only<V>(
     section: &str,
-    fields: &AdditionalFields,
+    fields: &BTreeMap<String, V>,
     known: &[&str],
 ) -> impl Iterator<Item = Unsupported> {
     fields
@@ -216,64 +222,40 @@ fn general(settings: &GeneralSettings) -> impl Iterator<Item = Unsupported> {
 
 fn router(settings: &RouterSettings) -> impl Iterator<Item = Unsupported> {
     let RouterSettings {
-        routing_strategy,
-        routing_strategy_args,
-        routing_groups,
-        retry_policy,
-        model_group_retry_policy,
-        model_group_affinity_config,
-        allowed_fails,
-        cooldown_time,
-        num_retries,
-        timeout,
-        max_retries,
-        retry_after,
-        fallbacks,
-        context_window_fallbacks,
-        model_group_alias,
-        enable_tag_filtering,
-        weights,
-        tag_routing_prefix,
-        optional_pre_call_checks,
+        // router-core reads these. Its build refuses at boot any it can't serve without Python
+        // (`HostFacts.capabilities`), and that refusal is an `Unsupported::Router`.
+        routing_strategy: _,
+        routing_strategy_args: _,
+        routing_groups: _,
+        retry_policy: _,
+        model_group_retry_policy: _,
+        allowed_fails_policy: _,
+        model_group_affinity_config: _,
+        allowed_fails: _,
+        cooldown_time: _,
+        disable_cooldowns: _,
+        num_retries: _,
+        timeout: _,
+        request_timeout: _,
+        max_retries: _,
+        retry_after: _,
+        fallbacks: _,
+        context_window_fallbacks: _,
+        content_policy_fallbacks: _,
+        default_fallbacks: _,
+        max_fallbacks: _,
+        model_group_alias: _,
+        enable_pre_call_checks: _,
+        enable_weighted_failover: _,
+        enable_health_check_routing: _,
+        fallback_on_unsupported_params: _,
+        enable_tag_filtering: _,
+        weights: _,
+        tag_routing_prefix: _,
+        optional_pre_call_checks: _,
         additional_fields,
     } = settings;
-    unset(
-        "router_settings.",
-        [
-            ("routing_strategy", routing_strategy.is_some()),
-            ("routing_strategy_args", routing_strategy_args.is_some()),
-            ("routing_groups", routing_groups.is_some()),
-            ("retry_policy", retry_policy.is_some()),
-            (
-                "model_group_retry_policy",
-                model_group_retry_policy.is_some(),
-            ),
-            (
-                "model_group_affinity_config",
-                model_group_affinity_config.is_some(),
-            ),
-            ("allowed_fails", allowed_fails.is_some()),
-            ("cooldown_time", cooldown_time.is_some()),
-            ("num_retries", num_retries.is_some()),
-            ("timeout", timeout.is_some()),
-            ("max_retries", max_retries.is_some()),
-            ("retry_after", retry_after.is_some()),
-            ("fallbacks", fallbacks.is_some()),
-            (
-                "context_window_fallbacks",
-                context_window_fallbacks.is_some(),
-            ),
-            ("model_group_alias", model_group_alias.is_some()),
-            ("enable_tag_filtering", enable_tag_filtering.is_some()),
-            ("weights", weights.is_some()),
-            ("tag_routing_prefix", tag_routing_prefix.is_some()),
-            (
-                "optional_pre_call_checks",
-                optional_pre_call_checks.is_some(),
-            ),
-        ],
-    )
-    .chain(only("router_settings.", additional_fields, &[]))
+    only("router_settings.", additional_fields, &[])
 }
 
 fn litellm(settings: &LiteLlmSettings) -> impl Iterator<Item = Unsupported> {
@@ -316,10 +298,12 @@ fn litellm(settings: &LiteLlmSettings) -> impl Iterator<Item = Unsupported> {
 }
 
 fn models(models: &[Model]) -> impl Iterator<Item = Unsupported> {
-    models.iter().enumerate().flat_map(move |(index, model)| {
+    models.iter().flat_map(|model| {
         let Model {
             model_name,
+            // router-core builds deployments from these, as it does for Python.
             litellm_params: _,
+            written_params: _,
             model_info,
             blocked,
             additional_fields,
@@ -327,20 +311,10 @@ fn models(models: &[Model]) -> impl Iterator<Item = Unsupported> {
         let wildcard = model_name
             .contains('*')
             .then(|| Unsupported::WildcardModel(model_name.clone()));
-        let load_balanced = models[..index]
-            .iter()
-            .any(|earlier| earlier.model_name == *model_name)
-            .then(|| Unsupported::LoadBalancedModel(model_name.clone()));
         wildcard
             .into_iter()
-            .chain(load_balanced)
-            .chain(unset(
-                "model_list.",
-                [
-                    ("model_info", !model_info.is_empty()),
-                    ("blocked", blocked.is_some()),
-                ],
-            ))
+            .chain(unset("model_list.", [("blocked", blocked.is_some())]))
+            .chain(only("model_list.model_info.", model_info, &["id"]))
             .chain(only("model_list.", additional_fields, &[]))
     })
 }
@@ -409,6 +383,7 @@ mod tests {
     #[case::cache_off("litellm_settings: {cache: false}")]
     #[case::no_callbacks("litellm_settings: {callbacks: []}")]
     #[case::variables("environment_variables: {OPENAI_API_KEY: sk-provider}")]
+    #[case::router_core_setting("router_settings: {fallbacks: [{a: [b]}], num_retries: 2}")]
     fn serves_sections_on_the_allowlist(#[case] section: &str) {
         assert_eq!(unsupported(&with_section(section), &no_env), vec![]);
     }
@@ -434,10 +409,6 @@ mod tests {
         "litellm_settings: {max_budget: 10}",
         "litellm_settings.max_budget"
     )]
-    #[case::fallbacks(
-        "router_settings: {fallbacks: [{a: [b]}]}",
-        "router_settings.fallbacks"
-    )]
     #[case::unknown_router_setting(
         "router_settings: {redis_host: localhost}",
         "router_settings.redis_host"
@@ -454,11 +425,11 @@ mod tests {
     )]
     #[case::load_balanced(
         "[{model_name: a, litellm_params: {model: openai/a}}, {model_name: a, litellm_params: {model: openai/b}}]",
-        vec![Unsupported::LoadBalancedModel("a".into())]
+        vec![]
     )]
-    #[case::three_deployments_named_once(
-        "[{model_name: a, litellm_params: {model: openai/a}}, {model_name: a, litellm_params: {model: openai/b}}, {model_name: a, litellm_params: {model: openai/c}}]",
-        vec![Unsupported::LoadBalancedModel("a".into())]
+    #[case::model_id(
+        "[{model_name: a, litellm_params: {model: openai/a}, model_info: {id: a-1}}]",
+        vec![]
     )]
     #[case::wildcard(
         "[{model_name: 'openai/*', litellm_params: {model: 'openai/*'}}]",
@@ -466,12 +437,9 @@ mod tests {
     )]
     #[case::model_info(
         "[{model_name: a, litellm_params: {model: openai/a}, model_info: {base_model: gpt}}]",
-        setting("model_list.model_info")
+        setting("model_list.model_info.base_model")
     )]
-    fn serves_only_models_with_one_plain_deployment(
-        #[case] models: &str,
-        #[case] expected: Vec<Unsupported>,
-    ) {
+    fn serves_models_router_core_builds(#[case] models: &str, #[case] expected: Vec<Unsupported>) {
         let config = Config::from_yaml(&format!(
             "model_list: {models}\ngeneral_settings:\n  master_key: sk-master\n"
         ))
@@ -530,10 +498,10 @@ mod tests {
         let config = Config::from_yaml(
             "model_list:
   - {model_name: a, litellm_params: {model: openai/a}, model_info: {base_model: gpt}}
-  - {model_name: a, litellm_params: {model: openai/b}, model_info: {base_model: gpt}}
+  - {model_name: b, litellm_params: {model: openai/b}, model_info: {base_model: gpt}}
 guardrails: [{guardrail_name: pii}]
 general_settings: {max_request_size_mb: 10, alerting: [slack]}
-router_settings: {num_retries: 2}
+router_settings: {redis_host: localhost}
 litellm_settings: {cache: true, callbacks: [prometheus]}
 ",
         )
@@ -547,11 +515,10 @@ litellm_settings: {cache: true, callbacks: [prometheus]}
                 Unsupported::NoMasterKey,
                 Unsupported::Setting("general_settings.max_request_size_mb".into()),
                 Unsupported::Setting("general_settings.alerting".into()),
-                Unsupported::Setting("router_settings.num_retries".into()),
+                Unsupported::Setting("router_settings.redis_host".into()),
                 Unsupported::Setting("litellm_settings.cache".into()),
                 Unsupported::Setting("litellm_settings.callbacks".into()),
-                Unsupported::Setting("model_list.model_info".into()),
-                Unsupported::LoadBalancedModel("a".into()),
+                Unsupported::Setting("model_list.model_info.base_model".into()),
             ]
         );
     }

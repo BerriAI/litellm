@@ -63,7 +63,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let level = settings.log_level();
     Logger::new(StderrSink { level }).install_global()?;
     let config = litellm_config_load::load(settings.litellm_config)?;
-    let inference = litellm_gateway::build_inference(&config)?;
+    let inference = litellm_gateway::build_inference(&config).await?;
     let _redis =
         litellm_gateway::build_redis(&config, &inference.resources.pool, &inference.http).await?;
     let ui = match std::env::var_os("LITELLM_UI_PATH") {
@@ -143,18 +143,27 @@ async fn in_front_of_python(
 ) -> Result<(), Box<dyn Error>> {
     let config = litellm_config_load::load(config)?;
     let unsupported = litellm_gateway::unsupported(&config, &|name| std::env::var(name).ok());
-    if !unsupported.is_empty() {
-        for reason in &unsupported {
-            tracing::info!(%reason, "the gateway does not support this configuration");
+    let built = match unsupported.is_empty() {
+        false => Err(unsupported),
+        true => match litellm_gateway::build_inference(&config).await {
+            Err(litellm_gateway::Error::RouterConfig(refused)) => Err(vec![(&refused).into()]),
+            built => Ok(built?),
+        },
+    };
+    let inference = match built {
+        Ok(inference) => inference,
+        Err(unsupported) => {
+            for reason in &unsupported {
+                tracing::info!(%reason, "the gateway does not support this configuration");
+            }
+            tracing::info!(
+                reasons = unsupported.len(),
+                "python serves every request until the gateway supports the whole configuration"
+            );
+            litellm_gateway_forward::run_app(forward, Forward::without_native, shutdown).await?;
+            return Ok(());
         }
-        tracing::info!(
-            reasons = unsupported.len(),
-            "python serves every request until the gateway supports the whole configuration"
-        );
-        litellm_gateway_forward::run_app(forward, Forward::without_native, shutdown).await?;
-        return Ok(());
-    }
-    let inference = litellm_gateway::build_inference(&config)?;
+    };
     let auth = litellm_gateway_auth::Auth::from_config(&config, inference.secrets.clone());
     let admission = litellm_gateway::Admission::new(&config, auth);
     let native = litellm_gateway::admitted_router(inference);

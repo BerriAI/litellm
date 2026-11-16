@@ -4,3 +4,4 @@
 - Let the `inference-<fmt>` crates validate inference fields and supported features, then map their errors to HTTP responses. Do not add gateway checks for temporary inference limitations
 - Use injected deployments, HTTP pools, settings, and secret sources. Do not load process configuration or construct independent clients in handlers
 - Test HTTP contracts here, including status codes, forwarded headers, error envelopes, and streaming behavior. Keep inference and provider tests in their owning crates
+- Routes go through router-core in `routing.rs`: `call` authorizes the name and hands the core a `RouteAttempt` per route. Every other hostcall is answered by the `Host` the `Gateway<H>` was built with. This crate implements no router-core host trait, so the routes never learn which host serves them

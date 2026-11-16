@@ -11,13 +11,13 @@ use serde_json::{Map, Value};
 use tracing::warn;
 
 use crate::{
-    Core, RouterStateSnapshot,
+    Call, RouterStateSnapshot,
     config::Op,
     error::{AttemptError, ConfigError, Error, FailureKind, Unsupported},
     fallback::{FallbackKeys, FallbackTarget, Fallbacks},
     health::{GroupShape, should_retry_status, team_model_has_alternatives},
     host::{
-        Attempt, Blocked, Output, PickError, RetryCause, RouterEvent, RouterRequest,
+        Attempt, Blocked, PickError, RetryCause, RouterEvent, RouterHost, RouterRequest, Served,
         UncountedRetries,
     },
     host_index::python_str,
@@ -42,8 +42,8 @@ const JITTER: f64 = 0.75;
 const MAX_HONOURED_RETRY_AFTER: Duration = Duration::from_secs(60);
 
 #[derive(Clone, Debug)]
-pub struct RouterResponse {
-    pub output: Output,
+pub struct RouterResponse<R> {
+    pub output: Served<R>,
     pub deployment_id: String,
     pub model_group: String,
     pub attempted_retries: u32,
@@ -283,12 +283,12 @@ fn retried_failure(error: &Error) -> Option<Cow<'_, AttemptError>> {
     }
 }
 
-impl Core {
+impl<H: RouterHost> Call<'_, H> {
     pub(crate) async fn call(
         &self,
         op: Op,
         request: Arc<RouterRequest>,
-    ) -> Result<RouterResponse, Error> {
+    ) -> Result<RouterResponse<H::Response>, Error> {
         let snapshot = self.snapshot.load_full();
         let mut chain = FallbackChain::default();
         let target = Target {
@@ -322,7 +322,7 @@ impl Core {
         target: Target,
         at: FallbackHop,
         chain: &'a mut FallbackChain,
-    ) -> BoxFuture<'a, Result<RouterResponse, Error>> {
+    ) -> BoxFuture<'a, Result<RouterResponse<H::Response>, Error>> {
         Box::pin(async move {
             let failed = match self
                 .with_retries(snapshot, op, request, &target, at, &chain.attempted)
@@ -352,7 +352,7 @@ impl Core {
         at: FallbackHop,
         chain: &mut FallbackChain,
         failed: Failed,
-    ) -> Result<RouterResponse, Error> {
+    ) -> Result<RouterResponse<H::Response>, Error> {
         let Failed {
             error,
             deployment_id: failed_id,
@@ -478,7 +478,7 @@ impl Core {
         at: FallbackHop,
         chain: &'a mut FallbackChain,
         targets: Vec<Next>,
-    ) -> BoxFuture<'a, Result<RouterResponse, Option<Error>>> {
+    ) -> BoxFuture<'a, Result<RouterResponse<H::Response>, Option<Error>>> {
         Box::pin(async move {
             let max_fallbacks = request
                 .max_fallbacks
@@ -520,7 +520,7 @@ impl Core {
                         // An order level of the group a pre-routing hook selected passes the
                         // fallback gates as any group the level did not serve does.
                         if *group != target.group {
-                            match self.host.allow_fallback(request, group).await {
+                            match self.host.allow_fallback(group).await {
                                 Ok(true) => {}
                                 Ok(false) => continue,
                                 Err(raised) => return Err(Some(Error::Attempt(raised))),
@@ -558,7 +558,7 @@ impl Core {
                         {
                             // A check that raises ends the loop outside its `try`, as the
                             // chain's own failure.
-                            match self.host.allow_fallback(request, model).await {
+                            match self.host.allow_fallback(model).await {
                                 Ok(true) => {}
                                 Ok(false) => continue,
                                 Err(raised) => return Err(Some(Error::Attempt(raised))),
@@ -711,7 +711,7 @@ impl Core {
             .map(|d| d.id.clone())
             .collect();
         let cooling = self
-            .health
+            .health()
             .active_cooldowns(&snapshot.registry.ids())
             .await
             .unwrap_or_default();
@@ -862,7 +862,7 @@ impl Core {
         inputs: &SelectInputs,
         max_retries: u32,
         place: (FallbackHop, &[Tried]),
-    ) -> Result<RouterResponse, Failed> {
+    ) -> Result<RouterResponse<H::Response>, Failed> {
         if request.mock_failure != Some(MockFailure::RateLimit) {
             return self
                 .attempt(
@@ -896,7 +896,7 @@ impl Core {
         target: &Target,
         at: FallbackHop,
         attempted: &[Tried],
-    ) -> Result<RouterResponse, Failed> {
+    ) -> Result<RouterResponse<H::Response>, Failed> {
         let place = (at, attempted);
         let mut inputs = SelectInputs {
             target_order: target.order,
@@ -1002,7 +1002,10 @@ impl Core {
                 // `_async_get_healthy_deployments` swallows the lookup's error and still reads the
                 // cooldowns: a Redis round trip the refused pick's failure log runs across.
                 Err(_) => {
-                    let _ = self.health.active_cooldowns(&snapshot.registry.ids()).await;
+                    let _ = self
+                        .health()
+                        .active_cooldowns(&snapshot.registry.ids())
+                        .await;
                     Vec::new()
                 }
             };
@@ -1230,13 +1233,13 @@ impl Core {
         inputs: &SelectInputs,
         (retry, max_retries): (u32, u32),
         (at, attempted): (FallbackHop, &[Tried]),
-    ) -> Result<RouterResponse, Failed> {
+    ) -> Result<RouterResponse<H::Response>, Failed> {
         if request.unrouted {
             return self
                 .unrouted_attempt(snapshot, op, request, target, (retry, max_retries), at)
                 .await;
         }
-        let pick_started = self.health.now_time();
+        let pick_started = self.health().now_time();
         let (deployment, candidates) = match self
             .picked(snapshot, op, request, target, inputs, retry, at)
             .await
@@ -1254,12 +1257,12 @@ impl Core {
             model_group: candidates.model_group.clone(),
             deployment_id: deployment.id.clone(),
             pick: self
-                .health
+                .health()
                 .now_time()
                 .duration_since(pick_started)
                 .unwrap_or_default(),
         });
-        if !self.host.supports(op, deployment.provider()) {
+        if !(self.facts.supports)(op, deployment.provider()) {
             return Err(Error::Config(ConfigError::Unsupported(Unsupported::Op {
                 op: op.clone(),
                 provider: deployment.provider().to_owned(),
@@ -1283,7 +1286,7 @@ impl Core {
                     },
                     None,
                     snapshot.settings.dynamic.default_ref(),
-                    self.health.timestamp(),
+                    self.health().timestamp(),
                 ),
                 Ok(None)
             );
@@ -1313,7 +1316,7 @@ impl Core {
         // request's `OutcomeCallbacks` reach, except a deferred stream's: its request counts now
         // (`increment_deployment_usage_for_response`), its success or failure when the host reports
         // the stream's end.
-        match self.host.invoke(&attempt).await {
+        match self.host.attempt(&attempt).await {
             Ok(output) => {
                 // `_should_raise_content_policy_error`: a blocked response is raised only when
                 // a content-policy fallback would serve it, and counts as no failure.
@@ -1343,14 +1346,14 @@ impl Core {
                 let recorded = match (output.deferred, tracks) {
                     (true, true) => {
                         let tokens = output.total_tokens as f64;
-                        self.health
+                        self.health()
                             .add_usage(&deployment, None, tokens, 1.0)
                             .await
                             .map(|_| ())
                     }
                     (true, false) => Ok(()),
                     (false, _) => {
-                        self.health
+                        self.health()
                             .record_success(callbacks, &deployment, output.total_tokens, tracks)
                             .await
                     }
@@ -1387,13 +1390,26 @@ impl Core {
                 })
             }
             Err(failure) => {
-                if !failure.recorded {
-                    self.record_failure(snapshot, request, &candidates, &deployment, &failure)
-                        .await;
-                }
+                let error = self.failed(failure);
+                let failed_deployment = match &error {
+                    Error::Attempt(failure) => {
+                        if !failure.recorded {
+                            self.record_failure(
+                                snapshot,
+                                request,
+                                &candidates,
+                                &deployment,
+                                failure,
+                            )
+                            .await;
+                        }
+                        Some(deployment.id.clone())
+                    }
+                    _ => None,
+                };
                 Err(Failed {
-                    error: Box::new(Error::Attempt(failure)),
-                    deployment_id: Some(deployment.id.clone()),
+                    error: Box::new(error),
+                    deployment_id: failed_deployment,
                     routed: routed_name(target, &candidates),
                     served_as: candidates.served_as.clone(),
                 })
@@ -1474,7 +1490,7 @@ impl Core {
         target: &Target,
         (retry, max_retries): (u32, u32),
         at: FallbackHop,
-    ) -> Result<RouterResponse, Failed> {
+    ) -> Result<RouterResponse<H::Response>, Failed> {
         let deployment =
             Arc::new(crate::registry::Deployment::unrouted(&target.group).map_err(Error::from)?);
         let attempt = Attempt {
@@ -1495,7 +1511,7 @@ impl Core {
             max_retries,
             model_group_size: snapshot.registry.model_list_len(&target.group),
         };
-        match self.host.invoke(&attempt).await {
+        match self.host.attempt(&attempt).await {
             Ok(output) => Ok(RouterResponse {
                 output,
                 deployment_id: String::new(),
@@ -1504,7 +1520,7 @@ impl Core {
                 max_retries: None,
                 attempted_fallbacks: at.depth,
             }),
-            Err(failure) => Err(Error::Attempt(failure).into()),
+            Err(failure) => Err(self.failed(failure).into()),
         }
     }
 
@@ -1563,7 +1579,7 @@ impl Core {
         if failure.uncounted_request {
             return;
         }
-        if let Err(error) = self.health.count_failed_request(deployment, None).await {
+        if let Err(error) = self.health().count_failed_request(deployment, None).await {
             warn!(deployment_id = %deployment.id, error = %error, "usage was not recorded");
         }
     }
@@ -1637,7 +1653,7 @@ impl Core {
         };
         self.count_failed_request(deployment, failure).await;
         match self
-            .health
+            .health()
             .record_failure(
                 &snapshot.settings,
                 deployment,

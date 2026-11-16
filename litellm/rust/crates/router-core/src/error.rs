@@ -1,17 +1,25 @@
 //! The router's errors: [`ConfigError`] when a router is built or changed, [`Error`] when a call
 //! or a selection fails, and [`AttemptError`], the typed facts of one failed attempt.
 
-use std::{any::Any, fmt, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
 
-use crate::config::{Op, RoutingStrategy};
+use crate::{
+    config::{Op, RoutingStrategy},
+    host::Capability,
+};
 
 /// What a host cannot serve, found when the router is built rather than partway through a call.
 #[derive(Clone, Debug, PartialEq, thiserror::Error)]
 pub enum Unsupported {
-    #[error("routing strategy `{0}` needs a host that can select")]
+    #[error("routing strategy `{0}` needs a host that {needs}", needs = Capability::Select)]
     Strategy(RoutingStrategy),
-    #[error("routing plugin `{0}` needs a host that can select")]
+    #[error("routing plugin `{0}` needs a host that {needs}", needs = Capability::Select)]
     Plugin(String),
+    #[error("`{setting}` needs a host that {needs}")]
+    Setting {
+        setting: &'static str,
+        needs: Capability,
+    },
     #[error("the host cannot run operation `{op}` on provider `{provider}`")]
     Op { op: Op, provider: String },
 }
@@ -23,6 +31,12 @@ pub enum ConfigError {
     #[error("deployment `{model_name}` has invalid litellm_params")]
     InvalidDeployment {
         model_name: String,
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error("router_settings.{setting} is invalid")]
+    Setting {
+        setting: &'static str,
         #[source]
         source: serde_json::Error,
     },
@@ -49,6 +63,9 @@ pub enum Error {
     },
     #[error("the attempt failed")]
     Attempt(#[from] AttemptError),
+    /// The host ended the call from inside an attempt ([`crate::AttemptFailure::Refused`]).
+    #[error("the host refused the call")]
+    Refused(RaisedAt),
     #[error("the routing cache failed")]
     Cache(#[from] litellm_cache::Error),
     #[error("the router was retired")]
@@ -131,6 +148,7 @@ impl Error {
         match self {
             Self::Attempt(attempt) => Some(attempt),
             Self::Config(_)
+            | Self::Refused(_)
             | Self::UnknownModel { .. }
             | Self::NoHealthyDeployments { .. }
             | Self::Cache(_)
@@ -191,6 +209,7 @@ impl Error {
             Self::IndexOutOfRange { .. } => (&["IndexError", "LookupError"], None),
             Self::DefaultDeploymentRaises { .. } => (&["Exception"], None),
             Self::Attempt(_)
+            | Self::Refused(_)
             | Self::Config(_)
             | Self::Cache(_)
             | Self::Retired
@@ -264,6 +283,7 @@ impl Error {
                 model: model.clone(),
             },
             Self::Attempt(_)
+            | Self::Refused(_)
             | Self::Config(_)
             | Self::Cache(_)
             | Self::Retired
@@ -330,16 +350,28 @@ pub enum FailureKind {
     Other,
 }
 
-/// An opaque value the host hands through the router unchanged, such as the original Python
-/// exception or response object.
-#[derive(Clone)]
-pub struct Payload(pub Arc<dyn Any + Send + Sync>);
-
-impl fmt::Debug for Payload {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("Payload(..)")
+impl FailureKind {
+    /// The exception class litellm maps a provider's HTTP status to (`exception_type`).
+    pub fn from_status(status: u16) -> Self {
+        match status {
+            400 | 422 => Self::BadRequest,
+            401 => Self::Authentication,
+            403 => Self::PermissionDenied,
+            404 => Self::NotFound,
+            408 | 504 => Self::Timeout,
+            429 => Self::RateLimit,
+            502 => Self::BadGateway,
+            503 | 529 => Self::ServiceUnavailable,
+            500..=599 => Self::InternalServer,
+            _ => Self::Other,
+        }
     }
 }
+
+/// Which of the call's host failures an error stands for: the slot the call keeps the host's own
+/// error in, handed back in [`crate::CallError::raised`] when the call ends on it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RaisedAt(pub(crate) usize);
 
 /// One failed attempt, as typed facts the retry, fallback and cooldown rules decide by.
 #[derive(Clone, Debug, thiserror::Error)]
@@ -387,7 +419,7 @@ pub struct AttemptError {
     /// The failure counts against no per-minute requests: `async_deployment_callback_on_failure`
     /// does not run for a sync call, and returns at once for a batch retrieve.
     pub uncounted_request: bool,
-    pub payload: Option<Payload>,
+    pub(crate) raised_at: Option<RaisedAt>,
 }
 
 impl AttemptError {
@@ -407,7 +439,17 @@ impl AttemptError {
             caller_scoped: false,
             status_absent: false,
             uncounted_request: false,
-            payload: None,
+            raised_at: None,
+        }
+    }
+
+    /// A provider's own error answer, which says something about the deployment that gave it.
+    pub fn from_provider(status: u16, detail: &str, retry_after: Option<Duration>) -> Self {
+        Self {
+            retry_after,
+            detail: Some(detail.into()),
+            names_provider: true,
+            ..Self::new(FailureKind::from_status(status), Some(status))
         }
     }
 

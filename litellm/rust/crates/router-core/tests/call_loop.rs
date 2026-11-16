@@ -3,13 +3,13 @@
 
 use std::{collections::VecDeque, sync::Arc, time::Duration};
 
-use async_trait::async_trait;
 use litellm_router_core::{
-    Attempt, AttemptError, CallbackFiltered, Deployment, Error, FailureKind, FailureReport, Host,
-    InMemoryRouterCache, Op, Output, Payload, Router, RouterCache, RouterConfig,
-    RouterDynamicConfig, RouterEvent, RouterRequest, RoutingContext, SeededRandomness, SelectStage,
-    SuccessReport, UsageWindow, call::StreamOrigin, fallback::Fallbacks, health::current_minute,
-    host::UncountedRetries, select::PassThrough,
+    Attempt, AttemptError, AttemptFailure, CallbackFiltered, ConfigError, Deployment, Error,
+    FailureKind, FailureReport, Health, HostFacts, InMemoryRouterCache, Op, Router, RouterCache,
+    RouterConfig, RouterDynamicConfig, RouterEvent, RouterHost, RouterRequest, RouterResponse,
+    RoutingContext, SeededRandomness, SelectStage, Served, SuccessReport, UsageWindow,
+    call::StreamOrigin, fallback::Fallbacks, health::current_minute, host::UncountedRetries,
+    select, select::PassThrough,
 };
 use parking_lot::Mutex;
 use rstest::{fixture, rstest};
@@ -23,7 +23,7 @@ struct ScriptedHost {
     cache: InMemoryRouterCache,
     /// Answer every success as a stream whose outcome the host reports when it ends.
     deferred: bool,
-    /// [`Output::tracks_usage`] on every success.
+    /// [`Served::tracks_usage`] on every success.
     tracks_usage: Option<bool>,
     /// Refuse every fallback chain with a dict target.
     refuses_dict_targets: bool,
@@ -33,6 +33,8 @@ struct ScriptedHost {
     pick_failures: Mutex<VecDeque<AttemptError>>,
     /// The next attempt's failure, whatever group it serves.
     first_failure: Mutex<Option<AttemptError>>,
+    /// Every attempt ends the call from inside it.
+    refuses: bool,
     /// The callback filters pin to this deployment until an attempt of the request failed on it,
     /// as `encrypted_content_affinity` does.
     pinned: Option<&'static str>,
@@ -75,11 +77,32 @@ impl ScriptedHost {
     }
 }
 
-#[async_trait]
-impl Host for ScriptedHost {
-    async fn invoke(&self, attempt: &Attempt) -> Result<Output, AttemptError> {
+/// The host error behind a scripted failure: the deployment it was raised on.
+#[derive(Debug, PartialEq)]
+struct Raised(String);
+
+impl ScriptedHost {
+    fn raised(attempt: &Attempt, facts: AttemptError) -> AttemptFailure<Raised> {
+        AttemptFailure::Failed {
+            facts,
+            raised: Raised(attempt.deployment.id.clone()),
+        }
+    }
+}
+
+impl RouterHost for ScriptedHost {
+    type Response = String;
+    type Failure = Raised;
+    type Cache = InMemoryRouterCache;
+
+    async fn attempt(&self, attempt: &Attempt) -> Result<Served<String>, AttemptFailure<Raised>> {
+        if self.refuses {
+            return Err(AttemptFailure::Refused(Raised(
+                attempt.deployment.id.clone(),
+            )));
+        }
         if let Some(failure) = self.first_failure.lock().take() {
-            return Err(failure);
+            return Err(Self::raised(attempt, failure));
         }
         let next = self
             .script
@@ -88,13 +111,11 @@ impl Host for ScriptedHost {
             .find(|(group, _)| *group == attempt.model_group)
             .and_then(|(_, failures)| failures.pop_front());
         match next {
-            Some(failure) => Err(failure),
-            None => Ok(Output {
-                value: Payload(Arc::new(attempt.deployment.id.clone())),
-                total_tokens: 10,
-                blocked: None,
+            Some(failure) => Err(Self::raised(attempt, failure)),
+            None => Ok(Served {
                 deferred: self.deferred,
                 tracks_usage: self.tracks_usage,
+                ..Served::new(attempt.deployment.id.clone(), 10)
             }),
         }
     }
@@ -129,11 +150,7 @@ impl Host for ScriptedHost {
         })
     }
 
-    async fn allow_fallback(
-        &self,
-        _request: &RouterRequest,
-        _target: &str,
-    ) -> Result<bool, AttemptError> {
+    async fn allow_fallback(&self, _target: &str) -> Result<bool, AttemptError> {
         match self.fallback_check_raises {
             Some(class) => Err(AttemptError::host_raised(&[class])),
             None => Ok(true),
@@ -154,8 +171,79 @@ impl Host for ScriptedHost {
         self.events.lock().push(event.clone());
     }
 
-    fn cache(&self) -> Arc<dyn RouterCache> {
-        Arc::new(self.cache.clone())
+    fn cache(&self) -> &InMemoryRouterCache {
+        &self.cache
+    }
+}
+
+/// A router with the host its calls run on.
+struct Hosted {
+    router: Router,
+    host: Arc<ScriptedHost>,
+}
+
+impl std::ops::Deref for Hosted {
+    type Target = Router;
+
+    fn deref(&self) -> &Router {
+        &self.router
+    }
+}
+
+impl Hosted {
+    async fn call(&self, op: Op, request: RouterRequest) -> Result<RouterResponse<String>, Error> {
+        self.router
+            .call(&*self.host, op, request)
+            .await
+            .map_err(|ended| ended.error)
+    }
+
+    async fn select(&self, op: &Op, request: &RouterRequest) -> Result<Arc<Deployment>, Error> {
+        self.router.select(&*self.host, op, request).await
+    }
+
+    async fn healthy(&self, op: &Op, request: &RouterRequest) -> Result<select::Candidates, Error> {
+        self.router.healthy(&*self.host, op, request).await
+    }
+
+    fn health(&self) -> Health<&InMemoryRouterCache> {
+        self.router.health(self.host.cache())
+    }
+
+    async fn report_success(
+        &self,
+        id: &str,
+        total_tokens: f64,
+        requests: f64,
+        report: SuccessReport,
+    ) -> Result<Option<UsageWindow>, Error> {
+        self.router
+            .report_success(self.host.cache(), id, total_tokens, requests, report)
+            .await
+    }
+
+    async fn report_failure(
+        &self,
+        id: &str,
+        failure: &AttemptError,
+        report: FailureReport,
+    ) -> Result<Option<Duration>, Error> {
+        self.router
+            .report_failure(self.host.cache(), id, failure, report)
+            .await
+    }
+
+    async fn retry_stream(
+        &self,
+        op: Op,
+        request: RouterRequest,
+        origin: StreamOrigin,
+        failure: AttemptError,
+    ) -> Result<RouterResponse<String>, Error> {
+        self.router
+            .retry_stream(&*self.host, op, request, origin, failure)
+            .await
+            .map_err(|ended| ended.error)
     }
 }
 
@@ -171,12 +259,13 @@ fn config() -> RouterConfig {
     .unwrap()
 }
 
-fn router(config: RouterConfig, dynamic: serde_json::Value, host: Arc<ScriptedHost>) -> Router {
+fn router(config: RouterConfig, dynamic: serde_json::Value, host: Arc<ScriptedHost>) -> Hosted {
     let dynamic: RouterDynamicConfig = serde_json::from_value(dynamic).unwrap();
-    Router::builder(config, dynamic, host)
+    let router = Router::builder(config, dynamic, HostFacts::everything())
         .randomness(Arc::new(SeededRandomness::new(7)))
         .build()
-        .unwrap()
+        .unwrap();
+    Hosted { router, host }
 }
 
 fn request() -> RouterRequest {
@@ -272,6 +361,122 @@ async fn a_retry_leaves_a_pinned_deployment_that_failed_the_request(
     assert_eq!(
         (host.selected(), response.attempted_retries),
         (vec!["a1".to_owned(), "a2".to_owned()], 1)
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_failed_call_hands_back_the_host_error_of_the_attempt_it_ends_on(config: RouterConfig) {
+    let host = Arc::new(ScriptedHost::scripted(vec![
+        ("primary", vec![failure(FailureKind::BadRequest, 400)]),
+        ("backup", vec![server_error()]),
+    ]));
+    let hosted = router(
+        config,
+        json!({"num_retries": 0, "fallbacks": [{"primary": ["backup"]}]}),
+        host.clone(),
+    );
+    let ended = hosted
+        .router
+        .call(&*host, Op::from("acompletion"), request())
+        .await
+        .unwrap_err();
+    let selected = host.selected();
+    assert_eq!(
+        (
+            ended.error.attempt().map(|failure| failure.kind),
+            ended.raised,
+            selected.len(),
+        ),
+        (
+            Some(FailureKind::BadRequest),
+            Some(Raised(selected[0].clone())),
+            2,
+        )
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_refused_attempt_ends_the_call_without_retries_or_fallbacks(config: RouterConfig) {
+    let host = Arc::new(ScriptedHost {
+        refuses: true,
+        ..ScriptedHost::default()
+    });
+    let hosted = router(
+        config,
+        json!({"num_retries": 3, "fallbacks": [{"primary": ["backup"]}]}),
+        host.clone(),
+    );
+    let ended = hosted
+        .router
+        .call(&*host, Op::from("acompletion"), request())
+        .await
+        .unwrap_err();
+    let selected = host.selected();
+    assert!(
+        matches!(ended.error, Error::Refused(_)),
+        "{:?}",
+        ended.error
+    );
+    assert_eq!(
+        (ended.raised, selected.len(), host.retries()),
+        (Some(Raised(selected[0].clone())), 1, 0)
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn an_error_the_router_made_itself_hands_back_no_host_error(config: RouterConfig) {
+    let host = Arc::new(ScriptedHost::default());
+    let hosted = router(config, json!({}), host.clone());
+    let ended = hosted
+        .router
+        .call(&*host, Op::from("acompletion"), request_for("unconfigured"))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&ended.error, Error::UnknownModel { model } if model == "unconfigured"),
+        "{:?}",
+        ended.error
+    );
+    assert_eq!(ended.raised, None);
+}
+
+#[rstest]
+#[case::pre_call_checks(json!({"enable_pre_call_checks": true}), "`enable_pre_call_checks`")]
+#[case::callback_filters(json!({"callback_filters": true}), "`callback_filters`")]
+#[case::strategy(json!({"routing_strategy": "least-busy"}), "`least-busy`")]
+#[case::tag_filtering(json!({"enable_tag_filtering": true}), "`enable_tag_filtering`")]
+#[case::optional_checks(
+    json!({"optional_pre_call_checks": ["encrypted_content_affinity"]}),
+    "`optional_pre_call_checks`"
+)]
+#[case::health_check_routing(
+    json!({"enable_health_check_routing": true}),
+    "`enable_health_check_routing`"
+)]
+fn a_host_without_capabilities_refuses_the_settings_that_need_them(
+    #[case] settings: Value,
+    #[case] named: &str,
+) {
+    let config: RouterConfig = serde_json::from_value(settings).unwrap();
+    let facts = HostFacts {
+        capabilities: &[],
+        supports: |_, _| true,
+    };
+    let refused = match Router::new(config.clone(), RouterDynamicConfig::default(), facts) {
+        Err(ConfigError::Unsupported(unsupported)) => unsupported.to_string(),
+        other => panic!("expected an unsupported config, got {:?}", other.err()),
+    };
+    assert!(refused.contains(named), "{refused}");
+    assert!(
+        Router::new(
+            config,
+            RouterDynamicConfig::default(),
+            HostFacts::everything()
+        )
+        .is_ok()
     );
 }
 
@@ -2070,10 +2275,11 @@ async fn access_windows_follow_the_routers_clock(#[case] now: u64, #[case] expec
         ]
     }))
     .unwrap();
+    let host = ScriptedHost::default();
     let router = Router::builder(
         config,
         RouterDynamicConfig::default(),
-        Arc::new(ScriptedHost::default()),
+        HostFacts::everything(),
     )
     .randomness(Arc::new(SeededRandomness::new(7)))
     .clock(Arc::new(StoppedClock(now)))
@@ -2082,7 +2288,7 @@ async fn access_windows_follow_the_routers_clock(#[case] now: u64, #[case] expec
     let mut picked = std::collections::BTreeSet::new();
     for _ in 0..40 {
         let deployment = router
-            .select(&Op::from("acompletion"), &request_for("chat"))
+            .select(&host, &Op::from("acompletion"), &request_for("chat"))
             .await
             .unwrap();
         picked.insert(deployment.id.clone());
