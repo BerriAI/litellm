@@ -11046,6 +11046,164 @@ class TestStreamingClientDisconnectBilling:
             litellm.token_counter(model=model, text=text, count_response_tokens=True),
         )
 
+    @staticmethod
+    def _recorded_logging_obj(
+        model: str, messages: list[dict[str, str]], call_id: str, recorder: _RecordingSuccessLogger
+    ) -> LiteLLMLoggingObj:
+        logging_obj: Final = LiteLLMLoggingObj(
+            model=model,
+            messages=messages,
+            stream=True,
+            call_type="acompletion",
+            start_time=datetime.datetime(2025, 3, 3, 21, 38, 10),
+            litellm_call_id=call_id,
+            function_id=call_id,
+            dynamic_async_success_callbacks=[recorder],
+        )
+        logging_obj.update_environment_variables(
+            model=model, user=None, optional_params={}, litellm_params={"litellm_call_id": call_id}
+        )
+        return logging_obj
+
+    @pytest.mark.asyncio
+    async def test_disconnect_before_the_finish_frame_records_an_unspecified_finish_reason(self):
+        model: Final = "gpt-4o"
+        messages: Final = [{"role": "user", "content": "Write a long sentence about a fox. " * 30}]
+        text: Final = "The quick brown fox jumps over the lazy dog. " * 20
+        recorder: Final = _RecordingSuccessLogger()
+        logging_obj: Final = self._recorded_logging_obj(model, messages, "unfinished-disconnect-call", recorder)
+        response: Final = CustomStreamWrapper(
+            completion_stream=ModelResponseListIterator(
+                model_responses=[
+                    ModelResponseStream(id="chatcmpl-unfinished", created=1741037890, model=model, choices=choices)
+                    for choices in (
+                        [StreamingChoices(index=0, delta=Delta(role="assistant", content=text))],
+                        [StreamingChoices(index=0, delta=Delta(content=""), finish_reason="stop")],
+                    )
+                ]
+            ),
+            model=model,
+            custom_llm_provider="openai",
+            logging_obj=logging_obj,
+            stream_options=None,
+        )
+        first_chunk: Final = await response.__aiter__().__anext__()
+        assert first_chunk.choices[0].finish_reason is None
+
+        billed: Final = await _bill_partial_streamed_spend_on_disconnect({"litellm_logging_obj": logging_obj}, response)
+        await asyncio.wait_for(recorder.logged.wait(), timeout=5)
+
+        assert billed is True
+        assert len(recorder.success_events) == 1
+        partial_response: Final = recorder.success_events[0]["response_obj"]
+        assert [choice.finish_reason for choice in partial_response.choices] == ["finish_reason_unspecified"]
+        assert (partial_response.usage.prompt_tokens, partial_response.usage.completion_tokens) == (
+            litellm.token_counter(model=model, messages=messages),
+            litellm.token_counter(model=model, text=text, count_response_tokens=True),
+        )
+
+    @pytest.mark.parametrize(
+        "provider_frames",
+        [
+            pytest.param(
+                (
+                    [StreamingChoices(index=0, delta=Delta(role="assistant", content="partial answer"))],
+                    [StreamingChoices(index=0, delta=Delta(content=""), finish_reason="length")],
+                ),
+                id="finish-on-its-own-frame",
+            ),
+            pytest.param(
+                (
+                    [
+                        StreamingChoices(
+                            index=0, delta=Delta(role="assistant", content="partial answer"), finish_reason="length"
+                        )
+                    ],
+                ),
+                id="finish-on-the-content-frame",
+            ),
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_disconnect_after_the_provider_finished_keeps_the_received_finish_reason(
+        self, provider_frames: tuple[list[StreamingChoices], ...]
+    ):
+        model: Final = "gpt-4o"
+        recorder: Final = _RecordingSuccessLogger()
+        logging_obj: Final = self._recorded_logging_obj(
+            model, [{"role": "user", "content": "hi"}], "finished-disconnect-call", recorder
+        )
+        response: Final = CustomStreamWrapper(
+            completion_stream=ModelResponseListIterator(
+                model_responses=[
+                    ModelResponseStream(id="chatcmpl-finished", created=1741037890, model=model, choices=choices)
+                    for choices in provider_frames
+                ]
+            ),
+            model=model,
+            custom_llm_provider="openai",
+            logging_obj=logging_obj,
+            stream_options=None,
+        )
+        stream_iter: Final = response.__aiter__()
+        for _ in provider_frames:
+            await stream_iter.__anext__()
+
+        billed: Final = await _bill_partial_streamed_spend_on_disconnect({"litellm_logging_obj": logging_obj}, response)
+        await asyncio.wait_for(recorder.logged.wait(), timeout=5)
+
+        assert billed is True
+        assert len(recorder.success_events) == 1
+        partial_response: Final = recorder.success_events[0]["response_obj"]
+        assert [choice.finish_reason for choice in partial_response.choices] == ["length"]
+        assert partial_response.usage.completion_tokens > 0
+
+    @pytest.mark.asyncio
+    async def test_disconnect_marks_only_the_unfinished_choice_unspecified(self):
+        model: Final = "gpt-4o"
+        messages: Final = [{"role": "user", "content": "look both up"}]
+        recorder: Final = _RecordingSuccessLogger()
+        logging_obj: Final = self._recorded_logging_obj(model, messages, "two-choice-disconnect-call", recorder)
+
+        def tool_call_delta(call_id: str) -> Delta:
+            return Delta(
+                role="assistant",
+                tool_calls=[
+                    {"id": call_id, "type": "function", "index": 0, "function": {"name": "lookup", "arguments": "{}"}}
+                ],
+            )
+
+        collected_stream: Final = SimpleNamespace(
+            chunks=[
+                ModelResponseStream(id="chatcmpl-two", created=1741037890, model=model, choices=choices)
+                for choices in (
+                    [
+                        StreamingChoices(index=0, delta=tool_call_delta("call_a")),
+                        StreamingChoices(index=1, delta=tool_call_delta("call_b")),
+                    ],
+                    [StreamingChoices(index=0, delta=Delta(), finish_reason="tool_calls")],
+                )
+            ],
+            messages=messages,
+            model=model,
+            received_finish_reason="tool_calls",
+        )
+
+        billed: Final = await _bill_partial_streamed_spend_on_disconnect(
+            {"litellm_logging_obj": logging_obj}, collected_stream
+        )
+        await asyncio.wait_for(recorder.logged.wait(), timeout=5)
+
+        assert billed is True
+        assert len(recorder.success_events) == 1
+        partial_response: Final = recorder.success_events[0]["response_obj"]
+        assert {choice.index: choice.finish_reason for choice in partial_response.choices} == {
+            0: "tool_calls",
+            1: "finish_reason_unspecified",
+        }
+        assert [len(choice.message.tool_calls) for choice in partial_response.choices] == [1, 1]
+        assert partial_response.usage.total_tokens > 0
+
     @pytest.mark.asyncio
     async def test_completed_stream_does_not_double_bill_on_late_disconnect(self):
         recorder = _RecordingSuccessLogger()

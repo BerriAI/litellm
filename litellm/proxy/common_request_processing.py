@@ -92,6 +92,7 @@ from litellm.litellm_core_utils.core_helpers import (
     has_attributes,
     independent_snapshot,
     is_expected_client_error,
+    map_finish_reason,
     proxy_request_headers,
     redact_nested_match_and_regex_keys,
     require_attributes,
@@ -119,6 +120,7 @@ from litellm.litellm_core_utils.served_output_texts import (
     record_served_output_texts,
     served_output_texts,
 )
+from litellm.litellm_core_utils.streaming_chunk_builder_utils import ChunkProcessor
 from litellm.litellm_core_utils.streaming_handler import (
     backfill_missing_cache_usage_fields,
 )
@@ -365,6 +367,7 @@ from litellm.proxy.litellm_pre_call_utils import (
 from litellm.proxy.policy_engine.response_retrieval import attach_post_call_pipelines_to_retrieval
 from litellm.types.litellm_params import STREAM_USAGE_INJECTED_FIELD
 from litellm.types.utils import (
+    Choices,
     LLMResponseTypes,
     ModelResponse,
     ModelResponseStream,
@@ -616,7 +619,35 @@ async def _bill_partial_streamed_spend_on_disconnect(request_data: dict, respons
     partial_usage: Final = getattr(partial_response, "usage", None)
     if isinstance(partial_usage, Usage):
         backfill_missing_cache_usage_fields(partial_usage)
+    if isinstance(partial_response, ModelResponse):
+        partial_response.choices = _choices_without_unobserved_finish_reasons(
+            partial_response.choices,
+            ChunkProcessor.choice_indices_with_observed_finish_reason(chunks),
+            getattr(response, "received_finish_reason", None),
+        )
     return await _dispatch_disconnect_billing_event(logging_obj, partial_response)
+
+
+def _choices_without_unobserved_finish_reasons(
+    choices: Sequence[Choices], observed_indices: frozenset[int], held_finish_reason: object
+) -> list[Choices]:
+    """The stream wrapper's held finish_reason does not record which choice it belongs to, so it
+    only counts as provider evidence when there is a single choice."""
+    single_choice_held_reason: Final = (
+        held_finish_reason if len(choices) == 1 and isinstance(held_finish_reason, str) and held_finish_reason else None
+    )
+    return [
+        choice if choice.index in observed_indices else _with_held_finish_reason(choice, single_choice_held_reason)
+        for choice in choices
+    ]
+
+
+def _with_held_finish_reason(choice: Choices, held_finish_reason: str | None) -> Choices:
+    if held_finish_reason is None:
+        return choice.model_copy(update={"finish_reason": "finish_reason_unspecified"})
+    finish_reason: Final = map_finish_reason(held_finish_reason)
+    ends_a_tool_call_turn: Final = finish_reason == "stop" and bool(choice.message.tool_calls)
+    return choice.model_copy(update={"finish_reason": "tool_calls" if ends_a_tool_call_turn else finish_reason})
 
 
 async def _bill_in_flight_round_on_disconnect(request_data: Mapping[str, object]) -> None:
