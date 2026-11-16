@@ -88,6 +88,7 @@ from litellm.proxy.common_utils.customer_usage import (
     customer_usage_http_status,
     normalize_customer_key_metadata,
 )
+from litellm.proxy.common_utils.key_expiry_alerts import key_expiry_alert_metadata_error
 from litellm.proxy.common_utils.openai_error_payload import openai_error_param, proxy_exception_for
 from litellm.proxy.common_utils.rbac_utils import check_org_admin_can_generate_keys
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time, keeps_due_budget_reset
@@ -959,6 +960,19 @@ def raise_on_invalid_key_logging_config(metadata: Mapping[str, object] | None) -
         raise HTTPException(status_code=400, detail={"error": error})
 
 
+def raise_on_invalid_key_expiry_alert_days(metadata: Mapping[str, object] | None) -> None:
+    """metadata.key_expiry_alert_days must be a day count the expiry alert job can act on."""
+    error: Final = key_expiry_alert_metadata_error(metadata)
+    if error is not None:
+        raise HTTPException(status_code=400, detail={"error": error})
+
+
+def raise_on_invalid_key_metadata(metadata: Mapping[str, object] | None) -> None:
+    """Every key metadata check that rejects a write: logging config and expiry alert days."""
+    raise_on_invalid_key_logging_config(metadata)
+    raise_on_invalid_key_expiry_alert_days(metadata)
+
+
 def raise_on_logging_credential_change(
     requested_metadata: object, existing_key_row: LiteLLM_VerificationToken | None, user_api_key_dict: UserAPIKeyAuth
 ) -> None:
@@ -1549,7 +1563,7 @@ async def _common_key_generation_helper(
     validate_budget_duration(data.budget_duration)
     if prisma_client is not None:
         await validate_scalar_budget_attachment(prisma_client, data.budget_id)
-    raise_on_invalid_key_logging_config(data.metadata)
+    raise_on_invalid_key_metadata(data.metadata)
     raise_on_logging_credential_change(data.metadata, None, user_api_key_dict)
 
     if data.throttle_on_budget_exceeded is True and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value:
@@ -2810,7 +2824,7 @@ def prepare_metadata_fields(data: BaseModel, non_default_values: dict, existing_
     """
     Check LiteLLM_ManagementEndpoint_MetadataFields (proxy/_types.py) for fields that are allowed to be updated
     """
-    raise_on_invalid_key_logging_config(non_default_values.get("metadata"))
+    raise_on_invalid_key_metadata(non_default_values.get("metadata"))
 
     if "metadata" not in non_default_values:  # allow user to set metadata to none
         non_default_values["metadata"] = existing_metadata.copy()

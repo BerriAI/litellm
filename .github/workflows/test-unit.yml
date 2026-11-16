@@ -126,7 +126,7 @@ jobs:
     name: ${{ matrix.shard }}
     needs: [rust-bridge, assert-shard-coverage]
     if: ${{ !cancelled() }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner || 'ubuntu-latest' }}
     timeout-minutes: ${{ matrix.job-timeout-minutes }}
     permissions:
       contents: read
@@ -220,6 +220,7 @@ jobs:
             dist: loadscope
 
           - shard: llms-providers
+            runner: ubuntu-latest-16-cores
             test-path: |-
               tests/unit/llms/test_api_base_trailing_slash_routes.py
               tests/unit/llms/test_cache_control_and_reasoning.py
@@ -380,7 +381,7 @@ jobs:
               tests/unit/llms/zai
               --ignore=tests/unit/llms/base_llm/batches/base_batches_config_test.py
             python-version: "3.12"
-            workers: 4
+            workers: 8
             reruns: 0
             timeout-minutes: 20
             job-timeout-minutes: 60
@@ -398,10 +399,11 @@ jobs:
             dist: loadscope
 
           - shard: root
+            runner: ubuntu-latest-16-cores
             test-path: >-
               tests/unit/test_*.py
             python-version: "3.12"
-            workers: 4
+            workers: 8
             reruns: 2
             timeout-minutes: 20
             job-timeout-minutes: 60
@@ -522,6 +524,7 @@ jobs:
             dist: loadscope
 
           - shard: proxy-endpoints
+            runner: ubuntu-latest-16-cores
             test-path: |-
               tests/unit/proxy/management_endpoints
               tests/unit/proxy/management_helpers
@@ -539,13 +542,14 @@ jobs:
               --ignore=tests/unit/proxy/management_endpoints/test_roi_calculator_endpoints.py
               --ignore=tests/unit/proxy/management_helpers/test_audit_logs_proxy.py
             python-version: "3.12"
-            workers: 4
+            workers: 8
             reruns: 0
             timeout-minutes: 20
             job-timeout-minutes: 60
             dist: loadscope
 
           - shard: proxy-feature-endpoints
+            runner: ubuntu-latest-16-cores
             test-path: |-
               tests/unit/proxy/guardrails
               --ignore=tests/unit/proxy/google_endpoints/test_gemini_agents_endpoints.py
@@ -578,7 +582,7 @@ jobs:
               tests/unit/proxy/config_resolvers
               tests/unit/proxy/utils
             python-version: "3.12"
-            workers: 4
+            workers: 8
             reruns: 0
             timeout-minutes: 20
             job-timeout-minutes: 60

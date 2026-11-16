@@ -181,6 +181,18 @@ class _CustomerBudgetRow(Protocol):
     def litellm_budget_table(self) -> _JoinedBudgetRow | None: ...
 
 
+def _dynamic_limiter_holder_labels(
+    kind: Literal["team", "key", "customer_org"], holder_id: str, holder_alias: str | None
+) -> Mapping[str, str | None]:
+    match kind:
+        case "team":
+            return {"team": holder_id, "team_alias": holder_alias}
+        case "key":
+            return {"hashed_api_key": holder_id, "api_key_alias": holder_alias}
+        case "customer_org":
+            return {"customer_org_id": holder_id, "customer_org_alias": holder_alias}
+
+
 def _customer_budget_metrics_enabled() -> bool:
     return litellm.enable_end_user_cost_tracking_prometheus_only is True and not litellm.disable_end_user_cost_tracking
 
@@ -4201,14 +4213,17 @@ class PrometheusLogger(CustomLogger):
     def set_dynamic_limiter_share(
         self,
         model_group: str,
-        team: str,
-        team_alias: str | None,
+        holder_kind: Literal["team", "key", "customer_org"],
+        holder_id: str,
+        holder_alias: str | None,
         priority: str,
         share_tokens: int,
         borrowed_tokens: int,
     ) -> None:
         enum_values: Final = UserAPIKeyLabelValues(
-            model_group=model_group, team=team, team_alias=team_alias, priority=priority
+            model_group=model_group,
+            priority=priority,
+            **_dynamic_limiter_holder_labels(holder_kind, holder_id, holder_alias),
         )
         self._set_labeled_gauge(
             self.litellm_dynamic_limiter_share_tokens, "litellm_dynamic_limiter_share_tokens", enum_values, share_tokens
@@ -4239,8 +4254,9 @@ class PrometheusLogger(CustomLogger):
     def increment_dynamic_limiter_throttled(
         self,
         model_group: str,
-        team: str,
-        team_alias: str | None,
+        holder_kind: Literal["team", "key", "customer_org"],
+        holder_id: str,
+        holder_alias: str | None,
         priority: str,
         rate_limit_type: str,
         reason: str,
@@ -4250,11 +4266,10 @@ class PrometheusLogger(CustomLogger):
             "litellm_dynamic_limiter_throttled_total",
             UserAPIKeyLabelValues(
                 model_group=model_group,
-                team=team,
-                team_alias=team_alias,
                 priority=priority,
                 rate_limit_type=rate_limit_type,
                 reason=reason,
+                **_dynamic_limiter_holder_labels(holder_kind, holder_id, holder_alias),
             ),
         )
 

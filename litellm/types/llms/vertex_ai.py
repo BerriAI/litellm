@@ -2,6 +2,7 @@ from collections.abc import Mapping, Sequence
 from enum import Enum
 from typing import Final, Literal, Protocol
 
+from pydantic import JsonValue
 from typing_extensions import (
     NotRequired,
     ReadOnly,
@@ -164,6 +165,7 @@ class FunctionDeclaration(TypedDict, total=False):
     name: Required[str]
     description: str
     parameters: Schema | dict
+    parametersJsonSchema: ReadOnly[Mapping[str, JsonValue]]
     response: Schema
 
 

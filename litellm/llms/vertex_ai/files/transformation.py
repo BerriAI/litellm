@@ -1339,6 +1339,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
             optional_params={},
             drop_params=drop_params,
             allow_integer_enums=False,
+            allow_parameters_json_schema=False,
         )
         return vertex_params
 

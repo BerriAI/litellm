@@ -6,6 +6,7 @@ batch under a per-minute RPM/TPM budget. Scopes that configure `tpd_limit`
 are charged against a 24h token window instead of their minute counters.
 """
 
+import base64
 import itertools
 import json
 import time
@@ -561,18 +562,13 @@ def _serve_file_to_the_deployment_key(rows: Sequence[_BatchLine]) -> Callable[[h
     return respond
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "query_string, routing_headers",
-    [(b"model=routed-batch-model", ()), (b"", ((b"x-litellm-model", b"routed-batch-model"),))],
-    ids=["query", "header"],
-)
-async def test_model_routed_batch_is_counted_with_the_deployment_key_not_the_request_key(
+async def _model_routed_batch_data(
     openai_files: respx.MockRouter,
     monkeypatch: pytest.MonkeyPatch,
     query_string: bytes,
     routing_headers: tuple[tuple[bytes, bytes], ...],
-):
+    user_api_key_dict: UserAPIKeyAuth,
+) -> tuple[dict[str, object], respx.Route]:
     from starlette.requests import Request
 
     from litellm import Router
@@ -599,7 +595,6 @@ async def test_model_routed_batch_is_counted_with_the_deployment_key_not_the_req
     file_route: Final = openai_files.get(_ROUTED_FILE_URL).mock(
         side_effect=_serve_file_to_the_deployment_key(_batch_rows(("Hello " * 50,)))
     )
-    user_api_key_dict: Final = UserAPIKeyAuth(api_key=hash_token("sk-batch"), tpm_limit=1)
     request: Final = Request(
         {
             "type": "http",
@@ -626,6 +621,28 @@ async def test_model_routed_batch_is_counted_with_the_deployment_key_not_the_req
         proxy_config=MagicMock(),
         general_settings={},
     )
+    return data, file_route
+
+
+_MODEL_ROUTES: Final = pytest.mark.parametrize(
+    "query_string, routing_headers",
+    [(b"model=routed-batch-model", ()), (b"", ((b"x-litellm-model", b"routed-batch-model"),))],
+    ids=["query", "header"],
+)
+
+
+@pytest.mark.asyncio
+@_MODEL_ROUTES
+async def test_model_routed_batch_is_counted_with_the_deployment_key_not_the_request_key(
+    openai_files: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    query_string: bytes,
+    routing_headers: tuple[tuple[bytes, bytes], ...],
+):
+    user_api_key_dict: Final = UserAPIKeyAuth(api_key=hash_token("sk-batch"), tpm_limit=1)
+    data, file_route = await _model_routed_batch_data(
+        openai_files, monkeypatch, query_string, routing_headers, user_api_key_dict
+    )
     _, _, batch_limiter = _make_limiters()
 
     with pytest.raises(HTTPException) as exc:
@@ -637,8 +654,37 @@ async def test_model_routed_batch_is_counted_with_the_deployment_key_not_the_req
     assert file_route.call_count == 1
 
 
+@pytest.mark.asyncio
+@_MODEL_ROUTES
+async def test_model_routed_batch_is_charged_to_the_project_cap_of_the_model_it_routes_to(
+    openai_files: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    query_string: bytes,
+    routing_headers: tuple[tuple[bytes, bytes], ...],
+):
+    user_api_key_dict: Final = UserAPIKeyAuth(
+        api_key=hash_token("sk-batch"),
+        project_id="project-1",
+        project_metadata={"model_batch_enqueued_token_limit": {"routed-batch-model": 1}},
+    )
+    data, _ = await _model_routed_batch_data(openai_files, monkeypatch, query_string, routing_headers, user_api_key_dict)
+    _, _, batch_limiter = _make_limiters()
+
+    with pytest.raises(HTTPException) as exc:
+        await batch_limiter.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict, cache=DualCache(), data=data, call_type="acreate_batch"
+        )
+
+    assert exc.value.status_code == 429
+    assert "project_model: project-1:routed-batch-model" in str(exc.value.detail)
+
+
 async def _install_managed_file_hook(
-    openai_files: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, rows: str
+    openai_files: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    rows: Sequence[_BatchLine],
+    file_id: str = _MANAGED_FILE_ID,
+    model_name: str = _BATCH_MODEL,
 ) -> tuple[respx.Route, respx.Route]:
     from litellm_enterprise.proxy.hooks.managed_files import _PROXY_LiteLLMManagedFiles
 
@@ -648,18 +694,18 @@ async def _install_managed_file_hook(
     from litellm.proxy.openai_files_endpoints.common_utils import is_base64_encoded_unified_file_id
     from litellm.proxy.utils import ProxyLogging
 
-    assert is_base64_encoded_unified_file_id(_MANAGED_FILE_ID)
+    assert is_base64_encoded_unified_file_id(file_id)
     provider_route: Final = _serve_file(openai_files, "file-provider-1", rows)
-    unrouted_managed_read: Final = _serve_file(openai_files, _MANAGED_FILE_ID, rows)
+    unrouted_managed_read: Final = _serve_file(openai_files, file_id, rows)
     row: Final = LiteLLM_ManagedFileTable(
-        unified_file_id=_MANAGED_FILE_ID,
+        unified_file_id=file_id,
         model_mappings={"deployment-1": "file-provider-1"},
         flat_model_file_ids=["file-provider-1"],
         created_by="test-user-regression",
         team_id="team-owner",
     )
     file_cache: Final = InternalUsageCache(dual_cache=DualCache())
-    await file_cache.async_set_cache(key=_MANAGED_FILE_ID, value=row.model_dump(), litellm_parent_otel_span=None)
+    await file_cache.async_set_cache(key=file_id, value=row.model_dump(), litellm_parent_otel_span=None)
     prisma_client: Final = MagicMock()
     prisma_client.db.litellm_managedfiletable.find_first = AsyncMock(return_value=row)
     proxy_logging: Final = ProxyLogging(user_api_key_cache=DualCache())
@@ -669,7 +715,7 @@ async def _install_managed_file_hook(
     router: Final = Router(
         model_list=[
             {
-                "model_name": _BATCH_MODEL,
+                "model_name": model_name,
                 "litellm_params": {"model": f"openai/{_BATCH_MODEL}", "api_key": "sk-test"},
                 "model_info": {"id": "deployment-1"},
             },
@@ -683,6 +729,72 @@ async def _install_managed_file_hook(
     monkeypatch.setattr(proxy_server, "proxy_logging_obj", proxy_logging)
     monkeypatch.setattr(proxy_server, "llm_router", router)
     return provider_route, unrouted_managed_read
+
+
+@pytest.mark.asyncio
+async def test_a_managed_batch_file_charges_only_the_project_cap_of_the_model_it_routes_to(
+    openai_files: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import get_request_stash
+
+    priority_group: Final = f"{_BATCH_MODEL}-priority"
+    managed_file_id: Final = base64.urlsafe_b64encode(
+        f"litellm_proxy:application/octet-stream;unified_id,priority-batch;target_model_names,{priority_group}".encode()
+    ).decode()
+    await _install_managed_file_hook(
+        openai_files, monkeypatch, _batch_rows(("Hello",) * 3), file_id=managed_file_id, model_name=priority_group
+    )
+    _, _, batch_limiter = _make_limiters()
+    data: Final = {"input_file_id": managed_file_id}
+
+    result: Final = await batch_limiter.async_pre_call_hook(
+        user_api_key_dict=UserAPIKeyAuth(
+            api_key="test-key-regression",
+            user_id="test-user-regression",
+            team_id="team-owner",
+            project_id="priority-project",
+            project_metadata={"model_batch_enqueued_token_limit": {priority_group: 1000000, _BATCH_MODEL: 1}},
+        ),
+        cache=DualCache(),
+        data=data,
+        call_type="acreate_batch",
+    )
+
+    assert result is data
+    stash: Final = get_request_stash()
+    assert stash is not None and stash.batch_enqueued_reservation is not None
+    assert [scope.value for scope in stash.batch_enqueued_reservation.scopes] == [f"priority-project:{priority_group}"]
+
+
+@pytest.mark.asyncio
+async def test_a_project_cap_on_the_routed_model_lifts_per_minute_limits_off_a_managed_batch_file(
+    openai_files: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    priority_group: Final = f"{_BATCH_MODEL}-priority"
+    managed_file_id: Final = base64.urlsafe_b64encode(
+        f"litellm_proxy:application/octet-stream;unified_id,priority-minute;target_model_names,{priority_group}".encode()
+    ).decode()
+    await _install_managed_file_hook(
+        openai_files, monkeypatch, _batch_rows(("Hello",) * 3), file_id=managed_file_id, model_name=priority_group
+    )
+    _, _, batch_limiter = _make_limiters()
+    data: Final = {"input_file_id": managed_file_id}
+
+    result: Final = await batch_limiter.async_pre_call_hook(
+        user_api_key_dict=UserAPIKeyAuth(
+            api_key="test-key-regression",
+            user_id="test-user-regression",
+            team_id="team-owner",
+            tpm_limit=1,
+            project_id="priority-project",
+            project_metadata={"model_batch_enqueued_token_limit": {priority_group: 1000000}},
+        ),
+        cache=DualCache(),
+        data=data,
+        call_type="acreate_batch",
+    )
+
+    assert result is data
 
 
 @pytest.mark.asyncio
@@ -871,6 +983,64 @@ async def test_alias_routed_row_is_charged_once_when_the_alias_and_deployment_mo
     ]
     assert key_tokens > 0
     assert project_tokens == key_tokens
+
+
+@pytest.mark.asyncio
+async def test_alias_routed_rows_are_held_to_the_enqueued_token_cap_of_the_model_they_name(
+    alias_routed_batch: respx.MockRouter,
+):
+    alias_routed_batch.get(_ROUTED_FILE_URL).mock(
+        side_effect=_serve_file_to_the_deployment_key((_row_naming(_DEPLOYMENT_MODEL),))
+    )
+    _, _, batch_limiter = _make_limiters()
+
+    with pytest.raises(HTTPException) as exc:
+        await batch_limiter.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(
+                api_key=hash_token("sk-batch"),
+                models=[_BATCH_ALIAS],
+                project_id="project-1",
+                project_metadata={"model_batch_enqueued_token_limit": {_DEPLOYMENT_MODEL: 1}},
+            ),
+            cache=DualCache(),
+            data=dict(_alias_routing("body")),
+            call_type="acreate_batch",
+        )
+
+    assert exc.value.status_code == 429
+    assert f"project_model: project-1:{_DEPLOYMENT_MODEL}" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_alias_routed_row_counts_once_toward_an_enqueued_token_cap_its_alias_shares(
+    openai_files: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "llm_router", _alias_router({_DEPLOYMENT_MODEL: _BATCH_ALIAS}))
+    openai_files.get(_ROUTED_FILE_URL).mock(
+        side_effect=_serve_file_to_the_deployment_key((_row_naming(_DEPLOYMENT_MODEL),))
+    )
+    _, _, batch_limiter = _make_limiters()
+    data: Final = _alias_routing("body")
+    user_api_key_dict: Final = UserAPIKeyAuth(api_key=hash_token("sk-batch"), models=[_BATCH_ALIAS])
+    usage: Final = await batch_limiter.count_input_file_usage(
+        file_id=data["input_file_id"], user_api_key_dict=user_api_key_dict, data=dict(data)
+    )
+
+    result: Final = await batch_limiter.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict.model_copy(
+            update={
+                "project_id": "project-1",
+                "project_metadata": {"model_batch_enqueued_token_limit": {_BATCH_ALIAS: usage.total_tokens * 3 // 2}},
+            }
+        ),
+        cache=DualCache(),
+        data=dict(data),
+        call_type="acreate_batch",
+    )
+
+    assert result["input_file_id"] == data["input_file_id"]
 
 
 @pytest.mark.asyncio

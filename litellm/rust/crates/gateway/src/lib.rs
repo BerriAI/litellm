@@ -24,6 +24,7 @@ use litellm_http::{
     media::PublicDnsResolver,
 };
 use litellm_inference::resources::CoreResources;
+use litellm_model_catalog::{BUNDLED_REGISTRY, Catalog};
 use litellm_secrets::source::EnvironmentSecrets;
 use litellm_tracing::ByteChunk;
 use uuid::Uuid;
@@ -37,7 +38,8 @@ pub fn build_inference(config: &Config) -> Result<Arc<Gateway>, Error> {
             .map(|value| value.expose().to_owned())
             .or_else(|| std::env::var(name).ok())
     };
-    let router = ModelRouter::from_config(config, &lookup);
+    let catalog = Catalog::parse(BUNDLED_REGISTRY)?.value;
+    let router = ModelRouter::from_config(config, &lookup, &catalog);
     let settings = &config.litellm_settings;
     let http_settings = HttpSettings::from_layers([
         HttpSettingsLayer::from_environment(&lookup),
