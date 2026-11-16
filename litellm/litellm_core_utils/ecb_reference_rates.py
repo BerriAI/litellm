@@ -239,7 +239,6 @@ class EcbReferenceRates:
         )
 
     def usd_rates(self) -> Mapping[str, UsdRate]:
-        """Every currency in the held feed except USD, empty when no usable rates are held."""
         state: Final = self._state
         currencies: Final = () if state is None else tuple(c for c in state.snapshot.units_per_eur if c != "USD")
         lookups: Final = tuple(self.usd_per_unit(currency) for currency in currencies)

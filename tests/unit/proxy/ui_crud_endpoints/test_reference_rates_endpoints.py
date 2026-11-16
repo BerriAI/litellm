@@ -14,7 +14,9 @@ from litellm.proxy.ui_crud_endpoints.reference_rates_endpoints import (
     EcbFeedFetch,
     _default_fetch,
     _default_rates,
+    _default_refresh_cooldown,
     _default_refresh_lock,
+    _FailedRefreshCooldown,
     router,
 )
 
@@ -52,7 +54,8 @@ class _Feed:
 
 
 class _GatedFeed:
-    def __init__(self) -> None:
+    def __init__(self, body: bytes | EcbFetchFailed = FEED) -> None:
+        self.body = body
         self.fetches = 0
         self.entered = asyncio.Event()
         self.release = asyncio.Event()
@@ -61,7 +64,7 @@ class _GatedFeed:
         self.fetches += 1
         self.entered.set()
         await self.release.wait()
-        return FEED
+        return self.body
 
 
 class _WaitSignallingLock(asyncio.Lock):
@@ -75,14 +78,29 @@ class _WaitSignallingLock(asyncio.Lock):
         return await super().acquire()
 
 
+class _Seconds:
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
 async def _caller() -> UserAPIKeyAuth:
     return UserAPIKeyAuth(api_key="sk-test", user_id="viewer")
 
 
-def _app(rates: EcbReferenceRates, feed: EcbFeedFetch, refresh_lock: asyncio.Lock | None = None) -> FastAPI:
+def _app(
+    rates: EcbReferenceRates,
+    feed: EcbFeedFetch,
+    refresh_lock: asyncio.Lock | None = None,
+    cooldown: _FailedRefreshCooldown | None = None,
+) -> FastAPI:
     app: Final = FastAPI()
     app.include_router(router)
     lock: Final = refresh_lock or asyncio.Lock()
+    refresh_cooldown: Final = cooldown or _FailedRefreshCooldown()
+    app.dependency_overrides[_default_refresh_cooldown] = lambda: refresh_cooldown
     app.dependency_overrides[user_api_key_auth] = _caller
     app.dependency_overrides[_default_rates] = lambda: rates
     app.dependency_overrides[_default_refresh_lock] = lambda: lock
@@ -161,4 +179,64 @@ async def test_concurrent_first_requests_share_one_fetch() -> None:
             await asyncio.gather(first, second, return_exceptions=True)
 
     assert [response.json() for response in responses] == [RATES_BODY, RATES_BODY]
+    assert feed.fetches == 1
+
+
+async def test_a_failed_cold_refresh_is_not_retried_until_its_cooldown_ends() -> None:
+    seconds: Final = _Seconds()
+    feed: Final = _Feed(EcbFetchFailed("HTTP 503"), FEED)
+    async with _client(
+        _app(EcbReferenceRates(clock=_clock()), feed, cooldown=_FailedRefreshCooldown(seconds))
+    ) as client:
+        during_outage: Final = [(await client.get(ROUTE)).status_code for _ in range(3)]
+        seconds.now = 59.9
+        before_cooldown_ends: Final = (await client.get(ROUTE)).status_code
+        fetches_before: Final = feed.fetches
+        seconds.now = 60.0
+        recovered: Final = await client.get(ROUTE)
+
+    assert during_outage == [503, 503, 503]
+    assert before_cooldown_ends == 503
+    assert fetches_before == 1
+    assert recovered.json() == RATES_BODY
+    assert feed.fetches == 2
+
+
+async def test_a_failed_refresh_keeps_serving_held_rates_without_refetching_until_its_cooldown_ends() -> None:
+    clock: Final = _clock()
+    seconds: Final = _Seconds()
+    feed: Final = _Feed(FEED, EcbFetchFailed("HTTP 503"), FEED)
+    async with _client(_app(EcbReferenceRates(clock=clock), feed, cooldown=_FailedRefreshCooldown(seconds))) as client:
+        assert (await client.get(ROUTE)).status_code == 200
+        clock.now = datetime(2026, 11, 14, 16, tzinfo=timezone.utc)
+        during_outage: Final = [(await client.get(ROUTE)).json() for _ in range(3)]
+        fetches_during_outage: Final = feed.fetches
+        seconds.now = 60.0
+        recovered: Final = await client.get(ROUTE)
+
+    assert during_outage == [RATES_BODY] * 3
+    assert fetches_during_outage == 2
+    assert recovered.json() == RATES_BODY
+    assert feed.fetches == 3
+
+
+async def test_concurrent_cold_requests_share_one_failed_fetch() -> None:
+    feed: Final = _GatedFeed(EcbFetchFailed("HTTP 503"))
+    lock: Final = _WaitSignallingLock()
+    cooldown: Final = _FailedRefreshCooldown(_Seconds())
+    async with _client(_app(EcbReferenceRates(clock=_clock()), feed, lock, cooldown)) as client:
+        first: Final = asyncio.create_task(client.get(ROUTE))
+        second: Final = asyncio.create_task(client.get(ROUTE))
+        try:
+            await asyncio.wait_for(feed.entered.wait(), DEADLOCK_GUARD_SECONDS)
+            await asyncio.wait_for(lock.contended.wait(), DEADLOCK_GUARD_SECONDS)
+            feed.release.set()
+            responses: Final = await asyncio.wait_for(asyncio.gather(first, second), DEADLOCK_GUARD_SECONDS)
+        finally:
+            feed.release.set()
+            first.cancel()
+            second.cancel()
+            await asyncio.gather(first, second, return_exceptions=True)
+
+    assert [response.status_code for response in responses] == [503, 503]
     assert feed.fetches == 1
