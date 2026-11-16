@@ -230,7 +230,8 @@ _CREDENTIAL_VALUE: Final = re.compile(
     r"|\b(?:gh[pousr]|github_pat)_[A-Za-z0-9_]{20,}"
     r"|\bxox[abposr]-[A-Za-z0-9-]{10,}"
     r"|\beyJ[A-Za-z0-9_-]{10,}"
-    r"|\b[a-z][a-z0-9+.-]{0,31}://[^\s/:@]*:[^\s/@]+@"
+    r"|\b(?i:[a-z][a-z0-9+.-]{0,31})://[^\s/:@]*:[^\s/@]+@"
+    r"|\b(?i:authorization)\s*[:=]\s*\S"
     r"|https://hooks\.slack\.com/"
     r"|https://(?:discord|discordapp)\.com/api/webhooks/"
 )
