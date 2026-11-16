@@ -1,0 +1,32 @@
+{"step": "real_proof", "deployment": "pc-a", "requests": ["real:200:r0/w4636", "real:200:r4636/w0"], "rows": []}
+{"state_after":"real_proof","key":"prompt_cache_alert:{89c27d66b3dc0d10c859355e..36:state","type":"hash","value":"tokens 4636 until 1794871502027 epoch 1794871203780 ","pttl":294616}
+{"step": "misses3", "deployment": "pc-a", "requests": ["miss:200:r0/w0", "miss:200:r0/w0", "miss:200:r0/w0"], "rows": ["1|open|3|4636|23:20:08.920"]}
+{"state_after":"misses3","key":"prompt_cache_alert:{89c27d66b3dc0d10c859355e..36:state","type":"hash","value":"tokens 4636 until 1794871502027 epoch 1794871208862 ","pttl":289521}
+{"state_after":"misses3","key":"prompt_cache_alert:{89c27d66b3dc0d10c859355e..9f:quiet","type":"string","value":"1","pttl":86396408}
+{"step": "show", "deployment": "pc-a", "requests": [], "rows": ["1|open|3|4636|23:20:08.920"], "list_status": 200, "api_alerts": [{"id": "1", "type": "prompt_cache", "resource_type": "deployment", "status": "open", "evidence": {"config_fingerprint": "40ae45fcfdf9f43d8d98ddd2c069da6edca17c420bcd13f09dfbff745d96989f", "prefix_fingerprint": "7b20bde36dc53bf5562a2d681a9206e4713789a3d8d2047e1d47a57890a12736", "provider": "anthropic", "provider_model": "anthropic/claude-sonnet-5-5", "consecutive_misses": 3, "proven_write_tokens": 4636, "ttl_seconds": 300}}]}
+{"state_after":"show","key":"prompt_cache_alert:{89c27d66b3dc0d10c859355e..36:state","type":"hash","value":"tokens 4636 until 1794871502027 epoch 1794871208862 ","pttl":286016}
+{"state_after":"show","key":"prompt_cache_alert:{89c27d66b3dc0d10c859355e..9f:quiet","type":"string","value":"1","pttl":86392903}
+{"step": "misses6", "deployment": "pc-a", "requests": ["miss:200:r0/w0", "miss:200:r0/w0", "miss:200:r0/w0", "miss:200:r0/w0", "miss:200:r0/w0", "miss:200:r0/w0"], "rows": ["1|open|3|4636|23:20:08.920"]}
+{"state_after":"misses6","key":"prompt_cache_alert:{89c27d66b3dc0d10c859355e..36:state","type":"hash","value":"tokens 4636 until 1794871502027 epoch 1794871219192 ","pttl":279215}
+{"state_after":"misses6","key":"prompt_cache_alert:{89c27d66b3dc0d10c859355e..9f:quiet","type":"string","value":"1","pttl":86386094}
+{"step": "dismiss", "deployment": "pc-a", "requests": [], "rows": ["1|dismissed|3|4636|23:20:23.193"], "patch_status": 200}
+{"state_after":"dismiss","key":"prompt_cache_alert:{89c27d66b3dc0d10c859355e..36:state","type":"hash","value":"tokens 4636 until 1794871502027 epoch 1794871219192 ","pttl":275734}
+{"state_after":"dismiss","key":"prompt_cache_alert:{89c27d66b3dc0d10c859355e..9f:quiet","type":"string","value":"1","pttl":86382619}
+{"step": "fx_proof", "deployment": "pc-a", "requests": ["write:200:r0/w2048"], "rows": ["1|dismissed|3|4636|23:20:23.193"]}
+{"state_after":"fx_proof","key":"prompt_cache_alert:{89c27d66b3dc0d10c859355e..36:state","type":"hash","value":"tokens 2048 until 1794871526630 epoch 1794871226667 ","pttl":296344}
+{"state_after":"fx_proof","key":"prompt_cache_alert:{89c27d66b3dc0d10c859355e..9f:quiet","type":"string","value":"1","pttl":86378629}
+{"step": "misses3", "deployment": "pc-a", "requests": ["miss:200:r0/w0", "miss:200:r0/w0", "miss:200:r0/w0"], "rows": ["1|dismissed|3|4636|23:20:23.193"]}
+{"state_after":"misses3","key":"prompt_cache_alert:{89c27d66b3dc0d10c859355e..36:state","type":"hash","value":"tokens 2048 until 1794871526630 epoch 1794871231731 ","pttl":291282}
+{"state_after":"misses3","key":"prompt_cache_alert:{89c27d66b3dc0d10c859355e..9f:quiet","type":"string","value":"1","pttl":86373567}
+{"step": "show", "deployment": "pc-a", "requests": [], "rows": ["1|dismissed|3|4636|23:20:23.193"], "list_status": 200, "api_alerts": []}
+{"state_after":"show","key":"prompt_cache_alert:{89c27d66b3dc0d10c859355e..36:state","type":"hash","value":"tokens 2048 until 1794871526630 epoch 1794871231731 ","pttl":287837}
+{"state_after":"show","key":"prompt_cache_alert:{89c27d66b3dc0d10c859355e..9f:quiet","type":"string","value":"1","pttl":86370122}
+{"event":"restart","detail":"head workers stopped, redis 6392 FLUSHALL, head workers started again; same database cz_rs_head_341feaf"}
+{"step": "fx_proof", "deployment": "pc-a", "requests": ["write:200:r0/w2048"], "rows": ["1|dismissed|3|4636|23:20:23.193"]}
+{"state_after":"restart_fx_proof","key":"prompt_cache_alert:{89c27d66b3dc0d10c859355e..36:state","type":"hash","value":"tokens 2048 until 1794871661016 epoch 1794871361523 ","pttl":295853}
+{"step": "misses3", "deployment": "pc-a", "requests": ["miss:200:r0/w0", "miss:200:r0/w0", "miss:200:r0/w0"], "rows": ["1|dismissed|3|4636|23:20:23.193"]}
+{"state_after":"restart_misses3","key":"prompt_cache_alert:{89c27d66b3dc0d10c859355e..36:state","type":"hash","value":"tokens 2048 until 1794871661016 epoch 1794871367123 ","pttl":290220}
+{"state_after":"restart_misses3","key":"prompt_cache_alert:{89c27d66b3dc0d10c859355e..9f:quiet","type":"string","value":"1","pttl":86396432}
+{"step": "show", "deployment": "pc-a", "requests": [], "rows": ["1|dismissed|3|4636|23:20:23.193"], "list_status": 200, "api_alerts": []}
+{"state_after":"restart_show","key":"prompt_cache_alert:{89c27d66b3dc0d10c859355e..36:state","type":"hash","value":"tokens 2048 until 1794871661016 epoch 1794871367123 ","pttl":286776}
+{"state_after":"restart_show","key":"prompt_cache_alert:{89c27d66b3dc0d10c859355e..9f:quiet","type":"string","value":"1","pttl":86392989}
