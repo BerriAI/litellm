@@ -1,0 +1,14 @@
+late hit, M3 after the old boundary -> alert_triggered True
+   {"step": "P proof", "at_ms": 1, "reply": [], "state_pttl": 8000, "misses_pttl": -2, "misses_zcard": 0, "proof_until_ms": 8000}
+   {"step": "M1 miss started 2500", "at_ms": 3002, "reply": [], "state_pttl": 4999, "misses_pttl": 4999, "misses_zcard": 1, "proof_until_ms": 8000}
+   {"step": "M2 miss started 2600", "at_ms": 3002, "reply": [], "state_pttl": 4999, "misses_pttl": 4998, "misses_zcard": 2, "proof_until_ms": 8000}
+   {"step": "late hit started 2000", "at_ms": 3003, "reply": [], "state_pttl": 6997, "misses_pttl": 6997, "misses_zcard": 2, "proof_until_ms": 10000}
+   {"step": "waited past old boundary T+8000; misses key exists=1", "at_ms": 8105, "reply": null, "state_pttl": 1895, "misses_pttl": 1895, "misses_zcard": 2, "proof_until_ms": 10000}
+   {"step": "M3 miss started now", "at_ms": 8106, "reply": [3, "2048", "1794797983416"], "state_pttl": 1894, "misses_pttl": -2, "misses_zcard": 0, "proof_until_ms": 10000}
+late proof, M3 after the old boundary -> alert_triggered True
+   {"step": "P proof", "at_ms": 0, "reply": [], "state_pttl": 8000, "misses_pttl": -2, "misses_zcard": 0, "proof_until_ms": 8000}
+   {"step": "M1 miss started 2500", "at_ms": 3006, "reply": [], "state_pttl": 4994, "misses_pttl": 4994, "misses_zcard": 1, "proof_until_ms": 8000}
+   {"step": "M2 miss started 2600", "at_ms": 3006, "reply": [], "state_pttl": 4994, "misses_pttl": 4994, "misses_zcard": 2, "proof_until_ms": 8000}
+   {"step": "late proof started 2000", "at_ms": 3006, "reply": [], "state_pttl": 6994, "misses_pttl": 6994, "misses_zcard": 2, "proof_until_ms": 10000}
+   {"step": "waited past old boundary T+8000; misses key exists=1", "at_ms": 8105, "reply": null, "state_pttl": 1895, "misses_pttl": 1895, "misses_zcard": 2, "proof_until_ms": 10000}
+   {"step": "M3 miss started now", "at_ms": 8106, "reply": [3, "2048", "1794797991522"], "state_pttl": 1894, "misses_pttl": -2, "misses_zcard": 0, "proof_until_ms": 10000}

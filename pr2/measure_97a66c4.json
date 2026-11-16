@@ -1,0 +1,95 @@
+{
+ "sha": "97a66c4d850960e6aa53165c3daa9d7265e32398",
+ "cases": [
+  {
+   "blocks": 100,
+   "envelope_extra_bytes": 0,
+   "request_json_bytes": 5132,
+   "canonical_bytes": 6373,
+   "ratio": 1.2,
+   "peak_traced_bytes": 52076,
+   "ms": 2.4,
+   "result": "CacheablePrefix"
+  },
+  {
+   "blocks": 1000,
+   "envelope_extra_bytes": 0,
+   "request_json_bytes": 50132,
+   "canonical_bytes": 63973,
+   "ratio": 1.3,
+   "peak_traced_bytes": 656108,
+   "ms": 24.5,
+   "result": "CacheablePrefix"
+  },
+  {
+   "blocks": 1000,
+   "envelope_extra_bytes": 0,
+   "request_json_bytes": 1030132,
+   "canonical_bytes": 1043973,
+   "ratio": 1.0,
+   "peak_traced_bytes": 2616108,
+   "ms": 30.5,
+   "result": "CacheablePrefix"
+  },
+  {
+   "blocks": 10,
+   "envelope_extra_bytes": 100000,
+   "request_json_bytes": 100651,
+   "canonical_bytes": 100720,
+   "ratio": 1.0,
+   "peak_traced_bytes": 227355,
+   "ms": 0.8,
+   "result": "CacheablePrefix"
+  },
+  {
+   "blocks": 100,
+   "envelope_extra_bytes": 100000,
+   "request_json_bytes": 105151,
+   "canonical_bytes": 106390,
+   "ratio": 1.0,
+   "peak_traced_bytes": 265555,
+   "ms": 2.9,
+   "result": "CacheablePrefix"
+  },
+  {
+   "blocks": 1000,
+   "envelope_extra_bytes": 100000,
+   "request_json_bytes": 150151,
+   "canonical_bytes": 163990,
+   "ratio": 1.1,
+   "peak_traced_bytes": 856142,
+   "ms": 23.9,
+   "result": "CacheablePrefix"
+  },
+  {
+   "blocks": 100,
+   "envelope_extra_bytes": 10000,
+   "request_json_bytes": 15151,
+   "canonical_bytes": 16390,
+   "ratio": 1.1,
+   "peak_traced_bytes": 72110,
+   "ms": 2.4,
+   "result": "CacheablePrefix"
+  },
+  {
+   "blocks": 1000,
+   "envelope_extra_bytes": 10000,
+   "request_json_bytes": 60151,
+   "canonical_bytes": 73990,
+   "ratio": 1.2,
+   "peak_traced_bytes": 676142,
+   "ms": 23.1,
+   "result": "CacheablePrefix"
+  },
+  {
+   "blocks": 1000,
+   "envelope_extra_bytes": 1000000,
+   "request_json_bytes": 1050151,
+   "canonical_bytes": 1063990,
+   "ratio": 1.0,
+   "peak_traced_bytes": 2787251,
+   "ms": 29.1,
+   "result": "CacheablePrefix"
+  }
+ ]
+}
