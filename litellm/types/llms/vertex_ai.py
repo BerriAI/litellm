@@ -219,7 +219,7 @@ class SafetSettingsConfig(TypedDict, total=False):
 class GeminiThinkingConfig(TypedDict, total=False):
     includeThoughts: bool
     thinkingBudget: int
-    thinkingLevel: Literal["minimal", "low", "medium", "high"]
+    thinkingLevel: Literal["minimal", "low", "medium", "high", "xhigh"]
 
 
 GeminiResponseModalities = Literal["TEXT", "IMAGE", "AUDIO", "VIDEO"]
