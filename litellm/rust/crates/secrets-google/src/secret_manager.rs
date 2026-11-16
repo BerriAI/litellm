@@ -1,7 +1,8 @@
 use std::{sync::Arc, time::Duration};
 
 use base64::{Engine, engine::general_purpose::STANDARD};
-use litellm_core_utils::settings::Lookup;
+use litellm_env::Lookup;
+use litellm_python_compat::flags::lower_is_true;
 use litellm_secret_value::SecretValue;
 use litellm_secrets_types::{BaseSecretManager, GoogleOperationContext, Secret, SecretCache};
 
@@ -103,7 +104,7 @@ impl GoogleSecretManager {
             );
         let always_read = environment
             .get(GOOGLE_SECRET_MANAGER_ALWAYS_READ_SECRET_MANAGER)
-            .is_some_and(|v| v.eq_ignore_ascii_case("true"));
+            .is_some_and(|v| lower_is_true(&v));
         Self::with_client(
             client,
             reqwest::Url::parse("https://secretmanager.googleapis.com").expect("static URL"),

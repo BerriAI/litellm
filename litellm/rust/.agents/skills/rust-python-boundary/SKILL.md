@@ -11,7 +11,7 @@ Python-shaped input becomes typed Rust in exactly two crates. Every crate past t
 
 ## The two boundaries
 
-- `crates/config` reads config.yaml, which is Python-shaped: `os.environ/` references, scalars that Helm or the environment turned into text, raw kwargs maps. It also owns the environment layering and `get_secret` fallbacks Python applies while it loads that config. It has no Python runtime, so it reproduces Python value semantics with `litellm-python-compat`
+- `crates/config` reads config.yaml, which is Python-shaped: scalars that Helm or the environment turned into text, raw kwargs maps. It also owns the environment layering and `get_secret` fallbacks Python applies while it loads that config. It has no Python runtime, so it reproduces Python value semantics with `litellm-python-compat`. `os.environ/` references are already resolved by `crates/config-load`, which reads the files and hands `Config::from_value` the resolved document
 - `crates/python-bridge` receives live Python objects, such as `RedisCache.redis_kwargs`. It reads them through PyO3 with the real protocol (`is_truthy()`, `str()`, `extract`), so it never imitates Python
 - Both produce the same typed input, defined in the data crate the consumer already depends on (`redis-types` for Redis), so a downstream crate cannot tell which host it runs under
 

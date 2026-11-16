@@ -1,10 +1,15 @@
 //! Pydantic's lax `bool` and `int` validation: `TypeAdapter(bool)` and `TypeAdapter(int)`.
 
 use num_bigint::BigInt;
+use serde::{Deserialize, Deserializer, de::Error};
+use serde_with::DeserializeAs;
 
 use crate::Value;
 
 const TWO_POW_63: f64 = 9_223_372_036_854_775_808.0;
+/// pydantic refuses an integer longer than this once cleaned, a `-` included. Checking first also
+/// keeps decimal parsing, quadratic in the digit count, from running on a huge string.
+const MAX_INT_TEXT_LEN: usize = 4300;
 
 /// `TypeAdapter(bool).validate_python(value)`, or `None` where pydantic raises `ValidationError`.
 pub fn lax_bool(value: &Value) -> Option<bool> {
@@ -65,6 +70,23 @@ fn int_text(text: &str) -> Option<BigInt> {
     if !well_formed {
         return None;
     }
-    let magnitude = BigInt::parse_bytes(digits.replace('_', "").as_bytes(), 10)?;
+    let digits = digits.replace('_', "");
+    let significant = digits.trim_start_matches('0').len();
+    if usize::from(negative) + significant > MAX_INT_TEXT_LEN {
+        return None;
+    }
+    let magnitude = BigInt::parse_bytes(digits.as_bytes(), 10)?;
     Some(if negative { -magnitude } else { magnitude })
+}
+
+/// [`lax_int`] as a `serde_with` adapter on an `i64`, failing where pydantic raises or the integer
+/// does not fit.
+pub struct LaxI64;
+
+impl<'de> DeserializeAs<'de, i64> for LaxI64 {
+    fn deserialize_as<D: Deserializer<'de>>(deserializer: D) -> Result<i64, D::Error> {
+        lax_int(&Value::deserialize(deserializer)?)
+            .and_then(|number| i64::try_from(number).ok())
+            .ok_or_else(|| D::Error::custom("expected an integer in the i64 range"))
+    }
 }

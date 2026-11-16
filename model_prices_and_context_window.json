@@ -102629,5 +102629,14 @@
             "/v1/images/generations"
         ],
         "supports_vision": true
+    },
+    "omni-moderation-csam-latest": {
+        "input_cost_per_token": 0.0,
+        "litellm_provider": "openai",
+        "max_input_tokens": 32768,
+        "max_output_tokens": 0,
+        "mode": "moderation",
+        "output_cost_per_token": 0.0,
+        "source": "https://developers.openai.com/api/docs/guides/csam-classifier"
     }
 }
