@@ -113,6 +113,7 @@ def _trigger_cooldown_for_failed_deployment(
             model_call_details,
             exception_status,
             ended=datetime.now(),  # noqa: DTZ005  # naive to match the logging pipeline's api_call_start_time
+            exception=exception,
         ):
             verbose_router_logger.debug(
                 "Not triggering cooldown for fallback deployment: a caller-supplied "

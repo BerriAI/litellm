@@ -463,23 +463,24 @@ async def test_native_live_stream_cut_at_the_stream_timeout_is_not_blamed_on_the
 
 
 @pytest.mark.parametrize(
-    "params, elapsed, status, expected",
+    "params, elapsed, status, expired, expected",
     (
-        ({"client_side_stream_ttft_timeout": True, "stream_ttft_timeout": 0.5}, 1.0, 408, True),
-        ({"client_side_stream_ttft_timeout": True, "stream_ttft_timeout": 0.5}, 0.1, 408, False),
-        ({"stream_ttft_timeout": 0.5}, 1.0, 408, False),
-        ({"client_side_timeout": True, "timeout": 600, "stream_ttft_timeout": 0.5}, 1.0, 408, False),
-        ({"client_side_stream_ttft_timeout": True, "stream_ttft_timeout": 0.5}, 1.0, 500, False),
+        ({"client_side_stream_ttft_timeout": True, "stream_ttft_timeout": 0.1}, 1.0, 408, False, False),
+        ({"client_side_stream_ttft_timeout": True, "stream_ttft_timeout": 0.1}, 0.0, 408, True, True),
+        ({"stream_ttft_timeout": 0.1}, 1.0, 408, True, False),
+        ({"client_side_timeout": True, "timeout": 600, "stream_ttft_timeout": 0.1}, 1.0, 408, True, False),
+        ({"client_side_stream_ttft_timeout": True, "stream_ttft_timeout": 0.1}, 1.0, 500, True, False),
         (
             {
                 "client_side_timeout": True,
                 "timeout": 600,
                 "client_side_stream_ttft_timeout": True,
-                "stream_ttft_timeout": 0.5,
+                "stream_ttft_timeout": 0.1,
             },
             1.0,
             408,
-            True,
+            False,
+            False,
         ),
         (
             {
@@ -490,19 +491,16 @@ async def test_native_live_stream_cut_at_the_stream_timeout_is_not_blamed_on_the
             },
             1.0,
             408,
+            False,
             True,
         ),
-        ({"client_side_stream_ttft_timeout": True, "stream_ttft_timeout": "0.5"}, 1.0, 408, True),
-        ({"client_side_stream_ttft_timeout": True, "stream_ttft_timeout": "abc"}, 1.0, 408, False),
-        ({"client_side_stream_ttft_timeout": True, "stream_ttft_timeout": "0"}, 1.0, 408, False),
-        ({"client_side_stream_ttft_timeout": True, "stream_ttft_timeout": "-1"}, 1.0, 408, False),
-        ({"client_side_stream_ttft_timeout": True, "stream_ttft_timeout": "nan"}, 1.0, 408, False),
     ),
 )
-def test_caller_stream_ttft_timeout_408_uses_only_marked_numeric_deadlines(
+def test_caller_stream_ttft_timeout_408_requires_router_expiry(
     params: Mapping[str, object],
     elapsed: float,
     status: int,
+    expired: bool,
     expected: bool,
 ) -> None:
     started: Final = datetime(2024, 1, 1)
@@ -511,7 +509,9 @@ def test_caller_stream_ttft_timeout_408_uses_only_marked_numeric_deadlines(
         "api_call_start_time": started,
         "end_time": started + timedelta(seconds=elapsed),
     }
-    assert is_caller_timeout_408(details, status) is expected
+    error: Final = litellm.Timeout(message="timeout", model="ttft-primary", llm_provider="openai")
+    setattr(error, "stream_ttft_expired", expired)
+    assert is_caller_timeout_408(details, status, exception=error) is expected
 
 
 @pytest.mark.asyncio
@@ -983,10 +983,13 @@ async def test_stream_ttft_chat_expiry_closes_abandoned_stream(stream_clock: _Ma
         ),
     )
     started: Final = stream_clock()
-    with pytest.raises(litellm.Timeout, match="stream_ttft_timeout"):
+    with pytest.raises(litellm.Timeout, match="stream_ttft_timeout") as caught:
         await open_attempt_stream(attempt, response)
     assert 0.08 <= stream_clock() - started <= 0.12
     assert upstream.closed.is_set()
+    assert is_caller_timeout_408(
+        {"litellm_params": {"client_side_stream_ttft_timeout": True}}, 408, exception=caught.value
+    )
 
 
 @pytest.mark.asyncio
@@ -1026,6 +1029,49 @@ async def _drain_ttft_chat_stream(router: Router) -> None:
         model="primary", messages=[{"role": "user", "content": "hi"}], stream=True
     )
     _ = tuple([chunk async for chunk in response])
+
+
+class _ProviderTimeoutAfterOutput(httpx.AsyncByteStream):
+    def __init__(self, clock: _ManualClock) -> None:
+        self.clock: Final = clock
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        yield _ttft_chat_chunk({"content": "first"})
+        await self.clock.elapse(0.3)
+        raise httpx.ReadTimeout("provider timeout after output")
+
+
+@pytest.mark.asyncio
+async def test_provider_timeout_after_first_output_is_not_exempted_by_caller_ttft(
+    stream_clock: _ManualClock,
+    respx_mock: respx.MockRouter,
+    ttft_httpx_transport: None,
+) -> None:
+    respx_mock.post("https://ttft.invalid/v1/chat/completions").mock(
+        return_value=httpx.Response(200, stream=_ProviderTimeoutAfterOutput(stream_clock))
+    )
+    router: Final = _ttft_router(fallback=False)
+    response: Final = await router.acompletion(
+        model="primary",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        stream_ttft_timeout=0.1,
+        client_side_stream_ttft_timeout=True,
+    )
+    first: Final = await anext(response)
+    assert first.choices[0].delta.content == "first"
+    with pytest.raises(litellm.Timeout) as caught:
+        await anext(response)
+    started: Final = datetime(2024, 1, 1)
+    assert not is_caller_timeout_408(
+        {
+            "litellm_params": {"client_side_stream_ttft_timeout": True, "stream_ttft_timeout": 0.1},
+            "api_call_start_time": started,
+            "end_time": started + timedelta(seconds=0.3),
+        },
+        408,
+        exception=caught.value,
+    )
 
 
 @pytest.mark.asyncio
@@ -1221,7 +1267,9 @@ async def test_stream_ttft_responses_holds_lifecycle_until_output_and_exempts_ba
 
 
 @pytest.mark.asyncio
-async def test_stream_ttft_timeout_cools_a_deployment_configured_stall(
+@pytest.mark.parametrize("caller", (False, True), ids=("deployment", "caller"))
+async def test_stream_ttft_timeout_cools_only_a_deployment_configured_stall(
+    caller: bool,
     stream_clock: _ManualClock,
     respx_mock: respx.MockRouter,
     ttft_httpx_transport: None,
@@ -1247,12 +1295,14 @@ async def test_stream_ttft_timeout_cools_a_deployment_configured_stall(
         model="primary",
         messages=[{"role": "user", "content": "hi"}],
         stream=True,
+        **({"stream_ttft_timeout": 0.1, "client_side_stream_ttft_timeout": True} if caller else {}),
     )
     assert "".join([chunk.choices[0].delta.content or "" async for chunk in response]) == "fallback"
     cooldowns: Final = await router.health().cooldowns.async_get_active_cooldowns(
         ["ttft-primary"], parent_otel_span=None
     )
-    assert tuple(deployment_id for deployment_id, _ in cooldowns) == ("ttft-primary",)
+    assert tuple(deployment_id for deployment_id, _ in cooldowns) == (() if caller else ("ttft-primary",))
+    assert router.health().failures_this_minute("ttft-primary") == (0 if caller else 1)
 
 
 @pytest.mark.asyncio
@@ -1319,4 +1369,5 @@ def test_stream_ttft_timeout_failure_exits_preserve_deployment_health_signals(
     error: Final = litellm.Timeout(
         message="No model output within stream_ttft_timeout=0.5s", model="ttft-primary", llm_provider="openai"
     )
+    setattr(error, "stream_ttft_expired", True)
     assert core.failure_exits(error, logged, "ttft-primary")["outside_deployment"] is caller

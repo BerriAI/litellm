@@ -2029,13 +2029,11 @@ async def open_attempt_stream(attempt: StreamAttempt, response: object) -> objec
     def expired() -> MidStreamFallbackError:
         model: Final = str(attempt.kwargs.get("model", attempt.group))
         provider: Final = str(attempt.kwargs.get("custom_llm_provider") or inferred_provider(model) or "")
-        return _stream_pre_content_error(
-            litellm_exceptions.Timeout(
-                message=f"No model output within stream_ttft_timeout={seconds}s", model=model, llm_provider=provider
-            ),
-            model,
-            provider,
+        timeout: Final = litellm_exceptions.Timeout(
+            message=f"No model output within stream_ttft_timeout={seconds}s", model=model, llm_provider=provider
         )
+        timeout.stream_ttft_expired = True  # pyright: ignore[reportAttributeAccessIssue]  # router-owned expiry marker
+        return _stream_pre_content_error(timeout, model, provider)
 
     if attempt.op == "acompletion" and isinstance(response, CustomStreamWrapper):
         needs_fetch: Final = response.completion_stream is None and response.make_call is not None  # pyright: ignore[reportUnknownMemberType]  # untyped attributes

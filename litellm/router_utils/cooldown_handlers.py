@@ -29,7 +29,6 @@ from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.litellm_logging import mask_api_base_credentials
 from litellm.router_deprecated import renamed_router_param
-from litellm.router_rust.invoke.shaping import stream_ttft_timeout
 from litellm.router_utils.cooldown_cache import CooldownCacheValue
 from litellm.router_utils.cooldown_callbacks import router_cooldown_event_callback
 from litellm.types.llms.anthropic import MESSAGE_THREAD_NOT_FOUND_ERROR_CODE
@@ -844,25 +843,40 @@ def cast_exception_status_to_int(exception_status: object) -> int:
     return exception_status
 
 
+def is_stream_ttft_expiry(exception: BaseException | None) -> bool:
+    return getattr(exception, "stream_ttft_expired", None) is True or (
+        isinstance(exception, MidStreamFallbackError)
+        and getattr(exception.original_exception, "stream_ttft_expired", None) is True
+    )
+
+
 def is_caller_timeout_408(
-    model_call_details: Mapping[str, object], exception_status: str | int, ended: datetime | None = None
+    model_call_details: Mapping[str, object],
+    exception_status: str | int,
+    ended: datetime | None = None,
+    *,
+    exception: BaseException | None = None,
 ) -> bool:
-    """A 408 is caller-controlled after the earliest marked timeout or TTFT deadline, using ended when supplied."""
+    """A 408 is caller-controlled when the caller's timeout elapsed or the router's caller-selected TTFT timer fired.
+
+    ``ended`` overrides ``model_call_details["end_time"]`` for callers that run before the
+    failure logger has stamped the current API call's end time.
+    """
     if cast_exception_status_to_int(exception_status) != 408:
         return False
     litellm_params: Final = as_str_mapping(model_call_details.get("litellm_params"))
     if litellm_params is None:
         return False
-    configured: Final = (
-        litellm_params.get("timeout") if litellm_params.get("client_side_timeout") else None,
-        stream_ttft_timeout(litellm_params, {}) if litellm_params.get("client_side_stream_ttft_timeout") else None,
-    )
-    deadlines: Final = tuple(value for value in configured if isinstance(value, (int, float)))
+    if litellm_params.get("client_side_stream_ttft_timeout") and is_stream_ttft_expiry(exception):
+        return True
+    if not litellm_params.get("client_side_timeout"):
+        return False
+    timeout: Final = litellm_params.get("timeout")
     started: Final = model_call_details.get("api_call_start_time") or model_call_details.get("start_time")
     finished: Final = ended if ended is not None else model_call_details.get("end_time")
-    if not deadlines or not isinstance(started, datetime) or not isinstance(finished, datetime):
+    if not isinstance(timeout, (int, float)) or not isinstance(started, datetime) or not isinstance(finished, datetime):
         return False
-    return (finished - started).total_seconds() >= min(deadlines)
+    return (finished - started).total_seconds() >= timeout
 
 
 def is_stream_stall(exception: BaseException) -> bool:

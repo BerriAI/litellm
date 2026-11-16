@@ -2077,6 +2077,7 @@ class LiteLLMProxyRequestSetup:
             or request_data.get("stream_timeout") is not None
         ):
             data["client_side_timeout"] = True
+        # This marker records that the caller chose the value. Cooldown exemption also requires the router's TTFT expiry.
         if request_data.get("stream_ttft_timeout") is not None:
             data["client_side_stream_ttft_timeout"] = True
 
