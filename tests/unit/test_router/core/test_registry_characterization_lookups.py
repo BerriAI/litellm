@@ -4,6 +4,7 @@ access groups; blocked and unhealthy groups; credentials lookups.
 """
 
 import time
+from typing import Final
 
 import pytest
 
@@ -680,3 +681,17 @@ def test_assigning_model_list_swaps_the_list_without_reindexing(make_core: MakeC
     found = core.registry().deployment("a")
     assert found is not None
     assert found.model_name == "n"
+
+
+def test_the_routing_groups_source_reads_its_rows_once(make_core: MakeCore) -> None:
+    core: Final = make_core(
+        model_list=[deployment("g", "a"), deployment("g", "b")],
+        routing_groups=[{"group_name": "grp", "models": ["g"], "routing_strategy": "simple-shuffle"}],
+    )
+    first: Final = core.registry().deployments(source="routing_groups")
+    assert ids(first) == ["a", "b"]
+    assert core.registry().deployments(source="routing_groups") is first
+
+
+def test_the_credential_deployment_of_a_non_string_id_is_none(make_core: MakeCore) -> None:
+    assert _core(make_core).registry().credentials(123, form="deployment") is None  # pyright: ignore[reportArgumentType]  # a caller's non-string id

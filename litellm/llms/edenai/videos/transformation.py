@@ -142,7 +142,7 @@ class EdenAIVideoConfig(OpenAIVideoConfig):
         raw_response: httpx.Response,
         logging_obj: "LiteLLMLoggingObj",
         custom_llm_provider: str | None = None,
-    ) -> dict[str, str]:  # mutable-ok: inherited contract
+    ) -> object:
         raw_response.raise_for_status()  # the shared GET helpers return error bodies instead of raising
         return super().transform_video_list_response(
             raw_response=raw_response, logging_obj=logging_obj, custom_llm_provider=custom_llm_provider

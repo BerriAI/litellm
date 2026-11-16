@@ -28,6 +28,8 @@ if TYPE_CHECKING:
 
     from litellm.types.llms.bedrock import BedrockCreateBatchRequest
 
+    from .base_aws_llm import BaseAWSLLM
+
 import httpx
 from pydantic import ConfigDict, TypeAdapter, ValidationError
 
@@ -36,12 +38,12 @@ from litellm import verbose_logger
 from litellm.constants import DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.litellm_core_utils.core_helpers import decoded_json_object, lax_bool, require_attributes
-from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import object_mapping
 from litellm.litellm_core_utils.optional_imports import ensure_optional_import
 from litellm.litellm_core_utils.prompt_templates.json_schema_utils import (
     schema_property_count,
 )
 from litellm.litellm_core_utils.url_utils import ensure_api_route
+from litellm.llms.anthropic.chat.transformation import mapped_max_output_tokens
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from litellm.llms.base_llm.anthropic_messages.transformation import (
     BaseAnthropicMessagesConfig,
@@ -58,6 +60,7 @@ if TYPE_CHECKING:
     from litellm.types.llms.openai import AllMessageValues
 
 BEDROCK_INVOKE_TRACE_FIELD: Final = "amazon-bedrock-trace"
+BEDROCK_SERVICE_TIER_HEADER: Final = "X-Amzn-Bedrock-Service-Tier"
 BEDROCK_INVOKE_CONTEXT_MANAGEMENT_EDIT_BETAS: Final[Mapping[str, str]] = MappingProxyType(
     {
         "compact_20260112": ANTHROPIC_BETA_HEADER_VALUES.COMPACT_2026_01_12.value,
@@ -84,6 +87,13 @@ BedrockRoute = Literal[
     "mantle",
     "chat_completions",
 ]
+
+
+def served_service_tier(response_headers: Mapping[str, str] | None) -> str | None:
+    tier_header: Final = BEDROCK_SERVICE_TIER_HEADER.lower()
+    return next(
+        (value for name, value in (response_headers or {}).items() if name.lower() == tier_header and value), None
+    )
 
 
 def error_response_text(response: httpx.Response) -> str:
@@ -321,15 +331,6 @@ def deployment_model_info(litellm_params: Mapping[str, object] | None) -> Mappin
     return _DEPLOYMENT_MODEL_INFO.validate_python(model_info) if isinstance(model_info, Mapping) else {}
 
 
-def bedrock_mapped_max_output_tokens(model: str) -> int | None:
-    row: Final = object_mapping(litellm.model_cost.get(model)) or {}  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # cost map rows are untyped JSON
-    match row.get("max_output_tokens"):
-        case int() as max_tokens:
-            return max_tokens
-        case _:
-            return None
-
-
 _CLAUDE_GENERATION: Final = re.compile(r"claude-(?:[a-z]+-)?(\d+)(?:-(\d{1,2}))?(?!\d)")
 _LEGACY_CLAUDE_NAMES: Final = ("claude-v", "claude-instant")
 _FIRST_CLAUDE_CAPPED_AT_4096_ON_CONVERSE: Final = (4, 7)
@@ -346,7 +347,7 @@ def _claude_keeps_bedrocks_converse_default(base_model: str) -> bool:
 def bedrock_converse_claude_default_max_tokens(base_model: str, model_info: Mapping[str, object] | None) -> int | None:
     if not base_model.startswith("anthropic") or _claude_keeps_bedrocks_converse_default(base_model):
         return None
-    mapped_max_tokens: Final = bedrock_mapped_max_output_tokens(base_model)
+    mapped_max_tokens: Final = mapped_max_output_tokens(base_model)
     model_max_tokens: Final = DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS if mapped_max_tokens is None else mapped_max_tokens
     match (model_info or {}).get("max_output_tokens"):
         case int() as deployment_max_tokens:
@@ -2677,11 +2678,8 @@ class CommonBatchFilesUtils:
     Provides shared functionality to reduce code duplication between batches and files.
     """
 
-    def __init__(self):
-        # Import here to avoid circular imports
-        from .base_aws_llm import BaseAWSLLM
-
-        self._base_aws = BaseAWSLLM()
+    def __init__(self, aws: BaseAWSLLM) -> None:
+        self._base_aws = aws
 
     def get_bedrock_model_id_from_litellm_model(self, model: str) -> str:
         """

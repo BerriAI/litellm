@@ -1,12 +1,13 @@
+import asyncio
 import ipaddress
 import json
 import os
 import re
 import secrets
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import datetime, timezone
 from datetime import datetime as dt
-from functools import reduce
+from functools import partial, reduce
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, Protocol, cast, runtime_checkable
 
@@ -37,7 +38,7 @@ from litellm.constants import (
     MAX_STRING_LENGTH_PROMPT_IN_DB as DEFAULT_MAX_STRING_LENGTH_PROMPT_IN_DB,
 )
 from litellm.integrations.otel.model.metadata import caller_session_id
-from litellm.integrations.otel.model.trace_controls import TraceControls
+from litellm.integrations.otel.model.trace_controls import TraceControls, caller_trace_controls
 from litellm.litellm_core_utils.batch_utils import (
     BATCH_COST_REQUEST_ID_SUFFIX,
     charged_poll_cost,
@@ -72,6 +73,7 @@ from litellm.litellm_core_utils.litellm_logging import (
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import message_field, parts_of
 from litellm.litellm_core_utils.ptu_pricing import azure_spillover
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps, strip_null_bytes
+from litellm.litellm_core_utils.secret_redaction import redact_tokens
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 from litellm.llms.anthropic.common_utils import resolve_used_client_oauth_token
 from litellm.proxy._types import (
@@ -214,6 +216,12 @@ _STAMPED_METADATA_KEYS: Final = frozenset(
         "is_silent_experiment",
         BILLED_RETRY_ATTEMPT_METADATA_KEY,
         "user_api_key_user_email",
+        "user_api_key_customer_org_id",
+        "user_api_key_customer_org_alias",
+        "user_api_key_customer_team_id",
+        "user_api_key_customer_team_alias",
+        "user_api_key_customer_member_id",
+        "user_api_key_customer_member_alias",
     )
 )
 
@@ -225,6 +233,30 @@ class _UpstreamProviderMetadata(TypedDict, total=False):
 def _stored_user_email(metadata: Mapping[str, object]) -> str | None:
     email: Final = metadata.get("user_api_key_user_email")
     return email if isinstance(email, str) and email.strip() else None
+
+
+_CUSTOMER_METADATA_ADAPTER: Final[TypeAdapter[Mapping[object, object]]] = TypeAdapter(Mapping[object, object])
+
+
+class _CustomerIdentityMetadata(TypedDict, total=False):
+    user_api_key_customer_org_id: ReadOnly[str]
+    user_api_key_customer_org_alias: ReadOnly[str]
+    user_api_key_customer_team_id: ReadOnly[str]
+    user_api_key_customer_team_alias: ReadOnly[str]
+    user_api_key_customer_member_id: ReadOnly[str]
+    user_api_key_customer_member_alias: ReadOnly[str]
+
+
+_CUSTOMER_IDENTITY_ADAPTER: Final[TypeAdapter[_CustomerIdentityMetadata]] = TypeAdapter(_CustomerIdentityMetadata)
+
+
+def _stored_customer_identity(metadata: Mapping[object, object]) -> _CustomerIdentityMetadata:
+    values: Final = {
+        key: value
+        for key in _CustomerIdentityMetadata.__annotations__
+        if isinstance(value := metadata.get(key), str) and value.strip()
+    }
+    return _CUSTOMER_IDENTITY_ADAPTER.validate_python(values)
 
 
 def _get_spend_logs_metadata(
@@ -310,10 +342,12 @@ def _get_spend_logs_metadata(
     retry_key: Final = BILLED_RETRY_ATTEMPT_METADATA_KEY
     billed_retry_attempt: Final = retry_key in metadata and metadata[retry_key] is True
     # Filter the metadata dictionary to include only the specified keys
+    customer_metadata: Final = _CUSTOMER_METADATA_ADAPTER.validate_python(metadata)
     clean_metadata: Final = SpendLogsMetadata(
         **MappingProxyType(
             {key: metadata.get(key) for key in SpendLogsMetadata.__annotations__ if key not in _STAMPED_METADATA_KEYS}
         ),
+        **_stored_customer_identity(customer_metadata),
         **upstream_provider_metadata,
         autorouter_savings=autorouter_savings,
         autorouter_savings_estimate=autorouter_savings_estimate,
@@ -607,6 +641,45 @@ def _scrub_raw_model_from_error_information(
             for key, value in error_information.items()
         },
     )
+
+
+def _spend_log_worker_kwargs(kwargs: Mapping[str, object]) -> Mapping[str, object]:
+    params: Final = as_str_mapping(kwargs.get("litellm_params"))
+    if params is None:
+        return kwargs
+    metadata: Final = as_str_mapping(params.get("litellm_metadata"))
+    return {
+        **kwargs,
+        "litellm_params": {
+            **params,
+            **({"litellm_metadata": dict(metadata)} if metadata is not None else {}),
+        },
+    }
+
+
+async def get_logging_payload_async(
+    kwargs: Mapping[str, object] | None,
+    response_obj: object,
+    start_time: datetime,
+    end_time: datetime,
+    llm_router: "Router | None" = None,
+    run_in_thread: Callable[[Callable[[], SpendLogsPayload]], Awaitable[SpendLogsPayload]] = asyncio.to_thread,
+) -> SpendLogsPayload:
+    from litellm.proxy.proxy_server import general_settings_view
+
+    call_kwargs: Final[Mapping[str, object]] = kwargs if kwargs is not None else MappingProxyType({})
+    offload: Final = general_settings_view().get("redact_tokens_in_spend_logs") is True
+    build: Final = partial(
+        get_logging_payload,
+        kwargs=dict(_spend_log_worker_kwargs(call_kwargs)) if offload else dict(call_kwargs),
+        response_obj=response_obj,
+        start_time=start_time,
+        end_time=end_time,
+        llm_router=llm_router,
+    )
+    if offload:
+        return await run_in_thread(build)
+    return build()
 
 
 def get_logging_payload(
@@ -1050,12 +1123,31 @@ def _get_batch_trace_session_id(call_type: str | None, request_id: str | None) -
     return request_id.removesuffix(BATCH_COST_REQUEST_ID_SUFFIX)
 
 
-def _caller_session_for_spend_log(kwargs: Mapping[str, object], metadata: Mapping[str, object] | None) -> str | None:
+def caller_session_for_accounting(kwargs: Mapping[str, object]) -> str | None:
+    params: Final = as_str_mapping(kwargs.get("litellm_params")) or MappingProxyType({})
+    preserved: Final = next(
+        (
+            session
+            for key in ("litellm_metadata", "metadata")
+            if isinstance(session := (as_str_mapping(params.get(key)) or {}).get(CALLER_SESSION_ID_METADATA_KEY), str)
+        ),
+        None,
+    )
+    return _caller_session_for_spend_log(
+        kwargs,
+        MappingProxyType({CALLER_SESSION_ID_METADATA_KEY: preserved}) if preserved else None,
+        trace=caller_trace_controls(kwargs),
+    )
+
+
+def _caller_session_for_spend_log(
+    kwargs: Mapping[str, object], metadata: Mapping[str, object] | None, trace: TraceControls | None = None
+) -> str | None:
     beside_trace_header: Final = metadata.get(CALLER_SESSION_ID_METADATA_KEY) if metadata else None
     caller_session: Final = (
         beside_trace_header
         if isinstance(beside_trace_header, str) and beside_trace_header
-        else caller_session_id(kwargs, TraceControls())
+        else caller_session_id(kwargs, trace or TraceControls())
     )
     return caller_session if caller_session and "\x00" not in caller_session else None
 
@@ -1267,7 +1359,7 @@ def _get_messages_for_spend_logs_payload(
                 messages: Final = standard_logging_payload.get("messages")
                 if messages is not None:
                     try:
-                        return safe_dumps(messages, non_finite_as_null=True)
+                        return _without_tokens(safe_dumps(messages, non_finite_as_null=True))
                     except Exception:
                         return "{}"
     return "{}"
@@ -1440,6 +1532,14 @@ def _is_spend_log_content(parent: Mapping[str, object], key: str) -> bool:
     )
 
 
+def _without_tokens(value: str) -> str:
+    from litellm.proxy.proxy_server import general_settings_view
+
+    if general_settings_view().get("redact_tokens_in_spend_logs") is not True:
+        return value
+    return redact_tokens(strip_null_bytes(value), REDACTED_BY_LITELM_STRING)
+
+
 def _truncated_for_db(value: str, max_length: int) -> str:
     if len(value) <= max_length:
         return value
@@ -1455,7 +1555,7 @@ def _truncated_for_db(value: str, max_length: int) -> str:
 
 def _compaction_summary_for_db(summary: str) -> str:
     return _truncated_for_db(
-        summary, max(_get_max_string_length_prompt_in_db(), MAX_STRING_LENGTH_COMPACTION_SUMMARY_IN_DB)
+        _without_tokens(summary), max(_get_max_string_length_prompt_in_db(), MAX_STRING_LENGTH_COMPACTION_SUMMARY_IN_DB)
     )
 
 
@@ -1484,7 +1584,7 @@ def _sanitize_request_body_for_spend_logs_payload(
     At every nesting level, also strips keys listed in _SENSITIVE_REQUEST_BODY_KEYS (e.g. secret_fields,
     which holds raw HTTP headers including Authorization tokens), and replaces string values under keys
     SensitiveDataMasker classifies as credentials with REDACTED_BY_LITELM_STRING, except inside tool payloads
-    and logprobs.
+    and logprobs. When enabled, token-shaped substrings (e.g. a GitHub token in a tool result) are masked everywhere.
     """
     if visited is None:
         visited = set()
@@ -1505,7 +1605,7 @@ def _sanitize_request_body_for_spend_logs_payload(
         elif isinstance(value, list):
             return [_sanitize_value(item, mask_credentials) for item in value]
         elif isinstance(value, str):
-            return _truncated_for_db(value, max_string_length_prompt_in_db)
+            return _truncated_for_db(_without_tokens(value), max_string_length_prompt_in_db)
         return value
 
     def _stored_value(key: str, value: object) -> object:

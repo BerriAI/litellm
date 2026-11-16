@@ -327,7 +327,7 @@ def whole_messages_within_cache_control_limit(
 
 
 def _part_with_cache_control_renamed(part: object) -> object:
-    if not _accepts_prompt_cache_breakpoint(part):
+    if not _accepts_prompt_cache_breakpoint(part) or _attribute_or_key(part, "cache_control") is None:
         return part
     return cache_control_as_prompt_cache_breakpoint(_CONTENT_PART_ADAPTER.validate_python(part))
 

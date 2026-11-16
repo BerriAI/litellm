@@ -205,6 +205,17 @@ async def test_sync_text_completion_merges_default_metadata_into_request_metadat
     assert (metadata["x"], metadata["y"], metadata["model_group"], sent["user"]) == (1, 2, "g", "u")
 
 
+async def test_sync_text_completion_keeps_the_request_metadata_over_the_default_metadata(
+    make_core: MakeCore, host: EndpointHost
+):
+    core: Final = make_core(
+        model_list=[deployment("g", "d1")],
+        default_litellm_params={"metadata": {"requester_metadata": {"env": "prod", "region": "us"}}},
+    )
+    core.text_completion(model="g", prompt="p", metadata={"requester_metadata": {"env": "dev", "team": "t1"}})
+    assert _bucket(_sent(host))["requester_metadata"] == {"env": "dev", "region": "us", "team": "t1"}
+
+
 async def test_sync_text_completion_sends_the_model_group_name_not_the_deployment_model(
     make_core: MakeCore, host: EndpointHost
 ):
@@ -329,12 +340,12 @@ async def test_default_litellm_params_metadata_merges_into_request_metadata(make
     assert (metadata["team"], metadata["trace"], metadata["model_group"]) == ("t", "x", "g")
 
 
-async def test_default_litellm_params_metadata_overwrites_the_same_request_metadata_key(
+async def test_the_request_metadata_key_wins_over_the_same_default_litellm_params_metadata_key(
     make_core: MakeCore, host: EndpointHost
 ):
     core: Final = make_core(model_list=[deployment("g", "d1")], default_litellm_params={"metadata": {"team": "t"}})
     await core.acompletion(model="g", messages=MESSAGES, metadata={"team": "request"})
-    assert _bucket(_sent(host))["team"] == "t"
+    assert _bucket(_sent(host))["team"] == "request"
 
 
 async def test_default_litellm_params_metadata_goes_to_litellm_metadata_for_generic_endpoints(

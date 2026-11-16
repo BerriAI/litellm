@@ -26,6 +26,7 @@ from litellm.types.llms.openai import InputTokensDetails, ResponseAPIUsage, Resp
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager
+from tests.unit.llms.fireworks_ai.latest_router_aliases import LATEST_ROUTER_ALIAS_TARGETS
 
 FIREWORKS_RESPONSES_URL: Final = "https://api.fireworks.ai/inference/v1/responses"
 HTTPX_CLIENT_FACTORY: Final = "litellm.llms.custom_httpx.llm_http_handler.get_httpx_client"
@@ -247,6 +248,27 @@ def test_responses_call_keeps_developer_items_in_place_for_a_model_the_cost_map_
         {"role": "system", "content": "Answer with exactly one word.", "type": "message"},
         {"role": "user", "content": "What is the capital of France?"},
     )
+
+
+@respx.mock
+@pytest.mark.parametrize(("alias", "target"), LATEST_ROUTER_ALIAS_TARGETS)
+def test_latest_router_alias_places_developer_items_like_the_model_it_points_to(alias: str, target: str) -> None:
+    route: Final = _fireworks_responses_route(alias)
+    for model in (alias, target):
+        litellm.responses(
+            model=f"fireworks_ai/{model}",
+            input=[
+                {"role": "user", "content": "Hi there"},
+                {"role": "developer", "content": "Answer with exactly one word."},
+                {"role": "user", "content": "What is the capital of France?"},
+                {"type": "message", "role": "assistant", "content": "Paris"},
+                {"role": "developer", "content": "Reply with PONG."},
+            ],
+            api_key="fw-test-key",
+        )
+    alias_body, target_body = (json.loads(call.request.content) for call in route.calls)
+    assert alias_body["model"] == alias
+    assert {**alias_body, "model": target} == target_body
 
 
 @respx.mock

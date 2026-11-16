@@ -1,12 +1,17 @@
 # conftest.py
 
 import asyncio
-import importlib
-import os
+from typing import Final
 
 import pytest
 
 import litellm
+import litellm.proxy.proxy_server
+from tests._module_state import collect_flushable_caches, flush_caches, restore_mutable_state, snapshot_mutable_state
+
+_LITELLM_STATE: Final = snapshot_mutable_state(litellm)
+_PROXY_SERVER_STATE: Final = snapshot_mutable_state(litellm.proxy.proxy_server)
+_FLUSHABLE_CACHES: Final = collect_flushable_caches((litellm, litellm.proxy.proxy_server))
 
 
 @pytest.fixture(scope="session")
@@ -19,38 +24,17 @@ def event_loop():
     loop.close()
 
 
-
-
 @pytest.fixture(scope="function", autouse=True)
 def setup_and_teardown():
-    """
-    This fixture reloads litellm before every function. To speed up testing by removing callbacks being chained.
-    """
-    curr_dir = os.getcwd()  # Get the current working directory
-
-    from litellm import Router
-
-    importlib.reload(litellm)
-
-    try:
-        if hasattr(litellm, "proxy") and hasattr(litellm.proxy, "proxy_server"):
-            importlib.reload(litellm.proxy.proxy_server)
-    except Exception as e:
-        print(f"Error reloading litellm.proxy.proxy_server: {e}")
-
-    litellm.in_memory_llm_clients_cache.flush_cache()
-
-    import asyncio
+    restore_mutable_state(litellm, _LITELLM_STATE)
+    restore_mutable_state(litellm.proxy.proxy_server, _PROXY_SERVER_STATE)
+    flush_caches(_FLUSHABLE_CACHES)
 
     loop = asyncio.get_event_loop_policy().new_event_loop()
     asyncio.set_event_loop(loop)
-    print(litellm)
-    # from litellm import Router, completion, aembedding, acompletion, embedding
     yield
-
-    # Teardown code (executes after the yield point)
-    loop.close()  # Close the loop created earlier
-    asyncio.set_event_loop(None)  # Remove the reference to the loop
+    loop.close()
+    asyncio.set_event_loop(None)
 
 
 def pytest_collection_modifyitems(config, items):

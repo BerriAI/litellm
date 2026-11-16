@@ -473,6 +473,7 @@ def test_F7_guardrail_ui_settings_classify_directional_scope_support(gateway: Ga
     assert unsupported is not None, response
     assert isinstance(unsupported, list), response
     assert set(unsupported) == {
+        "collieai",
         "lakera",
         "lakera_v2",
         "presidio",

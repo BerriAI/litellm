@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any, Final, Protocol, cast
 import httpx
 from httpx._types import RequestFiles
 
+import litellm
 from litellm.images.utils import ImageEditRequestUtils
 from litellm.litellm_core_utils.core_helpers import decoded_json_object
 from litellm.litellm_core_utils.url_utils import join_api_base
@@ -104,7 +105,11 @@ class GeminiImageEditConfig(BaseImageEditConfig):
     ) -> tuple[dict[str, object], RequestFiles | None]:
         inline_parts: Final = self._prepare_inline_image_parts(image) if image else []
         if not inline_parts:
-            raise ValueError("Gemini image edit requires at least one image.")
+            raise litellm.BadRequestError(
+                message="Gemini image edit requires at least one image.",
+                model=model,
+                llm_provider="gemini",
+            )
 
         # Build parts list with image and prompt (if provided)
         parts: Final = inline_parts.copy()

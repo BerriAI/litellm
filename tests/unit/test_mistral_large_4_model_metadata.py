@@ -11,6 +11,8 @@ from litellm.llms.mistral.chat.transformation import MistralConfig
 
 REPO_ROOT = Path(__file__).parents[2]
 MODELS = ("mistral/mistral-large-4", "mistral/mistral-large-4-0")
+# Probed against api.mistral.ai on 2026-11-13: both ids take these three levels and answer 400 to none.
+ACCEPTED_EFFORTS: Final = ("low", "medium", "high")
 
 
 @pytest.fixture(autouse=True)
@@ -34,7 +36,7 @@ def test_metadata_and_backup(model):
     assert info["mode"] == "chat"
     assert info["max_input_tokens"] == 1048576
     assert 0 < info["cache_read_input_token_cost"] < info["input_cost_per_token"] < info["output_cost_per_token"]
-    assert info["reasoning_effort_levels"] == ["none", "high"]
+    assert info["reasoning_effort_levels"] == list(ACCEPTED_EFFORTS)
     for capability in (
         "supports_vision",
         "supports_reasoning",
@@ -49,7 +51,7 @@ def test_metadata_and_backup(model):
 
 
 @pytest.mark.parametrize("model", MODELS)
-@pytest.mark.parametrize("effort", ["none", "high"])
+@pytest.mark.parametrize("effort", ACCEPTED_EFFORTS)
 def test_reasoning_effort(model, effort):
     config = MistralConfig()
     assert "reasoning_effort" in config.get_supported_openai_params(model)
@@ -92,7 +94,7 @@ def test_large_3_alias_is_not_retargeted():
 
 @pytest.mark.parametrize("model", MODELS)
 @pytest.mark.parametrize("sync_mode", [True, False])
-@pytest.mark.parametrize("effort", ["none", "high"])
+@pytest.mark.parametrize("effort", ACCEPTED_EFFORTS)
 @pytest.mark.asyncio
 async def test_completion_contract(model, sync_mode, effort, respx_mock):
     """Exercise the real adapter against explicitly mocked Mistral HTTP responses."""

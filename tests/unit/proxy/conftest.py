@@ -2,15 +2,15 @@
 
 import _hashlib
 import asyncio
-import copy
 import hashlib
-import inspect
+import importlib
 import logging
 import os
+import sys
 import tempfile
-import warnings
 from collections.abc import Awaitable, Callable, Iterator
 from contextlib import contextmanager
+from types import ModuleType
 from typing import Dict, Final, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -33,6 +33,8 @@ from litellm.integrations.otel.model.payloads import ServiceSpanData
 from litellm.integrations.otel.model.spans import service_span_name
 from tests.unit.litellm_core_utils.fake_secret_vault import FakeSecretVault
 from tests._master_key import MASTER_KEY
+from tests.unit.proxy.spend_tracking.native_budgets_replica import native_budgets_enabled
+from tests._module_state import collect_flushable_caches, flush_caches, restore_mutable_state, snapshot_mutable_state
 
 
 class StubClientNotConnectedError(ClientNotConnectedError):
@@ -53,104 +55,9 @@ def disconnected_prisma() -> DisconnectedPrisma:
     return DisconnectedPrisma()
 
 
-# Top-level assignments of these types are the ones importlib.reload(litellm)
-# would have effectively reset. We snapshot them at conftest import time and
-# deep-copy the snapshot back before every test.
-_SNAPSHOT_TYPES = (list, dict, set, tuple, str, int, float, bool, bytes)
-
-
-def _snapshot_mutable_state(module):
-    """Capture a per-module snapshot of primitive and collection attributes."""
-    snapshot = {}
-    for attr in list(vars(module)):
-        if attr.startswith("_"):
-            continue
-        try:
-            value = getattr(module, attr)
-        except Exception as exc:
-            warnings.warn(
-                f"conftest: could not read {module.__name__}.{attr} during snapshot: {exc}",
-                stacklevel=2,
-            )
-            continue
-        if value is None or isinstance(value, _SNAPSHOT_TYPES):
-            try:
-                snapshot[attr] = _restored_value(value)
-            except Exception as exc:
-                warnings.warn(
-                    f"conftest: could not snapshot {module.__name__}.{attr}: {exc}",
-                    stacklevel=2,
-                )
-    return snapshot
-
-
-_MUTABLE_CONTAINERS = (list, dict, set, bytearray)
-
-
-def _holds_mutable_container(value) -> bool:
-    if isinstance(value, _MUTABLE_CONTAINERS):
-        return True
-    if isinstance(value, tuple):
-        return any(_holds_mutable_container(element) for element in value)
-    return False
-
-
-def _restored_value(value):
-    return copy.deepcopy(value) if _holds_mutable_container(value) else value
-
-
-def _restore_mutable_state(module, snapshot):
-    for attr, default in snapshot.items():
-        try:
-            setattr(module, attr, _restored_value(default))
-        except Exception as exc:
-            warnings.warn(
-                f"conftest: could not restore {module.__name__}.{attr}: {exc}",
-                stacklevel=2,
-            )
-
-
-def _collect_flushable_caches():
-    """Return (module, attr) pairs whose values expose flush_cache()."""
-    targets = []
-    for module in (litellm, litellm.proxy.proxy_server):
-        for attr in list(vars(module)):
-            if attr.startswith("_"):
-                continue
-            try:
-                value = getattr(module, attr)
-            except Exception:
-                continue
-            # Only instances — a class reference has an unbound flush_cache
-            # that can't be called without a self argument.
-            if inspect.isclass(value) or inspect.ismodule(value):
-                continue
-            if callable(getattr(value, "flush_cache", None)):
-                targets.append((module, attr))
-    return targets
-
-
-def _flush_caches(targets):
-    for module, attr in targets:
-        try:
-            value = getattr(module, attr)
-        except Exception:
-            continue
-        flush = getattr(value, "flush_cache", None)
-        if callable(flush):
-            try:
-                flush()
-            except Exception as exc:
-                warnings.warn(
-                    f"conftest: flush_cache failed on {module.__name__}.{attr}: {exc}",
-                    stacklevel=2,
-                )
-
-
-# Snapshot once at conftest import — these are the "clean" module states.
-_LITELLM_STATE = _snapshot_mutable_state(litellm)
-_PROXY_SERVER_STATE = _snapshot_mutable_state(litellm.proxy.proxy_server)
-_FLUSHABLE_CACHES = _collect_flushable_caches()
+_LITELLM_STATE: Final = snapshot_mutable_state(litellm)
+_PROXY_SERVER_STATE: Final = snapshot_mutable_state(litellm.proxy.proxy_server)
+_FLUSHABLE_CACHES: Final = collect_flushable_caches((litellm, litellm.proxy.proxy_server))
 _PROXY_APP_LIFESPAN: Final = litellm.proxy.proxy_server.app.router.lifespan_context
 
 
@@ -179,9 +86,9 @@ def setup_and_teardown():
         Use pytest's monkeypatch.setattr() or a local fixture for those
         cases — don't rely on this autouse fixture to undo them.
     """
-    _restore_mutable_state(litellm, _LITELLM_STATE)
-    _restore_mutable_state(litellm.proxy.proxy_server, _PROXY_SERVER_STATE)
-    _flush_caches(_FLUSHABLE_CACHES)
+    restore_mutable_state(litellm, _LITELLM_STATE)
+    restore_mutable_state(litellm.proxy.proxy_server, _PROXY_SERVER_STATE)
+    flush_caches(_FLUSHABLE_CACHES)
 
     loop = asyncio.get_event_loop_policy().new_event_loop()
     asyncio.set_event_loop(loop)
@@ -241,6 +148,11 @@ def pytest_runtest_teardown(item, nextitem):
             setattr(proxy_server, name, snapshot[name])
         elif name in vars(proxy_server):
             delattr(proxy_server, name)
+
+
+@pytest.fixture
+def native_budgets_on(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    yield from native_budgets_enabled(monkeypatch)
 
 
 @pytest.fixture
@@ -523,6 +435,7 @@ def postgres_span_names() -> Iterator[Callable[[], Awaitable[tuple[str, ...]]]]:
 def fips_openssl(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(_hashlib, "get_fips_mode", lambda: 1)
     monkeypatch.setattr(_hashlib, "scrypt", MagicMock(side_effect=ValueError("[digital envelope routines] unsupported")))
+    monkeypatch.setattr("litellm.proxy.common_utils.encrypt_decrypt_utils._KBKDF_PROPERTIES", None)
 
 
 @pytest.fixture
@@ -545,3 +458,51 @@ def pbkdf2_on_event_loop(monkeypatch: pytest.MonkeyPatch) -> list[bool]:
 
     monkeypatch.setattr(hashlib, "pbkdf2_hmac", recording_pbkdf2)
     return on_event_loop
+
+
+def _per_token_priced(model_name: str, backend: str, input_cost: float, output_cost: float) -> dict[str, object]:
+    return {
+        "model_name": model_name,
+        "litellm_params": {
+            "model": backend,
+            "api_key": "sk-fixture",
+            "input_cost_per_token": input_cost,
+            "output_cost_per_token": output_cost,
+        },
+    }
+
+
+@pytest.fixture
+def free_and_paid_router() -> "litellm.Router":
+    import litellm
+
+    return litellm.Router(
+        model_list=[
+            _per_token_priced("free-model", "openai/free-backend", 0.0, 0.0),
+            _per_token_priced("paid-model", "openai/paid-backend", 1e-6, 2e-6),
+        ]
+    )
+
+
+@pytest.fixture
+def import_without_redis_installed(monkeypatch: pytest.MonkeyPatch) -> Callable[[str], ModuleType]:
+    def _import(module_name: str) -> ModuleType:
+        package_name, _, attribute = module_name.rpartition(".")
+        monkeypatch.setattr(sys.modules[package_name], attribute, sys.modules[module_name])
+        monkeypatch.setitem(sys.modules, "redis", None)
+        for name in tuple(sys.modules):
+            if name.startswith("redis."):
+                monkeypatch.setitem(sys.modules, name, None)
+        monkeypatch.delitem(sys.modules, module_name)
+        return importlib.import_module(module_name)
+
+    return _import
+
+
+@pytest.fixture(autouse=True)
+def _forget_email_in_use_checks() -> Iterator[None]:
+    from litellm.proxy.auth import auth_checks
+
+    auth_checks.email_in_use_checked_at.clear()
+    yield
+    auth_checks.email_in_use_checked_at.clear()
