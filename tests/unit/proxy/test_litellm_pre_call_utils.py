@@ -1361,6 +1361,58 @@ _PROXY_AND_PROVIDER_KEYS: Final = {"x-litellm-api-key": "Bearer sk-virtual-key",
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    "bad_pin",
+    [
+        "\n",
+        " ",
+        "\t",
+        " uprof_x",
+        "uprof_x ",
+        "uprof_\tx",
+        "uprof_\x00x",
+        "uprof_\x7fx",
+        "uprof_\x85x",
+        "uprof_\ud800x",
+        "",
+        None,
+        7,
+    ],
+)
+@pytest.mark.parametrize("team_pin", [None, "uprof_team"])
+async def test_malformed_stored_profile_is_skipped(bad_pin: object, team_pin: str | None) -> None:
+    updated: Final = await _request_data_added_by_the_proxy(
+        {},
+        {},
+        {},
+        UserAPIKeyAuth(
+            api_key="hashed-key",
+            user_id="test-user",
+            metadata={"anthropic_user_profile_id": bad_pin},
+            team_metadata={"anthropic_user_profile_id": team_pin},
+        ),
+    )
+    forwarded: Final = ProviderSpecificHeaderUtils.get_provider_specific_headers(
+        provider_specific_header=updated.get("provider_specific_header"), custom_llm_provider="anthropic"
+    )
+    assert forwarded.get(USER_PROFILE_ID_HEADER) == team_pin
+
+
+@pytest.mark.asyncio
+async def test_malformed_stored_team_profile_is_skipped() -> None:
+    updated: Final = await _request_data_added_by_the_proxy(
+        {},
+        {},
+        {},
+        UserAPIKeyAuth(api_key="hashed-key", user_id="test-user", team_metadata={"anthropic_user_profile_id": "\n"}),
+    )
+    forwarded: Final = ProviderSpecificHeaderUtils.get_provider_specific_headers(
+        provider_specific_header=updated.get("provider_specific_header"), custom_llm_provider="anthropic"
+    )
+    assert forwarded.get(USER_PROFILE_ID_HEADER) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     "sent,request_headers,general_settings,custom_llm_provider,expected",
     [
         ({"api_key": "sk-ant-api03-caller"}, {}, {}, "anthropic", "uprof_client"),

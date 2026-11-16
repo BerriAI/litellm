@@ -90,7 +90,7 @@ from litellm.proxy._types import (
     TeamCallbackMetadata,
     UserAPIKeyAuth,
 )
-from litellm.proxy.auth.auth_utils import get_request_route
+from litellm.proxy.auth.auth_utils import get_request_route, is_valid_anthropic_user_profile_id
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.common_utils.callback_utils import (
     decrypt_callback_vars,
@@ -855,7 +855,14 @@ def _key_or_team_metadata_flag_is_true(
 
 def pinned_anthropic_user_profile_id(user_api_key_dict: UserAPIKeyAuth) -> str | None:
     admin_mapped: Final = _key_then_team_metadata_values(user_api_key_dict, ANTHROPIC_USER_PROFILE_ID_METADATA_KEY)
-    return next((value for value in admin_mapped if isinstance(value, str) and value), None)
+    return next(
+        (
+            value
+            for value in admin_mapped
+            if isinstance(value, str) and value and is_valid_anthropic_user_profile_id(value)
+        ),
+        None,
+    )
 
 
 def anthropic_user_profile_id(
