@@ -25,6 +25,7 @@ from litellm.responses.litellm_completion_transformation.compaction_items import
 )
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import (
+    ALL_RESPONSES_API_TOOL_PARAMS,
     AllMessageValues,
     ChatCompletionResponseMessage,
     GenericChatCompletionMessage,
@@ -281,11 +282,35 @@ def _instruction_items_before(
     )
 
 
-def _stored_request_tools(proxy_server_request: Mapping[str, object] | None) -> object | None:
-    """The stored turn's ``tools``, so its calls read the same namespace shapes it was sent with."""
+def _tools_sent_with(
+    proxy_server_request: Mapping[str, object] | None, loaded_before: Sequence[Mapping[str, object]]
+) -> object | None:
+    """The tools a stored turn was sent with, so its calls replay under the names the provider saw."""
     if proxy_server_request is None:
         return None
-    return with_additional_tools_hoisted(proxy_server_request, drop_params=False).get("tools")
+    hoisted: Final = with_additional_tools_hoisted(proxy_server_request, drop_params=False)
+    request_input: Final = hoisted.get("input")
+    tools: Final = hoisted.get("tools")
+    if not isinstance(request_input, (str, list)) or not (tools is None or isinstance(tools, list)):
+        return tools
+    sent_tools: Final = cast("list[ALL_RESPONSES_API_TOOL_PARAMS] | None", tools)  # cast-ok: forwarded as sent
+    searched: Final = bridge_client_tool_search(
+        cast(ResponseInputParam, request_input),  # cast-ok: forwarded as sent, as inference does
+        sent_tools,
+        loaded_before,
+    )
+    return list(searched.tools) if searched.bridged else sent_tools
+
+
+def _tools_sent_by_turn(proxy_server_requests: Sequence[Mapping[str, object] | None]) -> tuple[object | None, ...]:
+    loaded_by_turn: Final = tuple(
+        () if request is None else client_tool_search_loaded_tools(request.get("input"))
+        for request in proxy_server_requests
+    )
+    return tuple(
+        _tools_sent_with(request, tuple(chain.from_iterable(loaded_by_turn[:index])))
+        for index, request in enumerate(proxy_server_requests)
+    )
 
 
 def _stored_instructions(proxy_server_request: Mapping[str, object] | None) -> str | None:
@@ -342,18 +367,21 @@ class ResponsesSessionHandler:
             replayable_turns if _holds_compaction_point(all_spend_logs, proxy_server_requests) else len(all_spend_logs)
         )
         earlier_instructions: Final = _instruction_items_before(proxy_server_requests, start)
+        tools_by_turn: Final = _tools_sent_by_turn(proxy_server_requests)
         replayed_history: Final = ResponsesSessionHandler._history_of_turns(
             all_spend_logs[start.index : replayed_turns],
             [
                 _replayed_request(index, proxy_server_requests[index], start, earlier_instructions)
                 for index in range(start.index, replayed_turns)
             ],
+            tools_by_turn[start.index : replayed_turns],
             item_cache_control,
             tool_call_provider_fields,
         )
         history_before_replay: Final = ResponsesSessionHandler._history_of_turns(
             all_spend_logs[: start.index],
             proxy_server_requests[: start.index],
+            tools_by_turn[: start.index],
             item_cache_control,
             tool_call_provider_fields,
         )
@@ -414,6 +442,7 @@ class ResponsesSessionHandler:
     def _history_of_turns(
         spend_logs: Sequence["SpendLogsPayload"],
         proxy_server_requests: Sequence[Mapping[str, object] | None],
+        sent_tools: Sequence[object | None],
         item_cache_control: bool,
         tool_call_provider_fields: bool,
     ) -> list["SessionMessage"]:
@@ -425,8 +454,11 @@ class ResponsesSessionHandler:
                     chat_completion_message_history=[],
                     item_cache_control=item_cache_control,
                     tool_call_provider_fields=tool_call_provider_fields,
+                    stored_tools=stored_tools,
                 )
-                for spend_log, proxy_server_request in zip(spend_logs, proxy_server_requests, strict=True)
+                for spend_log, proxy_server_request, stored_tools in zip(
+                    spend_logs, proxy_server_requests, sent_tools, strict=True
+                )
             )
         )
 
@@ -443,6 +475,8 @@ class ResponsesSessionHandler:
         ],
         item_cache_control: bool = False,
         tool_call_provider_fields: bool = False,
+        *,
+        stored_tools: object | None,
     ):
         """
         Extend the chat completion message history with the spend log payload
@@ -452,7 +486,6 @@ class ResponsesSessionHandler:
         )
 
         response_input_param: str | ResponseInputParam | None = None
-        stored_tools: Final = _stored_request_tools(proxy_server_request_dict)
 
         ############################################################
         # Add Input messages for this Spend Log

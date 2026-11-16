@@ -1,6 +1,7 @@
 import json
 import sqlite3
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from itertools import chain
 from types import SimpleNamespace
 from typing import Final
@@ -21,6 +22,7 @@ from litellm.responses.litellm_completion_transformation.session_handler import 
     ResponsesSessionHandler,
     _normalize_redacted_tool_call_arguments,
 )
+from litellm.responses.litellm_completion_transformation.tool_search import CLIENT_TOOL_SEARCH_FUNCTION_NAME
 from litellm.responses.litellm_completion_transformation.transformation import ChatCompletionSession
 from litellm.responses.mcp.litellm_proxy_mcp_handler import LiteLLM_Proxy_MCP_Handler
 from litellm.responses.utils import ResponsesAPIRequestUtils
@@ -1509,34 +1511,67 @@ def _additional_tools_item(tool: Mapping[str, object]) -> dict[str, object]:
     return {"type": "additional_tools", "id": "at_1", "role": "developer", "tools": [tool]}
 
 
-SentTools = tuple[list[Mapping[str, object]], list[Mapping[str, object]]]
+CLIENT_TOOL_SEARCH: Final = {"type": "tool_search", "execution": "client"}
+CLIENT_TOOL_SEARCH_CALL: Final = {
+    "type": "tool_search_call",
+    "call_id": "search_1",
+    "execution": "client",
+    "arguments": {"query": "document schemas"},
+}
+
+
+def _client_tool_search_output(tool: Mapping[str, object]) -> dict[str, object]:
+    return {
+        "type": "tool_search_output",
+        "call_id": "search_1",
+        "status": "completed",
+        "execution": "client",
+        "tools": [tool],
+    }
+
+
+@dataclass(frozen=True, slots=True)
+class SentTools:
+    tools: list[Mapping[str, object]]
+    stored_input: list[Mapping[str, object]]
+    next_input: list[Mapping[str, object]]
 
 
 def _sent_as_tools(tool: Mapping[str, object]) -> SentTools:
-    return [tool], []
+    return SentTools(tools=[tool], stored_input=[], next_input=[])
 
 
 def _sent_in_additional_tools(tool: Mapping[str, object]) -> SentTools:
-    return [], [_additional_tools_item(tool)]
+    return SentTools(tools=[], stored_input=[_additional_tools_item(tool)], next_input=[_additional_tools_item(tool)])
+
+
+def _loaded_by_client_tool_search(tool: Mapping[str, object]) -> SentTools:
+    return SentTools(
+        tools=[CLIENT_TOOL_SEARCH],
+        stored_input=[CLIENT_TOOL_SEARCH_CALL, _client_tool_search_output(tool)],
+        next_input=[],
+    )
 
 
 SENT_TOOL_PLACEMENTS: Final = pytest.mark.parametrize(
-    "placement", [_sent_as_tools, _sent_in_additional_tools], ids=["tools", "additional_tools"]
+    "placement",
+    [_sent_as_tools, _sent_in_additional_tools, _loaded_by_client_tool_search],
+    ids=["tools", "additional_tools", "client_tool_search"],
 )
 
 
 def _stored_long_member_call_turn(
     response_id: str, placement: Callable[[Mapping[str, object]], SentTools]
 ) -> dict[str, object]:
-    tools, input_items = placement(LONG_NAMESPACE_TOOL)
+    sent: Final = placement(LONG_NAMESPACE_TOOL)
     return {
         "request_id": response_id,
         "call_type": "aresponses",
         "session_id": "long-member-session",
         "proxy_server_request": {
-            "input": [*input_items, {"role": "user", "content": "Fetch document N-42"}],
+            "input": [*sent.stored_input, {"role": "user", "content": "Fetch document N-42"}],
             "model": "gemini-flash",
-            "tools": tools,
+            "tools": sent.tools,
         },
         "response": {
             "id": "chatcmpl-long-member",
@@ -1565,37 +1600,81 @@ def _stored_long_member_call_turn(
     }
 
 
-@SENT_TOOL_PLACEMENTS
-async def test_previous_response_replays_a_long_member_call_under_the_name_the_provider_was_sent(
-    monkeypatch: pytest.MonkeyPatch, placement: Callable[[Mapping[str, object]], SentTools]
-):
-    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    response_id: Final = ResponsesAPIRequestUtils._build_responses_api_response_id(
+def _long_member_response_id() -> str:
+    return ResponsesAPIRequestUtils._build_responses_api_response_id(
         custom_llm_provider="gemini", model_id=None, response_id="chatcmpl-long-member"
     )
-    stored: Final = _StoredSpendLogs((_stored_long_member_call_turn(response_id, placement),))
-    tools, input_items = placement(LONG_NAMESPACE_TOOL)
 
+
+async def _answer_the_long_member_call(stored: _StoredSpendLogs, response_id: str, sent: SentTools) -> None:
     with patch("litellm.proxy.proxy_server.prisma_client", SimpleNamespace(db=stored)), respx.mock:
         route: Final = respx.post(url__regex=GEMINI_URL_PATTERN).mock(return_value=_gemini_answer())
         await litellm.aresponses(
             model="gemini/gemini-3.5-flash",
             input=[
-                *input_items,
+                *sent.next_input,
                 {"type": "function_call_output", "call_id": "call_1", "output": "schema for N-42"},
             ],
             previous_response_id=response_id,
-            tools=tools,
+            tools=sent.tools,
             api_key="test-gemini-key",
         )
         sent_body: Final = json.loads(route.calls.last.request.content)
 
-    declared: Final = [
-        declaration["name"]
-        for declaration in chain.from_iterable(tool["function_declarations"] for tool in sent_body["tools"])
-    ]
+    declarations: Final = chain.from_iterable(tool["function_declarations"] for tool in sent_body["tools"])
+    declared: Final = [declaration["name"] for declaration in declarations]
     parts: Final = list(chain.from_iterable(turn["parts"] for turn in sent_body["contents"]))
     called: Final = [part["function_call"]["name"] for part in parts if "function_call" in part]
     answered: Final = [part["function_response"]["name"] for part in parts if "function_response" in part]
-    assert len(declared) == 1
-    assert called == answered == list(declared)
+    members_declared: Final = [name for name in declared if name != CLIENT_TOOL_SEARCH_FUNCTION_NAME]
+    assert len(members_declared) == 1
+    assert [name for name in called if name != CLIENT_TOOL_SEARCH_FUNCTION_NAME] == members_declared
+    assert [name for name in answered if name != CLIENT_TOOL_SEARCH_FUNCTION_NAME] == members_declared
+
+
+@SENT_TOOL_PLACEMENTS
+async def test_previous_response_replays_a_long_member_call_under_the_name_the_provider_was_sent(
+    monkeypatch: pytest.MonkeyPatch, placement: Callable[[Mapping[str, object]], SentTools]
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    response_id: Final = _long_member_response_id()
+    stored: Final = _StoredSpendLogs((_stored_long_member_call_turn(response_id, placement),))
+
+    await _answer_the_long_member_call(stored, response_id, placement(LONG_NAMESPACE_TOOL))
+
+
+def _searched_on_client_earlier(tool: Mapping[str, object]) -> SentTools:
+    return SentTools(tools=[CLIENT_TOOL_SEARCH], stored_input=[], next_input=[])
+
+
+async def test_previous_response_replays_a_long_member_call_whose_namespace_an_earlier_turn_searched_for(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    response_id: Final = _long_member_response_id()
+    search_turn: Final = {
+        "request_id": "client-tool-search-turn",
+        "call_type": "aresponses",
+        "session_id": "long-member-session",
+        "proxy_server_request": {
+            "input": [CLIENT_TOOL_SEARCH_CALL, _client_tool_search_output(LONG_NAMESPACE_TOOL)],
+            "model": "gemini-flash",
+            "tools": [CLIENT_TOOL_SEARCH],
+        },
+        "response": {
+            "id": "chatcmpl-tool-search",
+            "object": "chat.completion",
+            "choices": [
+                {
+                    "index": 0,
+                    "finish_reason": "stop",
+                    "message": {"role": "assistant", "content": "I can fetch document schemas now."},
+                }
+            ],
+        },
+    }
+    stored: Final = _StoredSpendLogs(
+        (search_turn, _stored_long_member_call_turn(response_id, _searched_on_client_earlier))
+    )
+
+    await _answer_the_long_member_call(stored, response_id, _searched_on_client_earlier(LONG_NAMESPACE_TOOL))
