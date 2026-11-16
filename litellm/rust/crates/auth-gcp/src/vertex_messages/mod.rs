@@ -6,6 +6,7 @@ mod adc;
 mod aws_wif;
 mod builders;
 mod environment;
+mod external_authorized_user;
 mod failure;
 mod source;
 
@@ -723,6 +724,30 @@ mod tests {
             format!(
                 "The file {path} does not have a valid type. Type is weird, expected one of ('authorized_user', 'service_account', 'external_account', 'external_account_authorized_user', 'impersonated_service_account', 'gdch_service_account')."
             )
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn an_application_default_external_account_authorized_user_logs_in(
+        #[future] token_server: TokenServer,
+    ) {
+        let server = token_server.await;
+        let file = key_file(&json!({
+            "type": "external_account_authorized_user",
+            "audience": "//iam.googleapis.com/locations/global/workforcePools/p/providers/q",
+            "refresh_token": "r", "token_url": server.url, "client_id": "c", "client_secret": "s",
+        }));
+        let login = auth(environment(&[(
+            "GOOGLE_APPLICATION_CREDENTIALS",
+            file.path().to_str().unwrap(),
+        )]))
+        .login(None, Some("p".into()))
+        .await
+        .unwrap();
+        assert_eq!(
+            (login.token.expose(), login.project_id.as_str()),
+            ("user-token", "p")
         );
     }
 

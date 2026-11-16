@@ -3174,6 +3174,7 @@ def _vertex_logger() -> Logging:
         ("google.auth.exceptions.InvalidValue", google_auth.InvalidValue),
         ("google.auth.exceptions.RefreshError", google_auth.RefreshError),
         ("google.auth.exceptions.TransportError", google_auth.TransportError),
+        ("google.auth.exceptions.OAuthError", google_auth.OAuthError),
     ],
 )
 def test_a_vertex_login_failure_raises_the_exception_python_s_load_auth_raises(
