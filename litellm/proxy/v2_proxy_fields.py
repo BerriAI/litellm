@@ -1,7 +1,3 @@
-# V2 callback fields and CallFacts that exist only at the proxy's own hook points (pre_call, post_call_*,
-# response_headers), wired from proxy/utils.py. Their sources read proxy state: the v3 parallel request limiter's
-# request stash and explicit output cap, the fallback_on_saturation settings, and the proxy auth object. Fields
-# that the SDK logging path can also derive stay in custom_logger_v2/derivations.py.
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import replace

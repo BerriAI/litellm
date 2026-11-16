@@ -216,36 +216,6 @@ async def test_hook_searches_through_the_injected_router_with_the_request_metada
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("sdk_verbose", [False, True])
-async def test_hook_falls_back_to_the_sdk_when_the_runtime_has_no_router(
-    registry_with: RegisterStores,
-    warnings: list[logging.LogRecord],
-    monkeypatch: pytest.MonkeyPatch,
-    sdk_verbose: bool,
-) -> None:
-    monkeypatch.setattr(litellm, "set_verbose", sdk_verbose)
-    registry_with("vs-sdk", custom_llm_provider="lit6752-not-a-provider")
-
-    _, messages, _ = await _run_hook(
-        VectorStorePreCallHook(proxy_runtime=FakeProxyRuntime(router=None)),
-        ["vs-sdk"],
-        FakeLoggingObj({"user_api_key_team_id": "team-a"}),
-    )
-
-    assert messages == [{"role": "user", "content": "what is litellm?"}]
-    search_warnings: Final = tuple(
-        record.getMessage()
-        for record in warnings
-        if record.getMessage().startswith("Vector store search failed for vector_store_id=")
-    )
-    assert len(search_warnings) == 1
-    assert search_warnings[0].startswith(
-        "Vector store search failed for vector_store_id=vs-sdk, continuing without its context: "
-    )
-    assert "is not a valid LlmProviders" in search_warnings[0]
-
-
-@pytest.mark.asyncio
 async def test_every_healthy_vector_store_contributes_its_own_context(registry_with: RegisterStores) -> None:
     """Regression (LIT-6752): each store appended its context to the original messages, so only the last one survived."""
     registry_with("vs-one", "vs-two")

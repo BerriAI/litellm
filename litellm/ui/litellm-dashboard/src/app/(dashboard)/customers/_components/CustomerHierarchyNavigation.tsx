@@ -1,7 +1,9 @@
 import { useTranslation } from "react-i18next";
+import { createSerializer, parseAsString, useQueryStates, type inferParserType } from "nuqs";
 import { cn } from "@/lib/cva.config";
 import { uiHref } from "@/utils/uiHref";
 import type { CustomerUsageScope } from "./customerUsageApi";
+import { customerUsageDateParsers } from "./customerUsageRange";
 
 type CustomerHierarchyView = "usage" | "teams" | "members" | "budget_groups" | "settings";
 const LABELS = {
@@ -12,11 +14,30 @@ const LABELS = {
   settings: "customerPortal.hierarchy.settings",
 } as const;
 
-export function customerHierarchyHref(page: "usage" | "manage", scope: CustomerUsageScope): string {
-  const query = new URLSearchParams({ org: scope.org });
-  if (scope.team) query.set("team", scope.team);
-  if (scope.member) query.set("member", scope.member);
-  return `${uiHref(`customers/${page}`)}?${query}`;
+const hierarchyParsers = {
+  org: parseAsString,
+  team: parseAsString,
+  member: parseAsString,
+  ...customerUsageDateParsers,
+};
+const hierarchyHref = createSerializer(hierarchyParsers);
+const listHref = createSerializer(customerUsageDateParsers);
+
+export function customerHierarchyHref(
+  page: "usage" | "manage",
+  scope: CustomerUsageScope,
+  dates: Partial<inferParserType<typeof customerUsageDateParsers>> = {},
+): string {
+  return hierarchyHref(uiHref(`customers/${page}`), { ...scope, ...dates });
+}
+
+export function useCustomerHierarchyLinks() {
+  const [dates] = useQueryStates(customerUsageDateParsers);
+  return {
+    customerHierarchyHref: (page: "usage" | "manage", scope: CustomerUsageScope) =>
+      customerHierarchyHref(page, scope, dates),
+    customersHref: listHref(uiHref("customers"), dates),
+  };
 }
 
 export default function CustomerHierarchyNavigation({
@@ -27,6 +48,7 @@ export default function CustomerHierarchyNavigation({
   active: CustomerHierarchyView;
 }) {
   const { t } = useTranslation();
+  const { customerHierarchyHref } = useCustomerHierarchyLinks();
   let pages: readonly CustomerHierarchyView[] = ["usage", "teams", "members", "budget_groups", "settings"];
   if (scope.team) pages = ["usage", "members", "settings"];
   if (scope.member) pages = ["usage", "settings"];
