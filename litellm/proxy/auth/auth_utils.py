@@ -22,6 +22,7 @@ from litellm.constants import (
     INVALID_VIRTUAL_KEY_ERROR_MARKER,
     MINIMUM_CUSTOM_KEY_LENGTH,
     MODEL_BATCH_ENQUEUED_TOKEN_LIMIT_METADATA_KEY,
+    MODEL_LIMIT_MAX_BORROW_MULTIPLE_METADATA_KEY,
     STANDARD_CUSTOMER_ID_HEADERS,
 )
 from litellm.litellm_core_utils.clientside_credential_handler import (
@@ -1922,7 +1923,21 @@ class BatchLimitRequest(Protocol):
     def model_fields_set(self) -> Collection[str]: ...
 
 
-_ADMIN_ONLY_METADATA_KEYS: Final = (*ADMIN_ONLY_BATCH_LIMIT_METADATA_KEYS, TEAM_S3_BUCKET_ALLOWLIST_METADATA_KEY)
+_ADMIN_ONLY_METADATA_KEYS: Final = (
+    *ADMIN_ONLY_BATCH_LIMIT_METADATA_KEYS,
+    TEAM_S3_BUCKET_ALLOWLIST_METADATA_KEY,
+    MODEL_LIMIT_MAX_BORROW_MULTIPLE_METADATA_KEY,
+)
+_ADMIN_ONLY_METADATA_REASONS: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        TEAM_S3_BUCKET_ALLOWLIST_METADATA_KEY: (
+            "It lets the holder read and write those buckets with the proxy's AWS credentials."
+        ),
+        MODEL_LIMIT_MAX_BORROW_MULTIPLE_METADATA_KEY: (
+            "It caps how far the holder borrows idle model capacity, so the holder cannot raise or remove it."
+        ),
+    }
+)
 
 
 def enforce_batch_limits_are_admin_only(
@@ -1955,10 +1970,8 @@ def enforce_batch_limits_are_admin_only(
     )
     if changed is None:
         return
-    reason: Final = (
-        "It lets the holder read and write those buckets with the proxy's AWS credentials."
-        if changed == TEAM_S3_BUCKET_ALLOWLIST_METADATA_KEY
-        else "It limits what the holder can do with batches, so the holder cannot raise it."
+    reason: Final = _ADMIN_ONLY_METADATA_REASONS.get(
+        changed, "It limits what the holder can do with batches, so the holder cannot raise it."
     )
     raise HTTPException(
         status_code=403,
@@ -2665,7 +2678,7 @@ def _cache_prediction_model_candidates(
 
 
 def _extract_model_candidates_from_request(
-    request_data: dict,
+    request_data: Mapping[str, object],
     route: str,
     request_headers: Mapping[str, object] | None = None,
     request_query_params: Mapping[str, object] | None = None,
@@ -2719,10 +2732,11 @@ def _extract_model_candidates_from_request(
         _append_model_candidates(candidates, request_data.get("target_model_names"))
     if _route_matches_any_marker(route=route, markers=_MODEL_ROUTING_SESSION_MODEL_ROUTE_MARKERS):
         session: Final = request_data.get("session")
-        if isinstance(session, dict):
+        if isinstance(session, Mapping):
             _append_model_candidates(candidates, session.get("model"))
-    if uses_completion_model_sources and isinstance(request_data.get("completion"), dict):
-        _append_model_candidates(candidates, request_data["completion"].get("model"))
+    completion: Final = request_data.get("completion")
+    if uses_completion_model_sources and isinstance(completion, Mapping):
+        _append_model_candidates(candidates, completion.get("model"))
 
     if uses_model_routing_sources:
         if uses_header_or_query_model_sources:
@@ -2792,7 +2806,7 @@ def request_dispatched_to_provider_pass_through(request: Request) -> bool:
 
 
 def get_model_from_request(
-    request_data: dict,
+    request_data: Mapping[str, object],
     route: str,
     request_headers: Mapping[str, object] | None = None,
     request_query_params: Mapping[str, object] | None = None,

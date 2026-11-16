@@ -14,7 +14,8 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Optional, Protocol, Union, cast, get_args
 
 import httpx
-from pydantic import JsonValue, TypeAdapter
+from pydantic import JsonValue, TypeAdapter, ValidationError
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm import verbose_logger
@@ -106,6 +107,8 @@ from ..common_utils import (
     VertexAIError,
     build_json_schema,
     build_vertex_schema,
+    has_bare_root_union,
+    parameters_json_schema_for,
     supports_response_json_schema,
     with_integer_enums_that_fit,
 )
@@ -553,6 +556,48 @@ def mapped_gemini_speech_config(
     }
 
 
+class _CallerFunction(TypedDict, total=False):
+    parameters: ReadOnly[Mapping[str, object]]
+
+
+class _CallerTool(_CallerFunction, total=False):
+    function: ReadOnly[_CallerFunction]
+
+
+class _ToolChoiceParam(TypedDict, total=False):
+    tool_choice: ReadOnly[object]
+
+
+_CALLER_TOOL: Final = TypeAdapter(_CallerTool)
+_CALLER_TOOLS: Final = TypeAdapter(tuple[object, ...])
+_TOOL_CHOICE_PARAM: Final = TypeAdapter(_ToolChoiceParam)
+
+
+def _caller_parameters(tool: object) -> Mapping[str, object] | None:
+    try:
+        caller_tool: Final = _CALLER_TOOL.validate_python(tool)
+    except ValidationError:
+        return None
+    return caller_tool.get("function", caller_tool).get("parameters")
+
+
+def _parameters_json_schema(tool: object, forced_function_names: frozenset[str]) -> Mapping[str, JsonValue] | None:
+    parameters: Final = _caller_parameters(tool)
+    json_schema: Final = None if parameters is None else parameters_json_schema_for(parameters)
+    if json_schema is None or declared_function_name(tool) not in forced_function_names:
+        return json_schema
+    return None if has_bare_root_union(json_schema) else json_schema
+
+
+def _parameters_json_schemas(
+    tools: object, allow_parameters_json_schema: bool, forced_function_names: frozenset[str]
+) -> tuple[Mapping[str, JsonValue] | None, ...]:
+    return tuple(
+        _parameters_json_schema(tool, forced_function_names) if allow_parameters_json_schema else None
+        for tool in _CALLER_TOOLS.validate_python(tools)
+    )
+
+
 def _as_chat_tool(member: JsonValue) -> JsonValue:
     if not isinstance(member, dict) or "function" in member or "name" not in member:
         return member
@@ -683,6 +728,16 @@ def _forced_function_names(name: str, tools: JsonValue) -> tuple[str, ...]:
         _qualified_names_of(name, tool, declarable, declared) for tool, declared in declared_by_tool
     )
     return tuple(qualified) or (name,)
+
+
+def _function_names_forced_by(tool_choice: object, tools: JsonValue) -> frozenset[str]:
+    match tool_choice:
+        case "required":
+            return frozenset(chain.from_iterable(_names_each_tool_declares(_listed(tools))))
+        case {"function": {"name": str() as name}}:
+            return frozenset(_forced_function_names(name, tools))
+        case _:
+            return frozenset()
 
 
 class VertexAIBaseConfig:
@@ -1226,7 +1281,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         value: list[dict],
         optional_params: dict,
         send_integer_enums: bool = False,
+        allow_parameters_json_schema: bool = True,
         outside_declarations: JsonValue = None,
+        tool_choice: object = None,
     ) -> list[Tools]:
         """
         Map OpenAI-style tools/functions to Vertex AI format.
@@ -1235,6 +1292,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             value: List of tool definitions
             optional_params: Request-scoped parameters to store retrieval config
             send_integer_enums: Whether to send integer enums with string values
+            allow_parameters_json_schema: Whether a tool whose parameters root Vertex cannot take as `parameters`
+                goes as `parametersJsonSchema`
 
         Returns:
             List of mapped tools in Vertex AI format
@@ -1254,18 +1313,25 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         computerUse: dict | None = None
         # remove 'additionalProperties' from tools
         schema_value: Final[JsonValue] = deepcopy(cast(JsonValue, value))  # cast-ok: tools are JSON request data
+        parameters_json_schemas: Final = _parameters_json_schemas(
+            _with_namespace_members_inlined(schema_value, outside_declarations),
+            allow_parameters_json_schema,
+            _function_names_forced_by(tool_choice, [*_listed(schema_value), *_listed(outside_declarations)]),
+        )
         remove_additional_properties(schema_value)
         # remove 'strict' from tools
         remove_strict_from_schema(schema_value)
 
         inlined_tools: Final = _with_namespace_members_inlined(schema_value, outside_declarations)
-        for tool in cast(list[dict], inlined_tools):  # cast-ok: a deep copy keeps the caller's tool shape
+        for index, parameters_json_schema in enumerate(parameters_json_schemas):
+            tool = cast(list[dict], inlined_tools)[index]  # cast-ok: a deep copy keeps the caller's tool shape
             openai_function_object: ChatCompletionToolParamFunctionChunk | None = None
             if "function" in tool:  # tools list
                 _openai_function_object = ChatCompletionToolParamFunctionChunk(**tool["function"])
 
                 if (
-                    "parameters" in _openai_function_object
+                    parameters_json_schema is None
+                    and "parameters" in _openai_function_object
                     and _openai_function_object["parameters"] is not None
                     and isinstance(_openai_function_object["parameters"], dict)
                 ):  # OPENAI accepts JSON Schema, Google accepts OpenAPI schema.
@@ -1328,8 +1394,12 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     # Empty config - Gemini will use defaults
                     computerUse = {}
             elif openai_function_object is not None:
-                gtool_func_declaration = FunctionDeclaration(
-                    name=openai_function_object["name"],
+                gtool_func_declaration = (
+                    FunctionDeclaration(name=openai_function_object["name"])
+                    if parameters_json_schema is None
+                    else FunctionDeclaration(
+                        name=openai_function_object["name"], parametersJsonSchema=parameters_json_schema
+                    )
                 )
                 _description = openai_function_object.get("description", None)
                 _parameters = openai_function_object.get("parameters", None)
@@ -1339,7 +1409,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     }
                 if _description is not None:
                     gtool_func_declaration["description"] = _description
-                if _parameters is not None:
+                if _parameters is not None and parameters_json_schema is None:
                     gtool_func_declaration["parameters"] = _parameters
                 gtool_func_declarations.append(gtool_func_declaration)
             else:
@@ -1415,8 +1485,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         value: list[dict[str, object]],  # mutable-ok: mirrors override contract
         optional_params: dict[str, object],  # mutable-ok: mirrors override contract
         send_integer_enums: bool = False,
+        allow_parameters_json_schema: bool = True,
     ) -> list[Tools]:  # mutable-ok: mirrors override contract
-        return self._map_function(value, optional_params, send_integer_enums)
+        return self._map_function(value, optional_params, send_integer_enums, allow_parameters_json_schema)
 
     def _map_response_schema(self, value: dict, send_integer_enums: bool = False) -> Mapping[str, object]:
         old_schema = deepcopy(value)
@@ -1836,6 +1907,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         model: str,
         drop_params: bool,
         allow_integer_enums: bool = True,
+        allow_parameters_json_schema: bool = True,
     ) -> dict:
         request_params: Final = tool_params_without_hosted_mcp(
             non_default_params, model=model, route=self._route, drop_params=drop_params
@@ -1898,7 +1970,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                         self._map_function,
                         value,
                         optional_params,
+                        allow_parameters_json_schema=allow_parameters_json_schema,
                         outside_declarations=request_params.get("functions" if param == "tools" else "tools"),
+                        tool_choice=_TOOL_CHOICE_PARAM.validate_python(request_params).get("tool_choice"),
                     ),
                     allow_integer_enums and self._is_gemini_3_or_newer(model),
                 )

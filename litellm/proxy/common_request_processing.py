@@ -96,6 +96,7 @@ from litellm.litellm_core_utils.core_helpers import (
     redact_nested_match_and_regex_keys,
     require_attributes,
     stream_cost_injection_requested,
+    without,
 )
 from litellm.litellm_core_utils.dd_tracing import NullTracer, tracer
 from litellm.litellm_core_utils.get_supported_openai_params import (
@@ -2727,47 +2728,35 @@ def _content_text(fields: Mapping[str, object]) -> str:
     return str(fields.get("content", ""))
 
 
-async def _no_stream_failure_to_release() -> None:
-    return None
+def _hold_stream_failures(logging_obj: LiteLLMLoggingObj | None) -> None:
+    if logging_obj is not None:
+        logging_obj.hold_stream_failures()
 
 
-@dataclass(slots=True)
-class _ClientStreamFailureReport:
-    logging_obj: LiteLLMLoggingObj
-    report: Callable[[Exception], Awaitable[None]]
-    held: Exception | None = None
-
-    @classmethod
-    def hold_while_streaming(cls, logging_obj: LiteLLMLoggingObj | None) -> Callable[[], Awaitable[None]]:
-        if logging_obj is None or logging_obj.on_detached_stream_failure is None:
-            return _no_stream_failure_to_release
-        return cls(logging_obj, logging_obj.on_detached_stream_failure)._start_holding()
-
-    def _start_holding(self) -> Callable[[], Awaitable[None]]:
-        self.logging_obj.on_detached_stream_failure = self.hold
-        return self.release
-
-    async def hold(self, failure: Exception) -> None:
-        if self.held is None:
-            self.held = failure
-
-    async def release(self) -> None:
-        self.logging_obj.on_detached_stream_failure = self.report
-        if self.held is None:
-            return
-        await asyncio.shield(
-            spawn_logging_task(
-                asyncio.get_running_loop(), self._report_held(self.held), task_name="stream failure report"
-            )
+async def _release_held_stream_failure(logging_obj: LiteLLMLoggingObj | None) -> None:
+    """Report the detached-stream failure held while the client stream ran, if the stream did not
+    report one itself."""
+    if logging_obj is None:
+        return
+    held: Final = logging_obj.release_held_stream_failure()
+    if held is None:
+        return
+    await asyncio.shield(
+        spawn_logging_task(
+            asyncio.get_running_loop(),
+            _report_held_stream_failure(logging_obj, held),
+            task_name="stream failure report",
         )
+    )
 
-    async def _report_held(self, failure: Exception) -> None:
-        try:
-            await self.report(failure)
-        except Exception as hook_failure:  # noqa: BLE001  # a failing failure hook must not skip the stream cleanup
-            verbose_proxy_logger.warning(
-                "Stream failure hook raised: %s(%s)", type(hook_failure).__name__, sanitize_for_log(hook_failure)
-            )
+
+async def _report_held_stream_failure(logging_obj: LiteLLMLoggingObj, failure: Exception) -> None:
+    try:
+        await logging_obj.report_detached_stream_failure(failure)
+    except Exception as hook_failure:  # noqa: BLE001  # a failing failure hook must not skip the stream cleanup
+        verbose_proxy_logger.warning(
+            "Stream failure hook raised: %s(%s)", type(hook_failure).__name__, sanitize_for_log(hook_failure)
+        )
 
 
 def _metadata_logged_on(logged_on: LiteLLMLoggingObj) -> Mapping[str, object]:
@@ -4461,6 +4450,9 @@ class ProxyBaseLLMRequestProcessing:
             ),
         )
 
+    def _request_fields(self) -> Mapping[str, object]:
+        return self.data
+
     def _arm_detached_stream_failure_hook(
         self,
         logging_obj: LiteLLMLoggingObj,
@@ -4475,17 +4467,21 @@ class ProxyBaseLLMRequestProcessing:
         so the failed spend is still written and the budget reservation released;
         a replacement error the hook raises has no client left to reach.
         """
-        request_data: Final = self.data
+        # The closure lives on the logging object until the logging object dies, so it must not
+        # hold the logging object, or a request stays alive until a full GC pass (#51277). The
+        # caller passes the logging object in when it fires.
+        request_data: Final = without(self._request_fields(), "litellm_logging_obj")
+        route_type: Final = self.route_type
 
-        async def _on_detached_stream_failure(exc: Exception) -> None:
-            if not logging_obj.claim_stream_failure_report():
+        async def _on_detached_stream_failure(failed_logging_obj: LiteLLMLoggingObj, exc: Exception) -> None:
+            if not failed_logging_obj.claim_stream_failure_report():
                 return
             try:
                 await proxy_logging_obj.post_call_failure_hook(
                     user_api_key_dict=user_api_key_dict,
                     original_exception=exc,
-                    request_data=request_data,
-                    dispatched_call_type=self.route_type,
+                    request_data={**request_data, "litellm_logging_obj": failed_logging_obj},
+                    dispatched_call_type=route_type,
                 )
             except HTTPException:
                 return
@@ -5525,7 +5521,7 @@ class ProxyBaseLLMRequestProcessing:
             request_data=request_data,
         )
         timing_sink: Final = stream_logging_obj if isinstance(stream_logging_obj, LiteLLMLoggingObj) else None
-        release_stream_failure: Final = _ClientStreamFailureReport.hold_while_streaming(timing_sink)
+        _hold_stream_failures(timing_sink)
         try:
             str_so_far = ""
             async for chunk in guarded_stream:
@@ -5637,7 +5633,7 @@ class ProxyBaseLLMRequestProcessing:
             yield seal + error_frame if seal else error_frame
         finally:
             try:
-                await release_stream_failure()
+                await _release_held_stream_failure(timing_sink)
             finally:
                 await ProxyBaseLLMRequestProcessing.finalize_streaming_generator_cleanup(
                     request=request,

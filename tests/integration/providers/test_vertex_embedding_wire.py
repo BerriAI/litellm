@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 _PROJECT: Final = "scripted-embedding-project"
 _LOCATION: Final = "us-central1"
 _VERTEX_MODEL: Final = "text-embedding-005"
+_VERTEX_BGE_MODEL: Final = "bge-small-en-v1.5"
 _VERTEX_INPUTS: Final = ("vertex embedding alpha", "vertex embedding bravo")
 _GEMINI_INPUTS: Final = ("gemini embedding alpha", "gemini embedding bravo")
 _VECTOR_A: Final = (1.0,) + (0.0,) * 255
@@ -103,6 +104,34 @@ def test_vertex_text_embedding_sends_dimensionality_and_preserves_input_order(
                 f"/v1/projects/{_PROJECT}/locations/{_LOCATION}/publishers/google/models/{_VERTEX_MODEL}:predict",
             )
         ]
+
+
+def test_vertex_bge_embedding_sends_extra_body_fields_as_predict_parameters(gateway: Gateway) -> None:
+    def respond(request: Request) -> Reply:
+        assert _JSON_OBJECT.validate_json(request.body) == {
+            "instances": [{"prompt": _VERTEX_INPUTS[0]}],
+            "parameters": {"autoTruncate": False},
+        }
+        return Reply(body=json.dumps({"predictions": [list(_VECTOR_A)]}).encode())
+
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(
+            model=f"vertex_ai/{_VERTEX_BGE_MODEL}",
+            api_base=wire.url,
+            api_key=None,
+            vertex_project=_PROJECT,
+            vertex_location=_LOCATION,
+            vertex_credentials=service_account_json(_PROJECT, gateway.upstream_url.rstrip("/")),
+        )
+        response: Final = gateway.request(
+            "POST",
+            "/v1/embeddings",
+            {"model": model, "input": [_VERTEX_INPUTS[0]], "extra_body": {"autoTruncate": False}},
+        )
+        assert response.status_code == 200, response.text
+        payload: Final = _EmbeddingResponse.model_validate_json(response.content)
+        assert [item.embedding for item in payload.data] == [list(_VECTOR_A)], response.text
+        assert len(wire.drain()) == 1
 
 
 @pytest.mark.parametrize(

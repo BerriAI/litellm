@@ -138,6 +138,25 @@ describe("complete customer organization usage", () => {
 });
 
 describe("customer organization sorting and budgets", () => {
+  it.each([false, true])("sorts by displayed budget with stable ties and uncapped rows last, descending %s", (desc) => {
+    const organizations = [
+      org("none"),
+      org("twenty", { budget: { max_budget: 20 } }),
+      org("z-first-tie", { budget: { max_budget: 7 } }),
+      org("a-second-tie", { budget: { max_budget: 90, budget_limits: [{ budget_duration: "1mo", max_budget: 7 }] } }),
+      org("annual", { budget: { budget_limits: [{ budget_duration: "12mo", max_budget: 100 }] } }),
+      org("zero", { budget: { max_budget: 0 } }),
+    ];
+    const rows = customerOrganizationRows(organizations, mergeCustomerActivityPages([]));
+    const expected = desc
+      ? ["annual", "twenty", "z-first-tie", "a-second-tie", "zero", "none"]
+      : ["zero", "z-first-tie", "a-second-tie", "twenty", "annual", "none"];
+    expect(
+      sortCustomerOrganizations(rows, "", [{ id: "budget", desc }]).map((row) => row.organization.customer_org_id),
+    ).toEqual(expected);
+    expect(sortCustomerOrganizations(rows, "absent", [{ id: "budget", desc }])).toEqual([]);
+  });
+
   it("sorts the full list before pagination with newest customers first by default", () => {
     const organizations = Array.from({ length: 30 }, (_, index) =>
       org(`org-${String(index).padStart(2, "0")}`, {

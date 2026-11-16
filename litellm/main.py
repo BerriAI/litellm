@@ -9663,7 +9663,9 @@ async def ahealth_check(
         if isinstance(stack_trace, str):
             stack_trace = stack_trace[:1000]
 
-        error_to_return: Final = str(e) + "\nstack trace: " + stack_trace
+        verbose_logger.debug("Health check failed: %s", stack_trace)
+
+        error_to_return: Final = str(e)
 
         raw_request_typed_dict: Final = litellm_logging_obj.model_call_details.get("raw_request_typed_dict")
 

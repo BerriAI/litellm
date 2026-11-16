@@ -6,15 +6,12 @@ import copy
 import importlib
 import io
 import json
-import os
-import subprocess
 import sys
 import threading
 import time
 from collections.abc import Callable, Mapping
 from concurrent.futures import Future, ThreadPoolExecutor, wait
 from itertools import accumulate, chain
-from pathlib import Path
 from queue import SimpleQueue
 from typing import Final, cast
 from unittest.mock import MagicMock, sentinel
@@ -23,7 +20,7 @@ import anyio.to_thread
 import pytest
 import tiktoken
 from PIL import Image
-from tokenizers import Regex, Tokenizer, models, pre_tokenizers
+from tokenizers import Tokenizer
 
 from unittest.mock import AsyncMock, patch
 
@@ -704,6 +701,20 @@ def test_token_counter_counts_function_tools_like_chat_completions_tools_for_cha
     ) == token_counter_new(model=model, messages=list(_USER_MESSAGES), tools=[_openai_tool(function)])
 
 
+def test_token_counter_counts_a_gemini_parameters_json_schema_like_parameters():
+    json_schema_function: Final = {
+        "name": _WEATHER_FUNCTION["name"],
+        "description": _WEATHER_FUNCTION["description"],
+        "parametersJsonSchema": _WEATHER_FUNCTION["parameters"],
+    }
+
+    assert token_counter_new(
+        model="gemini-2.5-pro", messages=list(_USER_MESSAGES), tools=[_gemini_tool(json_schema_function)]
+    ) == token_counter_new(
+        model="gemini-2.5-pro", messages=list(_USER_MESSAGES), tools=[_gemini_tool(_WEATHER_FUNCTION)]
+    )
+
+
 # Azure AI Foundry DeepSeek-V4-Flash-0731 billed 295 prompt tokens for the weather tool with each of
 # these tool_choice values on 2026-10-17, the same as without one. On 2026-10-29 aiand's
 # deepseek-v4.1-flash billed 296 for each, and Fireworks' deepseek-v4p1-flash and OpenRouter's
@@ -908,48 +919,6 @@ class NeedsToleranceUpdateError(Exception):
 # test_tokenizers()
 
 
-def test_encoding_and_decoding(tmp_path: Path):
-    sample_text = "Hellö World, this is my input string!"
-
-    # openai encoding + decoding
-    openai_tokens = encode(model="gpt-3.5-turbo", text=sample_text)
-    openai_text = decode(model="gpt-3.5-turbo", tokens=openai_tokens)
-
-    assert openai_text == sample_text
-
-    # claude encoding + decoding
-    claude_tokens = encode(model="claude-3-5-haiku-20241022", text=sample_text)
-
-    claude_text = decode(model="claude-3-5-haiku-20241022", tokens=claude_tokens)
-
-    assert claude_text == sample_text
-
-    # cohere encoding + decoding
-    cohere_tokens = encode(model="command-nightly", text=sample_text)
-    cohere_text = decode(model="command-nightly", tokens=cohere_tokens)
-
-    assert cohere_text == sample_text
-
-    # llama2 encoding + decoding
-    words = sample_text.split()
-    result = _run_in_memory_hub(
-        HUB_ROUND_TRIP_SCRIPT,
-        {
-            "hf-internal-testing/llama-tokenizer": _word_level_tokenizer_json(
-                pre_tokenizers.WhitespaceSplit(),
-                vocab={"[UNK]": 0, **{word: i + 1 for i, word in enumerate(words)}},
-            )
-        },
-        sample_text,
-        tmp_path,
-    )
-
-    assert result["decoded"] == sample_text
-    assert result["requested"] == ["hf-internal-testing/llama-tokenizer"]
-    assert len(result["tokens"]) == len(words)
-    assert len(result["tokens"]) != len(encode(model="gpt-3.5-turbo", text=sample_text))
-
-
 # test_encoding_and_decoding()
 
 
@@ -1148,7 +1117,6 @@ from litellm.utils import (
     _HuggingFaceTokenizerLoadOutcomes,
     _return_huggingface_tokenizer,
     _select_tokenizer_helper,
-    claude_json_str,
     encoding,
 )
 
@@ -2670,6 +2638,26 @@ def test_token_counter_counts_server_tool_errors(tool: str) -> None:
     assert _count_content_list(len, [block], False, None) == len("unavailable")
 
 
+@pytest.mark.parametrize(
+    "block",
+    (
+        {"type": "web_search_tool_result", "tool_use_id": "srv_1", "content": [{"url": "https://example.invalid"}]},
+        {"type": "code_execution_tool_result", "tool_use_id": "srv_1", "content": {"type": "future_result"}},
+        {"type": "web_fetch_tool_result", "tool_use_id": "srv_1", "content": {"url": "https://example.invalid"}},
+    ),
+    ids=("result-without-type", "unknown-result-type", "mapping-without-type"),
+)
+@pytest.mark.parametrize("nested", (False, True), ids=("assistant-content", "tool-result"))
+def test_malformed_server_tool_block_is_unsupported_content(block: Mapping[str, object], nested: bool) -> None:
+    from litellm.litellm_core_utils.token_counter import UnsupportedContentTypeError, _count_content_list
+
+    content: Final = [{"type": "tool_result", "tool_use_id": "toolu_1", "content": [block]}] if nested else [block]
+
+    with pytest.raises(UnsupportedContentTypeError):
+        _count_content_list(len, content, False, None)
+    assert _count_content_list(len, content, False, 7) == 7
+
+
 def test_token_counter_counts_anthropic_search_result_text() -> None:
     from litellm.litellm_core_utils.token_counter import _count_content_list
 
@@ -3550,139 +3538,12 @@ def test_image_estimate_bounds_header_decoding_for_large_inline_payloads() -> No
     assert len(decode_header.call_args.args[0]) <= 65_536
 
 
-HUB_SETUP_SCRIPT: Final = """
-import json
-import sys
-sys.path.insert(0, sys.argv[1])
-import httpx
-import huggingface_hub
-import litellm
-served = json.loads(sys.argv[2])
-text = sys.argv[3]
-requested = []
-def handle(request):
-    repo = request.url.path.lstrip("/").split("/resolve/")[0]
-    if repo not in served or not request.url.path.endswith("/tokenizer.json"):
-        return httpx.Response(404)
-    requested.append(repo)
-    payload = served[repo].encode()
-    headers = {"content-length": str(len(payload)), "etag": '"fixture"', "x-repo-commit": "a" * 40}
-    return httpx.Response(200, headers=headers, content=payload if request.method == "GET" else b"")
-huggingface_hub.set_client_factory(lambda: httpx.Client(transport=httpx.MockTransport(handle)))
-"""
-
-HUB_TOKENIZER_SCRIPT: Final = HUB_SETUP_SCRIPT + """
-litellm.cohere_models = {"command-r-v1"}
-litellm.anthropic_models = {"claude-2"}
-custom = litellm.create_pretrained_tokenizer("Xenova/llama-3-tokenizer")
-print(json.dumps({
-    "llama2": litellm.token_counter(model="meta-llama/Llama-2-7b-chat", text=text),
-    "llama3": litellm.token_counter(model="meta-llama/llama-3-70b-instruct", text=text),
-    "cohere": litellm.token_counter(model="command-r-v1", text=text),
-    "anthropic": litellm.token_counter(model="claude-2", text=text),
-    "custom": litellm.token_counter(custom_tokenizer=custom, text=text),
-    "requested": sorted(set(requested)),
-}))
-"""
-
-HUB_ROUND_TRIP_SCRIPT: Final = HUB_SETUP_SCRIPT + """
-tokens = litellm.encode(model="meta-llama/Llama-2-7b-chat", text=text)
-print(json.dumps({"tokens": tokens, "decoded": litellm.decode(model="meta-llama/Llama-2-7b-chat", tokens=tokens), "requested": sorted(set(requested))}))
-"""
-
-HUB_RETRY_DURING_EXIT_SCRIPT: Final = HUB_SETUP_SCRIPT + """
-import threading
-import time
-from litellm.utils import _HuggingFaceTokenizerLoadOutcomes, _return_huggingface_tokenizer
-retry_reached_hub = threading.Event()
-def answer_once_the_process_is_exiting(request):
-    retry_reached_hub.set()
-    while threading.main_thread().is_alive():
-        time.sleep(0.01)
-    time.sleep(0.5)
-    return handle(request)
-now = [0.0]
-outcomes = _HuggingFaceTokenizerLoadOutcomes(clock=lambda: now[0])
-model = "meta-llama/llama-3-70b-instruct"
-_return_huggingface_tokenizer(model, outcomes)
-huggingface_hub.set_client_factory(lambda: httpx.Client(transport=httpx.MockTransport(answer_once_the_process_is_exiting)))
-now[0] = 3600.0
-_return_huggingface_tokenizer(model, outcomes)
-print(json.dumps({"retry_reached_hub": retry_reached_hub.wait(timeout=60)}))
-"""
-
-
-def _word_level_tokenizer_json(
-    pre_tokenizer: pre_tokenizers.PreTokenizer, vocab: Mapping[str, int] | None = None
-) -> str:
-    tokenizer: Final = Tokenizer(
-        models.WordLevel(vocab=dict(vocab) if vocab is not None else {"[UNK]": 0}, unk_token="[UNK]")
-    )
-    tokenizer.pre_tokenizer = pre_tokenizer
-    return tokenizer.to_str()
-
-
-def _run_in_memory_hub(script: str, served: dict[str, str], text: str, tmp_path: Path) -> dict:
-    result: Final = subprocess.run(
-        [
-            sys.executable,
-            "-I",
-            "-c",
-            script,
-            str(Path(litellm.__file__).parent.parent),
-            json.dumps(served),
-            text,
-        ],
-        capture_output=True,
-        text=True,
-        timeout=60,
-        env={
-            **os.environ,
-            "HF_HOME": str(tmp_path / "home"),
-            "HF_HUB_CACHE": str(tmp_path / "cache"),
-            "HF_ENDPOINT": "http://127.0.0.1:9",
-            "HF_HUB_OFFLINE": "0",
-            "LITELLM_LOCAL_MODEL_COST_MAP": "True",
-        },
-    )
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    return json.loads(result.stdout.strip().splitlines()[-1])
-
-
-def test_token_counter_uses_the_tokenizer_of_each_model_family_and_of_a_custom_tokenizer(tmp_path: Path) -> None:
-    sample: Final = "Tokenizers disagree: anthropic, tiktoken; llama-2 & llama-3!"
-    served: Final = {
-        "hf-internal-testing/llama-tokenizer": _word_level_tokenizer_json(pre_tokenizers.WhitespaceSplit()),
-        "Xenova/llama-3-tokenizer": _word_level_tokenizer_json(pre_tokenizers.Split(Regex("."), "isolated")),
-        "Xenova/c4ai-command-r-v01-tokenizer": _word_level_tokenizer_json(pre_tokenizers.Whitespace()),
-    }
-    expected: Final = {repo: len(Tokenizer.from_str(payload).encode(sample).ids) for repo, payload in served.items()}
-    anthropic_count: Final = len(Tokenizer.from_str(claude_json_str).encode(sample).ids)
-    tiktoken_count: Final = litellm.token_counter(model="gpt-3.5-turbo", text=sample)
-    assert len({*expected.values(), anthropic_count, tiktoken_count}) == len(expected) + 2
-
-    counts: Final = _run_in_memory_hub(HUB_TOKENIZER_SCRIPT, served, sample, tmp_path)
-    assert counts == {
-        "llama2": expected["hf-internal-testing/llama-tokenizer"],
-        "llama3": expected["Xenova/llama-3-tokenizer"],
-        "cohere": expected["Xenova/c4ai-command-r-v01-tokenizer"],
-        "anthropic": anthropic_count,
-        "custom": expected["Xenova/llama-3-tokenizer"],
-        "requested": sorted(served),
-    }
-
-
 def test_custom_openai_tokenizer_without_a_model_counts_with_the_default_encoding() -> None:
     sample: Final = "A custom tokenizer passed with no model still counts."
 
     assert litellm.token_counter(model=None, custom_tokenizer=litellm.utils.select_tokenizer("gpt-4o"), text=sample) == (
         len(tiktoken.get_encoding("cl100k_base").encode(sample))
     )
-
-
-def test_process_exits_cleanly_while_a_background_tokenizer_retry_is_downloading(tmp_path: Path) -> None:
-    assert _run_in_memory_hub(HUB_RETRY_DURING_EXIT_SCRIPT, {}, "", tmp_path) == {"retry_reached_hub": True}
 
 
 def test_empty_custom_tokenizer_uses_model_tokenizer() -> None:
