@@ -20,17 +20,19 @@ pub use auth::{
 pub use environment::{Environment, Flag};
 pub use error::Error;
 pub use layer::Origins;
-pub use litellm_router_types::{LitellmParams, Spelled};
+pub use litellm_router_types::{LitellmParams, RouterSettings, Spelled};
 pub use mcp::{McpAuth, McpServer, McpTransport};
 pub use model::Model;
 pub use pass_through::{PassThroughEndpoint, PassThroughGuardrail};
 pub use redis::{CacheSettings, RedisSettings};
 pub use routes::RouteList;
 pub use settings::{
-    ClickHouseStoreSettings, GeneralSettings, LiteLlmSettings, RouterSettings, TracingSettings,
+    ClickHouseStoreSettings, GeneralSettings, LiteLlmSettings, TracingSettings,
     TracingStoreSettings, UserHeaderMapping,
 };
 pub use value::{AdditionalFields, Object, Value};
+
+pub const ENV_REFERENCE_PREFIX: &str = "os.environ/";
 
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default)]
