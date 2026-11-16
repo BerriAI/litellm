@@ -224,14 +224,14 @@ _EXPORT_CREDENTIAL_KEYS: Final[frozenset[str]] = frozenset(
 )
 _EXPORT_CREDENTIAL_KEY_SUFFIXES: Final = ("connectionstring", "databaseurl", "dsn", "passphrase", "webhookurl")
 _CREDENTIAL_VALUE: Final = re.compile(
-    r"^(?i:bearer|basic)\s+[A-Za-z0-9._~+/=-]{8,}$"
+    r"^\s*(?i:bearer|basic)\s+[A-Za-z0-9._~+/=-]{8,}\s*$"
     r"|\b[sr]k_(?:live|test)_[A-Za-z0-9]{10,}"
     r"|\b(?:AKIA|ASIA)[A-Z0-9]{16}\b"
     r"|\b(?:gh[pousr]|github_pat)_[A-Za-z0-9_]{20,}"
     r"|\bxox[abposr]-[A-Za-z0-9-]{10,}"
     r"|\beyJ[A-Za-z0-9_-]{10,}"
     r"|\b(?i:[a-z][a-z0-9+.-]{0,31})://[^\s/:@]*:[^\s/@]+@"
-    r"|\b(?i:authorization)[\"']?\s*[:=]\s*\S"
+    r"|(?i:authorization)\\?[\"']?\s*[:=]\s*\S"
     r"|https://hooks\.slack\.com/"
     r"|https://(?:discord|discordapp)\.com/api/webhooks/"
 )
