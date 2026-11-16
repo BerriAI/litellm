@@ -7,13 +7,18 @@ from typing import Final, Literal
 from pydantic import TypeAdapter, ValidationError
 
 from litellm.llms.vertex_ai.common_utils import get_vertex_base_url
+from litellm.llms.vertex_ai.credentials_source import (
+    VertexCredentialsFileUnreadable,
+    _is_inline_credentials_json,  # pyright: ignore[reportPrivateUsage]  # Python's own file-or-inline test
+    raise_vertex_credentials_failure,
+)
 from litellm.llms.vertex_ai.vertex_llm_base import GOOGLE_IMPORT_ERROR_MESSAGE, VertexBase
 
 _Stage = Literal["no_default_credentials", "token_rejected", "token_unreachable", "unloadable"]
 _GCP_CREDENTIAL_FAILURE: Final = TypeAdapter(tuple[_Stage, str])
 
 
-def credential_failure(marker: object, credentials_configured: bool) -> Exception | None:
+def credential_failure(marker: object, credentials: object) -> Exception | None:
     """Python loads configured `vertex_credentials` itself and raises `ValueError` when they do not load,
     and leaves anything else to `google.auth.default`, which raises `DefaultCredentialsError`."""
     try:
@@ -22,8 +27,8 @@ def credential_failure(marker: object, credentials_configured: bool) -> Exceptio
         return None
     try:
         from google.auth import exceptions as google_auth
-        from google.auth._default import (  # pyright: ignore[reportPrivateUsage]  # google.auth.default's own text
-            _CLOUD_SDK_MISSING_CREDENTIALS,
+        from google.auth._default import (
+            _CLOUD_SDK_MISSING_CREDENTIALS,  # pyright: ignore[reportPrivateUsage]  # google.auth.default's own text
         )
     except ImportError:
         return ImportError(GOOGLE_IMPORT_ERROR_MESSAGE)
@@ -35,7 +40,18 @@ def credential_failure(marker: object, credentials_configured: bool) -> Exceptio
         case "token_unreachable":
             return google_auth.TransportError(text)
         case "unloadable":
-            return ValueError(text) if credentials_configured else google_auth.DefaultCredentialsError(text)
+            return _unloadable(credentials, text, google_auth.DefaultCredentialsError)
+
+
+def _unloadable(credentials: object, text: str, default_failure: type[Exception]) -> Exception:
+    if credentials is None:
+        return default_failure(text)
+    if not isinstance(credentials, str) or _is_inline_credentials_json(credentials):
+        return ValueError(text)
+    try:
+        raise_vertex_credentials_failure(VertexCredentialsFileUnreadable(credentials, text))
+    except ValueError as file_failure:
+        return file_failure
 
 
 def default_base(model: str, location: str | None) -> str:

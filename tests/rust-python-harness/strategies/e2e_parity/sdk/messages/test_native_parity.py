@@ -4157,6 +4157,7 @@ AZURE_SHAPING_CASES: Final = (
 )
 
 UNREACHABLE_AZURE_BASE: Final = "http://127.0.0.1:9/d/dep-e03/anthropic"
+UNREACHABLE_TOKEN_URI: Final = "http://127.0.0.1:9/token"
 
 AZURE_ERROR_CASES: Final = tuple(
     replace(case, model=AZURE_CLAUDE)
@@ -4214,6 +4215,66 @@ ANTHROPIC_ON_AZURE_CLAUDE_ERROR_CASES: Final = (
         model=AZURE_CLAUDE,
         upstream=(_failure(404, "not_found_error", "model not found"),),
     ),
+)
+
+VERTEX_CLAUDE: Final = "vertex_ai/claude-sonnet-4-5"
+VERTEX_DEPLOYMENT: Final = MappingProxyType({"api_base": None, "vertex_project": "proj", "vertex_location": "us-east5"})
+_VERTEX_KEY: Final = (
+    rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    .private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption())
+    .decode()
+)
+
+
+def _vertex_service_account(private_key: str, token_uri: str) -> str:
+    return json.dumps(
+        {
+            "type": "service_account",
+            "project_id": "proj",
+            "private_key_id": "key-1",
+            "private_key": private_key,
+            "client_email": "parity@proj.iam.gserviceaccount.com",
+            "client_id": "1",
+            "token_uri": token_uri,
+        }
+    )
+
+
+E2_GOOGLE_AUTH_TEXT: Final = (
+    "E2: approved difference, the exception class matches but its text is Google's SDK or HTTP client's own "
+    "(cryptography's PEM error, urllib3's connection error, google.auth's missing-file text), which Rust cannot rebuild"
+)
+
+VERTEX_CREDENTIAL_CASES: Final = tuple(
+    replace(case, model=VERTEX_CLAUDE, upstream=())
+    for case in (
+        Case(
+            "vertex_ai_credentials_file_that_does_not_exist",
+            _kw(**VERTEX_DEPLOYMENT, vertex_credentials="/nonexistent/vertex-key.json"),
+        ),
+        Case(
+            "vertex_ai_inline_credentials_with_an_unloadable_key",
+            _kw(
+                **VERTEX_DEPLOYMENT,
+                vertex_credentials=_vertex_service_account(
+                    "-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----\n",
+                    "https://oauth2.googleapis.com/token",
+                ),
+            ),
+            gaps=_gaps(outcome=E2_GOOGLE_AUTH_TEXT, logged_error=E2_GOOGLE_AUTH_TEXT),
+        ),
+        Case(
+            "vertex_ai_token_endpoint_unreachable",
+            _kw(**VERTEX_DEPLOYMENT, vertex_credentials=_vertex_service_account(_VERTEX_KEY, UNREACHABLE_TOKEN_URI)),
+            gaps=_gaps(outcome=E2_GOOGLE_AUTH_TEXT, logged_error=E2_GOOGLE_AUTH_TEXT),
+        ),
+        Case(
+            "vertex_ai_application_default_credentials_file_that_does_not_exist",
+            _kw(**VERTEX_DEPLOYMENT),
+            env=MappingProxyType({"GOOGLE_APPLICATION_CREDENTIALS": "/nonexistent/adc.json"}),
+            gaps=_gaps(outcome=E2_GOOGLE_AUTH_TEXT, logged_error=E2_GOOGLE_AUTH_TEXT),
+        ),
+    )
 )
 
 AZURE_STREAM_CACHE_CASES: Final = tuple(
@@ -4383,6 +4444,7 @@ CASES: Final = (
     *AZURE_SHAPING_CASES,
     *AZURE_ERROR_CASES,
     *ANTHROPIC_ON_AZURE_CLAUDE_ERROR_CASES,
+    *VERTEX_CREDENTIAL_CASES,
     *AZURE_STREAM_CACHE_CASES,
     *VERTEX_SHAPING_CASES,
 )
@@ -4462,6 +4524,8 @@ def _environment(env: Mapping[str, str]) -> Generator[None]:
         "AZURE_CREDENTIAL",
         "AZURE_FEDERATED_TOKEN_FILE",
         "AZURE_AUTHORITY_HOST",
+        "VERTEXAI_CREDENTIALS",
+        "GOOGLE_APPLICATION_CREDENTIALS",
     )
     with pytest.MonkeyPatch.context() as patch:
         for name in names:
