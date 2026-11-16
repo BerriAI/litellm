@@ -11,6 +11,7 @@ google-sdk = ["dep:http"]
 [dependencies]
 litellm-secret-value.workspace = true
 litellm-auth-types.workspace = true
+litellm-error.workspace = true
 
 base64.workspace = true
 moka.workspace = true
@@ -22,12 +23,12 @@ veil.workspace = true
 
 gcp_auth = "0.12.7"
 google-cloud-auth.workspace = true
+reqwest.workspace = true
 http = { workspace = true, optional = true }
 
 [dev-dependencies]
 time = { workspace = true, features = ["formatting"] }
 axum = { workspace = true, features = ["json"] }
-litellm-error.workspace = true
 rstest.workspace = true
 rustls.workspace = true
 tempfile.workspace = true
