@@ -16,6 +16,7 @@ use litellm_host::{
     },
     protocol::UnobservedTail,
 };
+use litellm_http::Phases;
 use litellm_llms::base_llm::{
     auth::{Authenticated, AzureAdTokenHosts, ValidatedEnvironment, resolve_auth},
     messages::{
@@ -36,7 +37,8 @@ use super::{
     Transport, TransportRequest, TransportResponse, UnencodableHeader, WorkloadIdentity,
     common_utils::{MessagesProvider, merge_messages_header_sources, string_headers},
     constants::{
-        MESSAGES_HTTP_ERROR_ATTEMPTS, MESSAGES_STREAM_ERROR_BODY_READ_SECS, MESSAGES_TIMEOUT_SECS,
+        MESSAGES_CONNECT_TIMEOUT_SECS, MESSAGES_HTTP_ERROR_ATTEMPTS,
+        MESSAGES_STREAM_ERROR_BODY_READ_SECS, MESSAGES_TIMEOUT_SECS,
     },
     route::Messages,
     types::invalid_request,
@@ -62,6 +64,7 @@ struct ProviderCall {
     ascii_response_headers: bool,
     unencodable_request_header: Option<Vec<u8>>,
     ascii_request_headers: bool,
+    connect_retry: bool,
 }
 
 struct NativeOutputFallback {
@@ -335,11 +338,13 @@ async fn provider_call(
         extra_headers.unwrap_or_default(),
         scoped,
     ])))?;
-    let configured_key = api_key.as_deref().filter(|key| !key.is_empty()).or(shaping
-        .settings
-        .module_api_key
-        .as_ref()
-        .map(SecretValue::expose));
+    let configured_key = match shaping.settings.module_api_key.as_ref() {
+        Some(module_key) => api_key
+            .as_deref()
+            .filter(|key| !key.is_empty())
+            .or(Some(module_key.expose())),
+        None => api_key.as_deref(),
+    };
     let deferred = match (
         credentials.deferred_secrets,
         config.deferred_secret_names(
@@ -476,6 +481,7 @@ async fn provider_call(
         ascii_response_headers: shaping.settings.ascii_response_headers,
         unencodable_request_header: shaping.settings.unencodable_request_header,
         ascii_request_headers: shaping.settings.ascii_request_headers,
+        connect_retry: shaping.settings.connect_retry,
     })
 }
 
@@ -807,7 +813,13 @@ async fn send_recovering(
                     authenticated,
                     &request.wire.url,
                     sent_body.clone(),
-                    timeout,
+                    Phases {
+                        connect: request
+                            .timeout
+                            .unwrap_or(Duration::from_secs(MESSAGES_CONNECT_TIMEOUT_SECS)),
+                        read: timeout,
+                    },
+                    request.connect_retry,
                 )
                 .await?,
             ),
@@ -929,12 +941,12 @@ async fn send(
     authenticated: Authenticated,
     url: &str,
     body: Bytes,
-    timeout: Duration,
+    phases: Phases,
+    connect_retry: bool,
 ) -> Result<reqwest::Response, Error> {
     let request = serialized_outbound_request(authenticated, url, body, None)?;
-    tokio::time::timeout(timeout, litellm_inference::outbound::send(request, http))
+    litellm_inference::outbound::send_in_phases(request, http, phases, connect_retry)
         .await
-        .map_err(litellm_http::Error::read_timeout)?
         .map(super::encoding::decoded)
         .map_err(Error::from)
 }

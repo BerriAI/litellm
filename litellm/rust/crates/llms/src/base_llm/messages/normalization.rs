@@ -70,9 +70,11 @@ pub fn normalize_system_role_messages(
 
 fn strip_scope_from_block(block: ContentBlock) -> ContentBlock {
     ContentBlock {
-        cache_control: block.cache_control.map(|cache_control| CacheControl {
-            scope: None,
-            ..cache_control
+        cache_control: block.cache_control.map(|cache_control| {
+            cache_control.map_known(|cache_control| CacheControl {
+                scope: None,
+                ..cache_control
+            })
         }),
         ..block
     }
