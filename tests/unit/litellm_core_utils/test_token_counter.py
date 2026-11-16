@@ -1016,20 +1016,6 @@ def test_empty_tools():
     print(result)
 
 
-@pytest.mark.skip(
-    reason="Skipping this test temporarily because it relies on a function being called that I am removing."
-)
-def test_gpt_4o_token_counter():
-    with patch.object(
-        litellm.utils, "openai_token_counter", new=MagicMock()
-    ) as mock_client:
-        token_counter(
-            model="gpt-4o-2024-05-13", messages=[{"role": "user", "content": "Hey!"}]
-        )
-
-        mock_client.assert_called()
-
-
 @pytest.mark.parametrize(
     "img_url",
     [
