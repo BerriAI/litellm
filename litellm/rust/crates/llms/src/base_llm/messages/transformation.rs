@@ -7,7 +7,7 @@ use litellm_secret_value::SecretValue;
 use serde_json::Value;
 
 use super::{
-    context::{MessagesShapeOptions, MessagesTransformContext},
+    context::{MessagesModelCapabilities, MessagesShapeOptions, MessagesTransformContext},
     tools::ToolCustomField,
 };
 
@@ -45,6 +45,14 @@ pub trait BaseMessagesConfig: Sync {
         &self,
         request: MessagesRequest,
         _context: &MessagesTransformContext,
+    ) -> Result<MessagesRequest, Error> {
+        Ok(request)
+    }
+
+    fn clamp_requested_effort(
+        &self,
+        request: MessagesRequest,
+        _capabilities: &MessagesModelCapabilities,
     ) -> Result<MessagesRequest, Error> {
         Ok(request)
     }

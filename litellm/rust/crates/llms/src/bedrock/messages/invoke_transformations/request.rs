@@ -97,7 +97,7 @@ fn get_bedrock_output_config_effort_ceiling(
 }
 
 /// Port of Python's `_clamp_adaptive_reasoning_effort_for_bedrock`.
-fn clamp_adaptive_reasoning_effort_for_bedrock(
+pub(super) fn clamp_adaptive_reasoning_effort_for_bedrock(
     request: MessagesRequest,
     capabilities: &MessagesModelCapabilities,
 ) -> Result<MessagesRequest, Error> {

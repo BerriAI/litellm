@@ -4,7 +4,8 @@ use litellm_host::interceptors::RetriedRequest;
 use crate::{
     anthropic::messages::handler::shape_anthropic_messages_request,
     base_llm::messages::context::{
-        MessagesShapeOptions, MessagesTransformContext, NativeOutputSupport,
+        MessagesModelCapabilities, MessagesShapeOptions, MessagesTransformContext,
+        NativeOutputSupport,
     },
 };
 use litellm_auth::CredentialPlacement;
@@ -230,6 +231,14 @@ impl BaseMessagesConfig for AmazonAnthropicClaudeMessagesConfig {
         options: MessagesShapeOptions,
     ) -> Result<MessagesRequest, Error> {
         shape_anthropic_messages_request(request, options)
+    }
+
+    fn clamp_requested_effort(
+        &self,
+        request: MessagesRequest,
+        capabilities: &MessagesModelCapabilities,
+    ) -> Result<MessagesRequest, Error> {
+        request::clamp_adaptive_reasoning_effort_for_bedrock(request, capabilities)
     }
 
     fn get_complete_url(
