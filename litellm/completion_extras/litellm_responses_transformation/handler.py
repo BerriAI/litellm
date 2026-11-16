@@ -214,8 +214,9 @@ class ResponsesToCompletionBridgeHandler:
         from litellm.types.utils import ModelResponse
 
         stream: Final = self._resolve_stream_flag(optional_params, litellm_params)
+        json_mode: Final = kwargs.get("json_mode") is True
         if isinstance(result, ResponsesAPIResponse):
-            return self.transformation_handler.transform_response(
+            completed_response: Final = self.transformation_handler.transform_response(
                 model=model,
                 raw_response=result,
                 model_response=model_response,
@@ -226,7 +227,16 @@ class ResponsesToCompletionBridgeHandler:
                 litellm_params=litellm_params,
                 encoding=validated_kwargs["encoding"],
                 api_key=kwargs.get("api_key"),
-                json_mode=kwargs.get("json_mode"),
+                json_mode=json_mode,
+            )
+            if not stream:
+                return completed_response
+            return self._completed_response_as_stream(
+                response=completed_response,
+                model=model,
+                custom_llm_provider=custom_llm_provider,
+                logging_obj=logging_obj,
+                json_mode=json_mode,
             )
         elif isinstance(result, ModelResponse):
             if not stream:
@@ -236,7 +246,7 @@ class ResponsesToCompletionBridgeHandler:
                 model=model,
                 custom_llm_provider=custom_llm_provider,
                 logging_obj=logging_obj,
-                json_mode=kwargs.get("json_mode"),
+                json_mode=json_mode,
             )
         elif not stream:
             responses_api_response: Final = self._collect_response_from_stream(result)
@@ -251,7 +261,7 @@ class ResponsesToCompletionBridgeHandler:
                 litellm_params=litellm_params,
                 encoding=validated_kwargs["encoding"],
                 api_key=kwargs.get("api_key"),
-                json_mode=kwargs.get("json_mode"),
+                json_mode=json_mode,
             )
         else:
             if self._is_preformatted_cached_chat_stream(result):
@@ -261,7 +271,7 @@ class ResponsesToCompletionBridgeHandler:
             completion_stream: Final = self.transformation_handler.get_model_response_iterator(
                 streaming_response=result,
                 sync_stream=True,
-                json_mode=kwargs.get("json_mode"),
+                json_mode=json_mode,
                 structured_output=is_structured_output_request(
                     cast("Mapping[str, object]", optional_params)  # cast-ok: optional_params is an untyped dict
                 ),
@@ -324,8 +334,9 @@ class ResponsesToCompletionBridgeHandler:
         from litellm.types.utils import ModelResponse
 
         stream: Final = self._resolve_stream_flag(optional_params, litellm_params)
+        json_mode: Final = kwargs.get("json_mode") is True
         if isinstance(result, ResponsesAPIResponse):
-            return self.transformation_handler.transform_response(
+            completed_response: Final = self.transformation_handler.transform_response(
                 model=model,
                 raw_response=result,
                 model_response=model_response,
@@ -336,7 +347,16 @@ class ResponsesToCompletionBridgeHandler:
                 litellm_params=litellm_params,
                 encoding=validated_kwargs["encoding"],
                 api_key=kwargs.get("api_key"),
-                json_mode=kwargs.get("json_mode"),
+                json_mode=json_mode,
+            )
+            if not stream:
+                return completed_response
+            return self._completed_response_as_stream(
+                response=completed_response,
+                model=model,
+                custom_llm_provider=custom_llm_provider,
+                logging_obj=logging_obj,
+                json_mode=json_mode,
             )
         elif isinstance(result, ModelResponse):
             if not stream:
@@ -346,7 +366,7 @@ class ResponsesToCompletionBridgeHandler:
                 model=model,
                 custom_llm_provider=custom_llm_provider,
                 logging_obj=logging_obj,
-                json_mode=kwargs.get("json_mode"),
+                json_mode=json_mode,
             )
         elif not stream:
             responses_api_response: Final = await self._collect_response_from_stream_async(result)
@@ -361,7 +381,7 @@ class ResponsesToCompletionBridgeHandler:
                 litellm_params=litellm_params,
                 encoding=validated_kwargs["encoding"],
                 api_key=kwargs.get("api_key"),
-                json_mode=kwargs.get("json_mode"),
+                json_mode=json_mode,
             )
         else:
             if self._is_preformatted_cached_chat_stream(result):
@@ -371,7 +391,7 @@ class ResponsesToCompletionBridgeHandler:
             completion_stream: Final = self.transformation_handler.get_model_response_iterator(
                 streaming_response=result,
                 sync_stream=False,
-                json_mode=kwargs.get("json_mode"),
+                json_mode=json_mode,
                 structured_output=is_structured_output_request(
                     cast("Mapping[str, object]", optional_params)  # cast-ok: optional_params is an untyped dict
                 ),

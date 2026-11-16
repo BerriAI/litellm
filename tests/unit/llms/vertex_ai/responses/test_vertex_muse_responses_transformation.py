@@ -383,21 +383,28 @@ def _docs_namespace(*members: dict[str, object]) -> dict[str, object]:
     return {"type": "namespace", "name": "docs", "description": "Docs tools.", "tools": list(members)}
 
 
+@pytest.mark.parametrize(
+    "refused_member, refused_type",
+    [
+        ({"type": "custom", "name": "apply_patch", "description": "Apply a patch."}, "custom"),
+        ({"name": "lookup_raw", "description": "Look up a raw page.", "parameters": {}}, "None"),
+    ],
+    ids=["custom", "no_type"],
+)
 @pytest.mark.parametrize("drop_params", [True, False])
 def test_muse_treats_a_namespace_member_vertex_refuses_like_a_top_level_builtin(
-    drop_params: bool, respx_mock: respx.MockRouter
+    refused_member: dict[str, object], refused_type: str, drop_params: bool, respx_mock: respx.MockRouter
 ) -> None:
     get_time: Final = {"type": "function", "name": "get_time", "description": "Get the time.", "parameters": {}}
     lookup: Final = {"type": "function", "name": "lookup", "description": "Look up a page.", "parameters": {}}
-    apply_patch: Final = {"type": "custom", "name": "apply_patch", "description": "Apply a patch."}
     route: Final = respx_mock.post(ENDPOINT).mock(return_value=httpx.Response(200, json=_response("muse-ember-1.0")))
     if not drop_params:
-        with pytest.raises(litellm.UnsupportedParamsError, match="got custom"):
-            _sent_tools(route, [get_time, _docs_namespace(lookup, apply_patch)], drop_params)
+        with pytest.raises(litellm.UnsupportedParamsError, match=f"got {refused_type}\\."):
+            _sent_tools(route, [get_time, _docs_namespace(lookup, refused_member)], drop_params)
         assert not route.called
         return
-    mixed: Final = _sent_tools(route, [get_time, _docs_namespace(lookup, apply_patch)], drop_params)
-    only_refused: Final = _sent_tools(route, [get_time, _docs_namespace(apply_patch)], drop_params)
+    mixed: Final = _sent_tools(route, [get_time, _docs_namespace(lookup, refused_member)], drop_params)
+    only_refused: Final = _sent_tools(route, [get_time, _docs_namespace(refused_member)], drop_params)
     assert (mixed, only_refused) == ([get_time, _docs_namespace(lookup)], [get_time])
 
 
@@ -435,7 +442,8 @@ def _call_names(items: object) -> tuple[tuple[object, object], ...]:
 def test_muse_returns_declared_namespace_member_calls_under_their_namespace(respx_mock: respx.MockRouter) -> None:
     respx_mock.post(ENDPOINT).mock(
         return_value=httpx.Response(
-            200, json={**_response("muse-spark-1.3"), "output": [{**call, "status": "completed"} for call in MUSE_CALLS]}
+            200,
+            json={**_response("muse-spark-1.3"), "output": [{**call, "status": "completed"} for call in MUSE_CALLS]},
         )
     )
     response: Final = litellm.responses(
@@ -548,9 +556,7 @@ def test_muse_drop_params_omits_server_side_state_fields(
 
 
 @pytest.mark.parametrize("location", ["us-central1", "europe-west4"])
-def test_muse_rejects_a_regional_location_before_contacting_vertex(
-    location: str, respx_mock: respx.MockRouter
-) -> None:
+def test_muse_rejects_a_regional_location_before_contacting_vertex(location: str, respx_mock: respx.MockRouter) -> None:
     route: Final = respx_mock.post(ENDPOINT).mock(return_value=httpx.Response(200, json=_response("muse-wonder-1.0")))
     with pytest.raises(litellm.UnsupportedParamsError, match="global location"):
         litellm.responses(
@@ -647,7 +653,9 @@ def test_muse_chat_completions_bridge_authenticates_with_the_deployment_credenti
     request: Final = route.calls.last.request
     assert request.headers["authorization"] == f"Bearer {prefix}-token"
     assert credential_type.from_info.call_args.args[0]["audience"] == f"{prefix}-audience"
-    assert not {"vertex_project", "vertex_credentials", "vertex_location"} & FIELDS.validate_json(request.content).keys()
+    assert (
+        not {"vertex_project", "vertex_credentials", "vertex_location"} & FIELDS.validate_json(request.content).keys()
+    )
     assert response.choices[0].message.content == "Hello"
 
 
@@ -799,7 +807,10 @@ def _call_with_effort(surface: str, model: str, level: str, **kwargs: object) ->
         )
         return
     _ = litellm.completion(
-        model=f"vertex_ai/meta/{model}", messages=[{"role": "user", "content": "Say hello"}], reasoning_effort=level, **kwargs
+        model=f"vertex_ai/meta/{model}",
+        messages=[{"role": "user", "content": "Say hello"}],
+        reasoning_effort=level,
+        **kwargs,
     )
 
 

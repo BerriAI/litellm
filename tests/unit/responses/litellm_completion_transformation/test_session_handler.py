@@ -1489,3 +1489,85 @@ async def test_previous_response_replays_a_thought_signature_kept_out_of_the_id_
     model_parts: Final = list(chain.from_iterable(turn["parts"] for turn in model_turns))
     assert len(model_parts) == 1
     assert (model_parts[0]["thoughtSignature"] == LONG_SIGNATURE) is short_ids
+
+
+LONG_NAMESPACE_TOOL: Final = {
+    "type": "namespace",
+    "name": "mcp__codex_apps__codex_document_control",
+    "description": "Docs tools",
+    "tools": [
+        {
+            "type": "function",
+            "name": "_get_document_tool_schemas",
+            "parameters": {"type": "object", "properties": {"doc_id": {"type": "string"}}},
+        }
+    ],
+}
+
+
+def _stored_long_member_call_turn(response_id: str) -> dict[str, object]:
+    return {
+        "request_id": response_id,
+        "call_type": "aresponses",
+        "session_id": "long-member-session",
+        "proxy_server_request": {
+            "input": "Fetch document N-42",
+            "model": "gemini-flash",
+            "tools": [LONG_NAMESPACE_TOOL],
+        },
+        "response": {
+            "id": "chatcmpl-long-member",
+            "object": "chat.completion",
+            "choices": [
+                {
+                    "index": 0,
+                    "finish_reason": "tool_calls",
+                    "message": {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "id": "call_1",
+                                "type": "function",
+                                "function": {
+                                    "name": "mcp__codex_apps__codex_document_control___get_document_tool_schemas",
+                                    "arguments": '{"doc_id": "N-42"}',
+                                },
+                            }
+                        ],
+                    },
+                }
+            ],
+        },
+    }
+
+
+async def test_previous_response_replays_a_long_member_call_under_the_name_the_provider_was_sent(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    response_id: Final = ResponsesAPIRequestUtils._build_responses_api_response_id(
+        custom_llm_provider="gemini", model_id=None, response_id="chatcmpl-long-member"
+    )
+    stored: Final = _StoredSpendLogs((_stored_long_member_call_turn(response_id),))
+
+    with patch("litellm.proxy.proxy_server.prisma_client", SimpleNamespace(db=stored)), respx.mock:
+        route: Final = respx.post(url__regex=GEMINI_URL_PATTERN).mock(return_value=_gemini_answer())
+        await litellm.aresponses(
+            model="gemini/gemini-3.5-flash",
+            input=[{"type": "function_call_output", "call_id": "call_1", "output": "schema for N-42"}],
+            previous_response_id=response_id,
+            tools=[LONG_NAMESPACE_TOOL],
+            api_key="test-gemini-key",
+        )
+        sent_body: Final = json.loads(route.calls.last.request.content)
+
+    declared: Final = [
+        declaration["name"]
+        for declaration in chain.from_iterable(tool["function_declarations"] for tool in sent_body["tools"])
+    ]
+    parts: Final = list(chain.from_iterable(turn["parts"] for turn in sent_body["contents"]))
+    called: Final = [part["function_call"]["name"] for part in parts if "function_call" in part]
+    answered: Final = [part["function_response"]["name"] for part in parts if "function_response" in part]
+    assert len(declared) == 1
+    assert called == answered == list(declared)

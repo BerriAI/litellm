@@ -23,10 +23,11 @@ from types import MappingProxyType, TracebackType
 from typing import TYPE_CHECKING, Final, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
-from typing_extensions import LiteralString, ReadOnly, TypedDict
+from typing_extensions import LiteralString
 
 from litellm.constants import SPEND_LOG_WRITE_BATCH_MAX_BYTES, SPEND_LOG_WRITE_BATCH_MAX_ROWS
-from litellm.litellm_core_utils.tool_fields import BRIDGED_TOOL_NAMES_KWARG
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.tool_fields import BRIDGED_TOOL_NAMES_KWARG, BridgedToolNames
 from litellm.proxy._types import DB_RETRY_SAFE_ERROR_TYPES
 from litellm.proxy.db.db_span import db_span
 from litellm.proxy.db.rollup_lock_timeout import ROLLUP_LOCK_TIMEOUT_SQL, rollup_lock_timeout_setting
@@ -50,19 +51,10 @@ class ToolUsageTransaction:
 _NO_FULL_TOOL_NAMES: Final[Mapping[str, str]] = MappingProxyType({})
 
 
-class _LoggedBridgedToolNames(TypedDict, total=False):
-    litellm_bridged_tool_names: ReadOnly[Mapping[str, str]]
-
-
-_LOGGED_BRIDGED_TOOL_NAMES: Final = TypeAdapter(_LoggedBridgedToolNames)
-
-
 def logged_full_tool_names(call_kwargs: object) -> Mapping[str, str]:
-    try:
-        logged: Final = _LOGGED_BRIDGED_TOOL_NAMES.validate_python(call_kwargs)
-    except ValidationError:
-        return _NO_FULL_TOOL_NAMES
-    return logged.get(BRIDGED_TOOL_NAMES_KWARG, _NO_FULL_TOOL_NAMES)
+    fields: Final = as_str_mapping(call_kwargs)
+    logged: Final = None if fields is None else fields.get(BRIDGED_TOOL_NAMES_KWARG)
+    return logged.as_mapping() if isinstance(logged, BridgedToolNames) else _NO_FULL_TOOL_NAMES
 
 
 def response_tool_call_names(

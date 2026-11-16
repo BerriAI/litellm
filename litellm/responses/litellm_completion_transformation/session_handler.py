@@ -11,6 +11,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.constants import REDACTED_BY_LITELLM, REDACTED_TOOL_CALL_ARGUMENTS_PLACEHOLDER
 from litellm.litellm_core_utils.cold_storage_handler import ColdStorageHandler
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_or_none, require_attributes
+from litellm.litellm_core_utils.tool_fields import with_renamed_tool_calls
 from litellm.responses.litellm_completion_transformation.client_tool_search import (
     bridge_client_tool_search,
     client_tool_search_loaded_tools,
@@ -496,7 +497,12 @@ class ResponsesSessionHandler:
             )
         elif isinstance(_response_output, dict) and _response_output and _response_output != {}:
             # transform `ChatCompletion Response` to `ResponsesAPIResponse`
-            model_response: Final = ModelResponse(**_response_output)
+            model_response: Final = with_renamed_tool_calls(
+                ModelResponse(**_response_output),
+                LiteLLMCompletionResponsesConfig.member_chat_names(
+                    LiteLLMCompletionResponsesConfig.request_tools({"tools": stored_tools})
+                ),
+            )
             for choice in model_response.choices:
                 if hasattr(choice, "message"):
                     _normalize_redacted_tool_call_arguments(choice.message)
