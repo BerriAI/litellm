@@ -191,6 +191,11 @@ def attribute_or_none(source: object, name: str) -> object:
 _Shape: Final = TypeVar("_Shape")
 
 
+def held_finish_reason_of(stream: object) -> str | None:
+    held: Final[object] = getattr(stream, "held_finish_reason", None)
+    return held if isinstance(held, str) and held else None
+
+
 def has_attributes(
     value: object,
     shape: type[_Shape],

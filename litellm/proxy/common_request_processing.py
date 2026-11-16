@@ -90,6 +90,7 @@ from litellm.litellm_core_utils.core_helpers import (
     finite_cost,
     get_or_create_metadata_bucket,
     has_attributes,
+    held_finish_reason_of,
     independent_snapshot,
     is_expected_client_error,
     map_finish_reason,
@@ -623,19 +624,17 @@ async def _bill_partial_streamed_spend_on_disconnect(request_data: dict, respons
         partial_response.choices = _choices_without_unobserved_finish_reasons(
             partial_response.choices,
             ChunkProcessor.choice_indices_with_observed_finish_reason(chunks),
-            getattr(response, "received_finish_reason", None),
+            held_finish_reason_of(response),
         )
     return await _dispatch_disconnect_billing_event(logging_obj, partial_response)
 
 
 def _choices_without_unobserved_finish_reasons(
-    choices: Sequence[Choices], observed_indices: frozenset[int], held_finish_reason: object
+    choices: Sequence[Choices], observed_indices: frozenset[int], held_finish_reason: str | None
 ) -> list[Choices]:
     """The stream wrapper's held finish_reason does not record which choice it belongs to, so it
     only counts as provider evidence when there is a single choice."""
-    single_choice_held_reason: Final = (
-        held_finish_reason if len(choices) == 1 and isinstance(held_finish_reason, str) and held_finish_reason else None
-    )
+    single_choice_held_reason: Final = held_finish_reason if len(choices) == 1 else None
     return [
         choice if choice.index in observed_indices else _with_held_finish_reason(choice, single_choice_held_reason)
         for choice in choices

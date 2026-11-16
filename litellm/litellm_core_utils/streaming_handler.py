@@ -2190,6 +2190,10 @@ class CustomStreamWrapper:
         if self.logging_obj.is_sync_litellm_request(litellm_params):
             self.logging_obj.success_handler(processed_chunk, None, None, cache_hit)
 
+    @property
+    def held_finish_reason(self) -> str | None:
+        return self.received_finish_reason
+
     def _normalize_tool_call_finish_reason(self, finish_reason: str) -> str:
         if finish_reason == "stop" and self.tool_call:
             return "tool_calls"

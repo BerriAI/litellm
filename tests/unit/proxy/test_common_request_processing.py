@@ -11158,6 +11158,88 @@ class TestStreamingClientDisconnectBilling:
         assert [choice.finish_reason for choice in partial_response.choices] == ["length"]
         assert partial_response.usage.completion_tokens > 0
 
+    async def _router_stream_holding_a_length_finish(self, recorder: _RecordingSuccessLogger) -> CustomStreamWrapper:
+        from litellm.router_rust.invoke.streaming import StreamAttempt, open_attempt_stream
+
+        model: Final = "gpt-4o"
+        logging_obj: Final = self._recorded_logging_obj(
+            model, [{"role": "user", "content": "hi"}], "router-held-finish-call", recorder
+        )
+        provider_stream: Final = CustomStreamWrapper(
+            completion_stream=ModelResponseListIterator(
+                model_responses=[
+                    ModelResponseStream(
+                        id="chatcmpl-held",
+                        created=1741037890,
+                        model=model,
+                        choices=[
+                            StreamingChoices(
+                                index=0, delta=Delta(role="assistant", content="partial answer"), finish_reason="length"
+                            )
+                        ],
+                    )
+                ]
+            ),
+            model=model,
+            custom_llm_provider="openai",
+            logging_obj=logging_obj,
+            stream_options=None,
+        )
+        routed: Final = await open_attempt_stream(
+            MagicMock(spec=StreamAttempt, op="acompletion", slot=None), provider_stream
+        )
+        assert isinstance(routed, CustomStreamWrapper)
+        return routed
+
+    async def _assert_disconnect_bills_length(
+        self, recorder: _RecordingSuccessLogger, logging_obj: LiteLLMLoggingObj, streamed: object
+    ) -> None:
+        billed: Final = await _bill_partial_streamed_spend_on_disconnect({"litellm_logging_obj": logging_obj}, streamed)
+        await asyncio.wait_for(recorder.logged.wait(), timeout=5)
+
+        assert billed is True
+        assert len(recorder.success_events) == 1
+        partial_response: Final = recorder.success_events[0]["response_obj"]
+        assert [choice.finish_reason for choice in partial_response.choices] == ["length"]
+        assert partial_response.usage.completion_tokens > 0
+
+    @pytest.mark.asyncio
+    async def test_router_chat_stream_keeps_the_finish_reason_held_on_the_last_content_frame(self):
+        recorder: Final = _RecordingSuccessLogger()
+        routed: Final = await self._router_stream_holding_a_length_finish(recorder)
+
+        delivered: Final = await routed.__aiter__().__anext__()
+        assert (delivered.choices[0].delta.content, delivered.choices[0].finish_reason) == ("partial answer", None)
+
+        await self._assert_disconnect_bills_length(recorder, routed.logging_obj, routed)
+
+    @pytest.mark.asyncio
+    async def test_anthropic_messages_stream_keeps_the_finish_reason_held_on_the_last_content_frame(self):
+        from litellm.llms.anthropic.messages.adapters.streaming_iterator import AnthropicSSEStream
+        from litellm.llms.anthropic.messages.adapters.transformation import AnthropicAdapter
+        from litellm.router_rust.invoke.streaming import FallbackAwareAnthropicMessagesStream, StreamAttempt
+
+        recorder: Final = _RecordingSuccessLogger()
+        routed: Final = await self._router_stream_holding_a_length_finish(recorder)
+        source_iterator: Final = AnthropicAdapter().translate_completion_output_params_streaming(
+            routed, model="gpt-4o", is_async=True, litellm_logging_obj=routed.logging_obj
+        )
+        assert isinstance(source_iterator, AnthropicSSEStream)
+        async for frame in source_iterator:
+            if b"partial answer" in frame:
+                break
+
+        async def _sse_frames() -> AsyncGenerator[bytes, None]:
+            yield b"event: message_start\n\n"
+
+        await self._assert_disconnect_bills_length(
+            recorder,
+            routed.logging_obj,
+            prepare_response_for_header_attachment(
+                FallbackAwareAnthropicMessagesStream(_sse_frames(), source_iterator, MagicMock(spec=StreamAttempt))
+            ),
+        )
+
     @pytest.mark.asyncio
     async def test_disconnect_marks_only_the_unfinished_choice_unspecified(self):
         model: Final = "gpt-4o"
