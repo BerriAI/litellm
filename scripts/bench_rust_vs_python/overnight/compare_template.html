@@ -1,0 +1,212 @@
+<meta charset="utf-8">
+<title>__PAGE_TITLE__</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one reading column for findings, full-width bands for the drift strips and the flame graph */
+:root {
+  --bg: #f9f9f7; --surface: #fcfcfb; --fg: #0b0b0b; --fg2: #52514e; --muted: #898781;
+  --grid: #e1e0d9; --axis: #c3c2b7; --accent: #2a78d6; --line: #e6e5df;
+  --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100; --s5: #e87ba4; --s6: #008300; --s7: #6250d6; --s8: #e34948; --s9: #b3b1a8;
+  --font: "IBM Plex Sans", system-ui, sans-serif; --mono: "IBM Plex Mono", ui-monospace, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #0d0d0d; --surface: #1a1a19; --fg: #f0efec; --fg2: #c3c2b7; --muted: #898781; --grid: #2c2c2a; --axis: #383835; --accent: #3987e5; --line: #2c2c2a;
+  --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181; --s6: #0ca30c; --s7: #9085e9; --s8: #e66767; --s9: #5f5e59; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #0d0d0d; --surface: #1a1a19; --fg: #f0efec; --fg2: #c3c2b7; --muted: #898781; --grid: #2c2c2a; --axis: #383835; --accent: #3987e5; --line: #2c2c2a;
+  --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181; --s6: #0ca30c; --s7: #9085e9; --s8: #e66767; --s9: #5f5e59; color-scheme: dark }
+body { background: var(--bg); color: var(--fg); font: 15px/1.55 var(--font); }
+main { max-width: 1080px; margin: 0 auto; padding-block: 32px 64px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); display: grid; gap: 40px; }
+h1 { font-size: 28px; font-weight: 600; margin: 0; text-wrap: balance; letter-spacing: -0.01em; }
+h2 { font-size: 19px; font-weight: 600; margin: 0 0 4px; text-wrap: balance; }
+p { margin: 0; max-width: 68ch; color: var(--fg2); }
+.lede { display: grid; gap: 10px; }
+.meta { font: 12.5px var(--mono); color: var(--muted); display: flex; flex-wrap: wrap; gap: 6px 18px; }
+section { display: grid; gap: 14px; min-width: 0; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; }
+.tile { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; display: grid; gap: 2px; }
+.tile .k { font-size: 12px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); }
+.tile .v { font: 500 26px var(--mono); font-variant-numeric: tabular-nums; }
+.tile .v small { font-size: 14px; color: var(--fg2); }
+.tile .ci { font: 12px var(--mono); color: var(--fg2); }
+.scroll { overflow-x: auto; }
+table { border-collapse: collapse; font-variant-numeric: tabular-nums; width: 100%; font-size: 13.5px; }
+th, td { padding: 6px 10px; border-bottom: 1px solid var(--line); text-align: right; white-space: nowrap; }
+th:first-child, td:first-child { text-align: left; }
+th { font-weight: 500; color: var(--muted); font-size: 12px; letter-spacing: 0.03em; text-transform: uppercase; }
+td.num { font-family: var(--mono); }
+.strips { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; }
+.strip { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px 6px; min-width: 0; }
+.strip h3 { margin: 0; font-size: 13.5px; font-weight: 500; }
+.strip .sub { font: 12px var(--mono); color: var(--muted); }
+.strip svg { width: 100%; height: auto; display: block; }
+.legend { display: flex; gap: 16px; font-size: 13px; color: var(--fg2); flex-wrap: wrap; }
+.sw { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; vertical-align: -1px; }
+.sq { display: inline-block; width: 11px; height: 11px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
+#flamewrap { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+#flamebar { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; padding: 10px 12px; border-bottom: 1px solid var(--line); font-size: 13px; }
+#flamebar button { font: 500 13px var(--font); background: var(--bg); color: var(--fg); border: 1px solid var(--axis); border-radius: 6px; padding: 4px 10px; cursor: pointer; }
+#flamebar button:focus-visible, #flame .n:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+#crumb { font: 12.5px var(--mono); color: var(--fg2); min-width: 0; overflow-wrap: anywhere; }
+#flame { position: relative; height: 620px; overflow-y: auto; overflow-x: hidden; }
+#flame .n { position: absolute; height: 17px; box-sizing: border-box; border-right: 1px solid var(--surface); border-bottom: 1px solid var(--surface); font: 11px/17px var(--mono); color: #fff; padding: 0 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
+#flame .n.b4 { color: #0b0b0b; }
+#flame .n:hover { filter: brightness(1.12); }
+#tip { position: fixed; pointer-events: none; z-index: 5; max-width: min(520px, 90vw); background: var(--fg); color: var(--bg); border-radius: 6px; padding: 8px 10px; font: 12px/1.45 var(--mono); overflow-wrap: anywhere; }
+.findings { display: grid; gap: 14px; }
+.finding { display: grid; grid-template-columns: 76px 1fr; gap: 14px; align-items: baseline; border-top: 1px solid var(--line); padding-top: 12px; }
+.finding .ms { font: 500 18px var(--mono); font-variant-numeric: tabular-nums; text-align: right; }
+.finding .ms small { display: block; font-size: 11px; color: var(--muted); font-weight: 400; }
+.finding h3 { margin: 0 0 4px; font-size: 15px; font-weight: 600; }
+code { font: 13px var(--mono); background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; overflow-wrap: anywhere; }
+.note { font-size: 13.5px; }
+@media (max-width: 520px) { .finding { grid-template-columns: 1fr; gap: 4px; } .finding .ms { text-align: left; } #flame { height: 520px; } }
+@media (prefers-reduced-motion: no-preference) { #flame .n { transition: left .18s, width .18s; } }
+</style>
+<style>
+.cmp td.up { color: var(--s8); } .cmp td.down { color: var(--s3); }
+.cmp td.flat { color: var(--fg2); }
+.toggle { display: inline-flex; border: 1px solid var(--axis); border-radius: 6px; overflow: hidden; }
+#flamebar .toggle button { border: 0; border-radius: 0; }
+#flamebar .toggle button[aria-pressed="true"] { background: var(--fg); color: var(--bg); }
+</style>
+<main>
+  <header class="lede">
+    <h1>__TITLE__</h1>
+    __LEDE__
+    <div class="meta">__META__</div>
+  </header>
+
+  <section>
+    <h2>Under load, 5 requests a second</h2>
+    <p>Open-loop arrivals, 60 s warmup then 240 s measured per run. Requests use a 45k to 55k token input with tools and stream 1k to 4k output tokens from a mock that paces tokens at 12.5 ms. Each value is the median over the night's runs. The change column is the median of the per-round differences, with a bootstrap 95% interval, since both builds ran back to back in every round.</p>
+    <div class="scroll"><table class="cmp" id="loadTable"></table></div>
+  </section>
+
+  <section>
+    <h2>One request at a time</h2>
+    <p>One user and an instant mock, 300 warmup then 1,500 measured requests per run. This isolates CPU per request. The next request starts the moment the previous stream ends, so work a build does after the stream closes lands on the next request's pre-upstream time and time to first token.</p>
+    <div class="scroll"><table class="cmp" id="seqTable"></table></div>
+  </section>
+
+  <section>
+    <h2>Run by run</h2>
+    <p>Each dot is one run, in the order they ran overnight. Both builds ran in every round, so a gap that holds across rounds is the build, and shared ups and downs are the machine.</p>
+    <div class="legend" id="stripLegend"></div>
+    <div class="strips" id="strips"></div>
+  </section>
+
+  <section>
+    <h2>Where the CPU goes</h2>
+    <p>Merged py-spy profiles at 5 req/s and 50 Hz, scaled to each build's measured CPU per request under load. The table compares subsystems, the flame graph shows one build at a time. Click a frame to zoom into it, click the top bar or Reset to zoom out.</p>
+    <div class="scroll"><table class="cmp" id="buckets"></table></div>
+    <div class="legend" id="flameLegend"></div>
+    <div id="flamewrap">
+      <div id="flamebar"><span class="toggle" id="which"></span><button id="reset" type="button">Reset zoom</button><span id="crumb"></span></div>
+      <div id="flame" role="tree" aria-label="Flame graph"></div>
+    </div>
+    <p class="note">Spread is the standard deviation across the profiled runs of that build. Subsystems are assigned from the innermost frame that matches, the same rules as <code>flame.py</code>.</p>
+  </section>
+
+  __FINDINGS__
+
+  __METHOD__
+</main>
+<div id="tip" hidden></div>
+
+<script>
+const DATA = __DATA__;
+const NAMES = DATA.names, LABELS = __LABELS__;
+const tip = document.getElementById("tip");
+function showTip(e, html) { tip.innerHTML = html; tip.hidden = false; const x = Math.min(e.clientX + 14, innerWidth - tip.offsetWidth - 8); const y = e.clientY + 16 + tip.offsetHeight > innerHeight ? e.clientY - tip.offsetHeight - 10 : e.clientY + 16; tip.style.left = x + "px"; tip.style.top = y + "px"; }
+function hideTip() { tip.hidden = true; }
+const esc = s => s.replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const f1 = v => v.toFixed(1), f2 = v => v.toFixed(2);
+const sgn = v => (v > 0 ? "+" : v < 0 ? "−" : "") + f1(Math.abs(v));
+const SERIES = ["var(--s2)", "var(--s1)"];
+
+const ROWS = [["cpu_ms_per_request","CPU per request","ms"],["overhead_p50_ms","Added latency p50","ms"],["overhead_p95_ms","Added latency p95","ms"],["overhead_p99_ms","Added latency p99","ms"],["ttft_overhead_p50_ms","Added time to first token p50","ms"],["ttft_overhead_p99_ms","Added time to first token p99","ms"],["header_overhead_p50_ms","Response headers added p50","ms"],["pre_upstream_p50_ms","Before the upstream call p50","ms"],["tail_p50_ms","Wait after last token p50","ms"],["peak_rss_mb","Peak memory, 2 workers","MB"]];
+function table(el, d) {
+  const cls = v => v.diff_ci[0] > 0 ? "up" : v.diff_ci[1] < 0 ? "down" : "flat";
+  el.innerHTML = `<tr><th>Metric</th><th>${esc(LABELS[0])}</th><th>${esc(LABELS[1])}</th><th>Change</th><th>95% CI of change</th><th>Relative</th><th>Rounds lower</th></tr>` +
+    ROWS.map(([k, label, unit]) => { const v = d[k]; return `<tr><td>${label}</td><td class="num">${f1(v.base)} ${unit}</td><td class="num">${f1(v.new)} ${unit}</td><td class="num ${cls(v)}">${sgn(v.diff)}</td><td class="num">${sgn(v.diff_ci[0])} to ${sgn(v.diff_ci[1])}</td><td class="num ${cls(v)}">${sgn(v.pct)}%</td><td class="num">${v.new_lower_rounds} of ${v.rounds}</td></tr>`; }).join("");
+}
+table(document.getElementById("loadTable"), DATA.load.deltas);
+table(document.getElementById("seqTable"), DATA.seq.deltas);
+
+document.getElementById("stripLegend").innerHTML = LABELS.map((l, i) => `<span><span class="sw" style="background:${SERIES[i]}"></span>${esc(l)}</span>`).join("") + `<span><span class="sq" style="background:var(--axis);height:2px;vertical-align:3px"></span>median of each build</span>`;
+function strip(title, sub, both, key) {
+  const W = 480, H = 160, L = 40, R = 10, T = 10, B = 24;
+  const all = both.flat(), vals = all.map(r => r[key]);
+  const nr = Math.max(...all.map(r => r.round));
+  const lo = Math.min(...vals), hi = Math.max(...vals), pad = (hi - lo) * 0.1 || 1;
+  const y0 = Math.floor(lo - pad), y1 = Math.ceil(hi + pad);
+  const xr = r => L + (r - 1) / Math.max(1, nr - 1) * (W - L - R);
+  const ys = v => T + (1 - (v - y0) / (y1 - y0)) * (H - T - B);
+  const raw = (y1 - y0) / 4, mag = 10 ** Math.floor(Math.log10(raw)), step = [1, 2, 5, 10].map(m => m * mag).find(s => s >= raw);
+  const ticks = []; for (let t = Math.ceil(y0 / step) * step; t <= y1; t += step) ticks.push(t);
+  const grid = ticks.map(t => `<line x1="${L}" x2="${W - R}" y1="${ys(t)}" y2="${ys(t)}" stroke="var(--grid)" stroke-width="1"/><text x="${L - 6}" y="${ys(t) + 4}" text-anchor="end" font-size="11" fill="var(--muted)" font-family="var(--mono)">${t}</text>`).join("");
+  const xt = [1, Math.round(nr / 3), Math.round(2 * nr / 3), nr].map(r => `<text x="${xr(r)}" y="${H - 6}" text-anchor="middle" font-size="11" fill="var(--muted)" font-family="var(--mono)">r${r}</text>`).join("");
+  const median = rs => { const s = rs.map(r => r[key]).sort((a, b) => a - b), m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
+  const meds = both.map((rs, i) => `<line x1="${L}" x2="${W - R}" y1="${ys(median(rs))}" y2="${ys(median(rs))}" stroke="${SERIES[i]}" stroke-width="1.5" stroke-dasharray="4 3" opacity="0.8"/>`).join("");
+  const dots = both.map((rs, i) => rs.map(r => `<circle cx="${xr(r.round) + (i ? 3 : -3)}" cy="${ys(r[key])}" r="4" fill="${SERIES[i]}" stroke="var(--surface)" stroke-width="1.5"/><circle class="hit" cx="${xr(r.round) + (i ? 3 : -3)}" cy="${ys(r[key])}" r="9" fill="transparent" data-t="${esc(LABELS[i])} · round ${r.round}<br>${f2(r[key])}"/>`).join("")).join("");
+  return `<div class="strip"><h3>${title}</h3><div class="sub">${sub}</div><svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${title} per run">${grid}${xt}${meds}${dots}</svg></div>`;
+}
+const LD = DATA.load.deltas, SD = DATA.seq.deltas, sub = d => `${f1(d.base)} vs ${f1(d.new)}, change ${sgn(d.pct)}%`;
+document.getElementById("strips").innerHTML = [
+  strip("CPU per request, under load (ms)", sub(LD.cpu_ms_per_request), DATA.load.runs, "cpu_ms_per_request"),
+  strip("Added latency p50, under load (ms)", sub(LD.overhead_p50_ms), DATA.load.runs, "overhead_p50_ms"),
+  strip("Added latency p99, under load (ms)", sub(LD.overhead_p99_ms), DATA.load.runs, "overhead_p99_ms"),
+  strip("Added time to first token p50, under load (ms)", sub(LD.ttft_overhead_p50_ms), DATA.load.runs, "ttft_overhead_p50_ms"),
+  strip("CPU per request, one at a time (ms)", sub(SD.cpu_ms_per_request), DATA.seq.runs, "cpu_ms_per_request"),
+  strip("Added latency p50, one at a time (ms)", sub(SD.overhead_p50_ms), DATA.seq.runs, "overhead_p50_ms"),
+].join("");
+document.querySelectorAll(".hit").forEach(c => { c.addEventListener("mousemove", e => showTip(e, c.dataset.t)); c.addEventListener("mouseleave", hideTip); });
+
+const COLORS = ["--s8","--s1","--s6","--s7","--s4","--s5","--s3","--s2","--s9"];
+const colorOf = i => `var(${COLORS[i]})`;
+document.getElementById("flameLegend").innerHTML = DATA.bucketNames.map((n, i) => `<span><span class="sq" style="background:${colorOf(i)}"></span>${esc(n)}</span>`).join("");
+const [FA, FB] = DATA.flames;
+const bucketRows = DATA.bucketNames.map(n => ({ n, a: FA.buckets[n] || { ms: 0, sd: 0 }, b: FB.buckets[n] || { ms: 0, sd: 0 } })).sort((x, y) => Math.max(y.a.ms, y.b.ms) - Math.max(x.a.ms, x.b.ms));
+const tot = k => bucketRows.reduce((s, r) => s + r[k].ms, 0);
+document.getElementById("buckets").innerHTML = `<tr><th>Subsystem</th><th>${esc(LABELS[0])}</th><th>spread</th><th>${esc(LABELS[1])}</th><th>spread</th><th>Change</th></tr>` +
+  bucketRows.map(r => { const d = r.b.ms - r.a.ms, c = Math.abs(d) < 0.5 ? "flat" : d > 0 ? "up" : "down"; return `<tr><td><span class="sq" style="background:${colorOf(DATA.bucketNames.indexOf(r.n))}"></span>${esc(r.n)}</td><td class="num">${f2(r.a.ms)}</td><td class="num">± ${f2(r.a.sd)}</td><td class="num">${f2(r.b.ms)}</td><td class="num">± ${f2(r.b.sd)}</td><td class="num ${c}">${sgn(d)}</td></tr>`; }).join("") +
+  `<tr><td><b>Total, ms per request</b></td><td class="num"><b>${f2(tot("a"))}</b></td><td></td><td class="num"><b>${f2(tot("b"))}</b></td><td></td><td class="num"><b>${sgn(tot("b") - tot("a"))}</b></td></tr>`;
+
+function build(F) {
+  const nodes = F.tree.map(([id, parent, label, ms, self, b, full]) => ({ id, parent, label, ms, self, b, full, kids: [] }));
+  const byId = new Map(nodes.map(n => [n.id, n]));
+  const roots = [];
+  nodes.forEach(n => (n.parent === -1 ? roots : byId.get(n.parent).kids).push(n));
+  nodes.forEach(n => n.kids.sort((a, b) => b.ms - a.ms));
+  const ROOT = { id: -1, label: "all CPU", ms: roots.reduce((a, n) => a + n.ms, 0), self: 0, b: 8, full: "all CPU", kids: roots.sort((a, b) => b.ms - a.ms), up: null };
+  roots.forEach(n => n.up = ROOT); nodes.forEach(n => n.kids.forEach(k => k.up = n));
+  return { F, ROOT, find: id => id === -1 ? ROOT : byId.get(id) };
+}
+const trees = DATA.flames.map(build);
+const flame = document.getElementById("flame"), crumb = document.getElementById("crumb"), which = document.getElementById("which");
+let cur = trees[1], focus = cur.ROOT;
+which.innerHTML = LABELS.map((l, i) => `<button type="button" data-i="${i}" aria-pressed="${i === 1}">${esc(l)}</button>`).join("");
+which.addEventListener("click", e => { const b = e.target.closest("button"); if (!b) return; cur = trees[+b.dataset.i]; focus = cur.ROOT; which.querySelectorAll("button").forEach(x => x.setAttribute("aria-pressed", x === b)); render(); });
+function render() {
+  const W = flame.clientWidth, ROW = 18, MIN = 0.6, cpu = cur.F.cpu_ms;
+  const parts = [], chain = [];
+  for (let n = focus; n; n = n.up) chain.unshift(n);
+  chain.forEach((n, d) => parts.push([n, 0, W, d]));
+  const walk = (n, x, w, d) => { let cx = x; for (const k of n.kids) { const kw = w * k.ms / n.ms; if (kw >= MIN) { parts.push([k, cx, kw, d]); walk(k, cx, kw, d + 1); } cx += kw; } };
+  walk(focus, 0, W, chain.length);
+  flame.innerHTML = parts.map(([n, x, w, d]) => `<div class="n b${n.b}" role="treeitem" tabindex="0" data-id="${n.id}" style="left:${x}px;width:${w}px;top:${d * ROW}px;background:${colorOf(n.b)}">${w > 30 ? esc(n.label) : ""}</div>`).join("");
+  const depth = parts.reduce((a, p) => Math.max(a, p[3]), 0);
+  const pad = document.createElement("div"); pad.style.height = (depth + 2) * ROW + "px"; flame.appendChild(pad);
+  crumb.textContent = focus === cur.ROOT ? `all CPU, ${f1(cpu)} ms per request` : `${focus.label}, ${f2(focus.ms)} ms per request (${(100 * focus.ms / cpu).toFixed(1)}% of CPU)`;
+}
+flame.addEventListener("click", e => { const el = e.target.closest(".n"); if (!el) return; const n = cur.find(+el.dataset.id); focus = n === focus && n.up ? n.up : n; render(); });
+flame.addEventListener("keydown", e => { if (e.key !== "Enter" && e.key !== " ") return; const el = e.target.closest(".n"); if (!el) return; e.preventDefault(); focus = cur.find(+el.dataset.id); render(); });
+flame.addEventListener("mousemove", e => { const el = e.target.closest(".n"); if (!el) return hideTip(); const n = cur.find(+el.dataset.id); showTip(e, `${esc(n.full)}<br><b>${f2(n.ms)} ms</b> per request, ${(100 * n.ms / cur.F.cpu_ms).toFixed(2)}% of CPU${n.self ? `<br>self ${f2(n.self)} ms` : ""}<br>${esc(DATA.bucketNames[n.b])}`); });
+flame.addEventListener("mouseleave", hideTip);
+document.getElementById("reset").addEventListener("click", () => { focus = cur.ROOT; render(); });
+addEventListener("resize", render);
+render();
+</script>
