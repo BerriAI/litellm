@@ -6,13 +6,14 @@ Route to previously cached model id, if valid
 
 import secrets
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
-from itertools import chain
+from itertools import chain, islice
 from types import MappingProxyType
 from typing import Final, NamedTuple, Protocol, TypedDict, cast
 
 from pydantic import TypeAdapter, ValidationError
 from typing_extensions import ReadOnly
 
+import litellm
 from litellm import verbose_logger
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
@@ -22,7 +23,7 @@ from litellm.integrations.anthropic_cache_control_hook import (
     AnthropicCacheControlHook,
 )
 from litellm.integrations.custom_logger import CustomLogger, Span
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping
 from litellm.litellm_core_utils.routing_common_utils import deployment_ids_failed_in_request
 from litellm.litellm_core_utils.token_counter import offload_token_count
 from litellm.llms.bedrock.common_utils import bedrock_cache_point_ttl_supported, bedrock_capability_model
@@ -76,6 +77,8 @@ _RESPONSES_PIN_LIFETIME_SECONDS: Final = 3600
 _RETRY_RECORDS: Final = TypeAdapter(tuple[object, ...])
 _RESPONSES_CALL_TYPES: Final = frozenset((CallTypes.responses.value, CallTypes.aresponses.value))
 _RESPONSES_TOOL_TYPES_KEPT_AS_SENT: Final = RESPONSES_TOOL_TYPES_WITHOUT_CHAT_FORM | RESPONSES_WEB_SEARCH_TOOL_TYPES
+_PREFIX_SCAN_LIMIT: Final = 1024
+_PREFIX_SCAN_END: Final = object()
 
 
 def new_responses_pins_in_flight() -> ResponsesPinsInFlight:
@@ -242,6 +245,39 @@ def _honors_one_hour_cache_ttl(
     return model_map_value is not None and (model_map_value.get("cache_creation_input_token_cost_above_1hr") or 0) > 0
 
 
+def _might_carry_cache_marker(value: object) -> bool:
+    fields: Final = as_str_mapping(value)
+    return (
+        fields is None or fields.get("cache_control") is not None or fields.get("prompt_cache_breakpoint") is not None
+    )
+
+
+def _prefix_marker_carriers(item: object) -> Iterator[object]:
+    yield item
+    fields: Final = as_str_mapping(item)
+    if fields is None:
+        return
+    content: Final = fields.get("content")
+    blocks: Final = as_object_list(content)
+    if content is not None and not isinstance(content, str) and blocks is None:
+        yield None
+    yield from blocks or ()
+    function: Final = fields.get("function")
+    if function is not None:
+        yield function
+
+
+def _has_no_cacheable_prefix(messages: Sequence[object], tools: object) -> bool:
+    listed_tools: Final = as_object_list(tools)
+    if tools is not None and listed_tools is None:
+        return False
+    carriers: Final = chain.from_iterable(_prefix_marker_carriers(item) for item in chain(messages, listed_tools or ()))
+    return (
+        not any(_might_carry_cache_marker(item) for item in islice(carriers, _PREFIX_SCAN_LIMIT))
+        and next(carriers, _PREFIX_SCAN_END) is _PREFIX_SCAN_END
+    )
+
+
 class PromptCachingDeploymentCheck(CustomLogger):
     def __init__(
         self,
@@ -325,6 +361,21 @@ class PromptCachingDeploymentCheck(CustomLogger):
             if request_messages is not None
             else None
         )
+        automatic_caching: Final = (
+            litellm.enable_anthropic_prompt_caching is True or (request_data or {}).get("enable_prompt_caching") is True
+        )
+        configured_injections: Final = (request_data or {}).get("cache_control_injection_points") or any(
+            deployment.get("litellm_params", {}).get("cache_control_injection_points")
+            for deployment in healthy_deployments
+        )
+        if (
+            prompt_messages is not None
+            and not (automatic_caching or configured_injections)
+            and _has_no_cacheable_prefix(
+                prompt_messages, responses_prompt.key_tools if responses_prompt is not None else request_tools
+            )
+        ):
+            return None
 
         async def reaches(minimum: int) -> bool:
             return await offload_token_count(
@@ -449,6 +500,8 @@ class PromptCachingDeploymentCheck(CustomLogger):
             cast(list[AllMessageValues], messages),  # cast-ok: isinstance(list) checked above
             event_data.get("system"),
         )
+        if _has_no_cacheable_prefix(prompt_messages, tools):
+            return
 
         ## PROMPT CACHING - cache model id, if prompt caching valid prompt + provider
         if await offload_token_count(is_prompt_caching_valid_prompt)(
