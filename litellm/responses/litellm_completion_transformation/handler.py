@@ -170,6 +170,7 @@ class LiteLLMCompletionTransformationHandler:
                 **kwargs,
             )
 
+        _log_full_tool_names(_REQUEST_KWARGS_ADAPTER.validate_python(kwargs), echoed_request)
         litellm_completion_response: Final[ModelResponse | litellm.CustomStreamWrapper] = litellm.completion(
             **{**kwargs, **litellm_completion_request, "_skip_responses_api_bridge": True},
         )
