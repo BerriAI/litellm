@@ -13,6 +13,7 @@ from botocore.exceptions import NoCredentialsError, PartialCredentialsError
 from pydantic import TypeAdapter
 
 import litellm
+from litellm.anthropic_beta_headers_manager import reload_beta_headers_config
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.anthropic.messages.native import handler as python_messages
 from litellm.llms.bedrock.base_aws_llm import AwsAuthError
@@ -752,3 +753,252 @@ async def test_bedrock_mantle_runs_the_invoke_helpers_on_the_bedrock_capabilitie
     assert_served_natively(server)
     body: Final = _OBJECT.validate_python(server.requests[0].body)
     assert body.get("thinking") == thinking
+
+
+MANTLE_MODEL: Final = "bedrock_mantle/anthropic.claude-sonnet-5"
+_MANTLE_HEADERS: Final = (
+    "authorization",
+    "anthropic-version",
+    "anthropic-beta",
+    "anthropic-workspace-id",
+    "x-api-key",
+)
+
+
+@pytest.fixture
+def local_beta_headers(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    monkeypatch.setenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", "True")
+    reload_beta_headers_config()
+    yield
+    monkeypatch.delenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS")
+    reload_beta_headers_config()
+
+
+def _mantle_arguments(server: RecordingServer, kwargs: Mapping[str, object]) -> dict[str, object]:
+    return {
+        "model": MANTLE_MODEL,
+        "messages": list(MESSAGES),
+        "max_tokens": 8,
+        "api_base": server.base_url,
+        "api_key": "test-bearer",
+        "litellm_call_id": str(uuid.uuid4()),
+        **kwargs,
+    }
+
+
+async def _mantle(entry: Callable[..., Awaitable[object]], server: RecordingServer, **kwargs: object) -> object:
+    return await entry(**_mantle_arguments(server, kwargs))
+
+
+def _mantle_wire(request: RecordedRequest) -> tuple[object, ...]:
+    return (request.path, request.body, {name: request.headers.get(name) for name in _MANTLE_HEADERS})
+
+
+def _betas(request: RecordedRequest) -> list[str] | None:
+    header: Final = request.headers.get("anthropic-beta")
+    return None if header is None else header.split(",")
+
+
+_SAFEGUARDS: Final = [{"type": "dangerous_tool_use", "classifier_context": {"v": 1, "permission_mode": "auto"}}]
+_CLEAR_TOOL_USES: Final = {"edits": [{"type": "clear_tool_uses_20250919"}]}
+_WEATHER_TOOL: Final = {
+    "name": "get_weather",
+    "description": "Look up the weather",
+    "input_schema": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]},
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("local_beta_headers")
+@pytest.mark.parametrize(
+    ("request_params", "betas"),
+    (
+        pytest.param({}, None, id="plain"),
+        pytest.param(
+            {
+                "extra_headers": {
+                    "anthropic-beta": "claude-code-20250219,interleaved-thinking-2025-05-14,context-management-2025-06-27"
+                }
+            },
+            ["claude-code-20250219", "context-management-2025-06-27", "interleaved-thinking-2025-05-14"],
+            id="accepted-betas",
+        ),
+        pytest.param(
+            {
+                "extra_headers": {
+                    "anthropic-beta": "code-execution-2025-08-25,context-1m-2025-08-07,files-api-2025-04-14"
+                }
+            },
+            ["context-1m-2025-08-07"],
+            id="rejected-betas-dropped",
+        ),
+        pytest.param(
+            {"extra_headers": {"anthropic-beta": "code-execution-2025-08-25"}}, None, id="every-beta-rejected"
+        ),
+        pytest.param(
+            {"extra_headers": {"anthropic-beta": "advanced-tool-use-2025-11-20"}},
+            ["tool-search-tool-2025-10-19"],
+            id="advanced-tool-use-renamed",
+        ),
+        pytest.param(
+            {"extra_headers": {"anthropic-beta": "context-1m-2025-08-07"}, "context_management": _CLEAR_TOOL_USES},
+            ["context-1m-2025-08-07", "context-management-2025-06-27"],
+            id="feature-beta-joins",
+        ),
+        pytest.param({"safeguards": _SAFEGUARDS}, ["dangerous-tool-use-2026-09-03"], id="safeguards-beta"),
+        pytest.param(
+            {"extra_headers": {"anthropic-beta": "dangerous-tool-use-2026-09-03"}},
+            ["dangerous-tool-use-2026-09-03"],
+            id="client-dangerous-tool-use",
+        ),
+        pytest.param(
+            {
+                "extra_headers": {"anthropic-beta": "context-1m-2025-08-07"},
+                "context_management": _CLEAR_TOOL_USES,
+                "anthropic_version": "bedrock-2023-05-31",
+            },
+            ["context-1m-2025-08-07", "context-management-2025-06-27"],
+            id="version-stays-out-of-the-body",
+        ),
+        pytest.param(
+            {
+                "context_management": {
+                    "edits": [{"type": "clear_thinking_20251015", "keep": "all"}, {"type": "clear_tool_uses_20250919"}]
+                },
+                "thinking": {"type": "adaptive"},
+            },
+            ["context-management-2025-06-27"],
+            id="clear-thinking-with-thinking",
+        ),
+        pytest.param({"tools": [_WEATHER_TOOL], "tool_choice": {"type": "auto"}}, None, id="tools"),
+        pytest.param({"aws_bedrock_project_id": "proj_abc123def456"}, None, id="workspace"),
+    ),
+)
+async def test_bedrock_mantle_sends_the_request_python_sends(
+    server: RecordingServer, request_params: Mapping[str, object], betas: list[str] | None
+) -> None:
+    server.default_response = ResponseSpec(body=MESSAGES_RESPONSE)
+
+    python_response: Final = await _mantle(_PYTHON_ENTRY, server, **request_params)
+    rust_response: Final = await _mantle(_RUST_ENTRY, server, **request_params)
+
+    python_sent, rust_sent = server.requests
+    assert _mantle_wire(rust_sent) == _mantle_wire(python_sent)
+    assert rust_sent.path.endswith("/anthropic/v1/messages")
+    assert rust_sent.headers["authorization"] == "Bearer test-bearer"
+    assert rust_sent.headers["anthropic-version"] == "2023-06-01"
+    assert _betas(rust_sent) == betas
+    body: Final = _OBJECT.validate_python(rust_sent.body)
+    assert body["model"] == "anthropic.claude-sonnet-5"
+    assert {"anthropic_version", "anthropic_beta", "aws_bedrock_project_id"}.isdisjoint(body)
+    assert _public(rust_response) == _public(python_response)
+
+
+@pytest.mark.asyncio
+async def test_bedrock_mantle_sends_a_proxy_clients_betas_filtered_as_python_does(
+    server: RecordingServer, local_beta_headers: None
+) -> None:
+    from litellm.proxy.litellm_pre_call_utils import add_provider_specific_headers_to_request
+
+    proxy_request: Final[dict[str, object]] = {}  # mutable-ok: the proxy helper fills the request it is handed
+    add_provider_specific_headers_to_request(
+        data=proxy_request,
+        headers={
+            "anthropic-beta": "claude-code-20250219,fast-mode-2026-02-01,interleaved-thinking-2025-05-14",
+            "anthropic-version": "2023-06-01",
+            "user-agent": "claude-cli/2.1.239",
+        },
+    )
+
+    await _mantle(_PYTHON_ENTRY, server, **proxy_request)
+    await _mantle(_RUST_ENTRY, server, **proxy_request)
+
+    python_sent, rust_sent = server.requests
+    assert _mantle_wire(rust_sent) == _mantle_wire(python_sent)
+    assert _betas(rust_sent) == ["claude-code-20250219", "interleaved-thinking-2025-05-14"]
+
+
+@pytest.mark.asyncio
+async def test_bedrock_mantle_strips_the_region_prefix_from_the_model_as_python_does(server: RecordingServer) -> None:
+    model: Final = "bedrock_mantle/us-east-2/anthropic.claude-haiku-4-5"
+
+    await _mantle(_PYTHON_ENTRY, server, model=model)
+    await _mantle(_RUST_ENTRY, server, model=model)
+
+    python_sent, rust_sent = server.requests
+    assert _mantle_wire(rust_sent) == _mantle_wire(python_sent)
+    assert _OBJECT.validate_python(rust_sent.body)["model"] == "anthropic.claude-haiku-4-5"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "model",
+    (
+        pytest.param(MANTLE_MODEL, id="bedrock-mantle"),
+        pytest.param("bedrock/mantle/anthropic.claude-mythos-preview", id="mantle-route"),
+    ),
+)
+async def test_bedrock_mantle_signs_against_the_messages_url_as_python_does(
+    server: RecordingServer, model: str
+) -> None:
+    sigv4: Final = {"model": model, "api_key": None, **AWS}
+
+    await _mantle(_PYTHON_ENTRY, server, **sigv4)
+    await _mantle(_RUST_ENTRY, server, **sigv4)
+
+    python_sent, rust_sent = server.requests
+    assert _signing(rust_sent) == _signing(python_sent)
+    assert rust_sent.body == python_sent.body
+    assert "/us-east-1/bedrock/aws4_request" in rust_sent.headers["authorization"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "model",
+    (
+        pytest.param(MANTLE_MODEL, id="bedrock-mantle"),
+        pytest.param("bedrock/mantle/anthropic.claude-mythos-preview", id="mantle-route"),
+    ),
+)
+async def test_bedrock_mantle_stream_passes_the_sse_through_as_python_does(server: RecordingServer, model: str) -> None:
+    server.default_response = ResponseSpec(body=None, events=MESSAGES_EVENTS)
+    route: Final = {"model": model, **({} if model == MANTLE_MODEL else {"api_key": None, **AWS})}
+
+    python_chunks: Final = await _drain(await _mantle(_PYTHON_ENTRY, server, stream=True, **route))
+    rust_chunks: Final = await _drain(await _mantle(_RUST_ENTRY, server, stream=True, **route))
+
+    python_sent, rust_sent = server.requests
+    assert _OBJECT.validate_python(rust_sent.body)["stream"] is True
+    assert rust_sent.body == python_sent.body
+    assert _sse_events(rust_chunks) == _sse_events(python_chunks)
+    assert b"event: message_stop" in b"".join(rust_chunks)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("answer", "usage"),
+    (
+        pytest.param(
+            {name: value for name, value in MESSAGES_RESPONSE.items() if name != "usage"},
+            {"input_tokens": 0, "output_tokens": 0},
+            id="usage-backfilled",
+        ),
+        pytest.param(
+            {**MESSAGES_RESPONSE, "usage": {"input_tokens": 42, "output_tokens": 7, "cache_read_input_tokens": 5}},
+            {"input_tokens": 42, "output_tokens": 7, "cache_read_input_tokens": 5},
+            id="usage-kept",
+        ),
+    ),
+)
+async def test_bedrock_mantle_route_answers_the_usage_python_answers(
+    server: RecordingServer, answer: Mapping[str, object], usage: Mapping[str, int]
+) -> None:
+    server.default_response = ResponseSpec(body=dict(answer))
+    route: Final = {"model": "bedrock/mantle/anthropic.claude-opus-4-8", "api_key": None, **AWS}
+
+    python_response: Final = await _mantle(_PYTHON_ENTRY, server, **route)
+    rust_response: Final = await _mantle(_RUST_ENTRY, server, **route)
+
+    assert _public(rust_response) == _public(python_response)
+    rust_usage: Final = _OBJECT.validate_python(_OBJECT.validate_python(rust_response)["usage"])
+    assert {name: rust_usage.get(name) for name in usage} == usage
