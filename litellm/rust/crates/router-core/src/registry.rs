@@ -259,6 +259,15 @@ impl Deployment {
         self.is_azure() && self.is_batch_capable()
     }
 
+    /// The members of `group` that can take this deployment's calls: one serving only batches
+    /// takes none of another kind's.
+    pub(crate) fn peers_in(&self, group: &[Arc<Deployment>]) -> usize {
+        group
+            .iter()
+            .filter(|peer| self.serves_only_batches() || !peer.serves_only_batches())
+            .count()
+    }
+
     pub(crate) fn supports_web_search(&self) -> bool {
         self.model_info
             .raw

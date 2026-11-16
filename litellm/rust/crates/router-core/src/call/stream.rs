@@ -232,7 +232,12 @@ impl Router {
             .core
             .candidates(&snapshot, &op, &request, &target.group, &counting)
             .await
-            .map(|c| (counted(&c, c.healthy.len()), counted(&c, c.all.len())))
+            .map(|c| {
+                (
+                    counted(&c, c.healthy.len()),
+                    counted(&c, c.routable(&request)),
+                )
+            })
             .unwrap_or((0, 0));
         let (budget, policy_applies) =
             stream_retry_budget(&snapshot, &request, &origin, failure.kind);

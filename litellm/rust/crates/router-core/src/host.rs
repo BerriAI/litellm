@@ -91,10 +91,10 @@ pub struct RouterRequest {
     /// cool down, are paused, or fail their health check, so the file never lands on a deployment
     /// that cannot run its batch.
     pub batch_upload: bool,
-    /// A batch or file call (a batch create, retrieve, or cancel, a file upload, read, list, or
-    /// delete): the Azure deployments declared `model_info.mode: batch` stay candidates. Every
-    /// other call skips them while its group has any other deployment, since they serve only
-    /// batches.
+    /// A batch, file, or fine-tuning call (a batch create, retrieve, or cancel, a file upload,
+    /// read, list, or delete, a fine-tuning job create, read, list, or cancel): the Azure
+    /// deployments declared `model_info.mode: batch` stay candidates. Every other call skips them
+    /// while its group has any other deployment, since they serve only batches.
     pub batch_api: bool,
     /// An embedding pick: the host keeps the candidates whose `max_embedding_batch_size` admits
     /// the input (`deployments_admitting_embedding_batch`).

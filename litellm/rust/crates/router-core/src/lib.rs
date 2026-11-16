@@ -561,7 +561,7 @@ impl Router {
             single_deployment: snapshot
                 .registry
                 .group(&deployment.model_name)
-                .is_some_and(|group| group.len() == 1)
+                .is_some_and(|group| deployment.peers_in(&group) == 1)
                 && !report
                     .requested_group
                     .as_deref()

@@ -1369,23 +1369,101 @@ async fn only_batch_and_file_calls_pick_among_azure_batch_only_deployments(
     assert_eq!(healthy, expected);
 }
 
+fn azure_chat_alone() -> RouterConfig {
+    serde_json::from_value(json!({
+        "model_list": [
+            {"model_name": "primary", "litellm_params": {"model": "azure/chat"}, "model_info": {"id": "c1", "mode": "chat"}},
+        ]
+    }))
+    .unwrap()
+}
+
+#[rstest]
+#[case::alone(azure_chat_alone())]
+#[case::beside_a_batch_only_one(azure_chat_beside_batch())]
 #[tokio::test]
-async fn a_rate_limited_chat_deployment_beside_a_batch_one_returns_its_own_error() {
+async fn a_rate_limited_chat_deployment_stays_up_and_is_retried(#[case] config: RouterConfig) {
     let host = Arc::new(ScriptedHost::failing(
         "primary",
         vec![failure(FailureKind::RateLimit, 429)],
     ));
-    let router = router(
-        azure_chat_beside_batch(),
-        json!({"num_retries": 2}),
-        host.clone(),
+    let router = router(config, json!({"num_retries": 2}), host.clone());
+    router
+        .call(Op::from("acompletion"), request())
+        .await
+        .unwrap();
+    let cooled = router
+        .health()
+        .active_cooldowns(&["c1".to_owned()])
+        .await
+        .unwrap();
+    assert_eq!(
+        (host.selected(), cooled.len()),
+        (vec!["c1".to_owned(), "c1".to_owned()], 0)
     );
+}
+
+#[rstest]
+#[case::alone(azure_chat_alone())]
+#[case::beside_a_batch_only_one(azure_chat_beside_batch())]
+#[tokio::test]
+async fn a_reported_rate_limit_leaves_a_chat_deployment_up(#[case] config: RouterConfig) {
+    let router = router(config, json!({}), Arc::new(ScriptedHost::default()));
+    let cooldown = router
+        .report_failure(
+            "c1",
+            &failure(FailureKind::RateLimit, 429),
+            FailureReport::default(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(cooldown, None);
+}
+
+#[rstest]
+#[case::alone(azure_chat_alone())]
+#[case::beside_a_batch_only_one(azure_chat_beside_batch())]
+#[tokio::test]
+async fn a_chat_deployment_refusing_the_key_returns_its_own_error_without_retries(
+    #[case] mut config: RouterConfig,
+) {
+    config.disable_cooldowns = true;
+    let host = Arc::new(ScriptedHost::failing(
+        "primary",
+        vec![failure(FailureKind::Authentication, 401)],
+    ));
+    let router = router(config, json!({"num_retries": 2}), host.clone());
     let error = router
         .call(Op::from("acompletion"), request())
         .await
         .unwrap_err();
-    assert_eq!(host.selected(), vec!["c1"]);
-    assert!(matches!(error, Error::Attempt(refused) if refused.kind == FailureKind::RateLimit));
+    assert_eq!(
+        (host.selected(), error.attempt().map(|failed| failed.kind)),
+        (vec!["c1".to_owned()], Some(FailureKind::Authentication))
+    );
+}
+
+#[rstest]
+#[case::alone(azure_chat_alone())]
+#[case::beside_a_batch_only_one(azure_chat_beside_batch())]
+#[tokio::test]
+async fn a_stream_a_chat_deployment_refused_the_key_for_is_not_retried(
+    #[case] config: RouterConfig,
+) {
+    let host = Arc::new(ScriptedHost::default());
+    let router = router(config, json!({}), host.clone());
+    let refused = router
+        .retry_stream(
+            Op::from("acompletion"),
+            stream_request(),
+            stream_origin(),
+            failure(FailureKind::Authentication, 401),
+        )
+        .await;
+    assert!(
+        matches!(refused, Err(Error::Attempt(failed)) if failed.kind == FailureKind::Authentication)
+    );
+    assert_eq!(host.selected().len(), 0);
 }
 
 fn azure_chat_then_batch() -> RouterConfig {

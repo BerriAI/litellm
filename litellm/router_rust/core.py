@@ -316,7 +316,17 @@ _FAILURE_KINDS: Final = (
 )
 _DECLINED: Final = frozenset({"MalformedRequestFieldError", "UnsupportedEndpointError"})
 _BATCH_API_KINDS: Final = frozenset({"cancel_batch", "create_file"})
-_FILE_HANDLERS: Final = frozenset({"afile_content", "afile_delete", "afile_list"})
+_BATCH_API_HANDLERS: Final = frozenset(
+    {
+        "afile_content",
+        "afile_delete",
+        "afile_list",
+        "acreate_fine_tuning_job",
+        "acancel_fine_tuning_job",
+        "alist_fine_tuning_jobs",
+        "aretrieve_fine_tuning_job",
+    }
+)
 _PROVIDERS: Final = tuple(provider.value for provider in LlmProviders)
 _DEFAULT_COOLDOWN_SECONDS: Final = 5.0
 # Past this a retry-after no longer fits the Rust core's durations; it cools down as good as forever.
@@ -4358,7 +4368,7 @@ def _routes_as_batch_create(plan: Plan, request: Mapping[str, object]) -> bool:
 
 
 def _is_batch_api_call(plan: Plan) -> bool:
-    return plan.kind in _BATCH_API_KINDS or plan.handler in _FILE_HANDLERS
+    return plan.kind in _BATCH_API_KINDS or plan.handler in _BATCH_API_HANDLERS
 
 
 def _request_narrowing(request: Mapping[str, object]) -> Mapping[str, object]:

@@ -94,6 +94,15 @@ impl Candidates {
         }
     }
 
+    /// How many of `all` the request can route to: a call outside the batch and file APIs does
+    /// not count the batch-only deployments it skips.
+    pub(crate) fn routable(&self, request: &RouterRequest) -> usize {
+        if skips_batch_only(request, &self.all) {
+            return self.all.iter().filter(|d| !d.serves_only_batches()).count();
+        }
+        self.all.len()
+    }
+
     pub(crate) fn failed_model(&self, registry: &Registry) -> String {
         let model = match self.kind {
             ResolveKind::Wildcard => registry.alias_of(&self.name).unwrap_or(&self.name),

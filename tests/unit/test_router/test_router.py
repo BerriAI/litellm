@@ -8211,7 +8211,23 @@ async def test_chat_calls_on_a_mixed_azure_group_stay_off_its_batch_deployment(m
 
 _AZURE_FILE_DELETED: Final = {"id": "file-batch-input", "object": "file", "deleted": True}
 _AZURE_FILE_LIST: Final = {"object": "list", "data": [], "has_more": False}
-_MIXED_GROUP_BATCH_AND_FILE_CALLS: Final = {
+_AZURE_FINE_TUNING_JOB: Final = {
+    "id": "ftjob-1",
+    "object": "fine_tuning.job",
+    "created_at": 0,
+    "model": "gpt-mixed",
+    "status": "running",
+    "fine_tuned_model": None,
+    "training_file": "file-batch-input",
+    "hyperparameters": {"n_epochs": 3},
+    "organization_id": None,
+    "result_files": [],
+    "validation_file": None,
+    "trained_tokens": None,
+    "seed": 0,
+    "error": None,
+}
+_MIXED_GROUP_BATCH_API_CALLS: Final = {
     "retrieve-batch": (
         lambda router: router.aretrieve_batch(model="gpt-mixed", batch_id="batch_created"),
         _AZURE_BATCH_CREATED,
@@ -8233,14 +8249,30 @@ _MIXED_GROUP_BATCH_AND_FILE_CALLS: Final = {
         _AZURE_FILE_DELETED,
     ),
     "list-files": (lambda router: router.afile_list(model="gpt-mixed"), _AZURE_FILE_LIST),
+    "create-fine-tuning-job": (
+        lambda router: router.acreate_fine_tuning_job(model="gpt-mixed", training_file="file-batch-input"),
+        _AZURE_FINE_TUNING_JOB,
+    ),
+    "retrieve-fine-tuning-job": (
+        lambda router: router.aretrieve_fine_tuning_job(model="gpt-mixed", fine_tuning_job_id="ftjob-1"),
+        _AZURE_FINE_TUNING_JOB,
+    ),
+    "cancel-fine-tuning-job": (
+        lambda router: router.acancel_fine_tuning_job(model="gpt-mixed", fine_tuning_job_id="ftjob-1"),
+        _AZURE_FINE_TUNING_JOB,
+    ),
+    "list-fine-tuning-jobs": (
+        lambda router: router.alist_fine_tuning_jobs(model="gpt-mixed"),
+        {"object": "list", "data": [_AZURE_FINE_TUNING_JOB], "has_more": False},
+    ),
 }
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("call", "answer"), _MIXED_GROUP_BATCH_AND_FILE_CALLS.values(), ids=_MIXED_GROUP_BATCH_AND_FILE_CALLS.keys()
+    ("call", "answer"), _MIXED_GROUP_BATCH_API_CALLS.values(), ids=_MIXED_GROUP_BATCH_API_CALLS.keys()
 )
-async def test_batch_and_file_calls_on_a_mixed_azure_group_still_reach_its_batch_deployment(
+async def test_batch_file_and_fine_tuning_calls_on_a_mixed_azure_group_still_reach_its_batch_deployment(
     monkeypatch: pytest.MonkeyPatch,
     call: Callable[[Router], Awaitable[object]],
     answer: Mapping[str, object],

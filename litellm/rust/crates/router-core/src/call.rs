@@ -986,7 +986,7 @@ impl Core {
         let all = self
             .candidates(snapshot, op, request, &target.group, &counting)
             .await
-            .map(|c| counted(&c, c.all.len()))
+            .map(|c| counted(&c, c.routable(request)))
             .unwrap_or(0);
 
         for retry in 0..=num_retries {
@@ -1624,10 +1624,12 @@ impl Core {
             single_deployment: snapshot
                 .registry
                 .group(&deployment.model_name)
-                .map_or(candidates.all.len() == 1, |group| group.len() == 1)
+                .map_or(candidates.routable(request) == 1, |group| {
+                    deployment.peers_in(&group) == 1
+                })
                 // A routing group call with alternatives cools its member down so selection
                 // moves on (`routing_group_alternatives`).
-                && !(candidates.kind == ResolveKind::RoutingGroup && candidates.all.len() > 1)
+                && !(candidates.kind == ResolveKind::RoutingGroup && candidates.routable(request) > 1)
                 // As does a team deployment with a sibling under its public name
                 // (`team_model_alternatives`).
                 && !team_model_has_alternatives(&snapshot.registry, deployment),
