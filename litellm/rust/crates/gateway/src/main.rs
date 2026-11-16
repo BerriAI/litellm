@@ -63,10 +63,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let level = settings.log_level();
     Logger::new(StderrSink { level }).install_global()?;
     let config = litellm_config_load::load(settings.litellm_config)?;
-    let (inference, models) = litellm_gateway::build_serving(&config).await?;
-    tokio::spawn(models.run(inference.clone(), None));
-    let _redis =
-        litellm_gateway::build_redis(&config, &inference.resources.pool, &inference.http).await?;
+    let inference = litellm_gateway::build_native(&config).await?;
     let ui = match std::env::var_os("LITELLM_UI_PATH") {
         Some(directory) => {
             let ui_settings: UiSettings = settings::from_iter(std::env::vars_os())?;
@@ -146,14 +143,9 @@ async fn in_front_of_python(
     let unsupported = litellm_gateway::unsupported(&config, &|name| std::env::var(name).ok());
     let built = match unsupported.is_empty() {
         false => Err(unsupported),
-        true => match litellm_gateway::build_serving(&config).await {
-            Err(litellm_gateway::Error::RouterConfig(refused)) => Err(vec![(&refused).into()]),
-            built => {
-                let (inference, models) = built?;
-                tokio::spawn(models.run(inference.clone(), None));
-                Ok(inference)
-            }
-        },
+        true => litellm_gateway::build_native(&config)
+            .await
+            .map_err(|unbuilt| vec![(&unbuilt).into()]),
     };
     let inference = match built {
         Ok(inference) => inference,

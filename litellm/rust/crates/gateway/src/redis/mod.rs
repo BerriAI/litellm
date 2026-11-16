@@ -1,7 +1,9 @@
 use std::{sync::Arc, time::Duration};
 
 use litellm_circuit_breaker::Config as BreakerConfig;
-use litellm_config::{CacheSettings, Config, RedisSettings, Value};
+use std::collections::BTreeMap;
+
+use litellm_config::{CacheSettings, Config, RedisSettings, RouterSettings, Value};
 use litellm_core_utils::settings::Lookup;
 use litellm_redis_client::{RedisClient, RedisEvents};
 use litellm_redis_connect::{HostServices, RedisHosts, SharedEnvironment, TracingEvents};
@@ -28,6 +30,8 @@ const ENVIRONMENT_PING_TIMEOUT: Duration = Duration::from_secs(2);
 type Params = Resolution;
 
 pub struct RedisClients {
+    /// The router's routing state (`router_settings.redis_*`).
+    pub router: Option<RedisClient>,
     pub coordination: Option<RedisClient>,
     pub transaction_buffer: Option<RedisClient>,
     pub response_cache: Option<RedisClient>,
@@ -35,6 +39,7 @@ pub struct RedisClients {
 
 #[derive(Debug, PartialEq)]
 pub(crate) struct Plan {
+    router: Option<Params>,
     coordination: Option<Target>,
     transaction_buffer_fallback: Option<Params>,
     response_cache: Option<Params>,
@@ -47,6 +52,9 @@ enum Target {
 }
 
 pub(crate) fn plan(config: &Config, lookup: &dyn Lookup) -> Result<Plan, Error> {
+    let router = router_redis(&config.router_settings)
+        .map(|fields| resolve(&ConfiguredRedis::router(fields), lookup))
+        .transpose()?;
     let response_cache = redis_cache_params(config)
         .map(|settings| resolve(&ConfiguredRedis::cache_params(settings), lookup))
         .transpose()?;
@@ -66,6 +74,7 @@ pub(crate) fn plan(config: &Config, lookup: &dyn Lookup) -> Result<Plan, Error> 
         (Some(Target::Environment(_)) | None, true) => environment(lookup)?,
     };
     Ok(Plan {
+        router,
         coordination,
         transaction_buffer_fallback,
         response_cache,
@@ -112,11 +121,116 @@ pub(crate) async fn connect(
         (None, None) => None,
     };
     let response_cache = plan.response_cache.map(client).transpose()?;
+    let router = plan.router.map(client).transpose()?;
     Ok(RedisClients {
+        router,
         coordination,
         transaction_buffer,
         response_cache,
     })
+}
+
+/// `redis_cache_for`: the router's Redis, named by `redis_url` or by both `redis_host` and
+/// `redis_port`, with `cache_kwargs` passed on as further `RedisCache` keywords.
+fn router_redis(settings: &RouterSettings) -> Option<BTreeMap<String, Value>> {
+    let setting = |name: &str| {
+        settings
+            .additional_fields
+            .get(name)
+            .filter(|value| !value.is_null())
+            .and_then(|value| serde_json::from_value::<Value>(value.clone()).ok())
+    };
+    if setting("redis_url").is_none()
+        && (setting("redis_host").is_none() || setting("redis_port").is_none())
+    {
+        return None;
+    }
+    let as_text = |value: Value| configured::text(&value).map_or(value, Value::String);
+    let named = [
+        ("url", "redis_url", false),
+        ("host", "redis_host", false),
+        ("port", "redis_port", true),
+        ("password", "redis_password", false),
+        ("db", "redis_db", true),
+    ]
+    .into_iter()
+    .filter_map(|(key, name, text)| {
+        let value = setting(name)?;
+        Some((key.to_owned(), if text { as_text(value) } else { value }))
+    });
+    let kwargs = match setting("cache_kwargs") {
+        Some(Value::Mapping(kwargs)) => kwargs
+            .into_iter()
+            .filter_map(|(key, value)| Some((configured::text(&key)?, value)))
+            .collect(),
+        _ => Vec::new(),
+    };
+    Some(named.chain(kwargs).collect())
+}
+
+/// `DEFAULT_COOLDOWN_REDIS_READ_INTERVAL_SECONDS` in `litellm/constants.py`.
+const COOLDOWN_READ_INTERVAL: Duration = Duration::from_secs(1);
+/// `DEFAULT_REDIS_BATCH_CACHE_EXPIRY_SECONDS` in `litellm/constants.py`.
+const USAGE_READ_INTERVAL: Duration = Duration::from_secs(10);
+/// `DEFAULT_MAX_REDIS_BATCH_CACHE_SIZE` in `litellm/constants.py`.
+const TRACKED_READS: usize = 1000;
+/// `BaseCache`'s default `default_ttl`, which `RedisCache` keeps unless `litellm.default_redis_ttl` is set.
+const REDIS_DEFAULT_TTL: Duration = Duration::from_secs(60);
+
+fn litellm_seconds(config: &Config, name: &str) -> Option<Duration> {
+    config
+        .litellm_settings
+        .additional_fields
+        .get(name)
+        .and_then(Value::as_f64)
+        .and_then(|seconds| Duration::try_from_secs_f64(seconds).ok())
+}
+
+/// `router_tiers`: the tier settings the router's stores read, from the environment and the
+/// `litellm_settings` the proxy assigns onto `litellm`.
+pub(crate) fn router_tiers(
+    config: &Config,
+    lookup: &dyn Lookup,
+) -> Result<litellm_redis_store::RouterTiers, Error> {
+    let tracked_reads = environment_value(
+        lookup,
+        "DEFAULT_MAX_REDIS_BATCH_CACHE_SIZE",
+        Expected::Integer,
+        |text| text.parse().ok(),
+    )?
+    .unwrap_or(TRACKED_READS);
+    let default_in_memory_ttl = litellm_seconds(config, "default_in_memory_ttl");
+    let policy = |refresh_after| litellm_redis_store::TierPolicy {
+        refresh_after,
+        tracked_reads,
+        default_in_memory_ttl,
+    };
+    let cooldown_interval = environment_value(
+        lookup,
+        "DEFAULT_COOLDOWN_REDIS_READ_INTERVAL_SECONDS",
+        Expected::Seconds,
+        parse_seconds,
+    )?
+    .unwrap_or(COOLDOWN_READ_INTERVAL);
+    let usage_interval = litellm_seconds(config, "default_redis_batch_cache_expiry")
+        .filter(|interval| !interval.is_zero())
+        .unwrap_or(USAGE_READ_INTERVAL);
+    Ok(litellm_redis_store::RouterTiers {
+        cooldowns: policy(cooldown_interval),
+        usage: policy(usage_interval),
+        default_in_memory_ttl,
+    })
+}
+
+/// The router's Redis as its stores take it, with `RedisCache.default_ttl`.
+pub fn router_remote(client: RedisClient, config: &Config) -> litellm_redis_store::Remote {
+    let default_ttl = litellm_seconds(config, "default_redis_ttl")
+        .map(|ttl| Duration::from_secs(ttl.as_secs()))
+        .unwrap_or(REDIS_DEFAULT_TTL);
+    litellm_redis_store::Remote {
+        client,
+        default_ttl,
+    }
 }
 
 fn redis_cache_params(config: &Config) -> Option<&RedisSettings> {
@@ -310,6 +424,7 @@ mod tests {
 
     fn configured(coordination: Params, response_cache: Option<Params>) -> Plan {
         Plan {
+            router: None,
             coordination: Some(Target::Configured(coordination)),
             transaction_buffer_fallback: None,
             response_cache,
@@ -317,6 +432,7 @@ mod tests {
     }
 
     const NO_REDIS: Plan = Plan {
+        router: None,
         coordination: None,
         transaction_buffer_fallback: None,
         response_cache: None,
@@ -342,12 +458,22 @@ mod tests {
     #[case::environment_only_coordination_is_probed(
         "model_list: []",
         &[("REDIS_HOST", "env")],
-        Plan { coordination: Some(Target::Environment(host("env", 6379))), transaction_buffer_fallback: None, response_cache: None }
+        Plan { router: None, coordination: Some(Target::Environment(host("env", 6379))), transaction_buffer_fallback: None, response_cache: None }
     )]
     #[case::the_transaction_buffer_falls_back_to_the_environment_only_when_enabled(
         "general_settings:\n  use_redis_transaction_buffer: \"true\"",
         &[("REDIS_HOST", "env")],
-        Plan { coordination: Some(Target::Environment(host("env", 6379))), transaction_buffer_fallback: Some(host("env", 6379)), response_cache: None }
+        Plan { router: None, coordination: Some(Target::Environment(host("env", 6379))), transaction_buffer_fallback: Some(host("env", 6379)), response_cache: None }
+    )]
+    #[case::router_settings_name_the_routers_own_redis(
+        "router_settings:\n  redis_host: router\n  redis_port: 6380",
+        &[],
+        Plan { router: Some(host("router", 6380)), ..NO_REDIS }
+    )]
+    #[case::a_router_host_without_a_port_names_no_redis(
+        "router_settings:\n  redis_host: router",
+        &[],
+        NO_REDIS
     )]
     fn resolves_each_redis_role_like_the_proxy(
         #[case] yaml: &str,
