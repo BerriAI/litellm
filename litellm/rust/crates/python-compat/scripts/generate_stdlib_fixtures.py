@@ -25,7 +25,7 @@ QUOTE_TEXTS = [
     "a+b=c&d",
     "~_.-",
     "100%",
-    'a/b:c d%#?+=&~é"q',
+    "a/b:c d%#?+=&~é\"q",
     "id-é-\U0001f600",
     "日本",
     "\x00\x1f\x7f",
@@ -168,7 +168,7 @@ ISO_TEXTS = [
     "2025-11-1",
     "2025-11-13 ",
     "2025-11-13\u00e9",
-    "2025-11-13\U0001f60012:00",
+    "2025-11-13\U0001f600" "12:00",
     "1234567",
     "2025-11-13T12:00:00+05:30",
 ]
@@ -195,24 +195,7 @@ FIXED = [
     (-math.inf, 4),
 ]
 
-NUMBERS = [
-    0,
-    1,
-    -5,
-    2**53 + 1,
-    2**63 - 1,
-    -(2**63),
-    0.0,
-    -0.0,
-    1.0,
-    0.1,
-    1.5,
-    1e16,
-    1e-5,
-    123456789.123,
-    math.inf,
-    -math.inf,
-]
+NUMBERS = [0, 1, -5, 2**53 + 1, 2**63 - 1, -(2**63), 0.0, -0.0, 1.0, 0.1, 1.5, 1e16, 1e-5, 123456789.123, math.inf, -math.inf]
 
 EPOCH = datetime(1970, 1, 1)
 
@@ -241,15 +224,7 @@ def utc(seconds, micros):
     return {
         "seconds": seconds,
         "micros": micros,
-        "fields": [
-            moment.year,
-            moment.month,
-            moment.day,
-            moment.hour,
-            moment.minute,
-            moment.second,
-            moment.microsecond,
-        ],
+        "fields": [moment.year, moment.month, moment.day, moment.hour, moment.minute, moment.second, moment.microsecond],
     }
 
 
@@ -257,9 +232,7 @@ if __name__ == "__main__":
     json.dump(
         {
             "python": sys.version.split()[0],
-            "quote": [
-                {"text": text, "safe": safe, "quoted": quote(text, safe=safe)} for text in QUOTE_TEXTS for safe in SAFES
-            ],
+            "quote": [{"text": text, "safe": safe, "quoted": quote(text, safe=safe)} for text in QUOTE_TEXTS for safe in SAFES],
             "utc": [utc(seconds, micros) for seconds, micros in TIMESTAMPS],
             "fromisoformat": [fromisoformat(text) for text in ISO_TEXTS],
             "fixed": [fixed(value, precision) for value, precision in FIXED],
