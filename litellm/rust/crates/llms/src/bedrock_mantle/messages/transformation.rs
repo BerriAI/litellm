@@ -321,3 +321,514 @@ impl BaseMessagesConfig for BedrockMantleAnthropicMessagesConfig {
         &[]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use litellm_auth::AwsParams;
+    use litellm_llms_types::formats::messages::MessagesResponse;
+    use rstest::rstest;
+    use serde_json::{Map, json};
+
+    use super::*;
+    use crate::{
+        base_llm::{auth::AuthScheme, messages::context::MessagesModelCapabilities},
+        bedrock::messages::mantle_transformation::AMAZON_MANTLE_MESSAGES_CONFIG,
+    };
+
+    fn env(pairs: &'static [(&'static str, &'static str)]) -> impl Fn(&str) -> Option<String> {
+        move |name| {
+            pairs
+                .iter()
+                .find(|(key, _)| *key == name)
+                .map(|(_, value)| (*value).to_string())
+        }
+    }
+
+    fn params(api_base: Option<&str>, region: Option<&str>) -> LitellmParams {
+        LitellmParams {
+            api_base: api_base.map(str::to_string),
+            aws: AwsParams {
+                aws_region_name: region.map(str::to_string),
+                ..AwsParams::default()
+            },
+            ..LitellmParams::default()
+        }
+    }
+
+    fn headers(pairs: &[(&str, &str)]) -> Headers {
+        pairs
+            .iter()
+            .map(|(name, value)| (name.to_string(), value.to_string()))
+            .collect()
+    }
+
+    fn environment(
+        config: &dyn BaseMessagesConfig,
+        forwarded: Headers,
+        api_key: Option<&str>,
+        model: &str,
+        litellm_params: &LitellmParams,
+        env_pairs: &'static [(&'static str, &'static str)],
+    ) -> Result<ValidatedEnvironment, Error> {
+        config.validate_environment(
+            forwarded,
+            api_key,
+            model,
+            &MessagesOptionalParams::default(),
+            litellm_params,
+            &env(env_pairs),
+        )
+    }
+
+    fn signing_region(environment: &ValidatedEnvironment) -> Option<&str> {
+        match &environment.auth {
+            AuthScheme::AwsSigV4 { region, .. } => Some(region),
+            _ => None,
+        }
+    }
+
+    fn sent(
+        config: &dyn BaseMessagesConfig,
+        request: Value,
+        forwarded: Headers,
+    ) -> Result<(Value, Headers), Error> {
+        let request: MessagesRequest = serde_json::from_value(request).unwrap();
+        let context = MessagesTransformContext::new(MessagesModelCapabilities::default(), false);
+        let (request, headers) = config.finalize_request(request, forwarded, &context)?;
+        Ok((
+            config.wire_body(serde_json::to_value(&request).unwrap()),
+            headers,
+        ))
+    }
+
+    fn request(model: &str, extra: Value) -> Value {
+        let base = json!({
+            "model": model,
+            "max_tokens": 16,
+            "messages": [{"role": "user", "content": "hi"}],
+        });
+        let fields: Map<String, Value> = base
+            .as_object()
+            .unwrap()
+            .clone()
+            .into_iter()
+            .chain(extra.as_object().unwrap().clone())
+            .collect();
+        Value::Object(fields)
+    }
+
+    fn header<'a>(headers: &'a Headers, name: &str) -> Vec<&'a str> {
+        headers
+            .iter()
+            .filter(|(key, _)| key == name)
+            .map(|(_, value)| value.as_str())
+            .collect()
+    }
+
+    #[rstest]
+    #[case::root("https://private.test", "https://private.test/anthropic/v1/messages")]
+    #[case::openai(
+        "https://private.test/openai/v1/",
+        "https://private.test/anthropic/v1/messages"
+    )]
+    #[case::complete(
+        "https://private.test/anthropic/v1/messages/",
+        "https://private.test/anthropic/v1/messages"
+    )]
+    #[case::tenant(
+        "https://private.test/tenant/v1",
+        "https://private.test/tenant/anthropic/v1/messages"
+    )]
+    #[case::port_kept(
+        "https://bedrock-mantle.us-west-2.api.aws:8443/v1",
+        "https://bedrock-mantle.us-west-2.api.aws:8443/anthropic/v1/messages"
+    )]
+    #[case::public_host_rewritten_to_https(
+        "http://bedrock-mantle.us-west-2.api.aws/openai/v1",
+        "https://bedrock-mantle.us-west-2.api.aws/anthropic/v1/messages"
+    )]
+    #[case::whitespace_base_is_used("   ", "   /anthropic/v1/messages")]
+    fn api_base_suffixes_are_stripped_once(#[case] base: &str, #[case] expected: &str) {
+        assert_eq!(
+            BEDROCK_MANTLE_MESSAGES_CONFIG
+                .get_complete_url(
+                    Some(base),
+                    "claude-test",
+                    &LitellmParams::default(),
+                    true,
+                    &|_| None
+                )
+                .unwrap(),
+            expected
+        );
+    }
+
+    #[rstest]
+    #[case::default(None, None, "claude-test", &[], "us-east-1")]
+    #[case::aws_default_region_ignored(None, None, "claude-test", &[("AWS_DEFAULT_REGION", "eu-west-1")], "us-east-1")]
+    #[case::mantle_region_env(None, None, "claude-test", &[("BEDROCK_MANTLE_REGION", "eu-west-1"), ("AWS_REGION", "ap-south-1")], "eu-west-1")]
+    #[case::model_prefix_over_env(None, None, "us-west-2/claude-test", &[("AWS_REGION", "eu-west-1")], "us-west-2")]
+    #[case::configured_region_over_prefix(None, Some("eu-west-1"), "us-west-2/claude-test", &[], "eu-west-1")]
+    #[case::configured_region_over_public_host(Some("https://bedrock-mantle.us-west-2.api.aws"), Some("us-east-1"), "claude-test", &[], "us-east-1")]
+    #[case::public_host_over_prefix(Some("https://bedrock-mantle.ap-south-1.api.aws/v1"), None, "us-west-2/claude-test", &[], "ap-south-1")]
+    #[case::env_base_host(None, None, "claude-test", &[("BEDROCK_MANTLE_API_BASE", "https://bedrock-mantle.eu-central-1.api.aws/v1")], "eu-central-1")]
+    #[case::arn_ignored(None, None, "arn:aws:bedrock:eu-west-1:123:model/claude-test", &[], "us-east-1")]
+    fn public_host_region_follows_python_order(
+        #[case] api_base: Option<&str>,
+        #[case] region: Option<&str>,
+        #[case] model: &str,
+        #[case] env_pairs: &'static [(&'static str, &'static str)],
+        #[case] expected: &str,
+    ) {
+        assert_eq!(
+            BEDROCK_MANTLE_MESSAGES_CONFIG
+                .get_complete_url(
+                    None,
+                    model,
+                    &params(api_base, region),
+                    false,
+                    &env(env_pairs)
+                )
+                .unwrap(),
+            format!("https://bedrock-mantle.{expected}.api.aws/anthropic/v1/messages")
+        );
+    }
+
+    #[rstest]
+    fn runtime_endpoint_is_ignored() {
+        let litellm_params = LitellmParams {
+            aws: AwsParams {
+                aws_bedrock_runtime_endpoint: Some("https://runtime.test".into()),
+                ..AwsParams::default()
+            },
+            ..LitellmParams::default()
+        };
+        assert_eq!(
+            BEDROCK_MANTLE_MESSAGES_CONFIG
+                .get_complete_url(None, "claude-test", &litellm_params, false, &|_| None)
+                .unwrap(),
+            "https://bedrock-mantle.us-east-1.api.aws/anthropic/v1/messages"
+        );
+    }
+
+    #[rstest]
+    #[case::private_base_ignores_model_prefix(Some("https://private.test"), None, "us-west-2/claude-test", &[], "us-east-1")]
+    #[case::private_base_uses_env(Some("https://private.test"), None, "claude-test", &[("AWS_REGION_NAME", "eu-west-1")], "eu-west-1")]
+    #[case::public_host_pinned_to_configured_region(Some("https://bedrock-mantle.us-west-2.api.aws"), Some("us-east-1"), "claude-test", &[], "us-east-1")]
+    #[case::model_prefix_default_host(None, None, "us-west-2/claude-test", &[], "us-west-2")]
+    fn sigv4_signs_with_the_url_region(
+        #[case] api_base: Option<&str>,
+        #[case] region: Option<&str>,
+        #[case] model: &str,
+        #[case] env_pairs: &'static [(&'static str, &'static str)],
+        #[case] expected: &str,
+    ) {
+        let validated = environment(
+            &BEDROCK_MANTLE_MESSAGES_CONFIG,
+            vec![],
+            None,
+            model,
+            &params(api_base, region),
+            env_pairs,
+        )
+        .unwrap();
+        assert_eq!(signing_region(&validated), Some(expected));
+    }
+
+    #[rstest]
+    fn upper_case_public_host_fails_sigv4_but_not_bearer() {
+        let litellm_params = params(Some("https://BEDROCK-MANTLE.US-EAST-1.API.AWS"), None);
+        assert_eq!(
+            BEDROCK_MANTLE_MESSAGES_CONFIG
+                .get_complete_url(None, "claude-test", &litellm_params, false, &|_| None)
+                .unwrap(),
+            "https://bedrock-mantle.US-EAST-1.api.aws/anthropic/v1/messages"
+        );
+        assert!(matches!(
+            environment(
+                &BEDROCK_MANTLE_MESSAGES_CONFIG,
+                vec![],
+                None,
+                "claude-test",
+                &litellm_params,
+                &[]
+            ),
+            Err(Error::InvalidRequest(_))
+        ));
+        assert!(
+            environment(
+                &BEDROCK_MANTLE_MESSAGES_CONFIG,
+                vec![],
+                Some("key"),
+                "claude-test",
+                &litellm_params,
+                &[]
+            )
+            .is_ok()
+        );
+    }
+
+    #[rstest]
+    #[case::url_injection("us-east-1.attacker.test/steal?")]
+    #[case::uppercase("US-EAST-1")]
+    fn invalid_configured_regions_are_rejected(#[case] region: &str) {
+        assert!(matches!(
+            BEDROCK_MANTLE_MESSAGES_CONFIG.get_complete_url(
+                None,
+                "claude-test",
+                &params(None, Some(region)),
+                false,
+                &|_| None
+            ),
+            Err(Error::InvalidRequest(_))
+        ));
+    }
+
+    #[rstest]
+    #[case::explicit(Some("explicit"), "Bearer explicit")]
+    #[case::mantle_key(None, "Bearer mantle")]
+    fn bearer_prefers_the_mantle_key(#[case] api_key: Option<&str>, #[case] expected: &str) {
+        let validated = environment(
+            &BEDROCK_MANTLE_MESSAGES_CONFIG,
+            vec![],
+            api_key,
+            "claude-test",
+            &LitellmParams::default(),
+            &[
+                ("BEDROCK_MANTLE_API_KEY", "mantle"),
+                ("AWS_BEARER_TOKEN_BEDROCK", "aws"),
+            ],
+        )
+        .unwrap();
+        assert_eq!(header(&validated.headers, "Authorization"), vec![expected]);
+    }
+
+    #[rstest]
+    #[case::bedrock_mantle(&BEDROCK_MANTLE_MESSAGES_CONFIG)]
+    #[case::bedrock_mantle_route(&AMAZON_MANTLE_MESSAGES_CONFIG)]
+    fn bearer_overwrites_only_the_exact_authorization_key(#[case] config: &dyn BaseMessagesConfig) {
+        let validated = environment(
+            config,
+            headers(&[
+                ("authorization", "stale"),
+                ("Authorization", "old"),
+                ("x-api-key", "caller"),
+            ]),
+            Some("token"),
+            "claude-test",
+            &LitellmParams::default(),
+            &[],
+        )
+        .unwrap();
+        assert_eq!(
+            (
+                header(&validated.headers, "authorization"),
+                header(&validated.headers, "Authorization"),
+                header(&validated.headers, "x-api-key"),
+                header(&validated.headers, "Content-Type"),
+            ),
+            (
+                vec!["stale"],
+                vec!["Bearer token"],
+                vec!["caller"],
+                vec!["application/json"]
+            )
+        );
+    }
+
+    #[rstest]
+    fn sigv4_drops_every_authorization_casing_and_keeps_x_api_key() {
+        let validated = environment(
+            &BEDROCK_MANTLE_MESSAGES_CONFIG,
+            headers(&[
+                ("authorization", "stale"),
+                ("Authorization", "Bearer x"),
+                ("x-api-key", "caller"),
+            ]),
+            None,
+            "claude-test",
+            &LitellmParams::default(),
+            &[],
+        )
+        .unwrap();
+        assert!(
+            !validated
+                .headers
+                .iter()
+                .any(|(name, _)| name.eq_ignore_ascii_case("authorization"))
+        );
+        assert_eq!(header(&validated.headers, "x-api-key"), vec!["caller"]);
+    }
+
+    #[rstest]
+    #[case::absent(&[], vec!["2023-06-01"], vec!["application/json"])]
+    #[case::caller_casing_kept(&[("Anthropic-Version", "2024-01-01"), ("content-type", "text/plain")], vec![], vec![])]
+    fn version_and_content_type_defaults_respect_any_casing(
+        #[case] forwarded: &[(&str, &str)],
+        #[case] version: Vec<&str>,
+        #[case] content_type: Vec<&str>,
+    ) {
+        let validated = environment(
+            &BEDROCK_MANTLE_MESSAGES_CONFIG,
+            headers(forwarded),
+            None,
+            "claude-test",
+            &LitellmParams::default(),
+            &[],
+        )
+        .unwrap();
+        assert_eq!(
+            (
+                header(&validated.headers, "anthropic-version"),
+                header(&validated.headers, "Content-Type"),
+            ),
+            (version, content_type)
+        );
+    }
+
+    #[rstest]
+    #[case::bedrock_mantle(&BEDROCK_MANTLE_MESSAGES_CONFIG, true)]
+    #[case::bedrock_mantle_route(&AMAZON_MANTLE_MESSAGES_CONFIG, false)]
+    fn clear_thinking_edit_is_kept_only_on_bedrock_mantle(
+        #[case] config: &dyn BaseMessagesConfig,
+        #[case] kept: bool,
+    ) {
+        let (body, headers) = sent(
+            config,
+            request(
+                "claude-test",
+                json!({"context_management": {"edits": [{"type": "clear_thinking_20251015"}]}}),
+            ),
+            vec![],
+        )
+        .unwrap();
+        assert_eq!(body.get("context_management").is_some(), kept);
+        assert_eq!(
+            header(&headers, "anthropic-beta"),
+            if kept {
+                vec!["context-management-2025-06-27"]
+            } else {
+                vec![]
+            }
+        );
+    }
+
+    #[rstest]
+    #[case::bedrock_mantle(&BEDROCK_MANTLE_MESSAGES_CONFIG)]
+    #[case::bedrock_mantle_route(&AMAZON_MANTLE_MESSAGES_CONFIG)]
+    fn mantle_shapes_the_body_like_invoke_with_its_overrides(
+        #[case] config: &dyn BaseMessagesConfig,
+    ) {
+        let (body, headers) = sent(
+            config,
+            request(
+                "claude-test",
+                json!({
+                    "compaction": {"trigger": 1000},
+                    "service_tier": "auto",
+                    "inference_geo": "us",
+                    "stream": false,
+                }),
+            ),
+            headers(&[(
+                "anthropic-beta",
+                "custom-beta,dangerous-tool-use-2026-09-03",
+            )]),
+        )
+        .unwrap();
+        assert_eq!(
+            body.as_object().unwrap().keys().collect::<Vec<_>>(),
+            vec!["messages", "max_tokens", "service_tier", "model"]
+        );
+        assert_eq!(
+            header(&headers, "anthropic-beta"),
+            vec!["dangerous-tool-use-2026-09-03"]
+        );
+    }
+
+    #[rstest]
+    #[case::bedrock_mantle(&BEDROCK_MANTLE_MESSAGES_CONFIG)]
+    #[case::bedrock_mantle_route(&AMAZON_MANTLE_MESSAGES_CONFIG)]
+    fn null_safeguards_add_no_dangerous_tool_use_beta(#[case] config: &dyn BaseMessagesConfig) {
+        let (_, headers) = sent(
+            config,
+            request("claude-test", json!({"safeguards": null})),
+            vec![],
+        )
+        .unwrap();
+        assert!(header(&headers, "anthropic-beta").is_empty());
+    }
+
+    #[rstest]
+    #[case::bedrock_mantle(&BEDROCK_MANTLE_MESSAGES_CONFIG)]
+    #[case::bedrock_mantle_route(&AMAZON_MANTLE_MESSAGES_CONFIG)]
+    fn server_web_search_is_rejected(#[case] config: &dyn BaseMessagesConfig) {
+        assert!(matches!(
+            sent(
+                config,
+                request(
+                    "claude-test",
+                    json!({"tools": [{"type": "web_search_20250305", "name": "web_search"}]})
+                ),
+                vec![]
+            ),
+            Err(Error::InvalidRequest(_))
+        ));
+    }
+
+    #[rstest]
+    #[case::bedrock_mantle_strips_region(&BEDROCK_MANTLE_MESSAGES_CONFIG, "us-west-2/claude-test", true, json!({"model": "claude-test", "stream": true}))]
+    #[case::bedrock_mantle_route_keeps_region(&AMAZON_MANTLE_MESSAGES_CONFIG, "mantle/eu-west-1/anthropic.claude-test", true, json!({"model": "eu-west-1/anthropic.claude-test", "stream": true}))]
+    #[case::stream_false_is_omitted(&AMAZON_MANTLE_MESSAGES_CONFIG, "mantle/anthropic.claude-test", false, json!({"model": "anthropic.claude-test"}))]
+    fn wire_body_sends_model_and_stream_last(
+        #[case] config: &dyn BaseMessagesConfig,
+        #[case] model: &str,
+        #[case] stream: bool,
+        #[case] expected: Value,
+    ) {
+        let wire = config.wire_body(json!({
+            "model": model,
+            "stream": stream,
+            "anthropic_version": "sdk",
+            "anthropic_beta": ["sdk"],
+        }));
+        assert_eq!(wire, expected);
+        assert_eq!(
+            wire.as_object().unwrap().keys().last().map(String::as_str),
+            Some(if stream { "stream" } else { "model" })
+        );
+    }
+
+    #[rstest]
+    #[case::missing(None, json!({"input_tokens": 0, "output_tokens": 0}))]
+    #[case::null(Some(json!(null)), json!({"input_tokens": 0, "output_tokens": 0}))]
+    #[case::partial(Some(json!({"output_tokens": 7, "cache_read_input_tokens": 3})), json!({"input_tokens": 0, "output_tokens": 7, "cache_read_input_tokens": 3}))]
+    fn response_usage_is_zero_filled(#[case] usage: Option<Value>, #[case] expected: Value) {
+        let response: MessagesResponse = serde_json::from_value(json!({
+            "id": "msg_1",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-test",
+            "content": [],
+            "stop_reason": "end_turn",
+            "stop_sequence": null,
+        }))
+        .unwrap();
+        let response = MessagesResponse { usage, ..response };
+        let usage = BEDROCK_MANTLE_MESSAGES_CONFIG
+            .transform_anthropic_messages_response("claude-test", response)
+            .unwrap()
+            .usage
+            .unwrap();
+        assert_eq!(usage, expected);
+        assert_eq!(
+            usage
+                .as_object()
+                .unwrap()
+                .keys()
+                .take(2)
+                .collect::<Vec<_>>(),
+            vec!["input_tokens", "output_tokens"]
+        );
+    }
+}
