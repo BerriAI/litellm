@@ -115,6 +115,7 @@ class AnthropicResponsesStreamWrapper:
       response.output_text.delta         -> content_block_delta (text_delta)
       response.reasoning_summary_part.added -> content_block_delta (thinking_delta separator)
       response.reasoning_summary_text.delta -> content_block_delta (thinking_delta)
+      response.reasoning_text.delta      -> content_block_delta (thinking_delta)
       response.function_call_arguments.delta -> content_block_delta (input_json_delta)
       response.output_item.done          -> content_block_delta (signature_delta) + content_block_stop
       response.completed                 -> message_delta + message_stop
@@ -315,8 +316,7 @@ class AnthropicResponsesStreamWrapper:
             )
             return
 
-        # ---- reasoning summary text delta ----
-        if event_type == "response.reasoning_summary_text.delta":
+        if event_type in ("response.reasoning_summary_text.delta", "response.reasoning_text.delta"):
             item_id = getattr(event, "item_id", None) or (event.get("item_id") if isinstance(event, dict) else None)
             delta = getattr(event, "delta", "") or (event.get("delta", "") if isinstance(event, dict) else "")
             block_idx = self._item_id_to_block_index.get(item_id, -1) if item_id else self._current_block_index

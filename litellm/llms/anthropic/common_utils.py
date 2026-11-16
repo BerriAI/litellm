@@ -23,9 +23,11 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET,
 )
 from litellm.exceptions import UnsupportedParamsError
+from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_file_ids_from_messages,
     is_encrypted_reasoning_block,
+    is_unsignable_thinking_block,
     native_redacted_thinking_data,
 )
 from litellm.litellm_core_utils.prompt_templates.factory import THOUGHT_SIGNATURE_SEPARATOR
@@ -1751,6 +1753,66 @@ def strip_encrypted_reasoning_blocks_from_anthropic_messages(
     """
     stripped: Final = (_replayable_message(m) for m in messages)
     return [m for m in stripped if m is not None]
+
+
+def is_claude_model_target(custom_llm_provider: str | None, model: str) -> bool:
+    return "claude" in model.lower() and custom_llm_provider in ("anthropic", "bedrock", "azure_ai", "vertex_ai")
+
+
+def _without_unsignable_thinking(
+    message: dict[str, object],  # mutable-ok: AnthropicMessagesRequest.messages is typed list[dict]
+) -> dict[str, object] | None:  # mutable-ok: AnthropicMessagesRequest.messages is typed list[dict]
+    fields: Final = as_str_mapping(message)
+    content: Final = as_object_list(fields.get("content")) if fields is not None else None
+    if content is None:
+        return message
+    kept: Final = [block for block in content if not is_unsignable_thinking_block(block)]
+    if len(kept) == len(content):
+        return message
+    return {**message, "content": kept} if kept else None
+
+
+def _block_type(block: object) -> object:
+    fields: Final = as_str_mapping(block)
+    return fields.get("type") if fields is not None else None
+
+
+def _message_role(message: object) -> object:
+    fields: Final = as_str_mapping(message)
+    return fields.get("role") if fields is not None else None
+
+
+def _final_tool_turn_lacks_thinking(
+    messages: Sequence[dict[str, object]],  # mutable-ok: AnthropicMessagesRequest.messages is typed list[dict]
+) -> bool:
+    final_assistant: Final = next((m for m in reversed(messages) if _message_role(m) == "assistant"), None)
+    content: Final = as_object_list(final_assistant.get("content")) if final_assistant is not None else None
+    if not content:
+        return False
+    calls_tools: Final = any(_block_type(block) == "tool_use" for block in content)
+    return calls_tools and _block_type(content[0]) not in ("thinking", "redacted_thinking")
+
+
+def strip_unsignable_thinking_blocks_for_claude(
+    messages: list[dict[str, object]],  # mutable-ok: AnthropicMessagesRequest.messages is typed list[dict]
+    custom_llm_provider: str | None,
+    model: str,
+) -> list[dict[str, object]]:  # mutable-ok: AnthropicMessagesRequest.messages is typed list[dict]
+    """
+    Drop thinking blocks Claude cannot verify (no signature, or another provider's
+    encrypted reasoning) before the request reaches Claude, so a conversation that
+    switches from an open model to Claude keeps Claude's own signed thinking instead
+    of hitting the 400 retry that strips every block. The blocks stay when dropping
+    them would leave Claude's final tool-use turn without its opening thinking block,
+    which Claude rejects while thinking is enabled; the retry handles that case.
+    Other targets (DeepSeek, MiniMax, GLM) need their unsigned reasoning replayed.
+    """
+    if not is_claude_model_target(custom_llm_provider, model):
+        return messages
+    kept: Final = [m for m in map(_without_unsignable_thinking, messages) if m is not None]
+    if _final_tool_turn_lacks_thinking(kept) and not _final_tool_turn_lacks_thinking(messages):
+        return messages
+    return kept
 
 
 def strip_thinking_blocks_from_anthropic_messages_request_dict(

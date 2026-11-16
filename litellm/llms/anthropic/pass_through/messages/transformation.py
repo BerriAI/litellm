@@ -31,6 +31,7 @@ from ...common_utils import (
     requires_native_compaction_beta,
     strip_advisor_blocks_from_messages,
     strip_encrypted_reasoning_blocks_from_anthropic_messages,
+    strip_unsignable_thinking_blocks_for_claude,
 )
 from .mid_conversation_system import (
     as_system_content_blocks,
@@ -658,7 +659,11 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             messages = strip_advisor_blocks_from_messages(messages)
 
         anthropic_messages_request: Final[AnthropicMessagesRequest] = AnthropicMessagesRequest(
-            messages=strip_encrypted_reasoning_blocks_from_anthropic_messages(messages),
+            messages=strip_unsignable_thinking_blocks_for_claude(
+                strip_encrypted_reasoning_blocks_from_anthropic_messages(messages),
+                custom_llm_provider=self._resolved_provider,
+                model=model,
+            ),
             max_tokens=max_tokens,
             model=model,
             **anthropic_messages_optional_request_params,
