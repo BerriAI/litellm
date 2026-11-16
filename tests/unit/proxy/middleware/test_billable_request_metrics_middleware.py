@@ -7,11 +7,13 @@ middleware is a transparent pass-through when no recorder is injected.
 """
 
 import asyncio
+import re
 import threading
 from datetime import datetime, timezone
 from typing import Final, List, Optional, Tuple
 
 import pytest
+from fastapi.routing import APIRoute
 from starlette.applications import Starlette
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
@@ -19,6 +21,7 @@ from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 from starlette.testclient import TestClient
 
+from litellm.proxy._types import LiteLLMRoutes
 from litellm.proxy.db.gateway_request_tracking import GatewayRequestAccumulator
 from litellm.proxy.middleware.billable_request_metrics_middleware import (
     BillableCategory,
@@ -245,6 +248,28 @@ def test_classify_get_reads_are_not_billable(path: str):
     """GETs on inference resources (list videos, fetch a response) write no
     SpendLogs row and must not bill; only POST inference calls count."""
     assert classify_billable_request(path, "GET") is None
+
+
+_PATH_PARAM: Final = re.compile(r"\{[^}]+\}")
+_SINGLE_SEGMENT_PASSTHROUGH_PREFIXES: Final = tuple(
+    prefix for prefix in LiteLLMRoutes.mapped_pass_through_routes.value if prefix.count("/") == 1
+)
+
+
+@pytest.mark.parametrize("provider_prefix", _SINGLE_SEGMENT_PASSTHROUGH_PREFIXES)
+def test_provider_scoped_routes_classify_like_their_unscoped_twins(provider_prefix: str) -> None:
+    from litellm.proxy.proxy_server import app as proxy_app
+
+    unscoped_post_paths: Final = frozenset(
+        _PATH_PARAM.sub("batch_abc", route.path.removeprefix("/{provider}"))
+        for route in proxy_app.routes
+        if isinstance(route, APIRoute) and route.path.startswith("/{provider}/") and "POST" in route.methods
+    )
+
+    assert {"/v1/files", "/v1/batches", "/v1/batches/batch_abc/cancel"} <= unscoped_post_paths
+    assert {path: classify_billable_request(f"{provider_prefix}{path}") for path in unscoped_post_paths} == {
+        path: classify_billable_request(path) for path in unscoped_post_paths
+    }
 
 
 def test_classify_mcp_not_method_gated():

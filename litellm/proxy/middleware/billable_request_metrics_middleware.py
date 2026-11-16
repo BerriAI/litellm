@@ -112,6 +112,7 @@ _PASSTHROUGH_PREFIXES: Final[tuple[str, ...]] = tuple(
 )
 
 _OPENSEARCH_INDEX_SEARCH: Final = re.compile(rf"{re.escape(OPENSEARCH_PASS_THROUGH_ROUTE_PREFIX)}/[^/]+/_search")
+_PROVIDER_SCOPED_FILE_OR_BATCH_ROUTE: Final = re.compile(r"/[^/]+/v1/(?:files|batches)(?:/.*)?")
 
 
 def _classify_llm_route(path: str) -> str | None:
@@ -125,6 +126,8 @@ def _classify_llm_route(path: str) -> str | None:
         return suffix_match
     if RouteChecks.is_builtin_eu_jev_decision_route(route=path):
         return path
+    if _PROVIDER_SCOPED_FILE_OR_BATCH_ROUTE.fullmatch(path) is not None:
+        return None
     # Deep passthrough paths only: the bare prefix itself is not an inference call.
     return next((prefix for prefix in _PASSTHROUGH_PREFIXES if path.startswith(f"{prefix}/")), None)
 
