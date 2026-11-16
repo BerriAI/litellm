@@ -283,6 +283,10 @@ def _becomes_a_user_turn(message: object) -> bool:
     return _is_user_turn(message) or is_system_message(message)
 
 
+def _becomes_a_user_turn_with_tool_results_as_text(message: object) -> bool:
+    return _becomes_a_user_turn(message) or message_field(message, "role") in ("tool", "function")
+
+
 def _gets_guarded_when_trailing(message: object) -> bool:
     content: Final = message_field(message, "content")
     if is_system_message(message):
@@ -445,6 +449,12 @@ class AmazonConverseConfig(BaseConfig):
             (m.get("role") == "assistant" and m.get("tool_calls")) or m.get("role") in ("tool", "function")
             for m in messages
         )
+
+    @staticmethod
+    def _has_tool_blocks_without_tools(
+        messages: Sequence[AllMessageValues], optional_params: Mapping[str, object]
+    ) -> bool:
+        return not optional_params.get("tools") and AmazonConverseConfig._has_orphaned_tool_blocks(messages)
 
     @staticmethod
     def _neutralize_orphaned_tool_blocks(
@@ -1728,20 +1738,29 @@ class AmazonConverseConfig(BaseConfig):
         remaining: Final = messages[_leading_system_count(messages) :]
         return "guardrailConfig" in optional_params and (
             any(map(_is_guarded_user_turn, remaining))
-            or any(map(_gets_guarded_when_trailing, self._turns_the_trailing_wrap_guards(messages)))
+            or any(map(_gets_guarded_when_trailing, self._turns_the_trailing_wrap_guards(messages, optional_params)))
         )
 
-    def _turns_the_trailing_wrap_guards(self, messages: Sequence[AllMessageValues]) -> tuple[AllMessageValues, ...]:
+    def _turns_the_trailing_wrap_guards(
+        self, messages: Sequence[AllMessageValues], optional_params: Mapping[str, object]
+    ) -> tuple[AllMessageValues, ...]:
         """The turns that end the request as user turns, or none when no user turn is among them.
 
         A converted system turn is not user input, so guarding it alone would shrink the input check to the system
-        text and let a blocked word in an earlier user turn through.
+        text and let a blocked word in an earlier user turn through. Tool results rewritten as text become user turns
+        too, so a user turn right before them stays in the wrap.
         """
         remaining: Final = messages[_leading_system_count(messages) :]
         reordered: Final = chain.from_iterable(
             self._reordered_around_tool_results(remaining, index) for index in range(len(remaining))
         )
-        trailing: Final = tuple(takewhile(_becomes_a_user_turn, reversed(tuple(reordered))))
+        ends_as_a_user_turn: Final = (
+            _becomes_a_user_turn_with_tool_results_as_text
+            if litellm.bedrock_neutralize_orphaned_tool_blocks
+            and self._has_tool_blocks_without_tools(messages, optional_params)
+            else _becomes_a_user_turn
+        )
+        trailing: Final = tuple(takewhile(ends_as_a_user_turn, reversed(tuple(reordered))))
         return trailing if any(map(_is_user_turn, trailing)) else ()
 
     def _reordered_around_tool_results(
@@ -2527,7 +2546,9 @@ class AmazonConverseConfig(BaseConfig):
         keeps_full_input_check: Final = self._keeps_the_full_input_check(
             messages, json_optional_params, guards_user_input=guards_user_input
         )
-        wraps_trailing_turns: Final = guards_user_input and bool(self._turns_the_trailing_wrap_guards(messages))
+        wraps_trailing_turns: Final = guards_user_input and bool(
+            self._turns_the_trailing_wrap_guards(messages, json_optional_params)
+        )
         marked_messages: Final = self._messages_with_cache_marks(
             _guarded_text_as_text_past_the_system_prompt(messages) if keeps_full_input_check else messages,
             capability_model,
@@ -2652,7 +2673,9 @@ class AmazonConverseConfig(BaseConfig):
         keeps_full_input_check: Final = self._keeps_the_full_input_check(
             messages, json_optional_params, guards_user_input=guards_user_input
         )
-        wraps_trailing_turns: Final = guards_user_input and bool(self._turns_the_trailing_wrap_guards(messages))
+        wraps_trailing_turns: Final = guards_user_input and bool(
+            self._turns_the_trailing_wrap_guards(messages, json_optional_params)
+        )
         marked_messages: Final = self._messages_with_cache_marks(
             _guarded_text_as_text_past_the_system_prompt(messages) if keeps_full_input_check else messages,
             capability_model,
