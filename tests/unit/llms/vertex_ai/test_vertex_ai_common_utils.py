@@ -3,6 +3,7 @@ import threading
 import time
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
+from datetime import datetime
 from enum import Enum
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -10,6 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 import respx
+from google.oauth2.credentials import Credentials
 from pydantic import JsonValue, TypeAdapter
 
 import litellm
@@ -36,7 +38,6 @@ from litellm.llms.vertex_ai.common_utils import (
 from litellm.llms.vertex_ai.count_tokens import handler as vertex_count_tokens_handler
 from litellm.llms.vertex_ai.vertex_ai_partner_models.count_tokens import handler as partner_count_tokens_handler
 from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation import VertexAIAnthropicConfig
-from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.types.utils import CountContextManagement, TokenCountMessagesFormat, TokenCountResponse
 
 
@@ -2444,8 +2445,15 @@ async def test_vertex_count_sends_the_user_profile_id_only_to_claude(model: str,
     with (
         patch.object(gemini_count_tokens_handler, "get_async_httpx_client", return_value=client),
         patch.object(partner_count_tokens_handler, "get_async_httpx_client", return_value=client),
-        patch.object(
-            VertexBase, "_ensure_access_token_async", new=AsyncMock(return_value=("fake-token", "test-project"))
+        patch(
+            "google.auth.default",
+            return_value=(
+                Credentials(
+                    token="fake-token",
+                    refresh_handler=lambda request, scopes: ("fake-token", datetime(2100, 1, 1)),
+                ),
+                "test-project",
+            ),
         ),
     ):
         result: Final = await VertexAITokenCounter(user_profile_id="uprof_pinned").count_tokens(

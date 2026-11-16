@@ -4877,7 +4877,7 @@ def add_provider_specific_headers_to_request(
     anthropic_oauth_credential_headers: Final = {
         header: value
         for header, value in headers.items()
-        if header.lower() == "authorization" and is_anthropic_oauth_key(value)
+        if header.lower() == "authorization" and value.startswith("Bearer ") and is_anthropic_oauth_key(value)
     }
     chatgpt_oauth_credential_headers: Final = dict(select_chatgpt_client_credential_headers(headers))
     caller_credential_providers: Final = (

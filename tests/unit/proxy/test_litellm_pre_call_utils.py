@@ -9303,6 +9303,44 @@ def test_a_caller_anthropic_oauth_token_keeps_its_own_profile_id_only_where_the_
     assert forwarded.get("anthropic-user-profile-id") == expected
 
 
+@pytest.mark.parametrize("authorization_header_name", ["authorization", "Authorization"])
+@pytest.mark.parametrize("caller_profile", [None, "", "uprof_caller"])
+def test_a_raw_oauth_looking_header_keeps_the_pin_when_the_server_credential_is_sent(
+    monkeypatch: pytest.MonkeyPatch, authorization_header_name: str, caller_profile: str | None
+) -> None:
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "server-token-for-testing")
+    monkeypatch.setattr(litellm, "api_key", None)
+    monkeypatch.setattr(litellm, "anthropic_key", None)
+    data: Final[dict] = {}  # mutable-ok: the function under test writes into it
+    client_credential: Final = add_provider_specific_headers_to_request(
+        data=data,
+        headers={
+            authorization_header_name: "sk-ant-oat01-caller",
+            **({} if caller_profile is None else {"anthropic-user-profile-id": caller_profile}),
+        },
+        user_profile_id="uprof_pinned",
+    )
+    forwarded: Final = ProviderSpecificHeaderUtils.get_provider_specific_headers(
+        provider_specific_header=data["provider_specific_header"], custom_llm_provider="anthropic"
+    )
+    sent: Final = Headers(
+        litellm.AnthropicConfig().validate_environment(
+            headers=forwarded,
+            model="claude-sonnet-4-5",
+            messages=[{"role": "user", "content": "hi"}],
+            optional_params={},
+            litellm_params={},
+            api_base="https://api.anthropic.com",
+        )
+    )
+    assert (sent.get("anthropic-user-profile-id"), sent.get("authorization"), client_credential) == (
+        "uprof_pinned",
+        "Bearer server-token-for-testing",
+        False,
+    )
+
+
 @pytest.mark.parametrize("custom_llm_provider", ["openai", "gemini", "databricks"])
 def test_anthropic_user_profile_id_stays_off_non_claude_providers(custom_llm_provider: str) -> None:
     data: Final[dict] = {}  # mutable-ok: the function under test writes into it

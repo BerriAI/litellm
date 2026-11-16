@@ -300,6 +300,7 @@ pub fn merge_messages_header_sources(
 
 #[cfg(test)]
 mod merge_tests {
+    use rstest::rstest;
     use serde_json::{Map, Value, json};
 
     use super::merge_messages_header_sources;
@@ -327,7 +328,7 @@ mod merge_tests {
         assert!(merged.is_empty());
     }
 
-    #[test]
+    #[rstest]
     fn a_later_source_replaces_the_same_header_spelled_in_another_case() {
         let merged = merge_messages_header_sources([
             map(json!({"Anthropic-User-Profile-Id": "uprof_caller", "x-kept": "1"})),
