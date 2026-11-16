@@ -540,9 +540,20 @@ fn requested_optional_params(
     provider: MessagesProvider,
     context: &MessagesTransformContext,
 ) -> Result<MessagesRequest, Error> {
-    let request = litellm_llms::anthropic::messages::transformation::drop_unsupported_params(
-        request, context,
+    let requested_effort = request.params.reasoning_effort.clone();
+    let clamped = provider
+        .config()
+        .clamp_requested_effort(request, &context.thinking.capabilities)?;
+    let gated = litellm_llms::anthropic::messages::transformation::drop_unsupported_params(
+        clamped, context,
     )?;
+    let request = MessagesRequest {
+        params: MessagesOptionalParams {
+            reasoning_effort: gated.params.reasoning_effort.and(requested_effort),
+            ..gated.params
+        },
+        ..gated
+    };
     if provider.accepts_service_tier() {
         return Ok(request);
     }
@@ -1258,6 +1269,58 @@ mod tests {
     #[fixture]
     fn shaping() -> MessagesShaping {
         MessagesShaping::default()
+    }
+
+    fn opus_4_6_on_bedrock() -> MessagesTransformContext {
+        use litellm_llms::base_llm::messages::context::{
+            BedrockCapabilities, MessagesModelCapabilities, SupportedEffortTiers,
+        };
+        MessagesTransformContext::new(
+            MessagesModelCapabilities {
+                supports_reasoning: true,
+                supports_adaptive_thinking: true,
+                supports_output_config: true,
+                effort_tiers: SupportedEffortTiers {
+                    low: true,
+                    medium: true,
+                    high: true,
+                    max: true,
+                    ..SupportedEffortTiers::default()
+                },
+                bedrock: BedrockCapabilities {
+                    output_config_effort_ceiling: Some(
+                        litellm_llms_types::formats::messages::EffortLevel::Max,
+                    ),
+                    ..BedrockCapabilities::default()
+                },
+                ..MessagesModelCapabilities::default()
+            },
+            true,
+        )
+    }
+
+    #[rstest]
+    #[case::bedrock_clamps_before_the_gate("bedrock/anthropic.claude-opus-4-6-v1", Some(json!("xhigh")))]
+    #[case::anthropic_has_no_clamp("anthropic/claude-opus-4-6", None)]
+    fn drop_params_keeps_an_effort_the_bedrock_ceiling_clamps(
+        #[case] model: &str,
+        #[case] kept: Option<Value>,
+    ) {
+        let resolved = resolve_llm_provider(model, None, "messages").unwrap();
+        let provider = messages_provider(resolved.provider, resolved.model).unwrap();
+        let requested = requested_optional_params(
+            body(json!({"model": resolved.model, "max_tokens": 4096, "messages": [{"role": "user", "content": "hi"}], "reasoning_effort": "xhigh"})),
+            provider,
+            &opus_4_6_on_bedrock(),
+        )
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(&requested.params)
+                .unwrap()
+                .get("reasoning_effort")
+                .cloned(),
+            kept
+        );
     }
 
     fn body(value: Value) -> MessagesRequest {
