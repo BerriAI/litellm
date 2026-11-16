@@ -1688,6 +1688,9 @@ async def test_new_user_default_teams_flow(mocker):
             )
         ]
     )
+    mock_prisma_client.db.litellm_budgettable.find_many = mocker.AsyncMock(
+        return_value=[SimpleNamespace(budget_id="team-budget")]
+    )
 
     # Mock duplicate checks to pass
     async def mock_check_duplicate_user_email(*args, **kwargs):
@@ -4712,11 +4715,22 @@ async def test_resolve_user_email_metadata_skips_db_when_no_user_ids(mocker):
 
 
 @pytest.mark.parametrize(
-    ("teams_are_defaults", "team_metadata", "expected_max_budget_in_team"),
+    ("teams_are_defaults", "team_metadata", "budget_ids_in_db", "expected_max_budget_in_team"),
     [
-        pytest.param(True, {"team_member_budget_id": "team-budget"}, None, id="default-team-with-a-member-budget"),
-        pytest.param(True, {}, 25.0, id="default-team-without-a-member-budget"),
-        pytest.param(False, {"team_member_budget_id": "team-budget"}, 25.0, id="team-named-in-the-request"),
+        pytest.param(
+            True,
+            {"team_member_budget_id": "team-budget"},
+            ["team-budget"],
+            None,
+            id="default-team-with-a-member-budget",
+        ),
+        pytest.param(
+            True, {"team_member_budget_id": "team-budget"}, [], 25.0, id="default-team-whose-member-budget-was-deleted"
+        ),
+        pytest.param(True, {}, [], 25.0, id="default-team-without-a-member-budget"),
+        pytest.param(
+            False, {"team_member_budget_id": "team-budget"}, ["team-budget"], 25.0, id="team-named-in-the-request"
+        ),
     ],
 )
 @pytest.mark.asyncio
@@ -4724,11 +4738,12 @@ async def test_add_new_user_to_default_team_only_drops_the_cap_the_team_member_b
     mocker: MockerFixture,
     teams_are_defaults: bool,
     team_metadata: dict[str, str],
+    budget_ids_in_db: list[str],
     expected_max_budget_in_team: float | None,
 ) -> None:
     """A private copy of a default team's cap has no budget_duration and never resets, so the member
-    joins on the team's member budget when it exists. A cap with no team budget behind it, or one the
-    caller asked for in /user/new, must still reach the membership write."""
+    joins on the team's member budget when it exists. A cap with no team budget row behind it, or one
+    the caller asked for in /user/new, must still reach the membership write."""
     from litellm.proxy._types import NewUserRequestTeam
     from litellm.proxy.management_endpoints.internal_user_endpoints import (
         add_new_user_to_default_team,
@@ -4741,6 +4756,9 @@ async def test_add_new_user_to_default_team_only_drops_the_cap_the_team_member_b
     prisma_client: Final = mocker.MagicMock()
     prisma_client.db.litellm_teamtable.find_many = mocker.AsyncMock(
         return_value=[SimpleNamespace(team_id="budgeted-team", metadata=team_metadata)]
+    )
+    prisma_client.db.litellm_budgettable.find_many = mocker.AsyncMock(
+        return_value=[SimpleNamespace(budget_id=budget_id) for budget_id in budget_ids_in_db]
     )
 
     await add_new_user_to_default_team(

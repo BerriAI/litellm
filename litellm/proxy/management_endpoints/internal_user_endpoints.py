@@ -105,6 +105,7 @@ from litellm.proxy.utils import handle_exception_on_proxy, hash_password, query_
 from litellm.redis.stores.spend_counters import (
     user_counter,
 )
+from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.chunked_in import find_many_in, update_many_in
 from litellm.repositories.organization_repository import OrganizationRepository
 from litellm.repositories.prisma_protocols import TableActions
@@ -498,11 +499,19 @@ async def _memberships_on_team_member_budget(
     if not capped_team_ids:
         return memberships
     team_rows: Final = await find_many_in(_team_table(prisma_client), "team_id", capped_team_ids)
-    budgeted_team_ids: Final = frozenset(
-        row.team_id
+    member_budget_ids: Final = {
+        row.team_id: _TEAM_METADATA_ADAPTER.validate_python(row.metadata).get("team_member_budget_id")
         for row in team_rows
         if isinstance(row.metadata, dict)
-        and _TEAM_METADATA_ADAPTER.validate_python(row.metadata).get("team_member_budget_id") is not None
+    }
+    budget_rows: Final = await find_many_in(
+        BudgetRepository(prisma_client).table,
+        "budget_id",
+        [budget_id for budget_id in member_budget_ids.values() if isinstance(budget_id, str)],
+    )
+    existing_budget_ids: Final = frozenset(row.budget_id for row in budget_rows)
+    budgeted_team_ids: Final = frozenset(
+        team_id for team_id, budget_id in member_budget_ids.items() if budget_id in existing_budget_ids
     )
     return tuple(
         m.model_copy(update={"max_budget_in_team": None}) if m.team_id in budgeted_team_ids else m for m in memberships
