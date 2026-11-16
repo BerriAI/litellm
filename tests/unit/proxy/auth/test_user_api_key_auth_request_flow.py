@@ -7273,9 +7273,11 @@ class _OverBudgetCustomerOrganizations:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("authenticated_by_custom_auth, refused", [(False, False), (True, True)])
+@pytest.mark.parametrize(
+    "authenticated_by_custom_auth, expected", [(False, "admitted"), (True, "customer_org=org-1 over budget")]
+)
 async def test_a_public_route_enforces_the_customer_budget_only_for_a_custom_auth_caller(
-    monkeypatch: pytest.MonkeyPatch, authenticated_by_custom_auth: bool, refused: bool
+    monkeypatch: pytest.MonkeyPatch, authenticated_by_custom_auth: bool, expected: str
 ):
     import litellm.proxy.proxy_server as _proxy_server_mod
     from litellm.proxy.auth.user_api_key_auth import _authorize_authenticated_request
@@ -7314,7 +7316,7 @@ async def test_a_public_route_enforces_the_customer_budget_only_for_a_custom_aut
     except ProxyException as error:
         outcome = error.message
 
-    assert ("customer_org=org-1 over budget" in outcome) is refused, outcome
+    assert expected in outcome
 
 
 @pytest.mark.asyncio
