@@ -1,3 +1,4 @@
+import os
 import re
 import threading
 from collections.abc import Mapping
@@ -8,7 +9,11 @@ from litellm.proxy.auth.master_key_boot_check import SALT_KEY_ENV_VAR
 from litellm.secret_managers.main import str_to_bool
 
 FIPS_MODE_SETTING: Final = "fips_mode"
-SALT_KEY_HEX: Final = re.compile(r"(?:sk-)?((?:[0-9a-fA-F]{2}){32,})")
+_KEY_DERIVATION_KEY_MIN_BYTES: Final = 14
+KEY_DERIVATION_KEY_RULE: Final = (
+    f"at least {_KEY_DERIVATION_KEY_MIN_BYTES * 8} bits ({_KEY_DERIVATION_KEY_MIN_BYTES} bytes)"
+)
+_SALT_KEY_HEX: Final = re.compile(r"(?:sk-)?((?:[0-9a-fA-F]{2}){32,})")
 _SETTING: Final = f"general_settings.{FIPS_MODE_SETTING}"
 _NEW_SALT_KEY: Final = f"{SALT_KEY_ENV_VAR}=sk-$(openssl rand -hex 32)"
 _FIPS_MODE_ACTIVE: Final = threading.Event()
@@ -16,6 +21,15 @@ _FIPS_MODE_ACTIVE: Final = threading.Event()
 
 class FipsModeError(Exception):
     pass
+
+
+def key_derivation_key(salt_key: str) -> bytes | None:
+    """The key fips_mode derives its keys from: the decoded hex when salt_key is at least 32 bytes of hex, optionally
+    prefixed with sk-, else the UTF-8 bytes of salt_key as given (bytes an environment variable could not decode are
+    kept as they were). None when that is under 112 bits (14 bytes)."""
+    hex_key: Final = _SALT_KEY_HEX.fullmatch(salt_key)
+    key: Final = bytes.fromhex(hex_key.group(1)) if hex_key else salt_key.encode("utf-8", "surrogateescape")
+    return key if len(key) >= _KEY_DERIVATION_KEY_MIN_BYTES else None
 
 
 def fips_mode_setting(general_settings: Mapping[str, object]) -> bool | None:
@@ -64,7 +78,8 @@ def cryptography_enforces_fips() -> bool:
 
 def fips_mode_refusal(general_settings: Mapping[str, object], salt_key: str | None) -> str | None:
     """Why the proxy must not start: general_settings.fips_mode is not a boolean, or is on but Python's or the
-    cryptography library's OpenSSL does not enforce FIPS, or salt_key is not at least 32 bytes of hex. None when it may
+    cryptography library's OpenSSL does not enforce FIPS, or salt_key is missing or gives a key_derivation_key under
+    112 bits. salt_key is LITELLM_SALT_KEY, or the master key when LITELLM_SALT_KEY is not set. None when it may
     start."""
     setting: Final = fips_mode_setting(general_settings)
     if setting is None:
@@ -93,11 +108,15 @@ def fips_mode_refusal(general_settings: Mapping[str, object], salt_key: str | No
             f"{_SETTING} is on but neither {SALT_KEY_ENV_VAR} nor a master key is set, so fips_mode has no key to "
             f"derive its encryption keys from. Set {_NEW_SALT_KEY}, or turn {_SETTING} off."
         )
-    if SALT_KEY_HEX.fullmatch(salt_key) is None:
+    if key_derivation_key(salt_key) is None:
+        checked: Final = (
+            SALT_KEY_ENV_VAR
+            if os.getenv(SALT_KEY_ENV_VAR) is not None
+            else f"the master key ({SALT_KEY_ENV_VAR} is not set)"
+        )
         return (
-            f"{_SETTING} is on but {SALT_KEY_ENV_VAR} is not at least 32 bytes of hex. fips_mode derives its "
-            f"encryption keys from it, or from the master key when {SALT_KEY_ENV_VAR} is not set. Set "
-            f"{_NEW_SALT_KEY}, or turn {_SETTING} off."
+            f"{_SETTING} is on but {checked} is too short. fips_mode derives its encryption keys from it, so it "
+            f"must be {KEY_DERIVATION_KEY_RULE}. Set {_NEW_SALT_KEY}, or turn {_SETTING} off."
         )
     return None
 

@@ -1857,19 +1857,22 @@ def _boot_in_fips_mode(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "master_key, environment",
-    [(_HEX_KEY, {"LITELLM_SALT_KEY": "a-salt-key-that-is-not-hex"}), ("sk-a-safe-master-key", {})],
-    ids=["non-hex-salt-key-and-hex-master-key", "non-hex-master-key-and-no-salt-key"],
+    "master_key, environment, refusal",
+    [
+        (_HEX_KEY, {"LITELLM_SALT_KEY": "thirteen-byte"}, r"but LITELLM_SALT_KEY is too short"),
+        ("sk-short-key!", {}, r"but the master key \(LITELLM_SALT_KEY is not set\) is too short"),
+    ],
+    ids=["13-byte-salt-key-and-hex-master-key", "13-byte-master-key-and-no-salt-key"],
 )
-async def test_proxy_startup_refuses_fips_mode_when_the_key_it_encrypts_with_is_not_hex(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, master_key: str, environment: Mapping[str, str]
+async def test_proxy_startup_refuses_fips_mode_when_the_key_it_encrypts_with_is_under_112_bits(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, master_key: str, environment: Mapping[str, str], refusal: str
 ) -> None:
     from litellm.proxy.common_utils.fips import FipsModeError, fips_mode_active
     from litellm.proxy.proxy_server import proxy_startup_event
 
     _boot_in_fips_mode(monkeypatch, tmp_path, master_key, environment)
 
-    with pytest.raises(FipsModeError, match=r"LITELLM_SALT_KEY is not at least 32 bytes of hex"):
+    with pytest.raises(FipsModeError, match=refusal):
         async with proxy_startup_event(FastAPI()):
             pass
     assert fips_mode_active() is False
@@ -1878,10 +1881,20 @@ async def test_proxy_startup_refuses_fips_mode_when_the_key_it_encrypts_with_is_
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "master_key, environment",
-    [("sk-a-safe-master-key", {"LITELLM_SALT_KEY": _HEX_KEY}), (_HEX_KEY, {})],
-    ids=["hex-salt-key-and-non-hex-master-key", "hex-master-key-and-no-salt-key"],
+    [
+        ("sk-short-key!", {"LITELLM_SALT_KEY": _HEX_KEY}),
+        (_HEX_KEY, {}),
+        ("sk-short-key!", {"LITELLM_SALT_KEY": "a-salt-key-that-is-not-hex"}),
+        ("sk-a-safe-master-key", {}),
+    ],
+    ids=[
+        "hex-salt-key-and-13-byte-master-key",
+        "hex-master-key-and-no-salt-key",
+        "non-hex-salt-key-and-13-byte-master-key",
+        "non-hex-master-key-and-no-salt-key",
+    ],
 )
-async def test_proxy_startup_starts_fips_mode_when_the_key_it_encrypts_with_is_hex(
+async def test_proxy_startup_starts_fips_mode_when_the_key_it_encrypts_with_is_at_least_112_bits(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, master_key: str, environment: Mapping[str, str]
 ) -> None:
     from litellm.proxy.common_utils.fips import enforce_fips_mode, fips_mode_active

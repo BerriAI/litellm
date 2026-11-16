@@ -8,7 +8,7 @@ from pydantic import TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.auth.master_key_boot_check import SALT_KEY_ENV_VAR
-from litellm.proxy.common_utils.fips import SALT_KEY_HEX
+from litellm.proxy.common_utils.fips import KEY_DERIVATION_KEY_RULE, key_derivation_key
 
 # Versioned ciphertext marker for AES-256-GCM values.
 # Format: "v2:gcm:" + base64url(nonce(12) || ciphertext || tag(16)).
@@ -99,16 +99,17 @@ def _kbkdf_hmac_sha256(key: bytes, label: bytes, context: bytes) -> bytes:
 
 
 def derive_key_from_salt_key(label: bytes, context: bytes) -> str:
-    """Hex of 32 bytes derived from LITELLM_SALT_KEY under label and context by SP 800-108r1 KBKDF in counter mode
-    with HMAC-SHA256, run by EVP_KDF from the FIPS provider of the OpenSSL that hashlib uses. Raises ValueError when
-    LITELLM_SALT_KEY is not at least 32 bytes of hex, optionally prefixed with sk-, or when no FIPS provider runs it."""
-    salt_key: Final = SALT_KEY_HEX.fullmatch(os.getenv(SALT_KEY_ENV_VAR, ""))
-    if salt_key is None:
+    """Hex of 32 bytes derived from key_derivation_key(LITELLM_SALT_KEY) under label and context by SP 800-108r1 KBKDF
+    in counter mode with HMAC-SHA256, run by EVP_KDF from the FIPS provider of the OpenSSL that hashlib uses. Raises
+    ValueError when LITELLM_SALT_KEY is not set or is under 112 bits, or when no FIPS provider runs it."""
+    salt_key: Final = os.getenv(SALT_KEY_ENV_VAR)
+    key: Final = None if salt_key is None else key_derivation_key(salt_key)
+    if key is None:
         raise ValueError(
-            f"With general_settings.fips_mode on, {SALT_KEY_ENV_VAR} must be at least 32 bytes of hex, such as "
-            "sk-$(openssl rand -hex 32)"
+            f"With general_settings.fips_mode on, {SALT_KEY_ENV_VAR} must be set and {KEY_DERIVATION_KEY_RULE}, "
+            "such as sk-$(openssl rand -hex 32)"
         )
-    return _kbkdf_hmac_sha256(bytes.fromhex(salt_key.group(1)), label, context).hex()
+    return _kbkdf_hmac_sha256(key, label, context).hex()
 
 
 def _get_encryption_algorithm() -> str:

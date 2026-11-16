@@ -14,6 +14,7 @@ from litellm.proxy.common_utils.fips import (
     cryptography_enforces_fips,
     enforce_fips_mode,
     fips_mode_active,
+    key_derivation_key,
     openssl_enforces_fips,
 )
 
@@ -163,50 +164,112 @@ def fips_openssl_on_both_sides(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(rust_openssl, "is_fips_enabled", lambda: True)
 
 
+_SHORT_SALT_KEYS: Final = ("thirteen-byte", "é" * 6 + "x", "sk-0a1b2c3d4e", "")
+_SHORT_SALT_KEY_IDS: Final = ("13-ascii-bytes", "13-utf8-bytes-in-7-characters", "sk-and-10-hex-digits", "empty")
+
+
+@pytest.mark.parametrize(
+    "salt_key, key",
+    [
+        (_HEX_SALT_KEY, bytes(range(32))),
+        (bytes(range(32)).hex(), bytes(range(32))),
+        ("sk-" + bytes(range(32)).hex().upper(), bytes(range(32))),
+        ("sk-" + bytes(range(48)).hex(), bytes(range(48))),
+        ("fourteen-bytes", b"fourteen-bytes"),
+        ("é" * 7, "é".encode() * 7),
+        ("sk-" + bytes(range(31)).hex(), ("sk-" + bytes(range(31)).hex()).encode()),
+        (_HEX_SALT_KEY + "a", (_HEX_SALT_KEY + "a").encode()),
+        (_HEX_SALT_KEY + "\n", (_HEX_SALT_KEY + "\n").encode()),
+        ("SK-" + bytes(range(32)).hex(), ("SK-" + bytes(range(32)).hex()).encode()),
+        ("\udcff" * 14, b"\xff" * 14),
+    ],
+    ids=[
+        "sk-prefixed-hex",
+        "bare-hex",
+        "uppercase-hex-digits",
+        "48-bytes-of-hex",
+        "14-ascii-bytes",
+        "14-utf8-bytes-in-7-characters",
+        "sk-and-31-bytes-of-hex",
+        "odd-hex-digit-count",
+        "hex-and-a-trailing-newline",
+        "uppercase-prefix",
+        "environment-bytes-that-are-not-utf8",
+    ],
+)
+def test_key_derivation_key_decodes_a_hex_salt_key_and_takes_any_other_as_its_bytes(salt_key: str, key: bytes) -> None:
+    assert key_derivation_key(salt_key) == key
+
+
+@pytest.mark.parametrize(
+    "salt_key", (*_SHORT_SALT_KEYS, "\udcff" * 13), ids=(*_SHORT_SALT_KEY_IDS, "13-environment-bytes")
+)
+def test_key_derivation_key_refuses_a_salt_key_under_112_bits(salt_key: str) -> None:
+    assert key_derivation_key(salt_key) is None
+
+
 @pytest.mark.usefixtures("fips_openssl_on_both_sides")
 @pytest.mark.parametrize(
     "salt_key",
     [
         _HEX_SALT_KEY,
         bytes(range(32)).hex(),
-        "sk-" + bytes(range(32)).hex().upper(),
-        "sk-" + bytes(range(48)).hex(),
+        "fourteen-bytes",
+        "é" * 7,
+        "sk-" + bytes(range(31)).hex(),
+        _HEX_SALT_KEY + "\n",
+        "SK-" + bytes(range(32)).hex(),
     ],
-    ids=["sk-prefixed", "bare-hex", "uppercase-hex-digits", "longer-than-32-bytes"],
+    ids=[
+        "sk-prefixed-hex",
+        "bare-hex",
+        "14-ascii-bytes",
+        "14-utf8-bytes-in-7-characters",
+        "sk-and-31-bytes-of-hex",
+        "hex-and-a-trailing-newline",
+        "uppercase-prefix",
+    ],
 )
-def test_fips_mode_starts_with_a_hex_salt_key(salt_key: str) -> None:
+def test_fips_mode_starts_with_a_salt_key_of_at_least_112_bits(salt_key: str) -> None:
     enforce_fips_mode({"fips_mode": True}, salt_key)
     assert fips_mode_active() is True
 
 
 @pytest.mark.usefixtures("fips_openssl_on_both_sides")
 @pytest.mark.parametrize(
-    "salt_key, refusal",
-    [
-        ("a-salt-key-that-is-not-hex", "LITELLM_SALT_KEY is not at least 32 bytes of hex"),
-        ("sk-" + bytes(range(31)).hex(), "LITELLM_SALT_KEY is not at least 32 bytes of hex"),
-        ("sk-" + bytes(range(32)).hex() + "a", "LITELLM_SALT_KEY is not at least 32 bytes of hex"),
-        (_HEX_SALT_KEY + "\n", "LITELLM_SALT_KEY is not at least 32 bytes of hex"),
-        ("SK-" + bytes(range(32)).hex(), "LITELLM_SALT_KEY is not at least 32 bytes of hex"),
-        ("", "LITELLM_SALT_KEY is not at least 32 bytes of hex"),
-        (None, "neither LITELLM_SALT_KEY nor a master key is set"),
-    ],
-    ids=["not-hex", "31-bytes", "odd-digit-count", "trailing-newline", "uppercase-prefix", "empty", "no-key"],
+    "salt_key_in_environment, checked",
+    [(True, "LITELLM_SALT_KEY"), (False, "the master key (LITELLM_SALT_KEY is not set)")],
+    ids=["salt-key", "master-key"],
 )
-def test_fips_mode_refuses_to_start_without_a_hex_salt_key(salt_key: str | None, refusal: str) -> None:
-    with pytest.raises(FipsModeError, match=refusal) as refused:
+@pytest.mark.parametrize("salt_key", _SHORT_SALT_KEYS, ids=_SHORT_SALT_KEY_IDS)
+def test_fips_mode_refuses_to_start_with_a_salt_key_under_112_bits(
+    monkeypatch: pytest.MonkeyPatch, salt_key: str, salt_key_in_environment: bool, checked: str
+) -> None:
+    monkeypatch.delenv("LITELLM_SALT_KEY", raising=False)
+    if salt_key_in_environment:
+        monkeypatch.setenv("LITELLM_SALT_KEY", salt_key)
+    with pytest.raises(FipsModeError) as refused:
         enforce_fips_mode({"fips_mode": True}, salt_key)
+    assert str(refused.value) == (
+        f"general_settings.fips_mode is on but {checked} is too short. fips_mode derives its encryption keys from it, "
+        "so it must be at least 112 bits (14 bytes). Set LITELLM_SALT_KEY=sk-$(openssl rand -hex 32), or turn "
+        "general_settings.fips_mode off."
+    )
+    assert fips_mode_active() is False
+
+
+@pytest.mark.usefixtures("fips_openssl_on_both_sides")
+def test_fips_mode_refuses_to_start_with_no_salt_key_or_master_key() -> None:
+    with pytest.raises(FipsModeError, match="neither LITELLM_SALT_KEY nor a master key is set") as refused:
+        enforce_fips_mode({"fips_mode": True}, None)
     assert "LITELLM_SALT_KEY=sk-$(openssl rand -hex 32)" in str(refused.value)
     assert fips_mode_active() is False
 
 
 @pytest.mark.usefixtures("fips_openssl_on_both_sides")
-@pytest.mark.parametrize(
-    "salt_key",
-    ["a-salt-key-that-is-not-hex", "sk-" + bytes(range(31)).hex(), "SK-" + bytes(range(32)).hex()],
-    ids=["not-hex", "31-bytes", "uppercase-prefix"],
-)
-def test_the_fips_mode_salt_key_refusal_does_not_print_the_key(salt_key: str) -> None:
+@pytest.mark.parametrize("salt_key", _SHORT_SALT_KEYS[:3], ids=_SHORT_SALT_KEY_IDS[:3])
+def test_the_fips_mode_salt_key_refusal_does_not_print_the_key(monkeypatch: pytest.MonkeyPatch, salt_key: str) -> None:
+    monkeypatch.setenv("LITELLM_SALT_KEY", salt_key)
     with pytest.raises(FipsModeError) as refused:
         enforce_fips_mode({"fips_mode": True}, salt_key)
     assert salt_key not in str(refused.value)
@@ -215,7 +278,11 @@ def test_the_fips_mode_salt_key_refusal_does_not_print_the_key(salt_key: str) ->
 
 @pytest.mark.usefixtures("fips_openssl_on_both_sides")
 @pytest.mark.parametrize("general_settings", [{}, {"fips_mode": False}], ids=["unset", "off"])
-@pytest.mark.parametrize("salt_key", ["a-salt-key-that-is-not-hex", "", None], ids=["not-hex", "empty", "no-key"])
+@pytest.mark.parametrize(
+    "salt_key",
+    ["a-salt-key-that-is-not-hex", "thirteen-byte", "", None],
+    ids=["not-hex", "13-bytes", "empty", "no-key"],
+)
 def test_standard_mode_starts_whatever_the_salt_key_looks_like(
     general_settings: Mapping[str, object], salt_key: str | None
 ) -> None:
