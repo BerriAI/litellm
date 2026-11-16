@@ -1456,6 +1456,44 @@ def test_deployment_latency_per_output_token_emits_model_group_from_enum_values(
         _clear_prometheus_registry()
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "handler, metric_name",
+    [
+        ("log_success_fallback_event", "litellm_deployment_successful_fallbacks_total"),
+        ("log_failure_fallback_event", "litellm_deployment_failed_fallbacks_total"),
+    ],
+)
+async def test_fallback_events_carry_custom_metadata_labels(monkeypatch, handler, metric_name):
+    """
+    Fallback counters fill custom_prometheus_metadata_labels from the request metadata,
+    including the spend_logs_metadata the proxy parses from x-litellm-spend-logs-metadata,
+    like the request metrics do.
+    """
+    _clear_prometheus_registry()
+    monkeypatch.setattr(litellm, "custom_prometheus_metadata_labels", ["metadata.caller_agent", "metadata.team_slug"])
+    from litellm.integrations.prometheus import PrometheusLogger
+
+    logger = PrometheusLogger()
+    kwargs = {
+        "model": "gpt-4o-mini",
+        "metadata": {
+            "spend_logs_metadata": {"caller_agent": "triage"},
+            "requester_metadata": {"team_slug": "search"},
+        },
+    }
+
+    await getattr(logger, handler)(
+        original_model_group="gpt-4o",
+        kwargs=kwargs,
+        original_exception=litellm.RateLimitError("boom", llm_provider="openai", model="gpt-4o"),
+    )
+
+    (sample,) = _collected_samples(metric_name)
+    assert sample.labels["metadata_caller_agent"] == "triage"
+    assert sample.labels["metadata_team_slug"] == "search"
+
+
 if __name__ == "__main__":
     test_user_email_in_required_metrics()
     test_user_email_label_exists()
@@ -1470,3 +1508,4 @@ if __name__ == "__main__":
     test_prometheus_label_value_sanitization_none()
     test_prometheus_label_value_sanitization_non_string_types()
     print("\n✅ All prometheus label tests passed!")
+
