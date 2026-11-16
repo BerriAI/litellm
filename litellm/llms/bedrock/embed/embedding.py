@@ -161,7 +161,11 @@ def _caller_values_for_defaults(
         return {}
     if provider == "cohere" and any(is_base64_encoded(item) for item in input):
         return {}
-    source: Final = _nova_options(_nova_model_input(extra_body)) if provider == "nova" else extra_body
+    source: Final = (
+        _nova_options(_nova_model_input(extra_body))
+        if provider == "nova"
+        else {**extra_body, **_fields(extra_body.get("modelInput"))}
+    )
     return {k: source[k] for k in _DEFAULTED_FIELDS.get(provider, ()) if k in source}
 
 

@@ -2358,6 +2358,29 @@ def test_bedrock_nova_embedding_argument_beats_the_same_extra_body_param(respx_m
     assert body["singleEmbeddingParams"]["embeddingDimension"] == 1024
 
 
+def test_bedrock_async_marengo_embedding_uses_extra_body_text_truncate_under_model_input(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = respx_mock.post("https://bedrock-runtime.us-east-1.amazonaws.com/async-invoke").mock(
+        return_value=httpx.Response(200, json={"invocationArn": "arn:aws:bedrock:us-east-1:1:async-invoke/abc"})
+    )
+    request: Final = {
+        "model": f"bedrock/async_invoke/{_MARENGO_MODEL_ID}",
+        "input": [test_input],
+        "api_key": "test-bearer-token",
+        "aws_region_name": "us-east-1",
+        "output_s3_uri": "s3://test-bucket/out/",
+    }
+
+    litellm.embedding(**request)
+    plain: Final = json.loads(route.calls.last.request.read())
+    litellm.embedding(**request, extra_body={"modelInput": {"textTruncate": "none"}})
+    body: Final = json.loads(route.calls.last.request.read())
+
+    assert plain["modelInput"]["textTruncate"] == "end"
+    assert body == {**plain, "modelInput": {**plain["modelInput"], "textTruncate": "none"}}
+
+
 def test_bedrock_async_nova_embedding_uses_extra_body_params_under_model_input(
     respx_mock: respx.MockRouter,
 ) -> None:
