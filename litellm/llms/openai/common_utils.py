@@ -7,6 +7,7 @@ import hashlib
 import inspect
 import json
 import os
+import posixpath
 import ssl
 import time
 import uuid
@@ -109,7 +110,7 @@ def _openai_api_resource_segments(path: str) -> tuple[str, ...]:
 
 
 def is_openai_batch_create(method: str, path: str) -> bool:
-    return method.upper() == "POST" and _openai_api_resource_segments(path) == ("batches",)
+    return method.upper() == "POST" and _openai_api_resource_segments(posixpath.normpath(f"/{path}")) == ("batches",)
 
 
 class OpenAIError(BaseLLMException):

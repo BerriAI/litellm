@@ -4011,7 +4011,7 @@ def test_openai_passthrough_uses_workload_identity_token_without_static_key(
         assert json.loads(token_exchange.calls.last.request.content)["subject_token"] == "subject-token-from-file"
 
 
-@pytest.mark.parametrize("path", ["/v1/batches", "/v1/batches/", "/batches"])
+@pytest.mark.parametrize("path", ["/v1/batches", "/v1/batches/", "/batches", "/v1/%2e/batches", "/v1/x/%2e%2e/batches"])
 def test_openai_passthrough_refuses_batch_create_on_a_workload_identity_token(
     openai_passthrough_client: TestClient, openai_wif_env: None, monkeypatch: pytest.MonkeyPatch, path: str
 ) -> None:
@@ -4019,13 +4019,13 @@ def test_openai_passthrough_refuses_batch_create_on_a_workload_identity_token(
 
     monkeypatch.delenv("OPENAI_API_KEY")
     with respx.mock(assert_all_called=False) as upstream:
-        token_exchange = upstream.post("https://auth.openai.com/oauth/token").mock(
+        token_exchange: Final = upstream.post("https://auth.openai.com/oauth/token").mock(
             return_value=httpx.Response(200, json={"access_token": "wif-bearer", "expires_in": 3600})
         )
-        batches = upstream.post(url__startswith="https://api.openai.com/v1/batches").mock(
+        batches: Final = upstream.post(url__startswith="https://api.openai.com/v1/batches").mock(
             return_value=httpx.Response(200, json={"id": "batch_123"})
         )
-        response = openai_passthrough_client.post(
+        response: Final = openai_passthrough_client.post(
             f"/openai_passthrough{path}",
             json={"input_file_id": "file-abc123", "endpoint": "/v1/chat/completions", "completion_window": "24h"},
         )
@@ -4033,6 +4033,45 @@ def test_openai_passthrough_refuses_batch_create_on_a_workload_identity_token(
     assert response.status_code == 400
     assert FEDERATED_PASSTHROUGH_BATCH_CREATE_MESSAGE in response.text
     assert (token_exchange.call_count, batches.call_count) == (0, 0)
+
+
+def test_openai_passthrough_creates_batches_with_a_pass_through_deployment_key_beside_workload_identity(
+    openai_passthrough_client: TestClient, openai_wif_env: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.proxy.pass_through_endpoints.passthrough_endpoint_router import PassthroughEndpointRouter
+
+    batch_key_router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-5.4-nano-batch-key",
+                "litellm_params": {
+                    "model": "openai/gpt-5.4-nano",
+                    "api_key": "sk-batch-project",
+                    "use_in_pass_through": True,
+                },
+            }
+        ]
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router",
+        PassthroughEndpointRouter(llm_router_getter=lambda: batch_key_router),
+    )
+    monkeypatch.delenv("OPENAI_API_KEY")
+    with respx.mock(assert_all_called=False) as upstream:
+        token_exchange: Final = upstream.post("https://auth.openai.com/oauth/token").mock(
+            return_value=httpx.Response(200, json={"access_token": "wif-bearer", "expires_in": 3600})
+        )
+        batches: Final = upstream.post("https://api.openai.com/v1/batches").mock(
+            return_value=httpx.Response(200, json={"id": "batch_123"})
+        )
+        response: Final = openai_passthrough_client.post(
+            "/openai_passthrough/v1/batches",
+            json={"input_file_id": "file-abc123", "endpoint": "/v1/chat/completions", "completion_window": "24h"},
+        )
+
+    assert (response.status_code, response.json()) == (200, {"id": "batch_123"})
+    assert batches.calls.last.request.headers["authorization"] == "Bearer sk-batch-project"
+    assert token_exchange.call_count == 0
 
 
 @pytest.mark.parametrize(
@@ -4047,10 +4086,10 @@ def test_openai_passthrough_keeps_workload_identity_on_other_batch_calls(
         upstream.post("https://auth.openai.com/oauth/token").mock(
             return_value=httpx.Response(200, json={"access_token": "wif-bearer", "expires_in": 3600})
         )
-        route = upstream.request(method, f"https://api.openai.com{path}").mock(
+        route: Final = upstream.request(method, f"https://api.openai.com{path}").mock(
             return_value=httpx.Response(200, json={"id": "batch_123"})
         )
-        response = openai_passthrough_client.request(method, f"/openai_passthrough{path}")
+        response: Final = openai_passthrough_client.request(method, f"/openai_passthrough{path}")
 
     assert (response.status_code, response.json()) == (200, {"id": "batch_123"})
     assert route.calls.last.request.headers["authorization"] == "Bearer wif-bearer"

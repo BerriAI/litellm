@@ -12,7 +12,7 @@ import httpx
 import pytest
 import respx
 from openai import DEFAULT_MAX_RETRIES as OPENAI_SDK_DEFAULT_MAX_RETRIES
-from openai import APIStatusError, AsyncOpenAI, OpenAI
+from openai import APIStatusError, AsyncOpenAI, BadRequestError, OpenAI
 
 import litellm
 from litellm.containers import alist_container_files, aretrieve_container, list_container_files
@@ -1525,10 +1525,11 @@ class TestDeploymentNonChatSurfaces:
                 return await litellm.acreate_batch(**batch_kwargs)
             return litellm.create_batch(**batch_kwargs)
 
-        with pytest.raises(OpenAIError) as refusal:
+        with pytest.raises(BadRequestError) as refusal:
             await create_batch()
 
-        assert (refusal.value.status_code, refusal.value.message) == (400, FEDERATED_BATCH_CREATE_MESSAGE)
+        assert refusal.value.status_code == 400
+        assert FEDERATED_BATCH_CREATE_MESSAGE in refusal.value.message
         assert (exchange_route.call_count, batches_route.call_count) == (0, 0)
 
     @respx.mock

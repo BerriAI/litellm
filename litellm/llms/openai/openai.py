@@ -2213,13 +2213,10 @@ class OpenAIBatchesAPI(BaseLLM):
         litellm_params: Mapping[str, object] | None = None,
     ) -> LiteLLMBatch | Coroutine[None, None, LiteLLMBatch]:
         if (
-            client is None
-            and resolve_openai_workload_identity_config(
-                api_key=api_key, api_base=api_base, litellm_params=litellm_params
-            )
+            resolve_openai_workload_identity_config(api_key=api_key, api_base=api_base, litellm_params=litellm_params)
             is not None
         ):
-            raise OpenAIError(status_code=400, message=FEDERATED_BATCH_CREATE_MESSAGE)
+            raise litellm.BadRequestError(message=FEDERATED_BATCH_CREATE_MESSAGE, model="n/a", llm_provider="openai")
         openai_client: Final[OpenAI | AsyncOpenAI | None] = self.get_openai_client(
             api_key=api_key,
             api_base=api_base,
