@@ -260,10 +260,13 @@ fn vertex_litellm_params<'py>(
     let metadata = argument(VERTEX_LABELS_METADATA)?
         .map(|value| text_pairs(&value))
         .transpose()?;
-    Ok([(VERTEX_REQUEST_LABEL_FIELDS.to_string(), Value::Array(fields))]
-        .into_iter()
-        .chain(metadata.map(|pairs| (VERTEX_LABELS_METADATA.to_string(), Value::Object(pairs))))
-        .collect())
+    Ok([(
+        VERTEX_REQUEST_LABEL_FIELDS.to_string(),
+        Value::Array(fields),
+    )]
+    .into_iter()
+    .chain(metadata.map(|pairs| (VERTEX_LABELS_METADATA.to_string(), Value::Object(pairs))))
+    .collect())
 }
 
 fn global_drop_params(py: Python<'_>) -> PyResult<bool> {

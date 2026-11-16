@@ -607,7 +607,10 @@ mod tests {
         let litellm_params = LitellmParams {
             extra: [
                 ("vertex_request_label_fields".to_string(), fields),
-                ("litellm_metadata".to_string(), json!({"user_api_key_team_id": "t1"})),
+                (
+                    "litellm_metadata".to_string(),
+                    json!({"user_api_key_team_id": "t1"}),
+                ),
             ]
             .into_iter()
             .collect(),
@@ -698,7 +701,11 @@ mod tests {
         );
     }
 
-    fn finalized(value: Value, headers: &[(&str, &str)], context: &MessagesTransformContext) -> Value {
+    fn finalized(
+        value: Value,
+        headers: &[(&str, &str)],
+        context: &MessagesTransformContext,
+    ) -> Value {
         let request: MessagesRequest = serde_json::from_value(value).unwrap();
         let transformed = VERTEX_ANTHROPIC_MESSAGES_CONFIG
             .transform_anthropic_messages_request(request, context)
@@ -1095,7 +1102,10 @@ mod tests {
             &[],
             &mid_conversation_system(true),
         );
-        assert_eq!(body["system"], json!([{"type": "text", "text": "be terse"}]));
+        assert_eq!(
+            body["system"],
+            json!([{"type": "text", "text": "be terse"}])
+        );
     }
 
     fn with_output_config() -> MessagesTransformContext {
