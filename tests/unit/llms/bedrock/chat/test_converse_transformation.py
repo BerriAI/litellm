@@ -4271,6 +4271,33 @@ _LOOKUP_CALL: Final = {"id": "call_1", "type": "function", "function": {"name": 
 _LOOKUP_TOOL: Final = {"type": "function", "function": {"name": "lookup", "parameters": {"type": "object"}}}
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("optional_params", [{}, _GUARDRAIL_CONFIG], ids=["no_guardrail", "guardrail"])
+async def test_a_final_tool_call_turn_sent_as_text_sends_its_guarded_part_as_a_text_part_would_be_sent(
+    use_async: bool, optional_params: Mapping[str, object]
+):
+    config: Final = AmazonConverseConfig()
+
+    async def transformed(part_type: str) -> RequestObject:
+        kwargs: Final = dict(
+            model="us.anthropic.claude-haiku-4-5-20251001-v1:0",
+            messages=[
+                {"role": "user", "content": "Look up the weather."},
+                {
+                    "role": "assistant",
+                    "content": [{"type": part_type, "text": "Let me check.  "}],
+                    "tool_calls": [_LOOKUP_CALL],
+                },
+            ],
+            optional_params=dict(optional_params),
+            litellm_params={},
+        )
+        return await config._async_transform_request(**kwargs) if use_async else config._transform_request(**kwargs)
+
+    assert await transformed("guarded_text") == await transformed("text")
+
+
 def _tool_turn_conversation(placement: str, user_part_type: str) -> list[AllMessageValues]:
     guarded: Final = [{"type": "guarded_text", "text": _GUARDED_PART_TEXT}]
     question: Final = {"role": "user", "content": [{"type": user_part_type, "text": "Look up the weather."}]}
@@ -4420,6 +4447,13 @@ def _conversation_ending_in(shape: str) -> list[AllMessageValues]:
                 {"role": "user", "content": [{"type": "guarded_text", "text": _BLOCKED_QUESTION}]},
                 *_conversation_ending_in("tool_result")[1:],
             ]
+        case "guarded_tool_call_after_guarded_question":
+            guarded_call: Final = [{"type": "guarded_text", "text": _GUARDED_PART_TEXT}]
+            return [
+                {"role": "user", "content": [{"type": "guarded_text", "text": _BLOCKED_QUESTION}]},
+                {"role": "assistant", "content": guarded_call, "tool_calls": [_LOOKUP_CALL]},
+                {"role": "tool", "tool_call_id": "call_1", "content": "Sunny."},
+            ]
         case "system_after_guarded_assistant":
             guarded_answer: Final = [{"type": "guarded_text", "text": _GUARDED_PART_TEXT}]
             return [question, {"role": "assistant", "content": guarded_answer}, reply_rule]
@@ -4475,6 +4509,10 @@ async def test_trailing_guard_wrap_never_shrinks_the_input_check_to_a_converted_
         ("tool_result", ()),
         ("system_after_tool_result", ()),
         ("tool_result_after_guarded_question", (_BLOCKED_QUESTION, "[tool result for call_1: Sunny.]")),
+        (
+            "guarded_tool_call_after_guarded_question",
+            (_BLOCKED_QUESTION, _GUARDED_PART_TEXT, "[tool result for call_1: Sunny.]"),
+        ),
     ],
 )
 async def test_tool_history_without_tools_guards_its_tool_results_only_alongside_user_input(
