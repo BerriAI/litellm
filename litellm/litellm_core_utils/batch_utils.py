@@ -308,9 +308,12 @@ def _renamed_row(line: bytes, model: str, new_model: str) -> bytes | None:
         return None
     if body.get("model") != model:
         return None
-    renamed: Final = json.dumps(
-        {**row, "body": {**body, "model": new_model}}, ensure_ascii=False, separators=(",", ":")
-    )
+    try:
+        renamed: Final = json.dumps(
+            {**row, "body": {**body, "model": new_model}}, ensure_ascii=False, separators=(",", ":"), allow_nan=False
+        )
+    except ValueError:
+        return None
     return bom + renamed.encode("utf-8") + line[len(row_text) :]
 
 

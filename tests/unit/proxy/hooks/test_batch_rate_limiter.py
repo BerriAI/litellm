@@ -986,6 +986,39 @@ async def test_alias_routed_row_is_charged_once_when_the_alias_and_deployment_mo
 
 
 @pytest.mark.asyncio
+async def test_alias_quota_is_charged_every_row_routed_by_it_whichever_name_the_row_uses(
+    alias_routed_batch: respx.MockRouter,
+):
+    alias_routed_batch.get(_ROUTED_FILE_URL).mock(
+        side_effect=_serve_file_to_the_deployment_key((_row_naming(_BATCH_ALIAS), _row_naming(_DEPLOYMENT_MODEL)))
+    )
+    _, _, batch_limiter = _make_limiters()
+    data: Final = _alias_routing("body")
+    user_api_key_dict: Final = UserAPIKeyAuth(api_key=hash_token("sk-batch"), models=[_BATCH_ALIAS])
+    usage: Final = await batch_limiter.count_input_file_usage(
+        file_id=data["input_file_id"], user_api_key_dict=user_api_key_dict, data=dict(data)
+    )
+    row_tokens: Final = tuple(model_usage["total_tokens"] for model_usage in usage.per_model_usage.values())
+
+    with pytest.raises(HTTPException) as refused:
+        await batch_limiter.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict.model_copy(
+                update={
+                    "project_id": "project-1",
+                    "project_metadata": {"model_itpm_limit": {_BATCH_ALIAS: max(row_tokens) + 1}},
+                }
+            ),
+            cache=DualCache(),
+            data=dict(data),
+            call_type="acreate_batch",
+        )
+
+    assert len(row_tokens) == 2
+    assert refused.value.status_code == 429
+    assert f"project-1:{_BATCH_ALIAS}. Batch contains {sum(row_tokens)} tokens" in str(refused.value.detail)
+
+
+@pytest.mark.asyncio
 async def test_alias_routed_rows_are_held_to_the_enqueued_token_cap_of_the_model_they_name(
     alias_routed_batch: respx.MockRouter,
 ):

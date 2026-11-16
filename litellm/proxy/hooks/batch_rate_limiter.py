@@ -17,6 +17,7 @@ Quick summary:
 - async_log_success_event() fires on GET /v1/batches/{id} (batch completion)
 """
 
+import itertools
 import json
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from datetime import datetime, timezone
@@ -386,36 +387,56 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         self,
         user_api_key_dict: UserAPIKeyAuth,
         per_model_usage: Mapping[tuple[str, ...], Mapping[str, int]],
-    ) -> tuple[list["RateLimitDescriptor"], list[IncrementAmounts]]:  # mutable-ok: see below
+    ) -> tuple[list["RateLimitDescriptor"], list[IncrementAmounts]]:  # mutable-ok: callers extend these lists
         """Build project ITPM/OTPM descriptors charged against each row's own model.
 
-        One descriptor pair per distinct set of models the JSONL's rows are
-        charged to, so a row whose names share one counter adds to it once,
-        each incremented only by those rows' own counted usage -- never the
-        whole-batch total -- so a quota-limited model can't hide behind an
-        unlimited routing model, and an unrelated model's rows can't inflate
-        a different model's counter.
+        One descriptor pair per distinct project counter the JSONL's rows are
+        charged to, incremented by the usage of every row charged to it -- never
+        the whole-batch total -- so a quota-limited model can't hide behind an
+        unlimited routing model, an unrelated model's rows can't inflate a
+        different model's counter, and rows whose names share one counter add
+        to it once.
         """
-        extra_descriptors: Final[list[RateLimitDescriptor]] = []  # mutable-ok: see above
-        extra_increments: Final[list[IncrementAmounts]] = []  # mutable-ok: see above
-        for models, usage in per_model_usage.items():
-            model_descriptors: list[RateLimitDescriptor] = []  # mutable-ok: reset per loop iteration, not module state
-            self.parallel_request_limiter.add_project_io_token_rate_limit_descriptors_for_models(
-                user_api_key_dict=user_api_key_dict,
-                requested_models=models,
-                descriptors=model_descriptors,
+        charges: Final = tuple(
+            itertools.chain.from_iterable(
+                self._project_io_charges(user_api_key_dict, models, usage) for models, usage in per_model_usage.items()
             )
-            for descriptor in model_descriptors:
-                extra_descriptors.append(descriptor)
-                extra_increments.append(
-                    {
-                        "requests": 0,
-                        "tokens": usage.get("output_tokens", 0)
-                        if descriptor["key"] == PROJECT_OTPM_DESCRIPTOR_KEY
-                        else usage.get("total_tokens", 0),
-                    }
-                )
-        return extra_descriptors, extra_increments
+        )
+        counters: Final = tuple(dict.fromkeys((descriptor["key"], descriptor["value"]) for descriptor, _ in charges))
+        return (
+            [
+                next(descriptor for descriptor, _ in charges if (descriptor["key"], descriptor["value"]) == counter)
+                for counter in counters
+            ],
+            [
+                {
+                    "requests": 0,
+                    "tokens": sum(
+                        tokens for descriptor, tokens in charges if (descriptor["key"], descriptor["value"]) == counter
+                    ),
+                }
+                for counter in counters
+            ],
+        )
+
+    def _project_io_charges(
+        self, user_api_key_dict: UserAPIKeyAuth, models: Sequence[str], usage: Mapping[str, int]
+    ) -> tuple[tuple["RateLimitDescriptor", int], ...]:
+        model_descriptors: Final[list[RateLimitDescriptor]] = []  # mutable-ok: the limiter appends into a sink
+        self.parallel_request_limiter.add_project_io_token_rate_limit_descriptors_for_models(
+            user_api_key_dict=user_api_key_dict,
+            requested_models=models,
+            descriptors=model_descriptors,
+        )
+        return tuple(
+            (
+                descriptor,
+                usage.get("output_tokens", 0)
+                if descriptor["key"] == PROJECT_OTPM_DESCRIPTOR_KEY
+                else usage.get("total_tokens", 0),
+            )
+            for descriptor in model_descriptors
+        )
 
     def _should_skip_batch_input_file_processing(
         self,
@@ -807,13 +828,21 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                 if descriptor.get("key") in (PROJECT_ITPM_DESCRIPTOR_KEY, PROJECT_OTPM_DESCRIPTOR_KEY)
                 else None
             )
-            model_usage: Final = next(
-                (usage for models, usage in batch_usage.per_model_usage.items() if descriptor_model in models), None
+            charged_usage: Final = tuple(
+                usage for models, usage in batch_usage.per_model_usage.items() if descriptor_model in models
             )
             batch_token_count: Final = (
-                (model_usage or {}).get("output_tokens", batch_usage.output_tokens)
+                (
+                    sum(usage.get("output_tokens", 0) for usage in charged_usage)
+                    if charged_usage
+                    else batch_usage.output_tokens
+                )
                 if descriptor.get("key") == PROJECT_OTPM_DESCRIPTOR_KEY
-                else (model_usage or {}).get("total_tokens", batch_usage.total_tokens)
+                else (
+                    sum(usage.get("total_tokens", 0) for usage in charged_usage)
+                    if charged_usage
+                    else batch_usage.total_tokens
+                )
                 if descriptor.get("key") == PROJECT_ITPM_DESCRIPTOR_KEY
                 else batch_usage.total_tokens
             )

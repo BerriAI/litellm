@@ -362,6 +362,18 @@ def test_rewrite_rows_naming_model_changes_only_the_model_of_rows_naming_it_and_
     )
 
 
+def test_rewrite_rows_naming_model_keeps_a_row_whose_numbers_json_cannot_write_back():
+    out_of_range_row: Final = b'{"custom_id":"huge","body":{"model":"alias","temperature":1e400}}'
+    output: Final = BytesIO()
+
+    result: Final = rewrite_rows_naming_model(
+        _compact_row("a", "alias") + b"\n" + out_of_range_row + b"\n", "alias", "real", output
+    )
+
+    assert result is output
+    assert output.read() == _compact_row("a", "real") + b"\n" + out_of_range_row + b"\n"
+
+
 @pytest.mark.parametrize(
     "model, row",
     [
