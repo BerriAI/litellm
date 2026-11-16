@@ -1008,7 +1008,8 @@ async def user_info(
     user_id: str | None = fastapi.Query(default=None, description="User ID in the request parameters"),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     admin_mcp: bool = fastapi.Query(
-        default=False, description="Include the caller's current admin MCP route permissions"
+        default=False,
+        description="Include the caller's current admin MCP route permissions. An admin caller with no user_id gets empty keys and teams",
     ),
     mcp_tool: str | None = fastapi.Query(default=None, description="Admin MCP tool to authorize for this caller"),
     mcp_path: str | None = fastapi.Query(

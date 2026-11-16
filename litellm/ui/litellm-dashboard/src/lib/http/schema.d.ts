@@ -83472,7 +83472,7 @@ export interface operations {
             query?: {
                 /** @description User ID in the request parameters */
                 user_id?: string | null;
-                /** @description Include the caller's current admin MCP route permissions */
+                /** @description Include the caller's current admin MCP route permissions. An admin caller with no user_id gets empty keys and teams */
                 admin_mcp?: boolean;
                 /** @description Admin MCP tool to authorize for this caller */
                 mcp_tool?: string | null;

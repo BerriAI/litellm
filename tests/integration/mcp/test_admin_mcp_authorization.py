@@ -15,7 +15,7 @@ from pydantic import TypeAdapter
 
 _SEEDED_KEYS: Final = 30
 _METADATA_BYTES_PER_KEY: Final = 100_000
-_TOOL_NAMES: Final = TypeAdapter(dict[str, object])
+_JSON_OBJECT: Final = TypeAdapter(dict[str, object])
 
 
 def test_admin_mcp_lists_tools_when_proxy_key_payload_exceeds_connector_byte_limit(
@@ -43,5 +43,10 @@ def test_admin_mcp_lists_tools_when_proxy_key_payload_exceeds_connector_byte_lim
         )
 
         assert listed.status_code == 200, listed.text[:500]
-        result: Final = _TOOL_NAMES.validate_python(_TOOL_NAMES.validate_json(listed.content)["result"])
+        result: Final = _JSON_OBJECT.validate_python(_JSON_OBJECT.validate_json(listed.content)["result"])
         assert result["tools"], listed.text[:500]
+
+        own_row: Final = candidate.request("GET", "/user/info", key=admin_key, params={"admin_mcp": "true"})
+        assert own_row.status_code == 200, own_row.text[:500]
+        compact: Final = _JSON_OBJECT.validate_json(own_row.content)
+        assert (compact["user_id"], compact["keys"], compact["teams"]) == (admin_id, [], []), own_row.text[:500]
