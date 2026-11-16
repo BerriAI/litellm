@@ -1,4 +1,6 @@
-use axum::http::StatusCode;
+use std::time::Duration;
+
+use axum::http::{HeaderMap, HeaderValue, StatusCode, header::RETRY_AFTER};
 use axum::{
     Json,
     response::{IntoResponse, Response},
@@ -86,7 +88,25 @@ impl Error {
     }
 
     pub fn openai_response(self) -> Response {
-        (self.status(), Json(self.openai_body())).into_response()
+        (self.status(), self.headers(), Json(self.openai_body())).into_response()
+    }
+
+    /// `retry-after` in whole seconds on a refusal the router made itself, such as a deployment
+    /// past its declared rate limits.
+    pub fn headers(&self) -> HeaderMap {
+        self.retry_after()
+            .map(|after| {
+                let seconds = after.as_secs() + u64::from(after.subsec_nanos() > 0);
+                HeaderMap::from_iter([(RETRY_AFTER, HeaderValue::from(seconds))])
+            })
+            .unwrap_or_default()
+    }
+
+    fn retry_after(&self) -> Option<Duration> {
+        let Self::Routing(error) = self else {
+            return None;
+        };
+        error.attempt()?.retry_after
     }
 
     /// The OpenAI envelope as an `event: error` frame, for a stream that fails after its

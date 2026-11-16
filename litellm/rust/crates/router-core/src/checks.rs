@@ -1,13 +1,24 @@
 //! The optional pre-call checks the core runs itself, for a host that does not select:
 //! `encrypted_content_affinity` (`EncryptedContentAffinityCheck`) and
-//! `responses_api_deployment_check` (`DeploymentAffinityCheck`'s Responses API continuity). Both pin
-//! a follow-up request to the deployment that served the turn it continues, which the host reads
-//! off the request's own ids into [`Affinity`]. A host that selects runs Python's checks through
-//! [`crate::RouterHost::callback_filters`] instead.
+//! `responses_api_deployment_check` (`DeploymentAffinityCheck`'s Responses API continuity) pin a
+//! follow-up request to the deployment that served the turn it continues, which the host reads
+//! off the request's own ids into [`Affinity`]. `enforce_model_rate_limits`
+//! (`ModelRateLimitingCheck`) refuses an attempt on a deployment past its declared limits, on the
+//! counters in the router's cache. A host that selects runs Python's checks instead.
 
-use std::{collections::BTreeMap, str::FromStr, sync::Arc};
+use std::{
+    collections::BTreeMap,
+    str::FromStr,
+    sync::Arc,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
+
+use serde_json::Value;
 
 use crate::{
+    cache::{LimitCounter, LimitKind, RouterCache},
+    error::{AttemptError, FailureKind},
+    health::current_minute,
     host::RoutingContext,
     registry::{Deployment, Registry},
 };
@@ -17,6 +28,7 @@ use crate::{
 pub enum NativeCheck {
     EncryptedContentAffinity,
     ResponsesApiDeploymentCheck,
+    EnforceModelRateLimits,
 }
 
 /// `optional_pre_call_checks` and `model_group_affinity_config`.
@@ -50,6 +62,10 @@ impl PreCallChecks {
 
     pub fn is_empty(&self) -> bool {
         self.global.is_empty() && self.groups.is_empty()
+    }
+
+    pub fn enforces_model_rate_limits(&self) -> bool {
+        lists(&self.global, NativeCheck::EnforceModelRateLimits)
     }
 
     /// `EncryptedContentAffinityCheck.is_enabled_for_model_group`.
@@ -228,5 +244,284 @@ fn responses_api_continuity(
     {
         Some(pinned) => vec![pinned.clone()],
         None => candidates,
+    }
+}
+
+/// `RoutingArgs.ttl` and `RoutingArgs.daily_ttl`.
+const MINUTE: Duration = Duration::from_secs(60);
+const DAY: Duration = Duration::from_secs(86_400);
+
+/// A deployment's declared limits (`_get_deployment_limits`, `_DailyLimitDeployment`).
+struct Limits {
+    tpm: Option<f64>,
+    rpm: Option<f64>,
+    tpd: Option<f64>,
+    rpd: Option<f64>,
+    /// `daily_reset_time`: how far past midnight UTC the daily window starts over.
+    reset: Duration,
+}
+
+/// `HH:MM` in UTC, which `parse_daily_reset_time` accepts.
+fn reset_offset(value: Option<&Value>) -> Option<Duration> {
+    let Some(value) = value.filter(|value| !value.is_null()) else {
+        return Some(Duration::ZERO);
+    };
+    let (hours, minutes) = value.as_str()?.split_once(':')?;
+    let digits = |part: &str, below: u64| {
+        (part.len() == 2 && part.bytes().all(|byte| byte.is_ascii_digit()))
+            .then(|| part.parse::<u64>().ok())
+            .flatten()
+            .filter(|number| *number < below)
+    };
+    Some(Duration::from_secs(
+        digits(hours, 24)? * 3600 + digits(minutes, 60)? * 60,
+    ))
+}
+
+impl Limits {
+    /// `None` when the deployment's daily params do not validate, which skips the check.
+    fn of(deployment: &Deployment) -> Option<Self> {
+        let declared = |key: &str| {
+            [
+                &deployment.extra,
+                &deployment.raw_params,
+                &deployment.model_info.raw,
+            ]
+            .iter()
+            .find_map(|section| section.get(key).filter(|value| !value.is_null()))
+            .and_then(Value::as_f64)
+        };
+        let daily = |key: &str| deployment.raw_params.get(key).and_then(Value::as_f64);
+        Some(Self {
+            tpm: declared("tpm"),
+            rpm: declared("rpm"),
+            tpd: daily("tpd"),
+            rpd: daily("rpd"),
+            reset: reset_offset(deployment.raw_params.get("daily_reset_time"))?,
+        })
+    }
+
+    /// The seconds since the epoch the daily window is measured from.
+    fn shifted(&self, now: SystemTime) -> f64 {
+        now.duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs_f64()
+            - self.reset.as_secs_f64()
+    }
+
+    /// `daily_window_day`: the UTC day the window started on.
+    fn day(&self, now: SystemTime) -> String {
+        let days = (self.shifted(now) / 86_400.0).floor() as i64;
+        jiff::civil::date(1970, 1, 1)
+            .checked_add(jiff::Span::new().days(days))
+            .map_or_else(
+                |_| String::new(),
+                |date| date.strftime("%Y-%m-%d").to_string(),
+            )
+    }
+
+    /// `seconds_until_daily_reset`.
+    fn until_reset(&self, now: SystemTime) -> Duration {
+        let into_day = self.shifted(now).rem_euclid(86_400.0);
+        Duration::from_secs(((86_400.0 - into_day) as u64).max(1))
+    }
+}
+
+fn counter(deployment: &Deployment, kind: LimitKind, window: String) -> LimitCounter {
+    LimitCounter {
+        deployment_id: deployment.id.clone(),
+        model: deployment.params.model.clone(),
+        kind,
+        window,
+    }
+}
+
+fn number(value: f64) -> String {
+    if value.fract() == 0.0 && value.abs() < 1e15 {
+        format!("{}", value as i64)
+    } else {
+        value.to_string()
+    }
+}
+
+/// The `RateLimitError` the check raises: never retried, and retried after `retry_after` by a
+/// caller.
+fn refused(
+    deployment: &Deployment,
+    kind: LimitKind,
+    limit: f64,
+    usage: f64,
+    retry_after: Duration,
+) -> AttemptError {
+    let name: &'static str = kind.into();
+    let mut error = AttemptError::new(FailureKind::RateLimit, Some(429));
+    error.retry_after = Some(retry_after);
+    error.num_retries = Some(0);
+    error.detail = Some(
+        format!(
+            "Model rate limit exceeded. {} limit={}, current usage={}. id={}, model_group={}",
+            name.to_uppercase(),
+            number(limit),
+            number(usage),
+            deployment.id,
+            deployment.model_name,
+        )
+        .into(),
+    );
+    error
+}
+
+/// `ModelRateLimitingCheck.async_pre_call_check`: the deployment's token windows must have room,
+/// then its request windows count this request, refunded when that goes past a limit. A cache
+/// that fails lets the request through.
+pub(crate) async fn admit(
+    cache: &impl RouterCache,
+    deployment: &Deployment,
+    now: SystemTime,
+) -> Option<AttemptError> {
+    let limits = Limits::of(deployment)?;
+    let minute = current_minute(now);
+    let day = limits.day(now);
+    let used = |kind, window: &str, limit: f64| {
+        let counter = counter(deployment, kind, window.to_owned());
+        async move { cache.limit_usage(&counter, limit).await.ok().flatten() }
+    };
+    if let Some(limit) = limits.tpm
+        && let Some(usage) = used(LimitKind::Tpm, &minute, limit).await
+        && usage >= limit
+    {
+        return Some(refused(deployment, LimitKind::Tpm, limit, usage, MINUTE));
+    }
+    if let Some(limit) = limits.tpd
+        && let Some(usage) = used(LimitKind::Tpd, &day, limit).await
+        && usage >= limit
+    {
+        return Some(refused(
+            deployment,
+            LimitKind::Tpd,
+            limit,
+            usage,
+            limits.until_reset(now),
+        ));
+    }
+    let charged: Vec<(LimitCounter, i64, Duration)> = [
+        limits
+            .rpm
+            .map(|_| (counter(deployment, LimitKind::Rpm, minute), 1, MINUTE)),
+        limits
+            .rpd
+            .map(|_| (counter(deployment, LimitKind::Rpd, day), 1, DAY)),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    if charged.is_empty() {
+        return None;
+    }
+    let counts = cache
+        .add_limit_usages(&charged)
+        .await
+        .ok()
+        .flatten()
+        .filter(|counts| counts.len() == charged.len())?;
+    let count = |kind| {
+        charged
+            .iter()
+            .zip(&counts)
+            .find(|((counter, ..), _)| counter.kind == kind)
+            .map(|(_, count)| count.trunc())
+    };
+    let over = [
+        (LimitKind::Rpm, limits.rpm, MINUTE),
+        (LimitKind::Rpd, limits.rpd, limits.until_reset(now)),
+    ]
+    .into_iter()
+    .find_map(|(kind, limit, retry_after)| {
+        let limit = limit?;
+        let usage = count(kind)?;
+        (usage > limit).then(|| refused(deployment, kind, limit, usage, retry_after))
+    })?;
+    let refund: Vec<_> = charged
+        .into_iter()
+        .map(|(counter, _, ttl)| (counter, -1, ttl))
+        .collect();
+    if let Err(error) = cache.add_limit_usages(&refund).await {
+        tracing::debug!(%error, "the model rate limit refund was not recorded");
+    }
+    Some(over)
+}
+
+/// `ModelRateLimitingCheck.async_log_success_event`: a success's tokens count against the
+/// deployment's minute and day.
+pub(crate) async fn count_tokens(
+    cache: &impl RouterCache,
+    deployment: &Deployment,
+    total_tokens: u64,
+    now: SystemTime,
+) {
+    let Some(limits) = Limits::of(deployment) else {
+        return;
+    };
+    if total_tokens == 0 || deployment.params.model.is_empty() {
+        return;
+    }
+    let tokens = i64::try_from(total_tokens).unwrap_or(i64::MAX);
+    for (kind, window, ttl) in [
+        (LimitKind::Tpm, current_minute(now), MINUTE),
+        (LimitKind::Tpd, limits.day(now), DAY),
+    ] {
+        if let Err(error) = cache
+            .add_limit_usage(&counter(deployment, kind, window), tokens, ttl)
+            .await
+        {
+            tracing::debug!(%error, "Error in ModelRateLimitingCheck.async_log_success_event");
+            return;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use rstest::rstest;
+    use serde_json::json;
+
+    use super::*;
+
+    /// 2024-03-01 00:30:00 UTC.
+    fn half_past_midnight() -> SystemTime {
+        UNIX_EPOCH + Duration::from_secs(1_709_253_000)
+    }
+
+    #[rstest]
+    #[case::midnight(json!(null), "2024-03-01", 86_400 - 1800)]
+    #[case::before_the_reset(json!("01:00"), "2024-02-29", 1800)]
+    #[case::after_the_reset(json!("00:15"), "2024-03-01", 86_400 - 900)]
+    fn the_daily_window_starts_over_at_the_reset_time(
+        #[case] reset: Value,
+        #[case] day: &str,
+        #[case] until_reset: u64,
+    ) {
+        let limits = Limits {
+            tpm: None,
+            rpm: None,
+            tpd: None,
+            rpd: None,
+            reset: reset_offset(Some(&reset)).unwrap(),
+        };
+        assert_eq!(
+            (
+                limits.day(half_past_midnight()),
+                limits.until_reset(half_past_midnight())
+            ),
+            (day.to_owned(), Duration::from_secs(until_reset))
+        );
+    }
+
+    #[rstest]
+    #[case::hour_out_of_range("24:00")]
+    #[case::one_digit("1:00")]
+    #[case::not_a_time("noon")]
+    fn a_reset_time_that_is_not_hh_mm_skips_the_check(#[case] reset: &str) {
+        assert_eq!(reset_offset(Some(&json!(reset))), None);
     }
 }

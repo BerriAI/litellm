@@ -9,7 +9,7 @@ mod secrets;
 pub use admit::{Admission, Refused, Unsupported, unsupported};
 pub use error::Error;
 pub use models::{ModelRefresh, Refreshed};
-pub use redis::RedisClients;
+pub use redis::{RedisClients, router_remote};
 
 /// The gateway served through the native host.
 pub type Gateway = litellm_gateway_inference::Gateway<host::NativeHost>;
@@ -53,6 +53,10 @@ pub async fn build_serving(config: &Config) -> Result<(Arc<Gateway>, ModelRefres
             .or_else(|| std::env::var(name).ok())
     };
     let (router, shaper) = boot::router(config, &lookup).await?;
+    let routing = Arc::new(litellm_redis_store::RouterStores::new(
+        None,
+        redis::router_tiers(config, &lookup)?,
+    ));
     let settings = &config.litellm_settings;
     let http_settings = HttpSettings::from_layers([
         HttpSettingsLayer::from_environment(&lookup),
@@ -92,9 +96,29 @@ pub async fn build_serving(config: &Config) -> Result<(Arc<Gateway>, ModelRefres
         secrets,
         router,
         models,
+        routing,
         host::NativeHost,
     )?);
     Ok((gateway, refresh))
+}
+
+/// Share the router's routing state through its Redis, when `router_settings` names one.
+/// The gateway as it serves natively: the router built through router-core, its model table
+/// refreshed from the remote cost map, and its routing state on the router's Redis.
+pub async fn build_native(config: &Config) -> Result<Arc<Gateway>, Error> {
+    let (inference, models) = build_serving(config).await?;
+    tokio::spawn(models.run(inference.clone(), None));
+    let redis = build_redis(config, &inference.resources.pool, &inference.http).await?;
+    attach_routing(&inference, &redis, config);
+    Ok(inference)
+}
+
+fn attach_routing(inference: &Gateway, redis: &RedisClients, config: &Config) {
+    if let Some(client) = &redis.router {
+        inference
+            .routing()
+            .attach(router_remote(client.clone(), config));
+    }
 }
 
 pub fn install_crypto_provider() {

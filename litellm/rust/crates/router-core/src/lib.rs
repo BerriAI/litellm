@@ -132,7 +132,10 @@ use arc_swap::ArcSwap;
 use parking_lot::Mutex;
 
 pub use crate::{
-    cache::{HealthState, InMemoryRouterCache, Outcomes, RouterCache, UsageCounts, UsageWindow},
+    cache::{
+        HealthState, InMemoryRouterCache, LimitCounter, LimitKind, Outcomes, RouterCache,
+        UsageCounts, UsageWindow,
+    },
     call::RouterResponse,
     checks::{Affinity, PreCallChecks},
     config::{Op, RouterConfig, RouterDynamicConfig, RoutingStrategy},
@@ -192,6 +195,12 @@ pub(crate) struct Core {
 }
 
 impl Core {
+    /// `enforce_model_rate_limits` is the core's to run: the host does not select.
+    pub(crate) fn runs_model_rate_limits(&self) -> bool {
+        !self.facts.can(Capability::Select)
+            && self.config.pre_call_checks.enforces_model_rate_limits()
+    }
+
     /// Reject what this host cannot serve, before any request.
     fn validate(&self, registry: &Registry, settings: &Settings) -> Result<(), ConfigError> {
         let selects = self.facts.can(Capability::Select);
@@ -257,6 +266,21 @@ impl Core {
         }
         for deployment in registry.deployments(&DeploymentFilter::default()) {
             self.validate_deployment(&deployment)?;
+        }
+        let io_limited = |deployment: &Deployment| {
+            deployment.params.itpm.is_some() || deployment.params.otpm.is_some()
+        };
+        if self.runs_model_rate_limits()
+            && registry
+                .deployments(&DeploymentFilter::default())
+                .iter()
+                .any(|deployment| io_limited(deployment))
+        {
+            return Err(Unsupported::Setting {
+                setting: "itpm/otpm",
+                needs: Capability::Select,
+            }
+            .into());
         }
         Ok(())
     }
@@ -624,6 +648,15 @@ impl Router {
         let Some(deployment) = snapshot.registry.deployment(id) else {
             return Ok(None);
         };
+        if self.core.runs_model_rate_limits() {
+            checks::count_tokens(
+                cache,
+                &deployment,
+                total_tokens as u64,
+                self.core.clock.now(),
+            )
+            .await;
+        }
         let health = self.health(cache);
         health.count_success(id).await?;
         if !report

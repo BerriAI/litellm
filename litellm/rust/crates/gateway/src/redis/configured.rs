@@ -105,6 +105,16 @@ impl ConfiguredRedis {
         }
     }
 
+    /// The router's `redis_*` and `cache_kwargs` settings, as `redis_cache_for` hands them to
+    /// `RedisCache`, which receives no null.
+    pub(crate) fn router(fields: BTreeMap<String, Value>) -> Self {
+        Self {
+            fields,
+            nulls: Nulls::Dropped,
+            credential_provider: None,
+        }
+    }
+
     /// No configured settings, so only `REDIS_*` and the other environment fallbacks apply.
     pub(crate) fn environment_only() -> Self {
         Self {

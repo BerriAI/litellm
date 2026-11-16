@@ -5,10 +5,10 @@ use litellm_gateway_inference::{
     Error,
     routing::{self, RouteAttempt},
 };
+use litellm_redis_store::RouterStores;
 use litellm_router_core::{
-    Attempt, AttemptError, AttemptFailure, Capability, ConfigError, Deployment,
-    InMemoryRouterCache, RouterEvent, RouterHost, RoutingContext, SelectStage, Served, Unsupported,
-    precall::PreCallFacts,
+    Attempt, AttemptError, AttemptFailure, Capability, ConfigError, Deployment, RouterEvent,
+    RouterHost, RoutingContext, SelectStage, Served, Unsupported, precall::PreCallFacts,
 };
 
 use crate::Gateway;
@@ -24,7 +24,7 @@ pub struct NativeRouterHost<'a, A> {
 impl<A: RouteAttempt> RouterHost for NativeRouterHost<'_, A> {
     type Response = A::Outcome;
     type Failure = Error;
-    type Cache = InMemoryRouterCache;
+    type Cache = RouterStores;
 
     async fn attempt(
         &self,
@@ -61,7 +61,7 @@ impl<A: RouteAttempt> RouterHost for NativeRouterHost<'_, A> {
         Ok(routing::allows(self.gateway, self.identity, target).await)
     }
 
-    fn cache(&self) -> &InMemoryRouterCache {
+    fn cache(&self) -> &RouterStores {
         self.gateway.routing()
     }
 

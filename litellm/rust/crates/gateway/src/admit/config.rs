@@ -14,13 +14,13 @@ pub enum Unsupported {
     NoMasterKey,
     #[error("model `{0}` is a wildcard")]
     WildcardModel(String),
-    #[error("the router does not serve this configuration: {0}")]
-    Router(String),
+    #[error("the gateway can't serve this configuration natively: {0}")]
+    Build(String),
 }
 
-impl From<&litellm_router_core::ConfigError> for Unsupported {
-    fn from(refused: &litellm_router_core::ConfigError) -> Self {
-        Self::Router(litellm_error::Report::new(refused).to_string())
+impl From<&crate::Error> for Unsupported {
+    fn from(unbuilt: &crate::Error) -> Self {
+        Self::Build(litellm_error::Report::new(unbuilt).to_string())
     }
 }
 
@@ -223,7 +223,7 @@ fn general(settings: &GeneralSettings) -> impl Iterator<Item = Unsupported> {
 fn router(settings: &RouterSettings) -> impl Iterator<Item = Unsupported> {
     let RouterSettings {
         // router-core reads these. Its build refuses at boot any it can't serve without Python
-        // (`HostFacts.capabilities`), and that refusal is an `Unsupported::Router`.
+        // (`HostFacts.capabilities`), and that refusal is an `Unsupported::Build`.
         routing_strategy: _,
         routing_strategy_args: _,
         routing_groups: _,
@@ -255,7 +255,18 @@ fn router(settings: &RouterSettings) -> impl Iterator<Item = Unsupported> {
         optional_pre_call_checks: _,
         additional_fields,
     } = settings;
-    only("router_settings.", additional_fields, &[])
+    only(
+        "router_settings.",
+        additional_fields,
+        &[
+            "redis_url",
+            "redis_host",
+            "redis_port",
+            "redis_password",
+            "redis_db",
+            "cache_kwargs",
+        ],
+    )
 }
 
 fn litellm(settings: &LiteLlmSettings) -> impl Iterator<Item = Unsupported> {
@@ -388,6 +399,7 @@ mod tests {
     #[case::no_callbacks("litellm_settings: {callbacks: []}")]
     #[case::variables("environment_variables: {OPENAI_API_KEY: sk-provider}")]
     #[case::router_core_setting("router_settings: {fallbacks: [{a: [b]}], num_retries: 2}")]
+    #[case::router_redis("router_settings: {redis_host: localhost, redis_port: 6379}")]
     fn serves_sections_on_the_allowlist(#[case] section: &str) {
         assert_eq!(unsupported(&with_section(section), &no_env), vec![]);
     }
@@ -414,8 +426,8 @@ mod tests {
         "litellm_settings.max_budget"
     )]
     #[case::unknown_router_setting(
-        "router_settings: {redis_host: localhost}",
-        "router_settings.redis_host"
+        "router_settings: {provider_budget_config: {}}",
+        "router_settings.provider_budget_config"
     )]
     #[case::unknown_section("some_future_section: {enabled: true}", "some_future_section")]
     fn forwards_a_section_off_the_allowlist(#[case] section: &str, #[case] name: &str) {
@@ -509,7 +521,7 @@ mod tests {
   - {model_name: b, litellm_params: {model: openai/b}, model_info: {base_model: gpt}}
 guardrails: [{guardrail_name: pii}]
 general_settings: {max_request_size_mb: 10, alerting: [slack]}
-router_settings: {redis_host: localhost}
+router_settings: {provider_budget_config: {}}
 litellm_settings: {cache: true, callbacks: [prometheus]}
 ",
         )
@@ -523,7 +535,7 @@ litellm_settings: {cache: true, callbacks: [prometheus]}
                 Unsupported::NoMasterKey,
                 Unsupported::Setting("general_settings.max_request_size_mb".into()),
                 Unsupported::Setting("general_settings.alerting".into()),
-                Unsupported::Setting("router_settings.redis_host".into()),
+                Unsupported::Setting("router_settings.provider_budget_config".into()),
                 Unsupported::Setting("litellm_settings.cache".into()),
                 Unsupported::Setting("litellm_settings.callbacks".into()),
                 Unsupported::Setting("model_list.model_info.base_model".into()),

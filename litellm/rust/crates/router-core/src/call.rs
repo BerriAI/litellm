@@ -1316,8 +1316,32 @@ impl<H: RouterHost> Call<'_, H> {
         // request's `OutcomeCallbacks` reach, except a deferred stream's: its request counts now
         // (`increment_deployment_usage_for_response`), its success or failure when the host reports
         // the stream's end.
-        match self.host.attempt(&attempt).await {
+        let limited = self.core.runs_model_rate_limits();
+        let refused = match limited {
+            true => {
+                crate::checks::admit(self.host.cache(), &deployment, self.core.clock.now()).await
+            }
+            false => None,
+        };
+        let ran = match refused {
+            Some(refusal) => Err(Error::Attempt(refusal)),
+            None => self
+                .host
+                .attempt(&attempt)
+                .await
+                .map_err(|failure| self.failed(failure)),
+        };
+        match ran {
             Ok(output) => {
+                if limited && !output.deferred {
+                    crate::checks::count_tokens(
+                        self.host.cache(),
+                        &deployment,
+                        output.total_tokens,
+                        self.core.clock.now(),
+                    )
+                    .await;
+                }
                 // `_should_raise_content_policy_error`: a blocked response is raised only when
                 // a content-policy fallback would serve it, and counts as no failure.
                 let routed = routed_name(target, &candidates);
@@ -1389,8 +1413,7 @@ impl<H: RouterHost> Call<'_, H> {
                     attempted_fallbacks: at.depth,
                 })
             }
-            Err(failure) => {
-                let error = self.failed(failure);
+            Err(error) => {
                 let failed_deployment = match &error {
                     Error::Attempt(failure) => {
                         if !failure.recorded {

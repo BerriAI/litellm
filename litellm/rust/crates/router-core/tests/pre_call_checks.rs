@@ -22,6 +22,7 @@ struct Host {
     cache: InMemoryRouterCache,
     fail_first: Mutex<bool>,
     attempts: Mutex<Vec<String>>,
+    tokens: u64,
 }
 
 impl RouterHost for Host {
@@ -37,7 +38,7 @@ impl RouterHost for Host {
                 raised: (),
             });
         }
-        Ok(Served::new((), 1))
+        Ok(Served::new((), self.tokens))
     }
 
     async fn select(
@@ -279,4 +280,84 @@ fn a_deployment_decrypts_what_its_own_account_minted(
     );
     let target = router.registry().deployment(target).unwrap();
     assert_eq!(router.decrypts(origin, &target), expected);
+}
+
+fn limited(limits: Value) -> Router {
+    router(
+        json!({"global": ["enforce_model_rate_limits"]}),
+        vec![deployment("primary", "a1", limits, json!({}))],
+    )
+}
+
+/// The attempts `calls` calls reached, and how each call ended: `None` served, else the
+/// refusal's retry-after in seconds.
+async fn calls(router: &Router, host: &Host, calls: usize) -> Vec<Option<u64>> {
+    let mut ended = Vec::new();
+    for _ in 0..calls {
+        ended.push(
+            match router
+                .call(host, Op::RESPONSES, request(Affinity::default()))
+                .await
+            {
+                Ok(_) => None,
+                Err(ended) => match ended.error {
+                    Error::Attempt(refusal) => {
+                        assert_eq!(
+                            (refusal.kind, refusal.status, refusal.num_retries),
+                            (FailureKind::RateLimit, Some(429), Some(0))
+                        );
+                        refusal.retry_after.map(|wait| wait.as_secs())
+                    }
+                    other => panic!("expected a rate limit, got {other:?}"),
+                },
+            },
+        );
+    }
+    ended
+}
+
+#[rstest]
+#[case::rpm(json!({"rpm": 2}), 1, vec![None, None, Some(60), Some(60)], 2)]
+#[case::tpm(json!({"tpm": 15}), 10, vec![None, None, Some(60)], 2)]
+#[case::no_limit(json!({}), 1, vec![None, None, None], 3)]
+#[tokio::test]
+async fn a_deployment_past_its_minute_limit_refuses_the_attempt_without_calling_it(
+    #[case] limits: Value,
+    #[case] tokens: u64,
+    #[case] expected: Vec<Option<u64>>,
+    #[case] reached: usize,
+) {
+    let router = limited(limits);
+    let host = Host {
+        tokens,
+        ..Host::default()
+    };
+    assert_eq!(calls(&router, &host, expected.len()).await, expected);
+    assert_eq!(host.attempts.lock().len(), reached);
+}
+
+#[tokio::test]
+async fn a_daily_limit_is_retried_after_the_window_resets() {
+    let router = limited(json!({"rpd": 1}));
+    let ended = calls(&router, &Host::default(), 2).await;
+    assert!(
+        matches!(ended.as_slice(), [None, Some(wait)] if (1..=86_400).contains(wait)),
+        "{ended:?}"
+    );
+}
+
+#[test]
+fn io_token_limits_still_need_a_host_that_selects() {
+    let config: RouterConfig = serde_json::from_value(json!({
+        "pre_call_checks": {"global": ["enforce_model_rate_limits"]},
+        "model_list": [deployment("primary", "a1", json!({"itpm": 10}), json!({}))],
+    }))
+    .unwrap();
+    assert!(matches!(
+        Router::new(config, RouterDynamicConfig::default(), NO_STEPS),
+        Err(ConfigError::Unsupported(Unsupported::Setting {
+            setting: "itpm/otpm",
+            ..
+        }))
+    ));
 }
