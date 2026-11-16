@@ -614,6 +614,50 @@ def _catalog_sets_true(catalog: Mapping[str, Mapping[str, object]], catalog_keys
     return entry is not None and entry.get(field) is True
 
 
+def _vertex_pass_through_target(entry: Mapping[str, object]) -> tuple[str, str] | None:
+    import litellm
+
+    litellm_params: Final = entry.get("litellm_params")
+    if not isinstance(litellm_params, Mapping) or litellm_params.get("use_in_pass_through") is not True:
+        return None
+    model: Final = litellm_params.get("model")
+    if not isinstance(model, str) or not model:
+        return None
+    custom_llm_provider: Final = litellm_params.get("custom_llm_provider")
+    try:
+        _, provider, _, _ = litellm.get_llm_provider(
+            model=model,
+            custom_llm_provider=custom_llm_provider if isinstance(custom_llm_provider, str) else None,
+        )
+    except Exception:
+        return None
+    if provider != "vertex_ai":
+        return None
+    credential_name: Final = litellm_params.get("litellm_credential_name")
+    credential_values: Final = (
+        CredentialAccessor.get_credential_values(credential_name) if isinstance(credential_name, str) else {}
+    )
+    project: Final = credential_values.get("vertex_project") or litellm_params.get("vertex_project")
+    location: Final = credential_values.get("vertex_location") or litellm_params.get("vertex_location")
+    if not project or not location:
+        return None
+    return str(project), str(location)
+
+
+def _withdraw_vertex_pass_through_credentials(
+    removed: Mapping[str, object],
+    served: Iterable[Mapping[str, object]],
+) -> None:
+    target: Final = _vertex_pass_through_target(removed)
+    if target is None:
+        return
+    if any(_vertex_pass_through_target(entry) == target for entry in served):
+        return
+    from litellm.router_host import router_host
+
+    router_host().remove_vertex_pass_through_credentials(project_id=target[0], location=target[1])
+
+
 def withdraw_shared_capabilities(
     host: "PythonHost",
     removed: Mapping[str, object],
@@ -623,6 +667,8 @@ def withdraw_shared_capabilities(
     """For each ``SHARED_ONLY_WHEN_TRUE_CAPABILITY_FIELDS`` flag ``removed`` set ``True``, set the shared
     ``litellm.model_cost`` row(s) ``removed`` registers onto that still hold it ``True`` to whether ``replacement``,
     a ``served`` deployment registering onto one of them, or the catalog still sets it ``True``."""
+    served_entries: Final = tuple(served)
+    _withdraw_vertex_pass_through_credentials(removed, served_entries)
     backend: Final = _entry_backend(removed)
     set_true: Final = _shared_capabilities_set_true(removed)
     if backend is None or not set_true:
@@ -638,7 +684,7 @@ def withdraw_shared_capabilities(
     if not held:
         return
     candidates: Final = tuple(
-        entry for entry in served if not withdrawn.isdisjoint(_shared_capabilities_set_true(entry))
+        entry for entry in served_entries if not withdrawn.isdisjoint(_shared_capabilities_set_true(entry))
     )
     rows_by_backend: Final = {
         keys: frozenset(model_cost_registration_key(key) for key in keys)

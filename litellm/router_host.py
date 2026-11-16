@@ -45,6 +45,13 @@ class RouterHost:
     ) -> None:
         """Keep vertex credentials for pass-through endpoints. Only the proxy serves those."""
 
+    def remove_vertex_pass_through_credentials(
+        self,
+        project_id: str,
+        location: str,
+    ) -> None:
+        """Remove vertex pass-through credentials when no live deployment uses them."""
+
     async def authorize_strategy_inference(
         self,
         deployment: Mapping[str, object] | None,

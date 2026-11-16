@@ -885,3 +885,87 @@ class TestPassthroughEndpointRouter(unittest.TestCase):
         assert creds.vertex_project == "test-project"
         assert creds.vertex_location == "us-central1"
         assert creds.vertex_credentials == '{"credentials": "test-creds"}'
+
+    def test_remove_vertex_credentials(self):
+        """Test remove_vertex_credentials deletes stored entry and ignores missing keys."""
+        router = PassthroughEndpointRouter()
+        router.set_default_vertex_config(
+            config={
+                "vertex_project": None,
+                "vertex_location": None,
+                "vertex_credentials": None,
+            }
+        )
+        router.add_vertex_credentials(
+            project_id="test-project",
+            location="us-central1",
+            vertex_credentials='{"credentials": "test-creds"}',
+        )
+        assert "test-project-us-central1" in router.deployment_key_to_vertex_credentials
+
+        router.remove_vertex_credentials(project_id="test-project", location="us-central1")
+        assert "test-project-us-central1" not in router.deployment_key_to_vertex_credentials
+        router.remove_vertex_credentials(project_id="test-project", location="us-central1")
+
+        creds = router.get_vertex_credentials(project_id="test-project", location="us-central1")
+        assert creds.vertex_credentials is None
+
+
+def test_withdraw_vertex_pass_through_credentials_on_disable_and_sibling_preservation():
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import passthrough_endpoint_router
+    from litellm.router_rust.surface.registry import withdraw_shared_capabilities
+    from litellm.router_host import router_host
+
+    project = "proj-withdraw-51627"
+    location = "us-central1"
+    key = f"{project}-{location}"
+    passthrough_endpoint_router.remove_vertex_credentials(project_id=project, location=location)
+    try:
+        router_host().add_vertex_pass_through_credentials(
+            project_id=project,
+            location=location,
+            vertex_credentials='{"type": "service_account"}',
+        )
+        assert key in passthrough_endpoint_router.deployment_key_to_vertex_credentials
+
+        removed = {
+            "model_name": "vertex-pt",
+            "litellm_params": {
+                "model": "vertex_ai/gemini-2.5-flash",
+                "vertex_project": project,
+                "vertex_location": location,
+                "use_in_pass_through": True,
+            },
+        }
+        sibling = {
+            "model_name": "vertex-pt-2",
+            "litellm_params": {
+                "model": "vertex_ai/gemini-2.5-pro",
+                "vertex_project": project,
+                "vertex_location": location,
+                "use_in_pass_through": True,
+            },
+        }
+
+        class _NoopHost:
+            def invoke(self, name):
+                return lambda **kwargs: None
+
+        # Sibling still has use_in_pass_through=True: keep credentials registered.
+        withdraw_shared_capabilities(_NoopHost(), removed, None, [sibling])
+        assert key in passthrough_endpoint_router.deployment_key_to_vertex_credentials
+
+        # No remaining sibling with use_in_pass_through=True: unregister credentials.
+        disabled = {
+            "model_name": "vertex-pt",
+            "litellm_params": {
+                "model": "vertex_ai/gemini-2.5-flash",
+                "vertex_project": project,
+                "vertex_location": location,
+                "use_in_pass_through": False,
+            },
+        }
+        withdraw_shared_capabilities(_NoopHost(), removed, disabled, [disabled])
+        assert key not in passthrough_endpoint_router.deployment_key_to_vertex_credentials
+    finally:
+        passthrough_endpoint_router.remove_vertex_credentials(project_id=project, location=location)
