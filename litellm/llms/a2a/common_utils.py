@@ -4,12 +4,13 @@ Common utilities for A2A (Agent-to-Agent) Protocol
 
 import asyncio
 import time
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 from pydantic import BaseModel
 
+from litellm.litellm_core_utils.core_helpers import decoded_json_object, iter_items
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     convert_content_list_to_str,
 )
@@ -78,7 +79,15 @@ def convert_messages_to_prompt(messages: list[AllMessageValues]) -> str:
     return "\n".join(conversation_parts)
 
 
-def extract_text_from_a2a_message(message: dict[str, Any], depth: int = 0, max_depth: int = 10) -> str:
+def _join_with_spaces(texts: Sequence[object]) -> str:
+    strings: Final = [text for text in texts if isinstance(text, str)]
+    if len(strings) == len(texts):
+        return " ".join(strings)
+    first_bad: Final = next(position for position, text in enumerate(texts) if not isinstance(text, str))
+    raise TypeError(f"sequence item {first_bad}: expected str instance, {type(texts[first_bad]).__name__} found")
+
+
+def extract_text_from_a2a_message(message: object, depth: int = 0, max_depth: int = 10) -> str:
     """
     Extract text content from A2A message parts.
 
@@ -93,19 +102,20 @@ def extract_text_from_a2a_message(message: dict[str, Any], depth: int = 0, max_d
     if message is None or depth >= max_depth:
         return ""
 
-    parts: Final = message.get("parts", [])
-    text_parts: Final[list[str]] = []
+    parts: Final = iter_items(decoded_json_object(message).get("parts", []))
+    text_parts: Final[list[object]] = []
 
     for part in parts:
-        if part.get("kind") == "text":
-            text_parts.append(part.get("text", ""))
+        part_fields = decoded_json_object(part)
+        if part_fields.get("kind") == "text":
+            text_parts.append(part_fields.get("text", ""))
         # Handle nested parts if they exist
-        elif "parts" in part:
-            nested_text = extract_text_from_a2a_message(part, depth + 1, max_depth)
+        elif "parts" in part_fields:
+            nested_text = extract_text_from_a2a_message(part_fields, depth + 1, max_depth)
             if nested_text:
                 text_parts.append(nested_text)
 
-    return " ".join(text_parts)
+    return _join_with_spaces(text_parts)
 
 
 def a2a_task_state(result: Mapping[str, object]) -> str | None:
@@ -116,6 +126,25 @@ def a2a_task_state(result: Mapping[str, object]) -> str | None:
         return None
     state: Final = status.get("state")
     return state if isinstance(state, str) else None
+
+
+def require_a2a_task_state(
+    result: Mapping[str, object],
+    *,
+    status_code: int,
+    headers: Mapping[str, str] | None = None,
+) -> str | None:
+    """Return task state when ``kind`` is ``task``; raise if state is absent or invalid."""
+    if result.get("kind") != "task":
+        return None
+    state: Final[str | None] = a2a_task_state(result)
+    if state is None:
+        raise A2AError(
+            status_code=status_code,
+            message="A2A task response missing valid status.state",
+            headers=dict(headers) if headers else {},
+        )
+    return state
 
 
 def _extract_text_from_a2a_result(result: Mapping[str, object], max_depth: int = 10) -> str:
@@ -206,7 +235,10 @@ def _handle_a2a_poll_data(poll_data: Mapping[str, object], status_code: int) -> 
         raise A2AError(status_code=status_code, message=f"A2A error: {message}")
 
     result: Final = poll_data.get("result", {})
-    state: Final = a2a_task_state(result) if isinstance(result, dict) else None
+    if isinstance(result, dict) and result.get("kind") == "task":
+        state: Final[str | None] = require_a2a_task_state(result, status_code=status_code)
+    else:
+        state = a2a_task_state(result) if isinstance(result, dict) else None
     if state == A2A_TASK_STATE_COMPLETED:
         return poll_data
     if state in A2A_TASK_FAILURE_STATES:

@@ -27,7 +27,7 @@ from litellm.caching.llm_caching_handler import LLMClientCache
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy import proxy_server
 from litellm.proxy._types import LiteLLM_ProxyModelTable, UserAPIKeyAuth
-from litellm.utils import _invalidate_model_cost_lowercase_map
+from litellm.litellm_core_utils.model_cost_table import publish
 
 from .conftest import normalize, route_entry_points_to_stubs  # type: ignore[import-not-found]
 
@@ -76,7 +76,7 @@ async def test_discovery_preserves_model_info_fallbacks(
             "fallback-deployment": {"litellm_provider": "openai", "mode": "chat"},
         },
     )
-    _invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
     monkeypatch.setattr(proxy_server, "llm_router", router)
     handler: Final = AsyncHTTPHandler()
     await handler.client.aclose()
@@ -117,7 +117,7 @@ async def test_discovery_preserves_model_info_fallbacks(
         assert info["input_cost_per_token"] == builtin["input_cost_per_token"]
         assert info["output_cost_per_token"] == builtin["output_cost_per_token"]
         assert info["mode"] is None
-    _invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
 
 
 async def test_upstream_limits_reach_model_info_routes(
@@ -163,7 +163,7 @@ async def test_upstream_limits_reach_model_info_routes(
             group_response: Final = client.get("/model_group/info")
             assert group_response.status_code == 200, group_response.text
             assert group_response.json()["data"][0]["max_input_tokens"] == 4096
-    _invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
 
 
 # ---------------------------------------------------------------------------
@@ -582,7 +582,7 @@ def test_model_info_id_lookup_reports_the_same_cost_as_the_list(
         "vllm-priced-id": (declared["input_cost_per_token"], declared["output_cost_per_token"]),
     }
     assert by_id == listed
-    _invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
 
 
 def _discoverable_models(monkeypatch: pytest.MonkeyPatch, models: Mapping[str, list[str]]) -> None:
@@ -707,7 +707,7 @@ def test_model_info_prices_expanded_wildcard_rows_as_the_model_their_calls_route
         },
     }
     monkeypatch.setattr(litellm, "model_cost", {**litellm.model_cost, **catalog})
-    _invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
     router: Final = litellm.Router(
         model_list=[
             {
@@ -763,7 +763,7 @@ def test_model_info_prices_expanded_wildcard_rows_as_the_model_their_calls_route
             for model_name, call in calls.items()
         }
     )
-    _invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
 
 
 def test_model_info_prices_a_wildcard_row_as_the_other_deployment_its_calls_reach(
@@ -815,7 +815,7 @@ def test_model_info_prices_a_wildcard_row_as_the_other_deployment_its_calls_reac
         },
     }
     monkeypatch.setattr(litellm, "model_cost", {**litellm.model_cost, **catalog})
-    _invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
     router: Final = litellm.Router(
         model_list=[
             {
@@ -890,7 +890,7 @@ def test_model_info_prices_a_wildcard_row_as_the_other_deployment_its_calls_reac
             for key, (input_cost, output_cost) in listed.items()
         }
     )
-    _invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
 
 
 def _catch_all_and_shadowed_wildcard_router(monkeypatch: pytest.MonkeyPatch) -> litellm.Router:
@@ -928,7 +928,7 @@ def _catch_all_and_shadowed_wildcard_router(monkeypatch: pytest.MonkeyPatch) -> 
         },
     }
     monkeypatch.setattr(litellm, "model_cost", {**litellm.model_cost, **catalog})
-    _invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
     router: Final = litellm.Router(
         model_list=[
             {
@@ -997,7 +997,7 @@ def test_model_info_prices_a_wildcard_row_aliased_to_a_sibling_name_as_the_alias
         shown["input_cost_per_token"] * call.usage.prompt_tokens
         + shown["output_cost_per_token"] * call.usage.completion_tokens
     )
-    _invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
 
 
 def test_model_info_prices_a_wildcard_row_the_proxy_renames_as_the_model_its_calls_reach(
@@ -1033,7 +1033,7 @@ def test_model_info_prices_a_wildcard_row_the_proxy_renames_as_the_model_its_cal
         "my-fw/acme-pro": (5e-08, 6e-08, "fireworks_ai"),
         "gpt-5.6-acme": (7e-07, 8e-07, "deepseek"),
     }
-    _invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
 
 
 def test_model_info_prices_a_wildcard_row_whose_team_alias_targets_a_deleted_team_deployment(
@@ -1071,7 +1071,7 @@ def test_model_info_prices_a_wildcard_row_whose_team_alias_targets_a_deleted_tea
         5e-08,
         "fireworks_ai",
     )
-    _invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
 
 
 def _fireworks_wildcard_rows(client: TestClient) -> dict[str, dict[str, object]]:
@@ -1122,7 +1122,7 @@ def test_model_info_prices_a_wildcard_row_as_the_deployment_the_callers_team_pub
 
     assert team_rows["my-fw/acme-mini"].get("input_cost_per_token") == 7e-07
     assert other_rows["my-fw/acme-mini"].get("input_cost_per_token") == 5e-08
-    _invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
 
 
 def _call_cost_at_row_rates(call: litellm.ModelResponse, row: Mapping[str, float]) -> float:
@@ -1165,7 +1165,7 @@ def test_model_info_keeps_the_price_and_limits_of_a_row_another_wildcard_serves(
         "mode": "chat",
     }
     monkeypatch.setattr(litellm, "model_cost", {**litellm.model_cost, "gpt-5.6-acme": entry})
-    _invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
     router: Final = litellm.Router(
         model_list=[
             {
@@ -1194,7 +1194,7 @@ def test_model_info_keeps_the_price_and_limits_of_a_row_another_wildcard_serves(
         model=rows[0]["model_name"], messages=[{"role": "user", "content": "hi"}], mock_response="hello there"
     )
     assert call._hidden_params["response_cost"] == pytest.approx(_call_cost_at_row_rates(call, rows[0]["model_info"]))
-    _invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
 
 
 def test_model_info_prices_an_aliased_wildcard_row_as_the_model_the_other_wildcard_bills(
@@ -1220,7 +1220,7 @@ def test_model_info_prices_an_aliased_wildcard_row_as_the_model_the_other_wildca
         },
     }
     monkeypatch.setattr(litellm, "model_cost", {**litellm.model_cost, **catalog})
-    _invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
     router: Final = litellm.Router(
         model_list=[
             {
@@ -1247,7 +1247,7 @@ def test_model_info_prices_an_aliased_wildcard_row_as_the_model_the_other_wildca
     )
     assert aliased["model_info"]["input_cost_per_token"] == 3e-08
     assert call._hidden_params["response_cost"] == pytest.approx(_call_cost_at_row_rates(call, aliased["model_info"]))
-    _invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
 
 
 def test_model_info_keeps_the_price_of_a_wildcard_row_whose_listed_name_no_route_serves(
@@ -1265,7 +1265,7 @@ def test_model_info_keeps_the_price_of_a_wildcard_row_whose_listed_name_no_route
         "mode": "chat",
     }
     monkeypatch.setattr(litellm, "model_cost", {**litellm.model_cost, "gpt-5.6-acme": entry})
-    _invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
     router: Final = litellm.Router(
         model_list=[
             {
@@ -1287,7 +1287,7 @@ def test_model_info_keeps_the_price_of_a_wildcard_row_whose_listed_name_no_route
     assert {
         row["model_info"].get("input_cost_per_token") for row in response.json()["data"] if "*" not in row["model_name"]
     } == {3e-07}
-    _invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
 
 
 @pytest.mark.parametrize(
@@ -1335,7 +1335,7 @@ def test_model_info_shows_no_wildcard_price_when_the_cost_map_cannot_say_what_ca
         },
     }
     monkeypatch.setattr(litellm, "model_cost", {**litellm.model_cost, **catalog})
-    _invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
     router: Final = litellm.Router(
         model_list=[_FIREWORKS_WILDCARD, *({"model_name": "acme-target", **target} for target in targets)],
         model_group_alias={"my-fw/acme-mini": "acme-target"},
@@ -1349,7 +1349,7 @@ def test_model_info_shows_no_wildcard_price_when_the_cost_map_cannot_say_what_ca
         rows: Final = _fireworks_wildcard_rows(client)
 
     assert rows["my-fw/acme-mini"].get("input_cost_per_token") is None
-    _invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
 
 
 def test_model_info_prices_a_wildcard_row_aliased_to_an_aliased_group_as_the_group_its_calls_reach(
@@ -1375,7 +1375,7 @@ def test_model_info_prices_a_wildcard_row_aliased_to_an_aliased_group_as_the_gro
         },
     }
     monkeypatch.setattr(litellm, "model_cost", {**litellm.model_cost, **catalog})
-    _invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
     router: Final = litellm.Router(
         model_list=[
             _FIREWORKS_WILDCARD,
@@ -1405,7 +1405,7 @@ def test_model_info_prices_a_wildcard_row_aliased_to_an_aliased_group_as_the_gro
     )
     assert rows["my-fw/acme-mini"].get("input_cost_per_token") is not None
     assert call._hidden_params["response_cost"] == pytest.approx(_call_cost_at_row_rates(call, rows["my-fw/acme-mini"]))
-    _invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
 
 
 def test_model_info_prices_a_wildcard_row_aliased_to_another_deployment_as_that_deployment_not_the_wildcards_base_model(
@@ -1431,7 +1431,7 @@ def test_model_info_prices_a_wildcard_row_aliased_to_another_deployment_as_that_
         },
     }
     monkeypatch.setattr(litellm, "model_cost", {**litellm.model_cost, **catalog})
-    _invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
     router: Final = litellm.Router(
         model_list=[
             {**_FIREWORKS_WILDCARD, "model_info": {"id": "fireworks-wildcard", "base_model": "deepseek/acme-base"}},
@@ -1456,7 +1456,7 @@ def test_model_info_prices_a_wildcard_row_aliased_to_another_deployment_as_that_
     )
     assert rows["my-fw/acme-mini"].get("input_cost_per_token") is not None
     assert call._hidden_params["response_cost"] == pytest.approx(_call_cost_at_row_rates(call, rows["my-fw/acme-mini"]))
-    _invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
 
 
 def test_saving_a_replayed_model_info_wildcard_row_stores_none_of_its_shown_metadata(
@@ -1506,7 +1506,7 @@ def test_saving_a_replayed_model_info_wildcard_row_stores_none_of_its_shown_meta
     ]
     assert {name: info["access_groups"] for name, info in stored.items()} == dict.fromkeys(rows, ["prod"])
     assert {name: shown_metadata[name] & set(info) for name, info in stored.items()} == dict.fromkeys(rows, set())
-    _invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
 
 
 # ---------------------------------------------------------------------------

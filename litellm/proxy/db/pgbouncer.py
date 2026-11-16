@@ -140,19 +140,27 @@ def _userlist_quote(value: str) -> str:
     return '"' + value.replace('"', '""') + '"'
 
 
-def _option_settings(tokens: Sequence[str]) -> tuple[str, ...] | None:
-    """The ``name=value`` settings in a libpq ``options`` string, or None if it holds anything else.
-
-    Accepts ``-c name=value``, ``-cname=value`` and ``--name=value``; a
-    detached ``-c`` is folded into the token that follows it first.
-    """
-    folded: Final = tuple(
+def fold_libpq_option_tokens(tokens: Sequence[str]) -> tuple[str, ...]:
+    """The tokens of a libpq ``options`` string with each detached ``-c`` folded into the token after it."""
+    return tuple(
         f"-c{tokens[index + 1]}" if token == "-c" and index + 1 < len(tokens) else token
         for index, token in enumerate(tokens)
         if index == 0 or tokens[index - 1] != "-c"
     )
-    settings: Final = tuple(token[2:] for token in folded if token.startswith(("-c", "--")) and "=" in token[2:])
-    return settings if len(settings) == len(folded) else None
+
+
+def libpq_option_setting(token: str) -> str | None:
+    """The ``name=value`` setting a folded ``-cname=value`` or ``--name=value`` token carries, or None."""
+    return token[2:] if token.startswith(("-c", "--")) and "=" in token[2:] else None
+
+
+def libpq_option_settings(tokens: Sequence[str]) -> tuple[str, ...] | None:
+    """The ``name=value`` settings in a libpq ``options`` string, or None if it holds anything else.
+
+    Accepts ``-c name=value``, ``-cname=value`` and ``--name=value``.
+    """
+    settings: Final = tuple(libpq_option_setting(token) for token in fold_libpq_option_tokens(tokens))
+    return None if None in settings else tuple(setting for setting in settings if setting is not None)
 
 
 def _connect_query(options: str) -> str | PgBouncerError:
@@ -163,7 +171,7 @@ def _connect_query(options: str) -> str | PgBouncerError:
     the settings are applied to each new server connection instead. Every
     client shares them, which is what the single ``DATABASE_URL`` gave anyway.
     """
-    settings: Final = _option_settings(tuple(shlex.split(options)))
+    settings: Final = libpq_option_settings(tuple(shlex.split(options)))
     if settings is None:
         return PgBouncerError(f"cannot translate the DATABASE_URL options {options!r} into PgBouncer settings")
     return "; ".join(

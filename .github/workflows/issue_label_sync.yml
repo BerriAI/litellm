@@ -5,7 +5,7 @@ on:
     branches: [main]
     paths:
       - .github/issue-labels.json
-      - scripts/sync-issue-labels.ts
+      - litellm/scripts/sync-issue-labels.ts
   workflow_dispatch:
     inputs:
       dry_run:
@@ -16,9 +16,9 @@ on:
     paths:
       - .github/workflows/issue_label_sync.yml
       - .github/issue-labels.json
-      - scripts/sync-issue-labels.ts
-      - scripts/sync-issue-labels.test.ts
-      - scripts/issue-labels.ts
+      - litellm/scripts/sync-issue-labels.ts
+      - litellm/scripts/sync-issue-labels.test.ts
+      - litellm/scripts/issue-labels.ts
 
 permissions: {}
 
@@ -41,7 +41,7 @@ jobs:
           bun-version: "1.4.0"
 
       - name: Test the sync
-        run: bun test scripts/sync-issue-labels.test.ts
+        run: bun test litellm/scripts/sync-issue-labels.test.ts
 
   sync-issue-labels:
     if: github.event_name != 'pull_request' && github.repository == 'BerriAI/litellm'
@@ -56,7 +56,7 @@ jobs:
         with:
           sparse-checkout: |
             .github
-            scripts
+            litellm/scripts
           persist-credentials: false
 
       - name: Setup Bun
@@ -66,7 +66,7 @@ jobs:
           bun-version: "1.4.0"
 
       - name: Create or recolour every label in .github/issue-labels.json
-        run: bun run scripts/sync-issue-labels.ts
+        run: bun run litellm/scripts/sync-issue-labels.ts
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run == true }}

@@ -363,3 +363,25 @@ def test_transform_response_surfaces_failed_task_state():
                 "result": {"kind": "task", "id": "t1", "status": {"state": "failed"}},
             }
         )
+
+
+def test_transform_response_rejects_task_missing_status_state():
+    with pytest.raises(A2AError, match="missing valid status.state"):
+        _transform(
+            {
+                "jsonrpc": "2.0",
+                "id": "req1",
+                "result": {"kind": "task", "id": "t1", "status": {}},
+            }
+        )
+
+
+def test_transform_response_rejects_task_without_status():
+    with pytest.raises(A2AError, match="missing valid status.state"):
+        _transform(
+            {
+                "jsonrpc": "2.0",
+                "id": "req1",
+                "result": {"kind": "task", "id": "t1"},
+            }
+        )

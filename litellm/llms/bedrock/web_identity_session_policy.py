@@ -264,7 +264,24 @@ SAGEMAKER_SESSION_POLICY: Final = _policy(
 
 POLLY_SESSION_POLICY: Final = _policy(_allow("PollyLiteLLM", ("polly:SynthesizeSpeech",)))
 
-OPENSEARCH_SESSION_POLICY: Final = _policy(_allow("OpenSearchLiteLLM", ("es:ESHttpPost", "aoss:APIAccessAll")))
+OPENSEARCH_SESSION_POLICY: Final = _policy(
+    _allow("OpenSearchLiteLLM", ("es:ESHttpGet", "es:ESHttpPost", "aoss:APIAccessAll"))
+)
+
+OPENSEARCH_INDEX_SESSION_POLICY: Final = _policy(
+    _allow(
+        "OpenSearchIndexLiteLLM",
+        (
+            "es:ESHttpGet",
+            "es:ESHttpHead",
+            "es:ESHttpPost",
+            "es:ESHttpPut",
+            "es:ESHttpDelete",
+            "es:ESHttpPatch",
+            "aoss:APIAccessAll",
+        ),
+    ),
+)
 
 S3_VECTORS_QUERY_SESSION_POLICY: Final = _policy(
     _allow("S3VectorsLiteLLM", ("s3vectors:QueryVectors", "s3vectors:GetVectors")),

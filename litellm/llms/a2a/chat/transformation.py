@@ -23,6 +23,7 @@ from ..common_utils import (
     A2AError,
     a2a_hop_uses_entra,
     a2a_task_state,
+    require_a2a_task_state,
     async_poll_a2a_task_completion,
     convert_messages_to_prompt,
     extract_text_from_a2a_response,
@@ -117,7 +118,11 @@ class A2AConfig(BaseConfig):
         validated: Final = _JSON_OBJECT.validate_python(response_json)
         result: Final = validated.get("result")
         if isinstance(result, dict):
-            state: Final[str | None] = a2a_task_state(result)
+            state: Final[str | None] = require_a2a_task_state(
+                result,
+                status_code=raw_response.status_code,
+                headers=dict(raw_response.headers),
+            )
             if state in A2A_TASK_FAILURE_STATES:
                 raise A2AError(
                     status_code=raw_response.status_code,
@@ -184,7 +189,11 @@ class A2AConfig(BaseConfig):
         validated: Final = _JSON_OBJECT.validate_python(response_json)
         result: Final = validated.get("result")
         if isinstance(result, dict):
-            state: Final[str | None] = a2a_task_state(result)
+            state: Final[str | None] = require_a2a_task_state(
+                result,
+                status_code=raw_response.status_code,
+                headers=dict(raw_response.headers),
+            )
             if state in A2A_TASK_FAILURE_STATES:
                 raise A2AError(
                     status_code=raw_response.status_code,

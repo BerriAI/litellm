@@ -563,8 +563,12 @@ async def test_native_messages_stream_logging_fires_after_guardrail_end_of_strea
         request_data=request_data,
     ):
         pass
-    await asyncio.sleep(0)
-    await asyncio.sleep(0)
+
+    async def logging_dispatched() -> None:
+        while len(events) < 2:
+            await asyncio.sleep(0.01)
+
+    await asyncio.wait_for(logging_dispatched(), timeout=5)
 
     assert events == ["scan_appended", ("logging_dispatched", "post_call_entry_visible", True)]
 

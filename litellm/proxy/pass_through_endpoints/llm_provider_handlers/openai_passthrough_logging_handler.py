@@ -124,6 +124,10 @@ def _is_finished_background_response(response_body: Mapping[str, object]) -> boo
     return is_background_response(response_body) and response_body.get("usage") is not None
 
 
+def _settles_background_response(terminal_response: ResponsesAPIResponse) -> bool:
+    return is_background_response(terminal_response) and terminal_response.usage is not None
+
+
 def _responses_sub_route(path: str) -> tuple[str, ...] | None:
     segments: Final = path.rstrip("/").split("/")
     anchor: Final = max((index for index, segment in enumerate(segments) if segment == "responses"), default=None)
@@ -263,7 +267,7 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
 
     @staticmethod
     def openai_responses_call_billing(
-        method: str, url_route: str, response_body: Mapping[str, object]
+        method: str, url_route: str, response_body: Mapping[str, object], settled_before: bool = False
     ) -> ResponsesCallBilling:
         if not OpenAIPassthroughLoggingHandler.is_openai_responses_route(url_route):
             return "unbilled"
@@ -271,9 +275,34 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
             case ("POST", ("input_tokens",)) | ("GET", (_, "input_items")) | ("DELETE", (_,)):
                 return "unbilled"
             case ("GET", (_,)) | ("POST", (_, "cancel")):
-                return "background_settlement" if _is_finished_background_response(response_body) else "unbilled"
+                settles: Final = not settled_before and _is_finished_background_response(response_body)
+                return "background_settlement" if settles else "unbilled"
             case _:
                 return "billed"
+
+    @staticmethod
+    def background_response_settled_by_call(
+        method: str, url_route: str, response_body: Mapping[str, object]
+    ) -> str | None:
+        response_id: Final = response_body.get("id")
+        billing: Final = OpenAIPassthroughLoggingHandler.openai_responses_call_billing(method, url_route, response_body)
+        return response_id if billing == "background_settlement" and isinstance(response_id, str) else None
+
+    @staticmethod
+    def stream_may_settle_background_response(url_route: str, request_body: Mapping[str, object]) -> bool:
+        sub_route: Final = _responses_sub_route(urlparse(url_route).path)
+        creates_in_background: Final = sub_route == () and request_body.get("background") is True
+        resumes_a_response: Final = sub_route is not None and len(sub_route) == 1
+        return OpenAIPassthroughLoggingHandler.is_openai_responses_route(url_route) and (
+            creates_in_background or resumes_a_response
+        )
+
+    @staticmethod
+    def background_response_settled_by_stream(all_chunks: Sequence[str]) -> str | None:
+        terminal_response: Final = OpenAIResponsesAPIConfig.parse_terminal_response_from_stream_chunks(all_chunks)
+        if terminal_response is None or not _settles_background_response(terminal_response):
+            return None
+        return terminal_response.id
 
     @staticmethod
     def is_openai_agents_route(url_route: str) -> bool:
@@ -483,6 +512,7 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
         end_time: datetime,
         cache_hit: bool,
         request_body: dict,
+        background_response_settled_before: bool = False,
         **kwargs,
     ) -> PassThroughEndpointLoggingTypedDict:
         """
@@ -494,7 +524,7 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
         is_image_generation: Final = OpenAIPassthroughLoggingHandler.is_openai_image_generation_route(url_route)
         is_image_editing: Final = OpenAIPassthroughLoggingHandler.is_openai_image_editing_route(url_route)
         responses_billing: Final = OpenAIPassthroughLoggingHandler.openai_responses_call_billing(
-            httpx_response.request.method, url_route, response_body
+            httpx_response.request.method, url_route, response_body, background_response_settled_before
         )
         is_responses: Final = responses_billing != "unbilled"
         is_decisions: Final = (
@@ -801,6 +831,7 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
         start_time: datetime,
         all_chunks: list[str],
         end_time: datetime,
+        background_response_settled_before: bool = False,
     ) -> PassThroughEndpointLoggingTypedDict:
         """
         Handle logging for collected OpenAI streaming chunks with cost tracking.
@@ -811,10 +842,15 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
             )
         try:
             is_responses: Final = OpenAIPassthroughLoggingHandler.is_openai_responses_route(url_route)
-            terminal_response: Final = (
+            parsed_terminal_response: Final = (
                 OpenAIResponsesAPIConfig.parse_terminal_response_from_stream_chunks(all_chunks=all_chunks)
                 if is_responses
                 else None
+            )
+            terminal_response: Final = (
+                parsed_terminal_response.model_copy(update={"usage": None})
+                if background_response_settled_before and parsed_terminal_response is not None
+                else parsed_terminal_response
             )
             requested_model: Final[object] = request_body.get("model")
             model: Final = (
@@ -846,7 +882,9 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
             custom_llm_provider: Final = litellm_logging_obj.model_call_details.get("custom_llm_provider", "openai")
             # Calculate cost using LiteLLM's cost calculator
             response_cost: Final = (
-                litellm.completion_cost(
+                0.0
+                if background_response_settled_before
+                else litellm.completion_cost(
                     completion_response=complete_response,
                     model=model,
                     custom_llm_provider=custom_llm_provider,
@@ -862,9 +900,9 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
 
             settles_background_response: Final = (
                 BackgroundResponseSettlement.SETTLES
-                if terminal_response is not None
-                and is_background_response(terminal_response)
-                and terminal_response.usage is not None
+                if not background_response_settled_before
+                and terminal_response is not None
+                and _settles_background_response(terminal_response)
                 else None
             )
 

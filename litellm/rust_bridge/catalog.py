@@ -28,18 +28,23 @@ class Route(str, Enum):
 class Target(str, Enum):
     CHAT_COMPLETIONS = "chat_completions"
     MESSAGES = "messages"
+    MESSAGES_PASSTHROUGH = "messages_passthrough"
+    """A deployment's own /v1/messages, which Python's OpenAI-compatible config forwards untranslated."""
+    BEDROCK_INVOKE = "bedrock_invoke"
+    """Claude on Bedrock InvokeModel, an Anthropic Messages body behind the InvokeModel API."""
     RESPONSES = "responses"
 
 
+NATIVE_MESSAGES_TARGETS: Final = frozenset({Target.MESSAGES, Target.MESSAGES_PASSTHROUGH, Target.BEDROCK_INVOKE})
+
+
 class Feature(str, Enum):
-    SAFEGUARDS_CLASSIFIER = "safeguards_classifier"
-    """A non-Claude model with dangerous_tool_use safeguards, which the proxy classifier answers."""
     MOCK_RESPONSE = "mock_response"
     """mock_response short-circuits before any provider call."""
     PROXY_MCP_TOOLS = "proxy_mcp_tools"
     """litellm_proxy MCP tools that Python expands and may auto-execute."""
     CALLER_CLIENT = "caller_client"
-    """A caller-supplied HTTP client or shared session that Python sends through."""
+    """A caller-supplied HTTP client that Python sends through."""
     TIMEOUT_VARIANTS = "timeout_variants"
     """request_timeout, stream_timeout or httpx.Timeout phases beyond a plain timeout."""
     DROP_PARAMS = "drop_params"
@@ -66,14 +71,6 @@ class Feature(str, Enum):
     """Extra body fields that Python transforms and merges into the provider request."""
     PROVIDER_AFFINITY = "provider_affinity"
     """A provider affinity header that Python validates and populates from the session id."""
-    FOUNDRY_BETA_ROW = "foundry_beta_row"
-    """A Foundry api_base, where Python drops the anthropic-beta values Foundry rejects."""
-    PRE_REQUEST_HOOK = "pre_request_hook"
-    """A logger overriding async_pre_request_hook, which may rewrite the request."""
-    WEBSEARCH_INTERCEPTION = "websearch_interception"
-    """A WebSearchInterceptionLogger that may answer without calling the provider."""
-    MESSAGES_INTERCEPTOR = "messages_interceptor"
-    """A registered MessagesInterceptor that takes over the call."""
     AGENTIC_LOOP_HOOK = "agentic_loop_hook"
     """A logger overriding async_should_run_agentic_loop, which may run follow-up calls."""
     RESPONSE_CACHE = "response_cache"
@@ -94,14 +91,6 @@ class Feature(str, Enum):
     """No static key, so Python mints a workload identity federation token."""
     CACHE_CONTROL_INJECTION = "cache_control_injection"
     """Prompt caching injection that Python applies to messages and system."""
-    STREAM_COST_INJECTION = "stream_cost_injection"
-    """litellm.include_cost_in_streaming_usage or the x-litellm-include-cost-in-streaming-usage header, where Python adds cost to streamed usage."""
-    THINKING_SIGNATURE_RETRY = "thinking_signature_retry"
-    """Replayed thinking blocks, which Python strips and retries once if Anthropic rejects their signature."""
-    TOOL_CUSTOM_FIELD = "tool_custom_field"
-    """Tools carrying a non-spec custom object, which Python drops or hoists for the provider."""
-    STRICT_TOOLS_RETRY = "strict_tools_retry"
-    """Strict tools under drop_params, which Python sends again without strict if Claude rejects their limits."""
     CLIENT_HEADERS = "client_headers"
     """Proxy-forwarded headers that Python merges into extra_headers."""
     DEPLOYMENT_HOOK = "deployment_hook"
@@ -172,21 +161,14 @@ CHAT_PYTHON_FEATURES: Final = COMMON_PYTHON_FEATURES | {
     Feature.MODEL_ALIAS_MAP,
 }
 
-MESSAGES_PYTHON_FEATURES: Final = COMMON_PYTHON_FEATURES | {
-    Feature.PROVIDER_AFFINITY,
-    Feature.FOUNDRY_BETA_ROW,
-    Feature.SAFEGUARDS_CLASSIFIER,
-    Feature.PRE_REQUEST_HOOK,
-    Feature.WEBSEARCH_INTERCEPTION,
-    Feature.MESSAGES_INTERCEPTOR,
-    Feature.RESPONSE_CACHE,
-    Feature.MODIFY_PARAMS,
-    Feature.WORKLOAD_IDENTITY,
-    Feature.CACHE_CONTROL_INJECTION,
-    Feature.STREAM_COST_INJECTION,
-    Feature.THINKING_SIGNATURE_RETRY,
-    Feature.TOOL_CUSTOM_FIELD,
-    Feature.STRICT_TOOLS_RETRY,
+MESSAGES_PYTHON_FEATURES: Final = COMMON_PYTHON_FEATURES - {
+    Feature.TIMEOUT_VARIANTS,
+    Feature.LATEST_ALIAS,
+    Feature.MOCK_RESPONSE,
+    Feature.CALLER_CLIENT,
+    Feature.TLS_POLICY,
+    Feature.AGENTIC_LOOP_HOOK,
+    Feature.PROXY_MCP_TOOLS,
 }
 
 RESPONSES_PYTHON_FEATURES: Final = COMMON_PYTHON_FEATURES | {
@@ -218,9 +200,19 @@ RULES: Final[Rules] = (
     RouteRule(Route.CHAT_COMPLETIONS, Rollout.PYTHON_ONLY),
     RouteRule(Route.EMBEDDINGS, Rollout.PYTHON_ONLY),
     RouteRule(Route.OCR, Rollout.RUST_REQUIRED),
-    RouteRule(Route.MESSAGES, Rollout.PYTHON_ONLY, targets=frozenset({Target.CHAT_COMPLETIONS, Target.RESPONSES})),
+    RouteRule(
+        Route.MESSAGES,
+        Rollout.PYTHON_ONLY,
+        targets=frozenset({Target.CHAT_COMPLETIONS, Target.RESPONSES, Target.MESSAGES_PASSTHROUGH}),
+    ),
     RouteRule(Route.MESSAGES, Rollout.PYTHON_ONLY, features=MESSAGES_PYTHON_FEATURES),
-    RouteRule(Route.MESSAGES, Rollout.RUST_OPT_IN, providers=frozenset({"anthropic"})),
+    RouteRule(Route.MESSAGES, Rollout.RUST_REQUIRED, providers=frozenset({"anthropic", "azure_ai"})),
+    RouteRule(
+        Route.MESSAGES,
+        Rollout.RUST_REQUIRED,
+        providers=frozenset({"bedrock"}),
+        targets=frozenset({Target.BEDROCK_INVOKE}),
+    ),
     RouteRule(Route.MESSAGES, Rollout.PYTHON_ONLY),
     RouteRule(Route.RESPONSES, Rollout.PYTHON_ONLY, features=RESPONSES_PYTHON_FEATURES),
     RouteRule(Route.RESPONSES, Rollout.PYTHON_ONLY),

@@ -1,14 +1,15 @@
 import asyncio
 from datetime import datetime, timedelta
 from typing import Final
-from unittest.mock import AsyncMock
 
 import pytest
 
 from litellm import Router, token_counter
-from litellm.caching.dual_cache import DualCache
+from litellm.redis.stores.router_usage import UsageCounter
 from litellm.router_strategy.lowest_tpm_rpm_v2 import LowestTPMLoggingHandler_v2, PrefetchedUsage
 from litellm.types.router import DeploymentTypedDict, LiteLLMParamsTypedDict, RouterErrors
+from litellm.utils import get_utc_datetime
+from tests.unit.redis.stores.router_usage_double import FakeUsageHandle, usage_store
 
 MODEL_GROUP: Final = "lowest-tpm-router"
 HIGH_USAGE_DEPLOYMENT_ID: Final = "highest-usage"
@@ -87,29 +88,29 @@ def test_usage_based_routing_v1_skips_a_deployment_whose_tpm_limit_is_used_up() 
 
 @pytest.mark.asyncio
 async def test_v2_async_selection_uses_prefetched_counters_only_when_they_cover_its_keys():
-    router_cache = DualCache()
-    router_cache.async_batch_get_cache = AsyncMock(return_value=[100, 10, None, None])  # type: ignore[method-assign]
-    strategy = LowestTPMLoggingHandler_v2(router_cache=router_cache)
     deployments = [
         {"model_name": "g", "litellm_params": {"model": "m"}, "model_info": {"id": "a"}},
         {"model_name": "g", "litellm_params": {"model": "m"}, "model_info": {"id": "b"}},
     ]
-    tpm_keys, rpm_keys = strategy.usage_counter_keys(deployments)
-    keys = tpm_keys + rpm_keys
+    minute = get_utc_datetime().strftime("%H-%M")
+    tpm_counters = tuple(UsageCounter.for_deployment(d, "m", "tpm", minute) for d in ("a", "b"))
+    counters = tpm_counters + tuple(UsageCounter.for_deployment(d, "m", "rpm", minute) for d in ("a", "b"))
+    handle = FakeUsageHandle(redis=dict(zip(tpm_counters, [100, 10])))
+    strategy = LowestTPMLoggingHandler_v2(usage=usage_store(handle))
 
-    covering = PrefetchedUsage(keys=frozenset(keys), values=dict(zip(keys, [10, 100, None, None])))
+    covering = PrefetchedUsage(counters=frozenset(counters), values=dict(zip(counters, [10, 100, None, None])))
     with PrefetchedUsage.scoped(covering):
         chosen: Final = await strategy.async_get_available_deployments(model_group="g", healthy_deployments=deployments)
     assert chosen["model_info"]["id"] == "a", "the prefetched counters say a is the lowest"
-    router_cache.async_batch_get_cache.assert_not_awaited()
+    assert handle.calls == []
 
-    stale = PrefetchedUsage(keys=frozenset(keys[:1]), values={keys[0]: 10})
+    stale = PrefetchedUsage(counters=frozenset(counters[:1]), values={counters[0]: 10})
     with PrefetchedUsage.scoped(stale):
         chosen_stale: Final = await strategy.async_get_available_deployments(
             model_group="g", healthy_deployments=deployments
         )
     assert chosen_stale["model_info"]["id"] == "b", "counters that do not cover this minute's keys are read again"
-    router_cache.async_batch_get_cache.assert_awaited_once_with(keys=keys)
+    assert handle.calls == [("get_many", counters)]
 
 
 @pytest.mark.asyncio
@@ -133,11 +134,9 @@ async def test_v2_subclass_overriding_async_get_available_deployments_with_the_o
         model_list=[_deployment(HIGH_USAGE_DEPLOYMENT_ID), _deployment(LOW_USAGE_DEPLOYMENT_ID)],
         routing_strategy="usage-based-routing-v2",
     )
-    router.lowesttpm_logger_v2 = OldSignatureV2(router_cache=router.cache, routing_args={})
+    router.lowesttpm_logger_v2 = OldSignatureV2(usage=router.lowesttpm_logger_v2.usage, routing_args={})
 
-    response: Final = await router.acompletion(
-        model=MODEL_GROUP, messages=[{"role": "user", "content": "x"}]
-    )
+    response: Final = await router.acompletion(model=MODEL_GROUP, messages=[{"role": "user", "content": "x"}])
 
     assert response.choices[0].message.content in {
         f"from {HIGH_USAGE_DEPLOYMENT_ID}",
