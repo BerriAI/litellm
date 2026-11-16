@@ -1,5 +1,5 @@
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from typing import Final, cast
 from unittest.mock import patch
@@ -22,6 +22,13 @@ from litellm.proxy.guardrails.guardrail_hooks.crowdstrike_aidr.crowdstrike_aidr 
 )
 from litellm.proxy.guardrails.init_guardrails import init_guardrails_v2
 from litellm.types.guardrails import Guardrail, GuardrailEventHooks, LitellmParams
+from litellm.types.llms.openai import (
+    AllMessageValues,
+    ChatCompletionFileObject,
+    ChatCompletionFileObjectFile,
+    ChatCompletionTextObject,
+    ChatCompletionUserMessage,
+)
 from litellm.types.utils import Delta, GenericGuardrailAPIInputs, ModelResponse, ModelResponseStream
 
 
@@ -235,6 +242,60 @@ async def test_apply_guardrail_request_transformed(
     assert called_kwargs["json"]["guard_input"]["messages"] == inputs["structured_messages"]
     # Verify the transformed output
     assert result["texts"][0] == "Here is an SSN for one my employees: <US_SSN>"
+
+
+_PDF_LINK: Final = "https://example.com/reports/q3.pdf"
+_PDF_LINK_PART: Final = ChatCompletionFileObject(
+    type="file", file=ChatCompletionFileObjectFile(file_id=_PDF_LINK, filename="q3.pdf", format="application/pdf")
+)
+_PDF_LINK_AS_SCANNED: Final = {"type": "image_url", "image_url": {"url": _PDF_LINK}}
+
+
+async def _guard_pdf_link_question(
+    guard_api: Callable[[httpx.Request], httpx.Response], text: str
+) -> GenericGuardrailAPIInputs:
+    messages: Final[list[AllMessageValues]] = [
+        ChatCompletionUserMessage(role="user", content=[ChatCompletionTextObject(type="text", text=text), _PDF_LINK_PART])
+    ]
+    guardrail: Final = CrowdStrikeAIDRHandler(
+        mode="pre_call",
+        guardrail_name="crowdstrike-aidr-guard",
+        api_key="pts_crowdstrike_tokenid",
+        api_base="https://api.crowdstrike.com/aidr/aiguard",
+        async_handler=AsyncHTTPHandler(transport=httpx.MockTransport(guard_api)),
+    )
+    return await guardrail.apply_guardrail(
+        inputs={"texts": [text], "structured_messages": messages},
+        request_data={"messages": messages},
+        input_type="request",
+    )
+
+
+def _blocks_scanned_pdf_links(request: httpx.Request) -> httpx.Response:
+    scanned: Final = json.loads(request.content)["guard_input"]["messages"][0]["content"]
+    verdict: Final = {"result": {"blocked": _PDF_LINK_AS_SCANNED in scanned, "transformed": False}}
+    return httpx.Response(status_code=200, json=verdict, request=request)
+
+
+def _redacts_ssn_and_echoes_pdf_link(request: httpx.Request) -> httpx.Response:
+    redacted: Final = {"role": "user", "content": [{"type": "text", "text": "My SSN is <US_SSN>"}, _PDF_LINK_AS_SCANNED]}
+    verdict: Final = {"result": {"blocked": False, "transformed": True, "guard_output": {"messages": [redacted]}}}
+    return httpx.Response(status_code=200, json=verdict, request=request)
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_request_scans_a_pdf_link_file_part() -> None:
+    with pytest.raises(HTTPException, match="Violated CrowdStrike AIDR guardrail policy"):
+        await _guard_pdf_link_question(_blocks_scanned_pdf_links, "Summarize this report")
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_request_redaction_keeps_a_pdf_link_a_file_part() -> None:
+    result: Final = await _guard_pdf_link_question(_redacts_ssn_and_echoes_pdf_link, "My SSN is 078-05-1120")
+
+    assert result.get("structured_messages") == [
+        {"role": "user", "content": [{"type": "text", "text": "My SSN is <US_SSN>"}, _PDF_LINK_PART]}
+    ]
 
 
 @pytest.mark.asyncio

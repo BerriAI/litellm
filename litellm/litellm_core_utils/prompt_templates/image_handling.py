@@ -467,8 +467,9 @@ def _parse_remote_file(fields: Mapping[str, object]) -> _RemoteFile | None:
     return _RemoteFile(fields, file, url) if file is not None and url is not None else None
 
 
-def remote_pdf_file_link(part: Mapping[str, object]) -> str | None:
-    remote: Final = _parse_remote_file(part)
+def remote_pdf_file_link(part: object) -> str | None:
+    fields: Final = _as_mapping(part)
+    remote: Final = _parse_remote_file(fields) if fields is not None else None
     return remote.url if remote is not None and inline_remote_pdf_files(_remote_media(remote)) else None
 
 
