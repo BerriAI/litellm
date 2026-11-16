@@ -1,8 +1,8 @@
 import json
 import os
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from typing import Final
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -3498,6 +3498,89 @@ def test_update_default_team_settings_without_organization_skips_lookup(
     assert mock_proxy_config["save_call_count"]() == 1
 
 
+@pytest.fixture
+def mock_access_group_lookup(monkeypatch: pytest.MonkeyPatch) -> Callable[[frozenset[str]], AsyncMock]:
+    import litellm
+    import litellm.proxy.proxy_server as proxy_server_module
+
+    def _install(existing_access_group_ids: frozenset[str]) -> AsyncMock:
+        async def _find_many(where: dict[str, dict[str, list[str]]]) -> list[MagicMock]:
+            return [
+                MagicMock(access_group_id=access_group_id)
+                for access_group_id in where["access_group_id"]["in"]
+                if access_group_id in existing_access_group_ids
+            ]
+
+        find_many: Final = AsyncMock(side_effect=_find_many)
+        fake_prisma: Final = MagicMock()
+        fake_prisma.writer_db.litellm_accessgrouptable.find_many = find_many
+
+        monkeypatch.setattr(proxy_server_module, "prisma_client", fake_prisma)
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+        monkeypatch.setattr(litellm, "default_team_params", {})
+        return find_many
+
+    return _install
+
+
+def test_update_default_team_settings_rejects_unknown_access_group(
+    mock_proxy_config: dict[str, object],
+    mock_auth: None,
+    mock_access_group_lookup: Callable[[frozenset[str]], AsyncMock],
+) -> None:
+    import litellm
+
+    mock_access_group_lookup(frozenset({"real-group"}))
+
+    resp: Final = client.patch(
+        "/update/default_team_settings",
+        json={"access_group_ids": ["real-group", "ghost-group"]},
+    )
+
+    assert resp.status_code == 400, resp.text
+    assert "ghost-group" in resp.json()["detail"]["error"]
+    assert "real-group" not in resp.json()["detail"]["error"]
+    assert mock_proxy_config["save_call_count"]() == 0
+    assert litellm.default_team_params == {}
+
+
+def test_update_default_team_settings_saves_existing_access_groups(
+    mock_proxy_config: dict[str, object],
+    mock_auth: None,
+    mock_access_group_lookup: Callable[[frozenset[str]], AsyncMock],
+) -> None:
+    import litellm
+
+    mock_access_group_lookup(frozenset({"real-group", "other-group"}))
+
+    resp: Final = client.patch(
+        "/update/default_team_settings",
+        json={"access_group_ids": ["real-group", "other-group"]},
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["settings"]["access_group_ids"] == ["real-group", "other-group"]
+    assert mock_proxy_config["save_call_count"]() == 1
+    assert litellm.default_team_params["access_group_ids"] == ["real-group", "other-group"]
+
+
+def test_update_default_team_settings_with_empty_access_groups_skips_lookup(
+    mock_proxy_config: dict[str, object],
+    mock_auth: None,
+    mock_access_group_lookup: Callable[[frozenset[str]], AsyncMock],
+) -> None:
+    find_many: Final = mock_access_group_lookup(frozenset())
+
+    resp: Final = client.patch(
+        "/update/default_team_settings",
+        json={"access_group_ids": []},
+    )
+
+    assert resp.status_code == 200, resp.text
+    find_many.assert_not_awaited()
+    assert mock_proxy_config["save_call_count"]() == 1
+
+
 def test_update_mcp_semantic_filter_settings_requires_proxy_admin(monkeypatch):
     """Non-admin callers must not mutate global MCP semantic filter settings."""
     from litellm.proxy._types import UserAPIKeyAuth
@@ -4580,9 +4663,23 @@ class TestMoyaiUrlSetting:
         assert persisted["moyai_url"] is None
 
 
-@pytest.mark.parametrize("preset", ["today", "last_7_days", "last_30_days", "month_to_date", "year_to_date"])
-def test_usage_default_range_round_trips_without_overwriting_other_settings(
-    mock_auth, monkeypatch: pytest.MonkeyPatch, preset: str,
+@pytest.mark.parametrize("setting,initial_value,submitted,default", (
+    ("usage_default_time_range", None, "today", "last_7_days"),
+    ("usage_default_time_range", None, "last_7_days", "last_7_days"),
+    ("usage_default_time_range", None, "last_30_days", "last_7_days"),
+    ("usage_default_time_range", None, "month_to_date", "last_7_days"),
+    ("usage_default_time_range", None, "year_to_date", "last_7_days"),
+    ("disable_aria", None, False, False),
+    ("disable_aria", None, True, False),
+    ("disable_aria", False, True, False),
+    ("disable_aria", True, False, False),
+    ("aria_internal_user_access", None, "none", "own_usage"),
+    ("aria_internal_user_access", None, "own_usage", "own_usage"),
+    ("aria_internal_user_access", "none", "own_and_team_usage", "own_usage"),
+))
+def test_ui_setting_round_trips_without_overwriting_other_settings(
+    mock_auth: None, monkeypatch: pytest.MonkeyPatch, setting: str,
+    initial_value: str | bool | None, submitted: str | bool, default: str | bool,
 ) -> None:
     from types import SimpleNamespace
     from unittest.mock import AsyncMock, MagicMock
@@ -4593,7 +4690,7 @@ def test_usage_default_range_round_trips_without_overwriting_other_settings(
 
     prisma: Final = MagicMock()
     prisma.db.litellm_uisettings.find_unique = AsyncMock(return_value=SimpleNamespace(
-        ui_settings={"disable_custom_api_keys": True},
+        ui_settings={"disable_custom_api_keys": True, **({} if initial_value is None else {setting: initial_value})},
     ))
     prisma.db.litellm_uisettings.upsert = AsyncMock()
     monkeypatch.setattr(proxy_server, "prisma_client", prisma)
@@ -4603,22 +4700,28 @@ def test_usage_default_range_round_trips_without_overwriting_other_settings(
     app.dependency_overrides[user_api_key_auth] = lambda: actor
     try:
         initial: Final = client.get("/get/ui_settings")
-        assert initial.json()["values"]["usage_default_time_range"] == "last_7_days"
-        response: Final = client.patch("/update/ui_settings", json={"usage_default_time_range": preset})
+        assert initial.status_code == 200, initial.text
+        assert initial.json()["values"][setting] == (default if initial_value is None else initial_value)
+        assert initial.json()["source"][setting] == ("default" if initial_value is None else "db")
+        response: Final = client.patch("/update/ui_settings", json={setting: submitted})
         assert response.status_code == 200, response.text
         stored: Final = json.loads(prisma.db.litellm_uisettings.upsert.call_args.kwargs["data"]["update"]["ui_settings"])
-        assert stored == {"disable_custom_api_keys": True, "usage_default_time_range": preset}
-        prisma.db.litellm_uisettings.find_unique.return_value = SimpleNamespace(ui_settings=stored)
+        assert stored == {"disable_custom_api_keys": True, setting: submitted}
+        prisma.db.litellm_uisettings.find_unique.return_value = SimpleNamespace(ui_settings=json.dumps(stored))
         fetched: Final = client.get("/get/ui_settings")
-        assert fetched.json()["values"]["usage_default_time_range"] == preset
-        assert fetched.json()["source"]["usage_default_time_range"] == "db"
+        assert fetched.status_code == 200, fetched.text
+        assert fetched.json()["values"][setting] == submitted
+        assert fetched.json()["values"]["disable_custom_api_keys"] is True
+        assert fetched.json()["source"][setting] == "db"
+        assert "disable_aria" not in proxy_server.general_settings
     finally:
         app.dependency_overrides.clear()
 
 
 @pytest.mark.parametrize("submitted", ["invalid", None, 7])
-def test_usage_default_range_rejects_invalid_values_without_writing(
-    mock_auth, monkeypatch: pytest.MonkeyPatch, submitted: object,
+@pytest.mark.parametrize("setting", ("usage_default_time_range", "disable_aria", "aria_internal_user_access"))
+def test_ui_setting_rejects_invalid_values_without_writing(
+    mock_auth: None, monkeypatch: pytest.MonkeyPatch, submitted: object, setting: str,
 ) -> None:
     from unittest.mock import AsyncMock, MagicMock
     from litellm.proxy import proxy_server
@@ -4626,13 +4729,14 @@ def test_usage_default_range_rejects_invalid_values_without_writing(
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
     prisma: Final = MagicMock()
+    prisma.db.litellm_uisettings.find_unique = AsyncMock(return_value=None)
     prisma.db.litellm_uisettings.upsert = AsyncMock()
     monkeypatch.setattr(proxy_server, "prisma_client", prisma)
     monkeypatch.setattr(proxy_server, "store_model_in_db", True)
     actor: Final = UserAPIKeyAuth(user_id="test-admin", user_role=LitellmUserRoles.PROXY_ADMIN)
     app.dependency_overrides[user_api_key_auth] = lambda: actor
     try:
-        response: Final = client.patch("/update/ui_settings", json={"usage_default_time_range": submitted})
+        response: Final = client.patch("/update/ui_settings", json={setting: submitted})
         assert response.status_code == 422, response.text
         prisma.db.litellm_uisettings.upsert.assert_not_called()
     finally:
@@ -4640,8 +4744,9 @@ def test_usage_default_range_rejects_invalid_values_without_writing(
 
 
 @pytest.mark.parametrize("role", [LitellmUserRoles.INTERNAL_USER, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY])
-def test_usage_default_range_cannot_be_changed_by_non_admins(
-    mock_auth, monkeypatch: pytest.MonkeyPatch, role: LitellmUserRoles,
+@pytest.mark.parametrize("setting,value", (("usage_default_time_range", "month_to_date"), ("disable_aria", True), ("aria_internal_user_access", "none")))
+def test_ui_setting_cannot_be_changed_by_non_admins(
+    mock_auth: None, monkeypatch: pytest.MonkeyPatch, role: LitellmUserRoles, setting: str, value: str | bool,
 ) -> None:
     from unittest.mock import AsyncMock, MagicMock
     from litellm.proxy import proxy_server
@@ -4655,14 +4760,22 @@ def test_usage_default_range_cannot_be_changed_by_non_admins(
     actor: Final = UserAPIKeyAuth(user_id="test-user", user_role=role)
     app.dependency_overrides[user_api_key_auth] = lambda: actor
     try:
-        response: Final = client.patch("/update/ui_settings", json={"usage_default_time_range": "month_to_date"})
+        response: Final = client.patch("/update/ui_settings", json={setting: value})
         assert response.status_code == 403, response.text
         prisma.db.litellm_uisettings.upsert.assert_not_called()
     finally:
         app.dependency_overrides.clear()
 
 
-def test_usage_default_range_reports_config_precedence(mock_auth, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("setting,stored,configured", (
+    ("usage_default_time_range", "today", "month_to_date"),
+    ("disable_aria", False, True),
+    ("disable_aria", True, False),
+    ("aria_internal_user_access", "own_and_team_usage", "none"),
+))
+def test_ui_setting_reports_config_precedence(
+    mock_auth: None, monkeypatch: pytest.MonkeyPatch, setting: str, stored: str | bool, configured: str | bool,
+) -> None:
     from types import SimpleNamespace
     from unittest.mock import AsyncMock, MagicMock
     from litellm.proxy import proxy_server
@@ -4670,16 +4783,16 @@ def test_usage_default_range_reports_config_precedence(mock_auth, monkeypatch: p
 
     prisma: Final = MagicMock()
     prisma.db.litellm_uisettings.find_unique = AsyncMock(return_value=SimpleNamespace(
-        ui_settings={"usage_default_time_range": "today"},
+        ui_settings={setting: stored},
     ))
     monkeypatch.setattr(proxy_server, "prisma_client", prisma)
     settings: Final = SettingsStore("general_settings")
-    settings.load_yaml({"usage_default_time_range": "month_to_date"})
+    settings.load_yaml({setting: configured})
     monkeypatch.setattr(proxy_server.proxy_config, "settings", settings)
     response: Final = client.get("/get/ui_settings")
     assert response.status_code == 200, response.text
-    assert response.json()["values"]["usage_default_time_range"] == "month_to_date"
-    assert response.json()["source"]["usage_default_time_range"] == "config"
+    assert response.json()["values"][setting] == configured
+    assert response.json()["source"][setting] == "config"
 
 
 @pytest.fixture

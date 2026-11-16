@@ -3,7 +3,7 @@ import asyncio
 import json
 import os
 from collections import Counter
-from collections.abc import Mapping, MutableMapping, Sequence
+from collections.abc import ItemsView, Mapping, MutableMapping, Sequence
 from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
@@ -47,10 +47,12 @@ from litellm.proxy.spend_tracking.ptu_feature_flag import (
     is_ptu_cost_attribution_enabled,
 )
 from litellm.proxy.utils import CONFIG_PARAMS_TARGET, invalidate_config_param
+from litellm.repositories.chunked_in import find_many_in
 from litellm.repositories.config_repository import ConfigRepository
 from litellm.repositories.organization_repository import OrganizationRepository
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import (
+    AccessGroupRepository,
     SSOConfigRepository,
     UISettingsRepository,
 )
@@ -375,6 +377,16 @@ class UISettings(LiteLLMBaseModel):
         description="If true, shows the Chat page in the UI sidebar, letting users chat with an LLM and connect their own MCP server credentials via OAuth.",
     )
 
+    disable_aria: bool = Field(
+        default=False,
+        description="Hides Aria for everyone on this deployment.",
+    )
+
+    aria_internal_user_access: Literal["none", "own_usage", "own_and_team_usage"] = Field(
+        default="own_usage",
+        description="Aria access for internal users. Proxy admins and proxy-wide spend viewers are unaffected.",
+    )
+
     moyai_url: str | None = Field(
         default=None,
         description="URL of a connected Moyai deployment. When set, the Moyai entry in the UI navigation opens this deployment instead of the Moyai landing page.",
@@ -430,6 +442,8 @@ ALLOWED_UI_SETTINGS_FIELDS: Final = {
     "disable_custom_api_keys",
     "disable_key_generate_for_org_admin",
     "enable_chat_ui",
+    "disable_aria",
+    "aria_internal_user_access",
     "moyai_url",
     TEAM_ADMIN_EDITABLE_TEAM_FIELDS_SETTING,
 }
@@ -1172,6 +1186,33 @@ async def update_internal_user_settings(
     )
 
 
+async def _validate_default_access_groups_exist(access_group_ids: Sequence[str]) -> None:
+    if not access_group_ids:
+        return
+
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "Database not connected. Please connect a database."},
+        )
+
+    existing_groups: Final = await find_many_in(
+        AccessGroupRepository(prisma_client, use_writer=True).table, "access_group_id", dict.fromkeys(access_group_ids)
+    )
+    existing_ids: Final = {group.access_group_id for group in existing_groups}
+    missing_ids: Final = tuple(dict.fromkeys(ag_id for ag_id in access_group_ids if ag_id not in existing_ids))
+    if missing_ids:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": f"Access group(s) not found: {', '.join(missing_ids)}. "
+                "Create the access group first or remove it from the default team settings."
+            },
+        )
+
+
 @router.patch(
     "/update/default_team_settings",
     tags=["SSO Settings"],
@@ -1188,6 +1229,8 @@ async def update_default_team_settings(
     """
     if settings.organization_id is not None:
         await _validate_default_organization_exists(settings.organization_id)
+    if settings.access_group_ids is not None:
+        await _validate_default_access_groups_exist(settings.access_group_ids)
 
     return await _update_litellm_setting(
         settings=settings,
@@ -1273,6 +1316,16 @@ async def _load_environment_variables_param(
         return e
     else:
         return param_value
+
+
+def _submitted_sso_values(submitted: Mapping[str, object]) -> ItemsView[str, object]:
+    return submitted.items()
+
+
+def _environment_value(value: object) -> str:
+    if isinstance(value, str):
+        return value
+    raise TypeError(f"str expected, not {type(value).__name__}")
 
 
 def _decrypted_sso_fields(environment_variables: Mapping[str, object]) -> Mapping[str, str | None]:
@@ -1367,11 +1420,11 @@ async def update_sso_settings(
         field_name: submitted[field_name] if field_name in submitted else fallback_values.get(field_name)
         for field_name in SSOConfig.model_fields
     }
-    for field_name, value in submitted.items():
+    for field_name, value in _submitted_sso_values(submitted):
         if field_name in SSO_FIELD_ENV_VARS:
             env_var_name = SSO_FIELD_ENV_VARS[field_name]
             if value:
-                os.environ[env_var_name] = value
+                os.environ[env_var_name] = _environment_value(value)
             else:
                 # Clear environment variable if value is null/empty
                 os.environ.pop(env_var_name, None)

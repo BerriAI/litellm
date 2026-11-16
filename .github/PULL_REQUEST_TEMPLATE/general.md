@@ -93,6 +93,7 @@ If you're seeing a delay in your PR being merged, ping the LiteLLM Team on [Slac
      Otherwise proof must be fully e2e, no mocks, with real provider calls where applicable. Pytest alone is insufficient. The following format applies to live proof
      Show only the latest proof. Before uses the merge base and After the tested tip. Rerun affected QA after behavior changes. Verified neutral diffs may carry proof with the tested SHA, current tip, equivalence reason and focused checks, following AGENTS.md and /qa
      Use matching Before/After case headings with numbered commands and observed output. Put shared setup above them. For one case, omit case headings
+     A reviewer must be able to rerun every case from the body alone, so the shared setup gives the proxy start command, the config.yaml, env var names (never values) and the client code or curl used, all exactly as run. Wrap any block longer than about 20 lines in a collapsed <details> with a one-line summary
 
 ### Before (<hash>)
 

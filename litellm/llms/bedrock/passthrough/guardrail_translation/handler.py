@@ -8,13 +8,13 @@ from dataclasses import dataclass
 from functools import partial, reduce
 from itertools import accumulate, chain
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Optional, Protocol, TypeAlias, TypeVar
+from typing import TYPE_CHECKING, Final, Optional, Protocol, TypeAlias, TypeVar, runtime_checkable
 
 from pydantic import InstanceOf, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, decoded_json_object, subscript
 from litellm.llms.anthropic.chat.guardrail_translation.handler import AnthropicMessagesHandler
 from litellm.llms.base_llm.guardrail_translation.base_translation import (
     BaseTranslation,
@@ -171,8 +171,31 @@ def _reads_flat_texts_only(guardrail: "CustomGuardrail") -> bool:
     return is_compression_guardrail(guardrail) or not guardrail.supports_structured_messages()
 
 
-_StringHolder = tuple[Any, str | int]
+_StringHolder: TypeAlias = tuple[object, str | int]
+_StringLeaf: TypeAlias = tuple[_StringHolder, str]
 _LeafIdentity: TypeAlias = tuple[int, str | int]
+
+
+@runtime_checkable
+class _SupportsSetItem(Protocol):
+    def __setitem__(self, key: str | int, value: object, /) -> None: ...
+
+
+@runtime_checkable
+class _SupportsDelItem(Protocol):
+    def __delitem__(self, key: str | int, /) -> None: ...
+
+
+def _assignable(container: object) -> _SupportsSetItem:
+    if isinstance(container, _SupportsSetItem):
+        return container
+    raise TypeError(f"'{type(container).__name__}' object does not support item assignment")
+
+
+def _deletable(container: object) -> _SupportsDelItem:
+    if isinstance(container, _SupportsDelItem):
+        return container
+    raise TypeError(f"'{type(container).__name__}' object doesn't support item deletion")
 
 
 @dataclass(frozen=True, slots=True)
@@ -194,7 +217,7 @@ _OBJECT_BY_REFERENCE: Final = TypeAdapter(InstanceOf[Mapping[str, object]])
 _ARRAY_BY_REFERENCE: Final = TypeAdapter(InstanceOf[list[object]])
 
 
-def _collect_strings(node: object, holders: list[_StringHolder]) -> None:
+def _collect_strings(node: object, leaves: list[_StringLeaf]) -> None:
     """
     Record a (container, key) holder for every non-empty string value nested
     under an arbitrary JSON node, so prompt content a caller hides in fields
@@ -209,28 +232,28 @@ def _collect_strings(node: object, holders: list[_StringHolder]) -> None:
             for key, value in current.items():
                 if isinstance(value, str):
                     if value:
-                        holders.append((current, key))
+                        leaves.append(((current, key), value))
                 else:
                     stack.append(value)
         elif isinstance(current, list):
             for index, value in enumerate(current):
                 if isinstance(value, str):
                     if value:
-                        holders.append((current, index))
+                        leaves.append(((current, index), value))
                 else:
                     stack.append(value)
 
 
-def _collect_block_text(block: dict, holders: list[_StringHolder]) -> None:
+def _collect_block_text(block: dict, leaves: list[_StringLeaf]) -> None:
     text: Final = block.get("text")
     if isinstance(text, str) and text:
-        holders.append((block, "text"))
+        leaves.append(((block, "text"), text))
 
 
-def _request_field_holders(body: Mapping[str, object]) -> tuple[_StringHolder, ...]:
-    holders: Final = list[_StringHolder]()
-    _collect_strings(body.get("additionalModelRequestFields"), holders)
-    return tuple(holders)
+def _request_field_leaves(body: Mapping[str, object]) -> tuple[_StringLeaf, ...]:
+    leaves: Final = list[_StringLeaf]()
+    _collect_strings(body.get("additionalModelRequestFields"), leaves)
+    return tuple(leaves)
 
 
 def _extract_converse_texts(
@@ -267,15 +290,15 @@ def _extract_converse_texts(
     that model. Scanning it stays the fail-closed default. Its strings come
     last, in the same order as they follow the latest user message in the rows.
     """
-    system_holders: Final = list[_StringHolder]()
+    system_leaves: Final = list[_StringLeaf]()
     if not skip_system and not scan_only_tool_results:
         for block in body.get("system") or []:
             if isinstance(block, dict):
-                _collect_block_text(block, system_holders)
+                _collect_block_text(block, system_leaves)
 
-    request_field_holders: Final = () if scan_only_tool_results else _request_field_holders(body)
+    request_field_leaves: Final = () if scan_only_tool_results else _request_field_leaves(body)
 
-    message_holders: Final = list[_StringHolder]()
+    message_leaves: Final = list[_StringLeaf]()
     for message in body.get("messages") or []:
         if not isinstance(message, dict):
             continue
@@ -286,20 +309,19 @@ def _extract_converse_texts(
                 continue
             if scan_only_tool_results and "toolResult" not in block:
                 continue
-            _collect_block_text(block, message_holders)
+            _collect_block_text(block, message_leaves)
             tool_use = block.get("toolUse")
             if isinstance(tool_use, dict):
-                _collect_strings(tool_use.get("input"), message_holders)
+                _collect_strings(tool_use.get("input"), message_leaves)
             tool_result = block.get("toolResult")
             if isinstance(tool_result, dict):
                 for inner in tool_result.get("content") or []:
                     if isinstance(inner, dict):
-                        _collect_block_text(inner, message_holders)
-                        _collect_strings(inner.get("json"), message_holders)
+                        _collect_block_text(inner, message_leaves)
+                        _collect_strings(inner.get("json"), message_leaves)
 
-    holders: Final = [*system_holders, *message_holders, *request_field_holders]
-    texts: Final = [container[key] for container, key in holders]
-    return texts, holders
+    leaves: Final = (*system_leaves, *message_leaves, *request_field_leaves)
+    return [text for _, text in leaves], [holder for holder, _ in leaves]
 
 
 @dataclass(frozen=True, slots=True)
@@ -464,9 +486,9 @@ def _apply(writes: Sequence[_Assign | _Remove]) -> None:
     for write in writes:
         match write:
             case _Assign(holder=(container, key), value=value):
-                container[key] = value
+                _assignable(container)[key] = value
             case _Remove(holder=(container, key)):
-                del container[key]
+                del _deletable(container)[key]
 
 
 def _block_text_holder(block: object) -> _ContentHolder | None:
@@ -545,7 +567,7 @@ def _edits_drop_a_text_change(
     if writes is None:
         return True
     _apply(writes)
-    edited: Final = [container[key] for container, key in holders]
+    edited: Final = [subscript(container, key) for container, key in holders]
     return any(
         returned != before and after == before for before, returned, after in zip(texts, guardrailed_texts, edited)
     )
@@ -562,26 +584,25 @@ def _extract_converse_output_texts(
     ``citationsContent.content[].text`` -- while leaving structural values such
     as reasoning signatures and citation sources untouched.
     """
-    holders: Final[list[_StringHolder]] = []
+    leaves: Final[list[_StringLeaf]] = []
     for block in content_blocks:
         if not isinstance(block, dict):
             continue
-        _collect_block_text(block, holders)
+        _collect_block_text(block, leaves)
         tool_use = block.get("toolUse")
         if isinstance(tool_use, dict):
-            _collect_strings(tool_use.get("input"), holders)
+            _collect_strings(tool_use.get("input"), leaves)
         reasoning = block.get("reasoningContent")
         if isinstance(reasoning, dict):
             reasoning_text = reasoning.get("reasoningText")
             if isinstance(reasoning_text, dict):
-                _collect_block_text(reasoning_text, holders)
+                _collect_block_text(reasoning_text, leaves)
         citations = block.get("citationsContent")
         if isinstance(citations, dict):
             for cited in citations.get("content") or []:
                 if isinstance(cited, dict):
-                    _collect_block_text(cited, holders)
-    texts: Final = [container[key] for container, key in holders]
-    return texts, holders
+                    _collect_block_text(cited, leaves)
+    return [text for _, text in leaves], [holder for holder, _ in leaves]
 
 
 def _write_back_texts(
@@ -598,7 +619,7 @@ def _write_back_texts(
     for idx, (container, key) in enumerate(holders):
         if idx >= len(guardrailed_texts):
             break
-        container[key] = guardrailed_texts[idx]
+        _assignable(container)[key] = guardrailed_texts[idx]
 
 
 _GroupKey: TypeAlias = str | tuple[str, int]
@@ -849,6 +870,7 @@ class InvokeStreamFrame:
 
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object])
+_DECODED_JSON: Final = TypeAdapter(object)
 _Frame: Final = TypeVar("_Frame", ConverseStreamFrame, InvokeStreamFrame)
 
 
@@ -1298,7 +1320,7 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
             texts: Sequence[tuple[_StreamGroupKey, str]] = ()
             if event_type == "contentBlockDelta":
                 try:
-                    payload_dict: dict[str, object] = json.loads(payload_bytes)
+                    payload_dict = decoded_json_object(_DECODED_JSON.validate_python(json.loads(payload_bytes)))
                     texts = _delta_frame_texts(payload_dict)
                 except Exception as e:
                     verbose_proxy_logger.debug(

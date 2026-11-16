@@ -13,20 +13,20 @@ import litellm
 import pytest
 import respx
 from litellm import CustomLogger, Router
-from litellm.caching.dual_cache import DualCache
-from litellm.caching.in_memory_cache import InMemoryCache
-from litellm.constants import ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.router_utils.router_callbacks.track_deployment_metrics import (
     get_deployment_successes_for_current_minute,
 )
-from litellm.types.caching import RedisPipelineIncrementOperation
 from litellm.types.llms.openai import HttpxBinaryResponseContent
 from litellm.types.router import RoutingStrategy
 from litellm.types.utils import ImageResponse, ModelResponse, RerankResponse
 from litellm.types.videos.utils import encode_video_id_with_provider
 from openai import AsyncAzureOpenAI, AsyncOpenAI
+
+
+from tests.unit.conftest import redis_cache_double
 
 EVENT_TIMEOUT_SECONDS: Final = 5
 ROUTING_SELECTIONS: Final = 40
@@ -519,98 +519,22 @@ def test_router_routing_strategy_init_accepts_provider_budget_strategy(strategy:
     assert router.get_settings()["routing_strategy"] == "provider-budget-routing"
 
 
-class _GatedIncrementCache(DualCache):
-    def __init__(self) -> None:
-        super().__init__(in_memory_cache=InMemoryCache())
-        self.first_increment_started = asyncio.Event()
-        self.release_first_increment = asyncio.Event()
-        self.deployment_success_incremented = asyncio.Event()
-        self.increment_calls = 0
-
-    def increment_cache(self, key: str, value: int, local_only: bool = False, **kwargs: object) -> int:
-        result: Final = super().increment_cache(key=key, value=value, local_only=local_only, **kwargs)
-        if key.endswith(":successes"):
-            self.deployment_success_incremented.set()
-        return result
-
-    async def async_increment_cache(self, key: str, value: float, *args: object, **kwargs: object) -> float | None:
-        result: Final = await super().async_increment_cache(key, value, *args, **kwargs)
-        if key.endswith(":successes"):
-            self.deployment_success_incremented.set()
-        return result
-
-    async def async_increment_cache_pipeline(
-        self,
-        increment_list: list[RedisPipelineIncrementOperation],
-        local_only: bool = False,
-        parent_otel_span: object = None,
-        **kwargs: object,
-    ) -> list[float] | None:
-        self.increment_calls += 1
-        if self.increment_calls == 1:
-            self.first_increment_started.set()
-            await self.release_first_increment.wait()
-        return await super().async_increment_cache_pipeline(
-            increment_list=increment_list,
-            local_only=local_only,
-            parent_otel_span=parent_otel_span,
-            **kwargs,
-        )
-
-
-class _UnavailableIncrementCache(DualCache):
-    def __init__(self) -> None:
-        super().__init__(in_memory_cache=InMemoryCache())
-        self.first_increment_started = asyncio.Event()
-        self.release_first_increment = asyncio.Event()
-        self.deployment_success_incremented = asyncio.Event()
-        self.increment_calls = 0
-
-    def increment_cache(self, key: str, value: int, local_only: bool = False, **kwargs: object) -> int:
-        result: Final = super().increment_cache(key=key, value=value, local_only=local_only, **kwargs)
-        if key.endswith(":successes"):
-            self.deployment_success_incremented.set()
-        return result
-
-    async def async_increment_cache(self, key: str, value: float, *args: object, **kwargs: object) -> float | None:
-        result: Final = await super().async_increment_cache(key, value, *args, **kwargs)
-        if key.endswith(":successes"):
-            self.deployment_success_incremented.set()
-        return result
-
-    async def async_increment_cache_pipeline(
-        self,
-        increment_list: list[RedisPipelineIncrementOperation],
-        local_only: bool = False,
-        parent_otel_span: object = None,
-        **kwargs: object,
-    ) -> list[float] | None:
-        self.increment_calls += 1
-        if self.increment_calls == 1:
-            self.first_increment_started.set()
-            await self.release_first_increment.wait()
-        raise RuntimeError("cache unavailable")
-
-
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("router_minute_pinned")
 async def test_router_success_callback_during_pre_header_increment_does_not_double_count() -> None:
+    capture: Final = _RouterLoggingCapture("lit-3058-race")
     router: Final = _rpm_tpm_router("lit-3058-race")
-    cache: Final = _GatedIncrementCache()
-    router.cache = cache
     request: Final = asyncio.create_task(
         router.acompletion(
             model="gpt-5-mini",
             messages=[{"role": "user", "content": "hi"}],
             mock_response="pong",
+            success_callback=[capture.async_log_success_event],
         )
     )
 
-    await asyncio.wait_for(cache.first_increment_started.wait(), timeout=EVENT_TIMEOUT_SECONDS)
-    await asyncio.wait_for(cache.deployment_success_incremented.wait(), timeout=EVENT_TIMEOUT_SECONDS)
+    await capture.next_event()
     assert get_deployment_successes_for_current_minute(router, "lit-3058-race") == 1
-    assert cache.increment_calls == 1
-    cache.release_first_increment.set()
     response: Final = await request
 
     assert await router.get_model_group_usage("gpt-5-mini") == (response.usage.total_tokens, 1)
@@ -618,31 +542,26 @@ async def test_router_success_callback_during_pre_header_increment_does_not_doub
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("router_minute_pinned")
-async def test_router_failed_pre_header_increment_clears_counted_tokens_stamp() -> None:
+async def test_router_failed_redis_increment_keeps_local_usage_without_double_counting() -> None:
+    capture: Final = _RouterLoggingCapture("lit-3058-fail")
     router: Final = _rpm_tpm_router("lit-3058-fail")
-    cache: Final = _UnavailableIncrementCache()
-    router.cache = cache
-    metadata: Final[dict[str, object]] = {}
+    router.update_redis_cache(redis_cache_double())
     request: Final = asyncio.create_task(
         router.acompletion(
             model="gpt-5-mini",
             messages=[{"role": "user", "content": "hi"}],
             mock_response="pong",
-            metadata=metadata,
+            success_callback=[capture.async_log_success_event],
         )
     )
 
-    await asyncio.wait_for(cache.first_increment_started.wait(), timeout=EVENT_TIMEOUT_SECONDS)
-    await asyncio.wait_for(cache.deployment_success_incremented.wait(), timeout=EVENT_TIMEOUT_SECONDS)
+    await capture.next_event()
     assert get_deployment_successes_for_current_minute(router, "lit-3058-fail") == 1
-    assert cache.increment_calls == 1
-    cache.release_first_increment.set()
     response: Final = await request
 
     assert response.usage.total_tokens == 30
-    assert ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY not in metadata
-    assert _ratelimit_headers(response)["x-ratelimit-remaining-requests"] == 100
-    assert await router.get_model_group_usage("gpt-5-mini") == (None, None)
+    assert _ratelimit_headers(response)["x-ratelimit-remaining-requests"] == 99
+    assert await router.get_model_group_usage("gpt-5-mini") == (response.usage.total_tokens, 1)
 
 
 ASSISTANT_RESPONSE: Final = {
@@ -917,6 +836,43 @@ async def test_video_lookup_404_never_cools_down_the_deployment_that_answered(re
     for _ in range(3):
         with pytest.raises(litellm.NotFoundError):
             await router.avideo_status(model="sora", video_id=video_id)
+
+    assert await router.cooldown_cache.async_get_active_cooldowns(["dep-a", "dep-b"], parent_otel_span=None) == []
+
+
+@pytest.mark.parametrize(
+    ("endpoint", "method", "path"),
+    [
+        ("aget_responses", "GET", ""),
+        ("adelete_responses", "DELETE", ""),
+        ("acancel_responses", "POST", "/cancel"),
+        ("alist_input_items", "GET", "/input_items"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_response_lookup_404_never_cools_down_the_deployment_that_answered(
+    respx_mock: respx.MockRouter, endpoint: str, method: str, path: str
+) -> None:
+    respx_mock.route(method=method, url=f"https://api.openai.com/v1/responses/resp_gone{path}").respond(
+        404, json={"error": {"code": "NotFound", "message": "Response not found"}}
+    )
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "gpt",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": api_key},
+                "model_info": {"id": deployment_id},
+            }
+            for api_key, deployment_id in (("key-a", "dep-a"), ("key-b", "dep-b"))
+        ],
+        num_retries=0,
+        allowed_fails=1,
+    )
+    response_id: Final = ResponsesAPIRequestUtils._build_responses_api_response_id("openai", "dep-b", "resp_gone")
+
+    for _ in range(3):
+        with pytest.raises(litellm.NotFoundError):
+            await getattr(router, endpoint)(response_id=response_id)
 
     assert await router.cooldown_cache.async_get_active_cooldowns(["dep-a", "dep-b"], parent_otel_span=None) == []
 

@@ -2,52 +2,216 @@
 Common utility functions used for translating messages across providers
 """
 
-import base64
-import binascii
-import io
+import importlib
 import json
-import mimetypes
-import re
-from collections.abc import Callable, Hashable, Iterable, Iterator, Mapping, Sequence
+import sys
+import warnings
+from collections.abc import Hashable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from graphlib import CycleError, TopologicalSorter
-from itertools import chain, groupby, islice
-from os import PathLike
-from pathlib import Path
-from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias, TypeVar, cast
+from itertools import chain, groupby
+from types import MappingProxyType, ModuleType
+from typing import TYPE_CHECKING, Final, Literal, TypeAlias, cast
 
-from pydantic import TypeAdapter, ValidationError
+from pydantic import TypeAdapter
 
 import litellm
-from litellm import verbose_logger
-from litellm.exceptions import UnsupportedParamsError
-from litellm.litellm_core_utils.batch_utils import InMemoryFile
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
+    extract_file_data as extract_file_data,  # noqa: PLC0414  # public compatibility re-export
+)
+from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
+    extract_file_metadata as extract_file_metadata,  # noqa: PLC0414  # public compatibility re-export
+)
+from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
+    get_file_ids_from_messages as get_file_ids_from_messages,  # noqa: PLC0414  # public compatibility re-export
+)
+from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
+    get_format_from_file_id as get_format_from_file_id,  # noqa: PLC0414  # public compatibility re-export
+)
+from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
+    get_image_mime_type_from_url as get_image_mime_type_from_url,  # noqa: PLC0414  # public compatibility re-export
+)
+from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
+    infer_content_type_from_url_and_content as infer_content_type_from_url_and_content,  # noqa: PLC0414  # public compatibility re-export
+)
+from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
+    update_messages_with_model_file_ids as update_messages_with_model_file_ids,  # noqa: PLC0414  # public compatibility re-export
+)
+from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
+    update_responses_input_with_model_file_ids as update_responses_input_with_model_file_ids,  # noqa: PLC0414  # public compatibility re-export
+)
+from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
+    update_responses_tools_with_model_file_ids as update_responses_tools_with_model_file_ids,  # noqa: PLC0414  # public compatibility re-export
+)
+from litellm.litellm_core_utils.prompt_templates.json_schema_utils import (
+    drop_lookaround_regex_patterns as drop_lookaround_regex_patterns,  # noqa: PLC0414  # public compatibility re-export
+)
+from litellm.litellm_core_utils.prompt_templates.json_schema_utils import (
+    drop_non_python_regex_patterns as drop_non_python_regex_patterns,  # noqa: PLC0414  # public compatibility re-export
+)
+from litellm.litellm_core_utils.prompt_templates.json_schema_utils import (
+    flatten_combinators_and_drop_non_python_regex_patterns as flatten_combinators_and_drop_non_python_regex_patterns,  # noqa: PLC0414  # public compatibility re-export
+)
+from litellm.litellm_core_utils.prompt_templates.json_schema_utils import (
+    flatten_top_level_schema_combinators as flatten_top_level_schema_combinators,  # noqa: PLC0414  # public compatibility re-export
+)
+from litellm.litellm_core_utils.prompt_templates.json_schema_utils import (
+    is_object_schema as is_object_schema,  # noqa: PLC0414  # public compatibility re-export
+)
+from litellm.litellm_core_utils.prompt_templates.json_schema_utils import (
+    schema_fragment_ref as schema_fragment_ref,  # noqa: PLC0414  # public compatibility re-export
+)
+from litellm.litellm_core_utils.prompt_templates.json_schema_utils import (
+    schema_grammar_branch_count as schema_grammar_branch_count,  # noqa: PLC0414  # public compatibility re-export
+)
+from litellm.litellm_core_utils.prompt_templates.json_schema_utils import (
+    schema_has_lookaround_pattern as schema_has_lookaround_pattern,  # noqa: PLC0414  # public compatibility re-export
+)
+from litellm.litellm_core_utils.prompt_templates.json_schema_utils import (
+    schema_has_open_object as schema_has_open_object,  # noqa: PLC0414  # public compatibility re-export
+)
+from litellm.litellm_core_utils.prompt_templates.json_schema_utils import (
+    schema_has_unresolvable_ref as schema_has_unresolvable_ref,  # noqa: PLC0414  # public compatibility re-export
+)
+from litellm.litellm_core_utils.prompt_templates.json_schema_utils import (
+    schema_optional_property_count as schema_optional_property_count,  # noqa: PLC0414  # public compatibility re-export
+)
+from litellm.litellm_core_utils.prompt_templates.json_schema_utils import (
+    schema_property_count as schema_property_count,  # noqa: PLC0414  # public compatibility re-export
+)
+from litellm.litellm_core_utils.prompt_templates.json_schema_utils import (
+    schema_string_formats as schema_string_formats,  # noqa: PLC0414  # public compatibility re-export
+)
+from litellm.litellm_core_utils.prompt_templates.json_schema_utils import (
+    schema_union_property_count as schema_union_property_count,  # noqa: PLC0414  # public compatibility re-export
+)
+from litellm.litellm_core_utils.prompt_templates.json_schema_utils import (
+    tool_with_sanitized_parameters as tool_with_sanitized_parameters,  # noqa: PLC0414  # public compatibility re-export
+)
+from litellm.litellm_core_utils.prompt_templates.prompt_cache_breakpoint_utils import (
+    LITELLM_INTERNAL_MESSAGE_FIELDS as LITELLM_INTERNAL_MESSAGE_FIELDS,  # noqa: PLC0414  # public compatibility re-export
+)
+from litellm.litellm_core_utils.prompt_templates.prompt_cache_breakpoint_utils import (
+    LITELLM_RESPONSE_ONLY_MESSAGE_FIELDS as LITELLM_RESPONSE_ONLY_MESSAGE_FIELDS,  # noqa: PLC0414  # public compatibility re-export
+)
+from litellm.litellm_core_utils.prompt_templates.prompt_cache_breakpoint_utils import (
+    PROMPT_CACHE_BREAKPOINT_DROP_PARAMS_HINT as PROMPT_CACHE_BREAKPOINT_DROP_PARAMS_HINT,  # noqa: PLC0414  # public compatibility re-export
+)
+from litellm.litellm_core_utils.prompt_templates.prompt_cache_breakpoint_utils import (
+    cache_control_as_prompt_cache_breakpoint as cache_control_as_prompt_cache_breakpoint,  # noqa: PLC0414  # public compatibility re-export
+)
+from litellm.litellm_core_utils.prompt_templates.prompt_cache_breakpoint_utils import (
+    chat_completion_prompt_cache_breakpoint_for_wire as chat_completion_prompt_cache_breakpoint_for_wire,  # noqa: PLC0414  # public compatibility re-export
+)
+from litellm.litellm_core_utils.prompt_templates.prompt_cache_breakpoint_utils import (
+    chat_completion_prompt_cache_breakpoints_for_wire as chat_completion_prompt_cache_breakpoints_for_wire,  # noqa: PLC0414  # public compatibility re-export
+)
+from litellm.litellm_core_utils.prompt_templates.prompt_cache_breakpoint_utils import (
+    prompt_cache_breakpoint_as_cache_control as prompt_cache_breakpoint_as_cache_control,  # noqa: PLC0414  # public compatibility re-export
+)
+from litellm.litellm_core_utils.prompt_templates.prompt_cache_breakpoint_utils import (
+    prompt_cache_breakpoint_for_wire as prompt_cache_breakpoint_for_wire,  # noqa: PLC0414  # public compatibility re-export
+)
+from litellm.litellm_core_utils.prompt_templates.prompt_cache_breakpoint_utils import (
+    prompt_cache_breakpoint_with_readable_mode as prompt_cache_breakpoint_with_readable_mode,  # noqa: PLC0414  # public compatibility re-export
+)
+from litellm.litellm_core_utils.prompt_templates.prompt_cache_breakpoint_utils import (
+    prompt_cache_breakpoint_within as prompt_cache_breakpoint_within,  # noqa: PLC0414  # public compatibility re-export
+)
+from litellm.litellm_core_utils.prompt_templates.prompt_cache_breakpoint_utils import (
+    whole_prompt_cache_breakpoint_or_none as whole_prompt_cache_breakpoint_or_none,  # noqa: PLC0414  # public compatibility re-export
+)
+from litellm.litellm_core_utils.prompt_templates.prompt_cache_breakpoint_utils import (
+    with_prompt_cache_breakpoint as with_prompt_cache_breakpoint,  # noqa: PLC0414  # public compatibility re-export
+)
+from litellm.litellm_core_utils.prompt_templates.prompt_cache_breakpoint_utils import (
+    without_prompt_cache_breakpoints as without_prompt_cache_breakpoints,  # noqa: PLC0414  # public compatibility re-export
+)
+from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
+    ENCRYPTED_REASONING_SIGNATURE_PREFIX as ENCRYPTED_REASONING_SIGNATURE_PREFIX,  # noqa: PLC0414  # public compatibility re-export
+)
+from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
+    anthropic_content_lists as anthropic_content_lists,  # noqa: PLC0414  # public compatibility re-export
+)
+from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
+    converse_redacted_content as converse_redacted_content,  # noqa: PLC0414  # public compatibility re-export
+)
+from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
+    encrypted_content_from_signature as encrypted_content_from_signature,  # noqa: PLC0414  # public compatibility re-export
+)
+from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
+    encrypted_content_of_block as encrypted_content_of_block,  # noqa: PLC0414  # public compatibility re-export
+)
+from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
+    encrypted_reasoning_signature as encrypted_reasoning_signature,  # noqa: PLC0414  # public compatibility re-export
+)
+from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
+    extract_reasoning_content as extract_reasoning_content,  # noqa: PLC0414  # public compatibility re-export
+)
+from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
+    has_blank_redacted_data as has_blank_redacted_data,  # noqa: PLC0414  # public compatibility re-export
+)
+from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
+    is_encrypted_reasoning_block as is_encrypted_reasoning_block,  # noqa: PLC0414  # public compatibility re-export
+)
+from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
+    is_unsignable_thinking_block as is_unsignable_thinking_block,  # noqa: PLC0414  # public compatibility re-export
+)
+from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
+    native_redacted_thinking_data as native_redacted_thinking_data,  # noqa: PLC0414  # public compatibility re-export
+)
+from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
+    parse_content_for_reasoning as parse_content_for_reasoning,  # noqa: PLC0414  # public compatibility re-export
+)
+from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
+    reasoning_content_from_thinking_blocks as reasoning_content_from_thinking_blocks,  # noqa: PLC0414  # public compatibility re-export
+)
+from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
+    responses_reasoning_items_from_thinking_blocks as responses_reasoning_items_from_thinking_blocks,  # noqa: PLC0414  # public compatibility re-export
+)
+from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
+    strip_encrypted_reasoning_from_messages as strip_encrypted_reasoning_from_messages,  # noqa: PLC0414  # public compatibility re-export
+)
+from litellm.litellm_core_utils.prompt_templates.tool_call_json_repair import (
+    MAX_SALVAGED_TOOL_ARGUMENT_OBJECTS as MAX_SALVAGED_TOOL_ARGUMENT_OBJECTS,  # noqa: PLC0414  # public compatibility re-export
+)
+from litellm.litellm_core_utils.prompt_templates.tool_call_json_repair import (
+    parse_tool_call_arguments as parse_tool_call_arguments,  # noqa: PLC0414  # public compatibility re-export
+)
+from litellm.litellm_core_utils.prompt_templates.tool_call_json_repair import (
+    salvage_concatenated_tool_arguments as salvage_concatenated_tool_arguments,  # noqa: PLC0414  # public compatibility re-export
+)
+from litellm.litellm_core_utils.prompt_templates.tool_call_json_repair import (
+    split_concatenated_json_objects as split_concatenated_json_objects,  # noqa: PLC0414  # public compatibility re-export
+)
+from litellm.litellm_core_utils.prompt_templates.tpm_media_utils import (
+    _image_part_url,  # pyright: ignore[reportPrivateUsage]  # Shared implementation for as_openai_image_part
+)
+from litellm.litellm_core_utils.prompt_templates.tpm_media_utils import (
+    anthropic_image_source_to_openai_url as anthropic_image_source_to_openai_url,  # noqa: PLC0414  # public compatibility re-export
+)
+from litellm.litellm_core_utils.prompt_templates.tpm_media_utils import (
+    embedding_input_is_all_media as embedding_input_is_all_media,  # noqa: PLC0414  # public compatibility re-export
+)
+from litellm.litellm_core_utils.prompt_templates.tpm_media_utils import (
+    split_embedding_media_for_tpm as split_embedding_media_for_tpm,  # noqa: PLC0414  # public compatibility re-export
+)
+from litellm.litellm_core_utils.prompt_templates.tpm_media_utils import (
+    split_media_for_tpm as split_media_for_tpm,  # noqa: PLC0414  # public compatibility re-export
+)
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionAssistantMessage,
     ChatCompletionAudioObject,
-    ChatCompletionCachedContent,
     ChatCompletionFileObject,
     ChatCompletionImageObject,
-    ChatCompletionPromptCacheBreakpoint,
-    ChatCompletionReasoningItem,
-    ChatCompletionReasoningSummaryTextBlock,
-    ChatCompletionRedactedThinkingBlock,
     ChatCompletionResponseMessage,
     ChatCompletionTextObject,
-    ChatCompletionThinkingBlock,
     ChatCompletionToolParam,
     ChatCompletionUserMessage,
-    PromptCacheBreakpoint,
 )
 from litellm.types.utils import (
     Choices,
-    ExtractedFileData,
-    FileTypes,
     ModelResponse,
-    SpecialEnums,
     StreamingChoices,
 )
 
@@ -57,6 +221,112 @@ if TYPE_CHECKING:  # newer pattern to avoid importing pydantic objects on __init
 DEFAULT_USER_CONTINUE_MESSAGE: Final = ChatCompletionUserMessage(content="Please continue.", role="user")
 
 DEFAULT_ASSISTANT_CONTINUE_MESSAGE: Final = ChatCompletionAssistantMessage(content="Please continue.", role="assistant")
+
+_extract_reasoning_content: Final = extract_reasoning_content
+_get_image_mime_type_from_url: Final = get_image_mime_type_from_url
+_parse_content_for_reasoning: Final = parse_content_for_reasoning
+
+_MOVED_PRIVATE_NAME_MODULES: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        **dict.fromkeys(
+            ("_decode_vector_store_ids_in_tools",),
+            "file_id_utils",
+        ),
+        **dict.fromkeys(
+            (
+                "_EMPTY_SCHEMA",
+                "_LOCAL_SCHEMA_REF_PREFIXES",
+                "_MAX_SCHEMA_FLATTEN_DEPTH",
+                "_MAX_SCHEMA_NESTING",
+                "_OPENAI_REJECTED_TOP_LEVEL_SCHEMA_KEYS",
+                "_REGEX_LOOKAROUND_RE",
+                "_SCHEMA_LIST",
+                "_SUBSCHEMA_KEYWORDS",
+                "_SUBSCHEMA_LIST_KEYWORDS",
+                "_SUBSCHEMA_MAP_KEYWORDS",
+                "_TOP_LEVEL_SCHEMA_COMBINATORS",
+                "_any_of",
+                "_combinator_required_names",
+                "_dropped_pattern_properties",
+                "_flatten_schema_against_root",
+                "_grammar_branches",
+                "_is_not_python_regex",
+                "_is_object_schema",
+                "_is_open_object",
+                "_is_union",
+                "_keyword_value_rebuilt",
+                "_list_at",
+                "_may_be_string",
+                "_mergeable_branch",
+                "_named_schemas",
+                "_node_without_rejected_regex",
+                "_optional_property_names",
+                "_property_schemas",
+                "_refs_in",
+                "_resolve_local_schema_ref",
+                "_root_definitions",
+                "_schema_at",
+                "_schema_branches",
+                "_schema_levels",
+                "_schema_nodes",
+                "_schema_properties",
+                "_schema_required_names",
+                "_schema_without_rejected_regex",
+                "_subschemas",
+                "_uses_regex_lookaround",
+            ),
+            "json_schema_utils",
+        ),
+        **dict.fromkeys(
+            (
+                "_BREAKPOINT_BLOCKS",
+                "_BREAKPOINT_BLOCK_LIST_KEYS",
+                "_BREAKPOINT_FIELDS",
+                "_MarkedT",
+                "_PROMPT_CACHE_BREAKPOINT",
+                "_breakpoints_stripped_from",
+                "_without_prompt_cache_breakpoint",
+            ),
+            "prompt_cache_breakpoint_utils",
+        ),
+        **dict.fromkeys(
+            (
+                "_carries_encrypted_reasoning",
+                "_converse_wrapped_payload",
+                "_encrypted_reasoning_field",
+                "_provider_text_or_none",
+                "_readable_thinking_text",
+                "_reasoning_item_from_block_group",
+                "_reasoning_replay_group_key",
+                "_strip_encrypted_reasoning_from_blocks",
+            ),
+            "reasoning_utils",
+        ),
+        **dict.fromkeys(
+            (
+                "_DECODED_JSON",
+                "_attempt_json_repair",
+            ),
+            "tool_call_json_repair",
+        ),
+        **dict.fromkeys(
+            (
+                "_TPMMediaProjection",
+                "_tpm_blank_fields",
+                "_tpm_code_output_media",
+                "_tpm_document_media",
+                "_tpm_file_media",
+                "_tpm_image_part",
+                "_tpm_input_media",
+                "_tpm_media_leaf",
+                "_tpm_media_list",
+                "_tpm_replace_field",
+                "_tpm_tool_result_media",
+            ),
+            "tpm_media_utils",
+        ),
+    }
+)
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LoggingClass
@@ -245,228 +515,6 @@ _IMAGE_CONTENT_PART_TYPES: Final = ("image_url", "input_image", "image", "comput
 _IMAGE_SCAN_MAX_DEPTH: Final = 4
 
 
-@dataclass(frozen=True, slots=True)
-class _TPMMediaProjection:
-    content: object
-    media: tuple[Mapping[str, object], ...] = ()
-
-
-def _tpm_image_part(url: str, detail: object = "auto") -> Mapping[str, object]:
-    return {"type": "image_url", "image_url": {"url": url, "detail": detail}}
-
-
-def _tpm_blank_fields(fields: Mapping[str, object], names: tuple[str, ...]) -> Mapping[str, object]:
-    return {key: "" if key in names and isinstance(value, str) else value for key, value in fields.items()}
-
-
-def _tpm_file_media(part: Mapping[str, object]) -> _TPMMediaProjection:
-    from litellm.litellm_core_utils.prompt_templates.factory import parse_mime_type
-
-    nested: Final = part.get("type") == "file"
-    fields: Final = as_str_mapping(part.get("file")) if nested else part
-    if fields is None:
-        return _TPMMediaProjection(part)
-    raw_data: Final = fields.get("file_data")
-    data: Final = raw_data if isinstance(raw_data, str) else ""
-    declared: Final = next(
-        (
-            value
-            for key in ("format", "mime_type", "content_type")
-            if isinstance(value := fields.get(key), str) and value
-        ),
-        "",
-    )
-    mime: Final = (declared or parse_mime_type(data[:256]) or "").split(";", 1)[0].strip().lower()
-    if not mime.startswith(("image/", "audio/")):
-        return _TPMMediaProjection(part)
-    raw_url: Final = fields.get("file_url") or fields.get("file_id")
-    url: Final = data or (raw_url if isinstance(raw_url, str) else "")
-    header_end: Final = data.find(",", 0, 256)
-    encoded: Final = (
-        data[header_end + 1 :]
-        if header_end >= 0 and data[:header_end].endswith(";base64")
-        else ""
-        if data.startswith(("data:", "https://", "http://", "gs://"))
-        else data
-    )
-    media: Final = (
-        _tpm_image_part(
-            url
-            if not data or url.startswith(("data:", "https://", "http://", "gs://"))
-            else f"data:{mime};base64,{url}",
-            fields.get("detail", "auto"),
-        )
-        if mime.startswith("image/")
-        else {"type": "input_audio", "input_audio": {"data": encoded, "format": mime.removeprefix("audio/")}}
-    )
-    projected: Final = _tpm_blank_fields(fields, ("file_data", "file_url"))
-    return _TPMMediaProjection({**part, "file": projected} if nested else projected, (media,))
-
-
-def _tpm_media_leaf(value: object) -> _TPMMediaProjection:
-    part: Final = as_str_mapping(value)
-    if part is None:
-        return _TPMMediaProjection(value)
-    kind: Final = part.get("type")
-    if kind in ("file", "input_file"):
-        return _tpm_file_media(part)
-    if kind == "input_audio":
-        audio: Final = as_str_mapping(part.get("input_audio"))
-        return _TPMMediaProjection(
-            {**part, "input_audio": _tpm_blank_fields(audio, ("data",))} if audio is not None else value,
-            ({"type": "input_audio", "input_audio": part.get("input_audio")},),
-        )
-    if kind in ("image_url", "input_image", "image", "computer_screenshot"):
-        image: Final = as_str_mapping(part.get("image_url"))
-        source: Final = as_str_mapping(part.get("source"))
-        canonical: Final = _tpm_image_part(
-            _image_part_url({**part, "type": "input_image"} if kind == "computer_screenshot" else part) or "",
-            (image or part).get("detail", part.get("detail", "auto")),
-        )
-        projected: Final = (
-            {**part, "image_url": _tpm_blank_fields(image, ("url",))}
-            if image is not None and kind in ("image_url", "input_image", "computer_screenshot")
-            else {**part, "source": _tpm_blank_fields(source, ("data", "url"))}
-            if source is not None and kind == "image" and source.get("type") in ("base64", "url")
-            else _tpm_blank_fields(part, ("image_url", "url"))
-        )
-        return _TPMMediaProjection(projected, (canonical,))
-    return _TPMMediaProjection(value)
-
-
-def _tpm_media_list(value: object, split: Callable[[object], _TPMMediaProjection]) -> _TPMMediaProjection:
-    if not isinstance(value, (list, tuple)):
-        return _TPMMediaProjection(value)
-    parts: Final = cast(Sequence[object], value)  # cast-ok: finite JSON content arrays
-    projected: Final = tuple(map(split, parts))
-    media: Final = tuple(chain.from_iterable(part.media for part in projected))
-    content: Final = tuple(part.content for part in projected)
-    return _TPMMediaProjection(parts if not media else content if isinstance(value, tuple) else list(content), media)
-
-
-def _tpm_replace_field(part: Mapping[str, object], key: str, projection: _TPMMediaProjection) -> _TPMMediaProjection:
-    return _TPMMediaProjection({**part, key: projection.content} if projection.media else part, projection.media)
-
-
-def _tpm_document_media(value: object) -> _TPMMediaProjection:
-    part: Final = as_str_mapping(value)
-    source: Final = as_str_mapping(part.get("source")) if part is not None else None
-    if part is None or part.get("type") != "document" or source is None or source.get("type") != "content":
-        return _tpm_media_leaf(value)
-    content: Final = _tpm_media_list(source.get("content"), _tpm_media_leaf)
-    return _tpm_replace_field(part, "source", _tpm_replace_field(source, "content", content))
-
-
-def _tpm_tool_result_media(value: object) -> _TPMMediaProjection:
-    part: Final = as_str_mapping(value)
-    if part is None or part.get("type") != "tool_result":
-        return _tpm_document_media(value)
-    return _tpm_replace_field(part, "content", _tpm_media_list(part.get("content"), _tpm_document_media))
-
-
-def _tpm_code_output_media(value: object) -> _TPMMediaProjection:
-    part: Final = as_str_mapping(value)
-    url: Final = part.get("url") if part is not None else None
-    if part is None or part.get("type") != "image" or not isinstance(url, str) or not url:
-        return _TPMMediaProjection(value)
-    return _TPMMediaProjection(_tpm_blank_fields(part, ("url",)), (_tpm_image_part(url),))
-
-
-def _tpm_input_media(value: object) -> _TPMMediaProjection:
-    part: Final = as_str_mapping(value)
-    if part is None:
-        return _TPMMediaProjection(value)
-    kind: Final = part.get("type")
-    if kind in ("function_call_output", "custom_tool_call_output"):
-        return _tpm_replace_field(part, "output", _tpm_media_list(part.get("output"), _tpm_tool_result_media))
-    if kind == "computer_call_output":
-        return _tpm_replace_field(part, "output", _tpm_media_leaf(part.get("output")))
-    if kind == "code_interpreter_call":
-        return _tpm_replace_field(part, "outputs", _tpm_media_list(part.get("outputs"), _tpm_code_output_media))
-    result: Final = part.get("result")
-    if kind == "image_generation_call" and isinstance(result, str) and result:
-        return _TPMMediaProjection(
-            _tpm_blank_fields(part, ("result",)),
-            (_tpm_image_part("data:application/octet-stream;base64," + result),),
-        )
-    if kind == "message" or (kind is None and isinstance(part.get("role"), str)):
-        return _tpm_replace_field(part, "content", _tpm_media_list(part.get("content"), _tpm_tool_result_media))
-    return _tpm_tool_result_media(value)
-
-
-def split_media_for_tpm(value: object) -> tuple[object, tuple[Mapping[str, object], ...]]:
-    projection: Final = _tpm_media_list(value, _tpm_input_media)
-    return projection.content, projection.media
-
-
-_TPM_EMBEDDING_FILE_MIME_PREFIXES: Final = ("application/pdf", "video/")
-
-
-def _tpm_embedding_file(data_uri: str) -> tuple[Mapping[str, object], ...]:
-    from litellm.litellm_core_utils.prompt_templates.factory import parse_mime_type
-
-    mime: Final = (parse_mime_type(data_uri[:256]) or "").strip().lower()
-    if not mime.startswith(_TPM_EMBEDDING_FILE_MIME_PREFIXES):
-        return ()
-    return ({"type": "file", "file": {"file_data": data_uri, "format": mime}},)
-
-
-_BASE64_PAYLOAD: Final = re.compile(r"[A-Za-z0-9+/]*={0,2}")
-
-
-def _is_base64_data_uri(value: str) -> bool:
-    header_end: Final = value.find(",", 0, 256)
-    if header_end < 0 or not value[:header_end].endswith(";base64"):
-        return False
-    payload_start: Final = header_end + 1
-    if (len(value) - payload_start) % 4 or _BASE64_PAYLOAD.fullmatch(value, payload_start) is None:
-        return False
-    last_quantum: Final = value[max(payload_start, len(value) - 4) :]
-    return base64.b64encode(base64.b64decode(last_quantum)).decode("ascii") == last_quantum
-
-
-def _tpm_embedding_file_block(part: Mapping[str, object]) -> _TPMMediaProjection:
-    projection: Final = _tpm_file_media(part)
-    fields: Final = as_str_mapping(part.get("file"))
-    data: Final = fields.get("file_data") if fields is not None else None
-    if projection.media or fields is None or not isinstance(data, str) or not _is_base64_data_uri(data):
-        return projection
-    media: Final = _tpm_embedding_file(data)
-    return _TPMMediaProjection({**part, "file": _tpm_blank_fields(fields, ("file_data",))} if media else part, media)
-
-
-def _tpm_embedding_leaf(value: object) -> _TPMMediaProjection:
-    part: Final = as_str_mapping(value)
-    if part is not None and part.get("type") == "file":
-        return _tpm_embedding_file_block(part)
-    if not isinstance(value, str) or not value.startswith("data:"):
-        return _tpm_media_leaf(value)
-    if not _is_base64_data_uri(value):
-        return _TPMMediaProjection(value)
-    media: Final = _tpm_file_media({"file_data": value}).media or _tpm_embedding_file(value)
-    return _TPMMediaProjection("" if media else value, media)
-
-
-def _is_json_array(value: object) -> bool:
-    return isinstance(value, (list, tuple))
-
-
-def _tpm_embedding_item(value: object) -> _TPMMediaProjection:
-    return _tpm_media_list(value, _tpm_embedding_leaf) if _is_json_array(value) else _tpm_embedding_leaf(value)
-
-
-def split_embedding_media_for_tpm(value: object) -> tuple[object, tuple[Mapping[str, object], ...]]:
-    projection: Final = (
-        _tpm_media_list(value, _tpm_embedding_item) if _is_json_array(value) else _tpm_embedding_leaf(value)
-    )
-    return projection.content, projection.media
-
-
-def embedding_input_is_all_media(value: object) -> bool:
-    items: Final = cast(Sequence[object], value) if _is_json_array(value) else (value,)  # cast-ok: JSON input array
-    return all(_tpm_embedding_leaf(item).media for item in items)
-
-
 def _content_parts_contain_image(parts: Sequence[object]) -> bool:
     """Depth-bounded frontier walk over nested content lists, iterative because the repo bans
     recursion; an Anthropic tool_result nests its image parts exactly one level down."""
@@ -485,19 +533,6 @@ def _content_parts_contain_image(parts: Sequence[object]) -> bool:
         if not frontier:
             return False
     return False
-
-
-def anthropic_image_source_to_openai_url(image_source: Mapping[str, object]) -> str | None:
-    """Data or remote URL for an Anthropic ``source`` block, in the form chat completions expects."""
-    source_type: Final = image_source.get("type")
-    if source_type == "base64":
-        media_type: Final = image_source.get("media_type") or "image/jpeg"
-        image_data: Final = image_source.get("data") or ""
-        return f"data:{media_type};base64,{image_data}" if image_data else None
-    if source_type == "url":
-        url: Final = image_source.get("url")
-        return url if isinstance(url, str) else ""
-    return None
 
 
 @dataclass(frozen=True, slots=True)
@@ -603,22 +638,6 @@ def messages_with_file_parts_as_image_urls(messages: Sequence[AllMessageValues])
     return tuple(_typed_message_with_file_parts_as_image_urls(message) for message in messages)
 
 
-def _image_part_url(part: Mapping[str, object]) -> str | None:
-    """The image URL carried by one content part, whichever of the three dialects wrote it."""
-    part_type: Final = part.get("type")
-    if part_type in ("image_url", "input_image"):
-        image_url: Final = part.get("image_url") or part.get("url")
-        if isinstance(image_url, str):
-            return image_url
-        image_fields: Final = as_str_mapping(image_url)
-        url: Final = image_fields.get("url") if image_fields is not None else None
-        return url if isinstance(url, str) else None
-    if part_type == "image":
-        source: Final = part.get("source")
-        return anthropic_image_source_to_openai_url(source) if isinstance(source, Mapping) else None
-    return None
-
-
 def as_openai_image_part(part: Mapping[str, object]) -> ChatCompletionImageObject | None:
     """One image content part rewritten into chat-completions dialect, or None when it is not one.
 
@@ -691,6 +710,8 @@ def get_content_from_model_response(response: ModelResponse | dict) -> str:
     else:
         new_response = response
 
+    from litellm.llms.anthropic.common_utils import tool_calls_with_server_tool_calls
+
     content = ""
 
     for choice in new_response.choices:
@@ -698,9 +719,8 @@ def get_content_from_model_response(response: ModelResponse | dict) -> str:
             content += choice.message.content if choice.message.content else ""
             if choice.message.function_call:
                 content += choice.message.function_call.model_dump_json()
-            if choice.message.tool_calls:
-                for tc in choice.message.tool_calls:
-                    content += tc.model_dump_json()
+            for tc in tool_calls_with_server_tool_calls(choice.message):
+                content += tc.model_dump_json()
         elif isinstance(choice, StreamingChoices):
             content += getattr(choice, "delta", {}).get("content", "") or ""
     return content
@@ -865,433 +885,6 @@ def get_completion_messages(
     ## INSERT ASSISTANT CONTINUE MESSAGE
     messages = _insert_assistant_continue_message(messages, assistant_continue_message, ensure_alternating_roles)
     return messages
-
-
-def get_format_from_file_id(file_id: str | None) -> str | None:
-    """
-    Gets format from file id
-
-    unified_file_id = litellm_proxy:{};unified_id,{}
-    If not a unified file id, returns 'file' as default format
-    """
-    from litellm.proxy.openai_files_endpoints.common_utils import (
-        convert_b64_uid_to_unified_uid,
-    )
-
-    if not file_id:
-        return None
-    try:
-        transformed_file_id: Final = convert_b64_uid_to_unified_uid(file_id)
-        if transformed_file_id.startswith(SpecialEnums.LITELM_MANAGED_FILE_ID_PREFIX.value):
-            match: Final = re.match(
-                f"{SpecialEnums.LITELM_MANAGED_FILE_ID_PREFIX.value}:(.*?);unified_id",
-                transformed_file_id,
-            )
-            if match:
-                return match.group(1)
-
-        return None
-    except Exception:
-        return None
-
-
-def update_messages_with_model_file_ids(
-    messages: list[AllMessageValues],
-    model_id: str | None,
-    model_file_id_mapping: dict[str, dict[str, str]],
-) -> list[AllMessageValues]:
-    """
-    Updates messages with model file ids.
-
-    For managed files (unified file IDs), uses model_file_id_mapping if it
-    resolves the id, otherwise decodes the base64-encoded unified file ID
-    and extracts the llm_output_file_id directly. Mirrors the Responses-API
-    sibling `update_responses_input_with_model_file_ids`.
-
-    model_file_id_mapping: Dict[str, Dict[str, str]] = {
-        "litellm_proxy/file_id": {
-            "model_id": "provider_file_id"
-        }
-    }
-    """
-    from litellm.proxy.openai_files_endpoints.common_utils import (
-        convert_b64_uid_to_unified_uid,
-        get_original_file_id,
-        is_base64_encoded_unified_file_id,
-        is_model_embedded_id,
-    )
-
-    for message in messages:
-        if message.get("role") == "user":
-            content = message.get("content")
-            if content:
-                if isinstance(content, str):
-                    continue
-                for c in content:
-                    if not isinstance(c, dict):
-                        # Content list items aren't always dicts. e.g.
-                        # text_completion forwards a token-ids list/list-of-
-                        # lists through this path. Skip non-dict items
-                        # instead of indexing into them.
-                        continue
-                    if c.get("type") == "file":
-                        file_object = cast(ChatCompletionFileObject, c)
-                        file_object_file_field = file_object.get("file")
-                        if not isinstance(file_object_file_field, dict):
-                            # Content block has `type: "file"` but not the
-                            # OpenAI Chat Completions shape (e.g. a LangChain
-                            # v1 standardized file block, or a provider-native
-                            # shape that also uses `type: "file"`). Nothing to
-                            # remap here, so skip instead of crashing.
-                            continue
-                        file_id = file_object_file_field.get("file_id")
-                        format = file_object_file_field.get("format", get_format_from_file_id(file_id))
-
-                        if file_id:
-                            provider_file_id = (
-                                model_file_id_mapping.get(file_id, {}).get(model_id)
-                                if model_file_id_mapping and model_id is not None
-                                else None
-                            )
-                            if not provider_file_id and is_base64_encoded_unified_file_id(file_id):
-                                unified_file_id = convert_b64_uid_to_unified_uid(file_id)
-                                if "llm_output_file_id," in unified_file_id:
-                                    provider_file_id = unified_file_id.split("llm_output_file_id,")[1].split(";")[0]
-                            if not provider_file_id and is_model_embedded_id(file_id):
-                                provider_file_id = get_original_file_id(file_id)
-                            file_object_file_field["file_id"] = provider_file_id or file_id
-                        if format:
-                            file_object_file_field["format"] = format
-    return messages
-
-
-def update_responses_input_with_model_file_ids(
-    input: object,
-    model_id: str | None = None,
-    model_file_id_mapping: Mapping[str, Mapping[str, str]] | None = None,
-) -> object:
-    """
-    Updates responses API input with provider-specific file IDs.
-    File IDs are always inside the content array, not as direct input_file items.
-
-    For managed files (unified file IDs), uses model_file_id_mapping if provided,
-    otherwise decodes the base64-encoded unified file ID and extracts the llm_output_file_id directly.
-
-    Args:
-        input: The responses API input parameter
-        model_id: The model ID to use for looking up provider-specific file IDs
-        model_file_id_mapping: Dictionary mapping litellm file IDs to provider file IDs
-                               Format: {"litellm_file_id": {"model_id": "provider_file_id"}}
-    """
-    from litellm.proxy.openai_files_endpoints.common_utils import (
-        convert_b64_uid_to_unified_uid,
-        get_original_file_id,
-        is_base64_encoded_unified_file_id,
-        is_model_embedded_id,
-    )
-
-    if isinstance(input, str):
-        return input
-
-    if not isinstance(input, list):
-        return input
-
-    updated_input: Final = []
-    for item in input:
-        if not isinstance(item, dict):
-            updated_input.append(item)
-            continue
-
-        updated_item = item.copy()
-        content = item.get("content")
-        if isinstance(content, list):
-            updated_content = []
-            for content_item in content:
-                if isinstance(content_item, dict) and content_item.get("type") == "input_file":
-                    file_id = content_item.get("file_id")
-                    if isinstance(file_id, str) and file_id:
-                        provider_file_id = file_id  # Default to original
-
-                        # Check if we have a mapping for this file ID
-                        if model_file_id_mapping and model_id and file_id in model_file_id_mapping:
-                            # Use the model-specific file ID from mapping
-                            provider_file_id = model_file_id_mapping.get(file_id, {}).get(model_id) or file_id
-                            updated_content_item = content_item.copy()
-                            updated_content_item["file_id"] = provider_file_id
-                            updated_content.append(updated_content_item)
-                        else:
-                            # Check if this is a base64-encoded unified file ID without mapping
-                            is_unified_file_id = is_base64_encoded_unified_file_id(file_id)
-                            if is_unified_file_id:
-                                # Fallback: decode unified file ID
-                                unified_file_id = convert_b64_uid_to_unified_uid(file_id)
-                                if "llm_output_file_id," in unified_file_id:
-                                    provider_file_id = unified_file_id.split("llm_output_file_id,")[1].split(";")[0]
-
-                                updated_content_item = content_item.copy()
-                                updated_content_item["file_id"] = provider_file_id
-                                updated_content.append(updated_content_item)
-                            elif is_model_embedded_id(file_id):
-                                updated_content_item = content_item.copy()
-                                updated_content_item["file_id"] = get_original_file_id(file_id)
-                                updated_content.append(updated_content_item)
-                            else:
-                                # Not a managed file, keep as-is
-                                updated_content.append(content_item)
-                    else:
-                        updated_content.append(content_item)
-                else:
-                    updated_content.append(content_item)
-            updated_item["content"] = updated_content
-
-        updated_input.append(updated_item)
-
-    return updated_input
-
-
-def _decode_vector_store_ids_in_tools(
-    tools: list[dict[str, object]] | None,
-) -> list[dict[str, object]] | None:
-    """
-    Decodes unified (LiteLLM-managed) vector_store_ids in file_search tools to
-    provider-native IDs.  Non-unified IDs are passed through unchanged.
-
-    This runs unconditionally — no file-ID mapping is required.
-    """
-    if not tools or not isinstance(tools, list):
-        return tools
-
-    from litellm.llms.base_llm.managed_resources.utils import (
-        is_base64_encoded_unified_id,
-        parse_unified_id,
-    )
-
-    updated_tools: Final = []
-    for tool in tools:
-        if not isinstance(tool, dict) or tool.get("type") != "file_search":
-            updated_tools.append(tool)
-            continue
-
-        vector_store_ids = tool.get("vector_store_ids")
-        if not isinstance(vector_store_ids, list):
-            updated_tools.append(tool)
-            continue
-
-        decoded_ids = []
-        for vs_id in vector_store_ids:
-            if not isinstance(vs_id, str) or not is_base64_encoded_unified_id(vs_id):
-                decoded_ids.append(vs_id)
-                continue
-
-            parsed = parse_unified_id(vs_id)
-            provider_resource_id = parsed.get("provider_resource_id") if parsed else None
-
-            if not provider_resource_id:
-                verbose_logger.warning(
-                    "file_search tool contains unified vector_store_id '%s' that could "
-                    "not be decoded to a provider resource ID — passing original ID. "
-                    "Ensure the vector store was created via LiteLLM.",
-                    vs_id,
-                )
-                decoded_ids.append(vs_id)
-            else:
-                decoded_ids.append(provider_resource_id)
-
-        updated_tools.append({**tool, "vector_store_ids": decoded_ids})
-
-    return updated_tools
-
-
-def update_responses_tools_with_model_file_ids(
-    tools: list[dict[str, object]] | None,
-    model_id: str | None = None,
-    model_file_id_mapping: Mapping[str, Mapping[str, str]] | None = None,
-) -> list[dict[str, object]] | None:
-    """
-    Updates responses API tools with provider-specific file IDs.
-
-    Pass 1 (always): decode unified vector_store_ids in file_search tools.
-    Pass 2 (needs mapping): map code_interpreter container file_ids to provider IDs.
-
-    Args:
-        tools: The responses API tools parameter
-        model_id: The model ID to use for looking up provider-specific file IDs
-        model_file_id_mapping: Dictionary mapping litellm file IDs to provider file IDs
-                               Format: {"litellm_file_id": {"model_id": "provider_file_id"}}
-    """
-    if not tools or not isinstance(tools, list):
-        return tools
-
-    # Pass 1: decode unified vector_store_ids (no mapping needed)
-    tools = _decode_vector_store_ids_in_tools(tools) or tools
-
-    # Pass 2: map code_interpreter file IDs (requires mapping)
-    if not model_file_id_mapping or not model_id:
-        return tools
-
-    updated_tools: Final = []
-    for tool in tools:
-        if not isinstance(tool, dict):
-            updated_tools.append(tool)
-            continue
-
-        updated_tool = tool.copy()
-
-        # Handle code_interpreter with container file_ids
-        if tool.get("type") == "code_interpreter":
-            container = tool.get("container")
-            if isinstance(container, dict):
-                container_file_ids = container.get("file_ids")
-                if isinstance(container_file_ids, list):
-                    updated_file_ids = []
-                    for file_id in container_file_ids:
-                        if isinstance(file_id, str):
-                            # Check if we have a mapping for this file ID
-                            if file_id in model_file_id_mapping:
-                                # Map to provider-specific file ID
-                                provider_file_id = model_file_id_mapping.get(file_id, {}).get(model_id) or file_id
-                                updated_file_ids.append(provider_file_id)
-                            else:
-                                updated_file_ids.append(file_id)
-                        else:
-                            updated_file_ids.append(file_id)
-
-                    # Update the tool with new file IDs
-                    updated_container = container.copy()
-                    updated_container["file_ids"] = updated_file_ids
-                    updated_tool["container"] = updated_container
-
-        updated_tools.append(updated_tool)
-
-    return updated_tools
-
-
-def extract_file_metadata(file_data: FileTypes) -> tuple[str | None, str | None]:
-    """
-    Resolve (filename, content_type) without reading the file body.
-
-    Mirrors extract_file_data's metadata resolution but never calls .read(), so
-    it stays O(1) on large uploads. Use this when only metadata is needed (batch
-    detection, GCS object naming) and the body must remain a streamable Path/handle.
-    """
-    filename: str | None = None
-    content_type: str | None = None
-    file_content: object = None
-
-    if isinstance(file_data, tuple):
-        if len(file_data) == 2:
-            filename, file_content = file_data
-        elif len(file_data) == 3:
-            filename, file_content, content_type = file_data
-        elif len(file_data) == 4:
-            filename, file_content, content_type, _ = file_data
-    elif isinstance(file_data, InMemoryFile):
-        filename = file_data.name
-        content_type = file_data.content_type
-    else:
-        file_content = file_data
-
-    if filename is None:
-        if isinstance(file_content, PathLike):
-            filename = Path(file_content).name
-        elif isinstance(file_content, io.IOBase):
-            name_attr: Final = getattr(file_content, "name", None)
-            if isinstance(name_attr, str):
-                filename = Path(name_attr).name
-
-    if not content_type:
-        guessed: Final = mimetypes.guess_type(filename)[0] if filename else None
-        content_type = guessed or "application/octet-stream"
-
-    return filename, content_type
-
-
-def extract_file_data(file_data: FileTypes) -> ExtractedFileData:
-    """
-    Extracts and processes file data from various input formats.
-
-    Args:
-        file_data: Can be a tuple of (filename, content, [content_type], [headers]) or direct file content
-
-    Returns:
-        ExtractedFileData containing:
-        - filename: Name of the file if provided
-        - content: The file content in bytes
-        - content_type: MIME type of the file
-        - headers: Any additional headers
-    """
-    # Parse the file_data based on its type
-    filename = None
-    file_content = None
-    content_type = None
-    file_headers: Mapping[str, str] = {}
-
-    if isinstance(file_data, tuple):
-        if len(file_data) == 2:
-            filename, file_content = file_data
-        elif len(file_data) == 3:
-            filename, file_content, content_type = file_data
-        elif len(file_data) == 4:
-            filename, file_content, content_type, file_headers = file_data
-    elif isinstance(file_data, InMemoryFile):
-        filename = file_data.name
-        file_content = file_data
-        content_type = file_data.content_type
-    else:
-        file_content = file_data
-    # Convert content to bytes
-    if isinstance(file_content, str):
-        # Bare string inputs are rejected: when this helper runs in a proxy
-        # request handler the string came from an attacker-controlled form
-        # field, and opening it as a path is an arbitrary file read on the
-        # proxy host. SDK callers who want to upload from a path should
-        # either pass a pathlib.Path (a PathLike instance — see the branch
-        # below) or open the file themselves and pass the handle / bytes.
-        raise ValueError(
-            "extract_file_data does not accept bare str inputs. Pass bytes, "
-            "an open file handle, a (filename, content) tuple, or a "
-            "pathlib.Path. To upload a local file from a path, call "
-            "open(path, 'rb') yourself."
-        )
-    if isinstance(file_content, PathLike):
-        # PathLike (pathlib.Path) is a Python-level type that HTTP form
-        # values can't fabricate. Treat as a local file path for SDK
-        # convenience.
-        if filename is None:
-            filename = Path(file_content).name
-        with open(file_content, "rb") as f:
-            content = f.read()
-    elif isinstance(file_content, io.IOBase):
-        # If it's a file-like object
-        # Try to get filename from file handle if not already set
-        if not filename and hasattr(file_content, "name"):
-            filename = Path(file_content.name).name
-
-        content = file_content.read()
-
-        if isinstance(content, str):
-            content = content.encode("utf-8")
-        # Reset file pointer to beginning
-        file_content.seek(0)
-    elif isinstance(file_content, bytes):
-        content = file_content
-    else:
-        raise ValueError(f"Unsupported file content type: {type(file_content)}")
-
-    # Use provided content type or guess based on filename
-    if not content_type:
-        if filename:
-            guessed_type: Final = mimetypes.guess_type(filename)[0]
-            content_type = guessed_type if guessed_type else "application/octet-stream"
-        else:
-            content_type = "application/octet-stream"
-
-    return ExtractedFileData(
-        filename=filename,
-        content=content,
-        content_type=content_type,
-        headers=file_headers,
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -1536,633 +1129,6 @@ def sanitize_input_schema_for_anthropic(input_schema: dict) -> "AnthropicInputSc
     return AnthropicInputSchema(**filtered)
 
 
-_TOP_LEVEL_SCHEMA_COMBINATORS: Final = ("allOf", "anyOf", "oneOf")
-_OPENAI_REJECTED_TOP_LEVEL_SCHEMA_KEYS: Final = ("enum", "const", "not")
-_LOCAL_SCHEMA_REF_PREFIXES: Final = (("#/$defs/", "$defs"), ("#/definitions/", "definitions"))
-_MAX_SCHEMA_FLATTEN_DEPTH: Final = 32
-_EMPTY_SCHEMA: Final[Mapping[str, object]] = MappingProxyType({})
-
-
-def _schema_properties(schema: Mapping[str, object]) -> Mapping[str, object]:
-    properties: Final = schema.get("properties")
-    return properties if isinstance(properties, dict) else _EMPTY_SCHEMA
-
-
-def _schema_branches(schema: Mapping[str, object], combinator: str) -> tuple[object, ...]:
-    branches: Final = schema.get(combinator)
-    return tuple(branches) if isinstance(branches, list) else ()
-
-
-def _schema_required_names(schema: Mapping[str, object]) -> frozenset[str]:
-    required: Final = schema.get("required")
-    if not isinstance(required, list):
-        return frozenset()
-    return frozenset(name for name in required if isinstance(name, str))
-
-
-def _combinator_required_names(combinator: str, branches: tuple[Mapping[str, object], ...]) -> frozenset[str]:
-    branch_names: Final = tuple(_schema_required_names(branch) for branch in branches)
-    if not branch_names:
-        return frozenset()
-    if combinator == "allOf":
-        return branch_names[0].union(*branch_names[1:])
-    return branch_names[0].intersection(*branch_names[1:])
-
-
-def _resolve_local_schema_ref(root: Mapping[str, object], ref: str) -> Mapping[str, object] | None:
-    matched: Final = next(
-        ((prefix, container) for prefix, container in _LOCAL_SCHEMA_REF_PREFIXES if ref.startswith(prefix)),
-        None,
-    )
-    if matched is None:
-        return None
-    prefix, container = matched
-    definitions: Final = root.get(container)
-    if not isinstance(definitions, dict):
-        return None
-    target: Final = definitions.get(ref[len(prefix) :])
-    return target if isinstance(target, dict) else None
-
-
-def _mergeable_branch(
-    root: Mapping[str, object],
-    branch: object,
-    seen_refs: frozenset[str],
-    depth: int,
-    expanded_refs: dict[str, Mapping[str, object] | None],  # mutable-ok: per-call memo bounding repeated $ref work
-) -> Mapping[str, object] | None:
-    if not isinstance(branch, dict) or depth > _MAX_SCHEMA_FLATTEN_DEPTH:
-        return None
-    ref: Final = branch.get("$ref")
-    if not isinstance(ref, str):
-        flattened: Final = _flatten_schema_against_root(branch, root, seen_refs, depth, expanded_refs)
-        if any(combinator in flattened for combinator in _TOP_LEVEL_SCHEMA_COMBINATORS):
-            return None
-        return flattened
-    if ref in expanded_refs:
-        return expanded_refs[ref]
-    if ref in seen_refs:
-        return None
-    target: Final = _resolve_local_schema_ref(root, ref)
-    expanded: Final = (
-        None
-        if target is None
-        else _mergeable_branch(root, target, seen_refs | frozenset((ref,)), depth + 1, expanded_refs)
-    )
-    expanded_refs[ref] = expanded
-    return expanded
-
-
-def _is_object_schema(schema: Mapping[str, object]) -> bool:
-    return schema.get("type") == "object" or ("type" not in schema and "properties" in schema)
-
-
-def _flatten_schema_against_root(
-    schema: Mapping[str, object],
-    root: Mapping[str, object],
-    seen_refs: frozenset[str],
-    depth: int,
-    expanded_refs: dict[str, Mapping[str, object] | None],  # mutable-ok: per-call memo bounding repeated $ref work
-) -> Mapping[str, object]:
-    raw_branch_groups: Final = tuple(
-        (
-            combinator,
-            tuple(
-                _mergeable_branch(root, branch, seen_refs, depth + 1, expanded_refs)
-                for branch in _schema_branches(schema, combinator)
-            ),
-        )
-        for combinator in _TOP_LEVEL_SCHEMA_COMBINATORS
-        if isinstance(schema.get(combinator), list)
-    )
-    dropped: Final = (
-        *(combinator for combinator, _ in raw_branch_groups),
-        *(key for key in _OPENAI_REJECTED_TOP_LEVEL_SCHEMA_KEYS if key in schema),
-    )
-    if not dropped:
-        return schema
-
-    if any(branch is None for _, group in raw_branch_groups for branch in group):
-        return schema
-    branch_groups: Final = tuple(
-        (combinator, tuple(branch for branch in group if branch is not None)) for combinator, group in raw_branch_groups
-    )
-    branches: Final = tuple(branch for _, group in branch_groups for branch in group)
-    is_object_schema: Final = _is_object_schema(schema) or (
-        "type" not in schema and branches != () and all(_is_object_schema(branch) for branch in branches)
-    )
-    if not is_object_schema:
-        return schema
-
-    merged_properties: Final = {
-        name: value for source in (*reversed(branches), schema) for name, value in _schema_properties(source).items()
-    }
-    required_names: Final = _schema_required_names(schema).union(
-        *(_combinator_required_names(combinator, group) for combinator, group in branch_groups)
-    )
-    kept: Final = MappingProxyType({key: value for key, value in schema.items() if key not in dropped})
-    required_update: Final = MappingProxyType({"required": sorted(required_names)}) if required_names else _EMPTY_SCHEMA
-    return {
-        **kept,
-        "type": "object",
-        "properties": merged_properties,
-        **required_update,
-    }
-
-
-def flatten_top_level_schema_combinators(schema: Mapping[str, object]) -> Mapping[str, object]:
-    """Merge top-level ``allOf``/``anyOf``/``oneOf`` branches into an object tool schema.
-
-    OpenAI's function-calling validator rejects tool ``parameters`` carrying
-    'oneOf'/'anyOf'/'allOf'/'enum'/'const'/'not' at the top level (nested uses
-    are accepted), while lenient backends such as the ChatGPT backend Codex
-    talks to natively accept them, so an MCP tool declaring a top-level union
-    400s through LiteLLM. Branch properties merge without clobbering (the
-    top-level schema wins, then earlier branches); ``required`` becomes the
-    top-level list plus the intersection of the branch lists for anyOf/oneOf
-    or their union for allOf. Branches that are local ``$ref``s
-    (``#/$defs/...`` or ``#/definitions/...``) are resolved first, each ref
-    at most once per call, and branches that are themselves combinators are
-    flattened recursively up to a fixed depth; a branch that cannot be fully
-    merged (a boolean schema, an external or cyclic ``$ref``, a non-object
-    union, or nesting past the depth cap) leaves the whole schema untouched so
-    OpenAI's own validation still applies. Non-object schemas pass through
-    unchanged and the input is never mutated.
-    """
-    return _flatten_schema_against_root(schema, schema, frozenset(), 0, {})
-
-
-_SUBSCHEMA_KEYWORDS: Final = frozenset(
-    {
-        "additionalItems",
-        "additionalProperties",
-        "contains",
-        "else",
-        "if",
-        "items",
-        "not",
-        "propertyNames",
-        "then",
-        "unevaluatedItems",
-        "unevaluatedProperties",
-    }
-)
-_SUBSCHEMA_LIST_KEYWORDS: Final = frozenset({"allOf", "anyOf", "items", "oneOf", "prefixItems"})
-_SUBSCHEMA_MAP_KEYWORDS: Final = frozenset(
-    {"$defs", "definitions", "dependentSchemas", "patternProperties", "properties"}
-)
-
-_MAX_SCHEMA_NESTING: Final = 1024
-
-
-def drop_non_python_regex_patterns(schema: Mapping[str, object]) -> Mapping[str, object]:
-    """Drop every regex in a schema position that Python's ``re`` cannot compile.
-
-    OpenAI validates tool ``parameters`` against the 2020-12 metaschema with
-    ``jsonschema``'s format checker, which hands each ``pattern`` value and each
-    ``patternProperties`` key to ``re.compile``, so a regex written for an
-    ECMA-262 engine (Unicode property escapes such as ``\\p{Cc}``, as in Claude
-    Code's ``Artifact`` tool) is refused with "'...' is not a 'regex'" by every
-    model family on both the chat and Responses wires. Only schema positions are
-    walked (properties, items, combinators, ``$defs`` and the other applicators),
-    so a ``pattern`` key inside ``default``, ``examples``, ``const`` or vendor
-    extensions is data and stays. Outside strict mode the keyword is only a
-    hint, so dropping it costs the model a constraint and the caller nothing.
-    Compilable regexes and everything else pass through, the input is never
-    mutated, and the same object comes back when nothing was dropped. The walk
-    is level-order rather than recursive, rebuilt deepest level first, and stops
-    at more schema levels than a JSON parser admits, so a cyclic schema built in
-    code cannot spin it.
-    """
-    return _schema_without_rejected_regex(schema, _is_not_python_regex)
-
-
-def drop_lookaround_regex_patterns(schema: Mapping[str, object]) -> Mapping[str, object]:
-    """Drop every regex in a schema position that uses a lookaround assertion.
-
-    Some Bedrock Converse families compile tool schema regexes with an engine that
-    has no lookahead or lookbehind and refuse the whole request over one. The ``(?=``,
-    ``(?!``, ``(?<=`` and ``(?<!`` openers are matched textually, so an escaped literal
-    that spells one is dropped too, trading a hint for a request that goes through.
-    A ``patternProperties`` key dropped from an object closed by ``additionalProperties:
-    false`` leaves its value schema as that object's ``additionalProperties``, so the
-    names it allowed stay allowed; :func:`drop_non_python_regex_patterns` shares the walk.
-    """
-    return _schema_without_rejected_regex(schema, _uses_regex_lookaround)
-
-
-def _schema_without_rejected_regex(
-    schema: Mapping[str, object], rejected: Callable[[str], bool]
-) -> Mapping[str, object]:
-    rebuilt: dict[int, Mapping[str, object]] = {}  # mutable-ok: per-call memo of rewritten nodes, deepest level first
-    for level in reversed(tuple(islice(_schema_levels(schema), _MAX_SCHEMA_NESTING))):
-        rebuilt.update(
-            (id(node), rewritten)
-            for node in level
-            if (rewritten := _node_without_rejected_regex(node, rebuilt, rejected)) is not node
-        )
-    return rebuilt.get(id(schema), schema)
-
-
-def _schema_levels(schema: Mapping[str, object]) -> Iterator[tuple[Mapping[str, object], ...]]:
-    frontier: tuple[Mapping[str, object], ...] = (schema,)  # rebind-ok: level-order cursor, one level a round
-    while frontier:
-        yield frontier
-        frontier = tuple(child for node in frontier for child in _subschemas(node))
-
-
-def schema_fragment_ref(ref: str) -> str:
-    return f"#{ref}" if ref.startswith(("/$defs/", "/definitions/")) else ref
-
-
-def schema_has_unresolvable_ref(schema: Mapping[str, object]) -> bool:
-    definitions: Final = MappingProxyType(dict(_root_definitions(schema)))
-    if not _refs_in(schema) <= definitions.keys():
-        return True
-    try:
-        tuple(TopologicalSorter({pointer: _refs_in(body) for pointer, body in definitions.items()}).static_order())
-    except CycleError:
-        return True
-    return False
-
-
-def schema_union_property_count(schema: Mapping[str, object]) -> int:
-    return sum(1 for _, node in _property_schemas(schema) if _is_union(node))
-
-
-def schema_optional_property_count(schema: Mapping[str, object]) -> int:
-    return sum(len(_optional_property_names(node)) for node in _schema_nodes(schema))
-
-
-def schema_property_count(schema: Mapping[str, object]) -> int:
-    return sum(len(properties) for node in _schema_nodes(schema) if (properties := _schema_at(node, "properties")))
-
-
-def schema_grammar_branch_count(schema: Mapping[str, object]) -> int:
-    return sum(_grammar_branches(node) for node in _schema_nodes(schema))
-
-
-def schema_has_open_object(schema: Mapping[str, object]) -> bool:
-    return any(_is_open_object(node) for node in _schema_nodes(schema))
-
-
-def schema_has_lookaround_pattern(schema: Mapping[str, object]) -> bool:
-    return any(
-        isinstance(pattern := node.get("pattern"), str) and _uses_regex_lookaround(pattern)
-        for node in _schema_nodes(schema)
-    )
-
-
-def schema_string_formats(schema: Mapping[str, object]) -> frozenset[str]:
-    return frozenset(
-        value for node in _schema_nodes(schema) if _may_be_string(node) and isinstance(value := node.get("format"), str)
-    )
-
-
-def _may_be_string(node: Mapping[str, object]) -> bool:
-    node_type: Final = node.get("type")
-    return node_type is None or node_type == "string" or "string" in _list_at(node, "type")
-
-
-def is_object_schema(node: Mapping[str, object]) -> bool:
-    node_type: Final = node.get("type")
-    return node_type == "object" or (isinstance(node_type, list) and "object" in node_type)
-
-
-def _schema_nodes(schema: Mapping[str, object]) -> Iterator[Mapping[str, object]]:
-    return chain.from_iterable(islice(_schema_levels(schema), _MAX_SCHEMA_NESTING))
-
-
-_SCHEMA_LIST: Final = TypeAdapter(tuple[object, ...])
-
-
-def _list_at(container: Mapping[str, object], key: str) -> tuple[object, ...]:
-    value: Final = container.get(key)
-    return _SCHEMA_LIST.validate_python(value) if isinstance(value, list) else ()
-
-
-def _named_schemas(container: Mapping[str, object] | None) -> Iterator[tuple[str, Mapping[str, object]]]:
-    if container is None:
-        return iter(())
-    return ((key, value) for key in container if (value := _schema_at(container, key)) is not None)
-
-
-def _root_definitions(schema: Mapping[str, object]) -> Iterator[tuple[str, Mapping[str, object]]]:
-    for defs_key in ("$defs", "definitions"):
-        yield from ((f"#/{defs_key}/{name}", body) for name, body in _named_schemas(_schema_at(schema, defs_key)))
-
-
-def _refs_in(schema: Mapping[str, object]) -> frozenset[str]:
-    return frozenset(
-        schema_fragment_ref(ref) for node in _schema_nodes(schema) if isinstance(ref := node.get("$ref"), str)
-    )
-
-
-def _property_schemas(schema: Mapping[str, object]) -> Iterator[tuple[str, Mapping[str, object]]]:
-    return chain.from_iterable(_named_schemas(_schema_at(node, "properties")) for node in _schema_nodes(schema))
-
-
-def _is_union(node: Mapping[str, object]) -> bool:
-    return isinstance(node.get("anyOf"), list) or isinstance(node.get("oneOf"), list) or len(_list_at(node, "type")) > 1
-
-
-def _grammar_branches(node: Mapping[str, object]) -> int:
-    properties: Final = _schema_at(node, "properties")
-    if properties is None:
-        return 0
-    optional: Final = len(_optional_property_names(node))
-    return (1 << optional) * (len(properties) - optional + 1)
-
-
-def _optional_property_names(node: Mapping[str, object]) -> frozenset[str]:
-    properties: Final = _schema_at(node, "properties")
-    if properties is None:
-        return frozenset()
-    return frozenset(properties) - frozenset(name for name in _list_at(node, "required") if isinstance(name, str))
-
-
-def _is_open_object(node: Mapping[str, object]) -> bool:
-    additional_properties: Final = node.get("additionalProperties")
-    if additional_properties is True or isinstance(additional_properties, dict) or "patternProperties" in node:
-        return True
-    return is_object_schema(node) and "properties" not in node and additional_properties is not False
-
-
-def _subschemas(node: Mapping[str, object]) -> Iterator[Mapping[str, object]]:
-    for key, value in node.items():
-        if key in _SUBSCHEMA_MAP_KEYWORDS and isinstance(value, dict):
-            yield from (sub for sub in value.values() if isinstance(sub, dict))
-        elif key in _SUBSCHEMA_LIST_KEYWORDS and isinstance(value, list):
-            yield from (sub for sub in value if isinstance(sub, dict))
-        elif key in _SUBSCHEMA_KEYWORDS and isinstance(value, dict):
-            yield value
-
-
-def _node_without_rejected_regex(
-    node: Mapping[str, object],
-    rebuilt: Mapping[int, Mapping[str, object]],
-    rejected: Callable[[str], bool],
-) -> Mapping[str, object]:
-    kept: Final = {
-        key: _keyword_value_rebuilt(key, value, rebuilt, rejected)
-        for key, value in node.items()
-        if key != "pattern" or not isinstance(value, str) or not rejected(value)
-    }
-    if len(kept) == len(node) and all(kept[key] is node[key] for key in kept):
-        return node
-    dropped_pattern_properties: Final = _dropped_pattern_properties(node, kept, rebuilt)
-    if not dropped_pattern_properties or kept.get("additionalProperties") is not False:
-        return kept
-    return {**kept, "additionalProperties": _any_of(dropped_pattern_properties)}
-
-
-def _dropped_pattern_properties(
-    node: Mapping[str, object],
-    kept: Mapping[str, object],
-    rebuilt: Mapping[int, Mapping[str, object]],
-) -> tuple[object, ...]:
-    before: Final = _schema_at(node, "patternProperties")
-    after: Final = _schema_at(kept, "patternProperties")
-    if before is None or after is None:
-        return ()
-    return tuple(rebuilt.get(id(sub), sub) for name, sub in before.items() if name not in after)
-
-
-def _schema_at(container: Mapping[str, object], key: str) -> Mapping[str, object] | None:
-    value: Final = container.get(key)
-    return value if isinstance(value, dict) else None
-
-
-def _any_of(schemas: tuple[object, ...]) -> object:
-    return schemas[0] if len(schemas) == 1 else {"anyOf": list(schemas)}
-
-
-def _keyword_value_rebuilt(
-    key: str,
-    value: object,
-    rebuilt: Mapping[int, Mapping[str, object]],
-    rejected: Callable[[str], bool],
-) -> object:
-    if key in _SUBSCHEMA_MAP_KEYWORDS and isinstance(value, dict):
-        kept: Final = {
-            name: rebuilt.get(id(sub), sub)
-            for name, sub in value.items()
-            if key != "patternProperties" or not isinstance(name, str) or not rejected(name)
-        }
-        return value if len(kept) == len(value) and all(kept[name] is value[name] for name in kept) else kept
-    if key in _SUBSCHEMA_LIST_KEYWORDS and isinstance(value, list):
-        items: Final = [rebuilt.get(id(sub), sub) for sub in value]
-        return value if all(new is old for new, old in zip(items, value, strict=True)) else items
-    if key in _SUBSCHEMA_KEYWORDS and isinstance(value, dict):
-        return rebuilt.get(id(value), value)
-    return value
-
-
-def _is_not_python_regex(pattern: str) -> bool:
-    try:
-        re.compile(pattern)
-    except (re.error, RecursionError):
-        return True
-    return False
-
-
-_REGEX_LOOKAROUND_RE: Final = re.compile(r"\(\?<?[=!]")
-
-
-def _uses_regex_lookaround(pattern: str) -> bool:
-    return _REGEX_LOOKAROUND_RE.search(pattern) is not None
-
-
-def flatten_combinators_and_drop_non_python_regex_patterns(schema: Mapping[str, object]) -> Mapping[str, object]:
-    return flatten_top_level_schema_combinators(drop_non_python_regex_patterns(schema))
-
-
-def tool_with_sanitized_parameters(
-    tool: Mapping[str, object],
-    sanitize: Callable[[Mapping[str, object]], Mapping[str, object]],
-) -> Mapping[str, object]:
-    """Run the tool's JSON schema through ``sanitize``: ``function.parameters`` on an
-    OpenAI tool, ``input_schema`` on an Anthropic one. The same object comes back when
-    nothing changed."""
-    function: Final = _schema_at(tool, "function")
-    if function is not None:
-        parameters: Final = _schema_at(function, "parameters")
-        if parameters is None:
-            return tool
-        sanitized_parameters: Final = sanitize(parameters)
-        if sanitized_parameters is parameters:
-            return tool
-        return {**tool, "function": {**function, "parameters": sanitized_parameters}}
-    input_schema: Final = _schema_at(tool, "input_schema")
-    if input_schema is None:
-        return tool
-    sanitized_schema: Final = sanitize(input_schema)
-    return tool if sanitized_schema is input_schema else {**tool, "input_schema": sanitized_schema}
-
-
-def get_image_mime_type_from_url(url: str) -> str | None:
-    """
-    Get mime type for common image URLs
-    See gemini mime types: https://cloud.google.com/vertex-ai/generative-ai/docs/multimodal/image-understanding#image-requirements
-
-    Supported by Gemini:
-     application/pdf
-    audio/mpeg
-    audio/mp3
-    audio/wav
-    audio/ogg
-    image/png
-    image/jpeg
-    image/webp
-    text/plain
-    video/mov
-    video/mpeg
-    video/mp4
-    video/mpg
-    video/avi
-    video/wmv
-    video/mpegps
-    video/flv
-    """
-    from urllib.parse import urlparse
-
-    url = url.lower()
-
-    # Parse URL to extract path without query parameters
-    # This handles URLs like: https://example.com/image.jpg?signature=...
-    parsed: Final = urlparse(url)
-    path: Final = parsed.path
-
-    # Map file extensions to mime types
-    mime_types: Final = {
-        # Images
-        (".jpg", ".jpeg"): "image/jpeg",
-        (".png",): "image/png",
-        (".webp",): "image/webp",
-        # Videos
-        (".mp4",): "video/mp4",
-        (".mov",): "video/mov",
-        (".mpeg", ".mpg"): "video/mpeg",
-        (".avi",): "video/avi",
-        (".wmv",): "video/wmv",
-        (".mpegps",): "video/mpegps",
-        (".flv",): "video/flv",
-        # Audio
-        (".mp3",): "audio/mp3",
-        (".wav",): "audio/wav",
-        (".mpeg",): "audio/mpeg",
-        (".ogg",): "audio/ogg",
-        # Documents
-        (".pdf",): "application/pdf",
-        (".txt",): "text/plain",
-    }
-
-    # Check each extension group against the URL
-    for extensions, mime_type in mime_types.items():
-        if any(path.endswith(ext) for ext in extensions):
-            return mime_type
-
-    return None
-
-
-_get_image_mime_type_from_url = get_image_mime_type_from_url
-
-
-def infer_content_type_from_url_and_content(
-    url: str,
-    content: bytes,
-    current_content_type: str | None = None,
-) -> str:
-    """
-    Infer content type from URL extension and binary content when content-type header is missing or generic.
-
-    This helper implements a fallback strategy for determining MIME types when HTTP headers
-    are missing or provide generic values (like binary/octet-stream). It's commonly used
-    when processing images and documents from various sources (S3, URLs, etc.).
-
-    Fallback Strategy:
-    1. If current_content_type is valid (not None and not generic octet-stream), return it
-    2. Try to infer from URL extension (handles query parameters)
-    3. Try to detect from binary content signature (magic bytes)
-    4. Raise ValueError if all methods fail
-
-    Args:
-        url: The URL of the content (used to extract file extension)
-        content: The binary content (first ~100 bytes are sufficient for detection)
-        current_content_type: The current content-type from headers (may be None or generic)
-
-    Returns:
-        str: The inferred MIME type (e.g., "image/png", "application/pdf")
-
-    Raises:
-        ValueError: If content type cannot be determined by any method
-
-    Example:
-        >>> content_type = infer_content_type_from_url_and_content(
-        ...     url="https://s3.amazonaws.com/bucket/image.png?AWSAccessKeyId=123",
-        ...     content=png_binary_data,
-        ...     current_content_type="binary/octet-stream"
-        ... )
-        >>> print(content_type)
-        "image/png"
-    """
-    from litellm.litellm_core_utils.token_counter import get_image_type
-
-    media_type: Final = current_content_type.split(";", 1)[0].strip().lower() if current_content_type else None
-
-    # If we have a valid content type that's not generic, use it
-    if media_type and media_type not in [
-        "binary/octet-stream",
-        "application/octet-stream",
-    ]:
-        return media_type
-
-    # Extension to MIME type mapping
-    # Supports images, documents, and other common file types
-    extension_to_mime: Final = {
-        # Image formats
-        "jpg": "image/jpeg",
-        "jpeg": "image/jpeg",
-        "png": "image/png",
-        "gif": "image/gif",
-        "webp": "image/webp",
-        # Document formats
-        "pdf": "application/pdf",
-        "csv": "text/csv",
-        "doc": "application/msword",
-        "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        "xls": "application/vnd.ms-excel",
-        "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        "html": "text/html",
-        "txt": "text/plain",
-        "md": "text/markdown",
-    }
-
-    # Try to infer from URL extension
-    if url:
-        extension: Final = url.split(".")[-1].lower().split("?")[0]  # Remove query params
-        inferred_type: Final = extension_to_mime.get(extension)
-        if inferred_type:
-            return inferred_type
-
-    # Try to detect from binary content signature (magic bytes)
-    if content:
-        detected_type: Final = get_image_type(content[:100])
-        if detected_type:
-            type_to_mime: Final = {
-                "png": "image/png",
-                "jpeg": "image/jpeg",
-                "gif": "image/gif",
-                "webp": "image/webp",
-                "heic": "image/heic",
-            }
-            if detected_type in type_to_mime:
-                return type_to_mime[detected_type]
-
-    # If all fallbacks failed, raise error
-    raise ValueError(f"Unable to determine content type from URL: {url}. Response content-type: {current_content_type}")
-
-
 def get_tool_call_names(tools: list[ChatCompletionToolParam]) -> list[str]:
     """
     Get tool call names from tools
@@ -2214,32 +1180,6 @@ def convert_custom_tool_format_to_responses_shape(format_obj: Mapping[str, objec
     }
 
 
-def get_file_ids_from_messages(messages: list[AllMessageValues]) -> list[str]:
-    """
-    Gets file ids from messages
-    """
-    file_ids: Final = []
-    for message in messages:
-        if message.get("role") == "user":
-            content = message.get("content")
-            if content:
-                if isinstance(content, str):
-                    continue
-                for c in content:
-                    if isinstance(c, dict) and c["type"] == "file":
-                        file_object = cast(ChatCompletionFileObject, c)
-                        file_object_file_field = file_object.get("file")
-                        if not isinstance(file_object_file_field, dict):
-                            # Content block has `type: "file"` but not the
-                            # OpenAI Chat Completions shape. No file_id to
-                            # extract, so skip instead of raising KeyError.
-                            continue
-                        file_id = file_object_file_field.get("file_id")
-                        if file_id:
-                            file_ids.append(file_id)
-    return file_ids
-
-
 def check_is_function_call(logging_obj: "LoggingClass") -> bool:
     from litellm.litellm_core_utils.prompt_templates.common_utils import (
         is_function_call,
@@ -2250,195 +1190,6 @@ def check_is_function_call(logging_obj: "LoggingClass") -> bool:
             return True
 
     return False
-
-
-_MarkedT: Final = TypeVar("_MarkedT", bound=Mapping[str, object])
-PROMPT_CACHE_BREAKPOINT_DROP_PARAMS_HINT: Final = (
-    "set `drop_params: true` on the request or in litellm_settings (`litellm.drop_params = True` in the SDK)"
-)
-
-
-def with_prompt_cache_breakpoint(target: _MarkedT, marker: object) -> _MarkedT:
-    """A breakpoint the client already wrote on the block wins, TTL included."""
-    if marker is None or target.get("prompt_cache_breakpoint") is not None:
-        return target
-    marked: Final = {**target, "prompt_cache_breakpoint": marker}
-    return cast(_MarkedT, marked)  # cast-ok: same block shape as the input plus the marker key
-
-
-_PROMPT_CACHE_BREAKPOINT: Final = TypeAdapter(PromptCacheBreakpoint)
-_CHAT_COMPLETION_PROMPT_CACHE_BREAKPOINT: Final = TypeAdapter(ChatCompletionPromptCacheBreakpoint)
-_AcceptedBreakpointT: Final = TypeVar("_AcceptedBreakpointT", bound=Mapping[str, object])
-
-
-def _accepted_prompt_cache_breakpoint(
-    accepted: TypeAdapter[_AcceptedBreakpointT], marker: object
-) -> _AcceptedBreakpointT | None:
-    try:
-        return accepted.validate_python(marker)
-    except ValidationError:
-        return None
-
-
-def prompt_cache_breakpoint_within(
-    accepted: TypeAdapter[_AcceptedBreakpointT], marker: object
-) -> _AcceptedBreakpointT | None:
-    """The client's marker cut down to the ``accepted`` shape: an unsupported ttl is dropped and the mode kept,
-    and a marker whose mode the target cannot read is dropped whole."""
-    whole: Final = _accepted_prompt_cache_breakpoint(accepted, marker)
-    if whole is not None:
-        return whole
-    fields: Final = _breakpoint_fields_or_none(marker)
-    without_ttl: Final = (
-        None
-        if fields is None
-        else _accepted_prompt_cache_breakpoint(accepted, {key: item for key, item in fields.items() if key != "ttl"})
-    )
-    verbose_logger.debug(
-        "Dropping malformed prompt_cache_breakpoint %r under drop_params"
-        if without_ttl is None
-        else "Dropping the unsupported ttl of prompt_cache_breakpoint %r under drop_params",
-        marker,
-    )
-    return without_ttl
-
-
-def prompt_cache_breakpoint_for_wire(marker: object, drop_params: bool) -> object:
-    if marker is None or not drop_params:
-        return marker
-    return prompt_cache_breakpoint_within(_PROMPT_CACHE_BREAKPOINT, marker)
-
-
-def prompt_cache_breakpoint_with_readable_mode(marker: object, drop_params: bool) -> object:
-    """The client's marker as written, or None under drop_params when no target could read its mode, so the
-    target's own config decides which ttl and keys it keeps."""
-    return None if prompt_cache_breakpoint_for_wire(marker, drop_params) is None else marker
-
-
-def whole_prompt_cache_breakpoint_or_none(marker: object) -> PromptCacheBreakpoint | None:
-    return _accepted_prompt_cache_breakpoint(_PROMPT_CACHE_BREAKPOINT, marker)
-
-
-def chat_completion_prompt_cache_breakpoint_for_wire(marker: object, drop_params: bool) -> object:
-    if marker is None or not drop_params:
-        return marker
-    return prompt_cache_breakpoint_within(_CHAT_COMPLETION_PROMPT_CACHE_BREAKPOINT, marker)
-
-
-def cache_control_as_prompt_cache_breakpoint(block: _MarkedT) -> _MarkedT:
-    """Anthropic's ``cache_control`` mark rewritten as OpenAI's ``prompt_cache_breakpoint`` on the same block."""
-    if block.get("cache_control") is None:
-        return block
-    unmarked: Final = {key: value for key, value in block.items() if key != "cache_control"}
-    return cast(  # cast-ok: same block shape as the input with the marker key renamed
-        _MarkedT, with_prompt_cache_breakpoint(unmarked, PromptCacheBreakpoint(mode="explicit"))
-    )
-
-
-def prompt_cache_breakpoint_as_cache_control(block: _MarkedT, drop_params: bool) -> _MarkedT:
-    """OpenAI's ``prompt_cache_breakpoint`` mark rewritten as Anthropic's ``cache_control`` on the same block.
-    A ``cache_control`` the client already wrote on the block wins, TTL included."""
-    marker: Final = block.get("prompt_cache_breakpoint")
-    if marker is None:
-        return block
-    unmarked: Final = {key: value for key, value in block.items() if key != "prompt_cache_breakpoint"}
-    control: Final = (
-        None
-        if block.get("cache_control") is not None
-        else _cache_control_for_prompt_cache_breakpoint(marker, drop_params)
-    )
-    marked: Final = unmarked if control is None else {**unmarked, "cache_control": control}
-    return cast(_MarkedT, marked)  # cast-ok: same block shape as the input with the marker key renamed
-
-
-def _cache_control_for_prompt_cache_breakpoint(marker: object, drop_params: bool) -> ChatCompletionCachedContent | None:
-    try:
-        breakpoint_mark: Final = _PROMPT_CACHE_BREAKPOINT.validate_python(marker)
-    except ValidationError:
-        if not drop_params:
-            raise UnsupportedParamsError(
-                message=(
-                    f"prompt_cache_breakpoint must be {{'mode': 'explicit'}} with an optional ttl of '30m' or '12h', got "
-                    f"{marker!r}. Fix the marker, or "
-                    f"{PROMPT_CACHE_BREAKPOINT_DROP_PARAMS_HINT} to drop it."
-                ),
-                status_code=400,
-            )
-        verbose_logger.debug("Dropping malformed prompt_cache_breakpoint %r under drop_params", marker)
-        return None
-    ttl: Final = breakpoint_mark.get("ttl")
-    if ttl is not None and not drop_params:
-        raise UnsupportedParamsError(
-            message=(
-                f"This model's prompt cache lasts 5m, or 1h where it offers one, so prompt_cache_breakpoint "
-                f"ttl={ttl!r} has no equivalent. Remove the ttl, {PROMPT_CACHE_BREAKPOINT_DROP_PARAMS_HINT} to send "
-                "a 5m breakpoint instead, or send cache_control {'type': 'ephemeral', 'ttl': '1h'} on the block "
-                "where the model offers a 1h cache."
-            ),
-            status_code=400,
-        )
-    return ChatCompletionCachedContent(type="ephemeral")
-
-
-_BREAKPOINT_BLOCK_LIST_KEYS: Final = frozenset({"content", "tool_calls"})
-_BREAKPOINT_FIELDS: Final = TypeAdapter(Mapping[str, object])
-_BREAKPOINT_BLOCKS: Final = TypeAdapter(list[object])
-
-
-def _breakpoint_fields_or_none(value: object) -> Mapping[str, object] | None:
-    try:
-        return _BREAKPOINT_FIELDS.validate_python(value)
-    except ValidationError:
-        return None
-
-
-def _without_prompt_cache_breakpoint(value: object) -> object:
-    if not isinstance(value, Mapping):
-        return value
-    fields: Final = _BREAKPOINT_FIELDS.validate_python(value)
-    return {key: item for key, item in fields.items() if key != "prompt_cache_breakpoint"}
-
-
-def _breakpoints_stripped_from(key: str, value: object) -> object:
-    if key in _BREAKPOINT_BLOCK_LIST_KEYS and isinstance(value, list):
-        return [_without_prompt_cache_breakpoint(block) for block in _BREAKPOINT_BLOCKS.validate_python(value)]
-    return _without_prompt_cache_breakpoint(value) if key == "function" else value
-
-
-def without_prompt_cache_breakpoints(block: _MarkedT) -> _MarkedT:
-    """A message or tool definition with every ``prompt_cache_breakpoint`` removed: its own, its content parts',
-    its tool calls' and its ``function``'s."""
-    stripped: Final = {
-        key: _breakpoints_stripped_from(key, value) for key, value in block.items() if key != "prompt_cache_breakpoint"
-    }
-    return cast(_MarkedT, stripped)  # cast-ok: same block shape as the input minus the marker keys
-
-
-def _part_with_chat_completion_prompt_cache_breakpoint(part: object) -> object:
-    if not isinstance(part, Mapping):
-        return part
-    fields: Final = _BREAKPOINT_FIELDS.validate_python(part)
-    marker: Final = fields.get("prompt_cache_breakpoint")
-    if marker is None:
-        return fields
-    unmarked: Final = {key: item for key, item in fields.items() if key != "prompt_cache_breakpoint"}
-    return with_prompt_cache_breakpoint(unmarked, chat_completion_prompt_cache_breakpoint_for_wire(marker, True))
-
-
-def chat_completion_prompt_cache_breakpoints_for_wire(message: _MarkedT, drop_params: bool) -> _MarkedT:
-    content: Final = message.get("content")
-    if not drop_params or not isinstance(content, list):
-        return message
-    parts: Final = [
-        _part_with_chat_completion_prompt_cache_breakpoint(part) for part in _BREAKPOINT_BLOCKS.validate_python(content)
-    ]
-    return cast(_MarkedT, {**message, "content": parts})  # cast-ok: same message shape with its parts' markers trimmed
-
-
-LITELLM_RESPONSE_ONLY_MESSAGE_FIELDS: Final = frozenset(
-    {"thinking_blocks", "reasoning_items", "provider_specific_fields"}
-)
-LITELLM_INTERNAL_MESSAGE_FIELDS: Final = LITELLM_RESPONSE_ONLY_MESSAGE_FIELDS | {"reasoning_content"}
 
 
 def _tool_call_without_provider_specific_fields(tool_call: object) -> object:
@@ -2498,7 +1249,7 @@ def strip_prefill_prefix_field(message: AllMessageValues) -> AllMessageValues:
     return _message_without_fields(message, frozenset({"prefix"}))
 
 
-def filter_value_from_dict(dictionary: dict, key: str, depth: int = 0) -> Any:
+def filter_value_from_dict(dictionary: dict, key: str, depth: int = 0) -> Mapping[object, object]:
     """
     Filters a value from a dictionary
 
@@ -2690,267 +1441,6 @@ def convert_prefix_message_to_non_prefix_messages(
         else:
             new_messages.append(message)
     return new_messages
-
-
-def _provider_text_or_none(value: object) -> str | None:
-    return cast(str | None, value)  # cast-ok: reasoning fields arrive in untyped provider messages
-
-
-def extract_reasoning_content(message: Mapping[str, object]) -> tuple[str | None, str | None]:
-    """
-    Extract reasoning content and main content from a message.
-
-    Args:
-        message (dict): The message dictionary that may contain reasoning_content
-
-    Returns:
-        tuple[Optional[str], Optional[str]]: A tuple of (reasoning_content, content)
-    """
-    message_content: Final = message.get("content")
-    if "reasoning_content" in message:
-        return _provider_text_or_none(message["reasoning_content"]), _provider_text_or_none(message_content)
-    elif "reasoning" in message:
-        return _provider_text_or_none(message["reasoning"]), _provider_text_or_none(message_content)
-    elif isinstance(message_content, str):
-        return parse_content_for_reasoning(message_content)
-    return None, _provider_text_or_none(message_content)
-
-
-_extract_reasoning_content = extract_reasoning_content
-
-
-def _readable_thinking_text(block: Mapping[str, object]) -> str:
-    """The text a chat model can read back, empty for redacted blocks and malformed ones."""
-    if block.get("type") != "thinking":
-        return ""
-    return str(block.get("thinking") or "")
-
-
-def reasoning_content_from_thinking_blocks(
-    thinking_blocks: Iterable[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock],
-) -> str:
-    """Flatten Anthropic thinking blocks into the `reasoning_content` string chat models expect.
-
-    Redacted blocks carry no readable text, so they contribute nothing.
-    """
-    return "\n".join(text for block in thinking_blocks if (text := _readable_thinking_text(block)))
-
-
-ENCRYPTED_REASONING_SIGNATURE_PREFIX: Final = "litellm_encrypted_reasoning:"
-
-
-def encrypted_reasoning_signature(encrypted_content: str) -> str:
-    """The opaque value a Responses API reasoning item's `encrypted_content` travels in.
-
-    Anthropic clients echo a thinking block's `signature` and a redacted block's `data`
-    back verbatim, so either field can carry the encrypted reasoning across turns; the
-    prefix tells the two apart from a signature Anthropic minted.
-    """
-    return f"{ENCRYPTED_REASONING_SIGNATURE_PREFIX}{encrypted_content}"
-
-
-def _carries_encrypted_reasoning(signature: object) -> bool:
-    return isinstance(signature, str) and signature.startswith(ENCRYPTED_REASONING_SIGNATURE_PREFIX)
-
-
-def encrypted_content_from_signature(signature: object) -> str | None:
-    if not isinstance(signature, str) or not _carries_encrypted_reasoning(signature):
-        return None
-    return signature.removeprefix(ENCRYPTED_REASONING_SIGNATURE_PREFIX) or None
-
-
-def _encrypted_reasoning_field(block: Mapping[str, object]) -> object:
-    match block.get("type"):
-        case "thinking":
-            return block.get("signature")
-        case "redacted_thinking":
-            return block.get("data")
-        case _:
-            return None
-
-
-def encrypted_content_of_block(block: Mapping[str, object]) -> str | None:
-    return encrypted_content_from_signature(_encrypted_reasoning_field(block))
-
-
-def is_encrypted_reasoning_block(block: object) -> bool:
-    """A thinking or redacted_thinking block carrying Responses API encrypted reasoning.
-
-    Only the Responses API that minted the content can read it back, so an Anthropic
-    backend has to drop such a block rather than fail signature verification on it.
-    """
-    if not isinstance(block, Mapping):
-        return False
-    mapping: Final = cast(Mapping[str, object], block)  # cast-ok: narrowed by isinstance
-    return _carries_encrypted_reasoning(_encrypted_reasoning_field(mapping))
-
-
-def is_unsignable_thinking_block(block: object) -> bool:
-    """A thinking block Anthropic cannot accept on input.
-
-    Anthropic verifies the signature cryptographically, so a block with a null,
-    empty, or missing signature (e.g. from an open-source reasoning model) is
-    rejected with a 400, and so is a block whose signature or data carries
-    another provider's encrypted reasoning. A signed block is kept whatever its
-    text, since ``display: omitted`` returns signed blocks with empty ``thinking``.
-    `redacted_thinking` blocks carry no signature and are always kept.
-    """
-    if is_encrypted_reasoning_block(block):
-        return True
-    if not isinstance(block, Mapping):
-        return False
-    mapping: Final = cast(Mapping[str, object], block)  # cast-ok: narrowed by isinstance
-    if mapping.get("type") != "thinking":
-        return False
-    signature: Final = mapping.get("signature")
-    return not (isinstance(signature, str) and len(signature) > 0)
-
-
-def has_blank_redacted_data(block: object) -> bool:
-    match block:
-        case {"type": "redacted_thinking", "data": str() as data}:
-            return not data.strip()
-        case {"type": "redacted_thinking"}:
-            return True
-        case _:
-            return False
-
-
-def native_redacted_thinking_data(data: str) -> str:
-    """Claude's own `data` string for a redacted_thinking block.
-
-    Bedrock Converse carries it base64-wrapped as `redactedContent`, and LiteLLM passed that
-    wrapper through as `data` until it started decoding Converse replies, so histories saved
-    before then still hold it. Claude's own value never decodes twice, since its first byte
-    decodes to a protobuf tag outside the base64 alphabet.
-    """
-    return _converse_wrapped_payload(data) or data
-
-
-def converse_redacted_content(data: str) -> str:
-    """The `redactedContent` Bedrock Converse expects for a redacted_thinking block's `data`."""
-    return base64.b64encode(native_redacted_thinking_data(data).encode()).decode()
-
-
-def _converse_wrapped_payload(data: str) -> str | None:
-    try:
-        payload: Final = base64.b64decode(data, validate=True).decode("ascii")
-        _ = base64.b64decode(payload, validate=True)
-    except (binascii.Error, ValueError):
-        return None
-    else:
-        return payload
-
-
-def strip_encrypted_reasoning_from_messages(
-    messages: object,
-    *,
-    should_strip: Callable[[Mapping[str, object]], bool] | None = None,
-) -> None:
-    """Drop the bridge-tagged reasoning blocks a routed deployment cannot decrypt from
-    Anthropic-shaped history.
-
-    The whole block goes, the way #40280 drops undecryptable Responses ``input`` items: a
-    provider that did not mint the block rejects it signed (a foreign signature) and unsigned
-    (a missing signature) alike, so keeping its text as an unsigned thinking block only moves
-    the 400 from the router to the provider.
-
-    Mutates the content lists in place: the router's fallback snapshot shares these
-    message objects, so a rebound list would replay the stripped blocks on the fallback hop.
-    """
-    if not isinstance(messages, list):
-        return
-    for content in anthropic_content_lists(cast(list[object], messages)):  # cast-ok: untyped client json
-        _strip_encrypted_reasoning_from_blocks(content, should_strip=should_strip)
-
-
-def anthropic_content_lists(messages: Sequence[object]) -> Iterator[object]:
-    return (
-        cast(list[object], content)  # cast-ok: narrowed by isinstance
-        for message in messages
-        if isinstance(message, Mapping)
-        for content in (cast(Mapping[str, object], message).get("content"),)  # cast-ok: narrowed by isinstance
-        if isinstance(content, list)
-    )
-
-
-def _strip_encrypted_reasoning_from_blocks(
-    content: object,
-    *,
-    should_strip: Callable[[Mapping[str, object]], bool] | None = None,
-) -> None:
-    blocks: Final = cast(list[object], content)  # cast-ok: narrowed by the caller's isinstance
-    kept: Final = tuple(
-        block
-        for block in blocks
-        if not is_encrypted_reasoning_block(block)
-        or (should_strip is not None and not should_strip(cast(Mapping[str, object], block)))
-    )
-    blocks[:] = kept
-
-
-def _reasoning_replay_group_key(indexed_block: tuple[int, Mapping[str, object]]) -> str:
-    index, block = indexed_block
-    return f"encrypted:{index}" if is_encrypted_reasoning_block(block) else "summary"
-
-
-def _reasoning_item_from_block_group(group: tuple[Mapping[str, object], ...]) -> ChatCompletionReasoningItem | None:
-    summary: Final[list[ChatCompletionReasoningSummaryTextBlock]] = [  # mutable-ok: API message payload
-        ChatCompletionReasoningSummaryTextBlock(type="summary_text", text=text)
-        for block in group
-        if (text := _readable_thinking_text(block))
-    ]
-    encrypted_content: Final = encrypted_content_of_block(group[0])
-    if encrypted_content is not None:
-        return ChatCompletionReasoningItem(type="reasoning", summary=summary, encrypted_content=encrypted_content)
-    if not summary:
-        return None
-    return ChatCompletionReasoningItem(type="reasoning", summary=summary)
-
-
-def responses_reasoning_items_from_thinking_blocks(
-    thinking_blocks: Iterable[Mapping[str, object]],
-) -> tuple[ChatCompletionReasoningItem, ...]:
-    """Build Responses API `reasoning` input items from Anthropic thinking blocks.
-
-    A block carrying encrypted reasoning replays the item it came from byte for byte;
-    a run of plain thinking blocks collapses into one summary-only item. No item carries
-    an `id`: the Responses API 404s on any id it did not mint itself and rejects an empty
-    one, while an item without an id is always accepted.
-    """
-    return tuple(
-        item
-        for _, group in groupby(enumerate(thinking_blocks), key=_reasoning_replay_group_key)
-        if (item := _reasoning_item_from_block_group(tuple(block for _, block in group))) is not None
-    )
-
-
-def parse_content_for_reasoning(
-    message_text: str | None,
-) -> tuple[str | None, str | None]:
-    """
-    Parse the content for reasoning
-
-    Returns:
-    - reasoning_content: The content of the reasoning
-    - content: The content of the message
-    """
-    if not message_text:
-        return None, message_text
-
-    reasoning_match: Final = re.match(
-        r"<(?:think|thinking|budget:thinking)>(.*?)</(?:think|thinking|budget:thinking)>(.*)",
-        message_text,
-        re.DOTALL,
-    )
-
-    if reasoning_match:
-        return reasoning_match.group(1), reasoning_match.group(2)
-
-    return None, message_text
-
-
-_parse_content_for_reasoning = parse_content_for_reasoning
 
 
 def _extract_base64_data(image_url: str) -> str:
@@ -3163,252 +1653,6 @@ def merge_consecutive_system_messages(
     ]
 
 
-_DECODED_JSON: Final = TypeAdapter(object)
-
-
-def _attempt_json_repair(s: str) -> object | None:
-    """
-    Attempt to repair truncated JSON produced by LLM tool calls.
-
-    Handles the most common truncation patterns where the model generates
-    valid JSON that is cut short (missing closing brackets/braces).
-
-    Returns the parsed value on success, or None if repair fails.
-    """
-    import json
-
-    stripped: Final = s.rstrip()
-    if not stripped:
-        return None
-
-    # Track the stack of unmatched openers to respect nesting order
-    opener_stack: Final[list] = []
-    in_string = False
-    escape_next = False
-
-    for ch in stripped:
-        if escape_next:
-            escape_next = False
-            continue
-        if ch == "\\":
-            if in_string:
-                escape_next = True
-            continue
-        if ch == '"':
-            in_string = not in_string
-            continue
-        if in_string:
-            continue
-        if ch == "{":
-            opener_stack.append("}")
-        elif ch == "[":
-            opener_stack.append("]")
-        elif ch in ("}", "]"):
-            if opener_stack and opener_stack[-1] == ch:
-                opener_stack.pop()
-
-    if not opener_stack:
-        return None
-
-    # Remove trailing comma before we close brackets
-    candidate = stripped.rstrip(",")
-
-    # Close in reverse order of opening (respects nesting)
-    candidate += "".join(reversed(opener_stack))
-
-    try:
-        return _DECODED_JSON.validate_python(json.loads(candidate))
-    except json.JSONDecodeError:
-        pass
-
-    return None
-
-
-def parse_tool_call_arguments(
-    arguments: str | None,
-    tool_name: str | None = None,
-    context: str | None = None,
-) -> Any:
-    """
-    Parse tool call arguments from a JSON string.
-
-    When the JSON is malformed (e.g. truncated by the model), this function
-    attempts a lightweight repair (closing unmatched brackets/braces) before
-    raising an error.  A warning is logged whenever repair succeeds so that
-    callers are aware the arguments were not perfectly formed.
-
-    Args:
-        arguments: The JSON string containing tool arguments, or None.
-        tool_name: Optional name of the tool (for error messages).
-        context: Optional context string (e.g., "Anthropic Messages API").
-
-    Returns:
-        Parsed arguments (usually a dict, but may be any JSON-deserializable
-        type such as list, str, int, float, or None).  Returns empty dict if
-        arguments is None or empty.
-
-    Raises:
-        ValueError: If the arguments string is not valid JSON and cannot be repaired.
-    """
-    import json
-
-    if not arguments or not arguments.strip():
-        return {}
-
-    try:
-        return _DECODED_JSON.validate_python(json.loads(arguments))
-    except json.JSONDecodeError as original_error:
-        repaired: Final = _attempt_json_repair(arguments)
-        if repaired is not None:
-            verbose_logger.warning(
-                "Repaired truncated tool call arguments for tool '%s' (%s). Original (%d chars): %.200s%s",
-                tool_name or "<unknown>",
-                context or "unknown context",
-                len(arguments),
-                arguments,
-                "..." if len(arguments) > 200 else "",
-            )
-            return repaired
-
-        error_parts: Final = ["Failed to parse tool call arguments"]
-
-        if tool_name:
-            error_parts.append(f"for tool '{tool_name}'")
-        if context:
-            error_parts.append(f"({context})")
-
-        error_message: Final = " ".join(error_parts) + f". Error: {original_error}. Arguments: {arguments}"
-
-        raise ValueError(error_message) from original_error
-
-
-def split_concatenated_json_objects(raw: str) -> list[dict[str, object]]:
-    """
-    Split a string that contains one or more concatenated JSON objects into
-    a list of parsed dicts.
-
-    LLM providers (notably Bedrock Claude Sonnet 4.5) sometimes return
-    multiple tool-call argument objects concatenated in a single
-    ``arguments`` string, e.g.::
-
-        '{"command":["curl",...]}{"command":["curl",...]}{"command":["curl",...]}'
-
-    ``json.loads()`` fails on this with ``JSONDecodeError: Extra data``.
-    This helper uses ``json.JSONDecoder.raw_decode()`` to walk the string
-    and extract each JSON object individually.
-
-    The walk degrades gracefully: if the string is malformed or truncated
-    (e.g. a stream that ended mid-tool-call), whatever complete objects were
-    parsed before the bad tail are returned and the remainder is discarded
-    with a warning, rather than raising.  The sole caller
-    (``_convert_to_bedrock_tool_call_invoke``) treats an empty result as
-    ``input={}`` so the conversation can continue instead of hard-failing.
-
-    Returns
-    -------
-    list[dict]
-        A list of parsed dicts – one per JSON object found.  If *raw* is
-        empty, whitespace-only, or wholly unparseable, an empty list is
-        returned.
-    """
-    import json
-
-    raw = raw.strip()
-    if not raw:
-        return []
-
-    decoder: Final = json.JSONDecoder()
-    results: Final[list[dict[str, object]]] = []
-    idx = 0
-    length: Final = len(raw)
-
-    while idx < length:
-        # Skip whitespace between objects
-        while idx < length and raw[idx] in " \t\n\r":
-            idx += 1
-        if idx >= length:
-            break
-
-        try:
-            decoded = decoder.raw_decode(raw, idx)
-        except json.JSONDecodeError as e:
-            verbose_logger.warning(
-                "split_concatenated_json_objects: discarding unparseable tool-call "
-                "arguments tail after %d complete object(s); decode_start=%d error=%s",
-                len(results),
-                idx,
-                e,
-            )
-            break
-        obj = as_str_mapping(_DECODED_JSON.validate_python(decoded[0]))
-        if obj is not None:
-            results.append(dict(obj))
-        else:
-            # Non-dict JSON value – wrap in empty dict (Bedrock requires
-            # toolUse.input to be an object).
-            results.append({})
-        idx = decoded[1]
-
-    return results
-
-
-MAX_SALVAGED_TOOL_ARGUMENT_OBJECTS: Final = 8
-
-
-def salvage_concatenated_tool_arguments(raw: str) -> tuple[dict[str, object], ...]:
-    """Return complete concatenated JSON objects that are safe to expand.
-
-    Identical objects collapse to the first one and are not capped. More than
-    ``MAX_SALVAGED_TOOL_ARGUMENT_OBJECTS`` objects that are not all identical
-    returns an empty tuple. Anything that is not a full concatenation of JSON
-    objects returns an empty tuple. Repeated copies of the first object are not
-    retained, and once the cap is passed the rest of the string is only checked.
-    """
-    stripped: Final = raw.strip()
-    if not stripped:
-        return ()
-    decoder: Final = json.JSONDecoder()
-    length: Final = len(stripped)
-    idx = 0  # rebind-ok: cursor walks the concatenated JSON string
-    count = 0  # rebind-ok: counts complete objects without retaining duplicates
-    kept = ()  # rebind-ok: holds at most one object past the salvage cap
-    exceeded = False  # rebind-ok: cap already passed, the tail is only validated
-    while idx < length:
-        while idx < length and stripped[idx] in " \t\n\r":
-            idx += 1
-        if idx >= length:
-            break
-        try:
-            decoded = decoder.raw_decode(stripped, idx)
-        except json.JSONDecodeError:
-            return ()
-        decoded_object = as_str_mapping(_DECODED_JSON.validate_python(decoded[0]))
-        if decoded_object is None:
-            return ()
-        idx = decoded[1]
-        if exceeded:
-            continue
-        obj = dict(decoded_object)
-        count += 1
-        if not kept:
-            kept = (obj,)
-            continue
-        if obj == kept[0] and len(kept) == 1:
-            continue
-        if len(kept) == 1 and count > 2 and count - 1 > MAX_SALVAGED_TOOL_ARGUMENT_OBJECTS:
-            exceeded = True
-            continue
-        if len(kept) == 1 and count > 2:
-            kept = (kept[0],) * (count - 1)
-        if len(kept) >= MAX_SALVAGED_TOOL_ARGUMENT_OBJECTS:
-            exceeded = True
-            continue
-        kept = (*kept, obj)
-    if exceeded:
-        return ()
-    return kept
-
-
 def text_completion_prompt_to_messages(prompt: object) -> tuple[AllMessageValues, ...]:
     """
     Wrap an OpenAI ``/v1/completions`` ``prompt`` into Chat Completion messages.
@@ -3440,3 +1684,72 @@ def invalid_type_message(field_path: str, value: object) -> str:
 
 def is_unhashable_value_behind(error: TypeError, value: object) -> bool:
     return not isinstance(value, Hashable) and f"unhashable type: '{type(value).__name__}'" in str(error)
+
+
+_UNBOUND: Final = object()
+
+
+def _module(module_name: str) -> ModuleType:
+    return importlib.import_module(f"litellm.litellm_core_utils.prompt_templates.{module_name}")
+
+
+def _namespace(module: ModuleType) -> Mapping[str, object]:
+    return vars(module)
+
+
+def _moved_name_home(name: str) -> ModuleType:
+    module_name: Final = _MOVED_PRIVATE_NAME_MODULES.get(name)
+    if module_name is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    return _module(module_name)
+
+
+def _split_modules_sharing(name: str, value: object) -> tuple[ModuleType, ...]:
+    if value is _UNBOUND:
+        return ()
+    split_modules: Final = (_module(module_name) for module_name in frozenset(_MOVED_PRIVATE_NAME_MODULES.values()))
+    return tuple(module for module in split_modules if _namespace(module).get(name, _UNBOUND) is value)
+
+
+def _warn_old_path(name: str, home: ModuleType) -> None:
+    warnings.warn(
+        f"{__name__}.{name} moved to {home.__name__}, import or patch it there. "
+        "The old path will be removed in a future release",
+        DeprecationWarning,
+        stacklevel=3,
+    )
+
+
+_RELEASED_MOVED_VALUES: Final = MappingProxyType(
+    {name: _namespace(_moved_name_home(name))[name] for name in _MOVED_PRIVATE_NAME_MODULES}
+)
+
+
+class _CommonUtilsModule(ModuleType):
+    def __getattr__(self, name: str) -> object:
+        home: Final = _moved_name_home(name)
+        value: Final = _namespace(home).get(name, _UNBOUND)
+        if value is _UNBOUND:
+            raise AttributeError(f"module {home.__name__!r} has no attribute {name!r}")
+        _warn_old_path(name, home)
+        return value
+
+    def __setattr__(self, name: str, value: object) -> None:
+        if name in _MOVED_PRIVATE_NAME_MODULES:
+            home: Final = _moved_name_home(name)
+            _warn_old_path(name, home)
+            setattr(home, name, value)
+            return
+        for module in _split_modules_sharing(name, _namespace(self).get(name, _UNBOUND)):
+            setattr(module, name, value)
+        super().__setattr__(name, value)
+
+    def __delattr__(self, name: str) -> None:
+        released: Final = _RELEASED_MOVED_VALUES.get(name, _UNBOUND)
+        if released is _UNBOUND:
+            super().__delattr__(name)
+            return
+        setattr(_moved_name_home(name), name, released)
+
+
+sys.modules[__name__].__class__ = _CommonUtilsModule

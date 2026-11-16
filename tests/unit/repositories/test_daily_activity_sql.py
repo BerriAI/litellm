@@ -284,6 +284,7 @@ def test_aggregated_query_uses_the_caller_date_bounds(offset_minutes: int | None
 def test_aggregate_query_sums_all_savings_drivers_and_response_time() -> None:
     query = build_aggregated_sql(_scope(), api_key_limit=constants.USAGE_TOP_API_KEYS_DEFAULT)
     fields: Final = tuple(field for field in SpendMetrics.model_fields if field.endswith("_savings_spend")) + (
+        "guardrail_spend",
         "total_response_time_ms",
         "timed_requests",
     )

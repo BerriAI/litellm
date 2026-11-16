@@ -154,6 +154,11 @@ class PluginListItem(LiteLLMBaseModel):
     enabled: bool
     created_at: str | None
     updated_at: str | None
+    created_by: str | None = None
+    approved_by: str | None = None
+    published_by: str | None = None
+    security_scan_passed: bool = False
+    download_count: int | None = None
     has_agent_skill_metadata: bool = Field(default=False, exclude=True)
 
 

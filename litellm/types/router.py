@@ -76,6 +76,9 @@ from .utils import (
     StandardLoggingRoutingDecision,
 )
 from .utils import (
+    github_copilot_oauth_litellm_params as _github_copilot_oauth_litellm_params,
+)
+from .utils import (
     server_owned_wif_litellm_params as _server_owned_wif_litellm_params,
 )
 
@@ -89,6 +92,7 @@ class SilentExperimentFlag(TypedDict, total=False):
 class FallbackSkipReason(str, enum.Enum):
     NOT_AUTHORIZED = "not_authorized"
     OVER_BUDGET = "over_budget"
+    RATE_LIMITED = "rate_limited"
 
 
 @dataclass(frozen=True, slots=True)
@@ -236,6 +240,7 @@ class UpdateRouterConfig(LiteLLMBaseModel):
     tag_routing_prefix: str | None = None
     optional_pre_call_checks: OptionalPreCallChecks | None = None
     fallback_on_unsupported_params: bool | None = None
+    fallback_on_saturation: bool | None = None
 
     model_config = ConfigDict(protected_namespaces=())
 
@@ -353,6 +358,10 @@ class ModelInfo(MirroredPricingParams):
 
     max_embedding_batch_size: Annotated[int, Field(gt=0)] | None = None
 
+    # deployments that set the same value share one provider encryption boundary, so encrypted reasoning
+    # minted on one can be replayed to another (e.g. regional endpoints of one OpenAI organization)
+    encrypted_content_boundary: Annotated[str, Field(min_length=1)] | None = None
+
     def __init__(self, id: str | int | None = None, **params) -> None:
         if id is None:
             id = str(uuid.uuid4())  # Generate a UUID if id is None or not provided
@@ -427,6 +436,7 @@ class CredentialLiteLLMParams(LiteLLMBaseModel):
     ## OBJECT STORAGE (files / batches) ##
     gcs_bucket_name: str | None = None
     bucket_name: str | None = None
+    allow_legacy_cloud_file_ids: bool | None = None
 
     ## AWS BEDROCK / SAGEMAKER ##
     aws_access_key_id: str | None = None
@@ -489,6 +499,10 @@ class CredentialLiteLLMParams(LiteLLMBaseModel):
     token_exchange_profile: str | None = None
     token_exchange_scope: str | None = None
     token_exchange_audience: str | None = None
+    github_copilot_app_id: str | int | None = None
+    github_copilot_app_installation_id: str | int | None = None
+    github_copilot_app_private_key_ref: str | None = None
+    github_copilot_app_private_key: str | None = None
 
 
 def _api_key_secret_reference(fields: Mapping[str, object]) -> tuple[str, ...]:
@@ -658,6 +672,7 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     tag_regex: list[str] | None = None
 
     # auto-router params
+    switchyard_router_config: Mapping[str, object] | None = None
     auto_router_config_path: str | None = None
     auto_router_config: str | None = None
     auto_router_default_model: str | None = None
@@ -862,12 +877,14 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     cost_per_second: ReadOnly[float | None]
     input_cost_per_second: float | None
     input_cost_per_text_message: ReadOnly[float | None]
+    output_cost_per_video: ReadOnly[float | None]
     output_cost_per_second: float | None
     output_cost_per_second_480p: ReadOnly[float | None]
     output_cost_per_second_720p: ReadOnly[float | None]
     output_cost_per_second_768p: ReadOnly[float | None]
     output_cost_per_second_2k: ReadOnly[float | None]
     output_cost_per_second_1080p: float | None
+    output_cost_per_video_clip: ReadOnly[Mapping[str, Mapping[str, float]] | None]
     output_cost_per_second_4k: ReadOnly[float | None]
     num_retries: int | None
     ## MOCK RESPONSES ##
@@ -1040,6 +1057,21 @@ def _resolved_annotations(model_class: type[object]) -> Mapping[str, object]:
     return MappingProxyType(get_type_hints(model_class))
 
 
+class PriceTier(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    range: tuple[float, float]
+    costs: Mapping[str, float]
+
+
+class DeploymentPricing(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    provider: str
+    costs: Mapping[str, float]
+    tiered_pricing: tuple[PriceTier, ...] = ()
+
+
 class ModelGroupInfo(LiteLLMBaseModel):
     model_group: str
     providers: list[str]
@@ -1070,6 +1102,7 @@ class ModelGroupInfo(LiteLLMBaseModel):
     configurable_clientside_auth_params: CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS = None
     description: str | None = None
     supported_endpoints: tuple[str, ...] | None = None
+    deployment_pricing: tuple[DeploymentPricing, ...] = ()
 
     def __init__(self, **data) -> None:
         for field_name, field_type in _resolved_annotations(self.__class__).items():
@@ -1290,13 +1323,6 @@ class RoutingStrategy(enum.Enum):
     PROVIDER_BUDGET_LIMITING = "provider-budget-routing"
 
 
-class RouterCacheEnum(enum.Enum):
-    TPM = "global_router:{id}:{model}:tpm:{current_minute}"
-    RPM = "global_router:{id}:{model}:rpm:{current_minute}"
-    ITPM = "global_router:{id}:{model}:itpm:{current_minute}"
-    OTPM = "global_router:{id}:{model}:otpm:{current_minute}"
-
-
 class GenericBudgetWindowDetails(LiteLLMBaseModel):
     """Details about a provider's budget window"""
 
@@ -1325,6 +1351,19 @@ class FallbackBudgetCheck(Protocol):
     chosen later, inside the router, so a zero-cost group that falls back to a priced one bills
     without any budget gate. The router runs this before every cross-model-group fallback attempt
     and skips targets it rejects, leaving the free attempt itself untouched.
+    """
+
+    async def __call__(self, *, model: str, request_kwargs: Mapping[str, object], ctx: "RouterContext") -> bool: ...
+
+
+class FallbackRateLimitCheck(Protocol):
+    """
+    Decides whether the caller behind `request_kwargs` still has per-model rate limit capacity on fallback `model`.
+
+    The limiter admits a request once, against the *requested* model group, so a provider failure would hand
+    the caller a fallback group whose per-model limits were never checked. The router runs this before every
+    cross-model-group fallback attempt, skips rejected targets, and an implementation reserves capacity when
+    it admits so concurrent failovers cannot all pass.
     """
 
     async def __call__(self, *, model: str, request_kwargs: Mapping[str, object], ctx: "RouterContext") -> bool: ...
@@ -1444,6 +1483,7 @@ class PreRoutingStrategy(Protocol):
         messages: list[dict[str, Any]] | None = None,
         input: "str | list[Any] | None" = None,
         specific_deployment: bool | None = False,
+        call_type: str | None = None,
     ) -> "PreRoutingHookResponse | None": ...
 
 
@@ -1555,8 +1595,13 @@ def reject_server_owned_wif_fields(body: Mapping[str, object]) -> None:
     for param in _server_owned_wif_litellm_params:
         if param in submitted_names:
             raise ValueError(
-                f"Rejected Request: {param} is a server-owned workload identity federation or OAuth token exchange "
-                "parameter "
+                f"Rejected Request: {param} is a server-owned {server_owned_param_kind(param)} parameter "
                 "and cannot be set in a request body. A proxy admin configures it on the deployment "
                 "or on a stored credential."
             )
+
+
+def server_owned_param_kind(param: str) -> str:
+    if param in _github_copilot_oauth_litellm_params:
+        return "GitHub Copilot authentication"
+    return "workload identity federation or OAuth token exchange"

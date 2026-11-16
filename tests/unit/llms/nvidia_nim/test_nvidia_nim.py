@@ -237,3 +237,28 @@ def test_completion_nvidia_nim():
         assert request_body["model"] == "databricks/dbrx-instruct"
         assert request_body["frequency_penalty"] == 0.1
         assert request_body["presence_penalty"] == 0.5
+
+
+def test_embedding_nvidia_nim_sends_extra_body_fields_without_an_extra_body_key():
+    from openai import OpenAI
+
+    transport: Final = CapturingTransport(
+        CreateEmbeddingResponse(
+            object="list",
+            data=(Embedding(object="embedding", index=0, embedding=(0.1, 0.2, 0.3)),),
+            model="nvidia/nv-embedqa-e5-v5",
+            usage=EmbeddingUsage(prompt_tokens=6, total_tokens=6),
+        )
+    )
+    client: Final = OpenAI(api_key="fake-api-key", http_client=httpx.Client(transport=transport))
+
+    litellm.embedding(
+        model="nvidia_nim/nvidia/nv-embedqa-e5-v5",
+        input="What is the meaning of life?",
+        extra_body={"input_type": "query", "truncate": "END"},
+        client=client,
+    )
+
+    request_body: Final = transport.request_bodies[0]
+    assert "extra_body" not in request_body
+    assert (request_body["input_type"], request_body["truncate"]) == ("query", "END")

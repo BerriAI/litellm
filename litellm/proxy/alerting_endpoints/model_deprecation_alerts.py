@@ -68,7 +68,13 @@ async def update_deprecation_alert_state(
 ) -> DeprecationAlertState:
     _require_admin(user, write=True)
     state: Final = DeprecationAlertState(
-        **data.model_dump(), updated_at=datetime.now(timezone.utc), updated_by=user.user_id
+        model=data.model,
+        deprecation_date=data.deprecation_date,
+        status=data.status,
+        last_seen_date=data.last_seen_date,
+        last_seen_requests=data.last_seen_requests,
+        updated_at=datetime.now(timezone.utc),
+        updated_by=user.user_id,
     )
     await repository.set_param(_state_key(data.model, data.deprecation_date), state.model_dump(mode="json"))
     return state

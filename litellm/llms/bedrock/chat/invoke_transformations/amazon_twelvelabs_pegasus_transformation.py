@@ -7,10 +7,11 @@ https://docs.twelvelabs.io/docs/models/pegasus
 
 import json
 import time
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
-from pydantic import ConfigDict, TypeAdapter, with_config
+from pydantic import BaseModel, ConfigDict, TypeAdapter, with_config
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
@@ -43,6 +44,7 @@ class _PegasusResponse(TypedDict):
 
 
 _PEGASUS_RESPONSE: Final = TypeAdapter(_PegasusResponse)
+_OPTIONAL_PARAM: Final = TypeAdapter(object)
 
 
 class AmazonTwelveLabsPegasusConfig(AmazonInvokeConfig, BaseConfig):
@@ -65,7 +67,7 @@ class AmazonTwelveLabsPegasusConfig(AmazonInvokeConfig, BaseConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
+        non_default_params: Mapping[str, object],
         optional_params: dict,
         model: str,
         drop_params: bool,
@@ -79,7 +81,7 @@ class AmazonTwelveLabsPegasusConfig(AmazonInvokeConfig, BaseConfig):
                 optional_params["responseFormat"] = self._normalize_response_format(value)
         return optional_params
 
-    def _normalize_response_format(self, value: Any) -> object:
+    def _normalize_response_format(self, value: object) -> object:
         """Normalize response_format to TwelveLabs format.
 
         TwelveLabs expects:
@@ -110,7 +112,11 @@ class AmazonTwelveLabsPegasusConfig(AmazonInvokeConfig, BaseConfig):
                 return value
             # Otherwise return the dict as is
             return value
-        return type_to_response_format_param(response_format=value) or value
+        if value is None:
+            return None
+        if isinstance(value, type) and issubclass(value, BaseModel):
+            return type_to_response_format_param(response_format=value) or value
+        raise TypeError(f"Unsupported response_format type - {value}")
 
     def transform_request(
         self,
@@ -134,7 +140,7 @@ class AmazonTwelveLabsPegasusConfig(AmazonInvokeConfig, BaseConfig):
 
         # Handle responseFormat - transform to TwelveLabs format
         if "responseFormat" in optional_params:
-            response_format: Final = optional_params["responseFormat"]
+            response_format: Final = _OPTIONAL_PARAM.validate_python(optional_params["responseFormat"])
             transformed_format: Final = self._normalize_response_format(response_format)
             if transformed_format:
                 request_data["responseFormat"] = transformed_format
