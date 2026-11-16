@@ -336,11 +336,13 @@ async fn provider_call(
         extra_headers.unwrap_or_default(),
         scoped,
     ])))?;
-    let configured_key = api_key.as_deref().filter(|key| !key.is_empty()).or(shaping
-        .settings
-        .module_api_key
-        .as_ref()
-        .map(SecretValue::expose));
+    let configured_key = match shaping.settings.module_api_key.as_ref() {
+        Some(module_key) => api_key
+            .as_deref()
+            .filter(|key| !key.is_empty())
+            .or(Some(module_key.expose())),
+        None => api_key.as_deref(),
+    };
     let deferred = match (
         credentials.deferred_secrets,
         config.deferred_secret_names(
