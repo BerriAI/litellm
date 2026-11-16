@@ -140,6 +140,207 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          - shard: proxy-infra-root-q-z
+            test-path: |-
+              tests/unit/proxy/test_[q-z]*.py
+              tests/unit/a2a_protocol
+              tests/unit/anthropic_interface
+              tests/unit/batches
+              tests/unit/chat_completions
+              tests/unit/completion_extras
+              tests/unit/containers
+              tests/unit/embeddings
+              tests/unit/endpoints
+              tests/unit/files
+              tests/unit/fine_tuning
+              tests/unit/images
+              tests/unit/interactions
+              tests/unit/messages
+              tests/unit/ocr
+              tests/unit/passthrough
+              tests/unit/rag
+              tests/unit/realtime_api
+              tests/unit/rerank_api
+              tests/unit/search
+              tests/unit/text_completions
+              tests/unit/vector_stores
+              tests/unit/videos
+              tests/unit/mcp_client
+              --deselect=tests/unit/proxy/test_reducto_ocr_route.py
+              --deselect=tests/unit/proxy/test_response_polling_pre_call_checks.py
+              --deselect=tests/unit/proxy/test_server_root_path.py
+              --deselect=tests/unit/proxy/test_ui_path_detection.py
+              --deselect=tests/unit/proxy/test_unit_test_proxy_hooks.py
+              --deselect=tests/unit/proxy/test_update_spend.py
+              --deselect=tests/unit/proxy/test_zero_cost_model_budget_bypass.py
+              --ignore=tests/unit/mcp_client/test_mcp_client.py
+              --ignore=tests/unit/proxy/mcp_server/test_capabilities.py
+              --ignore=tests/unit/proxy/mcp_server/test_interactions.py
+              --ignore=tests/unit/proxy/mcp_server/test_mcp_elicitation_handler.py
+              --ignore=tests/unit/proxy/mcp_server/test_mcp_server_manager.py
+              --ignore=tests/unit/proxy/mcp_server/test_mcp_server_tool_calls_and_headers.py
+              --ignore=tests/unit/proxy/mcp_server/test_operations.py
+              --ignore=tests/unit/proxy/mcp_server/test_discoverable_endpoints.py
+              --ignore=tests/unit/proxy/mcp_server/test_db_credentials.py
+              --ignore=tests/unit/proxy/mcp_server/outbound_credentials
+            python-version: "3.12"
+            workers: 4
+            reruns: 0
+            timeout-minutes: 20
+            job-timeout-minutes: 60
+            dist: loadscope
+
+          - shard: enterprise-repositories-secrets
+            test-path: |-
+              tests/unit/enterprise/enterprise_callbacks/test_callback_controls.py
+              tests/unit/enterprise/enterprise_callbacks/test_llm_guard.py
+              tests/unit/enterprise/enterprise_callbacks/test_pagerduty_alerting.py
+              tests/unit/enterprise/enterprise_callbacks/test_secret_detection.py
+              tests/unit/integration_support
+              tests/unit/repositories
+              tests/unit/secret_managers
+              tests/unit/skills/test_skills_main.py
+              tests/unit/telemetry
+              tests/unit/proxy/telemetry
+              tests/unit/tracing
+              tests/unit/proxy/mcp_server/test_mcp_server_tool_calls_and_headers.py
+            python-version: "3.12"
+            workers: 4
+            reruns: 0
+            timeout-minutes: 20
+            job-timeout-minutes: 60
+            dist: loadscope
+
+          - shard: proxy-auth
+            test-path: |-
+              tests/unit/proxy/auth
+              tests/unit/proxy/db
+              --ignore=tests/unit/proxy/auth/test_auth_checks.py
+              --ignore=tests/unit/proxy/auth/test_user_api_key_auth.py
+              --ignore=tests/unit/proxy/auth/test_default_end_user_budget_simple.py
+              --ignore=tests/unit/proxy/auth/test_jwt.py
+              --ignore=tests/unit/proxy/auth/test_models_fallback_endpoint.py
+              --ignore=tests/unit/proxy/auth/test_multipart_bypass_repro.py
+              --ignore=tests/unit/proxy/auth/test_proxy_routes.py
+              --ignore=tests/unit/proxy/db/test_pgbouncer.py
+              --ignore=tests/unit/proxy/db/db_transaction_queue/test_e2e_pod_lock_manager.py
+              --ignore=tests/unit/proxy/db/test_update_daily_tag_spend.py
+              --ignore=tests/unit/proxy/spend_tracking/test_search_api_logging.py
+              --ignore=tests/unit/proxy/common_utils/test_cache_aware_routing.py
+              --ignore=tests/unit/proxy/common_utils/test_check_batch_cost.py
+              --ignore=tests/unit/proxy/common_utils/test_check_responses_cost.py
+              --ignore=tests/unit/proxy/common_utils/test_proxy_encrypt_decrypt.py
+              --ignore=tests/unit/proxy/common_utils/test_realtime_cache.py
+            python-version: "3.12"
+            workers: 4
+            reruns: 0
+            timeout-minutes: 20
+            job-timeout-minutes: 60
+            dist: loadscope
+
+          - shard: router
+            test-path: |-
+              tests/unit/router_rust
+              tests/unit/test_router
+              tests/unit/proxy/middleware
+              tests/unit/llms/bedrock_mantle
+              --ignore=tests/unit/proxy/middleware/test_request_size_limit_middleware.py
+            python-version: "3.12"
+            workers: 4
+            reruns: 0
+            timeout-minutes: 20
+            job-timeout-minutes: 60
+            dist: loadscope
+
+          - shard: llms-openai-meta
+            test-path: |-
+              tests/unit/llms/openai
+              tests/unit/llms/meta
+              tests/unit/llms/vertex_ai
+              tests/unit/responses/mcp
+              --ignore=tests/unit/mcp_client/test_mcp_client.py
+              --ignore=tests/unit/proxy/mcp_server/test_capabilities.py
+              --ignore=tests/unit/proxy/mcp_server/test_interactions.py
+              --ignore=tests/unit/proxy/mcp_server/test_mcp_elicitation_handler.py
+              --ignore=tests/unit/proxy/mcp_server/test_mcp_server_manager.py
+              --ignore=tests/unit/proxy/mcp_server/test_mcp_server_tool_calls_and_headers.py
+              --ignore=tests/unit/proxy/mcp_server/test_operations.py
+              --ignore=tests/unit/proxy/mcp_server/test_discoverable_endpoints.py
+              --ignore=tests/unit/proxy/mcp_server/test_db_credentials.py
+              --ignore=tests/unit/proxy/mcp_server/outbound_credentials
+            python-version: "3.12"
+            workers: 4
+            reruns: 0
+            timeout-minutes: 20
+            job-timeout-minutes: 60
+            dist: loadscope
+
+          - shard: integrations
+            test-path: |-
+              tests/unit/integrations
+              tests/unit/proxy/proxy_server
+              tests/unit/proxy/_experimental/mcp_server
+              --ignore=tests/unit/integrations/test_opentelemetry.py
+              --ignore=tests/unit/integrations/otel/test_otel_v2_components.py
+              --ignore=tests/unit/mcp_client/test_mcp_client.py
+              --ignore=tests/unit/proxy/mcp_server/test_capabilities.py
+              --ignore=tests/unit/proxy/mcp_server/test_interactions.py
+              --ignore=tests/unit/proxy/mcp_server/test_mcp_elicitation_handler.py
+              --ignore=tests/unit/proxy/mcp_server/test_mcp_server_manager.py
+              --ignore=tests/unit/proxy/mcp_server/test_mcp_server_tool_calls_and_headers.py
+              --ignore=tests/unit/proxy/mcp_server/test_operations.py
+              --ignore=tests/unit/proxy/mcp_server/test_discoverable_endpoints.py
+              --ignore=tests/unit/proxy/mcp_server/test_db_credentials.py
+              --ignore=tests/unit/proxy/mcp_server/outbound_credentials
+            python-version: "3.12"
+            workers: 4
+            reruns: 0
+            timeout-minutes: 60
+            job-timeout-minutes: 100
+            dist: loadscope
+
+          - shard: proxy-hooks-client
+            test-path: |-
+              tests/unit/proxy/hooks
+              tests/unit/proxy/policy_engine
+              tests/unit/proxy/client
+              tests/test_litellm_rust/test_dispatch.py
+              tests/test_litellm_rust/test_public_entries.py
+              tests/test_litellm_rust/chat_completions/test_dispatch.py
+              tests/test_litellm_rust/embeddings/test_dispatch.py
+              tests/test_litellm_rust/messages/test_dispatch.py
+              tests/test_litellm_rust/ocr/test_dispatch.py
+              tests/test_litellm_rust/responses/test_dispatch.py
+              tests/unit/compression
+              tests/unit/harness
+              tests/unit/rust_bridge
+              tests/unit/sandbox
+              --ignore=tests/unit/proxy/hooks/test_banned_keyword_list.py
+              --ignore=tests/unit/proxy/hooks/test_unit_test_max_model_budget_limiter.py
+              --ignore=tests/unit/rust_bridge/native_route_wheel_test.py
+            python-version: "3.12"
+            workers: 4
+            reruns: 0
+            timeout-minutes: 20
+            job-timeout-minutes: 60
+            dist: loadscope
+
+          - shard: enterprise-package
+            test-path: |-
+              tests/unit/enterprise/integrations
+              tests/unit/enterprise/proxy/auth
+              tests/unit/enterprise/proxy/guardrails
+              tests/unit/enterprise/proxy/management_endpoints
+              tests/unit/enterprise/proxy/test_audit_logging_endpoints.py
+              tests/unit/enterprise/proxy/test_liteadmin.py
+              tests/unit/enterprise/enterprise_callbacks/test_prometheus_logging_callbacks.py
+            python-version: "3.12"
+            workers: 4
+            reruns: 0
+            timeout-minutes: 20
+            job-timeout-minutes: 60
+            dist: loadscope
+
           - shard: core-utils
             test-path: |-
               tests/unit/accounting
@@ -148,6 +349,7 @@ jobs:
               tests/unit/extraction
               tests/unit/litellm_core_utils
               tests/unit/systemone
+              tests/unit/llms/bedrock
             python-version: "3.12"
             workers: 4
             reruns: 0
@@ -155,11 +357,209 @@ jobs:
             job-timeout-minutes: 60
             dist: loadscope
 
+          - shard: mcp-server
+            test-path: |-
+              tests/unit/experimental_mcp_client
+              tests/unit/proxy/mcp_server
+              tests/unit/enterprise/proxy/hooks
+              --ignore=tests/unit/mcp_client/test_mcp_client.py
+              --ignore=tests/unit/proxy/mcp_server/test_capabilities.py
+              --ignore=tests/unit/proxy/mcp_server/test_interactions.py
+              --ignore=tests/unit/proxy/mcp_server/test_mcp_elicitation_handler.py
+              --ignore=tests/unit/proxy/mcp_server/test_mcp_server_manager.py
+              --ignore=tests/unit/proxy/mcp_server/test_mcp_server_tool_calls_and_headers.py
+              --ignore=tests/unit/proxy/mcp_server/test_operations.py
+              --ignore=tests/unit/proxy/mcp_server/test_discoverable_endpoints.py
+              --ignore=tests/unit/proxy/mcp_server/test_db_credentials.py
+              --ignore=tests/unit/proxy/mcp_server/outbound_credentials
+            python-version: "3.12"
+            workers: 4
+            reruns: 0
+            timeout-minutes: 20
+            job-timeout-minutes: 60
+            dist: loadscope
+
+          - shard: proxy-infra-root-a-p
+            test-path: |-
+              tests/unit/proxy/spend_tracking
+              tests/unit/proxy/common_utils
+              tests/unit/proxy/test_[_a-p]*.py
+              --ignore=tests/unit/proxy/db/test_pgbouncer.py
+              --ignore=tests/unit/proxy/db/db_transaction_queue/test_e2e_pod_lock_manager.py
+              --ignore=tests/unit/proxy/db/test_update_daily_tag_spend.py
+              --ignore=tests/unit/proxy/spend_tracking/test_search_api_logging.py
+              --ignore=tests/unit/proxy/common_utils/test_cache_aware_routing.py
+              --ignore=tests/unit/proxy/common_utils/test_check_batch_cost.py
+              --ignore=tests/unit/proxy/common_utils/test_check_responses_cost.py
+              --ignore=tests/unit/proxy/common_utils/test_proxy_encrypt_decrypt.py
+              --ignore=tests/unit/proxy/common_utils/test_realtime_cache.py
+              --deselect=tests/unit/proxy/test_aproxy_startup.py
+              --deselect=tests/unit/proxy/test_component_allowlists.py
+              --deselect=tests/unit/proxy/test_credential_slot_registry.py
+              --deselect=tests/unit/proxy/test_custom_callback_input.py
+              --deselect=tests/unit/proxy/test_custom_logger_s3_gcs.py
+              --deselect=tests/unit/proxy/test_custom_tokenizer_bug.py
+              --deselect=tests/unit/proxy/test_db_schema_changes.py
+              --deselect=tests/unit/proxy/test_deprecated_key_grace_period.py
+              --deselect=tests/unit/proxy/test_get_favicon.py
+              --deselect=tests/unit/proxy/test_get_image.py
+              --deselect=tests/unit/proxy/test_prisma_client_backoff_retry.py
+              --deselect=tests/unit/proxy/test_prometheus_metrics_server.py
+              --deselect=tests/unit/proxy/test_prompt_test_endpoint.py
+              --deselect=tests/unit/proxy/test_proxy_cli.py
+              --deselect=tests/unit/proxy/test_proxy_config_unit_test.py
+              --deselect=tests/unit/proxy/test_proxy_custom_auth.py
+              --deselect=tests/unit/proxy/test_proxy_reject_logging.py
+              --deselect=tests/unit/proxy/test_proxy_server.py
+              --deselect=tests/unit/proxy/test_proxy_setting_guardrails.py
+              --deselect=tests/unit/proxy/test_proxy_token_counter.py
+              --deselect=tests/unit/proxy/test_proxy_utils.py
+            python-version: "3.12"
+            workers: 4
+            reruns: 0
+            timeout-minutes: 20
+            job-timeout-minutes: 60
+            dist: loadscope
+
+          - shard: llms-anthropic
+            test-path: |-
+              tests/unit/proxy/pass_through_endpoints
+              tests/unit/proxy/mcp_server/test_tool_registry.py
+              tests/unit/proxy/enterprise_billing
+              tests/unit/proxy/types_utils
+              tests/unit/proxy/logging_endpoints
+              tests/unit/gateway
+              tests/unit/proxy/management
+              tests/unit/proxy/management_endpoints/test_roi_calculator_endpoints.py
+              tests/unit/proxy/roi_calculator
+              tests/unit/llms/anthropic
+              --ignore=tests/unit/proxy/middleware/test_request_size_limit_middleware.py
+            python-version: "3.12"
+            workers: 4
+            reruns: 0
+            timeout-minutes: 20
+            job-timeout-minutes: 60
+            dist: loadscope
+
+          - shard: mcp-elicitation
+            test-path: |-
+              tests/unit/mcp_client/test_mcp_client.py
+              tests/unit/proxy/mcp_server/test_capabilities.py
+              tests/unit/proxy/mcp_server/test_interactions.py
+              tests/unit/proxy/mcp_server/test_mcp_elicitation_handler.py
+              tests/unit/proxy/mcp_server/test_mcp_server_manager.py
+              tests/unit/proxy/mcp_server/test_operations.py
+              tests/unit/models
+            python-version: "3.12"
+            workers: 4
+            reruns: 0
+            timeout-minutes: 20
+            job-timeout-minutes: 60
+            dist: loadscope
+
+          - shard: db-and-spend
+            test-path: |-
+              tests/unit/proxy/common_utils/test_proxy_encrypt_decrypt.py
+              tests/unit/proxy/db/db_transaction_queue/test_e2e_pod_lock_manager.py
+              tests/unit/proxy/db/test_update_daily_tag_spend.py
+              tests/unit/proxy/test_db_schema_changes.py
+              tests/unit/proxy/test_prisma_client_backoff_retry.py
+              tests/unit/proxy/test_update_spend.py
+              tests/unit/skills/test_skills_db.py
+              tests/unit/proxy/test_proxy_utils.py
+              tests/unit/proxy/auth/test_jwt.py
+              tests/unit/proxy/test_proxy_custom_auth.py
+              tests/unit/proxy/hooks/test_banned_keyword_list.py
+              tests/unit/proxy/test_proxy_setting_guardrails.py
+              tests/unit/proxy/test_unit_test_proxy_hooks.py
+              tests/unit/proxy/pass_through_endpoints/test_llm_passthrough_endpoints.py
+            python-version: "3.12"
+            workers: 4
+            reruns: 2
+            timeout-minutes: 15
+            job-timeout-minutes: 60
+            dist: loadscope
+
+          - shard: auth-checks
+            test-path: |-
+              tests/unit/proxy/test__lazy_features.py
+              tests/unit/proxy/test_aproxy_startup.py
+              tests/unit/proxy/test_proxy_server.py
+              tests/unit/proxy/auth/test_auth_checks.py
+              tests/unit/proxy/auth/test_user_api_key_auth.py
+              tests/unit/proxy/test_credential_slot_registry.py
+              tests/unit/proxy/test_deprecated_key_grace_period.py
+              tests/unit/proxy/test_proxy_server_custom_logger.py
+              tests/unit/proxy/test_custom_callback_input.py
+              tests/unit/proxy/test_custom_logger_s3_gcs.py
+              tests/unit/proxy/management_endpoints/test_jwt_key_mapping.py
+            python-version: "3.12"
+            workers: 4
+            reruns: 2
+            timeout-minutes: 15
+            job-timeout-minutes: 60
+            dist: loadscope
+
           - shard: enterprise-routing
+            test-path: |-
+              tests/unit/proxy/test_proxy_server_exception_mapping.py
+              tests/unit/proxy/lens
+              tests/unit/proxy/auth/test_models_fallback_endpoint.py
+              tests/unit/proxy/common_utils/test_check_batch_cost.py
+              tests/unit/proxy/common_utils/test_check_responses_cost.py
+              tests/unit/proxy/common_utils/test_realtime_cache.py
+              tests/unit/proxy/google_endpoints/test_gemini_agents_endpoints.py
+              tests/unit/proxy/google_endpoints/test_google_endpoint_routing.py
+              tests/unit/proxy/google_endpoints/test_google_gemini_proxy_request.py
+              tests/unit/proxy/public_endpoints/test_blog_posts_endpoint.py
+              tests/unit/proxy/response_polling
+              tests/unit/proxy/test_custom_tokenizer_bug.py
+              tests/unit/proxy/test_get_favicon.py
+              tests/unit/proxy/test_get_image.py
+              tests/unit/proxy/test_prompt_test_endpoint.py
+              tests/unit/proxy/test_reducto_ocr_route.py
+              tests/unit/proxy/test_response_polling_pre_call_checks.py
+              tests/unit/proxy/test_ui_path_detection.py
+              tests/unit/proxy/auth/test_multipart_bypass_repro.py
+              tests/unit/proxy/auth/test_proxy_routes.py
+              tests/unit/proxy/middleware/test_request_size_limit_middleware.py
+              tests/unit/proxy/test_proxy_config_unit_test.py
+              tests/unit/proxy/test_proxy_token_counter.py
+              tests/unit/proxy/test_server_root_path.py
+              tests/unit/proxy/spend_tracking/test_search_api_logging.py
+              tests/unit/proxy/test_proxy_reject_logging.py
+              tests/unit/router_utils
+            python-version: "3.12"
+            workers: 4
+            reruns: 2
+            timeout-minutes: 20
+            job-timeout-minutes: 60
+            dist: loadscope
+
+          - shard: mcp-oauth
+            test-path: |-
+              tests/unit/proxy/mcp_server/test_discoverable_endpoints.py
+              tests/unit/proxy/mcp_server/test_mcp_server_manager.py
+              tests/unit/proxy/mcp_server/test_db_credentials.py
+              tests/unit/proxy/mcp_server/test_gateway_dcr_flow.py
+              tests/unit/proxy/mcp_server/test_mcp_oauth_passthrough_tools.py
+              tests/unit/proxy/mcp_server/test_mcp_max_concurrent_requests.py
+              tests/unit/proxy/mcp_server/faults/test_list_outcomes.py
+              tests/unit/proxy/mcp_server/outbound_credentials
+              tests/unit/proxy/auth/test_default_end_user_budget_simple.py
+              tests/unit/proxy/hooks/test_unit_test_max_model_budget_limiter.py
+              tests/unit/proxy/test_zero_cost_model_budget_bypass.py
+            python-version: "3.12"
+            workers: 4
+            reruns: 2
+            timeout-minutes: 15
+            job-timeout-minutes: 60
+            dist: loadscope
+
+          - shard: enterprise-routing-2
             test-path: |-
               tests/unit/google_genai
               tests/unit/router_strategy
-              tests/unit/router_utils
               tests/unit/redis
               tests/unit/proxy/common_utils/test_cache_aware_routing.py
               tests/unit/enterprise/enterprise_callbacks/send_emails
@@ -173,6 +573,7 @@ jobs:
               tests/unit/enterprise/proxy/test_file_deletion_blocking.py
               tests/unit/enterprise/proxy/test_managed_files_access_check.py
               tests/unit/enterprise/proxy/test_managed_files_hook.py
+              tests/unit/proxy/management_helpers/test_audit_logs_proxy.py
             python-version: "3.12"
             workers: 4
             reruns: 2
@@ -180,44 +581,31 @@ jobs:
             job-timeout-minutes: 60
             dist: loadscope
 
-          - shard: integrations
+          - shard: proxy-endpoints
+            runner: ubuntu-latest-16-cores
             test-path: |-
-              tests/unit/integrations
-              --ignore=tests/unit/integrations/test_opentelemetry.py
-              --ignore=tests/unit/integrations/otel/test_otel_v2_components.py
+              tests/unit/proxy/management_endpoints
+              tests/unit/proxy/management_helpers
+              tests/unit/proxy/list_api
+              tests/unit/proxy/analytics_endpoints
+              tests/unit/proxy/alerting_endpoints
+              tests/unit/proxy/decisions_endpoints
+              tests/unit/proxy/memory
+              tests/unit/proxy/agent_endpoints
+              tests/unit/proxy/openai_files_endpoint
+              tests/unit/proxy/health_endpoints
+              tests/unit/proxy/batches_endpoints
+              tests/unit/proxy/utils
+              --ignore=tests/unit/proxy/management_endpoints/test_jwt_key_mapping.py
+              --ignore=tests/unit/proxy/management_endpoints/test_key_generate_prisma.py
+              --ignore=tests/unit/proxy/management_endpoints/test_roi_calculator_endpoints.py
+              --ignore=tests/unit/proxy/management_helpers/test_audit_logs_proxy.py
+              --ignore=tests/unit/proxy/google_endpoints/test_gemini_agents_endpoints.py
+              --ignore=tests/unit/proxy/google_endpoints/test_google_endpoint_routing.py
+              --ignore=tests/unit/proxy/google_endpoints/test_google_gemini_proxy_request.py
+              --ignore=tests/unit/proxy/public_endpoints/test_blog_posts_endpoint.py
             python-version: "3.12"
-            workers: 4
-            reruns: 0
-            timeout-minutes: 20
-            job-timeout-minutes: 60
-            dist: loadscope
-
-          - shard: llms-vertex-ai
-            test-path: >-
-              tests/unit/llms/vertex_ai
-            python-version: "3.12"
-            workers: 4
-            reruns: 0
-            timeout-minutes: 20
-            job-timeout-minutes: 60
-            dist: loadscope
-
-          - shard: llms-anthropic
-            test-path: >-
-              tests/unit/llms/anthropic
-            python-version: "3.12"
-            workers: 4
-            reruns: 0
-            timeout-minutes: 20
-            job-timeout-minutes: 60
-            dist: loadscope
-
-          - shard: llms-bedrock
-            test-path: |-
-              tests/unit/llms/bedrock
-              tests/unit/llms/bedrock_mantle
-            python-version: "3.12"
-            workers: 4
+            workers: 8
             reruns: 0
             timeout-minutes: 20
             job-timeout-minutes: 60
@@ -264,7 +652,6 @@ jobs:
               tests/unit/llms/compactifai
               tests/unit/llms/crusoe
               tests/unit/llms/custom_httpx
-              --ignore=tests/unit/llms/custom_httpx/test_aiohttp_transport.py
               tests/unit/llms/dashscope
               tests/unit/llms/databricks
               tests/unit/llms/dataforseo
@@ -384,168 +771,8 @@ jobs:
               tests/unit/llms/xinference
               tests/unit/llms/you_com
               tests/unit/llms/zai
+              --ignore=tests/unit/llms/custom_httpx/test_aiohttp_transport.py
               --ignore=tests/unit/llms/base_llm/batches/base_batches_config_test.py
-            python-version: "3.12"
-            workers: 8
-            reruns: 0
-            timeout-minutes: 20
-            job-timeout-minutes: 60
-            dist: loadscope
-
-          - shard: llms-openai-meta
-            test-path: >-
-              tests/unit/llms/openai
-              tests/unit/llms/meta
-            python-version: "3.12"
-            workers: 4
-            reruns: 0
-            timeout-minutes: 20
-            job-timeout-minutes: 60
-            dist: loadscope
-
-          - shard: root
-            runner: ubuntu-latest-16-cores
-            test-path: >-
-              tests/unit/test_*.py
-            python-version: "3.12"
-            workers: 8
-            reruns: 2
-            timeout-minutes: 20
-            job-timeout-minutes: 60
-            dist: loadscope
-
-          - shard: router
-            test-path: >-
-              tests/unit/router_rust
-              tests/unit/test_router
-            python-version: "3.12"
-            workers: 4
-            reruns: 0
-            timeout-minutes: 20
-            job-timeout-minutes: 60
-            dist: loadscope
-
-          - shard: endpoints
-            test-path: >-
-              tests/unit/a2a_protocol
-              tests/unit/anthropic_interface
-              tests/unit/batches
-              tests/unit/chat_completions
-              tests/unit/completion_extras
-              tests/unit/containers
-              tests/unit/embeddings
-              tests/unit/endpoints
-              tests/unit/files
-              tests/unit/fine_tuning
-              tests/unit/images
-              tests/unit/interactions
-              tests/unit/messages
-              tests/unit/ocr
-              tests/unit/passthrough
-              tests/unit/rag
-              tests/unit/realtime_api
-              tests/unit/rerank_api
-              tests/unit/search
-              tests/unit/text_completions
-              tests/unit/vector_stores
-              tests/unit/videos
-            python-version: "3.12"
-            workers: 4
-            reruns: 0
-            timeout-minutes: 20
-            job-timeout-minutes: 60
-            dist: loadscope
-
-          - shard: rust-bridge-harness
-            test-path: >-
-              tests/test_litellm_rust/test_dispatch.py
-              tests/test_litellm_rust/test_public_entries.py
-              tests/test_litellm_rust/chat_completions/test_dispatch.py
-              tests/test_litellm_rust/embeddings/test_dispatch.py
-              tests/test_litellm_rust/messages/test_dispatch.py
-              tests/test_litellm_rust/ocr/test_dispatch.py
-              tests/test_litellm_rust/responses/test_dispatch.py
-              tests/unit/compression
-              tests/unit/harness
-              tests/unit/rust_bridge
-              tests/unit/sandbox
-              --ignore=tests/unit/rust_bridge/native_route_wheel_test.py
-            python-version: "3.12"
-            workers: 4
-            reruns: 0
-            timeout-minutes: 20
-            job-timeout-minutes: 60
-            dist: loadscope
-
-          - shard: enterprise-repositories-secrets
-            test-path: >-
-              tests/unit/enterprise/enterprise_callbacks/test_callback_controls.py
-              tests/unit/enterprise/enterprise_callbacks/test_llm_guard.py
-              tests/unit/enterprise/enterprise_callbacks/test_pagerduty_alerting.py
-              tests/unit/enterprise/enterprise_callbacks/test_secret_detection.py
-              tests/unit/integration_support
-              tests/unit/models
-              tests/unit/repositories
-              tests/unit/secret_managers
-              tests/unit/skills/test_skills_main.py
-              tests/unit/telemetry tests/unit/proxy/telemetry
-              tests/unit/tracing
-            python-version: "3.12"
-            workers: 4
-            reruns: 0
-            timeout-minutes: 20
-            job-timeout-minutes: 60
-            dist: load
-
-          - shard: proxy-auth
-            test-path: |-
-              tests/unit/proxy/auth
-              --ignore=tests/unit/proxy/auth/test_auth_checks.py
-              --ignore=tests/unit/proxy/auth/test_user_api_key_auth.py
-              --ignore=tests/unit/proxy/auth/test_default_end_user_budget_simple.py
-              --ignore=tests/unit/proxy/auth/test_jwt.py
-              --ignore=tests/unit/proxy/auth/test_models_fallback_endpoint.py
-              --ignore=tests/unit/proxy/auth/test_multipart_bypass_repro.py
-              --ignore=tests/unit/proxy/auth/test_proxy_routes.py
-            python-version: "3.12"
-            workers: 4
-            reruns: 0
-            timeout-minutes: 20
-            job-timeout-minutes: 60
-            dist: loadscope
-
-          - shard: proxy-hooks-client
-            test-path: |-
-              tests/unit/proxy/hooks
-              tests/unit/proxy/policy_engine
-              tests/unit/proxy/client
-              --ignore=tests/unit/proxy/hooks/test_banned_keyword_list.py
-              --ignore=tests/unit/proxy/hooks/test_unit_test_max_model_budget_limiter.py
-            python-version: "3.12"
-            workers: 4
-            reruns: 0
-            timeout-minutes: 20
-            job-timeout-minutes: 60
-            dist: loadscope
-
-          - shard: proxy-endpoints
-            runner: ubuntu-latest-16-cores
-            test-path: |-
-              tests/unit/proxy/management_endpoints
-              tests/unit/proxy/management_helpers
-              tests/unit/proxy/list_api
-              tests/unit/proxy/analytics_endpoints
-              tests/unit/proxy/alerting_endpoints
-              tests/unit/proxy/decisions_endpoints
-              tests/unit/proxy/memory
-              tests/unit/proxy/agent_endpoints
-              tests/unit/proxy/openai_files_endpoint
-              tests/unit/proxy/health_endpoints
-              tests/unit/proxy/batches_endpoints
-              --ignore=tests/unit/proxy/management_endpoints/test_jwt_key_mapping.py
-              --ignore=tests/unit/proxy/management_endpoints/test_key_generate_prisma.py
-              --ignore=tests/unit/proxy/management_endpoints/test_roi_calculator_endpoints.py
-              --ignore=tests/unit/proxy/management_helpers/test_audit_logs_proxy.py
             python-version: "3.12"
             workers: 8
             reruns: 0
@@ -557,10 +784,6 @@ jobs:
             runner: ubuntu-latest-16-cores
             test-path: |-
               tests/unit/proxy/guardrails
-              --ignore=tests/unit/proxy/google_endpoints/test_gemini_agents_endpoints.py
-              --ignore=tests/unit/proxy/google_endpoints/test_google_endpoint_routing.py
-              --ignore=tests/unit/proxy/google_endpoints/test_google_gemini_proxy_request.py
-              --ignore=tests/unit/proxy/public_endpoints/test_blog_posts_endpoint.py
               tests/unit/proxy/anthropic_endpoints
               tests/unit/proxy/google_endpoints
               tests/unit/proxy/container_endpoints
@@ -585,7 +808,10 @@ jobs:
               tests/unit/proxy/ui_crud_endpoints
               tests/unit/proxy/deps
               tests/unit/proxy/config_resolvers
-              tests/unit/proxy/utils
+              --ignore=tests/unit/proxy/google_endpoints/test_gemini_agents_endpoints.py
+              --ignore=tests/unit/proxy/google_endpoints/test_google_endpoint_routing.py
+              --ignore=tests/unit/proxy/google_endpoints/test_google_gemini_proxy_request.py
+              --ignore=tests/unit/proxy/public_endpoints/test_blog_posts_endpoint.py
             python-version: "3.12"
             workers: 8
             reruns: 0
@@ -593,177 +819,16 @@ jobs:
             job-timeout-minutes: 60
             dist: loadscope
 
-          - shard: proxy-server
-            test-path: >-
-              tests/unit/proxy/proxy_server
-            python-version: "3.12"
-            workers: 4
-            reruns: 0
-            timeout-minutes: 60
-            job-timeout-minutes: 100
-            dist: loadscope
-
-          - shard: mcp-elicitation
+          - shard: root
+            runner: ubuntu-latest-16-cores
             test-path: |-
-              tests/unit/mcp_client/test_mcp_client.py
-              tests/unit/proxy/mcp_server/test_capabilities.py
-              tests/unit/proxy/mcp_server/test_interactions.py
-              tests/unit/proxy/mcp_server/test_mcp_elicitation_handler.py
-              tests/unit/proxy/mcp_server/test_mcp_server_manager.py
-              tests/unit/proxy/mcp_server/test_mcp_server_tool_calls_and_headers.py
-              tests/unit/proxy/mcp_server/test_operations.py
+              tests/unit/test_*.py
             python-version: "3.12"
-            workers: 4
-            reruns: 0
+            workers: 8
+            reruns: 2
             timeout-minutes: 20
             job-timeout-minutes: 60
             dist: loadscope
-
-          - shard: proxy-infra-db-spend
-            test-path: |-
-              tests/unit/proxy/db
-              --ignore=tests/unit/proxy/db/test_pgbouncer.py
-              --ignore=tests/unit/proxy/db/db_transaction_queue/test_e2e_pod_lock_manager.py
-              --ignore=tests/unit/proxy/db/test_update_daily_tag_spend.py
-              tests/unit/proxy/spend_tracking
-              --ignore=tests/unit/proxy/spend_tracking/test_search_api_logging.py
-              tests/unit/proxy/common_utils
-              --ignore=tests/unit/proxy/common_utils/test_cache_aware_routing.py
-              --ignore=tests/unit/proxy/common_utils/test_check_batch_cost.py
-              --ignore=tests/unit/proxy/common_utils/test_check_responses_cost.py
-              --ignore=tests/unit/proxy/common_utils/test_proxy_encrypt_decrypt.py
-              --ignore=tests/unit/proxy/common_utils/test_realtime_cache.py
-            python-version: "3.12"
-            workers: 4
-            reruns: 0
-            timeout-minutes: 20
-            job-timeout-minutes: 60
-            dist: loadscope
-
-          - shard: proxy-infra-routing
-            test-path: |-
-              tests/unit/proxy/middleware
-              --ignore=tests/unit/proxy/middleware/test_request_size_limit_middleware.py
-              tests/unit/proxy/pass_through_endpoints
-              tests/unit/proxy/mcp_server/test_tool_registry.py
-              tests/unit/proxy/enterprise_billing
-              tests/unit/proxy/types_utils
-              tests/unit/proxy/logging_endpoints
-              tests/unit/gateway
-              tests/unit/proxy/management
-              tests/unit/proxy/management_endpoints/test_roi_calculator_endpoints.py
-              tests/unit/proxy/roi_calculator
-            python-version: "3.12"
-            workers: 4
-            reruns: 0
-            timeout-minutes: 20
-            job-timeout-minutes: 60
-            dist: loadscope
-
-          - shard: proxy-infra-root-a-p
-            test-path: |-
-              tests/unit/proxy/test_[_a-p]*.py
-              --deselect=tests/unit/proxy/test_aproxy_startup.py
-              --deselect=tests/unit/proxy/test_component_allowlists.py
-              --deselect=tests/unit/proxy/test_credential_slot_registry.py
-              --deselect=tests/unit/proxy/test_custom_callback_input.py
-              --deselect=tests/unit/proxy/test_custom_logger_s3_gcs.py
-              --deselect=tests/unit/proxy/test_custom_tokenizer_bug.py
-              --deselect=tests/unit/proxy/test_db_schema_changes.py
-              --deselect=tests/unit/proxy/test_deprecated_key_grace_period.py
-              --deselect=tests/unit/proxy/test_get_favicon.py
-              --deselect=tests/unit/proxy/test_get_image.py
-              --deselect=tests/unit/proxy/test_prisma_client_backoff_retry.py
-              --deselect=tests/unit/proxy/test_prometheus_metrics_server.py
-              --deselect=tests/unit/proxy/test_prompt_test_endpoint.py
-              --deselect=tests/unit/proxy/test_proxy_cli.py
-              --deselect=tests/unit/proxy/test_proxy_config_unit_test.py
-              --deselect=tests/unit/proxy/test_proxy_custom_auth.py
-              --deselect=tests/unit/proxy/test_proxy_reject_logging.py
-              --deselect=tests/unit/proxy/test_proxy_server.py
-              --deselect=tests/unit/proxy/test_proxy_setting_guardrails.py
-              --deselect=tests/unit/proxy/test_proxy_token_counter.py
-              --deselect=tests/unit/proxy/test_proxy_utils.py
-            python-version: "3.12"
-            workers: 4
-            reruns: 0
-            timeout-minutes: 20
-            job-timeout-minutes: 60
-            dist: loadscope
-
-          - shard: proxy-infra-root-q-z
-            test-path: |-
-              tests/unit/proxy/test_[q-z]*.py
-              --deselect=tests/unit/proxy/test_reducto_ocr_route.py
-              --deselect=tests/unit/proxy/test_response_polling_pre_call_checks.py
-              --deselect=tests/unit/proxy/test_server_root_path.py
-              --deselect=tests/unit/proxy/test_ui_path_detection.py
-              --deselect=tests/unit/proxy/test_unit_test_proxy_hooks.py
-              --deselect=tests/unit/proxy/test_update_spend.py
-              --deselect=tests/unit/proxy/test_zero_cost_model_budget_bypass.py
-            python-version: "3.12"
-            workers: 4
-            reruns: 0
-            timeout-minutes: 20
-            job-timeout-minutes: 60
-            dist: loadscope
-
-          - shard: proxy-subprocess
-            test-path: |-
-              tests/unit/proxy/test_component_allowlists.py
-            python-version: "3.12"
-            workers: 2
-            reruns: 0
-            timeout-minutes: 20
-            job-timeout-minutes: 60
-            dist: loadscope
-
-          - shard: caching-local
-            test-path: >-
-              tests/unit/caching
-            python-version: "3.12"
-            workers: 2
-            reruns: 0
-            timeout-minutes: 20
-            job-timeout-minutes: 60
-            dist: loadscope
-
-          - shard: proxy-extras
-            test-path: >-
-              tests/unit/litellm_proxy_extras
-              tests/unit/db_scripts
-            python-version: "3.12"
-            workers: 2
-            reruns: 0
-            timeout-minutes: 20
-            job-timeout-minutes: 60
-            dist: loadscope
-
-          - shard: enterprise-package
-            test-path: |-
-              tests/unit/enterprise/integrations
-              tests/unit/enterprise/proxy/auth
-              tests/unit/enterprise/proxy/guardrails
-              tests/unit/enterprise/proxy/management_endpoints
-              tests/unit/enterprise/proxy/test_audit_logging_endpoints.py
-              tests/unit/enterprise/proxy/test_liteadmin.py
-              tests/unit/enterprise/enterprise_callbacks/test_prometheus_logging_callbacks.py
-            python-version: "3.12"
-            workers: 4
-            reruns: 0
-            timeout-minutes: 20
-            job-timeout-minutes: 60
-            dist: loadscope
-
-          - shard: enterprise-managed-files
-            test-path: >-
-              tests/unit/enterprise/proxy/hooks
-            python-version: "3.12"
-            workers: 4
-            reruns: 0
-            timeout-minutes: 20
-            job-timeout-minutes: 60
-            dist: load
 
           - shard: responses-caching-types
             test-path: |-
@@ -788,6 +853,19 @@ jobs:
               tests/unit/responses/test_streaming_iterator_error_events.py
               tests/unit/responses/test_text_format_conversion.py
               tests/unit/types
+              tests/unit/litellm_proxy_extras
+              tests/unit/db_scripts
+            python-version: "3.12"
+            workers: 2
+            reruns: 0
+            timeout-minutes: 20
+            job-timeout-minutes: 60
+            dist: loadscope
+
+          - shard: proxy-subprocess
+            test-path: |-
+              tests/unit/proxy/test_component_allowlists.py
+              tests/unit/caching
             python-version: "3.12"
             workers: 2
             reruns: 0
@@ -796,7 +874,7 @@ jobs:
             dist: loadscope
 
           - shard: key-generation
-            test-path: >-
+            test-path: |-
               tests/unit/proxy/management_endpoints/test_key_generate_prisma.py
             python-version: "3.12"
             workers: 0
@@ -805,203 +883,8 @@ jobs:
             job-timeout-minutes: 60
             dist: loadscope
 
-          - shard: auth-checks
-            test-path: |-
-              tests/unit/proxy/auth/test_auth_checks.py
-              tests/unit/proxy/auth/test_user_api_key_auth.py
-              tests/unit/proxy/test_credential_slot_registry.py
-              tests/unit/proxy/test_deprecated_key_grace_period.py
-            python-version: "3.12"
-            workers: 4
-            reruns: 2
-            timeout-minutes: 15
-            job-timeout-minutes: 60
-            dist: loadscope
-
-          - shard: jwt-and-keys
-            test-path: |-
-              tests/unit/proxy/auth/test_jwt.py
-              tests/unit/proxy/management_endpoints/test_jwt_key_mapping.py
-              tests/unit/proxy/test_proxy_custom_auth.py
-            python-version: "3.12"
-            workers: 4
-            reruns: 2
-            timeout-minutes: 15
-            job-timeout-minutes: 60
-            dist: loadscope
-
-          - shard: proxy-utils
-            test-path: >-
-              tests/unit/proxy/test_proxy_utils.py
-            python-version: "3.12"
-            workers: 4
-            reruns: 2
-            timeout-minutes: 15
-            job-timeout-minutes: 60
-            dist: worksteal
-
-          - shard: proxy-server-core
-            test-path: |-
-              tests/unit/proxy/pass_through_endpoints/test_llm_passthrough_endpoints.py
-              tests/unit/proxy/test__lazy_features.py
-              tests/unit/proxy/test_aproxy_startup.py
-              tests/unit/proxy/test_proxy_server.py
-            python-version: "3.12"
-            workers: 4
-            reruns: 2
-            timeout-minutes: 15
-            job-timeout-minutes: 60
-            dist: loadscope
-
-          - shard: proxy-runtime
-            test-path: |-
-              tests/unit/proxy/auth/test_multipart_bypass_repro.py
-              tests/unit/proxy/auth/test_proxy_routes.py
-              tests/unit/proxy/middleware/test_request_size_limit_middleware.py
-              tests/unit/proxy/test_proxy_config_unit_test.py
-              tests/unit/proxy/test_proxy_token_counter.py
-              tests/unit/proxy/test_server_root_path.py
-            python-version: "3.12"
-            workers: 4
-            reruns: 2
-            timeout-minutes: 15
-            job-timeout-minutes: 60
-            dist: loadscope
-
-          - shard: mcp-oauth
-            test-path: |-
-              tests/unit/proxy/mcp_server/test_discoverable_endpoints.py
-              tests/unit/proxy/mcp_server/test_mcp_server_manager.py
-              tests/unit/proxy/mcp_server/test_db_credentials.py
-              tests/unit/proxy/mcp_server/test_gateway_dcr_flow.py
-              tests/unit/proxy/mcp_server/test_mcp_oauth_passthrough_tools.py
-              tests/unit/proxy/mcp_server/test_mcp_max_concurrent_requests.py
-              tests/unit/proxy/mcp_server/faults/test_list_outcomes.py
-              tests/unit/proxy/mcp_server/outbound_credentials
-            python-version: "3.12"
-            workers: 4
-            reruns: 2
-            timeout-minutes: 15
-            job-timeout-minutes: 60
-            dist: loadscope
-
-          - shard: mcp-server
-            test-path: |-
-              tests/unit/mcp_client
-              tests/unit/experimental_mcp_client
-              tests/unit/proxy/mcp_server
-              tests/unit/proxy/_experimental/mcp_server
-              tests/unit/responses/mcp
-              --ignore=tests/unit/mcp_client/test_mcp_client.py
-              --ignore=tests/unit/proxy/mcp_server/test_capabilities.py
-              --ignore=tests/unit/proxy/mcp_server/test_interactions.py
-              --ignore=tests/unit/proxy/mcp_server/test_mcp_elicitation_handler.py
-              --ignore=tests/unit/proxy/mcp_server/test_mcp_server_manager.py
-              --ignore=tests/unit/proxy/mcp_server/test_mcp_server_tool_calls_and_headers.py
-              --ignore=tests/unit/proxy/mcp_server/test_operations.py
-              --ignore=tests/unit/proxy/mcp_server/test_discoverable_endpoints.py
-              --ignore=tests/unit/proxy/mcp_server/test_db_credentials.py
-              --ignore=tests/unit/proxy/mcp_server/outbound_credentials
-            python-version: "3.12"
-            workers: 4
-            reruns: 0
-            timeout-minutes: 20
-            job-timeout-minutes: 60
-            dist: loadscope
-
-          - shard: custom-logging
-            test-path: |-
-              tests/unit/proxy/test_proxy_server_custom_logger.py
-              tests/unit/proxy/test_custom_callback_input.py
-              tests/unit/proxy/test_custom_logger_s3_gcs.py
-            python-version: "3.12"
-            workers: 4
-            reruns: 2
-            timeout-minutes: 15
-            job-timeout-minutes: 60
-            dist: loadscope
-
-          - shard: logging-misc
-            test-path: |-
-              tests/unit/proxy/management_helpers/test_audit_logs_proxy.py
-              tests/unit/proxy/spend_tracking/test_search_api_logging.py
-              tests/unit/proxy/test_proxy_reject_logging.py
-            python-version: "3.12"
-            workers: 4
-            reruns: 2
-            timeout-minutes: 15
-            job-timeout-minutes: 60
-            dist: loadscope
-
-          - shard: db-and-spend
-            test-path: |-
-              tests/unit/proxy/common_utils/test_proxy_encrypt_decrypt.py
-              tests/unit/proxy/db/db_transaction_queue/test_e2e_pod_lock_manager.py
-              tests/unit/proxy/db/test_update_daily_tag_spend.py
-              tests/unit/proxy/test_db_schema_changes.py
-              tests/unit/proxy/test_prisma_client_backoff_retry.py
-              tests/unit/proxy/test_update_spend.py
-              tests/unit/skills/test_skills_db.py
-            python-version: "3.12"
-            workers: 4
-            reruns: 2
-            timeout-minutes: 15
-            job-timeout-minutes: 60
-            dist: loadscope
-
-          - shard: guardrails-hooks
-            test-path: |-
-              tests/unit/proxy/hooks/test_banned_keyword_list.py
-              tests/unit/proxy/test_proxy_setting_guardrails.py
-              tests/unit/proxy/test_unit_test_proxy_hooks.py
-            python-version: "3.12"
-            workers: 4
-            reruns: 2
-            timeout-minutes: 15
-            job-timeout-minutes: 60
-            dist: loadscope
-
-          - shard: budgets
-            test-path: |-
-              tests/unit/proxy/auth/test_default_end_user_budget_simple.py
-              tests/unit/proxy/hooks/test_unit_test_max_model_budget_limiter.py
-              tests/unit/proxy/test_zero_cost_model_budget_bypass.py
-            python-version: "3.12"
-            workers: 4
-            reruns: 2
-            timeout-minutes: 15
-            job-timeout-minutes: 60
-            dist: loadscope
-
-          - shard: endpoints-and-responses
-            test-path: |-
-              tests/unit/proxy/test_proxy_server_exception_mapping.py
-              tests/unit/proxy/lens
-              tests/unit/proxy/auth/test_models_fallback_endpoint.py
-              tests/unit/proxy/common_utils/test_check_batch_cost.py
-              tests/unit/proxy/common_utils/test_check_responses_cost.py
-              tests/unit/proxy/common_utils/test_realtime_cache.py
-              tests/unit/proxy/google_endpoints/test_gemini_agents_endpoints.py
-              tests/unit/proxy/google_endpoints/test_google_endpoint_routing.py
-              tests/unit/proxy/google_endpoints/test_google_gemini_proxy_request.py
-              tests/unit/proxy/public_endpoints/test_blog_posts_endpoint.py
-              tests/unit/proxy/response_polling
-              tests/unit/proxy/test_custom_tokenizer_bug.py
-              tests/unit/proxy/test_get_favicon.py
-              tests/unit/proxy/test_get_image.py
-              tests/unit/proxy/test_prompt_test_endpoint.py
-              tests/unit/proxy/test_reducto_ocr_route.py
-              tests/unit/proxy/test_response_polling_pre_call_checks.py
-              tests/unit/proxy/test_ui_path_detection.py
-            python-version: "3.12"
-            workers: 4
-            reruns: 2
-            timeout-minutes: 15
-            job-timeout-minutes: 60
-            dist: loadscope
-
           - shard: lens-python-310
-            test-path: >-
+            test-path: |-
               tests/unit/proxy/lens
             python-version: "3.10"
             workers: 0
