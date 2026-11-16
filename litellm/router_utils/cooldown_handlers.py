@@ -25,6 +25,7 @@ from litellm.constants import (
     SINGLE_DEPLOYMENT_TRAFFIC_FAILURE_THRESHOLD,
 )
 from litellm.exceptions import MidStreamFallbackError, MissingMessageRoleError
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.litellm_logging import mask_api_base_credentials
 from litellm.router_deprecated import renamed_router_param
@@ -848,8 +849,8 @@ def is_caller_timeout_408(
     """A 408 is caller-controlled after the earliest marked timeout or TTFT deadline, using ended when supplied."""
     if cast_exception_status_to_int(exception_status) != 408:
         return False
-    litellm_params: Final = model_call_details.get("litellm_params")
-    if not isinstance(litellm_params, Mapping):
+    litellm_params: Final = as_str_mapping(model_call_details.get("litellm_params"))
+    if litellm_params is None:
         return False
     configured: Final = (
         litellm_params.get("timeout") if litellm_params.get("client_side_timeout") else None,

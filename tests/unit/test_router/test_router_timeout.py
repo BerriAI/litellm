@@ -18,7 +18,7 @@ import respx
 import litellm
 from litellm import Router
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.router_api import ChangeSet
 from litellm.router_rust.core import RustCore
@@ -742,6 +742,13 @@ class _TTFTObserver(CustomLogger):
     def __init__(self) -> None:
         super().__init__()
         self.timeout: object = None
+        self.logging_params: Mapping[str, object] = {}
+        self.logging_ready: Final = asyncio.Event()
+        self.logging_loop: Final = asyncio.get_running_loop()
+
+    def log_pre_api_call(self, model: object, messages: object, kwargs: Mapping[str, object]) -> None:
+        self.logging_params = as_str_mapping(kwargs.get("litellm_params")) or {}
+        self.logging_loop.call_soon_threadsafe(self.logging_ready.set)
 
     async def async_pre_call_deployment_hook(
         self, kwargs: dict[str, object], call_type: object
@@ -1162,8 +1169,28 @@ async def test_stream_ttft_timeout_cools_a_deployment_configured_stall(
     assert tuple(deployment_id for deployment_id, _ in cooldowns) == ("ttft-primary",)
 
 
-def test_stream_ttft_timeout_and_caller_marker_are_in_logging_params() -> None:
-    params: Final = get_litellm_params(stream_ttft_timeout=0.5, client_side_stream_ttft_timeout=True)
+@pytest.mark.asyncio
+async def test_stream_ttft_timeout_and_caller_marker_are_in_logging_params(
+    respx_mock: respx.MockRouter,
+    ttft_httpx_transport: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observer: Final = _TTFTObserver()
+    monkeypatch.setattr(litellm, "callbacks", [observer])
+    respx_mock.post("https://ttft.invalid/v1/chat/completions").mock(
+        return_value=httpx.Response(200, content=_ttft_chat_chunk({"content": "answer"}, "stop") + b"data: [DONE]\n\n"),
+    )
+    router: Final = _ttft_router()
+    response: Final = await router.acompletion(
+        model="primary",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        stream_ttft_timeout=0.5,
+        client_side_stream_ttft_timeout=True,
+    )
+    _ = tuple([chunk async for chunk in response])
+    await asyncio.wait_for(observer.logging_ready.wait(), timeout=10)
+    params: Final = observer.logging_params
     assert params["stream_ttft_timeout"] == 0.5
     assert params["client_side_stream_ttft_timeout"] is True
 

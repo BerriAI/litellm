@@ -30,7 +30,7 @@ from litellm.constants import (
     USAGE_BASED_ROUTING_COUNTED_TOKENS_METADATA_KEY,
 )
 from litellm.integrations.otel.model.config import is_otel_v2_enabled
-from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, get_litellm_metadata_from_kwargs
 from litellm.litellm_core_utils.get_provider_specific_headers import (
     ProviderSpecificHeaderUtils,
 )
@@ -1869,19 +1869,24 @@ async def test_stream_ttft_timeout_marker_is_derived_from_the_request_body(
             "client": ("127.0.0.1", 1234),
         }
     )
-    updated: Final = await add_litellm_data_to_request(
-        data={"model": "openai/ttft-proxy-test", "messages": [{"role": "user", "content": "hi"}], **fields},
-        request=request,
-        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
-        proxy_config=MagicMock(),
-        general_settings={},
-        version="test-version",
+    updated: Final = as_str_mapping(
+        await add_litellm_data_to_request(
+            data={"model": "openai/ttft-proxy-test", "messages": [{"role": "user", "content": "hi"}], **fields},
+            request=request,
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+            proxy_config=MagicMock(),
+            general_settings={},
+            version="test-version",
+        )
     )
+    assert updated is not None
     assert bool(updated.get("client_side_stream_ttft_timeout")) is expected
     assert not updated.get("client_side_timeout")
-    assert updated["proxy_server_request"]["body"].get("client_side_stream_ttft_timeout") is (
-        True if expected else None
-    )
+    proxy_request: Final = as_str_mapping(updated["proxy_server_request"])
+    assert proxy_request is not None
+    body: Final = as_str_mapping(proxy_request["body"])
+    assert body is not None
+    assert body.get("client_side_stream_ttft_timeout") is (True if expected else None)
 
 
 @pytest.mark.asyncio
