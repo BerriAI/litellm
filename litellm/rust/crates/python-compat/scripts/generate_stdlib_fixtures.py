@@ -9,13 +9,14 @@ rows record `datetime.fromisoformat(text)` as microseconds since the epoch, `awa
 has an offset and `naive` (read as UTC) when not, or neither when it raises `ValueError`.
 `fixed` rows record `format(value, f".{precision}f")`, `number_str` rows `str(value)` for an
 `int` or `float`, and `isspace` lists every code point whose `str.isspace()` is true.
+`urlparse` rows record `urlsplit(url)`, `urlparse(url)` and `urlunparse(urlparse(url))`.
 """
 
 import json
 import math
 import sys
 from datetime import datetime, timedelta, timezone
-from urllib.parse import quote
+from urllib.parse import quote, urlparse, urlsplit, urlunparse
 
 QUOTE_TEXTS = [
     "",
@@ -34,6 +35,43 @@ QUOTE_TEXTS = [
 ]
 
 SAFES = ["/", "", ":/"]
+
+URLS = [
+    "",
+    "https://h",
+    "https://h/",
+    "https://h/v1",
+    "https://h/v1/",
+    "HTTPS://H/v1",
+    "https://h:8080/v1?k=1",
+    "https://h?k=1",
+    "https://h/?k=1",
+    "https://h/a?b#c",
+    "https://h/v1#frag",
+    "https://h/p;x",
+    "https://h/a;b/c;d",
+    "https://h/v1;x?q=1",
+    "https://h;x",
+    "https://h//v1",
+    "  https://h/v1",
+    "\x00\x1fhttps://h/v1 ",
+    "https://h/v\t1\r\n",
+    "//h/v1",
+    "/v1/projects/p",
+    "h/v1",
+    "1http://h/v1",
+    "ht tp://h/v1",
+    "mailto:a@b;c",
+    "custom+scheme.v1-x://h/v1;p",
+    "https:",
+    "https:/v1",
+    "https:v1",
+    "https://h/v1?",
+    "https://h/v1#",
+    "https://h/v1?#",
+    "https://user:pw@h/v1",
+    "https://h/é;ü",
+]
 
 TIMESTAMPS = [
     (0, 0),
@@ -237,6 +275,15 @@ if __name__ == "__main__":
             "fromisoformat": [fromisoformat(text) for text in ISO_TEXTS],
             "fixed": [fixed(value, precision) for value, precision in FIXED],
             "number_str": [number_str(value) for value in NUMBERS],
+            "urlparse": [
+                {
+                    "url": url,
+                    "split": list(urlsplit(url)),
+                    "parsed": list(urlparse(url)),
+                    "unparsed": urlunparse(urlparse(url)),
+                }
+                for url in URLS
+            ],
             "isspace": [code for code in range(sys.maxunicode + 1) if chr(code).isspace()],
         },
         sys.stdout,
