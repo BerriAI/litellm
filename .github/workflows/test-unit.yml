@@ -215,6 +215,7 @@ jobs:
             test-path: |-
               tests/unit/proxy/auth
               tests/unit/proxy/control_plane
+              tests/unit/proxy/client
               tests/unit/proxy/db
               --ignore=tests/unit/proxy/auth/test_auth_checks.py
               --ignore=tests/unit/proxy/auth/test_user_api_key_auth.py
@@ -304,7 +305,6 @@ jobs:
             test-path: |-
               tests/unit/proxy/hooks
               tests/unit/proxy/policy_engine
-              tests/unit/proxy/client
               tests/test_litellm_rust/test_dispatch.py
               tests/test_litellm_rust/test_public_entries.py
               tests/test_litellm_rust/chat_completions/test_dispatch.py
