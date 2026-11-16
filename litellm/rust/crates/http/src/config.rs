@@ -9,7 +9,7 @@ use crate::{
     phases::ConnectBound,
     proxy::EnvironmentProxies,
     settings::{HttpSettings, SslVerify, TcpKeepalive},
-    tls::{CipherSelection, KeyExchangeGroup, Tls12CipherSuite, Unsupported},
+    tls::{CipherSelection, KeyExchangeGroup, Tls12CipherSuite, Unsupported, without_chacha20},
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -77,7 +77,11 @@ impl From<&HttpSettings> for Resolution {
                 verify: Verify::from(settings),
                 client_certificate: settings.ssl_certificate.clone().map(ClientIdentity::Pem),
                 key_exchange_group: curve.clone().ok().flatten(),
-                tls12_cipher_suites: ciphers.tls12_cipher_suites,
+                tls12_cipher_suites: if settings.chacha20_excluded {
+                    Some(without_chacha20(ciphers.tls12_cipher_suites))
+                } else {
+                    ciphers.tls12_cipher_suites
+                },
                 force_ipv4: settings.force_ipv4,
                 http2: settings.http2,
                 user_agent: settings.user_agent.clone(),
