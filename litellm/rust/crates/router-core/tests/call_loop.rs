@@ -218,6 +218,15 @@ fn agentic_followup() -> AttemptError {
     failed
 }
 
+fn over_every_tpm_limit() -> AttemptError {
+    let mut failed = failure(FailureKind::RateLimit, 429);
+    failed.classes = vec![
+        "RequestOverDeploymentTpmError".into(),
+        "RateLimitError".into(),
+    ];
+    failed
+}
+
 #[rstest]
 #[tokio::test]
 async fn a_rate_limit_retries_in_the_same_group(config: RouterConfig) {
@@ -875,9 +884,14 @@ async fn weighted_failover_serves_every_failure_but_a_context_window_error(
 }
 
 #[rstest]
+#[case::agentic_followup(agentic_followup())]
+#[case::over_every_tpm_limit(over_every_tpm_limit())]
 #[tokio::test]
-async fn a_failed_agentic_followup_is_not_retried_but_still_falls_back(config: RouterConfig) {
-    let host = Arc::new(ScriptedHost::failing("primary", vec![agentic_followup()]));
+async fn a_failure_no_retry_clears_is_not_retried_but_still_falls_back(
+    config: RouterConfig,
+    #[case] refusal: AttemptError,
+) {
+    let host = Arc::new(ScriptedHost::failing("primary", vec![refusal]));
     let router = router(
         config,
         json!({"num_retries": 3, "fallbacks": [{"primary": ["backup"]}]}),
@@ -893,16 +907,21 @@ async fn a_failed_agentic_followup_is_not_retried_but_still_falls_back(config: R
 }
 
 #[rstest]
+#[case::agentic_followup(agentic_followup())]
+#[case::over_every_tpm_limit(over_every_tpm_limit())]
 #[tokio::test]
-async fn a_failed_agentic_followup_skips_the_retry_policy_lookup(config: RouterConfig) {
-    let host = Arc::new(ScriptedHost::failing("primary", vec![agentic_followup()]));
+async fn a_failure_no_retry_clears_skips_the_retry_policy_lookup(
+    config: RouterConfig,
+    #[case] refusal: AttemptError,
+) {
+    let host = Arc::new(ScriptedHost::failing("primary", vec![refusal]));
     let router = router(config, json!({"num_retries": 3}), host.clone());
     let call = RouterRequest {
         retry_policy_raises: vec!["primary".to_owned()],
         ..request()
     };
     let refused = router.call(Op::from("acompletion"), call).await;
-    assert!(matches!(refused, Err(Error::Attempt(failed)) if failed.agentic_followup));
+    assert!(matches!(refused, Err(Error::Attempt(failed)) if failed.ends_retries()));
     assert!(
         !host
             .events
@@ -913,15 +932,20 @@ async fn a_failed_agentic_followup_skips_the_retry_policy_lookup(config: RouterC
 }
 
 #[rstest]
+#[case::agentic_followup(agentic_followup())]
+#[case::over_every_tpm_limit(over_every_tpm_limit())]
 #[tokio::test]
-async fn a_retry_that_fails_its_agentic_followup_ends_the_retries(config: RouterConfig) {
+async fn a_retry_that_fails_beyond_any_retry_ends_the_retries(
+    config: RouterConfig,
+    #[case] refusal: AttemptError,
+) {
     let host = Arc::new(ScriptedHost::failing(
         "primary",
-        vec![server_error(), agentic_followup()],
+        vec![server_error(), refusal],
     ));
     let router = router(config, json!({"num_retries": 3}), host.clone());
     let refused = router.call(Op::from("acompletion"), request()).await;
-    assert!(matches!(refused, Err(Error::Attempt(failed)) if failed.agentic_followup));
+    assert!(matches!(refused, Err(Error::Attempt(failed)) if failed.ends_retries()));
     assert_eq!((host.retries(), host.selected().len()), (1, 2));
 }
 
@@ -957,9 +981,14 @@ async fn a_stream_that_failed_its_agentic_followup_is_not_retried(config: Router
 }
 
 #[rstest]
+#[case::agentic_followup(agentic_followup())]
+#[case::over_every_tpm_limit(over_every_tpm_limit())]
 #[tokio::test]
-async fn a_stream_retry_that_fails_its_agentic_followup_ends_the_retries(config: RouterConfig) {
-    let host = Arc::new(ScriptedHost::failing("primary", vec![agentic_followup()]));
+async fn a_stream_retry_that_fails_beyond_any_retry_ends_the_retries(
+    config: RouterConfig,
+    #[case] refusal: AttemptError,
+) {
+    let host = Arc::new(ScriptedHost::failing("primary", vec![refusal]));
     let router = router(config, json!({}), host.clone());
     let refused = router
         .retry_stream(
@@ -969,7 +998,7 @@ async fn a_stream_retry_that_fails_its_agentic_followup_ends_the_retries(config:
             server_error(),
         )
         .await;
-    assert!(matches!(refused, Err(Error::Attempt(failed)) if failed.agentic_followup));
+    assert!(matches!(refused, Err(Error::Attempt(failed)) if failed.ends_retries()));
     assert_eq!((host.retries(), host.selected().len()), (1, 1));
 }
 

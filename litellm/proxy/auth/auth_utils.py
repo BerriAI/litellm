@@ -4,7 +4,7 @@ import re
 import sys
 from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from dataclasses import dataclass
-from functools import cache, lru_cache
+from functools import cache, lru_cache, partial
 from itertools import accumulate, chain, repeat
 from logging import Logger
 from types import MappingProxyType
@@ -21,6 +21,8 @@ from litellm.constants import (
     EMPTY_MAPPING,
     INVALID_VIRTUAL_KEY_ERROR_MARKER,
     MINIMUM_CUSTOM_KEY_LENGTH,
+    MODEL_BATCH_ENQUEUED_TOKEN_LIMIT_METADATA_KEY,
+    MODEL_LIMIT_MAX_BORROW_MULTIPLE_METADATA_KEY,
     STANDARD_CUSTOMER_ID_HEADERS,
 )
 from litellm.litellm_core_utils.clientside_credential_handler import (
@@ -743,6 +745,12 @@ class _ClientSideStorageAllowlist(BaseModel):
                 return value in (self.allowed_client_side_s3_buckets or ())
             case "allowed_client_side_s3_endpoint_urls":
                 return value in (self.allowed_client_side_s3_endpoint_urls or ())
+
+
+def client_side_s3_bucket_check(general_settings: Mapping[str, object]) -> Callable[[str], bool]:
+    return partial(
+        _ClientSideStorageAllowlist.model_validate(general_settings).admits, "allowed_client_side_s3_buckets"
+    )
 
 
 def _banned_param_error(param: str) -> ValueError:
@@ -1915,22 +1923,37 @@ class BatchLimitRequest(Protocol):
     def model_fields_set(self) -> Collection[str]: ...
 
 
-_ADMIN_ONLY_METADATA_KEYS: Final = (*ADMIN_ONLY_BATCH_LIMIT_METADATA_KEYS, TEAM_S3_BUCKET_ALLOWLIST_METADATA_KEY)
+_ADMIN_ONLY_METADATA_KEYS: Final = (
+    *ADMIN_ONLY_BATCH_LIMIT_METADATA_KEYS,
+    TEAM_S3_BUCKET_ALLOWLIST_METADATA_KEY,
+    MODEL_LIMIT_MAX_BORROW_MULTIPLE_METADATA_KEY,
+)
+_ADMIN_ONLY_METADATA_REASONS: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        TEAM_S3_BUCKET_ALLOWLIST_METADATA_KEY: (
+            "It lets the holder read and write those buckets with the proxy's AWS credentials."
+        ),
+        MODEL_LIMIT_MAX_BORROW_MULTIPLE_METADATA_KEY: (
+            "It caps how far the holder borrows idle model capacity, so the holder cannot raise or remove it."
+        ),
+    }
+)
 
 
 def enforce_batch_limits_are_admin_only(
     data: BatchLimitRequest,
     existing_metadata: Mapping[str, object] | None,
     user_api_key_dict: UserAPIKeyAuth,
-    entity: Literal["key", "team"],
+    entity: Literal["key", "team", "project"],
 ) -> None:
-    """Only a proxy admin may change a key or team's batch limits.
+    """Only a proxy admin may change a key, team, or project's batch limits.
 
     Every key in ``ADMIN_ONLY_BATCH_LIMIT_METADATA_KEYS`` caps what the holder
     may do with batches, so a holder-writable copy would let a caller lift their
     own quota, and the S3 bucket list grants access to buckets with the proxy's
-    own credentials. Gated on the resulting value rather than on presence, so a form
-    resending the stored value stays a no-op.
+    own credentials. A project only enforces ``model_batch_enqueued_token_limit``,
+    so that is the one key gated there. Gated on the resulting value rather than
+    on presence, so a form resending the stored value stays a no-op.
     """
     if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
         return
@@ -1938,16 +1961,17 @@ def enforce_batch_limits_are_admin_only(
     requested: Final[Mapping[str, object]] = (
         (data.metadata or EMPTY_MAPPING) if "metadata" in data.model_fields_set else stored
     )
+    admin_only_keys: Final[tuple[str, ...]] = (
+        (MODEL_BATCH_ENQUEUED_TOKEN_LIMIT_METADATA_KEY,) if entity == "project" else _ADMIN_ONLY_METADATA_KEYS
+    )
     changed: Final = next(
-        (key for key in _ADMIN_ONLY_METADATA_KEYS if requested.get(key) != stored.get(key)),
+        (key for key in admin_only_keys if requested.get(key) != stored.get(key)),
         None,
     )
     if changed is None:
         return
-    reason: Final = (
-        "It lets the holder read and write those buckets with the proxy's AWS credentials."
-        if changed == TEAM_S3_BUCKET_ALLOWLIST_METADATA_KEY
-        else "It limits what the holder can do with batches, so the holder cannot raise it."
+    reason: Final = _ADMIN_ONLY_METADATA_REASONS.get(
+        changed, "It limits what the holder can do with batches, so the holder cannot raise it."
     )
     raise HTTPException(
         status_code=403,

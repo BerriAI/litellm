@@ -187,6 +187,7 @@ from litellm.types.router import (
     GenericLiteLLMParams,
     LiteLLM_Params,
     ModelInfo,
+    server_owned_param_kind,
     updateDeployment,
     updateLiteLLMParams,
 )
@@ -221,6 +222,57 @@ class KubernetesPodsResponse(BaseModel):
 CLEARABLE_LITELLM_PARAMS: Final = frozenset({"cache_control_injection_points", "litellm_credential_name"})
 NULL_CLEARABLE_LITELLM_PARAMS: Final = frozenset((*SPECIAL_MODEL_INFO_PARAMS, *CLEARABLE_LITELLM_PARAMS))
 _STR_OBJECT_DICT: Final = TypeAdapter(dict[str, object])
+_OBJECT_LIST: Final = TypeAdapter(list[object])
+
+
+_Node: TypeAlias = tuple[tuple[object, ...], object]
+
+
+def _child_nodes(node: _Node) -> tuple[_Node, ...]:
+    path, value = node
+    if is_str_keyed_mapping(value):
+        return tuple(((*path, key), child) for key, child in value.items())
+    if isinstance(value, list):
+        return tuple(((*path, index), child) for index, child in enumerate(_OBJECT_LIST.validate_python(value)))
+    return ()
+
+
+def _next_level(level: tuple[_Node, ...], _: None) -> tuple[_Node, ...]:
+    return tuple(itertools.chain.from_iterable(map(_child_nodes, level)))
+
+
+def _string_leaves(value: object) -> Mapping[tuple[object, ...], str]:
+    levels: Final = itertools.takewhile(
+        bool, itertools.accumulate(itertools.repeat(None), _next_level, initial=(((), value),))
+    )
+    return MappingProxyType(
+        {path: leaf for path, leaf in itertools.chain.from_iterable(levels) if isinstance(leaf, str)}
+    )
+
+
+def _adds_environment_reference(value: object, stored: object) -> bool:
+    kept: Final = _string_leaves(stored)
+    return any(
+        leaf.startswith("os.environ/") and kept.get(path) != leaf for path, leaf in _string_leaves(value).items()
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class _EnvironmentReferenceDenied:
+    field: str
+
+
+def _raise_environment_reference_denied(denial: _EnvironmentReferenceDenied | None) -> None:
+    match denial:
+        case None:
+            return
+        case _EnvironmentReferenceDenied(field=field):
+            raise ProxyException(
+                message=f"Only proxy admins can set an os.environ/ reference on a model ({field!r}).",
+                type=ProxyErrorTypes.auth_error.value,
+                code=status.HTTP_403_FORBIDDEN,
+                param=field,
+            )
 
 
 async def update_team(*args, **kwargs):
@@ -2799,7 +2851,7 @@ class ModelManagementAuthChecks:
             raise ProxyException(
                 message=(
                     f"Only proxy admins can change the credentials of a deployment configured for "
-                    f"workload identity federation or OAuth token exchange, or holding an oidc/ api_key secret "
+                    f"{server_owned_param_kind(wif_fields[0])}, or holding an oidc/ api_key secret "
                     f"reference ({wif_fields[0]!r})."
                 ),
                 type=ProxyErrorTypes.auth_error.value,
@@ -2842,6 +2894,27 @@ class ModelManagementAuthChecks:
             type=ProxyErrorTypes.bad_request_error.value,
             code=status.HTTP_400_BAD_REQUEST,
             param="api_key",
+        )
+
+    @staticmethod
+    def _non_admin_environment_reference(
+        *,
+        incoming_params: Mapping[str, object] | None,
+        stored_params: GenericLiteLLMParams | None,
+        user_api_key_dict: UserAPIKeyAuth,
+    ) -> _EnvironmentReferenceDenied | None:
+        if incoming_params is None or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
+            return None
+        stored: Final[Mapping[str, object]] = (
+            MappingProxyType({}) if stored_params is None else _decrypted_litellm_params(stored_params)
+        )
+        return next(
+            (
+                _EnvironmentReferenceDenied(name)
+                for name, value in incoming_params.items()
+                if _adds_environment_reference(value, stored.get(name))
+            ),
+            None,
         )
 
     @staticmethod
@@ -2925,12 +2998,20 @@ class ModelManagementAuthChecks:
                     llm_router=llm_router,
                 )
 
-            return ModelManagementAuthChecks.can_user_make_team_model_call(
+            team_write: Final = ModelManagementAuthChecks.can_user_make_team_model_call(
                 team_id=model_params.model_info.team_id,
                 user_api_key_dict=user_api_key_dict,
                 team_obj=team_obj,
                 premium_user=premium_user,
             )
+            _raise_environment_reference_denied(
+                ModelManagementAuthChecks._non_admin_environment_reference(
+                    incoming_params=incoming_params,
+                    stored_params=model_params.litellm_params if member_operation == "update" else None,
+                    user_api_key_dict=user_api_key_dict,
+                )
+            )
+            return team_write
         ## Check non-team model auth
         elif user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
             raise HTTPException(

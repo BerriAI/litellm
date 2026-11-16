@@ -3446,6 +3446,8 @@ async def test_update_team_with_team_member_budget_duration(
         }
         mock_existing_team.metadata = {"team_member_budget_id": "budget_123"}
         mock_existing_team.members_with_roles = []
+        mock_prisma_client.db.litellm_budgettable.find_unique = AsyncMock(return_value=None)
+        mock_prisma_client.db.litellm_teammembership.find_many = AsyncMock(return_value=[])
         mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(
             return_value=mock_existing_team
         )
@@ -13971,6 +13973,8 @@ async def _drive_team_write(
             new=AsyncMock(),
         ),
     ):
+        pc.db.litellm_budgettable.find_unique = AsyncMock(return_value=None)
+        pc.db.litellm_teammembership.find_many = AsyncMock(return_value=[])
         pc.db.litellm_teamtable.find_unique = AsyncMock(
             return_value=None if find_returns_none else existing
         )
@@ -19686,3 +19690,39 @@ async def test_update_team_rejects_an_added_unregistered_guardrail(mock_db_clien
     assert "typo" in str(exc.value.message)
     assert "stale" not in str(exc.value.message)
     mock_db_client.db.litellm_teamtable.update.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_team_reset_window_change_reaches_only_members_resetting_on_the_team_window():
+    """Members capped by the team default reset on a copy of its window, so a new team window must reach them."""
+    from litellm.proxy.management_endpoints.team_endpoints import TeamMemberBudgetHandler
+
+    def membership(budget_id: str, max_budget: float | None, budget_duration: str | None) -> MagicMock:
+        return MagicMock(
+            litellm_budget_table=MagicMock(budget_id=budget_id, max_budget=max_budget, budget_duration=budget_duration)
+        )
+
+    mock_prisma: Final = MagicMock()
+    mock_prisma.db.litellm_budgettable.find_unique = AsyncMock(return_value=MagicMock(budget_duration="1d"))
+    mock_prisma.db.litellm_teammembership.find_many = AsyncMock(
+        return_value=[
+            membership("on-team-window", None, "1d"),
+            membership("own-cap", 25.0, "1d"),
+            membership("own-window", None, "7d"),
+            MagicMock(litellm_budget_table=None),
+        ]
+    )
+    mock_prisma.db.litellm_budgettable.update_many = AsyncMock(return_value=1)
+
+    await TeamMemberBudgetHandler.move_members_to_team_reset_window(
+        team_id="team-1", team_member_budget_id="team-default", budget_duration="1d", prisma_client=mock_prisma
+    )
+    mock_prisma.db.litellm_budgettable.update_many.assert_not_awaited()
+
+    await TeamMemberBudgetHandler.move_members_to_team_reset_window(
+        team_id="team-1", team_member_budget_id="team-default", budget_duration=None, prisma_client=mock_prisma
+    )
+    mock_prisma.db.litellm_budgettable.update_many.assert_awaited_once_with(
+        data={"budget_duration": None, "budget_reset_at": None},
+        where={"budget_id": {"in": ["on-team-window"]}},
+    )

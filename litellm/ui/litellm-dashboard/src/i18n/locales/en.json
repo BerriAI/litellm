@@ -976,7 +976,8 @@
         "providerRequired": "Please select a provider",
         "vectorStoreIdRequired": "Please input the vector store ID from your api provider",
         "selectField": "Please select the {{field}}",
-        "inputField": "Please input the {{field}}"
+        "inputField": "Please input the {{field}}",
+        "hybridSearchNeedsPipeline": "Hybrid search needs a search pipeline with a normalization-processor"
       },
       "toasts": {
         "invalidMetadata": "Invalid JSON in metadata field",
@@ -1062,6 +1063,8 @@
         "opensearchEndpoint": "OpenSearch Endpoint",
         "awsRegionOptional": "AWS Region (optional)",
         "indexNameOptional": "Index Name (optional)",
+        "searchPipelineOptional": "Search Pipeline (optional)",
+        "hybridSearch": "Hybrid Search",
         "vectorBucketName": "Vector Bucket Name",
         "indexName": "Index Name",
         "awsRegion": "AWS Region"
@@ -1114,7 +1117,9 @@
           "embeddingModel": "The embedding model on this proxy that created the vectors already stored in your index. LiteLLM embeds every search query with it, so it must be the same model. Add it under Models first if it is not listed",
           "embeddingField": "The top-level knn_vector field in your index mapping that holds each document's embedding (default: embedding)",
           "textField": "The top-level field in each document that holds its readable text. LiteLLM returns this text in search results (default: text)",
-          "indexName": "The OpenSearch index to search. Leave blank to use the Vector Store ID, and set it to register same-named indexes from two endpoints under different IDs"
+          "indexName": "The OpenSearch index to search. Leave blank to use the Vector Store ID, and set it to register same-named indexes from two endpoints under different IDs",
+          "searchPipeline": "The name of a search pipeline in your OpenSearch cluster. LiteLLM runs every search through it. Hybrid search needs one with a normalization-processor, since OpenSearch returns unnormalized hybrid scores without one",
+          "hybridSearch": "Turn on to combine a BM25 keyword match on the Text Field with the k-NN vector search. Needs a Search Pipeline with a normalization-processor"
         },
         "s3Vectors": {
           "bucketName": "S3 bucket name for vector storage (will be auto-created if it doesn't exist)",
@@ -3262,6 +3267,7 @@
         "rpm": "RPM Limit",
         "itpm": "Input TPM Limit",
         "otpm": "Output TPM Limit",
+        "batchEnqueuedTokens": "Batch Enqueued Token Limit",
         "remove": "Remove model limit {{number}}",
         "add": "Add Model Limit"
       },
@@ -3279,7 +3285,8 @@
         "missingKey": "Missing key",
         "missingValue": "Missing value",
         "duplicateModel": "Duplicate model",
-        "duplicateKey": "Duplicate key"
+        "duplicateKey": "Duplicate key",
+        "batchEnqueuedTokens": "Enter a whole number above 0"
       }
     },
     "createModal": {
@@ -8157,7 +8164,7 @@
         "accessControl": "ACCESS CONTROL",
         "developerTools": "DEVELOPER TOOLS",
         "settings": "SETTINGS",
-        "customerPortal": "CUSTOMER PORTAL"
+        "customerPortal": "CUSTOMER MANAGEMENT"
       },
       "sections": {
         "aiGateway": "AI Gateway",
@@ -8165,7 +8172,7 @@
         "accessControl": "Access Control",
         "developerTools": "Developer Tools",
         "settings": "Settings",
-        "customerPortal": "Customer Portal"
+        "customerPortal": "Customer Management"
       },
       "items": {
         "home": "Home",
@@ -8767,6 +8774,7 @@
     }
   },
   "shared": {
+    "fieldInformation": "{{label}} information",
     "resourceActivity": {
       "title": "Activity",
       "ownUsage": "Showing your usage only.",
@@ -17331,6 +17339,7 @@
         "number": "Number"
       },
       "numberHint": "Value must be between 0 and 1",
+      "langfuseSpanScopeHint": "Leave empty to use the proxy default (LITELLM_OTEL_LANGFUSE_DESTINATION_SPAN_SCOPE, full if unset).",
       "disabledCallbacks": {
         "title": "Disabled Callbacks",
         "tooltip": "Select callbacks to disable for this key. Disabled callbacks will not receive any logging data.",
@@ -17583,6 +17592,13 @@
       "staticToken": {
         "label": "Static delegated access token",
         "description": "Sends one pre-acquired delegated Microsoft Graph token for every caller."
+      },
+      "githubApp": {
+        "label": "GitHub App",
+        "description": "Authenticate a service with a GitHub App installation. Usage is billed to the organization. LiteLLM refreshes installation tokens automatically.",
+        "uploadHelp": "Upload your GitHub App PEM below. LiteLLM encrypts it in its credential database and only shows a saved-key status. Use HTTPS and protect your proxy encryption key. No Enterprise license is required.",
+        "invalidFile": "Choose a .pem file no larger than 16 KiB.",
+        "keyProvided": "Private key supplied. Upload a replacement to change it."
       }
     },
     "classificationMethodConfig": {
@@ -20656,15 +20672,15 @@
     },
     "limits": {
       "byline": "Free tier: up to 5 customers, 5 teams per customer, 5 members per team. LiteLLM <enterprise>Enterprise</enterprise> removes these limits.",
-      "reachedTitle": "Free customer portal limit reached",
-      "reachedDescription": "New customers, teams and members can't be created. Requests from new customers or members still go through but are not tracked in the customer portal.",
+      "reachedTitle": "Customer Management free tier limit reached",
+      "reachedDescription": "New customers, teams and members can't be created. Requests from new customers or members still go through but are not tracked in Customer Management.",
       "upgrade": "Upgrade to Enterprise"
     },
     "hierarchy": {
       "customerNavigation": "Customer navigation",
       "usage": "Usage",
       "manage": "Manage",
-      "title": "Customer management",
+      "title": "Customer Management",
       "subtitle": "Manage customer teams, customer members, and settings for this customer organization.",
       "teamSubtitle": "Manage customer members and settings for this customer team.",
       "memberSubtitle": "Manage settings and budget for this customer member.",
@@ -20687,6 +20703,8 @@
       "membersHint": "Choose a customer member to manage their settings and budget.",
       "emptyTeams": "No customer teams in this customer organization.",
       "emptyMembers": "No customer members in this customer team.",
+      "searchMembers": "Search customer members by name or ID",
+      "noMemberMatches": "No customer members match your search.",
       "error": "Unable to load customer",
       "scopeMismatch": "This customer team or customer member does not belong to the selected customer organization.",
       "missingOrganization": "Choose a customer organization to manage.",
@@ -20759,10 +20777,20 @@
       "deleteOrganizationMessage": "This deletes this customer organization and its customer teams and customer members.",
       "deleteTeamMessage": "This deletes this customer team and its customer members.",
       "deleteMemberMessage": "This deletes this customer member.",
-      "deleteInformationTitle": "{{kind}} details"
+      "deleteInformationTitle": "{{kind}} details",
+      "teamsRequired": "Select at least one team.",
+      "memberTeamsHint": "Changing teams keeps this member’s ID, budgets and spend history. Past usage stays with the original team.",
+      "defaultTeam": "Default team",
+      "defaultTeamHint": "Requests without a team use this team.",
+      "retryTeams": "Retry",
+      "chooseTeams": "Choose teams",
+      "moveTeams": "Move teams",
+      "moving": "Moving…",
+      "memberMoved": "Member teams updated.",
+      "memberActions": "Actions for {{name}}"
     },
     "switcher": {
-      "label": "Customer Portal",
+      "label": "Customer Management",
       "description": "Customer organizations and usage"
     },
     "status": {

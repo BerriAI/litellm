@@ -2705,6 +2705,82 @@ def test_a_timed_out_request_is_priced_at_the_deployments_long_context_tier(monk
     assert response_cost == pytest.approx(prompt_tokens * expected_rate)
 
 
+PER_QUERY_RERANK_MODEL: Final = "cohere/rerank-v3.5"
+
+
+def _rerank_router_deployment(monkeypatch, deployment_id: str, extra_litellm_params: Mapping[str, object]) -> None:
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "team-rerank",
+                "litellm_params": {"model": PER_QUERY_RERANK_MODEL, "api_key": "fake", **extra_litellm_params},
+                "model_info": {"id": deployment_id},
+            }
+        ]
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router)
+
+
+def _rerank_failure_input_cost(deployment_id: str) -> float:
+    from litellm.proxy.utils import _estimated_input_cost
+
+    return _estimated_input_cost(
+        model_call_details={"model": "team-rerank", "custom_llm_provider": "cohere", "call_type": "arerank"},
+        prompt_tokens=40,
+        deployment_id=deployment_id,
+        base_model=None,
+    )
+
+
+def test_a_failed_rerank_on_a_per_query_model_bills_the_one_query_at_the_cost_map_rate(monkeypatch):
+    _rerank_router_deployment(monkeypatch, "dep-rerank-cost-map", {})
+    published_rate: Final = litellm.get_model_info(model=PER_QUERY_RERANK_MODEL)["input_cost_per_query"]
+
+    assert published_rate
+    assert _rerank_failure_input_cost("dep-rerank-cost-map") == pytest.approx(published_rate)
+
+
+def test_a_failed_rerank_bills_the_per_query_rate_its_deployment_declares(monkeypatch):
+    _rerank_router_deployment(monkeypatch, "dep-rerank-own-query-rate", {"input_cost_per_query": 0.5})
+
+    assert _rerank_failure_input_cost("dep-rerank-own-query-rate") == pytest.approx(0.5)
+
+
+def test_a_failed_rerank_on_a_deployment_priced_per_token_bills_the_estimated_tokens(monkeypatch):
+    _rerank_router_deployment(monkeypatch, "dep-rerank-own-token-rate", {"input_cost_per_token": 0.001})
+
+    assert _rerank_failure_input_cost("dep-rerank-own-token-rate") == pytest.approx(40 * 0.001)
+
+
+def _failed_rerank_prompt_tokens(query: str, documents: list[object]) -> int:
+    from litellm.proxy.utils import _estimated_prompt_usage
+    from litellm.types.utils import CallTypes
+
+    request_body: Final = {"model": PER_QUERY_RERANK_MODEL, "query": query, "documents": documents}
+    logging_obj, _ = litellm.utils.function_setup(
+        original_function=CallTypes.arerank.value,
+        rules_obj=litellm.utils.Rules(),
+        start_time=real_datetime.datetime.now(),
+        litellm_call_id="failed-rerank-estimate",
+        **request_body,
+    )
+    usage: Final = _estimated_prompt_usage(logging_obj.model_call_details, request_body, CallTypes.arerank.value)
+    assert usage is not None
+    return usage.prompt_tokens
+
+
+@pytest.mark.parametrize("documents", [["short"], [{"text": "short"}]])
+def test_a_failed_rerank_counts_the_documents_it_sent_next_to_the_query(documents):
+    longer_documents: Final = [*documents, "a much longer document " * 200]
+
+    assert _failed_rerank_prompt_tokens("which?", documents) < _failed_rerank_prompt_tokens("which?", longer_documents)
+    assert _failed_rerank_prompt_tokens("which?", []) < _failed_rerank_prompt_tokens("which?", documents)
+
+
+def test_a_failed_rerank_counts_the_query_it_sent():
+    assert _failed_rerank_prompt_tokens("which?", ["short"]) < _failed_rerank_prompt_tokens("which? " * 200, ["short"])
+
+
 def test_every_earlier_timed_out_attempt_is_billed_at_its_own_deployment_rate(monkeypatch):
     """The router leaves one RetryAttemptRecord per failed attempt in metadata.previous_models, the
     final attempt included; the earlier Timeout ones are billed (each at the deployment that served

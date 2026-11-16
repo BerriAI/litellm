@@ -3,25 +3,24 @@ import { skipToken, useQuery } from "@tanstack/react-query";
 import { parseAsInteger, parseAsString, parseAsStringLiteral, useQueryStates } from "nuqs";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import {
-  dateRangeFromParams,
-  dateRangePatch,
-  defaultUsageDateRange,
-  usageUrlParsers,
-} from "@/app/(dashboard)/usage/_components/usageUrlState";
-import {
   modelColorMap,
   overviewTotals,
   type Granularity,
   type UsageMetric,
 } from "@/app/(dashboard)/usage/_components/components/overview/overviewData";
-import { formatDate } from "@/components/networking";
 import type { DateRangePickerValue } from "@/components/shared/date_picker_types";
 import { EMPTY_DAILY_ACTIVITY_METADATA } from "@/components/UsagePage/dailyActivityApi";
 import type { DailyData } from "@/components/UsagePage/types";
 import { customerHierarchyUsageCall, type CustomerUsageScope } from "./customerUsageApi";
 import { rankCustomerModels, rankCustomerUsage } from "./customerUsageData";
 import { CUSTOMER_USAGE_DIMENSIONS, type CustomerUsageDimension } from "./CustomerUsageRankings";
-import { calendarDate, customerPresetRange } from "./customerUsageRange";
+import {
+  calendarDate,
+  customerPresetRange,
+  customerDateSelection,
+  customerDatePatch,
+  customerUsageDateParsers,
+} from "./customerUsageRange";
 
 const usageParsers = {
   org: parseAsString,
@@ -32,9 +31,7 @@ const usageParsers = {
   bucket: parseAsStringLiteral(["day", "week"] as const).withDefault("day"),
   search: parseAsString.withDefault(""),
   usagePage: parseAsInteger.withDefault(1),
-  range: usageUrlParsers.range,
-  from: usageUrlParsers.from,
-  to: usageUrlParsers.to,
+  ...customerUsageDateParsers,
 };
 const EMPTY_RESULTS: readonly DailyData[] = [];
 const ORGANIZATION_PATCH = { team: null, member: null, search: null, usagePage: null };
@@ -54,11 +51,9 @@ const usageRequest = (
 export default function useCustomerHierarchyUsage() {
   const { accessToken } = useAuthorized();
   const [params, setParams] = useQueryStates(usageParsers);
-  const defaultRange = useMemo(() => defaultUsageDateRange("month_to_date"), []);
-  const dateValue = useMemo(() => dateRangeFromParams(params) ?? defaultRange.value, [params, defaultRange]);
-  const preset = params.range ?? (params.from === null && params.to === null ? defaultRange.preset : null);
-  const startDate = dateValue.from ? formatDate(dateValue.from) : undefined;
-  const endDate = dateValue.to ? formatDate(dateValue.to) : undefined;
+  const { dateValue, preset } = useMemo(() => customerDateSelection(params), [params]);
+  const startDate = calendarDate(dateValue.from);
+  const endDate = calendarDate(dateValue.to);
   const scope = params.org ? { org: params.org, team: params.team, member: params.member } : null;
   const request = usageRequest(scope, accessToken, startDate, endDate);
   const month = customerPresetRange("month");
@@ -107,9 +102,8 @@ export default function useCustomerHierarchyUsage() {
     void setParams(patch, { history: "push" });
   };
   const setDateRange = (value: DateRangePickerValue, selectedPreset: string | null) => {
-    const { range, from, to } = dateRangePatch(value, selectedPreset);
-    const patch = { range, from, to, usagePage: null };
-    void setParams(patch);
+    const patch = customerDatePatch(value, selectedPreset);
+    if (patch) void setParams({ ...patch, usagePage: null }, { history: "push" });
   };
   const setDimension = (breakdown: CustomerUsageDimension) =>
     void setParams({ breakdown, search: null, usagePage: null });
