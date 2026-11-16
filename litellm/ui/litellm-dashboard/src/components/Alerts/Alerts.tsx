@@ -19,6 +19,7 @@ import AlertActions from "./AlertActions";
 import AlertChart from "./AlertChart";
 import AlertDetail from "./AlertDetail";
 import ManageAlerts from "./ManageAlerts";
+import BulkAlertActions from "./BulkAlertActions";
 
 const parsers = {
   alert: parseAsString,
@@ -119,6 +120,8 @@ function AlertsInbox({ auth }: { auth: ReturnType<typeof useAuthorized> }) {
   const pagedLists = [...(showPromptCache ? [promptCache] : []), ...(showPerformance ? [list] : [])];
   const loading = pagedLists.some((query) => query.isLoading) || deprecations.isLoading;
   const hasError = pagedLists.some((query) => query.isError) || (showDeprecations && deprecations.isError);
+  const refreshing = pagedLists.some((query) => query.isFetching) || deprecations.isFetching;
+  const bulkUnavailable = hasError || items.length === 0;
   function refresh() {
     void client.invalidateQueries({ queryKey: ["alert-monitoring"] });
     pagedLists.forEach((query) => void query.refetch());
@@ -140,7 +143,7 @@ function AlertsInbox({ auth }: { auth: ReturnType<typeof useAuthorized> }) {
           ))}
         </PageTabsList>
       </PageTabs>
-      <div className="flex items-center justify-between gap-3">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <Select value={params.type} onValueChange={(value) => void setParams({ type: value as AlertFilter })}>
           <SelectTrigger className="w-52" aria-label={t("alerts.unified.typeFilter")}>
             <SelectValue>{t(TYPE_LABEL_KEYS[params.type])}</SelectValue>
@@ -153,15 +156,19 @@ function AlertsInbox({ auth }: { auth: ReturnType<typeof useAuthorized> }) {
             ))}
           </SelectContent>
         </Select>
-        <Button
-          variant="outline"
-          size="sm"
-          disabled={pagedLists.some((query) => query.isFetching) || deprecations.isFetching}
-          onClick={refresh}
-        >
-          <RefreshCw className="size-3.5" />
-          {t("alerts.unified.refresh")}
-        </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          <BulkAlertActions
+            filter={params.type}
+            state={params.state}
+            readOnly={Boolean(auth.isViewOnly)}
+            deprecations={deprecations.data}
+            disabled={bulkUnavailable || refreshing}
+          />
+          <Button variant="outline" size="sm" disabled={refreshing} onClick={refresh}>
+            <RefreshCw className="size-3.5" />
+            {t("alerts.unified.refresh")}
+          </Button>
+        </div>
       </div>
       {showDeprecations && deprecations.isError && (
         <LoadError retry={() => void deprecations.refetch()}>{t("alerts.unified.deprecationsError")}</LoadError>
