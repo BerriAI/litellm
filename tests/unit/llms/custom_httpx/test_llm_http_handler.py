@@ -5,7 +5,8 @@ import json
 import logging
 import threading
 import time
-from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
+from datetime import datetime
 from types import MappingProxyType
 from typing import Final
 from unittest.mock import AsyncMock, Mock, patch
@@ -19,20 +20,22 @@ from botocore.credentials import RefreshableCredentials
 from h2.events import ConnectionTerminated
 
 import litellm
-from datetime import datetime
-from litellm.constants import MAX_IMAGE_FAN_OUT_REQUESTS
-from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.llms.anthropic.messages.native import handler as python_messages
 from litellm._logging import verbose_logger
+from litellm.constants import MAX_IMAGE_FAN_OUT_REQUESTS
+from litellm.images.fan_out import merge_image_responses
 from litellm.integrations.code_interpreter_interception.handler import (
-    CodeInterpreterInterceptionLogger,
     LITELLM_CODE_EXECUTION_TOOL_NAME,
+    CodeInterpreterInterceptionLogger,
 )
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.custom_logger_v2 import CallContext, CustomLoggerV2, Field, Hook, on
 from litellm.integrations.websearch_interception.handler import WebSearchInterceptionLogger
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.llms.anthropic.messages.native import handler as python_messages
+from litellm.llms.anthropic.skills.transformation import AnthropicSkillsConfig
 from litellm.llms.azure.responses.transformation import AzureOpenAIResponsesAPIConfig
 from litellm.llms.azure.vector_stores.transformation import AzureOpenAIVectorStoreConfig
+from litellm.llms.azure.videos.transformation import AzureVideoConfig
 from litellm.llms.base_llm.audio_transcription.transformation import (
     AudioTranscriptionRequestData,
     BaseAudioTranscriptionConfig,
@@ -40,14 +43,16 @@ from litellm.llms.base_llm.audio_transcription.transformation import (
 from litellm.llms.base_llm.batches.transformation import BaseBatchesConfig
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.base_llm.files.transformation import BaseFilesConfig
-from litellm.llms.base_llm.search.transformation import BaseSearchConfig, SearchResponse
-from litellm.llms.bedrock.base_aws_llm import SignsRequestsWithAWS
-from litellm.llms.brave.search.transformation import BraveSearchConfig
-from litellm.llms.gemini.image_edit.transformation import GeminiImageEditConfig
-from litellm.llms.gemini.image_generation.transformation import GoogleImageGenConfig
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
 from litellm.llms.base_llm.image_generation.transformation import BaseImageGenerationConfig
+from litellm.llms.base_llm.search.transformation import BaseSearchConfig, SearchResponse
 from litellm.llms.base_llm.text_to_speech.transformation import BaseTextToSpeechConfig
+from litellm.llms.bedrock.base_aws_llm import SignsRequestsWithAWS
+from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude_transformation import (
+    AmazonAnthropicClaudeMessagesConfig,
+)
+from litellm.llms.brave.search.transformation import BraveSearchConfig
 from litellm.llms.chatgpt.authenticator import Authenticator as ChatGPTAuthenticator
 from litellm.llms.chatgpt.responses.transformation import ChatGPTResponsesAPIConfig
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
@@ -59,14 +64,10 @@ from litellm.llms.custom_httpx.llm_http_handler import (
     _has_pre_call_deployment_hook,
     _rust_responses_websocket_enabled,
 )
-from litellm.llms.azure.videos.transformation import AzureVideoConfig
-from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude_transformation import (
-    AmazonAnthropicClaudeMessagesConfig,
-)
-from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
-from litellm.llms.anthropic.skills.transformation import AnthropicSkillsConfig
-from litellm.llms.openai.evals.transformation import OpenAIEvalsConfig
+from litellm.llms.gemini.image_edit.transformation import GeminiImageEditConfig
+from litellm.llms.gemini.image_generation.transformation import GoogleImageGenConfig
 from litellm.llms.mistral.files.transformation import MistralFilesConfig
+from litellm.llms.openai.evals.transformation import OpenAIEvalsConfig
 from litellm.llms.openai.vector_store_files.transformation import OpenAIVectorStoreFilesConfig
 from litellm.llms.openai.vector_stores.transformation import OpenAIVectorStoreConfig
 from litellm.llms.openai.videos.transformation import OpenAIVideoConfig
@@ -86,8 +87,7 @@ from litellm.types.utils import (
     ProviderSpecificHeader,
     TranscriptionResponse,
 )
-from tests.unit.llms.bedrock.event_loop_probe import EventLoopProbe
-from tests.unit.llms.bedrock.event_loop_probe import host_in_loop_probing_vault
+from tests.unit.llms.bedrock.event_loop_probe import EventLoopProbe, host_in_loop_probing_vault
 
 _ACTIVE_KEY = "_code_interpreter_interception_active"
 _SANDBOX_KEY = "_code_interpreter_interception_sandbox_key"
@@ -2362,6 +2362,7 @@ def _make_responses_handler_call(signed_body):
     signing provider (e.g. Bedrock Mantle).
     """
     from unittest.mock import MagicMock
+
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
     from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
     from litellm.types.router import GenericLiteLLMParams
@@ -2417,6 +2418,7 @@ def test_responses_handler_signs_after_fake_stream_prep_strips_stream():
     We snapshot request_data at sign time and assert "stream" is already gone.
     """
     from unittest.mock import MagicMock
+
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
     from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
     from litellm.types.llms.openai import ResponsesAPIResponse
@@ -2480,6 +2482,7 @@ def _make_compact_handler_call(signed_body, is_async):
     signing provider (e.g. Bedrock Mantle SigV4 / bearer).
     """
     from unittest.mock import MagicMock
+
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
     from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
     from litellm.types.router import GenericLiteLLMParams
@@ -5237,10 +5240,9 @@ class _ScriptedClientWebSocket(_FakeClientWebSocket):
 
 @pytest.mark.asyncio
 async def test_async_realtime_bridges_a_transcription_session_through_the_provider_backend():
-    import websockets.exceptions  # noqa: F401  # binds the submodule so async_realtime's except clause resolves, as in the proxy process
-
     from datetime import timedelta
 
+    import websockets.exceptions  # noqa: F401  # binds the submodule so async_realtime's except clause resolves, as in the proxy process
     from google.cloud.speech_v2.types import (
         RecognitionResponseMetadata,
         SpeechRecognitionAlternative,
@@ -7004,8 +7006,9 @@ def test_sync_responses_run_a_v2_callback_pre_deployment_hook_without_any_legacy
 
 
 class _GeminiImageUpstream:
-    def __init__(self, failing_request: int | None = None) -> None:
+    def __init__(self, failing_request: int | None = None, prompt_tokens: int = 8) -> None:
         self.failing_request: Final = failing_request
+        self.prompt_tokens: Final = prompt_tokens
         self.bodies: Final[
             list[Mapping[str, object]]
         ] = []  # mutable-ok: records each upstream request the handler sends
@@ -7026,10 +7029,10 @@ class _GeminiImageUpstream:
                     }
                 ],
                 "usageMetadata": {
-                    "promptTokenCount": 8,
+                    "promptTokenCount": self.prompt_tokens,
                     "candidatesTokenCount": 1120,
-                    "totalTokenCount": 1128,
-                    "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 8}],
+                    "totalTokenCount": self.prompt_tokens + 1120,
+                    "promptTokensDetails": [{"modality": "TEXT", "tokenCount": self.prompt_tokens}],
                     "candidatesTokensDetails": [{"modality": "IMAGE", "tokenCount": 1120}],
                 },
             },
@@ -7043,15 +7046,33 @@ class _GeminiImageUpstream:
         return handler
 
 
+def _gemini_image_log(
+    route: str, model: str = "gemini-3.1-flash-lite-image", priced_as: str = "gemini"
+) -> LiteLLMLoggingObj:
+    logging_obj: Final = LiteLLMLoggingObj(
+        model=model,
+        messages=[],
+        stream=False,
+        call_type="image_generation" if route == "generation" else "image_edit",
+        start_time=datetime(2026, 1, 1),
+        litellm_call_id="gemini-image-fan-out",
+        function_id="gemini-image-fan-out",
+    )
+    logging_obj.update_environment_variables(
+        model=model, optional_params={}, litellm_params={}, custom_llm_provider=priced_as
+    )
+    return logging_obj
+
+
 async def _gemini_images(
     upstream: _GeminiImageUpstream,
     route: str,
     is_async: bool,
     openai_params: dict[str, object],
-    logging_obj: object = None,
+    logging_obj: LiteLLMLoggingObj | None = None,
+    model: str = "gemini-3.1-flash-lite-image",
 ) -> ImageResponse:
-    logging_obj = logging_obj or Mock()  # rebind-ok: default double for tests that do not read the log
-    model: Final = "gemini-3.1-flash-lite-image"
+    logging_obj = logging_obj or _gemini_image_log(route, model)  # rebind-ok: tests that do not read the log
     if route == "edit":
         edit_config: Final = GeminiImageEditConfig()
         edited: Final = BaseLLMHTTPHandler().image_edit_handler(
@@ -7137,18 +7158,7 @@ async def test_gemini_image_n_above_the_cap_is_rejected_before_any_upstream_requ
 @pytest.mark.asyncio
 async def test_gemini_image_fan_out_bills_the_served_images_when_one_request_fails(route: str, is_async: bool) -> None:
     upstream: Final = _GeminiImageUpstream(failing_request=2)
-    logging_obj: Final = LiteLLMLoggingObj(
-        model="gemini-3.1-flash-lite-image",
-        messages=[],
-        stream=False,
-        call_type="image_generation" if route == "generation" else "image_edit",
-        start_time=datetime(2026, 1, 1),
-        litellm_call_id="fan-out-partial-failure",
-        function_id="fan-out-partial-failure",
-    )
-    logging_obj.update_environment_variables(
-        model="gemini-3.1-flash-lite-image", optional_params={}, litellm_params={}, custom_llm_provider="gemini"
-    )
+    logging_obj: Final = _gemini_image_log(route)
 
     with pytest.raises(BaseLLMException) as raised:
         await _gemini_images(upstream, route, is_async, {"n": 3}, logging_obj)
@@ -7158,3 +7168,38 @@ async def test_gemini_image_fan_out_bills_the_served_images_when_one_request_fai
     billed: Final = logging_obj.model_call_details["combined_usage_object"]
     assert (billed.prompt_tokens, billed.completion_tokens, billed.total_tokens) == (2 * 8, 2 * 1120, 2 * 1128)
     assert logging_obj.model_call_details["response_cost"] > 0
+
+
+@pytest.mark.parametrize("route", ["generation", "edit"])
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.asyncio
+async def test_gemini_image_fan_out_prices_each_request_on_its_own_tokens(route: str, is_async: bool) -> None:
+    """Three 150k-token calls sum past the Vertex 200k pricing tier that no single call reached."""
+    tiered_model: Final = "gemini-3-pro-image"
+
+    async def cost(n: int) -> float:
+        logging_obj: Final = _gemini_image_log(route, tiered_model, priced_as="vertex_ai")
+        response: Final = await _gemini_images(
+            _GeminiImageUpstream(prompt_tokens=150_000), route, is_async, {"n": n}, logging_obj, tiered_model
+        )
+        return logging_obj.response_cost_calculator(result=response) or 0.0
+
+    one_image: Final = await cost(1)
+
+    assert one_image > 0
+    assert await cost(3) == pytest.approx(3 * one_image)
+
+
+def test_merged_image_response_keeps_billing_metadata_without_sharing_it_with_the_first_response() -> None:
+    def served(image: str) -> ImageResponse:
+        response: Final = ImageResponse(data=[ImageObject(b64_json=image)])
+        response.hidden_params = {"provider_specific_fields": {"traffic_type": "ON_DEMAND"}}
+        return response
+
+    first: Final = served("image-1")
+    merged: Final = merge_image_responses([first, served("image-2")])
+    merged.hidden_params["response_cost"] = 1.0
+
+    assert merged.hidden_params["provider_specific_fields"] == {"traffic_type": "ON_DEMAND"}
+    assert "response_cost" not in first.hidden_params
+    assert "response_cost" not in ImageResponse(data=[]).hidden_params

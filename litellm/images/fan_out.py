@@ -14,8 +14,13 @@ _REQUEST_COUNT: Final = TypeAdapter(int)
 _USAGE: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 
 
-class _FailureSpendLog(Protocol):
-    def response_cost_calculator(self, result: ImageResponse) -> float | None: ...
+class _Price(Protocol):
+    @property
+    def cost(self) -> float | None: ...
+
+
+class _SpendLog(Protocol):
+    def uncached_price(self, result: object) -> _Price: ...
 
     def record_partial_usage_for_failure(self, usage: Usage, response_cost: float) -> None: ...
 
@@ -59,12 +64,14 @@ def merge_image_responses(responses: Sequence[ImageResponse]) -> ImageResponse:
     first: Final = responses[0]
     if len(responses) == 1:
         return first
-    return first.model_copy(
+    merged: Final = first.model_copy(
         update={
             "data": [image for response in responses for image in response.data or []],  # comprehension-ok: flatten
             "usage": _merge_usage([response.usage for response in responses if response.usage is not None]),
         }
     )
+    merged.hidden_params = {**first.hidden_params}
+    return merged
 
 
 def _outcome(send: Callable[[], _T]) -> _T | BaseException:
@@ -90,17 +97,32 @@ def split_outcomes(outcomes: Sequence[_T | BaseException]) -> tuple[tuple[_T, ..
     return tuple(outcome for outcome in outcomes if not isinstance(outcome, BaseException)), failure
 
 
-def record_partial_image_spend(logging_obj: _FailureSpendLog, responses: Sequence[ImageResponse]) -> None:
+def _summed_cost(logging_obj: _SpendLog, responses: Sequence[ImageResponse]) -> float | None:
+    """Each upstream call is priced on its own usage, so summed tokens never cross a pricing tier no call reached."""
+    costs: Final = tuple(logging_obj.uncached_price(response).cost for response in responses)
+    return None if None in costs else sum(cost for cost in costs if cost is not None)
+
+
+def merge_billed_image_responses(logging_obj: _SpendLog, responses: Sequence[ImageResponse]) -> ImageResponse:
+    merged: Final = merge_image_responses(responses)
+    if len(responses) == 1:
+        return merged
+    cost: Final = _summed_cost(logging_obj, responses)
+    if cost is not None:
+        merged.hidden_params = {**merged.hidden_params, "response_cost": cost}
+    return merged
+
+
+def record_partial_image_spend(logging_obj: _SpendLog, responses: Sequence[ImageResponse]) -> None:
     """Bill the images the provider did return when another request of the same fan-out failed."""
     if not responses:
         return
-    served: Final = merge_image_responses(responses)
-    usage: Final = served.usage
+    usage: Final = merge_image_responses(responses).usage
     logging_obj.record_partial_usage_for_failure(
         Usage(
             prompt_tokens=usage.input_tokens if usage else 0,
             completion_tokens=usage.output_tokens if usage else 0,
             total_tokens=usage.total_tokens if usage else 0,
         ),
-        logging_obj.response_cost_calculator(result=served) or 0.0,
+        _summed_cost(logging_obj, responses) or 0.0,
     )

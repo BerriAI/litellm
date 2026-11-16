@@ -46,7 +46,7 @@ from litellm.anthropic_beta_headers_manager import (
 from litellm.constants import MAX_FILE_LIST_LIMIT, REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
 from litellm.files.types import FileContentStreamingResult
 from litellm.images.fan_out import (
-    merge_image_responses,
+    merge_billed_image_responses,
     record_partial_image_spend,
     run_concurrently,
     split_outcomes,
@@ -7591,7 +7591,7 @@ class BaseLLMHTTPHandler:
         if failure is not None:
             record_partial_image_spend(logging_obj, served)
             raise self._handle_error(e=failure, provider_config=image_edit_provider_config)
-        image_edit_response: Final = merge_image_responses(served)
+        image_edit_response: Final = merge_billed_image_responses(logging_obj, served)
         set_provider_response_headers_in_hidden_params(image_edit_response, responses[0].headers)
         return image_edit_response
 
@@ -7697,7 +7697,7 @@ class BaseLLMHTTPHandler:
         if failure is not None:
             record_partial_image_spend(logging_obj, served)
             raise self._handle_error(e=failure, provider_config=image_edit_provider_config)
-        image_edit_response: Final = merge_image_responses(served)
+        image_edit_response: Final = merge_billed_image_responses(logging_obj, served)
         set_provider_response_headers_in_hidden_params(image_edit_response, responses[0].headers)
         return image_edit_response
 
@@ -7827,7 +7827,7 @@ class BaseLLMHTTPHandler:
         if failure is not None:
             record_partial_image_spend(logging_obj, served)
             raise self._handle_error(e=failure, provider_config=image_generation_provider_config)
-        model_response: Final[ImageResponse] = merge_image_responses(served)
+        model_response: Final[ImageResponse] = merge_billed_image_responses(logging_obj, served)
         set_provider_response_headers_in_hidden_params(model_response, responses[0].headers)
 
         return model_response
@@ -7939,7 +7939,7 @@ class BaseLLMHTTPHandler:
         if failure is not None:
             record_partial_image_spend(logging_obj, served)
             raise self._handle_error(e=failure, provider_config=image_generation_provider_config)
-        model_response: Final[ImageResponse] = merge_image_responses(served)
+        model_response: Final[ImageResponse] = merge_billed_image_responses(logging_obj, served)
         set_provider_response_headers_in_hidden_params(model_response, responses[0].headers)
 
         return model_response
