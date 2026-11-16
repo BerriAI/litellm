@@ -72,6 +72,12 @@ def _requester_details(row: Mapping[str, object]) -> str | None:
     return json.dumps(entries) if entries else None
 
 
+def _sku_price_details(row: Mapping[str, object]) -> str | None:
+    if row["custom_llm_provider"] is None or row["model"] is None:
+        return None
+    return json.dumps({"ModelId": row["model"]})
+
+
 class FocusTransformer:
     """Transforms LiteLLM DB rows into Focus-compatible schema."""
 
@@ -115,9 +121,12 @@ class FocusTransformer:
 
         none_str: Final = pl.lit(None, dtype=pl.Utf8)
         none_dec: Final = pl.lit(None, dtype=pl.Decimal(18, 6))
+        spend: Final = dec(pl.col("spend").fill_null(0.0))
+        requests: Final = dec(pl.col("api_requests").cast(pl.Int64).cast(pl.Float64).fill_null(0.0))
+        sku_id: Final = pl.concat_str(string_col("custom_llm_provider"), string_col("model"), separator="/")
 
-        normalized: Final = periods.select(
-            dec(pl.col("spend").fill_null(0.0)).alias("BilledCost"),
+        return periods.select(
+            spend.alias("BilledCost"),
             string_col("api_key").alias("BillingAccountId"),
             string_col("api_key_alias").alias("BillingAccountName"),
             pl.when(pl.col("api_key").is_not_null())
@@ -133,24 +142,24 @@ class FocusTransformer:
             pl.lit("Usage-Based").alias("ChargeFrequency"),
             fmt(pl.col("ChargePeriodEnd")).alias("ChargePeriodEnd"),
             fmt(pl.col("ChargePeriodStart")).alias("ChargePeriodStart"),
-            dec(pl.col("api_requests").cast(pl.Int64).cast(pl.Float64).fill_null(0.0)).alias("ConsumedQuantity"),
+            requests.alias("ConsumedQuantity"),
             pl.lit("Requests").alias("ConsumedUnit"),
-            dec(pl.col("spend").fill_null(0.0)).alias("ContractedCost"),
+            spend.alias("ContractedCost"),
             none_dec.alias("ContractedUnitPrice"),
             string_col("api_key").alias("CredentialId"),
-            dec(pl.col("spend").fill_null(0.0)).alias("EffectiveCost"),
+            spend.alias("EffectiveCost"),
             string_col("custom_llm_provider").alias("InvoiceIssuerName"),
             none_str.alias("InvoiceId"),
-            dec(pl.col("spend").fill_null(0.0)).alias("ListCost"),
+            spend.alias("ListCost"),
             none_dec.alias("ListUnitPrice"),
             none_str.alias("AvailabilityZone"),
             pl.lit("USD").alias("PricingCurrency"),
             none_str.alias("PricingCategory"),
-            none_dec.alias("PricingQuantity"),
+            requests.alias("PricingQuantity"),
             none_dec.alias("PricingCurrencyContractedUnitPrice"),
-            dec(pl.col("spend").fill_null(0.0)).alias("PricingCurrencyEffectiveCost"),
+            spend.alias("PricingCurrencyEffectiveCost"),
             none_dec.alias("PricingCurrencyListUnitPrice"),
-            none_str.alias("PricingUnit"),
+            pl.lit("Requests").alias("PricingUnit"),
             string_col("user_id").alias("PrincipalId"),
             string_col("custom_llm_provider").alias("ServiceProviderName"),
             string_col("custom_llm_provider").alias("HostProviderName"),
@@ -165,9 +174,13 @@ class FocusTransformer:
             pl.lit("AI and Machine Learning").alias("ServiceCategory"),
             pl.lit("Generative AI").alias("ServiceSubcategory"),
             string_col("model_group").alias("ServiceName"),
+            sku_id.alias("SkuId"),
+            pl.concat_str(sku_id, pl.lit("requests"), separator="/").alias("SkuPriceId"),
+            pl.struct("custom_llm_provider", "model")
+            .map_elements(_sku_price_details, return_dtype=pl.String)
+            .alias("SkuPriceDetails"),
             string_col("team_id").alias("SubAccountId"),
             string_col("team_alias").alias("SubAccountName"),
             pl.when(pl.col("team_id").is_not_null()).then(pl.lit("Team")).otherwise(none_str).alias("SubAccountType"),
             string_col("Tags").alias("Tags"),
-        )
-        return normalized.select(self.schema.names())
+        ).select(self.schema.names())

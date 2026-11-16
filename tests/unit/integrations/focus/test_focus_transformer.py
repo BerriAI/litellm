@@ -45,16 +45,42 @@ def test_consumed_quantity_reflects_api_requests():
     assert result["ConsumedQuantity"][0] == Decimal("7.000000")
 
 
-def test_aggregate_requests_do_not_invent_sku_pricing():
-    result: Final = _transform([_base_row(api_requests=7)])
-    assert result.select("PricingQuantity", "PricingUnit", "ListUnitPrice", "ContractedUnitPrice").row(0) == (
-        None,
-        None,
-        None,
-        None,
+@pytest.mark.parametrize("requests", [7, 0, None])
+def test_aggregate_request_meter_preserves_request_quantities(requests: int | None) -> None:
+    result: Final = _transform([_base_row(api_requests=requests)])
+    assert result.select("PricingQuantity", "PricingUnit").row(0) == (Decimal(requests or 0), "Requests")
+    assert result.select("PricingQuantity", "PricingUnit").row(0) == result.select(
+        "ConsumedQuantity", "ConsumedUnit"
+    ).row(0)
+
+
+@pytest.mark.parametrize("provider", ["openai", "anthropic", None])
+@pytest.mark.parametrize("model", ["model-a", 'provider/model-"b"', None])
+def test_sku_identity_and_details_require_provider_and_model(provider: str | None, model: str | None) -> None:
+    result: Final = _transform([_base_row(custom_llm_provider=provider, model=model)])
+    expected_sku: Final = f"{provider}/{model}" if provider is not None and model is not None else None
+    assert result.select("SkuId", "SkuPriceId").row(0) == (
+        expected_sku,
+        f"{expected_sku}/requests" if expected_sku is not None else None,
     )
-    assert "SkuPriceId" not in result.columns
-    assert "SkuPriceDetails" not in result.columns
+    details: Final = result["SkuPriceDetails"][0]
+    if expected_sku is None:
+        assert details is None
+        return
+    assert json.loads(details) == {"ModelId": model}
+
+
+def test_sku_identity_is_independent_of_account_date_and_price() -> None:
+    result: Final = _transform(
+        [
+            _base_row(),
+            _base_row(api_key="b" * 64, spend=0.1, date="2026-05-26"),
+        ]
+    )
+    assert result.select("SkuId", "SkuPriceId", "SkuPriceDetails").row(0) == result.select(
+        "SkuId", "SkuPriceId", "SkuPriceDetails"
+    ).row(1)
+    assert result["SkuPriceId"][0] is not None
 
 
 def test_null_api_requests_falls_back_to_zero_not_one():
@@ -139,6 +165,9 @@ def test_provider_names_and_daily_cost_survive_csv_and_vantage_filtering() -> No
     assert "ServiceProviderName" not in vantage.columns
     assert "HostProviderName" not in vantage.columns
     assert "RequesterDetails" not in vantage.columns
+    assert "SkuId" not in vantage.columns
+    assert "SkuPriceId" not in vantage.columns
+    assert "SkuPriceDetails" not in vantage.columns
 
 
 def test_missing_optional_user_columns_leave_only_credential_details() -> None:
