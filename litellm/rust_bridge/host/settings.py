@@ -29,6 +29,20 @@ class ProviderDefaults:
     vertex_project: object
     vertex_location: object
     enable_azure_ad_token_refresh: object
+    api_key: object
+    azure_key: object
+    drop_params: object
+    bedrock_request_metadata_fields: object
+
+
+@dataclass(frozen=True, slots=True)
+class RouterTierSettings:
+    """The memory-over-Redis tier values `main`'s router reads from the environment and `litellm` globals."""
+
+    cooldown_redis_read_interval: float
+    usage_redis_read_interval: float
+    max_redis_batch_cache_size: int
+    default_in_memory_ttl: float | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -108,6 +122,22 @@ def secret_manager_binding() -> SecretManagerBinding:
     )
 
 
+def router_tiers() -> RouterTierSettings:
+    import litellm
+    from litellm.constants import (
+        DEFAULT_COOLDOWN_REDIS_READ_INTERVAL_SECONDS,
+        DEFAULT_MAX_REDIS_BATCH_CACHE_SIZE,
+        DEFAULT_REDIS_BATCH_CACHE_EXPIRY_SECONDS,
+    )
+
+    return RouterTierSettings(
+        cooldown_redis_read_interval=DEFAULT_COOLDOWN_REDIS_READ_INTERVAL_SECONDS,
+        usage_redis_read_interval=litellm.default_redis_batch_cache_expiry or DEFAULT_REDIS_BATCH_CACHE_EXPIRY_SECONDS,
+        max_redis_batch_cache_size=DEFAULT_MAX_REDIS_BATCH_CACHE_SIZE,
+        default_in_memory_ttl=litellm.default_in_memory_ttl,
+    )
+
+
 def provider_defaults() -> ProviderDefaults:
     import litellm
 
@@ -115,6 +145,10 @@ def provider_defaults() -> ProviderDefaults:
         vertex_project=litellm.vertex_project,
         vertex_location=litellm.vertex_location,
         enable_azure_ad_token_refresh=litellm.enable_azure_ad_token_refresh,
+        api_key=litellm.api_key,
+        azure_key=litellm.azure_key,
+        drop_params=litellm.drop_params,
+        bedrock_request_metadata_fields=litellm.bedrock_request_metadata_fields,
     )
 
 

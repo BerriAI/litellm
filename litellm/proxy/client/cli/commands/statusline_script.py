@@ -89,6 +89,28 @@ class Fetch(Protocol):
     def __call__(self, credentials: Credentials, session_id: str) -> Fetched: ...
 
 
+class _ResponseBody(Protocol):
+    def read(self) -> bytes: ...
+
+
+class _OpenedResponse(Protocol):
+    def __enter__(self) -> _ResponseBody: ...
+
+    def __exit__(self, *exc_info: object) -> None: ...
+
+
+class _UrlOpener(Protocol):
+    def __call__(self, url: urllib.request.Request, /, *, timeout: float) -> _OpenedResponse: ...
+
+
+def _url_opener() -> _UrlOpener:
+    return urllib.request.urlopen
+
+
+def _json_decoder() -> Callable[[bytes | str], object]:
+    return json.loads
+
+
 def as_mapping(value: object) -> Mapping[str, object]:
     return value if isinstance(value, dict) else EMPTY
 
@@ -106,7 +128,7 @@ def printable(value: object) -> str:
 
 def load_json(raw: bytes | str) -> object:
     try:
-        return json.loads(raw)
+        return _json_decoder()(raw)
     except ValueError:
         return None
 
@@ -195,7 +217,7 @@ def fetch_session(credentials: Credentials, session_id: str) -> Fetched:
         },
     )
     try:
-        with urllib.request.urlopen(request, timeout=FETCH_TIMEOUT_SECONDS) as response:
+        with _url_opener()(request, timeout=FETCH_TIMEOUT_SECONDS) as response:
             raw: Final[bytes] = response.read()
     except urllib.error.HTTPError as error:
         return Fetched(session=None, definitive=400 <= error.code < 500)

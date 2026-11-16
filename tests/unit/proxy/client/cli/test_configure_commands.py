@@ -545,6 +545,21 @@ class TestConfigureAgents:
 
 
 class TestUnconfigureClaude:
+    def test_removes_the_key_files_lite_claude_launched_with_even_when_nothing_was_configured(
+        self, runner, paths, launch_claude
+    ):
+        settings_path, _ = paths
+        launched_with = (launch_claude(False), launch_claude(True))
+        settings_path.write_text("{}")
+        assert {path.parent for path in launched_with} == {settings_path.parent}
+        assert all(path.exists() for path in launched_with)
+
+        result = runner.invoke(cli, ["unconfigure", "claude"])
+        assert result.exit_code == 0, result.output
+        assert not any(path.exists() for path in launched_with)
+        assert settings_path.exists()
+        assert "Removed the settings files holding a LiteLLM key" in result.output
+
     @responses.activate
     def test_restores_the_original_file_and_removes_the_receipt(self, runner, paths):
         _mock_models()

@@ -1,10 +1,13 @@
 from collections.abc import Mapping
 from functools import reduce
+from types import MappingProxyType
 from typing import Final
 
 from pydantic import TypeAdapter, ValidationError
 from typing_extensions import assert_never
 
+from litellm.litellm_core_utils.llm_cost_calc.tiered_pricing import select_tier_for_input
+from litellm.litellm_core_utils.llm_cost_calc.utils import parse_prompt_tokens_details
 from litellm.types.utils import (
     CompletionTokensDetailsWrapper,
     PromptTokensDetailsWrapper,
@@ -16,10 +19,13 @@ ZERO_COST_COUNTER_NAME: Final = "litellm_zero_cost_requests_total"
 
 _TEXT_INPUT_RATE: Final = "input_cost_per_token"
 _AUDIO_INPUT_RATE: Final = "input_cost_per_audio_token"
+_CACHE_READ_INPUT_RATE: Final = "cache_read_input_token_cost"
+_CACHE_READ_AUDIO_INPUT_RATE: Final = "cache_read_input_audio_token_cost"
 _TEXT_OUTPUT_RATE: Final = "output_cost_per_token"
 _AUDIO_OUTPUT_RATE: Final = "output_cost_per_audio_token"
 _RATE_KEY_MARKERS: Final = ("cost", "pricing")
 _NESTED_PRICING: Final = TypeAdapter(Mapping[str, object] | tuple[object, ...])
+_PRICING_TIERS: Final = TypeAdapter(tuple[Mapping[str, object], ...])
 _MAX_PRICING_DEPTH: Final = 4
 
 
@@ -33,17 +39,36 @@ def _tokens(value: object) -> int:
 
 
 def used_pricing_keys(usage: Usage) -> tuple[str, ...]:
-    prompt_audio: Final = _audio_tokens(usage.prompt_tokens_details)
+    prompt_details: Final = parse_prompt_tokens_details(usage)
+    prompt_audio: Final = prompt_details["audio_tokens"]
     completion_audio: Final = _audio_tokens(usage.completion_tokens_details)
-    prompt_text: Final = _tokens(usage.prompt_tokens) - prompt_audio
+    prompt_text: Final = max(
+        _tokens(usage.prompt_tokens)
+        - prompt_details["cache_hit_tokens"]
+        - prompt_audio
+        - prompt_details["image_tokens"]
+        - prompt_details["video_tokens"],
+        0,
+    )
+    cached_text: Final = max(prompt_details["cache_hit_tokens"] - prompt_details["cache_hit_audio_tokens"], 0)
     completion_text: Final = _tokens(usage.completion_tokens) - completion_audio
     components: Final = (
         (_TEXT_INPUT_RATE, prompt_text),
         (_AUDIO_INPUT_RATE, prompt_audio),
+        (_CACHE_READ_INPUT_RATE, cached_text),
+        (_CACHE_READ_AUDIO_INPUT_RATE, prompt_details["cache_hit_audio_tokens"]),
         (_TEXT_OUTPUT_RATE, completion_text),
         (_AUDIO_OUTPUT_RATE, completion_audio),
     )
     return tuple(key for key, count in components if count > 0)
+
+
+def _effective_pricing_key(key: str, pricing_entry: Mapping[str, object]) -> str:
+    if key == _CACHE_READ_AUDIO_INPUT_RATE and pricing_entry.get(key) is None:
+        return _CACHE_READ_INPUT_RATE if pricing_entry.get(_CACHE_READ_INPUT_RATE) is not None else _TEXT_INPUT_RATE
+    if key == _CACHE_READ_INPUT_RATE and pricing_entry.get(key) is None:
+        return _TEXT_INPUT_RATE
+    return key
 
 
 def _nested_pricing(value: object) -> Mapping[str, object] | tuple[object, ...] | None:
@@ -83,13 +108,41 @@ def _is_explicit_zero(value: object) -> bool:
     return not isinstance(value, bool) and isinstance(value, (int, float)) and value == 0
 
 
+def _pricing_for_usage(usage: Usage, pricing_entry: Mapping[str, object]) -> Mapping[str, object]:
+    tiered_pricing: Final = pricing_entry.get("tiered_pricing")
+    if not isinstance(tiered_pricing, list):
+        return pricing_entry
+    try:
+        tiers: Final = _PRICING_TIERS.validate_python(tiered_pricing)
+    except ValidationError:
+        return pricing_entry
+    tier: Final = select_tier_for_input(tiers, usage.prompt_tokens)
+    if tier is None or _TEXT_INPUT_RATE not in tier:
+        return pricing_entry
+    cache_rate: Final = tier.get(_CACHE_READ_INPUT_RATE)
+    return MappingProxyType(
+        {
+            **pricing_entry,
+            **tier,
+            _CACHE_READ_INPUT_RATE: cache_rate if cache_rate is not None else tier[_TEXT_INPUT_RATE],
+        }
+    )
+
+
+def is_explicitly_free_usage(usage: Usage, pricing_entry: Mapping[str, object]) -> bool:
+    selected_pricing: Final = _pricing_for_usage(usage, pricing_entry)
+    used_keys: Final = tuple(_effective_pricing_key(key, selected_pricing) for key in used_pricing_keys(usage))
+    return bool(used_keys) and all(_is_explicit_zero(selected_pricing.get(key)) for key in used_keys)
+
+
 def diagnose_zero_cost(
     usage: Usage,
     pricing_model: str,
     pricing_entry: Mapping[str, object],
     calculation_failed: bool,
 ) -> StandardLoggingZeroCostDiagnostic | None:
-    used_keys: Final = used_pricing_keys(usage)
+    effective_keys: Final = tuple(_effective_pricing_key(key, pricing_entry) for key in used_pricing_keys(usage))
+    used_keys: Final = tuple(key for index, key in enumerate(effective_keys) if key not in effective_keys[:index])
     if not used_keys:
         return None
     missing_keys: Final = tuple(key for key in used_keys if pricing_entry.get(key) is None)
