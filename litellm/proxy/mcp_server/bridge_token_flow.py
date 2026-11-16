@@ -461,13 +461,49 @@ async def authorize_oauth_credential_request(request: Request, server_id: str) -
 async def _resolve_request_auth(
     request: Request, write_route: str | None = None
 ) -> "UserAPIKeyAuth | JWTIdentity | None":
+    from litellm.proxy.auth.auth_checks import LITELLM_SESSION_TOKEN_PREFIX  # noqa: PLC0415  # proxy import cycle
     from litellm.proxy.auth.handle_jwt import JWTHandler  # noqa: PLC0415  # proxy import cycle
 
     token: Final = _litellm_key_from_request(request)
     if token is not None and JWTHandler.is_jwt(token):
         return await _resolve_jwt_auth(request, token, write_route)
+    if token is not None and token.startswith(LITELLM_SESSION_TOKEN_PREFIX):
+        return await _resolve_session_token_auth(token)
     resolved: Final = await _resolve_active_litellm_key(request)
     return resolved.key if isinstance(resolved, _ResolvedKey) else None
+
+
+async def _resolve_session_token_auth(token: str) -> "UserAPIKeyAuth | None":
+    from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken  # noqa: PLC0415  # proxy import cycle
+    from litellm.proxy.auth.user_api_key_auth import (  # noqa: PLC0415  # proxy import cycle
+        _refresh_session_token_grants,  # pyright: ignore[reportPrivateUsage]  # reuse session token grant refresh without duplicating admission logic
+    )
+    from litellm.proxy.proxy_server import (  # noqa: PLC0415  # proxy globals initialized at startup
+        prisma_client,
+        proxy_logging_obj,
+        user_api_key_cache,
+    )
+    from litellm.secret_managers.main import get_secret_bool  # noqa: PLC0415  # proxy import cycle
+
+    if get_secret_bool("EXPERIMENTAL_UI_LOGIN") is False:
+        return None
+    try:
+        session: Final = ExperimentalUIJWTToken.get_key_object_from_ui_hash_key(token)
+        if session is None or not _key_is_active(session) or await _key_owner_scim_deactivated(session):
+            return None
+        if session.is_session_token and prisma_client is not None:
+            refreshed: Final = await _refresh_session_token_grants(
+                valid_token=session,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=None,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+            return refreshed if _key_is_active(refreshed) else None
+        return session
+    except Exception as exc:  # noqa: BLE001  # public OAuth exchange stays available; unvalidated session tokens never write credentials
+        verbose_logger.debug("OAuth session token identity could not be validated (%s)", type(exc).__name__)
+        return None
 
 
 async def can_store_oauth_credential(request: Request, auth: "UserAPIKeyAuth", server_id: str) -> bool:
