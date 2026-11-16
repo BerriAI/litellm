@@ -5,7 +5,11 @@ from typing import TYPE_CHECKING, Any, Final, cast
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import REDACTED_BY_LITELLM, REDACTED_TOOL_CALL_ARGUMENTS_PLACEHOLDER
+from litellm.constants import (
+    LITELLM_TRUNCATED_PAYLOAD_FIELD,
+    REDACTED_BY_LITELLM,
+    REDACTED_TOOL_CALL_ARGUMENTS_PLACEHOLDER,
+)
 from litellm.litellm_core_utils.cold_storage_handler import ColdStorageHandler
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.tool_fields import (
@@ -69,10 +73,18 @@ def _stored_request_tools(proxy_server_request: Mapping[str, object] | None) -> 
     return {"tools": [*(top_level_tools if isinstance(top_level_tools, list) else ()), *hoisted]}
 
 
-def _declared_tool_names(proxy_server_request: Mapping[str, object] | None) -> frozenset[str]:
-    model_parameters: Final = as_str_mapping(
-        None if proxy_server_request is None else proxy_server_request.get("model_parameters")
+def _rebuilt_from_cold_storage(spend_log: "SpendLogsPayload", proxy_server_request: Mapping[str, object]) -> bool:
+    return "input" not in proxy_server_request and LITELLM_TRUNCATED_PAYLOAD_FIELD in str(
+        spend_log.get("proxy_server_request")
     )
+
+
+def _declared_tool_names(
+    spend_log: "SpendLogsPayload", proxy_server_request: Mapping[str, object] | None
+) -> frozenset[str]:
+    if proxy_server_request is None or not _rebuilt_from_cold_storage(spend_log, proxy_server_request):
+        return frozenset()
+    model_parameters: Final = as_str_mapping(proxy_server_request.get("model_parameters"))
     return frozenset() if model_parameters is None else declared_function_names(model_parameters.get("tools"))
 
 
@@ -206,7 +218,7 @@ class ResponsesSessionHandler:
                         LiteLLMCompletionResponsesConfig.request_tools(_stored_request_tools(proxy_server_request_dict))
                     ),
                 ),
-                _declared_tool_names(proxy_server_request_dict),
+                _declared_tool_names(spend_log, proxy_server_request_dict),
             )
             for choice in model_response.choices:
                 if hasattr(choice, "message"):
@@ -304,8 +316,6 @@ class ResponsesSessionHandler:
         1. `LITELLM_TRUNCATED_PAYLOAD_FIELD` is in the proxy server request dict
         2. `litellm.cold_storage_custom_logger` is not None
         """
-        from litellm.constants import LITELLM_TRUNCATED_PAYLOAD_FIELD
-
         configured_cold_storage_custom_logger: Final = litellm.cold_storage_custom_logger
         if configured_cold_storage_custom_logger is None:
             return False

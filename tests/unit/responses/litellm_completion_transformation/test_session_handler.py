@@ -1003,7 +1003,11 @@ LONG_FUNCTION: Final = "lookup_" + "document_tool_schema_" * 4
 def test_cold_storage_turn_keeps_a_long_call_name_its_provider_was_not_sent_shortened(
     cold_object: dict[str, object],
 ):
-    stored_turn: Final = {
+    assert _replayed_call_names(_kept_in_cold_storage(_long_function_call_turn()), cold_object) == [LONG_FUNCTION]
+
+
+def _long_function_call_turn() -> dict[str, object]:
+    return {
         "request_id": "long-function-turn",
         "call_type": "aresponses",
         "session_id": "long-function-session",
@@ -1030,11 +1034,58 @@ def test_cold_storage_turn_keeps_a_long_call_name_its_provider_was_not_sent_shor
         },
     }
 
-    history: Final = ResponsesSessionHandler.extend_chat_completion_message_with_spend_log_payload(
-        stored_turn, cold_object, []
-    )
 
+def _replayed_call_names(stored_turn: Mapping[str, object], stored_request: Mapping[str, object]) -> list[str]:
+    history: Final = ResponsesSessionHandler.extend_chat_completion_message_with_spend_log_payload(
+        stored_turn, stored_request, []
+    )
     replayed: Final = history[-1]
     assert isinstance(replayed, Message)
     assert len(LONG_FUNCTION) > 64
-    assert [tool_call.function.name for tool_call in replayed.tool_calls or []] == [LONG_FUNCTION]
+    return [str(tool_call.function.name) for tool_call in replayed.tool_calls or []]
+
+
+def test_cold_storage_turn_replays_a_long_call_under_the_shortened_name_its_provider_was_sent():
+    stored_turn: Final = _kept_in_cold_storage(_long_function_call_turn())
+
+    assert _replayed_call_names(stored_turn, _cold_storage_object(truncate_tool_name(LONG_FUNCTION))) == [
+        truncate_tool_name(LONG_FUNCTION)
+    ]
+
+
+@pytest.mark.parametrize(
+    "stored_request",
+    [
+        pytest.param(
+            {
+                "model": "gemini-flash",
+                "input": [{"role": "user", "content": "Fetch document N-42"}],
+                "tools": [{"type": "function", "name": LONG_FUNCTION, "parameters": {"type": "object"}}],
+            },
+            id="responses_request",
+        ),
+        pytest.param(
+            {
+                "model": "gemini-flash",
+                "input": [{"role": "user", "content": "Fetch document N-42"}],
+                LITELLM_TRUNCATED_PAYLOAD_FIELD: True,
+            },
+            id="truncated_responses_request_without_cold_storage",
+        ),
+        pytest.param({"messages": [{"role": "user", "content": "Fetch document N-42"}]}, id="messages_request"),
+    ],
+)
+def test_hot_turn_keeps_its_stored_call_name_when_the_client_sent_model_parameters(
+    stored_request: dict[str, object],
+):
+    request_with_client_model_parameters: Final = {
+        **stored_request,
+        "model_parameters": _cold_storage_object(truncate_tool_name(LONG_FUNCTION))["model_parameters"],
+    }
+    stored_turn: Final = {
+        **_long_function_call_turn(),
+        "metadata": json.dumps({"cold_storage_object_key": "cold/long-function-turn.json"}),
+        "proxy_server_request": json.dumps(request_with_client_model_parameters),
+    }
+
+    assert _replayed_call_names(stored_turn, request_with_client_model_parameters) == [LONG_FUNCTION]
