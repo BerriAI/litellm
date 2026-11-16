@@ -1,12 +1,15 @@
 # What is this?
 ## Helper utilities for token counting
 import base64
+import contextvars
+import hashlib
 import io
 import math
 import re
 import struct
 from bisect import bisect_right
-from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Generator, Iterable, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import cached_property
 from itertools import accumulate, chain, islice
@@ -1233,6 +1236,56 @@ def _evenly_spaced_samples(text: str, total_chars: int) -> tuple[str, ...]:
     )
 
 
+_MEMOIZED_MIN_CHARS: Final = 256
+_RequestCounts: TypeAlias = dict[tuple[int, bytes], tuple[object, int]]
+
+
+class _RequestTokenCounts:
+    """One request's token counts, keyed by the tokenizer object and a digest of the text. A value holds its
+    tokenizer, so the `id` in the key cannot be reused by another tokenizer while the request runs."""
+
+    def __init__(self) -> None:
+        self._counts: Final[_RequestCounts] = {}
+
+    def counted(self, tokenizer: object, text: str, count: TokenCounterFunction) -> int:
+        key: Final = (id(tokenizer), hashlib.blake2b(text.encode("utf-8", "surrogatepass"), digest_size=16).digest())
+        if (known := self._counts.get(key)) is not None:
+            return known[1]
+        tokens: Final = count(text)
+        self._counts[key] = (tokenizer, tokens)
+        return tokens
+
+
+_REQUEST_TOKEN_COUNTS: Final = contextvars.ContextVar[_RequestTokenCounts | None](
+    "litellm_request_token_counts", default=None
+)
+
+
+@contextmanager
+def request_token_count_scope() -> Generator[None]:
+    """Counts within the scope reuse each other, so the checks along one request's call stack tokenize a text once
+    and a transformed payload only tokenizes what changed. Nothing outlives the scope or crosses into another
+    request, and a nested scope joins the one already open."""
+    if _REQUEST_TOKEN_COUNTS.get() is not None:
+        yield
+        return
+    token: Final = _REQUEST_TOKEN_COUNTS.set(_RequestTokenCounts())
+    try:
+        yield
+    finally:
+        _REQUEST_TOKEN_COUNTS.reset(token)
+
+
+def _memoized_count_function(tokenizer: object, count_exactly: TokenCounterFunction) -> TokenCounterFunction:
+    def count_tokens(text: str) -> int:
+        counts: Final = _REQUEST_TOKEN_COUNTS.get()
+        if counts is None or len(text) < _MEMOIZED_MIN_CHARS:
+            return count_exactly(text)
+        return counts.counted(tokenizer, text, count_exactly)
+
+    return count_tokens
+
+
 def _get_count_function(
     model: str | None,
     custom_tokenizer: dict | SelectTokenizerResponse | None = None,
@@ -1256,7 +1309,7 @@ def _get_exact_count_function(
         def encode_length(text: str) -> int:
             return _encoding_count(default_encoding, text)
 
-        return _get_tiktoken_count_function(encode_length)
+        return _memoized_count_function(default_encoding, _get_tiktoken_count_function(encode_length))
     if tokenizer_json["type"] == "huggingface_tokenizer":
         tokenizer: Final[HuggingFace] = tokenizer_json["tokenizer"]
 
@@ -1265,14 +1318,14 @@ def _get_exact_count_function(
                 return tokenizer.count(text)
             return len(tokenizer.encode_batch_fast([text])[0])
 
-        return count_tokens
+        return _memoized_count_function(tokenizer, count_tokens)
     if tokenizer_json["type"] == "openai_tokenizer":
         encoding: Final = openai_tokenizer_encoding(model or "")
 
         def encode_length(text: str) -> int:
             return _encoding_count(encoding, text)
 
-        return _get_tiktoken_count_function(encode_length)
+        return _memoized_count_function(encoding, _get_tiktoken_count_function(encode_length))
     raise ValueError("Unsupported tokenizer type")
 
 

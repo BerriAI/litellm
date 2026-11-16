@@ -122,6 +122,7 @@ from litellm.litellm_core_utils.served_output_texts import (
 from litellm.litellm_core_utils.streaming_handler import (
     backfill_missing_cache_usage_fields,
 )
+from litellm.litellm_core_utils.token_counter import request_token_count_scope
 from litellm.litellm_core_utils.tool_fields import DropPolicy, MalformedField, drop_policy, resolve_tool_fields
 from litellm.llms.openai.responses.guardrail_translation.handler import OpenAIResponsesHandler
 from litellm.proxy._types import LiteLLMRoutes, LitellmUserRoles, ProxyErrorTypes, ProxyException, UserAPIKeyAuth
@@ -3711,39 +3712,40 @@ class ProxyBaseLLMRequestProcessing:
                 dispatched_call_type=self.route_type,
             )
 
-        return await open_sse_before_first_byte(
-            self._within_total_timeout(
-                request=request,
-                route_type=route_type,
-                is_streaming_request=is_streaming_request,
-                processing=self._process_llm_request(
+        with request_token_count_scope():
+            return await open_sse_before_first_byte(
+                self._within_total_timeout(
                     request=request,
-                    fastapi_response=fastapi_response,
-                    user_api_key_dict=user_api_key_dict,
                     route_type=route_type,
-                    proxy_logging_obj=proxy_logging_obj,
-                    general_settings=general_settings,
-                    proxy_config=proxy_config,
-                    select_data_generator=select_data_generator,
-                    llm_router=llm_router,
-                    model=model,
-                    user_model=user_model,
-                    user_temperature=user_temperature,
-                    user_request_timeout=user_request_timeout,
-                    user_max_tokens=user_max_tokens,
-                    user_api_base=user_api_base,
-                    version=version,
                     is_streaming_request=is_streaming_request,
-                    contents=contents,
-                    skip_pre_call_logic=skip_pre_call_logic,
-                    first_chunk_framing=sse_framing.first_chunk,
+                    processing=self._process_llm_request(
+                        request=request,
+                        fastapi_response=fastapi_response,
+                        user_api_key_dict=user_api_key_dict,
+                        route_type=route_type,
+                        proxy_logging_obj=proxy_logging_obj,
+                        general_settings=general_settings,
+                        proxy_config=proxy_config,
+                        select_data_generator=select_data_generator,
+                        llm_router=llm_router,
+                        model=model,
+                        user_model=user_model,
+                        user_temperature=user_temperature,
+                        user_request_timeout=user_request_timeout,
+                        user_max_tokens=user_max_tokens,
+                        user_api_base=user_api_base,
+                        version=version,
+                        is_streaming_request=is_streaming_request,
+                        contents=contents,
+                        skip_pre_call_logic=skip_pre_call_logic,
+                        first_chunk_framing=sse_framing.first_chunk,
+                    ),
                 ),
-            ),
-            ping_interval_seconds=ttft_keepalive_interval(self.data, llm_router),
-            on_late_failure=_audit_late_failure,
-            late_framing=ANTHROPIC_LATE_SSE_FRAMING if answers_as_anthropic else sse_framing.late,
-            on_passthrough_block=on_passthrough_block,
-        )
+                ping_interval_seconds=ttft_keepalive_interval(self.data, llm_router),
+                on_late_failure=_audit_late_failure,
+                late_framing=ANTHROPIC_LATE_SSE_FRAMING if answers_as_anthropic else sse_framing.late,
+                on_passthrough_block=on_passthrough_block,
+            )
 
     def total_timeout_for(
         self, request: Request, route_type: ProxyRouteType, is_streaming_request: bool | None

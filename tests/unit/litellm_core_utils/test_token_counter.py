@@ -28,6 +28,7 @@ import litellm
 from litellm import decode, encode, get_modified_max_tokens
 from litellm import token_counter as token_counter_old
 import litellm.constants
+import litellm.litellm_core_utils.token_counter as token_counter_module
 from litellm.constants import (
     HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS,
     PDF_MAX_XOBJECT_DRAWS_PER_PAGE,
@@ -48,6 +49,7 @@ from litellm.litellm_core_utils.token_counter import (
     is_openai_model,
     messages_reach_token_count,
     offload_token_count,
+    request_token_count_scope,
 )
 from litellm.litellm_core_utils.token_counter import token_counter as token_counter_new
 from litellm.llms.anthropic.messages.adapters.transformation import LiteLLMAnthropicMessagesAdapter
@@ -3884,3 +3886,189 @@ def test_openai_model_check_holds_while_openai_models_are_registered_concurrentl
 )
 def test_has_only_text_content_accepts_only_plain_text_chat_messages(messages: list[object], text_only: bool) -> None:
     assert has_only_text_content(messages) is text_only
+
+
+class _CountingEncoder:
+    """A huggingface-shaped tokenizer that splits on spaces and records every long text it encodes."""
+
+    def __init__(self, tokens_per_word: int = 1) -> None:
+        self.tokens_per_word: Final = tokens_per_word
+        self.encoded: list[str] = []  # mutable-ok: recorder for the encoder double
+
+    def encode_batch_fast(self, texts: list[str]) -> list[list[int]]:
+        self.encoded.extend(text for text in texts if len(text) > 100)
+        return [[0] * (len(text.split()) * self.tokens_per_word) for text in texts]
+
+
+_LONG_TURN: Final = "the agent read the file and planned its next edit " * 40
+
+
+def _turn(turn: int) -> dict[str, object]:
+    return {"role": "user", "content": f"turn {turn}: {_LONG_TURN}"}
+
+
+def _counted_with(encoder: _CountingEncoder, messages: list[dict[str, object]]) -> int:
+    return token_counter_new(
+        custom_tokenizer={"type": "huggingface_tokenizer", "tokenizer": encoder}, messages=messages
+    )
+
+
+def test_counts_within_one_request_reuse_each_other():
+    encoder: Final = _CountingEncoder()
+    messages: Final = [_turn(turn) for turn in range(3)]
+
+    with request_token_count_scope():
+        counts: Final = tuple(_counted_with(encoder, messages) for _ in range(5))
+
+    assert len(set(counts)) == 1
+    assert encoder.encoded == [message["content"] for message in messages]
+
+
+def test_a_payload_transformed_within_the_request_only_tokenizes_what_changed():
+    encoder: Final = _CountingEncoder()
+    history: Final = [_turn(turn) for turn in range(6)]
+    summary: Final = {"role": "user", "content": f"summary of turns 0 to 3: {_LONG_TURN}"}
+    compacted: Final = [summary, *history[4:]]
+
+    with request_token_count_scope():
+        _counted_with(encoder, history)
+        encoder.encoded.clear()
+        compacted_count: Final = _counted_with(encoder, compacted)
+
+    assert encoder.encoded == [summary["content"]]
+    assert compacted_count == _counted_with(_CountingEncoder(), compacted)
+
+
+def test_an_edited_message_is_counted_again():
+    encoder: Final = _CountingEncoder()
+    edited: Final = {"role": "user", "content": f"{_turn(1)['content']}plus three words"}
+
+    with request_token_count_scope():
+        before: Final = _counted_with(encoder, [_turn(0), _turn(1)])
+        after: Final = _counted_with(encoder, [_turn(0), edited])
+
+    assert after == before + 3
+
+
+def test_the_same_text_under_two_tokenizers_keeps_each_tokenizers_count():
+    messages: Final = [_turn(0)]
+
+    with request_token_count_scope():
+        by_words: Final = _counted_with(_CountingEncoder(tokens_per_word=1), messages)
+        by_doubled: Final = _counted_with(_CountingEncoder(tokens_per_word=2), messages)
+
+    assert by_doubled - by_words == len(_turn(0)["content"].split()) + len("user".split())
+
+
+def test_two_requests_never_share_counts():
+    """A count one caller paid for must not make another caller's identical prompt faster to count, or the
+    timing would tell the second caller what the first one sent."""
+    encoder: Final = _CountingEncoder()
+    messages: Final = [_turn(0)]
+
+    for _ in range(2):
+        with request_token_count_scope():
+            _counted_with(encoder, messages)
+
+    assert encoder.encoded == [_turn(0)["content"]] * 2
+
+
+@pytest.mark.asyncio
+async def test_concurrent_requests_keep_their_own_counts():
+    encoder: Final = _CountingEncoder()
+    both_counted_once: Final = asyncio.Barrier(2)
+
+    async def request() -> None:
+        with request_token_count_scope():
+            _counted_with(encoder, [_turn(0)])
+            await both_counted_once.wait()
+            _counted_with(encoder, [_turn(0)])
+
+    await asyncio.gather(request(), request())
+
+    assert encoder.encoded == [_turn(0)["content"]] * 2
+
+
+def test_a_nested_scope_joins_the_request_already_open():
+    encoder: Final = _CountingEncoder()
+
+    with request_token_count_scope():
+        _counted_with(encoder, [_turn(0)])
+        with request_token_count_scope():
+            _counted_with(encoder, [_turn(0)])
+        _counted_with(encoder, [_turn(0)])
+
+    assert encoder.encoded == [_turn(0)["content"]]
+
+
+def test_counting_outside_a_request_is_never_memoized():
+    encoder: Final = _CountingEncoder()
+
+    _counted_with(encoder, [_turn(0)])
+    _counted_with(encoder, [_turn(0)])
+
+    assert encoder.encoded == [_turn(0)["content"]] * 2
+
+
+def test_short_texts_are_counted_every_time():
+    counted: list[str] = []  # mutable-ok: recorder for the count double
+
+    def count(sample: str) -> int:
+        counted.append(sample)
+        return len(sample)
+
+    memoized: Final = token_counter_module._memoized_count_function(object(), count)
+    with request_token_count_scope():
+        for _ in range(3):
+            memoized("hi there")
+
+    assert counted == ["hi there"] * 3
+
+
+@pytest.mark.asyncio
+async def test_an_auto_routed_request_tokenizes_its_prompt_text_about_once() -> None:
+    """Regression: the pre-call context check, the complexity router's health probe, context-window
+    escalation and context compaction each re-tokenized the whole prompt of one auto-routed request."""
+    from litellm import Router
+
+    tier_window: Final = {"max_input_tokens": 60_000, "max_output_tokens": 8_000}
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "small",
+                "litellm_params": {"model": "openai/small", "api_key": "k", "mock_response": "ok"},
+                "model_info": tier_window,
+            },
+            {
+                "model_name": "large",
+                "litellm_params": {"model": "openai/large", "api_key": "k", "mock_response": "ok"},
+                "model_info": {"max_input_tokens": 1_000_000},
+            },
+            {
+                "model_name": "auto",
+                "litellm_params": {
+                    "model": "auto_router/complexity_router",
+                    "complexity_router_config": {
+                        "tiers": {"SIMPLE": "small", "MEDIUM": "small", "COMPLEX": "large", "REASONING": "large"},
+                        "default_model": "large",
+                        "enable_context_window_escalation": True,
+                        "session_affinity": False,
+                    },
+                },
+            },
+        ],
+        enable_pre_call_checks=True,
+    )
+    turns: Final = tuple(
+        f"turn {index}: " + "the agent read the file and planned its next edit " * 120 for index in range(40)
+    )
+    messages: Final = [
+        {"role": "user" if index % 2 == 0 else "assistant", "content": turn} for index, turn in enumerate(turns)
+    ]
+    prompt_chars: Final = sum(len(turn) for turn in turns)
+
+    with patch("litellm.litellm_core_utils.token_counter._encoding_count", wraps=_encoding_count) as encoding_count:
+        await router.acompletion(model="auto", messages=messages)
+
+    encoded_chars: Final = sum(len(call.args[1]) for call in encoding_count.call_args_list)
+    assert prompt_chars <= encoded_chars < 1.5 * prompt_chars

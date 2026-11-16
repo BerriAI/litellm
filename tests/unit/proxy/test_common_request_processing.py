@@ -15585,3 +15585,65 @@ def test_get_custom_headers_leave_a_plain_request_without_a_fallback_reason() ->
 
     assert headers["x-litellm-attempted-fallbacks"] == "0"
     assert "x-litellm-fallback-reason" not in headers
+
+
+class _PromptCountingHook(CustomLogger):
+    """A proxy pre-call hook that counts the prompt, as the proxy's rate limiters and budget checks do."""
+
+    async def async_pre_call_hook(
+        self, user_api_key_dict: object, cache: object, data: dict[str, object], call_type: str
+    ) -> dict[str, object]:
+        litellm.token_counter(messages=data["messages"])
+        return data
+
+
+@pytest.mark.asyncio
+async def test_one_proxy_request_tokenizes_its_prompt_once_across_hooks_and_routing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A proxy hook and the router's pre-call context check count the same prompt within one request, and the
+    second count must reuse the first instead of tokenizing the prompt again."""
+    from litellm.litellm_core_utils.token_counter import _encoding_count
+    from litellm.proxy.proxy_server import ProxyConfig as RealProxyConfig
+
+    monkeypatch.setattr(litellm, "callbacks", [_PromptCountingHook()])
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "agent-model",
+                "litellm_params": {"model": "openai/agent-model", "api_key": "sk-test", "mock_response": "ok"},
+                "model_info": {"max_input_tokens": 200_000},
+            }
+        ],
+        enable_pre_call_checks=True,
+    )
+    messages: Final = [
+        {"role": "user", "content": f"turn {turn}: " + "rename the helper and update its callers " * 60}
+        for turn in range(10)
+    ]
+    prompt_chars: Final = sum(len(message["content"]) for message in messages)
+
+    with patch("litellm.litellm_core_utils.token_counter._encoding_count", wraps=_encoding_count) as encoding_count:
+        await ProxyBaseLLMRequestProcessing(
+            data={"model": "agent-model", "messages": messages}
+        ).base_process_llm_request(
+            request=Request(
+                {
+                    "type": "http",
+                    "method": "POST",
+                    "path": "/v1/chat/completions",
+                    "query_string": b"",
+                    "headers": [(b"content-type", b"application/json")],
+                }
+            ),
+            fastapi_response=Response(),
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-test", user_id="user-a"),
+            route_type="acompletion",
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=UserApiKeyCache()),
+            general_settings={},
+            proxy_config=RealProxyConfig(),
+            llm_router=router,
+        )
+
+    encoded_chars: Final = sum(len(call.args[1]) for call in encoding_count.call_args_list)
+    assert prompt_chars <= encoded_chars < 1.5 * prompt_chars
