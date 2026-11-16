@@ -27,7 +27,7 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.guardrails import GuardrailEventHooks, Mode
-from litellm.types.utils import GenericGuardrailAPIInputs, OpenAIObject
+from litellm.types.utils import CallTypes, GenericGuardrailAPIInputs, OpenAIObject
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import (
@@ -48,6 +48,8 @@ RESPONSES_TOOL_OUTPUT_TYPES: Final = ("function_call_output", "custom_tool_call_
 RESPONSES_TOOL_CALL_TYPES: Final = ("function_call", "custom_tool_call")
 # Characters of a PointGuard error response kept in the log: enough for its validation message.
 ERROR_BODY_LOG_LIMIT: Final = 300
+# Call types whose streams deliver a guardrail's text rewrite to the client: other streams can only be blocked.
+STREAM_REWRITE_CALL_TYPES: Final = frozenset((CallTypes.completion.value, CallTypes.acompletion.value))
 
 
 def _litellm_call_id(request_data: Mapping[str, object]) -> str | None:
@@ -107,6 +109,7 @@ class PointGuardAIGuardrail(CustomGuardrail):
         self.max_turns: int = DEFAULT_MAX_TURNS if max_turns is None else max_turns
         self.streaming_transform_mode: Literal["block_only", "incremental_diff"] = "incremental_diff"
         self.streaming_end_of_stream_only: bool = True
+        self.streaming_buffer_until_moderated: bool = True
 
         # Validate required parameters
         if not self.pointguardai_api_key:
@@ -690,9 +693,12 @@ class PointGuardAIGuardrail(CustomGuardrail):
 
             _json_data: Final = json.dumps(pointguardai_data)
 
-            # Bodies are logged at debug like other guardrails do; headers are not, since they hold the API key.
             verbose_proxy_logger.debug(
-                "PointGuardAI request to %s: %s litellm_call_id=%s", endpoint, _json_data, call_id
+                "PointGuardAI request to %s: input_messages=%d output_items=%d litellm_call_id=%s",
+                endpoint,
+                len(new_messages),
+                len(response_strings) if response_strings is not None else int(response_string is not None),
+                call_id,
             )
 
             started: Final = time.monotonic()
@@ -704,7 +710,7 @@ class PointGuardAIGuardrail(CustomGuardrail):
             elapsed_ms: Final = round((time.monotonic() - started) * 1000)
 
             verbose_proxy_logger.debug(
-                "PointGuardAI response %s: %s litellm_call_id=%s", response.status_code, response.text, call_id
+                "PointGuardAI response %s in %d ms litellm_call_id=%s", response.status_code, elapsed_ms, call_id
             )
             # Raise HTTPStatusError for 4xx and 5xx responses
             response.raise_for_status()
@@ -851,6 +857,7 @@ class PointGuardAIGuardrail(CustomGuardrail):
                 inputs=inputs,
                 texts=texts,
                 request_data=request_data,
+                logging_obj=logging_obj,
             )
         except _PointGuardAIUnavailableError as error:
             if self.unreachable_fallback == "fail_open":
@@ -879,13 +886,13 @@ class PointGuardAIGuardrail(CustomGuardrail):
         request_data: Mapping[str, object],
     ) -> GenericGuardrailAPIInputs:
         """Handle request-side (pre-call) guardrail checks for input messages."""
-        request_messages: Final = self._get_request_messages(request_data)
+        request_messages: Final = None if structured_messages else self._get_request_messages(request_data)
         messages: Final = (
-            self._conversation_messages(request_messages)
-            if request_messages is not None
+            self._conversation_messages(structured_messages)
+            if structured_messages
             else (
-                self._conversation_messages(structured_messages)
-                if structured_messages
+                self._conversation_messages(request_messages)
+                if request_messages is not None
                 else [{"role": "user", "content": text} for text in texts[-1:] if text.strip()]
             )
         )
@@ -907,6 +914,7 @@ class PointGuardAIGuardrail(CustomGuardrail):
             )
 
             modifications_applied = False  # rebind-ok: tracks whether any inspected input was redacted
+            inspected_messages: Final = self._scoped_messages(structured_messages)
 
             # Modify the structured_messages or texts with string replacement
             for mod_item in modified_content:
@@ -923,10 +931,18 @@ class PointGuardAIGuardrail(CustomGuardrail):
                 replacement = modified or ""
 
                 # A modification can come from any message sent as context, not only the last one.
-                for inspected_message in self._scoped_messages(structured_messages):
+                for inspected_message in inspected_messages:
                     if self._replace_text_in_message_content(inspected_message, original, replacement):
                         modifications_applied = True
                         verbose_proxy_logger.debug("PointGuardAI: Modified input message content")
+                if any(
+                    original in self._extract_text_content(inspected_message.get("content"))
+                    for inspected_message in inspected_messages
+                ):
+                    raise HTTPException(
+                        status_code=502,
+                        detail="Invalid PointGuardAI response: input modification spans content LiteLLM cannot rewrite",
+                    )
 
                 if self._replace_text_in_all_entries(texts, original, replacement):
                     modifications_applied = True
@@ -1018,24 +1034,52 @@ class PointGuardAIGuardrail(CustomGuardrail):
         self,
         request_data: Mapping[str, object],
     ) -> list[dict[str, object]] | None:  # mutable-ok: LiteLLM messages are redacted in place
-        """Read the request's messages in chat form: tool results become tool messages, Responses input a message array."""
-        messages: Final = request_data.get("messages")
-        if _is_json_array(messages):
-            chat_messages: Final[list[dict[str, object]]] = []  # mutable-ok: local JSON message accumulator
-            for message in messages:
-                if _is_json_object(message):
-                    chat_messages.extend(self._split_tool_results(message))
-            return chat_messages
+        """Read the request's messages in chat form: the top-level system prompt or instructions first, then chat
+        ``messages`` with tool results as tool messages, then Responses ``input``. Both fields are read, so one a
+        route ignores cannot hide the other."""
+        chat_messages: Final = self._chat_request_messages(request_data.get("messages"))
+        input_messages: Final = self._responses_request_messages(request_data.get("input"))
+        if chat_messages is None and input_messages is None:
+            return None
+        return [*self._top_level_system_messages(request_data), *(chat_messages or ()), *(input_messages or ())]
 
-        request_input: Final = request_data.get("input")
+    @classmethod
+    def _chat_request_messages(
+        cls,
+        messages: object,
+    ) -> list[dict[str, object]] | None:  # mutable-ok: LiteLLM messages are redacted in place
+        if not _is_json_array(messages):
+            return None
+        chat_messages: Final[list[dict[str, object]]] = []  # mutable-ok: local JSON message accumulator
+        for message in messages:
+            if _is_json_object(message):
+                chat_messages.extend(cls._split_tool_results(message))
+        return chat_messages
+
+    @classmethod
+    def _responses_request_messages(
+        cls,
+        request_input: object,
+    ) -> list[dict[str, object]] | None:  # mutable-ok: LiteLLM messages are redacted in place
         if isinstance(request_input, str):
             return [{"role": "user", "content": request_input}]
         input_messages: Final = [
             input_message
-            for item in self._responses_input_items(request_input)
-            if (input_message := self._responses_item_message(item)) is not None
+            for item in cls._responses_input_items(request_input)
+            if (input_message := cls._responses_item_message(item)) is not None
         ]
         return input_messages or None
+
+    @staticmethod
+    def _top_level_system_messages(
+        request_data: Mapping[str, object],
+    ) -> tuple[dict[str, object], ...]:  # mutable-ok: outbound JSON messages
+        """Responses ``instructions`` and Anthropic ``system``, which sit beside the messages, as system messages."""
+        return tuple(
+            {"role": "system", "content": prompt}
+            for prompt in (request_data.get("instructions"), request_data.get("system"))
+            if isinstance(prompt, str) or _is_json_array(prompt)
+        )
 
     @staticmethod
     def _split_tool_results(
@@ -1080,11 +1124,20 @@ class PointGuardAIGuardrail(CustomGuardrail):
             return (request_input,)
         return request_input if _is_json_array(request_input) else ()
 
+    @staticmethod
+    def _can_rewrite_output(request_data: Mapping[str, object], logging_obj: "LiteLLMLoggingObj | None") -> bool:
+        """Whether a redaction reaches the client: a buffered stream outside chat completions releases its raw events."""
+        if request_data.get("stream") is not True:
+            return True
+        call_type: Final = getattr(logging_obj or request_data.get("litellm_logging_obj"), "call_type", None)
+        return call_type in STREAM_REWRITE_CALL_TYPES
+
     async def _apply_guardrail_on_response(
         self,
         inputs: GenericGuardrailAPIInputs,
         texts: list[str],  # mutable-ok: inherited LiteLLM guardrail hook payload
         request_data: Mapping[str, object],
+        logging_obj: "LiteLLMLoggingObj | None" = None,
     ) -> GenericGuardrailAPIInputs:
         """Handle response-side (post-call) guardrail checks for output."""
         output_indices: Final = tuple(index for index, text in enumerate(texts) if text)
@@ -1127,6 +1180,12 @@ class PointGuardAIGuardrail(CustomGuardrail):
 
         # Apply modifications to output if present
         if modified_content:
+            if not self._can_rewrite_output(request_data, logging_obj):
+                verbose_proxy_logger.warning(
+                    "PointGuardAI: blocking a stream whose route cannot carry the required redaction litellm_call_id=%s",
+                    _litellm_call_id(request_data),
+                )
+                self._handle_blocked_request((), _litellm_call_id(request_data))
             verbose_proxy_logger.debug(
                 "PointGuardAI: Applying %d modifications to output",
                 len(modified_content),
