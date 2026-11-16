@@ -958,7 +958,7 @@ async fn send(
         .await
         .map_err(litellm_http::Error::read_timeout)?
         .map(super::encoding::decoded)
-        .map_err(Error::from)
+        .map_err(|error| Error::from(error.with_sent_origin(url)))
 }
 
 async fn read_body(

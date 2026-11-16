@@ -18,7 +18,6 @@ from dataclasses import asdict, dataclass, replace
 from types import MappingProxyType
 from typing import (
     Final,
-    Literal,
     TypeAlias,
     TypeVar,
     cast,  # noqa: TID251  # narrows native payloads to public TypedDicts
@@ -114,13 +113,6 @@ from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import (
     _merge_messages_header_sources as _merged_headers,  # pyright: ignore[reportPrivateUsage]  # the handler's own header merge
 )
-from litellm.llms.vertex_ai.common_utils import get_vertex_base_url
-from litellm.llms.vertex_ai.credentials_source import (
-    VertexCredentialsFileInvalid,
-    VertexCredentialsFileUnreadable,
-    raise_vertex_credentials_failure,
-)
-from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.responses.mcp.tool_precheck import may_name_litellm_mcp_gateway
 from litellm.rust_bridge import detectors, execution, failures
 from litellm.rust_bridge.execution import AsyncStream
@@ -684,7 +676,7 @@ _UPSTREAM_HEADERS: Final = TypeAdapter(list[tuple[str, str]])
 _INVOCATION_METRICS: Final = "amazon-bedrock-invocationMetrics"
 _BODY_CUT: Final = TypeAdapter(tuple[int, int | None, bool])
 _ERROR_CLASS: TypeAlias = Callable[..., Exception]
-_GOOGLE_LOGIN_FAILURE: Final = TypeAdapter(tuple[str, str, tuple[Literal["unreadable", "invalid"], str, str] | None])
+_GOOGLE_LOGIN_FAILURE: Final = TypeAdapter(tuple[str, str])
 _PYTHON_LOGIN_FAILURES: Final[Mapping[str, _ERROR_CLASS]] = MappingProxyType(
     {
         "ValueError": ValueError,
@@ -920,15 +912,11 @@ def _bedrock_credential_failure(error: Exception, request: Mapping[str, object])
 
 def _google_login_failure(error: Exception) -> Exception | None:
     """The exception Python's `VertexBase.load_auth` raises for a Vertex AI login Rust could not
-    complete, from the class, text and credentials file Rust names."""
+    complete, from the class and text Rust names."""
     try:
-        name, message, file = _GOOGLE_LOGIN_FAILURE.validate_python(
-            getattr(error, "messages_google_login_failure", None)
-        )
+        name, message = _GOOGLE_LOGIN_FAILURE.validate_python(getattr(error, "messages_google_login_failure", None))
     except ValidationError:
         return None
-    if file is not None:
-        return _credentials_file_failure(*file)
     python_class: Final = _PYTHON_LOGIN_FAILURES.get(name)
     if python_class is not None:
         return python_class(message)
@@ -940,23 +928,16 @@ def _google_login_failure(error: Exception) -> Exception | None:
     return google_exception(message)
 
 
-def _credentials_file_failure(kind: Literal["unreadable", "invalid"], path: str, detail: str) -> Exception:
-    failure: Final = (
-        VertexCredentialsFileUnreadable(path, detail)
-        if kind == "unreadable"
-        else VertexCredentialsFileInvalid(path, detail)
-    )
-    try:
-        raise_vertex_credentials_failure(failure)
-    except ValueError as raised:
-        return raised
-
-
-def _sent_base(request: Mapping[str, object], request_provider: str, secrets_read: _SecretsRead) -> str | None:
+def _sent_base(
+    request: Mapping[str, object], request_provider: str, secrets_read: _SecretsRead, sent_origin: str | None
+) -> str | None:
     """The base the call was sent to: azure_ai's falls back to the `AZURE_API_BASE` the host read
-    to send it, anthropic's to its default and bedrock's to the URL its config builds."""
+    to send it, anthropic's to its default, bedrock's to the URL its config builds, and vertex_ai's
+    is the origin Rust sent it to."""
+    if request_provider == "vertex_ai":
+        return sent_origin
     api_base: Final = request.get("api_base")
-    if isinstance(api_base, str) and (api_base or request_provider not in ("azure_ai", "vertex_ai")):
+    if isinstance(api_base, str) and (api_base or request_provider != "azure_ai"):
         return api_base
     if request_provider == "anthropic":
         return anthropic_pass_through_api_base()
@@ -964,20 +945,17 @@ def _sent_base(request: Mapping[str, object], request_provider: str, secrets_rea
         return dict(secrets_read).get("AZURE_API_BASE")
     if request_provider == "bedrock":
         return _bedrock_url(request)
-    if request_provider == "vertex_ai":
-        return get_vertex_base_url(
-            VertexBase.get_vertex_region(
-                VertexBase.safe_get_vertex_ai_location(dict(_python_handler_params(request, request_provider))),
-                str(request["model"]).removeprefix("vertex_ai/"),
-            )
-        )
     return None
 
 
 def _connect_failure(
-    native: str, request: Mapping[str, object], request_provider: str, secrets_read: _SecretsRead
+    native: str,
+    request: Mapping[str, object],
+    request_provider: str,
+    secrets_read: _SecretsRead,
+    sent_origin: str | None,
 ) -> str | None:
-    base: Final = _sent_base(request, request_provider, secrets_read)
+    base: Final = _sent_base(request, request_provider, secrets_read, sent_origin)
     if base is None:
         return None
     refused: Final = "tcp connect error: Connection refused" in native
@@ -1039,7 +1017,10 @@ def _transport_failure(
         return "Server disconnected without sending a response." if closed else native
     if not native.startswith(_UNREACHABLE):
         return None
-    connect: Final = _connect_failure(native, request, request_provider, secrets_read)
+    sent_origin: Final = getattr(error, "messages_sent_origin", None)
+    connect: Final = _connect_failure(
+        native, request, request_provider, secrets_read, sent_origin if isinstance(sent_origin, str) else None
+    )
     return native if connect is None else connect
 
 
@@ -1897,12 +1878,9 @@ def unencodable_header(value: bytes, received: bool) -> Exception:
     return ValueError(text)
 
 
-def unsendable_url(url: str) -> Exception:
-    try:
-        httpx.URL(url)
-    except httpx.InvalidURL as refused:
-        return refused
-    return ValueError(url)
+def unsendable_url(message: str) -> Exception:
+    """The `InvalidURL` Python's HTTP client raises for a URL it will not send, with the text Rust wrote."""
+    return httpx.InvalidURL(message)
 
 
 def _sent_url(request: Mapping[str, object], url: str) -> str:

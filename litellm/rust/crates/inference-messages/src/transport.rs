@@ -45,15 +45,14 @@ impl UnencodableHeader {
     }
 }
 
-/// A URL with a non-printable ASCII character, which Python's HTTP client refuses to send.
+/// A URL with a non-printable ASCII character, which Python's HTTP client refuses to send. It
+/// holds the message the refusal is raised with.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UnsendableUrl(pub String);
 
 impl std::fmt::Display for UnsendableUrl {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(
-            "the URL holds a non-printable ASCII character, which Python's HTTP client refuses",
-        )
+        formatter.write_str(&self.0)
     }
 }
 
@@ -61,9 +60,14 @@ impl std::error::Error for UnsendableUrl {}
 
 impl UnsendableUrl {
     pub(crate) fn of(url: &str) -> Option<Self> {
-        url.bytes()
-            .any(|byte| byte.is_ascii() && !(b' '..=b'~').contains(&byte))
-            .then(|| Self(url.to_owned()))
+        let (position, character) = url
+            .char_indices()
+            .enumerate()
+            .find(|(_, (_, character))| character.is_ascii() && !(' '..='~').contains(character))
+            .map(|(position, (_, character))| (position, character))?;
+        Some(Self(format!(
+            "Invalid URL: it holds the non-printable ASCII character {character:?} at position {position}."
+        )))
     }
 }
 
@@ -91,5 +95,15 @@ mod tests {
         #[case] refused: bool,
     ) {
         assert_eq!(UnsendableUrl::of(url).is_some(), refused);
+    }
+
+    #[rstest]
+    fn the_refusal_names_the_character_and_its_position() {
+        assert_eq!(
+            UnsendableUrl::of("https://us-east5\n-aiplatform.googleapis.com/v1")
+                .unwrap()
+                .to_string(),
+            "Invalid URL: it holds the non-printable ASCII character '\\n' at position 16."
+        );
     }
 }

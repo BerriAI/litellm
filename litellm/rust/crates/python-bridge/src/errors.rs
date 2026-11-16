@@ -1,6 +1,6 @@
 use std::error::Error as StdError;
 
-use litellm_auth::gcp::vertex_messages::{CredentialsFile, GoogleLoginFailure};
+use litellm_auth::gcp::vertex_messages::GoogleLoginFailure;
 use litellm_error::{Report, Source};
 use litellm_inference::Error;
 use pyo3::{
@@ -55,6 +55,8 @@ const MESSAGES_CREDENTIAL_FAILURE: &str = "messages_credential_failure";
 /// not complete, which the route raises in its place. `file` is `(kind, path, detail)` for a
 /// `vertex_credentials` file Python's `raise_vertex_credentials_failure` logs.
 const MESSAGES_GOOGLE_LOGIN_FAILURE: &str = "messages_google_login_failure";
+/// The scheme, host and port of a provider request that could not connect.
+const MESSAGES_SENT_ORIGIN: &str = "messages_sent_origin";
 
 struct ProviderRejection {
     text: String,
@@ -78,16 +80,8 @@ fn credential_failure(error: &Error) -> Option<&'static str> {
     }
 }
 
-fn google_login_failure(
-    failure: &GoogleLoginFailure,
-) -> (&'static str, &str, Option<(&'static str, &str, &str)>) {
-    let file = failure.file.as_ref().map(|file| match file {
-        CredentialsFile::Unreadable { path, reason } => {
-            ("unreadable", path.as_str(), reason.as_str())
-        }
-        CredentialsFile::Invalid { path, problem } => ("invalid", path.as_str(), problem.as_str()),
-    });
-    (failure.exception.into(), failure.message.as_str(), file)
+fn google_login_failure(failure: &GoogleLoginFailure) -> (&'static str, &str) {
+    (failure.exception.into(), failure.message.as_str())
 }
 
 fn aws_credential_failure(error: &(dyn StdError + 'static)) -> &'static str {
@@ -287,6 +281,9 @@ pub(crate) fn route_failure(
                     (false, false) => "Read",
                 };
                 value.setattr(MESSAGES_TIMEOUT, phase)?;
+            }
+            if let Some(origin) = error.sent_origin() {
+                value.setattr(MESSAGES_SENT_ORIGIN, origin)?;
             }
             if let Some(cut) = error.body_cut() {
                 value.setattr(MESSAGES_BODY_CUT, (cut.received, cut.expected, cut.reset))?;
@@ -666,44 +663,16 @@ mod tests {
         });
     }
 
-    type Marker = (String, String, Option<(String, String, String)>);
+    type Marker = (String, String);
 
     #[rstest::rstest]
     #[case::plain(
         GoogleLoginFailure::new(PythonException::Type, "Expected project_id to be a str"),
-        ("TypeError".into(), "Expected project_id to be a str".into(), None)
+        ("TypeError".into(), "Expected project_id to be a str".into())
     )]
-    #[case::unreadable_file(
-        GoogleLoginFailure {
-            file: Some(CredentialsFile::Unreadable {
-                path: "/k.json".into(),
-                reason: "No such file or directory (FileNotFoundError)".into(),
-            }),
-            ..GoogleLoginFailure::new(PythonException::Value, "file failure")
-        },
-        (
-            "ValueError".into(),
-            "file failure".into(),
-            Some((
-                "unreadable".into(),
-                "/k.json".into(),
-                "No such file or directory (FileNotFoundError)".into()
-            ))
-        )
-    )]
-    #[case::invalid_file(
-        GoogleLoginFailure {
-            file: Some(CredentialsFile::Invalid {
-                path: "/k.json".into(),
-                problem: "is not UTF-8 text".into(),
-            }),
-            ..GoogleLoginFailure::new(PythonException::Value, "file failure")
-        },
-        (
-            "ValueError".into(),
-            "file failure".into(),
-            Some(("invalid".into(), "/k.json".into(), "is not UTF-8 text".into()))
-        )
+    #[case::file_failure(
+        GoogleLoginFailure::new(PythonException::Value, "file failure"),
+        ("ValueError".into(), "file failure".into())
     )]
     fn a_google_login_failure_names_python_s_exception(
         #[case] failure: GoogleLoginFailure,

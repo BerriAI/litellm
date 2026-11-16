@@ -161,32 +161,49 @@ pub(crate) fn expiry(
     Ok(Expiry::At(now + time::Duration::seconds_f64(seconds)))
 }
 
+#[derive(serde::Serialize)]
+struct AssertionHeader<'a> {
+    typ: &'static str,
+    alg: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    kid: Option<&'a Value>,
+}
+
+#[derive(serde::Serialize)]
+struct AssertionClaims<'a> {
+    iat: i64,
+    exp: i64,
+    iss: &'a str,
+    aud: &'static str,
+    scope: &'static str,
+}
+
 impl ServiceAccountGrant {
-    /// `_make_authorization_grant_assertion` signed by `jwt.encode`: the header and claims are
-    /// `json.dumps` of google-auth's dicts, in their key order and with its separators.
+    /// A self-signed RS256 JWT bearer assertion for the cloud-platform scope, as google-auth's
+    /// `_make_authorization_grant_assertion` asks for.
     fn assertion(&self, now: OffsetDateTime) -> Result<String, GoogleLoginFailure> {
-        let text = |value: &str| PyValue::Str(value.to_owned());
         let issued = now.unix_timestamp();
-        let mut header = vec![(text("typ"), text("JWT")), (text("alg"), text("RS256"))];
-        if let Some(key_id) = &self.key_id {
-            header.push((text("kid"), from_json(key_id.clone())));
-        }
-        let claims = vec![
-            (text("iat"), PyValue::Int(issued.into())),
-            (
-                text("exp"),
-                PyValue::Int((issued + ASSERTION_LIFETIME.as_secs() as i64).into()),
-            ),
-            (text("iss"), text(&self.email)),
-            (text("aud"), text(GOOGLE_OAUTH_TOKEN_ENDPOINT)),
-            (text("scope"), text(CLOUD_PLATFORM_SCOPE)),
-        ];
-        let segment = |fields| {
-            dumps(&PyValue::Dict(fields))
-                .map(|json| URL_SAFE_NO_PAD.encode(json))
+        let header = AssertionHeader {
+            typ: "JWT",
+            alg: "RS256",
+            kid: self.key_id.as_ref(),
+        };
+        let claims = AssertionClaims {
+            iat: issued,
+            exp: issued + ASSERTION_LIFETIME.as_secs() as i64,
+            iss: &self.email,
+            aud: GOOGLE_OAUTH_TOKEN_ENDPOINT,
+            scope: CLOUD_PLATFORM_SCOPE,
+        };
+        let segment = |json: serde_json::Result<Vec<u8>>| {
+            json.map(|json| URL_SAFE_NO_PAD.encode(json))
                 .map_err(|error| GoogleLoginFailure::new(PythonException::Value, error.to_string()))
         };
-        let signing_input = format!("{}.{}", segment(header)?, segment(claims)?);
+        let signing_input = format!(
+            "{}.{}",
+            segment(serde_json::to_vec(&header))?,
+            segment(serde_json::to_vec(&claims))?
+        );
         let signature =
             jsonwebtoken::crypto::sign(signing_input.as_bytes(), &self.key, Algorithm::RS256)
                 .map_err(|error| {
@@ -441,27 +458,23 @@ pub(crate) mod tests {
             .unwrap();
         let segments: Vec<&str> = assertion.split('.').collect();
         let decoded = |segment: &str| {
-            String::from_utf8(
-                base64::Engine::decode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, segment)
+            serde_json::from_slice::<Value>(
+                &base64::Engine::decode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, segment)
                     .unwrap(),
             )
             .unwrap()
         };
         let claims = decoded(segments[1]);
-        let issued: i64 = claims["{\"iat\": ".len()..]
-            .split(',')
-            .next()
-            .unwrap()
-            .parse()
-            .unwrap();
+        let issued = claims["iat"].as_i64().unwrap();
+        assert!((before.unix_timestamp()..=before.unix_timestamp() + 5).contains(&issued));
         assert_eq!(
             (decoded(segments[0]), claims),
             (
-                r#"{"typ": "JWT", "alg": "RS256", "kid": "key-1"}"#.to_owned(),
-                format!(
-                    r#"{{"iat": {issued}, "exp": {}, "iss": "sa@p.iam.gserviceaccount.com", "aud": "{GOOGLE_OAUTH_TOKEN_ENDPOINT}", "scope": "{CLOUD_PLATFORM_SCOPE}"}}"#,
-                    issued + 3600
-                )
+                json!({"typ": "JWT", "alg": "RS256", "kid": "key-1"}),
+                json!({
+                    "iat": issued, "exp": issued + 3600, "iss": "sa@p.iam.gserviceaccount.com",
+                    "aud": GOOGLE_OAUTH_TOKEN_ENDPOINT, "scope": CLOUD_PLATFORM_SCOPE,
+                })
             )
         );
         let public = RsaPrivateKey::from_pkcs8_pem(&PRIVATE_KEY)
@@ -586,13 +599,10 @@ pub(crate) mod tests {
     }
 
     #[rstest]
-    #[case::named(json!({}), r#"{"typ": "JWT", "alg": "RS256", "kid": "key-1"}"#)]
-    #[case::null(json!({"private_key_id": null}), r#"{"typ": "JWT", "alg": "RS256"}"#)]
-    #[case::numeric(json!({"private_key_id": 7}), r#"{"typ": "JWT", "alg": "RS256", "kid": 7}"#)]
-    fn the_assertion_header_names_the_key_as_jwt_encode_does(
-        #[case] extra: Value,
-        #[case] expected: &str,
-    ) {
+    #[case::named(json!({}), json!({"typ": "JWT", "alg": "RS256", "kid": "key-1"}))]
+    #[case::null(json!({"private_key_id": null}), json!({"typ": "JWT", "alg": "RS256"}))]
+    #[case::numeric(json!({"private_key_id": 7}), json!({"typ": "JWT", "alg": "RS256", "kid": 7}))]
+    fn the_assertion_header_names_the_signing_key(#[case] extra: Value, #[case] expected: Value) {
         let assertion = grant(
             &key("http://127.0.0.1:9/token", extra),
             FIRST_RETRY_WAIT,
@@ -606,6 +616,6 @@ pub(crate) mod tests {
             assertion.split('.').next().unwrap(),
         )
         .unwrap();
-        assert_eq!(String::from_utf8(header).unwrap(), expected);
+        assert_eq!(serde_json::from_slice::<Value>(&header).unwrap(), expected);
     }
 }

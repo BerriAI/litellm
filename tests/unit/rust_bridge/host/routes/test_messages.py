@@ -3000,40 +3000,30 @@ _VERTEX_CLAUDE: Final = "vertex_ai/claude-sonnet-4-5"
 
 
 @pytest.mark.parametrize(
-    ("location", "host"),
+    ("origin", "host"),
     [
-        ({"vertex_location": "us-east5"}, "us-east5-aiplatform.googleapis.com"),
-        ({"vertex_ai_location": "global"}, "aiplatform.googleapis.com"),
-        ({"vertex_location": "eu"}, "aiplatform.eu.rep.googleapis.com"),
-        ({}, "us-central1-aiplatform.googleapis.com"),
-        ({"vertex_location": "us-east5", "api_base": ""}, "us-east5-aiplatform.googleapis.com"),
+        ("https://us-east5-aiplatform.googleapis.com", "us-east5-aiplatform.googleapis.com"),
+        ("https://aiplatform.googleapis.com", "aiplatform.googleapis.com"),
+        ("https://aiplatform.eu.rep.googleapis.com", "aiplatform.eu.rep.googleapis.com"),
     ],
-    ids=("regional", "global", "multi-region", "default", "blank-api-base"),
+    ids=("regional", "global", "multi-region"),
 )
-def test_a_vertex_connect_failure_names_the_host_python_reaches(
-    monkeypatch: pytest.MonkeyPatch, location: Mapping[str, str], host: str
+def test_a_vertex_connect_failure_names_the_host_rust_sent_it_to(
+    monkeypatch: pytest.MonkeyPatch, origin: str, host: str
 ) -> None:
     from litellm.rust_bridge.host import http_transport
 
-    monkeypatch.delenv("VERTEXAI_LOCATION", raising=False)
-    monkeypatch.delenv("VERTEX_LOCATION", raising=False)
-    monkeypatch.setattr(litellm, "vertex_location", None)
     monkeypatch.setattr(http_transport, "uses_aiohttp_transport", lambda: True)
     monkeypatch.setattr(messages_host, "get_ssl_configuration", _ssl_configuration)
     native: Final = RuntimeError(
         f"could not reach the provider: {_TRANSPORT} (Connect): dns error: error resolving DNS: "
         "failed to lookup address information: Name or service not known"
     )
+    native.messages_sent_origin = origin  # pyright: ignore[reportAttributeAccessIssue]  # set by the native host
 
     mapped: Final = messages_host.map_failure(
         native,
-        {
-            "model": _VERTEX_CLAUDE,
-            "messages": [],
-            "custom_llm_provider": "vertex_ai",
-            "vertex_project": "p",
-            **location,
-        },
+        {"model": _VERTEX_CLAUDE, "messages": [], "custom_llm_provider": "vertex_ai", "vertex_location": "elsewhere"},
         "vertex_ai",
     )
 
@@ -3077,9 +3067,9 @@ def test_a_tls_close_before_headers_reads_as_a_disconnect_on_vertex_ai_only(
     assert normalize_error(mapped, "500", str(mapped)) == expected
 
 
-def _google_login_failure(name: str, message: str, file: tuple[str, str, str] | None = None) -> RuntimeError:
+def _google_login_failure(name: str, message: str) -> RuntimeError:
     native: Final = RuntimeError("provider authentication failed: " + message)
-    native.messages_google_login_failure = (name, message, file)  # pyright: ignore[reportAttributeAccessIssue]  # set by the native host
+    native.messages_google_login_failure = (name, message)  # pyright: ignore[reportAttributeAccessIssue]  # set by the native host
     return native
 
 
@@ -3131,35 +3121,17 @@ def test_a_vertex_login_failure_raises_the_exception_python_s_load_auth_raises(
     assert logger.model_call_details["litellm_params"]["aanthropic_messages"] is True
 
 
-@pytest.mark.parametrize(
-    ("file", "logged"),
-    [
-        (
-            ("unreadable", "/etc/vertex/key.json", "No such file or directory (FileNotFoundError)"),
-            "Vertex: cannot read the credentials file at '/etc/vertex/key.json': "
-            "No such file or directory (FileNotFoundError)",
-        ),
-        (
-            ("invalid", "/etc/vertex/key.json", "is not UTF-8 text"),
-            "Vertex: the credentials file at '/etc/vertex/key.json' is not UTF-8 text",
-        ),
-    ],
-    ids=("unreadable", "invalid"),
-)
-def test_a_vertex_credentials_file_failure_is_logged_and_raised_as_python_s_file_failure(
-    caplog: pytest.LogCaptureFixture, file: tuple[str, str, str], logged: str
-) -> None:
-    caplog.set_level(logging.ERROR, logger="LiteLLM")
+def test_a_vertex_credentials_file_failure_is_raised_as_the_file_failure_rust_names() -> None:
+    message: Final = "Unable to load the vertex credentials file. LiteLLM's log names the path and the reason."
 
     mapped: Final = messages_host.map_failure(
-        _google_login_failure("ValueError", "a file failure", file),
+        _google_login_failure("ValueError", message),
         {"model": _VERTEX_CLAUDE, "messages": [], "litellm_logging_obj": _vertex_logger()},
         "vertex_ai",
     )
 
     assert type(mapped) is ValueError
-    assert str(mapped) == "Unable to load the vertex credentials file. LiteLLM's log names the path and the reason."
-    assert logged in caplog.messages
+    assert str(mapped) == message
 
 
 def test_a_google_login_failure_outside_vertex_ai_keeps_the_native_mapping() -> None:
