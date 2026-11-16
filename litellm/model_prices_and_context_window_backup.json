@@ -18975,6 +18975,23 @@
         "supports_tool_choice": true,
         "supports_vision": true
     },
+    "dashscope/qwen4-max": {
+        "input_cost_per_token": 1.5e-06,
+        "litellm_provider": "dashscope",
+        "max_input_tokens": 991808,
+        "max_output_tokens": 131072,
+        "mode": "chat",
+        "output_cost_per_token": 4.5e-06,
+        "source": "https://www.alibabacloud.com/help/en/model-studio/qwen4-max",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_video_input": true,
+        "supports_vision": true,
+        "supports_web_search": true
+    },
     "dashscope/qwen-max-latest": {
         "alias_of": "dashscope/qwen3.8-max"
     },
@@ -34730,6 +34747,7 @@
         "supports_minimal_reasoning_effort": false,
         "supports_none_reasoning_effort": true,
         "supports_reasoning": true,
+        "supports_max_reasoning_effort": true,
         "supports_xhigh_reasoning_effort": true
     },
     "chatgpt/gpt-5.6-sol": {
@@ -34749,6 +34767,7 @@
         "supports_minimal_reasoning_effort": false,
         "supports_none_reasoning_effort": true,
         "supports_reasoning": true,
+        "supports_max_reasoning_effort": true,
         "supports_xhigh_reasoning_effort": true
     },
     "chatgpt/gpt-5.6-terra": {
@@ -34768,6 +34787,7 @@
         "supports_minimal_reasoning_effort": false,
         "supports_none_reasoning_effort": true,
         "supports_reasoning": true,
+        "supports_max_reasoning_effort": true,
         "supports_xhigh_reasoning_effort": true
     },
     "chatgpt/gpt-5.4": {
