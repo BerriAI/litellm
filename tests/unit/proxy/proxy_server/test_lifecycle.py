@@ -1011,9 +1011,9 @@ async def test_the_proxy_lifespan_registers_prompt_cache_alerts_and_releases_the
     """The lifespan must still run as an async context manager, register on entry and release on exit."""
     registration: Final = _PromptCacheRegistration()
     scheduler: Final = AsyncIOScheduler()
-    clean_env: Final = {k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL")} | {
-        "LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY": "true"
-    }
+    clean_env: Final = {
+        k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL", "WORKER_CONFIG")
+    } | {"LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY": "true"}
     with (
         patch.dict(os.environ, clean_env, clear=True),
         patch.object(ps, "scheduler", scheduler),
