@@ -3401,14 +3401,7 @@ class ProxyBaseLLMRequestProcessing:
                 original_model,
                 fallback_models,
             )
-            raw_router_settings: Final = _DECODED_JSON.validate_python(
-                _REQUEST_FIELDS.validate_python(rate_limited_data).get("router_settings_override")
-            )
-            group_alias: Final = _DECODED_JSON.validate_python(
-                _REQUEST_FIELDS.validate_python(raw_router_settings).get("model_group_alias")
-                if isinstance(raw_router_settings, Mapping)
-                else None
-            )
+            group_alias: Final = router_settings.get("model_group_alias") if router_settings is not None else None
             await _release_pre_call_hold(
                 proxy_logging_obj, _REQUEST_FIELDS.validate_python(rate_limited_data), original_exc, user_api_key_dict
             )
