@@ -8,9 +8,9 @@
 //! | [`literal`] | `ast.literal_eval(text)` |
 //! | [`repr`] | `repr(value)` and `str(value)` |
 //! | [`reprlib`] | `reprlib.repr(value)` |
-//! | [`json`] | `json.dumps(value)` and `json.loads(text)` |
+//! | [`json`] | `json.dumps(value)`, `json.loads(text)`, and `type(json.loads(text)).__name__` |
 //! | [`pickle`] | `pickle.loads(data)` and `pickle.dumps(value)` for plain data |
-//! | [`truthy`] | `bool(value)` |
+//! | [`truthy`] | `bool(value)`, also straight off a `serde_json` value |
 //! | [`number`] | `int(text)`, `float(text)`, `int(seconds)` as a `Duration`, and `str()` of an `int` or `float` |
 //! | [`format`] | `format(value, f".{precision}f")` |
 //! | [`unicode`] | `str.isspace()` for one character |

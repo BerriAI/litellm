@@ -98,6 +98,7 @@ from litellm.proxy.pass_through_endpoints import pass_through_endpoints as pass_
 from litellm.proxy.spend_tracking.carried_budget_state import carried_budget_metadata
 from litellm.types.videos.utils import encode_video_id_with_provider
 from tests._master_key import MASTER_KEY
+from tests._support.rust_parallel_request_limiter import RustParallelRequestLimiter
 
 
 JWKS_URL: Final = "https://idp.example/jwks"
@@ -12105,7 +12106,7 @@ async def test_rate_limited_cached_key_is_refused_before_the_body_is_read() -> N
 
     api_key: Final = "sk-flooding-key"
     cached_key: Final = UserAPIKeyAuth(token=hash_token(api_key), rpm_limit=1, models=["gpt-5.6"])
-    limiter: Final = PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(DualCache()))
+    limiter: Final = RustParallelRequestLimiter(internal_usage_cache=InternalUsageCache(DualCache()))
     await limiter.async_pre_call_hook(
         UserAPIKeyAuth(api_key=hash_token(api_key), rpm_limit=1),
         DualCache(),
@@ -12139,7 +12140,7 @@ async def test_exhausted_cached_key_is_only_refused_before_the_body_where_a_mete
     from litellm.proxy.utils import hash_token
 
     api_key: Final = "sk-exhausted-key"
-    limiter: Final = PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(DualCache()))
+    limiter: Final = RustParallelRequestLimiter(internal_usage_cache=InternalUsageCache(DualCache()))
     await limiter.async_pre_call_hook(
         UserAPIKeyAuth(api_key=hash_token(api_key), rpm_limit=1),
         DualCache(),
@@ -12200,7 +12201,7 @@ async def test_early_rate_limit_check_uses_the_team_limits_full_auth_would_apply
     from litellm.proxy.utils import hash_token
 
     api_key: Final = "sk-team-limited-key"
-    limiter: Final = PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(DualCache()))
+    limiter: Final = RustParallelRequestLimiter(internal_usage_cache=InternalUsageCache(DualCache()))
     await limiter.async_pre_call_hook(
         UserAPIKeyAuth(api_key=hash_token(api_key), team_id=team_id, rpm_limit=key_rpm_limit, team_rpm_limit=1000),
         DualCache(),
@@ -12299,7 +12300,7 @@ async def test_preflight_rejection_preserves_failure_logging_context(body_mode: 
         user_api_key_cache=cache,
         proxy_logging_obj=None,
     )
-    limiter: Final = PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(DualCache()))
+    limiter: Final = RustParallelRequestLimiter(internal_usage_cache=InternalUsageCache(DualCache()))
     if not blocked:
         await limiter.async_pre_call_hook(
             UserAPIKeyAuth(api_key=hash_token(api_key), rpm_limit=1),

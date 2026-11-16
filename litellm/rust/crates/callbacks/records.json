@@ -19,7 +19,10 @@
     "agent_id": 42,
     "invoked_agent_id": 42,
     "team_priority": 42,
-    "key_priority": 42
+    "key_priority": 42,
+    "customer_org_id": "text",
+    "customer_team_id": "text",
+    "customer_member_id": "text"
   },
   "deployment": {
     "rejected": [
@@ -227,7 +230,25 @@
       "tpm_limit": 42,
       "session_rpm_limit": 42,
       "session_tpm_limit": 42
-    }
+    },
+    "customer_scopes": [
+      {
+        "rejected": [
+          "member"
+        ],
+        "key": "text",
+        "entity_id": "text",
+        "rpm_limit": 7,
+        "tpm_limit": 7,
+        "model_rpm_limit": {
+          "x-ratelimit-key-remaining-requests": 7
+        },
+        "model_tpm_limit": {
+          "x-ratelimit-key-remaining-requests": 7
+        },
+        "borrows": true
+      }
+    ]
   },
   "budget_plan": {
     "rejected": [

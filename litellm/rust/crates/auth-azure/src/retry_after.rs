@@ -6,6 +6,7 @@ use azure_core::http::headers::{
     HeaderName, Headers, RETRY_AFTER, RETRY_AFTER_MS, X_MS_RETRY_AFTER_MS,
 };
 use azure_core::time::{Duration, OffsetDateTime};
+use litellm_python_compat::{BigInt, number};
 use time::{Date, Month, PrimitiveDateTime, Time, UtcOffset};
 
 const HEADERS: [(HeaderName, f64); 3] = [
@@ -227,42 +228,23 @@ fn parsedate_tz(data: &str) -> Option<ParsedDate> {
     })
 }
 
-/// Python's `int(text)` for a token without whitespace: an optional sign and decimal digits,
-/// with single underscores between digits. A value too large for `i128` saturates, which every
-/// caller then rejects as Python's `datetime` rejects the big integer.
+/// Python's `int(text)`. A value too large for `i128` saturates, which every caller then rejects
+/// as Python's `datetime` rejects the big integer.
 fn python_int(text: &str) -> Option<i128> {
-    let (negative, digits) = match text.as_bytes().first()? {
-        b'-' => (true, &text[1..]),
-        b'+' => (false, &text[1..]),
-        _ => (false, text),
-    };
-    let digits = without_underscores(digits)?;
-    if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
-        return None;
-    }
-    let magnitude = digits.bytes().fold(0_i128, |value, byte| {
-        value
-            .saturating_mul(10)
-            .saturating_add(i128::from(byte - b'0'))
-    });
-    Some(if negative { -magnitude } else { magnitude })
+    let value = number::int(text)?;
+    Some(
+        i128::try_from(&value).unwrap_or(if value < BigInt::from(0) {
+            i128::MIN
+        } else {
+            i128::MAX
+        }),
+    )
 }
 
-/// Python's `float(text)`, whose underscores may only sit between digits.
+/// Python's `float(text)`, with NaN read as zero.
 fn python_float(text: &str) -> Option<f64> {
-    let value = without_underscores(text.trim())?.parse::<f64>().ok()?;
+    let value = number::float(text)?;
     Some(if value.is_nan() { 0.0 } else { value })
-}
-
-fn without_underscores(text: &str) -> Option<String> {
-    let bytes = text.as_bytes();
-    let separated = bytes.iter().enumerate().all(|(i, byte)| {
-        *byte != b'_'
-            || (i > 0
-                && bytes[i - 1].is_ascii_digit()
-                && bytes.get(i + 1).is_some_and(u8::is_ascii_digit))
-    });
-    separated.then(|| text.replace('_', ""))
 }
 
 #[cfg(test)]

@@ -10,7 +10,12 @@ use litellm_llms_types::{
     recognized::Recognized,
 };
 use litellm_python_compat::{
-    Value as PythonValue, json::from_json, repr::repr, reprlib::reprlib, truthy::truthy,
+    BigInt, Value as PythonValue,
+    json::{from_json, type_name as python_type_name},
+    number,
+    repr::repr,
+    reprlib::reprlib,
+    truthy::truthy,
 };
 use serde_json::Value;
 
@@ -366,39 +371,14 @@ fn numeric_budget_tokens(budget: &Recognized<u64>) -> Option<i64> {
     }
 }
 
-/// Python's `int(str)`: surrounding whitespace, a sign, and single underscores between digits.
+/// Python's `int(str)`, saturating at the `i64` bounds.
 fn python_int(text: &str) -> Option<i64> {
-    let trimmed = text.trim();
-    let digits = trimmed.trim_start_matches(['+', '-']);
-    let well_formed = trimmed.len() - digits.len() <= 1
-        && !digits.is_empty()
-        && !digits.starts_with('_')
-        && !digits.ends_with('_')
-        && !digits.contains("__")
-        && digits.chars().all(|ch| ch.is_ascii_digit() || ch == '_');
-    if !well_formed {
-        return None;
-    }
-    let cleaned: String = trimmed.chars().filter(|ch| *ch != '_').collect();
-    cleaned.parse::<i64>().ok().or_else(|| {
-        Some(if cleaned.starts_with('-') {
-            i64::MIN
-        } else {
-            i64::MAX
-        })
-    })
-}
-
-fn python_type_name(value: &Value) -> &'static str {
-    match value {
-        Value::Null => "NoneType",
-        Value::Bool(_) => "bool",
-        Value::Number(number) if number.is_f64() => "float",
-        Value::Number(_) => "int",
-        Value::String(_) => "str",
-        Value::Array(_) => "list",
-        Value::Object(_) => "dict",
-    }
+    let value = number::int(text)?;
+    Some(i64::try_from(&value).unwrap_or(if value < BigInt::from(0) {
+        i64::MIN
+    } else {
+        i64::MAX
+    }))
 }
 
 fn kept_display(

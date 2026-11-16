@@ -8,7 +8,7 @@ all pass validation, then all increment — bypassing the limit.
 Vulnerable code paths:
 - litellm/proxy/hooks/batch_rate_limiter.py:181-248
   (_check_and_increment_batch_counters: should_rate_limit(read_only=True)
-  → validate → async_increment_tokens_with_ttl_preservation)
+  → validate → a separate token increment)
 - litellm/proxy/hooks/dynamic_rate_limiter_v3.py:463-548
   (_check_rate_limits PHASE 1 read_only check → PHASE 3 increment)
 
@@ -17,24 +17,25 @@ check-and-increment becomes atomic.
 """
 
 import asyncio
-import os
-from typing import List
 
 import pytest
-
 
 import litellm
 from litellm import DualCache, Router
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.hooks import batch_rate_limiter, dynamic_rate_limiter_v3, parallel_request_limiter_v3
 from litellm.proxy.hooks.batch_rate_limiter import BatchFileUsage
 from litellm.proxy.hooks.dynamic_rate_limiter_v3 import (
     PROXY_DynamicRateLimitHandlerV3 as DynamicRateLimitHandler,
 )
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
-    PROXY_MaxParallelRequestsHandler_v3,
+    atomic_check_and_increment_by_n,
+    get_batch_rate_limiter,
+    should_rate_limit,
 )
 from litellm.proxy.utils import InternalUsageCache, hash_token
 from litellm.redis.stores.rate_limits import RateLimitScope
+from tests._support.rust_parallel_request_limiter import PROXY_MaxParallelRequestsHandler_v3
 
 
 def _make_phase1_barrier(num_concurrent: int, timeout: float = 0.1):
@@ -75,7 +76,7 @@ def _make_phase1_barrier(num_concurrent: int, timeout: float = 0.1):
 
 
 @pytest.mark.asyncio
-async def test_batch_limiter_concurrent_bypasses_tpm_via_toctou():
+async def test_batch_limiter_concurrent_bypasses_tpm_via_toctou(monkeypatch: pytest.MonkeyPatch):
     """
     5 concurrent batch submissions of 40 tokens each against TPM=100 limit.
 
@@ -91,7 +92,7 @@ async def test_batch_limiter_concurrent_bypasses_tpm_via_toctou():
     dual_cache = DualCache()
     internal_usage_cache = InternalUsageCache(dual_cache=dual_cache)
     rate_limiter = PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=internal_usage_cache)
-    batch_limiter = rate_limiter._get_batch_rate_limiter()
+    batch_limiter = get_batch_rate_limiter(rate_limiter)
     assert batch_limiter is not None
 
     user_api_key_dict = UserAPIKeyAuth(
@@ -102,7 +103,7 @@ async def test_batch_limiter_concurrent_bypasses_tpm_via_toctou():
     batch_usage = BatchFileUsage(total_tokens=BATCH_TOKENS, request_count=1)
 
     barrier = _make_phase1_barrier(NUM_CONCURRENT)
-    rate_limiter.should_rate_limit = barrier(rate_limiter.should_rate_limit)
+    monkeypatch.setattr(parallel_request_limiter_v3, "should_rate_limit", barrier(should_rate_limit))
 
     results = await asyncio.gather(
         *[
@@ -131,23 +132,23 @@ async def test_batch_limiter_concurrent_bypasses_tpm_via_toctou():
 
 
 @pytest.mark.asyncio
-async def test_batch_limiter_uses_atomic_check_and_increment():
+async def test_batch_limiter_uses_atomic_check_and_increment(monkeypatch: pytest.MonkeyPatch):
     """
     Regression test: batch limiter routes through
     `atomic_check_and_increment_by_n` rather than the legacy two-phase
-    pattern (read_only=True check + separate async_increment_tokens_with_ttl_preservation).
+    pattern (read_only=True check + a separate token increment).
 
     Ensures future refactors don't reintroduce the TOCTOU window.
     """
     dual_cache = DualCache()
     internal_usage_cache = InternalUsageCache(dual_cache=dual_cache)
     rate_limiter = PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=internal_usage_cache)
-    batch_limiter = rate_limiter._get_batch_rate_limiter()
+    batch_limiter = get_batch_rate_limiter(rate_limiter)
     assert batch_limiter is not None
 
-    call_log: List[str] = []
-    original_atomic = rate_limiter.atomic_check_and_increment_by_n
-    original_should = rate_limiter.should_rate_limit
+    call_log: list[str] = []
+    original_atomic = atomic_check_and_increment_by_n
+    original_should = should_rate_limit
 
     async def logging_atomic(*args, **kwargs):
         call_log.append("atomic_check_and_increment_by_n")
@@ -157,8 +158,8 @@ async def test_batch_limiter_uses_atomic_check_and_increment():
         call_log.append(f"should_rate_limit(read_only={kwargs.get('read_only')})")
         return await original_should(*args, **kwargs)
 
-    rate_limiter.atomic_check_and_increment_by_n = logging_atomic
-    rate_limiter.should_rate_limit = logging_should
+    monkeypatch.setattr(batch_rate_limiter, "atomic_check_and_increment_by_n", logging_atomic)
+    monkeypatch.setattr(parallel_request_limiter_v3, "should_rate_limit", logging_should)
 
     user_api_key_dict = UserAPIKeyAuth(
         api_key=hash_token("atomic-test-key"),
@@ -203,7 +204,7 @@ async def test_dynamic_rate_limiter_v3_concurrent_bypasses_model_capacity(monkey
     MAX_SEQUENTIAL_SUCCESSES = MODEL_RPM + 1
 
     monkeypatch.setenv("LITELLM_LICENSE", "test-license-key")
-    litellm.priority_reservation = {"high": 0.9, "low": 0.1}
+    monkeypatch.setattr(litellm, "priority_reservation", {"high": 0.9, "low": 0.1})
 
     dual_cache = DualCache()
     handler = DynamicRateLimitHandler(internal_usage_cache=dual_cache)
@@ -225,7 +226,7 @@ async def test_dynamic_rate_limiter_v3_concurrent_bypasses_model_capacity(monkey
     handler.update_variables(llm_router=llm_router)
 
     barrier = _make_phase1_barrier(NUM_CONCURRENT)
-    handler.v3_limiter.should_rate_limit = barrier(handler.v3_limiter.should_rate_limit)
+    monkeypatch.setattr(dynamic_rate_limiter_v3, "should_rate_limit", barrier(should_rate_limit))
 
     from litellm.types.router import ModelGroupInfo
 
@@ -277,7 +278,7 @@ async def test_dynamic_rate_limiter_v3_uses_atomic_check_and_increment(monkeypat
     enforced, priority counter is incremented for tracking only.
     """
     monkeypatch.setenv("LITELLM_LICENSE", "test-license-key")
-    litellm.priority_reservation = {"high": 0.9, "low": 0.1}
+    monkeypatch.setattr(litellm, "priority_reservation", {"high": 0.9, "low": 0.1})
 
     dual_cache = DualCache()
     handler = DynamicRateLimitHandler(internal_usage_cache=dual_cache)
@@ -298,15 +299,15 @@ async def test_dynamic_rate_limiter_v3_uses_atomic_check_and_increment(monkeypat
     )
     handler.update_variables(llm_router=llm_router)
 
-    atomic_descriptors_observed: List[List[str]] = []
-    original_atomic = handler.v3_limiter.atomic_check_and_increment_by_n
+    atomic_descriptors_observed: list[list[str]] = []
+    original_atomic = atomic_check_and_increment_by_n
 
     async def logging_atomic(*args, **kwargs):
-        ds = kwargs.get("descriptors") or (args[0] if args else [])
+        ds = kwargs.get("descriptors") or (args[1] if len(args) > 1 else [])
         atomic_descriptors_observed.append([d["key"] for d in ds])
         return await original_atomic(*args, **kwargs)
 
-    handler.v3_limiter.atomic_check_and_increment_by_n = logging_atomic
+    monkeypatch.setattr(dynamic_rate_limiter_v3, "atomic_check_and_increment_by_n", logging_atomic)
 
     from litellm.types.router import ModelGroupInfo
 
@@ -351,7 +352,7 @@ async def test_batch_zero_token_consumes_rpm_only():
     dual_cache = DualCache()
     internal_usage_cache = InternalUsageCache(dual_cache=dual_cache)
     rate_limiter = PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=internal_usage_cache)
-    batch_limiter = rate_limiter._get_batch_rate_limiter()
+    batch_limiter = get_batch_rate_limiter(rate_limiter)
     assert batch_limiter is not None
 
     user_api_key_dict = UserAPIKeyAuth(
@@ -406,7 +407,7 @@ async def test_dynamic_rate_limiter_v3_fails_closed_on_unknown_descriptor(monkey
     from fastapi import HTTPException
 
     monkeypatch.setenv("LITELLM_LICENSE", "test-license-key")
-    litellm.priority_reservation = {"high": 0.9, "low": 0.1}
+    monkeypatch.setattr(litellm, "priority_reservation", {"high": 0.9, "low": 0.1})
 
     dual_cache = DualCache()
     handler = DynamicRateLimitHandler(internal_usage_cache=dual_cache)
@@ -441,7 +442,7 @@ async def test_dynamic_rate_limiter_v3_fails_closed_on_unknown_descriptor(monkey
             ],
         }
 
-    handler.v3_limiter.atomic_check_and_increment_by_n = fake_atomic
+    monkeypatch.setattr(dynamic_rate_limiter_v3, "atomic_check_and_increment_by_n", fake_atomic)
 
     from litellm.types.router import ModelGroupInfo
 
