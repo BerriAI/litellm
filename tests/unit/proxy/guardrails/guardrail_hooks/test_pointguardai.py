@@ -10,6 +10,7 @@ import pytest
 from fastapi import HTTPException
 
 from litellm.exceptions import GuardrailRaisedException
+from litellm.integrations.custom_guardrail import GuardrailSetupError
 from litellm.llms.openai.chat.guardrail_translation.handler import (
     OpenAIChatCompletionsHandler,
 )
@@ -95,45 +96,6 @@ class TestPointGuardAIGuardrailInit:
         assert guardrail.pointguardai_policy_config_name == "test-policy"
         assert guardrail.guardrail_name == "pointguardai-guard"
 
-    def test_init_with_missing_api_key(self):
-        """Test that initialization fails without api_key."""
-        with pytest.raises(HTTPException) as exc_info:
-            _pointguard_guardrail(
-                api_key="",
-                api_base="https://api.appsoc.com",
-                org_code="test-org",
-                policy_config_name="test-policy",
-            )
-
-        assert exc_info.value.status_code == 401
-        assert "api_key" in str(exc_info.value.detail)
-
-    def test_init_with_missing_org_code(self):
-        """Test that initialization fails without org_code."""
-        with pytest.raises(HTTPException) as exc_info:
-            _pointguard_guardrail(
-                api_key="test_key",
-                api_base="https://api.appsoc.com",
-                org_code="",
-                policy_config_name="test-policy",
-            )
-
-        assert exc_info.value.status_code == 401
-        assert "org_code" in str(exc_info.value.detail)
-
-    def test_init_with_missing_policy_config_name(self):
-        """Test that initialization fails without policy_config_name."""
-        with pytest.raises(HTTPException) as exc_info:
-            _pointguard_guardrail(
-                api_key="test_key",
-                api_base="https://api.appsoc.com",
-                org_code="test-org",
-                policy_config_name="",
-            )
-
-        assert exc_info.value.status_code == 401
-        assert "policy_config_name" in str(exc_info.value.detail)
-
     def test_init_with_default_api_base(self):
         """Test the production API base is used when no override is configured."""
         guardrail = _pointguard_guardrail(
@@ -186,10 +148,8 @@ class TestPointGuardAIGuardrailInit:
         settings = {"api_key": "test_key", "org_code": "test-org", "policy_config_name": "test-policy"}
         settings[missing] = ""
 
-        with pytest.raises(HTTPException) as exc_info:
+        with pytest.raises(GuardrailSetupError, match=f"{missing}.*{variable}"):
             _pointguard_guardrail(**settings)
-
-        assert variable in str(exc_info.value.detail)
 
     @pytest.mark.parametrize(("max_turns", "expected"), [(None, 20), (5, 5)])
     def test_init_max_turns(self, max_turns: int | None, expected: int):
@@ -2898,3 +2858,39 @@ class TestPointGuardAIGuardrailRegistry:
             GuardrailEventHooks.pre_call,
             GuardrailEventHooks.post_call,
         ]
+
+
+@pytest.mark.asyncio
+async def test_create_guardrail_rejects_a_pointguard_guardrail_missing_its_org_code_and_saves_nothing(
+    mocker, monkeypatch
+):
+    from litellm.proxy._types import LitellmUserRoles
+    from litellm.proxy.guardrails.guardrail_endpoints import CreateGuardrailRequest, create_guardrail
+
+    monkeypatch.delenv("POINTGUARD_ORG_CODE", raising=False)
+    stored = {
+        "guardrail_id": "pointguard-missing-org",
+        "guardrail_name": "pointguard-missing-org",
+        "litellm_params": {
+            "guardrail": "pointguard_ai",
+            "mode": "pre_call",
+            "api_key": "test_key",
+            "policy_config_name": "test-policy",
+        },
+        "guardrail_info": {},
+    }
+    registry = mocker.Mock()
+    registry.add_guardrail_to_db = AsyncMock(return_value=stored)
+    mocker.patch("litellm.proxy.guardrails.guardrail_endpoints.GUARDRAIL_REGISTRY", registry)
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mocker.Mock())
+    delete_row = mocker.patch("litellm.proxy.guardrails.guardrail_endpoints._delete_guardrail_row", AsyncMock())
+
+    with pytest.raises(HTTPException) as exc_info:
+        await create_guardrail(
+            CreateGuardrailRequest(guardrail=stored),
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "org_code" in exc_info.value.detail
+    delete_row.assert_awaited_once_with(mocker.ANY, where={"guardrail_id": "pointguard-missing-org"})

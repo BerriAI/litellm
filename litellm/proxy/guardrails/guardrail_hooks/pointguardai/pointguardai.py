@@ -11,6 +11,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.exceptions import GuardrailRaisedException
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
+    GuardrailSetupError,
     log_guardrail_information,  # pyright: ignore[reportUnknownVariableType]  # decorator is untyped upstream
 )
 from litellm.llms.base_llm.guardrail_translation.utils import (
@@ -109,18 +110,11 @@ class PointGuardAIGuardrail(CustomGuardrail):
 
         # Validate required parameters
         if not self.pointguardai_api_key:
-            raise HTTPException(
-                status_code=401, detail="Missing required parameter: api_key (or set POINTGUARD_API_KEY)"
-            )
+            raise GuardrailSetupError("Missing required parameter: api_key (or set POINTGUARD_API_KEY)")
         if not self.pointguardai_org_code:
-            raise HTTPException(
-                status_code=401, detail="Missing required parameter: org_code (or set POINTGUARD_ORG_CODE)"
-            )
+            raise GuardrailSetupError("Missing required parameter: org_code (or set POINTGUARD_ORG_CODE)")
         if not self.pointguardai_policy_config_name:
-            raise HTTPException(
-                status_code=401,
-                detail="Missing required parameter: policy_config_name (or set POINTGUARD_POLICY_NAME)",
-            )
+            raise GuardrailSetupError("Missing required parameter: policy_config_name (or set POINTGUARD_POLICY_NAME)")
         if self.max_turns < 1:
             raise ValueError("max_turns must be at least 1")
 
@@ -371,6 +365,16 @@ class PointGuardAIGuardrail(CustomGuardrail):
         return input_section_present, output_section_present
 
     @staticmethod
+    def _is_inspection_section(section: object) -> bool:
+        if not _is_json_object(section):
+            return False
+        return (
+            isinstance(section.get("blocked"), bool)
+            and isinstance(section.get("modified"), bool)
+            and isinstance(section.get("content"), list)
+        )
+
+    @staticmethod
     def _validate_response_data(response_data: object, output_present: bool) -> Mapping[str, object]:
         if not _is_json_object(response_data):
             raise HTTPException(status_code=502, detail="Invalid response from PointGuardAI")
@@ -381,13 +385,7 @@ class PointGuardAIGuardrail(CustomGuardrail):
 
         required_sections: Final = ("input", "output") if output_present else ("input",)
         for section_name in required_sections:
-            section = response_data.get(section_name)
-            if (
-                not _is_json_object(section)
-                or not isinstance(section.get("blocked"), bool)
-                or not isinstance(section.get("modified"), bool)
-                or not isinstance(section.get("content"), list)
-            ):
+            if not PointGuardAIGuardrail._is_inspection_section(response_data.get(section_name)):
                 raise HTTPException(
                     status_code=502,
                     detail=f"Invalid PointGuardAI response: missing or malformed {section_name} inspection result",
