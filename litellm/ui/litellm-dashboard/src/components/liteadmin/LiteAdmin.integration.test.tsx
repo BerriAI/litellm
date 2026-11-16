@@ -26,6 +26,7 @@ vi.unmock("@/lib/toast");
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push }) }));
 
 const MANAGEMENT = "https://management.test/proxy";
+const browserCrypto = globalThis.crypto;
 const INFERENCE = "https://management.test/inference";
 const EXTERNAL_INFERENCE = "https://inference.test/proxy";
 const NEW_KEY = "sk-created-for-widget-test";
@@ -253,7 +254,7 @@ beforeEach(() => {
 afterEach(() => {
   toast.dismiss();
   document.cookie = "token=; Max-Age=0; Path=/";
-  vi.unstubAllGlobals();
+  vi.stubGlobal("crypto", browserCrypto);
 });
 
 describe("Aria Agent in the gateway", () => {
