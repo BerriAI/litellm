@@ -33,6 +33,7 @@ from openai import AsyncOpenAI
 from starlette.background import BackgroundTask
 from starlette.datastructures import FormData, UploadFile
 from starlette.responses import StreamingResponse
+from starlette.types import Message
 
 import litellm
 from litellm import Router
@@ -466,10 +467,10 @@ async def test_audio_speech_chunk_generator_forwards_an_unread_upstream_stream()
     assert stream.closed is True
 
 
-def _speech_request(payload: dict) -> Request:
+def _speech_request(payload: Mapping[str, str | bool]) -> Request:
     body: Final = orjson.dumps(payload)
 
-    async def _receive():
+    async def _receive() -> Message:
         return {"type": "http.request", "body": body, "more_body": False}
 
     return Request(
