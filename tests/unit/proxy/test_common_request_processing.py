@@ -50,6 +50,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.litellm_core_utils.total_deadline import current_total_deadline
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+from litellm.llms.vertex_ai.gemini.long_decode import AsyncStreamResume
 from litellm.proxy._types import Litellm_EntityType, LitellmUserRoles, ProxyErrorTypes, ProxyException
 from litellm.proxy._types import UserAPIKeyAuth as ProxyUserAPIKeyAuth
 from litellm.proxy.auth.fallback_budget import RouterFallbackBudgetCheck
@@ -11412,6 +11413,141 @@ class TestStreamingClientDisconnectBilling:
         partial_response: Final = recorder.success_events[0]["response_obj"]
         assert {choice.index: choice.finish_reason for choice in partial_response.choices} == expected
         assert partial_response.usage.completion_tokens > 0
+
+    @pytest.mark.parametrize(
+        ("candidate", "expected"),
+        [
+            pytest.param(
+                {"content": {"parts": [{"text": "partial answer"}], "role": "model"}, "index": 0},
+                "finish_reason_unspecified",
+                id="no-finish-reason",
+            ),
+            pytest.param(
+                {"content": {"parts": [{"text": "partial answer"}], "role": "model"}, "finishReason": "MAX_TOKENS"},
+                "length",
+                id="max-tokens",
+            ),
+            pytest.param(
+                {"content": {"parts": [{"text": "full answer"}], "role": "model"}, "finishReason": "STOP"},
+                "stop",
+                id="stop",
+            ),
+            pytest.param(
+                {
+                    "content": {"parts": [{"functionCall": {"name": "lookup", "args": {"q": "fox"}}}], "role": "model"},
+                    "finishReason": "STOP",
+                },
+                "tool_calls",
+                id="stop-after-a-tool-call",
+            ),
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_gemini_stream_bills_only_the_finish_reason_the_candidate_sent(
+        self, candidate: Mapping[str, object], expected: str
+    ):
+        partial_response: Final = await self._billed_after_the_first_gemini_frame({"candidates": [candidate]})
+
+        assert [choice.finish_reason for choice in partial_response.choices] == [expected]
+        assert partial_response.usage.completion_tokens > 0
+
+    @pytest.mark.asyncio
+    async def test_gemini_frame_that_plans_a_continuation_hop_is_not_billed_as_finished(self):
+        from litellm.types.llms.vertex_ai import GenerationConfig, RequestBody
+
+        async def _hop_must_not_open(request_body: RequestBody) -> httpx.Response:
+            pytest.fail(f"the client disconnected before the hop, yet it opened with {request_body}")
+
+        partial_response: Final = await self._billed_after_the_first_gemini_frame(
+            {
+                "candidates": [
+                    {
+                        "content": {"role": "model", "parts": [{"text": "hello"}]},
+                        "finishReason": "CONTINUATION",
+                        "continuationToken": "dG9rLTE=",
+                    }
+                ],
+                "usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 30, "totalTokenCount": 40},
+            },
+            AsyncStreamResume(
+                request_body=RequestBody(
+                    contents=[{"role": "user", "parts": [{"text": "Prove it"}]}],
+                    generationConfig=GenerationConfig(max_output_tokens=100),
+                ),
+                open_hop=_hop_must_not_open,
+            ),
+        )
+
+        assert [choice.finish_reason for choice in partial_response.choices] == ["finish_reason_unspecified"]
+        assert partial_response.usage.completion_tokens > 0
+
+    @pytest.mark.parametrize("evidence", ["length", ((0, None),), ((0, "length", "stop"),)])
+    @pytest.mark.asyncio
+    async def test_unreadable_provider_finish_evidence_bills_unspecified_instead_of_the_synthesized_stop(
+        self, evidence: object
+    ):
+        from litellm.constants import PROVIDER_FINISH_REASONS_HIDDEN_PARAM
+        from litellm.litellm_core_utils.hidden_params import set_hidden_param
+
+        frame: Final = ModelResponseStream(
+            id="chatcmpl-unreadable",
+            created=1741037890,
+            model="gemini-3.8-flash",
+            choices=[self._content_choice(0, "partial answer", "stop")],
+        )
+        set_hidden_param(frame, "is_finished", False)
+        set_hidden_param(frame, PROVIDER_FINISH_REASONS_HIDDEN_PARAM, evidence)
+
+        partial_response: Final = await self._billed_after_the_first_frame(
+            lambda _: ModelResponseListIterator(model_responses=[frame])
+        )
+
+        assert [choice.finish_reason for choice in partial_response.choices] == ["finish_reason_unspecified"]
+
+    async def _billed_after_the_first_gemini_frame(
+        self, frame: Mapping[str, object], resume: AsyncStreamResume | None = None
+    ) -> litellm.ModelResponse:
+        from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import ModelResponseIterator
+
+        async def _gemini_sse() -> AsyncGenerator[str, None]:
+            yield f"data: {json.dumps(frame)}"
+
+        return await self._billed_after_the_first_frame(
+            lambda logging_obj: ModelResponseIterator(
+                streaming_response=_gemini_sse(), sync_stream=False, logging_obj=logging_obj, resume=resume
+            )
+        )
+
+    async def _billed_after_the_first_frame(
+        self, completion_stream: Callable[[LiteLLMLoggingObj], object]
+    ) -> litellm.ModelResponse:
+        from litellm.router_rust.invoke.streaming import StreamAttempt, open_attempt_stream
+
+        model: Final = "gemini-3.8-flash"
+        recorder: Final = _RecordingSuccessLogger()
+        logging_obj: Final = self._recorded_logging_obj(
+            model, [{"role": "user", "content": "hi"}], "first-frame-disconnect-call", recorder
+        )
+        provider_stream: Final = CustomStreamWrapper(
+            completion_stream=completion_stream(logging_obj),
+            model=model,
+            custom_llm_provider="gemini",
+            logging_obj=logging_obj,
+            stream_options=None,
+        )
+        routed: Final = await open_attempt_stream(
+            MagicMock(spec=StreamAttempt, op="acompletion", slot=None), provider_stream
+        )
+        assert isinstance(routed, CustomStreamWrapper)
+        delivered: Final = await routed.__aiter__().__anext__()
+        assert delivered.choices[0].finish_reason is None
+
+        billed: Final = await _bill_partial_streamed_spend_on_disconnect({"litellm_logging_obj": logging_obj}, routed)
+        await asyncio.wait_for(recorder.logged.wait(), timeout=5)
+
+        assert billed is True
+        assert len(recorder.success_events) == 1
+        return recorder.success_events[0]["response_obj"]
 
     @pytest.mark.asyncio
     async def test_disconnect_uses_a_finish_reason_received_without_a_choice_index_for_a_single_choice(self):

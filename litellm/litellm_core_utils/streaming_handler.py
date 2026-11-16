@@ -23,7 +23,11 @@ from typing_extensions import NotRequired, TypedDict
 import litellm
 from litellm import verbose_logger
 from litellm._uuid import uuid
-from litellm.constants import STREAM_CHUNK_CHOICE_FIELDS, STREAM_FINISH_CHOICE_FIELDS
+from litellm.constants import (
+    PROVIDER_FINISH_REASONS_HIDDEN_PARAM,
+    STREAM_CHUNK_CHOICE_FIELDS,
+    STREAM_FINISH_CHOICE_FIELDS,
+)
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.core_helpers import (
     UPSTREAM_USAGE_COST,
@@ -183,10 +187,22 @@ def _indexed_finish_reason(choice: object) -> tuple[int, str] | None:
     return index, reason
 
 
+_PROVIDER_FINISH_REASONS: Final = TypeAdapter(tuple[tuple[int, str], ...])
+
+
+def _provider_finish_reasons(evidence: object) -> Mapping[int, str]:
+    if evidence is None:
+        return _NO_FINISH_REASONS_BY_INDEX
+    try:
+        return MappingProxyType(dict(_PROVIDER_FINISH_REASONS.validate_python(evidence, strict=True)))
+    except ValidationError:
+        return _NO_FINISH_REASONS_BY_INDEX
+
+
 def _finish_reasons_by_index(upstream_chunk: object) -> Mapping[int, str]:
     hidden_params: Final = get_hidden_params(upstream_chunk)
     if hidden_params is not None and hidden_params.get("is_finished") is False:
-        return _NO_FINISH_REASONS_BY_INDEX
+        return _provider_finish_reasons(hidden_params.get(PROVIDER_FINISH_REASONS_HIDDEN_PARAM))
     choices: Final[object] = getattr(upstream_chunk, "choices", None)
     return MappingProxyType(dict(filter(None, map(_indexed_finish_reason, object_items(choices)))))
 
