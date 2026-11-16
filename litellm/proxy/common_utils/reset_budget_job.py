@@ -1,6 +1,7 @@
 import asyncio
 import json
 import math
+import re
 import time
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
@@ -560,6 +561,20 @@ class _ChunkOutcome:
 
 
 _NO_PROGRESS: Final = _ChunkOutcome(fetched=0, advanced=0)
+
+
+def _next_budget_reset_at(budget_duration: str, settings: BudgetResetSettings, current_time: datetime) -> datetime:
+    try:
+        return compute_budget_reset_at(
+            budget_duration=budget_duration,
+            settings=settings,
+            now=current_time if is_annual_budget_duration(budget_duration) else None,
+        )
+    except OverflowError:
+        if re.fullmatch(r"\d+(mo|[smhdw])", budget_duration.strip().lower()):
+            raise
+        verbose_proxy_logger.warning("A stored budget_duration is too long for date math; resetting it daily instead.")
+        return compute_budget_reset_at(budget_duration="1d", settings=settings)
 
 
 def _as_utc(moment: datetime) -> datetime:
@@ -2093,11 +2108,7 @@ class ResetBudgetJob:
         try:
             item.spend = _carried_spend(item.spend, _rollover_cap(item.max_budget)) if _rollover_enabled() else 0.0
             if hasattr(item, "budget_duration") and item.budget_duration is not None:
-                item.budget_reset_at = compute_budget_reset_at(
-                    budget_duration=item.budget_duration,
-                    settings=reset_settings,
-                    now=current_time if is_annual_budget_duration(item.budget_duration) else None,
-                )
+                item.budget_reset_at = _next_budget_reset_at(item.budget_duration, reset_settings, current_time)
             return item
         except Exception as e:
             verbose_proxy_logger.exception("Error resetting budget for %s: %s. Item: %s", item_type, e, item)

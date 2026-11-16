@@ -499,6 +499,38 @@ def test_reset_budget_for_key(reset_budget_job, mock_prisma_client):
     assert set(write["data"].keys()) == {"spend", "budget_reset_at"}
 
 
+def _stored_key(budget_duration: str, now: datetime) -> type:
+    return type(
+        "LiteLLM_VerificationToken",
+        (),
+        {"spend": 0.5, "budget_duration": budget_duration, "budget_reset_at": now, "id": "k", "token": "tok-k"},
+    )
+
+
+@pytest.mark.parametrize("budget_duration", ("99999999999days", "999999999weeks", "3000000days"))
+def test_key_stored_with_a_long_spelled_duration_too_long_for_date_math_resets_daily(
+    reset_budget_job, mock_prisma_client, budget_duration: str
+):
+    now: Final = datetime.now(timezone.utc)
+    mock_prisma_client.data["key"] = [_stored_key(budget_duration, now)]
+
+    asyncio.run(reset_budget_job.reset_budget_for_litellm_keys())
+
+    (write,) = [c for c in mock_prisma_client.db.batch_calls if c["table"] == "key"]
+    assert write["data"]["spend"] == {"decrement": 0.5}
+    assert now < write["data"]["budget_reset_at"] <= now + timedelta(days=1)
+
+
+def test_key_stored_with_a_short_form_duration_too_long_for_date_math_is_still_left_due(
+    reset_budget_job, mock_prisma_client
+):
+    mock_prisma_client.data["key"] = [_stored_key("99999999999d", datetime.now(timezone.utc))]
+
+    asyncio.run(reset_budget_job.reset_budget_for_litellm_keys())
+
+    assert [c for c in mock_prisma_client.db.batch_calls if c["table"] == "key"] == []
+
+
 def test_reset_budget_for_key_leaves_lifetime_total_spend_alone(reset_budget_job, mock_prisma_client):
     """A period reset zeroes spend but must neither write nor touch the lifetime total_spend."""
     now = datetime.now(timezone.utc)

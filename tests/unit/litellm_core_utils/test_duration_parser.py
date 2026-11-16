@@ -277,19 +277,6 @@ def test_long_month_spelling_without_a_calendar_schedule_keeps_its_nightly_reset
     assert get_budget_window_start("3months", reset) == datetime(2026, 11, 13, tzinfo=timezone.utc)
 
 
-@pytest.mark.parametrize("long_spelling", ("99999999999days", "999999999weeks", "3000000days"))
-def test_long_unit_spelling_too_long_for_date_math_keeps_its_nightly_reset(long_spelling: str) -> None:
-    now: Final = datetime(2026, 11, 13, 18, 0, tzinfo=timezone.utc)
-    assert get_next_standardized_reset_time(long_spelling, now, "UTC") == datetime(2026, 11, 14, tzinfo=timezone.utc)
-
-
-@pytest.mark.parametrize("short_form", ("99999999999d", "999999999w", "3000000d"))
-def test_short_form_too_long_for_date_math_still_raises(short_form: str) -> None:
-    now: Final = datetime(2026, 11, 13, 18, 0, tzinfo=timezone.utc)
-    with pytest.raises(OverflowError):
-        get_next_standardized_reset_time(short_form, now, "UTC")
-
-
 @pytest.mark.parametrize(
     "zone,reset_at,expected",
     (
