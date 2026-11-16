@@ -124,7 +124,8 @@ mod tests {
 
     #[rstest]
     fn a_wrapped_failure_reads_as_python_s_two_argument_exception() {
-        let cause = GoogleLoginFailure::new(PythonException::Malformed, "missing fields token_uri.");
+        let cause =
+            GoogleLoginFailure::new(PythonException::Malformed, "missing fields token_uri.");
         let wrapped = GoogleLoginFailure::caused_by(
             PythonException::DefaultCredentials,
             "Failed to load service account credentials from /k.json",
@@ -152,7 +153,10 @@ mod tests {
     #[case::text(Some(json!("weird")), "weird")]
     #[case::number(Some(json!(3)), "3")]
     #[case::boolean(Some(json!(false)), "False")]
-    fn json_values_print_as_python_prints_them(#[case] value: Option<Value>, #[case] expected: &str) {
+    fn json_values_print_as_python_prints_them(
+        #[case] value: Option<Value>,
+        #[case] expected: &str,
+    ) {
         assert_eq!(python_str(value.as_ref()), expected);
     }
 }

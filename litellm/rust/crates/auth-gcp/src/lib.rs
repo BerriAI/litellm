@@ -2,9 +2,9 @@ mod auth;
 mod config;
 pub mod constants;
 mod identity;
-pub mod vertex_messages;
 #[cfg(feature = "google-sdk")]
 mod sdk;
+pub mod vertex_messages;
 
 pub use auth::{VertexAuth, VertexEnvironment};
 pub use config::{

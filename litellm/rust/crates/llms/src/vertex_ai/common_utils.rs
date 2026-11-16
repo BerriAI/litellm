@@ -6,7 +6,10 @@ use crate::Error;
 /// Python's `re.match(r"^[a-z][a-z0-9-]*$", location)`, without the newline `$` also matches
 /// before: a location reaches a hostname.
 fn is_location_token(location: &str) -> bool {
-    location.as_bytes().first().is_some_and(u8::is_ascii_lowercase)
+    location
+        .as_bytes()
+        .first()
+        .is_some_and(u8::is_ascii_lowercase)
         && location
             .bytes()
             .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
