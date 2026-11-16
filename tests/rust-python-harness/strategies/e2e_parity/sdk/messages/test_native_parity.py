@@ -30,6 +30,7 @@ import logging
 import math
 import os
 import re
+import threading
 import time
 import uuid
 from collections.abc import (
@@ -45,11 +46,14 @@ from collections.abc import (
 )
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field, replace
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from types import MappingProxyType
 from typing import ClassVar, Final, cast
 
 import httpx
 import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
 from pydantic import JsonValue, TypeAdapter
 
 import litellm
@@ -3579,6 +3583,10 @@ MALFORMED_BASE_CASES: Final = tuple(
 )
 
 AZURE_OPUS_4_8: Final = "azure_ai/claude-opus-4-8"
+E4_UNTRACED_VERSION_REFUSAL: Final = (
+    "E4: Python logs the attributed anthropic-version refusal with the traceback of its raise in the transform; the "
+    "native host hands the refusal back unraised, so its failure log has none"
+)
 JSON_SCHEMA_FORMAT: Final[Mapping[str, JsonValue]] = MappingProxyType(
     {
         "type": "json_schema",
@@ -4232,6 +4240,118 @@ AZURE_PASSTHROUGH_CASES: Final = tuple(
 )
 
 
+VERTEX_CLAUDE: Final = "vertex_ai/claude-sonnet-4-5"
+_VERTEX_KEY: Final = (
+    rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    .private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption())
+    .decode()
+)
+
+
+class _GoogleTokenEndpoint(BaseHTTPRequestHandler):
+    def do_POST(self) -> None:
+        self.rfile.read(int(self.headers.get("Content-Length", "0")))
+        body: Final = json.dumps({"access_token": "ya29.parity", "expires_in": 3600, "token_type": "Bearer"}).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, format: str, *args: object) -> None:
+        pass
+
+
+_GOOGLE_TOKENS: Final = ThreadingHTTPServer(("127.0.0.1", 0), _GoogleTokenEndpoint)
+threading.Thread(target=_GOOGLE_TOKENS.serve_forever, daemon=True).start()
+VERTEX_ACCOUNT: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        "type": "service_account",
+        "project_id": "parity-project",
+        "private_key_id": "parity-key",
+        "private_key": _VERTEX_KEY,
+        "client_email": "parity@parity-project.iam.gserviceaccount.com",
+        "client_id": "1",
+        "token_uri": f"http://127.0.0.1:{_GOOGLE_TOKENS.server_address[1]}/token",
+    }
+)
+
+
+def _vertex(**kwargs: object) -> Mapping[str, object]:
+    return _kw(
+        vertex_project="parity-project", vertex_location="us-east5", vertex_credentials=dict(VERTEX_ACCOUNT), **kwargs
+    )
+
+
+def _vertex_stream(name: str, **kwargs: object) -> Case:
+    return Case(name, _vertex(stream=True, **kwargs), model=VERTEX_CLAUDE, upstream=(_stream(TEXT_STREAM),))
+
+
+JSON_SCHEMA_FORMAT: Final[Mapping[str, JsonValue]] = MappingProxyType(
+    {"type": "json_schema", "schema": {"type": "object", "properties": {"city": {"type": "string"}}}}
+)
+
+VERTEX_SHAPING_CASES: Final = (
+    Case("vertex_caller_authorization", _vertex(extra_headers={"Authorization": "Bearer caller"}), model=VERTEX_CLAUDE),
+    Case(
+        "vertex_caller_lowercase_authorization",
+        _vertex(extra_headers={"authorization": "Bearer caller"}),
+        model=VERTEX_CLAUDE,
+    ),
+    Case("vertex_caller_content_type", _vertex(extra_headers={"content-type": "text/plain"}), model=VERTEX_CLAUDE),
+    Case(
+        "vertex_caller_betas_filtered",
+        _vertex(extra_headers={"anthropic-beta": "files-api-2025-04-14,context-1m-2025-08-07,not-a-beta"}),
+        model=VERTEX_CLAUDE,
+    ),
+    Case(
+        "vertex_caller_beta_renamed",
+        _vertex(extra_headers={"anthropic-beta": "advanced-tool-use-2025-11-20"}),
+        model=VERTEX_CLAUDE,
+    ),
+    Case(
+        "vertex_caller_betas_all_dropped",
+        _vertex(extra_headers={"anthropic-beta": "mcp-client-2025-11-20"}),
+        model=VERTEX_CLAUDE,
+    ),
+    Case("vertex_output_format_folded", _vertex(output_format=dict(JSON_SCHEMA_FORMAT)), model=VERTEX_CLAUDE),
+    Case(
+        "vertex_output_format_wins_over_output_config_format",
+        _vertex(output_format=dict(JSON_SCHEMA_FORMAT), output_config={"format": {"type": "json_schema"}}),
+        model=VERTEX_CLAUDE,
+    ),
+    Case("vertex_string_output_format_refused", _vertex(output_format="json"), model=VERTEX_CLAUDE, upstream=()),
+    Case("vertex_string_output_format_dropped", _vertex(output_format="json", drop_params=True), model=VERTEX_CLAUDE),
+    Case(
+        "vertex_unsupported_version_refused",
+        _vertex(extra_headers={"anthropic-version": "latest"}),
+        model=VERTEX_CLAUDE,
+        upstream=(),
+        gaps=_gaps(logged_error=E4_UNTRACED_VERSION_REFUSAL),
+    ),
+    Case(
+        "vertex_unsupported_version_refused_before_output_format",
+        _vertex(extra_headers={"anthropic-version": "latest"}, output_format="json"),
+        model=VERTEX_CLAUDE,
+        upstream=(),
+        gaps=_gaps(logged_error=E4_UNTRACED_VERSION_REFUSAL),
+    ),
+    Case(
+        "vertex_unsupported_version_dropped",
+        _vertex(extra_headers={"anthropic-version": "latest"}, drop_params=True),
+        model=VERTEX_CLAUDE,
+    ),
+    Case("vertex_base_version_doubled", _vertex(api_base_suffix="/v1"), model=VERTEX_CLAUDE),
+    Case("vertex_base_beta_version_doubled", _vertex(api_base_suffix="/v1beta1/"), model=VERTEX_CLAUDE),
+    Case("vertex_base_query", _vertex(api_base_suffix="?k=1"), model=VERTEX_CLAUDE),
+    Case("vertex_base_version_with_query", _vertex(api_base_suffix="/v1?k=1"), model=VERTEX_CLAUDE),
+    Case("vertex_base_own_path", _vertex(api_base_suffix="/custom/path/"), model=VERTEX_CLAUDE),
+    _vertex_stream("vertex_base_stream"),
+    _vertex_stream("vertex_base_version_doubled_stream", api_base_suffix="/v1"),
+    _vertex_stream("vertex_base_slash_query_stream", api_base_suffix="/?k=1"),
+    _vertex_stream("vertex_base_own_path_query_stream", api_base_suffix="/custom/path?k=1"),
+)
+
 CASES: Final = (
     *REQUEST_CASES,
     *INPUT_VALUE_CASES,
@@ -4264,6 +4384,7 @@ CASES: Final = (
     *AZURE_ERROR_CASES,
     *ANTHROPIC_ON_AZURE_CLAUDE_ERROR_CASES,
     *AZURE_STREAM_CACHE_CASES,
+    *VERTEX_SHAPING_CASES,
 )
 
 
@@ -4794,6 +4915,23 @@ def _cache_entries(cache: Cache) -> tuple[str, ...]:
     return (*keys, *backend.ops) if isinstance(backend, _OrderedMemory) else keys
 
 
+VERTEX_MESSAGES_RULE: Final = catalog.RouteRule(
+    catalog.Route.MESSAGES, Rollout.RUST_REQUIRED, providers=frozenset({"vertex_ai"})
+)
+
+
+@pytest.fixture(autouse=True)
+def vertex_messages_served_natively() -> Iterator[None]:
+    """Routes vertex_ai Messages calls to Rust as the catalog will once the port is cut over, ahead of the
+    catch-all Python rule. A no-op after the cutover."""
+    if VERTEX_MESSAGES_RULE in catalog.RULES:
+        yield
+        return
+    catch_all: Final = catalog.RULES.index(catalog.RouteRule(catalog.Route.MESSAGES, Rollout.PYTHON_ONLY))
+    with rebound(catalog, "RULES", (*catalog.RULES[:catch_all], VERTEX_MESSAGES_RULE, *catalog.RULES[catch_all:])):
+        yield
+
+
 @pytest.fixture
 def parity_server(recording_server: RecordingServer) -> RecordingServer:
     recording_server.expected_requests = None
@@ -4899,7 +5037,7 @@ def _stream_type_reference(case: Case, python: object) -> object:
     writer. Main's agentic and short-circuit paths already hand back the stream Python returns."""
     provider: Final = str(case.kwargs.get("custom_llm_provider") or case.model.partition("/")[0])
     wrapped: Final = frozenset(wrapping.name for wrapping in (*AGENTIC_CASES, *SHORT_CIRCUIT_CASES))
-    if provider == "azure_ai" or case.name in wrapped or python not in _PYTHON_HANDLER_STREAMS:
+    if provider in ("azure_ai", "vertex_ai") or case.name in wrapped or python not in _PYTHON_HANDLER_STREAMS:
         return python
     return "AsyncStream"
 
