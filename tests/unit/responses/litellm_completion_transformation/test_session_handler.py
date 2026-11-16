@@ -1,4 +1,5 @@
 import json
+from collections.abc import Callable, Mapping
 from itertools import chain
 from typing import Final
 from unittest.mock import AsyncMock, patch
@@ -848,15 +849,38 @@ LONG_NAMESPACE_TOOL: Final = {
 }
 
 
-def _stored_long_member_call_turn(response_id: str) -> dict[str, object]:
+def _additional_tools_item(tool: Mapping[str, object]) -> dict[str, object]:
+    return {"type": "additional_tools", "id": "at_1", "role": "developer", "tools": [tool]}
+
+
+SentTools = tuple[list[Mapping[str, object]], list[Mapping[str, object]]]
+
+
+def _sent_as_tools(tool: Mapping[str, object]) -> SentTools:
+    return [tool], []
+
+
+def _sent_in_additional_tools(tool: Mapping[str, object]) -> SentTools:
+    return [], [_additional_tools_item(tool)]
+
+
+SENT_TOOL_PLACEMENTS: Final = pytest.mark.parametrize(
+    "placement", [_sent_as_tools, _sent_in_additional_tools], ids=["tools", "additional_tools"]
+)
+
+
+def _stored_long_member_call_turn(
+    response_id: str, placement: Callable[[Mapping[str, object]], SentTools]
+) -> dict[str, object]:
+    tools, input_items = placement(LONG_NAMESPACE_TOOL)
     return {
         "request_id": response_id,
         "call_type": "aresponses",
         "session_id": "long-member-session",
         "proxy_server_request": {
-            "input": "Fetch document N-42",
+            "input": [*input_items, {"role": "user", "content": "Fetch document N-42"}],
             "model": "gemini-flash",
-            "tools": [LONG_NAMESPACE_TOOL],
+            "tools": tools,
         },
         "response": {
             "id": "chatcmpl-long-member",
@@ -885,22 +909,27 @@ def _stored_long_member_call_turn(response_id: str) -> dict[str, object]:
     }
 
 
+@SENT_TOOL_PLACEMENTS
 async def test_previous_response_replays_a_long_member_call_under_the_name_the_provider_was_sent(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, placement: Callable[[Mapping[str, object]], SentTools]
 ):
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     response_id: Final = ResponsesAPIRequestUtils._build_responses_api_response_id(
         custom_llm_provider="gemini", model_id=None, response_id="chatcmpl-long-member"
     )
-    fake_prisma_client: Final = _FakePrismaClient(results=[[_stored_long_member_call_turn(response_id)]])
+    fake_prisma_client: Final = _FakePrismaClient(results=[[_stored_long_member_call_turn(response_id, placement)]])
+    tools, input_items = placement(LONG_NAMESPACE_TOOL)
 
     with patch("litellm.proxy.proxy_server.prisma_client", fake_prisma_client), respx.mock:
         route: Final = respx.post(url__regex=GEMINI_URL_PATTERN).mock(return_value=_gemini_answer())
         await litellm.aresponses(
             model="gemini/gemini-3.5-flash",
-            input=[{"type": "function_call_output", "call_id": "call_1", "output": "schema for N-42"}],
+            input=[
+                *input_items,
+                {"type": "function_call_output", "call_id": "call_1", "output": "schema for N-42"},
+            ],
             previous_response_id=response_id,
-            tools=[LONG_NAMESPACE_TOOL],
+            tools=tools,
             api_key="test-gemini-key",
         )
         sent_body: Final = json.loads(route.calls.last.request.content)

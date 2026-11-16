@@ -8,6 +8,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.constants import REDACTED_BY_LITELLM, REDACTED_TOOL_CALL_ARGUMENTS_PLACEHOLDER
 from litellm.litellm_core_utils.cold_storage_handler import ColdStorageHandler
 from litellm.litellm_core_utils.tool_fields import with_renamed_tool_calls
+from litellm.responses.additional_tools import hoist_additional_tools
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -48,6 +49,19 @@ _FAILED_TURN_STATUS: Final = "failure"
 
 def _is_a_failed_turn(spend_log: "SpendLogsPayload") -> bool:
     return "status" in spend_log and spend_log["status"] == _FAILED_TURN_STATUS
+
+
+def _stored_request_tools(proxy_server_request: Mapping[str, object] | None) -> Mapping[str, object] | None:
+    """The stored turn's ``tools`` with its ``additional_tools`` items hoisted, as the bridge sent them."""
+    if proxy_server_request is None:
+        return None
+    request_input: Final = proxy_server_request.get("input")
+    if not isinstance(request_input, list):
+        return proxy_server_request
+    top_level_tools: Final = proxy_server_request.get("tools")
+    stored_input: Final = cast(ResponseInputParam, request_input)  # cast-ok: forwarded as sent, as the bridge does
+    hoisted: Final = hoist_additional_tools(stored_input, None).hoisted
+    return {"tools": [*(top_level_tools if isinstance(top_level_tools, list) else ()), *hoisted]}
 
 
 def _stored_instructions(proxy_server_request: Mapping[str, object] | None) -> str | None:
@@ -176,7 +190,7 @@ class ResponsesSessionHandler:
             model_response: Final = with_renamed_tool_calls(
                 ModelResponse(**_response_output),
                 LiteLLMCompletionResponsesConfig.member_chat_names(
-                    LiteLLMCompletionResponsesConfig.request_tools(proxy_server_request_dict)
+                    LiteLLMCompletionResponsesConfig.request_tools(_stored_request_tools(proxy_server_request_dict))
                 ),
             )
             for choice in model_response.choices:
