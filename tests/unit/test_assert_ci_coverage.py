@@ -28,7 +28,7 @@ _spec.loader.exec_module(coverage)
 
 
 def test_combined_shard_collects_client_dependencies_beside_native_route_packages(tmp_path: Path) -> None:
-    workflow: Final = yaml.safe_load((_REPO_ROOT / ".github/workflows/test-unit.yml").read_text())
+    workflow: Final = yaml.safe_load((_REPO_ROOT / ".github/workflows/pr-unit.yml").read_text())
     shards: Final = workflow["jobs"]["unit"]["strategy"]["matrix"]["include"]
     route: Final = tmp_path / "native/responses"
     route.mkdir(parents=True)
