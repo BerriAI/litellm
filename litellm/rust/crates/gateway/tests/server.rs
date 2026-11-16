@@ -485,7 +485,14 @@ async fn a_failed_deployment_is_retried_on_another_deployment_of_its_group() {
 #[case::pre_call_checks("enable_pre_call_checks: true", "enable_pre_call_checks")]
 #[case::tag_filtering("enable_tag_filtering: true", "enable_tag_filtering")]
 #[case::health_check_routing("enable_health_check_routing: true", "enable_health_check_routing")]
-#[case::affinity("model_group_affinity_config: {}", "model_group_affinity_config")]
+#[case::stateful_affinity(
+    "model_group_affinity_config: {public-model: [session_affinity]}",
+    "model_group_affinity_config"
+)]
+#[case::optional_check(
+    "optional_pre_call_checks: [prompt_caching]",
+    "optional_pre_call_checks"
+)]
 #[tokio::test]
 async fn a_router_setting_the_gateway_cannot_serve_fails_the_build(
     #[case] setting: &str,

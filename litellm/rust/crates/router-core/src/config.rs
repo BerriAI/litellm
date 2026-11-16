@@ -9,6 +9,7 @@ use serde::{Deserialize, de::DeserializeOwned};
 use serde_json::{Map, Value};
 
 use crate::{
+    checks::PreCallChecks,
     error::{AttemptError, ConfigError},
     registry::{DeploymentSpec, RoutingGroupSpec},
 };
@@ -225,10 +226,9 @@ pub struct RouterConfig {
     pub enable_health_check_routing: bool,
     /// `enable_tag_filtering`: the host's tag stage narrows the candidates.
     pub enable_tag_filtering: bool,
-    /// `optional_pre_call_checks`: the host's named pre-call checks run on each pick.
-    pub optional_pre_call_checks: Vec<String>,
-    /// `model_group_affinity_config` is set: the host pins a caller to a deployment.
-    pub model_group_affinity: bool,
+    /// `optional_pre_call_checks` and `model_group_affinity_config`: the named pre-call checks
+    /// run on each pick.
+    pub pre_call_checks: PreCallChecks,
     /// How old (seconds) a background health check result may be and still count
     /// (`health_check_staleness_threshold`, else the default interval times its multiplier).
     pub health_check_staleness_threshold: Option<f64>,
@@ -358,11 +358,17 @@ impl RouterConfig {
             enable_pre_call_checks: settings.enable_pre_call_checks.unwrap_or(false),
             enable_health_check_routing: settings.enable_health_check_routing.unwrap_or(false),
             enable_tag_filtering: settings.enable_tag_filtering.unwrap_or(false),
-            optional_pre_call_checks: settings
-                .optional_pre_call_checks
-                .clone()
+            pre_call_checks: PreCallChecks {
+                global: settings
+                    .optional_pre_call_checks
+                    .clone()
+                    .unwrap_or_default(),
+                groups: decoded(
+                    "model_group_affinity_config",
+                    object(&settings.model_group_affinity_config),
+                )?
                 .unwrap_or_default(),
-            model_group_affinity: settings.model_group_affinity_config.is_some(),
+            },
             enable_weighted_failover: settings.enable_weighted_failover.unwrap_or(false),
             fallback_on_unsupported_params: settings.fallback_on_unsupported_params,
             ..Self::default()
@@ -488,7 +494,7 @@ mod tests {
             "fallbacks": [{"a": ["b"]}],
             "model_group_alias": {"gpt": {"model": "a", "hidden": true}},
             "enable_tag_filtering": true,
-            "model_group_affinity_config": {},
+            "model_group_affinity_config": {"a": ["responses_api_deployment_check"]},
         })))
         .unwrap();
         assert_eq!(
@@ -499,9 +505,18 @@ mod tests {
                     .and_then(|policy| policy.RateLimitErrorRetries),
                 config.routing_groups.len(),
                 config.enable_tag_filtering,
-                config.model_group_affinity,
+                config.pre_call_checks.groups,
             ),
-            (RoutingStrategy::LeastBusy, Some(1), 1, true, true)
+            (
+                RoutingStrategy::LeastBusy,
+                Some(1),
+                1,
+                true,
+                BTreeMap::from([(
+                    "a".to_owned(),
+                    vec!["responses_api_deployment_check".to_owned()]
+                )])
+            )
         );
         assert_eq!(
             (

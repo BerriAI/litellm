@@ -274,6 +274,7 @@ pub(crate) fn parse_request(value: Value, model: Option<&str>) -> Result<RouterR
         max_fallbacks: spec.max_fallbacks,
         mock_failure: spec.mock_failure,
         cooldown_time: spec.cooldown_time,
+        affinity: Default::default(),
         health_check_probe: spec.health_check_probe.unwrap_or(false),
         outcome_callbacks: spec.outcome_callbacks.unwrap_or_default(),
     })
