@@ -222,6 +222,25 @@ def test_request_is_billed_at_the_reported_list_cost(gateway: Gateway, path: str
         assert _logged_spend(response.headers["x-litellm-call-id"]) == _approx(_LIST_COST)
 
 
+def test_chat_reasoning_preserves_reported_list_cost_guard(gateway: Gateway) -> None:
+    def respond(request: Request) -> Reply:
+        assert request.target.endswith("/chat/completions"), request.target
+        return _respond(request)
+
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        deployment: Final = scenario.model(
+            model="opencode_go/glm-5.3", api_base=wire.url, api_key="synthetic-go-key", drop_params=True
+        )
+        response: Final = gateway.request(
+            "POST", "/v1/chat/completions",
+            {**_body("/v1/chat/completions", deployment, False), "reasoning_effort": "high"},
+        )
+        assert response.status_code == 200, response.text
+        assert "ok" in response.text, response.text
+        assert float(response.headers["x-litellm-response-cost"]) == _approx(_LIST_COST)
+        assert _logged_spend(response.headers["x-litellm-call-id"]) == _approx(_LIST_COST)
+
+
 @pytest.mark.parametrize(
     ("model", "stream"),
     (
