@@ -354,3 +354,46 @@ def test_test_connection_sets_deployment_state_and_ignores_caller_metadata(rig: 
     }
     assert not tuple(sample for sample in scrape(rig.gateway) if _FORGED_PROBE_KEY in sample.labels.values())
     assert _FORGED_PROBE_KEY not in json.dumps(rig.logged())
+
+
+@pytest.mark.parametrize(
+    "forgery",
+    [
+        pytest.param({"litellm_params": {"metadata": {"health_check_deployment_id": _STANDBY_ID}}}, id="metadata"),
+        pytest.param(
+            {"model_info": {"health_check_params": {"litellm_metadata": {"health_check_deployment_id": _STANDBY_ID}}}},
+            id="health_check_params.litellm_metadata",
+        ),
+        pytest.param(
+            {"model_info": {"health_check_params": {"metadata": {"health_check_deployment_id": _STANDBY_ID}}}},
+            id="health_check_params.metadata",
+        ),
+    ],
+)
+def test_test_connection_cannot_count_under_another_deployment(rig: _Rig, forgery: dict[str, JsonValue]) -> None:
+    model: Final = f"forging-{uuid.uuid4().hex[:8]}"
+    params: Final[dict[str, JsonValue]] = {
+        "model": f"openai/{model}",
+        "api_key": "sk-fixture",
+        "api_base": f"{rig.upstream.url}/v1",
+    }
+    forged_params: Final = forgery.get("litellm_params", {})
+    assert isinstance(forged_params, dict)
+    response: Final = rig.gateway.request(
+        "POST",
+        "/health/test_connection",
+        {"mode": "chat", "model_info": forgery.get("model_info", {}), "litellm_params": {**params, **forged_params}},
+    )
+    assert response.status_code == 200, response.text
+    events: Final = eventually(
+        lambda: tuple(event for event in _probe_payloads(rig) if model in json.dumps(event.get("model"))),
+        bool,
+        seconds=30,
+    )
+    assert [event.get("deployment_id") for event in events] == [None]
+    counted: Final = tuple(
+        dict(sample.labels)
+        for sample in scrape(rig.gateway)
+        if model in sample.labels.get("litellm_model_name", "") and sample.labels.get("model_id")
+    )
+    assert not counted, counted

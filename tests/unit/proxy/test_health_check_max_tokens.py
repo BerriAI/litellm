@@ -1680,23 +1680,20 @@ class _CallRecorder(CustomLogger):
     def __init__(self) -> None:
         super().__init__()
         self.logged: list[dict[str, object]] = []  # mutable-ok: the logging worker appends each call it delivers
+        self.delivered: Final = asyncio.Event()
 
     async def async_log_success_event(
         self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
     ) -> None:
         self.logged.append(kwargs)
+        self.delivered.set()
 
     async def async_log_failure_event(
         self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
     ) -> None:
         self.logged.append(kwargs)
+        self.delivered.set()
 
-    async def only_call(self) -> dict[str, object]:
-        for _ in range(500):
-            if self.logged:
-                return self.logged[0]
-            await asyncio.sleep(0.01)
-        pytest.fail("no call was logged")
 
 
 @dataclass(frozen=True, slots=True)
@@ -1715,11 +1712,8 @@ class _Observed:
         return {sample.labels["model_id"]: sample.value for sample in samples}
 
     async def logged_payload(self) -> dict[str, object]:
-        call: Final = await self.calls.only_call()
-        for _ in range(500):
-            if self.series("litellm_deployment_total_requests_total"):
-                break
-            await asyncio.sleep(0.01)
+        await asyncio.wait_for(self.calls.delivered.wait(), timeout=30)
+        (call,) = self.calls.logged
         return cast(dict[str, object], call["standard_logging_object"])
 
 
