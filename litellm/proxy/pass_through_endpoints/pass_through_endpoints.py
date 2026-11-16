@@ -160,6 +160,7 @@ from litellm.proxy.litellm_pre_call_utils import (  # noqa: F401  # legacy modul
     resolve_customer_request_usage,
     strip_client_guardrail_information,
 )
+from litellm.proxy.pass_through_endpoints.common_utils import pass_through_auth_enforced
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.proxy.route_priority import (
     builtin_pass_through_routes_first,
@@ -4467,9 +4468,8 @@ async def _register_pass_through_endpoint(
     forward_headers: Final = endpoint_data.get("forward_headers")
     merge_query_params: Final = endpoint_data.get("merge_query_params")
     default_query_params: Final = endpoint_data.get("default_query_params")
-    auth: Final[bool | str | None] = endpoint_data.get("auth")
     dependencies = None
-    auth_enforced: Final = auth is not None and str(auth).lower() == "true"
+    auth_enforced: Final = pass_through_auth_enforced(endpoint_data)
 
     if auth_enforced:
         # Authentication on a pass-through endpoint used to be enterprise-only.
@@ -4512,7 +4512,7 @@ async def _register_pass_through_endpoint(
     visited_endpoints.add(f"{endpoint_id}:exact:{path}:{methods_str}")
 
     if endpoint_data.get("include_subpath", False) is True:
-        if auth is not None and str(auth).lower() == "true":
+        if auth_enforced:
             wildcard_path: Final = path.rstrip("/") + "/*"
             if wildcard_path not in LiteLLMRoutes.openai_routes.value:
                 LiteLLMRoutes.openai_routes.value.append(wildcard_path)
