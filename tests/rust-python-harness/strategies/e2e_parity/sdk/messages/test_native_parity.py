@@ -4405,6 +4405,12 @@ VERTEX_SHAPING_CASES: Final = (
         _vertex(extra_headers={"anthropic-version": "latest"}, drop_params=True),
         model=VERTEX_CLAUDE,
     ),
+    Case(
+        "vertex_always_on_thinking_disabled_dropped",
+        _vertex(thinking={"type": "disabled"}),
+        model="vertex_ai/claude-sonnet-5-5@default",
+        warned=True,
+    ),
     Case("vertex_base_version_doubled", _vertex(api_base_suffix="/v1"), model=VERTEX_CLAUDE),
     Case("vertex_base_beta_version_doubled", _vertex(api_base_suffix="/v1beta1/"), model=VERTEX_CLAUDE),
     Case("vertex_base_query", _vertex(api_base_suffix="?k=1"), model=VERTEX_CLAUDE),
@@ -4612,11 +4618,13 @@ VERTEX_AUTH_CASES: Final = tuple(
             "vertex_ai_no_project_after_the_login",
             _vertex_login(vertex_credentials=dict(_service_account("e1-no-project"))),
             upstream=(),
+            warned=True,
         ),
         Case(
             "vertex_ai_numeric_project_after_the_login",
             _vertex_login(vertex_credentials=dict(_service_account("e1-numeric-project", project_id=7))),
             upstream=(),
+            warned=True,
         ),
         Case(
             "vertex_ai_invalid_location_after_the_login",
