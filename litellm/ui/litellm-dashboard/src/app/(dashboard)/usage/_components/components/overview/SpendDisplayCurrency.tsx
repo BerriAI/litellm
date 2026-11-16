@@ -23,11 +23,10 @@ export default function SpendDisplayCurrency({ usdSpend, loading }: SpendDisplay
   );
   const codes = Object.keys(usable?.usd_per_unit ?? { USD: 1 }).sort();
   const estimate =
-    usable === undefined || currency === "USD"
-      ? null
-      : estimatedSpend(usdSpend, usable.usd_per_unit, usable.rate_date, currency, new Date());
+    usable === undefined || currency === "USD" ? null : estimatedSpend(usdSpend, usable, currency, new Date());
   const shown = estimate === null ? "USD" : currency;
-  const unavailable = rates.isError || (currency !== "USD" && estimate === null && !rates.isFetching);
+  const estimateMissing = currency !== "USD" && estimate === null;
+  const unavailable = rates.isError || (estimateMissing && !rates.isFetching);
   return (
     <div className="mt-1 grid gap-1 text-xs leading-4 text-muted-foreground">
       <div className="flex items-center gap-2">

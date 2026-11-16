@@ -81,7 +81,10 @@ describe("SpendDisplayCurrency", () => {
 
   it("falls back to USD when a refetch fails after another currency was chosen", async () => {
     const user = userEvent.setup();
-    const fetch = vi.fn().mockResolvedValueOnce(json(RATES)).mockResolvedValue(json({ detail: "unavailable" }, 503));
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(json(RATES))
+      .mockResolvedValue(json({ detail: "unavailable" }, 503));
     vi.stubGlobal("fetch", fetch);
     const { client } = renderFresh(<SpendDisplayCurrency usdSpend={42.5} loading={false} />);
     await chooseSelectOption(user, trigger(), /^EUR/);
@@ -89,9 +92,9 @@ describe("SpendDisplayCurrency", () => {
 
     await act(() => client.invalidateQueries({ queryKey: referenceRatesKeys.all }));
 
+    expect(await screen.findByText("Reference rates are unavailable, spend is shown in USD")).toBeVisible();
     expect(screen.queryByText(/estimated/)).not.toBeInTheDocument();
     expect(trigger()).toHaveTextContent("USD");
-    expect(screen.getByText("Reference rates are unavailable, spend is shown in USD")).toBeVisible();
     expect(fetch).toHaveBeenCalledTimes(2);
   });
 

@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, type UseQueryOptions } from "@tanstack/react-query";
 import { backgroundFetchClient } from "@/lib/http/api";
 import type { components } from "@/lib/http/schema";
 import { createQueryKeys } from "../common/queryKeysFactory";
@@ -15,12 +15,14 @@ export const fetchReferenceRates = async (signal: AbortSignal): Promise<Referenc
   return data;
 };
 
-export const useReferenceRates = (enabled: boolean) =>
-  useQuery({
+export const useReferenceRates = (enabled: boolean) => {
+  const options: UseQueryOptions<ReferenceExchangeRates> = {
     queryKey: referenceRatesKeys.all,
     queryFn: ({ signal }) => fetchReferenceRates(signal),
     enabled,
     staleTime: REFERENCE_RATES_STALE_MS,
     refetchInterval: REFERENCE_RATES_STALE_MS,
     retry: false,
-  });
+  };
+  return useQuery(options);
+};
