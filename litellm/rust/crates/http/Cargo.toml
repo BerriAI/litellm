@@ -9,6 +9,8 @@ repository.workspace = true
 test-support = []
 
 [dependencies]
+litellm-python-compat.workspace = true
+litellm-env.workspace = true
 http.workspace = true
 litellm-core-utils.workspace = true
 litellm-error.workspace = true

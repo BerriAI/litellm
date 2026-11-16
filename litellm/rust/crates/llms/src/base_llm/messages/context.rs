@@ -1,4 +1,4 @@
-use litellm_core_utils::settings::{Lookup, ProcessEnvironment};
+use litellm_env::{Lookup, ProcessEnvironment};
 use litellm_llms_types::formats::messages::EffortLevel;
 use serde::{Deserialize, Serialize};
 
