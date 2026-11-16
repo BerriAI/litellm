@@ -2456,6 +2456,38 @@ def test_marengo_3_extra_body_settings_join_the_generated_input_without_adding_c
     assert json.loads(route.calls.last.request.read()) == expected_body
 
 
+def test_marengo_3_async_extra_body_cannot_add_another_input_object_to_the_model_input(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = respx_mock.post("https://bedrock-runtime.us-east-1.amazonaws.com/async-invoke").mock(
+        return_value=httpx.Response(200, json={"invocationArn": "arn:aws:bedrock:us-east-1:1:async-invoke/abc"})
+    )
+    arguments: Final = {
+        "model": "bedrock/async_invoke/us.twelvelabs.marengo-embed-3-0-v1:0",
+        "input": ["s3://bucket/scanned.mp4"],
+        "input_type": "video",
+        "output_s3_uri": "s3://bucket/out/",
+        "bucketOwner": "123456789012",
+        "api_key": "test-bearer-token",
+        "aws_region_name": "us-east-1",
+    }
+
+    litellm.embedding(**arguments)
+    generated_model_input: Final = json.loads(route.calls.last.request.read())["modelInput"]
+    litellm.embedding(
+        **arguments,
+        extra_body={
+            "modelInput": {
+                "multi_input": {"inputText": "text the guardrails never saw"},
+                "text_image": {"inputText": "text the guardrails never saw"},
+                "extraOption": 1,
+            }
+        },
+    )
+
+    assert json.loads(route.calls.last.request.read())["modelInput"] == {**generated_model_input, "extraOption": 1}
+
+
 def test_bedrock_embedding_signs_the_body_it_sends(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ) -> None:

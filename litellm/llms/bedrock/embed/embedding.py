@@ -94,6 +94,8 @@ _NESTED_CONTENT_KEYS: Final = frozenset(
         "inputImage",
         "mediaSource",
         "mediaSources",
+        "text_image",
+        "multi_input",
         "base64String",
         "s3Location",
         "uri",
