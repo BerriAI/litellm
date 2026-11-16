@@ -5,8 +5,8 @@ use std::sync::LazyLock;
 use litellm_auth::{AwsParams, CredentialPlacement};
 use litellm_secret_value::SecretValue;
 
-use litellm_auth_aws::AwsCredentialSource;
 use litellm_auth_aws::bedrock_model_id_and_region;
+use litellm_auth_aws::{AwsCredentialSource, CallerSigningHeaders};
 use litellm_core_utils::settings::resolve_non_empty;
 use litellm_http::request::{with_header, without_headers};
 use litellm_llms_types::{
@@ -102,6 +102,7 @@ impl BaseMessagesConfig for BedrockMantleAnthropicMessagesConfig {
                 region: mantle_region(params.api_base.as_deref(), model, params, env)?,
                 service: "bedrock",
                 credentials: Box::new(AwsCredentialSource::from_params(&params.aws, env)),
+                caller_headers: CallerSigningHeaders::Botocore,
             },
         };
         Ok(ValidatedEnvironment { headers, auth })

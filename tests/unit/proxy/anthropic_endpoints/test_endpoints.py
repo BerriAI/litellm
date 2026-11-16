@@ -1223,17 +1223,33 @@ def _count_api_expecting(sent_profile_id: str | None) -> Callable[[httpx.Request
         "caller_oauth_without_an_id_gets_no_pin",
     ],
 )
+@pytest.mark.parametrize("configured_api_key", [False, True], ids=["caller_credential", "configured_credential"])
 def test_count_tokens_sends_the_user_profile_id_inference_would_send(
     monkeypatch: pytest.MonkeyPatch,
     key_metadata: Mapping[str, str],
     client_headers: Mapping[str, str],
     sent_profile_id: str | None,
+    configured_api_key: bool,
 ) -> None:
+    for name in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_BASE", "ANTHROPIC_BASE_URL"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(litellm, "anthropic_key", None)
+    monkeypatch.setattr(litellm, "api_key", None)
+    expected_profile: Final = (
+        key_metadata.get("anthropic_user_profile_id")
+        if configured_api_key and "authorization" in client_headers
+        else sent_profile_id
+    )
     response: Final = _count_on_claude(
         monkeypatch,
-        _count_api_expecting(sent_profile_id),
+        _count_api_expecting(expected_profile),
         client_headers,
         caller=UserAPIKeyAuth(metadata=dict(key_metadata)),
+        claude={
+            name: value
+            for name, value in _ANTHROPIC_CLAUDE.items()
+            if configured_api_key or "authorization" not in client_headers or name != "api_key"
+        },
     )
 
     assert response.json() == {"input_tokens": 77, "litellm_count_source": "provider"}, response.text

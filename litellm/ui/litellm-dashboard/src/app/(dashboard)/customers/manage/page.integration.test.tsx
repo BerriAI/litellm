@@ -117,6 +117,29 @@ function BrowserNavigationProbe() {
 }
 
 describe("customer hierarchy management", () => {
+  it.each(["teams", "members"])(
+    "requests %s budget sorting before pagination and stores it in the URL",
+    async (kind) => {
+      const onUrlUpdate = vi.fn();
+      const options = { searchParams: `?org=org-1&tab=${kind}&hierarchyPage=2&source=portal`, onUrlUpdate };
+      renderWithProviders(<CustomerHierarchyManager />, options);
+      await screen.findByRole("button", { name: kind === "teams" ? "Operations" : "Member Two" }, { timeout: 10_000 });
+      const table = screen.getByRole("table", { name: kind === "teams" ? "Customer teams" : "Customer members" });
+      const sort = within(table).getByRole("button", { name: "Spend limit (USD)" });
+      fireEvent.click(sort);
+      await waitFor(() =>
+        expect(onUrlUpdate).toHaveBeenLastCalledWith(
+          expect.objectContaining({ queryString: `?org=org-1&tab=${kind}&source=portal&budgetSort=budget_asc` }),
+        ),
+      );
+      const listRequests = () => requestedUrls().filter((url) => url.pathname === `/management/v1/customer_${kind}`);
+      await waitFor(() => expect(listRequests().at(-1)?.searchParams.get("sort")).toBe("budget_asc"));
+      expect(listRequests().at(-1)?.searchParams.get("page")).toBe("1");
+      fireEvent.click(within(screen.getByRole("table")).getByRole("button", { name: "Spend limit (USD)" }));
+      await waitFor(() => expect(listRequests().at(-1)?.searchParams.get("sort")).toBe("budget_desc"));
+    },
+  );
+
   it.each(["", "Member One"])(
     "moves a member through its row menu with search %j without editing budgets",
     async (search) => {

@@ -258,6 +258,8 @@ checksum = "47712fde1909402600ccfbb26e47d482d2e58bb9e9e603d9f17e67cc435a6319"
 dependencies = [
  "aws-credential-types",
  "aws-runtime",
+ "aws-sdk-sso",
+ "aws-sdk-ssooidc",
  "aws-sdk-sts",
  "aws-smithy-async",
  "aws-smithy-http",
@@ -269,11 +271,14 @@ dependencies = [
  "aws-types",
  "bytes",
  "fastrand",
+ "hex",
  "http 1.4.2",
+ "sha1 0.10.7",
  "time",
  "tokio",
  "tracing",
  "url",
+ "zeroize",
 ]
 
 [[package]]
@@ -407,6 +412,58 @@ name = "aws-sdk-secretsmanager"
 version = "1.117.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2d32d781b34ab083e0dc54b4c68fc5e89ddf35e97d97bdcb9386d21325c14767"
+dependencies = [
+ "arc-swap",
+ "aws-credential-types",
+ "aws-runtime",
+ "aws-smithy-async",
+ "aws-smithy-http",
+ "aws-smithy-json",
+ "aws-smithy-observability",
+ "aws-smithy-runtime",
+ "aws-smithy-runtime-api",
+ "aws-smithy-schema",
+ "aws-smithy-types",
+ "aws-types",
+ "bytes",
+ "fastrand",
+ "http 0.2.12",
+ "http 1.4.2",
+ "regex-lite",
+ "tracing",
+]
+
+[[package]]
+name = "aws-sdk-sso"
+version = "1.111.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "65700d75f6da78c89a61a49f1539979400a4609d3329376b1dc2133d7a1b2b90"
+dependencies = [
+ "arc-swap",
+ "aws-credential-types",
+ "aws-runtime",
+ "aws-smithy-async",
+ "aws-smithy-http",
+ "aws-smithy-json",
+ "aws-smithy-observability",
+ "aws-smithy-runtime",
+ "aws-smithy-runtime-api",
+ "aws-smithy-schema",
+ "aws-smithy-types",
+ "aws-types",
+ "bytes",
+ "fastrand",
+ "http 0.2.12",
+ "http 1.4.2",
+ "regex-lite",
+ "tracing",
+]
+
+[[package]]
+name = "aws-sdk-ssooidc"
+version = "1.113.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eb1147c254af7b6cee3ace90ae7da6f21366ce9a9b899035fa8a0fdf586eb75a"
 dependencies = [
  "arc-swap",
  "aws-credential-types",
@@ -3455,6 +3512,7 @@ dependencies = [
  "aws-smithy-types",
  "aws-types",
  "bytes",
+ "chrono",
  "futures-util",
  "litellm-auth-types",
  "litellm-error",
@@ -3467,6 +3525,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "tempfile",
  "thiserror 2.0.19",
  "tokio",
  "url",
@@ -3706,6 +3765,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "litellm-callbacks-budgets"
+version = "0.1.0"
+dependencies = [
+ "litellm-callbacks",
+ "litellm-coroutine",
+ "litellm-python-compat",
+ "litellm-redis-store",
+ "litellm-tracing",
+ "rstest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "litellm-callbacks-legacy-python"
 version = "0.1.0"
 dependencies = [
@@ -3779,17 +3854,31 @@ dependencies = [
 name = "litellm-config"
 version = "0.1.0"
 dependencies = [
- "litellm-error",
+ "litellm-python-compat",
  "litellm-router-types",
  "litellm-secret-value",
+ "litellm-starlette",
  "rstest",
  "serde",
  "serde_json",
+ "serde_with",
  "serde_yaml_ng",
  "strum",
- "tempfile",
  "thiserror 2.0.19",
  "veil",
+]
+
+[[package]]
+name = "litellm-config-load"
+version = "0.1.0"
+dependencies = [
+ "litellm-config",
+ "litellm-error",
+ "rstest",
+ "serde",
+ "serde_yaml_ng",
+ "tempfile",
+ "thiserror 2.0.19",
 ]
 
 [[package]]
@@ -3872,6 +3961,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "litellm-fnmatch"
+version = "0.1.0"
+dependencies = [
+ "rstest",
+]
+
+[[package]]
 name = "litellm-framer"
 version = "0.1.0"
 dependencies = [
@@ -3897,6 +3993,7 @@ dependencies = [
  "http-body-util",
  "litellm-circuit-breaker",
  "litellm-config",
+ "litellm-config-load",
  "litellm-core-utils",
  "litellm-error",
  "litellm-gateway-auth",
@@ -3955,6 +4052,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "litellm-gateway-auth-core"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "http 1.4.2",
+ "jsonwebtoken",
+ "litellm-config",
+ "litellm-fnmatch",
+ "litellm-secret-value",
+ "litellm-starlette",
+ "rstest",
+ "serde_json",
+ "strum",
+ "thiserror 2.0.19",
+]
+
+[[package]]
 name = "litellm-gateway-forward"
 version = "0.1.0"
 dependencies = [
@@ -3988,6 +4102,7 @@ dependencies = [
  "litellm-auth",
  "litellm-cache-memory",
  "litellm-cache-response",
+ "litellm-core-utils",
  "litellm-error",
  "litellm-gateway-auth",
  "litellm-host",
@@ -4253,6 +4368,7 @@ dependencies = [
  "litellm-inference-testing",
  "litellm-llms",
  "litellm-llms-types",
+ "litellm-python-compat",
  "litellm-router-types",
  "litellm-secret-value",
  "litellm-secrets",
@@ -4375,6 +4491,7 @@ dependencies = [
  "aws-smithy-types",
  "base64 0.22.1",
  "bytes",
+ "crc32fast",
  "data-url",
  "fancy-regex 0.19.2",
  "futures-util",
@@ -4404,6 +4521,7 @@ dependencies = [
  "thiserror 2.0.19",
  "time",
  "tokio",
+ "tokio-util",
  "url",
 ]
 
@@ -4472,12 +4590,14 @@ name = "litellm-python-bridge"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "aws-credential-types",
  "aws-sdk-secretsmanager",
  "azure_core",
  "bytes",
  "criterion",
  "fancy-regex 0.19.2",
  "futures-util",
+ "http 1.4.2",
  "indexmap 2.14.0",
  "litellm-auth",
  "litellm-auth-aws",
@@ -4485,13 +4605,16 @@ dependencies = [
  "litellm-cache",
  "litellm-cache-response",
  "litellm-callbacks",
+ "litellm-callbacks-budgets",
  "litellm-callbacks-legacy-python",
  "litellm-callbacks-python",
  "litellm-callbacks-s3-log",
  "litellm-circuit-breaker",
+ "litellm-config",
  "litellm-core-utils",
  "litellm-db",
  "litellm-error",
+ "litellm-gateway-auth-core",
  "litellm-host",
  "litellm-host-python",
  "litellm-http",
@@ -4521,6 +4644,7 @@ dependencies = [
  "litellm-storage-clickhouse",
  "litellm-token-counter",
  "litellm-tracing",
+ "parking_lot",
  "prost",
  "pyo3",
  "pyo3-async-runtimes",
@@ -4553,6 +4677,7 @@ dependencies = [
  "serde",
  "serde-pickle",
  "serde_json",
+ "serde_with",
  "thiserror 2.0.19",
 ]
 
@@ -4936,6 +5061,15 @@ dependencies = [
  "tokio",
  "uuid",
  "wiremock",
+]
+
+[[package]]
+name = "litellm-starlette"
+version = "0.1.0"
+dependencies = [
+ "rstest",
+ "serde",
+ "strum",
 ]
 
 [[package]]

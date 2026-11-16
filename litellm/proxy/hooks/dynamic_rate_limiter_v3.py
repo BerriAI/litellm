@@ -1374,16 +1374,9 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
                 llm_provider=llm_provider,
             )
 
-        # If priority is NOT enforced (saturation below threshold) but
-        # priority_descriptors exist, increment them for tracking only — no
-        # check, no rollback. This matches the prior tracking semantics.
-        #
-        # Using the non-atomic should_rate_limit (instead of
-        # atomic_check_and_increment_by_n) is intentional here: we don't want
-        # to enforce the limit, we only want to bump the counter so the
-        # priority allocation has accurate usage when it later becomes
-        # enforced. The increment-then-check semantics of should_rate_limit
-        # are fine because we ignore the OVER_LIMIT response.
+        # Below saturation the priority counters are tracked, not enforced, so an
+        # OVER_LIMIT here is ignored. The atomic call adds one request and no
+        # tokens, real usage lands on the token counter at settlement.
         for kind in BORROWER_KINDS:
             state = request_stash.borrowing_shares[kind]
             reservation = reservations.get(kind, 0)
@@ -1402,13 +1395,11 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         )
         if tightest_held is not None:
             self._cap_admitted_output(tightest_held[1], tightest_held[2], data, call_type)
-        if priority_descriptors and share is not None and not should_enforce_priority:
-            get_or_create_request_stash().rate_limit_response = atomic_response
-        elif priority_descriptors and not should_enforce_priority:
-            priority_tracking_response: Final = await self.v3_limiter.should_rate_limit(
-                descriptors=priority_descriptors,
+        if priority_descriptors and not should_enforce_priority:
+            priority_tracking_response: Final = await self.v3_limiter.atomic_check_and_increment_by_n(
+                descriptors=list(priority_descriptors),
+                increments=[per_request_increment for _ in priority_descriptors],
                 parent_otel_span=user_api_key_dict.parent_otel_span,
-                read_only=False,
             )
             get_or_create_request_stash().rate_limit_response = RateLimitResponse(
                 overall_code=atomic_response["overall_code"],

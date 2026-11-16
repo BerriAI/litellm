@@ -35,6 +35,7 @@ from litellm.models.team import BudgetLimitEntry
 from litellm.proxy._types import *
 from litellm.proxy.auth.auth_checks import (
     delete_cache_key_objects,
+    escape_ilike,
     evict_budget_windows_absent_marker,
     forget_missing_user,
     get_jwt_key_mapping_cache_keys_for_tokens,
@@ -305,9 +306,10 @@ async def _check_duplicate_user_field(
             raise Exception("Database not connected")
 
         value: Final = field_value.strip()
-        where_clause: Final = {field_name: {"equals": value}}
-        if case_insensitive:
-            where_clause[field_name]["mode"] = "insensitive"
+        condition: Final = (
+            {"equals": escape_ilike(value), "mode": "insensitive"} if case_insensitive else {"equals": value}
+        )
+        where_clause: Final = {field_name: condition}
 
         existing_user: Final[object] = await UserRepository(prisma_client).table.find_first(where=where_clause)
 
@@ -495,17 +497,15 @@ async def _memberships_on_team_member_budget(
     if not capped_team_ids:
         return memberships
     team_rows: Final = await find_many_in(_team_table(prisma_client), "team_id", capped_team_ids)
-    budgeted_team_ids: Final = frozenset(row.team_id for row in team_rows if _new_members_share_the_team_budget(row))
+    budgeted_team_ids: Final = frozenset(
+        row.team_id
+        for row in team_rows
+        if isinstance(row.metadata, dict)
+        and _TEAM_METADATA_ADAPTER.validate_python(row.metadata).get("team_member_budget_id") is not None
+    )
     return tuple(
         m.model_copy(update={"max_budget_in_team": None}) if m.team_id in budgeted_team_ids else m for m in memberships
     )
-
-
-def _new_members_share_the_team_budget(team_row: "prisma_models.LiteLLM_TeamTable") -> bool:
-    """default_team_member_models gives each new member a private budget, which must then keep its own cap."""
-    if team_row.default_team_member_models or not isinstance(team_row.metadata, dict):
-        return False
-    return _TEAM_METADATA_ADAPTER.validate_python(team_row.metadata).get("team_member_budget_id") is not None
 
 
 def _default_team_membership(team: str | NewUserRequestTeam) -> NewUserRequestTeam:

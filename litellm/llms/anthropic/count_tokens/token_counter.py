@@ -37,9 +37,15 @@ anthropic_count_tokens_handler: Final = AnthropicCountTokensHandler()
 class AnthropicTokenCounter(BaseTokenCounter):
     """Token counter implementation for Anthropic provider using the CountTokens API."""
 
-    def __init__(self, client_oauth_token: str | None = None, user_profile_id: str | None = None) -> None:
+    def __init__(
+        self,
+        client_oauth_token: str | None = None,
+        user_profile_id: str | None = None,
+        client_user_profile_id: str | None = None,
+    ) -> None:
         self.client_oauth_token: Final = client_oauth_token
         self.user_profile_headers: Final = user_profile_id_headers(user_profile_id)
+        self.client_user_profile_headers: Final = user_profile_id_headers(client_user_profile_id)
 
     def should_use_token_counting_api(
         self,
@@ -169,7 +175,14 @@ class AnthropicTokenCounter(BaseTokenCounter):
             result: Final = await anthropic_count_tokens_handler.handle_count_tokens_request(
                 model=model_to_use,
                 messages=[dict(message) for message in messages],
-                auth_header={**auth_header, **self.user_profile_headers},
+                auth_header={
+                    **auth_header,
+                    **(
+                        self.client_user_profile_headers
+                        if configured_auth_header is None and self.client_oauth_token is not None
+                        else self.user_profile_headers
+                    ),
+                },
                 api_base=api_base,
                 tools=None if tools is None else [dict(tool) for tool in tools],
                 system=system,

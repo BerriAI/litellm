@@ -11,7 +11,7 @@ pub enum Error {
     #[error(transparent)]
     Mcp(#[from] litellm_gateway_mcp::ConnectError),
     #[error(transparent)]
-    Config(#[from] litellm_config::Error),
+    Config(#[from] litellm_config_load::Error),
     #[error(transparent)]
     Redis(#[from] litellm_redis_resolve::Error),
     #[error("Redis setting {setting} is not plain data")]

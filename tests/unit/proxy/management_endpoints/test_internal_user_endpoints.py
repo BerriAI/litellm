@@ -47,6 +47,7 @@ from litellm.proxy.utils import PrismaClient
 from litellm.types.proxy.auth.auth_checks import UserNotFoundError
 from litellm.types.proxy.common_proxy_errors import CommonProxyErrors
 from litellm.types.proxy.management_endpoints.internal_user_endpoints import InsensitiveContains
+from tests.unit.proxy.auth._user_table import UserTable, prisma_over, user_row
 from tests.unit.proxy.management_endpoints.jwt_key_mapping_doubles import (
     CascadingJWTMappingTable,
     JWTMappingRow,
@@ -1683,9 +1684,7 @@ async def test_new_user_default_teams_flow(mocker):
     mock_prisma_client.db.litellm_teamtable.find_many = mocker.AsyncMock(
         return_value=[
             SimpleNamespace(
-                team_id="96fed65b-0182-4ff4-8429-2721cd7d42af",
-                metadata={"team_member_budget_id": "team-budget"},
-                default_team_member_models=[],
+                team_id="96fed65b-0182-4ff4-8429-2721cd7d42af", metadata={"team_member_budget_id": "team-budget"}
             )
         ]
     )
@@ -1807,6 +1806,7 @@ async def test_new_user_clears_recent_missing_user_lookup(mocker: MockerFixture)
     prisma_client.db.litellm_usertable.count = mocker.AsyncMock(return_value=1)
     prisma_client.db.litellm_usertable.find_unique = mocker.AsyncMock(return_value=None)
     prisma_client.db.litellm_usertable.find_first = mocker.AsyncMock(return_value=None)
+    prisma_client.writer_db.litellm_usertable.find_unique = mocker.AsyncMock(return_value=None)
     user_api_key_cache: Final = UserApiKeyCache()
     mocker.patch("litellm.proxy.proxy_server.prisma_client", prisma_client)
     license_check: Final = mocker.MagicMock()
@@ -2050,6 +2050,26 @@ async def test_check_duplicate_user_email_case_insensitive(mocker):
 
     # Test Case 3: None email should not cause issues
     await _check_duplicate_user_email(None, mock_prisma_client)  # Should not raise exception
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "new_email, is_duplicate",
+    [("ann_lee@example.com", False), ("ann%@example.com", False), ("ANN.LEE@example.com", True)],
+)
+async def test_check_duplicate_user_email_matches_the_whole_address_exactly(new_email: str, is_duplicate: bool) -> None:
+    from fastapi import HTTPException
+
+    from litellm.proxy.management_endpoints.internal_user_endpoints import _check_duplicate_user_email
+
+    table: Final = UserTable(user_row("ann", "ann.lee@example.com"))
+
+    if is_duplicate:
+        with pytest.raises(HTTPException) as exc_info:
+            await _check_duplicate_user_email(new_email, prisma_over(table))
+        assert exc_info.value.status_code == 409
+    else:
+        assert await _check_duplicate_user_email(new_email, prisma_over(table)) is None
 
 
 @pytest.mark.asyncio
@@ -4692,18 +4712,11 @@ async def test_resolve_user_email_metadata_skips_db_when_no_user_ids(mocker):
 
 
 @pytest.mark.parametrize(
-    ("teams_are_defaults", "team_metadata", "default_team_member_models", "expected_max_budget_in_team"),
+    ("teams_are_defaults", "team_metadata", "expected_max_budget_in_team"),
     [
-        pytest.param(True, {"team_member_budget_id": "team-budget"}, [], None, id="default-team-with-a-member-budget"),
-        pytest.param(True, {}, [], 25.0, id="default-team-without-a-member-budget"),
-        pytest.param(
-            True,
-            {"team_member_budget_id": "team-budget"},
-            ["gpt-5"],
-            25.0,
-            id="default-team-whose-member-models-give-each-member-a-private-budget",
-        ),
-        pytest.param(False, {"team_member_budget_id": "team-budget"}, [], 25.0, id="team-named-in-the-request"),
+        pytest.param(True, {"team_member_budget_id": "team-budget"}, None, id="default-team-with-a-member-budget"),
+        pytest.param(True, {}, 25.0, id="default-team-without-a-member-budget"),
+        pytest.param(False, {"team_member_budget_id": "team-budget"}, 25.0, id="team-named-in-the-request"),
     ],
 )
 @pytest.mark.asyncio
@@ -4711,7 +4724,6 @@ async def test_add_new_user_to_default_team_only_drops_the_cap_the_team_member_b
     mocker: MockerFixture,
     teams_are_defaults: bool,
     team_metadata: dict[str, str],
-    default_team_member_models: list[str],
     expected_max_budget_in_team: float | None,
 ) -> None:
     """A private copy of a default team's cap has no budget_duration and never resets, so the member
@@ -4728,11 +4740,7 @@ async def test_add_new_user_to_default_team_only_drops_the_cap_the_team_member_b
     )
     prisma_client: Final = mocker.MagicMock()
     prisma_client.db.litellm_teamtable.find_many = mocker.AsyncMock(
-        return_value=[
-            SimpleNamespace(
-                team_id="budgeted-team", metadata=team_metadata, default_team_member_models=default_team_member_models
-            )
-        ]
+        return_value=[SimpleNamespace(team_id="budgeted-team", metadata=team_metadata)]
     )
 
     await add_new_user_to_default_team(

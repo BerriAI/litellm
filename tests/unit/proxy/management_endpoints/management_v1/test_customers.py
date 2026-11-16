@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Final, cast
 import pytest
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
-from prisma.errors import DataError, RawQueryError
+from prisma.errors import DataError, RawQueryError, TransactionExpiredError
 
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.customer_hierarchy_auth import customer_member_cache_key, customer_org_alias_cache_key
@@ -978,7 +978,8 @@ def test_organization_list_counts_all_members_and_searches_before_paginating() -
     assert literal.json()["meta"]["total_count"] == 1
 
 
-def test_member_list_searches_id_and_alias_within_its_parent_before_paginating() -> None:
+@pytest.mark.parametrize("sort", (None, "budget_asc", "budget_desc"))
+def test_member_list_searches_id_and_alias_within_its_parent_before_paginating(sort: str | None) -> None:
     http: Final = client()
     family(http)
     parents: Final = (
@@ -1014,7 +1015,9 @@ def test_member_list_searches_id_and_alias_within_its_parent_before_paginating()
         assert created.status_code == 201, created.text
 
     def found(params: Mapping[str, str | int]) -> tuple[tuple[str, ...], int]:
-        response: Final = http.get("/management/v1/customer_members", params=params)
+        response: Final = http.get(
+            "/management/v1/customer_members", params={**params, **({"sort": sort} if sort is not None else {})}
+        )
         assert response.status_code == 200, response.text
         ids: Final = tuple(row["customer_member_id"] for row in response.json()["data"])
         return ids, response.json()["meta"]["total_count"]
@@ -1027,6 +1030,82 @@ def test_member_list_searches_id_and_alias_within_its_parent_before_paginating()
     assert found({"parent_team_id": "team", "search": "zed_"}) == (("zed_4",), 1)
     assert found({"parent_team_id": "team", "search": "%"}) == (("zedx4",), 1)
     assert found({"parent_team_id": "team", "search": "nobody"}) == ((), 0)
+
+
+@pytest.mark.parametrize("collection", ("customer_teams", "customer_members"))
+@pytest.mark.parametrize("sort", ("budget_asc", "budget_desc"))
+def test_list_sorts_effective_budget_before_pagination_with_uncapped_last(collection: str, sort: str) -> None:
+    database: Final = Database(hydration_limit=2)
+    http: Final = client(database=database)
+    org: Final = http.post("/management/v1/customer_organizations", json={"customer_org_id": "sort-org"})
+    assert org.status_code == 201, org.text
+    parent: Final = http.post(
+        "/management/v1/customer_teams", json={"customer_team_id": "parent", "parent_org_id": "sort-org"}
+    )
+    assert parent.status_code == 201, parent.text
+    budgets: Final = (
+        ("empty", {}),
+        ("expensive", {"max_budget": 20}),
+        ("cheap", {"max_budget": 80, "budget_limits": [{"budget_duration": "1mo", "max_budget": 7}]}),
+        ("same", {"max_budget": 7}),
+        ("annual", {"budget_limits": [{"budget_duration": "12mo", "max_budget": 100}]}),
+        ("zero", {"max_budget": 0}),
+    )
+    id_field: Final = "customer_team_id" if collection == "customer_teams" else "customer_member_id"
+    for identifier, budget in budgets:
+        ownership: Final = (
+            {"parent_org_id": "sort-org", "budget_override": budget}
+            if collection == "customer_teams"
+            else {"parent_team_ids": ["parent"], "budget_override": budget}
+        )
+        created: Final = http.post(f"/management/v1/{collection}", json={id_field: identifier, **ownership})
+        assert created.status_code == 201, created.text
+    scope: Final = {"parent_org_id": "sort-org"} if collection == "customer_teams" else {"parent_team_id": "parent"}
+    budget_order: Final = (
+        ("zero", "cheap", "same", "expensive", "annual", "empty")
+        if sort == "budget_asc"
+        else ("annual", "expensive", "cheap", "same", "zero", "empty")
+    )
+    expected: Final = (*budget_order, "parent") if collection == "customer_teams" else budget_order
+    for page in range(1, (len(expected) + 1) // 2 + 1):
+        response: Final = http.get(
+            f"/management/v1/{collection}", params={**scope, "sort": sort, "page_size": 2, "page": page}
+        )
+        assert response.status_code == 200, response.text
+        assert tuple(row[id_field] for row in response.json()["data"]) == expected[(page - 1) * 2 : page * 2]
+        assert response.json()["meta"]["total_count"] == len(expected)
+    empty: Final = http.get(f"/management/v1/{collection}", params={"parent_org_id": "missing", "sort": sort})
+    assert empty.status_code == 200, empty.text
+    assert empty.json()["data"] == []
+    invalid: Final = http.get(f"/management/v1/{collection}", params={"sort": "budget; DROP TABLE budgets"})
+    assert invalid.status_code == 422, invalid.text
+
+
+@pytest.mark.parametrize("collection", ("customer_teams", "customer_members"))
+def test_budget_sort_uses_inherited_cap_after_override_expiry(collection: str) -> None:
+    http: Final = client()
+    family(http)
+    default_budget: Final = family_default_budget_id(http)
+    id_field: Final = "customer_team_id" if collection == "customer_teams" else "customer_member_id"
+    for identifier, cap in (("low", 7), ("expired", 20)):
+        template: Final = (
+            {"budget": {"max_budget": cap}} if collection == "customer_teams" else {"budget_id": default_budget}
+        )
+        parent: Final = {"parent_org_id": "org"} if collection == "customer_teams" else {"parent_team_ids": ["team"]}
+        overrides: Final = (
+            {"budget_override": {"max_budget": 1}, "budget_override_expires_at": (NOW - timedelta(days=1)).isoformat()}
+            if identifier == "expired"
+            else {"budget_override": {"max_budget": 7}}
+        )
+        created: Final = http.post(
+            f"/management/v1/{collection}", json={id_field: identifier, **template, **parent, **overrides}
+        )
+        assert created.status_code == 201, created.text
+    response: Final = http.get(
+        f"/management/v1/{collection}", params={"parent_org_id": "org", "sort": "budget_asc", "page_size": 1}
+    )
+    assert response.status_code == 200, response.text
+    assert tuple(row[id_field] for row in response.json()["data"]) == ("low",)
 
 
 def created_member(http: TestClient, member_id: str, team_id: str, *, override: bool = False) -> CustomerMember:
@@ -1064,6 +1143,89 @@ def test_team_cascade_removes_only_its_members_and_owned_budgets() -> None:
     assert fetched.status_code == 200, fetched.text
     assert fetched.json() == {**organization, "member_count": 1}
     assert http.get("/management/v1/customer_members/sibling-member").status_code == 200
+
+
+@pytest.mark.parametrize("with_members", (False, True))
+def test_organization_cascade_completes_with_many_teams_within_a_bounded_query_budget(with_members: bool) -> None:
+    database: Final = Database(member_read_limit=20)
+    http: Final = client(database=database)
+    family(http)
+    created_member(http, "member", "team", override=True)
+    team: Final = database.litellm_customerteamtable.rows["team"]
+    member: Final = database.litellm_customermembertable.rows["member"]
+    team_budget_id: Final = str(team.model_dump()["budget_id"])
+    member_budget_id: Final = str(member.model_dump()["budget_override_id"])
+    database.litellm_customerteamtable.rows = {
+        **database.litellm_customerteamtable.rows,
+        **{
+            f"team-{index}": team.model_copy(
+                update={"customer_team_id": f"team-{index}", "budget_id": f"team-budget-{index}"}
+            )
+            for index in range(204)
+        },
+    }
+    database.litellm_customermembertable.rows = (
+        {
+            **database.litellm_customermembertable.rows,
+            **{
+                f"member-{index}": member.model_copy(
+                    update={
+                        "customer_member_id": f"member-{index}",
+                        "parent_team_ids": [f"team-{index}", f"team-{(index + 1) % 204}"],
+                        "budget_override_id": f"member-budget-{index}",
+                    }
+                )
+                for index in range(204)
+            },
+        }
+        if with_members
+        else {}
+    )
+    database.litellm_budgettable.rows = {
+        **database.litellm_budgettable.rows,
+        **{
+            f"team-budget-{index}": database.litellm_budgettable.rows[team_budget_id].model_copy(
+                update={"budget_id": f"team-budget-{index}"}
+            )
+            for index in range(204)
+        },
+        **{
+            f"member-budget-{index}": database.litellm_budgettable.rows[member_budget_id].model_copy(
+                update={"budget_id": f"member-budget-{index}"}
+            )
+            for index in range(204)
+            if with_members
+        },
+    }
+    response: Final = http.delete("/management/v1/customer_organizations/org?cascade=true")
+    assert response.status_code == 204, response.text
+    assert not database.litellm_customerorganizationtable.rows
+    assert not database.litellm_customerteamtable.rows
+    assert not database.litellm_customermembertable.rows
+    assert frozenset(database.litellm_budgettable.rows) == (frozenset() if with_members else {member_budget_id})
+
+
+def test_organization_cascade_expiry_reports_timeout_and_rolls_back_children_and_budgets() -> None:
+    database: Final = Database(organization_delete_error=TransactionExpiredError("Transaction already closed"))
+    http: Final = client(database=database)
+    family(http)
+    created_member(http, "member", "team", override=True)
+    tables: Final = (
+        database.litellm_customerorganizationtable,
+        database.litellm_customerteamtable,
+        database.litellm_customermembertable,
+        database.litellm_budgettable,
+    )
+    snapshots: Final = tuple(table.rows for table in tables)
+    response: Final = http.delete("/management/v1/customer_organizations/org?cascade=true")
+    assert response.status_code == 504, response.text
+    assert response.json() == {
+        "type": "urn:litellm:error:customer-hierarchy-transaction-timeout",
+        "title": "Customer Management operation timed out",
+        "status": 504,
+        "detail": "Customer Management operation timed out. The transaction was rolled back. Retry the request.",
+    }
+    assert tuple(table.rows for table in tables) == snapshots
 
 
 def test_organization_cascade_preserves_the_sibling_customer_and_its_budgets() -> None:
@@ -1987,6 +2149,7 @@ def test_list_and_detail_expose_each_effective_budget_with_its_own_recorded_spen
     assert detail.status_code == listing.status_code == 200
     assert listing.json()["data"][0]["budget_usage"] == detail.json()["budget_usage"]
     assert [(item["spend"], item["max_budget"]) for item in detail.json()["budget_usage"]] == [(0, 50), (8, 10)]
+
 
 def test_member_team_replacement_retains_identity_budgets_and_spend() -> None:
     database: Final = Database()
