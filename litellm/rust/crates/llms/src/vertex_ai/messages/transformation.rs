@@ -560,6 +560,50 @@ mod tests {
     }
 
     #[rstest]
+    #[case::login_project_and_listed_region(
+        Some("logged-in"),
+        &["us-east5"],
+        &[("VERTEXAI_LOCATION", "europe-west4")],
+        "https://us-east5-aiplatform.googleapis.com/v1/projects/logged-in/locations/us-east5/"
+    )]
+    #[case::supported_location_kept(
+        Some("logged-in"),
+        &["us-east5", "europe-west4"],
+        &[("VERTEXAI_LOCATION", "europe-west4")],
+        "https://europe-west4-aiplatform.googleapis.com/v1/projects/logged-in/locations/europe-west4/"
+    )]
+    #[case::no_regions_keep_the_location(
+        None,
+        &[],
+        &[("VERTEXAI_LOCATION", "europe-west4")],
+        "https://europe-west4-aiplatform.googleapis.com/v1/projects/proj/locations/europe-west4/"
+    )]
+    fn the_login_project_and_supported_regions_address_the_call(
+        #[case] logged_in: Option<&str>,
+        #[case] supported: &[&str],
+        #[case] env: &[(&str, &str)],
+        #[case] prefix: &str,
+    ) {
+        let lookup = |name: &str| {
+            env.iter()
+                .find(|(key, _)| *key == name)
+                .map(|(_, value)| value.to_string())
+        };
+        let supported: Vec<String> = supported.iter().map(|region| region.to_string()).collect();
+        let connection = vertex_connection_params(
+            params(Some("proj"), None),
+            logged_in.map(str::to_string),
+            &supported,
+            &lookup,
+        );
+        assert!(
+            url(None, &connection, false, &lookup)
+                .unwrap()
+                .starts_with(prefix)
+        );
+    }
+
+    #[rstest]
     fn without_a_project_anywhere_the_call_fails_before_sending() {
         let error = url(None, &LitellmParams::default(), false, &no_env).unwrap_err();
 
