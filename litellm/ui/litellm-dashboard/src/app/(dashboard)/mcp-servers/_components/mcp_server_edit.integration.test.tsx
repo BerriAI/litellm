@@ -348,6 +348,56 @@ describe("mcp_server_edit save payload contract", () => {
     expect(payload).toStrictEqual(testCase.expected);
   });
 
+  it("sends explicit scopes: null when all M2M scopes are cleared in the edit form", async () => {
+    const server: MCPServer = {
+      ...BASE,
+      auth_type: "oauth2",
+      oauth2_flow: "client_credentials",
+      token_url: "https://idp/token",
+      credentials: { client_id: "cid", scopes: ["read", "write"] },
+    };
+    vi.mocked(networking.updateMCPServer).mockResolvedValue(server as never);
+    render(
+      <MCPServerEdit
+        mcpServer={server}
+        accessToken="access-token"
+        userID="user-1"
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Clear all" }));
+    await act(async () => {
+      screen.getAllByRole("button", { name: "Save Changes" })[0].click();
+    });
+
+    await waitFor(() => {
+      expect(networking.updateMCPServer).toHaveBeenCalledWith(
+        "access-token",
+        expect.objectContaining({
+          server_id: server.server_id,
+          oauth2_flow: "client_credentials",
+          credentials: { client_id: "cid", scopes: null },
+        }),
+      );
+    });
+  });
+
+  it("does not emit spurious scopes: null when saving an M2M server that never had scopes", async () => {
+    const payload = await saveAndCapture({
+      ...BASE,
+      auth_type: "oauth2",
+      oauth2_flow: "client_credentials",
+      token_url: "https://idp/token",
+      credentials: { client_id: "cid", client_secret: "csec" },
+    });
+
+    expect(payload.credentials).toEqual({ client_id: "cid", client_secret: "csec" });
+    expect(payload.credentials).not.toHaveProperty("scopes");
+  });
+
   it("never sends a server-owned field the form does not bind", async () => {
     const payload = await saveAndCapture({
       ...BASE,
