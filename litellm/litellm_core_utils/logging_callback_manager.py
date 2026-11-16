@@ -231,10 +231,6 @@ class LoggingCallbackManager:
             ):
                 return cached_logger
 
-            # Cache miss (config changed or first creation). Build the replacement
-            # first, so that an invalid config raising in the constructor cannot leave
-            # the still-cached logger cancelled. Only after a successful build do we
-            # retire the evicted logger's background flush task.
             new_logger = GenericAPILogger(
                 endpoint=endpoint,
                 headers=headers,

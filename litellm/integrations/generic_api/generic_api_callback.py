@@ -97,9 +97,6 @@ def substitute_env_variables(value: str) -> str:
     return re.sub(pattern, replace_env_var, value)
 
 
-_SHUTDOWN_TIMEOUT_SECONDS: Final = 30.0
-
-
 class GenericAPILogger(CustomBatchLogger):
     def __init__(
         self,
@@ -205,7 +202,6 @@ class GenericAPILogger(CustomBatchLogger):
         self.log_queue: list[Mapping[str, object] | StandardLoggingPayload] = []
         self._stop_flush = asyncio.Event()
         self._replacement: GenericAPILogger | None = None
-        self._shutdown_task: asyncio.Task[None] | None = None
         self._flush_task = asyncio.create_task(self._run_periodic_flush())
 
     async def _run_periodic_flush(self) -> None:
@@ -218,18 +214,11 @@ class GenericAPILogger(CustomBatchLogger):
         with contextlib.suppress(Exception):
             await self.flush_queue()
 
-    async def _finish_shutdown(self) -> None:
-        try:
-            await asyncio.wait_for(self._flush_task, timeout=_SHUTDOWN_TIMEOUT_SECONDS)
-        except asyncio.TimeoutError:
-            verbose_logger.warning("Generic API Logger shutdown timed out; remaining logs may be lost")
-
     def shutdown(self, replacement: "GenericAPILogger | None" = None) -> None:
         if self._stop_flush.is_set():
             return
         self._replacement = replacement
         self._stop_flush.set()
-        self._shutdown_task = asyncio.create_task(self._finish_shutdown())
 
     def active_logger(self) -> "GenericAPILogger":
         if self._replacement is None:

@@ -850,14 +850,13 @@ async def test_shutdown_finishes_in_flight_batch_and_drains_remaining_logs(log_f
         logger.shutdown()
         sink.release.set()
         await logger._flush_task
-        await logger._shutdown_task
         await logger.async_log_success_event({"standard_logging_object": {"id": "late"}}, None, None, None)
         assert delivered == ("first", "queued", "late")
         assert logger.log_queue == []
     finally:
         sink.release.set()
         logger.shutdown()
-        await logger._shutdown_task
+        await logger._flush_task
         await handler.close()
 
 
@@ -912,7 +911,7 @@ async def test_header_rotation_replaces_registered_logger_and_forwards_late_call
     manager.add_litellm_success_callback("rotation")
     replacement: Final = litellm.success_callback[0]
     try:
-        await old._shutdown_task
+        await old._flush_task
         await old.async_log_success_event({"standard_logging_object": {"id": "late"}}, None, None, None)
         await replacement.async_log_failure_event({"standard_logging_object": {"id": "new"}}, None, None, None)
         await replacement.flush_queue()
@@ -922,32 +921,7 @@ async def test_header_rotation_replaces_registered_logger_and_forwards_late_call
     finally:
         old.shutdown()
         replacement.shutdown()
-        await old._shutdown_task
-        await replacement._shutdown_task
+        await old._flush_task
+        await replacement._flush_task
         await handler.close()
 
-
-@pytest.mark.asyncio
-async def test_shutdown_deadline_stops_a_stalled_log_sink(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
-    sink: Final = _InProcessLogSink(hold_first=True)
-    handler: Final = AsyncHTTPHandler(transport=httpx.MockTransport(sink.respond))
-    logger: Final = GenericAPILogger(
-        endpoint="https://owned-logger.invalid", async_httpx_client=handler, flush_interval=0.001
-    )
-    try:
-        await logger.async_log_success_event({"standard_logging_object": {"id": "stalled"}}, None, None, None)
-        await asyncio.wait_for(sink.arrived.wait(), timeout=5)
-        monkeypatch.setattr("litellm.integrations.generic_api.generic_api_callback._SHUTDOWN_TIMEOUT_SECONDS", 0)
-        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
-            logger.shutdown()
-            logger.shutdown()
-            await logger._shutdown_task
-        assert "shutdown timed out" in caplog.text
-        assert logger._flush_task.cancelled()
-    finally:
-        sink.release.set()
-        logger.shutdown()
-        await logger._shutdown_task
-        await handler.close()
