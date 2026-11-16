@@ -1809,6 +1809,7 @@ _ANTHROPIC_SERVER_TOOL_FIELDS: Final = MappingProxyType(
         "text_editor_code_execution_tool_result_error": ("error_code", "error_message"),
     }
 )
+_ANTHROPIC_CLIENT_TOOL_TYPES: Final = ("tool_use", "tool_result", "search_result")
 _ANTHROPIC_DOCUMENT: Final = TypeAdapter(AnthropicMessagesDocumentParam)
 
 
@@ -1873,8 +1874,7 @@ def _count_anthropic_content(
                 ):
                     inner_type: Final = field_mapping.get("type")
                     if isinstance(inner_type, str) and (
-                        inner_type in _ANTHROPIC_SERVER_TOOL_FIELDS
-                        or inner_type in ("tool_use", "tool_result", "search_result")
+                        inner_type in _ANTHROPIC_SERVER_TOOL_FIELDS or inner_type in _ANTHROPIC_CLIENT_TOOL_TYPES
                     ):
                         tokens += _count_anthropic_content(
                             field_mapping,
@@ -1984,9 +1984,7 @@ def _count_content_list(
                     use_default_image_token_count,
                     pdf_pricing,
                 )
-            elif (
-                c["type"] in ("tool_use", "tool_result", "search_result") or c["type"] in _ANTHROPIC_SERVER_TOOL_FIELDS
-            ):
+            elif c["type"] in _ANTHROPIC_CLIENT_TOOL_TYPES or c["type"] in _ANTHROPIC_SERVER_TOOL_FIELDS:
                 num_tokens += _count_anthropic_content(
                     c,
                     count_function,

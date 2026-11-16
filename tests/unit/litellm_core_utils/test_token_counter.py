@@ -2653,6 +2653,23 @@ def test_token_counter_counts_server_tool_content_block_dict(tool: str) -> None:
     assert _count_content_list(len, [block], False, None) == len("Hello world")
 
 
+def test_token_counter_counts_server_tool_image_block_dict() -> None:
+    from litellm.litellm_core_utils.token_counter import _count_content_list
+
+    png_data: Final = (
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+    )
+    block: Final = {
+        "type": "mcp_tool_result",
+        "tool_use_id": "srv_1",
+        "content": {
+            "type": "image",
+            "source": {"type": "base64", "media_type": "image/png", "data": png_data},
+        },
+    }
+    assert _count_content_list(len, [block], False, None) > 0
+
+
 @pytest.mark.parametrize(
     "block",
     (
