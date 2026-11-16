@@ -4413,6 +4413,112 @@ VERTEX_SHAPING_CASES: Final = (
     _vertex_stream("vertex_base_own_path_query_stream", api_base_suffix="/custom/path?k=1"),
 )
 
+
+def _service_account(name: str, **fields: JsonValue) -> Mapping[str, JsonValue]:
+    """A service account the parity token endpoint grants. Each case names its own account, so no case
+    reuses a login another case cached."""
+    return MappingProxyType(
+        {
+            "type": "service_account",
+            "client_email": f"{name}@parity.iam.gserviceaccount.com",
+            "private_key_id": name,
+            "private_key": _VERTEX_KEY,
+            "token_uri": f"http://127.0.0.1:{_GOOGLE_TOKENS.server_address[1]}/token",
+            **fields,
+        }
+    )
+
+
+def _vertex_login(**kwargs: object) -> Mapping[str, object]:
+    return MappingProxyType({"api_key": None, "vertex_location": "us-east5", **kwargs})
+
+
+VERTEX_AUTH_CASES: Final = tuple(
+    replace(case, model=VERTEX_CLAUDE)
+    for case in (
+        Case(
+            "vertex_ai_service_account_names_the_project",
+            _vertex_login(vertex_credentials=dict(_service_account("a3-project", project_id="credentials-project"))),
+        ),
+        Case(
+            "vertex_ai_configured_project_outranks_the_credentials",
+            _vertex_login(
+                vertex_project="configured-project",
+                vertex_credentials=dict(_service_account("p2-configured", project_id="credentials-project")),
+            ),
+        ),
+        Case(
+            "vertex_ai_no_project_after_the_login",
+            _vertex_login(vertex_credentials=dict(_service_account("e1-no-project"))),
+            upstream=(),
+        ),
+        Case(
+            "vertex_ai_numeric_project_after_the_login",
+            _vertex_login(vertex_credentials=dict(_service_account("e1-numeric-project", project_id=7))),
+            upstream=(),
+        ),
+        Case(
+            "vertex_ai_invalid_location_after_the_login",
+            _vertex_login(
+                api_base=None,
+                vertex_project="p",
+                vertex_location="US EAST",
+                vertex_credentials=dict(_service_account("p3-location")),
+            ),
+            upstream=(),
+        ),
+        Case(
+            "vertex_ai_impersonated_credentials_are_refused",
+            _vertex_login(
+                vertex_project="p",
+                vertex_credentials={
+                    "type": "impersonated_service_account",
+                    "client_email": "sa@p.iam.gserviceaccount.com",
+                    "source_credentials": {"type": "authorized_user"},
+                },
+            ),
+            upstream=(),
+        ),
+        Case(
+            "vertex_ai_service_account_without_a_private_key",
+            _vertex_login(
+                vertex_project="p",
+                vertex_credentials={"client_email": "sa@p.iam.gserviceaccount.com", "token_uri": "https://t"},
+            ),
+            upstream=(),
+        ),
+        Case(
+            "vertex_ai_authorized_user_missing_a_field",
+            _vertex_login(
+                vertex_project="p",
+                vertex_credentials={"type": "authorized_user", "client_id": "c", "client_secret": "s"},
+            ),
+            upstream=(),
+        ),
+        Case(
+            "vertex_ai_inline_credentials_not_json",
+            _vertex_login(vertex_project="p", vertex_credentials="{oops"),
+            upstream=(),
+        ),
+        Case("vertex_ai_blank_credentials", _vertex_login(vertex_project="p", vertex_credentials="   "), upstream=()),
+        Case(
+            "vertex_ai_explicit_aws_without_a_region",
+            _vertex_login(
+                vertex_project="p",
+                vertex_credentials={
+                    "type": "external_account",
+                    "audience": "//iam.googleapis.com/projects/1/locations/global/workloadIdentityPools/p/providers/aws",
+                    "subject_token_type": "urn:ietf:params:aws:token-type:aws4_request",
+                    "credential_source": {"environment_id": "aws1"},
+                    "aws_access_key_id": "AKIDPARITY",
+                },
+            ),
+            upstream=(),
+        ),
+    )
+)
+
+
 CASES: Final = (
     *REQUEST_CASES,
     *INPUT_VALUE_CASES,
@@ -4447,6 +4553,7 @@ CASES: Final = (
     *VERTEX_CREDENTIAL_CASES,
     *AZURE_STREAM_CACHE_CASES,
     *VERTEX_SHAPING_CASES,
+    *VERTEX_AUTH_CASES,
 )
 
 
@@ -4525,7 +4632,12 @@ def _environment(env: Mapping[str, str]) -> Generator[None]:
         "AZURE_FEDERATED_TOKEN_FILE",
         "AZURE_AUTHORITY_HOST",
         "VERTEXAI_CREDENTIALS",
+        "VERTEXAI_PROJECT",
+        "VERTEXAI_LOCATION",
+        "VERTEX_LOCATION",
         "GOOGLE_APPLICATION_CREDENTIALS",
+        "GOOGLE_CLOUD_PROJECT",
+        "GCLOUD_PROJECT",
     )
     with pytest.MonkeyPatch.context() as patch:
         for name in names:
