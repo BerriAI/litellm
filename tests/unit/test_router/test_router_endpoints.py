@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 import httpx
 import litellm
 import pytest
+import respx
 from litellm import Router
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
@@ -129,7 +130,7 @@ async def test_aspeech_sets_deployment_metadata():
 
     mock_response = MagicMock()
     with patch("litellm.aspeech", return_value=mock_response) as mock_aspeech:
-        response = await router._aspeech(
+        response = await router.aspeech(
             model="tts",
             input="the quick brown fox jumped over the lazy dogs",
             voice="alloy",
@@ -165,9 +166,7 @@ async def test_moderation_endpoint_with_api_base():
     )
 
     # Mock the OpenAI client to verify api_base is passed
-    with patch(
-        "litellm.main.openai_chat_completions.get_openai_client"
-    ) as mock_get_client:
+    with patch("litellm.main.openai_chat_completions.get_openai_client") as mock_get_client:
         mock_client = AsyncMock()
         mock_response = MagicMock()
         mock_response.model_dump.return_value = {
@@ -185,16 +184,14 @@ async def test_moderation_endpoint_with_api_base():
         mock_client.moderations.create = AsyncMock(return_value=mock_response)
         mock_get_client.return_value = mock_client
 
-        response = await router.amoderation(
-            model="openai/omni-moderation-latest", input="hello this is a test"
-        )
+        response = await router.amoderation(model="openai/omni-moderation-latest", input="hello this is a test")
 
         # Verify that get_openai_client was called with the custom api_base
         mock_get_client.assert_called()
         call_kwargs = mock_get_client.call_args.kwargs
-        assert (
-            call_kwargs.get("api_base") == custom_api_base
-        ), f"Expected api_base to be {custom_api_base}, but got {call_kwargs.get('api_base')}"
+        assert call_kwargs.get("api_base") == custom_api_base, (
+            f"Expected api_base to be {custom_api_base}, but got {call_kwargs.get('api_base')}"
+        )
 
         print(f"✓ Moderation endpoint correctly uses api_base: {custom_api_base}")
 
@@ -216,13 +213,6 @@ async def test_aaaaatext_completion_endpoint(model_list, sync_mode):
             prompt="Hello, how are you?",
             mock_response="I'm fine, thank you!",
         )
-
-        response_2 = await router._atext_completion(
-            model="gpt-5-mini",
-            prompt="Hello, how are you?",
-            mock_response="I'm fine, thank you!",
-        )
-        assert response_2.choices[0].text == "I'm fine, thank you!"
 
     assert response.choices[0].text == "I'm fine, thank you!"
 
@@ -252,147 +242,9 @@ async def test_router_with_empty_choices(model_list):
     assert response is not None
 
 
-@pytest.mark.parametrize("sync_mode", [True, False])
-def test_generic_api_call_with_fallbacks_basic(sync_mode):
-    """
-    Test both the sync and async versions of generic_api_call_with_fallbacks with a basic successful call
-    """
-    # Create a mock function that will be passed to generic_api_call_with_fallbacks
-    if sync_mode:
-        from unittest.mock import Mock
-
-        mock_function = Mock()
-        mock_function.__name__ = "test_function"
-    else:
-        mock_function = AsyncMock()
-        mock_function.__name__ = "test_function"
-
-    # Create a mock response
-    mock_response = {
-        "id": "resp_123456",
-        "role": "assistant",
-        "content": "This is a test response",
-        "model": "test-model",
-        "usage": {"input_tokens": 10, "output_tokens": 20},
-    }
-    mock_function.return_value = mock_response
-
-    # Create a router with a test model
-    router = Router(
-        model_list=[
-            {
-                "model_name": "test-model-alias",
-                "litellm_params": {
-                    "model": "anthropic/test-model",
-                    "api_key": "fake-api-key",
-                },
-            }
-        ]
-    )
-
-    # Call the appropriate generic_api_call_with_fallbacks method
-    if sync_mode:
-        response = router._generic_api_call_with_fallbacks(
-            model="test-model-alias",
-            original_function=mock_function,
-            messages=[{"role": "user", "content": "Hello"}],
-            max_tokens=100,
-        )
-    else:
-        response = asyncio.run(
-            router._ageneric_api_call_with_fallbacks(
-                model="test-model-alias",
-                original_function=mock_function,
-                messages=[{"role": "user", "content": "Hello"}],
-                max_tokens=100,
-            )
-        )
-
-    # Verify the mock function was called
-    mock_function.assert_called_once()
-
-    # Verify the response
-    assert response == mock_response
-
-
 @pytest.mark.asyncio
-async def test_aadapter_completion():
-    """
-    Test the aadapter_completion method which uses async_function_with_fallbacks
-    """
-
-    mock_response = {
-        "id": "adapter_resp_123",
-        "object": "adapter.completion",
-        "created": 1677858242,
-        "model": "test-model-with-adapter",
-        "choices": [
-            {
-                "text": "This is a test adapter response",
-                "index": 0,
-                "finish_reason": "stop",
-            }
-        ],
-        "usage": {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
-    }
-
-    with patch.object(Router, "_aadapter_completion", new_callable=AsyncMock) as mock_method:
-        mock_method.return_value = mock_response
-
-        router = Router(
-            model_list=[
-                {
-                    "model_name": "test-adapter-model",
-                    "litellm_params": {
-                        "model": "anthropic/test-model",
-                        "api_key": "fake-api-key",
-                    },
-                }
-            ]
-        )
-
-        router.async_function_with_fallbacks = AsyncMock(return_value=mock_response)
-
-        response = await router.aadapter_completion(
-            adapter_id="test-adapter-id",
-            model="test-adapter-model",
-            prompt="This is a test prompt",
-            max_tokens=100,
-        )
-
-        assert response == mock_response
-
-        router.async_function_with_fallbacks.assert_called_once()
-        call_kwargs = router.async_function_with_fallbacks.call_args.kwargs
-        assert call_kwargs["adapter_id"] == "test-adapter-id"
-        assert call_kwargs["model"] == "test-adapter-model"
-        assert call_kwargs["prompt"] == "This is a test prompt"
-        assert call_kwargs["max_tokens"] == 100
-        assert call_kwargs["original_function"] == router._aadapter_completion
-        assert "metadata" in call_kwargs
-        assert call_kwargs["metadata"]["model_group"] == "test-adapter-model"
-
-
-@pytest.mark.asyncio
-async def test__aadapter_completion():
-    """
-    Test the _aadapter_completion method directly
-    """
-
-    mock_response = {
-        "id": "adapter_resp_123",
-        "object": "adapter.completion",
-        "created": 1677858242,
-        "model": "test-model-with-adapter",
-        "choices": [
-            {
-                "text": "This is a test adapter response",
-                "index": 0,
-                "finish_reason": "stop",
-            }
-        ],
-        "usage": {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
-    }
+async def test_aadapter_completion_calls_the_adapter_with_the_deployments_params():
+    mock_response = {"id": "adapter_resp_123", "object": "adapter.completion"}
 
     with patch("litellm.aadapter_completion", new_callable=AsyncMock) as mock_adapter_completion:
         mock_adapter_completion.return_value = mock_response
@@ -409,43 +261,22 @@ async def test__aadapter_completion():
             ]
         )
 
-        router.async_get_available_deployment = AsyncMock(
-            return_value={
-                "model_name": "test-adapter-model",
-                "litellm_params": {
-                    "model": "test-model",
-                    "api_key": "fake-api-key",
-                },
-                "model_info": {
-                    "id": "test-unique-id",
-                },
-            }
-        )
-
-        router.async_routing_strategy_pre_call_checks = AsyncMock()
-
-        response = await router._aadapter_completion(
+        response = await router.aadapter_completion(
             adapter_id="test-adapter-id",
             model="test-adapter-model",
             prompt="This is a test prompt",
             max_tokens=100,
         )
 
-        assert response == mock_response
-
-        mock_adapter_completion.assert_called_once()
-        call_kwargs = mock_adapter_completion.call_args.kwargs
-        assert call_kwargs["adapter_id"] == "test-adapter-id"
-        assert call_kwargs["model"] == "test-model"
-        assert call_kwargs["prompt"] == "This is a test prompt"
-        assert call_kwargs["max_tokens"] == 100
-        assert call_kwargs["api_key"] == "fake-api-key"
-        assert call_kwargs["caching"] == router.cache_responses
-
-        assert router.success_calls["test-model"] == 1
-        assert router.total_calls["test-model"] == 1
-
-        router.async_routing_strategy_pre_call_checks.assert_called_once()
+    assert response["id"] == "adapter_resp_123"
+    mock_adapter_completion.assert_called_once()
+    call_kwargs = mock_adapter_completion.call_args.kwargs
+    assert call_kwargs["adapter_id"] == "test-adapter-id"
+    assert call_kwargs["model"] == "anthropic/test-model"
+    assert call_kwargs["prompt"] == "This is a test prompt"
+    assert call_kwargs["max_tokens"] == 100
+    assert call_kwargs["api_key"] == "fake-api-key"
+    assert call_kwargs["metadata"]["model_group"] == "test-adapter-model"
 
 
 def test_initialize_router_endpoints():
@@ -483,101 +314,6 @@ def test_initialize_router_endpoints():
 
 
 @pytest.mark.asyncio
-async def test_init_responses_api_endpoints():
-    """
-    A simpler test for _init_responses_api_endpoints that focuses on the basic functionality
-    """
-    from litellm.responses.utils import ResponsesAPIRequestUtils
-
-    # Create a router with a basic model
-    router = Router(
-        model_list=[
-            {
-                "model_name": "test-model",
-                "litellm_params": {
-                    "model": "openai/test-model",
-                    "api_key": "fake-api-key",
-                },
-            }
-        ]
-    )
-
-    # Just mock the _ageneric_api_call_with_fallbacks method
-    router._ageneric_api_call_with_fallbacks = AsyncMock()
-
-    # Add a mock implementation of _get_model_id_from_response_id to the Router instance
-    ResponsesAPIRequestUtils.get_model_id_from_response_id = MagicMock(
-        return_value=None
-    )
-
-    # Call without a response_id (no model extraction should happen)
-    await router._init_responses_api_endpoints(
-        original_function=AsyncMock(), thread_id="thread_xyz"
-    )
-
-    # Verify _ageneric_api_call_with_fallbacks was called but model wasn't changed
-    first_call_kwargs = router._ageneric_api_call_with_fallbacks.call_args.kwargs
-    assert "model" not in first_call_kwargs
-    assert first_call_kwargs["thread_id"] == "thread_xyz"
-
-    # Reset the mock
-    router._ageneric_api_call_with_fallbacks.reset_mock()
-
-    # Change the return value for the second call
-    ResponsesAPIRequestUtils.get_model_id_from_response_id.return_value = (
-        "claude-3-sonnet"
-    )
-
-    # Call with a response_id
-    await router._init_responses_api_endpoints(
-        original_function=AsyncMock(), response_id="resp_claude_123"
-    )
-
-    # Verify model was updated in the kwargs
-    second_call_kwargs = router._ageneric_api_call_with_fallbacks.call_args.kwargs
-    assert second_call_kwargs["model"] == "claude-3-sonnet"
-    assert second_call_kwargs["response_id"] == "resp_claude_123"
-
-
-@pytest.mark.asyncio
-async def test_init_vector_store_api_endpoints():
-    """
-    Test that _init_vector_store_api_endpoints correctly passes custom_llm_provider to kwargs
-    """
-
-    router = Router(
-        model_list=[
-            {
-                "model_name": "test-model",
-                "litellm_params": {
-                    "model": "openai/test-model",
-                    "api_key": "fake-api-key",
-                },
-            }
-        ]
-    )
-
-    mock_original_function = AsyncMock(return_value={"status": "success"})
-
-    result = await router._init_vector_store_api_endpoints(
-        original_function=mock_original_function, vector_store_id="test-store"
-    )
-
-    mock_original_function.assert_called_once_with(vector_store_id="test-store")
-    assert result == {"status": "success"}
-
-    mock_original_function.reset_mock()
-
-    await router._init_vector_store_api_endpoints(
-        original_function=mock_original_function,
-        custom_llm_provider="openai",
-        vector_store_id="test-store",
-    )
-
-    mock_original_function.assert_called_once_with(vector_store_id="test-store", custom_llm_provider="openai")
-
-
-@pytest.mark.asyncio
 async def test_avector_store_create_sends_only_the_callers_metadata_to_the_provider():
     def echo_vector_store(request: httpx.Request) -> httpx.Response:
         body: Final = json.loads(request.content)
@@ -612,10 +348,8 @@ async def test_avector_store_create_sends_only_the_callers_metadata_to_the_provi
 
 def test_apply_default_settings():
     """
-    Test the apply_default_settings method.
-
-    This test verifies that apply_default_settings correctly initializes
-    default pre-call checks and doesn't modify existing router state.
+    apply_default_settings initializes the default pre-call checks and leaves the optional
+    callbacks the router already has in place.
     """
 
     router = Router()
@@ -637,16 +371,6 @@ def test_apply_default_settings():
 
     assert mock_callback in router_with_callbacks.optional_callbacks
 
-    with patch.object(Router, "apply_default_settings") as mock_apply:
-        Router()
-        mock_apply.assert_called_once()
-
-    router_test = Router()
-    with patch.object(router_test, "add_optional_pre_call_checks") as mock_add_checks:
-        router_test.apply_default_settings()
-
-        mock_add_checks.assert_called_once_with([])
-
 
 def test_initialize_core_endpoints():
     """
@@ -664,8 +388,6 @@ def test_initialize_core_endpoints():
         ]
     )
 
-    router._initialize_core_endpoints()
-
     core_endpoints = [
         "amoderation",
         "aanthropic_messages",
@@ -679,7 +401,6 @@ def test_initialize_core_endpoints():
         "acancel_responses",
         "adelete_responses",
         "alist_input_items",
-        "_arealtime",
         "acreate_fine_tuning_job",
         "acancel_fine_tuning_job",
         "alist_fine_tuning_jobs",
@@ -709,8 +430,6 @@ def test_initialize_specialized_endpoints():
             }
         ]
     )
-
-    router._initialize_specialized_endpoints()
 
     specialized_endpoints = [
         "avector_store_search",
@@ -770,8 +489,6 @@ def test_initialize_vector_store_endpoints():
         ]
     )
 
-    router._initialize_vector_store_endpoints()
-
     vector_store_endpoints = [
         "avector_store_search",
         "avector_store_create",
@@ -799,8 +516,6 @@ def test_initialize_vector_store_file_endpoints():
             }
         ]
     )
-
-    router._initialize_vector_store_file_endpoints()
 
     vector_store_file_endpoints = [
         "avector_store_file_create",
@@ -838,8 +553,6 @@ def test_initialize_google_genai_endpoints():
         ]
     )
 
-    router._initialize_google_genai_endpoints()
-
     google_genai_endpoints = [
         "agenerate_content",
         "generate_content",
@@ -868,8 +581,6 @@ def test_initialize_ocr_search_endpoints():
         ]
     )
 
-    router._initialize_ocr_search_endpoints()
-
     ocr_search_endpoints = [
         "aocr",
         "ocr",
@@ -897,8 +608,6 @@ def test_initialize_video_endpoints():
             }
         ]
     )
-
-    router._initialize_video_endpoints()
 
     video_endpoints = [
         "avideo_generation",
@@ -934,8 +643,6 @@ def test_initialize_container_endpoints():
         ]
     )
 
-    router._initialize_container_endpoints()
-
     container_endpoints = [
         "acreate_container",
         "create_container",
@@ -968,8 +675,6 @@ def test_initialize_skills_endpoints():
         ]
     )
 
-    router._initialize_skills_endpoints()
-
     skills_endpoints = [
         "acreate_skill",
         "alist_skills",
@@ -982,35 +687,34 @@ def test_initialize_skills_endpoints():
         assert callable(getattr(router, endpoint))
 
 
-@pytest.mark.asyncio
-async def test_init_containers_api_endpoints():
-    """
-    Test that _init_containers_api_endpoints calls the original function
-    directly when there is no managed container ID (no embedded model_id).
-    """
-    router = Router(model_list=[])
+_CONTAINER_FILE: Final = {
+    "id": "cfile_xyz",
+    "object": "container.file",
+    "container_id": "cfile_upstream_abc",
+    "created_at": 0,
+    "bytes": 1,
+    "path": "/a",
+    "source": "user",
+}
 
-    mock_response = {"id": "cntr_test", "name": "Test Container"}
-    mock_original_function = AsyncMock(return_value=mock_response)
 
-    result = await router._init_containers_api_endpoints(
-        original_function=mock_original_function,
-        custom_llm_provider="openai",
-        name="Test Container",
-    )
-
-    mock_original_function.assert_called_once_with(custom_llm_provider="openai", name="Test Container")
-    assert result == mock_response
+async def _container_file_request(router: Router, container_id: str) -> httpx.Request:
+    with respx.mock(assert_all_called=False) as upstream:
+        route = upstream.route().mock(return_value=httpx.Response(200, json=_CONTAINER_FILE))
+        await router.aretrieve_container_file(container_id=container_id, file_id="cfile_xyz")
+    assert route.call_count == 1
+    return route.calls.last.request
 
 
 @pytest.mark.asyncio
-async def test_init_containers_api_endpoints_managed_id_routes_via_generic_fallbacks():
+async def test_containers_managed_id_routes_to_its_deployment_with_its_credentials(monkeypatch):
     """
-    Managed ``cntr_`` IDs embed ``model_id``; router should decode and use
-    ``_ageneric_api_call_with_fallbacks`` so deployment credentials apply.
+    Managed ``cntr_`` IDs embed ``model_id``; the router decodes it so the deployment's
+    credentials and api_base apply, and the upstream gets the unwrapped container ID.
     """
     from litellm.responses.utils import ResponsesAPIRequestUtils
 
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     router = Router(
         model_list=[
             {
@@ -1023,31 +727,21 @@ async def test_init_containers_api_endpoints_managed_id_routes_via_generic_fallb
             }
         ]
     )
-    router._ageneric_api_call_with_fallbacks = AsyncMock()
-
     managed_id = ResponsesAPIRequestUtils.build_container_id(
         custom_llm_provider="azure",
         model_id="azure-router-model",
         container_id="cfile_upstream_abc",
     )
 
-    await router._init_containers_api_endpoints(
-        original_function=AsyncMock(),
-        custom_llm_provider="openai",
-        container_id=managed_id,
-        file_id="cfile_xyz",
-    )
+    request = await _container_file_request(router, managed_id)
 
-    router._ageneric_api_call_with_fallbacks.assert_called_once()
-    call_kw = router._ageneric_api_call_with_fallbacks.call_args.kwargs
-    assert call_kw["model"] == "azure-router-model"
-    assert call_kw["container_id"] == "cfile_upstream_abc"
-    assert call_kw["file_id"] == "cfile_xyz"
-    assert call_kw["custom_llm_provider"] == "azure"
+    assert request.url.host == "westus.api.cognitive.microsoft.com"
+    assert request.url.path.endswith("/containers/cfile_upstream_abc/files/cfile_xyz")
+    assert request.headers["api-key"] == "fake-key"
 
 
 @pytest.mark.asyncio
-async def test_init_containers_api_endpoints_managed_id_without_model_id_unwraps():
+async def test_containers_managed_id_without_model_id_unwraps(monkeypatch):
     """
     Managed ``cntr_`` IDs may be encoded with an empty ``model_id`` (e.g. when a
     streaming response had no router metadata). The router must still unwrap the
@@ -1056,64 +750,22 @@ async def test_init_containers_api_endpoints_managed_id_without_model_id_unwraps
     """
     from litellm.responses.utils import ResponsesAPIRequestUtils
 
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-global")
     router = Router(model_list=[])
-    mock_original_function = AsyncMock(return_value={"ok": True})
-
     managed_id = ResponsesAPIRequestUtils.build_container_id(
         custom_llm_provider="openai",
         model_id=None,
         container_id="cfile_upstream_abc",
     )
 
-    await router._init_containers_api_endpoints(
-        original_function=mock_original_function,
-        custom_llm_provider="openai",
-        container_id=managed_id,
-        file_id="cfile_xyz",
-    )
+    request = await _container_file_request(router, managed_id)
 
-    mock_original_function.assert_called_once()
-    call_kw = mock_original_function.call_args.kwargs
-    assert call_kw["container_id"] == "cfile_upstream_abc"
-    assert call_kw["file_id"] == "cfile_xyz"
-    assert call_kw["custom_llm_provider"] == "openai"
+    assert request.url.path == "/v1/containers/cfile_upstream_abc/files/cfile_xyz"
 
 
 @pytest.mark.asyncio
-async def test_init_containers_api_endpoints_managed_id_without_model_id_applies_decoded_provider():
-    """
-    A managed ``cntr_`` ID can encode a non-OpenAI provider (e.g. ``azure``) with
-    an empty ``model_id`` (streaming events without router ``model_info.id``).
-    The router must still apply the decoded provider so the request routes to
-    the correct upstream — not stay on the default ``openai``.
-    """
-    from litellm.responses.utils import ResponsesAPIRequestUtils
-
-    router = Router(model_list=[])
-    mock_original_function = AsyncMock(return_value={"ok": True})
-
-    managed_id = ResponsesAPIRequestUtils.build_container_id(
-        custom_llm_provider="azure",
-        model_id=None,
-        container_id="cfile_upstream_abc",
-    )
-
-    await router._init_containers_api_endpoints(
-        original_function=mock_original_function,
-        custom_llm_provider="openai",
-        container_id=managed_id,
-        file_id="cfile_xyz",
-    )
-
-    mock_original_function.assert_called_once()
-    call_kw = mock_original_function.call_args.kwargs
-    assert call_kw["container_id"] == "cfile_upstream_abc"
-    assert call_kw["file_id"] == "cfile_xyz"
-    assert call_kw["custom_llm_provider"] == "azure"
-
-
-@pytest.mark.asyncio
-async def test_init_containers_api_endpoints_create_with_model_uses_deployment_credentials(monkeypatch):
+async def test_containers_create_with_model_uses_deployment_credentials(monkeypatch):
     """
     ``POST /v1/containers`` carries no container ID, so a ``model`` in the request
     body is the only way to pick a deployment. The upstream call must receive that
@@ -1121,29 +773,24 @@ async def test_init_containers_api_endpoints_create_with_model_uses_deployment_c
     ``OPENAI_API_KEY`` (which may be unset on the proxy).
     """
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    router = Router(
-        model_list=[
-            {
-                "model_name": "gpt-5.4",
-                "litellm_params": {
-                    "model": "openai/gpt-5.4",
-                    "api_key": "sk-model-list-key",
-                    "api_base": "https://custom.openai.example/v1",
-                },
-            }
-        ]
-    )
-    mock_original_function = AsyncMock(return_value={"id": "cntr_test", "name": "Test Container"})
+    with patch("litellm.containers.acreate_container", new_callable=AsyncMock) as create:
+        create.return_value = {"id": "cntr_test", "name": "Test Container"}
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "gpt-5.4",
+                    "litellm_params": {
+                        "model": "openai/gpt-5.4",
+                        "api_key": "sk-model-list-key",
+                        "api_base": "https://custom.openai.example/v1",
+                    },
+                }
+            ]
+        )
+        await router.acreate_container(name="Test Container", model="gpt-5.4")
 
-    await router._init_containers_api_endpoints(
-        original_function=mock_original_function,
-        custom_llm_provider="openai",
-        name="Test Container",
-        model="gpt-5.4",
-    )
-
-    mock_original_function.assert_called_once()
-    call_kw = mock_original_function.call_args.kwargs
+    create.assert_called_once()
+    call_kw = create.call_args.kwargs
     assert call_kw["api_key"] == "sk-model-list-key"
     assert call_kw["api_base"] == "https://custom.openai.example/v1"
     assert call_kw["model"] == "openai/gpt-5.4"
@@ -1151,53 +798,40 @@ async def test_init_containers_api_endpoints_create_with_model_uses_deployment_c
 
 
 @pytest.mark.asyncio
-async def test_init_containers_api_endpoints_create_without_model_calls_directly():
+async def test_containers_create_without_model_calls_directly():
     """
-    Without ``model`` (or with ``model=None`` as the proxy forwards it), create/list
-    must keep calling the handler directly with global provider credentials.
+    Without ``model``, create must keep calling the handler directly with global provider credentials.
     """
-    router = Router(model_list=[])
-    router._ageneric_api_call_with_fallbacks = AsyncMock()
-    mock_original_function = AsyncMock(return_value={"id": "cntr_test"})
+    with patch("litellm.containers.acreate_container", new_callable=AsyncMock) as create:
+        create.return_value = {"id": "cntr_test"}
+        router = Router(model_list=[])
+        await router.acreate_container(name="Test Container")
 
-    await router._init_containers_api_endpoints(
-        original_function=mock_original_function,
-        custom_llm_provider="openai",
-        name="Test Container",
-        model=None,
-    )
-
-    router._ageneric_api_call_with_fallbacks.assert_not_called()
-    mock_original_function.assert_called_once_with(custom_llm_provider="openai", name="Test Container", model=None)
+    create.assert_called_once_with(name="Test Container")
 
 
 @pytest.mark.asyncio
-async def test_init_containers_api_endpoints_create_with_unknown_model_passes_through(monkeypatch):
+async def test_containers_create_with_unknown_model_passes_through(monkeypatch):
     """
     A ``model`` that names no configured deployment must not turn into a 400. The call
     falls through to the handler with the caller's model and no injected deployment
     credentials, matching the behaviour before model-based routing existed.
     """
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    router = Router(
-        model_list=[
-            {
-                "model_name": "gpt-5.4",
-                "litellm_params": {"model": "openai/gpt-5.4", "api_key": "sk-model-list-key"},
-            }
-        ]
-    )
-    mock_original_function = AsyncMock(return_value={"id": "cntr_test"})
+    with patch("litellm.containers.acreate_container", new_callable=AsyncMock) as create:
+        create.return_value = {"id": "cntr_test"}
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "gpt-5.4",
+                    "litellm_params": {"model": "openai/gpt-5.4", "api_key": "sk-model-list-key"},
+                }
+            ]
+        )
+        await router.acreate_container(name="Test Container", model="does-not-exist")
 
-    await router._init_containers_api_endpoints(
-        original_function=mock_original_function,
-        custom_llm_provider="openai",
-        name="Test Container",
-        model="does-not-exist",
-    )
-
-    mock_original_function.assert_called_once()
-    call_kw = mock_original_function.call_args.kwargs
+    create.assert_called_once()
+    call_kw = create.call_args.kwargs
     assert call_kw["model"] == "does-not-exist"
     assert call_kw["name"] == "Test Container"
     assert "api_key" not in call_kw
@@ -1232,30 +866,11 @@ def test_router_model_group_encrypted_content_affinity_callback_registration():
 
     try:
         callbacks = router.optional_callbacks or []
-        encrypted_content_callbacks = [
-            cb for cb in callbacks if isinstance(cb, EncryptedContentAffinityCheck)
-        ]
-        deployment_callback = next(
-            cb for cb in callbacks if isinstance(cb, DeploymentAffinityCheck)
-        )
+        encrypted_content_callbacks = [cb for cb in callbacks if isinstance(cb, EncryptedContentAffinityCheck)]
+        deployment_callback = next(cb for cb in callbacks if isinstance(cb, DeploymentAffinityCheck))
         assert len(encrypted_content_callbacks) == 1
         assert encrypted_content_callbacks[0].enable_global_affinity is False
-        assert (
-            encrypted_content_callbacks[0].model_group_affinity_config
-            == model_group_affinity_config
-        )
-        assert callbacks.index(encrypted_content_callbacks[0]) < callbacks.index(
-            deployment_callback
-        )
-
-        router._add_encrypted_content_affinity_check(enable_global_affinity=True)
-
-        callbacks = router.optional_callbacks or []
-        encrypted_content_callbacks = [
-            cb for cb in callbacks if isinstance(cb, EncryptedContentAffinityCheck)
-        ]
-        assert len(encrypted_content_callbacks) == 1
-        assert encrypted_content_callbacks[0].enable_global_affinity is True
-        assert encrypted_content_callbacks[0].ctx is router._core_ctx
+        assert encrypted_content_callbacks[0].model_group_affinity_config == model_group_affinity_config
+        assert callbacks.index(encrypted_content_callbacks[0]) < callbacks.index(deployment_callback)
     finally:
         router.discard()

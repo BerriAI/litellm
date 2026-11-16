@@ -65,7 +65,7 @@ from litellm.constants import (
     MICROSOFT_USER_ID_ATTRIBUTE,
     MICROSOFT_USER_LAST_NAME_ATTRIBUTE,
 )
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, decoded_json_object
 from litellm.litellm_core_utils.dot_notation_indexing import get_nested_value
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -78,7 +78,6 @@ from litellm.proxy._types import (
     LitellmUserRoles,
     Member,
     NewTeamRequest,
-    NewUserRequest,
     NewUserRequestTeam,
     NewUserResponse,
     ProxyErrorTypes,
@@ -87,7 +86,13 @@ from litellm.proxy._types import (
     TeamMemberAddRequest,
     UserAPIKeyAuth,
 )
-from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken, get_team_object, get_user_object
+from litellm.proxy.auth.auth_checks import (
+    ExperimentalUIJWTToken,
+    email_belongs_to_another_user,
+    get_team_object,
+    get_user_object,
+    read_email_verified,
+)
 from litellm.proxy.auth.auth_utils import (  # noqa: F401  # legacy module exports
     _get_request_ip_address,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     get_request_ip_address,
@@ -164,6 +169,7 @@ from litellm.types.proxy.management_endpoints.ui_sso import (
     MicrosoftGraphAPIUserGroupResponse,
     MicrosoftServicePrincipalTeam,
     RoleMappings,
+    SSONewUserRequest,
     TeamMappings,
 )
 from litellm.types.proxy.ui_sso import ParsedOpenIDResult
@@ -1389,6 +1395,7 @@ def generic_response_convertor(
         team_id_to_upsert=team_id_to_upsert,
         user_role=user_role,
         extra_fields=extra_fields,
+        email_verified=read_email_verified(token.get("email_verified")),
     )
 
 
@@ -1973,11 +1980,13 @@ async def get_existing_user_info_from_db(
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging,
     raise_database_outage: bool = False,
+    email_verified: bool | None = None,
 ) -> LiteLLM_UserTable | None:
     try:
         user_info = await get_user_object(
             user_id=user_id,
             user_email=user_email,
+            email_verified=email_verified,
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
             user_id_upsert=False,
@@ -2001,6 +2010,18 @@ def sso_lookup_user_ids(alternate_user_id: str | None, provider_id: str | None) 
         for user_id in (alternate_user_id, provider_id)
         if user_id is not None and not _is_blank_sso_user_id(user_id)
     )
+
+
+async def _sso_email_taken(
+    prisma_client: PrismaClient, user_email: str | None, owner_id: str | None, stored_email: str | None
+) -> bool:
+    if user_email is None or owner_id is None or (stored_email or "").casefold() == user_email.casefold():
+        return False
+    try:
+        return await email_belongs_to_another_user(prisma_client, user_email, owner_id)
+    except Exception as error:  # noqa: BLE001  # the email is optional, so a failed check leaves it out
+        verbose_proxy_logger.warning("SSO sign-in: could not check whether the email is in use: %s", error)
+        return True
 
 
 async def get_user_info_from_db(
@@ -2027,6 +2048,9 @@ async def get_user_info_from_db(
         )
 
         user_info: LiteLLM_UserTable | NewUserResponse | None = None
+        email_verified: Final = read_email_verified(
+            _sso_result_to_dict(result).get("email_verified")  # pyright: ignore[reportUnknownArgumentType]  # untyped IdP dict
+        )
 
         for user_id in potential_user_ids:
             user_info = await get_existing_user_info_from_db(
@@ -2036,6 +2060,7 @@ async def get_user_info_from_db(
                 user_api_key_cache=user_api_key_cache,
                 proxy_logging_obj=proxy_logging_obj,
                 raise_database_outage=resolved_by_database_only,
+                email_verified=email_verified,
             )
             if user_info is not None:
                 break
@@ -2044,12 +2069,22 @@ async def get_user_info_from_db(
             "user_info: %s; litellm.default_internal_user_params: %s", user_info, litellm.default_internal_user_params
         )
 
+        new_user_id: Final = None if user_defined_values is None else user_defined_values.get("user_id")
+        owner_id: Final = new_user_id if user_info is None else user_info.user_id
+        stored_email: Final = None if user_info is None else user_info.user_email
+        email_taken: Final = await _sso_email_taken(prisma_client, user_email, owner_id, stored_email)
+        new_user_values: Final[SSOUserDefinedValues | None] = (
+            {**user_defined_values, "user_email": None}
+            if email_taken and user_defined_values is not None
+            else user_defined_values
+        )
+
         # Upsert SSO User to LiteLLM DB
         user_info = await SSOAuthenticationHandler.upsert_sso_user(
             result=result,
             user_info=user_info,
-            user_email=user_email,
-            user_defined_values=user_defined_values,
+            user_email=stored_email if email_taken else user_email,
+            user_defined_values=new_user_values,
             prisma_client=prisma_client,
             raise_database_outage=resolved_by_database_only,
         )
@@ -2915,7 +2950,7 @@ async def insert_sso_user(
     if user_defined_values["user_role"] is None:
         user_defined_values["user_role"] = LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
 
-    new_user_request: Final = NewUserRequest(
+    new_user_request: Final = SSONewUserRequest(
         user_id=user_defined_values["user_id"],
         user_email=normalize_email(user_defined_values["user_email"]),
         user_alias=_get_sso_user_alias(result_openid),
@@ -2924,10 +2959,8 @@ async def insert_sso_user(
         budget_duration=user_defined_values["budget_duration"],
         sso_user_id=user_defined_values["user_id"],
         auto_create_key=False,
+        metadata={"auth_provider": getattr(result_openid, "provider")} if hasattr(result_openid, "provider") else {},
     )
-
-    if result_openid and hasattr(result_openid, "provider"):
-        new_user_request.metadata = {"auth_provider": getattr(result_openid, "provider")}
 
     from litellm.proxy.proxy_server import premium_user
 
@@ -3178,7 +3211,7 @@ def set_session_token_cookie(response: Response, request: Request, jwt_token: st
 
     Not HttpOnly: the dashboard reads this cookie via ``document.cookie`` to
     populate its own Authorization headers (see
-    ``ui/litellm-dashboard/src/utils/cookieUtils.ts``), so marking it
+    ``litellm/ui/litellm-dashboard/src/utils/cookieUtils.ts``), so marking it
     HttpOnly would break login. Secure is still required whenever the public
     origin is HTTPS, resolved the same trust-aware way as every other
     litellm cookie."""
@@ -3332,7 +3365,6 @@ class SSOAuthenticationHandler:
         Returns:
             RedirectResponse: The redirect response from the SSO provider.
         """
-        asks_for_refresh_token: Final = await login_asks_for_refresh_token(retention_enabled)
         # Google SSO Auth
         if google_client_id is not None:
             google_client_secret: Final = os.getenv("GOOGLE_CLIENT_SECRET", None)
@@ -3353,11 +3385,11 @@ class SSOAuthenticationHandler:
                 redirect_url,
                 google_client_id,
             )
+            google_params: Final = (
+                dict(GOOGLE_REFRESH_TOKEN_PARAMS) if await login_asks_for_refresh_token(retention_enabled) else None
+            )
             with google_sso:
-                return await google_sso.get_login_redirect(
-                    state=state,
-                    params=dict(GOOGLE_REFRESH_TOKEN_PARAMS) if asks_for_refresh_token else None,
-                )
+                return await google_sso.get_login_redirect(state=state, params=google_params)
         # Microsoft SSO Auth
         elif microsoft_client_id is not None:
             microsoft_client_secret: Final = os.getenv("MICROSOFT_CLIENT_SECRET", None)
@@ -3375,7 +3407,11 @@ class SSOAuthenticationHandler:
                 tenant=microsoft_tenant,
                 redirect_uri=redirect_url,
                 allow_insecure_http=True,
-                scope=[*CustomMicrosoftSSO.scope, MICROSOFT_REFRESH_TOKEN_SCOPE] if asks_for_refresh_token else None,
+                scope=(
+                    [*CustomMicrosoftSSO.scope, MICROSOFT_REFRESH_TOKEN_SCOPE]
+                    if await login_asks_for_refresh_token(retention_enabled)
+                    else None
+                ),
             )
             with microsoft_sso:
                 return await microsoft_sso.get_login_redirect(state=state)
@@ -4858,7 +4894,7 @@ class MicrosoftSSOHandler:
 
             # Decode the JWT without signature verification
             # (signature is already verified by fastapi_sso)
-            decoded_token: Final = jwt.decode(id_token, options={"verify_signature": False})
+            decoded_token: Final = decoded_json_object(jwt.decode(id_token, options={"verify_signature": False}))
 
             # Extract app_roles claim from the token
             ## check for both 'roles' and 'app_roles' claims

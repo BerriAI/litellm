@@ -1,0 +1,105 @@
+uv sync --inexact --frozen --group proxy-dev --group e2e-dev
+warning: `VIRTUAL_ENV=.venv-typecheck` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead
+Checked 219 packages in 48ms
+uv run --no-sync python litellm/scripts/prisma_generate_if_needed.py
+warning: `VIRTUAL_ENV=.venv-typecheck` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead
+Prisma client already generated for litellm/proxy/schema.prisma (prisma 0.11.0); skipping prisma generate
+uv run --no-sync python litellm/scripts/check_mcp_operation_boundary.py
+uv run --no-sync python litellm/scripts/ruff_strict_gate.py --base "upstream/main"
+uv run --no-sync python litellm/scripts/type_discipline_gate.py --base "upstream/main"
+uv run --no-sync python litellm/scripts/test_quality_gate.py --base "upstream/main"
+uv run --no-sync python litellm/scripts/openapi_docs_gate.py --base "upstream/main"
+uv run --no-sync python litellm/scripts/type_check_gate.py --base "upstream/main"
+uv run --no-sync basedpyright tests/e2e tests/e2e_harness
+cd litellm && uv run --no-sync python ../tests/documentation_tests/test_circular_imports.py && cd ..
+warning: `VIRTUAL_ENV=.venv-typecheck` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead
+warning: `VIRTUAL_ENV=.venv-typecheck` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead
+warning: `VIRTUAL_ENV=.venv-typecheck` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead
+warning: `VIRTUAL_ENV=.venv-typecheck` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead
+warning: `VIRTUAL_ENV=.venv-typecheck` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead
+warning: `VIRTUAL_ENV=.venv-typecheck` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead
+warning: `VIRTUAL_ENV=.venv-typecheck` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead
+warning: `VIRTUAL_ENV=.venv-typecheck` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead
+warning: `VIRTUAL_ENV=/Users/alepigna/Desktop/Litellm/litellm/.venv-typecheck` does not match the project environment path `/Users/alepigna/Desktop/Litellm/litellm/.venv` and will be ignored; use `--active` to target the active environment instead
+No LiteLLM type hints found.
+warning: `VIRTUAL_ENV=.venv-typecheck` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead
+Would reformat: litellm/proxy-extras/litellm_proxy_extras/_logging.py
+Would reformat: litellm/proxy-extras/litellm_proxy_extras/prisma_toolchain.py
+Would reformat: litellm/runtime/migrations/run.py
+Would reformat: litellm/rust/crates/model-catalog/tests/generate_price_lookup_reference.py
+Would reformat: litellm/rust/crates/python-compat/scripts/generate_stdlib_fixtures.py
+Would reformat: litellm/scripts/adaptive_router_demo/eval.py
+Would reformat: litellm/scripts/adaptive_router_demo/traffic.py
+Would reformat: litellm/scripts/benchmark_anthropic_messages_perf.py
+Would reformat: litellm/scripts/benchmark_chat_completions_perf.py
+Would reformat: litellm/scripts/benchmark_mock.py
+Would reformat: litellm/scripts/benchmark_model_response_creator.py
+Would reformat: litellm/scripts/benchmark_proxy_vs_provider.py
+Would reformat: litellm/scripts/benchmark_streaming_chunk_overhead.py
+Would reformat: litellm/scripts/build_core_distribution.py
+Would reformat: litellm/scripts/check_test_quality.py
+Would reformat: litellm/scripts/check_type_discipline.py
+Would reformat: litellm/scripts/ci_cd/check_file_length.py
+Would reformat: litellm/scripts/ci_cd/check_files_match.py
+Would reformat: litellm/scripts/ci_cd/cost_map_guard.py
+Would reformat: litellm/scripts/ci_cd/run_migration.py
+Would reformat: litellm/scripts/db/create_views.py
+Would reformat: litellm/scripts/db/migrate_keys.py
+Would reformat: litellm/scripts/db/update_unassigned_teams.py
+Would reformat: litellm/scripts/eval_compression.py
+Would reformat: litellm/scripts/gate_slot_lock.py
+Would reformat: litellm/scripts/generate_provider_endpoints_support.py
+Would reformat: litellm/scripts/health_check/benchmark_get_all_latest_health_checks.py
+Would reformat: litellm/scripts/health_check/health_check_client.py
+Would reformat: litellm/scripts/mock_bedrock_passthrough_target.py
+Would reformat: litellm/scripts/mutation_report.py
+Would reformat: litellm/scripts/openapi_docs_gate.py
+Would reformat: litellm/scripts/prisma_generate_if_needed.py
+Would reformat: litellm/scripts/ruff_strict_gate.py
+Would reformat: litellm/scripts/seed_request_logs.py
+Would reformat: litellm/scripts/test_quality_gate.py
+Would reformat: litellm/scripts/test_tool_allowlist_script.py
+Would reformat: litellm/scripts/type_check_gate.py
+Would reformat: litellm/scripts/verify_adaptive_router.py
+Would reformat: litellm/ui/litellm-dashboard/scripts/generate_compliance_prompts.py
+Would reformat: litellm/ui/litellm-dashboard/src/components/claude_code_plugins/skillInstall.fixture.py
+40 files would be reformatted, 1260 files already formatted
+make[2]: *** [lint-format-check-changed] Error 1
+make[2]: *** Waiting for unfinished jobs....
+MCP operation boundary: passed
+cd litellm && uv run --no-sync ruff check . && cd ..
+warning: `VIRTUAL_ENV=/Users/alepigna/Desktop/Litellm/litellm/.venv-typecheck` does not match the project environment path `/Users/alepigna/Desktop/Litellm/litellm/.venv` and will be ignored; use `--active` to target the active environment instead
+I001 [*] Import block is un-sorted or un-formatted
+  --> integrations/lunary.py:3:1
+   |
+ 1 |   #### What this does ####
+ 2 |   #    On success + failure, log events to lunary.ai
+ 3 | / import importlib
+ 4 | | import traceback
+ 5 | | from datetime import datetime, timezone
+ 6 | | from typing import TYPE_CHECKING, Final
+ 7 | |
+ 8 | | import packaging
+ 9 | |
+10 | | from litellm.llms.anthropic.common_utils import tool_calls_with_server_tool_calls
+   | |_________________________________________________________________________________^
+11 |
+12 |   if TYPE_CHECKING:
+   |
+help: Organize imports
+
+Found 1 error.
+[*] 1 fixable with the `--fix` option.
+make[2]: *** [lint-ruff] Error 1
+FAIL: strict-rule totals grew past their merge-base count (base upstream/main):
+  I001: total 1 over ceiling 0 (this change added 1)
+Reduce the new violations or remove an equal number elsewhere; the ceiling is the merge-base count.
+make[2]: *** [lint-gate] Error 1
+[from litellm import *] OK! no issues!
+OK: no LIT rule grew past its merge-base count (base upstream/main)
+0 errors, 0 warnings, 0 notes
+OK: no OA rule grew past its merge-base count (base upstream/main)
+OK: no TQ rule grew past its merge-base count (base upstream/main)
+OK: every basedpyright rule is within its ceiling (94334 errors total, base 2f448a9ee896)
+make[1]: *** [lint-inner] Error 2
+make: *** [lint] Error 2

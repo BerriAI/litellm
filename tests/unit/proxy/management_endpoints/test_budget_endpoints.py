@@ -2,18 +2,20 @@
 
 import json
 import types
+from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 from typing import Final
-import pytest
 from unittest.mock import AsyncMock, MagicMock
+
+import pytest
 from fastapi.testclient import TestClient
+from prisma import Json
 
 import litellm.proxy.proxy_server as ps
-from litellm.proxy.proxy_server import app
-from litellm.proxy._types import UserAPIKeyAuth, LitellmUserRoles, CommonProxyErrors
 from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
-
+from litellm.proxy.proxy_server import app
 
 
 @pytest.fixture
@@ -21,12 +23,23 @@ def client_and_mocks(monkeypatch):
     # Setup MagicMock Prisma
     mock_prisma = MagicMock()
     mock_table = MagicMock()
-    mock_table.create = AsyncMock(side_effect=lambda *, data: data)
-    mock_table.update = AsyncMock(side_effect=lambda *, where, data: {**where, **data})
+
+    def created(*, data: Mapping[str, object]) -> dict[str, object]:
+        return {key: value.data if isinstance(value, Json) else value for key, value in data.items()}
+
+    def updated(*, where: Mapping[str, object], data: Mapping[str, object]) -> dict[str, object]:
+        return created(data={**where, **data})
+
+    mock_table.create = AsyncMock(side_effect=created)
+    mock_table.update = AsyncMock(side_effect=updated)
 
     mock_prisma.db = types.SimpleNamespace(
         litellm_budgettable=mock_table,
+        litellm_customermembertable=types.SimpleNamespace(find_many=AsyncMock(return_value=[])),
+        litellm_customerteamtable=types.SimpleNamespace(find_many=AsyncMock(return_value=[])),
+        litellm_customerorganizationtable=types.SimpleNamespace(find_many=AsyncMock(return_value=[])),
         litellm_dailyspend=mock_table,
+        query_raw=AsyncMock(return_value=[{"referenced": False}]),
     )
 
     # Monkeypatch Mocked Prisma client into the server module
@@ -46,6 +59,109 @@ def client_and_mocks(monkeypatch):
     # teardown
     app.dependency_overrides.clear()
     monkeypatch.setattr(ps, "prisma_client", ps.prisma_client)
+
+
+@pytest.mark.parametrize("path", ("/budget/new", "/budget/update"))
+def test_budget_windows_round_trip_with_existing_scalar_cap(
+    client_and_mocks: tuple[TestClient, MagicMock, MagicMock], path: str
+) -> None:
+    client, _, _ = client_and_mocks
+    response: Final = client.post(path, json={
+        "budget_id": "combined", "max_budget": 25, "budget_duration": "30d",
+        "budget_limits": [
+            {"budget_duration": "1mo", "max_budget": 0, "reset_at": "2027-02-01T00:00:00Z"},
+            {"budget_duration": "12mo", "max_budget": 1000, "reset_at": "2028-01-01T00:00:00Z"},
+        ],
+    })
+    assert response.status_code == 200, response.text
+    result: Final = response.json()
+    assert result["max_budget"] == 25
+    assert result["budget_duration"] == "30d"
+    assert {entry["budget_duration"]: entry["max_budget"] for entry in result["budget_limits"]} == {
+        "1mo": 0, "12mo": 1000,
+    }
+    assert result["budget_limits"][0]["reset_at"] == "2027-02-01T00:00:00+00:00"
+
+
+@pytest.mark.parametrize("clear", (None, []))
+def test_budget_update_can_clear_windows(
+    client_and_mocks: tuple[TestClient, MagicMock, MagicMock], clear: object
+) -> None:
+    client, _, _ = client_and_mocks
+    response: Final = client.post("/budget/update", json={"budget_id": "combined", "budget_limits": clear})
+    assert response.status_code == 200, response.text
+    assert response.json()["budget_limits"] == clear
+
+
+@pytest.mark.parametrize("path", ("/budget/new", "/budget/update"))
+@pytest.mark.parametrize("duration", ("2d", "14d", "30d", "1h"))
+def test_concurrent_windows_reject_noncanonical_durations_but_scalar_budgets_preserve_them(
+    client_and_mocks: tuple[TestClient, MagicMock, MagicMock], path: str, duration: str,
+) -> None:
+    client, _, table = client_and_mocks
+    rejected: Final = client.post(path, json={
+        "budget_id": "duration-test",
+        "budget_limits": [{"budget_duration": duration, "max_budget": 10}],
+    })
+    assert rejected.status_code == 422, rejected.text
+    table.create.assert_not_awaited()
+    table.update.assert_not_awaited()
+
+    accepted: Final = client.post(path, json={
+        "budget_id": "duration-test", "max_budget": 10, "budget_duration": duration,
+    })
+    assert accepted.status_code == 200, accepted.text
+    assert accepted.json()["budget_duration"] == duration
+
+
+def test_budget_update_rejects_windows_on_an_existing_scalar_consumer(
+    client_and_mocks: tuple[TestClient, MagicMock, MagicMock],
+) -> None:
+    client, database, table = client_and_mocks
+    database.db.query_raw.return_value = [{"referenced": True}]
+    response: Final = client.post("/budget/update", json={
+        "budget_id": "used-by-key", "budget_limits": [{"budget_duration": "12mo", "max_budget": 1000}],
+    })
+    assert response.status_code == 400, response.text
+    table.update.assert_not_awaited()
+
+
+def test_budget_edit_evicts_members_and_organization_aliases(
+    client_and_mocks: tuple[TestClient, MagicMock, MagicMock], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, database, _ = client_and_mocks
+    cache: Final = UserApiKeyCache(in_memory_cache=InMemoryCache())
+    member_key: Final = "customer_member_id:member"
+    alias_key: Final = "customer_org_alias:organization"
+    cache.set_cache(member_key, {"stale": True}, local_only=True)
+    cache.set_cache(alias_key, {"stale": True}, local_only=True)
+    monkeypatch.setattr(ps, "user_api_key_cache", cache)
+    database.db.litellm_customermembertable.find_many.return_value = [types.SimpleNamespace(customer_member_id="member")]
+    database.db.litellm_customerorganizationtable.find_many.return_value = [types.SimpleNamespace(alias="organization")]
+    response: Final = client.post("/budget/update", json={"budget_id": "shared", "max_budget": 3})
+    assert response.status_code == 200, response.text
+    assert cache.get_cache(member_key, local_only=True) is None
+    assert cache.get_cache(alias_key, local_only=True) is None
+
+
+def test_budget_edit_evicts_a_members_inherited_team_budget(
+    client_and_mocks: tuple[TestClient, MagicMock, MagicMock], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, database, _ = client_and_mocks
+    cache: Final = UserApiKeyCache(in_memory_cache=InMemoryCache())
+    member_key: Final = "customer_member_id:through-team"
+    other_key: Final = "customer_member_id:unrelated"
+    cache.set_cache(member_key, {"max_budget": 10}, local_only=True)
+    cache.set_cache(other_key, {"max_budget": 20}, local_only=True)
+    monkeypatch.setattr(ps, "user_api_key_cache", cache)
+    database.db.litellm_customerteamtable.find_many.return_value = [types.SimpleNamespace(customer_team_id="team")]
+    database.db.litellm_customermembertable.find_many.side_effect = [
+        [], [types.SimpleNamespace(customer_member_id="through-team")],
+    ]
+    response: Final = client.post("/budget/update", json={"budget_id": "team-budget", "max_budget": 3})
+    assert response.status_code == 200, response.text
+    assert cache.get_cache(member_key, local_only=True) is None
+    assert cache.get_cache(other_key, local_only=True) == {"max_budget": 20}
 
 
 @pytest.mark.asyncio
@@ -190,6 +306,43 @@ async def test_new_and_update_budget_persist_tpd_limit(client_and_mocks):
     assert resp.status_code == 200, resp.text
     assert resp.json()["tpd_limit"] == 500000
     assert mock_table.update.await_args.kwargs["data"]["tpd_limit"] == 500000
+
+
+@pytest.mark.asyncio
+async def test_new_and_update_budget_persist_per_model_tpm_and_rpm_limits(client_and_mocks):
+    client, _, mock_table = client_and_mocks
+
+    resp = client.post(
+        "/budget/new",
+        json={"budget_id": "budget_models", "model_tpm_limit": {"gpt-4o": 400000}, "model_rpm_limit": {"gpt-4o": 200}},
+    )
+    assert resp.status_code == 200, resp.text
+    created: Final = mock_table.create.await_args.kwargs["data"]
+    assert json.loads(created["model_tpm_limit"]) == {"gpt-4o": 400000}, created
+    assert json.loads(created["model_rpm_limit"]) == {"gpt-4o": 200}, created
+
+    resp = client.post("/budget/update", json={"budget_id": "budget_models", "model_tpm_limit": {"gpt-4o": 0}})
+    assert resp.status_code == 200, resp.text
+    updated: Final = mock_table.update.await_args.kwargs["data"]
+    assert json.loads(updated["model_tpm_limit"]) == {"gpt-4o": 0}, updated
+    assert "model_rpm_limit" not in updated, updated
+
+
+@pytest.mark.parametrize("route", ["/budget/new", "/budget/update"])
+@pytest.mark.parametrize("field", ["model_tpm_limit", "model_rpm_limit"])
+@pytest.mark.parametrize("value", [-1, 1.5])
+@pytest.mark.asyncio
+async def test_budget_rejects_a_per_model_limit_that_is_not_a_whole_number_of_zero_or_more(
+    client_and_mocks, route, field, value
+):
+    client, _, mock_table = client_and_mocks
+
+    resp = client.post(route, json={"budget_id": "budget_models", field: {"gpt-4o": value}})
+
+    assert resp.status_code == 422, resp.text
+    assert field in resp.text
+    mock_table.create.assert_not_awaited()
+    mock_table.update.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -477,3 +630,37 @@ async def test_update_budget_serializes_model_max_budget_for_prisma(
         "gpt4o": {"max_budget": 5.0, "budget_duration": "1d"},
         "glm-5.2": {"max_budget": 7.5, "budget_duration": "30d"},
     }
+
+
+@pytest.fixture
+def admin_client(client_and_mocks):
+    client, mock_prisma, mock_table = client_and_mocks
+    mock_table.delete = AsyncMock(return_value={"budget_id": "tpl-1"})
+    mock_prisma.db.litellm_customerorganizationtable = MagicMock()
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+    return client, mock_prisma, mock_table
+
+
+@pytest.mark.asyncio
+async def test_delete_budget_refuses_customer_organization_default_budget(admin_client):
+    client, mock_prisma, mock_table = admin_client
+    mock_prisma.db.litellm_customerorganizationtable.count = AsyncMock(return_value=1)
+
+    resp: Final = client.post("/budget/delete", json={"id": "tpl-1"})
+
+    assert resp.status_code == 409, resp.text
+    assert "/default_budgets/" in resp.json()["detail"]["error"]
+    mock_table.delete.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_delete_budget_deletes_budget_no_customer_organization_uses(admin_client):
+    client, mock_prisma, mock_table = admin_client
+    mock_prisma.db.litellm_customerorganizationtable.count = AsyncMock(return_value=0)
+
+    resp: Final = client.post("/budget/delete", json={"id": "tpl-1"})
+
+    assert resp.status_code == 200, resp.text
+    mock_table.delete.assert_awaited_once_with(where={"budget_id": "tpl-1"})

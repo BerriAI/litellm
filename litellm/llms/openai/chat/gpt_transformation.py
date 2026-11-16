@@ -2,37 +2,53 @@
 Support for gpt model family
 """
 
+import asyncio
 import json
 import os
 from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping, Sequence
+from contextvars import ContextVar
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional, cast, overload
+from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, cast, overload
 from urllib.parse import urlparse
 
 import httpx
 from pydantic import TypeAdapter, ValidationError
+from typing_extensions import TypedDict
 
 import litellm
 from litellm.constants import OPENAI_SYSTEM_MESSAGES_FIRST_PROVIDERS
-from litellm.litellm_core_utils.core_helpers import drops_unsupported_params, map_finish_reason
+from litellm.litellm_core_utils.core_helpers import (
+    drops_unsupported_params,
+    map_finish_reason,
+    require_attributes,
+    subscript,
+)
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
     extract_reasoning_content,
     handle_invalid_parallel_tool_calls,
     should_convert_tool_call_to_json_mode,
 )
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
-    drop_non_python_regex_patterns,
     drop_tool_reference_parts_from_tool_messages,
-    flatten_combinators_and_drop_non_python_regex_patterns,
     get_tool_call_names,
     hoist_images_from_tool_messages,
     system_messages_first,
-    tool_with_sanitized_parameters,
-    without_prompt_cache_breakpoints,
 )
 from litellm.litellm_core_utils.prompt_templates.image_handling import (
     async_convert_url_to_base64,
+    async_fetch_urls_to_base64,
     convert_url_to_base64,
+    file_id_urls_before_an_unreadable_part,
+    has_file_id_urls,
+)
+from litellm.litellm_core_utils.prompt_templates.json_schema_utils import (
+    drop_non_python_regex_patterns,
+    flatten_combinators_and_drop_non_python_regex_patterns,
+    tool_with_sanitized_parameters,
+)
+from litellm.litellm_core_utils.prompt_templates.prompt_cache_breakpoint_utils import (
+    chat_completion_prompt_cache_breakpoints_for_wire,
+    without_prompt_cache_breakpoints,
 )
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
@@ -80,6 +96,20 @@ else:
 
 _NO_TOOLS_UPDATE: Final[Mapping[str, object]] = MappingProxyType({})
 
+_ROLES_WHOSE_FILES_ARE_DOWNLOADED: Final = ("user", "tool")
+_PDF_URL_STARTS: Final = ("https://", "http://", "www.")
+_NOTHING_PREFETCHED: Final[Mapping[str, "str | litellm.ImageFetchError"]] = MappingProxyType({})
+_prefetched_pdf_urls: Final[ContextVar[Mapping[str, "str | litellm.ImageFetchError"]]] = ContextVar(
+    "prefetched_pdf_urls"
+)
+
+
+def _pdf_data_url(url: str) -> str:
+    prefetched: Final = _prefetched_pdf_urls.get(_NOTHING_PREFETCHED).get(url)
+    if isinstance(prefetched, litellm.ImageFetchError):
+        raise prefetched
+    return prefetched if prefetched is not None else convert_url_to_base64(url)
+
 
 def targets_openai_hosted_endpoint(custom_llm_provider: str | None, api_base: str | None) -> bool:
     if custom_llm_provider != "openai":
@@ -121,6 +151,14 @@ def translate_developer_role_for_openai_compatible_endpoint(
 _OBJECT_MAPPING: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 _CHOICE_MAPPINGS: Final = TypeAdapter(tuple[Mapping[str, object], ...])
 _DECODED_JSON: Final = TypeAdapter(object)
+
+
+class _ModelResponseStreamFields(TypedDict, total=False, extra_items=object):
+    pass
+
+
+class _SupportsGetWithDefault(Protocol):
+    def get(self, key: str, default: str, /) -> object: ...
 
 
 def _litellm_params_str(litellm_params: Mapping[str, object] | None, key: str) -> str | None:
@@ -186,9 +224,6 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
     - `top_p` (number or null): An alternative to sampling with temperature, used for nucleus sampling.
     """
 
-    # Add a class variable to track if this is the base class
-    _is_base_class = True
-
     frequency_penalty: int | None = None
     function_call: str | dict | None = None
     functions: list | None = None
@@ -219,8 +254,6 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
-
-        self.__class__._is_base_class = False
 
     @classmethod
     def get_config(cls):
@@ -317,9 +350,8 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         )
 
     def contains_pdf_url(self, content_item: ChatCompletionFileObjectFile) -> bool:
-        potential_pdf_url_starts: Final = ["https://", "http://", "www."]
         file_id: Final = content_item.get("file_id")
-        if file_id and any(file_id.startswith(start) for start in potential_pdf_url_starts):
+        if file_id and any(file_id.startswith(start) for start in _PDF_URL_STARTS):
             return True
         return False
 
@@ -327,7 +359,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         content_copy: Final = content_item.copy()
         file_id: Final = content_copy.get("file_id")
         if file_id is not None:
-            base64_data: Final = convert_url_to_base64(file_id)
+            base64_data: Final = _pdf_data_url(file_id)
             content_copy["file_data"] = base64_data
             content_copy["filename"] = "my_file.pdf"
             content_copy.pop("file_id")
@@ -555,26 +587,38 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
     ) -> tuple[Sequence[AllMessageValues], Sequence["ChatCompletionToolParam"] | None]:
         """
         A deployment that reads OpenAI's ``prompt_cache_breakpoint`` (gpt-5.6+ on
-        api.openai.com, or one opted in through ``prompt_cache_options`` or the cost
-        map) gets each Anthropic ``cache_control`` mark rewritten in place. Any other
-        endpoint keeps or strips the marks as before, and under drop_params also loses
-        every ``prompt_cache_breakpoint`` it cannot read.
+        api.openai.com, or one opted in through ``prompt_cache_options``, its own
+        ``model_info``, or the cost map) gets each
+        Anthropic ``cache_control`` mark rewritten in place, and under drop_params each
+        content part's ``prompt_cache_breakpoint`` cut down to what chat completions
+        accepts. Any other endpoint keeps or strips the marks as before, and under
+        drop_params also loses every ``prompt_cache_breakpoint`` it cannot read.
         """
-        from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
+        from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook, routed_model_info
 
         custom_llm_provider: Final = _litellm_params_str(litellm_params, "custom_llm_provider")
         api_base: Final = _litellm_params_str(litellm_params, "api_base")
         reads_breakpoints: Final = AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint(
-            model, custom_llm_provider, api_base, prompt_cache_options
+            model,
+            custom_llm_provider,
+            api_base,
+            prompt_cache_options,
+            routed_model_info(litellm_params.get("model_info")),
         )
         if not reads_breakpoints and self._should_preserve_cache_control_for_endpoint(custom_llm_provider, api_base):
             return (
                 _claude_messages_within_cache_control_cap(model, messages, tools, litellm_params, request_params),
                 tools,
             )
-        drops_breakpoints: Final = not reads_breakpoints and _drops_params(litellm_params)
+        drop_params: Final = _drops_params(litellm_params)
+        drops_breakpoints: Final = not reads_breakpoints and drop_params
         renamed: Final = (
-            [AnthropicCacheControlHook.cache_control_as_prompt_cache_breakpoints(message) for message in messages]
+            [
+                AnthropicCacheControlHook.cache_control_as_prompt_cache_breakpoints(
+                    chat_completion_prompt_cache_breakpoints_for_wire(message, drop_params)
+                )
+                for message in messages
+            ]
             if reads_breakpoints
             else [without_prompt_cache_breakpoints(message) for message in messages]
             if drops_breakpoints
@@ -616,7 +660,10 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         raw_api_base: Final = litellm_params.get("api_base")
         sanitize: Final = (
             flatten_combinators_and_drop_non_python_regex_patterns
-            if self._targets_openai_hosted_endpoint(provider, raw_api_base if isinstance(raw_api_base, str) else None)
+            if self._targets_openai_hosted_endpoint(
+                provider if isinstance(provider, str) else None,
+                raw_api_base if isinstance(raw_api_base, str) else None,
+            )
             else drop_non_python_regex_patterns
         )
         sanitized: Final = [
@@ -671,6 +718,12 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             **self._sanitized_tools_update_for_openai(optional_params, litellm_params),
         }
 
+    def _flattens_content_lists(self) -> bool:
+        return False
+
+    def _with_provider_roles(self, messages: Sequence[AllMessageValues], model: str) -> Sequence[AllMessageValues]:
+        return messages
+
     async def async_transform_request(
         self,
         model: str,
@@ -679,30 +732,25 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-        transformed_messages, tools = self._messages_and_tools_in_cache_mark_dialect(
-            model=model,
-            messages=await self._transform_messages(
-                messages=self._prompt_cache_ordered_messages(messages, litellm_params), model=model, is_async=True
-            ),
-            tools=optional_params.get("tools", []),
-            prompt_cache_options=_prompt_cache_options(optional_params),
-            litellm_params=litellm_params,
-            request_params=optional_params,
-        )
-        if tools is not None and len(tools) > 0:
-            optional_params["tools"] = tools
-        if self.__class__._is_base_class:
-            if not optional_params.get("tools") and not optional_params.get("functions"):
-                optional_params.pop("tool_choice", None)
-            return {
-                "model": model,
-                "messages": transformed_messages,
-                **optional_params,
-                **self._sanitized_tools_update_for_openai(optional_params, litellm_params),
-            }
-        else:
-            ## allow for any object specific behaviour to be handled
+        if not has_file_id_urls(messages, _PDF_URL_STARTS):
             return self.transform_request(model, messages, optional_params, litellm_params, headers)
+        sent_messages: Final = self._with_provider_roles(
+            self._prompt_cache_ordered_messages(messages, litellm_params), model
+        )
+        pdf_urls: Final = file_id_urls_before_an_unreadable_part(
+            (message for message in sent_messages if message.get("role") in _ROLES_WHOSE_FILES_ARE_DOWNLOADED),
+            _PDF_URL_STARTS,
+        )
+        prefetched: Final = (
+            _NOTHING_PREFETCHED if self._flattens_content_lists() else await async_fetch_urls_to_base64(pdf_urls)
+        )
+        reset_token: Final = _prefetched_pdf_urls.set(prefetched)
+        try:
+            return await asyncio.to_thread(
+                self.transform_request, model, messages, optional_params, litellm_params, headers
+            )
+        finally:
+            _prefetched_pdf_urls.reset(reset_token)
 
     def _passed_in_tools(self, optional_params: dict) -> bool:
         return optional_params.get("tools", None) is not None
@@ -777,7 +825,10 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
                 convert_tool_call_to_json_mode=json_mode,
             ):
                 # to support response_format on claude models
-                json_mode_content_str: str | None = str(new_tool_calls[0]["function"].get("arguments", "")) or None
+                tool_call_function = require_attributes(
+                    subscript(new_tool_calls[0], "function"), _SupportsGetWithDefault, "get"
+                )
+                json_mode_content_str: str | None = str(tool_call_function.get("arguments", "")) or None
                 if json_mode_content_str is not None:
                     translated_message = Message(content=json_mode_content_str)
                     finish_reason = "stop"
@@ -1055,7 +1106,7 @@ class OpenAIChatCompletionStreamingHandler(BaseModelResponseIterator):
             choices: Final = self._map_reasoning_to_reasoning_content(raw_choices)
             fingerprint: Final = _OBJECT_MAPPING.validate_python(chunk).get("system_fingerprint")
 
-            kwargs: Final[dict[str, Any]] = {
+            kwargs: Final[dict[str, object]] = {
                 "id": chunk.get("id"),
                 "system_fingerprint": fingerprint,
                 "object": "chat.completion.chunk",
@@ -1068,6 +1119,6 @@ class OpenAIChatCompletionStreamingHandler(BaseModelResponseIterator):
             service_tier: Final = chunk.get("service_tier")
             if isinstance(service_tier, str) and service_tier:
                 kwargs["service_tier"] = service_tier
-            return ModelResponseStream(**kwargs)
+            return ModelResponseStream(**_ModelResponseStreamFields(**kwargs))
         except Exception as e:
             raise e

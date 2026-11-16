@@ -44,7 +44,7 @@ def _codex_history(marker: str) -> list[JsonValue]:
         {
             "type": "agent_message",
             "id": "msg_agent",
-            "content": [{"type": "text", "text": "sub-agent said "}, {"type": "text", "encrypted_content": "hello"}],
+            "content": [{"type": "input_text", "text": "sub-agent said "}, {"type": "input_text", "text": "hello"}],
         },
         {"type": "context_compaction", "id": "cmp_1", "encrypted_content": "compacted-history"},
         {

@@ -1,5 +1,5 @@
 {
-  "metadata": {"entity_total_api_keys":null,
+  "metadata": {"entity_total_api_keys":{"user-1": 5},
     "api_key_limit": 100,
     "has_more": false,
     "page": 1,
@@ -39,6 +39,7 @@
             "metrics": {
               "api_requests": 1,
               "autorouter_savings_spend": 0.0,
+              "guardrail_spend": 0.0,
               "cache_creation_input_tokens": 0,
               "cache_read_input_tokens": 1,
               "completion_tokens": 2,
@@ -68,6 +69,7 @@
             "metrics": {
               "api_requests": 1,
               "autorouter_savings_spend": 0.0,
+              "guardrail_spend": 0.0,
               "cache_creation_input_tokens": 0,
               "cache_read_input_tokens": 1,
               "completion_tokens": 2,
@@ -97,6 +99,7 @@
             "metrics": {
               "api_requests": 1,
               "autorouter_savings_spend": 0.0,
+              "guardrail_spend": 0.0,
               "cache_creation_input_tokens": 0,
               "cache_read_input_tokens": 1,
               "completion_tokens": 2,
@@ -126,6 +129,7 @@
             "metrics": {
               "api_requests": 1,
               "autorouter_savings_spend": 0.0,
+              "guardrail_spend": 0.0,
               "cache_creation_input_tokens": 0,
               "cache_read_input_tokens": 1,
               "completion_tokens": 2,
@@ -155,6 +159,7 @@
             "metrics": {
               "api_requests": 1,
               "autorouter_savings_spend": 0.0,
+              "guardrail_spend": 0.0,
               "cache_creation_input_tokens": 0,
               "cache_read_input_tokens": 2,
               "completion_tokens": 2,
@@ -188,6 +193,7 @@
                 "metrics": {
                   "api_requests": 1,
                   "autorouter_savings_spend": 0.0,
+                  "guardrail_spend": 0.0,
                   "cache_creation_input_tokens": 0,
                   "cache_read_input_tokens": 1,
                   "completion_tokens": 2,
@@ -217,6 +223,7 @@
                 "metrics": {
                   "api_requests": 1,
                   "autorouter_savings_spend": 0.0,
+                  "guardrail_spend": 0.0,
                   "cache_creation_input_tokens": 0,
                   "cache_read_input_tokens": 1,
                   "completion_tokens": 2,
@@ -246,6 +253,7 @@
                 "metrics": {
                   "api_requests": 1,
                   "autorouter_savings_spend": 0.0,
+                  "guardrail_spend": 0.0,
                   "cache_creation_input_tokens": 0,
                   "cache_read_input_tokens": 1,
                   "completion_tokens": 2,
@@ -275,6 +283,7 @@
                 "metrics": {
                   "api_requests": 1,
                   "autorouter_savings_spend": 0.0,
+                  "guardrail_spend": 0.0,
                   "cache_creation_input_tokens": 0,
                   "cache_read_input_tokens": 1,
                   "completion_tokens": 2,
@@ -304,6 +313,7 @@
                 "metrics": {
                   "api_requests": 1,
                   "autorouter_savings_spend": 0.0,
+                  "guardrail_spend": 0.0,
                   "cache_creation_input_tokens": 0,
                   "cache_read_input_tokens": 2,
                   "completion_tokens": 2,
@@ -327,6 +337,7 @@
             "metrics": {
               "api_requests": 5,
               "autorouter_savings_spend": 0.0,
+              "guardrail_spend": 0.0,
               "cache_creation_input_tokens": 0,
               "cache_read_input_tokens": 6,
               "completion_tokens": 10,
@@ -346,7 +357,187 @@
             }
           }
         },
-        "entities": {},
+        "entities": {
+          "user-1": {
+            "api_key_breakdown": {
+              "key-a": {
+                "metadata": {
+                  "key_alias": "alias-a",
+                  "key_exists": true,
+                  "team_id": "team-1",
+                  "user_email": "user@example.com",
+                  "user_id": "user-1"
+                },
+                "metrics": {
+                  "api_requests": 1,
+                  "autorouter_savings_spend": 0.0,
+                  "guardrail_spend": 0.0,
+                  "cache_creation_input_tokens": 0,
+                  "cache_read_input_tokens": 1,
+                  "completion_tokens": 2,
+                  "compression_saved_tokens": 0,
+                  "compression_savings_spend": 0.0,
+                  "failed_requests": 0,
+                  "flat_cost": 0.0,
+                  "ptu_hours": 0.0,
+                  "gateway_injected_caching_savings_spend": 0.0,
+                  "prompt_caching_savings_spend": 0.0,
+                  "prompt_tokens": 2,
+                  "spend": 100.0,
+                  "successful_requests": 1,
+                  "timed_requests": 0,
+                  "total_response_time_ms": 0,
+                  "total_tokens": 4
+                }
+              },
+              "key-b": {
+                "metadata": {
+                  "key_alias": "alias-b",
+                  "key_exists": true,
+                  "team_id": "team-1",
+                  "user_email": "user@example.com",
+                  "user_id": "user-1"
+                },
+                "metrics": {
+                  "api_requests": 1,
+                  "autorouter_savings_spend": 0.0,
+                  "guardrail_spend": 0.0,
+                  "cache_creation_input_tokens": 0,
+                  "cache_read_input_tokens": 1,
+                  "completion_tokens": 2,
+                  "compression_saved_tokens": 0,
+                  "compression_savings_spend": 0.0,
+                  "failed_requests": 0,
+                  "flat_cost": 0.0,
+                  "ptu_hours": 0.0,
+                  "gateway_injected_caching_savings_spend": 0.0,
+                  "prompt_caching_savings_spend": 0.0,
+                  "prompt_tokens": 3,
+                  "spend": 90.0,
+                  "successful_requests": 1,
+                  "timed_requests": 0,
+                  "total_response_time_ms": 0,
+                  "total_tokens": 5
+                }
+              },
+              "key-c": {
+                "metadata": {
+                  "key_alias": "alias-c",
+                  "key_exists": true,
+                  "team_id": "team-1",
+                  "user_email": "user@example.com",
+                  "user_id": "user-1"
+                },
+                "metrics": {
+                  "api_requests": 1,
+                  "autorouter_savings_spend": 0.0,
+                  "guardrail_spend": 0.0,
+                  "cache_creation_input_tokens": 0,
+                  "cache_read_input_tokens": 1,
+                  "completion_tokens": 2,
+                  "compression_saved_tokens": 0,
+                  "compression_savings_spend": 0.0,
+                  "failed_requests": 0,
+                  "flat_cost": 0.0,
+                  "ptu_hours": 0.0,
+                  "gateway_injected_caching_savings_spend": 0.0,
+                  "prompt_caching_savings_spend": 0.0,
+                  "prompt_tokens": 4,
+                  "spend": 80.0,
+                  "successful_requests": 1,
+                  "timed_requests": 0,
+                  "total_response_time_ms": 0,
+                  "total_tokens": 6
+                }
+              },
+              "key-cache": {
+                "metadata": {
+                  "key_alias": "alias-cache",
+                  "key_exists": true,
+                  "team_id": "team-1",
+                  "user_email": "user@example.com",
+                  "user_id": "user-1"
+                },
+                "metrics": {
+                  "api_requests": 1,
+                  "autorouter_savings_spend": 0.0,
+                  "guardrail_spend": 0.0,
+                  "cache_creation_input_tokens": 0,
+                  "cache_read_input_tokens": 1,
+                  "completion_tokens": 2,
+                  "compression_saved_tokens": 0,
+                  "compression_savings_spend": 0.0,
+                  "failed_requests": 0,
+                  "flat_cost": 0.0,
+                  "ptu_hours": 0.0,
+                  "gateway_injected_caching_savings_spend": 0.0,
+                  "prompt_caching_savings_spend": 0.0,
+                  "prompt_tokens": 1000,
+                  "spend": 2.0,
+                  "successful_requests": 1,
+                  "timed_requests": 0,
+                  "total_response_time_ms": 0,
+                  "total_tokens": 1002
+                }
+              },
+              "key-target": {
+                "metadata": {
+                  "key_alias": "deleted-target",
+                  "key_exists": false,
+                  "team_id": "team-1",
+                  "user_email": "user@example.com",
+                  "user_id": "user-1"
+                },
+                "metrics": {
+                  "api_requests": 1,
+                  "autorouter_savings_spend": 0.0,
+                  "guardrail_spend": 0.0,
+                  "cache_creation_input_tokens": 0,
+                  "cache_read_input_tokens": 2,
+                  "completion_tokens": 2,
+                  "compression_saved_tokens": 0,
+                  "compression_savings_spend": 0.0,
+                  "failed_requests": 0,
+                  "flat_cost": 0.0,
+                  "ptu_hours": 0.0,
+                  "gateway_injected_caching_savings_spend": 0.0,
+                  "prompt_caching_savings_spend": 0.0,
+                  "prompt_tokens": 5,
+                  "spend": 1.0,
+                  "successful_requests": 1,
+                  "timed_requests": 0,
+                  "total_response_time_ms": 0,
+                  "total_tokens": 7
+                }
+              }
+            },
+            "metadata": {
+              "user_alias": null,
+              "user_email": "user@example.com"
+            },
+            "metrics": {
+              "api_requests": 5,
+              "autorouter_savings_spend": 0.0,
+              "guardrail_spend": 0.0,
+              "cache_creation_input_tokens": 0,
+              "cache_read_input_tokens": 6,
+              "completion_tokens": 10,
+              "compression_saved_tokens": 0,
+              "compression_savings_spend": 0.0,
+              "failed_requests": 0,
+              "flat_cost": 0.0,
+              "ptu_hours": 0.0,
+              "gateway_injected_caching_savings_spend": 0.0,
+              "prompt_caching_savings_spend": 0.0,
+              "prompt_tokens": 1014,
+              "spend": 1273.0,
+              "successful_requests": 5,
+              "timed_requests": 0,
+              "total_response_time_ms": 0,
+              "total_tokens": 1024
+            }
+          }
+        },
         "mcp_servers": {},
         "model_groups": {
           "model-cache": {
@@ -362,6 +553,7 @@
                 "metrics": {
                   "api_requests": 1,
                   "autorouter_savings_spend": 0.0,
+                  "guardrail_spend": 0.0,
                   "cache_creation_input_tokens": 0,
                   "cache_read_input_tokens": 1,
                   "completion_tokens": 2,
@@ -385,6 +577,7 @@
             "metrics": {
               "api_requests": 1,
               "autorouter_savings_spend": 0.0,
+              "guardrail_spend": 0.0,
               "cache_creation_input_tokens": 0,
               "cache_read_input_tokens": 1,
               "completion_tokens": 2,
@@ -416,6 +609,7 @@
                 "metrics": {
                   "api_requests": 1,
                   "autorouter_savings_spend": 0.0,
+                  "guardrail_spend": 0.0,
                   "cache_creation_input_tokens": 0,
                   "cache_read_input_tokens": 1,
                   "completion_tokens": 2,
@@ -445,6 +639,7 @@
                 "metrics": {
                   "api_requests": 1,
                   "autorouter_savings_spend": 0.0,
+                  "guardrail_spend": 0.0,
                   "cache_creation_input_tokens": 0,
                   "cache_read_input_tokens": 1,
                   "completion_tokens": 2,
@@ -474,6 +669,7 @@
                 "metrics": {
                   "api_requests": 1,
                   "autorouter_savings_spend": 0.0,
+                  "guardrail_spend": 0.0,
                   "cache_creation_input_tokens": 0,
                   "cache_read_input_tokens": 1,
                   "completion_tokens": 2,
@@ -497,6 +693,7 @@
             "metrics": {
               "api_requests": 3,
               "autorouter_savings_spend": 0.0,
+              "guardrail_spend": 0.0,
               "cache_creation_input_tokens": 0,
               "cache_read_input_tokens": 3,
               "completion_tokens": 6,
@@ -521,6 +718,7 @@
             "metrics": {
               "api_requests": 0,
               "autorouter_savings_spend": 0.0,
+              "guardrail_spend": 0.0,
               "cache_creation_input_tokens": 0,
               "cache_read_input_tokens": 0,
               "completion_tokens": 0,
@@ -552,6 +750,7 @@
                 "metrics": {
                   "api_requests": 1,
                   "autorouter_savings_spend": 0.0,
+                  "guardrail_spend": 0.0,
                   "cache_creation_input_tokens": 0,
                   "cache_read_input_tokens": 2,
                   "completion_tokens": 2,
@@ -575,6 +774,7 @@
             "metrics": {
               "api_requests": 1,
               "autorouter_savings_spend": 0.0,
+              "guardrail_spend": 0.0,
               "cache_creation_input_tokens": 0,
               "cache_read_input_tokens": 2,
               "completion_tokens": 2,
@@ -608,6 +808,7 @@
                 "metrics": {
                   "api_requests": 1,
                   "autorouter_savings_spend": 0.0,
+                  "guardrail_spend": 0.0,
                   "cache_creation_input_tokens": 0,
                   "cache_read_input_tokens": 1,
                   "completion_tokens": 2,
@@ -631,6 +832,7 @@
             "metrics": {
               "api_requests": 1,
               "autorouter_savings_spend": 0.0,
+              "guardrail_spend": 0.0,
               "cache_creation_input_tokens": 0,
               "cache_read_input_tokens": 1,
               "completion_tokens": 2,
@@ -662,6 +864,7 @@
                 "metrics": {
                   "api_requests": 1,
                   "autorouter_savings_spend": 0.0,
+                  "guardrail_spend": 0.0,
                   "cache_creation_input_tokens": 0,
                   "cache_read_input_tokens": 1,
                   "completion_tokens": 2,
@@ -691,6 +894,7 @@
                 "metrics": {
                   "api_requests": 1,
                   "autorouter_savings_spend": 0.0,
+                  "guardrail_spend": 0.0,
                   "cache_creation_input_tokens": 0,
                   "cache_read_input_tokens": 1,
                   "completion_tokens": 2,
@@ -720,6 +924,7 @@
                 "metrics": {
                   "api_requests": 1,
                   "autorouter_savings_spend": 0.0,
+                  "guardrail_spend": 0.0,
                   "cache_creation_input_tokens": 0,
                   "cache_read_input_tokens": 1,
                   "completion_tokens": 2,
@@ -743,6 +948,7 @@
             "metrics": {
               "api_requests": 3,
               "autorouter_savings_spend": 0.0,
+              "guardrail_spend": 0.0,
               "cache_creation_input_tokens": 0,
               "cache_read_input_tokens": 3,
               "completion_tokens": 6,
@@ -767,6 +973,7 @@
             "metrics": {
               "api_requests": 0,
               "autorouter_savings_spend": 0.0,
+              "guardrail_spend": 0.0,
               "cache_creation_input_tokens": 0,
               "cache_read_input_tokens": 0,
               "completion_tokens": 0,
@@ -798,6 +1005,7 @@
                 "metrics": {
                   "api_requests": 1,
                   "autorouter_savings_spend": 0.0,
+                  "guardrail_spend": 0.0,
                   "cache_creation_input_tokens": 0,
                   "cache_read_input_tokens": 2,
                   "completion_tokens": 2,
@@ -821,6 +1029,7 @@
             "metrics": {
               "api_requests": 1,
               "autorouter_savings_spend": 0.0,
+              "guardrail_spend": 0.0,
               "cache_creation_input_tokens": 0,
               "cache_read_input_tokens": 2,
               "completion_tokens": 2,
@@ -854,6 +1063,7 @@
                 "metrics": {
                   "api_requests": 1,
                   "autorouter_savings_spend": 0.0,
+                  "guardrail_spend": 0.0,
                   "cache_creation_input_tokens": 0,
                   "cache_read_input_tokens": 1,
                   "completion_tokens": 2,
@@ -883,6 +1093,7 @@
                 "metrics": {
                   "api_requests": 1,
                   "autorouter_savings_spend": 0.0,
+                  "guardrail_spend": 0.0,
                   "cache_creation_input_tokens": 0,
                   "cache_read_input_tokens": 1,
                   "completion_tokens": 2,
@@ -912,6 +1123,7 @@
                 "metrics": {
                   "api_requests": 1,
                   "autorouter_savings_spend": 0.0,
+                  "guardrail_spend": 0.0,
                   "cache_creation_input_tokens": 0,
                   "cache_read_input_tokens": 1,
                   "completion_tokens": 2,
@@ -941,6 +1153,7 @@
                 "metrics": {
                   "api_requests": 1,
                   "autorouter_savings_spend": 0.0,
+                  "guardrail_spend": 0.0,
                   "cache_creation_input_tokens": 0,
                   "cache_read_input_tokens": 1,
                   "completion_tokens": 2,
@@ -970,6 +1183,7 @@
                 "metrics": {
                   "api_requests": 1,
                   "autorouter_savings_spend": 0.0,
+                  "guardrail_spend": 0.0,
                   "cache_creation_input_tokens": 0,
                   "cache_read_input_tokens": 2,
                   "completion_tokens": 2,
@@ -993,6 +1207,7 @@
             "metrics": {
               "api_requests": 5,
               "autorouter_savings_spend": 0.0,
+              "guardrail_spend": 0.0,
               "cache_creation_input_tokens": 0,
               "cache_read_input_tokens": 6,
               "completion_tokens": 10,
@@ -1017,6 +1232,7 @@
       "metrics": {
         "api_requests": 5,
         "autorouter_savings_spend": 0.0,
+        "guardrail_spend": 0.0,
         "cache_creation_input_tokens": 0,
         "cache_read_input_tokens": 6,
         "completion_tokens": 10,

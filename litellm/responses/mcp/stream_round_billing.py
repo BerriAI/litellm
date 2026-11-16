@@ -1,5 +1,5 @@
 import asyncio
-from collections.abc import Callable, Coroutine, Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Final, TypeAlias
@@ -297,12 +297,8 @@ class StreamedRoundBilling:
         self._close(parked)
         self._bank((self._dispatch(row, billed, self._logging_obj.attempt_scoped_copy()),), row)
 
-    def _dispatch(
-        self, row: _RoundRow, billed: _BilledRounds, logger: LiteLLMLoggingObj
-    ) -> BilledRoundsDispatch | Coroutine[object, object, None]:
+    def _dispatch(self, row: _RoundRow, billed: _BilledRounds, logger: LiteLLMLoggingObj) -> BilledRoundsDispatch:
         dispatch: Final = self._log_success(_SuccessLog(logger, row, billed.chat_usage))
-        if billed.chat_usage is None:
-            return dispatch
         return BilledRoundsDispatch(dispatch, billed.spend)
 
     @staticmethod
