@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 
+use litellm_python_compat::truthy::json_truthy;
 use serde_json::{Map, Value};
 
 use std::sync::Arc;
@@ -39,17 +40,6 @@ struct Found {
 
 fn default_failure(message: String) -> GoogleLoginFailure {
     GoogleLoginFailure::new(PythonException::DefaultCredentials, message)
-}
-
-fn is_truthy(value: Option<&Value>) -> bool {
-    match value {
-        None | Some(Value::Null) => false,
-        Some(Value::String(text)) => !text.is_empty(),
-        Some(Value::Bool(flag)) => *flag,
-        Some(Value::Number(number)) => number.as_f64().is_some_and(|number| number != 0.0),
-        Some(Value::Array(items)) => !items.is_empty(),
-        Some(Value::Object(fields)) => !fields.is_empty(),
-    }
 }
 
 /// `_cloud_sdk.get_application_default_credentials_path`.
@@ -257,7 +247,7 @@ async fn gcloud_sdk_credentials(
         return Ok(None);
     };
     let found = load_credentials_from_file(env, &path.to_string_lossy())?;
-    if is_truthy(found.project.as_ref()) {
+    if json_truthy(found.project.as_ref()) {
         return Ok(Some(found));
     }
     Ok(Some(Found {
@@ -358,11 +348,11 @@ pub(crate) async fn default_credentials(
                 .ok_or_else(|| default_failure(MISSING_CREDENTIALS.into()))?,
         },
     };
-    let project = match is_truthy(explicit_project.as_ref()) {
+    let project = match json_truthy(explicit_project.as_ref()) {
         true => explicit_project,
         false => found.project,
     };
-    let project = match (&found.kind, is_truthy(project.as_ref())) {
+    let project = match (&found.kind, json_truthy(project.as_ref())) {
         (Kind::ExternalAccount { info }, false) => {
             external_account_project(env, &found.source, info).await?
         }

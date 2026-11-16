@@ -2,6 +2,7 @@ use std::time::SystemTime;
 
 use http::{HeaderMap, HeaderValue, header::AUTHORIZATION};
 use litellm_auth_aws::{AwsAuthConfig, AwsAuthService, SigningScope, sign_headers};
+use litellm_python_compat::truthy::json_truthy;
 use litellm_secret_value::SecretValue;
 use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
 use serde_json::{Map, Value, json};
@@ -9,9 +10,7 @@ use serde_json::{Map, Value, json};
 use super::{
     builders::token_failure,
     credentials::Loaded,
-    external_account::{
-        ExternalAccount, OsEnvironment, Settings, SubjectFuture, SubjectToken, is_truthy,
-    },
+    external_account::{ExternalAccount, OsEnvironment, Settings, SubjectFuture, SubjectToken},
     failure::{GoogleLoginFailure, PythonException, python_repr, python_str, python_type_name},
     transport::Requests,
 };
@@ -349,7 +348,7 @@ pub(crate) fn metadata_aws_credentials(
     };
     let environment_id = source
         .get("environment_id")
-        .filter(|value| is_truthy(Some(value)))
+        .filter(|value| json_truthy(Some(value)))
         .map(|value| python_str(Some(value)))
         .unwrap_or_default();
     let version = environment_id

@@ -19,6 +19,7 @@ mod transport;
 use std::sync::Arc;
 
 use litellm_auth_types::{Error, VertexParams};
+use litellm_python_compat::truthy::json_truthy;
 use litellm_secret_value::SecretValue;
 use serde_json::{Map, Value};
 
@@ -131,17 +132,6 @@ fn value_failure(message: impl Into<String>) -> GoogleLoginFailure {
     GoogleLoginFailure::new(PythonException::Value, message)
 }
 
-fn is_truthy(value: Option<&Value>) -> bool {
-    match value {
-        None | Some(Value::Null) => false,
-        Some(Value::String(text)) => !text.is_empty(),
-        Some(Value::Bool(flag)) => *flag,
-        Some(Value::Number(number)) => number.as_f64().is_some_and(|number| number != 0.0),
-        Some(Value::Array(items)) => !items.is_empty(),
-        Some(Value::Object(fields)) => !fields.is_empty(),
-    }
-}
-
 /// The project `load_auth` reads off credentials it built: an authorized user's quota project,
 /// a service account's `project_id`, nothing for an external account.
 fn credentials_project(info: &Map<String, Value>) -> Option<Value> {
@@ -251,7 +241,7 @@ impl VertexMessagesAuth {
         let project = project.map(Value::String).or(credential_project);
         let token = source.refresh().await?;
         let project_id = match project {
-            project if !is_truthy(project.as_ref()) => {
+            project if !json_truthy(project.as_ref()) => {
                 Err(value_failure("Could not resolve project_id"))
             }
             Some(Value::String(project)) => Ok(project),
