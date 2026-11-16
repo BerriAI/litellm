@@ -190,7 +190,7 @@ def initialize_presidio(litellm_params: LitellmParams, guardrail: Guardrail) -> 
             output_parse_pii=False,
             mask_response_content=True,
         )
-        if run_output
+        if run_output and not (run_input and litellm_params.output_parse_pii)
         else None
     )
     return tuple(
