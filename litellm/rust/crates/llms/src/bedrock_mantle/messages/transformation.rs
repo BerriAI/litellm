@@ -794,7 +794,7 @@ mod tests {
         }));
         assert_eq!(wire, expected);
         assert_eq!(
-            wire.as_object().unwrap().keys().last().map(String::as_str),
+            wire.as_object().unwrap().keys().next_back().map(String::as_str),
             Some(if stream { "stream" } else { "model" })
         );
     }
