@@ -10,6 +10,11 @@ variant``. Both Amazon Bedrock endpoints reject them:
 They are *history* items, so they only appear from the second turn of a session
 onward -- a first-turn request succeeds and hides the problem entirely.
 
+An ``agent_message`` content block's ``encrypted_content`` is ciphertext that only the
+backend that issued it can decrypt for the recipient model. A backend that declares
+``supports_encrypted_agent_messages`` gets those items intact, since turning them into
+text would hand the model ciphertext it believes it wrote.
+
 Codex also sends a ``web_search`` tool on every turn. api.openai.com runs that tool
 itself; a backend with no server-side tools rejects the whole request over it, so
 the same providers drop the tool types their backend does not accept.
@@ -24,6 +29,7 @@ from typing import Final
 
 from typing_extensions import ReadOnly, TypedDict
 
+from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping
 from litellm.types.llms.openai import ResponseInputParam
 
 AGENT_MESSAGE_INPUT_ITEM_TYPE: Final = "agent_message"
@@ -63,6 +69,15 @@ def _agent_message_text(item: "Mapping[str, object]") -> str:
     )
 
 
+def _is_encrypted_block(block: object) -> bool:
+    mapping: Final = as_str_mapping(block)
+    return mapping is not None and bool(mapping.get("encrypted_content"))
+
+
+def _carries_encrypted_content(item: "Mapping[str, object]") -> bool:
+    return any(_is_encrypted_block(block) for block in as_object_list(item.get("content")) or ())
+
+
 def _normalize_agent_message_item(item: "Mapping[str, object]") -> "_RewrittenAssistantMessageItem | None":
     text: Final = _agent_message_text(item)
     if not text:
@@ -97,28 +112,35 @@ def _normalize_local_shell_call_item(item: "Mapping[str, object]") -> "_Rewritte
     return rewritten
 
 
-def _normalize_input_item(item: object) -> "tuple[object, str | None]":
+def _normalize_input_item(item: object, keep_encrypted_agent_messages: bool) -> "tuple[object, str | None]":
     """Returns (normalized item, or None to drop it; original type when rewritten)."""
-    if not isinstance(item, dict):
+    mapping: Final = as_str_mapping(item)
+    if mapping is None:
         return item, None
-    item_type: Final = item.get("type")
+    item_type: Final = mapping.get("type")
     if item_type == AGENT_MESSAGE_INPUT_ITEM_TYPE:
-        return _normalize_agent_message_item(item), item_type
+        if keep_encrypted_agent_messages and _carries_encrypted_content(mapping):
+            return item, None
+        return _normalize_agent_message_item(mapping), AGENT_MESSAGE_INPUT_ITEM_TYPE
     if item_type == CONTEXT_COMPACTION_INPUT_ITEM_TYPE:
-        return _normalize_context_compaction_item(item), item_type
+        return _normalize_context_compaction_item(mapping), CONTEXT_COMPACTION_INPUT_ITEM_TYPE
     if item_type == LOCAL_SHELL_CALL_INPUT_ITEM_TYPE:
-        return _normalize_local_shell_call_item(item), item_type
+        return _normalize_local_shell_call_item(mapping), LOCAL_SHELL_CALL_INPUT_ITEM_TYPE
     return item, None
 
 
 def normalize_codex_input_items(
     input: "str | ResponseInputParam",
+    *,
+    keep_encrypted_agent_messages: bool,
 ) -> "tuple[str | ResponseInputParam, tuple[str, ...]]":
     """Rewrite the Codex history item types a Responses backend rejects.
 
-    ``agent_message`` (Codex multi-agent traffic; its ``encrypted_content`` slot
-    carries the plaintext payload when the model never issued encrypted args)
-    becomes an assistant message, ``context_compaction`` becomes the ``compaction``
+    ``agent_message`` (Codex multi-agent traffic) carrying an ``encrypted_content``
+    block is forwarded intact when ``keep_encrypted_agent_messages`` is set, because
+    only the backend can read it. Otherwise it becomes an assistant message: a backend
+    that never encrypts gets the plaintext payload Codex puts in that slot when the
+    model issued no encrypted args. ``context_compaction`` becomes the ``compaction``
     spelling these backends accept, and ``local_shell_call`` becomes the
     ``function_call`` its recorded ``function_call_output`` already pairs with.
 
@@ -127,7 +149,7 @@ def normalize_codex_input_items(
     """
     if not isinstance(input, list):
         return input, ()
-    normalized: Final = tuple(_normalize_input_item(item) for item in input)
+    normalized: Final = tuple(_normalize_input_item(item, keep_encrypted_agent_messages) for item in input)
     rewritten_types: Final = tuple(sorted(frozenset(item_type for _, item_type in normalized if item_type is not None)))
     kept: Final = [i for i, _ in normalized if i is not None]
     # Codex passthrough items sit outside the OpenAI input union.

@@ -18,11 +18,12 @@ from litellm.litellm_core_utils.prompt_templates.image_handling import (
     convert_url_to_base64,
     inline_every_remote_url,
 )
-from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+from litellm.llms.anthropic.chat.transformation import AnthropicConfig, mapped_max_output_tokens
 from litellm.llms.anthropic.common_utils import (
     OBJECT_MAPPING_ADAPTER,
     AnthropicModelInfo,
     carried_thinking_keys,
+    replays_tool_search,
 )
 from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation import (
     AmazonInvokeConfig,
@@ -34,6 +35,7 @@ from litellm.llms.bedrock.common_utils import (
     bedrock_capability_model,
     bedrock_chat_uses_native_structured_output,
     bedrock_cleaned_output_schema,
+    bedrock_native_output_retry_requested,
     bedrock_supports_tool_search,
     deployment_model_info,
     get_anthropic_beta_from_headers,
@@ -70,15 +72,6 @@ def _anthropic_config_max_tokens() -> int | None:
     return litellm.AnthropicConfig.max_tokens
 
 
-def _mapped_max_tokens(model: str) -> int | None:
-    row: Final = object_mapping(litellm.model_cost.get(model)) or {}  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # cost map rows are untyped JSON
-    match row.get("max_output_tokens"):
-        case int() as max_tokens:
-            return max_tokens
-        case _:
-            return None
-
-
 class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
     """
     Reference:
@@ -110,12 +103,20 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
 
     @classmethod
     def get_config(
-        cls, *, model: str | None = None, configured_max_output_tokens: int | None = None
+        cls,
+        *,
+        model: str | None = None,
+        configured_max_output_tokens: int | None = None,
+        custom_llm_provider: str | None = None,
     ) -> dict[str, object]:  # mutable-ok: overrides BaseConfig's dict
         return {
             key: value
             for key, value in super()
-            .get_config(model=model, configured_max_output_tokens=configured_max_output_tokens)
+            .get_config(
+                model=model,
+                configured_max_output_tokens=configured_max_output_tokens,
+                custom_llm_provider=custom_llm_provider,
+            )
             .items()
             if key != "max_tokens"
         }
@@ -160,6 +161,13 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         self, model: str, optional_params: Mapping[str, object], litellm_params: Mapping[str, object]
     ) -> bool:
         return requests_opt_in_native_output(model, optional_params, deployment_model_info(litellm_params))
+
+    def uses_native_output(
+        self, model: str, optional_params: Mapping[str, object], litellm_params: Mapping[str, object]
+    ) -> bool:
+        return bedrock_native_output_retry_requested(
+            model, optional_params, model_info=deployment_model_info(litellm_params)
+        )
 
     def map_openai_params(
         self,
@@ -257,6 +265,9 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
             optional_params=optional_params,
             headers=headers,
             thinking=_anthropic_request.get("thinking"),
+            history_holds_tool_search=replays_tool_search(
+                OBJECT_MAPPING_ADAPTER.validate_python(_anthropic_request).get("messages")
+            ),
         )
         if beta_list:
             _anthropic_request["anthropic_beta"] = beta_list
@@ -314,7 +325,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
                     (
                         max_tokens
                         for max_tokens in map(
-                            _mapped_max_tokens, self._default_max_tokens_models(model, litellm_params)
+                            mapped_max_output_tokens, self._default_max_tokens_models(model, litellm_params)
                         )
                         if max_tokens is not None
                     ),
@@ -389,9 +400,10 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         optional_params: dict,
         headers: dict,
         thinking: AnthropicThinkingParam | None,
+        history_holds_tool_search: bool,
     ) -> list[str]:
         tools: Final = optional_params.get("tools")
-        tool_search_used: Final = self.is_tool_search_used(tools)
+        tool_search_used: Final = self.is_tool_search_used(tools) or history_holds_tool_search
         programmatic_tool_calling_used: Final = self.is_programmatic_tool_calling_used(tools)
         input_examples_used: Final = self.is_input_examples_used(tools)
         is_mid_conversation_output_config_used: Final = self.is_mid_conversation_output_config_used(messages)

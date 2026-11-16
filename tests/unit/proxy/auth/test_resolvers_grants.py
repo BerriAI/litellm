@@ -1,6 +1,10 @@
-from fastapi import HTTPException
+from types import SimpleNamespace
+from typing import TYPE_CHECKING, Final, cast
+from unittest.mock import AsyncMock
+
 import httpx
 import pytest
+from fastapi import HTTPException
 
 from litellm.proxy._types import (
     LiteLLM_TeamMembership,
@@ -8,8 +12,7 @@ from litellm.proxy._types import (
     LiteLLM_UserTable,
     ProxyException,
 )
-from litellm.proxy.auth.auth_checks import TeamNotFoundError, UserNotFoundError
-from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.proxy.auth.auth_checks import TeamNotFoundError, UserNotFoundError, forget_missing_user
 from litellm.proxy.auth.resolvers.grants import (
     GrantResolver,
     LookupDegraded,
@@ -21,9 +24,42 @@ from litellm.proxy.auth.resolvers.grants import (
     raise_public,
     user_models,
 )
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 
 USER_ID = "user-1"
 TEAM_ID = "team-1"
+
+if TYPE_CHECKING:
+    from litellm.proxy.utils import PrismaClient
+
+
+@pytest.mark.parametrize("user_exists", (True, False), ids=("created-on-another-worker", "still-missing"))
+async def test_session_grants_recheck_a_recently_missing_user(
+    user_exists: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("time.time", lambda: 1_700_000_000.0)
+    user_id: Final = "session-user-after-miss"
+    row: Final = LiteLLM_UserTable(user_id=user_id, user_role="internal_user")
+    read: Final = AsyncMock(return_value=None)
+    database: Final = cast(
+        "PrismaClient",
+        SimpleNamespace(
+            db=SimpleNamespace(
+                litellm_usertable=SimpleNamespace(find_unique=read, find_first=AsyncMock(return_value=None))
+            )
+        ),
+    )
+    resolver: Final = GrantResolver(database, UserApiKeyCache())
+    forget_missing_user(user_id)
+    try:
+        assert await resolver.resolve(UserLookup(user_id=user_id), team_id=None) == UserGone(user_id=user_id)
+        read.return_value = row if user_exists else None
+
+        outcome: Final = await resolver.resolve(UserLookup(user_id=user_id), team_id=None)
+
+        assert outcome == (ResolvedGrants(row, None, None, user_id) if user_exists else UserGone(user_id=user_id))
+    finally:
+        forget_missing_user(user_id)
 
 
 class _Loaders:

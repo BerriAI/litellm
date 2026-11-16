@@ -7,12 +7,13 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Final, Protocol, cast  # noqa: TID251  # Prisma's generated delegates are dynamic
 from urllib.parse import urlsplit
 
-from pydantic import BaseModel, ConfigDict, TypeAdapter
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
 from litellm.models.plugin_upload import (
     PluginPublication,
     PluginPublicationBase,
     PluginPublicationError,
+    PluginReview,
     PublishedPlugin,
     uploaded_plugin_source,
 )
@@ -44,6 +45,7 @@ class _StoredProposal(BaseModel):
 
     manifest: Mapping[str, object]
     version: str | None
+    revision: int = Field(default=0, ge=0)
 
     def proposal(self, name: str) -> SkillProposal:
         return SkillProposal(
@@ -91,6 +93,7 @@ class _SubmissionRow(BaseModel):
             reviewed_by=self.reviewed_by,
             reviewed_at=self.reviewed_at,
             rejection_reason=self.rejection_reason,
+            revision=stored.revision,
         )
 
 
@@ -282,6 +285,71 @@ class SkillSubmissionRepository:
         )
         return None if row is None or row.archive_content is None else row.archive_content.decode()
 
+    async def edit(
+        self, submission_id: str, owner: str, revision: int, upload: PluginPublication
+    ) -> SkillSubmission | SubmissionMissing | SubmissionConflict | SubmissionLimitExceeded:
+        from prisma import Base64
+
+        async with self._database.tx() as transaction:
+            await transaction.query_raw(
+                "SELECT 1 AS locked FROM pg_advisory_xact_lock(hashtext('litellm.skill_submissions'), hashtext($1))",
+                owner,
+            )
+            row: Final = await _owned_pending(transaction, submission_id, owner, revision)
+            if isinstance(row, (SubmissionMissing, SubmissionConflict)):
+                return row
+            if upload.name != row.plugin_name:
+                return SubmissionConflict("A submission's skill name cannot change.")
+            proposal_json: Final = _StoredProposal(
+                manifest=upload.manifest, version=upload.version, revision=revision + 1
+            ).model_dump_json()
+            archive: Final = row.archive_content if upload.content is None else Base64.encode(upload.content)
+            usage: Final = _USAGE.validate_python(
+                await transaction.query_raw(
+                    """SELECT COUNT(*) AS count,
+                              COALESCE(SUM(octet_length(proposal_json)
+                                  + COALESCE(octet_length(archive_content), 0)), 0) AS storage_bytes
+                       FROM "LiteLLM_SkillSubmission" WHERE submitted_by = $1 AND status = 'pending_review'""",
+                    owner,
+                )
+            )[0]
+            previous_bytes: Final = len(row.proposal_json.encode()) + (
+                0 if row.archive_content is None else len(row.archive_content.decode())
+            )
+            incoming_bytes: Final = len(proposal_json.encode()) + (0 if archive is None else len(archive.decode()))
+            if usage.storage_bytes - previous_bytes + incoming_bytes > _MAX_PENDING_BYTES:
+                return SubmissionLimitExceeded(
+                    "Pending skill submissions cannot exceed 50 MiB of stored metadata and archives per user."
+                )
+            updated: Final = await transaction.litellm_skillsubmission.update(
+                where={"id": submission_id},
+                data={"proposal_json": proposal_json, "archive_content": archive, "scan_json": None},
+            )
+            return SubmissionMissing() if updated is None else _submission(updated)
+
+    async def withdraw(
+        self, submission_id: str, owner: str, revision: int
+    ) -> SkillSubmission | SubmissionMissing | SubmissionConflict:
+        async with self._database.tx() as transaction:
+            row: Final = await _owned_pending(transaction, submission_id, owner, revision)
+            if isinstance(row, (SubmissionMissing, SubmissionConflict)):
+                return row
+            receipt: Final = _StoredProposal(
+                manifest={"name": row.plugin_name, "source": {}},
+                version=None,
+                revision=revision,
+            )
+            updated: Final = await transaction.litellm_skillsubmission.update(
+                where={"id": submission_id},
+                data={
+                    "status": "withdrawn",
+                    "proposal_json": receipt.model_dump_json(),
+                    "archive_content": None,
+                    "scan_json": None,
+                },
+            )
+            return SubmissionMissing() if updated is None else _submission(updated)
+
     async def review(
         self,
         submission_id: str,
@@ -290,6 +358,7 @@ class SkillSubmissionRepository:
         reason: str | None,
         *,
         publication_base_url: str | None = None,
+        expected_revision: int | None = None,
     ) -> SubmissionReviewResult:
         from prisma.errors import UniqueViolationError
 
@@ -303,7 +372,9 @@ class SkillSubmissionRepository:
                     return SubmissionMissing()
                 submission: Final = _submission(row)
                 if submission.status != "pending_review":
-                    return SubmissionConflict("This submission has already been reviewed.")
+                    return SubmissionConflict("This submission is no longer pending review.")
+                if submission.revision != (expected_revision if expected_revision is not None else 0):
+                    return SubmissionConflict("This submission changed. Reload it before reviewing.")
                 content: Final = None if row.archive_content is None else row.archive_content.decode()
                 if approve and content is not None and not publication_base_url:
                     return SubmissionConflict("Uploaded skill approval requires a trusted publication URL.")
@@ -312,7 +383,9 @@ class SkillSubmissionRepository:
                     if approve and content is not None and publication_base_url
                     else _SOURCE.validate_python(submission.proposal.manifest.get("source"))
                 )
-                publication: Final = await _publish_submission(transaction, row, source, content) if approve else None
+                publication: Final = (
+                    await _publish_submission(transaction, row, source, content, reviewer) if approve else None
+                )
                 if isinstance(publication, PluginPublicationError):
                     return publication
                 reviewed_at: Final = datetime.now(timezone.utc)
@@ -341,11 +414,26 @@ class SkillSubmissionRepository:
             return SubmissionConflict("A skill with this name is already published. Submit a new update proposal.")
 
 
+async def _owned_pending(
+    transaction: SubmissionTransaction, submission_id: str, owner: str, revision: int
+) -> "prisma_models.LiteLLM_SkillSubmission | SubmissionMissing | SubmissionConflict":
+    await transaction.query_raw('SELECT id FROM "LiteLLM_SkillSubmission" WHERE id = $1 FOR UPDATE', submission_id)
+    row: Final = await transaction.litellm_skillsubmission.find_unique(where={"id": submission_id})
+    if row is None or not owner or row.submitted_by != owner:
+        return SubmissionMissing()
+    if row.status != "pending_review":
+        return SubmissionConflict("Only pending submissions can be edited or withdrawn.")
+    if _StoredProposal.model_validate_json(row.proposal_json).revision != revision:
+        return SubmissionConflict("This submission changed. Reload it before trying again.")
+    return row
+
+
 async def _publish_submission(
     transaction: PluginPublicationTransaction,
     row: "prisma_models.LiteLLM_SkillSubmission",
     source: Mapping[str, str],
     content: bytes | None,
+    reviewer: str,
 ) -> PublishedPlugin | PluginPublicationError:
     stored: Final = _StoredProposal.model_validate_json(row.proposal_json)
     proposal: Final = stored.proposal(row.plugin_name)
@@ -363,6 +451,24 @@ async def _publish_submission(
             manifest={**stored.manifest, "source": dict(source)},
             content=content,
             created_by=row.submitted_by,
+            review=PluginReview(reviewer, scan_passed_for_archive(row.scan_json, source.get("sha256"))),
         ),
         base,
+    )
+
+
+def scan_passed_for_archive(scan_json: str | None, digest: str | None) -> bool:
+    if not scan_json or not digest:
+        return False
+    try:
+        scan: Final = SkillScan.model_validate_json(scan_json)
+    except ValidationError:
+        return False
+    return (
+        scan.status == "completed"
+        and scan.archive_sha256 == digest
+        and scan.report is not None
+        and scan.report.complete
+        and scan.report.risk_score == 0
+        and not scan.report.findings
     )

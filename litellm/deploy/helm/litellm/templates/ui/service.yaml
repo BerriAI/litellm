@@ -1,0 +1,25 @@
+{{- if include "litellm.ui.render" . }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "litellm.ui.fullname" . }}
+  labels:
+    {{- include "litellm.commonLabels" . | nindent 4 }}
+    app.kubernetes.io/component: ui
+  {{- with .Values.ui.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.ui.service.type }}
+  {{- with include "litellm.service.extras" .Values.ui.service }}
+  {{- . | nindent 2 }}
+  {{- end }}
+  ports:
+    - port: {{ .Values.ui.service.port }}
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector:
+    {{- include "litellm.ui.selectorLabels" . | nindent 4 }}
+{{- end }}

@@ -23,6 +23,7 @@ from litellm.proxy.guardrails.guardrail_hooks.tool_permission import (
     ToolPermissionGuardrail,
 )
 from litellm.types.guardrails import GuardrailEventHooks, LitellmParams
+from litellm.types.responses.main import build_web_search_call
 from litellm.types.proxy.guardrails.guardrail_hooks.tool_permission import (
     PermissionError,
 )
@@ -39,6 +40,14 @@ from litellm.types.utils import (
     ModelResponseStream,
     StreamingChoices,
 )
+
+
+_SERVER_WEB_SEARCH_CALL: Final = {
+    "id": "srvtoolu_01Search",
+    "type": "function",
+    "function": {"name": "web_search", "arguments": '{"query": "weather in Paris"}'},
+}
+_ALLOWED_BASH_CALL: Final = {"id": "toolu_01Bash", "type": "function", "function": {"name": "Bash", "arguments": "{}"}}
 
 
 class TestToolPermissionGuardrail:
@@ -1376,6 +1385,93 @@ class TestToolPermissionGuardrail:
         assert "Permission denied" in choice.message.content
 
 
+    def _server_search_response(self) -> ModelResponse:
+        return ModelResponse(
+            choices=[
+                Choices(
+                    finish_reason="tool_calls",
+                    message={
+                        "content": "Searching.",
+                        "tool_calls": [_ALLOWED_BASH_CALL],
+                        "provider_specific_fields": {"server_tool_calls": [_SERVER_WEB_SEARCH_CALL]},
+                    },
+                )
+            ]
+        )
+
+    @pytest.mark.asyncio
+    async def test_denied_server_tool_call_is_blocked(self):
+        with patch.object(self.guardrail, "should_run_guardrail", return_value=True):
+            with pytest.raises(GuardrailRaisedException):
+                await self.guardrail.async_post_call_success_hook(
+                    data={}, user_api_key_dict=UserAPIKeyAuth(), response=self._server_search_response()
+                )
+
+    @pytest.mark.asyncio
+    async def test_denied_server_tool_call_in_a_chat_stream_is_blocked(self):
+        async def _stream():
+            yield ModelResponseStream(
+                choices=[
+                    StreamingChoices(
+                        index=0,
+                        delta=Delta(
+                            content="Searching.",
+                            provider_specific_fields={"server_tool_calls": [{**_SERVER_WEB_SEARCH_CALL, "index": 0}]},
+                        ),
+                        finish_reason="stop",
+                    )
+                ]
+            )
+
+        with patch.object(self.guardrail, "should_run_guardrail", return_value=True):
+            with pytest.raises(GuardrailRaisedException):
+                async for _ in self.guardrail.async_post_call_streaming_iterator_hook(
+                    user_api_key_dict=UserAPIKeyAuth(), response=_stream(), request_data={}
+                ):
+                    pass
+
+    @pytest.mark.asyncio
+    async def test_rewrite_mode_removes_the_denied_server_tool_call(self):
+        rewriting: Final = ToolPermissionGuardrail(
+            guardrail_name="test-tool-permission",
+            rules=self.test_rules,
+            default_action="deny",
+            on_disallowed_action="rewrite",
+        )
+
+        with patch.object(rewriting, "should_run_guardrail", return_value=True):
+            result: Final = await rewriting.async_post_call_success_hook(
+                data={}, user_api_key_dict=UserAPIKeyAuth(), response=self._server_search_response()
+            )
+
+        message: Final = result.choices[0].message
+        assert message.provider_specific_fields["server_tool_calls"] == []
+        assert [tool_call.id for tool_call in message.tool_calls] == [_ALLOWED_BASH_CALL["id"]]
+        assert "Permission denied" in message.content
+
+    @pytest.mark.asyncio
+    async def test_rewrite_mode_removes_the_denied_server_tool_calls_hosted_copy(self):
+        rewriting: Final = ToolPermissionGuardrail(
+            guardrail_name="test-tool-permission",
+            rules=self.test_rules,
+            default_action="deny",
+            on_disallowed_action="rewrite",
+        )
+        response: Final = self._server_search_response()
+        response.choices[0].message.provider_specific_fields = {
+            **response.choices[0].message.provider_specific_fields,
+            "web_search_calls": [
+                build_web_search_call("srvtoolu_01Search", {"query": "weather in Paris"}, {"content": []})
+            ],
+        }
+
+        with patch.object(rewriting, "should_run_guardrail", return_value=True):
+            result: Final = await rewriting.async_post_call_success_hook(
+                data={}, user_api_key_dict=UserAPIKeyAuth(), response=response
+            )
+
+        assert result.choices[0].message.provider_specific_fields["web_search_calls"] == []
+
     def test_modify_response_with_permission_errors_keeps_custom_tool_call_in_another_choice(self):
         denied_call = ChatCompletionMessageToolCall(
             id="call_bash", type="function", function=Function(name="Bash", arguments="{}")
@@ -1404,6 +1500,7 @@ class TestToolPermissionGuardrail:
             if isinstance(choice, Choices)
         ]
         assert kept == [[], ["call_patch"]]
+
 
 class TestToolPermissionGuardrailIntegration:
     """Integration tests for Tool Permission Guardrail"""

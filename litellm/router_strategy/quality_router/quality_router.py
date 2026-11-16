@@ -16,7 +16,7 @@ then cheapest `model_info.input_cost_per_token`).
 """
 
 import math
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, Optional
 
 from litellm._logging import verbose_router_logger
@@ -103,7 +103,7 @@ class QualityRouter(CustomLogger):
             self._tier_to_models_cache = self._build_tier_index()
         return self._tier_to_models_cache
 
-    def _get_routing_preferences(self, deployment: object) -> dict[str, Any] | None:
+    def _get_routing_preferences(self, deployment: object) -> dict[str, object] | None:
         """
         Extract litellm_routing_preferences from a deployment, handling both
         dict-shaped and Pydantic-object-shaped deployments.
@@ -162,7 +162,7 @@ class QualityRouter(CustomLogger):
         `_model_quality`, and `_model_cost`. Raises if any listed model is
         missing `litellm_routing_preferences`.
         """
-        model_list: Final = self.ctx.registry().all() or []
+        model_list: Final[Sequence[object]] = self.ctx.registry().all() or []
         available: Final = set(self.config.available_models)
 
         # Track which available models we've matched so we can error on missing.
@@ -330,6 +330,7 @@ class QualityRouter(CustomLogger):
         messages: list[dict[str, object]] | None = None,
         input: str | list | None = None,
         specific_deployment: bool | None = False,
+        call_type: str | None = None,
     ) -> Optional["PreRoutingHookResponse"]:
         """Try keyword override first; fall back to complexity-tier routing."""
         from litellm.types.router import PreRoutingHookResponse

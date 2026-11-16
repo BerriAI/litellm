@@ -548,3 +548,50 @@ async def test_pre_call_hook_counts_tokens_off_the_event_loop():
     assert result["messages"] is messages
     assert "tools" not in result
     assert_loop_stayed_free(took, lags)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("tool_choice", "retrieval_entry"),
+    [
+        (
+            {"type": "allowed_tools", "mode": "required", "tools": [{"type": "function", "name": "existing_tool"}]},
+            {"type": "function", "name": "litellm_content_retrieve"},
+        ),
+        (
+            {
+                "type": "allowed_tools",
+                "allowed_tools": {"mode": "auto", "tools": [{"type": "function", "function": {"name": "existing_tool"}}]},
+            },
+            {"type": "function", "function": {"name": "litellm_content_retrieve"}},
+        ),
+    ],
+)
+async def test_pre_call_hook_lets_an_allowed_tools_choice_allow_the_retrieval_tool_it_adds(
+    monkeypatch, tool_choice, retrieval_entry
+):
+    monkeypatch.setattr(
+        "litellm.integrations.compression_interception.handler.compress",
+        lambda **_: {
+            "messages": [{"role": "user", "content": "stubbed"}],
+            "original_tokens": 12000,
+            "compressed_tokens": 5000,
+            "cache": {"auth.py": "full file content"},
+            "tools": [{"type": "function", "function": {"name": "litellm_content_retrieve", "parameters": {}}}],
+        },
+    )
+
+    result = await CompressionInterceptionLogger().async_pre_call_deployment_hook(
+        kwargs={
+            "model": "anthropic/claude-sonnet-4-5",
+            "messages": [{"role": "user", "content": "very large context"}],
+            "tools": [{"type": "function", "function": {"name": "existing_tool", "parameters": {"type": "object"}}}],
+            "tool_choice": tool_choice,
+        },
+        call_type=CallTypes.anthropic_messages,
+    )
+
+    assert result is not None
+    entries = result["tool_choice"].get("tools") or result["tool_choice"]["allowed_tools"]["tools"]
+    assert entries[-1] == retrieval_entry
+    assert entries[:-1] == (tool_choice.get("tools") or tool_choice["allowed_tools"]["tools"])

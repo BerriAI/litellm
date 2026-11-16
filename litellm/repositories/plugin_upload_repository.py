@@ -287,4 +287,6 @@ def _archive_metadata(plugin: "prisma_models.LiteLLM_ClaudeCodePluginTable") -> 
         description=plugin.description,
         has_agent_skill_metadata=has_agent_skill_metadata(manifest),
         updated_at=plugin.updated_at,
+        created_at=plugin.created_at,
+        created_by=plugin.created_by,
     )

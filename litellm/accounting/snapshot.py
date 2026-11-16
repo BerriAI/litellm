@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Final
 from pydantic import TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import guardrail_share_of_spend
 from litellm.litellm_core_utils.safe_json_dumps import safe_json_structure
 from litellm.proxy._types import SpendLogsPayload
 from litellm.proxy.spend_tracking.compression_savings import extract_compression_saved_tokens
@@ -14,6 +15,7 @@ if TYPE_CHECKING:
     from litellm.router import Router
 
 _FIELDS: Final = TypeAdapter(dict[str, object])
+_JSON_SAFE_INTEGER: Final = 2**53 - 1
 
 
 def _mapping(value: object) -> Mapping[str, object] | None:
@@ -29,6 +31,7 @@ _METADATA_FIELDS: Final = frozenset(
         "compression_savings",
         "internal_call_origin",
         "billed_retry_attempt",
+        "user_api_key_customer_usage",
     }
 )
 
@@ -49,6 +52,9 @@ _ACCOUNTING_FIELDS: Final = frozenset(
         "team_id",
         "organization_id",
         "end_user",
+        "customer_member_id",
+        "customer_team_id",
+        "customer_org_id",
         "agent_id",
         "request_tags",
         "status",
@@ -72,6 +78,7 @@ def build_accounting_payload(
         **{key: _accounting_metadata_field(key, value) for key, value in metadata.items() if key in _METADATA_FIELDS},
         "accounting_entities": entities,
         "accounting_savings": savings._asdict(),
+        "accounting_guardrail_spend": guardrail_share_of_spend(metadata, payload["spend"]),
         "accounting_model_access_groups": model_access_groups,
         "accounting_windows": windows,
     }
@@ -86,6 +93,7 @@ def build_accounting_payload(
                 "metadata": accounting_metadata,
             },
             non_finite_as_null=True,
+            integer_limit=_JSON_SAFE_INTEGER,
         )
     )
 

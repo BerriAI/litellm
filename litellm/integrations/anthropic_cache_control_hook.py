@@ -26,18 +26,18 @@ from litellm.exceptions import UnsupportedParamsError
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.custom_prompt_management import CustomPromptManagement
 from litellm.integrations.prompt_management_base import PromptManagementClient
-from litellm.litellm_core_utils.prompt_templates.common_utils import (
+from litellm.litellm_core_utils.prompt_templates.factory import (
+    tool_call_ids_answered_by_client,
+    tool_call_ids_answered_in,
+)
+from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import string_field
+from litellm.litellm_core_utils.prompt_templates.prompt_cache_breakpoint_utils import (
     PROMPT_CACHE_BREAKPOINT_DROP_PARAMS_HINT,
     cache_control_as_prompt_cache_breakpoint,
     prompt_cache_breakpoint_as_cache_control,
     with_prompt_cache_breakpoint,
     without_prompt_cache_breakpoints,
 )
-from litellm.litellm_core_utils.prompt_templates.factory import (
-    tool_call_ids_answered_by_client,
-    tool_call_ids_answered_in,
-)
-from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import string_field
 from litellm.llms.anthropic.common_utils import (
     is_claude_code_one_shot_subagent_request,
     supports_anthropic_cache_control,
@@ -327,7 +327,7 @@ def whole_messages_within_cache_control_limit(
 
 
 def _part_with_cache_control_renamed(part: object) -> object:
-    if not _accepts_prompt_cache_breakpoint(part):
+    if not _accepts_prompt_cache_breakpoint(part) or _attribute_or_key(part, "cache_control") is None:
         return part
     return cache_control_as_prompt_cache_breakpoint(_CONTENT_PART_ADAPTER.validate_python(part))
 

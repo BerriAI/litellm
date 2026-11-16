@@ -26,7 +26,9 @@ model info caches) mean what they did: the same object until a write changes tha
 
 import copy
 import datetime
+import threading
 from collections.abc import Callable, Iterable, Mapping, Sequence
+from contextlib import AbstractContextManager
 from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
@@ -187,10 +189,19 @@ class HostedModelList(list[Entry]):
         self,
         handle: Callable[[], "RouterCoreHandle | None"],
         apply: Callable[[Mapping[str, object]], None],
+        live: Callable[[object], Mapping[str, object]] = lambda _: {},
+        live_info: Callable[[object], Mapping[str, object]] = lambda _: {},
+        *,
+        lock: AbstractContextManager[object] | None = None,
     ) -> None:
         super().__init__()
         self._handle: Final = handle
+        self._lock: Final[AbstractContextManager[object]] = threading.RLock() if lock is None else lock
         self._apply: Final = apply
+        # A deployment's litellm_params values its record carries as text, by id (``live_params``).
+        self._live: Final = live
+        # A deployment's model_info values its record reads back changed (non-string keys), by id.
+        self._live_info: Final = live_info
         # The handle and registry version the contents were last read at.
         self._read_at: tuple[object, int] | None = None
         self._stable: _Stable = {}
@@ -203,6 +214,10 @@ class HostedModelList(list[Entry]):
 
     def refresh(self) -> None:
         """Read router-core's deployments again when its registry moved since the last read."""
+        with self._lock:
+            self._refresh()
+
+    def _refresh(self) -> None:
         handle: Final = self._handle()
         if handle is None or self._building is not None:
             # While a build runs, the list shows what it accepted until router-core serves it.
@@ -225,7 +240,7 @@ class HostedModelList(list[Entry]):
         keys, counts = _keys(records, self._id_counts if appended else {})
         entries: Final[list[Entry]] = []  # mutable-ok: filled here
         for key, record in zip(keys, records, strict=True):
-            typed = typed_deployment(_record(record))
+            typed = self._with_live(typed_deployment(_record(record)))
             held = self._stable.get(key) if key is not None else None
             kept = held is not None and held[0] == typed
             entry = held[1] if held is not None and kept else _HostedEntry(typed, self._entry_written)
@@ -236,34 +251,49 @@ class HostedModelList(list[Entry]):
         self._id_counts = counts
         return entries
 
+    def _with_live(self, record: Mapping[str, object]) -> Mapping[str, object]:
+        params: Final = as_str_mapping(record.get("litellm_params"))
+        info: Final = as_str_mapping(record.get("model_info"))
+        model_id: Final = (info or {}).get("id")
+        live: Final = self._live(model_id) if params is not None else {}
+        live_info: Final = self._live_info(model_id) if info is not None else {}
+        if live:
+            record = {**record, "litellm_params": {**(params or {}), **live}}  # rebind-ok: given its live values
+        if live_info:
+            record = {**record, "model_info": {**(info or {}), **live_info}}  # rebind-ok: see above
+        return record
+
     # -- a build ----------------------------------------------------------------------------------
 
     def begin_build(self, *, replacing: bool) -> None:
         """A build starts: router-core serves what it adds once it ends, so until then the list
         shows each deployment it accepts here (``built``), after the entries it keeps, or alone
         when it replaces them, as the Python router's list grows while it adds them."""
-        self.refresh()
-        if replacing:
-            self._show([])
-            self._id_counts = {}
-        self._building = (len(self), self._id_counts, self._read_at)
+        with self._lock:
+            self._refresh()
+            if replacing:
+                self._show([])
+                self._id_counts = {}
+            self._building = (len(self), self._id_counts, self._read_at)
 
     def built(self, entry: Mapping[str, object]) -> None:
         """A deployment the build accepted, shown until the build ends."""
-        if self._building is not None:
-            super().extend(self._kept([entry], appended=True))
+        with self._lock:
+            if self._building is not None:
+                super().extend(self._kept([entry], appended=True))
 
     def end_build(self) -> None:
         """The build ended (or failed): router-core serves what it added, read back in place of
         the entries shown meanwhile, each kept as the object it was shown as while unchanged."""
-        if self._building is None:
-            return
-        start, counts, read_at = self._building
-        self._building = None
-        super().__delitem__(slice(start, None))
-        self._id_counts = counts
-        self._read_at = read_at
-        self.refresh()
+        with self._lock:
+            if self._building is None:
+                return
+            start, counts, read_at = self._building
+            self._building = None
+            super().__delitem__(slice(start, None))
+            self._id_counts = counts
+            self._read_at = read_at
+            self._refresh()
 
     def _seed(self, entries: Sequence[object]) -> None:
         """Keep ``entries``, the list router-core now holds, as the objects its records for them
@@ -293,19 +323,21 @@ class HostedModelList(list[Entry]):
     def _replace(self, entries: list[Entry]) -> None:  # mutable-ok: the list router-core takes
         # Seeded first: router-core's records for them read back as these objects however soon
         # the list is read again.
-        self._seed(entries)
-        self._apply({"replace": entries})
-        self.refresh()
+        with self._lock:
+            self._seed(entries)
+            self._apply({"replace": entries})
+            self._refresh()
 
     def replace(self, entries: Iterable[object]) -> None:
         """Every deployment at once (``router.model_list = [...]``)."""
         self._replace(cast(list[Entry], list(entries)))  # cast-ok: the entries as assigned, which router-core validates
 
     def append(self, value: Entry) -> None:
-        self.refresh()
-        self._seed_appended([value])
-        self._apply({"append": [value]})
-        self.refresh()
+        with self._lock:
+            self._refresh()
+            self._seed_appended([value])
+            self._apply({"append": [value]})
+            self._refresh()
 
     def extend(self, values: Iterable[Entry]) -> None:
         for value in tuple(values):
@@ -344,8 +376,9 @@ class HostedModelList(list[Entry]):
             # A delete removes every deployment with the id; the list removes only this one.
             self._replace(changed)
             return
-        self._apply({"delete": [removed_id]})
-        self.refresh()
+        with self._lock:
+            self._apply({"delete": [removed_id]})
+            self._refresh()
 
     def pop(self, index: SupportsIndex = -1) -> Entry:
         entry: Final = self[index]
