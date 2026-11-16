@@ -214,7 +214,7 @@ pub(crate) fn transform_mantle_messages_request(
     Ok((MessagesRequest { model, ..request }, headers))
 }
 
-fn amazon_mantle_model_id(model: &str) -> String {
+pub fn amazon_mantle_model_id(model: &str) -> String {
     model.replacen("mantle/", "", 1)
 }
 
