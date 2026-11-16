@@ -9544,6 +9544,12 @@ def _eur_rates() -> ReferenceRateLookup:
             {"input_cost_per_token": 0.5, "output_cost_per_token": 0.25},
             id="trusted-omitted-currency-stays-usd",
         ),
+        pytest.param(
+            {"allow_client_pricing_override": True},
+            {"pricing_currency": None, "input_cost_per_token": 0.5, "output_cost_per_token": 0.25},
+            {"input_cost_per_token": 0.5, "output_cost_per_token": 0.25},
+            id="trusted-null-currency-stays-usd",
+        ),
         pytest.param({}, {"pricing_currency": "EUR", "input_cost_per_token": 0.5}, {}, id="untrusted-stripped"),
     ],
 )
