@@ -18,7 +18,7 @@ from collections.abc import (
 )
 from dataclasses import dataclass
 from datetime import datetime
-from functools import reduce
+from functools import lru_cache, reduce
 from itertools import chain, count, groupby, takewhile
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Protocol, TypeAlias, TypedDict, TypeVar, cast
@@ -42,7 +42,7 @@ from fastapi.responses import StreamingResponse
 from fastapi.routing import APIRoute
 from pydantic import TypeAdapter
 from starlette.datastructures import UploadFile as StarletteUploadFile
-from starlette.routing import BaseRoute, Match, Route
+from starlette.routing import BaseRoute, Match, Route, compile_path
 from starlette.types import Scope
 from starlette.websockets import WebSocketState
 from typing_extensions import ReadOnly
@@ -4078,6 +4078,20 @@ class SafeRouteAdder:
         return True
 
 
+@lru_cache(maxsize=1024)
+def _compiled_exact_path(path: str) -> re.Pattern[str]:
+    regex, _, _ = compile_path(path)
+    return regex
+
+
+def _registered_path_matches(route_type: str, registered_path: str, route: str) -> bool:
+    if route_type == "exact":
+        return _compiled_exact_path(registered_path).match(route) is not None
+    if route_type == "subpath":
+        return route == registered_path or route.startswith(registered_path + "/")
+    return False
+
+
 class InitPassThroughEndpointHelpers:
     @staticmethod
     def add_exact_path_route(
@@ -4250,55 +4264,13 @@ class InitPassThroughEndpointHelpers:
 
     @staticmethod
     def remove_endpoint_routes(endpoint_id: str):
-        """Remove all routes for a specific endpoint ID from the registry
-        and clean up corresponding entries from LiteLLMRoutes.openai_routes."""
+        """Remove all routes for a specific endpoint ID from the registry"""
         keys_to_remove: Final = [
             key for key, value in _registered_pass_through_routes.items() if value["endpoint_id"] == endpoint_id
         ]
         for key in keys_to_remove:
-            route_info = _registered_pass_through_routes[key]
-            path = route_info.get("path")
-            if isinstance(path, str):
-                openai_routes = LiteLLMRoutes.openai_routes.value
-                if path in openai_routes:
-                    openai_routes.remove(path)
-                if route_info.get("type") == "subpath":
-                    wildcard_path = path.rstrip("/") + "/*"
-                    if wildcard_path in openai_routes:
-                        openai_routes.remove(wildcard_path)
             del _registered_pass_through_routes[key]
             verbose_proxy_logger.debug("Removed pass-through route from registry: %s", key)
-
-    @staticmethod
-    def _llm_api_routes_of_route(route_info: Mapping[str, object]) -> tuple[str, ...]:
-        path: Final = route_info.get("path")
-        if not isinstance(path, str):
-            return ()
-        if route_info.get("type") == "subpath":
-            return (path, path.rstrip("/") + "/*")
-        return (path,)
-
-    @staticmethod
-    def llm_api_routes_of_endpoint(endpoint_id: str) -> frozenset[str]:
-        route_infos: Final = (
-            route_info
-            for route_info in _registered_pass_through_routes.values()
-            if route_info["endpoint_id"] == endpoint_id
-        )
-        return frozenset(chain.from_iterable(map(InitPassThroughEndpointHelpers._llm_api_routes_of_route, route_infos)))
-
-    @staticmethod
-    def auth_enforced_llm_api_routes() -> frozenset[str]:
-        route_infos: Final = (
-            route_info for route_info in _registered_pass_through_routes.values() if route_info.get("auth") is True
-        )
-        return frozenset(chain.from_iterable(map(InitPassThroughEndpointHelpers._llm_api_routes_of_route, route_infos)))
-
-    @staticmethod
-    def drop_llm_api_routes(routes: frozenset[str]) -> None:
-        openai_routes: Final = LiteLLMRoutes.openai_routes.value
-        for route in routes.intersection(openai_routes):
-            openai_routes.remove(route)
 
     @staticmethod
     def clear_all_pass_through_routes():
@@ -4356,13 +4328,23 @@ class InitPassThroughEndpointHelpers:
             if len(parts) >= 3:
                 route_type = parts[1]
                 registered_path = parts[2]
-                if route_type == "exact" and comparison_route == registered_path:
+                if _registered_path_matches(
+                    route_type=route_type, registered_path=registered_path, route=comparison_route
+                ):
                     return True
-                elif route_type == "subpath":
-                    if comparison_route == registered_path or comparison_route.startswith(registered_path + "/"):
-                        return True
 
         return False
+
+    @staticmethod
+    def is_auth_enforced_route(route: str) -> bool:
+        """True when any registered endpoint matching ``route`` was registered with auth=true, whatever its methods"""
+        comparison_route: Final = InitPassThroughEndpointHelpers._route_for_registry_lookup(route)
+        return any(
+            route_info.get("auth") is True
+            and _registered_path_matches(route_type=parts[1], registered_path=parts[2], route=comparison_route)
+            for key, route_info in _registered_pass_through_routes.items()
+            if len(parts := key.split(":", 3)) >= 3
+        )
 
     @staticmethod
     def forwarded_routes(route: str) -> tuple[str, ...]:
@@ -4385,7 +4367,12 @@ class InitPassThroughEndpointHelpers:
             HttpPassThroughEndpointHelpers.forwarded_route(endpoint_path=path, subpath=comparison_route[len(path) :])
             for path in subpath_endpoint_paths
         )
-        if subpath_endpoint_paths and ("exact", comparison_route) not in registered:
+        exact_endpoint_matches: Final = any(
+            _registered_path_matches(route_type=route_type, registered_path=path, route=comparison_route)
+            for route_type, path in registered
+            if route_type == "exact"
+        )
+        if subpath_endpoint_paths and not exact_endpoint_matches:
             return forwarded
         return (comparison_route, *forwarded)
 
@@ -4407,16 +4394,10 @@ class InitPassThroughEndpointHelpers:
                 if not route_methods and len(parts) == 4:
                     route_methods = parts[3].split(",")
 
-                # Check if path matches
-                path_matches = False
-                if route_type == "exact" and comparison_route == registered_path:
-                    path_matches = True
-                elif route_type == "subpath":
-                    if comparison_route == registered_path or comparison_route.startswith(registered_path + "/"):
-                        path_matches = True
-
                 # If path matches and method filter is provided, check if method is allowed
-                if path_matches:
+                if _registered_path_matches(
+                    route_type=route_type, registered_path=registered_path, route=comparison_route
+                ):
                     if method is None or not route_methods or method in route_methods:
                         return _registered_pass_through_routes[key]
 
@@ -4486,8 +4467,6 @@ async def _register_pass_through_endpoint(
         # unless the operator had a license. The safe option must always be free,
         # and unauthenticated forwarding should require explicit opt-in.
         dependencies = [Depends(user_api_key_auth)]
-        if path not in LiteLLMRoutes.openai_routes.value:
-            LiteLLMRoutes.openai_routes.value.append(path)
 
     if target is None:
         return
@@ -4521,10 +4500,6 @@ async def _register_pass_through_endpoint(
     visited_endpoints.add(f"{endpoint_id}:exact:{path}:{methods_str}")
 
     if endpoint_data.get("include_subpath", False) is True:
-        if auth is not None and str(auth).lower() == "true":
-            wildcard_path: Final = path.rstrip("/") + "/*"
-            if wildcard_path not in LiteLLMRoutes.openai_routes.value:
-                LiteLLMRoutes.openai_routes.value.append(wildcard_path)
         InitPassThroughEndpointHelpers.add_subpath_route(
             app=app,
             path=path,
@@ -4609,8 +4584,6 @@ async def initialize_pass_through_endpoints(
     # Drop stale registry entries by their exact route key. registered_pass_through_endpoints
     # holds route keys ("{id}:{type}:{path}:{methods}"), not endpoint ids, so remove_endpoint_routes
     # (which matches on endpoint_id) never matched and left the registry growing every reload cycle.
-    # We pop the key directly and leave openai_routes alone: its append is path-deduped, and the path
-    # is still owned by the live endpoint that was just re-registered under a new id this same cycle.
     for endpoint_key in registered_pass_through_endpoints:
         if endpoint_key not in visited_endpoints:
             _registered_pass_through_routes.pop(endpoint_key, None)
@@ -4900,7 +4873,6 @@ async def update_pass_through_endpoints(
 
     # Update the list
     pass_through_endpoint_data[endpoint_index] = endpoint_dict
-    replaced_llm_api_routes: Final = InitPassThroughEndpointHelpers.llm_api_routes_of_endpoint(endpoint_id)
 
     ## Update db
     updated_data: Final = ConfigFieldUpdate(
@@ -4950,9 +4922,6 @@ async def update_pass_through_endpoints(
             auth=updated_endpoint.auth,
             timeout=updated_endpoint.timeout,
         )
-    InitPassThroughEndpointHelpers.drop_llm_api_routes(
-        replaced_llm_api_routes - InitPassThroughEndpointHelpers.auth_enforced_llm_api_routes()
-    )
 
     return PassThroughEndpointResponse(endpoints=[updated_endpoint] if updated_endpoint else [])
 

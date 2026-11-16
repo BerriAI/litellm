@@ -2491,3 +2491,43 @@ def test_spent_proxy_budget_refuses_chat_routes(monkeypatch: pytest.MonkeyPatch,
     _global_proxy_budget_check(global_proxy_spend=0.4, skip_budget_checks=False, route=route)
     with pytest.raises(litellm.BudgetExceededError):
         _global_proxy_budget_check(global_proxy_spend=1.0, skip_budget_checks=False, route=route)
+
+
+@pytest.mark.parametrize(("auth", "expected"), [(True, True), (False, False)])
+def test_jwt_team_default_openai_routes_cover_an_auth_pass_through(auth: bool, expected: bool) -> None:
+    from fastapi import FastAPI
+
+    from litellm.proxy._types import LiteLLM_JWTAuth, LitellmUserRoles
+    from litellm.proxy.auth.auth_checks import allowed_routes_check
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        InitPassThroughEndpointHelpers,
+        _registered_pass_through_routes,
+    )
+
+    saved_registry: Final = dict(_registered_pass_through_routes)
+    try:
+        _registered_pass_through_routes.clear()
+        InitPassThroughEndpointHelpers.add_exact_path_route(
+            app=FastAPI(),
+            path="/team-provider/{item_id}",
+            target="https://example.com",
+            custom_headers=None,
+            forward_headers=None,
+            merge_query_params=None,
+            dependencies=None,
+            cost_per_request=None,
+            endpoint_id="team-provider",
+            auth=auth,
+        )
+
+        assert (
+            allowed_routes_check(
+                user_role=LitellmUserRoles.TEAM,
+                user_route="/team-provider/123",
+                litellm_proxy_roles=LiteLLM_JWTAuth(),
+            )
+            is expected
+        )
+    finally:
+        _registered_pass_through_routes.clear()
+        _registered_pass_through_routes.update(saved_registry)

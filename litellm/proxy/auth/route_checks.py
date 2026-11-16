@@ -180,7 +180,7 @@ class RouteChecks:
                     if RouteChecks.check_route_access(
                         route=route,
                         allowed_routes=LiteLLMRoutes[allowed_route].value,
-                    ):
+                    ) or (allowed_route == "openai_routes" and RouteChecks.is_auth_enforced_pass_through_path(route)):
                         if (
                             allowed_route in _AUTH_ENFORCED_PASS_THROUGH_ROUTE_GROUPS
                             and RouteChecks.is_auth_enforced_pass_through_route(
@@ -537,7 +537,9 @@ class RouteChecks:
         for _llm_passthrough_route in LiteLLMRoutes.mapped_pass_through_routes.value:
             if route == _llm_passthrough_route or route.startswith(_llm_passthrough_route + "/"):
                 return True
-        return RouteChecks.is_builtin_eu_jev_decision_route(route=route)
+        if RouteChecks.is_builtin_eu_jev_decision_route(route=route):
+            return True
+        return RouteChecks.is_auth_enforced_pass_through_path(route=route)
 
     @staticmethod
     def is_builtin_eu_jev_decision_route(route: str) -> bool:
@@ -753,9 +755,9 @@ class RouteChecks:
         """
         True for config/DB pass-through endpoints registered with auth=true.
 
-        These routes are injected into ``openai_routes`` for spend/budget hooks but
-        must not inherit blanket ``openai_routes`` RBAC; access is gated by
-        ``allowed_passthrough_routes`` on the key or team.
+        These routes count as LLM API routes for spend/budget hooks but must not inherit
+        blanket ``openai_routes`` RBAC; access is gated by ``allowed_passthrough_routes``
+        on the key or team.
         """
         from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
             InitPassThroughEndpointHelpers,
@@ -765,6 +767,14 @@ class RouteChecks:
         if route_info is None:
             return False
         return route_info.get("auth") is True
+
+    @staticmethod
+    def is_auth_enforced_pass_through_path(route: str) -> bool:
+        from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (  # noqa: PLC0415  # pass_through_endpoints imports the auth stack
+            InitPassThroughEndpointHelpers,
+        )
+
+        return InitPassThroughEndpointHelpers.is_auth_enforced_route(route=route)
 
     @staticmethod
     def _auth_pass_through_denied_exception(route: str) -> HTTPException:
