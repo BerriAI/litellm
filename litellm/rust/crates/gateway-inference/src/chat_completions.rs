@@ -89,6 +89,10 @@ struct ChatAttempt {
 impl RouteAttempt for ChatAttempt {
     type Outcome = (ChatCompletionsResponse, CacheHeaders);
 
+    fn body(&self) -> Value {
+        Value::Object(self.body.clone())
+    }
+
     async fn run(&self, attempt: &Attempt) -> Result<Served<Self::Outcome>, Error> {
         let deployment = &attempt.deployment;
         let body = routing::attempt_body(&self.body, attempt);

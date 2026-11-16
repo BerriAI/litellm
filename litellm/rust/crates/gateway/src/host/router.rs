@@ -8,6 +8,7 @@ use litellm_gateway_inference::{
 use litellm_router_core::{
     Attempt, AttemptError, AttemptFailure, Capability, ConfigError, Deployment,
     InMemoryRouterCache, RouterEvent, RouterHost, RoutingContext, SelectStage, Served, Unsupported,
+    precall::PreCallFacts,
 };
 
 use crate::Gateway;
@@ -46,6 +47,14 @@ impl<A: RouteAttempt> RouterHost for NativeRouterHost<'_, A> {
             needs: Capability::Select,
         })
         .into())
+    }
+
+    async fn pre_call_facts(
+        &self,
+        ctx: &RoutingContext<'_>,
+        candidates: &[Arc<Deployment>],
+    ) -> Result<PreCallFacts, litellm_router_core::Error> {
+        Ok(super::precall::facts(self.gateway, ctx, candidates).await)
     }
 
     async fn allow_fallback(&self, target: &str) -> Result<bool, AttemptError> {

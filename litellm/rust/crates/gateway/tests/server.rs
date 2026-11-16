@@ -482,7 +482,6 @@ async fn a_failed_deployment_is_retried_on_another_deployment_of_its_group() {
 
 #[rstest]
 #[case::strategy("routing_strategy: usage-based-routing-v2", "usage-based-routing-v2")]
-#[case::pre_call_checks("enable_pre_call_checks: true", "enable_pre_call_checks")]
 #[case::tag_filtering("enable_tag_filtering: true", "enable_tag_filtering")]
 #[case::health_check_routing("enable_health_check_routing: true", "enable_health_check_routing")]
 #[case::stateful_affinity(

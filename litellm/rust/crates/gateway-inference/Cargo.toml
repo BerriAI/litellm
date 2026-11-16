@@ -7,7 +7,6 @@ repository.workspace = true
 
 [dependencies]
 arc-swap.workspace = true
-litellm-secret-value.workspace = true
 litellm-cache-response.workspace = true
 axum = { workspace = true, features = ["json", "multipart", "original-uri"] }
 base64.workspace = true
@@ -26,10 +25,9 @@ litellm-host-http.workspace = true
 litellm-host.workspace = true
 litellm-http.workspace = true
 litellm-llms.workspace = true
+litellm-core-utils.workspace = true
 litellm-model-catalog.workspace = true
 litellm-router-core.workspace = true
-litellm-config.workspace = true
-litellm-core-utils.workspace = true
 litellm-router-types.workspace = true
 litellm-secrets.workspace = true
 litellm-llms-types.workspace = true
@@ -40,6 +38,7 @@ tokio = { workspace = true, features = ["time"] }
 tracing.workspace = true
 
 [dev-dependencies]
+litellm-secret-value.workspace = true
 litellm-gateway.workspace = true
 litellm-cache-memory.workspace = true
 tokio = { workspace = true, features = ["io-util"] }

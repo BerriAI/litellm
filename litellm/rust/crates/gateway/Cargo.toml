@@ -35,6 +35,7 @@ litellm-http.workspace = true
 litellm-inference-messages.workspace = true
 litellm-llms.workspace = true
 litellm-model-catalog.workspace = true
+litellm-token-counter = { workspace = true, features = ["tiktoken"] }
 litellm-model-catalog-refresh.workspace = true
 litellm-router-core.workspace = true
 litellm-secrets.workspace = true
@@ -42,7 +43,7 @@ litellm-tracing.workspace = true
 serde_json.workspace = true
 serde.workspace = true
 tracing.workspace = true
-tokio = { workspace = true, features = ["signal"] }
+tokio = { workspace = true, features = ["rt", "signal"] }
 uuid.workspace = true
 veil.workspace = true
 tower-sessions-moka-store = "0.15.0"
