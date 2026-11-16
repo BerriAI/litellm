@@ -1,5 +1,5 @@
 import hashlib
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Container, Mapping, Sequence
 from copy import copy
 from dataclasses import dataclass
 from functools import reduce
@@ -101,7 +101,7 @@ class BridgedToolNames:
 @dataclass(frozen=True, slots=True)
 class SentToolNames:
     member_chat_names: Mapping[str, str]
-    self_named_namespace_members: frozenset[str]
+    self_named_namespace_members: Container[str]
 
 
 def with_renamed_tool_calls(response: ModelResponse, new_names: Mapping[str, str]) -> ModelResponse:

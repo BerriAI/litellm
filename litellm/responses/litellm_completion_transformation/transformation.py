@@ -6,7 +6,7 @@ import json
 import re
 import uuid
 from collections import Counter
-from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Container, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from functools import partial
 from itertools import accumulate, chain, groupby
@@ -1720,7 +1720,7 @@ class LiteLLMCompletionResponsesConfig:
         input: str | ResponseInputParam,
         replay_reasoning: bool = False,
         native_compaction: bool = False,
-        self_named_namespace_members: frozenset[str] = frozenset(),
+        self_named_namespace_members: Container[str] = frozenset(),
         member_chat_names: Mapping[str, str] = MappingProxyType({}),
         member_name: Callable[[str, str], str] = chat_member_name,
     ) -> list[
@@ -2464,7 +2464,7 @@ class LiteLLMCompletionResponsesConfig:
         input_item: Mapping[str, object],
         replay_reasoning: bool = False,
         native_compaction: bool = False,
-        self_named_namespace_members: frozenset[str] = frozenset(),
+        self_named_namespace_members: Container[str] = frozenset(),
         member_chat_names: Mapping[str, str] = MappingProxyType({}),
         member_name: Callable[[str, str], str] = chat_member_name,
     ) -> list[AllMessageValues | GenericChatCompletionMessage | ChatCompletionResponseMessage]:
@@ -2792,7 +2792,7 @@ class LiteLLMCompletionResponsesConfig:
     @staticmethod
     def _transform_responses_api_function_call_to_chat_completion_message(
         function_call: Mapping[str, str],
-        self_named_namespace_members: frozenset[str] = frozenset(),
+        self_named_namespace_members: Container[str] = frozenset(),
         member_chat_names: Mapping[str, str] = MappingProxyType({}),
         member_name: Callable[[str, str], str] = chat_member_name,
     ) -> list[AllMessageValues | GenericChatCompletionMessage | ChatCompletionResponseMessage]:
