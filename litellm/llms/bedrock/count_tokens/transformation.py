@@ -12,7 +12,12 @@ from typing import Final, Literal
 from pydantic import JsonValue
 
 from litellm.litellm_core_utils.url_utils import join_api_base
-from litellm.llms.anthropic.common_utils import tools_without_custom_field
+from litellm.llms.anthropic.common_utils import (
+    anthropic_message_objects,
+    is_claude_model_target,
+    strip_unsigned_thinking_from_anthropic_messages,
+    tools_without_custom_field,
+)
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.common_utils import (
     get_bedrock_base_model,
@@ -129,6 +134,7 @@ class BedrockCountTokensConfig(BaseAWSLLM):
     def transform_anthropic_to_bedrock_count_tokens(
         self,
         request_data: Mapping[str, JsonValue],
+        model: str,
     ) -> dict[str, JsonValue]:
         """
         Transform request to Bedrock CountTokens format.
@@ -164,7 +170,7 @@ class BedrockCountTokensConfig(BaseAWSLLM):
         if input_type == "converse":
             return self._transform_to_converse_format(request_data)
         else:
-            return self._transform_to_invoke_model_format(request_data)
+            return self._transform_to_invoke_model_format(request_data, model)
 
     def _transform_to_converse_format(self, request_data: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
         """Transform to Converse input format, including system and tools."""
@@ -209,7 +215,9 @@ class BedrockCountTokensConfig(BaseAWSLLM):
 
         return {"tools": bedrock_tools}
 
-    def _transform_to_invoke_model_format(self, request_data: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
+    def _transform_to_invoke_model_format(
+        self, request_data: Mapping[str, JsonValue], model: str
+    ) -> dict[str, JsonValue]:
         """Transform to InvokeModel input format."""
         import base64
         import json
@@ -217,12 +225,23 @@ class BedrockCountTokensConfig(BaseAWSLLM):
         # For InvokeModel, we need to provide the raw body that would be sent to the model
         # Remove the 'model' field from the body as it's not part of the model input
         tools: Final = request_data.get("tools")
+        messages: Final = request_data.get("messages")
+        claude_messages: Final = (
+            anthropic_message_objects(messages)
+            if isinstance(messages, list) and is_claude_model_target("bedrock", model)
+            else None
+        )
         body_data: Final = {
             **{k: v for k, v in request_data.items() if k != "model"},
             **(
                 {"tools": tools_without_custom_field(tools, hoist_defer_loading=True, drop_custom=True)}
                 if isinstance(tools, list)
                 else {}
+            ),
+            **(
+                {}
+                if claude_messages is None
+                else {"messages": strip_unsigned_thinking_from_anthropic_messages(claude_messages)}
             ),
         }
 

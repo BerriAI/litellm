@@ -81,6 +81,7 @@ class BedrockMantleCountTokensHandler(BaseAWSLLM):
                     {name: value for name, value in request_data.items() if name in COUNT_TOKEN_OPTION_NAMES}
                 ),
                 context_management=request.get("context_management"),
+                custom_llm_provider="bedrock_mantle",
             )
             betas: Final = (
                 *context_management_betas(request.get("context_management")),

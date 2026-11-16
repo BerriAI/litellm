@@ -7,7 +7,7 @@ use litellm_llms_types::{
         MessagesOptionalParams, MessagesRequest, Speed, ThinkingConfig, ThinkingDisplay,
     },
     providers::anthropic::{AnthropicBeta, BETA_HEADER, BetaProvider, BetaSet, DEFAULT_HEADERS},
-    recognized::Recognized,
+    recognized::{Recognized, map_known_runs},
 };
 use litellm_router_types::LitellmParams;
 use serde_json::{Map, Value, json};
@@ -37,7 +37,8 @@ use crate::{
         requires_native_compaction_beta, strip_advisor_blocks,
         strip_encrypted_reasoning_blocks_restoring_redacted_data, strip_raw_advisor_blocks,
         strip_raw_encrypted_reasoning_blocks,
-        strip_thinking_blocks_from_anthropic_messages_request, tools_without_strict,
+        strip_thinking_blocks_from_anthropic_messages_request, strip_unsignable_thinking_blocks,
+        tools_without_strict,
     },
     base_llm::{
         auth::AuthScheme,
@@ -161,6 +162,16 @@ impl BaseMessagesConfig for AnthropicMessagesConfig {
         retry_anthropic_messages_after_http_error(status, error_text, request_body, context)
     }
 
+    fn request_for_url(&self, request: MessagesRequest, url: &str) -> MessagesRequest {
+        if !(is_claude_model(&request.model) && checks_claude_signatures(url)) {
+            return request;
+        }
+        MessagesRequest {
+            messages: map_known_runs(request.messages, strip_unsignable_thinking_blocks),
+            ..request
+        }
+    }
+
     fn headers_for_url(&self, headers: Headers, url: &str) -> Headers {
         if !is_foundry_url(url) {
             return headers;
@@ -185,7 +196,7 @@ const FOUNDRY_HOST_SUFFIXES: [&str; 3] = [
     "cognitiveservices.azure.com",
 ];
 
-fn is_foundry_url(url: &str) -> bool {
+fn url_host(url: &str) -> Option<String> {
     let absolute = if url.contains("://") {
         url.to_string()
     } else {
@@ -194,11 +205,23 @@ fn is_foundry_url(url: &str) -> bool {
     url::Url::parse(&absolute)
         .ok()
         .and_then(|parsed| parsed.host_str().map(str::to_ascii_lowercase))
-        .is_some_and(|host| {
-            FOUNDRY_HOST_SUFFIXES
-                .iter()
-                .any(|suffix| host == *suffix || host.ends_with(&format!(".{suffix}")))
-        })
+}
+
+fn is_host_or_subdomain(host: &str, domain: &str) -> bool {
+    host == domain || host.ends_with(&format!(".{domain}"))
+}
+
+fn is_foundry_url(url: &str) -> bool {
+    url_host(url).is_some_and(|host| {
+        FOUNDRY_HOST_SUFFIXES
+            .iter()
+            .any(|suffix| is_host_or_subdomain(&host, suffix))
+    })
+}
+
+fn checks_claude_signatures(url: &str) -> bool {
+    is_foundry_url(url)
+        || url_host(url).is_some_and(|host| is_host_or_subdomain(&host, "anthropic.com"))
 }
 
 pub(crate) fn is_claude_model(model: &str) -> bool {
@@ -1299,6 +1322,52 @@ mod tests {
                 {"role": "user", "content": "And the next one?"}
             ]})))
         );
+    }
+
+    #[rstest]
+    #[case::claude_on_anthropic(
+        "claude-sonnet-5-5",
+        "https://api.anthropic.com/v1/messages",
+        false
+    )]
+    #[case::claude_on_foundry(
+        "claude-sonnet-5-5",
+        "https://example.services.ai.azure.com/anthropic/v1/messages",
+        false
+    )]
+    #[case::claude_name_on_deepseek(
+        "claude-sonnet-4-5",
+        "https://api.deepseek.com/anthropic/v1/messages",
+        true
+    )]
+    #[case::non_claude_on_anthropic("kimi-k3", "https://api.anthropic.com/v1/messages", true)]
+    fn unsigned_thinking_is_dropped_only_for_claude_on_a_host_that_checks_its_signatures(
+        #[case] model: &str,
+        #[case] url: &str,
+        #[case] kept: bool,
+    ) {
+        let unsigned_turn = json!([
+            {"type": "thinking", "thinking": "Read it first.", "signature": ""},
+            {"type": "tool_use", "id": "toolu_1", "name": "Read", "input": {"file_path": "numbers.txt"}}
+        ]);
+        let messages = json!([
+            {"role": "user", "content": "Read numbers.txt."},
+            {"role": "assistant", "content": unsigned_turn},
+            {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "toolu_1", "content": "3 7 12"}
+            ]}
+        ]);
+        let sent = serde_json::to_value(
+            ANTHROPIC_MESSAGES_CONFIG
+                .request_for_url(request(json!({"model": model, "messages": messages})), url),
+        )
+        .unwrap();
+        let expected = if kept {
+            unsigned_turn.clone()
+        } else {
+            json!([unsigned_turn[1]])
+        };
+        assert_eq!(sent["messages"][1]["content"], expected);
     }
 
     #[test]

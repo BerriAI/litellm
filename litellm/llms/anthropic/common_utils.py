@@ -40,7 +40,7 @@ from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import 
     parts_of,
 )
 from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
-    is_encrypted_reasoning_block,
+    is_unsignable_thinking_block,
     native_redacted_thinking_data,
 )
 from litellm.litellm_core_utils.reasoning_effort_utils import DroppedThinkingBudget, non_numeric_thinking_budget_error
@@ -151,7 +151,7 @@ _SERVER_CALL_FIELD_KEYS: Final = ("server_tool_calls", "web_search_calls")
 _WEB_SEARCH_CALL_ADAPTER: Final = TypeAdapter(ResponseFunctionWebSearch)
 _TOOL_CALL_FIELDS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _DECODED_JSON: Final = TypeAdapter(object)
-_JSON_VALUE: Final = TypeAdapter(JsonValue)
+_JSON_VALUE: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
 
 
 _CLAUDE_CODE_USER_AGENT_PREFIXES: Final = ("claude-cli/", "claude-code/")
@@ -172,6 +172,32 @@ def is_claude_tool_target(custom_llm_provider: str | None, model: str) -> bool:
 
 def is_claude_model_target(custom_llm_provider: str | None, model: str) -> bool:
     return "claude" in model.lower() and is_claude_tool_target(custom_llm_provider, model)
+
+
+_CLAUDE_SIGNATURE_CHECKING_DOMAINS: Final = (
+    "anthropic.com",
+    "services.ai.azure.com",
+    "openai.azure.com",
+    "cognitiveservices.azure.com",
+)
+
+
+def checks_claude_signatures(api_base: str) -> bool:
+    host: Final = urlparse(api_base if "://" in api_base else f"https://{api_base}").hostname or ""
+    return any(host == domain or host.endswith(f".{domain}") for domain in _CLAUDE_SIGNATURE_CHECKING_DOMAINS)
+
+
+_CLAUDE_SIGNATURE_CHECKING_PROVIDERS: Final = frozenset(
+    {"azure_ai", "vertex_ai", "bedrock", "bedrock_mantle", "databricks", "github_copilot"}
+)
+
+
+def verifies_claude_thinking_signatures(custom_llm_provider: str, model: str, api_base: str | None) -> bool:
+    if "claude" not in model.lower():
+        return False
+    if custom_llm_provider == "anthropic":
+        return checks_claude_signatures(AnthropicModelInfo.resolve_anthropic_api_base(api_base))
+    return custom_llm_provider in _CLAUDE_SIGNATURE_CHECKING_PROVIDERS
 
 
 def _hoistable_defer_loading(tool_dict: Mapping[object, object], custom: object) -> bool | None:
@@ -2147,14 +2173,18 @@ def strip_thinking_blocks_from_anthropic_messages(messages: Sequence[object]) ->
     return out
 
 
-def _replayable_message(message: dict) -> dict | None:  # mutable-ok: Anthropic message payload shape
+def _replayable_message(
+    message: dict,  # mutable-ok: Anthropic message payload shape
+    unreplayable: Callable[[object], bool],
+) -> dict | None:  # mutable-ok: Anthropic message payload shape
     if not isinstance(message, Mapping):
         return message
     content: Final = message.get("content")
     if not isinstance(content, list):
         return message
-    kept: Final = [_with_native_redacted_data(b) for b in content if not is_encrypted_reasoning_block(b)]
-    if kept == content:
+    blocks: Final = OBJECT_LIST_ADAPTER.validate_python(content)
+    kept: Final = [_with_native_redacted_data(b) for b in blocks if not unreplayable(b)]
+    if kept == blocks:
         return message
     if not kept:
         return None
@@ -2174,17 +2204,30 @@ def _with_native_redacted_data(block: object) -> object:
             return block
 
 
-def strip_encrypted_reasoning_blocks_from_anthropic_messages(
+def strip_unreplayable_blocks_from_anthropic_messages(
     messages: Sequence[dict],  # mutable-ok: Anthropic message payload shape
+    unreplayable: Callable[[object], bool],
 ) -> list[dict]:  # mutable-ok: AnthropicMessagesRequest.messages is typed list[dict]
     """
-    Drop thinking / redacted_thinking blocks that carry another provider's encrypted
-    reasoning (a turn the Responses API bridge served) before the request reaches
-    Anthropic, which cannot verify them. Anthropic's own signed blocks are kept, with a
-    redacted block's Bedrock Converse-wrapped `data` unwrapped back to Claude's own.
+    Drop the content blocks `unreplayable` matches (thinking from another provider that
+    the backend cannot verify) before the request reaches it, and any message left empty.
+    A kept redacted block's Bedrock Converse-wrapped `data` is unwrapped back to Claude's own.
     """
-    stripped: Final = (_replayable_message(m) for m in messages)
+    stripped: Final = (_replayable_message(m, unreplayable) for m in messages)
     return [m for m in stripped if m is not None]
+
+
+def strip_unsigned_thinking_from_anthropic_messages(
+    messages: Sequence[Mapping[str, JsonValue]],
+) -> Sequence[Mapping[str, JsonValue]]:
+    return strip_unreplayable_blocks_from_anthropic_messages(
+        tuple(dict(message) for message in messages), is_unsignable_thinking_block
+    )
+
+
+def anthropic_message_objects(messages: Sequence[JsonValue]) -> Sequence[Mapping[str, JsonValue]] | None:
+    objects: Final = tuple(message for message in messages if isinstance(message, dict))
+    return objects if len(objects) == len(messages) else None
 
 
 def strip_thinking_blocks_from_anthropic_messages_request_dict(

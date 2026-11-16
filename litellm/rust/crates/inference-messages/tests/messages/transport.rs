@@ -236,6 +236,52 @@ async fn a_recoverable_rejection_is_retried_through_the_host_transport(call: Mes
 }
 
 #[rstest]
+#[case::anthropic("https://api.anthropic.com", false)]
+#[case::anthropic_compatible_host("https://api.deepseek.com/anthropic", true)]
+#[tokio::test]
+async fn unsigned_thinking_is_sent_only_to_a_host_that_does_not_check_claude_signatures(
+    call: MessagesCall,
+    #[case] api_base: &str,
+    #[case] kept: bool,
+) {
+    let transport = ScriptedTransport::new([Scripted::Complete(message_body())]);
+    let unsigned = json!({"type": "thinking", "thinking": "Gemini's plan", "signature": ""});
+    let replayed = json!({
+        "max_tokens": 4096,
+        "thinking": {"type": "enabled", "budget_tokens": 2048},
+        "messages": [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": [unsigned.clone(), {"type": "text", "text": "hello"}]},
+            {"role": "user", "content": "again"}
+        ]
+    });
+
+    execute(
+        transport.clone(),
+        MessagesCall {
+            api_base: Some(api_base.into()),
+            ..hosted_call(call, replayed)
+        },
+    )
+    .await
+    .expect("the first call succeeds");
+
+    let sent = transport.sent();
+    let [request] = sent.as_slice() else {
+        panic!("one request");
+    };
+    assert_eq!(request.url, format!("{api_base}/v1/messages"));
+    assert_eq!(
+        request.body["messages"][1]["content"]
+            .as_array()
+            .expect("the assistant turn is sent")
+            .contains(&unsigned),
+        kept
+    );
+    assert!(request.body.get("thinking").is_some());
+}
+
+#[rstest]
 #[tokio::test]
 async fn the_raw_head_carries_the_bytes_the_host_transport_last_sent(
     call: MessagesCall,
