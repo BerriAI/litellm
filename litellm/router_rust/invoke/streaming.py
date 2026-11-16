@@ -1796,12 +1796,16 @@ def _responses_continuation_request(
 
 
 def _responses_stream_retries(
-    attempt: StreamAttempt, e: MidStreamFallbackError, source_iterator: "BaseResponsesAPIStreamingIterator"
+    attempt: StreamAttempt,
+    e: MidStreamFallbackError,
+    source_iterator: "BaseResponsesAPIStreamingIterator",
+    client_has_events: bool,
 ) -> bool:
-    """Whether a broken Responses stream retries in its own group first: it broke before any output and
-    before a tool call, with an error the retry rule takes (408, 409, 429, 5xx, or no status), as a
-    ``/v1/messages`` stream does. After output the continuation fallback takes over instead."""
-    if not _mid_stream_error_before_output(e) or source_iterator.started_tool_call:
+    """Whether a broken Responses stream retries in its own group first: it broke before the client was
+    sent any event, before any output and before a tool call, with an error the retry rule takes (408,
+    409, 429, 5xx, or no status), as a ``/v1/messages`` stream does. After output the continuation
+    fallback takes over instead."""
+    if client_has_events or not _mid_stream_error_before_output(e) or source_iterator.started_tool_call:
         return False
     status_code: Final = _stream_raised_error_status(_mid_stream_retry_trigger(e))
     return status_code is None or attempt.should_retry_status(status_code)
@@ -1819,7 +1823,8 @@ async def _responses_recover_stream_error(
     with the newest failure once the retries are spent. The primary's held lifecycle events are dropped
     when a retry or a fallback answers."""
     last_error: MidStreamFallbackError = e  # rebind-ok: the newest failure once a retry also failed
-    if _responses_stream_retries(attempt, e, source_iterator):
+    client_has_events: Final = getattr(wrapper, "yielded_first_chunk", False) is True
+    if _responses_stream_retries(attempt, e, source_iterator, client_has_events):
         if hasattr(source_iterator, "aclose"):
             with anyio.CancelScope(shield=True), contextlib.suppress(Exception):
                 await aclose_if_supported(source_iterator)
@@ -1853,12 +1858,17 @@ async def _responses_yield_retried(
         inner_attempt.attempted_retries = attempted
         inner_attempt.committed_budget = budget
 
-    served_as: Final = _prepare_fallback_hidden_params(wrapper)[1].get("x-litellm-model-group")
+    headers_before_retry: Final = _prepare_fallback_hidden_params(wrapper)[1]
+    kept: Final = {
+        name: headers_before_retry[name]
+        for name in ("x-litellm-model-group", "x-litellm-attempted-fallbacks")
+        if headers_before_retry.get(name) is not None
+    }
 
     def follow_source() -> _Prepared:
         prepared: Final = adopt_headers(response)
-        if served_as is not None:
-            _ = prepared[1].setdefault("x-litellm-model-group", served_as)
+        for name, value in kept.items():
+            _ = prepared[1].setdefault(name, value)
         newest: Final = prepared[1].get("x-litellm-attempted-retries")
         _ = add_retry_headers_to_response(
             response=wrapper,

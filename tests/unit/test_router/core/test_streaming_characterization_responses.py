@@ -551,3 +551,28 @@ async def test_the_failed_stream_is_closed_before_the_retry_is_opened(make_core:
     core = make_core(model_list=GROUP_A_TWICE, num_retries=1)
     assert await collect_event_types(await open_stream(core)) == [CREATED, TEXT_DELTA, COMPLETED]
     assert closed_when_retry_opens == [True]
+
+
+async def test_once_the_client_was_sent_events_the_stream_is_not_retried_in_the_group(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    item_added: Final = "response.output_item.added"
+    host.answer("*", responses_stream(Event(CREATED), Event(item_added), error=cut()), retried_ok())
+    stream = await open_stream(make_core(model_list=GROUP_A_TWICE, num_retries=1))
+    seen: list[object] = []
+    with pytest.raises(litellm.RateLimitError, match="stream cut"):
+        await drain_into(stream, seen)
+    assert [getattr(event, "type") for event in seen] == [CREATED, item_added]
+    assert len(host.deployments_called()) == 1
+
+
+async def test_a_stream_retried_inside_a_fallback_group_keeps_the_attempted_fallbacks_header(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    host.answer("openai/a", server_error())
+    host.answer("*", responses_stream(Event(CREATED), error=cut()), retried_ok())
+    core = build(make_core, model_list=[deployment("a", "a"), deployment("b", "b1"), deployment("b", "b2")])
+    stream = await open_stream(core, num_retries=1)
+    assert await collect_event_types(stream) == [CREATED, TEXT_DELTA, COMPLETED]
+    headers: Final = hidden(stream)["additional_headers"]
+    assert (headers["x-litellm-attempted-fallbacks"], headers["x-litellm-attempted-retries"]) == (1, 1)
