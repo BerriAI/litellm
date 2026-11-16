@@ -688,7 +688,7 @@ jobs:
     name: lint passed
     needs: [python, secret-scan, ui, ui-api-types, code-quality, ci-coverage, semgrep]
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     timeout-minutes: 2
     permissions: {}
     steps:

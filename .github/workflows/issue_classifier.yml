@@ -132,7 +132,7 @@ jobs:
   label-issue:
     needs: classify-issue
     if: needs.classify-issue.outputs.verdict != ''
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     timeout-minutes: 5
     permissions:
       contents: read

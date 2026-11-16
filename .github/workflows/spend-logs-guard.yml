@@ -17,7 +17,7 @@ concurrency:
 
 jobs:
   spend-logs-guard:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         if: github.event_name == 'pull_request'
@@ -39,9 +39,10 @@ jobs:
           echo "merge_base=$merge_base" >> "$GITHUB_OUTPUT"
       - name: Set up uv
         if: github.event_name == 'pull_request'
-        uses: ./.github/actions/setup-uv-with-retries
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d
         with:
           version: "0.10.9"
+          save-cache: false
       - name: Run the guard
         if: github.event_name == 'pull_request'
         env:
