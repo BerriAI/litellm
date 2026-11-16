@@ -60,7 +60,9 @@ if TYPE_CHECKING:
 
 _STREAMING_DELTA_TYPES: Final = frozenset(get_args(StreamingContentBlockDeltaType))
 _SSE_EVENT: Final = TypeAdapter(Mapping[str, object])
-_THINKING_BLOCK: Final = TypeAdapter(ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock)
+_THINKING_BLOCK: Final[TypeAdapter[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock]] = TypeAdapter(
+    ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock
+)
 _PROMPT_MESSAGES: Final = TypeAdapter(list[AllMessageValues])
 _PROMPT_TOOLS: Final = TypeAdapter(list[ChatCompletionToolParam])
 
@@ -491,7 +493,33 @@ class _CombinedChunkSplitter:
             return (chunk,)
         delta: Final = _optional_attr(choices[0], "delta")
         blocks: Final = _optional_attr_sequence(delta, "thinking_blocks")
-        if len(blocks) < 2 or _optional_attr(delta, "content") or _optional_attr(delta, "tool_calls"):
+        if _optional_attr(delta, "content") or _optional_attr(delta, "tool_calls"):
+            return (chunk,)
+        typed_blocks: Final = tuple(_THINKING_BLOCK.validate_python(block) for block in blocks)
+        has_thinking: Final = any(
+            ("thinking" in block and block["thinking"]) or ("signature" in block and block["signature"])
+            for block in typed_blocks
+            if block["type"] == "thinking"
+        )
+        reasoning: Final = _optional_str_attr(delta, "reasoning_content")
+        if reasoning and typed_blocks and not has_thinking:
+            fallback_index: Final = next(
+                (block["index"] for block in typed_blocks if block["type"] == "thinking" and "index" in block), None
+            )
+            fallback: Final = (
+                ChatCompletionThinkingBlock(type="thinking", thinking=reasoning, index=fallback_index)
+                if fallback_index is not None
+                else ChatCompletionThinkingBlock(type="thinking", thinking=reasoning)
+            )
+            fallback_blocks: Final = (
+                *(block for block in typed_blocks if block["type"] == "redacted_thinking"),
+                fallback,
+            )
+            return tuple(
+                _CombinedChunkSplitter._with_thinking_block(chunk, block, keep_role=position == 0)
+                for position, block in enumerate(fallback_blocks)
+            )
+        if len(blocks) < 2:
             return (chunk,)
         return tuple(
             _CombinedChunkSplitter._with_thinking_block(
@@ -575,7 +603,11 @@ class _CombinedChunkSplitter:
         Signature-carrying blocks are kept intact so ``signature_delta``
         suppression of the full-text snapshot still applies.
         """
-        if any(block.get("signature") for block in blocks if isinstance(block, dict)):
+        if any(
+            block.get("signature") or block.get("type") == "redacted_thinking"
+            for block in blocks
+            if isinstance(block, dict)
+        ):
             return None
         thinking_text: Final = "".join(
             block.get("thinking") or ""
@@ -1600,10 +1632,14 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
             self.current_content_block_start = content_block_start
             return True
 
-        if follows_closed_thinking_block or (
-            thinking_block_index is not None
-            and previous_thinking_block_index is not None
-            and thinking_block_index != previous_thinking_block_index
+        if (
+            block_type == "redacted_thinking"
+            or follows_closed_thinking_block
+            or (
+                thinking_block_index is not None
+                and previous_thinking_block_index is not None
+                and thinking_block_index != previous_thinking_block_index
+            )
         ):
             self.current_content_block_start = content_block_start
             return True

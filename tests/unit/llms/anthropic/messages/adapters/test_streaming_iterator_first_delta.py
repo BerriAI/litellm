@@ -21,6 +21,7 @@ into an open ``thinking`` block, crashing Anthropic SDK clients (Claude Code)
 with "Content block is not a text block".
 """
 
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final, List, Mapping, Optional, Sequence, Tuple
@@ -32,11 +33,12 @@ import pytest
 from litellm.llms.anthropic.messages.adapters.streaming_iterator import (
     AnthropicStreamWrapper,
 )
-from litellm.types.llms.openai import ChatCompletionThinkingBlock
+from litellm.types.llms.openai import ChatCompletionRedactedThinkingBlock, ChatCompletionThinkingBlock
 from litellm.types.utils import (
     ChatCompletionDeltaToolCall,
     Delta,
     Function,
+    ModelResponseStream,
     PromptTokensDetailsWrapper,
     StreamingChoices,
     Usage,
@@ -1495,7 +1497,9 @@ def _last_delta_types_per_thinking_block(events: List[dict]) -> Tuple[str, ...]:
 
 async def _events_for(chunks: Sequence[MagicMock], is_async: bool) -> List[dict]:
     if is_async:
-        return await _drain_async(AnthropicStreamWrapper(completion_stream=_AsyncStream(list(chunks)), model="mistral-x"))
+        return await _drain_async(
+            AnthropicStreamWrapper(completion_stream=_AsyncStream(list(chunks)), model="mistral-x")
+        )
     return _drain_sync(AnthropicStreamWrapper(completion_stream=iter(chunks), model="mistral-x"))
 
 
@@ -1532,5 +1536,190 @@ async def test_signed_thinking_blocks_keep_their_own_text_and_signature(is_async
         _AccumulatedThinking(thinking="Second thought.", signature="sig-1"),
     )
     assert _last_delta_types_per_thinking_block(events) == ("signature_delta", "signature_delta")
+    assert _text_deltas(events) == ["Done"]
+    _assert_deltas_match_their_block_type(events)
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.parametrize("combined", [False, True])
+@pytest.mark.parametrize(
+    "blocks, expected_text, expected_signature",
+    [
+        ([], "fallback thought", ""),
+        ([{"type": "thinking", "thinking": "", "signature": ""}], "fallback thought", ""),
+        ([{"type": "redacted_thinking", "data": "opaque-0"}], "fallback thought", ""),
+        (
+            [
+                {"type": "redacted_thinking", "data": "opaque-0"},
+                {"type": "thinking", "thinking": "", "signature": ""},
+                {"type": "redacted_thinking", "data": "opaque-1"},
+            ],
+            "fallback thought",
+            "",
+        ),
+        ([{"type": "thinking", "thinking": "primary"}], "primary", ""),
+        ([{"type": "thinking", "signature": "sig"}], "", "sig"),
+        (
+            [{"type": "redacted_thinking", "data": "opaque-0"}, {"type": "thinking", "thinking": "primary"}],
+            "primary",
+            "",
+        ),
+        ([{"type": "thinking", "thinking": "", "signature": ""}, {"type": "thinking", "signature": "sig"}], "", "sig"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_reasoning_fallback_preserves_block_protocol(
+    is_async: bool,
+    combined: bool,
+    blocks: list[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock],
+    expected_text: str,
+    expected_signature: str,
+) -> None:
+    first: Final = ModelResponseStream(
+        choices=[
+            StreamingChoices(
+                delta=Delta(
+                    thinking_blocks=blocks, reasoning_content="fallback thought", content="Done" if combined else None
+                )
+            )
+        ]
+    )
+    rest: Final = () if combined else (ModelResponseStream(choices=[StreamingChoices(delta=Delta(content="Done"))]),)
+    chunks: Final = (first, *rest, ModelResponseStream(choices=[StreamingChoices(finish_reason="stop", delta=Delta())]))
+
+    async def stream() -> AsyncIterator[ModelResponseStream]:
+        for chunk in chunks:
+            yield chunk
+
+    wrapper: Final = AnthropicStreamWrapper(
+        completion_stream=stream() if is_async else iter(chunks), model="test-model"
+    )
+    events: Final = [event async for event in wrapper] if is_async else list(wrapper)
+    starts: Final = tuple(event for event in events if event["type"] == "content_block_start")
+    redacted: Final = tuple(block for block in blocks if block["type"] == "redacted_thinking")
+    assert (
+        tuple(event["content_block"] for event in starts if event["content_block"]["type"] == "redacted_thinking")
+        == redacted
+    )
+    assert "".join(_thinking_deltas(events)) == expected_text
+    assert "".join(block.thinking for block in _thinking_blocks_as_accumulated(events)) == expected_text
+    assert "".join(_signature_deltas(events)) == expected_signature
+    assert _text_deltas(events) == ["Done"]
+    assert tuple(event["index"] for event in starts) == tuple(range(len(starts)))
+    assert tuple(
+        (event["type"], event["index"])
+        for event in events
+        if event["type"] in {"content_block_start", "content_block_stop"}
+    ) == tuple(
+        item for index in range(len(starts)) for item in (("content_block_start", index), ("content_block_stop", index))
+    )
+    assert tuple(event["content_block"]["type"] for event in starts) == (
+        *("redacted_thinking" for _ in redacted),
+        "thinking",
+        "text",
+    )
+    assert [event["type"] for event in events][-2:] == ["message_delta", "message_stop"]
+    _assert_deltas_match_their_block_type(events)
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.parametrize("combined_tool", [False, True])
+@pytest.mark.asyncio
+async def test_reasoning_fallback_before_tool_continuations(is_async: bool, combined_tool: bool) -> None:
+    opening: Final = ChatCompletionDeltaToolCall(
+        index=3, id="call-3", type="function", function=Function(name="lookup", arguments='{"query":')
+    )
+    reasoning: Final = ModelResponseStream(
+        choices=[
+            StreamingChoices(
+                delta=Delta(
+                    thinking_blocks=[ChatCompletionRedactedThinkingBlock(type="redacted_thinking", data="opaque")],
+                    reasoning_content="Plan",
+                    tool_calls=[opening] if combined_tool else None,
+                )
+            )
+        ]
+    )
+    tool_start: Final = (
+        () if combined_tool else (ModelResponseStream(choices=[StreamingChoices(delta=Delta(tool_calls=[opening]))]),)
+    )
+    chunks: Final = (
+        reasoning,
+        *tool_start,
+        ModelResponseStream(
+            choices=[
+                StreamingChoices(
+                    delta=Delta(
+                        thinking_blocks=[ChatCompletionThinkingBlock(type="thinking", thinking="", signature="")],
+                        reasoning_content="ignored during arguments",
+                        tool_calls=[ChatCompletionDeltaToolCall(index=3, function=Function(arguments='"value"}'))],
+                    )
+                )
+            ]
+        ),
+        ModelResponseStream(choices=[StreamingChoices(delta=Delta(), finish_reason="tool_calls")]),
+    )
+
+    async def stream() -> AsyncIterator[ModelResponseStream]:
+        for chunk in chunks:
+            yield chunk
+
+    wrapper: Final = AnthropicStreamWrapper(
+        completion_stream=stream() if is_async else iter(chunks), model="test-model"
+    )
+    events: Final = [event async for event in wrapper] if is_async else list(wrapper)
+    starts: Final = tuple(event for event in events if event["type"] == "content_block_start")
+    assert tuple(event["content_block"] for event in starts) == (
+        {"type": "redacted_thinking", "data": "opaque"},
+        {"type": "thinking", "thinking": "", "signature": ""},
+        {"type": "tool_use", "id": "call-3", "name": "lookup", "input": {}},
+    )
+    assert _thinking_blocks_as_accumulated(events) == (_AccumulatedThinking(thinking="Plan", signature=""),)
+    assert "".join(_input_json_deltas(events)) == '{"query":"value"}'
+    assert tuple(event["index"] for event in starts) == (0, 1, 2)
+    assert tuple(event["index"] for event in events if event["type"] == "content_block_stop") == (0, 1, 2)
+    assert events[-2]["delta"]["stop_reason"] == "tool_use"
+    assert events[-1]["type"] == "message_stop"
+    _assert_deltas_match_their_block_type(events)
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.asyncio
+async def test_reasoning_fallback_followed_by_provider_indexed_thinking(is_async: bool) -> None:
+    deltas: Final = (
+        Delta(
+            thinking_blocks=[ChatCompletionThinkingBlock(type="thinking", thinking="", index=4)],
+            reasoning_content="Fallback",
+        ),
+        Delta(thinking_blocks=[ChatCompletionThinkingBlock(type="thinking", thinking="First ", index=7)]),
+        Delta(thinking_blocks=[ChatCompletionThinkingBlock(type="thinking", thinking="thought", index=7)]),
+        Delta(thinking_blocks=[ChatCompletionThinkingBlock(type="thinking", thinking="", signature="sig-7", index=7)]),
+        Delta(
+            thinking_blocks=[
+                ChatCompletionThinkingBlock(type="thinking", thinking="Second", signature="sig-9", index=9)
+            ]
+        ),
+        Delta(content="Done"),
+    )
+    chunks: Final = (
+        *(ModelResponseStream(choices=[StreamingChoices(delta=delta)]) for delta in deltas),
+        ModelResponseStream(choices=[StreamingChoices(delta=Delta(), finish_reason="stop")]),
+    )
+
+    async def stream() -> AsyncIterator[ModelResponseStream]:
+        for chunk in chunks:
+            yield chunk
+
+    wrapper: Final = AnthropicStreamWrapper(
+        completion_stream=stream() if is_async else iter(chunks), model="test-model"
+    )
+    events: Final = [event async for event in wrapper] if is_async else list(wrapper)
+    assert _thinking_blocks_as_accumulated(events) == (
+        _AccumulatedThinking(thinking="Fallback", signature=""),
+        _AccumulatedThinking(thinking="First thought", signature="sig-7"),
+        _AccumulatedThinking(thinking="Second", signature="sig-9"),
+    )
+    assert tuple(event["index"] for event in events if event["type"] == "content_block_start") == (0, 1, 2, 3)
+    assert tuple(event["index"] for event in events if event["type"] == "content_block_stop") == (0, 1, 2, 3)
     assert _text_deltas(events) == ["Done"]
     _assert_deltas_match_their_block_type(events)
