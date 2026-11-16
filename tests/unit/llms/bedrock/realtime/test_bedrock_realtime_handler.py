@@ -1,23 +1,47 @@
 import asyncio
+import copy
 import json
 import sys
 import types
+from collections.abc import Mapping
+from datetime import datetime, timezone
 from types import SimpleNamespace
-from typing import Final
+from typing import Final, Literal
 from unittest.mock import MagicMock
 
 import pytest
+from fastapi import HTTPException
+from pydantic import TypeAdapter
+from typing_extensions import ReadOnly, TypedDict, Unpack
 
 import litellm
 from litellm.constants import (
     BEDROCK_REALTIME_SDK_SUPPORTED_RANGE,
+    REALTIME_SESSION_ENDED_ABNORMALLY_KEY,
     REALTIME_SESSION_SUCCESS_LOGGED_KEY,
     WEBSOCKET_CLOSE_REASON_MAX_BYTES,
 )
+from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
+from litellm.litellm_core_utils.realtime_errors import websocket_close_reason
+from litellm.litellm_core_utils.realtime_guardrails import BLOCKED_TOOL_OUTPUT
 from litellm.llms.bedrock.common_utils import BedrockError
-from litellm.llms.bedrock.realtime.handler import BedrockRealtime
+from litellm.llms.bedrock.realtime.handler import (
+    GUARDRAIL_UNAVAILABLE_MESSAGE,
+    BedrockRealtime,
+    BedrockRealtimeGuardrails,
+    SessionEndSignals,
+)
 from litellm.llms.bedrock.realtime.transformation import BedrockRealtimeConfig
+from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
 from litellm.realtime_api import main as realtime_main
+from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.utils import (
+    GenericGuardrailAPIInputs,
+    StandardLoggingPayload,
+    StandardLoggingPayloadErrorInformation,
+)
 from tests.unit.llms.bedrock.event_loop_probe import host_in_loop_probing_vault
 
 
@@ -34,6 +58,66 @@ def _isolate_host_aws_config(monkeypatch, tmp_path):
         "AWS_DEFAULT_REGION",
     ):
         monkeypatch.delenv(env_var, raising=False)
+
+
+def _closing_input() -> SessionEndSignals:
+    signals: Final = SessionEndSignals()
+    signals.input_closing.set()
+    return signals
+
+
+_SPEND_ROW_METADATA_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_ERROR_INFORMATION_ADAPTER: Final = TypeAdapter(StandardLoggingPayloadErrorInformation | None)
+_BEDROCK_INPUT_CHUNK_ADAPTER: Final = TypeAdapter(Mapping[str, Mapping[str, object]])
+_STANDARD_LOGGING_PAYLOAD_ADAPTER: Final = TypeAdapter(StandardLoggingPayload)
+
+
+def _spend_row(
+    logging_obj: "FakeLogging | LiteLLMLogging",
+) -> tuple[Literal["success", "failure"], StandardLoggingPayloadErrorInformation | None]:
+    return _spend_row_of(logging_obj.model_call_details)
+
+
+def _spend_row_of(
+    model_call_details: dict[str, object],
+) -> tuple[Literal["success", "failure"], StandardLoggingPayloadErrorInformation | None]:
+    now: Final = datetime.now(timezone.utc)
+    row: Final = get_logging_payload(kwargs=model_call_details, response_obj=None, start_time=now, end_time=now)
+    metadata: Final = _SPEND_ROW_METADATA_ADAPTER.validate_json(row["metadata"])
+    return row["status"], _ERROR_INFORMATION_ADAPTER.validate_python(metadata.get("error_information"))
+
+
+class LoggedEventRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.events: Final[list[tuple[Literal["success", "failure"], dict[str, object]]]] = []
+
+    async def async_log_success_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: datetime, end_time: datetime
+    ) -> None:
+        self.events.append(("success", dict(kwargs)))
+
+    async def async_log_failure_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: datetime, end_time: datetime
+    ) -> None:
+        self.events.append(("failure", dict(kwargs)))
+
+    def payload(self, event: Literal["success", "failure"]) -> StandardLoggingPayload:
+        (logged,) = (kwargs for logged_event, kwargs in self.events if logged_event == event)
+        return _STANDARD_LOGGING_PAYLOAD_ADAPTER.validate_python(logged["standard_logging_object"])
+
+
+class HeldSuccessLogger(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.entered: Final = asyncio.Event()
+        self.release: Final = asyncio.Event()
+
+    async def async_log_success_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: datetime, end_time: datetime
+    ) -> None:
+        self.entered.set()
+        await self.release.wait()
 
 
 class FakePayloadPart:
@@ -85,6 +169,19 @@ class HangingCloseInputStream(FakeInputStream):
         await asyncio.Future()
 
 
+class BodyWriterInputStream(FakeInputStream):
+    """Models the SDK input stream, whose request-body writer task only finishes once the stream is closed"""
+
+    def __init__(self):
+        super().__init__()
+        self._close_requested = asyncio.Event()
+        self.body_writer = asyncio.get_running_loop().create_task(self._close_requested.wait())
+
+    async def close(self):
+        await super().close()
+        self._close_requested.set()
+
+
 class FakeBedrockStream:
     def __init__(self, input_stream=None):
         self.input_stream = input_stream if input_stream is not None else FakeInputStream()
@@ -124,6 +221,11 @@ class FakeLogging:
         self.litellm_trace_id = trace_id
         self.model_call_details = {}
 
+    def attempt_scoped_copy(self):
+        attempt = copy.copy(self)
+        attempt.model_call_details = dict(self.model_call_details)
+        return attempt
+
 
 class DisconnectingClientWS:
     def __init__(self, messages):
@@ -136,8 +238,17 @@ class DisconnectingClientWS:
             return self._messages.pop(0)
         raise RuntimeError("client disconnected")
 
-    async def send_text(self, message):
+    async def send_text(self, message: str) -> None:
         self.sent_to_client.append(message)
+
+
+class GuardrailErrorUndeliveredClientWS(DisconnectingClientWS):
+    """Client that disconnects just as the proxy tries to tell it about a guardrail violation"""
+
+    async def send_text(self, message: str) -> None:
+        if "guardrail_violation" in message:
+            raise RuntimeError("client disconnected")
+        await super().send_text(message)
 
 
 class ClosableClientWS:
@@ -159,12 +270,15 @@ class EndedBedrockStream:
 
 
 class RealtimeClientWS:
-    def __init__(self):
+    def __init__(self, messages=()):
         self.closed = False
         self.sent_to_client = []
         self.scope = {}
+        self._messages = list(messages)
 
     async def receive_text(self):
+        if self._messages:
+            return self._messages.pop(0)
         raise RuntimeError("client disconnected")
 
     async def send_text(self, message):
@@ -178,8 +292,7 @@ class ConnectedClientWS(RealtimeClientWS):
     """Client that sends its scripted messages and then stays connected until the server closes it"""
 
     def __init__(self, messages):
-        super().__init__()
-        self._messages = list(messages)
+        super().__init__(messages)
         self._closed_event = asyncio.Event()
 
     async def receive_text(self):
@@ -249,6 +362,77 @@ class ScriptedBedrockStream:
 
     async def await_output(self):
         return (None, self._receiver)
+
+
+def _sent_event_names(input_stream: FakeInputStream) -> list[str]:
+    return [
+        next(iter(_BEDROCK_INPUT_CHUNK_ADAPTER.validate_json(chunk.value.bytes_)["event"]))
+        for chunk in input_stream.sent
+    ]
+
+
+class SessionEndingInputStream(FakeInputStream):
+    def __init__(self):
+        super().__init__()
+        self.session_ended = asyncio.Event()
+
+    async def send(self, event):
+        await super().send(event)
+        if "sessionEnd" in json.loads(event.value.bytes_.decode("utf-8")).get("event", {}):
+            self.session_ended.set()
+
+    async def close(self):
+        await super().close()
+        self.session_ended.set()
+
+
+class SlowClosingInputStream(SessionEndingInputStream):
+    async def close(self):
+        await asyncio.Event().wait()
+
+
+class OutputEndsAfterSessionEndReceiver(ScriptedBedrockReceiver):
+    def __init__(self, payloads, session_ended):
+        super().__init__(payloads)
+        self._session_ended = session_ended
+
+    async def receive(self):
+        if not self._payloads:
+            await self._session_ended.wait()
+        return await super().receive()
+
+
+class SessionBoundBedrockStream:
+    def __init__(self, payloads=(), input_stream_type=SessionEndingInputStream):
+        self.input_stream = input_stream_type()
+        self._receiver = OutputEndsAfterSessionEndReceiver(payloads, self.input_stream.session_ended)
+
+    async def await_output(self):
+        return (None, self._receiver)
+
+
+class ConnectionResetOnAudioInputStream(FakeInputStream):
+    def __init__(self, connection_reset):
+        super().__init__()
+        self._connection_reset = connection_reset
+
+    async def send(self, event):
+        await asyncio.sleep(0)
+        if self._connection_reset.is_set() or "audioInput" in json.loads(event.value.bytes_.decode("utf-8"))["event"]:
+            self._connection_reset.set()
+            raise RuntimeError("bedrock connection reset")
+        self.sent.append(event)
+
+
+class OutputEndsAfterConnectionResetReceiver(ScriptedBedrockReceiver):
+    def __init__(self, payloads, connection_reset):
+        super().__init__(payloads)
+        self._connection_reset = connection_reset
+
+    async def receive(self):
+        if not self._payloads:
+            await self._connection_reset.wait()
+        return await super().receive()
 
 
 class FakeAWSCredentialsIdentity:
@@ -352,7 +536,7 @@ def stub_aws_sdk_client(monkeypatch):
                     raise stream
                 captured["open_stream"] = stream
                 return stream
-            stream = ScriptedBedrockStream(captured.get("scripted_payloads", []))
+            stream = SessionBoundBedrockStream(captured.get("scripted_payloads", []))
             captured["open_stream"] = stream
             return stream
 
@@ -407,7 +591,9 @@ class TestBedrockRealtimeHandler:
             [json.dumps({"type": "session.update", "session": {"instructions": "You are helpful."}})]
         )
 
-        await handler._forward_client_to_bedrock(client_ws, stream, config, "amazon.nova-sonic-v1:0", {})
+        await handler._forward_client_to_bedrock(
+            client_ws, stream, config, "amazon.nova-sonic-v1:0", {}, signals=SessionEndSignals()
+        )
 
         sent_events = [json.loads(chunk.value.bytes_.decode("utf-8")) for chunk in stream.input_stream.sent]
         event_names = [next(iter(event["event"])) for event in sent_events]
@@ -422,7 +608,7 @@ class TestBedrockRealtimeHandler:
         stream = FakeBedrockStream()
 
         await handler._forward_client_to_bedrock(
-            DisconnectingClientWS([]), stream, config, "amazon.nova-sonic-v1:0", {}
+            DisconnectingClientWS([]), stream, config, "amazon.nova-sonic-v1:0", {}, signals=SessionEndSignals()
         )
 
         assert stream.input_stream.sent == []
@@ -437,9 +623,13 @@ class TestBedrockRealtimeHandler:
             [json.dumps({"type": "session.update", "session": {"instructions": "You are helpful."}})]
         )
 
-        with pytest.raises(RuntimeError, match="bedrock send failed"):
-            await handler._forward_client_to_bedrock(client_ws, stream, config, "amazon.nova-sonic-v1:0", {})
+        with pytest.raises(BedrockError) as failure:
+            await handler._forward_client_to_bedrock(
+                client_ws, stream, config, "amazon.nova-sonic-v1:0", {}, signals=SessionEndSignals()
+            )
 
+        assert failure.value.status_code == 503
+        assert str(failure.value.__cause__) == "bedrock send failed"
         assert stream.input_stream.closed
 
     @pytest.mark.asyncio
@@ -452,7 +642,10 @@ class TestBedrockRealtimeHandler:
         )
 
         await asyncio.wait_for(
-            handler._forward_client_to_bedrock(client_ws, stream, config, "amazon.nova-sonic-v1:0", {}), 2
+            handler._forward_client_to_bedrock(
+                client_ws, stream, config, "amazon.nova-sonic-v1:0", {}, signals=SessionEndSignals()
+            ),
+            2,
         )
 
         assert not stream.input_stream.closed
@@ -466,7 +659,9 @@ class TestBedrockRealtimeHandler:
             [json.dumps({"type": "session.update", "session": {"instructions": "You are helpful."}})]
         )
 
-        await handler._forward_client_to_bedrock(client_ws, stream, config, "amazon.nova-sonic-v1:0", {})
+        await handler._forward_client_to_bedrock(
+            client_ws, stream, config, "amazon.nova-sonic-v1:0", {}, signals=SessionEndSignals()
+        )
 
         sent_events = [json.loads(chunk.value.bytes_.decode("utf-8")) for chunk in stream.input_stream.sent]
         event_names = [next(iter(event["event"])) for event in sent_events]
@@ -495,6 +690,7 @@ class TestBedrockRealtimeHandler:
                 "amazon.nova-sonic-v1:0",
                 FakeLogging(),
                 {},
+                signals=_closing_input(),
             )
         ]
 
@@ -526,6 +722,7 @@ class TestBedrockRealtimeHandler:
                 "amazon.nova-sonic-v1:0",
                 FakeLogging(),
                 {},
+                signals=_closing_input(),
             )
         ]
 
@@ -597,6 +794,7 @@ class TestBedrockRealtimeHandler:
             "amazon.nova-sonic-v1:0",
             MagicMock(),
             {},
+            signals=_closing_input(),
         ):
             pass
 
@@ -656,7 +854,9 @@ class TestBedrockRealtimeSessionLifecycle:
             [json.dumps({"type": "session.update", "session": {"instructions": "hi", "modalities": ["text"]}})]
         )
 
-        await handler._forward_client_to_bedrock(client_ws, stream, config, "amazon.nova-sonic-v1:0", {}, FakeLogging())
+        await handler._forward_client_to_bedrock(
+            client_ws, stream, config, "amazon.nova-sonic-v1:0", {}, FakeLogging(), signals=SessionEndSignals()
+        )
 
         acked = [json.loads(message) for message in client_ws.sent_to_client]
         updated = [event for event in acked if event["type"] == "session.updated"]
@@ -670,7 +870,9 @@ class TestBedrockRealtimeSessionLifecycle:
         stream = FakeBedrockStream()
         client_ws = DisconnectingClientWS([json.dumps({"type": "session.update", "session": {"instructions": "hi"}})])
 
-        await handler._forward_client_to_bedrock(client_ws, stream, config, "amazon.nova-sonic-v1:0", {})
+        await handler._forward_client_to_bedrock(
+            client_ws, stream, config, "amazon.nova-sonic-v1:0", {}, signals=SessionEndSignals()
+        )
 
         assert client_ws.sent_to_client == []
 
@@ -693,7 +895,9 @@ class TestBedrockRealtimeSessionLifecycle:
         stream = FakeBedrockStream()
         client_ws = DisconnectingClientWS([update([tool]), update([other_tool]), update([tool])])
 
-        await handler._forward_client_to_bedrock(client_ws, stream, config, "amazon.nova-sonic-v1:0", {}, FakeLogging())
+        await handler._forward_client_to_bedrock(
+            client_ws, stream, config, "amazon.nova-sonic-v1:0", {}, FakeLogging(), signals=SessionEndSignals()
+        )
 
         acked: Final = [json.loads(message) for message in client_ws.sent_to_client]
         assert [event["type"] for event in acked] == ["session.updated", "error", "session.updated"]
@@ -720,10 +924,10 @@ class TestBedrockRealtimeSessionLifecycle:
     async def test_malformed_setting_is_rejected_or_dropped_and_the_session_still_answers(
         self, stub_aws_sdk_client, session, drop_params, expected_errors
     ):
-        stream: Final = ScriptedBedrockStream([])
+        stream: Final = SessionBoundBedrockStream()
         stub_aws_sdk_client["streams"] = [stream]
         user_text: Final = {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]}
-        websocket: Final = ConnectedClientWS(
+        websocket: Final = RealtimeClientWS(
             [
                 json.dumps({"type": "session.update", "session": session}),
                 json.dumps({"type": "conversation.item.create", "item": user_text}),
@@ -761,8 +965,8 @@ class TestBedrockRealtimeProviderFailurePropagation:
     @pytest.mark.asyncio
     async def test_readiness_failure_escapes_and_fallback_replays_session_update(self, stub_aws_sdk_client):
         handler = BedrockRealtime()
-        websocket = ConnectedClientWS([self.SESSION_UPDATE])
-        healthy_stream = ScriptedBedrockStream([])
+        websocket = RealtimeClientWS([self.SESSION_UPDATE])
+        healthy_stream = SessionBoundBedrockStream()
         eager_failure = ServiceUnavailableException("fault injected before the stream was returned")
         stub_aws_sdk_client["streams"] = [UnavailableBedrockStream(), eager_failure, healthy_stream]
 
@@ -848,9 +1052,6 @@ class TestBedrockRealtimeProviderFailurePropagation:
         await spend_dispatch["coro"]
         assert [event["type"] for event in spend_dispatch["events"]] == ["response.done"]
         assert "response.done" in [json.loads(m)["type"] for m in websocket.sent_to_client]
-        flushed = [json.loads(chunk.value.bytes_.decode("utf-8")) for chunk in stream.input_stream.sent]
-        assert [next(iter(event["event"])) for event in flushed][-2:] == ["promptEnd", "sessionEnd"]
-        assert stream.input_stream.closed
 
         with pytest.raises(BedrockError) as replay:
             await handler.async_realtime(
@@ -875,10 +1076,19 @@ class TestBedrockRealtimeProviderFailurePropagation:
         assert other_provider.calls == 0
 
     @pytest.mark.asyncio
-    async def test_readiness_failure_on_an_input_first_start_replays_the_input(self, stub_aws_sdk_client):
+    @pytest.mark.parametrize(
+        "guardrail_awaits_its_backend", [False, True], ids=["no guardrail", "a guardrail that awaits its backend"]
+    )
+    async def test_readiness_failure_on_an_input_first_start_replays_the_input(
+        self, stub_aws_sdk_client, monkeypatch, guardrail_awaits_its_backend: bool
+    ):
+        guardrail: Final = AwaitingGuardrail(
+            "hunter2", guardrail_name="remote", event_hook=GuardrailEventHooks.pre_call, default_on=True
+        )
+        monkeypatch.setattr(litellm, "callbacks", [guardrail] if guardrail_awaits_its_backend else [])
         handler = BedrockRealtime()
-        websocket = ConnectedClientWS([self.USER_TEXT])
-        healthy_stream = ScriptedBedrockStream([])
+        websocket = RealtimeClientWS([self.USER_TEXT])
+        healthy_stream = SessionBoundBedrockStream()
         stub_aws_sdk_client["streams"] = [UnavailableBedrockStream(), healthy_stream]
 
         with pytest.raises(BedrockError) as failure:
@@ -907,7 +1117,7 @@ class TestBedrockRealtimeProviderFailurePropagation:
             [self.SESSION_UPDATE, json.dumps({"type": "input_audio_buffer.append", "audio": "AAAA"})]
         )
 
-        with pytest.raises(RuntimeError, match="bedrock input stream reset"):
+        with pytest.raises(BedrockError) as failure:
             await BedrockRealtime().async_realtime(
                 model="amazon.nova-sonic-v1:0",
                 websocket=websocket,
@@ -915,6 +1125,8 @@ class TestBedrockRealtimeProviderFailurePropagation:
                 **self.AWS_PARAMS,
             )
 
+        assert failure.value.status_code == 503
+        assert str(failure.value.__cause__) == "bedrock input stream reset", "the proxy log keeps the reset's cause"
         assert "response.done" in [json.loads(m)["type"] for m in websocket.sent_to_client]
         await spend_dispatch["coro"]
         assert [event["type"] for event in spend_dispatch["events"]] == ["response.done"]
@@ -923,10 +1135,10 @@ class TestBedrockRealtimeProviderFailurePropagation:
     async def test_success_dispatch_stamps_the_ownership_marker_only_when_spend_was_logged(
         self, stub_aws_sdk_client, spend_dispatch
     ):
-        stub_aws_sdk_client["streams"] = [ScriptedBedrockStream(self.TEXT_TURN)]
+        stub_aws_sdk_client["streams"] = [SessionBoundBedrockStream(self.TEXT_TURN)]
         await BedrockRealtime().async_realtime(
             model="amazon.nova-sonic-v1:0",
-            websocket=ConnectedClientWS([self.SESSION_UPDATE]),
+            websocket=RealtimeClientWS([self.SESSION_UPDATE]),
             logging_obj=spend_dispatch["logging_obj"],
             **self.AWS_PARAMS,
         )
@@ -935,14 +1147,314 @@ class TestBedrockRealtimeProviderFailurePropagation:
         assert spend_dispatch["logging_obj"].model_call_details.get(REALTIME_SESSION_SUCCESS_LOGGED_KEY) is True
 
         idle_logging = FakeLogging()
-        stub_aws_sdk_client["streams"] = [ScriptedBedrockStream([])]
+        stub_aws_sdk_client["streams"] = [SessionBoundBedrockStream()]
         await BedrockRealtime().async_realtime(
             model="amazon.nova-sonic-v1:0",
-            websocket=ConnectedClientWS([self.SESSION_UPDATE]),
+            websocket=RealtimeClientWS([self.SESSION_UPDATE]),
             logging_obj=idle_logging,
             **self.AWS_PARAMS,
         )
         assert REALTIME_SESSION_SUCCESS_LOGGED_KEY not in idle_logging.model_call_details
+
+    @pytest.mark.asyncio
+    async def test_bedrock_stream_ending_mid_session_fails_the_session_and_keeps_partial_spend(
+        self, stub_aws_sdk_client, spend_dispatch
+    ):
+        handler: Final = BedrockRealtime()
+        websocket: Final = ConnectedClientWS([self.SESSION_UPDATE])
+        stream: Final = ScriptedBedrockStream(self.TEXT_TURN)
+        stub_aws_sdk_client["streams"] = [stream]
+        logging_obj: Final = spend_dispatch["logging_obj"]
+        request_metadata: Final = {"user_api_key": "hashed-key"}
+        logging_obj.model_call_details["litellm_params"] = {"litellm_metadata": request_metadata}
+
+        with pytest.raises(BedrockError) as failure:
+            await handler.async_realtime(
+                model="amazon.nova-sonic-v1:0",
+                websocket=websocket,
+                logging_obj=logging_obj,
+                **self.AWS_PARAMS,
+            )
+
+        assert failure.value.status_code == 503
+        assert not websocket.closed, "the proxy route owns the client-facing error event and 1011 close"
+        assert "response.done" in [json.loads(m)["type"] for m in websocket.sent_to_client]
+        await spend_dispatch["coro"]
+        assert [event["type"] for event in spend_dispatch["events"]] == ["response.done"]
+        status, error_information = _spend_row(logging_obj)
+        assert status == "failure", "the Logs page must show the dropped session as failed while it bills its turn"
+        assert error_information is not None
+        assert error_information.get("error_code") == "503"
+        assert error_information.get("error_message") == failure.value.message
+        assert request_metadata == {"user_api_key": "hashed-key"}, "the request's own metadata stays as it was sent"
+
+        with pytest.raises(BedrockError) as replay:
+            await handler.async_realtime(
+                model="amazon.nova-sonic-v1:0",
+                websocket=websocket,
+                logging_obj=logging_obj,
+                **self.AWS_PARAMS,
+            )
+
+        assert replay.value.status_code == 400, "a router retry must not restart the dropped session"
+        assert str(replay.value).startswith(failure.value.message), "the app's error event leads with the drop"
+        assert websocket_close_reason(str(replay.value), fallback="Internal server error").startswith(
+            failure.value.message
+        ), "the length-capped 1011 close reason must still carry the drop"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("receiver_type", "status_code"),
+        [(ScriptedBedrockReceiver, 503), (BreakingBedrockReceiver, 424)],
+        ids=["output-ends", "output-raises"],
+    )
+    async def test_a_failed_bedrock_output_reaches_the_app_without_waiting_on_the_input_close(
+        self, stub_aws_sdk_client, spend_dispatch, receiver_type, status_code: int
+    ):
+        stream: Final = ScriptedBedrockStream(self.TEXT_TURN, receiver_type=receiver_type)
+        stream.input_stream = HangingCloseInputStream()
+        stub_aws_sdk_client["streams"] = [stream]
+
+        with pytest.raises(BedrockError) as failure:
+            await asyncio.wait_for(
+                BedrockRealtime(close_timeout=30).async_realtime(
+                    model="amazon.nova-sonic-v1:0",
+                    websocket=ConnectedClientWS([self.SESSION_UPDATE]),
+                    logging_obj=spend_dispatch["logging_obj"],
+                    **self.AWS_PARAMS,
+                ),
+                timeout=5,
+            )
+
+        assert failure.value.status_code == status_code
+        assert stub_aws_sdk_client["client_closed"], "closing the SDK client still tears the dead stream down"
+        await spend_dispatch["coro"]
+        assert [event["type"] for event in spend_dispatch["events"]] == ["response.done"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("receiver_type", "status_code"),
+        [(ScriptedBedrockReceiver, 503), (BreakingBedrockReceiver, 424)],
+        ids=["output-ends", "output-raises"],
+    )
+    async def test_a_failed_bedrock_output_leaves_no_pending_input_writer(
+        self, stub_aws_sdk_client, spend_dispatch, receiver_type, status_code: int
+    ):
+        stream: Final = ScriptedBedrockStream(self.TEXT_TURN, receiver_type=receiver_type)
+        stream.input_stream = BodyWriterInputStream()
+        stub_aws_sdk_client["streams"] = [stream]
+
+        with pytest.raises(BedrockError) as failure:
+            await BedrockRealtime().async_realtime(
+                model="amazon.nova-sonic-v1:0",
+                websocket=ConnectedClientWS([self.SESSION_UPDATE]),
+                logging_obj=spend_dispatch["logging_obj"],
+                **self.AWS_PARAMS,
+            )
+
+        assert failure.value.status_code == status_code
+        await asyncio.wait_for(stream.input_stream.body_writer, timeout=1)
+        await spend_dispatch["coro"]
+
+    @pytest.mark.asyncio
+    async def test_a_dropped_session_logs_one_success_usage_record_and_a_failed_spend_row(
+        self, stub_aws_sdk_client, spend_dispatch
+    ):
+        stub_aws_sdk_client["streams"] = [ScriptedBedrockStream(self.TEXT_TURN)]
+        recorder: Final = LoggedEventRecorder()
+        logging_obj: Final = LiteLLMLogging(
+            model="amazon.nova-sonic-v1:0",
+            messages=[],
+            stream=False,
+            call_type="_arealtime",
+            start_time=datetime.now(),
+            litellm_call_id="nova-sonic-drop",
+            function_id="nova-sonic-drop",
+            dynamic_async_success_callbacks=[recorder],
+        )
+        logging_obj.update_from_kwargs(
+            kwargs={"litellm_metadata": {"user_api_key": "hashed-key"}},
+            model="amazon.nova-sonic-v1:0",
+            optional_params={},
+            litellm_params={"_arealtime": True},
+            custom_llm_provider="bedrock",
+        )
+
+        with pytest.raises(BedrockError) as failure:
+            await BedrockRealtime().async_realtime(
+                model="amazon.nova-sonic-v1:0",
+                websocket=ConnectedClientWS([self.SESSION_UPDATE]),
+                logging_obj=logging_obj,
+                **self.AWS_PARAMS,
+            )
+        await spend_dispatch["coro"]
+
+        assert failure.value.status_code == 503
+        ((logged_event, usage_kwargs),) = recorder.events
+        assert logged_event == "success"
+        usage_record: Final = recorder.payload("success")
+        assert usage_record["status"] == "success", "the router's failure event is each logger's one error record"
+        assert [event["type"] for event in usage_record["response"]["results"]] == ["response.done"]
+        assert logging_obj.model_call_details.get(REALTIME_SESSION_SUCCESS_LOGGED_KEY) is True
+        status, error_information = _spend_row_of(usage_kwargs)
+        assert status == "failure"
+        assert error_information is not None
+        assert error_information.get("error_code") == "503"
+
+    @pytest.mark.asyncio
+    async def test_a_dropped_session_bills_its_usage_to_loggers_while_the_failure_event_runs(
+        self, stub_aws_sdk_client, spend_dispatch
+    ):
+        usage_event: Final = json.dumps(
+            {"event": {"usageEvent": {"totalInputTokens": 1000, "totalOutputTokens": 50, "totalTokens": 1050}}}
+        )
+        stub_aws_sdk_client["streams"] = [ScriptedBedrockStream((*self.TEXT_TURN, usage_event))]
+        held: Final = HeldSuccessLogger()
+        recorder: Final = LoggedEventRecorder()
+        logging_obj: Final = LiteLLMLogging(
+            model="amazon.nova-2-5-sonic",
+            messages=[],
+            stream=False,
+            call_type="_arealtime",
+            start_time=datetime.now(),
+            litellm_call_id="nova-sonic-drop-order",
+            function_id="nova-sonic-drop-order",
+            dynamic_async_success_callbacks=[held, recorder],
+            dynamic_async_failure_callbacks=[recorder],
+        )
+        logging_obj.update_from_kwargs(
+            kwargs={"litellm_metadata": {"user_api_key": "hashed-key"}},
+            model="amazon.nova-2-5-sonic",
+            optional_params={},
+            litellm_params={"_arealtime": True},
+            custom_llm_provider="bedrock",
+        )
+
+        with pytest.raises(BedrockError) as failure:
+            await BedrockRealtime().async_realtime(
+                model="amazon.nova-2-5-sonic",
+                websocket=ConnectedClientWS([self.SESSION_UPDATE]),
+                logging_obj=logging_obj,
+                **self.AWS_PARAMS,
+            )
+        success_dispatch: Final = asyncio.create_task(spend_dispatch["coro"])
+        await asyncio.wait_for(held.entered.wait(), timeout=5)
+        logging_obj.failure_handler(failure.value, "", logging_obj.start_time, datetime.now(), for_async_request=True)
+        await logging_obj.async_failure_handler(failure.value, "", logging_obj.start_time, datetime.now())
+        held.release.set()
+        await success_dispatch
+
+        usage_record: Final = recorder.payload("success")
+        assert recorder.payload("failure")["status"] == "failure"
+        assert usage_record["status"] == "success"
+        assert usage_record["total_tokens"] == 1050
+        assert usage_record["response_cost"] > 0
+        ((_, usage_kwargs),) = (logged for logged in recorder.events if logged[0] == "success")
+        status, _ = _spend_row_of(usage_kwargs)
+        assert status == "failure"
+
+    @pytest.mark.asyncio
+    async def test_a_dropped_session_without_request_metadata_still_fails_and_bills_its_turn(
+        self, stub_aws_sdk_client, spend_dispatch
+    ):
+        stub_aws_sdk_client["streams"] = [ScriptedBedrockStream(self.TEXT_TURN)]
+        logging_obj: Final = spend_dispatch["logging_obj"]
+        logging_obj.model_call_details["litellm_params"] = {"litellm_metadata": None, "metadata": {}}
+
+        with pytest.raises(BedrockError) as failure:
+            await BedrockRealtime().async_realtime(
+                model="amazon.nova-sonic-v1:0",
+                websocket=ConnectedClientWS([self.SESSION_UPDATE]),
+                logging_obj=logging_obj,
+                **self.AWS_PARAMS,
+            )
+        await spend_dispatch["coro"]
+
+        assert failure.value.status_code == 503
+        assert [event["type"] for event in spend_dispatch["events"]] == ["response.done"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("receiver_type", "status_code"),
+        [(ScriptedBedrockReceiver, 503), (BreakingBedrockReceiver, 424)],
+        ids=["output-ends", "output-raises"],
+    )
+    async def test_a_session_bedrock_fails_before_any_logged_event_dispatches_no_success(
+        self, stub_aws_sdk_client, spend_dispatch, receiver_type, status_code: int
+    ):
+        stub_aws_sdk_client["streams"] = [ScriptedBedrockStream((), receiver_type=receiver_type)]
+        logging_obj: Final = spend_dispatch["logging_obj"]
+        logging_obj.model_call_details["litellm_params"] = {"litellm_metadata": {"user_api_key": "hashed-key"}}
+
+        with pytest.raises(BedrockError) as failure:
+            await BedrockRealtime().async_realtime(
+                model="amazon.nova-sonic-v1:0",
+                websocket=ConnectedClientWS([self.SESSION_UPDATE]),
+                logging_obj=logging_obj,
+                **self.AWS_PARAMS,
+            )
+
+        assert failure.value.status_code == status_code
+        assert "coro" not in spend_dispatch, "a failed session with no usage gets no success event, as on base"
+        assert REALTIME_SESSION_SUCCESS_LOGGED_KEY not in logging_obj.model_call_details
+
+    @pytest.mark.asyncio
+    async def test_bedrock_output_ending_right_after_session_end_is_a_clean_finish(
+        self, stub_aws_sdk_client, spend_dispatch
+    ):
+        stream: Final = SessionBoundBedrockStream(self.TEXT_TURN, input_stream_type=SlowClosingInputStream)
+        stub_aws_sdk_client["streams"] = [stream]
+        websocket: Final = RealtimeClientWS([self.SESSION_UPDATE])
+        spend_dispatch["logging_obj"].model_call_details["litellm_params"] = {
+            "litellm_metadata": {"user_api_key": "hashed-key"}
+        }
+
+        await asyncio.wait_for(
+            BedrockRealtime(close_timeout=30).async_realtime(
+                model="amazon.nova-sonic-v1:0",
+                websocket=websocket,
+                logging_obj=spend_dispatch["logging_obj"],
+                **self.AWS_PARAMS,
+            ),
+            timeout=5,
+        )
+
+        assert _sent_event_names(stream.input_stream)[-1] == "sessionEnd"
+        assert not stream.input_stream.closed, "the input close must still be pending when the output ends"
+        assert websocket.closed
+        await spend_dispatch["coro"]
+        assert [event["type"] for event in spend_dispatch["events"]] == ["response.done"]
+        assert spend_dispatch["logging_obj"].model_call_details.get(REALTIME_SESSION_SUCCESS_LOGGED_KEY) is True
+        assert _spend_row(spend_dispatch["logging_obj"]) == ("success", None)
+
+    @pytest.mark.asyncio
+    async def test_bedrock_output_ending_after_the_input_side_failed_still_fails_the_session(
+        self, stub_aws_sdk_client, spend_dispatch
+    ):
+        connection_reset: Final = asyncio.Event()
+        stream: Final = ScriptedBedrockStream(
+            self.TEXT_TURN,
+            receiver_type=lambda payloads: OutputEndsAfterConnectionResetReceiver(payloads, connection_reset),
+        )
+        stream.input_stream = ConnectionResetOnAudioInputStream(connection_reset)
+        stub_aws_sdk_client["streams"] = [stream]
+        websocket: Final = ConnectedClientWS([self.SESSION_UPDATE, self.USER_AUDIO])
+
+        with pytest.raises(BedrockError) as failure:
+            await BedrockRealtime().async_realtime(
+                model="amazon.nova-sonic-v1:0",
+                websocket=websocket,
+                logging_obj=spend_dispatch["logging_obj"],
+                **self.AWS_PARAMS,
+            )
+
+        assert (failure.value.status_code, failure.value.message) == (
+            503,
+            "Bedrock realtime stream ended before the session closed",
+        ), "the app sees one cause whichever side of the stream reports the reset first"
+        assert not websocket.closed, "the proxy route owns the client-facing error event and 1011 close"
+        await spend_dispatch["coro"]
+        assert [event["type"] for event in spend_dispatch["events"]] == ["response.done"]
 
     @pytest.mark.asyncio
     async def test_stream_failure_after_client_disconnect_is_not_a_provider_failure(self, stub_aws_sdk_client):
@@ -982,7 +1494,13 @@ class TestBedrockRealtimeProviderFailurePropagation:
 
         with pytest.raises(ServiceUnavailableException):
             await handler._forward_client_to_bedrock(
-                client_ws, stream, BedrockRealtimeConfig(), "amazon.nova-sonic-v1:0", {}, FakeLogging()
+                client_ws,
+                stream,
+                BedrockRealtimeConfig(),
+                "amazon.nova-sonic-v1:0",
+                {},
+                FakeLogging(),
+                signals=SessionEndSignals(),
             )
 
         assert client_ws.sent_to_client == []
@@ -1128,7 +1646,6 @@ class TestBedrockRealtimeSdkLifecycle:
             )
 
         assert stub_aws_sdk_client["client_closed"]
-        assert stub_aws_sdk_client["input_closed_before_client_close"]
 
     @pytest.mark.asyncio
     async def test_client_without_close_completes_session(self, monkeypatch):
@@ -1201,6 +1718,615 @@ class TestBedrockRealtimeSdkImportErrors:
         close_reason = message.encode()[:WEBSOCKET_CLOSE_REASON_MAX_BYTES].decode()
         assert "0.7.0 is installed" in close_reason
         assert BEDROCK_REALTIME_SDK_SUPPORTED_RANGE in close_reason
+
+
+class SessionEndOptions(TypedDict, total=False):
+    on_violation: ReadOnly[str]
+    end_session_after_n_fails: ReadOnly[int]
+
+
+class BlockedWordGuardrailOptions(SessionEndOptions, total=False):
+    guardrail_name: ReadOnly[str]
+    event_hook: ReadOnly[GuardrailEventHooks]
+    default_on: ReadOnly[bool]
+    realtime_violation_message: ReadOnly[str]
+
+
+class BlockedWordGuardrail(CustomGuardrail):
+    def __init__(self, blocked_word: str, **kwargs: Unpack[BlockedWordGuardrailOptions]) -> None:
+        super().__init__(**kwargs)
+        self.blocked_word = blocked_word
+        self.checked: list[tuple[tuple[str, ...], object]] = []
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: LiteLLMLogging | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        self.checked.append((tuple(inputs["texts"]), request_data.get("user_api_key_dict")))
+        if any(self.blocked_word in text for text in inputs["texts"]):
+            raise HTTPException(status_code=400, detail={"error": f"{self.blocked_word} is not allowed"})
+        return inputs
+
+
+class MaskingGuardrail(BlockedWordGuardrail):
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: LiteLLMLogging | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        return {**inputs, "texts": [text.replace(self.blocked_word, "[MASKED]") for text in inputs["texts"]]}
+
+
+class AwaitingGuardrail(BlockedWordGuardrail):
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: LiteLLMLogging | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        await asyncio.sleep(0.05)
+        return await super().apply_guardrail(inputs, request_data, input_type, logging_obj)
+
+
+class SystemSkippingGuardrail(BlockedWordGuardrail):
+    skip_system_message_in_guardrail: Final = True
+
+
+class CrashingGuardrail(BlockedWordGuardrail):
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: LiteLLMLogging | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        raise RuntimeError("guardrail backend down")
+
+
+class TestBedrockRealtimeGuardrails:
+    """Realtime guardrails must screen Nova Sonic sessions the way they screen OpenAI realtime sessions"""
+
+    MODEL: Final = "amazon.nova-sonic-v1:0"
+    VIOLATION: Final = "I can't help with that."
+    BLOCKED_TEXT: Final = "my secret is hunter2"
+    CLEAN_TEXT: Final = "what is the weather like"
+    RESPONSE_CREATE: Final = json.dumps({"type": "response.create"})
+
+    @staticmethod
+    def _guardrail(
+        event_hook: GuardrailEventHooks = GuardrailEventHooks.pre_call,
+        default_on: bool = True,
+        **kwargs: Unpack[SessionEndOptions],
+    ) -> BlockedWordGuardrail:
+        return BlockedWordGuardrail(
+            "hunter2",
+            guardrail_name="no_secrets",
+            event_hook=event_hook,
+            default_on=default_on,
+            realtime_violation_message=TestBedrockRealtimeGuardrails.VIOLATION,
+            **kwargs,
+        )
+
+    @staticmethod
+    def _user_text(text: str, role: str = "user") -> str:
+        return json.dumps(
+            {
+                "type": "conversation.item.create",
+                "item": {"type": "message", "role": role, "content": [{"type": "input_text", "text": text}]},
+            }
+        )
+
+    @staticmethod
+    def _bedrock_events(stream: FakeBedrockStream) -> list[dict]:
+        return [json.loads(chunk.value.bytes_.decode("utf-8"))["event"] for chunk in stream.input_stream.sent]
+
+    @classmethod
+    def _text_inputs(cls, stream: FakeBedrockStream) -> list[str]:
+        events: Final = cls._bedrock_events(stream)
+        user_contents: Final = {
+            event["contentStart"]["contentName"]
+            for event in events
+            if event.get("contentStart", {}).get("role") == "USER"
+        }
+        return [
+            event["textInput"]["content"]
+            for event in events
+            if event.get("textInput", {}).get("contentName") in user_contents
+        ]
+
+    @staticmethod
+    def _client_events(client_ws: DisconnectingClientWS | RealtimeClientWS) -> list[dict]:
+        return [json.loads(message) for message in client_ws.sent_to_client]
+
+    @classmethod
+    def _guardrail_errors(cls, client_ws: DisconnectingClientWS | RealtimeClientWS) -> list[dict]:
+        return [
+            event["error"]
+            for event in cls._client_events(client_ws)
+            if event["type"] == "error" and event["error"]["type"] == "guardrail_violation"
+        ]
+
+    async def _forward_client(
+        self,
+        messages: list[str],
+        guardrail: BlockedWordGuardrail,
+        client_ws_type: type[DisconnectingClientWS] | type[ConnectedClientWS] = DisconnectingClientWS,
+    ) -> tuple[FakeBedrockStream, DisconnectingClientWS | ConnectedClientWS]:
+        stream: Final = FakeBedrockStream()
+        client_ws: Final = client_ws_type(messages)
+        await asyncio.wait_for(
+            BedrockRealtime()._forward_client_to_bedrock(
+                client_ws,
+                stream,
+                BedrockRealtimeConfig(),
+                self.MODEL,
+                {},
+                signals=SessionEndSignals(),
+                guardrails=BedrockRealtimeGuardrails(callbacks=lambda: (guardrail,)),
+            ),
+            timeout=1,
+        )
+        return stream, client_ws
+
+    @staticmethod
+    def _user_transcript(text: str) -> tuple[str, ...]:
+        return (
+            json.dumps(
+                {
+                    "event": {
+                        "contentStart": {
+                            "role": "USER",
+                            "type": "TEXT",
+                            "additionalModelFields": json.dumps({"generationStage": "FINAL"}),
+                        }
+                    }
+                }
+            ),
+            json.dumps({"event": {"textOutput": {"content": text}}}),
+            json.dumps({"event": {"contentEnd": {"stopReason": "PARTIAL_TURN"}}}),
+        )
+
+    @staticmethod
+    def _assistant_text(text: str) -> tuple[str, ...]:
+        return (
+            json.dumps({"event": {"contentStart": {"role": "ASSISTANT", "type": "TEXT"}}}),
+            json.dumps({"event": {"textOutput": {"content": text}}}),
+            json.dumps({"event": {"contentEnd": {"stopReason": "END_TURN"}}}),
+        )
+
+    async def _forward_bedrock(
+        self,
+        payloads: tuple[str, ...],
+        guardrail: BlockedWordGuardrail,
+        client_audio_streamed: bool = True,
+        client_ws_type: type[ConnectedClientWS] | type[GuardrailErrorUndeliveredClientWS] = ConnectedClientWS,
+    ) -> tuple[ConnectedClientWS | GuardrailErrorUndeliveredClientWS, list[object]]:
+        config: Final = BedrockRealtimeConfig()
+        config.client_audio_streamed = client_audio_streamed
+        client_ws: Final = client_ws_type([])
+        logged: Final = [
+            event
+            async for event in BedrockRealtime()._forward_bedrock_to_client(
+                ScriptedBedrockStream(payloads),
+                client_ws,
+                config,
+                self.MODEL,
+                FakeLogging(),
+                {},
+                signals=_closing_input(),
+                guardrails=BedrockRealtimeGuardrails(callbacks=lambda: (guardrail,)),
+            )
+        ]
+        return client_ws, logged
+
+    @pytest.mark.asyncio
+    async def test_blocked_typed_message_never_reaches_bedrock_and_the_violation_is_voiced(
+        self, stub_aws_models: None
+    ) -> None:
+        guardrail: Final = self._guardrail()
+
+        stream, client_ws = await self._forward_client(
+            [self._user_text(self.BLOCKED_TEXT), self.RESPONSE_CREATE], guardrail
+        )
+        clean_stream, _ = await self._forward_client(
+            [self._user_text(self.CLEAN_TEXT), self.RESPONSE_CREATE], guardrail
+        )
+
+        assert "hunter2" not in json.dumps(self._bedrock_events(stream))
+        assert [f'"{self.VIOLATION}"' in text for text in self._text_inputs(stream)] == [True]
+        assert self._guardrail_errors(client_ws) == [
+            {"type": "guardrail_violation", "message": self.VIOLATION, "code": "content_policy_violation"}
+        ]
+        assert guardrail.checked == [((self.BLOCKED_TEXT,), None), ((self.CLEAN_TEXT,), None)]
+        audio_inputs = [sum("audioInput" in event for event in self._bedrock_events(s)) for s in (stream, clean_stream)]
+        assert audio_inputs[0] == audio_inputs[1] > 0, "the client's own response.create must not start a 2nd turn"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("role", ["assistant", "system"])
+    async def test_blocked_typed_message_is_screened_whatever_its_role(self, stub_aws_models: None, role: str) -> None:
+        stream, client_ws = await self._forward_client(
+            [self._user_text(self.BLOCKED_TEXT, role=role)], self._guardrail()
+        )
+
+        assert "hunter2" not in json.dumps(self._bedrock_events(stream))
+        assert [error["message"] for error in self._guardrail_errors(client_ws)] == [self.VIOLATION]
+
+    @pytest.mark.asyncio
+    async def test_a_system_message_nova_receives_as_a_user_turn_is_screened_by_a_system_skipping_guardrail(
+        self, stub_aws_models: None
+    ) -> None:
+        guardrail: Final = SystemSkippingGuardrail(
+            "hunter2",
+            guardrail_name="no_secrets",
+            event_hook=GuardrailEventHooks.pre_call,
+            default_on=True,
+            realtime_violation_message=self.VIOLATION,
+        )
+
+        stream, client_ws = await self._forward_client([self._user_text(self.BLOCKED_TEXT, role="system")], guardrail)
+
+        assert "hunter2" not in json.dumps(self._bedrock_events(stream))
+        assert [error["message"] for error in self._guardrail_errors(client_ws)] == [self.VIOLATION]
+
+    @pytest.mark.asyncio
+    async def test_the_next_clean_turn_is_answered_after_a_blocked_item_with_no_response_create(
+        self, stub_aws_models: None
+    ) -> None:
+        stream, _ = await self._forward_client(
+            [
+                self._user_text(self.BLOCKED_TEXT, role="system"),
+                self._user_text(self.CLEAN_TEXT),
+                self.RESPONSE_CREATE,
+            ],
+            self._guardrail(),
+        )
+
+        events: Final = self._bedrock_events(stream)
+        clean_text_index: Final = next(
+            i for i, event in enumerate(events) if event.get("textInput", {}).get("content") == self.CLEAN_TEXT
+        )
+        assert any("audioInput" in event for event in events[clean_text_index:]), "the client's response.create runs"
+
+    @pytest.mark.asyncio
+    async def test_client_message_the_guardrail_cannot_parse_never_reaches_bedrock(
+        self, stub_aws_models: None
+    ) -> None:
+        lone_surrogate_text: Final = self._user_text(f"{self.BLOCKED_TEXT} \ud800")
+
+        stream, _ = await self._forward_client(
+            [lone_surrogate_text, self._user_text(self.CLEAN_TEXT)], self._guardrail()
+        )
+
+        assert "hunter2" not in json.dumps(self._bedrock_events(stream))
+        assert self._text_inputs(stream) == [self.CLEAN_TEXT]
+
+    @pytest.mark.asyncio
+    async def test_clean_typed_message_reaches_bedrock_unchanged(self, stub_aws_models: None) -> None:
+        guardrail: Final = self._guardrail()
+
+        stream, client_ws = await self._forward_client([self._user_text(self.CLEAN_TEXT)], guardrail)
+
+        assert self._text_inputs(stream) == [self.CLEAN_TEXT]
+        assert client_ws.sent_to_client == []
+        assert guardrail.checked == [((self.CLEAN_TEXT,), None)]
+
+    @pytest.mark.asyncio
+    async def test_masked_typed_message_reaches_bedrock_masked_and_is_answered(self, stub_aws_models: None) -> None:
+        guardrail: Final = MaskingGuardrail(
+            "hunter2", guardrail_name="mask_secrets", event_hook=GuardrailEventHooks.pre_call, default_on=True
+        )
+
+        stream, client_ws = await self._forward_client(
+            [self._user_text(self.BLOCKED_TEXT), self.RESPONSE_CREATE], guardrail
+        )
+
+        events: Final = self._bedrock_events(stream)
+        assert "hunter2" not in json.dumps(events)
+        assert self._text_inputs(stream) == ["my secret is [MASKED]"]
+        assert client_ws.sent_to_client == []
+        assert any("audioInput" in event for event in events), "the client's response.create runs"
+
+    @pytest.mark.asyncio
+    async def test_masked_tool_output_reaches_bedrock_masked(self, stub_aws_models: None) -> None:
+        guardrail: Final = MaskingGuardrail(
+            "hunter2", guardrail_name="mask_secrets", event_hook=GuardrailEventHooks.pre_call, default_on=True
+        )
+        tool_output: Final = json.dumps(
+            {
+                "type": "conversation.item.create",
+                "item": {"type": "function_call_output", "call_id": "tool_1", "output": self.BLOCKED_TEXT},
+            }
+        )
+
+        stream, client_ws = await self._forward_client([tool_output], guardrail)
+
+        events: Final = self._bedrock_events(stream)
+        assert [event["toolResult"]["content"] for event in events if "toolResult" in event] == [
+            "my secret is [MASKED]"
+        ]
+        assert client_ws.sent_to_client == []
+
+    @pytest.mark.asyncio
+    async def test_the_block_reason_is_spoken_when_no_message_is_configured(self, stub_aws_models: None) -> None:
+        guardrail: Final = BlockedWordGuardrail(
+            "hunter2", guardrail_name="no_secrets", event_hook=GuardrailEventHooks.pre_call, default_on=True
+        )
+
+        stream, client_ws = await self._forward_client(
+            [self._user_text(self.BLOCKED_TEXT), self.RESPONSE_CREATE], guardrail
+        )
+
+        assert self.BLOCKED_TEXT not in json.dumps(self._bedrock_events(stream))
+        assert ['"hunter2 is not allowed"' in text for text in self._text_inputs(stream)] == [True]
+        assert [error["message"] for error in self._guardrail_errors(client_ws)] == ["hunter2 is not allowed"]
+
+    @pytest.mark.asyncio
+    async def test_guardrail_that_crashes_ends_the_session_as_an_outage_without_forwarding_the_text(
+        self, stub_aws_models: None
+    ) -> None:
+        guardrail: Final = CrashingGuardrail(
+            "hunter2", guardrail_name="flaky", event_hook=GuardrailEventHooks.pre_call, default_on=True
+        )
+        stream: Final = SessionBoundBedrockStream()
+        client_ws: Final = ConnectedClientWS([self._user_text(self.CLEAN_TEXT), self.RESPONSE_CREATE])
+        logging_obj: Final = FakeLogging()
+
+        async def open_stream() -> SessionBoundBedrockStream:
+            return stream
+
+        await asyncio.wait_for(
+            BedrockRealtime()._run_session(
+                client_ws,
+                open_stream,
+                self.MODEL,
+                logging_obj,
+                None,
+                guardrails=BedrockRealtimeGuardrails(callbacks=lambda: (guardrail,)),
+            ),
+            timeout=2,
+        )
+
+        assert self.CLEAN_TEXT not in json.dumps(self._bedrock_events(stream))
+        assert [event["error"] for event in self._client_events(client_ws) if event["type"] == "error"] == [
+            {"type": "guardrail_error", "message": GUARDRAIL_UNAVAILABLE_MESSAGE}
+        ]
+        assert client_ws.closed
+        assert logging_obj.model_call_details.get(REALTIME_SESSION_ENDED_ABNORMALLY_KEY) is True
+
+    @pytest.mark.asyncio
+    async def test_blocked_tool_output_is_replaced_and_answered_by_the_model_itself(
+        self, stub_aws_models: None
+    ) -> None:
+        tool_output: Final = json.dumps(
+            {
+                "type": "conversation.item.create",
+                "item": {"type": "function_call_output", "call_id": "tool_1", "output": self.BLOCKED_TEXT},
+            }
+        )
+
+        stream, client_ws = await self._forward_client([tool_output, self.RESPONSE_CREATE], self._guardrail())
+
+        events: Final = self._bedrock_events(stream)
+        assert "hunter2" not in json.dumps(events)
+        tool_result_index: Final = next(i for i, event in enumerate(events) if "toolResult" in event)
+        assert events[tool_result_index]["toolResult"]["content"] == BLOCKED_TOOL_OUTPUT
+        tool_starts: Final = [
+            event["contentStart"] for event in events if event.get("contentStart", {}).get("type") == "TOOL"
+        ]
+        assert [start["toolResultInputConfiguration"]["toolUseId"] for start in tool_starts] == ["tool_1"]
+        assert self._text_inputs(stream) == []
+        assert [error["message"] for error in self._guardrail_errors(client_ws)] == [self.VIOLATION]
+        assert any("audioInput" in event for event in events[tool_result_index:]), "the client's response.create runs"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("event_hook", "default_on"),
+        [
+            (GuardrailEventHooks.pre_call, False),
+            (GuardrailEventHooks.post_call, True),
+            (GuardrailEventHooks.realtime_input_transcription, True),
+        ],
+        ids=["not-default-on", "post-call-hook", "transcription-hook"],
+    )
+    async def test_guardrail_that_does_not_apply_to_typed_text_changes_nothing(
+        self, stub_aws_models: None, event_hook: GuardrailEventHooks, default_on: bool
+    ) -> None:
+        guardrail: Final = self._guardrail(event_hook=event_hook, default_on=default_on)
+
+        stream, client_ws = await self._forward_client([self._user_text(self.BLOCKED_TEXT)], guardrail)
+
+        assert self._text_inputs(stream) == [self.BLOCKED_TEXT]
+        assert client_ws.sent_to_client == []
+        assert guardrail.checked == []
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("guardrail_kwargs", "blocked_messages"),
+        [({"on_violation": "end_session"}, 1), ({"end_session_after_n_fails": 2}, 2)],
+        ids=["on-violation-end-session", "after-two-fails"],
+    )
+    async def test_end_session_guardrail_closes_the_session(
+        self, stub_aws_models: None, guardrail_kwargs: SessionEndOptions, blocked_messages: int
+    ) -> None:
+        messages: Final = [self._user_text(self.BLOCKED_TEXT)] * blocked_messages + [self._user_text(self.CLEAN_TEXT)]
+
+        stream, client_ws = await self._forward_client(
+            messages, self._guardrail(**guardrail_kwargs), client_ws_type=ConnectedClientWS
+        )
+
+        assert client_ws.closed
+        assert len(self._guardrail_errors(client_ws)) == blocked_messages
+        assert self.CLEAN_TEXT not in self._text_inputs(stream)
+        assert sum(self.VIOLATION in text for text in self._text_inputs(stream)) == blocked_messages - 1
+        assert stream.input_stream.closed
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("guardrail_kwargs", [{}, {"on_violation": "end_session"}], ids=["default", "end-session"])
+    async def test_blocked_transcript_ends_the_session_before_its_answer_reaches_the_client(
+        self, guardrail_kwargs: SessionEndOptions
+    ) -> None:
+        payloads: Final = (
+            *self._user_transcript(self.BLOCKED_TEXT),
+            *self._assistant_text("Your secret is safe with me"),
+            *self._user_transcript(self.CLEAN_TEXT),
+            *self._assistant_text("It is sunny"),
+        )
+        guardrail: Final = self._guardrail(
+            event_hook=GuardrailEventHooks.realtime_input_transcription, **guardrail_kwargs
+        )
+
+        client_ws, _ = await self._forward_bedrock(payloads, guardrail)
+
+        client_events: Final = self._client_events(client_ws)
+        assert client_ws.closed
+        assert not any(event["type"].startswith("response.") for event in client_events)
+        assert [error["message"] for error in self._guardrail_errors(client_ws)] == [self.VIOLATION]
+        assert guardrail.checked == [((self.BLOCKED_TEXT,), None)]
+
+    @pytest.mark.asyncio
+    async def test_blocked_transcript_answer_never_reaches_the_client_when_the_previous_answer_closes_late(
+        self,
+    ) -> None:
+        earlier_answer: Final = self._assistant_text("Earlier answer")
+        payloads: Final = (
+            *earlier_answer[:2],
+            *self._user_transcript(self.BLOCKED_TEXT),
+            earlier_answer[2],
+            *self._assistant_text("Your secret is safe with me"),
+        )
+
+        client_ws, _ = await self._forward_bedrock(
+            payloads, self._guardrail(event_hook=GuardrailEventHooks.realtime_input_transcription)
+        )
+
+        client_events: Final = self._client_events(client_ws)
+        assert "Your secret is safe with me" not in json.dumps(client_events)
+        assert [event["delta"] for event in client_events if event["type"] == "response.text.delta"] == [
+            "Earlier answer"
+        ]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("event_hook", "default_on", "client_audio_streamed"),
+        [
+            (GuardrailEventHooks.realtime_input_transcription, True, False),
+            (GuardrailEventHooks.pre_call, True, True),
+            (GuardrailEventHooks.realtime_input_transcription, False, True),
+        ],
+        ids=["typed-text-session", "pre-call-hook", "not-default-on"],
+    )
+    async def test_transcript_guardrail_that_does_not_apply_changes_nothing(
+        self, event_hook: GuardrailEventHooks, default_on: bool, client_audio_streamed: bool
+    ) -> None:
+        guardrail: Final = self._guardrail(event_hook=event_hook, default_on=default_on)
+
+        client_ws, _ = await self._forward_bedrock(
+            (*self._user_transcript(self.BLOCKED_TEXT), *self._assistant_text("Your secret is safe with me")),
+            guardrail,
+            client_audio_streamed=client_audio_streamed,
+        )
+
+        client_events: Final = self._client_events(client_ws)
+        assert [event["delta"] for event in client_events if event["type"] == "response.text.delta"] == [
+            "Your secret is safe with me"
+        ]
+        assert self._guardrail_errors(client_ws) == []
+        assert guardrail.checked == []
+
+    @pytest.mark.asyncio
+    async def test_session_ends_when_the_client_leaves_before_hearing_about_a_blocked_message(
+        self, stub_aws_models: None
+    ) -> None:
+        stream, client_ws = await self._forward_client(
+            [self._user_text(self.BLOCKED_TEXT), self._user_text(self.CLEAN_TEXT)],
+            self._guardrail(),
+            client_ws_type=GuardrailErrorUndeliveredClientWS,
+        )
+
+        assert self._text_inputs(stream) == []
+        assert self._client_events(client_ws) == []
+
+    @pytest.mark.asyncio
+    async def test_answers_stop_when_the_client_leaves_before_hearing_about_a_blocked_transcript(self) -> None:
+        guardrail: Final = self._guardrail(event_hook=GuardrailEventHooks.realtime_input_transcription)
+
+        _, logged = await self._forward_bedrock(
+            (*self._user_transcript(self.BLOCKED_TEXT), *self._assistant_text("Your secret is safe with me")),
+            guardrail,
+            client_ws_type=GuardrailErrorUndeliveredClientWS,
+        )
+
+        assert not any(event["type"].startswith("response.") for event in logged)
+
+    @pytest.mark.asyncio
+    async def test_proxy_request_guardrails_and_key_reach_the_bedrock_session(
+        self, stub_aws_sdk_client: dict[str, object], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        class ProxyLogging(FakeLogging):
+            def update_from_kwargs(self, **kwargs: object) -> None:
+                pass
+
+        guardrail: Final = self._guardrail(default_on=False)
+        monkeypatch.setattr(litellm, "callbacks", [guardrail])
+        stream: Final = ScriptedBedrockStream([], receiver_type=DrainedThenOpenBedrockReceiver)
+        stub_aws_sdk_client["streams"] = [stream]
+        user_api_key_dict: Final = object()
+        client_ws: Final = DisconnectingClientWS([self._user_text(self.BLOCKED_TEXT)])
+
+        await asyncio.wait_for(
+            realtime_main._arealtime.__wrapped__(
+                model=f"bedrock/{self.MODEL}",
+                websocket=client_ws,
+                litellm_logging_obj=ProxyLogging(),
+                aws_region_name="us-east-1",
+                aws_access_key_id="k",
+                aws_secret_access_key="s",
+                user_api_key_dict=user_api_key_dict,
+                metadata={"guardrails": ["no_secrets"]},
+            ),
+            timeout=1,
+        )
+
+        assert guardrail.checked == [((self.BLOCKED_TEXT,), user_api_key_dict)]
+        assert "hunter2" not in json.dumps(self._bedrock_events(stream))
+        assert [error["message"] for error in self._guardrail_errors(client_ws)] == [self.VIOLATION]
+
+    @pytest.mark.asyncio
+    async def test_a_key_that_opted_out_of_global_guardrails_is_not_screened(
+        self, stub_aws_sdk_client: dict[str, object], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        class ProxyLogging(FakeLogging):
+            def update_from_kwargs(self, **kwargs: object) -> None:
+                pass
+
+        guardrail: Final = self._guardrail()
+        monkeypatch.setattr(litellm, "callbacks", [guardrail])
+        stream: Final = ScriptedBedrockStream([], receiver_type=DrainedThenOpenBedrockReceiver)
+        stub_aws_sdk_client["streams"] = [stream]
+        client_ws: Final = DisconnectingClientWS([self._user_text(self.BLOCKED_TEXT)])
+
+        await asyncio.wait_for(
+            realtime_main._arealtime.__wrapped__(
+                model=f"bedrock/{self.MODEL}",
+                websocket=client_ws,
+                litellm_logging_obj=ProxyLogging(),
+                aws_region_name="us-east-1",
+                aws_access_key_id="k",
+                aws_secret_access_key="s",
+                metadata={"user_api_key_metadata": {"disable_global_guardrails": True}},
+            ),
+            timeout=1,
+        )
+
+        assert guardrail.checked == []
+        assert self._guardrail_errors(client_ws) == []
+        assert self.BLOCKED_TEXT in json.dumps(self._bedrock_events(stream))
 
 
 if __name__ == "__main__":

@@ -2,7 +2,7 @@ import asyncio
 import json
 import time
 from collections.abc import Callable, Coroutine
-from typing import Final
+from typing import Final, Protocol
 
 import httpx
 from openai import (
@@ -17,6 +17,7 @@ from pydantic import BaseModel
 
 import litellm
 from litellm.constants import DEFAULT_MAX_RETRIES
+from litellm.litellm_core_utils.core_helpers import require_attributes
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.logging_utils import speech_request_body, track_llm_api_timing
 from litellm.llms.custom_httpx.http_handler import (
@@ -42,6 +43,7 @@ from ..openai.common_utils import (
     build_output_token_limit_response,
     is_output_token_limit_error,
     model_dump_provider_response,
+    upstream_error_response,
 )
 from .common_utils import (
     AzureOpenAIError,
@@ -57,6 +59,11 @@ from .image_generation import (
     get_azure_image_generation_config,
 )
 from .image_generation.http_utils import azure_deployment_image_generation_json_body
+
+
+class _HasResponseText(Protocol):
+    @property
+    def text(self) -> str: ...
 
 
 class AzureOpenAIAssistantsAPIConfig:
@@ -347,7 +354,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                     raise AzureOpenAIError(status_code=422, message="max retries must be an int")
                 # init AzureOpenAI Client
                 azure_client: Final = self.get_azure_openai_client(
-                    api_version=api_version,
+                    api_version=self.chat_client_api_version(api_base, api_version),
                     api_base=api_base,
                     api_key=api_key,
                     model=model,
@@ -399,6 +406,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
             raise AzureOpenAIError(
                 status_code=status_code,
                 message=str(e),
+                response=upstream_error_response(e),
                 headers=error_headers,
                 body=error_body,
             )
@@ -425,7 +433,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         try:
             # setting Azure client
             azure_client: Final = self.get_azure_openai_client(
-                api_version=api_version,
+                api_version=self.chat_client_api_version(api_base, api_version),
                 api_base=api_base,
                 api_key=api_key,
                 model=model,
@@ -548,7 +556,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
             azure_client_params["azure_ad_token_provider"] = azure_ad_token_provider
 
         azure_client: Final = self.get_azure_openai_client(
-            api_version=api_version,
+            api_version=self.chat_client_api_version(api_base, api_version),
             api_base=api_base,
             api_key=api_key,
             model=model,
@@ -607,7 +615,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
     ):
         try:
             azure_client: Final = self.get_azure_openai_client(
-                api_version=api_version,
+                api_version=self.chat_client_api_version(api_base, api_version),
                 api_base=api_base,
                 api_key=api_key,
                 model=model,
@@ -662,6 +670,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
             raise AzureOpenAIError(
                 status_code=status_code,
                 message=message,
+                response=upstream_error_response(e),
                 headers=error_headers,
                 body=error_body,
             )
@@ -686,7 +695,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         response = None
         try:
             openai_aclient: Final = self.get_azure_openai_client(
-                api_version=api_version,
+                api_version=self.opt_out_client_api_version(api_version),
                 api_base=api_base,
                 api_key=api_key,
                 model=model,
@@ -808,7 +817,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                     api_version=api_version,
                 )
             azure_client: Final = self.get_azure_openai_client(
-                api_version=api_version,
+                api_version=self.opt_out_client_api_version(api_version),
                 api_base=api_base,
                 api_key=api_key,
                 model=model,
@@ -850,12 +859,17 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         except Exception as e:
             status_code: Final = getattr(e, "status_code", 500)
             error_headers = getattr(e, "headers", None)
-            error_response: Final = getattr(e, "response", None)
+            error_response: Final[object] = getattr(e, "response", None)
             error_text = str(e)
             if error_headers is None and error_response:
                 error_headers = getattr(error_response, "headers", None)
-                error_text = error_response.text
-            raise AzureOpenAIError(status_code=status_code, message=error_text, headers=error_headers)
+                error_text = require_attributes(error_response, _HasResponseText, "text").text
+            raise AzureOpenAIError(
+                status_code=status_code,
+                message=error_text,
+                response=upstream_error_response(e),
+                headers=error_headers,
+            )
 
     async def make_async_azure_httpx_request(
         self,
@@ -1190,7 +1204,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         except Exception as e:
             error_code: Final[object] = getattr(e, "status_code", None)
             if error_code is not None:
-                raise AzureOpenAIError(status_code=error_code, message=str(e))
+                raise AzureOpenAIError(status_code=error_code, message=str(e), response=upstream_error_response(e))
             else:
                 raise AzureOpenAIError(status_code=500, message=str(e))
 

@@ -120,6 +120,7 @@ class BulkNewUserItem(NewUserRequest):
 
     model_config = ConfigDict(extra="forbid", protected_namespaces=())
 
+    user_id: str | None = None
     auto_create_key: bool = False
 
     @field_validator("send_invite_email")

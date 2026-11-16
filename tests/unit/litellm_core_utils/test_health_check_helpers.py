@@ -8,6 +8,7 @@ from types import MappingProxyType
 from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 import responses
 import respx
@@ -19,6 +20,7 @@ from litellm.litellm_core_utils.health_check_helpers import (
     HealthCheckHelpers,
     default_health_check_mode,
     native_health_check_mode,
+    wildcard_health_check_models,
 )
 from litellm.main import ahealth_check
 from litellm.proxy._types import UserAPIKeyAuth
@@ -944,6 +946,11 @@ async def test_ahealth_check_without_mode_reports_the_real_failure(
     result: Final = await ahealth_check(model_params, prompt="test from litellm")
 
     assert expected_error in result["error"], result["error"]
+    assert result["error"] == str(result["exception"])
+    assert "Traceback" not in result["error"]
+    assert "stack trace" not in result["error"]
+    assert ahealth_check.__code__.co_filename not in result["error"]
+    assert 'File "' not in result["error"]
     assert "Missing `mode`" not in result["error"]
     assert "raw_request_typed_dict" in result
 
@@ -1449,6 +1456,339 @@ async def test_groq_wildcard_health_check_uses_a_concrete_model(
     assert response == {}
 
 
+_WILDCARD_CATALOG: Final = MappingProxyType(
+    {
+        "databricks": (
+            "databricks/databricks-claude-fixture-d",
+            "databricks/databricks-claude-fixture-c",
+            "databricks/databricks-claude-fixture-b",
+            "databricks/databricks-claude-fixture-a",
+            "databricks/databricks-cheap-chat",
+            "databricks/databricks-claude-fixture-retired",
+        ),
+        "bedrock": ("meta.llama-fixture", "anthropic.claude-fixture"),
+        "cloudflare": ("cloudflare/@cf/meta/fixture-chat",),
+        "vertex_ai": ("claude-fixture@default",),
+    }
+)
+_WILDCARD_CATALOG_COST: Final = MappingProxyType(
+    {
+        "databricks/databricks-claude-fixture-retired": 1e-10,
+        "databricks/databricks-cheap-chat": 1e-9,
+        "databricks/databricks-claude-fixture-a": 2e-9,
+        "databricks/databricks-claude-fixture-b": 3e-9,
+        "databricks/databricks-claude-fixture-c": 4e-9,
+        "databricks/databricks-claude-fixture-d": 5e-9,
+        "meta.llama-fixture": 1e-9,
+        "anthropic.claude-fixture": 2e-9,
+        "cloudflare/@cf/meta/fixture-chat": 1e-9,
+        "claude-fixture@default": 1e-9,
+    }
+)
+_DATABRICKS_FIXTURE_API_BASE: Final = "https://fixture.cloud.databricks.com/serving-endpoints"
+
+
+@pytest.fixture
+def wildcard_catalog(monkeypatch: pytest.MonkeyPatch) -> None:
+    providers: Final = {model: provider for provider, models in _WILDCARD_CATALOG.items() for model in models}
+    litellm.register_model(
+        {
+            model: {
+                "litellm_provider": providers[model],
+                "mode": "chat",
+                "max_tokens": 1024,
+                "input_cost_per_token": cost,
+                "output_cost_per_token": cost,
+                **({"deprecation_date": "2000-01-01"} if model.endswith("-retired") else {}),
+            }
+            for model, cost in _WILDCARD_CATALOG_COST.items()
+        }
+    )
+    for provider, models in _WILDCARD_CATALOG.items():
+        monkeypatch.setitem(litellm.models_by_provider, provider, list(models))
+
+
+_DATABRICKS_PROVIDER_PROBES: Final = (
+    "databricks/databricks-claude-fixture-retired",
+    "databricks/databricks-cheap-chat",
+    "databricks/databricks-claude-fixture-a",
+)
+_BEDROCK_PROVIDER_PROBES: Final = ("bedrock/meta.llama-fixture", "bedrock/anthropic.claude-fixture")
+_DATABRICKS_SERVED_CLAUDE_PROBES: Final = (
+    "databricks/databricks-claude-fixture-a",
+    "databricks/databricks-claude-fixture-b",
+)
+
+
+@pytest.mark.parametrize(
+    ("custom_llm_provider", "wildcard", "expected"),
+    [
+        ("databricks", "databricks-claude-*", (*_DATABRICKS_SERVED_CLAUDE_PROBES, *_DATABRICKS_PROVIDER_PROBES[:2])),
+        (
+            "databricks",
+            "databricks/databricks-claude-*",
+            (*_DATABRICKS_SERVED_CLAUDE_PROBES, *_DATABRICKS_PROVIDER_PROBES[:2]),
+        ),
+        ("databricks", "*", (*_DATABRICKS_PROVIDER_PROBES[1:], _DATABRICKS_PROVIDER_PROBES[0])),
+        ("databricks", "databricks-claude-fixture-r*", _DATABRICKS_PROVIDER_PROBES),
+        ("databricks", "databricks-llama-*", _DATABRICKS_PROVIDER_PROBES),
+        ("databricks", "*-fixture", _DATABRICKS_PROVIDER_PROBES),
+        ("databricks", "team-endpoints/*", _DATABRICKS_PROVIDER_PROBES),
+        ("bedrock", "converse/anthropic.*", ("bedrock/converse/anthropic.claude-fixture", *_BEDROCK_PROVIDER_PROBES)),
+        (
+            "bedrock",
+            "converse/*",
+            (
+                "bedrock/converse/meta.llama-fixture",
+                "bedrock/converse/anthropic.claude-fixture",
+                *_BEDROCK_PROVIDER_PROBES,
+            ),
+        ),
+        ("bedrock", "invoke/anthropic.*", ("bedrock/invoke/anthropic.claude-fixture", *_BEDROCK_PROVIDER_PROBES)),
+        ("bedrock", "us-east-1/anthropic.*", ("bedrock/us-east-1/anthropic.claude-fixture", *_BEDROCK_PROVIDER_PROBES)),
+        ("bedrock", "agent/anthropic.*", _BEDROCK_PROVIDER_PROBES),
+        ("bedrock", "nova/*", _BEDROCK_PROVIDER_PROBES),
+        ("bedrock", "nova-2/*", _BEDROCK_PROVIDER_PROBES),
+        ("bedrock", "mantle/*", _BEDROCK_PROVIDER_PROBES),
+        ("bedrock", "openai/*", _BEDROCK_PROVIDER_PROBES),
+        ("bedrock", "chat_completions/*", _BEDROCK_PROVIDER_PROBES),
+        ("bedrock", "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/*", _BEDROCK_PROVIDER_PROBES),
+        (
+            "bedrock",
+            "converse/arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/*",
+            _BEDROCK_PROVIDER_PROBES,
+        ),
+        ("cloudflare", "@cf/*", ("cloudflare/@cf/meta/fixture-chat",)),
+        ("vertex_ai", "claude-*", ("vertex_ai/claude-fixture@default",)),
+        ("vertex_ai", "meta/*", ("vertex_ai/claude-fixture@default",)),
+        ("fixture-gateway", "team/*", ()),
+    ],
+)
+@pytest.mark.usefixtures("wildcard_catalog")
+def test_wildcard_health_check_probes_the_cheapest_served_chat_models_before_the_provider_cheapest(
+    custom_llm_provider: str, wildcard: str, expected: tuple[str, ...]
+) -> None:
+    assert wildcard_health_check_models(wildcard=wildcard, custom_llm_provider=custom_llm_provider) == expected
+
+
+def _fail_first_databricks_claude_probe(request: httpx.Request) -> httpx.Response:
+    model: Final = json.loads(request.content)["model"]
+    if model == "databricks-claude-fixture-a":
+        return httpx.Response(500, json={"error_code": "INTERNAL_ERROR", "message": "fixture outage"})
+    return httpx.Response(
+        200,
+        json={
+            "id": "chatcmpl-health",
+            "object": "chat.completion",
+            "created": 1,
+            "model": model,
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "2"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        },
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("wildcard_catalog")
+async def test_partial_wildcard_health_check_falls_back_within_the_wildcard_before_any_other_model(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    upstream: Final = respx_mock.post(f"{_DATABRICKS_FIXTURE_API_BASE}/chat/completions").mock(
+        side_effect=_fail_first_databricks_claude_probe
+    )
+
+    response: Final = await ahealth_check(
+        {
+            "model": "databricks/databricks-claude-*",
+            "api_key": "fake-key",
+            "api_base": _DATABRICKS_FIXTURE_API_BASE,
+            "messages": [{"role": "user", "content": "What is 1 + 1?"}],
+        }
+    )
+
+    probed_models: Final = [json.loads(call.request.content)["model"] for call in upstream.calls]
+    assert probed_models[0] == "databricks-claude-fixture-a"
+    assert probed_models[-1] == "databricks-claude-fixture-b"
+    assert all(model.startswith("databricks-claude-") for model in probed_models)
+    assert "databricks-claude-fixture-a" not in probed_models[1:]
+    assert response == {}
+
+
+def _answer_only_the_retired_databricks_claude_model(request: httpx.Request) -> httpx.Response:
+    model: Final = json.loads(request.content)["model"]
+    if model != "databricks-claude-fixture-retired":
+        return httpx.Response(404, json={"error_code": "ENDPOINT_NOT_FOUND", "message": f"{model} does not exist"})
+    return _fail_first_databricks_claude_probe(request)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("wildcard_catalog")
+async def test_partial_wildcard_health_check_stays_healthy_while_any_model_the_provider_probes_answers(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    upstream: Final = respx_mock.post(f"{_DATABRICKS_FIXTURE_API_BASE}/chat/completions").mock(
+        side_effect=_answer_only_the_retired_databricks_claude_model
+    )
+
+    response: Final = await ahealth_check(
+        {
+            "model": "databricks/databricks-claude-*",
+            "api_key": "fake-key",
+            "api_base": _DATABRICKS_FIXTURE_API_BASE,
+            "messages": [{"role": "user", "content": "What is 1 + 1?"}],
+        }
+    )
+
+    assert [json.loads(call.request.content)["model"] for call in upstream.calls] == [
+        "databricks-claude-fixture-a",
+        "databricks-claude-fixture-b",
+        "databricks-claude-fixture-retired",
+    ]
+    assert response == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("wildcard_catalog")
+async def test_partial_wildcard_health_check_that_fails_on_every_probe_tries_its_own_models_then_the_provider_probes(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    upstream: Final = respx_mock.post(f"{_DATABRICKS_FIXTURE_API_BASE}/chat/completions").respond(
+        401, json={"error_code": "UNAUTHENTICATED", "message": "fixture bad token"}
+    )
+
+    response: Final = await ahealth_check(
+        {
+            "model": "databricks/databricks-claude-*",
+            "api_key": "fake-key",
+            "api_base": _DATABRICKS_FIXTURE_API_BASE,
+            "messages": [{"role": "user", "content": "What is 1 + 1?"}],
+        }
+    )
+
+    assert [json.loads(call.request.content)["model"] for call in upstream.calls] == [
+        "databricks-claude-fixture-a",
+        "databricks-claude-fixture-b",
+        "databricks-claude-fixture-retired",
+        "databricks-cheap-chat",
+    ]
+    assert "error" in response
+
+
+_DATABRICKS_EQUAL_PRICE_MODELS: Final = (
+    "databricks/databricks-free-d",
+    "databricks/databricks-free-c",
+    "databricks/databricks-free-b",
+    "databricks/databricks-free-a",
+)
+
+
+def _register_equal_price_databricks_models(monkeypatch: pytest.MonkeyPatch, listed_order: tuple[str, ...]) -> None:
+    litellm.register_model(
+        {
+            model: {
+                "litellm_provider": "databricks",
+                "mode": "chat",
+                "max_tokens": 1024,
+                "input_cost_per_token": 0.0,
+                "output_cost_per_token": 0.0,
+            }
+            for model in listed_order
+        }
+    )
+    monkeypatch.setitem(litellm.models_by_provider, "databricks", list(listed_order))
+
+
+@pytest.mark.parametrize("listed_order", [_DATABRICKS_EQUAL_PRICE_MODELS, _DATABRICKS_EQUAL_PRICE_MODELS[::-1]])
+def test_partial_wildcard_health_check_orders_its_own_equal_price_models_by_id_whatever_the_listing_order(
+    monkeypatch: pytest.MonkeyPatch, listed_order: tuple[str, ...]
+) -> None:
+    _register_equal_price_databricks_models(monkeypatch, listed_order)
+
+    assert wildcard_health_check_models(wildcard="databricks/databricks-free-*", custom_llm_provider="databricks")[
+        :2
+    ] == ("databricks/databricks-free-a", "databricks/databricks-free-b")
+
+
+def _answer_only_the_first_listed_databricks_free_model(request: httpx.Request) -> httpx.Response:
+    model: Final = json.loads(request.content)["model"]
+    if model != "databricks-free-d":
+        return httpx.Response(404, json={"error_code": "ENDPOINT_NOT_FOUND", "message": f"{model} does not exist"})
+    return _fail_first_databricks_claude_probe(request)
+
+
+@pytest.mark.asyncio
+async def test_wildcard_health_check_falls_back_to_equal_price_provider_models_in_the_provider_listing_order(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    _register_equal_price_databricks_models(monkeypatch, _DATABRICKS_EQUAL_PRICE_MODELS)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    upstream: Final = respx_mock.post(f"{_DATABRICKS_FIXTURE_API_BASE}/chat/completions").mock(
+        side_effect=_answer_only_the_first_listed_databricks_free_model
+    )
+
+    response: Final = await ahealth_check(
+        {
+            "model": "databricks/databricks-claude-*",
+            "api_key": "fake-key",
+            "api_base": _DATABRICKS_FIXTURE_API_BASE,
+            "messages": [{"role": "user", "content": "What is 1 + 1?"}],
+        }
+    )
+
+    assert [json.loads(call.request.content)["model"] for call in upstream.calls] == ["databricks-free-d"]
+    assert response == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("wildcard_catalog")
+async def test_partial_wildcard_health_check_without_a_served_cost_map_model_probes_the_provider_cheapest_chat_model(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    upstream: Final = respx_mock.post(f"{_DATABRICKS_FIXTURE_API_BASE}/chat/completions").mock(
+        side_effect=_fail_first_databricks_claude_probe
+    )
+
+    response: Final = await ahealth_check(
+        {
+            "model": "databricks/databricks-llama-*",
+            "api_key": "fake-key",
+            "api_base": _DATABRICKS_FIXTURE_API_BASE,
+            "messages": [{"role": "user", "content": "What is 1 + 1?"}],
+        }
+    )
+
+    assert json.loads(upstream.calls[0].request.content)["model"] == "databricks-claude-fixture-retired"
+    assert response == {}
+
+
+@pytest.mark.asyncio
+async def test_partial_wildcard_health_check_on_a_provider_without_cost_map_chat_models_names_health_check_model(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setitem(litellm.models_by_provider, "databricks", [])
+
+    response: Final = await ahealth_check(
+        {
+            "model": "databricks/databricks-llama-*",
+            "api_key": "fake-key",
+            "api_base": _DATABRICKS_FIXTURE_API_BASE,
+            "messages": [{"role": "user", "content": "What is 1 + 1?"}],
+        }
+    )
+
+    assert "model_info.health_check_model" in response["error"], response["error"]
+    assert respx_mock.calls.call_count == 0
+
+
 @pytest.mark.asyncio
 async def test_cohere_rerank_health_check_returns_a_successful_response(
     monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
@@ -1632,7 +1972,12 @@ async def test_wildcard_health_check_with_pinned_provider_calls_a_model_without_
     monkeypatch.setitem(
         litellm.model_cost,
         "fake-together-chat",
-        {"input_cost_per_token": 1e-9, "output_cost_per_token": 1e-9, "mode": "chat", "litellm_provider": "together_ai"},
+        {
+            "input_cost_per_token": 1e-9,
+            "output_cost_per_token": 1e-9,
+            "mode": "chat",
+            "litellm_provider": "together_ai",
+        },
     )
     monkeypatch.setitem(litellm.models_by_provider, "together_ai", ("fake-together-chat",))
     litellm.in_memory_llm_clients_cache.flush_cache()
@@ -1648,3 +1993,76 @@ async def test_wildcard_health_check_with_pinned_provider_calls_a_model_without_
     assert json.loads(together_route.calls.last.request.content)["model"] == "fake-together-chat"
     assert not other_hosts.called
 
+
+HEALTH_CHECK_ROUTES: Final = (
+    pytest.param(
+        "chat",
+        {"model": "openai/missing-model", "api_base": "https://deployment.example/v1"},
+        "https://deployment.example/v1/chat/completions",
+        id="chat",
+    ),
+    pytest.param(
+        "responses",
+        {"model": "anthropic/missing-model", "api_base": "https://deployment.example"},
+        "https://deployment.example/v1/messages",
+        id="responses-bridged-to-chat",
+    ),
+)
+
+
+def _mock_failing_deployment_with_a_healthy_openai_fallback(
+    respx_mock: respx.MockRouter, deployment_url: str
+) -> respx.Route:
+    _ = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-1",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "healthy-fallback",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+        )
+    )
+    return respx_mock.post(deployment_url).mock(
+        return_value=httpx.Response(404, json={"error": {"message": "model unavailable", "type": "not_found"}})
+    )
+
+
+@pytest.mark.timeout(30, method="thread")
+@pytest.mark.parametrize(("mode", "deployment_params", "deployment_url"), HEALTH_CHECK_ROUTES)
+@pytest.mark.asyncio
+async def test_ahealth_check_reports_a_failing_deployment_whatever_the_global_model_fallbacks(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    mode: Literal["chat", "responses"],
+    deployment_params: dict[str, str],
+    deployment_url: str,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "model_fallbacks", ["openai/healthy-fallback"])
+    deployment: Final = _mock_failing_deployment_with_a_healthy_openai_fallback(respx_mock, deployment_url)
+
+    result: Final = await ahealth_check({**deployment_params, "api_key": "sk-test"}, mode=mode)
+
+    assert "error" in result
+    assert len(deployment.calls) == 1
+
+
+@pytest.mark.timeout(30, method="thread")
+@pytest.mark.asyncio
+async def test_calls_after_a_health_check_still_use_the_global_model_fallbacks(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "model_fallbacks", ["openai/healthy-fallback"])
+    monkeypatch.setenv("OPENAI_API_KEY", "openai-env-key")
+    deployment: Final = {"model": "anthropic/missing-model", "api_base": "https://deployment.example", "api_key": "sk-test"}
+    _ = _mock_failing_deployment_with_a_healthy_openai_fallback(respx_mock, "https://deployment.example/v1/messages")
+
+    _ = await ahealth_check(deployment, mode="chat")
+    response: Final = await litellm.acompletion(**deployment, messages=[{"role": "user", "content": "hi"}])
+
+    assert response.choices[0].message.content == "ok"

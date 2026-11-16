@@ -9,7 +9,7 @@ is enabled, which publishes every stored skill to anyone who can reach the proxy
 import asyncio
 import re
 from collections.abc import Sequence
-from itertools import groupby
+from itertools import count
 from types import MappingProxyType
 from typing import Final
 
@@ -19,6 +19,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.models.skills import LiteLLM_SkillsTable
+from litellm.proxy.deps.repositories import PluginUploadRepositoryDep
 from litellm.proxy.discovery_endpoints.agent_skills_archive import SkillArchive, build_skill_archive
 from litellm.types.proxy.discovery_endpoints.agent_skills_endpoints import (
     MAX_SKILL_DESCRIPTION_LENGTH,
@@ -83,28 +84,34 @@ async def stored_skill(skill_id: str) -> LiteLLM_SkillsTable | None:
 )
 async def agent_skills_index(
     request: Request,
+    uploads: PluginUploadRepositoryDep,
     skills: Sequence[LiteLLM_SkillsTable] = Depends(stored_skills),
 ) -> AgentSkillsIndex:
-    """Agent Skills v0.2.0 discovery index over every skill stored on this proxy."""
+    """Discover public Hub skills and the separately enabled hosted skill store."""
+    from litellm.proxy.discovery_endpoints.skill_hub_endpoints import public_hub_entries
     from litellm.proxy.utils import get_custom_url
 
-    installable: Final = await _installable(skills)
+    installable: Final = await _installable(skills[:MAX_INDEXED_SKILLS])
     names: Final = _deduplicated(tuple(_base_name(skill, archive) for skill, archive in installable))
-
-    return AgentSkillsIndex(
-        skills=tuple(
-            AgentSkillsIndexEntry(
-                name=name,
-                type="archive",
-                description=_description(skill, archive, name),
-                url=get_custom_url(
-                    request_base_url=str(request.base_url),
-                    route=f"v1/skills/{skill.skill_id}/archive",
-                ),
-                digest=archive.digest,
-            )
-            for (skill, archive), name in zip(installable, names, strict=True)
+    legacy: Final = tuple(
+        AgentSkillsIndexEntry(
+            name=name,
+            type="archive",
+            description=_description(skill, archive, name),
+            url=get_custom_url(
+                request_base_url=str(request.base_url),
+                route=f"v1/skills/{skill.skill_id}/archive",
+            ),
+            digest=archive.digest,
         )
+        for (skill, archive), name in zip(installable, names, strict=True)
+    )
+    remaining: Final = MAX_INDEXED_SKILLS - len(legacy)
+    hub: Final = (await public_hub_entries(request, uploads))[:remaining] if remaining else ()
+    hub_names: Final = _deduplicated(tuple(entry.name for entry in hub), reserved=frozenset(names))
+    return AgentSkillsIndex(
+        skills=legacy
+        + tuple(entry.model_copy(update={"name": name}) for entry, name in zip(hub, hub_names, strict=True))
     )
 
 
@@ -153,7 +160,7 @@ async def _archive_for(skill: LiteLLM_SkillsTable) -> SkillArchive | None:
         )
         return None
 
-    if cache_key is not None and len(archive.content) <= MAX_CACHED_ARCHIVE_BYTES:
+    if cache_key is not None and len(archive.content) + len(archive.manifest_content) <= MAX_CACHED_ARCHIVE_BYTES:
         _ARCHIVE_CACHE.set_cache(cache_key, archive)
     return archive
 
@@ -172,19 +179,25 @@ def _slugify(raw: str | None) -> str | None:
     return _NON_SLUG_PATTERN.sub("-", raw.lower()).strip("-")[:MAX_SKILL_NAME_LENGTH].rstrip("-") or None
 
 
-def _entry_name(entry: tuple[int, str]) -> str:
-    return entry[1]
+def _deduplicated(names: Sequence[str], reserved: frozenset[str] = frozenset()) -> tuple[str, ...]:
+    natural_names: Final = frozenset(names) | reserved
+    ordinals: Final = MappingProxyType({name: count(1) for name in frozenset(names)})
+    used: Final[set[str]] = set(reserved)  # mutable-ok: bounded local allocation avoids rebuilding the set
 
+    def allocate(name: str) -> str:
+        selected: Final = (
+            name
+            if name not in used
+            else next(
+                candidate
+                for candidate in (_with_ordinal(name, ordinal) for ordinal in ordinals[name])
+                if candidate not in natural_names and candidate not in used
+            )
+        )
+        used.add(selected)
+        return selected
 
-def _deduplicated(names: Sequence[str]) -> tuple[str, ...]:
-    ordinals: Final = MappingProxyType(
-        {
-            position: ordinal
-            for _, duplicates in groupby(sorted(enumerate(names), key=_entry_name), key=_entry_name)
-            for ordinal, (position, _) in enumerate(duplicates)
-        }
-    )
-    return tuple(_with_ordinal(name, ordinals[position]) for position, name in enumerate(names))
+    return tuple(allocate(name) for name in names)
 
 
 def _with_ordinal(name: str, ordinal: int) -> str:

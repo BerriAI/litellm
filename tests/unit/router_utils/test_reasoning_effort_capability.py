@@ -7,7 +7,7 @@ import pytest
 
 import litellm
 from litellm._logging import JsonFormatter, verbose_logger
-from litellm.router_utils.reasoning_effort_capability import (
+from litellm.litellm_core_utils.reasoning_effort_capability import (
     RequestedReasoningEffort,
     deployment_is_catalog_mapped,
     intersect_supported_reasoning_efforts,

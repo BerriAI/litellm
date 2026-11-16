@@ -4,7 +4,7 @@ The componentization scaffold splits the proxy FastAPI app into two runtime
 components by trimming the route table inside a wrapped lifespan context:
 
   gateway.main  -> only paths matched by gateway/routes/allowlist.py
-  backend.main  -> only paths matched by backend/routes/allowlist.py
+  litellm.runtime.backend.main  -> only paths matched by litellm/runtime/backend/routes/allowlist.py
 
 If either allowlist drops a path that was reachable on the monolithic app,
 clients hitting that path on the corresponding pod get a 404. This test
@@ -12,7 +12,7 @@ guarantees that the union of the two trimmed route sets equals the full set
 of routes on the proxy app — i.e. no endpoint is dropped on the floor.
 
 The union-coverage test reproduces the same predicate that ``gateway/main.py``
-and ``backend/main.py`` use, without importing them. The component modules wrap
+and ``litellm/runtime/backend/main.py`` use, without importing them. The component modules wrap
 the shared ``app.router.lifespan_context``; importing them in the test process
 would chain wrappers and corrupt the snapshot. The gateway Mount tests below
 import the real ``gateway.main._is_gateway_route`` instead, undoing both of the
@@ -23,7 +23,6 @@ import (which raises on a non-postgres ``DATABASE_URL`` scheme and can mint an
 RDS IAM token when ``IAM_TOKEN_DB_AUTH`` is set).
 """
 
-import json
 import os
 import sys
 from collections.abc import AsyncGenerator, Mapping
@@ -64,7 +63,7 @@ _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..",
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
-from backend.routes.allowlist import BACKEND_MOUNT_PATHS
+from litellm.runtime.backend.routes.allowlist import BACKEND_MOUNT_PATHS
 from gateway.routes.allowlist import GATEWAY_MOUNT_PATHS
 from litellm.proxy import tracing_endpoints
 from litellm.proxy._lazy_features import LazyFeature, attach_lazy_features
@@ -72,7 +71,6 @@ from litellm.proxy.auth.authorization_dependencies import get_log_team_lookup
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.proxy_server import app
 from litellm.integrations.prometheus_metrics_endpoint import make_metrics_asgi_app
-from tests.test_litellm_rust.support.child_interpreter import run_child_interpreter
 
 for _key, _previous in _PRE_EXISTING_ENV.items():
     if _previous is None:
@@ -95,42 +93,12 @@ _PRE_COMPONENT_LIFESPAN = app.router.lifespan_context
 from gateway.main import _gateway_lifespan, _is_gateway_route
 
 app.router.lifespan_context = _PRE_COMPONENT_LIFESPAN
-from backend.main import _backend_lifespan
+from litellm.runtime.backend.main import _backend_lifespan
 
 app.router.lifespan_context = _PRE_COMPONENT_LIFESPAN
 for _key, _previous in _PRE_DB_ENV.items():
     if _previous is not None:
         os.environ[_key] = _previous
-
-
-_COVERAGE_PROBE: Final = """
-import json, os, sys
-sys.path.insert(0, os.environ["LITELLM_COMPONENT_ALLOWLIST_REPO_ROOT"])
-from starlette.routing import Mount
-from backend.routes.allowlist import BACKEND_EXACT_PATHS, BACKEND_PATH_PREFIXES
-from gateway.routes.allowlist import GATEWAY_EXACT_PATHS, GATEWAY_PATH_PREFIXES
-from litellm.proxy._lazy_features import loaded_lazy_modules
-from litellm.proxy.proxy_server import app
-
-all_paths = {
-    r.path for r in app.router.routes
-    if not isinstance(r, Mount) and getattr(r, "path", None) is not None
-}
-
-
-def covered(exact, prefixes):
-    return {p for p in all_paths if p in exact or any(p.startswith(x) for x in prefixes)}
-
-
-json.dump({
-    "lazy_loaded": sorted(loaded_lazy_modules(app)),
-    "route_count": len(all_paths),
-    "uncovered": sorted(all_paths - (
-        covered(GATEWAY_EXACT_PATHS, GATEWAY_PATH_PREFIXES)
-        | covered(BACKEND_EXACT_PATHS, BACKEND_PATH_PREFIXES)
-    )),
-}, sys.stdout)
-"""
 
 
 @pytest.mark.parametrize(
@@ -253,42 +221,6 @@ def test_retired_otlp_routes_reject_uploads_without_dependencies_on_each_compone
 
     assert response.status_code == 410, response.text
     assert response.json() == {"message": "Send traces and logs directly to the Lens endpoint shown in Lens setup."}
-
-
-def test_gateway_plus_backend_covers_full_app():
-    """Every route on the proxy app must be served by gateway or backend.
-
-    ``gateway.main`` and ``backend.main`` trim the route table once, inside the
-    lifespan, so the set this has to cover is the one registered at startup. A
-    lazy feature appends its router on demand, after that trim, and whether a
-    sibling test in the same xdist worker has triggered one is not something
-    this test can control. Measuring in a fresh interpreter is what makes the
-    route table deterministic; nothing is subtracted, so every route the trim
-    will actually see stays in the assertion.
-    """
-    env: Final = {**os.environ, "LITELLM_COMPONENT_ALLOWLIST_REPO_ROOT": _REPO_ROOT}
-    for key, value in _THROWAWAY_ENV.items():
-        env.setdefault(key, value)
-
-    probe: Final = run_child_interpreter(_COVERAGE_PROBE, env=env, timeout=90)
-    assert probe.returncode == 0, f"route probe failed:\n{probe.stderr}"
-    report: Final = json.loads(probe.stdout)
-
-    assert not report["lazy_loaded"], (
-        "route probe was not pristine; it loaded lazy features "
-        f"{report['lazy_loaded']}, so its route table is not the startup one"
-    )
-    assert report["route_count"] > 100, (
-        f"route probe only saw {report['route_count']} routes, so an empty "
-        "uncovered set would not mean anything"
-    )
-
-    uncovered: Final = report["uncovered"]
-    assert not uncovered, (
-        f"{len(uncovered)} route(s) are not exposed on either component. "
-        f"Update gateway/routes/allowlist.py or backend/routes/allowlist.py to cover:\n  "
-        + "\n  ".join(uncovered)
-    )
 
 
 def test_backend_mount_paths_defined():

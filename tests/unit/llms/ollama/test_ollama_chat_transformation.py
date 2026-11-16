@@ -1,10 +1,16 @@
 import asyncio
 import inspect
+import itertools
+import logging
 import os
 import sys
+import traceback
+from datetime import datetime, timezone
 from typing import Final, cast
 
+import httpx
 import pytest
+import respx
 from pydantic import BaseModel
 
 sys.path.insert(
@@ -23,7 +29,16 @@ import json
 from unittest.mock import ANY, MagicMock, patch
 
 import litellm
-from litellm.types.utils import Choices, EmbeddingResponse, Message, ModelResponse, ModelResponseStream
+from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.types.utils import (
+    ChatCompletionDeltaToolCall,
+    Choices,
+    EmbeddingResponse,
+    Message,
+    ModelResponse,
+    ModelResponseStream,
+)
 from unittest import mock
 
 
@@ -854,6 +869,99 @@ class TestOllamaReasoningContentStreaming:
 
 
 class TestOllamaToolCallTransformation:
+    @pytest.mark.parametrize("stream", [False, True])
+    def test_transform_request_keeps_parallel_call_ids_paired_with_results(self, stream: bool):
+        config: Final = OllamaChatConfig()
+        messages: Final = cast(
+            list[AllMessageValues],
+            [
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "call_first",
+                            "type": "function",
+                            "function": {
+                                "name": "read_fixture",
+                                "arguments": '{"path": "first.txt"}',
+                            },
+                        },
+                        {
+                            "id": "call_second",
+                            "type": "function",
+                            "function": {
+                                "name": "read_fixture",
+                                "arguments": '{"path": "second.txt"}',
+                            },
+                        },
+                    ],
+                },
+                {
+                    "role": "tool",
+                    "tool_call_id": "call_second",
+                    "content": "second result",
+                },
+                {
+                    "role": "tool",
+                    "tool_call_id": "call_first",
+                    "content": "first result",
+                },
+            ],
+        )
+
+        result: Final = config.transform_request(
+            model="ollama_chat/test-model",
+            messages=messages,
+            optional_params={"stream": stream},
+            litellm_params={},
+            headers={},
+        )
+
+        assert result["messages"][0]["tool_calls"] == [
+            {
+                "id": "call_first",
+                "function": {"name": "read_fixture", "arguments": {"path": "first.txt"}},
+            },
+            {
+                "id": "call_second",
+                "function": {"name": "read_fixture", "arguments": {"path": "second.txt"}},
+            },
+        ]
+        assert [message.get("tool_call_id") for message in result["messages"][1:]] == [
+            "call_second",
+            "call_first",
+        ]
+
+    def test_transform_request_does_not_invent_an_id_for_an_unidentified_call(self):
+        config: Final = OllamaChatConfig()
+        messages: Final = cast(
+            list[AllMessageValues],
+            [
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": None,
+                            "type": "function",
+                            "function": {"name": "read_fixture", "arguments": "{}"},
+                        }
+                    ],
+                }
+            ],
+        )
+
+        result: Final = config.transform_request(
+            model="ollama_chat/test-model",
+            messages=messages,
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+
+        assert result["messages"][0]["tool_calls"] == [{"function": {"name": "read_fixture", "arguments": {}}}]
+
     def test_transform_request_preserves_tool_calls(self):
         """
         tool_calls on assistant messages must survive transform_request.
@@ -946,6 +1054,132 @@ class TestOllamaToolCallTransformation:
         assert tool_msg["content"] == "Sunny, 72°F"
         assert "tool_call_id" in tool_msg, "tool_call_id must be forwarded to Ollama"
         assert tool_msg["tool_call_id"] == "call_abc123"
+
+    @staticmethod
+    def _replayed_history(arguments: object) -> list[AllMessageValues]:
+        return cast(
+            list[AllMessageValues],
+            [
+                {"role": "user", "content": "Read a.rs and b.rs"},
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "call_abc123",
+                            "type": "function",
+                            "function": {"name": "read_file", "arguments": arguments},
+                        }
+                    ],
+                },
+                {"role": "tool", "tool_call_id": "call_abc123", "content": "fn main() {}"},
+            ],
+        )
+
+    @pytest.mark.parametrize(
+        ("arguments", "expected"),
+        [
+            ("", {}),
+            (None, {}),
+            ("null", {}),
+            ('{"path": "a.rs"', {"path": "a.rs"}),
+            ('{"path": "a.rs", "limit": 2}', {"path": "a.rs", "limit": 2}),
+            ({"path": "a.rs"}, {"path": "a.rs"}),
+        ],
+        ids=["empty", "null", "null_string", "truncated", "non_string_value", "object"],
+    )
+    def test_replayed_tool_call_arguments_are_forwarded_as_an_object(self, arguments: object, expected: object):
+        result: Final = OllamaChatConfig().transform_request(
+            model="qwen3:8b",
+            messages=self._replayed_history(arguments),
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+
+        assert result["messages"][1]["tool_calls"] == [
+            {"id": "call_abc123", "function": {"name": "read_file", "arguments": expected}}
+        ]
+
+    @pytest.mark.parametrize(
+        "arguments",
+        ['{"path": "a.rs"}{"path": "b.rs"}', '["a.rs", "b.rs"]', '[["path", "a.rs"]]', "[]"],
+        ids=["glued", "array", "pairs", "empty_array"],
+    )
+    def test_replayed_tool_call_arguments_that_are_not_an_object_answer_400_without_echoing_them(
+        self, arguments: str
+    ):
+        with pytest.raises(litellm.BadRequestError) as exc_info:
+            litellm.completion(
+                model="ollama_chat/qwen3:8b",
+                messages=self._replayed_history(arguments),
+                api_base="http://127.0.0.1:9",
+            )
+
+        assert exc_info.value.status_code == 400
+        assert "call_abc123" in str(exc_info.value)
+        assert "a.rs" not in "".join(traceback.format_exception(exc_info.value))
+
+
+class TestOllamaStreamingParallelToolCallIndex:
+    """Regression for https://github.com/BerriAI/litellm/issues/33678.
+
+    Ollama streams each parallel tool call in its own chunk without an OpenAI-style top-level
+    index. Every delta used to carry index 0, so index-accumulating clients appended the
+    arguments of every later call onto the first one.
+    """
+
+    @staticmethod
+    def _tool_call(index: int, command: str) -> dict[str, object]:
+        return {
+            "id": f"call_{index}",
+            "function": {"index": index, "name": "bash", "arguments": {"command": command}},
+        }
+
+    @staticmethod
+    def _chunk(*tool_calls: dict[str, object]) -> dict[str, object]:
+        return {
+            "model": "qwen3:8b",
+            "message": {"role": "assistant", "content": "", "tool_calls": list(tool_calls)},
+            "done": False,
+        }
+
+    @staticmethod
+    def _parsed_tool_calls(
+        iterator: OllamaChatCompletionResponseIterator, *chunks: dict[str, object]
+    ) -> tuple[ChatCompletionDeltaToolCall, ...]:
+        return tuple(
+            itertools.chain.from_iterable(
+                iterator.chunk_parser(chunk).choices[0].delta.tool_calls or () for chunk in chunks
+            )
+        )
+
+    def test_tool_calls_in_separate_chunks_get_distinct_sequential_indices(self):
+        iterator: Final = OllamaChatCompletionResponseIterator(streaming_response=iter([]), sync_stream=True)
+        chunks: Final = [
+            self._chunk(self._tool_call(index, command))
+            for index, command in enumerate(("date", "uname -a", "whoami"))
+        ]
+
+        tool_calls: Final = self._parsed_tool_calls(iterator, *chunks)
+
+        assert [tool_call.index for tool_call in tool_calls] == [0, 1, 2]
+        assert [json.loads(tool_call.function.arguments) for tool_call in tool_calls] == [
+            {"command": "date"},
+            {"command": "uname -a"},
+            {"command": "whoami"},
+        ]
+
+    def test_index_counter_continues_across_chunks(self):
+        iterator: Final = OllamaChatCompletionResponseIterator(streaming_response=iter([]), sync_stream=True)
+        chunks: Final = [
+            self._chunk(self._tool_call(0, "date"), self._tool_call(1, "uname -a")),
+            self._chunk(self._tool_call(2, "whoami")),
+        ]
+
+        tool_calls: Final = self._parsed_tool_calls(iterator, *chunks)
+
+        assert [tool_call.index for tool_call in tool_calls] == [0, 1, 2]
 
 
 class TestOllamaStreamingUsage:
@@ -1114,3 +1348,158 @@ def test_get_complete_url_ignores_a_trailing_slash_on_api_base(api_base: str):
         )
         == "http://gateway.example.com/ollama/api/chat"
     )
+
+
+_DEEPWIKI_MCP_TOOL: Final = {
+    "type": "mcp",
+    "server_label": "deepwiki",
+    "server_url": "https://mcp.deepwiki.com/mcp",
+    "require_approval": "never",
+}
+_WEATHER_TOOL: Final = {
+    "type": "function",
+    "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {"city": {"type": "string"}}}},
+}
+
+
+def _ollama_chat_route(respx_mock: respx.MockRouter) -> respx.Route:
+    return respx_mock.post("http://ollama.test:11434/api/chat").respond(
+        json={
+            "model": "qwen3:0.6b",
+            "message": {"role": "assistant", "content": "Sunny"},
+            "done": True,
+            "prompt_eval_count": 5,
+            "eval_count": 3,
+        }
+    )
+
+
+def test_ollama_chat_answers_400_for_a_hosted_mcp_tool_it_cannot_run(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    route: Final = _ollama_chat_route(respx_mock)
+
+    with pytest.raises(litellm.UnsupportedParamsError) as raised:
+        litellm.completion(
+            model="ollama_chat/qwen3:0.6b",
+            messages=[{"role": "user", "content": "weather in Paris?"}],
+            tools=[_DEEPWIKI_MCP_TOOL, _WEATHER_TOOL],
+            api_base="http://ollama.test:11434",
+        )
+
+    assert raised.value.status_code == 400
+    assert "qwen3:0.6b on ollama_chat cannot run the hosted MCP tool `deepwiki`" in str(raised.value)
+    assert not route.called
+
+
+@pytest.mark.parametrize(
+    ("tools", "sent_tools"),
+    [([_DEEPWIKI_MCP_TOOL, _WEATHER_TOOL], [_WEATHER_TOOL]), ([_DEEPWIKI_MCP_TOOL], None)],
+    ids=["beside-a-function", "alone"],
+)
+def test_ollama_chat_drop_params_sends_only_the_tools_ollama_can_call(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, tools: list[object], sent_tools: object
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    route: Final = _ollama_chat_route(respx_mock)
+
+    response: Final = litellm.completion(
+        model="ollama_chat/qwen3:0.6b",
+        messages=[{"role": "user", "content": "weather in Paris?"}],
+        tools=tools,
+        api_base="http://ollama.test:11434",
+        drop_params=True,
+    )
+
+    assert json.loads(route.calls.last.request.content).get("tools") == sent_tools
+    assert response.choices[0].message.content == "Sunny"
+
+
+def _warnings_naming(caplog: pytest.LogCaptureFixture, param: str) -> tuple[str, ...]:
+    return tuple(
+        r.getMessage() for r in caplog.records if r.levelno == logging.WARNING and f"Dropping {param}=" in r.getMessage()
+    )
+
+
+@pytest.mark.parametrize("effort", ("minimal", "xhigh"))
+def test_reasoning_effort_mapped_to_think_off_warns_once(effort: str, caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        result: Final = OllamaChatConfig().map_openai_params(
+            non_default_params={"reasoning_effort": effort}, optional_params={}, model="qwen3", drop_params=False
+        )
+
+    warnings: Final = _warnings_naming(caplog, "reasoning_effort")
+    assert result["think"] is False
+    assert len(warnings) == 1
+    assert f"reasoning_effort={effort!r}" in warnings[0]
+    assert "qwen3" in warnings[0]
+
+
+@pytest.mark.parametrize("effort, think", (("none", False), ("low", True), ("high", True)))
+def test_reasoning_effort_with_a_matching_think_value_does_not_warn(
+    effort: str, think: bool, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        result: Final = OllamaChatConfig().map_openai_params(
+            non_default_params={"reasoning_effort": effort}, optional_params={}, model="qwen3", drop_params=False
+        )
+
+    assert result["think"] is think
+    assert _warnings_naming(caplog, "reasoning_effort") == ()
+
+
+def _transform_json_format_function_call(content: object) -> ModelResponse:
+    return OllamaChatConfig().transform_response(
+        model="llama3.2",
+        raw_response=httpx.Response(
+            200,
+            json={
+                "model": "llama3.2",
+                "message": {"role": "assistant", "content": content},
+                "done": True,
+                "prompt_eval_count": 12,
+                "eval_count": 8,
+            },
+        ),
+        model_response=ModelResponse(),
+        logging_obj=Logging(
+            model="llama3.2",
+            messages=[{"role": "user", "content": "Weather in Paris?"}],
+            stream=False,
+            call_type="completion",
+            start_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            litellm_call_id="ollama-json-function-call",
+            function_id="ollama-json-function-call",
+        ),
+        request_data={"format": "json"},
+        messages=[{"role": "user", "content": "Weather in Paris?"}],
+        optional_params={},
+        litellm_params={"function_name": "lookup_weather"},
+        encoding=None,
+    )
+
+
+@pytest.mark.parametrize(
+    ("content", "name", "arguments"),
+    [
+        pytest.param(
+            '{"name": "get_weather", "arguments": {"city": "Paris"}}', "get_weather", {"city": "Paris"}, id="named-call"
+        ),
+        pytest.param('{"city": "Paris"}', "lookup_weather", {"city": "Paris"}, id="bare-arguments"),
+    ],
+)
+def test_json_format_response_for_a_function_call_becomes_a_tool_call(
+    content: str, name: str, arguments: dict[str, object]
+) -> None:
+    response: Final = _transform_json_format_function_call(content)
+
+    choice: Final = response.choices[0]
+    tool_call: Final = choice.message.tool_calls[0]
+    assert (choice.finish_reason, choice.message.content) == ("tool_calls", None)
+    assert (tool_call.function.name, json.loads(tool_call.function.arguments)) == (name, arguments)
+
+
+def test_json_format_function_call_response_without_text_content_raises_type_error() -> None:
+    with pytest.raises(TypeError):
+        _transform_json_format_function_call(None)
