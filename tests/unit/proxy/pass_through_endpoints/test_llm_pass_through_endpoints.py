@@ -4463,7 +4463,20 @@ def test_openai_passthrough_uses_workload_identity_token_without_static_key(
         assert json.loads(token_exchange.calls.last.request.content)["subject_token"] == "subject-token-from-file"
 
 
-@pytest.mark.parametrize("path", ["/v1/batches", "/v1/batches/", "/batches", "/v1/%2e/batches", "/v1/x/%2e%2e/batches"])
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/v1/batches",
+        "/v1/batches/",
+        "/batches",
+        "/v1/%2e/batches",
+        "/v1/x/%2e%2e/batches",
+        "/v1/batches%3F",
+        "/v1/batches%3Fx=1",
+        "/v1/batches%23x",
+        "///api.openai.com/v1/batches",
+    ],
+)
 def test_openai_passthrough_refuses_batch_create_on_a_workload_identity_token(
     openai_passthrough_client: TestClient, openai_wif_env: None, monkeypatch: pytest.MonkeyPatch, path: str
 ) -> None:

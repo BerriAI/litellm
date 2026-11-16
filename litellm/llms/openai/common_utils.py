@@ -162,7 +162,10 @@ def openai_api_resource(path: str) -> str | None:
 
 
 def is_openai_batch_create(method: str, path: str) -> bool:
-    return method.upper() == "POST" and _openai_api_resource_segments(posixpath.normpath(f"/{path}")) == ("batches",)
+    if method.upper() != "POST":
+        return False
+    sent_path: Final = posixpath.normpath(f"/{httpx.URL(path).path}")
+    return _openai_api_resource_segments(sent_path) == ("batches",)
 
 
 def is_openai_agents_api_path(path: str) -> bool:
