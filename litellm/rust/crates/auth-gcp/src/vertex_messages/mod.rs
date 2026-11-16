@@ -863,4 +863,130 @@ mod tests {
             )
         );
     }
+
+    fn service_account_file(endpoint: &service_account::tests::Endpoint, extra: Value) -> Value {
+        Value::Object(service_account::tests::key(
+            &endpoint.url,
+            json!({"project_id": "key-project"})
+                .as_object()
+                .unwrap()
+                .clone()
+                .into_iter()
+                .chain(extra.as_object().unwrap().clone())
+                .collect::<Map<String, Value>>()
+                .into(),
+        ))
+    }
+
+    fn granted(token: &str, expires_in: i64) -> (u16, Value) {
+        (
+            200,
+            json!({"access_token": token, "expires_in": expires_in}),
+        )
+    }
+
+    async fn token(
+        auth: &VertexMessagesAuth,
+        file: &tempfile::NamedTempFile,
+    ) -> Result<String, Error> {
+        let path = file.path().to_str().unwrap().to_owned();
+        let login = auth.login(Some(path), None).await?;
+        Ok(login.token.expose().to_owned())
+    }
+
+    #[tokio::test]
+    async fn a_key_file_s_token_is_reused_until_the_file_is_rewritten() {
+        let endpoint = service_account::tests::endpoint(vec![
+            granted("first", 3600),
+            granted("rotated", 3600),
+        ])
+        .await;
+        let file = key_file(&service_account_file(&endpoint, json!({})));
+        let auth = auth(FakeEnvironment::default());
+
+        let before = (
+            token(&auth, &file).await.unwrap(),
+            token(&auth, &file).await.unwrap(),
+        );
+        std::fs::write(
+            file.path(),
+            service_account_file(&endpoint, json!({"rotated": true})).to_string(),
+        )
+        .unwrap();
+        let after = token(&auth, &file).await.unwrap();
+
+        assert_eq!(before, ("first".to_owned(), "first".to_owned()));
+        assert_eq!(after, "rotated");
+        assert_eq!(endpoint.forms.lock().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn a_key_file_replaced_by_one_that_does_not_load_keeps_the_earlier_credentials() {
+        let endpoint = service_account::tests::endpoint(vec![granted("earlier", 3600)]).await;
+        let file = key_file(&service_account_file(&endpoint, json!({})));
+        let auth = auth(FakeEnvironment::default());
+        token(&auth, &file).await.unwrap();
+
+        std::fs::write(file.path(), "{\"type\": \"service_account\", \"half\": ").unwrap();
+
+        assert_eq!(token(&auth, &file).await.unwrap(), "earlier");
+        assert_eq!(endpoint.forms.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_key_file_whose_token_fetch_fails_does_not_fall_back() {
+        let endpoint = service_account::tests::endpoint(vec![
+            granted("earlier", 3600),
+            (
+                400,
+                json!({"error": "invalid_client", "error_description": "gone"}),
+            ),
+        ])
+        .await;
+        let file = key_file(&service_account_file(&endpoint, json!({})));
+        let auth = auth(FakeEnvironment::default());
+        token(&auth, &file).await.unwrap();
+
+        std::fs::write(
+            file.path(),
+            service_account_file(&endpoint, json!({"rotated": true})).to_string(),
+        )
+        .unwrap();
+        let refused = failure(token(&auth, &file).await.unwrap_err());
+
+        assert_eq!(refused.exception, PythonException::Refresh);
+    }
+
+    #[rstest]
+    #[case::invalid_grant_reloads_once(
+        (400, json!({"error": "invalid_grant", "error_description": "Invalid JWT Signature."})),
+        Ok("reloaded"),
+        3
+    )]
+    #[case::another_refusal_stands(
+        (400, json!({"error": "invalid_client", "error_description": "The OAuth client was not found."})),
+        Err("('invalid_client: The OAuth client was not found.', {'error': 'invalid_client', 'error_description': 'The OAuth client was not found.'})"),
+        2
+    )]
+    #[tokio::test]
+    async fn an_expired_token_refused_for_good_reloads_the_key_file_once(
+        #[case] refusal: (u16, Value),
+        #[case] expected: Result<&str, &str>,
+        #[case] requests: usize,
+    ) {
+        let endpoint = service_account::tests::endpoint(vec![
+            granted("expired", 0),
+            refusal,
+            granted("reloaded", 3600),
+        ])
+        .await;
+        let file = key_file(&service_account_file(&endpoint, json!({})));
+
+        let served = token(&auth(FakeEnvironment::default()), &file)
+            .await
+            .map_err(|error| failure(error).message);
+
+        assert_eq!(served, expected.map(str::to_owned).map_err(str::to_owned));
+        assert_eq!(endpoint.forms.lock().unwrap().len(), requests);
+    }
 }
