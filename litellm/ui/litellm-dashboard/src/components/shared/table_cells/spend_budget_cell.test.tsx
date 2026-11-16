@@ -128,5 +128,11 @@ describe("SpendBudgetCell", () => {
 
     rerender(<SpendBudgetCell spend={0} maxBudget={0.00005} />);
     expect(screen.getByText("of $0.00005")).toBeInTheDocument();
+
+    rerender(<SpendBudgetCell spend={0} maxBudget={0.0000001} />);
+    expect(screen.getByText("of $0.0000001")).toBeInTheDocument();
+
+    rerender(<SpendBudgetCell spend={0} maxBudget={0} />);
+    expect(screen.getByText("of $0")).toBeInTheDocument();
   });
 });

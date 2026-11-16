@@ -55,7 +55,9 @@ const resolveBudgetDecimals = (
 ): number => {
   if (budgetDecimals !== undefined) return budgetDecimals;
   if (budget === null) return 0;
-  if (budget > 0 && budget < 0.01) return 5;
+  if (budget > 0 && budget < 0.01) {
+    return Math.min(8, Math.max(5, Math.ceil(-Math.log10(budget))));
+  }
   if (!Number.isInteger(budget)) return 2;
   return 0;
 };
