@@ -1368,7 +1368,7 @@ def _v1_writes_key_to_authorization(auth_type: MCPAuthType) -> bool:
             | MCPAuth.oauth_delegate
         ):
             return False
-    assert_never(auth_type)
+    assert_never(auth_type)  # pragma: no cover
 
 
 def _v1_key_occupies_authorization(server: MCPServer) -> bool:

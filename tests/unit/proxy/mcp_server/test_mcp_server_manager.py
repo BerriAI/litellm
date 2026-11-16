@@ -80,6 +80,7 @@ from litellm.proxy.mcp_server.mcp_server_manager import (
     _mcp_oauth_discovery_on_startup_enabled,
     _normalize_mcp_server_cost_info,
     _obo_retry_applies,
+    _server_key_occupies_authorization,
     global_mcp_server_manager,
     listed_tools_caller_for,
     oauth_endpoints_unresolved,
@@ -17409,6 +17410,12 @@ def _keyed_server(base: MCPServer, auth_type: MCPAuth, key: str | None, token_he
             "delegate_auth_to_upstream": auth_type == MCPAuth.oauth2,
         }
     )
+
+
+def test_a_sigv4_server_token_leaves_authorization_free_for_the_jwt_signer() -> None:
+    server: Final = _keyed_server(_server_with_tools_list_ttl(300), MCPAuth.aws_sigv4, "server-key", None)
+
+    assert _server_key_occupies_authorization(server) is False
 
 
 @pytest.mark.asyncio
