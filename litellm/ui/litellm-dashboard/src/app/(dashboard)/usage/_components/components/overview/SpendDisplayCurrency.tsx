@@ -11,7 +11,6 @@ interface SpendDisplayCurrencyProps {
   loading: boolean;
 }
 
-/** Shows the USD spend total estimated in another currency at the current ECB reference rate. */
 export default function SpendDisplayCurrency({ usdSpend, loading }: SpendDisplayCurrencyProps) {
   const { t, i18n } = useTranslation();
   const [requested, setRequested] = useState(false);
