@@ -1988,6 +1988,7 @@ mod tests {
         );
     }
 
+    #[rstest]
     #[tokio::test]
     async fn the_native_output_retry_drops_unsigned_thinking_too() {
         let model = "bedrock/invoke/us.anthropic.claude-sonnet-5-5-v1:0";

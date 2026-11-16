@@ -861,7 +861,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[rstest]
     fn unsigned_thinking_is_dropped_and_signed_thinking_kept() {
         let unsigned =
             serde_json::json!({"type": "thinking", "thinking": "Read it first.", "signature": ""});
