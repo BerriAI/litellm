@@ -2192,6 +2192,96 @@ def test_function_call_done_emits_is_finished():
     )
 
 
+def _tool_item(output_index: int, arguments: str) -> dict:
+    return {
+        "type": "function_call",
+        "id": f"fc_{output_index}",
+        "call_id": f"call_{output_index}",
+        "name": "simple_add",
+        "arguments": arguments,
+    }
+
+
+def _tool_added(output_index: int) -> dict:
+    return {"type": "response.output_item.added", "output_index": output_index, "item": _tool_item(output_index, "")}
+
+
+def _tool_arguments_delta(output_index: int, delta: str) -> dict:
+    return {"type": "response.function_call_arguments.delta", "output_index": output_index, "delta": delta}
+
+
+def _tool_arguments_done(output_index: int, arguments: str) -> dict:
+    return {"type": "response.function_call_arguments.done", "output_index": output_index, "arguments": arguments}
+
+
+def _tool_item_done(output_index: int, arguments: str) -> dict:
+    return {
+        "type": "response.output_item.done",
+        "output_index": output_index,
+        "item": _tool_item(output_index, arguments),
+    }
+
+
+_ADD_5_7 = '{"a":5,"b":7}'
+_ADD_1_2 = '{"a":1,"b":2}'
+
+
+@pytest.mark.parametrize(
+    "events, expected_arguments",
+    [
+        pytest.param(
+            [_tool_added(1), _tool_arguments_done(1, _ADD_5_7), _tool_item_done(1, _ADD_5_7)],
+            {0: _ADD_5_7},
+            id="arguments_only_in_done_events",
+        ),
+        pytest.param(
+            [_tool_added(0), _tool_item_done(0, _ADD_5_7)],
+            {0: _ADD_5_7},
+            id="arguments_only_in_output_item_done",
+        ),
+        pytest.param(
+            [
+                _tool_added(0),
+                _tool_arguments_delta(0, '{"a":5,'),
+                _tool_arguments_delta(0, '"b":7}'),
+                _tool_arguments_done(0, _ADD_5_7),
+                _tool_item_done(0, _ADD_5_7),
+            ],
+            {0: _ADD_5_7},
+            id="streamed_deltas_are_not_repeated_by_done_events",
+        ),
+        pytest.param(
+            [
+                _tool_added(0),
+                _tool_arguments_delta(0, _ADD_5_7),
+                _tool_arguments_done(0, _ADD_5_7),
+                _tool_item_done(0, _ADD_5_7),
+                _tool_added(1),
+                _tool_arguments_done(1, _ADD_1_2),
+                _tool_item_done(1, _ADD_1_2),
+            ],
+            {0: _ADD_5_7, 1: _ADD_1_2},
+            id="one_call_with_deltas_and_one_without",
+        ),
+    ],
+)
+def test_streamed_tool_call_arguments_match_upstream_whichever_event_carries_them(events, expected_arguments):
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
+    tool_call_deltas = [
+        tool_call for event in events for tool_call in (iterator.chunk_parser(event).choices[0].delta.tool_calls or [])
+    ]
+
+    assembled = {
+        index: "".join(tc.function.arguments or "" for tc in tool_call_deltas if tc.index == index)
+        for index in {tc.index for tc in tool_call_deltas}
+    }
+    assert assembled == expected_arguments
+
+
 def test_text_plus_tool_calls_sequence():
     """
     Test the full sequence when model returns text + tool_calls.
