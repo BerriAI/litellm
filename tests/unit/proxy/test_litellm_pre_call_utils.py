@@ -9552,7 +9552,7 @@ async def test_add_litellm_data_to_request_prices_chat_completions_in_usd_only_f
 ) -> None:
     from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
 
-    data: Final[dict[str, object]] = {"model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}], **body}
+    data: Final[dict[str, object]] = {"model": "gpt-5.4-mini", "messages": [{"role": "user", "content": "hi"}], **body}
     updated: Final[Mapping[str, object]] = await add_litellm_data_to_request(
         data=data,
         request=_reserved_stamp_request("/v1/chat/completions"),
