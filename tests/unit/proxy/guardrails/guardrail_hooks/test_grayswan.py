@@ -1,4 +1,4 @@
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import Callable, Mapping
 from types import MappingProxyType
 from typing import Final, Literal
 from unittest.mock import Mock
@@ -922,34 +922,21 @@ async def test_post_call_never_forwards_the_proxy_key_metadata_of_the_request_me
     assert "litellm_metadata" not in client.calls[0]["json"]
 
 
-@pytest.fixture
-async def failure_policy_guardrail(fail_open: bool, action: str) -> AsyncIterator[tuple[GraySwanGuardrail, Mock]]:
-    guardrail: Final = GraySwanGuardrail(
-        guardrail_name="failure-contract",
-        api_key="test-key",
-        policy_id="test-policy",
-        fail_open=fail_open,
-        on_flagged_action=action,
-        event_hook=GuardrailEventHooks.pre_call,
-    )
-    respond: Final = Mock()
-    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
-        guardrail.async_handler = client
-        yield guardrail, respond
-
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize("input_type", ["request", "response"])
 @pytest.mark.parametrize("action", ["block", "monitor", "passthrough"])
 @pytest.mark.parametrize("fail_open", [False, True])
 @pytest.mark.parametrize("payload", [{}, {"violation": None}, {"error": True, "violation": 0.0}])
 async def test_application_errors_respect_failure_policy(
-    failure_policy_guardrail: tuple[GraySwanGuardrail, Mock],
+    grayswan_guardrail_factory: tuple[Callable[[bool, str, str], GraySwanGuardrail], Mock],
     input_type: Literal["request", "response"],
+    action: str,
     fail_open: bool,
     payload: dict[str, object],
 ) -> None:
-    guardrail, respond = failure_policy_guardrail
+    make_guardrail, respond = grayswan_guardrail_factory
+    api_key: Final = "test-key"
+    guardrail: Final = make_guardrail(fail_open, action, api_key)
     respond.return_value = httpx.Response(200, json=payload)
     inputs: Final[GenericGuardrailAPIInputs] = {"texts": ["synthetic input"]}
     metadata: Final[dict[str, list[StandardLoggingGuardrailInformation]]] = {}
@@ -960,7 +947,7 @@ async def test_application_errors_respect_failure_policy(
         with pytest.raises(GraySwanGuardrailAPIError):
             await guardrail.apply_guardrail(inputs, request_data, input_type)
     respond.assert_called_once()
-    assert respond.call_args.args[0].headers["authorization"] == "Bearer test-key"
+    assert respond.call_args.args[0].headers["authorization"] == f"Bearer {api_key}"
     (failure_record,) = metadata["standard_logging_guardrail_information"]
     assert failure_record["guardrail_status"] == "guardrail_failed_to_respond"
 
@@ -1014,13 +1001,15 @@ def test_valid_decisions_keep_threshold_semantics(score):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("action", ["block"])
 @pytest.mark.parametrize("failure", ["timeout", "malformed_json", "http_error"])
 @pytest.mark.parametrize("fail_open", [False, True])
 async def test_transport_errors_respect_failure_policy(
-    failure_policy_guardrail: tuple[GraySwanGuardrail, Mock], failure: str, fail_open: bool
+    grayswan_guardrail_factory: tuple[Callable[[bool, str, str], GraySwanGuardrail], Mock],
+    failure: str,
+    fail_open: bool,
 ) -> None:
-    guardrail, respond = failure_policy_guardrail
+    make_guardrail, respond = grayswan_guardrail_factory
+    guardrail: Final = make_guardrail(fail_open, "block", "test-key")
 
     def transport_response(request: httpx.Request) -> httpx.Response:
         if failure == "timeout":
