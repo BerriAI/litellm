@@ -13,6 +13,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.focus.destinations.base import FocusTimeWindow
 from litellm.integrations.focus.destinations.ternary_destination import FocusTernaryDestination
 from litellm.integrations.focus.focus_logger import FocusLogger
+from litellm.litellm_core_utils.url_utils import validate_url
 
 if TYPE_CHECKING:
     from litellm.integrations.focus.export_engine import FocusExportEngine
@@ -168,7 +169,34 @@ class TernaryLogger(FocusLogger):
 
 
 class SettingsTernaryLogger(TernaryLogger):
-    """A TernaryLogger built from the settings stored through the proxy's /ternary admin endpoints, not from config."""
+    """A TernaryLogger built from the settings stored through the proxy's /ternary admin endpoints, not from config.
+
+    Its base URL comes from the admin API rather than the operator's config, so every export first checks it
+    against the proxy's outbound URL policy (`user_url_allowed_hosts` admits an internal host).
+    """
+
+    def __init__(
+        self,
+        *,
+        api_key: str,
+        connection_id: str,
+        base_url: str,
+        frequency: str | None = None,
+        interval_seconds: int | None = None,
+    ) -> None:
+        super().__init__(
+            api_key=api_key,
+            connection_id=connection_id,
+            base_url=base_url,
+            frequency=frequency,
+            interval_seconds=interval_seconds,
+        )
+        self._admin_base_url: Final = base_url
+
+    def _ternary_export_engine(self) -> TernaryExportEngine:
+        """Refuse a base URL that resolves to a private or internal address, checked again on every export."""
+        validate_url(self._admin_base_url)
+        return super()._ternary_export_engine()
 
 
 __all__ = ("SettingsTernaryLogger", "TernaryLogger")

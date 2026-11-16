@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import socket
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from datetime import date, datetime, timezone
 from decimal import Decimal
@@ -14,6 +15,7 @@ from pydantic import TypeAdapter
 from fastapi.testclient import TestClient
 
 import litellm
+import litellm.litellm_core_utils.url_utils as url_utils
 import litellm.proxy.proxy_server as ps
 from litellm.integrations.focus.destinations.base import FocusTimeWindow
 from litellm.integrations.ternary.export_engine import FocusFrame
@@ -127,6 +129,27 @@ def salt_key(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LITELLM_SALT_KEY", "sk-ternary-endpoint-tests")
 
 
+PUBLIC_HOSTS = {"api.ternary.app": "34.120.10.20", "collector.example.net": "93.184.215.14"}
+
+
+@pytest.fixture(autouse=True)
+def dns(monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
+    """Resolve hostnames from this table instead of the network; IP literals resolve to themselves."""
+    table = {**PUBLIC_HOSTS, "internal.example.net": "10.0.0.10", "localhost": "127.0.0.1"}
+
+    def getaddrinfo(host: str, port: int, *_args: object, **_kwargs: object) -> list[tuple[object, ...]]:
+        address = table.get(host, host)
+        try:
+            socket.inet_aton(address)
+        except OSError:
+            raise socket.gaierror(f"unknown host {host}") from None
+        return [(socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", (address, port))]
+
+    monkeypatch.setattr(url_utils.socket, "getaddrinfo", getaddrinfo)
+    monkeypatch.setattr(litellm, "user_url_allowed_hosts", [])
+    return table
+
+
 @pytest.fixture
 def config() -> MemoryConfig:
     return MemoryConfig()
@@ -235,6 +258,61 @@ def test_init_rejects_settings_the_destination_would_reject(
 
     assert response.status_code == 400
     assert config.rows == {}
+
+
+@pytest.mark.parametrize(
+    "base_url", ["https://127.0.0.1", "https://10.0.0.10", "https://internal.example.net", "http://localhost:8080"]
+)
+def test_init_rejects_a_base_url_that_reaches_a_private_address(
+    client: TestClient, config: MemoryConfig, base_url: str
+):
+    response = client.post(
+        "/ternary/init", json={"api_key": API_KEY, "connection_id": "conn-123", "ternary_base_url": base_url}
+    )
+
+    assert response.status_code == 400
+    assert "user_url_allowed_hosts" in response.text
+    assert config.rows == {}
+
+
+def test_init_accepts_an_internal_host_the_operator_allowlisted(
+    client: TestClient, store: TernarySettingsStore, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "user_url_allowed_hosts", ["internal.example.net"])
+
+    response = client.post(
+        "/ternary/init",
+        json={"api_key": API_KEY, "connection_id": "conn-123", "ternary_base_url": "https://internal.example.net"},
+    )
+
+    assert response.status_code == 200, response.text
+
+
+@pytest.mark.asyncio
+async def test_update_rejects_moving_the_base_url_to_a_private_address(
+    client: TestClient, store: TernarySettingsStore
+):
+    await store.save(SETTINGS)
+
+    response = client.put(
+        "/ternary/settings", json={"ternary_base_url": "https://internal.example.net", "api_key": "new-key"}
+    )
+
+    assert response.status_code == 400
+    assert await store.get() == SETTINGS
+
+
+@pytest.mark.asyncio
+async def test_export_refuses_a_saved_host_that_now_resolves_to_a_private_address(
+    client: TestClient, store: TernarySettingsStore, dns: dict[str, str]
+):
+    await store.save(SETTINGS.model_copy(update={"ternary_base_url": "https://collector.example.net"}))
+    dns["collector.example.net"] = "169.254.169.254"
+
+    response = client.post("/ternary/export", json={})
+
+    assert response.status_code == 502
+    assert "blocked address (169.254.169.254)" in response.text
 
 
 @pytest.mark.parametrize(
