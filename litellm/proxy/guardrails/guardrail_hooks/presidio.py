@@ -1210,7 +1210,19 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         Masks the input and output before logging to langfuse, datadog, etc.
         """
         if call_type == "completion" or call_type == "acompletion":  # /chat/completions requests
-            messages: Final[list | None] = kwargs.get("messages", None)
+            if (
+                isinstance(result, ModelResponse)
+                and result.choices
+                and not isinstance(result.choices[0], StreamingChoices)
+            ):
+                await self._process_response_for_pii(response=result, request_data=kwargs, mode="mask")
+            elif isinstance(result, dict) and self._is_anthropic_message_response(result):
+                await self._process_anthropic_response_for_pii(
+                    response=result,
+                    request_data=kwargs,
+                    mode="mask",
+                )
+            messages: Final[list | None] = None if self.apply_to_output else kwargs.get("messages", None)
             tasks: Final = []
             task_mappings: list[tuple[int, int | None]] = []  # Track (message_index, content_index) for each task
 
@@ -1265,19 +1277,6 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
 
             verbose_proxy_logger.debug("Presidio PII Masking: Redacted pii message: %s", messages)
             kwargs["messages"] = messages
-
-            if (
-                isinstance(result, ModelResponse)
-                and result.choices
-                and not isinstance(result.choices[0], StreamingChoices)
-            ):
-                await self._process_response_for_pii(response=result, request_data=kwargs, mode="mask")
-            elif isinstance(result, dict) and self._is_anthropic_message_response(result):
-                await self._process_anthropic_response_for_pii(
-                    response=result,
-                    request_data=kwargs,
-                    mode="mask",
-                )
 
         return kwargs, result
 
