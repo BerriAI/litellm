@@ -1,6 +1,9 @@
-use std::{future::Future, pin::Pin, sync::OnceLock, time::Duration};
+use std::{future::Future, pin::Pin, sync::Arc, time::Duration};
 
 use google_cloud_auth::credentials::mds;
+use litellm_http::{
+    ClientVariant, HttpClientPool, HttpSettings, Resolution, media::PublicDnsResolver,
+};
 use litellm_secret_value::SecretValue;
 use serde_json::Value;
 
@@ -42,14 +45,26 @@ pub trait GoogleEnvironment: Send + Sync {
     ) -> EnvironmentFuture<'_, Result<Option<String>, GoogleLoginFailure>>;
 }
 
-#[derive(Default)]
 pub struct SystemGoogleEnvironment {
-    client: OnceLock<reqwest::Client>,
+    pool: HttpClientPool,
+}
+
+impl Default for SystemGoogleEnvironment {
+    fn default() -> Self {
+        Self {
+            pool: HttpClientPool::new(Arc::new(PublicDnsResolver)),
+        }
+    }
 }
 
 impl SystemGoogleEnvironment {
-    fn client(&self) -> &reqwest::Client {
-        self.client.get_or_init(reqwest::Client::new)
+    fn client(&self) -> Option<litellm_http::Client> {
+        self.pool
+            .client(
+                &Resolution::from(&HttpSettings::default()).config,
+                ClientVariant::Provider,
+            )
+            .ok()
     }
 
     fn numeric_env<T: std::str::FromStr>(&self, name: &str, default: T) -> T {
@@ -67,10 +82,15 @@ impl SystemGoogleEnvironment {
         let timeout = Duration::from_secs(
             self.numeric_env("GCE_METADATA_TIMEOUT", DEFAULT_METADATA_TIMEOUT_SECONDS),
         );
-        let attempts = self.numeric_env("GCE_METADATA_DETECT_RETRIES", DEFAULT_METADATA_DETECT_RETRIES);
+        let attempts = self.numeric_env(
+            "GCE_METADATA_DETECT_RETRIES",
+            DEFAULT_METADATA_DETECT_RETRIES,
+        );
         for _ in 0..attempts {
-            let response = self
-                .client()
+            let Some(client) = self.client() else {
+                return false;
+            };
+            let response = client
                 .get(&root)
                 .header(METADATA_FLAVOR, GOOGLE)
                 .timeout(timeout)
@@ -128,10 +148,13 @@ impl GoogleEnvironment for SystemGoogleEnvironment {
 
     fn gce_project(&self) -> EnvironmentFuture<'_, Option<String>> {
         Box::pin(async {
-            let url = format!("http://{}/computeMetadata/v1/project/project-id", self.metadata_host());
+            let url = format!(
+                "http://{}/computeMetadata/v1/project/project-id",
+                self.metadata_host()
+            );
             for _ in 0..METADATA_PROJECT_RETRIES {
-                let Ok(response) = self
-                    .client()
+                let client = self.client()?;
+                let Ok(response) = client
                     .get(&url)
                     .header(METADATA_FLAVOR, GOOGLE)
                     .timeout(Duration::from_secs(DEFAULT_METADATA_TIMEOUT_SECONDS))
@@ -159,7 +182,9 @@ impl GoogleEnvironment for SystemGoogleEnvironment {
                     project_id: None,
                 }) as TokenSource
             })
-            .map_err(|error| GoogleLoginFailure::new(PythonException::DefaultCredentials, error.to_string()))
+            .map_err(|error| {
+                GoogleLoginFailure::new(PythonException::DefaultCredentials, error.to_string())
+            })
     }
 
     fn resource_manager_project(
@@ -168,8 +193,10 @@ impl GoogleEnvironment for SystemGoogleEnvironment {
         token: SecretValue,
     ) -> EnvironmentFuture<'_, Result<Option<String>, GoogleLoginFailure>> {
         Box::pin(async move {
-            let response = self
-                .client()
+            let client = self.client().ok_or_else(|| {
+                GoogleLoginFailure::new(PythonException::Transport, "no HTTP client")
+            })?;
+            let response = client
                 .get(&url)
                 .bearer_auth(token.expose())
                 .send()
@@ -178,8 +205,14 @@ impl GoogleEnvironment for SystemGoogleEnvironment {
             if response.status() != reqwest::StatusCode::OK {
                 return Ok(None);
             }
-            let body: Value = response.json().await.map_err(|error| token_failure(&error))?;
-            Ok(body.get("projectId").and_then(Value::as_str).map(str::to_string))
+            let body: Value = response
+                .json()
+                .await
+                .map_err(|error| token_failure(&error))?;
+            Ok(body
+                .get("projectId")
+                .and_then(Value::as_str)
+                .map(str::to_string))
         })
     }
 }

@@ -3582,6 +3582,7 @@ dependencies = [
  "litellm-auth-aws",
  "litellm-auth-types",
  "litellm-error",
+ "litellm-http",
  "litellm-secret-value",
  "moka",
  "percent-encoding",

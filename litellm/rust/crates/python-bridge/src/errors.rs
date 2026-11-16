@@ -706,7 +706,13 @@ mod tests {
                 .unwrap()
                 .extract()
                 .unwrap();
-            assert_eq!(named, ("ValueError".to_string(), "Could not resolve project_id".to_string()));
+            assert_eq!(
+                named,
+                (
+                    "ValueError".to_string(),
+                    "Could not resolve project_id".to_string()
+                )
+            );
         });
     }
 

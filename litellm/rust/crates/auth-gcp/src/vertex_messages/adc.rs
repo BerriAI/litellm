@@ -51,12 +51,18 @@ fn is_truthy(value: Option<&Value>) -> bool {
 fn gcloud_credentials_path(env: &dyn GoogleEnvironment) -> Option<PathBuf> {
     let config = match env.os_env("CLOUDSDK_CONFIG") {
         Some(config) => PathBuf::from(config),
-        None => PathBuf::from(env.os_env("HOME")?).join(".config").join("gcloud"),
+        None => PathBuf::from(env.os_env("HOME")?)
+            .join(".config")
+            .join("gcloud"),
     };
     Some(config.join("application_default_credentials.json"))
 }
 
-fn wrapped(build: Result<TokenSource, GoogleLoginFailure>, credential: &str, file: &str) -> Result<TokenSource, GoogleLoginFailure> {
+fn wrapped(
+    build: Result<TokenSource, GoogleLoginFailure>,
+    credential: &str,
+    file: &str,
+) -> Result<TokenSource, GoogleLoginFailure> {
     build.map_err(|cause| {
         GoogleLoginFailure::caused_by(
             PythonException::DefaultCredentials,
@@ -68,15 +74,21 @@ fn wrapped(build: Result<TokenSource, GoogleLoginFailure>, credential: &str, fil
 
 /// `_default._get_external_account_credentials`: AWS and executable sources raise their own
 /// failure, an identity pool's is named by the file it came from.
-fn external_account(info: &Map<String, Value>, file: &str) -> Result<TokenSource, GoogleLoginFailure> {
-    let raises_its_own = info.get("subject_token_type").and_then(Value::as_str) == Some(AWS_SUBJECT_TOKEN_TYPE)
+fn external_account(
+    info: &Map<String, Value>,
+    file: &str,
+) -> Result<TokenSource, GoogleLoginFailure> {
+    let raises_its_own = info.get("subject_token_type").and_then(Value::as_str)
+        == Some(AWS_SUBJECT_TOKEN_TYPE)
         || info
             .get("credential_source")
             .and_then(|source| source.get("executable"))
             .is_some_and(|executable| !executable.is_null());
     builders::external_account(info).map_err(|failure| match raises_its_own {
         true => failure,
-        false => default_failure(format!("Failed to load external account credentials from {file}")),
+        false => default_failure(format!(
+            "Failed to load external account credentials from {file}"
+        )),
     })
 }
 
@@ -85,18 +97,27 @@ fn load_credentials_from_file(file: &str) -> Result<Found, GoogleLoginFailure> {
     if !Path::new(file).exists() {
         return Err(default_failure(format!("File {file} was not found.")));
     }
-    let contents = std::fs::read_to_string(file)
-        .map_err(|error| default_failure(format!("File {file} is not a valid json file. {error}")))?;
+    let contents = std::fs::read_to_string(file).map_err(|error| {
+        default_failure(format!("File {file} is not a valid json file. {error}"))
+    })?;
     let info = match serde_json::from_str::<Value>(&contents) {
         Ok(Value::Object(info)) => info,
-        Ok(_) => return Err(default_failure(format!("File {file} is not a valid json file."))),
+        Ok(_) => {
+            return Err(default_failure(format!(
+                "File {file} is not a valid json file."
+            )));
+        }
         Err(error) => {
             return Err(default_failure(format!(
                 "('File {file} is not a valid json file.', JSONDecodeError('{error}'))"
             )));
         }
     };
-    let found = |source, project, kind| Found { source, project, kind };
+    let found = |source, project, kind| Found {
+        source,
+        project,
+        kind,
+    };
     match info.get("type").and_then(Value::as_str) {
         Some("authorized_user") => Ok(found(
             wrapped(builders::authorized_user(&info), "authorized user", file)?,
@@ -122,9 +143,11 @@ fn load_credentials_from_file(file: &str) -> Result<Found, GoogleLoginFailure> {
             None,
             Kind::Other,
         )),
-        Some(unsupported @ ("external_account_authorized_user" | "gdch_service_account")) => Err(default_failure(
-            format!("The file {file} holds {unsupported} credentials, which the Rust Vertex AI login does not support."),
-        )),
+        Some(unsupported @ ("external_account_authorized_user" | "gdch_service_account")) => {
+            Err(default_failure(format!(
+                "The file {file} holds {unsupported} credentials, which the Rust Vertex AI login does not support."
+            )))
+        }
         _ => Err(default_failure(format!(
             "The file {file} does not have a valid type. Type is {}, expected one of {VALID_TYPES}.",
             python_str(info.get("type"))
@@ -133,7 +156,9 @@ fn load_credentials_from_file(file: &str) -> Result<Found, GoogleLoginFailure> {
 }
 
 /// `_default._get_gcloud_sdk_credentials`.
-async fn gcloud_sdk_credentials(env: &dyn GoogleEnvironment) -> Result<Option<Found>, GoogleLoginFailure> {
+async fn gcloud_sdk_credentials(
+    env: &dyn GoogleEnvironment,
+) -> Result<Option<Found>, GoogleLoginFailure> {
     let Some(path) = gcloud_credentials_path(env).filter(|path| path.is_file()) else {
         return Ok(None);
     };
@@ -148,8 +173,12 @@ async fn gcloud_sdk_credentials(env: &dyn GoogleEnvironment) -> Result<Option<Fo
 }
 
 /// `_default._get_explicit_environ_credentials`.
-async fn explicit_environ_credentials(env: &dyn GoogleEnvironment) -> Result<Option<Found>, GoogleLoginFailure> {
-    let explicit_file = env.os_env("GOOGLE_APPLICATION_CREDENTIALS").unwrap_or_default();
+async fn explicit_environ_credentials(
+    env: &dyn GoogleEnvironment,
+) -> Result<Option<Found>, GoogleLoginFailure> {
+    let explicit_file = env
+        .os_env("GOOGLE_APPLICATION_CREDENTIALS")
+        .unwrap_or_default();
     if explicit_file.is_empty() {
         return Ok(None);
     }
@@ -173,7 +202,10 @@ async fn gce_credentials(env: &dyn GoogleEnvironment) -> Result<Option<Found>, G
 
 /// `external_account.Credentials.project_number`, else the workforce pool user project.
 fn project_number(info: &Map<String, Value>) -> Option<String> {
-    let audience = info.get("audience").and_then(Value::as_str).unwrap_or_default();
+    let audience = info
+        .get("audience")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
     let components: Vec<&str> = audience.split('/').collect();
     components
         .iter()
@@ -198,7 +230,10 @@ async fn external_account_project(
     let Some(number) = project_number(info) else {
         return Ok(None);
     };
-    let token = source.token().await.map_err(|error| token_failure(&error))?;
+    let token = source
+        .token()
+        .await
+        .map_err(|error| token_failure(&error))?;
     let universe_domain = info
         .get("universe_domain")
         .and_then(Value::as_str)
@@ -207,7 +242,10 @@ async fn external_account_project(
         "{}{number}",
         CLOUD_RESOURCE_MANAGER.replace("{universe_domain}", universe_domain)
     );
-    Ok(env.resource_manager_project(url, token).await?.map(Value::String))
+    Ok(env
+        .resource_manager_project(url, token)
+        .await?
+        .map(Value::String))
 }
 
 /// google-auth's `default()`: `GOOGLE_APPLICATION_CREDENTIALS`, the gcloud credentials file, then
@@ -234,7 +272,9 @@ pub(crate) async fn default_credentials(
         false => found.project,
     };
     let project = match (&found.kind, is_truthy(project.as_ref())) {
-        (Kind::ExternalAccount { info }, false) => external_account_project(env, &found.source, info).await?,
+        (Kind::ExternalAccount { info }, false) => {
+            external_account_project(env, &found.source, info).await?
+        }
         _ => project,
     };
     Ok(DefaultCredentials {
