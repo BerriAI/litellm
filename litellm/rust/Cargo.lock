@@ -4604,6 +4604,7 @@ dependencies = [
  "litellm-auth",
  "litellm-auth-aws",
  "litellm-auth-azure",
+ "litellm-auth-gcp",
  "litellm-cache",
  "litellm-cache-response",
  "litellm-callbacks",

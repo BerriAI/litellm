@@ -107,10 +107,12 @@ from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import (
     _merge_messages_header_sources as _merged_headers,  # pyright: ignore[reportPrivateUsage]  # the handler's own header merge
 )
+from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.responses.mcp.tool_precheck import may_name_litellm_mcp_gateway
 from litellm.rust_bridge import detectors, execution, failures
 from litellm.rust_bridge.execution import AsyncStream
 from litellm.rust_bridge.host import cache, callbacks_legacy_python, http_transport
+from litellm.rust_bridge.host.routes import vertex_failures
 from litellm.rust_bridge.messages.entrypoints import MessagesStreamHead
 from litellm.rust_bridge.public_call import NativeCall, known_params, optional_sequence, optional_str
 from litellm.secret_managers.main import get_secret_str
@@ -887,11 +889,18 @@ def _bedrock_credential_failure(error: Exception, request: Mapping[str, object])
     return None
 
 
+def _vertex_credential_failure(error: Exception, request: Mapping[str, object]) -> Exception | None:
+    return vertex_failures.credential_failure(
+        getattr(error, "messages_gcp_credential_failure", None),
+        VertexBase.safe_get_vertex_ai_credentials(dict(_python_handler_params(request, "vertex_ai"))) is not None,
+    )
+
+
 def _sent_base(request: Mapping[str, object], request_provider: str, secrets_read: _SecretsRead) -> str | None:
     """The base the call was sent to: azure_ai's falls back to the `AZURE_API_BASE` the host read
     to send it, anthropic's to its default and bedrock's to the URL its config builds."""
     api_base: Final = request.get("api_base")
-    if isinstance(api_base, str) and (api_base or request_provider != "azure_ai"):
+    if isinstance(api_base, str) and (api_base or request_provider not in ("azure_ai", "vertex_ai")):
         return api_base
     if request_provider == "anthropic":
         return anthropic_pass_through_api_base()
@@ -899,6 +908,11 @@ def _sent_base(request: Mapping[str, object], request_provider: str, secrets_rea
         return dict(secrets_read).get("AZURE_API_BASE")
     if request_provider == "bedrock":
         return _bedrock_url(request)
+    if request_provider == "vertex_ai":
+        return vertex_failures.default_base(
+            str(request["model"]).removeprefix("vertex_ai/"),
+            VertexBase.safe_get_vertex_ai_location(dict(_python_handler_params(request, request_provider))),
+        )
     return None
 
 
@@ -1208,6 +1222,11 @@ def map_failure(
     if credential_failure is not None:
         _log_resolved_call(request, request_provider)
         return map_token_failure(credential_failure, request, request_provider, asynchronous)
+    vertex_credential_failure: Final = (
+        _vertex_credential_failure(error, request) if request_provider == "vertex_ai" else None
+    )
+    if vertex_credential_failure is not None:
+        return map_token_failure(_raised(vertex_credential_failure), request, request_provider, asynchronous)
     provider_error: Final = _provider_error(error, request, request_provider, secrets_read or [])
     if provider_error is None:
         return failures.map_native_failure(
