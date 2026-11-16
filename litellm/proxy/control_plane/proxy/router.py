@@ -9,8 +9,9 @@ from fastapi.security import SecurityScopes
 from pydantic import TypeAdapter, ValidationError
 
 from litellm.proxy.control_plane.audit.dependencies import get_audit_log
-from litellm.proxy.control_plane.audit.log import AuditLog, redact_path
-from litellm.proxy.control_plane.auth.dependencies import get_principal, require_scopes
+from litellm.proxy.control_plane.audit.event import redact_path
+from litellm.proxy.control_plane.audit.log import AuditLog, Reservation
+from litellm.proxy.control_plane.auth.dependencies import get_principal
 from litellm.proxy.control_plane.auth.rbac import Principal, Scope
 from litellm.proxy.control_plane.common.exceptions import ControlPlaneException, bad_gateway, error_body, forbidden
 from litellm.proxy.control_plane.dataplanes.client import (
@@ -28,8 +29,9 @@ from litellm.proxy.control_plane.dataplanes.dependencies import (
     get_registry,
 )
 from litellm.proxy.control_plane.dataplanes.registry import Dataplane, DataplaneRegistry
-from litellm.proxy.control_plane.proxy.allowlist import Denied, decide
+from litellm.proxy.control_plane.proxy.allowlist import Allowed, Denied, decide
 
+AUDIT_UNAVAILABLE: Final = "audit-unavailable"
 DATAPLANE_HEADER: Final = "X-LiteLLM-Dataplane"
 READ_METHODS: Final = ("GET", "HEAD")
 WRITE_METHODS: Final = ("POST", "PUT", "PATCH", "DELETE")
@@ -40,12 +42,17 @@ _BODY: Final = TypeAdapter(Mapping[str, object])
 _METHOD: Final[TypeAdapter[Method]] = TypeAdapter(Method)
 
 
+def audit_unavailable() -> ControlPlaneException:
+    return ControlPlaneException(
+        error_body(AUDIT_UNAVAILABLE, "Audit Unavailable", 503, "No audit sink can record this write right now.")
+    )
+
+
 def bad_request(detail: str) -> ControlPlaneException:
     return ControlPlaneException(error_body("bad-request", "Bad Request", 400, detail))
 
 
-async def _json_body(request: Request) -> Mapping[str, object] | None:
-    raw: Final = await request.body()
+def _json_body(raw: bytes) -> Mapping[str, object] | None:
     if not raw:
         return None
     try:
@@ -67,16 +74,47 @@ async def _forward(
     decision: Final = decide(path)
     if isinstance(decision, Denied):
         audit.record(
-            principal.subject, principal.email, dataplane.id, method, decision.path, "denied", detail=decision.reason
+            principal.subject,
+            principal.email,
+            dataplane.id,
+            method,
+            decision.path,
+            "denied",
+            detail=decision.reason,
         )
         raise ControlPlaneException(forbidden(f"{redact_path(decision.path)}: {decision.reason}."))
+    raw: Final = await request.body()
+    reservation: Final = audit.reserve() if method in WRITE_METHODS else None
+    if method in WRITE_METHODS and reservation is None:
+        raise audit_unavailable()
+    try:
+        return await _forward_reserved(
+            request, raw, decision, method, principal, dataplane, caller, client, audit, reservation
+        )
+    finally:
+        if reservation is not None:
+            reservation.release()
+
+
+async def _forward_reserved(
+    request: Request,
+    raw: bytes,
+    decision: Allowed,
+    method: Method,
+    principal: Principal,
+    dataplane: Dataplane,
+    caller: Caller,
+    client: DataplaneClient,
+    audit: AuditLog,
+    reservation: Reservation | None,
+) -> Response:
     result: Final = await client.request(
         method,
         dataplane,
         decision.path,
         caller,
         params=tuple(request.query_params.multi_items()),
-        json=await _body_or_audit(request, principal, dataplane, method, decision.path, audit),
+        json=_body_or_audit(raw, principal, dataplane, method, decision.path, audit, reservation),
     )
     match result:
         case DataplaneReply(status=status, credential=credential) if 300 <= status < 400:
@@ -90,6 +128,7 @@ async def _forward(
                 status,
                 credential,
                 detail="dataplane answered with a redirect, which the control plane never follows",
+                reservation=reservation,
             )
             raise ControlPlaneException(bad_gateway("Dataplane answered with a redirect, which is not followed."))
         case DataplaneReply(
@@ -102,7 +141,15 @@ async def _forward(
             cache_control=cache_control,
         ):
             audit.record(
-                principal.subject, principal.email, dataplane.id, method, decision.path, "allowed", status, credential
+                principal.subject,
+                principal.email,
+                dataplane.id,
+                method,
+                decision.path,
+                "allowed",
+                status,
+                credential,
+                reservation=reservation,
             )
             if raw_content is not None:
                 headers: Final = {
@@ -131,6 +178,7 @@ async def _forward(
                 "unreachable",
                 502,
                 detail="dataplane response exceeded the configured byte limit",
+                reservation=reservation,
             )
             raise ControlPlaneException(
                 error_body(
@@ -142,26 +190,41 @@ async def _forward(
             )
         case DataplaneUnreachable(detail=detail, attempts=attempts):
             audit.record(
-                principal.subject, principal.email, dataplane.id, method, decision.path, "unreachable", detail=detail
+                principal.subject,
+                principal.email,
+                dataplane.id,
+                method,
+                decision.path,
+                "unreachable",
+                detail=detail,
+                reservation=reservation,
             )
             raise ControlPlaneException(bad_gateway(f"Dataplane unreachable after {attempts} attempt(s): {detail}"))
         case CredentialUnavailable(reason=reason):
             audit.record(
-                principal.subject, principal.email, dataplane.id, method, decision.path, "unreachable", detail=reason
+                principal.subject,
+                principal.email,
+                dataplane.id,
+                method,
+                decision.path,
+                "unreachable",
+                detail=reason,
+                reservation=reservation,
             )
             raise ControlPlaneException(bad_gateway(f"No usable credential for this dataplane: {reason}"))
 
 
-async def _body_or_audit(
-    request: Request,
+def _body_or_audit(
+    raw: bytes,
     principal: Principal,
     dataplane: Dataplane,
     method: Method,
     path: str,
     audit: AuditLog,
+    reservation: Reservation | None,
 ) -> Mapping[str, object] | None:
     try:
-        return await _json_body(request)
+        return _json_body(raw)
     except ControlPlaneException as error:
         audit.record(
             principal.subject,
@@ -172,6 +235,7 @@ async def _body_or_audit(
             "denied",
             error.body.status,
             detail=error.body.detail,
+            reservation=reservation,
         )
         raise
 
@@ -209,9 +273,10 @@ async def _passthrough_scope(
     principal: Annotated[Principal, Depends(get_principal)],
     audit: Annotated[AuditLog, Depends(get_audit_log)],
 ) -> Principal:
-    try:
-        return await require_scopes(security_scopes, principal)
-    except ControlPlaneException as error:
+    required: Final = frozenset(Scope(scope) for scope in security_scopes.scopes)
+    missing: Final = principal.missing_scopes(required)
+    if missing:
+        detail: Final = f"missing scope: {', '.join(sorted(scope.value for scope in missing))}"
         audit.record(
             principal.subject,
             principal.email,
@@ -219,10 +284,11 @@ async def _passthrough_scope(
             request.method,
             "/" + path.lstrip("/"),
             "denied",
-            error.body.status,
-            detail=error.body.detail,
+            403,
+            detail=detail,
         )
-        raise
+        raise ControlPlaneException(forbidden(f"Missing scope: {', '.join(sorted(scope.value for scope in missing))}."))
+    return principal
 
 
 @router.api_route("/dataplanes/{dataplane_id}/proxy/{path:path}", methods=list(READ_METHODS))

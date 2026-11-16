@@ -1,3 +1,4 @@
+import os
 from dataclasses import dataclass, field
 from typing import Final, cast
 
@@ -6,10 +7,46 @@ import pytest
 from pydantic import TypeAdapter
 
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-from litellm.proxy.control_plane.container import HandlerTransport, _shared_http_handler
+from litellm.proxy.control_plane.container import HandlerTransport, _shared_http_handler, build_audit_pipeline
 from litellm.proxy.control_plane.settings import ControlPlaneSettings
 
 _JSON_COUNT: Final = TypeAdapter(dict[str, int])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("strict", [False, True])
+@pytest.mark.parametrize(
+    ("exporter", "endpoint", "remote"),
+    [
+        (None, None, False),
+        ("console", None, False),
+        ("in_memory", None, False),
+        ("unknown", None, False),
+        ("otlp_http", None, True),
+        ("otlp_grpc", None, True),
+        (None, "http://collector.test:4318", True),
+    ],
+)
+async def test_otlp_auditing_refuses_local_exporter_fallbacks(
+    monkeypatch: pytest.MonkeyPatch, strict: bool, exporter: str | None, endpoint: str | None, remote: bool
+) -> None:
+    for name in tuple(os.environ):
+        if name.startswith("OTEL_"):
+            monkeypatch.delenv(name)
+    if exporter is not None:
+        monkeypatch.setenv("OTEL_EXPORTER", exporter)
+    if endpoint is not None:
+        monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", endpoint)
+    settings: Final = ControlPlaneSettings.model_validate(
+        {"LITELLM_MASTER_KEY": "01234567890123456789012345678901", "audit_sinks": ("otlp",), "audit_strict": strict}
+    )
+    if not remote:
+        with pytest.raises(TypeError, match="requires an OTLP HTTP or gRPC log exporter"):
+            build_audit_pipeline(settings)
+        return
+    pipeline: Final = build_audit_pipeline(settings)
+    assert tuple(worker.sink.name for worker in pipeline.workers) == ("otlp",)
+    await pipeline.close()
 
 
 def test_shared_http_handler_does_not_follow_redirects() -> None:
