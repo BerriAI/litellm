@@ -4,23 +4,7 @@ on:
   merge_group:
     types: [checks_requested]
   push:
-    paths:
-      - "litellm/rust/crates/db/**"
-      - "litellm/rust/Cargo.toml"
-      - "litellm/rust/Cargo.lock"
-      - "litellm/rust/clippy.toml"
-      - "litellm/proxy-extras/litellm_proxy_extras/migrations/**"
-      - "**/schema.prisma"
-      - "litellm/rust/.cargo/**"
-      - "litellm/rust/rust-toolchain.toml"
-      - "pyproject.toml"
-      - "uv.lock"
-      - ".github/actions/setup-uv-with-retries/**"
-      - ".github/workflows/test-rust-db.yml"
-  pull_request:
-    branches:
-      - main
-      - "litellm_**"
+    branches: [main]
     paths:
       - "litellm/rust/crates/db/**"
       - "litellm/rust/Cargo.toml"

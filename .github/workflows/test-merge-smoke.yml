@@ -18,6 +18,7 @@ concurrency:
 
 jobs:
   dashboard-build:
+    if: github.event_name != 'pull_request'
     name: dashboard-build
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -31,6 +32,7 @@ jobs:
         run: docker build --target ui-builder -f litellm/deploy/docker/Dockerfile .
 
   core-checks:
+    if: github.event_name != 'pull_request'
     name: py${{ matrix.python-version }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -125,6 +127,7 @@ jobs:
         run: uv cache prune --ci
 
   all-extras:
+    if: github.event_name != 'pull_request'
     name: all-extras-py${{ matrix.python-version }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -356,7 +359,7 @@ jobs:
 
   smoke-passed:
     name: smoke passed
-    needs: [dashboard-build, core-checks, all-extras]
+    needs: [dashboard-build, core-checks, all-extras, windows-sdk, proxy-build-from-pip]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 2
@@ -367,4 +370,4 @@ jobs:
           NEEDS: ${{ toJSON(needs) }}
         run: |
           jq -r 'to_entries[] | "\(.key): \(.value.result)"' <<< "$NEEDS"
-          jq -e 'all(.[]; .result == "success")' <<< "$NEEDS" > /dev/null
+          jq -e 'all(.[]; .result == "success" or .result == "skipped")' <<< "$NEEDS" > /dev/null

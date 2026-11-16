@@ -4,6 +4,7 @@ on:
   merge_group:
     types: [checks_requested]
   push:
+    branches: [main]
     paths:
       - "litellm/rust/**"
       - "model_prices_and_context_window.json"
@@ -152,7 +153,15 @@ jobs:
         working-directory: .
         run: uv run litellm/scripts/generate_trace_types.py --check
 
-      - run: cargo nextest run --workspace --locked
+      - name: Run Rust tests
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          if [ "$EVENT_NAME" = pull_request ]; then
+            cargo nextest run --workspace --locked -E 'not (rdeps(litellm-redis-testing) | rdeps(litellm-db-testing) | rdeps(testcontainers-modules))'
+          else
+            cargo nextest run --workspace --locked
+          fi
 
       - run: cargo test --workspace --doc --locked
 
@@ -171,6 +180,7 @@ jobs:
           done
 
   rust-wheel:
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
