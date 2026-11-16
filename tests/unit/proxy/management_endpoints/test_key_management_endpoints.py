@@ -17,7 +17,7 @@ from pydantic import JsonValue, ValidationError
 
 import litellm
 from litellm.caching.in_memory_cache import InMemoryCache
-from litellm.constants import PROXY_DB_LOOKUP_STALL_WINDOW_SECONDS
+from litellm.constants import KEY_EXPIRY_ALERT_MAX_DAYS, PROXY_DB_LOOKUP_STALL_WINDOW_SECONDS
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
 from litellm.models.project import LiteLLM_ProjectTable
@@ -60,6 +60,7 @@ from litellm.proxy.common_utils.user_api_key_cache import (
 from litellm.proxy.db.db_lookup_gate import db_lookup_stall_tracker
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     KeyProjectBindingError,
+    _can_user_query_key_info,
     _check_key_project_team,
     _check_key_project_team_on_mutation,
     _check_org_key_limits,
@@ -95,6 +96,7 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
     generate_key_fn,
     generate_key_helper_fn,
     generate_service_account_key_fn,
+    info_key_fn,
     key_aliases,
     key_generation_check,
     list_key_helper,
@@ -102,6 +104,8 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
     persist_deleted_verification_tokens,
     prepare_key_update_data,
     prepare_metadata_fields,
+    raise_on_invalid_key_expiry_alert_days,
+    raise_on_invalid_key_logging_config,
     raise_on_logging_credential_change,
     reset_key_spend_fn,
     update_key_fn,
@@ -118,6 +122,33 @@ from litellm.types.utils import CredentialItem
 from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
 
 client = TestClient(app)
+
+
+@pytest.mark.asyncio
+async def test_impersonated_caller_cannot_use_the_service_key_for_key_info() -> None:
+    auth: Final = UserAPIKeyAuth(api_key="service-key", user_id="subject").model_copy(
+        update={"impersonated_by": "service-user"}
+    )
+    key_info: Final = LiteLLM_VerificationToken(token="service-key", user_id="service-user")
+
+    assert (
+        await _can_user_query_key_info(
+            user_api_key_dict=auth,
+            key=auth.api_key,
+            key_info=key_info,
+        )
+        is False
+    )
+
+
+@pytest.mark.asyncio
+async def test_impersonated_key_info_requires_an_explicit_key() -> None:
+    auth: Final = UserAPIKeyAuth(user_id="subject").model_copy(update={"impersonated_by": "service-user"})
+
+    with pytest.raises(ProxyException) as error:
+        await info_key_fn(key=None, user_api_key_dict=auth)
+
+    assert error.value.code == "400"
 
 
 @pytest.mark.asyncio
@@ -24624,6 +24655,40 @@ def test_user_new_without_a_key_does_not_check_guardrail_names(spend_permission_
 
     assert response.status_code == 200, response.text
     find_many.assert_not_awaited()
+
+
+@pytest.mark.parametrize("value", [1, 7, KEY_EXPIRY_ALERT_MAX_DAYS])
+def test_key_expiry_metadata_accepts_day_counts(value: int) -> None:
+    assert raise_on_invalid_key_expiry_alert_days({"key_expiry_alert_days": value}) is None
+    assert raise_on_invalid_key_expiry_alert_days({}) is None
+
+
+@pytest.mark.parametrize("value", [None, "7", True, 7.0, {}, [], [7], [7, 1], 0, -1, KEY_EXPIRY_ALERT_MAX_DAYS + 1])
+def test_key_expiry_metadata_rejects_invalid_thresholds(value: object) -> None:
+    with pytest.raises(HTTPException) as exc:
+        raise_on_invalid_key_expiry_alert_days({"key_expiry_alert_days": value})
+    assert exc.value.status_code == 400
+    assert "key_expiry_alert_days" in str(exc.value.detail)
+
+
+def test_key_generate_accepts_expiry_alert_opt_in(spend_permission_client: TestClient) -> None:
+    response: Final = spend_permission_client.post("/key/generate", json={"metadata": {"key_expiry_alert_days": 7}})
+    assert response.status_code == 200, response.text
+    assert response.json()["metadata"]["key_expiry_alert_days"] == 7
+
+
+@pytest.mark.parametrize("route", ["/key/generate", "/key/update"])
+def test_key_writes_reject_invalid_expiry_alert_days(spend_permission_client: TestClient, route: str) -> None:
+    from litellm.proxy import proxy_server
+
+    proxy_server.prisma_client.db.litellm_verificationtoken.find_unique.return_value = LiteLLM_VerificationToken(
+        token=hash_token("sk-test"), metadata={}
+    )
+    response: Final = spend_permission_client.post(
+        route, json={"key": "sk-test", "metadata": {"key_expiry_alert_days": [7, 1]}}
+    )
+    assert response.status_code == 400, response.text
+    assert "key_expiry_alert_days" in response.text
 
 
 @pytest.mark.asyncio

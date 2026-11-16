@@ -85,7 +85,7 @@ fn duration(value: f64) -> PyResult<Duration> {
     })
 }
 
-fn ttl(value: Option<f64>) -> PyResult<Option<Duration>> {
+pub(crate) fn ttl(value: Option<f64>) -> PyResult<Option<Duration>> {
     value.map(duration).transpose()
 }
 

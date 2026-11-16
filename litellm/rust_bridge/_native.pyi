@@ -1,15 +1,20 @@
 from asyncio import Future
 from collections.abc import Callable, Mapping, Sequence
-from typing import Generic, Literal, Never, NotRequired, Protocol, TypedDict, TypeVar, final
+from typing import ClassVar, Generic, Literal, Never, NotRequired, Protocol, TypedDict, TypeVar, final
 
 import httpx
 from pydantic import JsonValue
 from typing_extensions import disjoint_base
 
+from litellm.integrations.custom_logger_v2.rust import RustHandle
+from litellm.proxy._types import LiteLLM_JWTAuth
 from litellm.redis.store_settings import RedisBreakerSettings, RedisStoreSettings
 from litellm.redis.stores.router_session_pins.keys import PinKey
+from litellm.rust_bridge.database import NativeDatabaseEndpoint, NativeDatabaseEvents
 from litellm.rust_bridge.execution import Execution
 from litellm.rust_bridge.public_call import NativeCall
+from litellm.types.integrations.custom_logger_v2 import BudgetPlan, BudgetReservation
+from litellm.types.proxy.native_budgets import BudgetCheck
 
 _T_co = TypeVar("_T_co", covariant=True)
 
@@ -19,10 +24,16 @@ class ForkedAfterNativeRuntimeStarted(RuntimeError): ...
 class ProcessReservedForForking(RuntimeError): ...
 class NativeRedisStoreError(Exception): ...
 
+class NativeDatabaseFailure(Exception):
+    kind: str
+    unavailable: bool
+    requeue_safe: bool
+
 def trace_encode_error(message: str) -> bytes: ...
 def bundled_model_cost_map() -> bytes: ...
 def native_redis_breaker_states() -> list[str]: ...
 def unsupported_tls_settings(ssl_security_level: str | None = None, ssl_ecdh_curve: str | None = None) -> list[str]: ...
+
 @final
 class NativeCostMapSource:
     def __new__(cls, url: str, *, use_http_settings: bool) -> NativeCostMapSource: ...
@@ -118,6 +129,35 @@ class NativeModelCostMap:
 
 @final
 class NativeModelCostMapState: ...
+
+class _S3LogHost(Protocol):
+    def callback_failed(self) -> None: ...
+    def web_identity_token(self, reference: str) -> str: ...
+
+@final
+class NativeS3Log:
+    def __new__(
+        cls,
+        params: dict[str, object],
+        constants: Mapping[str, object],
+        host: _S3LogHost,
+        cold_storage_is_s3_v2: bool,
+        region_from_environment: str | None,
+    ) -> NativeS3Log: ...
+    @property
+    def s3_path(self) -> str | None: ...
+    @property
+    def s3_bucket_name(self) -> str | None: ...
+    @property
+    def strip_base64_files(self) -> bool: ...
+    def callback(self) -> RustHandle: ...
+    def stashed(self) -> int: ...
+    def partition_granularity(self) -> Literal["day", "hour"]: ...
+    def queued_keys(self) -> list[str]: ...
+    def submit_audit(self, audit_log: dict[str, object], id: str) -> Future[tuple[int, int, int] | None]: ...
+    def upload_line_items(self, key: str, body: str, download_name: str) -> Future[bool]: ...
+    def download(self, key: str) -> Future[str | None]: ...
+    def flush(self) -> Future[tuple[int, int, int] | None]: ...
 
 @final
 class NativeClickHouseSpendConfig:
@@ -484,6 +524,80 @@ class LocalSizes:
     @property
     def key_objects(self) -> int: ...
 
+def auth_route_matches_wildcard(route: str, pattern: str) -> bool: ...
+def auth_managed_route(route: str) -> Literal["discovery", "realtime", "live", "model", "tool", "other"]: ...
+def auth_managed_agent_route_allowed(route: str, method: str | None = None) -> bool: ...
+def auth_route_matches_prefix(route: str, allowed_route: str) -> bool: ...
+def auth_route_matches_denied(route: str, denied_route: str) -> bool: ...
+def auth_first_denied_route(forwarded_routes: Sequence[str], denied_sources: Sequence[object]) -> str | None: ...
+def auth_jwt_team_routes_grant(route: str, team_allowed_routes: object) -> bool: ...
+def auth_allowed_routes_grant(route: str, *, key: object, team: object) -> bool: ...
+
+class _AuthRequest(Protocol):
+    @property
+    def route(self) -> str: ...
+    @property
+    def token(self) -> str | None: ...
+    @property
+    def is_llm_api_route(self) -> bool: ...
+    @property
+    def is_info_route(self) -> bool: ...
+    @property
+    def pass_through_open(self) -> bool: ...
+    @property
+    def from_custom_auth(self) -> bool: ...
+
+class _HostFacts(Protocol):
+    @property
+    def premium(self) -> bool: ...
+    @property
+    def metrics_require_auth(self) -> bool: ...
+
+@final
+class RustAuthSettings:
+    def __new__(
+        cls, general_settings: Mapping[str, object], litellm_jwtauth: LiteLLM_JWTAuth | None, facts: _HostFacts
+    ) -> RustAuthSettings: ...
+
+@final
+class RustPlan:
+    __hash__: ClassVar[None]  # type: ignore[assignment]  # pyright: ignore[reportIncompatibleMethodOverride]  # PyO3 `eq` without `hash` sets it to None
+    Public: ClassVar[RustPlan]
+    OAuth2Introspection: ClassVar[RustPlan]
+    OAuth2Proxy: ClassVar[RustPlan]
+    JwtWithOperatorCode: ClassVar[RustPlan]
+    Jwt: ClassVar[RustPlan]
+    PassThroughOpen: ClassVar[RustPlan]
+    Key: ClassVar[RustPlan]
+
+@disjoint_base
+class RustDenial:
+    @final
+    class Proxy(RustDenial):
+        __match_args__: tuple[Literal["status"], Literal["message"], Literal["error_type"], Literal["param"]] = (
+            "status",
+            "message",
+            "error_type",
+            "param",
+        )
+        def __new__(cls, status: int, message: str, error_type: str, param: str | None) -> RustDenial.Proxy: ...
+        @property
+        def status(self) -> int: ...
+        @property
+        def message(self) -> str: ...
+        @property
+        def error_type(self) -> str: ...
+        @property
+        def param(self) -> str | None: ...
+
+@final
+class RustAuth:
+    @staticmethod
+    def plan(request: _AuthRequest, settings: RustAuthSettings) -> RustPlan | RustDenial: ...
+    @staticmethod
+    def is_public_route(route: str, settings: RustAuthSettings) -> bool: ...
+    @staticmethod
+    def oauth2_introspection_applies(request: _AuthRequest, settings: RustAuthSettings) -> bool: ...
 @final
 class NativeAuthCache:
     def __new__(
@@ -534,6 +648,24 @@ class PostCallSettlement:
     def settled(self) -> bool: ...
 
 @final
+class NativeBudgets:
+    def __new__(cls, spend_counters: NativeSpendCounters) -> NativeBudgets: ...
+    def reserve(
+        self, plan: BudgetPlan, observed: tuple[Mapping[str, object], ...], ttl_seconds: float | None = None
+    ) -> Future[JsonValue]: ...
+    def settle(
+        self,
+        reservation: BudgetReservation,
+        window_resets: tuple[str | None, ...],
+        observed: tuple[float | None, ...],
+        actual: float,
+        apply_consistent: bool,
+        ttl_seconds: float | None = None,
+    ) -> Future[JsonValue]: ...
+
+def budget_check_decision(check: BudgetCheck) -> JsonValue: ...
+
+@final
 class NativeSpendCounters:
     def __new__(cls, client: NativeRedisClient | None) -> NativeSpendCounters: ...
     def attach(self, client: NativeRedisClient) -> bool: ...
@@ -576,8 +708,18 @@ class NativeSpendCounters:
 @final
 class NativeDatabase:
     @staticmethod
-    def connect() -> Future[NativeDatabase]: ...
+    def connect(
+        events: NativeDatabaseEvents, writer: NativeDatabaseEndpoint, reader: NativeDatabaseEndpoint | None = None
+    ) -> Future[NativeDatabase]: ...
+    def set_writer_password(self, password: str) -> None: ...
+    def set_reader_password(self, password: str) -> None: ...
+    def health_check(self) -> Future[None]: ...
     def close(self) -> Future[None]: ...
+
+@final
+class NativeTokenRedactor:
+    def __new__(cls, minimum_custom_key_length: int, word_ranges: Sequence[tuple[int, int]]) -> NativeTokenRedactor: ...
+    def redact(self, text: str, replacement: str) -> str | None: ...
 
 @final
 class NativeDiagnosticProcessor:
@@ -759,6 +901,7 @@ def reserve_process_for_forking() -> None: ...
 __all__ = [
     "AtomicApplied",
     "AtomicOverLimit",
+    "AttemptShape",
     "ForkedAfterNativeRuntimeStarted",
     "GaugeOverLimit",
     "GaugesAcquired",
@@ -767,10 +910,12 @@ __all__ = [
     "LocalSizes",
     "NativeAdmission",
     "NativeAuthCache",
+    "NativeBudgets",
     "NativeClickHouseSpendConfig",
     "NativeClickHouseSpendStorage",
     "NativeCostMapSource",
     "NativeDatabase",
+    "NativeDatabaseFailure",
     "NativeDeploymentHealth",
     "NativeDiagnosticProcessor",
     "NativeFetchFailed",
@@ -791,17 +936,23 @@ __all__ = [
     "NativeRouterCooldowns",
     "NativeRouterSessionPins",
     "NativeRouterUsage",
+    "NativeS3Log",
     "NativeSend",
     "NativeSensitiveRoutePins",
     "NativeSpendCounters",
     "NativeTableSwapped",
+    "NativeTokenRedactor",
     "NativeUsageRead",
     "PostCallSettlement",
     "ProcessReservedForForking",
     "ResponsesWebSocketConnection",
     "RouterCall",
     "RouterCoreHandle",
+    "RustAuth",
+    "RustAuthSettings",
     "RustBridgeDeclined",
+    "RustDenial",
+    "RustPlan",
     "RustUpstreamError",
     "SpendRead",
     "TokenCounter",
@@ -813,6 +964,15 @@ __all__ = [
     "aocr",
     "aresponses",
     "atranscription",
+    "auth_allowed_routes_grant",
+    "auth_first_denied_route",
+    "auth_jwt_team_routes_grant",
+    "auth_managed_agent_route_allowed",
+    "auth_managed_route",
+    "auth_route_matches_denied",
+    "auth_route_matches_prefix",
+    "auth_route_matches_wildcard",
+    "budget_check_decision",
     "bundled_model_cost_map",
     "completion",
     "embedding",
@@ -913,6 +1073,16 @@ class _Event(TypedDict):
 class _Step(TypedDict):
     events: list[_Event]
 
+# router-core's decisions for the fallback-hop parts of an attempt's kwargs.
+@final
+class AttemptShape:
+    @property
+    def fallback_model_group(self) -> str | None: ...
+    @property
+    def is_fallback(self) -> bool: ...
+    @property
+    def drops_mock_timeout(self) -> bool: ...
+
 class _AttemptStep(_Step):
     kind: Literal["attempt"]
     deployment_id: str
@@ -933,6 +1103,7 @@ class _AttemptStep(_Step):
     scope: int
     max_retries: int
     model_group_size: int
+    shape: AttemptShape
 
 class _SleepStep(_Step):
     kind: Literal["sleep"]

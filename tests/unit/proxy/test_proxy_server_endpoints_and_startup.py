@@ -62,6 +62,7 @@ from litellm.rust_bridge._native import NativeRedisStoreError
 from tests._master_key import MASTER_KEY
 from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
 from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
+from tests.unit.proxy.spend_tracking.native_budgets_replica import native_reservation
 
 PUBLICLY_KNOWN_KEY: Final = "sk-" + "1234"
 
@@ -1702,6 +1703,7 @@ async def test_aaaproxy_startup_master_key(mock_prisma, monkeypatch, tmp_path):
 
     # Mock the Prisma import
     monkeypatch.setattr("litellm.proxy.proxy_server.PrismaClient", MockPrisma)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://nobody:nothing@127.0.0.1:1/unreachable")
 
     # Create test app
     app = FastAPI()
@@ -1932,6 +1934,7 @@ async def test_proxy_startup_stops_when_the_requested_migration_fails(monkeypatc
     _boot_with_general_settings(monkeypatch, tmp_path, {"master_key": "sk-a-safe-master-key"})
     prisma: Final = _PrismaClientWhoseDatabaseRejectsQueries()
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://nobody:nothing@127.0.0.1:1/unreachable")
     monkeypatch.setenv("LITELLM_MIGRATE_FROM_MASTER_KEY", PUBLICLY_KNOWN_KEY)
 
     with (
@@ -1955,12 +1958,14 @@ async def test_proxy_startup_after_a_failed_migration_does_not_reuse_the_closed_
 
     _boot_with_general_settings(monkeypatch, tmp_path, {"master_key": "sk-a-safe-master-key"})
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", _PrismaClientWhoseDatabaseRejectsQueries())
+    monkeypatch.setenv("DATABASE_URL", "postgresql://nobody:nothing@127.0.0.1:1/unreachable")
     monkeypatch.setenv("LITELLM_MIGRATE_FROM_MASTER_KEY", PUBLICLY_KNOWN_KEY)
     with pytest.raises(RuntimeError, match="permission denied"):
         async with proxy_startup_event(FastAPI()):
             pass
 
     monkeypatch.setenv("LITELLM_MIGRATE_FROM_MASTER_KEY", "")
+    monkeypatch.delenv("DATABASE_URL")
     async with proxy_startup_event(FastAPI()) as state:
         assert state["database"] is None
 
@@ -2023,6 +2028,7 @@ async def test_proxy_shutdown_stops_database_background_tasks(monkeypatch, tmp_p
         yaml.dump({"general_settings": {"master_key": MASTER_KEY}}, f)
     monkeypatch.setenv("CONFIG_FILE_PATH", str(config_path))
     monkeypatch.setattr(proxy_server_module, "prisma_client", fake_prisma)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://nobody:nothing@127.0.0.1:1/unreachable")
     monkeypatch.setattr(proxy_server_module, "store_model_in_db", False)
 
     async with proxy_startup_event(FastAPI()):
@@ -9433,25 +9439,19 @@ async def test_window_spend_counter_does_not_seed_zero_when_db_unavailable():
 
 
 @pytest.mark.asyncio
-async def test_increment_spend_counters_finalizes_after_unreserved_increments(monkeypatch):
+async def test_increment_spend_counters_finalizes_after_unreserved_increments(monkeypatch, native_budgets_on):
     import litellm.proxy.proxy_server as ps
     from litellm.caching.dual_cache import DualCache
 
     counter_cache = SpendCounterStore(connect(None).spend_counters())
-    counter_cache.set_local("spend:key:key-finalize-after-increments", 0.5)
-    budget_reservation = {
-        "reserved_cost": 0.5,
-        "entries": [
-            {
-                "counter_key": "spend:key:key-finalize-after-increments",
-                "entity_type": "Key",
-                "entity_id": "key-finalize-after-increments",
-                "reserved_cost": 0.5,
-                "applied_adjustment": 0.0,
-            }
-        ],
-        "finalized": False,
-    }
+    counter_cache.set_local("spend:key:key-finalize-after-increments", 0.0)
+    budget_reservation = await native_reservation(
+        counter_cache,
+        UserAPIKeyAuth(token="key-finalize-after-increments"),
+        [{"counter_key": "spend:key:key-finalize-after-increments", "entity_type": "Key", "entity_id": "key-finalize-after-increments"}],
+        0.5,
+    )
+    assert counter_cache.get_local("spend:key:key-finalize-after-increments") == pytest.approx(0.5)
     incremented_counters = []
 
     async def assert_reservation_not_finalized_yet(**kwargs):
@@ -9479,24 +9479,18 @@ async def test_increment_spend_counters_finalizes_after_unreserved_increments(mo
 
 
 @pytest.mark.asyncio
-async def test_increment_spend_counters_finalizes_none_cost_reservation(monkeypatch):
+async def test_increment_spend_counters_finalizes_none_cost_reservation(monkeypatch, native_budgets_on):
     import litellm.proxy.proxy_server as ps
 
     counter_cache = SpendCounterStore(connect(None).spend_counters())
-    counter_cache.set_local("spend:key:key-finalize-none-cost", 0.5)
-    budget_reservation = {
-        "reserved_cost": 0.5,
-        "entries": [
-            {
-                "counter_key": "spend:key:key-finalize-none-cost",
-                "entity_type": "Key",
-                "entity_id": "key-finalize-none-cost",
-                "reserved_cost": 0.5,
-                "applied_adjustment": 0.0,
-            }
-        ],
-        "finalized": False,
-    }
+    counter_cache.set_local("spend:key:key-finalize-none-cost", 0.0)
+    budget_reservation = await native_reservation(
+        counter_cache,
+        UserAPIKeyAuth(token="key-finalize-none-cost"),
+        [{"counter_key": "spend:key:key-finalize-none-cost", "entity_type": "Key", "entity_id": "key-finalize-none-cost"}],
+        0.5,
+    )
+    assert counter_cache.get_local("spend:key:key-finalize-none-cost") == pytest.approx(0.5)
     monkeypatch.setattr(ps, "spend_counter_store", counter_cache)
 
     await ps.increment_spend_counters(
@@ -9512,7 +9506,7 @@ async def test_increment_spend_counters_finalizes_none_cost_reservation(monkeypa
 
 
 @pytest.mark.asyncio
-async def test_increment_spend_counters_reseeds_from_db_on_bad_reserved_counter():
+async def test_increment_spend_counters_reseeds_from_db_on_bad_reserved_counter(native_budgets_on):
     """When the reservation reconcile finds the counter in an inconsistent state
     (here: missing), it must NOT delete the counter and fail open (the old
     behavior, which left the counter unenforced after a Redis reload). It reseeds
@@ -9522,19 +9516,13 @@ async def test_increment_spend_counters_reseeds_from_db_on_bad_reserved_counter(
     from litellm.proxy.proxy_server import increment_spend_counters
 
     counter_cache = SpendCounterStore(connect(None).spend_counters())
-    budget_reservation = {
-        "reserved_cost": 0.5,
-        "entries": [
-            {
-                "counter_key": "spend:key:key-bad-reserved-counter",
-                "entity_type": "Key",
-                "entity_id": "key-bad-reserved-counter",
-                "reserved_cost": 0.5,
-                "applied_adjustment": 0.0,
-            }
-        ],
-        "finalized": False,
-    }
+    budget_reservation = await native_reservation(
+        counter_cache,
+        UserAPIKeyAuth(token="key-bad-reserved-counter"),
+        [{"counter_key": "spend:key:key-bad-reserved-counter", "entity_type": "Key", "entity_id": "key-bad-reserved-counter"}],
+        0.5,
+    )
+    counter_cache.delete_local("spend:key:key-bad-reserved-counter")
 
     import litellm.proxy.proxy_server as ps
 
@@ -15725,10 +15713,10 @@ def test_settings_store_exposes_dashboard_saved_mcp_client_allowlist_to_the_mcp_
 
 
 async def test_token_counter_keeps_the_event_loop_free_during_a_huggingface_count(monkeypatch):
-    from tests.large_text import text
     from tests.unit.litellm_core_utils.event_loop_lag import (
         assert_loop_stayed_free,
         timed_with_loop_lags,
+        uncounted_text,
         warm_tokenizer,
     )
 
@@ -15736,7 +15724,9 @@ async def test_token_counter_keeps_the_event_loop_free_during_a_huggingface_coun
     warm_tokenizer("claude-fable-5")
 
     response, took, lags = await timed_with_loop_lags(
-        lambda: proxy_server_module.count_request_tokens(TokenCountRequest(model="claude-fable-5", prompt=text * 100))
+        lambda: proxy_server_module.count_request_tokens(
+            TokenCountRequest(model="claude-fable-5", prompt=uncounted_text())
+        )
     )
 
     assert response.total_tokens > 0

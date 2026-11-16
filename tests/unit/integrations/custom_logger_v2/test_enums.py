@@ -20,21 +20,22 @@ def test_field_round_trips_from_its_config_string() -> None:
 
 def test_field_bits_are_distinct_and_fit_a_u64_bitset() -> None:
     bits = [member.bit for member in Field]
-    assert len(set(bits)) == len(bits) == 30
+    assert len(set(bits)) == len(bits) == 47
     assert all(0 <= bit < 64 for bit in bits)
 
 
 def test_fields_fall_in_the_four_cost_tiers_of_the_design() -> None:
     assert Counter(member.tier for member in Field) == {
-        FieldTier.small_record: 11,
+        FieldTier.small_record: 27,
         FieldTier.content: 12,
         FieldTier.wire: 4,
-        FieldTier.compatibility: 3,
+        FieldTier.compatibility: 4,
     }
     assert {member for member in Field if member.tier is FieldTier.compatibility} == {
         Field.standard_logging_payload,
         Field.deprecated_kwargs,
         Field.deprecated_response_obj,
+        Field.standard_logging_payload_ref,
     }
 
 
@@ -70,4 +71,21 @@ def test_field_bits_are_the_wire_contract_shared_with_the_rust_manifest() -> Non
         "standard_logging_payload": 27,
         "deprecated_kwargs": 28,
         "deprecated_response_obj": 29,
+        "key_limits": 30,
+        "budget_plan": 31,
+        "budget_reservation": 32,
+        "rate_limit_statuses": 33,
+        "output_cap": 34,
+        "attempt_timing": 35,
+        "rate_limit_state": 36,
+        "logged_request": 37,
+        "mcp_tool_call": 38,
+        "log_id": 39,
+        "cold_storage_object_key": 40,
+        "standard_logging_payload_ref": 41,
+        "logged_key_identity": 42,
+        "logged_model_group": 43,
+        "metadata_labels": 44,
+        "input_sequence_length": 45,
+        "limiter_request": 46,
     }

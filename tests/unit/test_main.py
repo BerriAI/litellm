@@ -943,6 +943,41 @@ def test_completion_drops_unanswered_claude_tool_search_calls_before_the_respons
     ]
 
 
+def test_completion_through_the_responses_bridge_honors_a_string_allowlist(
+    respx_mock: respx.MockRouter,
+):
+    route: Final = respx_mock.post("https://api.openai.com/v1/responses").respond(
+        json={
+            "id": "resp_allowlist",
+            "object": "response",
+            "created_at": 1,
+            "status": "completed",
+            "model": "gpt-5.6",
+            "output": [
+                {
+                    "type": "message",
+                    "id": "msg_allowlist",
+                    "role": "assistant",
+                    "status": "completed",
+                    "content": [{"type": "output_text", "text": "hi", "annotations": []}],
+                }
+            ],
+            "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+        }
+    )
+
+    litellm.completion(
+        model="openai/responses/gpt-5.6",
+        api_key="sk-test",
+        api_base="https://api.openai.com/v1",
+        messages=[{"role": "user", "content": "hi"}],
+        presence_penalty=0.1,
+        allowed_openai_params="presence_penalty",
+    )
+
+    assert route.call_count == 1
+
+
 def _openai_called_names(body: Mapping[str, object]) -> tuple[str, ...]:
     messages: Final = body["messages"]
     assert isinstance(messages, list)
@@ -10757,12 +10792,30 @@ def test_azure_ai_forwards_reasoning_effort_once_the_deployment_declares_levels(
     ] == "none"
 
 
-def test_a_model_map_declaration_alone_leaves_reasoning_effort_to_drop_params(
-    local_model_cost_map: None, respx_mock: respx.MockRouter
-) -> None:
-    assert "reasoning_effort" not in _chat_body_sent(
-        respx_mock, "azure_ai/FW-Kimi-K3", "medium", {"id": "kimi-azure-1"}, drop_params=True
+@pytest.fixture
+def foundry_reasoner_row(monkeypatch: pytest.MonkeyPatch) -> str:
+    from litellm.litellm_core_utils.get_model_cost_map import (
+        GetModelCostMap,
+        ModelCostMapReloaded,
+        install_model_cost_map,
     )
+
+    model: Final = "azure_ai/FW-Reasoner"
+    monkeypatch.setattr(litellm, "model_cost", litellm.model_cost)
+    catalog: Final = {
+        **GetModelCostMap.load_local_model_cost_map(),
+        model: {"litellm_provider": "azure_ai", "mode": "chat", "reasoning_effort_levels": ["low", "high", "max"]},
+    }
+    assert isinstance(install_model_cost_map(json.dumps(catalog).encode()), ModelCostMapReloaded)
+    return model
+
+
+def test_a_model_map_declaration_alone_forwards_reasoning_effort_without_rounding_it(
+    foundry_reasoner_row: str, respx_mock: respx.MockRouter
+) -> None:
+    assert _chat_body_sent(respx_mock, foundry_reasoner_row, "medium", {"id": "reasoner-1"}, drop_params=True)[
+        "reasoning_effort"
+    ] == "medium"
 
 
 @pytest.mark.parametrize("model_info, expected", [(_KIMI_DEPLOYMENT, "high"), (None, "medium")])

@@ -61,6 +61,12 @@ fn numbers(values: Option<Vec<Option<Number>>>) -> Option<Vec<Option<PyNumber>>>
 #[pyclass(frozen, name = "NativeSpendCounters")]
 pub(crate) struct NativeSpendCounters(Arc<SpendCounters>);
 
+impl NativeSpendCounters {
+    pub(crate) fn store(&self) -> Arc<SpendCounters> {
+        Arc::clone(&self.0)
+    }
+}
+
 #[pymethods]
 impl NativeSpendCounters {
     #[new]

@@ -22,9 +22,32 @@ from litellm.constants import PROXY_DB_LOOKUP_MAX_CONCURRENCY
 from litellm.proxy.db.db_lookup_gate import LoopBoundSemaphore, db_lookup_stall_tracker
 from litellm.proxy.db.spend_counter_reseed import SpendCounterReseed
 from litellm.redis.stores.connection import connect
-from litellm.redis.stores.spend_counters import SpendCounterStore
+from litellm.redis.stores.spend_counters import SpendCounterStore, user_counter, user_window_counter
 
 WINDOW_START = datetime(2026, 8, 1, tzinfo=timezone.utc)
+
+
+@pytest.mark.asyncio
+async def test_user_window_reseeds_from_maintained_balance() -> None:
+    prisma: Final = _FakePrismaClient(row=SimpleNamespace(window_start=WINDOW_START, spend=4.5))
+    result: Final = await SpendCounterReseed.window_from_db(prisma, "User", "u", "1h", WINDOW_START)
+    assert result == 4.5
+    assert prisma.db.litellm_budgetwindowspend.where_clauses == [
+        {"entity_type_entity_id_window_duration": {"entity_type": "user", "entity_id": "u", "window_duration": "1h"}}
+    ]
+    assert prisma.db.litellm_spendlogs.call_count == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "counter_key, expected",
+    [(user_counter("u:window:1h"), 7.0), (user_window_counter("u", "1h"), None)],
+    ids=["user_id_that_looks_like_a_window", "user_window"],
+)
+async def test_only_a_users_own_counter_reseeds_from_the_user_row(counter_key: str, expected: float | None) -> None:
+    users: Final = _FakeFindUniqueTable(row=SimpleNamespace(spend=7.0))
+    prisma: Final = SimpleNamespace(db=SimpleNamespace(litellm_usertable=users))
+    assert await SpendCounterReseed.from_db(prisma, counter_key) == expected
 
 
 @pytest.mark.asyncio
@@ -261,7 +284,7 @@ async def test_window_from_table_treats_naive_row_timestamp_as_utc():
     "prisma, entity_type",
     [
         (_FakePrismaClient(row=None), "Key"),
-        (_FakePrismaClient(row=_row(WINDOW_START, 1.0)), "User"),
+        (_FakePrismaClient(row=_row(WINDOW_START, 1.0)), "Unsupported"),
         (_FakePrismaClient(error=RuntimeError("connection reset")), "Key"),
         (None, "Key"),
     ],

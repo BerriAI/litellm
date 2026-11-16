@@ -926,6 +926,7 @@ async def test_async_post_call_failure_hook_non_llm_route():
         ("/unregistered-search", CallTypes.pass_through.value, False),
         ("/azure-search/", CallTypes.pass_through.value, True),
         ("/configured-search/indexes/docs", CallTypes.pass_through.value, True),
+        ("/queue/chat/completions", CallTypes.acompletion.value, True),
         (None, CallTypes.acompletion.value, True),
     ],
 )

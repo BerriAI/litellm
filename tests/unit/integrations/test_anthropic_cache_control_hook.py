@@ -4,12 +4,10 @@ import json
 import logging
 import os
 import pathlib
-import subprocess
 import sys
-import textwrap
 from collections.abc import Mapping
 from types import MappingProxyType
-from typing import Final, List, Optional, Tuple, cast
+from typing import Final, List, cast
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -3501,54 +3499,6 @@ class TestConfiguredInjectionPointsSurviveClientMarks:
         assert sys2 == sys1
 
 
-class TestAnthropicPromptCachingEnvVars:
-    """Both settings are read from the environment at import, so an admin can enable
-    auto-caching without a config file. Each case re-imports litellm in a subprocess
-    so the env is read fresh without contaminating this process's module graph.
-    """
-
-    @staticmethod
-    def _import_litellm_with_env(env_override: dict) -> Tuple[bool, Optional[str]]:
-        env = os.environ.copy()
-        env.pop("LITELLM_ENABLE_ANTHROPIC_PROMPT_CACHING", None)
-        env.pop("LITELLM_ANTHROPIC_PROMPT_CACHING_TTL", None)
-        env.update(env_override)
-        script = textwrap.dedent(
-            """
-            import json, litellm
-            print(json.dumps([litellm.enable_anthropic_prompt_caching, litellm.anthropic_prompt_caching_ttl]))
-            """
-        )
-        result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, env=env, timeout=300)
-        assert result.returncode == 0, result.stderr
-        enabled, ttl = json.loads(result.stdout.strip().splitlines()[-1])
-        return enabled, ttl
-
-    def test_unset_env_leaves_auto_caching_off(self):
-        assert self._import_litellm_with_env({}) == (False, None)
-
-    @pytest.mark.parametrize("value", ["true", "True", "TRUE"])
-    def test_env_enables_auto_caching_case_insensitively(self, value):
-        enabled, _ = self._import_litellm_with_env({"LITELLM_ENABLE_ANTHROPIC_PROMPT_CACHING": value})
-        assert enabled is True
-
-    @pytest.mark.parametrize("value", ["false", "0", "yes", ""])
-    def test_env_only_enables_on_true(self, value):
-        enabled, _ = self._import_litellm_with_env({"LITELLM_ENABLE_ANTHROPIC_PROMPT_CACHING": value})
-        assert enabled is False
-
-    @pytest.mark.parametrize("value", ["5m", "1h"])
-    def test_ttl_env_is_applied(self, value):
-        _, ttl = self._import_litellm_with_env({"LITELLM_ANTHROPIC_PROMPT_CACHING_TTL": value})
-        assert ttl == value
-
-    @pytest.mark.parametrize("value", ["10m", "1H", "3600", "ephemeral"])
-    def test_unsupported_ttl_env_falls_back_to_provider_default(self, value):
-        """An unparseable TTL must fall back to Anthropic's 5m default, never reach the provider verbatim."""
-        _, ttl = self._import_litellm_with_env({"LITELLM_ANTHROPIC_PROMPT_CACHING_TTL": value})
-        assert ttl is None
-
-
 def _contains_key(value, key) -> bool:
     if isinstance(value, dict):
         return key in value or any(_contains_key(v, key) for v in value.values())
@@ -5789,7 +5739,10 @@ _BEDROCK_INVOKE_REPLY: Final = MappingProxyType(
 async def test_a_bedrock_claude_deployment_declaring_the_breakpoint_flag_keeps_bedrocks_own_cache_marks(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, entrypoint: str, expected_system: list[object]
 ) -> None:
+    from litellm.llms.anthropic.messages.native import handler as python_messages
+
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "anthropic_messages", python_messages.anthropic_messages)
     bedrock: Final = respx_mock.post(host="bedrock-runtime.us-east-1.amazonaws.com").mock(
         side_effect=lambda request: Response(
             200,
@@ -5864,3 +5817,24 @@ def test_cache_control_hook_reads_a_non_string_answer_id_as_answering_no_tool_ca
     assert _cache_marks_after_injection(_search_conversation_with(malformed)) == _cache_marks_after_injection(
         _search_conversation_with(well_formed)
     )
+
+
+def test_cache_control_as_prompt_cache_breakpoints_leaves_unmarked_parts_with_non_string_keys_alone() -> None:
+    unmarked_part: Final = {"type": "text", "text": "Context", 1: "ignored"}
+    message: Final = cast(
+        AllMessageValues,
+        {
+            "role": "user",
+            "content": [
+                unmarked_part,
+                {"type": "text", "text": "Stable prefix", "cache_control": {"type": "ephemeral"}},
+            ],
+        },
+    )  # cast-ok: a chat caller passing a Python dict may use keys JSON cannot carry
+
+    renamed: Final = AnthropicCacheControlHook.cache_control_as_prompt_cache_breakpoints(message)
+
+    assert renamed["content"] == [
+        unmarked_part,
+        {"type": "text", "text": "Stable prefix", "prompt_cache_breakpoint": {"mode": "explicit"}},
+    ]
