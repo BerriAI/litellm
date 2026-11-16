@@ -6796,6 +6796,8 @@ def test_a_non_string_anthropic_user_profile_id_on_a_key_or_team_answers_400(
         "uprof_\x7fx",
         "uprof_\x85x",
         "uprof_\ud800x",
+        "uprof_\u00e9",
+        "uprof_\u2603",
     ],
 )
 def test_unsafe_profile_metadata_answers_400(entity: Literal["key", "team"], operation: str, sent: str) -> None:

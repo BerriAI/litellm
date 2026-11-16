@@ -264,11 +264,17 @@ pub fn merge_messages_header_sources(
     let mut merged = Map::new();
     let mut betas = std::collections::BTreeSet::new();
     for source in sources {
-        merged.retain(|existing, _| {
-            !source
-                .keys()
-                .any(|name| name != existing && name.eq_ignore_ascii_case(existing))
-        });
+        let mut names = std::collections::HashMap::new();
+        for name in source.keys() {
+            *names.entry(name.to_ascii_lowercase()).or_insert(0_usize) += 1;
+        }
+        merged.retain(
+            |existing, _| match names.get(&existing.to_ascii_lowercase()) {
+                Some(1) => source.contains_key(existing),
+                Some(_) => false,
+                None => true,
+            },
+        );
         for (name, value) in source {
             if !name.eq_ignore_ascii_case("anthropic-beta") {
                 merged.insert(name, value);
@@ -337,6 +343,33 @@ mod merge_tests {
         assert_eq!(
             Value::Object(merged),
             json!({"x-kept": "1", "anthropic-user-profile-id": "uprof_pinned"})
+        );
+    }
+
+    #[rstest]
+    #[case::empty(json!({}), json!({}), json!({}))]
+    #[case::disjoint(json!({"x-one": "1"}), json!({"x-two": "2"}), json!({"x-one": "1", "x-two": "2"}))]
+    #[case::same_spelling(
+        json!({"x-priority": "old", "x-kept": "yes"}),
+        json!({"x-priority": "new"}),
+        json!({"x-priority": "new", "x-kept": "yes"})
+    )]
+    #[case::multiple_casings(
+        json!({"X-Profile": "old"}),
+        json!({"X-Profile": "first", "x-profile": "last"}),
+        json!({"X-Profile": "first", "x-profile": "last"})
+    )]
+    fn merging_retains_all_incoming_values(
+        #[case] first: Value,
+        #[case] second: Value,
+        #[case] expected: Value,
+    ) {
+        let merged = merge_messages_header_sources([map(first), map(second)]);
+        let expected = map(expected);
+        assert_eq!(merged, expected);
+        assert_eq!(
+            merged.keys().collect::<Vec<_>>(),
+            expected.keys().collect::<Vec<_>>()
         );
     }
 }

@@ -1947,7 +1947,7 @@ _ADMIN_ONLY_METADATA_REASONS: Final[Mapping[str, str]] = MappingProxyType(
 
 
 def is_valid_anthropic_user_profile_id(value: str) -> bool:
-    return not any(char.isspace() or unicodedata.category(char) in ("Cc", "Cs") for char in value)
+    return value.isascii() and not any(char.isspace() or unicodedata.category(char) in ("Cc", "Cs") for char in value)
 
 
 def validate_anthropic_user_profile_id_metadata(
@@ -1958,8 +1958,8 @@ def validate_anthropic_user_profile_id_metadata(
         raise HTTPException(
             status_code=400,
             detail={
-                "error": f"{ANTHROPIC_USER_PROFILE_ID_METADATA_KEY} on a {entity} must not contain whitespace "
-                "or control characters"
+                "error": f"{ANTHROPIC_USER_PROFILE_ID_METADATA_KEY} on a {entity} must contain only printable ASCII "
+                "characters without whitespace"
             },
         )
 
