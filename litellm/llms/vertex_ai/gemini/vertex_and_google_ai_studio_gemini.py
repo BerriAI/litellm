@@ -34,6 +34,7 @@ from litellm.constants import (
 from litellm.exceptions import UnsupportedParamsError
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupported_params, normalize_drop_params
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
+from litellm.litellm_core_utils.hidden_params import set_hidden_param
 from litellm.litellm_core_utils.json_fragment_accumulator import JSONFragmentAccumulator
 from litellm.litellm_core_utils.model_param_helper import embeds_thought_signature_in_tool_call_id
 from litellm.litellm_core_utils.prompt_templates.factory import encode_tool_call_id_with_signature
@@ -4467,7 +4468,7 @@ class ModelResponseIterator:
 
             provider_finish_reasons: Final = _provider_finish_reasons(_candidates or (), model_response.choices)
             if provider_finish_reasons:
-                model_response.hidden_params[PROVIDER_FINISH_REASONS_HIDDEN_PARAM] = provider_finish_reasons
+                set_hidden_param(model_response, PROVIDER_FINISH_REASONS_HIDDEN_PARAM, provider_finish_reasons)
             model_response.hidden_params["is_finished"] = False
             return model_response
 
