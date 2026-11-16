@@ -6,7 +6,6 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 
 export type SpendEstimate = { readonly amount: number; readonly rateDate: string };
 
-/** The USD spend at the current reference rate for `currency`, or null when that rate is missing or too old to use. */
 export const estimatedSpend = (
   usdSpend: number,
   rates: Pick<ReferenceExchangeRates, "usd_per_unit" | "rate_date">,
