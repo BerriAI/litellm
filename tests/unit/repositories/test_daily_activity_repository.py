@@ -807,6 +807,8 @@ async def test_export_redacts_credential_named_values_the_masker_names_miss(key:
         "HTTPS://user:pw@internal.example.com",
         "curl -H 'Authorization: Bearer abcdefghijklmnop1234' https://api.example.com",
         "authorization=Basic dXNlcjpwYXNz",
+        '{"Authorization": "Bearer opaque-token-value"}',
+        "{'authorization': 'Basic dXNlcjpwYXNz'}",
         "postgres://app:" + "p" * 300 + "@db.internal/app",
         "postgres://" + "u" * 300 + ":pw@db.internal/app",
         "https://hooks.slack.com/services/T000/B000/XXXX",
