@@ -310,7 +310,16 @@ def create(
 
 _SEARCH_FIELDS: Final = TypeAdapter(dict[str, object])
 _SEARCH_METADATA: Final = frozenset(
-    {"metadata", "litellm_metadata", "litellm_call_id", "proxy_server_request", "litellm_trace_id"}
+    {
+        "metadata",
+        "litellm_metadata",
+        "litellm_call_id",
+        "proxy_server_request",
+        "litellm_trace_id",
+        "userContext",
+        "user_context",
+        "drop_params",
+    }
 )
 
 
@@ -356,10 +365,11 @@ async def _fallback_search_attempt(
 ) -> Attempt[VectorStoreSearchResponse]:
     registered: Final = store_search_params(target.params)
     connection: Final = {**registered, **await acredential_updates(registered)}
-    resolved: Final = VectorStoreTarget(target.store_id, target.provider, MappingProxyType(connection))
+    provider_name, separator, api_type = target.provider.partition("/")
+    resolved: Final = VectorStoreTarget(target.store_id, provider_name, MappingProxyType(connection))
     physical_id: Final = native_store_id(target)
     provider_config: Final = ProviderConfigManager.get_provider_vector_stores_config(
-        provider=litellm.LlmProviders(target.provider)
+        provider=litellm.LlmProviders(provider_name), api_type=api_type if separator else None
     )
     if provider_config is None:
         return Failed(target, ValueError(f"Vector store search is not supported for {target.provider}"), False)
@@ -367,12 +377,18 @@ async def _fallback_search_attempt(
     searched: Final = searched_query(
         query=builtins.list(request.query) if isinstance(request.query, tuple) else request.query,
         query_image=request.query_image,
-        custom_llm_provider=target.provider,
+        custom_llm_provider=provider_name,
         supports_query_image="query_image" in provider_config.get_supported_openai_params(model=""),
-        drop_params=False,
+        drop_params=drops_unsupported_params(request.metadata.get("drop_params")),
     )
     options: Final = VectorStoreRequestUtils.get_requested_vector_store_search_optional_param(
-        {**connection, **request.options, "query_image": searched.image, "drop_params": False}, provider_config
+        {
+            **connection,
+            **request.options,
+            "query_image": searched.image,
+            "drop_params": request.metadata.get("drop_params"),
+        },
+        provider_config,
     )
     embedding: Final = _SearchEmbeddingExecutor(request.embedding)
     extra_headers: Final = _optional_search_mapping(connection.get("extra_headers"))
@@ -382,7 +398,7 @@ async def _fallback_search_attempt(
         model=None,
         optional_params={"vector_store_id": physical_id, "query": searched.query, **options},
         litellm_params={**request.metadata, **litellm_params.model_dump(exclude_none=True)},
-        custom_llm_provider=target.provider,
+        custom_llm_provider=provider_name,
     )
     try:
         response: Final = await base_llm_http_handler.async_vector_store_search_handler(
@@ -390,7 +406,7 @@ async def _fallback_search_attempt(
             query=searched.query,
             vector_store_search_optional_params=options,
             vector_store_provider_config=provider_config,
-            custom_llm_provider=target.provider,
+            custom_llm_provider=provider_name,
             litellm_params=litellm_params,
             logging_obj=request.logger,
             embedding_executor=embedding,

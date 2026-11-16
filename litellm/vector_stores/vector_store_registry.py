@@ -431,14 +431,17 @@ class VectorStoreRegistry:
             return vector_store_ids
         return [*vector_store_ids, *chain.from_iterable(vector_store_ids_in_tool(tool) for tool in validated_tools)]
 
-    def load_vector_stores_from_config(self, vector_stores_config: Sequence[Mapping[str, object]]) -> None:
+    def load_vector_stores_from_config(
+        self, vector_stores_config: Sequence[Mapping[str, object]], *, validate_fallbacks: bool = True
+    ) -> None:
         loaded: Final = tuple(_configured_vector_store(config) for config in vector_stores_config)
         replaced: Final = frozenset(store.get("vector_store_id") for store in loaded)
         snapshot: Final = (
             *tuple(store for store in self.vector_stores if store.get("vector_store_id") not in replaced),
             *loaded,
         )
-        validate_vector_store_fallbacks(snapshot)
+        if validate_fallbacks:
+            validate_vector_store_fallbacks(snapshot)
         self.vector_stores = list(snapshot)
 
     def list_all_vector_stores(self) -> LiteLLM_ManagedVectorStoreListResponse:
@@ -573,11 +576,17 @@ def _validate_search_provider(name: str) -> None:
     from litellm.types.utils import LlmProviders
     from litellm.utils import ProviderConfigManager
 
+    provider_name, separator, api_type = name.partition("/")
     try:
-        provider: Final = LlmProviders(name)
+        provider: Final = LlmProviders(provider_name)
     except ValueError as error:
         raise ValueError("Vector store fallback provider is not supported") from error
-    if ProviderConfigManager.get_provider_vector_stores_config(provider=provider) is None:
+    if (
+        ProviderConfigManager.get_provider_vector_stores_config(
+            provider=provider, api_type=api_type if separator else None
+        )
+        is None
+    ):
         raise ValueError("Vector store fallback provider does not support search")
 
 

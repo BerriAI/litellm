@@ -205,19 +205,20 @@ def test_terminal_http_status_takes_precedence_over_chained_transport_error():
 def cooldown_redis(monkeypatch: pytest.MonkeyPatch):
     from unittest.mock import AsyncMock, MagicMock
 
-    from redis import Redis
-    from redis.asyncio import Redis as AsyncRedis
+    import redis
+    import redis.asyncio
 
     from litellm.caching.redis_cache import RedisCache
 
-    monkeypatch.setattr(Redis, "execute_command", lambda *args, **kwargs: {"redis_version": "7.0.0"})
-    cache: Final = RedisCache(host="cooldown.example", port=6379)
-    backend: Final = MagicMock()
+    sync_backend: Final = MagicMock(spec=redis.Redis)
+    sync_backend.info.return_value = {"redis_version": "7.0.0"}
+    backend: Final = MagicMock(spec=redis.asyncio.Redis)
     backend.mget = AsyncMock(return_value=[None, None])
     backend.set = AsyncMock(return_value=True)
-    monkeypatch.setattr(AsyncRedis, "mget", backend.mget)
-    monkeypatch.setattr(AsyncRedis, "set", backend.set)
-    monkeypatch.setattr(AsyncRedis, "ping", AsyncMock(return_value=True))
+    backend.ping = AsyncMock(return_value=True)
+    monkeypatch.setattr(redis, "Redis", MagicMock(return_value=sync_backend))
+    monkeypatch.setattr(redis.asyncio, "Redis", MagicMock(return_value=backend))
+    cache: Final = RedisCache(host="cooldown.example", port=6379)
     return cache, backend
 
 

@@ -618,6 +618,7 @@ async def test_fallback_maps_max_results_through_actual_search_adapter(
     from types import SimpleNamespace
     from unittest.mock import AsyncMock
 
+    import redis.asyncio as redis_asyncio
     from redis.asyncio import Redis
 
     from litellm.vector_stores.fallbacks import (
@@ -631,7 +632,7 @@ async def test_fallback_maps_max_results_through_actual_search_adapter(
     backend.ft.return_value.search = AsyncMock(return_value=SimpleNamespace(docs=[]))
     backend.aclose = AsyncMock()
     connect: Final = MagicMock(return_value=backend)
-    monkeypatch.setattr(Redis, "from_url", connect)
+    monkeypatch.setattr(redis_asyncio, "Redis", SimpleNamespace(from_url=connect))
     primary: Final = VectorStoreTarget(
         "limited-primary", "openai", {"api_base": "https://limit-primary.example/v1", "api_key": "primary"}
     )
@@ -710,6 +711,7 @@ async def test_raw_native_backend_errors_fail_over_only_for_transport(monkeypatc
     from types import SimpleNamespace
     from unittest.mock import AsyncMock
 
+    import redis.asyncio as redis_asyncio
     from redis.asyncio import Redis
     from redis.exceptions import AuthenticationError, AuthorizationError, ConnectionError, TimeoutError
 
@@ -729,7 +731,7 @@ async def test_raw_native_backend_errors_fail_over_only_for_transport(monkeypatc
     backend: Final = MagicMock(spec=Redis)
     backend.ft.return_value.search = AsyncMock(side_effect=[raw_error, SimpleNamespace(docs=[])])
     backend.aclose = AsyncMock()
-    monkeypatch.setattr(Redis, "from_url", MagicMock(return_value=backend))
+    monkeypatch.setattr(redis_asyncio, "Redis", SimpleNamespace(from_url=MagicMock(return_value=backend)))
     params: Final = {
         "valkey_host": "valkey.example",
         "litellm_embedding_model": "openai/text-embedding-3-small",
@@ -768,7 +770,11 @@ async def test_raw_native_backend_errors_fail_over_only_for_transport(monkeypatc
 
 @pytest.mark.asyncio
 async def test_embedding_outage_does_not_fail_over_vector_store(monkeypatch: pytest.MonkeyPatch):
-    from litellm.vector_stores.fallbacks import VectorStoreFallbackPlan, VectorStoreTarget, vector_store_fallback_context
+    from litellm.vector_stores.fallbacks import (
+        VectorStoreFallbackPlan,
+        VectorStoreTarget,
+        vector_store_fallback_context,
+    )
 
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     primary: Final = VectorStoreTarget(
@@ -799,3 +805,123 @@ async def test_sdk_rejects_fallback_configuration_before_sending_request():
         with pytest.raises(ValueError, match="registered vector store"):
             vector_stores_main.search("sdk-primary", query="q", fallbacks=["sdk-backup"])
         assert len(upstream.calls) == 0
+
+
+@pytest.mark.asyncio
+async def test_registered_vertex_fallback_preserves_each_api_subtype(
+    requests_mock: requests_mock_lib.Mocker,
+    monkeypatch: pytest.MonkeyPatch,
+):
+
+    from litellm.types.vector_stores import LiteLLM_ManagedVectorStore
+    from litellm.vector_stores.fallbacks import (
+        VectorStoreFallbackPlan,
+        targets_for_store,
+        vector_store_fallback_context,
+    )
+    from litellm.vector_stores.vector_store_registry import validate_vector_store_fallbacks
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    credentials: Final = _authorized_user_credentials(f"fallback-subtype-{uuid.uuid4().hex}")
+    stores: Final = tuple(
+        LiteLLM_ManagedVectorStore(
+            vector_store_id=store_id,
+            custom_llm_provider=f"vertex_ai/{api_type}",
+            litellm_params={
+                "api_base": f"https://vertex-fallback.test/{api_type}",
+                "vertex_project": "unit-project",
+                "vertex_location": "us-central1",
+                "vertex_credentials": credentials,
+                **({"fallbacks": ["vertex-backup"]} if store_id == "vertex-primary" else {}),
+            },
+        )
+        for store_id, api_type in (("vertex-primary", "search_api"), ("vertex-backup", "rag_api"))
+    )
+    validate_vector_store_fallbacks(stores)
+    plan: Final = VectorStoreFallbackPlan(targets_for_store(stores[0], stores), cooldown_time=0)
+    requests_mock.post(
+        GOOGLE_TOKEN_URL, json={"access_token": "ya29.fallback-subtypes", "expires_in": 3600, "token_type": "Bearer"}
+    )
+    with respx.mock(assert_all_called=True) as upstream:
+        primary: Final = upstream.post("https://vertex-fallback.test/search_api:search").respond(503)
+        backup: Final = upstream.post("https://vertex-fallback.test/rag_api:retrieveContexts").respond(
+            200, json={"contexts": {"contexts": []}}
+        )
+        with vector_store_fallback_context(plan):
+            response: Final = await vector_stores_main.asearch("vertex-primary", query="q")
+        assert primary.call_count == backup.call_count == 1
+        assert backup.calls[0].request.headers["authorization"] == "Bearer ya29.fallback-subtypes"
+        assert response["data"] == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("context_name", ["userContext", "user_context"])
+async def test_bedrock_fallback_retains_caller_user_context(context_name: str):
+    from litellm.vector_stores.fallbacks import (
+        VectorStoreFallbackPlan,
+        VectorStoreTarget,
+        vector_store_fallback_context,
+    )
+
+    targets: Final = tuple(
+        VectorStoreTarget(
+            f"kb-{host}",
+            "bedrock",
+            {
+                "api_base": f"https://bedrock-{host}.example/knowledgebases",
+                "aws_region_name": "us-west-2",
+                "aws_access_key_id": "test-key",
+                "aws_secret_access_key": "test-secret",
+            },
+        )
+        for host in ("primary", "backup")
+    )
+    with respx.mock(assert_all_called=True) as upstream:
+        first: Final = upstream.route(host="bedrock-primary.example").respond(503)
+        second: Final = upstream.route(host="bedrock-backup.example").respond(200, json={"retrievalResults": []})
+        with vector_store_fallback_context(VectorStoreFallbackPlan(targets, cooldown_time=0)):
+            response: Final = await vector_stores_main.asearch(
+                "kb-primary",
+                query="q",
+                client=AsyncHTTPHandler(transport=httpx.AsyncHTTPTransport()),
+                **{context_name: {"userId": "alice@example.com"}},
+            )
+        assert [json.loads(route.calls[0].request.content)["userContext"] for route in (first, second)] == [
+            {"userId": "alice@example.com"},
+            {"userId": "alice@example.com"},
+        ]
+        assert response["data"] == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("primary_status", [200, 503])
+async def test_fallback_honors_global_query_image_dropping(monkeypatch: pytest.MonkeyPatch, primary_status: int):
+    from litellm.vector_stores.fallbacks import (
+        VectorStoreFallbackPlan,
+        VectorStoreTarget,
+        vector_store_fallback_context,
+    )
+
+    monkeypatch.setattr(litellm, "drop_params", True)
+    targets: Final = tuple(
+        VectorStoreTarget(
+            f"image-{host}", "openai", {"api_base": f"https://image-{host}.example/v1", "api_key": "test"}
+        )
+        for host in ("primary", "backup")
+    )
+    with respx.mock(assert_all_called=False) as upstream:
+        first: Final = upstream.route(host="image-primary.example").respond(primary_status, json=MOCK_SEARCH_RESPONSE)
+        second: Final = upstream.route(host="image-backup.example").respond(200, json=MOCK_SEARCH_RESPONSE)
+        with vector_store_fallback_context(VectorStoreFallbackPlan(targets, cooldown_time=0)):
+            response: Final = await vector_stores_main.asearch(
+                "image-primary",
+                query="q",
+                query_image=QUERY_IMAGE,
+                client=AsyncHTTPHandler(transport=httpx.AsyncHTTPTransport()),
+            )
+        assert first.call_count == 1
+        assert second.call_count == int(primary_status == 503)
+        assert [json.loads(call.request.content) for call in upstream.calls] == [
+            {"query": "q", "filters": None, "max_num_results": None, "ranking_options": None, "rewrite_query": None}
+        ] * (1 + int(primary_status == 503))
+        assert response["data"] == MOCK_SEARCH_RESPONSE["data"]

@@ -6505,3 +6505,151 @@ async def test_proxy_config_validates_advertised_mcp_versions_at_load(tmp_path, 
         return
     with pytest.raises(ValidationError):
         await ProxyConfig().load_config(router=None, config_file_path=str(config))
+
+
+@pytest.mark.asyncio
+async def test_yaml_fallback_resolves_backup_loaded_from_database(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.utils import PrismaClient
+
+    client: Final = MagicMock(spec=PrismaClient)
+    client.db = SimpleNamespace(
+        litellm_managedvectorstorestable=SimpleNamespace(
+            find_many=AsyncMock(
+                return_value=[
+                    (
+                        ("vector_store_id", "backup"),
+                        ("custom_llm_provider", "openai"),
+                        ("litellm_params", {"api_key": "backup-key"}),
+                    )
+                ]
+            )
+        )
+    )
+    monkeypatch.setattr(litellm, "vector_store_registry", None)
+    monkeypatch.setattr(proxy_server, "prisma_client", client)
+    monkeypatch.setattr(proxy_server, "store_model_in_db", True)
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    config: Final = ProxyConfig()
+    await config._init_non_llm_configs(
+        config={
+            "vector_store_registry": [
+                {
+                    "vector_store_name": "primary",
+                    "litellm_params": {
+                        "vector_store_id": "primary",
+                        "custom_llm_provider": "openai",
+                        "fallbacks": ["backup"],
+                    },
+                }
+            ]
+        }
+    )
+    await config._init_vector_stores_in_db(client)
+    assert litellm.vector_store_registry is not None
+    assert tuple(store["vector_store_id"] for store in litellm.vector_store_registry.vector_stores) == (
+        "primary",
+        "backup",
+    )
+
+
+@pytest.mark.asyncio
+async def test_vector_store_db_refresh_updates_and_removes_rows_preserving_yaml(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy.utils import PrismaClient
+    from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
+
+    registry: Final = VectorStoreRegistry(
+        vector_stores=[
+            {"vector_store_id": "primary", "custom_llm_provider": "openai", "is_config": True},
+            {"vector_store_id": "backup", "custom_llm_provider": "openai", "litellm_params": {"api_key": "old"}},
+            {"vector_store_id": "deleted", "custom_llm_provider": "openai"},
+        ]
+    )
+    client: Final = MagicMock(spec=PrismaClient)
+    client.db = SimpleNamespace(
+        litellm_managedvectorstorestable=SimpleNamespace(
+            find_many=AsyncMock(
+                side_effect=[
+                    [
+                        (
+                            ("vector_store_id", "backup"),
+                            ("custom_llm_provider", "openai"),
+                            ("litellm_params", {"api_key": "new"}),
+                        )
+                    ],
+                    [],
+                ]
+            )
+        )
+    )
+    monkeypatch.setattr(litellm, "vector_store_registry", registry)
+    config: Final = ProxyConfig()
+    await config._init_vector_stores_in_db(client)
+    assert registry.vector_stores == [
+        {"vector_store_id": "primary", "custom_llm_provider": "openai", "is_config": True},
+        {"vector_store_id": "backup", "custom_llm_provider": "openai", "litellm_params": {"api_key": "new"}},
+    ]
+    await config._init_vector_stores_in_db(client)
+    assert registry.vector_stores == [
+        {"vector_store_id": "primary", "custom_llm_provider": "openai", "is_config": True},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_yaml_missing_fallback_rejected_without_db_loading(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(litellm, "vector_store_registry", None)
+    monkeypatch.setattr(proxy_server, "store_model_in_db", False)
+    with pytest.raises(ValueError, match="missing"):
+        await ProxyConfig()._init_non_llm_configs(
+            config={
+                "vector_store_registry": [
+                    {
+                        "litellm_params": {
+                            "vector_store_id": "primary",
+                            "custom_llm_provider": "openai",
+                            "fallbacks": ["missing"],
+                        },
+                    }
+                ]
+            }
+        )
+
+
+@pytest.mark.asyncio
+async def test_invalid_db_fallback_refresh_keeps_last_valid_registry(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy.utils import PrismaClient
+    from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
+
+    registry: Final = VectorStoreRegistry(
+        vector_stores=[
+            {
+                "vector_store_id": "primary",
+                "custom_llm_provider": "openai",
+                "is_config": True,
+                "litellm_params": {"fallbacks": ["backup"]},
+            },
+            {"vector_store_id": "backup", "custom_llm_provider": "openai"},
+        ]
+    )
+    previous: Final = tuple(registry.vector_stores)
+    client: Final = MagicMock(spec=PrismaClient)
+    client.db = SimpleNamespace(
+        litellm_managedvectorstorestable=SimpleNamespace(
+            find_many=AsyncMock(
+                return_value=[
+                    (
+                        ("vector_store_id", "backup"),
+                        ("custom_llm_provider", "openai"),
+                        ("litellm_params", {"fallbacks": ["missing"]}),
+                    ),
+                ]
+            )
+        )
+    )
+    monkeypatch.setattr(litellm, "vector_store_registry", registry)
+    await ProxyConfig()._init_vector_stores_in_db(client)
+    assert tuple(registry.vector_stores) == previous

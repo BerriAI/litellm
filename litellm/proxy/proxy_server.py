@@ -7955,7 +7955,14 @@ class ProxyConfig:
                 litellm.vector_store_registry = VectorStoreRegistry()
 
             # Load vector stores from config
-            litellm.vector_store_registry.load_vector_stores_from_config(vector_store_registry_config)
+            litellm.vector_store_registry.load_vector_stores_from_config(
+                vector_store_registry_config,
+                validate_fallbacks=not (
+                    store_model_in_db
+                    and self._should_load_db_object("vector_stores")
+                    and (prisma_client is not None or get_secret("DATABASE_URL", None) is not None)
+                ),
+            )
 
         ## WORKER REGISTRY (Global Control Plane)
         worker_registry_config: Final = config.get("worker_registry", None)
@@ -9895,19 +9902,25 @@ class ProxyConfig:
             verbose_proxy_logger.exception("litellm.proxy.proxy_server.py::ProxyConfig:_init_tool_policy_in_db - %s", e)
 
     async def _init_vector_stores_in_db(self, prisma_client: PrismaClient):
-        from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
+        from litellm.vector_stores.vector_store_registry import VectorStoreRegistry, validate_vector_store_fallbacks
 
         try:
-            # read vector stores from db table
             vector_stores: Final = await VectorStoreRegistry.get_vector_stores_from_db(prisma_client=prisma_client)
-            if len(vector_stores) <= 0:
-                return
-
+            configured: Final = (
+                tuple(store for store in litellm.vector_store_registry.vector_stores if store.get("is_config"))
+                if litellm.vector_store_registry is not None
+                else ()
+            )
+            configured_ids: Final = frozenset(store.get("vector_store_id") for store in configured)
+            snapshot: Final = (
+                *configured,
+                *(store for store in vector_stores if store.get("vector_store_id") not in configured_ids),
+            )
+            validate_vector_store_fallbacks(snapshot)
             if litellm.vector_store_registry is None:
-                litellm.vector_store_registry = VectorStoreRegistry(vector_stores=vector_stores)
+                litellm.vector_store_registry = VectorStoreRegistry(vector_stores=list(snapshot))
             else:
-                for vector_store in vector_stores:
-                    litellm.vector_store_registry.add_vector_store_to_registry(vector_store=vector_store)
+                litellm.vector_store_registry.vector_stores = list(snapshot)
         except Exception as e:
             verbose_proxy_logger.exception(
                 "litellm.proxy.proxy_server.py::ProxyConfig:_init_vector_stores_in_db - %s", e
@@ -12031,6 +12044,10 @@ class ProxyStartupEvent:
 
             # this will load all existing credentials and models on proxy startup
             await proxy_config.add_deployment(prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj)
+            if litellm.vector_store_registry is not None:
+                from litellm.vector_stores.vector_store_registry import validate_vector_store_fallbacks
+
+                validate_vector_store_fallbacks(litellm.vector_store_registry.vector_stores)
 
             proxy_config.start_config_sync_subscriber(
                 prisma_client=prisma_client,

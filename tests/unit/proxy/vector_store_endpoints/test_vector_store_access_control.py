@@ -113,6 +113,8 @@ async def test_delete_vector_store_checks_access():
     from litellm.types.vector_stores import VectorStoreDeleteRequest
 
     mock_prisma = MagicMock()
+    mock_prisma.db.query_raw = AsyncMock(return_value=[{"locked": 1}])
+    mock_prisma.tx.return_value.__aenter__.return_value = mock_prisma.db
     mock_vector_store = MagicMock(
         model_dump=lambda: {
             "vector_store_id": "vs_123",
