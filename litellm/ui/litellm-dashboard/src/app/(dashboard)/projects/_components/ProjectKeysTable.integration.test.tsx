@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import userEvent from "@testing-library/user-event";
-import { renderWithProviders, screen } from "../../../../../tests/test-utils";
+import { renderWithProviders, screen, within } from "../../../../../tests/test-utils";
 import { ProjectKeysTable } from "./ProjectKeysTable";
 import { KeyResponse } from "@/components/key_team_helpers/key_list";
 
@@ -24,7 +24,6 @@ const defaultProps = {
 function makeKey(overrides: Partial<KeyResponse> = {}): KeyResponse {
   return {
     token: "tok-abc123",
-    token_id: "tid-abc123",
     key_name: "sk-...abc",
     key_alias: "Test Key",
     spend: 0,
@@ -106,38 +105,96 @@ describe("ProjectKeysTable", () => {
     expect(screen.getByText("—")).toBeInTheDocument();
   });
 
-  it("should link the key name to that key's detail on the Virtual Keys page", () => {
+  it("keeps the key alias a real link to the key so it can open in a new tab", () => {
     renderWithProviders(
       <ProjectKeysTable {...defaultProps} keys={[makeKey({ token: "tok-abc123", key_alias: "My API Key" })]} />,
     );
-    expect(screen.getByRole("link", { name: "My API Key" })).toHaveAttribute("href", "/ui/api-keys?key=tok-abc123");
+    const row = screen.getByRole("row", { name: "Open key My API Key" });
+    expect(within(row).getByRole("link", { name: "My API Key" })).toHaveAttribute(
+      "href",
+      "/ui/api-keys?key=tok-abc123",
+    );
   });
 
-  it("should navigate to the key detail without a full page load when the key name is clicked", async () => {
+  it("opens the key once from a plain alias click and leaves a cmd-click to the browser", async () => {
     const user = userEvent.setup();
     push.mockClear();
     renderWithProviders(
       <ProjectKeysTable {...defaultProps} keys={[makeKey({ token: "tok-abc123", key_alias: "My API Key" })]} />,
     );
-    await user.click(screen.getByRole("link", { name: "My API Key" }));
+    const link = screen.getByRole("link", { name: "My API Key" });
+
+    await user.click(link);
+    expect(push).toHaveBeenCalledTimes(1);
     expect(push).toHaveBeenCalledWith("/ui/api-keys?key=tok-abc123");
+
+    await user.keyboard("{Meta>}");
+    await user.click(link);
+    await user.keyboard("{/Meta}");
+    expect(push).toHaveBeenCalledTimes(1);
   });
 
-  it("should still link a key that has no alias", () => {
+  it("falls back to the key name in the accessible row name when the alias is empty", () => {
     renderWithProviders(
       <ProjectKeysTable
         {...defaultProps}
-        keys={[makeKey({ token: "tok-no-alias", key_alias: "", user_id: "owner-1" })]}
+        keys={[makeKey({ token: "tok-empty-alias", key_name: "name-empty-alias", key_alias: "" })]}
       />,
     );
-    expect(screen.getByRole("link", { name: "—" })).toHaveAttribute("href", "/ui/api-keys?key=tok-no-alias");
+
+    expect(screen.getByRole("row", { name: "Open key name-empty-alias" })).toBeInTheDocument();
   });
 
-  it("should give each row a link to its own key", () => {
+  it("falls back to the token when the alias and key name are empty", () => {
+    renderWithProviders(
+      <ProjectKeysTable {...defaultProps} keys={[makeKey({ token: "tok-empty-name", key_name: "", key_alias: "" })]} />,
+    );
+
+    expect(screen.getByRole("row", { name: "Open key tok-empty-name" })).toBeInTheDocument();
+  });
+
+  it("navigates to key details when plain row content is clicked", async () => {
+    const user = userEvent.setup();
+    push.mockClear();
+    renderWithProviders(
+      <ProjectKeysTable {...defaultProps} keys={[makeKey({ token: "tok-abc123", key_alias: "My API Key" })]} />,
+    );
+    await user.click(within(screen.getByRole("row", { name: "Open key My API Key" })).getAllByRole("cell")[2]);
+    expect(push).toHaveBeenCalledTimes(1);
+    expect(push).toHaveBeenCalledWith("/ui/api-keys?key=tok-abc123");
+  });
+
+  it("opens a focused row with Enter and labels an alias-less key with its key name", async () => {
+    const user = userEvent.setup();
+    push.mockClear();
+    const aliasLessKeyInput = {
+      token: "tok-no-alias",
+      key_name: "name-no-alias",
+      key_alias: null as any,
+      user_id: "owner-1",
+    };
+    const aliasLessKey = makeKey(aliasLessKeyInput);
+    renderWithProviders(<ProjectKeysTable {...defaultProps} keys={[aliasLessKey]} />);
+    const row = screen.getByRole("row", { name: "Open key name-no-alias" });
+    row.focus();
+    expect(row).toHaveFocus();
+    await user.keyboard("{Enter}");
+
+    expect(push).toHaveBeenCalledWith("/ui/api-keys?key=tok-no-alias");
+  });
+
+  it("routes each row to its own key", async () => {
+    const user = userEvent.setup();
+    push.mockClear();
     const keys = [makeKey({ token: "tok-1", key_alias: "Key One" }), makeKey({ token: "tok-2", key_alias: "Key Two" })];
     renderWithProviders(<ProjectKeysTable {...defaultProps} keys={keys} />);
-    expect(screen.getByRole("link", { name: "Key One" })).toHaveAttribute("href", "/ui/api-keys?key=tok-1");
-    expect(screen.getByRole("link", { name: "Key Two" })).toHaveAttribute("href", "/ui/api-keys?key=tok-2");
+
+    await user.click(screen.getByText("Key One"));
+    expect(push).toHaveBeenLastCalledWith("/ui/api-keys?key=tok-1");
+    const secondRow = screen.getByRole("row", { name: "Open key Key Two" });
+    secondRow.focus();
+    await user.keyboard("{Enter}");
+    expect(push).toHaveBeenLastCalledWith("/ui/api-keys?key=tok-2");
   });
 
   it("should display the owner using user.user_email when available", () => {

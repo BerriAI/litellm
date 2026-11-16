@@ -92,7 +92,7 @@ test.describe("Proxy Admin - Keys", () => {
 
     const keyRow = page.getByRole("row").filter({ hasText: E2E_REGENERATE_KEY_ALIAS });
     await expect(keyRow).toBeVisible({ timeout: 10_000 });
-    await keyRow.getByRole("button", { name: E2E_REGENERATE_KEY_ALIAS }).click();
+    await keyRow.getByText(E2E_REGENERATE_KEY_ALIAS, { exact: true }).click();
 
     await expect(page.getByText("Back to Keys")).toBeVisible({ timeout: 10_000 });
 
@@ -126,7 +126,7 @@ test.describe("Proxy Admin - Keys", () => {
 
     const keyRow = page.getByRole("row").filter({ hasText: E2E_UPDATE_LIMITS_KEY_ALIAS });
     await expect(keyRow).toBeVisible({ timeout: 10_000 });
-    await keyRow.getByRole("button", { name: E2E_UPDATE_LIMITS_KEY_ALIAS }).click();
+    await keyRow.getByText(E2E_UPDATE_LIMITS_KEY_ALIAS, { exact: true }).click();
 
     await expect(page.getByText("Back to Keys")).toBeVisible({ timeout: 10_000 });
 
@@ -168,7 +168,7 @@ test.describe("Proxy Admin - Keys", () => {
 
     const keyRow = page.getByRole("row").filter({ hasText: alias });
     await expect(keyRow).toBeVisible({ timeout: 10_000 });
-    await keyRow.getByRole("button", { name: alias }).click();
+    await keyRow.getByText(alias, { exact: true }).click();
 
     await expect(page.getByText("Back to Keys")).toBeVisible({ timeout: 10_000 });
 

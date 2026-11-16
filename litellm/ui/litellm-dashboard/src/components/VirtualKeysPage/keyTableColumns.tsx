@@ -106,12 +106,11 @@ interface KeyTableColumnsDeps {
   allTeams: Team[];
   organizations: Organization[];
   teamMemberBudgets: Readonly<Record<string, TeamMemberBudgetSource>>;
-  onSelectKey: (key: KeyResponse) => void;
   applyUserBudgetToTeamKeys: boolean;
 }
 
 export const getKeyTableColumns = (
-  { allTeams, organizations, teamMemberBudgets, onSelectKey, applyUserBudgetToTeamKeys }: KeyTableColumnsDeps,
+  { allTeams, organizations, teamMemberBudgets, applyUserBudgetToTeamKeys }: KeyTableColumnsDeps,
   t: TFunction,
 ): ColumnDef<KeyResponse>[] => [
   {
@@ -148,7 +147,6 @@ export const getKeyTableColumns = (
               dataTestId={`key-status-${row.original.token_id}`}
             />
           }
-          onClick={() => onSelectKey(row.original)}
         />
       );
     },
@@ -162,7 +160,7 @@ export const getKeyTableColumns = (
     ),
     size: 120,
     enableSorting: true,
-    cell: (info) => <IdCell value={info.getValue() as string | null} onClick={() => onSelectKey(info.row.original)} />,
+    cell: (info) => <IdCell value={info.getValue() as string | null} />,
   },
   {
     id: "team_alias",

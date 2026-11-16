@@ -70,6 +70,7 @@ export interface DataTableResolvedProps<TData extends RowData, TValue> {
   onRowSelectionChange?: OnChangeFn<RowSelectionState>;
 
   onRowClick?: (row: TData) => void;
+  getRowLabel?: (row: TData) => string;
 
   rowClassName?: (row: Row<TData>) => string;
 
@@ -106,7 +107,19 @@ type DataTableBaseProps<TData extends RowData, TValue> = Omit<
   | "defaultColumnVisibility"
   | "rowSelection"
   | "onRowSelectionChange"
+  | "onRowClick"
+  | "getRowLabel"
 >;
+
+type RowActivationProps<TData> =
+  | {
+      onRowClick: (row: TData) => void;
+      getRowLabel: (row: TData) => string;
+    }
+  | {
+      onRowClick?: undefined;
+      getRowLabel?: undefined;
+    };
 
 type SortingProps =
   | {
@@ -167,6 +180,7 @@ type RowSelectionProps =
   | { rowSelection?: never; onRowSelectionChange?: OnChangeFn<RowSelectionState> };
 
 export type DataTableProps<TData extends RowData, TValue> = DataTableBaseProps<TData, TValue> &
+  RowActivationProps<TData> &
   SortingProps &
   PaginationProps &
   FilterProps &

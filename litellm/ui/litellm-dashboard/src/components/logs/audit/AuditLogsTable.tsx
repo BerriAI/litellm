@@ -17,7 +17,12 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import i18n from "@/i18n/i18n";
 
-import { AUDIT_TABLE_NAME_DISPLAY, AuditLogEntry, getAuditLogsTableColumns } from "./AuditLogsTableColumns";
+import {
+  AUDIT_TABLE_NAME_DISPLAY,
+  AuditLogEntry,
+  auditActionLabel,
+  getAuditLogsTableColumns,
+} from "./AuditLogsTableColumns";
 
 interface AuditLogsTableProps {
   data: AuditLogEntry[];
@@ -123,7 +128,7 @@ export function AuditLogsTable({
 }: AuditLogsTableProps) {
   const { t } = useTranslation();
   const [filtersOpen, setFiltersOpen] = useState(false);
-  const columns = useMemo(() => getAuditLogsTableColumns({ onViewLog }, t), [onViewLog, t]);
+  const columns = useMemo(() => getAuditLogsTableColumns(t), [t]);
   const filterLabels = useMemo(
     () => Object.fromEntries(Object.entries(FILTER_LABELS).map(([id, labelKey]) => [id, t(labelKey)])),
     [t],
@@ -137,6 +142,10 @@ export function AuditLogsTable({
       data={data}
       columns={columns}
       getRowId={(row) => row.id}
+      onRowClick={onViewLog}
+      getRowLabel={(log) =>
+        t("logs.audit.table.openRowLabel", { action: auditActionLabel(log.action), objectId: log.object_id })
+      }
       paginationMode="server"
       pagination={pagination}
       onPaginationChange={onPaginationChange}

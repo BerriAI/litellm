@@ -6,7 +6,8 @@ import { NuqsTestingAdapter } from "nuqs/adapters/testing";
 import { flexRender, getCoreRowModel, useReactTable } from "@tanstack/react-table";
 import PublicModelHub from "./public_model_hub";
 import { getClaudeCodePluginsList, skillHubPublicCall } from "./networking";
-import { getPublicMCPHubColumns, MCPServerData, ModelGroupInfo } from "./PublicModelHubTableColumns";
+import { getPublicMCPHubColumns } from "./PublicModelHubTableColumns";
+import type { AgentCard, MCPServerData, ModelGroupInfo } from "./PublicModelHubTableColumns";
 
 const { apiGetMock } = vi.hoisted(() => ({ apiGetMock: vi.fn() }));
 
@@ -77,6 +78,16 @@ const passThrough = (name: string, path: string, methods?: string[]): ModelGroup
 };
 
 const DEFAULT_MODELS = [model({ model_group: "gpt-4" }), model({ model_group: "claude-3", providers: ["anthropic"] })];
+const mockAgent: AgentCard = {
+  protocolVersion: "1",
+  name: "row-activation-agent",
+  description: "Agent used for row activation",
+  url: "https://example.com/agent",
+  version: "1.0",
+  defaultInputModes: [],
+  defaultOutputModes: [],
+  skills: [],
+};
 
 const respondWith = (
   rows: ModelGroupInfo[],
@@ -197,10 +208,62 @@ describe("PublicModelHub", () => {
 
     expect(await screen.findByText("gpt-4")).toBeInTheDocument();
     expect(
-      within(screen.getByRole("button", { name: "gpt-4", exact: true })).queryByAltText(""),
+      within(within(screen.getByRole("row", { name: "Open model gpt-4" })).getAllByRole("cell")[0]).queryByAltText(""),
     ).not.toBeInTheDocument();
     expect(modelCalls()[0][0]).toBe(MODEL_HUB_PATH);
     expect(modelQueries()[0]).toEqual({ page: 1, page_size: 50, sort: "model_group" });
+  });
+
+  it("opens model details by clicking a plain cell and exposes the accessible row name", async () => {
+    const user = userEvent.setup();
+    respondWith([model({ model_group: "gpt-4" })]);
+    renderHub();
+
+    const row = await screen.findByRole("row", { name: "Open model gpt-4" });
+    await user.click(within(row).getByText("gpt-4"));
+
+    expect(await screen.findByRole("heading", { name: "gpt-4" })).toBeInTheDocument();
+  });
+
+  it("opens model details when Enter is pressed on the focused row", async () => {
+    const user = userEvent.setup();
+    respondWith([model({ model_group: "gpt-4" })]);
+    renderHub();
+
+    const row = await screen.findByRole("row", { name: "Open model gpt-4" });
+    row.focus();
+    expect(row).toHaveFocus();
+    await user.keyboard("{Enter}");
+
+    expect(await screen.findByRole("heading", { name: "gpt-4" })).toBeInTheDocument();
+  });
+
+  it("opens agent details from a plain cell and exposes the accessible row name", async () => {
+    const user = userEvent.setup();
+    const networkingModule = await import("./networking");
+    vi.mocked(networkingModule.agentHubPublicModelsCall).mockResolvedValueOnce([mockAgent]);
+    renderHub();
+
+    await user.click(await screen.findByRole("tab", { name: "Agent Hub" }));
+    const row = await screen.findByRole("row", { name: "Open agent row-activation-agent" });
+    await user.click(within(row).getByText("row-activation-agent"));
+
+    expect(await screen.findByRole("heading", { name: "row-activation-agent" })).toBeInTheDocument();
+  });
+
+  it("opens agent details when Enter is pressed on the focused row", async () => {
+    const user = userEvent.setup();
+    const networkingModule = await import("./networking");
+    vi.mocked(networkingModule.agentHubPublicModelsCall).mockResolvedValueOnce([mockAgent]);
+    renderHub();
+
+    await user.click(await screen.findByRole("tab", { name: "Agent Hub" }));
+    const row = await screen.findByRole("row", { name: "Open agent row-activation-agent" });
+    row.focus();
+    expect(row).toHaveFocus();
+    await user.keyboard("{Enter}");
+
+    expect(await screen.findByRole("heading", { name: "row-activation-agent" })).toBeInTheDocument();
   });
 
   it("waits for the resolved proxy base url before asking for a page", async () => {
@@ -358,7 +421,7 @@ describe("PublicModelHub", () => {
     respondWith([model({ model_group: "jev-latest", providers: ["typesafe"], mode: "evaluation" })]);
     renderHub();
 
-    fireEvent.click(await screen.findByRole("button", { name: "jev-latest" }));
+    fireEvent.click(await screen.findByRole("row", { name: "Open model jev-latest" }));
 
     const example = (await screen.findByText(/\/v1\/systemone/)).closest("pre");
     expect(example).toHaveTextContent('"model": "jev-latest"');
@@ -368,7 +431,7 @@ describe("PublicModelHub", () => {
   it("keeps the chat completions usage example for a chat model", async () => {
     renderHub();
 
-    fireEvent.click(await screen.findByRole("button", { name: "gpt-4" }));
+    fireEvent.click(await screen.findByRole("row", { name: "Open model gpt-4" }));
 
     const example = (await screen.findByText(/chat\.completions\.create/)).closest("pre");
     expect(example).toHaveTextContent('model="gpt-4"');
@@ -390,7 +453,7 @@ describe("PublicModelHub", () => {
     ]);
     renderHub();
 
-    fireEvent.click(await screen.findByRole("button", { name: "gpt-4" }));
+    fireEvent.click(await screen.findByRole("row", { name: "Open model gpt-4" }));
 
     const openai = await screen.findByRole("region", { name: "OpenAI pricing" });
     const aboveThreshold = within(openai).getByRole("rowgroup", { name: "Above 272K tokens" });
@@ -494,7 +557,7 @@ describe("PublicModelHub", () => {
     expect(row).toHaveTextContent("n/a");
     expect(row).not.toHaveTextContent("Free");
 
-    fireEvent.click(screen.getByRole("button", { name: "Clinical NER" }));
+    fireEvent.click(row);
 
     const dialog = await screen.findByRole("dialog");
     expect(within(dialog).getByText("/clinical-ner")).toBeInTheDocument();
@@ -508,7 +571,7 @@ describe("PublicModelHub", () => {
     respondWith([passThrough("Odd", "/odd", ['GET" ; touch /tmp/pwned ; "'])]);
     renderHub();
 
-    fireEvent.click(await screen.findByRole("button", { name: "Odd" }));
+    fireEvent.click(await screen.findByRole("row", { name: "Open model Odd" }));
 
     const dialog = await screen.findByRole("dialog");
     expect(
@@ -520,7 +583,7 @@ describe("PublicModelHub", () => {
     respondWith([passThrough("Tenant", "/tenant/$acct")]);
     renderHub();
 
-    fireEvent.click(await screen.findByRole("button", { name: "Tenant" }));
+    fireEvent.click(await screen.findByRole("row", { name: "Open model Tenant" }));
 
     const dialog = await screen.findByRole("dialog");
     expect(
@@ -532,7 +595,7 @@ describe("PublicModelHub", () => {
     respondWith([passThrough("Catalog", "/catalog", ["GET"])]);
     renderHub();
 
-    fireEvent.click(await screen.findByRole("button", { name: "Catalog" }));
+    fireEvent.click(await screen.findByRole("row", { name: "Open model Catalog" }));
 
     const dialog = await screen.findByRole("dialog");
     expect(within(dialog).getByText(/curl -X "GET" "https:\/\/backend.example.com\/catalog"/)).toBeInTheDocument();
@@ -579,7 +642,7 @@ describe("PublicModelHub chat variant", () => {
     const networkingModule = await import("./networking");
     renderHub({ isEmbedded: true, variant: "chat" });
 
-    expect(await screen.findByRole("button", { name: /^gpt-4(?: |$)/ })).toBeInTheDocument();
+    expect(await screen.findByRole("row", { name: "Open model gpt-4" })).toBeInTheDocument();
     expect(screen.getByRole("textbox", { name: "Search models" })).toBeInTheDocument();
     expect(screen.queryByTestId("navbar")).not.toBeInTheDocument();
     expect(screen.queryByRole("tablist")).not.toBeInTheDocument();
@@ -597,9 +660,9 @@ describe("PublicModelHub chat variant", () => {
     const user = userEvent.setup();
     respondWith(DEFAULT_MODELS, 300);
     renderHub({ isEmbedded: true, variant: "chat" });
-    const modelButton = await screen.findByRole("button", { name: /^gpt-4(?: |$)/ });
-    expect(within(modelButton).getByAltText("")).toBeInTheDocument();
-    expect(modelButton).toHaveTextContent("OpenAI");
+    const modelCell = within(await screen.findByRole("row", { name: "Open model gpt-4" })).getAllByRole("cell")[0];
+    expect(within(modelCell).getByAltText("")).toBeInTheDocument();
+    expect(modelCell).toHaveTextContent("OpenAI");
     expect(screen.getByRole("columnheader", { name: "Model" })).toBeInTheDocument();
     expect(screen.queryByRole("columnheader", { name: "Providers" })).not.toBeInTheDocument();
     expect(screen.queryByRole("columnheader", { name: "Tags" })).not.toBeInTheDocument();
@@ -625,7 +688,7 @@ describe("PublicModelHub chat variant", () => {
     const user = userEvent.setup();
     respondWith(DEFAULT_MODELS, 300);
     renderHub({ isEmbedded: true, variant: "chat" });
-    await screen.findByRole("button", { name: /^gpt-4(?: |$)/ });
+    await screen.findByRole("row", { name: "Open model gpt-4" });
 
     await user.type(screen.getByRole("textbox", { name: "Search models" }), "gpt");
     await waitFor(() => expect(lastModelQuery().q).toBe("gpt"));
@@ -638,7 +701,7 @@ describe("PublicModelHub chat variant", () => {
     const user = userEvent.setup();
     respondWith([model({ model_group: "gpt-4", input_cost_per_token: 0.000001, output_cost_per_token: 0.000003 })]);
     renderHub({ isEmbedded: true, variant: "chat" });
-    await user.click(await screen.findByRole("button", { name: /^gpt-4(?: |$)/ }));
+    await user.click(await screen.findByRole("row", { name: "Open model gpt-4" }));
 
     const dialog = await screen.findByRole("dialog", { name: "gpt-4" });
     expect(dialog).toHaveClass("chat-theme", "chat-model-hub-dialog");
@@ -664,7 +727,7 @@ const mockMcpServer: MCPServerData = {
 };
 
 function PublicMcpTestTable({ data }: { data: MCPServerData[] }) {
-  const columns = getPublicMCPHubColumns({ onServerClick: vi.fn() });
+  const columns = getPublicMCPHubColumns();
   const table = useReactTable({ data, columns, getCoreRowModel: getCoreRowModel() });
 
   return (
@@ -702,7 +765,7 @@ describe("publicMCPHubColumns", () => {
   it("does not expose a URL column header", () => {
     render(<PublicMcpTestTable data={[mockMcpServer]} />);
     expect(screen.queryByText("URL")).not.toBeInTheDocument();
-    const columns = getPublicMCPHubColumns({ onServerClick: vi.fn() });
+    const columns = getPublicMCPHubColumns();
     expect(columns.some((c) => c.header === "URL" || c.meta?.title === "URL")).toBe(false);
   });
 
@@ -713,19 +776,53 @@ describe("publicMCPHubColumns", () => {
 });
 
 describe("public hub MCP details modal", () => {
+  it("uses the alias in the accessible label when the server name is empty", async () => {
+    const networkingModule = await import("./networking");
+    const serverWithoutName = {
+      ...mockMcpServer,
+      server_id: "server-fallback-id",
+      server_name: "",
+      alias: "server-fallback-alias",
+    };
+    vi.mocked(networkingModule.mcpHubPublicServersCall).mockResolvedValueOnce([serverWithoutName]);
+
+    renderHub();
+
+    await userEvent.click(await screen.findByRole("tab", { name: /MCP Hub/i }));
+    expect(await screen.findByRole("row", { name: "Open MCP server server-fallback-alias" })).toBeInTheDocument();
+  });
+
   it("does not show the upstream url when a server is opened", async () => {
+    const user = userEvent.setup();
     const networkingModule = await import("./networking");
     vi.mocked(networkingModule.mcpHubPublicServersCall).mockResolvedValue([mockMcpServer]);
 
     renderHub();
 
-    fireEvent.click(await screen.findByRole("tab", { name: /MCP Hub/i }));
-    fireEvent.click(await screen.findByRole("button", { name: "exa_test" }));
+    await user.click(await screen.findByRole("tab", { name: /MCP Hub/i }));
+    const row = await screen.findByRole("row", { name: "Open MCP server exa_test" });
+    await user.click(within(row).getByText("exa_test"));
 
     // "Server Overview" only exists inside the opened MCP details modal,
     // so finding it proves the modal rendered and the url assertion is not vacuous.
     await screen.findByText("Server Overview");
     expect(screen.queryByText(PUBLIC_SERVER_URL)).not.toBeInTheDocument();
+  });
+
+  it("opens MCP server details when Enter is pressed on the focused row", async () => {
+    const user = userEvent.setup();
+    const networkingModule = await import("./networking");
+    vi.mocked(networkingModule.mcpHubPublicServersCall).mockResolvedValueOnce([mockMcpServer]);
+
+    renderHub();
+
+    await user.click(await screen.findByRole("tab", { name: /MCP Hub/i }));
+    const row = await screen.findByRole("row", { name: "Open MCP server exa_test" });
+    row.focus();
+    expect(row).toHaveFocus();
+    await user.keyboard("{Enter}");
+
+    expect(await screen.findByText("Server Overview")).toBeInTheDocument();
   });
 
   it("uses the backend URL in displayed and copied MCP examples", async () => {
@@ -737,7 +834,7 @@ describe("public hub MCP details modal", () => {
     renderHub();
 
     await user.click(await screen.findByRole("tab", { name: /MCP Hub/i }));
-    await user.click(await screen.findByRole("button", { name: "exa_test" }));
+    await user.click(await screen.findByRole("row", { name: "Open MCP server exa_test" }));
     await screen.findByText("Server Overview");
 
     expect(screen.getByText(/https:\/\/backend\.example\.com\/exa_test\/mcp/)).toBeInTheDocument();
@@ -752,13 +849,15 @@ describe("public hub MCP details modal", () => {
   });
 
   it("closes the server details modal from its close control", async () => {
+    const user = userEvent.setup();
     const networkingModule = await import("./networking");
     vi.mocked(networkingModule.mcpHubPublicServersCall).mockResolvedValue([mockMcpServer]);
 
     renderHub();
 
-    fireEvent.click(await screen.findByRole("tab", { name: /MCP Hub/i }));
-    fireEvent.click(await screen.findByRole("button", { name: "exa_test" }));
+    await user.click(await screen.findByRole("tab", { name: /MCP Hub/i }));
+    const row = await screen.findByRole("row", { name: "Open MCP server exa_test" });
+    await user.click(within(row).getByText("exa_test"));
     await screen.findByText("Server Overview");
 
     fireEvent.click(screen.getByRole("button", { name: /close/i }));

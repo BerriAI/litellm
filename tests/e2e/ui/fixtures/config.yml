@@ -10,6 +10,9 @@ model_list:
       api_base: os.environ/MOCK_LLM_URL
       api_key: fake-key
 
+litellm_settings:
+  store_audit_logs: true
+
 general_settings:
   master_key: os.environ/LITELLM_MASTER_KEY
   database_url: os.environ/DATABASE_URL

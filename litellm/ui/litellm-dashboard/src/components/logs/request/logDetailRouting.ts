@@ -1,8 +1,24 @@
+import type { TFunction } from "i18next";
 import { parseAsString, useQueryStates } from "nuqs";
 import { useCallback } from "react";
 
+import type { LogEntry } from "../types";
+
 export const LOG_ID_QUERY_PARAM = "log_id";
 export const SESSION_ID_QUERY_PARAM = "session_id";
+
+export function isMultiRequestSession(log: LogEntry): boolean {
+  return Boolean(log.session_id) && (log.session_total_count || 1) > 1;
+}
+
+export function requestLogRowLabel(log: LogEntry, t: TFunction): string {
+  if (isMultiRequestSession(log)) {
+    return t("logs.request.table.openSessionRowLabel", { id: log.session_id });
+  }
+  return log.request_id
+    ? t("logs.request.table.openRequestRowLabel", { id: log.request_id })
+    : t("logs.request.table.openRequestRowLabelNoId");
+}
 
 export interface LogDetailRouting {
   logId: string | null;

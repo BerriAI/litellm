@@ -53,9 +53,9 @@ export function ProjectsTable({
   const pageSize = PAGE_SIZE_OPTIONS.includes(pagination.pageSize) ? pagination.pageSize : PROJECTS_DEFAULT_PAGE_SIZE;
 
   const columns = useMemo(() => {
-    const deps = { onProjectClick, teamAliasMap, isTeamsLoading, t };
+    const deps = { teamAliasMap, isTeamsLoading, t };
     return getProjectsTableColumns(deps);
-  }, [onProjectClick, teamAliasMap, isTeamsLoading, t]);
+  }, [teamAliasMap, isTeamsLoading, t]);
 
   const pageCount = Math.max(Math.ceil(projects.length / pageSize), 1);
   const pageIndex = pagination.pageIndex < pageCount ? pagination.pageIndex : 0;
@@ -86,6 +86,10 @@ export function ProjectsTable({
       loadingMessage={t("projects.table.loading")}
       noDataMessage={<EmptyState isFiltered={isFiltered} />}
       size="compact"
+      onRowClick={(project) => onProjectClick(project.project_id)}
+      getRowLabel={(project) =>
+        t("projects.table.openProjectRowLabel", { name: project.project_alias || project.project_id })
+      }
     />
   );
 }

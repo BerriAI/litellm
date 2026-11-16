@@ -2511,7 +2511,8 @@
         "keyIdPlaceholder": "Enter Key ID…",
         "status": "Status",
         "statusPlaceholder": "All statuses"
-      }
+      },
+      "openKeyRowLabel": "Open key {{name}}"
     }
   },
   "regenerateKeyModal": {
@@ -3180,7 +3181,8 @@
         "noModels": "No models",
         "blocked": "Blocked",
         "active": "Active"
-      }
+      },
+      "openProjectRowLabel": "Open project {{name}}"
     },
     "detail": {
       "loading": "Loading",
@@ -3237,7 +3239,8 @@
         "created": "Created",
         "lastActive": "Last Active",
         "never": "Never"
-      }
+      },
+      "openKeyRowLabel": "Open key {{name}}"
     },
     "form": {
       "basicInformation": "Basic Information",
@@ -4218,7 +4221,8 @@
       },
       "loading": "Loading workflow runs…",
       "empty": "No workflow runs yet",
-      "searchPlaceholder": "Search runs…"
+      "searchPlaceholder": "Search runs…",
+      "openRunRowLabel": "Open workflow run {{id}}"
     },
     "filters": {
       "title": "Filters",
@@ -7353,7 +7357,8 @@
         "noMatchTitle": "No matching models",
         "noMatchBody": "Adjust the search or filters to see more models.",
         "emptyTitle": "No models available",
-        "emptyBody": "Models made public by the proxy admin will appear here."
+        "emptyBody": "Models made public by the proxy admin will appear here.",
+        "openRowLabel": "Open model {{name}}"
       },
       "agents": {
         "title": "Available Agents",
@@ -7365,7 +7370,8 @@
         "loading": "Loading agents…",
         "noMatchTitle": "No matching agents",
         "noMatchBody": "Adjust the search or skill filter to see more agents.",
-        "showing": "Showing {{shown}} of {{total}} agents"
+        "showing": "Showing {{shown}} of {{total}} agents",
+        "openRowLabel": "Open agent {{name}}"
       },
       "mcp": {
         "title": "Available MCP Servers",
@@ -7377,7 +7383,8 @@
         "loading": "Loading MCP servers…",
         "noMatchTitle": "No matching MCP servers",
         "noMatchBody": "Adjust the search or transport filter to see more servers.",
-        "showing": "Showing {{shown}} of {{total}} MCP servers"
+        "showing": "Showing {{shown}} of {{total}} MCP servers",
+        "openRowLabel": "Open MCP server {{name}}"
       },
       "modelDialog": {
         "fallbackTitle": "Model Details",
@@ -12446,7 +12453,8 @@
         "formula": "guardrail + guardrail + … = guardrail cost",
         "explanation": "Each guardrail's cost is its units per counter × that counter's per-unit price from the cost map. Open a guardrail for its per-counter math."
       },
-      "unpricedTooltip": "{{summary}}: these units have no known price and are left out of the cost"
+      "unpricedTooltip": "{{summary}}: these units have no known price and are left out of the cost",
+      "openGuardrailRowLabel": "Open guardrail {{name}}"
     },
     "detail": {
       "loading": "Loading",
@@ -14984,7 +14992,10 @@
         "loading": "Loading request logs…",
         "searchPlaceholder": "Search logs by ID…",
         "filtersTitle": "Filters",
-        "filtersDescription": "Narrow down request logs"
+        "filtersDescription": "Narrow down request logs",
+        "openSessionRowLabel": "Open session {{id}}",
+        "openRequestRowLabel": "Open request {{id}}",
+        "openRequestRowLabelNoId": "Open request"
       },
       "filters": {
         "search": "Search",
@@ -15110,7 +15121,8 @@
         "action": "Action",
         "allActions": "All Actions",
         "table": "Table",
-        "allTables": "All Tables"
+        "allTables": "All Tables",
+        "openRowLabel": "Open audit log {{action}} {{objectId}}"
       },
       "columns": {
         "timestamp": "Timestamp",

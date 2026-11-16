@@ -374,6 +374,7 @@ export function GuardrailsOverview({
           isLoading={isLoading}
           noDataMessage={t("guardrailsMonitor.overview.empty")}
           onRowClick={(row) => onSelectGuardrail(row.id)}
+          getRowLabel={(row) => t("guardrailsMonitor.overview.openGuardrailRowLabel", { name: row.name })}
           rowClassName={() => "cursor-pointer"}
           sortingMode="server"
           sorting={sorting}

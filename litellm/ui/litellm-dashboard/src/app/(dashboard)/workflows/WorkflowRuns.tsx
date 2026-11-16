@@ -542,6 +542,7 @@ const WorkflowRuns: React.FC<WorkflowRunsProps> = ({ accessToken }) => {
         globalFilter={globalFilter}
         onGlobalFilterChange={setGlobalFilter}
         onRowClick={fetchRunDetail}
+        getRowLabel={(run) => t("workflows.table.openRunRowLabel", { id: run.run_id })}
         size="compact"
         toolbar={(table) => (
           <>

@@ -4,6 +4,11 @@ import type { OnUrlUpdateFunction } from "nuqs/adapters/testing";
 import { fireEvent, renderWithProviders, screen, waitFor } from "../../../../../tests/test-utils";
 import { ProjectKeysSection } from "./ProjectKeysSection";
 
+vi.mock("next/navigation", async () => ({
+  ...(await vi.importActual("next/navigation")),
+  useRouter: () => ({ push: vi.fn() }),
+}));
+
 const mockUseKeys = vi.fn();
 vi.mock("@/app/(dashboard)/hooks/keys/useKeys", () => ({
   useKeys: (...args: unknown[]) => mockUseKeys(...args),

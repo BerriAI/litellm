@@ -3,9 +3,11 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
 import { DataTable } from "@/components/shared/DataTable";
+import i18n from "@/i18n/i18n";
 
 import type { LogEntry } from "../types";
 import { getRequestLogsTableColumns } from "./RequestLogsTableColumns";
+import { requestLogRowLabel } from "./logDetailRouting";
 
 const { copyToClipboardMock } = vi.hoisted(() => ({ copyToClipboardMock: vi.fn() }));
 
@@ -362,6 +364,7 @@ describe("Request ID column", () => {
         getRowId={(row) => row.request_id}
         size="compact"
         onRowClick={onRowClick}
+        getRowLabel={(log) => requestLogRowLabel(log, i18n.t)}
       />,
     );
 

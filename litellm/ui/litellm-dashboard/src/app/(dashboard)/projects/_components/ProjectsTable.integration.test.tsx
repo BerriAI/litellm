@@ -167,3 +167,47 @@ describe("ProjectsTable pagination URL state", () => {
     expect(screen.getByTestId("pagination-page")).toHaveTextContent("Page 1 of 2");
   });
 });
+
+describe("ProjectsTable row activation", () => {
+  const renderProject = (onProjectClick: (projectId: string) => void, project = makeProject(1)) =>
+    renderWithProviders(
+      <ProjectsTable
+        projects={[project]}
+        isLoading={false}
+        isFiltered={false}
+        onProjectClick={onProjectClick}
+        teamAliasMap={new Map()}
+        isTeamsLoading={false}
+      />,
+    );
+
+  it("opens project details from a plain cell and exposes the accessible row name", async () => {
+    const user = userEvent.setup();
+    const onProjectClick = vi.fn();
+    renderProject(onProjectClick);
+    const row = screen.getByRole("row", { name: "Open project Project 01" });
+
+    await user.click(within(row).getByText("proj-01"));
+
+    expect(onProjectClick).toHaveBeenCalledWith("proj-01");
+  });
+
+  it("falls back to the project ID in the accessible row name when the alias is empty", () => {
+    renderProject(vi.fn(), { ...makeProject(1), project_alias: "" });
+
+    expect(screen.getByRole("row", { name: "Open project proj-01" })).toBeInTheDocument();
+  });
+
+  it("opens project details when Enter is pressed on the focused row", async () => {
+    const user = userEvent.setup();
+    const onProjectClick = vi.fn();
+    renderProject(onProjectClick);
+    const row = screen.getByRole("row", { name: "Open project Project 01" });
+
+    row.focus();
+    expect(row).toHaveFocus();
+    await user.keyboard("{Enter}");
+
+    expect(onProjectClick).toHaveBeenCalledWith("proj-01");
+  });
+});
