@@ -74,7 +74,8 @@ fn credential_failure(error: &Error) -> Option<&'static str> {
 
 fn gcp_credential_failure(error: &Error) -> Option<(&'static str, String)> {
     let (Error::Auth(litellm_auth::Error::CredentialAcquisition(detail))
-    | Error::Llm(litellm_llms::Error::Auth(litellm_auth::Error::CredentialAcquisition(detail)))) = error
+    | Error::Llm(litellm_llms::Error::Auth(litellm_auth::Error::CredentialAcquisition(detail)))) =
+        error
     else {
         return None;
     };

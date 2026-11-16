@@ -29,9 +29,8 @@ impl CredentialFailure {
         if let Some(error) = node.downcast_ref::<gcp_auth::Error>() {
             return match error {
                 gcp_auth::Error::NoAuthMethod(..) => Some(Self::NoDefaultCredentials),
-                gcp_auth::Error::Str(TOKEN_REJECTED) | gcp_auth::Error::Json(TOKEN_UNREADABLE, _) => {
-                    Some(Self::TokenRejected)
-                }
+                gcp_auth::Error::Str(TOKEN_REJECTED)
+                | gcp_auth::Error::Json(TOKEN_UNREADABLE, _) => Some(Self::TokenRejected),
                 gcp_auth::Error::Other(TOKEN_UNREACHABLE, _) | gcp_auth::Error::Http(..) => {
                     Some(Self::TokenUnreachable)
                 }
@@ -74,16 +73,26 @@ mod tests {
 
     #[rstest]
     #[case::no_adc(
-        gcp_auth::Error::NoAuthMethod(Box::new(not_found()), Box::new(not_found()), Box::new(not_found())),
+        gcp_auth::Error::NoAuthMethod(
+            Box::new(not_found()),
+            Box::new(not_found()),
+            Box::new(not_found())
+        ),
         CredentialFailure::NoDefaultCredentials
     )]
-    #[case::token_endpoint_error_status(gcp_auth::Error::Str(TOKEN_REJECTED), CredentialFailure::TokenRejected)]
+    #[case::token_endpoint_error_status(
+        gcp_auth::Error::Str(TOKEN_REJECTED),
+        CredentialFailure::TokenRejected
+    )]
     #[case::token_endpoint_unreadable_body(
         gcp_auth::Error::Json(TOKEN_UNREADABLE, json_error()),
         CredentialFailure::TokenRejected
     )]
     #[case::token_endpoint_unreachable(
-        gcp_auth::Error::Other(TOKEN_UNREACHABLE, Box::new(io::Error::from(io::ErrorKind::ConnectionRefused))),
+        gcp_auth::Error::Other(
+            TOKEN_UNREACHABLE,
+            Box::new(io::Error::from(io::ErrorKind::ConnectionRefused))
+        ),
         CredentialFailure::TokenUnreachable
     )]
     #[case::invalid_private_key(
@@ -94,7 +103,10 @@ mod tests {
         gcp_auth::Error::Io("failed to open application credentials file", missing_file()),
         CredentialFailure::Unloadable
     )]
-    fn gcp_auth_failures_are_classified(#[case] cause: gcp_auth::Error, #[case] expected: CredentialFailure) {
+    fn gcp_auth_failures_are_classified(
+        #[case] cause: gcp_auth::Error,
+        #[case] expected: CredentialFailure,
+    ) {
         assert_eq!(CredentialFailure::of(&acquisition(cause)), expected);
     }
 
@@ -113,7 +125,9 @@ mod tests {
         let address = listener.local_addr().unwrap();
         let app = axum::Router::new().route(
             "/token",
-            axum::routing::post(move || async move { axum::http::StatusCode::from_u16(status).unwrap() }),
+            axum::routing::post(move || async move {
+                axum::http::StatusCode::from_u16(status).unwrap()
+            }),
         );
         tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
         format!("http://{address}/token")
@@ -129,7 +143,10 @@ mod tests {
             .unwrap()
             .error_for_status()
             .unwrap_err();
-        assert_eq!(CredentialFailure::of(&acquisition(rejected)), CredentialFailure::TokenRejected);
+        assert_eq!(
+            CredentialFailure::of(&acquisition(rejected)),
+            CredentialFailure::TokenRejected
+        );
     }
 
     #[tokio::test]
@@ -137,7 +154,14 @@ mod tests {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let closed = format!("http://{}/token", listener.local_addr().unwrap());
         drop(listener);
-        let refused = reqwest::Client::new().post(closed).send().await.unwrap_err();
-        assert_eq!(CredentialFailure::of(&acquisition(refused)), CredentialFailure::TokenUnreachable);
+        let refused = reqwest::Client::new()
+            .post(closed)
+            .send()
+            .await
+            .unwrap_err();
+        assert_eq!(
+            CredentialFailure::of(&acquisition(refused)),
+            CredentialFailure::TokenUnreachable
+        );
     }
 }

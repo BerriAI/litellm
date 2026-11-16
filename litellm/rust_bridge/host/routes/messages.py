@@ -884,10 +884,15 @@ def _bedrock_credential_failure(error: Exception, request: Mapping[str, object])
     return None
 
 
+_VERTEX_CREDENTIALS: Final = cast(  # cast-ok: the reader's untyped params dict
+    Callable[[dict[str, object]], object], VertexBase.safe_get_vertex_ai_credentials
+)
+
+
 def _vertex_credential_failure(error: Exception, request: Mapping[str, object]) -> Exception | None:
     return vertex_failures.credential_failure(
         getattr(error, "messages_gcp_credential_failure", None),
-        VertexBase.safe_get_vertex_ai_credentials(dict(_python_handler_params(request, "vertex_ai"))) is not None,
+        _VERTEX_CREDENTIALS(dict(_python_handler_params(request, "vertex_ai"))),
     )
 
 
