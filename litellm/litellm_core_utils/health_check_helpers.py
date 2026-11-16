@@ -195,7 +195,9 @@ class HealthCheckHelpers:
         params: Final = TypeAdapter(dict[str, object]).validate_python(model_params)
         raw_incoming: Final = params.get(_metadata_variable_name)
         incoming: Final = (
-            TypeAdapter(dict[str, object]).validate_python(raw_incoming) if isinstance(raw_incoming, Mapping) else {}
+            TypeAdapter(Mapping[object, object]).validate_python(raw_incoming)
+            if isinstance(raw_incoming, Mapping)
+            else {}
         )
         litellm_metadata: Final[Mapping[str, object]] = {
             **HealthCheckHelpers._get_metadata_for_health_check_call(),

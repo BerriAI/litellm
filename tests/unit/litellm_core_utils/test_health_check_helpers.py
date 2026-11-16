@@ -253,6 +253,14 @@ def test_health_check_tracking_overwrites_non_mapping_incoming_metadata(malforme
     assert metadata["user_api_key_hash"] == LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME
 
 
+def test_health_check_tracking_keeps_the_deployment_id_beside_non_string_keys():
+    result: Final = HealthCheckHelpers.update_model_params_with_health_check_tracking_information(
+        {"model": "gpt-3.5-turbo", "litellm_metadata": {1: "a", "health_check_deployment_id": "standby-deployment"}}
+    )
+
+    assert result["litellm_metadata"]["health_check_deployment_id"] == "standby-deployment"
+
+
 def test_get_metadata_for_health_check_call():
     """Test _get_metadata_for_health_check_call returns correct metadata structure."""
     result: Final = HealthCheckHelpers._get_metadata_for_health_check_call()
