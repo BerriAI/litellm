@@ -1,4 +1,5 @@
 import json
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 from typing import Final
@@ -15,6 +16,7 @@ from litellm.completion_extras.litellm_responses_transformation.handler import (
 )
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.router import GenericLiteLLMParams
 from litellm.litellm_core_utils.prompt_templates.common_utils import encrypted_reasoning_signature
 from litellm.types.utils import ModelResponse
@@ -224,13 +226,42 @@ def _completed_chat_response() -> ModelResponse:
     )
 
 
+def _completed_responses_api_response() -> ResponsesAPIResponse:
+    return ResponsesAPIResponse(
+        id="resp_completed",
+        created_at=0,
+        model="gpt-5.4",
+        object="response",
+        status="completed",
+        output=[
+            {
+                "type": "message",
+                "id": "msg_completed",
+                "role": "assistant",
+                "status": "completed",
+                "content": [{"type": "output_text", "text": "pong", "annotations": []}],
+            }
+        ],
+    )
+
+
+_COMPLETED_RESULTS = pytest.mark.parametrize(
+    "completed_result",
+    [_completed_chat_response, _completed_responses_api_response],
+    ids=["chat_response", "responses_api_response"],
+)
+
+
 @pytest.mark.asyncio
-async def test_acompletion_streams_completed_model_response():
+@_COMPLETED_RESULTS
+async def test_acompletion_streams_completed_model_response(
+    completed_result: Callable[[], ModelResponse | ResponsesAPIResponse],
+):
     """A streaming request whose bridge call comes back already completed must still be
     handed back as an async-iterable stream. Returning the bare ModelResponse crashed the
     proxy's SSE generator with "'async for' requires an object with __aiter__ method".
     Regression for #33154."""
-    completed = _completed_chat_response()
+    completed = completed_result()
     bridge = ResponsesToCompletionBridgeHandler()
 
     with (
@@ -251,8 +282,11 @@ async def test_acompletion_streams_completed_model_response():
     assert [c for c in chunks if c.choices[0].finish_reason], "stream never emitted a finish_reason"
 
 
-def test_completion_streams_completed_model_response():
-    completed = _completed_chat_response()
+@_COMPLETED_RESULTS
+def test_completion_streams_completed_model_response(
+    completed_result: Callable[[], ModelResponse | ResponsesAPIResponse],
+):
+    completed = completed_result()
     bridge = ResponsesToCompletionBridgeHandler()
 
     with (

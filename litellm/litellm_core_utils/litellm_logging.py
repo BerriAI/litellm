@@ -122,7 +122,11 @@ from litellm.litellm_core_utils.served_output_texts import (
     overlay_served_output_texts,
 )
 from litellm.litellm_core_utils.thread_pool_executor import executor
-from litellm.litellm_core_utils.tool_fields import BRIDGED_TOOL_NAMES_KWARG, with_full_tool_call_names
+from litellm.litellm_core_utils.tool_fields import (
+    BRIDGED_TOOL_NAMES_KWARG,
+    BridgedToolNames,
+    with_renamed_tool_calls,
+)
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from litellm.llms.base_llm.search.transformation import SearchResponse
 from litellm.responses.utils import ResponseAPILoggingUtils
@@ -2666,7 +2670,7 @@ class Logging(LiteLLMLoggingBaseClass):
     def _with_full_tool_names(self, response: _LoggedResponse) -> _LoggedResponse | ModelResponse:
         if not isinstance(response, ModelResponse):
             return response
-        return with_full_tool_call_names(response, self.bridged_tool_names)
+        return with_renamed_tool_calls(response, self.bridged_tool_names)
 
     def _success_handler_helper_fn(
         self,
@@ -4511,7 +4515,7 @@ class Logging(LiteLLMLoggingBaseClass):
         if not self.bridged_tool_names:
             self.model_call_details.pop(BRIDGED_TOOL_NAMES_KWARG, None)
             return
-        self.model_call_details[BRIDGED_TOOL_NAMES_KWARG] = dict(self.bridged_tool_names)
+        self.model_call_details[BRIDGED_TOOL_NAMES_KWARG] = BridgedToolNames(tuple(self.bridged_tool_names.items()))
 
     def record_bridged_responses_api_response(self, response: ResponsesAPIResponse) -> None:
         self.record_bridged_model_response(self._translate_responses_api_response_to_model_response(response))

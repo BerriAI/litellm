@@ -100,7 +100,7 @@ def _refused_member_type(member: object) -> str | None:
     if not isinstance(member, Mapping):
         return None
     member_type: Final = _FIELDS.validate_python(member).get("type")
-    return None if member_type in (None, "function") else str(member_type)
+    return None if member_type == "function" else str(member_type)
 
 
 def _refused_tool_types(tool: object) -> tuple[str, ...]:

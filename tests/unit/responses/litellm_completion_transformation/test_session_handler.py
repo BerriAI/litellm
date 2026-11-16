@@ -1,8 +1,11 @@
 import json
+from itertools import chain
 from typing import Final
 from unittest.mock import AsyncMock, patch
 
+import httpx
 import pytest
+import respx
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
@@ -814,3 +817,100 @@ async def test_message_history_replays_real_key_named_tool_payloads() -> None:
     tool_message: Final = result["messages"][2]
     assert json.loads(assistant_message["tool_calls"][0]["function"]["arguments"]) == function_arguments
     assert json.loads(tool_message["content"]) == function_output
+
+
+GEMINI_URL_PATTERN: Final = r"https://generativelanguage\.googleapis\.com/v1[a-z]*/models/gemini-3\.5-flash:.*"
+
+
+def _gemini_answer() -> httpx.Response:
+    return httpx.Response(
+        200,
+        json={
+            "candidates": [
+                {"content": {"role": "model", "parts": [{"text": "Sunny"}]}, "finishReason": "STOP", "index": 0}
+            ],
+            "usageMetadata": {"promptTokenCount": 9, "candidatesTokenCount": 1, "totalTokenCount": 10},
+        },
+    )
+
+
+LONG_NAMESPACE_TOOL: Final = {
+    "type": "namespace",
+    "name": "mcp__codex_apps__codex_document_control",
+    "description": "Docs tools",
+    "tools": [
+        {
+            "type": "function",
+            "name": "_get_document_tool_schemas",
+            "parameters": {"type": "object", "properties": {"doc_id": {"type": "string"}}},
+        }
+    ],
+}
+
+
+def _stored_long_member_call_turn(response_id: str) -> dict[str, object]:
+    return {
+        "request_id": response_id,
+        "call_type": "aresponses",
+        "session_id": "long-member-session",
+        "proxy_server_request": {
+            "input": "Fetch document N-42",
+            "model": "gemini-flash",
+            "tools": [LONG_NAMESPACE_TOOL],
+        },
+        "response": {
+            "id": "chatcmpl-long-member",
+            "object": "chat.completion",
+            "choices": [
+                {
+                    "index": 0,
+                    "finish_reason": "tool_calls",
+                    "message": {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "id": "call_1",
+                                "type": "function",
+                                "function": {
+                                    "name": "mcp__codex_apps__codex_document_control___get_document_tool_schemas",
+                                    "arguments": '{"doc_id": "N-42"}',
+                                },
+                            }
+                        ],
+                    },
+                }
+            ],
+        },
+    }
+
+
+async def test_previous_response_replays_a_long_member_call_under_the_name_the_provider_was_sent(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    response_id: Final = ResponsesAPIRequestUtils._build_responses_api_response_id(
+        custom_llm_provider="gemini", model_id=None, response_id="chatcmpl-long-member"
+    )
+    fake_prisma_client: Final = _FakePrismaClient(results=[[_stored_long_member_call_turn(response_id)]])
+
+    with patch("litellm.proxy.proxy_server.prisma_client", fake_prisma_client), respx.mock:
+        route: Final = respx.post(url__regex=GEMINI_URL_PATTERN).mock(return_value=_gemini_answer())
+        await litellm.aresponses(
+            model="gemini/gemini-3.5-flash",
+            input=[{"type": "function_call_output", "call_id": "call_1", "output": "schema for N-42"}],
+            previous_response_id=response_id,
+            tools=[LONG_NAMESPACE_TOOL],
+            api_key="test-gemini-key",
+        )
+        sent_body: Final = json.loads(route.calls.last.request.content)
+
+    declared: Final = [
+        declaration["name"]
+        for declaration in chain.from_iterable(tool["function_declarations"] for tool in sent_body["tools"])
+    ]
+    parts: Final = list(chain.from_iterable(turn["parts"] for turn in sent_body["contents"]))
+    called: Final = [part["function_call"]["name"] for part in parts if "function_call" in part]
+    answered: Final = [part["function_response"]["name"] for part in parts if "function_response" in part]
+    assert len(declared) == 1
+    assert called == answered == list(declared)

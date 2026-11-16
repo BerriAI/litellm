@@ -460,7 +460,10 @@ async def test_a_client_sent_tool_name_map_never_renames_tools_or_drops_spend(
 
 
 @pytest.mark.asyncio
-async def test_a_malformed_logged_tool_name_map_keeps_the_spend_event_and_tool_rows() -> None:
+@pytest.mark.parametrize("client_value", [{"get_weather": "spoofed"}, 5], ids=["renaming_map", "not_a_map"])
+async def test_a_tool_name_map_in_a_failed_request_body_never_renames_the_spend_event_or_tool_rows(
+    client_value: object,
+) -> None:
     response: Final = ModelResponse(
         choices=[
             {
@@ -474,11 +477,17 @@ async def test_a_malformed_logged_tool_name_map_keeps_the_spend_event_and_tool_r
             }
         ]
     )
-    kwargs: Final = {"litellm_params": {}, "litellm_bridged_tool_names": 5}
+    request_body: Final = {
+        "litellm_params": {},
+        "tools": [{"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object"}}}],
+        "litellm_bridged_tool_names": client_value,
+    }
     now = datetime.now(timezone.utc)
+    event: Final = decode_spend_event(build_spend_event(request_body, response, now, now, store_bodies=False))
 
-    assert isinstance(decode_spend_event(build_spend_event(kwargs, response, now, now, store_bodies=False)), SpendEvent)
-    assert await _recorded_tool_names(kwargs, response) == ({"get_weather"}, ("get_weather",))
+    assert isinstance(event, SpendEvent)
+    assert event.request_tool_names == ("get_weather",)
+    assert await _recorded_tool_names(request_body, response) == ({"get_weather"}, ("get_weather",))
 
 
 @pytest.mark.asyncio

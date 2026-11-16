@@ -79,32 +79,40 @@ def qualified_member_name(namespace: str, name: str) -> str:
     return f"{namespace}__{name}"
 
 
-def with_full_tool_call_names(response: ModelResponse, full_names: Mapping[str, str]) -> ModelResponse:
-    if not full_names:
+@dataclass(frozen=True, slots=True)
+class BridgedToolNames:
+    full_name_by_sent_name: tuple[tuple[str, str], ...]
+
+    def as_mapping(self) -> Mapping[str, str]:
+        return dict(self.full_name_by_sent_name)
+
+
+def with_renamed_tool_calls(response: ModelResponse, new_names: Mapping[str, str]) -> ModelResponse:
+    if not new_names:
         return response
     return response.model_copy(
-        update={"choices": [_choice_with_full_tool_call_names(choice, full_names) for choice in response.choices]}
+        update={"choices": [_choice_with_renamed_tool_calls(choice, new_names) for choice in response.choices]}
     )
 
 
-def _choice_with_full_tool_call_names(
-    choice: Choices | StreamingChoices, full_names: Mapping[str, str]
+def _choice_with_renamed_tool_calls(
+    choice: Choices | StreamingChoices, new_names: Mapping[str, str]
 ) -> Choices | StreamingChoices:
     if not isinstance(choice, Choices) or not choice.message.tool_calls:
         return choice
-    tool_calls: Final = [_tool_call_with_full_name(tool_call, full_names) for tool_call in choice.message.tool_calls]
+    tool_calls: Final = [_renamed_tool_call(tool_call, new_names) for tool_call in choice.message.tool_calls]
     return choice.model_copy(update={"message": choice.message.model_copy(update={"tool_calls": tool_calls})})
 
 
-def _tool_call_with_full_name(
-    tool_call: ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall, full_names: Mapping[str, str]
+def _renamed_tool_call(
+    tool_call: ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall, new_names: Mapping[str, str]
 ) -> ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall:
     if not isinstance(tool_call, ChatCompletionMessageToolCall):
         return tool_call
-    full_name: Final = full_names.get(tool_call.function.name or "")
-    if full_name is None:
+    new_name: Final = new_names.get(tool_call.function.name or "")
+    if new_name is None or new_name == tool_call.function.name:
         return tool_call
-    return tool_call.model_copy(update={"function": tool_call.function.model_copy(update={"name": full_name})})
+    return tool_call.model_copy(update={"function": tool_call.function.model_copy(update={"name": new_name})})
 
 
 def truncate_tool_name(name: str) -> str:
