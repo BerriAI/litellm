@@ -14,12 +14,15 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 import litellm
+from litellm.constants import LITELLM_TRUNCATED_PAYLOAD_FIELD
+from litellm.litellm_core_utils.tool_fields import truncate_tool_name
 from litellm.proxy.spend_tracking.spend_tracking_utils import (
     _get_proxy_server_request_for_spend_logs_payload,
 )
 from litellm.responses.litellm_completion_transformation import session_handler
 from litellm.responses.litellm_completion_transformation.session_handler import (
     ResponsesSessionHandler,
+    StoredTurns,
     _normalize_redacted_tool_call_arguments,
 )
 from litellm.responses.litellm_completion_transformation.tool_search import CLIENT_TOOL_SEARCH_FUNCTION_NAME
@@ -1505,6 +1508,13 @@ LONG_NAMESPACE_TOOL: Final = {
         }
     ],
 }
+LONG_MEMBER_FULL_NAME: Final = "mcp__codex_apps__codex_document_control___get_document_tool_schemas"
+OTHER_LONG_NAMESPACE_TOOL: Final = {
+    "type": "namespace",
+    "name": "mcp__codex_apps__codex_calendar_control",
+    "description": "Calendar tools",
+    "tools": [{"type": "function", "name": "_get_calendar_tool_schemas", "parameters": {"type": "object"}}],
+}
 
 
 def _additional_tools_item(tool: Mapping[str, object]) -> dict[str, object]:
@@ -1520,10 +1530,10 @@ CLIENT_TOOL_SEARCH_CALL: Final = {
 }
 
 
-def _client_tool_search_output(tool: Mapping[str, object]) -> dict[str, object]:
+def _client_tool_search_output(tool: Mapping[str, object], call_id: str = "search_1") -> dict[str, object]:
     return {
         "type": "tool_search_output",
-        "call_id": "search_1",
+        "call_id": call_id,
         "status": "completed",
         "execution": "client",
         "tools": [tool],
@@ -1587,10 +1597,7 @@ def _stored_long_member_call_turn(
                             {
                                 "id": "call_1",
                                 "type": "function",
-                                "function": {
-                                    "name": "mcp__codex_apps__codex_document_control___get_document_tool_schemas",
-                                    "arguments": '{"doc_id": "N-42"}',
-                                },
+                                "function": {"name": LONG_MEMBER_FULL_NAME, "arguments": '{"doc_id": "N-42"}'},
                             }
                         ],
                     },
@@ -1626,10 +1633,10 @@ async def _answer_the_long_member_call(stored: _StoredSpendLogs, response_id: st
     parts: Final = list(chain.from_iterable(turn["parts"] for turn in sent_body["contents"]))
     called: Final = [part["function_call"]["name"] for part in parts if "function_call" in part]
     answered: Final = [part["function_response"]["name"] for part in parts if "function_response" in part]
-    members_declared: Final = [name for name in declared if name != CLIENT_TOOL_SEARCH_FUNCTION_NAME]
-    assert len(members_declared) == 1
-    assert [name for name in called if name != CLIENT_TOOL_SEARCH_FUNCTION_NAME] == members_declared
-    assert [name for name in answered if name != CLIENT_TOOL_SEARCH_FUNCTION_NAME] == members_declared
+    sent_name: Final = truncate_tool_name(LONG_MEMBER_FULL_NAME)
+    assert sent_name in declared
+    assert [name for name in called if name != CLIENT_TOOL_SEARCH_FUNCTION_NAME] == [sent_name]
+    assert [name for name in answered if name != CLIENT_TOOL_SEARCH_FUNCTION_NAME] == [sent_name]
 
 
 @SENT_TOOL_PLACEMENTS
@@ -1647,34 +1654,140 @@ def _searched_on_client_earlier(tool: Mapping[str, object]) -> SentTools:
     return SentTools(tools=[CLIENT_TOOL_SEARCH], stored_input=[], next_input=[])
 
 
-async def test_previous_response_replays_a_long_member_call_whose_namespace_an_earlier_turn_searched_for(
-    monkeypatch: pytest.MonkeyPatch,
-):
-    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    response_id: Final = _long_member_response_id()
-    search_turn: Final = {
-        "request_id": "client-tool-search-turn",
+def _client_tool_search_turn(request_id: str, call_id: str, tool: Mapping[str, object]) -> dict[str, object]:
+    return {
+        "request_id": request_id,
         "call_type": "aresponses",
         "session_id": "long-member-session",
         "proxy_server_request": {
-            "input": [CLIENT_TOOL_SEARCH_CALL, _client_tool_search_output(LONG_NAMESPACE_TOOL)],
+            "input": [{**CLIENT_TOOL_SEARCH_CALL, "call_id": call_id}, _client_tool_search_output(tool, call_id)],
             "model": "gemini-flash",
             "tools": [CLIENT_TOOL_SEARCH],
         },
         "response": {
-            "id": "chatcmpl-tool-search",
+            "id": f"chatcmpl-{request_id}",
             "object": "chat.completion",
             "choices": [
                 {
                     "index": 0,
                     "finish_reason": "stop",
-                    "message": {"role": "assistant", "content": "I can fetch document schemas now."},
+                    "message": {"role": "assistant", "content": "I can use the tools I found now."},
                 }
             ],
         },
     }
+
+
+async def test_previous_response_replays_a_long_member_call_whose_namespace_an_earlier_turn_searched_for(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    response_id: Final = _long_member_response_id()
     stored: Final = _StoredSpendLogs(
-        (search_turn, _stored_long_member_call_turn(response_id, _searched_on_client_earlier))
+        (
+            _client_tool_search_turn("client-tool-search-turn", "search_1", LONG_NAMESPACE_TOOL),
+            _stored_long_member_call_turn(response_id, _searched_on_client_earlier),
+        )
     )
 
     await _answer_the_long_member_call(stored, response_id, _searched_on_client_earlier(LONG_NAMESPACE_TOOL))
+
+
+async def test_previous_response_replays_a_long_member_call_after_a_later_search_loaded_another_namespace(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    response_id: Final = _long_member_response_id()
+    stored: Final = _StoredSpendLogs(
+        (
+            _client_tool_search_turn("document-search-turn", "search_1", LONG_NAMESPACE_TOOL),
+            _client_tool_search_turn("calendar-search-turn", "search_2", OTHER_LONG_NAMESPACE_TOOL),
+            _stored_long_member_call_turn(response_id, _searched_on_client_earlier),
+        )
+    )
+
+    await _answer_the_long_member_call(stored, response_id, _searched_on_client_earlier(LONG_NAMESPACE_TOOL))
+
+
+def _kept_in_cold_storage(stored_turn: Mapping[str, object]) -> dict[str, object]:
+    return {
+        **stored_turn,
+        "metadata": json.dumps({"cold_storage_object_key": "cold/long-member-turn.json"}),
+        "proxy_server_request": json.dumps({LITELLM_TRUNCATED_PAYLOAD_FIELD: True}),
+    }
+
+
+def _cold_storage_object(declared_name: str) -> dict[str, object]:
+    return {
+        "messages": [{"role": "user", "content": "Fetch document N-42"}],
+        "model_parameters": {
+            "tools": [{"type": "function", "function": {"name": declared_name, "parameters": {"type": "object"}}}]
+        },
+    }
+
+
+async def test_previous_response_replays_a_long_member_call_from_a_turn_kept_in_cold_storage(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "cold_storage_custom_logger", "s3_v2")
+    response_id: Final = _long_member_response_id()
+    stored: Final = _StoredSpendLogs(
+        (_kept_in_cold_storage(_stored_long_member_call_turn(response_id, _sent_as_tools)),)
+    )
+
+    with patch.object(session_handler, "COLD_STORAGE_HANDLER") as cold_storage:
+        cold_storage.get_proxy_server_request_from_cold_storage_with_object_key = AsyncMock(
+            return_value=_cold_storage_object(truncate_tool_name(LONG_MEMBER_FULL_NAME))
+        )
+        await _answer_the_long_member_call(stored, response_id, _sent_as_tools(LONG_NAMESPACE_TOOL))
+
+
+LONG_FUNCTION: Final = "lookup_" + "document_tool_schema_" * 4
+
+
+@pytest.mark.parametrize(
+    "cold_object",
+    [
+        pytest.param(_cold_storage_object(LONG_FUNCTION), id="sent_in_full"),
+        pytest.param({"messages": [{"role": "user", "content": "Fetch document N-42"}]}, id="no_tools_recorded"),
+    ],
+)
+async def test_cold_storage_turn_keeps_a_long_call_name_its_provider_was_not_sent_shortened(
+    cold_object: dict[str, object],
+):
+    stored_turn: Final = {
+        "request_id": "long-function-turn",
+        "call_type": "aresponses",
+        "session_id": "long-function-session",
+        "response": {
+            "id": "chatcmpl-long-function",
+            "object": "chat.completion",
+            "choices": [
+                {
+                    "index": 0,
+                    "finish_reason": "tool_calls",
+                    "message": {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "id": "call_1",
+                                "type": "function",
+                                "function": {"name": LONG_FUNCTION, "arguments": '{"doc_id": "N-42"}'},
+                            }
+                        ],
+                    },
+                }
+            ],
+        },
+    }
+
+    session: Final = await ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id(
+        "long-function-turn", stored_turns=StoredTurns(spend_logs=(stored_turn,), proxy_server_requests=(cold_object,))
+    )
+
+    replayed: Final = session["messages"][-1]
+    assert isinstance(replayed, Message)
+    assert len(LONG_FUNCTION) > 64
+    assert [tool_call.function.name for tool_call in replayed.tool_calls or []] == [LONG_FUNCTION]

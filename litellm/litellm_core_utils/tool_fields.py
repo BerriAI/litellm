@@ -3,6 +3,8 @@ from collections.abc import Callable, Mapping, Sequence
 from copy import copy
 from dataclasses import dataclass
 from functools import reduce
+from itertools import chain
+from types import MappingProxyType
 from typing import Annotated, Final, TypeAlias, TypeVar
 
 from pydantic import BeforeValidator, ConfigDict, Json, TypeAdapter, ValidationError
@@ -96,6 +98,12 @@ class BridgedToolNames:
         return dict(self.full_name_by_sent_name)
 
 
+@dataclass(frozen=True, slots=True)
+class SentToolNames:
+    member_chat_names: Mapping[str, str]
+    self_named_namespace_members: frozenset[str]
+
+
 def with_renamed_tool_calls(response: ModelResponse, new_names: Mapping[str, str]) -> ModelResponse:
     if not new_names:
         return response
@@ -122,6 +130,38 @@ def _renamed_tool_call(
     if new_name is None or new_name == tool_call.function.name:
         return tool_call
     return tool_call.model_copy(update={"function": tool_call.function.model_copy(update={"name": new_name})})
+
+
+def _function_call_names(choice: Choices | StreamingChoices) -> tuple[str, ...]:
+    if not isinstance(choice, Choices):
+        return ()
+    return tuple(
+        tool_call.function.name
+        for tool_call in choice.message.tool_calls or ()
+        if isinstance(tool_call, ChatCompletionMessageToolCall) and tool_call.function.name
+    )
+
+
+def declared_function_names(tools: object) -> frozenset[str]:
+    try:
+        entries: Final = _TOOLS.validate_python(tools)
+    except ValidationError:
+        return frozenset()
+    return frozenset(name for name in map(declared_function_name, entries) if name)
+
+
+def with_tool_calls_named_as_declared(response: ModelResponse, declared_names: frozenset[str]) -> ModelResponse:
+    called_names: Final = frozenset(chain.from_iterable(map(_function_call_names, response.choices)))
+    return with_renamed_tool_calls(
+        response,
+        MappingProxyType(
+            {
+                name: truncate_tool_name(name)
+                for name in called_names
+                if name not in declared_names and truncate_tool_name(name) in declared_names
+            }
+        ),
+    )
 
 
 def truncate_tool_name(name: str) -> str:

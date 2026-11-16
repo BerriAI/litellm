@@ -2,7 +2,7 @@ import asyncio
 import json
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
-from itertools import chain
+from itertools import accumulate, chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Protocol, cast
 
@@ -11,7 +11,12 @@ from litellm._logging import verbose_proxy_logger
 from litellm.constants import REDACTED_BY_LITELLM, REDACTED_TOOL_CALL_ARGUMENTS_PLACEHOLDER
 from litellm.litellm_core_utils.cold_storage_handler import ColdStorageHandler
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_or_none, require_attributes
-from litellm.litellm_core_utils.tool_fields import with_renamed_tool_calls
+from litellm.litellm_core_utils.tool_fields import (
+    SentToolNames,
+    declared_function_names,
+    with_renamed_tool_calls,
+    with_tool_calls_named_as_declared,
+)
 from litellm.responses.additional_tools import with_additional_tools_hoisted
 from litellm.responses.litellm_completion_transformation.client_tool_search import (
     bridge_client_tool_search,
@@ -282,35 +287,95 @@ def _instruction_items_before(
     )
 
 
-def _tools_sent_with(
-    proxy_server_request: Mapping[str, object] | None, loaded_before: Sequence[Mapping[str, object]]
-) -> object | None:
-    """The tools a stored turn was sent with, so its calls replay under the names the provider saw."""
+_NO_TOOL_NAMES: Final = SentToolNames(member_chat_names=MappingProxyType({}), self_named_namespace_members=frozenset())
+
+
+@dataclass(frozen=True, slots=True, eq=False)
+class _LayeredNames(Mapping[str, str]):
+    first: Mapping[str, str]
+    then: Mapping[str, str]
+
+    def __getitem__(self, name: str) -> str:
+        return self.first[name] if name in self.first else self.then[name]
+
+    def __iter__(self) -> Iterator[str]:
+        return chain(self.first, (name for name in self.then if name not in self.first))
+
+    def __len__(self) -> int:
+        return len(self.then) + sum(1 for name in self.first if name not in self.then)
+
+
+def _tool_names(tools: object) -> SentToolNames:
+    from litellm.responses.litellm_completion_transformation.transformation import (
+        LiteLLMCompletionResponsesConfig,
+    )
+
+    return LiteLLMCompletionResponsesConfig.sent_tool_names(
+        LiteLLMCompletionResponsesConfig.request_tools({"tools": tools})
+    )
+
+
+def _tools_loaded_in(proxy_server_request: Mapping[str, object] | None) -> tuple[ALL_RESPONSES_API_TOOL_PARAMS, ...]:
+    request_input: Final = None if proxy_server_request is None else proxy_server_request.get("input")
+    if not isinstance(request_input, list):
+        return ()
+    return bridge_client_tool_search(
+        cast(ResponseInputParam, request_input),  # cast-ok: forwarded as sent, as inference does
+        None,
+    ).tools
+
+
+def _with_names_loaded_in(
+    loaded_before: SentToolNames, proxy_server_request: Mapping[str, object] | None
+) -> SentToolNames:
+    loaded_now: Final = _tools_loaded_in(proxy_server_request)
+    if not loaded_now:
+        return loaded_before
+    names_now: Final = _tool_names(list(loaded_now))
+    return SentToolNames(
+        member_chat_names=MappingProxyType({**loaded_before.member_chat_names, **names_now.member_chat_names}),
+        self_named_namespace_members=loaded_before.self_named_namespace_members
+        | names_now.self_named_namespace_members,
+    )
+
+
+def _tool_names_sent_with(
+    proxy_server_request: Mapping[str, object] | None, loaded_before: SentToolNames
+) -> SentToolNames:
+    """The tool names a stored turn was sent with, so its calls replay under the names the provider saw."""
     if proxy_server_request is None:
-        return None
+        return _NO_TOOL_NAMES
     hoisted: Final = with_additional_tools_hoisted(proxy_server_request, drop_params=False)
     request_input: Final = hoisted.get("input")
     tools: Final = hoisted.get("tools")
     if not isinstance(request_input, (str, list)) or not (tools is None or isinstance(tools, list)):
-        return tools
-    sent_tools: Final = cast("list[ALL_RESPONSES_API_TOOL_PARAMS] | None", tools)  # cast-ok: forwarded as sent
+        return _tool_names(tools)
     searched: Final = bridge_client_tool_search(
         cast(ResponseInputParam, request_input),  # cast-ok: forwarded as sent, as inference does
-        sent_tools,
-        loaded_before,
+        cast("list[ALL_RESPONSES_API_TOOL_PARAMS] | None", tools),  # cast-ok: forwarded as sent
     )
-    return list(searched.tools) if searched.bridged else sent_tools
+    own: Final = _tool_names(list(searched.tools))
+    if not searched.bridged:
+        return own
+    return SentToolNames(
+        member_chat_names=_LayeredNames(own.member_chat_names, loaded_before.member_chat_names),
+        self_named_namespace_members=own.self_named_namespace_members | loaded_before.self_named_namespace_members,
+    )
 
 
-def _tools_sent_by_turn(proxy_server_requests: Sequence[Mapping[str, object] | None]) -> tuple[object | None, ...]:
-    loaded_by_turn: Final = tuple(
-        () if request is None else client_tool_search_loaded_tools(request.get("input"))
-        for request in proxy_server_requests
-    )
+def _tool_names_by_turn(proxy_server_requests: Sequence[Mapping[str, object] | None]) -> tuple[SentToolNames, ...]:
+    loaded_before_turn: Final = tuple(accumulate(proxy_server_requests, _with_names_loaded_in, initial=_NO_TOOL_NAMES))
     return tuple(
-        _tools_sent_with(request, tuple(chain.from_iterable(loaded_by_turn[:index])))
-        for index, request in enumerate(proxy_server_requests)
+        _tool_names_sent_with(request, loaded_before)
+        for request, loaded_before in zip(proxy_server_requests, loaded_before_turn[:-1], strict=True)
     )
+
+
+def _declared_tool_names(proxy_server_request: Mapping[str, object] | None) -> frozenset[str]:
+    model_parameters: Final = as_str_mapping(
+        None if proxy_server_request is None else proxy_server_request.get("model_parameters")
+    )
+    return frozenset() if model_parameters is None else declared_function_names(model_parameters.get("tools"))
 
 
 def _stored_instructions(proxy_server_request: Mapping[str, object] | None) -> str | None:
@@ -367,21 +432,21 @@ class ResponsesSessionHandler:
             replayable_turns if _holds_compaction_point(all_spend_logs, proxy_server_requests) else len(all_spend_logs)
         )
         earlier_instructions: Final = _instruction_items_before(proxy_server_requests, start)
-        tools_by_turn: Final = _tools_sent_by_turn(proxy_server_requests)
+        names_by_turn: Final = _tool_names_by_turn(proxy_server_requests)
         replayed_history: Final = ResponsesSessionHandler._history_of_turns(
             all_spend_logs[start.index : replayed_turns],
             [
                 _replayed_request(index, proxy_server_requests[index], start, earlier_instructions)
                 for index in range(start.index, replayed_turns)
             ],
-            tools_by_turn[start.index : replayed_turns],
+            names_by_turn[start.index : replayed_turns],
             item_cache_control,
             tool_call_provider_fields,
         )
         history_before_replay: Final = ResponsesSessionHandler._history_of_turns(
             all_spend_logs[: start.index],
             proxy_server_requests[: start.index],
-            tools_by_turn[: start.index],
+            names_by_turn[: start.index],
             item_cache_control,
             tool_call_provider_fields,
         )
@@ -442,7 +507,7 @@ class ResponsesSessionHandler:
     def _history_of_turns(
         spend_logs: Sequence["SpendLogsPayload"],
         proxy_server_requests: Sequence[Mapping[str, object] | None],
-        sent_tools: Sequence[object | None],
+        sent_tool_names: Sequence[SentToolNames],
         item_cache_control: bool,
         tool_call_provider_fields: bool,
     ) -> list["SessionMessage"]:
@@ -454,10 +519,10 @@ class ResponsesSessionHandler:
                     chat_completion_message_history=[],
                     item_cache_control=item_cache_control,
                     tool_call_provider_fields=tool_call_provider_fields,
-                    stored_tools=stored_tools,
+                    tool_names=tool_names,
                 )
-                for spend_log, proxy_server_request, stored_tools in zip(
-                    spend_logs, proxy_server_requests, sent_tools, strict=True
+                for spend_log, proxy_server_request, tool_names in zip(
+                    spend_logs, proxy_server_requests, sent_tool_names, strict=True
                 )
             )
         )
@@ -476,7 +541,7 @@ class ResponsesSessionHandler:
         item_cache_control: bool = False,
         tool_call_provider_fields: bool = False,
         *,
-        stored_tools: object | None,
+        tool_names: SentToolNames,
     ):
         """
         Extend the chat completion message history with the spend log payload
@@ -506,12 +571,13 @@ class ResponsesSessionHandler:
             chat_completion_message_history.extend(
                 LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
                     input=bridge_client_tool_search(response_input_param, None).input,
-                    responses_api_request={"tools": stored_tools} if stored_tools is not None else {},
+                    responses_api_request={},
                     replay_reasoning=True,
                     item_cache_control=item_cache_control,
                     tool_call_provider_fields=tool_call_provider_fields,
                     only_since_compaction=True,
                     replay_tool_search=True,
+                    tool_names=tool_names,
                 )
             )
 
@@ -523,21 +589,20 @@ class ResponsesSessionHandler:
             chat_completion_message_history.extend(
                 LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
                     input=bridge_client_tool_search(responses_api_output, None).input,
-                    responses_api_request={"tools": stored_tools} if stored_tools is not None else {},
+                    responses_api_request={},
                     replay_reasoning=True,
                     item_cache_control=item_cache_control,
                     tool_call_provider_fields=tool_call_provider_fields,
                     only_since_compaction=True,
                     replay_tool_search=True,
+                    tool_names=tool_names,
                 )
             )
         elif isinstance(_response_output, dict) and _response_output and _response_output != {}:
             # transform `ChatCompletion Response` to `ResponsesAPIResponse`
-            model_response: Final = with_renamed_tool_calls(
-                ModelResponse(**_response_output),
-                LiteLLMCompletionResponsesConfig.member_chat_names(
-                    LiteLLMCompletionResponsesConfig.request_tools({"tools": stored_tools})
-                ),
+            model_response: Final = with_tool_calls_named_as_declared(
+                with_renamed_tool_calls(ModelResponse(**_response_output), tool_names.member_chat_names),
+                _declared_tool_names(proxy_server_request_dict),
             )
             for choice in model_response.choices:
                 if hasattr(choice, "message"):

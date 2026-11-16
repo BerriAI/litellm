@@ -78,7 +78,7 @@ from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import 
     message_field,
     parts_of,
 )
-from litellm.litellm_core_utils.tool_fields import chat_member_name, qualified_member_name
+from litellm.litellm_core_utils.tool_fields import SentToolNames, chat_member_name, qualified_member_name
 from litellm.llms.anthropic.common_utils import (
     anthropic_server_tool_call_params,
     anthropic_server_tool_calls,
@@ -1463,6 +1463,7 @@ class LiteLLMCompletionResponsesConfig:
         replay_tool_search: bool = False,
         caller_input: str | ResponseInputParam | None = None,
         member_name: Callable[[str, str], str] = chat_member_name,
+        tool_names: SentToolNames | None = None,
     ) -> list[
         AllMessageValues
         | GenericChatCompletionMessage
@@ -1524,13 +1525,19 @@ class LiteLLMCompletionResponsesConfig:
         sent_input: Final = _without_item_keys(
             read_input, _dropped_item_keys(item_cache_control, tool_call_provider_fields)
         )
-        request_tools: Final = LiteLLMCompletionResponsesConfig.request_tools(responses_api_request)
+        names: Final = (
+            tool_names
+            if tool_names is not None
+            else LiteLLMCompletionResponsesConfig.sent_tool_names(
+                LiteLLMCompletionResponsesConfig.request_tools(responses_api_request), member_name
+            )
+        )
         convert_input: Final = partial(
             LiteLLMCompletionResponsesConfig._transform_response_input_param_to_chat_completion_message,
             replay_reasoning=replay_reasoning,
             native_compaction=native_compaction,
-            self_named_namespace_members=LiteLLMCompletionResponsesConfig.self_named_namespace_members(request_tools),
-            member_chat_names=LiteLLMCompletionResponsesConfig.member_chat_names(request_tools, member_name),
+            self_named_namespace_members=names.self_named_namespace_members,
+            member_chat_names=names.member_chat_names,
             member_name=member_name,
         )
         try:
@@ -3280,6 +3287,15 @@ class LiteLLMCompletionResponsesConfig:
                 qualified_member_name(namespace, member): member_name(namespace, member)
                 for namespace, member in LiteLLMCompletionResponsesConfig._namespace_entries(tools)
             }
+        )
+
+    @staticmethod
+    def sent_tool_names(
+        tools: ResponseTools, member_name: Callable[[str, str], str] = chat_member_name
+    ) -> SentToolNames:
+        return SentToolNames(
+            member_chat_names=LiteLLMCompletionResponsesConfig.member_chat_names(tools, member_name),
+            self_named_namespace_members=LiteLLMCompletionResponsesConfig.self_named_namespace_members(tools),
         )
 
     @staticmethod
