@@ -329,6 +329,7 @@ async def _call(
     stream: bool = False,
     api_key: str = "sk-ant-test",
     api_base: str | None = None,
+    no_log: bool = False,
 ) -> litellm.ModelResponse | None:
     respx_mock.post(api_base or _API_BASE).mock(return_value=reply)
     response: Final = await litellm.acompletion(
@@ -344,6 +345,7 @@ async def _call(
         api_base=api_base,
         stream=stream,
         metadata={"model_info": {"id": "claude-east"}},
+        **{"no-log": no_log},
     )
     if isinstance(response, litellm.CustomStreamWrapper):
         _ = [chunk async for chunk in response]
@@ -419,6 +421,18 @@ async def test_the_logged_account_and_endpoint_split_configurations_and_redactio
     assert len(set(states[:3])) == 3
     assert states[3] == states[0]
     assert all("sk-ant" not in key for key in states)
+
+
+async def test_a_no_log_request_is_never_observed_even_when_it_read_the_cache(
+    respx_mock: respx.MockRouter, watched: _Script
+) -> None:
+    """no-log requests stay out of the detector, so a hit among them is not seen and the alert stays advisory."""
+    await _call(respx_mock, _anthropic_reply(_usage(0, 2048)))
+    await _call(respx_mock, _anthropic_reply(_ZEROS))
+    await _call(respx_mock, _anthropic_reply(_usage(2048, 0)), no_log=True)
+    await _call(respx_mock, _anthropic_reply(_ZEROS))
+    await _settle(watched, 3)
+    assert watched.events() == ["proof", "miss", "miss"]
 
 
 async def test_a_failed_completion_resets_its_deployment(respx_mock: respx.MockRouter, watched: _Script) -> None:

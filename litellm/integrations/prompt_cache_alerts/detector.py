@@ -1,10 +1,16 @@
-"""Opens one prompt cache alert per deployment and configuration when a prefix the provider proved cacheable gets
-three consecutive requests that neither read nor wrote the cache.
+"""Opens one advisory prompt cache alert per deployment and configuration when three observed requests on a prefix
+the provider proved cacheable report no cache read or write.
+
+Only requests whose callback reaches this logger and Redis are observed. A delayed, lost or unlogged request (no-log,
+disabled callbacks, a Redis error on another worker) can fall between the observed misses, so an alert does not
+guarantee the misses were consecutive or that the provider cache was down.
 
 Streaks live in Redis and every update is one Lua script. Events are ordered by when their request started and
 ended, which a replayed callback repeats exactly: a proof, hit or deployment reset moves the epoch to the end of the
 request that caused it, and only a miss that started after the epoch counts. The proof expires with the cache entry
-it proved, measured from the request's start. After an alert is saved, the configuration stays quiet for a day.
+it proved, measured from the request's start. Once the stored proof has expired, the next hit or miss drops the
+streak, even a hit that started before the expiry, so only a new write can prove the prefix again. After an alert is
+saved, the configuration stays quiet for a day.
 """
 
 import asyncio
@@ -270,7 +276,6 @@ class PromptCacheAlertLogger(CustomLogger):
         alerts: AlertStore,
         clock: Callable[[], float] = time.time,
     ) -> None:
-        super().__init__()
         self._key: Final = key
         self._script: Final = script
         self._alerts: Final = alerts

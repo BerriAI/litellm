@@ -188,6 +188,18 @@ async def test_a_hit_keeps_the_entry_alive_for_another_ttl(streaks: _Streaks) ->
     assert outcomes[-1] == Triggered(MISSES_TO_ALERT, 2048, refreshed + TTL_MS - 4)
 
 
+async def test_a_hit_delivered_after_the_stored_proof_expired_leaves_the_prefix_unproven(streaks: _Streaks) -> None:
+    """The hit started while the entry was live, but its callback arrived after the stored expiry. The detector does
+    not revive the proof from a late callback, so later misses stay unassessed until a new write proves the prefix."""
+    await streaks.proof()
+    expired: Final = _T0 + TTL_MS
+    await streaks.apply(streaks.event("hit", "late-read", expired - 1), now_ms=expired + 5)
+    assert await streaks.apply(*streaks.misses("a", "b", "c", start=expired + 10)) == (None,) * 3
+    await streaks.proof(expired + 20)
+    outcomes: Final = await streaks.apply(*streaks.misses("d", "e", "f", start=expired + 21))
+    assert outcomes[-1] == Triggered(MISSES_TO_ALERT, 2048, expired + 21)
+
+
 async def test_a_new_configuration_never_borrows_another_configurations_proof(streaks: _Streaks) -> None:
     await streaks.proof()
     assert await streaks.apply(*streaks.misses("a", "b", "c", config="config-3")) == (None,) * 3
