@@ -10021,6 +10021,154 @@ def test_response_cost_calculator_prices_proxy_vertex_calls_on_the_configured_lo
     assert cost_at("us-east5") == pytest.approx(info["regional_endpoint_uplift_multiplier"] * expected_global)
 
 
+def test_resolve_vertex_location_for_cost_uses_the_registered_deployment_location(monkeypatch):
+    """
+    Routes whose logging object never receives the deployment's litellm_params
+    (messages, responses, cache hits) still carry the serving deployment's
+    model_info.id, and the location registered for that deployment beats the
+    process-wide environment default. An explicit request location still wins,
+    and an unknown id falls back exactly as before.
+    """
+    from litellm.litellm_core_utils.litellm_logging import resolve_vertex_location_for_cost
+
+    monkeypatch.setenv("VERTEXAI_LOCATION", "us-east5")
+    monkeypatch.setattr(litellm, "vertex_location", None)
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            "registered-global": {"vertex_location": "global"},
+            "registered-regional": {"vertex_location": "europe-west1"},
+        },
+    )
+
+    def resolve(optional_params=None, model_id=None):
+        return resolve_vertex_location_for_cost(
+            custom_llm_provider="vertex_ai",
+            litellm_params={},
+            optional_params=optional_params,
+            model="gemini-3.5-flash",
+            model_id=model_id,
+        )
+
+    assert resolve(model_id="registered-global") == "global"
+    assert resolve(model_id="registered-regional") == "europe-west1"
+    assert resolve(optional_params={"vertex_location": "us-east5"}, model_id="registered-global") == "us-east5"
+    assert resolve(model_id="not-a-deployment") == "us-east5"
+    assert resolve() == "us-east5"
+
+
+def _proxy_vertex_logging_obj(deployment_id, call_id):
+    from datetime import datetime
+
+    logging_obj = LitellmLogging(
+        model="gemini-3.5-flash",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="anthropic_messages",
+        start_time=datetime.now(),
+        litellm_call_id=call_id,
+        function_id="f",
+    )
+    logging_obj.update_environment_variables(
+        model="gemini-3.5-flash",
+        user="",
+        optional_params={},
+        litellm_params={"api_base": "", "metadata": {"model_info": {"id": deployment_id}}},
+        custom_llm_provider="vertex_ai",
+    )
+    return logging_obj
+
+
+def _vertex_model_response():
+    return ModelResponse(
+        id="resp-1",
+        model="gemini-3.5-flash",
+        choices=[{"message": {"role": "assistant", "content": "hello"}, "index": 0, "finish_reason": "stop"}],
+        usage={"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+    )
+
+
+def test_response_cost_calculator_prices_proxy_vertex_calls_on_the_registered_deployment_location(monkeypatch):
+    """
+    A proxy-shaped logging object for the routes that never carry the deployment's
+    location (neither optional_params nor litellm_params has it) must price on the
+    location registered for the deployment named by metadata model_info.id: a
+    global deployment pays no regional uplift even when the environment points at
+    a region, and a regional deployment pays it.
+    """
+    from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map
+
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            **get_model_cost_map(url=""),
+            "registered-global-deployment": {"vertex_location": "global"},
+            "registered-regional-deployment": {"vertex_location": "us-east5"},
+        },
+    )
+    monkeypatch.setenv("VERTEXAI_LOCATION", "us-east5")
+    monkeypatch.setattr(litellm, "vertex_location", None)
+
+    def cost_for(deployment_id):
+        logging_obj = _proxy_vertex_logging_obj(deployment_id, f"vertex-registered-{deployment_id}")
+        cost = logging_obj.response_cost_calculator(result=_vertex_model_response())
+        return cost, logging_obj.cost_breakdown.get("vertex_location")
+
+    info = litellm.model_cost["vertex_ai/gemini-3.5-flash"]
+    expected_global = 10 * info["input_cost_per_token"] + 5 * info["output_cost_per_token"]
+
+    assert cost_for("registered-global-deployment") == (pytest.approx(expected_global), "global")
+    assert cost_for("registered-regional-deployment") == (
+        pytest.approx(info["regional_endpoint_uplift_multiplier"] * expected_global),
+        "us-east5",
+    )
+
+
+def test_response_cost_calculator_prices_cache_hit_rebuilds_on_the_registered_deployment_location(monkeypatch):
+    """
+    On a cache hit the caching handler rebuilds the logging object's environment
+    with empty optional_params and fresh litellm_params, dropping any location the
+    original call carried. The metadata (and with it the deployment id) survives,
+    so a recomputed cost still prices on the deployment's registered location
+    instead of the guessed default region.
+    """
+    from datetime import datetime
+
+    from litellm.caching.caching_handler import LLMCachingHandler
+    from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map
+
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {**get_model_cost_map(url=""), "registered-global-deployment": {"vertex_location": "global"}},
+    )
+    monkeypatch.delenv("VERTEXAI_LOCATION", raising=False)
+    monkeypatch.delenv("VERTEX_LOCATION", raising=False)
+    monkeypatch.setattr(litellm, "vertex_location", None)
+
+    logging_obj = _proxy_vertex_logging_obj("registered-global-deployment", "vertex-cache-rebuild")
+    response = _vertex_model_response()
+    handler = LLMCachingHandler(original_function=lambda: None, request_kwargs={}, start_time=datetime.now())
+    handler._update_litellm_logging_obj_environment(
+        logging_obj=logging_obj,
+        model="gemini-3.5-flash",
+        kwargs={"metadata": {"model_info": {"id": "registered-global-deployment"}}},
+        cached_result=response,
+        is_async=True,
+        custom_llm_provider="vertex_ai",
+    )
+
+    info = litellm.model_cost["vertex_ai/gemini-3.5-flash"]
+    expected_global = 10 * info["input_cost_per_token"] + 5 * info["output_cost_per_token"]
+
+    assert logging_obj.response_cost_calculator(result=response) == pytest.approx(expected_global)
+    assert logging_obj.cost_breakdown.get("vertex_location") == "global"
+
+
 def test_response_cost_calculator_prices_proxy_vertex_image_calls_on_the_configured_location(monkeypatch):
     from datetime import datetime
 
