@@ -1,6 +1,7 @@
 mod auth;
 mod config;
 pub mod constants;
+mod failure;
 mod identity;
 #[cfg(feature = "google-sdk")]
 mod sdk;
@@ -11,6 +12,7 @@ pub use config::{
     get_vertex_ai_project_from_credentials,
 };
 pub use constants::secret_names;
+pub use failure::CredentialFailure;
 pub use identity::{GcpAuth, GcpAuthFuture, GcpProviderLoader, GcpTokenSource};
 #[cfg(feature = "google-sdk")]
 pub use sdk::GoogleCredentials;
