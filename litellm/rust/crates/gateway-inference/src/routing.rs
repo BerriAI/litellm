@@ -51,6 +51,11 @@ pub trait RouteAttempt: Send + Sync {
     fn affinity(&self) -> Affinity {
         Affinity::default()
     }
+
+    /// The request params the pre-call checks read.
+    fn body(&self) -> Value {
+        Value::Null
+    }
 }
 
 /// The litellm model of the first deployment the request's name resolves to for its caller,
@@ -170,6 +175,7 @@ pub(crate) async fn call<H: Host, A: RouteAttempt>(
 ) -> Result<RouterResponse<A::Outcome>, Error> {
     let request = RouterRequest {
         affinity: route.affinity(),
+        body: route.body(),
         ..caller_request(identity, model)
     };
     let first = first_model(gateway, &request).ok_or_else(|| Error::UnknownModel {

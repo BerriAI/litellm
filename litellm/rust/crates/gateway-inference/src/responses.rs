@@ -71,6 +71,10 @@ struct ResponsesAttempt<'a, H> {
 impl<H: Host> RouteAttempt for ResponsesAttempt<'_, H> {
     type Outcome = (Ran<Responses>, CacheHeaders);
 
+    fn body(&self) -> Value {
+        Value::Object(self.body.clone())
+    }
+
     fn affinity(&self) -> Affinity {
         Affinity {
             previous_response: self

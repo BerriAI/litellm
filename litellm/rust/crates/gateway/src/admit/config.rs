@@ -314,7 +314,11 @@ fn models(models: &[Model]) -> impl Iterator<Item = Unsupported> {
         wildcard
             .into_iter()
             .chain(unset("model_list.", [("blocked", blocked.is_some())]))
-            .chain(only("model_list.model_info.", model_info, &["id"]))
+            .chain(only(
+                "model_list.model_info.",
+                model_info,
+                &["id", "max_input_tokens"],
+            ))
             .chain(only("model_list.", additional_fields, &[]))
     })
 }
@@ -429,6 +433,10 @@ mod tests {
     )]
     #[case::model_id(
         "[{model_name: a, litellm_params: {model: openai/a}, model_info: {id: a-1}}]",
+        vec![]
+    )]
+    #[case::context_window(
+        "[{model_name: a, litellm_params: {model: openai/a}, model_info: {max_input_tokens: 8000}}]",
         vec![]
     )]
     #[case::wildcard(

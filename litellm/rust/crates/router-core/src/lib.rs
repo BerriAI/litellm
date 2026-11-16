@@ -216,7 +216,7 @@ impl Core {
             (
                 "enable_pre_call_checks",
                 settings.enable_pre_call_checks,
-                Capability::Select,
+                Capability::PreCallFacts,
             ),
             (
                 "routing_plugins",

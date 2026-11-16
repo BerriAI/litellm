@@ -131,16 +131,31 @@ fn configured_app(
 
 /// A gateway over `public/model` deployments, each `(id, api_base)`, read with `router_settings`.
 pub fn group_app(deployments: &[(&str, &str)], router_settings: Value) -> Router {
+    let described: Vec<_> = deployments
+        .iter()
+        .map(|(id, api_base)| (*id, *api_base, json!({})))
+        .collect();
+    described_group_app(&described, router_settings)
+}
+
+/// [`group_app`] over deployments that each declare a `model_info`.
+pub fn described_group_app(deployments: &[(&str, &str, Value)], router_settings: Value) -> Router {
     let settings: RouterSettings = serde_json::from_value(router_settings).unwrap();
     let (config, dynamic) = RouterConfig::from_settings(&settings).unwrap();
     let models = litellm_router_core::Router::new(
         RouterConfig {
             model_list: deployments
                 .iter()
-                .map(|(id, api_base)| DeploymentSpec {
+                .map(|(id, api_base, model_info)| DeploymentSpec {
                     model_name: "public/model".into(),
                     litellm_params: test_params("openai/test-model", api_base),
-                    model_info: json!({"id": id}).as_object().cloned().unwrap(),
+                    model_info: model_info
+                        .as_object()
+                        .cloned()
+                        .unwrap_or_default()
+                        .into_iter()
+                        .chain([("id".to_owned(), json!(id))])
+                        .collect(),
                     ..DeploymentSpec::default()
                 })
                 .collect(),

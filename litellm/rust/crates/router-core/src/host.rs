@@ -392,10 +392,14 @@ impl<F> From<Error> for CallError<F> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, strum::Display, strum::VariantArray)]
 pub enum Capability {
     /// The selection steps the core does not implement: [`RouterHost::select`] (strategies other
-    /// than simple-shuffle, plugins, tags, the optional pre-call checks), the pre-call facts, the
+    /// than simple-shuffle, plugins, tags, the optional pre-call checks it does not run), the
     /// routing plugins and the callback filters.
     #[strum(serialize = "selects")]
     Select,
+    /// [`RouterHost::pre_call_facts`]: the context windows and token count
+    /// `enable_pre_call_checks` decides by.
+    #[strum(serialize = "answers pre-call facts")]
+    PreCallFacts,
     /// Background health checks, whose results health-check routing filters by.
     #[strum(serialize = "runs health checks")]
     HealthChecks,
