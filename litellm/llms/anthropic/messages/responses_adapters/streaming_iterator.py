@@ -154,6 +154,7 @@ class AnthropicResponsesStreamWrapper:
         self._item_id_to_block_index: dict[str, int] = {}
         # Track open function_call items by item_id so we can emit tool_use start
         self._pending_tool_ids: dict[str, str] = {}  # item_id -> call_id / name accumulator
+        self._items_with_arguments: frozenset[str | None] = frozenset()
         self._sent_message_start = False
         self._sent_message_stop = False
         self._stream_failed = False
@@ -353,10 +354,16 @@ class AnthropicResponsesStreamWrapper:
             )
             return
 
-        # ---- function call arguments delta ----
-        if event_type == "response.function_call_arguments.delta":
+        # ---- function call arguments delta, or all of them at .done when no delta came ----
+        if event_type in ("response.function_call_arguments.delta", "response.function_call_arguments.done"):
             item_id = getattr(event, "item_id", None) or (event.get("item_id") if isinstance(event, dict) else None)
-            delta = getattr(event, "delta", "") or (event.get("delta", "") if isinstance(event, dict) else "")
+            is_done: Final = event_type == "response.function_call_arguments.done"
+            raw_json: Final = self._field(event, "arguments" if is_done else "delta")
+            arguments_json: Final = raw_json if isinstance(raw_json, str) else ""
+            if is_done and (not arguments_json or item_id in self._items_with_arguments):
+                return
+            if arguments_json:
+                self._items_with_arguments = self._items_with_arguments | {item_id}
             block_idx = (
                 self._item_id_to_block_index.get(item_id, self._current_block_index)
                 if item_id
@@ -366,7 +373,7 @@ class AnthropicResponsesStreamWrapper:
                 {
                     "type": "content_block_delta",
                     "index": block_idx,
-                    "delta": {"type": "input_json_delta", "partial_json": delta},
+                    "delta": {"type": "input_json_delta", "partial_json": arguments_json},
                 }
             )
             return

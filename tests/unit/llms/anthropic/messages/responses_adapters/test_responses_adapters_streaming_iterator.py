@@ -333,6 +333,31 @@ class TestToolUseBlockClosedExactlyOnce:
         }
 
 
+def _done_only_function_call(item_id: str, arguments: str) -> list[dict[str, object]]:
+    item: Final = {"type": "function_call", "id": item_id, "call_id": f"call_{item_id}", "name": "get_weather"}
+    return [
+        {"type": "response.output_item.added", "item": {**item, "arguments": ""}},
+        {"type": "response.function_call_arguments.done", "item_id": item_id, "arguments": arguments},
+        {"type": "response.output_item.done", "item": {**item, "arguments": arguments, "status": "completed"}},
+    ]
+
+
+def test_arguments_sent_only_at_done_stream_into_each_tool_use_block():
+    chunks: Final = _drain_async(
+        [
+            {"type": "response.created"},
+            *_done_only_function_call("fc_1", '{"city": "Paris"}'),
+            *_done_only_function_call("fc_2", '{"city": "London"}'),
+            {"type": "response.completed"},
+        ]
+    )
+
+    assert [(c["index"], c["delta"]["partial_json"]) for c in chunks if c["type"] == "content_block_delta"] == [
+        (0, '{"city": "Paris"}'),
+        (1, '{"city": "London"}'),
+    ]
+
+
 class TestProcessEventTextDeltaWithoutOutputItemAdded:
     """Streams that skip response.output_item.added (e.g. LMStudio) must still
     open a text block before any delta and never emit index -1."""
