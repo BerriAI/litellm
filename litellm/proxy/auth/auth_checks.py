@@ -1105,6 +1105,8 @@ MCP_DISCOVERY_ROUTES: Final = frozenset({"/mcp-rest/tools/list", "/v1/mcp/tools"
 
 MCP_ZERO_SPEND_JSONRPC_METHODS: Final = frozenset({"initialize", "notifications/initialized", "ping", "tools/list"})
 
+MCP_ADMISSION_SCOPE_KEY: Final = "mcp_servers"
+_SCOPE_NAMES: Final = TypeAdapter(tuple[str, ...])
 MCP_TOOL_CALL_ROUTES: Final = frozenset({"/mcp/tools/call", "/mcp-rest/tools/call"})
 
 
@@ -1151,7 +1153,7 @@ def _native_names_reached_from(tool_name: str, server: "MCPServer") -> frozenset
     prefix: Final = get_server_prefix(server)
 
     def with_the_tools_shown_under_their_names(reached: frozenset[str], _: int) -> frozenset[str]:
-        names_they_are_called_by: Final = reached | {add_server_prefix_to_name(name, prefix) for name in reached}
+        names_they_are_called_by: Final = {add_server_prefix_to_name(name, prefix) for name in reached}
         return reached | {
             native_name for native_name, shown_name in display_names.items() if shown_name in names_they_are_called_by
         }
@@ -1188,6 +1190,14 @@ def _is_reserved_mcp_tool_name(tool_name: str) -> bool:
     )
 
     return tool_name in VIRTUAL_TOOL_NAMES or tool_name in MCP_PROXY_TOOL_NAMES
+
+
+def _mcp_scope_names(request_body: Mapping[str, object]) -> tuple[str, ...]:
+    """The path or header scope of a streamable HTTP call, which can run a prefixed name on another server."""
+    try:
+        return _SCOPE_NAMES.validate_python(request_body.get(MCP_ADMISSION_SCOPE_KEY) or ())
+    except ValueError:
+        return ("",)
 
 
 def is_zero_cost_mcp_tool_call(route: str, request_body: Mapping[str, object]) -> bool:
@@ -1230,11 +1240,14 @@ def is_zero_cost_mcp_tool_call(route: str, request_body: Mapping[str, object]) -
     servers_showing_the_name: Final = tuple(
         server for server in servers if _native_names_displayed_as(tool_name, server)
     )
+    servers_in_scope: Final = tuple(
+        global_mcp_server_manager.get_mcp_server_by_identifier(name) for name in _mcp_scope_names(request_body)
+    )
     if _is_reserved_mcp_tool_name(tool_name) or not (named_servers or servers_showing_the_name):
         return False
     return all(
-        max(_costs_of_running_tool_on(tool_name, server)) <= 0
-        for server in (*servers_showing_the_name, *(named_servers or servers))
+        server is not None and max(_costs_of_running_tool_on(tool_name, server)) <= 0
+        for server in (*servers_showing_the_name, *servers_in_scope, *(named_servers or servers))
     )
 
 

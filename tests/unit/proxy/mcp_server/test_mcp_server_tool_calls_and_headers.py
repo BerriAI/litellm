@@ -4172,12 +4172,26 @@ def test_jsonrpc_text_has_top_level_method_ignores_nested_method():
     ("text", "method"),
     [
         pytest.param('{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}', "tools/list", id="complete"),
-        pytest.param('{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{"cursor":"' + "c" * 5000, "tools/list", id="cut-after-method"),
+        pytest.param(
+            '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{"cursor":"' + "c" * 5000,
+            "tools/list",
+            id="cut-after-method",
+        ),
         pytest.param('{"jsonrpc":"2.0","params":{"cursor":"' + "c" * 5000, None, id="cut-before-method"),
         pytest.param('{"jsonrpc":"2.0","id":1,"method":"tools/li', None, id="cut-inside-method"),
-        pytest.param('{"jsonrpc":"2.0","params":{"method":"tools/list"},"method":"ping"}', "ping", id="nested-method-first"),
-        pytest.param('{"jsonrpc":"2.0","id":1,"method":"tools\\/list","params":{"cursor":"' + "c" * 5000, "tools/list", id="escaped-slash"),
-        pytest.param('{"jsonrpc":"2.0","id":1,"method":"\\u0074ools/list","params":{"cursor":"' + "c" * 5000, "tools/list", id="unicode-escape"),
+        pytest.param(
+            '{"jsonrpc":"2.0","params":{"method":"tools/list"},"method":"ping"}', "ping", id="nested-method-first"
+        ),
+        pytest.param(
+            '{"jsonrpc":"2.0","id":1,"method":"tools\\/list","params":{"cursor":"' + "c" * 5000,
+            "tools/list",
+            id="escaped-slash",
+        ),
+        pytest.param(
+            '{"jsonrpc":"2.0","id":1,"method":"\\u0074ools/list","params":{"cursor":"' + "c" * 5000,
+            "tools/list",
+            id="unicode-escape",
+        ),
         pytest.param('{"jsonrpc":"2.0","id":1,"method":"bad\\x","params":{}}', None, id="invalid-escape"),
         pytest.param('{"jsonrpc":"2.0","id":1,"method":7,"params":{}}', None, id="not-a-string"),
         pytest.param('{"jsonrpc":"2.0","id":1,"result":{"method":"tools/list"}}', None, id="response"),
@@ -12376,8 +12390,8 @@ _CUT_TOOL_CALL: Final = (
                     "params": {"name": "free_tools-echo", "arguments": {"text": "secret"}, "_meta": {"k": "v"}},
                 }
             ).encode(),
-            {"method": "tools/call", "params": {"name": "free_tools-echo"}},
-            id="tool-call-keeps-only-the-method-and-tool-name",
+            {"method": "tools/call", "params": {"name": "free_tools-echo"}, "mcp_servers": ["paid_tools"]},
+            id="tool-call-keeps-only-the-method-the-tool-name-and-the-server-scope",
         ),
         pytest.param(
             json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": 7}}).encode(),
@@ -12403,7 +12417,7 @@ def test_admission_auth_body_carries_the_method_and_only_the_name_of_a_tool_call
 ) -> None:
     from litellm.proxy.mcp_server.server import _admission_auth_body
 
-    assert json.loads(_admission_auth_body(body)) == expected
+    assert json.loads(_admission_auth_body(body, scoped_to=("paid_tools",))) == expected
 
 
 @pytest.mark.asyncio

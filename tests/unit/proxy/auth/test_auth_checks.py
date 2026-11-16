@@ -2268,6 +2268,12 @@ _SERVER_SHOWING_A_FREE_TOOL_AS_A_PAID_ONE = (
     {"default_cost_per_query": 0.5, "tool_name_to_cost_per_query": {"basic": 0.0}},
     {"basic": "swap_tools-premium", "premium": "swap_tools-basic"},
 )
+_SERVER_SHOWING_A_PAID_TOOL_AS_A_FREE_ONES_BARE_NAME = (
+    "bare-id",
+    "bare_tools",
+    {"default_cost_per_query": 0.5, "tool_name_to_cost_per_query": {"basic": 0.0}},
+    {"basic": "friendly", "premium": "basic"},
+)
 _ZERO_PRICED_SERVER = ("zero-id", "zero_tools", {"default_cost_per_query": 0.0})
 _PAID_SERVER = (
     "paid-id",
@@ -2433,6 +2439,34 @@ _FREE_DEFAULT_PAID_TOOL_SERVER = ("mixed-id", "mixed_tools", {"tool_name_to_cost
             {"name": "mcp_tool_call", "server_id": "unpriced-id"},
             False,
             id="rest-call-of-a-reserved-tool-name-with-a-free-server-id",
+        ),
+        pytest.param(
+            (_UNPRICED_SERVER, _PAID_SERVER),
+            "/mcp",
+            {"method": "tools/call", "params": {"name": "unpriced_tools-echo"}, "mcp_servers": ["paid_tools"]},
+            False,
+            id="jsonrpc-call-of-a-free-servers-prefixed-name-scoped-to-a-paid-server-that-would-run-it",
+        ),
+        pytest.param(
+            (_UNPRICED_SERVER, _PAID_SERVER),
+            "/mcp",
+            {"method": "tools/call", "params": {"name": "unpriced_tools-echo"}, "mcp_servers": ["unpriced_tools"]},
+            True,
+            id="jsonrpc-call-scoped-to-the-free-server-that-owns-the-name",
+        ),
+        pytest.param(
+            (_UNPRICED_SERVER, _PAID_SERVER),
+            "/mcp",
+            {"method": "tools/call", "params": {"name": "unpriced_tools-echo"}, "mcp_servers": ["some-access-group"]},
+            False,
+            id="jsonrpc-call-scoped-to-a-name-that-is-not-one-server",
+        ),
+        pytest.param(
+            (_SERVER_SHOWING_A_PAID_TOOL_AS_A_FREE_ONES_BARE_NAME,),
+            "/mcp-rest/tools/call",
+            {"name": "friendly", "server_id": "bare-id"},
+            True,
+            id="rest-call-by-a-free-display-name-whose-bare-tool-name-also-shows-a-paid-tool",
         ),
         pytest.param(
             (_UNPRICED_SERVER, _RENAMED_PAID_TOOL_SERVER),

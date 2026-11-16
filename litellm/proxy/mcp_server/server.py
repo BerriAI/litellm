@@ -1474,8 +1474,8 @@ if MCP_AVAILABLE:
             return f"ip:{hashlib.sha256(client_ip.encode('utf-8')).hexdigest()}"
         return "anonymous"
 
-    def _admission_auth_body(body: bytes) -> bytes:
-        """Return only the JSON-RPC method, and the tool name of a tools/call, for admission auth."""
+    def _admission_auth_body(body: bytes, scoped_to: Sequence[str] = ()) -> bytes:
+        """Return only the JSON-RPC method, and the tool name and server scope of a tools/call, for admission auth."""
         try:
             data: Final = TypeAdapter(dict[str, object]).validate_json(body)
         except (ValueError, TypeError):
@@ -1490,7 +1490,7 @@ if MCP_AVAILABLE:
         tool_name: Final = string_field(data.get("params"), "name") if method == "tools/call" else None
         if tool_name is None:
             return json.dumps({"method": method}).encode()
-        return json.dumps({"method": method, "params": {"name": tool_name}}).encode()
+        return json.dumps({"method": method, "params": {"name": tool_name}, "mcp_servers": list(scoped_to)}).encode()
 
     def _is_initialize_request(body: bytes) -> bool:
         """
@@ -2552,7 +2552,17 @@ if MCP_AVAILABLE:
                 receive = peek.receive  # rebind-ok: replay peeked ASGI messages to the downstream handler
 
                 async def admission_auth_body() -> bytes:
-                    return _admission_auth_body(await peek.admission_body())
+                    return _admission_auth_body(
+                        await peek.admission_body(),
+                        scoped_to=MCPRequestHandler.extract_target_server_names_from_path(path)
+                        or tuple(
+                            name.strip()
+                            for name in StarletteRequest(scope)
+                            .headers.get(MCPRequestHandler.LITELLM_MCP_SERVERS_HEADER_NAME, "")
+                            .split(",")
+                            if name.strip()
+                        ),
+                    )
 
                 scope[MCP_PEEKED_BODY_SCOPE_KEY] = admission_auth_body
             (
