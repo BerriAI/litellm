@@ -1,6 +1,7 @@
 mod support;
 
 use axum::body::to_bytes;
+use litellm_inference_responses::ids::{self, IdScope};
 use rstest::rstest;
 use serde_json::json;
 use wiremock::{
@@ -40,15 +41,132 @@ async fn responses_aliases_run_the_core_route(
     let response = support::post(support::app("openai/test-model", &upstream.uri()), route,
         json!({"model": "public/model", "input": "hello", "stream": stream, "metadata": {"caller": "test"}})).await;
     assert_eq!(response.status(), 200);
+    let deployment = response.headers()["x-litellm-model-id"]
+        .to_str()
+        .unwrap()
+        .to_owned();
+    let managed = ids::response_id(
+        &IdScope {
+            provider: Some("openai".to_owned()),
+            model_id: Some(deployment),
+            encrypted_content_affinity: false,
+        },
+        "response-1",
+    );
+    let returned =
+        json!({"id": managed, "model": "test-model", "output": [], "provider_extra": true});
     if stream {
         assert_eq!(response.headers()["content-type"], "text/event-stream");
         assert_eq!(
             to_bytes(response.into_body(), 4096).await.unwrap().as_ref(),
-            events.as_bytes()
+            format!(
+                "event: response.completed\ndata: {}\n\n",
+                json!({"type": "response.completed", "response": returned})
+            )
+            .as_bytes()
         );
     } else {
-        assert_eq!(support::json(response).await, completed);
+        assert_eq!(support::json(response).await, returned);
     }
+}
+
+/// A follow-up carrying reasoning `east` minted, and continuing a response it served, from a
+/// client the Python proxy or this gateway answered before.
+fn follow_up() -> serde_json::Value {
+    json!({
+        "model": "public/model",
+        "previous_response_id": ids::response_id(
+            &IdScope {
+                provider: Some("openai".to_owned()),
+                model_id: Some("east".to_owned()),
+                encrypted_content_affinity: true,
+            },
+            "resp_upstream",
+        ),
+        "input": [
+            {"type": "reasoning", "id": ids::encrypted_item_id("east", "rs_1"),
+             "encrypted_content": "gAAAA", "summary": [{"type": "summary_text", "text": "thought"}]},
+            {"type": "message", "role": "user", "content": "and then?"},
+        ],
+    })
+}
+
+#[rstest]
+#[case::encrypted_content_affinity(
+    json!({"optional_pre_call_checks": ["encrypted_content_affinity"]})
+)]
+#[case::responses_api_deployment_check(
+    json!({"model_group_affinity_config": {"public/model": ["responses_api_deployment_check"]}})
+)]
+#[tokio::test]
+async fn a_follow_up_reaches_the_deployment_that_served_it_with_the_provider_s_own_ids(
+    #[case] router_settings: serde_json::Value,
+) {
+    let east = MockServer::start().await;
+    let west = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/responses"))
+        .and(body_json(json!({
+            "model": "test-model",
+            "previous_response_id": "resp_upstream",
+            "input": [
+                {"type": "reasoning", "id": "rs_1", "encrypted_content": "gAAAA",
+                 "summary": [{"type": "summary_text", "text": "thought"}]},
+                {"type": "message", "role": "user", "content": "and then?"},
+            ],
+        })))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(json!({"id": "resp_next", "model": "test-model", "output": []})),
+        )
+        .expect(5)
+        .mount(&east)
+        .await;
+    let app = support::group_app(
+        &[("east", &east.uri()), ("west", &west.uri())],
+        router_settings,
+    );
+    for _ in 0..5 {
+        let response = support::post(app.clone(), "/v1/responses", follow_up()).await;
+        assert_eq!(response.status(), 200);
+        let returned = support::json(response).await["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        assert_eq!(
+            ids::previous_response_deployment(&returned).as_deref(),
+            Some("east")
+        );
+    }
+    assert!(west.received_requests().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn reasoning_another_account_minted_reaches_a_new_deployment_as_its_summary() {
+    let west = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/responses"))
+        .and(body_json(json!({
+            "model": "test-model",
+            "previous_response_id": "resp_upstream",
+            "input": [
+                {"type": "reasoning", "summary": [{"type": "summary_text", "text": "thought"}]},
+                {"type": "message", "role": "user", "content": "and then?"},
+            ],
+        })))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(json!({"id": "resp_next", "model": "test-model", "output": []})),
+        )
+        .expect(1)
+        .mount(&west)
+        .await;
+    let app = support::group_app(
+        &[("west", &west.uri())],
+        json!({"optional_pre_call_checks": ["encrypted_content_affinity"]}),
+    );
+    let response = support::post(app, "/v1/responses", follow_up()).await;
+    assert_eq!(response.status(), 200);
 }
 
 #[rstest]
@@ -133,8 +251,9 @@ async fn a_stream_that_fails_after_opening_ends_with_the_responses_error_event()
     let body = to_bytes(response.into_body(), 4096).await.unwrap();
     let text = std::str::from_utf8(&body).unwrap();
     let frame = text
-        .strip_prefix(RESPONSE_CREATED)
-        .and_then(|rest| rest.strip_prefix("event: error\ndata: "))
+        .split_once("\n\nevent: error\ndata: ")
+        .filter(|(delivered, _)| delivered.starts_with("event: response.created\n"))
+        .map(|(_, frame)| frame)
         .unwrap_or_else(|| panic!("the delivered event then one error frame, got {text:?}"));
     let error: serde_json::Value = serde_json::from_str(frame.trim_end()).unwrap();
     assert_eq!(error["type"], "error");

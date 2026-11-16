@@ -1,6 +1,7 @@
 use litellm_host::observation::ObservationSender;
 pub use litellm_inference::Error;
 
+pub mod encoded_stream;
 pub mod ids;
 pub mod route;
 pub mod types;

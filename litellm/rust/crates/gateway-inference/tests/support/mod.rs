@@ -128,6 +128,43 @@ fn configured_app(
     )
 }
 
+/// A gateway over `public/model` deployments, each `(id, api_base)`, read with `router_settings`.
+pub fn group_app(deployments: &[(&str, &str)], router_settings: Value) -> Router {
+    let settings: RouterSettings = serde_json::from_value(router_settings).unwrap();
+    let (config, dynamic) = RouterConfig::from_settings(&settings).unwrap();
+    let models = litellm_router_core::Router::new(
+        RouterConfig {
+            model_list: deployments
+                .iter()
+                .map(|(id, api_base)| DeploymentSpec {
+                    model_name: "public/model".into(),
+                    litellm_params: test_params("openai/test-model", api_base),
+                    model_info: json!({"id": id}).as_object().cloned().unwrap(),
+                    ..DeploymentSpec::default()
+                })
+                .collect(),
+            ..config
+        },
+        dynamic,
+        FACTS,
+    )
+    .unwrap();
+    let pool = Arc::new(HttpClientPool::new(Arc::new(PublicDnsResolver)));
+    let gateway = Gateway::new(
+        CoreResources::new(pool),
+        Resolution::from(&HttpSettings::default()).config,
+        Arc::new(NoSecrets),
+        models,
+        HashMap::new(),
+        NativeHost,
+    )
+    .unwrap();
+    router(Arc::new(gateway)).layer(axum::middleware::from_fn_with_state(
+        (litellm_gateway_auth::Permissions::All, None),
+        test_identity,
+    ))
+}
+
 fn deployment_app(
     litellm_params: Map<String, Value>,
     shaping: Value,

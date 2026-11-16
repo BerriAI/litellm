@@ -13,8 +13,8 @@ use axum::{
 use futures_util::{StreamExt, stream::BoxStream};
 use litellm_gateway_auth::{AccessRequest, AuthenticatedRequest, Permissions};
 use litellm_router_core::{
-    Attempt, AttemptError, AttemptFailure, CallError, Deployment, FailureKind, Op, RouterHost,
-    RouterRequest, RouterResponse, Served, SuccessReport, resolve,
+    Affinity, Attempt, AttemptError, AttemptFailure, CallError, Deployment, FailureKind, Op,
+    RouterHost, RouterRequest, RouterResponse, Served, SuccessReport, resolve,
 };
 use litellm_router_types::Spelled;
 use serde_json::{Map, Value};
@@ -46,6 +46,11 @@ pub trait RouteAttempt: Send + Sync {
         &self,
         attempt: &Attempt,
     ) -> impl Future<Output = Result<Served<Self::Outcome>, Error>> + Send;
+
+    /// The deployments the request's own ids name.
+    fn affinity(&self) -> Affinity {
+        Affinity::default()
+    }
 }
 
 /// The litellm model of the first deployment the request's name resolves to for its caller,
@@ -163,7 +168,10 @@ pub(crate) async fn call<H: Host, A: RouteAttempt>(
     model: &str,
     route: &A,
 ) -> Result<RouterResponse<A::Outcome>, Error> {
-    let request = caller_request(identity, model);
+    let request = RouterRequest {
+        affinity: route.affinity(),
+        ..caller_request(identity, model)
+    };
     let first = first_model(gateway, &request).ok_or_else(|| Error::UnknownModel {
         route: path,
         model: model.to_owned(),

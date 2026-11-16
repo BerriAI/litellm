@@ -11,17 +11,20 @@ bytes.workspace = true
 futures-util.workspace = true
 litellm-auth = { workspace = true, features = ["aws", "azure", "gcp"] }
 litellm-cache-response.workspace = true
+litellm-framer.workspace = true
 litellm-core-utils.workspace = true
 litellm-host.workspace = true
 litellm-http.workspace = true
 litellm-inference.workspace = true
 litellm-llms.workspace = true
 litellm-llms-types.workspace = true
+litellm-python-compat.workspace = true
 litellm-secrets.workspace = true
 reqwest.workspace = true
 serde_json = { workspace = true, features = ["preserve_order"] }
 tokio = { workspace = true, features = ["sync"] }
 tokio-tungstenite.workspace = true
+tokio-util = { version = "0.7", features = ["codec"] }
 tracing.workspace = true
 
 [dev-dependencies]

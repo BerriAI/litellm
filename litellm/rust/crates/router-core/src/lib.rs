@@ -92,6 +92,7 @@ pub mod access;
 pub mod build;
 pub mod cache;
 pub mod call;
+pub mod checks;
 pub mod config;
 pub mod eligibility;
 pub mod error;
@@ -133,6 +134,7 @@ use parking_lot::Mutex;
 pub use crate::{
     cache::{HealthState, InMemoryRouterCache, Outcomes, RouterCache, UsageCounts, UsageWindow},
     call::RouterResponse,
+    checks::{Affinity, PreCallChecks},
     config::{Op, RouterConfig, RouterDynamicConfig, RoutingStrategy},
     error::{AttemptError, ConfigError, Error, FailureKind, RaisedAt, Unsupported},
     health::{Clock, Health, Outcome, SystemClock},
@@ -233,12 +235,12 @@ impl Core {
             ),
             (
                 "optional_pre_call_checks",
-                !config.optional_pre_call_checks.is_empty(),
+                !config.pre_call_checks.global_is_native(),
                 Capability::Select,
             ),
             (
                 "model_group_affinity_config",
-                config.model_group_affinity,
+                !config.pre_call_checks.groups_are_native(),
                 Capability::Select,
             ),
             (
@@ -544,6 +546,19 @@ impl Router {
 
     pub fn settings(&self) -> Arc<Settings> {
         self.core.snapshot.load().settings.clone()
+    }
+
+    /// Whether `model_group`'s responses carry the deployment in their encrypted output items.
+    pub fn encrypted_content_affinity(&self, model_group: &str) -> bool {
+        self.core
+            .config
+            .pre_call_checks
+            .encrypted_content_affinity(model_group)
+    }
+
+    /// Whether `target` decrypts the reasoning deployment `origin` minted.
+    pub fn decrypts(&self, origin: &str, target: &Deployment) -> bool {
+        checks::decrypts(&self.registry(), origin, target)
     }
 
     /// The routing state `cache` holds, read and written by this router's clock.

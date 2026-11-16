@@ -13,7 +13,7 @@ use crate::{
     config::{Op, RoutingStrategy},
     error::Error,
     health_routing::WhenAllUnhealthy,
-    host::{RouterHost, RouterRequest, RoutingContext, SelectStage},
+    host::{Capability, RouterHost, RouterRequest, RoutingContext, SelectStage},
     registry::{Deployment, Registry, ResolveKind},
     resolve::{Caller, resolve_request},
     strategy::{StrategyScope, request_override, routing_context},
@@ -477,7 +477,9 @@ impl<H: RouterHost> Call<'_, H> {
         let request_order = request.target_order.filter(|_| !inputs.fallback_hop);
         // `async_callback_filter_deployments` runs after the cooldown and blocked filters on every
         // async candidate list but a deployment named by id and a listed pass-through pick.
-        let preferred = if settings.callback_filters
+        let checks = &self.core.config.pre_call_checks;
+        let native_checks = !self.core.facts.can(Capability::Select) && !checks.is_empty();
+        let preferred = if (settings.callback_filters || native_checks)
             && !inputs.count_only
             && !resolution.kind.is_single()
             && request.pass_through != Some(PassThrough::Listed)
@@ -493,9 +495,16 @@ impl<H: RouterHost> Call<'_, H> {
             ctx.excluded_ids = &inputs.excluded_ids;
             ctx.skipped_ids = &inputs.failed_ids;
             ctx.target_order = inputs.target_order.or(request_order);
-            let filtered = self.host.callback_filters(&ctx, healthy).await?;
-            healthy = filtered.kept;
-            filtered.preferred
+            if native_checks {
+                healthy = crate::checks::filter(checks, &ctx, healthy);
+            }
+            if settings.callback_filters {
+                let filtered = self.host.callback_filters(&ctx, healthy).await?;
+                healthy = filtered.kept;
+                filtered.preferred
+            } else {
+                None
+            }
         } else {
             None
         };

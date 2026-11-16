@@ -5,8 +5,14 @@ use litellm_cache_response::CachePolicy;
 use litellm_gateway_auth::AuthenticatedRequest;
 use litellm_host::call::CallOutput;
 use litellm_host_http::{Ran, Sse};
-use litellm_inference_responses::{ResponsesRoute, route::Responses, types::ResponsesCall};
-use litellm_router_core::{Attempt, Op, Served};
+use litellm_inference_responses::{
+    ResponsesRoute,
+    encoded_stream::encode_stream,
+    ids::{self, IdScope},
+    route::Responses,
+    types::ResponsesCall,
+};
+use litellm_router_core::{Affinity, Attempt, Op, Served};
 use serde_json::{Map, Value};
 
 use crate::{
@@ -65,15 +71,48 @@ struct ResponsesAttempt<'a, H> {
 impl<H: Host> RouteAttempt for ResponsesAttempt<'_, H> {
     type Outcome = (Ran<Responses>, CacheHeaders);
 
+    fn affinity(&self) -> Affinity {
+        Affinity {
+            previous_response: self
+                .body
+                .get("previous_response_id")
+                .and_then(Value::as_str)
+                .and_then(ids::previous_response_deployment),
+            encrypted_content: self
+                .body
+                .get("input")
+                .and_then(ids::encrypted_content_origin),
+        }
+    }
+
     async fn run(&self, attempt: &Attempt) -> Result<Served<Self::Outcome>, Error> {
         let deployment = &attempt.deployment;
-        let body = routing::attempt_body(&self.body, attempt);
+        let router = &self.gateway.router;
+        let affinity = router.encrypted_content_affinity(&attempt.model_group);
+        let mut body = routing::attempt_body(&self.body, attempt);
+        let mut input = body.remove("input").unwrap_or_default();
+        if let Some(origin) = attempt.request.affinity.encrypted_content.as_deref()
+            && affinity
+        {
+            ids::strip_undecryptable_reasoning(&mut input, origin, |minted_by| {
+                router.decrypts(minted_by, deployment)
+            });
+        }
+        ids::restore_input(&mut input);
+        if let Some(Value::String(previous)) = body.get_mut("previous_response_id") {
+            *previous = ids::decode_response_id(previous).response_id;
+        }
+        let scope = IdScope {
+            provider: Some(deployment.provider().to_owned()),
+            model_id: Some(deployment.id.clone()),
+            encrypted_content_affinity: affinity,
+        };
         let call = ResponsesCall {
             model: deployment.params.model.clone(),
-            input: body.get("input").cloned().unwrap_or_default(),
+            input,
             optional_params: body
                 .into_iter()
-                .filter(|(name, _)| !matches!(name.as_str(), "model" | "input"))
+                .filter(|(name, _)| name != "model")
                 .collect(),
             api_key: routing::api_key(deployment),
             api_base: deployment.params.api_base.clone(),
@@ -85,13 +124,17 @@ impl<H: Host> RouteAttempt for ResponsesAttempt<'_, H> {
         let cache = CacheHeaders::default();
         let ran = litellm_host_http::run(machine, (), cache.clone(), None).await?;
         Ok(match ran {
-            CallOutput::Complete(response) => {
+            CallOutput::Complete(mut response) => {
+                ids::encode_response(&mut response, &scope);
                 let total_tokens = routing::total_tokens(response.extra.get("usage"));
                 Served::new((CallOutput::Complete(response), cache), total_tokens)
             }
             CallOutput::Stream { head, chunks } => {
-                let chunks =
-                    routing::reporting_success(self.gateway, deployment.id.clone(), chunks);
+                let chunks = routing::reporting_success(
+                    self.gateway,
+                    deployment.id.clone(),
+                    encode_stream(chunks, scope),
+                );
                 Served {
                     deferred: true,
                     ..Served::new((CallOutput::Stream { head, chunks }, cache), 0)

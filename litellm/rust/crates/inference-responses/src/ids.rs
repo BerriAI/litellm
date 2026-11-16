@@ -31,8 +31,9 @@
 //! - `cntr_` lets container calls find the provider and deployment that own a container. A
 //!   container id that already names a provider is left as it is.
 //! - On the way in, [`restore_input`] turns `encitem_` ids and `litellm_enc:` content in the
-//!   request input back into the provider's own bytes before the request is sent. The routing
-//!   decision itself stays in Python's `EncryptedContentAffinityCheck`.
+//!   request input back into the provider's own bytes before the request is sent. The router
+//!   pins by the deployments [`previous_response_deployment`] and [`encrypted_content_origin`]
+//!   read.
 //!
 //! Python's quirks are kept on purpose:
 //! - A missing provider or `model_id` is written as `None` in `resp_` ids (an f-string of
@@ -53,6 +54,19 @@ const ITEM_PREFIX: &str = "encitem_";
 const CONTAINER_PREFIX: &str = "cntr_";
 const WRAPPED_CONTENT_PREFIX: &str = "litellm_enc:";
 const ENCRYPTED_ITEM_TYPES: [&str; 2] = ["reasoning", "compaction"];
+const REASONING_FIELDS_ONLY_ITS_ORIGIN_RESOLVES: [&str; 3] = ["encrypted_content", "id", "status"];
+const OUTPUT_ITEM_EVENT_TYPES: [&str; 2] =
+    ["response.output_item.added", "response.output_item.done"];
+const REASONING_ITEM_EVENT_TYPES: [&str; 6] = [
+    "response.reasoning_summary_part.added",
+    "response.reasoning_summary_part.done",
+    "response.reasoning_summary_text.delta",
+    "response.reasoning_summary_text.done",
+    "response.reasoning_text.delta",
+    "response.reasoning_text.done",
+];
+const CONTENT_PART_EVENT_TYPES: [&str; 2] =
+    ["response.content_part.added", "response.content_part.done"];
 
 /// Python's non-strict `base64.b64decode`: characters outside the alphabet are skipped and
 /// non-zero trailing bits are accepted
@@ -83,22 +97,238 @@ pub fn encode_response(response: &mut ResponsesApiResponse, scope: &IdScope) {
         return;
     }
     response.id = response_id(scope, &response.id);
-    if let Some(model_id) = scope
+    encode_output(&mut response.output, scope);
+}
+
+/// [`encode_response`] on a response a stream event carries as JSON
+fn encode_response_object(response: &mut Map<String, Value>, scope: &IdScope) {
+    let Some(id) = response.get("id").and_then(Value::as_str) else {
+        return;
+    };
+    if is_managed_response_id(id) {
+        return;
+    }
+    let encoded = response_id(scope, id);
+    response.insert("id".to_owned(), Value::String(encoded));
+    if let Some(Value::Array(output)) = response.get_mut("output") {
+        encode_output(output, scope);
+    }
+}
+
+fn affinity_model_id(scope: &IdScope) -> Option<&str> {
+    scope
         .model_id
         .as_deref()
         .filter(|_| scope.encrypted_content_affinity)
         .filter(|model_id| !model_id.is_empty())
-    {
-        response
-            .output
+}
+
+fn encode_output(output: &mut [Value], scope: &IdScope) {
+    if let Some(model_id) = affinity_model_id(scope) {
+        output
             .iter_mut()
             .filter_map(Value::as_object_mut)
             .for_each(|item| encode_encrypted_item(item, model_id));
     }
-    response
-        .output
+    output
         .iter_mut()
         .for_each(|item| encode_containers(item, scope));
+}
+
+/// One Responses stream event with the ids [`encode_response`] gives the final response
+/// (`ResponsesAPIStreamingIterator._process_chunk`): the response it carries, its output item and
+/// the reasoning item its deltas name, and the container ids on items and annotations
+pub fn encode_stream_event(event: &mut Map<String, Value>, scope: &IdScope) {
+    let event_type = event
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
+    if let Some(model_id) = affinity_model_id(scope) {
+        encode_stream_affinity(event, &event_type, model_id);
+    }
+    if let Some(Value::Object(response)) = event.get_mut("response") {
+        encode_response_object(response, scope);
+    }
+    match event_type.as_str() {
+        "response.output_item.added" | "response.output_item.done" => {
+            if let Some(item) = event.get_mut("item") {
+                encode_containers(item, scope);
+            }
+        }
+        "response.output_text.annotation.added" => {
+            if let Some(annotation) = event.get_mut("annotation") {
+                encode_containers(annotation, scope);
+            }
+        }
+        "response.content_part.done" => {
+            if let Some(Value::Array(annotations)) = event
+                .get_mut("part")
+                .and_then(|part| part.get_mut("annotations"))
+            {
+                annotations
+                    .iter_mut()
+                    .for_each(|annotation| encode_containers(annotation, scope));
+            }
+        }
+        _ => {}
+    }
+}
+
+/// `encode_stream_event_for_affinity`
+fn encode_stream_affinity(event: &mut Map<String, Value>, event_type: &str, model_id: &str) {
+    if OUTPUT_ITEM_EVENT_TYPES.contains(&event_type) {
+        if let Some(Value::Object(item)) = event.get_mut("item") {
+            encode_encrypted_item(item, model_id);
+        }
+        return;
+    }
+    let part_type = event
+        .get("part")
+        .and_then(|part| part.get("type"))
+        .and_then(Value::as_str);
+    let names_reasoning = REASONING_ITEM_EVENT_TYPES.contains(&event_type)
+        || (CONTENT_PART_EVENT_TYPES.contains(&event_type) && part_type == Some("reasoning_text"));
+    if !names_reasoning {
+        return;
+    }
+    if let Some(Value::String(id)) = event.get_mut("item_id")
+        && !id.is_empty()
+        && decode_encrypted_item_id(id).is_none()
+    {
+        *id = encrypted_item_id(model_id, id);
+    }
+}
+
+/// A `resp_` id taken apart (`decode_responses_api_response_id`); an id LiteLLM did not mint
+/// names neither a provider nor a deployment
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DecodedResponseId {
+    pub provider: Option<String>,
+    pub model_id: Option<String>,
+    pub response_id: String,
+}
+
+pub fn decode_response_id(id: &str) -> DecodedResponseId {
+    let unmanaged = || DecodedResponseId {
+        provider: None,
+        model_id: None,
+        response_id: id.to_owned(),
+    };
+    let Some(decoded) = decode_text(&id.replace(RESPONSE_PREFIX, "")) else {
+        return unmanaged();
+    };
+    let parts: Vec<&str> = decoded.split(';').collect();
+    let [provider, model_id, response_id, ..] = parts.as_slice() else {
+        return unmanaged();
+    };
+    DecodedResponseId {
+        provider: Some(provider.replace("litellm:custom_llm_provider:", "")),
+        model_id: Some(model_id.replace("model_id:", "")),
+        response_id: response_id.replace("response_id:", ""),
+    }
+}
+
+/// The deployment a `previous_response_id` names (`get_model_id_from_response_id`)
+pub fn previous_response_deployment(previous_response_id: &str) -> Option<String> {
+    decode_response_id(previous_response_id)
+        .model_id
+        .filter(|model_id| !model_id.is_empty())
+}
+
+/// The deployment the first encrypted-content marker in `input` names
+/// (`_extract_model_id_from_input`)
+pub fn encrypted_content_origin(input: &Value) -> Option<String> {
+    input
+        .as_array()?
+        .iter()
+        .filter_map(Value::as_object)
+        .find_map(marked_origin)
+        .filter(|model_id| !model_id.is_empty())
+}
+
+/// `_model_id_of_input_item`: an `encitem_` id names its deployment even when that is empty, a
+/// wrapped `encrypted_content` only when it is not
+fn marked_origin(item: &Map<String, Value>) -> Option<String> {
+    if let Some(id) = item.get("id").and_then(Value::as_str)
+        && let Some((model_id, _)) = decode_encrypted_item_id(id)
+    {
+        return Some(model_id);
+    }
+    item.get("encrypted_content")
+        .and_then(Value::as_str)
+        .and_then(wrapped_model_id)
+        .filter(|model_id| !model_id.is_empty())
+}
+
+/// The deployment a wrapped `encrypted_content` names (`unwrap_encrypted_content_with_model_id`)
+pub fn wrapped_model_id(content: &str) -> Option<String> {
+    let (metadata, _) = content
+        .strip_prefix(WRAPPED_CONTENT_PREFIX)?
+        .split_once(';')?;
+    Some(decode_text(&padded(metadata))?.replace("model_id:", ""))
+}
+
+/// `strip_reasoning_the_targets_cannot_decrypt` for the deployment a request is sent to: each
+/// encrypted reasoning item whose origin (its own marker, else `unmarked_origin`) the target
+/// cannot `decrypt` keeps only its readable summary, or is dropped when it has none
+pub fn strip_undecryptable_reasoning(
+    input: &mut Value,
+    unmarked_origin: &str,
+    decrypts: impl Fn(&str) -> bool,
+) {
+    let Some(items) = input.as_array_mut() else {
+        return;
+    };
+    let kept = std::mem::take(items)
+        .into_iter()
+        .filter_map(|item| {
+            let Value::Object(reasoning) = &item else {
+                return Some(item);
+            };
+            if !is_encrypted_reasoning(reasoning) {
+                return Some(item);
+            }
+            let origin = marked_origin(reasoning);
+            if decrypts(origin.as_deref().unwrap_or(unmarked_origin)) {
+                return Some(item);
+            }
+            readable_reasoning(reasoning)
+        })
+        .collect();
+    *items = kept;
+}
+
+fn truthy(value: &Value) -> bool {
+    litellm_python_compat::truthy::truthy(&litellm_python_compat::json::from_json(value.clone()))
+}
+
+/// `_encrypted_reasoning_item`
+fn is_encrypted_reasoning(item: &Map<String, Value>) -> bool {
+    item.get("type").and_then(Value::as_str) == Some("reasoning")
+        && item.get("encrypted_content").is_some_and(truthy)
+}
+
+/// `readable_reasoning`: the item less what only its origin resolves, when its `summary` or
+/// `content` carries text
+fn readable_reasoning(reasoning: &Map<String, Value>) -> Option<Value> {
+    let has_text = |value: Option<&Value>| match value {
+        Some(Value::String(text)) => !text.trim().is_empty(),
+        Some(Value::Array(blocks)) => blocks
+            .iter()
+            .any(|block| block.get("text").is_some_and(truthy)),
+        _ => false,
+    };
+    if !has_text(reasoning.get("summary")) && !has_text(reasoning.get("content")) {
+        return None;
+    }
+    Some(Value::Object(
+        reasoning
+            .iter()
+            .filter(|(key, _)| !REASONING_FIELDS_ONLY_ITS_ORIGIN_RESOLVES.contains(&key.as_str()))
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect(),
+    ))
 }
 
 /// Restores encrypted-content item ids and contents that LiteLLM encoded on an earlier response,
@@ -531,6 +761,162 @@ mod tests {
                 {"type": "reasoning", "id": "rs_0a1b", "encrypted_content": "gAAAA", "summary": []},
                 {"role": "user", "content": "hi"}
             ])
+        );
+    }
+
+    fn managed(model_id: &str) -> String {
+        response_id(
+            &scope(Some("azure"), Some(model_id), false),
+            "resp_upstream",
+        )
+    }
+
+    #[rstest]
+    #[case::managed(managed("deploy-1"), Some("deploy-1"), "resp_upstream")]
+    #[case::minted_without_a_deployment(
+        "resp_bGl0ZWxsbTpjdXN0b21fbGxtX3Byb3ZpZGVyOm9wZW5haTttb2RlbF9pZDpOb25lO3Jlc3BvbnNlX2lkOnJlc3BfMGExYjJjM2Q0ZTVm".to_owned(),
+        Some("None"),
+        "resp_0a1b2c3d4e5f"
+    )]
+    #[case::raw("resp_0a1b2c3d4e5f".to_owned(), None, "resp_0a1b2c3d4e5f")]
+    #[case::two_segments("resp_YTti".to_owned(), None, "resp_YTti")]
+    fn response_ids_decode_like_python(
+        #[case] id: String,
+        #[case] deployment: Option<&str>,
+        #[case] original: &str,
+    ) {
+        assert_eq!(
+            (
+                previous_response_deployment(&id),
+                decode_response_id(&id).response_id
+            ),
+            (deployment.map(str::to_owned), original.to_owned())
+        );
+    }
+
+    #[rstest]
+    #[case::encoded_item_id(
+        json!([{"type": "message"}, {"type": "reasoning", "id": encrypted_item_id("deploy-1", "rs_1")}]),
+        Some("deploy-1")
+    )]
+    #[case::wrapped_content(
+        json!([{"type": "reasoning", "encrypted_content": wrap_encrypted_content("gAAAA", "deploy-2")}]),
+        Some("deploy-2")
+    )]
+    #[case::first_marker_wins(
+        json!([
+            {"encrypted_content": wrap_encrypted_content("gAAAA", "deploy-2")},
+            {"id": encrypted_item_id("deploy-1", "rs_1")},
+        ]),
+        Some("deploy-2")
+    )]
+    #[case::an_empty_item_marker_stops_the_scan(
+        json!([
+            {"id": encrypted_item_id("", "rs_1")},
+            {"encrypted_content": wrap_encrypted_content("gAAAA", "deploy-2")},
+        ]),
+        None
+    )]
+    #[case::unmarked(json!([{"type": "reasoning", "id": "rs_1", "encrypted_content": "gAAAA"}]), None)]
+    #[case::text_input(json!("hello"), None)]
+    fn the_first_marker_in_the_input_names_its_origin(
+        #[case] input: Value,
+        #[case] expected: Option<&str>,
+    ) {
+        assert_eq!(
+            encrypted_content_origin(&input),
+            expected.map(str::to_owned)
+        );
+    }
+
+    #[test]
+    fn reasoning_the_target_cannot_decrypt_keeps_only_its_summary() {
+        let summary = json!([{"type": "summary_text", "text": "thought"}]);
+        let mut input = json!([
+            {"type": "message", "content": "hi"},
+            {"type": "reasoning", "id": encrypted_item_id("east", "rs_1"), "status": "completed",
+             "encrypted_content": "gAAAA", "summary": summary},
+            {"type": "reasoning", "id": encrypted_item_id("west", "rs_2"),
+             "encrypted_content": "gBBBB", "summary": summary},
+            {"type": "reasoning", "id": "rs_3", "encrypted_content": "gCCCC", "summary": []},
+            {"type": "reasoning", "id": "rs_4", "summary": summary},
+        ]);
+        strip_undecryptable_reasoning(&mut input, "unmarked", |origin| origin == "west");
+        assert_eq!(
+            input,
+            json!([
+                {"type": "message", "content": "hi"},
+                {"type": "reasoning", "summary": summary},
+                {"type": "reasoning", "id": encrypted_item_id("west", "rs_2"),
+                 "encrypted_content": "gBBBB", "summary": summary},
+                {"type": "reasoning", "id": "rs_4", "summary": summary},
+            ])
+        );
+    }
+
+    #[test]
+    fn unmarked_reasoning_belongs_to_the_request_s_origin() {
+        let item =
+            json!({"type": "reasoning", "id": "rs_1", "encrypted_content": "gAAAA", "summary": []});
+        let mut kept = json!([item]);
+        strip_undecryptable_reasoning(&mut kept, "east", |origin| origin == "east");
+        assert_eq!(kept, json!([item]));
+    }
+
+    #[rstest]
+    #[case::output_item(
+        json!({"type": "response.output_item.added", "item": {"type": "reasoning", "id": "rs_1", "encrypted_content": "gAAAA"}}),
+        json!({"type": "response.output_item.added", "item": {
+            "type": "reasoning",
+            "id": encrypted_item_id("deploy-1", "rs_1"),
+            "encrypted_content": wrap_encrypted_content("gAAAA", "deploy-1"),
+        }})
+    )]
+    #[case::reasoning_delta(
+        json!({"type": "response.reasoning_summary_text.delta", "item_id": "rs_1", "delta": "x"}),
+        json!({"type": "response.reasoning_summary_text.delta", "item_id": encrypted_item_id("deploy-1", "rs_1"), "delta": "x"})
+    )]
+    #[case::reasoning_text_part(
+        json!({"type": "response.content_part.added", "item_id": "rs_1", "part": {"type": "reasoning_text"}}),
+        json!({"type": "response.content_part.added", "item_id": encrypted_item_id("deploy-1", "rs_1"), "part": {"type": "reasoning_text"}})
+    )]
+    #[case::message_part(
+        json!({"type": "response.content_part.added", "item_id": "msg_1", "part": {"type": "output_text"}}),
+        json!({"type": "response.content_part.added", "item_id": "msg_1", "part": {"type": "output_text"}})
+    )]
+    #[case::message_item(
+        json!({"type": "response.output_item.done", "item": {"type": "message", "id": "msg_1"}}),
+        json!({"type": "response.output_item.done", "item": {"type": "message", "id": "msg_1"}})
+    )]
+    fn stream_events_carry_the_ids_of_the_final_response(
+        #[case] event: Value,
+        #[case] expected: Value,
+    ) {
+        let Value::Object(mut event) = event else {
+            unreachable!()
+        };
+        encode_stream_event(&mut event, &scope(Some("azure"), Some("deploy-1"), true));
+        assert_eq!(Value::Object(event), expected);
+    }
+
+    #[rstest]
+    #[case::with_affinity(true)]
+    #[case::without_affinity(false)]
+    fn a_streamed_response_is_encoded_as_the_final_one(#[case] affinity: bool) {
+        let scope = scope(Some("azure"), Some("deploy-1"), affinity);
+        let output = json!([{"type": "reasoning", "id": "rs_1", "encrypted_content": "gAAAA"}]);
+        let mut whole = response("resp_upstream", output.clone());
+        encode_response(&mut whole, &scope);
+        let Value::Object(mut event) = json!({
+            "type": "response.completed",
+            "response": {"id": "resp_upstream", "output": output},
+        }) else {
+            unreachable!()
+        };
+        encode_stream_event(&mut event, &scope);
+        assert_eq!(
+            (&event["response"]["id"], &event["response"]["output"]),
+            (&Value::String(whole.id), &Value::Array(whole.output))
         );
     }
 }

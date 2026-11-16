@@ -127,6 +127,8 @@ pub struct RouterRequest {
     pub content_policy_fallbacks: Option<Option<Fallbacks>>,
     /// A per-request `max_fallbacks`, which replaces the router's.
     pub max_fallbacks: Option<u32>,
+    /// The deployments the request's own ids name, which the core's affinity checks pin to.
+    pub affinity: crate::checks::Affinity,
     /// A per-request `cooldown_time`: the call's own params carry it, so it cools a failed
     /// deployment down for that long unless its `model_info` sets one.
     pub cooldown_time: Option<f64>,

@@ -449,7 +449,7 @@ async fn an_error_the_router_made_itself_hands_back_no_host_error(config: Router
 #[case::strategy(json!({"routing_strategy": "least-busy"}), "`least-busy`")]
 #[case::tag_filtering(json!({"enable_tag_filtering": true}), "`enable_tag_filtering`")]
 #[case::optional_checks(
-    json!({"optional_pre_call_checks": ["encrypted_content_affinity"]}),
+    json!({"pre_call_checks": {"global": ["prompt_caching"]}}),
     "`optional_pre_call_checks`"
 )]
 #[case::health_check_routing(
