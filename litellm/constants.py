@@ -2362,6 +2362,7 @@ MODEL_BATCH_ENQUEUED_TOKEN_LIMIT_METADATA_KEY: Final = "model_batch_enqueued_tok
 MAX_BATCH_FILE_RECORDS_KEY: Final = "max_batch_file_records"
 MAX_BATCH_FILE_UPLOADS_PER_DAY_KEY: Final = "max_batch_file_uploads_per_day"
 MAX_FILE_DOWNLOADS_PER_MINUTE_KEY: Final = "max_file_downloads_per_minute"
+MODEL_LIMIT_MAX_BORROW_MULTIPLE_METADATA_KEY: Final = "model_limit_max_borrow_multiple"
 ADMIN_ONLY_BATCH_LIMIT_METADATA_KEYS: Final = (
     BATCH_ENQUEUED_TOKEN_LIMIT_METADATA_KEY,
     MAX_BATCH_FILE_RECORDS_KEY,

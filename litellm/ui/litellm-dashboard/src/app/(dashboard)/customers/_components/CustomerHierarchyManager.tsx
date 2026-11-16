@@ -27,6 +27,8 @@ import CreateCustomerHierarchyDialog from "./CreateCustomerHierarchyDialog";
 import { customerEntityId, customerEntityLabel, type CreatedCustomerHierarchyEntity } from "./customerHierarchyForms";
 import useCustomerHierarchy, { type CustomerHierarchyContext } from "./useCustomerHierarchy";
 import type { CustomerHierarchyScope } from "./customerHierarchyApi";
+import { customerBudgetLimit } from "./customerBudgetUsage";
+import { CustomerBudgetLimitCell, CustomerBudgetSortHeader } from "./CustomerBudgetColumn";
 
 type Hierarchy = ReturnType<typeof useCustomerHierarchy>;
 const CHILD_HINTS = {
@@ -230,6 +232,7 @@ function HierarchyChildRows(props: ScopeProps & { childLabel: string; showTeam: 
             <TableHead className="pl-0">{t("customerPortal.hierarchy.name")}</TableHead>
             {showTeam && <TableHead>{t("customerPortal.hierarchy.team")}</TableHead>}
             <CustomerSpendHeaders />
+            <CustomerBudgetSortHeader sort={hierarchy.budgetSort} onSort={hierarchy.toggleBudgetSort} />
             <TableHead className="pr-0">
               <span className="sr-only">{t("customerPortal.hierarchy.settings")}</span>
             </TableHead>
@@ -269,6 +272,7 @@ function HierarchyChildRows(props: ScopeProps & { childLabel: string; showTeam: 
                   )}
                 </TableCell>
               )}
+              <CustomerBudgetLimitCell limit={customerBudgetLimit(row.entity)} />
               <TableCell className="pr-0 text-right">
                 <div className="flex justify-end gap-2">
                   <a
@@ -315,7 +319,7 @@ function HierarchyChildRows(props: ScopeProps & { childLabel: string; showTeam: 
           ))}
           {rows.length === 0 && (
             <TableRow>
-              <TableCell colSpan={showTeam ? 8 : 7} className="py-12 text-center text-sm text-muted-foreground">
+              <TableCell colSpan={showTeam ? 9 : 8} className="py-12 text-center text-sm text-muted-foreground">
                 {t(childTab === "teams" ? "customerPortal.hierarchy.emptyTeams" : emptyMembers)}
               </TableCell>
             </TableRow>

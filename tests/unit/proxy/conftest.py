@@ -33,6 +33,7 @@ from litellm.integrations.otel.model.payloads import ServiceSpanData
 from litellm.integrations.otel.model.spans import service_span_name
 from tests.unit.litellm_core_utils.fake_secret_vault import FakeSecretVault
 from tests._master_key import MASTER_KEY
+from tests.unit.proxy.spend_tracking.native_budgets_replica import native_budgets_enabled
 from tests._module_state import collect_flushable_caches, flush_caches, restore_mutable_state, snapshot_mutable_state
 
 
@@ -147,6 +148,11 @@ def pytest_runtest_teardown(item, nextitem):
             setattr(proxy_server, name, snapshot[name])
         elif name in vars(proxy_server):
             delattr(proxy_server, name)
+
+
+@pytest.fixture
+def native_budgets_on(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    yield from native_budgets_enabled(monkeypatch)
 
 
 @pytest.fixture
@@ -491,3 +497,12 @@ def import_without_redis_installed(monkeypatch: pytest.MonkeyPatch) -> Callable[
         return importlib.import_module(module_name)
 
     return _import
+
+
+@pytest.fixture(autouse=True)
+def _forget_email_in_use_checks() -> Iterator[None]:
+    from litellm.proxy.auth import auth_checks
+
+    auth_checks.email_in_use_checked_at.clear()
+    yield
+    auth_checks.email_in_use_checked_at.clear()

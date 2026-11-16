@@ -6,16 +6,17 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+litellm-python-compat.workspace = true
 litellm-router-types.workspace = true
 litellm-secret-value.workspace = true
+litellm-starlette.workspace = true
 serde.workspace = true
+serde_with.workspace = true
 serde_yaml_ng = "0.10.0"
 strum.workspace = true
 thiserror.workspace = true
 veil.workspace = true
 
 [dev-dependencies]
-litellm-error.workspace = true
 rstest.workspace = true
 serde_json.workspace = true
-tempfile.workspace = true
