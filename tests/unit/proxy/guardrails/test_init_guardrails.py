@@ -582,17 +582,19 @@ async def test_presidio_output_parse_pii_masks_the_answer_then_restores_request_
     from litellm.types.utils import Choices, Message, ModelResponse
 
     email: Final = "jane@example.com"
+    known_pii: Final = (("Jane", "PERSON"), (email, "EMAIL_ADDRESS"))
 
     async def analyze(text: str, presidio_config: object, request_data: object) -> list[dict[str, object]]:
-        start: Final = text.find(email)
-        if start < 0:
-            return []
-        return [{"entity_type": "EMAIL_ADDRESS", "start": start, "end": start + len(email), "score": 1.0}]
+        return [
+            {"entity_type": entity, "start": text.find(value), "end": text.find(value) + len(value), "score": 1.0}
+            for value, entity in known_pii
+            if value in text
+        ]
 
     async def anonymize(text: str, analyze_results: list[dict[str, object]]) -> dict[str, object]:
         return {
-            "text": text.replace(email, "<EMAIL_ADDRESS>"),
-            "items": [{"entity_type": "EMAIL_ADDRESS"} for _ in analyze_results],
+            "text": text.replace(email, "<EMAIL_ADDRESS>").replace("Jane", "<PERSON>"),
+            "items": [{"entity_type": result["entity_type"]} for result in analyze_results],
         }
 
     monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
