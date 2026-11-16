@@ -13401,6 +13401,7 @@ async def test_oauth_jwt_resolves_canonical_owner_without_cached_identity(
     table.find_unique = AsyncMock(side_effect=[None, owner if identity == "sso" else None])
     table.find_first = AsyncMock(return_value=owner)
     table.update = AsyncMock(return_value=owner)
+    database.writer_db.litellm_usertable.update_many = AsyncMock(return_value=1)
     monkeypatch.setattr(proxy_server, "prisma_client", database)
     bearer: Final = _oauth_identity_jwt(signing_key, owner=external_id, scope="litellm_proxy_admin" if admin else "")
     request: Final = _token_request({"Authorization": f"Bearer {bearer}"})

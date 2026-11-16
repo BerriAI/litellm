@@ -480,6 +480,7 @@ class CustomStreamWrapper:
         _response_headers: dict | httpx.Headers | None = None,
         count_prompt_tokens: Callable[[], int] | None = None,
         is_mock: bool = False,
+        response_cost: float | None = None,
     ):
         self.model = model
         self.make_call = make_call
@@ -534,6 +535,7 @@ class CustomStreamWrapper:
         self._hidden_params: dict[str, object] = {
             "model_id": (_model_info.get("id", None)),
             "api_base": _api_base,
+            **({} if response_cost is None else {"response_cost": response_cost}),
         }  # returned as x-litellm-model-id response header in proxy
 
         self._hidden_params["additional_headers"] = process_response_headers(
@@ -574,7 +576,7 @@ class CustomStreamWrapper:
         # this cache must be removed.
         self._base_hidden_params: dict[str, object] = {
             **self._hidden_params,
-            "response_cost": None,
+            "response_cost": response_cost,
         }
 
         self._post_streaming_hooks: list | None = None
@@ -2713,6 +2715,8 @@ class CustomStreamWrapper:
             self._log_stream_failure_and_raise(e)
 
     async def _finalize_completed_stream(self, cache_hit: bool) -> "ModelResponseStream":
+        from litellm.responses.streaming_iterator import spawn_logging_task
+
         if self.sent_last_chunk is True:
             complete_streaming_response: Final = await self._async_build_complete_streaming_response()
             response: Final = self._new_usage_chunk()
@@ -2774,14 +2778,16 @@ class CustomStreamWrapper:
                 # prefer_async_handlers routes CustomLogger to async_success_handler
                 # when consumers use ``async for`` on sync-SDK streams. Legacy string
                 # callbacks still run via executor.submit inside dispatch_success_handlers.
-                asyncio.create_task(
+                spawn_logging_task(
+                    asyncio.get_running_loop(),
                     self.logging_obj.dispatch_success_handlers(
                         complete_streaming_response,
                         cache_hit=cache_hit,
                         start_time=None,
                         end_time=None,
                         prefer_async_handlers=True,
-                    )
+                    ),
+                    task_name="Chat completions stream success log",
                 )
 
             await self.aclose()

@@ -16,7 +16,11 @@ use super::*;
     "AZURE_API_KEY",
     "AZURE_API_BASE",
     "/anthropic/v1/messages",
-    &["AZURE_API_KEY", "AZURE_API_BASE"]
+    &[
+        "AZURE_OPENAI_API_KEY",
+        "AZURE_API_KEY",
+        "AZURE_API_BASE"
+    ]
 )]
 #[case::deepseek(
     "deepseek",
@@ -213,9 +217,129 @@ async fn azure_without_a_base_anywhere_fails_before_sending(call: MessagesCall) 
 
     assert_eq!(
         error,
-        Error::Auth(litellm_auth::Error::MissingApiBase {
-            provider: "Azure",
-            guidance: "Set `api_base` or the AZURE_API_BASE environment variable. Expected format: https://<resource-name>.services.ai.azure.com/anthropic"
-        })
+        Error::from(litellm_llms::Error::InvalidRequest(
+            litellm_llms::ErrorDetail::MissingAzureApiBase
+        ))
+    );
+}
+
+#[rstest]
+#[case::a_keyed_call(Some("sk-azure"), &[], false)]
+#[case::an_exact_caller_api_key(None, &[("api-key", "caller")], false)]
+#[case::a_caller_x_api_key(None, &[("x-api-key", "caller")], true)]
+#[case::a_caller_bearer(None, &[("Authorization", "Bearer caller")], true)]
+#[case::a_title_case_caller_api_key(None, &[("Api-Key", "caller")], true)]
+#[case::no_key_and_no_caller_credential(None, &[], true)]
+#[tokio::test]
+async fn azure_ad_token_is_looked_up_only_where_python_looks_it_up(
+    call: MessagesCall,
+    #[case] api_key: Option<&str>,
+    #[case] forwarded: &[(&str, &str)],
+    #[case] looked_up: bool,
+) {
+    let upstream = upstream([message_response()]).await;
+    let secrets = Arc::new(RecordingSecrets::empty());
+
+    run_hosted_with(
+        secrets.clone(),
+        MessagesCall {
+            custom_llm_provider: Some("azure_ai".into()),
+            litellm_params: Default::default(),
+            api_key: api_key.map(Into::into),
+            api_base: Some(upstream.uri()),
+            extra_headers: headers(forwarded.iter().copied()),
+            ..call
+        },
+    )
+    .await
+    .expect("messages call succeeds");
+
+    assert_eq!(
+        secrets
+            .requested()
+            .iter()
+            .filter(|name| name.as_str() == "AZURE_AD_TOKEN")
+            .count(),
+        usize::from(looked_up)
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn azure_ad_token_is_not_looked_up_without_a_python_host(call: MessagesCall) {
+    let upstream = upstream([message_response()]).await;
+    let secrets = Arc::new(RecordingSecrets::empty());
+
+    run_with(
+        secrets.clone(),
+        MessagesCall {
+            custom_llm_provider: Some("azure_ai".into()),
+            litellm_params: Default::default(),
+            api_base: Some(upstream.uri()),
+            ..call
+        },
+    )
+    .await
+    .expect_err("no key and no Python host");
+
+    assert_eq!(
+        secrets
+            .requested()
+            .iter()
+            .filter(|name| name.as_str() == "AZURE_AD_TOKEN")
+            .count(),
+        0
+    );
+}
+
+#[derive(Clone, Copy, Debug)]
+enum CallBase {
+    Upstream,
+    Empty,
+    Absent,
+}
+
+#[rstest]
+#[case::a_call_base(CallBase::Upstream, 0)]
+#[case::an_empty_call_base(CallBase::Empty, 1)]
+#[case::no_call_base(CallBase::Absent, 1)]
+#[tokio::test]
+async fn azure_api_base_is_looked_up_only_where_python_looks_it_up(
+    call: MessagesCall,
+    #[case] call_base: CallBase,
+    #[case] lookups: usize,
+) {
+    let upstream = upstream([message_response()]).await;
+    let base = upstream.uri();
+    let secrets = Arc::new(RecordingSecrets::new([("AZURE_API_BASE", base.as_str())]));
+
+    run_with(
+        secrets.clone(),
+        MessagesCall {
+            custom_llm_provider: Some("azure_ai".into()),
+            litellm_params: Default::default(),
+            api_key: Some("sk-azure".into()),
+            api_base: match call_base {
+                CallBase::Upstream => Some(base.clone()),
+                CallBase::Empty => Some(String::new()),
+                CallBase::Absent => None,
+            },
+            ..call
+        },
+    )
+    .await
+    .expect("messages call succeeds");
+
+    assert_eq!(
+        only_request(&upstream).await.url.path(),
+        "/anthropic/v1/messages"
+    );
+    assert_eq!(
+        secrets
+            .requested()
+            .iter()
+            .filter(|name| name.as_str() == "AZURE_API_BASE")
+            .count(),
+        lookups
     );
 }

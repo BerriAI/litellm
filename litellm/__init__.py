@@ -1465,6 +1465,7 @@ from .exceptions import (
     RateLimitError,
     RateLimitErrorCategory,
     RateLimitType,
+    RequestOverDeploymentTpmError as RequestOverDeploymentTpmError,
     ServiceUnavailableError,
     BadGatewayError,
     OpenAIError,
@@ -1796,6 +1797,9 @@ if TYPE_CHECKING:
     )
     from .llms.azure_ai.decisions.transformation import (
         AzureAIDecisionsConfig as AzureAIDecisionsConfig,
+    )
+    from .llms.vercel_ai_gateway.decisions.transformation import (
+        VercelAIGatewayDecisionsConfig as VercelAIGatewayDecisionsConfig,
     )
     from .llms.nvidia_nim.rerank.transformation import (
         NvidiaNimRerankConfig as NvidiaNimRerankConfig,

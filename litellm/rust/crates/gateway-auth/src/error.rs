@@ -16,8 +16,6 @@ pub enum Error {
     Forbidden,
     #[error("authentication service unavailable")]
     Unavailable(#[source] Source),
-    #[error("gateway authentication unavailable")]
-    Secret(#[from] litellm_secrets::Error),
     #[error("UI session unavailable")]
     Session(#[from] tower_sessions::session::Error),
     #[error("gateway auth not configured")]
@@ -36,8 +34,7 @@ impl Error {
             Self::InvalidToken | Self::InvalidSession | Self::Expired => StatusCode::UNAUTHORIZED,
             Self::Forbidden => StatusCode::FORBIDDEN,
             Self::Unavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
-            Self::Secret(_)
-            | Self::Session(_)
+            Self::Session(_)
             | Self::Unconfigured
             | Self::UiUnconfigured
             | Self::MissingIdentity
@@ -49,7 +46,6 @@ impl Error {
         match self {
             Self::InvalidToken | Self::InvalidSession | Self::Expired | Self::Forbidden => true,
             Self::Unavailable(_)
-            | Self::Secret(_)
             | Self::Session(_)
             | Self::Unconfigured
             | Self::UiUnconfigured

@@ -9,6 +9,7 @@ checks for each fallback target before it is attempted. Enabled by default. Opt 
 key, team and user search tool grants instead, the same check /search runs on the requested tool.
 """
 
+import inspect
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Final
@@ -67,7 +68,8 @@ async def is_search_tool_authorized_for_token(*, search_tool_name: str, valid_to
 
 
 def _is_search_request(request_kwargs: Mapping[str, object]) -> bool:
-    return request_kwargs.get("original_generic_function") is asearch
+    handler: Final = request_kwargs.get("original_generic_function")
+    return callable(handler) and inspect.unwrap(handler, stop=lambda function: function is asearch) is asearch
 
 
 def _token_in_metadata(metadata: object) -> UserAPIKeyAuth | None:
