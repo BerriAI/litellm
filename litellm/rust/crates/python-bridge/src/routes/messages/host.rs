@@ -962,11 +962,11 @@ impl MessagesPythonHost {
                 .call1((PyBytes::new(py, value), received))?;
             return self.map_transport_failure(py, PyErr::from_value(raised));
         }
-        if let Some(UnsendableUrl(url)) = litellm_error::find::<UnsendableUrl>(&error) {
+        if let Some(UnsendableUrl(message)) = litellm_error::find::<UnsendableUrl>(&error) {
             let raised = py
                 .import(ROUTE_HOST_MODULE)?
                 .getattr("unsendable_url")?
-                .call1((url.as_str(),))?;
+                .call1((message.as_str(),))?;
             return self.map_transport_failure(py, PyErr::from_value(raised));
         }
         if let Some(undecodable) = litellm_error::find::<DecodingError>(&error) {

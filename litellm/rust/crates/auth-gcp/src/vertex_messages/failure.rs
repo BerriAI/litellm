@@ -65,7 +65,19 @@ impl GoogleLoginFailure {
         }
     }
 
+    /// A credentials file that could not be used: its path and the reason go to LiteLLM's log,
+    /// and the failure names neither.
     pub(crate) fn credentials_file(file: CredentialsFile) -> Self {
+        match &file {
+            CredentialsFile::Unreadable { path, reason } => tracing::error!(
+                "Vertex: cannot read the credentials file at {}: {reason}",
+                path_for_log(path)
+            ),
+            CredentialsFile::Invalid { path, problem } => tracing::error!(
+                "Vertex: the credentials file at {} {problem}",
+                path_for_log(path)
+            ),
+        }
         Self {
             file: Some(file),
             ..Self::new(PythonException::Value, FILE_FAILURE_MESSAGE)
@@ -84,6 +96,25 @@ impl GoogleLoginFailure {
             ),
         )
     }
+}
+
+/// Paths longer than this are logged by their length only.
+const MAX_LOGGED_PATH_LENGTH: usize = 260;
+/// LiteLLM's default `MINIMUM_CUSTOM_KEY_LENGTH`, which its secret redaction uses.
+const MINIMUM_CUSTOM_KEY_LENGTH: usize = 16;
+
+/// A credentials file's path as LiteLLM logs it: quoted with secrets redacted, or only its
+/// length when it is too long to be a path.
+fn path_for_log(path: &str) -> String {
+    static REDACTOR: std::sync::LazyLock<litellm_tracing::SecretRedactor> =
+        std::sync::LazyLock::new(|| {
+            litellm_tracing::SecretRedactor::new(MINIMUM_CUSTOM_KEY_LENGTH)
+        });
+    let length = path.chars().count();
+    if length > MAX_LOGGED_PATH_LENGTH {
+        return format!("<a {length}-character value>");
+    }
+    python_repr(&REDACTOR.redact(path))
 }
 
 impl From<GoogleLoginFailure> for Error {
@@ -160,6 +191,46 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[derive(Clone, Default)]
+    struct Errors(std::sync::Arc<std::sync::Mutex<Vec<String>>>);
+
+    impl litellm_tracing::Sink for Errors {
+        fn enabled(&self, metadata: &litellm_tracing::Metadata<'_>) -> bool {
+            *metadata.level() == litellm_tracing::Level::ERROR
+        }
+
+        fn emit(&self, record: &litellm_tracing::Record) {
+            self.0.lock().unwrap().push(record.message.clone());
+        }
+    }
+
+    #[rstest]
+    #[case::unreadable(
+        CredentialsFile::Unreadable { path: "/etc/vertex/key.json".into(), reason: "No such file or directory (FileNotFoundError)".into() },
+        "Vertex: cannot read the credentials file at '/etc/vertex/key.json': No such file or directory (FileNotFoundError)"
+    )]
+    #[case::invalid(
+        CredentialsFile::Invalid { path: "/etc/vertex/key.json".into(), problem: "is not UTF-8 text".into() },
+        "Vertex: the credentials file at '/etc/vertex/key.json' is not UTF-8 text"
+    )]
+    #[case::long_path(
+        CredentialsFile::Invalid { path: "a".repeat(261), problem: "is empty".into() },
+        "Vertex: the credentials file at <a 261-character value> is empty"
+    )]
+    fn a_credentials_file_failure_logs_the_path_and_raises_only_the_file_failure(
+        #[case] file: CredentialsFile,
+        #[case] logged: &str,
+    ) {
+        let errors = Errors::default();
+        let failure = litellm_tracing::Logger::new(errors.clone())
+            .scope(|| GoogleLoginFailure::credentials_file(file));
+        assert_eq!(
+            (failure.exception, failure.message.as_str()),
+            (PythonException::Value, FILE_FAILURE_MESSAGE)
+        );
+        assert_eq!(*errors.0.lock().unwrap(), [logged.to_owned()]);
+    }
 
     #[rstest]
     #[case::plain("File a.json", "'File a.json'")]
