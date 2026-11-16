@@ -104,7 +104,7 @@ class TestMCPRegistryFile:
             "category": "Search",
             "registry_url": None,
             "transport": "http",
-            "url": "https://search.parallel.ai/mcp",
+            "url": "https://mcp.parallel.ai/mcp",
             "env_vars": [],
         }
 
