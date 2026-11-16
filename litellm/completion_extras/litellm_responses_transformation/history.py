@@ -103,6 +103,7 @@ class _Reasoning(_Frozen):
 
 
 class _ProviderFields(_Frozen):
+    commentary: str | None = None
     phase: Phase | None = None
     tool_search_items: tuple[Mapping[str, object], ...] | None = None
     openai_responses_replay: object = None
@@ -139,6 +140,7 @@ _PHASE: Final[TypeAdapter[Phase]] = TypeAdapter(Phase)
 
 
 class _RetainedFields(_PhaseFields):
+    commentary: str | None = None
     openai_responses_replay: object = None
 
 
@@ -211,7 +213,24 @@ def retained_replay_fields(provider_specific_fields: object) -> Mapping[str, obj
 def output_message_text(output_items: Sequence[object], *, first_message_only: bool) -> str:
     parsed: Final = map(_parsed_output_item, output_items)
     messages: Final = tuple(item for item in parsed if isinstance(item, _OutputMessage))
-    return "".join(_texts(messages[:1] if first_message_only else messages))
+    if first_message_only:
+        return "".join(_texts(messages[:1]))
+    has_answer: Final = any(item.phase != "commentary" and any(part.text for part in item.content) for item in messages)
+    kept: Final = tuple(item for item in messages if not has_answer or item.phase != "commentary")
+    return "".join(
+        ("\n\n" if index and item.phase == "commentary" else "") + "".join(part.text for part in item.content)
+        for index, item in enumerate(kept)
+    )
+
+
+def output_commentary(output_items: Sequence[object], *, first_message_only: bool) -> str:
+    if first_message_only:
+        return ""
+    parsed: Final = tuple(map(_parsed_output_item, output_items))
+    messages: Final = tuple(item for item in parsed if isinstance(item, _OutputMessage))
+    if not any(item.phase != "commentary" and any(part.text for part in item.content) for item in messages):
+        return ""
+    return "\n\n".join("".join(part.text for part in item.content) for item in messages if item.phase == "commentary")
 
 
 def _tool_search_entries(message: _ChatMessage) -> tuple[Mapping[str, object], ...]:
@@ -231,6 +250,7 @@ def _checksum(message: _ChatMessage, entries: Sequence[_MessageEntry | _IndexedE
         ],
         "tool_search_items": list((fields.tool_search_items if fields else None) or ()),
         "phase": message.phase or (fields.phase if fields else None),
+        **({"commentary": fields.commentary} if fields and fields.commentary is not None else {}),
         "items": [entry.model_dump(mode="json", exclude_none=True) for entry in entries],
     }
     encoded: Final = json.dumps(bound, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
@@ -267,7 +287,9 @@ def _matches(items: Sequence[_OutputItem], message: _ChatMessage) -> bool:
     tool_calls: Final = message.tool_calls or ()
     searches: Final = sum(1 for item in items if isinstance(item, _OutputToolSearch))
     return (
-        "".join(_texts(items)) == (message.content or "")
+        output_message_text(items, first_message_only=False) == (message.content or "")
+        and output_commentary(items, first_message_only=False)
+        == ((message.provider_specific_fields.commentary or "") if message.provider_specific_fields else "")
         and reasoning_ids == tuple(item.id for item in message.reasoning_items or ())
         and len(calls) == len(tool_calls)
         and all(chat.id in (call.call_id, call.id) for call, chat in zip(calls, tool_calls))
@@ -281,7 +303,16 @@ def _content_phase(
     messages: Final = tuple(item for raw, item in zip(output_items, parsed) if _is_message(raw))
     if not messages:
         return None
-    content_message: Final = messages[0] if first_message_only else messages[-1]
+    has_answer: Final = any(
+        isinstance(item, _OutputMessage) and item.phase != "commentary" and any(part.text for part in item.content)
+        for item in messages
+    )
+    kept: Final = (
+        tuple(item for item in messages if not isinstance(item, _OutputMessage) or item.phase != "commentary")
+        if has_answer
+        else messages
+    )
+    content_message: Final = messages[0] if first_message_only else kept[-1]
     return content_message.phase if isinstance(content_message, _OutputMessage) else None
 
 
@@ -324,6 +355,44 @@ def _message_texts(entries: Sequence[_MessageEntry], content: str) -> tuple[tupl
     parts: Final = tuple(content[start:end] for start, end in pairwise(bounds))
     groups: Final = tuple(accumulate((len(entry.parts) for entry in entries), initial=0))
     return tuple(parts[start:end] for start, end in pairwise(groups))
+
+
+def _replay_message_texts(entries: Sequence[_MessageEntry], message: _ChatMessage) -> tuple[tuple[str, ...], ...]:
+    commentary: Final = message.provider_specific_fields.commentary if message.provider_specific_fields else None
+    if commentary is None:
+        bounds: Final = tuple(
+            accumulate(
+                (
+                    sum(entry.parts) + (2 if index and entry.phase == "commentary" else 0)
+                    for index, entry in enumerate(entries)
+                ),
+                initial=0,
+            )
+        )
+        return tuple(
+            _entry_texts(
+                entry, message.content or "", bounds[index] + (2 if index and entry.phase == "commentary" else 0)
+            )
+            for index, entry in enumerate(entries)
+        )
+    content_offsets: Final = tuple(
+        accumulate((sum(entry.parts) if entry.phase != "commentary" else 0 for entry in entries), initial=0)
+    )
+    commentary_offsets: Final = tuple(
+        accumulate((sum(entry.parts) + 2 if entry.phase == "commentary" else 0 for entry in entries), initial=0)
+    )
+    return tuple(
+        _entry_texts(
+            entry,
+            commentary if entry.phase == "commentary" else message.content or "",
+            commentary_offsets[index] if entry.phase == "commentary" else content_offsets[index],
+        )
+        for index, entry in enumerate(entries)
+    )
+
+
+def _entry_texts(entry: _MessageEntry, source: str, offset: int) -> tuple[str, ...]:
+    return _message_texts((entry,), source[offset : offset + sum(entry.parts)])[0]
 
 
 def _message_item(texts: Sequence[str], phase: Phase | None) -> Mapping[str, object]:
@@ -397,7 +466,11 @@ def _fits(message: _ChatMessage, entries: Sequence[_MessageEntry | _IndexedEntry
     )
     parts: Final = chain.from_iterable(entry.parts for entry in entries if isinstance(entry, _MessageEntry))
     indexed: Final = (entry for entry in entries if isinstance(entry, _IndexedEntry))
-    return sum(parts) == len(message.content or "") and all(entry.index < sizes[entry.type] for entry in indexed)
+    messages: Final = tuple(entry for entry in entries if isinstance(entry, _MessageEntry))
+    texts: Final = _replay_message_texts(messages, message)
+    return sum(parts) == sum(map(len, chain.from_iterable(texts))) and all(
+        entry.index < sizes[entry.type] for entry in indexed
+    )
 
 
 def _resolve(
@@ -408,7 +481,7 @@ def _resolve(
         return None
     messages: Final = tuple(entry for entry in entries if isinstance(entry, _MessageEntry))
     calls: Final = tuple(entry for entry in indexed if entry.type in ("function_call", "custom_tool_call"))
-    texts: Final = _message_texts(messages, message.content or "")
+    texts: Final = _replay_message_texts(messages, message)
     positions: Final = tuple(position for position, entry in enumerate(entries) if isinstance(entry, _MessageEntry))
     resolved: Final = _Resolved(
         message=message,

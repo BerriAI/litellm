@@ -9,6 +9,8 @@ import respx
 import litellm
 from litellm.completion_extras.litellm_responses_transformation import history
 from litellm.exceptions import MidStreamFallbackError
+from litellm.types.llms.openai import ChatCompletionToolMessage
+from litellm.types.utils import ChatCompletionMessageToolCall
 
 OPENAI_RESPONSES_URL: Final = "https://api.openai.com/v1/responses"
 AZURE_API_BASE: Final = "https://litellm-history-test.openai.azure.com"
@@ -252,7 +254,8 @@ def test_next_turn_replays_every_item_phase_and_boundary_once_in_order(stream: b
 
     sent: Final = _next_turn_input(assistant)
 
-    assert assistant["content"] == "Checking the weather.Paris: light rain."
+    assert assistant["content"] == "Paris: light rain."
+    assert _replayed_fields(assistant)["commentary"] == "Checking the weather."
     assert _replayed_fields(assistant)["phase"] == "final_answer"
     assert sent[1:-1] == list(REPLAYED)
     assert sent[-1]["type"] == "function_call_output"
@@ -261,6 +264,34 @@ def test_next_turn_replays_every_item_phase_and_boundary_once_in_order(stream: b
 
 def _edit_content(message: Mapping[str, object]) -> Mapping[str, object]:
     return {**message, "content": "Checking the weather. Paris: heavy rain."}
+
+
+def test_tool_loop_saves_commentary_and_replays_the_original_item_order() -> None:
+    def execute_weather(call: ChatCompletionMessageToolCall) -> ChatCompletionToolMessage:
+        assert call.function.name == "get_weather"
+        assert call.function.arguments == '{"city":"Paris"}'
+        return ChatCompletionToolMessage(role="tool", tool_call_id=call.id or "", content="light rain")
+
+    with respx.mock(assert_all_called=True) as router:
+        upstream: Final = router.post(url__startswith=OPENAI_RESPONSES_URL).mock(
+            side_effect=(httpx.Response(200, json=_response(OUTPUT)), httpx.Response(200, json=_response((FOLLOW_UP,))))
+        )
+        answer: Final = litellm.run_tool_loop(
+            model=f"openai/responses/{MODEL}",
+            messages=[USER],
+            tools=TOOLS,
+            execute_tool=execute_weather,
+            api_key="sk-test",
+        )
+
+    sent: Final = json.loads(upstream.calls[1].request.content)["input"]
+    assert answer == "Done."
+    assert sent[1:-1] == list(REPLAYED)
+    assert sent[-1] == {
+        "type": "function_call_output",
+        "call_id": "call_weather_paris",
+        "output": [{"type": "input_text", "text": "light rain"}],
+    }
 
 
 def _edit_phase(message: Mapping[str, object]) -> Mapping[str, object]:
@@ -278,8 +309,8 @@ def _edit_arguments(message: Mapping[str, object]) -> Mapping[str, object]:
     ("edit", "expected_text", "expected_phase", "expected_arguments"),
     [
         (_edit_content, "Checking the weather. Paris: heavy rain.", "final_answer", '{"city":"Paris"}'),
-        (_edit_phase, "Checking the weather.Paris: light rain.", "commentary", '{"city":"Paris"}'),
-        (_edit_arguments, "Checking the weather.Paris: light rain.", "final_answer", '{"city":"Lyon"}'),
+        (_edit_phase, "Paris: light rain.", "commentary", '{"city":"Paris"}'),
+        (_edit_arguments, "Paris: light rain.", "final_answer", '{"city":"Lyon"}'),
     ],
     ids=["content", "phase", "arguments"],
 )
@@ -330,7 +361,7 @@ def test_missing_or_corrupt_replay_metadata_falls_back_to_the_chat_fields(
     sent: Final = _next_turn_input({**assistant, "provider_specific_fields": corrupt(_replayed_fields(assistant))})
 
     assert _types(sent[1:-1]) == ["reasoning", "reasoning", "message", "function_call"]
-    assert sent[3]["content"] == [{"type": "output_text", "text": "Checking the weather.Paris: light rain."}]
+    assert sent[3]["content"] == [{"type": "output_text", "text": "Paris: light rain."}]
     assert sent[3]["phase"] == "final_answer"
 
 
@@ -346,8 +377,56 @@ def test_an_unphased_answer_after_commentary_is_never_labeled_commentary(stream:
     assert "phase" not in sent[1]
 
 
+@pytest.mark.parametrize("separate", [False, True])
+def test_replay_preserves_empty_and_multipart_message_boundaries(separate: bool) -> None:
+    commentary: Final = {
+        "type": "message",
+        "role": "assistant",
+        "phase": "commentary",
+        "content": [{"type": "output_text", "text": ""}, {"type": "output_text", "text": "note"}],
+    }
+    empty: Final = {**commentary, "content": []}
+    answer: Final = {
+        "type": "message",
+        "role": "assistant",
+        "phase": "final_answer",
+        "content": [{"type": "output_text", "text": "Paris"}, {"type": "output_text", "text": "!"}],
+    }
+    items: Final = (
+        (empty, commentary, answer, empty, commentary) if separate else (empty, commentary, empty, commentary)
+    )
+    provider_fields: Final = {"commentary": "\n\nnote\n\n\n\nnote"} if separate else {}
+    message: Final = {
+        "role": "assistant",
+        "content": "Paris!" if separate else "\n\nnote\n\n\n\nnote",
+        "provider_specific_fields": provider_fields,
+    }
+    fields: Final = history.replay_fields(items, message, completed=True, first_message_only=False)
+    replayed: Final = history.replay_items(
+        {**message, "provider_specific_fields": {**provider_fields, **fields}},
+        replay_tool_search=True,
+    )
+    assert replayed is not None
+    assert replayed.items == items
+
+
 def _with_text(item: Mapping[str, object], text: str) -> Mapping[str, object]:
     return {**item, "content": [{"type": "output_text", "text": text, "annotations": []}]}
+
+
+@pytest.mark.parametrize("stream", [False, True], ids=["json", "stream"])
+def test_two_commentary_notes_before_a_tool_call_assemble_with_a_separator(stream: bool) -> None:
+    second_note: Final = {**_with_text(COMMENTARY, "Looking up the weather now."), "id": "msg_second_note"}
+    assistant: Final = _assistant_turn((COMMENTARY, second_note, WEATHER_CALL), stream=stream)
+
+    assert assistant["content"] == "Checking the weather.\n\nLooking up the weather now."
+    assert "commentary" not in _replayed_fields(assistant)
+    sent: Final = _next_turn_input(assistant)
+    assert sent[1:-1] == [
+        REPLAYED[0],
+        {**REPLAYED[0], "content": [{"type": "output_text", "text": "Looking up the weather now."}]},
+        REPLAYED[3],
+    ]
 
 
 @pytest.mark.parametrize("stream", [False, True], ids=["json", "stream"])
@@ -495,7 +574,7 @@ def test_an_interrupted_stream_records_no_replay() -> None:
         received: Final = tuple(_chunks_before_error(iter(stream)))
     assistant: Final = litellm.stream_chunk_builder(list(received), messages=[USER]).choices[0].message.model_dump()
 
-    assert assistant["content"] == "Checking the weather.Paris: light rain."
+    assert assistant["content"] == "Paris: light rain."
     assert _replayed_fields(assistant) == {}
 
 
@@ -503,7 +582,7 @@ def test_an_interrupted_stream_records_no_replay() -> None:
 def test_a_non_openai_route_records_no_phase_or_replay(stream: bool) -> None:
     assistant: Final = _assistant_turn(OUTPUT, stream=stream, model=f"azure/responses/{MODEL}")
 
-    assert _replayed_fields(assistant) == {}
+    assert _replayed_fields(assistant) == {"commentary": "Checking the weather."}
 
 
 def test_a_non_openai_route_ignores_a_recorded_replay() -> None:
@@ -581,7 +660,7 @@ def test_a_resealed_record_that_does_not_fit_the_chat_fields_falls_back(items: S
     sent: Final = _next_turn_input(_resealed(assistant, items))
 
     assert _types(sent[1:-1]) == ["message", "function_call"]
-    assert sent[1]["content"] == [{"type": "output_text", "text": "Checking the weather.Paris: light rain."}]
+    assert sent[1]["content"] == [{"type": "output_text", "text": "Paris: light rain."}]
 
 
 PATCH_CALL: Final = {
