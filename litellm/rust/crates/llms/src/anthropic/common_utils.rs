@@ -421,7 +421,7 @@ fn normalized_if_changed(raw_id: Option<&str>) -> Option<String> {
 }
 
 fn sanitize_tool_use_id_block(block: ContentBlock) -> ContentBlock {
-    match block.block_type.as_ref() {
+    match block.known_type() {
         Some(ContentBlockType::ToolUse | ContentBlockType::ServerToolUse) => {
             match normalized_if_changed(block.id.as_deref()) {
                 Some(id) => ContentBlock {
@@ -481,7 +481,7 @@ pub fn strip_provider_specific_fields(messages: Vec<Message>) -> Vec<Message> {
 }
 
 pub fn is_encrypted_reasoning_block(block: &ContentBlock) -> bool {
-    let field = match block.block_type.as_ref() {
+    let field = match block.known_type() {
         Some(ContentBlockType::Thinking) => block.signature.as_deref(),
         Some(ContentBlockType::RedactedThinking) => block.data.as_deref(),
         _ => None,
@@ -492,7 +492,7 @@ pub fn is_encrypted_reasoning_block(block: &ContentBlock) -> bool {
 const BILLING_HEADER_PREFIX: &str = "x-anthropic-billing-header:";
 
 fn is_billing_header_block(block: &ContentBlock) -> bool {
-    block.block_type == Some(ContentBlockType::Text)
+    block.is_type(ContentBlockType::Text)
         && block
             .text
             .as_deref()

@@ -532,7 +532,9 @@ fn context_management_betas(
 ) -> impl Iterator<Item = AnthropicBeta> {
     let edits = context_management
         .and_then(Recognized::known)
-        .and_then(|context_management| context_management.edits.as_deref())
+        .and_then(|context_management| context_management.edits.as_ref())
+        .and_then(Recognized::known)
+        .map(Vec::as_slice)
         .unwrap_or_default();
     let compact = edits.iter().any(is_compact_edit);
     let other = edits.iter().any(|edit| !is_compact_edit(edit));
@@ -548,7 +550,12 @@ fn uses_structured_output(params: &MessagesOptionalParams) -> bool {
             .output_config
             .as_ref()
             .and_then(Recognized::known)
-            .is_some_and(|config| config.format.is_some())
+            .is_some_and(|config| {
+                config
+                    .format
+                    .as_ref()
+                    .is_some_and(|format| !format.is_null())
+            })
 }
 
 fn carries_safeguards(params: &MessagesOptionalParams) -> bool {
@@ -598,7 +605,7 @@ fn uses_thinking_block_binding(params: &MessagesOptionalParams) -> bool {
 
 fn is_tool_reference_change(block: &ContentBlock) -> bool {
     matches!(
-        &block.block_type,
+        block.known_type(),
         Some(ContentBlockType::Other(block_type))
             if block_type == "tool_addition" || block_type == "tool_removal"
     ) && block
@@ -758,7 +765,7 @@ pub fn map_openai_context_management_to_anthropic(
         return context_management;
     }
     Recognized::Known(ContextManagement {
-        edits: Some(edits),
+        edits: Some(Recognized::Known(edits)),
         extra: Map::new(),
     })
 }
@@ -1542,6 +1549,8 @@ mod tests {
     #[case::no_features(json!({}), &[])]
     #[case::output_format(json!({"output_format": {"type": "json_schema"}}), &["structured-outputs-2025-11-13"])]
     #[case::null_output_format(json!({"output_format": null}), &[])]
+    #[case::null_output_config_format(json!({"output_config": {"format": null}}), &[])]
+    #[case::null_context_management_edits(json!({"context_management": {"edits": null}}), &[])]
     #[case::output_config_format(
         json!({"output_config": {"format": {"type": "json_schema"}, "effort": "xhigh"}}),
         &["structured-outputs-2025-11-13"]
