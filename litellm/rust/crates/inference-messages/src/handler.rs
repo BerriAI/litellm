@@ -18,15 +18,17 @@ use litellm_host::{
     protocol::UnobservedTail,
 };
 use litellm_http::Phases;
-use litellm_llms::vertex_ai::messages::transformation::vertex_connection_params;
 use litellm_llms::base_llm::{
-    auth::{Authenticated, AzureAdTokenHosts, ValidatedEnvironment, log_in_to_vertex, resolve_auth},
+    auth::{
+        Authenticated, AzureAdTokenHosts, ValidatedEnvironment, log_in_to_vertex, resolve_auth,
+    },
     messages::{
         context::MessagesTransformContext,
         streaming::{ByteStream, StreamDecoder},
         transformation::{BaseMessagesConfig, FederatedEnvironment},
     },
 };
+use litellm_llms::vertex_ai::messages::transformation::vertex_connection_params;
 use litellm_llms_types::formats::messages::{
     MessagesOptionalParams, MessagesRequest, MessagesResponse,
 };

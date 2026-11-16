@@ -54,11 +54,15 @@ fn sdk_source(credentials: AccessTokenCredentials) -> TokenSource {
 }
 
 /// google-auth's `service_account.Credentials.from_service_account_info`.
-pub(crate) fn service_account(info: &Map<String, Value>) -> Result<TokenSource, GoogleLoginFailure> {
+pub(crate) fn service_account(
+    info: &Map<String, Value>,
+) -> Result<TokenSource, GoogleLoginFailure> {
     if let Some(missing) = missing_fields(info, &SERVICE_ACCOUNT_FIELDS) {
         return Err(GoogleLoginFailure::new(
             PythonException::Malformed,
-            format!("Service account info was not in the expected format, missing fields {missing}."),
+            format!(
+                "Service account info was not in the expected format, missing fields {missing}."
+            ),
         ));
     }
     if !info.contains_key("private_key") {
@@ -77,11 +81,15 @@ pub(crate) fn service_account(info: &Map<String, Value>) -> Result<TokenSource, 
 }
 
 /// google-auth's `oauth2.credentials.Credentials.from_authorized_user_info`.
-pub(crate) fn authorized_user(info: &Map<String, Value>) -> Result<TokenSource, GoogleLoginFailure> {
+pub(crate) fn authorized_user(
+    info: &Map<String, Value>,
+) -> Result<TokenSource, GoogleLoginFailure> {
     if let Some(missing) = missing_fields(info, &AUTHORIZED_USER_FIELDS) {
         return Err(GoogleLoginFailure::new(
             PythonException::Value,
-            format!("Authorized user info was not in the expected format, missing fields {missing}."),
+            format!(
+                "Authorized user info was not in the expected format, missing fields {missing}."
+            ),
         ));
     }
     user_account::Builder::new(without_quota_project(info))
@@ -92,7 +100,9 @@ pub(crate) fn authorized_user(info: &Map<String, Value>) -> Result<TokenSource, 
 }
 
 /// google-auth's identity pool, AWS and pluggable `external_account` credentials.
-pub(crate) fn external_account(info: &Map<String, Value>) -> Result<TokenSource, GoogleLoginFailure> {
+pub(crate) fn external_account(
+    info: &Map<String, Value>,
+) -> Result<TokenSource, GoogleLoginFailure> {
     if !info.contains_key("credential_source") {
         return Err(GoogleLoginFailure::new(
             PythonException::InvalidValue,
@@ -118,7 +128,8 @@ pub(crate) fn impersonated_service_account(
 }
 
 fn is_transport(error: &(dyn StdError + 'static)) -> bool {
-    litellm_error::find::<reqwest::Error>(error).is_some_and(|error| error.is_connect() || error.is_timeout())
+    litellm_error::find::<reqwest::Error>(error)
+        .is_some_and(|error| error.is_connect() || error.is_timeout())
         || litellm_error::find::<std::io::Error>(error).is_some()
 }
 
@@ -193,12 +204,17 @@ mod tests {
     #[rstest]
     #[case::all(json!({"type": "authorized_user"}), "refresh_token, client_id, client_secret")]
     #[case::some(json!({"type": "authorized_user", "client_id": "x"}), "refresh_token, client_secret")]
-    fn authorized_user_info_names_its_missing_fields(#[case] configured: Value, #[case] missing: &str) {
+    fn authorized_user_info_names_its_missing_fields(
+        #[case] configured: Value,
+        #[case] missing: &str,
+    ) {
         let failure = failure(authorized_user(&info(configured)));
         assert_eq!(failure.exception, PythonException::Value);
         assert_eq!(
             failure.message,
-            format!("Authorized user info was not in the expected format, missing fields {missing}.")
+            format!(
+                "Authorized user info was not in the expected format, missing fields {missing}."
+            )
         );
     }
 
@@ -218,14 +234,21 @@ mod tests {
 
     #[rstest]
     fn an_unreachable_endpoint_is_a_transport_error() {
-        let wrapped = litellm_auth_types::Error::provider(std::io::Error::from(std::io::ErrorKind::ConnectionRefused));
-        assert_eq!(token_failure(&wrapped).exception, PythonException::Transport);
+        let wrapped = litellm_auth_types::Error::provider(std::io::Error::from(
+            std::io::ErrorKind::ConnectionRefused,
+        ));
+        assert_eq!(
+            token_failure(&wrapped).exception,
+            PythonException::Transport
+        );
     }
 
     #[rstest]
     fn a_rejected_refresh_is_a_refresh_error() {
         let wrapped = litellm_auth_types::Error::CredentialAcquisition(
-            litellm_auth_types::ErrorDetail::Unresolved { subject: "Google access token" },
+            litellm_auth_types::ErrorDetail::Unresolved {
+                subject: "Google access token",
+            },
         );
         assert_eq!(token_failure(&wrapped).exception, PythonException::Refresh);
     }
