@@ -7,6 +7,7 @@ repository.workspace = true
 description = "Reads a LiteLLM config file and the files its `include` names into one typed Config"
 
 [dependencies]
+litellm-yaml.workspace = true
 litellm-config.workspace = true
 serde.workspace = true
 serde_yaml_ng = "0.10.0"

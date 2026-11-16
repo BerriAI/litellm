@@ -3,13 +3,11 @@ mod deployment;
 use std::collections::HashMap;
 
 use litellm_config::{Config, Spelled};
-use litellm_core_utils::{
-    serde_compat::{parse_pydantic_bool, parse_str_bool},
-    settings::Lookup,
-};
+use litellm_env::Lookup;
 use litellm_inference_messages::{MessagesSettings, MessagesShaping};
 use litellm_llms::anthropic::model_capabilities::anthropic_model_capabilities;
 use litellm_model_catalog::Catalog;
+use litellm_python_compat::flags::{lax_bool, str_to_bool};
 use litellm_router_types::{ExtraParams, LitellmParams};
 use serde_json::{Map, Value};
 
@@ -24,8 +22,8 @@ fn is_on(flag: Option<&Spelled<bool>>, env: &impl Lookup) -> bool {
         Some(Spelled::Text(text)) => match text.strip_prefix("os.environ/") {
             Some(name) => env
                 .get(name)
-                .is_some_and(|value| parse_pydantic_bool(&value) == Some(true)),
-            None => parse_pydantic_bool(text) == Some(true),
+                .is_some_and(|value| lax_bool(&value.as_str().into()) == Some(true)),
+            None => lax_bool(&text.as_str().into()) == Some(true),
         },
         None => false,
     }
@@ -33,7 +31,7 @@ fn is_on(flag: Option<&Spelled<bool>>, env: &impl Lookup) -> bool {
 
 fn environment_value(name: &str, env: &impl Lookup) -> Value {
     env.get(name).map_or(Value::Null, |value| {
-        parse_str_bool(&value).map_or(Value::String(value), Value::Bool)
+        str_to_bool(&value).map_or(Value::String(value), Value::Bool)
     })
 }
 

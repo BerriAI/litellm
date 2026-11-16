@@ -1,6 +1,8 @@
 //! Pydantic's lax `bool` and `int` validation: `TypeAdapter(bool)` and `TypeAdapter(int)`.
 
 use num_bigint::BigInt;
+use serde::{Deserialize, Deserializer, de::Error};
+use serde_with::DeserializeAs;
 
 use crate::Value;
 
@@ -67,4 +69,16 @@ fn int_text(text: &str) -> Option<BigInt> {
     }
     let magnitude = BigInt::parse_bytes(digits.replace('_', "").as_bytes(), 10)?;
     Some(if negative { -magnitude } else { magnitude })
+}
+
+/// [`lax_int`] as a `serde_with` adapter on an `i64`, failing where pydantic raises or the integer
+/// does not fit.
+pub struct LaxI64;
+
+impl<'de> DeserializeAs<'de, i64> for LaxI64 {
+    fn deserialize_as<D: Deserializer<'de>>(deserializer: D) -> Result<i64, D::Error> {
+        lax_int(&Value::deserialize(deserializer)?)
+            .and_then(|number| i64::try_from(number).ok())
+            .ok_or_else(|| D::Error::custom("expected an integer in the i64 range"))
+    }
 }
