@@ -3879,14 +3879,22 @@ dependencies = [
 name = "litellm-config-load"
 version = "0.1.0"
 dependencies = [
+ "futures-util",
  "litellm-config",
+ "litellm-env",
  "litellm-error",
+ "litellm-http",
+ "litellm-router-types",
+ "litellm-secret-value",
+ "litellm-secrets",
  "litellm-yaml",
  "rstest",
  "serde",
  "serde_yaml_ng",
  "tempfile",
  "thiserror 2.0.21",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
