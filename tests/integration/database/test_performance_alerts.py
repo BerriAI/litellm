@@ -277,7 +277,13 @@ async def test_retries_status_changes_deletion_and_reconnect_do_not_restore_allo
 async def test_opt_out_is_shared_and_config_false_cannot_be_overridden(fixture: Fixture, gateway: Gateway) -> None:
     response: Final = gateway.request("GET", "/alerts/monitoring")
     assert response.status_code == 200, response.text
-    assert response.json() == {"enabled": True, "alerts_used": 0, "alert_limit": 5, "disabled_by_config": False}
+    assert response.json() == {
+        "enabled": True,
+        "model_deprecations_enabled": True,
+        "alerts_used": 0,
+        "alert_limit": None if os.environ.get("LITELLM_LICENSE") else FREE_ALERT_LIMIT,
+        "disabled_by_config": False,
+    }
     claim: Final = await fixture.repository.claim(timedelta(0))
     assert claim is not None
     disabled: Final = gateway.request("PATCH", "/alerts/monitoring", {"enabled": False})
