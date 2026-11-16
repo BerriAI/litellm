@@ -1,5 +1,6 @@
 import json
 from collections.abc import Mapping
+from itertools import chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 from urllib.parse import urlparse
@@ -90,35 +91,48 @@ def _reasoning_fields(reasoning: object) -> Mapping[str, object]:
     return _FIELDS.validate_python(reasoning) if isinstance(reasoning, Mapping) else {}
 
 
-def _keeps_muse_tool(tool: object) -> bool:
-    return not isinstance(tool, Mapping) or _FIELDS.validate_python(tool).get("type") in _MUSE_TOOL_TYPES
+def _namespace_members(namespace: Mapping[str, object]) -> tuple[object, ...]:
+    members: Final = namespace.get("tools")
+    return _OBJECTS.validate_python(members) if isinstance(members, list | tuple) else ()
+
+
+def _refused_member_type(member: object) -> str | None:
+    if not isinstance(member, Mapping):
+        return None
+    member_type: Final = _FIELDS.validate_python(member).get("type")
+    return None if member_type in (None, "function") else str(member_type)
+
+
+def _refused_tool_types(tool: object) -> tuple[str, ...]:
+    if not isinstance(tool, Mapping):
+        return ()
+    fields: Final = _FIELDS.validate_python(tool)
+    tool_type: Final = fields.get("type")
+    if tool_type == "namespace":
+        return tuple(filter(None, map(_refused_member_type, _namespace_members(fields))))
+    return () if tool_type in _MUSE_TOOL_TYPES else (str(tool_type),)
+
+
+def _muse_tool(tool: object) -> object | None:
+    if not _refused_tool_types(tool):
+        return tool
+    fields: Final = _FIELDS.validate_python(tool)
+    if fields.get("type") != "namespace":
+        return None
+    members: Final = tuple(member for member in _namespace_members(fields) if _refused_member_type(member) is None)
+    return {**fields, "tools": members} if members else None
 
 
 def _muse_tools(tools: object) -> tuple[object, ...] | None:
     if not isinstance(tools, list | tuple):
         return None
-    return tuple(tool for tool in _OBJECTS.validate_python(tools) if _keeps_muse_tool(tool))
-
-
-def _unsupported_muse_tool_type(tool: object) -> str | None:
-    if not isinstance(tool, Mapping):
-        return None
-    tool_type: Final = _FIELDS.validate_python(tool).get("type")
-    return None if tool_type in _MUSE_TOOL_TYPES else str(tool_type)
+    return tuple(kept for kept in map(_muse_tool, _OBJECTS.validate_python(tools)) if kept is not None)
 
 
 def _unsupported_muse_tool_types(tools: object) -> tuple[str, ...]:
     if not isinstance(tools, list | tuple):
         return ()
-    return tuple(
-        sorted(
-            frozenset(
-                tool_type
-                for tool_type in map(_unsupported_muse_tool_type, _OBJECTS.validate_python(tools))
-                if tool_type is not None
-            )
-        )
-    )
+    return tuple(sorted(frozenset(chain.from_iterable(map(_refused_tool_types, _OBJECTS.validate_python(tools))))))
 
 
 def _refused_reasoning_effort(model: str, reasoning: Mapping[str, object]) -> str | None:

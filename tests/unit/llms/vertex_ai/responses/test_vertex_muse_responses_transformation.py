@@ -379,6 +379,28 @@ def test_muse_drop_params_omits_builtin_tools_vertex_refuses(
     assert (with_accepted, alone) == (accepted, None)
 
 
+def _docs_namespace(*members: dict[str, object]) -> dict[str, object]:
+    return {"type": "namespace", "name": "docs", "description": "Docs tools.", "tools": list(members)}
+
+
+@pytest.mark.parametrize("drop_params", [True, False])
+def test_muse_treats_a_namespace_member_vertex_refuses_like_a_top_level_builtin(
+    drop_params: bool, respx_mock: respx.MockRouter
+) -> None:
+    get_time: Final = {"type": "function", "name": "get_time", "description": "Get the time.", "parameters": {}}
+    lookup: Final = {"type": "function", "name": "lookup", "description": "Look up a page.", "parameters": {}}
+    apply_patch: Final = {"type": "custom", "name": "apply_patch", "description": "Apply a patch."}
+    route: Final = respx_mock.post(ENDPOINT).mock(return_value=httpx.Response(200, json=_response("muse-ember-1.0")))
+    if not drop_params:
+        with pytest.raises(litellm.UnsupportedParamsError, match="got custom"):
+            _sent_tools(route, [get_time, _docs_namespace(lookup, apply_patch)], drop_params)
+        assert not route.called
+        return
+    mixed: Final = _sent_tools(route, [get_time, _docs_namespace(lookup, apply_patch)], drop_params)
+    only_refused: Final = _sent_tools(route, [get_time, _docs_namespace(apply_patch)], drop_params)
+    assert (mixed, only_refused) == ([get_time, _docs_namespace(lookup)], [get_time])
+
+
 NAMESPACED_TOOLS: Final[list[ToolParam]] = [
     {
         "type": "namespace",
