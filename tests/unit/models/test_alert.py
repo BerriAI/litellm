@@ -24,6 +24,7 @@ DETECTION: Final = {
         {"resource_id": ""},
         {"resource_type": "key", "resource_id": "sk-example-not-a-real-key"},
         {"resource_type": "gateway", "resource_id": "another-gateway"},
+        {"resource_type": "deployment", "resource_id": "claude-east"},
         {
             "resource_type": "gateway",
             "resource_id": "gateway",

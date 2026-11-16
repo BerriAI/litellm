@@ -116,6 +116,8 @@ class AlertDetection(BaseModel):
             if not isinstance(self.evidence, PromptCacheEvidence) or self.resource_type != "deployment":
                 raise ValueError("Prompt cache alerts require a deployment resource and prompt cache evidence")
             return self
+        if self.resource_type == "deployment":
+            raise ValueError("Only prompt cache alerts use a deployment resource")
         expected_unit: Final = {
             "spend": "usd",
             "traffic": "requests",
