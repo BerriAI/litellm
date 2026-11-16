@@ -46,11 +46,7 @@ export default function AlertDetail({
           </div>
           <p className="text-base leading-relaxed text-muted-foreground">{alert.description}</p>
         </header>
-        {alert.promptCache ? (
-          <PromptCacheEvidence details={alert.promptCache} />
-        ) : (
-          <AlertChart alert={alert} />
-        )}
+        {alert.promptCache ? <PromptCacheEvidence details={alert.promptCache} /> : <AlertChart alert={alert} />}
         <section className="space-y-2 border-t border-border pt-5">
           <h2 className="text-sm font-medium">{t("alerts.unified.resourceHeading")}</h2>
           <ul className="divide-y divide-border">

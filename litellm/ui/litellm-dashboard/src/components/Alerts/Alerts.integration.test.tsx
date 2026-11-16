@@ -61,6 +61,17 @@ function response(data: unknown, code = 200) {
   return new Response(JSON.stringify(data), { status: code, headers: { "Content-Type": "application/json" } });
 }
 
+function promptCacheResponse(url: URL): Response | undefined {
+  if (url.pathname === `/alerts/${cacheIncident.id}`) return response({ ...cacheIncident, status });
+  if (url.pathname !== "/alerts" || url.searchParams.get("type") !== "prompt_cache") return undefined;
+  if (url.searchParams.has("cursor"))
+    return response({ data: [{ ...cacheIncident, id: "41", resource_id: "claude-east-2" }], next_cursor: null });
+  return response({
+    data: cacheIncidents.filter((incident) => incident.status === url.searchParams.get("status")),
+    next_cursor: cacheNextCursor,
+  });
+}
+
 describe("Alerts", () => {
   beforeEach(() => {
     testQueryClient.clear();
@@ -102,16 +113,10 @@ describe("Alerts", () => {
         status = body.status;
         return response({ ...(url.pathname === `/alerts/${cacheIncident.id}` ? cacheIncident : alert), status });
       }
-      if (url.pathname === `/alerts/${cacheIncident.id}`) return response({ ...cacheIncident, status });
+      const promptCache = promptCacheResponse(url);
+      if (promptCache) return promptCache;
       if (url.pathname === `/alerts/${alert.id}`)
         return response({ ...alert, status, history: rejectHistory ? null : alert.history });
-      if (url.pathname === "/alerts" && url.searchParams.get("type") === "prompt_cache")
-        return url.searchParams.has("cursor")
-          ? response({ data: [{ ...cacheIncident, id: "41", resource_id: "claude-east-2" }], next_cursor: null })
-          : response({
-              data: cacheIncidents.filter((incident) => incident.status === url.searchParams.get("status")),
-              next_cursor: cacheNextCursor,
-            });
       if (url.pathname === "/alerts") {
         if (url.searchParams.has("cursor"))
           return response({ data: [{ ...alert, id: "7", resource_name: "Second key" }], next_cursor: null });

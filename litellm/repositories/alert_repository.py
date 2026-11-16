@@ -236,6 +236,7 @@ class AlertRepository:
         self, status: AlertStatus, limit: int, cursor: int | None, alert_type: AlertFilter | None = None
     ) -> AlertPage:
         size: Final = max(1, min(limit, 100))
+        # bounded-ok: METRIC_ALERT_TYPES is the fixed four metric categories
         category: Final = {"in": list(METRIC_ALERT_TYPES)} if alert_type == "performance" else alert_type
         rows: Final = await self._table.find_many(
             where={

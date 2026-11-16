@@ -3,17 +3,12 @@ import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { backgroundFetchClient } from "@/lib/http/api";
 import { getProxyBaseUrl } from "@/components/networking";
 import { AlertStatus } from "@/components/ModelDeprecationAlerts/migrationState";
-import { listedAlertType, type AlertFilter, type ListedAlertType } from "./alertPresentation";
+import { listedAlertType, type AlertFilter } from "./alertPresentation";
 
-function useSavedAlerts(
-  scope: string,
-  enabled: boolean,
-  status: AlertStatus,
-  key: string,
-  type: ListedAlertType | null,
-) {
+export function useAlerts(scope: string, enabled: boolean, status: AlertStatus, filter: AlertFilter | "prompt_cache") {
+  const type = filter === "prompt_cache" ? filter : listedAlertType(filter);
   const options = {
-    queryKey: ["alerts", getProxyBaseUrl(), scope, status, key],
+    queryKey: ["alerts", getProxyBaseUrl(), scope, status, filter],
     enabled: enabled && type !== null,
     initialPageParam: undefined as string | undefined,
     queryFn: async ({ pageParam, signal }: { pageParam: string | undefined; signal: AbortSignal }) => {
@@ -29,12 +24,6 @@ function useSavedAlerts(
     retry: false,
   };
   return useInfiniteQuery(options);
-}
-export function useAlerts(scope: string, enabled: boolean, status: AlertStatus, filter: AlertFilter) {
-  return useSavedAlerts(scope, enabled, status, filter, listedAlertType(filter));
-}
-export function usePromptCacheAlerts(scope: string, enabled: boolean, status: AlertStatus) {
-  return useSavedAlerts(scope, enabled, status, "prompt_cache", "prompt_cache");
 }
 export function useAlert(id: string | null, scope: string, enabled: boolean) {
   const options = {

@@ -58,7 +58,7 @@ describe("alert presentation", () => {
       undefined,
       null,
     ]);
-    expect(presentation.promptCache).toEqual({
+    const expectedDetails = {
       deploymentId: "claude-east",
       model: "claude-test",
       misses: 3,
@@ -66,7 +66,8 @@ describe("alert presentation", () => {
       ttlSeconds: 300,
       firstMiss: saved.window_start,
       lastMiss: saved.window_end,
-    });
+    };
+    expect(presentation.promptCache).toEqual(expectedDetails);
   });
   it("keeps metric alerts on their chart", () => {
     expect(presentAlert({ source: "performance", alert: saved }).promptCache).toBeNull();

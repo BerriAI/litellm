@@ -13,7 +13,7 @@ import { useDeprecationAlerts } from "@/components/ModelDeprecationAlerts/useDep
 import ModelDeprecationsPanel from "@/components/ModelDeprecationAlerts/ModelDeprecationsPanel";
 import DeprecationEmailSetup from "@/components/ModelDeprecationAlerts/DeprecationEmailSetup";
 import { AlertStatus, effectiveAlertStatus } from "@/components/ModelDeprecationAlerts/migrationState";
-import { useAlert, useAlerts, usePromptCacheAlerts } from "./useAlerts";
+import { useAlert, useAlerts } from "./useAlerts";
 import { ALERT_TYPES, AlertFilter, AlertItem, TYPE_LABEL_KEYS, presentAlert } from "./alertPresentation";
 import AlertActions from "./AlertActions";
 import AlertChart from "./AlertChart";
@@ -106,7 +106,7 @@ function AlertsInbox({ auth }: { auth: ReturnType<typeof useAuthorized> }) {
   const showPerformance = params.type !== "model-deprecations";
   const showPromptCache = params.type === "all";
   const list = useAlerts(scope, showPerformance, params.state, params.type);
-  const promptCache = usePromptCacheAlerts(scope, showPromptCache, params.state);
+  const promptCache = useAlerts(scope, showPromptCache, params.state, "prompt_cache");
   const deprecations = useDeprecationAlerts(showDeprecations ? auth.accessToken : null);
   const retirementItems: AlertItem[] = (deprecations.data ?? [])
     .filter((alert) => effectiveAlertStatus(alert) === params.state)
