@@ -23,6 +23,28 @@ const alert: SavedAlert = {
     { date: "2026-01-08", value: 21 },
   ],
 };
+const cacheIncident: SavedAlert = {
+  id: "42",
+  type: "prompt_cache",
+  resource_type: "deployment",
+  resource_id: "claude-east-1",
+  status: "open",
+  window_start: "2026-01-08T10:00:00Z",
+  window_end: "2026-01-08T10:00:02Z",
+  created_at: "2026-01-08T10:00:03Z",
+  updated_at: "2026-01-08T10:00:03Z",
+  evidence: {
+    config_fingerprint: "config-fingerprint-1",
+    prefix_fingerprint: "prefix-fingerprint-1",
+    provider: "anthropic",
+    provider_model: "claude-sonnet-5-5",
+    consecutive_misses: 3,
+    proven_write_tokens: 2048,
+    ttl_seconds: 300,
+  },
+};
+let cacheIncidents: SavedAlert[] = [];
+let cacheNextCursor: string | null = null;
 const calls: { path: string; query: URLSearchParams; method: string; body: unknown }[] = [];
 let status = "open";
 let rejectWrite = false;
@@ -37,6 +59,17 @@ let monitoring = {
 let rejectMonitoring = false;
 function response(data: unknown, code = 200) {
   return new Response(JSON.stringify(data), { status: code, headers: { "Content-Type": "application/json" } });
+}
+
+function promptCacheResponse(url: URL): Response | undefined {
+  if (url.pathname === `/alerts/${cacheIncident.id}`) return response({ ...cacheIncident, status });
+  if (url.pathname !== "/alerts" || url.searchParams.get("type") !== "prompt_cache") return undefined;
+  if (url.searchParams.has("cursor"))
+    return response({ data: [{ ...cacheIncident, id: "41", resource_id: "claude-east-2" }], next_cursor: null });
+  return response({
+    data: cacheIncidents.filter((incident) => incident.status === url.searchParams.get("status")),
+    next_cursor: cacheNextCursor,
+  });
 }
 
 describe("Alerts", () => {
@@ -55,6 +88,8 @@ describe("Alerts", () => {
       disabled_by_config: false,
     };
     role = "proxy_admin";
+    cacheIncidents = [];
+    cacheNextCursor = null;
     document.cookie = `token=${btoa(JSON.stringify({ alg: "none" }))}.${btoa(JSON.stringify({ key: "example-session", exp: 4102444800 }))}.example; path=/`;
     vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
       const request = input instanceof Request ? input : new Request(input);
@@ -76,8 +111,10 @@ describe("Alerts", () => {
       if (request.method === "PATCH") {
         if (rejectWrite) return response({ detail: "Unavailable" }, 503);
         status = body.status;
-        return response({ ...alert, status });
+        return response({ ...(url.pathname === `/alerts/${cacheIncident.id}` ? cacheIncident : alert), status });
       }
+      const promptCache = promptCacheResponse(url);
+      if (promptCache) return promptCache;
       if (url.pathname === `/alerts/${alert.id}`)
         return response({ ...alert, status, history: rejectHistory ? null : alert.history });
       if (url.pathname === "/alerts") {
@@ -154,6 +191,99 @@ describe("Alerts", () => {
     ]);
     await user.click(screen.getByRole("tab", { name: "resolved" }));
     expect(await screen.findByText("No resolved alerts.")).toBeInTheDocument();
+  });
+
+  it("lists prompt cache incidents in All without changing the performance query", async () => {
+    cacheIncidents = [cacheIncident];
+    renderWithProviders(<Alerts />);
+    expect(
+      await screen.findByRole("button", { name: "Prompt cache usage advisory for claude-east-1" }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Spend on Research agent/ })).toBeInTheDocument();
+    expect(
+      screen.getByText(/3 observed requests to claude-sonnet-5-5 reported no cache usage.*not necessarily consecutive/),
+    ).toBeInTheDocument();
+    expect(
+      calls
+        .filter((call) => call.path === "/alerts")
+        .map((call) => call.query.get("type"))
+        .sort(),
+    ).toEqual(["performance", "prompt_cache"]);
+  });
+
+  it("pages prompt cache and performance alerts in All from their own cursors", async () => {
+    cacheIncidents = [cacheIncident];
+    cacheNextCursor = cacheIncident.id;
+    const user = userEvent.setup();
+    renderWithProviders(<Alerts />);
+    await user.click(await screen.findByRole("button", { name: "Load more" }));
+    expect(await screen.findByRole("button", { name: /Spend on Second key/ })).toBeInTheDocument();
+    expect(
+      await screen.findByRole("button", { name: "Prompt cache usage advisory for claude-east-2" }),
+    ).toBeInTheDocument();
+    expect(
+      calls
+        .filter((call) => call.path === "/alerts" && call.query.has("cursor"))
+        .map((call) => [call.query.get("type"), call.query.get("cursor")])
+        .sort(),
+    ).toEqual([
+      ["performance", "8"],
+      ["prompt_cache", cacheIncident.id],
+    ]);
+    expect(screen.queryByRole("button", { name: "Load more" })).not.toBeInTheDocument();
+  });
+
+  it("drops prompt cache alerts already loaded for All once Performance is chosen", async () => {
+    cacheIncidents = [cacheIncident];
+    const user = userEvent.setup();
+    renderWithProviders(<Alerts />);
+    expect(
+      await screen.findByRole("button", { name: "Prompt cache usage advisory for claude-east-1" }),
+    ).toBeInTheDocument();
+    await user.click(screen.getByRole("combobox", { name: "Alert type" }));
+    await user.click(await screen.findByRole("option", { name: "Performance" }));
+    expect(await screen.findByRole("button", { name: /Spend on Research agent/ })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Prompt cache usage advisory for/ })).not.toBeInTheDocument();
+  });
+
+  it("keeps the Performance filter to metric alerts", async () => {
+    cacheIncidents = [cacheIncident];
+    renderWithProviders(<Alerts />, { searchParams: { type: "performance" } });
+    expect(await screen.findByRole("button", { name: /Spend on Research agent/ })).toBeInTheDocument();
+    expect(calls.filter((call) => call.path === "/alerts").map((call) => call.query.get("type"))).toEqual([
+      "performance",
+    ]);
+    expect(screen.queryByRole("button", { name: /Prompt cache usage advisory for/ })).not.toBeInTheDocument();
+  });
+
+  it("shows what a prompt cache incident observed, without a metric chart or prompt identity", async () => {
+    renderWithProviders(<Alerts />, { searchParams: { alert: cacheIncident.id } });
+    expect(
+      await screen.findByRole("heading", { name: "Prompt cache usage advisory for claude-east-1" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/not necessarily consecutive and do not prove a caching outage/)).toBeInTheDocument();
+    const evidence = screen.getByRole("region", { name: "What was observed" });
+    expect(within(evidence).getByText("claude-east-1")).toBeInTheDocument();
+    expect(within(evidence).getByText("claude-sonnet-5-5")).toBeInTheDocument();
+    expect(within(evidence).getByText("2048 tokens")).toBeInTheDocument();
+    expect(within(evidence).getByText("5 minutes")).toBeInTheDocument();
+    expect(within(evidence).getByText(/to .* UTC$/)).toBeInTheDocument();
+    expect(within(evidence).getByText(/Prefixes never confirmed as cached are not assessed/)).toBeInTheDocument();
+    expect(screen.queryByText(/Daily history is unavailable/)).not.toBeInTheDocument();
+    expect(document.body).not.toHaveTextContent("prefix-fingerprint-1");
+    expect(document.body).not.toHaveTextContent("config-fingerprint-1");
+  });
+
+  it("dismisses and reopens a prompt cache incident through the existing status controls", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<Alerts />, { searchParams: { alert: cacheIncident.id } });
+    await user.click(await screen.findByRole("button", { name: "Dismiss" }));
+    await user.click(await screen.findByRole("button", { name: "Reopen" }));
+    expect(await screen.findByRole("button", { name: "Dismiss" })).toBeInTheDocument();
+    expect(calls.filter((call) => call.method === "PATCH")).toMatchObject([
+      { path: `/alerts/${cacheIncident.id}`, body: { status: "dismissed" } },
+      { path: `/alerts/${cacheIncident.id}`, body: { status: "open" } },
+    ]);
   });
 
   it("keeps alert email setup accessible from the inbox", async () => {

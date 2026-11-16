@@ -5868,6 +5868,23 @@
       },
       "retiredTitle": "{{name}} retired on {{date}}",
       "retiresTitle": "{{name}} retires on {{date}}",
+      "promptCache": {
+        "title": "Prompt cache usage advisory for {{name}}",
+        "description": "{{misses}} observed requests to {{model}} reported no cache usage for a prefix the provider had cached before. Delayed, missing or unlogged observations mean these requests are not necessarily consecutive and do not prove a caching outage.",
+        "evidenceHeading": "What was observed",
+        "deployment": "Deployment",
+        "model": "Model",
+        "misses": "Observed requests with no cache usage",
+        "provenWrite": "Earlier cache write that proved the prefix",
+        "provenWriteTokens_one": "{{count}} token",
+        "provenWriteTokens_other": "{{count}} tokens",
+        "ttl": "Cache lifetime",
+        "ttlMinutes_one": "{{count}} minute",
+        "ttlMinutes_other": "{{count}} minutes",
+        "window": "Misses observed",
+        "windowValue": "{{start}} to {{end}} UTC",
+        "scope": "Only non-streaming Anthropic Chat Completions requests with one five-minute cache breakpoint are checked, after the provider confirmed a cache write for that prefix. Prefixes never confirmed as cached are not assessed."
+      },
       "deprecationDescription": "{{requests}} recorded requests. Last used {{date}} UTC.",
       "retired": "Retired",
       "retires": "Retires",
@@ -5913,7 +5930,8 @@
           "milliseconds": "Mean response time per day",
           "ratio": "Daily error rate"
         }
-      }
+      },
+      "promptCacheError": "Could not load prompt cache alerts."
     },
     "page": {
       "tabs": {

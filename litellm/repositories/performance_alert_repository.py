@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Final, Protocol, cast  # noqa: TID251  # Prism
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 from typing_extensions import LiteralString
 
+from litellm.models.alert import METRIC_ALERT_TYPES
 from litellm.models.performance_alert import (
     BASELINE_DAYS,
     FREE_ALERT_LIMIT,
@@ -178,9 +179,10 @@ class PerformanceAlertRepository:
             await transaction.execute_raw(
                 """UPDATE "LiteLLM_PerformanceAlertState" SET alerts_used = (
                     SELECT COUNT(*) FROM (SELECT 1 FROM "LiteLLM_Alert"
-                    WHERE type != 'model_deprecation' LIMIT $1) existing
+                    WHERE type = ANY($2::text[]) LIMIT $1) existing
                 ) WHERE id = 1 AND alerts_used IS NULL""",
                 FREE_ALERT_LIMIT,
+                list(METRIC_ALERT_TYPES),
             )
             return await self._monitoring(transaction, lock=lock)
         return AlertMonitoring(
