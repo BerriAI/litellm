@@ -187,6 +187,15 @@ pub enum ErrorDetail {
         value: String,
         hint: String,
     },
+    /// Python's Vertex config attributes this refusal to `vertex_ai` and the model.
+    #[error(
+        "{model} does not support anthropic-version={value}. To drop unsupported params, set `litellm.drop_params = True`."
+    )]
+    UnsupportedVertexAnthropicVersion { model: String, value: String },
+    #[error(
+        "{model} on vertex_ai needs `output_format` to be a JSON object, got {actual}. To drop it, set `litellm.drop_params=True` or for proxy:\n\n`litellm_settings:\n drop_params: true`\n"
+    )]
+    NonObjectVertexOutputFormat { model: String, actual: &'static str },
     #[error(
         "thinking.budget_tokens must be a number, got {actual}. To drop it, set `litellm.drop_params=True`, or `drop_params: true` under `litellm_settings` on the proxy"
     )]
