@@ -1,4 +1,5 @@
 mod support;
+use support::planned;
 
 use std::{
     sync::{
@@ -209,10 +210,10 @@ async fn messages_cache_identity_follows_resolved_configuration_and_request_call
             .revision
             .store(usize::from(call >= 2), Ordering::SeqCst);
         let cache = ScopedCache::new(cache.clone(), CacheScope::Shared);
-        support::messages_route(secrets.clone()).with_cache(cache).execute(MessagesCall {
+        support::messages_route(secrets.clone()).with_cache(cache).execute(planned(MessagesCall {
             body: serde_json::from_value(json!({"model":"anthropic/cache-test-model","messages":[{"role":"user","content":"hello"}],"max_tokens":32})).unwrap(),
             api_key:None,api_base:None,custom_llm_provider:None,litellm_params:Default::default(),extra_headers:None,provider_specific_header:None,timeout:None,shaping:Default::default(),
-        }, &hooks, None).await.unwrap();
+        }), &hooks, None).await.unwrap();
     }
     assert_eq!(hooks.calls.load(Ordering::SeqCst), 4);
     {
@@ -274,8 +275,14 @@ async fn provider_reported_cost_is_delivered_once_and_never_charged_for_a_cache_
         timeout: None, shaping: Default::default(),
     }
     };
-    let first = route.execute(request(), &hooks, None).await.unwrap();
-    let second = route.execute(request(), &hooks, None).await.unwrap();
+    let first = route
+        .execute(planned(request()), &hooks, None)
+        .await
+        .unwrap();
+    let second = route
+        .execute(planned(request()), &hooks, None)
+        .await
+        .unwrap();
     let (MessagesCallResponse::Complete(first), MessagesCallResponse::Complete(second)) =
         (first, second)
     else {
@@ -367,10 +374,13 @@ async fn a_caller_keyed_hit_is_served_before_the_request_is_built_or_intercepted
     }
     };
     let first = route
-        .execute(request(Some("key")), &hooks, None)
+        .execute(planned(request(Some("key"))), &hooks, None)
         .await
         .unwrap();
-    let second = route.execute(request(None), &hooks, None).await.unwrap();
+    let second = route
+        .execute(planned(request(None)), &hooks, None)
+        .await
+        .unwrap();
     let (MessagesCallResponse::Complete(first), MessagesCallResponse::Complete(second)) =
         (first, second)
     else {
@@ -422,7 +432,7 @@ async fn a_mock_is_stored_under_the_caller_key_only_when_unstreamed(
         },
     };
 
-    let output = route.execute(call, &hooks, None).await.unwrap();
+    let output = route.execute(planned(call), &hooks, None).await.unwrap();
 
     let MessagesCallResponse::Complete(MessagesBody::Unchecked(body)) = output else {
         panic!("expected the mock as a whole response");

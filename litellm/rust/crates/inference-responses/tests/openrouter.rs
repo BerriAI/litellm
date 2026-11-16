@@ -42,7 +42,7 @@ async fn the_payload_goes_to_the_openrouter_responses_endpoint_with_a_bearer(
     let upstream = upstream([json_response(response_body())]).await;
     let output = responses_route(Arc::new(RecordingSecrets::new(secrets.iter().copied())))
         .execute(
-            ResponsesCall {
+            planned(ResponsesCall {
                 api_key: api_key.map(str::to_owned),
                 api_base: Some(format!("{}/api/v1", upstream.uri())),
                 optional_params: json!({"max_output_tokens": 16})
@@ -50,7 +50,7 @@ async fn the_payload_goes_to_the_openrouter_responses_endpoint_with_a_bearer(
                     .unwrap()
                     .clone(),
                 ..call
-            },
+            }),
             &(),
             None,
         )
@@ -79,7 +79,7 @@ async fn the_secret_manager_supplies_the_base_and_key(call: ResponsesCall) {
         ("OPENROUTER_API_BASE", base.as_str()),
     ]));
     responses_route(secrets.clone())
-        .execute(call, &(), None)
+        .execute(planned(call), &(), None)
         .await
         .unwrap();
     assert_eq!(
@@ -97,10 +97,10 @@ async fn a_missing_key_fails_before_transport(call: ResponsesCall) {
     let upstream = upstream([json_response(response_body())]).await;
     let result = responses_route(no_secrets())
         .execute(
-            ResponsesCall {
+            planned(ResponsesCall {
                 api_base: Some(upstream.uri()),
                 ..call
-            },
+            }),
             &(),
             None,
         )
@@ -122,12 +122,12 @@ async fn streaming_relays_every_openrouter_event_untouched(call: ResponsesCall) 
         upstream([ResponseTemplate::new(200).set_body_raw(sse, "text/event-stream")]).await;
     let output = responses_route(no_secrets())
         .execute(
-            ResponsesCall {
+            planned(ResponsesCall {
                 api_key: Some("key".into()),
                 api_base: Some(upstream.uri()),
                 optional_params: json!({"stream": true}).as_object().unwrap().clone(),
                 ..call
-            },
+            }),
             &(),
             None,
         )

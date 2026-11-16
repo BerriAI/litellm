@@ -104,7 +104,7 @@ fn headers<'a>(pairs: impl IntoIterator<Item = (&'a str, &'a str)>) -> Option<Ma
 }
 
 fn machine(secrets: Arc<dyn SecretSource>) -> impl FnOnce(MessagesCall) -> MessagesMachine {
-    move |request| messages_route(secrets).machine(request, None)
+    move |request| messages_route(secrets).machine(planned(request), None)
 }
 
 async fn run_with(
@@ -147,7 +147,7 @@ async fn run_hosted_with(
         },
     );
     litellm_host_native::in_process::run_hosted(
-        route.machine(host.request()?, None),
+        route.machine(planned(host.request()?), None),
         host.runtime(),
     )
     .await

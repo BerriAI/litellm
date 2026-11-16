@@ -7,7 +7,7 @@ use std::sync::Arc;
 use futures_util::TryStreamExt;
 use litellm_host::{call::HostedCompletion, lifecycle::CallEvent};
 use litellm_inference_responses::{
-    Error,
+    Error, ResponsesRoute, Unplanned,
     route::Responses,
     types::{ResponsesCall, ResponsesOutput},
 };
@@ -62,13 +62,13 @@ async fn provider_resolution_preserves_the_wire_model(
     let upstream = upstream([json_response(response)]).await;
     responses_route(no_secrets())
         .execute(
-            ResponsesCall {
+            planned(ResponsesCall {
                 model: model.into(),
                 api_key: Some("test-key".into()),
                 api_base: Some(upstream.uri()),
                 custom_llm_provider: custom_llm_provider.map(str::to_owned),
                 ..call()
-            },
+            }),
             &(),
             None,
         )
@@ -84,54 +84,43 @@ async fn provider_resolution_preserves_the_wire_model(
 #[rstest]
 #[case::explicit_unknown_provider("test-model", Some("unknown-provider"))]
 #[case::unsupported_responses_provider("test-model", Some("anthropic"))]
-#[tokio::test]
-async fn unsupported_providers_fail_before_transport(
+fn a_provider_without_a_native_config_declines_in_the_plan(
     #[case] model: &str,
     #[case] custom_llm_provider: Option<&str>,
 ) {
-    let upstream = upstream([]).await;
-    let result = responses_route(no_secrets())
-        .execute(
-            ResponsesCall {
-                model: model.into(),
-                api_base: Some(upstream.uri()),
-                custom_llm_provider: custom_llm_provider.map(str::to_owned),
-                ..call()
-            },
-            &(),
-            None,
-        )
-        .await;
+    let Err(Unplanned::Declined(decline)) = ResponsesRoute::plan(ResponsesCall {
+        model: model.into(),
+        custom_llm_provider: custom_llm_provider.map(str::to_owned),
+        ..call()
+    }) else {
+        panic!("a provider with no native config declines")
+    };
 
-    assert!(matches!(result, Err(ref error) if error.declined().is_some()));
-    assert!(received(&upstream).await.is_empty());
+    assert_eq!(decline.code(), "llms.provider");
+    assert_eq!(
+        decline.detail(),
+        format!("responses on provider `{}`", custom_llm_provider.unwrap())
+    );
 }
 
 #[rstest]
 #[case::openai_with_vendor_segment("openai/other/model", None)]
 #[case::empty_model("openai/", None)]
 #[case::conflicting_prefix("openrouter/anthropic/claude", Some("openai"))]
-#[tokio::test]
-async fn invalid_provider_models_fail_before_transport(
+fn a_model_its_provider_cannot_name_is_rejected_in_the_plan(
     #[case] model: &str,
     #[case] custom_llm_provider: Option<&str>,
 ) {
-    let upstream = upstream([]).await;
-    let result = responses_route(no_secrets())
-        .execute(
-            ResponsesCall {
-                model: model.into(),
-                api_base: Some(upstream.uri()),
-                custom_llm_provider: custom_llm_provider.map(str::to_owned),
-                ..call()
-            },
-            &(),
-            None,
-        )
-        .await;
+    let result = ResponsesRoute::plan(ResponsesCall {
+        model: model.into(),
+        custom_llm_provider: custom_llm_provider.map(str::to_owned),
+        ..call()
+    });
 
-    assert!(matches!(result, Err(Error::InvalidProvider(_))));
-    assert!(received(&upstream).await.is_empty());
+    assert!(matches!(
+        result,
+        Err(Unplanned::Rejected(Error::InvalidProvider(_)))
+    ));
 }
 
 #[rstest]
@@ -141,10 +130,10 @@ async fn invalid_provider_models_fail_before_transport(
 async fn http_responses_share_execution_and_hooks(call: ResponsesCall, #[case] hosted: bool) {
     let body = json!({"id": "response-1", "model": "test-model", "output": [{"type":"message", "content":[]}], "usage":{"total_tokens":7}, "provider_extra": true});
     let upstream = upstream([json_response(body.clone())]).await;
-    let host = RecordingCall::<Responses>::new(ResponsesCall {
+    let host = RecordingCall::<Responses>::new(planned(ResponsesCall {
         api_base: Some(upstream.uri()),
         ..call
-    });
+    }));
     let response = if hosted {
         let HostedCompletion::Complete(response) = litellm_host_native::in_process::run_hosted(
             responses_route(no_secrets())
@@ -202,11 +191,11 @@ async fn streaming_keeps_headers_and_bytes_and_finishes_after_consumption(
         .insert_header("x-request-id", "response-stream")
         .set_body_raw(body, "text/event-stream")])
     .await;
-    let host = RecordingCall::<Responses>::new(ResponsesCall {
+    let host = RecordingCall::<Responses>::new(planned(ResponsesCall {
         api_base: Some(upstream.uri()),
         optional_params: json!({"stream":true}).as_object().unwrap().clone(),
         ..call
-    });
+    }));
     let (headers, bytes) = if hosted {
         assert_eq!(
             litellm_host_native::in_process::run_hosted(
@@ -275,10 +264,10 @@ async fn provider_failures_emit_failure_once(
     #[case] body: serde_json::Value,
 ) {
     let upstream = upstream([ResponseTemplate::new(status).set_body_json(body)]).await;
-    let host = RecordingCall::<Responses>::new(ResponsesCall {
+    let host = RecordingCall::<Responses>::new(planned(ResponsesCall {
         api_base: Some(upstream.uri()),
         ..call
-    });
+    }));
     let call = host.request.lock().unwrap().take().unwrap();
     assert!(
         responses_route(no_secrets())
@@ -304,10 +293,10 @@ async fn provider_failures_emit_failure_once(
 #[rstest]
 #[tokio::test]
 async fn a_transport_error_does_not_echo_the_provider_url(call: ResponsesCall) {
-    let host = RecordingCall::<Responses>::new(ResponsesCall {
+    let host = RecordingCall::<Responses>::new(planned(ResponsesCall {
         api_base: Some(format!("{UNREACHABLE_BASE}/tenant-token-1234")),
         ..call
-    });
+    }));
     let call = host.request.lock().unwrap().take().unwrap();
 
     let Err(error) = responses_route(no_secrets())
@@ -344,7 +333,7 @@ async fn credentials_and_endpoint_are_resolved_only_when_needed(
         ..call
     };
     responses_route(secrets.clone())
-        .execute(call, &(), None)
+        .execute(planned(call), &(), None)
         .await
         .unwrap();
     assert_eq!(
@@ -357,33 +346,6 @@ async fn credentials_and_endpoint_are_resolved_only_when_needed(
         assert!(secrets.requested().contains(&"OPENAI_API_KEY".into()));
         assert!(secrets.requested().contains(&"OPENAI_BASE_URL".into()));
     }
-}
-
-#[rstest]
-#[case::provider("other/model", "other")]
-#[case::conflicting_prefix("other/model", "openai")]
-#[tokio::test]
-async fn unsupported_providers_fail_before_secrets_or_transport(
-    call: ResponsesCall,
-    #[case] model: &str,
-    #[case] provider: &str,
-) {
-    let upstream = upstream([]).await;
-    let secrets = Arc::new(RecordingSecrets::failing());
-    let call = ResponsesCall {
-        model: model.into(),
-        custom_llm_provider: Some(provider.into()),
-        api_base: Some(upstream.uri()),
-        ..call
-    };
-    assert!(
-        responses_route(secrets.clone())
-            .execute(call, &(), None)
-            .await
-            .is_err()
-    );
-    assert!(secrets.requested().is_empty());
-    assert!(received(&upstream).await.is_empty());
 }
 
 #[rstest]
@@ -400,12 +362,12 @@ async fn route_tracing_covers_native_and_hosted_outcomes(
     #[values(false, true)] hosted: bool,
 ) {
     let upstream = upstream([status_response(status, body)]).await;
-    let host = RecordingCall::<Responses>::new(ResponsesCall {
+    let host = RecordingCall::<Responses>::new(planned(ResponsesCall {
         api_base: Some(upstream.uri()),
         input: json!("private-prompt-sentinel"),
         api_key: Some("private-key-sentinel".into()),
         ..call
-    });
+    }));
     let route = responses_route(no_secrets());
     let result = traces
         .logger()
@@ -461,11 +423,11 @@ async fn stream_trace_survives_handoff_and_closes_before_the_stream_object_is_dr
         .instrument(async {
             responses_route(no_secrets())
                 .execute(
-                    ResponsesCall {
+                    planned(ResponsesCall {
                         api_base: Some(upstream.uri()),
                         optional_params: json!({"stream":true}).as_object().unwrap().clone(),
                         ..call
-                    },
+                    }),
                     &(),
                     None,
                 )
@@ -500,31 +462,14 @@ async fn preparation_failure_is_traced_but_unpolled_builders_are_not(
     call: ResponsesCall,
     traces: TraceCapture,
 ) {
-    traces.logger().scope(|| {
-        drop(responses_route(no_secrets()).execute(
-            ResponsesCall {
-                model: "unknown/model".into(),
-                ..call
-            },
-            &(),
-            None,
-        ))
-    });
+    let failing = || responses_route(Arc::new(RecordingSecrets::failing()));
+    traces
+        .logger()
+        .scope(|| drop(failing().execute(planned(call), &(), None)));
     assert!(traces.records().is_empty());
     let result = traces
         .logger()
-        .instrument(async {
-            responses_route(no_secrets())
-                .execute(
-                    ResponsesCall {
-                        model: "unknown/model".into(),
-                        ..self::call()
-                    },
-                    &(),
-                    None,
-                )
-                .await
-        })
+        .instrument(async { failing().execute(planned(self::call()), &(), None).await })
         .await;
     assert!(result.is_err());
     let summaries = traces.summaries("litellm.route");

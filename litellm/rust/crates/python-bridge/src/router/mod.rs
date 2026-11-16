@@ -37,7 +37,12 @@ use self::host::{
     CacheOp, CacheOutcome, DriveError, Driver, Finish, HostCall, HostCallResponse,
     PythonRandomness, Stage, Step, StepHost, StepKind,
 };
-use crate::errors::RustBridgeDeclined;
+
+const UNSERVED_CONFIG: litellm_core_utils::decline::Decline =
+    litellm_core_utils::decline::Decline::new(
+        "router.config",
+        "a router config router-core does not serve",
+    );
 
 /// The `error_kind` of a `failed` step.
 #[derive(Clone, Copy, Debug, strum::IntoStaticStr)]
@@ -126,7 +131,7 @@ impl From<&Error> for ErrorKind {
 fn config_error_to_pyerr(error: config::Error) -> PyErr {
     let message = Report::new(&error).to_string();
     if error.declined() {
-        RustBridgeDeclined::new_err(message)
+        crate::errors::declined(&UNSERVED_CONFIG.with_detail(message))
     } else {
         PyValueError::new_err(message)
     }

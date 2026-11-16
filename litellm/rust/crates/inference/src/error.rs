@@ -11,8 +11,6 @@ pub enum Error {
     #[error("invalid provider: unable to resolve custom_llm_provider for {route} request")]
     UnresolvedProvider { route: &'static str },
     #[error(transparent)]
-    Declined(Decline),
-    #[error(transparent)]
     Llm(LlmError),
     #[error(transparent)]
     Auth(#[from] litellm_auth::Error),
@@ -61,11 +59,7 @@ impl Error {
             Self::Llm(error) => error.is_request(),
             Self::Auth(error) => error.is_request(),
             Self::Http(error) => error.is_request(),
-            Self::Declined(_)
-            | Self::Secret(_)
-            | Self::Host(_)
-            | Self::Transport(_)
-            | Self::PostCallHook(_) => false,
+            Self::Secret(_) | Self::Host(_) | Self::Transport(_) | Self::PostCallHook(_) => false,
         }
     }
 
@@ -75,7 +69,6 @@ impl Error {
             Self::Http(error) => error.is_response(),
             Self::InvalidProvider(_)
             | Self::UnresolvedProvider { .. }
-            | Self::Declined(_)
             | Self::Auth(_)
             | Self::Headers(_)
             | Self::Secret(_)
@@ -91,7 +84,6 @@ impl Error {
             Self::Auth(error) => error.is_missing_credential(),
             Self::InvalidProvider(_)
             | Self::UnresolvedProvider { .. }
-            | Self::Declined(_)
             | Self::Headers(_)
             | Self::Http(_)
             | Self::Secret(_)
@@ -101,28 +93,12 @@ impl Error {
         }
     }
 
-    pub fn declined(&self) -> Option<&Decline> {
-        match self {
-            Self::Declined(decline) => Some(decline),
-            Self::Llm(error) => error.declined(),
-            Self::InvalidProvider(_)
-            | Self::UnresolvedProvider { .. }
-            | Self::Auth(_)
-            | Self::Headers(_)
-            | Self::Http(_)
-            | Self::Secret(_)
-            | Self::Host(_)
-            | Self::Transport(_)
-            | Self::PostCallHook(_) => None,
-        }
-    }
-
     /// Re-tag an error raised while handling an answer the provider already returned.
     ///
-    /// A config reports the same variants on either side of the call, so a missing field or
-    /// a decline can mean "this request cannot be translated" before the send and "this
-    /// response cannot be normalized" after it. Only the second kind was billed, and a host
-    /// that keeps a reference implementation must not retry it.
+    /// A config reports the same variants on either side of the call, so a missing field can
+    /// mean "this request cannot be translated" before the send and "this response cannot be
+    /// normalized" after it. Only the second kind was billed, and a host that keeps a reference
+    /// implementation must not retry it.
     pub fn after_send(self) -> Self {
         if self.is_response() || self.upstream_response().is_some() {
             return self;
@@ -137,7 +113,6 @@ impl Error {
             Self::Host(_) | Self::Transport(_) | Self::PostCallHook(_) => true,
             Self::InvalidProvider(_)
             | Self::UnresolvedProvider { .. }
-            | Self::Declined(_)
             | Self::Auth(_)
             | Self::Headers(_)
             | Self::Secret(_) => false,
@@ -149,7 +124,6 @@ impl Error {
             Self::Llm(error) => error.rejected_request(),
             Self::InvalidProvider(_)
             | Self::UnresolvedProvider { .. }
-            | Self::Declined(_)
             | Self::Auth(_)
             | Self::Headers(_)
             | Self::Http(_)
@@ -202,7 +176,6 @@ impl Error {
             Self::Http(error) => error.upstream_response(),
             Self::InvalidProvider(_)
             | Self::UnresolvedProvider { .. }
-            | Self::Declined(_)
             | Self::Auth(_)
             | Self::Headers(_)
             | Self::Secret(_)
@@ -222,7 +195,6 @@ impl From<litellm_http::Error> for Error {
 impl From<LlmError> for Error {
     fn from(error: LlmError) -> Self {
         match error {
-            LlmError::Declined(decline) => Self::Declined(decline),
             LlmError::Http(error) => Self::from(error),
             LlmError::Auth(error) => Self::Auth(error),
             error @ (LlmError::InvalidType { .. }
@@ -230,6 +202,23 @@ impl From<LlmError> for Error {
             | LlmError::InvalidRequest(_)
             | LlmError::InvalidResponse(_)) => Self::Llm(error),
         }
+    }
+}
+
+/// Why a route's `plan` produced no call to execute. `plan` runs before anything writes, so it is
+/// the only place a route may decline, and `execute` takes the plan and returns [`Error`], which
+/// has no way to say it.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum Unplanned {
+    #[error(transparent)]
+    Declined(#[from] Decline),
+    #[error(transparent)]
+    Rejected(#[from] Error),
+}
+
+impl From<LlmError> for Unplanned {
+    fn from(error: LlmError) -> Self {
+        Self::Rejected(error.into())
     }
 }
 
@@ -260,7 +249,6 @@ impl Eq for SecretError {}
 #[cfg(test)]
 mod tests {
     use super::Error;
-    use litellm_core_utils::decline::Decline;
     use litellm_host::machine::MachineFault;
     use litellm_llms::{Error as LlmError, ErrorDetail};
     use rstest::rstest;
@@ -325,24 +313,7 @@ mod tests {
         assert!(error.is_missing_credential());
     }
 
-    #[test]
-    fn a_transformation_decline_survives_into_the_route_error() {
-        let decline = Decline::new("unrecognized request parameter");
-        let error = Error::from(LlmError::Declined(decline));
-        assert_eq!(error.declined(), Some(&decline));
-        assert!(!error.is_request());
-        assert!(!error.dispatched());
-    }
-
-    #[test]
-    fn a_post_call_hook_failure_is_never_a_decline() {
-        let hook = Error::post_call(Error::Declined(Decline::new("hook")));
-        assert_eq!(hook.declined(), None);
-    }
-
     #[rstest]
-    #[case::declined(Error::Declined(Decline::new("non-text response content block")))]
-    #[case::transformation_decline(LlmError::Declined(Decline::new("streaming")).into())]
     #[case::missing_field(LlmError::MissingField("usage").into())]
     #[case::invalid_request(Error::invalid_request(ErrorDetail::Expected {
         subject: "whatever",
@@ -350,13 +321,12 @@ mod tests {
     }))]
     #[case::auth(Error::Auth(litellm_auth::Error::InvalidHeader))]
     #[case::host_driver(MachineFault::Abandoned.into())]
-    fn errors_after_the_send_are_response_faults_and_never_a_decline(#[case] error: Error) {
+    fn errors_after_the_send_are_response_faults(#[case] error: Error) {
         let report = litellm_error::Report::new(&error).to_string();
         let collapsed = error.after_send();
         assert!(collapsed.is_response(), "{collapsed:?}");
         assert!(!collapsed.is_request(), "{collapsed:?}");
         assert!(collapsed.dispatched(), "{collapsed:?}");
-        assert_eq!(collapsed.declined(), None);
         let collapsed_report = litellm_error::Report::new(&collapsed).to_string();
         assert!(collapsed_report.ends_with(&report), "{collapsed_report}");
     }

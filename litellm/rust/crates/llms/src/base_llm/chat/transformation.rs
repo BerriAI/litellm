@@ -24,6 +24,18 @@ pub struct ProviderChatResponseData {
 
 pub const STREAM_PARAM: &str = "stream";
 
+pub const STREAMING: Decline = Decline::new("llms.streaming", "a streamed chat completion");
+pub const UNRECOGNIZED_PARAM: Decline =
+    Decline::new("llms.param", "unrecognized request parameter");
+pub const UNRECOGNIZED_MESSAGE_FIELD: Decline =
+    Decline::new("llms.message.field", "unrecognized message field");
+pub const UNRECOGNIZED_MESSAGE_ROLE: Decline =
+    Decline::new("llms.message.role", "unrecognized message role");
+pub const MESSAGE_WITHOUT_CONTENT: Decline =
+    Decline::new("llms.message.content", "message without content");
+pub const NON_TEXT_MESSAGE_CONTENT: Decline =
+    Decline::new("llms.message.content", "non-text message content");
+
 /// Message fields that carry no meaning for the upstream body, so their
 /// presence does not make a request untranslatable.
 const IGNORABLE_MESSAGE_FIELDS: &[&str] = &["name"];
@@ -108,18 +120,18 @@ pub fn unsupported_param(
         .and_then(Value::as_bool)
         .unwrap_or(false)
     {
-        return Some(Decline::new("streaming"));
+        return Some(STREAMING);
     }
     optional_params
         .keys()
-        .any(|key| {
-            key != STREAM_PARAM
+        .find(|key| {
+            *key != STREAM_PARAM
                 && !supported
                     .iter()
-                    .any(|(_, provider_name)| *provider_name == key)
+                    .any(|(_, provider_name)| provider_name == key)
                 && !config.contains(&key.as_str())
         })
-        .then_some(Decline::new("unrecognized request parameter"))
+        .map(|key| UNRECOGNIZED_PARAM.with_detail(format!("request parameter `{key}`")))
 }
 
 /// Message shapes the core can translate faithfully: text content, either a
@@ -139,19 +151,17 @@ pub fn unsupported_message_fields(
         !IGNORABLE_MESSAGE_FIELDS.contains(&key.as_str())
             && !accepted_fields.contains(&key.as_str())
     }) {
-        return Some(Decline::new("unrecognized message field"));
+        return Some(UNRECOGNIZED_MESSAGE_FIELD);
     }
     (!matches!(message.role.as_str(), "system" | "user" | "assistant"))
-        .then_some(Decline::new("unrecognized message role"))
+        .then_some(UNRECOGNIZED_MESSAGE_ROLE)
 }
 
 pub fn unsupported_message_content(content: Option<&ChatMessageContent>) -> Option<Decline> {
     match content {
-        None => Some(Decline::new("message without content")),
+        None => Some(MESSAGE_WITHOUT_CONTENT),
         Some(ChatMessageContent::Text(_)) => None,
-        Some(ChatMessageContent::Parts(parts)) if parts.is_empty() => {
-            Some(Decline::new("message without content"))
-        }
+        Some(ChatMessageContent::Parts(parts)) if parts.is_empty() => Some(MESSAGE_WITHOUT_CONTENT),
         Some(ChatMessageContent::Parts(parts)) => parts
             .iter()
             .any(|part| {
@@ -159,6 +169,6 @@ pub fn unsupported_message_content(content: Option<&ChatMessageContent>) -> Opti
                     || part.get("text").and_then(Value::as_str).is_none()
                     || part.as_object().is_some_and(|object| object.len() != 2)
             })
-            .then_some(Decline::new("non-text message content")),
+            .then_some(NON_TEXT_MESSAGE_CONTENT),
     }
 }

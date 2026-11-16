@@ -47,7 +47,7 @@
 
 # Fallback
 
-- Native admission may pick Python before execution starts
+- Native admission may pick Python before execution starts. It does so with `RustBridgeDeclined(code, detail)`, which `runtime.py` reads into `RustDeclined`: `code` is the stable dotted code of the Rust `Decline` and `detail` is its text for the log
 - A caller or deployment `api_base` the native URL parser reads otherwise than httpx and aiohttp (no host, credentials in the URL, a port Python cannot read, a missing http(s) scheme, whitespace, control or non-ASCII characters) goes to Python's client through `_unsendable_api_base` in `host/routes/messages.py`. The native parser can read a host out of such a base where Python refuses it, sending the operator's key to a host the configuration did not name or mean
 - A failure after execution starts is terminal and never triggers fallback
 - Creating an unstarted native coroutine acquires no clients or credentials and captures no execution context

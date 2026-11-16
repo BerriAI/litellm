@@ -38,6 +38,15 @@ use crate::{
     },
 };
 
+const CONVERSATION_OPENS_OFF_USER: Decline = Decline::new(
+    "llms.conversation",
+    "conversation does not open on a user turn",
+);
+const MALFORMED_THINKING_BLOCK: Decline = Decline::new("llms.thinking", "malformed thinking block");
+const CACHED_THINKING_BLOCK: Decline = Decline::new("llms.thinking", "cached thinking block");
+const REDACTED_THINKING_WITHOUT_DATA: Decline =
+    Decline::new("llms.thinking", "redacted thinking block without data");
+
 /// Anthropic parameter names, post `map_openai_params`, that the Rust path can
 /// place verbatim in the Messages body.
 ///
@@ -273,7 +282,7 @@ impl BaseConfig for AnthropicConfig {
             // core cannot observe, so decline instead of guessing.
             .or_else(|| {
                 (!build_conversation(messages).opens_on_user_turn())
-                    .then_some(Decline::new("conversation does not open on a user turn"))
+                    .then_some(CONVERSATION_OPENS_OFF_USER)
             })
     }
 }
@@ -289,7 +298,7 @@ fn unsupported_anthropic_message(message: &ChatMessage) -> Option<Decline> {
                 .iter()
                 .find_map(unsupported_thinking_block)
                 .or_else(|| unsupported_assistant_content(message.content.as_ref(), blocks)),
-            Some(_) => Some(Decline::new("malformed thinking block")),
+            Some(_) => Some(MALFORMED_THINKING_BLOCK),
         }
     })
 }
@@ -318,10 +327,10 @@ fn unsupported_assistant_content(
 /// `drop_params`, which the core cannot observe, so those decline.
 fn unsupported_thinking_block(block: &Value) -> Option<Decline> {
     let Some(block) = block.as_object() else {
-        return Some(Decline::new("malformed thinking block"));
+        return Some(MALFORMED_THINKING_BLOCK);
     };
     if block.contains_key("cache_control") {
-        return Some(Decline::new("cached thinking block"));
+        return Some(CACHED_THINKING_BLOCK);
     }
     match block.get("type").and_then(Value::as_str) {
         Some("thinking") => None,
@@ -333,8 +342,8 @@ fn unsupported_thinking_block(block: &Value) -> Option<Decline> {
         {
             None
         }
-        Some("redacted_thinking") => Some(Decline::new("redacted thinking block without data")),
-        _ => Some(Decline::new("malformed thinking block")),
+        Some("redacted_thinking") => Some(REDACTED_THINKING_WITHOUT_DATA),
+        _ => Some(MALFORMED_THINKING_BLOCK),
     }
 }
 
@@ -456,12 +465,20 @@ fn anthropic_body(
 
 #[cfg(test)]
 mod tests {
+    use super::{
+        CACHED_THINKING_BLOCK, CONVERSATION_OPENS_OFF_USER, MALFORMED_THINKING_BLOCK,
+        REDACTED_THINKING_WITHOUT_DATA,
+    };
     use crate::{
         Error,
         anthropic::chat::transformation::ANTHROPIC_CHAT_COMPLETIONS_CONFIG,
         base_llm::{
             auth::AuthScheme,
-            chat::transformation::{BaseConfig, ProviderChatResponseData},
+            chat::transformation::{
+                BaseConfig, MESSAGE_WITHOUT_CONTENT, NON_TEXT_MESSAGE_CONTENT,
+                ProviderChatResponseData, STREAMING, UNRECOGNIZED_MESSAGE_FIELD,
+                UNRECOGNIZED_PARAM,
+            },
         },
     };
     use litellm_core_utils::decline::Decline;
@@ -587,6 +604,11 @@ mod tests {
         assert_eq!(body["stop_sequences"], json!(["STOP"]));
     }
 
+    fn named_param(param: &Value) -> Decline {
+        let name = param.as_object().unwrap().keys().next().unwrap();
+        UNRECOGNIZED_PARAM.with_detail(format!("request parameter `{name}`"))
+    }
+
     #[test]
     fn declines_top_k_because_python_gates_it_by_model_below_this_point() {
         // `temperature` and `top_p` arrive already resolved, because
@@ -600,7 +622,7 @@ mod tests {
                 json!([{"role": "user", "content": "hi"}]),
                 json!({"top_k": 40})
             ),
-            Some(Decline::new("unrecognized request parameter"))
+            Some(named_param(&json!({"top_k": 40})))
         );
     }
 
@@ -611,7 +633,7 @@ mod tests {
                 json!([{"role": "user", "content": "hi"}]),
                 json!({"stream": true, "max_tokens": 16})
             ),
-            Some(Decline::new("streaming"))
+            Some(STREAMING)
         );
     }
 
@@ -636,7 +658,7 @@ mod tests {
     fn declines_any_param_outside_the_allowlist(#[case] param: Value) {
         assert_eq!(
             reason(json!([{"role": "user", "content": "hi"}]), param.clone()),
-            Some(Decline::new("unrecognized request parameter")),
+            Some(named_param(&param)),
             "expected {param} to decline"
         );
     }
@@ -654,7 +676,7 @@ mod tests {
                 ]),
                 json!({})
             ),
-            Some(Decline::new("unrecognized message field"))
+            Some(UNRECOGNIZED_MESSAGE_FIELD)
         );
         assert_eq!(
             reason(
@@ -664,7 +686,7 @@ mod tests {
                 ]),
                 json!({})
             ),
-            Some(Decline::new("unrecognized message field"))
+            Some(UNRECOGNIZED_MESSAGE_FIELD)
         );
         assert_eq!(
             reason(
@@ -674,7 +696,7 @@ mod tests {
                 ]}]),
                 json!({})
             ),
-            Some(Decline::new("non-text message content"))
+            Some(NON_TEXT_MESSAGE_CONTENT)
         );
         assert_eq!(
             reason(
@@ -684,7 +706,7 @@ mod tests {
                 ]}]),
                 json!({})
             ),
-            Some(Decline::new("non-text message content"))
+            Some(NON_TEXT_MESSAGE_CONTENT)
         );
     }
 
@@ -695,7 +717,7 @@ mod tests {
         // than declining to Python before it.
         assert_eq!(
             reason(json!([{"role": "user", "content": []}]), json!({})),
-            Some(Decline::new("message without content"))
+            Some(MESSAGE_WITHOUT_CONTENT)
         );
         assert_eq!(
             reason(
@@ -716,7 +738,7 @@ mod tests {
                 ]),
                 json!({})
             ),
-            Some(Decline::new("conversation does not open on a user turn"))
+            Some(CONVERSATION_OPENS_OFF_USER)
         );
     }
 
@@ -832,7 +854,7 @@ mod tests {
     fn declines_a_reply_with_nothing_to_replay(#[case] thinking_blocks: Value) {
         assert_eq!(
             reason(cut_off_reply(Some(Value::Null), thinking_blocks), json!({})),
-            Some(Decline::new("message without content"))
+            Some(MESSAGE_WITHOUT_CONTENT)
         );
     }
 
@@ -863,16 +885,16 @@ mod tests {
     #[rstest]
     #[case::cache_control(
         json!([{"type": "thinking", "thinking": "t", "signature": "s", "cache_control": {"type": "ephemeral"}}]),
-        "cached thinking block"
+        CACHED_THINKING_BLOCK
     )]
-    #[case::blank_redacted(json!([{"type": "redacted_thinking", "data": " "}]), "redacted thinking block without data")]
-    #[case::redacted_without_data(json!([{"type": "redacted_thinking"}]), "redacted thinking block without data")]
-    #[case::not_a_thinking_block(json!([{"type": "text", "text": "t"}]), "malformed thinking block")]
-    #[case::not_an_object(json!(["t"]), "malformed thinking block")]
-    #[case::not_a_list(json!({"type": "thinking"}), "malformed thinking block")]
+    #[case::blank_redacted(json!([{"type": "redacted_thinking", "data": " "}]), REDACTED_THINKING_WITHOUT_DATA)]
+    #[case::redacted_without_data(json!([{"type": "redacted_thinking"}]), REDACTED_THINKING_WITHOUT_DATA)]
+    #[case::not_a_thinking_block(json!([{"type": "text", "text": "t"}]), MALFORMED_THINKING_BLOCK)]
+    #[case::not_an_object(json!(["t"]), MALFORMED_THINKING_BLOCK)]
+    #[case::not_a_list(json!({"type": "thinking"}), MALFORMED_THINKING_BLOCK)]
     fn declines_thinking_blocks_python_would_not_replay_as_sent(
         #[case] thinking_blocks: Value,
-        #[case] expected: &'static str,
+        #[case] expected: Decline,
     ) {
         assert_eq!(
             reason(
@@ -883,7 +905,7 @@ mod tests {
                 ]),
                 json!({})
             ),
-            Some(Decline::new(expected))
+            Some(expected)
         );
     }
 
@@ -894,7 +916,7 @@ mod tests {
                 json!([{"role": "user", "content": "hi", "thinking_blocks": []}]),
                 json!({})
             ),
-            Some(Decline::new("unrecognized message field"))
+            Some(UNRECOGNIZED_MESSAGE_FIELD)
         );
     }
 

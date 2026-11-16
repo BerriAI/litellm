@@ -16,6 +16,14 @@ use wiremock::{Mock, MockServer, Request, ResponseTemplate, matchers::any};
 /// A port nothing listens on, for calls that must fail before any request is sent.
 pub const UNREACHABLE_BASE: &str = "http://127.0.0.1:1";
 
+/// The plan for a call these tests expect the route to take.
+pub fn planned(
+    call: litellm_inference_messages::MessagesCall,
+) -> litellm_inference_messages::MessagesPlan {
+    litellm_inference_messages::MessagesRoute::plan(call)
+        .unwrap_or_else(|unplanned| panic!("the call plans: {unplanned}"))
+}
+
 pub fn messages_route(secrets: Arc<dyn SecretSource>) -> litellm_inference_messages::MessagesRoute {
     let resources = resources();
     litellm_inference_messages::MessagesRoute::new(

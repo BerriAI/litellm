@@ -6,7 +6,7 @@ use litellm_host::{
     protocol::Protocol,
 };
 
-use super::{Error, MessagesBody, MessagesCall};
+use super::{Error, MessagesBody, MessagesPlan};
 
 pub type MessagesOutput = HostedCompletion<MessagesBody>;
 
@@ -22,7 +22,7 @@ pub struct Messages;
 impl Protocol for Messages {
     type Response = MessagesBody;
     type Error = Error;
-    type Request = MessagesCall;
+    type Request = MessagesPlan;
     type HostCall = Infallible;
     type Chunk = Bytes;
     type StreamHead = MessagesStreamHead;
@@ -43,7 +43,7 @@ pub type MessagesMachine = HostedMachine<Messages>;
 impl super::MessagesRoute {
     pub fn machine(
         self,
-        request: super::MessagesCall,
+        plan: MessagesPlan,
         options: impl Into<litellm_inference::CallOptions>,
     ) -> MessagesMachine {
         let litellm_inference::CallOptions {
@@ -51,9 +51,9 @@ impl super::MessagesRoute {
             observers,
         } = options.into();
         hosted_call(
-            request,
+            plan,
             observers,
-            move |call, _, interceptors, observers| async move {
+            move |plan: MessagesPlan, _, interceptors, observers| async move {
                 let context = litellm_inference::context::CallContext::new(
                     &interceptors,
                     litellm_inference::CallOptions {
@@ -61,7 +61,7 @@ impl super::MessagesRoute {
                         observers,
                     },
                 );
-                self.run(call, context).await
+                self.run(plan.call, context).await
             },
         )
     }

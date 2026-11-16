@@ -25,7 +25,7 @@ metadata:
   - Classification states facts. Retry and fallback policy lives with the caller that knows idempotency
 - [boundaries](references/boundaries.md)
   - An error becomes text for someone else only in one mapping function per error type, in the gateway crates, the Python bridge and host-python. The inference gateway and the bridge decide by the same predicates
-  - A failure before the provider was called is a decline. Both ask `declined()` first and hand it back to the host unchanged
+  - A decline is not an error variant. It is `litellm_core_utils::decline::Decline`, a stable `code` plus a `detail`, and only a route's `plan` or a config's construction returns one. `execute` returns `Error`, which cannot say it
 - [gateway](references/gateway.md)
   - One `Error` with `IntoResponse` per gateway crate that serves a router. Every failure flows through the same `From` chain, is classified once in `status()` and rendered by surface and framing
 - [pyo3](references/pyo3.md)

@@ -53,12 +53,12 @@ async fn only_a_valid_bearer_can_override_the_configured_key(
     let secrets = Arc::new(RecordingSecrets::new([("OPENROUTER_API_KEY", "managed")]));
     let output = messages_route(secrets)
         .execute(
-            MessagesCall {
+            planned(MessagesCall {
                 api_key: api_key.map(str::to_string),
                 api_base: Some(format!("{}/api/v1", upstream.uri())),
                 extra_headers: Some(extra_headers),
                 ..call
-            },
+            }),
             &(),
             None,
         )
@@ -78,7 +78,7 @@ async fn an_anthropic_key_alone_is_not_an_openrouter_credential(call: MessagesCa
     let upstream = upstream([message_response()]).await;
     let result = messages_route(no_secrets())
         .execute(
-            MessagesCall {
+            planned(MessagesCall {
                 api_base: Some(upstream.uri()),
                 extra_headers: Some(
                     json!({"x-api-key": "caller-key"})
@@ -87,7 +87,7 @@ async fn an_anthropic_key_alone_is_not_an_openrouter_credential(call: MessagesCa
                         .clone(),
                 ),
                 ..call
-            },
+            }),
             &(),
             None,
         )
@@ -111,7 +111,7 @@ async fn the_secret_manager_supplies_the_native_base_and_key(call: MessagesCall)
         ("OPENROUTER_API_BASE", base.as_str()),
     ]));
     messages_route(secrets)
-        .execute(call, &(), None)
+        .execute(planned(call), &(), None)
         .await
         .unwrap();
     let request = only_request(&upstream).await;
@@ -132,7 +132,7 @@ async fn streaming_relay_preserves_every_event_and_billed_usage(call: MessagesCa
         ..call
     };
     let output = messages_route(no_secrets())
-        .execute(streamed, &(), None)
+        .execute(planned(streamed), &(), None)
         .await
         .unwrap();
     let MessagesCallResponse::Stream { chunks, .. } = output else {

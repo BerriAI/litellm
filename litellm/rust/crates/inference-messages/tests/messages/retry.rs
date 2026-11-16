@@ -109,7 +109,7 @@ async fn a_rejected_thinking_replay_is_sent_once_more_without_thinking(
         message_response()
     };
     let upstream = upstream([rejection(400, message), success]).await;
-    let host = RecordingCall::<Messages>::new(replay(
+    let host = RecordingCall::<Messages>::new(planned(replay(
         MessagesCall {
             custom_llm_provider: Some(provider.into()),
             ..call
@@ -117,7 +117,7 @@ async fn a_rejected_thinking_replay_is_sent_once_more_without_thinking(
         upstream.uri(),
         stream,
         enabled(),
-    ));
+    )));
 
     let (response, chunks) = execute(&host).await.expect("the retry succeeds");
 
@@ -161,7 +161,8 @@ async fn the_raw_head_of_a_retried_call_carries_the_retried_bytes(
         message_response()
     };
     let upstream = upstream([rejection(400, INVALID_SIGNATURE), success]).await;
-    let host = RecordingCall::<Messages>::new(replay(call, upstream.uri(), stream, enabled()));
+    let host =
+        RecordingCall::<Messages>::new(planned(replay(call, upstream.uri(), stream, enabled())));
 
     execute(&host).await.expect("the retry succeeds");
 
@@ -187,7 +188,8 @@ async fn a_second_rejection_is_the_error_the_caller_sees(
         ),
     ])
     .await;
-    let host = RecordingCall::<Messages>::new(replay(call, upstream.uri(), stream, enabled()));
+    let host =
+        RecordingCall::<Messages>::new(planned(replay(call, upstream.uri(), stream, enabled())));
 
     let error = execute(&host).await.err().expect("the retry fails");
 
@@ -222,7 +224,7 @@ async fn other_failures_reach_the_caller_without_a_retry(
         },
         ..MessagesShaping::default()
     };
-    let host = RecordingCall::<Messages>::new(replay(
+    let host = RecordingCall::<Messages>::new(planned(replay(
         MessagesCall {
             shaping: adaptive,
             ..call
@@ -230,7 +232,7 @@ async fn other_failures_reach_the_caller_without_a_retry(
         upstream.uri(),
         false,
         thinking.clone(),
-    ));
+    )));
 
     let error = execute(&host).await.err().expect("the call fails");
 
@@ -288,7 +290,8 @@ async fn a_rejected_strict_tool_is_sent_once_more_without_strict_under_drop_para
         message_response()
     };
     let upstream = upstream([rejection(400, STRICT_REJECTION), success]).await;
-    let host = RecordingCall::<Messages>::new(strict_tools(call, upstream.uri(), stream, true));
+    let host =
+        RecordingCall::<Messages>::new(planned(strict_tools(call, upstream.uri(), stream, true)));
 
     let (response, _) = execute(&host).await.expect("the retry succeeds");
 
@@ -317,7 +320,8 @@ async fn a_rejected_strict_tool_is_sent_once_more_without_strict_under_drop_para
 #[tokio::test]
 async fn a_rejected_strict_tool_reaches_the_caller_without_drop_params(call: MessagesCall) {
     let upstream = upstream([rejection(400, STRICT_REJECTION), message_response()]).await;
-    let host = RecordingCall::<Messages>::new(strict_tools(call, upstream.uri(), false, false));
+    let host =
+        RecordingCall::<Messages>::new(planned(strict_tools(call, upstream.uri(), false, false)));
 
     let error = execute(&host).await.err().expect("the call fails");
 
@@ -338,12 +342,12 @@ async fn strict_tools_and_a_thinking_replay_share_the_one_retry(call: MessagesCa
         message_response(),
     ])
     .await;
-    let host = RecordingCall::<Messages>::new(replay(
+    let host = RecordingCall::<Messages>::new(planned(replay(
         strict_tools(call, upstream.uri(), false, true),
         upstream.uri(),
         false,
         enabled(),
-    ));
+    )));
 
     let error = execute(&host)
         .await
@@ -366,7 +370,7 @@ async fn strict_tools_and_a_thinking_replay_share_the_one_retry(call: MessagesCa
 async fn a_truthy_global_drop_params_that_is_not_true_does_not_drop_strict(call: MessagesCall) {
     let upstream = upstream([rejection(400, STRICT_REJECTION), message_response()]).await;
     let strict = strict_tools(call, upstream.uri(), false, true);
-    let host = RecordingCall::<Messages>::new(MessagesCall {
+    let host = RecordingCall::<Messages>::new(planned(MessagesCall {
         shaping: MessagesShaping {
             settings: MessagesSettings {
                 drops_unsupported_params: false,
@@ -375,7 +379,7 @@ async fn a_truthy_global_drop_params_that_is_not_true_does_not_drop_strict(call:
             ..strict.shaping.clone()
         },
         ..strict
-    });
+    }));
 
     let error = execute(&host).await.err().expect("the call fails");
 

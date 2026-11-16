@@ -7,15 +7,22 @@ use axum::{
     Json,
     body::Bytes,
     extract::State,
-    http::HeaderMap,
+    http::{HeaderMap, request::Parts},
     response::{IntoResponse, Response},
 };
+use litellm_cache_response::CacheOptions;
 use litellm_host_http::Sse;
-use litellm_inference_messages::{MessagesCall, messages_body, route::Messages};
+use litellm_inference_messages::{
+    MessagesCall, MessagesPlan, MessagesRoute, messages_body, route::Messages,
+};
 use litellm_llms_types::headers::{ProviderSpecificHeader, ProviderSpecificHeaders};
 use serde_json::{Map, Value};
 
-use crate::{Deployment, Error, Gateway, JsonObject, RequestId, request};
+use crate::{
+    Deployment, Error, Gateway, RequestId,
+    admit::{Planned, Refusal},
+    request,
+};
 
 /// Client headers Python forwards to Anthropic-speaking providers on every call.
 const ANTHROPIC_API_HEADERS: [&str; 2] = ["anthropic-version", "anthropic-beta"];
@@ -51,40 +58,48 @@ const DEPLOYMENT_DEFAULT_PARAMS: [&str; 23] = [
     "thread",
 ];
 
-pub async fn create(
-    State(gateway): State<Arc<Gateway>>,
-    identity: AuthenticatedRequest,
-    RequestId(request_id): RequestId,
-    headers: HeaderMap,
-    body: Result<JsonObject, Error>,
-) -> impl IntoResponse {
-    let result = match body {
-        Ok(JsonObject(body)) => handle(&gateway, &identity, &headers, body).await,
-        Err(error) => Err(error),
-    };
-    result.map_err(|error| (error.status(), Json(error.body(request_id.as_deref()))))
+pub(crate) struct Call {
+    plan: MessagesPlan,
+    cache: CacheOptions,
 }
 
-async fn handle(
+pub(crate) async fn plan(
     gateway: &Gateway,
     identity: &AuthenticatedRequest,
-    headers: &HeaderMap,
-    body: Map<String, Value>,
-) -> Result<Response, Error> {
+    parts: &Parts,
+    body: &Bytes,
+) -> Result<Call, Refusal> {
+    let body = request::object(body)?;
     let deployment = request::resolve_deployment(gateway, "/v1/messages", &body)?;
     request::authorize_model(identity, deployment, &body).await?;
-    let (body, cache_options) = crate::caching::prepare(identity, body)?;
+    let (body, cache) = crate::caching::prepare(identity, body)?;
+    let call = project(deployment, body, &parts.headers)?;
+    Ok(Call {
+        plan: MessagesRoute::plan(call)?,
+        cache,
+    })
+}
+
+pub(crate) async fn create(
+    State(gateway): State<Arc<Gateway>>,
+    RequestId(request_id): RequestId,
+    Planned(call): Planned<Call>,
+) -> impl IntoResponse {
+    serve(&gateway, call)
+        .await
+        .map_err(|error| (error.status(), Json(error.body(request_id.as_deref()))))
+}
+
+async fn serve(gateway: &Gateway, Call { plan, cache }: Call) -> Result<Response, Error> {
     let route = gateway.messages.clone();
     let route = match &gateway.cache {
-        Some(cache) => route.with_cache(litellm_cache_response::ScopedCache::new(
-            cache.clone(),
-            cache_options.scope.clone(),
+        Some(shared) => route.with_cache(litellm_cache_response::ScopedCache::new(
+            shared.clone(),
+            cache.scope.clone(),
         )),
         None => route,
     };
-
-    let call = project(deployment, body, headers)?;
-    let machine = route.machine(call, cache_options.policy);
+    let machine = route.machine(plan, cache.policy);
     let stream =
         Sse::<Messages, _, _>::new(Json, |error| Bytes::from(Error::from(error).sse_frame()));
     let headers = crate::caching::CacheHeaders::default();

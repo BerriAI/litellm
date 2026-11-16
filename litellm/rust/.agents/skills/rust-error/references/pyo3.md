@@ -15,12 +15,12 @@ A route host never builds a `PyErr` from a route error itself. It calls the mapp
 | Class | Meaning | Payload |
 |---|---|---|
 | `RustUpstreamError` | the provider call was issued and the provider answered with a failure | `args == (status, body)` and a `headers` attribute of `(name, value)` pairs, always set |
-| `RustBridgeDeclined` | the route stopped before calling the provider, so the host may run its own path | `args == (message,)` |
+| `RustBridgeDeclined` | there is no Rust way to serve the call and nothing was written, so the host may run its own path | `args == (code, detail)` |
 | a standard class from `pyo3::exceptions` | whichever Python class means the same thing, such as `ValueError` or `TypeError` for the caller's input, `FileNotFoundError` or `OSError` for a file, `KeyError` or `OverflowError` where Python raises them, and `RuntimeError` for anything else | the rendered chain, or a parity text where Python pins one |
 
 The two native classes come from `create_exception!` in `crates/python-bridge/src/errors.rs` and are exported with `#[pymodule_export]`, which is how the [pyo3 guide](https://github.com/PyO3/pyo3/blob/main/guide/src/exception.md) makes an exception importable. Their docstrings are the contract Python reads. `errors::upstream_error(py, status, body, headers)` is the one constructor of `RustUpstreamError`, so the payload cannot differ between routes
 
-Python decodes a `RustUpstreamError` in `litellm/rust_bridge/failures.py`, which validates `args` and `headers` with a `TypeAdapter` and rebuilds the provider's `httpx.Response`. `litellm/rust_bridge/runtime.py` catches `RustBridgeDeclined` and reads its reason. `_raise_upstream` in `runtime.py` still reads `args` a second time by hand for the `attempt` path, which is the one decode to fold into `failures.py`. A new fact goes into `args` or `headers`, and the decoder learns to read it in the same change
+Python decodes a `RustUpstreamError` in `litellm/rust_bridge/failures.py`, which validates `args` and `headers` with a `TypeAdapter` and rebuilds the provider's `httpx.Response`. `litellm/rust_bridge/runtime.py` catches `RustBridgeDeclined` and reads its code and detail into `RustDeclined`. `_raise_upstream` in `runtime.py` still reads `args` a second time by hand for the `attempt` path, which is the one decode to fold into `failures.py`. A new fact goes into `args` or `headers`, and the decoder learns to read it in the same change
 
 Two routes also flag a request fault with a boolean attribute, read by their Python route module: `ocr_request_format_error` in `host/routes/ocr.py` and `messages_request_error` in `host/routes/messages.py`. OCR additionally sets `status_code` and `message` for Python parity, and `native_settings_error`, which only the OCR host reads back to tell a settings failure from the caller's exception. Do not add another attribute, nothing on the Python side types them
 
@@ -30,7 +30,7 @@ The bridge builds with pyo3's `abi3-py310` feature. Under abi3, `#[pyclass(exten
 
 ## Mapping order
 
-A core decline is returned first, as `RustBridgeDeclined` with the decline's reason as its only arg, without calling the route's public mapping. Then a Python exception raised inside the call, such as a secret manager callback's, is returned as it is. Then the provider's answer passes through as `RustUpstreamError`. On `/v1/messages` a request the route rejected becomes a `ValueError` flagged with `messages_request_error`. Everything else is split by `is_request()` into `ValueError` or `RuntimeError`, with the message rendered by `litellm_error::Report`. A missing API key is a `RuntimeError` because `is_request()` answers false for it, and `missing_api_key_stays_a_runtime_error_while_other_auth_failures_are_value_errors` pins that
+A Python exception raised inside the call, such as a secret manager callback's, is returned as it is. Then the provider's answer passes through as `RustUpstreamError`. On `/v1/messages` a request the route rejected becomes a `ValueError` flagged with `messages_request_error`. Everything else is split by `is_request()` into `ValueError` or `RuntimeError`, with the message rendered by `litellm_error::Report`. A missing API key is a `RuntimeError` because `is_request()` answers false for it, and `missing_api_key_stays_a_runtime_error_while_other_auth_failures_are_value_errors` pins that
 
 OCR puts Python parity arms in front of that order, each matching a top-level variant of its own public enum
 
@@ -47,9 +47,9 @@ Use the standard class whose Python meaning matches. `PyFileNotFoundError` for a
 
 ## Declining
 
-`RustBridgeDeclined` means no provider call was made and the host may run its own path for the same call. The tokenizer, embeddings and token counter routes raise it from their own pre-checks, and `route_failure` raises it for a route error whose `declined()` answers, so a decline from deep inside a transformation reaches Python the same way. Never raise it for a failure after the request went out, the host would repeat a billed call. `a_core_decline_hands_the_call_back_to_python_before_the_public_mapping` and `route_failures_are_terminal` in `errors.rs` pin both sides
+`RustBridgeDeclined` means nothing was written and the host may run its own path for the same call. `errors::declined(&Decline)` is its one constructor, so `args` is always `(code, detail)`. The SDK's admission is `PythonBinding::decode_request` followed by the route's `plan`: `errors::unplanned` raises a decline to Python as it is and passes a rejection on as the route's own failure. The tokenizer, embeddings and token counter routes raise it from their own pre-checks. Nothing after `decode_request` can raise it, because a route's `execute` returns an `Error` with no decline in it. `a_decline_crosses_into_python_as_its_code_and_detail` and `an_unplanned_call_declines_to_python_or_fails_as_the_route_would` in `errors.rs` pin both sides
 
-Route hosts pass a terminal failure through the Python route module's `map_failure`, which runs `litellm.exception_type` and returns the public exception a Python caller expects. A decline must skip that step. Once wrapped it looks like a provider failure to the dispatcher and the host no longer falls back, so `route_failure` returns it before it calls `public`
+Route hosts pass a terminal failure through the Python route module's `map_failure`, which runs `litellm.exception_type` and returns the public exception a Python caller expects. A decline never reaches that step, since it is raised before the machine starts
 
 ## Rules
 

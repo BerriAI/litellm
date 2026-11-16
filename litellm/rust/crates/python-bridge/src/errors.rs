@@ -1,7 +1,9 @@
 use std::error::Error as StdError;
 
+use litellm_core_utils::decline::Decline;
 use litellm_error::{Report, Source};
-use litellm_inference::Error;
+use litellm_host_python::InvokeError;
+use litellm_inference::{Error, Unplanned};
 use pyo3::{
     exceptions::{PyRuntimeError, PyTypeError, PyValueError},
     prelude::*,
@@ -12,8 +14,22 @@ pyo3::create_exception!(
     _native,
     RustBridgeDeclined,
     pyo3::exceptions::PyException,
-    "The route declined before calling the provider, so the host may retry on its own path."
+    "There is no Rust way to serve the call and nothing was written, so the host runs its own path. `args` is `(code, detail)`."
 );
+
+/// The exception a [`Decline`] crosses into Python as.
+pub(crate) fn declined(decline: &Decline) -> PyErr {
+    RustBridgeDeclined::new_err((decline.code(), decline.detail().to_owned()))
+}
+
+/// A route's refusal to plan a call, for a `decode_request`: a decline is raised to Python as it
+/// is, and a rejection is the route's own failure.
+pub(crate) fn unplanned(unplanned: Unplanned) -> InvokeError<Error> {
+    match unplanned {
+        Unplanned::Declined(decline) => InvokeError::Python(declined(&decline)),
+        Unplanned::Rejected(error) => InvokeError::Native(error),
+    }
+}
 
 pyo3::create_exception!(
     _native,
@@ -159,18 +175,14 @@ pub(crate) enum RequestMarker {
     Messages,
 }
 
-/// Maps a route failure once. A core decline and a Python exception raised inside the call are
-/// returned as they are, everything else is mapped and handed to `public`, the route's public
-/// exception mapping.
+/// Maps a route failure once. A Python exception raised inside the call is returned as it is,
+/// everything else is mapped and handed to `public`, the route's public exception mapping.
 pub(crate) fn route_failure(
     py: Python<'_>,
     error: Error,
     marker: RequestMarker,
     public: impl FnOnce(PyErr) -> PyResult<PyErr>,
 ) -> PyResult<PyErr> {
-    if let Some(decline) = error.declined() {
-        return Ok(RustBridgeDeclined::new_err(decline.reason));
-    }
     if let Some(raised) = crate::secrets::python_error(py, &error) {
         return Ok(raised);
     }
@@ -311,8 +323,8 @@ mod tests {
         }),
         false
     )]
-    #[case::post_call_decline(
-        Error::post_call(Error::Declined(Decline::new("result rejected"))),
+    #[case::post_call_hook(
+        Error::post_call(Error::InvalidProvider("result rejected".into())),
         false
     )]
     fn route_failures_are_terminal(#[case] error: Error, #[case] is_request: bool) {
@@ -326,30 +338,39 @@ mod tests {
     }
 
     #[rstest::rstest]
-    #[case::unmarked(RequestMarker::Unmarked)]
-    #[case::messages(RequestMarker::Messages)]
-    fn a_core_decline_hands_the_call_back_to_python_before_the_public_mapping(
-        #[case] marker: RequestMarker,
-    ) {
+    fn a_decline_crosses_into_python_as_its_code_and_detail() {
+        const PARAM: Decline = Decline::new("llms.param", "unrecognized request parameter");
         Python::initialize();
         Python::attach(|py| {
-            let error = Error::from(litellm_llms::Error::Declined(Decline::new(
-                "unrecognized request parameter",
-            )));
-            let declined = route_failure(py, error, marker, |_| {
-                panic!("a decline must not reach the public mapping")
-            })
-            .unwrap();
-            assert!(declined.is_instance_of::<RustBridgeDeclined>(py));
+            let raised = declined(&PARAM.with_detail("request parameter `top_k`"));
+            assert!(raised.is_instance_of::<RustBridgeDeclined>(py));
             assert_eq!(
-                declined
+                raised
                     .value(py)
                     .getattr("args")
                     .unwrap()
-                    .extract::<(String,)>()
+                    .extract::<(String, String)>()
                     .unwrap(),
-                ("unrecognized request parameter".into(),)
+                ("llms.param".into(), "request parameter `top_k`".into())
             );
+        });
+    }
+
+    #[rstest::rstest]
+    fn an_unplanned_call_declines_to_python_or_fails_as_the_route_would() {
+        const PARAM: Decline = Decline::new("llms.param", "unrecognized request parameter");
+        Python::initialize();
+        Python::attach(|py| {
+            let InvokeError::Python(raised) = unplanned(Unplanned::Declined(PARAM)) else {
+                panic!("a decline is raised to Python as it is")
+            };
+            assert!(raised.is_instance_of::<RustBridgeDeclined>(py));
+            assert!(matches!(
+                unplanned(Unplanned::Rejected(Error::InvalidProvider(
+                    "unknown".into()
+                ))),
+                InvokeError::Native(Error::InvalidProvider(_))
+            ));
         });
     }
 

@@ -1,10 +1,12 @@
+use std::convert::Infallible;
+
 use axum::{
-    body::Bytes,
-    extract::{FromRequest, FromRequestParts, Multipart, OriginalUri, Request},
+    body::{Body, Bytes},
+    extract::{DefaultBodyLimit, FromRequest, FromRequestParts, Multipart, Request},
     http::request::Parts,
-    response::IntoResponse,
 };
 use serde_json::{Map, Value};
+use tower::{Layer, ServiceExt};
 
 use crate::{BodyError, Deployment, Error, Gateway};
 
@@ -95,7 +97,25 @@ impl<S: Send + Sync> FromRequest<S> for InferenceBody {
     }
 }
 
-fn object(body: &[u8]) -> Result<Map<String, Value>, BodyError> {
+/// The JSON or multipart body of a request admission already read into memory. Multipart goes
+/// through axum's extractor, which reads its size limit from a layer, so the request is rebuilt
+/// under one.
+pub(crate) async fn inference_body(parts: &Parts, body: Bytes) -> Result<InferenceBody, Error> {
+    let request = Request::from_parts(parts.clone(), Body::from(body));
+    let extract = tower::service_fn(|request: Request| async move {
+        Ok::<_, Infallible>(InferenceBody::from_request(request, &()).await)
+    });
+    match DefaultBodyLimit::max(MAX_BODY_BYTES)
+        .layer(extract)
+        .oneshot(request)
+        .await
+    {
+        Ok(body) => body,
+        Err(never) => match never {},
+    }
+}
+
+pub(crate) fn object(body: &[u8]) -> Result<Map<String, Value>, BodyError> {
     match serde_json::from_slice(body) {
         Ok(Value::Object(body)) => Ok(body),
         Ok(_) => Err(BodyError::NotAnObject),
@@ -177,10 +197,6 @@ fn multipart_error(error: axum::extract::multipart::MultipartError) -> Error {
         return Error::BodyTooLarge;
     }
     BodyError::MultipartField(error).into()
-}
-
-pub(crate) async fn unsupported(OriginalUri(uri): OriginalUri) -> impl IntoResponse {
-    Error::Unsupported(uri.path().to_owned())
 }
 
 #[cfg(test)]

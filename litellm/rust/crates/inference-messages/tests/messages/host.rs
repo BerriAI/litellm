@@ -1,4 +1,3 @@
-use litellm_core_utils::decline::Decline;
 use std::sync::Mutex;
 
 use litellm_host::interceptors::{
@@ -78,7 +77,7 @@ impl litellm_host::interceptors::Interceptors<<Messages as litellm_host::protoco
     async fn result_ready(&self, facts: ExecutionFacts) -> Result<(), Error> {
         self.facts.lock().unwrap().push(facts);
         if self.reject_result {
-            return Err(Error::Declined(Decline::new("result rejected")));
+            return Err(Error::InvalidProvider("result rejected".into()));
         }
         Ok(())
     }
@@ -99,7 +98,7 @@ impl litellm_host::interceptors::Interceptors<<Messages as litellm_host::protoco
         raw: litellm_host::interceptors::RawResponse,
     ) -> Result<(), <Messages as litellm_host::protocol::Protocol>::Error> {
         if self.reject_response {
-            return Err(Error::Declined(Decline::new("response rejected")));
+            return Err(Error::InvalidProvider("response rejected".into()));
         }
         litellm_host::lifecycle::CallObserver::observe(
             self,
@@ -160,26 +159,27 @@ async fn rejected_results_are_not_delivered_or_cached(
         ..RecordingHost::passthrough(request())
     };
     if cached {
-        let output = route.execute(request(), &(), None).await.unwrap();
+        let output = route.execute(planned(request()), &(), None).await.unwrap();
         if let MessagesCallResponse::Stream { chunks, .. } = output {
             chunks.try_collect::<Vec<_>>().await.unwrap();
         }
     }
     let result = if hosted {
         litellm_host_native::in_process::run_hosted(
-            route.clone().machine(host.request().unwrap(), None),
+            route
+                .clone()
+                .machine(planned(host.request().unwrap()), None),
             host.runtime(),
         )
         .await
         .map(|_| ())
     } else {
         route
-            .execute(host.request().unwrap(), &host, None)
+            .execute(planned(host.request().unwrap()), &host, None)
             .await
             .map(|_| ())
     };
     let error = result.unwrap_err();
-    assert_eq!(error.declined().is_some(), cached);
     assert_eq!(error.dispatched(), !cached);
     assert!(
         litellm_error::Report::new(&error)
@@ -195,7 +195,7 @@ async fn rejected_results_are_not_delivered_or_cached(
             cached
         );
     }
-    let output = route.execute(request(), &(), None).await.unwrap();
+    let output = route.execute(planned(request()), &(), None).await.unwrap();
     if let MessagesCallResponse::Stream { chunks, .. } = output {
         chunks.try_collect::<Vec<_>>().await.unwrap();
     }
@@ -206,7 +206,7 @@ async fn rejected_results_are_not_delivered_or_cached(
 #[case::native(false)]
 #[case::hosted(true)]
 #[tokio::test]
-async fn response_hook_declines_are_terminal(call: MessagesCall, #[case] hosted: bool) {
+async fn response_hook_failures_are_terminal(call: MessagesCall, #[case] hosted: bool) {
     let upstream = upstream([message_response()]).await;
     let host = RecordingHost {
         reject_response: true,
@@ -215,19 +215,18 @@ async fn response_hook_declines_are_terminal(call: MessagesCall, #[case] hosted:
     let route = messages_route(no_secrets());
     let result = if hosted {
         litellm_host_native::in_process::run_hosted(
-            route.machine(host.request().unwrap(), None),
+            route.machine(planned(host.request().unwrap()), None),
             host.runtime(),
         )
         .await
         .map(|_| ())
     } else {
         route
-            .execute(host.request().unwrap(), &host, None)
+            .execute(planned(host.request().unwrap()), &host, None)
             .await
             .map(|_| ())
     };
     let error = result.unwrap_err();
-    assert!(error.declined().is_none());
     assert!(error.dispatched());
     assert!(
         litellm_error::Report::new(&error)
@@ -321,7 +320,7 @@ async fn response_mode_follows_the_intercepted_request(
         .logger()
         .instrument(async {
             let output = messages_route(no_secrets())
-                .execute(host.request()?, &host, None)
+                .execute(planned(host.request()?), &host, None)
                 .await?;
             match output {
                 MessagesCallResponse::Stream { chunks, .. } => {
@@ -637,7 +636,7 @@ async fn an_intercepted_call_is_answered_by_the_host_before_the_mock_and_the_pro
     let host = RecordingHost::passthrough(request);
 
     let output = route
-        .execute(host.request().unwrap(), &host, None)
+        .execute(planned(host.request().unwrap()), &host, None)
         .await
         .unwrap();
 
@@ -661,7 +660,7 @@ async fn a_call_no_interceptor_owns_never_asks_the_host(call: MessagesCall) {
     let host = RecordingHost::passthrough(authenticated(call, upstream.uri()));
 
     route
-        .execute(host.request().unwrap(), &host, None)
+        .execute(planned(host.request().unwrap()), &host, None)
         .await
         .unwrap();
 
@@ -694,7 +693,7 @@ async fn an_interception_no_interceptor_takes_reaches_the_provider(call: Message
     let host = RecordingHost::passthrough(request);
 
     route
-        .execute(host.request().unwrap(), &host, None)
+        .execute(planned(host.request().unwrap()), &host, None)
         .await
         .unwrap();
 

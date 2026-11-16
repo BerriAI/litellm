@@ -1597,7 +1597,9 @@ class RustCore(
 
         extra: Final = unsupported_arguments(config)
         if extra:
-            raise RustBridgeDeclined(f"router arguments not served by the Rust core: {sorted(extra)}")
+            raise RustBridgeDeclined(
+                "router.arguments", f"router arguments not served by the Rust core: {sorted(extra)}"
+            )
         RustEndpoints.prepare_host(config, host)
         return cls(config, host, Resolved.of(config, host.dynamic()))
 

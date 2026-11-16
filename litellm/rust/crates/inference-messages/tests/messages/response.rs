@@ -30,10 +30,10 @@ async fn calls_defer_execution_until_polled(
     let upstream = upstream([message_response()]).await;
     let secrets = Arc::new(RecordingSecrets::new([("ANTHROPIC_API_KEY", "test-key")]));
     let route = messages_route(secrets.clone());
-    let host = RecordingCall::<Messages>::new(MessagesCall {
+    let host = RecordingCall::<Messages>::new(planned(MessagesCall {
         api_base: Some(upstream.uri()),
         ..call
-    });
+    }));
     let request = host.request().unwrap();
     let observer: Option<litellm_host::observation::ObservationSender> =
         with_observer.then(|| host.events.0.sender.clone());
@@ -456,11 +456,11 @@ async fn the_facade_sends_through_the_injected_http_pool_configuration(call: Mes
         no_secrets(),
     )
     .execute(
-        MessagesCall {
+        planned(MessagesCall {
             api_key: Some("sk-ant".into()),
             api_base: Some(base),
             ..call
-        },
+        }),
         &(),
         None,
     )
@@ -600,7 +600,7 @@ async fn route_uses_injected_dependencies_and_optional_cache(
             ..super::call()
         };
         let MessagesCallResponse::Complete(response) =
-            route.execute(request, &(), None).await.unwrap()
+            route.execute(planned(request), &(), None).await.unwrap()
         else {
             panic!("expected a completed message");
         };
@@ -674,8 +674,10 @@ async fn cache_overrides_preserve_the_routes_isolated_scope(call: MessagesCall) 
             ttl: Some(Duration::from_secs(30)),
             ..CachePolicy::default()
         };
-        let MessagesCallResponse::Complete(response) =
-            route.execute(request, &(), override_options).await.unwrap()
+        let MessagesCallResponse::Complete(response) = route
+            .execute(planned(request), &(), override_options)
+            .await
+            .unwrap()
         else {
             panic!("expected a completed message");
         };

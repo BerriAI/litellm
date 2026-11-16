@@ -23,8 +23,9 @@ pub enum Error {
     Route(#[from] InferenceError),
     #[error(transparent)]
     Ocr(#[from] OcrError),
-    #[error("{0} is not implemented by the Rust gateway")]
-    Unsupported(String),
+    /// A decline with nothing behind the gateway to answer it instead.
+    #[error(transparent)]
+    NotImplemented(litellm_core_utils::decline::Decline),
     #[error("request body exceeds the size limit")]
     BodyTooLarge,
     #[error("unexpected HTTP host operation")]
@@ -35,6 +36,8 @@ pub enum Error {
 pub enum BodyError {
     #[error("could not read the body")]
     Read(#[source] axum::extract::rejection::BytesRejection),
+    #[error("could not read the body")]
+    Unreadable(#[source] axum::Error),
     #[error("invalid JSON")]
     Json(#[source] serde_json::Error),
     #[error("expected a JSON object")]
@@ -73,7 +76,7 @@ impl Error {
         match self {
             Self::Auth(error) => error.status(),
             Self::InvalidPath(rejection) => rejection.status(),
-            Self::Unsupported(_) => StatusCode::NOT_IMPLEMENTED,
+            Self::NotImplemented(_) => StatusCode::NOT_IMPLEMENTED,
             Self::BodyTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
             Self::InvalidBody(_) | Self::UnknownModel { .. } => StatusCode::BAD_REQUEST,
             Self::Internal => StatusCode::INTERNAL_SERVER_ERROR,
@@ -141,7 +144,7 @@ impl Error {
             | Self::UnknownModel { .. }
             | Self::Route(_)
             | Self::Ocr(_)
-            | Self::Unsupported(_)
+            | Self::NotImplemented(_)
             | Self::BodyTooLarge
             | Self::Internal => litellm_error::Report::new(self).to_string(),
         }
@@ -149,9 +152,6 @@ impl Error {
 }
 
 fn route_status(error: &InferenceError) -> StatusCode {
-    if error.declined().is_some() {
-        return StatusCode::NOT_IMPLEMENTED;
-    }
     if let Some((status, _)) = error.upstream_response() {
         return StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY);
     }
@@ -324,9 +324,10 @@ mod tests {
     #[rstest]
     #[case::upstream_status(upstream(429, ""), StatusCode::TOO_MANY_REQUESTS)]
     #[case::declined(
-        Error::Route(InferenceError::Declined(litellm_core_utils::decline::Decline::new(
+        Error::NotImplemented(litellm_core_utils::decline::Decline::new(
+            "llms.param",
             "unrecognized request parameter"
-        ))),
+        )),
         StatusCode::NOT_IMPLEMENTED
     )]
     #[case::rejected_request(
@@ -354,7 +355,6 @@ mod tests {
     #[case::missing_model(BodyError::MissingModel.into(), StatusCode::BAD_REQUEST)]
     #[case::unknown_model(unknown_model(), StatusCode::BAD_REQUEST)]
     #[case::oversized_body(Error::BodyTooLarge, StatusCode::PAYLOAD_TOO_LARGE)]
-    #[case::unserved_path(Error::Unsupported("/v1/completions".into()), StatusCode::NOT_IMPLEMENTED)]
     #[case::host_protocol(
         litellm_host_http::Error::<InferenceError>::Protocol.into(),
         StatusCode::INTERNAL_SERVER_ERROR

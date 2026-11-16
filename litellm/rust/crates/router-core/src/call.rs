@@ -13,7 +13,7 @@ use tracing::warn;
 use crate::{
     Core, RouterStateSnapshot,
     config::Op,
-    error::{AttemptError, ConfigError, Error, FailureKind, Unsupported},
+    error::{AttemptError, Error, FailureKind},
     fallback::{FallbackKeys, FallbackTarget, Fallbacks},
     health::{GroupShape, should_retry_status, team_model_has_alternatives},
     host::{
@@ -1259,13 +1259,6 @@ impl Core {
                 .duration_since(pick_started)
                 .unwrap_or_default(),
         });
-        if !self.host.supports(op, deployment.provider()) {
-            return Err(Error::Config(ConfigError::Unsupported(Unsupported::Op {
-                op: op.clone(),
-                provider: deployment.provider().to_owned(),
-            }))
-            .into());
-        }
         // A name no deployment serves is routed to the first default fallback
         // (`_common_checks_available_deployment`), still stamped as the name.
         let defaulted = candidates.model_group != target.group

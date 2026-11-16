@@ -1,30 +1,36 @@
 use std::sync::Arc;
 
 use axum::{Json, body::Bytes, extract::State, response::Response};
+use litellm_cache_response::CacheOptions;
 use litellm_gateway_auth::AuthenticatedRequest;
 use litellm_host_http::Sse;
-use litellm_inference_responses::{route::Responses, types::ResponsesCall};
+use litellm_inference_responses::{
+    ResponsesRoute,
+    route::Responses,
+    types::{ResponsesCall, ResponsesPlan},
+};
 
-use crate::{Error, Gateway, JsonObject, request};
+use crate::{
+    Error, Gateway,
+    admit::{Planned, Refusal},
+    request,
+};
 
-pub(crate) async fn create(
-    State(gateway): State<Arc<Gateway>>,
-    identity: AuthenticatedRequest,
-    JsonObject(body): JsonObject,
-) -> Result<Response, Error> {
-    let deployment = request::resolve_deployment(&gateway, "/responses", &body)?;
-    request::authorize_model(&identity, deployment, &body).await?;
-    let (body, cache_options) = crate::caching::prepare(&identity, body)?;
-    let route = gateway.responses.clone();
-    let route = match &gateway.cache {
-        Some(cache) => route.with_cache(litellm_cache_response::ScopedCache::new(
-            cache.clone(),
-            cache_options.scope.clone(),
-        )),
-        None => route,
-    };
+pub(crate) struct Call {
+    plan: ResponsesPlan,
+    cache: CacheOptions,
+}
 
-    let call = ResponsesCall {
+pub(crate) async fn plan(
+    gateway: &Gateway,
+    identity: &AuthenticatedRequest,
+    body: &Bytes,
+) -> Result<Call, Refusal> {
+    let body = request::object(body)?;
+    let deployment = request::resolve_deployment(gateway, "/responses", &body)?;
+    request::authorize_model(identity, deployment, &body).await?;
+    let (body, cache) = crate::caching::prepare(identity, body)?;
+    let plan = ResponsesRoute::plan(ResponsesCall {
         model: deployment.model.clone(),
         input: body.get("input").cloned().unwrap_or_default(),
         optional_params: body
@@ -36,8 +42,23 @@ pub(crate) async fn create(
         custom_llm_provider: deployment.custom_llm_provider.clone(),
         extra_headers: None,
         timeout: deployment.timeout,
+    })?;
+    Ok(Call { plan, cache })
+}
+
+pub(crate) async fn create(
+    State(gateway): State<Arc<Gateway>>,
+    Planned(Call { plan, cache }): Planned<Call>,
+) -> Result<Response, Error> {
+    let route = gateway.responses.clone();
+    let route = match &gateway.cache {
+        Some(shared) => route.with_cache(litellm_cache_response::ScopedCache::new(
+            shared.clone(),
+            cache.scope.clone(),
+        )),
+        None => route,
     };
-    let machine = route.machine(call, cache_options.policy);
+    let machine = route.machine(plan, cache.policy);
     let stream = Sse::<Responses, _, _>::new(Json, |error| {
         Bytes::from(Error::from(error).responses_sse_frame())
     });

@@ -1,16 +1,10 @@
 mod support;
 
-use std::sync::Arc;
-
 use axum::{
     body::{Body, Bytes},
     http::Request,
 };
-use litellm_http::{
-    ClientVariant, HttpClientPool, HttpSettings, Resolution, media::PublicDnsResolver,
-};
-use litellm_inference::resources::CoreResources;
-use litellm_inference_chat::{ChatCompletionsRoute, types::ChatCompletionsRequest};
+use litellm_inference_chat::{ChatCompletionsRoute, Unplanned, types::ChatCompletionsRequest};
 use rstest::rstest;
 use serde_json::{Value, json};
 use tower::ServiceExt;
@@ -178,38 +172,25 @@ async fn chat_errors_come_from_core(
 ) {
     let upstream = MockServer::start().await;
     let base = upstream.uri();
-    let resources = CoreResources::new(Arc::new(HttpClientPool::new(Arc::new(PublicDnsResolver))));
-    let http = Resolution::from(&HttpSettings::default()).config;
-    let provider = resources
-        .pool
-        .client(&http, ClientVariant::Provider)
-        .unwrap();
     let fields = fields.as_object().unwrap();
-    let error = ChatCompletionsRoute::new(
-        provider,
-        resources.auth.clone(),
-        Arc::new(support::NoSecrets),
-    )
-    .execute(
-        ChatCompletionsRequest {
-            model: "anthropic/test-model",
-            messages: fields.get("messages").cloned().unwrap_or_default(),
-            optional_params: fields
-                .iter()
-                .filter(|(name, _)| name.as_str() != "messages")
-                .map(|(name, value)| (name.clone(), value.clone()))
-                .collect(),
-            api_key: Some("test-key"),
-            api_base: Some(&base),
-            custom_llm_provider: None,
-            extra_headers: None,
-            timeout: None,
-        },
-        &(),
-        None,
-    )
-    .await
-    .unwrap_err();
+    let message = match ChatCompletionsRoute::plan(ChatCompletionsRequest {
+        model: "anthropic/test-model",
+        messages: fields.get("messages").cloned().unwrap_or_default(),
+        optional_params: fields
+            .iter()
+            .filter(|(name, _)| name.as_str() != "messages")
+            .map(|(name, value)| (name.clone(), value.clone()))
+            .collect(),
+        api_key: Some("test-key"),
+        api_base: Some(&base),
+        custom_llm_provider: None,
+        extra_headers: None,
+        timeout: None,
+    }) {
+        Ok(_) => panic!("the route plans a call it should not"),
+        Err(Unplanned::Declined(decline)) => decline.to_string(),
+        Err(Unplanned::Rejected(error)) => litellm_error::Report::new(&error).to_string(),
+    };
     let body = fields
         .iter()
         .map(|(name, value)| (name.clone(), value.clone()))
@@ -223,10 +204,7 @@ async fn chat_errors_come_from_core(
     .await;
     assert_eq!(response.status(), status);
     let body = support::json(response).await;
-    assert_eq!(
-        body["error"]["message"],
-        litellm_error::Report::new(&error).to_string()
-    );
+    assert_eq!(body["error"]["message"], message);
     assert_eq!(body["error"]["code"], status);
     assert!(upstream.received_requests().await.unwrap().is_empty());
 }

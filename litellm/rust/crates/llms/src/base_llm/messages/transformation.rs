@@ -1,3 +1,4 @@
+use litellm_core_utils::decline::Decline;
 use litellm_host::interceptors::RetriedRequest;
 use litellm_llms_types::formats::messages::{
     MessagesOptionalParams, MessagesRequest, MessagesResponse,
@@ -24,6 +25,12 @@ pub enum FederatedEnvironment {
 }
 
 pub trait BaseMessagesConfig: Sync {
+    /// The decline for a request this config cannot shape as Python does. A route asks while it
+    /// plans the call, since nothing after that may decline.
+    fn unsupported_reason(&self, _request: &MessagesRequest) -> Option<Decline> {
+        None
+    }
+
     fn shape_request(
         &self,
         request: MessagesRequest,

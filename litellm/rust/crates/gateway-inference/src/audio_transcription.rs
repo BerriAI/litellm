@@ -1,32 +1,37 @@
 use litellm_gateway_auth::AuthenticatedRequest;
-use std::{path::Path, sync::Arc};
+use std::{path::Path, sync::Arc, time::Duration};
 
-use axum::{Json, extract::State, response::IntoResponse};
+use axum::{Json, body::Bytes, extract::State, http::request::Parts, response::IntoResponse};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use litellm_inference_transcription::types::AudioTranscriptionRequest;
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 
 use crate::{
     Error, Gateway,
+    admit::{Planned, Refusal},
     request::{self, InferenceBody},
 };
 
-pub(crate) async fn create(
-    State(gateway): State<Arc<Gateway>>,
-    identity: AuthenticatedRequest,
-    body: InferenceBody,
-) -> Result<impl IntoResponse, Error> {
-    handle(&gateway, &identity, body).await.map(Json)
+pub(crate) struct Call {
+    model: String,
+    audio: Value,
+    api_key: Option<String>,
+    api_base: Option<String>,
+    custom_llm_provider: Option<String>,
+    optional_params: Map<String, Value>,
+    timeout: Option<Duration>,
 }
 
-async fn handle(
+pub(crate) async fn plan(
     gateway: &Gateway,
     identity: &AuthenticatedRequest,
-    InferenceBody {
+    parts: &Parts,
+    body: Bytes,
+) -> Result<Call, Refusal> {
+    let InferenceBody {
         fields: body,
         upload,
-    }: InferenceBody,
-) -> Result<Value, Error> {
+    } = request::inference_body(parts, body).await?;
     let deployment = request::resolve_deployment(gateway, "/audio/transcriptions", &body)?;
     request::authorize_model(identity, deployment, &body).await?;
     let audio = match upload {
@@ -41,20 +46,37 @@ async fn handle(
         }
         None => body.get("audio").cloned().unwrap_or_default(),
     };
-    Ok(gateway
-        .audio_transcription
-        .execute(AudioTranscriptionRequest {
-            model: &deployment.model,
-            audio,
-            api_key: deployment.api_key.as_deref(),
-            api_base: deployment.api_base.as_deref(),
-            custom_llm_provider: deployment.custom_llm_provider.as_deref(),
-            extra_headers: None,
-            optional_params: body
-                .into_iter()
-                .filter(|(name, _)| !matches!(name.as_str(), "model" | "audio"))
-                .collect(),
-            timeout: deployment.timeout,
-        })
-        .await?)
+    Ok(Call {
+        model: deployment.model.clone(),
+        audio,
+        api_key: deployment.api_key.clone(),
+        api_base: deployment.api_base.clone(),
+        custom_llm_provider: deployment.custom_llm_provider.clone(),
+        optional_params: body
+            .into_iter()
+            .filter(|(name, _)| !matches!(name.as_str(), "model" | "audio"))
+            .collect(),
+        timeout: deployment.timeout,
+    })
+}
+
+pub(crate) async fn create(
+    State(gateway): State<Arc<Gateway>>,
+    Planned(call): Planned<Call>,
+) -> Result<impl IntoResponse, Error> {
+    Ok(Json(
+        gateway
+            .audio_transcription
+            .execute(AudioTranscriptionRequest {
+                model: &call.model,
+                audio: call.audio,
+                api_key: call.api_key.as_deref(),
+                api_base: call.api_base.as_deref(),
+                custom_llm_provider: call.custom_llm_provider.as_deref(),
+                extra_headers: None,
+                optional_params: call.optional_params,
+                timeout: call.timeout,
+            })
+            .await?,
+    ))
 }

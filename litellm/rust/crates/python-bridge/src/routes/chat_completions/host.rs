@@ -3,12 +3,21 @@ use std::convert::Infallible;
 
 use crate::routes::inference::InferenceHost;
 use litellm_host_python::{InvokeError, PythonBinding, PythonHostCalls, PythonOwned};
-use litellm_inference_chat::{Error, route::ChatCompletions, types::ChatCompletionsCall};
+use litellm_inference_chat::{
+    ChatCompletionsRoute, Error,
+    route::ChatCompletions,
+    types::{ChatCompletionsCall, ChatCompletionsPlan},
+};
 use pyo3::{
     gc::{PyTraverseError, PyVisit},
     prelude::*,
     types::PyDict,
 };
+
+const STREAMING: Decline = Decline::new(
+    "bridge.streaming",
+    "a streamed chat completion through the Python bridge",
+);
 
 pub(super) struct ChatCompletionsPythonHost(pub InferenceHost);
 
@@ -38,18 +47,16 @@ impl PythonBinding for ChatCompletionsPythonHost {
         &mut self,
         py: Python<'_>,
         arguments: &Bound<'_, PyDict>,
-    ) -> Result<ChatCompletionsCall, InvokeError<Error>> {
+    ) -> Result<ChatCompletionsPlan, InvokeError<Error>> {
         let call = project(&mut self.0, py, arguments).map_err(InvokeError::Python)?;
         if call
             .optional_params
             .get("stream")
             .is_some_and(|value| value == &serde_json::Value::Bool(true))
         {
-            return Err(InvokeError::Native(Error::Declined(Decline::new(
-                "native Python chat_completions streaming",
-            ))));
+            return Err(InvokeError::Python(crate::errors::declined(&STREAMING)));
         }
-        Ok(call)
+        ChatCompletionsRoute::plan(call).map_err(crate::errors::unplanned)
     }
 
     fn encode_response(

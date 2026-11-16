@@ -122,9 +122,9 @@ def test_missing_native_binding_raises_without_python_fallback() -> None:
 
 
 def test_admission_decline_raises_for_required_route() -> None:
-    NATIVE_TRANSCRIPTION.override(SyncBridge(RustBridgeDeclined("unsupported format")))
+    NATIVE_TRANSCRIPTION.override(SyncBridge(RustBridgeDeclined("llms.param", "unsupported format")))
 
-    with pytest.raises(RuntimeError, match="declined the request: unsupported format"):
+    with pytest.raises(RuntimeError, match=r"declined the request \(llms\.param\): unsupported format"):
         dispatch_sync()
 
 

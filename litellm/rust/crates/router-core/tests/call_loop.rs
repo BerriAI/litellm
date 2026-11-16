@@ -4,12 +4,13 @@
 use std::{collections::VecDeque, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
+use litellm_core_utils::decline::Decline;
 use litellm_router_core::{
-    Attempt, AttemptError, CallbackFiltered, Deployment, Error, FailureKind, FailureReport, Host,
-    InMemoryRouterCache, Op, Output, Payload, Router, RouterCache, RouterConfig,
-    RouterDynamicConfig, RouterEvent, RouterRequest, RoutingContext, SeededRandomness, SelectStage,
-    SuccessReport, UsageWindow, call::StreamOrigin, fallback::Fallbacks, health::current_minute,
-    host::UncountedRetries, select::PassThrough,
+    Attempt, AttemptError, CallbackFiltered, ConfigError, Deployment, Error, FailureKind,
+    FailureReport, Host, InMemoryRouterCache, Op, Output, Payload, Router, RouterCache,
+    RouterConfig, RouterDynamicConfig, RouterEvent, RouterRequest, RoutingContext,
+    SeededRandomness, SelectStage, Selects, SuccessReport, UsageWindow, call::StreamOrigin,
+    fallback::Fallbacks, health::current_minute, host::UncountedRetries, select::PassThrough,
 };
 use parking_lot::Mutex;
 use rstest::{fixture, rstest};
@@ -36,7 +37,13 @@ struct ScriptedHost {
     /// The callback filters pin to this deployment until an attempt of the request failed on it,
     /// as `encrypted_content_affinity` does.
     pinned: Option<&'static str>,
+    /// Decline to select, and to invoke anything on this provider, as a host with no way to run
+    /// them does.
+    declines_select_and_provider: Option<&'static str>,
 }
+
+const SELECT: Decline = Decline::new("router.select", "a selection this host does not run");
+const INVOKE: Decline = Decline::new("router.invoke", "an operation this host does not run");
 
 impl ScriptedHost {
     fn failing(group: &str, failures: Vec<AttemptError>) -> Self {
@@ -157,6 +164,73 @@ impl Host for ScriptedHost {
     fn cache(&self) -> Arc<dyn RouterCache> {
         Arc::new(self.cache.clone())
     }
+
+    fn plan_invoke(&self, op: &Op, provider: &str) -> Result<(), Decline> {
+        match self.declines_select_and_provider {
+            Some(declined) if declined == provider => {
+                Err(INVOKE.with_detail(format!("{op} on `{provider}`")))
+            }
+            _ => Ok(()),
+        }
+    }
+
+    fn plan_select(&self, selects: Selects<'_>) -> Result<(), Decline> {
+        match (self.declines_select_and_provider, selects) {
+            (None, _) => Ok(()),
+            (Some(_), Selects::Strategy(strategy)) => {
+                Err(SELECT.with_detail(format!("routing strategy `{strategy}`")))
+            }
+            (Some(_), Selects::Plugin(plugin)) => {
+                Err(SELECT.with_detail(format!("routing plugin `{plugin}`")))
+            }
+        }
+    }
+}
+
+#[rstest]
+fn a_router_reports_every_host_call_its_host_declined_and_not_only_the_first() {
+    let host = Arc::new(ScriptedHost {
+        declines_select_and_provider: Some("anthropic"),
+        ..ScriptedHost::default()
+    });
+    let config: RouterConfig = serde_json::from_value(json!({
+        "model_list": [
+            {"model_name": "primary", "litellm_params": {"model": "openai/a"}, "model_info": {"id": "a1"}},
+            {"model_name": "backup", "litellm_params": {"model": "anthropic/c"}, "model_info": {"id": "b1"}},
+            {"model_name": "backup", "litellm_params": {"model": "anthropic/d"}, "model_info": {"id": "b2"}},
+        ],
+        "routing_strategy": "least-busy",
+        "served_ops": ["acompletion", "aembedding"],
+    }))
+    .unwrap();
+    let dynamic: RouterDynamicConfig = serde_json::from_value(json!({})).unwrap();
+
+    let Err(ConfigError::Declined(declines)) = Router::new(config, dynamic, host) else {
+        panic!("a host that declines part of the config fails the build")
+    };
+
+    assert_eq!(
+        declines
+            .iter()
+            .map(|decline| (decline.code(), decline.detail()))
+            .collect::<Vec<_>>(),
+        [
+            ("router.select", "routing strategy `least-busy`"),
+            ("router.invoke", "acompletion on `anthropic`"),
+            ("router.invoke", "aembedding on `anthropic`"),
+        ]
+    );
+}
+
+#[rstest]
+fn a_native_strategy_never_asks_the_host_to_select() {
+    let host = Arc::new(ScriptedHost {
+        declines_select_and_provider: Some("bedrock"),
+        ..ScriptedHost::default()
+    });
+    let dynamic: RouterDynamicConfig = serde_json::from_value(json!({})).unwrap();
+
+    assert!(Router::new(config(), dynamic, host).is_ok());
 }
 
 #[fixture]

@@ -80,7 +80,11 @@ pub(super) async fn request(
     host: &LiveCall,
 ) -> MessagesCallResponse {
     route
-        .execute(call, host, None)
+        .execute(
+            MessagesRoute::plan(call).expect("the call plans"),
+            host,
+            None,
+        )
         .boxed()
         .await
         .expect("live request failed")

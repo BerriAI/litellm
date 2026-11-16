@@ -75,7 +75,7 @@ async fn the_same_route_entrypoint_reports_facts_with_or_without_caching(
         let response = traces
             .logger()
             .instrument(route.execute(
-                ChatCompletionsRequest {
+                support::planned(ChatCompletionsRequest {
                     model: "anthropic/cache-test-model",
                     messages: json!([{"role":"user","content":"hello"}]),
                     optional_params: [("max_tokens".into(), json!(16))].into_iter().collect(),
@@ -84,7 +84,7 @@ async fn the_same_route_entrypoint_reports_facts_with_or_without_caching(
                     custom_llm_provider: None,
                     extra_headers: None,
                     timeout: None,
-                },
+                }),
                 &(),
                 Some(observer.clone()),
             ))
@@ -246,7 +246,7 @@ async fn chat_cache_identity_follows_resolved_configuration_and_request_callback
         )
         .with_cache(cache)
         .execute(
-            ChatCompletionsRequest {
+            support::planned(ChatCompletionsRequest {
                 model: "anthropic/cache-test-model",
                 messages: json!([{"role":"user","content":"hello"}]),
                 optional_params: [("max_tokens".into(), json!(32))].into_iter().collect(),
@@ -255,7 +255,7 @@ async fn chat_cache_identity_follows_resolved_configuration_and_request_callback
                 custom_llm_provider: None,
                 extra_headers: None,
                 timeout: None,
-            },
+            }),
             &hooks,
             None,
         )
@@ -315,12 +315,12 @@ async fn signed_requests_bypass_response_caching(cache: Arc<dyn ResponseCacheSer
         support::chat_completions_route().with_cache(ScopedCache::new(cache, CacheScope::Shared));
     let hooks = ChangingHooks::default();
     for _ in 0..2 {
-        let response = route.execute(ChatCompletionsRequest {
+        let response = route.execute(support::planned(ChatCompletionsRequest {
             model:"bedrock/anthropic.cache-test-model",
             messages:json!([{"role":"user","content":"hello"}]),
             optional_params:json!({"aws_access_key_id":"test-access","aws_secret_access_key":"test-secret","aws_region_name":"eu-west-1"}).as_object().unwrap().clone(),
             api_key:None,api_base:Some(&upstream.uri()),custom_llm_provider:None,extra_headers:None,timeout:None,
-        }, &hooks, None).await.unwrap();
+        }), &hooks, None).await.unwrap();
         assert_eq!(
             serde_json::to_value(response).unwrap()["usage"]["total_tokens"],
             5

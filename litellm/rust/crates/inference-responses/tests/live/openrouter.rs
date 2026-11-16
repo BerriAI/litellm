@@ -43,7 +43,7 @@ fn call(stream: bool) -> ResponsesCall {
 async fn a_complete_response_carries_output_and_usage(secrets: Option<Arc<RecordingSecrets>>) {
     let Some(secrets) = secrets else { return };
     let output = responses_route(secrets)
-        .execute(call(false), &(), None)
+        .execute(crate::support::planned(call(false)), &(), None)
         .await
         .unwrap();
     let ResponsesOutput::Complete(response) = output else {
@@ -70,7 +70,7 @@ async fn a_complete_response_carries_output_and_usage(secrets: Option<Arc<Record
 async fn a_stream_ends_with_response_completed(secrets: Option<Arc<RecordingSecrets>>) {
     let Some(secrets) = secrets else { return };
     let output = responses_route(secrets)
-        .execute(call(true), &(), None)
+        .execute(crate::support::planned(call(true)), &(), None)
         .await
         .unwrap();
     let ResponsesOutput::Stream { chunks, .. } = output else {

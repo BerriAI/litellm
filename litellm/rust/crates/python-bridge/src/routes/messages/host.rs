@@ -12,8 +12,8 @@ use litellm_host_python::{
     InvokeError, PythonBinding, effective_py_args, from_py, json_from_py, to_py,
 };
 use litellm_inference_messages::{
-    DecodingError, Error, MessagesCall, MessagesSettings, MessagesShaping, UnencodableHeader,
-    litellm_params, messages_body,
+    DecodingError, Error, MessagesCall, MessagesPlan, MessagesSettings, MessagesShaping,
+    UnencodableHeader, litellm_params, messages_body,
     route::{Messages, MessagesStreamHead},
 };
 use litellm_llms::{
@@ -319,7 +319,7 @@ fn azure_module_settings<'py>(
 pub(super) struct MessagesHosted;
 
 impl litellm_host::protocol::Protocol for MessagesHosted {
-    type Request = (MessagesCall, Selection, Selected);
+    type Request = (MessagesPlan, Selection, Selected);
     type Response = <Messages as litellm_host::protocol::Protocol>::Response;
     type Error = Error;
     type HostCall = MessagesHostCall;
@@ -952,7 +952,7 @@ impl PythonBinding for MessagesPythonHost {
         &mut self,
         py: Python<'_>,
         arguments: &Bound<'_, PyDict>,
-    ) -> Result<(MessagesCall, Selection, Selected), InvokeError<Error>> {
+    ) -> Result<(MessagesPlan, Selection, Selected), InvokeError<Error>> {
         self.view
             .resolve(py, arguments)
             .map_err(InvokeError::Python)?;
@@ -977,7 +977,9 @@ impl PythonBinding for MessagesPythonHost {
             .map_err(InvokeError::Python)?
             .is_some_and(|stream| stream.is(pyo3::types::PyBool::new(py, true)));
         self.arguments = Some(arguments.clone().unbind());
-        let request = self.decode_call(py, arguments)?;
+        let request =
+            litellm_inference_messages::MessagesRoute::plan(self.decode_call(py, arguments)?)
+                .map_err(crate::errors::unplanned)?;
         let transport = self
             .transport
             .select(py, self.view.request(py).map_err(InvokeError::Python)?)

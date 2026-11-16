@@ -9,6 +9,8 @@ use litellm_llms::{
 use litellm_llms_types::formats::chat_completions::ChatMessage;
 use serde_json::{Map, Value};
 
+use litellm_inference::Unplanned;
+
 use super::Error;
 use crate::types::{ChatCompletionsCall, ResolvedChatCompletionsRequest};
 
@@ -48,7 +50,7 @@ pub(super) fn string_headers(
 pub(super) fn resolve_request(
     call: ChatCompletionsCall,
     config: &'static dyn BaseConfig,
-) -> Result<ResolvedChatCompletionsRequest, Error> {
+) -> Result<ResolvedChatCompletionsRequest, Unplanned> {
     let messages = serde_json::from_value::<Vec<ChatMessage>>(call.messages).map_err(|err| {
         Error::invalid_request(litellm_llms::ErrorDetail::invalid(
             "chat completions messages",
@@ -56,14 +58,15 @@ pub(super) fn resolve_request(
         ))
     })?;
     if messages.is_empty() {
-        return Err(Error::invalid_request(
-            litellm_llms::ErrorDetail::NoMessages {
+        return Err(
+            Error::invalid_request(litellm_llms::ErrorDetail::NoMessages {
                 route: "chat completions",
-            },
-        ));
+            })
+            .into(),
+        );
     }
-    if let Some(reason) = config.unsupported_reason(&messages, &call.optional_params) {
-        return Err(Error::Declined(reason));
+    if let Some(decline) = config.unsupported_reason(&messages, &call.optional_params) {
+        return Err(decline.into());
     }
     Ok(ResolvedChatCompletionsRequest {
         messages,

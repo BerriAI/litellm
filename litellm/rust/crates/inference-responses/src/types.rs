@@ -20,6 +20,13 @@ pub struct ResponsesCall {
     pub timeout: Option<Duration>,
 }
 
+/// A call [`crate::ResponsesRoute::plan`] accepted: its provider has a native Responses config.
+/// Only `plan` builds one, so whatever executes it has nothing left to decline.
+pub struct ResponsesPlan {
+    pub(crate) provider: ResponsesProvider,
+    pub(crate) call: ResponsesCall,
+}
+
 pub(crate) struct ResponsesProvider {
     pub identity: ProviderIdentity,
     pub config: &'static dyn BaseResponsesApiConfig,

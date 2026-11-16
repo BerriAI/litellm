@@ -1,7 +1,7 @@
 use litellm_host::observation::ObservationSender;
 pub mod route;
 pub mod types;
-pub use litellm_inference::Error;
+pub use litellm_inference::{Error, Unplanned};
 mod common_utils;
 pub mod constants;
 pub(crate) mod handler;
@@ -11,7 +11,7 @@ use litellm_auth::AuthServices;
 use litellm_inference::provider::resolve_llm_provider;
 use litellm_secrets::source::SecretSource;
 use std::sync::Arc;
-use types::{ChatCompletionsCall, ChatCompletionsRequest};
+use types::{ChatCompletionsCall, ChatCompletionsPlan};
 
 #[derive(Clone)]
 pub struct ChatCompletionsRoute {
@@ -42,9 +42,39 @@ impl ChatCompletionsRoute {
         }
     }
 
+    /// Everything about a call that can be settled without a credential, a host or the network:
+    /// the provider, its config, and whether that config translates the request. The only place
+    /// this route declines.
+    pub fn plan(call: impl Into<ChatCompletionsCall>) -> Result<ChatCompletionsPlan, Unplanned> {
+        let call = call.into();
+        let resolved = resolve_llm_provider(
+            &call.model,
+            call.custom_llm_provider.as_deref(),
+            "chat completions",
+        )?;
+        let provider = resolved.provider;
+        let model = resolved.model.to_owned();
+        let config = common_utils::chat_completions_provider(provider)
+            .ok_or_else(|| {
+                litellm_inference::provider::no_native_config(
+                    "chat completions",
+                    <&str>::from(provider),
+                )
+            })?
+            .config();
+        let requested_model = call.model.clone();
+        Ok(ChatCompletionsPlan {
+            requested_model,
+            model,
+            provider,
+            config,
+            request: common_utils::resolve_request(call, config)?,
+        })
+    }
+
     pub async fn execute(
         &self,
-        request: ChatCompletionsRequest<'_>,
+        plan: ChatCompletionsPlan,
         interceptors: &impl litellm_host::interceptors::Interceptors<Error>,
         options: impl Into<litellm_inference::CallOptions>,
     ) -> Result<ChatCompletionsResponse, Error> {
@@ -54,19 +84,14 @@ impl ChatCompletionsRoute {
         } = options.into();
         litellm_host::lifecycle::observe_unary(
             observers.clone(),
-            self.run(
-                request.into(),
-                cache_options,
-                interceptors,
-                observers.as_ref(),
-            ),
+            self.run(plan, cache_options, interceptors, observers.as_ref()),
         )
         .await
     }
 
     #[tracing::instrument(name = "litellm.route", skip_all, fields(
         route = "chat_completions",
-        model = %call.model,
+        model = %plan.requested_model,
         provider,
         resolved_model,
         stream = false,
@@ -74,20 +99,23 @@ impl ChatCompletionsRoute {
     ))]
     async fn run(
         &self,
-        call: ChatCompletionsCall,
+        plan: ChatCompletionsPlan,
         cache_options: Option<litellm_cache_response::CachePolicy>,
         interceptors: &impl litellm_host::interceptors::Interceptors<Error>,
         observers: Option<&ObservationSender>,
     ) -> Result<ChatCompletionsResponse, Error> {
         litellm_inference::diagnostic::unary(async {
-            let model = call.model.clone();
-            let custom_llm_provider = call.custom_llm_provider.clone();
-            let provider =
-                resolve_llm_provider(&model, custom_llm_provider.as_deref(), "chat completions")?;
-            let config = common_utils::chat_completions_provider(provider.provider)
-                .ok_or_else(|| Error::InvalidProvider(<&str>::from(provider.provider).to_string()))?
-                .config();
-            let call = common_utils::resolve_request(call, config)?;
+            let ChatCompletionsPlan {
+                model,
+                provider,
+                config,
+                request: call,
+                ..
+            } = plan;
+            let provider = litellm_inference::provider::ResolvedProvider {
+                model: &model,
+                provider,
+            };
             litellm_inference::diagnostic::provider(
                 provider.model,
                 <&'static str>::from(provider.provider),

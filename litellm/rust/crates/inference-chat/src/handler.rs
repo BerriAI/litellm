@@ -196,7 +196,7 @@ mod tests {
         let config = chat_completions_provider(provider.provider)
             .expect("provider has a chat completions config")
             .config();
-        let request = resolve_request(
+        let Ok(request) = resolve_request(
             ChatCompletionsCall {
                 model: "anthropic/claude-sonnet-4-5".into(),
                 messages: json!([{"role": "user", "content": "hi"}]),
@@ -208,8 +208,9 @@ mod tests {
                 timeout: None,
             },
             config,
-        )
-        .unwrap();
+        ) else {
+            panic!("the request resolves")
+        };
         (provider, config, request)
     }
 

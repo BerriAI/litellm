@@ -9,7 +9,7 @@ use litellm_llms_types::formats::responses::ResponsesApiResponse;
 
 use super::{
     Error, ResponsesRoute,
-    types::{ResponsesCall, ResponsesStreamHead},
+    types::{ResponsesPlan, ResponsesStreamHead},
 };
 
 pub struct Responses;
@@ -17,7 +17,7 @@ pub struct Responses;
 impl Protocol for Responses {
     type Response = ResponsesApiResponse;
     type Error = Error;
-    type Request = ResponsesCall;
+    type Request = ResponsesPlan;
     type HostCall = Infallible;
     type Chunk = Bytes;
     type StreamHead = ResponsesStreamHead;
@@ -26,7 +26,7 @@ impl Protocol for Responses {
 impl ResponsesRoute {
     pub fn machine(
         self,
-        call: ResponsesCall,
+        plan: ResponsesPlan,
         options: impl Into<litellm_inference::CallOptions>,
     ) -> HostedMachine<Responses> {
         let litellm_inference::CallOptions {
@@ -34,10 +34,10 @@ impl ResponsesRoute {
             observers,
         } = options.into();
         hosted_call(
-            call,
+            plan,
             observers,
-            move |call, _, interceptors, observers| async move {
-                self.run(call, cache_options, &interceptors, observers.as_ref())
+            move |plan, _, interceptors, observers| async move {
+                self.run(plan, cache_options, &interceptors, observers.as_ref())
                     .await
             },
         )

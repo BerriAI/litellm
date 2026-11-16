@@ -1,7 +1,7 @@
 use litellm_gateway_auth::AuthenticatedRequest;
 use std::sync::Arc;
 
-use axum::{Json, extract::State, http::HeaderMap, response::IntoResponse};
+use axum::{Json, body::Bytes, extract::State, http::request::Parts, response::IntoResponse};
 use litellm_inference_ocr::types::{LiteLLMOcrRequest, OcrConnectionInputs, OcrDocumentInput};
 use litellm_llms::base_llm::ocr::transformation::decode_request_value;
 use litellm_llms_types::formats::ocr::OcrDocument;
@@ -10,28 +10,24 @@ use serde_json::Value;
 
 use crate::{
     Error, Gateway,
+    admit::{Planned, Refusal},
     request::{self, InferenceBody},
 };
 
-pub(crate) async fn create(
-    State(gateway): State<Arc<Gateway>>,
-    identity: AuthenticatedRequest,
-    headers: HeaderMap,
-    body: InferenceBody,
-) -> Result<impl IntoResponse, Error> {
-    handle(&gateway, &identity, &headers, body).await.map(Json)
-}
+pub(crate) struct Call(LiteLLMOcrRequest);
 
-async fn handle(
+pub(crate) async fn plan(
     gateway: &Gateway,
     identity: &AuthenticatedRequest,
-    headers: &HeaderMap,
-    InferenceBody {
+    parts: &Parts,
+    body: Bytes,
+) -> Result<Call, Refusal> {
+    let InferenceBody {
         fields: body,
         upload,
-    }: InferenceBody,
-) -> Result<Value, Error> {
-    let header_format = headers
+    } = request::inference_body(parts, body).await?;
+    let header_format = parts
+        .headers
         .get("x-req-format")
         .and_then(|value| value.to_str().ok())
         .map(str::to_owned);
@@ -46,7 +42,8 @@ async fn handle(
         None => decode_request_value::<OcrDocument>(
             body.get("document").cloned().unwrap_or_default(),
             "document",
-        )?
+        )
+        .map_err(Error::from)?
         .into(),
     };
     let format = body
@@ -74,10 +71,18 @@ async fn handle(
             timeout: deployment.timeout,
             ..Default::default()
         },
-    )?;
+    )
+    .map_err(Error::from)?;
+    Ok(Call(call))
+}
+
+pub(crate) async fn create(
+    State(gateway): State<Arc<Gateway>>,
+    Planned(Call(call)): Planned<Call>,
+) -> Result<impl IntoResponse, Error> {
     let response = gateway.ocr.execute(call, &(), None).await?;
-    match response.provider_native_response {
-        Some(native) => Ok(Value::Object(native)),
-        None => Ok(response.into_json()),
-    }
+    Ok(Json(match response.provider_native_response {
+        Some(native) => Value::Object(native),
+        None => response.into_json(),
+    }))
 }

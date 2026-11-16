@@ -400,7 +400,6 @@ async fn publish(
 
 #[cfg(test)]
 mod tests {
-    use litellm_core_utils::decline::Decline;
     use litellm_host::interceptors::{RawResponse, RequestContext, WireRequest};
 
     use super::*;
@@ -421,17 +420,17 @@ mod tests {
         }
 
         async fn result_ready(&self, _: ExecutionFacts) -> Result<(), Error> {
-            Err(Error::Declined(Decline::new("result rejected")))
+            Err(Error::InvalidProvider("result rejected".into()))
         }
     }
 
     #[rstest::rstest]
-    #[case::provider(ResultSource::Provider, false)]
-    #[case::cache(ResultSource::Cache { key: "cached".into() }, true)]
+    #[case::provider(ResultSource::Provider, true)]
+    #[case::cache(ResultSource::Cache { key: "cached".into() }, false)]
     #[tokio::test]
-    async fn result_rejection_only_declines_without_a_provider_call(
+    async fn result_rejection_is_a_post_call_failure_only_after_a_provider_call(
         #[case] source: ResultSource,
-        #[case] may_decline: bool,
+        #[case] dispatched: bool,
     ) {
         let facts = ExecutionFacts {
             provider: ProviderIdentity {
@@ -442,8 +441,7 @@ mod tests {
             source,
         };
         let error = publish(facts, &RejectResult, None).await.unwrap_err();
-        assert_eq!(error.declined().is_some(), may_decline);
-        assert_eq!(error.dispatched(), !may_decline);
+        assert_eq!(error.dispatched(), dispatched);
         assert!(
             litellm_error::Report::new(&error)
                 .to_string()

@@ -34,7 +34,13 @@ fn request<'a>(
 async fn complete(
     request: ChatCompletionsRequest<'_>,
 ) -> Result<litellm_llms_types::formats::chat_completions::ChatCompletionsResponse, Error> {
-    chat_completions_route().execute(request, &(), None).await
+    match litellm_inference_chat::ChatCompletionsRoute::plan(request) {
+        Ok(plan) => chat_completions_route().execute(plan, &(), None).await,
+        Err(litellm_inference_chat::Unplanned::Rejected(error)) => Err(error),
+        Err(litellm_inference_chat::Unplanned::Declined(decline)) => {
+            panic!("the request declined: {decline}")
+        }
+    }
 }
 
 fn object(value: Value) -> Map<String, Value> {
@@ -215,19 +221,41 @@ async fn rejects_empty_messages_before_resolving_credentials() {
 }
 
 #[rstest]
-#[tokio::test]
-async fn rejects_an_unknown_provider() {
-    assert_eq!(
-        complete(request(
-            "openai/gpt-4o",
+#[case::provider_without_a_native_config(
+    "openai/gpt-4o",
+    json!({}),
+    "llms.provider",
+    "chat completions on provider `openai`"
+)]
+#[case::streaming(
+    "anthropic/claude-sonnet-4-5",
+    json!({"stream": true}),
+    "llms.streaming",
+    "a streamed chat completion"
+)]
+#[case::untranslated_param(
+    "anthropic/claude-sonnet-4-5",
+    json!({"tools": []}),
+    "llms.param",
+    "request parameter `tools`"
+)]
+fn the_plan_declines_what_the_route_does_not_serve(
+    #[case] model: &str,
+    #[case] optional_params: Value,
+    #[case] code: &str,
+    #[case] detail: &str,
+) {
+    let Err(litellm_inference_chat::Unplanned::Declined(decline)) =
+        litellm_inference_chat::ChatCompletionsRoute::plan(request(
+            model,
             None,
             json!([{"role": "user", "content": "hi"}]),
-            json!({}),
+            optional_params,
         ))
-        .await
-        .unwrap_err(),
-        Error::InvalidProvider("openai".into())
-    );
+    else {
+        panic!("the route plans a call it does not serve")
+    };
+    assert_eq!((decline.code(), decline.detail()), (code, detail));
 }
 
 #[rstest]

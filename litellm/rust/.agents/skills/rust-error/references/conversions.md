@@ -53,24 +53,25 @@ Do not drop meaningful context just to use `?`
 When a lower error needs a different meaning for every caller, do it in the upper type's `From`, not per route
 
 ```rust
-impl From<litellm_http::Error> for Error {
-    fn from(error: litellm_http::Error) -> Self {
-        if error.is_computed_header() {
-            return Self::Declined(Decline::new("request forwards a header AWS SigV4 computes"));
+impl From<LlmError> for Error {
+    fn from(error: LlmError) -> Self {
+        match error {
+            LlmError::Http(error) => Self::from(error),
+            LlmError::Auth(error) => Self::Auth(error),
+            error => Self::Llm(error),
         }
-        Self::Http(error)
     }
 }
 ```
 
-All four inference routes classify a header the signer computes the same way, because none of them does it themselves
+All four inference routes see a transport or credential failure raised inside a transformation the same way as one they raised themselves, because none of them does the lifting
 
 ## Nest, translate or add context, never mirror
 
 | The upper layer | Do | Example |
 |---|---|---|
 | has nothing to add | nest in one transparent variant and delegate predicates | `Self::Http(error) => error.is_request()` |
-| changes what the failure means | translate to an upper variant, keep the cause attached when it helps | computed header -> `Declined` |
+| changes what the failure means | translate to an upper variant, keep the cause attached when it helps | a transformation's `Http` -> the route's own `Http` |
 | knows something the lower one does not | a variant with the extra fields plus the cause as its source | `Read { path, tls_source, source }` |
 
 Never re-declare a lower crate's variants in the upper type with an upper-layer name and a 1:1 mapping function. OCR once did that for every media download failure, `MediaError::BlockedUrl => Error::BlockedDocumentUrl` and so on, which doubled every change and let the two lists drift.

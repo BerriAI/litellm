@@ -24,7 +24,8 @@ class RustHandled(Generic[ResultT]):
 
 @dataclass(frozen=True, slots=True)
 class RustDeclined:
-    reason: str
+    code: str
+    detail: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -157,7 +158,7 @@ def attempt(
     try:
         value: Final = native_call()
     except _native.RustBridgeDeclined as error:
-        return RustDeclined(reason=_decline_reason(error))
+        return _declined(error)
     except _native.RustUpstreamError as error:
         _raise_upstream(error, context)
     return RustHandled(adapt(value))
@@ -174,15 +175,18 @@ async def aattempt(
     try:
         value: Final = await native_call()
     except _native.RustBridgeDeclined as error:
-        return RustDeclined(reason=_decline_reason(error))
+        return _declined(error)
     except _native.RustUpstreamError as error:
         _raise_upstream(error, context)
     return RustHandled(adapt(value))
 
 
-def _decline_reason(error: BaseException) -> str:
-    reason: Final[object] = error.args[0] if error.args else str(error)
-    return reason if isinstance(reason, str) else str(reason)
+def _declined(error: BaseException) -> RustDeclined:
+    match error.args:
+        case (str() as code, str() as detail):
+            return RustDeclined(code=code, detail=detail)
+        case _:
+            return RustDeclined(code="bridge.malformed", detail=str(error))
 
 
 def _raise_required(
@@ -196,8 +200,8 @@ def _required_reason(result: RustDeclined | RustUnavailable) -> str:
     match result:
         case RustUnavailable():
             return "is unavailable"
-        case RustDeclined(reason=reason):
-            return f"declined the request: {reason}"
+        case RustDeclined(code=code, detail=detail):
+            return f"declined the request ({code}): {detail}"
 
 
 def _raise_upstream(error: BaseException, context: BridgeErrorContext) -> NoReturn:

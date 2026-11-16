@@ -386,12 +386,12 @@ async fn the_sdk_returns_stream_headers_and_every_sse_byte(
     let upstream = upstream([sse_response()]).await;
     let response = messages_route(no_secrets())
         .execute(
-            MessagesCall {
+            planned(MessagesCall {
                 custom_llm_provider: Some(provider.into()),
                 api_key: Some("stream-key".into()),
                 litellm_params: Default::default(),
                 ..streaming(call, upstream.uri())
-            },
+            }),
             &(),
             None,
         )
@@ -414,7 +414,7 @@ async fn the_sdk_returns_stream_headers_and_every_sse_byte(
 async fn the_sdk_returns_http_errors_before_opening_a_stream(call: MessagesCall) {
     let upstream = upstream([ResponseTemplate::new(429).set_body_string("slow down")]).await;
     let error = messages_route(no_secrets())
-        .execute(streaming(call, upstream.uri()), &(), None)
+        .execute(planned(streaming(call, upstream.uri())), &(), None)
         .await
         .err()
         .expect("upstream failure is returned by messages()");
@@ -434,10 +434,10 @@ async fn dropping_the_sdk_stream_closes_the_unfinished_upstream(
     let response = tokio::time::timeout(
         Duration::from_secs(5),
         messages_route(no_secrets()).execute(
-            MessagesCall {
+            planned(MessagesCall {
                 timeout: Some(Duration::from_secs(30)),
                 ..streaming(call, base)
-            },
+            }),
             &(),
             None,
         ),
@@ -514,10 +514,10 @@ async fn the_sdk_yields_a_body_error_once_after_delivered_chunks(call: MessagesC
     let (base, connection) = stalling_upstream().await;
     let response = messages_route(no_secrets())
         .execute(
-            MessagesCall {
+            planned(MessagesCall {
                 timeout: Some(Duration::from_millis(300)),
                 ..streaming(call, base)
-            },
+            }),
             &(),
             None,
         )

@@ -6,6 +6,7 @@
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
+use litellm_core_utils::decline::Decline;
 use serde::Deserialize;
 use serde_json::{Map, Value};
 
@@ -640,6 +641,13 @@ impl RetryCause {
     }
 }
 
+/// What a config needs [`Host::select`] for.
+#[derive(Clone, Copy, Debug)]
+pub enum Selects<'a> {
+    Strategy(&'a RoutingStrategy),
+    Plugin(&'a str),
+}
+
 #[async_trait]
 pub trait Host: Send + Sync {
     /// Run one attempt against the picked deployment. The core records its outcome (cooldowns,
@@ -683,16 +691,20 @@ pub trait Host: Send + Sync {
     /// The shared store routing state lives in.
     fn cache(&self) -> Arc<dyn RouterCache>;
 
-    /// Whether [`Self::invoke`] can run `op` on `provider`. Checked for every served op and
-    /// deployment when the router is built or changed, so an unsupported pair fails the config,
-    /// never a request. `PythonHost` runs every op.
-    fn supports(&self, _op: &Op, _provider: &str) -> bool {
-        true
+    /// The plan-time half of [`Self::invoke`]: asked for every served op and deployment when the
+    /// router is built or changed, and never inside a request, where a counter may already have
+    /// moved. A host with no way to run `op` on `provider` returns its [`Decline`] here, next to
+    /// the hosts that do run it, so the pair fails the config and the caller falls back. The core
+    /// only carries what a host says. `PythonHost` runs every op.
+    fn plan_invoke(&self, _op: &Op, _provider: &str) -> Result<(), Decline> {
+        Ok(())
     }
 
-    /// Whether [`Self::select`] can run strategies and plugins.
-    fn can_select(&self) -> bool {
-        true
+    /// The plan-time half of [`Self::select`]: asked once for each strategy and plugin the config
+    /// reaches that the core does not run itself, when the router is built or changed. A host
+    /// that does not run it returns its [`Decline`] here.
+    fn plan_select(&self, _selects: Selects<'_>) -> Result<(), Decline> {
+        Ok(())
     }
 
     /// Run the routing plugins for `ctx.name` when `run` (the async pick's pre-routing hook), and

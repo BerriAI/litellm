@@ -14,7 +14,12 @@ use pyo3::{
 };
 use tokio::sync::Semaphore;
 
-use crate::errors::RustBridgeDeclined;
+use litellm_core_utils::decline::Decline;
+
+const UNSUPPORTED: Decline = Decline::new(
+    "token_counter.unsupported",
+    "a request the native token counter does not count",
+);
 use crate::tokenizer::Tokenizer;
 
 /// Counts the input tokens of a raw request body off the Python event loop with
@@ -73,7 +78,7 @@ fn count_body(counter: &CoreTokenCounter, body: &[u8]) -> Result<InputTokenCount
 pub(crate) fn token_count_error_to_pyerr(error: Error) -> PyErr {
     let message = Report::new(&error).to_string();
     if error.is_unsupported() {
-        RustBridgeDeclined::new_err(message)
+        crate::errors::declined(&UNSUPPORTED.with_detail(message))
     } else if error.is_load() {
         PyValueError::new_err(message)
     } else {

@@ -3,7 +3,30 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use litellm_python_compat::{json as python_json, repr};
 use serde_json::{Map, Value, json};
 
+use litellm_core_utils::decline::Decline;
+
 use crate::{Error, ErrorDetail, base_llm::messages::context::NativeOutputSupport};
+
+const OUTPUT_SCHEMA: Decline = Decline::new(
+    "llms.output_schema",
+    "an output schema Python rewrites in a way the port does not",
+);
+
+/// Why an output schema was not filtered.
+enum Unfiltered {
+    /// Python rewrites this shape in a way the port does not reproduce.
+    Unported(&'static str),
+    Invalid(Error),
+}
+
+impl From<Unfiltered> for Error {
+    fn from(unfiltered: Unfiltered) -> Self {
+        match unfiltered {
+            Unfiltered::Unported(shape) => Self::InvalidRequest(ErrorDetail::Unhandled(shape)),
+            Unfiltered::Invalid(error) => error,
+        }
+    }
+}
 
 use litellm_llms_types::recognized::python_truthy;
 
@@ -340,69 +363,85 @@ fn enum_conflicts_with_declared_type(schema: &Schema) -> bool {
     !values.iter().all(check)
 }
 
-fn note_value(value: &Value) -> Result<String, Error> {
+fn note_value(value: &Value) -> Result<String, Unfiltered> {
     let python = python_json::from_json(value.clone());
     match value {
         Value::Object(_) | Value::Array(_) => python_json::dumps(&python).map_err(|error| {
-            Error::InvalidRequest(ErrorDetail::failed(
+            Unfiltered::Invalid(Error::InvalidRequest(ErrorDetail::failed(
                 "output schema note serialization",
                 error,
-            ))
+            )))
         }),
         _ => Ok(repr::to_str(&python)),
     }
 }
 
-fn described_with_note(description: Option<&Value>, note: String) -> Result<Value, Error> {
+fn described_with_note(description: Option<&Value>, note: String) -> Result<Value, Unfiltered> {
     match description {
         Some(Value::String(text)) if !text.is_empty() => {
             Ok(Value::String(format!("{text} {note}")))
         }
-        Some(other) if python_truthy(other) => {
-            Err(Error::Declined(litellm_core_utils::decline::Decline::new(
-                "a non-string output schema description next to a dropped constraint",
-            )))
-        }
+        Some(other) if python_truthy(other) => Err(Unfiltered::Unported(
+            "a non-string output schema description next to a dropped constraint",
+        )),
         _ => Ok(Value::String(note)),
     }
 }
 
-fn filtered_subschema(value: &Value) -> Result<Value, Error> {
+fn filtered_subschema(value: &Value) -> Result<Value, Unfiltered> {
     match value {
-        Value::Object(schema) => filter_output_schema(schema).map(Value::Object),
+        Value::Object(schema) => filtered_schema(schema).map(Value::Object),
         other => Ok(other.clone()),
     }
 }
 
-fn filtered_subschemas(value: &Value) -> Result<Value, Error> {
+fn filtered_subschemas(value: &Value) -> Result<Value, Unfiltered> {
     match value {
         Value::Object(entries) => entries
             .iter()
             .map(|(name, schema)| Ok((name.clone(), filtered_subschema(schema)?)))
-            .collect::<Result<Map<_, _>, Error>>()
+            .collect::<Result<Map<_, _>, Unfiltered>>()
             .map(Value::Object),
         other => Ok(other.clone()),
     }
 }
 
-fn filtered_branches(branches: &[Value]) -> Result<Vec<Value>, Error> {
+fn filtered_branches(branches: &[Value]) -> Result<Vec<Value>, Unfiltered> {
     branches.iter().map(filtered_subschema).collect()
 }
 
-fn extended_any_of(result: &Schema, branches: &[Value]) -> Result<Value, Error> {
+fn extended_any_of(result: &Schema, branches: &[Value]) -> Result<Value, Unfiltered> {
     let filtered = filtered_branches(branches)?;
     match result.get("anyOf") {
         Some(Value::Array(existing)) => Ok(Value::Array(
             existing.iter().cloned().chain(filtered).collect(),
         )),
-        Some(_) => Err(Error::Declined(litellm_core_utils::decline::Decline::new(
+        Some(_) => Err(Unfiltered::Unported(
             "an output schema whose anyOf cannot be extended",
-        ))),
+        )),
         None => Ok(Value::Array(filtered)),
     }
 }
 
 pub(crate) fn filter_output_schema(schema: &Schema) -> Result<Schema, Error> {
+    filtered_schema(schema).map_err(Error::from)
+}
+
+/// The decline for a request whose output schema [`filter_output_schema`] would not rewrite as
+/// Python does. A route asks before it runs anything, so the filter never meets one mid-call.
+pub(crate) fn unsupported_output_schema(params: &Map<String, Value>) -> Option<Decline> {
+    let Value::Object(schema) = requested_output_format(params)?.get("schema")? else {
+        return None;
+    };
+    match filtered_schema(schema) {
+        Err(Unfiltered::Unported(shape)) if !native_output_rejects(schema) => {
+            Some(OUTPUT_SCHEMA.with_detail(shape))
+        }
+        Ok(_) | Err(_) => None,
+    }
+}
+
+fn filtered_schema(schema: &Schema) -> Result<Schema, Unfiltered> {
     let enforced_min_items = schema
         .get("minItems")
         .filter(|value| is_int(value))
@@ -418,7 +457,7 @@ pub(crate) fn filter_output_schema(schema: &Schema) -> Result<Schema, Error> {
         .filter_map(|(field, label)| schema.get(*field).map(|value| (label, value)))
         .filter(|(_, value)| **value != Value::Bool(false))
         .map(|(label, value)| Ok(label.replacen("{}", &note_value(value)?, 1)))
-        .collect::<Result<Vec<String>, Error>>()?;
+        .collect::<Result<Vec<String>, Unfiltered>>()?;
     let mut result = Map::new();
     if !notes.is_empty() {
         let note = format!("Note: {}.", notes.join(", "));
@@ -778,6 +817,48 @@ mod tests {
             body["messages"][0]["content"][1]["text"],
             json!(r#"{"type": "object", "properties": {"legacy": {"type": "string"}}}"#)
         );
+    }
+
+    #[rstest]
+    #[case::non_string_description_next_to_a_dropped_constraint(
+        json!({"type": "integer", "maximum": 3, "description": {"en": "a count"}}),
+        "a non-string output schema description next to a dropped constraint"
+    )]
+    #[case::any_of_that_cannot_be_extended(
+        json!({"anyOf": {"type": "string"}, "oneOf": [{"type": "integer"}]}),
+        "an output schema whose anyOf cannot be extended"
+    )]
+    #[case::nested_in_a_property(
+        json!({"type": "object", "properties": {"n": {"maximum": 3, "description": 7}}}),
+        "a non-string output schema description next to a dropped constraint"
+    )]
+    fn a_schema_python_rewrites_differently_declines_before_the_call_and_fails_inside_it(
+        #[case] raw: Value,
+        #[case] shape: &'static str,
+    ) {
+        let params =
+            schema(json!({"output_format": {"type": "json_schema", "schema": raw.clone()}}));
+        let decline = unsupported_output_schema(&params).expect("the schema declines");
+        assert_eq!(
+            (decline.code(), decline.detail()),
+            ("llms.output_schema", shape)
+        );
+        assert_eq!(
+            filter_output_schema(&schema(raw)).unwrap_err(),
+            Error::InvalidRequest(ErrorDetail::Unhandled(shape))
+        );
+    }
+
+    #[rstest]
+    #[case::no_schema(json!({"max_tokens": 16}))]
+    #[case::schema_the_port_filters(
+        json!({"output_format": {"type": "json_schema", "schema": {"type": "integer", "maximum": 3}}})
+    )]
+    #[case::output_config_format(
+        json!({"output_config": {"format": {"type": "json_schema", "schema": {"type": "string"}}}})
+    )]
+    fn a_schema_the_port_rewrites_as_python_does_plans(#[case] params: Value) {
+        assert_eq!(unsupported_output_schema(&schema(params)), None);
     }
 
     #[rstest]

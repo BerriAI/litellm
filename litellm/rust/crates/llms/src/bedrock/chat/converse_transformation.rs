@@ -36,6 +36,12 @@ use crate::{
     },
 };
 
+const BLANK_MESSAGE_TEXT: Decline = Decline::new("llms.message.content", "blank message text");
+const CONVERSATION_OFF_USER_TURNS: Decline = Decline::new(
+    "llms.conversation",
+    "conversation does not run user turn to user turn",
+);
+
 /// Converse parameter names, post `map_openai_params`, that the Rust path can
 /// place verbatim in `inferenceConfig`.
 ///
@@ -285,7 +291,7 @@ impl BaseConfig for AmazonConverseConfig {
             messages
                 .iter()
                 .any(has_blank_text)
-                .then_some(Decline::new("blank message text"))
+                .then_some(BLANK_MESSAGE_TEXT)
         })
         // Converse has no assistant prefill: Python inserts a continue turn
         // when a conversation opens or closes on an assistant message, and
@@ -298,9 +304,8 @@ impl BaseConfig for AmazonConverseConfig {
                 .turns
                 .last()
                 .is_some_and(|turn| turn.role == TurnRole::Assistant);
-            (!conversation.opens_on_user_turn() || ends_on_assistant).then_some(Decline::new(
-                "conversation does not run user turn to user turn",
-            ))
+            (!conversation.opens_on_user_turn() || ends_on_assistant)
+                .then_some(CONVERSATION_OFF_USER_TURNS)
         })
     }
 }
@@ -356,11 +361,15 @@ fn has_blank_text(message: &ChatMessage) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use super::{BLANK_MESSAGE_TEXT, CONVERSATION_OFF_USER_TURNS};
     use crate::{
         Error,
         base_llm::{
             auth::AuthScheme,
-            chat::transformation::{BaseConfig, ProviderChatResponseData},
+            chat::transformation::{
+                BaseConfig, MESSAGE_WITHOUT_CONTENT, NON_TEXT_MESSAGE_CONTENT,
+                ProviderChatResponseData, STREAMING, UNRECOGNIZED_PARAM,
+            },
         },
         bedrock::chat::converse_transformation::BEDROCK_CHAT_COMPLETIONS_CONFIG,
     };
@@ -475,8 +484,13 @@ mod tests {
                 json!([{"role": "user", "content": "hi"}]),
                 json!({"stream": true})
             ),
-            Some(Decline::new("streaming"))
+            Some(STREAMING)
         );
+    }
+
+    fn named_param(param: &Value) -> Decline {
+        let name = param.as_object().unwrap().keys().next().unwrap();
+        UNRECOGNIZED_PARAM.with_detail(format!("request parameter `{name}`"))
     }
 
     #[test]
@@ -486,7 +500,7 @@ mod tests {
                 json!([{"role": "user", "content": "hi"}]),
                 json!({"topK": 40})
             ),
-            Some(Decline::new("unrecognized request parameter"))
+            Some(named_param(&json!({"topK": 40})))
         );
     }
 
@@ -500,7 +514,7 @@ mod tests {
     fn declines_tools_and_other_params_outside_the_allowlist(#[case] param: Value) {
         assert_eq!(
             reason(json!([{"role": "user", "content": "hi"}]), param.clone()),
-            Some(Decline::new("unrecognized request parameter")),
+            Some(named_param(&param)),
             "expected {param} to decline"
         );
     }
@@ -517,7 +531,7 @@ mod tests {
                 json!([{"role": "user", "content": content}, {"role": "user", "content": "hi"}]),
                 json!({})
             ),
-            Some(Decline::new("blank message text")),
+            Some(BLANK_MESSAGE_TEXT),
             "expected blank content {content} to decline"
         );
     }
@@ -529,7 +543,7 @@ mod tests {
         // host before the call rather than an error after it.
         assert_eq!(
             reason(json!([{"role": "user", "content": []}]), json!({})),
-            Some(Decline::new("message without content"))
+            Some(MESSAGE_WITHOUT_CONTENT)
         );
         assert_eq!(
             reason(
@@ -550,9 +564,7 @@ mod tests {
                 ]),
                 json!({})
             ),
-            Some(Decline::new(
-                "conversation does not run user turn to user turn"
-            ))
+            Some(CONVERSATION_OFF_USER_TURNS)
         );
         assert_eq!(
             reason(
@@ -562,9 +574,7 @@ mod tests {
                 ]),
                 json!({})
             ),
-            Some(Decline::new(
-                "conversation does not run user turn to user turn"
-            ))
+            Some(CONVERSATION_OFF_USER_TURNS)
         );
     }
 
@@ -831,7 +841,7 @@ mod tests {
                 ]}]),
                 json!({})
             ),
-            Some(Decline::new("non-text message content"))
+            Some(NON_TEXT_MESSAGE_CONTENT)
         );
     }
 

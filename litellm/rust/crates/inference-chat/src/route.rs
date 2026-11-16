@@ -6,14 +6,14 @@ use litellm_host::{
 };
 use litellm_llms_types::formats::chat_completions::ChatCompletionsResponse;
 
-use super::{ChatCompletionsRoute, Error, types::ChatCompletionsCall};
+use super::{ChatCompletionsRoute, Error, types::ChatCompletionsPlan};
 
 pub struct ChatCompletions;
 
 impl Protocol for ChatCompletions {
     type Response = ChatCompletionsResponse;
     type Error = Error;
-    type Request = ChatCompletionsCall;
+    type Request = ChatCompletionsPlan;
     type HostCall = Infallible;
     type Chunk = Infallible;
     type StreamHead = Infallible;
@@ -22,7 +22,7 @@ impl Protocol for ChatCompletions {
 impl ChatCompletionsRoute {
     pub fn machine(
         self,
-        call: ChatCompletionsCall,
+        plan: ChatCompletionsPlan,
         options: impl Into<litellm_inference::CallOptions>,
     ) -> HostedMachine<ChatCompletions> {
         let litellm_inference::CallOptions {
@@ -30,10 +30,10 @@ impl ChatCompletionsRoute {
             observers,
         } = options.into();
         hosted_call(
-            call,
+            plan,
             observers,
-            move |call, _, interceptors, observers| async move {
-                self.run(call, cache_options, &interceptors, observers.as_ref())
+            move |plan, _, interceptors, observers| async move {
+                self.run(plan, cache_options, &interceptors, observers.as_ref())
                     .await
                     .map(CallOutput::Complete)
             },

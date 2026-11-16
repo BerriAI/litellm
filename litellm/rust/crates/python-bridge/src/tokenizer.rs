@@ -27,7 +27,11 @@ use pyo3::{
 };
 
 #[cfg(not(all(feature = "tiktoken", feature = "huggingface")))]
-use crate::errors::RustBridgeDeclined;
+const MISSING_FEATURE: litellm_core_utils::decline::Decline =
+    litellm_core_utils::decline::Decline::new(
+        "tokenizer.feature",
+        "a tokenizer this build was compiled without",
+    );
 use crate::routes::token_counter::token_count_error_to_pyerr;
 
 #[cfg(feature = "huggingface")]
@@ -97,7 +101,9 @@ impl From<TokenizerError> for PyErr {
         let message = Report::new(&error).to_string();
         match error {
             #[cfg(not(all(feature = "tiktoken", feature = "huggingface")))]
-            TokenizerError::MissingFeature(_) => RustBridgeDeclined::new_err(message),
+            TokenizerError::MissingFeature(_) => {
+                crate::errors::declined(&MISSING_FEATURE.with_detail(message))
+            }
             #[cfg(all(feature = "tiktoken", feature = "huggingface"))]
             TokenizerError::NotTiktoken | TokenizerError::NotHuggingFace => {
                 PyValueError::new_err(message)

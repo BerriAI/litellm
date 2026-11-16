@@ -1,5 +1,7 @@
 use std::time::Duration;
 
+use litellm_core_utils::get_llm_provider_logic::LlmProviders;
+use litellm_llms::base_llm::chat::transformation::BaseConfig;
 use litellm_llms_types::formats::chat_completions::ChatMessage;
 use serde_json::{Map, Value};
 
@@ -44,6 +46,17 @@ impl From<ChatCompletionsRequest<'_>> for ChatCompletionsCall {
             timeout: request.timeout,
         }
     }
+}
+
+/// A call [`crate::ChatCompletionsRoute::plan`] accepted: its provider has a native config and
+/// that config translates every message and parameter. Only `plan` builds one, so whatever
+/// executes it has nothing left to decline.
+pub struct ChatCompletionsPlan {
+    pub(crate) requested_model: String,
+    pub(crate) model: String,
+    pub(crate) provider: LlmProviders,
+    pub(crate) config: &'static dyn BaseConfig,
+    pub(crate) request: ResolvedChatCompletionsRequest,
 }
 
 pub struct ResolvedChatCompletionsRequest {

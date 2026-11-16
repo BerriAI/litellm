@@ -14,7 +14,6 @@ use litellm_cache_memory::InMemoryCache;
 use litellm_cache_response::{
     CacheOptions, CachePolicy, CacheScope, ResponseCache, ResponseCacheConfig, ResponseCacheService,
 };
-use litellm_core_utils::decline::Decline;
 use litellm_host::{
     call::{CallOutput, OutputOf},
     interceptors::{
@@ -206,7 +205,7 @@ async fn streamed(
                 .map(|bytes| Ok(Bytes::copy_from_slice(bytes)))
                 .collect::<Vec<_>>();
             let ending =
-                fail.then_some(Err(Error::Declined(Decline::new("test transport failure"))));
+                fail.then_some(Err(Error::InvalidProvider("test transport failure".into())));
             Ok(CallOutput::Stream {
                 head: (),
                 chunks: stream::iter(chunks.into_iter().chain(ending)).boxed(),
@@ -317,7 +316,7 @@ async fn a_provider_failure_never_populates_the_cache(cache: Arc<dyn ResponseCac
         None,
         || async {
             calls.fetch_add(1, Ordering::SeqCst);
-            Err(Error::Declined(Decline::new("test provider failure")))
+            Err(Error::InvalidProvider("test provider failure".into()))
         },
     )
     .await;
@@ -484,7 +483,7 @@ impl Interceptors<Error> for CacheHitAccounting {
         );
         self.key.set(key).unwrap();
         if self.reject {
-            return Err(Error::Declined(Decline::new("cache accounting rejected")));
+            return Err(Error::InvalidProvider("cache accounting rejected".into()));
         }
         Ok(())
     }
@@ -572,8 +571,8 @@ async fn cache_hits_notify_accounting_once_and_propagate_its_failure(
     };
     if reject {
         assert_eq!(
-            result.unwrap_err().declined(),
-            Some(&Decline::new("cache accounting rejected"))
+            result.unwrap_err(),
+            Error::InvalidProvider("cache accounting rejected".into())
         );
     } else {
         assert_eq!(result.unwrap(), expected);

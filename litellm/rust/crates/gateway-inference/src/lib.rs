@@ -1,20 +1,21 @@
 //! The proxy's inference endpoints as an axum [`Router`] a server mounts.
 //!
 //! Authentication, rate limiting and logging are the mounting server's layers; this crate
-//! maps a public model name to its deployment and runs the core route.
+//! admits a request, mapping its public model name to a deployment and planning the call, and
+//! runs the core route for what it admitted.
 
+mod admit;
 mod audio_transcription;
 mod caching;
 mod chat_completions;
 mod error;
-pub mod messages;
+mod messages;
 mod ocr;
 mod request;
 mod responses;
 
 use std::sync::Arc;
 
-use axum::{Router, routing::post};
 use litellm_http::{ClientVariant, HttpClientConfig, media::UrlPolicy};
 use litellm_inference::resources::CoreResources;
 use litellm_inference_chat::ChatCompletionsRoute;
@@ -25,6 +26,7 @@ use litellm_inference_transcription::AudioTranscriptionRoute;
 use litellm_llms::base_llm::ocr::{handler::OcrClient, settings::OcrSettings};
 use litellm_secrets::source::SecretSource;
 
+pub use admit::router;
 pub use error::{BodyError, Error};
 pub use litellm_router::{Deployment, Router as ModelRouter};
 pub use request::{JsonObject, RequestId};
@@ -86,40 +88,4 @@ impl Gateway {
             http,
         })
     }
-}
-
-pub fn router(gateway: Arc<Gateway>) -> Router {
-    Router::new()
-        .route("/v1/messages", post(messages::create))
-        .route("/ocr", post(ocr::create))
-        .route("/v1/ocr", post(ocr::create))
-        .route("/chat/completions", post(chat_completions::create))
-        .route("/v1/chat/completions", post(chat_completions::create))
-        .nest("/engines/{model}", model_routes())
-        .nest("/openai/deployments/{model}", model_routes())
-        .route("/audio/transcriptions", post(audio_transcription::create))
-        .route(
-            "/v1/audio/transcriptions",
-            post(audio_transcription::create),
-        )
-        .route("/responses", post(responses::create))
-        .route("/v1/responses", post(responses::create))
-        .route("/embeddings", post(request::unsupported))
-        .route("/v1/embeddings", post(request::unsupported))
-        .route("/completions", post(request::unsupported))
-        .route("/v1/completions", post(request::unsupported))
-        .layer(axum::extract::DefaultBodyLimit::max(
-            request::MAX_BODY_BYTES,
-        ))
-        .with_state(gateway)
-}
-
-fn model_routes() -> Router<Arc<Gateway>> {
-    Router::new()
-        .route(
-            "/chat/completions",
-            post(chat_completions::create_from_model_path),
-        )
-        .route("/embeddings", post(request::unsupported))
-        .route("/completions", post(request::unsupported))
 }

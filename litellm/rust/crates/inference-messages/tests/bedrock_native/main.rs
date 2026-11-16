@@ -67,7 +67,9 @@ async fn run_with(
     secrets: Arc<RecordingSecrets>,
     call: MessagesCall,
 ) -> Result<MessagesCallResponse, Error> {
-    messages_route(secrets).execute(call, &(), None).await
+    messages_route(secrets)
+        .execute(planned(call), &(), None)
+        .await
 }
 
 async fn run(call: MessagesCall) -> Result<MessagesCallResponse, Error> {
@@ -319,7 +321,7 @@ async fn native_streams_relay_every_sse_byte(call: MessagesCall, #[case] model: 
         upstream([ResponseTemplate::new(200).set_body_raw(sse, "text/event-stream")]).await;
     let response = messages_route(no_secrets())
         .execute(
-            MessagesCall {
+            planned(MessagesCall {
                 api_key: Some("key".into()),
                 api_base: Some(upstream.uri()),
                 custom_llm_provider: None,
@@ -327,7 +329,7 @@ async fn native_streams_relay_every_sse_byte(call: MessagesCall, #[case] model: 
                     call,
                     json!({"model": model, "stream": true, "workspace_id": "workspace"}),
                 )
-            },
+            }),
             &(),
             None,
         )

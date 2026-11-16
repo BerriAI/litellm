@@ -29,6 +29,13 @@ pub struct MessagesCall {
     pub shaping: MessagesShaping,
 }
 
+/// A call [`crate::MessagesRoute::plan`] accepted: its provider has a native Messages config and
+/// that config shapes the request as Python does. Only `plan` builds one, so whatever executes it
+/// has nothing left to decline.
+pub struct MessagesPlan {
+    pub(crate) call: MessagesCall,
+}
+
 pub fn messages_body(body: Map<String, Value>) -> Result<MessagesRequest, Error> {
     serde_json::from_value(Value::Object(body)).map_err(invalid_request)
 }

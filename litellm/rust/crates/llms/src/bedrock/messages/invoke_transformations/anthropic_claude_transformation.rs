@@ -1,4 +1,5 @@
 use crate::anthropic::messages::transformation::retry_anthropic_messages_after_http_error;
+use litellm_core_utils::decline::Decline;
 use litellm_host::interceptors::RetriedRequest;
 
 use crate::{
@@ -44,7 +45,7 @@ use crate::bedrock::{
         structured_output::{
             NATIVE_OUTPUT_UNSUPPORTED, bedrock_native_output_format,
             bedrock_native_output_retry_requested, is_bedrock_native_output_rejection,
-            requested_output_format, sent_output_config_format,
+            requested_output_format, sent_output_config_format, unsupported_output_schema,
         },
         validated_region,
     },
@@ -215,6 +216,13 @@ fn without_native_output(context: &MessagesTransformContext) -> MessagesTransfor
 }
 
 impl BaseMessagesConfig for AmazonAnthropicClaudeMessagesConfig {
+    fn unsupported_reason(&self, request: &MessagesRequest) -> Option<Decline> {
+        let Ok(Value::Object(params)) = serde_json::to_value(&request.params) else {
+            return None;
+        };
+        unsupported_output_schema(&params)
+    }
+
     fn retry_after_http_error(
         &self,
         status: u16,

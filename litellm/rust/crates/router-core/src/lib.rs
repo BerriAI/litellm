@@ -118,15 +118,18 @@ use std::sync::{
 use arc_swap::ArcSwap;
 use parking_lot::Mutex;
 
+use litellm_core_utils::decline::Decline;
+
 pub use crate::{
     cache::{HealthState, InMemoryRouterCache, Outcomes, RouterCache, UsageCounts, UsageWindow},
     call::RouterResponse,
     config::{Op, RouterConfig, RouterDynamicConfig, RoutingStrategy},
-    error::{AttemptError, ConfigError, Error, FailureKind, Payload, Unsupported},
+    error::{AttemptError, ConfigError, Error, FailureKind, Payload},
     health::{Clock, Health, Outcome, SystemClock},
     host::{
         Attempt, Blocked, BuildAsk, BuildPath, Built, CallbackFiltered, Host, Output, Provided,
         RetryCause, RouterEvent, RouterRequest, RoutingContext, SecretAt, SecretRef, SelectStage,
+        Selects,
     },
     outcome::{OutcomeCallbacks, OutcomeWrite},
     prerouting::{PreRoute, PreRouted},
@@ -177,43 +180,54 @@ pub(crate) struct Core {
 }
 
 impl Core {
-    /// Reject what this host cannot serve, before any request.
+    /// Asks the host for every host call the config reaches, before any request, and reports
+    /// each one it declined rather than only the first.
     fn validate(&self, registry: &Registry, settings: &Settings) -> Result<(), ConfigError> {
-        let can_select = self.host.can_select();
-        let strategies = std::iter::once(&settings.routing_strategy).chain(
-            registry
-                .routing_groups()
-                .iter()
-                .map(|group| &group.routing_strategy),
-        );
-        for strategy in strategies {
-            if !strategy.is_native() && !can_select {
-                return Err(Unsupported::Strategy(strategy.clone()).into());
-            }
-        }
-        if let Some(plugin) = settings.plugins.first()
-            && !can_select
-        {
-            return Err(Unsupported::Plugin(plugin.name.clone()).into());
-        }
-        for deployment in registry.deployments(&DeploymentFilter::default()) {
-            self.validate_deployment(&deployment)?;
-        }
-        Ok(())
+        let groups = registry.routing_groups();
+        let strategies = std::iter::once(&settings.routing_strategy)
+            .chain(groups.iter().map(|group| &group.routing_strategy))
+            .filter(|strategy| !strategy.is_native())
+            .map(Selects::Strategy);
+        let plugins = settings
+            .plugins
+            .iter()
+            .map(|plugin| Selects::Plugin(&plugin.name));
+        let selects = strategies
+            .chain(plugins)
+            .filter_map(|selects| self.host.plan_select(selects).err());
+        let deployments = registry.deployments(&DeploymentFilter::default());
+        let invokes = deployments
+            .iter()
+            .flat_map(|deployment| self.declined_ops(deployment));
+        declined(selects.chain(invokes))
     }
 
-    /// Reject a deployment whose provider this host cannot run a served op on.
+    /// Reject a deployment whose provider this host does not run a served op on.
     fn validate_deployment(&self, deployment: &Deployment) -> Result<(), ConfigError> {
-        for op in &self.config.served_ops {
-            if !self.host.supports(op, deployment.provider()) {
-                return Err(Unsupported::Op {
-                    op: op.clone(),
-                    provider: deployment.provider().to_owned(),
-                }
-                .into());
-            }
+        declined(self.declined_ops(deployment))
+    }
+
+    fn declined_ops(&self, deployment: &Deployment) -> impl Iterator<Item = Decline> + '_ {
+        let provider = deployment.provider().to_owned();
+        self.config
+            .served_ops
+            .iter()
+            .filter_map(move |op| self.host.plan_invoke(op, &provider).err())
+    }
+}
+
+/// The declines a host returned for one config, each named once.
+fn declined(declines: impl Iterator<Item = Decline>) -> Result<(), ConfigError> {
+    let declines = declines.fold(Vec::new(), |mut named, decline| {
+        if !named.contains(&decline) {
+            named.push(decline);
         }
+        named
+    });
+    if declines.is_empty() {
         Ok(())
+    } else {
+        Err(ConfigError::Declined(declines))
     }
 }
 

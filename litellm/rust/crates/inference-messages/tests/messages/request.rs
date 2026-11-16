@@ -1,4 +1,5 @@
 use litellm_auth::VertexParams;
+use litellm_inference_messages::{MessagesRoute, Unplanned};
 use litellm_llms::base_llm::messages::context::{MessagesModelCapabilities, SupportedEffortTiers};
 use litellm_llms_types::{
     headers::{ProviderSpecificHeader, ProviderSpecificHeaders},
@@ -462,32 +463,63 @@ async fn each_provider_posts_to_its_messages_endpoint(
 }
 
 #[rstest]
-#[case::unknown_provider(MODEL, Some("openai"), "openai")]
-#[case::unresolvable_model(
-    "no-such-model",
-    None,
-    "unable to resolve custom_llm_provider for messages request"
-)]
-#[tokio::test]
-async fn unsupported_providers_are_rejected_before_sending(
+fn a_provider_without_a_native_config_declines_in_the_plan(call: MessagesCall) {
+    let Err(Unplanned::Declined(decline)) = MessagesRoute::plan(MessagesCall {
+        custom_llm_provider: Some("openai".into()),
+        ..with_model(call, MODEL)
+    }) else {
+        panic!("a provider with no native config declines")
+    };
+
+    assert_eq!(
+        (decline.code(), decline.detail()),
+        ("llms.provider", "messages on provider `openai`")
+    );
+}
+
+#[rstest]
+#[case::bedrock_invoke("bedrock/anthropic.claude-sonnet-4-5-20250929-v1:0", true)]
+#[case::anthropic("anthropic/claude-sonnet-4-5", false)]
+fn an_output_schema_only_python_rewrites_declines_in_the_plan_of_the_provider_that_rewrites_it(
     call: MessagesCall,
     #[case] model: &str,
-    #[case] provider: Option<&str>,
-    #[case] reported: &str,
+    #[case] declines: bool,
 ) {
-    let error = run(MessagesCall {
-        custom_llm_provider: provider.map(Into::into),
-        litellm_params: Default::default(),
-        api_key: Some("sk".into()),
-        api_base: Some(UNREACHABLE_BASE.into()),
-        ..with_model(call, model)
-    })
-    .await
-    .expect_err("unsupported provider errors");
+    let planned = MessagesRoute::plan(MessagesCall {
+        custom_llm_provider: None,
+        ..with_fields(
+            with_model(call, model),
+            json!({"output_format": {"type": "json_schema", "schema": {
+                "type": "integer", "maximum": 3, "description": {"en": "a count"}
+            }}}),
+        )
+    });
+
+    match planned {
+        Err(Unplanned::Declined(decline)) => {
+            assert!(declines, "{decline}");
+            assert_eq!(decline.code(), "llms.output_schema");
+        }
+        Ok(_) => assert!(!declines),
+        Err(Unplanned::Rejected(error)) => panic!("{error:?}"),
+    }
+}
+
+#[rstest]
+fn a_model_with_no_resolvable_provider_is_rejected_in_the_plan(call: MessagesCall) {
+    let Err(Unplanned::Rejected(error)) = MessagesRoute::plan(MessagesCall {
+        custom_llm_provider: None,
+        ..with_model(call, "no-such-model")
+    }) else {
+        panic!("a model with no provider is the caller's mistake")
+    };
 
     assert!(error.is_request(), "{error:?}");
     let report = litellm_error::Report::new(&error).to_string();
-    assert!(report.contains(reported), "{report}");
+    assert!(
+        report.contains("unable to resolve custom_llm_provider for messages request"),
+        "{report}"
+    );
 }
 
 #[rstest]

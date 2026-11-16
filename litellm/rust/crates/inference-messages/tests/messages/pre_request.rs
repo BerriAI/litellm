@@ -30,7 +30,7 @@ async fn run_hooked(hooks: Arc<Hooks>, call: MessagesCall) -> Result<MessagesOut
     let host = LocalMessagesHost::new(call);
     let route = messages_route(Arc::new(RecordingSecrets::empty())).with_pre_request_hooks(hooks);
     litellm_host_native::in_process::run_hosted(
-        route.machine(host.request()?, None),
+        route.machine(planned(host.request()?), None),
         host.runtime(),
     )
     .await

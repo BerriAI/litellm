@@ -34,7 +34,7 @@ fn gateway_call(call: MessagesCall, api_base: String, mcp_gateway: bool) -> Mess
 async fn run_through(route: MessagesRoute, call: MessagesCall) -> Result<MessagesOutput, Error> {
     let host = LocalMessagesHost::new(call);
     litellm_host_native::in_process::run_hosted(
-        route.machine(host.request()?, None),
+        route.machine(planned(host.request()?), None),
         host.runtime(),
     )
     .await

@@ -1,16 +1,18 @@
-use litellm_error::Report;
 use pyo3::prelude::*;
 
 use super::NativeCall;
-use crate::errors::RustBridgeDeclined;
+use litellm_core_utils::decline::Decline;
 
-#[derive(Debug, thiserror::Error)]
-#[error("native embeddings route is not implemented")]
+const NOT_IMPLEMENTED: Decline = Decline::new(
+    "bridge.embeddings",
+    "native embeddings route is not implemented",
+);
+
 struct NotImplemented;
 
 impl From<NotImplemented> for PyErr {
-    fn from(error: NotImplemented) -> Self {
-        RustBridgeDeclined::new_err(Report::new(&error).to_string())
+    fn from(_: NotImplemented) -> Self {
+        crate::errors::declined(&NOT_IMPLEMENTED)
     }
 }
 

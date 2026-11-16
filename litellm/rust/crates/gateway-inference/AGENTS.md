@@ -2,5 +2,7 @@
 - Own endpoint paths, request parsing, model alias resolution, and API-specific response and SSE error formats. Delegate hosted call execution and HTTP body delivery to host-http
 - Delegate inference execution to the `inference-<fmt>` crates and provider transformations and authentication to `llms` and the auth crates. Do not duplicate them in handlers
 - Let the `inference-<fmt>` crates validate inference fields and supported features, then map their errors to HTTP responses. Do not add gateway checks for temporary inference limitations
+- `src/admit.rs` is the one place a request declines. `ROUTES` is the only list of native paths, read by both the router and admission. Admission matches the route without touching the body, then reads the body up to the cap and calls the route's `plan`, which parses, resolves and authorizes the model and asks the route core for its plan. Nothing in a `plan` writes. A handler is `create(Planned<Call>)`: it takes the plan from the request and has no body to read and nothing to decline
+- `Refusal` is a `Decline` or a rejection with the gateway's own error, and `router` answers it itself: the error it found, or a 501 naming the code for a decline
 - Use injected deployments, HTTP pools, settings, and secret sources. Do not load process configuration or construct independent clients in handlers
 - Test HTTP contracts here, including status codes, forwarded headers, error envelopes, and streaming behavior. Keep inference and provider tests in their owning crates

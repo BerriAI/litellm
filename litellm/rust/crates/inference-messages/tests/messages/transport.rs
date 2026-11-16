@@ -112,7 +112,7 @@ async fn execute(
     transport: Arc<ScriptedTransport>,
     call: MessagesCall,
 ) -> Result<(MessagesCallResponse, Vec<Bytes>), Error> {
-    execute_recorded(transport, &RecordingCall::<Messages>::new(call)).await
+    execute_recorded(transport, &RecordingCall::<Messages>::new(planned(call))).await
 }
 
 async fn execute_recorded(
@@ -250,8 +250,10 @@ async fn the_raw_head_carries_the_bytes_the_host_transport_last_sent(
     };
     let transport = ScriptedTransport::new([Scripted::Rejected(400, INVALID_SIGNATURE), success]);
     let fields = json!({"stream": stream, "temperature": 1e-7, "system": "caf\u{e9}"});
-    let host =
-        RecordingCall::<Messages>::new(hosted_call(with_fields(call, replayed_thinking()), fields));
+    let host = RecordingCall::<Messages>::new(planned(hosted_call(
+        with_fields(call, replayed_thinking()),
+        fields,
+    )));
 
     execute_recorded(transport.clone(), &host)
         .await

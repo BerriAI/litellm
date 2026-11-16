@@ -3,23 +3,14 @@
 
 use std::{any::Any, fmt, sync::Arc, time::Duration};
 
-use crate::config::{Op, RoutingStrategy};
-
-/// What a host cannot serve, found when the router is built rather than partway through a call.
-#[derive(Clone, Debug, PartialEq, thiserror::Error)]
-pub enum Unsupported {
-    #[error("routing strategy `{0}` needs a host that can select")]
-    Strategy(RoutingStrategy),
-    #[error("routing plugin `{0}` needs a host that can select")]
-    Plugin(String),
-    #[error("the host cannot run operation `{op}` on provider `{provider}`")]
-    Op { op: Op, provider: String },
-}
+use litellm_core_utils::decline::Decline;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
-    #[error("the router config asks for something this host cannot serve")]
-    Unsupported(#[from] Unsupported),
+    /// Every host call the config reaches that the host declined, found when the router is built
+    /// or changed rather than partway through a call. The core only collects them.
+    #[error("the host declined the router config: {}", listed(.0))]
+    Declined(Vec<Decline>),
     #[error("deployment `{model_name}` has invalid litellm_params")]
     InvalidDeployment {
         model_name: String,
@@ -31,6 +22,14 @@ pub enum ConfigError {
     /// A removal the host's indexes could not finish ([`crate::host_index::RemovalError`]).
     #[error("{0}")]
     Removal(String),
+}
+
+fn listed(declines: &[Decline]) -> String {
+    declines
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("; ")
 }
 
 #[derive(Debug, thiserror::Error)]

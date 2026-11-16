@@ -329,7 +329,10 @@ mod tests {
         Error,
         base_llm::{
             auth::AuthScheme,
-            chat::transformation::{BaseConfig, ProviderChatResponseData},
+            chat::transformation::{
+                BaseConfig, ProviderChatResponseData, STREAMING, UNRECOGNIZED_MESSAGE_FIELD,
+                UNRECOGNIZED_PARAM,
+            },
         },
         openai_like::chat::transformation::OPENAI_LIKE_CHAT_COMPLETIONS_CONFIG,
     };
@@ -639,12 +642,15 @@ mod tests {
     }
 
     #[rstest]
-    #[case::streaming(json!({"stream": true}), "streaming")]
-    #[case::unrecognized_param(json!({"some_provider_knob": 1}), "unrecognized request parameter")]
-    fn declines(#[case] opts: Value, #[case] expected: &'static str) {
+    #[case::streaming(json!({"stream": true}), STREAMING)]
+    #[case::unrecognized_param(
+        json!({"some_provider_knob": 1}),
+        UNRECOGNIZED_PARAM.with_detail("request parameter `some_provider_knob`")
+    )]
+    fn declines(#[case] opts: Value, #[case] expected: Decline) {
         assert_eq!(
             reason(json!([{"role": "user", "content": "hi"}]), opts),
-            Some(Decline::new(expected))
+            Some(expected)
         );
     }
 
@@ -705,7 +711,7 @@ mod tests {
                 ]),
                 json!({}),
             ),
-            Some(Decline::new("unrecognized message field"))
+            Some(UNRECOGNIZED_MESSAGE_FIELD)
         );
     }
 
@@ -718,7 +724,7 @@ mod tests {
                 json!([{"role": "user", "content": "hi"}]),
                 json!({"tools": [{"type": "function", "function": {"name": "f"}}]}),
             ),
-            Some(Decline::new("unrecognized request parameter"))
+            Some(UNRECOGNIZED_PARAM.with_detail("request parameter `tools`"))
         );
     }
 }

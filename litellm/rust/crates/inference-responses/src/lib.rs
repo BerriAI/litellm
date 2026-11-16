@@ -1,5 +1,5 @@
 use litellm_host::observation::ObservationSender;
-pub use litellm_inference::Error;
+pub use litellm_inference::{Error, Unplanned};
 
 pub mod ids;
 pub mod route;
@@ -11,7 +11,6 @@ mod handler;
 use std::sync::Arc;
 
 use litellm_auth::AuthServices;
-use litellm_core_utils::decline::Decline;
 use litellm_core_utils::get_llm_provider_logic::{
     CustomLlmProvider, LlmProviders, get_custom_llm_provider,
 };
@@ -23,9 +22,7 @@ use litellm_llms::{
     openrouter::responses::transformation::OPENROUTER_RESPONSES_CONFIG,
 };
 use litellm_secrets::source::SecretSource;
-use types::{ResponsesCall, ResponsesOutput, ResponsesProvider};
-
-const NOT_NATIVE: Decline = Decline::new("native HTTP responses provider");
+use types::{ResponsesCall, ResponsesOutput, ResponsesPlan, ResponsesProvider};
 
 fn responses_provider(provider: LlmProviders) -> Option<&'static dyn BaseResponsesApiConfig> {
     match provider {
@@ -64,9 +61,53 @@ impl ResponsesRoute {
         }
     }
 
+    /// Resolves the provider and its native Responses config, which is everything about a call
+    /// that can be settled before a credential or the network. The only place this route declines.
+    pub fn plan(call: ResponsesCall) -> Result<ResponsesPlan, Unplanned> {
+        let explicit = call
+            .custom_llm_provider
+            .as_deref()
+            .filter(|provider| !provider.is_empty());
+        let (provider_name, resolved_model) = match get_custom_llm_provider(&call.model, explicit) {
+            Some(CustomLlmProvider {
+                model,
+                custom_llm_provider,
+            }) => (custom_llm_provider, model),
+            None => ("openai", call.model.as_str()),
+        };
+        if resolved_model.is_empty() {
+            return Err(Error::InvalidProvider(call.model).into());
+        }
+        let not_native =
+            || litellm_inference::provider::no_native_config("responses", provider_name);
+        let provider = provider_name
+            .parse::<LlmProviders>()
+            .map_err(|_| not_native())?;
+        let config = responses_provider(provider).ok_or_else(not_native)?;
+        let wire_model = match provider {
+            LlmProviders::Openai if resolved_model.contains('/') => {
+                return Err(Error::InvalidProvider(call.model).into());
+            }
+            LlmProviders::Openai => resolved_model.into(),
+            LlmProviders::Openrouter if explicit.is_some() && !resolved_model.contains('/') => {
+                format!("openrouter/{resolved_model}")
+            }
+            LlmProviders::Openrouter => resolved_model.into(),
+            _ => return Err(not_native().into()),
+        };
+        let provider = ResponsesProvider {
+            identity: ProviderIdentity {
+                model: wire_model,
+                provider: provider_name.into(),
+            },
+            config,
+        };
+        Ok(ResponsesPlan { provider, call })
+    }
+
     pub async fn execute(
         &self,
-        call: ResponsesCall,
+        plan: ResponsesPlan,
         interceptors: &impl Interceptors<Error>,
         options: impl Into<litellm_inference::CallOptions>,
     ) -> Result<ResponsesOutput, Error> {
@@ -76,64 +117,28 @@ impl ResponsesRoute {
         } = options.into();
         litellm_host::lifecycle::observe_call(
             observers.clone(),
-            self.run(call, cache_options, interceptors, observers.as_ref()),
+            self.run(plan, cache_options, interceptors, observers.as_ref()),
         )
         .await
     }
 
     #[tracing::instrument(name = "litellm.route", skip_all, fields(
         route = "responses",
-        model = %call.model,
+        model = %plan.call.model,
         provider,
         resolved_model,
-        stream = call.optional_params.get("stream").and_then(serde_json::Value::as_bool).unwrap_or(false),
+        stream = plan.call.optional_params.get("stream").and_then(serde_json::Value::as_bool).unwrap_or(false),
         outcome
     ))]
     async fn run(
         &self,
-        call: ResponsesCall,
+        plan: ResponsesPlan,
         cache_options: Option<litellm_cache_response::CachePolicy>,
         interceptors: &impl litellm_host::interceptors::Interceptors<Error>,
         observers: Option<&ObservationSender>,
     ) -> Result<ResponsesOutput, Error> {
         litellm_inference::diagnostic::call(async {
-            let explicit = call
-                .custom_llm_provider
-                .as_deref()
-                .filter(|provider| !provider.is_empty());
-            let (provider_name, resolved_model) =
-                match get_custom_llm_provider(&call.model, explicit) {
-                    Some(CustomLlmProvider {
-                        model,
-                        custom_llm_provider,
-                    }) => (custom_llm_provider, model),
-                    None => ("openai", call.model.as_str()),
-                };
-            if resolved_model.is_empty() {
-                return Err(Error::InvalidProvider(call.model));
-            }
-            let provider = provider_name
-                .parse::<LlmProviders>()
-                .map_err(|_| Error::Declined(NOT_NATIVE))?;
-            let config = responses_provider(provider).ok_or(Error::Declined(NOT_NATIVE))?;
-            let wire_model = match provider {
-                LlmProviders::Openai if resolved_model.contains('/') => {
-                    return Err(Error::InvalidProvider(call.model));
-                }
-                LlmProviders::Openai => resolved_model.into(),
-                LlmProviders::Openrouter if explicit.is_some() && !resolved_model.contains('/') => {
-                    format!("openrouter/{resolved_model}")
-                }
-                LlmProviders::Openrouter => resolved_model.into(),
-                _ => return Err(Error::Declined(NOT_NATIVE)),
-            };
-            let provider = ResponsesProvider {
-                identity: ProviderIdentity {
-                    model: wire_model,
-                    provider: provider_name.into(),
-                },
-                config,
-            };
+            let ResponsesPlan { provider, call } = plan;
             litellm_inference::diagnostic::provider(
                 &provider.identity.model,
                 &provider.identity.provider,

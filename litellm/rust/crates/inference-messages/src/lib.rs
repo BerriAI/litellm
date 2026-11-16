@@ -26,13 +26,13 @@ use crate::common_utils::messages_provider;
 pub use common_utils::merge_messages_header_sources;
 pub use encoding::DecodingError;
 pub use host_answer::HostAnswer;
-pub use litellm_inference::Error;
+pub use litellm_inference::{Error, Unplanned};
 pub use pre_request::PreRequestHooks;
 pub use safeguards::Safeguards;
 pub use transport::{Delivered, Transport, TransportRequest, TransportResponse, UnencodableHeader};
 pub use types::{
-    MessagesBody, MessagesCall, MessagesCallResponse, MessagesSettings, MessagesShaping,
-    litellm_params, messages_body,
+    MessagesBody, MessagesCall, MessagesCallResponse, MessagesPlan, MessagesSettings,
+    MessagesShaping, litellm_params, messages_body,
 };
 pub use workload_identity::WorkloadIdentity;
 
@@ -129,15 +129,39 @@ impl MessagesRoute {
         }
     }
 
+    /// Resolves the provider and asks its config whether it shapes the request as Python does,
+    /// which is everything about a call that can be settled before a host hook, a credential or
+    /// the network. The only place this route declines.
+    pub fn plan(call: MessagesCall) -> Result<MessagesPlan, Unplanned> {
+        let resolved = resolve_llm_provider(
+            &call.body.model,
+            call.custom_llm_provider.as_deref(),
+            "messages",
+        )?;
+        let config = messages_provider(resolved.provider, resolved.model).ok_or_else(|| {
+            litellm_inference::provider::no_native_config(
+                "messages",
+                <&str>::from(resolved.provider),
+            )
+        })?;
+        match config.config().unsupported_reason(&call.body) {
+            Some(decline) => Err(decline.into()),
+            None => Ok(MessagesPlan { call }),
+        }
+    }
+
     pub async fn execute(
         &self,
-        call: MessagesCall,
+        plan: MessagesPlan,
         interceptors: &impl litellm_host::interceptors::Interceptors<Error>,
         options: impl Into<litellm_inference::CallOptions>,
     ) -> Result<MessagesCallResponse, Error> {
         let context = CallContext::new(interceptors, options.into());
-        litellm_host::lifecycle::observe_call(context.observers.clone(), self.run(call, context))
-            .await
+        litellm_host::lifecycle::observe_call(
+            context.observers.clone(),
+            self.run(plan.call, context),
+        )
+        .await
     }
 
     #[tracing::instrument(name = "litellm.route", skip_all, fields(

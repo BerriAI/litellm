@@ -76,7 +76,10 @@ async def test_a_native_decline_reaches_the_dispatcher_before_provider_io(
 ) -> None:
     server.expected_requests = 0
 
-    with pytest.raises(RuntimeError, match="declined the request: native Python chat_completions streaming"):
+    with pytest.raises(
+        RuntimeError,
+        match=r"declined the request \(bridge\.streaming\): a streamed chat completion through the Python bridge",
+    ):
         await call(server, asynchronous=asynchronous, stream=True)
 
     assert not server.requests

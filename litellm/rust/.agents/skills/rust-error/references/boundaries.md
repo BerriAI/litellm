@@ -16,7 +16,6 @@ The inference gateway and the Python bridge's route mapping both receive a neste
 
 | Predicate | Gateway | Bridge |
 |---|---|---|
-| `declined()` | 501 | `RustBridgeDeclined`, without the route's public mapping |
 | `upstream_response()` | the provider's status and body | `RustUpstreamError` |
 | `is_missing_credential()` | 401 | no class of its own, a `RuntimeError` because `is_request()` answers false |
 | `is_request()` | 400 | `ValueError` |
@@ -28,9 +27,13 @@ The two boundaries are not identical. The gateway has variants of its own for bo
 
 ## Declines
 
-A failure before anything reached the provider is a decline, and `declined()` on the route error names its reason. It means another host may serve the same request as it was received, so each boundary hands it to the host unchanged: the gateway answers 501 and the Python bridge raises `RustBridgeDeclined`, never a public exception or a `ValueError`. See [gateway](gateway.md) and [pyo3](pyo3.md) for each host's side
+A decline means there is no Rust way to do this, and it is its own type, `litellm_core_utils::decline::Decline { code, detail }`, never a variant of a route error. `code` is stable, dotted by layer (`config.setting`, `route`, `body.field`, `auth.plan`, `router.select`, `llms.streaming`) and safe in a header. `detail` is for the log. Declare each one as a `const`, so a malformed code does not compile
 
-Anything after the send is terminal, never a decline. `declined()` answers `None` for a response fault and for a post-call hook failure even when the wrapped error was a decline, and every route that transforms the provider's answer collapses its errors with `Error::after_send`, which keeps a provider answer and a response fault as they are and nests anything else as the source of an invalid response, so a decline can never describe a call that was billed. Ask `declined()`, do not match the variant behind it, because that after-send cut lives in the predicate
+It is legal only before the first effect another implementation would repeat, and it comes from two places. Construction returns every decline a config gives, such as router-core's `ConfigError::Declined`. A route's `plan` returns the first one for a request as `Unplanned::Declined`. `execute` takes the plan and returns `Error`, which has no decline variant, so a late decline does not compile. A host call Rust may not serve gets a plan-time half on the host trait (`Host::plan_select`, `Host::plan_invoke`), and the Rust host's implementation of that half is where its decline is written
+
+It bubbles up unchanged to the edge that dispatched the work, and that edge decides what it means: the Python bridge raises `RustBridgeDeclined(code, detail)` so the SDK runs its own path, and the gateway, with nothing behind it, answers 501 naming the code. See [gateway](gateway.md) and [pyo3](pyo3.md) for each side
+
+Anything after the send is terminal. Every route that transforms the provider's answer collapses its errors with `Error::after_send`, which keeps a provider answer and a response fault as they are and nests anything else as the source of an invalid response
 
 ## What reaches the client
 

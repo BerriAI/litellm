@@ -13,9 +13,8 @@ Downstream crates ask a lower error questions instead of matching its nested var
 | `status()` | an HTTP status to report |
 | `is_connect()` | the connection was never made, for a host's own connect-error mapping |
 | `tls_source()` | which TLS setting to blame in a config error |
-| `is_computed_header()` | the caller forwarded a header the signer owns, which `litellm_inference::Error` turns into a decline |
 
-Upper types add the questions their callers ask. `litellm_inference::Error` and the OCR error answer `is_missing_credential()`, and `litellm_llms::Error` and `litellm_inference::Error` answer `declined()`, which the boundaries ask first instead of reaching into `Auth` or `Declined`, see [boundaries](boundaries.md)
+Upper types add the questions their callers ask. `litellm_inference::Error` and the OCR error answer `is_missing_credential()`, which the boundaries ask instead of reaching into `Auth`, see [boundaries](boundaries.md). No error answers whether it is a decline, because a decline is never inside one
 
 ```rust
 // reaches through two crates' variants and breaks when either changes

@@ -5,16 +5,21 @@ use crate::routes::inference::InferenceHost;
 use litellm_core_utils::get_llm_provider_logic::get_custom_llm_provider;
 use litellm_host_python::{InvokeError, PythonBinding, PythonHostCalls, PythonOwned, from_py};
 use litellm_inference_responses::{
-    Error,
+    Error, ResponsesRoute,
     ids::{self, IdScope},
     route::Responses,
-    types::ResponsesCall,
+    types::{ResponsesCall, ResponsesPlan},
 };
 use pyo3::{
     gc::{PyTraverseError, PyVisit},
     prelude::*,
     types::PyDict,
 };
+
+const STREAMING: Decline = Decline::new(
+    "bridge.streaming",
+    "a streamed response through the Python bridge",
+);
 
 pub(super) struct ResponsesPythonHost {
     host: InferenceHost,
@@ -108,7 +113,7 @@ impl PythonBinding for ResponsesPythonHost {
         &mut self,
         py: Python<'_>,
         arguments: &Bound<'_, PyDict>,
-    ) -> Result<ResponsesCall, InvokeError<Error>> {
+    ) -> Result<ResponsesPlan, InvokeError<Error>> {
         let call = project(&mut self.host, py, arguments).map_err(InvokeError::Python)?;
         self.ids = id_scope(&self.host, py, arguments, &call).map_err(InvokeError::Python)?;
         if call
@@ -116,11 +121,9 @@ impl PythonBinding for ResponsesPythonHost {
             .get("stream")
             .is_some_and(|value| value == &serde_json::Value::Bool(true))
         {
-            return Err(InvokeError::Native(Error::Declined(Decline::new(
-                "native Python responses streaming",
-            ))));
+            return Err(InvokeError::Python(crate::errors::declined(&STREAMING)));
         }
-        Ok(call)
+        ResponsesRoute::plan(call).map_err(crate::errors::unplanned)
     }
 
     fn encode_response(

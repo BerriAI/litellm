@@ -9,6 +9,9 @@ use url::Url;
 
 use crate::{Error, anthropic::common_utils::resolve_anthropic_api_base};
 
+const BATCH_CREATION: Decline =
+    Decline::new("llms.batch_create", "Anthropic message batch creation");
+
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AnthropicBatchRequestCounts {
     #[serde(default)]
@@ -57,7 +60,7 @@ pub trait AnthropicBatchesConfig {
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<String, Error>;
 
-    fn transform_create_batch_request(&self) -> Result<Value, Error>;
+    fn transform_create_batch_request(&self) -> Result<Value, Decline>;
 
     fn transform_create_batch_response(
         &self,
@@ -127,10 +130,8 @@ impl AnthropicBatchesConfig for AnthropicBatchesTransformation {
         Ok(batches_base_url(api_base, env_lookup)?.into())
     }
 
-    fn transform_create_batch_request(&self) -> Result<Value, Error> {
-        Err(Error::Declined(Decline {
-            reason: "Anthropic message batch creation",
-        }))
+    fn transform_create_batch_request(&self) -> Result<Value, Decline> {
+        Err(BATCH_CREATION)
     }
 
     fn transform_create_batch_response(
@@ -344,20 +345,15 @@ mod tests {
 
     #[rstest::rstest]
     fn batch_creation_only_declines_before_a_provider_response() {
-        let error = ANTHROPIC_BATCHES_TRANSFORMATION
+        let decline = ANTHROPIC_BATCHES_TRANSFORMATION
             .transform_create_batch_request()
             .unwrap_err();
-        assert!(!error.dispatched());
-        assert_eq!(
-            error.declined().map(|decline| decline.reason),
-            Some("Anthropic message batch creation")
-        );
+        assert_eq!(decline.code(), "llms.batch_create");
         let response: AnthropicMessageBatch = serde_json::from_value(json!({})).unwrap();
         let error = ANTHROPIC_BATCHES_TRANSFORMATION
             .transform_create_batch_response(response, 0)
             .unwrap_err();
         assert!(error.dispatched());
         assert!(error.is_response());
-        assert!(error.declined().is_none());
     }
 }
