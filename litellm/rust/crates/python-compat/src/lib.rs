@@ -17,6 +17,7 @@
 //! | [`pydantic`] | `TypeAdapter(bool)` and `TypeAdapter(int)` lax validation |
 //! | [`urllib`] | `urllib.parse.quote(text, safe=safe)` |
 //! | [`datetime`] | `datetime.fromtimestamp(seconds, timezone.utc)` fields and `datetime.fromisoformat(text)` |
+//! | [`flags`] | LiteLLM's own text-to-bool helpers, such as `str_to_bool` and `_redis._str_to_bool` |
 //! | [`lenient`] | how Python reads an unvalidated config value: `value is True`, or a value of the expected shape |
 //!
 //! [`Value`] is the closed data model these formats share. Live Python objects
@@ -32,6 +33,7 @@
 
 pub mod datetime;
 mod error;
+pub mod flags;
 pub mod format;
 pub mod json;
 pub mod lenient;

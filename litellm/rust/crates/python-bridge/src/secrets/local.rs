@@ -5,7 +5,8 @@ use std::{
 };
 
 use futures_util::future::{BoxFuture, FutureExt, try_join_all};
-use litellm_core_utils::{serde_compat::parse_str_bool, settings::Lookup};
+use litellm_env::Lookup;
+use litellm_python_compat::flags::str_to_bool;
 use litellm_secret_value::SecretValue;
 use litellm_secrets::{
     Error,
@@ -46,7 +47,7 @@ fn environment_str(name: &str) -> Option<SecretValue> {
     }
     std::env::var(name.as_ref())
         .ok()
-        .filter(|value| parse_str_bool(value).is_none())
+        .filter(|value| str_to_bool(value).is_none())
         .map(SecretValue::new)
 }
 
