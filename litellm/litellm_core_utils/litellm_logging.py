@@ -2667,8 +2667,8 @@ class Logging(LiteLLMLoggingBaseClass):
             return response
         return response.model_copy(update={"model": model})
 
-    def _with_full_tool_names(self, response: _LoggedResponse) -> _LoggedResponse | ModelResponse:
-        if not isinstance(response, ModelResponse):
+    def _with_full_tool_names(self, response: _LoggedResponse) -> _LoggedResponse | ModelResponse | ModelResponseStream:
+        if not isinstance(response, ModelResponse | ModelResponseStream):
             return response
         return with_renamed_tool_calls(response, self.bridged_tool_names)
 
