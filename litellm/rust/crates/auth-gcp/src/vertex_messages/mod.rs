@@ -201,7 +201,9 @@ impl VertexMessagesAuth {
                 )
             }
             Some("external_account") => builders::external_account(info),
-            Some("authorized_user") => builders::authorized_user(info),
+            Some("authorized_user") => {
+                builders::authorized_user(info, &self.environment.google_token_endpoint())
+            }
             _ => builders::service_account(info),
         };
         built.map_err(|failure| match credentials.from_file {
@@ -282,6 +284,7 @@ mod tests {
 
     #[derive(Default)]
     struct FakeEnvironment {
+        token_endpoint: String,
         env: BTreeMap<&'static str, String>,
         gcloud_project: Option<&'static str>,
         on_gce: bool,
@@ -293,6 +296,10 @@ mod tests {
     impl GoogleEnvironment for FakeEnvironment {
         fn os_env(&self, name: &str) -> Option<String> {
             self.env.get(name).cloned()
+        }
+
+        fn google_token_endpoint(&self) -> String {
+            self.token_endpoint.clone()
         }
 
         fn gcloud_project(&self) -> EnvironmentFuture<'_, Option<String>> {
@@ -376,6 +383,14 @@ mod tests {
         )
     }
 
+    /// Google's token endpoint played by the token server.
+    fn at(server: &TokenServer) -> FakeEnvironment {
+        FakeEnvironment {
+            token_endpoint: server.url.clone(),
+            ..FakeEnvironment::default()
+        }
+    }
+
     fn auth(environment: FakeEnvironment) -> VertexMessagesAuth {
         VertexMessagesAuth::new(Arc::new(environment))
     }
@@ -403,7 +418,7 @@ mod tests {
         #[case] expected: &str,
     ) {
         let server = token_server.await;
-        let login = auth(FakeEnvironment::default())
+        let login = auth(at(&server))
             .login(
                 Some(authorized_user(&server, extra).to_string()),
                 configured.map(str::to_string),
@@ -430,7 +445,7 @@ mod tests {
         #[case] message: &str,
     ) {
         let server = token_server.await;
-        let error = auth(FakeEnvironment::default())
+        let error = auth(at(&server))
             .login(Some(authorized_user(&server, extra).to_string()), None)
             .await
             .unwrap_err();
@@ -440,11 +455,31 @@ mod tests {
 
     #[rstest]
     #[tokio::test]
+    async fn an_authorized_user_refreshes_at_google_whatever_token_uri_it_names(
+        #[future] token_server: TokenServer,
+    ) {
+        let server = token_server.await;
+        let error = auth(FakeEnvironment {
+            token_endpoint: "http://127.0.0.1:9/token".into(),
+            ..FakeEnvironment::default()
+        })
+        .login(
+            Some(authorized_user(&server, json!({"quota_project_id": "quota"})).to_string()),
+            None,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(failure(error).exception, PythonException::Transport);
+        assert_eq!(server.requests.load(Ordering::SeqCst), 0);
+    }
+
+    #[rstest]
+    #[tokio::test]
     async fn an_empty_configured_project_is_not_replaced_by_the_credentials_project(
         #[future] token_server: TokenServer,
     ) {
         let server = token_server.await;
-        let error = auth(FakeEnvironment::default())
+        let error = auth(at(&server))
             .login(
                 Some(authorized_user(&server, json!({"quota_project_id": "quota"})).to_string()),
                 Some(String::new()),
@@ -526,6 +561,7 @@ mod tests {
         std::fs::copy(file.path(), &path).unwrap();
         let fake = FakeEnvironment {
             gcloud_project: Some("file-project"),
+            token_endpoint: server.url.clone(),
             ..environment(
                 &env.iter()
                     .copied()
@@ -549,6 +585,7 @@ mod tests {
         ));
         let fake = FakeEnvironment {
             gcloud_project: Some("gcloud-project"),
+            token_endpoint: server.url.clone(),
             ..environment(&[(
                 "GOOGLE_APPLICATION_CREDENTIALS",
                 file.path().to_str().unwrap(),
@@ -777,7 +814,7 @@ mod tests {
                 }
             ))
         ));
-        let messages = auth(FakeEnvironment::default())
+        let messages = auth(at(&server))
             .login(Some(credentials), None)
             .await
             .unwrap();
