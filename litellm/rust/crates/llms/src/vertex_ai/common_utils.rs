@@ -4,9 +4,10 @@ use litellm_python_compat::urllib::{ParsedUrl, urlparse, urlsplit};
 
 use crate::Error;
 
-/// Python's `re.match(r"^[a-z][a-z0-9-]*$", location)`, without the newline `$` also matches
-/// before: a location reaches a hostname.
+/// Python's `re.match(r"^[a-z][a-z0-9-]*$", location)`, whose `$` also matches before one
+/// trailing newline.
 fn is_location_token(location: &str) -> bool {
+    let location = location.strip_suffix('\n').unwrap_or(location);
     location
         .as_bytes()
         .first()
@@ -23,11 +24,7 @@ pub fn validate_vertex_location(location: &str) -> Result<&str, Error> {
         return Ok(location);
     }
     Err(Error::Auth(
-        GoogleLoginFailure {
-            exception: PythonException::Value,
-            message: "Invalid vertex_location format".into(),
-        }
-        .into(),
+        GoogleLoginFailure::new(PythonException::Value, "Invalid vertex_location format").into(),
     ))
 }
 
@@ -114,7 +111,9 @@ mod tests {
     #[case::uppercase("US-EAST5")]
     #[case::leading_hyphen("-us")]
     #[case::leading_digit("1us")]
-    #[case::trailing_newline("us-east5\n")]
+    #[case::two_trailing_newlines("us-east5\n\n")]
+    #[case::newline_inside("us\neast5")]
+    #[case::only_a_newline("\n")]
     #[case::empty("")]
     fn a_location_that_is_not_a_token_is_rejected(#[case] location: &str) {
         let Err(Error::Auth(error)) = get_vertex_base_url(location) else {
@@ -122,16 +121,17 @@ mod tests {
         };
         assert_eq!(
             litellm_error::find::<GoogleLoginFailure>(&error),
-            Some(&GoogleLoginFailure {
-                exception: PythonException::Value,
-                message: "Invalid vertex_location format".into(),
-            })
+            Some(&GoogleLoginFailure::new(
+                PythonException::Value,
+                "Invalid vertex_location format"
+            ))
         );
     }
 
     #[rstest]
     #[case::trailing_hyphen("us-")]
     #[case::digit_after_letter("u1")]
+    #[case::one_trailing_newline("us-east5\n")]
     fn a_location_python_accepts_is_accepted(#[case] location: &str) {
         assert!(get_vertex_base_url(location).is_ok());
     }

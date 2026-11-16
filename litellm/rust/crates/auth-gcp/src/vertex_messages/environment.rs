@@ -225,3 +225,60 @@ impl GoogleEnvironment for SystemGoogleEnvironment {
         })
     }
 }
+
+/// A GCE machine whose metadata server grants `token` and names `project`, for tests of a login
+/// that must not reach the network.
+#[cfg(any(test, feature = "test-support"))]
+pub struct OnGce {
+    pub project: &'static str,
+    pub token: &'static str,
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl GoogleEnvironment for OnGce {
+    fn os_env(&self, _name: &str) -> Option<String> {
+        None
+    }
+
+    fn google_token_endpoint(&self) -> String {
+        unreachable!("a GCE login refreshes at the metadata server")
+    }
+
+    fn gcloud_project(&self) -> EnvironmentFuture<'_, Option<String>> {
+        Box::pin(async { None })
+    }
+
+    fn on_gce(&self) -> EnvironmentFuture<'_, bool> {
+        Box::pin(async { true })
+    }
+
+    fn gce_project(&self) -> EnvironmentFuture<'_, Option<String>> {
+        Box::pin(async { Some(self.project.to_string()) })
+    }
+
+    fn gce_credentials(&self) -> Result<TokenSource, GoogleLoginFailure> {
+        struct Granted(&'static str);
+
+        impl crate::GcpTokenSource for Granted {
+            fn project_id(&self) -> crate::GcpAuthFuture<'_, String> {
+                Box::pin(async {
+                    unreachable!("a GCE login names its project from the metadata server")
+                })
+            }
+
+            fn token(&self) -> crate::GcpAuthFuture<'_, SecretValue> {
+                Box::pin(async { Ok(SecretValue::new(self.0)) })
+            }
+        }
+
+        Ok(Arc::new(Granted(self.token)))
+    }
+
+    fn resource_manager_project(
+        &self,
+        _url: String,
+        _token: SecretValue,
+    ) -> EnvironmentFuture<'_, Result<Option<String>, GoogleLoginFailure>> {
+        unreachable!("a GCE login names its project")
+    }
+}

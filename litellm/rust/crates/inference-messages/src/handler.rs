@@ -39,7 +39,8 @@ use serde_json::{Map, Value};
 
 use super::{
     Delivered, Error, HostAnswer, MessagesBody, MessagesCall, MessagesCallResponse, MessagesRoute,
-    Transport, TransportRequest, TransportResponse, UnencodableHeader, WorkloadIdentity,
+    Transport, TransportRequest, TransportResponse, UnencodableHeader, UnsendableUrl,
+    WorkloadIdentity,
     common_utils::{MessagesProvider, merge_messages_header_sources, string_headers},
     constants::{
         MESSAGES_CONNECT_TIMEOUT_SECS, MESSAGES_HTTP_ERROR_ATTEMPTS,
@@ -399,12 +400,17 @@ async fn provider_call(
         },
     }
     .with_azure_ad_token_hosts(credentials.azure_ad_token_hosts)?;
-    let (validated, logged_in_project) =
-        log_in_to_vertex(credentials.auth, validated, &env_lookup).await?;
+    let (validated, logged_in_project) = log_in_to_vertex(
+        credentials.auth,
+        validated,
+        shaping.vertex.google_sdk_missing,
+        &env_lookup,
+    )
+    .await?;
     let connection_params = vertex_connection_params(
         connection_params,
         logged_in_project,
-        &shaping.vertex_supported_regions,
+        &shaping.vertex.supported_regions,
         &env_lookup,
     );
 
@@ -805,6 +811,9 @@ async fn send_recovering(
         log_request_body(request.provider.as_str(), request.stream, &body);
         if let Some(value) = &request.unencodable_request_header {
             return Err(Error::transport(UnencodableHeader::Sent(value.clone())));
+        }
+        if let Some(unsendable) = UnsendableUrl::of(&request.wire.url) {
+            return Err(Error::transport(unsendable));
         }
         // The credential header built from the caller's api_key never passes the caller header
         // check, so it is checked on the wire headers as Python's client encodes them.
@@ -1361,30 +1370,7 @@ mod tests {
         provider_call_with_secrets(call, &|_: &str| None).await
     }
 
-    struct GoogleToken;
-
-    impl litellm_auth_gcp::GcpTokenSource for GoogleToken {
-        fn project_id(&self) -> litellm_auth_gcp::GcpAuthFuture<'_, String> {
-            Box::pin(async { Ok("token-project".to_string()) })
-        }
-
-        fn token(&self) -> litellm_auth_gcp::GcpAuthFuture<'_, litellm_secret_value::SecretValue> {
-            Box::pin(async { Ok(litellm_secret_value::SecretValue::new("google-token")) })
-        }
-    }
-
-    impl litellm_auth_gcp::GcpProviderLoader for GoogleToken {
-        fn load(
-            &self,
-            _source: litellm_auth_gcp::CredentialSource,
-        ) -> litellm_auth_gcp::GcpAuthFuture<'_, std::sync::Arc<dyn litellm_auth_gcp::GcpTokenSource>>
-        {
-            Box::pin(async {
-                Ok(std::sync::Arc::new(GoogleToken)
-                    as std::sync::Arc<dyn litellm_auth_gcp::GcpTokenSource>)
-            })
-        }
-    }
+    use litellm_auth_gcp::vertex_messages::{OnGce, VertexMessagesAuth};
 
     async fn provider_call_with_secrets(
         call: MessagesCall,
@@ -1409,7 +1395,10 @@ mod tests {
         let interceptors = ();
         let context = CallContext::new(&interceptors, litellm_inference::CallOptions::default());
         let auth = AuthServices {
-            gcp: litellm_auth_gcp::VertexAuth::new(std::sync::Arc::new(GoogleToken)),
+            vertex_messages: VertexMessagesAuth::new(std::sync::Arc::new(OnGce {
+                project: "token-project",
+                token: "google-token",
+            })),
             ..AuthServices::default()
         };
         provider_call(
