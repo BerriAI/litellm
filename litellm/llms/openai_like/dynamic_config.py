@@ -126,6 +126,9 @@ def create_config_class(provider: SimpleProviderConfig):
     base_class: Final[type] = OpenAIGPTConfig if provider.base_class == "openai_gpt" else OpenAILikeChatConfig
 
     class JSONProviderConfig(base_class):
+        def _flattens_content_lists(self) -> bool:
+            return bool(provider.special_handling.get("convert_content_list_to_string"))
+
         @overload
         def _transform_messages(
             self, messages: list[AllMessageValues], model: str, is_async: Literal[True]
@@ -146,7 +149,7 @@ def create_config_class(provider: SimpleProviderConfig):
 
             content_flattened: Final = (
                 handle_messages_with_content_list_to_str_conversion(messages)
-                if provider.special_handling.get("convert_content_list_to_string")
+                if self._flattens_content_lists()
                 else messages
             )
             transformed: Final = (
