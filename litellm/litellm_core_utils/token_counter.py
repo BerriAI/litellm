@@ -1871,14 +1871,25 @@ def _count_anthropic_content(
                     and field_name == "content"
                     and (field_mapping := as_str_mapping(content[field_name])) is not None
                 ):
-                    tokens += _count_anthropic_content(
-                        field_mapping,
-                        count_function,
-                        use_default_image_token_count,
-                        default_token_count,
-                        pdf_pricing,
-                        _content_depth=_content_depth + 1,
-                    )
+                    block_type = field_mapping.get("type")
+                    text_field = _TEXT_FIELD_BY_BLOCK_TYPE.get(block_type) if isinstance(block_type, str) else None
+                    if text_field is not None:
+                        # A server tool may answer with a single block rather than a
+                        # list (`content: {"type": "text", ...}`). The list path in
+                        # `_count_content_list` reads those through
+                        # `_TEXT_FIELD_BY_BLOCK_TYPE`; the recursion below only knows
+                        # the tool blocks and raised "Unknown Anthropic content
+                        # type: 'text'" instead (#52006).
+                        tokens += count_function(str(field_mapping.get(text_field) or ""))
+                    else:
+                        tokens += _count_anthropic_content(
+                            field_mapping,
+                            count_function,
+                            use_default_image_token_count,
+                            default_token_count,
+                            pdf_pricing,
+                            _content_depth=_content_depth + 1,
+                        )
                 else:
                     tokens += count_function(str(field_value))
         except Exception as e:
