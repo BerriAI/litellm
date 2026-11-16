@@ -6,6 +6,7 @@ use std::{
 
 use crate::{
     error::Error,
+    phases::ConnectBound,
     proxy::EnvironmentProxies,
     settings::{HttpSettings, SslVerify, TcpKeepalive},
     tls::{CipherSelection, KeyExchangeGroup, Tls12CipherSuite, Unsupported},
@@ -102,7 +103,7 @@ impl TryFrom<&HttpClientConfig> for reqwest::ClientBuilder {
     fn try_from(config: &HttpClientConfig) -> Result<Self, Self::Error> {
         let base = reqwest::Client::builder()
             .tls_backend_preconfigured(rustls::ClientConfig::try_from(config)?)
-            .connect_timeout(config.connect_timeout)
+            .connector_layer(ConnectBound::new(config.connect_timeout))
             .pool_idle_timeout(config.pool_idle_timeout)
             .referer(false)
             .redirect(reqwest::redirect::Policy::limited(MAX_REDIRECTS));

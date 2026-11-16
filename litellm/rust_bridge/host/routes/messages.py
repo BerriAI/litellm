@@ -171,6 +171,7 @@ class MessagesSettings:
     ascii_request_headers: bool = True
     detached_drain_timeout: float | None = None
     detached_drain_limit: int | None = None
+    connect_retry: bool = False
 
 
 def response(value: Mapping[str, object]) -> AnthropicMessagesResponse:
@@ -1313,6 +1314,7 @@ def settings(
         joined_reads=aiohttp,
         detached_drain_timeout=ANTHROPIC_MESSAGES_DETACHED_STREAM_DRAIN_TIMEOUT_SECONDS if asynchronous else None,
         detached_drain_limit=ANTHROPIC_MESSAGES_MAX_DETACHED_STREAM_DRAINS if asynchronous else None,
+        connect_retry=asynchronous,
     )
     if request is None:
         return asdict(configured)

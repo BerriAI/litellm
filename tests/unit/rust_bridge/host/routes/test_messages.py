@@ -87,6 +87,11 @@ def test_settings_drain_a_detached_stream_only_on_an_async_call(asynchronous: bo
     )
 
 
+@pytest.mark.parametrize("asynchronous", [True, False])
+def test_settings_retry_a_failed_connect_only_on_an_async_call(asynchronous: bool) -> None:
+    assert messages_host.settings({}, asynchronous=asynchronous)["connect_retry"] is asynchronous
+
+
 def test_settings_project_caller_configuration_without_resolving_a_model(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "drop_params", False)
     monkeypatch.setattr(litellm, "reasoning_auto_summary", True)
@@ -113,6 +118,7 @@ def test_settings_project_caller_configuration_without_resolving_a_model(monkeyp
         "ascii_request_headers": True,
         "detached_drain_timeout": None,
         "detached_drain_limit": None,
+        "connect_retry": False,
     }
 
 
