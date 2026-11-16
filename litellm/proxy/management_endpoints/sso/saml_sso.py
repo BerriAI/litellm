@@ -316,7 +316,7 @@ class SAMLAuthHandler:
 
     @staticmethod
     async def handle_acs(
-        request: Request, cache: DualCache, post_data: Mapping[str, str]
+        request: Request, cache: DualCache, post_data: Mapping[str, str], *, require_sp_initiated: bool = False
     ) -> tuple[CustomOpenID, SSOIdentityAssertion | None]:
         auth: Final = await SAMLAuthHandler._build_auth(request, cache, post_data=post_data)
         browser_request_id: Final = request.cookies.get(_SAML_AUTHN_STATE_COOKIE)
@@ -336,6 +336,11 @@ class SAMLAuthHandler:
                 detail=f"SAML authentication failed: {reason or ', '.join(errors)}",
             )
 
+        if require_sp_initiated and SAMLAuthHandler._response_in_response_to(auth) is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="CLI/Claude Code sign-in must start from the CLI.",
+            )
         await SAMLAuthHandler._enforce_response_binding(auth, cache, browser_request_id)
         return SAMLAuthHandler._result_from_auth(auth), SAMLAuthHandler._retained_assertion(auth)
 

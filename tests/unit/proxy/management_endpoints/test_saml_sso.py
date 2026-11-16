@@ -13,6 +13,10 @@ import logging
 import re
 import time
 from http.cookies import SimpleCookie
+from types import SimpleNamespace
+from typing import Final
+from unittest.mock import AsyncMock
+from urllib.parse import parse_qs, urlencode, urlparse
 
 import pytest
 from fastapi import HTTPException, Request
@@ -27,11 +31,13 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import NameOID
 from onelogin.saml2.utils import OneLogin_Saml2_Utils
 from starlette.datastructures import URL
+from starlette.types import Message
 
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.caching.redis_cache import RedisCache
-from litellm.proxy._types import LitellmUserRoles
+from litellm.proxy._types import LiteLLM_UserTable, LitellmUserRoles
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.management_endpoints.sso.saml_sso import (
     _SAML_AUTHN_REQUEST_CACHE_PREFIX,
     _SAML_AUTHN_STATE_COOKIE,
@@ -633,6 +639,173 @@ async def test_build_login_redirect_targets_idp_and_caches_request_id(saml_env):
     set_cookie = redirect.headers["set-cookie"]
     assert f"{_SAML_AUTHN_STATE_COOKIE}={request_id}" in set_cookie
     assert "httponly" in set_cookie.lower()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("user_code", "relay_override", "sign", "unsolicited", "prefill_enabled", "direct_login", "disable_admin_ui"),
+    [
+        (None, None, True, False, True, False, False),
+        ("ABCD-EFGH", None, True, False, True, False, False),
+        (None, "litellm-session-token:", True, False, True, False, False),
+        (None, "litellm-session-token:cli-never-issued-session-00", True, False, True, False, False),
+        (None, None, False, False, True, False, False),
+        (None, None, True, True, True, False, False),
+        ("ABCD-EFGH", None, True, False, False, True, False),
+        ("ABCD-EFGH", None, True, False, True, True, False),
+        pytest.param(None, None, True, False, True, False, True, id="disabled-ui-cli"),
+        pytest.param(None, None, False, False, True, False, True, id="disabled-ui-unsigned"),
+        pytest.param(None, None, True, True, True, False, True, id="disabled-ui-unsolicited"),
+    ],
+)
+async def test_saml_cli_device_login_completes_after_signed_assertion(
+    saml_env: tuple[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+    user_code: str | None,
+    relay_override: str | None,
+    sign: bool,
+    unsolicited: bool,
+    prefill_enabled: bool,
+    direct_login: bool,
+    disable_admin_ui: bool,
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.management_endpoints.ui_sso import (
+        _get_cli_sso_flow_cache_key,
+        google_login,
+        saml_callback,
+        saml_login,
+    )
+
+    key_pem, cert_pem = saml_env
+    monkeypatch.setenv("SAML_ALLOW_UNSOLICITED", "true")
+    login_id: Final = "cli-saml-device-login-0001"
+    cli_cache: Final = DualCache()
+    flow_key: Final = _get_cli_sso_flow_cache_key(login_id)
+    cli_cache.set_cache(key=flow_key, value={"poll_secret_hash": "hash", "code_challenge": "pkce-challenge"})
+    user_cache: Final = UserApiKeyCache()
+    user_cache.set_cache(
+        key="alice@example.com",
+        value=LiteLLM_UserTable(user_id="alice@example.com", user_email="alice@example.com", teams=[]),
+    )
+    monkeypatch.setattr(proxy_server, "cli_sso_session_cache", cli_cache)
+    monkeypatch.setattr(proxy_server, "saml_sso_cache", _shared_cache())
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", user_cache)
+    monkeypatch.setattr(
+        proxy_server,
+        "prisma_client",
+        SimpleNamespace(
+            db=SimpleNamespace(
+                litellm_usertable=SimpleNamespace(update_many=AsyncMock()),
+            )
+        ),
+    )
+    monkeypatch.setattr(proxy_server, "master_key", "sk-test-master")
+    monkeypatch.setattr(proxy_server, "general_settings", {"allow_cli_sso_verification_uri_complete": prefill_enabled})
+    monkeypatch.setattr(proxy_server, "user_custom_ui_sso_sign_in_handler", None)
+    for name in ("MICROSOFT_CLIENT_ID", "GOOGLE_CLIENT_ID", "GENERIC_CLIENT_ID", "DISABLE_ADMIN_UI"):
+        monkeypatch.delenv(name, raising=False)
+    if disable_admin_ui:
+        monkeypatch.setenv("DISABLE_ADMIN_UI", "true")
+
+    request: Final = Request(
+        {
+            "type": "http",
+            "scheme": "https",
+            "server": ("proxy.example.com", 443),
+            "path": "/sso/key/generate",
+            "query_string": b"",
+            "headers": [],
+        }
+    )
+    expected_relay: Final = f"litellm-session-token:{login_id}" + (f":{user_code}" if user_code else "")
+    redirect: Final = (
+        await saml_login(request, return_to=expected_relay)
+        if direct_login
+        else await google_login(request, source="litellm-cli", key=login_id, user_code=user_code)
+    )
+    relay: Final = parse_qs(urlparse(redirect.headers["location"]).query)["RelayState"][0]
+    assert relay == expected_relay
+    ticket: Final = SimpleCookie(redirect.headers["set-cookie"])[_SAML_AUTHN_STATE_COOKIE].value
+    signed: Final = _build_signed_response(key_pem, cert_pem, in_response_to=None if unsolicited else ticket, sign=sign)
+    body: Final = urlencode({"SAMLResponse": _b64(signed), "RelayState": relay_override or relay}).encode()
+
+    async def receive() -> Message:
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    callback: Final = Request(
+        {
+            "type": "http",
+            "scheme": "https",
+            "server": ("proxy.example.com", 443),
+            "path": "/sso/saml/callback",
+            "query_string": b"",
+            "headers": [
+                (b"cookie", b"" if unsolicited else f"{_SAML_AUTHN_STATE_COOKIE}={ticket}".encode()),
+                (b"content-type", b"application/x-www-form-urlencoded"),
+            ],
+        },
+        receive,
+    )
+    if relay_override is not None or not sign or unsolicited:
+        with pytest.raises(HTTPException) as exc:
+            await saml_callback(callback)
+        if unsolicited:
+            assert exc.value.status_code == 400
+            assert exc.value.detail == "CLI/Claude Code sign-in must start from the CLI."
+        assert "sso_complete" not in cli_cache.get_cache(key=flow_key)
+        return
+    response: Final = await saml_callback(callback)
+    completed: Final = cli_cache.get_cache(key=flow_key)
+    assert completed["sso_complete"] is True
+    assert completed["session_data"]["user_id"] == "alice@example.com"
+    assert completed["code_challenge"] == "pkce-challenge"
+    assert response.status_code == 200
+    assert f"sso/cli/complete/{login_id}" in response.body.decode()
+    verification_input: Final = re.search(r'<input\b[^>]*\bname="user_code"[^>]*>', response.body.decode())
+    assert verification_input is not None
+    if user_code and prefill_enabled:
+        assert f'value="{user_code}"' in verification_input.group()
+    else:
+        assert "value=" not in verification_input.group()
+
+
+@pytest.mark.asyncio
+async def test_saml_ui_login_preserves_return_to(saml_env: tuple[str, str], monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.management_endpoints.ui_sso import google_login
+
+    monkeypatch.setattr(proxy_server, "prisma_client", SimpleNamespace())
+    monkeypatch.setattr(proxy_server, "master_key", "sk-test-master")
+    monkeypatch.setattr(proxy_server, "saml_sso_cache", _shared_cache())
+    monkeypatch.setattr(proxy_server, "user_custom_ui_sso_sign_in_handler", None)
+    for name in ("MICROSOFT_CLIENT_ID", "GOOGLE_CLIENT_ID", "GENERIC_CLIENT_ID", "DISABLE_ADMIN_UI"):
+        monkeypatch.delenv(name, raising=False)
+    response: Final = await google_login(_fake_request(), return_to="/ui/?tab=keys")
+    assert parse_qs(urlparse(response.headers["location"]).query)["RelayState"] == ["/ui/?tab=keys"]
+
+
+@pytest.mark.asyncio
+async def test_saml_ui_login_stays_blocked_when_admin_ui_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy.management_endpoints.ui_sso import google_login, saml_callback, saml_login
+
+    monkeypatch.setenv("DISABLE_ADMIN_UI", "true")
+    body: Final = urlencode({"SAMLResponse": "unused", "RelayState": "/ui/?tab=keys"}).encode()
+
+    async def receive() -> Message:
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    request: Final = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/sso/saml/callback",
+            "headers": [(b"content-type", b"application/x-www-form-urlencoded")],
+        },
+        receive,
+    )
+    for response in (await google_login(request), await saml_login(request), await saml_callback(request)):
+        assert "Admin UI is Disabled" in response.body.decode()
 
 
 @pytest.mark.asyncio
