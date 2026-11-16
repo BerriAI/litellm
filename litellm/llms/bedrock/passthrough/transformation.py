@@ -15,6 +15,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import object_mapping
 from litellm.llms.base_llm.passthrough.transformation import (
     BasePassthroughConfig,
+    LoggedPassthroughRequest,
     PassthroughStreamCollector,
     relayed_json_object,
 )
@@ -22,7 +23,12 @@ from litellm.llms.bedrock.chat.converse_to_openai import as_json_array, as_json_
 from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation import (
     bedrock_invoke_guardrail_headers,
 )
-from litellm.types.llms.openai import ChatCompletionSystemMessage, ChatCompletionUserMessage
+from litellm.types.llms.openai import (
+    AllMessageValues,
+    ChatCompletionAssistantMessage,
+    ChatCompletionSystemMessage,
+    ChatCompletionUserMessage,
+)
 from litellm.types.utils import Embedding, EmbeddingResponse, ModelResponseStream, PromptTokensDetailsWrapper, Usage
 
 from ..base_aws_llm import BaseAWSLLM
@@ -331,6 +337,8 @@ def _leaf_texts(block: Mapping[str, object]) -> Iterator[str]:
         yield text
     if "json" in block:
         yield json.dumps(block["json"], default=str)
+    if "guardContent" in block:
+        yield from _leaf_texts(_JSON_OBJECT.validate_python(_JSON_OBJECT.validate_python(block["guardContent"])["text"]))
     if "toolUse" in block:
         yield json.dumps(_JSON_OBJECT.validate_python(block["toolUse"]).get("input"), default=str)
 
@@ -369,6 +377,49 @@ def _count_prompt_tokens(model: str, request_body: object) -> int:
         *map(_chat_message, _JSON_OBJECTS.validate_python(body["messages"])),
     )
     return token_counter(model=model, messages=messages)
+
+
+def _logged_turn(turn: Mapping[str, object]) -> AllMessageValues:
+    content: Final = _content_text(turn.get("content", ""))
+    if turn.get("role") == "assistant":
+        return ChatCompletionAssistantMessage(role="assistant", content=content)
+    return ChatCompletionUserMessage(role="user", content=content)
+
+
+def _logged_messages(body: Mapping[str, object]) -> Iterator[AllMessageValues]:
+    if body.get("system"):
+        yield ChatCompletionSystemMessage(role="system", content=_content_text(body["system"]))
+    if "messages" in body:
+        yield from map(_logged_turn, _JSON_OBJECTS.validate_python(body["messages"]))
+    for field in ("prompt", "inputText"):
+        text = body.get(field)
+        if isinstance(text, str):
+            yield ChatCompletionUserMessage(role="user", content=text)
+
+
+def _numeric_settings(body: Mapping[str, object]) -> Iterator[tuple[str, object]]:
+    """A native body's numbers and booleans, nested ones included. Model-specific bodies name their prompt fields
+    freely, so everything that could hold prompt text is left out of the logged settings."""
+    for name, value in body.items():
+        if isinstance(value, (bool, int, float)):
+            yield name, value
+            continue
+        nested = dict(_numeric_settings(value)) if isinstance(value, Mapping) else None
+        if nested:
+            yield name, nested
+
+
+def _logged_request(endpoint: str, body: Mapping[str, object]) -> LoggedPassthroughRequest | None:
+    action: Final = _bedrock_endpoint_action(endpoint)
+    if action not in _BEDROCK_CONVERSE_ACTIONS | _BEDROCK_INVOKE_ACTIONS:
+        return None
+    try:
+        messages: Final = tuple(_logged_messages(body))
+    except (ValidationError, KeyError):
+        return None
+    return LoggedPassthroughRequest(
+        messages=messages, model_parameters={**dict(_numeric_settings(body)), "operation": action}
+    )
 
 
 def _invoke_guardrail_trace(httpx_response: Response) -> Mapping[str, object]:
@@ -494,6 +545,9 @@ class BedrockPassthroughConfig(BaseAWSLLM, BedrockModelInfo, BedrockEventStreamD
 
     def is_streaming_request(self, endpoint: str, request_data: dict) -> bool:
         return "stream" in endpoint
+
+    def logged_request(self, endpoint: str, request_data: Mapping[str, object]) -> LoggedPassthroughRequest | None:
+        return _logged_request(endpoint, request_data)
 
     def _encode_model_id_for_endpoint(self, model_id: str) -> str:
         """

@@ -644,6 +644,11 @@ _GOOGLE_USAGE_FIELDS: Final = frozenset(UsageMetadata.__annotations__)
 _REDACTED_RESULT: Final = TypeAdapter(object)
 _LoggedResponse: Final = TypeVar("_LoggedResponse")
 _GUARDRAIL_INFORMATION_KEY: Final = "standard_logging_guardrail_information"
+PASSTHROUGH_MODEL_PARAMETERS_KEY: Final = "passthrough_model_parameters"
+_PASSTHROUGH_CALL_TYPES: Final = frozenset(
+    {CallTypes.llm_passthrough_route.value, CallTypes.allm_passthrough_route.value}
+)
+_MODEL_PARAMETERS: Final = TypeAdapter(Mapping[str, object])
 
 
 def _without_guardrail_information(metadata: Mapping[str, object]) -> Mapping[str, object]:
@@ -8736,6 +8741,8 @@ def get_standard_logging_object_payload(
             or kwargs.get("async_complete_streaming_response") is not None
         ) and kwargs.get("stream") is True:
             stream = True
+        elif kwargs.get("call_type") in _PASSTHROUGH_CALL_TYPES and isinstance(kwargs.get("stream"), bool):
+            stream = kwargs["stream"]
 
         # Reconstruct full model name with provider prefix for logging
         # This ensures Bedrock models like "us.anthropic.claude-3-5-sonnet-20240620-v1:0"
@@ -8875,9 +8882,10 @@ def get_standard_logging_object_payload(
                 )
             ),
             response=final_response_obj,
-            model_parameters=ModelParamHelper.get_standard_logging_model_parameters(
-                kwargs.get("optional_params", None) or {}
-            ),
+            model_parameters={
+                **ModelParamHelper.get_standard_logging_model_parameters(kwargs.get("optional_params", None) or {}),
+                **_MODEL_PARAMETERS.validate_python(kwargs.get(PASSTHROUGH_MODEL_PARAMETERS_KEY) or {}),
+            },
             hidden_params=clean_hidden_params,
             model_map_information=model_cost_information,
             error_str=error_str,
