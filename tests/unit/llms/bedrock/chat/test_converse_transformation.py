@@ -1131,6 +1131,7 @@ def test_reasoning_effort_sets_output_config_for_adaptive_models_converse(model,
         "bedrock/converse/us.anthropic.claude-opus-4-7",
         "bedrock/converse/us.anthropic.claude-opus-4-6-v1",
         "bedrock/converse/us.anthropic.claude-sonnet-4-6",
+        "bedrock/converse/ca.anthropic.claude-haiku-5-5",
     ],
 )
 def test_output_config_effort_forwarded_into_additional_request_fields(model):
