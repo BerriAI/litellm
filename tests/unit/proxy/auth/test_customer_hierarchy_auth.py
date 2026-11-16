@@ -485,13 +485,15 @@ class _Registrar:
 class _OrganizationRegistrar:
     """Stands in for ensure_customer_organization: records the alias and adds the organization row, or fails."""
 
-    def __init__(self, organizations: _OrganizationTable, failure: Failure | None = None) -> None:
+    def __init__(self, organizations: _OrganizationTable, failure: Failure | Exception | None = None) -> None:
         self.organizations = organizations
         self.failure = failure
         self.calls: tuple[str, ...] = ()
 
     async def __call__(self, alias: str, prisma_client: object) -> Organization | Failure:
         self.calls = (*self.calls, alias)
+        if isinstance(self.failure, Exception):
+            raise self.failure
         if self.failure is not None:
             return self.failure
         self.organizations.rows = (*self.organizations.rows, _organization(alias, org_id=alias))
@@ -716,6 +718,16 @@ async def test_an_alias_that_cannot_be_registered_runs_untracked_and_a_shared_al
         _Prisma(_MemberTable({})), CustomerRequestIdentity(customer_org_alias="ghost"), register_organization=failing
     )
     assert (untracked, failing.calls) == (None, ("ghost",))
+
+    raising: Final = _OrganizationRegistrar(_OrganizationTable(()), RuntimeError("insert refused"))
+    assert (
+        await _resolve(
+            _Prisma(_MemberTable({})),
+            CustomerRequestIdentity(customer_org_alias="ghost"),
+            register_organization=raising,
+        ),
+        raising.calls,
+    ) == (None, ("ghost",))
 
     oversized: Final = _OrganizationRegistrar(_OrganizationTable(()))
     assert (

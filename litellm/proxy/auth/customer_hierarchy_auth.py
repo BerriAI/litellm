@@ -549,7 +549,13 @@ async def _register_organization(
         )
         return _untracked(f"organization alias not found: {customer_org_alias}", CUSTOMER_ORG_ALIAS_HEADER)
     _check_key_scope(customer_org_alias, key_metadata)
-    registered: Final = await register(customer_org_alias, prisma_client)
+    try:
+        registered: Final = await register(customer_org_alias, prisma_client)
+    except Exception as error:
+        verbose_proxy_logger.warning(
+            "Could not register customer organization %s: %s", customer_org_alias, type(error).__name__
+        )
+        return _untracked(f"organization alias not found: {customer_org_alias}", CUSTOMER_ORG_ALIAS_HEADER)
     if isinstance(registered, Failure):
         if registered.code is ErrorCode.FREE_TIER_LIMIT:
             verbose_proxy_logger.warning(
