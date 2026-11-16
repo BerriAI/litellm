@@ -8,6 +8,7 @@ import json
 import os
 import sys
 from types import SimpleNamespace
+from typing import Final
 
 import pytest
 
@@ -187,7 +188,7 @@ class TestReasoningItemWithoutSummaryText:
         """A stand-in signature would be replayed as a real one, so the block closes with an empty one."""
         chunks = _drain_async(self._gpt_turn(reasoning_summary_deltas=["Weighing options"]))
 
-        signature_deltas = [c for c in chunks if c.get("delta", {}).get("type") == "signature_delta"]
+        signature_deltas: Final = [c for c in chunks if c.get("delta", {}).get("type") == "signature_delta"]
         assert [(c["index"], c["delta"]["signature"]) for c in signature_deltas] == [(0, "")]
         assert chunks[chunks.index(signature_deltas[0]) + 1] == {"type": "content_block_stop", "index": 0}
 
@@ -197,7 +198,7 @@ class TestRawReasoningTextIsStreamedAsThinking:
     stream it as ``response.reasoning_text.delta`` instead of a summary."""
 
     def test_reasoning_text_deltas_become_one_closed_thinking_block(self):
-        chunks = _drain_async(
+        chunks: Final = _drain_async(
             [
                 {"type": "response.created"},
                 {"type": "response.output_item.added", "item": {"type": "reasoning", "id": "rs_1"}},
@@ -223,14 +224,14 @@ class TestRawReasoningTextIsStreamedAsThinking:
         ]
 
     def test_a_whole_reasoning_item_without_deltas_becomes_one_closed_thinking_block(self):
-        reasoning_item = {
+        reasoning_item: Final = {
             "type": "reasoning",
             "id": "rs_1",
             "summary": [],
             "content": [{"type": "reasoning_text", "text": "Just answer 391."}],
             "encrypted_content": None,
         }
-        chunks = _drain_async(
+        chunks: Final = _drain_async(
             [
                 {"type": "response.created"},
                 {"type": "response.output_item.added", "item": reasoning_item},
