@@ -989,4 +989,29 @@ mod tests {
         assert_eq!(served, expected.map(str::to_owned).map_err(str::to_owned));
         assert_eq!(endpoint.forms.lock().unwrap().len(), requests);
     }
+
+    #[tokio::test]
+    async fn a_key_refused_with_invalid_grant_is_asked_for_a_token_once() {
+        let endpoint = service_account::tests::endpoint(vec![(
+            400,
+            json!({"error": "invalid_grant", "error_description": "Invalid JWT Signature."}),
+        )])
+        .await;
+        let file = key_file(&service_account_file(&endpoint, json!({})));
+
+        let refused = failure(
+            token(&auth(FakeEnvironment::default()), &file)
+                .await
+                .unwrap_err(),
+        );
+
+        assert_eq!(
+            refused,
+            GoogleLoginFailure::new(
+                PythonException::Refresh,
+                "('invalid_grant: Invalid JWT Signature.', {'error': 'invalid_grant', 'error_description': 'Invalid JWT Signature.'})"
+            )
+        );
+        assert_eq!(endpoint.forms.lock().unwrap().len(), 1);
+    }
 }

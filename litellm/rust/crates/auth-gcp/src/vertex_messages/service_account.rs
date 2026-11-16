@@ -3,7 +3,8 @@
 
 use std::{sync::Arc, time::Duration};
 
-use jsonwebtoken::{Algorithm, EncodingKey, Header};
+use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+use jsonwebtoken::{Algorithm, EncodingKey};
 use litellm_http::{
     ClientVariant, HttpClientPool, HttpSettings, Resolution, media::PublicDnsResolver,
 };
@@ -13,7 +14,6 @@ use litellm_python_compat::{
     repr::{repr, to_str},
 };
 use litellm_secret_value::SecretValue;
-use serde::Serialize;
 use serde_json::{Map, Value};
 use time::OffsetDateTime;
 
@@ -39,18 +39,10 @@ const RETRYABLE_ERRORS: [&str; 3] = [
     "temporarily_unavailable",
 ];
 
-#[derive(Serialize)]
-struct Assertion<'a> {
-    iat: i64,
-    exp: i64,
-    iss: &'a str,
-    aud: &'a str,
-    scope: &'a str,
-}
-
 pub(crate) struct ServiceAccountGrant {
     key: EncodingKey,
-    key_id: Option<String>,
+    /// `private_key_id` as the signer holds it, any JSON value but null.
+    key_id: Option<Value>,
     email: String,
     token_uri: String,
     first_retry_wait: Duration,
@@ -82,8 +74,8 @@ fn grant(
         key,
         key_id: info
             .get("private_key_id")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
+            .filter(|key_id| !key_id.is_null())
+            .cloned(),
         email: text(info, "client_email"),
         token_uri: text(info, "token_uri"),
         first_retry_wait,
@@ -165,24 +157,37 @@ fn expiry(granted: &Map<String, Value>, now: OffsetDateTime) -> Result<Expiry, G
 }
 
 impl ServiceAccountGrant {
+    /// `_make_authorization_grant_assertion` signed by `jwt.encode`: the header and claims are
+    /// `json.dumps` of google-auth's dicts, in their key order and with its separators.
     fn assertion(&self, now: OffsetDateTime) -> Result<String, GoogleLoginFailure> {
+        let text = |value: &str| PyValue::Str(value.to_owned());
         let issued = now.unix_timestamp();
-        let header = Header {
-            kid: self.key_id.clone(),
-            ..Header::new(Algorithm::RS256)
+        let mut header = vec![(text("typ"), text("JWT")), (text("alg"), text("RS256"))];
+        if let Some(key_id) = &self.key_id {
+            header.push((text("kid"), from_json(key_id.clone())));
+        }
+        let claims = vec![
+            (text("iat"), PyValue::Int(issued.into())),
+            (
+                text("exp"),
+                PyValue::Int((issued + ASSERTION_LIFETIME.as_secs() as i64).into()),
+            ),
+            (text("iss"), text(&self.email)),
+            (text("aud"), text(GOOGLE_OAUTH_TOKEN_ENDPOINT)),
+            (text("scope"), text(CLOUD_PLATFORM_SCOPE)),
+        ];
+        let segment = |fields| {
+            dumps(&PyValue::Dict(fields))
+                .map(|json| URL_SAFE_NO_PAD.encode(json))
+                .map_err(|error| GoogleLoginFailure::new(PythonException::Value, error.to_string()))
         };
-        jsonwebtoken::encode(
-            &header,
-            &Assertion {
-                iat: issued,
-                exp: issued + ASSERTION_LIFETIME.as_secs() as i64,
-                iss: &self.email,
-                aud: GOOGLE_OAUTH_TOKEN_ENDPOINT,
-                scope: CLOUD_PLATFORM_SCOPE,
-            },
-            &self.key,
-        )
-        .map_err(|error| GoogleLoginFailure::new(PythonException::Value, error.to_string()))
+        let signing_input = format!("{}.{}", segment(header)?, segment(claims)?);
+        let signature =
+            jsonwebtoken::crypto::sign(signing_input.as_bytes(), &self.key, Algorithm::RS256)
+                .map_err(|error| {
+                    GoogleLoginFailure::new(PythonException::Value, error.to_string())
+                })?;
+        Ok(format!("{signing_input}.{signature}"))
     }
 
     async fn post(&self, assertion: &str) -> Result<(u16, String), GoogleLoginFailure> {
@@ -195,7 +200,8 @@ impl ServiceAccountGrant {
             .map_err(|error| token_failure(&error))?;
         let response = client
             .post(&self.token_uri)
-            .form(&[("grant_type", JWT_BEARER_GRANT), ("assertion", assertion)])
+            .header(http::header::ACCEPT, "*/*")
+            .form(&[("assertion", assertion), ("grant_type", JWT_BEARER_GRANT)])
             .send()
             .await
             .map_err(|error| token_failure(&error))?;
@@ -258,7 +264,10 @@ pub(crate) mod tests {
     };
 
     use axum::{Router, routing::post};
-    use rsa::{RsaPrivateKey, pkcs8::EncodePrivateKey};
+    use rsa::{
+        RsaPrivateKey,
+        pkcs8::{DecodePrivateKey, EncodePrivateKey, EncodePublicKey},
+    };
     use rstest::rstest;
     use serde_json::json;
 
@@ -288,6 +297,8 @@ pub(crate) mod tests {
     pub(crate) struct Endpoint {
         pub(crate) url: String,
         pub(crate) forms: Arc<Mutex<Vec<String>>>,
+        /// Each request's `accept` header.
+        pub(crate) accepts: Arc<Mutex<Vec<Option<String>>>>,
         server: tokio::task::JoinHandle<()>,
     }
 
@@ -301,12 +312,19 @@ pub(crate) mod tests {
     pub(crate) async fn endpoint(answers: Vec<(u16, Value)>) -> Endpoint {
         let forms = Arc::new(Mutex::new(Vec::new()));
         let recorded = forms.clone();
+        let accepts = Arc::new(Mutex::new(Vec::new()));
+        let accepted = accepts.clone();
         let next = Arc::new(AtomicUsize::new(0));
         let answers = Arc::new(answers);
         let app = Router::new().route(
             "/token",
-            post(move |form: String| {
+            post(move |headers: axum::http::HeaderMap, form: String| {
                 let recorded = recorded.clone();
+                accepted.lock().unwrap().push(
+                    headers
+                        .get(axum::http::header::ACCEPT)
+                        .map(|accept| accept.to_str().unwrap().to_owned()),
+                );
                 let answers = answers.clone();
                 let index = next.fetch_add(1, Ordering::SeqCst);
                 async move {
@@ -322,7 +340,12 @@ pub(crate) mod tests {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}/token", listener.local_addr().unwrap());
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        Endpoint { url, forms, server }
+        Endpoint {
+            url,
+            forms,
+            accepts,
+            server,
+        }
     }
 
     fn quick(url: &str) -> ServiceAccountGrant {
@@ -347,37 +370,53 @@ pub(crate) mod tests {
         assert!(expiry >= before + time::Duration::seconds(3599));
         let form = endpoint.forms.lock().unwrap()[0].clone();
         let assertion = form
-            .strip_prefix(
-                "grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=",
-            )
+            .strip_prefix("assertion=")
+            .and_then(|form| {
+                form.strip_suffix(
+                    "&grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer",
+                )
+            })
             .unwrap();
-        let header = jsonwebtoken::decode_header(assertion).unwrap();
-        assert_eq!(
-            (header.alg, header.kid.as_deref()),
-            (Algorithm::RS256, Some("key-1"))
-        );
-        let claims: Value = serde_json::from_slice(
-            &base64::Engine::decode(
-                &base64::engine::general_purpose::URL_SAFE_NO_PAD,
-                assertion.split('.').nth(1).unwrap(),
+        let segments: Vec<&str> = assertion.split('.').collect();
+        let decoded = |segment: &str| {
+            String::from_utf8(
+                base64::Engine::decode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, segment)
+                    .unwrap(),
             )
-            .unwrap(),
-        )
-        .unwrap();
+            .unwrap()
+        };
+        let claims = decoded(segments[1]);
+        let issued: i64 = claims["{\"iat\": ".len()..]
+            .split(',')
+            .next()
+            .unwrap()
+            .parse()
+            .unwrap();
         assert_eq!(
+            (decoded(segments[0]), claims),
             (
-                &claims["iss"],
-                &claims["aud"],
-                &claims["scope"],
-                claims["exp"].as_i64().unwrap() - claims["iat"].as_i64().unwrap()
-            ),
-            (
-                &json!("sa@p.iam.gserviceaccount.com"),
-                &json!(GOOGLE_OAUTH_TOKEN_ENDPOINT),
-                &json!(CLOUD_PLATFORM_SCOPE),
-                3600
+                r#"{"typ": "JWT", "alg": "RS256", "kid": "key-1"}"#.to_owned(),
+                format!(
+                    r#"{{"iat": {issued}, "exp": {}, "iss": "sa@p.iam.gserviceaccount.com", "aud": "{GOOGLE_OAUTH_TOKEN_ENDPOINT}", "scope": "{CLOUD_PLATFORM_SCOPE}"}}"#,
+                    issued + 3600
+                )
             )
         );
+        let public = RsaPrivateKey::from_pkcs8_pem(&PRIVATE_KEY)
+            .unwrap()
+            .to_public_key()
+            .to_public_key_pem(rsa::pkcs8::LineEnding::LF)
+            .unwrap();
+        assert!(
+            jsonwebtoken::crypto::verify(
+                segments[2],
+                format!("{}.{}", segments[0], segments[1]).as_bytes(),
+                &jsonwebtoken::DecodingKey::from_rsa_pem(public.as_bytes()).unwrap(),
+                Algorithm::RS256,
+            )
+            .unwrap()
+        );
+        assert_eq!(endpoint.accepts.lock().unwrap()[0].as_deref(), Some("*/*"));
     }
 
     #[rstest]
@@ -449,5 +488,25 @@ pub(crate) mod tests {
                 "('No access token in response.', {'expires_in': 60})"
             )
         );
+    }
+
+    #[rstest]
+    #[case::named(json!({}), r#"{"typ": "JWT", "alg": "RS256", "kid": "key-1"}"#)]
+    #[case::null(json!({"private_key_id": null}), r#"{"typ": "JWT", "alg": "RS256"}"#)]
+    #[case::numeric(json!({"private_key_id": 7}), r#"{"typ": "JWT", "alg": "RS256", "kid": 7}"#)]
+    fn the_assertion_header_names_the_key_as_jwt_encode_does(
+        #[case] extra: Value,
+        #[case] expected: &str,
+    ) {
+        let assertion = grant(&key("http://127.0.0.1:9/token", extra), FIRST_RETRY_WAIT)
+            .unwrap()
+            .assertion(OffsetDateTime::now_utc())
+            .unwrap();
+        let header = base64::Engine::decode(
+            &base64::engine::general_purpose::URL_SAFE_NO_PAD,
+            assertion.split('.').next().unwrap(),
+        )
+        .unwrap();
+        assert_eq!(String::from_utf8(header).unwrap(), expected);
     }
 }
