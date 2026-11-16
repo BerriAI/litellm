@@ -33,6 +33,7 @@ tracing.workspace = true
 
 [dev-dependencies]
 litellm-error.workspace = true
+litellm-auth-gcp.workspace = true
 litellm-framer = { workspace = true, features = ["sse"] }
 litellm-cache.workspace = true
 litellm-cache-memory.workspace = true
