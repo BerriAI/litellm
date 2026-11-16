@@ -165,7 +165,7 @@ fn eager_input_streaming_used(tools: &[Value]) -> Result<bool, Error> {
 }
 
 fn effort_used(params: &Body, model: &str, capabilities: &MessagesModelCapabilities) -> bool {
-    if params.is_empty() || capabilities.supports_adaptive_thinking {
+    if params.is_empty() || capabilities.bedrock.supports_adaptive_thinking {
         return false;
     }
     let lowered = model.to_lowercase();

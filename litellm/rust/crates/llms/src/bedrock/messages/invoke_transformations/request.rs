@@ -8,7 +8,7 @@ use serde_json::{Map, Value, json};
 use crate::{
     Error, ErrorDetail,
     anthropic::{
-        beta_gated_fields::strip_beta_gated_request, common_utils::supports_effort_param,
+        beta_gated_fields::strip_beta_gated_request,
         messages::transformation::transform_messages_request,
     },
     base_llm::{
@@ -130,7 +130,7 @@ pub(crate) fn clamp_adaptive_reasoning_effort_for_bedrock(
     request: MessagesRequest,
     capabilities: &MessagesModelCapabilities,
 ) -> Result<MessagesRequest, Error> {
-    if !capabilities.supports_adaptive_thinking {
+    if !capabilities.bedrock.supports_adaptive_thinking {
         return Ok(request);
     }
     let mut body = to_body(&request)?;
@@ -268,7 +268,7 @@ pub(super) fn supports_extended_thinking_on_bedrock(
     capabilities: &MessagesModelCapabilities,
 ) -> bool {
     let lowered = model.to_lowercase();
-    capabilities.supports_adaptive_thinking
+    capabilities.bedrock.supports_adaptive_thinking
         || EXTENDED_THINKING_PATTERNS
             .iter()
             .any(|pattern| lowered.contains(pattern))
@@ -362,7 +362,7 @@ fn ensure_thinking_for_clear_thinking_context_management(
     if !needs_thinking || !supports_extended_thinking_on_bedrock(model, capabilities) {
         return Ok(false);
     }
-    let adaptive = capabilities.supports_adaptive_thinking;
+    let adaptive = capabilities.bedrock.supports_adaptive_thinking;
     if let Some(Value::Object(thinking)) = body.get("thinking") {
         match thinking.get("type").and_then(Value::as_str) {
             Some("adaptive") => return Ok(false),
@@ -540,7 +540,7 @@ pub(crate) fn transform_anthropic_messages_request(
     apply_bedrock_invoke_structured_output(&mut body, &model, capabilities.bedrock.native_output)?;
     let ceiling = get_bedrock_output_config_effort_ceiling(capabilities);
     normalize_bedrock_opus_output_config_effort(body.get_mut("output_config"), ceiling.as_deref());
-    let supports_effort = supports_effort_param(capabilities);
+    let supports_effort = capabilities.bedrock.supports_effort_param;
     strip_unsupported_bedrock_invoke_output_config_keys(
         &model,
         &mut body,
@@ -588,6 +588,7 @@ mod tests {
 
     use super::*;
     use crate::{
+        anthropic::model_capabilities::with_invoke_flags,
         base_llm::messages::{
             context::{BedrockCapabilities, NativeOutputSupport, SupportedEffortTiers},
             transformation::BaseMessagesConfig,
@@ -601,7 +602,7 @@ mod tests {
     }
 
     fn adaptive() -> MessagesModelCapabilities {
-        MessagesModelCapabilities {
+        let capabilities = MessagesModelCapabilities {
             supports_reasoning: true,
             supports_adaptive_thinking: true,
             supports_output_config: true,
@@ -614,6 +615,10 @@ mod tests {
                 ..SupportedEffortTiers::default()
             },
             ..MessagesModelCapabilities::default()
+        };
+        MessagesModelCapabilities {
+            bedrock: with_invoke_flags(capabilities.bedrock, &capabilities),
+            ..capabilities
         }
     }
 
@@ -631,6 +636,10 @@ mod tests {
         capabilities: MessagesModelCapabilities,
         drop_params: bool,
     ) -> MessagesTransformContext {
+        let capabilities = MessagesModelCapabilities {
+            bedrock: with_invoke_flags(capabilities.bedrock, &capabilities),
+            ..capabilities
+        };
         MessagesTransformContext {
             drops_unsupported_params: drop_params,
             ..MessagesTransformContext::new(capabilities, drop_params)
@@ -904,7 +913,10 @@ mod tests {
         #[case] expected: bool,
     ) {
         let capabilities = MessagesModelCapabilities {
-            supports_adaptive_thinking,
+            bedrock: BedrockCapabilities {
+                supports_adaptive_thinking,
+                ..BedrockCapabilities::default()
+            },
             ..MessagesModelCapabilities::default()
         };
         assert_eq!(
