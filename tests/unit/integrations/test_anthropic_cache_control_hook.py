@@ -51,6 +51,34 @@ def _rendered_log_message(call):
     return message % values if values else message
 
 
+@pytest.mark.parametrize("source", ["deployment", "catalog"])
+@pytest.mark.parametrize(
+    "canonical,legacy,expected",
+    [(None, True, True), (None, False, False), (True, False, True), (False, True, False)],
+)
+def test_openai_cache_breakpoints_prefer_the_scoped_flag_but_keep_the_legacy_alias(
+    monkeypatch, source, canonical, legacy, expected
+):
+    model: Final = "openai-cache-capability-test"
+    flags: Final = {
+        "litellm_provider": "openai",
+        "mode": "chat",
+        "supports_openai_prompt_cache_breakpoint": canonical,
+        "supports_prompt_cache_breakpoint": legacy,
+        "supports_bedrock_converse_cache_point": not expected,
+    }
+    monkeypatch.setitem(litellm.model_cost, model, flags)
+
+    assert (
+        supports_openai_prompt_cache_breakpoint(model, "openai", flags if source == "deployment" else None) is expected
+    )
+    assert litellm.utils.supports_prompt_cache_breakpoint(model, "openai") is expected
+    assert (
+        litellm.get_model_info(model, custom_llm_provider="openai")["supports_openai_prompt_cache_breakpoint"]
+        is canonical
+    )
+
+
 @pytest.mark.asyncio
 async def test_anthropic_cache_control_hook_system_message(monkeypatch: pytest.MonkeyPatch):
     # Use patch.dict to mock environment variables instead of setting them directly

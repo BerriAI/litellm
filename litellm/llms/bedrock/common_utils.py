@@ -1647,7 +1647,7 @@ def bedrock_model_accepts_cache_points(
     models without prompt caching support ("You invoked an unsupported model or your
     request did not allow prompt caching"), so a model whose cost-map entry does not declare
     ``supports_prompt_caching`` must not receive them. An explicit
-    ``supports_prompt_cache_breakpoint`` on the entry wins over that flag: a model can price
+    ``supports_bedrock_converse_cache_point`` on the entry wins over that flag: a model can price
     cached tokens through implicit caching yet reject the marker on Converse ("This model
     doesn't support the cachePoint field", Kimi K3). The router registers a deployment's
     ``model_info`` under ``bedrock/<model>`` as configured, route prefix included, while the
@@ -1689,7 +1689,7 @@ def bedrock_model_known_to_accept_cache_points(
     model: str, deployment_model: str | None = None, model_info: Mapping[str, object] | None = None
 ) -> bool:
     """Like ``bedrock_model_accepts_cache_points``, but only for the Claude and Nova families Bedrock documents
-    as taking cache checkpoints, unless the entry sets ``supports_prompt_cache_breakpoint``: an OpenAI
+    as taking cache checkpoints, unless the entry sets ``supports_bedrock_converse_cache_point``: an OpenAI
     ``prompt_cache_breakpoint`` reaches every model of a mixed fleet, not only the ones a client marked for
     Bedrock caching, and other families price implicit cache reads yet may reject the cachePoint field."""
     deployment_declared: Final = (
@@ -1718,19 +1718,35 @@ def _documents_cache_checkpoints(model: str) -> bool:
 
 
 def _explicit_cache_point_support(model: str, model_info: Mapping[str, object] | None) -> bool | None:
-    deployment_flag: Final = None if model_info is None else model_info.get("supports_prompt_cache_breakpoint")
+    deployment_flag: Final = None if model_info is None else model_info.get("supports_bedrock_converse_cache_point")
     if deployment_flag is not None:
         return deployment_flag is True
     catalog_entry: Final = _catalog_entry_reader(model_info)
     registered_keys: Final = tuple(f"bedrock/{route}{model}" for route in ("", "converse/", "converse_like/"))
-    return next(
+    entries: Final = tuple(
+        entry
+        for key in (*registered_keys, model, get_bedrock_base_model(model))
+        if (entry := catalog_entry(key)) is not None
+    )
+    explicit_support: Final = next(
         (
-            entry.get("supports_prompt_cache_breakpoint") is True
-            for key in (*registered_keys, model, get_bedrock_base_model(model))
-            if (entry := catalog_entry(key)) is not None and entry.get("supports_prompt_cache_breakpoint") is not None
+            entry.get("supports_bedrock_converse_cache_point") is True
+            for entry in entries
+            if entry.get("supports_bedrock_converse_cache_point") is not None
         ),
         None,
     )
+    if explicit_support is not None:
+        return explicit_support
+    legacy_flag: Final = None if model_info is None else model_info.get("supports_prompt_cache_breakpoint")
+    if legacy_flag is not None or any(entry.get("supports_prompt_cache_breakpoint") is not None for entry in entries):
+        warnings.warn(
+            "supports_prompt_cache_breakpoint controls OpenAI prompt_cache_breakpoint, not Bedrock cachePoint. "
+            "Use supports_bedrock_converse_cache_point to enable or disable Bedrock Converse cache points.",
+            UserWarning,
+            stacklevel=2,
+        )
+    return None
 
 
 def _mapped_prompt_caching_support(model: str, model_info: Mapping[str, object] | None) -> bool | None:

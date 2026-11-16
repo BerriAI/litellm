@@ -1,5 +1,6 @@
 import asyncio, importlib, litellm, pytest
 import respx
+import warnings
 from httpx import Response
 from typing import Final
 
@@ -481,12 +482,12 @@ def test_deprecated_is_claude_4_5_on_bedrock_warns_and_matches_new_name(monkeypa
     ("entry", "expected"),
     [
         pytest.param(
-            {"supports_prompt_caching": True, "supports_prompt_cache_breakpoint": False},
+            {"supports_prompt_caching": True, "supports_bedrock_converse_cache_point": False},
             False,
             id="priced-cached-tokens-but-rejects-the-explicit-marker",
         ),
         pytest.param(
-            {"supports_prompt_caching": False, "supports_prompt_cache_breakpoint": True},
+            {"supports_prompt_caching": False, "supports_bedrock_converse_cache_point": True},
             True,
             id="explicit-marker-flag-wins-over-the-caching-flag",
         ),
@@ -515,6 +516,45 @@ def test_kimi_k3_keeps_cached_token_pricing_while_refusing_converse_cache_points
     assert litellm.model_cost[model]["cache_read_input_token_cost"] > 0
 
 
+@pytest.mark.parametrize("source", ["deployment", "catalog"])
+@pytest.mark.parametrize(
+    "legacy,bedrock,caching,expected",
+    [
+        (False, None, True, True),
+        (True, None, True, True),
+        (True, False, True, False),
+        (False, True, False, True),
+        (None, None, False, False),
+    ],
+)
+def test_bedrock_ignores_openai_flags_and_warns_about_legacy_configs(
+    monkeypatch, source, legacy, bedrock, caching, expected
+):
+    from litellm.llms.bedrock.common_utils import bedrock_declared_cache_point_support
+
+    model: Final = "us.anthropic.claude-fable-5-2" if source == "deployment" else "bedrock-cache-capability-test"
+    flags: Final = {
+        "supports_prompt_caching": caching,
+        "supports_prompt_cache_breakpoint": legacy,
+        "supports_openai_prompt_cache_breakpoint": False,
+        "supports_bedrock_converse_cache_point": bedrock,
+    }
+    monkeypatch.setitem(litellm.model_cost, model, flags)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        actual: Final = bedrock_declared_cache_point_support(model, flags if source == "deployment" else None)
+
+    assert actual is expected
+    assert [str(warning.message) for warning in caught] == (
+        [
+            "supports_prompt_cache_breakpoint controls OpenAI prompt_cache_breakpoint, not Bedrock cachePoint. "
+            "Use supports_bedrock_converse_cache_point to enable or disable Bedrock Converse cache points."
+        ]
+        if legacy is not None and bedrock is None
+        else []
+    )
+
+
 def test_deployment_model_info_breakpoint_flag_covers_an_unmapped_arn(local_model_cost_map):
     from litellm import Router
     from litellm.llms.bedrock.common_utils import bedrock_model_accepts_cache_points
@@ -527,12 +567,12 @@ def test_deployment_model_info_breakpoint_flag_covers_an_unmapped_arn(local_mode
             {
                 "model_name": "kimi-k3-profile-converse",
                 "litellm_params": {"model": f"bedrock/converse/{converse_arn}", "aws_region_name": "us-east-1"},
-                "model_info": {"supports_prompt_cache_breakpoint": False},
+                "model_info": {"supports_bedrock_converse_cache_point": False},
             },
             {
                 "model_name": "kimi-k3-profile",
                 "litellm_params": {"model": f"bedrock/{flagged_arn}", "aws_region_name": "us-east-1"},
-                "model_info": {"supports_prompt_cache_breakpoint": False},
+                "model_info": {"supports_bedrock_converse_cache_point": False},
             },
             {
                 "model_name": "kimi-k3-profile-unflagged",
@@ -621,7 +661,7 @@ async def test_a_bedrock_deployment_sends_cache_points_by_its_own_flag_not_a_sib
     converse: Final = respx_mock.post(f"https://bedrock-runtime.us-east-1.amazonaws.com/model/{model}/converse").mock(
         return_value=Response(200, json=_CONVERSE_REPLY)
     )
-    flags: Final = {flagged: {"supports_prompt_cache_breakpoint": declared}}
+    flags: Final = {flagged: {"supports_bedrock_converse_cache_point": declared}}
     registration_order: Final = ("flagless", flagged) if flagless_registers_first else (flagged, "flagless")
     router: Final = Router(
         model_list=[
@@ -665,7 +705,7 @@ async def test_a_routed_bedrock_deployment_sends_cache_points_when_register_mode
     converse: Final = respx_mock.post(
         "https://bedrock-runtime.us-east-1.amazonaws.com/model/moonshotai.kimi-k3/converse"
     ).mock(return_value=Response(200, json=_CONVERSE_REPLY))
-    litellm.register_model({"bedrock/moonshotai.kimi-k3": {"supports_prompt_cache_breakpoint": True}})
+    litellm.register_model({"bedrock/moonshotai.kimi-k3": {"supports_bedrock_converse_cache_point": True}})
     router: Final = Router(
         model_list=[
             {

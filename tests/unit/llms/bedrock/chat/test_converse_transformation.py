@@ -715,10 +715,10 @@ def _cache_points(node: object) -> Iterator[object]:
     ("model_info", "expected_cache_point"),
     [
         ({"base_model": _OPUS}, {"type": "default", "ttl": "1h"}),
-        ({"base_model": _OPUS, "supports_prompt_cache_breakpoint": False}, None),
-        ({"base_model": _OPUS, "supports_prompt_cache_breakpoint": True}, {"type": "default", "ttl": "1h"}),
+        ({"base_model": _OPUS, "supports_bedrock_converse_cache_point": False}, None),
+        ({"base_model": _OPUS, "supports_bedrock_converse_cache_point": True}, {"type": "default", "ttl": "1h"}),
         ({"base_model": _LLAMA}, None),
-        ({"base_model": _LLAMA, "supports_prompt_cache_breakpoint": True}, {"type": "default"}),
+        ({"base_model": _LLAMA, "supports_bedrock_converse_cache_point": True}, {"type": "default"}),
     ],
     ids=[
         "base_model_allows",
@@ -10324,6 +10324,48 @@ def test_converse_carries_prompt_cache_breakpoint_to_cache_point():
     ]
 
 
+@pytest.mark.parametrize("legacy_flag", [False, True])
+@pytest.mark.parametrize("converse_flag", [None, False, True])
+def test_converse_cache_points_do_not_use_the_openai_capability_flag(
+    monkeypatch: pytest.MonkeyPatch, legacy_flag: bool, converse_flag: bool | None
+) -> None:
+    model: Final = "anthropic.claude-cache-flag-test"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        model,
+        {
+            "supports_prompt_caching": True,
+            "supports_prompt_cache_breakpoint": legacy_flag,
+            "supports_bedrock_converse_cache_point": converse_flag,
+        },
+    )
+    request: Final = AmazonConverseConfig()._transform_request(
+        model=model,
+        messages=[
+            {
+                "role": "system",
+                "content": [{"type": "text", "text": "System", "cache_control": {"type": "ephemeral"}}],
+            },
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "Hello", "cache_control": {"type": "ephemeral"}}],
+            },
+        ],
+        optional_params={
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {"name": "lookup", "parameters": {"type": "object", "properties": {}}},
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ]
+        },
+        litellm_params={},
+    )
+
+    assert list(_cache_points(request)) == ([] if converse_flag is False else [{"type": "default"}] * 3)
+
+
 def test_converse_keeps_the_first_and_last_prompt_cache_breakpoints_within_the_cap():
     messages: Final = [
         {
@@ -10574,7 +10616,7 @@ def test_converse_translates_prompt_cache_breakpoint_on_an_unmapped_arn_only_whe
             {
                 "model_name": "claude-profile",
                 "litellm_params": {"model": f"bedrock/{flagged_arn}", "aws_region_name": "us-east-1"},
-                "model_info": {"supports_prompt_cache_breakpoint": True},
+                "model_info": {"supports_bedrock_converse_cache_point": True},
             },
             {
                 "model_name": "mistral-profile",
@@ -10613,12 +10655,12 @@ def test_converse_prompt_cache_breakpoint_follows_the_arn_flag_over_its_base_mod
             {
                 "model_name": "opted-in",
                 "litellm_params": {"model": f"bedrock/{opted_in_arn}", "aws_region_name": "us-east-1"},
-                "model_info": {"supports_prompt_cache_breakpoint": True},
+                "model_info": {"supports_bedrock_converse_cache_point": True},
             },
             {
                 "model_name": "opted-out",
                 "litellm_params": {"model": f"bedrock/{opted_out_arn}", "aws_region_name": "us-east-1"},
-                "model_info": {"supports_prompt_cache_breakpoint": False},
+                "model_info": {"supports_bedrock_converse_cache_point": False},
             },
         ]
     )

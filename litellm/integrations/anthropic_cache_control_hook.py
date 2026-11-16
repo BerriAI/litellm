@@ -111,8 +111,15 @@ def _live_cost_map_unless(model_cost: CostMap | None) -> CostMap:
     return cast(CostMap, litellm.model_cost)  # cast-ok: the live map holds catalog entries
 
 
+def _prompt_cache_breakpoint_flag(model_info: Mapping[str, object] | None) -> object:
+    explicit: Final = None if model_info is None else model_info.get("supports_openai_prompt_cache_breakpoint")
+    if explicit is not None:
+        return explicit
+    return None if model_info is None else model_info.get("supports_prompt_cache_breakpoint")
+
+
 def declared_prompt_cache_breakpoint(model_info: Mapping[str, object] | None) -> bool | None:
-    declared: Final = None if model_info is None else model_info.get("supports_prompt_cache_breakpoint")
+    declared: Final = _prompt_cache_breakpoint_flag(model_info)
     return declared if isinstance(declared, bool) else None
 
 
@@ -429,12 +436,12 @@ def _named_model_breakpoint_support(model: str) -> bool | None:
 def _model_map_prompt_cache_breakpoint_flag(model: str, model_cost: CostMap | None = None) -> bool | None:
     cost_map: Final = _live_cost_map_unless(model_cost)
     entries: Final = (cost_map.get(key) for key in (model, model.rsplit("/", 1)[-1]))
-    flags: Final = (entry.get("supports_prompt_cache_breakpoint") for entry in entries if isinstance(entry, Mapping))
+    flags: Final = (_prompt_cache_breakpoint_flag(entry) for entry in entries if isinstance(entry, Mapping))
     return next((flag is True for flag in flags if flag is not None), None)
 
 
 def _hosted_entry_flag(entry: Mapping[str, object], resolve_provider: Callable[[], str | None]) -> bool | None:
-    flag: Final = entry.get("supports_prompt_cache_breakpoint")
+    flag: Final = _prompt_cache_breakpoint_flag(entry)
     entry_provider: Final = entry.get("litellm_provider")
     if flag is None or entry_provider is None or entry_provider == "openai":
         return None
