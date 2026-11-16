@@ -87,10 +87,11 @@ from litellm.litellm_core_utils.cloud_storage_security import (
     s3_media_uris,
 )
 from litellm.litellm_core_utils.core_helpers import (
+    FinishEvidence,
+    finish_evidence_of,
     finite_cost,
     get_or_create_metadata_bucket,
     has_attributes,
-    held_finish_reason_of,
     independent_snapshot,
     is_expected_client_error,
     map_finish_reason,
@@ -627,28 +628,39 @@ async def _bill_partial_streamed_spend_on_disconnect(request_data: dict, respons
             _choices_without_unobserved_finish_reasons(
                 partial_response.choices,
                 ChunkProcessor.choice_indices_with_observed_finish_reason(object_items(chunk_source)),
-                held_finish_reason_of(response),
+                finish_evidence_of(response),
             )
         )
     return await _dispatch_disconnect_billing_event(logging_obj, partial_response)
 
 
 def _choices_without_unobserved_finish_reasons(
-    choices: Sequence[Choices], observed_indices: frozenset[int], held_finish_reason: str | None
+    choices: Sequence[Choices], observed_indices: frozenset[int], evidence: FinishEvidence
 ) -> tuple[Choices, ...]:
-    """The stream wrapper's held finish_reason does not record which choice it belongs to, so it
-    only counts as provider evidence when there is a single choice."""
-    single_choice_held_reason: Final = held_finish_reason if len(choices) == 1 else None
+    """Finish reasons the stream recorded per choice off the provider's frames decide every choice: the
+    terminal chunk the stream emits can carry another choice's index, so the assembled chunks cannot."""
+    if evidence.by_choice:
+        return tuple(
+            _with_received_finish_reason(choice, _indexed_finish_reason(choice.index, len(choices), evidence.by_choice))
+            for choice in choices
+        )
+    single_choice_reason: Final = evidence.unindexed if len(choices) == 1 else None
     return tuple(
-        choice if choice.index in observed_indices else _with_held_finish_reason(choice, single_choice_held_reason)
+        choice if choice.index in observed_indices else _with_received_finish_reason(choice, single_choice_reason)
         for choice in choices
     )
 
 
-def _with_held_finish_reason(choice: Choices, held_finish_reason: str | None) -> Choices:
-    if held_finish_reason is None:
+def _indexed_finish_reason(choice_index: int, choice_count: int, by_choice: Mapping[int, str]) -> str | None:
+    if choice_count == 1 and len(by_choice) == 1:
+        return next(iter(by_choice.values()))
+    return by_choice.get(choice_index)
+
+
+def _with_received_finish_reason(choice: Choices, received_finish_reason: str | None) -> Choices:
+    if received_finish_reason is None:
         return choice.model_copy(update={"finish_reason": "finish_reason_unspecified"})
-    finish_reason: Final = map_finish_reason(held_finish_reason)
+    finish_reason: Final = map_finish_reason(received_finish_reason)
     ends_a_tool_call_turn: Final = finish_reason == "stop" and bool(choice.message.tool_calls)
     return choice.model_copy(update={"finish_reason": "tool_calls" if ends_a_tool_call_turn else finish_reason})
 

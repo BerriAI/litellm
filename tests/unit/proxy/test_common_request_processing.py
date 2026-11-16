@@ -9,6 +9,7 @@ import time
 import weakref
 from base64 import urlsafe_b64encode
 from collections.abc import AsyncIterable, Awaitable, Coroutine, Mapping
+from itertools import chain
 from types import MappingProxyType, SimpleNamespace
 from typing import AsyncGenerator, Callable, Final, Iterator, Literal, Optional, Sequence, TypeAlias, TypeVar
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -37,6 +38,7 @@ from litellm.integrations.custom_guardrail import ModifyResponseException
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.opentelemetry import UserAPIKeyAuth
 from litellm.litellm_core_utils.add_retry_fallback_headers import prepare_response_for_header_attachment
+from litellm.litellm_core_utils.core_helpers import FinishEvidence
 from litellm.litellm_core_utils.bug_report import (
     DISABLE_ENV_VAR,
     ISSUE_URL_BASE,
@@ -11162,7 +11164,9 @@ class TestStreamingClientDisconnectBilling:
         assert [choice.finish_reason for choice in partial_response.choices] == ["length"]
         assert partial_response.usage.completion_tokens > 0
 
-    async def _router_stream_holding_a_length_finish(self, recorder: _RecordingSuccessLogger) -> CustomStreamWrapper:
+    async def _router_stream(
+        self, recorder: _RecordingSuccessLogger, frames: Sequence[Sequence[StreamingChoices]]
+    ) -> CustomStreamWrapper:
         from litellm.router_rust.invoke.streaming import StreamAttempt, open_attempt_stream
 
         model: Final = "gpt-4o"
@@ -11172,16 +11176,8 @@ class TestStreamingClientDisconnectBilling:
         provider_stream: Final = CustomStreamWrapper(
             completion_stream=ModelResponseListIterator(
                 model_responses=[
-                    ModelResponseStream(
-                        id="chatcmpl-held",
-                        created=1741037890,
-                        model=model,
-                        choices=[
-                            StreamingChoices(
-                                index=0, delta=Delta(role="assistant", content="partial answer"), finish_reason="length"
-                            )
-                        ],
-                    )
+                    ModelResponseStream(id="chatcmpl-held", created=1741037890, model=model, choices=list(choices))
+                    for choices in frames
                 ]
             ),
             model=model,
@@ -11194,6 +11190,18 @@ class TestStreamingClientDisconnectBilling:
         )
         assert isinstance(routed, CustomStreamWrapper)
         return routed
+
+    async def _router_stream_holding_a_length_finish(self, recorder: _RecordingSuccessLogger) -> CustomStreamWrapper:
+        return await self._router_stream(
+            recorder,
+            [
+                [
+                    StreamingChoices(
+                        index=0, delta=Delta(role="assistant", content="partial answer"), finish_reason="length"
+                    )
+                ]
+            ],
+        )
 
     async def _assert_disconnect_bills_length(
         self, recorder: _RecordingSuccessLogger, logging_obj: LiteLLMLoggingObj, streamed: object
@@ -11298,6 +11306,142 @@ class TestStreamingClientDisconnectBilling:
             model=model, text="partial answer", count_response_tokens=True
         )
 
+    @staticmethod
+    def _content_choice(index: int, text: str, finish_reason: str | None = None) -> StreamingChoices:
+        return StreamingChoices(index=index, delta=Delta(role="assistant", content=text), finish_reason=finish_reason)
+
+    @pytest.mark.parametrize(
+        ("frames", "expected"),
+        [
+            pytest.param(
+                (((0, "zero ", None),), ((1, "one ", None),), ((0, "done", "length"),)),
+                {0: "length", 1: "finish_reason_unspecified"},
+                id="choice-0-finished",
+            ),
+            pytest.param(
+                (((0, "zero ", None),), ((1, "one ", None),), ((1, "done", "length"),)),
+                {0: "finish_reason_unspecified", 1: "length"},
+                id="choice-1-finished",
+            ),
+            pytest.param(
+                (((1, "one", "stop"),), ((0, "zero", "length"),)),
+                {0: "length", 1: "stop"},
+                id="both-finished-out-of-order",
+            ),
+            pytest.param(
+                (((2, "two", "length"),), ((0, "zero", "stop"),)),
+                {0: "stop", 2: "length"},
+                id="sparse-indexes",
+            ),
+            pytest.param(
+                (((2, "partial answer", "length"),),),
+                {0: "length"},
+                id="single-choice-nonzero-index",
+            ),
+            pytest.param(
+                (((0, "zero", "length"), (1, "one", "stop")),),
+                {0: "length", 1: "stop"},
+                id="one-frame-two-finishes",
+            ),
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_router_stream_keeps_each_choice_finish_reason_held_on_its_content_frame(
+        self,
+        frames: tuple[tuple[tuple[int, str, str | None], ...], ...],
+        expected: Mapping[int, str],
+    ):
+        recorder: Final = _RecordingSuccessLogger()
+        routed: Final = await self._router_stream(
+            recorder,
+            [tuple(self._content_choice(*choice) for choice in frame) for frame in frames],
+        )
+        stream_iter: Final = routed.__aiter__()
+        delivered: Final = [await stream_iter.__anext__() for _ in frames]
+        delivered_choices: Final = tuple(chain.from_iterable(chunk.choices for chunk in delivered))
+        assert [choice.finish_reason for choice in delivered_choices] == [None] * sum(map(len, frames))
+
+        billed: Final = await _bill_partial_streamed_spend_on_disconnect(
+            {"litellm_logging_obj": routed.logging_obj}, routed
+        )
+        await asyncio.wait_for(recorder.logged.wait(), timeout=5)
+
+        assert billed is True
+        assert len(recorder.success_events) == 1
+        partial_response: Final = recorder.success_events[0]["response_obj"]
+        assert {choice.index: choice.finish_reason for choice in partial_response.choices} == expected
+        assert partial_response.usage.completion_tokens > 0
+
+    @pytest.mark.parametrize(
+        ("frames", "expected"),
+        [
+            pytest.param(
+                (((0, "zero ", None),), ((1, "one ", None),), ((1, "", "length"),)),
+                {0: "finish_reason_unspecified", 1: "length"},
+                id="choice-1-terminal-frame",
+            ),
+            pytest.param(
+                (((0, "zero ", None), (1, "one ", None)), ((0, "", "length"), (1, "", "stop"))),
+                {0: "length", 1: "stop"},
+                id="one-terminal-frame-two-finishes",
+            ),
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_disconnect_after_a_terminal_frame_bills_each_choice_its_own_finish_reason(
+        self,
+        frames: tuple[tuple[tuple[int, str, str | None], ...], ...],
+        expected: Mapping[int, str],
+    ):
+        recorder: Final = _RecordingSuccessLogger()
+        routed: Final = await self._router_stream(
+            recorder,
+            [tuple(self._content_choice(*choice) for choice in frame) for frame in frames],
+        )
+        stream_iter: Final = routed.__aiter__()
+        for _ in frames:
+            await stream_iter.__anext__()
+
+        billed: Final = await _bill_partial_streamed_spend_on_disconnect(
+            {"litellm_logging_obj": routed.logging_obj}, routed
+        )
+        await asyncio.wait_for(recorder.logged.wait(), timeout=5)
+
+        assert billed is True
+        assert len(recorder.success_events) == 1
+        partial_response: Final = recorder.success_events[0]["response_obj"]
+        assert {choice.index: choice.finish_reason for choice in partial_response.choices} == expected
+        assert partial_response.usage.completion_tokens > 0
+
+    @pytest.mark.asyncio
+    async def test_disconnect_uses_a_finish_reason_received_without_a_choice_index_for_a_single_choice(self):
+        model: Final = "gpt-4o"
+        messages: Final = [{"role": "user", "content": "hi"}]
+        recorder: Final = _RecordingSuccessLogger()
+        logging_obj: Final = self._recorded_logging_obj(model, messages, "unindexed-finish-call", recorder)
+        collected_stream: Final = SimpleNamespace(
+            chunks=[
+                ModelResponseStream(
+                    id="chatcmpl-unindexed",
+                    created=1741037890,
+                    model=model,
+                    choices=[self._content_choice(0, "partial answer")],
+                )
+            ],
+            messages=messages,
+            model=model,
+            finish_evidence=FinishEvidence(by_choice=MappingProxyType({}), unindexed="length"),
+        )
+
+        billed: Final = await _bill_partial_streamed_spend_on_disconnect(
+            {"litellm_logging_obj": logging_obj}, collected_stream
+        )
+        await asyncio.wait_for(recorder.logged.wait(), timeout=5)
+
+        assert billed is True
+        partial_response: Final = recorder.success_events[0]["response_obj"]
+        assert [choice.finish_reason for choice in partial_response.choices] == ["length"]
+
     @pytest.mark.asyncio
     async def test_disconnect_marks_only_the_unfinished_choice_unspecified(self):
         model: Final = "gpt-4o"
@@ -11326,7 +11470,7 @@ class TestStreamingClientDisconnectBilling:
             ],
             messages=messages,
             model=model,
-            received_finish_reason="tool_calls",
+            finish_evidence=FinishEvidence(by_choice=MappingProxyType({}), unindexed="tool_calls"),
         )
 
         billed: Final = await _bill_partial_streamed_spend_on_disconnect(

@@ -27,7 +27,12 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.exceptions import ContextWindowExceededError, MidStreamFallbackError
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_items, held_finish_reason_of
+from litellm.litellm_core_utils.core_helpers import (
+    FinishEvidence,
+    as_str_mapping,
+    attribute_items,
+    finish_evidence_of,
+)
 from litellm.litellm_core_utils.hidden_params import set_hidden_params
 from litellm.llms.anthropic.messages.safeguards import StreamedSafeguardResults
 from litellm.llms.anthropic.messages.utils import anthropic_sse_frame
@@ -284,8 +289,8 @@ class _CombinedChunkSplitter:
         )
 
     @property
-    def held_finish_reason(self) -> str | None:
-        return held_finish_reason_of(self._stream)
+    def finish_evidence(self) -> FinishEvidence:
+        return finish_evidence_of(self._stream)
 
     @property
     def messages(self) -> "list[AllMessageValues] | None":
@@ -716,8 +721,8 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         )
 
     @property
-    def held_finish_reason(self) -> str | None:
-        return self._combined_chunk_splitter.held_finish_reason
+    def finish_evidence(self) -> FinishEvidence:
+        return self._combined_chunk_splitter.finish_evidence
 
     @property
     def messages(self) -> "list[AllMessageValues] | None":
@@ -1654,8 +1659,8 @@ class AnthropicSSEStream(AsyncIterator[bytes]):
         return self._anthropic_wrapper.chunks
 
     @property
-    def held_finish_reason(self) -> str | None:
-        return self._anthropic_wrapper.held_finish_reason
+    def finish_evidence(self) -> FinishEvidence:
+        return self._anthropic_wrapper.finish_evidence
 
     @property
     def messages(self) -> "list[AllMessageValues] | None":

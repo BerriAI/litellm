@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Final, cast
 import litellm
 from litellm._logging import verbose_logger
 from litellm.caching.caching_handler import create_cache_write_task, is_response_without_output
-from litellm.litellm_core_utils.core_helpers import held_finish_reason_of
+from litellm.litellm_core_utils.core_helpers import FinishEvidence, finish_evidence_of
 from litellm.llms.anthropic.messages.native.streaming_iterator import (
     AnthropicMessagesStreamingResponse,
     BaseAnthropicMessagesStreamingIterator,
@@ -61,8 +61,8 @@ class AnthropicMessagesStreamCacheWriter:
         )
 
     @property
-    def held_finish_reason(self) -> str | None:
-        return held_finish_reason_of(self.stream)
+    def finish_evidence(self) -> FinishEvidence:
+        return finish_evidence_of(self.stream)
 
     @property
     def messages(self) -> "list[AllMessageValues] | None":

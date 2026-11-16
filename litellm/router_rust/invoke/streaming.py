@@ -63,7 +63,7 @@ from litellm.litellm_core_utils.add_retry_fallback_headers import (
     get_hidden_params_dict,
     replace_complexity_router_headers,
 )
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, held_finish_reason_of, without
+from litellm.litellm_core_utils.core_helpers import FinishEvidence, as_str_mapping, finish_evidence_of, without
 from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, get_hidden_params, set_hidden_params
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.router_rust.surface.health import failure_already_logged, logged_call
@@ -864,8 +864,8 @@ class FallbackAwareStreamWrapper(CustomStreamWrapper):
     _source_stream: CustomStreamWrapper
 
     @property
-    def held_finish_reason(self) -> str | None:
-        return self._source_stream.held_finish_reason
+    def finish_evidence(self) -> FinishEvidence:
+        return self._source_stream.finish_evidence
 
     def adopt_fallback_response_headers(
         self,
@@ -1140,8 +1140,8 @@ class FallbackAwareAnthropicMessagesStream:
         return getattr(self._source_iterator, "chunks", None)
 
     @property
-    def held_finish_reason(self) -> str | None:
-        return held_finish_reason_of(self._source_iterator)
+    def finish_evidence(self) -> FinishEvidence:
+        return finish_evidence_of(self._source_iterator)
 
     @property
     def messages(self) -> object:
