@@ -25,7 +25,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
-DASHBOARD_DIR="$REPO_ROOT/ui/litellm-dashboard"
+DASHBOARD_DIR="$REPO_ROOT/litellm/ui/litellm-dashboard"
 IS_CI="${CI:-false}"
 CONTAINER_NAME="litellm-e2e-postgres-$$"
 MOCK_PID=""
@@ -56,7 +56,7 @@ if [ "$IS_CI" = "false" ]; then
   # is swallowed and the run dies later with the far less obvious
   # "sh: next: command not found".
   #
-  # So select a Node that satisfies ui/litellm-dashboard's engines.node, and if
+  # So select a Node that satisfies litellm/ui/litellm-dashboard's engines.node, and if
   # none is available say so here rather than 200 lines downstream.
   if [ -s "$HOME/.nvm/nvm.sh" ]; then
     # shellcheck disable=SC1091
@@ -70,7 +70,7 @@ if [ "$IS_CI" = "false" ]; then
         nvm use "$required_major" >/dev/null 2>&1 || nvm use --lts >/dev/null 2>&1 || true
         current_major="$(node --version 2>/dev/null | sed -E 's/^v([0-9]+).*/\1/')"
         if [ -z "$current_major" ] || [ "$current_major" -lt "$required_major" ]; then
-          echo "Error: ui/litellm-dashboard requires Node >= v${required_major}, and no such version is installed."
+          echo "Error: litellm/ui/litellm-dashboard requires Node >= v${required_major}, and no such version is installed."
           echo "       Install one with:  nvm install ${required_major}"
           exit 1
         fi

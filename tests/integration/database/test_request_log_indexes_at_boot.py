@@ -20,8 +20,8 @@ from psycopg.rows import class_row
 pytestmark: Final = pytest.mark.timeout(240)
 
 REPO_ROOT: Final = Path(__file__).resolve().parents[3]
-PRISMA_DIR: Final = REPO_ROOT / "litellm-proxy-extras" / "litellm_proxy_extras"
-PARTITION_SCRIPT: Final = REPO_ROOT / "db_scripts" / "partition_spend_logs.sql"
+PRISMA_DIR: Final = REPO_ROOT / "litellm" / "proxy-extras" / "litellm_proxy_extras"
+PARTITION_SCRIPT: Final = REPO_ROOT / "litellm/scripts" / "db" / "partition_spend_logs.sql"
 SHIPPED_MIGRATIONS: Final = tuple(sorted(path.name for path in (PRISMA_DIR / "migrations").iterdir() if path.is_dir()))
 API_KEY_INDEX_MIGRATION: Final = "20260823000000_add_spend_logs_api_key_starttime_index"
 CALL_ID_INDEX_MIGRATION: Final = "20260831120001_spend_logs_litellm_call_id_index"
@@ -96,7 +96,7 @@ def migrate_deploy(database_url: str, schema: Path) -> subprocess.CompletedProce
 def migration_job(database_url: str, resolver: Resolver) -> subprocess.CompletedProcess[str]:
     """The migrations image entrypoint, as the helm migration Job runs it."""
     return subprocess.run(
-        [sys.executable, "-I", str(REPO_ROOT / "migrations" / "run.py")],
+        [sys.executable, "-I", str(REPO_ROOT / "litellm/runtime/migrations" / "run.py")],
         capture_output=True,
         text=True,
         timeout=MIGRATION_JOB_SECONDS,

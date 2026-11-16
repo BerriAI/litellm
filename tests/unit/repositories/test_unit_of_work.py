@@ -8,6 +8,7 @@ from litellm.repositories.unit_of_work import (
     LinkedSpendResetWrites,
     SpendResetWrites,
     budget_cascade_unit_of_work,
+    customer_spend_reset_unit_of_work,
     enduser_spend_reset_unit_of_work,
     spend_reset_unit_of_work,
 )
@@ -39,6 +40,9 @@ class FakeBatch:
         self.litellm_modelaccessgroupbudgettable = FakeBatchTable("litellm_modelaccessgroupbudgettable", self.calls)
         self.litellm_projecttable = FakeBatchTable("litellm_projecttable", self.calls)
         self.litellm_endusertable = FakeBatchTable("litellm_endusertable", self.calls)
+        self.litellm_customerorganizationtable = FakeBatchTable("litellm_customerorganizationtable", self.calls)
+        self.litellm_customerteamtable = FakeBatchTable("litellm_customerteamtable", self.calls)
+        self.litellm_customermembertable = FakeBatchTable("litellm_customermembertable", self.calls)
 
     def execute_raw(self, query: str, *args: object) -> None:
         self.calls.append(("execute_raw", {"query": query}, {"args": args}))
@@ -120,7 +124,11 @@ async def test_budget_cascade_dependents_and_window_advance_share_one_batch():
         ("litellm_tagtable.update_many", linked, {"spend": 0}),
         ("litellm_modelaccessgroupbudgettable.update_many", linked, {"spend": 0}),
         ("litellm_projecttable.update_many", linked, {"spend": 0}),
-        ("litellm_budgettable.update_many", {"budget_id": "budget-1"}, {"budget_reset_at": reset_at}),
+        (
+            "litellm_budgettable.update_many",
+            {"budget_id": "budget-1"},
+            {"budget_reset_at": reset_at, "budget_reset_count": {"increment": 1}},
+        ),
     ]
 
 
@@ -128,23 +136,29 @@ async def test_enduser_page_commits_on_its_own_batch():
     """One tier can gate millions of end users, so a page of them lands in its
     own transaction instead of riding the cascade's."""
     batch = FakeBatch()
+    window = "tier-1:4"
+    not_reset_in_window = {"OR": [{"spend_reset_window": None}, {"spend_reset_window": {"not": window}}]}
 
     async with enduser_spend_reset_unit_of_work(lambda: batch) as writes:
-        writes.queue_spend_zero(where={"user_id": {"in": ["enduser-1", "enduser-2"]}, "spend": {"gt": 0}})
-        writes.queue_spend_decrement(where={"user_id": {"in": ["enduser-3"]}, "spend": {"gt": 5.0}}, amount=5.0)
+        writes.queue_spend_zero(
+            where={"user_id": {"in": ["enduser-1", "enduser-2"]}, "spend": {"gt": 0}}, window=window
+        )
+        writes.queue_spend_decrement(
+            where={"user_id": {"in": ["enduser-3"]}, "spend": {"gt": 5.0}}, amount=5.0, window=window
+        )
         assert batch.commit_count == 0
 
     assert batch.commit_count == 1
     assert batch.calls == [
         (
             "litellm_endusertable.update_many",
-            {"user_id": {"in": ["enduser-1", "enduser-2"]}, "spend": {"gt": 0}},
-            {"spend": 0},
+            {"AND": [{"user_id": {"in": ["enduser-1", "enduser-2"]}, "spend": {"gt": 0}}, not_reset_in_window]},
+            {"spend": 0, "spend_reset_window": window},
         ),
         (
             "litellm_endusertable.update_many",
-            {"user_id": {"in": ["enduser-3"]}, "spend": {"gt": 5.0}},
-            {"spend": {"decrement": 5.0}},
+            {"AND": [{"user_id": {"in": ["enduser-3"]}, "spend": {"gt": 5.0}}, not_reset_in_window]},
+            {"spend": {"decrement": 5.0}, "spend_reset_window": window},
         ),
     ]
 
@@ -226,3 +240,48 @@ async def test_membership_total_spend_repair_is_queued_on_the_cascade_batch_ahea
     assert repair[0] == "execute_raw"
     assert repair[2] == {"args": (["budget-1", "budget-2"],)}
     assert reset == ("litellm_teammembership.update_many", {"budget_id": "budget-1"}, {"spend": 0})
+
+
+@pytest.mark.asyncio
+async def test_customer_page_resets_commit_on_their_own_batch_against_the_named_table():
+    """A page of customer members or teams lands in its own commit, apart from the
+    budget cascade, so a statement never grows with the rows a template governs.
+    Like an end-user page, it stamps the window it closes and skips rows already stamped."""
+    batch = FakeBatch()
+    window = "tier-1:4"
+    not_reset_in_window = {"OR": [{"spend_reset_window": None}, {"spend_reset_window": {"not": window}}]}
+    async with customer_spend_reset_unit_of_work(lambda: batch, "litellm_customermembertable") as writes:
+        writes.queue_spend_zero(
+            where={"customer_member_id": {"in": ["m-1"]}, "spend": {"gt": 0, "lte": 10.0}}, window=window
+        )
+        writes.queue_spend_decrement(
+            where={"customer_member_id": {"in": ["m-1"]}, "spend": {"gt": 10.0}}, amount=10.0, window=window
+        )
+        assert batch.commit_count == 0
+
+    assert batch.commit_count == 1
+    assert batch.calls == [
+        (
+            "litellm_customermembertable.update_many",
+            {"AND": [{"customer_member_id": {"in": ["m-1"]}, "spend": {"gt": 0, "lte": 10.0}}, not_reset_in_window]},
+            {"spend": 0, "spend_reset_window": window},
+        ),
+        (
+            "litellm_customermembertable.update_many",
+            {"AND": [{"customer_member_id": {"in": ["m-1"]}, "spend": {"gt": 10.0}}, not_reset_in_window]},
+            {"spend": {"decrement": 10.0}, "spend_reset_window": window},
+        ),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_budget_cascade_no_longer_writes_customer_teams_or_members():
+    """Their resets moved to the paged walk, so the cascade's transaction neither locks nor touches those tables."""
+    batch = FakeBatch()
+    async with budget_cascade_unit_of_work(lambda: batch) as uow:
+        uow.row_locks.queue_row_locks(["budget-1"])
+        assert not hasattr(uow, "customer_members") and not hasattr(uow, "customer_teams")
+
+    locked_tables = [call[1]["query"].split('"')[1] for call in batch.calls if call[0] == "execute_raw"]
+    assert "LiteLLM_CustomerOrganizationTable" in locked_tables
+    assert "LiteLLM_CustomerTeamTable" not in locked_tables and "LiteLLM_CustomerMemberTable" not in locked_tables

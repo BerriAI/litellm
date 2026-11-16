@@ -23,7 +23,7 @@ else:
 
 REPO_ROOT: Final = os.path.join(os.path.dirname(__file__), "..", "..")
 
-PROXY_DOCKERFILES: Final = ("Dockerfile",)
+PROXY_DOCKERFILES: Final = ("litellm/deploy/docker/Dockerfile",)
 
 CONTINUED_LINE_RE: Final = re.compile(r"(?:\\\n|[^\n])+")
 UV_SYNC_BOUNDARY_RE: Final = re.compile(r"(?=uv sync)")

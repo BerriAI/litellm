@@ -505,14 +505,15 @@ class RustHealthCallbacks:
     ) -> str | None:
         """``sync_deployment_callback_on_success``, for a sync stream that ended."""
         from litellm.litellm_core_utils.batch_utils import is_batch_retrieve_call_type
+        from litellm.router_utils.router_callbacks.track_deployment_metrics import deployment_successes_key
 
         if is_batch_retrieve_call_type(kwargs.get("call_type")):
             return None
         target: Final = _success_target(kwargs)
         if target is None:
             return None
-        key: Final = self._drive_sync_steps(self._handle.count_success(target[0], callbacks)).get("key")
-        return key if isinstance(key, str) else None
+        counted: Final = self._drive_sync_steps(self._handle.count_success(target[0], callbacks)).get("counted")
+        return deployment_successes_key(target[0]) if counted is True else None
 
     async def repin_after_success(self, kwargs: Mapping[str, object], completion_response: object) -> None:
         """The session re-pin ``deployment_callback_on_success`` runs for a success logged against a
