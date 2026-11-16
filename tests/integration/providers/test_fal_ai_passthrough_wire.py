@@ -200,6 +200,8 @@ def test_fal_queue_submit_prices_string_resolution_like_the_integer(gateway: Gat
         "/fal_ai/synthetic-vendor/x/requests/%2e%2e/%2e%2e/unpriced-endpoint",
         "/fal_ai/synthetic-vendor/unpriced-endpoint%3Fa=/requests/x",
         "/fal_ai/synthetic-vendor/unpriced-endpoint%23/requests/x",
+        "/fal_ai/synthetic-vendor/requests/unpriced-endpoint",
+        "/fal_ai/synthetic-vendor/unpriced-endpoint/requests/",
     ),
 )
 def test_fal_queue_submit_to_unpriced_endpoint_is_rejected_however_the_path_is_spelled(

@@ -627,10 +627,9 @@ async def fal_ai_proxy_route(
             detail="FAL_AI_API_KEY is not set and no fal_ai pass-through deployment credentials are configured",
         )
     upstream_endpoint: Final = _fal_upstream_endpoint(updated_url)
-    if (
-        "/requests/" not in upstream_endpoint
-        and fal_ai_passthrough_cost(upstream_endpoint, await read_request_body(request)) is None
-    ):
+    if (request.method == "POST" or "/requests/" not in upstream_endpoint) and fal_ai_passthrough_cost(
+        upstream_endpoint, await read_request_body(request)
+    ) is None:
         raise HTTPException(
             status_code=400,
             detail=f"fal_ai/{upstream_endpoint} has no pricing entry for this request; only priced Fal requests can be submitted through /fal_ai",

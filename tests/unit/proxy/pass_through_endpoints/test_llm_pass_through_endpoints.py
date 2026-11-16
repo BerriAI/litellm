@@ -10802,6 +10802,36 @@ class TestFalAIPassthroughRoute:
             assert "no pricing entry" in response.text
             assert not route.calls
 
+    @pytest.mark.parametrize(
+        "path",
+        (
+            "acme/requests/unit-billed-model",
+            "acme/unit-billed-model/requests/",
+            "acme/unit-billed-model/requests/req-1",
+        ),
+    )
+    def test_submit_gate_prices_a_post_whose_path_has_a_requests_segment(self, client: TestClient, path: str) -> None:
+        with respx.mock(assert_all_called=False) as upstream:
+            route: Final = upstream.post(f"https://queue.fal.run/{path}").mock(
+                return_value=httpx.Response(200, json={"request_id": "req-1"})
+            )
+            response: Final = client.post(f"/fal_ai/{path}", json={"prompt": "a red boat"})
+
+            assert response.status_code == 400, response.text
+            assert "no pricing entry" in response.text
+            assert not route.calls
+
+    def test_cancel_put_passes_through_unpriced(self, client: TestClient) -> None:
+        with respx.mock() as upstream:
+            route: Final = upstream.put("https://queue.fal.run/fal-ai/trellis-2/requests/req-1/cancel").mock(
+                return_value=httpx.Response(202, json={"status": "CANCELLATION_REQUESTED"})
+            )
+            response: Final = client.put("/fal_ai/fal-ai/trellis-2/requests/req-1/cancel")
+
+            assert response.status_code == 202, response.text
+            assert response.json() == {"status": "CANCELLATION_REQUESTED"}
+            assert route.called
+
     def test_submit_gate_rejects_an_encoded_spelling_that_stays_encoded_upstream(self, client: TestClient) -> None:
         with respx.mock(assert_all_called=False) as upstream:
             route: Final = upstream.post(url__regex=r"https://queue\.fal\.run/.*").mock(
