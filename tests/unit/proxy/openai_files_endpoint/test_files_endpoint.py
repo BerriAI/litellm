@@ -1,9 +1,12 @@
+import email.policy
 import io
 import itertools
 import json
 import tempfile
 import tracemalloc
 from collections import Counter
+from collections.abc import Iterator
+from email.parser import BytesParser
 from typing import IO, Final, List, Optional
 from urllib.parse import quote
 from unittest.mock import ANY, AsyncMock, MagicMock
@@ -762,11 +765,10 @@ def _router_with_executed_batch_model() -> Router:
 
 
 @pytest.fixture
-def batch_upload_seams(mocker: MockerFixture, monkeypatch):
+def batch_upload_proxy(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     import litellm.proxy.proxy_server as ps
-    from litellm.proxy._types import LitellmUserRoles
 
-    llm_router = _router_with_executed_batch_model()
+    llm_router: Final = _router_with_executed_batch_model()
     monkeypatch.setattr("litellm.proxy.proxy_server.master_key", None)
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", llm_router)
@@ -775,6 +777,14 @@ def batch_upload_seams(mocker: MockerFixture, monkeypatch):
     app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
         user_role=LitellmUserRoles.PROXY_ADMIN, user_id="test-user"
     )
+    try:
+        yield
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.fixture
+def batch_upload_seams(batch_upload_proxy: None, mocker: MockerFixture):
     uploaded = OpenAIFileObject(
         id="file-kept",
         object="file",
@@ -791,14 +801,11 @@ def batch_upload_seams(mocker: MockerFixture, monkeypatch):
     provider_upload = mocker.patch(  # test-quality-ok: the route calls litellm.acreate_file directly with no injection seam
         "litellm.acreate_file", new=mocker.AsyncMock(return_value=uploaded)
     )
-    try:
-        with respx.mock(assert_all_called=False) as upstream:
-            upstream_files_route = upstream.get("http://vllm.test/v1/files").mock(
-                return_value=httpx.Response(404, json={"detail": "Not Found"})
-            )
-            yield stored, provider_upload, upstream_files_route
-    finally:
-        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+    with respx.mock(assert_all_called=False) as upstream:
+        upstream_files_route = upstream.get("http://vllm.test/v1/files").mock(
+            return_value=httpx.Response(404, json={"detail": "Not Found"})
+        )
+        yield stored, provider_upload, upstream_files_route
 
 
 def _upload_batch_file(headers: dict[str, str], form: dict[str, str], content: bytes = BATCH_JSONL_LINE):
@@ -1057,8 +1064,56 @@ def _batch_row(custom_id: str, model: str) -> bytes:
     ).encode()
 
 
+def _file_part_of(request: httpx.Request) -> ExtractedFileData:
+    form: Final = BytesParser(policy=email.policy.HTTP).parsebytes(
+        b"Content-Type: " + request.headers["content-type"].encode() + b"\r\n\r\n" + request.content
+    )
+    part: Final = next(p for p in form.iter_parts() if p.get_param("name", header="content-disposition") == "file")
+    return ExtractedFileData(
+        filename=part.get_filename(),
+        content=part.get_payload(decode=True),
+        content_type=part.get_content_type(),
+        headers={},
+    )
+
+
 @pytest.fixture
-def files_the_provider_received(batch_upload_seams: tuple[AsyncMock, AsyncMock, respx.Route]) -> list[ExtractedFileData]:
+def uploads_at_the_provider(monkeypatch: pytest.MonkeyPatch) -> Iterator[list[ExtractedFileData]]:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    received: Final[list[ExtractedFileData]] = []
+
+    def read_the_upload_like_a_provider(request: httpx.Request) -> httpx.Response:
+        received.append(_file_part_of(request))
+        return httpx.Response(
+            200,
+            json={
+                "id": "file-kept",
+                "object": "file",
+                "purpose": "batch",
+                "created_at": 0,
+                "bytes": 0,
+                "filename": "batch.jsonl",
+                "status": "uploaded",
+            },
+        )
+
+    with respx.mock(assert_all_called=False) as provider:
+        provider.post("https://api.openai.com/v1/files").mock(side_effect=read_the_upload_like_a_provider)
+        provider.post(url__startswith="https://azure.test/").mock(side_effect=read_the_upload_like_a_provider)
+        yield received
+
+
+@pytest.fixture
+def files_the_provider_received(
+    batch_upload_proxy: None, uploads_at_the_provider: list[ExtractedFileData]
+) -> list[ExtractedFileData]:
+    return uploads_at_the_provider
+
+
+@pytest.fixture
+def files_handed_to_the_vertex_upload(
+    batch_upload_seams: tuple[AsyncMock, AsyncMock, respx.Route],
+) -> list[ExtractedFileData]:
     _, provider_upload, _ = batch_upload_seams
     received: Final[list[ExtractedFileData]] = []
 
@@ -1209,25 +1264,18 @@ def test_model_routed_upload_with_another_purpose_keeps_the_callers_bytes(
 
 
 def test_model_routed_passthrough_upload_keeps_the_callers_bytes(
-    files_the_provider_received: list[ExtractedFileData],
+    files_handed_to_the_vertex_upload: list[ExtractedFileData],
 ):
     content: Final = b'{"request":   {"contents": []}, "body":   {"model": "native"}}\n'
 
     response: Final = _upload_batch_file({"x-litellm-model": "vertex-batch-keep"}, {"passthrough": "true"}, content)
 
     assert response.status_code == 200, response.text
-    assert files_the_provider_received[0]["content"] == content
+    assert files_handed_to_the_vertex_upload[0]["content"] == content
 
 
-@pytest.mark.parametrize(
-    "model, deployment_model",
-    [("vertex-batch-keep", "gemini-2.5-flash"), ("gpt-5.4-nano-batch", "gpt-5.4-nano")],
-    ids=["vertex_ai", "openai"],
-)
-def test_model_routed_batch_upload_keeps_blank_lines_and_line_endings_around_the_rewritten_rows(
-    files_the_provider_received: list[ExtractedFileData], model: str, deployment_model: str
-):
-    content: Final = (
+def _alias_rows_around_blank_lines(model: str) -> bytes:
+    return (
         _compact_batch_row("first", model)
         + b"\r\n\r\n"
         + _batch_row("other", "another-model")
@@ -1236,11 +1284,30 @@ def test_model_routed_batch_upload_keeps_blank_lines_and_line_endings_around_the
         + b"\n"
     )
 
-    response: Final = _upload_batch_file({"x-litellm-model": model}, {}, content)
+
+def test_model_routed_batch_upload_keeps_blank_lines_and_line_endings_around_the_rewritten_rows(
+    files_the_provider_received: list[ExtractedFileData],
+):
+    content: Final = _alias_rows_around_blank_lines("gpt-5.4-nano-batch")
+
+    response: Final = _upload_batch_file({"x-litellm-model": "gpt-5.4-nano-batch"}, {}, content)
 
     assert response.status_code == 200, response.text
     assert files_the_provider_received[0]["content"] == content.replace(
-        f'"model":"{model}"'.encode(), f'"model":"{deployment_model}"'.encode()
+        b'"model":"gpt-5.4-nano-batch"', b'"model":"gpt-5.4-nano"'
+    )
+
+
+def test_vertex_routed_batch_upload_keeps_blank_lines_and_line_endings_around_the_rewritten_rows(
+    files_handed_to_the_vertex_upload: list[ExtractedFileData],
+):
+    content: Final = _alias_rows_around_blank_lines("vertex-batch-keep")
+
+    response: Final = _upload_batch_file({"x-litellm-model": "vertex-batch-keep"}, {}, content)
+
+    assert response.status_code == 200, response.text
+    assert files_handed_to_the_vertex_upload[0]["content"] == content.replace(
+        b'"model":"vertex-batch-keep"', b'"model":"gemini-2.5-flash"'
     )
 
 
@@ -1267,10 +1334,11 @@ def test_batch_upload_routed_by_a_model_named_like_its_deployment_reaches_the_pr
     assert files_the_provider_received[0]["content"] == content
 
 
-def test_model_routed_batch_upload_refuses_a_key_without_the_alias_before_uploading(batch_upload_seams: tuple[AsyncMock, AsyncMock, respx.Route]):
+def test_model_routed_batch_upload_refuses_a_key_without_the_alias_before_uploading(
+    files_the_provider_received: list[ExtractedFileData],
+):
     import litellm.proxy.proxy_server as ps
 
-    _, provider_upload, _ = batch_upload_seams
     app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
         user_id="restricted-user", models=["gemini-2.0-flash"]
     )
@@ -1279,7 +1347,7 @@ def test_model_routed_batch_upload_refuses_a_key_without_the_alias_before_upload
 
     assert response.status_code == 403, response.text
     assert "gpt-5.4-nano-batch" in response.text
-    provider_upload.assert_not_awaited()
+    assert files_the_provider_received == []
 
 
 @pytest.mark.parametrize(
@@ -1298,26 +1366,9 @@ def test_batch_upload_the_rewrite_cannot_read_reaches_the_provider_whole(
     assert files_the_provider_received[0]["content"] == content
 
 
-async def _route_model_upload(mocker: MockerFixture, file: FileTypes) -> ExtractedFileData:
-    received: Final[list[ExtractedFileData]] = []
-
-    async def read_the_upload_like_a_provider(**kwargs: object) -> OpenAIFileObject:
-        received.append(extract_file_data(kwargs["file"]))
-        return OpenAIFileObject(
-            id="file-kept",
-            object="file",
-            purpose="batch",
-            created_at=0,
-            bytes=0,
-            filename="batch.jsonl",
-            status="uploaded",
-        )
-
-    mocker.patch(  # test-quality-ok: the route calls litellm.acreate_file directly with no injection seam
-        "litellm.acreate_file", new=read_the_upload_like_a_provider
-    )
+async def _route_model_upload(uploads_at_the_provider: list[ExtractedFileData], file: FileTypes) -> ExtractedFileData:
     await _route_alias_upload(_router_with_executed_batch_model(), file)
-    return received[0]
+    return uploads_at_the_provider[-1]
 
 
 async def _route_alias_upload(llm_router: Router, file: FileTypes) -> None:
@@ -1351,9 +1402,9 @@ MALFORMED_TRAILING_BATCH_CONTENT: Final = (
 )
 @pytest.mark.asyncio
 async def test_route_create_file_rewrites_complete_alias_rows_and_keeps_malformed_trailing_content_as_written(
-    mocker: MockerFixture, file: FileTypes
+    uploads_at_the_provider: list[ExtractedFileData], file: FileTypes
 ):
-    received = await _route_model_upload(mocker, file)
+    received: Final = await _route_model_upload(uploads_at_the_provider, file)
 
     assert received["content"] == MALFORMED_TRAILING_BATCH_CONTENT.replace(
         b'"model":"gpt-5.4-nano-batch"', b'"model":"gpt-5.4-nano"', 1
@@ -1361,8 +1412,10 @@ async def test_route_create_file_rewrites_complete_alias_rows_and_keeps_malforme
 
 
 @pytest.mark.asyncio
-async def test_route_create_file_rewrites_a_bare_upload_to_the_deployment_model(mocker: MockerFixture):
-    received = await _route_model_upload(mocker, _batch_row("r", "gpt-5.4-nano-batch"))
+async def test_route_create_file_rewrites_a_bare_upload_to_the_deployment_model(
+    uploads_at_the_provider: list[ExtractedFileData],
+):
+    received: Final = await _route_model_upload(uploads_at_the_provider, _batch_row("r", "gpt-5.4-nano-batch"))
 
     assert _models_named_by_rows(received) == ["gpt-5.4-nano"]
 
@@ -1389,7 +1442,7 @@ async def test_route_create_file_rewrites_a_large_upload_on_disk_and_discards_it
             status="uploaded",
         )
 
-    mocker.patch(  # test-quality-ok: the route calls litellm.acreate_file directly with no injection seam
+    mocker.patch(  # test-quality-ok: the memory bound needs the handle the route passes on, and an HTTP mock reads the whole body into memory
         "litellm.acreate_file", new=stream_the_upload_like_a_provider
     )
     llm_router: Final = _router_with_executed_batch_model()
