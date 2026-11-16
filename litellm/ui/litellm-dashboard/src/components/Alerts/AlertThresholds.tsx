@@ -83,10 +83,15 @@ export default function AlertThresholds({
                 id={`${rule}-multiplier`}
                 name={`${rule}-multiplier`}
                 type="number"
-                min="1.01"
+                min="1"
                 step="any"
                 required
                 defaultValue={thresholds[rule].multiplier}
+                onChange={(event) =>
+                  event.currentTarget.setCustomValidity(
+                    event.currentTarget.valueAsNumber <= 1 ? t("alerts.thresholds.multiplierInvalid") : "",
+                  )
+                }
               />
             </div>
             <div className="space-y-1">

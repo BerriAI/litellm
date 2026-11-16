@@ -6112,6 +6112,7 @@
       "edit": "Edit thresholds",
       "cancel": "Cancel",
       "multiplier": "Times the usual value",
+      "multiplierInvalid": "Use a multiplier greater than 1.",
       "rules": {
         "spend": "Spend",
         "traffic": "Traffic",

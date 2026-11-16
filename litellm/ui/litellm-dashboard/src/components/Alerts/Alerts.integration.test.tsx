@@ -422,12 +422,18 @@ describe("Alerts", () => {
 
   it("edits Enterprise thresholds with explicit units and saves the values", async () => {
     monitoring.alert_limit = null;
+    monitoring.thresholds = { ...thresholds, latency: { multiplier: 1.005, minimum_increase: 500 } };
     const user = userEvent.setup();
     renderWithProviders(<Alerts />);
     await user.click(await screen.findByRole("button", { name: "Manage alerts" }));
     await user.click(await screen.findByRole("button", { name: "Edit thresholds" }));
     const spend = screen.getByRole("group", { name: "Spend" });
-    fireEvent.change(within(spend).getByRole("spinbutton", { name: "Times the usual value" }), {
+    const multiplier = within(spend).getByRole("spinbutton", { name: "Times the usual value" });
+    fireEvent.change(multiplier, { target: { value: "1" } });
+    await user.click(screen.getByRole("button", { name: "Save thresholds" }));
+    expect(multiplier).toBeInvalid();
+    expect(calls.filter((call) => call.method === "PATCH")).toEqual([]);
+    fireEvent.change(multiplier, {
       target: { value: "4" },
     });
     fireEvent.change(screen.getByRole("spinbutton", { name: "Minimum increase ($)" }), { target: { value: "75" } });
@@ -444,6 +450,7 @@ describe("Alerts", () => {
         thresholds: {
           ...thresholds,
           spend: { multiplier: 4, minimum_increase: 75 },
+          latency: { multiplier: 1.005, minimum_increase: 500 },
           reliability: { multiplier: 3, minimum_increase: 0.035 },
         },
       },
