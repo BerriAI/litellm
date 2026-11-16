@@ -330,6 +330,7 @@ pub(crate) fn route_error_to_pyerr(error: Error) -> PyErr {
 
 #[cfg(test)]
 mod tests {
+    use litellm_auth::gcp::vertex_messages::PythonException;
     use litellm_core_utils::decline::Decline;
     use reqwest::header::{HeaderValue, RETRY_AFTER};
 
@@ -677,6 +678,35 @@ mod tests {
                 .unwrap()
                 .map(|value| value.extract::<String>().unwrap());
             assert_eq!(marked.as_deref(), expected);
+        });
+    }
+
+    #[rstest::rstest]
+    #[case::auth(Error::Auth(
+        GoogleLoginFailure {
+            exception: PythonException::Value,
+            message: "Could not resolve project_id".into(),
+        }
+        .into()
+    ))]
+    #[case::llms(Error::Llm(litellm_llms::Error::Auth(
+        GoogleLoginFailure {
+            exception: PythonException::Value,
+            message: "Could not resolve project_id".into(),
+        }
+        .into()
+    )))]
+    fn a_google_login_failure_names_python_s_exception(#[case] error: Error) {
+        Python::initialize();
+        Python::attach(|py| {
+            let native = route_failure(py, error, RequestMarker::Messages, Ok).unwrap();
+            let named: (String, String) = native
+                .value(py)
+                .getattr(MESSAGES_GOOGLE_LOGIN_FAILURE)
+                .unwrap()
+                .extract()
+                .unwrap();
+            assert_eq!(named, ("ValueError".to_string(), "Could not resolve project_id".to_string()));
         });
     }
 
