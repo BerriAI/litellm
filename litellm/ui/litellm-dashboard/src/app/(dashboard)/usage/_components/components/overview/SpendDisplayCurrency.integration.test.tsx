@@ -1,9 +1,10 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { chooseSelectOption } from "@/../tests/test-utils";
+import { referenceRatesKeys } from "@/app/(dashboard)/hooks/referenceRates/useReferenceRates";
 import { registerErrorHandler } from "@/lib/http/runtime";
 import SpendDisplayCurrency from "./SpendDisplayCurrency";
 
@@ -16,7 +17,7 @@ const renderFresh = (ui: ReactElement) => {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const wrap = (node: ReactElement) => <QueryClientProvider client={client}>{node}</QueryClientProvider>;
   const rendered = render(wrap(ui));
-  return { ...rendered, rerender: (next: ReactElement) => rendered.rerender(wrap(next)) };
+  return { ...rendered, client, rerender: (next: ReactElement) => rendered.rerender(wrap(next)) };
 };
 
 const trigger = () => screen.getByRole("combobox", { name: "Spend display" });
@@ -76,6 +77,22 @@ describe("SpendDisplayCurrency", () => {
     expect(await screen.findByText("Reference rates are unavailable, spend is shown in USD")).toBeVisible();
     expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual(["USD · US Dollar"]);
     expect(onError).not.toHaveBeenCalled();
+  });
+
+  it("falls back to USD when a refetch fails after another currency was chosen", async () => {
+    const user = userEvent.setup();
+    const fetch = vi.fn().mockResolvedValueOnce(json(RATES)).mockResolvedValue(json({ detail: "unavailable" }, 503));
+    vi.stubGlobal("fetch", fetch);
+    const { client } = renderFresh(<SpendDisplayCurrency usdSpend={42.5} loading={false} />);
+    await chooseSelectOption(user, trigger(), /^EUR/);
+    expect(await screen.findByText(/≈ EUR 34\.00 estimated/)).toBeVisible();
+
+    await act(() => client.invalidateQueries({ queryKey: referenceRatesKeys.all }));
+
+    expect(screen.queryByText(/estimated/)).not.toBeInTheDocument();
+    expect(trigger()).toHaveTextContent("USD");
+    expect(screen.getByText("Reference rates are unavailable, spend is shown in USD")).toBeVisible();
+    expect(fetch).toHaveBeenCalledTimes(2);
   });
 
   it("cancels the rate request when the overview goes away before it answers", async () => {

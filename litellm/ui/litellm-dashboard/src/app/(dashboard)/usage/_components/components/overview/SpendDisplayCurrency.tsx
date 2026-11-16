@@ -27,13 +27,14 @@ export default function SpendDisplayCurrency({ usdSpend, loading }: SpendDisplay
     usable === undefined || currency === "USD"
       ? null
       : estimatedSpend(usdSpend, usable.usd_per_unit, usable.rate_date, currency, new Date());
+  const shown = estimate === null ? "USD" : currency;
   const unavailable = rates.isError || (currency !== "USD" && estimate === null && !rates.isFetching);
   return (
     <div className="mt-1 grid gap-1 text-xs leading-4 text-muted-foreground">
       <div className="flex items-center gap-2">
         <span>{t("usage.statStrip.spendDisplay.label")}</span>
         <Select
-          value={currency}
+          value={shown}
           onValueChange={(value) => setCurrency(value ?? "USD")}
           onOpenChange={(open) => {
             if (open) setRequested(true);

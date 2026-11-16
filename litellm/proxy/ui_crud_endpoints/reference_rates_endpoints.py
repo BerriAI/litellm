@@ -35,16 +35,15 @@ def _default_refresh_lock() -> asyncio.Lock:
     return _refresh_lock
 
 
-def _default_fetch() -> EcbFeedFetch:
+async def _fetch_on_serving_loop() -> bytes | EcbFetchFailed:
     from litellm.llms.custom_httpx.http_handler import get_async_httpx_client  # noqa: PLC0415  # heavy, first use only
     from litellm.types.llms.custom_http import httpxSpecialProvider  # noqa: PLC0415  # imported with the client
 
-    client: Final = get_async_httpx_client(llm_provider=httpxSpecialProvider.UI)
+    return await fetch_ecb_daily_feed(get_async_httpx_client(llm_provider=httpxSpecialProvider.UI))
 
-    async def fetch() -> bytes | EcbFetchFailed:
-        return await fetch_ecb_daily_feed(client)
 
-    return fetch
+def _default_fetch() -> EcbFeedFetch:
+    return _fetch_on_serving_loop
 
 
 @router.get(
@@ -61,7 +60,7 @@ async def reference_exchange_rates(
 ) -> ReferenceExchangeRates:
     """
     ECB euro foreign exchange reference rates as USD per unit of each currency, with USD at 1. They estimate a USD
-    total in another currency for display and are not settlement quotes. Fetches the ECB feed at most once a day.
+    total in another currency for display and are not settlement quotes. Refreshes from the ECB feed when due.
     """
     if rates.refresh_due():
         async with refresh_lock:

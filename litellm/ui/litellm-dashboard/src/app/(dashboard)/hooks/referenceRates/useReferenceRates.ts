@@ -21,5 +21,6 @@ export const useReferenceRates = (enabled: boolean) =>
     queryFn: ({ signal }) => fetchReferenceRates(signal),
     enabled,
     staleTime: REFERENCE_RATES_STALE_MS,
+    refetchInterval: REFERENCE_RATES_STALE_MS,
     retry: false,
   });
