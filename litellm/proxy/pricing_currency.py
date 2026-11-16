@@ -25,8 +25,7 @@ from litellm.litellm_core_utils.ecb_reference_rates import (
     UsdRateLookup,
     fetch_ecb_daily_feed,
 )
-from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
-from litellm.types.llms.custom_http import httpxSpecialProvider
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.types.utils import CustomPricingLiteLLMParams
 
 PRICING_CURRENCY_FIELD: Final = "pricing_currency"
@@ -84,7 +83,11 @@ class ReferenceRateLookup:
 
 
 async def _fetch_ecb_feed() -> bytes | EcbFetchFailed:
-    return await fetch_ecb_daily_feed(get_async_httpx_client(llm_provider=httpxSpecialProvider.ModelCostMap))
+    handler: Final = AsyncHTTPHandler()
+    try:
+        return await fetch_ecb_daily_feed(handler)
+    finally:
+        await handler.close()
 
 
 reference_rates: Final = ReferenceRateLookup(
