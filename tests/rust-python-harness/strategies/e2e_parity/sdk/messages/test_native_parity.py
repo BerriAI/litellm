@@ -20,6 +20,7 @@ R request, S response, C callbacks, F covered by a fallback detector today)
 """
 
 import asyncio
+import base64
 import contextlib
 import copy
 import datetime
@@ -4413,6 +4414,123 @@ VERTEX_SHAPING_CASES: Final = (
     _vertex_stream("vertex_base_own_path_query_stream", api_base_suffix="/custom/path?k=1"),
 )
 
+VERTEX_OPUS: Final = "vertex_ai/claude-opus-5-5"
+_VERTEX_IDENTITY: Final[Mapping[str, JsonValue]] = MappingProxyType(
+    {
+        "user_api_key_hash": "88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",
+        "user_api_key_team_id": "Team A",
+        "user_api_key_org_id": "Org.1",
+        "spend_logs_metadata": {"Project": "Billing Q4", "user_api_key_alias": "forged", "9lives": "x"},
+    }
+)
+_CALLER_LABELS: Final = base64.b64encode(
+    json.dumps({"env": "Prod", "user_api_key_team_id": "forged", "project": "caller"}).encode()
+).decode()
+_LABEL_FIELDS: Final = _kw(
+    vertex_request_label_fields=(
+        "user_api_key_hash",
+        "user_api_key_team_id",
+        "user_api_key_org_id",
+        "spend_logs_metadata",
+    )
+)
+
+
+def _labelled(**kwargs: object) -> Mapping[str, object]:
+    return _vertex(litellm_metadata=dict(_VERTEX_IDENTITY), **kwargs)
+
+
+VERTEX_LABELS_CASES: Final = (
+    Case("vertex_labels_from_identity", _labelled(), model=VERTEX_CLAUDE, settings=_LABEL_FIELDS),
+    Case(
+        "vertex_labels_replace_the_callers_header",
+        _labelled(extra_headers={"X-Vertex-AI-Labels": _CALLER_LABELS}),
+        model=VERTEX_CLAUDE,
+        settings=_LABEL_FIELDS,
+    ),
+    Case(
+        "vertex_labels_drop_an_undecodable_header",
+        _labelled(extra_headers={"x-vertex-ai-labels": "not base64"}),
+        model=VERTEX_CLAUDE,
+        settings=_kw(vertex_request_label_fields="user_api_key_team_id"),
+    ),
+    Case(
+        "vertex_labels_without_identity_only_drop_the_callers_header",
+        _vertex(extra_headers={"X-Vertex-AI-Labels": _CALLER_LABELS}),
+        model=VERTEX_CLAUDE,
+        settings=_kw(vertex_request_label_fields=["team"]),
+    ),
+    Case(
+        "vertex_labels_unset_keep_the_callers_header",
+        _labelled(extra_headers={"X-Vertex-AI-Labels": _CALLER_LABELS}),
+        model=VERTEX_CLAUDE,
+    ),
+    replace(_vertex_stream("vertex_labels_stream", litellm_metadata=dict(_VERTEX_IDENTITY)), settings=_LABEL_FIELDS),
+)
+
+VERTEX_REGIONAL_COST_CASES: Final = (
+    Case(
+        "vertex_global_location_prices_without_the_regional_uplift",
+        _kw(vertex_project="parity-project", vertex_location="global", vertex_credentials=dict(VERTEX_ACCOUNT)),
+        model=VERTEX_CLAUDE,
+    ),
+    Case(
+        "vertex_legacy_location_spelling_prices_without_the_regional_uplift",
+        _kw(vertex_project="parity-project", vertex_ai_location="global", vertex_credentials=dict(VERTEX_ACCOUNT)),
+        model=VERTEX_CLAUDE,
+    ),
+    Case(
+        "vertex_global_location_wins_over_the_environment",
+        _kw(vertex_project="parity-project", vertex_location="global", vertex_credentials=dict(VERTEX_ACCOUNT)),
+        model=VERTEX_CLAUDE,
+        env=_kw(VERTEXAI_LOCATION="europe-west4"),
+    ),
+    Case("vertex_regional_location_prices_with_the_regional_uplift", _vertex(), model=VERTEX_CLAUDE),
+)
+
+_CLEAR_AT_TURNS: Final = _mid_conversation_system(content="Be brief.", clear_at={"type": "turns", "value": 2})
+
+VERTEX_BETA_GATED_CASES: Final = (
+    Case(
+        "vertex_clear_at_stripped_under_drop_params",
+        _vertex(drop_params=True, messages=_CLEAR_AT_TURNS),
+        model=VERTEX_OPUS,
+        warned=True,
+    ),
+    Case(
+        "vertex_clear_at_kept_with_its_beta",
+        _vertex(
+            drop_params=True,
+            messages=_CLEAR_AT_TURNS,
+            extra_headers=_beta("mid-conversation-system-clear-at-2026-08-21"),
+        ),
+        model=VERTEX_OPUS,
+        warned=True,
+    ),
+    Case("vertex_clear_at_kept_without_drop_params", _vertex(messages=_CLEAR_AT_TURNS), model=VERTEX_OPUS),
+    Case(
+        "vertex_clear_at_stripped_before_conversion",
+        _vertex(drop_params=True, messages=_CLEAR_AT_TURNS),
+        model=VERTEX_CLAUDE,
+        warned=True,
+    ),
+    Case(
+        "vertex_tool_addition_stripped_under_drop_params",
+        _vertex(
+            drop_params=True,
+            messages=_mid_conversation_system(
+                content=[
+                    {"type": "text", "text": "A new tool."},
+                    {"type": "tool_addition", "tool": dict(WEATHER_TOOL)},
+                ]
+            ),
+            extra_headers=_beta("context-1m-2025-08-07"),
+        ),
+        model=VERTEX_OPUS,
+        warned=True,
+    ),
+)
+
 CASES: Final = (
     *REQUEST_CASES,
     *INPUT_VALUE_CASES,
@@ -4447,6 +4565,9 @@ CASES: Final = (
     *VERTEX_CREDENTIAL_CASES,
     *AZURE_STREAM_CACHE_CASES,
     *VERTEX_SHAPING_CASES,
+    *VERTEX_LABELS_CASES,
+    *VERTEX_REGIONAL_COST_CASES,
+    *VERTEX_BETA_GATED_CASES,
 )
 
 
