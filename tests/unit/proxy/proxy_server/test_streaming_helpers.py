@@ -1148,6 +1148,93 @@ async def test_async_data_generator_yields_sse_chunks_and_done(monkeypatch):
     }
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("provider_chunks", "released"), [(0, True), (1, False)], ids=["before_output", "after_output"])
+async def test_async_data_generator_refunds_the_reservation_only_when_the_client_leaves_before_provider_output(
+    monkeypatch: pytest.MonkeyPatch, provider_chunks: int, released: bool
+) -> None:
+    _patch_logging_flags(monkeypatch)
+    waiting_on_provider: Final = asyncio.Event()
+
+    async def provider() -> AsyncIterator[ModelResponseStream]:
+        for _ in range(provider_chunks):
+            yield _simple_chunk(content="partial")
+        waiting_on_provider.set()
+        await asyncio.Event().wait()
+        yield _simple_chunk(content="never sent")
+
+    auth: Final = UserAPIKeyAuth(
+        api_key="sk-test-key", budget_reservation={"reserved_cost": 0.01, "input_cost": 0.0, "entries": []}
+    )
+    generator: Final = async_data_generator(response=provider(), user_api_key_dict=auth, request_data={"model": "gpt-4"})
+    for _ in range(provider_chunks):
+        await generator.__anext__()
+    next_frame: Final = asyncio.ensure_future(generator.__anext__())
+    await waiting_on_provider.wait()
+    next_frame.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await next_frame
+
+    assert auth.budget_reservation is not None
+    assert (auth.budget_reservation.get("finalized") is True) is released
+
+
+class _PartialBillingRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.billed_texts: Final[list[str]] = []  # mutable-ok: collects the billing events the stream dispatches
+        self.billed: Final = asyncio.Event()
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        self.billed_texts.append(litellm.get_response_string(response_obj))
+        self.billed.set()
+
+
+@pytest.mark.asyncio
+async def test_a_stream_a_guardrail_buffered_leaves_its_reservation_to_the_partial_billing_when_the_client_leaves(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_logging_flags(monkeypatch, needs_wrap=True)
+    recorder: Final = _PartialBillingRecorder()
+    provider_stream: Final = await litellm.acompletion(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "count"}],
+        mock_response="one two three four five six seven eight",
+        stream=True,
+        api_key="test-key",
+    )
+    provider_stream.logging_obj.dynamic_async_success_callbacks = [recorder]
+    guardrail_holding_chunks: Final = asyncio.Event()
+
+    async def buffering_guardrail(user_api_key_dict, response, request_data) -> AsyncIterator[object]:
+        held: Final = [await response.__anext__() for _ in range(3)]
+        guardrail_holding_chunks.set()
+        await asyncio.Event().wait()
+        for chunk in held:
+            yield chunk
+
+    monkeypatch.setattr(ps.proxy_logging_obj, "async_post_call_streaming_iterator_hook", buffering_guardrail)
+    auth: Final = UserAPIKeyAuth(
+        api_key="sk-test-key", budget_reservation={"reserved_cost": 0.01, "input_cost": 0.004, "entries": []}
+    )
+    generator: Final = async_data_generator(
+        response=provider_stream,
+        user_api_key_dict=auth,
+        request_data={"model": "gpt-4o-mini", "litellm_logging_obj": provider_stream.logging_obj},
+    )
+    first_frame: Final = asyncio.ensure_future(generator.__anext__())
+    await guardrail_holding_chunks.wait()
+    first_frame.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await first_frame
+    await asyncio.wait_for(recorder.billed.wait(), timeout=5)
+
+    assert recorder.billed_texts == ["".join(chunk.choices[0].delta.content or "" for chunk in provider_stream.chunks)]
+    assert recorder.billed_texts[0]
+    assert auth.budget_reservation is not None
+    assert auth.budget_reservation.get("finalized") is not True
+
+
 _AZURE_CONTENT_FILTER_RESULTS: Final = {
     "hate": {"filtered": False, "severity": "safe"},
     "protected_material_text": {"detected": False, "filtered": False},

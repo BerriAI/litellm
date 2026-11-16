@@ -491,7 +491,19 @@ def update_kwargs_with_deployment(
             existing_tags.append(credential_tag)  # pyright: ignore[reportUnknownMemberType]  # the request's own tags list
         metadata["tags"] = existing_tags
 
+    from litellm.llms.github_copilot.app_auth import app_config
     from litellm.llms.github_copilot.per_user_auth import github_copilot_per_user_credential_name
+
+    if (
+        app_config(deployment_params) is not None
+        and "litellm_credential_name" in kwargs
+        and kwargs["litellm_credential_name"] != credential_name
+    ):
+        raise litellm_exceptions.BadRequestError(
+            message="litellm_credential_name cannot be overridden on a GitHub App deployment",
+            model=str(deployment_model_name),
+            llm_provider="github_copilot",
+        )
 
     configured_per_user_name: Final = github_copilot_per_user_credential_name(deployment_params)
     caller_credential_name: Final = kwargs.get("litellm_credential_name")

@@ -404,6 +404,8 @@ class _TeamMembershipRow(TypedDict):
     team_members_with_roles: ReadOnly[Iterable[_TeamMemberRow] | None]
 
 
+_ROOTED_STREAM_LOGGING_TASKS: Final[set[asyncio.Task[None]]] = set()  # mutable-ok: strong refs keep tasks alive
+_MAX_BACKGROUND_SERVED_OUTPUT_REBUILDS: Final = 64
 _VIEW_SETUP_POLL_INTERVAL_SECONDS: Final = 5.0
 _VIEW_SETUP_DEADLINE_SECONDS: Final = 15 * 60.0
 _VIEW_SETUP_GATE_TABLE: Final = '"LiteLLM_SpendLogs"'
@@ -2512,6 +2514,7 @@ class ProxyLogging:
         # Replace string entries in litellm.callbacks with initialized instances
         for idx, initialized_callback in string_callbacks_to_replace.items():
             litellm.callbacks[idx] = initialized_callback
+        litellm.logging_callback_manager.place_v2_companions(litellm.callbacks)
 
         # Fan ``litellm.callbacks`` (the "all events" registry) out into the
         # success/failure event lists eagerly, at startup. ``completion()`` does
@@ -4530,7 +4533,7 @@ class ProxyLogging:
         #########################################################
         if route is None:
             return False
-        if not (RouteChecks.is_llm_api_route(route) or RouteChecks.is_info_route(route)):
+        if not (RouteChecks.runs_inference_checks(route) or RouteChecks.is_info_route(route)):
             return False
         # Dashboard session keys poll info routes in the background; their failures are not user requests.
         if RouteChecks.is_dashboard_session_info_route(route, team_id):
@@ -5335,8 +5338,17 @@ class ProxyLogging:
         # completed.  unified_guardrail writes guardrail_information during
         # its end-of-stream block (inside current_response), so by the time
         # we reach this point the metadata is fully populated.
-        await ProxyLogging._record_served_stream_output(request_data, served_chunks)
-        ProxyLogging.fire_deferred_stream_logging(request_data)
+        # Rebuilding the served output only feeds logging, so it runs after the stream closes,
+        # unless enough rebuilds are already pending that this stream should wait like it used to.
+        if len(_ROOTED_STREAM_LOGGING_TASKS) >= _MAX_BACKGROUND_SERVED_OUTPUT_REBUILDS:
+            await ProxyLogging._record_served_stream_output(request_data, served_chunks)
+            ProxyLogging.fire_deferred_stream_logging(request_data)
+            return
+        ProxyLogging._spawn_rooted(
+            ProxyLogging._log_served_stream(
+                request_data, served_chunks, ProxyLogging._take_deferred_stream_logging(request_data)
+            )
+        )
 
     async def async_post_call_event_stream_iterator_hook(
         self,
@@ -5599,6 +5611,39 @@ class ProxyLogging:
         record_served_output_texts(logging_obj.model_call_details, texts)
 
     @staticmethod
+    async def _log_served_stream(
+        request_data: Mapping[str, object],
+        served_chunks: Sequence[object],
+        deferred_logging: Coroutine[object, object, object] | None,
+    ) -> None:
+        try:
+            await ProxyLogging._record_served_stream_output(request_data, served_chunks)
+        finally:
+            if deferred_logging is not None:
+                _ = await deferred_logging
+
+    @staticmethod
+    def _spawn_rooted(work: Coroutine[object, object, None]) -> None:
+        task: Final = asyncio.create_task(work)
+        _ROOTED_STREAM_LOGGING_TASKS.add(task)
+        task.add_done_callback(_ROOTED_STREAM_LOGGING_TASKS.discard)
+
+    @staticmethod
+    def _take_deferred_stream_logging(request_data: Mapping[str, object]) -> Coroutine[object, object, object] | None:
+        logging_obj: Final = request_data.get("litellm_logging_obj")
+        if logging_obj is None:
+            return None
+        _deferred_cb: Final[Callable[..., Coroutine[object, object, object]] | None] = getattr(
+            logging_obj, "_on_deferred_stream_complete", None
+        )
+        _args: Final[tuple[object, ...] | None] = getattr(logging_obj, "_deferred_stream_complete_args", None)
+        if _deferred_cb is None or _args is None:
+            return None
+        logging_obj._on_deferred_stream_complete = None  # pyright: ignore[reportAttributeAccessIssue]  # slot parked by the stream iterators
+        logging_obj._deferred_stream_complete_args = None  # pyright: ignore[reportAttributeAccessIssue]  # slot parked by the stream iterators
+        return _deferred_cb(*_args)
+
+    @staticmethod
     def fire_deferred_stream_logging(request_data: dict) -> None:
         """
         Fire the deferred streaming logging callback after the full streaming
@@ -5608,17 +5653,9 @@ class ProxyLogging:
         scheduling via create_task (which would race with unified_guardrail's
         end-of-stream block).  This method retrieves and fires them.
         """
-        logging_obj: Final = request_data.get("litellm_logging_obj")
-        if logging_obj is None:
-            return
-        _deferred_cb: Final[Callable[..., Coroutine[object, object, object]] | None] = getattr(
-            logging_obj, "_on_deferred_stream_complete", None
-        )
-        _args: Final[tuple[object, ...] | None] = getattr(logging_obj, "_deferred_stream_complete_args", None)
-        if _deferred_cb is not None and _args is not None:
-            logging_obj._on_deferred_stream_complete = None
-            logging_obj._deferred_stream_complete_args = None
-            asyncio.create_task(_deferred_cb(*_args))
+        deferred_logging: Final = ProxyLogging._take_deferred_stream_logging(request_data)
+        if deferred_logging is not None:
+            asyncio.create_task(deferred_logging)
 
     _fire_deferred_stream_logging = fire_deferred_stream_logging
 

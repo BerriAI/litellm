@@ -70,6 +70,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
     # Class variables or attributes
     server_fulfilled_tool_names: ClassVar[frozenset[str]] = frozenset()
     wants_failed_prompt_token_estimate: ClassVar[bool] = False
+    wants_chat_completion_hooks_on_bridged_chat: ClassVar[bool] = False
 
     enforces_request_content: bool = False
     """

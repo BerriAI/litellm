@@ -7,7 +7,7 @@ use litellm_llms_types::{
         MessagesOptionalParams, MessagesRequest, Speed, ThinkingConfig, ThinkingDisplay,
     },
     providers::anthropic::{AnthropicBeta, BETA_HEADER, BetaProvider, BetaSet, DEFAULT_HEADERS},
-    recognized::{Recognized, map_known_runs},
+    recognized::Recognized,
 };
 use litellm_router_types::LitellmParams;
 use serde_json::{Map, Value, json};
@@ -15,9 +15,11 @@ use serde_json::{Map, Value, json};
 use super::{
     handler::shape_anthropic_messages_request,
     scalar::{is_one, python_str, python_value},
-    thinking::translate_thinking,
+    thinking::{drop_unsupported_effort, translate_thinking},
 };
-use crate::anthropic::beta_headers::accepted_or_unlisted;
+use crate::anthropic::{
+    beta_gated_fields::strip_beta_gated_request, beta_headers::accepted_or_unlisted,
+};
 use crate::base_llm::messages::{
     context::{MessagesShapeOptions, MessagesTransformContext},
     tools::ToolCustomField,
@@ -30,9 +32,11 @@ use crate::{
         anthropic_request_errors_on_thinking_binding_mismatch, complete_anthropic_url,
         existing_betas, get_auth_header, has_advisor_tool, has_anthropic_credential,
         is_anthropic_invalid_thinking_block_error, is_anthropic_thinking_binding_mismatch_error,
-        is_claude_strict_tools_rejection, is_tool_search_used, merge_beta_headers,
+        is_claude_strict_tools_rejection, is_tool_search_used, map_messages, merge_beta_headers,
         minted_oauth_environment, optionally_handle_anthropic_oauth,
-        requires_native_compaction_beta, strip_advisor_blocks, strip_encrypted_reasoning_blocks,
+        requires_native_compaction_beta, strip_advisor_blocks,
+        strip_encrypted_reasoning_blocks_restoring_redacted_data, strip_raw_advisor_blocks,
+        strip_raw_encrypted_reasoning_blocks,
         strip_thinking_blocks_from_anthropic_messages_request, tools_without_strict,
     },
     base_llm::{
@@ -130,6 +134,23 @@ impl BaseMessagesConfig for AnthropicMessagesConfig {
         )
     }
 
+    /// Python's transform strips the thinking and system fields the final header does not
+    /// unlock.
+    fn finalize_request(
+        &self,
+        request: MessagesRequest,
+        headers: Headers,
+        context: &MessagesTransformContext,
+    ) -> Result<(MessagesRequest, Headers), Error> {
+        let stripped = strip_beta_gated_request(
+            request,
+            &existing_betas(&headers),
+            context.drops_unsupported_params,
+            BetaProvider::Anthropic,
+        );
+        Ok((stripped, headers))
+    }
+
     fn retry_after_http_error(
         &self,
         status: u16,
@@ -155,6 +176,8 @@ impl BaseMessagesConfig for AnthropicMessagesConfig {
         with_header(headers, BETA_HEADER, kept.to_string())
     }
 }
+
+const OUTPUT_CONFIG: &str = "output_config";
 
 const FOUNDRY_HOST_SUFFIXES: [&str; 3] = [
     "services.ai.azure.com",
@@ -302,7 +325,11 @@ pub(crate) fn transform_messages_request(
     {
         request.messages
     } else {
-        map_known_runs(request.messages, strip_advisor_blocks)
+        map_messages(
+            request.messages,
+            strip_advisor_blocks,
+            strip_raw_advisor_blocks,
+        )
     };
     let messages = if context.drops_unsupported_params {
         drop_non_string_tool_result_texts(messages)
@@ -310,7 +337,11 @@ pub(crate) fn transform_messages_request(
         messages
     };
     Ok(MessagesRequest {
-        messages: map_known_runs(messages, strip_encrypted_reasoning_blocks),
+        messages: map_messages(
+            messages,
+            strip_encrypted_reasoning_blocks_restoring_redacted_data,
+            strip_raw_encrypted_reasoning_blocks,
+        ),
         params: MessagesOptionalParams {
             context_management,
             extra: without_null_safeguards(request.params.extra),
@@ -527,11 +558,14 @@ fn carries_safeguards(params: &MessagesOptionalParams) -> bool {
         .is_some_and(|value| !value.is_null())
 }
 
+/// Python's `messages_carry_output_config` reads any mapping, so a message that did not parse,
+/// such as a system turn sent without content, counts too.
 fn messages_carry_output_config(messages: &[Recognized<Message>]) -> bool {
-    messages
-        .iter()
-        .filter_map(Recognized::known)
-        .any(|message| message.extra.contains_key("output_config"))
+    messages.iter().any(|message| match message {
+        Recognized::Known(message) => message.extra.contains_key(OUTPUT_CONFIG),
+        Recognized::Unrecognized(Value::Object(fields)) => fields.contains_key(OUTPUT_CONFIG),
+        Recognized::Unrecognized(_) => false,
+    })
 }
 
 fn uses_thinking_display_updates(params: &MessagesOptionalParams) -> bool {
@@ -575,13 +609,34 @@ fn is_tool_reference_change(block: &ContentBlock) -> bool {
         == Some("tool_reference")
 }
 
+fn is_raw_tool_reference_change(block: &Value) -> bool {
+    block
+        .get("type")
+        .and_then(Value::as_str)
+        .is_some_and(|block_type| block_type == "tool_addition" || block_type == "tool_removal")
+        && block
+            .get("tool")
+            .and_then(|tool| tool.get("type"))
+            .and_then(Value::as_str)
+            == Some("tool_reference")
+}
+
+/// `AnthropicModelInfo.is_mid_conversation_tool_change_used` reads any mapping, so a system
+/// message that did not parse is scanned through its raw content too.
 fn messages_carry_tool_changes(messages: &[Recognized<Message>]) -> bool {
-    messages
-        .iter()
-        .filter_map(Recognized::known)
-        .filter(|message| message.role == "system")
-        .flat_map(Message::blocks)
-        .any(is_tool_reference_change)
+    messages.iter().any(|message| match message {
+        Recognized::Known(message) => {
+            message.role == "system" && message.blocks().iter().any(is_tool_reference_change)
+        }
+        Recognized::Unrecognized(Value::Object(fields)) => {
+            fields.get("role").and_then(Value::as_str) == Some("system")
+                && matches!(
+                    fields.get("content"),
+                    Some(Value::Array(blocks)) if blocks.iter().any(is_raw_tool_reference_change)
+                )
+        }
+        Recognized::Unrecognized(_) => false,
+    })
 }
 
 fn unsupported_param(model: &str, param: &str, value: &str, hint: &str) -> Error {
@@ -599,6 +654,11 @@ pub fn drop_unsupported_params(
     context: &MessagesTransformContext,
 ) -> Result<MessagesRequest, Error> {
     let capabilities = &context.thinking.capabilities;
+    let request = if context.drop_params {
+        drop_unsupported_effort(request, capabilities)
+    } else {
+        request
+    };
     let model = request.model.clone();
     let reject = |param: &str, value: String, hint: &str| -> Result<(), Error> {
         if context.drop_params {
@@ -610,6 +670,9 @@ pub fn drop_unsupported_params(
     let speed = match &params.speed {
         Some(speed) if !capabilities.supports_speed => {
             reject("speed", speed_repr(speed), "")?;
+            litellm_tracing::warn!(
+                "Dropping unsupported `speed` for model={model} (drop_params=True). Fast mode is only supported on select Opus models."
+            );
             None
         }
         _ => params.speed.clone(),
@@ -711,6 +774,7 @@ mod tests {
 
     use super::*;
     use crate::anthropic::common_utils::ENCRYPTED_REASONING_SIGNATURE_PREFIX;
+    use crate::base_llm::messages::context::SupportedEffortTiers;
     use litellm_http::request::header_values;
 
     type Env = &'static [(&'static str, &'static str)];
@@ -813,6 +877,30 @@ mod tests {
         }
     }
 
+    #[fixture]
+    fn adaptive_without_xhigh() -> MessagesModelCapabilities {
+        MessagesModelCapabilities {
+            supports_reasoning: true,
+            supports_adaptive_thinking: true,
+            supports_legacy_thinking: true,
+            supports_output_config: true,
+            effort_tiers: SupportedEffortTiers {
+                max: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
+    #[fixture]
+    fn effort_without_adaptive() -> MessagesModelCapabilities {
+        MessagesModelCapabilities {
+            supports_reasoning: true,
+            supports_output_config: true,
+            ..Default::default()
+        }
+    }
+
     #[rstest]
     #[case::alone(json!({"max_tokens": null}))]
     #[case::ahead_of_the_param_gate(json!({"max_tokens": null, "speed": "fast"}))]
@@ -846,6 +934,16 @@ mod tests {
     )]
     #[case::speed_on_a_fast_mode_model(fast_mode(), false, json!({"speed": "fast"}))]
     #[case::speed_on_a_fast_mode_model_under_drop_params(fast_mode(), true, json!({"speed": "fast"}))]
+    #[case::effort_tier_the_model_lacks_is_left_to_the_provider(
+        adaptive_without_xhigh(),
+        false,
+        json!({"output_config": {"effort": "xhigh"}})
+    )]
+    #[case::effort_tier_the_model_has_under_drop_params(
+        adaptive_without_xhigh(),
+        true,
+        json!({"output_config": {"effort": "max"}})
+    )]
     #[case::native_context_management_edits(unmapped(), false, json!({"context_management": {"edits": [{
         "type": "clear_tool_uses_20250919",
         "trigger": {"type": "input_tokens", "value": 30000},
@@ -900,12 +998,46 @@ mod tests {
         json!({"speed": "fast", "temperature": 1.0}),
         json!({"temperature": 1.0})
     )]
+    #[case::reasoning_effort_tier_the_adaptive_model_lacks(
+        adaptive_without_xhigh(),
+        json!({"reasoning_effort": "xhigh"}),
+        json!({})
+    )]
+    #[case::output_config_effort_tier_the_adaptive_model_lacks(
+        adaptive_without_xhigh(),
+        json!({"output_config": {"effort": "xhigh", "format": {"type": "json_schema"}}}),
+        json!({"output_config": {"format": {"type": "json_schema"}}})
+    )]
+    #[case::output_config_effort_tier_the_effort_model_lacks(
+        effort_without_adaptive(),
+        json!({"output_config": {"effort": "max"}}),
+        json!({})
+    )]
     fn removed_params_are_dropped_under_drop_params(
         #[case] capabilities: MessagesModelCapabilities,
         #[case] fields: Value,
         #[case] expected: Value,
     ) {
         assert_eq!(transform(fields, capabilities, true), Ok(body(expected)));
+    }
+
+    #[rstest]
+    fn drop_params_keeps_the_effort_sized_budget_on_a_model_without_adaptive_thinking(
+        effort_without_adaptive: MessagesModelCapabilities,
+    ) {
+        let adaptive = json!({"max_tokens": 64000, "thinking": {"type": "adaptive"}});
+        let with_xhigh = merged(
+            adaptive.clone(),
+            json!({"output_config": {"effort": "xhigh"}}),
+        );
+
+        let dropped = transform(with_xhigh.clone(), effort_without_adaptive, true);
+
+        assert_eq!(
+            dropped,
+            transform(with_xhigh, effort_without_adaptive, false)
+        );
+        assert_ne!(dropped, transform(adaptive, effort_without_adaptive, true));
     }
 
     #[rstest]
@@ -1211,6 +1343,7 @@ mod tests {
                     },
                     drop_params: true,
                     drops_unsupported_params: false,
+                    global_drop_params: false,
                 }
             );
             return;
@@ -1473,6 +1606,43 @@ mod tests {
         json!({"messages": [{"role": "user", "content": "hi", "output_config": null}]}),
         &["per-turn-control-2026-07-01"]
     )]
+    #[case::contentless_system_output_config(
+        json!({"messages": [
+            {"role": "", "content": "Hello"},
+            {"role": "system", "output_config": {"effort": "high"}},
+        ]}),
+        &["per-turn-control-2026-07-01"]
+    )]
+    #[case::unparsed_message_output_config(
+        json!({"messages": [{"role": "user", "content": 5, "output_config": {"effort": "low"}}]}),
+        &["per-turn-control-2026-07-01"]
+    )]
+    #[case::unparsed_signed_compaction_block_in_history(
+        json!({"messages": [
+            {"role": "assistant", "content": [{"type": "text", "text": 5}, {"type": "compaction", "content": "summary", "signature": "sig"}]},
+            {"role": "user", "content": "Continue"},
+        ]}),
+        &["compact-2026-09-04"]
+    )]
+    #[case::unparsed_unsigned_compaction_block_in_history(
+        json!({"messages": [
+            {"role": "assistant", "content": [{"type": "text", "text": 5}, {"type": "compaction", "content": "summary", "signature": ""}]},
+        ]}),
+        &[]
+    )]
+    #[case::unparsed_system_tool_addition(
+        json!({"messages": [
+            {"role": "user", "content": "Use the ping tool"},
+            {"role": "system", "content": [{"type": "text", "text": 5}, {"type": "tool_addition", "tool": {"type": "tool_reference", "name": "ping"}}]},
+        ]}),
+        &["mid-conversation-tool-changes-2026-07-01"]
+    )]
+    #[case::unparsed_user_tool_addition(
+        json!({"messages": [
+            {"role": "user", "content": [{"type": "text", "text": 5}, {"type": "tool_addition", "tool": {"type": "tool_reference", "name": "ping"}}]},
+        ]}),
+        &[]
+    )]
     #[case::safeguards(
         json!({"safeguards": [{"type": "dangerous_tool_use", "classifier_context": {"v": 1, "permission_mode": "auto"}}]}),
         &[]
@@ -1563,6 +1733,35 @@ mod tests {
     )]
     fn feature_betas_follow_the_request(#[case] fields: Value, #[case] expected: &[&str]) {
         assert_eq!(feature_betas(&request(fields)), betas(expected));
+    }
+
+    #[rstest]
+    #[case::contentless_system_output_config(json!({"messages": [
+        {"role": "", "content": "Hello"},
+        {"role": "system", "output_config": {"effort": "high"}},
+    ]}))]
+    #[case::unparsed_message_output_config(
+        json!({"messages": [{"role": "user", "content": 5, "output_config": {"effort": "low"}}]})
+    )]
+    #[case::unparsed_signed_compaction_block_in_history(json!({"messages": [
+        {"role": "assistant", "content": [{"type": "text", "text": 5}, {"type": "compaction", "content": "summary", "signature": "sig"}]},
+        {"role": "user", "content": "Continue"},
+    ]}))]
+    #[case::unparsed_system_tool_addition(json!({"messages": [
+        {"role": "user", "content": "Use the ping tool"},
+        {"role": "system", "content": [{"type": "text", "text": 5}, {"type": "tool_addition", "tool": {"type": "tool_reference", "name": "ping"}}]},
+    ]}))]
+    fn a_beta_trigger_in_an_unparsed_message_counts_on_every_provider(#[case] fields: Value) {
+        let request = request(fields);
+        assert_ne!(feature_betas(&request), BetaSet::default());
+        assert_eq!(
+            existing_betas(&update_headers_with_anthropic_beta(Vec::new(), &request)),
+            feature_betas(&request)
+        );
+        assert_eq!(
+            provider_feature_betas(&request, BetaProvider::Anthropic),
+            feature_betas(&request)
+        );
     }
 
     #[rstest]

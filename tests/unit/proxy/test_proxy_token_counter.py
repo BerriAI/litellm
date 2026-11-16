@@ -44,7 +44,7 @@ from starlette.types import Message
 
 import litellm
 from litellm import Router
-from litellm._logging import JsonFormatter, verbose_proxy_logger
+from litellm._logging import JsonFormatter, verbose_logger, verbose_proxy_logger
 from litellm.llms.anthropic.count_tokens import handler as anthropic_count_tokens_handler
 from litellm.llms.azure_ai.anthropic.count_tokens import handler as azure_ai_count_tokens_http
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
@@ -83,6 +83,7 @@ from litellm.proxy.proxy_server import (
     _provider_token_count,
     _try_provider_token_count,
     count_request_tokens,
+    token_counter,
 )
 from litellm.responses.litellm_completion_transformation.session_handler import ResponsesSessionHandler
 from litellm.responses.utils import ResponsesAPIRequestUtils
@@ -3455,6 +3456,78 @@ async def test_bedrock_kimi_k3_is_counted_with_its_tokenizer_plus_the_shipped_fr
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("messages_format", "tools", "forced", "unforced"),
+    [
+        pytest.param(
+            "openai", [_KIMI_WEATHER], {"type": "function", "function": {"name": "get_weather"}}, "auto", id="openai"
+        ),
+        pytest.param(
+            "anthropic",
+            [
+                {
+                    "name": "get_weather",
+                    "description": "Get the weather",
+                    "input_schema": _KIMI_WEATHER["function"]["parameters"],
+                }
+            ],
+            {"type": "tool", "name": "get_weather"},
+            {"type": "auto"},
+            id="anthropic",
+        ),
+    ],
+)
+@pytest.mark.parametrize("drops_tool_choice", [False, True])
+async def test_bedrock_kimi_k3_count_adds_the_template_message_of_a_forced_tool_choice_inference_sends(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    messages_format: TokenCountMessagesFormat,
+    tools: list[dict[str, object]],
+    forced: dict[str, object],
+    unforced: str | dict[str, object],
+    drops_tool_choice: bool,
+):
+    _framed_kimi(monkeypatch)
+    if drops_tool_choice:
+        monkeypatch.setattr(
+            litellm.proxy.proxy_server,
+            "llm_router",
+            Router(
+                model_list=[
+                    {
+                        "model_name": "kimi",
+                        "litellm_params": {
+                            "model": "bedrock/us.moonshotai.kimi-k3",
+                            "additional_drop_params": ["tool_choice"],
+                        },
+                    }
+                ]
+            ),
+        )
+    encoding: Final = _available_kimi_k3(monkeypatch, tmp_path)
+    question: Final = [{"role": "user", "content": "Weather in Paris?"}]
+
+    async def count(tool_choice: str | dict[str, object] | None) -> int:
+        counted: Final = await count_request_tokens(
+            request=TokenCountRequest(model="kimi", messages=question, tools=tools, tool_choice=tool_choice),
+            call_endpoint=True,
+            messages_format=messages_format,
+        )
+        assert counted.tokenizer_type == "huggingface_tokenizer"
+        return counted.total_tokens
+
+    plain: Final = kimi_k3_tokens(encoding, "us.moonshotai.kimi-k3", question, [_KIMI_WEATHER])
+    required: Final = kimi_k3_tokens(encoding, "us.moonshotai.kimi-k3", question, [_KIMI_WEATHER], "required")
+    unset: Final = await count(None)
+
+    assert plain is not None and required is not None and required > plain
+    assert (await count(unforced), await count(forced)) == (
+        unset,
+        unset if drops_tool_choice else unset + required - plain,
+    )
+
+
+@pytest.mark.asyncio
 async def test_bedrock_kimi_k3_deployment_with_a_custom_tokenizer_keeps_counting_with_it(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ):
@@ -6361,3 +6434,330 @@ async def test_messages_count_tokens_drops_what_the_deployment_drops_unless_the_
 
     sent: Final = json.loads(route.calls.last.request.content)
     assert ("tool_choice" in sent, (sent.get("thinking") or {}).get("type")) == sent_options
+
+
+_TOOL_CHOICE_MODEL: Final = "qwen/qwen3.8-27b"
+_TOOL_CHOICE_QUESTION: Final = "What is the weather in Paris?"
+_CITY_SCHEMA: Final[dict[str, JsonValue]] = {
+    "type": "object",
+    "properties": {"city": {"type": "string"}},
+    "required": ["city"],
+}
+_CHAT_WEATHER_TOOL: Final[dict[str, JsonValue]] = {
+    "type": "function",
+    "function": {"name": "get_weather", "description": "Get the weather for a city", "parameters": _CITY_SCHEMA},
+}
+
+
+def _tool_choice_router() -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "no-count-api",
+                "litellm_params": {"model": f"groq/{_TOOL_CHOICE_MODEL}", "api_key": "sk-test"},
+            }
+        ]
+    )
+
+
+async def _utils_route_count(tool_choice: Mapping[str, JsonValue], model: str = "no-count-api") -> int:
+    response: Final = await token_counter(
+        request=TokenCountRequest(
+            model=model,
+            messages=[{"role": "user", "content": _TOOL_CHOICE_QUESTION}],
+            tools=[_CHAT_WEATHER_TOOL],
+            **tool_choice,
+        ),
+        http_request=_json_request({}, "python-httpx/0.28.1"),
+        fastapi_response=Response(),
+    )
+    return response.total_tokens
+
+
+async def _messages_route_count(tool_choice: Mapping[str, JsonValue]) -> int:
+    body: Final = {
+        "model": "no-count-api",
+        "messages": [{"role": "user", "content": _TOOL_CHOICE_QUESTION}],
+        "tools": [{"name": "get_weather", "description": "Get the weather for a city", "input_schema": _CITY_SCHEMA}],
+        **tool_choice,
+    }
+    response: Final = await anthropic_count_tokens(
+        _json_request(body, "python-httpx/0.28.1"), Response(), UserAPIKeyAuth()
+    )
+    assert isinstance(response, dict)
+    return response["input_tokens"]
+
+
+async def _responses_route_count(tool_choice: Mapping[str, JsonValue]) -> int:
+    from litellm.proxy.response_api_endpoints.endpoints import responses_input_tokens
+
+    body: Final = {
+        "model": "no-count-api",
+        "input": _TOOL_CHOICE_QUESTION,
+        "tools": [
+            {
+                "type": "function",
+                "name": "get_weather",
+                "description": "Get the weather for a city",
+                "parameters": _CITY_SCHEMA,
+            }
+        ],
+        **tool_choice,
+    }
+    response: Final = await responses_input_tokens(
+        request=_json_request(body, "python-httpx/0.28.1"),
+        fastapi_response=Response(),
+        general_settings=MappingProxyType({}),
+        token_counter=count_request_tokens,
+        llm_router=litellm.proxy.proxy_server.llm_router,
+        user_api_key_dict=UserAPIKeyAuth(),
+        response_id_security=None,
+        managed_files=None,
+    )
+    assert isinstance(response, dict)
+    return response["input_tokens"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("route_count", "tool_choice"),
+    [
+        (_utils_route_count, {"type": "function", "function": {"name": "get_weather"}}),
+        (_utils_route_count, "none"),
+        (_messages_route_count, {"type": "tool", "name": "get_weather"}),
+        (_messages_route_count, {"type": "none"}),
+        (_responses_route_count, {"type": "function", "name": "get_weather"}),
+        (_responses_route_count, "none"),
+    ],
+    ids=["utils-named", "utils-none", "messages-named", "messages-none", "responses-named", "responses-none"],
+)
+async def test_count_routes_without_a_count_api_count_the_tool_choice_like_token_counter(
+    monkeypatch: pytest.MonkeyPatch,
+    route_count: Callable[[Mapping[str, JsonValue]], Coroutine[None, None, int]],
+    tool_choice: JsonValue,
+) -> None:
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", _tool_choice_router())
+    monkeypatch.setattr(litellm.proxy.proxy_server, "proxy_config", litellm.proxy.proxy_server.ProxyConfig())
+    question: Final = [{"role": "user", "content": _TOOL_CHOICE_QUESTION}]
+    sdk_added: Final = litellm.token_counter(
+        model=_TOOL_CHOICE_MODEL, messages=question, tools=[_CHAT_WEATHER_TOOL], tool_choice=tool_choice
+    ) - litellm.token_counter(model=_TOOL_CHOICE_MODEL, messages=question, tools=[_CHAT_WEATHER_TOOL])
+
+    route_added: Final = await route_count({"tool_choice": tool_choice}) - await route_count({})
+
+    assert route_added == sdk_added > 0
+
+
+_AZURE_GROK_PARAMS: Final = {"api_base": "https://example.services.ai.azure.com", "api_key": "sk-test"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("deployment", "served_by_xai"),
+    [
+        ({"litellm_params": {"model": "xai/grok-4-1-fast-reasoning", "api_key": "sk-test"}}, True),
+        ({"litellm_params": {"model": "openrouter/x-ai/grok-4.3", "api_key": "sk-test"}}, True),
+        (
+            {"litellm_params": {"model": "openai/grok-4.3", "api_base": "https://api.x.ai/v1", "api_key": "sk-test"}},
+            True,
+        ),
+        ({"litellm_params": {"model": "openai/grok-4.3", "api_base": "http://[bad", "api_key": "sk-test"}}, False),
+        (
+            {
+                "litellm_params": {"model": "azure_ai/grok-4-1", **_AZURE_GROK_PARAMS},
+                "model_info": {"base_model": "azure_ai/grok-4-1-fast-reasoning"},
+            },
+            False,
+        ),
+        ({"litellm_params": {"model": "azure_ai/grok-4-1-fast-reasoning", **_AZURE_GROK_PARAMS}}, False),
+        ({"litellm_params": {"model": "grok-4.3", "custom_llm_provider": "azure_ai", **_AZURE_GROK_PARAMS}}, False),
+        (
+            {
+                "litellm_params": {
+                    "model": "vertex_ai/xai/grok-4.3",
+                    "vertex_project": "test-project",
+                    "vertex_location": "global",
+                }
+            },
+            False,
+        ),
+    ],
+)
+async def test_utils_token_counter_counts_xai_tool_choice_costs_only_on_grok_that_xai_serves(
+    monkeypatch: pytest.MonkeyPatch, deployment: dict[str, dict[str, str]], served_by_xai: bool
+) -> None:
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server, "llm_router", Router(model_list=[{"model_name": "grok", **deployment}])
+    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "proxy_config", litellm.proxy.proxy_server.ProxyConfig())
+    named: Final = {"tool_choice": {"type": "function", "function": {"name": "get_weather"}}}
+    question: Final = [{"role": "user", "content": _TOOL_CHOICE_QUESTION}]
+    sdk_added: Final = litellm.token_counter(
+        model="xai/grok-4.3", messages=question, tools=[_CHAT_WEATHER_TOOL], **named
+    ) - litellm.token_counter(model="xai/grok-4.3", messages=question, tools=[_CHAT_WEATHER_TOOL])
+
+    route_added: Final = await _utils_route_count(named, "grok") - await _utils_route_count({}, "grok")
+
+    assert route_added == (sdk_added if served_by_xai else 0)
+    assert sdk_added > 0
+
+
+def _litellm_warnings(caplog: pytest.LogCaptureFixture) -> tuple[str, ...]:
+    return tuple(record.getMessage() for record in caplog.records if record.name == verbose_logger.name)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("route_count", "tool_choice"),
+    [(_utils_route_count, "none"), (_messages_route_count, {"type": "none"}), (_responses_route_count, "none")],
+    ids=["utils", "messages", "responses"],
+)
+@pytest.mark.parametrize("model", ["chatgpt/gpt-6.1-sol", "github_copilot/kimi-k3"])
+async def test_count_routes_leave_the_provider_login_alone_when_counting_a_tool_choice(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    route_count: Callable[[Mapping[str, JsonValue]], Coroutine[None, None, int]],
+    tool_choice: JsonValue,
+    model: str,
+) -> None:
+    (tmp_path / "auth.json").write_text("not a saved login")
+    monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(tmp_path))
+    monkeypatch.setenv("GITHUB_COPILOT_TOKEN_DIR", str(tmp_path))
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server,
+        "llm_router",
+        Router(model_list=[{"model_name": "no-count-api", "litellm_params": {"model": model}}]),
+    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "proxy_config", litellm.proxy.proxy_server.ProxyConfig())
+
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        without_choice: Final = await route_count({})
+        warnings_without_choice: Final = _litellm_warnings(caplog)
+        caplog.clear()
+        with_choice: Final = await route_count({"tool_choice": tool_choice})
+
+    assert with_choice > without_choice
+    assert _litellm_warnings(caplog) == warnings_without_choice
+
+
+def _nested_json(depth: int) -> JsonValue:
+    return "none" if depth == 0 else {"nested": _nested_json(depth - 1)}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("route_count", "field"),
+    [
+        (_utils_route_count, "tool_choice"),
+        (_utils_route_count, "additional_drop_params"),
+        (_messages_route_count, "tool_choice"),
+        (_messages_route_count, "thinking"),
+        (_responses_route_count, "tool_choice"),
+    ],
+    ids=["utils-tool-choice", "utils-drop-params", "messages-tool-choice", "messages-thinking", "responses-tool-choice"],
+)
+async def test_count_routes_skip_a_value_nested_too_deep_to_validate(
+    monkeypatch: pytest.MonkeyPatch,
+    route_count: Callable[[Mapping[str, JsonValue]], Coroutine[None, None, int]],
+    field: str,
+) -> None:
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", _tool_choice_router())
+    monkeypatch.setattr(litellm.proxy.proxy_server, "proxy_config", litellm.proxy.proxy_server.ProxyConfig())
+
+    assert await route_count({field: _nested_json(300)}) == await route_count({})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("route_count", "tool_choice"),
+    [(_utils_route_count, "none"), (_messages_route_count, {"type": "none"}), (_responses_route_count, "none")],
+    ids=["utils", "messages", "responses"],
+)
+@pytest.mark.parametrize(
+    ("drop_params", "counts_choice"),
+    [({"additional_drop_params": ["tool_choice"]}, False), ({"drop_params": True}, True)],
+    ids=["tool-choice-dropped", "only-unsupported-dropped"],
+)
+async def test_count_routes_count_no_tool_choice_the_deployment_drops(
+    monkeypatch: pytest.MonkeyPatch,
+    route_count: Callable[[Mapping[str, JsonValue]], Coroutine[None, None, int]],
+    tool_choice: JsonValue,
+    drop_params: dict[str, JsonValue],
+    counts_choice: bool,
+) -> None:
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server,
+        "llm_router",
+        Router(
+            model_list=[
+                {
+                    "model_name": "no-count-api",
+                    "litellm_params": {"model": f"groq/{_TOOL_CHOICE_MODEL}", "api_key": "sk-test", **drop_params},
+                }
+            ]
+        ),
+    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "proxy_config", litellm.proxy.proxy_server.ProxyConfig())
+
+    route_added: Final = await route_count({"tool_choice": tool_choice}) - await route_count({})
+
+    assert (route_added > 0) == counts_choice
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("route_count", "tool_choice"),
+    [(_utils_route_count, "none"), (_messages_route_count, {"type": "none"}), (_responses_route_count, "none")],
+    ids=["utils", "messages", "responses"],
+)
+@pytest.mark.parametrize(
+    ("dropped", "counts_choice"),
+    [(["tool_choice"], False), (["temperature"], True)],
+    ids=["tool-choice-dropped", "other-param-dropped"],
+)
+async def test_count_routes_count_no_tool_choice_the_request_drops(
+    monkeypatch: pytest.MonkeyPatch,
+    route_count: Callable[[Mapping[str, JsonValue]], Coroutine[None, None, int]],
+    tool_choice: JsonValue,
+    dropped: list[JsonValue],
+    counts_choice: bool,
+) -> None:
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server,
+        "llm_router",
+        Router(
+            model_list=[
+                {
+                    "model_name": "no-count-api",
+                    "litellm_params": {"model": f"groq/{_TOOL_CHOICE_MODEL}", "api_key": "sk-test"},
+                }
+            ]
+        ),
+    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "proxy_config", litellm.proxy.proxy_server.ProxyConfig())
+    drop_list: Final = {"additional_drop_params": dropped}
+
+    route_added: Final = await route_count({"tool_choice": tool_choice, **drop_list}) - await route_count(drop_list)
+
+    assert (route_added > 0) == counts_choice
+
+
+@pytest.mark.asyncio
+async def test_utils_token_counter_counts_a_bare_prompt_with_a_tool_choice_like_the_prompt_alone(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", _tool_choice_router())
+
+    with_choice: Final = await token_counter(
+        request=TokenCountRequest(model="no-count-api", prompt=_TOOL_CHOICE_QUESTION, tool_choice="required"),
+        http_request=_json_request({}, "python-httpx/0.28.1"),
+        fastapi_response=Response(),
+    )
+    prompt_alone: Final = await token_counter(
+        request=TokenCountRequest(model="no-count-api", prompt=_TOOL_CHOICE_QUESTION),
+        http_request=_json_request({}, "python-httpx/0.28.1"),
+        fastapi_response=Response(),
+    )
+
+    assert (with_choice.error, with_choice.total_tokens) == (False, prompt_alone.total_tokens)

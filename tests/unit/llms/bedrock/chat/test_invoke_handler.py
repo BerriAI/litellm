@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import binascii
 import datetime
@@ -29,6 +30,7 @@ from litellm.llms.bedrock.chat.invoke_handler import (
 )
 from litellm.llms.bedrock.common_utils import BedrockError, get_bedrock_stream_event_statuses
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.llms.custom_httpx.stream_close import aclose_if_supported
 from litellm.types.llms.bedrock import BedrockInvokeNovaRequest
 from litellm.types.utils import ModelResponseStream
 from tests.unit.llms.bedrock.slow_upstream import (
@@ -952,6 +954,7 @@ async def test_moonshot_invoke_async_stream_yields_openai_shaped_chunks(_aws_tes
 
     response: Final = MagicMock(status_code=200, headers={})
     response.aiter_bytes = _aiter_bytes
+    response.aclose = AsyncMock()
     client: Final = AsyncHTTPHandler()
     client.post = AsyncMock(return_value=response)
 
@@ -964,6 +967,7 @@ async def test_moonshot_invoke_async_stream_yields_openai_shaped_chunks(_aws_tes
     )
 
     _assert_moonshot_stream_content([chunk async for chunk in stream])
+    response.aclose.assert_awaited_once()
 
 
 def _truncated_frame() -> bytes:
@@ -1073,6 +1077,7 @@ async def test_async_converse_stream_with_an_empty_200_body_raises_instead_of_an
 
     response: Final = MagicMock(status_code=200, headers=_event_stream_headers())
     response.aiter_bytes = _aiter_bytes
+    response.aclose = AsyncMock()
     client: Final = AsyncHTTPHandler()
     client.post = AsyncMock(return_value=response)
 
@@ -1601,6 +1606,7 @@ async def test_async_converse_stream_with_an_exception_event_frame_raises_instea
 
     response: Final = MagicMock(status_code=200, headers=_event_stream_headers())
     response.aiter_bytes = _aiter_bytes
+    response.aclose = AsyncMock()
     client: Final = AsyncHTTPHandler()
     client.post = AsyncMock(return_value=response)
 
@@ -1614,6 +1620,7 @@ async def test_async_converse_stream_with_an_exception_event_frame_raises_instea
         _ = [chunk async for chunk in stream]
 
     _assert_exception_event_surfaced_with_its_modeled_status(exc_info.value, event_type)
+    response.aclose.assert_awaited_once()
 
 
 def test_converse_stream_made_only_of_unknown_events_raises_instead_of_an_empty_turn(
@@ -2198,3 +2205,22 @@ async def test_a_nova_invoke_stream_without_a_served_tier_reports_no_tier(
     assert getattr(litellm.stream_chunk_builder(list(sync_chunks)), "service_tier", None) is None
     assert getattr(litellm.stream_chunk_builder(list(async_chunks)), "service_tier", None) is None
     assert getattr(non_streaming, "service_tier", None) is None
+
+
+@pytest.mark.asyncio
+async def test_aws_event_stream_decoder_aiter_bytes_closes_its_source_on_aclose() -> None:
+    source_closed: Final = asyncio.Event()
+
+    async def _byte_source() -> AsyncIterator[bytes]:
+        try:
+            yield _bedrock_event_stream_frame({"type": "message_start", "message": {"id": "msg_1"}})
+            for _ in range(20):
+                yield _bedrock_event_stream_frame({"type": "ping"})
+        finally:
+            source_closed.set()
+
+    source: Final = _byte_source()
+    stream: Final = AWSEventStreamDecoder(model="us.anthropic.claude-sonnet-4-6").aiter_bytes(source)
+    await anext(stream)
+    await aclose_if_supported(stream)
+    assert source_closed.is_set()

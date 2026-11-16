@@ -85,6 +85,8 @@ model LiteLLM_CustomerTeamTable {
   updated_at DateTime @default(now()) @updatedAt
   updated_by String
   @@index([parent_org_id])
+  @@index([budget_id])
+  @@index([budget_override_id])
   @@index([spend])
 }
 
@@ -107,6 +109,9 @@ model LiteLLM_CustomerMemberTable {
   updated_at DateTime @default(now()) @updatedAt
   updated_by String
   @@index([parent_org_id])
+  @@index([parent_team_ids], type: Gin)
+  @@index([budget_id])
+  @@index([budget_override_id])
   @@index([spend])
 }
 
@@ -386,6 +391,7 @@ model LiteLLM_DeletedTeamTable {
 
 // Track spend, rate limit, budget Users
 model LiteLLM_UserTable {
+    budget_limits Json?
     verified_subjects LiteLLM_VerifiedSubject[]
 		user_id    String @id
     user_alias String? 
@@ -2307,7 +2313,7 @@ enum AccountingDeliveryState {
 }
 
 model LiteLLM_SpendLogDelivery {
-  delivery_id        String                  @id @default(dbgenerated("(gen_random_uuid())::text"))
+  delivery_id        String                  @id @default(uuid())
   request_id         String
   state              AccountingDeliveryState @default(pending)
   accounting_payload Json

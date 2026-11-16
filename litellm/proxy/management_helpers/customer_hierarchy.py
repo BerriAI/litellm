@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
 from itertools import chain
-from typing import TYPE_CHECKING, Final, Generic, Protocol, TypeVar
+from typing import TYPE_CHECKING, Final, Generic, Literal, Protocol, TypeAlias, TypeVar
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
@@ -20,7 +20,7 @@ from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.list_api.common import escape_like
 from litellm.proxy.management_helpers.customer_budget_usage import customer_budget_usage
 from litellm.repositories.budget_repository import create_budget_row, update_budget_row
-from litellm.repositories.chunked_in import count_in, delete_many_in, find_many_in
+from litellm.repositories.chunked_in import IN_LIST_CHUNK_SIZE, count_in, delete_many_in, find_many_in
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.types.proxy.management_endpoints.customer_hierarchy import (
     Budget,
@@ -29,6 +29,7 @@ from litellm.types.proxy.management_endpoints.customer_hierarchy import (
     BudgetTemplate,
     CustomerMember,
     MemberCreate,
+    MemberFields,
     MemberPatch,
     Organization,
     OrganizationBudget,
@@ -45,9 +46,53 @@ if TYPE_CHECKING:
     from prisma.models import LiteLLM_BudgetWindowSpend
 
 
+BudgetSort: TypeAlias = Literal["budget_asc", "budget_desc"]
+
+
+def customer_budget_limit(budget: Budget | None) -> float | None:
+    if budget is None:
+        return None
+    limits: Final = budget.budget_limits or ()
+    monthly: Final = next(
+        (
+            limit.max_budget
+            for limit in limits
+            if limit.budget_duration.strip().lower() in ("1mo", "1month", "1months", "30d", "30days", "monthly")
+        ),
+        None,
+    )
+    if monthly is not None:
+        return monthly
+    if budget.max_budget is not None:
+        return budget.max_budget
+    return next(
+        (
+            limit.max_budget
+            for limit in limits
+            if limit.budget_duration.strip().lower() in ("12mo", "12month", "12months")
+        ),
+        None,
+    )
+
+
+def _budget_sort_key(budget: Budget | None, sort: BudgetSort) -> tuple[bool, float]:
+    limit: Final = customer_budget_limit(budget)
+    return limit is None, (limit or 0) * (-1 if sort == "budget_desc" else 1)
+
+
+class _BudgetSortRow(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    entity_id: str
+    budget_id: str | None
+    budget_override_id: str | None
+    budget_override_expires_at: datetime | None
+
+
 class ErrorCode(str, Enum):
     FREE_TIER_LIMIT = "free_tier_limit"
     CAPACITY_BUSY = "capacity_busy"
+    TRANSACTION_TIMEOUT = "transaction_timeout"
     NOT_FOUND = "not_found"
     PARENT_NOT_FOUND = "parent_not_found"
     ALREADY_EXISTS = "already_exists"
@@ -371,7 +416,7 @@ def team_response(row: PrismaRecord, now: datetime) -> Team:
 
 
 def override_expiry(
-    row: Team | CustomerMember | None, payload: TeamPatch | MemberPatch, override_id: str | None
+    row: Team | CustomerMember | None, payload: TeamPatch | MemberFields, override_id: str | None
 ) -> datetime | None:
     if override_id is None:
         return None
@@ -484,6 +529,12 @@ def default_template_patch(
 _BUDGET_INCLUDE: Final = {"budget": True}
 _MEMBER_INCLUDE: Final = {"budget": True, "budget_override": True}
 _ID: Final = TypeAdapter(str)
+
+
+def _search_filter(search: str, fields: tuple[str, ...]) -> Mapping[str, object]:
+    if not search:
+        return {}
+    return {"OR": tuple({field: {"contains": escape_like(search), "mode": "insensitive"}} for field in fields)}
 
 
 def _member_ids(rows: Sequence[PrismaRecord]) -> tuple[str, ...]:
@@ -995,9 +1046,20 @@ class CustomerHierarchyStore:
         return await self.update_budget(current_id, payload.budget_override, actor)
 
     async def update_member(self, member_id: str, payload: MemberPatch, actor: str) -> CustomerMember | Failure:
+        if payload.parent_team_ids is not None:
+            await self.lock_customer_identities()
         member: Final = await self.get_member(member_id)
         if isinstance(member, Failure):
             return member
+        if payload.parent_team_ids is not None:
+            teams: Final = await find_many_in(self.teams, "customer_team_id", payload.parent_team_ids)
+            if len(teams) != len(payload.parent_team_ids):
+                return Failure(ErrorCode.PARENT_NOT_FOUND)
+            if any(team.model_dump()["parent_org_id"] != member.parent_org_id for team in teams):
+                return Failure(ErrorCode.CUSTOMER_ORG_MISMATCH)
+            added: Final = tuple(team for team in payload.parent_team_ids if team not in member.parent_team_ids)
+            if await self.member_capacity_reached(added):
+                return Failure(ErrorCode.FREE_TIER_LIMIT)
         selected: Final = await self.member_template_patch(member, payload)
         if isinstance(selected, Failure):
             return selected
@@ -1012,6 +1074,7 @@ class CustomerHierarchyStore:
             where={"customer_member_id": member_id},
             data={
                 **alias_patch(payload),
+                **({"parent_team_ids": payload.parent_team_ids} if payload.parent_team_ids is not None else {}),
                 **({"budget_id": selected} if "budget_id" in payload.model_fields_set else {}),
                 **(
                     {
@@ -1028,16 +1091,7 @@ class CustomerHierarchyStore:
         return await self.get_member(member_id)
 
     async def list_organizations(self, page: int, page_size: int, search: str = "") -> Page[Organization]:
-        where: Final = (
-            {
-                "OR": tuple(
-                    {field: {"contains": escape_like(search), "mode": "insensitive"}}
-                    for field in ("alias", "customer_org_id")
-                )
-            }
-            if search
-            else {}
-        )
+        where: Final = _search_filter(search, ("alias", "customer_org_id"))
         count: Final = await self.organizations.count(where=where)
         rows: Final = await self.organizations.find_many(
             where=where,
@@ -1048,9 +1102,49 @@ class CustomerHierarchyStore:
         )
         return Page(await self.organization_responses(rows), count)
 
-    async def list_teams(self, parent_org_id: str | None, page: int, page_size: int) -> Page[Team]:
+    async def list_teams(
+        self, parent_org_id: str | None, page: int, page_size: int, sort: BudgetSort | None = None
+    ) -> Page[Team]:
         where: Final = {"parent_org_id": parent_org_id} if parent_org_id is not None else {}
         count: Final = await self.teams.count(where=where)
+        if sort is not None:
+            ids: Final = await self._budget_sort_ids(
+                await self.db.query_raw(
+                    "SELECT customer_team_id AS entity_id, budget_id, budget_override_id, budget_override_expires_at "
+                    'FROM "LiteLLM_CustomerTeamTable" WHERE ($1::text IS NULL OR parent_org_id = $1) '
+                    "ORDER BY created_at ASC, customer_team_id ASC",
+                    parent_org_id,
+                ),
+                sort,
+                page,
+                page_size,
+            )
+            chunks: Final = tuple(
+                [
+                    await self.teams.find_many(
+                        # bounded-ok: Each slice has at most IN_LIST_CHUNK_SIZE ids.
+                        where={"customer_team_id": {"in": list(ids[start : start + IN_LIST_CHUNK_SIZE])}},
+                        include=_MEMBER_INCLUDE,
+                    )
+                    for start in range(0, len(ids), IN_LIST_CHUNK_SIZE)
+                ]
+            )
+            rows_by_id: Final = {
+                _ID.validate_python(row.model_dump()["customer_team_id"]): row for row in chain.from_iterable(chunks)
+            }
+            return Page(
+                await customer_budget_usage(
+                    tuple(
+                        team_response(rows_by_id[identifier], self.now)
+                        for identifier in ids
+                        if identifier in rows_by_id
+                    ),
+                    self.window_spend,
+                    self.now,
+                    self.settings,
+                ),
+                count,
+            )
         rows: Final = await self.teams.find_many(
             where=where,
             skip=(page - 1) * page_size,
@@ -1060,19 +1154,72 @@ class CustomerHierarchyStore:
         )
         return Page(
             await customer_budget_usage(
-                tuple(team_response(row, self.now) for row in rows), self.window_spend, self.now, self.settings
+                tuple(team_response(row, self.now) for row in rows),
+                self.window_spend,
+                self.now,
+                self.settings,
             ),
             count,
         )
 
     async def list_members(
-        self, parent_team_id: str | None, page: int, page_size: int, *, parent_org_id: str | None = None
+        self,
+        parent_team_id: str | None,
+        page: int,
+        page_size: int,
+        *,
+        parent_org_id: str | None = None,
+        search: str = "",
+        sort: BudgetSort | None = None,
     ) -> Page[CustomerMember]:
         where: Final[Mapping[str, object]] = {
             **({"parent_team_ids": {"has": parent_team_id}} if parent_team_id is not None else {}),
             **({"parent_org_id": parent_org_id} if parent_org_id is not None else {}),
+            **_search_filter(search, ("alias", "customer_member_id")),
         }
         count: Final = await self.members.count(where=where)
+        if sort is not None:
+            ids: Final = await self._budget_sort_ids(
+                await self.db.query_raw(
+                    "SELECT customer_member_id AS entity_id, budget_id, budget_override_id, budget_override_expires_at "
+                    'FROM "LiteLLM_CustomerMemberTable" WHERE ($1::text IS NULL OR parent_org_id = $1) '
+                    "AND ($2::text IS NULL OR parent_team_ids @> ARRAY[$2]::text[]) "
+                    "AND ($3 = '' OR alias ILIKE $3 OR customer_member_id ILIKE $3) "
+                    "ORDER BY created_at ASC, customer_member_id ASC",
+                    parent_org_id,
+                    parent_team_id,
+                    f"%{escape_like(search)}%" if search else "",
+                ),
+                sort,
+                page,
+                page_size,
+            )
+            chunks: Final = tuple(
+                [
+                    await self.members.find_many(
+                        # bounded-ok: Each slice has at most IN_LIST_CHUNK_SIZE ids.
+                        where={"customer_member_id": {"in": list(ids[start : start + IN_LIST_CHUNK_SIZE])}},
+                        include=_MEMBER_INCLUDE,
+                    )
+                    for start in range(0, len(ids), IN_LIST_CHUNK_SIZE)
+                ]
+            )
+            rows_by_id: Final = {
+                _ID.validate_python(row.model_dump()["customer_member_id"]): row for row in chain.from_iterable(chunks)
+            }
+            return Page(
+                await customer_budget_usage(
+                    tuple(
+                        member_response(rows_by_id[identifier], self.now)
+                        for identifier in ids
+                        if identifier in rows_by_id
+                    ),
+                    self.window_spend,
+                    self.now,
+                    self.settings,
+                ),
+                count,
+            )
         rows: Final = await self.members.find_many(
             where=where,
             skip=(page - 1) * page_size,
@@ -1082,10 +1229,35 @@ class CustomerHierarchyStore:
         )
         return Page(
             await customer_budget_usage(
-                tuple(member_response(row, self.now) for row in rows), self.window_spend, self.now, self.settings
+                tuple(member_response(row, self.now) for row in rows),
+                self.window_spend,
+                self.now,
+                self.settings,
             ),
             count,
         )
+
+    async def _budget_sort_ids(self, rows: object, sort: BudgetSort, page: int, page_size: int) -> tuple[str, ...]:
+        candidates: Final = TypeAdapter(tuple[_BudgetSortRow, ...]).validate_python(rows)
+        references: Final = chain.from_iterable((row.budget_id, row.budget_override_id) for row in candidates)
+        budgets: Final = {
+            _ID.validate_python(row.model_dump()["budget_id"]): row.model_dump()
+            for row in await find_many_in(self.budgets, "budget_id", (ref for ref in references if ref is not None))
+        }
+
+        def key(row: _BudgetSortRow) -> tuple[bool, float]:
+            template: Final = related_budget(budgets.get(row.budget_id or ""), self.now)
+            override: Final = related_budget(
+                budgets.get(row.budget_override_id or ""),
+                self.now,
+                template.max_budget if template is not None else None,
+            )
+            return _budget_sort_key(
+                effective_member_budget(template, override, row.budget_override_expires_at, self.now), sort
+            )
+
+        ordered: Final = sorted(candidates, key=key)
+        return tuple(row.entity_id for row in ordered[(page - 1) * page_size : page * page_size])
 
     async def _delete_unused_budgets(self, budget_ids: Sequence[str]) -> None:
         where: Final[Mapping[str, object]] = {field: {"none": {}} for field in _BUDGET_REFERENCE_FIELDS}
@@ -1098,8 +1270,10 @@ class CustomerHierarchyStore:
             chunk_size=_DELETE_BATCH_SIZE,
         )
 
-    async def _delete_team_member_batch(self, team_id: str) -> bool:
-        rows: Final = await self.members.find_many(where={"parent_team_ids": {"has": team_id}}, take=_DELETE_BATCH_SIZE)
+    async def _delete_team_member_batch(self, team_ids: tuple[str, ...]) -> bool:
+        rows: Final = await self.members.find_many(
+            where={"parent_team_ids": {"has_some": list(team_ids)}}, take=_DELETE_BATCH_SIZE
+        )
         members: Final = tuple(_MemberDeletionRow.model_validate(row) for row in rows)
         if not members:
             return False
@@ -1111,9 +1285,9 @@ class CustomerHierarchyStore:
         await self._delete_unused_budgets(budget_ids)
         return True
 
-    async def _delete_team_members(self, team_id: str) -> None:
+    async def _delete_team_members(self, team_ids: tuple[str, ...]) -> None:
         while True:
-            if not await self._delete_team_member_batch(team_id):
+            if not await self._delete_team_member_batch(team_ids):
                 return
 
     async def _delete_organization_team_batch(self, organization_id: str) -> bool:
@@ -1121,9 +1295,8 @@ class CustomerHierarchyStore:
         teams: Final = tuple(_TeamDeletionRow.model_validate(row) for row in rows)
         if not teams:
             return False
-        for team in teams:
-            await self._delete_team_members(team.customer_team_id)
         team_ids: Final = tuple(team.customer_team_id for team in teams)
+        await self._delete_team_members(team_ids)
         team_budget_ids: Final = chain.from_iterable((team.budget_id, team.budget_override_id) for team in teams)
         budget_ids: Final = tuple(budget_id for budget_id in team_budget_ids if budget_id is not None)
         await delete_many_in(self.teams, "customer_team_id", team_ids, atomicity="caller_transaction")
@@ -1154,11 +1327,12 @@ class CustomerHierarchyStore:
         return None
 
     async def delete_team(self, team_id: str, *, cascade: bool = False) -> None | Failure:
+        await self.lock_customer_identities()
         team: Final = await self.get_team(team_id)
         if isinstance(team, Failure):
             return team
         if cascade:
-            await self._delete_team_members(team_id)
+            await self._delete_team_members((team_id,))
         elif await self.members.count(where={"parent_team_ids": {"has": team_id}}):
             return Failure(ErrorCode.HAS_CHILDREN)
         await self.teams.delete(where={"customer_team_id": team_id})
@@ -1166,6 +1340,7 @@ class CustomerHierarchyStore:
         return None
 
     async def delete_organization(self, organization_id: str, *, cascade: bool = False) -> None | Failure:
+        await self.lock_customer_identities()
         organization: Final = await self.get_organization(organization_id)
         if isinstance(organization, Failure):
             return organization
@@ -1196,7 +1371,13 @@ class CustomerHierarchy:
         *,
         operation_type: TransactionOperation = TransactionOperation.READ_WRITE,
     ) -> T | Failure:
-        from prisma.errors import DataError, ForeignKeyViolationError, RecordNotFoundError, UniqueViolationError
+        from prisma.errors import (
+            DataError,
+            ForeignKeyViolationError,
+            RecordNotFoundError,
+            TransactionExpiredError,
+            UniqueViolationError,
+        )
 
         try:
             async with self.db.tx() as tx:
@@ -1205,6 +1386,8 @@ class CustomerHierarchy:
             return Failure(ErrorCode.ALREADY_EXISTS)
         except RecordNotFoundError:
             return Failure(ErrorCode.NOT_FOUND)
+        except TransactionExpiredError:
+            return Failure(ErrorCode.TRANSACTION_TIMEOUT)
         except ForeignKeyViolationError:
             return Failure(
                 ErrorCode.HAS_CHILDREN if operation_type is TransactionOperation.DELETE else ErrorCode.PARENT_NOT_FOUND
@@ -1278,15 +1461,24 @@ class CustomerHierarchy:
         return await self.transaction(lambda store: store.list_organizations(page, page_size, search))
 
     async def list_teams(
-        self, parent_org_id: str | None = None, page: int = 1, page_size: int = 50
+        self, parent_org_id: str | None = None, page: int = 1, page_size: int = 50, sort: BudgetSort | None = None
     ) -> Page[Team] | Failure:
-        return await self.transaction(lambda store: store.list_teams(parent_org_id, page, page_size))
+        return await self.transaction(lambda store: store.list_teams(parent_org_id, page, page_size, sort))
 
     async def list_members(
-        self, parent_team_id: str | None = None, page: int = 1, page_size: int = 50, *, parent_org_id: str | None = None
+        self,
+        parent_team_id: str | None = None,
+        page: int = 1,
+        page_size: int = 50,
+        *,
+        parent_org_id: str | None = None,
+        search: str = "",
+        sort: BudgetSort | None = None,
     ) -> Page[CustomerMember] | Failure:
         return await self.transaction(
-            lambda store: store.list_members(parent_team_id, page, page_size, parent_org_id=parent_org_id)
+            lambda store: store.list_members(
+                parent_team_id, page, page_size, parent_org_id=parent_org_id, search=search, sort=sort
+            )
         )
 
     async def add_template(self, organization_id: str, payload: BudgetTemplate, actor: str) -> Organization | Failure:

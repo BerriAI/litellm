@@ -23,7 +23,7 @@ if TYPE_CHECKING:
     from prisma import Prisma
     from prisma import models as prisma_models
 
-_JSON_ENCODED_COLUMNS: Final = frozenset({"metadata", "model_spend", "model_max_budget"})
+_JSON_ENCODED_COLUMNS: Final = frozenset({"metadata", "model_spend", "model_max_budget", "budget_limits"})
 
 _SHADOWING_PLACEHOLDERS_SQL: Final = """
 SELECT p.user_id AS placeholder_user_id,
@@ -320,6 +320,19 @@ class UserRepository(BaseRepository[LiteLLM_UserTable]):
             data["object_permission_id"] = object_permission_id
 
         return await self.update(user_id, data, id_field="user_id")
+
+    async def link_null_sso_user_id(self, user_id: str, sso_user_id: str) -> bool:
+        """Set sso_user_id only when the stored value is null, atomically; False if another row already holds it."""
+        from prisma.errors import UniqueViolationError
+
+        try:
+            updated_count: Final[int] = await self.table.update_many(
+                where={"user_id": user_id, "sso_user_id": None},
+                data={"sso_user_id": sso_user_id},
+            )
+        except UniqueViolationError:
+            return False
+        return updated_count == 1
 
     async def backfill_null_user_email(self, user_id: str, user_email: str) -> int:
         """Set user_email only when the stored value is null, atomically at the database.

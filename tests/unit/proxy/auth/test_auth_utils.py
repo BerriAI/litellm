@@ -474,10 +474,7 @@ def _client_router_config(placement: str, litellm_params: dict[str, str]) -> dic
 @pytest.mark.parametrize("placement", ["model_list", "default_litellm_params"])
 def test_every_server_owned_auth_param_is_refused_from_a_client_router_config(param: str, placement: str):
     user_config: Final = _client_router_config(placement, {"model": "openai/gpt-5.4-nano", param: "attacker-chosen"})
-    with pytest.raises(
-        ValueError,
-        match="server-owned workload identity federation or OAuth token exchange parameter",
-    ):
+    with pytest.raises(ValueError, match=f"{param} is a server-owned .* parameter and cannot be set in a request body"):
         is_request_body_safe(
             request_body={"model": "gpt-5.4-nano", "user_config": user_config},
             general_settings={"allow_client_side_credentials": True},
@@ -6615,6 +6612,42 @@ def test_only_proxy_admins_change_a_teams_s3_bucket_list(
         )
     assert rejection.value.status_code == 403
     assert "Only proxy admins can set allowed_s3_buckets on a team." in str(rejection.value.detail)
+
+
+@pytest.mark.parametrize(
+    "role, stored, sent, refused",
+    [
+        (LitellmUserRoles.INTERNAL_USER, 2, None, True),
+        (LitellmUserRoles.INTERNAL_USER, 2, 10, True),
+        (LitellmUserRoles.INTERNAL_USER, None, 10, True),
+        (LitellmUserRoles.INTERNAL_USER, 2, 2, False),
+        (LitellmUserRoles.PROXY_ADMIN, 2, None, False),
+    ],
+    ids=["removes_the_cap", "raises_the_cap", "sets_a_cap", "resends_the_stored_cap", "proxy_admin_removes_the_cap"],
+)
+def test_only_a_proxy_admin_changes_a_keys_model_limit_max_borrow_multiple(
+    role: LitellmUserRoles, stored: int | None, sent: int | None, refused: bool
+) -> None:
+    from litellm.proxy._types import UpdateKeyRequest
+    from litellm.proxy.auth.auth_utils import enforce_batch_limits_are_admin_only
+
+    def metadata(multiple: int | None) -> dict[str, object]:
+        return {"project": "x"} if multiple is None else {"model_limit_max_borrow_multiple": multiple, "project": "x"}
+
+    request: Final = UpdateKeyRequest(key="sk-1", metadata=metadata(sent))
+    caller: Final = UserAPIKeyAuth(user_role=role, user_id="u1")
+
+    if not refused:
+        enforce_batch_limits_are_admin_only(
+            data=request, existing_metadata=metadata(stored), user_api_key_dict=caller, entity="key"
+        )
+        return
+    with pytest.raises(HTTPException) as rejection:
+        enforce_batch_limits_are_admin_only(
+            data=request, existing_metadata=metadata(stored), user_api_key_dict=caller, entity="key"
+        )
+    assert rejection.value.status_code == 403
+    assert "Only proxy admins can set model_limit_max_borrow_multiple on a key." in str(rejection.value.detail)
 
 
 def _request_with_content_length(content_length: int) -> Request:

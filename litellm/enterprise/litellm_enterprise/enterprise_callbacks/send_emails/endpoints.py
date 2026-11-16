@@ -19,8 +19,13 @@ from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.db.db_span import db_span
+from litellm.proxy.utils import PrismaClient
 
 router = APIRouter()
+
+
+async def get_email_settings(prisma_client: PrismaClient) -> dict[str, bool]:
+    return await _get_email_settings(prisma_client)
 
 
 async def _get_email_settings(prisma_client) -> Dict[str, bool]:
