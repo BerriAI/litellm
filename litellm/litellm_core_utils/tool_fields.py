@@ -3,6 +3,8 @@ from collections.abc import Callable, Mapping, Sequence
 from copy import copy
 from dataclasses import dataclass
 from functools import reduce
+from itertools import chain
+from types import MappingProxyType
 from typing import Annotated, Final, TypeAlias, TypeVar
 
 from pydantic import BeforeValidator, ConfigDict, Json, TypeAdapter, ValidationError
@@ -11,7 +13,7 @@ from typing_extensions import ReadOnly, TypedDict
 import litellm
 from litellm._logging import verbose_logger
 from litellm.exceptions import UnsupportedParamsError
-from litellm.litellm_core_utils.core_helpers import drops_unsupported_params, normalize_drop_params
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupported_params, normalize_drop_params
 from litellm.types.utils import (
     ChatCompletionMessageCustomToolCall,
     ChatCompletionMessageToolCall,
@@ -113,6 +115,47 @@ def _renamed_tool_call(
     if new_name is None or new_name == tool_call.function.name:
         return tool_call
     return tool_call.model_copy(update={"function": tool_call.function.model_copy(update={"name": new_name})})
+
+
+def _function_call_names(choice: Choices | StreamingChoices) -> tuple[str, ...]:
+    if not isinstance(choice, Choices):
+        return ()
+    return tuple(
+        tool_call.function.name
+        for tool_call in choice.message.tool_calls or ()
+        if isinstance(tool_call, ChatCompletionMessageToolCall) and tool_call.function.name
+    )
+
+
+def declared_function_name(tool: object) -> str | None:
+    fields: Final = as_str_mapping(tool)
+    if fields is None:
+        return None
+    function: Final = as_str_mapping(fields.get("function"))
+    name: Final = (fields if function is None else function).get("name")
+    return name if isinstance(name, str) and name else None
+
+
+def declared_function_names(tools: object) -> frozenset[str]:
+    try:
+        entries: Final = _TOOLS.validate_python(tools)
+    except ValidationError:
+        return frozenset()
+    return frozenset(name for name in map(declared_function_name, entries) if name)
+
+
+def with_tool_calls_named_as_declared(response: ModelResponse, declared_names: frozenset[str]) -> ModelResponse:
+    called_names: Final = frozenset(chain.from_iterable(map(_function_call_names, response.choices)))
+    return with_renamed_tool_calls(
+        response,
+        MappingProxyType(
+            {
+                name: truncate_tool_name(name)
+                for name in called_names
+                if name not in declared_names and truncate_tool_name(name) in declared_names
+            }
+        ),
+    )
 
 
 def truncate_tool_name(name: str) -> str:

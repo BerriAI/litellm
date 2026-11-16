@@ -7,7 +7,12 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import REDACTED_BY_LITELLM, REDACTED_TOOL_CALL_ARGUMENTS_PLACEHOLDER
 from litellm.litellm_core_utils.cold_storage_handler import ColdStorageHandler
-from litellm.litellm_core_utils.tool_fields import with_renamed_tool_calls
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.tool_fields import (
+    declared_function_names,
+    with_renamed_tool_calls,
+    with_tool_calls_named_as_declared,
+)
 from litellm.responses.additional_tools import hoist_additional_tools
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import (
@@ -62,6 +67,13 @@ def _stored_request_tools(proxy_server_request: Mapping[str, object] | None) -> 
     stored_input: Final = cast(ResponseInputParam, request_input)  # cast-ok: forwarded as sent, as the bridge does
     hoisted: Final = hoist_additional_tools(stored_input, None).hoisted
     return {"tools": [*(top_level_tools if isinstance(top_level_tools, list) else ()), *hoisted]}
+
+
+def _declared_tool_names(proxy_server_request: Mapping[str, object] | None) -> frozenset[str]:
+    model_parameters: Final = as_str_mapping(
+        None if proxy_server_request is None else proxy_server_request.get("model_parameters")
+    )
+    return frozenset() if model_parameters is None else declared_function_names(model_parameters.get("tools"))
 
 
 def _stored_instructions(proxy_server_request: Mapping[str, object] | None) -> str | None:
@@ -187,11 +199,14 @@ class ResponsesSessionHandler:
         _response_output: Final = spend_log.get("response", "{}")
         if isinstance(_response_output, dict) and _response_output and _response_output != {}:
             # transform `ChatCompletion Response` to `ResponsesAPIResponse`
-            model_response: Final = with_renamed_tool_calls(
-                ModelResponse(**_response_output),
-                LiteLLMCompletionResponsesConfig.member_chat_names(
-                    LiteLLMCompletionResponsesConfig.request_tools(_stored_request_tools(proxy_server_request_dict))
+            model_response: Final = with_tool_calls_named_as_declared(
+                with_renamed_tool_calls(
+                    ModelResponse(**_response_output),
+                    LiteLLMCompletionResponsesConfig.member_chat_names(
+                        LiteLLMCompletionResponsesConfig.request_tools(_stored_request_tools(proxy_server_request_dict))
+                    ),
                 ),
+                _declared_tool_names(proxy_server_request_dict),
             )
             for choice in model_response.choices:
                 if hasattr(choice, "message"):

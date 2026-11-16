@@ -11,6 +11,8 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 import litellm
+from litellm.constants import LITELLM_TRUNCATED_PAYLOAD_FIELD
+from litellm.litellm_core_utils.tool_fields import truncate_tool_name
 from litellm.proxy.spend_tracking.spend_tracking_utils import (
     _get_proxy_server_request_for_spend_logs_payload,
 )
@@ -847,6 +849,7 @@ LONG_NAMESPACE_TOOL: Final = {
         }
     ],
 }
+LONG_MEMBER_FULL_NAME: Final = "mcp__codex_apps__codex_document_control___get_document_tool_schemas"
 
 
 def _additional_tools_item(tool: Mapping[str, object]) -> dict[str, object]:
@@ -896,10 +899,7 @@ def _stored_long_member_call_turn(
                             {
                                 "id": "call_1",
                                 "type": "function",
-                                "function": {
-                                    "name": "mcp__codex_apps__codex_document_control___get_document_tool_schemas",
-                                    "arguments": '{"doc_id": "N-42"}',
-                                },
+                                "function": {"name": LONG_MEMBER_FULL_NAME, "arguments": '{"doc_id": "N-42"}'},
                             }
                         ],
                     },
@@ -909,15 +909,16 @@ def _stored_long_member_call_turn(
     }
 
 
-@SENT_TOOL_PLACEMENTS
-async def test_previous_response_replays_a_long_member_call_under_the_name_the_provider_was_sent(
-    monkeypatch: pytest.MonkeyPatch, placement: Callable[[Mapping[str, object]], SentTools]
-):
-    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    response_id: Final = ResponsesAPIRequestUtils._build_responses_api_response_id(
+def _long_member_response_id() -> str:
+    return ResponsesAPIRequestUtils._build_responses_api_response_id(
         custom_llm_provider="gemini", model_id=None, response_id="chatcmpl-long-member"
     )
-    fake_prisma_client: Final = _FakePrismaClient(results=[[_stored_long_member_call_turn(response_id, placement)]])
+
+
+async def _answer_the_long_member_call(
+    stored_turn: Mapping[str, object], response_id: str, placement: Callable[[Mapping[str, object]], SentTools]
+) -> None:
+    fake_prisma_client: Final = _FakePrismaClient(results=[[stored_turn]])
     tools, input_items = placement(LONG_NAMESPACE_TOOL)
 
     with patch("litellm.proxy.proxy_server.prisma_client", fake_prisma_client), respx.mock:
@@ -941,5 +942,99 @@ async def test_previous_response_replays_a_long_member_call_under_the_name_the_p
     parts: Final = list(chain.from_iterable(turn["parts"] for turn in sent_body["contents"]))
     called: Final = [part["function_call"]["name"] for part in parts if "function_call" in part]
     answered: Final = [part["function_response"]["name"] for part in parts if "function_response" in part]
-    assert len(declared) == 1
-    assert called == answered == list(declared)
+    assert declared == called == answered == [truncate_tool_name(LONG_MEMBER_FULL_NAME)]
+
+
+@SENT_TOOL_PLACEMENTS
+async def test_previous_response_replays_a_long_member_call_under_the_name_the_provider_was_sent(
+    monkeypatch: pytest.MonkeyPatch, placement: Callable[[Mapping[str, object]], SentTools]
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    response_id: Final = _long_member_response_id()
+
+    await _answer_the_long_member_call(_stored_long_member_call_turn(response_id, placement), response_id, placement)
+
+
+def _kept_in_cold_storage(stored_turn: Mapping[str, object]) -> dict[str, object]:
+    return {
+        **stored_turn,
+        "metadata": json.dumps({"cold_storage_object_key": "cold/long-member-turn.json"}),
+        "proxy_server_request": json.dumps({LITELLM_TRUNCATED_PAYLOAD_FIELD: True}),
+    }
+
+
+def _cold_storage_object(declared_name: str) -> dict[str, object]:
+    return {
+        "messages": [{"role": "user", "content": "Fetch document N-42"}],
+        "model_parameters": {
+            "tools": [{"type": "function", "function": {"name": declared_name, "parameters": {"type": "object"}}}]
+        },
+    }
+
+
+async def test_previous_response_replays_a_long_member_call_from_a_turn_kept_in_cold_storage(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "cold_storage_custom_logger", "s3_v2")
+    response_id: Final = _long_member_response_id()
+
+    with patch.object(session_handler, "COLD_STORAGE_HANDLER") as cold_storage:
+        cold_storage.get_proxy_server_request_from_cold_storage_with_object_key = AsyncMock(
+            return_value=_cold_storage_object(truncate_tool_name(LONG_MEMBER_FULL_NAME))
+        )
+        await _answer_the_long_member_call(
+            _kept_in_cold_storage(_stored_long_member_call_turn(response_id, _sent_as_tools)),
+            response_id,
+            _sent_as_tools,
+        )
+
+
+LONG_FUNCTION: Final = "lookup_" + "document_tool_schema_" * 4
+
+
+@pytest.mark.parametrize(
+    "cold_object",
+    [
+        pytest.param(_cold_storage_object(LONG_FUNCTION), id="sent_in_full"),
+        pytest.param({"messages": [{"role": "user", "content": "Fetch document N-42"}]}, id="no_tools_recorded"),
+    ],
+)
+def test_cold_storage_turn_keeps_a_long_call_name_its_provider_was_not_sent_shortened(
+    cold_object: dict[str, object],
+):
+    stored_turn: Final = {
+        "request_id": "long-function-turn",
+        "call_type": "aresponses",
+        "session_id": "long-function-session",
+        "response": {
+            "id": "chatcmpl-long-function",
+            "object": "chat.completion",
+            "choices": [
+                {
+                    "index": 0,
+                    "finish_reason": "tool_calls",
+                    "message": {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "id": "call_1",
+                                "type": "function",
+                                "function": {"name": LONG_FUNCTION, "arguments": '{"doc_id": "N-42"}'},
+                            }
+                        ],
+                    },
+                }
+            ],
+        },
+    }
+
+    history: Final = ResponsesSessionHandler.extend_chat_completion_message_with_spend_log_payload(
+        stored_turn, cold_object, []
+    )
+
+    replayed: Final = history[-1]
+    assert isinstance(replayed, Message)
+    assert len(LONG_FUNCTION) > 64
+    assert [tool_call.function.name for tool_call in replayed.tool_calls or []] == [LONG_FUNCTION]
