@@ -1,6 +1,8 @@
 import json
 import os
+import shlex
 import subprocess
+import sys
 from pathlib import Path
 from typing import Final
 
@@ -14,6 +16,49 @@ _TIERS: Final = (
     ("merge-smoke.yml", "smoke-passed", frozenset()),
 )
 _Tier = tuple[str, str, frozenset[str]]
+
+
+def test_combined_shard_collects_client_dependencies_beside_native_route_packages(tmp_path: Path) -> None:
+    workflow: Final = yaml.safe_load((_WORKFLOWS_DIR / _TIERS[1][0]).read_text())
+    shards: Final = workflow["jobs"]["unit"]["strategy"]["matrix"]["include"]
+    route: Final = tmp_path / "native/responses"
+    route.mkdir(parents=True)
+    (route / "__init__.py").write_text("")
+    (route / "conftest.py").write_text("")
+    (route / "test_dispatch.py").write_text("def test_dispatch(): pass\n")
+    dependency: Final = tmp_path / "third_party"
+    dependency.mkdir()
+    (dependency / "responses.py").write_text("def activate(test): return test\n")
+    client: Final = tmp_path / "client"
+    client.mkdir()
+    (client / "test_client.py").write_text("import responses\n@responses.activate\ndef test_client(): pass\n")
+    probes: Final = (
+        ("tests/unit/proxy/client", "client", "client/test_client.py::test_client"),
+        (
+            "tests/test_litellm_rust/responses/test_dispatch.py",
+            "native/responses/test_dispatch.py",
+            "native/responses/test_dispatch.py::test_dispatch",
+        ),
+    )
+    for source, _, _ in probes:
+        assert any(source in shlex.split(shard["test-path"]) for shard in shards)
+    for shard in shards:
+        tokens: Final = tuple(shlex.split(shard["test-path"]))
+        paths: Final = tuple(path for source, path, _ in probes if source in tokens)
+        if not paths:
+            continue
+        flags: Final = tuple(token for token in tokens if token.startswith("-"))
+        result: Final = subprocess.run(
+            [sys.executable, "-m", "pytest", *paths, *flags, "--collect-only", "-q"],
+            cwd=tmp_path,
+            env={**os.environ, "PYTHONPATH": str(dependency)},
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=30,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert all(node in result.stdout for source, _, node in probes if source in tokens)
 
 
 def _jobs(tier: _Tier) -> dict[str, dict[str, object]]:
