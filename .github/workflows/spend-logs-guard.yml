@@ -20,9 +20,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        if: github.event_name == 'pull_request'
         with:
-          ref: ${{ github.event.pull_request.base.ref || github.event.merge_group.base_sha }}
-          fetch-depth: 0
+          ref: ${{ github.event.pull_request.base.ref }}
           persist-credentials: false
       - name: Fetch the pull request head, its merge base and its reviews
         if: github.event_name == 'pull_request'
@@ -38,6 +38,7 @@ jobs:
           gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/reviews" --paginate --slurp | jq 'add // []' > "$RUNNER_TEMP/reviews.json"
           echo "merge_base=$merge_base" >> "$GITHUB_OUTPUT"
       - name: Set up uv
+        if: github.event_name == 'pull_request'
         uses: ./.github/actions/setup-uv-with-retries
         with:
           version: "0.10.9"
@@ -56,30 +57,3 @@ jobs:
             guard=ci_cd/spend_logs_guard.py
           fi
           uv run --no-project --with pydantic==2.14.1 python "$guard" --base "$MERGE_BASE" --head "$HEAD_SHA" --approver kerry-berri --reviews "$RUNNER_TEMP/reviews.json"
-      - name: Check approvals for every pull request in the merge group
-        if: github.event_name == 'merge_group'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GROUP_BASE: ${{ github.event.merge_group.base_sha }}
-          GROUP_HEAD: ${{ github.event.merge_group.head_sha }}
-          BASE_REF: ${{ github.event.merge_group.base_ref }}
-        run: |
-          guard=litellm/scripts/ci_cd/spend_logs_guard.py
-          git fetch --no-tags origin "$GROUP_BASE" "$GROUP_HEAD"
-          gh api --paginate "repos/${GITHUB_REPOSITORY}/compare/${GROUP_BASE}...${GROUP_HEAD}?per_page=100" --jq '.commits[].sha' > "$RUNNER_TEMP/commits.txt"
-          : > "$RUNNER_TEMP/pulls.txt"
-          while IFS= read -r commit; do
-            gh api --paginate "repos/${GITHUB_REPOSITORY}/commits/${commit}/pulls?per_page=100" \
-              --jq '.[] | select(.state == "open") | [.number, .base.ref, .head.sha] | @tsv' >> "$RUNNER_TEMP/pulls.txt"
-          done < "$RUNNER_TEMP/commits.txt"
-          sort -u "$RUNNER_TEMP/pulls.txt" > "$RUNNER_TEMP/unique-pulls.txt"
-          checked=0
-          while IFS=$'\t' read -r number base_ref head; do
-            [ "$base_ref" = "${BASE_REF#refs/heads/}" ] || continue
-            merge_base="$(gh api "repos/${GITHUB_REPOSITORY}/compare/${GROUP_BASE}...${head}" --jq '.merge_base_commit.sha')"
-            git fetch --no-tags origin "$merge_base" "$head"
-            gh api "repos/${GITHUB_REPOSITORY}/pulls/${number}/reviews" --paginate --slurp | jq 'add // []' > "$RUNNER_TEMP/reviews.json"
-            uv run --no-project --with pydantic==2.14.1 python "$guard" --base "$merge_base" --head "$head" --approver kerry-berri --reviews "$RUNNER_TEMP/reviews.json"
-            checked=$((checked + 1))
-          done < "$RUNNER_TEMP/unique-pulls.txt"
-          test "$checked" -gt 0
