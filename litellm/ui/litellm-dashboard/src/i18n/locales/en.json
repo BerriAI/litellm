@@ -2496,6 +2496,59 @@
       "loading": "Loading keys...",
       "empty": "No keys found",
       "searchPlaceholder": "Search by key alias or ID…",
+      "bulkActions": {
+        "select": "Select keys",
+        "cancel": "Cancel selection",
+        "menu": "Actions"
+      },
+      "bulkDelete": {
+        "selectKey": "Select {{key}}",
+        "selected_one": "{{count}} key selected",
+        "selected_other": "{{count}} keys selected",
+        "action": "Delete selected ({{count}})",
+        "title_one": "Delete {{count}} Virtual Key",
+        "title_other": "Delete {{count}} Virtual Keys",
+        "warning": "Deleted keys immediately stop authenticating requests. This action cannot be undone.",
+        "message": "Confirm deletion of only the keys listed above.",
+        "requiredConfirmation": "confirm delete",
+        "keyAlias": "Key {{number}} alias",
+        "keyId": "Key {{number}} ID",
+        "noAlias": "No alias",
+        "selectionChanged": "Some selected keys are no longer available to delete. Close this dialog and review your selection.",
+        "success_one": "{{count}} Virtual Key deleted",
+        "success_other": "{{count}} Virtual Keys deleted"
+      },
+      "bulkEdit": {
+        "team": "Move to team",
+        "user": "Assign to user",
+        "budget": "Set budget",
+        "selected_one": "{{count}} key selected",
+        "selected_other": "{{count}} keys selected",
+        "apply_one": "Apply to {{count}} key",
+        "apply_other": "Apply to {{count}} keys",
+        "pending": "Applying...",
+        "cancel": "Cancel",
+        "success_one": "{{count}} Virtual Key updated",
+        "success_other": "{{count}} Virtual Keys updated",
+        "partialFailure_one": "{{count}} key could not be updated. Review the reason below and try again.",
+        "partialFailure_other": "{{count}} keys could not be updated. Review the reasons below and try again.",
+        "selectionChanged": "Some selected keys are no longer available to edit. Close this dialog and review your selection.",
+        "projectTeamLocked": "Project keys keep their project’s team",
+        "descriptions": {
+          "team": "Only the team will be updated. User, model, and budget settings stay unchanged.",
+          "user": "Only the assigned user will be updated. Team, model, and budget settings stay unchanged.",
+          "budget": "Apply the same budget and reset period to each key separately. Existing spend stays unchanged."
+        },
+        "fields": {
+          "team": "Team",
+          "user": "User",
+          "budget": "Budget per key (USD)",
+          "resetPeriod": "Reset period"
+        },
+        "invalidBudget": "Enter a finite amount of 0 or more.",
+        "resetPeriodPlaceholder": "Select a reset period",
+        "resetPeriodRequired": "Select a reset period."
+      },
       "filters": {
         "title": "Filters",
         "description": "Narrow down virtual keys",
