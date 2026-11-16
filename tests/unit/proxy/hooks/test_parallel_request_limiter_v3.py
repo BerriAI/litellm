@@ -10199,7 +10199,9 @@ async def test_team_model_limits_stop_being_hard_caps_when_borrowing_is_on(
     monkeypatch.setattr(
         litellm,
         "priority_reservation_settings",
-        PriorityReservationSettings(team_model_limit_borrows_idle_capacity_from_other_teams=borrows),
+        PriorityReservationSettings(
+            model_limit_borrowing_config={"borrow_idle_capacity": ("team",) if borrows else ()}
+        ),
     )
     monkeypatch.setattr(litellm, "callbacks", ["dynamic_rate_limiter_v3"])
     monkeypatch.setattr(
@@ -10263,3 +10265,79 @@ async def test_raise_if_over_limit_before_body_skips_limits_that_need_the_model(
     await handler.async_pre_call_hook(auth, cache, {"model": "gpt-5.6", "messages": []}, "acompletion")
 
     assert await handler.raise_if_over_limit_before_body(auth) is None
+
+
+@pytest.mark.parametrize(
+    "setting, auth_fields, rate_limited_by",
+    [
+        (
+            "key",
+            {"metadata": {"model_rpm_limit": {"test-model": 2}}},
+            "model_per_key",
+        ),
+        (
+            "customer_organization",
+            {
+                "customer_hierarchy": CustomerHierarchyAuth(
+                    customer_org_id="org-1",
+                    scopes=(
+                        CustomerScopeAuth(key="customer_org", entity_id="org-1", model_rpm_limit={"test-model": 2}),
+                    ),
+                )
+            },
+            "model_per_customer_org",
+        ),
+    ],
+    ids=["key", "customer_org"],
+)
+@pytest.mark.parametrize(
+    "borrows", [False, True], ids=["by_default_the_limit_stays_a_ceiling", "with_borrowing_on_it_is_not_a_ceiling"]
+)
+@pytest.mark.asyncio
+async def test_key_and_customer_org_model_limits_stop_being_hard_caps_when_their_borrowing_is_on(
+    monkeypatch: pytest.MonkeyPatch,
+    borrows: bool,
+    setting: str,
+    auth_fields: dict[str, object],
+    rate_limited_by: str,
+):
+    from litellm.types.utils import ModelLimitBorrowingConfig, PriorityReservationSettings
+
+    monkeypatch.setattr(
+        litellm,
+        "priority_reservation_settings",
+        PriorityReservationSettings(
+            model_limit_borrowing_config=ModelLimitBorrowingConfig(borrow_idle_capacity=(setting,) if borrows else ())
+        ),
+    )
+    monkeypatch.setattr(litellm, "callbacks", ["dynamic_rate_limiter_v3"])
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.llm_router",
+        Router(
+            model_list=[
+                {
+                    "model_name": "test-model",
+                    "litellm_params": {"model": "gpt-3.5-turbo", "api_key": "k", "api_base": "b", "tpm": 1000},
+                }
+            ]
+        ),
+    )
+    cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(cache))
+    auth = UserAPIKeyAuth(api_key=hash_token("sk-borrow"), **auth_fields)
+
+    async def request():
+        await handler.async_pre_call_hook(
+            user_api_key_dict=auth, cache=cache, data={"model": "test-model"}, call_type="acompletion"
+        )
+
+    await request()
+    await request()
+    if borrows:
+        await request()
+        return
+    with pytest.raises(HTTPException) as exc:
+        await request()
+    assert exc.value.status_code == 429
+    assert exc.value.headers is not None
+    assert exc.value.headers["rate_limited_by"] == rate_limited_by

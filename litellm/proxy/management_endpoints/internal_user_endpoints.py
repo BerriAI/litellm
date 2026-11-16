@@ -35,6 +35,7 @@ from litellm.models.team import BudgetLimitEntry
 from litellm.proxy._types import *
 from litellm.proxy.auth.auth_checks import (
     delete_cache_key_objects,
+    escape_ilike,
     evict_budget_windows_absent_marker,
     forget_missing_user,
     get_jwt_key_mapping_cache_keys_for_tokens,
@@ -87,6 +88,7 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (  # noq
     raise_on_logging_credential_change,
     validated_customer_key_metadata,
 )
+from litellm.proxy.management_helpers.audit_logs import with_audit_actor
 from litellm.proxy.management_helpers.bulk_user_deletion import delete_users_from_current_teams
 from litellm.proxy.management_helpers.object_permission_utils import (  # noqa: F401  # legacy module exports
     _set_object_permission,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
@@ -103,7 +105,7 @@ from litellm.proxy.utils import handle_exception_on_proxy, hash_password, query_
 from litellm.redis.stores.spend_counters import (
     user_counter,
 )
-from litellm.repositories.chunked_in import update_many_in
+from litellm.repositories.chunked_in import find_many_in, update_many_in
 from litellm.repositories.organization_repository import OrganizationRepository
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import (
@@ -159,6 +161,7 @@ class _AdminTeamAndKeyRows(TypedDict):
 _ADMIN_TEAM_AND_KEY_ROWS_ADAPTER: Final = TypeAdapter(
     list[_AdminTeamAndKeyRows], config=ConfigDict(hide_input_in_errors=True)
 )
+_TEAM_METADATA_ADAPTER: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_in_errors=True))
 _ADMIN_KEY_ROW_ADAPTER: Final = TypeAdapter(
     dict[str, object], config=ConfigDict(strict=True, hide_input_in_errors=True)
 )
@@ -304,9 +307,10 @@ async def _check_duplicate_user_field(
             raise Exception("Database not connected")
 
         value: Final = field_value.strip()
-        where_clause: Final = {field_name: {"equals": value}}
-        if case_insensitive:
-            where_clause[field_name]["mode"] = "insensitive"
+        condition: Final = (
+            {"equals": escape_ilike(value), "mode": "insensitive"} if case_insensitive else {"equals": value}
+        )
+        where_clause: Final = {field_name: condition}
 
         existing_user: Final[object] = await UserRepository(prisma_client).table.find_first(where=where_clause)
 
@@ -468,8 +472,12 @@ async def add_new_user_to_default_team(
     user_api_key_dict: UserAPIKeyAuth,
     teams: Sequence[str | NewUserRequestTeam],
     prisma_client: "PrismaClient",
+    teams_are_defaults: bool = True,
 ):
-    memberships: Final = tuple(_default_team_membership(team) for team in teams)
+    requested: Final = tuple(_default_team_membership(team) for team in teams)
+    memberships: Final = (
+        await _memberships_on_team_member_budget(requested, prisma_client) if teams_are_defaults else requested
+    )
     for membership in memberships:
         with contextlib.suppress(Exception):
             await _add_user_to_team(
@@ -480,6 +488,25 @@ async def add_new_user_to_default_team(
                 max_budget_in_team=membership.max_budget_in_team,
                 user_role=membership.user_role,
             )
+
+
+async def _memberships_on_team_member_budget(
+    memberships: tuple[NewUserRequestTeam, ...], prisma_client: "PrismaClient"
+) -> tuple[NewUserRequestTeam, ...]:
+    """A default team's max_budget_in_team is already the team's member budget, which also carries the reset."""
+    capped_team_ids: Final = [m.team_id for m in memberships if m.max_budget_in_team is not None]
+    if not capped_team_ids:
+        return memberships
+    team_rows: Final = await find_many_in(_team_table(prisma_client), "team_id", capped_team_ids)
+    budgeted_team_ids: Final = frozenset(
+        row.team_id
+        for row in team_rows
+        if isinstance(row.metadata, dict)
+        and _TEAM_METADATA_ADAPTER.validate_python(row.metadata).get("team_member_budget_id") is not None
+    )
+    return tuple(
+        m.model_copy(update={"max_budget_in_team": None}) if m.team_id in budgeted_team_ids else m for m in memberships
+    )
 
 
 def _default_team_membership(team: str | NewUserRequestTeam) -> NewUserRequestTeam:
@@ -666,6 +693,7 @@ async def new_user(
                 user_api_key_dict=user_api_key_dict,
                 teams=teams,
                 prisma_client=prisma_client,
+                teams_are_defaults=data.teams is None,
             )
 
         user_id: Final = cast(str | None, response.get("user_id", None))
@@ -2707,20 +2735,23 @@ async def delete_user(
 
             asyncio.create_task(
                 create_audit_log_for_update(
-                    request_data=LiteLLM_AuditLogs(
-                        id=str(uuid.uuid4()),
-                        updated_at=datetime.now(timezone.utc),
-                        changed_by=get_audit_log_changed_by(
-                            litellm_changed_by=litellm_changed_by,
-                            user_api_key_dict=user_api_key_dict,
-                            litellm_proxy_admin_name=litellm_proxy_admin_name,
+                    request_data=with_audit_actor(
+                        LiteLLM_AuditLogs(
+                            id=str(uuid.uuid4()),
+                            updated_at=datetime.now(timezone.utc),
+                            changed_by=get_audit_log_changed_by(
+                                litellm_changed_by=litellm_changed_by,
+                                user_api_key_dict=user_api_key_dict,
+                                litellm_proxy_admin_name=litellm_proxy_admin_name,
+                            ),
+                            changed_by_api_key=user_api_key_dict.api_key,
+                            table_name=LitellmTableNames.USER_TABLE_NAME,
+                            object_id=user_id,
+                            action="deleted",
+                            updated_values="{}",
+                            before_value=_user_row,
                         ),
-                        changed_by_api_key=user_api_key_dict.api_key,
-                        table_name=LitellmTableNames.USER_TABLE_NAME,
-                        object_id=user_id,
-                        action="deleted",
-                        updated_values="{}",
-                        before_value=_user_row,
+                        user_api_key_dict,
                     )
                 )
             )
