@@ -3734,6 +3734,19 @@ async def test_every_worker_reads_the_models_saturation_from_redis_not_from_what
     assert await idle._check_model_saturation("shared-model", group) == pytest.approx(0.7)
 
 
+@pytest.mark.asyncio
+async def test_a_count_read_for_the_share_gauge_is_not_kept_in_the_workers_memory(monkeypatch: pytest.MonkeyPatch):
+    handler: Final = _borrowing_handler(monkeypatch, borrows=True)
+    share: Final = RateLimitScope("model_per_team_saturated", "team-a:shared-model").counter("tokens")
+    saturation: Final = RateLimitScope("model_saturation_check", "shared-model").counter("tokens")
+    handler.v3_limiter = PROXY_MaxParallelRequestsHandler_v3(
+        handler.internal_usage_cache, rate_limit_store=_SharedRedisRateLimits({share: 120, saturation: 700}).store()
+    )
+    assert await handler._get_saturation_value_from_cache(share, backfill=False) == 120
+    assert await handler._get_saturation_value_from_cache(saturation) == 700
+    assert handler.v3_limiter.rate_limits.local((share, saturation)) == (None, 700)
+
+
 class _FailingRedisRateLimits(FakeRateLimits):
     def read_counters(self, counters: Sequence[RateLimitCounter], send: object) -> Resolved[list[str | None]]:
         raise ConnectionError("redis down")

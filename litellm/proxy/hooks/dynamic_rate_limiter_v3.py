@@ -437,6 +437,8 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
     async def _get_saturation_value_from_cache(
         self,
         counter: RateLimitCounter,
+        *,
+        backfill: bool = True,
     ) -> int | float | str | None:
         """The model's counter as Redis holds it, so every worker agrees on saturation. A worker's own in-memory copy
         carries only the usage it served itself, and steady traffic keeps that copy alive past any TTL. The read is
@@ -445,7 +447,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         rate_limits: Final = self.v3_limiter.rate_limits
         try:
             value: Final = await rate_limits.get_from_redis(
-                counter, backfill_ttl=self._get_saturation_check_cache_ttl()
+                counter, backfill_ttl=self._get_saturation_check_cache_ttl(), backfill=backfill
             )
         except Exception as e:  # noqa: BLE001  # any Redis failure degrades to the local mirror, as the limiter's counter reads do
             verbose_proxy_logger.warning("Saturation read failed in Redis, using this worker's copy: %s", e)
@@ -886,7 +888,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
                     continue
                 descriptor, share_tokens = share
                 used = await self._get_saturation_value_from_cache(
-                    RateLimitScope(descriptor["key"], descriptor["value"]).counter("tokens")
+                    RateLimitScope(descriptor["key"], descriptor["value"]).counter("tokens"), backfill=False
                 )
                 used_tokens = 0 if used is None else int(float(used))
                 for logger in loggers:
