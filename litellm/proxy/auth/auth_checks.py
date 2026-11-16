@@ -17,7 +17,7 @@ import time
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from functools import partial
+from functools import partial, reduce
 from itertools import chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Generic, Literal, NoReturn, Optional, Protocol, TypeAlias
@@ -1140,19 +1140,26 @@ def _native_names_displayed_as(display_name: str, server: "MCPServer") -> frozen
     )
 
 
-def _native_names_reached_from(tool_name: str, server: "MCPServer", seen: frozenset[str]) -> frozenset[str]:
+def _native_names_reached_from(tool_name: str, server: "MCPServer") -> frozenset[str]:
     """Execution resolves a display name more than once, so a tool shown under another tool's name is reached too."""
     from litellm.proxy.mcp_server.utils import (  # noqa: PLC0415  # the MCP package imports the auth stack
         add_server_prefix_to_name,
         get_server_prefix,
     )
 
-    found: Final = _native_names_displayed_as(tool_name, server) - seen
-    names_they_are_called_by: Final = found | {
-        add_server_prefix_to_name(native_name, get_server_prefix(server)) for native_name in found
-    }
-    return found.union(
-        *(_native_names_reached_from(name, server, seen | found) for name in names_they_are_called_by - {tool_name})
+    display_names: Final = server.tool_name_to_display_name or {}
+    prefix: Final = get_server_prefix(server)
+
+    def with_the_tools_shown_under_their_names(reached: frozenset[str], _: int) -> frozenset[str]:
+        names_they_are_called_by: Final = reached | {add_server_prefix_to_name(name, prefix) for name in reached}
+        return reached | {
+            native_name for native_name, shown_name in display_names.items() if shown_name in names_they_are_called_by
+        }
+
+    return reduce(
+        with_the_tools_shown_under_their_names,
+        range(len(display_names)),
+        _native_names_displayed_as(tool_name, server),
     )
 
 
@@ -1169,8 +1176,7 @@ def _costs_of_running_tool_on(tool_name: str, server: "MCPServer") -> tuple[floa
     return tuple(
         mcp_tool_cost_per_query(cost_info=cost_info, tool_name=native_name)
         for native_name in (
-            _native_names_reached_from(tool_name, server, frozenset())
-            or (strip_known_server_prefix(tool_name, server),)
+            _native_names_reached_from(tool_name, server) or (strip_known_server_prefix(tool_name, server),)
         )
     )
 
