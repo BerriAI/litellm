@@ -845,21 +845,22 @@ def cast_exception_status_to_int(exception_status: object) -> int:
 def is_caller_timeout_408(
     model_call_details: Mapping[str, object], exception_status: str | int, ended: datetime | None = None
 ) -> bool:
-    """A 408 that arrives before the caller-set timeout could have fired came from the provider.
-
-    ``ended`` overrides ``model_call_details["end_time"]`` for callers that run before the
-    failure logger has stamped the current API call's end time."""
+    """A 408 is caller-controlled after the earliest marked timeout or TTFT deadline, using ended when supplied."""
     if cast_exception_status_to_int(exception_status) != 408:
         return False
     litellm_params: Final = model_call_details.get("litellm_params")
-    if not isinstance(litellm_params, Mapping) or not litellm_params.get("client_side_timeout"):
+    if not isinstance(litellm_params, Mapping):
         return False
-    timeout: Final = litellm_params.get("timeout")
+    configured: Final = (
+        litellm_params.get("timeout") if litellm_params.get("client_side_timeout") else None,
+        litellm_params.get("stream_ttft_timeout") if litellm_params.get("client_side_stream_ttft_timeout") else None,
+    )
+    deadlines: Final = tuple(value for value in configured if isinstance(value, (int, float)))
     started: Final = model_call_details.get("api_call_start_time") or model_call_details.get("start_time")
     finished: Final = ended if ended is not None else model_call_details.get("end_time")
-    if not isinstance(timeout, (int, float)) or not isinstance(started, datetime) or not isinstance(finished, datetime):
+    if not deadlines or not isinstance(started, datetime) or not isinstance(finished, datetime):
         return False
-    return (finished - started).total_seconds() >= timeout
+    return (finished - started).total_seconds() >= min(deadlines)
 
 
 def is_stream_stall(exception: BaseException) -> bool:

@@ -554,6 +554,8 @@ _UNTRUSTED_ROOT_CONTROL_FIELDS: Final = (
     # protection on a real deployment failure or force a false "not caller-controlled"
     # reading that lets its own bad timeout cool down deployments other tenants rely on.
     "client_side_timeout",
+    # Recomputed from the TTFT request field so clients cannot forge a cooldown exemption.
+    "client_side_stream_ttft_timeout",
 )
 
 _UNTRUSTED_METADATA_CONTROL_FIELDS: Final = (
@@ -2075,6 +2077,8 @@ class LiteLLMProxyRequestSetup:
             or request_data.get("stream_timeout") is not None
         ):
             data["client_side_timeout"] = True
+        if request_data.get("stream_ttft_timeout") is not None:
+            data["client_side_stream_ttft_timeout"] = True
 
         num_retries: Final = LiteLLMProxyRequestSetup._get_num_retries_from_request(headers)
         if num_retries is not None:

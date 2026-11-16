@@ -18,7 +18,12 @@ import respx
 import litellm
 from litellm import Router
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
+from litellm.router_api import ChangeSet
+from litellm.router_rust.core import RustCore
+from litellm.router_rust.invoke.streaming import StreamAttempt
+from litellm.router_rust.surface.health import logged_call
 from litellm.router_utils.cooldown_handlers import is_caller_timeout_408
 from litellm.types.integrations.custom_logger import WEBSEARCH_INTERCEPTION_PREFIX, as_converted_stream
 from litellm.types.llms.openai import AllMessageValues
@@ -439,6 +444,54 @@ async def test_native_live_stream_cut_at_the_stream_timeout_is_not_blamed_on_the
     )
 
 
+@pytest.mark.parametrize(
+    "params, elapsed, status, expected",
+    (
+        ({"client_side_stream_ttft_timeout": True, "stream_ttft_timeout": 0.5}, 1.0, 408, True),
+        ({"client_side_stream_ttft_timeout": True, "stream_ttft_timeout": 0.5}, 0.1, 408, False),
+        ({"stream_ttft_timeout": 0.5}, 1.0, 408, False),
+        ({"client_side_timeout": True, "timeout": 600, "stream_ttft_timeout": 0.5}, 1.0, 408, False),
+        ({"client_side_stream_ttft_timeout": True, "stream_ttft_timeout": 0.5}, 1.0, 500, False),
+        (
+            {
+                "client_side_timeout": True,
+                "timeout": 600,
+                "client_side_stream_ttft_timeout": True,
+                "stream_ttft_timeout": 0.5,
+            },
+            1.0,
+            408,
+            True,
+        ),
+        (
+            {
+                "client_side_timeout": True,
+                "timeout": 0.5,
+                "client_side_stream_ttft_timeout": True,
+                "stream_ttft_timeout": 600,
+            },
+            1.0,
+            408,
+            True,
+        ),
+        ({"client_side_stream_ttft_timeout": True, "stream_ttft_timeout": "0.5"}, 1.0, 408, False),
+    ),
+)
+def test_caller_stream_ttft_timeout_408_uses_only_marked_numeric_deadlines(
+    params: Mapping[str, object],
+    elapsed: float,
+    status: int,
+    expected: bool,
+) -> None:
+    started: Final = datetime(2024, 1, 1)
+    details: Final = {
+        "litellm_params": params,
+        "api_call_start_time": started,
+        "end_time": started + timedelta(seconds=elapsed),
+    }
+    assert is_caller_timeout_408(details, status) is expected
+
+
 @pytest.mark.asyncio
 async def test_bedrock_timeout_preserves_the_provider_timeout_error(
     respx_mock: respx.MockRouter,
@@ -743,7 +796,10 @@ async def test_stream_ttft_timeout_is_resolved_per_attempt_and_kept_out_of_provi
         ],
         num_retries=0,
     )
-    request: Final = {} if request_value is None else {"stream_ttft_timeout": request_value}
+    request: Final = {
+        "client_side_stream_ttft_timeout": True,
+        **({} if request_value is None else {"stream_ttft_timeout": request_value}),
+    }
     response: Final = await router.acompletion(
         model="ttft",
         messages=[{"role": "user", "content": "hi"}],
@@ -753,6 +809,7 @@ async def test_stream_ttft_timeout_is_resolved_per_attempt_and_kept_out_of_provi
     assert "".join([chunk.choices[0].delta.content or "" async for chunk in response]) == "answer"
     assert observer.timeout == expected
     assert "stream_ttft_timeout" not in json.loads(route.calls.last.request.content)
+    assert "client_side_stream_ttft_timeout" not in json.loads(route.calls.last.request.content)
 
 
 class _TTFTByteStream(httpx.AsyncByteStream):
@@ -1068,3 +1125,85 @@ async def test_stream_ttft_responses_holds_lifecycle_until_output_and_exempts_ba
         "primary" if background else "fallback",
     )
     assert route.call_count == (1 if background else 2)
+
+
+@pytest.mark.asyncio
+async def test_stream_ttft_timeout_cools_a_deployment_configured_stall(
+    stream_clock: _ManualClock,
+    respx_mock: respx.MockRouter,
+    ttft_httpx_transport: None,
+) -> None:
+    respx_mock.post("https://ttft.invalid/v1/chat/completions").mock(
+        side_effect=[
+            httpx.Response(
+                200,
+                stream=_TTFTByteStream(
+                    stream_clock,
+                    (
+                        (0.0, _ttft_chat_chunk({"role": "assistant"})),
+                        (0.3, _ttft_chat_chunk({"content": "primary"}, "stop")),
+                    ),
+                ),
+            ),
+            httpx.Response(200, content=_ttft_chat_chunk({"content": "fallback"}, "stop") + b"data: [DONE]\n\n"),
+        ]
+    )
+    router: Final = _ttft_router()
+    router.apply(ChangeSet(assign={"allowed_fails": 0}))
+    response: Final = await router.acompletion(
+        model="primary",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+    )
+    assert "".join([chunk.choices[0].delta.content or "" async for chunk in response]) == "fallback"
+    cooldowns: Final = await router.health().cooldowns.async_get_active_cooldowns(
+        ["ttft-primary"], parent_otel_span=None
+    )
+    assert tuple(deployment_id for deployment_id, _ in cooldowns) == ("ttft-primary",)
+
+
+def test_stream_ttft_timeout_and_caller_marker_are_in_logging_params() -> None:
+    params: Final = get_litellm_params(stream_ttft_timeout=0.5, client_side_stream_ttft_timeout=True)
+    assert params["stream_ttft_timeout"] == 0.5
+    assert params["client_side_stream_ttft_timeout"] is True
+
+
+@pytest.mark.parametrize("caller", (True, False), ids=("caller", "deployment"))
+@pytest.mark.parametrize("after_lifecycle", (False, True), ids=("first-chunk", "stream-report"))
+def test_stream_ttft_timeout_failure_exits_preserve_deployment_health_signals(
+    caller: bool,
+    after_lifecycle: bool,
+) -> None:
+    router: Final = _ttft_router()
+    core: Final = router._core
+    assert isinstance(core, RustCore)
+    started: Final = datetime(2024, 1, 1)
+    kwargs: Final = {
+        "metadata": {"model_group": "primary"},
+        "model_info": {"id": "ttft-primary"},
+        "stream_ttft_timeout": 0.5,
+        "timeout": 600,
+        **({"client_side_stream_ttft_timeout": True} if caller else {"client_side_timeout": True}),
+    }
+    attempt: Final = StreamAttempt(
+        core=core,
+        op="acompletion",
+        request=kwargs,
+        kwargs=kwargs,
+        group="primary",
+        order=None,
+        depth=0,
+        level=0,
+        deployment_id="ttft-primary",
+        attempted_retries=0,
+    )
+    call: Final = logged_call("acompletion", kwargs, started=started)
+    logged: Final = {
+        **call,
+        **(attempt.logged() if after_lifecycle else {}),
+        "end_time": started + timedelta(seconds=1),
+    }
+    error: Final = litellm.Timeout(
+        message="No model output within stream_ttft_timeout=0.5s", model="ttft-primary", llm_provider="openai"
+    )
+    assert core.failure_exits(error, logged, "ttft-primary")["outside_deployment"] is caller

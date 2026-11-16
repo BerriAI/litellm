@@ -93,7 +93,14 @@ def logged_call(op: str, kwargs: Mapping[str, object], started: datetime | None 
     call_type: Final = op.rsplit(".", 1)[-1]
     if details is not None:
         return {"call_type": call_type, **details, "end_time": ended}
-    fields: Final = ("metadata", "litellm_metadata", "client_side_timeout", "timeout")
+    fields: Final = (
+        "metadata",
+        "litellm_metadata",
+        "client_side_timeout",
+        "client_side_stream_ttft_timeout",
+        "stream_ttft_timeout",
+        "timeout",
+    )
     return {
         "call_type": call_type,
         "litellm_params": {name: kwargs.get(name) for name in fields},

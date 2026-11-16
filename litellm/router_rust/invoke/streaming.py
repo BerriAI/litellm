@@ -187,6 +187,8 @@ class StreamAttempt:
                 "model_info": kwargs.get("model_info") or {},
                 "api_base": kwargs.get("api_base"),
                 "client_side_timeout": kwargs.get("client_side_timeout"),
+                "client_side_stream_ttft_timeout": kwargs.get("client_side_stream_ttft_timeout"),
+                "stream_ttft_timeout": kwargs.get("stream_ttft_timeout"),
                 "timeout": kwargs.get("timeout"),
                 **({"cooldown_time": kwargs["cooldown_time"]} if "cooldown_time" in kwargs else {}),
             },

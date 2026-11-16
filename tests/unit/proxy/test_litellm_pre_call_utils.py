@@ -4,6 +4,7 @@ import copy
 import json
 import os
 import time
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Final
@@ -1839,6 +1840,48 @@ async def test_add_litellm_data_to_request_ignores_forged_client_side_timeout():
     )
 
     assert not updated.get("client_side_timeout")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "fields, expected",
+    (
+        ({"stream_ttft_timeout": 0.5}, True),
+        ({}, False),
+        ({"stream_ttft_timeout": None}, False),
+        ({"client_side_stream_ttft_timeout": True}, False),
+        ({"stream_ttft_timeout": 0.5, "client_side_stream_ttft_timeout": False}, True),
+    ),
+)
+async def test_stream_ttft_timeout_marker_is_derived_from_the_request_body(
+    fields: Mapping[str, object],
+    expected: bool,
+) -> None:
+    request: Final = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "scheme": "http",
+            "server": ("testserver", 80),
+            "path": "/v1/chat/completions",
+            "query_string": b"",
+            "headers": [],
+            "client": ("127.0.0.1", 1234),
+        }
+    )
+    updated: Final = await add_litellm_data_to_request(
+        data={"model": "openai/ttft-proxy-test", "messages": [{"role": "user", "content": "hi"}], **fields},
+        request=request,
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+    assert bool(updated.get("client_side_stream_ttft_timeout")) is expected
+    assert not updated.get("client_side_timeout")
+    assert updated["proxy_server_request"]["body"].get("client_side_stream_ttft_timeout") is (
+        True if expected else None
+    )
 
 
 @pytest.mark.asyncio
@@ -11850,8 +11893,11 @@ def test_pre_call_served_model_applies_aliases_in_request_preparation_order(
 def test_request_served_model_ignores_a_malformed_alias_like_request_preparation_does(
     token_fields: dict[str, object], expected: str
 ) -> None:
-    from litellm.proxy.litellm_pre_call_utils import _update_model_if_key_alias_exists, _update_model_if_team_alias_exists
-    from litellm.proxy.litellm_pre_call_utils import request_served_model
+    from litellm.proxy.litellm_pre_call_utils import (
+        _update_model_if_key_alias_exists,
+        _update_model_if_team_alias_exists,
+        request_served_model,
+    )
 
     valid_token: Final = UserAPIKeyAuth(**token_fields)
     prepared: Final[dict[str, object]] = {"model": "requested"}  # mutable-ok: the rewrite functions edit the body

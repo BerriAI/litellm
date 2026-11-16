@@ -59,6 +59,8 @@ OPTIONAL_KWARGS_KEYS: Final = (
             "azure_scope",
             "timeout",
             "client_side_timeout",
+            "client_side_stream_ttft_timeout",
+            "stream_ttft_timeout",
             "gcs_bucket_name",
             "bucket_name",
             "s3_bucket_name",

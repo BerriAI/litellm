@@ -4712,6 +4712,8 @@ class LitellmDataForBackendLLMCall(TypedDict, total=False):
     # deliberately tiny value isn't treated as a deployment health signal (see
     # cooldown_handlers._trigger_cooldown_for_failed_deployment).
     client_side_timeout: bool
+    # True when the request body supplied the separate first-output deadline.
+    client_side_stream_ttft_timeout: bool  # writable-ok: proxy setup assembles this trusted marker in place
     keepalive_seconds: float | None
 
 
