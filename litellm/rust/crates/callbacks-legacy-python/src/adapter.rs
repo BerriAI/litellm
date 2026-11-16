@@ -30,6 +30,9 @@ use crate::{
     setup,
 };
 
+const VERTEX_AI_PROVIDER: &str = "vertex_ai";
+const VERTEX_LOCATION_PARAMS: [&str; 2] = ["vertex_location", "vertex_ai_location"];
+
 #[derive(Clone, Copy, Debug)]
 struct PassThroughStream {
     url_route: &'static str,
@@ -151,24 +154,47 @@ impl LegacyLogging {
     }
 
     /// Python's Messages handler hands the logger its request params, validated `metadata`
-    /// included, as `litellm_params`, beside the `aanthropic_messages` call flag.
+    /// included, as `litellm_params`, beside the `aanthropic_messages` call flag and, for
+    /// Vertex AI, the explicit `vertex_location` cost tracking prices the regional uplift from.
     fn logged_request_params(
         &self,
+        py: Python<'_>,
         context: &RequestContext,
-    ) -> Option<serde_json::Map<String, Value>> {
+    ) -> PyResult<Option<serde_json::Map<String, Value>>> {
         if self.operation != LoggingOperation::Messages {
-            return None;
+            return Ok(None);
         }
-        let mut params = context
-            .optional_params
-            .as_object()
-            .cloned()
-            .unwrap_or_default();
+        let location = match context.custom_llm_provider == VERTEX_AI_PROVIDER {
+            true => self.explicit_vertex_location(py)?,
+            false => None,
+        };
+        let mut params: serde_json::Map<String, Value> = location
+            .map(|location| (VERTEX_LOCATION_PARAMS[0].to_owned(), Value::String(location)))
+            .into_iter()
+            .collect();
+        params.extend(context.optional_params.as_object().cloned().unwrap_or_default());
         params.insert(
             "aanthropic_messages".to_owned(),
             Value::Bool(self.asynchronous),
         );
-        Some(params)
+        Ok(Some(params))
+    }
+
+    /// Python's `VertexBase.explicit_vertex_ai_location` over the call's params.
+    fn explicit_vertex_location(&self, py: Python<'_>) -> PyResult<Option<String>> {
+        for name in VERTEX_LOCATION_PARAMS {
+            let Some(value) = self.call.lookup(py, name)? else {
+                continue;
+            };
+            let Ok(text) = value.cast::<PyString>() else {
+                continue;
+            };
+            let text = text.to_str()?;
+            if !text.is_empty() {
+                return Ok(Some(text.to_owned()));
+            }
+        }
+        Ok(None)
     }
 
     // Compared as Python compares them, so a caller's `0` is kept over a typed float's `0.0`.
@@ -623,7 +649,7 @@ impl LegacyLogging {
             &self.logging_kwargs(py, false)?,
             &wire,
             context,
-            self.logged_request_params(context).as_ref(),
+            self.logged_request_params(py, context)?.as_ref(),
         )?;
         let lossless = self.operation == LoggingOperation::Messages;
         let body = if lossless {

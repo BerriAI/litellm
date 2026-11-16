@@ -18,8 +18,9 @@ use serde_json::{Value, json};
 use crate::{
     Error,
     anthropic::{
+        beta_gated_fields::strip_beta_gated_request,
         beta_headers::BetaPolicy,
-        common_utils::{merge_beta_headers, supports_effort_param},
+        common_utils::{existing_betas, merge_beta_headers, supports_effort_param},
         messages::{
             handler::shape_anthropic_messages_request,
             thinking::python_type_name,
@@ -34,7 +35,10 @@ use crate::{
             transformation::BaseMessagesConfig,
         },
     },
-    vertex_ai::common_utils::{get_vertex_base_url, graft_default_vertex_path, join_api_base},
+    vertex_ai::{
+        common_utils::{get_vertex_base_url, graft_default_vertex_path, join_api_base},
+        request_labels::with_partner_labels_header,
+    },
 };
 use litellm_llms_types::providers::vertex_ai::{
     ANTHROPIC_VERSION, DEFAULT_LOCATION, RAW_PREDICT, STREAM_RAW_PREDICT,
@@ -101,15 +105,6 @@ impl BaseMessagesConfig for VertexAiPartnerModelsAnthropicMessagesConfig {
         context: &MessagesTransformContext,
     ) -> Result<MessagesRequest, Error> {
         let request = transform_messages_request(request, &context.keeping_display_updates())?;
-        let request = strip_cache_control_scope(normalize_system_role_messages(
-            request,
-            context
-                .thinking
-                .capabilities
-                .supports_mid_conversation_system,
-            context.drops_unsupported_params,
-            BetaProvider::VertexAi,
-        ));
         let accepts_effort = supports_effort_param(&context.thinking.capabilities);
         Ok(MessagesRequest {
             params: MessagesOptionalParams {
@@ -131,7 +126,8 @@ impl BaseMessagesConfig for VertexAiPartnerModelsAnthropicMessagesConfig {
     /// credentials (`vertex_credentials`, `VERTEXAI_CREDENTIALS`, `GOOGLE_APPLICATION_CREDENTIALS`,
     /// then application default credentials) is always acquired when the request is sent and set
     /// under the exact `Authorization` key, replacing a caller's header of that spelling only. The
-    /// exact `content-type` key is set to JSON the same way.
+    /// exact `content-type` key is set to JSON the same way, and the proxy's request labels
+    /// replace the caller's `X-Vertex-AI-Labels` once label fields are configured.
     fn validate_environment(
         &self,
         headers: Headers,
@@ -142,7 +138,10 @@ impl BaseMessagesConfig for VertexAiPartnerModelsAnthropicMessagesConfig {
         _env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<ValidatedEnvironment, Error> {
         Ok(ValidatedEnvironment {
-            headers: with_exact_header(headers, CONTENT_TYPE_HEADER, JSON_CONTENT_TYPE),
+            headers: with_partner_labels_header(
+                with_exact_header(headers, CONTENT_TYPE_HEADER, JSON_CONTENT_TYPE),
+                &litellm_params.extra,
+            ),
             auth: AuthScheme::GcpAccessToken {
                 config: Box::new(VertexConfig::from_params(&litellm_params.vertex)),
             },
@@ -188,6 +187,33 @@ impl BaseMessagesConfig for VertexAiPartnerModelsAnthropicMessagesConfig {
             },
             ..request
         })
+    }
+
+    /// Python's transform strips the thinking and system fields the final, filtered header does
+    /// not unlock, then normalizes system roles and drops `cache_control.scope`, all after the
+    /// betas were chosen from the request as sent.
+    fn finalize_request(
+        &self,
+        request: MessagesRequest,
+        headers: Headers,
+        context: &MessagesTransformContext,
+    ) -> Result<(MessagesRequest, Headers), Error> {
+        let stripped = strip_beta_gated_request(
+            request,
+            &existing_betas(&headers),
+            context.drops_unsupported_params,
+            BetaProvider::VertexAi,
+        );
+        let normalized = strip_cache_control_scope(normalize_system_role_messages(
+            stripped,
+            context
+                .thinking
+                .capabilities
+                .supports_mid_conversation_system,
+            context.drops_unsupported_params,
+            BetaProvider::VertexAi,
+        ));
+        Ok((normalized, headers))
     }
 
     /// Vertex addresses the model in the URL and rejects it in the body.
@@ -569,6 +595,43 @@ mod tests {
     }
 
     #[rstest]
+    #[case::configured(
+        json!(["user_api_key_team_id"]),
+        vec![("X-Vertex-AI-Labels".to_string(), "eyJ1c2VyX2FwaV9rZXlfdGVhbV9pZCI6ICJ0MSJ9".to_string())]
+    )]
+    #[case::unset(json!(null), vec![("x-vertex-ai-labels".to_string(), "forged".to_string())])]
+    fn configured_label_fields_replace_the_callers_labels_header(
+        #[case] fields: Value,
+        #[case] expected: Headers,
+    ) {
+        let litellm_params = LitellmParams {
+            extra: [
+                ("vertex_request_label_fields".to_string(), fields),
+                ("litellm_metadata".to_string(), json!({"user_api_key_team_id": "t1"})),
+            ]
+            .into_iter()
+            .collect(),
+            ..params(Some("proj"), None)
+        };
+        let headers = VERTEX_ANTHROPIC_MESSAGES_CONFIG
+            .validate_environment(
+                vec![("x-vertex-ai-labels".to_string(), "forged".to_string())],
+                None,
+                "claude-sonnet-4-5",
+                &MessagesOptionalParams::default(),
+                &litellm_params,
+                &no_env,
+            )
+            .unwrap()
+            .headers;
+        let labels: Headers = headers
+            .into_iter()
+            .filter(|(name, _)| name.eq_ignore_ascii_case("x-vertex-ai-labels"))
+            .collect();
+        assert_eq!(labels, expected);
+    }
+
+    #[rstest]
     #[case::no_caller_credential(&[])]
     #[case::caller_bearer(&[("Authorization", "Bearer caller")])]
     #[case::caller_lowercase_bearer(&[("authorization", "Bearer caller")])]
@@ -635,14 +698,23 @@ mod tests {
         );
     }
 
-    fn transformed(value: Value, context: &MessagesTransformContext) -> Value {
+    fn finalized(value: Value, headers: &[(&str, &str)], context: &MessagesTransformContext) -> Value {
         let request: MessagesRequest = serde_json::from_value(value).unwrap();
-        serde_json::to_value(
-            VERTEX_ANTHROPIC_MESSAGES_CONFIG
-                .transform_anthropic_messages_request(request, context)
-                .unwrap(),
-        )
-        .unwrap()
+        let transformed = VERTEX_ANTHROPIC_MESSAGES_CONFIG
+            .transform_anthropic_messages_request(request, context)
+            .unwrap();
+        let headers = headers
+            .iter()
+            .map(|(name, value)| (name.to_string(), value.to_string()))
+            .collect();
+        let (finalized, _) = VERTEX_ANTHROPIC_MESSAGES_CONFIG
+            .finalize_request(transformed, headers, context)
+            .unwrap();
+        serde_json::to_value(finalized).unwrap()
+    }
+
+    fn transformed(value: Value, context: &MessagesTransformContext) -> Value {
+        finalized(value, &[], context)
     }
 
     #[rstest]
@@ -939,6 +1011,91 @@ mod tests {
             body["messages"][2]["content"].as_array().unwrap().len(),
             converted_blocks
         );
+    }
+
+    fn reminder(system: Value) -> Value {
+        json!({
+            "model": "claude-opus-5-5",
+            "max_tokens": 64,
+            "messages": [
+                {"role": "user", "content": "hi"},
+                {"role": "assistant", "content": "hello"},
+                system,
+                {"role": "user", "content": "go on"}
+            ]
+        })
+    }
+
+    fn mid_conversation_system(drops_unsupported_params: bool) -> MessagesTransformContext {
+        MessagesTransformContext {
+            thinking: ThinkingContext {
+                capabilities: MessagesModelCapabilities {
+                    supports_mid_conversation_system: true,
+                    ..MessagesModelCapabilities::default()
+                },
+                ..ThinkingContext::default()
+            },
+            drops_unsupported_params,
+            ..MessagesTransformContext::default()
+        }
+    }
+
+    #[rstest]
+    #[case::clear_at_without_its_beta(
+        json!({"role": "system", "content": "note", "clear_at": {"type": "turns", "value": 2}}),
+        &[],
+        true,
+        json!({"role": "system", "content": "note"})
+    )]
+    #[case::clear_at_with_its_beta(
+        json!({"role": "system", "content": "note", "clear_at": {"type": "turns", "value": 2}}),
+        &[("anthropic-beta", "mid-conversation-system-clear-at-2026-08-21")],
+        true,
+        json!({"role": "system", "content": "note", "clear_at": {"type": "turns", "value": 2}})
+    )]
+    #[case::clear_at_kept_without_drop_params(
+        json!({"role": "system", "content": "note", "clear_at": {"type": "turns", "value": 2}}),
+        &[],
+        false,
+        json!({"role": "system", "content": "note", "clear_at": {"type": "turns", "value": 2}})
+    )]
+    #[case::tool_addition_without_its_beta(
+        json!({"role": "system", "content": [{"type": "text", "text": "note"}, {"type": "tool_addition", "tool": {"name": "t"}}]}),
+        &[("anthropic-beta", "context-1m-2025-08-07")],
+        true,
+        json!({"role": "system", "content": [{"type": "text", "text": "note"}]})
+    )]
+    fn fields_the_final_betas_do_not_unlock_are_stripped_under_drop_params(
+        #[case] system: Value,
+        #[case] headers: &[(&str, &str)],
+        #[case] drops_unsupported_params: bool,
+        #[case] expected: Value,
+    ) {
+        assert_eq!(
+            finalized(
+                reminder(system),
+                headers,
+                &mid_conversation_system(drops_unsupported_params)
+            )["messages"][2],
+            expected
+        );
+    }
+
+    #[rstest]
+    fn a_leading_system_turn_is_stripped_before_it_is_hoisted() {
+        let body = finalized(
+            json!({
+                "model": "claude-opus-5-5",
+                "max_tokens": 64,
+                "messages": [
+                    {"role": "system", "content": [{"type": "text", "text": "be terse"}, {"type": "tool_addition", "tool": {"name": "t"}}]},
+                    {"role": "user", "content": "hi"}
+                ]
+            }),
+            &[],
+            &mid_conversation_system(true),
+        );
+        assert_eq!(body["system"], json!([{"type": "text", "text": "be terse"}]));
     }
 
     fn with_output_config() -> MessagesTransformContext {
