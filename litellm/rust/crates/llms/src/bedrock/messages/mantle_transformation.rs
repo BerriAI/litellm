@@ -435,3 +435,221 @@ impl BaseMessagesConfig for AmazonMantleMessagesConfig {
         &[]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use rstest::rstest;
+
+    use super::*;
+
+    fn env(pairs: &'static [(&'static str, &'static str)]) -> impl Fn(&str) -> Option<String> {
+        move |name| {
+            pairs
+                .iter()
+                .find(|(key, _)| *key == name)
+                .map(|(_, value)| (*value).to_string())
+        }
+    }
+
+    fn params(region: Option<&str>, runtime_endpoint: Option<&str>) -> LitellmParams {
+        LitellmParams {
+            aws: AwsParams {
+                aws_region_name: region.map(str::to_string),
+                aws_bedrock_runtime_endpoint: runtime_endpoint.map(str::to_string),
+                ..AwsParams::default()
+            },
+            ..LitellmParams::default()
+        }
+    }
+
+    fn url(
+        api_base: Option<&str>,
+        model: &str,
+        litellm_params: &LitellmParams,
+        env_pairs: &'static [(&'static str, &'static str)],
+    ) -> String {
+        AMAZON_MANTLE_MESSAGES_CONFIG
+            .get_complete_url(api_base, model, litellm_params, false, &env(env_pairs))
+            .unwrap()
+    }
+
+    fn environment(
+        forwarded: &[(&str, &str)],
+        api_key: Option<&str>,
+        model: &str,
+        litellm_params: &LitellmParams,
+        env_pairs: &'static [(&'static str, &'static str)],
+    ) -> ValidatedEnvironment {
+        AMAZON_MANTLE_MESSAGES_CONFIG
+            .validate_environment(
+                forwarded
+                    .iter()
+                    .map(|(name, value)| (name.to_string(), value.to_string()))
+                    .collect(),
+                api_key,
+                model,
+                &MessagesOptionalParams::default(),
+                litellm_params,
+                &env(env_pairs),
+            )
+            .unwrap()
+    }
+
+    #[rstest]
+    #[case::v1_suffix_kept(Some("https://x.test/v1"), None, &[], "https://x.test/v1/anthropic/v1/messages")]
+    #[case::query_after_full_path_kept(
+        Some("https://x.test/anthropic/v1/messages?x=1"),
+        None,
+        &[],
+        "https://x.test/anthropic/v1/messages?x=1"
+    )]
+    #[case::public_host_never_rewritten(
+        Some("https://bedrock-mantle.us-west-2.api.aws/custom"),
+        None,
+        &[],
+        "https://bedrock-mantle.us-west-2.api.aws/custom/anthropic/v1/messages"
+    )]
+    #[case::port_kept(
+        Some("https://bedrock-mantle.us-west-2.api.aws:8443"),
+        None,
+        &[],
+        "https://bedrock-mantle.us-west-2.api.aws:8443/anthropic/v1/messages"
+    )]
+    #[case::runtime_endpoint(None, Some("https://runtime.test/v1"), &[], "https://runtime.test/v1/anthropic/v1/messages")]
+    #[case::api_base_over_runtime_and_env(
+        Some("https://base.test"),
+        Some("https://runtime.test"),
+        &[("BEDROCK_MANTLE_API_BASE", "https://env.test")],
+        "https://base.test/anthropic/v1/messages"
+    )]
+    #[case::env_openai_suffix_stripped(
+        None,
+        None,
+        &[("BEDROCK_MANTLE_API_BASE", "https://env.test/openai/v1/")],
+        "https://env.test/anthropic/v1/messages"
+    )]
+    #[case::env_anthropic_suffix_loses_only_v1(
+        None,
+        None,
+        &[("BEDROCK_MANTLE_API_BASE", "https://env.test/anthropic/v1")],
+        "https://env.test/anthropic/anthropic/v1/messages"
+    )]
+    fn explicit_bases_follow_build_mantle_messages_url(
+        #[case] api_base: Option<&str>,
+        #[case] runtime_endpoint: Option<&str>,
+        #[case] env_pairs: &'static [(&'static str, &'static str)],
+        #[case] expected: &str,
+    ) {
+        assert_eq!(
+            url(
+                api_base,
+                "mantle/anthropic.claude-test",
+                &params(Some("us-east-1"), runtime_endpoint),
+                env_pairs
+            ),
+            expected
+        );
+    }
+
+    #[rstest]
+    #[case::mantle_region_env_ignored(
+        "mantle/anthropic.claude-test",
+        &[("BEDROCK_MANTLE_REGION", "eu-west-1"), ("AWS_REGION", "ap-south-1")],
+        "ap-south-1"
+    )]
+    #[case::aws_default_region(
+        "mantle/anthropic.claude-test",
+        &[("AWS_DEFAULT_REGION", "eu-west-1")],
+        "eu-west-1"
+    )]
+    #[case::region_prefix_ignored(
+        "mantle/eu-west-1/anthropic.claude-test",
+        &[("AWS_REGION", "us-east-2")],
+        "us-east-2"
+    )]
+    #[case::arn_region(
+        "mantle/arn:aws:bedrock:eu-central-1:123456789012:inference-profile/anthropic.claude-test",
+        &[("AWS_REGION", "us-east-2")],
+        "eu-central-1"
+    )]
+    fn host_and_signing_region_follow_the_invoke_order(
+        #[case] model: &str,
+        #[case] env_pairs: &'static [(&'static str, &'static str)],
+        #[case] expected: &str,
+    ) {
+        let litellm_params = params(None, None);
+        assert_eq!(
+            url(None, model, &litellm_params, env_pairs),
+            format!("https://bedrock-mantle.{expected}.api.aws/anthropic/v1/messages")
+        );
+        assert!(matches!(
+            environment(&[], None, model, &litellm_params, env_pairs).auth,
+            AuthScheme::AwsSigV4 { region, .. } if region == expected
+        ));
+    }
+
+    #[rstest]
+    fn default_region_is_the_invoke_default() {
+        let invoke_default = resolve_bedrock_region(None, &AwsParams::default(), &|_| None);
+        assert_eq!(
+            url(
+                None,
+                "mantle/anthropic.claude-test",
+                &LitellmParams::default(),
+                &[]
+            ),
+            format!("https://bedrock-mantle.{invoke_default}.api.aws/anthropic/v1/messages")
+        );
+    }
+
+    #[rstest]
+    #[case::mantle_key_ignored(&[("BEDROCK_MANTLE_API_KEY", "mantle")], None)]
+    #[case::bedrock_token(&[("AWS_BEARER_TOKEN_BEDROCK", "aws")], Some("Bearer aws"))]
+    fn bearer_reads_only_the_bedrock_token(
+        #[case] env_pairs: &'static [(&'static str, &'static str)],
+        #[case] expected: Option<&str>,
+    ) {
+        let validated = environment(
+            &[],
+            None,
+            "mantle/anthropic.claude-test",
+            &params(Some("us-east-1"), None),
+            env_pairs,
+        );
+        let authorization = validated
+            .headers
+            .iter()
+            .find(|(name, _)| name == "Authorization")
+            .map(|(_, value)| value.as_str());
+        assert_eq!(authorization, expected);
+        assert_eq!(
+            matches!(validated.auth, AuthScheme::AwsSigV4 { .. }),
+            expected.is_none()
+        );
+    }
+
+    #[rstest]
+    fn sigv4_keeps_forwarded_credentials_for_the_signer() {
+        let forwarded = [("authorization", "Bearer caller"), ("x-api-key", "caller")];
+        let validated = environment(
+            &forwarded,
+            None,
+            "mantle/anthropic.claude-test",
+            &params(Some("us-east-1"), None),
+            &[],
+        );
+        assert!(forwarded.iter().all(|(name, value)| {
+            validated
+                .headers
+                .iter()
+                .any(|(key, sent)| key == name && sent == value)
+        }));
+        assert!(matches!(
+            validated.auth,
+            AuthScheme::AwsSigV4 {
+                caller_headers: CallerSigningHeaders::Botocore,
+                ..
+            }
+        ));
+    }
+}
