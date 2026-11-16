@@ -803,6 +803,8 @@ async def test_export_redacts_credential_named_values_the_masker_names_miss(key:
         "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.sig",
         "postgres://admin:pw@db.internal:5432/app",
         "redis://:pw@cache.internal:6379/1",
+        "postgres://app:" + "p" * 300 + "@db.internal/app",
+        "postgres://" + "u" * 300 + ":pw@db.internal/app",
         "https://hooks.slack.com/services/T000/B000/XXXX",
         "https://discord.com/api/webhooks/1/abc",
         "AKIAIOSFODNN7EXAMPLE",
@@ -825,8 +827,9 @@ async def test_export_redacts_credential_shaped_values_under_any_key_and_in_list
         ("eyJ-" * 30_000, "REDACTED"),
         ("a." * 60_000, "a." * 60_000),
         ("x://:" * 24_000, "x://:" * 24_000),
+        ("a://:" + "p" * 200_000, "a://:" + "p" * 200_000),
     ],
-    ids=["sk-run", "jwt-run", "url-scheme-run", "url-userinfo-run"],
+    ids=["sk-run", "jwt-run", "url-scheme-run", "url-userinfo-run", "url-password-run"],
 )
 async def test_export_scans_long_adversarial_metadata_in_linear_time(value: str, expected: str) -> None:
     assert await _exported_key_metadata({"note": value}) == {"note": expected}
