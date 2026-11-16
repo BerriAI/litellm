@@ -7,7 +7,6 @@ repository.workspace = true
 
 [dependencies]
 litellm-python-compat.workspace = true
-litellm-env.workspace = true
 litellm-config.workspace = true
 litellm-inference.workspace = true
 litellm-inference-messages.workspace = true

@@ -59,7 +59,7 @@ pub fn build_inference(config: &Config) -> Result<Arc<Gateway>, Error> {
     ));
     let lookup = |name: &str| environment.get(name);
     let catalog = Catalog::parse(BUNDLED_REGISTRY)?.value;
-    let router = ModelRouter::from_config(config, &lookup, &catalog);
+    let router = ModelRouter::from_config(config, &catalog);
     let settings = &config.litellm_settings;
     let http_settings = HttpSettings::from_layers([
         HttpSettingsLayer::from_environment(&lookup),
@@ -114,7 +114,6 @@ pub async fn build_redis(
 
 pub async fn build_mcp(
     config: &Config,
-    secrets: Arc<dyn litellm_secrets::source::SecretSource>,
     shutdown: tokio_util::sync::CancellationToken,
     pool: &HttpClientPool,
     http: &litellm_http::HttpClientConfig,
@@ -140,15 +139,12 @@ pub async fn build_mcp(
     {
         return Err(Error::McpGuardrails);
     }
-    Auth::from_config(config, secrets.clone())
-        .validate()
-        .await?;
+    Auth::from_config(config).validate().await?;
     let client = pool.client(http, ClientVariant::NoRedirect)?;
     Ok(Some(
         litellm_gateway_mcp::ConfiguredGateway::connect(
             &config.mcp_servers,
             (*client).clone(),
-            secrets.as_ref(),
             shutdown,
         )
         .await?,
@@ -161,7 +157,7 @@ pub fn router(
     ui: Option<Router>,
     mcp: Option<Router>,
 ) -> Router {
-    let auth = Auth::from_config(config, inference.secrets.clone());
+    let auth = Auth::from_config(config);
     let inference = litellm_gateway_inference::router(inference)
         .merge(mcp.unwrap_or_default())
         .route_layer(axum::middleware::from_fn(auth::bind_session_owner))
