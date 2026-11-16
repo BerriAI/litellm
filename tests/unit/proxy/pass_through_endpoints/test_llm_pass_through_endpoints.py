@@ -4030,8 +4030,7 @@ def test_openai_passthrough_refuses_batch_create_on_a_workload_identity_token(
             json={"input_file_id": "file-abc123", "endpoint": "/v1/chat/completions", "completion_window": "24h"},
         )
 
-    assert response.status_code == 400
-    assert FEDERATED_PASSTHROUGH_BATCH_CREATE_MESSAGE in response.text
+    assert (response.status_code, response.json()["error"]["message"]) == (400, FEDERATED_PASSTHROUGH_BATCH_CREATE_MESSAGE)
     assert (token_exchange.call_count, batches.call_count) == (0, 0)
 
 

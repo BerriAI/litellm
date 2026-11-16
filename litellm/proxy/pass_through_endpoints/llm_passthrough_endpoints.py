@@ -3179,7 +3179,9 @@ async def openai_proxy_route(
     """
     base_target_url: Final = os.getenv("OPENAI_API_BASE") or "https://api.openai.com/"
     if _creates_federated_openai_batch(request.method, endpoint, base_target_url):
-        raise HTTPException(status_code=400, detail=FEDERATED_PASSTHROUGH_BATCH_CREATE_MESSAGE)
+        raise ProxyException(
+            message=FEDERATED_PASSTHROUGH_BATCH_CREATE_MESSAGE, type="invalid_request_error", param=None, code=400
+        )
     openai_api_key: Final = await _openai_passthrough_credential(base_target_url)
     if openai_api_key is None:
         raise Exception("Required 'OPENAI_API_KEY' in environment to make pass-through calls to OpenAI.")
