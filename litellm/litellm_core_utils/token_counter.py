@@ -1871,13 +1871,27 @@ def _count_anthropic_content(
                     and field_name == "content"
                     and (field_mapping := as_str_mapping(content[field_name])) is not None
                 ):
-                    tokens += _count_content_list(
-                        count_function,
-                        [field_mapping],
-                        use_default_image_token_count,
-                        default_token_count,
-                        pdf_pricing,
-                    )
+                    inner_type: Final = field_mapping.get("type")
+                    if isinstance(inner_type, str) and (
+                        inner_type in _ANTHROPIC_SERVER_TOOL_FIELDS
+                        or inner_type in ("tool_use", "tool_result", "search_result")
+                    ):
+                        tokens += _count_anthropic_content(
+                            field_mapping,
+                            count_function,
+                            use_default_image_token_count,
+                            default_token_count,
+                            pdf_pricing,
+                            _content_depth=_content_depth + 1,
+                        )
+                    else:
+                        tokens += _count_content_list(
+                            count_function,
+                            [field_mapping],
+                            use_default_image_token_count,
+                            default_token_count,
+                            pdf_pricing,
+                        )
                 else:
                     tokens += count_function(str(field_value))
         except Exception as e:
