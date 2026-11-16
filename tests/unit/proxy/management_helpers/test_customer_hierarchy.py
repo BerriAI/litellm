@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Final, cast
 
 import pytest
 from prisma import Json
-from prisma.errors import DataError, RawQueryError
+from prisma.errors import DataError, RawQueryError, TransactionExpiredError
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 from litellm.models.budget import BudgetLimit, LiteLLM_BudgetTable
@@ -96,12 +96,17 @@ class Table:
         *,
         create_error: DataError | None = None,
         hydration_limit: int | None = None,
+        read_limit: int | None = None,
+        delete_error: Exception | None = None,
     ) -> None:
         self.id_field = id_field
         self.database = database
         self.create_error = create_error
         self.rows: Mapping[str, Record] = {}
         self.hydration_limit = hydration_limit
+        self.read_limit = read_limit
+        self.read_count = 0
+        self.delete_error = delete_error
 
     async def include(self, row: Record, include: Mapping[str, object] | None) -> Record:
         if not include:
@@ -185,6 +190,9 @@ class Table:
         skip: int = 0,
         take: int | None = None,
     ) -> tuple[Record, ...]:
+        self.read_count += 1
+        if self.read_limit is not None and self.read_count > self.read_limit:
+            raise TransactionExpiredError("Transaction exhausted its query budget")
         matches: Final = tuple(row for row in self.rows.values() if self.matches(row, where or {}))
         ordered: Final = reduce(
             lambda rows, key: tuple(
@@ -206,6 +214,8 @@ class Table:
         return len(await self.find_many(where=where))
 
     async def delete(self, where: Mapping[str, object]) -> Record | None:
+        if self.delete_error is not None:
+            raise self.delete_error
         row_id: Final = TypeAdapter(str).validate_python(where[self.id_field])
         row: Final = self.rows.get(row_id)
         self.rows = {key: value for key, value in self.rows.items() if key != row_id}
@@ -290,9 +300,13 @@ class Database:
         *,
         team_create_error: DataError | None = None,
         hydration_limit: int | None = None,
+        member_read_limit: int | None = None,
+        organization_delete_error: Exception | None = None,
     ) -> None:
         self.litellm_customerorganizationtable = (
-            Table("customer_org_id", self) if source is None else source.litellm_customerorganizationtable
+            Table("customer_org_id", self, delete_error=organization_delete_error)
+            if source is None
+            else source.litellm_customerorganizationtable
         )
         self.litellm_customerteamtable = (
             Table("customer_team_id", self, create_error=team_create_error, hydration_limit=hydration_limit)
@@ -300,7 +314,7 @@ class Database:
             else source.litellm_customerteamtable
         )
         self.litellm_customermembertable = (
-            Table("customer_member_id", self, hydration_limit=hydration_limit)
+            Table("customer_member_id", self, hydration_limit=hydration_limit, read_limit=member_read_limit)
             if source is None
             else source.litellm_customermembertable
         )

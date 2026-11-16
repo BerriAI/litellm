@@ -92,6 +92,7 @@ class _BudgetSortRow(BaseModel):
 class ErrorCode(str, Enum):
     FREE_TIER_LIMIT = "free_tier_limit"
     CAPACITY_BUSY = "capacity_busy"
+    TRANSACTION_TIMEOUT = "transaction_timeout"
     NOT_FOUND = "not_found"
     PARENT_NOT_FOUND = "parent_not_found"
     ALREADY_EXISTS = "already_exists"
@@ -1269,8 +1270,10 @@ class CustomerHierarchyStore:
             chunk_size=_DELETE_BATCH_SIZE,
         )
 
-    async def _delete_team_member_batch(self, team_id: str) -> bool:
-        rows: Final = await self.members.find_many(where={"parent_team_ids": {"has": team_id}}, take=_DELETE_BATCH_SIZE)
+    async def _delete_team_member_batch(self, team_ids: tuple[str, ...]) -> bool:
+        rows: Final = await self.members.find_many(
+            where={"parent_team_ids": {"has_some": list(team_ids)}}, take=_DELETE_BATCH_SIZE
+        )
         members: Final = tuple(_MemberDeletionRow.model_validate(row) for row in rows)
         if not members:
             return False
@@ -1282,9 +1285,9 @@ class CustomerHierarchyStore:
         await self._delete_unused_budgets(budget_ids)
         return True
 
-    async def _delete_team_members(self, team_id: str) -> None:
+    async def _delete_team_members(self, team_ids: tuple[str, ...]) -> None:
         while True:
-            if not await self._delete_team_member_batch(team_id):
+            if not await self._delete_team_member_batch(team_ids):
                 return
 
     async def _delete_organization_team_batch(self, organization_id: str) -> bool:
@@ -1292,9 +1295,8 @@ class CustomerHierarchyStore:
         teams: Final = tuple(_TeamDeletionRow.model_validate(row) for row in rows)
         if not teams:
             return False
-        for team in teams:
-            await self._delete_team_members(team.customer_team_id)
         team_ids: Final = tuple(team.customer_team_id for team in teams)
+        await self._delete_team_members(team_ids)
         team_budget_ids: Final = chain.from_iterable((team.budget_id, team.budget_override_id) for team in teams)
         budget_ids: Final = tuple(budget_id for budget_id in team_budget_ids if budget_id is not None)
         await delete_many_in(self.teams, "customer_team_id", team_ids, atomicity="caller_transaction")
@@ -1330,7 +1332,7 @@ class CustomerHierarchyStore:
         if isinstance(team, Failure):
             return team
         if cascade:
-            await self._delete_team_members(team_id)
+            await self._delete_team_members((team_id,))
         elif await self.members.count(where={"parent_team_ids": {"has": team_id}}):
             return Failure(ErrorCode.HAS_CHILDREN)
         await self.teams.delete(where={"customer_team_id": team_id})
@@ -1369,7 +1371,13 @@ class CustomerHierarchy:
         *,
         operation_type: TransactionOperation = TransactionOperation.READ_WRITE,
     ) -> T | Failure:
-        from prisma.errors import DataError, ForeignKeyViolationError, RecordNotFoundError, UniqueViolationError
+        from prisma.errors import (
+            DataError,
+            ForeignKeyViolationError,
+            RecordNotFoundError,
+            TransactionExpiredError,
+            UniqueViolationError,
+        )
 
         try:
             async with self.db.tx() as tx:
@@ -1378,6 +1386,8 @@ class CustomerHierarchy:
             return Failure(ErrorCode.ALREADY_EXISTS)
         except RecordNotFoundError:
             return Failure(ErrorCode.NOT_FOUND)
+        except TransactionExpiredError:
+            return Failure(ErrorCode.TRANSACTION_TIMEOUT)
         except ForeignKeyViolationError:
             return Failure(
                 ErrorCode.HAS_CHILDREN if operation_type is TransactionOperation.DELETE else ErrorCode.PARENT_NOT_FOUND
