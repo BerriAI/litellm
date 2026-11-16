@@ -16,6 +16,10 @@
 - `AppState::build` (`src/state.rs`) builds `Resources` and then what both modes share once at boot: inference, the Redis clients and the database pools. `router` takes it and hands it to routes with `with_state`, and a handler or middleware takes the part it needs with `State<RedisClients>` or `State<Option<Pools>>`, which `FromRef` clones out of it. Never build a store inside a route and never give one mode a store the other lacks
 - In front of Python the config is the local YAML file Python loads, which the supervisor names in `LITELLM_FORWARD_CONFIG`. When Python loads no local file, `load_config` cannot load the one it names, or the native app cannot be built from it, `native_state` in `src/main.rs` builds the state from `Config::default()`, so only the environment's `REDIS_*` and `DATABASE_*` are seen, and `Admit::unconfigured` leaves every request to Python. Never fail boot on that file or on what it sets, because the gateway exiting stops Python too. Config stored in the database is not read yet
 
+## Host
+- `src/host/` is the native host, the counterpart of python-bridge's `PythonRouterHost`. `NativeBootHost` answers router-core's deployment build at boot, and `NativeHost` builds a `NativeRouterHost` for each inference call. `Gateway` is gateway-inference's `Gateway<NativeHost>`, so the routes are served through it without depending on it
+- A hostcall answered from the gateway's own state belongs here, not in gateway-inference. Only running the route's attempt and authorizing a name stay with the routes
+
 ## Redis
 - `redis::connect` builds the Redis clients once at boot (`src/redis.rs`). `State<RedisClients>` hands out clones of them, never a connection checked out per request. redis-rs multiplexes one connection per node, so there is no connection pool and pool settings like `max_connections` are accepted and ignored
 - Which Redis backs which role mirrors the proxy: coordination is `general_settings.coordination_redis`, else the `cache_params` Redis when `cache: true` and `type: redis`, else `REDIS_*` env. The transaction buffer reuses coordination, else env when `use_redis_transaction_buffer` is on. The response cache gets its own client so large values never queue in front of coordination commands
@@ -33,3 +37,4 @@
 - `build_license` verifies the license once at boot (`src/license.rs`) and the result never changes while serving. `middleware::global` hands it to every middleware and route as `Extension<Arc<Entitlements>>`
 - The key comes from `LITELLM_LICENSE`, where config `environment_variables` replaces the process environment, and from `general_settings.litellm_license`, which wins unless only the environment's key is enterprise, as in `_use_config_license`
 - Verification itself belongs to `litellm-license`. A key the bundled public key did not sign is asked of the license server, so boot can wait on that request for `NON_LLM_CONNECTION_TIMEOUT` seconds per attempt
+- A setting Python's router honors and the native host does not yet is refused, never ignored: `boot::slot_limit` names a config that asks for `max_parallel_requests` slots, and the build fails on it

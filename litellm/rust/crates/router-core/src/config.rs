@@ -2,12 +2,14 @@
 //! [`RouterDynamicConfig`], a versioned snapshot read once per call. The router never reads
 //! process globals.
 
-use std::{collections::BTreeMap, time::Duration};
+use std::{borrow::Cow, collections::BTreeMap, time::Duration};
 
-use serde::Deserialize;
+use litellm_router_types::RouterSettings;
+use serde::{Deserialize, de::DeserializeOwned};
+use serde_json::{Map, Value};
 
 use crate::{
-    error::AttemptError,
+    error::{AttemptError, ConfigError},
     registry::{DeploymentSpec, RoutingGroupSpec},
 };
 
@@ -15,16 +17,30 @@ use crate::{
 pub const DEFAULT_COOLDOWN_TIME: Duration = Duration::from_secs(5);
 /// `ROUTER_MAX_FALLBACKS` in `litellm/constants.py`.
 pub const DEFAULT_MAX_FALLBACKS: u32 = 5;
+/// `DEFAULT_MAX_RETRIES` in `litellm/constants.py`: `Router(num_retries=None)`.
+pub const DEFAULT_NUM_RETRIES: u32 = 2;
+/// `litellm.allowed_fails`.
+pub const DEFAULT_ALLOWED_FAILS: u32 = 3;
 
 /// The router operation a call runs: the Python router's endpoint method name (`acompletion`,
 /// `aembedding`, ...). The core runs every op alike; what differs per endpoint is the host's.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Deserialize)]
 #[serde(transparent)]
-pub struct Op(String);
+pub struct Op(Cow<'static, str>);
 
 impl Op {
+    pub const COMPLETION: Self = Self::named("acompletion");
+    pub const ANTHROPIC_MESSAGES: Self = Self::named("aanthropic_messages");
+    pub const RESPONSES: Self = Self::named("aresponses");
+    pub const TRANSCRIPTION: Self = Self::named("atranscription");
+    pub const OCR: Self = Self::named("aocr");
+
     pub fn new(name: impl Into<String>) -> Self {
-        Self(name.into())
+        Self(Cow::Owned(name.into()))
+    }
+
+    const fn named(name: &'static str) -> Self {
+        Self(Cow::Borrowed(name))
     }
 
     pub fn as_str(&self) -> &str {
@@ -207,6 +223,12 @@ pub struct RouterConfig {
     /// (`async_callback_filter_deployments`).
     pub callback_filters: bool,
     pub enable_health_check_routing: bool,
+    /// `enable_tag_filtering`: the host's tag stage narrows the candidates.
+    pub enable_tag_filtering: bool,
+    /// `optional_pre_call_checks`: the host's named pre-call checks run on each pick.
+    pub optional_pre_call_checks: Vec<String>,
+    /// `model_group_affinity_config` is set: the host pins a caller to a deployment.
+    pub model_group_affinity: bool,
     /// How old (seconds) a background health check result may be and still count
     /// (`health_check_staleness_threshold`, else the default interval times its multiplier).
     pub health_check_staleness_threshold: Option<f64>,
@@ -257,26 +279,112 @@ pub struct RouterDynamicConfig {
     pub default_deployment_raises: bool,
 }
 
-/// `model_group_alias` as `resolve_model_group_alias` reads it: an alias maps to a non-empty
-/// group name, or to `{"model": <non-empty group name>, ...}`; any other value rewrites nothing.
 fn alias_targets<'de, D>(deserializer: D) -> Result<BTreeMap<String, String>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
-    let aliases = BTreeMap::<String, serde_json::Value>::deserialize(deserializer)?;
-    Ok(aliases
-        .into_iter()
+    Ok(alias_targets_of(&Map::deserialize(deserializer)?))
+}
+
+/// `model_group_alias` as `resolve_model_group_alias` reads it: an alias maps to a non-empty
+/// group name, or to `{"model": <non-empty group name>, ...}`; any other value rewrites nothing.
+fn alias_targets_of(aliases: &Map<String, Value>) -> BTreeMap<String, String> {
+    aliases
+        .iter()
         .filter_map(|(alias, target)| {
-            let group = match &target {
-                serde_json::Value::Object(entry) => entry.get("model")?,
+            let group = match target {
+                Value::Object(entry) => entry.get("model")?,
                 other => other,
             };
             group
                 .as_str()
                 .filter(|group| !group.is_empty())
-                .map(|group| (alias, group.to_owned()))
+                .map(|group| (alias.clone(), group.to_owned()))
         })
-        .collect())
+        .collect()
+}
+
+fn decoded<T: DeserializeOwned>(
+    setting: &'static str,
+    value: Option<Value>,
+) -> Result<Option<T>, ConfigError> {
+    value
+        .map(|value| {
+            serde_json::from_value(value).map_err(|source| ConfigError::Setting { setting, source })
+        })
+        .transpose()
+}
+
+fn fallbacks(list: Option<&Vec<Value>>) -> Option<Fallbacks> {
+    list.cloned().map(Fallbacks::from)
+}
+
+impl RouterConfig {
+    /// `router_settings` as the router reads them: what is fixed for the router's life and what
+    /// a call reads, with the defaults Python's `Router` applies when a setting is unset.
+    pub fn from_settings(
+        settings: &RouterSettings,
+    ) -> Result<(Self, RouterDynamicConfig), ConfigError> {
+        let object = |map: &Option<Map<String, Value>>| map.clone().map(Value::Object);
+        let config = Self {
+            routing_strategy: settings
+                .routing_strategy
+                .as_deref()
+                .and_then(|name| name.parse().ok())
+                .unwrap_or_default(),
+            routing_groups: decoded(
+                "routing_groups",
+                settings
+                    .routing_groups
+                    .clone()
+                    .map(|groups| Value::Array(groups.into_iter().map(Value::Object).collect())),
+            )?
+            .unwrap_or_default(),
+            cooldown_time: settings.cooldown_time,
+            disable_cooldowns: settings.disable_cooldowns.unwrap_or(false),
+            allowed_fails_policy: decoded(
+                "allowed_fails_policy",
+                object(&settings.allowed_fails_policy),
+            )?,
+            retry_policy: decoded("retry_policy", object(&settings.retry_policy))?,
+            model_group_retry_policy: decoded(
+                "model_group_retry_policy",
+                object(&settings.model_group_retry_policy),
+            )?
+            .unwrap_or_default(),
+            retry_after: settings.retry_after.unwrap_or(0.0),
+            timeout: settings.timeout,
+            request_timeout: settings.request_timeout,
+            enable_pre_call_checks: settings.enable_pre_call_checks.unwrap_or(false),
+            enable_health_check_routing: settings.enable_health_check_routing.unwrap_or(false),
+            enable_tag_filtering: settings.enable_tag_filtering.unwrap_or(false),
+            optional_pre_call_checks: settings
+                .optional_pre_call_checks
+                .clone()
+                .unwrap_or_default(),
+            model_group_affinity: settings.model_group_affinity_config.is_some(),
+            enable_weighted_failover: settings.enable_weighted_failover.unwrap_or(false),
+            fallback_on_unsupported_params: settings.fallback_on_unsupported_params,
+            ..Self::default()
+        };
+        let dynamic = RouterDynamicConfig {
+            model_alias_map: settings
+                .model_group_alias
+                .as_ref()
+                .map(alias_targets_of)
+                .unwrap_or_default(),
+            fallbacks: fallbacks(settings.fallbacks.as_ref()).unwrap_or_default(),
+            default_fallbacks: settings.default_fallbacks.clone().unwrap_or_default(),
+            context_window_fallbacks: fallbacks(settings.context_window_fallbacks.as_ref()),
+            content_policy_fallbacks: fallbacks(settings.content_policy_fallbacks.as_ref()),
+            num_retries: Some(settings.num_retries.unwrap_or(DEFAULT_NUM_RETRIES)),
+            max_fallbacks: settings.max_fallbacks.unwrap_or(DEFAULT_MAX_FALLBACKS),
+            allowed_fails: Some(settings.allowed_fails.unwrap_or(DEFAULT_ALLOWED_FAILS)),
+            allowed_fails_is_default: settings.allowed_fails.is_none(),
+            ..RouterDynamicConfig::default()
+        };
+        Ok((config, dynamic))
+    }
 }
 
 impl Default for RouterDynamicConfig {
@@ -339,6 +447,96 @@ mod tests {
         assert_eq!(
             dynamic.model_alias_map,
             BTreeMap::from([("gpt".to_owned(), "gpt-4".to_owned())])
+        );
+    }
+
+    fn settings(value: serde_json::Value) -> RouterSettings {
+        serde_json::from_value(value).unwrap()
+    }
+
+    #[test]
+    fn unset_settings_take_python_routers_defaults() {
+        let (config, dynamic) = RouterConfig::from_settings(&RouterSettings::default()).unwrap();
+        assert_eq!(
+            (
+                config.routing_strategy,
+                dynamic.num_retries,
+                dynamic.allowed_fails,
+                dynamic.allowed_fails_is_default,
+                dynamic.max_fallbacks,
+            ),
+            (
+                RoutingStrategy::SimpleShuffle,
+                Some(DEFAULT_NUM_RETRIES),
+                Some(DEFAULT_ALLOWED_FAILS),
+                true,
+                DEFAULT_MAX_FALLBACKS,
+            )
+        );
+    }
+
+    #[test]
+    fn written_settings_land_on_the_static_or_the_per_call_config() {
+        let (config, dynamic) = RouterConfig::from_settings(&settings(json!({
+            "routing_strategy": "least-busy",
+            "allowed_fails": 0,
+            "num_retries": 4,
+            "retry_policy": {"RateLimitErrorRetries": 1},
+            "routing_groups": [
+                {"group_name": "tier", "models": ["a"], "routing_strategy": "simple-shuffle"},
+            ],
+            "fallbacks": [{"a": ["b"]}],
+            "model_group_alias": {"gpt": {"model": "a", "hidden": true}},
+            "enable_tag_filtering": true,
+            "model_group_affinity_config": {},
+        })))
+        .unwrap();
+        assert_eq!(
+            (
+                config.routing_strategy,
+                config
+                    .retry_policy
+                    .and_then(|policy| policy.RateLimitErrorRetries),
+                config.routing_groups.len(),
+                config.enable_tag_filtering,
+                config.model_group_affinity,
+            ),
+            (RoutingStrategy::LeastBusy, Some(1), 1, true, true)
+        );
+        assert_eq!(
+            (
+                dynamic.num_retries,
+                dynamic.allowed_fails,
+                dynamic.allowed_fails_is_default,
+                dynamic.fallback_targets(&["a"]).is_some(),
+                dynamic.model_alias_map,
+            ),
+            (
+                Some(4),
+                Some(0),
+                false,
+                true,
+                BTreeMap::from([("gpt".to_owned(), "a".to_owned())]),
+            )
+        );
+    }
+
+    #[test]
+    fn a_setting_of_the_wrong_shape_names_itself() {
+        let refused = RouterConfig::from_settings(&settings(json!({
+            "retry_policy": {"RateLimitErrorRetries": "many"},
+        })))
+        .err()
+        .unwrap();
+        assert!(
+            matches!(
+                refused,
+                ConfigError::Setting {
+                    setting: "retry_policy",
+                    ..
+                }
+            ),
+            "{refused:?}"
         );
     }
 

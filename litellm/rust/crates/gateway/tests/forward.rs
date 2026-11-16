@@ -79,6 +79,7 @@ async fn gateway(python: SocketAddr, admits: bool, root_path: &str) -> SocketAdd
                     &config,
                     &litellm_gateway::Resources::build(&config).unwrap(),
                 )
+                .await
                 .unwrap(),
                 redis: litellm_gateway::RedisClients::default(),
                 database: None,

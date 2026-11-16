@@ -15,6 +15,11 @@ pub enum Unsupported {
     Strategy(RoutingStrategy),
     #[error("routing plugin `{0}` needs a host that {needs}", needs = Capability::Select)]
     Plugin(String),
+    #[error("`{setting}` needs a host that {needs}")]
+    Setting {
+        setting: &'static str,
+        needs: Capability,
+    },
     #[error("the host cannot run operation `{op}` on provider `{provider}`")]
     Op { op: Op, provider: String },
 }
@@ -26,6 +31,12 @@ pub enum ConfigError {
     #[error("deployment `{model_name}` has invalid litellm_params")]
     InvalidDeployment {
         model_name: String,
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error("router_settings.{setting} is invalid")]
+    Setting {
+        setting: &'static str,
         #[source]
         source: serde_json::Error,
     },
@@ -343,6 +354,26 @@ pub enum FailureKind {
     Other,
 }
 
+impl FailureKind {
+    /// The exception class litellm maps a provider's HTTP status to (`exception_type`). An
+    /// overloaded provider's 529 is an `InternalServerError` there, not the
+    /// `ServiceUnavailableError` a 503 is, and a retry policy names these classes.
+    pub fn from_status(status: u16) -> Self {
+        match status {
+            400 | 422 => Self::BadRequest,
+            401 => Self::Authentication,
+            403 => Self::PermissionDenied,
+            404 => Self::NotFound,
+            408 | 504 => Self::Timeout,
+            429 => Self::RateLimit,
+            502 => Self::BadGateway,
+            503 => Self::ServiceUnavailable,
+            500..=599 => Self::InternalServer,
+            _ => Self::Other,
+        }
+    }
+}
+
 /// Which of the call's host failures an error stands for: the slot the call keeps the host's own
 /// error in, handed back in [`crate::CallError::raised`] when the call ends on it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -418,6 +449,16 @@ impl AttemptError {
         }
     }
 
+    /// A provider's own error answer, which says something about the deployment that gave it.
+    pub fn from_provider(status: u16, detail: &str, retry_after: Option<Duration>) -> Self {
+        Self {
+            retry_after,
+            detail: Some(detail.into()),
+            names_provider: true,
+            ..Self::new(FailureKind::from_status(status), Some(status))
+        }
+    }
+
     /// The exception's class names, most specific first: the host's, else the kind's.
     pub fn class_names(&self) -> Vec<&str> {
         if self.classes.is_empty() {
@@ -474,6 +515,18 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
+
+    #[rstest]
+    #[case::a_server_error(500, FailureKind::InternalServer)]
+    #[case::a_bad_gateway(502, FailureKind::BadGateway)]
+    #[case::an_unavailable_provider(503, FailureKind::ServiceUnavailable)]
+    #[case::an_overloaded_provider(529, FailureKind::InternalServer)]
+    fn a_5xx_status_is_the_class_litellm_raises_for_it(
+        #[case] status: u16,
+        #[case] class: FailureKind,
+    ) {
+        assert_eq!(FailureKind::from_status(status), class);
+    }
 
     #[rstest]
     #[case::rate_limit("RateLimitError", FailureKind::RateLimit)]

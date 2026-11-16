@@ -374,15 +374,23 @@ pub struct CallError<F> {
     pub error: Error,
     /// The host's own error behind it, when an attempt raised it. `None` for an error the core
     /// made itself (no deployment to pick, a mock failure, a blocked response raised to fall back).
-    pub raised: Option<F>,
+    pub raised: Option<Raised<F>>,
 }
 
-impl<F> From<Error> for CallError<F> {
+/// A host's own error, with the deployment the attempt that raised it ran on.
+#[derive(Debug, PartialEq)]
+pub struct Raised<F> {
+    pub failure: F,
+    /// `None` for an attempt on a name passed through unrouted, which runs on no deployment.
+    pub deployment_id: Option<String>,
+}
+
+impl<F> From<Error> for Box<CallError<F>> {
     fn from(error: Error) -> Self {
-        Self {
+        Self::new(CallError {
             error,
             raised: None,
-        }
+        })
     }
 }
 
@@ -394,6 +402,9 @@ pub enum Capability {
     /// routing plugins and the callback filters.
     #[strum(serialize = "selects")]
     Select,
+    /// Background health checks, whose results health-check routing filters by.
+    #[strum(serialize = "runs health checks")]
+    HealthChecks,
 }
 
 /// What a host can serve, which the config does not say. Checked when the router is built or
