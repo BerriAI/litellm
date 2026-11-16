@@ -4642,7 +4642,10 @@ async def _authorize_authenticated_request_checks(
             safe_get_request_headers(request)  # pyright: ignore[reportUnknownArgumentType]  # request headers are untyped
         )
         user_api_key_auth_obj.customer_hierarchy = None  # rebind-ok: request state, never inherited from a cached key
-        if customer_identity is not None and not RustAuth.is_public_route(route, core.proxy_settings()):
+        if customer_identity is not None and (
+            user_api_key_auth_obj.authenticated_by_custom_auth
+            or not RustAuth.is_public_route(route, core.proxy_settings())
+        ):
             with tracer.trace("litellm.proxy.auth.resolve_customer_hierarchy"):  # pyright: ignore[reportUnknownMemberType]  # tracer is the untyped proxy tracer
                 try:
                     hierarchy: Final = await resolve_customer_hierarchy(

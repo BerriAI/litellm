@@ -7261,6 +7261,62 @@ async def test_authorizing_a_public_route_ignores_the_customer_headers():
     assert (recovered, token.customer_hierarchy) == (None, None)
 
 
+class _OverBudgetCustomerOrganizations:
+    """Customer organization table whose only row, aliased acme, has a zero budget."""
+
+    async def find_unique(self, **_: object):
+        row: Final = {"customer_org_id": "org-1", "alias": "acme", "spend": 0.0, "budget": {"max_budget": 0}}
+        return SimpleNamespace(spend=0.0, model_dump=lambda: row)
+
+    async def find_many(self, **_: object):
+        return [await self.find_unique()]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("authenticated_by_custom_auth, refused", [(False, False), (True, True)])
+async def test_a_public_route_enforces_the_customer_budget_only_for_a_custom_auth_caller(
+    monkeypatch: pytest.MonkeyPatch, authenticated_by_custom_auth: bool, refused: bool
+):
+    import litellm.proxy.proxy_server as _proxy_server_mod
+    from litellm.proxy.auth.user_api_key_auth import _authorize_authenticated_request
+    from litellm.proxy.utils import ProxyLogging
+
+    token: Final = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY)
+    token.authenticated_by_custom_auth = authenticated_by_custom_auth
+    request: Final = Request(
+        scope={
+            "type": "http",
+            "method": "GET",
+            "path": "/",
+            "query_string": b"",
+            "headers": [(b"x-litellm-customer-org-alias", b"acme")],
+        }
+    )
+    key_cache: Final = UserApiKeyCache()
+    attrs: Final = {
+        **_proxy_attrs_for_centralized_checks(),
+        "prisma_client": SimpleNamespace(
+            db=SimpleNamespace(litellm_customerorganizationtable=_OverBudgetCustomerOrganizations())
+        ),
+        "user_api_key_cache": key_cache,
+        "proxy_logging_obj": ProxyLogging(user_api_key_cache=key_cache),
+        "llm_model_list": None,
+        "user_model": None,
+    }
+    for name, value in attrs.items():
+        monkeypatch.setattr(_proxy_server_mod, name, value)
+
+    try:
+        await _authorize_authenticated_request(
+            user_api_key_auth_obj=token, request=request, request_data={}, route="/", api_key=""
+        )
+        outcome = "admitted"
+    except ProxyException as error:
+        outcome = error.message
+
+    assert ("customer_org=org-1 over budget" in outcome) is refused, outcome
+
+
 @pytest.mark.asyncio
 async def test_centralized_common_checks_skips_passthrough_endpoint_with_auth_false():
     """Regression: user-configured pass-through endpoints with
