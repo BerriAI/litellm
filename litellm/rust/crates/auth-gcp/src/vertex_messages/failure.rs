@@ -26,6 +26,8 @@ pub enum PythonException {
     Refresh,
     #[strum(serialize = "google.auth.exceptions.TransportError")]
     Transport,
+    #[strum(serialize = "google.auth.exceptions.OAuthError")]
+    OAuth,
 }
 
 /// A `vertex_credentials` file Python's `raise_vertex_credentials_failure` logs by path before it
