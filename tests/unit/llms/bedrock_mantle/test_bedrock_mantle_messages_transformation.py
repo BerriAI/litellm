@@ -37,6 +37,13 @@ def _httpx_transport_with_fresh_clients(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _python_messages(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.llms.anthropic.messages.native import handler as python_messages
+
+    monkeypatch.setattr(litellm, "anthropic_messages", python_messages.anthropic_messages)
+
+
+@pytest.fixture(autouse=True)
 def _no_ambient_mantle_env(monkeypatch):
     monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
     monkeypatch.delenv("BEDROCK_MANTLE_API_KEY", raising=False)

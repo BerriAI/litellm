@@ -23,6 +23,14 @@ from litellm.llms.bedrock.messages.mantle_transformation import (
 _MANTLE_WORKSPACE_HEADER = "anthropic-workspace-id"
 
 
+@pytest.fixture(autouse=True)
+def _python_messages(monkeypatch: pytest.MonkeyPatch) -> None:
+    import litellm
+    from litellm.llms.anthropic.messages.native import handler as python_messages
+
+    monkeypatch.setattr(litellm, "anthropic_messages", python_messages.anthropic_messages)
+
+
 def _anthropic_response(url: str) -> httpx.Response:
     return httpx.Response(
         status_code=200,
