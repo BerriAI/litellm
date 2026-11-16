@@ -6,6 +6,7 @@ import os
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
+from itertools import chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal
 
@@ -352,11 +353,9 @@ def _borrowing_settlement(
     if stash is None:
         return ()
     return tuple(
-        operation
-        for state in stash.borrowing_shares.values()
-        for operation in _team_model_settlement(
-            state, model_group, total_tokens, ttl
-        )  # comprehension-ok: flattens each borrower's settlement
+        chain.from_iterable(
+            _team_model_settlement(state, model_group, total_tokens, ttl) for state in stash.borrowing_shares.values()
+        )
     )
 
 
@@ -1049,11 +1048,9 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
             self._track_frame_shares(connection_stash, borrowing, saturated)
         descriptors: Final = (share_descriptors if saturated else ()) + tuple(
             descriptor
-            for borrower_share in borrowing.values()
-            for descriptor in (
-                borrower_share.enforced(saturated),
-                borrower_share.ceiling,
-            )  # comprehension-ok: each borrower's share then cap
+            for descriptor in chain.from_iterable(
+                (borrower_share.enforced(saturated), borrower_share.ceiling) for borrower_share in borrowing.values()
+            )
             if descriptor is not None
         )
         if not descriptors:
@@ -1919,11 +1916,10 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         )
         failed_holds: Final = _served_holds(stash, failed_group)
         refund: Final = tuple(
-            operation
-            for kind, state in stash.borrowing_shares.items()
-            for operation in self._failed_attempt_settlement(
-                state, failed_holds.get(kind), used
-            )  # comprehension-ok: flattens each borrower's settlement
+            chain.from_iterable(
+                self._failed_attempt_settlement(state, failed_holds.get(kind), used)
+                for kind, state in stash.borrowing_shares.items()
+            )
         )
         for kind, state in stash.borrowing_shares.items():
             state.clear_reservation()

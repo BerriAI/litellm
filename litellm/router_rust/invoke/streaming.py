@@ -66,6 +66,7 @@ from litellm.litellm_core_utils.add_retry_fallback_headers import (
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, without
 from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, get_hidden_params, set_hidden_params
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+from litellm.llms.custom_httpx.stream_close import aclose_if_supported
 from litellm.router_rust.surface.health import failure_already_logged, logged_call
 from litellm.types.utils import ModelResponseStream, Usage
 
@@ -1821,7 +1822,7 @@ async def _responses_recover_stream_error(
     if _responses_stream_retries(attempt, e, source_iterator):
         if hasattr(source_iterator, "aclose"):
             with anyio.CancelScope(shield=True), contextlib.suppress(Exception):
-                await source_iterator.aclose()  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]  # checked above
+                await aclose_if_supported(source_iterator)
         await attempt.failure_recorded()
         trigger: Final = _mid_stream_retry_trigger(e)
         retried: Final = await attempt.retry(trigger)
@@ -1882,7 +1883,7 @@ async def _responses_yield_retried(
         if hasattr(response, "aclose"):
             with anyio.CancelScope(shield=True):
                 try:
-                    await response.aclose()  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]  # checked above
+                    await aclose_if_supported(response)
                 except Exception as exc:  # noqa: BLE001  # closing is best-effort
                     verbose_router_logger.debug("stream_with_fallbacks(aresponses): error closing retry: %s", exc)
 
