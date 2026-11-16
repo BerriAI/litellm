@@ -23,6 +23,9 @@ def _fallback_targets(rules: ContentPolicyFallbackRules) -> Iterator[object]:
             yield from targets
 
 
+MAX_KEY_DISALLOWED_MODELS: Final = 500
+
+
 class KeyRequestBase(GenerateRequestBase):
     key: str | None = None
     tpd_limit: int | None = None
@@ -38,7 +41,7 @@ class KeyRequestBase(GenerateRequestBase):
     allowed_routes: list[Any] | None = []
     allowed_passthrough_routes: list[object] | None = None
     denied_passthrough_routes: list[str] | None = None
-    disallowed_models: Sequence[str] | None = None
+    disallowed_models: Sequence[str] | None = Field(default=None, max_length=MAX_KEY_DISALLOWED_MODELS)
     allowed_vector_store_indexes: list[AllowedVectorStoreIndexItem] | None = None
     rpm_limit_type: Literal["guaranteed_throughput", "best_effort_throughput", "dynamic"] | None = (
         None  # raise an error if 'guaranteed_throughput' is set and we're overallocating rpm

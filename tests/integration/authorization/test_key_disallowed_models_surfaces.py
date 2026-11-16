@@ -488,6 +488,26 @@ def test_a_malformed_disallowed_models_value_is_rejected_and_changes_nothing(
         assert unrelated.status_code == 200, unrelated.text
 
 
+def test_a_key_stores_at_most_500_disallowed_models_and_a_longer_list_changes_nothing(rig: DenyRig) -> None:
+    with rig.gateway.scenario() as scenario:
+        full: Final[list[JsonValue]] = [rig.denied.chat, *(f"capped-{index}-*" for index in range(499))]
+        over: Final[list[JsonValue]] = [*full, "one-too-many"]
+        key: Final = scenario.key(disallowed_models=full)
+        assert _stored(key) == [{"disallowed_models": full}]
+        rejected: Final = [
+            rig.gateway.request("POST", "/key/generate", {"disallowed_models": over}),
+            rig.gateway.request("POST", "/key/update", {"key": key, "disallowed_models": over}),
+            rig.gateway.request("POST", "/key/bulk_update", {"keys": [{"key": key, "disallowed_models": over}]}),
+        ]
+        assert [response.status_code for response in rejected] == [422, 422, 422], [
+            response.text[:300] for response in rejected
+        ]
+        assert _stored(key) == [{"disallowed_models": full}]
+        assert denial(fresh_chat(rig.gateway, rig.denied.chat, key, uuid.uuid4().hex)) == KEY_DENIAL
+        served: Final = fresh_chat(rig.gateway, rig.allowed.chat, key, uuid.uuid4().hex)
+        assert served.status_code == 200, served.text
+
+
 def test_empty_oversized_and_repeated_entries_are_stored_and_only_real_matches_are_refused(rig: DenyRig) -> None:
     with rig.gateway.scenario() as scenario:
         oversized: Final = "x" * 5000
