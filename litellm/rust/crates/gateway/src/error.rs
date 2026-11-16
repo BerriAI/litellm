@@ -14,4 +14,10 @@ pub enum Error {
     DatabasePool(#[from] litellm_db::Error),
     #[error(transparent)]
     ModelCatalog(#[from] litellm_model_catalog::Error),
+    #[error(transparent)]
+    RouterConfig(#[from] litellm_router_core::ConfigError),
+    #[error(transparent)]
+    Router(#[from] litellm_router_core::Error),
+    #[error("the gateway does not honor `{0}` yet")]
+    Unhonored(&'static str),
 }

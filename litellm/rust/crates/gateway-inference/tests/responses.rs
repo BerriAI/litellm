@@ -74,13 +74,13 @@ async fn invalid_responses_requests_never_reach_the_provider(
 
 #[rstest]
 #[tokio::test]
-async fn responses_preserve_upstream_errors_without_retry() {
+async fn responses_preserve_upstream_errors_once_the_router_retries_run_out() {
     let upstream = MockServer::start().await;
     Mock::given(method("POST"))
         .respond_with(
             ResponseTemplate::new(429).set_body_json(json!({"error": {"message": "slow down"}})),
         )
-        .expect(1)
+        .expect(3)
         .mount(&upstream)
         .await;
     let response = support::post(

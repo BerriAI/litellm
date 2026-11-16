@@ -4,11 +4,11 @@
 use std::{collections::VecDeque, sync::Arc, time::Duration};
 
 use litellm_router_core::{
-    Attempt, AttemptError, AttemptFailure, CallbackFiltered, Deployment, Error, FailureKind,
-    FailureReport, Health, HostFacts, InMemoryRouterCache, Op, PreRoute, PreRouted, Randomness,
-    Router, RouterCache, RouterConfig, RouterDynamicConfig, RouterEvent, RouterHost, RouterRequest,
-    RouterResponse, RoutingContext, SeededRandomness, SelectStage, Served, SuccessReport,
-    UsageWindow, call::StreamOrigin, fallback::Fallbacks, health::current_minute,
+    Attempt, AttemptError, AttemptFailure, CallbackFiltered, ConfigError, Deployment, Error,
+    FailureKind, FailureReport, Health, HostFacts, InMemoryRouterCache, Op, PreRoute, PreRouted,
+    Randomness, Router, RouterCache, RouterConfig, RouterDynamicConfig, RouterEvent, RouterHost,
+    RouterRequest, RouterResponse, RoutingContext, SeededRandomness, SelectStage, Served,
+    SuccessReport, UsageWindow, call::StreamOrigin, fallback::Fallbacks, health::current_minute,
     host::UncountedRetries, select, select::PassThrough,
 };
 use parking_lot::Mutex;
@@ -471,6 +471,43 @@ async fn an_error_the_router_made_itself_hands_back_no_host_error(config: Router
         ended.error
     );
     assert_eq!(ended.raised, None);
+}
+
+#[rstest]
+#[case::pre_call_checks(json!({"enable_pre_call_checks": true}), "`enable_pre_call_checks`")]
+#[case::callback_filters(json!({"callback_filters": true}), "`callback_filters`")]
+#[case::strategy(json!({"routing_strategy": "least-busy"}), "`least-busy`")]
+#[case::tag_filtering(json!({"enable_tag_filtering": true}), "`enable_tag_filtering`")]
+#[case::optional_checks(
+    json!({"optional_pre_call_checks": ["encrypted_content_affinity"]}),
+    "`optional_pre_call_checks`"
+)]
+#[case::health_check_routing(
+    json!({"enable_health_check_routing": true}),
+    "`enable_health_check_routing`"
+)]
+fn a_host_without_capabilities_refuses_the_settings_that_need_them(
+    #[case] settings: Value,
+    #[case] named: &str,
+) {
+    let config: RouterConfig = serde_json::from_value(settings).unwrap();
+    let facts = HostFacts {
+        capabilities: &[],
+        supports: |_, _| true,
+    };
+    let refused = match Router::new(config.clone(), RouterDynamicConfig::default(), facts) {
+        Err(ConfigError::Unsupported(unsupported)) => unsupported.to_string(),
+        other => panic!("expected an unsupported config, got {:?}", other.err()),
+    };
+    assert!(refused.contains(named), "{refused}");
+    assert!(
+        Router::new(
+            config,
+            RouterDynamicConfig::default(),
+            HostFacts::everything()
+        )
+        .is_ok()
+    );
 }
 
 #[rstest]
