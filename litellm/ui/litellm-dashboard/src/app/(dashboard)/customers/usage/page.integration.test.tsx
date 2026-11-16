@@ -148,11 +148,12 @@ const activityUrl = (resource: string, id: string, endDate = "2026-11-03") => {
 };
 const serve = (input: Parameters<typeof fetch>[0]): Response => {
   const url = requestUrl(input);
-  if (url.pathname.endsWith("/daily/activity")) {
-    const resource = url.pathname.split("/").at(-3);
+  const aggregated = url.pathname.endsWith("/daily/activity/aggregated");
+  if (url.pathname.endsWith("/daily/activity") || aggregated) {
+    const resource = url.pathname.split("/").at(aggregated ? -4 : -3);
     const dimension = activityDimension(resource);
     const filter = filterFor(resource);
-    const ids = url.searchParams.get(filter)?.split(",") ?? [];
+    const ids = aggregated ? [url.searchParams.get("customer_org_id")] : url.searchParams.get(filter)?.split(",") ?? [];
     const selected = records
       .filter((record) => ids.includes(record[dimension]))
       .filter(
@@ -173,7 +174,13 @@ const serve = (input: Parameters<typeof fetch>[0]): Response => {
         },
       };
     });
-    return json({ results, metadata: EMPTY_DAILY_ACTIVITY_METADATA });
+    return json({
+      results,
+      metadata: {
+        ...EMPTY_DAILY_ACTIVITY_METADATA,
+        total_spend: selected.reduce((total, record) => total + record.metrics.spend, 0),
+      },
+    });
   }
   if (url.pathname === "/management/v1/customer_organizations/org-1") return json(organization);
   if (url.pathname === "/management/v1/customer_teams") return json(list(teams));
@@ -209,13 +216,46 @@ describe("CustomerHierarchyUsagePage", () => {
     vi.unstubAllGlobals();
   });
 
+  it.each([
+    ["2026-11-15T00:30:00Z", "", "2026-11-01", "2026-11-15"],
+    ["2027-01-01T00:30:00Z", "", "2027-01-01", "2027-01-01"],
+    ["2026-11-15T00:30:00Z", "&range=month", "2026-11-01", "2026-11-30"],
+    ["2026-11-15T00:30:00Z", "&range=MTD", "2026-11-01", "2026-11-15"],
+    ["2026-11-30T23:30:00Z", "&range=today", "2026-11-30", "2026-11-30"],
+  ])("uses UTC calendar dates at %s with %s", async (now, query, startDate, endDate) => {
+    vi.setSystemTime(new Date(now));
+    renderWithProviders(<CustomerHierarchyUsagePage />, { searchParams: `?org=org-1${query}` });
+    await screen.findByRole("heading", { name: "Customer organization" });
+    expect(
+      requestedUrls()
+        .find((url) => url.pathname.endsWith("/daily/activity"))
+        ?.searchParams.get("start_date"),
+    ).toBe(startDate);
+    expect(
+      requestedUrls()
+        .find((url) => url.pathname.endsWith("/daily/activity"))
+        ?.searchParams.get("end_date"),
+    ).toBe(endDate);
+  });
+
+  it("keeps the selected dates in customer navigation and the return to all customers", async () => {
+    renderWithProviders(<CustomerHierarchyUsagePage />, { searchParams: initialUrl });
+    await screen.findByRole("heading", { name: "Customer organization" });
+    for (const name of ["Customer teams", "Customer members", "Settings", "Customer organizations"]) {
+      const link = screen.getByRole("link", { name, exact: true });
+      const url = new URL(link.getAttribute("href")!, "http://localhost");
+      expect(url.searchParams.get("from")).toBe("2026-11-01");
+      expect(url.searchParams.get("to")).toBe("2026-11-03");
+    }
+  });
+
   it("should render organization totals and model rankings from the selected UTC date range", async () => {
     renderWithProviders(<CustomerHierarchyUsagePage />, { searchParams: initialUrl });
 
     expect(await screen.findByRole("heading", { name: "Customer organization" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Customer teams", exact: true })).toHaveAttribute(
       "href",
-      "/ui/customers/manage?org=org-1",
+      "/ui/customers/manage?org=org-1&from=2026-11-01&to=2026-11-03",
     );
     expect(screen.getByText("$15.00")).toBeInTheDocument();
     const budget = screen.getByRole("region", { name: "Current budget" });
@@ -223,7 +263,7 @@ describe("CustomerHierarchyUsagePage", () => {
     expect(within(budget).getByText("Recorded budget spend")).toBeInTheDocument();
     expect(within(budget).getByRole("link", { name: "Edit budget" })).toHaveAttribute(
       "href",
-      "/ui/customers/manage?org=org-1&tab=settings",
+      "/ui/customers/manage?org=org-1&from=2026-11-01&to=2026-11-03&tab=settings",
     );
     expect(screen.getByTitle("700 tokens")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Usage over time" })).toBeInTheDocument();
@@ -276,10 +316,11 @@ describe("CustomerHierarchyUsagePage", () => {
     expect(activityUrl("customer_teams", "team-a")?.pathname).toBe("/management/v1/customer_teams/daily/activity");
     expect(activityUrl("customer_teams", "team-a")?.searchParams.get("customer_team_ids")).toBe("team-a");
     const teamBudget = screen.getByRole("region", { name: "Current budget" });
-    expect(within(teamBudget).getByText("$40.00 / No limit")).toBeInTheDocument();
+    expect(within(teamBudget).getByText("No budget set")).toBeInTheDocument();
+    expect(within(teamBudget).queryByText(/\$40\.00/)).not.toBeInTheDocument();
     expect(within(teamBudget).getByRole("link", { name: "Set budget" })).toHaveAttribute(
       "href",
-      "/ui/customers/manage?org=org-1&team=team-a&tab=settings",
+      "/ui/customers/manage?org=org-1&team=team-a&from=2026-11-01&to=2026-11-03&tab=settings",
     );
 
     await user.click(
@@ -290,7 +331,7 @@ describe("CustomerHierarchyUsagePage", () => {
     expect(within(memberBudget).getByText("$40.00 / $10.00")).toBeInTheDocument();
     expect(within(memberBudget).getByRole("link", { name: "Edit budget" })).toHaveAttribute(
       "href",
-      "/ui/customers/manage?org=org-1&team=team-a&member=member-a&tab=settings",
+      "/ui/customers/manage?org=org-1&team=team-a&member=member-a&from=2026-11-01&to=2026-11-03&tab=settings",
     );
     const memberUrl = activityUrl("customer_members", "member-a")!;
     expect(memberUrl.pathname).toBe("/management/v1/customer_members/daily/activity");

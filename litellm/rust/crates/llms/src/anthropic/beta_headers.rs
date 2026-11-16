@@ -16,20 +16,38 @@ pub enum BetaPolicy {
 
 impl BetaPolicy {
     pub fn apply(self, headers: Headers) -> Headers {
+        self.apply_keeping(headers, &BetaSet::default())
+    }
+
+    /// Python's `update_headers_with_filtered_beta` with `keep`: a beta the routed model
+    /// accepts is sent as the caller sent it, after the betas the filter kept.
+    pub fn apply_keeping(self, headers: Headers, keep: &BetaSet) -> Headers {
         let provider = match self {
             Self::Forward => return headers,
             Self::Drop => return without_headers(headers, &[BETA_HEADER]),
             Self::Filter(provider) => provider,
         };
-        let accepted: BetaSet = existing_betas(&headers)
+        let sent = existing_betas(&headers);
+        let accepted: BetaSet = sent
             .iter()
+            .filter(|beta| !keep.contains(beta))
             .filter_map(|beta| beta.on(provider))
             .collect();
+        let kept: Vec<&AnthropicBeta> = sent
+            .iter()
+            .filter(|beta| keep.contains(beta) && !accepted.contains(beta))
+            .collect();
         let headers = without_headers(headers, &[BETA_HEADER]);
-        if accepted.is_empty() {
+        if accepted.is_empty() && kept.is_empty() {
             return headers;
         }
-        with_header(headers, BETA_HEADER, accepted.to_string())
+        let value = accepted
+            .iter()
+            .chain(kept)
+            .map(AnthropicBeta::as_str)
+            .collect::<Vec<_>>()
+            .join(",");
+        with_header(headers, BETA_HEADER, value)
     }
 }
 
@@ -46,7 +64,7 @@ pub fn accepted_or_unlisted(betas: BetaSet, provider: BetaProvider) -> BetaSet {
 #[cfg(test)]
 mod tests {
     use crate::anthropic::beta_headers::BetaPolicy;
-    use litellm_llms_types::providers::anthropic::BetaProvider;
+    use litellm_llms_types::providers::anthropic::{BetaProvider, BetaSet};
     use rstest::rstest;
 
     fn headers(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
@@ -122,6 +140,37 @@ mod tests {
                 ("anthropic-beta", beta_value)
             ])),
             headers(&[("x-api-key", "k")])
+        );
+    }
+
+    #[rstest]
+    #[case::kept_after_the_filtered_betas(
+        "per-turn-control-2026-07-01,advanced-tool-use-2025-11-20,example-beta-2099-01-01",
+        Some("tool-search-tool-2025-10-19,per-turn-control-2026-07-01")
+    )]
+    #[case::kept_alone(
+        "per-turn-control-2026-07-01,example-beta-2099-01-01",
+        Some("per-turn-control-2026-07-01")
+    )]
+    #[case::not_sent("advanced-tool-use-2025-11-20", Some("tool-search-tool-2025-10-19"))]
+    #[case::nothing_survives("example-beta-2099-01-01", None)]
+    fn filter_sends_a_kept_beta_as_sent_after_the_filtered_ones(
+        #[case] sent: &str,
+        #[case] expected: Option<&str>,
+    ) {
+        let keep: BetaSet = "per-turn-control-2026-07-01"
+            .parse()
+            .unwrap_or_else(|never| match never {});
+        assert_eq!(
+            BetaPolicy::Filter(BetaProvider::Bedrock).apply_keeping(
+                headers(&[("x-api-key", "k"), ("anthropic-beta", sent)]),
+                &keep
+            ),
+            [("x-api-key", "k")]
+                .into_iter()
+                .chain(expected.map(|beta| ("anthropic-beta", beta)))
+                .map(|(name, value)| (name.to_string(), value.to_string()))
+                .collect::<Vec<_>>()
         );
     }
 

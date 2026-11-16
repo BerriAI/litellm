@@ -8,12 +8,14 @@ import { cn } from "@/lib/cva.config";
 import { uiHref } from "@/utils/uiHref";
 import CustomerBudgetSpend, { CustomerBudgetWindow } from "./CustomerBudgetSpend";
 import type { CustomerOrganizationRow } from "./customerOrganizations";
+import { CustomerBudgetLimitCell } from "./CustomerBudgetColumn";
 
 const usageHref = createSerializer({ org: parseAsString, from: parseAsString, to: parseAsString });
 const SORT_DIRECTIONS = ["ascending", "descending"] as const;
 const COLUMNS = [
   { id: "customer", label: "customerPortal.list.columns.customer" },
   { id: "spend", label: "customerPortal.analytics.monthlySpend" },
+  { id: "budget", label: "customerPortal.hierarchy.maxBudget" },
   { id: "share", label: "customerPortal.list.columns.overallSpendShare" },
   { id: "status", label: "customerPortal.list.columns.status" },
 ] as const;
@@ -56,7 +58,7 @@ export default function CustomerOrganizationsTable({
                   variant="ghost"
                   size="sm"
                   className="-mx-2 gap-2"
-                  onClick={() => onSort([{ id, desc: active ? !descending : id !== "customer" }])}
+                  onClick={() => onSort([{ id, desc: active ? !descending : id !== "customer" && id !== "budget" }])}
                 >
                   {t(label)}
                   <Icon aria-hidden="true" className="size-3.5" />
@@ -69,20 +71,20 @@ export default function CustomerOrganizationsTable({
       <TableBody>
         {loading && (
           <TableRow>
-            <TableCell colSpan={4} className="py-8 text-center text-muted-foreground">
+            <TableCell colSpan={5} className="py-8 text-center text-muted-foreground">
               {t("customerPortal.list.loading")}
             </TableCell>
           </TableRow>
         )}
         {!loading && rows.length === 0 && (
           <TableRow>
-            <TableCell colSpan={4} className="py-8 text-center text-muted-foreground">
+            <TableCell colSpan={5} className="py-8 text-center text-muted-foreground">
               {t(searching ? "customerPortal.list.noMatches" : "customerPortal.list.empty")}
             </TableCell>
           </TableRow>
         )}
         {!loading &&
-          rows.map(({ organization, monthlySpend, monthlyBudgets, share, status }) => {
+          rows.map(({ organization, monthlySpend, monthlyBudgets, budgetLimit, share, status }) => {
             const label = organization.alias || organization.customer_org_id;
             const percentage = Math.max(0, Math.min(100, share * 100));
             const shareLabel = t("format.number", { val: share, style: "percent", maximumFractionDigits: 1 });
@@ -135,6 +137,7 @@ export default function CustomerOrganizationsTable({
                     )}
                   </div>
                 </TableCell>
+                <CustomerBudgetLimitCell limit={budgetLimit} />
                 <TableCell className="px-4">
                   <div className="flex items-center gap-3">
                     <div

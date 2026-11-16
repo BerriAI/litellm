@@ -9,6 +9,7 @@ import http
 import http.client
 import inspect
 import ipaddress
+import json
 import os
 import socket
 import ssl
@@ -18,12 +19,17 @@ from typing import Final, TypeAlias, TypeVar, cast  # noqa: TID251  # narrows na
 from urllib.parse import SplitResult, urlsplit
 
 import httpx
+from aiohttp import ClientPayloadError
 from aiohttp.http_exceptions import ContentLengthError, TransferEncodingError
 from pydantic import JsonValue, TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm.caching.caching_handler import LLMCachingHandler
+from litellm.constants import (
+    ANTHROPIC_MESSAGES_DETACHED_STREAM_DRAIN_TIMEOUT_SECONDS,
+    ANTHROPIC_MESSAGES_MAX_DETACHED_STREAM_DRAINS,
+)
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils import exception_mapping_utils
 from litellm.litellm_core_utils.core_helpers import (
@@ -42,7 +48,7 @@ from litellm.litellm_core_utils.model_latest_aliases import is_model_latest_alia
 from litellm.litellm_core_utils.provider_affinity import add_provider_affinity_header
 from litellm.litellm_core_utils.reasoning_effort_capability import deployment_reasoning_effort_levels
 from litellm.litellm_core_utils.request_timeout_resolver import get_configured_request_timeout
-from litellm.litellm_core_utils.url_utils import ensure_api_route
+from litellm.litellm_core_utils.url_utils import ensure_api_route, join_api_base
 from litellm.llms.anthropic.common_utils import (
     AnthropicError,
     AnthropicModelInfo,
@@ -70,7 +76,13 @@ from litellm.llms.anthropic.messages.native.handler import (
     _with_deployment_output_effort as _deployment_output_effort,  # pyright: ignore[reportPrivateUsage]  # the handler's own effort rounding
 )
 from litellm.llms.anthropic.messages.native.interceptors import MessagesInterceptor, get_messages_interceptors
-from litellm.llms.anthropic.messages.native.utils import normalize_native_messages, prepare_native_messages
+from litellm.llms.anthropic.messages.native.utils import (
+    continues_message_thread,
+    message_thread_not_found_body,
+    message_thread_unsupported_body,
+    normalize_native_messages,
+    prepare_native_messages,
+)
 from litellm.llms.anthropic.messages.safeguards import (
     SafeguardsEvaluator,
     StreamedSafeguardResults,
@@ -81,6 +93,11 @@ from litellm.llms.anthropic.messages.utils import is_reasoning_auto_summary_enab
 from litellm.llms.anthropic.wif import get_anthropic_wif_token
 from litellm.llms.base_llm.anthropic_messages.transformation import BaseAnthropicMessagesConfig
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.llms.bedrock.common_utils import (
+    ensure_bedrock_anthropic_messages_tool_names,  # pyright: ignore[reportUnknownVariableType]  # takes an untyped request dict
+    normalize_custom_field_on_tools,  # pyright: ignore[reportUnknownVariableType]  # takes an untyped request dict
+    normalize_tool_input_schema_types_for_bedrock_invoke,  # pyright: ignore[reportUnknownVariableType]  # takes an untyped request dict
+)
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     get_async_httpx_client,  # pyright: ignore[reportUnknownVariableType]  # its params dict is untyped
@@ -152,6 +169,8 @@ class MessagesSettings:
     ascii_response_headers: bool = False
     joined_reads: bool = False
     ascii_request_headers: bool = True
+    detached_drain_timeout: float | None = None
+    detached_drain_limit: int | None = None
 
 
 def response(value: Mapping[str, object]) -> AnthropicMessagesResponse:
@@ -191,15 +210,100 @@ def _anthropic_metadata(params: Mapping[str, object]) -> Mapping[str, object]:
 
 def _body_fields(request: Mapping[str, object]) -> Mapping[str, object]:
     params: Final = _anthropic_metadata(
-        known_params(_BODY_FIELDS.difference(handler.additional_drop_paths(request)), request)
+        known_params(_BODY_FIELDS.difference(handler.additional_drop_paths(request), _dropped_thread(request)), request)
     )
     if deployment_reasoning_effort_levels(request.get("model_info")) is None:
         return params
     return _with_deployment_effort(params, request)
 
 
+def _thread_provider(request: Mapping[str, object]) -> str | None:
+    """The provider of a call carrying a thread its Messages config cannot serve, as Python's handler
+    resolves it, or None when the call carries no thread or its config serves threads."""
+    if request.get("thread") is None:
+        return None
+    model, provider, _, _ = _requested_provider(
+        str(request["model"]), optional_str(request.get("custom_llm_provider")), _handler_params(request)
+    )
+    config: Final = native_messages_config(
+        model, provider, request.get("model_info"), optional_str(request.get("api_base"))
+    )
+    if config is not None and config.supports_message_threads():
+        return None
+    return str(provider)
+
+
+def _dropped_thread(request: Mapping[str, object]) -> tuple[str, ...]:
+    return () if _thread_provider(request) is None else ("thread",)
+
+
+def _thread_refusal(thread: object, provider: str, drop_params: object) -> AnthropicError | None:
+    if continues_message_thread(thread):
+        return AnthropicError(
+            status_code=404,
+            message=message_thread_not_found_body(
+                f"message threads are not supported for provider {provider}, "
+                "so this thread cannot be continued. Send the full conversation to start over"
+            ),
+        )
+    if not drops_unsupported_params(drop_params):
+        return AnthropicError(
+            status_code=400,
+            message=message_thread_unsupported_body(
+                f"message threads are not supported for provider {provider}. "
+                "Send the request without thread, or set drop_params to serve it without a server-side thread"
+            ),
+        )
+    verbose_logger.warning(
+        "Dropping thread for provider %s: message threads are not supported there, "
+        "so the request is served without a server-side thread",
+        provider,
+    )
+    return None
+
+
+def _refuse_unsupported_thread(request: Mapping[str, object], asynchronous: bool) -> None:
+    """Python's handler refuses a thread its provider cannot serve, or drops it under drop_params."""
+    provider: Final = _thread_provider(request)
+    if provider is None:
+        return
+    refusal: Final = _thread_refusal(request.get("thread"), provider, request.get("drop_params"))
+    if refusal is None:
+        return
+    _flag_messages_call(request.get("litellm_logging_obj"), asynchronous)
+    try:
+        raise refusal
+    except AnthropicError as provider_error:
+        _exception_type(
+            model=str(request["model"]),
+            custom_llm_provider=provider,
+            original_exception=provider_error,
+            extra_kwargs={name: value for name, value in request.items() if name not in _ENTRY_PARAMS},
+        )
+        raise
+
+
+def _shape_bedrock_tools(tools: object, model: str) -> None:
+    """Python's Bedrock invoke transform shapes the caller's own tool dicts in place, so its logs show them shaped."""
+    if not isinstance(tools, list):
+        return
+    from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude_transformation import (
+        AmazonAnthropicClaudeMessagesConfig,
+    )
+
+    body: Final[dict[str, object]] = {"tools": tools}  # mutable-ok: the Bedrock transform helpers shape it in place
+    AmazonAnthropicClaudeMessagesConfig()._remove_ttl_from_cache_control(  # pyright: ignore[reportPrivateUsage, reportUnknownMemberType]  # the transform's own in-place step
+        anthropic_messages_request=body, model=model
+    )
+    normalize_custom_field_on_tools(body)
+    normalize_tool_input_schema_types_for_bedrock_invoke(body)
+    ensure_bedrock_anthropic_messages_tool_names(body)
+
+
 def body_params(request: Mapping[str, object], asynchronous: bool, hooked: bool = False) -> Mapping[str, object]:
     fields: Final = _body_fields(request)
+    if _resolved_provider(request) == "bedrock":
+        _shape_bedrock_tools(fields.get("tools"), str(request["model"]).removeprefix("bedrock/"))
     if not detectors.cache_control_injection(NativeCall(args=(), kwargs=request, base={})):
         return {**fields, "messages": request["messages"]} if hooked else fields
     messages, system, tools = _prompt_cached(request, asynchronous, hooked)
@@ -493,12 +597,18 @@ def answer(owner: MessagesInterceptor, request: Mapping[str, object], stream: bo
     )
 
 
-def stream_hidden_params(headers: Sequence[tuple[str, str]]) -> Mapping[str, object]:
+def stream_hidden_params(headers: Sequence[tuple[str, str]], relayed: bool = False) -> Mapping[str, object]:
+    """The stream's head. `relayed` says the stream runs through Python's native Messages relay,
+    `BaseAnthropicMessagesStreamingIterator.async_sse_wrapper`, rather than its pass-through."""
     from litellm.llms.anthropic.messages.native.streaming_iterator import (
         anthropic_messages_stream_hidden_params,
     )
 
-    return MessagesStreamHead(anthropic_messages_stream_hidden_params(callbacks_legacy_python.wire_headers(headers)))
+    head: Final = MessagesStreamHead(
+        anthropic_messages_stream_hidden_params(callbacks_legacy_python.wire_headers(headers))
+    )
+    head.relayed = relayed
+    return head
 
 
 async def _unrequested_stream_delivered(
@@ -557,6 +667,7 @@ def unrequested_stream(
 
 _UPSTREAM_ARGS: Final = TypeAdapter(tuple[int, str])
 _UPSTREAM_HEADERS: Final = TypeAdapter(list[tuple[str, str]])
+_INVOCATION_METRICS: Final = "amazon-bedrock-invocationMetrics"
 _BODY_CUT: Final = TypeAdapter(tuple[int, int | None, bool])
 _ERROR_CLASS: TypeAlias = Callable[..., Exception]
 _validate_metadata: Final = cast(  # cast-ok: the handler's untyped metadata validator
@@ -601,18 +712,41 @@ def _rejection(error: Exception, request: Mapping[str, object], request_provider
     provider_rejection: Final = getattr(error, "messages_provider_rejection", None)
     if isinstance(provider_rejection, str):
         _log_resolved_call(request, request_provider)
-        _flag_azure_ai_call(request, request_provider, asynchronous)
-        return _public_provider_error(
-            _config_error(400, provider_rejection, (), request, request_provider), error, request, request_provider
+        _flag_messages_call(request.get("litellm_logging_obj"), asynchronous)
+        rejection: Final = _provider_rejection(
+            provider_rejection,
+            getattr(error, "messages_provider_bad_request", False) is True,
+            request,
+            request_provider,
         )
+        if isinstance(rejection, litellm.BadRequestError):
+            return rejection
+        return _public_provider_error(rejection, error, request, request_provider)
     if getattr(error, "messages_unsupported_param", False):
-        _flag_azure_ai_call(request, request_provider, asynchronous)
+        _flag_messages_call(request.get("litellm_logging_obj"), asynchronous)
         return litellm.UnsupportedParamsError(message=str(error))
     return litellm.BadRequestError(
         message=str(error),
         model=str(request["model"]).removeprefix(f"{request_provider}/"),
         llm_provider=request_provider,
     )
+
+
+def _provider_rejection(
+    text: str, bad_request: bool, request: Mapping[str, object], request_provider: str
+) -> Exception:
+    """The Bedrock invoke config raises its own `BadRequestError`, which other configs' HTTP handler
+    maps into their error class by its text."""
+    if not bad_request:
+        return _config_error(400, text, (), request, request_provider)
+    raised: Final = litellm.BadRequestError(
+        message=text,
+        model=str(request["model"]).removeprefix(f"{request_provider}/"),
+        llm_provider=request_provider,
+    )
+    if request_provider == "bedrock":
+        return raised
+    return _config_error(400, str(raised), (), request, request_provider)
 
 
 def _timeout_text(phase: str, request: Mapping[str, object]) -> str:
@@ -652,21 +786,115 @@ def _body_cut(received: int, expected: int | None, reset: bool) -> httpx.Transpo
             f"Not enough data to satisfy content length header (received {received} of {expected} bytes)."
         )
     )
-    text: Final = f"Response payload is not completed: {payload!r}"
-    if not reset:
-        return httpx.ReadError(text)
-    return httpx.ReadError(f"{text}. {ConnectionResetError(errno.ECONNRESET, os.strerror(errno.ECONNRESET))!r}")
+    completed: Final = f"Response payload is not completed: {payload!r}"
+    text: Final = (
+        f"{completed}. {ConnectionResetError(errno.ECONNRESET, os.strerror(errno.ECONNRESET))!r}"
+        if reset
+        else completed
+    )
+    payload_error: Final = ClientPayloadError(text)
+    payload_error.__cause__ = payload
+    read_error: Final = httpx.ReadError(text)
+    read_error.__cause__ = payload_error
+    read_error.__context__ = payload_error
+    return read_error
+
+
+@dataclass(frozen=True, slots=True)
+class _ProviderCall:
+    config: BaseAnthropicMessagesConfig
+    model: str
+    params: dict[str, object]  # mutable-ok: the config hooks take a params dict
+
+
+def _provider_call(request: Mapping[str, object]) -> _ProviderCall | None:
+    """The config, model and params Python's handler hands its provider config for the call."""
+    model, provider, _, _ = _requested_provider(
+        str(request["model"]), optional_str(request.get("custom_llm_provider")), _handler_params(request)
+    )
+    config: Final = native_messages_config(
+        model, provider, request.get("model_info"), optional_str(request.get("api_base"))
+    )
+    if config is None:
+        return None
+    return _ProviderCall(config=config, model=model, params=dict(_python_handler_params(request, provider)))
+
+
+def _complete_url(call: _ProviderCall, request: Mapping[str, object]) -> str:
+    return call.config.get_complete_url(  # pyright: ignore[reportUnknownMemberType]  # the config's untyped params dicts
+        api_base=optional_str(request.get("api_base")),
+        api_key=optional_str(request.get("api_key")),
+        model=call.model,
+        optional_params=call.params,
+        litellm_params=call.params,
+        stream=request.get("stream") is True,
+    )
+
+
+def _bedrock_url(request: Mapping[str, object]) -> str | None:
+    """The URL Python's bedrock Messages config builds for the call."""
+    call: Final = _provider_call(request)
+    return None if call is None else _complete_url(call, request)
+
+
+def _signing_failure(kind: str) -> Exception | None:
+    """The exception Python's AWS signing raises for a credential failure whose outcome needs no STS,
+    IMDS or secret manager call. botocore's environment provider raises `PartialCredentialsError`
+    for an access key without its secret, where Rust's default chain finds nothing."""
+    from botocore.exceptions import NoCredentialsError
+
+    from litellm.llms.bedrock.base_aws_llm import AwsAuthError
+
+    if kind == "web_identity_reference":
+        return AwsAuthError(status_code=400, message="Invalid web identity token reference.")
+    if kind == "missing_web_identity_token":
+        return AwsAuthError(status_code=401, message="OIDC token could not be retrieved from secret manager.")
+    if kind == "no_credentials" and not os.environ.get("AWS_ACCESS_KEY_ID"):
+        return NoCredentialsError()
+    return None
+
+
+def _bedrock_credential_failure(error: Exception, request: Mapping[str, object]) -> Exception | None:
+    """The exception Python's bedrock config raises while signing a call whose credentials Rust
+    could not acquire, from botocore's `NoCredentialsError` to an STS or `AwsAuthError` failure."""
+    kind: Final = getattr(error, "messages_credential_failure", None)
+    if not isinstance(kind, str):
+        return None
+    known: Final = _signing_failure(kind)
+    if known is not None:
+        return _raised(known)
+    call: Final = _provider_call(request)
+    if call is None:
+        return None
+    try:
+        call.config.sign_request(  # pyright: ignore[reportUnknownMemberType]  # the config's untyped params dicts
+            headers={},
+            optional_params=call.params,
+            request_data={},
+            api_base=_complete_url(call, request),
+            api_key=optional_str(request.get("api_key")),
+            model=call.model,
+            stream=request.get("stream") is True,
+            fake_stream=False,
+        )
+    except Exception as python_failure:  # noqa: BLE001  # the exception Python's signing raises is the answer
+        return python_failure
+    return None
 
 
 def _sent_base(request: Mapping[str, object], request_provider: str, secrets_read: _SecretsRead) -> str | None:
     """The base the call was sent to: azure_ai's falls back to the `AZURE_API_BASE` the host read
-    to send it, and anthropic's to its default."""
+    to send it, anthropic's to its default and bedrock's to the URL its config builds."""
     api_base: Final = request.get("api_base")
+    if isinstance(api_base, str) and (api_base or request_provider != "azure_ai"):
+        return api_base
     if request_provider == "anthropic":
-        return api_base if isinstance(api_base, str) else anthropic_pass_through_api_base()
-    if request_provider == "azure_ai" and not api_base:
+        return anthropic_pass_through_api_base()
+    if request_provider == "azure_ai":
         return dict(secrets_read).get("AZURE_API_BASE")
-    return api_base if isinstance(api_base, str) else None
+    if request_provider == "bedrock":
+        return _bedrock_url(request)
+    return None
 
 
 def _connect_failure(
@@ -869,6 +1097,58 @@ def _raised_like_python(error: _RaisedT, request_provider: str) -> _RaisedT:
     return error if request_provider in _MAIN_NATIVE_ERROR_PROVIDERS else _raised(error)
 
 
+def _chunk_parser_failure(text: str) -> Exception:
+    try:
+        json.loads(text).pop(_INVOCATION_METRICS, {})
+    except Exception as error:  # noqa: BLE001  # the chunk parser's own failure is what Python raised
+        return error
+    return ValueError(text)
+
+
+def _json_failure(text: str) -> Exception:
+    try:
+        json.loads(text)
+    except json.JSONDecodeError as error:
+        return error
+    return ValueError(text)
+
+
+def bedrock_stream_raise(kind: str, arguments: Sequence[object]) -> Exception:
+    """The exception Python's Bedrock stream decoder raised unmapped for a body it could not parse."""
+    from botocore import eventstream
+
+    raises: Final[Mapping[str, Callable[..., Exception]]] = {
+        "ChecksumMismatch": eventstream.ChecksumMismatch,
+        "InvalidHeadersLength": eventstream.InvalidHeadersLength,
+        "InvalidPayloadLength": eventstream.InvalidPayloadLength,
+        "DuplicateHeader": eventstream.DuplicateHeader,
+        "InvalidJson": _json_failure,
+        "NotAnObject": _chunk_parser_failure,
+    }
+    return _raise_with(raises[kind], arguments)
+
+
+def _raise_with(factory: Callable[..., Exception], arguments: Sequence[object]) -> Exception:
+    return factory(*arguments)
+
+
+def stream_failure(error: BaseException, request: Mapping[str, object], request_provider: str) -> BaseException:
+    """Python's Bedrock Messages stream raises a failure after its head with the deployment's debug info."""
+    if request_provider in _MAIN_NATIVE_ERROR_PROVIDERS or not isinstance(error, Exception):
+        return error
+    return _with_deployment_debug_info(error, request, request_provider)
+
+
+def _bedrock_stream_error(error: Exception, request: Mapping[str, object]) -> Exception | None:
+    """Python's Bedrock stream decoder raises its `BedrockError` as built, unmapped."""
+    try:
+        status, text = _UPSTREAM_ARGS.validate_python(error.args)
+        headers: Final = _UPSTREAM_HEADERS.validate_python(getattr(error, "headers", None))
+    except ValidationError:
+        return None
+    return _config_error(status, text, headers, request, "bedrock")
+
+
 def map_failure(
     error: Exception,
     request: Mapping[str, object],
@@ -878,6 +1158,10 @@ def map_failure(
 ) -> Exception:
     """Raises what Python's Messages handler raises for the same failure. `secrets_read` are the
     secrets the host read to send the call, such as azure_ai's `AZURE_API_BASE`."""
+    if request_provider == "bedrock" and getattr(error, "messages_stream_failure", False):
+        stream_error: Final = _bedrock_stream_error(error, request)
+        if stream_error is not None:
+            return stream_error
     if getattr(error, "messages_timeout", None) == "Body":
         # Python reads a stream's body outside its HTTP client's error mapping, so the transport's
         # own timeout reaches the caller unmapped.
@@ -915,6 +1199,10 @@ def map_failure(
             ),
             request_provider,
         )
+    credential_failure: Final = _bedrock_credential_failure(error, request) if request_provider == "bedrock" else None
+    if credential_failure is not None:
+        _log_resolved_call(request, request_provider)
+        return map_token_failure(credential_failure, request, request_provider, asynchronous)
     provider_error: Final = _provider_error(error, request, request_provider, secrets_read or [])
     if provider_error is None:
         return failures.map_native_failure(
@@ -948,6 +1236,20 @@ def _resolved_provider(request: Mapping[str, object]) -> str | None:
 
 def failure_provider(request: Mapping[str, object]) -> str:
     return _resolved_provider(request) or "anthropic"
+
+
+def filters_beta_headers(model: str, custom_llm_provider: str | None, api_base: str | None) -> bool:
+    """Whether the call's provider config filters the caller's `anthropic-beta` before Python's client encodes it."""
+    config: Final = native_messages_config(
+        model.removeprefix(f"{custom_llm_provider}/"), custom_llm_provider, None, api_base
+    )
+    return config is not None and config.should_filter_anthropic_beta_headers()
+
+
+def record_guardrail(public: Mapping[str, object], request: Mapping[str, object]) -> None:
+    logger: Final = _logger(request)
+    if logger is not None:
+        logger.record_native_bedrock_guardrail(public)
 
 
 def _scope_provider_specific_header(request: Mapping[str, object]) -> None:
@@ -1009,23 +1311,21 @@ def settings(
         drops_unsupported_params=drops_unsupported_params(kwargs.get("drop_params")),
         ascii_response_headers=aiohttp,
         joined_reads=aiohttp,
+        detached_drain_timeout=ANTHROPIC_MESSAGES_DETACHED_STREAM_DRAIN_TIMEOUT_SECONDS if asynchronous else None,
+        detached_drain_limit=ANTHROPIC_MESSAGES_MAX_DETACHED_STREAM_DRAINS if asynchronous else None,
     )
-    return asdict(
-        configured if request is None else _with_call_settings(configured, request, kwargs.get("litellm_logging_obj"))
-    )
+    if request is None:
+        return asdict(configured)
+    call_settings: Final = _with_call_settings(configured, request, kwargs.get("litellm_logging_obj"))
+    if call_settings.mock_response is None and not call_settings.mcp_gateway:
+        _refuse_unsupported_thread(request, asynchronous)
+    return asdict(call_settings)
 
 
 def _flag_messages_call(logger: object, asynchronous: bool) -> None:
     if not isinstance(logger, LiteLLMLoggingObj):
         return
     logger.model_call_details.setdefault("litellm_params", {})[CallTypes.aanthropic_messages.value] = asynchronous
-
-
-def _flag_azure_ai_call(request: Mapping[str, object], request_provider: str, asynchronous: bool) -> None:
-    """Python's handler flags the call before it gets the credential or refuses a param. By the owner's ruling
-    anthropic keeps main's unflagged failure."""
-    if request_provider == "azure_ai":
-        _flag_messages_call(request.get("litellm_logging_obj"), asynchronous)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1296,7 +1596,7 @@ def map_token_failure(
 ) -> Exception:
     """Python's handler maps a litellm exception raised while it gets the call's credential, and lets any other
     exception through as raised."""
-    _flag_azure_ai_call(request, request_provider, asynchronous)
+    _flag_messages_call(request.get("litellm_logging_obj"), asynchronous)
     if not isinstance(error, BaseLLMException):
         return error
     return _public_provider_error(error, error, request, request_provider)
@@ -1518,13 +1818,14 @@ def unencodable_header(value: bytes, received: bool) -> Exception:
 def _sent_url(request: Mapping[str, object], url: str) -> str:
     """The native URL builder trims the caller's api_base; Python sends it as given."""
     api_base: Final = request.get("api_base")
-    if (
-        not isinstance(api_base, str)
-        or api_base == api_base.strip()
-        or not _unsendable_api_base(api_base)
-        or _resolved_provider(request) != "anthropic"
-    ):
+    if not isinstance(api_base, str) or api_base == api_base.strip() or not _unsendable_api_base(api_base):
         return url
+    provider: Final = _resolved_provider(request)
+    if provider not in ("anthropic", "bedrock"):
+        return url
+    if provider == "bedrock":
+        trimmed: Final = f"{api_base.strip().rstrip('/')}/"
+        return join_api_base(api_base, url.removeprefix(trimmed)) if url.startswith(trimmed) else url
     try:
         return _python_messages_url(api_base) if url == _python_messages_url(api_base.strip()) else url
     except ValueError:  # a base urlsplit cannot split keeps the URL the native builder made

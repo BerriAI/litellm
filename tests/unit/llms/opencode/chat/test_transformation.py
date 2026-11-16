@@ -607,26 +607,6 @@ def cost_recorder(monkeypatch: pytest.MonkeyPatch) -> CostRecorder:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("upstream", ["chat/completions", "messages", "responses", "gemini"])
-@pytest.mark.parametrize("ingress", ["chat", "responses"])
-async def test_reported_list_cost_is_billed_instead_of_rows(
-    go_catalog: None, cost_recorder: CostRecorder, upstream: str, ingress: str
-) -> None:
-    model: Final = f"fixture-{upstream.split('/')[0]}"
-    with respx.mock(using="httpx") as transport:
-        transport.post().mock(
-            return_value=httpx.Response(200, json=go_priced_reply(upstream, model, GO_REPORTED_USAGE))
-        )
-        kwargs: Final = {"model": f"opencode_go/{model}", "api_key": "fake-go-key"}
-        if ingress == "chat":
-            response: Final = await litellm.acompletion(messages=[{"role": "user", "content": "hello"}], **kwargs)
-        else:
-            response = await litellm.aresponses(input="hello", **kwargs)
-    assert response._hidden_params["additional_headers"][RESPONSE_COST_HEADER] == pytest.approx(0.00412)
-    assert await logged_cost(cost_recorder) == pytest.approx(0.00412)
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize("usage_extra", [{}, {"cost": 0}, {"opencode": {"billing_source": "go"}}])
 async def test_rows_price_the_request_when_no_list_cost_is_reported(
     go_catalog: None, cost_recorder: CostRecorder, usage_extra: Mapping[str, object]

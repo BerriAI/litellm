@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerBaseUrlGetter } from "@/lib/http/runtime";
 import { uiHref } from "@/utils/uiHref";
+import { EMPTY_DAILY_ACTIVITY_METADATA } from "@/components/UsagePage/dailyActivityApi";
 import {
   act,
   fireEvent,
@@ -66,6 +67,9 @@ const requestedUrls = () => fetchMock.mock.calls.map(([input]) => requestUrl(inp
 
 function serve(input: Parameters<typeof fetch>[0]): Response {
   const url = requestUrl(input);
+  if (url.pathname.endsWith("/daily/activity/aggregated"))
+    return json({ results: [], metadata: EMPTY_DAILY_ACTIVITY_METADATA });
+  if (url.pathname.endsWith("/daily/activity")) return json({ results: [], metadata: EMPTY_DAILY_ACTIVITY_METADATA });
   if (url.pathname === "/models")
     return json({ data: [{ id: "configured-model", object: "model", created: 0, owned_by: "openai" }] });
   if (url.pathname === "/management/v1/customer_organizations/org-1") return json(organization);
@@ -113,6 +117,183 @@ function BrowserNavigationProbe() {
 }
 
 describe("customer hierarchy management", () => {
+  it.each(["teams", "members"])(
+    "requests %s budget sorting before pagination and stores it in the URL",
+    async (kind) => {
+      const onUrlUpdate = vi.fn();
+      const options = { searchParams: `?org=org-1&tab=${kind}&hierarchyPage=2&source=portal`, onUrlUpdate };
+      renderWithProviders(<CustomerHierarchyManager />, options);
+      await screen.findByRole("button", { name: kind === "teams" ? "Operations" : "Member Two" }, { timeout: 10_000 });
+      const table = screen.getByRole("table", { name: kind === "teams" ? "Customer teams" : "Customer members" });
+      const sort = within(table).getByRole("button", { name: "Spend limit (USD)" });
+      fireEvent.click(sort);
+      await waitFor(() =>
+        expect(onUrlUpdate).toHaveBeenLastCalledWith(
+          expect.objectContaining({ queryString: `?org=org-1&tab=${kind}&source=portal&budgetSort=budget_asc` }),
+        ),
+      );
+      const listRequests = () => requestedUrls().filter((url) => url.pathname === `/management/v1/customer_${kind}`);
+      await waitFor(() => expect(listRequests().at(-1)?.searchParams.get("sort")).toBe("budget_asc"));
+      expect(listRequests().at(-1)?.searchParams.get("page")).toBe("1");
+      fireEvent.click(within(screen.getByRole("table")).getByRole("button", { name: "Spend limit (USD)" }));
+      await waitFor(() => expect(listRequests().at(-1)?.searchParams.get("sort")).toBe("budget_desc"));
+    },
+  );
+
+  it.each(["", "Member One"])(
+    "moves a member through its row menu with search %j without editing budgets",
+    async (search) => {
+      const user = userEvent.setup();
+      const moved = { ...member, parent_team_ids: ["team-b"] };
+      fetchMock.mockImplementation(async (input, init) => {
+        const url = requestUrl(input);
+        const method = input instanceof Request ? input.method : init?.method;
+        if (url.pathname === "/management/v1/customer_members/member-a" && method === "PATCH") return json(moved);
+        return serve(input);
+      });
+      const options = { searchParams: `?org=org-1&tab=members&memberSearch=${encodeURIComponent(search)}` };
+      renderWithProviders(<CustomerHierarchyManager />, options);
+      await user.click(await screen.findByRole("button", { name: "Actions for Member One" }));
+      expect(screen.getAllByRole("searchbox", { name: "Search customer members by name or ID" })).toHaveLength(1);
+      expect(screen.getByRole("searchbox", { name: "Search customer members by name or ID" })).toHaveValue(search);
+      expect(
+        requestedUrls()
+          .find((url) => url.pathname === "/management/v1/customer_members")
+          ?.searchParams.get("search"),
+      ).toBe(search || null);
+      await user.keyboard("{ArrowDown}");
+      await user.click(await screen.findByRole("menuitem", { name: "Move teams" }));
+      const dialog = screen.getByRole("dialog", { name: "Move teams" });
+      const teams = within(dialog).getByRole("combobox", { name: "Choose teams" });
+      await waitFor(() => expect(teams).toBeEnabled());
+      await user.click(teams);
+      await user.click(screen.getByRole("option", { name: /Operations/ }));
+      await user.click(screen.getByRole("option", { name: /Product/ }));
+      await user.keyboard("{Escape}");
+      await user.click(within(dialog).getByRole("button", { name: "Move teams" }));
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+      const write = fetchMock.mock.calls
+        .map(([input]) => input)
+        .find((input) => input instanceof Request && input.method === "PATCH");
+      expect(write).toBeInstanceOf(Request);
+      expect(await (write as Request).clone().json()).toEqual({ parent_team_ids: ["team-b"] });
+    },
+  );
+
+  it.each(["teams", "members"] as const)(
+    "should show usage-style budgets, spend share, tokens and actions for customer %s",
+    async (kind) => {
+      const id = kind === "teams" ? "team-a" : "member-a";
+      const label = kind === "teams" ? "Product" : "Member One";
+      const collection = kind === "teams" ? "customer_teams" : "customer_members";
+      const budgetUsage = [
+        { source: "scalar", budget_duration: "1mo", max_budget: 10, spend: 3, reset_at: null },
+        { source: "window", budget_duration: "12mo", max_budget: 100, spend: 7, reset_at: null },
+      ];
+      fetchMock.mockImplementation(async (input) => {
+        const url = requestUrl(input);
+        if (url.pathname === `/management/v1/${collection}`) {
+          return json({
+            data: [
+              { ...(kind === "teams" ? product : member), budget_usage: budgetUsage },
+              {
+                ...(kind === "teams" ? product : member),
+                [kind === "teams" ? "customer_team_id" : "customer_member_id"]: `${id},other`,
+                alias: "Comma ID",
+              },
+            ],
+            meta: { total_count: 2, page: 1, page_size: 20, total_pages: 1 },
+          });
+        }
+        if (url.pathname.endsWith("/daily/activity/aggregated"))
+          return json({ results: [], metadata: { ...EMPTY_DAILY_ACTIVITY_METADATA, total_spend: 12 } });
+        if (!url.pathname.endsWith("/daily/activity")) return serve(input);
+        const spend = url.pathname.includes("customer_organizations") ? 12 : 3;
+        const metrics = {
+          spend,
+          total_tokens: 250,
+          prompt_tokens: 250,
+          completion_tokens: 0,
+          api_requests: 1,
+          successful_requests: 1,
+          failed_requests: 0,
+          cache_read_input_tokens: 0,
+          cache_creation_input_tokens: 0,
+        };
+        return json({
+          results: [
+            {
+              date: url.searchParams.get("start_date"),
+              metrics,
+              breakdown: {
+                models: {},
+                model_groups: {},
+                providers: {},
+                mcp_servers: {},
+                api_keys: {},
+                entities: { [id]: { metrics, metadata: {}, api_key_breakdown: {} } },
+              },
+            },
+          ],
+          metadata: {
+            ...EMPTY_DAILY_ACTIVITY_METADATA,
+            total_spend: spend,
+            total_tokens: 250,
+            total_api_requests: 1,
+          },
+        });
+      });
+      renderWithProviders(<CustomerHierarchyManager />, { searchParams: `?org=org-1&tab=${kind}` });
+      const table = await screen.findByRole("table", {
+        name: kind === "teams" ? "Customer teams" : "Customer members",
+      });
+      const progress = await within(table).findByRole("progressbar", { name: "Spend this month / monthly limit" });
+      expect(progress).toHaveAttribute("aria-valuenow", "30");
+      expect(within(table).getByText("$3.00 / $10.00")).toBeInTheDocument();
+      expect(within(table).getByText("$7.00 remains")).toBeInTheDocument();
+      expect(within(table).getByText("$7.00 / $100.00")).toBeInTheDocument();
+      expect(within(table).getByRole("meter", { name: "Share of customer spend" })).toHaveAttribute(
+        "aria-valuenow",
+        "25",
+      );
+      expect(within(table).getByRole("cell", { name: "250" })).toBeInTheDocument();
+      expect(within(table).getByText("Within budget")).toBeInTheDocument();
+      expect(
+        within(table).getByRole("button", { name: kind === "teams" ? `Edit ${label}` : `Actions for ${label}` }),
+      ).toBeEnabled();
+      const validRow = within(table).getByRole("row", { name: new RegExp(label) });
+      expect(within(validRow).getByRole("link", { name: "View usage" })).toHaveAttribute(
+        "href",
+        `${uiHref("customers/usage")}?org=org-1&${kind === "teams" ? "team" : "member"}=${id}`,
+      );
+      const unavailableRow = within(table).getByRole("row", { name: /Comma ID/ });
+      expect(within(unavailableRow).getByRole("status")).toHaveTextContent("Unavailable");
+      expect(within(unavailableRow).queryByRole("meter")).not.toBeInTheDocument();
+      const activity = requestedUrls().filter((url) => url.pathname.endsWith("/daily/activity"));
+      expect(activity).toHaveLength(2);
+      expect(
+        activity
+          .filter((url) => url.pathname.includes(collection))
+          .every((url) => url.searchParams.get(kind === "teams" ? "customer_team_ids" : "customer_member_ids") === id),
+      ).toBe(true);
+    },
+  );
+
+  it.each(["/daily/activity", "/daily/activity/aggregated"])(
+    "should keep row actions without showing zero usage when %s fails",
+    async (route) => {
+      fetchMock.mockImplementation(async (input) =>
+        requestUrl(input).pathname.endsWith(route) ? json({ detail: "Usage unavailable" }, 503) : serve(input),
+      );
+      renderWithProviders(<CustomerHierarchyManager />, { searchParams: "?org=org-1" });
+      const table = await screen.findByRole("table", { name: "Customer teams" });
+      expect(await screen.findByRole("alert")).toHaveTextContent("Usage unavailable");
+      expect(within(table).getByRole("status")).toHaveTextContent("Unavailable");
+      expect(within(table).queryByRole("meter")).not.toBeInTheDocument();
+      expect(within(table).getByRole("button", { name: "Edit Product" })).toBeEnabled();
+    },
+  );
+
   it("should preserve a draft on refresh and conflict, then reload and save the current configuration", async () => {
     const user = userEvent.setup();
     const standard = {
@@ -216,6 +397,22 @@ describe("customer hierarchy management", () => {
     testQueryClient.clear();
   });
 
+  it("keeps usage dates while opening team settings and returning to usage", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<CustomerHierarchyManager />, { searchParams: "?org=org-1&from=2026-11-01&to=2026-11-03" });
+    await screen.findByRole("table", { name: "Customer teams" });
+    await user.click(screen.getByRole("button", { name: "Edit Product" }));
+    await screen.findByRole("heading", { name: "Product" });
+    expect(screen.getByRole("link", { name: "Usage", exact: true })).toHaveAttribute(
+      "href",
+      `${uiHref("customers/usage")}?org=org-1&team=team-a&from=2026-11-01&to=2026-11-03`,
+    );
+    expect(screen.getByRole("link", { name: "Customer organizations", exact: true })).toHaveAttribute(
+      "href",
+      `${uiHref("customers")}?from=2026-11-01&to=2026-11-03`,
+    );
+  });
+
   it("should render the selected organization and request its paginated teams", async () => {
     const user = userEvent.setup();
     renderWithProviders(<CustomerHierarchyManager />, { searchParams: "?org=org-1" });
@@ -304,6 +501,67 @@ describe("customer hierarchy management", () => {
     ]);
   });
 
+  it("should search customer members on the server from the first page and ignore a slower earlier search", async () => {
+    const slow = Promise.withResolvers<Response>();
+    fetchMock.mockImplementation(async (input) => {
+      const url = requestUrl(input);
+      const search = url.searchParams.get("search");
+      if (url.pathname !== "/management/v1/customer_members" || search === null) return serve(input);
+      if (search === "one") return slow.promise;
+      const data = search === "two" ? [supportMember] : [];
+      return json({ data, meta: { total_count: data.length, page: 1, page_size: 20, total_pages: 1 } });
+    });
+    const onUrlUpdate = vi.fn();
+    renderWithProviders(<CustomerHierarchyManager />, {
+      searchParams: "?org=org-1&tab=members&hierarchyPage=2",
+      onUrlUpdate,
+    });
+    const table = await screen.findByRole("table", { name: "Customer members" });
+    expect(within(table).queryByRole("button", { name: "Member One" })).not.toBeInTheDocument();
+    const search = screen.getByRole("searchbox", { name: "Search customer members by name or ID" });
+    const searches = () =>
+      requestedUrls()
+        .filter((url) => url.pathname === "/management/v1/customer_members" && url.searchParams.has("search"))
+        .map((url) => [
+          url.searchParams.get("search"),
+          url.searchParams.get("parent_org_id"),
+          url.searchParams.get("page"),
+        ]);
+
+    fireEvent.change(search, { target: { value: " one " } });
+    await waitFor(() => expect(searches()).toEqual([["one", "org-1", "1"]]));
+    expect(onUrlUpdate).toHaveBeenLastCalledWith(
+      expect.objectContaining({ queryString: "?org=org-1&tab=members&memberSearch=one" }),
+    );
+    fireEvent.change(search, { target: { value: "two" } });
+    expect(await screen.findByRole("button", { name: "Member Two" })).toBeInTheDocument();
+    slow.resolve(json({ data: [member], meta: { total_count: 1, page: 1, page_size: 20, total_pages: 1 } }));
+    await act(async () => {
+      await slow.promise;
+    });
+    expect(screen.queryByRole("button", { name: "Member One" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Member Two" })).toBeInTheDocument();
+
+    fireEvent.change(search, { target: { value: "nobody" } });
+    expect(await screen.findByText("No customer members match your search.")).toBeInTheDocument();
+    expect(search).toHaveValue("nobody");
+    fireEvent.change(search, { target: { value: "" } });
+    expect(await screen.findByRole("button", { name: "Member One" })).toBeInTheDocument();
+    expect(onUrlUpdate).toHaveBeenLastCalledWith(expect.objectContaining({ queryString: "?org=org-1&tab=members" }));
+    expect(searches().map(([value]) => value)).toEqual(["one", "two", "nobody"]);
+  });
+
+  it("should restore a customer member search from the URL within the selected customer team", async () => {
+    renderWithProviders(<CustomerHierarchyManager />, { searchParams: "?org=org-1&team=team-a&memberSearch=Member" });
+    expect(await screen.findByRole("button", { name: "Member One" })).toBeInTheDocument();
+    expect(screen.getByRole("searchbox", { name: "Search customer members by name or ID" })).toHaveValue("Member");
+    expect(
+      requestedUrls()
+        .filter((url) => url.pathname === "/management/v1/customer_members")
+        .map((url) => [url.searchParams.get("parent_team_id"), url.searchParams.get("search")]),
+    ).toEqual([["team-a", "Member"]]);
+  });
+
   it.each([2, 0])(
     "should reset an out-of-range hierarchy deep link when the collection has %i pages",
     async (totalPages) => {
@@ -348,7 +606,9 @@ describe("customer hierarchy management", () => {
         .find((url) => url.pathname === "/management/v1/customer_members")
         ?.searchParams.get("parent_team_id"),
     ).toBe("team-a");
-    await user.click(within(members).getByRole("button", { name: "Edit Member One" }));
+    await user.click(within(members).getByRole("button", { name: "Actions for Member One" }));
+    await user.keyboard("{ArrowDown}");
+    await user.click(await screen.findByRole("menuitem", { name: "Settings" }));
     expect(await screen.findByRole("heading", { name: "Member One" })).toBeInTheDocument();
     expect(screen.getByText("Manage settings and budget for this customer member.")).toBeInTheDocument();
     const usage = screen.getByRole("link", { name: "Usage" });

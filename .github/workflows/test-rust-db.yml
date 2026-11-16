@@ -91,6 +91,8 @@ jobs:
 
       - name: Install Python dependencies
         working-directory: .
+        env:
+          SQLX_OFFLINE: "true"
         run: uv sync --frozen --extra extra-proxy
 
       - name: Deploy Prisma migrations

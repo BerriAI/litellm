@@ -49,7 +49,7 @@ def saturated_model(tmp_path_factory: pytest.TempPathFactory) -> Iterator[tuple[
             "priority_reservation_settings": {
                 "default_priority": 1.0,
                 "saturation_threshold": 0.5,
-                "team_model_limit_borrows_idle_capacity_from_other_teams": True,
+                "model_limit_borrowing_config": {"borrow_idle_capacity": ["team"]},
                 "saturation_check_cache_ttl": SATURATION_CACHE_TTL,
             },
         },

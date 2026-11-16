@@ -920,13 +920,12 @@ impl litellm_tracing::Sink for Warnings {
 }
 
 #[rstest]
-#[case::anthropic_logs_as_main("anthropic", false)]
-#[case::azure_ai_logs_python_s_warning("azure_ai", true)]
+#[case::anthropic("anthropic")]
+#[case::azure_ai("azure_ai")]
 #[tokio::test]
-async fn a_speed_dropped_under_drop_params_is_logged_only_on_azure_ai(
+async fn a_speed_dropped_under_drop_params_logs_python_s_warning(
     call: MessagesCall,
     #[case] provider: &str,
-    #[case] logged: bool,
 ) {
     let upstream = upstream([message_response()]).await;
     let warnings = Warnings::default();
@@ -956,11 +955,7 @@ async fn a_speed_dropped_under_drop_params_is_logged_only_on_azure_ai(
         .filter(|message| message.starts_with("Dropping unsupported `speed`"))
         .cloned()
         .collect();
-    assert_eq!(
-        speed_warnings.len(),
-        usize::from(logged),
-        "{speed_warnings:?}"
-    );
+    assert_eq!(speed_warnings.len(), 1, "{speed_warnings:?}");
 }
 
 #[rstest]

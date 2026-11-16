@@ -213,7 +213,7 @@ from litellm.router_strategy.auto_router.auto_router_tuning_baseline import (
     snapshot_tuning_baselines,
     tuning_limit_violation,
 )
-from litellm.rust_bridge.catalog import Target
+from litellm.rust_bridge.catalog import NATIVE_MESSAGES_TARGETS, Target
 from litellm.types.utils import (
     PRICING_OVERRIDES_KEY,
     CallTypes,
@@ -681,6 +681,7 @@ from litellm.proxy.config_resolvers.settings_rules import (
 from litellm.proxy.config_resolvers.sso import SSO_FIELD_ENV_VARS
 from litellm.proxy.container_endpoints.endpoints import router as container_router
 from litellm.proxy.credential_endpoints.endpoints import router as credential_router
+from litellm.proxy.db.connection_budget import RUST_RESERVED_CONNECTIONS
 from litellm.proxy.db.create_views import SupportsRawQueries
 from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
 from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import (
@@ -1620,7 +1621,12 @@ async def _connect_to_count_stored_values(resources: AsyncExitStack) -> Supports
 async def _own_database(resources: AsyncExitStack, client: PrismaClient | None) -> database_runtime.Database | None:
     if client is None:
         return None
-    database: Final = await database_runtime.Database.open(client)
+    database: Final = await database_runtime.Database.open(
+        client,
+        os.environ["DATABASE_URL"],
+        os.environ.get("DATABASE_URL_READ_REPLICA") or None,
+        RUST_RESERVED_CONNECTIONS,
+    )
     resources.push_async_callback(database.aclose)
     return database
 
@@ -16124,7 +16130,6 @@ def _count_context_management(
 
 
 _GATEWAY_EDIT_ROUTES: Final = frozenset({Target.CHAT_COMPLETIONS, Target.RESPONSES})
-_MESSAGES_ROUTES: Final = frozenset({Target.MESSAGES, Target.MESSAGES_PASSTHROUGH})
 
 
 def _messages_route(deployment: _TokenCountDeployment, request_model: str) -> Target:
@@ -16441,12 +16446,13 @@ async def _routed_count_deployment(
     if llm_router is None:
         return None
     try:
-        return await llm_router.select(model, dict(_responses_routing_kwargs(responses_request)))
+        routed: Final = await llm_router.select(model, dict(_responses_routing_kwargs(responses_request)))
     except Exception:
         verbose_proxy_logger.exception(
             "litellm.proxy.proxy_server.token_counter(): Exception occured while getting deployment"
         )
         return None
+    return routed if isinstance(routed, Mapping) else None
 
 
 def _with_chat_timeout(litellm_params: Mapping[str, object]) -> Mapping[str, object]:
@@ -16662,7 +16668,7 @@ async def _count_request_tokens(
 
     local_view: Final = (
         None
-        if route not in _MESSAGES_ROUTES or context_edits is None or request_messages is None
+        if route not in NATIVE_MESSAGES_TARGETS or context_edits is None or request_messages is None
         else await _bridged_request_view(
             request_messages,
             system,

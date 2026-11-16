@@ -1,4 +1,4 @@
-use std::{process::Command, task::Poll};
+use std::{cell::Cell, process::Command, task::Poll};
 
 use litellm_host::{
     machine::{HostFailure, Interrupted, Machine, MachineStep, Step},
@@ -37,6 +37,51 @@ impl Machine for DiagnosticMachine {
             Ok(())
         })
     }
+}
+
+struct ChunkMachine {
+    raise_level: bool,
+}
+
+impl Machine for ChunkMachine {
+    type Protocol = DiagnosticMachine;
+    type Complete = ();
+
+    fn resume(&mut self) -> Step<'_, Self> {
+        let raise_level = self.raise_level;
+        Box::pin(async move {
+            for index in 0..3 {
+                litellm_tracing::debug!(index, "stream chunk");
+                if raise_level {
+                    Python::attach(|py| {
+                        py.import("litellm._logging")?
+                            .getattr("verbose_logger")?
+                            .call_method1("setLevel", (10,))
+                            .map(|_| ())
+                    })
+                    .map_err(|error| error.to_string())?;
+                }
+                tokio::task::yield_now().await;
+            }
+            Ok(MachineStep::Complete(()))
+        })
+    }
+
+    fn interrupt(&mut self, _: HostFailure<String>) -> Interrupted<'_, Self> {
+        Box::pin(async { Ok(()) })
+    }
+}
+
+#[pyfunction]
+fn machine_chunks(py: Python<'_>, raise_level: bool) -> PyResult<Bound<'_, PyAny>> {
+    let mut machine = super::LoggedMachine::new(ChunkMachine { raise_level });
+    litellm_host_python::run_async_value(py, async move {
+        machine
+            .resume()
+            .await
+            .map(|_| ())
+            .map_err(pyo3::exceptions::PyValueError::new_err)
+    })
 }
 
 #[pyfunction]
@@ -123,6 +168,24 @@ fn http_warning(py: Python<'_>) -> PyResult<()> {
 }
 
 #[rstest::rstest]
+#[case::debug(10)]
+#[case::info(20)]
+#[case::warning(30)]
+#[case::error(40)]
+fn call_levels_ask_python_once_per_level(#[case] level: u8, #[values(true, false)] enabled: bool) {
+    let levels = super::Levels::default();
+    let queries = Cell::new(0);
+    let query = || {
+        queries.set(queries.get() + 1);
+        enabled
+    };
+    assert_eq!(levels.enabled(level, query), enabled);
+    assert_eq!(levels.enabled(level, query), enabled);
+    assert_eq!(levels.enabled(level, query), enabled);
+    assert_eq!(queries.get(), 1);
+}
+
+#[rstest::rstest]
 fn native_events_reach_python_with_levels_context_reentry_and_http_deduplication() {
     if std::env::var_os("LITELLM_LOGGER_TEST_PROCESS").is_none() {
         let output = Command::new(std::env::current_exe().unwrap())
@@ -155,6 +218,12 @@ fn native_events_reach_python_with_levels_context_reentry_and_http_deduplication
             .set_item(
                 "machine_warning",
                 wrap_pyfunction!(machine_warning, py).unwrap(),
+            )
+            .unwrap();
+        locals
+            .set_item(
+                "machine_chunks",
+                wrap_pyfunction!(machine_chunks, py).unwrap(),
             )
             .unwrap();
         locals
@@ -280,6 +349,42 @@ try:
         ('trace', logging.DEBUG), ('debug', logging.DEBUG), ('info', logging.INFO),
         ('warn', logging.WARNING), ('error', logging.ERROR),
     ]
+
+    import litellm.rust_bridge.host.logger as host_logger
+    original_enabled = host_logger.enabled
+    queries = []
+    def counting_enabled(level):
+        queries.append(level)
+        return original_enabled(level)
+    host_logger.enabled = counting_enabled
+    async def chunks(raise_level):
+        await machine_chunks(raise_level)
+    try:
+        verbose_logger.setLevel(logging.WARNING)
+        before_chunks = len(capture.records)
+        asyncio.run(chunks(False))
+        assert capture.records[before_chunks:] == []
+        assert queries == [logging.DEBUG]
+
+        queries.clear()
+        verbose_logger.setLevel(logging.DEBUG)
+        asyncio.run(chunks(False))
+        assert [(r.getMessage(), r.levelno, r.rust_fields) for r in capture.records[before_chunks:]] == [
+            ('stream chunk', logging.DEBUG, {'index': 0}),
+            ('stream chunk', logging.DEBUG, {'index': 1}),
+            ('stream chunk', logging.DEBUG, {'index': 2}),
+        ]
+        assert queries == [logging.DEBUG] * 4
+
+        queries.clear()
+        verbose_logger.setLevel(logging.WARNING)
+        before_raise = len(capture.records)
+        asyncio.run(chunks(True))
+        assert capture.records[before_raise:] == []
+        assert queries == [logging.DEBUG]
+    finally:
+        host_logger.enabled = original_enabled
+        verbose_logger.setLevel(logging.DEBUG)
 
     before_spans = len(capture.records)
     async def traced_request():

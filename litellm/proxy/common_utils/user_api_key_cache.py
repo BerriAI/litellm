@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import re
 from collections.abc import Awaitable, Callable, Mapping, Sequence
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final, TypeAlias, TypeVar, cast, overload
 from weakref import WeakValueDictionary
 
@@ -46,6 +47,13 @@ _TTL: Final[TypeAdapter[float | None]] = TypeAdapter(float | None)
 
 def _ttl(kwargs: Mapping[str, object]) -> float | None:
     return _TTL.validate_python(kwargs.get("ttl"))
+
+
+@dataclass(frozen=True, slots=True)
+class _DecodedModel:
+    payload: object
+    model_type: type[BaseModel]
+    model: BaseModel
 
 
 class CacheLease:
@@ -114,6 +122,7 @@ class UserApiKeyCache(DualCache):
         self._redis_connection: RedisCache | None = None
         self._shared: AuthCacheStore | None = None
         self._leases: Final[WeakValueDictionary[str, CacheLease]] = WeakValueDictionary()
+        self._decoded_models: Final[dict[str, _DecodedModel]] = {}  # mutable-ok: per-key memo of validated reads
         self.attach_redis_cache(redis_cache, default_redis_ttl=default_redis_ttl)
 
     @property
@@ -175,6 +184,7 @@ class UserApiKeyCache(DualCache):
 
     def set_local(self, key: str, value: object, ttl: float | None) -> None:
         """A memory write alone, with ``default_in_memory_ttl`` when ``ttl`` is None."""
+        self._drop_decoded((key,))
         if self._shared is not None:
             self._shared.set_local(key, value, ttl)
             return
@@ -199,6 +209,7 @@ class UserApiKeyCache(DualCache):
         """Caches ``value`` unless the lease's key was evicted since it was taken; False when refused."""
         if self._leases.get(lease.key) is not lease:
             return False
+        self._drop_decoded((lease.key,))
         shared: Final = self._shared
         if shared is None:
             await self.async_set_cache(key=lease.key, value=value, ttl=ttl)
@@ -214,8 +225,34 @@ class UserApiKeyCache(DualCache):
         return True
 
     def _void_leases(self, keys: Sequence[str]) -> None:
+        self._drop_decoded(keys)
         for key in keys:
             _ = self._leases.pop(key, None)
+
+    def _drop_decoded(self, keys: Sequence[str]) -> None:
+        for key in keys:
+            _ = self._decoded_models.pop(key, None)
+
+    def _decoded(self, cached: object, key: str, model_type: type[BaseModel] | None, method: str) -> object:
+        """In Python memory, a read of the same payload object a previous read validated returns a shallow copy of
+        that model instead of validating again, so a caller that sets a field cannot change what the next reader
+        gets. The shared store hands back a new payload on every read, so it is validated each time."""
+        if model_type is None or cached is None:
+            return cached
+        memo: Final = self._decoded_models.get(key)
+        if memo is not None and memo.payload is cached and memo.model_type is model_type:
+            return memo.model.model_copy()
+        decoded: Final = _validated(cached, key, model_type, method)
+        if decoded is None or decoded is cached or self._shared is not None:
+            return decoded
+        _ = self._decoded_models.pop(key, None)
+        self._decoded_models[key] = _DecodedModel(payload=cached, model_type=model_type, model=decoded)
+        if len(self._decoded_models) > self._decoded_capacity():
+            _ = self._decoded_models.pop(next(iter(self._decoded_models)))
+        return decoded.model_copy()
+
+    def _decoded_capacity(self) -> int:
+        return self.in_memory_cache.max_size_in_memory + self.key_object_cache.in_memory_cache.max_size_in_memory
 
     def delete_local(self, key: str) -> None:
         """Drops this worker's memory copy alone, as a cross-worker eviction broadcast does."""
@@ -271,7 +308,7 @@ class UserApiKeyCache(DualCache):
             if is_user_key_cache_key(key)
             else super().get_cache(key=key, parent_otel_span=parent_otel_span, local_only=local_only, **kwargs)
         )
-        return _decoded(cached, key, model_type, "get_cache")
+        return self._decoded(cached, key, model_type, "get_cache")
 
     @overload
     async def async_get_cache(
@@ -316,7 +353,7 @@ class UserApiKeyCache(DualCache):
                 key=key, parent_otel_span=parent_otel_span, local_only=local_only, **kwargs
             )
         )
-        return _decoded(cached, key, model_type, "async_get_cache")
+        return self._decoded(cached, key, model_type, "async_get_cache")
 
     @staticmethod
     def _get_shared_sync(shared: AuthCacheStore, key: str, local_only: bool) -> object:
@@ -337,6 +374,8 @@ class UserApiKeyCache(DualCache):
     def set_cache(self, key: str | None, value: CacheValue, local_only: bool = False, **kwargs: object):
         model_type: Final = cast(type[BaseModel] | None, kwargs.pop("model_type", None))
         payload: Final[object] = CacheCodec.serialize(value, model_type=model_type)
+        if key is not None:
+            self._drop_decoded((key,))
         shared: Final = self._shared
         if shared is not None:
             if key is None:
@@ -358,6 +397,8 @@ class UserApiKeyCache(DualCache):
         else, or with options the pipeline does not carry, it goes to Redis directly as before."""
         model_type: Final = cast(type[BaseModel] | None, kwargs.pop("model_type", None))
         payload: Final[object] = CacheCodec.serialize(value, model_type=model_type)
+        if key is not None:
+            self._drop_decoded((key,))
         ttl: Final = kwargs.get("ttl")
         pipelined: Final = (
             key is not None
@@ -443,6 +484,7 @@ class UserApiKeyCache(DualCache):
 
     def flush_cache(self) -> None:
         self._leases.clear()
+        self._decoded_models.clear()
         self.budget_windows_absent_cache.flush_cache()
         if self._shared is not None:
             self._shared.flush_local()
@@ -458,6 +500,7 @@ class UserApiKeyCache(DualCache):
         ``model_type``: ``BaseModel`` values become JSON-safe dicts; dicts/scalars unchanged.
         """
         normalized: Final = tuple((key, CacheCodec.serialize(value, model_type=None)) for key, value in cache_list)
+        self._drop_decoded(tuple(key for key, _ in normalized))
         shared: Final = self._shared
         if shared is not None:
             await self._set_many_shared(shared, normalized, local_only=local_only, ttl=_ttl(kwargs))
@@ -519,9 +562,7 @@ class UserApiKeyCache(DualCache):
         )
 
 
-def _decoded(cached: object, key: str, model_type: type[BaseModel] | None, method: str) -> object:
-    if model_type is None or cached is None:
-        return cached
+def _validated(cached: object, key: str, model_type: type[BaseModel], method: str) -> BaseModel | None:
     decoded: Final = CacheCodec.deserialize(cached, model_type=model_type)
     if decoded is None:
         verbose_proxy_logger.error(

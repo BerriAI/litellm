@@ -11,6 +11,7 @@ Run checks for:
 
 import asyncio
 import math
+import os
 import re
 import time
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
@@ -185,6 +186,7 @@ from litellm.repositories.user_repository import UserRepository
 from litellm.responses.additional_tools import additional_tools_in_input
 from litellm.router import Router
 from litellm.router_api import RegistryReader
+from litellm.secret_managers.main import str_to_bool
 from litellm.types.proxy.auth.auth_checks import UserNotFoundError
 from litellm.types.proxy.model_access_group_budget import ModelAccessGroupBudget
 from litellm.types.router import DeploymentTypedDict
@@ -205,6 +207,8 @@ from .auth_utils import (
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
+
+    from litellm.proxy.spend_tracking.native_budgets import BudgetDecision
 
     Span = _Span
 else:
@@ -242,6 +246,7 @@ class _PrismaVectorStoreRow(Protocol):
 
 class _PrismaUserRow(Protocol):
     user_id: str
+    sso_user_id: str | None
 
     @property
     def organization_memberships(self) -> Sequence[_PrismaModelDumpRow | None] | None: ...
@@ -505,6 +510,7 @@ _safe_json_loads_obj: Final = _typed_json_loads(safe_json_loads)
 
 last_db_access_time: Final = LimitedSizeOrderedDict(max_size=100)
 db_cache_expiry: Final = DEFAULT_IN_MEMORY_TTL  # refresh every 5s
+email_in_use_checked_at: Final = LimitedSizeOrderedDict(max_size=1000)
 
 _TEAM_MEMBERSHIP_INFLIGHT_MAX: Final = 10000
 _team_membership_inflight: Final = LimitedSizeOrderedDict(max_size=_TEAM_MEMBERSHIP_INFLIGHT_MAX)
@@ -948,12 +954,11 @@ def _global_proxy_budget_check(global_proxy_spend: float | None, skip_budget_che
         and RouteChecks.runs_inference_checks(route=route)
         and route not in MODEL_LIST_ROUTES
     ):
-        if math.isfinite(litellm.max_budget) and global_proxy_spend > litellm.max_budget:
-            raise litellm.BudgetExceededError(
-                current_cost=global_proxy_spend,
-                max_budget=litellm.max_budget,
-                entity_type=Litellm_EntityType.PROXY.value,
-            )
+        native: Final = _native_budget_decision(
+            {"check": "proxy", "spend": global_proxy_spend, "max_budget": litellm.max_budget}
+        )
+        if native.refused:
+            raise native.error()
 
 
 _GUARDRAIL_MODIFICATION_KEYS: Final[tuple] = (
@@ -1488,14 +1493,16 @@ async def common_checks(
                     user_info=call_info,
                 )
             )
-            if math.isfinite(user_budget) and user_spend >= user_budget:
-                raise litellm.BudgetExceededError(
-                    current_cost=user_spend,
-                    max_budget=user_budget,
-                    message=f"ExceededBudget: User={user_object.user_id} over budget. Spend={user_spend}, Budget={user_budget}",
-                    entity_type=Litellm_EntityType.USER.value,
-                    entity_id=user_object.user_id,
-                )
+            native: Final = _native_budget_decision(
+                {
+                    "check": "user",
+                    "spend": user_spend,
+                    "max_budget": user_budget,
+                    "user_id": user_object.user_id,
+                }
+            )
+            if native.refused:
+                raise native.error()
 
         # Each scope reads a distinct counter key with no cross-scope ordering
         # dependency, so the per-scope Redis-first reads run concurrently instead
@@ -2032,14 +2039,16 @@ async def check_end_user_budget(
         max_budget=end_user_budget,
         fallback_authoritative=True,
     )
-    if end_user_spend > end_user_budget:
-        raise litellm.BudgetExceededError(
-            current_cost=end_user_spend,
-            max_budget=end_user_budget,
-            message=f"ExceededBudget: End User={end_user_obj.user_id} over budget. Spend={end_user_spend}, Budget={end_user_budget}",
-            entity_type=Litellm_EntityType.END_USER.value,
-            entity_id=end_user_obj.user_id,
-        )
+    native: Final = _native_budget_decision(
+        {
+            "check": "end_user",
+            "spend": end_user_spend,
+            "max_budget": end_user_budget,
+            "end_user_id": end_user_obj.user_id,
+        }
+    )
+    if native.refused:
+        raise native.error()
 
 
 _check_end_user_budget: Final = check_end_user_budget
@@ -2982,20 +2991,27 @@ def get_role_based_routes(
     )
 
 
+def read_email_verified(value: object) -> bool | None:
+    """Some identity providers send `email_verified` as the string "true" or "false"."""
+    if isinstance(value, bool):
+        return value
+    return str_to_bool(value) if isinstance(value, str) else None
+
+
 async def _get_fuzzy_user_object(
     prisma_client: PrismaClient,
     sso_user_id: str | None = None,
     user_email: str | None = None,
+    email_verified: bool | None = None,
 ) -> "_PrismaUserRow | None":
     """
     Checks if sso user is in db.
 
     Called when user id match is not found in db.
 
-    - Check if sso_user_id is user_id in db
     - Check if sso_user_id is sso_user_id in db
-    - Check if user_email is user_email in db
-    - If not, create new user with user_email and sso_user_id and user_id = sso_user_id
+    - Check if user_email is user_email in db, unless the email is unverified; with an sso_user_id, only an unlinked
+      row matches, and it is linked only if no other sign-in linked it first
     """
 
     response = None
@@ -3005,15 +3021,19 @@ async def _get_fuzzy_user_object(
             include={"organization_memberships": True},
         )
 
-    if response is None and user_email is not None:
-        # Use case-insensitive query to handle emails with different casing
-        # This matches the pattern used in _check_duplicate_user_email
+    links_any_user: Final = _email_fallback_links_any_user()
+    if response is None and user_email is not None and (links_any_user or email_verified is not False):
+        unlinked_only: Final[Mapping[str, None]] = (
+            {} if links_any_user or sso_user_id is None else {"sso_user_id": None}
+        )
         response = await _user_table(UserRepository(prisma_client)).find_first(
-            where={"user_email": {"equals": user_email, "mode": "insensitive"}},
+            where={"user_email": email_equals(user_email), **unlinked_only},
             include={"organization_memberships": True},
         )
 
-        if response is not None and sso_user_id is not None:  # update sso_user_id
+        if sso_user_id is not None and not links_any_user:
+            return await _link_by_email(prisma_client, response, sso_user_id)
+        if response is not None and sso_user_id is not None:
             asyncio.create_task(  # background task to update user with sso id
                 _user_table(UserRepository(prisma_client)).update(
                     where={"user_id": response.user_id},
@@ -3024,6 +3044,53 @@ async def _get_fuzzy_user_object(
     return response
 
 
+async def _link_by_email(
+    prisma_client: PrismaClient, row: "_PrismaUserRow | None", sso_user_id: str
+) -> "_PrismaUserRow | None":
+    writer: Final = UserRepository(prisma_client, use_writer=True)
+    if row is not None and await writer.link_null_sso_user_id(row.user_id, sso_user_id):
+        return row
+    return await _user_table(writer).find_unique(
+        where={"sso_user_id": sso_user_id}, include={"organization_memberships": True}
+    )
+
+
+async def _link_own_sign_in_id(
+    prisma_client: PrismaClient, row: "_PrismaUserRow | None", sso_user_id: str | None
+) -> None:
+    if row is None or row.sso_user_id is not None or sso_user_id != row.user_id or _email_fallback_links_any_user():
+        return
+    await UserRepository(prisma_client, use_writer=True).link_null_sso_user_id(row.user_id, row.user_id)
+
+
+def escape_ilike(value: str) -> str:
+    """Prisma runs an insensitive `equals` as ILIKE, where `%` and `_` are wildcards and `\\` escapes them."""
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def email_equals(user_email: str) -> Mapping[str, str]:
+    return {"equals": escape_ilike(user_email), "mode": "insensitive"}
+
+
+def _email_fallback_links_any_user() -> bool:
+    return str_to_bool(os.environ.get("LITELLM_EMAIL_FALLBACK_LINKS_ANY_USER")) is True
+
+
+async def _email_free_to_store(prisma_client: PrismaClient, user_email: str | None, user_id: str) -> str | None:
+    if user_email is None or await email_belongs_to_another_user(prisma_client, user_email, user_id):
+        return None
+    return user_email
+
+
+async def email_belongs_to_another_user(prisma_client: PrismaClient, user_email: str, user_id: str) -> bool:
+    if _email_fallback_links_any_user():
+        return False
+    holder: Final = await _user_table(UserRepository(prisma_client)).find_first(
+        where={"user_email": email_equals(user_email), "user_id": {"not": user_id}},
+    )
+    return holder is not None
+
+
 @with_service_target(AUTH_OBJECTS_TARGET)
 async def _backfill_null_user_email(
     prisma_client: PrismaClient | None,
@@ -3032,6 +3099,14 @@ async def _backfill_null_user_email(
     user_email: str | None,
 ) -> LiteLLM_UserTable:
     if user_email is None or user_row.user_email is not None or prisma_client is None:
+        return user_row
+    in_use_key: Final = f"{user_row.user_id}:{user_email.casefold()}"
+    if not _should_check_db(
+        key=in_use_key, last_db_access_time=email_in_use_checked_at, db_cache_expiry=db_cache_expiry
+    ):
+        return user_row
+    _update_last_db_access_time(key=in_use_key, value=None, last_db_access_time=email_in_use_checked_at)
+    if await email_belongs_to_another_user(prisma_client, user_email, user_row.user_id):
         return user_row
 
     user_repo: Final = UserRepository(prisma_client)
@@ -3065,6 +3140,7 @@ async def get_user_object(
     sso_user_id: str | None = None,
     user_email: str | None = None,
     check_db_only: bool | None = None,
+    email_verified: bool | None = None,
 ) -> LiteLLM_UserTable | None:
     """
     - Check if user id in proxy User Table
@@ -3103,12 +3179,14 @@ async def get_user_object(
             response = await _user_table(UserRepository(prisma_client, use_writer=bool(check_db_only))).find_unique(
                 where={"user_id": user_id}, include={"organization_memberships": True}
             )
+            await _link_own_sign_in_id(prisma_client, response, sso_user_id)
 
             if response is None:
                 response = await _get_fuzzy_user_object(
                     prisma_client=prisma_client,
                     sso_user_id=sso_user_id,
                     user_email=user_email,
+                    email_verified=email_verified,
                 )
 
         else:
@@ -3126,9 +3204,15 @@ async def get_user_object(
                 scalar_default_params: Final = {
                     key: value for key, value in default_params.items() if key not in ("teams", "available_teams")
                 }
+                new_user_email: Final = await _email_free_to_store(prisma_client, user_email, user_id)
                 new_user_params: Final[dict[str, Any]] = {
                     "user_id": user_id,
-                    **({"user_email": user_email} if user_email is not None else {}),
+                    **({"user_email": new_user_email} if new_user_email is not None else {}),
+                    **(
+                        {"sso_user_id": sso_user_id}
+                        if sso_user_id is not None and not _email_fallback_links_any_user()
+                        else {}
+                    ),
                     **scalar_default_params,
                     **(
                         {"budget_limits": initial_budget_windows_json(scalar_default_params["budget_limits"])}
@@ -3153,7 +3237,7 @@ async def get_user_object(
                 if default_teams:
                     await add_new_user_to_default_team(
                         user_id=user_id,
-                        user_email=user_email,
+                        user_email=new_user_email,
                         user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
                         teams=default_teams,
                         prisma_client=prisma_client,
@@ -6957,13 +7041,6 @@ async def is_valid_fallback_model(
     return True
 
 
-# The shape abbreviate_api_key writes into LiteLLM_VerificationToken.key_name. The
-# last four characters are only barred from being whitespace or a control code,
-# because a custom key's can be anything else, punctuation and non-ASCII included;
-# a real key is at least MINIMUM_CUSTOM_KEY_LENGTH long, so it never fullmatches.
-_MASKED_KEY_NAME_RE: Final = re.compile(r"sk-\.\.\.(?:[^\s\x00-\x1f\x7f-\x9f]{4})?")
-
-
 def _apply_budget_exceeded_throttle(valid_token: UserAPIKeyAuth) -> bool:
     """
     Throttle an over-budget key instead of blocking it, when the key opted in
@@ -6980,6 +7057,17 @@ def _apply_budget_exceeded_throttle(valid_token: UserAPIKeyAuth) -> bool:
         return False
     valid_token.budget_throttle_pct = pct
     return True
+
+
+def _native_budget_decision(check: Mapping[str, object]) -> "BudgetDecision":
+    from litellm.proxy.spend_tracking.native_budgets import native_budget_decision
+
+    return native_budget_decision(check)
+
+
+def _budget_exceeded_throttle_pct(valid_token: UserAPIKeyAuth) -> float | None:
+    pct: Final = budget_throttle_percentage()
+    return pct if pct is not None and should_throttle_budget_exceeded(valid_token) else None
 
 
 async def virtual_key_max_budget_check(
@@ -7041,25 +7129,21 @@ async def virtual_key_max_budget_check(
         # Defense-in-depth (GHSA-2rv4-xv66-fpjg): spend >= NaN is always False,
         # so a NaN max_budget would silently disable enforcement.  Treat a
         # non-finite max_budget as "no configured limit" rather than as a bypass.
-        if math.isfinite(valid_token.max_budget) and spend >= valid_token.max_budget:
-            if _apply_budget_exceeded_throttle(valid_token):
-                return
-            # This message is returned to the caller, and key_name has no enforced
-            # shape (a direct DB write bypasses abbreviate_api_key), so echo it only
-            # when it still looks masked and fall back to the alias otherwise.
-            key_label: Final = valid_token.key_alias or "key"
-            key_descriptor: Final = (
-                f"{key_label} ({valid_token.key_name})"
-                if valid_token.key_name and _MASKED_KEY_NAME_RE.fullmatch(valid_token.key_name)
-                else key_label
-            )
-            raise litellm.BudgetExceededError(
-                current_cost=spend,
-                max_budget=valid_token.max_budget,
-                message=f"Budget has been exceeded! Key={key_descriptor} Current cost: {spend}, Max budget: {valid_token.max_budget}",
-                entity_type=Litellm_EntityType.KEY.value,
-                entity_id=valid_token.token,
-            )
+        native: Final = _native_budget_decision(
+            {
+                "check": "key_max",
+                "spend": spend,
+                "max_budget": valid_token.max_budget,
+                "token": valid_token.token,
+                "key_alias": valid_token.key_alias,
+                "key_name": valid_token.key_name,
+                "throttle_pct": _budget_exceeded_throttle_pct(valid_token),
+            }
+        )
+        if native.decision == "throttle" and _apply_budget_exceeded_throttle(valid_token):
+            return
+        if native.refused:
+            raise native.error()
 
 
 _virtual_key_max_budget_check: Final = virtual_key_max_budget_check
@@ -7096,17 +7180,17 @@ async def _virtual_key_multi_budget_check(
             window_duration=str(w["budget_duration"]),
             window_start=get_budget_window_start(w),
         )
-        if math.isfinite(w["max_budget"]) and window_spend >= w["max_budget"]:
-            raise litellm.BudgetExceededError(
-                current_cost=window_spend,
-                max_budget=w["max_budget"],
-                message=(
-                    f"ExceededBudget: Key over {w['budget_duration']} budget. "
-                    f"Spend=${window_spend:.4f}, Limit=${w['max_budget']:.2f}"
-                ),
-                entity_type=Litellm_EntityType.KEY.value,
-                entity_id=valid_token.token,
-            )
+        native = _native_budget_decision(
+            {
+                "check": "key_window",
+                "spend": window_spend,
+                "max_budget": w["max_budget"],
+                "budget_duration": str(w["budget_duration"]),
+                "token": valid_token.token,
+            }
+        )
+        if native.refused:
+            raise native.error()
 
 
 async def virtual_key_soft_budget_check(
@@ -7119,7 +7203,10 @@ async def virtual_key_soft_budget_check(
 
     """
 
-    if valid_token.soft_budget and valid_token.spend >= valid_token.soft_budget:
+    native: Final = _native_budget_decision(
+        {"check": "key_soft", "spend": valid_token.spend, "soft_budget": valid_token.soft_budget}
+    )
+    if native.alerts:
         verbose_proxy_logger.debug(
             "Crossed Soft Budget for token %s, spend %s, soft_budget %s",
             valid_token.token,
@@ -7422,7 +7509,16 @@ async def _check_team_member_budget(
                 max_budget=team_member_budget,
             )
 
-            if not math.isfinite(team_member_budget):
+            native: Final = _native_budget_decision(
+                {
+                    "check": "team_member",
+                    "spend": team_member_spend,
+                    "max_budget": team_member_budget,
+                    "user_id": valid_token.user_id,
+                    "team_id": team_object.team_id,
+                }
+            )
+            if native.skipped:
                 return
 
             team_member_max_budget_alert_check(
@@ -7437,14 +7533,8 @@ async def _check_team_member_budget(
                 max_budget=team_member_budget,
             )
 
-            if team_member_spend >= team_member_budget:
-                raise litellm.BudgetExceededError(
-                    current_cost=team_member_spend,
-                    max_budget=team_member_budget,
-                    message=f"Budget has been exceeded! User={valid_token.user_id} in Team={team_object.team_id} Current cost: {team_member_spend}, Max budget: {team_member_budget}",
-                    entity_type=Litellm_EntityType.TEAM_MEMBER.value,
-                    entity_id=f"{valid_token.user_id}:{team_object.team_id}",
-                )
+            if native.refused:
+                raise native.error()
 
 
 async def check_team_member_model_access(
@@ -7534,7 +7624,15 @@ async def team_max_budget_check(
             max_budget=team_object.max_budget,
         )
 
-        if math.isfinite(team_object.max_budget) and spend > team_object.max_budget:
+        native: Final = _native_budget_decision(
+            {
+                "check": "team_max",
+                "spend": spend,
+                "max_budget": team_object.max_budget,
+                "team_id": team_object.team_id,
+            }
+        )
+        if native.refused:
             if valid_token:
                 call_info: Final = CallInfo(
                     token=valid_token.token,
@@ -7553,13 +7651,7 @@ async def team_max_budget_check(
                     )
                 )
 
-            raise litellm.BudgetExceededError(
-                current_cost=spend,
-                max_budget=team_object.max_budget,
-                message=f"Budget has been exceeded! Team={team_object.team_id} Current cost: {spend}, Max budget: {team_object.max_budget}",
-                entity_type=Litellm_EntityType.TEAM.value,
-                entity_id=team_object.team_id,
-            )
+            raise native.error()
 
 
 _team_max_budget_check: Final = team_max_budget_check
@@ -7571,29 +7663,26 @@ async def _user_multi_budget_check(user_object: LiteLLM_UserTable | None) -> Non
     from litellm.proxy.proxy_server import get_current_spend
 
     for window in user_object.budget_limits:
-        if (
-            spend := await get_current_spend(
-                counter_key=user_window_counter(user_object.user_id, window.budget_duration),
-                fallback_spend=0.0,
-                max_budget=window.max_budget,
-                window_entity_type="User",
-                window_entity_id=user_object.user_id,
-                window_duration=window.budget_duration,
-                window_start=get_budget_window_start(window),
-            )
-        ) < window.max_budget:
-            continue
-        if math.isfinite(window.max_budget) and spend >= window.max_budget:
-            raise litellm.BudgetExceededError(
-                current_cost=spend,
-                max_budget=window.max_budget,
-                message=(
-                    f"ExceededBudget: User={user_object.user_id} over {window.budget_duration} budget. "
-                    f"Spend=${spend:.4f}, Limit=${window.max_budget:.2f}"
-                ),
-                entity_type=Litellm_EntityType.USER.value,
-                entity_id=user_object.user_id,
-            )
+        spend = await get_current_spend(
+            counter_key=user_window_counter(user_object.user_id, window.budget_duration),
+            fallback_spend=0.0,
+            max_budget=window.max_budget,
+            window_entity_type="User",
+            window_entity_id=user_object.user_id,
+            window_duration=window.budget_duration,
+            window_start=get_budget_window_start(window),
+        )
+        native = _native_budget_decision(
+            {
+                "check": "user_window",
+                "spend": spend,
+                "max_budget": window.max_budget,
+                "budget_duration": window.budget_duration,
+                "user_id": user_object.user_id,
+            }
+        )
+        if native.refused:
+            raise native.error()
 
 
 async def _team_multi_budget_check(
@@ -7623,17 +7712,17 @@ async def _team_multi_budget_check(
             window_duration=str(w["budget_duration"]),
             window_start=get_budget_window_start(w),
         )
-        if math.isfinite(w["max_budget"]) and window_spend >= w["max_budget"]:
-            raise litellm.BudgetExceededError(
-                current_cost=window_spend,
-                max_budget=w["max_budget"],
-                message=(
-                    f"ExceededBudget: Team={team_object.team_id} over {w['budget_duration']} budget. "
-                    f"Spend=${window_spend:.4f}, Limit=${w['max_budget']:.2f}"
-                ),
-                entity_type=Litellm_EntityType.TEAM.value,
-                entity_id=team_object.team_id,
-            )
+        native = _native_budget_decision(
+            {
+                "check": "team_window",
+                "spend": window_spend,
+                "max_budget": w["max_budget"],
+                "budget_duration": str(w["budget_duration"]),
+                "team_id": team_object.team_id,
+            }
+        )
+        if native.refused:
+            raise native.error()
 
 
 async def _team_soft_budget_check(
@@ -7644,12 +7733,12 @@ async def _team_soft_budget_check(
     """
     Triggers a budget alert if the team is over it's soft budget.
     """
-    if (
-        team_object is not None
-        and team_object.soft_budget is not None
-        and team_object.spend is not None
-        and team_object.spend >= team_object.soft_budget
-    ):
+    if team_object is None:
+        return
+    native: Final = _native_budget_decision(
+        {"check": "team_soft", "spend": team_object.spend, "soft_budget": team_object.soft_budget}
+    )
+    if native.alerts and team_object.spend is not None:
         verbose_proxy_logger.debug(
             "Crossed Soft Budget for team %s, spend %s, soft_budget %s",
             team_object.team_id,
@@ -7737,7 +7826,15 @@ async def _project_max_budget_check(
         max_budget=max_budget,
     )
 
-    if project_spend >= max_budget:
+    native: Final = _native_budget_decision(
+        {
+            "check": "project_max",
+            "spend": project_spend,
+            "max_budget": max_budget,
+            "project_id": project_object.project_id,
+        }
+    )
+    if native.refused:
         if valid_token:
             call_info: Final = CallInfo(
                 token=valid_token.token,
@@ -7756,13 +7853,7 @@ async def _project_max_budget_check(
                 )
             )
 
-        raise litellm.BudgetExceededError(
-            current_cost=project_spend,
-            max_budget=max_budget,
-            message=f"Budget has been exceeded! Project={project_object.project_id} Current cost: {project_spend}, Max budget: {max_budget}",
-            entity_type=Litellm_EntityType.PROJECT.value,
-            entity_id=project_object.project_id,
-        )
+        raise native.error()
 
 
 async def _project_soft_budget_check(
@@ -7782,7 +7873,10 @@ async def _project_soft_budget_check(
     if project_object.litellm_budget_table is not None:
         soft_budget = project_object.litellm_budget_table.soft_budget
 
-    if soft_budget is not None and project_object.spend is not None and project_object.spend >= soft_budget:
+    native: Final = _native_budget_decision(
+        {"check": "project_soft", "spend": project_object.spend, "soft_budget": soft_budget}
+    )
+    if native.alerts:
         verbose_proxy_logger.debug(
             "Crossed Soft Budget for project %s, spend %s, soft_budget %s",
             project_object.project_id,
@@ -7945,7 +8039,10 @@ async def organization_max_budget_check(
     )
 
     # Check if organization spend exceeds max budget
-    if math.isfinite(org_max_budget) and org_spend >= org_max_budget:
+    native: Final = _native_budget_decision(
+        {"check": "organization", "spend": org_spend, "max_budget": org_max_budget, "org_id": org_id}
+    )
+    if native.refused:
         # Trigger budget alert
         call_info: Final = CallInfo(
             token=valid_token.token,
@@ -7964,13 +8061,7 @@ async def organization_max_budget_check(
             )
         )
 
-        raise litellm.BudgetExceededError(
-            current_cost=org_spend,
-            max_budget=org_max_budget,
-            message=f"Budget has been exceeded! Organization={org_id} Current cost: {org_spend}, Max budget: {org_max_budget}",
-            entity_type=Litellm_EntityType.ORGANIZATION.value,
-            entity_id=org_id,
-        )
+        raise native.error()
 
 
 _organization_max_budget_check: Final = organization_max_budget_check
@@ -8034,15 +8125,16 @@ async def tag_max_budget_check_for_tags(
                 max_budget=tag_object.litellm_budget_table.max_budget,
                 fallback_authoritative=True,
             )
-            if tag_spend <= tag_object.litellm_budget_table.max_budget:
-                continue
-            raise litellm.BudgetExceededError(
-                current_cost=tag_spend,
-                max_budget=tag_object.litellm_budget_table.max_budget,
-                message=f"Budget has been exceeded! Tag={tag_name} Current cost: {tag_spend}, Max budget: {tag_object.litellm_budget_table.max_budget}",
-                entity_type=Litellm_EntityType.TAG.value,
-                entity_id=tag_name,
+            native = _native_budget_decision(
+                {
+                    "check": "tag",
+                    "spend": tag_spend,
+                    "max_budget": tag_object.litellm_budget_table.max_budget,
+                    "tag": tag_name,
+                }
             )
+            if native.refused:
+                raise native.error()
 
 
 async def _model_access_group_max_budget_check(
@@ -8089,15 +8181,11 @@ async def _model_access_group_max_budget_check(
             max_budget=budget.max_budget,
             fallback_authoritative=True,
         )
-        if group_spend < budget.max_budget:
-            continue
-        raise litellm.BudgetExceededError(
-            current_cost=group_spend,
-            max_budget=budget.max_budget,
-            message=f"Budget has been exceeded! Model access group={group} Current cost: {group_spend}, Max budget: {budget.max_budget}",
-            entity_type=Litellm_EntityType.MODEL_ACCESS_GROUP.value,
-            entity_id=group,
+        native = _native_budget_decision(
+            {"check": "model_access_group", "spend": group_spend, "max_budget": budget.max_budget, "group": group}
         )
+        if native.refused:
+            raise native.error()
 
 
 def is_model_allowed_by_pattern(model: str, allowed_model_pattern: str) -> bool:
