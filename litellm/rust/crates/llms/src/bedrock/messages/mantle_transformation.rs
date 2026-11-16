@@ -191,17 +191,31 @@ fn move_betas_into_header(request: &MessagesRequest, headers: Headers) -> Result
 }
 
 /// Python's `AmazonMantleMessagesConfig.transform_anthropic_messages_request` up to the body: the Invoke
-/// transform with the Mantle overrides, then the betas move into the header.
+/// transform runs on `model_id` with the Mantle overrides, then the betas move into the header. The
+/// request keeps its own model, which `wire_body` turns into `model_id`.
 pub(crate) fn transform_mantle_messages_request(
     request: MessagesRequest,
+    model_id: String,
     headers: Headers,
     context: &MessagesTransformContext,
     settings: &InvokeRequestSettings,
 ) -> Result<(MessagesRequest, Headers), Error> {
-    let (request, headers) =
-        transform_anthropic_messages_request(request, context, headers, settings)?;
+    let model = request.model.clone();
+    let (request, headers) = transform_anthropic_messages_request(
+        MessagesRequest {
+            model: model_id,
+            ..request
+        },
+        context,
+        headers,
+        settings,
+    )?;
     let headers = move_betas_into_header(&request, headers)?;
-    Ok((request, headers))
+    Ok((MessagesRequest { model, ..request }, headers))
+}
+
+fn amazon_mantle_model_id(model: &str) -> String {
+    model.replacen("mantle/", "", 1)
 }
 
 /// The body half of Python's Mantle transform: `model` and `stream` go last, `stream` only when it is `True`.
@@ -361,8 +375,10 @@ impl BaseMessagesConfig for AmazonMantleMessagesConfig {
         headers: Headers,
         context: &MessagesTransformContext,
     ) -> Result<(MessagesRequest, Headers), Error> {
+        let model_id = amazon_mantle_model_id(&request.model);
         transform_mantle_messages_request(
             request,
+            model_id,
             headers,
             context,
             &AMAZON_MANTLE_REQUEST_SETTINGS,
@@ -401,7 +417,7 @@ impl BaseMessagesConfig for AmazonMantleMessagesConfig {
     }
 
     fn wire_body(&self, body: Value) -> Value {
-        mantle_wire_body(body, |model| model.replacen("mantle/", "", 1))
+        mantle_wire_body(body, amazon_mantle_model_id)
     }
 
     fn secret_names(&self) -> &'static [&'static str] {

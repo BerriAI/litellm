@@ -1,6 +1,5 @@
 use std::sync::LazyLock;
 
-use litellm_auth_aws::is_bedrock_region;
 use litellm_host::interceptors::RetriedRequest;
 use litellm_llms_types::{
     formats::messages::{MessagesOptionalParams, MessagesRequest, MessagesResponse},
@@ -42,6 +41,32 @@ use crate::{
 };
 
 const BEDROCK_MANTLE_DEFAULT_REGION: &str = "us-east-1";
+/// Python's `AmazonBedrockGlobalConfig().get_all_regions()`, which `BEDROCK_REGIONS` freezes.
+const BEDROCK_REGIONS: [&str; 23] = [
+    "us-east-1",
+    "us-east-2",
+    "us-west-1",
+    "us-west-2",
+    "us-gov-east-1",
+    "us-gov-west-1",
+    "eu-west-1",
+    "eu-west-2",
+    "eu-west-3",
+    "eu-central-1",
+    "eu-central-2",
+    "eu-south-1",
+    "eu-south-2",
+    "eu-north-1",
+    "ap-northeast-1",
+    "ap-northeast-2",
+    "ap-northeast-3",
+    "ap-south-1",
+    "ap-south-2",
+    "ap-southeast-1",
+    "ap-southeast-2",
+    "ca-central-1",
+    "sa-east-1",
+];
 const REGION_ENVS: [&str; 3] = ["BEDROCK_MANTLE_REGION", "AWS_REGION_NAME", "AWS_REGION"];
 const KEY_ENVS: [&str; 2] = ["BEDROCK_MANTLE_API_KEY", "AWS_BEARER_TOKEN_BEDROCK"];
 const SECRET_NAMES: [&str; 6] = [
@@ -107,9 +132,17 @@ fn mantle_host_region(base: &str) -> Option<&str> {
 /// Python's `split_mantle_region_prefix`, which `get_llm_provider` applies before the config sees the model.
 fn split_mantle_region_prefix(model: &str) -> (Option<&str>, &str) {
     match model.split_once('/') {
-        Some((head, tail)) if is_bedrock_region(head) => (Some(head), tail),
+        Some((head, tail)) if BEDROCK_REGIONS.contains(&head) => (Some(head), tail),
         _ => (None, model),
     }
+}
+
+/// The model Python's Mantle transform sends: `get_llm_provider` drops the region prefix, then
+/// `AmazonMantleMessagesConfig` drops the first `mantle/`.
+fn mantle_model_id(model: &str) -> String {
+    split_mantle_region_prefix(model)
+        .1
+        .replacen("mantle/", "", 1)
 }
 
 fn configured_region(litellm_params: &LitellmParams) -> Option<&str> {
@@ -231,8 +264,10 @@ impl BaseMessagesConfig for BedrockMantleAnthropicMessagesConfig {
         headers: Headers,
         context: &MessagesTransformContext,
     ) -> Result<(MessagesRequest, Headers), Error> {
+        let model_id = mantle_model_id(&request.model);
         transform_mantle_messages_request(
             request,
+            model_id,
             headers,
             context,
             &BEDROCK_MANTLE_REQUEST_SETTINGS,
@@ -271,11 +306,7 @@ impl BaseMessagesConfig for BedrockMantleAnthropicMessagesConfig {
     }
 
     fn wire_body(&self, body: Value) -> Value {
-        mantle_wire_body(body, |model| {
-            split_mantle_region_prefix(model)
-                .1
-                .replacen("mantle/", "", 1)
-        })
+        mantle_wire_body(body, mantle_model_id)
     }
 
     fn secret_names(&self) -> &'static [&'static str] {
@@ -319,6 +350,10 @@ impl BaseMessagesConfig for BedrockMantleAnthropicMessagesConfig {
 
     fn default_headers(&self) -> &'static [(&'static str, &'static str)] {
         &[]
+    }
+
+    fn logged_model(&self, model: &str) -> String {
+        split_mantle_region_prefix(model).1.to_string()
     }
 }
 
@@ -473,6 +508,7 @@ mod tests {
     #[case::public_host_over_prefix(Some("https://bedrock-mantle.ap-south-1.api.aws/v1"), None, "us-west-2/claude-test", &[], "ap-south-1")]
     #[case::env_base_host(None, None, "claude-test", &[("BEDROCK_MANTLE_API_BASE", "https://bedrock-mantle.eu-central-1.api.aws/v1")], "eu-central-1")]
     #[case::arn_ignored(None, None, "arn:aws:bedrock:eu-west-1:123:model/claude-test", &[], "us-east-1")]
+    #[case::unlisted_region_prefix_ignored(None, None, "ca-west-1/claude-test", &[], "us-east-1")]
     fn public_host_region_follows_python_order(
         #[case] api_base: Option<&str>,
         #[case] region: Option<&str>,
@@ -637,6 +673,31 @@ mod tests {
     }
 
     #[rstest]
+    #[case::bedrock_mantle(&BEDROCK_MANTLE_MESSAGES_CONFIG, "us-west-2/anthropic.claude-test")]
+    #[case::bedrock_mantle_route(&AMAZON_MANTLE_MESSAGES_CONFIG, "mantle/anthropic.claude-test")]
+    fn the_invoke_transform_sees_the_model_python_sends(
+        #[case] config: &dyn BaseMessagesConfig,
+        #[case] model: &str,
+    ) {
+        let Err(Error::InvalidRequest(refused)) = sent(
+            config,
+            request(
+                model,
+                json!({"tools": [{"type": "web_search_20250305", "name": "web_search"}]}),
+            ),
+            Headers::new(),
+        ) else {
+            panic!("expected a request rejection");
+        };
+        assert!(
+            refused
+                .to_string()
+                .contains("model 'anthropic.claude-test'"),
+            "{refused}"
+        );
+    }
+
+    #[rstest]
     fn sigv4_drops_every_authorization_casing_and_keeps_x_api_key() {
         let validated = environment(
             &BEDROCK_MANTLE_MESSAGES_CONFIG,
@@ -794,7 +855,11 @@ mod tests {
         }));
         assert_eq!(wire, expected);
         assert_eq!(
-            wire.as_object().unwrap().keys().next_back().map(String::as_str),
+            wire.as_object()
+                .unwrap()
+                .keys()
+                .next_back()
+                .map(String::as_str),
             Some(if stream { "stream" } else { "model" })
         );
     }
