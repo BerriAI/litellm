@@ -4055,10 +4055,15 @@ dependencies = [
 name = "litellm-gateway-auth-core"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "http 1.4.2",
+ "jsonwebtoken",
  "litellm-config",
+ "litellm-fnmatch",
+ "litellm-secret-value",
  "litellm-starlette",
  "rstest",
+ "serde_json",
  "strum",
  "thiserror 2.0.19",
 ]
