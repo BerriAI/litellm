@@ -15,13 +15,7 @@ import socket
 import ssl
 from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Iterable, Iterator, Mapping, Sequence
 from dataclasses import asdict, dataclass, replace
-from typing import (  # noqa: TID251  # narrows native payloads to public TypedDicts
-    Final,
-    NoReturn,
-    TypeAlias,
-    TypeVar,
-    cast,
-)
+from typing import Final, NoReturn, TypeAlias, TypeVar, cast  # noqa: TID251  # narrows native payloads to public TypedDicts
 from urllib.parse import SplitResult, urlsplit
 
 import httpx
