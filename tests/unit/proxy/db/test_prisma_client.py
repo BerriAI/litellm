@@ -602,3 +602,49 @@ def test_migration_dry_run_summary_needs_database_url(unset_database_url):
     from litellm.proxy.db.prisma_client import PrismaManager
 
     assert PrismaManager.migration_dry_run_summary(use_migrate=True) == (False, "DATABASE_URL is not set.")
+
+
+class _SlotsPrismaClient:
+    """Mirrors every supported prisma-client-py release: slots-based, engine behind a property with a setter."""
+
+    __slots__ = ("_internal_engine",)
+
+    def __init__(self):
+        self._internal_engine = None
+
+    @property
+    def _engine(self):
+        return self._internal_engine
+
+    @_engine.setter
+    def _engine(self, engine):
+        self._internal_engine = engine
+
+
+def test_write_engine_uses_public_setter_on_slots_client():
+    from litellm.proxy.db.prisma_client import PrismaWrapper
+
+    client = _SlotsPrismaClient()
+    engine = object()
+
+    PrismaWrapper._write_engine(client, engine)
+
+    assert client._engine is engine
+    assert client._internal_engine is engine
+    assert not hasattr(client, "_Prisma__engine")
+
+
+def test_slots_client_rejects_the_name_mangled_write():
+    """Regression guard: `__slots__` forbids new attributes, which is what broke every connect."""
+    client = _SlotsPrismaClient()
+
+    with pytest.raises(AttributeError):
+        setattr(client, "_Prisma__engine", object())
+
+    # the write path must therefore reach the engine through the public setter
+    from litellm.proxy.db.prisma_client import PrismaWrapper
+
+    engine = object()
+    PrismaWrapper._write_engine(client, engine)
+
+    assert client._internal_engine is engine
