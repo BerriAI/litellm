@@ -35,6 +35,9 @@ function getAccessPrompt(access: AriaAccess): string {
   if (access.scope.type === "global") {
     return "You have read-only access to global, user, team and tag usage. Use the usage tools for historical totals and trends. You cannot change gateway resources.";
   }
+  if (access.scope.type === "user_and_teams") {
+    return "You have read-only access to the signed-in user's own usage and permitted team usage. Use get_usage_data for their own historical totals and get_team_usage_data for their teams. Team results are restricted by the gateway to their permitted keys unless they are a team admin. Query administered teams separately with team_ids to retrieve their full permitted totals when the user also belongs to teams they do not administer. You cannot query other users or change gateway resources.";
+  }
   return "You have read-only access to the signed-in user's own usage. Use get_usage_data for their historical totals and trends. You cannot query other users or change gateway resources.";
 }
 

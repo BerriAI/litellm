@@ -81,6 +81,18 @@ def _without_region_path(model: str) -> str:
     return model if region is None else model_id
 
 
+_ASYNC_INVOKE_REQUEST_FIELDS: Final = frozenset({"clientRequestToken", "tags"})
+
+
+def _split_async_invoke_extra_body(
+    extra_body: Mapping[str, object],
+) -> tuple[Mapping[str, object], Mapping[str, object]]:
+    return (
+        {key: value for key, value in extra_body.items() if key in _ASYNC_INVOKE_REQUEST_FIELDS},
+        {key: value for key, value in extra_body.items() if key not in _ASYNC_INVOKE_REQUEST_FIELDS},
+    )
+
+
 _NO_FIELDS: Final[Mapping[str, object]] = MappingProxyType({})
 _FIELDS: Final = TypeAdapter(dict[str, object])
 _NOVA_PARAMS_KEYS: Final = ("segmentedEmbeddingParams", "singleEmbeddingParams")
@@ -196,17 +208,28 @@ def _with_extra_body(
     provider: str, extra_body: Mapping[str, object], body: Mapping[str, object]
 ) -> dict[str, object]:  # mutable-ok: serialized as the request body
     """The provider body over the ``extra_body`` fields. An object on both sides is combined field by field, and the
-    generated fields win. On Nova the caller's embedding params are combined with the generated ones the same way."""
+    generated fields win. On Nova the caller's embedding params are combined with the generated ones the same way. On
+    async-invoke the fields go inside ``modelInput``, apart from the ones that belong to the request itself."""
+    if "modelInput" in body:
+        request_fields, model_fields = _split_async_invoke_extra_body(extra_body)
+        caller: Final = {
+            **{k: v for k, v in model_fields.items() if k != "modelInput"},
+            **_fields(model_fields.get("modelInput")),
+        }
+        generated: Final = _fields(body["modelInput"])
+        return {
+            **request_fields,
+            **body,
+            "modelInput": {
+                **{k: v for k, v in caller.items() if k not in _NOVA_PARAMS_KEYS},
+                **_nova_model_input_with_options(caller, generated),
+            }
+            if provider == "nova"
+            else _COMBINED_FIELD(caller, generated),
+        }
     if provider != "nova":
         return {**extra_body, **{k: _COMBINED_FIELD(extra_body.get(k), v) for k, v in body.items()}}
-    merged: Final = {**extra_body, **body}
-    caller: Final = _nova_model_input(extra_body)
-    if "modelInput" in body:
-        return {
-            **merged,
-            "modelInput": dict(_nova_model_input_with_options(caller, _fields(body["modelInput"]))),
-        }
-    return {**extra_body, **_nova_model_input_with_options(caller, body)}
+    return {**extra_body, **_nova_model_input_with_options(_nova_model_input(extra_body), body)}
 
 
 class BedrockEmbedding(BaseAWSLLM):

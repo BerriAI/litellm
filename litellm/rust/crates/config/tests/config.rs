@@ -1,57 +1,5 @@
-use litellm_config::{Config, Error, Spelled, TracingStoreSettings};
-use rstest::{fixture, rstest};
-use tempfile::TempDir;
-
-#[fixture]
-fn directory() -> TempDir {
-    tempfile::tempdir().unwrap()
-}
-
-#[fixture]
-fn model_list_yaml() -> &'static str {
-    r#"
-model_list:
-  - model_name: assistant
-    litellm_params:
-      model: anthropic/test-model
-      api_key: os.environ/ANTHROPIC_API_KEY
-  - model_name: local
-    litellm_params:
-      model: test-model
-      api_base: http://localhost:8000/v1
-      custom_llm_provider: openai
-"#
-}
-
-#[rstest]
-fn loads_model_list_from_file(directory: TempDir, model_list_yaml: &str) {
-    let path = directory.path().join("config.yaml");
-    std::fs::write(&path, model_list_yaml).unwrap();
-
-    let config = Config::load(path).unwrap();
-    assert_eq!(config.model_list.len(), 2);
-    let anthropic = &config.model_list[0];
-    assert_eq!(anthropic.model_name, "assistant");
-    assert_eq!(anthropic.litellm_params.model, "anthropic/test-model");
-    assert_eq!(
-        anthropic.litellm_params.api_key.as_ref().unwrap().expose(),
-        "os.environ/ANTHROPIC_API_KEY"
-    );
-    assert!(anthropic.litellm_params.api_base.is_none());
-    assert!(anthropic.litellm_params.custom_llm_provider.is_none());
-    let local = &config.model_list[1];
-    assert_eq!(local.model_name, "local");
-    assert_eq!(local.litellm_params.model, "test-model");
-    assert!(local.litellm_params.api_key.is_none());
-    assert_eq!(
-        local.litellm_params.api_base.as_deref(),
-        Some("http://localhost:8000/v1")
-    );
-    assert_eq!(
-        local.litellm_params.custom_llm_provider.as_deref(),
-        Some("openai")
-    );
-}
+use litellm_config::{Config, Error, RouteList, Spelled, TracingStoreSettings};
+use rstest::rstest;
 
 #[rstest]
 fn config_debug_redacts_api_keys() {
@@ -80,20 +28,6 @@ fn config_debug_redacts_api_keys() {
 )]
 fn rejects_malformed_and_incomplete_config(#[case] yaml: &str) {
     assert!(matches!(Config::from_yaml(yaml), Err(Error::Parse(_))));
-}
-
-#[rstest]
-fn distinguishes_read_errors_from_parse_errors(directory: TempDir) {
-    let error = Config::load(directory.path().join("missing.yaml")).unwrap_err();
-    assert!(
-        litellm_error::Report::new(&error)
-            .to_string()
-            .contains("missing.yaml")
-    );
-    assert!(matches!(
-        error,
-        Error::Read { source, .. } if source.kind() == std::io::ErrorKind::NotFound
-    ));
 }
 
 #[rstest]
@@ -335,15 +269,6 @@ include:
 }
 
 #[rstest]
-#[case::policy_pipeline("../../../proxy/example_config_yaml/test_pipeline_config.yaml")]
-#[case::gateway("../../../../tests/e2e/gateway/stage_mirror_ci_config.yml")]
-fn parses_representative_python_configs(#[case] relative_path: &str) {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(relative_path);
-    let config = Config::load(path).unwrap();
-    assert!(!config.model_list.is_empty());
-}
-
-#[rstest]
 #[case::one("callbacks: custom_callbacks.logger", 1)]
 #[case::many("callbacks: [prometheus, otel]", 2)]
 fn accepts_python_callback_shorthand(#[case] setting: &str, #[case] expected_len: usize) {
@@ -385,32 +310,6 @@ fn debug_output_does_not_expose_config_values(#[case] field: &str, #[case] secre
     };
     let config = Config::from_yaml(&yaml).unwrap();
     assert!(!format!("{config:?}").contains(secret));
-}
-
-#[rstest]
-fn resolves_nested_includes_once_in_breadth_first_order() {
-    let directory = TempDir::new().unwrap();
-    let root = directory.path();
-    std::fs::create_dir(root.join("nested")).unwrap();
-    std::fs::write(root.join("config.yaml"), "include: [nested/first.yaml, second.yaml]\nmodel_list: [{model_name: root, litellm_params: {model: root}}]\n").unwrap();
-    std::fs::write(root.join("nested/first.yaml"), "include: [third.yaml]\nmodel_list: [{model_name: first, litellm_params: {model: first}}]\n").unwrap();
-    std::fs::write(root.join("second.yaml"), "general_settings: {master_key: second}\nmodel_list: [{model_name: second, litellm_params: {model: second}}]\n").unwrap();
-    std::fs::write(root.join("nested/third.yaml"), "include: [../config.yaml]\ngeneral_settings: {master_key: third}\nmodel_list: [{model_name: third, litellm_params: {model: third}}]\n").unwrap();
-
-    let config = Config::load(root.join("config.yaml")).unwrap();
-    assert_eq!(
-        config
-            .model_list
-            .iter()
-            .map(|model| model.model_name.as_str())
-            .collect::<Vec<_>>(),
-        ["root", "first", "second", "third"]
-    );
-    assert_eq!(
-        config.general_settings.master_key.unwrap().expose(),
-        "third"
-    );
-    assert!(config.include.is_empty());
 }
 
 #[rstest]
@@ -465,4 +364,149 @@ fn non_redis_cache_settings_remain_opaque() {
         config.litellm_settings.cache_params,
         Some(litellm_config::CacheSettings::Other(_))
     ));
+}
+
+fn pass_through(entry: &str) -> litellm_config::PassThroughEndpoint {
+    let config = Config::from_yaml(&format!(
+        "general_settings: {{pass_through_endpoints: [{entry}]}}"
+    ))
+    .unwrap();
+    config.general_settings.pass_through_endpoints.unwrap()[0].clone()
+}
+
+#[rstest]
+fn a_pass_through_endpoint_reads_its_python_fields() {
+    let endpoint = pass_through(
+        "{path: '/bria/{item_id:int}', target: https://upstream.example/v1, include_subpath: true, \
+         headers: {Authorization: os.environ/BRIA_KEY}, cost_per_request: '0.5', methods: [POST], \
+         guardrails: {pii: {request_fields: [text]}, toxicity: null}, custom_auth_parser: langfuse, display_name: Bria}",
+    );
+    assert_eq!(
+        endpoint.path,
+        litellm_starlette::RouteTemplate::parse("/bria/{item_id:int}")
+    );
+    assert_eq!(
+        endpoint.target.unwrap().expose(),
+        "https://upstream.example/v1"
+    );
+    assert!(endpoint.include_subpath);
+    assert_eq!(
+        endpoint.headers.keys().collect::<Vec<_>>(),
+        ["Authorization"]
+    );
+    assert_eq!(endpoint.methods.as_deref(), Some(&["POST".to_owned()][..]));
+    let guardrails = endpoint.guardrails.unwrap();
+    assert_eq!(
+        guardrails["pii"]
+            .as_ref()
+            .unwrap()
+            .request_fields
+            .as_deref(),
+        Some(&["text".to_owned()][..])
+    );
+    assert!(guardrails["toxicity"].is_none());
+    assert_eq!(endpoint.custom_auth_parser.as_deref(), Some("langfuse"));
+    assert!(endpoint.additional_fields.contains_key("display_name"));
+}
+
+/// `endpoint.get("auth", True) is True`, `endpoint.get("include_subpath", False) is True` and
+/// `bool(forward_headers)`, as the proxy reads them.
+#[rstest]
+#[case::nothing_set("", true, false, false)]
+#[case::booleans(
+    "auth: false, include_subpath: true, forward_headers: true",
+    false,
+    true,
+    true
+)]
+#[case::strings(
+    "auth: 'true', include_subpath: 'true', forward_headers: 'false'",
+    false,
+    false,
+    true
+)]
+#[case::numbers("auth: 1, include_subpath: 1, forward_headers: 0", false, false, false)]
+fn pass_through_flags_read_like_python(
+    #[case] flags: &str,
+    #[case] auth: bool,
+    #[case] include_subpath: bool,
+    #[case] forward_headers: bool,
+) {
+    let separator = if flags.is_empty() { "" } else { ", " };
+    let endpoint = pass_through(&format!(
+        "{{path: /x, target: https://t.example{separator}{flags}}}"
+    ));
+    assert_eq!(
+        (
+            endpoint.auth,
+            endpoint.include_subpath,
+            endpoint.forward_headers
+        ),
+        (auth, include_subpath, forward_headers)
+    );
+}
+
+#[rstest]
+#[case::bool_true("true", true)]
+#[case::bool_false("false", false)]
+#[case::string_true("'true'", false)]
+#[case::environment_reference("os.environ/ENABLE_JWT_AUTH", false)]
+#[case::number("1", false)]
+fn auth_flags_are_on_only_for_boolean_true(#[case] value: &str, #[case] expected: bool) {
+    let config = Config::from_yaml(&format!(
+        "general_settings: {{enable_jwt_auth: {value}, enable_oauth2_auth: {value}, enable_oauth2_proxy_auth: {value}}}"
+    ))
+    .unwrap();
+    let general = config.general_settings;
+    assert_eq!(
+        [
+            general.enable_jwt_auth,
+            general.enable_oauth2_auth,
+            general.enable_oauth2_proxy_auth
+        ],
+        [expected; 3]
+    );
+}
+
+#[rstest]
+fn a_pass_through_endpoint_without_a_path_fails_the_load_like_registration() {
+    assert!(
+        Config::from_yaml(
+            "general_settings: {pass_through_endpoints: [{target: https://t.example}]}"
+        )
+        .is_err()
+    );
+}
+
+#[rstest]
+fn pass_through_debug_hides_the_target_and_header_values() {
+    let config = Config::from_yaml(
+        "general_settings: {pass_through_endpoints: [{path: /x, target: https://user:target-secret@t.example, headers: {Authorization: header-secret}}]}",
+    )
+    .unwrap();
+    let debug = format!("{config:?}");
+    assert!(!debug.contains("target-secret") && !debug.contains("header-secret"));
+}
+
+#[rstest]
+#[case::callbacks("callbacks")]
+#[case::success_callback("success_callback")]
+#[case::failure_callback("failure_callback")]
+fn debug_hides_inline_callback_settings(#[case] field: &str) {
+    let config = Config::from_yaml(&format!(
+        "litellm_settings: {{{field}: [{{token: callback-list-secret}}]}}"
+    ))
+    .unwrap();
+    assert!(!format!("{config:?}").contains("callback-list-secret"));
+}
+
+#[rstest]
+#[case::list("[/a/*, /b]", Some(RouteList::Valid(["/a/*".to_owned(), "/b".to_owned()].into())))]
+#[case::bare_string("/a/*", Some(RouteList::Malformed))]
+#[case::non_string_entry("[/a, 5, /b/*]", Some(RouteList::Malformed))]
+#[case::null("null", None)]
+fn public_routes_never_fail_the_load(#[case] value: &str, #[case] expected: Option<RouteList>) {
+    let config =
+        Config::from_yaml(&format!("general_settings: {{public_routes: {value}}}")).unwrap();
+    assert_eq!(config.general_settings.public_routes, expected);
 }

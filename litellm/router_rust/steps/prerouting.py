@@ -35,7 +35,7 @@ from litellm.constants import (
 )
 from litellm.integrations.otel.routing import routing_decision_attributes
 from litellm.integrations.otel.runtime import phase_attributes
-from litellm.litellm_core_utils.core_helpers import get_or_create_metadata_bucket, without
+from litellm.litellm_core_utils.core_helpers import allowed_openai_param_names, get_or_create_metadata_bucket, without
 from litellm.litellm_core_utils.credential_accessor import reject_api_key_secret_reference
 from litellm.router_api import deployment_id
 from litellm.router_host import router_host
@@ -1171,10 +1171,7 @@ def _tags_of(params: Mapping[str, object]) -> Sequence[object]:
 
 
 def _allowlist(params: Mapping[str, object]) -> frozenset[str]:
-    declared: Final = params.get("allowed_openai_params")
-    if not isinstance(declared, list | tuple | set | frozenset):
-        return frozenset()
-    return frozenset(entry for entry in declared if isinstance(entry, str))
+    return frozenset(allowed_openai_param_names(params.get("allowed_openai_params")))
 
 
 __all__ = ["PreRouter", "PreRoutingStrategies", "as_output_cap", "is_strategy_marker", "stamped_client_ceiling"]

@@ -374,6 +374,12 @@ _UpstreamSessionKey: TypeAlias = tuple[
 
 
 @dataclass(frozen=True, slots=True)
+class ResourceListingFailed:
+    server_name: str
+    error: Exception
+
+
+@dataclass(frozen=True, slots=True)
 class _OAuthDiscoveryResolved:
     server: MCPServer
 
@@ -1621,13 +1627,14 @@ def _redacted_registry_dump(servers: dict[str, MCPServer]) -> dict[str, dict[str
 
 def caller_authorization_fans_out(
     server: MCPServer,
-    scope_servers: list[MCPServer] | None,
+    scope_servers: Sequence[MCPServer] | None,
 ) -> bool:
     """True when forwarding the caller's request-wide ``Authorization`` to ``server`` inside a
     listing fan-out would replay one credential against multiple upstreams: another server in the
     scope also consumes it (RFC 9700 cross-resource replay). ``scope_servers`` is None for
-    explicitly-addressed operations (tool call, get_prompt, read_resource, single-server routes),
-    where the client named the one target and the gateway is not choosing recipients."""
+    explicitly-addressed operations (tool call, get_prompt, single-server routes), where the client
+    named the one target and the gateway is not choosing recipients. An aggregate read_resource passes
+    its scope because the gateway picks the owner from listings."""
     if scope_servers is None:
         return False
     return any(
@@ -5099,8 +5106,33 @@ class MCPServerManager:
         raw_headers: dict[str, str] | None = None,
         client_ip: str | None = None,
     ) -> list[Resource]:
-        if self._skip_blocked_stdio_listing(server, "resource"):
+        listing: Final = await self.list_resources_from_server(
+            server=server,
+            user_api_key_auth=user_api_key_auth,
+            mcp_auth_header=mcp_auth_header,
+            extra_headers=extra_headers,
+            add_prefix=add_prefix,
+            raw_headers=raw_headers,
+            client_ip=client_ip,
+        )
+        if isinstance(listing, ResourceListingFailed):
+            verbose_logger.warning("Failed to get resources from server %s: %s", server.name, listing.error)
             return []
+        return list(listing)
+
+    async def list_resources_from_server(
+        self,
+        server: MCPServer,
+        user_api_key_auth: UserAPIKeyAuth | None,
+        mcp_auth_header: str | Mapping[str, str] | None = None,
+        extra_headers: Mapping[str, str] | None = None,
+        add_prefix: bool = True,
+        raw_headers: Mapping[str, str] | None = None,
+        client_ip: str | None = None,
+    ) -> tuple[Resource, ...] | ResourceListingFailed:
+        if self._skip_blocked_stdio_listing(server, "resource"):
+            return ()
+        auth_header: Final = dict(mcp_auth_header) if isinstance(mcp_auth_header, Mapping) else mcp_auth_header
         try:
             headers: Final = (
                 dict(
@@ -5115,7 +5147,7 @@ class MCPServerManager:
             subject_token: Final = self._obo_subject_token(server, raw_headers, user_api_key_auth)
             client: Final = await self.create_mcp_client(
                 server=server,
-                mcp_auth_header=mcp_auth_header,
+                mcp_auth_header=auth_header,
                 extra_headers=headers,
                 stdio_env=stdio_env,
                 subject_token=subject_token,
@@ -5127,7 +5159,7 @@ class MCPServerManager:
             key: Final = self._discovery_key(
                 server,
                 user_api_key_auth,
-                mcp_auth_header,
+                auth_header,
                 headers,
                 stdio_env,
                 subject_token,
@@ -5139,10 +5171,9 @@ class MCPServerManager:
                 return await client.list_resources_result(raise_on_error=True)
 
             items: Final = await self._resource_discovery_cache.get(key, fetch)
-            return self._create_prefixed_resources(items.resources, server, add_prefix=add_prefix)
+            return tuple(self._create_prefixed_resources(items.resources, server, add_prefix=add_prefix))
         except Exception as error:
-            verbose_logger.warning("Failed to get resources from server %s: %s", server.name, error)
-            return []
+            return ResourceListingFailed(server_name=server.name, error=error)
 
     async def get_resource_templates_from_server(
         self,

@@ -794,6 +794,7 @@ def _proxy_environment(
             "STORE_MODEL_IN_DB": "True",
             "PYTHON_DOTENV_DISABLED": "1",
             **overrides,
+            "PYTHONFAULTHANDLER": "1",
             "LITELLM_WORKER_STARTUP_HOOKS": ",".join(
                 hook
                 for hook in (
