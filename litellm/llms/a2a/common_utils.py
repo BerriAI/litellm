@@ -139,6 +139,9 @@ def require_a2a_task_state(
         return None
     state: Final[str | None] = a2a_task_state(result)
     if state is None:
+        artifacts: Final = result.get("artifacts")
+        if isinstance(artifacts, list) and artifacts:
+            return A2A_TASK_STATE_COMPLETED
         raise A2AError(
             status_code=status_code,
             message="A2A task response missing valid status.state",
