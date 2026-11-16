@@ -101960,12 +101960,12 @@
         ]
     },
     "agentgates/gpt-oss-120b": {
-        "input_cost_per_token": 1.55e-07,
+        "input_cost_per_token": 1.65e-07,
         "litellm_provider": "agentgates",
         "max_input_tokens": 131072,
         "max_output_tokens": 16384,
         "mode": "chat",
-        "output_cost_per_token": 6.18e-07,
+        "output_cost_per_token": 6.6e-07,
         "source": "https://api.agentgates.ai/api/inference/v1/models",
         "supported_modalities": [
             "text"
@@ -101981,12 +101981,12 @@
         "supports_vision": false
     },
     "agentgates/deepseek-v3-2": {
-        "input_cost_per_token": 1.03e-06,
+        "input_cost_per_token": 1.1e-06,
         "litellm_provider": "agentgates",
         "max_input_tokens": 163840,
         "max_output_tokens": 20480,
         "mode": "chat",
-        "output_cost_per_token": 1.03e-06,
+        "output_cost_per_token": 1.1e-06,
         "source": "https://api.agentgates.ai/api/inference/v1/models",
         "supported_modalities": [
             "text"
@@ -102001,12 +102001,12 @@
         "supports_vision": false
     },
     "agentgates/deepseek-v4-flash-0731": {
-        "input_cost_per_token": 4.54e-07,
+        "input_cost_per_token": 4.84e-07,
         "litellm_provider": "agentgates",
         "max_input_tokens": 1048576,
         "max_output_tokens": 32000,
         "mode": "chat",
-        "output_cost_per_token": 1.36e-06,
+        "output_cost_per_token": 1.452e-06,
         "source": "https://api.agentgates.ai/api/inference/v1/models",
         "supported_modalities": [
             "text"
@@ -102021,12 +102021,12 @@
         "supports_vision": false
     },
     "agentgates/glm-5-3": {
-        "input_cost_per_token": 1.442e-06,
+        "input_cost_per_token": 1.54e-06,
         "litellm_provider": "agentgates",
         "max_input_tokens": 1048576,
         "max_output_tokens": 32000,
         "mode": "chat",
-        "output_cost_per_token": 4.532e-06,
+        "output_cost_per_token": 4.84e-06,
         "source": "https://api.agentgates.ai/api/inference/v1/models",
         "supported_modalities": [
             "text"
@@ -102041,12 +102041,12 @@
         "supports_vision": false
     },
     "agentgates/glm-5-3-flash": {
-        "input_cost_per_token": 1.55e-07,
+        "input_cost_per_token": 1.65e-07,
         "litellm_provider": "agentgates",
         "max_input_tokens": 1048576,
         "max_output_tokens": 32000,
         "mode": "chat",
-        "output_cost_per_token": 5.15e-07,
+        "output_cost_per_token": 5.5e-07,
         "source": "https://api.agentgates.ai/api/inference/v1/models",
         "supported_modalities": [
             "text"
@@ -102061,12 +102061,12 @@
         "supports_vision": false
     },
     "agentgates/kimi-k3": {
-        "input_cost_per_token": 3.09e-06,
+        "input_cost_per_token": 3.3e-06,
         "litellm_provider": "agentgates",
         "max_input_tokens": 1048576,
         "max_output_tokens": 32000,
         "mode": "chat",
-        "output_cost_per_token": 1.545e-05,
+        "output_cost_per_token": 1.65e-05,
         "source": "https://api.agentgates.ai/api/inference/v1/models",
         "supported_modalities": [
             "text"
@@ -102081,12 +102081,12 @@
         "supports_vision": false
     },
     "agentgates/qwen3-5-397b": {
-        "input_cost_per_token": 5.67e-07,
+        "input_cost_per_token": 6.05e-07,
         "litellm_provider": "agentgates",
         "max_input_tokens": 262144,
         "max_output_tokens": 32000,
         "mode": "chat",
-        "output_cost_per_token": 3.605e-06,
+        "output_cost_per_token": 3.85e-06,
         "source": "https://api.agentgates.ai/api/inference/v1/models",
         "supported_modalities": [
             "text"
@@ -102101,12 +102101,12 @@
         "supports_vision": false
     },
     "agentgates/qwen3-6-27b": {
-        "input_cost_per_token": 3.3e-07,
+        "input_cost_per_token": 3.52e-07,
         "litellm_provider": "agentgates",
         "max_input_tokens": 262144,
         "max_output_tokens": 32000,
         "mode": "chat",
-        "output_cost_per_token": 3.348e-06,
+        "output_cost_per_token": 3.575e-06,
         "source": "https://api.agentgates.ai/api/inference/v1/models",
         "supported_modalities": [
             "text"
@@ -102121,12 +102121,12 @@
         "supports_vision": false
     },
     "agentgates/gemma-4-31b-it": {
-        "input_cost_per_token": 1.55e-07,
+        "input_cost_per_token": 1.65e-07,
         "litellm_provider": "agentgates",
         "max_input_tokens": 262144,
         "max_output_tokens": 32000,
         "mode": "chat",
-        "output_cost_per_token": 4.74e-07,
+        "output_cost_per_token": 5.06e-07,
         "source": "https://api.agentgates.ai/api/inference/v1/models",
         "supported_modalities": [
             "text"
@@ -102141,12 +102141,12 @@
         "supports_vision": false
     },
     "agentgates/llama-3-3-70b-instruct": {
-        "input_cost_per_token": 2.06e-06,
+        "input_cost_per_token": 2.2e-06,
         "litellm_provider": "agentgates",
         "max_input_tokens": 131072,
         "max_output_tokens": 16384,
         "mode": "chat",
-        "output_cost_per_token": 2.06e-06,
+        "output_cost_per_token": 2.2e-06,
         "source": "https://api.agentgates.ai/api/inference/v1/models",
         "supported_modalities": [
             "text"
