@@ -1,12 +1,16 @@
+import re
 import threading
 from collections.abc import Mapping
 from typing import Final
 
 from litellm.llms.custom_httpx.http_handler import exclude_rsa_key_exchange_and_chacha20
+from litellm.proxy.auth.master_key_boot_check import SALT_KEY_ENV_VAR
 from litellm.secret_managers.main import str_to_bool
 
 FIPS_MODE_SETTING: Final = "fips_mode"
+SALT_KEY_HEX: Final = re.compile(r"(?:sk-)?((?:[0-9a-fA-F]{2}){32,})")
 _SETTING: Final = f"general_settings.{FIPS_MODE_SETTING}"
+_NEW_SALT_KEY: Final = f"{SALT_KEY_ENV_VAR}=sk-$(openssl rand -hex 32)"
 _FIPS_MODE_ACTIVE: Final = threading.Event()
 
 
@@ -58,9 +62,10 @@ def cryptography_enforces_fips() -> bool:
     return True
 
 
-def fips_mode_refusal(general_settings: Mapping[str, object]) -> str | None:
+def fips_mode_refusal(general_settings: Mapping[str, object], salt_key: str | None) -> str | None:
     """Why the proxy must not start: general_settings.fips_mode is not a boolean, or is on but Python's or the
-    cryptography library's OpenSSL does not enforce FIPS. None when it may start."""
+    cryptography library's OpenSSL does not enforce FIPS, or salt_key is not at least 32 bytes of hex. None when it may
+    start."""
     setting: Final = fips_mode_setting(general_settings)
     if setting is None:
         value: Final = general_settings.get(FIPS_MODE_SETTING)
@@ -83,11 +88,22 @@ def fips_mode_refusal(general_settings: Mapping[str, object]) -> str | None:
             "against the system OpenSSL (pip install --no-binary cryptography cryptography), or turn "
             f"{_SETTING} off."
         )
+    if salt_key is None:
+        return (
+            f"{_SETTING} is on but neither {SALT_KEY_ENV_VAR} nor a master key is set, so fips_mode has no key to "
+            f"derive its encryption keys from. Set {_NEW_SALT_KEY}, or turn {_SETTING} off."
+        )
+    if SALT_KEY_HEX.fullmatch(salt_key) is None:
+        return (
+            f"{_SETTING} is on but {SALT_KEY_ENV_VAR} is not at least 32 bytes of hex. fips_mode derives its "
+            f"encryption keys from it, or from the master key when {SALT_KEY_ENV_VAR} is not set. Set "
+            f"{_NEW_SALT_KEY}, or turn {_SETTING} off."
+        )
     return None
 
 
-def enforce_fips_mode(general_settings: Mapping[str, object]) -> None:
-    refusal: Final = fips_mode_refusal(general_settings)
+def enforce_fips_mode(general_settings: Mapping[str, object], salt_key: str | None = None) -> None:
+    refusal: Final = fips_mode_refusal(general_settings, salt_key)
     if refusal is not None:
         raise FipsModeError(refusal)
     active: Final = fips_mode_setting(general_settings) is True

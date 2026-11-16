@@ -1,6 +1,7 @@
 import _hashlib
 from collections.abc import Iterator, Mapping
 from contextlib import nullcontext
+from typing import Final
 from unittest.mock import Mock
 
 import pytest
@@ -15,6 +16,8 @@ from litellm.proxy.common_utils.fips import (
     fips_mode_active,
     openssl_enforces_fips,
 )
+
+_HEX_SALT_KEY: Final = "sk-" + bytes(range(32)).hex()
 
 
 @pytest.fixture(autouse=True)
@@ -125,7 +128,7 @@ def test_enforce_fips_mode(
     monkeypatch.setattr(rust_openssl, "is_fips_enabled", lambda: cryptography_fips)
 
     with pytest.raises(FipsModeError, match=refusal) if refusal else nullcontext():
-        enforce_fips_mode(general_settings)
+        enforce_fips_mode(general_settings, _HEX_SALT_KEY)
 
 
 @pytest.mark.parametrize(
@@ -138,7 +141,7 @@ def test_fips_mode_active_follows_the_setting_the_gate_accepted(
 ) -> None:
     _fake_openssl(monkeypatch, fips_flag=1, scrypt_refused=True)
     monkeypatch.setattr(rust_openssl, "is_fips_enabled", lambda: True)
-    enforce_fips_mode(general_settings)
+    enforce_fips_mode(general_settings, _HEX_SALT_KEY)
     assert fips_mode_active() is active
 
 
@@ -151,4 +154,70 @@ def test_fips_mode_stays_inactive_on_a_refused_boot(monkeypatch: pytest.MonkeyPa
 
 def test_a_fips_openssl_alone_does_not_activate_fips_mode(monkeypatch: pytest.MonkeyPatch) -> None:
     _fake_openssl(monkeypatch, fips_flag=1, scrypt_refused=True)
+    assert fips_mode_active() is False
+
+
+@pytest.fixture
+def fips_openssl_on_both_sides(monkeypatch: pytest.MonkeyPatch) -> None:
+    _fake_openssl(monkeypatch, fips_flag=1, scrypt_refused=True)
+    monkeypatch.setattr(rust_openssl, "is_fips_enabled", lambda: True)
+
+
+@pytest.mark.usefixtures("fips_openssl_on_both_sides")
+@pytest.mark.parametrize(
+    "salt_key",
+    [
+        _HEX_SALT_KEY,
+        bytes(range(32)).hex(),
+        "sk-" + bytes(range(32)).hex().upper(),
+        "sk-" + bytes(range(48)).hex(),
+    ],
+    ids=["sk-prefixed", "bare-hex", "uppercase-hex-digits", "longer-than-32-bytes"],
+)
+def test_fips_mode_starts_with_a_hex_salt_key(salt_key: str) -> None:
+    enforce_fips_mode({"fips_mode": True}, salt_key)
+    assert fips_mode_active() is True
+
+
+@pytest.mark.usefixtures("fips_openssl_on_both_sides")
+@pytest.mark.parametrize(
+    "salt_key, refusal",
+    [
+        ("a-salt-key-that-is-not-hex", "LITELLM_SALT_KEY is not at least 32 bytes of hex"),
+        ("sk-" + bytes(range(31)).hex(), "LITELLM_SALT_KEY is not at least 32 bytes of hex"),
+        ("sk-" + bytes(range(32)).hex() + "a", "LITELLM_SALT_KEY is not at least 32 bytes of hex"),
+        (_HEX_SALT_KEY + "\n", "LITELLM_SALT_KEY is not at least 32 bytes of hex"),
+        ("SK-" + bytes(range(32)).hex(), "LITELLM_SALT_KEY is not at least 32 bytes of hex"),
+        ("", "LITELLM_SALT_KEY is not at least 32 bytes of hex"),
+        (None, "neither LITELLM_SALT_KEY nor a master key is set"),
+    ],
+    ids=["not-hex", "31-bytes", "odd-digit-count", "trailing-newline", "uppercase-prefix", "empty", "no-key"],
+)
+def test_fips_mode_refuses_to_start_without_a_hex_salt_key(salt_key: str | None, refusal: str) -> None:
+    with pytest.raises(FipsModeError, match=refusal) as refused:
+        enforce_fips_mode({"fips_mode": True}, salt_key)
+    assert "LITELLM_SALT_KEY=sk-$(openssl rand -hex 32)" in str(refused.value)
+    assert fips_mode_active() is False
+
+
+@pytest.mark.usefixtures("fips_openssl_on_both_sides")
+@pytest.mark.parametrize(
+    "salt_key",
+    ["a-salt-key-that-is-not-hex", "sk-" + bytes(range(31)).hex(), "SK-" + bytes(range(32)).hex()],
+    ids=["not-hex", "31-bytes", "uppercase-prefix"],
+)
+def test_the_fips_mode_salt_key_refusal_does_not_print_the_key(salt_key: str) -> None:
+    with pytest.raises(FipsModeError) as refused:
+        enforce_fips_mode({"fips_mode": True}, salt_key)
+    assert salt_key not in str(refused.value)
+    assert salt_key[3:] not in str(refused.value)
+
+
+@pytest.mark.usefixtures("fips_openssl_on_both_sides")
+@pytest.mark.parametrize("general_settings", [{}, {"fips_mode": False}], ids=["unset", "off"])
+@pytest.mark.parametrize("salt_key", ["a-salt-key-that-is-not-hex", "", None], ids=["not-hex", "empty", "no-key"])
+def test_standard_mode_starts_whatever_the_salt_key_looks_like(
+    general_settings: Mapping[str, object], salt_key: str | None
+) -> None:
+    enforce_fips_mode(general_settings, salt_key)
     assert fips_mode_active() is False
