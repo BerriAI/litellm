@@ -218,7 +218,6 @@ const eslintConfig = [
   },
   {
     files: ["src/**/*.{ts,tsx}"],
-    ignores: ["src/components/CreateUserButton.tsx"],
     rules: {
       "no-restricted-properties": [
         "error",

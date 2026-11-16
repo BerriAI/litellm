@@ -16,6 +16,7 @@ import { ChevronRight, CircleHelp, Info, UserPlus } from "lucide-react";
 import React, { useEffect, useState } from "react";
 import { useForm, useWatch } from "react-hook-form";
 import { useTranslation } from "react-i18next";
+import { v4 as uuidv4 } from "uuid";
 import TeamDropdown from "./common_components/team_dropdown";
 import { getModelDisplayName } from "./key_team_helpers/fetch_available_models_team_key";
 import { toast } from "@/lib/toast";
@@ -27,19 +28,6 @@ import {
   userCreateCall,
 } from "./networking";
 import OnboardingModal, { InvitationLink } from "./onboarding_link";
-
-// Helper function to generate UUID compatible across all environments
-const generateUUID = (): string => {
-  if (typeof crypto !== "undefined" && crypto.randomUUID) {
-    return crypto.randomUUID();
-  }
-  // Fallback UUID generation for environments without crypto.randomUUID
-  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, function (c) {
-    const r = (Math.random() * 16) | 0;
-    const v = c == "x" ? r : (r & 0x3) | 0x8;
-    return v.toString(16);
-  });
-};
 
 interface CreateuserProps {
   userID: string;
@@ -120,7 +108,7 @@ const SSO_INVITE_LIFETIME_MS = 7 * 24 * 60 * 60 * 1000;
 const buildSsoInvitationLink = (userId: string, createdBy: string): InvitationLink => {
   const now = new Date();
   return {
-    id: generateUUID(),
+    id: uuidv4(),
     user_id: userId,
     is_accepted: false,
     accepted_at: null,

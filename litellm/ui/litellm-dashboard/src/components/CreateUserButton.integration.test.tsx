@@ -48,6 +48,23 @@ const renderForm = (isEmbedded: boolean, onUserCreated = vi.fn()) => {
 };
 
 describe("custom User ID invitation", () => {
+  it("shows the SSO invitation after creating a user without a secure browser context", async () => {
+    vi.stubGlobal("crypto", { getRandomValues: crypto.getRandomValues.bind(crypto), randomUUID: undefined });
+    const user = userEvent.setup();
+    renderForm(false);
+    await user.click(screen.getByRole("button", { name: "+ Invite User" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "User Email" }), {
+      target: { value: "invitee@example.test" },
+    });
+    await user.click(screen.getByRole("button", { name: "Invite User", exact: true }));
+    const invitation = await screen.findByRole("dialog", { name: "Invitation Link" });
+    expect(within(invitation).getByText("generated-id")).toBeInTheDocument();
+    expect(within(invitation).getByRole("textbox", { name: "Invitation link" })).toHaveValue(
+      new URL("/ui", window.location.origin).toString(),
+    );
+    expect(createUser).toHaveBeenCalledWith(expect.objectContaining({ user_email: "invitee@example.test" }));
+  });
+
   it.each([true, false])("sends the custom ID from the form (embedded=%s)", async (embedded) => {
     const user = userEvent.setup();
     const onCreated = renderForm(embedded);
