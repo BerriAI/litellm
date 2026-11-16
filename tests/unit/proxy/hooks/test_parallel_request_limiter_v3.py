@@ -949,6 +949,46 @@ async def test_sliding_window_rate_limit_v3(monkeypatch, time_controller):
 
 
 @pytest.mark.asyncio
+async def test_stale_local_counter_does_not_block_after_window_roll(time_controller):
+    """
+    #47340: a local counter that outlives its window must not keep answering OVER_LIMIT once the
+    window rolled. The local mirror's TTL is anchored at the write and not at the window start, so the
+    counter survives the roll by up to ``window_size`` seconds; the roll is owned by
+    ``_in_memory_cache_sliding_window`` / the Lua script, not by cache expiry.
+    """
+    fakes = FakeRateLimits(connected=False)
+    parallel_request_handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(DualCache()),
+        time_provider=time_controller.now,
+        rate_limit_store=fakes.store(),
+    )
+    descriptors = [
+        RateLimitDescriptor(
+            key="api_key",
+            value="over-limit-key",
+            rate_limit={"tokens_per_unit": 1000, "window_size": 60},
+        )
+    ]
+    tokens = _counter("api_key", "over-limit-key")
+
+    admitted = await parallel_request_handler.should_rate_limit(descriptors=descriptors)
+    assert admitted["overall_code"] == "OK"
+    await parallel_request_handler.async_increment_tokens_with_ttl_preservation(
+        [CounterIncrement(counter=tokens, amount=2000.0, ttl=None)]
+    )
+    assert _local(parallel_request_handler, tokens) == 2001
+
+    inside_window = await parallel_request_handler.should_rate_limit(descriptors=descriptors, read_only=True)
+    assert inside_window["overall_code"] == "OVER_LIMIT", "the debt must still be enforced inside its window"
+
+    time_controller.advance(61)
+    rolled = await parallel_request_handler.should_rate_limit(descriptors=descriptors)
+    assert rolled["overall_code"] == "OK"
+    assert rolled["statuses"][0]["limit_remaining"] == 999
+    assert _local(parallel_request_handler, tokens) == 1
+
+
+@pytest.mark.asyncio
 async def test_rate_limiter_script_return_values_v3(monkeypatch, time_controller):
     """
     Test that the rate limiter script returns both counter and window values correctly
