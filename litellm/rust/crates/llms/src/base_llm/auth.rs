@@ -9,8 +9,8 @@ use litellm_auth::{AuthServices, CredentialPlacement, TokenProviderHandle};
 use litellm_auth_azure::AzureAuthInputs;
 use litellm_secret_value::SecretValue;
 
-use litellm_auth_aws::{AwsCredentialSource, CallerSigningHeaders, SigV4Signer};
 use litellm_auth::VertexParams;
+use litellm_auth_aws::{AwsCredentialSource, CallerSigningHeaders, SigV4Signer};
 use litellm_auth_gcp::vertex_messages::{vertex_credentials, vertex_project};
 use litellm_http::request::with_header;
 
@@ -142,7 +142,10 @@ pub async fn log_in_to_vertex(
     };
     let login = services
         .vertex_messages
-        .login(vertex_credentials(&params, secrets), vertex_project(&params, secrets))
+        .login(
+            vertex_credentials(&params, secrets),
+            vertex_project(&params, secrets),
+        )
         .await?;
     Ok((
         ValidatedEnvironment {
@@ -217,7 +220,10 @@ pub async fn resolve_auth(
         AuthScheme::GcpAccessToken { params } => {
             let login = services
                 .vertex_messages
-                .login(vertex_credentials(&params, env_lookup), vertex_project(&params, env_lookup))
+                .login(
+                    vertex_credentials(&params, env_lookup),
+                    vertex_project(&params, env_lookup),
+                )
                 .await?;
             Ok(Authenticated {
                 headers: with_python_authorization_bearer(headers, login.token.expose()),

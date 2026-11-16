@@ -36,19 +36,30 @@ pub fn python_or(values: impl IntoIterator<Item = Option<String>>) -> Option<Str
 
 /// Python's `VertexBase.safe_get_vertex_ai_credentials`, with the deployment's
 /// `VERTEXAI_CREDENTIALS` read through the host's secrets as `get_secret_str` reads it.
-pub fn vertex_credentials(params: &VertexParams, secrets: &dyn Fn(&str) -> Option<String>) -> Option<String> {
+pub fn vertex_credentials(
+    params: &VertexParams,
+    secrets: &dyn Fn(&str) -> Option<String>,
+) -> Option<String> {
     python_or(
         VertexParams::CREDENTIALS
             .wire
             .iter()
             .map(|name| params.get(name))
-            .chain(VertexParams::CREDENTIALS.env.iter().map(|name| secrets(name))),
+            .chain(
+                VertexParams::CREDENTIALS
+                    .env
+                    .iter()
+                    .map(|name| secrets(name)),
+            ),
     )
 }
 
 /// Python's `VertexBase.safe_get_vertex_ai_project`. `litellm.vertex_project` reaches the params
 /// as `vertex_project` when the call names no project.
-pub fn vertex_project(params: &VertexParams, secrets: &dyn Fn(&str) -> Option<String>) -> Option<String> {
+pub fn vertex_project(
+    params: &VertexParams,
+    secrets: &dyn Fn(&str) -> Option<String>,
+) -> Option<String> {
     python_or(
         VertexParams::PROJECT
             .wire
@@ -59,7 +70,10 @@ pub fn vertex_project(params: &VertexParams, secrets: &dyn Fn(&str) -> Option<St
 }
 
 /// Python's `VertexBase.safe_get_vertex_ai_location`.
-pub fn vertex_location(params: &VertexParams, secrets: &dyn Fn(&str) -> Option<String>) -> Option<String> {
+pub fn vertex_location(
+    params: &VertexParams,
+    secrets: &dyn Fn(&str) -> Option<String>,
+) -> Option<String> {
     python_or(
         VertexParams::LOCATION
             .wire
@@ -146,9 +160,15 @@ impl VertexMessagesAuth {
 
     /// Python's `_ensure_access_token` for `vertex_ai`: `credentials` and `project` as
     /// `safe_get_vertex_ai_credentials` and `safe_get_vertex_ai_project` resolve them.
-    pub async fn login(&self, credentials: Option<String>, project: Option<String>) -> Result<VertexLogin, Error> {
+    pub async fn login(
+        &self,
+        credentials: Option<String>,
+        project: Option<String>,
+    ) -> Result<VertexLogin, Error> {
         let key = LoginKey {
-            credentials: credentials.as_deref().map(|text| Sha256::digest(text).into()),
+            credentials: credentials
+                .as_deref()
+                .map(|text| Sha256::digest(text).into()),
             project: project.clone(),
         };
         let login = self
@@ -156,19 +176,29 @@ impl VertexMessagesAuth {
             .try_get_with(key, self.load(credentials, project))
             .await
             .map_err(|error| (*error).clone())?;
-        let token = login.source.token().await.map_err(|error| Error::from(token_failure(&error)))?;
+        let token = login
+            .source
+            .token()
+            .await
+            .map_err(|error| Error::from(token_failure(&error)))?;
         Ok(VertexLogin {
             token,
             project_id: login.project_id.clone(),
         })
     }
 
-    fn explicit_source(&self, credentials: &CredentialsJson) -> Result<TokenSource, GoogleLoginFailure> {
+    fn explicit_source(
+        &self,
+        credentials: &CredentialsJson,
+    ) -> Result<TokenSource, GoogleLoginFailure> {
         let info = &credentials.info;
         let built = match info.get("type").and_then(Value::as_str) {
             Some("external_account") if aws_wif::uses_explicit_aws(info) => {
                 let environment = self.environment.clone();
-                aws_wif::explicit_aws_credentials(info, Arc::new(move |name| environment.os_env(name)))
+                aws_wif::explicit_aws_credentials(
+                    info,
+                    Arc::new(move |name| environment.os_env(name)),
+                )
             }
             Some("external_account") => builders::external_account(info),
             Some("authorized_user") => builders::authorized_user(info),
@@ -180,11 +210,18 @@ impl VertexMessagesAuth {
         })
     }
 
-    async fn load(&self, credentials: Option<String>, project: Option<String>) -> Result<Arc<Login>, Error> {
+    async fn load(
+        &self,
+        credentials: Option<String>,
+        project: Option<String>,
+    ) -> Result<Arc<Login>, Error> {
         let (source, credential_project) = match credentials {
             Some(text) => {
                 let json = load_vertex_credentials_source(&text)?;
-                (self.explicit_source(&json)?, credentials_project(&json.info))
+                (
+                    self.explicit_source(&json)?,
+                    credentials_project(&json.info),
+                )
             }
             None => {
                 let found = adc::default_credentials(&*self.environment).await?;
@@ -192,13 +229,21 @@ impl VertexMessagesAuth {
             }
         };
         let project = project.map(Value::String).or(credential_project);
-        source.token().await.map_err(|error| Error::from(token_failure(&error)))?;
+        source
+            .token()
+            .await
+            .map_err(|error| Error::from(token_failure(&error)))?;
         let project_id = match project {
-            project if !is_truthy(project.as_ref()) => Err(value_failure("Could not resolve project_id")),
+            project if !is_truthy(project.as_ref()) => {
+                Err(value_failure("Could not resolve project_id"))
+            }
             Some(Value::String(project)) => Ok(project),
             Some(other) => Err(GoogleLoginFailure::new(
                 PythonException::Type,
-                format!("Expected project_id to be a str but got {}", python_type(&other)),
+                format!(
+                    "Expected project_id to be a str but got {}",
+                    python_type(&other)
+                ),
             )),
             None => Err(value_failure("Could not resolve project_id")),
         }?;
@@ -417,7 +462,9 @@ mod tests {
     }))]
     #[case::unknown_type(json!({"type": "gdch_service_account", "client_email": "sa@p.iam.gserviceaccount.com"}))]
     #[tokio::test]
-    async fn explicit_credentials_of_another_type_are_refused_as_a_service_account(#[case] configured: Value) {
+    async fn explicit_credentials_of_another_type_are_refused_as_a_service_account(
+        #[case] configured: Value,
+    ) {
         let error = auth(FakeEnvironment::default())
             .login(Some(configured.to_string()), Some("project".into()))
             .await
@@ -436,15 +483,24 @@ mod tests {
     async fn credentials_that_do_not_build_from_a_file_name_the_file_failure() {
         let file = key_file(&json!({"type": "impersonated_service_account"}));
         let error = auth(FakeEnvironment::default())
-            .login(Some(file.path().to_str().unwrap().into()), Some("project".into()))
+            .login(
+                Some(file.path().to_str().unwrap().into()),
+                Some("project".into()),
+            )
             .await
             .unwrap_err();
-        assert_eq!(failure(error), GoogleLoginFailure::new(PythonException::Value, FILE_FAILURE_MESSAGE));
+        assert_eq!(
+            failure(error),
+            GoogleLoginFailure::new(PythonException::Value, FILE_FAILURE_MESSAGE)
+        );
     }
 
     fn environment(env: &[(&'static str, &str)]) -> FakeEnvironment {
         FakeEnvironment {
-            env: env.iter().map(|(name, value)| (*name, value.to_string())).collect(),
+            env: env
+                .iter()
+                .map(|(name, value)| (*name, value.to_string()))
+                .collect(),
             ..FakeEnvironment::default()
         }
     }
@@ -461,7 +517,10 @@ mod tests {
         #[case] expected: &str,
     ) {
         let server = token_server.await;
-        let file = key_file(&authorized_user(&server, json!({"quota_project_id": "quota"})));
+        let file = key_file(&authorized_user(
+            &server,
+            json!({"quota_project_id": "quota"}),
+        ));
         let gcloud = tempfile::tempdir().unwrap();
         let path = gcloud.path().join("application_default_credentials.json");
         std::fs::copy(file.path(), &path).unwrap();
@@ -484,10 +543,16 @@ mod tests {
         #[future] token_server: TokenServer,
     ) {
         let server = token_server.await;
-        let file = key_file(&authorized_user(&server, json!({"quota_project_id": "quota"})));
+        let file = key_file(&authorized_user(
+            &server,
+            json!({"quota_project_id": "quota"}),
+        ));
         let fake = FakeEnvironment {
             gcloud_project: Some("gcloud-project"),
-            ..environment(&[("GOOGLE_APPLICATION_CREDENTIALS", file.path().to_str().unwrap())])
+            ..environment(&[(
+                "GOOGLE_APPLICATION_CREDENTIALS",
+                file.path().to_str().unwrap(),
+            )])
         };
         let error = auth(fake).login(None, None).await.unwrap_err();
         assert_eq!(failure(error).message, "Could not resolve project_id");
@@ -527,11 +592,18 @@ mod tests {
         }));
         let fake = Arc::new(FakeEnvironment {
             resource_manager_project: answered,
-            ..environment(&[("GOOGLE_APPLICATION_CREDENTIALS", file.path().to_str().unwrap())])
+            ..environment(&[(
+                "GOOGLE_APPLICATION_CREDENTIALS",
+                file.path().to_str().unwrap(),
+            )])
         });
-        let login = VertexMessagesAuth::new(fake.clone()).login(None, None).await;
+        let login = VertexMessagesAuth::new(fake.clone())
+            .login(None, None)
+            .await;
         assert_eq!(
-            login.map(|login| login.project_id).map_err(|error| failure(error).message),
+            login
+                .map(|login| login.project_id)
+                .map_err(|error| failure(error).message),
             expected.map(str::to_string).map_err(str::to_string)
         );
         assert_eq!(
@@ -554,10 +626,16 @@ mod tests {
             "credential_source": {"file": subject.path().to_str().unwrap()},
         }));
         let fake = Arc::new(environment(&[
-            ("GOOGLE_APPLICATION_CREDENTIALS", file.path().to_str().unwrap()),
+            (
+                "GOOGLE_APPLICATION_CREDENTIALS",
+                file.path().to_str().unwrap(),
+            ),
             ("GOOGLE_CLOUD_PROJECT", "env-project"),
         ]));
-        let login = VertexMessagesAuth::new(fake.clone()).login(None, None).await.unwrap();
+        let login = VertexMessagesAuth::new(fake.clone())
+            .login(None, None)
+            .await
+            .unwrap();
         assert_eq!(login.project_id, "env-project");
         assert!(fake.resource_manager_urls.lock().unwrap().is_empty());
     }
@@ -576,7 +654,10 @@ mod tests {
         #[case] env: &[(&'static str, &str)],
         #[case] message: &str,
     ) {
-        let error = auth(environment(env)).login(None, Some("p".into())).await.unwrap_err();
+        let error = auth(environment(env))
+            .login(None, Some("p".into()))
+            .await
+            .unwrap_err();
         assert_eq!(
             failure(error),
             GoogleLoginFailure::new(PythonException::DefaultCredentials, message)
@@ -594,7 +675,9 @@ mod tests {
             .unwrap_err();
         assert_eq!(
             failure(error).message,
-            format!("The file {path} does not have a valid type. Type is weird, expected one of ('authorized_user', 'service_account', 'external_account', 'external_account_authorized_user', 'impersonated_service_account', 'gdch_service_account').")
+            format!(
+                "The file {path} does not have a valid type. Type is weird, expected one of ('authorized_user', 'service_account', 'external_account', 'external_account_authorized_user', 'impersonated_service_account', 'gdch_service_account')."
+            )
         );
     }
 
@@ -606,11 +689,17 @@ mod tests {
             "service_account_impersonation_url": "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/sa:generateAccessToken",
             "source_credentials": {"type": "authorized_user", "client_id": "c", "client_secret": "s", "refresh_token": "r", "token_uri": "http://127.0.0.1:9/token"}
         }));
-        let error = auth(environment(&[("GOOGLE_APPLICATION_CREDENTIALS", file.path().to_str().unwrap())]))
-            .login(None, Some("p".into()))
-            .await
-            .unwrap_err();
-        assert_ne!(failure(error).exception, PythonException::DefaultCredentials);
+        let error = auth(environment(&[(
+            "GOOGLE_APPLICATION_CREDENTIALS",
+            file.path().to_str().unwrap(),
+        )]))
+        .login(None, Some("p".into()))
+        .await
+        .unwrap_err();
+        assert_ne!(
+            failure(error).exception,
+            PythonException::DefaultCredentials
+        );
     }
 
     #[rstest]
@@ -630,7 +719,11 @@ mod tests {
             vertex_ai_credentials: alias.map(Into::into),
             ..VertexParams::default()
         };
-        let secrets = |name: &str| (name == "VERTEXAI_CREDENTIALS").then(|| secret.map(str::to_string)).flatten();
+        let secrets = |name: &str| {
+            (name == "VERTEXAI_CREDENTIALS")
+                .then(|| secret.map(str::to_string))
+                .flatten()
+        };
         assert_eq!(vertex_credentials(&params, &secrets).as_deref(), expected);
     }
 
@@ -647,14 +740,20 @@ mod tests {
         #[case] expected: &str,
     ) {
         let supported: Vec<String> = supported.iter().map(|region| region.to_string()).collect();
-        assert_eq!(vertex_region(location.map(str::to_string), &supported), expected);
+        assert_eq!(
+            vertex_region(location.map(str::to_string), &supported),
+            expected
+        );
     }
 
     #[rstest]
     #[tokio::test]
-    async fn the_shared_loader_keeps_main_s_login_for_other_consumers(#[future] token_server: TokenServer) {
+    async fn the_shared_loader_keeps_main_s_login_for_other_consumers(
+        #[future] token_server: TokenServer,
+    ) {
         let server = token_server.await;
-        let credentials = authorized_user(&server, json!({"quota_project_id": "quota"})).to_string();
+        let credentials =
+            authorized_user(&server, json!({"quota_project_id": "quota"})).to_string();
         let shared = VertexAuth::default()
             .validate_environment(
                 Vec::new(),
@@ -672,11 +771,16 @@ mod tests {
             .await;
         assert!(matches!(
             shared,
-            Err(Error::CredentialAcquisition(litellm_auth_types::ErrorDetail::Unresolved {
-                subject: "GCP resource project"
-            }))
+            Err(Error::CredentialAcquisition(
+                litellm_auth_types::ErrorDetail::Unresolved {
+                    subject: "GCP resource project"
+                }
+            ))
         ));
-        let messages = auth(FakeEnvironment::default()).login(Some(credentials), None).await.unwrap();
+        let messages = auth(FakeEnvironment::default())
+            .login(Some(credentials), None)
+            .await
+            .unwrap();
         assert_eq!(messages.project_id, "quota");
     }
 
@@ -696,7 +800,9 @@ mod tests {
         })
         .to_string();
         let shared = GcpAuth::default()
-            .load_provider(CredentialSource::Trusted(SecretValue::new(explicit_aws.clone())))
+            .load_provider(CredentialSource::Trusted(SecretValue::new(
+                explicit_aws.clone(),
+            )))
             .await;
         assert!(shared.is_ok(), "{:?}", shared.err());
         let error = auth(FakeEnvironment::default())
@@ -705,7 +811,10 @@ mod tests {
             .unwrap_err();
         assert_eq!(
             failure(error),
-            GoogleLoginFailure::new(PythonException::Value, "aws_region_name is required in the WIF credential JSON when using explicit AWS authentication. Add \"aws_region_name\": \"<your-region>\" to your credential file.")
+            GoogleLoginFailure::new(
+                PythonException::Value,
+                "aws_region_name is required in the WIF credential JSON when using explicit AWS authentication. Add \"aws_region_name\": \"<your-region>\" to your credential file."
+            )
         );
     }
 }

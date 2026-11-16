@@ -4519,6 +4519,30 @@ VERTEX_AUTH_CASES: Final = tuple(
 )
 
 
+VERTEX_REGIONAL_CLAUDE: Final = "vertex_ai/claude-parity-regional"
+VERTEX_REGIONAL_CASES: Final = (
+    Case(
+        "vertex_ai_supported_regions_route_the_call",
+        _vertex_login(
+            vertex_project="p",
+            vertex_credentials=dict(_service_account("p1-regions", project_id="p")),
+        ),
+        model=VERTEX_REGIONAL_CLAUDE,
+        settings=MappingProxyType(
+            {
+                "model_cost": {
+                    **litellm.model_cost,
+                    VERTEX_REGIONAL_CLAUDE: {
+                        **litellm.model_cost[VERTEX_CLAUDE],
+                        "supported_regions": ["europe-west1", "us-east5-b"],
+                    },
+                }
+            }
+        ),
+    ),
+)
+
+
 CASES: Final = (
     *REQUEST_CASES,
     *INPUT_VALUE_CASES,
@@ -4554,6 +4578,7 @@ CASES: Final = (
     *AZURE_STREAM_CACHE_CASES,
     *VERTEX_SHAPING_CASES,
     *VERTEX_AUTH_CASES,
+    *VERTEX_REGIONAL_CASES,
 )
 
 
