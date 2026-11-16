@@ -6,6 +6,7 @@ batch under a per-minute RPM/TPM budget. Scopes that configure `tpd_limit`
 are charged against a 24h token window instead of their minute counters.
 """
 
+import itertools
 import json
 import time
 from collections.abc import Callable, Iterator, Sequence
@@ -29,8 +30,9 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     PROXY_MaxParallelRequestsHandler_v3,
 )
 from litellm.proxy.utils import InternalUsageCache, hash_token
-from litellm.redis.stores.rate_limits import RateLimitScope
+from litellm.redis.stores.rate_limits import RateLimitScope, RateLimitStore
 from litellm.types.llms.openai import ChatCompletionUserMessage, LiteLLMBatchCreateRequest
+from tests.unit.redis.stores.fake_rate_limits import FakeRateLimits, counter_key
 
 
 class _Clock:
@@ -41,9 +43,11 @@ class _Clock:
         return self.now
 
 
-def _make_limiters(clock: _Clock | None = None):
+def _make_limiters(clock: _Clock | None = None, rate_limit_store: RateLimitStore | None = None):
     internal_usage_cache = InternalUsageCache(dual_cache=DualCache())
-    rate_limiter = PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=internal_usage_cache, time_provider=clock)
+    rate_limiter = PROXY_MaxParallelRequestsHandler_v3(
+        internal_usage_cache=internal_usage_cache, time_provider=clock, rate_limit_store=rate_limit_store
+    )
     batch_limiter = rate_limiter._get_batch_rate_limiter()
     assert batch_limiter is not None
     return internal_usage_cache, rate_limiter, batch_limiter
@@ -742,6 +746,18 @@ def _row_naming(model: str) -> _BatchLine:
     )
 
 
+def _redis_with_open_windows() -> tuple[FakeRateLimits, dict[str, float]]:
+    counters: Final[dict[str, float]] = {}
+
+    async def check_and_increment_by_n(keys: list[str], args: list[float]) -> list[float]:
+        counter_keys: Final = keys[1::2]
+        for key, increment in zip(counter_keys, args[1::4]):
+            counters[key] = counters.get(key, 0) + increment
+        return [0, *itertools.chain.from_iterable((counters[key], 0) for key in counter_keys)]
+
+    return FakeRateLimits(check_and_increment_by_n_script=check_and_increment_by_n), counters
+
+
 def _alias_router(model_group_alias: dict[str, str]) -> litellm.Router:
     return litellm.Router(
         model_list=[
@@ -832,7 +848,8 @@ async def test_alias_routed_row_is_charged_once_when_the_alias_and_deployment_mo
     openai_files.get(_ROUTED_FILE_URL).mock(
         side_effect=_serve_file_to_the_deployment_key((_row_naming(_DEPLOYMENT_MODEL),))
     )
-    internal_usage_cache, rate_limiter, batch_limiter = _make_limiters()
+    redis, redis_counters = _redis_with_open_windows()
+    _, _, batch_limiter = _make_limiters(rate_limit_store=redis.store())
     api_key: Final = hash_token("sk-batch")
 
     await batch_limiter.async_pre_call_hook(
@@ -848,10 +865,10 @@ async def test_alias_routed_row_is_charged_once_when_the_alias_and_deployment_mo
         call_type="acreate_batch",
     )
 
-    key_tokens: Final = await _counter(internal_usage_cache, rate_limiter, "api_key_tpd", api_key, "tokens")
-    project_tokens: Final = await _counter(
-        internal_usage_cache, rate_limiter, PROJECT_ITPM_DESCRIPTOR_KEY, f"project-1:{_BATCH_ALIAS}", "tokens"
-    )
+    key_tokens: Final = redis_counters[counter_key(RateLimitScope("api_key_tpd", api_key).counter("tokens"))]
+    project_tokens: Final = redis_counters[
+        counter_key(RateLimitScope(PROJECT_ITPM_DESCRIPTOR_KEY, f"project-1:{_BATCH_ALIAS}").counter("tokens"))
+    ]
     assert key_tokens > 0
     assert project_tokens == key_tokens
 
