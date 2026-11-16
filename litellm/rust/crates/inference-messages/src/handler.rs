@@ -7,8 +7,9 @@ use litellm_secret_value::SecretValue;
 
 use litellm_core_utils::{
     dot_notation_indexing::delete_nested_value,
-    get_provider_specific_headers::get_provider_specific_headers, settings::Lookup,
+    get_provider_specific_headers::get_provider_specific_headers,
 };
+use litellm_env::Lookup;
 use litellm_host::{
     interceptors::{
         Cost, ExecutionFacts, Interceptors, ProviderIdentity, RawResponse, RequestContext,
