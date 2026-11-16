@@ -1879,6 +1879,52 @@ def amessages(
 ) -> Execution: ...
 
 @final
+class NativeModelCapacityState:
+    def __new__(cls, _uninstantiable: Never, /) -> Never: ...
+    def take_output_cap(self) -> tuple[int, str | None] | None: ...
+
+@final
+class NativeModelCapacity:
+    def __new__(
+        cls,
+        delegate: object,
+        rate_limits: NativeRateLimits,
+        window_size: int,
+        tpm_reservation_enabled: bool,
+        now: Callable[[], float] | None = None,
+    ) -> NativeModelCapacity: ...
+    def callback(self) -> RustHandle: ...
+    def request_state(self) -> NativeModelCapacityState: ...
+    def handle(
+        self,
+        hook: str,
+        fields: Mapping[str, object],
+        call: Mapping[str, object] | None,
+        state: NativeModelCapacityState | None,
+        facts: Mapping[str, object],
+        /,
+        request: NativeRequestRedis | None = None,
+    ) -> Future[object]: ...
+    def post_call_headers(self, key: Mapping[str, object]) -> list[list[object]]: ...
+    def fallback_target_allowed(
+        self,
+        state: NativeModelCapacityState,
+        key: Mapping[str, object],
+        model: str,
+        commit: bool,
+        facts: Mapping[str, object],
+        request: NativeRequestRedis | None = None,
+    ) -> Future[dict[str, object]]: ...
+    def enforce_frame(
+        self,
+        connection: NativeModelCapacityState | None,
+        key: Mapping[str, object],
+        model: str,
+        facts: Mapping[str, object],
+        request: NativeRequestRedis | None = None,
+    ) -> Future[dict[str, object]]: ...
+
+@final
 class ResponsesWebSocketConnection:
     def __new__(cls, _uninstantiable: Never, /) -> Never: ...
     @classmethod
@@ -2025,6 +2071,8 @@ __all__ = [
     "NativeFetchPolicy",
     "NativeFetched",
     "NativeInstalled",
+    "NativeModelCapacity",
+    "NativeModelCapacityState",
     "NativeModelCostMap",
     "NativeModelCostMapState",
     "NativeParallelRequestLimiter",

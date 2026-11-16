@@ -263,6 +263,35 @@ async def test_virtual_key_model_policy_on_first_lookup_and_cache_hit(
 
 
 @pytest.mark.asyncio
+async def test_the_endpoint_reads_the_auth_its_dependency_resolved(monkeypatch: pytest.MonkeyPatch) -> None:
+    from fastapi import Depends, FastAPI
+
+    from litellm.proxy.request_auth_context import REQUEST_AUTH
+
+    server: Final = litellm.proxy.proxy_server
+    key: Final = "sk-request-auth"
+    stored: Final = UserAPIKeyAuth(token=server.hash_token(key), key_alias="alias-a")
+    monkeypatch.setattr(server, "master_key", MASTER_KEY)
+    monkeypatch.setattr(server, "general_settings", {})
+    monkeypatch.setattr(server, "user_api_key_cache", UserApiKeyCache())
+    monkeypatch.setattr(server, "prisma_client", MagicMock(get_data=AsyncMock(return_value=stored)))
+    monkeypatch.setattr(server, "llm_router", None)
+    monkeypatch.setattr(server, "user_custom_auth", None)
+    app: Final = FastAPI()
+
+    @app.post("/chat/completions")
+    async def endpoint(auth: UserAPIKeyAuth = Depends(user_api_key_auth)) -> dict[str, object]:
+        bound: Final = REQUEST_AUTH.get()
+        return {"same": bound is auth, "key_alias": None if bound is None else bound.key_alias}
+
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://proxy") as client:
+        response: Final = await client.post(
+            "/chat/completions", json={"model": "m"}, headers={"Authorization": f"Bearer {key}"}
+        )
+    assert response.json() == {"same": True, "key_alias": "alias-a"}
+
+
+@pytest.mark.asyncio
 async def test_scim_deactivation_precedes_central_key_model_denial(monkeypatch: pytest.MonkeyPatch) -> None:
     server: Final = litellm.proxy.proxy_server
     key: Final = "sk-deactivated-owner"
