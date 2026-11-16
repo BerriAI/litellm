@@ -802,6 +802,7 @@ async def test_export_redacts_credential_named_values_the_masker_names_miss(key:
         "basic dXNlcjpwYXNz",
         "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.sig",
         "postgres://admin:pw@db.internal:5432/app",
+        "redis://:pw@cache.internal:6379/1",
         "https://hooks.slack.com/services/T000/B000/XXXX",
         "https://discord.com/api/webhooks/1/abc",
         "AKIAIOSFODNN7EXAMPLE",
@@ -813,6 +814,14 @@ async def test_export_redacts_credential_shaped_values_under_any_key_and_in_list
     exported: Final = await _exported_key_metadata({"note": value, "owners": [value, "ops"]})
 
     assert exported == {"note": "REDACTED", "owners": ["REDACTED", "ops"]}
+
+
+@pytest.mark.asyncio
+@pytest.mark.timeout(5)
+async def test_export_scans_long_credential_free_strings_in_linear_time() -> None:
+    value: Final = "sk-" * 50_000
+
+    assert await _exported_key_metadata({"note": value}) == {"note": value}
 
 
 @pytest.mark.asyncio
