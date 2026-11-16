@@ -4208,12 +4208,12 @@ def _transform_long_decode_hops(
 def _provider_finish_reasons(
     candidates: Sequence[Candidates], choices: Sequence["StreamingChoices"]
 ) -> tuple[tuple[int, str], ...]:
-    """Every streamed choice carries a finish_reason, "stop" when the candidate sent none, so only the
-    choices whose candidate sent a finishReason are evidence of how the provider ended them."""
+    """Every streamed choice carries a finish_reason, "stop" when the candidate sent none or Google's
+    FINISH_REASON_UNSPECIFIED, so only a candidate that named how it ended is evidence of it."""
     finished: Final = frozenset(
         candidate.get("index", position)
         for position, candidate in enumerate(candidates)
-        if candidate.get("finishReason")
+        if (candidate.get("finishReason") or "FINISH_REASON_UNSPECIFIED") != "FINISH_REASON_UNSPECIFIED"
     )
     return tuple(
         (choice.index, choice.finish_reason) for choice in choices if choice.index in finished and choice.finish_reason

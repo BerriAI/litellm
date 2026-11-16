@@ -11452,6 +11452,14 @@ class TestStreamingClientDisconnectBilling:
                 id="no-finish-reason",
             ),
             pytest.param(
+                {
+                    "content": {"parts": [{"text": "partial answer"}], "role": "model"},
+                    "finishReason": "FINISH_REASON_UNSPECIFIED",
+                },
+                "finish_reason_unspecified",
+                id="finish-reason-unspecified-sentinel",
+            ),
+            pytest.param(
                 {"content": {"parts": [{"text": "partial answer"}], "role": "model"}, "finishReason": "MAX_TOKENS"},
                 "length",
                 id="max-tokens",
