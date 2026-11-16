@@ -455,7 +455,7 @@ class NeuralTrustGuardrail(CustomGuardrail):
         try:
             parsed: Final[object] = response.json()
         except ValueError as exc:
-            raise _TrustGuardUnreachable("TrustGuard returned non-JSON body") from exc
+            raise HTTPException(status_code=503, detail="TrustGuard returned a non-JSON response") from exc
         if not isinstance(parsed, dict):
             raise HTTPException(status_code=503, detail="TrustGuard returned an invalid response")
         typed_response: Final = METADATA_ADAPTER.validate_python(parsed)

@@ -1052,22 +1052,24 @@ class TestNeuralTrustGuardrail:
                     logging_obj=_logging(),
                 )
         assert exc_info.value.status_code == 503
-        assert "unreachable" in str(exc_info.value.detail)
+        assert "non-JSON" in str(exc_info.value.detail)
 
     @pytest.mark.asyncio
-    async def test_non_json_200_follows_fail_open(self) -> None:
+    async def test_non_json_200_fails_closed_even_if_fail_open(self) -> None:
+        """A body that cannot be read is a verdict this code cannot judge, not a transport failure,
+        and the fallback covers transport only."""
         guardrail = _guardrail(unreachable_fallback="fail_open")
-        inputs: GenericGuardrailAPIInputs = {"texts": ["hello"]}
         request = Request("POST", "https://trustguard.neuraltrust.ai/v1/evaluate")
         mock_post = AsyncMock(return_value=Response(200, request=request, text="<html>captive portal</html>"))
         with patch.object(guardrail.async_handler, "post", mock_post):
-            result = await guardrail.apply_guardrail(
-                inputs=inputs,
-                request_data={},
-                input_type="request",
-                logging_obj=_logging(),
-            )
-        assert result == inputs
+            with pytest.raises(HTTPException) as exc_info:
+                await guardrail.apply_guardrail(
+                    inputs={"texts": ["hello"]},
+                    request_data={},
+                    input_type="request",
+                    logging_obj=_logging(),
+                )
+        assert exc_info.value.status_code == 503
 
     @pytest.mark.asyncio
     async def test_http_502_follows_fail_open(self) -> None:
