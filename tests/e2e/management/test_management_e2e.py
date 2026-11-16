@@ -9,15 +9,15 @@ so the traffic-facing read-backs poll to a deadline instead of asserting once.
 
 from __future__ import annotations
 
+import hashlib
 import math
 import time
 from collections.abc import Callable
 from typing import Final
 
 import pytest
-
 from e2e_config import POLL_INTERVAL, POLL_TIMEOUT, UI_PASSWORD, UI_USERNAME, unique_marker
-from e2e_http import StreamingResponse, Success, unwrap
+from e2e_http import NoBody, StreamingResponse, Success, unwrap
 from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
 from lifecycle import ResourceManager
 from management_client import (
@@ -30,6 +30,8 @@ from models import (
     AuditLogPage,
     KeyGenerateBody,
     KeyGenerateResponse,
+    KeyInfoParams,
+    KeyInfoResponse,
     KeyUpdateBody,
     LiteLLMParamsBody,
     ModelInfoEntry,
@@ -1192,3 +1194,93 @@ class TestKeyDeletionAuditLog:
 
         _assert_key_deleted(client, created.key)
         _assert_single_deleted_row(_await_deleted_audit_rows(client, token), token)
+
+
+class TestKeyInfoOwnership:
+    @pytest.mark.parametrize("deleted", [False, True], ids=["active", "deleted"])
+    @meta(Subject(domain=Domain.MANAGEMENT, route=Route.KEY_MANAGEMENT))
+    def test_ownerless_key_cannot_read_another_teams_key(
+        self, client: ManagementClient, resources: ResourceManager, deleted: bool
+    ) -> None:
+        marker: Final = unique_marker()
+        caller_team: Final = _create_team(client, resources, f"ownerless-caller-{marker}", [])
+        target_team: Final = _create_team(client, resources, f"ownerless-target-{marker}", [])
+        caller: Final = _generate_key(client, resources, KeyGenerateBody(team_id=caller_team))
+        target: Final = _generate_key(client, resources, KeyGenerateBody(team_id=target_team))
+        caller_hash: Final = hashlib.sha256(caller.encode()).hexdigest()
+        target_hash: Final = hashlib.sha256(target.encode()).hexdigest()
+        assert client.proxy.key_info(caller_hash).user_id is None
+        assert client.proxy.key_info(target_hash).user_id is None
+        assert unwrap(client.key_info_as(caller_hash, caller_key=caller)).info.team_id == caller_team
+        assert unwrap(client.key_info_as(caller, caller_key=caller)).info.team_id == caller_team
+        assert unwrap(
+            client.proxy.transport.get(
+                "/key/info",
+                headers=client.proxy.transport.bearer(caller),
+                params=NoBody(),
+                response_type=KeyInfoResponse,
+            )
+        ).info.team_id == caller_team
+        if deleted:
+            client.delete_key_strict(target)
+        admin_info: Final = client.proxy.key_info(target_hash)
+        assert admin_info.team_id == target_team
+        assert admin_info.status == ("deleted" if deleted else "active")
+
+        denied: Final = tuple(
+            client.proxy.transport.probe(
+                "/key/info",
+                headers=client.proxy.transport.bearer(caller),
+                params=KeyInfoParams(key=lookup),
+            )
+            for lookup in (target_hash, target)
+        )
+        assert all(outcome.status_code == 403 for outcome in denied), denied
+        member_user: Final = _create_user(
+            client,
+            resources,
+            UserNewBody(user_email=f"member-{marker}@example.com", user_role="internal_user"),
+        )
+        client.add_team_member(target_team, member_user)
+        member_key: Final = _generate_key(client, resources, KeyGenerateBody(user_id=member_user, team_id=target_team))
+        assert unwrap(client.key_info_as(target_hash, caller_key=member_key)).info.team_id == target_team
+        if not deleted:
+            visible: Final = client.key_info_bulk_as([caller_hash, target_hash], caller_key=caller)
+            assert [info.team_id for info in visible.info] == [caller_team]
+            admin_visible: Final = client.key_info_bulk_as([target_hash])
+            assert [info.team_id for info in admin_visible.info] == [target_team]
+
+    @pytest.mark.parametrize(
+        "caller_owner,target_owner,allowed",
+        [(None, "target", False), ("caller", "target", False), ("shared", "shared", True)],
+    )
+    @meta(Subject(domain=Domain.MANAGEMENT, route=Route.KEY_MANAGEMENT))
+    def test_assigned_user_ownership_is_preserved(
+        self,
+        client: ManagementClient,
+        resources: ResourceManager,
+        caller_owner: str | None,
+        target_owner: str,
+        allowed: bool,
+    ) -> None:
+        marker: Final = unique_marker()
+        caller_user: Final = None if caller_owner is None else f"{caller_owner}-{marker}"
+        target_user: Final = f"{target_owner}-{marker}"
+        for user_id in frozenset((caller_user, target_user)):
+            if user_id is not None:
+                _create_user(
+                    client,
+                    resources,
+                    UserNewBody(user_id=user_id, user_email=f"{user_id}@example.com", user_role="internal_user"),
+                )
+        caller: Final = _generate_key(client, resources, KeyGenerateBody(user_id=caller_user))
+        target: Final = _generate_key(client, resources, KeyGenerateBody(user_id=target_user))
+        target_hash: Final = hashlib.sha256(target.encode()).hexdigest()
+        outcome: Final = client.proxy.transport.probe(
+            "/key/info",
+            headers=client.proxy.transport.bearer(caller),
+            params=KeyInfoParams(key=target_hash),
+        )
+        assert outcome.status_code == (200 if allowed else 403), outcome.body
+        visible: Final = client.key_info_bulk_as([target_hash], caller_key=caller)
+        assert [info.user_id for info in visible.info] == ([target_user] if allowed else [])
