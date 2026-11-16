@@ -50,6 +50,8 @@
 //! is the host's business:
 //! - `PythonHost` (inside a Python process) builds the request for the picked deployment and calls
 //!   `litellm.<op>`. It never calls back into a Python router.
+//! - The gateway's host (`litellm-gateway-inference`) runs the request's own inference route
+//!   against the picked deployment.
 //!
 //! A host is handed to each call, never kept by the router, so it may hold what one request owns:
 //! the caller, the typed request. Its response and its own error are associated types the core
@@ -136,7 +138,7 @@ pub use crate::{
     health::{Clock, Health, Outcome, SystemClock},
     host::{
         Attempt, AttemptFailure, Blocked, BuildAsk, BuildPath, Built, CallError, CallbackFiltered,
-        Capability, HostFacts, Provided, RegistryHost, RetryCause, RouterEvent, RouterHost,
+        Capability, HostFacts, Provided, Raised, RegistryHost, RetryCause, RouterEvent, RouterHost,
         RouterRequest, RoutingContext, SecretAt, SecretRef, SelectStage, Served,
     },
     outcome::{OutcomeCallbacks, OutcomeWrite},
@@ -207,6 +209,50 @@ impl Core {
         {
             return Err(Unsupported::Plugin(plugin.name.clone()).into());
         }
+        let config = &self.config;
+        let needed = [
+            (
+                "enable_pre_call_checks",
+                settings.enable_pre_call_checks,
+                Capability::Select,
+            ),
+            (
+                "routing_plugins",
+                settings.routing_plugins,
+                Capability::Select,
+            ),
+            (
+                "callback_filters",
+                settings.callback_filters,
+                Capability::Select,
+            ),
+            (
+                "enable_tag_filtering",
+                config.enable_tag_filtering,
+                Capability::Select,
+            ),
+            (
+                "optional_pre_call_checks",
+                !config.optional_pre_call_checks.is_empty(),
+                Capability::Select,
+            ),
+            (
+                "model_group_affinity_config",
+                config.model_group_affinity,
+                Capability::Select,
+            ),
+            (
+                "enable_health_check_routing",
+                settings.enable_health_check_routing,
+                Capability::HealthChecks,
+            ),
+        ];
+        if let Some((setting, _, needs)) = needed
+            .into_iter()
+            .find(|(_, on, needs)| *on && !self.facts.can(*needs))
+        {
+            return Err(Unsupported::Setting { setting, needs }.into());
+        }
         for deployment in registry.deployments(&DeploymentFilter::default()) {
             self.validate_deployment(&deployment)?;
         }
@@ -233,7 +279,7 @@ impl Core {
 pub(crate) struct Call<'a, H: RouterHost> {
     core: &'a Core,
     pub(crate) host: &'a H,
-    raised: Mutex<Vec<Option<H::Failure>>>,
+    raised: Mutex<Vec<Option<Raised<H::Failure>>>>,
 }
 
 impl<'a, H: RouterHost> Call<'a, H> {
@@ -249,27 +295,34 @@ impl<'a, H: RouterHost> Call<'a, H> {
         Health::new(self.host.cache(), self.core.clock.clone())
     }
 
-    /// The error a failed attempt stands for, naming the slot its host error is kept in.
-    pub(crate) fn failed(&self, failure: AttemptFailure<H::Failure>) -> Error {
+    /// The error a failed attempt stands for, naming the slot its host error is kept in with the
+    /// deployment the attempt ran on.
+    pub(crate) fn failed(
+        &self,
+        failure: AttemptFailure<H::Failure>,
+        deployment_id: Option<&str>,
+    ) -> Error {
         let mut raised = self.raised.lock();
         let slot = RaisedAt(raised.len());
-        match failure {
-            AttemptFailure::Failed { facts, raised: own } => {
-                raised.push(Some(own));
+        let (failure, error) = match failure {
+            AttemptFailure::Failed { facts, raised: own } => (
+                own,
                 Error::Attempt {
                     failure: facts,
                     raised_at: Some(slot),
-                }
-            }
-            AttemptFailure::Refused(own) => {
-                raised.push(Some(own));
-                Error::Refused(slot)
-            }
-        }
+                },
+            ),
+            AttemptFailure::Refused(own) => (own, Error::Refused(slot)),
+        };
+        raised.push(Some(Raised {
+            failure,
+            deployment_id: deployment_id.map(str::to_owned),
+        }));
+        error
     }
 
     /// The error the call ends on, with the host error behind it when an attempt raised it.
-    pub(crate) fn ended(&self, error: Error) -> CallError<H::Failure> {
+    pub(crate) fn ended(&self, error: Error) -> Box<CallError<H::Failure>> {
         let slot = match &error {
             Error::Attempt { raised_at, .. } => *raised_at,
             Error::Refused(slot) => Some(*slot),
@@ -277,7 +330,7 @@ impl<'a, H: RouterHost> Call<'a, H> {
         };
         let raised =
             slot.and_then(|RaisedAt(slot)| self.raised.lock().get_mut(slot).and_then(Option::take));
-        CallError { error, raised }
+        Box::new(CallError { error, raised })
     }
 }
 
@@ -419,7 +472,7 @@ impl Router {
         host: &H,
         op: Op,
         request: RouterRequest,
-    ) -> Result<RouterResponse<H::Response>, CallError<H::Failure>> {
+    ) -> Result<RouterResponse<H::Response>, Box<CallError<H::Failure>>> {
         self.live()?;
         let call = Call::new(&self.core, host);
         call.call(op, Arc::new(request))

@@ -4,9 +4,9 @@
 use std::{collections::VecDeque, sync::Arc, time::Duration};
 
 use litellm_router_core::{
-    Attempt, AttemptError, AttemptFailure, CallbackFiltered, Deployment, Error, FailureKind,
-    FailureReport, Health, HostFacts, InMemoryRouterCache, Op, PreRoute, PreRouted, Router,
-    RouterCache, RouterConfig, RouterDynamicConfig, RouterEvent, RouterHost, RouterRequest,
+    Attempt, AttemptError, AttemptFailure, CallbackFiltered, ConfigError, Deployment, Error,
+    FailureKind, FailureReport, Health, HostFacts, InMemoryRouterCache, Op, PreRoute, PreRouted,
+    Router, RouterCache, RouterConfig, RouterDynamicConfig, RouterEvent, RouterHost, RouterRequest,
     RouterResponse, RoutingContext, SeededRandomness, SelectStage, Served, SuccessReport,
     UsageWindow, call::StreamOrigin, fallback::Fallbacks, health::current_minute,
     host::UncountedRetries, select, select::PassThrough,
@@ -400,7 +400,10 @@ async fn a_failed_call_hands_back_the_host_error_of_the_attempt_it_ends_on(confi
         ),
         (
             Some(FailureKind::BadRequest),
-            Some(Raised(selected[0].clone())),
+            Some(litellm_router_core::Raised {
+                failure: Raised(selected[0].clone()),
+                deployment_id: Some(selected[0].clone()),
+            }),
             2,
         )
     );
@@ -431,7 +434,14 @@ async fn a_refused_attempt_ends_the_call_without_retries_or_fallbacks(config: Ro
     );
     assert_eq!(
         (ended.raised, selected.len(), host.retries()),
-        (Some(Raised(selected[0].clone())), 1, 0)
+        (
+            Some(litellm_router_core::Raised {
+                failure: Raised(selected[0].clone()),
+                deployment_id: Some(selected[0].clone()),
+            }),
+            1,
+            0
+        )
     );
 }
 
@@ -457,6 +467,43 @@ fn rate_limited() -> AttemptError {
     failure(FailureKind::RateLimit, 429)
 }
 
+#[rstest]
+#[case::pre_call_checks(json!({"enable_pre_call_checks": true}), "`enable_pre_call_checks`")]
+#[case::callback_filters(json!({"callback_filters": true}), "`callback_filters`")]
+#[case::strategy(json!({"routing_strategy": "least-busy"}), "`least-busy`")]
+#[case::tag_filtering(json!({"enable_tag_filtering": true}), "`enable_tag_filtering`")]
+#[case::optional_checks(
+    json!({"optional_pre_call_checks": ["encrypted_content_affinity"]}),
+    "`optional_pre_call_checks`"
+)]
+#[case::health_check_routing(
+    json!({"enable_health_check_routing": true}),
+    "`enable_health_check_routing`"
+)]
+fn a_host_without_capabilities_refuses_the_settings_that_need_them(
+    #[case] settings: Value,
+    #[case] named: &str,
+) {
+    let config: RouterConfig = serde_json::from_value(settings).unwrap();
+    let facts = HostFacts {
+        capabilities: &[],
+        supports: |_, _| true,
+    };
+    let refused = match Router::new(config.clone(), RouterDynamicConfig::default(), facts) {
+        Err(ConfigError::Unsupported(unsupported)) => unsupported.to_string(),
+        other => panic!("expected an unsupported config, got {:?}", other.err()),
+    };
+    assert!(refused.contains(named), "{refused}");
+    assert!(
+        Router::new(
+            config,
+            RouterDynamicConfig::default(),
+            HostFacts::everything()
+        )
+        .is_ok()
+    );
+}
+
 /// A rate limit cools its deployment down, so the next attempt runs on the group's other one and
 /// the two host errors differ.
 #[rstest]
@@ -474,7 +521,11 @@ async fn a_call_whose_retry_fails_too_hands_back_the_host_error_of_the_retry(con
         .unwrap_err();
     let selected = host.selected();
     assert_eq!(
-        (selected.len(), selected[0] == selected[1], ended.raised),
+        (
+            selected.len(),
+            selected[0] == selected[1],
+            ended.raised.map(|raised| raised.failure)
+        ),
         (2, false, Some(Raised(selected[1].clone())))
     );
 }
@@ -500,7 +551,11 @@ async fn a_retry_the_host_refuses_hands_back_the_host_error_of_the_retry(config:
         ended.error
     );
     assert_eq!(
-        (selected.len(), selected[0] == selected[1], ended.raised),
+        (
+            selected.len(),
+            selected[0] == selected[1],
+            ended.raised.map(|raised| raised.failure)
+        ),
         (2, false, Some(Raised(selected[1].clone())))
     );
 }
@@ -531,7 +586,11 @@ async fn stream_retries_that_all_fail_hand_back_the_host_error_of_the_last_one(
         .unwrap_err();
     let selected = host.selected();
     assert_eq!(
-        (selected.len(), selected[0] == selected[1], ended.raised),
+        (
+            selected.len(),
+            selected[0] == selected[1],
+            ended.raised.map(|raised| raised.failure)
+        ),
         (2, false, Some(Raised(selected[1].clone())))
     );
 }

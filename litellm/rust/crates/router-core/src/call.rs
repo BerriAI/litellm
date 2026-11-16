@@ -45,6 +45,9 @@ const MAX_HONOURED_RETRY_AFTER: Duration = Duration::from_secs(60);
 pub struct RouterResponse<R> {
     pub output: Served<R>,
     pub deployment_id: String,
+    /// The name the serving attempt ran under: the requested name as written, an alias included,
+    /// or a fallback target.
+    pub name: String,
     pub model_group: String,
     pub attempted_retries: u32,
     /// The retry budget of the loop a retry succeeded in (`x-litellm-max-retries`); `None`
@@ -1391,6 +1394,7 @@ impl<H: RouterHost> Call<'_, H> {
                 Ok(RouterResponse {
                     output,
                     deployment_id: deployment.id.clone(),
+                    name: target.group.clone(),
                     model_group: candidates.model_group,
                     attempted_retries: retry,
                     max_retries: None,
@@ -1398,7 +1402,7 @@ impl<H: RouterHost> Call<'_, H> {
                 })
             }
             Err(failure) => {
-                let error = self.failed(failure);
+                let error = self.failed(failure, Some(&deployment.id));
                 let failed_deployment = match &error {
                     Error::Attempt { failure, .. } => {
                         if !failure.recorded && !failure.queue_rejected() {
@@ -1548,12 +1552,13 @@ impl<H: RouterHost> Call<'_, H> {
             Ok(output) => Ok(RouterResponse {
                 output,
                 deployment_id: String::new(),
+                name: target.group.clone(),
                 model_group: target.group.clone(),
                 attempted_retries: retry,
                 max_retries: None,
                 attempted_fallbacks: at.depth,
             }),
-            Err(failure) => Err(self.failed(failure).into()),
+            Err(failure) => Err(self.failed(failure, None).into()),
         }
     }
 
