@@ -338,7 +338,9 @@ def _leaf_texts(block: Mapping[str, object]) -> Iterator[str]:
     if "json" in block:
         yield json.dumps(block["json"], default=str)
     if "guardContent" in block:
-        yield from _leaf_texts(_JSON_OBJECT.validate_python(_JSON_OBJECT.validate_python(block["guardContent"])["text"]))
+        yield from _leaf_texts(
+            _JSON_OBJECT.validate_python(_JSON_OBJECT.validate_python(block["guardContent"])["text"])
+        )
     if "toolUse" in block:
         yield json.dumps(_JSON_OBJECT.validate_python(block["toolUse"]).get("input"), default=str)
 
@@ -386,27 +388,38 @@ def _logged_turn(turn: Mapping[str, object]) -> AllMessageValues:
     return ChatCompletionUserMessage(role="user", content=content)
 
 
+_INVOKE_PROMPT_FIELDS: Final = ("prompt", "inputText")
+
+
 def _logged_messages(body: Mapping[str, object]) -> Iterator[AllMessageValues]:
     if body.get("system"):
         yield ChatCompletionSystemMessage(role="system", content=_content_text(body["system"]))
     if "messages" in body:
         yield from map(_logged_turn, _JSON_OBJECTS.validate_python(body["messages"]))
-    for field in ("prompt", "inputText"):
-        text = body.get(field)
-        if isinstance(text, str):
-            yield ChatCompletionUserMessage(role="user", content=text)
+    yield from (
+        ChatCompletionUserMessage(role="user", content=text)
+        for text in map(body.get, _INVOKE_PROMPT_FIELDS)
+        if isinstance(text, str)
+    )
 
 
-def _numeric_settings(body: Mapping[str, object]) -> Iterator[tuple[str, object]]:
+def _numeric_setting(value: object) -> object:
+    if isinstance(value, (bool, int, float)):
+        return value
+    if isinstance(value, Mapping):
+        return _numeric_settings(_JSON_OBJECT.validate_python(value)) or None
+    return None
+
+
+def _is_set(setting: tuple[str, object]) -> bool:
+    return setting[1] is not None
+
+
+def _numeric_settings(body: Mapping[str, object]) -> Mapping[str, object]:
     """A native body's numbers and booleans, nested ones included. Model-specific bodies name their prompt fields
     freely, so everything that could hold prompt text is left out of the logged settings."""
-    for name, value in body.items():
-        if isinstance(value, (bool, int, float)):
-            yield name, value
-            continue
-        nested = dict(_numeric_settings(value)) if isinstance(value, Mapping) else None
-        if nested:
-            yield name, nested
+    settings: Final = ((name, _numeric_setting(value)) for name, value in body.items())
+    return dict(filter(_is_set, settings))
 
 
 def _logged_request(endpoint: str, body: Mapping[str, object]) -> LoggedPassthroughRequest | None:
@@ -418,7 +431,7 @@ def _logged_request(endpoint: str, body: Mapping[str, object]) -> LoggedPassthro
     except (ValidationError, KeyError):
         return None
     return LoggedPassthroughRequest(
-        messages=messages, model_parameters={**dict(_numeric_settings(body)), "operation": action}
+        messages=messages, model_parameters={**_numeric_settings(body), "operation": action}
     )
 
 

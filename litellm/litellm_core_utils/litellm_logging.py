@@ -644,11 +644,6 @@ _GOOGLE_USAGE_FIELDS: Final = frozenset(UsageMetadata.__annotations__)
 _REDACTED_RESULT: Final = TypeAdapter(object)
 _LoggedResponse: Final = TypeVar("_LoggedResponse")
 _GUARDRAIL_INFORMATION_KEY: Final = "standard_logging_guardrail_information"
-PASSTHROUGH_MODEL_PARAMETERS_KEY: Final = "passthrough_model_parameters"
-_PASSTHROUGH_CALL_TYPES: Final = frozenset(
-    {CallTypes.llm_passthrough_route.value, CallTypes.allm_passthrough_route.value}
-)
-_MODEL_PARAMETERS: Final = TypeAdapter(Mapping[str, object])
 
 
 def _without_guardrail_information(metadata: Mapping[str, object]) -> Mapping[str, object]:
@@ -1047,6 +1042,8 @@ class Logging(LiteLLMLoggingBaseClass):
         self.message_copy_duration_ms: float = (time.time() - _copy_start) * 1000
         self.callback_duration_ms: float = 0.0
         self.stream = stream
+        self.passthrough_model_parameters: Mapping[str, object] = MappingProxyType({})
+        self.passthrough_stream: bool | None = None
         self.applied_timeout: float | Timeout | None = None
         self.start_time = start_time  # log the call start time
         self.call_type = call_type
@@ -8735,14 +8732,12 @@ def get_standard_logging_object_payload(
             kwargs=kwargs,
         )
 
-        stream: bool | None = None
+        stream: bool | None = logging_obj.passthrough_stream
         if (
             kwargs.get("complete_streaming_response") is not None
             or kwargs.get("async_complete_streaming_response") is not None
         ) and kwargs.get("stream") is True:
             stream = True
-        elif kwargs.get("call_type") in _PASSTHROUGH_CALL_TYPES and isinstance(kwargs.get("stream"), bool):
-            stream = kwargs["stream"]
 
         # Reconstruct full model name with provider prefix for logging
         # This ensures Bedrock models like "us.anthropic.claude-3-5-sonnet-20240620-v1:0"
@@ -8884,7 +8879,7 @@ def get_standard_logging_object_payload(
             response=final_response_obj,
             model_parameters={
                 **ModelParamHelper.get_standard_logging_model_parameters(kwargs.get("optional_params", None) or {}),
-                **_MODEL_PARAMETERS.validate_python(kwargs.get(PASSTHROUGH_MODEL_PARAMETERS_KEY) or {}),
+                **logging_obj.passthrough_model_parameters,
             },
             hidden_params=clean_hidden_params,
             model_map_information=model_cost_information,
