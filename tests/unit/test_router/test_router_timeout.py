@@ -476,7 +476,11 @@ async def test_native_live_stream_cut_at_the_stream_timeout_is_not_blamed_on_the
             408,
             True,
         ),
-        ({"client_side_stream_ttft_timeout": True, "stream_ttft_timeout": "0.5"}, 1.0, 408, False),
+        ({"client_side_stream_ttft_timeout": True, "stream_ttft_timeout": "0.5"}, 1.0, 408, True),
+        ({"client_side_stream_ttft_timeout": True, "stream_ttft_timeout": "abc"}, 1.0, 408, False),
+        ({"client_side_stream_ttft_timeout": True, "stream_ttft_timeout": "0"}, 1.0, 408, False),
+        ({"client_side_stream_ttft_timeout": True, "stream_ttft_timeout": "-1"}, 1.0, 408, False),
+        ({"client_side_stream_ttft_timeout": True, "stream_ttft_timeout": "nan"}, 1.0, 408, False),
     ),
 )
 def test_caller_stream_ttft_timeout_408_uses_only_marked_numeric_deadlines(

@@ -29,6 +29,7 @@ from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.litellm_logging import mask_api_base_credentials
 from litellm.router_deprecated import renamed_router_param
+from litellm.router_rust.invoke.shaping import stream_ttft_timeout
 from litellm.router_utils.cooldown_cache import CooldownCacheValue
 from litellm.router_utils.cooldown_callbacks import router_cooldown_event_callback
 from litellm.types.llms.anthropic import MESSAGE_THREAD_NOT_FOUND_ERROR_CODE
@@ -854,7 +855,7 @@ def is_caller_timeout_408(
         return False
     configured: Final = (
         litellm_params.get("timeout") if litellm_params.get("client_side_timeout") else None,
-        litellm_params.get("stream_ttft_timeout") if litellm_params.get("client_side_stream_ttft_timeout") else None,
+        stream_ttft_timeout(litellm_params, {}) if litellm_params.get("client_side_stream_ttft_timeout") else None,
     )
     deadlines: Final = tuple(value for value in configured if isinstance(value, (int, float)))
     started: Final = model_call_details.get("api_call_start_time") or model_call_details.get("start_time")
