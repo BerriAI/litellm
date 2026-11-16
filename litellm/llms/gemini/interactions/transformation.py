@@ -198,11 +198,10 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
         """
         request_body: Final[dict[str, object]] = {}
 
-        # Model or Agent (one required)
-        if model:
-            request_body["model"] = GeminiModelInfo.get_base_model(model) or model
-        elif agent:
+        if agent:
             request_body["agent"] = agent
+        elif model:
+            request_body["model"] = GeminiModelInfo.get_base_model(model) or model
         else:
             raise ValueError("Either 'model' or 'agent' must be provided")
 
@@ -225,7 +224,7 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
         dropped_keys: Final = (
             frozenset({"agent_config"})
             if drops_unsupported_params(litellm_params.get("drop_params"))
-            and (model or not _has_agent_config_type(optional_params.get("agent_config")))
+            and (not agent or not _has_agent_config_type(optional_params.get("agent_config")))
             else frozenset()
         )
         for key in optional_keys:

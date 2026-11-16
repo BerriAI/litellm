@@ -2,8 +2,9 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
-from typing import Any, Final, Literal, TypeAlias
+from typing import Annotated, Any, Final, Literal, TypeAlias
 
+from pydantic import AfterValidator, ConfigDict, Field, StrictFloat, StrictInt, StrictStr
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm.types.llms.base import LiteLLMBaseModel
@@ -342,6 +343,54 @@ VECTOR_STORE_OPENAI_PARAMS = Literal[
     "ranking_options",
     "rewrite_query",
     "query_image",
+]
+
+
+def _require_items(items: tuple[object, ...]) -> tuple[object, ...]:
+    if not items:
+        raise ValueError("must not be empty")
+    return items
+
+
+class OpenAIEqualityFilter(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    type: Literal["eq", "ne"]
+    key: str
+    value: str | bool | int | float
+
+
+class OpenAIRangeFilter(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    type: Literal["gt", "gte", "lt", "lte"]
+    key: str
+    value: StrictInt | StrictFloat
+
+
+class OpenAIMembershipFilter(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    type: Literal["in", "nin"]
+    key: str
+    value: Annotated[
+        tuple[StrictStr | StrictInt | StrictFloat, ...], Field(fail_fast=True), AfterValidator(_require_items)
+    ]
+
+
+OpenAIComparisonFilter: TypeAlias = OpenAIEqualityFilter | OpenAIRangeFilter | OpenAIMembershipFilter
+
+
+class OpenAICompoundFilter(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    type: Literal["and", "or"]
+    filters: Annotated[tuple["OpenAIVectorStoreFilter", ...], Field(fail_fast=True), AfterValidator(_require_items)]
+
+
+OpenAIVectorStoreFilter: TypeAlias = Annotated[
+    OpenAIComparisonFilter | OpenAICompoundFilter,
+    Field(discriminator="type"),
 ]
 
 

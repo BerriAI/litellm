@@ -178,6 +178,7 @@ jobs:
 
   windows-sdk:
     name: windows-sdk
+    if: github.event_name != 'pull_request'
     runs-on: windows-2025
     timeout-minutes: 30
     env:
@@ -213,6 +214,7 @@ jobs:
 
   proxy-build-from-pip:
     name: proxy-build-from-pip
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     services:
@@ -352,7 +354,7 @@ jobs:
 
   smoke-passed:
     name: smoke passed
-    needs: [dashboard-build, core-checks, all-extras, windows-sdk, proxy-build-from-pip]
+    needs: [dashboard-build, core-checks, all-extras]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 2

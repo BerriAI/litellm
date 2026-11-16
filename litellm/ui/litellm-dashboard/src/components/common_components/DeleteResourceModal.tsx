@@ -22,6 +22,7 @@ interface DeleteResourceModalProps {
   onOk: () => void;
   confirmLoading: boolean;
   requiredConfirmation?: string;
+  errorMessage?: string | null;
 }
 
 export default function DeleteResourceModal({
@@ -35,6 +36,7 @@ export default function DeleteResourceModal({
   onOk,
   confirmLoading,
   requiredConfirmation,
+  errorMessage,
 }: DeleteResourceModalProps) {
   const { t } = useTranslation();
   const [requiredConfirmationInput, setRequiredConfirmationInput] = useState("");
@@ -77,6 +79,11 @@ export default function DeleteResourceModal({
           <div>
             <span>{message}</span>
           </div>
+          {errorMessage && (
+            <p role="alert" className="text-sm text-destructive">
+              {errorMessage}
+            </p>
+          )}
           {requiredConfirmation && (
             <div className="mb-6 mt-4 pt-4 border-t border-border">
               <p className="block text-base font-medium text-foreground mb-2">

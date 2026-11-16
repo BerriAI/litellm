@@ -217,4 +217,18 @@ describe("BudgetTable", () => {
     expect(screen.getByText("Could not load budgets")).toBeInTheDocument();
     expect(screen.getByText("budget store unavailable")).toBeInTheDocument();
   });
+
+  it("shows both limits, including zero, without describing the budget as unlimited", () => {
+    const row = makeBudget({
+      max_budget: null,
+      budget_limits: [
+        { budget_duration: "1mo", max_budget: 0 },
+        { budget_duration: "12mo", max_budget: 120 },
+      ],
+    });
+    renderWithProviders(<BudgetTable {...defaultProps} list={makeList({ rows: [row] })} />);
+    expect(screen.getByText("$0 per month")).toBeVisible();
+    expect(screen.getByText("$120 per year")).toBeVisible();
+    expect(screen.queryByText("Unlimited")).not.toBeInTheDocument();
+  });
 });

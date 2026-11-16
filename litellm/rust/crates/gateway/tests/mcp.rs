@@ -121,8 +121,12 @@ impl Served {
 #[fixture]
 async fn served(#[future] upstream: Fixture) -> Served {
     let upstream = upstream.await;
-    let config = Config::from_yaml(&format!(
-        r#"
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("config.yaml");
+    std::fs::write(
+        &path,
+        format!(
+            r#"
 environment_variables:
   GATEWAY_KEY: admission-secret
   UPSTREAM_KEY: upstream-secret
@@ -143,14 +147,15 @@ mcp_servers:
     timeout: 2
     max_concurrent_requests: 1
 "#,
-        upstream.url
-    ))
+            upstream.url
+        ),
+    )
     .unwrap();
+    let config = litellm_gateway::load_config(&path).await.unwrap();
     let inference = litellm_gateway::build_inference(&config).unwrap();
     let shutdown = CancellationToken::new();
     let mcp = litellm_gateway::build_mcp(
         &config,
-        inference.secrets.clone(),
         shutdown.clone(),
         &inference.resources.pool,
         &inference.http,
@@ -274,16 +279,11 @@ async fn mcp_tools_are_discovered_through_the_configured_proxy(#[future] upstrea
         ..inference.http.clone()
     };
     let shutdown = CancellationToken::new();
-    let mcp = litellm_gateway::build_mcp(
-        &config,
-        inference.secrets.clone(),
-        shutdown.clone(),
-        &inference.resources.pool,
-        &http,
-    )
-    .await
-    .unwrap()
-    .unwrap();
+    let mcp =
+        litellm_gateway::build_mcp(&config, shutdown.clone(), &inference.resources.pool, &http)
+            .await
+            .unwrap()
+            .unwrap();
     let app = litellm_gateway_mcp::router(mcp.operations.clone(), HttpConfig::default());
     let response = app
         .oneshot(
@@ -325,7 +325,6 @@ async fn mcp_uses_the_configured_ca_bundle() {
     };
     let error = litellm_gateway::build_mcp(
         &config,
-        inference.secrets.clone(),
         CancellationToken::new(),
         &inference.resources.pool,
         &http,
@@ -359,10 +358,6 @@ async fn mcp_uses_the_configured_ca_bundle() {
 #[case::protocol_override("mcp_info: {protocol_version: auto}", "protocol and cost")]
 #[case::costs("mcp_info: {mcp_server_cost_info: {default: 1}}", "protocol and cost")]
 #[case::missing_token("auth_type: api_key", "authentication_token")]
-#[case::missing_env(
-    "auth_type: api_key\n    authentication_token: os.environ/LITELLM_TEST_NONEXISTENT_MCP_SECRET",
-    "referenced secret"
-)]
 #[case::reserved_header("static_headers: {host: secret-value}", "header")]
 #[tokio::test]
 async fn rejects_unsupported_or_invalid_settings_before_serving(
@@ -373,7 +368,6 @@ async fn rejects_unsupported_or_invalid_settings_before_serving(
     let inference = litellm_gateway::build_inference(&config).unwrap();
     let result = litellm_gateway::build_mcp(
         &config,
-        Arc::new(NoSecrets),
         CancellationToken::new(),
         &inference.resources.pool,
         &inference.http,
@@ -393,7 +387,6 @@ async fn mcp_is_optional_and_requires_admission_credentials_when_enabled() {
     assert!(
         litellm_gateway::build_mcp(
             &empty,
-            inference.secrets.clone(),
             CancellationToken::new(),
             &inference.resources.pool,
             &inference.http
@@ -406,7 +399,6 @@ async fn mcp_is_optional_and_requires_admission_credentials_when_enabled() {
         Config::from_yaml("mcp_servers: {docs: {url: 'http://127.0.0.1:1/mcp'}}").unwrap();
     let error = litellm_gateway::build_mcp(
         &enabled,
-        inference.secrets.clone(),
         CancellationToken::new(),
         &inference.resources.pool,
         &inference.http,
@@ -415,19 +407,6 @@ async fn mcp_is_optional_and_requires_admission_credentials_when_enabled() {
     .err()
     .unwrap();
     assert!(matches!(error, litellm_gateway::Error::Auth(_)));
-}
-
-struct NoSecrets;
-impl litellm_secrets::source::SecretSource for NoSecrets {
-    fn get_secret_str<'a>(
-        &'a self,
-        _: &'a str,
-    ) -> futures_util::future::BoxFuture<
-        'a,
-        Result<Option<litellm_secret_value::SecretValue>, litellm_secrets::Error>,
-    > {
-        Box::pin(async { Ok(None) })
-    }
 }
 
 #[rstest]
@@ -461,7 +440,6 @@ async fn refuses_unimplemented_global_mcp_policy(#[case] settings: &str) {
     let inference = litellm_gateway::build_inference(&config).unwrap();
     let error = litellm_gateway::build_mcp(
         &config,
-        Arc::new(NoSecrets),
         CancellationToken::new(),
         &inference.resources.pool,
         &inference.http,

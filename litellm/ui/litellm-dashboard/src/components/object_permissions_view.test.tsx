@@ -2,11 +2,32 @@ import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import ObjectPermissionsView from "./object_permissions_view";
 
-vi.mock("./permissions/VectorStorePermissions", () => ({ default: () => <div data-testid="vector-stores" /> }));
+vi.mock("./permissions/VectorStorePermissions", () => ({
+  default: ({ inheritedVectorStores }: { inheritedVectorStores?: { id: string }[] }) => (
+    <div data-testid="vector-stores">{(inheritedVectorStores ?? []).map((grant) => grant.id).join(",")}</div>
+  ),
+}));
 vi.mock("./permissions/MCPServerPermissions", () => ({ default: () => <div data-testid="mcp-servers" /> }));
 vi.mock("./permissions/AgentPermissions", () => ({ default: () => <div data-testid="agents" /> }));
 
 const objectPermission = { object_permission_id: "perm-1", skills: [] as string[] };
+
+describe("ObjectPermissionsView vector stores card", () => {
+  it("hands the card the stores that come from access groups", () => {
+    render(
+      <ObjectPermissionsView
+        objectPermission={objectPermission}
+        inheritedVectorStores={[
+          { id: "store-a", accessGroupNames: ["kb-readers"] },
+          { id: "store-b", accessGroupNames: ["kb-readers"] },
+        ]}
+        variant="inline"
+      />,
+    );
+
+    expect(screen.getByTestId("vector-stores")).toHaveTextContent("store-a,store-b");
+  });
+});
 
 describe("ObjectPermissionsView skills card", () => {
   it("shows plugin names granted only through access groups with their source", () => {

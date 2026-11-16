@@ -924,12 +924,12 @@ impl Core {
             Err(failed) => failed,
         };
         self.pick_failed(at, target, &failed.error);
-        // A guardrail's block and a failed agentic follow-up are re-raised as they are, before
+        // A guardrail's block and a failure no retry can clear are re-raised as they are, before
         // anything else looks at them (`async_function_with_retries`).
         if matches!(
             &*failed.error,
             Error::Attempt(failure)
-                if failure.kind == FailureKind::GuardrailIntervention || failure.agentic_followup
+                if failure.kind == FailureKind::GuardrailIntervention || failure.ends_retries()
         ) {
             return Err(failed);
         }
@@ -1102,7 +1102,7 @@ impl Core {
                     response.max_retries = Some(num_retries);
                     return Ok(response);
                 }
-                Err(next) if next.error.attempt().is_some_and(|f| f.agentic_followup) => {
+                Err(next) if next.error.attempt().is_some_and(AttemptError::ends_retries) => {
                     return Err(next);
                 }
                 Err(next) => {
