@@ -19,6 +19,7 @@ import pytest
 from pydantic import TypeAdapter, ValidationError
 
 import litellm
+from litellm import anthropic_beta_headers_manager
 from litellm.caching.llm_caching_handler import LLMClientCache
 from litellm.constants import (
     ANTHROPIC_MESSAGES_DETACHED_STREAM_DRAIN_TIMEOUT_SECONDS,
@@ -296,6 +297,33 @@ def test_azure_ad_token_is_the_one_python_mints(
 )
 def test_filters_beta_headers_is_what_the_provider_config_says(model: str, provider: str, expected: bool) -> None:
     assert messages_host.filters_beta_headers(model, provider, None) is expected
+
+
+@pytest.mark.parametrize(
+    ("model", "provider", "api_base", "carried"),
+    [
+        pytest.param("anthropic/claude-sonnet-4-5", "anthropic", None, False, id="anthropic"),
+        pytest.param(
+            "anthropic/claude-sonnet-4-5",
+            "anthropic",
+            "https://example-resource.services.ai.azure.com/anthropic",
+            True,
+            id="anthropic_foundry",
+        ),
+        pytest.param("azure_ai/claude-sonnet-4-5", "azure_ai", None, True, id="azure_ai"),
+        pytest.param(_BEDROCK_INVOKE, "bedrock", None, True, id="bedrock_invoke"),
+    ],
+)
+def test_beta_headers_config_is_the_map_python_loaded_for_a_filtering_call(
+    monkeypatch: pytest.MonkeyPatch, model: str, provider: str, api_base: str | None, carried: bool
+) -> None:
+    loaded: Final = {"provider_aliases": {}, "azure_ai": {"advisor-tool-2026-03-01": "advisor-tool-2026-03-01"}}
+    monkeypatch.setattr(anthropic_beta_headers_manager, "_BETA_HEADERS_CONFIG", loaded)
+
+    config: Final = messages_host.beta_headers_config(model, provider, api_base)
+
+    assert (config is loaded) is carried
+    assert carried or config is None
 
 
 @pytest.mark.parametrize(
