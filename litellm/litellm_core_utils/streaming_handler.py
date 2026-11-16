@@ -2715,6 +2715,8 @@ class CustomStreamWrapper:
             self._log_stream_failure_and_raise(e)
 
     async def _finalize_completed_stream(self, cache_hit: bool) -> "ModelResponseStream":
+        from litellm.responses.streaming_iterator import spawn_logging_task
+
         if self.sent_last_chunk is True:
             complete_streaming_response: Final = await self._async_build_complete_streaming_response()
             response: Final = self._new_usage_chunk()
@@ -2734,11 +2736,13 @@ class CustomStreamWrapper:
                     _copy = complete_streaming_response.model_copy(deep=True)
                 except RuntimeError:
                     _copy = complete_streaming_response.model_copy()
-                asyncio.create_task(
+                spawn_logging_task(
+                    asyncio.get_running_loop(),
                     self.async_cache_streaming_response(
                         processed_chunk=_copy,
                         cache_hit=cache_hit,
-                    )
+                    ),
+                    task_name="Streaming response cache write",
                 )
             # Update hidden_params with final usage from
             # stream_chunk_builder (see sync __next__ for full comment).
@@ -2776,14 +2780,16 @@ class CustomStreamWrapper:
                 # prefer_async_handlers routes CustomLogger to async_success_handler
                 # when consumers use ``async for`` on sync-SDK streams. Legacy string
                 # callbacks still run via executor.submit inside dispatch_success_handlers.
-                asyncio.create_task(
+                spawn_logging_task(
+                    asyncio.get_running_loop(),
                     self.logging_obj.dispatch_success_handlers(
                         complete_streaming_response,
                         cache_hit=cache_hit,
                         start_time=None,
                         end_time=None,
                         prefer_async_handlers=True,
-                    )
+                    ),
+                    task_name="Chat completions stream success log",
                 )
 
             await self.aclose()

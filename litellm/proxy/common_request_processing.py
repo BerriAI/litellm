@@ -4203,14 +4203,16 @@ class ProxyBaseLLMRequestProcessing:
                 if _deferred_fn is not None:
                     logging_obj._on_deferred_stream_complete = None
                     try:
-                        asyncio.create_task(
+                        spawn_logging_task(
+                            asyncio.get_running_loop(),
                             logging_obj.dispatch_success_handlers(
                                 response,
                                 cache_hit=None,
                                 start_time=None,
                                 end_time=None,
                                 prefer_async_handlers=True,
-                            )
+                            ),
+                            task_name="Orphaned stream success log",
                         )
                     except Exception as e:
                         verbose_proxy_logger.exception("Error in orphaned streaming async logging: %s", e)
@@ -5111,14 +5113,16 @@ class ProxyBaseLLMRequestProcessing:
                 # callbacks fire regardless of the call-type heuristic in
                 # _is_sync_litellm_request (which only recognizes a subset of
                 # async markers stored in litellm_params).
-                asyncio.create_task(
+                spawn_logging_task(
+                    asyncio.get_running_loop(),
                     _as_success_dispatcher(captured_logging_obj).dispatch_success_handlers(
                         run.response,
                         cache_hit=cache_hit,
                         start_time=None,
                         end_time=None,
                         prefer_async_handlers=True,
-                    )
+                    ),
+                    task_name="Deferred stream success log",
                 )
             except Exception as e:
                 verbose_proxy_logger.exception(
