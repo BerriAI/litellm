@@ -581,7 +581,7 @@ class _DetachedFailureRecorder:
     def __init__(self):
         self.exceptions = []
 
-    async def __call__(self, exc: Exception) -> None:
+    async def __call__(self, _logging_obj: object, exc: Exception) -> None:
         self.exceptions.append(exc)
 
 

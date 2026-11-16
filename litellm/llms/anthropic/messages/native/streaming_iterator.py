@@ -899,11 +899,8 @@ class BaseAnthropicMessagesStreamingIterator:
     async def _fire_detached_failure_hook(self, exc: Exception) -> None:
         from litellm._logging import verbose_proxy_logger
 
-        on_detached_failure: Final = getattr(self.litellm_logging_obj, "on_detached_stream_failure", None)
-        if on_detached_failure is None:
-            return
         try:
-            await on_detached_failure(exc)
+            await self.litellm_logging_obj.report_detached_stream_failure(exc)
         except Exception as hook_failure:  # noqa: BLE001  # a failing proxy hook must not crash the detached pump
             verbose_proxy_logger.warning(
                 "async_sse_wrapper detached failure hook raised: %s(%s)", type(hook_failure).__name__, hook_failure

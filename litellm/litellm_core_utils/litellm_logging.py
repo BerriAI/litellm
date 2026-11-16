@@ -990,11 +990,11 @@ class Logging(LiteLLMLoggingBaseClass):
         self.llm_caching_handler = value
 
     @property
-    def _on_detached_stream_failure(self) -> Callable[[Exception], Awaitable[None]] | None:
+    def _on_detached_stream_failure(self) -> Callable[["Logging", Exception], Awaitable[None]] | None:
         return self.on_detached_stream_failure
 
     @_on_detached_stream_failure.setter
-    def _on_detached_stream_failure(self, value: Callable[[Exception], Awaitable[None]] | None) -> None:
+    def _on_detached_stream_failure(self, value: Callable[["Logging", Exception], Awaitable[None]] | None) -> None:
         self.on_detached_stream_failure = value
 
     @property
@@ -1175,8 +1175,10 @@ class Logging(LiteLLMLoggingBaseClass):
         self._async_success_scheduled: bool = False
         self._async_success_enqueued: bool = False
         self._sync_success_scheduled: bool = False
-        self.on_detached_stream_failure: Callable[[Exception], Awaitable[None]] | None = None
+        self.on_detached_stream_failure: Callable[[Logging, Exception], Awaitable[None]] | None = None
         self._stream_failure_claimed: bool = False
+        self._holding_stream_failure: bool = False
+        self._held_stream_failure: Exception | None = None
         self._stash_owed_on_success: bool = False
         self._stash_billed_by_continuation: bool = False
         self._failed_attempts_owed_on_success: tuple[ServedRound, ...] = ()
@@ -3171,6 +3173,30 @@ class Logging(LiteLLMLoggingBaseClass):
         self.model_call_details["response_cost"] = own_cost + failed_attempts_cost
         if self.cost_breakdown is not None:
             self.cost_breakdown = _with_failed_attempts_cost(self.cost_breakdown, own_cost, failed_attempts_cost)
+
+    async def report_detached_stream_failure(self, exc: Exception) -> None:
+        """Fires the proxy's detached-stream failure hook, if one is armed, with this logging object.
+        While the proxy's client stream holds failures, the first one is kept for it instead."""
+        hook: Final = self.on_detached_stream_failure
+        if hook is None:
+            return
+        if self._holding_stream_failure:
+            if self._held_stream_failure is None:
+                self._held_stream_failure = exc
+            return
+        await hook(self, exc)
+
+    def hold_stream_failures(self) -> None:
+        """Defer detached-stream failure reports until the client stream ends, so a failure the
+        client stream reports itself claims the report first."""
+        self._holding_stream_failure = True
+
+    def release_held_stream_failure(self) -> Exception | None:
+        """Stop holding, and return the failure held meanwhile for the caller to report."""
+        self._holding_stream_failure = False
+        held: Final = self._held_stream_failure
+        self._held_stream_failure = None
+        return held
 
     def claim_stream_failure_report(self) -> bool:
         if self._stream_failure_claimed:
