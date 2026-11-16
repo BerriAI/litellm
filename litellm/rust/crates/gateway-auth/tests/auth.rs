@@ -50,7 +50,8 @@ fn secrets() -> Arc<dyn SecretSource> {
 )]
 #[case::wrong("literal-key", Some("Bearer other-key"), 401)]
 #[case::missing("literal-key", None, 401)]
-#[case::wrong_scheme("literal-key", Some("Basic literal-key"), 401)]
+#[case::basic_scheme_like_python("literal-key", Some("Basic literal-key"), 204)]
+#[case::unknown_scheme("literal-key", Some("Token literal-key"), 401)]
 #[case::empty_token("literal-key", Some("Bearer "), 401)]
 #[case::missing_reference("os.environ/MISSING", Some("Bearer os.environ/MISSING"), 500)]
 #[case::empty_reference("os.environ/EMPTY", Some("Bearer "), 500)]
@@ -366,7 +367,8 @@ async fn expiry_is_checked_again_for_operations_on_existing_connections() {
 
 #[rstest]
 #[tokio::test]
-async fn bearer_extraction_rejects_duplicates_and_does_not_trust_preexisting_identity() {
+async fn authentication_reads_the_first_key_header_like_python_and_does_not_trust_preexisting_identity()
+ {
     let pipeline = pipeline("issuer-a", Permissions::All, Permissions::All, None);
     let identity = pipeline
         .auth
@@ -382,12 +384,23 @@ async fn bearer_extraction_rejects_duplicates_and_does_not_trust_preexisting_ide
             pipeline.auth,
             authenticate,
         ));
-    let duplicate = Request::get("/protected")
-        .header("authorization", "Bearer test-token")
-        .header("authorization", "Bearer test-token")
-        .body(Body::empty())
-        .unwrap();
-    assert_eq!(app.clone().oneshot(duplicate).await.unwrap().status(), 401);
+    let duplicate = |first: &str, second: &str| {
+        Request::get("/protected")
+            .header("authorization", format!("Bearer {first}"))
+            .header("authorization", format!("Bearer {second}"))
+            .body(Body::empty())
+            .unwrap()
+    };
+    let first_valid = duplicate("test-token", "wrong-token");
+    assert_eq!(
+        app.clone().oneshot(first_valid).await.unwrap().status(),
+        204
+    );
+    let second_valid = duplicate("wrong-token", "test-token");
+    assert_eq!(
+        app.clone().oneshot(second_valid).await.unwrap().status(),
+        401
+    );
     let forged = Request::get("/protected")
         .extension(identity)
         .body(Body::empty())
@@ -430,53 +443,6 @@ async fn route_permissions_are_checked_before_parsing_or_dispatch() {
         .unwrap();
     assert_eq!(app.clone().oneshot(allowed).await.unwrap().status(), 204);
     assert_eq!(app.oneshot(denied).await.unwrap().status(), 403);
-}
-
-struct CustomHeader;
-
-impl litellm_gateway_auth::CredentialExtractor for CustomHeader {
-    fn extract(
-        &self,
-        parts: &axum::http::request::Parts,
-    ) -> Result<litellm_gateway_auth::Credential, Error> {
-        let value = parts
-            .headers
-            .get("x-test-key")
-            .and_then(|value| value.to_str().ok())
-            .ok_or(Error::InvalidToken)?;
-        Ok(litellm_gateway_auth::Credential::Token(SecretValue::new(
-            value,
-        )))
-    }
-}
-
-#[rstest]
-#[case::selected_header("test-token", "wrong-token", 204)]
-#[case::no_fallback("wrong-token", "test-token", 401)]
-#[tokio::test]
-async fn route_profile_uses_only_its_selected_credentials(
-    #[case] custom: &str,
-    #[case] bearer: &str,
-    #[case] status: u16,
-) {
-    let pipeline = pipeline("issuer-a", Permissions::All, Permissions::All, None);
-    let app = Router::new()
-        .route("/protected", get(|| async { StatusCode::NO_CONTENT }))
-        .layer(axum::middleware::from_fn_with_state(
-            pipeline.auth.with_extractor(Arc::new(CustomHeader)),
-            authenticate,
-        ));
-    let response = app
-        .oneshot(
-            Request::get("/protected")
-                .header("x-test-key", custom)
-                .header("authorization", format!("Bearer {bearer}"))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(response.status().as_u16(), status);
 }
 
 #[rstest]

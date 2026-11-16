@@ -1,3 +1,4 @@
+mod api_key;
 mod authentication;
 mod authorization;
 mod error;
@@ -8,6 +9,7 @@ mod ui;
 
 use sha2::{Digest, Sha256};
 
+pub use api_key::ApiKey;
 pub use authentication::{
     Auth, AuthFuture, Authenticator, Clock, Credential, IdentityResolver, LocalAdministrator,
     MasterKeyAuthenticator, SystemClock,
@@ -17,7 +19,7 @@ pub use authorization::{
     NoAdditionalPolicy, Permissions, UiAction,
 };
 pub use error::Error;
-pub use http::{Bearer, CredentialExtractor, RequireMasterKey, authenticate};
+pub use http::{RequireMasterKey, authenticate};
 pub use identity::{
     AuthenticatedCaller, Authentication, AuthenticationMethod, Principal, PrincipalKind,
     ResolvedIdentity, SharedCaller, VerifiedIdentity,

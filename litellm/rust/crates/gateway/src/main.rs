@@ -1,9 +1,11 @@
 use std::{
     error::Error,
+    path::PathBuf,
     time::{SystemTime, UNIX_EPOCH},
 };
 
 use litellm_gateway_auth::UiBackend;
+use litellm_gateway_forward::Forward;
 use litellm_tracing::{Level, Logger, Metadata, Record, Sink};
 use serde_json::json;
 
@@ -48,10 +50,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
         })
         .install_global()?;
         let stdin_closed = litellm_gateway_forward::input_closed(std::io::stdin());
-        litellm_gateway_forward::run(forward, async {
+        let shutdown = async {
             tokio::select! { () = shutdown_signal() => (), () = stdin_closed => () }
-        })
-        .await?;
+        };
+        match forward.config.clone() {
+            None => litellm_gateway_forward::run(forward, shutdown).await?,
+            Some(config) => in_front_of_python(forward, config, shutdown).await?,
+        }
         return Ok(());
     }
     let settings: Settings = settings::from_iter(std::env::vars_os())?;
@@ -125,6 +130,40 @@ async fn main() -> Result<(), Box<dyn Error>> {
         mcp.close().await;
     }
     result?;
+    Ok(())
+}
+
+/// Serves natively the requests the gateway admits, in front of the Python proxy, which answers
+/// everything else. A configuration the gateway does not support in full leaves every request to
+/// Python.
+async fn in_front_of_python(
+    forward: litellm_gateway_forward::Settings,
+    config: PathBuf,
+    shutdown: impl Future<Output = ()> + Send + 'static,
+) -> Result<(), Box<dyn Error>> {
+    let config = litellm_config_load::load(config)?;
+    let unsupported = litellm_gateway::unsupported(&config, &|name| std::env::var(name).ok());
+    if !unsupported.is_empty() {
+        for reason in &unsupported {
+            tracing::info!(%reason, "the gateway does not support this configuration");
+        }
+        tracing::info!(
+            reasons = unsupported.len(),
+            "python serves every request until the gateway supports the whole configuration"
+        );
+        litellm_gateway_forward::run_app(forward, Forward::without_native, shutdown).await?;
+        return Ok(());
+    }
+    let inference = litellm_gateway::build_inference(&config)?;
+    let auth = litellm_gateway_auth::Auth::from_config(&config, inference.secrets.clone());
+    let admission = litellm_gateway::Admission::new(&config, auth);
+    let native = litellm_gateway::admitted_router(inference);
+    litellm_gateway_forward::run_app(
+        forward,
+        |python| python.behind(native, move |request| admission.clone().admit(request)),
+        shutdown,
+    )
+    .await?;
     Ok(())
 }
 
