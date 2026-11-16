@@ -4,6 +4,7 @@ import os
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Final, Literal, TypeAlias
+from urllib.parse import urlsplit
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, TypeAdapter, field_validator, model_validator
@@ -15,8 +16,20 @@ from litellm.proxy.control_plane.auth.rbac import ADMIN_ROLE
 from litellm.types.proxy.control_plane.auth import PASSWORD_MAX_LENGTH, USERNAME_MAX_LENGTH
 
 DEFAULT_SESSION_TTL_SECONDS: Final = 12 * 60 * 60
-AuditSinkKind: TypeAlias = Literal["log", "otlp"]
+AuditSinkKind: TypeAlias = Literal["log", "otlp", "s3"]
+ObjectLockMode: TypeAlias = Literal["COMPLIANCE", "GOVERNANCE"]
 DEFAULT_DATAPLANE_TIMEOUT_SECONDS: Final = 10.0
+
+
+@dataclass(frozen=True, slots=True)
+class S3SinkSettings:
+    bucket: str
+    prefix: str
+    region: str | None
+    endpoint_url: str | None
+    object_lock_mode: ObjectLockMode | None
+    retention_days: int
+    timeout_seconds: float
 
 
 @dataclass(frozen=True, slots=True)
@@ -124,6 +137,51 @@ class ControlPlaneSettings(BaseSettings):
     audit_batch_size: int = Field(default=100, ge=1)
     audit_drain_seconds: float = Field(default=5.0, gt=0)
     audit_strict: bool = False
+    audit_s3_bucket: str | None = None
+    audit_s3_prefix: str = "control-plane-audit"
+    audit_s3_region: str | None = None
+    audit_s3_endpoint_url: str | None = None
+    audit_s3_allow_insecure_http: bool = False
+    audit_s3_object_lock_mode: ObjectLockMode | None = None
+    audit_s3_retention_days: int = Field(default=365, ge=1)
+    audit_s3_timeout_seconds: float = 30.0
+
+    @field_validator("audit_s3_bucket")
+    @classmethod
+    def _s3_bucket_is_not_blank(cls, value: str | None) -> str | None:
+        if value is not None and not value.strip():
+            raise ValueError("CONTROL_PLANE_AUDIT_S3_BUCKET must not be empty or whitespace.")
+        return value
+
+    @model_validator(mode="after")
+    def _s3_sink_needs_a_bucket(self) -> "ControlPlaneSettings":
+        if "s3" in self.audit_sinks and self.audit_s3_bucket is None:
+            raise ValueError("CONTROL_PLANE_AUDIT_SINKS names s3 but CONTROL_PLANE_AUDIT_S3_BUCKET is not set.")
+        return self
+
+    @model_validator(mode="after")
+    def _s3_endpoint_is_https_unless_opted_out(self) -> "ControlPlaneSettings":
+        endpoint: Final = self.audit_s3_endpoint_url
+        if endpoint is None or self.audit_s3_allow_insecure_http or urlsplit(endpoint).scheme.lower() == "https":
+            return self
+        raise ValueError(
+            f"audit s3 endpoint {endpoint!r} is not https, audit records and the SigV4 authorization would travel "
+            "unencrypted. Use https or set CONTROL_PLANE_AUDIT_S3_ALLOW_INSECURE_HTTP=true for an in-cluster store."
+        )
+
+    @property
+    def audit_s3(self) -> S3SinkSettings | None:
+        if self.audit_s3_bucket is None:
+            return None
+        return S3SinkSettings(
+            bucket=self.audit_s3_bucket,
+            prefix=self.audit_s3_prefix.strip("/"),
+            region=self.audit_s3_region,
+            endpoint_url=self.audit_s3_endpoint_url,
+            object_lock_mode=self.audit_s3_object_lock_mode,
+            retention_days=self.audit_s3_retention_days,
+            timeout_seconds=self.audit_s3_timeout_seconds,
+        )
 
     @model_validator(mode="after")
     def _strict_audit_requires_a_sink(self) -> "ControlPlaneSettings":
