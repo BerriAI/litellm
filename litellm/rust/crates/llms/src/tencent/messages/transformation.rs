@@ -4,7 +4,7 @@ use litellm_host::interceptors::RetriedRequest;
 use litellm_secret_value::SecretValue;
 use serde_json::Value;
 
-use litellm_core_utils::settings::resolve_non_empty;
+use litellm_env::resolve_non_empty;
 use litellm_llms_types::{
     formats::messages::{MessagesOptionalParams, MessagesRequest},
     providers::anthropic::{DEFAULT_HEADERS, MESSAGES_PATH},

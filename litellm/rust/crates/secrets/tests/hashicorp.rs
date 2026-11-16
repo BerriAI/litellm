@@ -4,7 +4,7 @@
 async fn hashicorp_handler_resolves_found_missing_and_failed_values() {
     use std::sync::Arc;
 
-    use litellm_core_utils::settings::Lookup;
+    use litellm_env::Lookup;
     use litellm_secrets::{
         Error, FailurePolicy, KeyManagementSettings, SecretManager, SecretManagerState,
         SecretResolver, hashicorp::HashicorpVault, hashicorp::HashicorpVaultConfig,
