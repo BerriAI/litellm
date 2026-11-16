@@ -933,16 +933,12 @@ def _strip_client_callback_credentials(
         )
 
 
-async def _convert_request_prices_to_usd(
-    data: dict[str, object],  # mutable-ok: rewrites prices in place on the threaded request body
-    route: str,
-    rates: ReferenceRateLookup,
-) -> None:
+async def _usd_request_prices(
+    data: Mapping[str, object], route: str, rates: ReferenceRateLookup
+) -> Mapping[str, float]:
     if data.get(PRICING_CURRENCY_FIELD) is None:
-        data.pop(PRICING_CURRENCY_FIELD, None)
-        return
+        return MappingProxyType({})
     prices: Final = await usd_request_prices(data, route, rates)
-    data.pop(PRICING_CURRENCY_FIELD)
     if isinstance(prices, PricingCurrencyRejected):
         raise ProxyException(
             message=prices.message,
@@ -952,7 +948,7 @@ async def _convert_request_prices_to_usd(
             param=PRICING_CURRENCY_FIELD,
             code=prices.status_code,
         )
-    data.update(prices)
+    return prices
 
 
 def _strip_client_pricing_overrides(data: dict[str, object]) -> None:
@@ -3120,7 +3116,13 @@ async def add_litellm_data_to_request(
     # would silently skip the field.
     if not _key_or_team_allows_client_pricing_override(user_api_key_dict):
         _strip_client_pricing_overrides(data)
-    await _convert_request_prices_to_usd(data, get_request_route(request), pricing_rates)
+    if PRICING_CURRENCY_FIELD in data:
+        usd_prices: Final = await _usd_request_prices(
+            _REQUEST_FIELDS.validate_python(data), get_request_route(request), pricing_rates
+        )
+        del data[PRICING_CURRENCY_FIELD]  # rebind-ok: data is an out-param
+        for field, price in usd_prices.items():
+            data[field] = price  # rebind-ok: data is an out-param
     strip_client_guardrail_information(data)
     _strip_router_reserved_metadata(data)
 

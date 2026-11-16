@@ -14,6 +14,7 @@ import pytest
 from botocore.credentials import Credentials
 from fastapi import Request
 from opentelemetry.trace import INVALID_SPAN, NonRecordingSpan, SpanContext
+from pydantic import TypeAdapter
 from pydantic import ValidationError as PydanticValidationError
 from starlette.datastructures import Headers
 
@@ -9550,17 +9551,17 @@ def _eur_rates() -> ReferenceRateLookup:
 async def test_add_litellm_data_to_request_prices_chat_completions_in_usd_only_for_trusted_keys(
     key_metadata: Mapping[str, object], body: Mapping[str, object], expected: Mapping[str, float]
 ) -> None:
-    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
-
     data: Final[dict[str, object]] = {"model": "gpt-5.4-mini", "messages": [{"role": "user", "content": "hi"}], **body}
-    updated: Final[Mapping[str, object]] = await add_litellm_data_to_request(
-        data=data,
-        request=_reserved_stamp_request("/v1/chat/completions"),
-        user_api_key_dict=_reserved_stamp_key(dict(key_metadata)),
-        proxy_config=MagicMock(),
-        general_settings={},
-        version="test-version",
-        pricing_rates=_eur_rates(),
+    updated: Final = TypeAdapter(Mapping[str, object]).validate_python(
+        await add_litellm_data_to_request(
+            data=data,
+            request=_reserved_stamp_request("/v1/chat/completions"),
+            user_api_key_dict=_reserved_stamp_key(dict(key_metadata)),
+            proxy_config=MagicMock(),
+            general_settings={},
+            version="test-version",
+            pricing_rates=_eur_rates(),
+        )
     )
 
     assert "pricing_currency" not in updated
@@ -9571,8 +9572,6 @@ async def test_add_litellm_data_to_request_prices_chat_completions_in_usd_only_f
 
 @pytest.mark.asyncio
 async def test_add_litellm_data_to_request_rejects_pricing_currency_outside_chat_completions() -> None:
-    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
-
     data: Final[dict[str, object]] = {
         "model": "text-embedding-3-small",
         "input": "hi",

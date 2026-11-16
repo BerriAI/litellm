@@ -86,7 +86,7 @@ async def test_cross_rate_converts_through_eur() -> None:
         {"pricing_currency": "JPY", "input_cost_per_token": 200}, CHAT, _lookup(_Feed(_feed()))
     )
 
-    assert result == {"input_cost_per_token": pytest.approx(2.0)}
+    assert result == {"input_cost_per_token": 2.0}
 
 
 async def test_usd_prices_pass_through_without_any_fetch() -> None:
