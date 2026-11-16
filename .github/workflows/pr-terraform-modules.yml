@@ -5,7 +5,7 @@ on:
     paths:
       - "litellm/deploy/terraform/litellm/aws/**"
       - "litellm/deploy/terraform/litellm/gcp/**"
-      - ".github/workflows/test-terraform-modules.yml"
+      - ".github/workflows/pr-terraform-modules.yml"
   pull_request:
     branches:
       - main
@@ -13,7 +13,7 @@ on:
     paths:
       - "litellm/deploy/terraform/litellm/aws/**"
       - "litellm/deploy/terraform/litellm/gcp/**"
-      - ".github/workflows/test-terraform-modules.yml"
+      - ".github/workflows/pr-terraform-modules.yml"
 
 permissions:
   contents: read

@@ -66,14 +66,14 @@ jobs:
         uses: ./.github/actions/cache-prisma-binaries
 
       # The source scanners only need the pinned dev tools (ruff and the
-      # stdlib checkers), the same versions test-linting.yml's python job runs.
+      # stdlib checkers), the same versions pr-lint.yml's python job runs.
       - name: Install the dev tools
         if: matrix.checker != 'basedpyright' && matrix.checker != 'openapi-docs'
         run: |
           uv sync --frozen --only-group dev --no-install-project
 
       # The OpenAPI gate imports the proxy app, so it needs the same install the
-      # test-linting.yml python job uses, Prisma client included.
+      # pr-lint.yml python job uses, Prisma client included.
       - name: Install the proxy
         if: matrix.checker == 'openapi-docs'
         run: |

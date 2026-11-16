@@ -11,7 +11,7 @@ description: >-
   only what changed when its target directory survives, so a warm job pays for the
   bridge crate alone.
 
-  The key namespace is separate from test-rust.yml's check and release caches. They
+  The key namespace is separate from pr-rust.yml's check and release caches. They
   cache the same directory for different workloads, and a shared key would let
   whichever ran first deny the others a save.
 

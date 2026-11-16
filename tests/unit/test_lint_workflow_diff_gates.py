@@ -16,7 +16,7 @@ import pytest
 import yaml
 from pydantic import BaseModel, ConfigDict, Field
 
-WORKFLOW: Final = Path(__file__).resolve().parents[2] / ".github" / "workflows" / "test-linting.yml"
+WORKFLOW: Final = Path(__file__).resolve().parents[2] / ".github" / "workflows" / "pr-lint.yml"
 WORKFLOWS_DIR: Final = WORKFLOW.parent
 REPO_ROOT: Final = WORKFLOW.parents[2]
 DIFF_GATE: Final = re.compile(r'git diff --name-only --diff-filter=\w+ "\$GATE_BASE_SHA" HEAD -- (.+?) \|')
@@ -269,7 +269,7 @@ def test_e2e_basedpyright_gate_also_fires_on_harness_python_and_pyrightconfig(tm
         "tests/e2e_harness/claude_code/test_driver.py",
         "pyproject.toml",
         "uv.lock",
-        ".github/workflows/test-linting.yml",
+        ".github/workflows/pr-lint.yml",
     ),
 )
 def test_e2e_harness_gate_fires_on_any_e2e_or_harness_file_its_dependency_manifests_and_workflow(
@@ -415,12 +415,12 @@ def _merge_base_and_tip(upstream: StaleBaseUpstream, ref: str) -> tuple[str, str
 
 CONSUMERS: Final = MappingProxyType(
     {
-        "test-linting.yml:python": Consumer(_gate_base_exported, _merge_base),
-        "test-linting.yml:ui": Consumer(_ui_files_queued_for_prettier, _ui_files_changed_since_merge_base),
-        "test-unit.yml:ui-unit": Consumer(_ui_files_passed_to_vitest_related, _ui_files_changed_since_merge_base),
-        "test-unit.yml:unit": Consumer(_schema_base_commit_and_its_type_in_the_checkout, _merge_base_as_a_commit),
-        "spend-logs-guard.yml:spend-logs-guard": Consumer(_guard_base_argument_and_checkout, _merge_base_and_tip),
-        "cost-map-guard.yml:cost-map-guard": Consumer(_guard_base_argument_and_checkout, _merge_base_and_tip),
+        "pr-lint.yml:python": Consumer(_gate_base_exported, _merge_base),
+        "pr-lint.yml:ui": Consumer(_ui_files_queued_for_prettier, _ui_files_changed_since_merge_base),
+        "pr-unit.yml:ui-unit": Consumer(_ui_files_passed_to_vitest_related, _ui_files_changed_since_merge_base),
+        "pr-unit.yml:unit": Consumer(_schema_base_commit_and_its_type_in_the_checkout, _merge_base_as_a_commit),
+        "pr-spend-logs-guard.yml:spend-logs-guard": Consumer(_guard_base_argument_and_checkout, _merge_base_and_tip),
+        "pr-cost-map-guard.yml:cost-map-guard": Consumer(_guard_base_argument_and_checkout, _merge_base_and_tip),
     }
 )
 
@@ -518,7 +518,7 @@ UI_API_TYPES_DETECT: Final[str] = next(
     if step.get("id") == "changes"
 )
 PRE_COMMIT_LINT: Final = WORKFLOW.parents[2] / "litellm/scripts" / "pre_commit_lint.sh"
-TERRAFORM_PROVIDER_WORKFLOW: Final = WORKFLOW.with_name("test-terraform-provider.yml")
+TERRAFORM_PROVIDER_WORKFLOW: Final = WORKFLOW.with_name("pr-terraform-provider.yml")
 
 
 def _ui_api_types_relevant(tmp_path: Path, changed: str) -> bool:
@@ -611,7 +611,7 @@ def test_make_check_runs_the_api_type_sync_on_the_same_tracked_files_as_ci() -> 
         _tracked_paths_matching(make_check_trigger) - _tracked_paths_matching(make_check_exclusions)
     ) | _tracked_paths_matching(make_check_dashboard_trigger)
     assert "pyproject.toml" in ci_selected
-    assert make_check_selected == ci_selected - {".github/workflows/test-linting.yml"}
+    assert make_check_selected == ci_selected - {".github/workflows/pr-lint.yml"}
 
 
 def test_a_pull_request_changing_any_route_file_runs_the_terraform_provider_endpoint_audit() -> None:

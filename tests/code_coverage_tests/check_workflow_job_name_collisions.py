@@ -8,7 +8,7 @@ clash completely, so the context quietly stops meaning what the ruleset intended
 One job lands in the same place when its `name:` holds no matrix value, since
 every combination it runs then reports under that one name.
 
-`.github/workflows/auto-close-duplicates.yml` shipped a job id `test` while
+`.github/workflows/repo-auto-close-duplicates.yml` shipped a job id `test` while
 `.github/workflows/test-mcp.yml` already published the required `test` context,
 and commit ed5761daef4ae17152446d182c860630c38b7268 carried both check runs.
 This invariant has to be enforced here because CI cannot enforce it on itself.

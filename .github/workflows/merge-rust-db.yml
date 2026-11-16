@@ -17,7 +17,7 @@ on:
       - "pyproject.toml"
       - "uv.lock"
       - ".github/actions/setup-uv-with-retries/**"
-      - ".github/workflows/test-rust-db.yml"
+      - ".github/workflows/merge-rust-db.yml"
 
 permissions:
   contents: read

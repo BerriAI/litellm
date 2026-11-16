@@ -34,7 +34,7 @@ COMMENT_RE = re.compile(r"^\s*#.*$", re.MULTILINE)
 GLOB_CHARS = frozenset("*?[")
 DEDICATED_INTEGRATION_WORKFLOWS: Final = MappingProxyType(
     {
-        "image-scan.yml": "tests/integration/database/image/",
+        "main-image-scan.yml": "tests/integration/database/image/",
     }
 )
 

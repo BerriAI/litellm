@@ -38,7 +38,7 @@ first runs on main after its PR merges, or earlier if the PR gets `run-ci`. Want
 is no reason to change CI, and a new
 dedicated workflow for it is the same mistake as a shared shard. Write the file, leave `GITHUB_FILES` and
 every workflow alone, and tell the user it first runs on main. `GITHUB_FILES` is only for a file that
-needs what GitHub Actions groups cannot give it, like the images `image-scan.yml` builds. `test_roi_observed.py` previously needed a dedicated plain pytest
+needs what GitHub Actions groups cannot give it, like the images `main-image-scan.yml` builds. `test_roi_observed.py` previously needed a dedicated plain pytest
 job and now has no CI owner. It is listed explicitly in the coverage allowlist. Add a file to `GITHUB_FILES` only when needed,
 together with its dedicated job, and list a new dedicated GitHub workflow with the directory it owns in
 `DEDICATED_INTEGRATION_WORKFLOWS` in `.github/scripts/assert_ci_coverage.py`. The `ci-coverage` check

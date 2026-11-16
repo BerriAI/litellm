@@ -35,7 +35,7 @@ on:
       - ".github/scripts/smoke_test_native_wheel.py"
       - ".github/scripts/verify_linux_native_wheel.py"
       - "tests/unit/rust_bridge/native_route_wheel_test.py"
-      - ".github/workflows/test-rust.yml"
+      - ".github/workflows/pr-rust.yml"
   pull_request:
     branches:
       - main
@@ -70,7 +70,7 @@ on:
       - ".github/scripts/smoke_test_native_wheel.py"
       - ".github/scripts/verify_linux_native_wheel.py"
       - "tests/unit/rust_bridge/native_route_wheel_test.py"
-      - ".github/workflows/test-rust.yml"
+      - ".github/workflows/pr-rust.yml"
 
 permissions:
   contents: read

@@ -9,13 +9,13 @@ on:
       - "litellm_**"
     paths:
       - "litellm/vscode-extension/**"
-      - ".github/workflows/test-vscode-extension.yml"
+      - ".github/workflows/pr-vscode-extension.yml"
   push:
     branches:
       - main
     paths:
       - "litellm/vscode-extension/**"
-      - ".github/workflows/test-vscode-extension.yml"
+      - ".github/workflows/pr-vscode-extension.yml"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}

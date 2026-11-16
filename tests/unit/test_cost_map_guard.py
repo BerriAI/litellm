@@ -186,11 +186,11 @@ def test_contract_names_the_skip() -> None:
 
 
 def test_bot_may_only_touch_the_cost_map_files() -> None:
-    changed = (*guard.GUARDED_PATHS, "litellm/utils.py", ".github/workflows/cost-map-guard.yml")
+    changed = (*guard.GUARDED_PATHS, "litellm/utils.py", ".github/workflows/pr-cost-map-guard.yml")
     assert _failures(BASE, changed_files=changed, bot=False) == ()
     assert _failures(BASE, changed_files=changed) == (
         "bot PRs may only change the cost map files, not litellm/utils.py",
-        "bot PRs may only change the cost map files, not .github/workflows/cost-map-guard.yml",
+        "bot PRs may only change the cost map files, not .github/workflows/pr-cost-map-guard.yml",
     )
 
 

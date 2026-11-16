@@ -9,17 +9,17 @@
 #   - nothing staged  -> scope is the working tree's diff against the merge base
 #     with origin's current default branch, untracked files included
 # The per-area checks:
-#   - litellm/ Python  -> `make lint` (test-linting.yml's python job)
+#   - litellm/ Python  -> `make lint` (pr-lint.yml's python job)
 #   - tests/e2e and tests/e2e_harness Python
-#                      -> `make lint-e2e-basedpyright` (test-linting.yml's e2e type-check step)
-#                         + raw HTTP client ban (test-linting.yml's check_e2e_no_raw_requests)
+#                      -> `make lint-e2e-basedpyright` (pr-lint.yml's e2e type-check step)
+#                         + raw HTTP client ban (pr-lint.yml's check_e2e_no_raw_requests)
 #   - tests/ Python, .github/linters/ruff-tests.toml, litellm/scripts/check_test_quality.py,
 #     litellm/scripts/test_quality_gate.py
-#                      -> ruff over .github/linters/ruff-tests.toml + `make lint-test-quality` (test-linting.yml's
+#                      -> ruff over .github/linters/ruff-tests.toml + `make lint-test-quality` (pr-lint.yml's
 #                         test-tree ruff and test-quality gate steps)
-#   - dashboard        -> prettier + eslint + lint budgets (test-linting.yml's ui job)
+#   - dashboard        -> prettier + eslint + lint budgets (pr-lint.yml's ui job)
 #   - spec_pattern     -> regenerate the lazy OpenAPI snapshot and dashboard API types, fail on drift
-#                         (test-linting.yml's ui-api-types job)
+#                         (pr-lint.yml's ui-api-types job)
 #
 # Each block is skipped when no matching files are in scope, so unrelated commits
 # stay fast. This is intentionally not auto-installed as a git hook (see
@@ -260,7 +260,7 @@ genapi_checks() {
     local status=0
     echo "check: checking the lazy OpenAPI snapshot and dashboard API types are in sync (npm run gen:api)"
     # gen-api-types.mjs imports litellm.proxy.proxy_server, which needs the proxy deps
-    # and an up-to-date Prisma client; test-linting.yml installs those and runs
+    # and an up-to-date Prisma client; pr-lint.yml installs those and runs
     # prisma generate before gen:api, so mirror that here or a stale client can mask
     # drift that CI will still flag.
     if [ ! -d litellm/ui/litellm-dashboard/node_modules ]; then

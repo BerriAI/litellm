@@ -5,7 +5,7 @@ on:
     paths:
       - "litellm/deploy/terraform/provider/**"
       - ".github/actions/cache-go-build/**"
-      - ".github/workflows/test-terraform-provider.yml"
+      - ".github/workflows/pr-terraform-provider.yml"
   pull_request:
     branches:
       - main
@@ -15,7 +15,7 @@ on:
       - "litellm/proxy/**"
       - "litellm/enterprise/**"
       - ".github/actions/cache-go-build/**"
-      - ".github/workflows/test-terraform-provider.yml"
+      - ".github/workflows/pr-terraform-provider.yml"
 
 permissions:
   contents: read

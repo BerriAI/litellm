@@ -30,7 +30,7 @@ def test_a_call_only_workflow_with_the_prefix_is_clean():
 def test_a_dual_mode_workflow_keeps_its_plain_name():
     # workflow_call plus a human trigger is deliberate: the `_` prefix would hide a
     # workflow someone is meant to be able to dispatch.
-    assert _codes("create-release-branch.yml", {"workflow_call", "workflow_dispatch"}) == []
+    assert _codes("release-create-release-branch.yml", {"workflow_call", "workflow_dispatch"}) == []
 
 
 def test_a_prefixed_workflow_nobody_can_call_is_flagged():
@@ -38,7 +38,7 @@ def test_a_prefixed_workflow_nobody_can_call_is_flagged():
 
 
 def test_a_plain_workflow_with_ordinary_triggers_is_clean():
-    assert _codes("test-unit.yml", {"pull_request", "push"}) == []
+    assert _codes("pr-unit.yml", {"pull_request", "push"}) == []
 
 
 @pytest.mark.parametrize(
