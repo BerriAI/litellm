@@ -1331,6 +1331,31 @@ mod tests {
         provider_call_with_secrets(call, &|_: &str| None).await
     }
 
+    struct GoogleToken;
+
+    impl litellm_auth_gcp::GcpTokenSource for GoogleToken {
+        fn project_id(&self) -> litellm_auth_gcp::GcpAuthFuture<'_, String> {
+            Box::pin(async { Ok("token-project".to_string()) })
+        }
+
+        fn token(&self) -> litellm_auth_gcp::GcpAuthFuture<'_, litellm_secret_value::SecretValue> {
+            Box::pin(async { Ok(litellm_secret_value::SecretValue::new("google-token")) })
+        }
+    }
+
+    impl litellm_auth_gcp::GcpProviderLoader for GoogleToken {
+        fn load(
+            &self,
+            _source: litellm_auth_gcp::CredentialSource,
+        ) -> litellm_auth_gcp::GcpAuthFuture<'_, std::sync::Arc<dyn litellm_auth_gcp::GcpTokenSource>>
+        {
+            Box::pin(async {
+                Ok(std::sync::Arc::new(GoogleToken)
+                    as std::sync::Arc<dyn litellm_auth_gcp::GcpTokenSource>)
+            })
+        }
+    }
+
     async fn provider_call_with_secrets(
         call: MessagesCall,
         secrets: &(dyn Lookup + Send + Sync),
@@ -1353,9 +1378,13 @@ mod tests {
         let model = provider.model.to_owned();
         let interceptors = ();
         let context = CallContext::new(&interceptors, litellm_inference::CallOptions::default());
+        let auth = AuthServices {
+            gcp: litellm_auth_gcp::VertexAuth::new(std::sync::Arc::new(GoogleToken)),
+            ..AuthServices::default()
+        };
         provider_call(
             CallerCredentials {
-                auth: &AuthServices::default(),
+                auth: &auth,
                 workload_identity,
                 azure_ad_token_hosts: AzureAdTokenHosts::default(),
                 deferred_secrets: None,
@@ -1515,6 +1544,48 @@ mod tests {
 
     #[rstest]
     #[tokio::test]
+    async fn vertex_sends_the_google_token_beside_a_caller_bearer_and_only_vertex_betas(
+        shaping: MessagesShaping,
+    ) {
+        let call = vertex_call_requesting(shaping, "2023-06-01", false);
+        let call = MessagesCall {
+            extra_headers: call.extra_headers.map(|headers| {
+                headers
+                    .into_iter()
+                    .chain([(
+                        "anthropic-beta".to_string(),
+                        json!("files-api-2025-04-14,context-1m-2025-08-07"),
+                    )])
+                    .collect()
+            }),
+            ..call
+        };
+        let call = provider_call_with_secrets(call, &vertex_project)
+            .await
+            .unwrap();
+        let sent = |name: &str| {
+            call.wire
+                .headers
+                .iter()
+                .find(|(present, _)| present.eq_ignore_ascii_case(name))
+                .map(|(_, value)| value.as_str())
+        };
+        assert_eq!(
+            (
+                sent("authorization"),
+                sent("anthropic-beta"),
+                sent("content-type")
+            ),
+            (
+                Some("Bearer vertex-token, Bearer google-token"),
+                Some("context-1m-2025-08-07"),
+                Some("application/json")
+            )
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
     async fn vertex_refuses_an_unsupported_version_without_drop_params(shaping: MessagesShaping) {
         assert!(matches!(
             provider_call_with_secrets(
@@ -1523,7 +1594,7 @@ mod tests {
             )
             .await,
             Err(Error::Llm(litellm_llms::Error::InvalidRequest(
-                litellm_llms::ErrorDetail::UnsupportedParameter { .. }
+                litellm_llms::ErrorDetail::UnsupportedVertexAnthropicVersion { .. }
             )))
         ));
     }

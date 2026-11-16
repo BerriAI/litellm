@@ -4355,6 +4355,7 @@ dependencies = [
  "http 1.4.2",
  "litellm-auth",
  "litellm-auth-aws",
+ "litellm-auth-gcp",
  "litellm-cache",
  "litellm-cache-memory",
  "litellm-cache-response",
