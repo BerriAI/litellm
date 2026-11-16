@@ -248,14 +248,19 @@ _PDF_LINK: Final = "https://example.com/reports/q3.pdf"
 _PDF_LINK_PART: Final = ChatCompletionFileObject(
     type="file", file=ChatCompletionFileObjectFile(file_id=_PDF_LINK, filename="q3.pdf", format="application/pdf")
 )
+_PDF_LINK_COPY_PART: Final = ChatCompletionFileObject(
+    type="file", file=ChatCompletionFileObjectFile(file_id=_PDF_LINK, filename="q3-copy.pdf", format="application/pdf")
+)
 _PDF_LINK_AS_SCANNED: Final = {"type": "image_url", "image_url": {"url": _PDF_LINK}}
 
 
 async def _guard_pdf_link_question(
-    guard_api: Callable[[httpx.Request], httpx.Response], text: str
+    guard_api: Callable[[httpx.Request], httpx.Response],
+    text: str,
+    attachments: tuple[ChatCompletionFileObject, ...] = (_PDF_LINK_PART,),
 ) -> GenericGuardrailAPIInputs:
     messages: Final[list[AllMessageValues]] = [
-        ChatCompletionUserMessage(role="user", content=[ChatCompletionTextObject(type="text", text=text), _PDF_LINK_PART])
+        ChatCompletionUserMessage(role="user", content=[ChatCompletionTextObject(type="text", text=text), *attachments])
     ]
     guardrail: Final = CrowdStrikeAIDRHandler(
         mode="pre_call",
@@ -277,8 +282,10 @@ def _blocks_scanned_pdf_links(request: httpx.Request) -> httpx.Response:
     return httpx.Response(status_code=200, json=verdict, request=request)
 
 
-def _redacts_ssn_and_echoes_pdf_link(request: httpx.Request) -> httpx.Response:
-    redacted: Final = {"role": "user", "content": [{"type": "text", "text": "My SSN is <US_SSN>"}, _PDF_LINK_AS_SCANNED]}
+def _redacts_ssn_and_echoes_pdf_links(request: httpx.Request) -> httpx.Response:
+    scanned: Final = json.loads(request.content)["guard_input"]["messages"][0]["content"]
+    scanned_links: Final = [part for part in scanned if part["type"] == "image_url"]
+    redacted: Final = {"role": "user", "content": [{"type": "text", "text": "My SSN is <US_SSN>"}, *scanned_links]}
     verdict: Final = {"result": {"blocked": False, "transformed": True, "guard_output": {"messages": [redacted]}}}
     return httpx.Response(status_code=200, json=verdict, request=request)
 
@@ -291,10 +298,24 @@ async def test_apply_guardrail_request_scans_a_pdf_link_file_part() -> None:
 
 @pytest.mark.asyncio
 async def test_apply_guardrail_request_redaction_keeps_a_pdf_link_a_file_part() -> None:
-    result: Final = await _guard_pdf_link_question(_redacts_ssn_and_echoes_pdf_link, "My SSN is 078-05-1120")
+    result: Final = await _guard_pdf_link_question(_redacts_ssn_and_echoes_pdf_links, "My SSN is 078-05-1120")
 
     assert result.get("structured_messages") == [
         {"role": "user", "content": [{"type": "text", "text": "My SSN is <US_SSN>"}, _PDF_LINK_PART]}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_request_redaction_keeps_each_name_of_a_repeated_pdf_link() -> None:
+    result: Final = await _guard_pdf_link_question(
+        _redacts_ssn_and_echoes_pdf_links, "My SSN is 078-05-1120", (_PDF_LINK_PART, _PDF_LINK_COPY_PART)
+    )
+
+    assert result.get("structured_messages") == [
+        {
+            "role": "user",
+            "content": [{"type": "text", "text": "My SSN is <US_SSN>"}, _PDF_LINK_PART, _PDF_LINK_COPY_PART],
+        }
     ]
 
 

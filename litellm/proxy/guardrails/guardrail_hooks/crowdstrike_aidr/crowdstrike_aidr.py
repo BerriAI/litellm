@@ -220,14 +220,31 @@ def _merge_request_transforms(
     return [replacements.get(idx, original) for idx, original in enumerate(original_texts)]
 
 
-def _pdf_link_parts(content: Sequence[object]) -> Mapping[str, object]:
-    return MappingProxyType({link: part for part in content if (link := remote_pdf_file_link(part)) is not None})
+def _pdf_link_parts(content: Sequence[object]) -> Mapping[str, tuple[object, ...]]:
+    linked: Final = tuple((link, part) for part in content if (link := remote_pdf_file_link(part)) is not None)
+    return MappingProxyType(
+        {link: tuple(part for part_link, part in linked if part_link == link) for link, _ in linked}
+    )
 
 
-def _restored_part(part: _ContentPart, pdf_link_parts: Mapping[str, object]) -> object:
-    if isinstance(part, _ImageUrlContentPart) and part.image_url.url in pdf_link_parts:
-        return pdf_link_parts[part.image_url.url]
-    return part.model_dump()
+def _image_url(part: _ContentPart) -> str | None:
+    return part.image_url.url if isinstance(part, _ImageUrlContentPart) else None
+
+
+def _restored_part(part: _ContentPart, occurrence: int, pdf_link_parts: Mapping[str, tuple[object, ...]]) -> object:
+    url: Final = _image_url(part)
+    originals: Final = pdf_link_parts.get(url, ()) if url is not None else ()
+    return originals[min(occurrence, len(originals) - 1)] if originals else part.model_dump()
+
+
+def _restored_content(
+    redacted_content: Sequence[_ContentPart], pdf_link_parts: Mapping[str, tuple[object, ...]]
+) -> Sequence[object]:
+    urls: Final = tuple(_image_url(part) for part in redacted_content)
+    return [
+        _restored_part(part, urls[:index].count(urls[index]), pdf_link_parts)
+        for index, part in enumerate(redacted_content)
+    ]
 
 
 def _apply_message_redaction(original: AllMessageValues, redacted: _Message) -> AllMessageValues:
@@ -238,7 +255,7 @@ def _apply_message_redaction(original: AllMessageValues, redacted: _Message) -> 
         redacted_content: Final = redacted.content
         pdf_link_parts: Final = _pdf_link_parts(_CONTENT_PARTS.validate_python(content))
         new_content: Final = (
-            [_restored_part(part, pdf_link_parts) for part in redacted_content]
+            _restored_content(redacted_content, pdf_link_parts)
             if isinstance(redacted_content, list)
             else redacted_content
         )
