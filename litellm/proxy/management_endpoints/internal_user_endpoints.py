@@ -495,17 +495,15 @@ async def _memberships_on_team_member_budget(
     if not capped_team_ids:
         return memberships
     team_rows: Final = await find_many_in(_team_table(prisma_client), "team_id", capped_team_ids)
-    budgeted_team_ids: Final = frozenset(row.team_id for row in team_rows if _new_members_share_the_team_budget(row))
+    budgeted_team_ids: Final = frozenset(
+        row.team_id
+        for row in team_rows
+        if isinstance(row.metadata, dict)
+        and _TEAM_METADATA_ADAPTER.validate_python(row.metadata).get("team_member_budget_id") is not None
+    )
     return tuple(
         m.model_copy(update={"max_budget_in_team": None}) if m.team_id in budgeted_team_ids else m for m in memberships
     )
-
-
-def _new_members_share_the_team_budget(team_row: "prisma_models.LiteLLM_TeamTable") -> bool:
-    """default_team_member_models gives each new member a private budget, which must then keep its own cap."""
-    if team_row.default_team_member_models or not isinstance(team_row.metadata, dict):
-        return False
-    return _TEAM_METADATA_ADAPTER.validate_python(team_row.metadata).get("team_member_budget_id") is not None
 
 
 def _default_team_membership(team: str | NewUserRequestTeam) -> NewUserRequestTeam:
