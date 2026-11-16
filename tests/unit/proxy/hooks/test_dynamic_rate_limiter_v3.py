@@ -4314,3 +4314,18 @@ async def test_a_fallback_target_only_the_key_has_a_limit_on_leaves_the_customer
     await _settle_tokens(handler, 90, model_group="other-model")
     await _use(handler, caller, 80, saturation=0.5)
     await _check(handler, caller, saturation=0.5)
+
+
+def test_settled_tokens_excludes_cached_tokens_for_input_and_total():
+    from litellm.proxy.hooks.dynamic_rate_limiter_v3 import _settled_tokens
+    from litellm.types.utils import PromptTokensDetailsWrapper, Usage
+
+    usage = Usage(
+        prompt_tokens=1000,
+        completion_tokens=10,
+        total_tokens=1010,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=900),
+    )
+    assert _settled_tokens(usage, "input") == 100
+    assert _settled_tokens(usage, "total") == 110
+    assert _settled_tokens(usage, "output") == 10
