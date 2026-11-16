@@ -573,8 +573,10 @@ def _next_budget_reset_at(budget_duration: str, settings: BudgetResetSettings, c
     except OverflowError:
         if re.fullmatch(r"\d+(mo|[smhdw])", budget_duration.strip().lower()):
             raise
-        verbose_proxy_logger.warning("A stored budget_duration is too long for date math; resetting it daily instead.")
-        return compute_budget_reset_at(budget_duration="1d", settings=settings)
+        verbose_proxy_logger.warning(
+            "A stored budget_duration is too long for date math; resetting it at midnight instead."
+        )
+        return compute_budget_reset_at(budget_duration="1d", settings=BudgetResetSettings(timezone=settings.timezone))
 
 
 def _as_utc(moment: datetime) -> datetime:
