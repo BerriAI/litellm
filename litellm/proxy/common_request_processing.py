@@ -4203,16 +4203,14 @@ class ProxyBaseLLMRequestProcessing:
                 if _deferred_fn is not None:
                     logging_obj._on_deferred_stream_complete = None
                     try:
-                        spawn_logging_task(
-                            asyncio.get_running_loop(),
+                        asyncio.create_task(
                             logging_obj.dispatch_success_handlers(
                                 response,
                                 cache_hit=None,
                                 start_time=None,
                                 end_time=None,
                                 prefer_async_handlers=True,
-                            ),
-                            task_name="Orphaned stream success log",
+                            )
                         )
                     except Exception as e:
                         verbose_proxy_logger.exception("Error in orphaned streaming async logging: %s", e)

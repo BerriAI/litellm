@@ -1,25 +1,33 @@
 import asyncio
 import gc
 import weakref
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Final
 
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.responses.streaming_iterator import drain_logging_tasks
 
 _DEADLOCK_GUARD_SECONDS: Final = 5
 
 
 class WeaklyParkedLogger(CustomLogger):
-    """Parks the success callback on a future only the logging task can reach, the shape asyncio's weak task refs lose."""
+    """Parks the success callback on a future only its logging task reaches, which asyncio's weak task refs lose."""
 
     def __init__(self) -> None:
         super().__init__()
         self.entered: Final = asyncio.Event()
         self.finished: Final = asyncio.Event()
+        self.parks = 0
         self._release: weakref.ref[asyncio.Future[None]] | None = None
+        self._task: weakref.ref[asyncio.Task[object]] | None = None
 
     async def park(self) -> None:
         release: Final[asyncio.Future[None]] = asyncio.get_running_loop().create_future()
+        current: Final = asyncio.current_task()
         self._release = weakref.ref(release)
+        self._task = None if current is None else weakref.ref(current)
+        self.parks += 1
         self.entered.set()
         await release
         self.finished.set()
@@ -34,11 +42,31 @@ class WeaklyParkedLogger(CustomLogger):
     ) -> None:
         await self.park()
 
-    async def survives_collection(self) -> bool:
-        await asyncio.wait_for(self.entered.wait(), _DEADLOCK_GUARD_SECONDS)
-        _ = gc.collect()
+    def _release_parked(self) -> bool:
         release: Final = None if self._release is None else self._release()
         if release is None:
             return False
-        release.set_result(None)
+        if not release.done():
+            release.set_result(None)
         return True
+
+    async def survives_collection(self) -> bool:
+        await asyncio.wait_for(self.entered.wait(), _DEADLOCK_GUARD_SECONDS)
+        _ = gc.collect()
+        return self._release_parked()
+
+    async def settle(self) -> None:
+        _ = self._release_parked()
+        task: Final = None if self._task is None else self._task()
+        if task is not None:
+            _ = await asyncio.wait((task,), timeout=_DEADLOCK_GUARD_SECONDS)
+        await drain_logging_tasks(timeout=_DEADLOCK_GUARD_SECONDS)
+
+
+@asynccontextmanager
+async def weakly_parked_logger() -> AsyncIterator[WeaklyParkedLogger]:
+    logger: Final = WeaklyParkedLogger()
+    try:
+        yield logger
+    finally:
+        await logger.settle()

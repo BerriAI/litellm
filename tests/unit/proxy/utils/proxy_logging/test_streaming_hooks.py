@@ -31,7 +31,7 @@ from litellm.proxy.utils import ProxyLogging
 from litellm.responses.streaming_iterator import drain_logging_tasks
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import Usage
-from tests.unit.litellm_core_utils.weakly_parked_logger import WeaklyParkedLogger
+from tests.unit.litellm_core_utils.weakly_parked_logger import weakly_parked_logger
 
 
 @pytest.fixture(autouse=True)
@@ -769,20 +769,20 @@ async def test_fire_deferred_stream_logging_fires_callback():
 
 @pytest.mark.asyncio
 async def test_fired_deferred_stream_logging_survives_garbage_collection_while_pending():
-    parked: Final = WeaklyParkedLogger()
-    logging_obj: Final = MagicMock()
+    async with weakly_parked_logger() as parked:
+        logging_obj: Final = MagicMock()
 
-    async def deferred(assembled_response: object, cache_hit: object) -> None:
-        await parked.park()
+        async def deferred(assembled_response: object, cache_hit: object) -> None:
+            await parked.park()
 
-    logging_obj._on_deferred_stream_complete = deferred
-    logging_obj._deferred_stream_complete_args = ("assembled", None)
+        logging_obj._on_deferred_stream_complete = deferred
+        logging_obj._deferred_stream_complete_args = ("assembled", None)
 
-    ProxyLogging.fire_deferred_stream_logging(request_data={"litellm_logging_obj": logging_obj})
-    survived: Final = await parked.survives_collection()
-    await drain_logging_tasks()
+        ProxyLogging.fire_deferred_stream_logging(request_data={"litellm_logging_obj": logging_obj})
+        survived: Final = await parked.survives_collection()
+        await drain_logging_tasks()
 
-    assert (survived, parked.finished.is_set()) == (True, True)
+        assert (survived, parked.parks, parked.finished.is_set()) == (True, 1, True)
 
 
 def test_fire_deferred_stream_logging_no_logging_obj_no_error():

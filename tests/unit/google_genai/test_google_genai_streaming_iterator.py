@@ -15,7 +15,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.responses.streaming_iterator import drain_logging_tasks
 from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointType
-from tests.unit.litellm_core_utils.weakly_parked_logger import WeaklyParkedLogger
+from tests.unit.litellm_core_utils.weakly_parked_logger import weakly_parked_logger
 
 
 class _SuccessRecorder(CustomLogger):
@@ -253,19 +253,19 @@ async def test_async_stream_logs_its_first_chunk_time_measured_from_the_call_sta
 
 @pytest.mark.asyncio
 async def test_async_stream_success_log_survives_garbage_collection_while_its_callback_is_pending():
-    logger: Final = WeaklyParkedLogger()
-    response: Final = httpx.Response(200, content=(_gemini_event("Hel") + _gemini_event("lo", "STOP")).encode())
-    iterator: Final = AsyncGoogleGenAIGenerateContentStreamingIterator(
-        response=response,
-        model="gemini-3.1-flash",
-        logging_obj=_logging_obj(recorder=logger),
-        generate_content_provider_config=MagicMock(),
-        litellm_metadata={},
-        custom_llm_provider="gemini",
-    )
+    async with weakly_parked_logger() as logger:
+        response: Final = httpx.Response(200, content=(_gemini_event("Hel") + _gemini_event("lo", "STOP")).encode())
+        iterator: Final = AsyncGoogleGenAIGenerateContentStreamingIterator(
+            response=response,
+            model="gemini-3.1-flash",
+            logging_obj=_logging_obj(recorder=logger),
+            generate_content_provider_config=MagicMock(),
+            litellm_metadata={},
+            custom_llm_provider="gemini",
+        )
 
-    yielded: Final = len([chunk async for chunk in iterator])
-    survived: Final = await logger.survives_collection()
-    await drain_logging_tasks()
+        yielded: Final = len([chunk async for chunk in iterator])
+        survived: Final = await logger.survives_collection()
+        await drain_logging_tasks()
 
-    assert (yielded, survived, logger.finished.is_set()) == (2, True, True)
+        assert (yielded, survived, logger.parks, logger.finished.is_set()) == (2, True, 1, True)

@@ -40,7 +40,7 @@ from litellm.responses.streaming_iterator import drain_logging_tasks
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import Delta, ModelResponseStream, StandardLoggingPayload, StreamingChoices
 from litellm.utils import ModelResponseListIterator, dispatch_success_logging
-from tests.unit.litellm_core_utils.weakly_parked_logger import WeaklyParkedLogger
+from tests.unit.litellm_core_utils.weakly_parked_logger import weakly_parked_logger
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -1247,51 +1247,51 @@ class TestFireDeferredStreamLogging:
     @pytest.mark.asyncio
     async def test_proxy_chat_stream_success_log_survives_garbage_collection_while_pending(self):
         model: Final = "gpt-4o"
-        logger: Final = WeaklyParkedLogger()
-        logging_obj: Final = Logging(
-            model=model,
-            messages=[{"role": "user", "content": "hi"}],
-            stream=True,
-            call_type="acompletion",
-            start_time=datetime(2026, 11, 16, 12, 0, 0),
-            litellm_call_id="proxy-parked-stream",
-            function_id="proxy-parked-stream",
-            dynamic_async_success_callbacks=[logger],
-        )
-        logging_obj.update_environment_variables(
-            model=model, user=None, optional_params={}, litellm_params={"litellm_call_id": "proxy-parked-stream"}
-        )
-        wrapper: Final = CustomStreamWrapper(
-            completion_stream=ModelResponseListIterator(
-                model_responses=[
-                    ModelResponseStream(id="chatcmpl-parked", created=1763294400, model=model, choices=choices)
-                    for choices in (
-                        [StreamingChoices(index=0, delta=Delta(role="assistant", content="Hello there"))],
-                        [StreamingChoices(index=0, delta=Delta(content=""), finish_reason="stop")],
-                    )
-                ]
-            ),
-            model=model,
-            custom_llm_provider="openai",
-            logging_obj=logging_obj,
-            stream_options=None,
-        )
-        ProxyBaseLLMRequestProcessing(data={"model": model, "metadata": {}})._arm_deferred_stream_dispatch(
-            response=wrapper,
-            route_type="acompletion",
-            user_api_key_dict=UserAPIKeyAuth(api_key="test"),
-            logging_obj=logging_obj,
-        )
-
-        with patch("litellm.callbacks", []):
-            received: Final = "".join(
-                [chunk.choices[0].delta.content or "" async for chunk in wrapper if chunk.choices]
+        async with weakly_parked_logger() as logger:
+            logging_obj: Final = Logging(
+                model=model,
+                messages=[{"role": "user", "content": "hi"}],
+                stream=True,
+                call_type="acompletion",
+                start_time=datetime(2026, 11, 16, 12, 0, 0),
+                litellm_call_id="proxy-parked-stream",
+                function_id="proxy-parked-stream",
+                dynamic_async_success_callbacks=[logger],
             )
-            ProxyLogging.fire_deferred_stream_logging({"litellm_logging_obj": logging_obj})
-            survived: Final = await logger.survives_collection()
-            await drain_logging_tasks()
+            logging_obj.update_environment_variables(
+                model=model, user=None, optional_params={}, litellm_params={"litellm_call_id": "proxy-parked-stream"}
+            )
+            wrapper: Final = CustomStreamWrapper(
+                completion_stream=ModelResponseListIterator(
+                    model_responses=[
+                        ModelResponseStream(id="chatcmpl-parked", created=1763294400, model=model, choices=choices)
+                        for choices in (
+                            [StreamingChoices(index=0, delta=Delta(role="assistant", content="Hello there"))],
+                            [StreamingChoices(index=0, delta=Delta(content=""), finish_reason="stop")],
+                        )
+                    ]
+                ),
+                model=model,
+                custom_llm_provider="openai",
+                logging_obj=logging_obj,
+                stream_options=None,
+            )
+            ProxyBaseLLMRequestProcessing(data={"model": model, "metadata": {}})._arm_deferred_stream_dispatch(
+                response=wrapper,
+                route_type="acompletion",
+                user_api_key_dict=UserAPIKeyAuth(api_key="test"),
+                logging_obj=logging_obj,
+            )
 
-        assert (received, survived, logger.finished.is_set()) == ("Hello there", True, True)
+            with patch("litellm.callbacks", []):
+                received: Final = "".join(
+                    [chunk.choices[0].delta.content or "" async for chunk in wrapper if chunk.choices]
+                )
+                ProxyLogging.fire_deferred_stream_logging({"litellm_logging_obj": logging_obj})
+                survived: Final = await logger.survives_collection()
+                await drain_logging_tasks()
+
+            assert (received, survived, logger.parks, logger.finished.is_set()) == ("Hello there", True, 1, True)
 
     @pytest.mark.asyncio
     async def test_noop_when_no_deferred_args(self):

@@ -57,7 +57,7 @@ from litellm.types.utils import (
     Usage,
 )
 from litellm.utils import ModelResponseListIterator
-from tests.unit.litellm_core_utils.weakly_parked_logger import WeaklyParkedLogger
+from tests.unit.litellm_core_utils.weakly_parked_logger import weakly_parked_logger
 from litellm import completion
 from typing import Tuple
 
@@ -10150,38 +10150,38 @@ async def test_generic_tool_use_streams_as_a_function_call_when_the_caller_passe
 @pytest.mark.asyncio
 async def test_async_stream_success_log_survives_garbage_collection_while_its_callback_is_pending() -> None:
     model: Final = "gpt-4o"
-    logger: Final = WeaklyParkedLogger()
-    logging_obj: Final = Logging(
-        model=model,
-        messages=[{"role": "user", "content": "hi"}],
-        stream=True,
-        call_type="acompletion",
-        start_time=datetime.datetime(2026, 11, 16, 12, 0, 0),
-        litellm_call_id="parked-chat-stream",
-        function_id="parked-chat-stream",
-        dynamic_async_success_callbacks=[logger],
-    )
-    logging_obj.update_environment_variables(
-        model=model, user=None, optional_params={}, litellm_params={"litellm_call_id": "parked-chat-stream"}
-    )
-    wrapper: Final = CustomStreamWrapper(
-        completion_stream=ModelResponseListIterator(
-            model_responses=[
-                ModelResponseStream(id="chatcmpl-parked", created=1763294400, model=model, choices=choices)
-                for choices in (
-                    [StreamingChoices(index=0, delta=Delta(role="assistant", content="Hello there"))],
-                    [StreamingChoices(index=0, delta=Delta(content=""), finish_reason="stop")],
-                )
-            ]
-        ),
-        model=model,
-        custom_llm_provider="openai",
-        logging_obj=logging_obj,
-        stream_options=None,
-    )
+    async with weakly_parked_logger() as logger:
+        logging_obj: Final = Logging(
+            model=model,
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            call_type="acompletion",
+            start_time=datetime.datetime(2026, 11, 16, 12, 0, 0),
+            litellm_call_id="parked-chat-stream",
+            function_id="parked-chat-stream",
+            dynamic_async_success_callbacks=[logger],
+        )
+        logging_obj.update_environment_variables(
+            model=model, user=None, optional_params={}, litellm_params={"litellm_call_id": "parked-chat-stream"}
+        )
+        wrapper: Final = CustomStreamWrapper(
+            completion_stream=ModelResponseListIterator(
+                model_responses=[
+                    ModelResponseStream(id="chatcmpl-parked", created=1763294400, model=model, choices=choices)
+                    for choices in (
+                        [StreamingChoices(index=0, delta=Delta(role="assistant", content="Hello there"))],
+                        [StreamingChoices(index=0, delta=Delta(content=""), finish_reason="stop")],
+                    )
+                ]
+            ),
+            model=model,
+            custom_llm_provider="openai",
+            logging_obj=logging_obj,
+            stream_options=None,
+        )
 
-    received: Final = "".join([chunk.choices[0].delta.content or "" async for chunk in wrapper if chunk.choices])
-    survived: Final = await logger.survives_collection()
-    await drain_logging_tasks()
+        received: Final = "".join([chunk.choices[0].delta.content or "" async for chunk in wrapper if chunk.choices])
+        survived: Final = await logger.survives_collection()
+        await drain_logging_tasks()
 
-    assert (received, survived, logger.finished.is_set()) == ("Hello there", True, True)
+        assert (received, survived, logger.parks, logger.finished.is_set()) == ("Hello there", True, 1, True)
