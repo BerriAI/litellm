@@ -104,6 +104,8 @@ class TestMCPRegistryFile:
             "category": "Search",
             "registry_url": None,
             "transport": "http",
+            # Parallel's MCP quickstart (checked 2026-11-16) names this URL for new installs and says
+            # web_search and web_fetch need no API key https://docs.parallel.ai/integrations/mcp/quickstart
             "url": "https://mcp.parallel.ai/mcp",
             "env_vars": [],
         }
