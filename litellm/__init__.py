@@ -130,6 +130,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "gcs_pubsub",
     "agentops",
     "anthropic_cache_control_hook",
+    "prefix_block_hashes",
     "generic_api",
     "resend_email",
     "sendgrid_email",
