@@ -2607,15 +2607,14 @@ async def test_model_connection(
             )
 
         # Get model name from litellm_params
-        request_litellm_params: Final = {
-            key: value
-            for key, value in _OBJECT_MAPPING.validate_python(litellm_params or {}).items()
-            if key != "litellm_metadata"
-        }
+        raw_litellm_params: Final = _OBJECT_MAPPING.validate_python(litellm_params or {})
         # Reject request-supplied os.environ/ references. Config values are
         # already resolved before reaching this endpoint; any remaining
         # reference must have come from the request body.
-        _reject_os_environ_references(request_litellm_params)
+        _reject_os_environ_references(raw_litellm_params)
+        request_litellm_params: Final = {
+            key: value for key, value in raw_litellm_params.items() if key != "litellm_metadata"
+        }
         if model_info:
             _reject_os_environ_references(model_info)
         requested_model: Final = request_litellm_params.get("model")

@@ -1324,6 +1324,37 @@ async def test_test_connection_refuses_a_non_admin_pointing_a_federated_deployme
 
 
 @pytest.mark.asyncio
+async def test_test_connection_rejects_an_os_environ_reference_inside_litellm_metadata():
+    mock_ahealth_check: Final = AsyncMock(return_value={"status": "healthy"})
+    with (
+        patch.multiple(  # test-quality-ok: proxy module globals, no injection seam
+            "litellm.proxy.proxy_server",
+            prisma_client=MagicMock(),
+            llm_router=None,
+        ),
+        patch(  # test-quality-ok: asserting the probe never runs
+            "litellm.proxy.health_endpoints._health_endpoints.litellm.ahealth_check",
+            mock_ahealth_check,
+        ),
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        await health_test_model_connection(
+            request=MagicMock(),
+            mode="chat",
+            litellm_params={
+                "model": "openai/gpt-4o",
+                "api_key": "sk-x",
+                "litellm_metadata": {"k": "os.environ/SECRET"},
+            },
+            model_info=None,
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+    assert exc_info.value.status_code == 400
+    assert mock_ahealth_check.await_count == 0
+
+
+@pytest.mark.asyncio
 async def test_test_model_connection_authorizes_on_params_after_health_check_params_merge():
     """
     Regression guard for the ordering fix: health_check_params from the request
