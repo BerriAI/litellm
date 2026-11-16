@@ -3651,12 +3651,14 @@ class Logging(LiteLLMLoggingBaseClass):
             return response
         return response.model_copy(update={"model": model})
 
-    def _with_full_tool_names(self, response: _LoggedResponse) -> _LoggedResponse | ModelResponse:
-        if not isinstance(response, ModelResponse):
+    def _with_full_tool_names(self, response: _LoggedResponse) -> _LoggedResponse | ModelResponse | ModelResponseStream:
+        if not isinstance(response, ModelResponse | ModelResponseStream):
             return response
         return with_renamed_tool_calls(response, self.bridged_tool_names)
 
-    def _as_served_chat_response(self, response: _LoggedResponse) -> _LoggedResponse | ModelResponse:
+    def _as_served_chat_response(
+        self, response: _LoggedResponse
+    ) -> _LoggedResponse | ModelResponse | ModelResponseStream:
         request: Final = self.bridged_chat_request
         if request is None or not isinstance(response, ResponsesAPIResponse):
             return self._with_full_tool_names(response)
@@ -3664,7 +3666,7 @@ class Logging(LiteLLMLoggingBaseClass):
 
     def _as_served_response(
         self, response: _LoggedResponse
-    ) -> _LoggedResponse | ModelResponse | TextCompletionResponse:
+    ) -> _LoggedResponse | ModelResponse | ModelResponseStream | TextCompletionResponse:
         request: Final = self.bridged_chat_request
         if request is None or not isinstance(response, ResponsesAPIResponse):
             return self._with_full_tool_names(response)

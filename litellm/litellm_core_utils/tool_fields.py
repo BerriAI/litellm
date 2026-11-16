@@ -15,10 +15,13 @@ from litellm._logging import verbose_logger
 from litellm.exceptions import UnsupportedParamsError
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupported_params, normalize_drop_params
 from litellm.types.utils import (
+    ChatCompletionDeltaCustomToolCall,
+    ChatCompletionDeltaToolCall,
     ChatCompletionMessageCustomToolCall,
     ChatCompletionMessageToolCall,
     Choices,
     ModelResponse,
+    ModelResponseStream,
     StreamingChoices,
 )
 
@@ -104,7 +107,15 @@ class SentToolNames:
     self_named_namespace_members: Container[str]
 
 
-def with_renamed_tool_calls(response: ModelResponse, new_names: Mapping[str, str]) -> ModelResponse:
+_RenamableResponse: Final = TypeVar("_RenamableResponse", ModelResponse, ModelResponseStream)
+_RenamableToolCall: Final = TypeVar(
+    "_RenamableToolCall",
+    ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall,
+    ChatCompletionDeltaToolCall | ChatCompletionDeltaCustomToolCall,
+)
+
+
+def with_renamed_tool_calls(response: _RenamableResponse, new_names: Mapping[str, str]) -> _RenamableResponse:
     if not new_names:
         return response
     return response.model_copy(
@@ -115,16 +126,25 @@ def with_renamed_tool_calls(response: ModelResponse, new_names: Mapping[str, str
 def _choice_with_renamed_tool_calls(
     choice: Choices | StreamingChoices, new_names: Mapping[str, str]
 ) -> Choices | StreamingChoices:
-    if not isinstance(choice, Choices) or not choice.message.tool_calls:
+    if isinstance(choice, StreamingChoices):
+        return _streaming_choice_with_renamed_tool_calls(choice, new_names)
+    if not choice.message.tool_calls:
         return choice
     tool_calls: Final = [_renamed_tool_call(tool_call, new_names) for tool_call in choice.message.tool_calls]
     return choice.model_copy(update={"message": choice.message.model_copy(update={"tool_calls": tool_calls})})
 
 
-def _renamed_tool_call(
-    tool_call: ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall, new_names: Mapping[str, str]
-) -> ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall:
-    if not isinstance(tool_call, ChatCompletionMessageToolCall):
+def _streaming_choice_with_renamed_tool_calls(
+    choice: StreamingChoices, new_names: Mapping[str, str]
+) -> StreamingChoices:
+    if not choice.delta.tool_calls:
+        return choice
+    tool_calls: Final = [_renamed_tool_call(tool_call, new_names) for tool_call in choice.delta.tool_calls]
+    return choice.model_copy(update={"delta": choice.delta.model_copy(update={"tool_calls": tool_calls})})
+
+
+def _renamed_tool_call(tool_call: _RenamableToolCall, new_names: Mapping[str, str]) -> _RenamableToolCall:
+    if not isinstance(tool_call, ChatCompletionMessageToolCall | ChatCompletionDeltaToolCall):
         return tool_call
     new_name: Final = new_names.get(tool_call.function.name or "")
     if new_name is None or new_name == tool_call.function.name:

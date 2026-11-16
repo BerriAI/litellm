@@ -14,7 +14,9 @@ kwargs lack the flag and these tests fail.
 
 import inspect
 import json
+import time
 from collections.abc import Mapping, Sequence
+from itertools import chain
 from types import SimpleNamespace
 from typing import Final
 from unittest.mock import patch
@@ -23,15 +25,16 @@ import httpx
 import pytest
 
 import litellm
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.tool_fields import BRIDGED_TOOL_NAMES_KWARG, BridgedToolNames, qualified_member_name
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.responses.litellm_completion_transformation.handler import (
     LiteLLMCompletionTransformationHandler,
 )
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import ResponsesAPIResponse
-from litellm.types.utils import ADDRESSED_RESPONSE_ID_FIELD
+from litellm.types.utils import ADDRESSED_RESPONSE_ID_FIELD, ChatCompletionDeltaToolCall, ModelResponseStream
 
 
 class _StopForwarding(Exception):
@@ -462,3 +465,94 @@ async def test_bridged_turn_logs_the_full_name_of_a_namespace_member_sent_under_
     assert full_name not in sent_names
     assert isinstance(logged, BridgedToolNames)
     assert logged.as_mapping() == {sent_name: full_name for sent_name in sent_names}
+
+
+def _anthropic_streams_a_call_to_the_first_tool(request: httpx.Request) -> httpx.Response:
+    sent_name: Final = json.loads(request.content)["tools"][0]["name"]
+    events: Final = (
+        {
+            "type": "message_start",
+            "message": {
+                "id": "msg_stream",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-haiku-5-5",
+                "content": [],
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        },
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {"type": "tool_use", "id": "toolu_1", "name": sent_name, "input": {}},
+        },
+        {"type": "content_block_delta", "index": 0, "delta": {"type": "input_json_delta", "partial_json": "{}"}},
+        {"type": "content_block_stop", "index": 0},
+        {"type": "message_delta", "delta": {"stop_reason": "tool_use"}, "usage": {"output_tokens": 1}},
+        {"type": "message_stop"},
+    )
+    body: Final = b"".join(f"event: {event['type']}\ndata: {json.dumps(event)}\n\n".encode() for event in events)
+    return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=body, request=request)
+
+
+def _chunk_tool_names(chunk: object) -> tuple[str, ...]:
+    if not isinstance(chunk, ModelResponseStream):
+        return ()
+    tool_calls: Final = chain.from_iterable(choice.delta.tool_calls or () for choice in chunk.choices)
+    return tuple(
+        tool_call.function.name
+        for tool_call in tool_calls
+        if isinstance(tool_call, ChatCompletionDeltaToolCall) and tool_call.function.name
+    )
+
+
+class _StreamChunkToolNames(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.names: list[str] = []
+
+    def log_stream_event(self, kwargs, response_obj, start_time, end_time):
+        self.names.extend(_chunk_tool_names(response_obj))
+
+    async def async_log_stream_event(self, kwargs, response_obj, start_time, end_time):
+        self.names.extend(_chunk_tool_names(response_obj))
+
+    def wait_for_names(self) -> list[str]:
+        for _ in range(200):
+            if self.names:
+                return self.names
+            time.sleep(0.01)
+        raise AssertionError("no stream chunk with a tool call reached the per-chunk hooks")
+
+
+def test_per_chunk_hooks_of_a_sync_bridged_stream_see_the_full_name_of_a_namespace_member(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recorder: Final = _StreamChunkToolNames()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    namespace: Final = {
+        "type": "namespace",
+        "name": _LONG_NAMESPACE,
+        "description": "",
+        "tools": [
+            {
+                "type": "function",
+                "name": _LONG_MEMBER,
+                "description": "Reads the document tool schemas.",
+                "parameters": {"type": "object", "properties": {}},
+            }
+        ],
+    }
+
+    stream: Final = litellm.responses(
+        model="anthropic/claude-haiku-5-5",
+        input="Read the document tool schemas",
+        tools=[namespace],
+        stream=True,
+        api_key="sk-ant-fake",
+        client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_anthropic_streams_a_call_to_the_first_tool))),
+    )
+    events: Final = tuple(stream)
+
+    assert events
+    assert set(recorder.wait_for_names()) == {qualified_member_name(_LONG_NAMESPACE, _LONG_MEMBER)}
