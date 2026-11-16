@@ -80,9 +80,10 @@ async def streaks() -> AsyncIterator[_Streaks]:
     tags: Final = tuple(
         hashlib.sha256(deployment.encode()).hexdigest() for deployment in (deployment_id, f"{deployment_id}-other")
     )
-    owned: Final = [key for tag in tags async for key in client.scan_iter(match=f"*{tag}*")]
-    if owned:
-        await client.delete(*owned)
+    for tag in tags:
+        owned: Final = [key async for key in client.scan_iter(match=f"*{tag}*")]
+        if owned:
+            await client.delete(*owned)
     await cache.disconnect()
 
 
