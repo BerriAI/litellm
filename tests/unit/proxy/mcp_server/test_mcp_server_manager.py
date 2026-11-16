@@ -17392,12 +17392,22 @@ _SERVER_KEY_CASES: Final = (
     pytest.param(MCPAuth.api_key, "server-key", None, _GATEWAY_JWT, id="api_key-keeps-signer"),
     pytest.param(MCPAuth.bearer_token, "server-key", "X-Upstream-Key", _GATEWAY_JWT, id="custom-header-keeps-signer"),
     pytest.param(MCPAuth.bearer_token, None, None, _GATEWAY_JWT, id="no-key-keeps-signer"),
+    pytest.param(MCPAuth.oauth2, "server-key", None, "Bearer server-key", id="oauth2-delegate-static-token"),
+    pytest.param(MCPAuth.oauth2, None, None, _GATEWAY_JWT, id="oauth2-delegate-no-key-keeps-signer"),
+    pytest.param(
+        MCPAuth.oauth2, "server-key", "X-Upstream-Key", _GATEWAY_JWT, id="oauth2-delegate-custom-header-keeps-signer"
+    ),
 )
 
 
 def _keyed_server(base: MCPServer, auth_type: MCPAuth, key: str | None, token_header: str | None) -> MCPServer:
     return base.model_copy(
-        update={"auth_type": auth_type, "authentication_token": key, "upstream_token_header": token_header}
+        update={
+            "auth_type": auth_type,
+            "authentication_token": key,
+            "upstream_token_header": token_header,
+            "delegate_auth_to_upstream": auth_type == MCPAuth.oauth2,
+        }
     )
 
 
