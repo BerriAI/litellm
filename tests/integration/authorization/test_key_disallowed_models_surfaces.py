@@ -2,6 +2,7 @@ import asyncio
 import uuid
 from collections.abc import Iterator
 from hashlib import sha256
+from itertools import product
 from typing import Final
 
 import anthropic
@@ -31,6 +32,7 @@ from integration.authorization._key_disallowed_models import (
     ROUTES,
     UPSTREAM_RECORDED_ROUTES,
     DenyRig,
+    Models,
     denial,
     deny_rig,
     send,
@@ -234,7 +236,9 @@ def test_a_disallowed_alias_name_is_refused_while_its_target_stays_callable(rig:
 
 
 @pytest.mark.parametrize("owner", ["key", "team"])
-def test_a_disallowed_router_settings_alias_is_refused_while_its_target_stays_callable(rig: DenyRig, owner: str) -> None:
+def test_a_disallowed_router_settings_alias_is_refused_while_its_target_stays_callable(
+    rig: DenyRig, owner: str
+) -> None:
     with rig.gateway.scenario() as scenario:
         alias: Final = f"group-alias-{uuid.uuid4().hex[:8]}"
         router_settings: Final[dict[str, JsonValue]] = {"model_group_alias": {alias: rig.allowed.chat}}
@@ -247,6 +251,43 @@ def test_a_disallowed_router_settings_alias_is_refused_while_its_target_stays_ca
         assert denial(fresh_chat(rig.gateway, alias, key, uuid.uuid4().hex)) == KEY_DENIAL
         served: Final = fresh_chat(rig.gateway, rig.allowed.chat, key, uuid.uuid4().hex)
         assert served.status_code == 200, served.text
+
+
+@pytest.mark.parametrize("owner", ["key", "team"])
+def test_every_inference_route_refuses_a_router_settings_alias_disallowed_by_its_own_name_or_by_its_target(
+    rig: DenyRig, owner: str
+) -> None:
+    with rig.gateway.scenario() as scenario:
+        suffix: Final = uuid.uuid4().hex[:8]
+        aliases: Final = Models(
+            chat=f"group-chat-{suffix}",
+            responses=f"group-responses-{suffix}",
+            responses_stream=f"group-stream-{suffix}",
+        )
+        router_settings: Final[dict[str, JsonValue]] = {
+            "model_group_alias": {
+                aliases.chat: rig.allowed.chat,
+                aliases.responses: rig.allowed.responses,
+                aliases.responses_stream: rig.allowed.responses_stream,
+            }
+        }
+        team: Final = scenario.team(**({"router_settings": router_settings} if owner == "team" else {}))
+        on_key: Final[dict[str, JsonValue]] = {"router_settings": router_settings} if owner == "key" else {}
+        unrestricted: Final = scenario.key(team_id=team, **on_key)
+        by_alias: Final = scenario.key(team_id=team, disallowed_models=aliases.names(), **on_key)
+        by_target: Final = scenario.key(team_id=team, disallowed_models=rig.allowed.names(), **on_key)
+        served: Final = [
+            send(rig.gateway, route, aliases.serving(route), unrestricted, f"served-{uuid.uuid4().hex}")
+            for route in ROUTES
+        ]
+        assert [response.status_code for response in served] == [200] * len(ROUTES), [r.text for r in served]
+        refused_marker: Final = f"refused-{uuid.uuid4().hex}"
+        refused: Final = [
+            send(rig.gateway, route, aliases.serving(route), key, refused_marker)
+            for route, key in product(ROUTES, (by_alias, by_target))
+        ]
+        assert [denial(response) for response in refused] == [KEY_DENIAL] * len(refused), [r.text for r in refused]
+        assert upstream_hits(upstream_requests(rig.gateway.upstream_url), refused_marker) == 0
 
 
 @pytest.mark.parametrize("route", ["chat", "responses", "messages"])
