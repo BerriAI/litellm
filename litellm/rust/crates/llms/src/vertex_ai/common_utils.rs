@@ -1,35 +1,31 @@
+use litellm_auth_gcp::vertex_messages::{GoogleLoginFailure, PythonException};
 use litellm_llms_types::providers::vertex_ai::{GLOBAL_API_BASE, GLOBAL_LOCATION};
 use litellm_python_compat::urllib::{ParsedUrl, urlparse, urlsplit};
 
 use crate::Error;
 
+/// Python's `re.match(r"^[a-z][a-z0-9-]*$", location)`, without the newline `$` also matches
+/// before: a location reaches a hostname.
 fn is_location_token(location: &str) -> bool {
-    !location.is_empty()
+    location.as_bytes().first().is_some_and(u8::is_ascii_lowercase)
         && location
             .bytes()
             .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
-        && location
-            .as_bytes()
-            .first()
-            .is_some_and(u8::is_ascii_alphanumeric)
-        && location
-            .as_bytes()
-            .last()
-            .is_some_and(u8::is_ascii_alphanumeric)
 }
 
 /// Python's `validate_vertex_location`: a location reaches a hostname, so only `global` or a
-/// lowercase alphanumeric token with hyphens is allowed.
+/// lowercase token of letters, digits and hyphens is allowed, else its `ValueError`.
 pub fn validate_vertex_location(location: &str) -> Result<&str, Error> {
     if location == GLOBAL_LOCATION || is_location_token(location) {
         return Ok(location);
     }
-    Err(Error::Auth(litellm_auth::Error::InvalidConfiguration(
-        litellm_auth::ErrorDetail::InvalidType {
-            field: "vertex_location".into(),
-            expected: "global or a lowercase alphanumeric token with hyphens",
-        },
-    )))
+    Err(Error::Auth(
+        GoogleLoginFailure {
+            exception: PythonException::Value,
+            message: "Invalid vertex_location format".into(),
+        }
+        .into(),
+    ))
 }
 
 /// Python's `get_vertex_base_url`: the global control plane, a multi-region geography, or a
@@ -114,8 +110,26 @@ mod tests {
     #[case::fragment("evil.com#")]
     #[case::uppercase("US-EAST5")]
     #[case::leading_hyphen("-us")]
+    #[case::leading_digit("1us")]
+    #[case::trailing_newline("us-east5\n")]
     #[case::empty("")]
     fn a_location_that_is_not_a_token_is_rejected(#[case] location: &str) {
-        assert!(get_vertex_base_url(location).is_err());
+        let Err(Error::Auth(error)) = get_vertex_base_url(location) else {
+            panic!("{location:?} should be rejected");
+        };
+        assert_eq!(
+            litellm_error::find::<GoogleLoginFailure>(&error),
+            Some(&GoogleLoginFailure {
+                exception: PythonException::Value,
+                message: "Invalid vertex_location format".into(),
+            })
+        );
+    }
+
+    #[rstest]
+    #[case::trailing_hyphen("us-")]
+    #[case::digit_after_letter("u1")]
+    fn a_location_python_accepts_is_accepted(#[case] location: &str) {
+        assert!(get_vertex_base_url(location).is_ok());
     }
 }

@@ -18,8 +18,9 @@ use litellm_host::{
     protocol::UnobservedTail,
 };
 use litellm_http::Phases;
+use litellm_llms::vertex_ai::messages::transformation::vertex_connection_params;
 use litellm_llms::base_llm::{
-    auth::{Authenticated, AzureAdTokenHosts, ValidatedEnvironment, resolve_auth},
+    auth::{Authenticated, AzureAdTokenHosts, ValidatedEnvironment, log_in_to_vertex, resolve_auth},
     messages::{
         context::MessagesTransformContext,
         streaming::{ByteStream, StreamDecoder},
@@ -390,6 +391,14 @@ async fn provider_call(
         },
     }
     .with_azure_ad_token_hosts(credentials.azure_ad_token_hosts)?;
+    let (validated, logged_in_project) =
+        log_in_to_vertex(credentials.auth, validated, &env_lookup).await?;
+    let connection_params = vertex_connection_params(
+        connection_params,
+        logged_in_project,
+        &shaping.vertex_supported_regions,
+        &env_lookup,
+    );
 
     let tool_custom_field = config.tool_custom_field(&trimmed.model);
     let requested_output_format = trimmed.params.output_format.clone();

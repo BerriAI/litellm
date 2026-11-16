@@ -676,6 +676,7 @@ _UPSTREAM_ARGS: Final = TypeAdapter(tuple[int, str])
 _UPSTREAM_HEADERS: Final = TypeAdapter(list[tuple[str, str]])
 _INVOCATION_METRICS: Final = "amazon-bedrock-invocationMetrics"
 _BODY_CUT: Final = TypeAdapter(tuple[int, int | None, bool])
+_GOOGLE_LOGIN_FAILURE: Final = TypeAdapter(tuple[str, str])
 _ERROR_CLASS: TypeAlias = Callable[..., Exception]
 _validate_metadata: Final = cast(  # cast-ok: the handler's untyped metadata validator
     Callable[[object], object], handler.validate_anthropic_api_metadata
@@ -904,6 +905,25 @@ def _vertex_credential_failure(error: Exception, request: Mapping[str, object]) 
         getattr(error, "messages_gcp_credential_failure", None),
         _VERTEX_CREDENTIALS(dict(_python_handler_params(request, "vertex_ai"))),
     )
+
+
+def _google_login_failure(error: Exception) -> Exception | None:
+    """The exception Python's `VertexBase.load_auth` raises for a Vertex AI login Rust could not
+    complete, from the class and text Rust names."""
+    try:
+        name, message = _GOOGLE_LOGIN_FAILURE.validate_python(getattr(error, "messages_google_login_failure", None))
+    except ValidationError:
+        return None
+    if name == "ValueError":
+        return ValueError(message)
+    if name == "TypeError":
+        return TypeError(message)
+    from google.auth import exceptions as google_exceptions
+
+    google_exception: Final = getattr(google_exceptions, name.removeprefix("google.auth.exceptions."), None)
+    if not isinstance(google_exception, type) or not issubclass(google_exception, Exception):
+        return None
+    return google_exception(message)
 
 
 def _sent_base(request: Mapping[str, object], request_provider: str, secrets_read: _SecretsRead) -> str | None:
@@ -1228,6 +1248,9 @@ def map_failure(
             ),
             request_provider,
         )
+    google_login_failure: Final = _google_login_failure(error) if request_provider == "vertex_ai" else None
+    if google_login_failure is not None:
+        return map_token_failure(_raised(google_login_failure), request, request_provider, asynchronous)
     credential_failure: Final = _bedrock_credential_failure(error, request) if request_provider == "bedrock" else None
     if credential_failure is not None:
         _log_resolved_call(request, request_provider)

@@ -61,6 +61,10 @@ pub enum MessagesBody {
 pub struct MessagesShaping {
     #[serde(default)]
     pub capabilities: MessagesModelCapabilities,
+    /// The model map's `supported_regions` for a Claude on Vertex AI model, which Python's
+    /// `VertexBase.get_vertex_region` routes the call by.
+    #[serde(default)]
+    pub vertex_supported_regions: Vec<String>,
     #[serde(flatten)]
     pub settings: MessagesSettings,
 }
