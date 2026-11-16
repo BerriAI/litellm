@@ -3161,6 +3161,89 @@ async def test_update_key_rejects_a_duration_that_never_advances(monkeypatch, ba
     mock_prisma_client.update_data.assert_not_awaited()
 
 
+_CAPPED_KEY_EXPIRES: Final = datetime(2099, 1, 1, tzinfo=timezone.utc)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "field, stored_limit",
+    [
+        ("duration", {"expires": _CAPPED_KEY_EXPIRES}),
+        ("budget_duration", {"budget_duration": "7d"}),
+    ],
+)
+async def test_update_key_cannot_clear_a_capped_duration(monkeypatch, field, stored_limit):
+    """An explicit null slipped past upperbound_key_generate_params on update, so the UI's
+    "Never expire" box turned a capped key into one that never expires or never resets."""
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        update_key_fn,
+    )
+    from litellm.types.proxy.management_endpoints.ui_sso import LiteLLM_UpperboundKeyGenerateParams
+
+    monkeypatch.setattr(
+        litellm,
+        "upperbound_key_generate_params",
+        LiteLLM_UpperboundKeyGenerateParams(duration="30d", budget_duration="30d"),
+    )
+    hashed_token = "0d62f396c1317066f55a96086517047c737087c61eb2bf016b72e6298927b15b"
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
+        return_value=LiteLLM_VerificationToken(token=hashed_token, user_id="test-user", **stored_limit)
+    )
+    mock_prisma_client.update_data = AsyncMock()
+    _setup_update_key_mocks(monkeypatch, mock_prisma_client)
+
+    with pytest.raises(ProxyException) as exc_info:
+        await update_key_fn(
+            request=MagicMock(),
+            data=UpdateKeyRequest.model_validate({"key": hashed_token, field: None}),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-admin", user_id="admin-user"
+            ),
+            litellm_changed_by=None,
+        )
+
+    assert str(exc_info.value.code) == "400"
+    assert f"{field} is over max limit set in config - user_value=None; max_value=30d" in str(exc_info.value.message)
+    mock_prisma_client.update_data.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_update_key_with_null_duration_still_saves_a_key_that_never_expired(monkeypatch):
+    """The UI edit form sends duration=null on every save of a never-expiring key, such as one minted
+    by JWT auto_register, so the cap must not block editing keys that were already uncapped."""
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        update_key_fn,
+    )
+    from litellm.types.proxy.management_endpoints.ui_sso import LiteLLM_UpperboundKeyGenerateParams
+
+    monkeypatch.setattr(litellm, "upperbound_key_generate_params", LiteLLM_UpperboundKeyGenerateParams(duration="30d"))
+    hashed_token = "0d62f396c1317066f55a96086517047c737087c61eb2bf016b72e6298927b15b"
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
+        return_value=LiteLLM_VerificationToken(token=hashed_token, user_id="test-user")
+    )
+    mock_prisma_client.update_data = AsyncMock(return_value={"data": {"max_budget": 5.0}})
+    _setup_update_key_mocks(monkeypatch, mock_prisma_client)
+
+    with patch(
+        "litellm.proxy.management_endpoints.key_management_endpoints.delete_cache_key_object",
+        return_value=None,
+    ):
+        await update_key_fn(
+            request=MagicMock(),
+            data=UpdateKeyRequest(key=hashed_token, duration=None, max_budget=5.0),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-admin", user_id="admin-user"
+            ),
+            litellm_changed_by=None,
+        )
+
+    written: Final = mock_prisma_client.update_data.call_args.kwargs["data"]
+    assert written["expires"] is None
+    assert written["max_budget"] == 5.0
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("bad_duration", ["0s", "-5m"])
 async def test_generate_key_rejects_a_duration_that_never_advances(monkeypatch, bad_duration):
@@ -7714,6 +7797,22 @@ async def test_bulk_update_keys_explicit_null_still_clears_the_field(monkeypatch
 
     assert written["max_budget"] is None
     assert not {"team_id", "budget_id"} & written.keys()
+
+
+@pytest.mark.asyncio
+async def test_bulk_update_keys_cannot_clear_a_capped_budget(monkeypatch):
+    from litellm.types.proxy.management_endpoints.ui_sso import LiteLLM_UpperboundKeyGenerateParams
+
+    monkeypatch.setattr(
+        litellm, "upperbound_key_generate_params", LiteLLM_UpperboundKeyGenerateParams(max_budget=200.0)
+    )
+
+    response, prisma = await _run_bulk_update_on_one_key(monkeypatch, {"max_budget": None})
+
+    assert [failure.failed_reason for failure in response.failed_updates] == [
+        "max_budget is over max limit set in config - user_value=None; max_value=200.0"
+    ]
+    prisma.update_data.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -13209,7 +13308,7 @@ def test_enforce_upperbound_rejects_over_limit_on_generate(monkeypatch):
     )
     data = GenerateKeyRequest(tpm_limit=5000)
     with pytest.raises(HTTPException) as exc_info:
-        _enforce_upperbound_key_params(data, fill_defaults=True)
+        _enforce_upperbound_key_params(data)
     assert exc_info.value.status_code == 400
     assert "tpm_limit" in str(exc_info.value.detail)
 
@@ -13229,13 +13328,13 @@ def test_enforce_upperbound_fills_defaults_on_generate(monkeypatch):
                 ),
     )
     data = GenerateKeyRequest()  # tpm_limit=None, rpm_limit=None
-    _enforce_upperbound_key_params(data, fill_defaults=True)
+    _enforce_upperbound_key_params(data)
     assert data.tpm_limit == 1000
     assert data.rpm_limit == 100
 
 
 def test_enforce_upperbound_skips_none_on_update(monkeypatch):
-    """Test that None values are NOT filled during update (fill_defaults=False)."""
+    """Test that None values are NOT filled during update."""
     import litellm
     from litellm.types.proxy.management_endpoints.ui_sso import (
         LiteLLM_UpperboundKeyGenerateParams,
@@ -13249,7 +13348,7 @@ def test_enforce_upperbound_skips_none_on_update(monkeypatch):
                 ),
     )
     data = UpdateKeyRequest(key="sk-test")  # tpm_limit=None, rpm_limit=None
-    _enforce_upperbound_key_params(data, fill_defaults=False)
+    _enforce_upperbound_key_params(data, LiteLLM_VerificationToken(token="sk-test", tpm_limit=500, rpm_limit=50))
     assert data.tpm_limit is None  # should NOT be filled
     assert data.rpm_limit is None  # should NOT be filled
 
@@ -13270,7 +13369,7 @@ def test_enforce_upperbound_rejects_over_limit_on_update(monkeypatch):
     )
     data = UpdateKeyRequest(key="sk-test", tpm_limit=5000)
     with pytest.raises(HTTPException) as exc_info:
-        _enforce_upperbound_key_params(data, fill_defaults=False)
+        _enforce_upperbound_key_params(data, LiteLLM_VerificationToken(token="sk-test"))
     assert exc_info.value.status_code == 400
     assert "tpm_limit" in str(exc_info.value.detail)
 
@@ -13292,7 +13391,7 @@ def test_enforce_upperbound_allows_within_limit_on_update(monkeypatch):
     data = UpdateKeyRequest(
         key="sk-test", tpm_limit=500, rpm_limit=50, max_budget=5.0
     )
-    _enforce_upperbound_key_params(data, fill_defaults=False)
+    _enforce_upperbound_key_params(data, LiteLLM_VerificationToken(token="sk-test"))
     # Should not raise
     assert data.tpm_limit == 500
     assert data.rpm_limit == 50
@@ -13315,7 +13414,7 @@ def test_enforce_upperbound_duration_over_limit(monkeypatch):
     )
     data = UpdateKeyRequest(key="sk-test", duration="30d")
     with pytest.raises(HTTPException) as exc_info:
-        _enforce_upperbound_key_params(data, fill_defaults=False)
+        _enforce_upperbound_key_params(data, LiteLLM_VerificationToken(token="sk-test"))
     assert exc_info.value.status_code == 400
     assert "duration" in str(exc_info.value.detail)
 
@@ -13326,9 +13425,69 @@ def test_enforce_upperbound_no_config_is_noop(monkeypatch):
 
     monkeypatch.setattr(litellm, "upperbound_key_generate_params", None)
     data = UpdateKeyRequest(key="sk-test", tpm_limit=999999)
-    _enforce_upperbound_key_params(data, fill_defaults=False)
+    _enforce_upperbound_key_params(data, LiteLLM_VerificationToken(token="sk-test"))
     # Should not raise — no enforcement configured
     assert data.tpm_limit == 999999
+
+
+def _cap_every_upperbound_field(monkeypatch):
+    from litellm.types.proxy.management_endpoints.ui_sso import LiteLLM_UpperboundKeyGenerateParams
+
+    monkeypatch.setattr(
+        litellm,
+        "upperbound_key_generate_params",
+        LiteLLM_UpperboundKeyGenerateParams(
+            max_budget=10.0,
+            budget_duration="30d",
+            duration="30d",
+            max_parallel_requests=10,
+            tpm_limit=1000,
+            rpm_limit=100,
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    "field, stored_limit, max_value",
+    [
+        ("max_budget", {"max_budget": 5.0}, "10.0"),
+        ("budget_duration", {"budget_duration": "7d"}, "30d"),
+        ("duration", {"expires": _CAPPED_KEY_EXPIRES}, "30d"),
+        ("max_parallel_requests", {"max_parallel_requests": 5}, "10"),
+        ("tpm_limit", {"tpm_limit": 500}, "1000"),
+        ("rpm_limit", {"rpm_limit": 50}, "100"),
+    ],
+)
+def test_enforce_upperbound_rejects_clearing_a_capped_limit_on_update(monkeypatch, field, stored_limit, max_value):
+    _cap_every_upperbound_field(monkeypatch)
+
+    with pytest.raises(HTTPException) as exc_info:
+        _enforce_upperbound_key_params(
+            UpdateKeyRequest.model_validate({"key": "sk-test", field: None}),
+            LiteLLM_VerificationToken(token="sk-test", **stored_limit),
+        )
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == {
+        "error": f"{field} is over max limit set in config - user_value=None; max_value={max_value}"
+    }
+
+
+def test_enforce_upperbound_allows_null_on_update_when_the_key_had_no_limit(monkeypatch):
+    _cap_every_upperbound_field(monkeypatch)
+    capped_fields: Final = (
+        "max_budget",
+        "budget_duration",
+        "duration",
+        "max_parallel_requests",
+        "tpm_limit",
+        "rpm_limit",
+    )
+    data: Final = UpdateKeyRequest.model_validate({"key": "sk-test", **dict.fromkeys(capped_fields, None)})
+
+    _enforce_upperbound_key_params(data, LiteLLM_VerificationToken(token="sk-test"))
+
+    assert {field: getattr(data, field) for field in capped_fields} == dict.fromkeys(capped_fields, None)
 
 
 # --- Tests: _execute_virtual_key_regeneration enforces upperbound ---
@@ -14723,7 +14882,7 @@ async def test_execute_virtual_key_regeneration_rejects_over_limit_max_budget(mo
 @pytest.mark.asyncio
 async def test_execute_virtual_key_regeneration_skips_none_values(monkeypatch):
     """Regenerate with data.duration=None must not raise, even when upperbound is set
-    (fill_defaults=False semantic — None means 'inherit from existing key')."""
+    (None means 'inherit from existing key')."""
     from litellm.proxy._types import RegenerateKeyRequest
     from litellm.proxy.management_endpoints.key_management_endpoints import (
         _execute_virtual_key_regeneration,
@@ -14775,6 +14934,54 @@ async def test_execute_virtual_key_regeneration_skips_none_values(monkeypatch):
             proxy_logging_obj=MagicMock(),
         )
     assert mock_prisma_client.db.litellm_verificationtoken.update.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_execute_virtual_key_regeneration_cannot_clear_a_capped_expiry(monkeypatch):
+    from litellm.proxy._types import RegenerateKeyRequest
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _execute_virtual_key_regeneration,
+    )
+    from litellm.types.proxy.management_endpoints.ui_sso import (
+        LiteLLM_UpperboundKeyGenerateParams,
+    )
+
+    monkeypatch.setattr(litellm, "upperbound_key_generate_params", LiteLLM_UpperboundKeyGenerateParams(duration="1h"))
+    expiring_key = _make_regenerate_existing_key().model_copy(update={"expires": _CAPPED_KEY_EXPIRES})
+    mock_prisma_client = _make_regenerate_mock_prisma()
+
+    with (
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints.get_new_token",
+            new_callable=AsyncMock,
+            return_value="sk-newtoken1234ab12",
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints._insert_deprecated_key",
+            new_callable=AsyncMock,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints.delete_cache_key_object",
+            new_callable=AsyncMock,
+        ),
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        await _execute_virtual_key_regeneration(
+            prisma_client=mock_prisma_client,
+            key_in_db=expiring_key,
+            hashed_api_key="abc123",
+            key="abc123",
+            data=RegenerateKeyRequest(duration=None),
+            user_api_key_dict=_make_regenerate_user_api_key_dict(),
+            litellm_changed_by=None,
+            user_api_key_cache=MagicMock(),
+            proxy_logging_obj=MagicMock(),
+        )
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == {
+        "error": "duration is over max limit set in config - user_value=None; max_value=1h"
+    }
+    assert mock_prisma_client.db.litellm_verificationtoken.update.await_count == 0
 
 
 @pytest.mark.asyncio
