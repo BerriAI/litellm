@@ -35,6 +35,7 @@ litellm-http.workspace = true
 litellm-inference-messages.workspace = true
 litellm-llms.workspace = true
 litellm-model-catalog.workspace = true
+litellm-model-catalog-refresh.workspace = true
 litellm-router-core.workspace = true
 litellm-secrets.workspace = true
 litellm-tracing.workspace = true
