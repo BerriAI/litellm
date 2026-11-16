@@ -6,13 +6,16 @@ on the body, so these tests send only the headers and the first kilobyte of a de
 read the answer through the same socket.
 """
 
+import asyncio
 import socket
 import uuid
 from typing import Final
 
 import httpx
 import pytest
+import websockets
 from integration._support.client import Gateway
+from websockets.exceptions import InvalidStatus
 
 pytestmark: Final = pytest.mark.shares_worker_state
 
@@ -84,6 +87,30 @@ def test_rate_limited_key_still_reaches_routes_the_limiter_never_meters(
         unmetered: Final = gateway.request(method, path, body, key=key)
 
         assert unmetered.status_code == 200, unmetered.text
+
+
+async def _realtime_upgrade_status(gateway: Gateway, model: str, key: str) -> int:
+    """Open a realtime WebSocket and return the HTTP status of the upgrade, 101 when the proxy accepts it."""
+    base: Final = str(gateway.client.base_url).rstrip("/").replace("http://", "ws://")
+    try:
+        async with websockets.connect(
+            f"{base}/v1/realtime?model={model}", additional_headers={"Authorization": f"Bearer {key}"}
+        ):
+            return 101
+    except InvalidStatus as refused:
+        return refused.response.status_code
+
+
+def test_rate_limited_key_is_refused_a_realtime_websocket_upgrade(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        model: Final = scenario.model()
+        key: Final = scenario.key(models=[model], rpm_limit=1)
+        admitted: Final = _small_chat(gateway, model, key)
+        assert admitted.status_code == 200, admitted.text
+        refused: Final = _small_chat(gateway, model, key)
+        assert refused.status_code == 429, refused.text
+
+        assert asyncio.run(_realtime_upgrade_status(gateway, model, key)) == 403
 
 
 def test_blocked_key_is_refused_before_its_body_arrives(gateway: Gateway) -> None:

@@ -2243,6 +2243,7 @@ async def _small_preflight_failure_json(request: Request) -> Mapping[str, object
 def _is_bodyless_get(request: Request) -> bool:
     return (
         request.scope.get("method") == "GET"
+        and request.headers.get("upgrade", "").lower() != "websocket"
         and request.headers.get("content-length", "0") == "0"
         and request.headers.get("transfer-encoding") is None
     )
@@ -2256,6 +2257,7 @@ async def _reject_from_headers_before_reading_body(
     Only a key already in the cache is considered, so a miss changes nothing and the full auth path still runs.
     The limit is only checked where a body is declared and the route is metered, because model listing, token
     counting and other GET discovery routes never reach the limiter and must keep answering an exhausted key.
+    A WebSocket upgrade is authenticated as a GET but opens a metered session, so it is still checked.
     A retry flood of large payloads against a limited key used to buffer every payload just to answer 429.
     """
     if not RouteChecks.is_llm_api_route(route=route):

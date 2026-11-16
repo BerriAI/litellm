@@ -14199,6 +14199,57 @@ async def test_exhausted_cached_key_is_only_refused_before_the_body_where_a_mete
 
 
 @pytest.mark.asyncio
+async def test_exhausted_cached_key_is_refused_a_realtime_websocket_before_it_is_accepted() -> None:
+    from fastapi import WebSocket
+
+    from litellm.proxy.utils import hash_token
+
+    api_key: Final = "sk-exhausted-realtime-key"
+    limiter: Final = PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(DualCache()))
+    await limiter.async_pre_call_hook(
+        UserAPIKeyAuth(api_key=hash_token(api_key), rpm_limit=1),
+        DualCache(),
+        {"model": "gpt-realtime-2.1"},
+        "_arealtime",
+    )
+    user_api_key_cache: Final = DualCache()
+    await cache_key_object(
+        hashed_token=hash_token(api_key),
+        user_api_key_obj=UserAPIKeyAuth(token=hash_token(api_key), rpm_limit=1, models=["gpt-realtime-2.1"]),
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=None,
+    )
+    proxy_logging_obj: Final = MagicMock()
+    proxy_logging_obj.get_proxy_hook.return_value = limiter
+    proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
+    send: Final = AsyncMock()
+    websocket: Final = WebSocket(
+        scope={
+            "type": "websocket",
+            "path": "/v1/realtime",
+            "headers": [(b"authorization", f"Bearer {api_key}".encode()), (b"upgrade", b"websocket")],
+            "query_string": b"model=gpt-realtime-2.1",
+        },
+        receive=AsyncMock(return_value={"type": "websocket.connect"}),
+        send=send,
+    )
+    with (
+        patch("litellm.proxy.proxy_server.general_settings", {}),
+        patch("litellm.proxy.proxy_server.master_key", "sk-master"),
+        patch("litellm.proxy.proxy_server.open_telemetry_logger", None),
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", user_api_key_cache),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging_obj),
+        pytest.raises(HTTPException) as refusal,
+    ):
+        await user_api_key_auth_websocket_for_model(websocket, model="gpt-realtime-2.1")
+
+    assert refusal.value.status_code == 403
+    assert "Rate limit exceeded for api_key" in str(refusal.value.detail)
+    assert [call.args[0] for call in send.await_args_list] == [{"type": "websocket.close", "code": 1008, "reason": ""}]
+
+
+@pytest.mark.asyncio
 async def test_blocked_cached_key_is_refused_before_the_body_is_read() -> None:
     from litellm.proxy.utils import hash_token
 
