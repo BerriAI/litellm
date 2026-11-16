@@ -256,7 +256,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         return str(getattr(part, "text", None) or "")
 
     @classmethod
-    def _thinking_block_from_reasoning_item(
+    def thinking_block_from_reasoning_item(
         cls,
         summary: Iterable[object],
         encrypted_content: object,
@@ -776,7 +776,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                             ).model_dump()
                         )
             elif item_type == "reasoning":
-                reasoning_block = self._thinking_block_from_reasoning_item(
+                reasoning_block = self.thinking_block_from_reasoning_item(
                     iter_items(item.get("summary") or item.get("content") or ()),
                     item.get("encrypted_content"),
                 )
