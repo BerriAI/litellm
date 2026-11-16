@@ -79,6 +79,7 @@ async fn gateway(python: SocketAddr, admits: bool, root_path: &str) -> SocketAdd
                     &config,
                     &litellm_gateway::Resources::build(&config).unwrap(),
                 )
+                .await
                 .unwrap(),
                 redis: litellm_gateway::RedisClients::default(),
                 database: None,
@@ -291,8 +292,9 @@ async fn a_master_key_callers_messages_request_is_answered_natively() {
         (
             response.status(),
             response.headers()[ANSWERED_BY_HEADER].to_str().unwrap(),
+            response.headers()["x-litellm-model-id"].to_str().unwrap(),
         ),
-        (StatusCode::OK, "native")
+        (StatusCode::OK, "native", "claude-a")
     );
     assert_eq!(provider.received_requests().await.unwrap().len(), 1);
     assert!(received.try_recv().is_err());

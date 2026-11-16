@@ -6,8 +6,8 @@ use std::{
 use axum::{body::Body, http::Request};
 use litellm_config::Config;
 use litellm_db::{Endpoint, PoolLimits, Pools, SslMode};
-use litellm_gateway::{AppState, RedisClients, Resources};
-use litellm_gateway_inference::{Error, Gateway};
+use litellm_gateway::{AppState, Gateway, RedisClients, Resources};
+use litellm_gateway_inference::Error;
 use litellm_http::ClientVariant;
 use litellm_model_catalog::{BUNDLED_REGISTRY, Catalog};
 use litellm_tracing::{Logger, Metadata, Record, Sink};
@@ -34,8 +34,10 @@ impl Sink for LogSink {
     }
 }
 
-fn inference_for(config: &Config) -> Arc<Gateway> {
-    litellm_gateway::build_inference(config, &Resources::build(config).unwrap()).unwrap()
+async fn inference_for(config: &Config) -> Arc<Gateway> {
+    litellm_gateway::build_inference(config, &Resources::build(config).unwrap())
+        .await
+        .unwrap()
 }
 
 fn global(router: axum::Router) -> axum::Router {
@@ -48,8 +50,8 @@ fn global(router: axum::Router) -> axum::Router {
 }
 
 #[fixture]
-fn inference() -> Arc<Gateway> {
-    inference_for(&Config::from_yaml("model_list: []").unwrap())
+async fn inference() -> Arc<Gateway> {
+    inference_for(&Config::from_yaml("model_list: []").unwrap()).await
 }
 
 fn without_stores(inference: Arc<Gateway>) -> AppState {
@@ -82,7 +84,7 @@ fn without_stores(inference: Arc<Gateway>) -> AppState {
 #[case::unconfigured("/v1/messages", &[("authorization", "Bearer gateway-key")], None, 500, None)]
 #[tokio::test]
 async fn authenticates_before_serving_mounted_inference_routes(
-    inference: Arc<Gateway>,
+    #[future(awt)] inference: Arc<Gateway>,
     #[case] path: &str,
     #[case] headers: &[(&str, &str)],
     #[case] master_key: Option<&str>,
@@ -152,7 +154,7 @@ async fn authenticates_before_serving_mounted_inference_routes(
 
 #[rstest]
 #[tokio::test]
-async fn logs_request_outcome_without_credentials_or_query(inference: Arc<Gateway>) {
+async fn logs_request_outcome_without_credentials_or_query(#[future(awt)] inference: Arc<Gateway>) {
     let config =
         Config::from_yaml("model_list: []\ngeneral_settings:\n  master_key: gateway-key\n")
             .unwrap();
@@ -190,7 +192,7 @@ async fn logs_request_outcome_without_credentials_or_query(inference: Arc<Gatewa
 #[case::without_master_key("model_list: []\n")]
 #[tokio::test]
 async fn readiness_answers_without_credentials_like_the_proxy_with_no_database(
-    inference: Arc<Gateway>,
+    #[future(awt)] inference: Arc<Gateway>,
     #[case] yaml: &str,
 ) {
     let config = Config::from_yaml(yaml).unwrap();
@@ -217,7 +219,9 @@ async fn readiness_answers_without_credentials_like_the_proxy_with_no_database(
 
 #[rstest]
 #[tokio::test]
-async fn readiness_reports_a_configured_database_it_cannot_reach(inference: Arc<Gateway>) {
+async fn readiness_reports_a_configured_database_it_cannot_reach(
+    #[future(awt)] inference: Arc<Gateway>,
+) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let closed_port = listener.local_addr().unwrap().port();
     drop(listener);
@@ -266,6 +270,472 @@ async fn readiness_reports_a_configured_database_it_cannot_reach(inference: Arc<
     );
 }
 
+fn served_message() -> ResponseTemplate {
+    ResponseTemplate::new(200).set_body_json(json!({
+        "id": "msg_test", "type": "message", "role": "assistant", "model": "claude-unlisted-9",
+        "content": [{"type": "text", "text": "hi"}], "stop_reason": "end_turn",
+        "usage": {"input_tokens": 1, "output_tokens": 1}
+    }))
+}
+
+fn deployment(name: &str, id: &str, upstream: &MockServer) -> String {
+    format!(
+        "  - model_name: {name}\n    litellm_params:\n      model: anthropic/claude-unlisted-9\n      api_base: {}\n      api_key: test-key\n    model_info:\n      id: {id}\n",
+        upstream.uri()
+    )
+}
+
+async fn routed(config: &str, model: &str) -> axum::response::Response {
+    let config = Config::from_yaml(config).unwrap();
+    let request = Request::post("/v1/messages")
+        .header("authorization", "Bearer gateway-key")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({"model": model, "max_tokens": 8, "messages": [{"role": "user", "content": "hi"}]})
+                .to_string(),
+        ))
+        .unwrap();
+    global(litellm_gateway::router(
+        without_stores(inference_for(&config).await),
+        &config,
+    ))
+    .oneshot(request)
+    .await
+    .unwrap()
+}
+
+fn routing_headers(response: &axum::response::Response) -> Vec<(&str, &str)> {
+    response
+        .headers()
+        .iter()
+        .filter(|(name, _)| name.as_str().starts_with("x-litellm-") && *name != "x-litellm-call-id")
+        .map(|(name, value)| (name.as_str(), value.to_str().unwrap()))
+        .collect()
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_failed_model_group_falls_back_to_the_configured_group() {
+    let (failing, healthy) = (MockServer::start().await, MockServer::start().await);
+    Mock::given(method("POST"))
+        .respond_with(
+            ResponseTemplate::new(400).set_body_json(json!({"error": {"message": "refused"}})),
+        )
+        .expect(1)
+        .mount(&failing)
+        .await;
+    Mock::given(method("POST"))
+        .respond_with(served_message())
+        .expect(1)
+        .mount(&healthy)
+        .await;
+    let config = format!(
+        "model_list:\n{}{}router_settings:\n  fallbacks:\n    - primary: [backup]\ngeneral_settings:\n  master_key: gateway-key\n",
+        deployment("primary", "primary-1", &failing),
+        deployment("backup", "backup-1", &healthy),
+    );
+
+    let response = routed(&config, "primary").await;
+
+    assert_eq!(response.status().as_u16(), 200);
+    assert_eq!(
+        routing_headers(&response),
+        [
+            ("x-litellm-model-id", "backup-1"),
+            ("x-litellm-model-group", "backup"),
+            ("x-litellm-attempted-retries", "0"),
+            ("x-litellm-attempted-fallbacks", "1"),
+        ]
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_name_no_deployment_serves_routes_to_the_first_default_fallback() {
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(served_message())
+        .expect(1)
+        .mount(&upstream)
+        .await;
+    let config = format!(
+        "model_list:\n{}router_settings:\n  default_fallbacks: [backup]\ngeneral_settings:\n  master_key: gateway-key\n",
+        deployment("backup", "backup-1", &upstream),
+    );
+
+    let response = routed(&config, "unconfigured").await;
+
+    assert_eq!(response.status().as_u16(), 200);
+    assert_eq!(
+        routing_headers(&response)[0],
+        ("x-litellm-model-id", "backup-1")
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_failed_deployment_is_retried_on_another_deployment_of_its_group() {
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(
+            ResponseTemplate::new(500).set_body_json(json!({"error": {"message": "down"}})),
+        )
+        .up_to_n_times(1)
+        .with_priority(1)
+        .mount(&upstream)
+        .await;
+    Mock::given(method("POST"))
+        .respond_with(served_message())
+        .with_priority(2)
+        .mount(&upstream)
+        .await;
+    let config = format!(
+        "model_list:\n{}{}general_settings:\n  master_key: gateway-key\n",
+        deployment("primary", "primary-1", &upstream),
+        deployment("primary", "primary-2", &upstream),
+    );
+
+    let response = routed(&config, "primary").await;
+
+    assert_eq!(response.status().as_u16(), 200);
+    let headers = routing_headers(&response);
+    assert_eq!(
+        (
+            &headers[1..],
+            upstream.received_requests().await.unwrap().len()
+        ),
+        (
+            [
+                ("x-litellm-model-group", "primary"),
+                ("x-litellm-attempted-retries", "1"),
+                ("x-litellm-attempted-fallbacks", "0"),
+                ("x-litellm-max-retries", "2"),
+            ]
+            .as_slice(),
+            2,
+        )
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_deployments_own_num_retries_retries_its_failed_call() {
+    let (failing, healthy) = (MockServer::start().await, MockServer::start().await);
+    Mock::given(method("POST"))
+        .respond_with(
+            ResponseTemplate::new(500).set_body_json(json!({"error": {"message": "down"}})),
+        )
+        .mount(&failing)
+        .await;
+    Mock::given(method("POST"))
+        .respond_with(served_message())
+        .mount(&healthy)
+        .await;
+    let deployment = |id: &str, upstream: &MockServer, weight: u8| {
+        format!(
+            "  - model_name: primary\n    litellm_params:\n      model: anthropic/claude-unlisted-9\n      api_base: {}\n      api_key: test-key\n      weight: {weight}\n      num_retries: 1\n    model_info:\n      id: {id}\n",
+            upstream.uri()
+        )
+    };
+
+    let response = routed(
+        &format!(
+            "model_list:\n{}{}router_settings:\n  num_retries: 0\n  allowed_fails: 0\n  cooldown_time: 30\ngeneral_settings:\n  master_key: gateway-key\n",
+            deployment("first", &failing, 1),
+            deployment("second", &healthy, 0),
+        ),
+        "primary",
+    )
+    .await;
+
+    assert_eq!(
+        (response.status().as_u16(), routing_headers(&response)),
+        (
+            200,
+            vec![
+                ("x-litellm-model-id", "second"),
+                ("x-litellm-model-group", "primary"),
+                ("x-litellm-attempted-retries", "1"),
+                ("x-litellm-attempted-fallbacks", "0"),
+                ("x-litellm-max-retries", "1"),
+            ]
+        )
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_call_through_an_alias_reports_the_alias_as_its_model_group() {
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(served_message())
+        .mount(&upstream)
+        .await;
+    let config = format!(
+        "model_list:\n{}router_settings:\n  model_group_alias:\n    alias: primary\ngeneral_settings:\n  master_key: gateway-key\n",
+        deployment("primary", "primary-1", &upstream),
+    );
+
+    let response = routed(&config, "alias").await;
+
+    assert_eq!(response.status().as_u16(), 200);
+    assert_eq!(
+        routing_headers(&response)[..2],
+        [
+            ("x-litellm-model-id", "primary-1"),
+            ("x-litellm-model-group", "alias"),
+        ]
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_call_that_ends_on_a_failed_attempt_names_its_deployment() {
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(
+            ResponseTemplate::new(400).set_body_json(json!({"error": {"message": "refused"}})),
+        )
+        .mount(&upstream)
+        .await;
+    let config = format!(
+        "model_list:\n{}general_settings:\n  master_key: gateway-key\n",
+        deployment("primary", "primary-1", &upstream),
+    );
+
+    let response = routed(&config, "primary").await;
+
+    assert_eq!(response.status().as_u16(), 400);
+    assert_eq!(
+        routing_headers(&response),
+        [("x-litellm-model-id", "primary-1")]
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_call_whose_fallback_also_fails_names_the_deployment_whose_error_it_answers_with() {
+    let (first, second) = (MockServer::start().await, MockServer::start().await);
+    Mock::given(method("POST"))
+        .respond_with(
+            ResponseTemplate::new(500).set_body_json(json!({"error": {"message": "from-first"}})),
+        )
+        .mount(&first)
+        .await;
+    Mock::given(method("POST"))
+        .respond_with(
+            ResponseTemplate::new(503).set_body_json(json!({"error": {"message": "from-second"}})),
+        )
+        .mount(&second)
+        .await;
+    let config = format!(
+        "model_list:\n{}{}router_settings:\n  num_retries: 0\n  fallbacks:\n    - first: [second]\ngeneral_settings:\n  master_key: gateway-key\n",
+        deployment("first", "first-1", &first),
+        deployment("second", "second-1", &second),
+    );
+
+    let response = routed(&config, "first").await;
+
+    assert_eq!(
+        (response.status().as_u16(), routing_headers(&response)),
+        (500, vec![("x-litellm-model-id", "first-1")])
+    );
+    assert_eq!(second.received_requests().await.unwrap().len(), 1);
+}
+
+/// A port nothing listens on, so a call to it never gets an answer.
+async fn closed_port() -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    format!("http://{}", listener.local_addr().unwrap())
+}
+
+#[tokio::test]
+async fn a_deployment_the_gateway_cannot_reach_cools_down_and_its_group_keeps_serving() {
+    let healthy = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(served_message())
+        .mount(&healthy)
+        .await;
+    let unreachable = closed_port().await;
+    let config = Config::from_yaml(&format!(
+        "model_list:\n  - model_name: primary\n    litellm_params:\n      model: anthropic/claude-unlisted-9\n      api_base: {unreachable}\n      api_key: test-key\n      weight: 1\n    model_info:\n      id: unreachable\n  - model_name: primary\n    litellm_params:\n      model: anthropic/claude-unlisted-9\n      api_base: {}\n      api_key: test-key\n      weight: 0\n    model_info:\n      id: healthy\nrouter_settings:\n  num_retries: 0\n  cooldown_time: 30\ngeneral_settings:\n  master_key: gateway-key\n",
+        healthy.uri()
+    ))
+    .unwrap();
+    let app = global(litellm_gateway::router(
+        without_stores(inference_for(&config).await),
+        &config,
+    ));
+    let call = || {
+        let request = Request::post("/v1/messages")
+            .header("authorization", "Bearer gateway-key")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                json!({"model": "primary", "max_tokens": 8, "messages": [{"role": "user", "content": "hi"}]})
+                    .to_string(),
+            ))
+            .unwrap();
+        app.clone().oneshot(request)
+    };
+
+    let failed = [
+        call().await.unwrap().status().as_u16(),
+        call().await.unwrap().status().as_u16(),
+        call().await.unwrap().status().as_u16(),
+        call().await.unwrap().status().as_u16(),
+        call().await.unwrap().status().as_u16(),
+    ];
+    let served = call().await.unwrap();
+
+    assert_eq!(failed, [500; 5]);
+    assert_eq!(
+        (
+            served.status().as_u16(),
+            served.headers()["x-litellm-model-id"].to_str().unwrap()
+        ),
+        (200, "healthy")
+    );
+}
+
+#[rstest]
+#[case::strategy("routing_strategy: usage-based-routing-v2", "usage-based-routing-v2")]
+#[case::pre_call_checks("enable_pre_call_checks: true", "enable_pre_call_checks")]
+#[case::tag_filtering("enable_tag_filtering: true", "enable_tag_filtering")]
+#[case::health_check_routing("enable_health_check_routing: true", "enable_health_check_routing")]
+#[case::affinity("model_group_affinity_config: {}", "model_group_affinity_config")]
+#[case::default_slots(
+    "default_max_parallel_requests: 2",
+    "router_settings.default_max_parallel_requests"
+)]
+#[tokio::test]
+async fn a_router_setting_the_gateway_cannot_serve_fails_the_build(
+    #[case] setting: &str,
+    #[case] named: &str,
+) {
+    let config = Config::from_yaml(&format!(
+        "model_list:\n  - model_name: public-model\n    litellm_params:\n      model: anthropic/claude-unlisted-9\nrouter_settings:\n  {setting}\n"
+    ))
+    .unwrap();
+
+    let refused = litellm_gateway::build_inference(&config, &Resources::build(&config).unwrap())
+        .await
+        .err()
+        .map(|error| litellm_error::Report::new(&error).to_string())
+        .unwrap();
+
+    assert!(refused.contains(named), "{refused}");
+}
+
+#[tokio::test]
+async fn a_deployment_asking_for_slots_fails_the_build() {
+    let config = Config::from_yaml(
+        "model_list:\n  - model_name: public-model\n    litellm_params:\n      model: anthropic/claude-unlisted-9\n      max_parallel_requests: 2\n",
+    )
+    .unwrap();
+
+    let refused = litellm_gateway::build_inference(&config, &Resources::build(&config).unwrap())
+        .await
+        .err()
+        .map(|error| error.to_string());
+
+    assert_eq!(
+        refused.as_deref(),
+        Some("the gateway does not honor `model_list.litellm_params.max_parallel_requests` yet")
+    );
+}
+
+fn streamed(events: &str) -> ResponseTemplate {
+    ResponseTemplate::new(200).set_body_raw(events.to_owned(), "text/event-stream")
+}
+
+async fn stream_read_to_its_end(app: &axum::Router, model: &str) -> (u16, String) {
+    let request = Request::post("/v1/messages")
+        .header("authorization", "Bearer gateway-key")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({"model": model, "max_tokens": 8, "stream": true, "messages": [{"role": "user", "content": "hi"}]})
+                .to_string(),
+        ))
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    let status = response.status().as_u16();
+    let body = axum::body::to_bytes(response.into_body(), 65536)
+        .await
+        .unwrap();
+    (status, String::from_utf8(body.to_vec()).unwrap())
+}
+
+#[tokio::test]
+async fn a_stream_carrying_the_providers_error_cools_its_deployment_down() {
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(streamed(concat!(
+            "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"claude-unlisted-9\",\"content\":[],\"stop_reason\":null,\"stop_sequence\":null,\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}}\n\n",
+            "event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"Overloaded\"}}\n\n",
+        )))
+        .mount(&upstream)
+        .await;
+    let config = Config::from_yaml(&format!(
+        "model_list:\n{}{}router_settings:\n  allowed_fails: 0\n  cooldown_time: 30\n  num_retries: 0\ngeneral_settings:\n  master_key: gateway-key\n",
+        deployment("primary", "primary-1", &upstream),
+        deployment("primary", "primary-2", &upstream),
+    ))
+    .unwrap();
+    let app = global(litellm_gateway::router(
+        without_stores(inference_for(&config).await),
+        &config,
+    ));
+
+    let first = stream_read_to_its_end(&app, "primary").await;
+    let second = stream_read_to_its_end(&app, "primary").await;
+    let (status, refused) = stream_read_to_its_end(&app, "primary").await;
+
+    assert_eq!((first.0, second.0), (200, 200));
+    assert!(first.1.contains("overloaded_error"), "{}", first.1);
+    assert_eq!(
+        (status, serde_json::from_str::<Value>(&refused).unwrap()),
+        (
+            429,
+            json!({"type": "error", "error": {
+                "type": "rate_limit_error",
+                "message": "No deployments available for selected model, Try again in 30 seconds. All deployments for selected model are in cooldown. Passed model=primary. pre-call-checks=False, cooldown_list=['primary-1', 'primary-2']",
+            }})
+        )
+    );
+    assert_eq!(upstream.received_requests().await.unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn a_stream_that_ends_cleanly_keeps_its_deployment_serving() {
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(streamed(concat!(
+            "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"claude-unlisted-9\",\"content\":[],\"stop_reason\":null,\"stop_sequence\":null,\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}}\n\n",
+            "event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\",\"stop_sequence\":null},\"usage\":{\"output_tokens\":2}}\n\n",
+            "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+        )))
+        .mount(&upstream)
+        .await;
+    let config = Config::from_yaml(&format!(
+        "model_list:\n{}{}router_settings:\n  allowed_fails: 0\n  cooldown_time: 30\ngeneral_settings:\n  master_key: gateway-key\n",
+        deployment("primary", "primary-1", &upstream),
+        deployment("primary", "primary-2", &upstream),
+    ))
+    .unwrap();
+    let app = global(litellm_gateway::router(
+        without_stores(inference_for(&config).await),
+        &config,
+    ));
+
+    let statuses = [
+        stream_read_to_its_end(&app, "primary").await.0,
+        stream_read_to_its_end(&app, "primary").await.0,
+        stream_read_to_its_end(&app, "primary").await.0,
+    ];
+
+    assert_eq!(statuses, [200, 200, 200]);
+}
+
 async fn forwarded_body(deployment_params: &str, client_params: Value) -> Value {
     let upstream = MockServer::start().await;
     Mock::given(method("POST"))
@@ -300,7 +770,7 @@ async fn forwarded_body(deployment_params: &str, client_params: Value) -> Value 
         .unwrap();
 
     let response = global(litellm_gateway::router(
-        without_stores(inference_for(&config)),
+        without_stores(inference_for(&config).await),
         &config,
     ))
     .oneshot(request)
@@ -395,7 +865,7 @@ async fn forwards_a_param_the_catalog_says_the_model_supports(
         .unwrap();
 
     let response = global(litellm_gateway::router(
-        without_stores(inference_for(&config)),
+        without_stores(inference_for(&config).await),
         &config,
     ))
     .oneshot(request)
@@ -471,7 +941,7 @@ async fn chat_sends_a_caller_supplied_bedrock_endpoint_only_under_client_side_cr
         .body(Body::from(body.to_string()))
         .unwrap();
 
-    let response = litellm_gateway::router(without_stores(inference_for(&config)), &config)
+    let response = litellm_gateway::router(without_stores(inference_for(&config).await), &config)
         .oneshot(request)
         .await
         .unwrap();
@@ -525,7 +995,7 @@ async fn chat_drops_sampling_params_the_catalog_says_the_model_rejects(
         .body(Body::from(body.to_string()))
         .unwrap();
 
-    let response = litellm_gateway::router(without_stores(inference_for(&config)), &config)
+    let response = litellm_gateway::router(without_stores(inference_for(&config).await), &config)
         .oneshot(request)
         .await
         .unwrap();

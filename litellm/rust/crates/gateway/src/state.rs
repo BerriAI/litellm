@@ -3,9 +3,8 @@ use std::sync::Arc;
 use axum::extract::FromRef;
 use litellm_config::Config;
 use litellm_db::Pools;
-use litellm_gateway_inference::Gateway;
 
-use crate::{Error, RedisClients, Resources, db};
+use crate::{Error, Gateway, RedisClients, Resources, db};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -17,7 +16,7 @@ pub struct AppState {
 impl AppState {
     pub async fn build(config: &Config) -> Result<Self, Error> {
         let resources = Resources::build(config)?;
-        let inference = crate::build_inference(config, &resources)?;
+        let inference = crate::build_inference(config, &resources).await?;
         let redis = crate::redis::connect(config, &resources).await?;
         let database = db::connect(config, &resources.secrets).await?;
         Ok(Self {
