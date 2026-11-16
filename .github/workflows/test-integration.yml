@@ -222,3 +222,150 @@ jobs:
           name: integration-${{ matrix.suite }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: test-results/
           retention-days: 14
+
+  unit-io:
+    name: integration unit-io
+    if: github.event_name != 'pull_request' || github.event.label.name == 'run-ci'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      UV_PYTHON: "3.12"
+      LITELLM_LOCAL_MODEL_COST_MAP: "True"
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        timeout-minutes: 3
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Set up Python
+        timeout-minutes: 3
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: ${{ env.UV_PYTHON }}
+
+      - name: Set up uv
+        timeout-minutes: 3
+        uses: ./.github/actions/setup-uv-with-retries
+        with:
+          version: "0.10.9"
+
+      - name: Cache uv dependencies
+        timeout-minutes: 5
+        uses: ./.github/actions/cache-uv-downloads
+
+      - name: Set up the Rust build
+        timeout-minutes: 5
+        uses: ./.github/actions/rust-bridge
+
+      - name: Install dependencies
+        timeout-minutes: 5
+        run: |
+          diff -u model_prices_and_context_window.json litellm/model_prices_and_context_window_backup.json
+          .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router --extra switchyard --extra saml --extra extra_proxy --extra proxy-runtime --extra utils
+          uv run --no-sync python -c 'import os, sys; print(sys.version); assert f"{sys.version_info.major}.{sys.version_info.minor}" == os.environ["UV_PYTHON"]'
+
+      - name: Cache Prisma binaries
+        timeout-minutes: 3
+        uses: ./.github/actions/cache-prisma-binaries
+
+      - name: Generate Prisma client
+        timeout-minutes: 3
+        run: |
+          uv run --no-sync prisma generate --schema litellm/proxy/schema.prisma
+
+      - name: Run tests
+        timeout-minutes: 30
+        env:
+          COVERAGE_CORE: sysmon
+        run: |
+          uv run --no-sync pytest \
+            tests/unit/integrations/test_opentelemetry.py \
+            tests/unit/integrations/otel/test_otel_v2_components.py \
+            tests/unit/llms/custom_httpx/test_aiohttp_transport.py \
+            tests/unit/proxy/db/test_pgbouncer.py \
+            tests/unit/proxy/test_prometheus_metrics_server.py \
+            tests/unit/proxy/test_proxy_cli.py \
+            --tb=short -vv --maxfail=10 \
+            -n 4 --dist=loadscope \
+            --reruns 0 --reruns-delay 1 \
+            --timeout=120 --rerun-except "from pytest-timeout" \
+            --durations=20 \
+            --cov=./litellm --cov=./litellm/enterprise/litellm_enterprise \
+            --cov-report=xml:coverage.xml \
+            --cov-config=pyproject.toml
+
+      - name: Save coverage report
+        if: always()
+        uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1 # v4.6.1
+        with:
+          name: coverage-unit-io-${{ github.run_id }}-${{ github.run_attempt }}
+          path: coverage.xml
+          retention-days: 1
+
+  e2e-harness:
+    name: integration e2e-harness
+    if: github.event_name != 'pull_request' || github.event.label.name == 'run-ci'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      redis:
+        image: redis@sha256:e2debfb7956fa12c7ddc79d7e645c8cf26b30c99a6e9161ea9bf4171e1668a5f
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: ./.github/actions/setup-uv-with-retries
+        with:
+          version: "0.10.9"
+
+      - name: Cache uv dependencies
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.cache/uv
+            .venv
+          key: ${{ runner.os }}-uv-${{ hashFiles('uv.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-uv-
+
+      - name: Cache the Rust build
+        uses: ./.github/actions/cache-cargo-build
+
+      - name: Install dependencies
+        run: |
+          uv sync --frozen --group proxy-dev --group e2e-dev
+
+      - name: Cache Prisma binaries
+        uses: ./.github/actions/cache-prisma-binaries
+
+      - name: Generate Prisma client
+        run: |
+          uv run --no-sync prisma generate --schema litellm/proxy/schema.prisma
+
+      - name: Run the e2e harness tests
+        env:
+          LITELLM_MASTER_KEY: sk-e2e-harness-tests-reach-no-proxy
+          E2E_CACHE_TEST_REDIS_URL: redis://127.0.0.1:6379/0
+        run: |
+          retry() { "$@" || { sleep 15; "$@"; } || { sleep 30; "$@"; }; }
+          CLAUDE_VERSION="$(retry uv run --no-sync python tests/e2e/cli_harness/npm_version_resolver.py @anthropic-ai/claude-code)"
+          tests/e2e/claude_code/cron_vm/install_claude_code.sh "$CLAUDE_VERSION" "$RUNNER_TEMP/claude-cli"
+          PATH="$RUNNER_TEMP/claude-cli:$PATH" uv run --no-sync pytest -q tests/e2e_harness
+          uv run --no-sync pytest --tb=short -q --noconftest -o addopts= -o "pythonpath=tests/e2e tests/e2e_harness" -p no:rerunfailures \
+            tests/code_coverage_tests/test_provider_replay_harness.py \
+            tests/code_coverage_tests/test_provider_cache.py
