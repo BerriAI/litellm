@@ -102,6 +102,7 @@ from litellm.proxy.mcp_server.utils import (
     LITELLM_MCP_SERVER_VERSION,
     asgi_scope_fields,
     merge_mcp_headers,
+    string_field,
 )
 from litellm.types.mcp import (
     MCPAuth,
@@ -1474,15 +1475,23 @@ if MCP_AVAILABLE:
         return "anonymous"
 
     def _admission_auth_body(body: bytes) -> bytes:
-        """Return only the JSON-RPC method for admission auth."""
+        """Return only the JSON-RPC method, and the tool name of a tools/call, for admission auth."""
         try:
             data: Final = TypeAdapter(dict[str, object]).validate_json(body)
         except (ValueError, TypeError):
-            return b"{}"
+            cut_method: Final = (
+                _jsonrpc_text_method(body.decode("utf-8", errors="replace"))
+                if len(body) >= _MCP_ROUTING_PEEK_MAX_BYTES
+                else None
+            )
+            return b"{}" if cut_method is None else json.dumps({"method": cut_method}).encode()
         method: Final = data.get("method")
         if not isinstance(method, str):
             return b"{}"
-        return json.dumps({"method": method}).encode()
+        tool_name: Final = string_field(data.get("params"), "name") if method == "tools/call" else None
+        if tool_name is None:
+            return json.dumps({"method": method}).encode()
+        return json.dumps({"method": method, "params": {"name": tool_name}}).encode()
 
     def _is_initialize_request(body: bytes) -> bool:
         """

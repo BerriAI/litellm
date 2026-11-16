@@ -209,6 +209,8 @@ if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
     from litellm.proxy.spend_tracking.native_budgets import BudgetDecision
+    from litellm.types.mcp import MCPServerCostInfo
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
     Span = _Span
 else:
@@ -1116,6 +1118,71 @@ def is_mcp_discovery_request(route: str, request_body: Mapping[str, object]) -> 
     return isinstance(method, str) and method in MCP_ZERO_SPEND_JSONRPC_METHODS
 
 
+def _is_mcp_tool_call(route: str, request_body: Mapping[str, object]) -> bool:
+    if route in MCP_TOOL_CALL_ROUTES:
+        return True
+    return (route == "/mcp" or route.startswith("/mcp/")) and request_body.get("method") == "tools/call"
+
+
+def _mcp_tool_call_name(route: str, request_body: Mapping[str, object]) -> str | None:
+    from litellm.proxy.mcp_server.utils import string_field
+
+    if route in MCP_TOOL_CALL_ROUTES:
+        name: Final = request_body.get("name")
+        return name if isinstance(name, str) else None
+    return string_field(request_body.get("params"), "name")
+
+
+def is_zero_cost_mcp_tool_call(route: str, request_body: Mapping[str, object]) -> bool:
+    """A tool call is free when no MCP server charges, or when every server that could run it is free for it.
+
+    A name that carries no known server prefix is only trusted when the REST ``server_id`` names the
+    server, because header or path scoping can route a bare name to a server this check cannot see."""
+    if not _is_mcp_tool_call(route=route, request_body=request_body):
+        return False
+    from litellm.proxy.mcp_server.cost_calculator import (  # noqa: PLC0415  # the MCP package imports the auth stack
+        mcp_server_charges_for_tool_calls,
+        mcp_tool_cost_per_query,
+    )
+    from litellm.proxy.mcp_server.mcp_server_manager import (  # noqa: PLC0415  # the MCP package imports the auth stack
+        global_mcp_server_manager,
+    )
+    from litellm.proxy.mcp_server.utils import (  # noqa: PLC0415  # the MCP package imports the auth stack
+        strip_known_server_prefix,
+    )
+
+    def cost_info_of(server: "MCPServer") -> "MCPServerCostInfo | None":
+        return (server.mcp_info or {}).get("mcp_server_cost_info")
+
+    if not any(
+        mcp_server_charges_for_tool_calls(cost_info_of(server))
+        for server in global_mcp_server_manager.get_registry().values()
+    ):
+        return True
+    tool_name: Final = _mcp_tool_call_name(route=route, request_body=request_body)
+    if tool_name is None:
+        return False
+    requested_server_id: Final = request_body.get("server_id") if route in MCP_TOOL_CALL_ROUTES else None
+    candidate_servers: Final = tuple(
+        server
+        for server in (
+            global_mcp_server_manager.server_owning_tool_name_prefix(tool_name),
+            (
+                global_mcp_server_manager.get_mcp_server_by_id(requested_server_id)
+                or global_mcp_server_manager.get_mcp_server_by_identifier(requested_server_id)
+            )
+            if isinstance(requested_server_id, str)
+            else None,
+        )
+        if server is not None
+    )
+    return bool(candidate_servers) and all(
+        mcp_tool_cost_per_query(cost_info=cost_info_of(server), tool_name=strip_known_server_prefix(tool_name, server))
+        <= 0
+        for server in candidate_servers
+    )
+
+
 def is_video_retrieval_request(route: str, http_method: str | None) -> bool:
     return http_method == "GET" and RouteChecks.check_route_access(route=route, allowed_routes=VIDEO_RETRIEVAL_ROUTES)
 
@@ -1153,7 +1220,10 @@ def request_skips_budget_checks(
 ) -> bool:
     if route_skips_budget_checks(route=route) or is_video_retrieval_request(route=route, http_method=http_method):
         return True
-    if request_body is not None and is_mcp_discovery_request(route=route, request_body=request_body):
+    if request_body is not None and (
+        is_mcp_discovery_request(route=route, request_body=request_body)
+        or is_zero_cost_mcp_tool_call(route=route, request_body=request_body)
+    ):
         return True
     return is_model_cost_zero(model=model, llm_router=llm_router)
 

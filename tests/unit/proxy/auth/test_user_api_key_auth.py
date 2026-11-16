@@ -2490,6 +2490,24 @@ async def test_jwt_path_skips_user_model_budget_only_for_zero_spend_mcp_methods(
     from litellm.caching.dual_cache import DualCache
     from litellm.proxy._types import LiteLLM_JWTAuth
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth_builder
+    from litellm.proxy.mcp_server.mcp_server_manager import global_mcp_server_manager
+    from litellm.types.mcp import MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    monkeypatch.setattr(  # test-quality-ok: the registry is a module singleton read by the budget check; no injection seam
+        global_mcp_server_manager,
+        "config_mcp_servers",
+        {
+            "paid-id": MCPServer(
+                server_id="paid-id",
+                name="paid_tools",
+                alias="paid_tools",
+                url="https://example.invalid/mcp",
+                transport=MCPTransport.http,
+                mcp_info={"server_name": "paid_tools", "mcp_server_cost_info": {"default_cost_per_query": 0.5}},
+            )
+        },
+    )
 
     jwt_response: Final = {
         "is_proxy_admin": False,

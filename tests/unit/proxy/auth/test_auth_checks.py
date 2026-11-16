@@ -27,6 +27,8 @@ from litellm.proxy.auth.auth_checks import get_org_object, get_user_object
 from litellm.proxy.db.prisma_client import PrismaWrapper
 from litellm.proxy.auth.auth_checks import get_end_user_object
 from litellm.caching.caching import DualCache
+from litellm.types.mcp import MCPTransport
+from litellm.types.mcp_server.mcp_server_manager import MCPServer
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy._types import (
     LiteLLM_EndUserTable,
@@ -2171,8 +2173,13 @@ async def test_mcp_jsonrpc_zero_spend_method_bypasses_team_budget(route, method)
     ],
 )
 @pytest.mark.asyncio
-async def test_mcp_tool_call_route_still_enforces_team_budget(route, request_body):
+async def test_mcp_tool_call_route_still_enforces_team_budget(monkeypatch, route, request_body):
     from litellm.proxy.auth.auth_checks import common_checks
+    from litellm.proxy.mcp_server.mcp_server_manager import global_mcp_server_manager
+
+    monkeypatch.setattr(  # test-quality-ok: the registry is a module singleton read by the budget check; no injection seam
+        global_mcp_server_manager, "config_mcp_servers", {_PAID_SERVER[0]: _mcp_server(*_PAID_SERVER)}
+    )
 
     team_object = LiteLLM_TeamTable(team_id="test-team", spend=150.0, max_budget=100.0)
 
@@ -2221,6 +2228,161 @@ def test_is_mcp_discovery_request(route, request_body, expected):
     from litellm.proxy.auth.auth_checks import is_mcp_discovery_request
 
     assert is_mcp_discovery_request(route=route, request_body=request_body) is expected
+
+
+def _mcp_server(server_id: str, name: str, cost_info: dict[str, object] | None) -> MCPServer:
+    return MCPServer(
+        server_id=server_id,
+        name=name,
+        alias=name,
+        url="https://example.invalid/mcp",
+        transport=MCPTransport.http,
+        mcp_info=None if cost_info is None else {"server_name": name, "mcp_server_cost_info": cost_info},
+    )
+
+
+_UNPRICED_SERVER = ("unpriced-id", "unpriced_tools", None)
+_ZERO_PRICED_SERVER = ("zero-id", "zero_tools", {"default_cost_per_query": 0.0})
+_PAID_SERVER = (
+    "paid-id",
+    "paid_tools",
+    {"default_cost_per_query": 0.5, "tool_name_to_cost_per_query": {"gratis": 0.0}},
+)
+_FREE_DEFAULT_PAID_TOOL_SERVER = ("mixed-id", "mixed_tools", {"tool_name_to_cost_per_query": {"premium": 0.25}})
+
+
+@pytest.mark.parametrize(
+    "servers,route,request_body,expected",
+    [
+        pytest.param(
+            (_UNPRICED_SERVER, _ZERO_PRICED_SERVER),
+            "/mcp",
+            {"method": "tools/call", "params": {"name": "unpriced_tools-echo"}},
+            True,
+            id="jsonrpc-call-when-no-server-charges",
+        ),
+        pytest.param(
+            (_UNPRICED_SERVER, _ZERO_PRICED_SERVER),
+            "/mcp",
+            {"method": "tools/call"},
+            True,
+            id="jsonrpc-call-without-a-readable-name-when-no-server-charges",
+        ),
+        pytest.param(
+            (_UNPRICED_SERVER, _ZERO_PRICED_SERVER),
+            "/mcp-rest/tools/call",
+            {"name": "echo", "server_id": "zero-id"},
+            True,
+            id="rest-call-when-no-server-charges",
+        ),
+        pytest.param(
+            (_UNPRICED_SERVER, _PAID_SERVER),
+            "/mcp",
+            {"method": "tools/call", "params": {"name": "unpriced_tools-echo"}},
+            True,
+            id="jsonrpc-call-prefixed-with-a-free-server",
+        ),
+        pytest.param(
+            (_UNPRICED_SERVER, _PAID_SERVER),
+            "/mcp",
+            {"method": "tools/call", "params": {"name": "paid_tools-echo"}},
+            False,
+            id="jsonrpc-call-prefixed-with-a-paid-server",
+        ),
+        pytest.param(
+            (_UNPRICED_SERVER, _PAID_SERVER),
+            "/mcp",
+            {"method": "tools/call", "params": {"name": "paid_tools-gratis"}},
+            True,
+            id="jsonrpc-call-to-a-zero-priced-tool-on-a-paid-server",
+        ),
+        pytest.param(
+            (_FREE_DEFAULT_PAID_TOOL_SERVER,),
+            "/mcp",
+            {"method": "tools/call", "params": {"name": "mixed_tools-premium"}},
+            False,
+            id="jsonrpc-call-to-a-priced-tool-on-a-server-with-no-default-cost",
+        ),
+        pytest.param(
+            (_FREE_DEFAULT_PAID_TOOL_SERVER,),
+            "/mcp",
+            {"method": "tools/call", "params": {"name": "mixed_tools-echo"}},
+            True,
+            id="jsonrpc-call-to-an-unpriced-tool-beside-a-priced-one",
+        ),
+        pytest.param(
+            (_UNPRICED_SERVER, _PAID_SERVER),
+            "/mcp",
+            {"method": "tools/call", "params": {"name": "echo"}},
+            False,
+            id="jsonrpc-bare-name-is-not-trusted-when-a-server-charges",
+        ),
+        pytest.param(
+            (_UNPRICED_SERVER, _PAID_SERVER),
+            "/mcp",
+            {"method": "tools/call"},
+            False,
+            id="jsonrpc-call-without-a-readable-name-when-a-server-charges",
+        ),
+        pytest.param(
+            (_UNPRICED_SERVER, _PAID_SERVER),
+            "/mcp-rest/tools/call",
+            {"name": "echo", "server_id": "unpriced-id"},
+            True,
+            id="rest-bare-name-with-a-free-server-id",
+        ),
+        pytest.param(
+            (_UNPRICED_SERVER, _PAID_SERVER),
+            "/mcp-rest/tools/call",
+            {"name": "echo", "server_id": "unpriced_tools"},
+            True,
+            id="rest-bare-name-with-a-free-server-name",
+        ),
+        pytest.param(
+            (_UNPRICED_SERVER, _PAID_SERVER),
+            "/mcp-rest/tools/call",
+            {"name": "echo", "server_id": "paid-id"},
+            False,
+            id="rest-bare-name-with-a-paid-server-id",
+        ),
+        pytest.param(
+            (_UNPRICED_SERVER, _PAID_SERVER),
+            "/mcp-rest/tools/call",
+            {"name": "unpriced_tools-echo", "server_id": "paid-id"},
+            False,
+            id="rest-free-prefix-with-a-paid-server-id",
+        ),
+        pytest.param(
+            (_UNPRICED_SERVER,),
+            "/mcp",
+            {"method": "resources/read", "params": {"name": "unpriced_tools-echo"}},
+            False,
+            id="other-jsonrpc-methods-stay-budget-checked",
+        ),
+        pytest.param(
+            (_UNPRICED_SERVER,),
+            "/v1/chat/completions",
+            {"method": "tools/call", "params": {"name": "unpriced_tools-echo"}},
+            False,
+            id="non-mcp-route-with-a-tool-call-shaped-body",
+        ),
+    ],
+)
+def test_request_skips_budget_checks_for_mcp_tool_calls_that_cost_nothing(
+    monkeypatch, servers, route, request_body, expected
+):
+    from litellm.proxy.auth.auth_checks import request_skips_budget_checks
+    from litellm.proxy.mcp_server.mcp_server_manager import global_mcp_server_manager
+
+    monkeypatch.setattr(  # test-quality-ok: the registry is a module singleton read by the budget check; no injection seam
+        global_mcp_server_manager,
+        "config_mcp_servers",
+        {server_id: _mcp_server(server_id, name, cost_info) for server_id, name, cost_info in servers},
+    )
+
+    assert (
+        request_skips_budget_checks(route=route, model=None, llm_router=None, request_body=request_body) is expected
+    ), f"{route} {request_body}"
 
 
 @pytest.mark.asyncio

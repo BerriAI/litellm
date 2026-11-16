@@ -12359,6 +12359,48 @@ async def test_streamable_http_admission_auth_sees_only_peeked_jsonrpc_method() 
     send.assert_not_awaited()
 
 
+_CUT_TOOL_CALL: Final = (
+    b'{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"arguments": {"text": "' + b"a" * 4096
+)
+
+
+@pytest.mark.parametrize(
+    "body, expected",
+    [
+        pytest.param(
+            json.dumps(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "tools/call",
+                    "params": {"name": "free_tools-echo", "arguments": {"text": "secret"}, "_meta": {"k": "v"}},
+                }
+            ).encode(),
+            {"method": "tools/call", "params": {"name": "free_tools-echo"}},
+            id="tool-call-keeps-only-the-method-and-tool-name",
+        ),
+        pytest.param(
+            json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": 7}}).encode(),
+            {"method": "tools/call"},
+            id="tool-call-with-a-non-string-name-keeps-only-the-method",
+        ),
+        pytest.param(
+            json.dumps({"jsonrpc": "2.0", "id": 1, "method": "resources/read", "params": {"name": "x"}}).encode(),
+            {"method": "resources/read"},
+            id="other-methods-never-carry-params",
+        ),
+        pytest.param(_CUT_TOOL_CALL, {"method": "tools/call"}, id="tool-call-cut-by-the-peek-keeps-its-method"),
+        pytest.param(b'{"method": "tools/call", "params": {"na', {}, id="short-malformed-body-carries-nothing"),
+    ],
+)
+def test_admission_auth_body_carries_the_method_and_only_the_name_of_a_tool_call(
+    body: bytes, expected: dict[str, object]
+) -> None:
+    from litellm.proxy.mcp_server.server import _admission_auth_body
+
+    assert json.loads(_admission_auth_body(body)) == expected
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "payload, valid",
