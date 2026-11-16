@@ -1496,7 +1496,7 @@ def _requested_output_tokens(request_body: Mapping[str, object]) -> int | None:
         *(request_body.get(field) for field in _OUTPUT_TOKEN_FIELDS),
         inference_config.get("maxTokens") if isinstance(inference_config, Mapping) else None,
     )
-    return next((tokens for tokens in map(_to_int, candidates) if tokens is not None), None)
+    return max((tokens for tokens in map(_to_int, candidates) if tokens is not None), default=None)
 
 
 def _get_output_multiplier(request_body: dict) -> int:

@@ -246,6 +246,60 @@ def test_google_route_reserves_on_the_model_its_path_param_selects(monkeypatch: 
     assert math.isclose(url_model_cost, cheap_cost * 1000)
 
 
+CAP_GROUP: Final = "cap-group"
+CAP_INPUT_TOKENS: Final = 10
+CAP_INPUT_RATE: Final = 1e-06
+CAP_OUTPUT_RATE: Final = 2e-06
+CAP_MODEL_CEILING: Final = 1000
+
+
+@pytest.mark.parametrize(
+    "route, caps, expected_output_tokens",
+    [
+        ("/v1/responses", {"max_tokens": 1, "max_output_tokens": 400}, 400),
+        ("/v1/responses", {"max_completion_tokens": 1, "max_output_tokens": 400}, 400),
+        ("/v1/responses", {"max_tokens": 1, "max_output_tokens": "400"}, 400),
+        ("/v1/responses", {"max_tokens": 1, "max_output_tokens": 5000}, CAP_MODEL_CEILING),
+        ("/v1/messages", {"max_completion_tokens": 1, "max_tokens": 400}, 400),
+        ("/chat/completions", {"max_tokens": 1}, 1),
+        ("/v1/responses", {"max_output_tokens": 400}, 400),
+        (f"/bedrock/model/{CAP_GROUP}/converse", {"inferenceConfig": {"maxTokens": 400}}, 400),
+    ],
+)
+def test_reservation_sizes_output_from_the_largest_requested_cap(
+    route: str, caps: dict[str, object], expected_output_tokens: int
+) -> None:
+    router: Final = Router(
+        model_list=[
+            Deployment(
+                model_name=CAP_GROUP,
+                litellm_params=LiteLLM_Params(model="dashscope/qwen3-max", api_key="sk-fake"),
+                model_info=ModelInfo(
+                    id=CAP_GROUP,
+                    max_output_tokens=CAP_MODEL_CEILING,
+                    tiered_pricing=[
+                        {
+                            "input_cost_per_token": CAP_INPUT_RATE,
+                            "output_cost_per_token": CAP_OUTPUT_RATE,
+                            "range": [0, 128000],
+                        }
+                    ],
+                ),
+            ).model_dump()
+        ]
+    )
+
+    cost: Final = estimate_request_max_cost(
+        request_body={"model": CAP_GROUP, "input": "hi", **caps},
+        route=route,
+        llm_router=router,
+        input_token_counts={CAP_GROUP: CAP_INPUT_TOKENS},
+    )
+
+    assert cost is not None
+    assert math.isclose(cost, CAP_INPUT_TOKENS * CAP_INPUT_RATE + expected_output_tokens * CAP_OUTPUT_RATE)
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "expiry_offset, expected_max_budget",
