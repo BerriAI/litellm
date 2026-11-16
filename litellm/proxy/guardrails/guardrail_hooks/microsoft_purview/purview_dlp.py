@@ -325,6 +325,7 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
             messages: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
                 input=input_data if input_data is not None else "",
                 responses_api_request=data,
+                replay_tool_search=True,
             )
             return self.get_prompt_text_for_dlp(cast(list["AllMessageValues"], messages))
         except Exception:

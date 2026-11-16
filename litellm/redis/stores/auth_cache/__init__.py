@@ -62,6 +62,19 @@ class AuthCacheStore:
         self._handle.set_sync(key, value, _redis_ttl(ttl))
 
     @with_service_target(AUTH_CACHE_TARGET)
+    async def lease(self, key: str) -> str | None:
+        """The generation of ``key`` every worker shares, read on a cache miss before the database read that will
+        fill it. A delete of the key on any worker starts a new one."""
+        return await self._handle.lease(key)
+
+    @with_service_target(AUTH_CACHE_TARGET)
+    async def set_leased(self, key: str, lease: str | None, value: object, ttl: float | None) -> bool:
+        """The Redis SET alone, refused with False when ``key`` was deleted on any worker since ``lease`` was read.
+        Memory is the caller's to write."""
+        self._forget_miss(key)
+        return await self._handle.set_leased(key, lease, value, _redis_ttl(ttl))
+
+    @with_service_target(AUTH_CACHE_TARGET)
     def declare_set(self, key: str, value: object, ttl: float | None) -> Awaitable[None] | None:
         """Memory now and the SET on the request's pre-call batch, sent with its next flush; None outside a request,
         so the caller writes through."""

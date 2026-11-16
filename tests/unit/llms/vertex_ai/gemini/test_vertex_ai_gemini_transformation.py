@@ -2962,6 +2962,30 @@ def test_convert_tool_response_with_url_image(content_type: str, nested: bool) -
     )
 
 
+def _assistant_with_image(url: str) -> Message:
+    return Message(
+        role="assistant",
+        content="Here is the picture",
+        images=[{"type": "image_url", "image_url": {"url": url}, "index": 0}],
+    )
+
+
+@pytest.mark.parametrize(
+    ("message", "needs_fetch"),
+    [
+        (_assistant_with_image("gs://litellm-test-bucket/cat"), True),
+        (_assistant_with_image("gs://litellm-test-bucket/cat.png"), False),
+        ("gs://litellm-test-bucket/cat", False),
+    ],
+)
+def test_sync_media_fetch_check_reads_pydantic_messages_and_skips_other_objects(
+    message: object, needs_fetch: bool
+) -> None:
+    from litellm.llms.vertex_ai.gemini.transformation import _openai_messages_may_need_sync_media_fetch
+
+    assert _openai_messages_may_need_sync_media_fetch([message]) is needs_fetch
+
+
 CLAUDE_THINKING_SIGNATURE: Final = "EqQBCkYIBxgCKkCfQ2x0b3VkZS1zaWduYXR1cmUtbm90LW1pbnRlZC1ieS1nZW1pbmkSDJ3lXf5sD+QVqpFQmRoM"
 
 

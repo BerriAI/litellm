@@ -269,7 +269,7 @@ async def test_weighted_failover_skips_an_affinity_pin_on_the_failed_deployment(
         if isinstance(callback, DeploymentAffinityCheck)
     )
     key: Final = DeploymentAffinityCheck.get_session_affinity_cache_key("g", "s", "c")
-    await check.cache.async_set_cache(key, {"model_id": "a"})  # pyright: ignore[reportUnknownMemberType]
+    await check.pins.set(key, {"model_id": "a"}, 3600)
     host.answer("openai/a", server_error())
 
     response: Final = await complete(core, "g", metadata={"session_id": "s", "user_api_key_hash": "c"})

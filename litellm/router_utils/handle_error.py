@@ -3,6 +3,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 from litellm._logging import redact_secrets, verbose_router_logger
 from litellm.constants import MAX_EXCEPTION_MESSAGE_LENGTH
+from litellm.exceptions import MissingMessageRoleError
 from litellm.router_deprecated import renamed_router_param
 from litellm.router_utils.cooldown_handlers import (
     async_get_cooldown_deployments_with_debug_info,
@@ -46,12 +47,15 @@ async def send_llm_exception_alert(
     if slack_alerting_logger is None:
         return
 
+    if isinstance(original_exception, MissingMessageRoleError):
+        return
+
     if "proxy_server_request" in request_kwargs:
         # Do not send any alert if it's a request from litellm proxy server request
         # the proxy is already instrumented to send LLM API call failures
         return
 
-    litellm_debug_info: Final = getattr(original_exception, "litellm_debug_info", None)
+    litellm_debug_info: Final[str | None] = getattr(original_exception, "litellm_debug_info", None)
     exception_str = str(original_exception)
     if litellm_debug_info is not None:
         exception_str += litellm_debug_info

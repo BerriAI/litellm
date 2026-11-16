@@ -9,7 +9,8 @@ from types import MappingProxyType
 from typing import Annotated, Final, Literal, Protocol, TypeAlias
 
 import httpx
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
+from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 
 from litellm._logging import verbose_proxy_logger
@@ -29,11 +30,13 @@ LATEST_RELEASE_UNAVAILABLE_CACHE_TTL_SECONDS: Final = 5 * 60
 LATEST_RELEASE_CACHE_KEY: Final = "latest_release_info"
 
 _RELEASE_BULLET_PATTERN: Final = re.compile(r"^\*\s+(?:([A-Za-z]+)(?:\([^)]*\))?!?:\s)?\S")
+_AREA_BULLET_PATTERN: Final = re.compile(r"^-\s+\*\*[^*]+\*\*\s+([A-Za-z]+)")
 _NEW_CONTRIBUTOR_PATTERN: Final = re.compile(r"^\*\s+@\S+ made their first contribution\b")
 _CHANGELOG_PAGE_PATTERN: Final = re.compile(rf"{re.escape(CHANGELOG_URL)}v(\d+)\.(\d+)\.(\d+)/")
 
 _Bucket: TypeAlias = Literal["new_features", "bug_fixes", "other_updates"]
 _PREFIX_BUCKETS: Final[Mapping[str, _Bucket]] = MappingProxyType({"feat": "new_features", "fix": "bug_fixes"})
+_VERB_BUCKETS: Final[Mapping[str, _Bucket]] = MappingProxyType({"added": "new_features", "fixed": "bug_fixes"})
 
 
 class LatestReleaseInfo(LiteLLMBaseModel):
@@ -97,6 +100,9 @@ def _default_release_check_enabled() -> bool:
 def _bucket_for(line: str) -> _Bucket | None:
     if _NEW_CONTRIBUTOR_PATTERN.match(line) is not None:
         return None
+    area_match: Final = _AREA_BULLET_PATTERN.match(line)
+    if area_match is not None:
+        return _VERB_BUCKETS.get(area_match.group(1).lower(), "other_updates")
     match: Final = _RELEASE_BULLET_PATTERN.match(line)
     if match is None:
         return None
@@ -105,7 +111,8 @@ def _bucket_for(line: str) -> _Bucket | None:
 
 
 def count_release_bullets(body: str) -> Mapping[_Bucket, int]:
-    """Bucket release-note bullets by conventional-commit type or ``other_updates``."""
+    """Bucket release-note bullets by conventional-commit type (``* fix(x): ...``) or by the verb after the area label
+    (``- **Area:** Fixed ...``), falling back to ``other_updates``."""
     return MappingProxyType(Counter(bucket for line in body.splitlines() if (bucket := _bucket_for(line)) is not None))
 
 
@@ -200,15 +207,20 @@ async def fetch_latest_release(client: _AsyncGetClient) -> LatestReleaseInfo | L
     )
 
 
+def _cached_release(cache: InMemoryCache) -> LatestReleaseInfo | LatestReleaseUnavailable | None:
+    cached: Final = cache.get_cache(LATEST_RELEASE_CACHE_KEY)
+    return cached if isinstance(cached, (LatestReleaseInfo, LatestReleaseUnavailable)) else None
+
+
 async def get_latest_release_info(
     client: _AsyncGetClient, cache: InMemoryCache, fetch_lock: asyncio.Lock
 ) -> LatestReleaseInfo | LatestReleaseUnavailable:
-    cached: Final = cache.get_cache(LATEST_RELEASE_CACHE_KEY)
-    if isinstance(cached, (LatestReleaseInfo, LatestReleaseUnavailable)):
+    cached: Final = _cached_release(cache)
+    if cached is not None:
         return cached
     async with fetch_lock:
-        cached_after_lock: Final = cache.get_cache(LATEST_RELEASE_CACHE_KEY)
-        if isinstance(cached_after_lock, (LatestReleaseInfo, LatestReleaseUnavailable)):
+        cached_after_lock: Final = _cached_release(cache)
+        if cached_after_lock is not None:
             return cached_after_lock
         result: Final = await fetch_latest_release(client)
         ttl: Final = (
@@ -220,28 +232,46 @@ async def get_latest_release_info(
         return result
 
 
+async def refresh_latest_release_info(client: _AsyncGetClient, cache: InMemoryCache, fetch_lock: asyncio.Lock) -> None:
+    result: Final = await get_latest_release_info(client=client, cache=cache, fetch_lock=fetch_lock)
+    if isinstance(result, LatestReleaseUnavailable):
+        verbose_proxy_logger.warning("LiteLLM: latest release info unavailable: %s", result.reason)
+
+
 @router.get(
     "/get/latest_release_info",
     tags=["UI Settings"],
     dependencies=[Depends(user_api_key_auth)],
     response_model=LatestReleaseInfo | None,
+    responses={
+        202: {"description": "The release is being fetched in the background, so ask again shortly", "model": None},
+        502: {"description": "The changelog or GitHub could not be reached or answered with something unusable"},
+    },
 )
 async def latest_release_info(
+    background_tasks: BackgroundTasks,
     client: Annotated[_AsyncGetClient, Depends(_default_client)],
     cache: Annotated[InMemoryCache, Depends(_default_cache)],
     fetch_lock: Annotated[asyncio.Lock, Depends(_default_fetch_lock)],
     release_check_enabled: Annotated[bool, Depends(_default_release_check_enabled)],
-) -> LatestReleaseInfo | None:
+) -> LatestReleaseInfo | JSONResponse | None:
     """
     Newest stable release on the LiteLLM changelog, linked to its changelog page, with the PR count of its whole
     minor line (e.g. v1.105.0 + v1.105.1) from GitHub split into new features, bug fixes and other updates.
-    Returns null when the changelog or GitHub can't be reached so the dashboard upgrade banner simply doesn't render.
+    Never waits on the changelog or GitHub. It answers from the cache and, when the cache is empty or expired, responds
+    202 with null and fetches after the response is sent, so a later call returns the release. Responds 502 once that
+    fetch has failed because the changelog or GitHub couldn't be reached or answered with something unusable, so the dashboard
+    upgrade notice simply doesn't render. The three counts are all zero when the release notes list no change in a
+    format this proxy can count.
     Set LITELLM_DISABLE_LATEST_RELEASE_CHECK=true to return null without making any outbound request.
     """
     if not release_check_enabled:
         return None
-    result: Final = await get_latest_release_info(client=client, cache=cache, fetch_lock=fetch_lock)
-    if isinstance(result, LatestReleaseUnavailable):
-        verbose_proxy_logger.warning("LiteLLM: latest release info unavailable: %s", result.reason)
-        return None
-    return result
+    cached: Final = _cached_release(cache)
+    if isinstance(cached, LatestReleaseInfo):
+        return cached
+    if isinstance(cached, LatestReleaseUnavailable):
+        raise HTTPException(status_code=502, detail="Latest release info unavailable")
+    if not fetch_lock.locked():
+        background_tasks.add_task(refresh_latest_release_info, client, cache, fetch_lock)
+    return JSONResponse(status_code=status.HTTP_202_ACCEPTED, content=None)

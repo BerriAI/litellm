@@ -6,10 +6,11 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone, tzinfo
 from types import MappingProxyType
-from typing import Final, Literal, Protocol, TypedDict, cast
+from typing import Final, Literal, Protocol, SupportsFloat, SupportsIndex, TypedDict, cast
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from typing_extensions import ReadOnly
+from pydantic import TypeAdapter
+from typing_extensions import Buffer, ReadOnly
 
 import litellm
 from litellm._internal_context import current_billing_time
@@ -48,10 +49,10 @@ _IMAGE_RESPONSE_CALL_TYPES: Final = frozenset(
     }
 )
 
-# Pre-resolved DataResidency enum values for fast membership checks
 _VALID_DATA_RESIDENCIES: Final = frozenset(r.value for r in DataResidency)
 
 _DEPLOYMENT_PRICING_KEYS: Final[frozenset[str]] = frozenset(CustomPricingLiteLLMParams.model_fields)
+_IMAGE_REQUEST_PARAMS: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
 
 _BASE_CACHE_WRITE_RATE_KEY: Final = "cache_creation_input_token_cost"
 
@@ -111,6 +112,7 @@ _BATCH_RATE_PREFIXES: Final = (
     "input_cost_per_token",
     "output_cost_per_token",
     "cache_read_input_token_cost",
+    "cache_read_input_image_token_cost",
     "cache_creation_input_token_cost",
 )
 _BATCH_TIER_PREFIXES: Final = (*_BATCH_RATE_PREFIXES, *_TTL_PRICED_CACHE_WRITE_RATE_KEYS.values())
@@ -325,6 +327,7 @@ class BatchCostRates:
     cache_read: float | None
     cache_creation: float | None
     cache_creation_rates_by_ttl: Mapping[str, float] = field(default_factory=lambda: MappingProxyType({}))
+    cache_read_image: float | None = None
 
 
 def _batch_rate(model_info: ModelInfo, key: str) -> float | None:
@@ -387,6 +390,7 @@ def get_batch_cost_rates(model_info: ModelInfo, usage: Usage, custom_llm_provide
                 if (rate := _batch_rate_for_prefix(model_info, key, usage, inclusive)) is not None
             }
         ),
+        cache_read_image=_batch_rate_for_prefix(model_info, "cache_read_input_image_token_cost", usage, inclusive),
     )
 
 
@@ -1425,8 +1429,15 @@ def get_regional_uplift_multiplier(model_info: ModelInfo, data_residency: str | 
     residency: Final = data_residency.lower()
     if residency not in _VALID_DATA_RESIDENCIES:
         return 1.0
-    multiplier: Final = model_info.get(f"regional_processing_uplift_multiplier_{residency}")
+    multiplier: Final[object] = model_info.get(f"regional_processing_uplift_multiplier_{residency}")
     if multiplier is None:
+        return 1.0
+    if not isinstance(multiplier, (str, Buffer, SupportsFloat, SupportsIndex)):
+        verbose_logger.error(
+            "Invalid regional_processing_uplift_multiplier_%s for model (got %s); defaulting to 1.0",
+            residency,
+            type(multiplier).__name__,
+        )
         return 1.0
     try:
         return float(multiplier)
@@ -1464,7 +1475,7 @@ def get_fedramp_uplift_multiplier(model_info: ModelInfo, data_residency: str | N
         return 1.0
 
 
-def get_vertex_regional_endpoint_uplift(model_info: ModelInfo, vertex_location: str | None) -> float:
+def get_vertex_regional_endpoint_uplift(model_info: Mapping[str, object], vertex_location: str | None) -> float:
     """
     Resolve the per-model uplift multiplier for Vertex AI non-global (regional and
     multi-region) endpoints.
@@ -2096,6 +2107,7 @@ def calculate_image_response_cost_from_usage(
     custom_llm_provider: str,
     model_info: ModelInfo | None = None,
     vertex_location: str | None = None,
+    service_tier: str | None = None,
 ) -> float | None:
     """
     Calculate image generation cost from usage metadata when available.
@@ -2143,28 +2155,22 @@ def calculate_image_response_cost_from_usage(
         else completion_tokens_details_attr
     )
 
-    if output_tokens_details is None:
-        completion_tokens_details = CompletionTokensDetailsWrapper(
-            text_tokens=0,
-            image_tokens=completion_tokens,
-            reasoning_tokens=0,
-            audio_tokens=0,
-        )
-    else:
-        text_tokens = _get_token_detail_value(output_tokens_details, "text_tokens") or 0
-        image_tokens: Final = _get_token_detail_value(output_tokens_details, "image_tokens") or 0
-        audio_tokens: Final = _get_token_detail_value(output_tokens_details, "audio_tokens") or 0
-        reasoning_tokens: Final = _get_token_detail_value(output_tokens_details, "reasoning_tokens") or 0
-        known_output_tokens: Final = text_tokens + image_tokens + audio_tokens + reasoning_tokens
-        if completion_tokens > known_output_tokens:
-            text_tokens += completion_tokens - known_output_tokens
-
-        completion_tokens_details = CompletionTokensDetailsWrapper(
-            text_tokens=text_tokens,
-            image_tokens=image_tokens,
-            reasoning_tokens=reasoning_tokens,
-            audio_tokens=audio_tokens,
-        )
+    text_tokens: Final = _get_token_detail_value(output_tokens_details, "text_tokens") or 0
+    image_tokens: Final = _get_token_detail_value(output_tokens_details, "image_tokens") or 0
+    audio_tokens: Final = _get_token_detail_value(output_tokens_details, "audio_tokens") or 0
+    reasoning_tokens: Final = _get_token_detail_value(output_tokens_details, "reasoning_tokens") or 0
+    has_output_modalities: Final = any(
+        _get_token_detail_value(output_tokens_details, modality) is not None
+        for modality in ("text_tokens", "image_tokens", "audio_tokens")
+    )
+    unitemized_tokens: Final = max(completion_tokens - text_tokens - image_tokens - audio_tokens - reasoning_tokens, 0)
+    unitemized_image_tokens: Final = unitemized_tokens if not has_output_modalities and image_response.data else 0
+    completion_tokens_details: Final = CompletionTokensDetailsWrapper(
+        text_tokens=text_tokens + unitemized_tokens - unitemized_image_tokens,
+        image_tokens=image_tokens + unitemized_image_tokens,
+        reasoning_tokens=reasoning_tokens,
+        audio_tokens=audio_tokens,
+    )
 
     normalized_usage: Final = Usage(
         prompt_tokens=prompt_tokens,
@@ -2180,6 +2186,7 @@ def calculate_image_response_cost_from_usage(
         custom_llm_provider=custom_llm_provider,
         model_info=model_info,
         vertex_location=vertex_location,
+        service_tier=service_tier,
     )
     return prompt_cost + completion_cost
 
@@ -2287,6 +2294,7 @@ class CostCalculatorUtils:
         call_type: str | None = None,
         model_info: ModelInfo | None = None,
         vertex_location: str | None = None,
+        service_tier: str | None = None,
     ) -> float:
         """
         Route the image generation cost calculator based on the custom_llm_provider
@@ -2318,6 +2326,20 @@ class CostCalculatorUtils:
         )
         resolved_n: Final = n if n is not None else (len(completion_response.data) if completion_response.data else 0)
         pricing: Final = deployment_pricing(model_info)
+        if custom_llm_provider == litellm.LlmProviders.XAI.value:
+            from litellm.llms.xai.image_generation.cost_calculator import cost_calculator as xai_image_cost_calculator
+
+            xai_cost: Final = xai_image_cost_calculator(
+                model=model,
+                image_response=completion_response,
+                quality=quality,
+                n=resolved_n,
+                optional_params=_IMAGE_REQUEST_PARAMS.validate_python(optional_params),
+                call_type=call_type,
+                model_info=pricing,
+            )
+            if xai_cost is not None:
+                return xai_cost
         model_priced_calculator: Final = _model_priced_image_cost_calculator(custom_llm_provider, model, pricing)
 
         if model_priced_calculator is not None:
@@ -2329,6 +2351,7 @@ class CostCalculatorUtils:
                     image_response=completion_response,
                     model_info=pricing,
                     vertex_location=vertex_location,
+                    service_tier=service_tier,
                 )
         elif custom_llm_provider == litellm.LlmProviders.BEDROCK.value:
             if isinstance(completion_response, ImageResponse):

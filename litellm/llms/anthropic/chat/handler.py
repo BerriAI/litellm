@@ -11,7 +11,6 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Union, cast
 
 import httpx
-from pydantic import TypeAdapter
 
 import litellm
 import litellm.litellm_core_utils
@@ -27,6 +26,8 @@ from litellm.litellm_core_utils.json_fragment_accumulator import JSONFragmentAcc
 from litellm.llms.base_llm.base_utils import (
     RESPONSE_FORMAT_ENVELOPE_NAME_KEYS,
     ResponseFormatSchema,
+    answer_json_text,
+    decoded_answer_object,
     names_a_response_format_property,
     partial_response_format_answer,
     response_format_answer_json,
@@ -89,9 +90,6 @@ _THINKING_BLOCK_TYPES: Final = frozenset({"thinking", "redacted_thinking"})
 
 def _loads_stream_chunk(payload: str) -> dict[str, object]:
     return json.loads(payload)
-
-
-_DECODED_JSON: Final = TypeAdapter(object)
 
 
 _EnvelopeVerdict = Literal["undecided", "pass_through", "hold"]
@@ -175,12 +173,19 @@ def _prefix_verdict(buffered_json: str, schema: ResponseFormatSchema, tool_name:
     return _first_value_verdict(buffered_json[first_key.end() :], schema, tool_name)
 
 
+def _unwrapped_values_answer(arguments: str) -> str:
+    payload_object: Final = decoded_answer_object(arguments)
+    values: Final = None if payload_object is None else payload_object.get("values")
+    return arguments if values is None else answer_json_text(values, ensure_ascii=True)
+
+
 def _held_answer(held: str, schema: ResponseFormatSchema) -> str:
-    try:
-        payload: Final = _DECODED_JSON.validate_python(json.loads(held))
-    except (json.JSONDecodeError, RecursionError):
-        return held
-    contents: Final = response_format_envelope_contents(payload, schema, RESPONSE_FORMAT_TOOL_NAME)
+    payload_object: Final = decoded_answer_object(held)
+    contents: Final = (
+        None
+        if payload_object is None
+        else response_format_envelope_contents(payload_object, schema, RESPONSE_FORMAT_TOOL_NAME)
+    )
     return held if contents is None else response_format_answer_json(contents)
 
 
@@ -736,6 +741,7 @@ class ModelResponseIterator:
         self._withheld_answer_close: str = ""
         self._streamed_answer_keys: frozenset[str] | None = None
         self._held_prose: str = ""
+        self._schemaless_input_started: bool = False
 
         # For handling partial JSON chunks from fragmentation
         # See: https://github.com/BerriAI/litellm/issues/17473
@@ -806,8 +812,9 @@ class ModelResponseIterator:
             reasoning_content=reasoning_content,
             speed=self.speed,
         )
-        if usage.speed is not None:
-            self.speed = usage.speed
+        reported_speed: Final = self._cumulative_usage.get("speed")
+        if isinstance(reported_speed, str):
+            self.speed = reported_speed
         return usage
 
     def _content_block_delta_helper(
@@ -1081,7 +1088,7 @@ class ModelResponseIterator:
                     if "caller" in content_block_start["content_block"]:
                         caller_data: Final = content_block_start["content_block"]["caller"]
                         if caller_data and tool_use is not None:
-                            tool_use["caller"] = cast(dict[str, Any], caller_data)
+                            tool_use["caller"] = caller_data
                 elif content_block_start["content_block"]["type"] == "redacted_thinking":
                     (
                         thinking_blocks,
@@ -1315,14 +1322,18 @@ class ModelResponseIterator:
 
         # Convert tool to content if we're tracking a response_format tool
         if self.is_response_format_tool:
-            message: Final = AnthropicConfig.convert_tool_response_to_message(tool_calls=[tool_use])
-            if message is not None:
-                text = message.content or ""
-                tool_use = None
-                # Track that we converted a response_format tool
-                self.converted_response_format_tool = True
+            self.converted_response_format_tool = True
+            return self._stream_schemaless_fragment(tool_use), None
 
         return text, tool_use
+
+    def _stream_schemaless_fragment(self, tool_use: ChatCompletionToolCallChunk) -> str:
+        fragment: Final = tool_use.get("function", {}).get("arguments") or ""
+        if tool_use.get("id") is not None:
+            self._schemaless_input_started = False
+        is_first_piece: Final = not self._schemaless_input_started
+        self._schemaless_input_started = self._schemaless_input_started or bool(fragment.strip())
+        return _unwrapped_values_answer(fragment) if is_first_piece else fragment
 
     def _stream_response_format_fragment(
         self, tool_use: ChatCompletionToolCallChunk, schema: ResponseFormatSchema

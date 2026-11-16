@@ -14,6 +14,7 @@ reads a failed request's walk off it), so a fresh call's root writes reach that 
 from collections.abc import Callable, Coroutine, Mapping, Sequence
 from typing import TYPE_CHECKING, Final
 
+from litellm.exceptions import logged_class_name
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 
 if TYPE_CHECKING:
@@ -21,6 +22,7 @@ if TYPE_CHECKING:
 
     from litellm.router_api import RoutingContext
     from litellm.router_utils.fallback_event_handlers import AttemptedFallbackTargets
+    from litellm.rust_bridge._native import AttemptShape
 
 # `RETRY_BREADCRUMB_LIMIT`: how many failures `previous_models` keeps.
 RETRY_BREADCRUMB_LIMIT: Final = 4
@@ -39,6 +41,7 @@ _WALK_KEYS: Final = (
 _SERVED_KEYS: Final = ("model_info", "deployment")
 # The walk state `run_async_fallback` hands every hop as kwargs.
 _HOP_KWARGS: Final = ("fallback_depth", "max_fallbacks", "attempted_targets", "include_fallback_errors")
+_RETRY_RECORD_KEYS: Final = ("previous_models", "request_retry_count")
 
 
 def _reentrant_hop_stamps(request: Mapping[str, object], field: str) -> Mapping[str, object]:
@@ -83,7 +86,7 @@ def _breadcrumb(
         "deployment_id": known_id,
         "model": deployment if isinstance(deployment, str) else None,
         "base_model": base_model,
-        "exception_type": type(error).__name__,
+        "exception_type": logged_class_name(error),
         "exception_string": str(error),
         "attempted_retries": attempted if type(attempted) is int else None,
     }
@@ -130,7 +133,7 @@ def log_retry_into(
             {
                 "litellm.routing.router_model_name": router_name,
                 "litellm.retry.count": request_retry_count,
-                "error.type": type(error).__name__,
+                "error.type": logged_class_name(error),
                 **({"litellm.deployment.model_group": model_group} if isinstance(model_group, str) else {}),
                 **({"litellm.deployment.id": deployment_id} if isinstance(deployment_id, str) else {}),
             },
@@ -179,11 +182,13 @@ class WalkMetadata:
             return
         sibling: Final = request.get("metadata" if self._field == "litellm_metadata" else "litellm_metadata")
         if isinstance(sibling, dict):
-            sibling.pop("attempted_fallbacks", None)  # pyright: ignore[reportUnknownMemberType]  # the caller's metadata dict
-            sibling.pop("original_model_group", None)  # pyright: ignore[reportUnknownMemberType]  # see above
+            for key in ("attempted_fallbacks", "original_model_group", *_RETRY_RECORD_KEYS):
+                sibling.pop(key, None)  # pyright: ignore[reportUnknownMemberType]  # the caller's metadata dict
         bucket: Final = request.get(self._field)
         if not isinstance(bucket, dict):
             return
+        for key in _RETRY_RECORD_KEYS:
+            bucket.pop(key, None)  # pyright: ignore[reportUnknownMemberType]  # see above
         bucket["attempted_fallbacks"] = 0
         model: Final = request.get("model")
         if model is not None:
@@ -310,10 +315,9 @@ class WalkMetadata:
         return self._scope(step.get("scope")).metadata.get("request_retry_count")
 
     def stamp(
-        self, step: Mapping[str, object], kwargs: Mapping[str, object], deployment: Mapping[str, object] | None = None
+        self, step: Mapping[str, object], kwargs: Mapping[str, object], shape: "AttemptShape"
     ) -> Mapping[str, object]:
-        """The attempt's kwargs with its level's walk metadata and hop kwargs laid over them.
-        ``deployment``: the deployment the attempt calls, whose own ``mock_timeout`` a hop keeps."""
+        """The attempt's kwargs with its level's walk metadata and hop kwargs laid over them."""
         scope: Final = self._scope(step.get("scope"))
         metadata: Final = scope.metadata
         metadata["attempted_retries"] = step.get("retry")
@@ -326,24 +330,20 @@ class WalkMetadata:
         hop: Final = {
             key: scope.kwargs[key] for key in _HOP_KWARGS if key in scope.kwargs and key != "include_fallback_errors"
         }
-        depth: Final = hop.get("fallback_depth")
         given: Final = kwargs.get(self._field)
         # The requested group's attempts stamp the caller's own dict in place, as
         # `_update_kwargs_with_deployment` stamps it: the proxy's post-call write-backs land in the dict
         # its spend row reads. A fallback hop stamps its own copy (`run_async_fallback`'s kwargs).
         served: Final = (
             given  # pyright: ignore[reportUnknownVariableType]  # the caller's metadata dict
-            if isinstance(given, dict) and not (isinstance(depth, int) and depth > 0)
+            if isinstance(given, dict) and not shape.is_fallback
             else dict(as_str_mapping(given) or {})
         )
         served.update({key: metadata[key] for key in _WALK_KEYS if key in metadata})
         metadata.update({key: served.get(key) for key in _SERVED_KEYS})
-        # `async_function_with_fallbacks` pops the request's `mock_timeout` for the requested group's own
-        # retries: no hop sees it. A deployment's own `mock_timeout` is merged in per call, so it stays.
-        own: Final = as_str_mapping((deployment or {}).get("litellm_params")) or {}
         sent: Final = (
             {key: value for key, value in kwargs.items() if key != "mock_timeout"}
-            if isinstance(depth, int) and depth > 0 and "mock_timeout" not in own
+            if shape.drops_mock_timeout
             else kwargs
         )
         return {**sent, **hop, self._field: served}

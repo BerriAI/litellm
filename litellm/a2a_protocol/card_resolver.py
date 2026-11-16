@@ -4,13 +4,14 @@ Custom A2A Card Resolver for LiteLLM.
 Extends the A2A SDK's card resolver to support multiple well-known paths.
 """
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Protocol, runtime_checkable
 
 from litellm._logging import verbose_logger
 from litellm.a2a_protocol.exceptions import A2AAgentCardDiscoveryError
 from litellm.constants import LOCALHOST_URL_PATTERNS
+from litellm.litellm_core_utils.core_helpers import has_attributes
 
 if TYPE_CHECKING:
     from a2a.types import AgentCard
@@ -130,15 +131,34 @@ def normalize_agent_card_interfaces(agent_card: "AgentCard", protocol_version: s
     return normalized
 
 
+class _UrlCarrier(Protocol):
+    url: str
+
+
+class _InterfacesCarrier(Protocol):
+    @property
+    def supported_interfaces(self) -> Sequence[_UrlCarrier]: ...
+
+
+def _url_of(value: object) -> str | None:
+    return value.url if has_attributes(value, _UrlCarrier, "url") else None
+
+
+def _supported_interfaces(agent_card: object) -> Sequence[_UrlCarrier] | None:
+    if has_attributes(agent_card, _InterfacesCarrier, "supported_interfaces"):
+        return agent_card.supported_interfaces
+    return None
+
+
 def get_agent_card_url(agent_card: "AgentCard") -> str | None:
     """Return the agent endpoint URL from the resolved SDK card."""
-    url: Final = getattr(agent_card, "url", None)
+    url: Final = _url_of(agent_card)
     if url:
         return url
 
-    interfaces: Final = getattr(agent_card, "supported_interfaces", None)
+    interfaces: Final = _supported_interfaces(agent_card)
     if interfaces:
-        return getattr(interfaces[0], "url", None)
+        return _url_of(interfaces[0])
     return None
 
 
@@ -168,16 +188,16 @@ def fix_agent_card_url(agent_card: "AgentCard", base_url: str) -> "AgentCard":
     Returns:
         The agent card with the URL fixed if necessary
     """
-    card_url: Final = getattr(agent_card, "url", None)
+    card_url: Final = _url_of(agent_card)
 
     if card_url and is_localhost_or_internal_url(card_url):
         # Normalize base_url to ensure it ends with /
         fixed_url: Final = base_url.rstrip("/") + "/"
         agent_card.url = fixed_url
 
-    interfaces: Final = getattr(agent_card, "supported_interfaces", None)
+    interfaces: Final = _supported_interfaces(agent_card)
     if interfaces:
-        interface_url: Final = getattr(interfaces[0], "url", None)
+        interface_url: Final = _url_of(interfaces[0])
         if interface_url and is_localhost_or_internal_url(interface_url):
             interfaces[0].url = base_url.rstrip("/") + "/"
 
@@ -193,6 +213,9 @@ class LiteLLMA2ACardResolver(_A2ACardResolver):
     - /.well-known/agent.json (previous/alternative)
     - /agentCard/v1.0
     """
+
+    if TYPE_CHECKING:
+        base_url: str
 
     async def get_agent_card(
         self,

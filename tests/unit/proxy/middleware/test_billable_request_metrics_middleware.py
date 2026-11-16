@@ -105,6 +105,7 @@ def test_is_pure_asgi_not_base_http_middleware():
         # SpendLogs-producing routes surfaced by the route-inventory audit
         ("/v1/search", (BillableCategory.LLM, "/search")),
         ("/v1/vector_stores/vs_1/search", (BillableCategory.LLM, "/search")),
+        ("/opensearch/docs/_search", (BillableCategory.LLM, "/opensearch")),
         ("/v1/rag/query", (BillableCategory.LLM, "/rag/query")),
         ("/rag/ingest", (BillableCategory.LLM, "/rag/ingest")),
         # Provider passthrough carries real inference and writes SpendLogs
@@ -164,6 +165,18 @@ def test_classify_billable(path: str, expected: Tuple[BillableCategory, str]):
         "/v1beta/interactions/int_123/cancel",
         # observability passthrough writes no SpendLogs row
         "/langfuse/api/public/ingestion",
+        "/opensearch/docs/_doc",
+        "/opensearch/docs/_doc/_search",
+        "/opensearch/docs/_doc/1",
+        "/opensearch/docs/_bulk",
+        "/opensearch/docs/_update/1",
+        "/opensearch/docs/_count",
+        "/opensearch/docs/_mget",
+        "/opensearch/docs/_doc/search",
+        "/opensearch/docs/_update/search",
+        "/opensearch/docs/_create/embeddings",
+        "/opensearch/docs/_doc/completions",
+        "/opensearch/docs/_explain/rerank",
         # a bare provider prefix is not an inference call
         "/bedrock",
         "/eu_jev/v1/systemone/extra",

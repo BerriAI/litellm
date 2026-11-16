@@ -51,6 +51,7 @@ from litellm.types.proxy.management_endpoints.ui_sso import (
     TeamMappings,
 )
 from tests._master_key import MASTER_KEY
+from tests.unit.proxy.auth._user_table import UserTable, prisma_over, user_row
 
 
 @pytest.mark.asyncio
@@ -1946,7 +1947,7 @@ def test_sso_lookup_user_ids_never_offers_a_blank_id(
 
 
 @pytest.mark.asyncio
-async def test_get_user_info_from_db_user_not_exists_creates_user():
+async def test_get_user_info_from_db_user_not_exists_creates_user() -> None:
     """
     Test that get_user_info_from_db creates a new user when user doesn't exist in DB.
 
@@ -1959,6 +1960,7 @@ async def test_get_user_info_from_db_user_not_exists_creates_user():
     from litellm.proxy.management_endpoints.ui_sso import get_user_info_from_db
 
     prisma_client = MagicMock()
+    prisma_client.db.litellm_usertable.find_first = AsyncMock(return_value=None)
     user_api_key_cache = MagicMock()
     proxy_logging_obj = MagicMock()
     user_email = "newuser@example.com"
@@ -2038,7 +2040,7 @@ async def test_get_user_info_from_db_user_not_exists_creates_user():
 
 
 @pytest.mark.asyncio
-async def test_get_user_info_from_db_user_exists_updates_user():
+async def test_get_user_info_from_db_user_exists_updates_user() -> None:
     """
     Test that get_user_info_from_db updates existing user when user exists in DB.
 
@@ -2051,6 +2053,7 @@ async def test_get_user_info_from_db_user_exists_updates_user():
     from litellm.proxy.management_endpoints.ui_sso import get_user_info_from_db
 
     prisma_client = MagicMock()
+    prisma_client.db.litellm_usertable.find_first = AsyncMock(return_value=None)
     user_api_key_cache = MagicMock()
     proxy_logging_obj = MagicMock()
     user_email = "existing@example.com"
@@ -2229,7 +2232,12 @@ async def test_get_user_info_from_db_keeps_reading_a_database_outage_as_no_accou
 @pytest.mark.asyncio
 async def test_get_user_info_from_db_keeps_the_matched_account_when_its_update_hits_a_database_outage() -> None:
     matched: Final = LiteLLM_UserTable(user_id="existing-user", user_email="existing@example.com")
-    prisma_client: Final = MagicMock(**{"db.litellm_usertable.update_many": AsyncMock(side_effect=_database_outage())})
+    prisma_client: Final = MagicMock(
+        **{
+            "db.litellm_usertable.update_many": AsyncMock(side_effect=_database_outage()),
+            "db.litellm_usertable.find_first": AsyncMock(return_value=None),
+        }
+    )
 
     assert await _sso_user_info_from_db(None, prisma_client, cached_user=matched) is matched
 
@@ -10214,6 +10222,60 @@ async def test_microsoft_login_asks_for_offline_access_only_while_an_id_jag_serv
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "client_id_kwarg, environment, upstream_redirect",
+    [
+        (
+            "google_client_id",
+            {"GOOGLE_CLIENT_ID": "google-cid", "GOOGLE_CLIENT_SECRET": "google-secret"},
+            "fastapi_sso.sso.google.GoogleSSO.get_login_redirect",
+        ),
+        (
+            "microsoft_client_id",
+            {"MICROSOFT_CLIENT_ID": "ms-cid", "MICROSOFT_CLIENT_SECRET": "ms-secret", "MICROSOFT_TENANT": "tenant"},
+            "fastapi_sso.sso.microsoft.MicrosoftSSO.get_login_redirect",
+        ),
+    ],
+)
+async def test_login_redirect_keeps_the_client_secret_read_with_its_client_id_when_a_sync_removes_both(
+    client_id_kwarg: str, environment: Mapping[str, str], upstream_redirect: str
+) -> None:
+    """A config sync can remove an SSO client's environment variables while a sign-in that already read
+    the client id is waiting on the refresh-token check. The redirect must use the secret that belonged
+    to that client id instead of failing because the secret is gone by then."""
+    from fastapi.responses import RedirectResponse
+
+    from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
+
+    client_id: Final = next(value for key, value in environment.items() if key.endswith("_CLIENT_ID"))
+    client_secret: Final = next(value for key, value in environment.items() if key.endswith("_SECRET"))
+
+    async def sync_removes_the_client() -> bool:
+        for key in environment:
+            os.environ.pop(key, None)
+        return False
+
+    with (
+        patch.dict(os.environ, environment),
+        patch(  # test-quality-ok: stubs the upstream IdP authorization boundary, where the request leaves
+            upstream_redirect,
+            autospec=True,
+            return_value=RedirectResponse(url="https://idp.example/authorize"),
+        ) as idp_redirect,
+    ):
+        response: Final = await SSOAuthenticationHandler.get_sso_login_redirect(
+            redirect_url="http://localhost:4000/sso/callback",
+            retention_enabled=sync_removes_the_client,
+            **{client_id_kwarg: client_id},
+        )
+
+    assert response is not None
+    idp_redirect.assert_awaited_once()
+    provider: Final = idp_redirect.await_args.args[0]
+    assert (provider.client_id, provider.client_secret) == (client_id, client_secret)
+
+
+@pytest.mark.asyncio
 async def test_cli_completion_persists_assertion_under_db_user_id():
     """The CLI funnel persists the captured assertion under the DB-resolved user_id."""
     from litellm.proxy.management_endpoints.ui_sso import (
@@ -11463,3 +11525,139 @@ async def test_sso_login_still_joins_the_team_and_warns_when_creating_it_fails(
     warnings: Final = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
     assert events == [("join", "finance")]
     assert len(warnings) == 1 and "finance" in warnings[0] and str(create_error.detail) in warnings[0]
+
+
+@pytest.mark.parametrize("value, expected", [(False, False), ("false", False), ("true", True), (None, None)])
+def test_generic_response_convertor_carries_email_verified(value: object, expected: bool | None) -> None:
+    from litellm.proxy.management_endpoints.ui_sso import generic_response_convertor
+
+    claim: Final[Mapping[str, object]] = {} if value is None else {"email_verified": value}
+    response: Final = {"preferred_username": "user-1", "email": "owner@example.com", "sub": "user-1", **claim}
+    jwt_handler: Final = MagicMock()
+    jwt_handler.get_all_jwt_team_ids.return_value = []
+
+    assert generic_response_convertor(response=response, jwt_handler=jwt_handler).email_verified is expected
+
+
+async def _sso_sign_in(table: UserTable, sso_id: str, email_verified: bool | None = None) -> object:
+    from litellm.proxy.auth import auth_checks
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.management_endpoints.ui_sso import get_user_info_from_db
+
+    auth_checks.last_db_access_time.clear()
+    return await get_user_info_from_db(
+        result=CustomOpenID(id=sso_id, email="owner@example.com", team_ids=[], email_verified=email_verified),
+        prisma_client=prisma_over(table),
+        user_api_key_cache=UserApiKeyCache(),
+        proxy_logging_obj=MagicMock(),
+        user_email="owner@example.com",
+        user_defined_values={
+            "models": [],
+            "user_id": sso_id,
+            "user_email": "owner@example.com",
+            "max_budget": None,
+            "user_role": None,
+            "budget_duration": None,
+        },
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "other_email, stored",
+    [("owner@example.com", None), ("other@example.com", "owner@example.com")],
+)
+async def test_repeat_sso_sign_in_stores_an_email_only_when_no_other_user_has_it(
+    other_email: str, stored: str | None
+) -> None:
+    table: Final = UserTable(user_row("owner", other_email, sso_user_id="idp-owner"), user_row("idp-new", None))
+
+    user: Final = await _sso_sign_in(table, "idp-new")
+
+    assert getattr(user, "user_id", None) == "idp-new"
+    assert table.row("idp-new").user_email == stored
+    assert table.row("owner").user_email == other_email
+    assert table.row("owner").sso_user_id == "idp-owner"
+
+
+class _EmailLookupDown(UserTable):
+    async def find_first(self, where: Mapping[str, object], include: object = None) -> LiteLLM_UserTable | None:
+        raise TimeoutError("user table timed out")
+
+
+@pytest.mark.asyncio
+async def test_sso_sign_in_keeps_the_user_when_the_email_in_use_check_fails() -> None:
+    table: Final = _EmailLookupDown(user_row("idp-new", "old@example.com", sso_user_id="idp-new"))
+
+    user: Final = await _sso_sign_in(table, "idp-new")
+
+    assert getattr(user, "user_id", None) == "idp-new"
+    assert table.row("idp-new").user_email == "old@example.com"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "owner_sso_user_id, email_verified, new_user_email",
+    [("idp-owner", None, None), (None, False, None), (None, None, None)],
+)
+async def test_first_sso_sign_in_creates_its_own_user_without_another_users_email(
+    owner_sso_user_id: str | None, email_verified: bool | None, new_user_email: str | None
+) -> None:
+    table: Final = UserTable(user_row("owner", "owner@example.com", sso_user_id=owner_sso_user_id))
+    links_owner: Final = owner_sso_user_id is None and email_verified is None
+
+    with patch("litellm.proxy.proxy_server.prisma_client", prisma_over(table)):
+        user: Final = await _sso_sign_in(table, "idp-new", email_verified=email_verified)
+
+    assert getattr(user, "user_id", None) == ("owner" if links_owner else "idp-new")
+    assert table.row("owner").sso_user_id == ("idp-new" if links_owner else owner_sso_user_id)
+    if not links_owner:
+        assert table.row("idp-new").user_email == new_user_email
+
+
+@pytest.mark.asyncio
+async def test_repeat_sso_sign_in_keeps_the_earlier_email_write_when_opted_out(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LITELLM_EMAIL_FALLBACK_LINKS_ANY_USER", "true")
+    table: Final = UserTable(user_row("owner", "owner@example.com", sso_user_id="idp-owner"), user_row("idp-new", None))
+
+    await _sso_sign_in(table, "idp-new")
+
+    assert table.row("idp-new").user_email == "owner@example.com"
+
+
+@pytest.mark.asyncio
+async def test_repeat_sso_sign_in_with_an_unchanged_email_runs_no_email_lookup() -> None:
+    table: Final = UserTable(user_row("idp-new", "Owner@Example.com", sso_user_id="idp-new"))
+
+    await _sso_sign_in(table, "idp-new")
+
+    assert table.first_lookups == []
+
+
+@pytest.mark.asyncio
+async def test_sso_sign_in_with_custom_values_missing_user_id_finds_the_existing_user() -> None:
+    from litellm.proxy.auth import auth_checks
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.management_endpoints.ui_sso import get_user_info_from_db
+
+    auth_checks.last_db_access_time.clear()
+    table: Final = UserTable(user_row("idp-new", "owner@example.com", sso_user_id="idp-new"))
+
+    user: Final = await get_user_info_from_db(
+        result=CustomOpenID(id="idp-new", email="owner@example.com", team_ids=[]),
+        prisma_client=prisma_over(table),
+        user_api_key_cache=UserApiKeyCache(),
+        proxy_logging_obj=MagicMock(),
+        user_email="owner@example.com",
+        user_defined_values={
+            "models": [],
+            "user_email": "owner@example.com",
+            "max_budget": None,
+            "user_role": None,
+            "budget_duration": None,
+        },
+        alternate_user_id="idp-new",
+    )
+
+    assert getattr(user, "user_id", None) == "idp-new"
+

@@ -1,5 +1,5 @@
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, ClassVar, Final
 
 import httpx
 
@@ -9,6 +9,7 @@ from litellm.llms.base_llm.vector_store.transformation import (
     VectorStoreEmbeddingExecutor,
 )
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+from litellm.llms.bedrock.web_identity_session_policy import S3_VECTORS_QUERY_SESSION_POLICY, WebIdentitySessionPolicy
 from litellm.types.rag import RAGIngestEmbeddingOptions
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.vector_stores import (
@@ -76,6 +77,8 @@ def s3_vectors_ingest_embedding_options(
 
 class S3VectorsVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig, BaseAWSLLM):
     """Vector store configuration for AWS S3 Vectors."""
+
+    _web_identity_session_policy: ClassVar[WebIdentitySessionPolicy] = S3_VECTORS_QUERY_SESSION_POLICY
 
     def __init__(self) -> None:
         BaseQueryEmbeddingVectorStoreConfig.__init__(self)

@@ -3,7 +3,7 @@ import os
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import Annotated, Final, Protocol, TypeAlias, runtime_checkable
+from typing import Annotated, Final, Literal, Protocol, TypeAlias, runtime_checkable
 
 from pydantic import Field, TypeAdapter, ValidationError
 from starlette.responses import JSONResponse
@@ -133,6 +133,12 @@ class AdmissionControlState:
         return self._metrics
 
 
+class _RoutedScope(Protocol):
+    def __getitem__(self, key: Literal["path"], /) -> str: ...
+
+    def get(self, key: Literal["root_path"], default: str, /) -> str: ...
+
+
 class _AdmissionLease:
     def __init__(self, state: AdmissionControlState) -> None:
         self.state: Final = state
@@ -207,7 +213,7 @@ class AdmissionControlMiddleware:
             state.record_release()
 
 
-def _get_route_path(scope: Scope) -> str:
+def _get_route_path(scope: _RoutedScope) -> str:
     """Strip the ASGI root_path (SERVER_ROOT_PATH) the same way Starlette does before route matching."""
     path: Final[str] = scope["path"]
     root_path: Final[str] = scope.get("root_path", "")

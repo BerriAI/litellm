@@ -17,7 +17,7 @@ are encoded; pass a Pydantic model or convert with e.g. ``dataclasses.asdict`` f
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import Any, TypeAlias, TypeVar
+from typing import TypeAlias, TypeVar
 
 from pydantic import BaseModel, ValidationError
 
@@ -67,7 +67,7 @@ class CacheCodec:
         return value
 
     @staticmethod
-    def deserialize(cached: Any, model_type: type[T]) -> T | None:
+    def deserialize(cached: object, model_type: type[T]) -> T | None:
         """
         Decode a cache entry to ``model_type``.
 

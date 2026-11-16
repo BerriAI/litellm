@@ -1,15 +1,17 @@
 import datetime
 import hashlib
-from typing import Any, Final
+from collections.abc import Awaitable, Callable
+from typing import Any, ClassVar, Final, TypeAlias
 from unittest.mock import MagicMock
 
 import pytest
+from pydantic import BaseModel, model_validator
 
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.caching.redis_cache import RedisCache
 from litellm.constants import DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import LiteLLM_TeamTableCachedObj, LiteLLM_UserTable, UserAPIKeyAuth
 from litellm.proxy.common_utils.user_api_key_cache import (
     UserApiKeyCache,
     budget_windows_absent_cache_key,
@@ -173,7 +175,9 @@ class TestUserApiKeyCache:
     async def test_a_model_holding_a_datetime_is_cached_as_its_json_dump(self):
         cache = UserApiKeyCache(
             redis_cache=MagicMock(spec=RedisCache),
-            auth_cache=lambda _redis, settings: AuthCacheStore(NativeAuthCache(None, memory_entries=settings.memory_entries)),
+            auth_cache=lambda _redis, settings: AuthCacheStore(
+                NativeAuthCache(None, memory_entries=settings.memory_entries)
+            ),
         )
         key_obj = UserAPIKeyAuth(token="abc", expires=datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc))
 
@@ -476,3 +480,266 @@ class TestManagementObjectTTL:
         )
 
         assert mem.last_ttl == 300
+
+
+async def _evict_by_delete(cache: UserApiKeyCache, key: str) -> None:
+    await cache.async_delete_cache(key)
+
+
+async def _evict_by_bulk_delete(cache: UserApiKeyCache, key: str) -> None:
+    await cache.async_delete_cache_keys((key,))
+
+
+async def _evict_by_broadcast(cache: UserApiKeyCache, key: str) -> None:
+    cache.delete_local(key)
+
+
+async def _evict_by_sync_delete(cache: UserApiKeyCache, key: str) -> None:
+    cache.delete_cache(key)
+
+
+async def _evict_by_flush(cache: UserApiKeyCache, key: str) -> None:
+    cache.flush_cache()
+
+
+def _memory_only() -> UserApiKeyCache:
+    return UserApiKeyCache()
+
+
+def _with_redis_auth_cache() -> UserApiKeyCache:
+    return shared_cache()[0]
+
+
+_NewCache: TypeAlias = Callable[[], UserApiKeyCache]
+_Evict: TypeAlias = Callable[[UserApiKeyCache, str], Awaitable[None]]
+
+_EVICTIONS: Final = (
+    _evict_by_delete,
+    _evict_by_bulk_delete,
+    _evict_by_broadcast,
+    _evict_by_sync_delete,
+    _evict_by_flush,
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("new_cache", [_memory_only, _with_redis_auth_cache])
+@pytest.mark.parametrize("evict", _EVICTIONS)
+async def test_a_load_that_began_before_an_eviction_cannot_cache_what_it_read(
+    new_cache: _NewCache, evict: _Evict
+) -> None:
+    cache: Final = new_cache()
+    lease: Final = await cache.lease("customer_member_id:m")
+    await evict(cache, "customer_member_id:m")
+
+    assert await cache.async_set_leased(lease, {"spend": 5.0}, ttl=60) is False
+    assert await cache.async_get_cache("customer_member_id:m") is None
+
+    assert await cache.async_set_leased(await cache.lease("customer_member_id:m"), {"spend": 0.0}, ttl=60) is True
+    assert await cache.async_get_cache("customer_member_id:m") == {"spend": 0.0}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("new_cache", [_memory_only, _with_redis_auth_cache])
+async def test_a_load_caches_what_it_read_when_only_another_key_was_evicted(new_cache: _NewCache) -> None:
+    cache: Final = new_cache()
+    lease: Final = await cache.lease("customer_member_id:m")
+    await cache.async_delete_cache("customer_member_id:other")
+
+    assert await cache.async_set_leased(lease, {"spend": 5.0}, ttl=60) is True
+    assert await cache.async_get_cache("customer_member_id:m") == {"spend": 5.0}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("evict", [_evict_by_delete, _evict_by_bulk_delete, _evict_by_sync_delete])
+async def test_a_load_cannot_cache_what_it_read_before_another_worker_evicted_the_key(evict: _Evict) -> None:
+    """The eviction broadcast has not reached the loading worker, so only Redis can refuse its write."""
+    resetter, shared = shared_cache()
+    loader, _ = shared_cache(FakeAuthCache(redis=shared.redis, generations=shared.generations))
+    lease: Final = await loader.lease("customer_member_id:m")
+    await evict(resetter, "customer_member_id:m")
+
+    assert await loader.async_set_leased(lease, {"spend": 5.0}, ttl=60) is False
+    assert await loader.async_get_cache("customer_member_id:m") is None
+    assert await resetter.async_get_cache("customer_member_id:m") is None
+
+    assert await loader.async_set_leased(await loader.lease("customer_member_id:m"), {"spend": 0.0}, ttl=60) is True
+    assert await resetter.async_get_cache("customer_member_id:m") == {"spend": 0.0}
+
+
+class _EvictedMidWrite(FakeAuthCache):
+    """Redis takes the leased write, and this worker evicts the key before the reply is handled."""
+
+    cache: UserApiKeyCache | None = None
+
+    async def set_leased(self, key: str, lease: str | None, value: object, ttl_seconds: float | None = None) -> bool:
+        written: Final = await super().set_leased(key, lease, value, ttl_seconds)
+        assert self.cache is not None
+        await self.cache.async_delete_cache(key)
+        return written
+
+
+@pytest.mark.asyncio
+async def test_an_eviction_that_lands_while_redis_takes_the_write_keeps_it_out_of_memory() -> None:
+    double: Final = _EvictedMidWrite()
+    cache, _ = shared_cache(double)
+    double.cache = cache
+    lease: Final = await cache.lease("customer_member_id:m")
+
+    assert await cache.async_set_leased(lease, {"spend": 5.0}, ttl=60) is False
+    assert await cache.async_get_cache("customer_member_id:m") is None
+
+
+class _CountedValidation(BaseModel):
+    validations: ClassVar[int] = 0
+
+    spend: float
+
+    @model_validator(mode="before")
+    @classmethod
+    def _count(cls, data: object) -> object:
+        _CountedValidation.validations += 1
+        return data
+
+
+_TEAM_KEY: Final = "team_id:t1"
+
+
+def _auth_objects() -> tuple[tuple[str, BaseModel], ...]:
+    return (
+        (HASHED_TOKEN, UserAPIKeyAuth(token=HASHED_TOKEN, spend=1.5, models=["gpt-4o"], metadata={"a": 1})),
+        (_TEAM_KEY, LiteLLM_TeamTableCachedObj(team_id="t1", spend=2.0, models=["gpt-4o"], metadata={"a": 1})),
+        ("u1", LiteLLM_UserTable(user_id="u1", spend=3.0, models=["gpt-4o"], teams=["t1"])),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("new_cache", [_memory_only, _with_redis_auth_cache])
+@pytest.mark.parametrize(("key", "stored"), _auth_objects())
+async def test_every_hit_returns_an_object_equal_to_the_stored_one(
+    new_cache: _NewCache, key: str, stored: BaseModel
+) -> None:
+    cache: Final = new_cache()
+    await cache.async_set_cache(key, stored, model_type=type(stored))
+
+    reads: Final = (
+        await cache.async_get_cache(key, model_type=type(stored)),
+        await cache.async_get_cache(key, model_type=type(stored)),
+        cache.get_cache(key, model_type=type(stored)),
+    )
+
+    assert [type(read) for read in reads] == [type(stored)] * 3
+    assert list(reads) == [stored] * 3
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("new_cache", [_memory_only, _with_redis_auth_cache])
+@pytest.mark.parametrize(("key", "stored"), _auth_objects())
+async def test_a_field_set_on_a_read_object_does_not_reach_the_next_read(
+    new_cache: _NewCache, key: str, stored: BaseModel
+) -> None:
+    cache: Final = new_cache()
+    await cache.async_set_cache(key, stored, model_type=type(stored))
+    reads: Final = [await cache.async_get_cache(key, model_type=type(stored)) for _ in range(2)]
+    for read in reads:
+        assert read is not None
+        read.spend = 99.0
+        read.models = ["mutated"]
+
+    after_mutation: Final = await cache.async_get_cache(key, model_type=type(stored))
+
+    assert after_mutation == stored
+
+
+@pytest.mark.asyncio
+async def test_reads_of_an_unchanged_entry_validate_it_once() -> None:
+    cache: Final = UserApiKeyCache()
+    await cache.async_set_cache("k", {"spend": 1.0})
+    before: Final = _CountedValidation.validations
+
+    reads: Final = [await cache.async_get_cache("k", model_type=_CountedValidation) for _ in range(5)]
+
+    assert _CountedValidation.validations - before == 1
+    assert reads == [_CountedValidation(spend=1.0)] * 5
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("new_cache", [_memory_only, _with_redis_auth_cache])
+async def test_each_write_changes_what_the_next_read_returns(new_cache: _NewCache) -> None:
+    cache: Final = new_cache()
+    await cache.async_set_cache(_TEAM_KEY, LiteLLM_TeamTableCachedObj(team_id="t1", spend=1.0))
+    assert await cache.async_get_cache(_TEAM_KEY, model_type=LiteLLM_TeamTableCachedObj) is not None
+
+    await cache.async_set_cache(_TEAM_KEY, LiteLLM_TeamTableCachedObj(team_id="t1", spend=2.0))
+    after_async_set: Final = await cache.async_get_cache(_TEAM_KEY, model_type=LiteLLM_TeamTableCachedObj)
+    cache.set_cache(_TEAM_KEY, LiteLLM_TeamTableCachedObj(team_id="t1", spend=3.0), local_only=True)
+    after_local_set: Final = cache.get_cache(_TEAM_KEY, local_only=True, model_type=LiteLLM_TeamTableCachedObj)
+    await cache.async_set_cache_pipeline([(_TEAM_KEY, LiteLLM_TeamTableCachedObj(team_id="t1", spend=4.0))])
+    after_pipeline: Final = await cache.async_get_cache(_TEAM_KEY, model_type=LiteLLM_TeamTableCachedObj)
+
+    assert [after_async_set, after_local_set, after_pipeline] == [
+        LiteLLM_TeamTableCachedObj(team_id="t1", spend=2.0),
+        LiteLLM_TeamTableCachedObj(team_id="t1", spend=3.0),
+        LiteLLM_TeamTableCachedObj(team_id="t1", spend=4.0),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_payload_rewritten_in_place_and_set_again_is_read_back() -> None:
+    cache: Final = UserApiKeyCache()
+    await cache.async_set_cache("k", {"spend": 1.0})
+    assert await cache.async_get_cache("k", model_type=_CountedValidation) == _CountedValidation(spend=1.0)
+    payload: Final = await cache.async_get_cache("k")
+    payload["spend"] = 2.0
+
+    await cache.async_set_cache("k", payload)
+
+    assert await cache.async_get_cache("k", model_type=_CountedValidation) == _CountedValidation(spend=2.0)
+
+
+@pytest.mark.asyncio
+async def test_a_payload_written_straight_into_the_memory_layer_is_read_back() -> None:
+    memory: Final = InMemoryCache()
+    cache: Final = UserApiKeyCache(in_memory_cache=memory)
+    await cache.async_set_cache("k", {"spend": 1.0})
+    assert await cache.async_get_cache("k", model_type=_CountedValidation) == _CountedValidation(spend=1.0)
+
+    memory.set_cache("k", {"spend": 2.0})
+
+    assert await cache.async_get_cache("k", model_type=_CountedValidation) == _CountedValidation(spend=2.0)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("new_cache", [_memory_only, _with_redis_auth_cache])
+@pytest.mark.parametrize("evict", _EVICTIONS)
+async def test_a_typed_read_after_an_eviction_is_a_miss(new_cache: _NewCache, evict: _Evict) -> None:
+    cache: Final = new_cache()
+    await cache.async_set_cache(HASHED_TOKEN, UserAPIKeyAuth(token=HASHED_TOKEN), model_type=UserAPIKeyAuth)
+    assert await cache.async_get_cache(HASHED_TOKEN, model_type=UserAPIKeyAuth) is not None
+
+    await evict(cache, HASHED_TOKEN)
+
+    assert await cache.async_get_cache(HASHED_TOKEN, local_only=True, model_type=UserAPIKeyAuth) is None
+
+
+def test_a_typed_read_after_the_ttl_is_a_miss() -> None:
+    clock: Final = _ManualClock()
+    cache: Final = UserApiKeyCache(in_memory_cache=InMemoryCache(clock=clock), default_in_memory_ttl=60)
+    cache.set_cache(_TEAM_KEY, LiteLLM_TeamTableCachedObj(team_id="t1"))
+    assert cache.get_cache(_TEAM_KEY, model_type=LiteLLM_TeamTableCachedObj) is not None
+
+    clock.advance(61)
+
+    assert cache.get_cache(_TEAM_KEY, model_type=LiteLLM_TeamTableCachedObj) is None
+
+
+@pytest.mark.asyncio
+async def test_one_entry_read_as_two_models_returns_each_model() -> None:
+    cache: Final = UserApiKeyCache()
+    await cache.async_set_cache(_TEAM_KEY, LiteLLM_TeamTableCachedObj(team_id="t1", spend=1.0))
+
+    as_team: Final = await cache.async_get_cache(_TEAM_KEY, model_type=LiteLLM_TeamTableCachedObj)
+    as_counted: Final = await cache.async_get_cache(_TEAM_KEY, model_type=_CountedValidation)
+
+    assert type(as_team) is LiteLLM_TeamTableCachedObj
+    assert as_counted == _CountedValidation(spend=1.0)
