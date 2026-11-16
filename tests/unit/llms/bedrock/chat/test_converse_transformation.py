@@ -4507,6 +4507,13 @@ def _conversation_ending_in(shape: str) -> list[AllMessageValues]:
                 {"role": "user", "content": [{"type": "guarded_text", "text": _BLOCKED_QUESTION}]},
                 *_conversation_ending_in("tool_result")[1:],
             ]
+        case "guarded_tool_call_after_guarded_question":
+            guarded_call: Final = [{"type": "guarded_text", "text": _GUARDED_PART_TEXT}]
+            return [
+                {"role": "user", "content": [{"type": "guarded_text", "text": _BLOCKED_QUESTION}]},
+                {"role": "assistant", "content": guarded_call, "tool_calls": [_LOOKUP_CALL]},
+                {"role": "tool", "tool_call_id": "call_1", "content": "Sunny."},
+            ]
         case "system_after_guarded_assistant":
             guarded_answer: Final = [{"type": "guarded_text", "text": _GUARDED_PART_TEXT}]
             return [question, {"role": "assistant", "content": guarded_answer}, reply_rule]
@@ -4586,6 +4593,10 @@ async def test_trailing_system_turn_after_tool_history_without_tools_keeps_the_f
         ("tool_result", ()),
         ("system_after_tool_result", ()),
         ("tool_result_after_guarded_question", (_BLOCKED_QUESTION, "[tool result for call_1: Sunny.]")),
+        (
+            "guarded_tool_call_after_guarded_question",
+            (_BLOCKED_QUESTION, _GUARDED_PART_TEXT, "[tool result for call_1: Sunny.]"),
+        ),
     ],
 )
 async def test_tool_history_without_tools_guards_its_tool_results_only_alongside_user_input(

@@ -422,8 +422,14 @@ class AmazonConverseConfig(BaseConfig):
             role = message.get("role")
             tool_calls = message.get("tool_calls")
             if role == "assistant" and tool_calls:
-                base_text: Final = convert_content_list_to_str(message)
                 call_texts: Final = tuple(_tool_call_text(call) for call in tool_calls)
+                if guards_tool_results and _has_guarded_text(message):
+                    call_text: Final = {"type": "text", "text": "\n".join(call_texts)}
+                    return cast(  # cast-ok: guarded parts stay as they are, which the assistant message type omits
+                        AllMessageValues,
+                        {"role": "assistant", "content": [*parts_of(message_field(message, "content")), call_text]},
+                    )
+                base_text: Final = convert_content_list_to_str(message)
                 text: Final = "\n".join(part for part in (base_text, *call_texts) if part)
                 return ChatCompletionAssistantMessage(role="assistant", content=text)
             if role in ("tool", "function"):
