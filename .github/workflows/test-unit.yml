@@ -1626,6 +1626,7 @@ jobs:
       - name: Require every unit job to succeed
         env:
           NEEDS: ${{ toJSON(needs) }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
           jq -r 'to_entries[] | "\(.key): \(.value.result)"' <<< "$NEEDS"
-          jq -e 'to_entries | all(.[]; .value.result == "success" or ((.key == "openai-sdk-compat" or .key == "redis-compat") and .value.result == "skipped"))' <<< "$NEEDS" > /dev/null
+          jq -e --arg event "$EVENT_NAME" 'to_entries | all(.[]; .value.result == "success" or ($event == "pull_request" and (.key == "openai-sdk-compat" or .key == "redis-compat") and .value.result == "skipped"))' <<< "$NEEDS" > /dev/null

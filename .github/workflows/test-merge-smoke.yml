@@ -368,6 +368,7 @@ jobs:
       - name: Require every smoke job to succeed
         env:
           NEEDS: ${{ toJSON(needs) }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
           jq -r 'to_entries[] | "\(.key): \(.value.result)"' <<< "$NEEDS"
-          jq -e 'all(.[]; .result == "success" or .result == "skipped")' <<< "$NEEDS" > /dev/null
+          jq -e --arg event "$EVENT_NAME" 'all(.[]; .result == "success" or ($event == "pull_request" and .result == "skipped"))' <<< "$NEEDS" > /dev/null

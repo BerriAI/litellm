@@ -294,12 +294,19 @@ def _event_context(pull_request: Mapping[str, str]) -> Mapping[str, str]:
         {
             "github.repository": REPOSITORY,
             "github.token": "fake-token",
+            "github.event_name": "pull_request",
+            "github.sha": pull_request["head.sha"],
             **{f"github.event.pull_request.{field}": value for field, value in pull_request.items()},
         }
     )
 
 
 def _context_value(context: Mapping[str, str], expression: str) -> str:
+    first, operator, fallback = expression.partition("||")
+    if operator:
+        return _context_value(context, first.strip()) or _context_value(context, fallback.strip())
+    if expression.startswith(("github.event.pull_request.", "github.event.merge_group.")):
+        return context.get(expression, "")
     if expression not in context:
         pytest.fail(f"the fake runner has no value for ${{{{ {expression} }}}}")
     return context[expression]
@@ -314,8 +321,8 @@ def _install_tool(path: Path, script: str) -> None:
     path.chmod(0o755)
 
 
-def _runner(tmp_path: Path, upstream: StaleBaseUpstream, pull_request: Mapping[str, str], live_base_ref: str) -> Runner:
-    runner: Final = Runner(tmp_path, upstream, live_base_ref, _event_context(pull_request))
+def _runner(tmp_path: Path, upstream: StaleBaseUpstream, context: Mapping[str, str], live_base_ref: str) -> Runner:
+    runner: Final = Runner(tmp_path, upstream, live_base_ref, context)
     runner.tools.mkdir()
     runner.temp.mkdir()
     for name, script in (("gh", FAKE_GH), ("npm", FAKE_ARGV_RECORDER), ("uv", FAKE_ARGV_RECORDER)):
@@ -325,7 +332,7 @@ def _runner(tmp_path: Path, upstream: StaleBaseUpstream, pull_request: Mapping[s
 
 def _check_out_like_the_job(job: WorkflowJob, runner: Runner) -> None:
     checkout: Final = next(step for step in job.steps if step.uses.startswith("actions/checkout@"))
-    ref: Final = _resolved(checkout.with_.get("ref", "${{ github.event.pull_request.head.sha }}"), runner.context)
+    ref: Final = _resolved(checkout.with_.get("ref", "${{ github.sha }}"), runner.context)
     _git(runner.root, "init", "-q", str(runner.checkout))
     _git(runner.checkout, "remote", "add", "origin", f"file://{runner.upstream.path}")
     _git(runner.checkout, "fetch", "-q", "--no-tags", "--depth=1", "origin", ref)
@@ -504,12 +511,48 @@ def test_merge_base_step_hands_its_consumer_the_events_base_unless_that_branch_i
             "user.type": "User",
         }
     )
-    runner: Final = _runner(tmp_path, upstream, pull_request, live_base_ref)
+    runner: Final = _runner(tmp_path, upstream, _event_context(pull_request), live_base_ref)
     _check_out_like_the_job(step.job, runner)
     _run_step(step.step, step.job, runner.context, runner)
     consumer: Final = CONSUMERS[step.job_key]
     measured_ref: Final = event_base_ref if event_base_ref in upstream.tip_by_ref else live_base_ref
     assert consumer.observe(StepRun(step, runner)) == consumer.expect(upstream, measured_ref)
+
+
+@pytest.mark.parametrize(
+    "step",
+    tuple(
+        step
+        for step in MERGE_BASE_STEPS
+        if step.job_key in {"test-linting.yml:python", "test-linting.yml:ui", "cost-map-guard.yml:cost-map-guard"}
+    ),
+    ids=lambda step: step.job_key,
+)
+def test_merge_group_steps_use_the_group_revisions_and_lint_all_ui_files(
+    upstream: StaleBaseUpstream, tmp_path: Path, step: MergeBaseStep
+) -> None:
+    context: Final = MappingProxyType(
+        {
+            "github.repository": REPOSITORY,
+            "github.token": "fake-token",
+            "github.event_name": "merge_group",
+            "github.sha": upstream.head,
+            "github.event.merge_group.base_sha": upstream.tip_by_ref["main"],
+            "github.event.merge_group.base_ref": "refs/heads/main",
+            "github.event.merge_group.head_sha": upstream.head,
+            "github.event.merge_group.head_ref": "refs/heads/gh-readonly-queue/main/group",
+        }
+    )
+    runner: Final = _runner(tmp_path, upstream, context, "main")
+    _check_out_like_the_job(step.job, runner)
+    _run_step(step.step, step.job, context, runner)
+    run: Final = StepRun(step, runner)
+    if step.job_key == "test-linting.yml:ui":
+        files: Final = _git(upstream.path, "ls-tree", "-r", "--name-only", f"{upstream.head}:{UI_DASHBOARD}")
+        assert _ui_files_queued_for_prettier(run) == frozenset(files.splitlines())
+        return
+    consumer: Final = CONSUMERS[step.job_key]
+    assert consumer.observe(run) == consumer.expect(upstream, "main")
 
 
 UI_API_TYPES_DETECT: Final[str] = next(
