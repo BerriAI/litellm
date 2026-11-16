@@ -88,6 +88,19 @@ def _stream_through_router(*events):
             litellm.in_memory_llm_clients_cache.flush_cache()
 
 
+class TestWrapperClassIsModuleLevel:
+    def test_wrapper_class_object_is_not_created_per_call(self):
+        """#51936: the class used to be defined inside ``wrap_responses_stream``,
+        so every streamed Responses call created a new class object whose
+        methods closed over the source iterator — a reference cycle that kept
+        the inner stream, logging obj and httpx request/response alive until a
+        full GC. The class is module-level now, so every call returns an
+        instance of the same class."""
+        stream_a, _ = _stream_through_router(_DELTA, _terminal_event("response.completed", "completed"))
+        stream_b, _ = _stream_through_router(_DELTA, _terminal_event("response.completed", "completed"))
+        assert type(stream_a) is type(stream_b)
+
+
 class TestStreamWrapperCapturesTerminalEvent:
     def test_terminal_completed_event_is_recorded_on_wrapper(self):
         """The #30210 bug: a forwarded ``response.completed`` chunk used
