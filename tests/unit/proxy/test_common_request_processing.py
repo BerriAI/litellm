@@ -38,13 +38,13 @@ from litellm.integrations.custom_guardrail import ModifyResponseException
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.opentelemetry import UserAPIKeyAuth
 from litellm.litellm_core_utils.add_retry_fallback_headers import prepare_response_for_header_attachment
-from litellm.litellm_core_utils.core_helpers import FinishEvidence
 from litellm.litellm_core_utils.bug_report import (
     DISABLE_ENV_VAR,
     ISSUE_URL_BASE,
     bug_report_notice,
     build_bug_report,
 )
+from litellm.litellm_core_utils.core_helpers import FinishEvidence
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
@@ -98,6 +98,10 @@ from litellm.proxy.hooks.model_max_budget_limiter import (
 from litellm.proxy.utils import ProxyLogging
 from litellm.responses.mcp.parked_stream_dispatch import IN_FLIGHT_ROUND
 from litellm.router import Router
+from litellm.router_config import build_router_config
+from litellm.router_python_host import python_host
+from litellm.router_rust.core import RustCore
+from litellm.router_rust.invoke.streaming import StreamAttempt, open_attempt_stream
 from litellm.types.router import RouterRateLimitError, RouterRateLimitErrorBasic
 from litellm.types.utils import CachingDetails, Delta, ModelResponseStream, SpecialEnums, StreamingChoices
 from litellm.utils import ModelResponseListIterator
@@ -11165,11 +11169,29 @@ class TestStreamingClientDisconnectBilling:
         assert [choice.finish_reason for choice in partial_response.choices] == ["length"]
         assert partial_response.usage.completion_tokens > 0
 
-    async def _router_stream(
-        self, recorder: _RecordingSuccessLogger, frames: Sequence[Sequence[StreamingChoices]]
-    ) -> CustomStreamWrapper:
-        from litellm.router_rust.invoke.streaming import StreamAttempt, open_attempt_stream
+    @pytest.fixture
+    def stream_attempt(self) -> Iterator[StreamAttempt]:
+        core: Final = RustCore.build(build_router_config(MappingProxyType({"model_list": []})), python_host)
+        yield StreamAttempt(
+            core=core,
+            op="acompletion",
+            request=MappingProxyType({}),
+            kwargs=MappingProxyType({}),
+            group="gpt-4o",
+            order=None,
+            depth=0,
+            level=0,
+            deployment_id=None,
+            attempted_retries=0,
+        )
+        core.retire()
 
+    async def _router_stream(
+        self,
+        recorder: _RecordingSuccessLogger,
+        frames: Sequence[Sequence[StreamingChoices]],
+        stream_attempt: StreamAttempt,
+    ) -> CustomStreamWrapper:
         model: Final = "gpt-4o"
         logging_obj: Final = self._recorded_logging_obj(
             model, [{"role": "user", "content": "hi"}], "router-held-finish-call", recorder
@@ -11186,13 +11208,13 @@ class TestStreamingClientDisconnectBilling:
             logging_obj=logging_obj,
             stream_options=None,
         )
-        routed: Final = await open_attempt_stream(
-            MagicMock(spec=StreamAttempt, op="acompletion", slot=None), provider_stream
-        )
+        routed: Final = await open_attempt_stream(stream_attempt, provider_stream)
         assert isinstance(routed, CustomStreamWrapper)
         return routed
 
-    async def _router_stream_holding_a_length_finish(self, recorder: _RecordingSuccessLogger) -> CustomStreamWrapper:
+    async def _router_stream_holding_a_length_finish(
+        self, recorder: _RecordingSuccessLogger, stream_attempt: StreamAttempt
+    ) -> CustomStreamWrapper:
         return await self._router_stream(
             recorder,
             [
@@ -11202,6 +11224,7 @@ class TestStreamingClientDisconnectBilling:
                     )
                 ]
             ],
+            stream_attempt,
         )
 
     async def _assert_disconnect_bills_length(
@@ -11217,9 +11240,11 @@ class TestStreamingClientDisconnectBilling:
         assert partial_response.usage.completion_tokens > 0
 
     @pytest.mark.asyncio
-    async def test_router_chat_stream_keeps_the_finish_reason_held_on_the_last_content_frame(self):
+    async def test_router_chat_stream_keeps_the_finish_reason_held_on_the_last_content_frame(
+        self, stream_attempt: StreamAttempt
+    ):
         recorder: Final = _RecordingSuccessLogger()
-        routed: Final = await self._router_stream_holding_a_length_finish(recorder)
+        routed: Final = await self._router_stream_holding_a_length_finish(recorder, stream_attempt)
 
         delivered: Final = await routed.__aiter__().__anext__()
         assert (delivered.choices[0].delta.content, delivered.choices[0].finish_reason) == ("partial answer", None)
@@ -11229,17 +11254,17 @@ class TestStreamingClientDisconnectBilling:
     @pytest.mark.parametrize("through_response_cache", [False, True], ids=["uncached", "response-cache-writer"])
     @pytest.mark.asyncio
     async def test_anthropic_messages_stream_keeps_the_finish_reason_held_on_the_last_content_frame(
-        self, through_response_cache: bool
+        self, through_response_cache: bool, stream_attempt: StreamAttempt
     ):
         from litellm.caching.caching_handler import LLMCachingHandler
         from litellm.llms.anthropic.messages.adapters.streaming_iterator import AnthropicSSEStream
         from litellm.llms.anthropic.messages.adapters.transformation import AnthropicAdapter
         from litellm.llms.anthropic.messages.native import handler
         from litellm.llms.anthropic.messages.native.response_cache import AnthropicMessagesStreamCacheWriter
-        from litellm.router_rust.invoke.streaming import FallbackAwareAnthropicMessagesStream, StreamAttempt
+        from litellm.router_rust.invoke.streaming import FallbackAwareAnthropicMessagesStream
 
         recorder: Final = _RecordingSuccessLogger()
-        routed: Final = await self._router_stream_holding_a_length_finish(recorder)
+        routed: Final = await self._router_stream_holding_a_length_finish(recorder, stream_attempt)
         adapted: Final = AnthropicAdapter().translate_completion_output_params_streaming(
             routed, model="gpt-4o", is_async=True, litellm_logging_obj=routed.logging_obj
         )
@@ -11267,7 +11292,7 @@ class TestStreamingClientDisconnectBilling:
             recorder,
             routed.logging_obj,
             prepare_response_for_header_attachment(
-                FallbackAwareAnthropicMessagesStream(_sse_frames(), source_iterator, MagicMock(spec=StreamAttempt))
+                FallbackAwareAnthropicMessagesStream(_sse_frames(), source_iterator, stream_attempt)
             ),
         )
 
@@ -11351,11 +11376,13 @@ class TestStreamingClientDisconnectBilling:
         self,
         frames: tuple[tuple[tuple[int, str, str | None], ...], ...],
         expected: Mapping[int, str],
+        stream_attempt: StreamAttempt,
     ):
         recorder: Final = _RecordingSuccessLogger()
         routed: Final = await self._router_stream(
             recorder,
             [tuple(self._content_choice(*choice) for choice in frame) for frame in frames],
+            stream_attempt,
         )
         stream_iter: Final = routed.__aiter__()
         delivered: Final = [await stream_iter.__anext__() for _ in frames]
@@ -11393,11 +11420,13 @@ class TestStreamingClientDisconnectBilling:
         self,
         frames: tuple[tuple[tuple[int, str, str | None], ...], ...],
         expected: Mapping[int, str],
+        stream_attempt: StreamAttempt,
     ):
         recorder: Final = _RecordingSuccessLogger()
         routed: Final = await self._router_stream(
             recorder,
             [tuple(self._content_choice(*choice) for choice in frame) for frame in frames],
+            stream_attempt,
         )
         stream_iter: Final = routed.__aiter__()
         for _ in frames:
@@ -11444,21 +11473,26 @@ class TestStreamingClientDisconnectBilling:
     )
     @pytest.mark.asyncio
     async def test_gemini_stream_bills_only_the_finish_reason_the_candidate_sent(
-        self, candidate: Mapping[str, object], expected: str
+        self, candidate: Mapping[str, object], expected: str, stream_attempt: StreamAttempt
     ):
-        partial_response: Final = await self._billed_after_the_first_gemini_frame({"candidates": [candidate]})
+        partial_response: Final = await self._billed_after_the_first_gemini_frame(
+            stream_attempt, {"candidates": [candidate]}
+        )
 
         assert [choice.finish_reason for choice in partial_response.choices] == [expected]
         assert partial_response.usage.completion_tokens > 0
 
     @pytest.mark.asyncio
-    async def test_gemini_frame_that_plans_a_continuation_hop_is_not_billed_as_finished(self):
+    async def test_gemini_frame_that_plans_a_continuation_hop_is_not_billed_as_finished(
+        self, stream_attempt: StreamAttempt
+    ):
         from litellm.types.llms.vertex_ai import GenerationConfig, RequestBody
 
         async def _hop_must_not_open(request_body: RequestBody) -> httpx.Response:
             pytest.fail(f"the client disconnected before the hop, yet it opened with {request_body}")
 
         partial_response: Final = await self._billed_after_the_first_gemini_frame(
+            stream_attempt,
             {
                 "candidates": [
                     {
@@ -11484,7 +11518,7 @@ class TestStreamingClientDisconnectBilling:
     @pytest.mark.parametrize("evidence", ["length", ((0, None),), ((0, "length", "stop"),)])
     @pytest.mark.asyncio
     async def test_unreadable_provider_finish_evidence_bills_unspecified_instead_of_the_synthesized_stop(
-        self, evidence: object
+        self, evidence: object, stream_attempt: StreamAttempt
     ):
         from litellm.constants import PROVIDER_FINISH_REASONS_HIDDEN_PARAM
         from litellm.litellm_core_utils.hidden_params import set_hidden_param
@@ -11499,13 +11533,13 @@ class TestStreamingClientDisconnectBilling:
         set_hidden_param(frame, PROVIDER_FINISH_REASONS_HIDDEN_PARAM, evidence)
 
         partial_response: Final = await self._billed_after_the_first_frame(
-            lambda _: ModelResponseListIterator(model_responses=[frame])
+            stream_attempt, lambda _: ModelResponseListIterator(model_responses=[frame])
         )
 
         assert [choice.finish_reason for choice in partial_response.choices] == ["finish_reason_unspecified"]
 
     async def _billed_after_the_first_gemini_frame(
-        self, frame: Mapping[str, object], resume: AsyncStreamResume | None = None
+        self, stream_attempt: StreamAttempt, frame: Mapping[str, object], resume: AsyncStreamResume | None = None
     ) -> litellm.ModelResponse:
         from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import ModelResponseIterator
 
@@ -11513,16 +11547,15 @@ class TestStreamingClientDisconnectBilling:
             yield f"data: {json.dumps(frame)}"
 
         return await self._billed_after_the_first_frame(
+            stream_attempt,
             lambda logging_obj: ModelResponseIterator(
                 streaming_response=_gemini_sse(), sync_stream=False, logging_obj=logging_obj, resume=resume
-            )
+            ),
         )
 
     async def _billed_after_the_first_frame(
-        self, completion_stream: Callable[[LiteLLMLoggingObj], object]
+        self, stream_attempt: StreamAttempt, completion_stream: Callable[[LiteLLMLoggingObj], object]
     ) -> litellm.ModelResponse:
-        from litellm.router_rust.invoke.streaming import StreamAttempt, open_attempt_stream
-
         model: Final = "gemini-3.8-flash"
         recorder: Final = _RecordingSuccessLogger()
         logging_obj: Final = self._recorded_logging_obj(
@@ -11535,9 +11568,7 @@ class TestStreamingClientDisconnectBilling:
             logging_obj=logging_obj,
             stream_options=None,
         )
-        routed: Final = await open_attempt_stream(
-            MagicMock(spec=StreamAttempt, op="acompletion", slot=None), provider_stream
-        )
+        routed: Final = await open_attempt_stream(stream_attempt, provider_stream)
         assert isinstance(routed, CustomStreamWrapper)
         delivered: Final = await routed.__aiter__().__anext__()
         assert delivered.choices[0].finish_reason is None
