@@ -5,6 +5,7 @@ use serde_json::{Map, Value};
 use super::{
     builders::{self, TokenSource, token_failure},
     environment::GoogleEnvironment,
+    external_authorized_user,
     failure::{GoogleLoginFailure, PythonException, python_str},
 };
 
@@ -150,11 +151,14 @@ fn load_credentials_from_file(
             None,
             Kind::Other,
         )),
-        Some(unsupported @ ("external_account_authorized_user" | "gdch_service_account")) => {
-            Err(default_failure(format!(
-                "The file {file} holds {unsupported} credentials, which the Rust Vertex AI login does not support."
-            )))
-        }
+        Some("external_account_authorized_user") => Ok(found(
+            external_authorized_user::external_account_authorized_user(&info, file)?,
+            None,
+            Kind::Other,
+        )),
+        Some(unsupported @ "gdch_service_account") => Err(default_failure(format!(
+            "The file {file} holds {unsupported} credentials, which the Rust Vertex AI login does not support."
+        ))),
         _ => Err(default_failure(format!(
             "The file {file} does not have a valid type. Type is {}, expected one of {VALID_TYPES}.",
             python_str(info.get("type"))

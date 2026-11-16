@@ -24,6 +24,7 @@ import base64
 import contextlib
 import copy
 import datetime
+import functools
 import gc
 import gzip
 import json
@@ -31,6 +32,7 @@ import logging
 import math
 import os
 import re
+import tempfile
 import threading
 import time
 import uuid
@@ -4575,6 +4577,19 @@ def _service_account(name: str, **fields: JsonValue) -> Mapping[str, JsonValue]:
     )
 
 
+@functools.cache
+def _adc_directory() -> str:
+    return tempfile.mkdtemp(prefix="vertex-adc-")
+
+
+def _adc_file(name: str, info: Mapping[str, JsonValue]) -> str:
+    """A credentials file `GOOGLE_APPLICATION_CREDENTIALS` names for one case."""
+    path: Final = os.path.join(_adc_directory(), f"{name}.json")
+    with open(path, "w", encoding="utf-8") as file:
+        json.dump(dict(info), file)
+    return path
+
+
 def _vertex_login(**kwargs: object) -> Mapping[str, object]:
     return MappingProxyType({"api_key": None, "vertex_location": "us-east5", **kwargs})
 
@@ -4610,6 +4625,50 @@ VERTEX_AUTH_CASES: Final = tuple(
                 vertex_project="p",
                 vertex_location="US EAST",
                 vertex_credentials=dict(_service_account("p3-location")),
+            ),
+            upstream=(),
+        ),
+        Case(
+            "vertex_ai_adc_external_account_authorized_user",
+            _vertex_login(vertex_project="adc-workforce"),
+            env=MappingProxyType(
+                {
+                    "GOOGLE_APPLICATION_CREDENTIALS": _adc_file(
+                        "workforce",
+                        {
+                            "type": "external_account_authorized_user",
+                            "audience": "//iam.googleapis.com/locations/global/workforcePools/p/providers/q",
+                            "refresh_token": "workforce-refresh",
+                            "token_url": f"http://127.0.0.1:{_GOOGLE_TOKENS.server_address[1]}/token",
+                            "client_id": "workforce-client",
+                            "client_secret": "workforce-secret",
+                        },
+                    )
+                }
+            ),
+        ),
+        Case(
+            "vertex_ai_adc_external_account_authorized_user_without_refresh_fields",
+            _vertex_login(vertex_project="adc-workforce-token"),
+            env=MappingProxyType(
+                {
+                    "GOOGLE_APPLICATION_CREDENTIALS": _adc_file(
+                        "workforce-token",
+                        {"type": "external_account_authorized_user", "token": "file-token"},
+                    )
+                }
+            ),
+            upstream=(),
+        ),
+        Case(
+            "vertex_ai_adc_external_account_authorized_user_that_cannot_load",
+            _vertex_login(vertex_project="adc-workforce-nothing"),
+            env=MappingProxyType(
+                {
+                    "GOOGLE_APPLICATION_CREDENTIALS": _adc_file(
+                        "workforce-nothing", {"type": "external_account_authorized_user"}
+                    )
+                }
             ),
             upstream=(),
         ),
