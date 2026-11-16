@@ -172,6 +172,10 @@ const BEDROCK_METADATA_PARAMS: [&str; 2] = ["metadata", "litellm_metadata"];
 const BEDROCK_SPEND_LOGS_METADATA: &str = "spend_logs_metadata";
 const BEDROCK_REQUEST_METADATA_FIELDS: &str = "bedrock_request_metadata_fields";
 
+const VERTEX_AI_PROVIDER: &str = "vertex_ai";
+const VERTEX_REQUEST_LABEL_FIELDS: &str = "vertex_request_label_fields";
+const VERTEX_LABELS_METADATA: &str = "litellm_metadata";
+
 fn text_pairs(value: &Bound<'_, PyAny>) -> PyResult<Map<String, Value>> {
     let Ok(mapping) = value.cast::<PyMapping>() else {
         return Ok(Map::new());
@@ -217,6 +221,49 @@ fn bedrock_litellm_params<'py>(
         );
     }
     Ok(extra)
+}
+
+/// Python's `vertex_request_label_fields()`: a non-empty string names one field, a list or tuple
+/// its string members. With fields set, the call's `litellm_metadata` goes along as the labels'
+/// source.
+fn vertex_litellm_params<'py>(
+    py: Python<'py>,
+    argument: impl Fn(&str) -> PyResult<Option<Bound<'py, PyAny>>>,
+) -> PyResult<Map<String, Value>> {
+    let fields: Vec<Value> = match module_global(py, VERTEX_REQUEST_LABEL_FIELDS)? {
+        Some(configured) if configured.is_instance_of::<PyString>() => {
+            let field = configured.cast::<PyString>()?.to_str()?.to_string();
+            (!field.is_empty())
+                .then_some(Value::String(field))
+                .into_iter()
+                .collect()
+        }
+        Some(configured)
+            if configured.is_instance_of::<PyList>() || configured.is_instance_of::<PyTuple>() =>
+        {
+            configured
+                .try_iter()?
+                .filter_map(|field| match field {
+                    Ok(field) => field
+                        .cast::<PyString>()
+                        .ok()
+                        .map(|text| Ok(Value::String(text.to_str()?.to_string()))),
+                    Err(error) => Some(Err(error)),
+                })
+                .collect::<PyResult<_>>()?
+        }
+        _ => Vec::new(),
+    };
+    if fields.is_empty() {
+        return Ok(Map::new());
+    }
+    let metadata = argument(VERTEX_LABELS_METADATA)?
+        .map(|value| text_pairs(&value))
+        .transpose()?;
+    Ok([(VERTEX_REQUEST_LABEL_FIELDS.to_string(), Value::Array(fields))]
+        .into_iter()
+        .chain(metadata.map(|pairs| (VERTEX_LABELS_METADATA.to_string(), Value::Object(pairs))))
+        .collect())
 }
 
 fn global_drop_params(py: Python<'_>) -> PyResult<bool> {
@@ -713,6 +760,9 @@ impl MessagesPythonHost {
                 azure_settled_params(azure, argument(CALLER_TOKEN_PROVIDER_PARAM)?)?
             }
             (None, true) => bedrock_litellm_params(py, argument)?,
+            (None, false) if custom_llm_provider.as_deref() == Some(VERTEX_AI_PROVIDER) => {
+                vertex_litellm_params(py, argument)?
+            }
             (None, false) => Map::new(),
         };
         let litellm_params = project_litellm_params(provider_fields, settled, argument, |name| {
