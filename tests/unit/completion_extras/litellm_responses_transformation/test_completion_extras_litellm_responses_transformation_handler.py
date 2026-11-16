@@ -1,5 +1,7 @@
+import asyncio
 from collections.abc import Callable
 from datetime import datetime
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -9,6 +11,8 @@ import litellm
 from litellm.completion_extras.litellm_responses_transformation.handler import (
     ResponsesToCompletionBridgeHandler,
 )
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.hidden_params import set_hidden_param
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.types.llms.openai import ResponsesAPIResponse
@@ -299,6 +303,47 @@ def test_completion_streams_completed_model_response(
         f"completed response did not stream its content: {chunks}"
     )
 
+
+
+class _CostRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.logged = asyncio.Event()
+        self.response_costs: list[object] = []
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        self.response_costs.append(kwargs.get("response_cost"))
+        self.logged.set()
+
+
+@pytest.mark.asyncio
+@_COMPLETED_RESULTS
+async def test_acompletion_streamed_completed_response_bills_the_cost_it_carries(
+    completed_result: Callable[[], ModelResponse | ResponsesAPIResponse], monkeypatch: pytest.MonkeyPatch
+):
+    """Emulated file search sums the cost of both of its calls into the completed response, and
+    streaming that response must bill the sum instead of re-pricing only the final message."""
+    summed_cost: Final = 0.0123
+    completed: Final = completed_result()
+    set_hidden_param(completed, "response_cost", summed_cost)
+    recorder: Final = _CostRecorder()
+    monkeypatch.setattr(litellm, "_async_success_callback", [recorder])
+    bridge: Final = ResponsesToCompletionBridgeHandler()
+
+    with (
+        patch.object(
+            bridge.transformation_handler,
+            "transform_request",
+            return_value={"model": "gpt-5.4", "input": "hi"},
+        ),
+        patch("litellm.aresponses", new=AsyncMock(return_value=completed)),
+    ):
+        result = await bridge.acompletion(**_bridge_kwargs(stream=True))
+        assert isinstance(result, CustomStreamWrapper)
+        _ = [chunk async for chunk in result]
+        await asyncio.wait_for(recorder.logged.wait(), timeout=30)
+
+    assert recorder.response_costs == [pytest.approx(summed_cost)]
 
 _PROVIDER_NATIVE_MODEL_CASES = [
     ("perplexity", "perplexity/kimi-k3", "perplexity/kimi-k3"),

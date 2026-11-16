@@ -13,6 +13,7 @@ from typing import (
 
 from typing_extensions import ReadOnly, TypedDict
 
+from litellm.litellm_core_utils.hidden_params import get_hidden_params
 from litellm.types.integrations.custom_logger import CHAT_COMPLETION_AGENTIC_SURFACE
 from litellm.types.llms.openai import ResponsesAPIResponse
 
@@ -417,11 +418,17 @@ class ResponsesToCompletionBridgeHandler:
         from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
         from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
 
+        billed_cost: Final = (get_hidden_params(response) or {}).get("response_cost")
         streamwrapper: Final = CustomStreamWrapper(
             completion_stream=MockResponseIterator(model_response=response, json_mode=json_mode),
             model=model,
             custom_llm_provider=custom_llm_provider,
             logging_obj=logging_obj,
+            response_cost=(
+                float(billed_cost)
+                if isinstance(billed_cost, (int, float)) and not isinstance(billed_cost, bool)
+                else None
+            ),
         )
         return self._apply_post_stream_processing(streamwrapper, model, custom_llm_provider)
 

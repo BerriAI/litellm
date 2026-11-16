@@ -12,6 +12,7 @@ from litellm.constants import REDACTED_BY_LITELLM, REDACTED_TOOL_CALL_ARGUMENTS_
 from litellm.litellm_core_utils.cold_storage_handler import ColdStorageHandler
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_or_none, require_attributes
 from litellm.litellm_core_utils.tool_fields import with_renamed_tool_calls
+from litellm.responses.additional_tools import with_additional_tools_hoisted
 from litellm.responses.litellm_completion_transformation.client_tool_search import (
     bridge_client_tool_search,
     client_tool_search_loaded_tools,
@@ -282,7 +283,9 @@ def _instruction_items_before(
 
 def _stored_request_tools(proxy_server_request: Mapping[str, object] | None) -> object | None:
     """The stored turn's ``tools``, so its calls read the same namespace shapes it was sent with."""
-    return proxy_server_request.get("tools") if proxy_server_request is not None else None
+    if proxy_server_request is None:
+        return None
+    return with_additional_tools_hoisted(proxy_server_request, drop_params=False).get("tools")
 
 
 def _stored_instructions(proxy_server_request: Mapping[str, object] | None) -> str | None:
