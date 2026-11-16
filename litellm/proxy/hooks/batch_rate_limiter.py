@@ -142,13 +142,14 @@ class BatchFileUsage(LiteLLMBaseModel):
     total_tokens: int
     request_count: int
     output_tokens: int = 0
-    # Keyed by each row's own `body.model`, distinct from `total_tokens`/
+    # Keyed by the models each row is charged to (its own `body.model`, and the
+    # alias a model-routed upload routed by), distinct from `total_tokens`/
     # `output_tokens` (the whole-file totals charged to the file-bound/
     # top-level routing model's key/team/model limits). A batch's rows can
     # each target a different model, so the project's per-model ITPM/OTPM
     # quota for a row's actual model must be charged with that row's own
     # tokens -- see `_create_project_io_descriptors_for_models`.
-    per_model_usage: dict[str, dict[str, int]] = Field(default_factory=dict)
+    per_model_usage: dict[tuple[str, ...], dict[str, int]] = Field(default_factory=dict)
 
 
 class _PROXY_BatchRateLimiter(CustomLogger):
@@ -369,23 +370,24 @@ class _PROXY_BatchRateLimiter(CustomLogger):
     def _create_project_io_descriptors_for_models(
         self,
         user_api_key_dict: UserAPIKeyAuth,
-        per_model_usage: Mapping[str, Mapping[str, int]],
+        per_model_usage: Mapping[tuple[str, ...], Mapping[str, int]],
     ) -> tuple[list["RateLimitDescriptor"], list[IncrementAmounts]]:  # mutable-ok: see below
         """Build project ITPM/OTPM descriptors charged against each row's own model.
 
-        One descriptor pair per distinct `body.model` found in the JSONL,
-        each incremented only by that model's own counted usage -- never the
+        One descriptor pair per distinct set of models the JSONL's rows are
+        charged to, so a row whose names share one counter adds to it once,
+        each incremented only by those rows' own counted usage -- never the
         whole-batch total -- so a quota-limited model can't hide behind an
         unlimited routing model, and an unrelated model's rows can't inflate
         a different model's counter.
         """
         extra_descriptors: Final[list[RateLimitDescriptor]] = []  # mutable-ok: see above
         extra_increments: Final[list[IncrementAmounts]] = []  # mutable-ok: see above
-        for model, usage in per_model_usage.items():
+        for models, usage in per_model_usage.items():
             model_descriptors: list[RateLimitDescriptor] = []  # mutable-ok: reset per loop iteration, not module state
-            self.parallel_request_limiter.add_project_io_token_rate_limit_descriptors_from_metadata(
+            self.parallel_request_limiter.add_project_io_token_rate_limit_descriptors_for_models(
                 user_api_key_dict=user_api_key_dict,
-                requested_model=model,
+                requested_models=models,
                 descriptors=model_descriptors,
             )
             for descriptor in model_descriptors:
@@ -766,7 +768,9 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                 if descriptor.get("key") in (PROJECT_ITPM_DESCRIPTOR_KEY, PROJECT_OTPM_DESCRIPTOR_KEY)
                 else None
             )
-            model_usage: Final = batch_usage.per_model_usage.get(descriptor_model) if descriptor_model else None
+            model_usage: Final = next(
+                (usage for models, usage in batch_usage.per_model_usage.items() if descriptor_model in models), None
+            )
             batch_token_count: Final = (
                 (model_usage or {}).get("output_tokens", batch_usage.output_tokens)
                 if descriptor.get("key") == PROJECT_OTPM_DESCRIPTOR_KEY
@@ -935,7 +939,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
 
         Returns:
             BatchFileUsage with total_tokens, output_tokens, request_count, and
-            per_model_usage (each row's own totals, keyed by its `body.model`)
+            per_model_usage (each row's own totals, keyed by the models it is charged to)
         """
         descriptor_otpm_limits: Final = tuple(
             int(v)
@@ -1020,10 +1024,10 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             # Counting stays best-effort, so a legitimate (e.g. multimodal) row
             # the counter can't measure is estimated, not hard-rejected.
             models: Final[set] = set()
-            # Keyed by each row's own `body.model`, so the project ITPM/OTPM
+            # Keyed by the models each row is charged to, so the project ITPM/OTPM
             # quota for that model is charged with only its own rows' tokens,
             # never the whole batch's -- see `_create_project_io_descriptors_for_models`.
-            per_model_usage: Final[dict[str, dict[str, int]]] = {}
+            per_model_usage: Final[dict[tuple[str, ...], dict[str, int]]] = {}
             total_tokens = 0
             output_tokens = 0  # rebind-ok: accumulated per JSONL row in the loop below
             request_count = 0
@@ -1059,11 +1063,10 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                     entry_total_tokens = estimate_batch_entry_tokens(raw_line)
                 total_tokens += entry_total_tokens
 
-                for charged_model in (
-                    dict.fromkeys((model, row_model)) if isinstance(model, str) and isinstance(row_model, str) else ()
-                ):
+                if isinstance(model, str) and isinstance(row_model, str):
                     model_usage = per_model_usage.setdefault(
-                        charged_model, {"total_tokens": 0, "output_tokens": 0, "request_count": 0}
+                        tuple(dict.fromkeys((model, row_model))),
+                        {"total_tokens": 0, "output_tokens": 0, "request_count": 0},
                     )
                     model_usage["total_tokens"] += entry_total_tokens
                     model_usage["output_tokens"] += entry_output_tokens

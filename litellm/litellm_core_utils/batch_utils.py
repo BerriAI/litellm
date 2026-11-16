@@ -262,10 +262,9 @@ def rewrite_rows_naming_model(file_content: FileTypes, model: str, new_model: st
     source: Final = file_content[1] if isinstance(file_content, tuple) else file_content
     if model == new_model or isinstance(source, PathLike) or not _rewound(source):
         return file_content
-    spellings: Final = _json_spellings(model)
     renamed_rows: Final = (
-        sum(_copy_line_renaming_model(line, model, new_model, spellings, output_file) for line in _lines(source))
-        if any(_mentions(line, spellings) for line in _lines(source))
+        sum(_copy_line_renaming_model(line, model, new_model, output_file) for line in _lines(source))
+        if any(_renamed_row(line, model, new_model) is not None for line in _lines(source))
         else 0
     )
     if not isinstance(source, bytes):
@@ -293,22 +292,8 @@ def _lines(source: IO[bytes] | bytes) -> Iterator[bytes]:
     return iter(source)
 
 
-def _json_spellings(value: str) -> frozenset[bytes]:
-    escaped: Final = json.dumps(value)
-    return frozenset(
-        spelling.encode("utf-8")
-        for spelling in (escaped, escaped.replace("/", "\\/"), json.dumps(value, ensure_ascii=False))
-    )
-
-
-def _mentions(line: bytes, spellings: frozenset[bytes]) -> bool:
-    return any(spelling in line for spelling in spellings)
-
-
-def _copy_line_renaming_model(
-    line: bytes, model: str, new_model: str, spellings: frozenset[bytes], output_file: IO[bytes]
-) -> bool:
-    renamed: Final = _renamed_row(line, model, new_model) if _mentions(line, spellings) else None
+def _copy_line_renaming_model(line: bytes, model: str, new_model: str, output_file: IO[bytes]) -> bool:
+    renamed: Final = _renamed_row(line, model, new_model)
     output_file.write(line if renamed is None else renamed)
     return renamed is not None
 

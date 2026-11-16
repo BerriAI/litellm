@@ -25,6 +25,7 @@ from litellm.constants import BATCH_TPD_WINDOW_SECONDS
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.hooks.batch_rate_limiter import BatchFileUsage
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
+    PROJECT_ITPM_DESCRIPTOR_KEY,
     PROXY_MaxParallelRequestsHandler_v3,
 )
 from litellm.proxy.utils import InternalUsageCache, hash_token
@@ -741,28 +742,28 @@ def _row_naming(model: str) -> _BatchLine:
     )
 
 
+def _alias_router(model_group_alias: dict[str, str]) -> litellm.Router:
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": _BATCH_ALIAS,
+                "litellm_params": {
+                    "model": f"openai/{_DEPLOYMENT_MODEL}",
+                    "api_key": "sk-deployment",
+                    "api_base": "https://routed.example/v1",
+                },
+                "model_info": {"id": "alias-deployment"},
+            }
+        ],
+        model_group_alias=model_group_alias,
+    )
+
+
 @pytest.fixture
 def alias_routed_batch(openai_files: respx.MockRouter, monkeypatch: pytest.MonkeyPatch) -> respx.MockRouter:
-    from litellm import Router
     from litellm.proxy import proxy_server
 
-    monkeypatch.setattr(
-        proxy_server,
-        "llm_router",
-        Router(
-            model_list=[
-                {
-                    "model_name": _BATCH_ALIAS,
-                    "litellm_params": {
-                        "model": f"openai/{_DEPLOYMENT_MODEL}",
-                        "api_key": "sk-deployment",
-                        "api_base": "https://routed.example/v1",
-                    },
-                    "model_info": {"id": "alias-deployment"},
-                }
-            ]
-        ),
-    )
+    monkeypatch.setattr(proxy_server, "llm_router", _alias_router({}))
     return openai_files
 
 
@@ -791,7 +792,7 @@ async def test_key_granted_only_the_alias_can_batch_rows_naming_its_deployment_m
         data=dict(data),
     )
 
-    assert usage.per_model_usage[_BATCH_ALIAS]["request_count"] == 1
+    assert usage.per_model_usage[(_BATCH_ALIAS, _DEPLOYMENT_MODEL)]["request_count"] == 1
 
 
 @pytest.mark.asyncio
@@ -819,6 +820,40 @@ async def test_alias_routed_rows_naming_the_deployment_model_are_held_to_both_pr
 
     assert refused.value.status_code == 429
     assert f"project-1:{limited_model}" in str(refused.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_alias_routed_row_is_charged_once_when_the_alias_and_deployment_model_share_a_quota_group(
+    openai_files: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "llm_router", _alias_router({_DEPLOYMENT_MODEL: _BATCH_ALIAS}))
+    openai_files.get(_ROUTED_FILE_URL).mock(
+        side_effect=_serve_file_to_the_deployment_key((_row_naming(_DEPLOYMENT_MODEL),))
+    )
+    internal_usage_cache, rate_limiter, batch_limiter = _make_limiters()
+    api_key: Final = hash_token("sk-batch")
+
+    await batch_limiter.async_pre_call_hook(
+        user_api_key_dict=UserAPIKeyAuth(
+            api_key=api_key,
+            models=[_BATCH_ALIAS],
+            tpd_limit=1_000_000,
+            project_id="project-1",
+            project_metadata={"model_itpm_limit": {_BATCH_ALIAS: 1_000_000}},
+        ),
+        cache=DualCache(),
+        data=dict(_alias_routing("body")),
+        call_type="acreate_batch",
+    )
+
+    key_tokens: Final = await _counter(internal_usage_cache, rate_limiter, "api_key_tpd", api_key, "tokens")
+    project_tokens: Final = await _counter(
+        internal_usage_cache, rate_limiter, PROJECT_ITPM_DESCRIPTOR_KEY, f"project-1:{_BATCH_ALIAS}", "tokens"
+    )
+    assert key_tokens > 0
+    assert project_tokens == key_tokens
 
 
 @pytest.mark.asyncio
@@ -877,7 +912,7 @@ async def test_managed_file_usage_stays_keyed_by_the_row_model(
         data={"input_file_id": _MANAGED_FILE_ID, "model": _MANAGED_DEPLOYMENT_ALIAS},
     )
 
-    assert set(usage.per_model_usage) == {_BATCH_MODEL}
+    assert set(usage.per_model_usage) == {(_BATCH_MODEL,)}
 
 
 @pytest.mark.asyncio
@@ -893,4 +928,4 @@ async def test_batch_routed_by_a_model_missing_from_the_proxy_is_counted_under_t
         data={"input_file_id": "file-abc123", "model": "not-on-this-proxy"},
     )
 
-    assert set(usage.per_model_usage) == {_DEPLOYMENT_MODEL}
+    assert set(usage.per_model_usage) == {(_DEPLOYMENT_MODEL,)}

@@ -3493,7 +3493,21 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         requested_model: str | None,
         descriptors: _RateLimitDescriptorSink,
     ) -> None:
-        candidates: Final = expand_model_latest_alias(requested_model) if requested_model else (None,)
+        self.add_project_io_token_rate_limit_descriptors_for_models(
+            user_api_key_dict=user_api_key_dict,
+            requested_models=(requested_model,) if requested_model else (),
+            descriptors=descriptors,
+        )
+
+    def add_project_io_token_rate_limit_descriptors_for_models(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        requested_models: Sequence[str],
+        descriptors: _RateLimitDescriptorSink,
+    ) -> None:
+        candidates: Final = itertools.chain.from_iterable(
+            expand_model_latest_alias(model) for model in requested_models
+        )
         model_descriptors: Final = tuple(
             itertools.chain.from_iterable(
                 self._project_io_token_rate_limit_descriptors(user_api_key_dict, candidate) for candidate in candidates

@@ -367,9 +367,11 @@ def test_rewrite_rows_naming_model_changes_only_the_model_of_rows_naming_it_and_
     [
         ("team/batch", b'{"body":{"model":"team\\/batch"}}\n'),
         ("日本-batch", b'{"body":{"model":"\\u65e5\\u672c-batch"}}\n'),
+        ("日本-batch", b'{"body":{"model":"\\u65E5\\u672C-batch"}}\n'),
+        ("batch", b'{"body":{"model":"\\u0062atch"}}\n'),
         ("日本-batch", '{"body":{"model":"日本-batch"}}\n'.encode()),
     ],
-    ids=["escaped slash", "escaped non-ascii", "raw non-ascii"],
+    ids=["escaped slash", "escaped non-ascii", "uppercase escaped non-ascii", "escaped ascii", "raw non-ascii"],
 )
 def test_rewrite_rows_naming_model_finds_every_json_spelling_of_the_model(model: str, row: bytes):
     output: Final = BytesIO()
