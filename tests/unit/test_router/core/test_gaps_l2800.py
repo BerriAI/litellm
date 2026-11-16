@@ -175,6 +175,21 @@ def test_a_caller_sent_silent_experiment_flag_still_mirrors_to_the_silent_model_
     assert sorted(host.deployments_called()) == ["d1", "s1"]
 
 
+def test_a_mirrored_call_is_not_mirrored_again_on_the_sync_path(make_core: MakeCore, host: ScriptedHost) -> None:
+    core: Final = make_core(
+        model_list=[
+            deployment("g", "d1", silent_model="shadow"),
+            deployment("shadow", "s1", silent_model="shadow-of-shadow"),
+            deployment("shadow-of-shadow", "s2"),
+        ]
+    )
+    threads_before: Final = frozenset(threading.enumerate())
+    core.completion(model="g", messages=MESSAGES)  # pyright: ignore[reportAttributeAccessIssue]
+    for thread in frozenset(threading.enumerate()) - threads_before:
+        thread.join(timeout=5)
+    assert sorted(host.deployments_called()) == ["d1", "s1"]
+
+
 async def test_silent_experiment_marks_its_own_metadata_when_the_request_metadata_cannot_be_deep_copied(
     make_core: MakeCore, host: ScriptedHost
 ) -> None:
