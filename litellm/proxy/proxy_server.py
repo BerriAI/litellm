@@ -1643,7 +1643,6 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState
             yield state
 
 
-@asynccontextmanager
 def register_prompt_cache_alerts(
     settings: Mapping[str, object], prisma: PrismaClient | None, resources: AsyncExitStack
 ) -> None:
@@ -1664,6 +1663,7 @@ def register_prompt_cache_alerts(
     resources.callback(litellm.logging_callback_manager.remove_callback_from_all_lists, logger)
 
 
+@asynccontextmanager
 async def _proxy_lifespan(app: FastAPI, resources: AsyncExitStack) -> AsyncGenerator[ProxyLifespanState, None]:
     global \
         prisma_client, \

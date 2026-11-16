@@ -258,9 +258,10 @@ def detection(update: Assessed, triggered: Triggered) -> AlertDetection:
 
 
 class PromptCacheAlertLogger(CustomLogger):
-    """Redis or database trouble never fails the request. Evidence lost to a Redis error may have been what ended a
-    streak, so before anything else reaches Redis the lost evidence's deployment is reset as of that request's end.
-    A reset older than a proof's lifetime can no longer matter and is dropped."""
+    """Redis or database trouble never fails the request. Evidence lost to a Redis error, or seen while the shared
+    Redis client is unavailable, may have been what ended a streak, so before anything else reaches Redis the lost
+    evidence's deployment is reset as of that request's end. A reset older than a proof's lifetime can no longer
+    matter and is dropped."""
 
     def __init__(
         self,
@@ -290,16 +291,22 @@ class PromptCacheAlertLogger(CustomLogger):
             return await apply(run, update, now_ms)
         except _STORE_FAILURES as error:
             verbose_proxy_logger.warning("prompt cache alert streak unavailable (%s)", type(error).__name__)
-            lost: Final = max(self._lost.get(update.deployment_id, update.ended_ms), update.ended_ms)
-            self._lost = MappingProxyType({**self._lost, update.deployment_id: lost})
+            self._remember(update)
             return None
+
+    def _remember(self, update: Update) -> None:
+        lost: Final = max(self._lost.get(update.deployment_id, update.ended_ms), update.ended_ms)
+        self._lost = MappingProxyType({**self._lost, update.deployment_id: lost})
 
     async def _observe(self, kwargs: Mapping[str, object], succeeded: bool) -> None:
         from prisma.errors import PrismaError
 
+        update: Final = await offload_token_count(observe)(kwargs, self._key, succeeded)
         run: Final = self._script()
-        update: Final = await offload_token_count(observe)(kwargs, self._key, succeeded) if run else None
-        if run is None or update is None:
+        if update is None:
+            return
+        if run is None:
+            self._remember(update)
             return
         now_ms: Final = int(self._clock() * 1000)
         triggered: Final = await self._apply(run, update, now_ms)

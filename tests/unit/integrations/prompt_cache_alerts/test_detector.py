@@ -245,6 +245,30 @@ async def test_a_lost_reset_older_than_any_proof_is_dropped() -> None:
     assert script.events() == ["miss"]
 
 
+class _Reloadable:
+    """The proxy's shared Redis getter, which a config reload can briefly leave empty."""
+
+    def __init__(self, script: _Script) -> None:
+        self.current: _Script | None = script
+
+    def __call__(self) -> _Script | None:
+        return self.current
+
+
+async def test_evidence_seen_while_redis_is_reloading_resets_its_deployment_once_redis_is_back() -> None:
+    """The read during the gap ended the streak, so the miss after it must not extend the misses before it."""
+    script: Final = _Script()
+    getter: Final = _Reloadable(script)
+    logger: Final = PromptCacheAlertLogger(_KEY, getter, _Alerts(), clock=lambda: _CLOCK_MS / 1000)
+    await _log(logger, _kwargs(call_id="a", at=_START + 10))
+    getter.current = None
+    await _log(logger, _kwargs(call_id="hit", at=_START + 11, raw=_raw(512, 0)))
+    getter.current = script
+    await _log(logger, _kwargs(call_id="c", at=_START + 12))
+    assert script.events() == ["miss", "reset", "miss"]
+    assert script.calls[1][1][2] == int((_START + 11.5) * 1000)
+
+
 async def test_evidence_lost_while_an_older_reset_is_in_flight_is_reset_before_later_evidence() -> None:
     script: Final = _Script(failing=frozenset({0, 2}), hold_at=1)
     logger: Final = _logger(script, _Alerts())
