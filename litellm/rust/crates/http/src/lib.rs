@@ -12,6 +12,7 @@ pub mod outbound;
 mod pool;
 mod proxy;
 pub mod request;
+pub mod requests_env;
 mod settings;
 mod tls;
 pub mod websocket;
