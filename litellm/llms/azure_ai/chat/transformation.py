@@ -101,9 +101,12 @@ def _registered_catalog_row(key: str) -> Mapping[str, object] | None:
 
 
 def _catalog_row(key: str) -> Mapping[str, object] | None:
-    exact: Final = _registered_catalog_row(key)
     canonical: Final = GetModelCostMap.loaded_model_cost_map_key(key)
-    return exact if exact is not None or canonical is None else _registered_catalog_row(canonical)
+    catalog_row: Final = _registered_catalog_row(canonical) if canonical is not None else None
+    registered_row: Final = _registered_catalog_row(key)
+    if catalog_row is None or registered_row is None:
+        return registered_row if catalog_row is None else catalog_row
+    return {**catalog_row, **registered_row}
 
 
 def _catalog_levels(model: str) -> tuple[str, ...] | None:
