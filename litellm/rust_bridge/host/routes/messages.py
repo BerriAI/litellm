@@ -16,12 +16,12 @@ import ssl
 from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Iterable, Iterator, Mapping, Sequence
 from dataclasses import asdict, dataclass, replace
 from types import MappingProxyType
-from typing import (  # noqa: TID251  # narrows native payloads to public TypedDicts
+from typing import (
     Final,
     Literal,
     TypeAlias,
     TypeVar,
-    cast,
+    cast,  # noqa: TID251  # narrows native payloads to public TypedDicts
 )
 from urllib.parse import SplitResult, urlsplit
 
