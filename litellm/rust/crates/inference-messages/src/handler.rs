@@ -67,6 +67,7 @@ struct ProviderCall {
 struct NativeOutputFallback {
     input: MessagesRequest,
     context: MessagesTransformContext,
+    url: String,
     headers: Vec<(String, String)>,
     tool_custom_field: litellm_llms::base_llm::messages::tools::ToolCustomField,
     drops_unsupported_params: bool,
@@ -83,7 +84,11 @@ impl NativeOutputFallback {
             &self.headers,
             self.drop_params,
         )?;
-        let (rebuilt, _) = config.finalize_request(rebuilt, self.headers.clone(), &self.context)?;
+        let (rebuilt, _) = config.finalize_request(
+            config.request_for_url(rebuilt, &self.url),
+            self.headers.clone(),
+            &self.context,
+        )?;
         Ok(config.wire_body(serde_json::to_value(&rebuilt).map_err(serialize_failure)?))
     }
 }
@@ -416,6 +421,7 @@ async fn provider_call(
     let native_output_fallback = fallback.map(|(input, context)| NativeOutputFallback {
         input,
         context,
+        url: url.clone(),
         headers: headers.clone(),
         tool_custom_field,
         drops_unsupported_params: shaping.settings.drops_unsupported_params,
@@ -1980,6 +1986,68 @@ mod tests {
             authorization.contains(&format!("/us-west-2/{service}/aws4_request")),
             "{authorization}"
         );
+    }
+
+    #[tokio::test]
+    async fn the_native_output_retry_drops_unsigned_thinking_too() {
+        let model = "bedrock/invoke/us.anthropic.claude-sonnet-5-5-v1:0";
+        let tool_use = json!({
+            "type": "tool_use", "id": "toolu_1", "name": "Read", "input": {"file_path": "numbers.txt"}
+        });
+        let call = provider_call_for(MessagesCall {
+            body: body(json!({
+                "model": model,
+                "max_tokens": 64,
+                "messages": [
+                    {"role": "user", "content": "Read numbers.txt."},
+                    {"role": "assistant", "content": [
+                        {"type": "thinking", "thinking": "Read it first.", "signature": ""},
+                        tool_use
+                    ]},
+                    {"role": "user", "content": [
+                        {"type": "tool_result", "tool_use_id": "toolu_1", "content": "3 7 12"}
+                    ]}
+                ],
+                "output_config": {"format": {"type": "json_schema", "schema": {
+                    "type": "object", "properties": {"sum": {"type": "integer"}}, "required": ["sum"]
+                }}}
+            })),
+            api_key: None,
+            api_base: None,
+            custom_llm_provider: None,
+            litellm_params: crate::litellm_params(Map::from_iter([
+                ("model".into(), json!(model)),
+                ("aws_access_key_id".into(), json!("AKIDEXAMPLE")),
+                ("aws_secret_access_key".into(), json!("secret")),
+                ("aws_region_name".into(), json!("us-east-1")),
+            ]))
+            .unwrap(),
+            extra_headers: None,
+            provider_specific_header: None,
+            timeout: None,
+            shaping: MessagesShaping {
+                capabilities: litellm_llms::base_llm::messages::context::MessagesModelCapabilities {
+                    bedrock: litellm_llms::base_llm::messages::context::BedrockCapabilities {
+                        native_output: litellm_llms::base_llm::messages::context::NativeOutputSupport {
+                            opt_in: true,
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        })
+        .await
+        .unwrap();
+        let retried = call
+            .native_output_fallback
+            .as_ref()
+            .unwrap()
+            .body(call.provider.config())
+            .unwrap();
+        assert_eq!(retried["messages"][1]["content"], json!([tool_use]));
     }
 
     #[rstest]

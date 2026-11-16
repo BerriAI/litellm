@@ -2,7 +2,12 @@ use crate::anthropic::messages::transformation::retry_anthropic_messages_after_h
 use litellm_host::interceptors::RetriedRequest;
 
 use crate::{
-    anthropic::messages::handler::shape_anthropic_messages_request,
+    anthropic::{
+        common_utils::{
+            map_messages, strip_raw_unsignable_thinking_blocks, strip_unsignable_thinking_blocks,
+        },
+        messages::handler::shape_anthropic_messages_request,
+    },
     base_llm::messages::context::{
         MessagesShapeOptions, MessagesTransformContext, NativeOutputSupport,
     },
@@ -241,6 +246,17 @@ impl BaseMessagesConfig for AmazonAnthropicClaudeMessagesConfig {
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<String, Error> {
         invoke_url(api_base, model, litellm_params, stream, env_lookup)
+    }
+
+    fn request_for_url(&self, request: MessagesRequest, _url: &str) -> MessagesRequest {
+        MessagesRequest {
+            messages: map_messages(
+                request.messages,
+                strip_unsignable_thinking_blocks,
+                strip_raw_unsignable_thinking_blocks,
+            ),
+            ..request
+        }
     }
 
     /// Python's `transform_anthropic_messages_request`, which picks the betas from the caller's
@@ -843,5 +859,49 @@ mod tests {
                 .wire_body(serde_json::json!({"model": "m", "stream": true, "max_tokens": 1})),
             serde_json::json!({"max_tokens": 1})
         );
+    }
+
+    #[test]
+    fn unsigned_thinking_is_dropped_and_signed_thinking_kept() {
+        let unsigned =
+            serde_json::json!({"type": "thinking", "thinking": "Read it first.", "signature": ""});
+        let tool_use = serde_json::json!({
+            "type": "tool_use", "id": "toolu_1", "name": "Read", "input": {"file_path": "numbers.txt"}
+        });
+        let non_string_signature =
+            serde_json::json!({"type": "thinking", "thinking": "Add them.", "signature": 5});
+        let unparsed_text =
+            serde_json::json!({"type": "text", "text": "22", "cache_control": "ephemeral"});
+        let signed = serde_json::json!({"type": "thinking", "thinking": "Multiply.", "signature": "c2lnbmVk"});
+        let request: MessagesRequest = serde_json::from_value(serde_json::json!({
+            "model": "us.anthropic.claude-sonnet-5-5-v1:0",
+            "max_tokens": 64,
+            "messages": [
+                {"role": "user", "content": "Read numbers.txt."},
+                {"role": "assistant", "content": [unsigned, tool_use]},
+                {"role": "user", "content": [
+                    {"type": "tool_result", "tool_use_id": "toolu_1", "content": "3 7 12"}
+                ]},
+                {"role": "assistant", "content": [non_string_signature, unparsed_text]},
+                {"role": "user", "content": "And the product?"},
+                {"role": "assistant", "content": [signed, {"type": "text", "text": "252"}]},
+                {"role": "user", "content": "Thanks."}
+            ]
+        }))
+        .unwrap();
+        let sent = serde_json::to_value(AmazonAnthropicClaudeMessagesConfig.request_for_url(
+            request,
+            "https://bedrock-runtime.us-west-2.amazonaws.com/model/x/invoke",
+        ))
+        .unwrap();
+        assert_eq!(
+            sent["messages"][1]["content"],
+            serde_json::json!([tool_use])
+        );
+        assert_eq!(
+            sent["messages"][3]["content"],
+            serde_json::json!([unparsed_text])
+        );
+        assert_eq!(sent["messages"][5]["content"][0], signed);
     }
 }
