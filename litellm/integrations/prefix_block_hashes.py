@@ -2,19 +2,28 @@ import asyncio
 import hashlib
 import hmac
 import json
+import os
 from collections.abc import Callable, Mapping
 from itertools import accumulate
+from threading import BoundedSemaphore
 from typing import Final
 
 from pydantic import TypeAdapter
 
 from litellm._logging import verbose_logger
 from litellm.caching.dual_cache import DualCache
-from litellm.constants import PREFIX_BLOCK_HASHES_BLOCK_SIZE
+from litellm.constants import (
+    PREFIX_BLOCK_HASHES_BLOCK_SIZE,
+    PREFIX_BLOCK_HASHES_MAX_CHARS,
+    TOKEN_COUNTER_MAX_CONCURRENT_COUNTS,
+)
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, get_metadata_variable_name_from_kwargs
+from litellm.litellm_core_utils.initialize_dynamic_callback_params import initialize_standard_callback_dynamic_params
+from litellm.litellm_core_utils.redact_messages import (
+    should_redact_message_logging,  # pyright: ignore[reportUnknownVariableType]  # legacy helper accepts an untyped dict
+)
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.common_utils.encrypt_decrypt_utils import get_salt_key
 from litellm.types.utils import CallTypesLiteral
 from litellm.utils import (
     encode,  # pyright: ignore[reportUnknownVariableType]  # tokenizer SDKs have partial return types
@@ -22,6 +31,11 @@ from litellm.utils import (
 
 _TOKEN_IDS: Final = TypeAdapter(tuple[int, ...])
 _ITEMS: Final = TypeAdapter(tuple[object, ...])
+_HASH_JOBS: Final = BoundedSemaphore(TOKEN_COUNTER_MAX_CONCURRENT_COUNTS)
+
+
+def _secret() -> str | None:
+    return os.getenv("LITELLM_PREFIX_BLOCK_HASHES_SECRET")
 
 
 def _text(content: object) -> str:
@@ -62,9 +76,14 @@ def _hash_ids(tokens: tuple[int, ...], key: str) -> tuple[str, ...]:
 
 
 class PrefixBlockHashes(CustomLogger):
-    def __init__(self, tokenizer: Callable[[str, str], tuple[int, ...]] = _encode_prompt) -> None:
+    def __init__(
+        self,
+        tokenizer: Callable[[str, str], tuple[int, ...]] = _encode_prompt,
+        secret: Callable[[], str | None] = _secret,
+    ) -> None:
         super().__init__()  # pyright: ignore[reportUnknownMemberType]  # legacy base accepts untyped optional kwargs
         self._tokenizer: Final = tokenizer
+        self._secret: Final = secret
 
     async def async_pre_call_hook(
         self,
@@ -77,17 +96,35 @@ class PrefixBlockHashes(CustomLogger):
         if call_type not in ("completion", "acompletion") or not isinstance(messages, list) or not messages:
             return data if isinstance(data, dict) else dict(data)
         try:
-            key: Final = get_salt_key()
+            if should_redact_message_logging(
+                {
+                    "litellm_params": dict(data),
+                    "standard_callback_dynamic_params": initialize_standard_callback_dynamic_params(dict(data)),
+                }
+            ):
+                verbose_logger.debug("Prefix block hashing skipped because message logging is redacted")
+                return data if isinstance(data, dict) else dict(data)
+            key: Final = self._secret()
             if not key:
-                verbose_logger.debug("Prefix block hashing skipped because no salt key is configured")
+                verbose_logger.debug("Prefix block hashing skipped because no dedicated secret is configured")
                 return data if isinstance(data, dict) else dict(data)
             tools: Final = data.get("tools")
             tools_text: Final = json.dumps(tools, sort_keys=True, separators=(",", ":")) if tools else ""
             prompt: Final = tools_text + "".join(_message_text(message) for message in _ITEMS.validate_python(messages))
+            if len(prompt) > PREFIX_BLOCK_HASHES_MAX_CHARS:
+                verbose_logger.debug("Prefix block hashing skipped because the prompt exceeds its size budget")
+                return data if isinstance(data, dict) else dict(data)
             model: Final = data.get("model")
-            hash_ids: Final = await asyncio.to_thread(
-                _encode_and_hash, self._tokenizer, model if isinstance(model, str) else "", prompt, key
+            if not _HASH_JOBS.acquire(blocking=False):
+                verbose_logger.debug("Prefix block hashing skipped because hash workers are busy")
+                return data if isinstance(data, dict) else dict(data)
+            job: Final = asyncio.create_task(
+                asyncio.to_thread(
+                    _encode_and_hash, self._tokenizer, model if isinstance(model, str) else "", prompt, key
+                )
             )
+            job.add_done_callback(lambda completed: _HASH_JOBS.release())
+            hash_ids: Final = await asyncio.shield(job)
             bucket: Final = get_metadata_variable_name_from_kwargs(data)
             metadata: Final[Mapping[str, object]] = as_str_mapping(data.get(bucket)) or {}
             spend_metadata: Final = as_str_mapping(metadata.get("spend_logs_metadata")) or {}

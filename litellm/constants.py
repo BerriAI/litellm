@@ -577,6 +577,12 @@ TOKEN_COUNTER_MAX_CONCURRENT_COUNTS: Final = get_env_int_in_range(
     minimum=1,
     maximum=256,
 )
+PREFIX_BLOCK_HASHES_MAX_CHARS: Final = get_env_int_in_range(
+    "LITELLM_PREFIX_BLOCK_HASHES_MAX_CHARS",
+    default=min(65_536, TOKEN_COUNTER_MAX_EXACT_CHARS),
+    minimum=1,
+    maximum=TOKEN_COUNTER_MAX_EXACT_CHARS,
+)
 MAX_TILE_WIDTH: Final = get_env_int("MAX_TILE_WIDTH", 512)
 MAX_TILE_HEIGHT: Final = get_env_int("MAX_TILE_HEIGHT", 512)
 OPENAI_FILE_SEARCH_COST_PER_1K_CALLS: Final = get_env_float("OPENAI_FILE_SEARCH_COST_PER_1K_CALLS", 2.5 / 1000)

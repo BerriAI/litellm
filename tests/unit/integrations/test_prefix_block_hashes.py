@@ -1,3 +1,4 @@
+import asyncio
 import copy
 import json
 import math
@@ -8,8 +9,13 @@ from typing import Final
 import pytest
 from pydantic import TypeAdapter
 
+import litellm
 from litellm.caching.dual_cache import DualCache
-from litellm.constants import PREFIX_BLOCK_HASHES_BLOCK_SIZE
+from litellm.constants import (
+    PREFIX_BLOCK_HASHES_BLOCK_SIZE,
+    PREFIX_BLOCK_HASHES_MAX_CHARS,
+    TOKEN_COUNTER_MAX_CONCURRENT_COUNTS,
+)
 from litellm.integrations.prefix_block_hashes import PrefixBlockHashes
 from litellm.litellm_core_utils.litellm_logging import (
     build_custom_logger_compatible_class,
@@ -34,8 +40,9 @@ async def _call(data: dict[str, object], call_type: CallTypesLiteral = "completi
 
 
 @pytest.fixture(autouse=True)
-def salt(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("LITELLM_SALT_KEY", "prefix-test-salt")
+def secret(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LITELLM_PREFIX_BLOCK_HASHES_SECRET", "prefix-test-secret")
+    monkeypatch.setattr(litellm, "turn_off_message_logging", False)
 
 
 @pytest.mark.asyncio
@@ -71,10 +78,10 @@ async def test_tool_result_identity_changes_hash(field: str) -> None:
 
 
 @pytest.mark.asyncio
-async def test_salt_changes_ids(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_secret_changes_ids(monkeypatch: pytest.MonkeyPatch) -> None:
     data: Final = {"model": "gpt-4o", "messages": [{"role": "user", "content": "hello"}]}
     first: Final = await _call(data)
-    monkeypatch.setenv("LITELLM_SALT_KEY", "another-test-salt")
+    monkeypatch.setenv("LITELLM_PREFIX_BLOCK_HASHES_SECRET", "another-test-secret")
     second: Final = await _call(data)
     assert _hashes(first) != _hashes(second)
 
@@ -130,10 +137,80 @@ async def test_missing_messages_are_untouched(data: dict[str, object]) -> None:
 
 
 @pytest.mark.asyncio
-async def test_missing_salt_leaves_request_untouched(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("LITELLM_SALT_KEY", "")
+async def test_missing_secret_leaves_request_untouched(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("LITELLM_PREFIX_BLOCK_HASHES_SECRET")
+    monkeypatch.setenv("LITELLM_SALT_KEY", "not-a-hashing-secret")
+    monkeypatch.setenv("LITELLM_MASTER_KEY", "not-a-hashing-secret")
     data: Final = {"messages": [{"role": "user", "content": "hello"}]}
     assert await _call(data) is data
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("size", (PREFIX_BLOCK_HASHES_MAX_CHARS, 20 * 1024 * 1024))
+async def test_oversize_prompt_skips_tokenization(size: int) -> None:
+    callback: Final = PrefixBlockHashes(tokenizer=lambda model, prompt: (1,))
+    data: Final = {"messages": [{"role": "user", "content": "x" * size}]}
+    assert await callback.async_pre_call_hook(UserAPIKeyAuth(), DualCache(), data, "completion") is data
+
+
+@pytest.mark.asyncio
+async def test_prompt_at_size_budget_still_hashes() -> None:
+    callback: Final = PrefixBlockHashes(tokenizer=lambda model, prompt: (1,))
+    data: Final = {"messages": [{"role": "user", "content": "x" * (PREFIX_BLOCK_HASHES_MAX_CHARS - len("\nuser\n"))}]}
+    assert len(_hashes(await callback.async_pre_call_hook(UserAPIKeyAuth(), DualCache(), data, "completion"))) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("enabled", (False, True))
+@pytest.mark.parametrize("control", ("global", "request", "metadata", "litellm_metadata", "header"))
+async def test_message_redaction_controls_hashing(monkeypatch: pytest.MonkeyPatch, enabled: bool, control: str) -> None:
+    monkeypatch.setattr(litellm, "turn_off_message_logging", enabled if control == "global" else False)
+    settings: Final = {"turn_off_message_logging": enabled}
+    controls: Final = (
+        settings
+        if control == "request"
+        else {control: settings}
+        if control in ("metadata", "litellm_metadata")
+        else {"metadata": {"headers": {"litellm-enable-message-redaction": enabled}}}
+        if control == "header"
+        else {}
+    )
+    data: Final = {"messages": [{"role": "user", "content": "hello"}], **controls}
+    result: Final = await _call(data)
+    if enabled:
+        assert result is data
+    else:
+        assert len(_hashes(result, "litellm_metadata" if control == "litellm_metadata" else "metadata")) == 1
+
+
+@pytest.mark.asyncio
+async def test_busy_hash_workers_skip_without_queuing_and_cancellation_keeps_limit() -> None:
+    loop: Final = asyncio.get_running_loop()
+    started: Final[asyncio.Queue[None]] = asyncio.Queue()
+    release: Final = threading.Event()
+
+    def tokenizer(model: str, prompt: str) -> tuple[int, ...]:
+        loop.call_soon_threadsafe(started.put_nowait, None)
+        release.wait()
+        return (1,)
+
+    callback: Final = PrefixBlockHashes(tokenizer=tokenizer)
+    data: Final = {"messages": [{"role": "user", "content": "hello"}]}
+    jobs: Final = tuple(
+        asyncio.create_task(callback.async_pre_call_hook(UserAPIKeyAuth(), DualCache(), data, "completion"))
+        for _ in range(TOKEN_COUNTER_MAX_CONCURRENT_COUNTS)
+    )
+    try:
+        for _ in jobs:
+            await started.get()
+        assert await callback.async_pre_call_hook(UserAPIKeyAuth(), DualCache(), data, "completion") is data
+        jobs[0].cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await jobs[0]
+        assert await callback.async_pre_call_hook(UserAPIKeyAuth(), DualCache(), data, "completion") is data
+    finally:
+        release.set()
+        await asyncio.gather(*jobs, return_exceptions=True)
 
 
 @pytest.mark.asyncio
