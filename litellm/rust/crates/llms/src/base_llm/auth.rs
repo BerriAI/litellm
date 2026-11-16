@@ -15,7 +15,7 @@ use litellm_http::request::with_header;
 
 pub type Headers = Vec<(String, String)>;
 
-const ENTRA_AUTHORIZATION_HEADER: &str = "Authorization";
+const PYTHON_AUTHORIZATION_KEY: &str = "Authorization";
 
 #[derive(Clone, Debug)]
 pub enum AuthScheme {
@@ -49,7 +49,8 @@ pub enum AuthScheme {
         unhosted: Result<(), litellm_auth::Error>,
     },
     /// A Google access token for the Vertex AI project the config names, acquired when the
-    /// request is sent through the shared GCP token cache.
+    /// request is sent through the shared GCP token cache and set under Python's exact
+    /// `Authorization` key.
     GcpAccessToken { config: Box<VertexConfig> },
     /// AWS SigV4 over the bytes that go on the wire, so the handler signs after the body is
     /// serialized.
@@ -162,14 +163,16 @@ pub async fn resolve_auth(
                 })?;
             Ok(Authenticated {
                 headers: match token {
-                    Some(token) => with_entra_bearer(headers, token.value().secret().expose()),
+                    Some(token) => {
+                        with_python_authorization_bearer(headers, token.value().secret().expose())
+                    }
                     None => headers,
                 },
                 signer: None,
             })
         }
         AuthScheme::AzureAdTokenValue { secret } => Ok(Authenticated {
-            headers: with_entra_bearer(headers, secret.expose()),
+            headers: with_python_authorization_bearer(headers, secret.expose()),
             signer: None,
         }),
         AuthScheme::PythonHostedAzureAdToken { unhosted, .. } => unhosted.map(|()| Authenticated {
@@ -184,7 +187,7 @@ pub async fn resolve_auth(
         AuthScheme::GcpAccessToken { config } => {
             let token = services.gcp.access_token(&config, env_lookup).await?;
             Ok(Authenticated {
-                headers: with_credential(headers, CredentialPlacement::Bearer, &token),
+                headers: with_python_authorization_bearer(headers, &token),
                 signer: None,
             })
         }
@@ -204,14 +207,15 @@ pub async fn resolve_auth(
     }
 }
 
-/// Python's `_base_validate_azure_environment` sets `headers["Authorization"]`: only that exact
-/// key is replaced, and a caller `authorization` in another casing is joined with it on the wire.
-fn with_entra_bearer(headers: Headers, token: &str) -> Headers {
+/// Python's `headers["Authorization"] = f"Bearer {token}"`, as the Azure and Vertex configs set
+/// it: only that exact key is replaced, and a caller `authorization` in another casing is joined
+/// with it on the wire.
+fn with_python_authorization_bearer(headers: Headers, token: &str) -> Headers {
     headers
         .into_iter()
-        .filter(|(name, _)| name != ENTRA_AUTHORIZATION_HEADER)
+        .filter(|(name, _)| name != PYTHON_AUTHORIZATION_KEY)
         .chain([(
-            ENTRA_AUTHORIZATION_HEADER.to_string(),
+            PYTHON_AUTHORIZATION_KEY.to_string(),
             format!("Bearer {token}"),
         )])
         .collect()
@@ -391,6 +395,64 @@ mod tests {
             },
         )
         .await;
+        assert_eq!(authenticated.headers, headers(expected));
+    }
+
+    struct GoogleToken;
+
+    impl litellm_auth_gcp::GcpTokenSource for GoogleToken {
+        fn project_id(&self) -> litellm_auth_gcp::GcpAuthFuture<'_, String> {
+            Box::pin(async { Ok("proj".to_string()) })
+        }
+
+        fn token(&self) -> litellm_auth_gcp::GcpAuthFuture<'_, SecretValue> {
+            Box::pin(async { Ok(SecretValue::new("google")) })
+        }
+    }
+
+    impl litellm_auth_gcp::GcpProviderLoader for GoogleToken {
+        fn load(
+            &self,
+            _source: litellm_auth_gcp::CredentialSource,
+        ) -> litellm_auth_gcp::GcpAuthFuture<'_, Arc<dyn litellm_auth_gcp::GcpTokenSource>>
+        {
+            Box::pin(async {
+                Ok(Arc::new(GoogleToken) as Arc<dyn litellm_auth_gcp::GcpTokenSource>)
+            })
+        }
+    }
+
+    #[rstest]
+    #[case::pythons_exact_key_is_replaced(
+        &[("Authorization", "Bearer caller"), ("x-trace", "1")],
+        &[("x-trace", "1"), ("Authorization", "Bearer google")]
+    )]
+    #[case::another_casing_stays_beside_it(
+        &[("authorization", "Bearer caller")],
+        &[("authorization", "Bearer caller"), ("Authorization", "Bearer google")]
+    )]
+    #[case::no_caller_credential(&[], &[("Authorization", "Bearer google")])]
+    #[tokio::test]
+    async fn a_google_token_is_set_under_pythons_authorization_key(
+        #[case] forwarded: &[(&str, &str)],
+        #[case] expected: &[(&str, &str)],
+    ) {
+        let services = AuthServices {
+            gcp: litellm_auth_gcp::VertexAuth::new(Arc::new(GoogleToken)),
+            ..AuthServices::default()
+        };
+        let authenticated = resolve_auth(
+            &services,
+            ValidatedEnvironment {
+                headers: headers(forwarded),
+                auth: AuthScheme::GcpAccessToken {
+                    config: Box::new(VertexConfig::default()),
+                },
+            },
+            &no_env,
+        )
+        .await
+        .unwrap();
         assert_eq!(authenticated.headers, headers(expected));
     }
 

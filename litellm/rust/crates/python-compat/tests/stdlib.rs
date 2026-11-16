@@ -102,7 +102,15 @@ fn quote_matches_urllib() {
 }
 
 fn fields(url: &ParsedUrl) -> [String; 6] {
-    [&url.scheme, &url.netloc, &url.path, &url.params, &url.query, &url.fragment].map(Clone::clone)
+    [
+        &url.scheme,
+        &url.netloc,
+        &url.path,
+        &url.params,
+        &url.query,
+        &url.fragment,
+    ]
+    .map(Clone::clone)
 }
 
 #[test]
