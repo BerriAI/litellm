@@ -230,6 +230,8 @@ def test_provider_defaults_read_the_litellm_globals(monkeypatch: pytest.MonkeyPa
     monkeypatch.setattr(litellm, "enable_azure_ad_token_refresh", True)
     monkeypatch.setattr(litellm, "api_key", "module-key")
     monkeypatch.setattr(litellm, "azure_key", "azure-module-key")
+    monkeypatch.setattr(litellm, "drop_params", True)
+    monkeypatch.setattr(litellm, "bedrock_request_metadata_fields", ["team"])
 
     assert settings.provider_defaults() == settings.ProviderDefaults(
         vertex_project="configured-project",
@@ -237,4 +239,6 @@ def test_provider_defaults_read_the_litellm_globals(monkeypatch: pytest.MonkeyPa
         enable_azure_ad_token_refresh=True,
         api_key="module-key",
         azure_key="azure-module-key",
+        drop_params=True,
+        bedrock_request_metadata_fields=["team"],
     )

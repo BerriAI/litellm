@@ -2,13 +2,42 @@ mod machine;
 
 pub(crate) use machine::LoggedMachine;
 
-use litellm_host_python::Pythonized;
-use litellm_tracing::{DiagnosticInput, Level, Logger, Metadata, Policy, Processor, Record, Sink};
+use std::sync::atomic::{AtomicU8, Ordering};
+
+use litellm_host_python::{Pythonized, release_gil};
+use litellm_tracing::{
+    DiagnosticInput, Level, Logger, Metadata, Policy, Processor, Record, Sink, TokenRedactor,
+};
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
+use pyo3::pybacked::PyBackedStr;
 
 const MODULE: &str = "litellm.rust_bridge.host.logger";
 type NativeDiagnosticOutput = (String, Option<String>, Option<String>, Vec<String>, bool);
+
+#[pyclass]
+pub(crate) struct NativeTokenRedactor {
+    inner: TokenRedactor,
+}
+
+#[pymethods]
+impl NativeTokenRedactor {
+    #[new]
+    fn new(minimum_custom_key_length: usize, word_ranges: Vec<(u32, u32)>) -> Self {
+        Self {
+            inner: TokenRedactor::new(minimum_custom_key_length, word_ranges),
+        }
+    }
+
+    fn redact(
+        &self,
+        py: Python<'_>,
+        text: PyBackedStr,
+        replacement: PyBackedStr,
+    ) -> Option<String> {
+        release_gil(py, || self.inner.redact(&text, &replacement))
+    }
+}
 
 #[pyclass]
 pub(crate) struct NativeDiagnosticProcessor {
@@ -91,6 +120,40 @@ fn processing_error(error: fancy_regex::Error) -> PyErr {
 
 struct PythonSink {
     correlation: (String, String),
+    levels: Option<Levels>,
+}
+
+#[derive(Default)]
+struct Levels([AtomicU8; 4]);
+
+const UNKNOWN: u8 = 0;
+const DISABLED: u8 = 1;
+const ENABLED: u8 = 2;
+
+impl Levels {
+    fn enabled(&self, level: u8, query: impl FnOnce() -> bool) -> bool {
+        let slot = &self.0[usize::from(level / 10 - 1)];
+        match slot.load(Ordering::Relaxed) {
+            UNKNOWN => {
+                let enabled = query();
+                slot.store(if enabled { ENABLED } else { DISABLED }, Ordering::Relaxed);
+                enabled
+            }
+            state => state == ENABLED,
+        }
+    }
+}
+
+fn python_enabled(level: u8) -> bool {
+    Python::try_attach(|py| {
+        report(
+            py,
+            py.import(MODULE)
+                .and_then(|module| module.call_method1("enabled", (level,)))
+                .and_then(|enabled| enabled.extract()),
+        )
+    })
+    .unwrap_or(false)
 }
 
 fn level(level: &Level) -> u8 {
@@ -118,15 +181,11 @@ impl Sink for PythonSink {
         {
             return false;
         }
-        Python::try_attach(|py| {
-            report(
-                py,
-                py.import(MODULE)
-                    .and_then(|module| module.call_method1("enabled", (level(metadata.level()),)))
-                    .and_then(|enabled| enabled.extract()),
-            )
-        })
-        .unwrap_or(false)
+        let level = level(metadata.level());
+        match &self.levels {
+            Some(levels) => levels.enabled(level, || python_enabled(level)),
+            None => python_enabled(level),
+        }
     }
 
     fn emit(&self, record: &Record) {
@@ -155,12 +214,25 @@ impl Sink for PythonSink {
 }
 
 pub(crate) fn capture(py: Python<'_>) -> Logger {
+    logger(py, None)
+}
+
+pub(crate) fn capture_call(py: Python<'_>) -> Logger {
+    logger(py, Some(Levels::default()))
+}
+
+fn logger(py: Python<'_>, levels: Option<Levels>) -> Logger {
     report(
         py,
         py.import(MODULE)
             .and_then(|module| module.call_method0("context"))
             .and_then(|value| value.extract())
-            .map(|correlation| Logger::new(PythonSink { correlation })),
+            .map(|correlation| {
+                Logger::new(PythonSink {
+                    correlation,
+                    levels,
+                })
+            }),
     )
 }
 

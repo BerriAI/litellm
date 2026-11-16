@@ -2,7 +2,7 @@ from collections.abc import Mapping
 from datetime import datetime
 from hashlib import sha256
 from json import dumps
-from typing import Final, Literal, TypeAlias
+from typing import Annotated, Final, Literal, TypeAlias
 
 from pydantic import (
     AwareDatetime,
@@ -14,6 +14,7 @@ from pydantic import (
     field_validator,
     model_validator,
 )
+from pydantic.json_schema import SkipJsonSchema
 
 from litellm.models.budget import BudgetLimits
 from litellm.proxy.common_utils.timezone_utils import budget_duration_error
@@ -116,7 +117,7 @@ class TeamCreate(TeamPatch):
     parent_org_id: str
 
 
-class MemberPatch(BaseModel):
+class MemberFields(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     alias: str | None = None
@@ -125,13 +126,28 @@ class MemberPatch(BaseModel):
     budget_override_expires_at: AwareDatetime | None = None
 
 
-class MemberCreate(MemberPatch):
+class MemberPatch(MemberFields):
+    parent_team_ids: Annotated[tuple[str, ...], Field(min_length=1)] | SkipJsonSchema[None] = Field(
+        default=None,
+        description="Replace the member's teams within its existing organization. First team is the default. "
+        "Omit to keep current teams. Member identity, budgets and historical usage are retained.",
+    )
+
+    @field_validator("parent_team_ids")
+    @classmethod
+    def valid_parent_teams(cls, value: tuple[str, ...] | None) -> tuple[str, ...]:
+        if value is None or any(not team.strip() for team in value) or len(set(value)) != len(value):
+            raise ValueError("parent_team_ids must contain unique, nonempty team IDs")
+        return value
+
+
+class MemberCreate(MemberFields):
     customer_member_id: str | None = None
     parent_org_id: str | None = Field(default=None, description="Must match the parent teams' organization when set")
     parent_team_ids: tuple[str, ...] = Field(min_length=1, description="Teams the member belongs to, first is default")
 
 
-class MemberUpsert(MemberPatch):
+class MemberUpsert(MemberFields):
     customer_member_id: str = Field(min_length=1)
     customer_org_id: str | None = None
     customer_org_alias: str | None = None

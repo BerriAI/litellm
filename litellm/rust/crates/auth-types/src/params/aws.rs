@@ -21,6 +21,14 @@ const fn spec(
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct AwsSessionTag {
+    #[serde(rename = "Key")]
+    pub key: String,
+    #[serde(rename = "Value")]
+    pub value: String,
+}
+
 /// The `aws_*` fields of Python's `GenericLiteLLMParams`.
 #[derive(Redact, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AwsParams {
@@ -50,11 +58,15 @@ pub struct AwsParams {
     pub aws_external_id: Option<String>,
     #[serde(default)]
     pub aws_bedrock_runtime_endpoint: Option<String>,
+    #[serde(default)]
+    pub aws_session_tags: Option<Vec<AwsSessionTag>>,
 }
 
 impl AwsParams {
     pub const ROLE_ARN_ENV: &str = "AWS_ROLE_ARN";
     pub const WEB_IDENTITY_TOKEN_FILE_ENV: &str = "AWS_WEB_IDENTITY_TOKEN_FILE";
+    pub const DEFAULT_REGION_ENV: &str = "AWS_DEFAULT_REGION";
+    pub const SESSION_TAGS: &str = "aws_session_tags";
 
     pub const ACCESS_KEY_ID: ParamSpec = spec(
         "access key id",
@@ -144,6 +156,7 @@ impl AwsParams {
         Self::SPECS
             .iter()
             .flat_map(|spec| spec.wire.iter().copied())
+            .chain([Self::SESSION_TAGS])
     }
 
     /// The environment names the specs read, for hosts that resolve secrets up front.
@@ -153,6 +166,7 @@ impl AwsParams {
                 .iter()
                 .flat_map(|spec| spec.env.iter().copied())
                 .chain([
+                    AwsParams::DEFAULT_REGION_ENV,
                     AwsParams::ROLE_ARN_ENV,
                     AwsParams::WEB_IDENTITY_TOKEN_FILE_ENV,
                 ])
@@ -205,6 +219,9 @@ impl AwsParams {
             aws_sts_endpoint: value("aws_sts_endpoint"),
             aws_external_id: value("aws_external_id"),
             aws_bedrock_runtime_endpoint: value("aws_bedrock_runtime_endpoint"),
+            aws_session_tags: optional_params
+                .get(Self::SESSION_TAGS)
+                .and_then(|tags| serde_json::from_value(tags.clone()).ok()),
         }
     }
 }
