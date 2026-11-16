@@ -50,7 +50,11 @@ class PromptCacheEvidence(BaseModel):
     prefix_fingerprint: str = Field(min_length=1, max_length=64, description="Keyed hash of the cached prefix.")
     provider: Literal["anthropic"] = Field(description="Provider that served the requests.")
     provider_model: str = Field(min_length=1, max_length=1024, description="Model the provider served.")
-    consecutive_misses: int = Field(ge=1, le=MAX_ALERT_ID, description="Requests in a row that read and wrote 0.")
+    consecutive_misses: int = Field(
+        ge=1,
+        le=MAX_ALERT_ID,
+        description="Observed requests that reported no cache read or write, not necessarily consecutive.",
+    )
     proven_write_tokens: int = Field(ge=1, le=MAX_ALERT_ID, description="Tokens the proving cache write stored.")
     ttl_seconds: Literal[300] = Field(description="Cache lifetime of the prefix's breakpoint.")
 
