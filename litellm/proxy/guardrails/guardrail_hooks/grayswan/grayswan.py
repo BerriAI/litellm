@@ -3,6 +3,7 @@
 import os
 import time
 from collections.abc import Mapping
+from enum import Enum
 from typing import TYPE_CHECKING, Final, Literal, Optional, Protocol, cast
 
 from fastapi import HTTPException
@@ -117,18 +118,30 @@ class GraySwanGuardrailAPIError(Exception):
         self.status_code = status_code
 
 
-def _validated_violation_score(response_json: object) -> float:
-    """Do not interpret an unevaluated or malformed response as a clean decision."""
+class _MonitorDecisionError(Enum):
+    INVALID_RESPONSE = "Gray Swan returned an invalid monitor response"
+    MODERATION_FAILED = "Gray Swan moderation failed"
+    INVALID_SCORE = "Gray Swan returned an invalid violation score"
+
+
+def _parse_violation_score(response_json: object) -> float | _MonitorDecisionError:
     try:
         response: Final = _MONITOR_RESPONSE_ADAPTER.validate_python(response_json, strict=True)
     except ValidationError:
-        raise GraySwanGuardrailAPIError("Gray Swan returned an invalid monitor response") from None
+        return _MonitorDecisionError.INVALID_RESPONSE
     if response.get("error"):
-        raise GraySwanGuardrailAPIError("Gray Swan moderation failed")
+        return _MonitorDecisionError.MODERATION_FAILED
     score: Final = response.get("violation")
     if isinstance(score, bool) or not isinstance(score, (int, float)) or not 0 <= score <= 1:
-        raise GraySwanGuardrailAPIError("Gray Swan returned an invalid violation score")
+        return _MonitorDecisionError.INVALID_SCORE
     return float(score)
+
+
+def _require_violation_score(response_json: object) -> float:
+    score: Final = _parse_violation_score(response_json)
+    if isinstance(score, _MonitorDecisionError):
+        raise GraySwanGuardrailAPIError(score.value)
+    return score
 
 
 class GraySwanGuardrail(CustomGuardrail):
@@ -421,7 +434,7 @@ class GraySwanGuardrail(CustomGuardrail):
             data: Optional request data (for passthrough exceptions)
             hook_type: Optional GuardrailEventHooks for determining behavior
         """
-        violation_score: Final = _validated_violation_score(response_json)
+        violation_score: Final = _require_violation_score(response_json)
         violated_rules: Final = response_json.get("violated_rules", [])
         mutation_detected: Final = response_json.get("mutation")
         ipi_detected: Final = response_json.get("ipi")
@@ -546,7 +559,7 @@ class GraySwanGuardrail(CustomGuardrail):
         Raises:
             HTTPException: If content is blocked (block mode)
         """
-        violation_score: Final = _validated_violation_score(response_json)
+        violation_score: Final = _require_violation_score(response_json)
         violated_rules: Final = response_json.get("violated_rule_descriptions", [])
         mutation_detected: Final = response_json.get("mutation")
         ipi_detected: Final = response_json.get("ipi")
