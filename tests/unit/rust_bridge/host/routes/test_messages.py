@@ -3327,3 +3327,50 @@ def test_body_params_shape_mantle_caller_tools_and_drop_a_body_anthropic_beta(mo
     assert tools == [
         {"type": "custom", "name": "litellm_unnamed_tool_0", "description": "d", "input_schema": {"type": "object"}}
     ]
+
+
+_MANTLE_NON_CLAUDE: Final = "bedrock_mantle/openai.gpt-oss-120b"
+
+
+@pytest.mark.usefixtures("no_aws_credentials")
+@pytest.mark.parametrize(
+    "request_fields",
+    (
+        pytest.param({"model": _MANTLE_NON_CLAUDE}, id="no-mantle-messages-config"),
+        pytest.param({"model": _BEDROCK_MANTLE, "api_key": "bearer-key"}, id="python-would-send-a-bearer"),
+    ),
+)
+def test_a_bedrock_mantle_credential_failure_python_would_not_sign_raises_botocores_error(
+    request_fields: Mapping[str, object],
+) -> None:
+    from botocore.exceptions import NoCredentialsError
+
+    mapped: Final = messages_host.map_failure(
+        _credential_failure("no_credentials"),
+        {**request_fields, "messages": [], "api_base": "https://mantle.test"},
+        "bedrock_mantle",
+    )
+
+    assert type(mapped) is NoCredentialsError
+
+
+@pytest.mark.parametrize(
+    "request_fields",
+    (
+        pytest.param({"model": _MANTLE_NON_CLAUDE}, id="no-mantle-messages-config"),
+        pytest.param(
+            {"model": _BEDROCK_MANTLE, "api_key": "bearer-key", "aws_region_name": "us-west-2"},
+            id="python-builds-and-signs-it",
+        ),
+    ),
+)
+def test_a_mantle_refusal_python_would_send_keeps_the_native_bad_request(
+    request_fields: Mapping[str, object],
+) -> None:
+    mapped: Final = messages_host.map_failure(
+        _refused("native refusal"), {**request_fields, "messages": []}, "bedrock_mantle"
+    )
+
+    assert type(mapped) is litellm.BadRequestError
+    assert mapped.status_code == 400
+    assert mapped.llm_provider == "bedrock_mantle"  # pyright: ignore[reportUnknownMemberType]  # the public error leaves llm_provider untyped
