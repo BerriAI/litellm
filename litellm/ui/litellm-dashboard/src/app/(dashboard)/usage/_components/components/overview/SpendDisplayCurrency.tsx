@@ -29,6 +29,11 @@ export default function SpendDisplayCurrency({ usdSpend, loading }: SpendDisplay
   const ratesUnusable = rates.isError || (estimateMissing && !rates.isFetching);
   const unavailable = requested && ratesUnusable;
   const retryable = requested && rates.isError && !rates.isFetching;
+  const handleOpenChange = (open: boolean) => {
+    if (!open) return;
+    if (retryable) void rates.refetch();
+    setRequested(true);
+  };
   return (
     <div className="mt-1 grid gap-1 text-xs leading-4 text-muted-foreground">
       <div className="flex items-center gap-2">
@@ -36,11 +41,7 @@ export default function SpendDisplayCurrency({ usdSpend, loading }: SpendDisplay
         <Select
           value={shown}
           onValueChange={(value) => setCurrency(value ?? "USD")}
-          onOpenChange={(open) => {
-            if (!open) return;
-            if (retryable) void rates.refetch();
-            setRequested(true);
-          }}
+          onOpenChange={handleOpenChange}
         >
           <SelectTrigger size="sm" aria-label={t("usage.statStrip.spendDisplay.label")}>
             <SelectValue />
