@@ -1908,7 +1908,7 @@ def map_transport_failure(error: Exception, request: Mapping[str, object], reque
     return error
 
 
-_AGENTIC_UNSENT_PARAMS: Final = frozenset({"model", "messages", "max_tokens"})
+_AGENTIC_UNSENT_PARAMS: Final = frozenset({"model", "messages", "max_tokens", "system"})
 _HANDLER_POPPED: Final = frozenset(
     {"is_async", "_litellm_messages_presanitized", "_skip_mcp_handler", "cache_control_injection_points"}
 )
@@ -1954,7 +1954,11 @@ class _AgenticCall:
 def _agentic_params(
     sent: Mapping[str, object], requested: Mapping[str, object], request: Mapping[str, object]
 ) -> dict[str, object]:  # mutable-ok: the handler's agentic hooks take a params dict
-    params: Final = {name: value for name, value in sent.items() if name not in _AGENTIC_UNSENT_PARAMS}
+    requested_system: Final = requested.get("system")
+    params: Final = {
+        **{name: value for name, value in sent.items() if name not in _AGENTIC_UNSENT_PARAMS},
+        **({"system": requested_system} if "system" in sent and requested_system is not None else {}),
+    }
     if "tools" not in params:
         return params
     caller_tools: Final = request.get("tools")

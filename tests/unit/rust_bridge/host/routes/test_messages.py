@@ -1806,6 +1806,28 @@ def test_agentic_stream_tags_the_head_only_when_a_hook_runs(monkeypatch: pytest.
     assert "tools" not in call.kwargs
 
 
+_HOISTED: Final = [{"type": "text", "text": "S"}, {"type": "text", "text": "R"}]
+
+
+@pytest.mark.parametrize(
+    ("sent_system", "requested_system", "expected"),
+    [
+        pytest.param({"system": _HOISTED}, {"system": "S"}, {"system": "S"}, id="caller-system-and-hoisted-turn"),
+        pytest.param({"system": _HOISTED[1:]}, {}, {}, id="hoisted-turn-only"),
+        pytest.param({}, {"system": "S"}, {}, id="system-not-sent"),
+    ],
+)
+def test_agentic_params_take_the_callers_system_not_the_hoisted_wire_system(
+    sent_system: Mapping[str, object], requested_system: Mapping[str, object], expected: Mapping[str, object]
+) -> None:
+    sent: Final = {"model": "claude-sonnet-4-5", "messages": [], "max_tokens": 16, "stream": False, **sent_system}
+    requested: Final = {"max_tokens": 16, "stream": False, **requested_system}
+
+    params: Final = messages_host._agentic_params(sent, requested, {"model": "azure_ai/claude-sonnet-4-5"})  # pyright: ignore[reportPrivateUsage]  # the follow-up params the handler's hooks read
+
+    assert params == {"stream": False, **expected}
+
+
 _DANGEROUS_TOOL_USE: Final = [{"type": "dangerous_tool_use"}]
 _CLASSIFIER_SETTINGS: Final = {"safeguards_classifier_model": "openai/classifier"}
 _NO_TOOL_USES: Final[dict[str, object]] = {}
