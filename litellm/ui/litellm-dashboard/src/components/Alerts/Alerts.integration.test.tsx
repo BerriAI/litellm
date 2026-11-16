@@ -197,7 +197,7 @@ describe("Alerts", () => {
     cacheIncidents = [cacheIncident];
     renderWithProviders(<Alerts />);
     expect(
-      await screen.findByRole("button", { name: "Prompt cache usage not observed on claude-east-1" }),
+      await screen.findByRole("button", { name: "Prompt cache usage advisory for claude-east-1" }),
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Spend on Research agent/ })).toBeInTheDocument();
     expect(
@@ -219,7 +219,7 @@ describe("Alerts", () => {
     await user.click(await screen.findByRole("button", { name: "Load more" }));
     expect(await screen.findByRole("button", { name: /Spend on Second key/ })).toBeInTheDocument();
     expect(
-      await screen.findByRole("button", { name: "Prompt cache usage not observed on claude-east-2" }),
+      await screen.findByRole("button", { name: "Prompt cache usage advisory for claude-east-2" }),
     ).toBeInTheDocument();
     expect(
       calls
@@ -238,12 +238,12 @@ describe("Alerts", () => {
     const user = userEvent.setup();
     renderWithProviders(<Alerts />);
     expect(
-      await screen.findByRole("button", { name: "Prompt cache usage not observed on claude-east-1" }),
+      await screen.findByRole("button", { name: "Prompt cache usage advisory for claude-east-1" }),
     ).toBeInTheDocument();
     await user.click(screen.getByRole("combobox", { name: "Alert type" }));
     await user.click(await screen.findByRole("option", { name: "Performance" }));
     expect(await screen.findByRole("button", { name: /Spend on Research agent/ })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /Prompt cache usage not observed/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Prompt cache usage advisory for/ })).not.toBeInTheDocument();
   });
 
   it("keeps the Performance filter to metric alerts", async () => {
@@ -253,15 +253,15 @@ describe("Alerts", () => {
     expect(calls.filter((call) => call.path === "/alerts").map((call) => call.query.get("type"))).toEqual([
       "performance",
     ]);
-    expect(screen.queryByRole("button", { name: /Prompt cache usage not observed/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Prompt cache usage advisory for/ })).not.toBeInTheDocument();
   });
 
   it("shows what a prompt cache incident observed, without a metric chart or prompt identity", async () => {
     renderWithProviders(<Alerts />, { searchParams: { alert: cacheIncident.id } });
     expect(
-      await screen.findByRole("heading", { name: "Prompt cache usage not observed on claude-east-1" }),
+      await screen.findByRole("heading", { name: "Prompt cache usage advisory for claude-east-1" }),
     ).toBeInTheDocument();
-    expect(screen.getByText(/not necessarily consecutive and do not prove an outage/)).toBeInTheDocument();
+    expect(screen.getByText(/not necessarily consecutive and do not prove a caching outage/)).toBeInTheDocument();
     const evidence = screen.getByRole("region", { name: "What was observed" });
     expect(within(evidence).getByText("claude-east-1")).toBeInTheDocument();
     expect(within(evidence).getByText("claude-sonnet-5-5")).toBeInTheDocument();

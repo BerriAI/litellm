@@ -50,9 +50,9 @@ describe("alert presentation", () => {
         },
       },
     });
-    expect(presentation.title).toBe("Prompt cache usage not observed on claude-east");
+    expect(presentation.title).toBe("Prompt cache usage advisory for claude-east");
     expect(presentation.description).toContain("3 observed requests to claude-test reported no cache usage");
-    expect(presentation.description).toContain("not necessarily consecutive and do not prove an outage");
+    expect(presentation.description).toContain("not necessarily consecutive and do not prove a caching outage");
     expect(presentation.description).not.toContain("prefix-1");
     expect([presentation.resourceType, presentation.href, presentation.history]).toEqual([
       "deployment",

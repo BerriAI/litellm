@@ -5869,8 +5869,8 @@
       "retiredTitle": "{{name}} retired on {{date}}",
       "retiresTitle": "{{name}} retires on {{date}}",
       "promptCache": {
-        "title": "Prompt cache usage not observed on {{name}}",
-        "description": "{{misses}} observed requests to {{model}} reported no cache usage for a prefix the provider had cached before. Delayed, missing or unlogged requests can fall between them, so they are not necessarily consecutive and do not prove an outage.",
+        "title": "Prompt cache usage advisory for {{name}}",
+        "description": "{{misses}} observed requests to {{model}} reported no cache usage for a prefix the provider had cached before. Delayed, missing or unlogged observations mean these requests are not necessarily consecutive and do not prove a caching outage.",
         "evidenceHeading": "What was observed",
         "deployment": "Deployment",
         "model": "Model",
