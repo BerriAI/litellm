@@ -12,6 +12,8 @@ from litellm.redis.stores.router_session_pins.keys import PinKey
 from litellm.rust_bridge.database import NativeDatabaseEndpoint, NativeDatabaseEvents
 from litellm.rust_bridge.execution import Execution
 from litellm.rust_bridge.public_call import NativeCall
+from litellm.types.integrations.custom_logger_v2 import BudgetPlan, BudgetReservation
+from litellm.types.proxy.native_budgets import BudgetCheck
 
 _T_co = TypeVar("_T_co", covariant=True)
 
@@ -30,6 +32,7 @@ def trace_encode_error(message: str) -> bytes: ...
 def bundled_model_cost_map() -> bytes: ...
 def native_redis_breaker_states() -> list[str]: ...
 def unsupported_tls_settings(ssl_security_level: str | None = None, ssl_ecdh_curve: str | None = None) -> list[str]: ...
+
 @final
 class NativeCostMapSource:
     def __new__(cls, url: str, *, use_http_settings: bool) -> NativeCostMapSource: ...
@@ -570,6 +573,21 @@ class PostCallSettlement:
     def settled(self) -> bool: ...
 
 @final
+class NativeBudgets:
+    def __new__(cls, spend_counters: NativeSpendCounters) -> NativeBudgets: ...
+    def reserve(self, plan: BudgetPlan, observed: tuple[Mapping[str, object], ...]) -> Future[JsonValue]: ...
+    def settle(
+        self,
+        reservation: BudgetReservation,
+        window_resets: tuple[str | None, ...],
+        observed: tuple[float | None, ...],
+        actual: float,
+        apply_consistent: bool,
+    ) -> Future[JsonValue]: ...
+
+def budget_check_decision(check: BudgetCheck) -> JsonValue: ...
+
+@final
 class NativeSpendCounters:
     def __new__(cls, client: NativeRedisClient | None) -> NativeSpendCounters: ...
     def attach(self, client: NativeRedisClient) -> bool: ...
@@ -804,6 +822,7 @@ __all__ = [
     "LocalSizes",
     "NativeAdmission",
     "NativeAuthCache",
+    "NativeBudgets",
     "NativeClickHouseSpendConfig",
     "NativeClickHouseSpendStorage",
     "NativeCostMapSource",
@@ -853,6 +872,7 @@ __all__ = [
     "aocr",
     "aresponses",
     "atranscription",
+    "budget_check_decision",
     "bundled_model_cost_map",
     "completion",
     "embedding",

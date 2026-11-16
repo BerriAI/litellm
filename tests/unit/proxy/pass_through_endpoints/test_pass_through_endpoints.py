@@ -98,6 +98,7 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
 )
 from tests._master_key import MASTER_KEY
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
+from tests.unit.proxy.spend_tracking.native_budgets_replica import native_reservation
 
 MESSAGE_START_SSE_FRAME = b'event: message_start\ndata: {"type": "message_start"}\n\n'
 PROTOCOL_CONSTRAINED_PASS_THROUGH_ROUTES: Final = MappingProxyType(
@@ -9836,7 +9837,7 @@ async def test_passthrough_charge_moves_the_committed_spend_of_the_entities_auth
 
 
 @pytest.mark.asyncio
-async def test_passthrough_success_reconciles_budget_reservation():
+async def test_passthrough_success_reconciles_budget_reservation(native_budgets_on):
     """
     A successful pass-through request must hand its pre-call budget reservation
     to the spend-counter update so the reserved amount is reconciled down to the
@@ -9844,14 +9845,17 @@ async def test_passthrough_success_reconciles_budget_reservation():
     the actual cost is added on top, so the counter drifts above real spend until
     the key falsely trips BudgetExceededError.
     """
-    budget_reservation = {
-        "reserved_cost": 0.5,
-        "entries": [{"counter_key": "spend:key:hashed-token", "reserved_cost": 0.5}],
-    }
     user_api_key_dict = UserAPIKeyAuth(
         api_key="hashed-token",
         user_id="u1",
-        budget_reservation=budget_reservation,
+    )
+    from litellm.proxy import proxy_server
+
+    budget_reservation = await native_reservation(
+        proxy_server.spend_counter_store,
+        user_api_key_dict,
+        [{"counter_key": "spend:key:hashed-token", "entity_type": "Key", "entity_id": "hashed-token"}],
+        0.5,
     )
 
     reservation = user_api_key_dict.budget_reservation

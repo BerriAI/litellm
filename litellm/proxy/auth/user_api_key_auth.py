@@ -198,6 +198,7 @@ from litellm.proxy.spend_tracking.committed_spend import (
     committed_spend_tracked,
     read_admission_committed_spend,
 )
+from litellm.proxy.spend_tracking.native_budgets import native_budget_decision
 from litellm.proxy.spend_tracking.spend_counter_batch import (
     bind_admission_counter_keys,
     release_spend_counter_batch,
@@ -3432,7 +3433,16 @@ async def validate_resolved_virtual_key(  # noqa: C901  # Preserve ordering of e
                                 fallback_spend=team_member_spend,
                                 max_budget=team_member_budget,
                             )
-                        if team_member_spend >= team_member_budget:
+                        native: Final = native_budget_decision(
+                            {
+                                "check": "team_member_positive",
+                                "spend": team_member_spend,
+                                "max_budget": team_member_budget,
+                                "user_id": valid_token.user_id,
+                                "team_id": valid_token.team_id,
+                            }
+                        )
+                        if native.refused:
                             # common_checks sends this alert on requests that get past here, so only the
                             # request rejected here sends it from the builder.
                             team_member_max_budget_alert_check(
@@ -3446,17 +3456,7 @@ async def validate_resolved_virtual_key(  # noqa: C901  # Preserve ordering of e
                                 spend=team_member_spend,
                                 max_budget=team_member_budget,
                             )
-                            _entity_id: Final = f"{valid_token.user_id}:{valid_token.team_id}"
-                            raise litellm.BudgetExceededError(
-                                current_cost=team_member_spend,
-                                max_budget=team_member_budget,
-                                message=(
-                                    f"Budget has been exceeded! TeamMember={_entity_id} "
-                                    f"Current cost: {team_member_spend}, Max budget: {team_member_budget}"
-                                ),
-                                entity_type=Litellm_EntityType.TEAM_MEMBER.value,
-                                entity_id=_entity_id,
-                            )
+                            raise native.error()
 
         # Check 3. If token is expired
         if valid_token.expires is not None:
