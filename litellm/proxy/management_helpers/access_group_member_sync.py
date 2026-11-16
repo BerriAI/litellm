@@ -1,10 +1,9 @@
 """
 Drop a deleted agent or MCP server from every unified access group that lists it.
 
-`access_agent_ids`, `access_mcp_server_ids` and the keys of `mcp_tool_permissions` hold ids
-with no foreign key to the agent or MCP server row, so a delete that leaves them alone
-strands the id in every group that granted it, and a resource later created under the same
-id would inherit those grants.
+`access_agent_ids` and `access_mcp_server_ids` hold ids with no foreign key to the agent or
+MCP server row, so a delete that leaves them alone strands the id in every group that granted
+it, and a resource later created under the same id would inherit those grants.
 """
 
 from typing import Final
@@ -29,16 +28,14 @@ _REMOVE_AGENT_ID_SQL: Final = (
     'RETURNING "access_group_id"'
 )
 
-# `mcp_tool_permissions` is written as a JSON null when a group has none, and `jsonb - text`
-# raises on a scalar, so the key is only removed from an object.
+# Only the grant is removed. `access_mcp_server_ids` may also list the server by name or alias,
+# and that entry is left alone, so the server's `mcp_tool_permissions` entry has to stay: dropping
+# it would turn a tool-scoped grant into an unrestricted one for a server recreated under the same
+# id and alias. A tool entry with no grant behind it grants nothing.
 _REMOVE_MCP_SERVER_ID_SQL: Final = (
     'UPDATE "LiteLLM_AccessGroupTable" '
-    'SET "access_mcp_server_ids" = array_remove("access_mcp_server_ids", $1), '
-    '"mcp_tool_permissions" = CASE '
-    'WHEN jsonb_typeof("mcp_tool_permissions") = \'object\' THEN "mcp_tool_permissions" - $1::text '
-    'ELSE "mcp_tool_permissions" END '
+    'SET "access_mcp_server_ids" = array_remove("access_mcp_server_ids", $1) '
     'WHERE $1 = ANY("access_mcp_server_ids") '
-    'OR (jsonb_typeof("mcp_tool_permissions") = \'object\' AND jsonb_exists("mcp_tool_permissions", $1::text)) '
     'RETURNING "access_group_id"'
 )
 

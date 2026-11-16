@@ -45,7 +45,7 @@ async def test_deleted_agent_is_removed_from_every_group_that_lists_it():
 
 
 @pytest.mark.asyncio
-async def test_deleted_mcp_server_is_removed_from_the_id_list_and_the_tool_permissions():
+async def test_deleted_mcp_server_is_removed_from_every_group_that_lists_it():
     prisma_client, writer_inner, reader_inner = _routed_prisma_client(["ag-1"])
 
     with patch(_INVALIDATE, new=AsyncMock()) as invalidate:
@@ -55,10 +55,7 @@ async def test_deleted_mcp_server_is_removed_from_the_id_list_and_the_tool_permi
     sql = update_call.args[0]
     assert sql.startswith('UPDATE "LiteLLM_AccessGroupTable"')
     assert 'array_remove("access_mcp_server_ids", $1)' in sql
-    assert '"mcp_tool_permissions" - $1::text' in sql
-    # A group can scope tools for a server it no longer lists, so the key alone must match too.
     assert '$1 = ANY("access_mcp_server_ids")' in sql
-    assert 'jsonb_exists("mcp_tool_permissions", $1::text)' in sql
     assert "access_agent_ids" not in sql
     assert update_call.args[1:] == ("server-9",)
     invalidate.assert_awaited_once_with(("ag-1",))
@@ -66,16 +63,16 @@ async def test_deleted_mcp_server_is_removed_from_the_id_list_and_the_tool_permi
 
 
 @pytest.mark.asyncio
-async def test_mcp_server_removal_leaves_a_json_null_tool_permissions_column_alone():
+async def test_mcp_server_removal_keeps_the_tool_restriction_for_the_deleted_server():
+    """A group can also grant the server by alias, which this cleanup leaves in place. Dropping the
+    tool entry would then make that alias grant unrestricted for a server recreated under the same id."""
     prisma_client, writer_inner, _ = _routed_prisma_client(["ag-1"])
 
     with patch(_INVALIDATE, new=AsyncMock()):
         await sync_access_groups_for_deleted_mcp_server(prisma_client, server_id="server-9")
 
     sql = writer_inner.query_raw.await_args.args[0]
-    # `jsonb - text` raises on a scalar; groups without tool scopes store a JSON null.
-    assert "WHEN jsonb_typeof(\"mcp_tool_permissions\") = 'object' THEN" in sql
-    assert 'ELSE "mcp_tool_permissions" END' in sql
+    assert "mcp_tool_permissions" not in sql
 
 
 @pytest.mark.asyncio
