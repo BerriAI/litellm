@@ -394,6 +394,9 @@ pub enum Capability {
     /// routing plugins and the callback filters.
     #[strum(serialize = "selects")]
     Select,
+    /// Background health checks, whose results health-check routing filters by.
+    #[strum(serialize = "runs health checks")]
+    HealthChecks,
 }
 
 /// What a host can serve, which the config does not say. Checked when the router is built or

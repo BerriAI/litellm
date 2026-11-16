@@ -50,6 +50,8 @@
 //! is the host's business:
 //! - `PythonHost` (inside a Python process) builds the request for the picked deployment and calls
 //!   `litellm.<op>`. It never calls back into a Python router.
+//! - The gateway's host (`litellm-gateway-inference`) runs the request's own inference route
+//!   against the picked deployment.
 //!
 //! A host is handed to each call, never kept by the router, so it may hold what one request owns:
 //! the caller, the typed request. Its response and its own error are associated types the core
@@ -206,6 +208,50 @@ impl Core {
             && !selects
         {
             return Err(Unsupported::Plugin(plugin.name.clone()).into());
+        }
+        let config = &self.config;
+        let needed = [
+            (
+                "enable_pre_call_checks",
+                settings.enable_pre_call_checks,
+                Capability::Select,
+            ),
+            (
+                "routing_plugins",
+                settings.routing_plugins,
+                Capability::Select,
+            ),
+            (
+                "callback_filters",
+                settings.callback_filters,
+                Capability::Select,
+            ),
+            (
+                "enable_tag_filtering",
+                config.enable_tag_filtering,
+                Capability::Select,
+            ),
+            (
+                "optional_pre_call_checks",
+                !config.optional_pre_call_checks.is_empty(),
+                Capability::Select,
+            ),
+            (
+                "model_group_affinity_config",
+                config.model_group_affinity,
+                Capability::Select,
+            ),
+            (
+                "enable_health_check_routing",
+                settings.enable_health_check_routing,
+                Capability::HealthChecks,
+            ),
+        ];
+        if let Some((setting, _, needs)) = needed
+            .into_iter()
+            .find(|(_, on, needs)| *on && !self.facts.can(*needs))
+        {
+            return Err(Unsupported::Setting { setting, needs }.into());
         }
         for deployment in registry.deployments(&DeploymentFilter::default()) {
             self.validate_deployment(&deployment)?;

@@ -91,7 +91,7 @@ async fn ocr_keeps_upstream_status_in_an_openai_error_envelope() {
     let upstream = MockServer::start().await;
     Mock::given(method("POST"))
         .respond_with(ResponseTemplate::new(429).set_body_json(json!({"message": "busy"})))
-        .expect(1)
+        .expect(3)
         .mount(&upstream)
         .await;
     let response = support::post(support::app("mistral/test-ocr", &upstream.uri()), "/ocr",

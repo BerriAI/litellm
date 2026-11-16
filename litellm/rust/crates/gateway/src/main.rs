@@ -8,8 +8,7 @@ use std::{
 
 use axum::{ServiceExt, extract::Request, response::Response};
 use litellm_config::{Config, Environment};
-use litellm_gateway::{Admit, AppState};
-use litellm_gateway_inference::Gateway;
+use litellm_gateway::{Admit, AppState, Gateway};
 use litellm_license::Entitlements;
 use litellm_tracing::{Level, Logger, Metadata, Record, Sink};
 use serde_json::json;
