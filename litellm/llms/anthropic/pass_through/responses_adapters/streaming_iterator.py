@@ -11,6 +11,7 @@ from litellm import verbose_logger
 from litellm._logging import redact_internal_details_from_client_message
 from litellm._uuid import uuid
 from litellm.exceptions import MidStreamFallbackError
+from litellm.litellm_core_utils.core_helpers import iter_items
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     encrypted_reasoning_signature,
 )
@@ -188,24 +189,45 @@ class AnthropicResponsesStreamWrapper:
     def _field(source: object, name: str) -> object:
         return source.get(name) if isinstance(source, dict) else getattr(source, name, None)
 
+    def _replay_whole_reasoning_item(self, item: object, item_id: str | None) -> None:
+        block: Final = LiteLLMAnthropicToResponsesAPIAdapter.thinking_block_from_reasoning_item(
+            iter_items(self._field(item, "summary") or self._field(item, "content") or ()),
+            self._field(item, "encrypted_content"),
+        )
+        if block is None:
+            return
+        if block.get("type") == "redacted_thinking":
+            redacted_idx: Final = self._open_block(item_id, block)
+            self._chunk_queue.append({"type": "content_block_stop", "index": redacted_idx})
+            return
+        block_idx: Final = self._open_block(item_id, {"type": "thinking", "thinking": "", "signature": ""})
+        self._chunk_queue.extend(
+            (
+                {
+                    "type": "content_block_delta",
+                    "index": block_idx,
+                    "delta": {"type": "thinking_delta", "thinking": block.get("thinking")},
+                },
+                {
+                    "type": "content_block_delta",
+                    "index": block_idx,
+                    "delta": {"type": "signature_delta", "signature": block.get("signature")},
+                },
+                {"type": "content_block_stop", "index": block_idx},
+            )
+        )
+
     def _close_reasoning_item(self, item: object, item_id: str | None) -> None:
         block_idx: Final = self._item_id_to_block_index.get(item_id, -1) if item_id else self._current_block_index
+        if block_idx < 0:
+            self._replay_whole_reasoning_item(item, item_id)
+            return
         encrypted_content: Final = self._field(item, "encrypted_content")
         signature: Final = (
             encrypted_reasoning_signature(encrypted_content)
             if isinstance(encrypted_content, str) and encrypted_content
             else None
         )
-        if block_idx < 0 and signature is None:
-            return
-        if block_idx < 0:
-            redacted_idx: Final = self._open_block(
-                item_id,
-                {"type": "redacted_thinking", "data": signature},
-            )
-            stop: Final[dict[str, object]] = {"type": "content_block_stop", "index": redacted_idx}
-            self._chunk_queue.append(stop)
-            return
         self._chunk_queue.append(
             {
                 "type": "content_block_delta",
