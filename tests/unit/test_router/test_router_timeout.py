@@ -871,6 +871,13 @@ async def test_stream_ttft_chat_allows_output_pause_and_disabled_deadline(
     assert route.call_count == 1
 
 
+async def _drain_ttft_chat_stream(router: Router) -> None:
+    response: Final = await router.acompletion(
+        model="primary", messages=[{"role": "user", "content": "hi"}], stream=True
+    )
+    _ = tuple([chunk async for chunk in response])
+
+
 @pytest.mark.asyncio
 async def test_stream_ttft_chat_without_fallback_raises_provider_timeout(
     stream_clock: _ManualClock,
@@ -889,10 +896,7 @@ async def test_stream_ttft_chat_without_fallback_raises_provider_timeout(
     router: Final = _ttft_router(fallback=False)
     started: Final = stream_clock()
     with pytest.raises(litellm.Timeout, match="stream_ttft_timeout"):
-        response: Final = await router.acompletion(
-            model="primary", messages=[{"role": "user", "content": "hi"}], stream=True
-        )
-        _ = tuple([chunk async for chunk in response])
+        await _drain_ttft_chat_stream(router)
     assert stream_clock() - started == pytest.approx(0.1, abs=0.02)
 
 
@@ -946,6 +950,16 @@ async def test_stream_ttft_messages_forwards_pings_then_falls_back_without_dupli
     assert router.health().failures_this_minute("ttft-primary") == 1
 
 
+async def _drain_ttft_messages_stream(router: Router) -> None:
+    response: Final = await router.aanthropic_messages(
+        model="primary",
+        messages=[{"role": "user", "content": "hi"}],
+        max_tokens=10,
+        stream=True,
+    )
+    _ = tuple([chunk async for chunk in response])
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("fallback, lifecycle_count", ((False, 1), (True, 201)), ids=("no-policy", "buffer-cap"))
 async def test_stream_ttft_messages_deadline_ignores_wrapper_commit_flag(
@@ -977,13 +991,7 @@ async def test_stream_ttft_messages_deadline_ignores_wrapper_commit_flag(
     )
     router: Final = _ttft_router(fallback=fallback, messages=True)
     with pytest.raises(litellm.Timeout, match="stream_ttft_timeout"):
-        response: Final = await router.aanthropic_messages(
-            model="primary",
-            messages=[{"role": "user", "content": "hi"}],
-            max_tokens=10,
-            stream=True,
-        )
-        _ = tuple([chunk async for chunk in response])
+        await _drain_ttft_messages_stream(router)
 
 
 def _ttft_response_event(kind: str, model: str, *, background: bool = False) -> bytes:
