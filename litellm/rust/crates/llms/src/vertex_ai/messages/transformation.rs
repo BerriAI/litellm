@@ -103,7 +103,12 @@ impl BaseMessagesConfig for VertexAiPartnerModelsAnthropicMessagesConfig {
         request: MessagesRequest,
         context: &MessagesTransformContext,
     ) -> Result<MessagesRequest, Error> {
-        let request = transform_messages_request(request, &context.keeping_display_updates())?;
+        let request = transform_messages_request(
+            request,
+            &context
+                .keeping_display_updates()
+                .warning_disabled_thinking_drop(),
+        )?;
         let accepts_effort = supports_effort_param(&context.thinking.capabilities);
         Ok(MessagesRequest {
             params: MessagesOptionalParams {
@@ -1356,5 +1361,58 @@ mod tests {
             ),
             vec![("x-trace".to_string(), "1".to_string())]
         );
+    }
+
+    #[derive(Clone, Default)]
+    struct Warnings(std::sync::Arc<std::sync::Mutex<Vec<String>>>);
+
+    impl litellm_tracing::Sink for Warnings {
+        fn enabled(&self, metadata: &litellm_tracing::Metadata<'_>) -> bool {
+            *metadata.level() == litellm_tracing::Level::WARN
+        }
+
+        fn emit(&self, record: &litellm_tracing::Record) {
+            self.0.lock().unwrap().push(record.message.clone());
+        }
+    }
+
+    #[rstest]
+    #[case::vertex_ai_warns(
+        true,
+        vec!["Dropping `thinking={'type': 'disabled'}` for model=claude-sonnet-5-5@default: thinking is always on for this model and cannot be disabled (the alternative is a provider 400). The model will still think adaptively, its response can contain thinking blocks, and those thinking tokens are billed as output tokens.".to_owned()]
+    )]
+    #[case::anthropic_stays_silent_as_on_main(false, vec![])]
+    fn a_disabled_thinking_drop_warns_as_python_on_vertex_ai_only(
+        #[case] vertex: bool,
+        #[case] expected: Vec<String>,
+    ) {
+        let request: MessagesRequest = serde_json::from_value(json!({
+            "model": "claude-sonnet-5-5@default",
+            "max_tokens": 64,
+            "messages": [{"role": "user", "content": "hi"}],
+            "thinking": {"type": "disabled"},
+        }))
+        .unwrap();
+        let context = MessagesTransformContext {
+            thinking: ThinkingContext {
+                capabilities: MessagesModelCapabilities {
+                    thinking_always_on: true,
+                    ..MessagesModelCapabilities::default()
+                },
+                ..ThinkingContext::default()
+            },
+            ..MessagesTransformContext::default()
+        };
+        let warnings = Warnings::default();
+
+        let transformed = litellm_tracing::Logger::new(warnings.clone()).scope(|| match vertex {
+            true => VERTEX_ANTHROPIC_MESSAGES_CONFIG
+                .transform_anthropic_messages_request(request, &context),
+            false => crate::anthropic::messages::transformation::ANTHROPIC_MESSAGES_CONFIG
+                .transform_anthropic_messages_request(request, &context),
+        });
+
+        assert_eq!(transformed.unwrap().params.thinking, None);
+        assert_eq!(*warnings.0.lock().unwrap(), expected);
     }
 }

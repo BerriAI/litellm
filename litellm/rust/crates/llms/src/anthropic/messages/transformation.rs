@@ -1340,6 +1340,7 @@ mod tests {
                         },
                         drop_params: true,
                         keeps_display_updates: false,
+                        warns_disabled_thinking_drop: false,
                     },
                     drop_params: true,
                     drops_unsupported_params: false,

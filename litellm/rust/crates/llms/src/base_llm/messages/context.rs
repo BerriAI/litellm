@@ -171,6 +171,10 @@ pub struct ThinkingContext {
     /// The provider accepts `display: "updates"` on thinking translated from the legacy shape
     /// (Python's `LEGACY_THINKING_DISPLAY_UPDATES_PROVIDERS`).
     pub keeps_display_updates: bool,
+    /// Python's `maybe_drop_disabled_thinking` warns when it drops `thinking={'type':
+    /// 'disabled'}`. Only Vertex AI says so natively: the native Anthropic route has never
+    /// warned, and its silence is a difference main already has.
+    pub warns_disabled_thinking_drop: bool,
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct MessagesTransformContext {
@@ -195,6 +199,7 @@ impl MessagesTransformContext {
                 budgets: ThinkingBudgets::from_lookup(env),
                 drop_params,
                 keeps_display_updates: false,
+                warns_disabled_thinking_drop: false,
             },
             drop_params,
             drops_unsupported_params: false,
@@ -208,6 +213,18 @@ impl MessagesTransformContext {
         Self {
             thinking: ThinkingContext {
                 keeps_display_updates: true,
+                ..self.thinking
+            },
+            ..*self
+        }
+    }
+
+    /// The same context for a provider whose disabled-thinking drop is logged as Python logs it.
+    #[must_use]
+    pub fn warning_disabled_thinking_drop(&self) -> Self {
+        Self {
+            thinking: ThinkingContext {
+                warns_disabled_thinking_drop: true,
                 ..self.thinking
             },
             ..*self
