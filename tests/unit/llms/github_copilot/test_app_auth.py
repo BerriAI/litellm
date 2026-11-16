@@ -846,6 +846,64 @@ def test_invalid_app_configuration_fails_closed(override: Mapping[str, object]) 
         )
 
 
+@pytest.mark.parametrize("empty_stored_key", ("", "   "))
+def test_valid_key_ref_with_empty_stored_key(empty_stored_key: str) -> None:
+    config: Final = app_config(
+        {
+            "github_copilot_auth_type": "github_app",
+            "github_copilot_app_id": _CONFIG.app_id,
+            "github_copilot_app_installation_id": _CONFIG.installation_id,
+            "github_copilot_app_private_key_ref": _CONFIG.private_key_ref,
+            "github_copilot_app_private_key": empty_stored_key,
+        }
+    )
+    assert config == _CONFIG
+
+
+@pytest.mark.parametrize(
+    "empty_fields",
+    [
+        {
+            "github_copilot_app_id": "",
+            "github_copilot_app_installation_id": "",
+            "github_copilot_app_private_key_ref": "",
+            "github_copilot_app_private_key": "",
+        },
+        {
+            "github_copilot_app_id": "   ",
+            "github_copilot_app_installation_id": False,
+            "github_copilot_app_private_key_ref": "",
+            "github_copilot_app_private_key": "",
+        },
+    ],
+)
+def test_non_app_auth_with_empty_or_boolean_app_fields_returns_none(
+    empty_fields: Mapping[str, object],
+) -> None:
+    assert (
+        app_config(
+            {
+                "github_copilot_auth_type": "personal_access_token",
+                **empty_fields,
+            }
+        )
+        is None
+    )
+
+
+def test_invalid_non_string_stored_key_fails_closed() -> None:
+    with pytest.raises(BadRequestError, match="GitHub App authentication requires"):
+        app_config(
+            {
+                "github_copilot_auth_type": "github_app",
+                "github_copilot_app_id": _CONFIG.app_id,
+                "github_copilot_app_installation_id": _CONFIG.installation_id,
+                "github_copilot_app_private_key_ref": _CONFIG.private_key_ref,
+                "github_copilot_app_private_key": 12345,
+            }
+        )
+
+
 def test_network_failure_does_not_expose_jwt(private_key: str) -> None:
     def fail(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError(request.headers["authorization"], request=request)
