@@ -846,6 +846,34 @@ def test_invalid_app_configuration_fails_closed(override: Mapping[str, object]) 
         )
 
 
+def test_valid_key_ref_with_empty_stored_key() -> None:
+    config: Final = app_config(
+        {
+            "github_copilot_auth_type": "github_app",
+            "github_copilot_app_id": _CONFIG.app_id,
+            "github_copilot_app_installation_id": _CONFIG.installation_id,
+            "github_copilot_app_private_key_ref": _CONFIG.private_key_ref,
+            "github_copilot_app_private_key": "",
+        }
+    )
+    assert config == _CONFIG
+
+
+def test_non_app_auth_with_empty_app_fields_returns_none() -> None:
+    assert (
+        app_config(
+            {
+                "github_copilot_auth_type": "personal_access_token",
+                "github_copilot_app_id": "",
+                "github_copilot_app_installation_id": "",
+                "github_copilot_app_private_key_ref": "",
+                "github_copilot_app_private_key": "",
+            }
+        )
+        is None
+    )
+
+
 def test_network_failure_does_not_expose_jwt(private_key: str) -> None:
     def fail(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError(request.headers["authorization"], request=request)

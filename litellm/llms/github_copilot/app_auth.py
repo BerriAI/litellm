@@ -62,28 +62,36 @@ def _value(source: object, key: str) -> object:
     return getattr(source, key, None)
 
 
+def _is_configured_field(value: object) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    return True
+
+
 def app_config(source: object, *, validate_stored_key: bool = False) -> AppConfig | None:
     name: Final = _value(source, "litellm_credential_name")
     credential: Final = CredentialAccessor.find_credential(name) if isinstance(name, str) else None
     values: Final = credential.credential_values if credential is not None else source
     mode: Final = _value(values, "github_copilot_auth_type")
-    configured: Final = any(_value(values, key) is not None for key in APP_FIELDS)
+    configured: Final = any(_is_configured_field(_value(values, key)) for key in APP_FIELDS)
     if mode != APP_AUTH_TYPE and not configured:
         return None
     app_id: Final = _value(values, APP_FIELDS[0])
     installation: Final = _value(values, APP_FIELDS[1])
     key_ref: Final = _value(values, APP_FIELDS[2])
     stored_key: Final = _value(values, APP_PRIVATE_KEY)
-    stored_key_selected: Final = isinstance(stored_key, str) and bool(stored_key)
+    stored_key_selected: Final = isinstance(stored_key, str) and bool(stored_key.strip())
+    key_ref_text: Final = key_ref.strip() if isinstance(key_ref, str) else ""
     valid_key_source: Final = (
-        stored_key_selected and not key_ref and (credential is not None or validate_stored_key)
+        stored_key_selected and not key_ref_text and (credential is not None or validate_stored_key)
     ) or (
-        stored_key is None
-        and isinstance(key_ref, str)
-        and bool(key_ref.strip())
-        and "-----BEGIN" not in key_ref
-        and not any(c.isspace() for c in key_ref)
-        and (not key_ref.startswith("oidc/") or key_ref.startswith("oidc/file/"))
+        not stored_key_selected
+        and bool(key_ref_text)
+        and "-----BEGIN" not in key_ref_text
+        and not any(c.isspace() for c in key_ref_text)
+        and (not key_ref_text.startswith("oidc/") or key_ref_text.startswith("oidc/file/"))
     )
     host: Final = normalized_github_host(_value(values, "github_copilot_host"))
     app_id_text: Final = _id_text(app_id).strip()
@@ -108,7 +116,7 @@ def app_config(source: object, *, validate_stored_key: bool = False) -> AppConfi
     return AppConfig(
         app_id_text,
         int(installation_text),
-        key_ref if isinstance(key_ref, str) else "",
+        key_ref_text if not stored_key_selected else "",
         host,
         credential.credential_name if stored_key_selected and credential is not None else None,
     )
