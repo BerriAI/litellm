@@ -1347,7 +1347,7 @@ def _server_auth_header_for(
     return mcp_auth_header if server_specific is None else server_specific
 
 
-def _v1_writes_key_to_authorization(auth_type: MCPAuthType) -> bool:
+def _v1_default_key_header(auth_type: MCPAuthType) -> str | None:
     match auth_type:
         case (
             MCPAuth.bearer_token
@@ -1357,26 +1357,28 @@ def _v1_writes_key_to_authorization(auth_type: MCPAuthType) -> bool:
             | MCPAuth.token
             | MCPAuth.oauth2_token_exchange
         ):
-            return True
+            return "Authorization"
+        case MCPAuth.api_key:
+            return "X-API-Key"
         case (
             None
             | MCPAuth.none
-            | MCPAuth.api_key
             | MCPAuth.aws_sigv4
             | MCPAuth.oauth2_id_jag
             | MCPAuth.true_passthrough
             | MCPAuth.oauth_delegate
         ):
-            return False
+            return None
     assert_never(auth_type)  # pragma: no cover
 
 
 def _v1_key_occupies_authorization(server: MCPServer) -> bool:
     if server.is_byok or not server.authentication_token:
         return False
-    if server.upstream_token_header:
-        return server.upstream_token_header.lower() == "authorization"
-    return _v1_writes_key_to_authorization(server.auth_type)
+    default_header: Final = _v1_default_key_header(server.auth_type)
+    if default_header is None:
+        return False
+    return (server.upstream_token_header or default_header).lower() == "authorization"
 
 
 def _server_key_occupies_authorization(server: MCPServer) -> bool:

@@ -17412,8 +17412,9 @@ def _keyed_server(base: MCPServer, auth_type: MCPAuth, key: str | None, token_he
     )
 
 
-def test_a_sigv4_server_token_leaves_authorization_free_for_the_jwt_signer() -> None:
-    server: Final = _keyed_server(_server_with_tools_list_ttl(300), MCPAuth.aws_sigv4, "server-key", None)
+@pytest.mark.parametrize("token_header", [None, "Authorization"], ids=["default-header", "authorization-override"])
+def test_a_sigv4_server_token_leaves_authorization_free_for_the_jwt_signer(token_header: str | None) -> None:
+    server: Final = _keyed_server(_server_with_tools_list_ttl(300), MCPAuth.aws_sigv4, "server-key", token_header)
 
     assert _server_key_occupies_authorization(server) is False
 
