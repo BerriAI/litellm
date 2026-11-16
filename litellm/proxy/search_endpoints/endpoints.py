@@ -1,7 +1,7 @@
 #### Search Endpoints #####
 
 from collections.abc import Callable, Mapping
-from typing import Final
+from typing import Annotated, Final
 
 import orjson
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -324,7 +324,7 @@ async def fetch_page(
     request: Request,
     fastapi_response: Response,
     body: FetchPageRequest,
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
     search_tool_name: str | None = None,
 ) -> object:
     """
@@ -346,7 +346,7 @@ async def tool_search(
     request: Request,
     fastapi_response: Response,
     body: ToolSearchRequest,
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
     search_tool_name: str | None = None,
 ) -> object:
     """

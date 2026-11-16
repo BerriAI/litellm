@@ -125,6 +125,7 @@ async def asearch(
         api_base: Optional API base URL
         timeout: Optional timeout
         extra_headers: Optional extra headers
+        fetch_url: Optional page URL for the DeepSeek fetch operation instead of search
         **kwargs: Additional parameters
 
     Returns:
@@ -230,6 +231,7 @@ def search(
         api_base: Optional API base URL
         timeout: Optional timeout
         extra_headers: Optional extra headers
+        fetch_url: Optional page URL for the DeepSeek fetch operation instead of search
         **kwargs: Additional parameters
 
     Returns:
