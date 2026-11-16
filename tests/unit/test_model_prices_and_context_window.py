@@ -289,6 +289,61 @@ def _rate(value: JsonValue | None) -> float | None:
     return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
 
 
+_AZURE_REGIONAL_ROW: Final = re.compile(r"^azure/(?:us|eu|apac|us-gov)/(?P<model>.+)$")
+_CACHE_WRITE_PREFIX: Final = "cache_creation_input_token_cost"
+_INPUT_PREFIX: Final = "input_cost_per_token"
+
+
+def _cache_write_markup(row: Mapping[str, JsonValue], tier: str) -> float | None:
+    write: Final = _rate(row.get(f"{_CACHE_WRITE_PREFIX}{tier}"))
+    base: Final = _rate(row.get(f"{_INPUT_PREFIX}{tier}"))
+    return None if write is None or not base else write / base
+
+
+def _regional_cache_write_gaps(prices: Mapping[str, JsonValue], key: str) -> Iterator[tuple[str, str, float | None]]:
+    match: Final = _AZURE_REGIONAL_ROW.match(key)
+    row: Final = prices[key]
+    base_row: Final = prices.get(f"azure/{match['model']}") if match else None
+    if not isinstance(row, dict) or not isinstance(base_row, dict):
+        return
+    for field in base_row:
+        if not field.startswith(_CACHE_WRITE_PREFIX):
+            continue
+        tier = field.removeprefix(_CACHE_WRITE_PREFIX)
+        expected = _cache_write_markup(base_row, tier)
+        if expected is None or _rate(row.get(f"{_INPUT_PREFIX}{tier}")) is None:
+            continue
+        actual = _cache_write_markup(row, tier)
+        if actual is None or actual != pytest.approx(expected, rel=1e-3):
+            yield key, field, actual
+
+
+@pytest.mark.parametrize("path", (PRICES_PATH, BACKUP_PRICES_PATH), ids=("main", "backup"))
+def test_azure_regional_rows_charge_cache_writes_at_their_base_row_markup_over_input(path: Path) -> None:
+    prices: Final = TypeAdapter(dict[str, JsonValue]).validate_json(path.read_bytes())
+    gaps: Final = tuple(gap for key in prices for gap in _regional_cache_write_gaps(prices, key))
+    assert gaps == (), f"regional Azure rows whose cache write rate is missing or off their base row's markup: {gaps}"
+
+
+@pytest.mark.parametrize(
+    ("regional_cache_write", "expected_gaps"),
+    [
+        (None, (("azure/us-gov/m", _CACHE_WRITE_PREFIX, None),)),
+        (2.0e-06, (("azure/us-gov/m", _CACHE_WRITE_PREFIX, 1.0),)),
+        (2.5e-06, ()),
+    ],
+    ids=("missing", "priced-at-input", "base-markup"),
+)
+def test_regional_cache_write_gaps_reports_a_row_that_drops_or_misprices_its_base_cache_write(
+    regional_cache_write: float | None, expected_gaps: tuple[tuple[str, str, float | None], ...]
+) -> None:
+    prices: Final[dict[str, JsonValue]] = {
+        "azure/m": {_INPUT_PREFIX: 1.0e-06, _CACHE_WRITE_PREFIX: 1.25e-06},
+        "azure/us-gov/m": {_INPUT_PREFIX: 2.0e-06, _CACHE_WRITE_PREFIX: regional_cache_write},
+    }
+    assert tuple(_regional_cache_write_gaps(prices, "azure/us-gov/m")) == expected_gaps
+
+
 def _priority_markup(entry: Mapping[str, JsonValue], key: str) -> float | None:
     if not key.endswith(PRIORITY_SUFFIX):
         return None
