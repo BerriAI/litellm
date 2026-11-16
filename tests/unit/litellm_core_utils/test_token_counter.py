@@ -2553,6 +2553,15 @@ def test_anthropic_image_block_with_empty_base64_data():
         ),
         (
             {
+                "type": "mcp_tool_result",
+                "tool_use_id": "mcp_1",
+                "is_error": False,
+                "content": {"type": "text", "text": "Streaming added."},
+            },
+            "Streaming added.",
+        ),
+        (
+            {
                 "type": "bash_code_execution_tool_result",
                 "tool_use_id": "srv_1",
                 "content": {
