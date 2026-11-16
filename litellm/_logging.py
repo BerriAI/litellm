@@ -11,7 +11,7 @@ from collections.abc import Iterator, Mapping
 from datetime import datetime
 from logging import Formatter
 from types import FrameType
-from typing import Final, TextIO
+from typing import Final, Protocol, TextIO
 from urllib.parse import unquote
 
 from pydantic import TypeAdapter
@@ -689,7 +689,7 @@ class LevelRoutingStreamHandler(logging.StreamHandler):
 def _parse_env_flag(value: str | None) -> bool:
     """Strict opt-in parse for a boolean env var such as JSON_LOGS: only "true" (any case) enables it.
 
-    Matches the reader in litellm-proxy-extras/_logging.py. The previous
+    Matches the reader in litellm/proxy-extras/_logging.py. The previous
     bool(os.getenv(...)) treated any non-empty value, including "false" and "0",
     as enabled.
     """
@@ -935,6 +935,11 @@ else:
     )
 
     handler.setFormatter(formatter)
+
+
+class WarningLogger(Protocol):
+    def warning(self, msg: str, /, *args: object) -> None: ...
+
 
 verbose_proxy_logger = logging.getLogger("LiteLLM Proxy")
 # Malformed virtual key rejections log through this child; LevelRoutingStreamHandler

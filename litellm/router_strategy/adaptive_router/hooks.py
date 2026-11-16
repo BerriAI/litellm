@@ -14,10 +14,13 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Final, Protocol, runtime_checkable
+
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_router_logger
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_or_none, iter_items, require_attributes
 from litellm.router_strategy.adaptive_router.adaptive_router import AdaptiveRouter
 from litellm.router_strategy.adaptive_router.classifier import classify_prompt
 from litellm.router_strategy.adaptive_router.config import (
@@ -41,7 +44,12 @@ _IDENTITY_FIELDS: Final = (
 )
 
 
-def _resolve_session_key(kwargs: dict[str, Any]) -> str | None:
+class _LoggedCallKwargs(TypedDict, total=False):
+    litellm_params: ReadOnly[Mapping[str, object]]
+    messages: ReadOnly[Sequence[Mapping[str, object]] | None]
+
+
+def _resolve_session_key(kwargs: _LoggedCallKwargs) -> str | None:
     """Pick a stable per-conversation key for owner-cache attribution.
 
     Order:
@@ -135,38 +143,70 @@ def _recent_tool_results(
     return results
 
 
-def _assistant_content_and_tool_calls(response_obj: Any) -> tuple[object, Sequence[Mapping[str, object]]]:
+@runtime_checkable
+class _SupportsGetItem(Protocol):
+    def __getitem__(self, index: int, /) -> object: ...
+
+
+class _SupportsGet(Protocol):
+    def get(self, key: str, /) -> object: ...
+
+
+class _SupportsModelDump(Protocol):
+    def model_dump(self) -> Mapping[str, object]: ...
+
+
+def _first_item(value: object) -> object:
+    if isinstance(value, _SupportsGetItem):
+        return value[0]
+    raise TypeError(f"'{type(value).__name__}' object is not subscriptable")
+
+
+def _dict_fields(value: object) -> Mapping[str, object] | None:
+    fields: Final = as_str_mapping(value)
+    return fields if isinstance(value, dict) else None
+
+
+def _attribute_or_dict_field(source: object, name: str) -> object:
+    attribute: Final = attribute_or_none(source, name)
+    fields: Final = _dict_fields(source)
+    return fields.get(name) if attribute is None and fields is not None else attribute
+
+
+def _tool_call_fields(tool_call: object) -> Mapping[str, object]:
+    fields: Final = _dict_fields(tool_call)
+    if fields is not None:
+        return fields
+    try:
+        return require_attributes(tool_call, _SupportsModelDump, "model_dump").model_dump()
+    except Exception:
+        return {"name": getattr(tool_call, "name", ""), "arguments": ""}
+
+
+def _assistant_content_and_tool_calls(response_obj: object) -> tuple[object, Sequence[Mapping[str, object]]]:
     """Return (assistant_text, tool_calls_list) extracted from a ModelResponse-ish object."""
     if response_obj is None:
         return None, []
     try:
-        choices: Final = getattr(response_obj, "choices", None) or response_obj.get("choices")
+        choices: Final = attribute_or_none(response_obj, "choices") or require_attributes(
+            response_obj, _SupportsGet, "get"
+        ).get("choices")
     except Exception:
         return None, []
     if not choices:
         return None, []
 
-    msg = choices[0]
-    msg = getattr(msg, "message", None) or (msg.get("message") if isinstance(msg, dict) else None)
+    first_choice: Final = _first_item(choices)
+    choice_fields: Final = _dict_fields(first_choice)
+    msg: Final = attribute_or_none(first_choice, "message") or (
+        choice_fields.get("message") if choice_fields is not None else None
+    )
     if msg is None:
         return None, []
 
-    content = getattr(msg, "content", None)
-    if content is None and isinstance(msg, dict):
-        content = msg.get("content")
-
-    raw_tool_calls = getattr(msg, "tool_calls", None)
-    if raw_tool_calls is None and isinstance(msg, dict):
-        raw_tool_calls = msg.get("tool_calls")
-    tool_calls: Final[list[dict[str, object]]] = []
-    for tc in raw_tool_calls or []:
-        if isinstance(tc, dict):
-            tool_calls.append(tc)
-        else:
-            try:
-                tool_calls.append(tc.model_dump())
-            except Exception:
-                tool_calls.append({"name": getattr(tc, "name", ""), "arguments": ""})
+    content: Final = _attribute_or_dict_field(msg, "content")
+    raw_tool_calls: Final = _attribute_or_dict_field(msg, "tool_calls")
+    tool_calls: Final = [_tool_call_fields(tc) for tc in iter_items(raw_tool_calls or [])]
     return content, tool_calls
 
 
@@ -214,7 +254,7 @@ class AdaptiveRouterPostCallHook(CustomLogger):
 
     async def _record(
         self,
-        kwargs: dict[str, Any],
+        kwargs: _LoggedCallKwargs,
         response_obj: object,
         response_status: int,
     ) -> None:

@@ -75,6 +75,51 @@ async def test_failure_alerts_follow_the_configured_threshold(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("exception", "request_count"),
+    [
+        (
+            litellm.MissingMessageRoleError(
+                message="Missing required parameter: 'messages[0].role'.", model="gpt-5.6", llm_provider="openai"
+            ),
+            0,
+        ),
+        (
+            litellm.MalformedRequestFieldError(
+                message="tools: Input should be a valid list", model="gpt-5.6", llm_provider="openai"
+            ),
+            1,
+        ),
+    ],
+)
+async def test_only_a_role_less_request_stays_out_of_the_failure_count(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    exception: Exception,
+    request_count: int,
+) -> None:
+    route: Final = respx_mock.post(PAGERDUTY_URL).mock(return_value=httpx.Response(202))
+    logger: Final = _pagerduty_logger(monkeypatch)
+    payload: Final = cast(
+        StandardLoggingPayload,
+        {
+            "error_information": {
+                "error_class": type(exception).__name__,
+                "error_code": "400",
+                "llm_provider": "openai",
+            },
+            "metadata": {},
+        },
+    )
+
+    await logger.async_log_failure_event(
+        {"standard_logging_object": payload, "exception": exception}, None, None, None
+    )
+
+    assert route.call_count == request_count
+
+
+@pytest.mark.asyncio
 async def test_hanging_requests_alert_at_the_default_threshold(
     monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
 ) -> None:

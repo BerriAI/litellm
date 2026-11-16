@@ -535,8 +535,10 @@ def test_link_only_links_after_a_cached_rejection_from_the_previous_mode(gateway
             denied: Final = _chat(rejecting, model, token)
             assert denied.status_code == 403, denied.text
             with Redis(host=os.environ["REDIS_HOST"], port=int(os.environ["REDIS_PORT"])) as cache:
-                cached: Final = cache.get(f"jwt_key_mapping:sub:{user}")
-                assert cached is not None and b"__NO_MAPPING__" in cached, cached
+                eventually(
+                    lambda: cache.get(f"jwt_key_mapping:sub:{user}"),
+                    lambda value: value is not None and b"__NO_MAPPING__" in value,
+                )
         with owned_proxy(
             gateway,
             tmp_path,

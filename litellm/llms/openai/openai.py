@@ -1,3 +1,4 @@
+import inspect
 import time
 import types
 from collections.abc import AsyncIterator, Callable, Coroutine, Iterable, Iterator, Mapping, Sequence
@@ -26,7 +27,7 @@ from typing_extensions import overload
 
 import litellm
 from litellm import LlmProviders
-from litellm._logging import verbose_logger
+from litellm._logging import WarningLogger, verbose_logger
 from litellm.constants import DEFAULT_MAX_RETRIES
 from litellm.exceptions import UnsupportedParamsError
 from litellm.files.types import FileContentStreamingResult
@@ -259,6 +260,8 @@ class OpenAIConfig(BaseConfig):
         optional_params: dict,
         model: str,
         drop_params: bool,
+        *,
+        reasoning_drop_logger: WarningLogger = verbose_logger,
     ) -> dict:
         """ """
         if openaiOSeriesConfig.is_model_o_series_model(model=model):
@@ -274,6 +277,7 @@ class OpenAIConfig(BaseConfig):
                 optional_params=optional_params,
                 model=model,
                 drop_params=drop_params,
+                reasoning_drop_logger=reasoning_drop_logger,
             )
         elif litellm.openAIGPTAudioConfig.is_model_gpt_audio_model(model=model):
             return litellm.openAIGPTAudioConfig.map_openai_params(
@@ -379,6 +383,11 @@ _EXTRA_HEADERS_ADAPTER: Final = TypeAdapter(dict[str, str] | None)
 _EXTRA_QUERY_ADAPTER: Final = TypeAdapter(dict[str, object] | None)
 _NO_EXTRA_HEADERS: Final[Mapping[str, str]] = types.MappingProxyType({})
 _SDK_OPTION_KEYS: Final = frozenset(("extra_headers", "extra_query", "extra_body"))
+_CLIENT_API_KEY_ONLY_AUTH: Final[Mapping[str, Mapping[str, bool]]] = (
+    types.MappingProxyType({"security": types.MappingProxyType({"bearer_auth": True})})
+    if "security" in inspect.signature(make_request_options).parameters
+    else types.MappingProxyType({})
+)
 
 
 def _raw_chat_response(
@@ -398,6 +407,7 @@ def _request_without_sdk_transform(
         extra_query=_EXTRA_QUERY_ADAPTER.validate_python(data.get("extra_query")),
         extra_body=data.get("extra_body"),
         timeout=timeout,
+        **_CLIENT_API_KEY_ONLY_AUTH,  # pyright: ignore[reportArgumentType]  # openai<3 make_request_options has no security kwarg
     )
     return body, options
 
@@ -1159,7 +1169,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         shared_session: Optional["ClientSession"] = None,
     ):
         response = None
-        data = provider_config.transform_request(
+        data = await provider_config.async_transform_request(
             model=model,
             messages=messages,
             optional_params=optional_params,

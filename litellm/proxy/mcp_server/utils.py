@@ -16,6 +16,7 @@ from urllib.parse import quote
 from pydantic import TypeAdapter
 
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.core_helpers import has_attributes
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
 if typing.TYPE_CHECKING:
@@ -175,7 +176,7 @@ def sanitize_mcp_alias_for_header(alias: str) -> str:
     """
     Sanitize an MCP server alias for x-mcp-{alias}-{header} HTTP headers.
 
-    Must stay in sync with ui/litellm-dashboard/src/utils/mcpHeaderUtils.ts.
+    Must stay in sync with litellm/ui/litellm-dashboard/src/utils/mcpHeaderUtils.ts.
     """
     sanitized = _MCP_ALIAS_HEADER_INVALID_RE.sub("_", alias.lower().strip())
     sanitized = re.sub(r"_+", "_", sanitized)
@@ -702,8 +703,12 @@ class MCPMissingUserEnvVarsError(Exception):
 _ENV_VAR_PATTERN: Final = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 
 
+class _ModelDumpable(Protocol):
+    def model_dump(self) -> Mapping[str, object]: ...
+
+
 def parse_admin_env_vars(
-    env_vars: Iterable[Any] | None,
+    env_vars: Iterable[object] | None,
 ) -> tuple[dict[str, str], list[dict[str, Any]]]:
     """Split admin-configured env var entries into globals and per-user specs.
 
@@ -723,7 +728,7 @@ def parse_admin_env_vars(
     for raw in env_vars:
         if raw is None:
             continue
-        if hasattr(raw, "model_dump"):
+        if has_attributes(raw, _ModelDumpable, "model_dump"):
             entry: Mapping[str, object] = raw.model_dump()
         elif isinstance(raw, dict):
             entry = raw

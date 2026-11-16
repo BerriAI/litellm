@@ -6,12 +6,14 @@
 ##########################################################################
 
 import asyncio
-from typing import Final, cast
+from typing import Final
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.core_helpers import decoded_json_object
 from litellm.litellm_core_utils.hidden_params import set_hidden_param
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -25,6 +27,7 @@ from litellm.proxy.utils import handle_exception_on_proxy
 from litellm.types.utils import LiteLLMFineTuningJob
 
 router: Final = APIRouter()
+_DECODED_JSON: Final = TypeAdapter(object)
 
 from litellm.types.llms.openai import LiteLLMFineTuningJobCreate
 
@@ -50,7 +53,7 @@ def set_fine_tuning_config(config):
 
 # Function to search for specific custom_llm_provider and return its configuration
 def get_fine_tuning_provider_config(
-    custom_llm_provider: str,
+    custom_llm_provider: object,
 ):
     global fine_tuning_config
     if fine_tuning_config is None:
@@ -59,6 +62,13 @@ def get_fine_tuning_provider_config(
         if setting.get("custom_llm_provider") == custom_llm_provider:
             return setting
     return None
+
+
+async def _decoded_request_body(request: Request) -> object:
+    try:
+        return _DECODED_JSON.validate_python(await request.json())
+    except Exception:
+        return {}
 
 
 @router.post(
@@ -163,7 +173,7 @@ async def create_fine_tuning_job(
                     detail={"error": "LLM Router not initialized. Ensure models added to proxy."},
                 )
 
-            response = cast(LiteLLMFineTuningJob, await llm_router.acreate_fine_tuning_job(**data))
+            response = await llm_router.acreate_fine_tuning_job(**data)
             response.training_file = training_file
             response.validation_file = fine_tuning_request.validation_file
             set_hidden_param(response, "unified_file_id", unified_file_id)
@@ -285,12 +295,8 @@ async def retrieve_fine_tuning_job(
             route_type=CallTypes.aretrieve_fine_tuning_job.value,
         )
 
-        try:
-            request_body = await request.json()
-        except Exception:
-            request_body = {}
-
-        custom_llm_provider = request_body.get("custom_llm_provider", None) or custom_llm_provider
+        request_body: Final = decoded_json_object(await _decoded_request_body(request))
+        requested_provider: Final = request_body.get("custom_llm_provider", None) or custom_llm_provider
 
         ## CHECK IF MANAGED FILE ID
         unified_finetuning_job_id: str | Literal[False] = False
@@ -305,16 +311,13 @@ async def retrieve_fine_tuning_job(
                     status_code=500,
                     detail={"error": "LLM Router not initialized. Ensure models added to proxy."},
                 )
-            response = cast(
-                LiteLLMFineTuningJob,
-                await llm_router.aretrieve_fine_tuning_job(
-                    **data,
-                ),
+            response = await llm_router.aretrieve_fine_tuning_job(
+                **data,
             )
             set_hidden_param(response, "unified_finetuning_job_id", unified_finetuning_job_id)
-        elif custom_llm_provider:
+        elif requested_provider:
             # get configs for custom_llm_provider
-            llm_provider_config: Final = get_fine_tuning_provider_config(custom_llm_provider=custom_llm_provider)
+            llm_provider_config: Final = get_fine_tuning_provider_config(custom_llm_provider=requested_provider)
 
             if llm_provider_config is not None:
                 data.update(llm_provider_config)
@@ -560,11 +563,7 @@ async def cancel_fine_tuning_job(
             route_type=CallTypes.acancel_fine_tuning_job.value,
         )
 
-        try:
-            request_body = await request.json()
-        except Exception:
-            request_body = {}
-
+        request_body: Final = decoded_json_object(await _decoded_request_body(request))
         custom_llm_provider: Final = request_body.get("custom_llm_provider", None)
 
         ## CHECK IF MANAGED FILE ID
@@ -580,11 +579,8 @@ async def cancel_fine_tuning_job(
                     status_code=500,
                     detail={"error": "LLM Router not initialized. Ensure models added to proxy."},
                 )
-            response = cast(
-                LiteLLMFineTuningJob,
-                await llm_router.acancel_fine_tuning_job(
-                    **data,
-                ),
+            response = await llm_router.acancel_fine_tuning_job(
+                **data,
             )
             set_hidden_param(response, "unified_finetuning_job_id", unified_finetuning_job_id)
         else:

@@ -779,3 +779,34 @@ async def test_deleting_many_keys_writes_every_audit_row_in_one_insert():
     assert {(row["table_name"], row["action"], row["changed_by"]) for row in rows} == {
         (LitellmTableNames.KEY_TABLE_NAME, "deleted", "admin")
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("team_metadata", "expected"),
+    [
+        ({"secret_manager_settings": {"prefix": "team-a/"}}, {"prefix": "team-a/"}),
+        ({"secret_manager_settings": {}}, None),
+        ({"owner": "platform"}, None),
+        (None, None),
+    ],
+    ids=["team_settings", "empty_settings", "no_settings_key", "no_metadata"],
+)
+async def test_secret_manager_optional_params_come_from_the_team_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+    team_metadata: dict[str, object] | None,
+    expected: dict[str, object] | None,
+) -> None:
+    from litellm.models.team import LiteLLM_TeamTable
+    from litellm.proxy import proxy_server
+
+    async def fake_get_team_object(
+        team_id: str, prisma_client: object, user_api_key_cache: object
+    ) -> LiteLLM_TeamTable:
+        return LiteLLM_TeamTable(team_id=team_id, metadata=team_metadata)
+
+    monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", MagicMock())
+    monkeypatch.setattr("litellm.proxy.auth.auth_checks.get_team_object", fake_get_team_object)
+
+    assert await KeyManagementEventHooks._get_secret_manager_optional_params("team-a") == expected

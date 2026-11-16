@@ -34,6 +34,7 @@ class httpxSpecialProvider(str, Enum):
     ROICalculator = "roi_calculator"
     Sandbox = "sandbox"
     ModelCostMap = "model_cost_map"
+    CodexModelCatalog = "codex_model_catalog"
     PasswordBreachCheck = "password_breach_check"
     ASGI = "asgi"
     AgentHarness = "agent_harness"

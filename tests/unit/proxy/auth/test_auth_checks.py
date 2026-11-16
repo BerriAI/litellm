@@ -16,6 +16,8 @@ from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest, litellm
+
+from tests.unit.redis.stores.auth_cache_double import FakeAuthCache, shared_cache
 import httpx
 from fastapi import Request, status
 from prisma import Prisma
@@ -107,7 +109,7 @@ async def _run_team_trace_id_check(
 
 @pytest.mark.parametrize(
     "route",
-    ["/chat/completions", "/v1/messages", "/mcp/", "/a2a/my-agent"],
+    ["/chat/completions", "/queue/chat/completions", "/v1/messages", "/mcp/", "/a2a/my-agent"],
 )
 @pytest.mark.asyncio
 async def test_team_require_trace_id_rejects_llm_mcp_and_agent_requests(route: str) -> None:
@@ -1293,7 +1295,7 @@ async def test_can_user_call_model_with_no_default_models():
 
 
 @pytest.mark.asyncio
-async def test_get_fuzzy_user_object():
+async def test_get_fuzzy_user_object() -> None:
     from litellm.proxy.auth.auth_checks import _get_fuzzy_user_object
     from unittest.mock import AsyncMock, MagicMock
 
@@ -1322,30 +1324,30 @@ async def test_get_fuzzy_user_object():
     )
 
     # Test 2: SSO ID not found, find by email
+    unlinked_user: Final = test_user.model_copy(update={"sso_user_id": None})
     mock_prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
-    mock_prisma.db.litellm_usertable.find_first = AsyncMock(return_value=test_user)
-    mock_prisma.db.litellm_usertable.update = AsyncMock()
+    mock_prisma.db.litellm_usertable.find_first = AsyncMock(return_value=unlinked_user)
+    mock_prisma.writer_db.litellm_usertable.update_many = AsyncMock(return_value=1)
 
     result = await _get_fuzzy_user_object(
         prisma_client=mock_prisma,
         sso_user_id="new_sso_456",
         user_email="test@example.com",
     )
-    assert result == test_user
+    assert result == unlinked_user
     mock_prisma.db.litellm_usertable.find_first.assert_called_with(
-        where={"user_email": {"equals": "test@example.com", "mode": "insensitive"}},
+        where={"user_email": {"equals": "test@example.com", "mode": "insensitive"}, "sso_user_id": None},
         include={"organization_memberships": True},
     )
 
-    # Test 3: Verify background SSO update task when user found by email
-    await asyncio.sleep(0.1)  # Allow time for background task
-    mock_prisma.db.litellm_usertable.update.assert_called_with(
-        where={"user_id": "test_123"}, data={"sso_user_id": "new_sso_456"}
+    mock_prisma.writer_db.litellm_usertable.update_many.assert_called_with(
+        where={"user_id": "test_123", "sso_user_id": None}, data={"sso_user_id": "new_sso_456"}
     )
 
     # Test 4: User not found by either method
     mock_prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
     mock_prisma.db.litellm_usertable.find_first = AsyncMock(return_value=None)
+    mock_prisma.writer_db.litellm_usertable.find_unique = AsyncMock(return_value=None)
 
     result = await _get_fuzzy_user_object(
         prisma_client=mock_prisma,
@@ -2342,10 +2344,8 @@ async def test_bulk_eviction_clears_this_worker_before_waiting_on_a_wedged_redis
         for index in range(600)
     )
     for hashed_token in hashed_tokens:
-        cache.in_memory_cache_for(hashed_token).set_cache(key=hashed_token, value={"token": hashed_token})
-    seeded: Final = tuple(
-        token for token in hashed_tokens if cache.in_memory_cache_for(token).get_cache(token) is not None
-    )
+        cache.set_local(hashed_token, {"token": hashed_token}, None)
+    seeded: Final = tuple(token for token in hashed_tokens if cache.get_local(token) is not None)
 
     with patch(
         "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.coordination_redis_cache",
@@ -2355,9 +2355,7 @@ async def test_bulk_eviction_clears_this_worker_before_waiting_on_a_wedged_redis
             delete_cache_key_objects(hashed_tokens=hashed_tokens, user_api_key_cache=cache, proxy_logging_obj=None)
         )
         await asyncio.sleep(0.05)
-        still_cached: Final = tuple(
-            token for token in seeded if cache.in_memory_cache_for(token).get_cache(token) is not None
-        )
+        still_cached: Final = tuple(token for token in seeded if cache.get_local(token) is not None)
         client.release.set()
         await eviction
         await _drain_publishes()
@@ -2404,11 +2402,9 @@ async def test_bulk_eviction_clears_the_redis_copies_before_waiting_on_a_wedged_
         hashlib.sha256(f"token-{index}".encode()).hexdigest()
         for index in range(600)
     )
-    redis = _AuthRedisCache({token: {"token": token} for token in hashed_tokens})
-    cache: Final = UserApiKeyCache(key_object_in_memory_cache=InMemoryCache(max_size_in_memory=2_000))
-    cache.attach_redis_cache(redis)  # pyright: ignore[reportArgumentType]  # a dict-backed fake of the Redis layer
+    cache, redis = shared_cache(FakeAuthCache(redis={token: {"token": token} for token in hashed_tokens}))
     for hashed_token in hashed_tokens:
-        cache.in_memory_cache_for(hashed_token).set_cache(key=hashed_token, value={"token": hashed_token})
+        cache.set_local(hashed_token, {"token": hashed_token}, None)
 
     with patch(
         "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.coordination_redis_cache",
@@ -2424,7 +2420,7 @@ async def test_bulk_eviction_clears_the_redis_copies_before_waiting_on_a_wedged_
         await _drain_publishes()
 
     assert refilled == []
-    assert redis.entries == {}
+    assert redis.redis == {}
 
 
 class _SignallingPublishRedisClient(_SlowPublishRedisClient):
@@ -2473,3 +2469,25 @@ async def test_bulk_eviction_broadcasts_while_the_usage_cache_redis_is_wedged(
 
     assert usage_redis.finished
     assert {json.loads(message)["cache_key"] for message in client.published} == set(hashed_tokens)
+
+
+@pytest.mark.parametrize("route", ("/v1/chat/completions", "/queue/chat/completions"))
+def test_chat_routes_require_the_user_param_when_enforced(route: str) -> None:
+    from starlette.requests import Request
+
+    from litellm.proxy.auth.auth_checks import _enforce_user_param_check
+
+    request: Final = Request({"type": "http", "method": "POST", "path": route})
+    with pytest.raises(Exception, match="'user' param not passed"):
+        _enforce_user_param_check({"enforce_user_param": True}, request, {}, route)
+    _enforce_user_param_check({"enforce_user_param": True}, request, {"user": "u"}, route)
+
+
+@pytest.mark.parametrize("route", ("/v1/chat/completions", "/queue/chat/completions"))
+def test_spent_proxy_budget_refuses_chat_routes(monkeypatch: pytest.MonkeyPatch, route: str) -> None:
+    from litellm.proxy.auth.auth_checks import _global_proxy_budget_check
+
+    monkeypatch.setattr(litellm, "max_budget", 0.5)
+    _global_proxy_budget_check(global_proxy_spend=0.4, skip_budget_checks=False, route=route)
+    with pytest.raises(litellm.BudgetExceededError):
+        _global_proxy_budget_check(global_proxy_spend=1.0, skip_budget_checks=False, route=route)

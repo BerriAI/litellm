@@ -12,7 +12,7 @@ import asyncio
 import json
 import re
 import threading
-from collections.abc import AsyncGenerator, AsyncIterable, AsyncIterator, Awaitable, Iterator, Sequence
+from collections.abc import AsyncGenerator, AsyncIterable, AsyncIterator, Awaitable, Callable, Iterator, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime
@@ -42,6 +42,11 @@ from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
+)
+from litellm.llms.anthropic.common_utils import (
+    anthropic_server_tool_call_params,
+    with_server_tool_call_arguments,
+    write_anthropic_server_tool_calls,
 )
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.sse_keepalive import split_complete_sse_frames
@@ -1404,6 +1409,18 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             verbose_proxy_logger.debug("No pii_tokens found in request_data['metadata'] — nothing to unmask")
         presidio_config: Final = self.get_presidio_settings_from_request_data(request_data or {})
 
+        async def pii_processed_text(text: str) -> str:
+            match mode:
+                case "unmask":
+                    return self._unmask_pii_text(text, pii_tokens)
+                case "mask":
+                    return await self.check_pii(
+                        text=text,
+                        output_parse_pii=False,
+                        presidio_config=presidio_config,
+                        request_data=request_data,
+                    )
+
         for choice in response.choices:
             message: Message | None = getattr(choice, "message", None)
             if message is None:
@@ -1412,15 +1429,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             # 1. Process content
             content = getattr(message, "content", None)
             if isinstance(content, str):
-                if mode == "unmask":
-                    message.content = self._unmask_pii_text(content, pii_tokens)
-                elif mode == "mask":
-                    message.content = await self.check_pii(
-                        text=content,
-                        output_parse_pii=False,
-                        presidio_config=presidio_config,
-                        request_data=request_data,
-                    )
+                message.content = await pii_processed_text(content)
             elif isinstance(content, list):
                 for item in content:
                     if not isinstance(item, dict):
@@ -1428,53 +1437,42 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     text_value = item.get("text")
                     if text_value is None:
                         continue
-                    if mode == "unmask":
-                        item["text"] = self._unmask_pii_text(text_value, pii_tokens)
-                    elif mode == "mask":
-                        item["text"] = await self.check_pii(
-                            text=text_value,
-                            output_parse_pii=False,
-                            presidio_config=presidio_config,
-                            request_data=request_data,
-                        )
+                    item["text"] = await pii_processed_text(text_value)
+
+            await self._process_server_tool_calls_for_pii(message, pii_processed_text)
 
             # 2. Process tool calls
             for tool_call in attribute_items(message, "tool_calls"):
                 function = attribute_or_none(tool_call, "function")
                 args = attribute_or_none(function, "arguments") if function else None
                 if isinstance(args, str):
-                    if mode == "unmask":
-                        _write_attribute(function, "arguments", self._unmask_pii_text(args, pii_tokens))
-                    elif mode == "mask":
-                        _write_attribute(
-                            function,
-                            "arguments",
-                            await self.check_pii(
-                                text=args,
-                                output_parse_pii=False,
-                                presidio_config=presidio_config,
-                                request_data=request_data,
-                            ),
-                        )
+                    _write_attribute(function, "arguments", await pii_processed_text(args))
 
             # 3. Process legacy function calls
             function_call = attribute_or_none(message, "function_call")
             legacy_args = attribute_or_none(function_call, "arguments") if function_call else None
             if isinstance(legacy_args, str):
-                if mode == "unmask":
-                    _write_attribute(function_call, "arguments", self._unmask_pii_text(legacy_args, pii_tokens))
-                elif mode == "mask":
-                    _write_attribute(
-                        function_call,
-                        "arguments",
-                        await self.check_pii(
-                            text=legacy_args,
-                            output_parse_pii=False,
-                            presidio_config=presidio_config,
-                            request_data=request_data,
-                        ),
-                    )
+                _write_attribute(function_call, "arguments", await pii_processed_text(legacy_args))
         return response
+
+    @staticmethod
+    async def _process_server_tool_calls_for_pii(
+        message: Message,
+        pii_processed_text: Callable[[str], Awaitable[str]],
+    ) -> None:
+        server_tool_calls: Final = anthropic_server_tool_call_params(message)
+        if not server_tool_calls:
+            return
+        processed_arguments: Final = tuple(
+            [
+                await pii_processed_text(server_tool_call["function"].get("arguments", ""))
+                for server_tool_call in server_tool_calls
+            ]
+        )
+        write_anthropic_server_tool_calls(
+            message,
+            tuple(map(with_server_tool_call_arguments, server_tool_calls, processed_arguments)),
+        )
 
     async def _mask_output_response(
         self,

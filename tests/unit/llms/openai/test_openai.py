@@ -1,6 +1,8 @@
 import asyncio
+import contextlib
 import gzip
 import importlib
+import inspect
 import json
 import os
 from collections.abc import Awaitable, Callable, Mapping, Sequence
@@ -40,7 +42,7 @@ from litellm.types.utils import (
     PromptTokensDetails,
 )
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-from litellm.utils import _invalidate_model_cost_lowercase_map
+from litellm.litellm_core_utils.model_cost_table import publish
 from openai.types.beta.assistant import Assistant
 from openai.types.beta.assistant_deleted import AssistantDeleted
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
@@ -225,6 +227,52 @@ async def test_acompletion_returns_prompt_cache_details_over_injected_transport(
     prompt_tokens_details: Final = response.usage.prompt_tokens_details
     assert isinstance(prompt_tokens_details, PromptTokensDetails)
     assert prompt_tokens_details.cached_tokens == 7
+
+
+_SDK_READS_OPENAI_ADMIN_KEY: Final = "admin_api_key" in inspect.signature(AsyncOpenAI.__init__).parameters
+
+
+@pytest.mark.skipif(not _SDK_READS_OPENAI_ADMIN_KEY, reason="openai<3 has no OPENAI_ADMIN_KEY fallback to leak")
+@pytest.mark.asyncio
+async def test_acompletion_never_sends_the_openai_admin_key_for_a_deployment_without_a_key(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_ADMIN_KEY", "sk-admin-only")
+    monkeypatch.setattr(litellm, "api_key", None)
+    monkeypatch.setattr(litellm, "openai_key", None)
+    outbound: Final = asyncio.Queue()
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        outbound.put_nowait(request.headers.get("authorization"))
+        return httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-no-admin-key",
+                "object": "chat.completion",
+                "created": 0,
+                "model": "gpt-5.4-mini",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as http_client:
+        monkeypatch.setattr(litellm, "aclient_session", http_client)
+        with contextlib.suppress(litellm.AuthenticationError, litellm.InternalServerError):
+            await asyncio.wait_for(
+                litellm.acompletion(
+                    model="openai/gpt-5.4-mini",
+                    api_key="",
+                    messages=[{"role": "user", "content": "who signs this request"}],
+                    num_retries=0,
+                    max_retries=0,
+                ),
+                timeout=10,
+            )
+
+    sent: Final = tuple(outbound.get_nowait() for _ in range(outbound.qsize()))
+    assert all(authorization is None for authorization in sent), sent
 
 
 
@@ -1782,7 +1830,7 @@ def isolate_litellm_state():
     for attr, original_value in original_state.items():
         if hasattr(litellm, attr):
             setattr(litellm, attr, original_value)
-    _invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
 
 
 _SCALAR_DEFAULTS = {
@@ -2650,6 +2698,83 @@ def test_openai_config_hoists_a_later_developer_message_only_for_a_model_off_ope
         model_info=None,
     )
     assert [message["role"] for message in messages] == expected_roles
+
+
+class _ChatCompletionOnlyAgenticLoop(CustomLogger):
+    async def async_should_run_chat_completion_agentic_loop(
+        self,
+        response: object,
+        model: str,
+        messages: list[dict],
+        tools: list[dict] | None,
+        stream: bool,
+        custom_llm_provider: str,
+        kwargs: dict,
+    ) -> tuple[bool, dict]:
+        return isinstance(response, ModelResponse) and response.choices[0].finish_reason == "tool_calls", {}
+
+    async def async_run_chat_completion_agentic_loop(
+        self,
+        tools: dict,
+        model: str,
+        messages: list[dict],
+        response: object,
+        optional_params: dict,
+        logging_obj: object,
+        stream: bool,
+        kwargs: dict,
+    ) -> ModelResponse:
+        return ModelResponse(
+            choices=[{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "order shipped"}}]
+        )
+
+
+@pytest.mark.asyncio
+async def test_openai_runs_a_callback_that_only_implements_the_chat_completion_agentic_loop(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "callbacks", [_ChatCompletionOnlyAgenticLoop()])
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    respx_mock.post("https://openai-compatible.example/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-lookup",
+                "object": "chat.completion",
+                "created": 0,
+                "model": "gpt-5.6",
+                "choices": [
+                    {
+                        "index": 0,
+                        "finish_reason": "tool_calls",
+                        "message": {
+                            "role": "assistant",
+                            "content": None,
+                            "tool_calls": [
+                                {
+                                    "id": "call_lookup",
+                                    "type": "function",
+                                    "function": {"name": "lookup_order", "arguments": '{"order_id": "42"}'},
+                                }
+                            ],
+                        },
+                    }
+                ],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+            },
+        )
+    )
+
+    response: Final = await litellm.acompletion(
+        model="openai/gpt-5.6",
+        messages=[{"role": "user", "content": "Where is order 42?"}],
+        tools=[{"type": "function", "function": {"name": "lookup_order", "parameters": {"type": "object"}}}],
+        api_key="sk-test",
+        api_base="https://openai-compatible.example/v1",
+    )
+
+    assert response.choices[0].message.content == "order shipped"
 
 
 @pytest.mark.asyncio
