@@ -17,6 +17,7 @@ from litellm.proxy.list_api.common import (
 )
 from litellm.proxy.management_endpoints.management_v1.common import MANAGEMENT_V1_PREFIX
 from litellm.proxy.management_helpers.customer_hierarchy import (
+    BudgetSort,
     CustomerHierarchy,
     CustomerPortalLimits,
     ErrorCode,
@@ -54,13 +55,18 @@ _ERROR_DETAILS: Final[Mapping[ErrorCode, tuple[int, str, str]]] = MappingProxyTy
     {
         ErrorCode.CAPACITY_BUSY: (
             503,
-            "Customer portal busy",
-            "Customer portal capacity is being updated. Retry the request.",
+            "Customer Management busy",
+            "Customer Management capacity is being updated. Retry the request.",
+        ),
+        ErrorCode.TRANSACTION_TIMEOUT: (
+            504,
+            "Customer Management operation timed out",
+            "Customer Management operation timed out. The transaction was rolled back. Retry the request.",
         ),
         ErrorCode.FREE_TIER_LIMIT: (
             403,
-            "Free customer portal limit reached",
-            "Free customer portal limit reached: up to 5 customer organizations, 5 teams per organization and "
+            "Customer Management free tier limit reached",
+            "Customer Management free tier limit reached: up to 5 customer organizations, 5 teams per organization and "
             "5 members per team without a LiteLLM Enterprise license. Upgrade to Enterprise to remove the limits: "
             "https://www.litellm.ai/enterprise",
         ),
@@ -213,7 +219,8 @@ AuthCache: TypeAlias = Annotated[UserApiKeyCache, Depends(get_user_api_key_cache
 @router.get(
     "/customer_portal/limits",
     response_model=CustomerPortalLimits,
-    description="Get customer portal free-tier limits and current capacity. Proxy admins only.",
+    summary="Get Customer Management Limits",
+    description="Get Customer Management free-tier limits and current capacity. Proxy admins only.",
 )
 @management_endpoint_wrapper
 async def get_customer_portal_limits(
@@ -407,9 +414,12 @@ async def list_customer_teams(
     page: Annotated[int, Query(ge=1)] = 1,
     page_size: Annotated[int, Query(ge=1)] = 50,
     parent_org_id: str | None = None,
+    sort: Annotated[
+        BudgetSort | None, Query(description="Sort by displayed budget limit, with uncapped rows last.")
+    ] = None,
 ) -> ListResponse[Team]:
     size: Final = min(page_size, 100)
-    result: Final = resolve(await hierarchy.list_teams(parent_org_id, page, size))
+    result: Final = resolve(await hierarchy.list_teams(parent_org_id, page, size, sort))
     return list_response(result, request, page, size)
 
 
@@ -470,7 +480,9 @@ async def get_customer_member(
 @router.patch(
     "/customer_members/{customer_member_id}",
     response_model=CustomerMember,
-    description="Update a customer member and its budgets. Proxy admins only.",
+    description="Update a customer member and its budgets. Supply parent_team_ids to replace its teams within the "
+    "same organization, with the first team as default. Identity, budget counters and historical usage are retained. "
+    "Historical usage stays attributed to the original team. Proxy admins only.",
 )
 @management_endpoint_wrapper
 async def update_customer_member(
@@ -505,7 +517,10 @@ async def delete_customer_member(
     "/customer_members",
     response_model=ListResponse[CustomerMember],
     dependencies=(Depends(reject_duplicate_list_params),),
-    description="List customer members with page-number pagination and resolved budgets. Proxy admins only.",
+    description=(
+        "List customer members with page-number pagination and resolved budgets. "
+        "search filters by customer member ID or alias before paginating. Proxy admins only."
+    ),
 )
 @management_endpoint_wrapper
 async def list_customer_members(
@@ -515,9 +530,17 @@ async def list_customer_members(
     page_size: Annotated[int, Query(ge=1)] = 50,
     parent_team_id: str | None = None,
     parent_org_id: str | None = None,
+    search: Annotated[str, Query(description="Case-insensitive substring of the customer member ID or alias")] = "",
+    sort: Annotated[
+        BudgetSort | None, Query(description="Sort by displayed budget limit, with uncapped rows last.")
+    ] = None,
 ) -> ListResponse[CustomerMember]:
     size: Final = min(page_size, 100)
-    result: Final = resolve(await hierarchy.list_members(parent_team_id, page, size, parent_org_id=parent_org_id))
+    result: Final = resolve(
+        await hierarchy.list_members(
+            parent_team_id, page, size, parent_org_id=parent_org_id, search=search.strip(), sort=sort
+        )
+    )
     return list_response(result, request, page, size)
 
 

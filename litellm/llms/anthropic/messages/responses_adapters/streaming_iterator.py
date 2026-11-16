@@ -2,7 +2,7 @@
 ## Translates OpenAI call to Anthropic `/v1/messages` format
 import asyncio
 from collections import deque
-from collections.abc import AsyncGenerator, AsyncIterable, Awaitable, Callable, Iterable, Iterator, Mapping, Sequence
+from collections.abc import AsyncGenerator, AsyncIterable, Iterable, Iterator, Mapping, Sequence
 from typing import TYPE_CHECKING, Final, Protocol, runtime_checkable
 
 import anyio
@@ -486,14 +486,12 @@ class AnthropicResponsesStreamWrapper:
         if failure is None:
             return
         self._unreported_failure = None
-        on_failure: Final[Callable[[Exception], Awaitable[None]] | None] = getattr(
-            self.litellm_logging_obj, "_on_detached_stream_failure", None
-        )
-        if on_failure is None:
+        logging_obj: Final = self.litellm_logging_obj
+        if logging_obj is None:
             return
         try:
             with anyio.CancelScope(shield=True):
-                await on_failure(failure)
+                await logging_obj.report_detached_stream_failure(failure)
         except Exception as hook_failure:  # noqa: BLE001  # a failing proxy hook must not hide the error event from the client
             verbose_logger.warning(
                 "AnthropicResponsesStreamWrapper: stream failure hook raised: %s(%s)",

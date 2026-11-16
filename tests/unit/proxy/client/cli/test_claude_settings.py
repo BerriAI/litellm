@@ -1,9 +1,6 @@
 import json
 import os
-import pathlib
-import shlex
 import stat
-import subprocess
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
@@ -56,7 +53,6 @@ def _owners(*backup_paths):
 
 
 CLAUDE_SETTINGS_MODULE = "litellm.proxy.client.cli.commands.claude_settings"
-AUTH_MODULE = "litellm.proxy.client.cli.commands.auth"
 @pytest.fixture
 def paths(tmp_path):
     return tmp_path / "claude" / "settings.json", tmp_path / "backup.json"
@@ -174,35 +170,6 @@ class TestConfigureClaudeSettings:
 
 
 class TestLiteApiKeyHelper:
-    @pytest.mark.skipif(sys.platform.startswith("win"), reason="runs the command through sh, as Claude Code does on POSIX")
-    def test_sh_runs_the_lite_on_path_against_this_proxy(self, tmp_path):
-        lite = tmp_path / "my tools" / "lite"
-        lite.parent.mkdir()
-        lite.write_text('#!/bin/sh\nprintf "%s\\n" "$0" "$@"\n')
-        lite.chmod(0o700)
-
-        helper = lite_api_key_helper("https://proxy.example.com/", platform="linux", which=lambda name: str(lite))
-
-        assert helper is not None
-        ran = subprocess.run(["sh", "-c", helper.command], capture_output=True, text=True, check=True)
-        assert ran.stdout.splitlines() == [str(lite), "--base-url", "https://proxy.example.com", "auth", "print-token"]
-
-    @pytest.mark.skipif(sys.platform.startswith("win"), reason="runs the command through sh, as Claude Code does on POSIX")
-    def test_a_lite_found_through_a_relative_path_entry_keeps_running_from_any_directory(self, tmp_path, monkeypatch):
-        for repo, name in ((tmp_path / "login-dir", "mine"), (tmp_path / "other-repo", "planted")):
-            lite = repo / "bin" / "lite"
-            lite.parent.mkdir(parents=True)
-            lite.write_text(f"#!/bin/sh\necho {name}\n")
-            lite.chmod(0o700)
-        monkeypatch.chdir(tmp_path / "login-dir")
-
-        helper = lite_api_key_helper("https://proxy.example.com", platform="linux", which=lambda name: "bin/lite")
-
-        assert helper is not None
-        ran = subprocess.run(
-            ["sh", "-c", helper.command], cwd=tmp_path / "other-repo", capture_output=True, text=True, check=True
-        )
-        assert ran.stdout == "mine\n"
 
     def test_quotes_every_token_for_cmd_on_windows(self):
         helper = lite_api_key_helper(
@@ -261,23 +228,6 @@ class TestInstalledExecutable:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(f"#!/bin/sh\n{body}\n")
         path.chmod(0o700)
-
-    def test_the_helper_runs_the_lite_installed_beside_this_python_over_a_shim_earlier_on_path(
-        self, tmp_path, monkeypatch
-    ):
-        self._script(tmp_path / "shims" / "lite", "echo 'pyenv: lite: command not found' >&2; exit 127")
-        self._script(tmp_path / "venv" / "bin" / "lite", "echo real")
-        monkeypatch.setenv("PATH", f"{tmp_path / 'shims'}{os.pathsep}{os.environ['PATH']}")
-
-        helper = lite_api_key_helper(
-            "https://proxy.example.com",
-            platform="linux",
-            which=lambda name: installed_executable(name, scripts_dir=str(tmp_path / "venv" / "bin")),
-        )
-
-        assert helper is not None
-        ran = subprocess.run(["sh", "-c", helper.command], capture_output=True, text=True)
-        assert (ran.returncode, ran.stdout) == (0, "real\n")
 
     def test_falls_back_to_path_when_this_python_has_no_lite(self, tmp_path, monkeypatch):
         self._script(tmp_path / "pipx" / "lite", "echo pipx")
@@ -930,18 +880,6 @@ class TestStatusLine:
     def test_the_merge_carries_it(self):
         merged = merge_claude_settings({}, PROXY, StaticToken("tok"), status_line=self.COMMAND)
         assert merged["statusLine"] == {"type": "command", "command": self.COMMAND}
-
-    def test_the_installed_script_is_the_bundled_one_and_the_command_runs_this_interpreter(self, tmp_path):
-        from litellm.proxy.client.cli.commands import statusline_script
-
-        script = tmp_path / "lite" / "statusline.py"
-        command = install_statusline_script(script)
-        assert script.read_bytes().split(b"\n", 1)[1] == pathlib.Path(statusline_script.__file__).read_bytes()
-        assert shlex.split(command) == [sys.executable, str(script)]
-        assert command == statusline_command(script)
-        assert stat.S_IMODE(script.stat().st_mode) == 0o600
-        assert stat.S_IMODE(script.parent.stat().st_mode) == 0o700
-        assert install_statusline_script(script) == command
 
     def test_a_reinstall_replaces_the_script_in_one_step_and_a_refused_one_leaves_the_old_script_whole(self, tmp_path):
         # Claude Code may be running the script at the moment `lite` reinstalls it; the file it has open

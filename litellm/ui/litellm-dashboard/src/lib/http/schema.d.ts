@@ -2205,7 +2205,7 @@ export interface paths {
          *     - model_rpm_limit: Optional[dict] - Max requests per minute per model, shared by everything on this budget. Example: {"gpt-4o": 200}
          *     - budget_reset_at: Optional[datetime] - Datetime when the initial budget is reset. Default is now.
          */
-        post: operations["new_budget_endpoint_budget_new_post"];
+        post: operations["new_budget_budget_new_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2265,7 +2265,7 @@ export interface paths {
          *     - model_rpm_limit: Optional[dict] - Max requests per minute per model, shared by everything on this budget. Example: {"gpt-4o": 200}
          *     - budget_reset_at: Optional[datetime] - Update the Datetime when the budget was last reset.
          */
-        post: operations["update_budget_endpoint_budget_update_post"];
+        post: operations["update_budget_budget_update_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -9683,7 +9683,7 @@ export interface paths {
         };
         /**
          * List Customer Members
-         * @description List customer members with page-number pagination and resolved budgets. Proxy admins only.
+         * @description List customer members with page-number pagination and resolved budgets. search filters by customer member ID or alias before paginating. Proxy admins only.
          */
         get: operations["list_customer_members_management_v1_customer_members_get"];
         put?: never;
@@ -9761,7 +9761,7 @@ export interface paths {
         head?: never;
         /**
          * Update Customer Member
-         * @description Update a customer member and its budgets. Proxy admins only.
+         * @description Update a customer member and its budgets. Supply parent_team_ids to replace its teams within the same organization, with the first team as default. Identity, budget counters and historical usage are retained. Historical usage stays attributed to the original team. Proxy admins only.
          */
         patch: operations["update_customer_member_management_v1_customer_members__customer_member_id__patch"];
         trace?: never;
@@ -9934,8 +9934,8 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Get Customer Portal Limits
-         * @description Get customer portal free-tier limits and current capacity. Proxy admins only.
+         * Get Customer Management Limits
+         * @description Get Customer Management free-tier limits and current capacity. Proxy admins only.
          */
         get: operations["get_customer_portal_limits_management_v1_customer_portal_limits_get"];
         put?: never;
@@ -18844,7 +18844,10 @@ export interface paths {
          *         - langfuse_secret: The secret for the Langfuse callback
          *         - langfuse_host: The host for the Langfuse callback
          *         - langfuse_environment: The tracing environment for the Langfuse callback (lowercase; falls back to LANGFUSE_TRACING_ENVIRONMENT)
-         *         - langfuse_span_scope: For langfuse_otel, "full" (default) sends the whole request trace, "llm_only" sends only the model-call spans
+         *         - langfuse_span_scope: For langfuse_otel, "full" sends the whole request trace,
+         *           "llm_only" sends only model-call spans.
+         *           Omitted follows LITELLM_OTEL_LANGFUSE_DESTINATION_SPAN_SCOPE (default "full"), also configurable as
+         *           callback_settings.otel.langfuse_destination_span_scope.
          *         - capture_message_content: For OTel v2 callbacks, "no_content" or "span_only".
          *           An explicit value overrides the global setting for this destination; omitted follows the proxy's own callback for that backend, else the global setting.
          *           "span_only" puts prompt and response content on the destination's spans, "no_content" leaves it out
@@ -27695,7 +27698,7 @@ export interface components {
              * Evidence
              * @description Small saved snapshot explaining the alert.
              */
-            evidence: components["schemas"]["MetricEvidence"] | components["schemas"]["DeprecationEvidence"];
+            evidence: components["schemas"]["MetricEvidence"] | components["schemas"]["DeprecationEvidence"] | components["schemas"]["PromptCacheEvidence"];
             /**
              * Id
              * @description Opaque alert ID, also used as a pagination cursor.
@@ -27711,7 +27714,7 @@ export interface components {
              * @description Kind of affected resource.
              * @enum {string}
              */
-            resource_type: "gateway" | "key" | "team" | "user" | "model";
+            resource_type: "gateway" | "key" | "team" | "user" | "model" | "deployment";
             /**
              * Status
              * @description Current review status.
@@ -27721,9 +27724,8 @@ export interface components {
             /**
              * Type
              * @description Built-in alert category.
-             * @enum {string}
              */
-            type: "spend" | "traffic" | "latency" | "reliability" | "model_deprecation";
+            type: ("spend" | "traffic" | "latency" | "reliability") | ("model_deprecation" | "prompt_cache");
             /**
              * Updated At
              * Format: date-time
@@ -27826,7 +27828,7 @@ export interface components {
              * Evidence
              * @description Small saved snapshot explaining the alert.
              */
-            evidence: components["schemas"]["MetricEvidence"] | components["schemas"]["DeprecationEvidence"];
+            evidence: components["schemas"]["MetricEvidence"] | components["schemas"]["DeprecationEvidence"] | components["schemas"]["PromptCacheEvidence"];
             /**
              * History
              * @description Current Usage values for the seven baseline days and observed day. Null if unavailable.
@@ -27852,7 +27854,7 @@ export interface components {
              * @description Kind of affected resource.
              * @enum {string}
              */
-            resource_type: "gateway" | "key" | "team" | "user" | "model";
+            resource_type: "gateway" | "key" | "team" | "user" | "model" | "deployment";
             /**
              * Status
              * @description Current review status.
@@ -27862,9 +27864,8 @@ export interface components {
             /**
              * Type
              * @description Built-in alert category.
-             * @enum {string}
              */
-            type: "spend" | "traffic" | "latency" | "reliability" | "model_deprecation";
+            type: ("spend" | "traffic" | "latency" | "reliability") | ("model_deprecation" | "prompt_cache");
             /**
              * Updated At
              * Format: date-time
@@ -32140,6 +32141,11 @@ export interface components {
              * @description for `/models` endpoint, infers available model based on environment keys (e.g. OPENAI_API_KEY)
              */
             infer_model_from_keys?: boolean | null;
+            /**
+             * Key Expiry Alert Days
+             * @description Email a key's owner once when the key has this many days or fewer left before it expires. Applies to every key with an expiry date and an owner email, including existing keys. A key's metadata.key_expiry_alert_days overrides it. Off unless set.
+             */
+            key_expiry_alert_days?: number | null;
             /** @description key manager to load keys from / decrypt keys with */
             key_management_system?: components["schemas"]["KeyManagementSystem"] | null;
             /**
@@ -34432,7 +34438,7 @@ export interface components {
          * EmailEvent
          * @enum {string}
          */
-        EmailEvent: "Model Deprecations" | "Performance Alerts" | "Virtual Key Created" | "New User Invitation" | "Virtual Key Rotated" | "Soft Budget Crossed" | "Max Budget Alert";
+        EmailEvent: "Model Deprecations" | "Performance Alerts" | "Virtual Key Created" | "New User Invitation" | "Virtual Key Rotated" | "Virtual Key Expiring" | "Soft Budget Crossed" | "Max Budget Alert";
         /** EmailEventSettings */
         EmailEventSettings: {
             /** Enabled */
@@ -40885,6 +40891,11 @@ export interface components {
             budget_override?: components["schemas"]["Budget"] | null;
             /** Budget Override Expires At */
             budget_override_expires_at?: string | null;
+            /**
+             * Parent Team Ids
+             * @description Replace the member's teams within its existing organization. First team is the default. Omit to keep current teams. Member identity, budgets and historical usage are retained.
+             */
+            parent_team_ids?: string[];
         };
         /** MemberUpsert */
         MemberUpsert: {
@@ -44666,6 +44677,46 @@ export interface components {
             /** Prompt Id */
             prompt_id: string;
             prompt_info?: components["schemas"]["PromptInfo"] | null;
+        };
+        /** PromptCacheEvidence */
+        PromptCacheEvidence: {
+            /**
+             * Config Fingerprint
+             * @description Cache-relevant deployment settings.
+             */
+            config_fingerprint: string;
+            /**
+             * Consecutive Misses
+             * @description Observed requests that reported no cache read or write, not necessarily consecutive.
+             */
+            consecutive_misses: number;
+            /**
+             * Prefix Fingerprint
+             * @description Keyed hash of the cached prefix.
+             */
+            prefix_fingerprint: string;
+            /**
+             * Proven Write Tokens
+             * @description Tokens the proving cache write stored.
+             */
+            proven_write_tokens: number;
+            /**
+             * Provider
+             * @description Provider that served the requests.
+             * @constant
+             */
+            provider: "anthropic";
+            /**
+             * Provider Model
+             * @description Model the provider served.
+             */
+            provider_model: string;
+            /**
+             * Ttl Seconds
+             * @description Cache lifetime of the prefix's breakpoint.
+             * @constant
+             */
+            ttl_seconds: 300;
         };
         /** PromptCacheOptions */
         PromptCacheOptions: {
@@ -56277,7 +56328,7 @@ export interface operations {
                 /** @description next_cursor from the preceding page. */
                 cursor?: string | null;
                 /** @description Alert category, or all performance alerts. */
-                type?: ("spend" | "traffic" | "latency" | "reliability" | "model_deprecation") | "performance" | null;
+                type?: ("spend" | "traffic" | "latency" | "reliability") | ("model_deprecation" | "prompt_cache") | "performance" | null;
             };
             header?: never;
             path?: never;
@@ -58508,7 +58559,7 @@ export interface operations {
             };
         };
     };
-    new_budget_endpoint_budget_new_post: {
+    new_budget_budget_new_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -58572,7 +58623,7 @@ export interface operations {
             };
         };
     };
-    update_budget_endpoint_budget_update_post: {
+    update_budget_budget_update_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -68931,6 +68982,10 @@ export interface operations {
                 page_size?: number;
                 parent_team_id?: string | null;
                 parent_org_id?: string | null;
+                /** @description Case-insensitive substring of the customer member ID or alias */
+                search?: string;
+                /** @description Sort by displayed budget limit, with uncapped rows last. */
+                sort?: ("budget_asc" | "budget_desc") | null;
             };
             header?: never;
             path?: never;
@@ -69595,6 +69650,8 @@ export interface operations {
                 page?: number;
                 page_size?: number;
                 parent_org_id?: string | null;
+                /** @description Sort by displayed budget limit, with uncapped rows last. */
+                sort?: ("budget_asc" | "budget_desc") | null;
             };
             header?: never;
             path?: never;
@@ -83453,7 +83510,7 @@ export interface operations {
             query?: {
                 /** @description User ID in the request parameters */
                 user_id?: string | null;
-                /** @description Include the caller's current admin MCP route permissions */
+                /** @description Include the caller's current admin MCP route permissions. An admin caller with no user_id gets empty keys and teams */
                 admin_mcp?: boolean;
                 /** @description Admin MCP tool to authorize for this caller */
                 mcp_tool?: string | null;

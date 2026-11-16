@@ -250,6 +250,9 @@ const LoggingSettings: React.FC<LoggingSettingsProps> = ({
                 {paramType === "number" && (
                   <span className="text-xs text-muted-foreground">{t("teams.loggingSettings.numberHint")}</span>
                 )}
+                {paramName === "langfuse_span_scope" && (
+                  <p className="text-xs text-muted-foreground">{t("teams.loggingSettings.langfuseSpanScopeHint")}</p>
+                )}
                 {renderParamControl(config, configIndex, paramName, {
                   type: paramType,
                   options: paramType === "select" ? paramOptions[paramName] || [] : [],

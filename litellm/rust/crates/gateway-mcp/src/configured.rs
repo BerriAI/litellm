@@ -10,7 +10,6 @@ use futures_util::future::try_join_all;
 use http::{HeaderName, HeaderValue};
 use litellm_config::{McpAuth, McpServer, McpTransport};
 use litellm_secret_value::SecretValue;
-use litellm_secrets::source::SecretSource;
 use rmcp::{
     RoleClient, ServiceExt,
     service::RunningService,
@@ -148,21 +147,6 @@ fn validate(name: &str, config: &McpServer) -> Result<(), ConnectError> {
     Ok(())
 }
 
-async fn resolve(
-    name: &str,
-    value: &SecretValue,
-    secrets: &dyn SecretSource,
-) -> Result<String, ConnectError> {
-    match value.expose().strip_prefix("os.environ/") {
-        Some(key) => secrets
-            .get_secret_str(key)
-            .await?
-            .map(|secret| secret.expose().to_owned())
-            .ok_or_else(|| invalid(name, ConfigFault::MissingSecret)),
-        None => Ok(value.expose().to_owned()),
-    }
-}
-
 fn header(
     server: &str,
     name: &str,
@@ -211,18 +195,18 @@ fn basic(value: &str) -> String {
     format!("Basic {encoded}")
 }
 
-async fn headers(
+fn headers(
     name: &str,
     config: &McpServer,
-    secrets: &dyn SecretSource,
 ) -> Result<HashMap<HeaderName, HeaderValue>, ConnectError> {
-    let entries = try_join_all(config.static_headers.iter().map(|(key, value)| async move {
-        header(name, key, &resolve(name, value, secrets).await?)
-    }))
-    .await?;
+    let entries = config
+        .static_headers
+        .iter()
+        .map(|(key, value)| header(name, key, value.expose()))
+        .collect::<Result<Vec<_>, _>>()?;
     let auth = match (&config.authentication_token, config.auth_type) {
         (Some(token), Some(kind)) => {
-            let token = resolve(name, token, secrets).await?;
+            let token = token.expose().to_owned();
             if token.trim().is_empty() {
                 return Err(invalid(name, ConfigFault::EmptyCredential));
             }
@@ -249,20 +233,13 @@ impl ConfiguredGateway {
     pub async fn connect<C: StreamableHttpClient>(
         configs: &BTreeMap<String, McpServer>,
         client: C,
-        secrets: &dyn SecretSource,
         shutdown: CancellationToken,
     ) -> Result<Self, ConnectError> {
         for (name, config) in configs {
             validate(name, config)?;
         }
         let connected = try_join_all(configs.iter().map(|(name, config)| {
-            connect_one(
-                name,
-                config,
-                client.clone(),
-                secrets,
-                shutdown.child_token(),
-            )
+            connect_one(name, config, client.clone(), shutdown.child_token())
         }))
         .await?;
         let (servers, services, limits) = connected.into_iter().fold(
@@ -293,12 +270,11 @@ async fn connect_one<C: StreamableHttpClient>(
     name: &str,
     config: &McpServer,
     client: C,
-    secrets: &dyn SecretSource,
     shutdown: CancellationToken,
 ) -> Result<(Server, RunningService<RoleClient, ()>, Limits), ConnectError> {
     let duration = timeout(name, config)?;
     let running = tokio::select! {
-        result = tokio::time::timeout(duration, connect_service(name, config, client, secrets, shutdown.clone())) => result.map_err(|_| ConnectError::Timeout(name.into()))??,
+        result = tokio::time::timeout(duration, connect_service(name, config, client, shutdown.clone())) => result.map_err(|_| ConnectError::Timeout(name.into()))??,
         () = shutdown.cancelled() => return Err(ConnectError::Cancelled),
     };
     let server = Server {
@@ -321,7 +297,6 @@ async fn connect_service<C: StreamableHttpClient>(
     name: &str,
     config: &McpServer,
     client: C,
-    secrets: &dyn SecretSource,
     shutdown: CancellationToken,
 ) -> Result<RunningService<RoleClient, ()>, ConnectError> {
     let initialized = match config.transport {
@@ -330,8 +305,8 @@ async fn connect_service<C: StreamableHttpClient>(
                 .url
                 .as_ref()
                 .ok_or_else(|| invalid(name, ConfigFault::HttpShape))?;
-            let url = resolve(name, configured, secrets).await?;
-            let parsed = url::Url::parse(&url)
+            let url = configured.expose();
+            let parsed = url::Url::parse(url)
                 .map_err(|source| invalid(name, ConfigFault::InvalidUrl(source)))?;
             if !matches!(parsed.scheme(), "http" | "https")
                 || parsed.host_str().is_none()
@@ -344,15 +319,12 @@ async fn connect_service<C: StreamableHttpClient>(
             let transport = StreamableHttpClientTransport::with_client(
                 client,
                 StreamableHttpClientTransportConfig::with_uri(url)
-                    .custom_headers(headers(name, config, secrets).await?),
+                    .custom_headers(headers(name, config)?),
             );
             ().serve_with_ct(transport, shutdown).await
         }
         McpTransport::Stdio => {
-            let environment = try_join_all(config.env.iter().map(|(key, value)| async move {
-                Ok::<_, ConnectError>((key, resolve(name, value, secrets).await?))
-            }))
-            .await?;
+            let environment = config.env.iter().map(|(key, value)| (key, value.expose()));
             let program = config
                 .command
                 .as_deref()
@@ -377,18 +349,6 @@ async fn connect_service<C: StreamableHttpClient>(
 mod tests {
     use super::*;
     use rstest::rstest;
-
-    struct Secrets;
-
-    impl SecretSource for Secrets {
-        fn get_secret_str<'a>(
-            &'a self,
-            name: &'a str,
-        ) -> futures_util::future::BoxFuture<'a, Result<Option<SecretValue>, litellm_secrets::Error>>
-        {
-            Box::pin(async move { Ok((name == "KEY").then(|| SecretValue::new("resolved-token"))) })
-        }
-    }
 
     #[rstest]
     #[case::api_key("api_key", "token-value", "x-api-key", "token-value")]
@@ -418,9 +378,7 @@ mod tests {
         "authorization",
         "Custom token-value"
     )]
-    #[case::secret_reference("api_key", "os.environ/KEY", "x-api-key", "resolved-token")]
-    #[tokio::test]
-    async fn builds_configured_auth_header(
+    fn builds_configured_auth_header(
         #[case] mode: &str,
         #[case] token: &str,
         #[case] slot: &str,
@@ -430,25 +388,17 @@ mod tests {
             "mcp_servers:\n  test:\n    auth_type: {mode}\n    authentication_token: '{token}'\n"
         ))
         .unwrap();
-        let built = headers("test", &config.mcp_servers["test"], &Secrets)
-            .await
-            .unwrap();
+        let built = headers("test", &config.mcp_servers["test"]).unwrap();
         let key = HeaderName::try_from(slot).unwrap();
         assert_eq!(built[&key], expected);
         assert!(built[&key].is_sensitive());
     }
 
     #[rstest]
-    #[tokio::test]
-    async fn explicit_credential_slot_overrides_static_header() {
-        let config = litellm_config::Config::from_yaml("mcp_servers: {test: {auth_type: api_key, authentication_token: os.environ/KEY, upstream_token_header: x-custom, static_headers: {X-Custom: old, x-extra: extra}}}").unwrap();
-        let built = headers("test", &config.mcp_servers["test"], &Secrets)
-            .await
-            .unwrap();
-        assert_eq!(
-            built[&HeaderName::from_static("x-custom")],
-            "resolved-token"
-        );
+    fn explicit_credential_slot_overrides_static_header() {
+        let config = litellm_config::Config::from_yaml("mcp_servers: {test: {auth_type: api_key, authentication_token: token-value, upstream_token_header: x-custom, static_headers: {X-Custom: old, x-extra: extra}}}").unwrap();
+        let built = headers("test", &config.mcp_servers["test"]).unwrap();
+        assert_eq!(built[&HeaderName::from_static("x-custom")], "token-value");
         assert_eq!(built[&HeaderName::from_static("x-extra")], "extra");
         assert_eq!(built.len(), 2);
     }
