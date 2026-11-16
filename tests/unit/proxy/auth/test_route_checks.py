@@ -1885,6 +1885,49 @@ def test_check_passthrough_route_access_empty_list():
 
 
 @pytest.mark.parametrize(
+    "key_routes",
+    [
+        pytest.param("/custom-endpoint", id="bare_string"),
+        pytest.param(["/custom-endpoint", None], id="null_entry_after_a_match"),
+        pytest.param(5, id="number"),
+        pytest.param(object(), id="unconvertible_object"),
+    ],
+)
+def test_a_malformed_key_list_grants_nothing_and_shadows_the_team_list(key_routes: object) -> None:
+    valid_token: Final = UserAPIKeyAuth(
+        user_id="test_user",
+        metadata={"allowed_passthrough_routes": key_routes},
+        team_metadata={"allowed_passthrough_routes": ["/custom-endpoint"]},
+    )
+
+    assert (
+        RouteChecks.check_passthrough_route_access(route="/custom-endpoint/x", user_api_key_dict=valid_token) is False
+    )
+
+
+@pytest.mark.parametrize(
+    "key_routes",
+    [
+        pytest.param([], id="empty_list"),
+        pytest.param("", id="empty_string"),
+        pytest.param(0, id="zero"),
+        pytest.param(False, id="false"),
+        pytest.param({}, id="empty_dict"),
+    ],
+)
+def test_an_empty_key_list_falls_back_to_the_team_list(key_routes: object) -> None:
+    valid_token: Final = UserAPIKeyAuth(
+        user_id="test_user",
+        metadata={"allowed_passthrough_routes": key_routes},
+        team_metadata={"allowed_passthrough_routes": ["/custom-endpoint"]},
+    )
+
+    assert (
+        RouteChecks.check_passthrough_route_access(route="/custom-endpoint/x", user_api_key_dict=valid_token) is True
+    )
+
+
+@pytest.mark.parametrize(
     "route",
     [
         "/videos",
@@ -4706,6 +4749,71 @@ def test_denied_passthrough_routes_win_over_allow(
 
     assert exc_info.value.status_code == 403
     assert f"Matched `{denied_route}` in `denied_passthrough_routes`" in exc_info.value.detail
+
+
+@pytest.mark.parametrize(
+    "denied",
+    [
+        pytest.param(["/other", None], id="null_entry"),
+        pytest.param("/other", id="bare_string"),
+        pytest.param(5, id="number"),
+    ],
+)
+def test_a_malformed_deny_list_denies_every_route_instead_of_failing(denied: object) -> None:
+    valid_token: Final = UserAPIKeyAuth(
+        user_id="test_user",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+        metadata={"allowed_passthrough_routes": ["/svc"]},
+        team_metadata={"denied_passthrough_routes": denied},
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        _check_route_with_registered_routes(route="/svc/public", valid_token=valid_token)
+
+    assert exc_info.value.status_code == 403
+    assert "Matched `(not a list of routes)` in `denied_passthrough_routes`" in exc_info.value.detail
+
+
+@pytest.mark.parametrize(
+    "denied",
+    [
+        pytest.param([], id="empty_list"),
+        pytest.param("", id="empty_string"),
+        pytest.param(0, id="zero"),
+        pytest.param(False, id="false"),
+        pytest.param({}, id="empty_dict"),
+    ],
+)
+def test_an_empty_deny_list_denies_nothing(denied: object) -> None:
+    valid_token: Final = UserAPIKeyAuth(
+        user_id="test_user",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+        metadata={"allowed_passthrough_routes": ["/svc"]},
+        team_metadata={"denied_passthrough_routes": denied},
+    )
+
+    assert (
+        RouteChecks.matching_denied_passthrough_route(
+            route="/svc/public", metadata_sources=(valid_token.metadata, valid_token.team_metadata)
+        )
+        is None
+    )
+    _check_route_with_registered_routes(route="/svc/public", valid_token=valid_token)
+
+
+@pytest.mark.parametrize(
+    ("team_allowed_routes", "expected"),
+    [(["/openai/*"], True), (["/openai/*", None], False), ("/openai/*", False)],
+    ids=["list", "null_entry", "bare_string"],
+)
+def test_jwt_team_routes_grant_only_from_a_list_of_routes(team_allowed_routes: object, expected: bool) -> None:
+    assert (
+        RouteChecks.jwt_team_routes_grant_pass_through(
+            route="/openai/x",
+            team_allowed_routes=team_allowed_routes,  # pyright: ignore[reportArgumentType]  # malformed on purpose
+        )
+        is expected
+    )
 
 
 @pytest.mark.parametrize(

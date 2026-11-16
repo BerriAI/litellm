@@ -1,0 +1,18 @@
+[package]
+name = "litellm-config-load"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Reads a LiteLLM config file and the files its `include` names into one typed Config"
+
+[dependencies]
+litellm-config.workspace = true
+serde.workspace = true
+serde_yaml_ng = "0.10.0"
+thiserror.workspace = true
+
+[dev-dependencies]
+litellm-error.workspace = true
+rstest.workspace = true
+tempfile.workspace = true

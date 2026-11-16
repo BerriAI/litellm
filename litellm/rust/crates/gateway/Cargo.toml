@@ -20,6 +20,7 @@ futures-util.workspace = true
 litellm-gateway-auth.workspace = true
 litellm-gateway-ui.workspace = true
 litellm-config.workspace = true
+litellm-config-load.workspace = true
 litellm-core-utils.workspace = true
 litellm-error.workspace = true
 litellm-circuit-breaker.workspace = true
