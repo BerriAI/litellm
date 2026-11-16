@@ -169,10 +169,21 @@ impl LegacyLogging {
             false => None,
         };
         let mut params: serde_json::Map<String, Value> = location
-            .map(|location| (VERTEX_LOCATION_PARAMS[0].to_owned(), Value::String(location)))
+            .map(|location| {
+                (
+                    VERTEX_LOCATION_PARAMS[0].to_owned(),
+                    Value::String(location),
+                )
+            })
             .into_iter()
             .collect();
-        params.extend(context.optional_params.as_object().cloned().unwrap_or_default());
+        params.extend(
+            context
+                .optional_params
+                .as_object()
+                .cloned()
+                .unwrap_or_default(),
+        );
         params.insert(
             "aanthropic_messages".to_owned(),
             Value::Bool(self.asynchronous),

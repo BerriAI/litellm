@@ -183,7 +183,11 @@ pub(crate) fn with_partner_labels_header(headers: Headers, extra: &ExtraParams) 
         .into_iter()
         .chain(spend_logs)
         .filter(|(key, _)| !is_reserved(key));
-    let labels = first_occurrences(identity_labels(metadata, &allowed).into_iter().chain(client));
+    let labels = first_occurrences(
+        identity_labels(metadata, &allowed)
+            .into_iter()
+            .chain(client),
+    );
     headers
         .into_iter()
         .filter(|(name, _)| !is_labels_header(name))
@@ -211,14 +215,16 @@ mod tests {
         general_purpose::STANDARD.encode(json)
     }
 
-    fn sent_labels(headers: &[(&str, &str)], params: Value) -> Option<String> {
+    fn sent_labels(headers: &[(&str, String)], params: Value) -> Option<String> {
         let headers = headers
             .iter()
             .map(|(name, value)| (name.to_string(), value.to_string()))
             .collect();
         let sent = with_partner_labels_header(headers, &extra(params));
-        let labels: Vec<&(String, String)> =
-            sent.iter().filter(|(name, _)| is_labels_header(name)).collect();
+        let labels: Vec<&(String, String)> = sent
+            .iter()
+            .filter(|(name, _)| is_labels_header(name))
+            .collect();
         assert!(labels.len() <= 1);
         labels.first().map(|(name, value)| {
             assert_eq!(name, LABELS_HEADER);
@@ -229,7 +235,7 @@ mod tests {
 
     #[rstest]
     #[case::identity_is_normalized(
-        &[],
+        vec![],
         json!({
             "vertex_request_label_fields": ["user_api_key_team_alias", "user_api_key_org_id"],
             "litellm_metadata": {"user_api_key_team_alias": "AI Platform", "user_api_key_org_id": "Org.1"}
@@ -237,12 +243,12 @@ mod tests {
         Some(r#"{"user_api_key_team_alias": "ai_platform", "user_api_key_org_id": "org_1"}"#)
     )]
     #[case::unreserved_fields_are_never_identity(
-        &[],
+        vec![],
         json!({"vertex_request_label_fields": ["team"], "litellm_metadata": {"team": "t1"}}),
         None
     )]
     #[case::the_callers_header_follows_identity_and_cannot_forge_it(
-        &[("x-vertex-ai-labels", &encoded(r#"{"env": "Prod", "user_api_key_hash": "forged", "n": 1}"#))],
+        vec![("x-vertex-ai-labels", encoded(r#"{"env": "Prod", "user_api_key_hash": "forged", "n": 1}"#))],
         json!({
             "vertex_request_label_fields": ["user_api_key_hash"],
             "litellm_metadata": {"user_api_key_hash": "abc"}
@@ -250,12 +256,12 @@ mod tests {
         Some(r#"{"user_api_key_hash": "abc", "env": "Prod"}"#)
     )]
     #[case::an_undecodable_header_is_dropped(
-        &[("X-Vertex-AI-Labels", "not base64!")],
+        vec![("X-Vertex-AI-Labels", "not base64!".to_string())],
         json!({"vertex_request_label_fields": ["user_api_key_hash"]}),
         None
     )]
     #[case::spend_logs_only_when_allowed(
-        &[],
+        vec![],
         json!({
             "vertex_request_label_fields": ["user_api_key_team_id"],
             "litellm_metadata": {"user_api_key_team_id": "t1", "spend_logs_metadata": {"project": "a"}}
@@ -263,7 +269,7 @@ mod tests {
         Some(r#"{"user_api_key_team_id": "t1"}"#)
     )]
     #[case::spend_logs_are_normalized_and_keep_their_first_value(
-        &[("x-vertex-ai-labels", &encoded(r#"{"project": "Caller"}"#))],
+        vec![("x-vertex-ai-labels", encoded(r#"{"project": "Caller"}"#))],
         json!({
             "vertex_request_label_fields": ["spend_logs_metadata"],
             "litellm_metadata": {"spend_logs_metadata": {"Project": "B", "9lives": "x", "user_api_key_alias": "f", "cost center": "R&D"}}
@@ -271,11 +277,11 @@ mod tests {
         Some(r#"{"project": "Caller", "cost_center": "r_d"}"#)
     )]
     fn the_labels_header_matches_python(
-        #[case] headers: &[(&str, &str)],
+        #[case] headers: Vec<(&str, String)>,
         #[case] params: Value,
         #[case] expected: Option<&str>,
     ) {
-        assert_eq!(sent_labels(headers, params).as_deref(), expected);
+        assert_eq!(sent_labels(&headers, params).as_deref(), expected);
     }
 
     #[rstest]
@@ -303,7 +309,7 @@ mod tests {
         let labels: Map<String, Value> = serde_json::from_str(&sent).unwrap();
         assert_eq!(labels.len(), 32);
         assert_eq!(labels.keys().next().unwrap(), "user_api_key_user_id");
-        assert_eq!(labels.keys().last().unwrap(), "k30");
+        assert_eq!(labels.keys().next_back().unwrap(), "k30");
     }
 
     #[rstest]

@@ -4582,6 +4582,7 @@ dependencies = [
  "time",
  "tokio",
  "tokio-util",
+ "unicode-general-category",
  "url",
 ]
 
