@@ -751,6 +751,7 @@ def _lite(
                 "HOME": str(home),
                 "BROWSER": "true",
                 "PYTHONUNBUFFERED": "1",
+                "LITELLM_CLI_DISABLE_KEYRING": "1",
                 "LITELLM_PROXY_URL": _proxy_url(proxy),
                 **environment,
             },
@@ -865,51 +866,81 @@ def test_lite_login_with_a_team_that_names_no_single_team_of_the_user_still_asks
         assert signed_in_to is not None and signed_in_to.group(1) in teams, printed
 
 
+def _dashboard_cookies(gateway: Gateway, scenario: Scenario, subject: str) -> dict[str, str]:
+    session: Final = {
+        "user_id": subject,
+        "key": scenario.key(user_id=subject, duration="10m"),
+        "login_method": "username_password",
+        "exp": int(time.time()) + 600,
+    }
+    return {"token": jwt.encode(session, gateway.key, algorithm="HS256")}
+
+
+def _authorize_url(run: LiteRun) -> str:
+    opened: Final = eventually(
+        lambda: re.search(r"Opening browser to: (\S+)", run.printed()),
+        lambda match: match is not None or run.process.poll() is not None,
+        seconds=60,
+    )
+    assert opened is not None, run.printed()
+    return opened.group(1)
+
+
+def _approve_consent(gateway: Gateway, authorize: str, cookies: Mapping[str, str], team_id: str) -> list[str]:
+    with _browser() as browser:
+        consent: Final = browser.get(authorize, cookies=cookies)
+        assert consent.status_code == 200, consent.text
+        approved: Final = browser.post(
+            f"{_proxy_url(gateway)}/authorize/complete",
+            data={
+                **dict(re.findall(r'<input type="hidden" name="([^"]+)" value="([^"]*)">', consent.text)),
+                "team_id": team_id,
+                "decision": "approve",
+            },
+            cookies={**cookies, **dict(consent.cookies)},
+        )
+        assert approved.status_code == 303, approved.text
+        delivered: Final = browser.get(approved.headers["location"])
+        assert delivered.status_code == 200, delivered.text
+        return re.findall(r'<option value="([^"]*)" selected>', consent.text)
+
+
 def test_lite_login_pkce_env_var_opens_the_consent_page_on_the_team_env_var(gateway: Gateway, tmp_path: Path) -> None:
     with gateway.scenario() as scenario:
         hinted_alias: Final = f"hinted-{uuid.uuid4().hex}"
         hinted_team: Final = scenario.team(team_alias=hinted_alias)
         subject: Final = _subject_in_teams(gateway, scenario, (scenario.team(), hinted_team))
-        session: Final = {
-            "user_id": subject,
-            "key": scenario.key(user_id=subject, duration="10m"),
-            "login_method": "username_password",
-            "exp": int(time.time()) + 600,
-        }
-        cookies: Final = {"token": jwt.encode(session, gateway.key, algorithm="HS256")}
+        cookies: Final = _dashboard_cookies(gateway, scenario, subject)
         environment: Final = {"LITELLM_PROXY_LOGIN_PKCE": "true", "LITELLM_PROXY_TEAM": hinted_alias}
         with _lite(gateway, tmp_path, ("login",), environment) as run:
-            opened: Final = eventually(
-                lambda: re.search(r"Opening browser to: (\S+)", run.printed()),
-                lambda match: match is not None or run.process.poll() is not None,
-                seconds=60,
-            )
-            assert opened is not None, run.printed()
-            authorize: Final = urlparse(opened.group(1))
-            assert authorize.path == "/authorize", opened.group(1)
-            assert parse_qs(authorize.query).get("team") == [hinted_alias], opened.group(1)
-            with _browser() as browser:
-                consent: Final = browser.get(opened.group(1), cookies=cookies)
-                assert consent.status_code == 200, consent.text
-                preselected: Final = re.findall(r'<option value="([^"]*)" selected>', consent.text)
-                assert preselected == [hinted_team], consent.text
-                approved: Final = browser.post(
-                    f"{_proxy_url(gateway)}/authorize/complete",
-                    data={
-                        **dict(re.findall(r'<input type="hidden" name="([^"]+)" value="([^"]*)">', consent.text)),
-                        "team_id": preselected[0],
-                        "decision": "approve",
-                    },
-                    cookies={**cookies, **dict(consent.cookies)},
-                )
-                assert approved.status_code == 303, approved.text
-                delivered: Final = browser.get(approved.headers["location"])
-                assert delivered.status_code == 200, delivered.text
+            authorize: Final = _authorize_url(run)
+            assert urlparse(authorize).path == "/authorize", authorize
+            assert parse_qs(urlparse(authorize).query).get("team") == [hinted_alias], authorize
+            preselected: Final = _approve_consent(gateway, authorize, cookies, hinted_team)
+            assert preselected == [hinted_team], preselected
             printed: Final = run.printed_once_exited()
         assert "Login successful!" in printed, printed
         assert f"Requested team '{hinted_alias}'. This login is for team ID '{hinted_team}'." in printed, printed
         stored: Final = JSON_OBJECT.validate_json((tmp_path / ".litellm" / "token.json").read_bytes())
         assert (stored["user_id"], stored["team_id"]) == (subject, hinted_team), stored
+
+
+def test_lite_login_pkce_without_a_requested_team_prints_no_requested_team_line(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    with gateway.scenario() as scenario:
+        picked_team: Final = scenario.team()
+        subject: Final = _subject_in_teams(gateway, scenario, (scenario.team(), picked_team))
+        cookies: Final = _dashboard_cookies(gateway, scenario, subject)
+        with _lite(gateway, tmp_path, ("login", "--pkce"), {}) as run:
+            authorize: Final = _authorize_url(run)
+            assert "team" not in parse_qs(urlparse(authorize).query), authorize
+            _approve_consent(gateway, authorize, cookies, picked_team)
+            printed: Final = run.printed_once_exited()
+        assert "Login successful!" in printed, printed
+        assert "Requested team" not in printed, printed
+        stored: Final = JSON_OBJECT.validate_json((tmp_path / ".litellm" / "token.json").read_bytes())
+        assert (stored["user_id"], stored["team_id"]) == (subject, picked_team), stored
 
 
 def test_no_pkce_flag_beats_the_pkce_env_var(one_worker: OneWorkerProxy, tmp_path: Path) -> None:
