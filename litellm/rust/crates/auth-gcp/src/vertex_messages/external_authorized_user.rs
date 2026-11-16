@@ -7,10 +7,6 @@ use std::{
 };
 
 use base64::{Engine, engine::general_purpose::STANDARD};
-use litellm_http::{
-    ClientVariant, HttpClientPool, HttpSettings, Resolution, media::PublicDnsResolver,
-};
-use litellm_secret_value::SecretValue;
 use serde_json::{Map, Value};
 use time::{OffsetDateTime, PrimitiveDateTime, macros::format_description};
 
@@ -18,6 +14,7 @@ use super::{
     builders::token_failure,
     credentials::{Credentials, Expiry, Loaded, Minted, REFRESH_THRESHOLD, RefreshFuture},
     failure::{GoogleLoginFailure, PythonException, python_repr, python_str},
+    transport::Requests,
 };
 
 const CANNOT_REFRESH: &str = "The credentials do not contain the necessary fields need to refresh the access token. You must specify refresh_token, token_url, client_id, and client_secret.";
@@ -48,7 +45,7 @@ struct ExternalAuthorizedUser {
     refresh: Option<Refresh>,
     /// The refresh token the last exchange rotated to.
     rotated: Mutex<Option<String>>,
-    pool: HttpClientPool,
+    requests: Requests,
 }
 
 fn truthy(info: &Map<String, Value>, field: &str) -> Option<String> {
@@ -112,12 +109,12 @@ pub(crate) fn external_account_authorized_user(
     Ok(Arc::new(ExternalAuthorizedUser {
         rotated: Mutex::new(None),
         refresh,
-        pool: HttpClientPool::new(Arc::new(PublicDnsResolver)),
+        requests: Requests::process(),
     }))
 }
 
 /// `utils.handle_error_response`'s `OAuthError(details, body)`.
-fn oauth_error(body: &str) -> GoogleLoginFailure {
+pub(crate) fn oauth_error(body: &str) -> GoogleLoginFailure {
     let details = serde_json::from_str::<Value>(body)
         .ok()
         .and_then(|error| {
@@ -147,13 +144,7 @@ impl ExternalAuthorizedUser {
             .lock()
             .clone()
             .unwrap_or_else(|| refresh.refresh_token.clone());
-        let client = self
-            .pool
-            .client(
-                &Resolution::from(&HttpSettings::default()).config,
-                ClientVariant::Provider,
-            )
-            .map_err(|error| token_failure(&error))?;
+        let client = self.requests.client(&refresh.token_url)?;
         let credentials =
             STANDARD.encode(format!("{}:{}", refresh.client_id, refresh.client_secret));
         let response = client
@@ -188,12 +179,10 @@ impl ExternalAuthorizedUser {
         if let Some(rotated) = granted.get("refresh_token") {
             *self.lock() = Some(python_str(Some(rotated)));
         }
-        Ok(Minted {
-            value: SecretValue::new(python_str(granted.get("access_token"))),
-            expiry: Expiry::At(
-                OffsetDateTime::now_utc() + Duration::from_secs_f64(lifetime.max(0.0)),
-            ),
-        })
+        Ok(Minted::from_reply(
+            granted.get("access_token"),
+            Expiry::At(OffsetDateTime::now_utc() + Duration::from_secs_f64(lifetime.max(0.0))),
+        ))
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Option<String>> {

@@ -11,7 +11,11 @@ use litellm_llms_types::{
     providers::anthropic::{AnthropicBeta, BetaProvider, BetaSet, VERSION_HEADER},
     recognized::Recognized,
 };
-use litellm_python_compat::urllib::{ParsedUrl, urlparse};
+use litellm_python_compat::{
+    Value as PythonValue,
+    repr::repr,
+    urllib::{ParsedUrl, urlparse},
+};
 use litellm_router_types::LitellmParams;
 use serde_json::{Value, json};
 
@@ -233,16 +237,21 @@ impl BaseMessagesConfig for VertexAiPartnerModelsAnthropicMessagesConfig {
 /// resolved, and the region a model the model map lists `supported_regions` for is routed to.
 pub fn vertex_connection_params(
     params: LitellmParams,
+    model: &str,
     logged_in_project: Option<String>,
     supported_regions: &[String],
     env_lookup: &dyn Fn(&str) -> Option<String>,
 ) -> LitellmParams {
     let vertex_location = match supported_regions.is_empty() {
         true => params.vertex.vertex_location.clone(),
-        false => Some(vertex_region(
-            vertex_location(&params.vertex, env_lookup),
-            supported_regions,
-        )),
+        false => {
+            let configured = vertex_location(&params.vertex, env_lookup);
+            let routed = vertex_region(configured.clone(), supported_regions);
+            if let Some(configured) = configured.filter(|configured| *configured != routed) {
+                warn_unsupported_region(model, &configured, supported_regions, &routed);
+            }
+            Some(routed)
+        }
     };
     LitellmParams {
         vertex: VertexParams {
@@ -252,6 +261,19 @@ pub fn vertex_connection_params(
         },
         ..params
     }
+}
+
+/// `get_vertex_region`'s warning when it overrides a configured location the model does not
+/// support.
+fn warn_unsupported_region(model: &str, configured: &str, supported: &[String], routed: &str) {
+    let supported = supported
+        .iter()
+        .map(|region| repr(&PythonValue::Str(region.clone())))
+        .collect::<Vec<_>>()
+        .join(", ");
+    litellm_tracing::warn!(
+        "Vertex AI model '{model}' does not support region '{configured}' (supported: [{supported}]). Routing to '{routed}'."
+    );
 }
 
 /// Python's `get_complete_vertex_url` for the Claude partner: the publisher path joined to the
@@ -623,6 +645,7 @@ mod tests {
         let supported: Vec<String> = supported.iter().map(|region| region.to_string()).collect();
         let connection = vertex_connection_params(
             params(Some("proj"), None),
+            "claude-sonnet-5-5@default",
             logged_in.map(str::to_string),
             &supported,
             &lookup,
@@ -1413,6 +1436,28 @@ mod tests {
         });
 
         assert_eq!(transformed.unwrap().params.thinking, None);
+        assert_eq!(*warnings.0.lock().unwrap(), expected);
+    }
+
+    #[rstest]
+    #[case::unsupported(Some("us-east5"), vec!["Vertex AI model 'claude-fz-regional-5-5@default' does not support region 'us-east5' (supported: ['europe-west1', 'asia-southeast1']). Routing to 'europe-west1'.".to_owned()])]
+    #[case::supported(Some("asia-southeast1"), vec![])]
+    #[case::unconfigured(None, vec![])]
+    fn an_overridden_region_warns_as_get_vertex_region_does(
+        #[case] location: Option<&str>,
+        #[case] expected: Vec<String>,
+    ) {
+        let supported = ["europe-west1".to_owned(), "asia-southeast1".to_owned()];
+        let warnings = Warnings::default();
+        litellm_tracing::Logger::new(warnings.clone()).scope(|| {
+            vertex_connection_params(
+                params(Some("proj"), location),
+                "claude-fz-regional-5-5@default",
+                None,
+                &supported,
+                &no_env,
+            )
+        });
         assert_eq!(*warnings.0.lock().unwrap(), expected);
     }
 }

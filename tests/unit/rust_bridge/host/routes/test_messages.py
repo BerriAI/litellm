@@ -3042,6 +3042,41 @@ def test_a_vertex_connect_failure_names_the_host_python_reaches(
     assert str(mapped).endswith(f"Cannot connect to host {host}:443 ssl:<ssl> [Name or service not known]")
 
 
+_TLS_CLOSED: Final = (
+    f"upstream network error: {_TRANSPORT} (SendRequest): connection error: peer closed connection without "
+    "sending TLS close_notify: https://docs.rs/rustls/latest/rustls/manual/_03_howto/index.html#unexpected-eof"
+)
+
+
+@pytest.mark.parametrize(
+    ("aiohttp", "provider", "model", "text"),
+    [
+        (True, "vertex_ai", _VERTEX_CLAUDE, "Server disconnected"),
+        (False, "vertex_ai", _VERTEX_CLAUDE, "Server disconnected without sending a response."),
+        (True, "anthropic", _ADAPTIVE_OPUS, "peer closed connection without sending TLS close_notify"),
+    ],
+    ids=("vertex_aiohttp", "vertex_httpx", "anthropic_keeps_main_s_text"),
+)
+def test_a_tls_close_before_headers_reads_as_a_disconnect_on_vertex_ai_only(
+    monkeypatch: pytest.MonkeyPatch, aiohttp: bool, provider: str, model: str, text: str
+) -> None:
+    from litellm.litellm_core_utils.error_normalization import normalize_error
+    from litellm.rust_bridge.host import http_transport
+
+    monkeypatch.setattr(http_transport, "uses_aiohttp_transport", lambda: aiohttp)
+
+    mapped: Final = messages_host.map_failure(
+        RuntimeError(_TLS_CLOSED),
+        {"model": model, "messages": [], "custom_llm_provider": provider, "vertex_project": "p"},
+        provider,
+    )
+
+    assert type(mapped) is litellm.InternalServerError
+    assert text in str(mapped)
+    expected: Final = "500_PROVIDER_CONNECTION_ERROR" if provider == "anthropic" else "500_PROVIDER_INTERNAL_ERROR"
+    assert normalize_error(mapped, "500", str(mapped)) == expected
+
+
 def _google_login_failure(name: str, message: str, file: tuple[str, str, str] | None = None) -> RuntimeError:
     native: Final = RuntimeError("provider authentication failed: " + message)
     native.messages_google_login_failure = (name, message, file)  # pyright: ignore[reportAttributeAccessIssue]  # set by the native host
@@ -3066,7 +3101,11 @@ def _vertex_logger() -> Logging:
         ("ValueError", ValueError),
         ("TypeError", TypeError),
         ("ImportError", ImportError),
+        ("AttributeError", AttributeError),
+        ("IndexError", IndexError),
+        ("OSError", OSError),
         ("google.auth.exceptions.DefaultCredentialsError", google_auth.DefaultCredentialsError),
+        ("google.auth.exceptions.InvalidResource", google_auth.InvalidResource),
         ("google.auth.exceptions.MalformedError", google_auth.MalformedError),
         ("google.auth.exceptions.InvalidValue", google_auth.InvalidValue),
         ("google.auth.exceptions.RefreshError", google_auth.RefreshError),

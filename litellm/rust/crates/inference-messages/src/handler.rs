@@ -390,6 +390,7 @@ async fn provider_call(
     .with_azure_ad_token_hosts(credentials.azure_ad_token_hosts)?;
     let (validated, logged_in_project) = log_in_to_vertex(
         credentials.auth,
+        &trimmed.model,
         validated,
         shaping.vertex.google_sdk_missing,
         &env_lookup,
@@ -397,6 +398,7 @@ async fn provider_call(
     .await?;
     let connection_params = vertex_connection_params(
         connection_params,
+        &trimmed.model,
         logged_in_project,
         &shaping.vertex.supported_regions,
         &env_lookup,

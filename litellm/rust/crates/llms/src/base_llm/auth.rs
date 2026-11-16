@@ -135,6 +135,7 @@ pub struct Authenticated {
 /// token in hand and the project the login resolved; any other scheme passes through.
 pub async fn log_in_to_vertex(
     services: &AuthServices,
+    model: &str,
     validated: ValidatedEnvironment,
     google_sdk_missing: bool,
     secrets: &(dyn Fn(&str) -> Option<String> + Sync),
@@ -149,6 +150,7 @@ pub async fn log_in_to_vertex(
     let login = services
         .vertex_messages
         .login(
+            model,
             vertex_credentials(&params, secrets),
             vertex_project(&params, secrets),
         )
@@ -224,6 +226,7 @@ pub async fn resolve_auth(
             let login = services
                 .vertex_messages
                 .login(
+                    "",
                     vertex_credentials(&params, env_lookup),
                     vertex_project(&params, env_lookup),
                 )
@@ -455,6 +458,7 @@ mod tests {
         };
         log_in_to_vertex(
             &services,
+            "claude-sonnet-5-5@default",
             ValidatedEnvironment {
                 headers: headers(forwarded),
                 auth: AuthScheme::GcpAccessToken {
