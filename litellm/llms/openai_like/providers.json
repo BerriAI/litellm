@@ -314,5 +314,10 @@
       "supports_function_calling": true,
       "supports_reasoning": true
     }
+  },
+  "prentis": {
+    "base_url": "https://compute.prentis.ai/v1",
+    "api_key_env": "PRENTIS_API_KEY",
+    "api_base_env": "PRENTIS_API_BASE"
   }
 }
