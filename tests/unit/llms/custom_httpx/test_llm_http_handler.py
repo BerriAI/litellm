@@ -40,6 +40,8 @@ from litellm.llms.base_llm.files.transformation import BaseFilesConfig
 from litellm.llms.base_llm.search.transformation import BaseSearchConfig, SearchResponse
 from litellm.llms.bedrock.base_aws_llm import SignsRequestsWithAWS
 from litellm.llms.brave.search.transformation import BraveSearchConfig
+from litellm.llms.gemini.image_edit.transformation import GeminiImageEditConfig
+from litellm.llms.gemini.image_generation.transformation import GoogleImageGenConfig
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
 from litellm.llms.base_llm.image_generation.transformation import BaseImageGenerationConfig
 from litellm.llms.base_llm.text_to_speech.transformation import BaseTextToSpeechConfig
@@ -6968,3 +6970,105 @@ def test_sync_responses_run_a_v2_callback_pre_deployment_hook_without_any_legacy
 
     assert seen == (["gpt-5.5"] if with_v2 else [])
     assert response_params["temperature"] == 1.0
+
+
+class _GeminiImageUpstream:
+    def __init__(self) -> None:
+        self.bodies: Final[list[Mapping[str, object]]] = []  # mutable-ok: records each upstream request the handler sends
+
+    def respond(self, request: httpx.Request) -> httpx.Response:
+        self.bodies.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={
+                "candidates": [
+                    {"content": {"parts": [{"inlineData": {"mimeType": "image/png", "data": f"image-{len(self.bodies)}"}}]}}
+                ],
+                "usageMetadata": {
+                    "promptTokenCount": 8,
+                    "candidatesTokenCount": 1120,
+                    "totalTokenCount": 1128,
+                    "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 8}],
+                    "candidatesTokensDetails": [{"modality": "IMAGE", "tokenCount": 1120}],
+                },
+            },
+        )
+
+    def client(self, is_async: bool) -> HTTPHandler | AsyncHTTPHandler:
+        if not is_async:
+            return HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(self.respond)))
+        handler: Final = AsyncHTTPHandler()
+        handler.client = httpx.AsyncClient(transport=httpx.MockTransport(self.respond))
+        return handler
+
+
+async def _gemini_images(
+    upstream: _GeminiImageUpstream, route: str, is_async: bool, openai_params: dict[str, object]
+) -> ImageResponse:
+    logging_obj: Final = Mock()
+    model: Final = "gemini-3.1-flash-lite-image"
+    if route == "edit":
+        edit_config: Final = GeminiImageEditConfig()
+        edited: Final = BaseLLMHTTPHandler().image_edit_handler(
+            model=model,
+            image=b"\x89PNG\r\n\x1a\n",
+            prompt="add a blue circle",
+            image_edit_provider_config=edit_config,
+            image_edit_optional_request_params=edit_config.map_openai_params(openai_params, model, drop_params=False),
+            custom_llm_provider="gemini",
+            litellm_params=GenericLiteLLMParams(api_key="test-key"),
+            logging_obj=logging_obj,
+            timeout=30,
+            client=upstream.client(is_async),
+            _is_async=is_async,
+        )
+        return await edited if inspect.isawaitable(edited) else edited
+    generation_config: Final = GoogleImageGenConfig()
+    generated: Final = BaseLLMHTTPHandler().image_generation_handler(
+        model=model,
+        prompt="a lighthouse",
+        image_generation_provider_config=generation_config,
+        image_generation_optional_request_params=generation_config.map_openai_params(
+            openai_params, {}, model, drop_params=False
+        ),
+        custom_llm_provider="gemini",
+        litellm_params={"api_key": "test-key"},
+        logging_obj=logging_obj,
+        timeout=30,
+        client=upstream.client(is_async),
+        _is_async=is_async,
+        api_key="test-key",
+    )
+    return await generated if inspect.isawaitable(generated) else generated
+
+
+@pytest.mark.parametrize("route", ["generation", "edit"])
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.asyncio
+async def test_gemini_image_n_returns_n_images_from_n_single_image_requests(route: str, is_async: bool) -> None:
+    upstream: Final = _GeminiImageUpstream()
+
+    response: Final = await _gemini_images(upstream, route, is_async, {"n": 3})
+
+    assert sorted(image.b64_json for image in response.data) == ["image-1", "image-2", "image-3"]
+    assert [body["generationConfig"].get("candidateCount") for body in upstream.bodies] == [None, None, None]
+    assert response.usage is not None
+    assert (response.usage.input_tokens, response.usage.output_tokens, response.usage.total_tokens) == (
+        3 * 8,
+        3 * 1120,
+        3 * 1128,
+    )
+    assert response.usage.input_tokens_details.text_tokens == 3 * 8
+    assert response.model_dump()["usage"]["output_tokens_details"]["image_tokens"] == 3 * 1120
+
+
+@pytest.mark.parametrize("route", ["generation", "edit"])
+@pytest.mark.parametrize("openai_params", [{}, {"n": 1}])
+@pytest.mark.asyncio
+async def test_gemini_image_without_multiple_n_sends_one_request(route: str, openai_params: dict[str, object]) -> None:
+    upstream: Final = _GeminiImageUpstream()
+
+    response: Final = await _gemini_images(upstream, route, True, openai_params)
+
+    assert [image.b64_json for image in response.data] == ["image-1"]
+    assert len(upstream.bodies) == 1

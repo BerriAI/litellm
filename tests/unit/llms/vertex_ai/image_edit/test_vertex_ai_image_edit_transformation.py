@@ -181,6 +181,32 @@ class TestVertexAIGeminiImageEditTransformation:
 
         assert mapped["aspectRatio"] == "16:9"
 
+    @pytest.mark.parametrize(("requested", "request_count"), [({}, 1), ({"n": 1}, 1), ({"n": 3}, 3)])
+    def test_n_is_accepted_and_served_by_single_image_requests(
+        self, requested: Dict[str, object], request_count: int
+    ) -> None:
+        assert "n" in self.config.get_supported_openai_params(self.model)
+        mapped = self.config.map_openai_params(
+            image_edit_optional_params={"size": "1792x1024", **requested},  # type: ignore[arg-type]
+            model=self.model,
+            drop_params=False,
+        )
+
+        request_body, _ = self.config.transform_image_edit_request(
+            model=self.model,
+            prompt=self.prompt,
+            image=[BytesIO(b"fake_image_data")],
+            image_edit_optional_request_params=mapped,
+            litellm_params=MagicMock(),
+            headers={},
+        )
+
+        assert self.config.get_request_count(self.model, mapped) == request_count
+        assert json.loads(request_body)["generationConfig"] == {
+            "response_modalities": ["IMAGE"],
+            "image_config": {"aspect_ratio": "16:9"},
+        }
+
     def test_get_complete_url(self) -> None:
         """Test URL generation for Vertex AI Gemini"""
         with patch.dict(
