@@ -102068,6 +102068,11 @@
                 "540p": 0.15,
                 "720p": 0.2,
                 "1080p": 0.4
+            },
+            "8s": {
+                "360p": 0.3,
+                "540p": 0.3,
+                "720p": 0.4
             }
         },
         "source": "https://fal.ai/models/fal-ai/pixverse/extend",
@@ -102114,6 +102119,11 @@
                 "540p": 0.15,
                 "720p": 0.2,
                 "1080p": 0.4
+            },
+            "8s": {
+                "360p": 0.3,
+                "540p": 0.3,
+                "720p": 0.4
             }
         },
         "source": "https://fal.ai/models/fal-ai/pixverse/v3.5/effects",
@@ -102237,6 +102247,11 @@
                 "540p": 0.15,
                 "720p": 0.2,
                 "1080p": 0.4
+            },
+            "8s": {
+                "360p": 0.3,
+                "540p": 0.3,
+                "720p": 0.4
             }
         },
         "source": "https://fal.ai/models/fal-ai/pixverse/v3.5/transition",
@@ -102260,6 +102275,11 @@
                 "540p": 0.15,
                 "720p": 0.2,
                 "1080p": 0.4
+            },
+            "8s": {
+                "360p": 0.3,
+                "540p": 0.3,
+                "720p": 0.4
             }
         },
         "source": "https://fal.ai/models/fal-ai/pixverse/v4.5/effects",
@@ -102383,6 +102403,11 @@
                 "540p": 0.15,
                 "720p": 0.2,
                 "1080p": 0.4
+            },
+            "8s": {
+                "360p": 0.3,
+                "540p": 0.3,
+                "720p": 0.4
             }
         },
         "source": "https://fal.ai/models/fal-ai/pixverse/v4.5/transition",
@@ -102406,6 +102431,11 @@
                 "540p": 0.15,
                 "720p": 0.2,
                 "1080p": 0.4
+            },
+            "8s": {
+                "360p": 0.3,
+                "540p": 0.3,
+                "720p": 0.4
             }
         },
         "source": "https://fal.ai/models/fal-ai/pixverse/v4/effects",
@@ -102529,6 +102559,11 @@
                 "540p": 0.15,
                 "720p": 0.2,
                 "1080p": 0.4
+            },
+            "8s": {
+                "360p": 0.3,
+                "540p": 0.3,
+                "720p": 0.4
             }
         },
         "source": "https://fal.ai/models/fal-ai/pixverse/v5/effects",
@@ -102607,6 +102642,11 @@
                 "540p": 0.15,
                 "720p": 0.2,
                 "1080p": 0.4
+            },
+            "8s": {
+                "360p": 0.3,
+                "540p": 0.3,
+                "720p": 0.4
             }
         },
         "source": "https://fal.ai/models/fal-ai/pixverse/v5/transition",
