@@ -14,7 +14,7 @@ use serde_json::Value;
 use crate::{
     Error,
     anthropic::{
-        common_utils::{filter_billing_headers_from_system, has_anthropic_credential},
+        common_utils::{has_anthropic_credential, strip_billing_metadata_from_system},
         messages::transformation::update_headers_with_anthropic_beta,
     },
     base_llm::{
@@ -104,7 +104,7 @@ impl BaseMessagesConfig for EdenAIAnthropicMessagesConfig {
                 system: request
                     .params
                     .system
-                    .and_then(filter_billing_headers_from_system),
+                    .and_then(strip_billing_metadata_from_system),
                 ..request.params
             },
             ..request
@@ -137,5 +137,38 @@ impl BaseMessagesConfig for EdenAIAnthropicMessagesConfig {
             return None;
         }
         serde_json::Number::from_f64(cost)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use rstest::rstest;
+
+    use super::*;
+
+    #[rstest]
+    #[case::empty_string(serde_json::json!(""), None)]
+    #[case::string(serde_json::json!("be terse"), Some(serde_json::json!("be terse")))]
+    fn an_empty_system_string_is_dropped_as_python_does(
+        #[case] system: serde_json::Value,
+        #[case] expected: Option<serde_json::Value>,
+    ) {
+        let request: MessagesRequest = serde_json::from_value(serde_json::json!({
+            "model": "test-model",
+            "max_tokens": 16,
+            "system": system,
+            "messages": [{"role": "user", "content": "hi"}]
+        }))
+        .unwrap();
+        let transformed = EDENAI_MESSAGES_CONFIG
+            .transform_anthropic_messages_request(request, &MessagesTransformContext::default())
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(transformed)
+                .unwrap()
+                .get("system")
+                .cloned(),
+            expected
+        );
     }
 }

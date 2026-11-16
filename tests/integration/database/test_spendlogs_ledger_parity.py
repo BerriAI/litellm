@@ -114,9 +114,10 @@ async def test_worker_removes_more_expired_receipts_than_one_cleanup_batch_in_on
     client = PrismaClient(database_url=parity_database, proxy_logging_obj=proxy_server.proxy_logging_obj)
     with psycopg.connect(parity_database, autocommit=True) as connection:
         connection.execute(
-            'INSERT INTO "LiteLLM_SpendLogDelivery" (request_id, accounting_payload, is_batch, state, applied_at) '
-            "SELECT 'expired-' || n, '{}'::jsonb, false, 'applied', CURRENT_TIMESTAMP - INTERVAL '2 days' "
-            "FROM generate_series(1, 501) AS n"
+            'INSERT INTO "LiteLLM_SpendLogDelivery" '
+            "(delivery_id, request_id, accounting_payload, is_batch, state, applied_at) "
+            "SELECT 'expired-' || n, 'expired-' || n, '{}'::jsonb, false, 'applied', "
+            "CURRENT_TIMESTAMP - INTERVAL '2 days' FROM generate_series(1, 501) AS n"
         )
     await client.db.connect()
     try:
@@ -810,7 +811,8 @@ async def test_window_seed_excludes_pending_and_parked_but_preserves_legacy_cuto
             )
         for request_id, state in (("applied", "applied"), ("pending", "pending"), ("parked", "parked")):
             await client.writer_db.execute_raw(
-                'INSERT INTO "LiteLLM_SpendLogDelivery" (request_id,state,accounting_payload,is_batch) VALUES ($1,$2::"AccountingDeliveryState",$$ {} $$::jsonb,false)',
+                'INSERT INTO "LiteLLM_SpendLogDelivery" (delivery_id,request_id,state,accounting_payload,is_batch) '
+                'VALUES ($1,$1,$2::"AccountingDeliveryState",$$ {} $$::jsonb,false)',
                 request_id,
                 state,
             )
@@ -944,8 +946,9 @@ async def test_worker_exposes_invalid_accounting_as_delayed_then_parked_work(
     try:
         with psycopg.connect(parity_database, autocommit=True) as connection:
             connection.execute(
-                'INSERT INTO "LiteLLM_SpendLogDelivery" (request_id, created_at, accounting_payload, is_batch) '
-                "VALUES ('invalid-accounting', CURRENT_TIMESTAMP - INTERVAL '1 hour', "
+                'INSERT INTO "LiteLLM_SpendLogDelivery" '
+                "(delivery_id, request_id, created_at, accounting_payload, is_batch) "
+                "VALUES ('invalid-accounting', 'invalid-accounting', CURRENT_TIMESTAMP - INTERVAL '1 hour', "
                 '$$ {"metadata": {"accounting_windows": [{}]}} $$::jsonb, false)'
             )
         await flush_accounting_deliveries(writer, client, proxy_server.proxy_logging_obj)
@@ -1001,8 +1004,9 @@ async def test_worker_delivers_under_another_leaders_lock_then_cleans_reports_an
         assert reports_before is not None
         with psycopg.connect(parity_database, autocommit=True) as connection:
             connection.execute(
-                'INSERT INTO "LiteLLM_SpendLogDelivery" (request_id, accounting_payload, is_batch, attempts) '
-                "VALUES ('fresh', %s::jsonb, false, 0), ('retry', %s::jsonb, false, 1)",
+                'INSERT INTO "LiteLLM_SpendLogDelivery" '
+                "(delivery_id, request_id, accounting_payload, is_batch, attempts) "
+                "VALUES ('fresh', 'fresh', %s::jsonb, false, 0), ('retry', 'retry', %s::jsonb, false, 1)",
                 (
                     json.dumps({"spend": 0.25, "metadata": {"accounting_entities": {"user": "user"}}}),
                     json.dumps({"spend": 0.5, "metadata": {"accounting_entities": {"user": "user"}}}),
@@ -1010,8 +1014,8 @@ async def test_worker_delivers_under_another_leaders_lock_then_cleans_reports_an
             )
             connection.execute(
                 'INSERT INTO "LiteLLM_SpendLogDelivery" '
-                '(request_id, accounting_payload, is_batch, state, applied_at) '
-                "VALUES ('expired', '{}'::jsonb, false, 'applied', CURRENT_TIMESTAMP - INTERVAL '2 days')"
+                '(delivery_id, request_id, accounting_payload, is_batch, state, applied_at) '
+                "VALUES ('expired', 'expired', '{}'::jsonb, false, 'applied', CURRENT_TIMESTAMP - INTERVAL '2 days')"
             )
         assert await other_leader.acquire_lock(cronjob_id="accounting_delivery", allow_reentrant=False)
         await flush_accounting_deliveries(writer, client, proxy_server.proxy_logging_obj)
@@ -1442,8 +1446,9 @@ async def test_retained_batch_storage_threshold_alerts_without_deleting_receipts
     try:
         with psycopg.connect(parity_database, autocommit=True) as connection:
             connection.execute(
-                'INSERT INTO "LiteLLM_SpendLogDelivery" (request_id, state, applied_at, accounting_payload, is_batch) '
-                "VALUES ('old-batch', 'applied', CURRENT_TIMESTAMP - INTERVAL '400 days', '{}', true)"
+                'INSERT INTO "LiteLLM_SpendLogDelivery" '
+                "(delivery_id, request_id, state, applied_at, accounting_payload, is_batch) "
+                "VALUES ('old-batch', 'old-batch', 'applied', CURRENT_TIMESTAMP - INTERVAL '400 days', '{}', true)"
             )
         await flush_accounting_deliveries(DBSpendUpdateWriter(), client, alerts)
         with psycopg.connect(parity_database) as connection:
@@ -1482,15 +1487,17 @@ async def test_worker_drains_recovered_and_expired_work_at_its_configured_capaci
         with psycopg.connect(parity_database, autocommit=True) as connection:
             if backlog == "retries":
                 connection.execute(
-                    'INSERT INTO "LiteLLM_SpendLogDelivery" (request_id, accounting_payload, is_batch, attempts) '
-                    "SELECT 'retry-' || i, accounting_payload, false, 1 "
+                    'INSERT INTO "LiteLLM_SpendLogDelivery" '
+                    "(delivery_id, request_id, accounting_payload, is_batch, attempts) "
+                    "SELECT 'retry-' || i || '-' || delivery_id, 'retry-' || i, accounting_payload, false, 1 "
                     'FROM "LiteLLM_SpendLogDelivery" CROSS JOIN generate_series(1, 3) i'
                 )
             else:
                 connection.execute(
-                    'INSERT INTO "LiteLLM_SpendLogDelivery" (request_id, accounting_payload, is_batch, state, applied_at) '
-                    "SELECT 'expired-' || i, '{}', false, 'applied', CURRENT_TIMESTAMP - INTERVAL '2 days' "
-                    'FROM generate_series(1, 1100) i'
+                    'INSERT INTO "LiteLLM_SpendLogDelivery" '
+                    "(delivery_id, request_id, accounting_payload, is_batch, state, applied_at) "
+                    "SELECT 'expired-' || i, 'expired-' || i, '{}', false, 'applied', "
+                    "CURRENT_TIMESTAMP - INTERVAL '2 days' FROM generate_series(1, 1100) i"
                 )
         await flush_accounting_deliveries(writer, client, proxy_server.proxy_logging_obj)
         with psycopg.connect(parity_database) as connection:

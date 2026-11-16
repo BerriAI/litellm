@@ -1,3 +1,5 @@
+mod auth;
+mod budgets;
 mod cache;
 mod callable;
 mod coercion;
@@ -16,6 +18,7 @@ mod python_settings;
 mod redis;
 mod router;
 mod routes;
+mod s3_log;
 mod secrets;
 mod tokenizer;
 
@@ -26,7 +29,17 @@ mod _native {
     use pyo3::{prelude::*, types::PyModule};
 
     #[pymodule_export]
-    use crate::db::NativeDatabase;
+    use crate::auth::{
+        auth_allowed_routes_grant, auth_first_denied_route, auth_jwt_team_routes_grant,
+        auth_managed_agent_route_allowed, auth_managed_route, auth_route_matches_denied,
+        auth_route_matches_prefix, auth_route_matches_wildcard,
+    };
+    #[pymodule_export]
+    use crate::budgets::NativeBudgets;
+    #[pymodule_export]
+    use crate::budgets::budget_check_decision;
+    #[pymodule_export]
+    use crate::db::{NativeDatabase, NativeDatabaseFailure};
     #[cfg(feature = "panic-test")]
     #[pymodule_export]
     use crate::diagnostics::_panic_for_test;
@@ -37,7 +50,7 @@ mod _native {
     #[pymodule_export]
     use crate::http::unsupported_tls_settings;
     #[pymodule_export]
-    use crate::logger::NativeDiagnosticProcessor;
+    use crate::logger::{NativeDiagnosticProcessor, NativeTokenRedactor};
     #[pymodule_export]
     use crate::model_cost::{
         NativeCostMapSource, NativeFetchFailed, NativeFetchPolicy, NativeFetched, NativeInstalled,
@@ -76,7 +89,7 @@ mod _native {
         NativePending, NativeRedisStoreError, router_cooldowns::NativeRouterCooldowns,
     };
     #[pymodule_export]
-    use crate::router::{RouterCall, RouterCoreHandle};
+    use crate::router::{AttemptShape, RouterCall, RouterCoreHandle};
     #[pymodule_export]
     use crate::routes::audio_transcription::{atranscription, transcription};
     #[pymodule_export]
@@ -97,6 +110,8 @@ mod _native {
     use crate::routes::token_counter::TokenCounter;
     #[pymodule_export]
     use crate::routes::traces::trace_encode_error;
+    #[pymodule_export]
+    use crate::s3_log::NativeS3Log;
     #[cfg(feature = "huggingface")]
     #[pymodule_export]
     use crate::tokenizer::HuggingFaceEncoding;
@@ -151,6 +166,7 @@ mod tests {
                 "aresponses",
                 "ResponsesWebSocketConnection",
                 "NativeDiagnosticProcessor",
+                "NativeTokenRedactor",
                 "NativeRedisClient",
                 "NativeRedisBreaker",
                 "NativeAdmission",
@@ -180,6 +196,7 @@ mod tests {
                 "NativeClickHouseSpendConfig",
                 "NativeClickHouseSpendStorage",
                 "NativeDatabase",
+                "NativeDatabaseFailure",
                 "trace_encode_error",
                 "bundled_model_cost_map",
                 "NativeModelCostMap",
@@ -197,10 +214,22 @@ mod tests {
                 "Tokenizer",
                 "RouterCoreHandle",
                 "RouterCall",
+                "AttemptShape",
                 "gil_stats",
                 "process_state_started",
                 "reserve_process_for_forking",
                 "unsupported_tls_settings",
+                "NativeBudgets",
+                "budget_check_decision",
+                "NativeS3Log",
+                "auth_allowed_routes_grant",
+                "auth_first_denied_route",
+                "auth_jwt_team_routes_grant",
+                "auth_managed_agent_route_allowed",
+                "auth_managed_route",
+                "auth_route_matches_denied",
+                "auth_route_matches_prefix",
+                "auth_route_matches_wildcard",
             ];
             #[cfg(feature = "huggingface")]
             expected.push("HuggingFaceEncoding");

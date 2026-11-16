@@ -11,6 +11,7 @@ use litellm_llms_types::{
     headers::ProviderSpecificHeaders,
 };
 use litellm_router_types::LitellmParams;
+use litellm_secret_value::SecretValue;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
@@ -85,6 +86,8 @@ pub struct MessagesSettings {
     #[serde(default)]
     pub drops_unsupported_params: bool,
     #[serde(default)]
+    pub global_drop_params: bool,
+    #[serde(default)]
     pub intercepted: bool,
     #[serde(default)]
     pub mcp_gateway: bool,
@@ -96,6 +99,15 @@ pub struct MessagesSettings {
     /// encode fails the call before the send.
     #[serde(default)]
     pub ascii_request_headers: bool,
+    /// The module-level key Python's config for this provider reads after the call's own, such
+    /// as `litellm.api_key or litellm.azure_key` for `azure_ai`. A host projects it, never Python's
+    /// settings dict.
+    #[serde(skip)]
+    pub module_api_key: Option<SecretValue>,
+    #[serde(default)]
+    pub detached_drain_timeout: Option<f64>,
+    #[serde(default)]
+    pub detached_drain_limit: Option<usize>,
 }
 
 impl MessagesSettings {
@@ -104,6 +116,15 @@ impl MessagesSettings {
             reasoning_auto_summary: self.reasoning_auto_summary,
             presanitized: self.presanitized,
         }
+    }
+
+    /// Python's Bedrock Messages relay keeps reading the provider stream after its client leaves,
+    /// for at most this long and in at most this many calls at once.
+    pub fn detached_drain(&self) -> Option<litellm_host::protocol::DetachedDrain> {
+        Some(litellm_host::protocol::DetachedDrain {
+            timeout: Duration::try_from_secs_f64(self.detached_drain_timeout?).ok()?,
+            limit: self.detached_drain_limit?,
+        })
     }
 
     pub fn request_timeout(&self) -> Option<Duration> {
@@ -194,6 +215,7 @@ mod tests {
                 supports_sampling_params: false,
                 supports_speed: true,
                 supports_mid_conversation_system: false,
+                bedrock: Default::default(),
                 effort_tiers: SupportedEffortTiers {
                     minimal: false,
                     low: true,
