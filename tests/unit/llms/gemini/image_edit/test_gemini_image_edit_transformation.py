@@ -261,18 +261,20 @@ class TestGeminiImageEditTransformation:
 
         assert raised.type is error
 
-    def test_transform_image_edit_request_without_image_raises(self) -> None:
-        optional_params = {}
-
-        with pytest.raises(ValueError, match='Gemini image edit requires at least one image\\.'):
+    @pytest.mark.parametrize("image", [None, []])
+    def test_transform_image_edit_request_without_image_is_a_bad_request(self, image: list[object] | None) -> None:
+        with pytest.raises(litellm.BadRequestError, match="Gemini image edit requires at least one image") as raised:
             self.config.transform_image_edit_request(
                 model=self.model,
                 prompt=self.prompt,
-                image=[],
-                image_edit_optional_request_params=optional_params,
+                image=image,
+                image_edit_optional_request_params={},
                 litellm_params=MagicMock(),
                 headers={},
             )
+
+        assert raised.value.status_code == 400
+        assert raised.value.llm_provider == "gemini"
 
     def test_use_multipart_form_data_returns_false(self) -> None:
         """
