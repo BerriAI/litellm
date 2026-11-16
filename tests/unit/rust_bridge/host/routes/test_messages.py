@@ -16,6 +16,7 @@ from typing import Final
 
 import httpx
 import pytest
+from google.auth import exceptions as google_auth
 from pydantic import TypeAdapter, ValidationError
 
 import litellm
@@ -2958,6 +2959,127 @@ def test_a_credential_failure_text_without_the_marker_keeps_the_native_mapping()
 
     assert isinstance(mapped, litellm.APIConnectionError | litellm.InternalServerError)
     assert mapped.llm_provider == "bedrock"  # pyright: ignore[reportUnknownMemberType]  # the public error leaves llm_provider untyped
+
+
+_VERTEX_CLAUDE: Final = "vertex_ai/claude-sonnet-4-5"
+_GOOGLE_CREDENTIAL_FAILURE: Final = "credential acquisition failed: Google credentials failed: token request failed"
+
+
+def _google_credential_failure(stage: str, cause: str) -> RuntimeError:
+    native: Final = RuntimeError(_GOOGLE_CREDENTIAL_FAILURE)
+    native.messages_credential_failure = "replay"  # pyright: ignore[reportAttributeAccessIssue]  # set by the native host
+    native.messages_gcp_credential_failure = (stage, cause)  # pyright: ignore[reportAttributeAccessIssue]  # set by the native host
+    return native
+
+
+@pytest.fixture
+def no_vertex_credentials_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("VERTEXAI_CREDENTIALS", raising=False)
+
+
+@pytest.mark.usefixtures("no_vertex_credentials_env")
+@pytest.mark.parametrize(
+    ("stage", "configured", "error_class", "text"),
+    [
+        ("token_rejected", True, google_auth.RefreshError, "token request failed"),
+        ("token_unreachable", True, google_auth.TransportError, "HTTP request failed: connection refused"),
+        ("unloadable", True, ValueError, "invalid private key in credentials"),
+        ("unloadable", False, google_auth.DefaultCredentialsError, "No such file or directory (os error 2)"),
+        (
+            "no_default_credentials",
+            False,
+            google_auth.DefaultCredentialsError,
+            "Your default credentials were not found. To set up Application Default Credentials, see "
+            "https://cloud.google.com/docs/authentication/external/set-up-adc for more information.",
+        ),
+    ],
+)
+def test_a_vertex_credential_failure_raises_the_class_python_s_token_acquisition_raises(
+    stage: str, configured: bool, error_class: type[Exception], text: str
+) -> None:
+    cause: Final = "no available authentication method found" if stage == "no_default_credentials" else text
+    logger: Final = Logging(
+        model=_VERTEX_CLAUDE,
+        messages=[],
+        stream=False,
+        call_type="aanthropic_messages",
+        start_time=None,
+        litellm_call_id="call-1",
+        function_id="fn",
+    )
+    request: Final = {
+        "model": _VERTEX_CLAUDE,
+        "messages": [],
+        "custom_llm_provider": "vertex_ai",
+        "vertex_project": "proj",
+        "litellm_logging_obj": logger,
+        **({"vertex_credentials": "/etc/vertex/key.json"} if configured else {}),
+    }
+
+    mapped: Final = messages_host.map_failure(_google_credential_failure(stage, cause), request, "vertex_ai", True)
+
+    assert type(mapped) is error_class
+    assert str(mapped) == text
+    assert mapped.__traceback__ is not None
+    assert logger.model_call_details["litellm_params"]["aanthropic_messages"] is True
+
+
+@pytest.mark.usefixtures("no_aws_credentials")
+@pytest.mark.parametrize(
+    ("model", "provider", "extra"),
+    [
+        ("anthropic/claude-sonnet-4-5", "anthropic", {"api_key": "sk-test"}),
+        (_BEDROCK_INVOKE, "bedrock", {"aws_region_name": "us-east-1"}),
+    ],
+    ids=("anthropic", "bedrock"),
+)
+def test_the_google_credential_stage_is_read_for_vertex_ai_alone(
+    model: str, provider: str, extra: Mapping[str, object]
+) -> None:
+    native: Final = _google_credential_failure("token_rejected", "token request failed")
+    del native.messages_credential_failure
+
+    mapped: Final = messages_host.map_failure(native, {"model": model, "messages": [], **extra}, provider)
+
+    assert isinstance(mapped, litellm.APIConnectionError | litellm.InternalServerError)
+    assert mapped.llm_provider == provider  # pyright: ignore[reportUnknownMemberType]  # the public error leaves llm_provider untyped
+
+
+@pytest.mark.parametrize(
+    ("location", "host"),
+    [
+        ({"vertex_location": "us-east5"}, "us-east5-aiplatform.googleapis.com"),
+        ({"vertex_ai_location": "global"}, "aiplatform.googleapis.com"),
+        ({"vertex_location": "eu"}, "aiplatform.eu.rep.googleapis.com"),
+        ({}, "us-central1-aiplatform.googleapis.com"),
+        ({"vertex_location": "us-east5", "api_base": ""}, "us-east5-aiplatform.googleapis.com"),
+    ],
+    ids=("regional", "global", "multi-region", "default", "blank-api-base"),
+)
+def test_a_vertex_connect_failure_names_the_host_python_reaches(
+    monkeypatch: pytest.MonkeyPatch, location: Mapping[str, str], host: str
+) -> None:
+    from litellm.rust_bridge.host import http_transport
+
+    monkeypatch.delenv("VERTEXAI_LOCATION", raising=False)
+    monkeypatch.delenv("VERTEX_LOCATION", raising=False)
+    monkeypatch.setattr(litellm, "vertex_location", None)
+    monkeypatch.setattr(http_transport, "uses_aiohttp_transport", lambda: True)
+    monkeypatch.setattr(messages_host, "get_ssl_configuration", _ssl_configuration)
+    native: Final = RuntimeError(
+        f"could not reach the provider: {_TRANSPORT} (Connect): dns error: error resolving DNS: "
+        "failed to lookup address information: Name or service not known"
+    )
+
+    mapped: Final = messages_host.map_failure(
+        native,
+        {"model": _VERTEX_CLAUDE, "messages": [], "custom_llm_provider": "vertex_ai", "vertex_project": "p", **location},
+        "vertex_ai",
+    )
+
+    assert type(mapped) is litellm.InternalServerError
+    assert mapped.llm_provider == "vertex_ai"  # pyright: ignore[reportUnknownMemberType]  # the public error leaves llm_provider untyped
+    assert str(mapped).endswith(f"Cannot connect to host {host}:443 ssl:<ssl> [Name or service not known]")
 
 
 @pytest.mark.parametrize(

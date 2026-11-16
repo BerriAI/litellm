@@ -47,6 +47,8 @@ const MESSAGES_PROVIDER_BAD_REQUEST: &str = "messages_provider_bad_request";
 /// Which failure Python's AWS signing raises for a credential Rust could not acquire, or `replay`
 /// when only running Python's signing again gives its exception.
 const MESSAGES_CREDENTIAL_FAILURE: &str = "messages_credential_failure";
+/// `(stage, text)` of a Google credential Rust could not acquire, read only for vertex_ai calls.
+const MESSAGES_GCP_CREDENTIAL_FAILURE: &str = "messages_gcp_credential_failure";
 
 struct ProviderRejection {
     text: String,
@@ -68,6 +70,25 @@ fn credential_failure(error: &Error) -> Option<&'static str> {
         | litellm_auth::Error::MissingApiBase { .. }
         | litellm_auth::Error::InvalidHeader => None,
     }
+}
+
+fn gcp_credential_failure(error: &Error) -> Option<(&'static str, String)> {
+    let (Error::Auth(litellm_auth::Error::CredentialAcquisition(detail))
+    | Error::Llm(litellm_llms::Error::Auth(litellm_auth::Error::CredentialAcquisition(detail)))) = error
+    else {
+        return None;
+    };
+    let stage = match litellm_auth_gcp::CredentialFailure::of(detail) {
+        litellm_auth_gcp::CredentialFailure::NoDefaultCredentials => "no_default_credentials",
+        litellm_auth_gcp::CredentialFailure::TokenRejected => "token_rejected",
+        litellm_auth_gcp::CredentialFailure::TokenUnreachable => "token_unreachable",
+        litellm_auth_gcp::CredentialFailure::Unloadable => "unloadable",
+    };
+    let text = match detail {
+        litellm_auth::ErrorDetail::Failed { cause, .. } => Report::new(&**cause).to_string(),
+        other => other.to_string(),
+    };
+    Some((stage, text))
 }
 
 fn aws_credential_failure(error: &(dyn StdError + 'static)) -> &'static str {
@@ -262,6 +283,9 @@ pub(crate) fn route_failure(
             }
             if let Some(failure) = credential_failure(&error) {
                 value.setattr(MESSAGES_CREDENTIAL_FAILURE, failure)?;
+            }
+            if let Some(failure) = gcp_credential_failure(&error) {
+                value.setattr(MESSAGES_GCP_CREDENTIAL_FAILURE, failure)?;
             }
             native
         }
@@ -642,6 +666,52 @@ mod tests {
                     .getattr_opt(MESSAGES_CREDENTIAL_FAILURE)
                     .unwrap()
                     .is_none()
+            );
+        });
+    }
+
+    #[rstest::rstest]
+    #[case::failed_load(
+        litellm_auth::Error::CredentialAcquisition(litellm_auth::ErrorDetail::failed(
+            "Google credentials",
+            std::io::Error::new(std::io::ErrorKind::NotFound, "No such file or directory"),
+        )),
+        Some(("unloadable", "No such file or directory"))
+    )]
+    #[case::unresolved(
+        litellm_auth::Error::CredentialAcquisition(litellm_auth::ErrorDetail::Unresolved {
+            subject: "GCP resource project",
+        }),
+        Some(("unloadable", "GCP resource project did not resolve to a value"))
+    )]
+    #[case::invalid_configuration(
+        litellm_auth::Error::InvalidConfiguration(litellm_auth::ErrorDetail::Base64EncodedJson {
+            field: "vertex_credentials",
+        }),
+        None
+    )]
+    fn a_google_credential_failure_names_its_stage_and_cause(
+        #[case] auth: litellm_auth::Error,
+        #[case] expected: Option<(&str, &str)>,
+        #[values(false, true)] through_llm: bool,
+    ) {
+        let error = match through_llm {
+            true => Error::Llm(litellm_llms::Error::Auth(auth)),
+            false => Error::Auth(auth),
+        };
+        Python::initialize();
+        Python::attach(|py| {
+            let native = route_failure(py, error, RequestMarker::Messages, Ok).unwrap();
+            let marked = native
+                .value(py)
+                .getattr_opt(MESSAGES_GCP_CREDENTIAL_FAILURE)
+                .unwrap()
+                .map(|value| value.extract::<(String, String)>().unwrap());
+            assert_eq!(
+                marked
+                    .as_ref()
+                    .map(|(stage, text)| (stage.as_str(), text.as_str())),
+                expected
             );
         });
     }
