@@ -16218,6 +16218,13 @@ def _responses_routing_kwargs(responses_request: Mapping[str, object] | None) ->
     return {"previous_response_id": previous_response_id} if isinstance(previous_response_id, str) else {}
 
 
+def _caller_routing_kwargs(caller: UserAPIKeyAuth | None) -> Mapping[str, object]:
+    if caller is None:
+        return {}
+    team_scope: Final = {"user_api_key_team_id": caller.team_id} if caller.team_id else {}
+    return {"metadata": {"user_api_key_auth": LiteLLMProxyRequestSetup.auth_for_request_metadata(caller), **team_scope}}
+
+
 def _inference_params(
     litellm_params: Mapping[str, object], responses_request: Mapping[str, object]
 ) -> Mapping[str, object]:
@@ -16360,6 +16367,7 @@ async def token_counter(
     request: TokenCountRequest,
     http_request: Request,
     fastapi_response: Response,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
     call_endpoint: bool = False,
     litellm_call_id: Annotated[str | None, Header(alias=LITELLM_CALL_ID_HEADER)] = None,
 ):
@@ -16374,6 +16382,7 @@ async def token_counter(
         \f
         http_request: carries the call id to the error handler when the count fails
         fastapi_response: answers the x-litellm-call-id header the count's log line names
+        user_api_key_dict: the caller, whose team picks the deployment the count runs on
     """
     call_id: Final = resolve_litellm_call_id(litellm_call_id)
     return await answered_with_litellm_call_id(
@@ -16386,6 +16395,7 @@ async def token_counter(
                 else {"additional_drop_params": request.additional_drop_params}
             ),
             litellm_call_id=call_id,
+            caller=user_api_key_dict,
         ),
         call_id,
         http_request,
@@ -16404,6 +16414,7 @@ async def count_request_tokens(
     litellm_call_id: str | None = None,
     client_oauth_token: str | None = None,
     count_options: Mapping[str, JsonValue] = MappingProxyType({}),
+    caller: UserAPIKeyAuth | None = None,
 ) -> TokenCountResponse:
     call_id: Final = resolve_litellm_call_id(litellm_call_id)
     if request.prompt is None and request.messages is None and request.contents is None:
@@ -16412,7 +16423,7 @@ async def count_request_tokens(
             call_id,
             request.model,
         )
-    routed: Final = await _routed_count_deployment(request.model, responses_request)
+    routed: Final = await _routed_count_deployment(request.model, responses_request, caller)
     count: Final = _count_request_tokens(
         request=request,
         routed=routed,
@@ -16441,12 +16452,14 @@ async def _with_anthropic_content_errors(count: Awaitable[TokenCountResponse]) -
 
 
 async def _routed_count_deployment(
-    model: str, responses_request: Mapping[str, object] | None
+    model: str, responses_request: Mapping[str, object] | None, caller: UserAPIKeyAuth | None
 ) -> Mapping[str, object] | None:
     if llm_router is None:
         return None
     try:
-        routed: Final = await llm_router.select(model, dict(_responses_routing_kwargs(responses_request)))
+        routed: Final = await llm_router.select(
+            model, {"model": model, **_responses_routing_kwargs(responses_request), **_caller_routing_kwargs(caller)}
+        )
     except Exception:
         verbose_proxy_logger.exception(
             "litellm.proxy.proxy_server.token_counter(): Exception occured while getting deployment"

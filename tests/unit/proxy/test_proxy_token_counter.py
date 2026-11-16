@@ -66,7 +66,7 @@ from litellm.llms.gemini.count_tokens import handler as gemini_count_tokens_hand
 from litellm.llms.mistral.count_tokens import handler as mistral_count_tokens_http
 from litellm.llms.openai.responses.count_tokens import handler as openai_count_tokens_http
 from litellm.llms.vertex_ai.vertex_ai_partner_models.count_tokens.handler import VertexAIPartnerModelsTokenCounter
-from litellm.proxy._types import ProxyException, TokenCountRequest, UserAPIKeyAuth
+from litellm.proxy._types import LitellmUserRoles, ProxyException, TokenCountRequest, UserAPIKeyAuth
 from litellm.proxy.anthropic_endpoints.endpoints import (
     count_tokens as anthropic_count_tokens,
 )
@@ -183,6 +183,105 @@ async def test_token_counting_model_not_in_model_list():
 
     assert response.tokenizer_type == "openai_tokenizer"  # SHOULD use the OpenAI tokenizer
     assert response.model_used == "special-alias"
+
+
+def _team_scoped_router() -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "shared-model",
+                "litellm_params": {"model": "groq/global-backend", "api_key": "sk-test"},
+                "model_info": {"id": "global-deployment"},
+            },
+            {
+                "model_name": "model_name_team-a_1",
+                "litellm_params": {"model": "groq/team-a-backend", "api_key": "sk-test"},
+                "model_info": {"id": "team-a-deployment", "team_id": "team-a", "team_public_model_name": "shared-model"},
+            },
+            {
+                "model_name": "model_name_team-b_2",
+                "litellm_params": {"model": "groq/team-b-backend", "api_key": "sk-test"},
+                "model_info": {"id": "team-b-deployment", "team_id": "team-b", "team_public_model_name": "team-only-model"},
+            },
+        ]
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("caller", "model", "expected_model_used"),
+    [
+        (UserAPIKeyAuth(team_id="team-a"), "shared-model", "team-a-backend"),
+        (UserAPIKeyAuth(team_id="team-b"), "team-only-model", "team-b-backend"),
+        (UserAPIKeyAuth(team_id="team-b"), "shared-model", "global-backend"),
+        (UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN), "team-only-model", "team-b-backend"),
+        (None, "shared-model", "global-backend"),
+    ],
+)
+async def test_count_runs_on_the_deployment_the_callers_team_routes_to(
+    monkeypatch: pytest.MonkeyPatch, caller: UserAPIKeyAuth | None, model: str, expected_model_used: str
+):
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", _team_scoped_router())
+
+    response = await count_request_tokens(
+        request=TokenCountRequest(model=model, messages=[{"role": "user", "content": "hello"}]), caller=caller
+    )
+
+    assert response.model_used == expected_model_used
+
+
+async def _count_on_utils_route(caller: UserAPIKeyAuth) -> object:
+    return await token_counter(
+        request=TokenCountRequest(model="shared-model", messages=[{"role": "user", "content": "hello"}]),
+        http_request=_json_request({}, "python-httpx/0.28.1"),
+        fastapi_response=Response(),
+        user_api_key_dict=caller,
+    )
+
+
+async def _count_on_messages_route(caller: UserAPIKeyAuth) -> object:
+    body: Final = {"model": "shared-model", "messages": [{"role": "user", "content": "hello"}]}
+    return await anthropic_count_tokens(_json_request(body, "python-httpx/0.28.1"), Response(), caller)
+
+
+async def _count_on_responses_route(caller: UserAPIKeyAuth) -> object:
+    from litellm.proxy.response_api_endpoints.endpoints import responses_input_tokens
+
+    return await responses_input_tokens(
+        request=_json_request({"model": "shared-model", "input": "hello"}, "python-httpx/0.28.1"),
+        fastapi_response=Response(),
+        general_settings=MappingProxyType({}),
+        token_counter=count_request_tokens,
+        llm_router=litellm.proxy.proxy_server.llm_router,
+        user_api_key_dict=caller,
+        response_id_security=None,
+        managed_files=None,
+    )
+
+
+async def _count_on_google_route(caller: UserAPIKeyAuth) -> object:
+    from litellm.proxy.google_endpoints.endpoints import google_count_tokens
+
+    body: Final = {"contents": [{"role": "user", "parts": [{"text": "hello"}]}]}
+    return await google_count_tokens(_json_request(body, "python-httpx/0.28.1"), "shared-model", Response(), caller)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "count_on_route",
+    [_count_on_utils_route, _count_on_messages_route, _count_on_responses_route, _count_on_google_route],
+    ids=["utils", "messages", "responses", "google"],
+)
+async def test_every_count_route_counts_on_the_callers_team_deployment(
+    monkeypatch: pytest.MonkeyPatch,
+    token_count_log_lines: Callable[[], tuple[dict[str, object], ...]],
+    count_on_route: Callable[[UserAPIKeyAuth], Coroutine[None, None, object]],
+):
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", _team_scoped_router())
+
+    await count_on_route(UserAPIKeyAuth(team_id="team-a"))
+
+    assert tuple(line["model_id"] for line in token_count_log_lines()) == ("team-a-deployment",)
 
 
 @pytest.mark.asyncio
@@ -442,6 +541,7 @@ async def test_anthropic_messages_count_tokens_endpoint():
         litellm_call_id=None,
         client_oauth_token=None,
         count_options=None,
+        caller=None,
     ):
         assert call_endpoint == True, "Should be called with call_endpoint=True for Anthropic endpoint"
         assert request.model == "claude-3-sonnet-20240229"
@@ -525,6 +625,7 @@ async def test_anthropic_messages_count_tokens_with_non_anthropic_model():
         litellm_call_id=None,
         client_oauth_token=None,
         count_options=None,
+        caller=None,
     ):
         assert call_endpoint == True, "Should be called with call_endpoint=True for Anthropic endpoint"
         assert request.model == "gpt-4"
@@ -1348,6 +1449,7 @@ async def test_anthropic_endpoint_returns_anthropic_error_format():
         litellm_call_id=None,
         client_oauth_token=None,
         count_options=None,
+        caller=None,
     ):
         raise ProxyException(
             message='{"detail":{"message":"Input is too long for requested model."}}',
@@ -1408,6 +1510,7 @@ async def test_anthropic_endpoint_403_permission_error_format():
         litellm_call_id=None,
         client_oauth_token=None,
         count_options=None,
+        caller=None,
     ):
         raise ProxyException(
             message='{"Message":"Bearer Token has expired"}',
@@ -1468,6 +1571,7 @@ async def test_anthropic_endpoint_429_rate_limit_error_format():
         litellm_call_id=None,
         client_oauth_token=None,
         count_options=None,
+        caller=None,
     ):
         raise ProxyException(
             message="Rate limit exceeded",
@@ -6470,6 +6574,7 @@ async def _utils_route_count(tool_choice: Mapping[str, JsonValue], model: str = 
         ),
         http_request=_json_request({}, "python-httpx/0.28.1"),
         fastapi_response=Response(),
+        user_api_key_dict=UserAPIKeyAuth(),
     )
     return response.total_tokens
 
@@ -6753,11 +6858,13 @@ async def test_utils_token_counter_counts_a_bare_prompt_with_a_tool_choice_like_
         request=TokenCountRequest(model="no-count-api", prompt=_TOOL_CHOICE_QUESTION, tool_choice="required"),
         http_request=_json_request({}, "python-httpx/0.28.1"),
         fastapi_response=Response(),
+        user_api_key_dict=UserAPIKeyAuth(),
     )
     prompt_alone: Final = await token_counter(
         request=TokenCountRequest(model="no-count-api", prompt=_TOOL_CHOICE_QUESTION),
         http_request=_json_request({}, "python-httpx/0.28.1"),
         fastapi_response=Response(),
+        user_api_key_dict=UserAPIKeyAuth(),
     )
 
     assert (with_choice.error, with_choice.total_tokens) == (False, prompt_alone.total_tokens)

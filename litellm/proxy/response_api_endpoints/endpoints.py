@@ -1529,6 +1529,7 @@ class _TokenCounter(Protocol):
         call_endpoint: bool,
         responses_request: Mapping[str, object] | None,
         litellm_call_id: str | None,
+        caller: UserAPIKeyAuth | None,
     ) -> Awaitable[TokenCountResponse]: ...
 
 
@@ -1897,6 +1898,7 @@ async def _responses_input_tokens(
             call_endpoint=True,
             responses_request=responses_request,
             litellm_call_id=litellm_call_id,
+            caller=user_api_key_dict,
         )
     except ProxyException as e:
         if e.type != _PROVIDER_COUNT_ERROR_TYPE:
