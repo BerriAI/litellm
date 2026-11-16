@@ -102618,5 +102618,16 @@
         "supported_output_modalities": [
             "video"
         ]
+    },
+    "fal_ai/bria/rmbg-3": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.018,
+        "source": "https://fal.ai/models/bria/rmbg-3",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
     }
 }
