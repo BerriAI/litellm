@@ -55,12 +55,17 @@ class WeaklyParkedLogger(CustomLogger):
         _ = gc.collect()
         return self._release_parked()
 
-    async def settle(self) -> None:
+    async def settle(self) -> bool:
         _ = self._release_parked()
         task: Final = None if self._task is None else self._task()
-        if task is not None:
-            _ = await asyncio.wait((task,), timeout=_DEADLOCK_GUARD_SECONDS)
+        if task is not None and not task.done():
+            _, pending = await asyncio.wait((task,), timeout=_DEADLOCK_GUARD_SECONDS)
+            if pending:
+                _ = task.cancel()
+                _ = await asyncio.wait((task,))
+                return False
         await drain_logging_tasks(timeout=_DEADLOCK_GUARD_SECONDS)
+        return True
 
 
 @asynccontextmanager
@@ -68,5 +73,7 @@ async def weakly_parked_logger() -> AsyncIterator[WeaklyParkedLogger]:
     logger: Final = WeaklyParkedLogger()
     try:
         yield logger
-    finally:
-        await logger.settle()
+    except BaseException:
+        _ = await logger.settle()
+        raise
+    assert await logger.settle(), "the released logging callback was still pending and had to be cancelled"

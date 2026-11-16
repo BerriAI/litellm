@@ -2736,13 +2736,11 @@ class CustomStreamWrapper:
                     _copy = complete_streaming_response.model_copy(deep=True)
                 except RuntimeError:
                     _copy = complete_streaming_response.model_copy()
-                spawn_logging_task(
-                    asyncio.get_running_loop(),
+                asyncio.create_task(
                     self.async_cache_streaming_response(
                         processed_chunk=_copy,
                         cache_hit=cache_hit,
-                    ),
-                    task_name="Streaming response cache write",
+                    )
                 )
             # Update hidden_params with final usage from
             # stream_chunk_builder (see sync __next__ for full comment).
