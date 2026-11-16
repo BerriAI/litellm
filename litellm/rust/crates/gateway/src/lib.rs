@@ -1,7 +1,9 @@
 mod admit;
+mod boot;
 mod db;
 mod error;
 mod health;
+pub mod host;
 mod license;
 pub mod middleware;
 mod redis;
@@ -13,6 +15,9 @@ pub use redis::RedisClients;
 pub use resources::Resources;
 pub use state::AppState;
 
+/// The gateway served through the native host.
+pub type Gateway = litellm_gateway_inference::Gateway<host::NativeHost>;
+
 use std::{path::Path, sync::Arc};
 
 use axum::Router;
@@ -20,7 +25,6 @@ use axum::Router;
 use litellm_config::Config;
 use litellm_env::{Lookup, ProcessEnvironment};
 use litellm_gateway_auth::{Auth, BearerOrXApiKey};
-use litellm_gateway_inference::{Gateway, ModelRouter};
 use litellm_http::{
     ClientVariant, HttpClientPool, HttpSettings, HttpSettingsLayer, Resolution,
     media::PublicDnsResolver,
@@ -49,15 +53,20 @@ pub(crate) fn environment_secrets(
     )
 }
 
-pub fn build_inference(config: &Config, resources: &Resources) -> Result<Arc<Gateway>, Error> {
+pub async fn build_inference(
+    config: &Config,
+    resources: &Resources,
+) -> Result<Arc<Gateway>, Error> {
     let catalog = Catalog::parse(BUNDLED_REGISTRY)?.value;
-    let router = ModelRouter::from_config(config, &catalog);
+    let (router, shaping) = boot::router(config, &catalog).await?;
     Ok(Arc::new(
         Gateway::new(
             resources.core.clone(),
             resources.http.clone(),
             resources.secrets.clone(),
             router,
+            shaping,
+            host::NativeHost,
         )?
         .with_client_side_credentials(config.general_settings.allow_client_side_credentials),
     ))

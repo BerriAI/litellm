@@ -1,11 +1,14 @@
 use axum::http::StatusCode;
 use axum::{
-    Json,
+    Extension, Json,
     response::{IntoResponse, Response},
 };
 use litellm_inference::Error as InferenceError;
 use litellm_llms::base_llm::ocr::error::Error as OcrError;
+use litellm_python_compat::{Value as PyValue, repr::repr};
 use serde_json::{Map, Value, json};
+
+use crate::headers::Routing;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -23,12 +26,54 @@ pub enum Error {
     Route(#[from] InferenceError),
     #[error(transparent)]
     Ocr(#[from] OcrError),
+    #[error(transparent)]
+    NoDeployments(#[from] NoDeployments),
+    #[error(transparent)]
+    Routing(litellm_router_core::Error),
     #[error("{0} is not implemented by the Rust gateway")]
     Unsupported(String),
     #[error("request body exceeds the size limit")]
     BodyTooLarge,
     #[error("unexpected HTTP host operation")]
     Internal,
+}
+
+/// Python's `RouterRateLimitError`, in its words: no deployment of `model` takes a call now.
+#[derive(Debug, PartialEq)]
+pub struct NoDeployments {
+    pub model: String,
+    /// Seconds until a deployment of the model is tried again.
+    pub cooldown: f64,
+    /// Every deployment of the model is cooling down.
+    pub all_cooling: bool,
+    pub pre_call_checks: bool,
+    /// The ids of every deployment that is cooling down, of any model.
+    pub cooling: Vec<String>,
+}
+
+impl std::error::Error for NoDeployments {}
+
+impl std::fmt::Display for NoDeployments {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let whole = self.cooldown.fract() == 0.0 && self.cooldown.abs() < i64::MAX as f64;
+        let seconds = match whole {
+            true => PyValue::Int((self.cooldown as i64).into()),
+            false => PyValue::Float(self.cooldown),
+        };
+        let reason = match self.all_cooling {
+            true => " All deployments for selected model are in cooldown.",
+            false => "",
+        };
+        let cooling = PyValue::List(self.cooling.iter().cloned().map(PyValue::Str).collect());
+        write!(
+            formatter,
+            "No deployments available for selected model, Try again in {} seconds.{reason} Passed model={}. pre-call-checks={}, cooldown_list={}",
+            repr(&seconds),
+            self.model,
+            repr(&PyValue::Bool(self.pre_call_checks)),
+            repr(&cooling),
+        )
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -59,6 +104,37 @@ impl IntoResponse for Error {
     }
 }
 
+/// The error a request ended on, with the deployment the router says raised it, which the proxy
+/// names in `x-litellm-model-id`.
+#[derive(Debug)]
+pub struct Ended {
+    pub error: Box<Error>,
+    pub deployment_id: Option<String>,
+}
+
+impl Ended {
+    /// What the router did for the call, which the routing headers layer reads off the response.
+    pub(crate) fn routing(&self) -> Option<Extension<Routing>> {
+        let deployment_id = self.deployment_id.as_deref()?;
+        Some(Extension(Routing::failed_on(deployment_id)))
+    }
+}
+
+impl<E: Into<Error>> From<E> for Ended {
+    fn from(error: E) -> Self {
+        Self {
+            error: Box::new(error.into()),
+            deployment_id: None,
+        }
+    }
+}
+
+impl IntoResponse for Ended {
+    fn into_response(self) -> Response {
+        (self.routing(), *self.error).into_response()
+    }
+}
+
 impl From<litellm_host_http::Error<InferenceError>> for Error {
     fn from(error: litellm_host_http::Error<InferenceError>) -> Self {
         match error {
@@ -76,9 +152,11 @@ impl Error {
             Self::Unsupported(_) => StatusCode::NOT_IMPLEMENTED,
             Self::BodyTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
             Self::InvalidBody(_) | Self::UnknownModel { .. } => StatusCode::BAD_REQUEST,
+            Self::NoDeployments(_) => StatusCode::TOO_MANY_REQUESTS,
             Self::Internal => StatusCode::INTERNAL_SERVER_ERROR,
             Self::Ocr(error) => ocr_status(error),
             Self::Route(error) => route_status(error),
+            Self::Routing(error) => routing_status(error),
         }
     }
 
@@ -141,6 +219,8 @@ impl Error {
             | Self::UnknownModel { .. }
             | Self::Route(_)
             | Self::Ocr(_)
+            | Self::NoDeployments(_)
+            | Self::Routing(_)
             | Self::Unsupported(_)
             | Self::BodyTooLarge
             | Self::Internal => litellm_error::Report::new(self).to_string(),
@@ -162,6 +242,17 @@ fn route_status(error: &InferenceError) -> StatusCode {
         return StatusCode::BAD_REQUEST;
     }
     StatusCode::INTERNAL_SERVER_ERROR
+}
+
+/// The status of an error the router made itself: the status of the exception it stands for.
+fn routing_status(error: &litellm_router_core::Error) -> StatusCode {
+    let status = match error {
+        litellm_router_core::Error::Attempt { failure, .. } => failure.status,
+        other => other.pick_failure().and_then(|failure| failure.status),
+    };
+    status
+        .and_then(|status| StatusCode::from_u16(status).ok())
+        .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR)
 }
 
 fn ocr_status(error: &OcrError) -> StatusCode {
@@ -319,6 +410,50 @@ mod tests {
         assert_eq!(body["error"]["type"], error_type);
         assert_eq!(body["error"]["message"], message);
         assert_eq!(body["request_id"], "req_1");
+    }
+
+    #[rstest]
+    #[case::every_deployment_cooling(
+        NoDeployments {
+            model: "primary".into(),
+            cooldown: 30.0,
+            all_cooling: true,
+            pre_call_checks: false,
+            cooling: vec!["primary-1".into(), "primary-2".into()],
+        },
+        "No deployments available for selected model, Try again in 30 seconds. All deployments for selected model are in cooldown. Passed model=primary. pre-call-checks=False, cooldown_list=['primary-1', 'primary-2']"
+    )]
+    #[case::another_models_deployment_cooling(
+        NoDeployments {
+            model: "primary".into(),
+            cooldown: 2.5,
+            all_cooling: false,
+            pre_call_checks: true,
+            cooling: vec!["other-1".into()],
+        },
+        "No deployments available for selected model, Try again in 2.5 seconds. Passed model=primary. pre-call-checks=True, cooldown_list=['other-1']"
+    )]
+    #[case::nothing_cooling(
+        NoDeployments {
+            model: "primary".into(),
+            cooldown: 5.0,
+            all_cooling: false,
+            pre_call_checks: false,
+            cooling: vec![],
+        },
+        "No deployments available for selected model, Try again in 5 seconds. Passed model=primary. pre-call-checks=False, cooldown_list=[]"
+    )]
+    fn no_deployments_reads_as_pythons_router_rate_limit_error(
+        #[case] refused: NoDeployments,
+        #[case] message: &str,
+    ) {
+        let error = Error::from(refused);
+
+        assert_eq!(error.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(
+            error.body(None),
+            json!({"type": "error", "error": {"type": "rate_limit_error", "message": message}})
+        );
     }
 
     #[rstest]
