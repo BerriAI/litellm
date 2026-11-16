@@ -337,22 +337,27 @@ def _leaf_texts(block: Mapping[str, object]) -> Iterator[str]:
         yield text
     if "json" in block:
         yield json.dumps(block["json"], default=str)
-    if "guardContent" in block:
-        yield from _leaf_texts(
-            _JSON_OBJECT.validate_python(_JSON_OBJECT.validate_python(block["guardContent"])["text"])
-        )
+    guarded: Final = object_mapping((object_mapping(block.get("guardContent")) or {}).get("text")) or {}
+    if isinstance(guarded.get("text"), str):
+        yield str(guarded["text"])
     if "toolUse" in block:
         yield json.dumps(_JSON_OBJECT.validate_python(block["toolUse"]).get("input"), default=str)
+    if block.get("type") == "tool_use":
+        yield json.dumps(block.get("input"), default=str)
 
 
 def _block_texts(block: Mapping[str, object]) -> Iterator[str]:
     """The prompt text a request content block carries, including the blocks of a tool result's content, which
     Bedrock does not nest further."""
     yield from _leaf_texts(block)
-    if "toolResult" not in block:
+    tool_result: Final = block if block.get("type") == "tool_result" else object_mapping(block.get("toolResult"))
+    if tool_result is None:
         return
-    tool_result: Final = _JSON_OBJECT.validate_python(block["toolResult"])
-    yield from chain.from_iterable(map(_leaf_texts, _JSON_OBJECTS.validate_python(tool_result.get("content", ()))))
+    result_content: Final = tool_result.get("content", ())
+    if isinstance(result_content, str):
+        yield result_content
+        return
+    yield from chain.from_iterable(map(_leaf_texts, _JSON_OBJECTS.validate_python(result_content)))
 
 
 def _content_text(content: object) -> str:

@@ -1907,10 +1907,22 @@ CONVERSE_REPLY: Final = {
 LLAMA_INVOKE_REPLY: Final = {"generation": "OK", "prompt_token_count": 25, "generation_token_count": 2}
 
 
+class _AwaitableSuccessCallback(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.logged: Final[asyncio.Future[dict[str, object]]] = asyncio.get_running_loop().create_future()
+
+    async def async_log_success_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        if not self.logged.done():
+            self.logged.set_result(kwargs)
+
+
 async def _logged_passthrough_request(
     action: str, body: dict[str, object], reply: httpx.Response, monkeypatch: pytest.MonkeyPatch
 ) -> Mapping[str, object]:
-    callback: Final = _CaptureAsyncSuccessCallback()
+    callback: Final = _AwaitableSuccessCallback()
     monkeypatch.setattr(litellm, "callbacks", [callback])
     response: Final = await litellm.allm_passthrough_route(
         model="bedrock/meta.llama3-1-8b-instruct-v1:0",
@@ -1925,12 +1937,7 @@ async def _logged_passthrough_request(
     if not isinstance(response, httpx.Response):
         _ = [chunk async for chunk in response]
         assert await response.wait_for_spend_flush()
-    for _ in range(200):
-        if callback.kwargs is not None:
-            break
-        await asyncio.sleep(0.01)
-    assert callback.kwargs is not None, "the passthrough request was never logged"
-    return _STANDARD_LOGGING_OBJECT.validate_python(callback.kwargs["standard_logging_object"])
+    return _STANDARD_LOGGING_OBJECT.validate_python((await callback.logged)["standard_logging_object"])
 
 
 @pytest.mark.asyncio
@@ -1975,6 +1982,58 @@ async def _logged_passthrough_request(
             ],
             {"operation": "invoke", "max_tokens": 8},
             id="invoke messages",
+        ),
+        pytest.param(
+            "invoke",
+            {
+                "anthropic_version": "bedrock-2023-05-31",
+                "max_tokens": 8,
+                "messages": [
+                    {"role": "user", "content": "weather in Paris?"},
+                    {
+                        "role": "assistant",
+                        "content": [{"type": "tool_use", "id": "t1", "name": "weather", "input": {"city": "Paris"}}],
+                    },
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "tool_result", "tool_use_id": "t1", "content": "18C"},
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": "t2",
+                                "content": [{"type": "text", "text": "sunny"}],
+                            },
+                        ],
+                    },
+                ],
+            },
+            LLAMA_INVOKE_REPLY,
+            [
+                {"role": "user", "content": "weather in Paris?"},
+                {"role": "assistant", "content": '{"city": "Paris"}'},
+                {"role": "user", "content": "18C\nsunny"},
+            ],
+            {"operation": "invoke", "max_tokens": 8},
+            id="invoke tool exchange",
+        ),
+        pytest.param(
+            "converse",
+            {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"guardContent": {"image": {"format": "png", "source": {"bytes": "aGk="}}}},
+                            {"text": "describe the picture"},
+                        ],
+                    }
+                ],
+                "inferenceConfig": {"maxTokens": 2},
+            },
+            CONVERSE_REPLY,
+            [{"role": "user", "content": "describe the picture"}],
+            {"operation": "converse", "inferenceConfig": {"maxTokens": 2}},
+            id="converse guarded image",
         ),
         pytest.param(
             "converse",
