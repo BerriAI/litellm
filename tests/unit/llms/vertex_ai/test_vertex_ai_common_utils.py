@@ -3267,24 +3267,35 @@ def test_enum_budget_answers_fast_when_one_huge_enum_value_repeats_across_branch
     huge: Final = "x" * (8 * 1024 * 1024)
 
     assert enums_fit({"anyOf": [{"type": "string", "enum": [huge]} for _ in range(20_000)]}) is False
+
+_FILTERED_EMAIL: Final = {"type": "string", "description": "email"}
+
+
 @pytest.mark.parametrize(
-    "build_parent",
+    ("build_parent", "expected_cc"),
     [
-        pytest.param(lambda shared: {"properties": {"to": shared, "cc": shared}}, id="properties"),
         pytest.param(
-            lambda shared: {"properties": {"to": shared, "cc": {"type": "array", "items": shared}}}, id="items"
+            lambda shared: {"properties": {"to": shared, "cc": shared}},
+            _FILTERED_EMAIL,
+            id="properties",
         ),
         pytest.param(
-            lambda shared: {"properties": {"to": shared, "cc": {"anyOf": [shared, {"type": "integer"}]}}}, id="anyOf"
+            lambda shared: {"properties": {"to": shared, "cc": {"type": "array", "items": shared}}},
+            {"type": "array", "items": _FILTERED_EMAIL},
+            id="items",
+        ),
+        pytest.param(
+            lambda shared: {"properties": {"to": shared, "cc": {"anyOf": [shared, {"type": "integer"}]}}},
+            {"anyOf": [_FILTERED_EMAIL, {"type": "integer"}]},
+            id="anyOf",
         ),
     ],
 )
-def test_build_vertex_schema_filters_a_reused_sub_schema_everywhere(build_parent):
+def test_build_vertex_schema_filters_a_reused_sub_schema_everywhere(build_parent, expected_cc):
     shared = {"type": "string", "description": "email", "examples": ["a@b.c"], "$comment": "reused"}
     schema = build_vertex_schema({"type": "object", **build_parent(shared)})
 
-    assert "examples" not in str(schema)
-    assert "$comment" not in str(schema)
+    assert schema == {"type": "object", "properties": {"to": _FILTERED_EMAIL, "cc": expected_cc}}
 
 
 def test_filter_schema_fields_still_stops_at_a_cycle():
@@ -3311,7 +3322,8 @@ def test_gemini_tool_declaration_filters_a_parameter_schema_used_twice():
     from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
 
     declaration = VertexGeminiConfig()._map_function(tools, {})[0]["function_declarations"][0]
-    properties = declaration["parameters"]["properties"]
 
-    assert properties["cc"] == properties["to"]
-    assert not {"examples", "$comment"} & properties["cc"].keys()
+    assert declaration["parameters"] == {
+        "type": "object",
+        "properties": {"to": _FILTERED_EMAIL, "cc": _FILTERED_EMAIL},
+    }
