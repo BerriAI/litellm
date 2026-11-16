@@ -3,6 +3,7 @@ import uuid
 from pathlib import Path
 from typing import Final
 
+import httpx
 import pytest
 import yaml
 from integration._support.client import Gateway, eventually
@@ -107,6 +108,75 @@ def test_non_streaming_v1_messages_success_carries_v3_priority_rate_limit_header
         }
         observed: Final = {name: response.headers.get(name) for name in expected}
         assert observed == expected, response.headers
+
+
+def test_priority_request_headers_and_count_survive_the_priority_pool_running_out_of_tokens(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    """Premium is owed a quarter of the model. It spends that quarter while the model is far from saturated, so it
+    keeps being served, and every response must still report and count the request against premium's request share."""
+    model_tpm: Final = 200
+    model_rpm: Final = 400
+    premium_share: Final = 0.25
+    premium_rpm: Final = int(model_rpm * premium_share)
+
+    def respond(request: Request) -> Reply:
+        assert request.method == "POST" and request.target == "/v1/messages", request.target
+        return Reply(body=UPSTREAM_REPLY)
+
+    configuration: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+    configuration["litellm_settings"] = {
+        **configuration["litellm_settings"],
+        "callbacks": ["dynamic_rate_limiter_v3"],
+        "priority_reservation": {"premium": premium_share},
+    }
+    path: Final = tmp_path / "priority_pool_drained.yaml"
+    path.write_text(yaml.safe_dump(configuration))
+    with (
+        wire_server(respond) as wire,
+        owned_proxy(gateway, tmp_path, {}, config=path) as candidate,
+        candidate.scenario() as scenario,
+    ):
+        model: Final = scenario.model(
+            model=f"anthropic/{ANTHROPIC_MODEL}",
+            api_base=wire.url,
+            api_key="synthetic-anthropic-key",
+            rpm=model_rpm,
+            tpm=model_tpm,
+        )
+        key: Final = scenario.key(metadata={"priority": "premium"})
+
+        def call() -> httpx.Response:
+            return candidate.request(
+                "POST",
+                "/v1/messages",
+                {
+                    "model": model,
+                    "max_tokens": 16,
+                    "messages": [{"role": "user", "content": f"drain premium {uuid.uuid4().hex}"}],
+                },
+                key=key,
+            )
+
+        drained: Final = eventually(
+            call,
+            lambda response: response.headers.get("x-ratelimit-priority_model-remaining-tokens") == "0",
+            seconds=30,
+        )
+        after: Final = call()
+        sent: Final = len(wire.drain())
+        assert (drained.status_code, after.status_code) == (200, 200), (drained.text, after.text)
+        names: Final = (
+            "x-ratelimit-priority_model-limit-requests",
+            "x-ratelimit-priority_model-remaining-requests",
+            "x-ratelimit-priority_model-limit-tokens",
+            "x-ratelimit-priority_model-remaining-tokens",
+        )
+        limits: Final = (str(premium_rpm), str(int(model_tpm * premium_share)))
+        assert tuple({name: response.headers.get(name) for name in names} for response in (drained, after)) == (
+            dict(zip(names, (limits[0], str(premium_rpm - sent + 1), limits[1], "0"))),
+            dict(zip(names, (limits[0], str(premium_rpm - sent), limits[1], "0"))),
+        ), (sent, drained.headers, after.headers)
 
 
 @pytest.mark.covers("other.routing.priority_rate_limits.streaming_success_logs_v3_remaining_values_for_callbacks")
