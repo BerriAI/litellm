@@ -2214,6 +2214,8 @@ class StreamingChoices(OpenAIObject):
         enhancements: object
         logprobs: ChoiceLogprobs | JsonValue
 
+    provider_specific_fields: dict[str, Any] | None = Field(default=None)
+
     def __init__(
         self,
         finish_reason=None,
@@ -2226,8 +2228,14 @@ class StreamingChoices(OpenAIObject):
         # Fix Perplexity return both delta and message cause OpenWebUI repect text
         # https://github.com/BerriAI/litellm/issues/8455
         params.pop("message", None)
+        mapped: Final = map_finish_reason(finish_reason) if finish_reason else None
+        if mapped is not None and finish_reason != mapped:
+            params["provider_specific_fields"] = {
+                **(params.get("provider_specific_fields") or {}),
+                "native_finish_reason": finish_reason,
+            }
         super().__init__(**params)
-        set_extra_attribute(self, "finish_reason", map_finish_reason(finish_reason) if finish_reason else None)
+        set_extra_attribute(self, "finish_reason", mapped)
         set_extra_attribute(self, "index", index)
         if delta is not None:
             if isinstance(delta, Delta):

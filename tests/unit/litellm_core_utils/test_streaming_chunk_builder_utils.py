@@ -2985,3 +2985,37 @@ def test_stream_chunk_builder_counts_a_custom_named_deployments_missing_usage_wi
         model="my-gpt-6", messages=messages
     )
     assert built.usage.prompt_tokens == litellm.token_counter(model=counted_as, messages=messages)
+
+
+def test_stream_chunk_builder_preserves_native_finish_reason_from_dict_chunks():
+    """SDK callers may pass model_dump()-ed chunks back to stream_chunk_builder, the
+    preserved native finish reason has to survive that round trip too."""
+    chunks: Final[list[dict[str, object]]] = [
+        {
+            "id": "chatcmpl-native-dict",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": "glm-5",
+            "choices": [{"index": 0, "delta": {"content": "hi"}, "finish_reason": None}],
+        },
+        {
+            "id": "chatcmpl-native-dict",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": "glm-5",
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {},
+                    "finish_reason": "stop",
+                    "provider_specific_fields": {"native_finish_reason": "network_error"},
+                }
+            ],
+        },
+    ]
+
+    response: Final = stream_chunk_builder(chunks=chunks)
+
+    assert response is not None
+    assert response.choices[0].finish_reason == "stop"
+    assert response.choices[0].provider_specific_fields == {"native_finish_reason": "network_error"}

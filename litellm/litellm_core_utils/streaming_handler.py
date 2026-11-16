@@ -1482,16 +1482,22 @@ class CustomStreamWrapper:
             if _is_delta_empty:
                 model_response.choices[0].delta = Delta(content=self._close_open_think_block())
                 # get any function call arguments
+                native_finish_reason: Final = self.received_finish_reason
+                mapped_finish_reason: Final = map_finish_reason(finish_reason=self.received_finish_reason)
                 model_response.choices[0].finish_reason = self._normalize_tool_call_finish_reason(
-                    map_finish_reason(finish_reason=self.received_finish_reason)
+                    mapped_finish_reason
                 )  # ensure consistent output to openai
+                if native_finish_reason is not None and native_finish_reason != mapped_finish_reason:
+                    model_response.choices[0].provider_specific_fields = {
+                        **(model_response.choices[0].provider_specific_fields or {}),
+                        "native_finish_reason": native_finish_reason,
+                    }
                 self._apply_finish_choice_fields(model_response.choices[0])
                 if (
                     response_obj.get("is_finished")
                     and _response_choice_index(response_obj) == model_response.choices[0].index
                 ):
                     _apply_choice_fields(model_response.choices[0], chunk_choice_fields)
-
                 self.sent_last_chunk = True
 
             return model_response
