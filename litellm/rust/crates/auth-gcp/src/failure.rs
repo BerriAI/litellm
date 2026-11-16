@@ -120,27 +120,10 @@ mod tests {
         assert_eq!(CredentialFailure::of(&error), CredentialFailure::Unloadable);
     }
 
-    async fn token_endpoint_answering(status: u16) -> String {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = listener.local_addr().unwrap();
-        let app = axum::Router::new().route(
-            "/token",
-            axum::routing::post(move || async move {
-                axum::http::StatusCode::from_u16(status).unwrap()
-            }),
-        );
-        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        format!("http://{address}/token")
-    }
-
-    #[tokio::test]
-    async fn an_sdk_token_endpoint_error_status_is_a_rejection() {
-        let url = token_endpoint_answering(400).await;
-        let rejected = reqwest::Client::new()
-            .post(url)
-            .send()
-            .await
-            .unwrap()
+    #[test]
+    fn an_sdk_token_endpoint_error_status_is_a_rejection() {
+        let answered = http::Response::builder().status(400).body("").unwrap();
+        let rejected = reqwest::Response::from(answered)
             .error_for_status()
             .unwrap_err();
         assert_eq!(
@@ -150,6 +133,11 @@ mod tests {
     }
 
     #[tokio::test]
+    #[expect(
+        clippy::disallowed_methods,
+        clippy::disallowed_types,
+        reason = "google-cloud-auth sends its token requests through its own reqwest client"
+    )]
     async fn an_sdk_token_endpoint_it_cannot_connect_to_is_unreachable() {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let closed = format!("http://{}/token", listener.local_addr().unwrap());
