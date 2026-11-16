@@ -3969,3 +3969,88 @@ async def test_store_access_does_not_allow_retargeting_registered_credentials(
     assert denied.value.status_code == 403
     table.find_unique.assert_not_awaited()
     table.update.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("primary_status", [200, 503])
+async def test_fallback_search_uses_effective_pre_call_hook_filters(
+    monkeypatch: pytest.MonkeyPatch, primary_status: int
+) -> None:
+    from collections.abc import Mapping
+
+    import httpx
+    import respx
+    from fastapi import FastAPI
+
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy import proxy_server
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.proxy.utils import ProxyLogging
+    from litellm.proxy.vector_store_endpoints.endpoints import router
+    from litellm.types.utils import CallTypesLiteral
+    from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
+
+    hook_filter: Final = {"type": "eq", "key": "tenant", "value": "hook-tenant"}
+    seen: Final[list[Mapping[str, object]]] = []
+
+    class TenantHook(CustomLogger):
+        async def async_pre_call_hook(
+            self,
+            user_api_key_dict: UserAPIKeyAuth,
+            cache: DualCache,
+            data: dict[str, object],
+            call_type: CallTypesLiteral,
+        ) -> dict[str, object]:
+            seen.append({key: data[key] for key in ("filters", "max_num_results") if key in data})
+            return {**data, "filters": hook_filter, "max_num_results": 1}
+
+    async def authorized() -> UserAPIKeyAuth:
+        return UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+
+    stores: Final = [
+        LiteLLM_ManagedVectorStore(
+            vector_store_id=f"hook-{host}-{primary_status}",
+            custom_llm_provider="openai",
+            litellm_params={
+                "api_base": f"https://hook-{host}.example/v1",
+                "api_key": "test",
+                "filters": {"type": "eq", "key": "region", "value": host},
+                "max_num_results": 9,
+                **({"fallbacks": [f"hook-backup-{primary_status}"]} if host == "primary" else {}),
+            },
+        )
+        for host in ("primary", "backup")
+    ]
+    monkeypatch.setattr(litellm, "vector_store_registry", VectorStoreRegistry(stores))
+    monkeypatch.setattr(litellm, "callbacks", [TenantHook()])
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(proxy_server, "llm_router", litellm.Router(model_list=[]))
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", ProxyLogging(proxy_server.user_api_key_cache))
+    app: Final = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[user_api_key_auth] = authorized
+    with respx.mock(assert_all_called=False) as upstream:
+        first: Final = upstream.route(host="hook-primary.example").respond(
+            primary_status, json={"object": "vector_store.search_results.page", "search_query": "q", "data": []}
+        )
+        second: Final = upstream.route(host="hook-backup.example").respond(
+            200, json={"object": "vector_store.search_results.page", "search_query": "q", "data": []}
+        )
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://gateway") as client:
+            response: Final = await client.post(
+                f"/v1/vector_stores/hook-primary-{primary_status}/search", json={"query": "q"}
+            )
+        assert response.status_code == 200, response.text
+        assert seen == [{}]
+        assert first.call_count == 1
+        assert second.call_count == int(primary_status == 503)
+        assert [json.loads(call.request.content) for call in upstream.calls] == [
+            {
+                "query": "q",
+                "filters": {"type": "and", "filters": [{"type": "eq", "key": "region", "value": host}, hook_filter]},
+                "max_num_results": 1,
+                "ranking_options": None,
+                "rewrite_query": None,
+            }
+            for host in (("primary",) if primary_status == 200 else ("primary", "backup"))
+        ]

@@ -2,6 +2,7 @@ import asyncio
 from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Final
+from unittest.mock import MagicMock
 
 import httpx
 import pytest
@@ -10,6 +11,7 @@ from pydantic import ValidationError
 import litellm
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.caching.redis_cache import RedisCache
 from litellm.vector_stores.fallbacks import (
     Failed,
     Served,
@@ -202,13 +204,11 @@ def test_terminal_http_status_takes_precedence_over_chained_transport_error():
 
 
 @pytest.fixture
-def cooldown_redis(monkeypatch: pytest.MonkeyPatch):
-    from unittest.mock import AsyncMock, MagicMock
+def cooldown_redis(monkeypatch: pytest.MonkeyPatch) -> tuple[RedisCache, MagicMock]:
+    from unittest.mock import AsyncMock
 
     import redis
     import redis.asyncio
-
-    from litellm.caching.redis_cache import RedisCache
 
     sync_backend: Final = MagicMock(spec=redis.Redis)
     sync_backend.info.return_value = {"redis_version": "7.0.0"}
@@ -224,7 +224,9 @@ def cooldown_redis(monkeypatch: pytest.MonkeyPatch):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("redis_available", [True, False])
-async def test_cooldown_survives_redis_outage_and_is_visible_to_another_worker(cooldown_redis, redis_available: bool):
+async def test_cooldown_survives_redis_outage_and_is_visible_to_another_worker(
+    cooldown_redis: tuple[RedisCache, MagicMock], redis_available: bool
+):
     redis_cache, backend = cooldown_redis
     clock: Final = Clock()
     cache: Final = DualCache(in_memory_cache=InMemoryCache(clock=clock), redis_cache=redis_cache)
@@ -246,7 +248,9 @@ async def test_cooldown_survives_redis_outage_and_is_visible_to_another_worker(c
     second: Final = await execute_with_vector_store_fallbacks(
         plan,
         attempt,
-        cache=DualCache(in_memory_cache=InMemoryCache(clock=clock), redis_cache=redis_cache) if redis_available else cache,
+        cache=DualCache(in_memory_cache=InMemoryCache(clock=clock), redis_cache=redis_cache)
+        if redis_available
+        else cache,
         clock=clock,
     )
     assert first == second == Served(plan.targets[1], "results", 1)

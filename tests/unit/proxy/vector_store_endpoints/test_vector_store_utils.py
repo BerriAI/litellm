@@ -377,3 +377,112 @@ async def test_search_rejects_caller_timeout_before_any_provider_attempt(monkeyp
         )
     assert rejected.value.status_code == 400
     assert rejected.value.detail == "'timeout' is owned by the vector store registration"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "key_stores,team_stores,group_stores,strict,allowed",
+    [
+        (["primary"], ["primary", "backup"], [], False, False),
+        (["primary", "backup"], ["primary"], [], False, False),
+        (["primary", "backup"], ["primary", "backup"], [], False, True),
+        (["primary"], ["primary"], ["backup"], False, True),
+        ([], [], [], False, True),
+        ([], [], [], True, False),
+        (["primary", "backup"], [], [], True, False),
+        ([], [], ["primary", "backup"], True, True),
+    ],
+)
+@pytest.mark.parametrize("role", ["internal_user", "proxy_admin"])
+async def test_fallback_candidates_require_the_same_key_and_team_search_grants(
+    monkeypatch: pytest.MonkeyPatch,
+    key_stores: list[str],
+    team_stores: list[str],
+    group_stores: list[str],
+    strict: bool,
+    allowed: bool,
+    role: str,
+):
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.vector_store_endpoints.utils import resolve_vector_store_fallback_plan
+    from litellm.types.vector_stores import LiteLLM_ManagedVectorStore
+    from tests.unit.proxy.vector_store_access_group_state import TEAM_ID, ProxyState, make_key, make_team
+
+    proxy: Final = ProxyState(monkeypatch)
+    await proxy.add_group("search-grants", group_stores)
+    await proxy.add_team(make_team(team_stores, ["search-grants"]))
+    caller: Final = make_key(key_stores, ["search-grants"], team_id=TEAM_ID)
+    caller.via_virtual_key = True
+    caller.user_role = role
+    primary: Final = LiteLLM_ManagedVectorStore(
+        vector_store_id="primary", custom_llm_provider="openai", team_id=TEAM_ID, litellm_params={"fallbacks": ["backup"]}
+    )
+    backup: Final = LiteLLM_ManagedVectorStore(vector_store_id="backup", custom_llm_provider="openai", team_id=TEAM_ID)
+    monkeypatch.setattr(litellm, "vector_store_registry", VectorStoreRegistry([primary, backup]))
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {"vector_store_deny_by_default": strict})
+    if allowed:
+        plan: Final = await resolve_vector_store_fallback_plan(primary, caller)
+        assert plan is not None
+        assert tuple(target.store_id for target in plan.targets) == ("primary", "backup")
+    else:
+        with pytest.raises(ProxyException) as refused:
+            await resolve_vector_store_fallback_plan(primary, caller)
+        assert refused.value.code == "401"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("user_stores,allowed", [(["primary"], False), (["primary", "backup"], True)])
+async def test_keyless_user_fallback_requires_personal_grants_in_strict_mode(
+    monkeypatch: pytest.MonkeyPatch, user_stores: list[str], allowed: bool
+):
+    from litellm.proxy._types import LiteLLM_UserTable, ProxyException
+    from litellm.proxy.vector_store_endpoints.utils import resolve_vector_store_fallback_plan
+    from litellm.types.vector_stores import LiteLLM_ManagedVectorStore
+    from tests.unit.proxy.vector_store_access_group_state import ProxyState, own_permission
+
+    proxy: Final = ProxyState(monkeypatch)
+    user: Final = LiteLLM_UserTable(user_id="caller", object_permission_id="own", object_permission=own_permission(user_stores))
+    await proxy.cache.async_set_cache(key="caller", value=user)
+    caller: Final = UserAPIKeyAuth(user_id="caller", user_role="internal_user", is_session_token=True)
+    primary: Final = LiteLLM_ManagedVectorStore(
+        vector_store_id="primary", custom_llm_provider="openai", litellm_params={"fallbacks": ["backup"]}
+    )
+    backup: Final = LiteLLM_ManagedVectorStore(vector_store_id="backup", custom_llm_provider="openai")
+    monkeypatch.setattr(litellm, "vector_store_registry", VectorStoreRegistry([primary, backup]))
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {"vector_store_deny_by_default": True})
+    if allowed:
+        plan: Final = await resolve_vector_store_fallback_plan(primary, caller)
+        assert plan is not None
+        assert tuple(target.store_id for target in plan.targets) == ("primary", "backup")
+    else:
+        with pytest.raises(ProxyException) as refused:
+            await resolve_vector_store_fallback_plan(primary, caller)
+        assert refused.value.code == "401"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("allowed_ids,allowed", [(["primary"], False), (["primary", "backup"], True)])
+async def test_config_only_fallback_enforces_loaded_caller_grants_without_database(
+    monkeypatch: pytest.MonkeyPatch, allowed_ids: list[str], allowed: bool
+):
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.vector_store_endpoints.utils import resolve_vector_store_fallback_plan
+    from litellm.types.vector_stores import LiteLLM_ManagedVectorStore
+    from tests.unit.proxy.vector_store_access_group_state import own_permission
+
+    caller: Final = UserAPIKeyAuth(object_permission=own_permission(allowed_ids))
+    primary: Final = LiteLLM_ManagedVectorStore(
+        vector_store_id="primary", custom_llm_provider="openai", litellm_params={"fallbacks": ["backup"]}, is_config=True
+    )
+    backup: Final = LiteLLM_ManagedVectorStore(vector_store_id="backup", custom_llm_provider="openai", is_config=True)
+    monkeypatch.setattr(litellm, "vector_store_registry", VectorStoreRegistry([primary, backup]))
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+    if allowed:
+        plan: Final = await resolve_vector_store_fallback_plan(primary, caller)
+        assert plan is not None
+        assert tuple(target.store_id for target in plan.targets) == ("primary", "backup")
+    else:
+        with pytest.raises(ProxyException) as refused:
+            await resolve_vector_store_fallback_plan(primary, caller)
+        assert refused.value.code == "401"

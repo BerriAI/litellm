@@ -929,7 +929,9 @@ async def test_fallback_honors_global_query_image_dropping(monkeypatch: pytest.M
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("caller_filter", [None, {"type": "eq", "key": "category", "value": "guide"}])
-async def test_fallback_preserves_target_filter_and_defaults_separately_from_primary(caller_filter):
+async def test_fallback_preserves_target_filter_and_defaults_separately_from_primary(
+    caller_filter: Mapping[str, object] | None,
+):
     from litellm.vector_stores.fallbacks import (
         VectorStoreFallbackPlan,
         VectorStoreTarget,
@@ -958,18 +960,15 @@ async def test_fallback_preserves_target_filter_and_defaults_separately_from_pri
             "max_num_results": 2,
         },
     )
-    caller_options: Final = {"filters": caller_filter, "max_num_results": None}
     with respx.mock(assert_all_called=True) as upstream:
         first: Final = upstream.route(host="defaults-primary.example").respond(503)
         second: Final = upstream.route(host="defaults-backup.example").respond(200, json=MOCK_SEARCH_RESPONSE)
-        with vector_store_fallback_context(
-            VectorStoreFallbackPlan((primary, backup), cooldown_time=0, caller_options=caller_options)
-        ):
+        with vector_store_fallback_context(VectorStoreFallbackPlan((primary, backup), cooldown_time=0)):
             await vector_stores_main.asearch(
                 "defaults-primary",
                 query="q",
-                filters=primary_filter,
-                max_num_results=9,
+                filters=caller_filter,
+                max_num_results=None,
                 client=AsyncHTTPHandler(transport=httpx.AsyncHTTPTransport()),
             )
         assert [json.loads(route.calls[0].request.content) for route in (first, second)] == [
@@ -1052,7 +1051,7 @@ async def test_global_drop_cannot_remove_a_registered_filter_when_caller_filter_
     )
     with respx.mock(assert_all_called=False) as upstream:
         with vector_store_fallback_context(VectorStoreFallbackPlan(targets, cooldown_time=0)):
-            with pytest.raises(litellm.BadRequestError, match="cannot drop a registered"):
+            with pytest.raises(litellm.BadRequestError, match="Invalid filters"):
                 await vector_stores_main.asearch(
                     "guard-primary",
                     query="q",
@@ -1060,3 +1059,59 @@ async def test_global_drop_cannot_remove_a_registered_filter_when_caller_filter_
                     client=AsyncHTTPHandler(transport=httpx.AsyncHTTPTransport()),
                 )
         assert len(upstream.calls) == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "caller_filter",
+    [{"type": "eq", "key": "category", "value": "guide"}, {"equals": {"key": "category", "value": "guide"}}],
+)
+async def test_bedrock_fallback_combines_native_registered_and_caller_filters(
+    caller_filter: Mapping[str, object],
+) -> None:
+    from litellm.vector_stores.fallbacks import (
+        VectorStoreFallbackPlan,
+        VectorStoreTarget,
+        vector_store_fallback_context,
+    )
+
+    targets: Final = tuple(
+        VectorStoreTarget(
+            f"native-filter-{host}",
+            "bedrock",
+            {
+                "filters": {"equals": {"key": "tenant", "value": host}},
+                "api_base": f"https://native-filter-{host}.example/knowledgebases",
+                "aws_region_name": "us-west-2",
+                "aws_access_key_id": "test-key",
+                "aws_secret_access_key": "test-secret",
+            },
+        )
+        for host in ("primary", "backup")
+    )
+    with respx.mock(assert_all_called=True) as upstream:
+        first: Final = upstream.route(host="native-filter-primary.example").respond(503)
+        second: Final = upstream.route(host="native-filter-backup.example").respond(200, json={"retrievalResults": []})
+        with vector_store_fallback_context(VectorStoreFallbackPlan(targets, cooldown_time=0)):
+            await vector_stores_main.asearch(
+                "native-filter-primary",
+                query="q",
+                filters=caller_filter,
+                client=AsyncHTTPHandler(transport=httpx.AsyncHTTPTransport()),
+            )
+        assert [json.loads(route.calls[0].request.content) for route in (first, second)] == [
+            {
+                "retrievalQuery": {"text": "q"},
+                "retrievalConfiguration": {
+                    "vectorSearchConfiguration": {
+                        "filter": {
+                            "andAll": [
+                                {"equals": {"key": "tenant", "value": host}},
+                                {"equals": {"key": "category", "value": "guide"}},
+                            ]
+                        }
+                    }
+                },
+            }
+            for host in ("primary", "backup")
+        ]

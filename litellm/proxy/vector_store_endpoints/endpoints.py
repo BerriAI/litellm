@@ -1,5 +1,4 @@
 from collections.abc import Mapping, Sequence
-from dataclasses import replace
 from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
@@ -142,6 +141,8 @@ async def _update_request_data_with_litellm_managed_vector_store_registry(
     data: dict,
     vector_store_id: str,
     user_api_key_dict: UserAPIKeyAuth | None = None,
+    *,
+    include_search_defaults: bool = True,
 ) -> dict:
     """
     Update the request data with the litellm managed vector store registry.
@@ -150,6 +151,7 @@ async def _update_request_data_with_litellm_managed_vector_store_registry(
         data: Request data to update
         vector_store_id: ID of the vector store
         user_api_key_dict: User API key authentication info for access control
+        include_search_defaults: Merge search defaults before hooks when no fallback plan applies
 
     Raises:
         HTTPException: If user doesn't have access to the vector store
@@ -164,7 +166,14 @@ async def _update_request_data_with_litellm_managed_vector_store_registry(
             vector_store=vector_store_to_run,
             user_api_key_dict=user_api_key_dict,
         )
-    return {**data, **build_request_data_from_managed_vector_store(vector_store_to_run)}
+    return {
+        **data,
+        **{
+            key: value
+            for key, value in build_request_data_from_managed_vector_store(vector_store_to_run).items()
+            if include_search_defaults or key not in ("filters", "max_num_results", "ranking_options", "rewrite_query")
+        },
+    }
 
 
 @router.post(
@@ -207,23 +216,9 @@ async def vector_store_search(
     data["vector_store_id"] = vector_store_id
     caller_body: Final = JSON_OBJECT_ADAPTER.validate_python(data)
     registered_store: Final = await get_litellm_managed_vector_store(vector_store_id)
-    resolved_plan: Final = (
+    fallback_plan: Final = (
         await resolve_vector_store_fallback_plan(registered_store, user_api_key_dict)
         if registered_store is not None
-        else None
-    )
-    fallback_plan: Final = (
-        replace(
-            resolved_plan,
-            caller_options=MappingProxyType(
-                {
-                    key: caller_body[key]
-                    for key in ("filters", "max_num_results", "ranking_options", "rewrite_query")
-                    if key in caller_body
-                }
-            ),
-        )
-        if resolved_plan is not None
         else None
     )
     reject_caller_fallback_selection(caller_body, enabled=fallback_plan is not None)
@@ -232,7 +227,10 @@ async def vector_store_search(
     data = dict(  # rebind-ok: pre-existing rebinding of the request body
         with_caller_query_params(
             await _update_request_data_with_litellm_managed_vector_store_registry(
-                data=data, vector_store_id=vector_store_id, user_api_key_dict=user_api_key_dict
+                data=data,
+                vector_store_id=vector_store_id,
+                user_api_key_dict=user_api_key_dict,
+                include_search_defaults=fallback_plan is None,
             ),
             caller_body.get("extra_body"),
         )

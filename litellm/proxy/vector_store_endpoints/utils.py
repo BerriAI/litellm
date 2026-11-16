@@ -682,6 +682,8 @@ async def with_managed_search_file_ids(
 async def resolve_vector_store_fallback_plan(
     vector_store: LiteLLM_ManagedVectorStore,
     user_api_key_dict: UserAPIKeyAuth,
+    *,
+    enforce_search_grants: bool = True,
 ) -> VectorStoreFallbackPlan | None:
     from litellm.constants import DEFAULT_COOLDOWN_TIME_SECONDS
     from litellm.proxy.proxy_server import llm_router
@@ -704,6 +706,10 @@ async def resolve_vector_store_fallback_plan(
         raise HTTPException(status_code=400, detail=str(error)) from error
     for store in stores[1:]:
         await assert_user_can_access_vector_store(store, user_api_key_dict)
+    if enforce_search_grants:
+        from litellm.proxy.auth.auth_checks import vector_store_access_check_for_caller
+
+        await vector_store_access_check_for_caller(tuple(target.store_id for target in candidates), user_api_key_dict)
     configured_ttl: Final = llm_router.settings().cooldown_time if llm_router is not None else None
     return VectorStoreFallbackPlan(
         targets=candidates,
@@ -719,4 +725,4 @@ async def validate_vector_store_fallback_registration(
     if "fallbacks" not in params:
         return
     assert_proxy_admin_for_vector_store_index_management(user_api_key_dict, operation="update")
-    await resolve_vector_store_fallback_plan(vector_store, user_api_key_dict)
+    await resolve_vector_store_fallback_plan(vector_store, user_api_key_dict, enforce_search_grants=False)
