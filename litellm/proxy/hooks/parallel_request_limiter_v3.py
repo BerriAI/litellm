@@ -579,7 +579,7 @@ def _merge_rate_limit_descriptors(descriptors: Sequence[RateLimitDescriptor]) ->
     )
 
 
-def _coalesce_rate_limit_descriptors(descriptors: Sequence[RateLimitDescriptor]) -> Sequence[RateLimitDescriptor]:
+def coalesce_rate_limit_descriptors(descriptors: Sequence[RateLimitDescriptor]) -> Sequence[RateLimitDescriptor]:
     identities: Final = tuple(dict.fromkeys((descriptor["key"], descriptor["value"]) for descriptor in descriptors))
     if len(identities) == len(descriptors):
         return descriptors
@@ -2791,7 +2791,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             for model in self._rate_limited_models(self._rate_limited_model(requested_model))
             if (descriptor := self._organization_model_rate_limit_descriptor(user_api_key_dict, model)) is not None
         )
-        return [*descriptors, *_coalesce_rate_limit_descriptors(model_descriptors)]
+        return [*descriptors, *coalesce_rate_limit_descriptors(model_descriptors)]
 
     def _organization_model_rate_limit_descriptor(
         self, user_api_key_dict: UserAPIKeyAuth, model: RateLimitedModel
@@ -3426,7 +3426,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 )
             )
 
-        return descriptors if len(model_candidates) == 1 else list(_coalesce_rate_limit_descriptors(descriptors))
+        return descriptors if len(model_candidates) == 1 else list(coalesce_rate_limit_descriptors(descriptors))
 
     _create_rate_limit_descriptors = create_rate_limit_descriptors
 
@@ -3589,7 +3589,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             for candidate in candidates
             if (descriptor := self._project_model_rate_limit_descriptor(user_api_key_dict, candidate)) is not None
         )
-        for descriptor in _coalesce_rate_limit_descriptors(model_descriptors):
+        for descriptor in coalesce_rate_limit_descriptors(model_descriptors):
             descriptors.append(descriptor)
 
     def _project_model_rate_limit_descriptor(
@@ -3645,7 +3645,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 self._project_io_token_rate_limit_descriptors(user_api_key_dict, candidate) for candidate in candidates
             )
         )
-        for descriptor in _coalesce_rate_limit_descriptors(model_descriptors):
+        for descriptor in coalesce_rate_limit_descriptors(model_descriptors):
             descriptors.append(descriptor)
 
     def _project_io_token_rate_limit_descriptors(

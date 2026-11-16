@@ -67,6 +67,7 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     PROJECT_OTPM_DESCRIPTOR_KEY,
     ReservationWindowIdentity,
     WindowGuardedIncrement,
+    coalesce_rate_limit_descriptors,
     get_or_create_request_stash,
 )
 from litellm.proxy.hooks.rate_limiter_utils import resolve_llm_provider_for_rate_limit
@@ -395,27 +396,26 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         the whole-batch total -- so a quota-limited model can't hide behind an
         unlimited routing model, an unrelated model's rows can't inflate a
         different model's counter, and rows whose names share one counter add
-        to it once.
+        to it once, held to the lowest limit any of those names sets.
         """
         charges: Final = tuple(
             itertools.chain.from_iterable(
                 self._project_io_charges(user_api_key_dict, models, usage) for models, usage in per_model_usage.items()
             )
         )
-        counters: Final = tuple(dict.fromkeys((descriptor["key"], descriptor["value"]) for descriptor, _ in charges))
+        descriptors: Final = coalesce_rate_limit_descriptors(tuple(descriptor for descriptor, _ in charges))
         return (
-            [
-                next(descriptor for descriptor, _ in charges if (descriptor["key"], descriptor["value"]) == counter)
-                for counter in counters
-            ],
+            list(descriptors),
             [
                 {
                     "requests": 0,
                     "tokens": sum(
-                        tokens for descriptor, tokens in charges if (descriptor["key"], descriptor["value"]) == counter
+                        tokens
+                        for charged, tokens in charges
+                        if (charged["key"], charged["value"]) == (descriptor["key"], descriptor["value"])
                     ),
                 }
-                for counter in counters
+                for descriptor in descriptors
             ],
         )
 
