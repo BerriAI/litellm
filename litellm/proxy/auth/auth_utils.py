@@ -48,6 +48,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     read_request_path_params,
     resolve_inference_model,
 )
+from litellm.types.llms.anthropic import ANTHROPIC_USER_PROFILE_ID_METADATA_KEY
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_ENDPOINT_MARKER,
 )
@@ -1927,7 +1928,7 @@ _ADMIN_ONLY_METADATA_KEYS: Final = (
     *ADMIN_ONLY_BATCH_LIMIT_METADATA_KEYS,
     TEAM_S3_BUCKET_ALLOWLIST_METADATA_KEY,
     MODEL_LIMIT_MAX_BORROW_MULTIPLE_METADATA_KEY,
-    "anthropic_user_profile_id",
+    ANTHROPIC_USER_PROFILE_ID_METADATA_KEY,
 )
 _ADMIN_ONLY_METADATA_REASONS: Final[Mapping[str, str]] = MappingProxyType(
     {
@@ -1937,7 +1938,9 @@ _ADMIN_ONLY_METADATA_REASONS: Final[Mapping[str, str]] = MappingProxyType(
         MODEL_LIMIT_MAX_BORROW_MULTIPLE_METADATA_KEY: (
             "It caps how far the holder borrows idle model capacity, so the holder cannot raise or remove it."
         ),
-        "anthropic_user_profile_id": "It binds upstream profile attribution selected by the proxy admin.",
+        ANTHROPIC_USER_PROFILE_ID_METADATA_KEY: (
+            "It picks the Anthropic user profile a safety action applies to, so the holder cannot change it."
+        ),
     }
 )
 
@@ -1953,10 +1956,25 @@ def enforce_batch_limits_are_admin_only(
     Every key in ``ADMIN_ONLY_BATCH_LIMIT_METADATA_KEYS`` caps what the holder
     may do with batches, so a holder-writable copy would let a caller lift their
     own quota, and the S3 bucket list grants access to buckets with the proxy's
-    own credentials. A project only enforces ``model_batch_enqueued_token_limit``,
+    own credentials, and the Anthropic user profile id picks which end user an
+    Anthropic safety action applies to. A project only enforces ``model_batch_enqueued_token_limit``,
     so that is the one key gated there. Gated on the resulting value rather than
-    on presence, so a form resending the stored value stays a no-op.
+    on presence, so a form resending the stored value stays a no-op. A key or
+    team that sets a non-string Anthropic user profile id answers 400 for every role.
     """
+    sent_profile_id: Final = data.metadata.get(ANTHROPIC_USER_PROFILE_ID_METADATA_KEY) if data.metadata else None
+    stored_profile_id: Final = (
+        existing_metadata.get(ANTHROPIC_USER_PROFILE_ID_METADATA_KEY) if existing_metadata else None
+    )
+    if (
+        entity != "project"
+        and sent_profile_id not in (None, stored_profile_id)
+        and not isinstance(sent_profile_id, str)
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail={"error": f"{ANTHROPIC_USER_PROFILE_ID_METADATA_KEY} on a {entity} must be a string like uprof_..."},
+        )
     if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
         return
     stored: Final[Mapping[str, object]] = existing_metadata or EMPTY_MAPPING

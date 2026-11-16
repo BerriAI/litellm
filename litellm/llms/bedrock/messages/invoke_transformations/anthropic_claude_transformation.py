@@ -39,14 +39,12 @@ from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation
 )
 from litellm.llms.bedrock.common_utils import (
     BEDROCK_INVOKE_CONTEXT_MANAGEMENT_EDIT_BETAS,
-    REQUEST_HEADERS,
     BedrockError,
     apply_bedrock_invoke_structured_output,
     bedrock_native_output_format,
     bedrock_native_output_retry_requested,
     bedrock_supports_per_turn_control,
     bedrock_supports_tool_search,
-    bedrock_user_profile_fields,
     ensure_bedrock_anthropic_messages_tool_names,
     for_bedrock_json_tool_retry,
     get_anthropic_beta_from_headers,
@@ -920,10 +918,9 @@ class AmazonAnthropicClaudeMessagesConfig(
         # Catches Anthropic-only extensions (output_config, speed, mcp_servers, ...)
         # and any future additions Claude Code may start sending. ``context_management``
         # has already been pre-filtered to its Bedrock-supported subset above.
-        return {
-            **self._strip_unsupported_bedrock_invoke_fields(anthropic_messages_request),
-            **bedrock_user_profile_fields(REQUEST_HEADERS.validate_python(headers)),
-        }
+        anthropic_messages_request = self._strip_unsupported_bedrock_invoke_fields(anthropic_messages_request)
+
+        return anthropic_messages_request
 
     def get_async_streaming_response_iterator(
         self,

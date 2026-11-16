@@ -6614,46 +6614,6 @@ def test_only_proxy_admins_change_a_teams_s3_bucket_list(
     assert "Only proxy admins can set allowed_s3_buckets on a team." in str(rejection.value.detail)
 
 
-@pytest.mark.parametrize("entity", ["key", "team"])
-@pytest.mark.parametrize("stored,sent", [(None, "uprof_other"), ("uprof_admin", "uprof_other"), ("uprof_admin", None)])
-def test_profile_mapping_changes_require_a_proxy_admin(
-    entity: Literal["key", "team"], stored: str | None, sent: str | None
-) -> None:
-    from litellm.proxy._types import UpdateKeyRequest
-    from litellm.proxy.auth.auth_utils import enforce_batch_limits_are_admin_only
-
-    request: Final = UpdateKeyRequest(key="key", metadata={} if sent is None else {"anthropic_user_profile_id": sent})
-    with pytest.raises(HTTPException, match="anthropic_user_profile_id") as rejection:
-        enforce_batch_limits_are_admin_only(
-            request,
-            {} if stored is None else {"anthropic_user_profile_id": stored},
-            UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER),
-            entity=entity,
-        )
-    assert rejection.value.status_code == 403
-
-
-@pytest.mark.parametrize(
-    "role,stored,sent",
-    [
-        (LitellmUserRoles.PROXY_ADMIN, "uprof_admin", "uprof_other"),
-        (LitellmUserRoles.INTERNAL_USER, "uprof_admin", "uprof_admin"),
-        (LitellmUserRoles.INTERNAL_USER, None, None),
-    ],
-)
-def test_profile_mapping_admin_edits_and_unchanged_values_are_allowed(
-    role: LitellmUserRoles, stored: str | None, sent: str | None
-) -> None:
-    from litellm.proxy._types import UpdateKeyRequest
-    from litellm.proxy.auth.auth_utils import enforce_batch_limits_are_admin_only
-
-    request: Final = UpdateKeyRequest(key="key", metadata={} if sent is None else {"anthropic_user_profile_id": sent})
-    enforce_batch_limits_are_admin_only(
-        request, {} if stored is None else {"anthropic_user_profile_id": stored}, UserAPIKeyAuth(user_role=role), "key"
-    )
-    assert request.metadata == ({} if sent is None else {"anthropic_user_profile_id": sent})
-
-
 @pytest.mark.parametrize(
     "role, stored, sent, refused",
     [
@@ -6688,6 +6648,47 @@ def test_only_a_proxy_admin_changes_a_keys_model_limit_max_borrow_multiple(
         )
     assert rejection.value.status_code == 403
     assert "Only proxy admins can set model_limit_max_borrow_multiple on a key." in str(rejection.value.detail)
+
+
+@pytest.mark.parametrize("entity", ["key", "team"])
+@pytest.mark.parametrize(
+    "role,stored,sent,refused",
+    [
+        (LitellmUserRoles.PROXY_ADMIN, "uprof_pinned", "uprof_other", False),
+        (LitellmUserRoles.INTERNAL_USER, None, "uprof_other", True),
+        (LitellmUserRoles.INTERNAL_USER, "uprof_pinned", "uprof_other", True),
+        (LitellmUserRoles.INTERNAL_USER, "uprof_pinned", None, True),
+        (LitellmUserRoles.INTERNAL_USER, "uprof_pinned", "uprof_pinned", False),
+    ],
+)
+def test_only_proxy_admins_change_the_anthropic_user_profile_id_of_a_key_or_team(
+    entity: Literal["key", "team"], role: LitellmUserRoles, stored: str | None, sent: str | None, refused: bool
+) -> None:
+    from litellm.proxy._types import UpdateKeyRequest, UpdateTeamRequest
+    from litellm.proxy.auth.auth_utils import enforce_batch_limits_are_admin_only
+
+    existing: Final = {"project": "x"} if stored is None else {"anthropic_user_profile_id": stored, "project": "x"}
+    metadata: Final = {"project": "x"} if sent is None else {"anthropic_user_profile_id": sent, "project": "x"}
+    request: Final = (
+        UpdateKeyRequest(key="sk-holder", metadata=metadata)
+        if entity == "key"
+        else UpdateTeamRequest(team_id="t1", metadata=metadata)
+    )
+    caller: Final = UserAPIKeyAuth(user_role=role, user_id="u1")
+
+    if not refused:
+        enforce_batch_limits_are_admin_only(
+            data=request, existing_metadata=existing, user_api_key_dict=caller, entity=entity
+        )
+        return
+    with pytest.raises(HTTPException) as rejection:
+        enforce_batch_limits_are_admin_only(
+            data=request, existing_metadata=existing, user_api_key_dict=caller, entity=entity
+        )
+    assert rejection.value.status_code == 403
+    assert f"Only proxy admins can set anthropic_user_profile_id on a {entity}. It picks the Anthropic user profile" in (
+        str(rejection.value.detail)
+    )
 
 
 def _request_with_content_length(content_length: int) -> Request:
@@ -6755,3 +6756,55 @@ def test_chatgpt_model_configuration_reaches_role_authorization(
                 model="",
                 route=inference_route,
             )
+
+
+@pytest.mark.parametrize("entity", ["key", "team"])
+@pytest.mark.parametrize("sent", [12345, True, ["uprof_x"], {"id": "uprof_x"}])
+def test_a_non_string_anthropic_user_profile_id_on_a_key_or_team_answers_400(
+    entity: Literal["key", "team"], sent: object
+) -> None:
+    from litellm.proxy._types import UpdateKeyRequest, UpdateTeamRequest
+    from litellm.proxy.auth.auth_utils import enforce_batch_limits_are_admin_only
+
+    metadata: Final = {"anthropic_user_profile_id": sent}
+    request: Final = (
+        UpdateKeyRequest(key="sk-holder", metadata=metadata)
+        if entity == "key"
+        else UpdateTeamRequest(team_id="t1", metadata=metadata)
+    )
+    admin: Final = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin")
+
+    with pytest.raises(HTTPException) as rejection:
+        enforce_batch_limits_are_admin_only(data=request, existing_metadata=None, user_api_key_dict=admin, entity=entity)
+
+    assert rejection.value.status_code == 400
+    assert f"anthropic_user_profile_id on a {entity} must be a string" in str(rejection.value.detail)
+
+
+@pytest.mark.parametrize(
+    "entity,stored",
+    [("key", {"anthropic_user_profile_id": 12345}), ("team", {"anthropic_user_profile_id": 12345}), ("project", None)],
+    ids=["key_resends_stored", "team_resends_stored", "project_never_reads_it"],
+)
+def test_a_non_string_anthropic_user_profile_id_passes_when_unchanged_or_on_a_project(
+    entity: Literal["key", "team", "project"], stored: Mapping[str, object] | None
+) -> None:
+    from litellm.proxy._types import UpdateKeyRequest, UpdateProjectRequest, UpdateTeamRequest
+    from litellm.proxy.auth.auth_utils import enforce_batch_limits_are_admin_only
+
+    metadata: Final = {"anthropic_user_profile_id": 12345, "note": "edited"}
+    request: Final = (
+        UpdateKeyRequest(key="sk-holder", metadata=metadata)
+        if entity == "key"
+        else UpdateTeamRequest(team_id="t1", metadata=metadata)
+        if entity == "team"
+        else UpdateProjectRequest(project_id="p1", metadata=metadata)
+    )
+    admin: Final = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin")
+
+    assert (
+        enforce_batch_limits_are_admin_only(
+            data=request, existing_metadata=stored, user_api_key_dict=admin, entity=entity
+        )
+        is None
+    )

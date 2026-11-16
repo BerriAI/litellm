@@ -11,7 +11,7 @@ from litellm.litellm_core_utils.json_validation_rule import normalize_json_schem
 from litellm.proxy._types import *
 from litellm.proxy._types import ProxyException, TokenCountRequest
 from litellm.proxy.auth.auth_utils import MODEL_ROUTING_HEADER_NAME
-from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
+from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, request_anthropic_user_profile_id, user_api_key_auth
 from litellm.proxy.common_request_processing import (
     ProxyBaseLLMRequestProcessing,
     log_llm_api_exception,
@@ -328,7 +328,12 @@ async def google_stream_generate_content(
     dependencies=[Depends(user_api_key_auth)],
     response_model=TokenCountDetailsResponse,
 )
-async def google_count_tokens(request: Request, model_name: str, fastapi_response: Response):
+async def google_count_tokens(
+    request: Request,
+    model_name: str,
+    fastapi_response: Response,
+    user_profile_id: Annotated[str | None, Depends(request_anthropic_user_profile_id)] = None,
+):
     """
     ```json
     return {
@@ -345,12 +350,15 @@ async def google_count_tokens(request: Request, model_name: str, fastapi_respons
     """
     litellm_call_id: Final = resolve_litellm_call_id(request.headers.get(LITELLM_CALL_ID_HEADER))
     return await answered_with_litellm_call_id(
-        _google_count_tokens(request, model_name, litellm_call_id), litellm_call_id, request, fastapi_response
+        _google_count_tokens(request, model_name, litellm_call_id, user_profile_id),
+        litellm_call_id,
+        request,
+        fastapi_response,
     )
 
 
 async def _google_count_tokens(
-    request: Request, model_name: str, litellm_call_id: str
+    request: Request, model_name: str, litellm_call_id: str, user_profile_id: str | None
 ) -> JSONResponse | TokenCountDetailsResponse:
     from litellm.proxy.common_utils.http_parsing_utils import read_request_body
     from litellm.proxy.proxy_server import count_request_tokens
@@ -375,7 +383,10 @@ async def _google_count_tokens(
 
     try:
         token_response: Final = await count_request_tokens(
-            request=token_request, call_endpoint=True, litellm_call_id=litellm_call_id
+            request=token_request,
+            call_endpoint=True,
+            litellm_call_id=litellm_call_id,
+            user_profile_id=user_profile_id,
         )
     except ProxyException as error:
         return _google_error_response(request, error)

@@ -144,6 +144,16 @@ class AmazonMantleConfig(AmazonAnthropicClaudeConfig):
         stream_fields: Final[dict] = {"stream": True} if optional_params.get("stream") is True else {}
         return {**request, "model": model_id, **stream_fields, **bedrock_user_profile_fields(headers)}
 
+    def transform_extra_body(
+        self,
+        extra_body: Mapping[str, object],
+        request: Mapping[str, object],
+        model: str,
+        litellm_params: Mapping[str, object],
+    ) -> Mapping[str, object]:
+        profile_fields: Final = {"user_profile_id": request["user_profile_id"]} if "user_profile_id" in request else {}
+        return {**extra_body, **profile_fields}
+
     @property
     def has_custom_stream_wrapper(self) -> bool:
         return False

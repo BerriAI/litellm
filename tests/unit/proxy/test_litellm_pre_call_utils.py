@@ -1283,25 +1283,6 @@ async def test_profile_mapping_cannot_be_replaced_through_extra_body(metadata: d
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("pinned", [True, False])
-@pytest.mark.parametrize("nested", [True, False])
-async def test_profile_pin_rejects_client_model_hints_even_with_custom_pricing(pinned: bool, nested: bool) -> None:
-    fields: Final = {"base_model": "amazon.nova-pro-v1:0"}
-    metadata: Final = {
-        "allow_client_pricing_override": True,
-        **({"anthropic_user_profile_id": "uprof_admin"} if pinned else {}),
-    }
-    updated: Final = await _request_data_added_by_the_proxy(
-        {"extra_body": fields} if nested else fields,
-        {},
-        {},
-        UserAPIKeyAuth(api_key="hashed-key", metadata=metadata),
-    )
-    received: Final = updated["extra_body"] if nested else updated
-    assert received.get("base_model") == (None if pinned else "amazon.nova-pro-v1:0")
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize("metadata_slot", ["key", "team"])
 @pytest.mark.parametrize("header_slot", ["headers", "extra_headers"])
 @pytest.mark.parametrize("caller_value", ["uprof_other", ""])
@@ -1370,6 +1351,51 @@ async def test_anthropic_user_profile_id_prefers_the_admin_mapping_over_the_clie
 
     forwarded: Final = ProviderSpecificHeaderUtils.get_provider_specific_headers(
         provider_specific_header=updated.get("provider_specific_header"), custom_llm_provider="anthropic"
+    )
+    assert forwarded.get(USER_PROFILE_ID_HEADER) == expected
+
+
+_PROXY_AND_PROVIDER_KEYS: Final = {"x-litellm-api-key": "Bearer sk-virtual-key", "x-api-key": "sk-ant-api03-caller"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "sent,request_headers,general_settings,custom_llm_provider,expected",
+    [
+        ({"api_key": "sk-ant-api03-caller"}, {}, {}, "anthropic", "uprof_client"),
+        ({}, _PROXY_AND_PROVIDER_KEYS, {"forward_llm_provider_auth_headers": True}, "anthropic", "uprof_client"),
+        ({}, _PROXY_AND_PROVIDER_KEYS, {}, "anthropic", "uprof_key"),
+        ({"api_key": " "}, {}, {}, "anthropic", "uprof_key"),
+        ({"api_key": "sk-ant-api03-caller"}, {}, {}, "azure_ai", "uprof_key"),
+        ({"api_key": "sk-ant-api03-caller"}, {}, {}, "bedrock_mantle", "uprof_key"),
+        ({"api_key": "sk-ant-api03-caller"}, {}, {}, "vertex_ai", "uprof_key"),
+    ],
+    ids=[
+        "body-api-key-on-anthropic",
+        "forwarded-x-api-key-on-anthropic",
+        "x-api-key-not-forwarded",
+        "blank-body-api-key",
+        "body-api-key-on-azure-ai",
+        "body-api-key-on-bedrock-mantle",
+        "body-api-key-on-vertex-ai",
+    ],
+)
+async def test_a_caller_anthropic_api_key_keeps_its_own_profile_id_only_on_anthropic(
+    sent: dict[str, object],
+    request_headers: dict[str, str],
+    general_settings: dict[str, object],
+    custom_llm_provider: str,
+    expected: str,
+) -> None:
+    updated: Final = await _request_data_added_by_the_proxy(
+        sent,
+        {USER_PROFILE_ID_HEADER: "uprof_client", **request_headers},
+        general_settings,
+        UserAPIKeyAuth(api_key="hashed-key", user_id="test-user", metadata={"anthropic_user_profile_id": "uprof_key"}),
+    )
+
+    forwarded: Final = ProviderSpecificHeaderUtils.get_provider_specific_headers(
+        provider_specific_header=updated.get("provider_specific_header"), custom_llm_provider=custom_llm_provider
     )
     assert forwarded.get(USER_PROFILE_ID_HEADER) == expected
 
@@ -9205,6 +9231,33 @@ def test_anthropic_user_profile_id_reaches_every_claude_provider(custom_llm_prov
         provider_specific_header=data["provider_specific_header"], custom_llm_provider=custom_llm_provider
     )
     assert forwarded == {"anthropic-user-profile-id": "uprof_01"}
+
+
+@pytest.mark.parametrize(
+    "client_headers,custom_llm_provider,expected",
+    [
+        ({"anthropic-user-profile-id": "uprof_caller"}, "anthropic", "uprof_caller"),
+        ({}, "anthropic", None),
+        ({"anthropic-user-profile-id": "uprof_caller"}, "azure_ai", "uprof_pinned"),
+        ({"anthropic-user-profile-id": "uprof_caller"}, "bedrock", "uprof_pinned"),
+        ({"anthropic-user-profile-id": "uprof_caller"}, "bedrock_mantle", "uprof_pinned"),
+        ({"anthropic-user-profile-id": "uprof_caller"}, "vertex_ai", "uprof_pinned"),
+    ],
+)
+def test_a_caller_anthropic_oauth_token_keeps_its_own_profile_id_only_where_the_token_authenticates(
+    client_headers: dict[str, str], custom_llm_provider: str, expected: str | None
+) -> None:
+    data: Final[dict] = {}  # mutable-ok: the function under test writes into it
+    add_provider_specific_headers_to_request(
+        data=data,
+        headers={"authorization": "Bearer sk-ant-oat01-caller", **client_headers},
+        user_profile_id="uprof_pinned",
+    )
+
+    forwarded: Final = ProviderSpecificHeaderUtils.get_provider_specific_headers(
+        provider_specific_header=data["provider_specific_header"], custom_llm_provider=custom_llm_provider
+    )
+    assert forwarded.get("anthropic-user-profile-id") == expected
 
 
 @pytest.mark.parametrize("custom_llm_provider", ["openai", "gemini", "databricks"])

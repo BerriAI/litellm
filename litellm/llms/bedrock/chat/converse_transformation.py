@@ -72,7 +72,6 @@ from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from litellm.llms.base_llm.chat.transformation import REQUEST_PARAMS, BaseConfig, BaseLLMException
 from litellm.llms.bedrock.chat.tool_result_images import place_tool_result_images
 from litellm.llms.bedrock.common_utils import (
-    REQUEST_HEADERS,
     bedrock_chat_opts_into_native_structured_output,
     bedrock_chat_uses_native_structured_output,
     bedrock_cleaned_output_schema,
@@ -82,7 +81,6 @@ from litellm.llms.bedrock.common_utils import (
     bedrock_native_output_is_opt_in,
     bedrock_native_output_retry_requested,
     bedrock_supports_tool_search,
-    bedrock_user_profile_fields,
     deployment_model_info,
     requests_output_config_format,
 )
@@ -2271,23 +2269,11 @@ class AmazonConverseConfig(BaseConfig):
             for config_name, config_class in self.get_config_blocks().items()
         )
 
-        requested_profile_fields: Final = bedrock_user_profile_fields(REQUEST_HEADERS.validate_python(headers or {}))
-        if requested_profile_fields and is_bedrock_application_inference_profile_arn(model):
-            raise BedrockError(
-                status_code=400,
-                message="Set base_model on the deployment to identify the underlying model before using "
-                "anthropic-user-profile-id with an application inference profile ARN",
-            )
-        user_profile_fields: Final[Mapping[str, str]] = (
-            requested_profile_fields
-            if BedrockModelInfo.get_base_model(model).startswith(("anthropic", "claude"))
-            else types.MappingProxyType({})
-        )
         data: Final[CommonRequestObject] = {
             "inferenceConfig": self._transform_inference_params(inference_params=inference_params),
         }
-        if additional_request_params or user_profile_fields:
-            data["additionalModelRequestFields"] = {**additional_request_params, **user_profile_fields}
+        if additional_request_params:
+            data["additionalModelRequestFields"] = additional_request_params
         if "thinking" in additional_request_params or AnthropicModelInfo.thinks_by_default(model, "bedrock"):
             data["additionalModelResponseFieldPaths"] = ("/usage/output_tokens_details",)
         if system_content_blocks:

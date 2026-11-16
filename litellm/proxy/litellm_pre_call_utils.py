@@ -409,7 +409,11 @@ from litellm.litellm_core_utils.routing_common_utils import resolve_model_group_
 from litellm.router import Router
 from litellm.secret_managers.main import get_secret_bool
 from litellm.types.litellm_params import AGENTIC_LOOP_KWARG_NAMES, STREAM_USAGE_INJECTED_FIELD
-from litellm.types.llms.anthropic import ANTHROPIC_API_HEADERS, ANTHROPIC_USER_PROFILE_ID_HEADER
+from litellm.types.llms.anthropic import (
+    ANTHROPIC_API_HEADERS,
+    ANTHROPIC_USER_PROFILE_ID_HEADER,
+    ANTHROPIC_USER_PROFILE_ID_METADATA_KEY,
+)
 from litellm.types.router import BaggageMappedTagsStamp, holds_api_key_secret_reference
 from litellm.types.services import ServiceTypes
 from litellm.types.utils import (
@@ -608,7 +612,6 @@ UNTRUSTED_REQUEST_HEADER_CONTROL_FIELDS: Final = frozenset(
 )
 _CLIENT_MOCK_CONTROL_FIELDS: Final = frozenset({"mock_response", "mock_tool_calls"})
 _ALLOW_CLIENT_MOCK_RESPONSE_METADATA_KEY: Final = "allow_client_mock_response"
-_ANTHROPIC_USER_PROFILE_ID_METADATA_KEY: Final = "anthropic_user_profile_id"
 _ALLOW_CLIENT_MESSAGE_REDACTION_OPT_OUT_METADATA_KEY: Final = "allow_client_message_redaction_opt_out"
 
 # Per-request pricing parameters mutate cost-tracking output and (via
@@ -850,12 +853,18 @@ def _key_or_team_metadata_flag_is_true(
     return any(value is True for value in _key_then_team_metadata_values(user_api_key_dict, metadata_key))
 
 
-def anthropic_user_profile_id(user_api_key_dict: UserAPIKeyAuth, headers: Mapping[str, str]) -> str | None:
-    admin_mapped: Final = _key_then_team_metadata_values(user_api_key_dict, _ANTHROPIC_USER_PROFILE_ID_METADATA_KEY)
-    return next(
-        (value for value in admin_mapped if isinstance(value, str) and value),
-        headers.get(ANTHROPIC_USER_PROFILE_ID_HEADER),
-    )
+def pinned_anthropic_user_profile_id(user_api_key_dict: UserAPIKeyAuth) -> str | None:
+    admin_mapped: Final = _key_then_team_metadata_values(user_api_key_dict, ANTHROPIC_USER_PROFILE_ID_METADATA_KEY)
+    return next((value for value in admin_mapped if isinstance(value, str) and value), None)
+
+
+def anthropic_user_profile_id(
+    user_api_key_dict: UserAPIKeyAuth, headers: Mapping[str, str], caller_credential: bool = False
+) -> str | None:
+    client_profile_id: Final = headers.get(ANTHROPIC_USER_PROFILE_ID_HEADER)
+    if caller_credential:
+        return client_profile_id
+    return pinned_anthropic_user_profile_id(user_api_key_dict) or client_profile_id
 
 
 def _without_caller_profile_body_fields(fields: Mapping[str, object]) -> Mapping[str, object]:
@@ -864,7 +873,7 @@ def _without_caller_profile_body_fields(fields: Mapping[str, object]) -> Mapping
             **{
                 name: value
                 for name, value in fields.items()
-                if name not in ("user_profile_id", "base_model", "additionalModelRequestFields")
+                if name not in ("user_profile_id", "additionalModelRequestFields")
             },
             **(
                 {
@@ -3088,7 +3097,6 @@ async def add_litellm_data_to_request(
                 }
         caller_body: Final = _without_caller_profile_body_fields(_REQUEST_FIELDS.validate_python(data))
         data.pop("user_profile_id", None)
-        data.pop("base_model", None)  # pyright: ignore[reportUnknownMemberType]  # legacy request data is a bare dict
         if "additionalModelRequestFields" in data:
             data["additionalModelRequestFields"] = (  # rebind-ok: data is an out-param
                 caller_body["additionalModelRequestFields"]
@@ -4831,7 +4839,7 @@ _ANTHROPIC_API_HEADER_PROVIDERS: Final = ",".join(
 _NATIVE_MESSAGES_ANTHROPIC_API_HEADER_PROVIDERS: Final = ",".join(
     (LlmProviders.AZURE_AI.value, LlmProviders.DATABRICKS.value)
 )
-_ANTHROPIC_USER_PROFILE_ID_PROVIDERS: Final = ",".join(
+_ANTHROPIC_USER_PROFILE_ID_PROVIDERS: Final = frozenset(
     (
         LlmProviders.ANTHROPIC.value,
         LlmProviders.AZURE_AI.value,
@@ -4842,6 +4850,19 @@ _ANTHROPIC_USER_PROFILE_ID_PROVIDERS: Final = ",".join(
 )
 _ANTHROPIC_OAUTH_CREDENTIAL_PROVIDERS: Final = ",".join(sorted(ANTHROPIC_OAUTH_FORWARD_PROVIDERS))
 _CHATGPT_OAUTH_CREDENTIAL_PROVIDERS: Final = LlmProviders.CHATGPT.value
+_CALLER_API_KEY_PROVIDERS: Final = frozenset((LlmProviders.ANTHROPIC.value,))
+
+
+def _carries_a_caller_api_key(data: Mapping[str, object]) -> bool:
+    api_key: Final = data.get("api_key")
+    return isinstance(api_key, str) and bool(api_key.strip())
+
+
+def _user_profile_id_header(providers: frozenset[str], user_profile_id: str | None) -> ProviderSpecificHeader:
+    return ProviderSpecificHeader(
+        custom_llm_provider=",".join(sorted(providers)),
+        extra_headers={ANTHROPIC_USER_PROFILE_ID_HEADER: user_profile_id} if user_profile_id and providers else {},
+    )
 
 
 def add_provider_specific_headers_to_request(
@@ -4859,6 +4880,13 @@ def add_provider_specific_headers_to_request(
         if header.lower() == "authorization" and is_anthropic_oauth_key(value)
     }
     chatgpt_oauth_credential_headers: Final = dict(select_chatgpt_client_credential_headers(headers))
+    caller_credential_providers: Final = (
+        ANTHROPIC_OAUTH_FORWARD_PROVIDERS if anthropic_oauth_credential_headers else frozenset[str]()
+    ) | (
+        _CALLER_API_KEY_PROVIDERS
+        if _carries_a_caller_api_key(_REQUEST_FIELDS.validate_python(data))
+        else frozenset[str]()
+    )
 
     typesafe_danger_zone_headers: Final = {
         header: value
@@ -4877,10 +4905,10 @@ def add_provider_specific_headers_to_request(
                 extra_headers=anthropic_api_headers,
                 native_anthropic_messages_only=True,
             ),
-            ProviderSpecificHeader(
-                custom_llm_provider=_ANTHROPIC_USER_PROFILE_ID_PROVIDERS,
-                extra_headers={ANTHROPIC_USER_PROFILE_ID_HEADER: user_profile_id} if user_profile_id else {},
+            _user_profile_id_header(
+                _ANTHROPIC_USER_PROFILE_ID_PROVIDERS - caller_credential_providers, user_profile_id
             ),
+            _user_profile_id_header(caller_credential_providers, headers.get(ANTHROPIC_USER_PROFILE_ID_HEADER)),
             ProviderSpecificHeader(
                 custom_llm_provider=_ANTHROPIC_OAUTH_CREDENTIAL_PROVIDERS,
                 extra_headers=anthropic_oauth_credential_headers,

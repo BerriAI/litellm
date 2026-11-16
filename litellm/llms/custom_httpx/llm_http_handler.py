@@ -76,6 +76,7 @@ from litellm.litellm_core_utils.core_helpers import as_str_mapping, set_provider
 from litellm.litellm_core_utils.dot_notation_indexing import delete_nested_value
 from litellm.litellm_core_utils.get_litellm_params import AWS_CREDENTIAL_KWARGS_KEYS
 from litellm.litellm_core_utils.get_llm_provider_logic import get_provider_affinity_header
+from litellm.litellm_core_utils.get_provider_specific_headers import override_headers
 from litellm.litellm_core_utils.llm_request_utils import serialize_multipart_form_fields
 from litellm.litellm_core_utils.provider_affinity import add_provider_affinity_header
 from litellm.litellm_core_utils.realtime_errors import (
@@ -713,9 +714,13 @@ def _unwrap_provider_error(error: Exception) -> Exception:
     return error
 
 
+def _without_anthropic_beta(source: Mapping[str, object] | None) -> Mapping[str, object]:
+    return {name: value for name, value in (source or {}).items() if name.lower() != "anthropic-beta"}
+
+
 def _merge_messages_header_sources(*sources: Mapping[str, object] | None) -> Mapping[str, object]:
-    """Later sources win per header, except ``anthropic-beta``, which unions every source so client betas
-    never drop a deployment's configured ones."""
+    """Later sources win per header, in any letter case, except ``anthropic-beta``, which unions every source so
+    client betas never drop a deployment's configured ones."""
     entries: Final = tuple(chain.from_iterable((source or {}).items() for source in sources))
     beta_values: Final = tuple(
         cast("str | Sequence[str]", value)  # cast-ok: the merge helper skips non-str list entries
@@ -723,10 +728,8 @@ def _merge_messages_header_sources(*sources: Mapping[str, object] | None) -> Map
         if name.lower() == "anthropic-beta" and isinstance(value, str | Sequence)
     )
     merged_beta: Final = reduce(merge_anthropic_beta_headers, beta_values, "")
-    return MappingProxyType(
-        {name: value for name, value in entries if name.lower() != "anthropic-beta"}
-        | ({"anthropic-beta": merged_beta} if merged_beta else {})
-    )
+    without_beta: Final[Mapping[str, object]] = reduce(override_headers, map(_without_anthropic_beta, sources), {})
+    return MappingProxyType({**without_beta, **({"anthropic-beta": merged_beta} if merged_beta else {})})
 
 
 class BaseLLMHTTPHandler:

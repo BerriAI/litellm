@@ -1,6 +1,7 @@
 import base64
 import json
 import uuid
+from collections.abc import Mapping
 from types import SimpleNamespace
 from typing import Final
 from unittest.mock import MagicMock
@@ -337,3 +338,35 @@ def test_mantle_claude_completion_sends_a_proxy_user_profile_id_in_the_body(
 
     body: Final = json.loads(respond.call_args.args[0].content)
     assert {key: body[key] for key in ("user_profile_id",) if key in body} == expected_fields
+
+
+@pytest.mark.parametrize("model", MANTLE_CLAUDE_ROUTES)
+@pytest.mark.parametrize(
+    "caller_value",
+    [
+        {"extra_headers": {"Anthropic-User-Profile-Id": "uprof_other"}},
+        {"extra_body": {"user_profile_id": "uprof_other"}},
+    ],
+    ids=["header_in_another_case", "extra_body"],
+)
+def test_mantle_claude_completion_sends_the_proxy_user_profile_id_over_a_caller_value(
+    model: str, caller_value: Mapping[str, Mapping[str, str]]
+) -> None:
+    from litellm.proxy.litellm_pre_call_utils import add_provider_specific_headers_to_request
+
+    proxy_request_data: Final[dict] = {}  # mutable-ok: the function under test writes into it
+    add_provider_specific_headers_to_request(data=proxy_request_data, headers={}, user_profile_id="uprof_pinned")
+    respond: Final = MagicMock(wraps=_text_message)
+
+    litellm.completion(
+        model=model,
+        messages=[{"role": "user", "content": "hi"}],
+        **caller_value,
+        aws_access_key_id="AKIAEXAMPLE",
+        aws_secret_access_key="fake-secret",
+        aws_region_name="us-east-1",
+        client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond))),
+        **proxy_request_data,
+    )
+
+    assert json.loads(respond.call_args.args[0].content)["user_profile_id"] == "uprof_pinned"

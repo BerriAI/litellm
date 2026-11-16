@@ -2794,6 +2794,34 @@ async def test_azure_ai_decision_posts_deployment_to_foundry_systemone_route(
 
 
 @pytest.mark.asyncio
+async def test_azure_ai_decision_sends_the_proxy_user_profile_id_over_a_caller_header_in_another_case(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    from litellm.proxy.litellm_pre_call_utils import add_provider_specific_headers_to_request
+
+    monkeypatch.delenv("AZURE_AI_API_BASE", raising=False)
+    monkeypatch.delenv("AZURE_AI_API_KEY", raising=False)
+    proxy_request_data: Final[dict] = {}  # mutable-ok: the function under test writes into it
+    add_provider_specific_headers_to_request(data=proxy_request_data, headers={}, user_profile_id="uprof_pinned")
+    respx_mock.post("https://res.services.ai.azure.com/providers/microsoft/v1/systemone").respond(
+        json={**_RESPONSE, "model": "microsoft-decision-1"}
+    )
+
+    await litellm.asystemone(
+        model="azure_ai/decision-1",
+        state="review",
+        questions={"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+        api_base="https://res.services.ai.azure.com",
+        api_key="foundry-key",
+        extra_headers={"Anthropic-User-Profile-Id": "uprof_other"},
+        **proxy_request_data,
+    )
+
+    assert respx_mock.calls[0].request.headers.get_list("anthropic-user-profile-id") == ["uprof_pinned"]
+
+
+@pytest.mark.asyncio
 async def test_azure_ai_systemone_uses_its_decisions_pricing_fields(
     respx_mock: respx.MockRouter, decisions_pricing_fields: None
 ) -> None:
