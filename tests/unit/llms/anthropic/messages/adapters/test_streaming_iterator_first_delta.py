@@ -1563,7 +1563,7 @@ _UNSIGNED_REASONING_STREAMS: Final[Mapping[str, Tuple[MagicMock, ...]]] = Mappin
 )
 
 
-def _event_before_stop(events: List[dict], index: int) -> dict:
+def _event_before_stop(events: Sequence[Mapping[str, object]], index: int) -> Mapping[str, object]:
     stop_position: Final = next(
         position
         for position, event in enumerate(events)

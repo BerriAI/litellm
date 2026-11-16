@@ -1,9 +1,14 @@
+from typing import Final
+
+import pytest
+
 from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
     encrypted_reasoning_signature,
 )
 from litellm.llms.anthropic.messages.native.transformation import (
     AnthropicMessagesConfig,
 )
+from litellm.llms.deepseek.messages.transformation import DeepSeekAnthropicMessagesConfig
 
 
 def _transform(messages):
@@ -48,3 +53,93 @@ def test_anthropic_signed_thinking_blocks_are_forwarded_untouched():
         },
     ]
     assert _transform(messages)["messages"] == messages
+
+
+_CLAUDE_SIGNED_TURN: Final = {
+    "role": "assistant",
+    "content": [
+        {"type": "thinking", "thinking": "claude plan", "signature": "EqQBCkYIAxgCIkA_anthropic_signed"},
+        {"type": "text", "text": "Refined."},
+    ],
+}
+
+
+def _open_model_turn(thinking_block: dict[str, object]) -> dict[str, object]:
+    return {"role": "assistant", "content": [thinking_block, {"type": "text", "text": "Draft."}]}
+
+
+@pytest.mark.parametrize(
+    "thinking_block",
+    [
+        {"type": "thinking", "thinking": "open model plan", "signature": ""},
+        {"type": "thinking", "thinking": "open model plan", "signature": None},
+        {"type": "thinking", "thinking": "open model plan"},
+    ],
+    ids=["empty", "null", "missing"],
+)
+def test_unsigned_thinking_from_an_open_model_never_reaches_claude(thinking_block: dict[str, object]) -> None:
+    messages: Final = [
+        {"role": "user", "content": "Solve it."},
+        _open_model_turn(thinking_block),
+        {"role": "user", "content": "Refine it."},
+        _CLAUDE_SIGNED_TURN,
+        {"role": "user", "content": "Thanks."},
+    ]
+
+    sent: Final = _transform(messages)["messages"]
+
+    assert sent[1]["content"] == [{"type": "text", "text": "Draft."}]
+    assert sent[3] == _CLAUDE_SIGNED_TURN
+    assert messages[1]["content"][0] == thinking_block
+
+
+def test_unsigned_thinking_is_still_replayed_to_an_open_model() -> None:
+    messages: Final = [
+        {"role": "user", "content": "Solve it."},
+        _open_model_turn({"type": "thinking", "thinking": "open model plan", "signature": ""}),
+        {"role": "user", "content": "Refine it."},
+    ]
+
+    sent: Final = DeepSeekAnthropicMessagesConfig().transform_anthropic_messages_request(
+        model="deepseek-v4-pro",
+        messages=messages,
+        anthropic_messages_optional_request_params={"max_tokens": 1024},
+        litellm_params={},
+        headers={},
+    )["messages"]
+
+    assert sent[1]["content"][0]["thinking"] == "open model plan"
+
+
+def _pending_tool_turn(opening: list[dict[str, object]]) -> list[dict[str, object]]:
+    return [
+        {"role": "user", "content": "List the files."},
+        {
+            "role": "assistant",
+            "content": [*opening, {"type": "tool_use", "id": "toolu_1", "name": "ls", "input": {}}],
+        },
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_1", "content": "a.txt"}]},
+    ]
+
+
+def test_unsigned_thinking_that_opens_the_pending_tool_turn_is_left_for_the_retry() -> None:
+    messages: Final = [
+        {"role": "user", "content": "Solve it."},
+        _open_model_turn({"type": "thinking", "thinking": "open model plan", "signature": ""}),
+        *_pending_tool_turn([{"type": "thinking", "thinking": "call ls", "signature": ""}]),
+    ]
+
+    assert _transform(messages)["messages"] == messages
+
+
+def test_unsigned_thinking_is_dropped_when_the_pending_tool_turn_never_opened_with_thinking() -> None:
+    messages: Final = [
+        {"role": "user", "content": "Solve it."},
+        _open_model_turn({"type": "thinking", "thinking": "open model plan", "signature": ""}),
+        *_pending_tool_turn([]),
+    ]
+
+    sent: Final = _transform(messages)["messages"]
+
+    assert sent[1]["content"] == [{"type": "text", "text": "Draft."}]
+    assert sent[2:] == messages[2:]

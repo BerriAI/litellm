@@ -197,6 +197,37 @@ class TestReasoningItemWithoutSummaryText:
         assert chunks[chunks.index(signature_deltas[0]) + 1] == {"type": "content_block_stop", "index": 0}
 
 
+class TestRawReasoningTextIsStreamedAsThinking:
+    """Servers that return a reasoning item's raw text (vLLM and OpenRouter for gpt-oss)
+    stream it as ``response.reasoning_text.delta`` instead of a summary."""
+
+    def test_reasoning_text_deltas_become_one_closed_thinking_block(self):
+        chunks = _drain_async(
+            [
+                {"type": "response.created"},
+                {"type": "response.output_item.added", "item": {"type": "reasoning", "id": "rs_1"}},
+                {"type": "response.reasoning_text.delta", "item_id": "rs_1", "content_index": 0, "delta": "17*23"},
+                {"type": "response.reasoning_text.delta", "item_id": "rs_1", "content_index": 0, "delta": " is 391."},
+                {"type": "response.output_item.done", "item": {"type": "reasoning", "id": "rs_1"}},
+                {"type": "response.output_item.added", "item": {"type": "message", "id": "msg_1"}},
+                {"type": "response.output_text.delta", "item_id": "msg_1", "delta": "391"},
+                {"type": "response.output_item.done", "item": {"type": "message", "id": "msg_1"}},
+                {"type": "response.completed"},
+            ]
+        )
+
+        assert [(c["type"], c.get("index"), c.get("content_block") or c.get("delta")) for c in chunks[1:-2]] == [
+            ("content_block_start", 0, {"type": "thinking", "thinking": "", "signature": ""}),
+            ("content_block_delta", 0, {"type": "thinking_delta", "thinking": "17*23"}),
+            ("content_block_delta", 0, {"type": "thinking_delta", "thinking": " is 391."}),
+            ("content_block_delta", 0, {"type": "signature_delta", "signature": ""}),
+            ("content_block_stop", 0, None),
+            ("content_block_start", 1, {"type": "text", "text": ""}),
+            ("content_block_delta", 1, {"type": "text_delta", "text": "391"}),
+            ("content_block_stop", 1, None),
+        ]
+
+
 _ENCRYPTED_REASONING = "gAAAAABp_encrypted_reasoning_bytes_only_openai_can_read"
 
 

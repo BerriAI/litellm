@@ -2463,7 +2463,7 @@ class TestTranslateChatBridgedResponse:
             Message(role="assistant", content="OK", reasoning_content="The user wants OK."), "stop"
         )
 
-        result: Any = _ADAPTER.translate_response(response)
+        result: Final = _ADAPTER.translate_response(response)
 
         assert result["content"] == [
             {"type": "thinking", "thinking": "The user wants OK.", "signature": ""},
@@ -2487,7 +2487,7 @@ class TestTranslateChatBridgedResponse:
             "tool_calls",
         )
 
-        result: Any = _ADAPTER.translate_response(response)
+        result: Final = _ADAPTER.translate_response(response)
 
         assert result["content"] == [
             {"type": "tool_use", "id": "call_1", "name": "get_weather", "input": {"city": "Oslo"}}
