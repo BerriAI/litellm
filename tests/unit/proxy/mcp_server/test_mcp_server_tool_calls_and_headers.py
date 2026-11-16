@@ -12391,6 +12391,11 @@ _CUT_TOOL_CALL: Final = (
         ),
         pytest.param(_CUT_TOOL_CALL, {"method": "tools/call"}, id="tool-call-cut-by-the-peek-keeps-its-method"),
         pytest.param(b'{"method": "tools/call", "params": {"na', {}, id="short-malformed-body-carries-nothing"),
+        pytest.param(
+            b'{"jsonrpc": "2.0", "id": 1, "method": "ping", "params": {"padding": "' + b"a" * 4096,
+            {},
+            id="other-method-cut-by-the-peek-carries-nothing-because-a-later-method-key-would-win",
+        ),
     ],
 )
 def test_admission_auth_body_carries_the_method_and_only_the_name_of_a_tool_call(

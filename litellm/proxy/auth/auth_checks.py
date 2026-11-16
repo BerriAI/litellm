@@ -209,7 +209,6 @@ if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
     from litellm.proxy.spend_tracking.native_budgets import BudgetDecision
-    from litellm.types.mcp import MCPServerCostInfo
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
     Span = _Span
@@ -1133,74 +1132,87 @@ def _mcp_tool_call_name(route: str, request_body: Mapping[str, object]) -> str |
     return string_field(request_body.get("params"), "name")
 
 
-def _costs_of_tools_displayed_as(display_name: str, servers: Sequence["MCPServer"]) -> Iterator[float]:
-    for server in servers:
-        yield from _costs_of_a_servers_tools_displayed_as(display_name, server)
-
-
-def _costs_of_a_servers_tools_displayed_as(display_name: str, server: "MCPServer") -> Iterator[float]:
-    from litellm.proxy.mcp_server.cost_calculator import (  # noqa: PLC0415  # the MCP package imports the auth stack
-        mcp_tool_cost_per_query,
-    )
-
-    cost_info: Final = (server.mcp_info or {}).get("mcp_server_cost_info")
-    return (
-        mcp_tool_cost_per_query(cost_info=cost_info, tool_name=native_name)
+def _native_names_displayed_as(display_name: str, server: "MCPServer") -> tuple[str, ...]:
+    return tuple(
+        native_name
         for native_name, shown_name in (server.tool_name_to_display_name or {}).items()
         if shown_name == display_name
     )
 
 
-def is_zero_cost_mcp_tool_call(route: str, request_body: Mapping[str, object]) -> bool:
-    """A tool call is free when no MCP server charges, or when every server that could run it is free for it.
-
-    A name that carries no known server prefix is only trusted when the REST ``server_id`` names the
-    server, because header or path scoping can route a bare name to a server this check cannot see."""
-    if not _is_mcp_tool_call(route=route, request_body=request_body):
-        return False
+def _costs_of_running_tool_on(tool_name: str, server: "MCPServer") -> tuple[float, ...]:
+    """A server that shows a tool under this name always runs that tool, never a native tool of the same name."""
     from litellm.proxy.mcp_server.cost_calculator import (  # noqa: PLC0415  # the MCP package imports the auth stack
-        mcp_server_charges_for_tool_calls,
         mcp_tool_cost_per_query,
-    )
-    from litellm.proxy.mcp_server.mcp_server_manager import (  # noqa: PLC0415  # the MCP package imports the auth stack
-        global_mcp_server_manager,
     )
     from litellm.proxy.mcp_server.utils import (  # noqa: PLC0415  # the MCP package imports the auth stack
         strip_known_server_prefix,
     )
 
-    def cost_info_of(server: "MCPServer") -> "MCPServerCostInfo | None":
-        return (server.mcp_info or {}).get("mcp_server_cost_info")
+    cost_info: Final = (server.mcp_info or {}).get("mcp_server_cost_info")
+    return tuple(
+        mcp_tool_cost_per_query(cost_info=cost_info, tool_name=native_name)
+        for native_name in (
+            _native_names_displayed_as(tool_name, server) or (strip_known_server_prefix(tool_name, server),)
+        )
+    )
 
+
+def _is_reserved_mcp_tool_name(tool_name: str) -> bool:
+    from litellm.proxy.mcp_server.tool_search import (  # noqa: PLC0415  # the MCP package imports the auth stack
+        MCP_PROXY_TOOL_NAMES,
+        VIRTUAL_TOOL_NAMES,
+    )
+
+    return tool_name in VIRTUAL_TOOL_NAMES or tool_name in MCP_PROXY_TOOL_NAMES
+
+
+def is_zero_cost_mcp_tool_call(route: str, request_body: Mapping[str, object]) -> bool:
+    """A tool call is free when no MCP server charges, or when every server that could run it is free for it.
+
+    Header or path scoping can route a name with no known server prefix to a server this check cannot see, so
+    such a name is only trusted when the REST ``server_id`` names the server, or when it is a display name
+    and no server charges for a tool of that name."""
+    if not _is_mcp_tool_call(route=route, request_body=request_body):
+        return False
+    from litellm.proxy.mcp_server.cost_calculator import (  # noqa: PLC0415  # the MCP package imports the auth stack
+        mcp_server_charges_for_tool_calls,
+    )
+    from litellm.proxy.mcp_server.mcp_server_manager import (  # noqa: PLC0415  # the MCP package imports the auth stack
+        global_mcp_server_manager,
+    )
+
+    servers: Final = tuple(global_mcp_server_manager.get_registry().values())
     if not any(
-        mcp_server_charges_for_tool_calls(cost_info_of(server))
-        for server in global_mcp_server_manager.get_registry().values()
+        mcp_server_charges_for_tool_calls((server.mcp_info or {}).get("mcp_server_cost_info")) for server in servers
     ):
         return True
     tool_name: Final = _mcp_tool_call_name(route=route, request_body=request_body)
     if tool_name is None:
         return False
     requested_server_id: Final = request_body.get("server_id") if route in MCP_TOOL_CALL_ROUTES else None
-    named_servers: Final = (
-        global_mcp_server_manager.server_owning_tool_name_prefix(tool_name),
-        (
-            global_mcp_server_manager.get_mcp_server_by_id(requested_server_id)
-            or global_mcp_server_manager.get_mcp_server_by_identifier(requested_server_id)
-        )
-        if isinstance(requested_server_id, str)
-        else None,
-    )
-    costs: Final = (
-        *(
-            mcp_tool_cost_per_query(
-                cost_info=cost_info_of(server), tool_name=strip_known_server_prefix(tool_name, server)
+    named_servers: Final = tuple(
+        server
+        for server in (
+            global_mcp_server_manager.server_owning_tool_name_prefix(tool_name),
+            (
+                global_mcp_server_manager.get_mcp_server_by_id(requested_server_id)
+                or global_mcp_server_manager.get_mcp_server_by_identifier(requested_server_id)
             )
-            for server in named_servers
-            if server is not None
-        ),
-        *_costs_of_tools_displayed_as(tool_name, tuple(global_mcp_server_manager.get_registry().values())),
+            if isinstance(requested_server_id, str)
+            else None,
+        )
+        if server is not None
     )
-    return bool(costs) and all(cost <= 0 for cost in costs)
+    servers_showing_the_name: Final = tuple(
+        server for server in servers if _native_names_displayed_as(tool_name, server)
+    )
+    if not named_servers and (not servers_showing_the_name or _is_reserved_mcp_tool_name(tool_name)):
+        return False
+    return all(
+        max(_costs_of_running_tool_on(tool_name, server)) <= 0
+        for server in (*servers_showing_the_name, *(named_servers or servers))
+    )
 
 
 def is_video_retrieval_request(route: str, http_method: str | None) -> bool:

@@ -1479,12 +1479,11 @@ if MCP_AVAILABLE:
         try:
             data: Final = TypeAdapter(dict[str, object]).validate_json(body)
         except (ValueError, TypeError):
-            cut_method: Final = (
-                _jsonrpc_text_method(body.decode("utf-8", errors="replace"))
-                if len(body) >= _MCP_ROUTING_PEEK_MAX_BYTES
-                else None
+            is_cut_tool_call: Final = (
+                len(body) >= _MCP_ROUTING_PEEK_MAX_BYTES
+                and _jsonrpc_text_method(body.decode("utf-8", errors="replace")) == "tools/call"
             )
-            return b"{}" if cut_method is None else json.dumps({"method": cut_method}).encode()
+            return json.dumps({"method": "tools/call"}).encode() if is_cut_tool_call else b"{}"
         method: Final = data.get("method")
         if not isinstance(method, str):
             return b"{}"
