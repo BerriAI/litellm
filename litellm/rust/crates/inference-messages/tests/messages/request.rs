@@ -1191,6 +1191,43 @@ async fn deepseek_sends_neither_billing_blocks_nor_the_custom_tool_discriminator
     );
 }
 
+struct GoogleToken;
+
+impl litellm_auth_gcp::GcpTokenSource for GoogleToken {
+    fn project_id(&self) -> litellm_auth_gcp::GcpAuthFuture<'_, String> {
+        Box::pin(async { Ok("token-project".to_string()) })
+    }
+
+    fn token(&self) -> litellm_auth_gcp::GcpAuthFuture<'_, SecretValue> {
+        Box::pin(async { Ok(SecretValue::new("google-token")) })
+    }
+}
+
+impl litellm_auth_gcp::GcpProviderLoader for GoogleToken {
+    fn load(
+        &self,
+        _source: litellm_auth_gcp::CredentialSource,
+    ) -> litellm_auth_gcp::GcpAuthFuture<'_, Arc<dyn litellm_auth_gcp::GcpTokenSource>> {
+        Box::pin(async { Ok(Arc::new(GoogleToken) as Arc<dyn litellm_auth_gcp::GcpTokenSource>) })
+    }
+}
+
+async fn run_with_google_token(call: MessagesCall) -> Result<MessagesOutput, Error> {
+    let route = messages_route_with_auth(
+        Arc::new(RecordingSecrets::empty()),
+        litellm_auth::AuthServices {
+            gcp: litellm_auth_gcp::VertexAuth::new(Arc::new(GoogleToken)),
+            ..litellm_auth::AuthServices::default()
+        },
+    );
+    let host = LocalMessagesHost::new(call);
+    litellm_host_native::in_process::run_hosted(
+        route.machine(host.request()?, None),
+        host.runtime(),
+    )
+    .await
+}
+
 #[rstest]
 #[case::not_streaming(false, ":rawPredict")]
 #[case::streaming(true, ":streamRawPredict?alt=sse")]
@@ -1206,7 +1243,7 @@ async fn vertex_ai_addresses_the_model_in_the_url_and_not_in_the_body(
     );
     let upstream = upstream([if stream { streamed } else { message_response() }]).await;
 
-    run(with_fields(
+    run_with_google_token(with_fields(
         MessagesCall {
             custom_llm_provider: Some("vertex_ai".into()),
             litellm_params: LitellmParams {
@@ -1233,7 +1270,7 @@ async fn vertex_ai_addresses_the_model_in_the_url_and_not_in_the_body(
             "/v1/projects/proj/locations/us-east5/publishers/anthropic/models/claude-sonnet-4-5@20250929{suffix}"
         )
     );
-    assert_eq!(request.header("authorization"), Some("Bearer caller-token"));
+    assert_eq!(request.header("authorization"), Some("Bearer google-token"));
     assert_eq!(request.header("anthropic-version"), None);
     let body = request.json();
     assert_eq!(body.get("model"), None);
