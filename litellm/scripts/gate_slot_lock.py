@@ -22,7 +22,7 @@ itself. Any filesystem error fails open and the command runs unlocked: the
 lock is a courtesy to the machine, never a gate that may break a build (CI
 runs one job per machine, so there it only ever takes the instant path).
 
-CLI: python3 litellm/scripts/gate_slot_lock.py <command> [args...]
+CLI: python3 litellm/scripts/gate_slot_lock.py [--] <command> [args...]
 """
 
 from __future__ import annotations
@@ -37,13 +37,14 @@ from pathlib import Path
 from typing import IO, TYPE_CHECKING, Final
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Iterator, Sequence
 
 HELD_MARKER_ENV: Final = "LITELLM_GATE_SLOT_HELD"
 SLOT_COUNT_ENV: Final = "LITELLM_GATE_SLOTS"
 SLOT_DIR_ENV: Final = "LITELLM_GATE_SLOT_DIR"
 DEFAULT_SLOT_COUNT: Final = 2
 POLL_SECONDS: Final = 2.0
+USAGE: Final = "usage: gate_slot_lock.py [--] <command> [args...]"
 
 
 def _slot_dir() -> Path:
@@ -59,8 +60,7 @@ def _slot_count() -> int:
         return int(raw)
     except ValueError:
         print(
-            f"gate_slot_lock: ignoring non-integer {SLOT_COUNT_ENV}={raw!r}; "
-            f"using {DEFAULT_SLOT_COUNT} slots",
+            f"gate_slot_lock: ignoring non-integer {SLOT_COUNT_ENV}={raw!r}; using {DEFAULT_SLOT_COUNT} slots",
             file=sys.stderr,
         )
         return DEFAULT_SLOT_COUNT
@@ -81,8 +81,7 @@ def _try_slot(directory: Path, index: int) -> IO[bytes] | None:
 
 def _wait_for_slot(directory: Path, count: int) -> IO[bytes]:
     print(
-        f"gate_slot_lock: all {count} machine-wide slots are busy; queueing "
-        f"(set {SLOT_COUNT_ENV}=0 to disable)",
+        f"gate_slot_lock: all {count} machine-wide slots are busy; queueing (set {SLOT_COUNT_ENV}=0 to disable)",
         file=sys.stderr,
         flush=True,
     )
@@ -151,16 +150,13 @@ def _wait_ignoring_interrupts(process: subprocess.Popen[bytes]) -> int:
             continue
 
 
-def main() -> int:
-    if len(sys.argv) < 2:
-        print("usage: gate_slot_lock.py <command> [args...]", file=sys.stderr)
-        return 2
+def _run_in_slot(command: Sequence[str]) -> int:
     try:
         held: Final = acquire_slot()
     except KeyboardInterrupt:
         return 130
     try:
-        code: Final = _wait_ignoring_interrupts(subprocess.Popen(sys.argv[1:]))
+        code: Final = _wait_ignoring_interrupts(subprocess.Popen(command))
     except FileNotFoundError as error:
         print(f"gate_slot_lock: {error}", file=sys.stderr)
         return 127
@@ -169,5 +165,19 @@ def main() -> int:
     return code if code >= 0 else 128 - code
 
 
+def main(arguments: Sequence[str]) -> int:
+    match arguments:
+        case ["-h" | "--help", *_]:
+            print(USAGE)
+            return 0
+        case ["--", program, *rest]:
+            return _run_in_slot((program, *rest))
+        case [program, *rest] if not program.startswith("-"):
+            return _run_in_slot((program, *rest))
+        case _:
+            print(USAGE, file=sys.stderr)
+            return 2
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(main(sys.argv[1:]))

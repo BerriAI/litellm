@@ -200,6 +200,35 @@ def test_missing_command_exits_127_and_no_command_exits_2(tmp_path: Path) -> Non
     assert bare.returncode == 2
 
 
+def test_leading_separator_is_dropped_before_the_command_runs(tmp_path: Path) -> None:
+    proc = subprocess.run(
+        [sys.executable, "-I", str(HELPER), "--", sys.executable, "-c", "raise SystemExit(7)"],
+        env=_env(tmp_path / "locks", "2"),
+    )
+    assert proc.returncode == 7
+
+
+@pytest.mark.parametrize(
+    ("arguments", "exit_code", "stream"),
+    [
+        (["--help"], 0, "stdout"),
+        (["-h", "make", "lint"], 0, "stdout"),
+        (["--slots", "1", "make", "lint"], 2, "stderr"),
+        (["--"], 2, "stderr"),
+    ],
+)
+def test_help_and_options_answer_with_usage_without_taking_a_slot(
+    tmp_path: Path, arguments: list[str], exit_code: int, stream: str
+) -> None:
+    locks = tmp_path / "locks"
+    proc = subprocess.run(
+        [sys.executable, "-I", str(HELPER), *arguments], env=_env(locks, "2"), capture_output=True, text=True
+    )
+    assert proc.returncode == exit_code
+    assert getattr(proc, stream).startswith("usage: gate_slot_lock.py [--] <command>")
+    assert not locks.exists()
+
+
 def test_wrapped_command_killed_by_signal_maps_to_128_plus_signal(tmp_path: Path) -> None:
     proc = subprocess.run(
         _wrapped(["import os, signal\nos.kill(os.getpid(), signal.SIGTERM)\n"]),
