@@ -3,7 +3,8 @@ use std::path::{Path, PathBuf};
 use serde_json::{Map, Value};
 
 use super::{
-    builders::{self, TokenSource, token_failure},
+    builders,
+    credentials::{Loaded, managed},
     environment::GoogleEnvironment,
     external_authorized_user,
     failure::{GoogleLoginFailure, PythonException, python_str},
@@ -18,7 +19,7 @@ const DEFAULT_UNIVERSE_DOMAIN: &str = "googleapis.com";
 /// What google-auth's `default()` found: the credentials and the project it resolved, which is
 /// the JSON value a credentials file holds and may not be a string.
 pub(crate) struct DefaultCredentials {
-    pub(crate) source: TokenSource,
+    pub(crate) source: Loaded,
     pub(crate) project: Option<Value>,
 }
 
@@ -28,7 +29,7 @@ enum Kind {
 }
 
 struct Found {
-    source: TokenSource,
+    source: Loaded,
     project: Option<Value>,
     kind: Kind,
 }
@@ -60,10 +61,10 @@ fn gcloud_credentials_path(env: &dyn GoogleEnvironment) -> Option<PathBuf> {
 }
 
 fn wrapped(
-    build: Result<TokenSource, GoogleLoginFailure>,
+    build: Result<Loaded, GoogleLoginFailure>,
     credential: &str,
     file: &str,
-) -> Result<TokenSource, GoogleLoginFailure> {
+) -> Result<Loaded, GoogleLoginFailure> {
     build.map_err(|cause| {
         GoogleLoginFailure::caused_by(
             PythonException::DefaultCredentials,
@@ -75,22 +76,21 @@ fn wrapped(
 
 /// `_default._get_external_account_credentials`: AWS and executable sources raise their own
 /// failure, an identity pool's is named by the file it came from.
-fn external_account(
-    info: &Map<String, Value>,
-    file: &str,
-) -> Result<TokenSource, GoogleLoginFailure> {
+fn external_account(info: &Map<String, Value>, file: &str) -> Result<Loaded, GoogleLoginFailure> {
     let raises_its_own = info.get("subject_token_type").and_then(Value::as_str)
         == Some(AWS_SUBJECT_TOKEN_TYPE)
         || info
             .get("credential_source")
             .and_then(|source| source.get("executable"))
             .is_some_and(|executable| !executable.is_null());
-    builders::external_account(info).map_err(|failure| match raises_its_own {
-        true => failure,
-        false => default_failure(format!(
-            "Failed to load external account credentials from {file}"
-        )),
-    })
+    builders::external_account(info)
+        .map(managed)
+        .map_err(|failure| match raises_its_own {
+            true => failure,
+            false => default_failure(format!(
+                "Failed to load external account credentials from {file}"
+            )),
+        })
 }
 
 /// `_default.load_credentials_from_file`.
@@ -125,7 +125,7 @@ fn load_credentials_from_file(
     match info.get("type").and_then(Value::as_str) {
         Some("authorized_user") => Ok(found(
             wrapped(
-                builders::authorized_user(&info, &env.google_token_endpoint()),
+                builders::authorized_user(&info, &env.google_token_endpoint()).map(managed),
                 "authorized user",
                 file,
             )?,
@@ -144,7 +144,7 @@ fn load_credentials_from_file(
         )),
         Some("impersonated_service_account") => Ok(found(
             wrapped(
-                builders::impersonated_service_account(&info),
+                builders::impersonated_service_account(&info).map(managed),
                 "impersonated service account",
                 file,
             )?,
@@ -206,7 +206,7 @@ async fn gce_credentials(env: &dyn GoogleEnvironment) -> Result<Option<Found>, G
     }
     Ok(Some(Found {
         project: env.gce_project().await.map(Value::String),
-        source: env.gce_credentials()?,
+        source: managed(env.gce_credentials()?),
         kind: Kind::Other,
     }))
 }
@@ -235,16 +235,13 @@ fn project_number(info: &Map<String, Value>) -> Option<String> {
 /// `external_account.Credentials.get_project_id`.
 async fn external_account_project(
     env: &dyn GoogleEnvironment,
-    source: &TokenSource,
+    source: &Loaded,
     info: &Map<String, Value>,
 ) -> Result<Option<Value>, GoogleLoginFailure> {
     let Some(number) = project_number(info) else {
         return Ok(None);
     };
-    let token = source
-        .token()
-        .await
-        .map_err(|error| token_failure(&error))?;
+    let token = source.refresh().await?.value;
     let universe_domain = info
         .get("universe_domain")
         .and_then(Value::as_str)
