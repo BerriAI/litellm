@@ -244,6 +244,9 @@ class _PrismaClient(Protocol):
     @property
     def _engine(self) -> _PrismaEngine: ...
 
+    @_engine.setter
+    def _engine(self, engine: _PrismaEngine) -> None: ...
+
 
 class _PrismaDrainTracker:
     def __init__(self) -> None:
@@ -503,7 +506,13 @@ class PrismaWrapper:
 
     @staticmethod
     def _write_engine(prisma_client: _PrismaClient, engine: _PrismaEngine) -> None:
-        prisma_client._Prisma__engine = engine
+        # `_engine` is the accessor `_read_engine` already reads from, and every
+        # supported prisma-client-py release (0.11 through 0.13) exposes it as a
+        # property with a setter. The setter hides the internal rename from
+        # `Prisma.__engine` to `BasePrisma._internal_engine`. Both classes use
+        # `__slots__`, so writing either backing name directly raises
+        # AttributeError once the name changes.
+        prisma_client._engine = engine  # rebind-ok: third-party Prisma client instance, not a local we own
 
     def _instrument_prisma_client(self, prisma_client: "Prisma | _PrismaClient") -> _PrismaDrainTracker | None:
         from prisma.errors import ClientNotConnectedError
