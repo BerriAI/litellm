@@ -2740,6 +2740,35 @@ async def test_two_interactive_teams_each_keep_half_of_the_interactive_share(mon
 
 
 @pytest.mark.asyncio
+async def test_tokens_a_team_used_while_the_model_was_idle_count_against_its_class_share(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler: Final = _borrowing_handler(monkeypatch, borrows=False, splits=True)
+    await _burn(handler, _class_team("team-a"), "interactive", 20, saturation=0.0)
+    await _burn(handler, _class_team("team-b"), "interactive", 400, saturation=0.02)
+    await _burn(handler, _class_team("team-b"), "interactive", 100, saturation=0.42)
+    with pytest.raises(ProxyRateLimitError) as exc:
+        await _check(handler, _class_team("team-b"), saturation=0.52, priority="interactive")
+    _held_to_class_share(exc.value)
+    assert "Share: 500, Remaining: 0, Model saturation: 52.0%" in str(exc.value.detail)
+    await _burn(handler, _class_team("team-a"), "interactive", 470, saturation=0.52)
+
+
+@pytest.mark.asyncio
+async def test_requests_sent_while_the_model_was_idle_charge_only_their_tokens_to_the_class_share(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler: Final = _borrowing_handler(monkeypatch, borrows=False, splits=True)
+    await _burn(handler, _class_team("team-a"), "interactive", 20, saturation=0.0)
+    for _ in range(5):
+        await _burn(handler, _class_team("team-b"), "interactive", 99, saturation=0.02)
+    await _burn(handler, _class_team("team-b"), "interactive", 5, saturation=0.52)
+    with pytest.raises(ProxyRateLimitError) as exc:
+        await _check(handler, _class_team("team-b"), saturation=0.52, priority="interactive")
+    _held_to_class_share(exc.value)
+
+
+@pytest.mark.asyncio
 async def test_the_only_active_class_gets_the_whole_model_instead_of_its_weight(monkeypatch: pytest.MonkeyPatch):
     handler = _borrowing_handler(monkeypatch, borrows=False, splits=True)
     await _burn(handler, _class_team("team-b", "batch"), "batch", 950)
