@@ -38,6 +38,7 @@ class SimpleProviderConfig:
         self.provider_info: ProviderSpecificModelInfo = (
             _PROVIDER_INFO_ADAPTER.validate_python(data["provider_info"]) if "provider_info" in data else {}
         )
+        self.require_explicit_key_for_custom_base: bool = data.get("require_explicit_key_for_custom_base", False)
 
 
 class JSONProviderRegistry:

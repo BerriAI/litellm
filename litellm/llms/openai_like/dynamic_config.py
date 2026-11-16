@@ -43,6 +43,21 @@ def web_search_requests_from_tool_usage(payload: object) -> int | None:
     return calls if calls > 0 else None
 
 
+def _resolve_api_key(provider: SimpleProviderConfig, api_base: str, api_key: str | None) -> str | None:
+    if api_key:
+        return api_key
+
+    env_key: Final = get_secret_str(provider.api_key_env)
+    if not env_key or not provider.require_explicit_key_for_custom_base:
+        return env_key
+
+    env_base: Final = get_secret_str(provider.api_base_env) if provider.api_base_env else None
+    trusted_bases: Final = frozenset(base.rstrip("/") for base in (provider.base_url, env_base) if base)
+    if api_base.rstrip("/") not in trusted_bases:
+        raise ValueError(f"api_key is required for custom api_base on provider {provider.slug}")
+    return env_key
+
+
 def create_config_class(provider: SimpleProviderConfig):
     """Generate config class dynamically from JSON configuration"""
 
@@ -101,8 +116,7 @@ def create_config_class(provider: SimpleProviderConfig):
             if not resolved_base:
                 resolved_base = provider.base_url
 
-            # Resolve API key
-            resolved_key: Final = api_key or get_secret_str(provider.api_key_env)
+            resolved_key: Final = _resolve_api_key(provider, resolved_base, api_key)
 
             return resolved_base, resolved_key
 
@@ -260,7 +274,12 @@ def create_responses_config_class(provider: SimpleProviderConfig) -> "type[OpenA
             litellm_params: GenericLiteLLMParams | None,
         ) -> dict:
             litellm_params = litellm_params or GenericLiteLLMParams()
-            api_key: Final = litellm_params.api_key or get_secret_str(provider.api_key_env)
+            api_base: Final = (
+                litellm_params.api_base
+                or (get_secret_str(provider.api_base_env) if provider.api_base_env else None)
+                or provider.base_url
+            )
+            api_key: Final = _resolve_api_key(provider, api_base, litellm_params.api_key)
             if api_key:
                 headers["Authorization"] = f"Bearer {api_key}"
             return headers
