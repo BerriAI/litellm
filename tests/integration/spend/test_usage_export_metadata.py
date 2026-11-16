@@ -50,6 +50,11 @@ _KEY_METADATA: Final[Mapping[str, JsonValue]] = {
     "routes": [{"name": "a", "api_key": "route_1", "callback_settings": {"otel": {"headers": "h"}}}],
     "secret_manager_settings": {"vault": "v"},
     "scim_enterprise": {"employeeNumber": "E-1"},
+    "apiKeys": "k_1",
+    "tokens": "t_1",
+    "database_url": "db.invalid",
+    "note": "sk-proj-1234567890abcdef",
+    "owners": ["Bearer abc.def.ghi", "ops"],
 }
 _KEY_METADATA_EXPORTED: Final[Mapping[str, JsonValue]] = {
     "cost_center": "cc-7",
@@ -72,6 +77,11 @@ _KEY_METADATA_EXPORTED: Final[Mapping[str, JsonValue]] = {
     "access_token": _REDACTED,
     "langfuse": {"host": "https://langfuse.invalid", "apiKey": _REDACTED},
     "routes": [{"name": "a", "api_key": _REDACTED}],
+    "apiKeys": _REDACTED,
+    "tokens": _REDACTED,
+    "database_url": _REDACTED,
+    "note": _REDACTED,
+    "owners": [_REDACTED, "ops"],
 }
 _USER_METADATA: Final[Mapping[str, JsonValue]] = {
     "department": "research",
@@ -83,9 +93,13 @@ _USER_METADATA: Final[Mapping[str, JsonValue]] = {
     "scim_enterprise": {"employeeNumber": "E-1"},
     "scim_entitlements": ["ent"],
     "scim_roles": ["role"],
+    "slackWebhookUrl": "https://hooks.slack.invalid/T/B/X",
+    "bio": "postgres://admin:pw@db.invalid:5432/app",
 }
 _USER_METADATA_EXPORTED: Final[Mapping[str, JsonValue]] = {
     "department": "research",
+    "slackWebhookUrl": _REDACTED,
+    "bio": _REDACTED,
     "ldap_password": _REDACTED,
     "APIKEY": _REDACTED,
     "profile": {"sessionToken": _REDACTED, "level": 3},

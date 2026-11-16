@@ -1,5 +1,5 @@
 import re
-from collections.abc import ItemsView, Mapping, Sequence
+from collections.abc import Callable, ItemsView, Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, field
 from typing import Any, Final
@@ -273,6 +273,7 @@ def redact_credentials_in_payload(
     masker: SensitiveDataMasker = _default_masker,
     *,
     dropped_keys: AbstractSet[str] = frozenset(),
+    is_credential: Callable[[str, object], bool] = lambda _key, _value: False,
 ) -> Mapping[str, object]:
     """Return a copy of ``data`` where every value under a credential-named key is
     replaced by the shared ``REDACTED`` marker, every entry whose key is in
@@ -288,21 +289,24 @@ def redact_credentials_in_payload(
     credential nested inside one is caught as well. The walk is bounded only to stop
     runaway recursion, and a container sitting at that bound is replaced wholesale
     rather than passed through, so burying a credential deeper than the walk goes
-    hides it instead of exposing it.
+    hides it instead of exposing it. ``is_credential`` lets a caller also redact by
+    value shape or by key names the masker does not know; list items reach it with
+    an empty key.
     """
-    return _PayloadRedactor(masker, frozenset(dropped_keys)).mapping(data, 0)
+    return _PayloadRedactor(masker, frozenset(dropped_keys), is_credential).mapping(data, 0)
 
 
 @dataclass(frozen=True, slots=True)
 class _PayloadRedactor:
     masker: SensitiveDataMasker
     dropped_keys: frozenset[str]
+    is_credential: Callable[[str, object], bool]
 
     def mapping(self, data: Mapping[str, object], depth: int) -> Mapping[str, object]:
         return {key: self.entry(key, value, depth) for key, value in data.items() if key not in self.dropped_keys}
 
     def entry(self, key: str, value: object, depth: int) -> object:
-        if value is not None and self.masker.is_sensitive_key(key):
+        if value is not None and (self.masker.is_sensitive_key(key) or self.is_credential(key, value)):
             return REDACTED
         if not isinstance(value, (Mapping, list, tuple)):
             return value

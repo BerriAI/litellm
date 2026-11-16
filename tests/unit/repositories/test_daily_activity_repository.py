@@ -764,6 +764,73 @@ async def test_export_redacts_credential_named_values_inside_metadata_objects() 
     assert (rows[1].key_metadata, rows[1].user_metadata) == ({}, {})
 
 
+async def _exported_key_metadata(key_metadata: Mapping[str, object]) -> Mapping[str, object]:
+    database: Final = _FakeDatabase((({**_export_row("key-1"), "key_metadata": key_metadata, "user_metadata": {}},),))
+    repository, _ = _repository(database)
+    rows: Final = [row async for row in repository.export_rows(_scope(), export_type=ExportType.DAILY_WITH_KEYS)]
+    return rows[0].key_metadata
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "key",
+    [
+        "apiKeys",
+        "secrets",
+        "tokens",
+        "passphrase",
+        "bearer",
+        "jwt",
+        "slackWebhookUrl",
+        "connectionString",
+        "database_url",
+        "sentry_dsn",
+    ],
+)
+async def test_export_redacts_credential_named_values_the_masker_names_miss(key: str) -> None:
+    assert await _exported_key_metadata({key: "opaque-value", "team": "ops"}) == {key: "REDACTED", "team": "ops"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "value",
+    [
+        "sk-proj-1234567890abcdef",
+        "rotate sk-abc123456789 next week",
+        "sk_live_abcdef1234567890",
+        "Bearer abc.def.ghi",
+        "basic dXNlcjpwYXNz",
+        "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.sig",
+        "postgres://admin:pw@db.internal:5432/app",
+        "https://hooks.slack.com/services/T000/B000/XXXX",
+        "https://discord.com/api/webhooks/1/abc",
+        "AKIAIOSFODNN7EXAMPLE",
+        "ghp_abcdefghijklmnopqrstuvwxyz0123",
+        "xoxb-1234567890-abcdef",
+    ],
+)
+async def test_export_redacts_credential_shaped_values_under_any_key_and_in_lists(value: str) -> None:
+    exported: Final = await _exported_key_metadata({"note": value, "owners": [value, "ops"]})
+
+    assert exported == {"note": "REDACTED", "owners": ["REDACTED", "ops"]}
+
+
+@pytest.mark.asyncio
+async def test_export_keeps_ordinary_metadata_that_only_resembles_credentials() -> None:
+    metadata: Final = {
+        "team": "sk-team",
+        "tags": ["skunkworks", "task-runner-2024", "basic plan", "bearer of news"],
+        "max_tokens": 4096,
+        "token_budget": None,
+        "docs": "https://user@docs.example.com/guide",
+        "dashboard": "https://grafana.example.com:3000/d/abc",
+        "webhook": {"url": "https://hooks.example", "enabled": True},
+        "cost_center": "cc-1234567890",
+    }
+
+    assert await _exported_key_metadata(metadata) == metadata
+
+
 @pytest.mark.asyncio
 async def test_export_is_lazy_and_uses_the_last_row_as_the_next_cursor(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(constants, "USAGE_EXPORT_BATCH_SIZE", 2)

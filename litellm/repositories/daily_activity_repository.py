@@ -1,4 +1,5 @@
 import asyncio
+import re
 from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime
@@ -218,8 +219,38 @@ _EXPORT_METADATA_MASKER: Final = SensitiveDataMasker(
 )
 
 
+_EXPORT_CREDENTIAL_KEYS: Final[frozenset[str]] = frozenset(
+    {"apikeys", "bearer", "credentials", "jwt", "passphrase", "secrets", "tokens"}
+)
+_EXPORT_CREDENTIAL_KEY_SUFFIXES: Final = ("connectionstring", "databaseurl", "dsn", "passphrase", "webhookurl")
+_CREDENTIAL_VALUE: Final = re.compile(
+    r"^(?i:bearer|basic)\s+[A-Za-z0-9._~+/=-]{8,}$"
+    r"|\bsk-(?=[A-Za-z0-9_-]*\d)[A-Za-z0-9_-]{10,}"
+    r"|\b[sr]k_(?:live|test)_[A-Za-z0-9]{10,}"
+    r"|\b(?:AKIA|ASIA)[A-Z0-9]{16}\b"
+    r"|\b(?:gh[pousr]|github_pat)_[A-Za-z0-9_]{20,}"
+    r"|\bxox[abposr]-[A-Za-z0-9-]{10,}"
+    r"|\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*"
+    r"|\b[a-z][a-z0-9+.-]*://[^\s/:@]+:[^\s/@]+@"
+    r"|https://hooks\.slack\.com/"
+    r"|https://(?:discord|discordapp)\.com/api/webhooks/"
+)
+
+
+def _is_export_credential(key: str, value: object) -> bool:
+    normalized_key: Final = key.lower().replace("_", "").replace("-", "")
+    if normalized_key in _EXPORT_CREDENTIAL_KEYS or normalized_key.endswith(_EXPORT_CREDENTIAL_KEY_SUFFIXES):
+        return True
+    return isinstance(value, str) and _CREDENTIAL_VALUE.search(value) is not None
+
+
 def _redacted_metadata(metadata: Mapping[str, object]) -> Mapping[str, object]:
-    return redact_credentials_in_payload(metadata, _EXPORT_METADATA_MASKER, dropped_keys=EXPORT_METADATA_DROPPED_KEYS)
+    return redact_credentials_in_payload(
+        metadata,
+        _EXPORT_METADATA_MASKER,
+        dropped_keys=EXPORT_METADATA_DROPPED_KEYS,
+        is_credential=_is_export_credential,
+    )
 
 
 def _with_redacted_metadata(row: ExportRow) -> ExportRow:
