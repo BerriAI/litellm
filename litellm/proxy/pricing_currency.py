@@ -33,7 +33,14 @@ from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.utils import CustomPricingLiteLLMParams
 
 PRICING_CURRENCY_FIELD: Final = "pricing_currency"
-CHAT_COMPLETION_ROUTES: Final = frozenset({"/v1/chat/completions", "/chat/completions"})
+CHAT_COMPLETION_ROUTES: Final = frozenset(
+    {
+        "/v1/chat/completions",
+        "/chat/completions",
+        "/engines/{model:path}/chat/completions",
+        "/openai/deployments/{model:path}/chat/completions",
+    }
+)
 _CONVERTED_PRICE_FIELDS: Final = ("input_cost_per_token", "output_cost_per_token")
 _PRICING_FIELDS: Final = frozenset(CustomPricingLiteLLMParams.model_fields)
 _UNCONVERTED_PRICING_FIELDS: Final = tuple(sorted(_PRICING_FIELDS - frozenset(_CONVERTED_PRICE_FIELDS)))

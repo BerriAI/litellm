@@ -90,7 +90,7 @@ from litellm.proxy._types import (
     TeamCallbackMetadata,
     UserAPIKeyAuth,
 )
-from litellm.proxy.auth.auth_utils import get_request_route
+from litellm.proxy.auth.auth_utils import get_request_route, get_request_route_template
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.common_utils.callback_utils import (
     decrypt_callback_vars,
@@ -3118,7 +3118,9 @@ async def add_litellm_data_to_request(
         _strip_client_pricing_overrides(data)
     if PRICING_CURRENCY_FIELD in data:
         usd_prices: Final = await _usd_request_prices(
-            _REQUEST_FIELDS.validate_python(data), get_request_route(request), pricing_rates
+            _REQUEST_FIELDS.validate_python(data),
+            get_request_route_template(request) or get_request_route(request),
+            pricing_rates,
         )
         del data[PRICING_CURRENCY_FIELD]  # rebind-ok: data is an out-param
         for field, price in usd_prices.items():

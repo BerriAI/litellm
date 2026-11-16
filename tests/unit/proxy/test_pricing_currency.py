@@ -276,3 +276,29 @@ async def test_a_failed_refresh_is_not_retried_until_its_cooldown_ends() -> None
     assert after_cooldown == {"input_cost_per_token": 0.625}
     assert feed.fetches == 2
     assert await usd_request_prices({**body, "pricing_currency": "USD"}, CHAT, lookup) == {"input_cost_per_token": 0.5}
+
+
+class _CancelledThenServed:
+    def __init__(self) -> None:
+        self.fetches = 0
+
+    async def __call__(self) -> bytes | EcbFetchFailed:
+        self.fetches += 1
+        if self.fetches == 1:
+            raise asyncio.CancelledError
+        return _feed()
+
+
+async def test_a_cancelled_refresh_does_not_block_the_next_lookup() -> None:
+    fetch: Final = _CancelledThenServed()
+    lookup: Final = ReferenceRateLookup(
+        EcbReferenceRates(clock=_Clock(datetime(2026, 11, 13, 16, tzinfo=timezone.utc))), fetch, _Seconds()
+    )
+    body: Final = {"pricing_currency": "EUR", "input_cost_per_token": 0.5}
+
+    with pytest.raises(asyncio.CancelledError):
+        await usd_request_prices(body, CHAT, lookup)
+    after_cancel: Final = await usd_request_prices(body, CHAT, lookup)
+
+    assert after_cancel == {"input_cost_per_token": 0.625}
+    assert fetch.fetches == 2

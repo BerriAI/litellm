@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from botocore.credentials import Credentials
 from fastapi import Request
+from fastapi.routing import APIRoute
 from opentelemetry.trace import INVALID_SPAN, NonRecordingSpan, SpanContext
 from pydantic import TypeAdapter
 from pydantic import ValidationError as PydanticValidationError
@@ -9574,6 +9575,45 @@ async def test_add_litellm_data_to_request_prices_chat_completions_in_usd_only_f
     assert {
         field: updated[field] for field in ("input_cost_per_token", "output_cost_per_token") if field in updated
     } == expected
+
+
+def _routed_request(template: str, path: str) -> MagicMock:
+    request: Final = _reserved_stamp_request(path)
+    request.scope = {"type": "http", "path": path, "root_path": "", "route": APIRoute(template, endpoint=lambda: None)}
+    return request
+
+
+@pytest.mark.parametrize(
+    ("template", "path"),
+    [
+        ("/v1/chat/completions", "/v1/chat/completions"),
+        ("/chat/completions", "/chat/completions"),
+        ("/engines/{model:path}/chat/completions", "/engines/gpt-5.4-mini/chat/completions"),
+        ("/openai/deployments/{model:path}/chat/completions", "/openai/deployments/gpt-5.4-mini/chat/completions"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_add_litellm_data_to_request_prices_every_chat_completions_alias_in_usd(template: str, path: str) -> None:
+    data: Final[dict[str, object]] = {
+        "model": "gpt-5.4-mini",
+        "messages": [{"role": "user", "content": "hi"}],
+        "pricing_currency": "EUR",
+        "input_cost_per_token": 0.5,
+    }
+    updated: Final = TypeAdapter(Mapping[str, object]).validate_python(
+        await add_litellm_data_to_request(
+            data=data,
+            request=_routed_request(template, path),
+            user_api_key_dict=_reserved_stamp_key({"allow_client_pricing_override": True}),
+            proxy_config=MagicMock(),
+            general_settings={},
+            version="test-version",
+            pricing_rates=_eur_rates(),
+        )
+    )
+
+    assert "pricing_currency" not in updated
+    assert updated["input_cost_per_token"] == 0.625
 
 
 @pytest.mark.asyncio
