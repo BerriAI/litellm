@@ -523,6 +523,10 @@ CALLER_CLIENT_STREAM_TIMEOUT_DEBUG_INFO: Final = (
     "The caller client's ReadTimeout from a stalled stream reaches the caller without litellm_debug_info, "
     "which Python's stream mapping attaches from the deployment's litellm_params"
 )
+V_UNSENDABLE_URL_TEXT: Final = (
+    "V: a URL with a non-printable character raises the same InvalidURL with litellm's own text, "
+    "which Rust writes instead of borrowing httpx's"
+)
 E04_HTTPX_CHUNK_READS: Final = "E04: httpx yields each HTTP chunk whole from a 64 KiB socket read; hyper hands a large chunk over in pieces of its smaller read buffer"
 A10_NO_MAX_TOKENS: Final = "A10: native admission hands a call without an int max_tokens to Python, whose signature raises the TypeError; only dispatch differs"
 C_UNSENT_CALL_FLAG: Final = (
@@ -4689,6 +4693,7 @@ VERTEX_AUTH_CASES: Final = tuple(
                 vertex_credentials=dict(_service_account("p3-newline")),
             ),
             upstream=(),
+            gaps=_gaps(outcome=V_UNSENDABLE_URL_TEXT, logged_error=V_UNSENDABLE_URL_TEXT),
         ),
         Case(
             "vertex_ai_impersonated_credentials_are_refused",
