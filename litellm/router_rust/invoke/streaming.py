@@ -2039,9 +2039,8 @@ async def open_attempt_stream(attempt: StreamAttempt, response: object) -> objec
 
     if attempt.op == "acompletion" and isinstance(response, CustomStreamWrapper):
         needs_fetch: Final = response.completion_stream is None and response.make_call is not None  # pyright: ignore[reportUnknownMemberType]  # untyped attributes
-        if deadline is None:
-            if needs_fetch:
-                await response.fetch_stream()
+        if deadline is None and needs_fetch:
+            await response.fetch_stream()
 
         async def read_with_cleanup(
             stream: CustomStreamWrapper, chat_deadline: float
