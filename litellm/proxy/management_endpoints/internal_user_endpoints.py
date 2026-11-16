@@ -490,6 +490,14 @@ async def add_new_user_to_default_team(
             )
 
 
+async def _readable_team_rows(
+    prisma_client: "PrismaClient", team_ids: Sequence[str]
+) -> "tuple[prisma_models.LiteLLM_TeamTable, ...]":
+    with contextlib.suppress(Exception):
+        return await find_many_in(_team_table(prisma_client), "team_id", team_ids)
+    return ()
+
+
 async def _memberships_on_team_member_budget(
     memberships: tuple[NewUserRequestTeam, ...], prisma_client: "PrismaClient"
 ) -> tuple[NewUserRequestTeam, ...]:
@@ -497,7 +505,7 @@ async def _memberships_on_team_member_budget(
     capped_team_ids: Final = [m.team_id for m in memberships if m.max_budget_in_team is not None]
     if not capped_team_ids:
         return memberships
-    team_rows: Final = await find_many_in(_team_table(prisma_client), "team_id", capped_team_ids)
+    team_rows: Final = await _readable_team_rows(prisma_client, capped_team_ids)
     budgeted_team_ids: Final = frozenset(
         row.team_id
         for row in team_rows

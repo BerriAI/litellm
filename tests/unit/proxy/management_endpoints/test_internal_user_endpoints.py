@@ -6018,3 +6018,15 @@ async def test_fips_user_update_hashes_off_the_event_loop(pbkdf2_on_event_loop: 
 
     assert pbkdf2_on_event_loop == [False]
     assert data["password"].startswith("pbkdf2:")
+
+
+@pytest.mark.asyncio
+async def test_default_team_memberships_keep_their_configured_cap_when_the_team_table_read_fails(mocker):
+    from litellm.proxy._types import NewUserRequestTeam
+    from litellm.proxy.management_endpoints.internal_user_endpoints import _memberships_on_team_member_budget
+
+    prisma_client: Final = mocker.MagicMock()
+    prisma_client.db.litellm_teamtable.find_many = mocker.AsyncMock(side_effect=ConnectionError("team table down"))
+    configured: Final = (NewUserRequestTeam(team_id="default-team", max_budget_in_team=1500, user_role="user"),)
+
+    assert await _memberships_on_team_member_budget(configured, prisma_client) == configured

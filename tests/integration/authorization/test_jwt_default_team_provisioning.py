@@ -1,17 +1,19 @@
 import json
 import time
 import uuid
+from collections.abc import Callable
 from pathlib import Path
 from typing import Final
 
+import httpx
 import jwt
 import pytest
 import yaml
 from cryptography.hazmat.primitives.asymmetric import rsa
 
 from tests.integration._support.client import Gateway, eventually
-from tests.integration._support.database import read_rows
-from tests.integration._support.process import owned_proxy
+from tests.integration._support.database import read_rows, write_rows
+from tests.integration._support.process import OWNED_STATE_VARIABLE, OwnedState, owned_proxy
 from tests.integration._support.wire import Reply, Request, wire_server
 
 pytestmark: Final = pytest.mark.shares_worker_state
@@ -86,3 +88,58 @@ def test_jwt_subject_without_team_claim_is_provisioned_into_configured_default_t
             assert memberships == [{"team_id": team, "max_budget": TEAM_BUDGET}]
             roster: Final = read_rows('SELECT members_with_roles FROM "LiteLLM_TeamTable" WHERE team_id = %s', (team,))
             assert {"user_id": subject, "role": "user", "user_email": None} in roster[0]["members_with_roles"], roster
+
+
+def _sign_in_with_jwt(candidate: Gateway, subject: str, private_key: rsa.RSAPrivateKey) -> httpx.Response:
+    token: Final = jwt.encode(
+        {"sub": subject, "iat": int(time.time()), "exp": int(time.time()) + 300},
+        private_key,
+        algorithm="RS256",
+        headers={"kid": KEY_ID},
+    )
+    return candidate.request("GET", "/v1/models", key=token)
+
+
+def _create_user(candidate: Gateway, subject: str, _private_key: rsa.RSAPrivateKey) -> httpx.Response:
+    return candidate.request("POST", "/user/new", {"user_id": subject})
+
+
+@pytest.mark.parametrize("arrive", [_sign_in_with_jwt, _create_user], ids=["jwt-sign-in", "user-new"])
+def test_a_new_user_still_arrives_while_the_default_team_cannot_be_read(
+    gateway: Gateway,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    arrive: Callable[[Gateway, str, rsa.RSAPrivateKey], httpx.Response],
+) -> None:
+    monkeypatch.setenv(OWNED_STATE_VARIABLE, OwnedState.PRIVATE.value)
+    private_key: Final = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    public_jwk: Final = jwt.algorithms.RSAAlgorithm.to_jwk(private_key.public_key())
+    config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+    config["general_settings"] = {
+        **config["general_settings"],
+        "enable_jwt_auth": True,
+        "litellm_jwtauth": {"user_id_jwt_field": "sub", "user_id_upsert": True},
+    }
+    config["litellm_settings"] = {
+        **config["litellm_settings"],
+        "default_internal_user_params": {
+            "teams": [{"team_id": "default-team", "user_role": "user", "max_budget_in_team": TEAM_BUDGET}]
+        },
+    }
+    path: Final = tmp_path / "unreadable_default_team.yaml"
+    path.write_text(yaml.safe_dump(config))
+    subject: Final = f"integration-unreadable-team-{uuid.uuid4().hex}"
+    with (
+        wire_server(lambda _request: _jwks_reply(public_jwk)) as jwks,
+        owned_proxy(gateway, tmp_path, {"JWT_PUBLIC_KEY_URL": jwks.url}, config=path) as candidate,
+    ):
+        write_rows(
+            'ALTER TABLE "LiteLLM_TeamTable" RENAME TO "LiteLLM_TeamTable_unavailable"',
+            (),
+            database_url=candidate.database_url,
+        )
+
+        arrived: Final = arrive(candidate, subject, private_key)
+
+        assert arrived.status_code == 200, f"{arrived.status_code} {arrived.text}"
+        assert candidate.rows('SELECT teams FROM "LiteLLM_UserTable" WHERE user_id = %s', (subject,)) == [{"teams": []}]
