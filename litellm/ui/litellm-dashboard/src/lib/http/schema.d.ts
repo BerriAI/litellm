@@ -44687,7 +44687,7 @@ export interface components {
             config_fingerprint: string;
             /**
              * Consecutive Misses
-             * @description Requests in a row that read and wrote 0.
+             * @description Observed requests that reported no cache read or write, not necessarily consecutive.
              */
             consecutive_misses: number;
             /**
