@@ -6,7 +6,6 @@ use fancy_regex::Regex;
 use litellm_auth::CredentialPlacement;
 use litellm_secret_value::SecretValue;
 
-use litellm_env::resolve_non_empty;
 use litellm_http::request::{
     has_header, header_value, header_values, with_header, without_headers,
 };
@@ -167,12 +166,16 @@ pub fn resolve_anthropic_api_base(
     api_base: Option<&str>,
     env_lookup: &dyn Fn(&str) -> Option<String>,
 ) -> String {
-    resolve_non_empty(
-        api_base,
-        env_lookup,
-        &[ANTHROPIC_API_BASE_ENV, ANTHROPIC_BASE_URL_ENV],
-    )
-    .unwrap_or_else(|| API_BASE.to_string())
+    api_base
+        .map(str::trim)
+        .filter(|api_base| !api_base.is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            [ANTHROPIC_API_BASE_ENV, ANTHROPIC_BASE_URL_ENV]
+                .iter()
+                .find_map(|name| env_lookup(name).filter(|value| !value.is_empty()))
+        })
+        .unwrap_or_else(|| API_BASE.to_string())
 }
 
 pub fn complete_anthropic_url(
@@ -418,7 +421,7 @@ fn normalized_if_changed(raw_id: Option<&str>) -> Option<String> {
 }
 
 fn sanitize_tool_use_id_block(block: ContentBlock) -> ContentBlock {
-    match block.block_type.as_ref() {
+    match block.known_type() {
         Some(ContentBlockType::ToolUse | ContentBlockType::ServerToolUse) => {
             match normalized_if_changed(block.id.as_deref()) {
                 Some(id) => ContentBlock {
@@ -478,7 +481,7 @@ pub fn strip_provider_specific_fields(messages: Vec<Message>) -> Vec<Message> {
 }
 
 pub fn is_encrypted_reasoning_block(block: &ContentBlock) -> bool {
-    let field = match block.block_type.as_ref() {
+    let field = match block.known_type() {
         Some(ContentBlockType::Thinking) => block.signature.as_deref(),
         Some(ContentBlockType::RedactedThinking) => block.data.as_deref(),
         _ => None,
@@ -489,7 +492,7 @@ pub fn is_encrypted_reasoning_block(block: &ContentBlock) -> bool {
 const BILLING_HEADER_PREFIX: &str = "x-anthropic-billing-header:";
 
 fn is_billing_header_block(block: &ContentBlock) -> bool {
-    block.block_type == Some(ContentBlockType::Text)
+    block.is_type(ContentBlockType::Text)
         && block
             .text
             .as_deref()
@@ -1284,15 +1287,25 @@ mod tests {
         &[(ANTHROPIC_BASE_URL_ENV, "https://base-url.example.com")],
         "https://base-url.example.com"
     )]
-    #[case::blank_api_base_env_falls_back_to_base_url_env(
+    #[case::whitespace_api_base_env_is_kept(
         None,
         &[(ANTHROPIC_API_BASE_ENV, " \t "), (ANTHROPIC_BASE_URL_ENV, "https://base-url.example.com")],
-        "https://base-url.example.com"
+        " \t "
     )]
-    #[case::blank_envs_fall_back_to_public_endpoint(
+    #[case::empty_api_base_env_falls_back_to_base_url_env(
         None,
         &[(ANTHROPIC_API_BASE_ENV, ""), (ANTHROPIC_BASE_URL_ENV, "  ")],
+        "  "
+    )]
+    #[case::empty_envs_fall_back_to_public_endpoint(
+        None,
+        &[(ANTHROPIC_API_BASE_ENV, ""), (ANTHROPIC_BASE_URL_ENV, "")],
         "https://api.anthropic.com"
+    )]
+    #[case::padded_api_base_env_is_kept(
+        None,
+        &[(ANTHROPIC_API_BASE_ENV, " http://h ")],
+        " http://h "
     )]
     fn api_base_resolution(
         #[case] api_base: Option<&str>,
