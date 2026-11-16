@@ -331,23 +331,20 @@ async def _call(
     api_base: str | None = None,
 ) -> litellm.ModelResponse | None:
     respx_mock.post(api_base or _API_BASE).mock(return_value=reply)
-    try:
-        response: Final = await litellm.acompletion(
-            model="anthropic/claude-sonnet-5-5",
-            messages=[
-                {
-                    "role": "system",
-                    "content": [{"type": "text", "text": "shared policy", "cache_control": {"type": "ephemeral"}}],
-                },
-                {"role": "user", "content": "question"},
-            ],
-            api_key=api_key,
-            api_base=api_base,
-            stream=stream,
-            metadata={"model_info": {"id": "claude-east"}},
-        )
-    except litellm.exceptions.APIError:
-        return None
+    response: Final = await litellm.acompletion(
+        model="anthropic/claude-sonnet-5-5",
+        messages=[
+            {
+                "role": "system",
+                "content": [{"type": "text", "text": "shared policy", "cache_control": {"type": "ephemeral"}}],
+            },
+            {"role": "user", "content": "question"},
+        ],
+        api_key=api_key,
+        api_base=api_base,
+        stream=stream,
+        metadata={"model_info": {"id": "claude-east"}},
+    )
     if isinstance(response, litellm.CustomStreamWrapper):
         _ = [chunk async for chunk in response]
         return None
@@ -425,7 +422,8 @@ async def test_the_logged_account_and_endpoint_split_configurations_and_redactio
 
 
 async def test_a_failed_completion_resets_its_deployment(respx_mock: respx.MockRouter, watched: _Script) -> None:
-    await _call(respx_mock, httpx.Response(500, json={"type": "error", "error": {"type": "api_error"}}))
+    with pytest.raises(litellm.InternalServerError):
+        await _call(respx_mock, httpx.Response(500, json={"type": "error", "error": {"type": "api_error"}}))
     await _settle(watched, 1)
     assert watched.events() == ["reset"]
 
