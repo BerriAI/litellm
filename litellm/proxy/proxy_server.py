@@ -1058,6 +1058,9 @@ from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import (
 from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import (
     sync_ui_settings_to_general_settings,
 )
+from litellm.proxy.ui_crud_endpoints.reference_rates_endpoints import (
+    router as reference_rates_endpoints_router,
+)
 from litellm.proxy.ui_crud_endpoints.user_banner_endpoints import (
     router as user_banner_endpoints_router,
 )
@@ -23140,6 +23143,7 @@ app.include_router(ui_crud_endpoints_router)
 app.include_router(moyai_router)
 app.include_router(user_banner_endpoints_router)
 app.include_router(latest_release_endpoints_router)
+app.include_router(reference_rates_endpoints_router)
 app.include_router(team_callback_router)
 app.include_router(budget_management_router)
 app.include_router(model_management_router)
