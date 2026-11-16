@@ -5,7 +5,7 @@ use litellm_python_compat::{
     format::fixed,
     number::{self, PyNumber},
     unicode::isspace,
-    urllib::quote,
+    urllib::{ParsedUrl, quote, urlparse, urlsplit},
 };
 use serde::Deserialize;
 
@@ -16,6 +16,7 @@ struct Fixtures {
     fromisoformat: Vec<FromIsoFormat>,
     fixed: Vec<Fixed>,
     number_str: Vec<NumberStr>,
+    urlparse: Vec<UrlParse>,
     isspace: Vec<u32>,
 }
 
@@ -65,6 +66,14 @@ struct Quote {
 }
 
 #[derive(Deserialize)]
+struct UrlParse {
+    url: String,
+    split: [String; 5],
+    parsed: [String; 6],
+    unparsed: String,
+}
+
+#[derive(Deserialize)]
 struct Utc {
     seconds: i64,
     micros: u32,
@@ -89,6 +98,26 @@ fn quote_matches_urllib() {
             row.text,
             row.safe
         );
+    }
+}
+
+fn fields(url: &ParsedUrl) -> [String; 6] {
+    [&url.scheme, &url.netloc, &url.path, &url.params, &url.query, &url.fragment].map(Clone::clone)
+}
+
+#[test]
+fn urlparse_matches_urllib() {
+    for row in fixtures().urlparse {
+        let [scheme, netloc, path, query, fragment] = row.split.clone();
+        assert_eq!(
+            fields(&urlsplit(&row.url)),
+            [scheme, netloc, path, String::new(), query, fragment],
+            "urlsplit({:?})",
+            row.url
+        );
+        let parsed = urlparse(&row.url);
+        assert_eq!(fields(&parsed), row.parsed, "urlparse({:?})", row.url);
+        assert_eq!(parsed.geturl(), row.unparsed, "urlunparse({:?})", row.url);
     }
 }
 
