@@ -3,6 +3,7 @@ mod config;
 pub mod constants;
 mod failure;
 mod identity;
+pub mod vertex_messages;
 #[cfg(feature = "google-sdk")]
 mod sdk;
 
