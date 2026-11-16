@@ -4414,6 +4414,39 @@ def test_speech_stream_success_handler_runs_when_the_audio_ends(
     assert speech_logger.logged_payloads.get_nowait()["response"] == _audio_summary(len(b"firstrest"))
 
 
+class _SyncAudioThatRecordsClose(httpx.SyncByteStream):
+    def __init__(self) -> None:
+        self.closed: bool = False
+
+    def __iter__(self) -> Iterator[bytes]:
+        yield b"first"
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class _ResponseMetadataFailed(Exception):
+    pass
+
+
+def _fail_response_metadata(**_: object) -> None:
+    raise _ResponseMetadataFailed
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+def test_speech_stream_failing_after_the_headers_closes_the_audio(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    audio: Final = _SyncAudioThatRecordsClose()
+    _mock_elevenlabs_audio(respx_mock, audio)
+    monkeypatch.setattr("litellm.utils.update_response_metadata", _fail_response_metadata)
+
+    with pytest.raises(_ResponseMetadataFailed):
+        litellm.speech(**_SPEECH_ARGS, stream=True)
+
+    assert audio.closed
+
+
 class TestCallbackAsyncSyncSeparation:
     """Test that LoggingCallbackManager auto-routes async callbacks to async lists."""
 

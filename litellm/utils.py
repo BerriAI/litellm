@@ -1727,6 +1727,13 @@ async def _close_unread_speech(result: object, call_type: str, stream_requested:
             await unread_speech.aclose()
 
 
+def _close_unread_speech_sync(result: object, call_type: str, stream_requested: bool) -> None:
+    unread_speech: Final = _unread_speech_upstream(result, call_type, stream_requested)
+    if unread_speech is not None:
+        with contextlib.suppress(Exception):
+            unread_speech.close()
+
+
 def _bill_failed_speech_stream(logging_obj: LiteLLMLoggingObject, result: object) -> None:
     logging_obj.record_partial_usage_for_failure(Usage(), logging_obj.response_cost_calculator(result=result) or 0.0)
 
@@ -2582,6 +2589,7 @@ def client(original_function):
             # RETURN RESULT
             return checked_result
         except Exception as e:
+            _close_unread_speech_sync(result, call_type, "stream" in kwargs and kwargs["stream"] is True)
             if call_type == CallTypes.completion.value:
                 num_retries = kwargs.get("num_retries", None) or litellm.num_retries or None
                 if kwargs.get("retry_policy", None):
