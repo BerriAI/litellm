@@ -39,6 +39,7 @@ from litellm.llms.bedrock.web_identity_session_policy import (
     session_policy_document,
 )
 from litellm.secret_managers.main import get_secret, get_secret_str
+from litellm.types.llms.anthropic import ANTHROPIC_USER_PROFILE_ID_HEADER
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.bedrock import AWS_AUTH_PARAM_KEYS, AwsAuthParams, AwsSessionTag, BearerPreparedRequest
 
@@ -63,6 +64,7 @@ _STS_REGION_FROM_ENDPOINT_PATTERN: Final = re.compile(
 SIGV4_COMPUTED_HEADERS: Final = frozenset({"authorization", "x-amz-date", "x-amz-security-token", "date"})
 
 _AWS_SESSION_TAGS_ADAPTER: Final[TypeAdapter[tuple[AwsSessionTag, ...]]] = TypeAdapter(tuple[AwsSessionTag, ...])
+_REQUEST_HEADER_FIELDS: Final = TypeAdapter(dict[str, object])
 
 
 def _canonical_aws_session_tags(raw_tags: object) -> tuple[AwsSessionTag, ...] | None:
@@ -1560,6 +1562,11 @@ class BaseAWSLLM(SignsRequestsWithAWS):
         api_key: str | None = None,
         supports_bearer_token: bool = True,
     ) -> AWSPreparedRequest | BearerPreparedRequest:
+        headers = {  # pyright: ignore[reportUnknownVariableType]  # legacy header values  # rebind-ok: preserve caller headers for body transforms and retries
+            name: headers[name]
+            for name in _REQUEST_HEADER_FIELDS.validate_python(headers)
+            if name.lower() != ANTHROPIC_USER_PROFILE_ID_HEADER
+        }
         aws_bearer_token: Final = bedrock_bearer_token(api_key) if supports_bearer_token else None
 
         if aws_bearer_token is not None:
@@ -1662,6 +1669,12 @@ class BaseAWSLLM(SignsRequestsWithAWS):
         Returns:
             Tuple[dict, Optional[str]]: A tuple containing the headers and the json str body of the request
         """
+        if service_name == "bedrock":
+            headers = {  # pyright: ignore[reportUnknownVariableType]  # legacy header values  # rebind-ok: preserve caller headers for body transforms and retries
+                name: headers[name]
+                for name in _REQUEST_HEADER_FIELDS.validate_python(headers or {})
+                if name.lower() != ANTHROPIC_USER_PROFILE_ID_HEADER
+            }
         aws_bearer_token: Final = bedrock_bearer_token(api_key)
 
         if aws_bearer_token is not None:
