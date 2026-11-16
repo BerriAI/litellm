@@ -53,6 +53,15 @@ pub fn strip_bedrock_routing_prefix(model: &str) -> &str {
     })
 }
 
+/// Port of Python's `split_bedrock_region_path`.
+pub fn split_bedrock_region_path(model: &str) -> (Option<&str>, &str) {
+    let stripped = strip_bedrock_routing_prefix(model);
+    match stripped.split_once('/') {
+        Some((region, model_id)) if is_bedrock_region(region) => (Some(region), model_id),
+        _ => (None, stripped),
+    }
+}
+
 fn model_name_from_arn(model: &str) -> &str {
     if !model.to_lowercase().contains("arn") {
         return model;
