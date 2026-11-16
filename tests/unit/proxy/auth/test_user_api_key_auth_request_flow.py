@@ -12844,13 +12844,23 @@ async def test_router_settings_model_group_alias_leaves_pass_through_bodies_alon
     request = _alias_request(route, data, path_params={} if user_defined else {"endpoint": "v1/messages"})
     if user_defined:
         request.scope["endpoint"] = _user_defined_pass_through_endpoint()
-        LiteLLMRoutes.openai_routes.value.append(route)
+        pass_through.InitPassThroughEndpointHelpers.add_exact_path_route(
+            app=fastapi.FastAPI(),
+            path=route,
+            target="https://provider.example/chat",
+            custom_headers=None,
+            forward_headers=None,
+            merge_query_params=None,
+            dependencies=None,
+            cost_per_request=None,
+            endpoint_id="alias-pass-through",
+            auth=True,
+        )
     token = _alias_token(monkeypatch, "key", {"AgentX-LLM": "claude-haiku"}, ["claude-haiku", "AgentX-LLM"])
     try:
         await _enforce_alias_access(token, data, route, request, router)
     finally:
-        if user_defined:
-            LiteLLMRoutes.openai_routes.value.remove(route)
+        pass_through.InitPassThroughEndpointHelpers.remove_endpoint_routes(endpoint_id="alias-pass-through")
     assert data["model"] == "AgentX-LLM"
     assert (await request.json())["model"] == "AgentX-LLM"
     assert get_client_requested_model(request) is None

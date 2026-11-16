@@ -522,8 +522,6 @@ class _TeamMembershipCacheMiss:
 
 _TEAM_MEMBERSHIP_CACHE_MISS: Final = _TeamMembershipCacheMiss()
 
-all_routes: Final = LiteLLMRoutes.openai_routes.value + LiteLLMRoutes.management_routes.value
-
 
 def _membership_from_shared_load(result: object) -> LiteLLM_TeamMembership | None:
     return result if isinstance(result, LiteLLM_TeamMembership) else None
@@ -1701,6 +1699,8 @@ def _allowed_routes_check(user_route: str, allowed_routes: list) -> bool:
                 regex, _, _ = compile_path(template)
                 if regex.match(user_route):
                     return True
+            if allowed_route == "openai_routes" and RouteChecks.is_auth_enforced_pass_through_path(route=user_route):
+                return True
         elif RouteChecks.route_matches_wildcard_pattern(route=user_route, pattern=allowed_route):
             return True
     return False

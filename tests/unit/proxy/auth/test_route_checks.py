@@ -3461,80 +3461,44 @@ def test_patch_team_gate_rejects_view_only_admin():
 
 
 @pytest.mark.asyncio
-async def test_initialize_pass_through_registers_wildcard_for_auth_subpath():
-    """
-    Test that initialize_pass_through_endpoints registers both base path and
-    wildcard path in openai_routes when auth=true and include_subpath=true,
-    and that subpath requests pass is_llm_api_route.
-
-    Also verifies:
-    - Dedup: calling init twice does not duplicate entries
-    - Cleanup: removing the endpoint cleans up openai_routes
-    """
+async def test_initialize_pass_through_auth_subpath_is_an_llm_api_route_until_removed():
     from litellm.proxy._types import LiteLLMRoutes
     from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
         InitPassThroughEndpointHelpers,
+        _registered_pass_through_routes,
         initialize_pass_through_endpoints,
     )
 
     base_path = "/v1/ocr/nvidia/community/nemoretriever-ocr-v1"
-    wildcard_path = base_path + "/*"
-
     endpoint_config = {
+        "id": "ocr-subpath",
         "path": base_path,
         "target": "https://httpbin.org/post",
         "include_subpath": True,
         "auth": True,
         "headers": {"content-type": "application/json"},
     }
-
-    original_routes = LiteLLMRoutes.openai_routes.value[:]
+    saved_registry = dict(_registered_pass_through_routes)
+    openai_routes_before = tuple(LiteLLMRoutes.openai_routes.value)
     try:
         with (
-            patch(
-                "litellm.proxy.proxy_server.app",
-                MagicMock(),
-            ),
-            patch(
-                "litellm.proxy.proxy_server.premium_user",
-                True,
-            ),
-            patch(
-                "litellm.proxy.proxy_server.config_passthrough_endpoints",
-                None,
-            ),
+            patch("litellm.proxy.proxy_server.app", MagicMock()),
+            patch("litellm.proxy.proxy_server.premium_user", True),
+            patch("litellm.proxy.proxy_server.config_passthrough_endpoints", None),
         ):
             await initialize_pass_through_endpoints([endpoint_config])
 
-            # Both base and wildcard paths should be registered
-            assert base_path in LiteLLMRoutes.openai_routes.value
-            assert wildcard_path in LiteLLMRoutes.openai_routes.value
+        assert RouteChecks.is_llm_api_route(base_path) is True
+        assert RouteChecks.is_llm_api_route(base_path + "/v1/infer") is True
+        assert RouteChecks.is_llm_api_route(base_path + "-other") is False
+        assert tuple(LiteLLMRoutes.openai_routes.value) == openai_routes_before
 
-            # Subpath requests should pass the auth route check
-            assert RouteChecks.is_llm_api_route(base_path) is True
-            assert RouteChecks.is_llm_api_route(base_path + "/v1/infer") is True
-
-            # Calling init again should not duplicate entries
-            await initialize_pass_through_endpoints([endpoint_config])
-            assert LiteLLMRoutes.openai_routes.value.count(base_path) == 1
-            assert LiteLLMRoutes.openai_routes.value.count(wildcard_path) == 1
-
-            # Removing the endpoint should clean up openai_routes
-            # remove_endpoint_routes takes endpoint_id (UUID portion of
-            # the route key "{id}:exact:{path}:{methods}")
-            registered = InitPassThroughEndpointHelpers.get_all_registered_pass_through_routes()
-            endpoint_ids = {k.split(":")[0] for k in registered}
-            for eid in endpoint_ids:
-                InitPassThroughEndpointHelpers.remove_endpoint_routes(eid)
-            assert base_path not in LiteLLMRoutes.openai_routes.value
-            assert wildcard_path not in LiteLLMRoutes.openai_routes.value
+        InitPassThroughEndpointHelpers.remove_endpoint_routes("ocr-subpath")
+        assert RouteChecks.is_llm_api_route(base_path) is False
+        assert RouteChecks.is_llm_api_route(base_path + "/v1/infer") is False
     finally:
-        LiteLLMRoutes.openai_routes.value[:] = original_routes
-        # Clean up any routes registered during this test to avoid
-        # polluting the module-level _registered_pass_through_routes
-        registered = InitPassThroughEndpointHelpers.get_all_registered_pass_through_routes()
-        for k in registered:
-            InitPassThroughEndpointHelpers.remove_endpoint_routes(k.split(":")[0])
+        _registered_pass_through_routes.clear()
+        _registered_pass_through_routes.update(saved_registry)
 
 
 @pytest.mark.parametrize(
@@ -5262,3 +5226,51 @@ def test_member_can_reach_skill_history_visibility_checks(route: str) -> None:
         )
     except HTTPException as exc:
         pytest.fail(f"History visibility could not run: {exc.detail}")
+
+
+@pytest.mark.parametrize(
+    ("allowed_passthrough_routes", "allowed"),
+    [(None, False), (["/tmpl/123"], True)],
+)
+@pytest.mark.asyncio
+async def test_templated_auth_pass_through_is_an_llm_route_gated_by_allowed_passthrough_routes(
+    allowed_passthrough_routes: list[str] | None, allowed: bool
+) -> None:
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        _registered_pass_through_routes,
+        initialize_pass_through_endpoints,
+    )
+
+    saved_registry: Final = dict(_registered_pass_through_routes)
+    valid_token: Final = UserAPIKeyAuth(
+        user_id="test_user",
+        allowed_routes=["openai_routes"],
+        metadata={"allowed_passthrough_routes": allowed_passthrough_routes} if allowed_passthrough_routes else {},
+    )
+    try:
+        _registered_pass_through_routes.clear()
+        with (
+            patch("litellm.proxy.proxy_server.app", MagicMock()),
+            patch("litellm.proxy.proxy_server.premium_user", True),
+            patch("litellm.proxy.proxy_server.config_passthrough_endpoints", None),
+        ):
+            await initialize_pass_through_endpoints(
+                [{"id": "tmpl", "path": "/tmpl/{item_id}", "target": "https://example.com", "auth": True}]
+            )
+
+        assert RouteChecks.is_llm_api_route(route="/tmpl/123") is True
+        assert RouteChecks.is_llm_api_route(route="/tmpl/123/extra") is False
+        if allowed:
+            assert RouteChecks.is_virtual_key_allowed_to_call_route(
+                route="/tmpl/123", valid_token=valid_token, request=_mock_request("POST")
+            )
+        else:
+            with pytest.raises(HTTPException) as exc_info:
+                RouteChecks.is_virtual_key_allowed_to_call_route(
+                    route="/tmpl/123", valid_token=valid_token, request=_mock_request("POST")
+                )
+            assert exc_info.value.status_code == 403
+            assert "allowed_passthrough_routes" in exc_info.value.detail
+    finally:
+        _registered_pass_through_routes.clear()
+        _registered_pass_through_routes.update(saved_registry)

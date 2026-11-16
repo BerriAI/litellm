@@ -1212,13 +1212,11 @@ def test_remove_unregistered_routes_drops_unregistered_methods() -> None:
     from fastapi import FastAPI
     from starlette.routing import Match, Route
 
-    from litellm.proxy._types import LiteLLMRoutes
     from litellm.types.passthrough_endpoints.pass_through_endpoints import (
         LITELLM_PASS_THROUGH_ENDPOINT_MARKER,
     )
 
     saved_registry: Final = dict(_registered_pass_through_routes)
-    saved_openai_routes: Final = tuple(LiteLLMRoutes.openai_routes.value)
     try:
         _registered_pass_through_routes.clear()
         app: Final = FastAPI()
@@ -1281,20 +1279,17 @@ def test_remove_unregistered_routes_drops_unregistered_methods() -> None:
     finally:
         _registered_pass_through_routes.clear()
         _registered_pass_through_routes.update(saved_registry)
-        LiteLLMRoutes.openai_routes.value[:] = saved_openai_routes
 
 
 def test_remove_unregistered_routes_keeps_overlapping_method_route() -> None:
     from fastapi import FastAPI
     from starlette.routing import Route
 
-    from litellm.proxy._types import LiteLLMRoutes
     from litellm.types.passthrough_endpoints.pass_through_endpoints import (
         LITELLM_PASS_THROUGH_ENDPOINT_MARKER,
     )
 
     saved_registry: Final = dict(_registered_pass_through_routes)
-    saved_openai_routes: Final = tuple(LiteLLMRoutes.openai_routes.value)
     try:
         _registered_pass_through_routes.clear()
         app: Final = FastAPI()
@@ -1346,7 +1341,6 @@ def test_remove_unregistered_routes_keeps_overlapping_method_route() -> None:
     finally:
         _registered_pass_through_routes.clear()
         _registered_pass_through_routes.update(saved_registry)
-        LiteLLMRoutes.openai_routes.value[:] = saved_openai_routes
 
 
 def test_add_subpath_route_for_an_unrelated_prefix_leaves_the_route_order_untouched():
@@ -13262,7 +13256,6 @@ async def test_update_pass_through_endpoint_keeps_llm_api_route_checks_on_the_up
     from litellm.proxy._types import (
         ConfigFieldInfo,
         ConfigFieldUpdate,
-        LiteLLMRoutes,
         PassThroughGenericEndpoint,
         UserAPIKeyAuth,
     )
@@ -13280,7 +13273,6 @@ async def test_update_pass_through_endpoint_keeps_llm_api_route_checks_on_the_up
         "include_subpath": True,
     }
     saved_registry: Final = dict(_registered_pass_through_routes)
-    saved_openai_routes: Final = tuple(LiteLLMRoutes.openai_routes.value)
     try:
         _registered_pass_through_routes.clear()
         monkeypatch.setattr(proxy_server, "app", FastAPI())
@@ -13304,14 +13296,13 @@ async def test_update_pass_through_endpoint_keeps_llm_api_route_checks_on_the_up
         updated_path: Final = str(update["path"])
         assert (
             RouteChecks.is_llm_api_route(route=updated_path),
-            f"{updated_path}/*" in LiteLLMRoutes.openai_routes.value,
+            RouteChecks.is_llm_api_route(route=f"{updated_path}/sub"),
             RouteChecks.is_llm_api_route(route="/moved-from"),
-            "/moved-from/*" in LiteLLMRoutes.openai_routes.value,
+            RouteChecks.is_llm_api_route(route="/moved-from/sub"),
         ) == expected
     finally:
         _registered_pass_through_routes.clear()
         _registered_pass_through_routes.update(saved_registry)
-        LiteLLMRoutes.openai_routes.value[:] = saved_openai_routes
 
 
 @pytest.mark.asyncio
@@ -13322,7 +13313,6 @@ async def test_update_pass_through_endpoint_keeps_llm_api_route_checks_on_a_path
     from litellm.proxy._types import (
         ConfigFieldInfo,
         ConfigFieldUpdate,
-        LiteLLMRoutes,
         PassThroughGenericEndpoint,
         UserAPIKeyAuth,
     )
@@ -13343,7 +13333,6 @@ async def test_update_pass_through_endpoint_keeps_llm_api_route_checks_on_a_path
         for method in ("GET", "POST")
     ]
     saved_registry: Final = dict(_registered_pass_through_routes)
-    saved_openai_routes: Final = tuple(LiteLLMRoutes.openai_routes.value)
     try:
         _registered_pass_through_routes.clear()
         monkeypatch.setattr(proxy_server, "app", FastAPI())
@@ -13373,7 +13362,6 @@ async def test_update_pass_through_endpoint_keeps_llm_api_route_checks_on_a_path
     finally:
         _registered_pass_through_routes.clear()
         _registered_pass_through_routes.update(saved_registry)
-        LiteLLMRoutes.openai_routes.value[:] = saved_openai_routes
 
 
 @pytest.mark.asyncio
@@ -13593,3 +13581,77 @@ async def test_parse_request_data_by_content_type_reads_json_sent_as_multipart(
     request: Final = _request_with_body("multipart/form-data; boundary=x", body)
 
     assert await _parse_request_data_by_content_type(request) == expected
+
+
+@pytest.fixture
+def isolated_pass_through_registry(monkeypatch: pytest.MonkeyPatch):
+    from litellm.proxy import proxy_server
+
+    saved_registry: Final = dict(_registered_pass_through_routes)
+    _registered_pass_through_routes.clear()
+    monkeypatch.setattr(proxy_server, "app", FastAPI())
+    monkeypatch.setattr(proxy_server, "premium_user", True)
+    monkeypatch.setattr(proxy_server, "config_passthrough_endpoints", None)
+    try:
+        yield
+    finally:
+        _registered_pass_through_routes.clear()
+        _registered_pass_through_routes.update(saved_registry)
+
+
+@pytest.mark.usefixtures("isolated_pass_through_registry")
+def test_auth_pass_through_added_through_the_create_api_is_an_llm_route_immediately() -> None:
+    from litellm.proxy.auth.route_checks import RouteChecks
+
+    InitPassThroughEndpointHelpers.add_exact_path_route(
+        app=FastAPI(),
+        path="/created-at-runtime",
+        target="https://example.com",
+        custom_headers=None,
+        forward_headers=None,
+        merge_query_params=None,
+        dependencies=None,
+        cost_per_request=None,
+        endpoint_id="created",
+        auth=True,
+    )
+
+    assert RouteChecks.is_llm_api_route(route="/created-at-runtime") is True
+
+
+@pytest.mark.usefixtures("isolated_pass_through_registry")
+@pytest.mark.asyncio
+async def test_removing_one_auth_pass_through_keeps_a_shared_path_an_llm_route() -> None:
+    from litellm.proxy.auth.route_checks import RouteChecks
+
+    await initialize_pass_through_endpoints(
+        [
+            {"id": endpoint_id, "path": "/shared", "target": "https://example.com", "auth": True, "methods": [method]}
+            for endpoint_id, method in (("shared-get", "GET"), ("shared-post", "POST"))
+        ]
+    )
+
+    InitPassThroughEndpointHelpers.remove_endpoint_routes("shared-get")
+
+    assert RouteChecks.is_llm_api_route(route="/shared") is True
+    InitPassThroughEndpointHelpers.remove_endpoint_routes("shared-post")
+    assert RouteChecks.is_llm_api_route(route="/shared") is False
+
+
+@pytest.mark.usefixtures("isolated_pass_through_registry")
+@pytest.mark.asyncio
+async def test_an_auth_pass_through_dropped_on_reload_stops_being_an_llm_route() -> None:
+    from litellm.proxy._types import LiteLLMRoutes
+    from litellm.proxy.auth.route_checks import RouteChecks
+
+    openai_routes_before: Final = tuple(LiteLLMRoutes.openai_routes.value)
+    await initialize_pass_through_endpoints(
+        [{"id": "reloaded", "path": "/reloaded", "target": "https://example.com", "auth": True, "include_subpath": True}]
+    )
+    assert tuple(LiteLLMRoutes.openai_routes.value) == openai_routes_before
+    assert RouteChecks.is_llm_api_route(route="/reloaded/sub") is True
+
+    await initialize_pass_through_endpoints([])
+
+    assert RouteChecks.is_llm_api_route(route="/reloaded") is False
+    assert RouteChecks.is_llm_api_route(route="/reloaded/sub") is False
