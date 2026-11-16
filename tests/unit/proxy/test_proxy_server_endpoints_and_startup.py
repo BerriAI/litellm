@@ -2,6 +2,7 @@ import asyncio
 import contextlib
 import dataclasses
 import importlib
+import itertools
 import json
 import logging
 import os
@@ -39,6 +40,7 @@ from litellm._logging import turn_on_json, verbose_proxy_logger
 from litellm.caching.caching import RedisCache
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.redis_cluster_cache import RedisClusterCache
+from litellm.integrations.generic_api.generic_api_callback import GenericAPILogger
 from litellm.litellm_core_utils.get_model_cost_map import (
     GetModelCostMap,
     ModelCostMapReloaded,
@@ -12129,6 +12131,55 @@ def test_db_config_sync_unregisters_a_callback_the_stored_config_no_longer_lists
 
     pc._add_callbacks_from_db_config({"litellm_settings": {setting_key: []}})
     assert callback_name not in _runtime_callback_names()
+
+
+async def _shut_down(logger: GenericAPILogger) -> None:
+    logger.shutdown()
+    await logger._flush_task
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("configured_keys", "kept_keys"),
+    [
+        (("success_callback",), ()),
+        (("success_callback", "failure_callback"), ("failure_callback",)),
+        (("success_callback", "failure_callback"), ("success_callback",)),
+    ],
+)
+async def test_db_config_sync_unregisters_a_generic_api_callback_after_its_headers_rotate(
+    monkeypatch: pytest.MonkeyPatch, configured_keys: tuple[str, ...], kept_keys: tuple[str, ...]
+):
+    import litellm.proxy.proxy_server as ps
+    from litellm.litellm_core_utils import logging_callback_manager
+
+    _reset_runtime_callbacks(monkeypatch)
+    logger_cache: Final[dict[str, GenericAPILogger]] = {}
+    monkeypatch.setattr(logging_callback_manager, "_generic_api_logger_cache", logger_cache)
+    monkeypatch.setattr(
+        litellm,
+        "callback_settings",
+        {"sink_logger": {"callback_type": "generic_api", "endpoint": "http://127.0.0.1:9/logs", "headers": {}}},
+    )
+    monkeypatch.setenv("GENERIC_LOGGER_HEADERS", "Authorization=Bearer old")
+    pc = ps.ProxyConfig()
+    configured: Final = {"litellm_settings": {key: ["sink_logger"] for key in configured_keys}}
+
+    pc._add_callbacks_from_db_config(configured)
+    monkeypatch.setenv("GENERIC_LOGGER_HEADERS", "Authorization=Bearer new")
+    pc._add_callbacks_from_db_config(configured)
+    pc._add_callbacks_from_db_config({"litellm_settings": {key: ["sink_logger"] for key in kept_keys}})
+
+    def registered_authorizations(*list_names: str) -> list[str]:
+        callbacks: Final = itertools.chain.from_iterable(getattr(litellm, list_name) for list_name in list_names)
+        return [callback.headers["Authorization"] for callback in callbacks if isinstance(callback, GenericAPILogger)]
+
+    authorization_by_event: Final = {
+        "success_callback": registered_authorizations("success_callback", "_async_success_callback"),
+        "failure_callback": registered_authorizations("failure_callback", "_async_failure_callback"),
+    }
+    await asyncio.gather(*(_shut_down(logger) for logger in logger_cache.values()))
+    assert authorization_by_event == {key: ["Bearer new"] if key in kept_keys else [] for key in authorization_by_event}
 
 
 def test_db_config_sync_keeps_callbacks_it_did_not_register(monkeypatch: pytest.MonkeyPatch):

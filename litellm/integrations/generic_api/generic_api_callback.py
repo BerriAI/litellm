@@ -231,10 +231,10 @@ class GenericAPILogger(CustomBatchLogger):
         self._stop_flush.set()
         self._shutdown_task = asyncio.create_task(self._finish_shutdown())
 
-    def _active_logger(self) -> "GenericAPILogger":
+    def active_logger(self) -> "GenericAPILogger":
         if self._replacement is None:
             return self
-        return self._replacement._active_logger()
+        return self._replacement.active_logger()
 
     @staticmethod
     def resolve_headers(
@@ -332,7 +332,7 @@ class GenericAPILogger(CustomBatchLogger):
             Raises a NON Blocking verbose_logger.exception if an error occurs
         """
 
-        logger: Final = self._active_logger()
+        logger: Final = self.active_logger()
 
         if logger.event_types is not None and "llm_api_success" not in logger.event_types:
             return
@@ -367,7 +367,7 @@ class GenericAPILogger(CustomBatchLogger):
         - Creates a StandardLoggingPayload
         - Adds to batch queue
         """
-        logger: Final = self._active_logger()
+        logger: Final = self.active_logger()
 
         if logger.event_types is not None and "llm_api_failure" not in logger.event_types:
             return
