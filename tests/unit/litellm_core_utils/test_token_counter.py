@@ -58,6 +58,7 @@ from tests.large_text import text
 from tests.unit.litellm_core_utils.event_loop_lag import (
     assert_loop_stayed_free,
     timed_with_loop_lags,
+    uncounted_text,
     warm_tokenizer,
 )
 from tests.unit.litellm_core_utils.messages_with_counts import (
@@ -176,7 +177,7 @@ async def test_huggingface_count_in_a_worker_thread_leaves_the_event_loop_free()
     warm_tokenizer("claude-fable-5")
 
     tokens, took, lags = await timed_with_loop_lags(
-        lambda: asyncify(token_counter_new)(model="claude-fable-5", text=text * 100)
+        lambda: asyncify(token_counter_new)(model="claude-fable-5", text=uncounted_text())
     )
 
     assert tokens > 0

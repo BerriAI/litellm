@@ -4056,10 +4056,10 @@ def test_a_dispatched_failure_lifts_the_fields_the_spend_log_needs():
 async def test_a_dispatched_failure_is_counted_off_the_event_loop():
     from unittest.mock import AsyncMock, patch
 
-    from tests.large_text import text
     from tests.unit.litellm_core_utils.event_loop_lag import (
         assert_loop_stayed_free,
         timed_with_loop_lags,
+        uncounted_text,
         warm_tokenizer,
     )
 
@@ -4070,7 +4070,7 @@ async def test_a_dispatched_failure_is_counted_off_the_event_loop():
                 "first_api_call_start_time": 1700000000.0,
                 "call_type": "acompletion",
                 "model": "claude-fable-5",
-                "messages": [{"role": "user", "content": text * 100}],
+                "messages": [{"role": "user", "content": uncounted_text()}],
             }
         ),
         "metadata": {},

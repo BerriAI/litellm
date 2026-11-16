@@ -98,10 +98,10 @@ class _AgentChunk:
 
 @pytest.mark.asyncio
 async def test_stream_completion_counts_tokens_off_the_event_loop(monkeypatch):
-    from tests.large_text import text
     from tests.unit.litellm_core_utils.event_loop_lag import (
         assert_loop_stayed_free,
         timed_with_loop_lags,
+        uncounted_text,
         warm_tokenizer,
     )
 
@@ -119,12 +119,12 @@ async def test_stream_completion_counts_tokens_off_the_event_loop(monkeypatch):
     )
 
     async def _stream():
-        yield _AgentChunk(text * 100)
+        yield _AgentChunk(uncounted_text())
 
     iterator = A2AStreamingIterator(
         stream=_stream(),
         request=SimpleNamespace(
-            params=SimpleNamespace(message={"role": "user", "parts": [{"kind": "text", "text": text * 100}]})
+            params=SimpleNamespace(message={"role": "user", "parts": [{"kind": "text", "text": uncounted_text()}]})
         ),
         logging_obj=logging_obj,
         agent_name="test-agent",

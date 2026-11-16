@@ -9495,17 +9495,18 @@ class TestContinuationDisqualifiers:
 
 @pytest.mark.asyncio
 async def test_async_stream_without_usage_counts_tokens_off_the_event_loop():
-    from tests.large_text import text
     from tests.unit.litellm_core_utils.event_loop_lag import (
         assert_loop_stayed_free,
         timed_with_loop_lags,
+        uncounted_text,
         warm_tokenizer,
     )
 
     model = "gpt-5.6-luna"
     warm_tokenizer(model)
-    messages = [{"role": "user", "content": text * 100}]
-    content_chunks = [_make_chunk(text) for _ in range(100)]
+    messages = [{"role": "user", "content": uncounted_text()}]
+    completion = uncounted_text()
+    content_chunks = [_make_chunk(completion[start : start + 25_000]) for start in range(0, len(completion), 25_000)]
     stop_chunk = ModelResponseStream(
         id="test",
         created=1741037890,
@@ -9534,7 +9535,7 @@ async def test_async_stream_without_usage_counts_tokens_off_the_event_loop():
 
     chunks, took, lags = await timed_with_loop_lags(consume)
 
-    assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == text * 100
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == completion
     assert chunks[-1].usage.prompt_tokens > 100_000
     assert chunks[-1].usage.completion_tokens > 100_000
     assert_loop_stayed_free(took, lags)

@@ -766,17 +766,17 @@ async def test_wildcard_route_resolves_underlying_model_minimum(local_model_cost
 
 @pytest.mark.asyncio
 async def test_async_filter_deployments_counts_the_prompt_off_the_event_loop():
-    from tests.large_text import text
     from tests.unit.litellm_core_utils.event_loop_lag import (
         assert_loop_stayed_free,
         timed_with_loop_lags,
+        uncounted_text,
         warm_tokenizer,
     )
 
     warm_tokenizer("anthropic/claude-fable-5")
     check = PromptCachingDeploymentCheck(cache=DualCache())
     deployments = _deployments("anthropic/claude-fable-5", "anthropic/claude-fable-5")
-    messages = cast(list[AllMessageValues], [{"role": "user", "content": "filtered deployments " + text * 100}])
+    messages = cast(list[AllMessageValues], [{"role": "user", "content": uncounted_text()}])
 
     result, took, lags = await timed_with_loop_lags(
         lambda: check.async_filter_deployments(
@@ -790,10 +790,10 @@ async def test_async_filter_deployments_counts_the_prompt_off_the_event_loop():
 
 @pytest.mark.asyncio
 async def test_async_log_success_event_counts_the_prompt_off_the_event_loop():
-    from tests.large_text import text
     from tests.unit.litellm_core_utils.event_loop_lag import (
         assert_loop_stayed_free,
         timed_with_loop_lags,
+        uncounted_text,
         warm_tokenizer,
     )
 
@@ -806,7 +806,7 @@ async def test_async_log_success_event_counts_the_prompt_off_the_event_loop():
             {
                 "role": "user",
                 "content": [
-                    {"type": "text", "text": "logged success " + text * 100, "cache_control": {"type": "ephemeral"}}
+                    {"type": "text", "text": uncounted_text(), "cache_control": {"type": "ephemeral"}}
                 ],
             }
         ],
