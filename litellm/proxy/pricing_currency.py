@@ -3,6 +3,7 @@
 import asyncio
 import math
 import re
+import time
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -25,7 +26,10 @@ from litellm.litellm_core_utils.ecb_reference_rates import (
     UsdRateLookup,
     fetch_ecb_daily_feed,
 )
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.llms.custom_httpx.http_handler import (
+    get_async_httpx_client,  # pyright: ignore[reportUnknownVariableType]  # shared HTTP factory has an untyped params argument
+)
+from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.utils import CustomPricingLiteLLMParams
 
 PRICING_CURRENCY_FIELD: Final = "pricing_currency"
@@ -35,6 +39,7 @@ _PRICING_FIELDS: Final = frozenset(CustomPricingLiteLLMParams.model_fields)
 _UNCONVERTED_PRICING_FIELDS: Final = tuple(sorted(_PRICING_FIELDS - frozenset(_CONVERTED_PRICE_FIELDS)))
 _CURRENCY_CODE: Final = re.compile(r"[A-Z]{3}")
 _STR_MAPPING: Final = TypeAdapter(Mapping[str, object])
+_FAILED_REFRESH_COOLDOWN_SECONDS: Final = 60.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,10 +53,16 @@ class ReferenceRateLookup:
     no usable rates waits for that task, whose fetch ``fetch_ecb_daily_feed`` bounds. Callers that are cancelled
     while waiting leave the shared refresh running."""
 
-    def __init__(self, rates: EcbReferenceRates, fetch: Callable[[], Awaitable[bytes | EcbFetchFailed]]) -> None:
+    def __init__(
+        self,
+        rates: EcbReferenceRates,
+        fetch: Callable[[], Awaitable[bytes | EcbFetchFailed]],
+        monotonic: Callable[[], float] = time.monotonic,
+    ) -> None:
         self._rates: Final = rates
         self._fetch: Final = fetch
-        self._refresh: tuple[asyncio.AbstractEventLoop, asyncio.Task[EcbRefreshResult]] | None = None
+        self._monotonic: Final = monotonic
+        self._refresh: tuple[asyncio.AbstractEventLoop, asyncio.Task[EcbRefreshResult], float] | None = None
 
     async def usd_per_unit(self, currency: str) -> UsdRateLookup:
         held: Final = self._rates.usd_per_unit(currency)
@@ -65,11 +76,18 @@ class ReferenceRateLookup:
     def _shared_refresh(self) -> "asyncio.Task[EcbRefreshResult]":
         loop: Final = asyncio.get_running_loop()
         running: Final = self._refresh
-        if running is not None and running[0] is loop and not running[1].done():
+        if running is not None and running[0] is loop and self._reusable(running[1], running[2]):
             return running[1]
         task: Final = loop.create_task(self._refresh_once())
-        self._refresh = (loop, task)
+        self._refresh = (loop, task, self._monotonic())
         return task
+
+    def _reusable(self, task: "asyncio.Task[EcbRefreshResult]", started_at: float) -> bool:
+        if not task.done():
+            return True
+        if task.cancelled() or not isinstance(task.result(), EcbFetchFailed | EcbFeedRejected):
+            return False
+        return self._monotonic() - started_at < _FAILED_REFRESH_COOLDOWN_SECONDS
 
     async def _refresh_once(self) -> EcbRefreshResult:
         try:
@@ -83,11 +101,7 @@ class ReferenceRateLookup:
 
 
 async def _fetch_ecb_feed() -> bytes | EcbFetchFailed:
-    handler: Final = AsyncHTTPHandler()
-    try:
-        return await fetch_ecb_daily_feed(handler)
-    finally:
-        await handler.close()
+    return await fetch_ecb_daily_feed(get_async_httpx_client(llm_provider=httpxSpecialProvider.ModelCostMap))
 
 
 reference_rates: Final = ReferenceRateLookup(

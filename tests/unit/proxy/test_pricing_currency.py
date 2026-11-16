@@ -244,3 +244,35 @@ async def test_a_refresh_that_raises_rejects_the_request_instead_of_failing_it()
     result: Final = await usd_request_prices({"pricing_currency": "EUR", "input_cost_per_token": 0.5}, CHAT, lookup)
 
     assert result == PricingCurrencyRejected("ECB reference rates are unavailable, retry later", 503)
+
+
+class _Seconds:
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+async def test_a_failed_refresh_is_not_retried_until_its_cooldown_ends() -> None:
+    seconds: Final = _Seconds()
+    feed: Final = _Feed(EcbFetchFailed("HTTP 503"), _feed())
+    lookup: Final = ReferenceRateLookup(
+        EcbReferenceRates(clock=_Clock(datetime(2026, 11, 13, 16, tzinfo=timezone.utc))), feed, seconds
+    )
+    body: Final = {"pricing_currency": "EUR", "input_cost_per_token": 0.5}
+    unavailable: Final = PricingCurrencyRejected("ECB reference rates are unavailable, retry later", 503)
+
+    during_outage: Final = [await usd_request_prices(body, CHAT, lookup) for _ in range(3)]
+    seconds.now = 59.9
+    before_cooldown_ends: Final = await usd_request_prices(body, CHAT, lookup)
+    fetches_before: Final = feed.fetches
+    seconds.now = 60.0
+    after_cooldown: Final = await usd_request_prices(body, CHAT, lookup)
+
+    assert during_outage == [unavailable] * 3
+    assert before_cooldown_ends == unavailable
+    assert fetches_before == 1
+    assert after_cooldown == {"input_cost_per_token": 0.625}
+    assert feed.fetches == 2
+    assert await usd_request_prices({**body, "pricing_currency": "USD"}, CHAT, lookup) == {"input_cost_per_token": 0.5}
