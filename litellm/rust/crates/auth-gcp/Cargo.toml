@@ -29,6 +29,7 @@ http = { workspace = true, optional = true }
 [dev-dependencies]
 time = { workspace = true, features = ["formatting"] }
 axum = { workspace = true, features = ["json"] }
+http.workspace = true
 rstest.workspace = true
 rustls.workspace = true
 tempfile.workspace = true
