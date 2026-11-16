@@ -11,6 +11,10 @@ from pydantic import TypeAdapter
 from litellm.caching.dual_cache import DualCache
 from litellm.constants import PREFIX_BLOCK_HASHES_BLOCK_SIZE
 from litellm.integrations.prefix_block_hashes import PrefixBlockHashes
+from litellm.litellm_core_utils.litellm_logging import (
+    build_custom_logger_compatible_class,
+    get_custom_logger_compatible_class,
+)
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
 from litellm.types.utils import CallTypesLiteral
@@ -123,6 +127,25 @@ async def test_non_chat_requests_are_untouched(call_type: CallTypesLiteral) -> N
 @pytest.mark.parametrize("data", ({}, {"messages": []}))
 async def test_missing_messages_are_untouched(data: dict[str, object]) -> None:
     assert await _call(data) is data
+
+
+@pytest.mark.asyncio
+async def test_missing_salt_leaves_request_untouched(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LITELLM_SALT_KEY", "")
+    data: Final = {"messages": [{"role": "user", "content": "hello"}]}
+    assert await _call(data) is data
+
+
+@pytest.mark.asyncio
+async def test_registered_callback_is_built_reused_and_hashes_requests() -> None:
+    callback: Final = build_custom_logger_compatible_class("prefix_block_hashes", None, None)
+    assert isinstance(callback, PrefixBlockHashes)
+    assert build_custom_logger_compatible_class("prefix_block_hashes", None, None) is callback
+    assert get_custom_logger_compatible_class("prefix_block_hashes") is callback
+    result: Final = await callback.async_pre_call_hook(
+        UserAPIKeyAuth(), DualCache(), {"messages": [{"role": "user", "content": "hello"}]}, "completion"
+    )
+    assert len(_hashes(result)) == 1
 
 
 @pytest.mark.asyncio
