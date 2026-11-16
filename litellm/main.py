@@ -2867,11 +2867,15 @@ def _complete_custom_openai(
             headers = dict[str, object](copilot_headers)  # rebind-ok: pin App headers in both transports
 
     request_headers: Final = cast("dict[str, object] | None", headers)  # cast-ok: untyped request header boundary
-    outbound_headers: Final = (
-        request_headers
-        if provider_config is None
-        else with_attribution_headers(provider_config.get_attribution_headers(), request_headers)
+    # JSON-configured providers have no provider_config, so their attribution
+    # headers (e.g. a User-Agent) come from the JSON registry instead.
+    json_provider_config: Final = JSONProviderRegistry.get(custom_llm_provider) if provider_config is None else None
+    attribution_headers: Final = (
+        provider_config.get_attribution_headers()
+        if provider_config is not None
+        else (json_provider_config.get_attribution_headers() if json_provider_config is not None else {})
     )
+    outbound_headers: Final = with_attribution_headers(attribution_headers, request_headers)
 
     use_base_llm_http_handler: Final = get_secret_bool("EXPERIMENTAL_OPENAI_BASE_LLM_HTTP_HANDLER")
 

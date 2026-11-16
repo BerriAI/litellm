@@ -3,6 +3,7 @@ JSON-based provider configuration loader for OpenAI-compatible providers.
 """
 
 import json
+import platform
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Final
@@ -10,11 +11,15 @@ from typing import Final
 from pydantic import TypeAdapter
 
 from litellm._logging import verbose_logger
+from litellm._version import version as _LITELLM_VERSION
 from litellm.types.utils import ProviderSpecificModelInfo
 
 _PROVIDER_INFO_ADAPTER: Final = TypeAdapter(ProviderSpecificModelInfo)
 _SPECIAL_HANDLING_ADAPTER: Final = TypeAdapter(Mapping[str, bool])
 _MODEL_ENDPOINTS_ADAPTER: Final = TypeAdapter(Mapping[str, tuple[str, ...]])
+
+_VERSION_PLACEHOLDER: Final = "{version}"
+_PYTHON_PLACEHOLDER: Final = "{python}"
 
 
 class SimpleProviderConfig:
@@ -26,6 +31,7 @@ class SimpleProviderConfig:
         self.api_key_env: str = data["api_key_env"]
         self.api_base_env: str | None = data.get("api_base_env")
         self.base_class = data.get("base_class", "openai_gpt")
+        self.user_agent: str | None = data.get("user_agent")
         self.param_mappings = data.get("param_mappings", {})
         self.constraints = data.get("constraints", {})
         self.special_handling: Mapping[str, bool] = _SPECIAL_HANDLING_ADAPTER.validate_python(
@@ -38,6 +44,21 @@ class SimpleProviderConfig:
         self.provider_info: ProviderSpecificModelInfo = (
             _PROVIDER_INFO_ADAPTER.validate_python(data["provider_info"]) if "provider_info" in data else {}
         )
+
+    def get_attribution_headers(self) -> Mapping[str, str]:
+        """
+        Headers that tell the provider a request came through LiteLLM.
+
+        `user_agent` is a template so the value reports the running LiteLLM and
+        Python versions rather than the versions at build time.
+        """
+        if not self.user_agent:
+            return {}
+        return {
+            "User-Agent": self.user_agent.replace(_VERSION_PLACEHOLDER, _LITELLM_VERSION).replace(
+                _PYTHON_PLACEHOLDER, platform.python_version()
+            )
+        }
 
 
 class JSONProviderRegistry:
