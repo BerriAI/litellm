@@ -93,7 +93,10 @@ fn external_account(
 }
 
 /// `_default.load_credentials_from_file`.
-fn load_credentials_from_file(file: &str) -> Result<Found, GoogleLoginFailure> {
+fn load_credentials_from_file(
+    env: &dyn GoogleEnvironment,
+    file: &str,
+) -> Result<Found, GoogleLoginFailure> {
     if !Path::new(file).exists() {
         return Err(default_failure(format!("File {file} was not found.")));
     }
@@ -120,7 +123,11 @@ fn load_credentials_from_file(file: &str) -> Result<Found, GoogleLoginFailure> {
     };
     match info.get("type").and_then(Value::as_str) {
         Some("authorized_user") => Ok(found(
-            wrapped(builders::authorized_user(&info), "authorized user", file)?,
+            wrapped(
+                builders::authorized_user(&info, &env.google_token_endpoint()),
+                "authorized user",
+                file,
+            )?,
             None,
             Kind::Other,
         )),
@@ -162,7 +169,7 @@ async fn gcloud_sdk_credentials(
     let Some(path) = gcloud_credentials_path(env).filter(|path| path.is_file()) else {
         return Ok(None);
     };
-    let found = load_credentials_from_file(&path.to_string_lossy())?;
+    let found = load_credentials_from_file(env, &path.to_string_lossy())?;
     if is_truthy(found.project.as_ref()) {
         return Ok(Some(found));
     }
@@ -185,7 +192,7 @@ async fn explicit_environ_credentials(
     if gcloud_credentials_path(env).is_some_and(|path| path == Path::new(&explicit_file)) {
         return gcloud_sdk_credentials(env).await;
     }
-    load_credentials_from_file(&explicit_file).map(Some)
+    load_credentials_from_file(env, &explicit_file).map(Some)
 }
 
 /// `_default._get_gce_credentials`.
