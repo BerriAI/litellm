@@ -3587,6 +3587,7 @@ dependencies = [
  "litellm-http",
  "litellm-python-compat",
  "litellm-secret-value",
+ "litellm-tracing",
  "moka",
  "percent-encoding",
  "rand 0.8.7",
