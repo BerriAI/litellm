@@ -42,13 +42,6 @@ from litellm.vector_stores.main import _direct_vector_store_embedding_executor
 from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
 
 
-def _transactional_database() -> MagicMock:
-    database: Final = MagicMock()
-    database.db.query_raw = AsyncMock(return_value=[{"locked": 1}])
-    database.tx.return_value.__aenter__.return_value = database.db
-    return database
-
-
 def _serialize_litellm_params(litellm_params):
     """Serialize ``litellm_params`` to a string for substring assertions.
 
@@ -2144,7 +2137,7 @@ async def test_new_vector_store_persists_embedding_reference_without_credentials
 
     from litellm.types.vector_stores import LiteLLM_ManagedVectorStore
 
-    mock_prisma_client = _transactional_database()
+    mock_prisma_client = MagicMock()
 
     # Mock vector store request with embedding_model but no embedding_config
     vector_store_data: LiteLLM_ManagedVectorStore = {
@@ -2212,7 +2205,7 @@ async def test_new_vector_store_auto_resolves_from_router():
     from litellm.types.router import Deployment, LiteLLM_Params
     from litellm.types.vector_stores import LiteLLM_ManagedVectorStore
 
-    mock_prisma_client = _transactional_database()
+    mock_prisma_client = MagicMock()
 
     # Mock vector store request with embedding_model but no embedding_config
     vector_store_data: LiteLLM_ManagedVectorStore = {
@@ -2367,7 +2360,7 @@ async def test_create_vector_store_in_db():
     """Test that create_vector_store_in_db correctly creates a vector store in the database."""
     from datetime import datetime, timezone
 
-    mock_prisma_client = _transactional_database()
+    mock_prisma_client = MagicMock()
 
     # Mock vector store data
     vector_store_id = "test-create-store-001"
@@ -2691,7 +2684,7 @@ class TestUpdateVectorStoreAccessControlAndRedaction:
             }
         )
 
-        mock_prisma_client = _transactional_database()
+        mock_prisma_client = MagicMock()
         mock_prisma_client.db.litellm_managedvectorstorestable.find_unique = AsyncMock(
             return_value=existing_row
         )
@@ -2760,7 +2753,7 @@ class TestUpdateVectorStoreAccessControlAndRedaction:
             }
         )
 
-        mock_prisma_client = _transactional_database()
+        mock_prisma_client = MagicMock()
         mock_prisma_client.db.litellm_managedvectorstorestable.find_unique = AsyncMock(
             return_value=existing_row
         )
@@ -2811,7 +2804,7 @@ class TestUpdateVectorStoreAccessControlAndRedaction:
             return_value={"vector_store_id": "vs_owned", "team_id": "team-A"}
         )
 
-        mock_prisma_client = _transactional_database()
+        mock_prisma_client = MagicMock()
         mock_prisma_client.db.litellm_managedvectorstorestable.find_unique = AsyncMock(
             return_value=existing_row
         )
@@ -3349,10 +3342,9 @@ class TestConfigOwnedVectorStores:
         from litellm.proxy.vector_store_endpoints.management_endpoints import delete_vector_store
         from litellm.types.vector_stores import VectorStoreDeleteRequest
 
-        prisma = _transactional_database()
+        prisma = MagicMock()
         prisma.db.litellm_managedvectorstorestable.find_unique = AsyncMock(return_value=None)
         prisma.db.litellm_managedvectorstorestable.delete = AsyncMock()
-        prisma.db.litellm_managedvectorstorestable.find_many = AsyncMock(return_value=[])
         registry = self._registry()
 
         with (
@@ -3376,10 +3368,9 @@ class TestConfigOwnedVectorStores:
 
         row = MagicMock()
         row.model_dump = MagicMock(return_value=self._db_row(self.DB_ID, "db-store"))
-        prisma = _transactional_database()
+        prisma = MagicMock()
         prisma.db.litellm_managedvectorstorestable.find_unique = AsyncMock(return_value=row)
         prisma.db.litellm_managedvectorstorestable.delete = AsyncMock()
-        prisma.db.litellm_managedvectorstorestable.find_many = AsyncMock(return_value=[])
         registry = self._registry()
 
         with (
@@ -3650,7 +3641,7 @@ async def test_update_vector_store_persists_submitted_metadata_as_json() -> None
 
     stored_row = MagicMock()
     stored_row.model_dump = MagicMock(return_value={"vector_store_id": "vs_owned", "team_id": "team-A"})
-    mock_prisma_client = _transactional_database()
+    mock_prisma_client = MagicMock()
     mock_prisma_client.db.litellm_managedvectorstorestable.find_unique = AsyncMock(return_value=stored_row)
     mock_prisma_client.db.litellm_managedvectorstorestable.update = AsyncMock(return_value=stored_row)
 
@@ -3680,172 +3671,6 @@ async def test_update_vector_store_persists_submitted_metadata_as_json() -> None
 
 
 @pytest.mark.asyncio
-async def test_create_vector_store_persists_fallback_references(monkeypatch: pytest.MonkeyPatch) -> None:
-    from typing import Final
-
-    from prisma.models import LiteLLM_ManagedVectorStoresTable
-
-    from litellm.types.vector_stores import LiteLLM_ManagedVectorStore
-    from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
-
-    registry: Final = VectorStoreRegistry(
-        [LiteLLM_ManagedVectorStore(vector_store_id="backup", custom_llm_provider="openai", is_config=True)]
-    )
-    monkeypatch.setattr(litellm, "vector_store_registry", registry)
-    database: Final = _transactional_database()
-    database.db.litellm_managedvectorstorestable.find_unique = AsyncMock(return_value=None)
-    database.db.litellm_managedvectorstorestable.find_many = AsyncMock(return_value=[])
-    row: Final = LiteLLM_ManagedVectorStoresTable(
-        vector_store_id="primary",
-        custom_llm_provider="openai",
-        litellm_params=json.dumps({"fallbacks": ["backup"]}),
-        created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
-        updated_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
-    )
-    database.db.litellm_managedvectorstorestable.create = AsyncMock(return_value=row)
-    saved: Final = await create_vector_store_in_db(
-        vector_store_id="primary",
-        custom_llm_provider="openai",
-        prisma_client=database,
-        litellm_params={"fallbacks": ["backup"]},
-    )
-    written: Final = database.db.litellm_managedvectorstorestable.create.await_args.kwargs["data"]
-    assert json.loads(written["litellm_params"])["fallbacks"] == ["backup"]
-    assert saved["litellm_params"]["fallbacks"] == ["backup"]
-    assert registry.get_litellm_managed_vector_store_from_registry("primary") == saved
-
-
-@pytest.mark.asyncio
-async def test_create_vector_store_rejects_unknown_fallback_before_persisting(monkeypatch: pytest.MonkeyPatch) -> None:
-    from typing import Final
-
-    from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
-
-    monkeypatch.setattr(litellm, "vector_store_registry", VectorStoreRegistry())
-    database: Final = _transactional_database()
-    database.db.litellm_managedvectorstorestable.find_unique = AsyncMock(return_value=None)
-    database.db.litellm_managedvectorstorestable.find_many = AsyncMock(return_value=[])
-    database.db.litellm_managedvectorstorestable.create = AsyncMock()
-    with pytest.raises(HTTPException) as rejected:
-        await create_vector_store_in_db(
-            vector_store_id="primary",
-            custom_llm_provider="openai",
-            prisma_client=database,
-            litellm_params={"fallbacks": ["missing"]},
-        )
-    assert rejected.value.status_code == 400
-    database.db.litellm_managedvectorstorestable.create.assert_not_awaited()
-
-
-@pytest.fixture
-def fallback_management_database(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
-    from prisma.models import LiteLLM_ManagedVectorStoresTable
-
-    from litellm.proxy import proxy_server
-    from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
-
-    stores: Final = [
-        LiteLLM_ManagedVectorStore(
-            vector_store_id=store_id,
-            custom_llm_provider="openai",
-            litellm_params={"fallbacks": ["backup"]} if store_id == "primary" else {},
-        )
-        for store_id in ("primary", "backup", "reserve")
-    ]
-    rows: Final = {
-        store["vector_store_id"]: LiteLLM_ManagedVectorStoresTable(
-            vector_store_id=store["vector_store_id"],
-            custom_llm_provider="openai",
-            litellm_params=json.dumps(store["litellm_params"]),
-            created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
-            updated_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
-        )
-        for store in stores
-    }
-    database: Final = _transactional_database()
-    table: Final = database.db.litellm_managedvectorstorestable
-    table.find_unique = AsyncMock(side_effect=lambda *, where: rows.get(where["vector_store_id"]))
-    table.find_many = AsyncMock(return_value=list(rows.values()))
-    table.update = AsyncMock()
-    table.delete = AsyncMock()
-    monkeypatch.setattr(proxy_server, "prisma_client", database)
-    monkeypatch.setattr(proxy_server, "llm_router", None)
-    monkeypatch.setattr(litellm, "vector_store_registry", VectorStoreRegistry(stores))
-    return database
-
-
-@pytest.mark.asyncio
-async def test_delete_referenced_fallback_rejects_before_database_or_registry_mutation(
-    fallback_management_database: MagicMock,
-) -> None:
-    from litellm.proxy.vector_store_endpoints.management_endpoints import delete_vector_store
-    from litellm.types.vector_stores import VectorStoreDeleteRequest
-
-    with pytest.raises(HTTPException) as rejected:
-        await delete_vector_store(
-            data=VectorStoreDeleteRequest(vector_store_id="backup"),
-            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
-        )
-    assert rejected.value.status_code == 400
-    assert "exactly one registered store" in rejected.value.detail
-    fallback_management_database.db.litellm_managedvectorstorestable.delete.assert_not_awaited()
-    assert litellm.vector_store_registry is not None
-    assert litellm.vector_store_registry.get_litellm_managed_vector_store_from_registry("backup") is not None
-
-
-@pytest.mark.asyncio
-async def test_update_fallback_rejects_nested_chain_before_database_or_registry_mutation(
-    fallback_management_database: MagicMock,
-) -> None:
-    from litellm.proxy.vector_store_endpoints.management_endpoints import update_vector_store
-    from litellm.types.vector_stores import VectorStoreUpdateRequest
-
-    with pytest.raises(HTTPException) as rejected:
-        await update_vector_store(
-            data=VectorStoreUpdateRequest(vector_store_id="backup", litellm_params={"fallbacks": ["reserve"]}),
-            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
-        )
-    assert rejected.value.status_code == 400
-    assert "Nested vector store fallback chains" in rejected.value.detail
-    fallback_management_database.db.litellm_managedvectorstorestable.update.assert_not_awaited()
-    assert litellm.vector_store_registry is not None
-    backup: Final = litellm.vector_store_registry.get_litellm_managed_vector_store_from_registry("backup")
-    assert backup is not None
-    assert backup["litellm_params"] == {}
-
-
-@pytest.mark.asyncio
-async def test_update_fallback_persists_reference_and_updates_registry(
-    fallback_management_database: MagicMock,
-) -> None:
-    from prisma.models import LiteLLM_ManagedVectorStoresTable
-
-    from litellm.proxy.vector_store_endpoints.management_endpoints import update_vector_store
-    from litellm.types.vector_stores import VectorStoreUpdateRequest
-
-    table: Final = fallback_management_database.db.litellm_managedvectorstorestable
-    table.update.return_value = LiteLLM_ManagedVectorStoresTable(
-        vector_store_id="primary",
-        custom_llm_provider="openai",
-        litellm_params=json.dumps({"fallbacks": ["reserve"]}),
-        created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
-        updated_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
-    )
-    response: Final = await update_vector_store(
-        data=VectorStoreUpdateRequest(vector_store_id="primary", litellm_params={"fallbacks": ["reserve"]}),
-        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
-    )
-    assert response["status"] == "success"
-    table.update.assert_awaited_once()
-    assert table.update.await_args.kwargs["where"] == {"vector_store_id": "primary"}
-    assert json.loads(table.update.await_args.kwargs["data"]["litellm_params"])["fallbacks"] == ["reserve"]
-    assert litellm.vector_store_registry is not None
-    primary: Final = litellm.vector_store_registry.get_litellm_managed_vector_store_from_registry("primary")
-    assert primary is not None
-    assert primary["litellm_params"]["fallbacks"] == ["reserve"]
-
-
-@pytest.mark.asyncio
 async def test_search_resolution_preserves_registered_physical_ids(monkeypatch: pytest.MonkeyPatch):
     from dataclasses import replace
 
@@ -3863,6 +3688,7 @@ async def test_search_resolution_preserves_registered_physical_ids(monkeypatch: 
 
     stores: Final = [
         LiteLLM_ManagedVectorStore(
+            is_config=True,
             vector_store_id=f"connection-{host}",
             custom_llm_provider="openai",
             vector_store_name=host,
@@ -3895,80 +3721,6 @@ async def test_search_resolution_preserves_registered_physical_ids(monkeypatch: 
             )
         assert backup.calls[0].request.headers["authorization"] == "Bearer backup"
         assert response["data"] == []
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("redacted_roundtrip", [False, True])
-async def test_fallback_patch_retains_connection_and_nested_embedding_credentials(
-    fallback_management_database: MagicMock, redacted_roundtrip: bool
-):
-    from prisma.models import LiteLLM_ManagedVectorStoresTable
-
-    from litellm.constants import REDACTED_BY_LITELM_STRING
-    from litellm.proxy.vector_store_endpoints.management_endpoints import update_vector_store
-    from litellm.types.vector_stores import VectorStoreUpdateRequest
-
-    existing_params: Final = {
-        "api_base": "https://registered.example/v1",
-        "api_key": "registered-test-key",
-        "litellm_embedding_model": "registered-embedding",
-        "litellm_embedding_config": {"api_key": "embedding-test-key", "api_base": "https://embedding.example"},
-        "fallbacks": ["backup"],
-    }
-    existing: Final = LiteLLM_ManagedVectorStoresTable(
-        vector_store_id="primary",
-        custom_llm_provider="openai",
-        litellm_params=json.dumps(existing_params),
-        created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
-        updated_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
-    )
-    table: Final = fallback_management_database.db.litellm_managedvectorstorestable
-    table.find_unique = AsyncMock(return_value=existing)
-    table.update = AsyncMock(side_effect=lambda *, where, data: existing.model_copy(update=data))
-    submitted: Final = {
-        "fallbacks": ["reserve"],
-        **(
-            {"api_key": REDACTED_BY_LITELM_STRING, "litellm_embedding_config": {"api_key": REDACTED_BY_LITELM_STRING}}
-            if redacted_roundtrip
-            else {}
-        ),
-    }
-    response: Final = await update_vector_store(
-        VectorStoreUpdateRequest(vector_store_id="primary", litellm_params=submitted),
-        UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
-    )
-    assert json.loads(table.update.await_args.kwargs["data"]["litellm_params"]) == {
-        **existing_params,
-        "fallbacks": ["reserve"],
-    }
-    assert "registered-test-key" not in str(response)
-    assert "embedding-test-key" not in str(response)
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "changes",
-    [
-        {"litellm_params": {"api_base": "https://untrusted.example/v1"}},
-        {"litellm_params": {"litellm_embedding_config": {"api_base": "https://untrusted.example/v1"}}},
-        {"custom_llm_provider": "pg_vector"},
-    ],
-)
-async def test_store_access_does_not_allow_retargeting_registered_credentials(
-    fallback_management_database: MagicMock, changes: dict[str, object]
-):
-    from litellm.proxy.vector_store_endpoints.management_endpoints import update_vector_store
-    from litellm.types.vector_stores import VectorStoreUpdateRequest
-
-    table: Final = fallback_management_database.db.litellm_managedvectorstorestable
-    with pytest.raises(HTTPException) as denied:
-        await update_vector_store(
-            VectorStoreUpdateRequest.model_validate({"vector_store_id": "backup", **changes}),
-            UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER),
-        )
-    assert denied.value.status_code == 403
-    table.find_unique.assert_not_awaited()
-    table.update.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -4009,6 +3761,7 @@ async def test_fallback_search_uses_effective_pre_call_hook_filters(
 
     stores: Final = [
         LiteLLM_ManagedVectorStore(
+            is_config=True,
             vector_store_id=f"hook-{host}-{primary_status}",
             custom_llm_provider="openai",
             litellm_params={

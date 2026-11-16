@@ -114,9 +114,7 @@ class _ManagedFileIds:
     async def get_unified_file_ids_for_provider_file_ids(
         self, provider_file_ids: Sequence[str], user_api_key_dict: UserAPIKeyAuth
     ) -> Mapping[str, str]:
-        return {
-            file_id: self.unified_file_ids[file_id] for file_id in provider_file_ids if file_id in self.unified_file_ids
-        }
+        return {file_id: self.unified_file_ids[file_id] for file_id in provider_file_ids if file_id in self.unified_file_ids}
 
 
 class _UnreachableManagedFilesTable:
@@ -186,12 +184,14 @@ async def test_fallback_resolution_checks_backup_ownership(monkeypatch: pytest.M
     from litellm.types.vector_stores import LiteLLM_ManagedVectorStore
 
     primary: Final = LiteLLM_ManagedVectorStore(
+        is_config=True,
         vector_store_id="primary",
         custom_llm_provider="openai",
         team_id="one",
         litellm_params={"fallbacks": ["private-backup"]},
     )
     backup: Final = LiteLLM_ManagedVectorStore(
+        is_config=True,
         vector_store_id="private-backup",
         custom_llm_provider="openai",
         team_id="two",
@@ -210,11 +210,12 @@ async def test_unified_fallback_allows_another_provider(
     from litellm.types.vector_stores import LiteLLM_ManagedVectorStore
 
     primary: Final = LiteLLM_ManagedVectorStore(
+        is_config=True,
         vector_store_id="primary",
         custom_llm_provider="azure_ai",
         litellm_params={"fallbacks": ["backup"]},
     )
-    backup: Final = LiteLLM_ManagedVectorStore(vector_store_id="backup", custom_llm_provider="openai")
+    backup: Final = LiteLLM_ManagedVectorStore(is_config=True, vector_store_id="backup", custom_llm_provider="openai")
     monkeypatch.setattr(litellm, "vector_store_registry", VectorStoreRegistry([primary, backup]))
     admin: Final = UserAPIKeyAuth(user_role="proxy_admin")
     plan: Final = await resolve_vector_store_fallback_plan(primary, admin)
@@ -268,6 +269,7 @@ async def test_unified_search_fallback_uses_its_own_native_resource_id(monkeypat
 
     stores: Final = [
         {
+            "is_config": True,
             "vector_store_id": store_id,
             "custom_llm_provider": "openai",
             "litellm_params": {
@@ -317,6 +319,7 @@ async def test_unauthorized_primary_does_not_reveal_invalid_fallback_configurati
     from litellm.types.vector_stores import LiteLLM_ManagedVectorStore
 
     primary: Final = LiteLLM_ManagedVectorStore(
+        is_config=True,
         vector_store_id="private-primary",
         custom_llm_provider="openai",
         team_id="private-team",
@@ -336,7 +339,7 @@ async def test_invalid_registered_fallback_returns_client_error(monkeypatch: pyt
     from litellm.types.vector_stores import LiteLLM_ManagedVectorStore
 
     primary: Final = LiteLLM_ManagedVectorStore(
-        vector_store_id="primary", custom_llm_provider="openai", litellm_params={"fallbacks": refs}
+        is_config=True, vector_store_id="primary", custom_llm_provider="openai", litellm_params={"fallbacks": refs}
     )
     monkeypatch.setattr(litellm, "vector_store_registry", VectorStoreRegistry([primary]))
     with pytest.raises(HTTPException) as invalid:
@@ -353,6 +356,7 @@ async def test_search_rejects_caller_timeout_before_any_provider_attempt(monkeyp
 
     stores: Final = [
         LiteLLM_ManagedVectorStore(
+            is_config=True,
             vector_store_id=store_id,
             custom_llm_provider="openai",
             litellm_params={"fallbacks": ["timeout-backup"]} if store_id == "timeout-primary" else {},
@@ -415,9 +419,15 @@ async def test_fallback_candidates_require_the_same_key_and_team_search_grants(
     caller.via_virtual_key = True
     caller.user_role = role
     primary: Final = LiteLLM_ManagedVectorStore(
-        vector_store_id="primary", custom_llm_provider="openai", team_id=TEAM_ID, litellm_params={"fallbacks": ["backup"]}
+        is_config=True,
+        vector_store_id="primary",
+        custom_llm_provider="openai",
+        team_id=TEAM_ID,
+        litellm_params={"fallbacks": ["backup"]},
     )
-    backup: Final = LiteLLM_ManagedVectorStore(vector_store_id="backup", custom_llm_provider="openai", team_id=TEAM_ID)
+    backup: Final = LiteLLM_ManagedVectorStore(
+        is_config=True, vector_store_id="backup", custom_llm_provider="openai", team_id=TEAM_ID
+    )
     monkeypatch.setattr(litellm, "vector_store_registry", VectorStoreRegistry([primary, backup]))
     monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {"vector_store_deny_by_default": strict})
     if allowed:
@@ -441,13 +451,18 @@ async def test_keyless_user_fallback_requires_personal_grants_in_strict_mode(
     from tests.unit.proxy.vector_store_access_group_state import ProxyState, own_permission
 
     proxy: Final = ProxyState(monkeypatch)
-    user: Final = LiteLLM_UserTable(user_id="caller", object_permission_id="own", object_permission=own_permission(user_stores))
+    user: Final = LiteLLM_UserTable(
+        user_id="caller", object_permission_id="own", object_permission=own_permission(user_stores)
+    )
     await proxy.cache.async_set_cache(key="caller", value=user)
     caller: Final = UserAPIKeyAuth(user_id="caller", user_role="internal_user", is_session_token=True)
     primary: Final = LiteLLM_ManagedVectorStore(
-        vector_store_id="primary", custom_llm_provider="openai", litellm_params={"fallbacks": ["backup"]}
+        is_config=True,
+        vector_store_id="primary",
+        custom_llm_provider="openai",
+        litellm_params={"fallbacks": ["backup"]},
     )
-    backup: Final = LiteLLM_ManagedVectorStore(vector_store_id="backup", custom_llm_provider="openai")
+    backup: Final = LiteLLM_ManagedVectorStore(is_config=True, vector_store_id="backup", custom_llm_provider="openai")
     monkeypatch.setattr(litellm, "vector_store_registry", VectorStoreRegistry([primary, backup]))
     monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {"vector_store_deny_by_default": True})
     if allowed:
@@ -472,7 +487,10 @@ async def test_config_only_fallback_enforces_loaded_caller_grants_without_databa
 
     caller: Final = UserAPIKeyAuth(object_permission=own_permission(allowed_ids))
     primary: Final = LiteLLM_ManagedVectorStore(
-        vector_store_id="primary", custom_llm_provider="openai", litellm_params={"fallbacks": ["backup"]}, is_config=True
+        vector_store_id="primary",
+        custom_llm_provider="openai",
+        litellm_params={"fallbacks": ["backup"]},
+        is_config=True,
     )
     backup: Final = LiteLLM_ManagedVectorStore(vector_store_id="backup", custom_llm_provider="openai", is_config=True)
     monkeypatch.setattr(litellm, "vector_store_registry", VectorStoreRegistry([primary, backup]))
@@ -525,3 +543,31 @@ async def test_config_only_fallback_enforces_loaded_team_grants_without_database
         with pytest.raises(ProxyException) as refused:
             await resolve_vector_store_fallback_plan(primary, caller)
         assert refused.value.code == "401"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("primary_config,backup_config", [(False, True), (True, False)])
+async def test_fallback_resolution_rejects_database_defined_stores(
+    monkeypatch: pytest.MonkeyPatch, primary_config: bool, backup_config: bool
+) -> None:
+    from fastapi import HTTPException
+
+    from litellm.proxy.vector_store_endpoints.utils import resolve_vector_store_fallback_plan
+    from litellm.types.vector_stores import LiteLLM_ManagedVectorStore
+
+    primary: Final = LiteLLM_ManagedVectorStore(
+        vector_store_id="primary",
+        custom_llm_provider="openai",
+        is_config=primary_config,
+        litellm_params={"fallbacks": ["backup"]},
+    )
+    backup: Final = LiteLLM_ManagedVectorStore(
+        vector_store_id="backup",
+        custom_llm_provider="openai",
+        is_config=backup_config,
+    )
+    monkeypatch.setattr(litellm, "vector_store_registry", VectorStoreRegistry([primary, backup]))
+    with pytest.raises(HTTPException) as refused:
+        await resolve_vector_store_fallback_plan(primary, UserAPIKeyAuth(user_role="proxy_admin"))
+    assert refused.value.status_code == 400
+    assert "configured in YAML" in refused.value.detail

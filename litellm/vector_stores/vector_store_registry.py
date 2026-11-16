@@ -144,7 +144,6 @@ class VectorStoreIndexRegistry:
 class VectorStoreRegistry:
     def __init__(self, vector_stores: list[LiteLLM_ManagedVectorStore] | None = None):
         self.vector_stores: list[LiteLLM_ManagedVectorStore] = vector_stores if vector_stores is not None else []
-        self.generation: int = 0
         self.vector_store_ids_to_vector_store_map: dict[str, LiteLLM_ManagedVectorStore] = {}
 
     def _extract_tool_params(self, tool: dict) -> VectorStoreToolParams:
@@ -432,19 +431,15 @@ class VectorStoreRegistry:
             return vector_store_ids
         return [*vector_store_ids, *chain.from_iterable(vector_store_ids_in_tool(tool) for tool in validated_tools)]
 
-    def load_vector_stores_from_config(
-        self, vector_stores_config: Sequence[Mapping[str, object]], *, validate_fallbacks: bool = True
-    ) -> None:
+    def load_vector_stores_from_config(self, vector_stores_config: Sequence[Mapping[str, object]]) -> None:
         loaded: Final = tuple(_configured_vector_store(config) for config in vector_stores_config)
         replaced: Final = frozenset(store.get("vector_store_id") for store in loaded)
         snapshot: Final = (
             *tuple(store for store in self.vector_stores if store.get("vector_store_id") not in replaced),
             *loaded,
         )
-        if validate_fallbacks:
-            validate_vector_store_fallbacks(snapshot)
+        validate_vector_store_fallbacks(loaded)
         self.vector_stores = list(snapshot)
-        self.generation += 1
 
     def list_all_vector_stores(self) -> LiteLLM_ManagedVectorStoreListResponse:
         """
@@ -479,7 +474,6 @@ class VectorStoreRegistry:
             if _vector_store.get("vector_store_id") == vector_store_id:
                 return
         self.vector_stores.append(vector_store)
-        self.generation += 1
 
     def delete_vector_store_from_registry(self, vector_store_id: str):
         """
@@ -490,7 +484,6 @@ class VectorStoreRegistry:
             for vector_store in self.vector_stores
             if vector_store.get("vector_store_id") != vector_store_id
         ]
-        self.generation += 1
 
     def update_vector_store_in_registry(self, vector_store_id: str, updated_data: LiteLLM_ManagedVectorStore):
         """Update or add a vector store in the registry. Config-defined stores are left untouched"""
@@ -498,10 +491,8 @@ class VectorStoreRegistry:
             if vector_store.get("vector_store_id") == vector_store_id:
                 if not vector_store.get("is_config", False):
                     self.vector_stores[i] = updated_data
-                    self.generation += 1
                 return
         self.vector_stores.append(updated_data)
-        self.generation += 1
 
     #########################################################
     ########### DB management helpers for vector stores ###########
@@ -510,17 +501,13 @@ class VectorStoreRegistry:
     @staticmethod
     async def get_vector_stores_from_db(
         prisma_client: PrismaClient | None,
-        *,
-        use_writer: bool = False,
     ) -> list[LiteLLM_ManagedVectorStore]:
         """
         Get vector stores from the database
         """
         vector_stores_from_db: Final[list[LiteLLM_ManagedVectorStore]] = []
         if prisma_client is not None:
-            _vector_stores_from_db: Final = await ManagedVectorStoresRepository(
-                prisma_client, use_writer=use_writer
-            ).table.find_many(
+            _vector_stores_from_db: Final = await ManagedVectorStoresRepository(prisma_client).table.find_many(
                 order={"created_at": "desc"},
             )
             for vector_store in _vector_stores_from_db:

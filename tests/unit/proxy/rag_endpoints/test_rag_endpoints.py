@@ -433,8 +433,6 @@ def _post_rag_query(
 def test_rag_ingest_forwards_team_provider_credentials_without_persisting_them(client_team_a):
     router: Final = _team_provider_router()
     prisma_client: Final = MagicMock()
-    prisma_client.db.query_raw = AsyncMock(return_value=[{"locked": 1}])
-    prisma_client.tx.return_value.__aenter__.return_value = prisma_client.db
     managed_vector_store_table: Final = prisma_client.db.litellm_managedvectorstorestable
     managed_vector_store_table.find_unique = AsyncMock(return_value=None)
     created_row: Final = MagicMock()
@@ -727,8 +725,6 @@ def _installed_managed_files_hook(hook: _ManagedFilesHookStub | None):
 
 def _prisma_client_saving_a_new_store() -> tuple[MagicMock, MagicMock]:
     prisma_client: Final = MagicMock()
-    prisma_client.db.query_raw = AsyncMock(return_value=[{"locked": 1}])
-    prisma_client.tx.return_value.__aenter__.return_value = prisma_client.db
     managed_vector_store_table: Final = prisma_client.db.litellm_managedvectorstorestable
     managed_vector_store_table.find_unique = AsyncMock(return_value=None)
     created_row: Final = MagicMock()

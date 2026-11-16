@@ -63,7 +63,6 @@ class LiteLLM_ManagedVectorStoreListResponse(TypedDict, total=False):
 
 class VectorStoreUpdateRequest(LiteLLMBaseModel):
     vector_store_id: str
-    litellm_params: Mapping[str, object] | None = None
     custom_llm_provider: str | None = None
     vector_store_name: str | None = None
     vector_store_description: str | None = None

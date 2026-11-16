@@ -679,8 +679,33 @@ def test_fallback_provider_without_search_rejects_config_atomically(provider: st
     with pytest.raises(ValueError, match="provider"):
         registry.load_vector_stores_from_config(
             [
-                {"litellm_params": {"vector_store_id": "primary", "custom_llm_provider": "openai", "fallbacks": ["backup"]}},
+                {
+                    "litellm_params": {
+                        "vector_store_id": "primary",
+                        "custom_llm_provider": "openai",
+                        "fallbacks": ["backup"],
+                    }
+                },
                 {"litellm_params": {"vector_store_id": "backup", "custom_llm_provider": provider}},
             ]
         )
     assert registry.vector_stores == []
+
+
+def test_yaml_fallback_cannot_reference_a_database_store() -> None:
+    registry: Final = VectorStoreRegistry(
+        [LiteLLM_ManagedVectorStore(vector_store_id="db-backup", custom_llm_provider="openai")]
+    )
+    with pytest.raises(ValueError, match="exactly one registered store"):
+        registry.load_vector_stores_from_config(
+            [
+                {
+                    "litellm_params": {
+                        "vector_store_id": "primary",
+                        "custom_llm_provider": "openai",
+                        "fallbacks": ["db-backup"],
+                    }
+                }
+            ]
+        )
+    assert [store["vector_store_id"] for store in registry.vector_stores] == ["db-backup"]

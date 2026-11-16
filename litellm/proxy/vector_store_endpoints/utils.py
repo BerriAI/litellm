@@ -682,8 +682,6 @@ async def with_managed_search_file_ids(
 async def resolve_vector_store_fallback_plan(
     vector_store: LiteLLM_ManagedVectorStore,
     user_api_key_dict: UserAPIKeyAuth,
-    *,
-    enforce_search_grants: bool = True,
 ) -> VectorStoreFallbackPlan | None:
     from litellm.constants import DEFAULT_COOLDOWN_TIME_SECONDS
     from litellm.proxy.proxy_server import llm_router
@@ -696,33 +694,29 @@ async def resolve_vector_store_fallback_plan(
         raise HTTPException(status_code=400, detail=str(error)) from error
     if not ids:
         return None
-    resolved: Final = tuple([await get_litellm_managed_vector_store(store_id) for store_id in ids])
+    if not primary.get("is_config"):
+        raise HTTPException(status_code=400, detail="Vector store fallbacks must be configured in YAML")
+    registry: Final = litellm.vector_store_registry
+    resolved: Final = tuple(
+        registry.get_litellm_managed_vector_store_from_registry(store_id) if registry is not None else None
+        for store_id in ids
+    )
     if any(store is None for store in resolved):
         raise HTTPException(status_code=400, detail="A configured vector store fallback does not exist")
     stores: Final = (primary, *(store for store in resolved if store is not None))
+    if any(not store.get("is_config") for store in stores):
+        raise HTTPException(status_code=400, detail="Vector store fallback targets must be configured in YAML")
     try:
         candidates: Final = targets_for_store(primary, stores)
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     for store in stores[1:]:
         await assert_user_can_access_vector_store(store, user_api_key_dict)
-    if enforce_search_grants:
-        from litellm.proxy.auth.auth_checks import vector_store_access_check_for_caller
+    from litellm.proxy.auth.auth_checks import vector_store_access_check_for_caller
 
-        await vector_store_access_check_for_caller(tuple(target.store_id for target in candidates), user_api_key_dict)
+    await vector_store_access_check_for_caller(tuple(target.store_id for target in candidates), user_api_key_dict)
     configured_ttl: Final = llm_router.settings().cooldown_time if llm_router is not None else None
     return VectorStoreFallbackPlan(
         targets=candidates,
         cooldown_time=DEFAULT_COOLDOWN_TIME_SECONDS if configured_ttl is None else configured_ttl,
     )
-
-
-async def validate_vector_store_fallback_registration(
-    vector_store: LiteLLM_ManagedVectorStore,
-    user_api_key_dict: UserAPIKeyAuth,
-) -> None:
-    params: Final = normalize_litellm_params(vector_store).get("litellm_params") or {}
-    if "fallbacks" not in params:
-        return
-    assert_proxy_admin_for_vector_store_index_management(user_api_key_dict, operation="update")
-    await resolve_vector_store_fallback_plan(vector_store, user_api_key_dict, enforce_search_grants=False)
