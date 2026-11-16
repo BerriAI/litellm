@@ -788,8 +788,6 @@ if MCP_AVAILABLE:
             "mcp_routes",
             "management_routes",
             "/v1/mcp/server",
-            "/v1/mcp/server/*",
-            "/v1/mcp/server/{path:path}",
             "/v1/mcp/sessions",
         }
         for r in allowed_routes:

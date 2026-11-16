@@ -46,6 +46,24 @@ def test_is_restricted_virtual_key_request_admin_roles():
     )
     assert _is_restricted_virtual_key_request(admin_viewer_combined_mcp) is False
 
+    admin_viewer_wildcard = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+        allowed_routes=["/v1/mcp/server/*"],
+    )
+    assert _is_restricted_virtual_key_request(admin_viewer_wildcard) is False
+
+    admin_viewer_path_param = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+        allowed_routes=["/v1/mcp/server/{path:path}"],
+    )
+    assert _is_restricted_virtual_key_request(admin_viewer_path_param) is False
+
+    admin_viewer_sessions = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+        allowed_routes=["/v1/mcp/sessions"],
+    )
+    assert _is_restricted_virtual_key_request(admin_viewer_sessions) is False
+
     proxy_admin_mgmt = UserAPIKeyAuth(
         user_role=LitellmUserRoles.PROXY_ADMIN,
         allowed_routes=["/v1/mcp/server"],
