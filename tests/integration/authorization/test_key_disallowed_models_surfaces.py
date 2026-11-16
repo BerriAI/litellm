@@ -233,6 +233,22 @@ def test_a_disallowed_alias_name_is_refused_while_its_target_stays_callable(rig:
         assert served.status_code == 200, served.text
 
 
+@pytest.mark.parametrize("owner", ["key", "team"])
+def test_a_disallowed_router_settings_alias_is_refused_while_its_target_stays_callable(rig: DenyRig, owner: str) -> None:
+    with rig.gateway.scenario() as scenario:
+        alias: Final = f"group-alias-{uuid.uuid4().hex[:8]}"
+        router_settings: Final[dict[str, JsonValue]] = {"model_group_alias": {alias: rig.allowed.chat}}
+        team: Final = scenario.team(**({"router_settings": router_settings} if owner == "team" else {}))
+        on_key: Final[dict[str, JsonValue]] = {"router_settings": router_settings} if owner == "key" else {}
+        unrestricted: Final = scenario.key(team_id=team, **on_key)
+        served_alias: Final = fresh_chat(rig.gateway, alias, unrestricted, uuid.uuid4().hex)
+        assert served_alias.status_code == 200, served_alias.text
+        key: Final = scenario.key(team_id=team, disallowed_models=[alias], **on_key)
+        assert denial(fresh_chat(rig.gateway, alias, key, uuid.uuid4().hex)) == KEY_DENIAL
+        served: Final = fresh_chat(rig.gateway, rig.allowed.chat, key, uuid.uuid4().hex)
+        assert served.status_code == 200, served.text
+
+
 @pytest.mark.parametrize("route", ["chat", "responses", "messages"])
 def test_a_request_fallback_to_a_disallowed_model_is_refused_on_every_route(rig: DenyRig, route: str) -> None:
     marker: Final = f"fallback-{uuid.uuid4().hex}"

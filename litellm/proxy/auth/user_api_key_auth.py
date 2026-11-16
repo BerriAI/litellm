@@ -173,6 +173,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # leg
     _safe_get_request_headers,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     _safe_get_request_query_params,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     _safe_set_request_parsed_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    get_client_requested_model,
     is_opaque_pass_through_request,
     populate_request_with_path_params,
     read_raw_json_body,
@@ -5157,6 +5158,9 @@ async def enforce_key_and_fallback_model_access(
     await _normalize_claude_model(request_data, valid_token, request, route)
     await _resolve_router_settings_model_group_alias(request_data, valid_token, request, route)
     _resolve_codex_native_chatgpt_model(request_data, valid_token, request, route)
+    client_requested_model: Final = get_client_requested_model(request)
+    if client_requested_model is not None:
+        ensure_key_may_call_model(client_requested_model, valid_token, llm_router)
     skips_key_allowlist: Final = valid_token.config != {} or (
         isinstance(valid_token.models, list) and "all-team-models" in valid_token.models
     )
