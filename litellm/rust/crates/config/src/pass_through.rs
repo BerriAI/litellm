@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use litellm_python_compat::lenient::{IsTrue, Truthy};
+use litellm_python_compat::lenient::{IsTrue, LaxBoolOr, Truthy};
 use litellm_secret_value::SecretValue;
 use litellm_starlette::RouteTemplate;
 use serde::Deserialize;
@@ -28,9 +28,9 @@ pub struct PassThroughEndpoint {
     pub include_subpath: bool,
     pub cost_per_request: Option<Spelled<f64>>,
     pub timeout: Option<Spelled<f64>>,
-    /// `endpoint.get("auth", True) is True`, which decides whether a request needs a key.
-    /// Registration still reads `str(auth).lower() == "true"`, until both share one rule.
-    #[serde_as(as = "IsTrue")]
+    /// `pass_through_auth_enforced(endpoint)`: pydantic's lax `bool`, where a missing or unreadable
+    /// value keeps auth on.
+    #[serde_as(as = "LaxBoolOr<true>")]
     #[serde(default = "auth_default")]
     pub auth: bool,
     pub methods: Option<Box<[String]>>,

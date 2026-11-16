@@ -20,7 +20,14 @@ fn config_debug_redacts_api_keys() {
 }
 
 #[rstest]
-#[case::malformed_yaml("model_list: [")]
+fn rejects_malformed_yaml() {
+    assert!(matches!(
+        Config::from_yaml("model_list: ["),
+        Err(Error::Load(_))
+    ));
+}
+
+#[rstest]
 #[case::missing_params("model_list: [{model_name: assistant}]")]
 #[case::missing_model("model_list: [{model_name: assistant, litellm_params: {api_key: key}}]")]
 #[case::provider_param_of_the_wrong_type(
@@ -409,7 +416,7 @@ fn a_pass_through_endpoint_reads_its_python_fields() {
     assert!(endpoint.additional_fields.contains_key("display_name"));
 }
 
-/// `endpoint.get("auth", True) is True`, `endpoint.get("include_subpath", False) is True` and
+/// `pass_through_auth_enforced(endpoint)`, `endpoint.get("include_subpath", False) is True` and
 /// `bool(forward_headers)`, as the proxy reads them.
 #[rstest]
 #[case::nothing_set("", true, false, false)]
@@ -421,11 +428,11 @@ fn a_pass_through_endpoint_reads_its_python_fields() {
 )]
 #[case::strings(
     "auth: 'true', include_subpath: 'true', forward_headers: 'false'",
-    false,
+    true,
     false,
     true
 )]
-#[case::numbers("auth: 1, include_subpath: 1, forward_headers: 0", false, false, false)]
+#[case::numbers("auth: 1, include_subpath: 1, forward_headers: 0", true, false, false)]
 fn pass_through_flags_read_like_python(
     #[case] flags: &str,
     #[case] auth: bool,
@@ -444,6 +451,29 @@ fn pass_through_flags_read_like_python(
         ),
         (auth, include_subpath, forward_headers)
     );
+}
+
+/// Expected values from pydantic 2.13.4 running `pass_through_auth_enforced` of BerriAI/litellm#51940:
+/// `TypeAdapter(bool).validate_python(endpoint.get("auth", True))`, or `True` where it raises.
+#[rstest]
+#[case::text_false("'false'", false)]
+#[case::no("'no'", false)]
+#[case::off("'off'", false)]
+#[case::text_zero("'0'", false)]
+#[case::zero("0", false)]
+#[case::padded_false("' false'", true)]
+#[case::unknown_word("maybe", true)]
+#[case::two("2", true)]
+#[case::null("null", true)]
+#[case::list("[]", true)]
+fn pass_through_auth_stays_on_unless_pydantic_reads_false(
+    #[case] auth: &str,
+    #[case] expected: bool,
+) {
+    let endpoint = pass_through(&format!(
+        "{{path: /x, target: https://t.example, auth: {auth}}}"
+    ));
+    assert_eq!(endpoint.auth, expected);
 }
 
 #[rstest]

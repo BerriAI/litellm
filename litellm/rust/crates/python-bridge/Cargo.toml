@@ -19,6 +19,7 @@ huggingface = ["litellm-token-counter/huggingface"]
 tiktoken = ["litellm-token-counter/tiktoken"]
 
 [dependencies]
+litellm-env.workspace = true
 rustls.workspace = true
 litellm-secret-value.workspace = true
 litellm-db.workspace = true

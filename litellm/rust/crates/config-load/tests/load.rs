@@ -1,6 +1,18 @@
+use std::sync::Arc;
+
 use litellm_config_load::Error;
+use litellm_secrets::{OidcResolver, SecretManagerState, SecretResolver};
 use rstest::{fixture, rstest};
 use tempfile::TempDir;
+
+#[fixture]
+fn secrets() -> SecretResolver {
+    SecretResolver::new_python_compatible(
+        Arc::new(SecretManagerState::default()),
+        Arc::new(|name: &str| (name == "ANTHROPIC_API_KEY").then(|| "sk-from-env".to_owned())),
+        OidcResolver::new(litellm_http::Client::for_test()),
+    )
+}
 
 #[fixture]
 fn directory() -> TempDir {
@@ -24,18 +36,23 @@ model_list:
 }
 
 #[rstest]
-fn loads_model_list_from_file(directory: TempDir, model_list_yaml: &str) {
+#[tokio::test]
+async fn loads_model_list_from_file(
+    directory: TempDir,
+    model_list_yaml: &str,
+    secrets: SecretResolver,
+) {
     let path = directory.path().join("config.yaml");
     std::fs::write(&path, model_list_yaml).unwrap();
 
-    let config = litellm_config_load::load(path).unwrap();
+    let config = litellm_config_load::load(path, secrets).await.unwrap();
     assert_eq!(config.model_list.len(), 2);
     let anthropic = &config.model_list[0];
     assert_eq!(anthropic.model_name, "assistant");
     assert_eq!(anthropic.litellm_params.model, "anthropic/test-model");
     assert_eq!(
         anthropic.litellm_params.api_key.as_ref().unwrap().expose(),
-        "os.environ/ANTHROPIC_API_KEY"
+        "sk-from-env"
     );
     assert!(anthropic.litellm_params.api_base.is_none());
     assert!(anthropic.litellm_params.custom_llm_provider.is_none());
@@ -54,8 +71,11 @@ fn loads_model_list_from_file(directory: TempDir, model_list_yaml: &str) {
 }
 
 #[rstest]
-fn distinguishes_read_errors_from_parse_errors(directory: TempDir) {
-    let error = litellm_config_load::load(directory.path().join("missing.yaml")).unwrap_err();
+#[tokio::test]
+async fn distinguishes_read_errors_from_parse_errors(directory: TempDir, secrets: SecretResolver) {
+    let error = litellm_config_load::load(directory.path().join("missing.yaml"), secrets)
+        .await
+        .unwrap_err();
     assert!(
         litellm_error::Report::new(&error)
             .to_string()
@@ -71,16 +91,21 @@ fn distinguishes_read_errors_from_parse_errors(directory: TempDir) {
 #[case::policy_pipeline("../../../proxy/example_config_yaml/test_pipeline_config.yaml")]
 #[case::gateway("../../../../tests/e2e/gateway/stage_mirror_ci_config.yml")]
 #[case::pass_through("../../../proxy/example_config_yaml/pass_through_config.yaml")]
-fn parses_representative_python_configs(#[case] relative_path: &str) {
+#[tokio::test]
+async fn parses_representative_python_configs(
+    #[case] relative_path: &str,
+    secrets: SecretResolver,
+) {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../config")
         .join(relative_path);
-    let config = litellm_config_load::load(path).unwrap();
+    let config = litellm_config_load::load(path, secrets).await.unwrap();
     assert!(!config.model_list.is_empty());
 }
 
 #[rstest]
-fn resolves_nested_includes_once_in_breadth_first_order() {
+#[tokio::test]
+async fn resolves_nested_includes_once_in_breadth_first_order(secrets: SecretResolver) {
     let directory = TempDir::new().unwrap();
     let root = directory.path();
     std::fs::create_dir(root.join("nested")).unwrap();
@@ -89,7 +114,9 @@ fn resolves_nested_includes_once_in_breadth_first_order() {
     std::fs::write(root.join("second.yaml"), "general_settings: {master_key: second}\nmodel_list: [{model_name: second, litellm_params: {model: second}}]\n").unwrap();
     std::fs::write(root.join("nested/third.yaml"), "include: [../config.yaml]\ngeneral_settings: {master_key: third}\nmodel_list: [{model_name: third, litellm_params: {model: third}}]\n").unwrap();
 
-    let config = litellm_config_load::load(root.join("config.yaml")).unwrap();
+    let config = litellm_config_load::load(root.join("config.yaml"), secrets)
+        .await
+        .unwrap();
     assert_eq!(
         config
             .model_list

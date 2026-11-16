@@ -57,7 +57,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let settings: Settings = settings::from_iter(std::env::vars_os())?;
     let level = settings.log_level();
     Logger::new(StderrSink { level }).install_global()?;
-    let config = litellm_config_load::load(settings.litellm_config)?;
+    let config = litellm_gateway::load_config(settings.litellm_config).await?;
     let inference = litellm_gateway::build_inference(&config)?;
     let _redis =
         litellm_gateway::build_redis(&config, &inference.resources.pool, &inference.http).await?;
@@ -87,7 +87,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
     });
     let mcp = litellm_gateway::build_mcp(
         &config,
-        inference.secrets.clone(),
         shutdown.clone(),
         &inference.resources.pool,
         &inference.http,
