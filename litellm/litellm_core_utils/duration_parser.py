@@ -141,7 +141,25 @@ def get_next_standardized_reset_time(
     # Midnight of the current day in the specified timezone
     base_midnight: Final = current_time.replace(hour=0, minute=0, second=0, microsecond=0)
 
-    # Handle different time units
+    try:
+        return _reset_for_unit(current_time, base_midnight, value, unit, reset_time_of_day)
+    except OverflowError:
+        if not _is_long_unit_spelling(normalize_duration(duration)):
+            raise
+        verbose_logger.warning(
+            "budget_duration %r is too long for date math; falling back to a next-midnight reset.", duration
+        )
+        return base_midnight + timedelta(days=1)
+
+
+def _is_long_unit_spelling(duration: str) -> bool:
+    match: Final = re.match(r"\d+([a-z]+)", duration)
+    return match is not None and match.group(1) != _extract_from_regex(duration)[1]
+
+
+def _reset_for_unit(
+    current_time: datetime, base_midnight: datetime, value: int, unit: str | None, reset_time_of_day: time
+) -> datetime:
     if unit == "d":
         return _handle_day_reset(current_time, base_midnight, value, reset_time_of_day)
     elif unit == "w":
