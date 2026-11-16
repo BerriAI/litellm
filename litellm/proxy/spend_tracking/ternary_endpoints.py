@@ -12,6 +12,7 @@ from pydantic import JsonValue, TypeAdapter, ValidationError
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
+from litellm.litellm_core_utils.url_utils import validate_url
 from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper, encrypt_value_helper
@@ -181,6 +182,7 @@ async def ternary_exporter(
 
 
 def _destination_error(settings: TernarySettings) -> str | None:
+    """Why the destination would reject `settings`, including a base URL the outbound URL policy blocks."""
     from litellm.integrations.focus.destinations.ternary_destination import FocusTernaryDestination
 
     try:
@@ -192,7 +194,8 @@ def _destination_error(settings: TernarySettings) -> str | None:
                 "base_url": settings.ternary_base_url,
             },
         )
-    except ValueError as e:
+        validate_url(settings.ternary_base_url)
+    except ValueError as e:  # SSRFError is a ValueError
         return str(e)
     return None
 
