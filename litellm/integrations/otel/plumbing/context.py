@@ -4,11 +4,11 @@ import os
 from collections.abc import Generator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar, Token
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
 from opentelemetry import baggage
 from opentelemetry.context import Context, get_current
-from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.trace import (
     INVALID_SPAN,
     Link,
@@ -96,6 +96,8 @@ def request_root_http_route() -> str | None:
     where the FastAPI instrumentation did not mount.
     """
     span: Final = request_root_span()
+    from opentelemetry.sdk.trace import ReadableSpan
+
     route: Final = span.attributes.get(HTTP.ROUTE) if isinstance(span, ReadableSpan) and span.attributes else None
     return route if isinstance(route, str) and route else None
 
@@ -278,6 +280,8 @@ def post_response_root(span: Span) -> Generator[None]:
 
 
 def _is_post_response(parent: Span, end_time_ns: int | None) -> bool:
+    from opentelemetry.sdk.trace import ReadableSpan
+
     if not isinstance(parent, ReadableSpan):
         return False
     if in_post_response_phase():
@@ -476,6 +480,24 @@ def reset_request_destinations(token: "Token[tuple[OtelDestination, ...]]") -> N
 def request_destinations() -> 'tuple["OtelDestination", ...]':
     """The destinations resolved for this request, empty outside a proxy request."""
     return _request_destinations.get()
+
+
+# The request's flattened metadata as identity seeding last read it, kept beside the
+# destinations so the fan-out can export the extra ``metadata_keys`` a destination asked
+# for onto that destination's spans alone, never into the Baggage every exporter reads.
+_request_metadata: Final["ContextVar[Mapping[str, str]]"] = ContextVar(
+    "litellm_otel_request_metadata", default=MappingProxyType({})
+)
+
+
+def set_request_metadata(metadata: Mapping[str, str]) -> None:
+    """Record the flattened metadata of the request on this context."""
+    _request_metadata.set(metadata)
+
+
+def request_metadata() -> Mapping[str, str]:
+    """The flattened metadata seeded for this request, empty before seeding or outside one."""
+    return _request_metadata.get()
 
 
 #: ``litellm_settings: otel_tenant_destination_mode`` and its env equivalent.

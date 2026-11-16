@@ -45,6 +45,7 @@ from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.litellm_pre_call_utils import (
     KeyAndTeamLoggingSettings,
     LiteLLMProxyRequestSetup,
+    _add_otel_traceparent_to_data,
     _apply_credential_overrides_from_model_config,
     _extract_credential_from_entry,
     _get_enforced_params,
@@ -7477,6 +7478,48 @@ def _make_request_mock(path: str, headers: dict) -> MagicMock:
     return request_mock
 
 
+_TRACEPARENT: Final = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"
+
+
+@pytest.mark.parametrize(
+    ("extra_headers", "forwarded"),
+    (
+        ("X-Foo: bar", "X-Foo: bar"),
+        (["X-Foo: bar"], ["X-Foo: bar"]),
+        (None, {"traceparent": _TRACEPARENT}),
+        ({"X-Kept": "yes"}, {"X-Kept": "yes", "traceparent": _TRACEPARENT}),
+        ({"traceparent": "caller-set"}, {"traceparent": "caller-set"}),
+    ),
+    ids=("string", "list", "null", "object", "caller_traceparent"),
+)
+def test_traceparent_forwarding_leaves_non_object_extra_headers_for_the_endpoint_to_check(
+    extra_headers: object, forwarded: object, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "forward_traceparent_to_llm_provider", True)
+    data: Final = {"model": "decider", "extra_headers": extra_headers}
+
+    with patch("litellm.proxy.proxy_server.open_telemetry_logger", MagicMock()):
+        _add_otel_traceparent_to_data(data, request=_make_request_mock("/v1/decisions", {"traceparent": _TRACEPARENT}))
+
+    assert data["extra_headers"] == forwarded
+
+
+@pytest.mark.parametrize("extra_headers", ({}, {"X-Kept": "yes"}), ids=("empty_object", "object"))
+def test_forwarded_traceparent_shows_in_the_logged_request_body(
+    extra_headers: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.proxy.litellm_pre_call_utils import refresh_proxy_server_request_body_snapshot
+
+    monkeypatch.setattr(litellm, "forward_traceparent_to_llm_provider", True)
+    data: Final = {"model": "decider", "extra_headers": extra_headers, "proxy_server_request": {"body": None}}
+    refresh_proxy_server_request_body_snapshot(data)
+
+    with patch("litellm.proxy.proxy_server.open_telemetry_logger", MagicMock()):
+        _add_otel_traceparent_to_data(data, request=_make_request_mock("/v1/decisions", {"traceparent": _TRACEPARENT}))
+
+    assert data["proxy_server_request"]["body"]["extra_headers"]["traceparent"] == _TRACEPARENT
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "user_agent, request_drop_params, operator_settings, expected_drop_params",
@@ -9369,6 +9412,7 @@ def _reserved_stamp_key(key_metadata: dict | None = None) -> UserAPIKeyAuth:
 _PLANTED_STAMPS = {
     "attempted_fallbacks": 99,
     "original_model_group": "spoofed-group",
+    "rate_limit_fallback": {"original_model_group": "spoofed-group", "descriptor_key": "model_per_key"},
     "request_retry_count": -100,
     "previous_models": [{"exception_type": "Timeout", "deployment_id": "spoofed", "attempted_retries": 101}],
     "_client_output_ceiling": {"api_base": "https://attacker.example"},
@@ -9404,6 +9448,7 @@ async def test_add_litellm_data_to_request_strips_router_reserved_stamps_from_bo
     assert "litellm_metadata" not in updated
     assert "attempted_fallbacks" not in updated["metadata"]
     assert "original_model_group" not in updated["metadata"]
+    assert "rate_limit_fallback" not in updated["metadata"]
     assert "_client_output_ceiling" not in updated["metadata"]
     assert "request_retry_count" not in updated["metadata"]
     assert "previous_models" not in updated["metadata"]
@@ -11762,6 +11807,55 @@ def test_caller_tags_reach_litellm_metadata_whether_metadata_is_a_dict_or_a_json
     LiteLLMProxyRequestSetup.merge_caller_body_tags(request_data=data)
     assert set(data["litellm_metadata"]["tags"]) == {"key-tag", "client-tag"}
     assert data["metadata"] == caller_metadata
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ("/v1/chat/completions", "/v1/responses"))
+@pytest.mark.parametrize("assigned", (False, True))
+async def test_customer_window_policy_is_stamped_from_auth_not_requester_metadata(path, assigned):
+    from litellm.models.budget import BudgetLimit
+    from litellm.proxy.proxy_server import ProxyConfig
+    from litellm.types.proxy.auth.customer_hierarchy import (
+        CustomerHierarchyAuth,
+        CustomerScopeAuth,
+        customer_budget_scopes_from_request,
+        customer_budget_scopes_metadata,
+    )
+
+    hierarchy: Final = CustomerHierarchyAuth(
+        customer_org_id="admitted-org",
+        scopes=(
+            CustomerScopeAuth(
+                key="customer_org",
+                entity_id="admitted-org",
+                budget_limits=(BudgetLimit(budget_duration="1mo", max_budget=10),),
+            ),
+        ),
+    )
+    forged: Final = {
+        "user_api_key_customer_org_id": "admitted-org",
+        "user_api_key_customer_budget_scopes": customer_budget_scopes_metadata(
+            hierarchy.model_copy(
+                update={
+                    "scopes": (
+                        CustomerScopeAuth(
+                            key="customer_org",
+                            entity_id="admitted-org",
+                            budget_limits=(BudgetLimit(budget_duration="12mo", max_budget=9999),),
+                        ),
+                    )
+                }
+            )
+        ),
+    }
+    updated: Final = await add_litellm_data_to_request(
+        data={"model": "gpt-4o-mini", "metadata": dict(forged), "litellm_metadata": dict(forged)},
+        request=_make_request_mock(path, {}),
+        user_api_key_dict=UserAPIKeyAuth(customer_hierarchy=hierarchy if assigned else None),
+        proxy_config=ProxyConfig(),
+        general_settings={},
+    )
+    assert customer_budget_scopes_from_request({"litellm_params": updated}) == (hierarchy.scopes if assigned else None)
 
 
 @pytest.mark.parametrize(
