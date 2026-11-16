@@ -228,6 +228,18 @@
     },
     "supported_endpoints": ["/v1/chat/completions"]
   },
+  "cedarllm": {
+    "base_url": "https://api.cedarllm.com/v1",
+    "api_key_env": "CEDARLLM_API_KEY",
+    "api_base_env": "CEDARLLM_API_BASE",
+    "param_mappings": {
+      "max_completion_tokens": "max_tokens"
+    },
+    "provider_info": {
+      "supports_function_calling": true
+    },
+    "supported_endpoints": ["/v1/chat/completions"]
+  },
   "prism": {
     "base_url": "https://api.prisminference.com/v1",
     "api_key_env": "PRISM_API_KEY",
