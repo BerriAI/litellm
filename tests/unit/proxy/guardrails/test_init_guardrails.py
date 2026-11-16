@@ -519,6 +519,8 @@ def test_init_guardrails_v2_skips_guardrail_with_malformed_advisory_template():
         ("pre_mcp_call", [], False, "output", {"raw": "restored"}, "masked", 1),
         ({"tags": {"team:mcp": "pre_mcp_call"}}, ["team:mcp"], False, "output", {}, "masked", 1),
         ({"tags": {"team:mcp": "pre_mcp_call"}}, [], False, "output", {}, "raw", 0),
+        ("pre_call", [], True, None, {"raw": "restored"}, "restored", 1),
+        ("pre_call", [], True, "both", {"raw": "restored"}, "masked", 2),
     ],
 )
 async def test_presidio_initialized_output_dispatch(
