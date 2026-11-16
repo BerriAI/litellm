@@ -1,0 +1,29 @@
+litellm/integrations/prompt_cache_alerts/__init__.py: base=new head=0 introduced=0
+litellm/integrations/prompt_cache_alerts/detector.py: base=new head=1 introduced=1
+    273:9 reportUnknownMemberType Type of "__init__" is partially unknown
+litellm/integrations/prompt_cache_alerts/evidence.py: base=new head=0 introduced=0
+litellm/proxy/proxy_server.py: base=2421 head=2422 introduced=1
+    1965:34 reportUnknownArgumentType Argument type is partially unknown
+tests/integration/caching/test_prompt_cache_alert_streaks_real_io.py: base=new head=9 introduced=9
+    76:5 reportUnknownVariableType Type of "client" is partially unknown
+    76:21 reportUnknownMemberType Type of "init_async_client" is partially unknown
+    80:5 reportUnknownVariableType Type of "owned" is partially unknown
+    80:51 reportUnknownVariableType Type of "key" is unknown
+    80:58 reportUnknownMemberType Type of "scan_iter" is partially unknown
+    80:65 reportAttributeAccessIssue Cannot access attribute "scan_iter" for class "async_redis_cluster_client"
+    82:15 reportUnknownMemberType Type of "delete" is partially unknown
+    82:22 reportAttributeAccessIssue Cannot access attribute "delete" for class "async_redis_cluster_client"
+tests/unit/integrations/prompt_cache_alerts/__init__.py: base=new head=0 introduced=0
+tests/unit/integrations/prompt_cache_alerts/test_detector.py: base=new head=10 introduced=10
+    191:57 reportArgumentType Argument of type "_Alerts" cannot be assigned to parameter "alerts" of type "AlertStore" in function "__init__
+    241:66 reportArgumentType Argument of type "_Alerts" cannot be assigned to parameter "alerts" of type "AlertStore" in function "__init__
+    262:58 reportArgumentType Argument of type "_Alerts" cannot be assigned to parameter "alerts" of type "AlertStore" in function "__init__
+    314:5 reportUnknownVariableType Type of "events" is partially unknown
+    322:88 reportUnknownVariableType Type of "event" is partially unknown
+    365:93 reportArgumentType Argument of type "_Alerts" cannot be assigned to parameter "alerts" of type "AlertStore" in function "__init__
+    390:12 reportUnknownMemberType Type of "usage" is unknown
+    390:21 reportAttributeAccessIssue Cannot access attribute "usage" for class "ModelResponse"
+tests/unit/integrations/prompt_cache_alerts/test_evidence.py: base=new head=0 introduced=0
+tests/unit/proxy/proxy_server/test_lifecycle.py: base=434 head=435 introduced=1
+    1192:48 reportArgumentType Argument of type "None" cannot be assigned to parameter "app" of type "FastAPI"
+TOTAL introduced 22

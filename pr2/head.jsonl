@@ -1,0 +1,68 @@
+{"step": "real_proof", "deployment": "pc-a", "requests": ["real:200:r0/w4632", "real:200:r4632/w0"], "rows": []}
+{"step": "misses3", "deployment": "pc-a", "requests": ["miss:200:r0/w0", "miss:200:r0/w0", "miss:200:r0/w0"], "rows": ["1|open|3|4632|01:23:08.454"]}
+{"step": "show", "deployment": "pc-a", "requests": [], "rows": ["1|open|3|4632|01:23:08.454"], "list_status": 200, "api_alerts": [{"id": "1", "type": "prompt_cache", "resource_type": "deployment", "status": "open", "evidence": {"config_fingerprint": "40ae45fcfdf9f43d8d98ddd2c069da6edca17c420bcd13f09dfbff745d96989f", "prefix_fingerprint": "7a3b422fe63ecaab66decd9cb87011dfc7312e245038d92972ce86d274bd95ab", "provider": "anthropic", "provider_model": "anthropic/claude-sonnet-5-5", "consecutive_misses": 3, "proven_write_tokens": 4632, "ttl_seconds": 300}}]}
+{"step": "misses6", "deployment": "pc-a", "requests": ["miss:200:r0/w0", "miss:200:r0/w0", "miss:200:r0/w0", "miss:200:r0/w0", "miss:200:r0/w0", "miss:200:r0/w0"], "rows": ["1|open|3|4632|01:23:08.454"]}
+{"step": "fx_incident", "deployment": "pc-b", "requests": ["write:200:r0/w2048", "hit:200:r2048/w0", "miss:200:r0/w0", "miss:200:r0/w0", "miss:200:r0/w0"], "rows": ["2|open|3|2048|01:23:23.880"]}
+{"step": "break_fail", "deployment": "pc-c", "requests": ["write:200:r0/w2048", "miss:200:r0/w0", "miss:200:r0/w0", "fail:500:rNone/wNone", "miss:200:r0/w0", "miss:200:r0/w0"], "rows": []}
+{"step": "break_hit", "deployment": "pc-d", "requests": ["write:200:r0/w2048", "miss:200:r0/w0", "miss:200:r0/w0", "hit:200:r2048/w0", "miss:200:r0/w0", "miss:200:r0/w0"], "rows": []}
+{"step": "break_nousage", "deployment": "pc-e", "requests": ["write:200:r0/w2048", "miss:200:r0/w0", "miss:200:r0/w0", "nousage:200:r0/w0", "miss:200:r0/w0", "miss:200:r0/w0"], "rows": []}
+{"step": "break_stream", "deployment": "pc-f", "requests": ["write:200:r0/w2048", "miss:200:r0/w0", "miss:200:r0/w0", "miss(stream):200:rNone/wNone", "miss:200:r0/w0", "miss:200:r0/w0"], "rows": []}
+{"step": "never_proven", "deployment": "pc-g", "requests": ["miss:200:r0/w0", "miss:200:r0/w0", "miss:200:r0/w0", "miss:200:r0/w0", "miss:200:r0/w0"], "rows": []}
+{"step": "surface_messages", "deployment": "pc-h", "requests": ["write:200:r0/w2048", "miss:200:r0/w0", "miss:200:r0/w0", "miss:200:r0/w0", "miss:200:r0/w0"], "rows": []}
+{"step": "surface_responses", "deployment": "pc-i", "requests": ["write:200:r0/wNone", "miss:200:r0/wNone", "miss:200:r0/wNone", "miss:200:r0/wNone", "miss:200:r0/wNone"], "rows": []}
+{"step": "all_stream", "deployment": "pc-j", "requests": ["miss(stream):200:rNone/wNone", "miss(stream):200:rNone/wNone", "miss(stream):200:rNone/wNone", "miss(stream):200:rNone/wNone", "miss(stream):200:rNone/wNone"], "rows": []}
+{"step": "two_breakpoints", "deployment": "pc-k", "requests": ["write:200:r0/w2048", "miss:200:r0/w0", "miss:200:r0/w0", "miss:200:r0/w0", "miss:200:r0/w0"], "rows": []}
+{"step": "ttl_1h", "deployment": "pc-l", "requests": ["write:200:r0/w2048", "miss:200:r0/w0", "miss:200:r0/w0", "miss:200:r0/w0", "miss:200:r0/w0"], "rows": []}
+{"step": "provider_openai", "deployment": "pc-oai", "requests": ["write:200:r0/wNone", "miss:200:r0/wNone", "miss:200:r0/wNone", "miss:200:r0/wNone", "miss:200:r0/wNone"], "rows": []}
+{"step": "dismiss", "deployment": "pc-a", "requests": [], "rows": ["1|dismissed|3|4632|01:24:42.665"], "patch_status": 200}
+{"step": "fx_proof_2miss", "deployment": "pc-m", "requests": ["write:200:r0/w2048", "miss:200:r0/w0", "miss:200:r0/w0"], "rows": []}
+{"step": "fx_proof_2miss", "deployment": "pc-n", "requests": ["write:200:r0/w2048", "miss:200:r0/w0", "miss:200:r0/w0"], "rows": []}
+{"step": "fx_proof_2miss", "deployment": "pc-o", "requests": ["write:200:r0/w2048", "miss:200:r0/w0", "miss:200:r0/w0"], "rows": []}
+{"marker":"proxy stopped, Redis shutdown-save and restarted, proxy restarted with ON2.yaml (pc-m api_base changed, pc-n api_key changed)"}
+{"step": "misses3", "deployment": "pc-a", "requests": ["miss:200:r0/w0", "miss:200:r0/w0", "miss:200:r0/w0"], "rows": ["1|dismissed|3|4632|01:24:42.665"]}
+{"step": "miss1", "deployment": "pc-o", "requests": ["miss:200:r0/w0"], "rows": ["3|open|3|2048|01:26:39.134"]}
+{"step": "miss2", "deployment": "pc-m", "requests": ["miss:200:r0/w0", "miss:200:r0/w0"], "rows": []}
+{"step": "miss2", "deployment": "pc-n", "requests": ["miss:200:r0/w0", "miss:200:r0/w0"], "rows": []}
+{"step": "fx_proof_2miss", "deployment": "pc-m", "requests": ["write:200:r0/w2048", "miss:200:r0/w0", "miss:200:r0/w0"], "rows": []}
+{"step": "miss1", "deployment": "pc-m", "requests": ["miss:200:r0/w0"], "rows": ["4|open|3|2048|01:26:55.827"]}
+{"step": "fx_proof_2miss", "deployment": "pc-p", "requests": ["write:200:r0/w2048", "miss:200:r0/w0", "miss:200:r0/w0"], "rows": []}
+{"marker":"Redis FLUSHALL (evidence lost)"}
+{"step": "miss2", "deployment": "pc-p", "requests": ["miss:200:r0/w0", "miss:200:r0/w0"], "rows": []}
+{"step": "fx_proof_2miss", "deployment": "pc-q", "requests": ["write:200:r0/w2048", "miss:200:r0/w0", "miss:200:r0/w0"], "rows": []}
+{"marker":"Redis stopped (shutdown save); requests must still return 200"}
+{"step": "fx_incident", "deployment": "pc-r", "requests": ["write:200:r0/w2048", "hit:200:r2048/w0", "miss:200:r0/w0", "miss:200:r0/w0", "miss:200:r0/w0"], "rows": []}
+{"marker":"Redis back"}
+{"step": "miss2", "deployment": "pc-r", "requests": ["miss:200:r0/w0", "miss:200:r0/w0"], "rows": []}
+{"marker":"LiteLLM_Alert table renamed away (alert save fails); requests must still return 200"}
+{"step": "fx_incident", "deployment": "pc-s", "requests": ["write:200:r0/w2048", "hit:200:r2048/w0", "miss:200:r0/w0", "miss:200:r0/w0", "miss:200:r0/w0"], "rows": []}
+{"marker":"table restored"}
+{"step": "miss2", "deployment": "pc-s", "requests": ["miss:200:r0/w0", "miss:200:r0/w0"], "rows": []}
+{"step": "show", "deployment": "pc-s", "requests": [], "rows": [], "list_status": 200, "api_alerts": []}
+{"marker":"CORRECTION: the two table-rename commands above FAILED (psql role error); the table was never renamed. The pc-s steps above are NOT a DB-failure case."}
+{"marker":"note: pc-s steps above ran while the Redis circuit breaker was still open after the outage (detector.py warnings RedisCircuitBreakerOpenError 01:27:37-01:27:55 UTC), so they show evidence lost during/just after the outage"}
+{"marker":"Redis healthy again, breaker recovered: detection must work"}
+{"step": "fx_incident", "deployment": "pc-t", "requests": ["write:200:r0/w2048", "hit:200:r2048/w0", "miss:200:r0/w0", "miss:200:r0/w0", "miss:200:r0/w0"], "rows": ["5|open|3|2048|01:29:05.204"]}
+{"marker":"LiteLLM_Alert renamed away (alert save fails); requests must still return 200"}
+{"step": "fx_incident", "deployment": "pc-u", "requests": ["write:200:r0/w2048", "hit:200:r2048/w0", "miss:200:r0/w0", "miss:200:r0/w0", "miss:200:r0/w0"], "rows": []}
+{"marker":"table restored"}
+{"step": "miss2", "deployment": "pc-u", "requests": ["miss:200:r0/w0", "miss:200:r0/w0"], "rows": []}
+{"marker":"proxy restarted with OFF.yaml (prompt_cache_alerts unset): default off"}
+{"step": "fx_incident", "deployment": "pc-v", "requests": ["write:200:r0/w2048", "hit:200:r2048/w0", "miss:200:r0/w0", "miss:200:r0/w0", "miss:200:r0/w0"], "rows": []}
+{"marker":"proxy restarted with NOREDIS.yaml (alerts on, no Redis configured)"}
+{"step": "fx_incident", "deployment": "pc-w", "requests": ["write:400:rNone/wNone", "hit:400:rNone/wNone", "miss:400:rNone/wNone", "miss:400:rNone/wNone", "miss:400:rNone/wNone"], "rows": []}
+{"marker":"CORRECTION: pc-w 400s above are a harness error (pc-w is not in the config). NOREDIS rerun on pc-v with a fresh prefix"}
+{"step": "fx_incident", "deployment": "pc-v", "requests": ["write:200:r0/w2048", "hit:200:r2048/w0", "miss:200:r0/w0", "miss:200:r0/w0", "miss:200:r0/w0"], "rows": []}
+{"marker":"GAP RUN (new prefixes): proxy 0f89cd0 restarted with ON.yaml, Redis restored from its saved state"}
+{"marker":"case 19b: LiteLLM_Alert renamed away, then write+hit+3 misses"}
+{"step": "fx_incident", "deployment": "pc-u", "requests": ["write:200:r0/w2048", "hit:200:r2048/w0", "miss:200:r0/w0", "miss:200:r0/w0", "miss:200:r0/w0"], "rows": []}
+{"marker":"table restored; three single misses follow"}
+{"step": "miss1", "deployment": "pc-u", "requests": ["miss:200:r0/w0"], "rows": []}
+{"step": "miss1", "deployment": "pc-u", "requests": ["miss:200:r0/w0"], "rows": []}
+{"step": "miss1", "deployment": "pc-u", "requests": ["miss:200:r0/w0"], "rows": ["6|open|3|2048|01:37:55.693"]}
+{"marker":"case 12b: pc-a alert 1 is dismissed; Redis kept its saved state; fresh fixture proof + 3 misses"}
+{"step": "fx_proof", "deployment": "pc-a", "requests": ["write:200:r0/w2048"], "rows": ["1|dismissed|3|4632|01:24:42.665"]}
+{"step": "misses3", "deployment": "pc-a", "requests": ["miss:200:r0/w0", "miss:200:r0/w0", "miss:200:r0/w0"], "rows": ["1|dismissed|3|4632|01:24:42.665"]}
+{"marker":"case 12c: Redis FLUSHALL (quiet key gone), then fresh fixture proof + 3 misses on pc-a"}
+{"step": "fx_proof", "deployment": "pc-a", "requests": ["write:200:r0/w2048"], "rows": ["1|dismissed|3|4632|01:24:42.665"]}
+{"step": "misses3", "deployment": "pc-a", "requests": ["miss:200:r0/w0", "miss:200:r0/w0", "miss:200:r0/w0"], "rows": ["1|dismissed|3|4632|01:24:42.665"]}
+{"marker":"after case 12c: quiet keys in Redis = 1; alert rows = 6"}

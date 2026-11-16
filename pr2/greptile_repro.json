@@ -1,0 +1,111 @@
+[
+ {
+  "case": "1 control: chronological P A H B C",
+  "arrival": [
+   "P@w0:0",
+   "A@w0:0",
+   "H@w0:0",
+   "B@w0:0",
+   "C@w0:0"
+  ],
+  "incidents_saved": 0,
+  "evidence": [],
+  "lost_left": [
+   {}
+  ]
+ },
+ {
+  "case": "1 finding: requests P A H B C, callbacks arrive P A B C H",
+  "arrival": [
+   "P@w0:0",
+   "A@w0:0",
+   "B@w0:0",
+   "C@w0:1",
+   "H@w0:1"
+  ],
+  "incidents_saved": 1,
+  "evidence": [
+   {
+    "config_fingerprint": "0016b21bee779f999a4445e41403ba02fcc4e10b1fd99a41dfe857c01665b290",
+    "prefix_fingerprint": "c54d35153bc0f92ab1e231445684ad7637802efe2ada6ccd0ae1a8a93444596f",
+    "provider": "anthropic",
+    "provider_model": "claude-sonnet-5-5",
+    "consecutive_misses": 3,
+    "proven_write_tokens": 2048,
+    "ttl_seconds": 300
+   }
+  ],
+  "lost_left": [
+   {}
+  ]
+ },
+ {
+  "case": "2 control: hit H on w0 reaches Redis, then C on w1",
+  "arrival": [
+   "P@w0:0",
+   "A@w0:0",
+   "B@w1:0",
+   "H@w0:0",
+   "C@w1:0"
+  ],
+  "incidents_saved": 0,
+  "evidence": [],
+  "lost_left": [
+   {},
+   {}
+  ]
+ },
+ {
+  "case": "2 control: H on w0 fails Redis, third miss C also on w0",
+  "arrival": [
+   "P@w0:0",
+   "A@w0:0",
+   "B@w1:0",
+   "H@w0:0",
+   "C@w0:0"
+  ],
+  "incidents_saved": 0,
+  "evidence": [],
+  "lost_left": [
+   {},
+   {}
+  ]
+ },
+ {
+  "case": "2 finding: H on w0 fails Redis, third miss C on w1",
+  "arrival": [
+   "P@w0:0",
+   "A@w0:0",
+   "B@w1:0",
+   "H@w0:0",
+   "C@w1:1"
+  ],
+  "incidents_saved": 1,
+  "evidence": [
+   {
+    "config_fingerprint": "0016b21bee779f999a4445e41403ba02fcc4e10b1fd99a41dfe857c01665b290",
+    "prefix_fingerprint": "c54d35153bc0f92ab1e231445684ad7637802efe2ada6ccd0ae1a8a93444596f",
+    "provider": "anthropic",
+    "provider_model": "claude-sonnet-5-5",
+    "consecutive_misses": 3,
+    "proven_write_tokens": 2048,
+    "ttl_seconds": 300
+   }
+  ],
+  "lost_left": [
+   {
+    "greptile-e4551429-7ef1-44c2-add7-d6b307ef8345": 1700000020500
+   },
+   {}
+  ]
+ },
+ {
+  "case": "3 no-log",
+  "script_events_after_drain": {
+   "plain": [
+    "hit"
+   ],
+   "no-log": []
+  }
+ }
+]

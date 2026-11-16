@@ -1,0 +1,12 @@
+{"step": "break_fail", "deployment": "pc-c", "requests": ["write:200:r0/w2048", "miss:200:r0/w0", "miss:200:r0/w0", "fail:500:rNone/wNone", "miss:200:r0/w0", "miss:200:r0/w0"], "rows": []}
+{"redis_state":"pc-c","reset_ms":"1794793566631","state":"tokens 2048 until 1794793864734 epoch 1794793564965 ","misses_in_zset":"2"}
+{"step": "break_hit", "deployment": "pc-d", "requests": ["write:200:r0/w2048", "miss:200:r0/w0", "miss:200:r0/w0", "hit:200:r2048/w0", "miss:200:r0/w0", "miss:200:r0/w0"], "rows": []}
+{"redis_state":"pc-d","reset_ms":"","state":"tokens 2048 until 1794793873680 epoch 1794793573696 ","misses_in_zset":"2"}
+{"step": "break_nousage", "deployment": "pc-e", "requests": ["write:200:r0/w2048", "miss:200:r0/w0", "miss:200:r0/w0", "nousage:200:r0/w0", "miss:200:r0/w0", "miss:200:r0/w0"], "rows": []}
+{"redis_state":"pc-e","reset_ms":"1794793580208","state":"tokens 2048 until 1794793878482 epoch 1794793578499 ","misses_in_zset":"2"}
+{"step": "break_stream", "deployment": "pc-f", "requests": ["write:200:r0/w2048", "miss:200:r0/w0", "miss:200:r0/w0", "miss(stream):200:rNone/wNone", "miss:200:r0/w0", "miss:200:r0/w0"], "rows": []}
+{"redis_state":"pc-f","reset_ms":"1794793586758","state":"tokens 2048 until 1794793885044 epoch 1794793585060 ","misses_in_zset":"2"}
+{"step": "never_proven", "deployment": "pc-g", "requests": ["miss:200:r0/w0", "miss:200:r0/w0", "miss:200:r0/w0", "miss:200:r0/w0", "miss:200:r0/w0"], "rows": []}
+{"redis_state":"pc-g","reset_ms":"","state":"","misses_in_zset":"0"}
+{"step": "fx_proof_2miss", "deployment": "pc-h", "requests": ["write:200:r0/w2048", "miss:200:r0/w0", "miss:200:r0/w0"], "rows": []}
+{"redis_state":"pc-h","reset_ms":"","state":"tokens 2048 until 1794793897472 epoch 1794793597491 ","misses_in_zset":"2"}

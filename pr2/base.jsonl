@@ -1,0 +1,4 @@
+{"step": "real_proof", "deployment": "pc-a", "requests": ["real:200:r0/w4632", "real:200:r4632/w0"], "rows": []}
+{"step": "misses3", "deployment": "pc-a", "requests": ["miss:200:r0/w0", "miss:200:r0/w0", "miss:200:r0/w0"], "rows": []}
+{"step": "fx_incident", "deployment": "pc-b", "requests": ["write:200:r0/w2048", "hit:200:r2048/w0", "miss:200:r0/w0", "miss:200:r0/w0", "miss:200:r0/w0"], "rows": []}
+{"step": "break_fail", "deployment": "pc-c", "requests": ["write:200:r0/w2048", "miss:200:r0/w0", "miss:200:r0/w0", "fail:500:rNone/wNone", "miss:200:r0/w0", "miss:200:r0/w0"], "rows": []}
