@@ -2038,16 +2038,32 @@ async def open_attempt_stream(attempt: StreamAttempt, response: object) -> objec
         )
 
     if attempt.op == "acompletion" and isinstance(response, CustomStreamWrapper):
-        if response.completion_stream is None and response.make_call is not None:  # pyright: ignore[reportUnknownMemberType]  # untyped attributes
-            if deadline is None:
+        needs_fetch: Final = response.completion_stream is None and response.make_call is not None  # pyright: ignore[reportUnknownMemberType]  # untyped attributes
+        if deadline is None:
+            if needs_fetch:
                 await response.fetch_stream()
-            else:
-                try:
-                    with anyio.fail_after(max(0.0, deadline - anyio.current_time())):
-                        await response.fetch_stream()
-                except TimeoutError as error:
-                    raise _mid_stream_retry_trigger(expired()) from error
-        first_chunk: Final = await _aread_first_chunk(response, deadline, expired)
+
+        async def read_with_cleanup(
+            stream: CustomStreamWrapper, chat_deadline: float
+        ) -> _FirstChunk[AsyncIterator[object]]:
+            try:
+                if needs_fetch:
+                    try:
+                        with anyio.fail_after(max(0.0, chat_deadline - anyio.current_time())):
+                            await stream.fetch_stream()
+                    except TimeoutError as error:
+                        raise _mid_stream_retry_trigger(expired()) from error
+                return await _aread_first_chunk(stream, chat_deadline, expired)
+            except BaseException:
+                with anyio.CancelScope(shield=True), contextlib.suppress(BaseException):
+                    await stream.aclose()
+                raise
+
+        first_chunk: Final = (
+            await _aread_first_chunk(response, deadline, expired)
+            if deadline is None
+            else await read_with_cleanup(response, deadline)
+        )
         held_slot: Final = attempt.slot.pop_all() if attempt.slot is not None else contextlib.ExitStack()
         return wrap_chat_stream(attempt, response, first_chunk, held_slot)
     if not attempt.kwargs.get("stream"):

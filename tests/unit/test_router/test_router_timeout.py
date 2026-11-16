@@ -14,15 +14,17 @@ import openai
 import pytest
 import pytest_asyncio
 import respx
+from openai.types.chat import ChatCompletionChunk
 
 import litellm
 from litellm import Router
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
+from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.router_api import ChangeSet
 from litellm.router_rust.core import RustCore
-from litellm.router_rust.invoke.streaming import StreamAttempt
+from litellm.router_rust.invoke.streaming import StreamAttempt, open_attempt_stream
 from litellm.router_rust.surface.health import logged_call
 from litellm.router_utils.cooldown_handlers import is_caller_timeout_408
 from litellm.types.integrations.custom_logger import WEBSEARCH_INTERCEPTION_PREFIX, as_converted_stream
@@ -901,6 +903,70 @@ async def test_stream_ttft_chat_stall_falls_back_and_records_failure(
     assert "".join([chunk.choices[0].delta.content or "" async for chunk in response]) == "fallback"
     assert route.call_count == 2
     assert router.health().failures_this_minute("ttft-primary") == 1
+
+
+class _TTFTChatStream:
+    def __init__(self, clock: _ManualClock) -> None:
+        self.clock: Final = clock
+        self.closed: Final = asyncio.Event()
+
+    async def __aiter__(self) -> AsyncIterator[ChatCompletionChunk]:
+        await self.clock.elapse(0.3)
+        yield ChatCompletionChunk.model_validate_json(
+            _ttft_chat_chunk({"content": "late"}, "stop").removeprefix(b"data: ")
+        )
+
+    async def aclose(self) -> None:
+        await asyncio.sleep(0)
+        self.closed.set()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("during_fetch", (False, True), ids=("already-open", "fetch"))
+async def test_stream_ttft_chat_expiry_closes_abandoned_stream(stream_clock: _ManualClock, during_fetch: bool) -> None:
+    router: Final = _ttft_router()
+    core: Final = router._core
+    assert isinstance(core, RustCore)
+    kwargs: Final = {"model": "openai/ttft-primary", "stream": True, "stream_ttft_timeout": 0.1}
+    attempt: Final = StreamAttempt(
+        core=core,
+        op="acompletion",
+        request=kwargs,
+        kwargs=kwargs,
+        group="primary",
+        order=None,
+        depth=0,
+        level=0,
+        deployment_id="ttft-primary",
+        attempted_retries=0,
+    )
+    upstream: Final = _TTFTChatStream(stream_clock)
+
+    async def make_call(*, client: object) -> _TTFTChatStream:
+        response.completion_stream = upstream
+        await stream_clock.elapse(0.3)
+        return upstream
+
+    response: Final = CustomStreamWrapper(
+        completion_stream=None if during_fetch else upstream,
+        model="ttft-primary",
+        custom_llm_provider="openai",
+        make_call=make_call if during_fetch else None,
+        logging_obj=LiteLLMLogging(
+            model="ttft-primary",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            call_type="acompletion",
+            start_time=datetime(2024, 1, 1),
+            litellm_call_id="ttft-fetch-close",
+            function_id="ttft-fetch-close",
+        ),
+    )
+    started: Final = stream_clock()
+    with pytest.raises(litellm.Timeout, match="stream_ttft_timeout"):
+        await open_attempt_stream(attempt, response)
+    assert 0.08 <= stream_clock() - started <= 0.12
+    assert upstream.closed.is_set()
 
 
 @pytest.mark.asyncio
