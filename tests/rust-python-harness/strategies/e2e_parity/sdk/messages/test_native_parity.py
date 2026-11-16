@@ -4455,7 +4455,7 @@ VERTEX_LABELS_CASES: Final = (
         settings=_kw(vertex_request_label_fields="user_api_key_team_id"),
     ),
     Case(
-        "vertex_labels_without_identity_only_drop_the_callers_header",
+        "vertex_labels_with_unreserved_fields_keep_the_callers_labels",
         _vertex(extra_headers={"X-Vertex-AI-Labels": _CALLER_LABELS}),
         model=VERTEX_CLAUDE,
         settings=_kw(vertex_request_label_fields=["team"]),
