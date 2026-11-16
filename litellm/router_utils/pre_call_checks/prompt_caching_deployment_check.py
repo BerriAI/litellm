@@ -364,13 +364,9 @@ class PromptCachingDeploymentCheck(CustomLogger):
         automatic_caching: Final = (
             litellm.enable_anthropic_prompt_caching is True or (request_data or {}).get("enable_prompt_caching") is True
         )
-        configured_injections: Final = (request_data or {}).get("cache_control_injection_points") or any(
-            deployment.get("litellm_params", {}).get("cache_control_injection_points")
-            for deployment in healthy_deployments
-        )
         if (
             prompt_messages is not None
-            and not (automatic_caching or configured_injections)
+            and not automatic_caching
             and _has_no_cacheable_prefix(
                 prompt_messages, responses_prompt.key_tools if responses_prompt is not None else request_tools
             )

@@ -767,24 +767,36 @@ async def test_wildcard_route_resolves_underlying_model_minimum(local_model_cost
 @pytest.mark.asyncio
 @pytest.mark.parametrize("background", [False, True], ids=["routing", "success"])
 @pytest.mark.parametrize(
-    "request_messages,request_kwargs",
+    "request_messages,request_kwargs,deployment_params",
     [
-        ([{"role": "user", "content": "word " * 4000}], {}),
-        ([{"role": "user", "content": [{"type": "text", "text": "word " * 4000}]}], {}),
-        ([{"role": "user", "content": "hello"}], {"system": "word " * 4000}),
+        ([{"role": "user", "content": "word " * 4000}], {}, {}),
+        ([{"role": "user", "content": [{"type": "text", "text": "word " * 4000}]}], {}, {}),
+        ([{"role": "user", "content": "hello"}], {"system": "word " * 4000}, {}),
         (
             [{"role": "user", "content": "hello"}],
             {"tools": [{"type": "function", "function": {"name": "search", "description": "word " * 4000}}]},
+            {},
         ),
-        ([], {}),
+        ([], {}, {}),
+        (
+            [{"role": "user", "content": "word " * 4000}],
+            {"cache_control_injection_points": [{"location": "message", "index": -1}]},
+            {},
+        ),
+        (
+            [{"role": "user", "content": "word " * 4000}],
+            {},
+            {"cache_control_injection_points": [{"location": "message", "index": -1}]},
+        ),
     ],
-    ids=["string", "blocks", "system", "tools", "empty"],
+    ids=["string", "blocks", "system", "tools", "empty", "request_injections", "deployment_injections"],
 )
 async def test_unmarked_request_does_not_wait_for_token_count_capacity(
     monkeypatch: pytest.MonkeyPatch,
     background: bool,
     request_messages: list[AllMessageValues],
     request_kwargs: dict[str, object],
+    deployment_params: dict[str, object],
 ) -> None:
     import anyio
 
@@ -792,7 +804,10 @@ async def test_unmarked_request_does_not_wait_for_token_count_capacity(
 
     monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", False)
     check: Final = PromptCachingDeploymentCheck(cache=DualCache())
-    deployments: Final = _deployments("anthropic/claude-fable-5", "anthropic/claude-fable-5")
+    deployments: Final = [
+        {**deployment, "litellm_params": {**deployment["litellm_params"], **deployment_params}}
+        for deployment in _deployments("anthropic/claude-fable-5", "anthropic/claude-fable-5")
+    ]
     limiter: Final = _count_offload_limiter_for_this_loop()
     borrowers: Final = tuple(object() for _ in range(int(limiter.total_tokens)))
     for borrower in borrowers:
@@ -1444,6 +1459,12 @@ def _success_kwargs(
             [{"role": "user", "content": "weather?"}],
             {"tools": [_OPENAI_TOOL]},
             id="chat_tool_breakpoint_only",
+        ),
+        pytest.param(
+            "acompletion",
+            [{"role": "user", "content": "weather?"}],
+            {"tools": (_OPENAI_TOOL,)},
+            id="chat_tuple_tool_breakpoint_only",
         ),
         pytest.param(
             "acompletion",
