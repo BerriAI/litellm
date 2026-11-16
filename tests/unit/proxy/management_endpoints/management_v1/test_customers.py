@@ -1661,6 +1661,25 @@ def test_customer_org_upsert_retry_does_not_rewrite_audit_fields() -> None:
     assert repeated.json() == {**original.json(), "created": False}
 
 
+def test_customer_member_upsert_retry_with_an_expiry_and_no_override_does_not_rewrite_audit_fields() -> None:
+    database: Final = Database()
+    family(client(database=database))
+    payload: Final = {
+        "customer_member_id": "m",
+        "customer_org_id": "org",
+        "budget_override_expires_at": "2030-01-01T00:00:00Z",
+    }
+    original: Final = client(database=database, actor="creator").post(
+        "/management/v1/customer_members/upsert", json=payload
+    )
+    assert original.status_code == 200, original.text
+    repeated: Final = client(database=database, actor="retry").post(
+        "/management/v1/customer_members/upsert", json=payload
+    )
+    assert repeated.status_code == 200, repeated.text
+    assert repeated.json() == {**original.json(), "created": False}
+
+
 def test_customer_org_upsert_merges_templates_without_replacing_customer_member_budgets() -> None:
     http: Final = client()
     original: Final = family(http)

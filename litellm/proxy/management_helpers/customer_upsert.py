@@ -11,6 +11,7 @@ from litellm.proxy.management_helpers.customer_hierarchy import (
     ErrorCode,
     Failure,
     default_template_index,
+    override_expiry,
 )
 from litellm.types.proxy.management_endpoints.customer_hierarchy import (
     Budget,
@@ -268,7 +269,7 @@ async def upsert_member(
         existing.budget_override, patch.budget_override
     )
     expiry_matches: Final = "budget_override_expires_at" not in patch.model_fields_set or (
-        existing.budget_override_expires_at == patch.budget_override_expires_at
+        existing.budget_override_expires_at == override_expiry(existing, patch, existing.budget_override_id)
     )
     if (
         existing.parent_team_ids == team_ids

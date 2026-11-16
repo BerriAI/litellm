@@ -45,3 +45,29 @@ def test_an_override_applies_after_a_past_expiry_was_sent_without_one(gateway: G
         body: Final = JSON_OBJECT.validate_json(overridden.content)
         assert body["budget_override_expires_at"] is None
         assert object_value(body["effective_budget"])["max_budget"] == 50
+
+
+def test_a_repeated_member_upsert_with_an_expiry_and_no_override_changes_nothing(gateway: Gateway) -> None:
+    suffix: Final = uuid.uuid4().hex
+    org, member = f"upsert-org-{suffix}", f"upsert-member-{suffix}"
+    payload: Final = {
+        "customer_member_id": member,
+        "customer_org_id": org,
+        "budget_override_expires_at": "2030-01-01T00:00:00Z",
+    }
+    with gateway.scenario() as scenario:
+        _created(
+            scenario,
+            "customer_organizations",
+            {"customer_org_id": org, "default_budgets": [{"name": "base", "max_budget": 10}]},
+            org,
+        )
+        scenario.cleanups.callback(gateway.request, "DELETE", f"{_ROUTE}/customer_organizations/{org}?cascade=true")
+        first: Final = gateway.request("POST", f"{_ROUTE}/customer_members/upsert", payload)
+        assert first.status_code == 200, first.text
+        repeated: Final = gateway.request("POST", f"{_ROUTE}/customer_members/upsert", payload)
+        assert repeated.status_code == 200, repeated.text
+        assert JSON_OBJECT.validate_json(repeated.content) == {
+            **JSON_OBJECT.validate_json(first.content),
+            "created": False,
+        }
