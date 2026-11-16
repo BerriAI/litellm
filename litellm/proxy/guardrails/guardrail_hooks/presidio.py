@@ -12,7 +12,16 @@ import asyncio
 import json
 import re
 import threading
-from collections.abc import AsyncGenerator, AsyncIterable, AsyncIterator, Awaitable, Callable, Iterator, Sequence
+from collections.abc import (
+    AsyncGenerator,
+    AsyncIterable,
+    AsyncIterator,
+    Awaitable,
+    Callable,
+    Iterator,
+    Mapping,
+    Sequence,
+)
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime
@@ -1209,19 +1218,19 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         """
         Masks the input and output before logging to langfuse, datadog, etc.
         """
-        if call_type == "completion" or call_type == "acompletion":  # /chat/completions requests
+        if call_type in ("completion", "acompletion", "anthropic_messages", "aanthropic_messages"):
+            logged_response: Final = await self._mask_logged_response(result, kwargs)  # pyright: ignore[reportUnknownArgumentType]  # CustomLogger.async_logging_hook kwargs and results are untyped
+            standard_logging_object: Final[object] = kwargs.get("standard_logging_object")  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # CustomLogger.async_logging_hook kwargs and results are untyped
             if (
-                isinstance(result, ModelResponse)
-                and result.choices
-                and not isinstance(result.choices[0], StreamingChoices)
+                logged_response is not None
+                and isinstance(standard_logging_object, dict)
+                and isinstance(standard_logging_object.get("response"), dict)  # pyright: ignore[reportUnknownMemberType]  # CustomLogger.async_logging_hook kwargs and results are untyped
             ):
-                await self._process_response_for_pii(response=result, request_data=kwargs, mode="mask")
-            elif isinstance(result, dict) and self._is_anthropic_message_response(result):
-                await self._process_anthropic_response_for_pii(
-                    response=result,
-                    request_data=kwargs,
-                    mode="mask",
-                )
+                masked_payload: Final[Mapping[str, object]] = {  # pyright: ignore[reportUnknownVariableType]  # untyped logging payload
+                    **standard_logging_object,
+                    "response": logged_response,
+                }
+                kwargs["standard_logging_object"] = masked_payload  # rebind-ok: the logger reads the hook's kwargs back
             messages: Final[list | None] = None if self.apply_to_output else kwargs.get("messages", None)
             tasks: Final = []
             task_mappings: list[tuple[int, int | None]] = []  # Track (message_index, content_index) for each task
@@ -1279,6 +1288,20 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             kwargs["messages"] = messages
 
         return kwargs, result
+
+    async def _mask_logged_response(
+        self,
+        result: object,
+        request_data: dict[str, object],  # mutable-ok: async_logging_hook kwargs, forwarded as request_data
+    ) -> Mapping[str, object] | None:
+        if isinstance(result, ModelResponse) and result.choices and not isinstance(result.choices[0], StreamingChoices):
+            await self._process_response_for_pii(response=result, request_data=request_data, mode="mask")
+            return result.model_dump()  # pyright: ignore[reportUnknownMemberType]  # CustomLogger.async_logging_hook kwargs and results are untyped
+        if isinstance(result, dict) and self._is_anthropic_message_response(result):
+            return await self._process_anthropic_response_for_pii(  # pyright: ignore[reportUnknownVariableType]  # the Anthropic response dict is untyped
+                response=result, request_data=request_data, mode="mask"
+            )
+        return None
 
     async def async_post_call_success_hook(
         self,
