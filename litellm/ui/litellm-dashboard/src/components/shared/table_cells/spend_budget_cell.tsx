@@ -49,18 +49,30 @@ const getMeterValueText = (
   return i18n.t("shared.tableCells.spendBudgetCell.meterValue", { spend: meterSpendText, budget: formattedBudget });
 };
 
+const resolveBudgetDecimals = (
+  budget: number | null,
+  budgetDecimals: number | undefined,
+): number => {
+  if (budgetDecimals !== undefined) return budgetDecimals;
+  if (budget === null) return 0;
+  if (budget > 0 && budget < 0.01) return 5;
+  if (!Number.isInteger(budget)) return 2;
+  return 0;
+};
+
 export function SpendBudgetCell({
   spend,
   maxBudget,
   teamMemberGate = null,
   inheritedGates = [],
   spendDecimals = 4,
-  budgetDecimals = 0,
+  budgetDecimals,
 }: SpendBudgetCellProps) {
   const { t } = useTranslation();
   const spendValue = typeof spend === "number" && !Number.isNaN(spend) ? spend : 0;
   const ownBudget = maxBudget ?? null;
   const budget = ownBudget ?? teamMemberGate?.maxBudget ?? null;
+  const effectiveBudgetDecimals = resolveBudgetDecimals(budget, budgetDecimals);
   const usesTeamMemberBudget = ownBudget === null && teamMemberGate !== null;
   const memberSpendValue =
     typeof teamMemberGate?.spend === "number" && !Number.isNaN(teamMemberGate.spend) ? teamMemberGate.spend : 0;
@@ -70,11 +82,11 @@ export function SpendBudgetCell({
 
   const spendText = spendValue > 0 ? getSpendString(spendValue, spendDecimals) : "$0.00";
   const memberSpendText = memberSpendValue > 0 ? getSpendString(memberSpendValue, spendDecimals) : "$0.00";
-  const budgetLabel = getBudgetLabel(budget, usesTeamMemberBudget, memberSpendText, budgetDecimals);
+  const budgetLabel = getBudgetLabel(budget, usesTeamMemberBudget, memberSpendText, effectiveBudgetDecimals);
   const meterSpendText = usesTeamMemberBudget
     ? t("shared.tableCells.spendBudgetCell.memberSpend", { spend: memberSpendText })
     : spendText;
-  const meterValueText = getMeterValueText(hasBudget, budget, meterSpendText, budgetDecimals);
+  const meterValueText = getMeterValueText(hasBudget, budget, meterSpendText, effectiveBudgetDecimals);
 
   return (
     <div className="flex min-w-[130px] flex-col gap-1">

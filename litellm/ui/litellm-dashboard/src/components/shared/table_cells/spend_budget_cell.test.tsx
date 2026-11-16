@@ -115,4 +115,18 @@ describe("SpendBudgetCell", () => {
     expect(screen.getByText("of $50")).toBeInTheDocument();
     expect(screen.queryByLabelText("question-circle")).not.toBeInTheDocument();
   });
+
+  it("preserves cents and sub-cent precision when budgetDecimals is not explicitly provided", () => {
+    const { rerender } = render(<SpendBudgetCell spend={0} maxBudget={1.5} />);
+    expect(screen.getByText("of $1.50")).toBeInTheDocument();
+
+    rerender(<SpendBudgetCell spend={0} maxBudget={0.01} />);
+    expect(screen.getByText("of $0.01")).toBeInTheDocument();
+
+    rerender(<SpendBudgetCell spend={0} maxBudget={1234.56} />);
+    expect(screen.getByText("of $1,234.56")).toBeInTheDocument();
+
+    rerender(<SpendBudgetCell spend={0} maxBudget={0.00005} />);
+    expect(screen.getByText("of $0.00005")).toBeInTheDocument();
+  });
 });
