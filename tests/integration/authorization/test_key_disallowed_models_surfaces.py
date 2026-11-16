@@ -508,6 +508,67 @@ def test_a_key_stores_at_most_500_disallowed_models_and_a_longer_list_changes_no
         assert served.status_code == 200, served.text
 
 
+def test_regenerate_and_service_account_generate_store_500_disallowed_models_and_reject_a_longer_list(
+    rig: DenyRig,
+) -> None:
+    with rig.gateway.scenario() as scenario:
+        full: Final[list[JsonValue]] = [rig.denied.chat, *(f"capped-{index}" for index in range(499))]
+        over: Final[list[JsonValue]] = [*full, "one-too-many"]
+        team: Final = scenario.team()
+        old: Final = string_value(rig.gateway.post("/key/generate", {"disallowed_models": [rig.denied.chat]})["key"])
+        rejected: Final = [
+            rig.gateway.request("POST", "/key/regenerate", {"key": old, "disallowed_models": over}),
+            rig.gateway.request("POST", "/key/service-account/generate", {"team_id": team, "disallowed_models": over}),
+        ]
+        assert [response.status_code for response in rejected] == [422, 422], [
+            response.text[:300] for response in rejected
+        ]
+        assert _stored(old) == [{"disallowed_models": [rig.denied.chat]}]
+        assert denial(fresh_chat(rig.gateway, rig.denied.chat, old, uuid.uuid4().hex)) == KEY_DENIAL
+        regenerated: Final = string_value(
+            rig.gateway.post("/key/regenerate", {"key": old, "disallowed_models": full})["key"]
+        )
+        scenario.cleanups.callback(scenario.delete_key, regenerated)
+        service: Final = string_value(
+            rig.gateway.post("/key/service-account/generate", {"team_id": team, "disallowed_models": full})["key"]
+        )
+        scenario.cleanups.callback(scenario.delete_key, service)
+        assert (_stored(regenerated), _stored(service)) == (
+            [{"disallowed_models": full}],
+            [{"disallowed_models": full}],
+        )
+        refused: Final = tuple(
+            fresh_chat(rig.gateway, rig.denied.chat, key, uuid.uuid4().hex) for key in (regenerated, service)
+        )
+        assert [denial(response) for response in refused] == [KEY_DENIAL, KEY_DENIAL]
+        served: Final = fresh_chat(rig.gateway, rig.allowed.chat, regenerated, uuid.uuid4().hex)
+        assert served.status_code == 200, served.text
+
+
+def test_a_star_pattern_among_plain_entries_refuses_a_deployment_id_and_a_starless_glob_entry_matches_nothing(
+    rig: DenyRig,
+) -> None:
+    with rig.gateway.scenario() as scenario:
+        family: Final = f"integration-family-{uuid.uuid4().hex[:10]}"
+        deployment_id: Final = f"integration-deployment-{uuid.uuid4().hex}"
+        matched: Final = scenario.model(name=f"{family}-small", model_info={"id": deployment_id})
+        starless: Final = [f"{rig.allowed.chat[:-1]}?", f"{rig.allowed.chat[:-1]}[0-9a-f]"]
+        entries: Final[list[JsonValue]] = [
+            *starless,
+            *(f"plain-{index}" for index in range(20)),
+            f"{family}-*",
+            f"{family}-*",
+        ]
+        key: Final = scenario.key(disallowed_models=entries)
+        assert _stored(key) == [{"disallowed_models": entries}]
+        refused: Final = tuple(
+            fresh_chat(rig.gateway, model, key, uuid.uuid4().hex) for model in (matched, deployment_id)
+        )
+        assert [denial(response) for response in refused] == [KEY_DENIAL, KEY_DENIAL]
+        served: Final = fresh_chat(rig.gateway, rig.allowed.chat, key, uuid.uuid4().hex)
+        assert served.status_code == 200, served.text
+
+
 def test_empty_oversized_and_repeated_entries_are_stored_and_only_real_matches_are_refused(rig: DenyRig) -> None:
     with rig.gateway.scenario() as scenario:
         oversized: Final = "x" * 5000
