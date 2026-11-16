@@ -621,24 +621,26 @@ async def _bill_partial_streamed_spend_on_disconnect(request_data: dict, respons
     if isinstance(partial_usage, Usage):
         backfill_missing_cache_usage_fields(partial_usage)
     if isinstance(partial_response, ModelResponse):
-        partial_response.choices = _choices_without_unobserved_finish_reasons(
-            partial_response.choices,
-            ChunkProcessor.choice_indices_with_observed_finish_reason(chunks),
-            held_finish_reason_of(response),
+        partial_response.choices = list(
+            _choices_without_unobserved_finish_reasons(
+                partial_response.choices,
+                ChunkProcessor.choice_indices_with_observed_finish_reason(chunks),
+                held_finish_reason_of(response),
+            )
         )
     return await _dispatch_disconnect_billing_event(logging_obj, partial_response)
 
 
 def _choices_without_unobserved_finish_reasons(
     choices: Sequence[Choices], observed_indices: frozenset[int], held_finish_reason: str | None
-) -> list[Choices]:
+) -> tuple[Choices, ...]:
     """The stream wrapper's held finish_reason does not record which choice it belongs to, so it
     only counts as provider evidence when there is a single choice."""
     single_choice_held_reason: Final = held_finish_reason if len(choices) == 1 else None
-    return [
+    return tuple(
         choice if choice.index in observed_indices else _with_held_finish_reason(choice, single_choice_held_reason)
         for choice in choices
-    ]
+    )
 
 
 def _with_held_finish_reason(choice: Choices, held_finish_reason: str | None) -> Choices:
