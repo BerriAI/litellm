@@ -149,6 +149,61 @@ async fn a_rejected_thinking_replay_is_sent_once_more_without_thinking(
     assert_eq!(chunks.is_empty(), !stream);
 }
 
+fn adaptive_shaping() -> MessagesShaping {
+    MessagesShaping {
+        capabilities: MessagesModelCapabilities {
+            supports_adaptive_thinking: true,
+            ..MessagesModelCapabilities::default()
+        },
+        ..MessagesShaping::default()
+    }
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_replay_bound_to_another_conversation_is_resent_whole_dropping_only_the_mismatched_blocks(
+    call: MessagesCall,
+    #[values(false, true)] stream: bool,
+    #[values("anthropic", "azure_ai")] provider: &str,
+) {
+    let success = if stream {
+        sse_response()
+    } else {
+        message_response()
+    };
+    let upstream = upstream([rejection(400, BOUND_ELSEWHERE), success]).await;
+    let host = RecordingCall::<Messages>::new(replay(
+        MessagesCall {
+            custom_llm_provider: Some(provider.into()),
+            shaping: adaptive_shaping(),
+            ..call
+        },
+        upstream.uri(),
+        stream,
+        json!({"type": "adaptive"}),
+    ));
+
+    execute(&host).await.expect("the retry succeeds");
+
+    let [first, second] = <[_; 2]>::try_from(received(&upstream).await).unwrap();
+    let mut expected = first.json();
+    expected["thinking"] =
+        json!({"type": "adaptive", "block_binding": {"prefix_mismatch_behavior": "drop_block"}});
+    assert_eq!(second.json(), expected);
+    assert_eq!(first.header("anthropic-beta"), None);
+    assert_eq!(
+        second.header("anthropic-beta"),
+        Some("thinking-binding-controls-2026-08-01")
+    );
+    assert_eq!(
+        *host.retried.lock().unwrap(),
+        vec![RetriedRequest {
+            reasons: vec![RetryReason::ThinkingSignature],
+            body: second.json(),
+        }]
+    );
+}
+
 #[rstest]
 #[tokio::test]
 async fn the_raw_head_of_a_retried_call_carries_the_retried_bytes(
@@ -215,16 +270,9 @@ async fn other_failures_reach_the_caller_without_a_retry(
     #[case] thinking: Value,
 ) {
     let upstream = upstream([rejection(status, message), message_response()]).await;
-    let adaptive = MessagesShaping {
-        capabilities: MessagesModelCapabilities {
-            supports_adaptive_thinking: true,
-            ..MessagesModelCapabilities::default()
-        },
-        ..MessagesShaping::default()
-    };
     let host = RecordingCall::<Messages>::new(replay(
         MessagesCall {
-            shaping: adaptive,
+            shaping: adaptive_shaping(),
             ..call
         },
         upstream.uri(),

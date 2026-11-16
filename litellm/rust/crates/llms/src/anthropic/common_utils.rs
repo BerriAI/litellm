@@ -22,7 +22,7 @@ use litellm_llms_types::{
     recognized::{Recognized, map_known_runs, python_truthy},
 };
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 
 use crate::{
     anthropic::ANTHROPIC_OAUTH_TOKEN_PREFIX,
@@ -1124,6 +1124,40 @@ pub fn anthropic_request_errors_on_thinking_binding_mismatch(request_body: &Valu
         .pointer("/thinking/block_binding/prefix_mismatch_behavior")
         .and_then(Value::as_str)
         == Some("error")
+}
+
+/// Python's `thinking_dropping_mismatched_blocks`: `thinking` asking the API to drop the blocks
+/// bound to another conversation instead of failing, keeping the rest of the replayed reasoning.
+/// None when it can't: only adaptive thinking takes `block_binding`, and a caller's own
+/// `prefix_mismatch_behavior` stands.
+pub fn thinking_dropping_mismatched_blocks(thinking: Option<&Value>) -> Option<Value> {
+    let Some(Value::Object(adaptive)) = thinking else {
+        return None;
+    };
+    if adaptive.get("type").and_then(Value::as_str) != Some("adaptive") {
+        return None;
+    }
+    let mut binding = match adaptive.get("block_binding") {
+        None => Map::new(),
+        Some(Value::Object(binding)) => binding.clone(),
+        Some(_) => return None,
+    };
+    if binding.contains_key("prefix_mismatch_behavior") {
+        return None;
+    }
+    binding.insert("prefix_mismatch_behavior".to_owned(), json!("drop_block"));
+    let mut dropping = adaptive.clone();
+    dropping.insert("block_binding".to_owned(), Value::Object(binding));
+    Some(Value::Object(dropping))
+}
+
+/// Python's `block_binding_betas`: the beta a request body's `thinking.block_binding` needs.
+pub fn block_binding_betas(request_body: &Value) -> BetaSet {
+    request_body
+        .pointer("/thinking/block_binding")
+        .map(|_| AnthropicBeta::ThinkingBindingControls20260801)
+        .into_iter()
+        .collect()
 }
 
 fn is_thinking_value_block(block: &Value) -> bool {

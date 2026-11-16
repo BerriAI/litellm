@@ -16,22 +16,25 @@ use litellm_llms::{
     vertex_ai::messages::transformation::VERTEX_ANTHROPIC_MESSAGES_CONFIG,
 };
 use rstest::rstest;
-use serde_json::Value;
+use serde_json::{Value, json};
 
+/// `betas_in_body`: InvokeModel reads betas from the body's `anthropic_beta`, so the beta a
+/// retried body needs goes there, as Python's Bedrock invoke config does.
 #[rstest]
-#[case::anthropic(&ANTHROPIC_MESSAGES_CONFIG)]
-#[case::azure_ai(&AZURE_ANTHROPIC_MESSAGES_CONFIG)]
-#[case::bedrock_invoke(&BEDROCK_ANTHROPIC_MESSAGES_CONFIG)]
-#[case::bedrock_claude_platform(&BEDROCK_CLAUDE_PLATFORM_MESSAGES_CONFIG)]
-#[case::bedrock_mantle(&BEDROCK_MANTLE_MESSAGES_CONFIG)]
-#[case::deepseek(&DEEPSEEK_ANTHROPIC_MESSAGES_CONFIG)]
-#[case::edenai(&EDENAI_MESSAGES_CONFIG)]
-#[case::minimax(&MINIMAX_MESSAGES_CONFIG)]
-#[case::openrouter(&OPENROUTER_MESSAGES_CONFIG)]
-#[case::tencent(&TENCENT_MESSAGES_CONFIG)]
-#[case::vertex_ai(&VERTEX_ANTHROPIC_MESSAGES_CONFIG)]
+#[case::anthropic(&ANTHROPIC_MESSAGES_CONFIG, false)]
+#[case::azure_ai(&AZURE_ANTHROPIC_MESSAGES_CONFIG, false)]
+#[case::bedrock_invoke(&BEDROCK_ANTHROPIC_MESSAGES_CONFIG, true)]
+#[case::bedrock_claude_platform(&BEDROCK_CLAUDE_PLATFORM_MESSAGES_CONFIG, false)]
+#[case::bedrock_mantle(&BEDROCK_MANTLE_MESSAGES_CONFIG, false)]
+#[case::deepseek(&DEEPSEEK_ANTHROPIC_MESSAGES_CONFIG, false)]
+#[case::edenai(&EDENAI_MESSAGES_CONFIG, false)]
+#[case::minimax(&MINIMAX_MESSAGES_CONFIG, false)]
+#[case::openrouter(&OPENROUTER_MESSAGES_CONFIG, false)]
+#[case::tencent(&TENCENT_MESSAGES_CONFIG, false)]
+#[case::vertex_ai(&VERTEX_ANTHROPIC_MESSAGES_CONFIG, false)]
 fn every_messages_provider_retries_like_the_python_base_config(
     #[case] config: &dyn BaseMessagesConfig,
+    #[case] betas_in_body: bool,
 ) {
     let fixture: Value = serde_json::from_str(include_str!(
         "fixtures/anthropic_messages_http_error_retry.json"
@@ -47,7 +50,17 @@ fn every_messages_provider_retries_like_the_python_base_config(
             body["thinking"] = case["thinking"].clone();
             let status = u16::try_from(case["status"].as_u64().unwrap()).unwrap();
             let expected = case["retried"].as_bool().unwrap().then(|| {
-                if case["stripped"].as_bool().unwrap() {
+                if let Some(retried_thinking) = case.get("retried_thinking") {
+                    let mut body = body.clone();
+                    body["thinking"] = retried_thinking.clone();
+                    if betas_in_body {
+                        body["anthropic_beta"] = json!(["thinking-binding-controls-2026-08-01"]);
+                    }
+                    RetriedRequest {
+                        reasons: vec![RetryReason::ThinkingSignature],
+                        body,
+                    }
+                } else if case["stripped"].as_bool().unwrap() {
                     RetriedRequest {
                         reasons: vec![RetryReason::ThinkingSignature],
                         body: table["stripped_request"].clone(),

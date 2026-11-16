@@ -181,7 +181,66 @@
       {
         "name": "unpinned_binding_mismatch",
         "status": 400,
-        "error_text": "messages.1.content.0: Invalid `signature` in `thinking` block. The block is bound to a different conversation.",
+        "error_text": "messages.1.content.0: Invalid `signature` in `thinking` block. The block is bound to a different conversation. Remove the block, or set `thinking.block_binding.prefix_mismatch_behavior` to \"drop_block\". That setting requires the `thinking-binding-controls-2026-08-01` value in the `anthropic-beta` header.",
+        "thinking": {
+          "type": "adaptive",
+          "display": "summarized"
+        },
+        "retried": true,
+        "stripped": false,
+        "retried_thinking": {
+          "type": "adaptive",
+          "display": "summarized",
+          "block_binding": {
+            "prefix_mismatch_behavior": "drop_block"
+          }
+        }
+      },
+      {
+        "name": "binding_mismatch_under_an_empty_block_binding",
+        "status": 400,
+        "error_text": "messages.1.content.0: Invalid `signature` in `thinking` block. The block is bound to a different conversation. Remove the block, or set `thinking.block_binding.prefix_mismatch_behavior` to \"drop_block\". That setting requires the `thinking-binding-controls-2026-08-01` value in the `anthropic-beta` header.",
+        "thinking": {
+          "type": "adaptive",
+          "block_binding": {}
+        },
+        "retried": true,
+        "stripped": false,
+        "retried_thinking": {
+          "type": "adaptive",
+          "block_binding": {
+            "prefix_mismatch_behavior": "drop_block"
+          }
+        }
+      },
+      {
+        "name": "binding_mismatch_already_dropping",
+        "status": 400,
+        "error_text": "messages.1.content.0: Invalid `signature` in `thinking` block. The block is bound to a different conversation. Remove the block, or set `thinking.block_binding.prefix_mismatch_behavior` to \"drop_block\". That setting requires the `thinking-binding-controls-2026-08-01` value in the `anthropic-beta` header.",
+        "thinking": {
+          "type": "adaptive",
+          "block_binding": {
+            "prefix_mismatch_behavior": "drop_block"
+          }
+        },
+        "retried": true,
+        "stripped": true
+      },
+      {
+        "name": "binding_mismatch_under_enabled_thinking",
+        "status": 400,
+        "error_text": "messages.1.content.0: Invalid `signature` in `thinking` block. The block is bound to a different conversation. Remove the block, or set `thinking.block_binding.prefix_mismatch_behavior` to \"drop_block\". That setting requires the `thinking-binding-controls-2026-08-01` value in the `anthropic-beta` header.",
+        "thinking": {
+          "type": "enabled",
+          "budget_tokens": 2048
+        },
+        "retried": true,
+        "stripped": true
+      },
+      {
+        "name": "tampered_signature_under_adaptive_thinking",
+        "status": 400,
+        "error_text": "messages.1.content.0: Invalid `signature` in `thinking` block",
         "thinking": {
           "type": "adaptive"
         },

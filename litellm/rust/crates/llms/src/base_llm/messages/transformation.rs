@@ -196,6 +196,12 @@ pub trait BaseMessagesConfig: Sync {
     ) -> Option<RetriedRequest> {
         None
     }
+
+    /// The headers for an attempt whose body `retry_after_http_error` rewrote, which can need a
+    /// beta the first attempt did not send.
+    fn retry_headers_after_http_error(&self, headers: Headers, _retried_body: &Value) -> Headers {
+        headers
+    }
 }
 
 #[cfg(test)]

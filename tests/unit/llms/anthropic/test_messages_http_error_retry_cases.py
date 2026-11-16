@@ -6,7 +6,7 @@ from typing import Final
 import httpx
 import pytest
 from pydantic import TypeAdapter
-from typing_extensions import ReadOnly, TypedDict
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 from litellm.llms.anthropic.common_utils import (
@@ -38,6 +38,7 @@ class _RetryCase(TypedDict):
     thinking: ReadOnly[Mapping[str, object]]
     retried: ReadOnly[bool]
     stripped: ReadOnly[bool]
+    retried_thinking: NotRequired[ReadOnly[Mapping[str, object]]]
 
 
 class _RetryTable(TypedDict):
@@ -154,7 +155,38 @@ def test_the_http_error_retry_matches_the_shared_cases(config: BaseAnthropicMess
     )
 
     assert retried is case["retried"]
-    assert transformed == (RETRY["stripped_request"] if case["stripped"] else body)
+    assert transformed == _retried_body(body, case)
+
+
+@pytest.mark.parametrize(
+    "config",
+    [AnthropicMessagesConfig(), DeepSeekAnthropicMessagesConfig()],
+    ids=["anthropic", "deepseek"],
+)
+@pytest.mark.parametrize("case", [pytest.param(case, id=case["name"]) for case in RETRY["cases"]])
+def test_the_http_error_retry_sends_the_beta_its_body_needs(
+    config: BaseAnthropicMessagesConfig, case: _RetryCase
+) -> None:
+    sent_headers: Final = {"x-api-key": "sk-ant", "Anthropic-Beta": "files-api-2025-04-14"}
+    transformed: Final = config.transform_anthropic_messages_request_on_http_error(
+        e=_rejection(case), request_data={**copy.deepcopy(RETRY["request"]), "thinking": case["thinking"]}
+    )
+
+    retried_headers: Final = config.transform_anthropic_messages_headers_on_http_error(
+        headers=sent_headers, request_data=transformed
+    )
+
+    assert retried_headers == (
+        {"x-api-key": "sk-ant", "anthropic-beta": "files-api-2025-04-14,thinking-binding-controls-2026-08-01"}
+        if "retried_thinking" in case
+        else sent_headers
+    )
+
+
+def _retried_body(body: Mapping[str, object], case: _RetryCase) -> Mapping[str, object]:
+    if "retried_thinking" in case:
+        return {**body, "thinking": case["retried_thinking"]}
+    return RETRY["stripped_request"] if case["stripped"] else body
 
 
 @pytest.mark.parametrize(
