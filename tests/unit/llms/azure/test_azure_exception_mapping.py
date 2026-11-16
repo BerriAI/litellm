@@ -1,3 +1,4 @@
+import datetime
 import json
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Final
@@ -12,6 +13,7 @@ import respx
 import litellm
 from litellm.exceptions import BadRequestError, ContentPolicyViolationError, ContextWindowExceededError
 from litellm.litellm_core_utils.exception_mapping_utils import exception_type
+from litellm.llms.azure.common_utils import AzureOpenAIError
 
 
 @respx.mock
@@ -632,3 +634,202 @@ def test_azure_content_policy_wins_over_context_length_code(monkeypatch: pytest.
     error: Final = _azure_chat_error(monkeypatch, _azure_error_response(400, policy_error))
 
     assert type(error) is ContentPolicyViolationError
+
+
+_AZURE_REFUSAL_BODY: Final = '{"error":{"message":"azure refused","type":"upstream_refusal","code":"refused"}}'
+_AZURE_DEPLOYMENT_NOT_FOUND_BODY: Final = '{"error":{"code":"DeploymentNotFound","message":"no such deployment"}}'
+_AZURE_INTERNAL_ERROR_BODY: Final = '{"error":{"code":"InternalServerError","message":"Internal server error"}}'
+_AZURE_CONTENT_FILTER_BODY: Final = json.dumps(
+    {
+        "error": {
+            "message": "The response was filtered due to the prompt triggering Azure OpenAI's content management policy.",
+            "type": None,
+            "param": "prompt",
+            "code": "content_filter",
+            "status": 400,
+            "innererror": {
+                "code": "ResponsibleAIPolicyViolation",
+                "content_filter_result": {"violence": {"filtered": True, "severity": "high"}},
+            },
+        }
+    }
+)
+_AZURE_KEY: Final = "azure-provider-secret"
+_AZURE_BASE: Final = "https://azure-upstream.openai.azure.com"
+_AZURE_ARGS: Final = {"api_base": _AZURE_BASE, "api_version": "2024-10-21", "api_key": _AZURE_KEY, "max_retries": 0}
+
+
+async def _azure_completion() -> None:
+    litellm.completion(model="azure/gpt-4.1-mini", messages=[{"role": "user", "content": "hi"}], **_AZURE_ARGS)
+
+
+async def _azure_completion_stream() -> None:
+    list(
+        litellm.completion(
+            model="azure/gpt-4.1-mini", messages=[{"role": "user", "content": "hi"}], stream=True, **_AZURE_ARGS
+        )
+    )
+
+
+async def _azure_acompletion() -> None:
+    await litellm.acompletion(model="azure/gpt-4.1-mini", messages=[{"role": "user", "content": "hi"}], **_AZURE_ARGS)
+
+
+async def _azure_acompletion_stream() -> None:
+    stream: Final = await litellm.acompletion(
+        model="azure/gpt-4.1-mini", messages=[{"role": "user", "content": "hi"}], stream=True, **_AZURE_ARGS
+    )
+    async for _ in stream:
+        pass
+
+
+async def _azure_embedding() -> None:
+    litellm.embedding(model="azure/text-embedding-3-large", input=["hi"], **_AZURE_ARGS)
+
+
+async def _azure_aembedding() -> None:
+    await litellm.aembedding(model="azure/text-embedding-3-large", input=["hi"], **_AZURE_ARGS)
+
+
+async def _azure_image_generation() -> None:
+    litellm.image_generation(model="azure/gpt-image-2", prompt="a cat", **_AZURE_ARGS)
+
+
+async def _azure_text_completion() -> None:
+    litellm.text_completion(model="azure_text/gpt-35-turbo-instruct", prompt="hi", **_AZURE_ARGS)
+
+
+async def _azure_text_completion_stream() -> None:
+    list(litellm.text_completion(model="azure_text/gpt-35-turbo-instruct", prompt="hi", stream=True, **_AZURE_ARGS))
+
+
+async def _azure_atext_completion() -> None:
+    await litellm.atext_completion(model="azure_text/gpt-35-turbo-instruct", prompt="hi", **_AZURE_ARGS)
+
+
+async def _azure_atext_completion_stream() -> None:
+    stream: Final = await litellm.atext_completion(
+        model="azure_text/gpt-35-turbo-instruct", prompt="hi", stream=True, **_AZURE_ARGS
+    )
+    async for _ in stream:
+        pass
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "route",
+    (
+        _azure_completion,
+        _azure_completion_stream,
+        _azure_acompletion,
+        _azure_acompletion_stream,
+        _azure_embedding,
+        _azure_aembedding,
+        _azure_image_generation,
+        _azure_text_completion,
+        _azure_text_completion_stream,
+        _azure_atext_completion,
+        _azure_atext_completion_stream,
+    ),
+    ids=lambda route: route.__name__.removeprefix("_azure_"),
+)
+@pytest.mark.parametrize(
+    ("status_code", "body", "mapped_error"),
+    (
+        (400, _AZURE_REFUSAL_BODY, BadRequestError),
+        (400, _AZURE_CONTENT_FILTER_BODY, BadRequestError),
+        (403, _AZURE_REFUSAL_BODY, litellm.APIError),
+        (404, _AZURE_DEPLOYMENT_NOT_FOUND_BODY, litellm.NotFoundError),
+        (500, _AZURE_INTERNAL_ERROR_BODY, openai.APIError),
+        (502, _AZURE_REFUSAL_BODY, litellm.BadGatewayError),
+        (504, _AZURE_REFUSAL_BODY, litellm.Timeout),
+    ),
+)
+@respx.mock
+async def test_azure_error_keeps_the_upstream_body_without_the_api_key(
+    route: Callable[[], Awaitable[None]],
+    status_code: int,
+    body: str,
+    mapped_error: type[Exception],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    respx.post(url__regex=r"https://azure-upstream\.openai\.azure\.com/.*").mock(
+        return_value=httpx.Response(status_code, content=body, headers={"content-type": "application/json"})
+    )
+
+    with pytest.raises(mapped_error) as raised:
+        await route()
+
+    error_response: Final = getattr(raised.value, "response")
+    assert error_response.status_code == status_code
+    assert error_response.text == body
+    assert error_response.json() == json.loads(body)
+    for exposed in (error_response.request, getattr(raised.value, "request")):
+        assert _AZURE_KEY not in str(exposed.headers)
+        assert exposed.content == b""
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "route",
+    (
+        _azure_completion,
+        _azure_completion_stream,
+        _azure_acompletion,
+        _azure_acompletion_stream,
+        _azure_embedding,
+        _azure_aembedding,
+        _azure_text_completion,
+        _azure_atext_completion,
+        _azure_atext_completion_stream,
+    ),
+    ids=lambda route: route.__name__.removeprefix("_azure_"),
+)
+@respx.mock
+async def test_azure_error_response_keeps_the_upstream_elapsed_time(
+    route: Callable[[], Awaitable[None]], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    respx.post(url__regex=r"https://azure-upstream\.openai\.azure\.com/.*").mock(
+        return_value=httpx.Response(400, content=_AZURE_REFUSAL_BODY, headers={"content-type": "application/json"})
+    )
+
+    with pytest.raises(BadRequestError) as raised:
+        await route()
+
+    assert raised.value.response.elapsed > datetime.timedelta(0)
+
+
+def test_azure_client_side_missing_key_error_keeps_the_empty_placeholder_response() -> None:
+    missing_key: Final = openai.OpenAIError(
+        "The api_key client option must be set either by passing api_key to the client or by setting the "
+        "OPENAI_API_KEY environment variable"
+    )
+
+    with pytest.raises(litellm.AuthenticationError) as raised:
+        exception_type(model="azure/gpt-4.1-mini", original_exception=missing_key, custom_llm_provider="azure")
+
+    assert raised.value.response.status_code == 401
+    assert raised.value.response.text == ""
+
+
+@pytest.mark.parametrize(
+    ("status_code", "message", "mapped_error"),
+    (
+        (500, "azure_client is not an instance of AzureOpenAI or OpenAI", litellm.APIError),
+        (408, "the deployment did not answer in time", litellm.Timeout),
+        (504, "the deployment did not answer in time", litellm.Timeout),
+    ),
+)
+def test_azure_error_litellm_raises_itself_has_no_upstream_response(
+    status_code: int, message: str, mapped_error: type[Exception]
+) -> None:
+    with pytest.raises(mapped_error) as raised:
+        exception_type(
+            model="azure/gpt-4.1-mini",
+            original_exception=AzureOpenAIError(status_code=status_code, message=message),
+            custom_llm_provider="azure",
+        )
+
+    assert getattr(raised.value, "response", None) is None

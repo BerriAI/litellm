@@ -1,4 +1,6 @@
-import asyncio, base64, importlib, uuid
+import asyncio
+import base64
+import importlib
 import json
 import logging
 import os
@@ -6,8 +8,10 @@ import re
 import sys
 import time
 import types
+import uuid
 from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
+from datetime import datetime
 from typing import Final, List, TypeAlias, cast
 from unittest.mock import MagicMock, patch
 
@@ -16,62 +20,49 @@ import pytest
 import respx
 
 import litellm
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    get_completion_messages,
+)
 from litellm.litellm_core_utils.prompt_templates.factory import (
-    BEDROCK_DOCUMENT_PLACEHOLDER_TEXT,
     _EMPTY_TEXT_PLACEHOLDER,
+    BEDROCK_DOCUMENT_PLACEHOLDER_TEXT,
+    THOUGHT_SIGNATURE_SEPARATOR,
     BedrockConverseMessagesProcessor,
     BedrockImageProcessor,
     _bedrock_converse_messages_pt,
     _bedrock_tools_pt,
-    _rename_duplicate_bedrock_document_names,
     _convert_to_bedrock_tool_call_invoke,
-    sanitize_anthropic_tool_use_id,
     _convert_to_bedrock_tool_call_result,
+    _rename_duplicate_bedrock_document_names,
     anthropic_messages_pt,
-    convert_to_anthropic_tool_result,
-    convert_to_gemini_tool_call_result,
-    convert_to_ollama_image,
-    encode_tool_call_id_with_signature,
-    function_call_prompt,
-    get_thought_signature_from_tool,
-    get_tool_calls_from_response,
-    make_valid_bedrock_tool_name,
-    ollama_pt,
-    parse_mime_type,
-    sanitize_messages_for_tool_calling,
-    THOUGHT_SIGNATURE_SEPARATOR,
-)
-from litellm.types.llms.openai import ChatCompletionAssistantMessage, ChatCompletionToolMessage
-from litellm.types.utils import ChatCompletionMessageToolCall, Function
-from litellm.utils import (
-    _invalidate_model_cost_lowercase_map,
-    function_setup,
-    Rules,
-    validate_and_fix_openai_messages,
-)
-from datetime import datetime
-from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
-from litellm.litellm_core_utils.prompt_templates.factory import (
     anthropic_pt,
     claude_2_1_pt,
     convert_generic_image_chunk_to_openai_image_obj,
     convert_to_anthropic_image_obj,
     convert_to_anthropic_tool_invoke,
+    convert_to_anthropic_tool_result,
+    convert_to_gemini_tool_call_result,
+    convert_to_ollama_image,
     convert_url_to_base64,
     create_anthropic_image_param,
+    encode_tool_call_id_with_signature,
+    function_call_prompt,
+    get_thought_signature_from_tool,
+    get_tool_calls_from_response,
     has_tool_with_name,
     llama_2_chat_pt,
+    make_valid_bedrock_tool_name,
+    ollama_pt,
+    parse_mime_type,
     prompt_factory,
+    response_schema_prompt,
+    sanitize_anthropic_tool_use_id,
+    sanitize_messages_for_tool_calling,
 )
-from litellm.litellm_core_utils.prompt_templates.common_utils import (
+from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
     encrypted_reasoning_signature,
-    get_completion_messages,
 )
-from litellm.llms.vertex_ai.gemini.transformation import gemini_convert_messages_with_history
-from litellm.types.llms.bedrock import BedrockConverseReasoningContentBlock
-from litellm.types.llms.openai import AllMessageValues
-from litellm.litellm_core_utils.prompt_templates.factory import response_schema_prompt
 from litellm.llms.anthropic.completion.transformation import AnthropicTextConfig
 from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation import AmazonInvokeConfig
 from litellm.llms.codestral.completion.handler import CodestralTextCompletion
@@ -79,10 +70,25 @@ from litellm.llms.ollama.completion.transformation import OllamaConfig
 from litellm.llms.petals.completion import handler as petals_handler
 from litellm.llms.predibase.chat.transformation import PredibaseConfig
 from litellm.llms.sagemaker.completion.transformation import SagemakerConfig
+from litellm.llms.vertex_ai.gemini.transformation import gemini_convert_messages_with_history
 from litellm.llms.vllm.completion import handler as vllm_handler
 from litellm.llms.watsonx.common_utils import _convert_watsonx_messages_core
-from litellm.types.utils import ModelResponse, TextCompletionResponse
-
+from litellm.types.llms.bedrock import BedrockConverseReasoningContentBlock
+from litellm.types.llms.bedrock import ContentBlock as BedrockContentBlock
+from litellm.types.llms.openai import (
+    AllMessageValues,
+    ChatCompletionAssistantMessage,
+    ChatCompletionToolMessage,
+    ChatCompletionUserMessage,
+)
+from litellm.types.utils import ChatCompletionMessageToolCall, Function, ModelResponse, TextCompletionResponse
+from litellm.utils import (
+    Rules,
+    function_setup,
+    validate_and_fix_openai_messages,
+)
+from litellm.litellm_core_utils.model_cost_table import publish
+from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
 READ_FILE: Final[list[object]] = [{"name": "read_file", "description": "Read the contents of a file."}]
 USER_TURN: Final[dict[str, object]] = {"role": "user", "content": "Read the file."}
@@ -432,6 +438,46 @@ def test_anthropic_messages_pt_drops_the_stream_index_from_replayed_thinking_blo
         {"type": "thinking", "thinking": "Step 1.", "signature": "sig-a"},
         {"type": "redacted_thinking", "data": "EmwKAhgB"},
         {"type": "text", "text": "Paris"},
+    ]
+
+
+@pytest.mark.parametrize(
+    ("model", "expected_content"),
+    (
+        (
+            "global.anthropic.claude-haiku-5-5",
+            [
+                {"reasoningContent": {"reasoningText": {"text": "pondering", "signature": "signed-reasoning"}}},
+                {"text": "hello"},
+            ],
+        ),
+        ("global.zai.glm-5.3", [{"text": "hello"}]),
+        ("amazon.nova-pro-v1:0", [{"text": "hello"}]),
+        ("converse/us.openai.gpt-6-luna", [{"text": "hello"}]),
+    ),
+)
+def test_bedrock_converse_replays_signed_thinking_only_to_claude(
+    model: str, expected_content: Sequence[Mapping[str, object]]
+) -> None:
+    body: Final = litellm.AmazonConverseConfig().transform_request(
+        model=model,
+        messages=[
+            ChatCompletionUserMessage(role="user", content="hi"),
+            ChatCompletionAssistantMessage(
+                role="assistant",
+                content="hello",
+                thinking_blocks=[{"type": "thinking", "thinking": "pondering", "signature": "signed-reasoning"}],
+            ),
+            ChatCompletionUserMessage(role="user", content="continue"),
+        ],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+    assert body["messages"] == [
+        {"role": "user", "content": [{"text": "hi"}]},
+        {"role": "assistant", "content": expected_content},
+        {"role": "user", "content": [{"text": "continue"}]},
     ]
 
 
@@ -1032,6 +1078,192 @@ async def test_bedrock_converse_keeps_dropping_redacted_thinking_for_non_claude_
     assert assistant_content == [{"text": "hello"}]
 
 
+_HIDDEN_MODEL_ARN: Final = "arn:aws:bedrock:us-west-2:123456789012:application-inference-profile/abc123"
+
+
+async def _converse_messages(
+    messages: list[dict[str, object]],
+    model: str,
+    base_model: str | None,
+    use_async: bool,
+    assistant_continue_message: str | None = None,
+) -> list[dict[str, object]]:
+    return (
+        await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+            messages=messages,
+            model=model,
+            llm_provider="bedrock",
+            base_model=base_model,
+            assistant_continue_message=assistant_continue_message,
+        )
+        if use_async
+        else _bedrock_converse_messages_pt(
+            messages=messages,
+            model=model,
+            llm_provider="bedrock",
+            base_model=base_model,
+            assistant_continue_message=assistant_continue_message,
+        )
+    )
+
+
+def _assistant_with_thinking(placement: str, block: dict[str, object]) -> dict[str, object]:
+    return (
+        {"role": "assistant", "content": "hello", "thinking_blocks": [block]}
+        if placement == "thinking_blocks"
+        else {"role": "assistant", "content": [block, {"type": "text", "text": "hello"}]}
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.parametrize("placement", ["thinking_blocks", "content"])
+@pytest.mark.parametrize(
+    "signature", ["claude-signature", encrypted_reasoning_signature("gAAAA_1")], ids=["claude", "encrypted"]
+)
+@pytest.mark.parametrize(
+    ("model", "base_model"),
+    [
+        ("converse/us.openai.gpt-6-luna", None),
+        ("us.amazon.nova-pro-v1:0", None),
+        ("us.amazon.nova-pro-v1:0", "anthropic.claude-sonnet-4-6"),
+        (_HIDDEN_MODEL_ARN, "openai.gpt-oss-120b-1:0"),
+    ],
+)
+async def test_bedrock_converse_drops_signed_thinking_for_a_known_non_claude_target(
+    use_async: bool, placement: str, signature: str, model: str, base_model: str | None
+):
+    block: Final = {"type": "thinking", "thinking": "private plan", "signature": signature}
+    messages: Final = [
+        {"role": "user", "content": "hi"},
+        _assistant_with_thinking(placement, block),
+        {"role": "user", "content": "again"},
+    ]
+
+    assert await _converse_messages(messages, model, base_model, use_async) == [
+        {"role": "user", "content": [{"text": "hi"}]},
+        {"role": "assistant", "content": [{"text": "hello"}]},
+        {"role": "user", "content": [{"text": "again"}]},
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.parametrize("placement", ["thinking_blocks", "content"])
+@pytest.mark.parametrize(
+    ("model", "base_model"),
+    [
+        ("us.anthropic.claude-sonnet-4-6", None),
+        ("ca.anthropic.claude-haiku-5-5", None),
+        ("converse/in.anthropic.claude-sonnet-5", None),
+        ("claude-sonnet-4-6", None),
+        (_HIDDEN_MODEL_ARN, None),
+        (_HIDDEN_MODEL_ARN, "anthropic.claude-sonnet-4-6"),
+    ],
+)
+async def test_bedrock_converse_keeps_signed_thinking_for_a_target_that_may_be_claude(
+    use_async: bool, placement: str, model: str, base_model: str | None
+):
+    block: Final = {"type": "thinking", "thinking": "private plan", "signature": "claude-signature"}
+    messages: Final = [
+        {"role": "user", "content": "hi"},
+        _assistant_with_thinking(placement, block),
+        {"role": "user", "content": "again"},
+    ]
+
+    result: Final = await _converse_messages(messages, model, base_model, use_async)
+
+    assistant_content: Final = next(m["content"] for m in result if m["role"] == "assistant")
+    assert assistant_content == [
+        {"reasoningContent": {"reasoningText": {"text": "private plan", "signature": "claude-signature"}}},
+        {"text": "hello"},
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+async def test_bedrock_converse_keeps_the_tool_call_when_dropping_signed_thinking(use_async: bool):
+    messages: Final = [
+        {"role": "user", "content": "weather?"},
+        {
+            "role": "assistant",
+            "content": None,
+            "thinking_blocks": [{"type": "thinking", "thinking": "private plan", "signature": "claude-signature"}],
+            "tool_calls": [
+                {"id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": "{}"}}
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call_1", "content": "sunny"},
+    ]
+
+    result: Final = await _converse_messages(messages, "converse/us.openai.gpt-6-luna", None, use_async)
+
+    assert [m["role"] for m in result] == ["user", "assistant", "user"]
+    assert [list(part) for part in result[1]["content"]] == [["toolUse"]]
+    assert result[1]["content"][0]["toolUse"]["toolUseId"] == "call_1"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.parametrize(
+    ("assistant_continue_message", "expected"),
+    [
+        (None, [{"role": "user", "content": [{"text": "hi"}, {"text": "again"}]}]),
+        (
+            "Please continue.",
+            [
+                {"role": "user", "content": [{"text": "hi"}]},
+                {"role": "assistant", "content": [{"text": "Please continue."}]},
+                {"role": "user", "content": [{"text": "again"}]},
+            ],
+        ),
+    ],
+    ids=["merged_into_one_user_turn", "split_by_the_continue_message"],
+)
+async def test_bedrock_converse_drops_a_turn_that_held_only_signed_thinking(
+    use_async: bool, assistant_continue_message: str | None, expected: list[dict[str, object]]
+):
+    messages: Final = [
+        {"role": "user", "content": "hi"},
+        {
+            "role": "assistant",
+            "content": None,
+            "thinking_blocks": [{"type": "thinking", "thinking": "private plan", "signature": "claude-signature"}],
+        },
+        {"role": "user", "content": "again"},
+    ]
+
+    result: Final = await _converse_messages(
+        messages, "converse/us.openai.gpt-6-luna", None, use_async, assistant_continue_message
+    )
+
+    assert result == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+async def test_bedrock_converse_drops_the_cache_point_of_a_dropped_signed_thinking_block(use_async: bool):
+    messages: Final = [
+        {"role": "user", "content": "hi"},
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "thinking",
+                    "thinking": "private plan",
+                    "signature": "claude-signature",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        },
+        {"role": "user", "content": "again"},
+    ]
+
+    result: Final = await _converse_messages(messages, "converse/us.amazon.nova-2-lite-v1:0", None, use_async)
+
+    assert result == [{"role": "user", "content": [{"text": "hi"}, {"text": "again"}]}]
+
+
 @pytest.mark.parametrize(
     "thinking_block",
     [
@@ -1244,6 +1476,145 @@ def test_anthropic_messages_pt_keeps_signed_thinking_block():
     assert len(thinking_blocks) == 1
     assert thinking_blocks[0]["signature"] == "ErcBCkgIValidSignatureBytes"
     assert thinking_blocks[0]["thinking"] == "genuine anthropic reasoning"
+
+
+@pytest.mark.parametrize("llm_provider", ("anthropic", "vertex_ai"))
+def test_anthropic_messages_pt_converts_pdf_image_url_data_uri_to_document(llm_provider: str) -> None:
+    pdf_data = "JVBERi0xLjQK"
+    result: Final = anthropic_messages_pt(
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "summarize"},
+                    {"type": "image_url", "image_url": {"url": f"data:application/pdf;base64,{pdf_data}"}},
+                ],
+            }
+        ],
+        model="claude-opus-5-5",
+        llm_provider=llm_provider,
+    )
+
+    assert result[0]["content"][1] == {
+        "type": "document",
+        "source": {"type": "base64", "media_type": "application/pdf", "data": pdf_data},
+    }
+
+
+@pytest.mark.parametrize("llm_provider", ("anthropic", "vertex_ai"))
+def test_anthropic_messages_pt_uses_pdf_format_for_generic_mime_data_uri(llm_provider: str) -> None:
+    pdf_data = "JVBERi0xLjQK"
+    result: Final = anthropic_messages_pt(
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "summarize"},
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:application/octet-stream;base64,{pdf_data}",
+                            "format": "application/pdf",
+                        },
+                    },
+                ],
+            }
+        ],
+        model="claude-opus-5-5",
+        llm_provider=llm_provider,
+    )
+
+    assert result[0]["content"][1] == {
+        "type": "document",
+        "source": {"type": "base64", "media_type": "application/pdf", "data": pdf_data},
+    }
+
+
+@pytest.mark.parametrize(
+    ("image_url", "expected_type"),
+    (
+        ({"url": "https://example.com/download?id=7", "format": "application/pdf"}, "document"),
+        ({"url": "https://example.com/download?id=7", "format": "Application/PDF; charset=binary"}, "document"),
+        ({"url": "https://example.com/files/report.pdf", "format": "image/png"}, "image"),
+        ({"url": "https://example.com/pdf/photo.png"}, "image"),
+        ({"url": "https://example.com/pdf/photo.png", "format": 5}, "image"),
+        ({"url": "https://example.com/pdf/photo.png", "format": ["application/pdf"]}, "image"),
+    ),
+)
+def test_anthropic_messages_pt_picks_block_type_for_https_image_url(
+    image_url: dict[str, object], expected_type: str
+) -> None:
+    result: Final = anthropic_messages_pt(
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "summarize"},
+                    {"type": "image_url", "image_url": image_url},
+                ],
+            }
+        ],
+        model="claude-opus-5-5",
+        llm_provider="anthropic",
+    )
+
+    assert result[0]["content"][1] == {
+        "type": expected_type,
+        "source": {"type": "url", "url": image_url["url"]},
+    }
+
+
+@pytest.mark.parametrize(
+    "image_url",
+    (
+        {"url": "data:Application/PDF;base64,JVBERi0xLjQK"},
+        {"url": "data:application/x-pdf;base64,JVBERi0xLjQK"},
+        {"url": "data:application/octet-stream;base64,JVBERi0xLjQK", "format": "application/pdf; charset=binary"},
+    ),
+)
+def test_anthropic_messages_pt_normalizes_a_pdf_media_type_with_case_or_parameters(
+    image_url: dict[str, str],
+) -> None:
+    result: Final = anthropic_messages_pt(
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "summarize"},
+                    {"type": "image_url", "image_url": image_url},
+                ],
+            }
+        ],
+        model="claude-opus-5-5",
+        llm_provider="anthropic",
+    )
+
+    assert result[0]["content"][1] == {
+        "type": "document",
+        "source": {"type": "base64", "media_type": "application/pdf", "data": "JVBERi0xLjQK"},
+    }
+
+
+def test_anthropic_messages_pt_keeps_png_image_url_as_image() -> None:
+    image_data = "iVBORw0KGgo="
+    result: Final = anthropic_messages_pt(
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "describe"},
+                    {"type": "image_url", "image_url": f"data:image/png;base64,{image_data}"},
+                ],
+            }
+        ],
+        model="claude-opus-5-5",
+        llm_provider="anthropic",
+    )
+
+    assert result[0]["content"][1] == {
+        "type": "image",
+        "source": {"type": "base64", "media_type": "image/png", "data": image_data},
+    }
 
 
 EMPTY_USER_MESSAGES: Final = pytest.mark.parametrize(
@@ -2731,10 +3102,10 @@ def test_bedrock_create_bedrock_block_deterministic_document_hash():
 
     # Create two blocks with same content
     block1 = BedrockImageProcessor._create_bedrock_block(
-        image_bytes=base64_content, mime_type="application/pdf", image_format="pdf"
+        source={"bytes": base64_content}, mime_type="application/pdf", image_format="pdf"
     )
     block2 = BedrockImageProcessor._create_bedrock_block(
-        image_bytes=base64_content, mime_type="application/pdf", image_format="pdf"
+        source={"bytes": base64_content}, mime_type="application/pdf", image_format="pdf"
     )
 
     # Both should have the same document name
@@ -2759,10 +3130,10 @@ def test_bedrock_create_bedrock_block_different_content_different_hash():
 
     # Create blocks
     block1 = BedrockImageProcessor._create_bedrock_block(
-        image_bytes=base64_content1, mime_type="application/pdf", image_format="pdf"
+        source={"bytes": base64_content1}, mime_type="application/pdf", image_format="pdf"
     )
     block2 = BedrockImageProcessor._create_bedrock_block(
-        image_bytes=base64_content2, mime_type="application/pdf", image_format="pdf"
+        source={"bytes": base64_content2}, mime_type="application/pdf", image_format="pdf"
     )
 
     # Should have different document names
@@ -2785,15 +3156,15 @@ def test_bedrock_create_bedrock_block_normalized_base64():
 
     # Create blocks
     block1 = BedrockImageProcessor._create_bedrock_block(
-        image_bytes=base64_content, mime_type="application/pdf", image_format="pdf"
+        source={"bytes": base64_content}, mime_type="application/pdf", image_format="pdf"
     )
     block2 = BedrockImageProcessor._create_bedrock_block(
-        image_bytes=base64_with_newlines,
+        source={"bytes": base64_with_newlines},
         mime_type="application/pdf",
         image_format="pdf",
     )
     block3 = BedrockImageProcessor._create_bedrock_block(
-        image_bytes=base64_with_spaces,
+        source={"bytes": base64_with_spaces},
         mime_type="application/pdf",
         image_format="pdf",
     )
@@ -2820,10 +3191,10 @@ def test_bedrock_create_bedrock_block_large_file_sampling():
 
     # Create blocks
     block1 = BedrockImageProcessor._create_bedrock_block(
-        image_bytes=base64_content1, mime_type="application/pdf", image_format="pdf"
+        source={"bytes": base64_content1}, mime_type="application/pdf", image_format="pdf"
     )
     block2 = BedrockImageProcessor._create_bedrock_block(
-        image_bytes=base64_content2, mime_type="application/pdf", image_format="pdf"
+        source={"bytes": base64_content2}, mime_type="application/pdf", image_format="pdf"
     )
 
     # Should have different names because total length is different
@@ -2842,7 +3213,7 @@ def test_bedrock_create_bedrock_block_very_large_file():
 
     # Create block
     block = BedrockImageProcessor._create_bedrock_block(
-        image_bytes=base64_content, mime_type="application/pdf", image_format="pdf"
+        source={"bytes": base64_content}, mime_type="application/pdf", image_format="pdf"
     )
 
     # Should have a valid document name
@@ -2864,7 +3235,7 @@ def test_bedrock_create_bedrock_block_image_type():
 
     # Create block
     block = BedrockImageProcessor._create_bedrock_block(
-        image_bytes=base64_content, mime_type="image/png", image_format="png"
+        source={"bytes": base64_content}, mime_type="image/png", image_format="png"
     )
 
     # Should be an image block, not a document block
@@ -2885,7 +3256,7 @@ def test_bedrock_create_bedrock_block_video_type():
 
     # Create block
     block = BedrockImageProcessor._create_bedrock_block(
-        image_bytes=base64_content, mime_type="video/mp4", image_format="mp4"
+        source={"bytes": base64_content}, mime_type="video/mp4", image_format="mp4"
     )
 
     # Should be a video block, not a document block
@@ -2906,7 +3277,7 @@ def test_bedrock_create_bedrock_block_document_name_format():
     base64_content = base64.b64encode(pdf_content).decode("utf-8")
 
     block = BedrockImageProcessor._create_bedrock_block(
-        image_bytes=base64_content, mime_type="application/pdf", image_format="pdf"
+        source={"bytes": base64_content}, mime_type="application/pdf", image_format="pdf"
     )
 
     document_name = block["document"]["name"]
@@ -2935,13 +3306,372 @@ def test_bedrock_create_bedrock_block_different_document_formats():
     for content, mime_type, format_type in test_cases:
         base64_content = base64.b64encode(content + b"\x00" * 100).decode("utf-8")
         block = BedrockImageProcessor._create_bedrock_block(
-            image_bytes=base64_content, mime_type=mime_type, image_format=format_type
+            source={"bytes": base64_content}, mime_type=mime_type, image_format=format_type
         )
 
         assert block.get("document") is not None
         assert f"DocumentPDFmessages_" in block["document"]["name"]
         assert block["document"]["name"].endswith(f"_{format_type}")
         assert block["document"]["format"] == format_type
+
+
+_S3_MEDIA_MODEL: Final = "us.amazon.nova-2-lite-v1:0"
+_S3_BUCKET_OWNER: Final = "111122223333"
+
+
+async def _converse_user_content(part: Mapping[str, object], run_async: bool) -> Sequence[BedrockContentBlock]:
+    messages: Final = [{"role": "user", "content": [{"type": "text", "text": "Describe this."}, part]}]
+    with respx.mock:
+        converted: Final = (
+            await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+                messages=messages, model=_S3_MEDIA_MODEL, llm_provider="bedrock"
+            )
+            if run_async
+            else _bedrock_converse_messages_pt(messages=messages, model=_S3_MEDIA_MODEL, llm_provider="bedrock")
+        )
+    return converted[0]["content"][1:]
+
+
+def _s3_source(uri: str, bucket_owner: str | None = None) -> Mapping[str, object]:
+    return {"s3Location": {"uri": uri} if bucket_owner is None else {"uri": uri, "bucketOwner": bucket_owner}}
+
+
+@pytest.mark.parametrize("run_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    ("part", "expected"),
+    [
+        pytest.param(
+            {"type": "image_url", "image_url": {"url": "s3://media-bucket/dir/cat.png"}},
+            {"image": {"format": "png", "source": _s3_source("s3://media-bucket/dir/cat.png")}},
+            id="image-format-from-extension",
+        ),
+        pytest.param(
+            {"type": "image_url", "image_url": "s3://media-bucket/dir/CAT.JPG"},
+            {"image": {"format": "jpeg", "source": _s3_source("s3://media-bucket/dir/CAT.JPG")}},
+            id="string-url-uppercase-extension",
+        ),
+        pytest.param(
+            {"type": "image_url", "image_url": {"url": "s3://media-bucket/dir/cat.jpg"}},
+            {"image": {"format": "jpeg", "source": _s3_source("s3://media-bucket/dir/cat.jpg")}},
+            id="jpg-is-jpeg",
+        ),
+        pytest.param(
+            {"type": "image_url", "image_url": {"url": "s3://media-bucket/dir/CAT.PNG"}},
+            {"image": {"format": "png", "source": _s3_source("s3://media-bucket/dir/CAT.PNG")}},
+            id="uppercase-image-extension",
+        ),
+        pytest.param(
+            {"type": "image_url", "image_url": {"url": "s3://media-bucket/clips/DEMO.MOV"}},
+            {"video": {"format": "mov", "source": _s3_source("s3://media-bucket/clips/DEMO.MOV")}},
+            id="uppercase-video-extension",
+        ),
+        pytest.param(
+            {
+                "type": "image_url",
+                "image_url": {"url": "s3://media-bucket/dir/cat.png", "bucket_owner": _S3_BUCKET_OWNER},
+            },
+            {"image": {"format": "png", "source": _s3_source("s3://media-bucket/dir/cat.png", _S3_BUCKET_OWNER)}},
+            id="bucket-owner",
+        ),
+        pytest.param(
+            {"type": "image_url", "image_url": {"url": "s3://media-bucket/dir/cat.png", "format": "image/webp"}},
+            {"image": {"format": "webp", "source": _s3_source("s3://media-bucket/dir/cat.png")}},
+            id="explicit-format-wins",
+        ),
+        pytest.param(
+            {"type": "image_url", "image_url": {"url": "s3://media-bucket/base64/cat.png"}},
+            {"image": {"format": "png", "source": _s3_source("s3://media-bucket/base64/cat.png")}},
+            id="base64-in-key",
+        ),
+        pytest.param(
+            {"type": "image_url", "image_url": {"url": "s3://media-bucket/clips/demo.mp4"}},
+            {"video": {"format": "mp4", "source": _s3_source("s3://media-bucket/clips/demo.mp4")}},
+            id="video",
+        ),
+        pytest.param(
+            {"type": "image_url", "image_url": {"url": "s3://media-bucket/clips/demo.mov"}},
+            {"video": {"format": "mov", "source": _s3_source("s3://media-bucket/clips/demo.mov")}},
+            id="video-extension-is-the-bedrock-format",
+        ),
+        pytest.param(
+            {"type": "file", "file": {"file_id": "s3://media-bucket/dir/cat.png", "bucket_owner": _S3_BUCKET_OWNER}},
+            {"image": {"format": "png", "source": _s3_source("s3://media-bucket/dir/cat.png", _S3_BUCKET_OWNER)}},
+            id="file-id",
+        ),
+    ],
+)
+async def test_bedrock_converse_s3_media_is_sent_as_an_s3_location_without_a_download(
+    part: Mapping[str, object], expected: Mapping[str, object], run_async: bool
+):
+    assert await _converse_user_content(part, run_async) == [expected]
+
+
+@pytest.mark.parametrize("run_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    ("declared", "block", "converse_format"),
+    [
+        pytest.param("image/jpg", "image", "jpeg", id="image-jpg"),
+        pytest.param("IMAGE/PNG", "image", "png", id="upper-case"),
+        pytest.param("image/png; charset=binary", "image", "png", id="image-with-parameter"),
+        pytest.param("video/quicktime", "video", "mov", id="quicktime"),
+        pytest.param("video/x-matroska", "video", "mkv", id="matroska"),
+        pytest.param("video/x-flv", "video", "flv", id="flv"),
+        pytest.param("video/x-ms-wmv", "video", "wmv", id="wmv"),
+        pytest.param("video/3gpp", "video", "three_gp", id="3gpp"),
+    ],
+)
+async def test_bedrock_converse_s3_media_format_accepts_a_registered_mime_type(
+    declared: str, block: str, converse_format: str, run_async: bool
+):
+    uri: Final = "s3://media-bucket/uploads/7f3a9c"
+
+    content: Final = await _converse_user_content(
+        {"type": "image_url", "image_url": {"url": uri, "format": declared}}, run_async
+    )
+
+    assert content == [{block: {"format": converse_format, "source": _s3_source(uri)}}]
+
+
+@pytest.mark.parametrize("run_async", [False, True], ids=["sync", "async"])
+async def test_bedrock_converse_s3_3gp_key_uses_the_converse_format_name(run_async: bool):
+    uri: Final = "s3://media-bucket/clips/demo.3gp"
+
+    content: Final = await _converse_user_content({"type": "image_url", "image_url": {"url": uri}}, run_async)
+
+    assert content == [{"video": {"format": "three_gp", "source": _s3_source(uri)}}]
+
+
+@pytest.mark.parametrize("run_async", [False, True], ids=["sync", "async"])
+async def test_bedrock_converse_s3_text_with_a_charset_is_a_txt_document(run_async: bool):
+    uri: Final = "s3://media-bucket/docs/7f3a9c"
+
+    content: Final = await _converse_user_content(
+        {"type": "file", "file": {"file_id": uri, "format": "text/plain; charset=utf-8"}}, run_async
+    )
+
+    assert content[0]["document"]["format"] == "txt"
+    assert content[0]["document"]["source"] == _s3_source(uri)
+
+
+@pytest.mark.parametrize("run_async", [False, True], ids=["sync", "async"])
+async def test_bedrock_converse_s3_pdf_is_a_document_named_after_its_uri(run_async: bool):
+    report: Final = "s3://media-bucket/docs/report.pdf"
+    invoice: Final = "s3://media-bucket/docs/invoice.pdf"
+
+    report_content: Final = await _converse_user_content({"type": "file", "file": {"file_id": report}}, run_async)
+    report_again: Final = await _converse_user_content({"type": "file", "file": {"file_id": report}}, run_async)
+    invoice_content: Final = await _converse_user_content({"type": "file", "file": {"file_id": invoice}}, run_async)
+
+    report_name: Final = report_content[0]["document"]["name"]
+    assert report_content == [{"document": {"format": "pdf", "name": report_name, "source": _s3_source(report)}}]
+    assert re.fullmatch(r"DocumentPDFmessages_[0-9a-f]{16}_pdf", report_name)
+    assert report_again == report_content
+    assert invoice_content[0]["document"]["name"] != report_name
+
+
+@pytest.mark.parametrize("run_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("uri", ["s3://media-bucket/docs/notes.md", "s3://media-bucket/docs/NOTES.markdown"])
+async def test_bedrock_converse_s3_markdown_without_a_format_is_an_md_document(uri: str, run_async: bool):
+    content: Final = await _converse_user_content({"type": "file", "file": {"file_id": uri}}, run_async)
+
+    assert [{**block, "document": {**block["document"], "name": "-"}} for block in content] == [
+        {"document": {"format": "md", "name": "-", "source": _s3_source(uri)}}
+    ]
+
+
+@pytest.mark.parametrize("run_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("uri", ["s3://media-bucket/uploads/7f3a9c", "s3://media-bucket/uploads/blob.unknownext"])
+async def test_bedrock_converse_s3_media_without_a_known_extension_or_format_is_a_bad_request(
+    uri: str, run_async: bool
+):
+    with pytest.raises(litellm.BadRequestError) as excinfo:
+        await _converse_user_content({"type": "image_url", "image_url": {"url": uri}}, run_async)
+
+    assert uri in excinfo.value.message
+    assert "`format`" in excinfo.value.message
+
+
+@pytest.mark.parametrize("run_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    ("image_url", "named_format"),
+    [
+        pytest.param({"url": "s3://media-bucket/scans/page.tiff"}, "page.tiff", id="tiff-key"),
+        pytest.param(
+            {"url": "s3://media-bucket/scans/page.png", "format": "image/tiff"}, "image/tiff", id="tiff-format"
+        ),
+        pytest.param({"url": "s3://media-bucket/voice/note.mp3"}, "audio/mpeg", id="mp3-key"),
+        pytest.param(
+            {"url": "s3://media-bucket/voice/note.bin", "format": "audio/mp4"}, "audio/mp4", id="audio-format"
+        ),
+    ],
+)
+async def test_bedrock_converse_s3_media_in_a_format_bedrock_does_not_take_is_a_bad_request(
+    image_url: Mapping[str, str], named_format: str, run_async: bool
+):
+    with pytest.raises(litellm.BadRequestError) as excinfo:
+        await _converse_user_content({"type": "image_url", "image_url": image_url}, run_async)
+
+    assert image_url["url"] in excinfo.value.message
+    assert named_format in excinfo.value.message
+
+
+_PNG_BASE64: Final = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="
+
+
+def _owned_image_url_part(url: str, bucket_owner: object) -> Mapping[str, object]:
+    return {"type": "image_url", "image_url": {"url": url, "bucket_owner": bucket_owner}}
+
+
+def _owned_file_part(url: str, bucket_owner: object) -> Mapping[str, object]:
+    return {"type": "file", "file": {"file_id": url, "bucket_owner": bucket_owner}}
+
+
+@pytest.mark.parametrize("run_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("bucket_owner", [111122223333, ["111122223333"], ""], ids=["int", "list", "empty-string"])
+@pytest.mark.parametrize("part_for", [_owned_image_url_part, _owned_file_part], ids=["image-url", "file"])
+async def test_bedrock_converse_s3_media_with_a_bucket_owner_that_is_not_an_account_id_is_a_bad_request(
+    part_for: Callable[[str, object], Mapping[str, object]], bucket_owner: object, run_async: bool
+):
+    with pytest.raises(litellm.BadRequestError) as excinfo:
+        await _converse_user_content(part_for("s3://media-bucket/dir/cat.png", bucket_owner), run_async)
+
+    assert "`bucket_owner`" in excinfo.value.message
+    assert "s3://media-bucket/dir/cat.png" in excinfo.value.message
+
+
+@pytest.mark.parametrize("run_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("part_for", [_owned_image_url_part, _owned_file_part], ids=["image-url", "file"])
+async def test_bedrock_converse_ignores_a_bucket_owner_on_media_that_is_not_on_s3(
+    part_for: Callable[[str, object], Mapping[str, object]], run_async: bool
+):
+    content: Final = await _converse_user_content(
+        part_for(f"data:image/png;base64,{_PNG_BASE64}", 111122223333), run_async
+    )
+
+    assert content == [{"image": {"format": "png", "source": {"bytes": _PNG_BASE64}}}]
+
+
+@pytest.mark.parametrize(
+    "part",
+    [
+        pytest.param(
+            {
+                "type": "image_url",
+                "image_url": {"url": "s3://media-bucket/dir/cat.png", "bucket_owner": _S3_BUCKET_OWNER},
+            },
+            id="image-url",
+        ),
+        pytest.param(
+            {"type": "file", "file": {"file_id": "s3://media-bucket/dir/cat.png", "bucket_owner": _S3_BUCKET_OWNER}},
+            id="file",
+        ),
+    ],
+)
+def test_bedrock_converse_tool_result_s3_media_keeps_its_bucket_owner(part: Mapping[str, object]):
+    messages: Final = [
+        {"role": "user", "content": "Describe the screenshot."},
+        {"tool_call_id": "tooluse_s3_1", "role": "tool", "name": "fetch_screenshot", "content": [part]},
+    ]
+
+    with respx.mock:
+        converted: Final = _bedrock_converse_messages_pt(
+            messages=messages, model=_S3_MEDIA_MODEL, llm_provider="bedrock"
+        )
+
+    assert converted[-1]["content"][-1]["toolResult"]["content"] == [
+        {"image": {"format": "png", "source": _s3_source("s3://media-bucket/dir/cat.png", _S3_BUCKET_OWNER)}}
+    ]
+
+
+@pytest.mark.parametrize(
+    "file, expected_media",
+    [
+        pytest.param(
+            {"file_id": "s3://media-bucket/clips/demo.mp4"},
+            [{"video": {"format": "mp4", "source": _s3_source("s3://media-bucket/clips/demo.mp4")}}],
+            id="s3-video-is-forwarded",
+        ),
+        pytest.param(
+            {"file_data": "data:video/mp4;base64,AAAAGGZ0eXBtcDQy"},
+            [],
+            id="inline-video-is-dropped",
+        ),
+    ],
+)
+def test_bedrock_converse_tool_result_video_is_forwarded_only_from_s3(
+    file: Mapping[str, object], expected_media: list[Mapping[str, object]]
+):
+    messages: Final = [
+        {"role": "user", "content": "Describe the clip."},
+        {
+            "tool_call_id": "tooluse_video_1",
+            "role": "tool",
+            "name": "fetch_clip",
+            "content": [{"type": "text", "text": "clip:"}, {"type": "file", "file": file}],
+        },
+    ]
+
+    with respx.mock:
+        converted: Final = _bedrock_converse_messages_pt(
+            messages=messages, model=_S3_MEDIA_MODEL, llm_provider="bedrock"
+        )
+
+    assert converted[-1]["content"][-1]["toolResult"]["content"] == [{"text": "clip:"}, *expected_media]
+
+
+@pytest.mark.parametrize("bucket_owner", [111122223333, ""], ids=["int", "empty-string"])
+@pytest.mark.parametrize("part_for", [_owned_image_url_part, _owned_file_part], ids=["image-url", "file"])
+def test_bedrock_converse_tool_result_s3_media_with_a_bucket_owner_that_is_not_an_account_id_is_a_bad_request(
+    part_for: Callable[[str, object], Mapping[str, object]], bucket_owner: object
+):
+    messages: Final = [
+        {"role": "user", "content": "Describe the screenshot."},
+        {
+            "tool_call_id": "tooluse_s3_1",
+            "role": "tool",
+            "name": "fetch_screenshot",
+            "content": [part_for("s3://media-bucket/dir/cat.png", bucket_owner)],
+        },
+    ]
+
+    with respx.mock, pytest.raises(litellm.BadRequestError) as excinfo:
+        _bedrock_converse_messages_pt(messages=messages, model=_S3_MEDIA_MODEL, llm_provider="bedrock")
+
+    assert "`bucket_owner`" in excinfo.value.message
+
+
+@pytest.mark.parametrize("run_async", [False, True], ids=["sync", "async"])
+async def test_bedrock_converse_assistant_s3_image_is_sent_as_an_s3_location(run_async: bool):
+    messages: Final = [
+        {"role": "user", "content": "Draw a cat."},
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": "s3://media-bucket/dir/cat.png",
+                        "format": "image/webp",
+                        "bucket_owner": _S3_BUCKET_OWNER,
+                    },
+                }
+            ],
+        },
+        {"role": "user", "content": "Make it bigger."},
+    ]
+
+    with respx.mock:
+        converted: Final = (
+            await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+                messages=messages, model=_S3_MEDIA_MODEL, llm_provider="bedrock"
+            )
+            if run_async
+            else _bedrock_converse_messages_pt(messages=messages, model=_S3_MEDIA_MODEL, llm_provider="bedrock")
+        )
+
+    assert converted[1]["content"] == [
+        {"image": {"format": "webp", "source": _s3_source("s3://media-bucket/dir/cat.png", _S3_BUCKET_OWNER)}}
+    ]
 
 
 def test_bedrock_nova_web_search_options_mapping():
@@ -3321,8 +4051,8 @@ def test_bedrock_tools_unpack_defs_no_oom_with_nested_refs():
     This test creates a schema with multiple nested $defs that reference each other
     to verify the fix prevents memory explosion while still correctly resolving refs.
     """
-    import sys
     import copy
+    import sys
 
     from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_tools_pt
 
@@ -5309,8 +6039,9 @@ def test_convert_gemini_tool_call_result_answers_tool_reference_only_result():
 def test_convert_to_anthropic_tool_invoke_degrades_unpaired_server_tool_use():
     """A replayed srvtoolu_ call whose server tool result is not available
     (e.g. the Responses bridge replays items without provider_specific_fields)
-    must become a plain client tool_use so the client's tool_result can pair
-    with it. A dangling server_tool_use makes Anthropic 400 the request with
+    and that the client answered with its own tool message must become a plain
+    client tool_use so the client's tool_result can pair with it. A dangling
+    server_tool_use makes Anthropic 400 the request with
     "unexpected `tool_use_id` found in `tool_result` blocks"."""
     from litellm.litellm_core_utils.prompt_templates.factory import convert_to_anthropic_tool_invoke
 
@@ -5324,6 +6055,7 @@ def test_convert_to_anthropic_tool_invoke_degrades_unpaired_server_tool_use():
         ],
         web_search_results=None,
         tool_results=None,
+        answered_tool_ids=frozenset({"srvtoolu_01Unpaired"}),
     )
 
     assert result == [
@@ -5818,7 +6550,7 @@ def isolate_litellm_state():
     for attr, original_value in original_state.items():
         if hasattr(litellm, attr):
             setattr(litellm, attr, original_value)
-    _invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
 
 
 _SCALAR_DEFAULTS = {
@@ -7361,17 +8093,11 @@ def test_convert_to_anthropic_tool_invoke_sanitizes_invalid_ids():
 
 def test_convert_to_anthropic_tool_invoke_server_tool():
     """
-    Test that a server tool call (srvtoolu_) with no stored result is replayed
-    as a regular tool_use block.
-
-    A server_tool_use block is only valid when paired with its result block, so
-    an unpaired one must degrade to tool_use for Anthropic to accept the replay.
-    A paired call still becomes server_tool_use, covered by
-    test_convert_to_anthropic_tool_invoke_with_web_search_results.
-
-    Context: https://github.com/BerriAI/litellm/issues/17737 (original
-    server_tool_use reconstruction) and LIT-6622 / PR #39144 (unpaired calls
-    degrade instead of 400ing at Anthropic).
+    A server tool call (srvtoolu_) with no stored result and no client answer is
+    the unrun call a pause_turn response ends on, so it is replayed as a
+    server_tool_use for Anthropic to run when the client resends the turn.
+    An answered one degrades to tool_use, covered by
+    test_convert_to_anthropic_tool_invoke_degrades_unpaired_server_tool_use.
     """
     tool_calls = [
         {
@@ -7386,11 +8112,14 @@ def test_convert_to_anthropic_tool_invoke_server_tool():
 
     result = convert_to_anthropic_tool_invoke(tool_calls)
 
-    assert len(result) == 1
-    assert result[0]["type"] == "tool_use"
-    assert result[0]["id"] == "srvtoolu_01ABC123"
-    assert result[0]["name"] == "web_search"
-    assert result[0]["input"] == {"query": "elephant weight"}
+    assert result == [
+        {
+            "type": "server_tool_use",
+            "id": "srvtoolu_01ABC123",
+            "name": "web_search",
+            "input": {"query": "elephant weight"},
+        }
+    ]
 
 
 def test_convert_to_anthropic_tool_invoke_with_web_search_results():
@@ -7714,7 +8443,7 @@ def test_anthropic_messages_pt_with_bash_tool_result_in_provider_specific_fields
 
 def test_parse_tool_call_arguments_valid_json():
     """Test that valid JSON is parsed correctly."""
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    from litellm.litellm_core_utils.prompt_templates.tool_call_json_repair import (
         parse_tool_call_arguments,
     )
 
@@ -7724,7 +8453,7 @@ def test_parse_tool_call_arguments_valid_json():
 
 def test_parse_tool_call_arguments_empty_input():
     """Test that None/empty input returns empty dict."""
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    from litellm.litellm_core_utils.prompt_templates.tool_call_json_repair import (
         parse_tool_call_arguments,
     )
 
@@ -7734,7 +8463,7 @@ def test_parse_tool_call_arguments_empty_input():
 
 def test_parse_tool_call_arguments_malformed_json():
     """Test that malformed JSON raises ValueError with context."""
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    from litellm.litellm_core_utils.prompt_templates.tool_call_json_repair import (
         parse_tool_call_arguments,
     )
 
@@ -7780,7 +8509,7 @@ def test_convert_to_anthropic_tool_invoke_malformed_json():
 
 def test_attempt_json_repair_missing_closing_brace():
     """Repair JSON truncated with a missing closing brace (issue #22312)."""
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    from litellm.litellm_core_utils.prompt_templates.tool_call_json_repair import (
         _attempt_json_repair,
     )
 
@@ -7796,7 +8525,7 @@ def test_attempt_json_repair_missing_closing_brace():
 
 def test_attempt_json_repair_missing_bracket_and_brace():
     """Repair JSON truncated with both missing ] and }."""
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    from litellm.litellm_core_utils.prompt_templates.tool_call_json_repair import (
         _attempt_json_repair,
     )
 
@@ -7808,7 +8537,7 @@ def test_attempt_json_repair_missing_bracket_and_brace():
 
 def test_attempt_json_repair_trailing_comma():
     """Repair JSON with a trailing comma before missing close."""
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    from litellm.litellm_core_utils.prompt_templates.tool_call_json_repair import (
         _attempt_json_repair,
     )
 
@@ -7820,7 +8549,7 @@ def test_attempt_json_repair_trailing_comma():
 
 def test_attempt_json_repair_returns_none_for_unterminated_string():
     """Cannot repair an unterminated string — returns None."""
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    from litellm.litellm_core_utils.prompt_templates.tool_call_json_repair import (
         _attempt_json_repair,
     )
 
@@ -7829,7 +8558,7 @@ def test_attempt_json_repair_returns_none_for_unterminated_string():
 
 def test_attempt_json_repair_returns_none_for_valid_json():
     """Valid JSON has no unmatched brackets — returns None (no repair needed)."""
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    from litellm.litellm_core_utils.prompt_templates.tool_call_json_repair import (
         _attempt_json_repair,
     )
 
@@ -7838,7 +8567,7 @@ def test_attempt_json_repair_returns_none_for_valid_json():
 
 def test_attempt_json_repair_returns_none_for_empty():
     """Empty / whitespace input returns None."""
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    from litellm.litellm_core_utils.prompt_templates.tool_call_json_repair import (
         _attempt_json_repair,
     )
 
@@ -7848,7 +8577,7 @@ def test_attempt_json_repair_returns_none_for_empty():
 
 def test_attempt_json_repair_interleaved_nesting():
     """Repair JSON with interleaved {} and [] nesting."""
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    from litellm.litellm_core_utils.prompt_templates.tool_call_json_repair import (
         _attempt_json_repair,
     )
 
@@ -7860,7 +8589,7 @@ def test_attempt_json_repair_interleaved_nesting():
 
 def test_attempt_json_repair_deeply_nested():
     """Repair deeply nested truncated JSON."""
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    from litellm.litellm_core_utils.prompt_templates.tool_call_json_repair import (
         _attempt_json_repair,
     )
 
@@ -7872,7 +8601,7 @@ def test_attempt_json_repair_deeply_nested():
 
 def test_parse_tool_call_arguments_whitespace_only():
     """Whitespace-only input returns empty dict."""
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    from litellm.litellm_core_utils.prompt_templates.tool_call_json_repair import (
         parse_tool_call_arguments,
     )
 
@@ -7882,7 +8611,7 @@ def test_parse_tool_call_arguments_whitespace_only():
 
 def test_parse_tool_call_arguments_non_object_json():
     """Non-object JSON (list, string, number) is returned as-is (no wrapping)."""
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    from litellm.litellm_core_utils.prompt_templates.tool_call_json_repair import (
         parse_tool_call_arguments,
     )
 
@@ -7892,7 +8621,7 @@ def test_parse_tool_call_arguments_non_object_json():
 
 def test_parse_tool_call_arguments_repairs_truncated_json():
     """parse_tool_call_arguments should repair truncated JSON instead of raising."""
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    from litellm.litellm_core_utils.prompt_templates.tool_call_json_repair import (
         parse_tool_call_arguments,
     )
 
@@ -7903,7 +8632,7 @@ def test_parse_tool_call_arguments_repairs_truncated_json():
 
 def test_parse_tool_call_arguments_still_raises_for_unrepairable():
     """parse_tool_call_arguments raises ValueError when repair also fails."""
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    from litellm.litellm_core_utils.prompt_templates.tool_call_json_repair import (
         parse_tool_call_arguments,
     )
 
@@ -8155,6 +8884,170 @@ def test_anthropic_messages_pt_interleave_more_thinking_than_tool_groups():
         "thinking",
         "text",
     ], f"Expected order but got: {types}"
+
+
+
+def _paused_web_search_turn(
+    thinking_blocks: list[dict[str, str]] | None, content: str | list[dict[str, str]] = "Step 1 is Tokyo."
+) -> dict[str, object]:
+    assistant_message: Final[dict[str, object]] = {
+        "role": "assistant",
+        "content": content,
+        "tool_calls": [
+            {
+                "id": "srvtoolu_01Done",
+                "type": "function",
+                "function": {"name": "web_search", "arguments": '{"query": "Tokyo sister cities"}'},
+            },
+            {
+                "id": "srvtoolu_02Done",
+                "type": "function",
+                "function": {"name": "web_search", "arguments": '{"query": "Adana sister cities"}'},
+            },
+            {
+                "id": "srvtoolu_01Paused",
+                "type": "function",
+                "function": {"name": "web_search", "arguments": '{"query": "Adelaide sister cities"}'},
+            },
+        ],
+        "provider_specific_fields": {
+            "stop_reason": "pause_turn",
+            "web_search_results": [
+                {
+                    "type": "web_search_tool_result",
+                    "tool_use_id": tool_use_id,
+                    "content": [
+                        {"type": "web_search_result", "url": "https://example.com", "title": "City", "snippet": "x"}
+                    ],
+                }
+                for tool_use_id in ("srvtoolu_01Done", "srvtoolu_02Done")
+            ],
+        },
+    }
+    if thinking_blocks is None:
+        return assistant_message
+    return {**assistant_message, "thinking_blocks": thinking_blocks}
+
+
+_PAUSED_TURN_THINKING_CASES = pytest.mark.parametrize(
+    "thinking_blocks",
+    [
+        None,
+        [{"type": "thinking", "thinking": "Search first", "signature": "sig_1"}],
+        [
+            {"type": "thinking", "thinking": "Search first", "signature": "sig_1"},
+            {"type": "thinking", "thinking": "Search again", "signature": "sig_2"},
+            {"type": "thinking", "thinking": "Search once more", "signature": "sig_3"},
+            {"type": "thinking", "thinking": "Wrap up later", "signature": "sig_4"},
+        ],
+    ],
+    ids=["without_thinking", "fewer_thinking_than_searches", "more_thinking_than_searches"],
+)
+
+_PAUSED_TURN_CONTENT_CASES = pytest.mark.parametrize(
+    "content",
+    [
+        "Step 1 is Tokyo.",
+        [{"type": "text", "text": "Step 1 is Tokyo."}],
+        [
+            {"type": "thinking", "thinking": "Search first", "signature": "sig_1"},
+            {"type": "text", "text": "Step 1 is Tokyo."},
+        ],
+    ],
+    ids=["string_content", "text_parts", "text_parts_with_inline_thinking"],
+)
+
+
+@_PAUSED_TURN_THINKING_CASES
+@_PAUSED_TURN_CONTENT_CASES
+def test_anthropic_messages_pt_paused_turn_ends_on_unrun_server_tool_use(thinking_blocks, content):
+    """A pause_turn response resent as-is must end on its unrun server_tool_use:
+    Anthropic reads a turn ending on text as prefill, which newer models reject,
+    and a tool_use without a tool_result is a 400. Its thinking blocks are dropped,
+    since chat cannot say where Claude wrote them and Anthropic rejects moved ones."""
+    result = anthropic_messages_pt(
+        [
+            {"role": "user", "content": "Play the sister city chain game."},
+            _paused_web_search_turn(thinking_blocks, content),
+        ],
+        model="claude-sonnet-4-5",
+        llm_provider="anthropic",
+    )
+
+    replayed = result[-1]["content"]
+    assert replayed[-1] == {
+        "type": "server_tool_use",
+        "id": "srvtoolu_01Paused",
+        "name": "web_search",
+        "input": {"query": "Adelaide sister cities"},
+    }
+    assert [block["id"] for block in replayed if block["type"] == "server_tool_use"] == [
+        "srvtoolu_01Done",
+        "srvtoolu_02Done",
+        "srvtoolu_01Paused",
+    ]
+    assert [block["type"] for block in replayed if block["type"] in ("tool_use", "thinking")] == []
+    assert [block.get("tool_use_id") for block in replayed if block["type"] == "web_search_tool_result"] == [
+        "srvtoolu_01Done",
+        "srvtoolu_02Done",
+    ]
+
+
+@_PAUSED_TURN_THINKING_CASES
+@_PAUSED_TURN_CONTENT_CASES
+def test_anthropic_messages_pt_paused_turn_before_new_user_message_drops_unrun_search(thinking_blocks, content):
+    """A client may answer a paused turn with a new user message instead of resending it.
+    Anthropic then rejects a server_tool_use without its result, so the unrun search is dropped."""
+    result = anthropic_messages_pt(
+        [
+            {"role": "user", "content": "Play the sister city chain game."},
+            _paused_web_search_turn(thinking_blocks, content),
+            {"role": "user", "content": "Please continue."},
+        ],
+        model="claude-sonnet-4-5",
+        llm_provider="anthropic",
+    )
+
+    assert [message["role"] for message in result] == ["user", "assistant", "user"]
+    replayed = result[1]["content"]
+    assert [block["id"] for block in replayed if block["type"] == "server_tool_use"] == [
+        "srvtoolu_01Done",
+        "srvtoolu_02Done",
+    ]
+    assert [block["type"] for block in replayed if block["type"] in ("tool_use", "thinking")] == []
+    assert [block.get("tool_use_id") for block in replayed if block["type"] == "web_search_tool_result"] == [
+        "srvtoolu_01Done",
+        "srvtoolu_02Done",
+    ]
+    assert {"type": "text", "text": "Step 1 is Tokyo."} in replayed
+
+
+@_PAUSED_TURN_THINKING_CASES
+@_PAUSED_TURN_CONTENT_CASES
+def test_anthropic_messages_pt_paused_turn_resent_without_search_results_runs_only_its_last_search(
+    thinking_blocks, content
+):
+    paused_turn = _paused_web_search_turn(thinking_blocks, content)
+    result = anthropic_messages_pt(
+        [
+            {"role": "user", "content": "Play the sister city chain game."},
+            {key: value for key, value in paused_turn.items() if key != "provider_specific_fields"},
+        ],
+        model="claude-sonnet-4-5",
+        llm_provider="anthropic",
+    )
+
+    replayed = result[-1]["content"]
+    assert [block["id"] for block in replayed if block["type"] in ("server_tool_use", "tool_use")] == [
+        "srvtoolu_01Paused"
+    ]
+    assert replayed[-1] == {
+        "type": "server_tool_use",
+        "id": "srvtoolu_01Paused",
+        "name": "web_search",
+        "input": {"query": "Adelaide sister cities"},
+    }
+    assert [block["type"] for block in replayed if block["type"] == "thinking"] == []
 
 
 def test_anthropic_messages_pt_list_content_with_thinking_preserves_order():

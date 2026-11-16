@@ -3,9 +3,11 @@ Helper util for handling perplexity-specific cost calculation
 - e.g.: citation tokens, search queries
 """
 
+import math
 from datetime import datetime
 from typing import Final
 
+from litellm.litellm_core_utils.core_helpers import finite_reported_cost
 from litellm.litellm_core_utils.llm_cost_calc.utils import TokenRates, apply_off_peak_pricing
 from litellm.types.utils import Usage
 from litellm.utils import get_model_info
@@ -34,10 +36,9 @@ def cost_per_token(model: str, usage: Usage, current_time: datetime | None = Non
         total_cost = cost_info.get("total_cost")
     elif isinstance(cost_info, (int, float)) and not isinstance(cost_info, bool):
         total_cost = float(cost_info)
-    if total_cost is not None:
-        # Return total cost as completion_cost (prompt_cost=0) since Perplexity
-        # doesn't break down by input/output in their cost object
-        return (0.0, float(total_cost))
+    reported_cost: Final = None if total_cost is None else finite_reported_cost(float(total_cost))
+    if reported_cost is not None:
+        return (0.0, reported_cost)
 
     ## FALLBACK: Calculate cost manually if Perplexity doesn't provide it
     ## GET MODEL INFO
@@ -52,13 +53,14 @@ def cost_per_token(model: str, usage: Usage, current_time: datetime | None = Non
         except (ValueError, TypeError):
             return default
 
+    cache_read_cost_value: Final = model_info.get("cache_read_input_token_cost")
     rates: Final = apply_off_peak_pricing(
         model_info,
         current_time,
         TokenRates(
             input_rate=_safe_float_cast(model_info.get("input_cost_per_token")),
             output_rate=_safe_float_cast(model_info.get("output_cost_per_token")),
-            cache_read_rate=0.0,
+            cache_read_rate=math.nan if cache_read_cost_value is None else _safe_float_cast(cache_read_cost_value),
             cache_creation_rate=0.0,
             reasoning_rate=None,
         ),
@@ -67,7 +69,15 @@ def cost_per_token(model: str, usage: Usage, current_time: datetime | None = Non
     output_cost_per_token: Final = rates.output_rate
 
     ## CALCULATE INPUT COST
-    prompt_cost: float = (usage.prompt_tokens or 0) * input_cost_per_token
+    prompt_tokens: Final = usage.prompt_tokens or 0
+    reported_cached_tokens: Final = getattr(usage.prompt_tokens_details, "cached_tokens", 0) or 0
+    cached_tokens: Final = min(prompt_tokens, reported_cached_tokens)
+    cache_read_cost_per_token: Final = (
+        input_cost_per_token if math.isnan(rates.cache_read_rate) else rates.cache_read_rate
+    )
+    prompt_cost: float = (
+        prompt_tokens - cached_tokens
+    ) * input_cost_per_token + cached_tokens * cache_read_cost_per_token
 
     ## ADD CITATION TOKENS COST (if present)
     citation_tokens: Final = getattr(usage, "citation_tokens", 0) or 0
@@ -100,8 +110,9 @@ def cost_per_token(model: str, usage: Usage, current_time: datetime | None = Non
         num_search_queries = getattr(usage.prompt_tokens_details, "web_search_requests", 0) or 0
 
     # Check both possible keys for search cost (legacy and current)
-    search_cost_value: Final = model_info.get("search_queries_cost_per_query") or model_info.get(
-        "search_context_cost_per_query"
+    legacy_search_cost: Final = model_info.get("search_queries_cost_per_query")
+    search_cost_value: Final = (
+        model_info.get("search_context_cost_per_query") if legacy_search_cost is None else legacy_search_cost
     )
     if num_search_queries > 0 and search_cost_value is not None:
         # Handle both dict and float formats

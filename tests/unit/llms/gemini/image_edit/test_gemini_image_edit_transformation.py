@@ -234,12 +234,12 @@ class TestGeminiImageEditTransformation:
         assert usage["prompt_tokens"] == 35
         assert usage["completion_tokens"] == 1716
         assert usage["prompt_tokens_details"]["image_tokens"] == 5
-        assert usage["completion_tokens_details"]["image_tokens"] == 1716
+        assert usage["completion_tokens_details"] == {}
 
         logging_usage = StandardLoggingPayloadSetup.get_usage_as_dict(
             response_obj=image_response.model_dump()
         )
-        assert logging_usage["completion_tokens_details"]["image_tokens"] == 1716
+        assert all(value is None for value in logging_usage["completion_tokens_details"].values())
 
     @pytest.mark.parametrize(
         ("body", "error", "message"),

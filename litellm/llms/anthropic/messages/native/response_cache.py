@@ -115,7 +115,7 @@ class AnthropicMessagesStreamCacheWriter:
             return
         cached_payload: Final = {CACHED_STREAM_EVENTS_KEY: events}
         if is_response_without_output(cached_payload):
-            verbose_logger.debug("LiteLLM Cache: not caching a stream with no content blocks")
+            verbose_logger.debug("LiteLLM Cache: not caching a stream with no output")
             return
         dual_cache: Final = self.caching_handler.dual_cache
 

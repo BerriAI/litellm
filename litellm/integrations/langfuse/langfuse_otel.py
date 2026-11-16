@@ -7,10 +7,11 @@ from itertools import chain
 from typing import TYPE_CHECKING, Any, Final, Optional, Protocol, runtime_checkable
 
 from opentelemetry import trace
+from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.constants import REDACTED_BY_LITELLM
+from litellm.constants import FAILED_PROMPT_TOKEN_ESTIMATE_KEY, REDACTED_BY_LITELLM
 from litellm.integrations._types.open_inference import ErrorAttributes
 from litellm.integrations.arize import _utils
 from litellm.integrations.langfuse.langfuse_otel_attributes import (
@@ -18,22 +19,29 @@ from litellm.integrations.langfuse.langfuse_otel_attributes import (
     serialize_langfuse_datetime,
 )
 from litellm.integrations.opentelemetry import (
+    ESTIMATED_INPUT_TOKENS_ATTRIBUTE,
     HTTP_RESPONSE_STATUS_CODE_ATTRIBUTE,
     LITELLM_PROXY_REQUEST_SPAN_NAME,
+    USAGE_PROVIDER_STATUS_ATTRIBUTE,
     OpenTelemetry,
     OpenTelemetryConfig,
 )
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
+from litellm.llms.anthropic.common_utils import tool_calls_with_server_tool_calls
 from litellm.secret_managers.main import str_to_bool
 from litellm.types.integrations.langfuse_otel import (
     LangfuseSpanAttributes,
 )
 from litellm.types.utils import StandardCallbackDynamicParams
 
+_DECODED_JSON: Final = TypeAdapter(object)
+
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
+
+    from litellm.proxy._types import UserAPIKeyAuth
 
     Span = _Span
 else:
@@ -124,6 +132,26 @@ def _starts_its_own_trace(span: object, kwargs: Mapping[str, object]) -> bool:
         and _parent_of(proxy_span) is None
         and proxy_span.get_span_context().span_id == parent.span_id
     )
+
+
+def _a_destination_records_the_call(kwargs: Mapping[str, object]) -> bool:
+    """Whether a key's or team's ``langfuse_otel`` destination gets this call from the OTel v2 fan-out, which records
+    every call but one whose logging payload shows it never reached a provider."""
+    from litellm.integrations.otel.model.metadata import LLMCallEvent
+
+    if not _a_destination_carries_the_trace():
+        return False
+    call: Final = LLMCallEvent.from_dict(kwargs)
+    return call.payload is None or call.reached_a_provider
+
+
+def _a_destination_carries_the_trace() -> bool:
+    """Whether this request resolved a key's or team's ``langfuse_otel`` destination, whose fan-out sends it the whole
+    trace."""
+    from litellm.integrations.otel.model.config import ExporterOwner
+    from litellm.integrations.otel.plumbing.context import destination_backends
+
+    return ExporterOwner.LANGFUSE_OTEL in destination_backends()
 
 
 class LangfuseOtelLogger(OpenTelemetry):
@@ -352,9 +380,15 @@ class LangfuseOtelLogger(OpenTelemetry):
         limit: Final = span_attribute_limit(span)
         carried: Final = carried_keys(span)
         new_keys: Final = tuple(key for key, _value in fields if key not in carried)
-        room: Final = (
-            len(new_keys) if limit is None else max(limit - len(carried) - len(_ERROR_ATTRIBUTES - carried), 0)
+        pending_usage: Final[frozenset[str]] = (
+            frozenset((USAGE_PROVIDER_STATUS_ATTRIBUTE, ESTIMATED_INPUT_TOKENS_ATTRIBUTE))
+            if isinstance(kwargs.get(FAILED_PROMPT_TOKEN_ESTIMATE_KEY), int)
+            else frozenset((USAGE_PROVIDER_STATUS_ATTRIBUTE,))
+            if FAILED_PROMPT_TOKEN_ESTIMATE_KEY in kwargs
+            else frozenset()
         )
+        reserved: Final = _ERROR_ATTRIBUTES | pending_usage
+        room: Final = len(new_keys) if limit is None else max(limit - len(carried) - len(reserved - carried), 0)
         written: Final = carried | frozenset(new_keys[:room])
         for key, value in fields:
             if key in written:
@@ -541,6 +575,27 @@ class LangfuseOtelLogger(OpenTelemetry):
         """
         return None
 
+    def _emit_once(
+        self,
+        kwargs: dict[str, object],  # mutable-ok: the v1 dedupe marker is written into the request's kwargs
+        *scope: object,
+    ) -> bool:
+        """Whether to emit this span: once per request, and never for a call a Langfuse destination records."""
+        return not _a_destination_records_the_call(kwargs) and super()._emit_once(kwargs, *scope)  # pyright: ignore[reportUnknownMemberType]  # the v1 hook takes a bare dict
+
+    async def async_post_call_failure_hook(
+        self,
+        request_data: dict[str, object],  # mutable-ok: the v1 hook contract
+        original_exception: Exception,
+        user_api_key_dict: "UserAPIKeyAuth",
+        traceback_str: str | None = None,
+    ) -> None:
+        """Record the proxy failure of a request no Langfuse destination carries."""
+        if not _a_destination_carries_the_trace():
+            await super().async_post_call_failure_hook(  # pyright: ignore[reportUnknownMemberType]  # the v1 hook takes a bare dict
+                request_data, original_exception, user_api_key_dict, traceback_str
+            )
+
     async def async_service_success_hook(self, *args, **kwargs):
         """
         Langfuse should not receive service success logs.
@@ -562,8 +617,8 @@ def _extract_choices_output(response_obj: _Gettable) -> str | None:
     message: Final = _as_gettable(first_choice.get("message", {}))
     if message is None:
         return None
-    tool_calls: Final = message.get("tool_calls")
-    if isinstance(tool_calls, list) and tool_calls:
+    tool_calls: Final = tool_calls_with_server_tool_calls(message)
+    if tool_calls:
         transformed_tool_calls: Final = [
             entry for tool_call in tool_calls if (entry := _transformed_tool_call(response_obj, tool_call)) is not None
         ]
@@ -599,7 +654,7 @@ def _tool_call_arguments(arguments: object) -> object:
     if not isinstance(arguments, str):
         return arguments
     try:
-        return json.loads(arguments)
+        return _DECODED_JSON.validate_python(json.loads(arguments))
     except json.JSONDecodeError:
         return {}
 

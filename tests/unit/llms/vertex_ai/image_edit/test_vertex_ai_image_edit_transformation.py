@@ -1,8 +1,11 @@
 import base64
 import json
 import os
+from collections.abc import Mapping
 from datetime import datetime
-from io import BytesIO
+from io import BytesIO, StringIO
+from pathlib import Path
+from types import MappingProxyType
 from typing import Dict, Final
 from unittest.mock import MagicMock, patch
 
@@ -21,6 +24,46 @@ from litellm.llms.vertex_ai.image_edit.vertex_imagen_transformation import (
     VertexAIImagenImageEditConfig,
 )
 from litellm.types.router import GenericLiteLLMParams
+
+
+@pytest.mark.parametrize("traffic_type", ("ON_DEMAND_PRIORITY", "", None))
+def test_vertex_gemini_edit_preserves_usage_and_traffic_type(traffic_type: str | None) -> None:
+    response: Final = VertexAIGeminiImageEditConfig().transform_image_edit_response(
+        model="gemini-3.1-flash-image",
+        raw_response=httpx.Response(
+            200,
+            json={
+                "candidates": [],
+                "usageMetadata": {
+                    "promptTokenCount": 1131,
+                    "candidatesTokenCount": 0,
+                    "totalTokenCount": 1131,
+                    "promptTokensDetails": [
+                        {"modality": "TEXT", "tokenCount": 7},
+                        {"modality": "IMAGE", "tokenCount": 1124},
+                    ],
+                    **({"trafficType": traffic_type} if traffic_type is not None else {}),
+                },
+            },
+        ),
+        logging_obj=Logging(
+            model="gemini-3.1-flash-image",
+            messages=[],
+            stream=False,
+            call_type="image_edit",
+            start_time=datetime(2025, 1, 1),
+            litellm_call_id="edit",
+            function_id="edit",
+        ),
+    )
+    assert response.usage is not None
+    assert response.usage.input_tokens == 1131
+    assert response.usage.output_tokens == 0
+    assert response.usage.input_tokens_details.text_tokens == 7
+    assert response.usage.input_tokens_details.image_tokens == 1124
+    assert response.hidden_params.get("provider_specific_fields", {}) == (
+        {"traffic_type": traffic_type} if traffic_type else {}
+    )
 
 
 @pytest.mark.parametrize("size", ("1536x1024", "1024x1536", "3072x2048", "256x256", "512x512", "4096x4096"))
@@ -230,10 +273,10 @@ class TestVertexAIGeminiImageEditTransformation:
         )
 
     def test_transform_image_edit_request_without_image_raises(self) -> None:
-        """Test that missing image raises ValueError"""
+        """Test that missing image raises BadRequestError with 400 status code"""
         optional_params = {}
 
-        with pytest.raises(ValueError, match="requires at least one image"):
+        with pytest.raises(litellm.BadRequestError, match="requires at least one image") as exc_info:
             self.config.transform_image_edit_request(
                 model=self.model,
                 prompt=self.prompt,
@@ -242,6 +285,7 @@ class TestVertexAIGeminiImageEditTransformation:
                 litellm_params=MagicMock(),
                 headers={},
             )
+        assert exc_info.value.status_code == 400
 
     def test_validate_environment_with_litellm_params(self) -> None:
         """Test validate_environment uses credentials from litellm_params"""
@@ -512,6 +556,30 @@ class TestVertexAIImagenImageEditTransformation:
             == b"test_bytearray"
         )
 
+    @pytest.mark.parametrize(
+        ("image", "expected"),
+        [
+            ([None, b"first image"], b"first image"),
+            ({"data": base64.b64encode(b"from data").decode()}, b"from data"),
+            ({"bytes": None, "content": b"from content"}, b"from content"),
+            ({"path": BytesIO(b"from path")}, b"from path"),
+            (StringIO("from text reader"), b"from text reader"),
+        ],
+    )
+    def test_read_all_bytes_unwraps_lists_dicts_and_readers(self, image: object, expected: bytes) -> None:
+        assert self.config._read_all_bytes(image) == expected
+
+    @pytest.mark.parametrize(
+        ("image", "refusal"),
+        [
+            ({"path": "/etc/passwd"}, "plain string values are not accepted"),
+            ({"path": Path("/etc/passwd")}, "filesystem paths are not accepted"),
+        ],
+    )
+    def test_read_all_bytes_refuses_to_read_a_path_given_inside_a_dict(self, image: object, refusal: str) -> None:
+        with pytest.raises(ValueError, match=refusal):
+            self.config._read_all_bytes(image)
+
 
 _IMAGEN_EDIT_IMAGE_KEY = "bytesBase64Encoded"
 
@@ -692,3 +760,69 @@ def test_imagen_image_edit_maps_malformed_predictions_to_a_connection_error_with
         500,
         False,
     )
+
+
+_LABEL_FIELDS: Final = ("user_api_key_alias", "user_api_key_team_alias", "spend_logs_metadata")
+_IDENTITY: Final = MappingProxyType({"user_api_key_alias": "chargeback-key", "user_api_key_team_alias": "ai-platform"})
+_PROXY_METADATA: Final = MappingProxyType({**_IDENTITY, "spend_logs_metadata": {"cost-center": "cc-1"}})
+_FORGED: Final = MappingProxyType({"user_api_key_alias": "forged", "app": "bot"})
+_SENT_BODY: Final = TypeAdapter(Mapping[str, object])
+_SENT_LABELS: Final = TypeAdapter(Mapping[str, str])
+
+
+def _sent_gemini_edit(extra_headers: Mapping[str, str] | None = None) -> httpx.Request:
+    sent: Final[list[httpx.Request]] = []
+
+    def reply(request: httpx.Request) -> httpx.Response:
+        sent.append(request)
+        return httpx.Response(
+            200, json={"candidates": [{"content": {"parts": [{"inlineData": {"mimeType": "image/png", "data": "aW1n"}}]}}]}
+        )
+
+    litellm.image_edit(
+        model="vertex_ai/gemini-3.1-flash-image",
+        image=BytesIO(b"\x89PNG\r\n\x1a\nimage"),
+        prompt="mountains",
+        api_base="https://vertex.test/edit",
+        metadata=dict(_PROXY_METADATA),
+        labels=dict(_FORGED),
+        extra_headers=dict(extra_headers or {}),
+        client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(reply))),
+    )
+    return sent[0]
+
+
+def _sent_gemini_edit_body() -> Mapping[str, object]:
+    return _SENT_BODY.validate_json(_sent_gemini_edit().content)
+
+
+def test_vertex_gemini_edit_sends_identity_labels_only_while_the_setting_is_on(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "vertex_request_label_fields", None)
+    setting_off: Final = _sent_gemini_edit_body()
+    monkeypatch.setattr(litellm, "vertex_request_label_fields", _LABEL_FIELDS)
+    setting_on: Final = _sent_gemini_edit_body()
+
+    assert sorted(setting_off) == ["contents", "generationConfig"]
+    assert {key: value for key, value in setting_on.items() if key != "labels"} == setting_off
+    assert list(_SENT_LABELS.validate_python(setting_on["labels"]).items()) == [
+        *_IDENTITY.items(),
+        ("app", "bot"),
+        ("cost-center", "cc-1"),
+    ]
+
+
+_FORGED_LABELS_HEADER: Final = base64.b64encode(json.dumps({"user_api_key_team_alias": "forged"}).encode()).decode()
+
+
+def test_vertex_gemini_edit_drops_a_caller_labels_header_only_while_the_setting_is_on(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    caller_headers: Final = {"X-Vertex-AI-Labels": _FORGED_LABELS_HEADER, "x-trace-id": "t-1"}
+    monkeypatch.setattr(litellm, "vertex_request_label_fields", None)
+    setting_off: Final = _sent_gemini_edit(caller_headers).headers
+    monkeypatch.setattr(litellm, "vertex_request_label_fields", _LABEL_FIELDS)
+    setting_on: Final = _sent_gemini_edit(caller_headers).headers
+
+    assert setting_off["x-vertex-ai-labels"] == _FORGED_LABELS_HEADER
+    assert "x-vertex-ai-labels" not in setting_on
+    assert setting_on["x-trace-id"] == "t-1"

@@ -29,7 +29,7 @@ from litellm.llms.anthropic.messages.context_management.editors.compact import (
     _augment_system_with_summary,
     _extract_summary_text,
     _select_last_user_question,
-    _slice_around_compaction_block,
+    slice_around_compaction_block,
     _strip_compaction_blocks,
     apply_client_compaction_block_history,
     apply_compact_20260112,
@@ -153,7 +153,7 @@ def test_applied_edits_for_response_includes_compact_when_block_present():
 
 def test_slice_around_compaction_block_found():
     messages = _messages_with_compaction("my summary")
-    sliced, block = _slice_around_compaction_block(messages)
+    sliced, block = slice_around_compaction_block(messages)
     assert block is not None
     assert block["type"] == "compaction"
     assert block["content"] == "my summary"
@@ -164,7 +164,7 @@ def test_slice_around_compaction_block_found():
 
 def test_slice_around_compaction_block_not_found():
     messages = _simple_messages()
-    sliced, block = _slice_around_compaction_block(messages)
+    sliced, block = slice_around_compaction_block(messages)
     assert block is None
     assert sliced is messages  # same object, no copy
 

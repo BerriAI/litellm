@@ -1,6 +1,7 @@
 import asyncio
 import os
 import unittest
+from typing import Final
 from unittest.mock import patch
 
 import pytest
@@ -58,6 +59,49 @@ def test_credential_loaded_after_deployment_registration_still_resolves():
         passthrough_router.get_credentials(custom_llm_provider="openai", region_name=None)
         == "sk-loaded-after-boot"
     )
+
+
+def test_proxy_wide_credentials_pair_a_deployment_key_with_that_deployment_base() -> None:
+    llm_router: Final = litellm.Router(
+        model_list=[
+            _flagged_deployment("openai/gpt-4o", api_base="https://keyless.example/v1"),
+            _flagged_deployment("openai/gpt-4o-mini", api_key="sk-deployment", api_base="https://keyed.example/v1"),
+        ]
+    )
+    credentials: Final = _passthrough_router(llm_router).get_proxy_wide_credentials(custom_llm_provider="openai")
+
+    assert credentials is not None
+    assert (credentials.api_key, credentials.api_base) == ("sk-deployment", "https://keyed.example/v1")
+
+
+def test_proxy_wide_credentials_never_come_from_a_team_deployment(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-proxy-env")
+    team_deployment: Final = {
+        **_flagged_deployment("openai/gpt-4o", api_key="sk-team-a", api_base="https://team-a.example/v1"),
+        "model_info": {"team_id": "team-a"},
+    }
+    passthrough_router: Final = _passthrough_router(litellm.Router(model_list=[team_deployment]))
+
+    credentials: Final = passthrough_router.get_proxy_wide_credentials(custom_llm_provider="openai")
+
+    assert credentials is not None
+    assert (credentials.api_key, credentials.api_base) == ("sk-proxy-env", None)
+
+
+def test_credentials_for_a_provider_route_still_include_a_team_deployment_key() -> None:
+    team_deployment: Final = {
+        **_flagged_deployment("openai/gpt-4o", api_key="sk-team-a"),
+        "model_info": {"team_id": "team-a"},
+    }
+    passthrough_router: Final = _passthrough_router(litellm.Router(model_list=[team_deployment]))
+
+    assert passthrough_router.get_credentials(custom_llm_provider="openai", region_name=None) == "sk-team-a"
+
+
+def test_proxy_wide_credentials_are_missing_without_a_deployment_or_env_key() -> None:
+    passthrough_router: Final = _passthrough_router(litellm.Router(model_list=[]))
+
+    assert passthrough_router.get_proxy_wide_credentials(custom_llm_provider="anthropic") is None
 
 
 def test_credential_rotation_is_reflected_without_deployment_update():
@@ -485,7 +529,7 @@ def test_oidc_env_path_reference_is_not_resolved(tmp_path, monkeypatch):
     )
 
 
-def test_network_backed_oidc_reference_is_not_fetched_inline(monkeypatch):
+def test_oidc_google_reference_is_refused_without_a_metadata_fetch(monkeypatch):
     def fail(*args, **kwargs):
         raise AssertionError("network-backed oidc reference was resolved inside the request path")
 
@@ -494,10 +538,23 @@ def test_network_backed_oidc_reference_is_not_fetched_inline(monkeypatch):
         lambda name, *a, **k: "oidc/google/https://example.com" if name == "OPENAI_API_KEY" else fail(),
     )
 
-    assert (
+    with pytest.raises(HTTPException) as excinfo:
         _passthrough_router(None).get_credentials(custom_llm_provider="openai", region_name=None)
-        == "oidc/google/https://example.com"
+
+    assert excinfo.value.status_code == 401
+    assert "pass-through credential oidc/google" in str(excinfo.value.detail)
+    assert "example.com" not in str(excinfo.value.detail)
+
+
+def test_deployment_oidc_google_reference_is_not_sent_upstream(monkeypatch):
+    llm_router = litellm.Router(
+        model_list=[_flagged_deployment("openai/gpt-4o", api_key="oidc/google/https://vllm.example.test")]
     )
+
+    with pytest.raises(HTTPException) as excinfo:
+        _passthrough_router(llm_router).get_credentials(custom_llm_provider="openai", region_name=None)
+
+    assert excinfo.value.status_code == 401
 
 
 @pytest.fixture()

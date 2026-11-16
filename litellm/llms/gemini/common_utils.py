@@ -4,10 +4,11 @@ import json
 import math
 from collections.abc import Iterable, Mapping, Sequence
 from types import MappingProxyType
-from typing import Any, Final, cast
+from typing import Final, cast
 
 import httpx
 from pydantic import JsonValue, TypeAdapter
+from typing_extensions import TypedDict as ExtraItemsTypedDict
 
 import litellm
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
@@ -510,6 +511,13 @@ def get_api_key_from_env() -> str | None:
     return get_secret_str("GOOGLE_API_KEY") or get_secret_str("GEMINI_API_KEY")
 
 
+_COUNT_TOKENS_REQUEST_FIELDS: Final = frozenset({"model", "contents", "system_instruction", "tools"})
+
+
+class _ForwardedLitellmParams(ExtraItemsTypedDict, total=False, extra_items=object):
+    pass
+
+
 class GoogleAIStudioTokenCounter(BaseTokenCounter):
     """Token counter implementation for Google AI Studio provider."""
 
@@ -526,7 +534,7 @@ class GoogleAIStudioTokenCounter(BaseTokenCounter):
         model_to_use: str,
         messages: list[dict[str, object]] | None,
         contents: list[dict[str, object]] | None,
-        deployment: dict[str, Any] | None = None,
+        deployment: dict[str, object] | None = None,
         request_model: str = "",
         tools: list[dict[str, object]] | None = None,
         system: object | None = None,
@@ -534,29 +542,35 @@ class GoogleAIStudioTokenCounter(BaseTokenCounter):
         output_format: JsonValue = None,
         context_management: CountContextManagement | None = None,
         chat_params: Mapping[str, JsonValue] = MappingProxyType({}),
+        count_options: Mapping[str, JsonValue] = MappingProxyType({}),
     ) -> TokenCountResponse | None:
         import copy
 
+        from litellm.litellm_core_utils.core_helpers import decoded_json_object
+        from litellm.llms.anthropic.messages.context_management.inference_view import (
+            InferenceRequestViewError,
+            count_context_edits,
+            inference_request_view,
+        )
         from litellm.llms.gemini.count_tokens.handler import GoogleAIStudioTokenCounter
         from litellm.llms.vertex_ai.count_tokens.context import (
             VertexGeminiCountContextError,
-            count_context_edits,
             count_context_error_response,
             gemini_count_contents,
-            inference_request_view,
             malformed_tool_result_text_count_error,
             provider_error_response,
             unconvertible_messages_error,
             vertex_gemini_count_context,
         )
 
+        litellm_params: Final = decoded_json_object((deployment or {}).get("litellm_params", {}))
         request_view: Final = await inference_request_view(
             messages or [],
             system,
             messages_format,
-            count_context_edits(context_management, tools, (deployment or {}).get("litellm_params", {}), model_to_use),
+            count_context_edits(context_management, tools, litellm_params, model_to_use),
         )
-        if isinstance(request_view, VertexGeminiCountContextError):
+        if isinstance(request_view, InferenceRequestViewError):
             return count_context_error_response(request_view, request_model, model_to_use)
         count_context: Final = vertex_gemini_count_context(system=request_view.system, tools=tools, model=model_to_use)
         if isinstance(count_context, VertexGeminiCountContextError):
@@ -567,8 +581,7 @@ class GoogleAIStudioTokenCounter(BaseTokenCounter):
         if blocks_error is not None:
             return count_context_error_response(blocks_error, request_model, model_to_use)
 
-        deployment = deployment or {}
-        count_tokens_params_request: Final = copy.deepcopy(deployment.get("litellm_params", {}))
+        count_tokens_params_request: Final = copy.deepcopy(litellm_params)
         resolved_contents: Final = (
             contents
             if contents is not None
@@ -578,16 +591,15 @@ class GoogleAIStudioTokenCounter(BaseTokenCounter):
         )
         if isinstance(resolved_contents, VertexGeminiCountContextError):
             return count_context_error_response(resolved_contents, request_model, model_to_use)
-        count_tokens_params: Final = {
-            "model": model_to_use,
-            "contents": resolved_contents,
-            "system_instruction": count_context.system_instruction,
-            "tools": count_context.tools,
-        }
-        count_tokens_params_request.update(count_tokens_params)
         try:
             result: Final = await GoogleAIStudioTokenCounter().acount_tokens(
-                **count_tokens_params_request,
+                **_ForwardedLitellmParams(
+                    **{k: v for k, v in count_tokens_params_request.items() if k not in _COUNT_TOKENS_REQUEST_FIELDS}
+                ),
+                model=model_to_use,
+                contents=resolved_contents,
+                system_instruction=count_context.system_instruction,
+                tools=count_context.tools,
             )
         except litellm.APIError as error:
             return provider_error_response(error, request_model, model_to_use)
