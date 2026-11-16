@@ -105,6 +105,7 @@ class LiteLLMCompletionTransformationHandler:
         completion_args.update(litellm_completion_request)
         completion_args["_skip_responses_api_bridge"] = True
 
+        _log_full_tool_names(_REQUEST_KWARGS_ADAPTER.validate_python(kwargs), echoed_request)
         litellm_completion_response: Final[ModelResponse | litellm.CustomStreamWrapper] = litellm.completion(
             **completion_args,
         )
