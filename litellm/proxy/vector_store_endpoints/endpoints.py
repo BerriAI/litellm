@@ -31,11 +31,13 @@ from litellm.proxy.vector_store_endpoints.utils import (
     assert_proxy_admin_for_vector_store_index_management,
     assert_user_can_access_vector_store,
     get_litellm_managed_vector_store,
+    resolve_vector_store_fallback_plan,
     with_managed_search_file_ids,
 )
 from litellm.repositories.table_repositories import ManagedVectorStoreIndexRepository
 from litellm.types.utils import LlmProviders
 from litellm.types.vector_stores import IndexCreateRequest, IndexListResponse
+from litellm.vector_stores.fallbacks import vector_store_fallback_context
 from litellm.vector_stores.search_query import store_search_params, with_caller_query_params
 from litellm.vector_stores.utils import VectorStoreWriteBody, callers_metadata_snapshot
 from litellm.vector_stores.vector_store_registry import VectorStoreIndexRegistry
@@ -101,6 +103,17 @@ def reject_caller_opensearch_store_params(
                 "It comes from the vector store's server-side registration."
             },
         )
+
+
+def reject_caller_fallback_selection(payload: Mapping[str, object], *, enabled: bool) -> None:
+    from litellm.litellm_core_utils.clientside_credential_handler import UPSTREAM_BOUND_PARAMS
+
+    always: Final = frozenset({"fallbacks", "_vector_store_fallback_plan"})
+    owned: Final = UPSTREAM_BOUND_PARAMS | frozenset({"model", "custom_llm_provider", "client", "extra_query"})
+    blocked: Final = always | owned if enabled else always
+    found: Final = next((key for key in payload if key in blocked), None)
+    if found is not None:
+        raise HTTPException(status_code=400, detail=f"'{found}' is owned by the vector store registration")
 
 
 ########################################################
@@ -190,6 +203,13 @@ async def vector_store_search(
     reject_caller_embedding_selection_params(payload=data, source="the search request body")
     data["vector_store_id"] = vector_store_id
     caller_body: Final = JSON_OBJECT_ADAPTER.validate_python(data)
+    registered_store: Final = await get_litellm_managed_vector_store(vector_store_id)
+    fallback_plan: Final = (
+        await resolve_vector_store_fallback_plan(registered_store, user_api_key_dict)
+        if registered_store is not None
+        else None
+    )
+    reject_caller_fallback_selection(caller_body, enabled=fallback_plan is not None)
 
     # Check for legacy vector store registry (non-managed vector stores)
     data = dict(  # rebind-ok: pre-existing rebinding of the request body
@@ -214,24 +234,25 @@ async def vector_store_search(
 
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
-        search_response: Final = await processor.base_process_llm_request(
-            request=request,
-            fastapi_response=fastapi_response,
-            user_api_key_dict=user_api_key_dict,
-            route_type="avector_store_search",
-            proxy_logging_obj=proxy_logging_obj,
-            llm_router=llm_router,
-            general_settings=general_settings,
-            proxy_config=proxy_config,
-            select_data_generator=select_data_generator,
-            model=None,
-            user_model=user_model,
-            user_temperature=user_temperature,
-            user_request_timeout=user_request_timeout,
-            user_max_tokens=user_max_tokens,
-            user_api_base=user_api_base,
-            version=version,
-        )
+        with vector_store_fallback_context(fallback_plan):
+            search_response: Final = await processor.base_process_llm_request(
+                request=request,
+                fastapi_response=fastapi_response,
+                user_api_key_dict=user_api_key_dict,
+                route_type="avector_store_search",
+                proxy_logging_obj=proxy_logging_obj,
+                llm_router=llm_router,
+                general_settings=general_settings,
+                proxy_config=proxy_config,
+                select_data_generator=select_data_generator,
+                model=None,
+                user_model=user_model,
+                user_temperature=user_temperature,
+                user_request_timeout=user_request_timeout,
+                user_max_tokens=user_max_tokens,
+                user_api_base=user_api_base,
+                version=version,
+            )
         search_page: Final = as_str_mapping(search_response)
         if search_page is None:
             return search_response

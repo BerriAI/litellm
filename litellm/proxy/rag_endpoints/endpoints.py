@@ -783,6 +783,8 @@ async def parse_rag_ingest_request(
     # api_base is also blocked: a user-controlled base URL causes the server
     # to send its configured provider credentials to an attacker endpoint.
     _BLOCKED_VECTOR_STORE_CREDENTIAL_PARAMS: Final = {
+        "fallbacks",
+        "_vector_store_fallback_plan",
         "vertex_credentials",
         "vertex_ai_credentials",
         "aws_access_key_id",

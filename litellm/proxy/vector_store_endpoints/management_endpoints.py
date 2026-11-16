@@ -36,6 +36,7 @@ from litellm.proxy.common_utils.rbac_utils import check_feature_access_for_user
 from litellm.proxy.vector_store_endpoints.utils import (
     can_user_access_vector_store,
     filter_listable_vector_stores,
+    validate_vector_store_fallback_registration,
 )
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import ManagedVectorStoresRepository
@@ -229,6 +230,16 @@ async def create_vector_store_in_db(
             detail=f"Vector store with ID {vector_store_id} already exists",
         )
 
+    if litellm_params and "fallbacks" in litellm_params:
+        await _validate_fallback_snapshot(
+            prisma_client,
+            LiteLLM_ManagedVectorStore(
+                vector_store_id=vector_store_id,
+                custom_llm_provider=custom_llm_provider,
+                litellm_params=litellm_params,
+            ),
+        )
+
     # Prepare data for database
     data_to_create: Final[dict[str, object]] = {
         "vector_store_id": vector_store_id,
@@ -314,6 +325,8 @@ async def new_vector_store(
                 detail="vector_store_id and custom_llm_provider are required",
             )
         _raise_if_config_owned(vector_store_id)
+
+        await validate_vector_store_fallback_registration(vector_store, user_api_key_dict)
 
         # Extract and validate metadata
         metadata: Final = vector_store.get("vector_store_metadata")
@@ -524,6 +537,8 @@ async def delete_vector_store(
                 detail="Access denied: You do not have permission to delete this vector store",
             )
 
+        await _validate_fallback_snapshot(prisma_client, None, removed_id=data.vector_store_id)
+
         # Delete from database if exists
         if db_vector_store_exists:
             await _vector_store_table(prisma_client).delete(where={"vector_store_id": data.vector_store_id})
@@ -646,11 +661,19 @@ async def update_vector_store(
         # Per-store access control: anyone authenticated who passes the
         # premium-feature gate could otherwise update *any* vector store —
         # including stores belonging to other teams.
-        await _fetch_and_authorize_vector_store(
+        existing_store: Final = await _fetch_and_authorize_vector_store(
             vector_store_id=vector_store_id,
             user_api_key_dict=user_api_key_dict,
             prisma_client=prisma_client,
         )
+
+        proposed_store: Final = LiteLLM_ManagedVectorStore(
+            **_VectorStoreRowFields(**{**existing_store, **update_data, "vector_store_id": vector_store_id})
+        )
+        if "litellm_params" in update_data:
+            await validate_vector_store_fallback_registration(proposed_store, user_api_key_dict)
+        if "litellm_params" in update_data or "custom_llm_provider" in update_data:
+            await _validate_fallback_snapshot(prisma_client, proposed_store)
 
         # Handle metadata serialization
         submitted_metadata: Final[object] = update_data.get("vector_store_metadata")
@@ -710,3 +733,30 @@ async def update_vector_store(
     except Exception as e:
         verbose_proxy_logger.exception("Error updating vector store: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+async def _validate_fallback_snapshot(
+    prisma_client: "PrismaClient",
+    proposed: LiteLLM_ManagedVectorStore | None,
+    *,
+    removed_id: str | None = None,
+) -> None:
+    from litellm.vector_stores.vector_store_registry import validate_vector_store_fallbacks
+
+    persisted: Final = await VectorStoreRegistry.get_vector_stores_from_db(prisma_client)
+    memory: Final = tuple(litellm.vector_store_registry.vector_stores) if litellm.vector_store_registry else ()
+    config_ids: Final = frozenset(store.get("vector_store_id") for store in memory if store.get("is_config"))
+    persisted_ids: Final = frozenset(store.get("vector_store_id") for store in persisted)
+    combined: Final = (
+        *(store for store in memory if store.get("is_config") or store.get("vector_store_id") not in persisted_ids),
+        *(store for store in persisted if store.get("vector_store_id") not in config_ids),
+    )
+    replaced_id: Final = proposed.get("vector_store_id") if proposed is not None else removed_id
+    snapshot: Final = (
+        *(store for store in combined if store.get("vector_store_id") != replaced_id),
+        *((proposed,) if proposed is not None else ()),
+    )
+    try:
+        validate_vector_store_fallbacks(snapshot)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
