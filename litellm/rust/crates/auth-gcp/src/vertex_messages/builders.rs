@@ -80,9 +80,11 @@ pub(crate) fn service_account(
     Ok(Arc::new(ServiceAccountTokenSource(Arc::new(provider))))
 }
 
-/// google-auth's `oauth2.credentials.Credentials.from_authorized_user_info`.
+/// google-auth's `oauth2.credentials.Credentials.from_authorized_user_info`, which always
+/// refreshes at Google's token endpoint whatever `token_uri` the credentials name.
 pub(crate) fn authorized_user(
     info: &Map<String, Value>,
+    token_endpoint: &str,
 ) -> Result<TokenSource, GoogleLoginFailure> {
     if let Some(missing) = missing_fields(info, &AUTHORIZED_USER_FIELDS) {
         return Err(GoogleLoginFailure::new(
@@ -93,6 +95,7 @@ pub(crate) fn authorized_user(
         ));
     }
     user_account::Builder::new(without_quota_project(info))
+        .with_token_uri(token_endpoint)
         .with_scopes([CLOUD_PLATFORM_SCOPE])
         .build_access_token_credentials()
         .map(sdk_source)
@@ -208,7 +211,10 @@ mod tests {
         #[case] configured: Value,
         #[case] missing: &str,
     ) {
-        let failure = failure(authorized_user(&info(configured)));
+        let failure = failure(authorized_user(
+            &info(configured),
+            "https://oauth2.googleapis.com/token",
+        ));
         assert_eq!(failure.exception, PythonException::Value);
         assert_eq!(
             failure.message,

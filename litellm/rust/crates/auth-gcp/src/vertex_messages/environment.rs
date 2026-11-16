@@ -11,7 +11,10 @@ use super::{
     builders::{TokenSource, token_failure},
     failure::{GoogleLoginFailure, PythonException},
 };
-use crate::{constants::CLOUD_PLATFORM_SCOPE, identity::SdkTokenSource};
+use crate::{
+    constants::{CLOUD_PLATFORM_SCOPE, GOOGLE_OAUTH_TOKEN_ENDPOINT},
+    identity::SdkTokenSource,
+};
 
 pub type EnvironmentFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
@@ -29,6 +32,8 @@ const GCE_PRODUCT_NAME_FILE: &str = "/sys/class/dmi/id/product_name";
 pub trait GoogleEnvironment: Send + Sync {
     /// `os.environ`, which google-auth reads directly rather than through LiteLLM's secrets.
     fn os_env(&self, name: &str) -> Option<String>;
+    /// The endpoint google-auth refreshes an authorized user at, never the credentials' own.
+    fn google_token_endpoint(&self) -> String;
     /// `gcloud config get project`, or `None` when the command fails or prints nothing.
     fn gcloud_project(&self) -> EnvironmentFuture<'_, Option<String>>;
     /// `_metadata.is_on_gce`.
@@ -118,6 +123,10 @@ impl SystemGoogleEnvironment {
 impl GoogleEnvironment for SystemGoogleEnvironment {
     fn os_env(&self, name: &str) -> Option<String> {
         std::env::var(name).ok()
+    }
+
+    fn google_token_endpoint(&self) -> String {
+        GOOGLE_OAUTH_TOKEN_ENDPOINT.into()
     }
 
     fn gcloud_project(&self) -> EnvironmentFuture<'_, Option<String>> {
