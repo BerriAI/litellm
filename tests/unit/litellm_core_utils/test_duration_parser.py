@@ -528,8 +528,22 @@ class TestGetBudgetWindowStart(unittest.TestCase):
         cannot be parsed."""
         created_at: Final = datetime(2024, 10, 1, 0, 30, tzinfo=timezone.utc)
         durations: Final = (
-            "1d", "24h", "daily", "7d", "weekly", "2w", "10d", "30d", "monthly",
-            "1mo", "2mo", "3mo", "4h", "5h", "30m", "45s",
+            "1d",
+            "24h",
+            "daily",
+            "7d",
+            "weekly",
+            "2w",
+            "10d",
+            "30d",
+            "monthly",
+            "1mo",
+            "2mo",
+            "3mo",
+            "4h",
+            "5h",
+            "30m",
+            "45s",
         )
         for duration in durations:
             with self.subTest(duration=duration):

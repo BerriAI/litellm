@@ -9,6 +9,7 @@ import type { components } from "@/lib/http/schema";
 import { resolveCustomerHierarchy, type CustomerHierarchyScope } from "./customerHierarchyApi";
 import { customerChildSpendCall, customerUsageEntity } from "./customerUsageApi";
 import { calendarDate, customerPresetRange } from "./customerUsageRange";
+import { customerBudgetSortParser } from "./customerBudgetUsage";
 import type {
   CreatedCustomerHierarchyEntity,
   CustomerHierarchyEntity,
@@ -24,6 +25,7 @@ const MANAGE_PARSERS = {
   tab: parseAsStringLiteral(["teams", "members", "budget_groups", "settings"] as const),
   hierarchyPage: parseAsInteger.withDefault(1),
   memberSearch: parseAsString.withDefault(""),
+  budgetSort: customerBudgetSortParser,
 };
 
 export interface CustomerHierarchyContext {
@@ -57,14 +59,14 @@ export async function customerHierarchyContext(
 async function customerHierarchyChildren(
   context: CustomerHierarchyContext,
   kind: ChildList["kind"],
-  { page, search }: { page: number; search: string },
+  { page, search, sort }: { page: number; search: string; sort: "budget_asc" | "budget_desc" | null },
   signal?: AbortSignal,
 ): Promise<ChildList> {
   if (kind === "members") {
     const parent = context.team
       ? { parent_team_id: context.team.customer_team_id }
       : { parent_org_id: context.organization.customer_org_id };
-    const query = { ...parent, page, page_size: 20, ...(search ? { search } : {}) };
+    const query = { ...parent, page, page_size: 20, ...(search ? { search } : {}), ...(sort ? { sort } : {}) };
     const response = await fetchClient.GET("/management/v1/customer_members", {
       params: { query },
       signal,
@@ -79,7 +81,9 @@ async function customerHierarchyChildren(
     return { kind: "members", ...response.data };
   }
   const response = await fetchClient.GET("/management/v1/customer_teams", {
-    params: { query: { parent_org_id: context.organization.customer_org_id, page, page_size: 20 } },
+    params: {
+      query: { parent_org_id: context.organization.customer_org_id, page, page_size: 20, ...(sort ? { sort } : {}) },
+    },
     signal,
   });
   if (
@@ -194,10 +198,17 @@ export default function useCustomerHierarchy() {
       selected?.team?.customer_team_id,
       page,
       memberSearch,
+      params.budgetSort,
     ],
     queryFn:
       enabled && childContext && showChildren
-        ? ({ signal }) => customerHierarchyChildren(childContext, childTab, { page, search: memberSearch }, signal)
+        ? ({ signal }) =>
+            customerHierarchyChildren(
+              childContext,
+              childTab,
+              { page, search: memberSearch, sort: params.budgetSort },
+              signal,
+            )
         : skipToken,
   });
   const childUsage = useChildSpend(children.data, scope, accessToken, enabled && showChildren);
@@ -264,6 +275,7 @@ export default function useCustomerHierarchy() {
     childTab,
     page,
     memberSearch,
+    budgetSort: params.budgetSort,
     canManage,
     isLoading,
     openOrganization,
@@ -273,6 +285,11 @@ export default function useCustomerHierarchy() {
     refresh,
     organizationSaved,
     setPage: (hierarchyPage: number) => void setParams({ hierarchyPage }),
+    toggleBudgetSort: () =>
+      void setParams(
+        { budgetSort: params.budgetSort === "budget_asc" ? "budget_desc" : "budget_asc", hierarchyPage: null },
+        { history: "push" },
+      ),
     setMemberSearch: (search: string) =>
       void setParams({ memberSearch: search || null, hierarchyPage: null }, { history: "push" }),
   };
