@@ -6205,6 +6205,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/get/reference_exchange_rates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Reference Exchange Rates
+         * @description ECB euro foreign exchange reference rates as USD per unit of each currency, with USD at 1. They estimate a USD
+         *     total in another currency for display and are not settlement quotes. Refreshes from the ECB feed when due.
+         */
+        get: operations["reference_exchange_rates_get_reference_exchange_rates_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/get/sso_settings": {
         parameters: {
             query?: never;
@@ -45177,6 +45198,23 @@ export interface components {
             /** Summary */
             summary?: ("auto" | "concise" | "detailed") | null;
         };
+        /** ReferenceExchangeRates */
+        ReferenceExchangeRates: {
+            /**
+             * Rate Date
+             * Format: date
+             */
+            rate_date: string;
+            /**
+             * Source
+             * @constant
+             */
+            source: "ecb";
+            /** Usd Per Unit */
+            usd_per_unit: {
+                [key: string]: number;
+            };
+        };
         /** RegenerateKeyRequest */
         RegenerateKeyRequest: {
             /** Access Group Ids */
@@ -65046,6 +65084,33 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["MCPToolSearchSettingsResponse"];
                 };
+            };
+        };
+    };
+    reference_exchange_rates_get_reference_exchange_rates_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReferenceExchangeRates"];
+                };
+            };
+            /** @description No ECB reference rate published in the last 7 days is available */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
