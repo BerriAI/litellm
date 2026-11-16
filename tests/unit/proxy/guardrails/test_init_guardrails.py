@@ -565,6 +565,67 @@ async def test_presidio_initialized_output_dispatch(
     assert len(selected) == expected_calls
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("filter_scope", [None, "output", "both"])
+@pytest.mark.parametrize("mode", ["logging_only", {"tags": {}, "default": "logging_only"}])
+async def test_presidio_logging_only_guardrail_never_masks_the_live_response(
+    mode: str | dict[str, str],
+    filter_scope: Literal["input", "output", "both"] | None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression (#52046): a logging_only Presidio guardrail masked the response
+    the client receives, because its output masking callback was wired to
+    post_call instead of running as a logging hook."""
+    from typing import Final
+
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import UnifiedLLMGuardrails
+    from litellm.proxy.guardrails.guardrail_initializers import initialize_presidio
+    from litellm.types.guardrails import GuardrailEventHooks, LitellmParams
+    from litellm.types.utils import Choices, Message, ModelResponse
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
+    raw_answer: Final = "Call me at 415-555-2671"
+    params: Final = LitellmParams(
+        guardrail="presidio",
+        mode=mode,
+        default_on=True,
+        presidio_filter_scope=filter_scope,
+        presidio_analyzer_api_base="https://example.invalid/analyze",
+        presidio_anonymizer_api_base="https://example.invalid/anonymize",
+        mock_redacted_text={"text": "masked", "items": []},
+    )
+    callbacks: Final = initialize_presidio(params, {"guardrail_name": "logging_only_pii"})
+    data: Final = {"metadata": {}}
+
+    mask_callbacks: Final = [callback for callback in callbacks if callback.apply_to_output]
+    assert len(mask_callbacks) == 1
+    mask_callback: Final = mask_callbacks[0]
+    assert mask_callback.should_run_guardrail(data, GuardrailEventHooks.post_call) is False
+    assert mask_callback.should_run_guardrail(data, GuardrailEventHooks.logging_only) is True
+
+    live_response: Final = ModelResponse(
+        choices=[Choices(message=Message(role="assistant", content=raw_answer), index=0, finish_reason="stop")]
+    )
+    for callback in callbacks:
+        if callback.should_run_guardrail(data, GuardrailEventHooks.post_call):
+            data["guardrail_to_apply"] = callback
+            await UnifiedLLMGuardrails().async_post_call_success_hook(
+                data, UserAPIKeyAuth(request_route="/v1/chat/completions"), live_response
+            )
+    assert live_response.choices[0].message.content == raw_answer
+
+    logged_response: Final = ModelResponse(
+        choices=[Choices(message=Message(role="assistant", content=raw_answer), index=0, finish_reason="stop")]
+    )
+    _, logged_result = await mask_callback.async_logging_hook(
+        kwargs={"messages": [{"role": "user", "content": raw_answer}], "metadata": {}},
+        result=logged_response,
+        call_type="acompletion",
+    )
+    assert logged_result.choices[0].message.content == "masked"
+
+
 def test_init_guardrails_v2_publishes_initialized_guardrail_to_the_proxy_router(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
