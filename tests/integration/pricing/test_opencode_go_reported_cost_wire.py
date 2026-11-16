@@ -233,8 +233,8 @@ def test_chat_reasoning_preserves_reported_list_cost_guard(gateway: Gateway) -> 
             model="opencode_go/glm-5.3", api_base=wire.url, api_key="synthetic-go-key", drop_params=True
         )
         response: Final = gateway.request(
-            "POST", "/v1/chat/completions",
-            {**_body("/v1/chat/completions", deployment, False), "reasoning_effort": "high"},
+            "POST", _CHAT_ROUTE,
+            {**_body(_CHAT_ROUTE, deployment, False), "reasoning_effort": "high"},
         )
         assert response.status_code == 200, response.text
         assert "ok" in response.text, response.text
@@ -327,7 +327,9 @@ def test_chat_request_reasoning_forwarded_regression(gateway: Gateway, effort: s
             model="opencode_go/glm-5.3", api_base=wire.url, api_key="synthetic-go-key", drop_params=True
         )
         response: Final = gateway.request(
-            "POST", _CHAT_ROUTE, {"model": model, **_reasoning_input(_CHAT_ROUTE), "reasoning_effort": effort, "stream": stream}
+            "POST",
+            _CHAT_ROUTE,
+            {"model": model, **_reasoning_input(_CHAT_ROUTE), "reasoning_effort": effort, "stream": stream},
         )
         assert response.status_code == 200, response.text
         _assert_chat_response(response.text, stream)
@@ -343,7 +345,9 @@ def test_chat_strict_reasoning_forwarded_regression(gateway: Gateway) -> None:
         model: Final = scenario.model(
             model="opencode_go/glm-5.3", api_base=wire.url, api_key="synthetic-go-key", drop_params=False
         )
-        response: Final = gateway.request("POST", _CHAT_ROUTE, {"model": model, **_reasoning_input(_CHAT_ROUTE), "reasoning_effort": "high"})
+        response: Final = gateway.request(
+            "POST", _CHAT_ROUTE, {"model": model, **_reasoning_input(_CHAT_ROUTE), "reasoning_effort": "high"}
+        )
         assert response.status_code == 200, response.text
         _assert_chat_response(response.text, False)
 
@@ -372,7 +376,9 @@ def test_deployment_reasoning_and_session_forwarded_regression(gateway: Gateway,
             drop_params=True,
             reasoning_effort="none",
         )
-        response: Final = gateway.request("POST", _CHAT_ROUTE, {"model": model, **_reasoning_input(_CHAT_ROUTE), **session})
+        response: Final = gateway.request(
+            "POST", _CHAT_ROUTE, {"model": model, **_reasoning_input(_CHAT_ROUTE), **session}
+        )
         assert response.status_code == 200, response.text
         _assert_chat_response(response.text, False)
 
@@ -382,7 +388,8 @@ def test_translated_reasoning_forwarded_regression(gateway: Gateway, path: str) 
     def respond(request: Request) -> Reply:
         assert request.target.endswith("/chat/completions"), request.target
         effort: Final = _JSON_OBJECT.validate_json(request.body).get("reasoning_effort")
-        assert effort == "high" if path == "/v1/responses" else isinstance(effort, str) and bool(effort), effort
+        expected_effort: Final = "high" if path == "/v1/responses" else "medium"
+        assert effort == expected_effort, effort
         return _respond(request)
 
     reasoning: Final[dict[str, JsonValue]] = (
@@ -424,7 +431,9 @@ def test_unknown_model_reasoning_guard(gateway: Gateway, drop_params: bool) -> N
         model: Final = scenario.model(
             model="opencode_go/not-in-catalog-x", api_base=wire.url, api_key="synthetic-go-key", drop_params=drop_params
         )
-        response: Final = gateway.request("POST", _CHAT_ROUTE, {"model": model, **_reasoning_input(_CHAT_ROUTE), "reasoning_effort": "high"})
+        response: Final = gateway.request(
+            "POST", _CHAT_ROUTE, {"model": model, **_reasoning_input(_CHAT_ROUTE), "reasoning_effort": "high"}
+        )
         assert response.status_code == (200 if drop_params else 400), response.text
         if drop_params:
             _assert_chat_response(response.text, False)

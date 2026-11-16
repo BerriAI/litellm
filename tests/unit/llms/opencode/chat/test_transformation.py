@@ -296,12 +296,15 @@ async def test_unknown_chat_reasoning_effort_guard(drop_params: bool) -> None:
 def test_chat_supported_reasoning_params_regression(reasoning_catalog: None, go_catalog: None) -> None:
     base: Final = frozenset(litellm.get_supported_openai_params(model="opencode_go/fixture-chat") or ())
     supported: Final = frozenset(litellm.get_supported_openai_params(model="opencode_go/fixture-reasoning") or ())
+    assert "reasoning_effort" not in base
     assert supported == base | {"reasoning_effort"}
 
 
 def test_unknown_chat_supported_params_guard(go_catalog: None) -> None:
     base: Final = frozenset(litellm.get_supported_openai_params(model="opencode_go/fixture-chat") or ())
-    assert frozenset(litellm.get_supported_openai_params(model="opencode_go/not-in-catalog-x") or ()) == base
+    supported: Final = frozenset(litellm.get_supported_openai_params(model="opencode_go/not-in-catalog-x") or ())
+    assert "reasoning_effort" not in supported
+    assert supported == base
 
 
 @pytest.mark.asyncio
