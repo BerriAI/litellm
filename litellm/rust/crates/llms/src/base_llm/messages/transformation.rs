@@ -49,13 +49,26 @@ pub trait BaseMessagesConfig: Sync {
         Ok(request)
     }
 
-    fn tool_custom_field(&self, _model: &str) -> ToolCustomField {
-        ToolCustomField::Keep
+    fn native_output_fallback(
+        &self,
+        _request: &MessagesRequest,
+        _context: &MessagesTransformContext,
+    ) -> Option<MessagesTransformContext> {
+        None
     }
 
-    /// Whether a param `drop_params` drops because the model lacks it logs Python's warning.
-    fn logs_dropped_params(&self) -> bool {
+    fn retries_without_native_output(
+        &self,
+        _status: u16,
+        _error_text: &str,
+        _request_body: &Value,
+        _model: &str,
+    ) -> bool {
         false
+    }
+
+    fn tool_custom_field(&self, _model: &str) -> ToolCustomField {
+        ToolCustomField::Keep
     }
 
     fn transform_anthropic_messages_response(
@@ -149,14 +162,15 @@ pub trait BaseMessagesConfig: Sync {
     }
 
     /// The request steps Python runs once the final `anthropic-beta` header is known, which
-    /// read that header or must not change which betas the request asks for.
+    /// read that header, must not change which betas the request asks for, or rewrite the
+    /// headers that go out with the body.
     fn finalize_request(
         &self,
         request: MessagesRequest,
-        _headers: &Headers,
+        headers: Headers,
         _context: &MessagesTransformContext,
-    ) -> MessagesRequest {
-        request
+    ) -> Result<(MessagesRequest, Headers), Error> {
+        Ok((request, headers))
     }
 
     /// The JSON that goes on the wire, for a host whose body differs from the typed request:
@@ -249,7 +263,6 @@ mod tests {
                 MessagesShapeOptions {
                     reasoning_auto_summary,
                     presanitized,
-                    ..MessagesShapeOptions::default()
                 }
             ),
             Ok(request)
