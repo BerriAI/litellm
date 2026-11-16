@@ -10,6 +10,7 @@ use litellm_llms_types::{
     recognized::Recognized,
 };
 use litellm_router_types::LitellmParams;
+use litellm_secret_value::SecretValue;
 use serde_json::{Map, Value, json};
 
 use super::{
@@ -28,9 +29,9 @@ use crate::{
     Error,
     anthropic::common_utils::{
         ANTHROPIC_API_BASE_ENV, ANTHROPIC_API_KEY_ENV, ANTHROPIC_AUTH_TOKEN_ENV,
-        ANTHROPIC_BASE_URL_ENV, OauthHandling,
+        ANTHROPIC_BASE_URL_ENV, OauthHandling, OauthToken,
         anthropic_request_errors_on_thinking_binding_mismatch, complete_anthropic_url,
-        existing_betas, get_auth_header, has_advisor_tool, has_anthropic_credential,
+        existing_betas, get_api_key, get_auth_header, has_advisor_tool, has_anthropic_credential,
         is_anthropic_invalid_thinking_block_error, is_anthropic_thinking_binding_mismatch_error,
         is_claude_strict_tools_rejection, is_tool_search_used, map_messages, merge_beta_headers,
         minted_oauth_environment, optionally_handle_anthropic_oauth,
@@ -291,6 +292,14 @@ fn anthropic_environment(
             headers,
             auth: AuthScheme::Forwarded,
         });
+    }
+    if let Some(token) =
+        get_api_key(api_key, env_lookup).filter(|key| OauthToken::parse(key).is_some())
+    {
+        return FederatedEnvironment::Validated(minted_oauth_environment(
+            headers,
+            SecretValue::new(token),
+        ));
     }
     match get_auth_header(api_key, env_lookup) {
         Some(auth) => FederatedEnvironment::Validated(ValidatedEnvironment { headers, auth }),
@@ -1507,12 +1516,26 @@ mod tests {
         &[],
         Some(("Authorization", "env-token")),
     )]
-    #[case::oauth_env_key_as_a_bearer(
-        &[],
+    #[case::oauth_env_key_as_a_bearer_with_the_oauth_beta(
+        &[("anthropic-beta", "web-search-2025-03-05")],
         None,
         &[("ANTHROPIC_API_KEY", "sk-ant-oat01-env")],
-        &[],
+        &[("anthropic-beta", "oauth-2025-04-20,web-search-2025-03-05")],
         Some(("Authorization", "sk-ant-oat01-env")),
+    )]
+    #[case::padded_oauth_api_key_as_a_bearer_with_the_oauth_beta(
+        &[],
+        Some(" sk-ant-oat01-param "),
+        &[],
+        &[("anthropic-beta", OAUTH_BETA)],
+        Some(("Authorization", "sk-ant-oat01-param")),
+    )]
+    #[case::bearer_prefixed_oauth_env_key_without_the_oauth_beta(
+        &[],
+        None,
+        &[("ANTHROPIC_API_KEY", OAUTH_BEARER)],
+        &[],
+        Some(("Authorization", OAUTH_TOKEN)),
     )]
     fn validate_environment_shapes_the_headers_and_names_the_credential(
         #[case] forwarded: &[(&str, &str)],
