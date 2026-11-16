@@ -1,4 +1,5 @@
-from collections.abc import Iterator, Sequence
+from collections.abc import AsyncIterator, Iterator, Sequence
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Final
 
@@ -8,7 +9,9 @@ import pytest
 from litellm.proxy.control_plane.dataplanes.client import (
     DataplaneClient,
     DataplaneReply,
+    DataplaneResponseTooLarge,
     DataplaneUnreachable,
+    Method,
     RetryPolicy,
 )
 from litellm.proxy.control_plane.dataplanes.credentials import (
@@ -24,8 +27,10 @@ from tests.unit.proxy.control_plane.dataplanes.conftest import caller
 class FakeTransport:  # mutable-ok: records calls for assertions
     outcomes: Iterator[httpx.Response | Exception]
     calls: list[tuple[str, str, dict[str, str] | None]] = field(default_factory=list)
+    close_error: httpx.HTTPError | None = None
 
-    async def request(
+    @asynccontextmanager
+    async def stream(
         self,
         method: str,
         url: str,
@@ -34,12 +39,23 @@ class FakeTransport:  # mutable-ok: records calls for assertions
         json: dict[str, object] | None = None,
         headers: dict[str, str] | None = None,
         timeout: float,
-    ) -> httpx.Response:
+    ) -> AsyncIterator[httpx.Response]:
         self.calls.append((method, url, headers))
         outcome: Final = next(self.outcomes)
         if isinstance(outcome, Exception):
             raise outcome
-        return outcome
+        yield outcome
+        if self.close_error is not None:
+            raise self.close_error
+
+
+class _ReadErrorStream(httpx.AsyncByteStream):
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        yield b'{"partial":'
+        raise httpx.ReadError("failed while reading")
+
+    async def aclose(self) -> None:
+        return None
 
 
 @dataclass
@@ -54,15 +70,25 @@ def _response(status: int, body: object = None) -> httpx.Response:
     return httpx.Response(status, json=body, request=httpx.Request("GET", "https://eu.test/x"))
 
 
+def _read_error_response() -> httpx.Response:
+    return httpx.Response(
+        200,
+        headers={"Content-Type": "application/json"},
+        stream=_ReadErrorStream(),
+        request=httpx.Request("GET", "https://eu.test/user/info"),
+    )
+
+
 def _dataplane(token: str | None = "sk-svc") -> Dataplane:
     chain: Final = CredentialChain(() if token is None else (ServiceTokenImpersonation(token),))
     return Dataplane(id="eu", name="eu", url="https://eu.test", credential=chain, credential_kinds=chain.kinds)
 
 
-def _client(transport: FakeTransport, clock: Clock) -> DataplaneClient:
+def _client(transport: FakeTransport, clock: Clock, max_response_bytes: int = 64 * 1024 * 1024) -> DataplaneClient:
     return DataplaneClient(
         transport,
         timeout_seconds=1.0,
+        max_response_bytes=max_response_bytes,
         retry=RetryPolicy(attempts=3, base_delay_seconds=0.1),
         sleep=clock.sleep,
         jitter=lambda: 1.0,
@@ -85,28 +111,124 @@ async def test_get_injects_the_credential_and_parses_json() -> None:
 
 
 @pytest.mark.asyncio
-async def test_get_retries_transient_failures_with_capped_exponential_backoff() -> None:
+async def test_streamed_non_json_body_without_charset_is_forwarded_as_text() -> None:
+    response: Final = httpx.Response(
+        200,
+        headers={"Content-Type": "text/plain"},
+        stream=httpx.ByteStream(b"upstream text"),
+        request=httpx.Request("GET", "https://eu.test/user/info"),
+    )
+    transport: Final = FakeTransport(iter([response]))
+
+    reply: Final = await _client(transport, Clock()).get(_dataplane(), "/user/info", caller("session"))
+
+    assert reply == DataplaneReply(
+        200,
+        "upstream text",
+        "service_token",
+        raw_content=b"upstream text",
+        content_type="text/plain",
+    )
+
+
+@pytest.mark.asyncio
+async def test_unknown_charset_preserves_raw_response_without_failing_the_request() -> None:
+    content: Final = b"upstream bytes \xff"
+    content_type: Final = "text/plain; charset=not-a-codec"
+    response: Final = httpx.Response(
+        200, content=content, headers={"Content-Type": content_type}, request=httpx.Request("GET", "https://eu.test/x")
+    )
+    reply: Final = await _client(FakeTransport(iter([response])), Clock()).get(
+        _dataplane(), "/user/info", caller("session")
+    )
+    assert reply == DataplaneReply(200, content, "service_token", raw_content=content, content_type=content_type)
+
+
+@pytest.mark.asyncio
+async def test_response_body_over_limit_is_rejected_while_streaming() -> None:
+    transport: Final = FakeTransport(iter([_response(200, {"value": "large"})]))
+    reply: Final = await _client(transport, Clock(), max_response_bytes=4).get(
+        _dataplane(), "/user/info", caller("session")
+    )
+    assert reply == DataplaneResponseTooLarge(4)
+
+
+@pytest.mark.asyncio
+async def test_response_too_large_survives_stream_close_error_without_retry() -> None:
+    transport: Final = FakeTransport(
+        iter(
+            [
+                _response(200, {"value": "large"}),
+                _response(200, {"value": "large"}),
+                _response(200, {"value": "large"}),
+            ]
+        ),
+        close_error=httpx.ReadError("close failed"),
+    )
+    clock: Final = Clock()
+
+    reply: Final = await _client(transport, clock, max_response_bytes=4).get(
+        _dataplane(), "/user/info", caller("session")
+    )
+
+    assert reply == DataplaneResponseTooLarge(4)
+    assert len(transport.calls) == 1
+    assert clock.slept == []
+
+
+@pytest.mark.asyncio
+async def test_reply_survives_stream_close_error() -> None:
+    transport: Final = FakeTransport(
+        iter([_response(200, {"ok": True}), _response(200, {"ok": True}), _response(200, {"ok": True})]),
+        close_error=httpx.ReadError("close failed"),
+    )
+
+    reply: Final = await _client(transport, Clock()).get(_dataplane(), "/user/info", caller("session"))
+
+    assert reply == DataplaneReply(200, {"ok": True}, "service_token")
+    assert len(transport.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_get_retries_mid_body_read_error() -> None:
+    transport: Final = FakeTransport(iter([_read_error_response(), _read_error_response(), _read_error_response()]))
+    clock: Final = Clock()
+
+    reply: Final = await _client(transport, clock).get(_dataplane(), "/user/info", caller("session"))
+
+    assert reply == DataplaneUnreachable("ReadError", attempts=3)
+    assert len(transport.calls) == 3
+    assert clock.slept == [pytest.approx(0.1), pytest.approx(0.2)]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["GET", "HEAD"])
+async def test_reads_retry_transient_failures_with_capped_exponential_backoff(method: Method) -> None:
     transport, clock = FakeTransport(iter([httpx.ConnectError("down"), _response(503), _response(200, "up")])), Clock()
-    reply: Final = await _client(transport, clock).get(_dataplane(), "/health/liveliness", caller("session"))
+    reply: Final = await _client(transport, clock).request(
+        method, _dataplane(), "/health/liveliness", caller("session")
+    )
     assert reply == DataplaneReply(200, "up", "service_token")
     assert clock.slept == [pytest.approx(0.1), pytest.approx(0.2)]
 
 
 @pytest.mark.asyncio
-async def test_get_gives_up_after_the_configured_attempts() -> None:
+@pytest.mark.parametrize("method", ["GET", "HEAD"])
+async def test_reads_give_up_after_the_configured_attempts(method: Method) -> None:
     transport, clock = FakeTransport(iter([httpx.ConnectTimeout("t")] * 3)), Clock()
-    result: Final = await _client(transport, clock).get(_dataplane(), "/x", caller("session"))
+    result: Final = await _client(transport, clock).request(method, _dataplane(), "/x", caller("session"))
     assert result == DataplaneUnreachable("ConnectTimeout", attempts=3)
     assert len(transport.calls) == 3
 
 
 @pytest.mark.asyncio
-async def test_post_is_never_retried_and_client_errors_are_replies_not_failures() -> None:
+@pytest.mark.parametrize("method", ["POST", "PUT", "PATCH", "DELETE"])
+async def test_writes_never_retry_and_client_errors_are_replies_not_failures(method: Method) -> None:
     transport, clock = FakeTransport(iter([_response(502), _response(200)])), Clock()
-    result: Final = await _client(transport, clock).post(
-        _dataplane(), "/key/generate", caller("session"), json={"a": 1}
+    result: Final = await _client(transport, clock).request(
+        method, _dataplane(), "/key/generate", caller("session"), json={"a": 1}
     )
-    assert result == DataplaneReply(502, "", "service_token")
+    assert result == DataplaneReply(502, "", "service_token", raw_content=b"")
     assert len(transport.calls) == 1 and clock.slept == []
     forbidden: Final = FakeTransport(iter([_response(403, {"error": "no"})]))
     denied: Final = await _client(forbidden, clock).get(_dataplane(), "/x", caller("session"))
