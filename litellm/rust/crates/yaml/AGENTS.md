@@ -27,5 +27,5 @@
 
 ## Limits
 
-- Deliberately stricter than PyYAML: nesting past `litellm_python_compat::MAX_DEPTH` and aliases that expand past a million nodes fail, because PyYAML shares an aliased node and a `Value` copies it. Integers beyond 64 bits fail, since a `Value` number holds 64 bits
+- Deliberately stricter than PyYAML: nesting past `litellm_python_compat::MAX_DEPTH`, counting the levels an alias brings in, and aliases that expand past a million nodes fail, because PyYAML shares an aliased node and a `Value` copies it. `tests/limits.rs` pins both. Integers beyond 64 bits fail, since a `Value` number holds 64 bits
 - Known gaps: PyYAML collapses keys Python considers equal (`1` and `True`), while a `Value` mapping keeps both. A repeated anchor name is an error in PyYAML and takes the latest definition here, since saphyr reports anchors only by id

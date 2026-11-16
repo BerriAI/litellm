@@ -43,6 +43,8 @@ pub(crate) struct Node {
     pub(crate) kind: Kind,
     pub(crate) at: Location,
     pub(crate) size: usize,
+    /// How many levels the deepest descendant sits below this node.
+    pub(crate) height: usize,
 }
 
 const MAX_DEPTH: usize = litellm_python_compat::MAX_DEPTH;
@@ -96,7 +98,7 @@ impl<'input> Composer<'input> {
             });
         }
         let (anchor, node) = match event {
-            Event::Alias(anchor) => return self.alias(anchor, at),
+            Event::Alias(anchor) => return self.alias(anchor, at, depth),
             Event::Scalar(text, style, anchor, tag) => {
                 let tag = scalar_tag(&text, style, tag.as_deref().map(full_tag));
                 (anchor, leaf(tag, Kind::Scalar(text.into_owned()), at))
@@ -124,12 +126,18 @@ impl<'input> Composer<'input> {
         Ok(node)
     }
 
-    fn alias(&mut self, anchor: usize, at: Location) -> Result<Node, Error> {
+    fn alias(&mut self, anchor: usize, at: Location, depth: usize) -> Result<Node, Error> {
         let node = self
             .anchors
             .get(&anchor)
             .cloned()
             .ok_or(Error::RecursiveAlias { at })?;
+        if depth + node.height > MAX_DEPTH {
+            return Err(Error::TooDeep {
+                limit: MAX_DEPTH,
+                at,
+            });
+        }
         self.count(node.size)?;
         Ok(node)
     }
@@ -151,11 +159,13 @@ impl<'input> Composer<'input> {
             }
         }
         let size = 1 + items.iter().map(|item| item.size).sum::<usize>();
+        let height = parent_height(items.iter());
         Ok(Node {
             tag,
             kind: Kind::Sequence(items),
             at,
             size,
+            height,
         })
     }
 
@@ -175,11 +185,13 @@ impl<'input> Composer<'input> {
             .iter()
             .map(|(key, value)| key.size + value.size)
             .sum::<usize>();
+        let height = parent_height(pairs.iter().flat_map(|(key, value)| [key, value]));
         Ok(Node {
             tag,
             kind: Kind::Mapping(pairs),
             at,
             size,
+            height,
         })
     }
 }
@@ -190,7 +202,12 @@ fn leaf(tag: Tag, kind: Kind, at: Location) -> Node {
         kind,
         at,
         size: 1,
+        height: 0,
     }
+}
+
+fn parent_height<'node>(children: impl Iterator<Item = &'node Node>) -> usize {
+    children.map(|child| child.height + 1).max().unwrap_or(0)
 }
 
 fn full_tag(tag: &saphyr_parser::Tag) -> String {
@@ -223,38 +240,5 @@ fn location(span: Span) -> Location {
     Location {
         line: span.start.line(),
         column: span.start.col() + 1,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use rstest::rstest;
-
-    use crate::{Error, from_str};
-
-    /// Each level aliases the previous one ten times, so seven levels expand to ten million nodes.
-    #[rstest]
-    fn aliases_that_multiply_past_the_node_limit_fail() {
-        let levels: String = (1..7)
-            .map(|level| {
-                let previous = format!("*l{}", level - 1);
-                format!("l{level}: &l{level} [{}]\n", vec![previous; 10].join(", "))
-            })
-            .collect();
-        let text = format!("l0: &l0 [x, x, x, x, x, x, x, x, x, x]\n{levels}");
-        assert!(matches!(from_str(&text), Err(Error::TooLarge { .. })));
-    }
-
-    #[rstest]
-    #[case::at_the_limit(129, true)]
-    #[case::past_the_limit(130, false)]
-    fn nesting_is_capped(#[case] depth: usize, #[case] loads: bool) {
-        let text = format!("{}{}", "[".repeat(depth), "]".repeat(depth));
-        assert_eq!(
-            from_str(&text).is_ok(),
-            loads,
-            "{:?}",
-            from_str(&text).err()
-        );
     }
 }
