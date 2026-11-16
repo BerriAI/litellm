@@ -17,12 +17,14 @@ use moka::future::Cache;
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 
+#[cfg(any(test, feature = "test-support"))]
+pub use environment::OnGce;
 pub use environment::{EnvironmentFuture, GoogleEnvironment, SystemGoogleEnvironment};
-pub use failure::{GoogleLoginFailure, PythonException};
+pub use failure::{CredentialsFile, GOOGLE_SDK_MISSING, GoogleLoginFailure, PythonException};
 
 use builders::{TokenSource, token_failure};
 use failure::python_type;
-use source::{CredentialsJson, FILE_FAILURE_MESSAGE, load_vertex_credentials_source};
+use source::{CredentialsJson, load_vertex_credentials_source};
 
 const MAX_CACHED_LOGINS: u64 = 64;
 
@@ -206,9 +208,12 @@ impl VertexMessagesAuth {
             }
             _ => builders::service_account(info),
         };
-        built.map_err(|failure| match credentials.from_file {
-            true => value_failure(FILE_FAILURE_MESSAGE),
-            false => failure,
+        built.map_err(|failure| match &credentials.path {
+            Some(path) => GoogleLoginFailure::credentials_file(CredentialsFile::Invalid {
+                path: path.clone(),
+                problem: format!("holds credentials that cannot be used: {}", failure.message),
+            }),
+            None => failure,
         })
     }
 
@@ -525,8 +530,11 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(
-            failure(error),
-            GoogleLoginFailure::new(PythonException::Value, FILE_FAILURE_MESSAGE)
+            failure(error).file,
+            Some(CredentialsFile::Invalid {
+                path: file.path().to_str().unwrap().into(),
+                problem: "holds credentials that cannot be used: Service account info was not in the expected format, missing fields client_email, token_uri.".into(),
+            })
         );
     }
 

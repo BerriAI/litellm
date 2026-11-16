@@ -7,6 +7,7 @@ repository.workspace = true
 
 [features]
 google-sdk = []
+test-support = []
 
 [dependencies]
 litellm-secret-value.workspace = true

@@ -873,7 +873,7 @@ async fn unsupported_params_are_dropped_under_drop_params_and_rejected_without_i
                 api_key: Some("sk".into()),
                 api_base: Some(upstream.uri()),
                 shaping: MessagesShaping {
-                    vertex_supported_regions: Vec::new(),
+                    vertex: Default::default(),
                     capabilities,
                     settings: MessagesSettings {
                         drop_params,
@@ -968,7 +968,7 @@ async fn additional_drop_params_clear_a_param_the_model_does_not_support(call: M
         api_key: Some("sk".into()),
         api_base: Some(upstream.uri()),
         shaping: MessagesShaping {
-            vertex_supported_regions: Vec::new(),
+            vertex: Default::default(),
             capabilities: sampling_removed(),
             settings: MessagesSettings {
                 additional_drop_params: vec!["top_k".into()],
@@ -1002,7 +1002,7 @@ async fn reasoning_auto_summary_marks_active_thinking_on_the_wire(
             api_key: Some("sk".into()),
             api_base: Some(upstream.uri()),
             shaping: MessagesShaping {
-                vertex_supported_regions: Vec::new(),
+                vertex: Default::default(),
                 settings: MessagesSettings {
                     reasoning_auto_summary: true,
                     ..MessagesSettings::default()
@@ -1194,32 +1194,16 @@ async fn deepseek_sends_neither_billing_blocks_nor_the_custom_tool_discriminator
     );
 }
 
-struct GoogleToken;
-
-impl litellm_auth_gcp::GcpTokenSource for GoogleToken {
-    fn project_id(&self) -> litellm_auth_gcp::GcpAuthFuture<'_, String> {
-        Box::pin(async { Ok("token-project".to_string()) })
-    }
-
-    fn token(&self) -> litellm_auth_gcp::GcpAuthFuture<'_, SecretValue> {
-        Box::pin(async { Ok(SecretValue::new("google-token")) })
-    }
-}
-
-impl litellm_auth_gcp::GcpProviderLoader for GoogleToken {
-    fn load(
-        &self,
-        _source: litellm_auth_gcp::CredentialSource,
-    ) -> litellm_auth_gcp::GcpAuthFuture<'_, Arc<dyn litellm_auth_gcp::GcpTokenSource>> {
-        Box::pin(async { Ok(Arc::new(GoogleToken) as Arc<dyn litellm_auth_gcp::GcpTokenSource>) })
-    }
-}
-
 async fn run_with_google_token(call: MessagesCall) -> Result<MessagesOutput, Error> {
     let route = messages_route_with_auth(
         Arc::new(RecordingSecrets::empty()),
         litellm_auth::AuthServices {
-            gcp: litellm_auth_gcp::VertexAuth::new(Arc::new(GoogleToken)),
+            vertex_messages: litellm_auth_gcp::vertex_messages::VertexMessagesAuth::new(Arc::new(
+                litellm_auth_gcp::vertex_messages::OnGce {
+                    project: "token-project",
+                    token: "google-token",
+                },
+            )),
             ..litellm_auth::AuthServices::default()
         },
     );
