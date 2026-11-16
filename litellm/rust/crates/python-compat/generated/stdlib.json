@@ -932,6 +932,654 @@
       "str": "-inf"
     }
   ],
+  "urlparse": [
+    {
+      "url": "",
+      "split": [
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "parsed": [
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "unparsed": ""
+    },
+    {
+      "url": "https://h",
+      "split": [
+        "https",
+        "h",
+        "",
+        "",
+        ""
+      ],
+      "parsed": [
+        "https",
+        "h",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "unparsed": "https://h"
+    },
+    {
+      "url": "https://h/",
+      "split": [
+        "https",
+        "h",
+        "/",
+        "",
+        ""
+      ],
+      "parsed": [
+        "https",
+        "h",
+        "/",
+        "",
+        "",
+        ""
+      ],
+      "unparsed": "https://h/"
+    },
+    {
+      "url": "https://h/v1",
+      "split": [
+        "https",
+        "h",
+        "/v1",
+        "",
+        ""
+      ],
+      "parsed": [
+        "https",
+        "h",
+        "/v1",
+        "",
+        "",
+        ""
+      ],
+      "unparsed": "https://h/v1"
+    },
+    {
+      "url": "https://h/v1/",
+      "split": [
+        "https",
+        "h",
+        "/v1/",
+        "",
+        ""
+      ],
+      "parsed": [
+        "https",
+        "h",
+        "/v1/",
+        "",
+        "",
+        ""
+      ],
+      "unparsed": "https://h/v1/"
+    },
+    {
+      "url": "HTTPS://H/v1",
+      "split": [
+        "https",
+        "H",
+        "/v1",
+        "",
+        ""
+      ],
+      "parsed": [
+        "https",
+        "H",
+        "/v1",
+        "",
+        "",
+        ""
+      ],
+      "unparsed": "https://H/v1"
+    },
+    {
+      "url": "https://h:8080/v1?k=1",
+      "split": [
+        "https",
+        "h:8080",
+        "/v1",
+        "k=1",
+        ""
+      ],
+      "parsed": [
+        "https",
+        "h:8080",
+        "/v1",
+        "",
+        "k=1",
+        ""
+      ],
+      "unparsed": "https://h:8080/v1?k=1"
+    },
+    {
+      "url": "https://h?k=1",
+      "split": [
+        "https",
+        "h",
+        "",
+        "k=1",
+        ""
+      ],
+      "parsed": [
+        "https",
+        "h",
+        "",
+        "",
+        "k=1",
+        ""
+      ],
+      "unparsed": "https://h?k=1"
+    },
+    {
+      "url": "https://h/?k=1",
+      "split": [
+        "https",
+        "h",
+        "/",
+        "k=1",
+        ""
+      ],
+      "parsed": [
+        "https",
+        "h",
+        "/",
+        "",
+        "k=1",
+        ""
+      ],
+      "unparsed": "https://h/?k=1"
+    },
+    {
+      "url": "https://h/a?b#c",
+      "split": [
+        "https",
+        "h",
+        "/a",
+        "b",
+        "c"
+      ],
+      "parsed": [
+        "https",
+        "h",
+        "/a",
+        "",
+        "b",
+        "c"
+      ],
+      "unparsed": "https://h/a?b#c"
+    },
+    {
+      "url": "https://h/v1#frag",
+      "split": [
+        "https",
+        "h",
+        "/v1",
+        "",
+        "frag"
+      ],
+      "parsed": [
+        "https",
+        "h",
+        "/v1",
+        "",
+        "",
+        "frag"
+      ],
+      "unparsed": "https://h/v1#frag"
+    },
+    {
+      "url": "https://h/p;x",
+      "split": [
+        "https",
+        "h",
+        "/p;x",
+        "",
+        ""
+      ],
+      "parsed": [
+        "https",
+        "h",
+        "/p",
+        "x",
+        "",
+        ""
+      ],
+      "unparsed": "https://h/p;x"
+    },
+    {
+      "url": "https://h/a;b/c;d",
+      "split": [
+        "https",
+        "h",
+        "/a;b/c;d",
+        "",
+        ""
+      ],
+      "parsed": [
+        "https",
+        "h",
+        "/a;b/c",
+        "d",
+        "",
+        ""
+      ],
+      "unparsed": "https://h/a;b/c;d"
+    },
+    {
+      "url": "https://h/v1;x?q=1",
+      "split": [
+        "https",
+        "h",
+        "/v1;x",
+        "q=1",
+        ""
+      ],
+      "parsed": [
+        "https",
+        "h",
+        "/v1",
+        "x",
+        "q=1",
+        ""
+      ],
+      "unparsed": "https://h/v1;x?q=1"
+    },
+    {
+      "url": "https://h;x",
+      "split": [
+        "https",
+        "h;x",
+        "",
+        "",
+        ""
+      ],
+      "parsed": [
+        "https",
+        "h;x",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "unparsed": "https://h;x"
+    },
+    {
+      "url": "https://h//v1",
+      "split": [
+        "https",
+        "h",
+        "//v1",
+        "",
+        ""
+      ],
+      "parsed": [
+        "https",
+        "h",
+        "//v1",
+        "",
+        "",
+        ""
+      ],
+      "unparsed": "https://h//v1"
+    },
+    {
+      "url": "  https://h/v1",
+      "split": [
+        "https",
+        "h",
+        "/v1",
+        "",
+        ""
+      ],
+      "parsed": [
+        "https",
+        "h",
+        "/v1",
+        "",
+        "",
+        ""
+      ],
+      "unparsed": "https://h/v1"
+    },
+    {
+      "url": "\u0000\u001fhttps://h/v1 ",
+      "split": [
+        "https",
+        "h",
+        "/v1 ",
+        "",
+        ""
+      ],
+      "parsed": [
+        "https",
+        "h",
+        "/v1 ",
+        "",
+        "",
+        ""
+      ],
+      "unparsed": "https://h/v1 "
+    },
+    {
+      "url": "https://h/v\t1\r\n",
+      "split": [
+        "https",
+        "h",
+        "/v1",
+        "",
+        ""
+      ],
+      "parsed": [
+        "https",
+        "h",
+        "/v1",
+        "",
+        "",
+        ""
+      ],
+      "unparsed": "https://h/v1"
+    },
+    {
+      "url": "//h/v1",
+      "split": [
+        "",
+        "h",
+        "/v1",
+        "",
+        ""
+      ],
+      "parsed": [
+        "",
+        "h",
+        "/v1",
+        "",
+        "",
+        ""
+      ],
+      "unparsed": "//h/v1"
+    },
+    {
+      "url": "/v1/projects/p",
+      "split": [
+        "",
+        "",
+        "/v1/projects/p",
+        "",
+        ""
+      ],
+      "parsed": [
+        "",
+        "",
+        "/v1/projects/p",
+        "",
+        "",
+        ""
+      ],
+      "unparsed": "/v1/projects/p"
+    },
+    {
+      "url": "h/v1",
+      "split": [
+        "",
+        "",
+        "h/v1",
+        "",
+        ""
+      ],
+      "parsed": [
+        "",
+        "",
+        "h/v1",
+        "",
+        "",
+        ""
+      ],
+      "unparsed": "h/v1"
+    },
+    {
+      "url": "1http://h/v1",
+      "split": [
+        "",
+        "",
+        "1http://h/v1",
+        "",
+        ""
+      ],
+      "parsed": [
+        "",
+        "",
+        "1http://h/v1",
+        "",
+        "",
+        ""
+      ],
+      "unparsed": "1http://h/v1"
+    },
+    {
+      "url": "ht tp://h/v1",
+      "split": [
+        "",
+        "",
+        "ht tp://h/v1",
+        "",
+        ""
+      ],
+      "parsed": [
+        "",
+        "",
+        "ht tp://h/v1",
+        "",
+        "",
+        ""
+      ],
+      "unparsed": "ht tp://h/v1"
+    },
+    {
+      "url": "mailto:a@b;c",
+      "split": [
+        "mailto",
+        "",
+        "a@b;c",
+        "",
+        ""
+      ],
+      "parsed": [
+        "mailto",
+        "",
+        "a@b;c",
+        "",
+        "",
+        ""
+      ],
+      "unparsed": "mailto:a@b;c"
+    },
+    {
+      "url": "custom+scheme.v1-x://h/v1;p",
+      "split": [
+        "custom+scheme.v1-x",
+        "h",
+        "/v1;p",
+        "",
+        ""
+      ],
+      "parsed": [
+        "custom+scheme.v1-x",
+        "h",
+        "/v1;p",
+        "",
+        "",
+        ""
+      ],
+      "unparsed": "custom+scheme.v1-x://h/v1;p"
+    },
+    {
+      "url": "https:",
+      "split": [
+        "https",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "parsed": [
+        "https",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "unparsed": "https://"
+    },
+    {
+      "url": "https:/v1",
+      "split": [
+        "https",
+        "",
+        "/v1",
+        "",
+        ""
+      ],
+      "parsed": [
+        "https",
+        "",
+        "/v1",
+        "",
+        "",
+        ""
+      ],
+      "unparsed": "https:///v1"
+    },
+    {
+      "url": "https:v1",
+      "split": [
+        "https",
+        "",
+        "v1",
+        "",
+        ""
+      ],
+      "parsed": [
+        "https",
+        "",
+        "v1",
+        "",
+        "",
+        ""
+      ],
+      "unparsed": "https:v1"
+    },
+    {
+      "url": "https://h/v1?",
+      "split": [
+        "https",
+        "h",
+        "/v1",
+        "",
+        ""
+      ],
+      "parsed": [
+        "https",
+        "h",
+        "/v1",
+        "",
+        "",
+        ""
+      ],
+      "unparsed": "https://h/v1"
+    },
+    {
+      "url": "https://h/v1#",
+      "split": [
+        "https",
+        "h",
+        "/v1",
+        "",
+        ""
+      ],
+      "parsed": [
+        "https",
+        "h",
+        "/v1",
+        "",
+        "",
+        ""
+      ],
+      "unparsed": "https://h/v1"
+    },
+    {
+      "url": "https://h/v1?#",
+      "split": [
+        "https",
+        "h",
+        "/v1",
+        "",
+        ""
+      ],
+      "parsed": [
+        "https",
+        "h",
+        "/v1",
+        "",
+        "",
+        ""
+      ],
+      "unparsed": "https://h/v1"
+    },
+    {
+      "url": "https://user:pw@h/v1",
+      "split": [
+        "https",
+        "user:pw@h",
+        "/v1",
+        "",
+        ""
+      ],
+      "parsed": [
+        "https",
+        "user:pw@h",
+        "/v1",
+        "",
+        "",
+        ""
+      ],
+      "unparsed": "https://user:pw@h/v1"
+    },
+    {
+      "url": "https://h/\u00e9;\u00fc",
+      "split": [
+        "https",
+        "h",
+        "/\u00e9;\u00fc",
+        "",
+        ""
+      ],
+      "parsed": [
+        "https",
+        "h",
+        "/\u00e9",
+        "\u00fc",
+        "",
+        ""
+      ],
+      "unparsed": "https://h/\u00e9;\u00fc"
+    }
+  ],
   "isspace": [
     9,
     10,
