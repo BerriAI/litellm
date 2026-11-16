@@ -13,6 +13,7 @@ from datetime import datetime
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, TypeAlias
 
+import httpx
 from fastapi import HTTPException, status
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
@@ -549,9 +550,11 @@ async def _register_organization(
         )
         return _untracked(f"organization alias not found: {customer_org_alias}", CUSTOMER_ORG_ALIAS_HEADER)
     _check_key_scope(customer_org_alias, key_metadata)
+    from prisma.errors import PrismaError
+
     try:
         registered: Final = await register(customer_org_alias, prisma_client)
-    except Exception as error:
+    except (PrismaError, httpx.HTTPError) as error:
         verbose_proxy_logger.warning(
             "Could not register customer organization %s: %s", customer_org_alias, type(error).__name__
         )

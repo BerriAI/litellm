@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
+import httpx
 import pytest
 from pydantic import TypeAdapter
 
@@ -709,6 +710,19 @@ async def test_an_unknown_alias_becomes_a_new_organization_charged_for_the_reque
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("error_type", ("prisma", "http"))
+async def test_an_alias_whose_registration_raises_a_database_error_runs_untracked(error_type: str) -> None:
+    from prisma.errors import PrismaError
+
+    error: Final = PrismaError("insert refused") if error_type == "prisma" else httpx.ConnectError("unreachable")
+    raising: Final = _OrganizationRegistrar(_OrganizationTable(()), error)
+    untracked: Final = await _resolve(
+        _Prisma(_MemberTable({})), CustomerRequestIdentity(customer_org_alias="ghost"), register_organization=raising
+    )
+    assert (untracked, raising.calls) == (None, ("ghost",))
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("error", (ErrorCode.ALREADY_EXISTS, ErrorCode.FREE_TIER_LIMIT))
 async def test_an_alias_that_cannot_be_registered_runs_untracked_and_a_shared_alias_is_rejected_as_ambiguous(
     error: ErrorCode,
@@ -718,16 +732,6 @@ async def test_an_alias_that_cannot_be_registered_runs_untracked_and_a_shared_al
         _Prisma(_MemberTable({})), CustomerRequestIdentity(customer_org_alias="ghost"), register_organization=failing
     )
     assert (untracked, failing.calls) == (None, ("ghost",))
-
-    raising: Final = _OrganizationRegistrar(_OrganizationTable(()), RuntimeError("insert refused"))
-    assert (
-        await _resolve(
-            _Prisma(_MemberTable({})),
-            CustomerRequestIdentity(customer_org_alias="ghost"),
-            register_organization=raising,
-        ),
-        raising.calls,
-    ) == (None, ("ghost",))
 
     oversized: Final = _OrganizationRegistrar(_OrganizationTable(()))
     assert (
