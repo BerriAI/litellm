@@ -846,6 +846,7 @@ def test_sign_aws_request_assumes_role_with_external_id(monkeypatch):
     import boto3
     from botocore.exceptions import ClientError
 
+    from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
     from litellm.llms.bedrock.common_utils import CommonBatchFilesUtils
 
     monkeypatch.delenv("AWS_EXTERNAL_ID", raising=False)
@@ -879,7 +880,7 @@ def test_sign_aws_request_assumes_role_with_external_id(monkeypatch):
     }
 
     with patch.object(boto3, "client", return_value=FakeSTSClient()):
-        signed_headers, signed_data = CommonBatchFilesUtils().sign_aws_request(
+        signed_headers, signed_data = CommonBatchFilesUtils(BaseAWSLLM()).sign_aws_request(
             service_name="bedrock",
             data={"jobName": "litellm-batch-job"},
             endpoint_url="https://bedrock.us-east-1.amazonaws.com/model-invocation-job",
@@ -899,6 +900,7 @@ def test_sign_aws_request_assumes_role_with_session_tags(monkeypatch):
     import boto3
     from botocore.exceptions import ClientError
 
+    from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
     from litellm.llms.bedrock.common_utils import CommonBatchFilesUtils
 
     monkeypatch.delenv("AWS_WEB_IDENTITY_TOKEN_FILE", raising=False)
@@ -934,7 +936,7 @@ def test_sign_aws_request_assumes_role_with_session_tags(monkeypatch):
     }
 
     with patch.object(boto3, "client", return_value=FakeSTSClient()):
-        signed_headers, _signed_data = CommonBatchFilesUtils().sign_aws_request(
+        signed_headers, _signed_data = CommonBatchFilesUtils(BaseAWSLLM()).sign_aws_request(
             service_name="bedrock",
             data={"jobName": "litellm-batch-job"},
             endpoint_url="https://bedrock.us-east-1.amazonaws.com/model-invocation-job",
@@ -1659,6 +1661,21 @@ class TestGetBedrockBaseModel:
     def test_strips_throughput_suffix(self, input_model, expected):
         """Test that throughput tier suffixes like :51k are stripped. Issue #19113."""
         assert get_bedrock_base_model(input_model) == expected
+
+
+def test_region_only_deployment_takes_no_traffic_from_a_valid_model_group() -> None:
+    valid_model: Final = "bedrock/us.anthropic.claude-opus-4-6-v1"
+    router: Final = litellm.Router(
+        model_list=[
+            {"model_name": "group", "litellm_params": {"model": "bedrock/us", "aws_region_name": "us-east-1"}},
+            {"model_name": "group", "litellm_params": {"model": valid_model, "aws_region_name": "us-east-1"}},
+        ],
+        ignore_invalid_deployments=True,
+    )
+
+    assert [deployment["litellm_params"]["model"] for deployment in router.get_model_list(model_name="group")] == [
+        valid_model
+    ]
 
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")

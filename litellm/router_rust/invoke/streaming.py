@@ -42,6 +42,7 @@ from collections.abc import (
     Mapping,
     Sequence,
 )
+from collections.abc import Set as AbstractSet
 from typing import (
     TYPE_CHECKING,
     Final,
@@ -629,8 +630,8 @@ def continuation_routing(core: "RustCore", request: Mapping[str, object]) -> Map
     registry: Final = core.registry()
     excluded: Final = [
         deployment.model_info.id
-        for record in registry.all()
-        if (deployment := registry.deployment(str(_record_id(record)))) is not None
+        for record_id in _record_ids(registry.all())
+        if (deployment := registry.deployment(str(record_id))) is not None
         and not deployment_can_continue(deployment.model_dump(exclude_none=True))
     ]
     return {"body": {CONTINUATION_EXCLUDED_IDS: excluded}}
@@ -641,13 +642,21 @@ def _record_id(record: Mapping[str, object]) -> object:
     return model_info.get("id") if isinstance(model_info, Mapping) else None  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # a plain record
 
 
+def _record_ids(records: Iterable[Mapping[str, object]]) -> Iterator[object]:
+    return (_record_id(record) for record in records)
+
+
+def _record_model_names(records: Iterable[Mapping[str, object]]) -> AbstractSet[object]:
+    return {record.get("model_name") for record in records}
+
+
 def _names_deployment_that_cannot_continue(core: "RustCore", target: object) -> bool:
     from litellm.router_utils.fallback_event_handlers import fallback_target_name
     from litellm.router_utils.pre_call_checks.continuation_prefill_check import deployment_can_continue
 
     name: Final = fallback_target_name(target)
     registry: Final = core.registry()
-    model_names: Final = {record.get("model_name") for record in registry.all()}
+    model_names: Final = _record_model_names(registry.all())
     if name is None or name in model_names or not registry.has_deployment(name):
         return False
     deployment: Final = registry.deployment(name)
@@ -684,7 +693,10 @@ def _mid_stream_continuation_eligible(
     lookup_groups: Final = fallback_lookup_groups(
         request, requested_group if isinstance(requested_group, str) else None
     )
-    targets: Final = continuation_fallback_targets(core.settings().fallbacks, lookup_groups)  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # fallbacks as Python spells them
+    targets: Final = continuation_fallback_targets(
+        request.get("fallbacks", core.settings().fallbacks),  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # the request's list replaces the router's
+        lookup_groups,
+    )
     if any(fallback_target_overrides_request_params(target) for target in targets):
         return False
     if any(_names_deployment_that_cannot_continue(core, target) for target in targets):
@@ -1563,6 +1575,7 @@ def wrap_responses_stream(  # noqa: C901  # one function per Python wrapper it p
 
         def __init__(self, async_generator: AsyncGenerator[object, None]) -> None:  # pyright: ignore[reportMissingSuperCall]  # no httpx response of its own
             self._async_generator: Final = async_generator
+            self.attempt: Final = attempt
             self._billing_source: object = source_iterator
             self._last_sequence_number = -1
             self.response = getattr(source_iterator, "response", None)  # pyright: ignore[reportAttributeAccessIssue]  # copied from the source
@@ -1687,10 +1700,12 @@ def wrap_responses_stream(  # noqa: C901  # one function per Python wrapper it p
             if response_id_exposed:
                 _raise_released_stream_error(attempt, e)
             async with contextlib.aclosing(
-                _responses_fallback_attempt(attempt, e, source_iterator, wrapper.adopt_fallback_headers, held)
-            ) as fallback_stream:
-                async for fallback_item in fallback_stream:
-                    yield fallback_item
+                _responses_recover_stream_error(
+                    attempt, e, source_iterator, wrapper, wrapper.adopt_fallback_headers, held
+                )
+            ) as recovered_stream:
+                async for recovered_item in recovered_stream:
+                    yield recovered_item
         except Exception:
             for held_event in held:
                 yield held_event
@@ -1751,11 +1766,11 @@ def _responses_continuation_request(
         responses_continuation_input,
     )
 
+    if source_iterator.started_tool_call:
+        _raise_original_mid_stream_error(e)
     if _mid_stream_error_before_output(e):
         return None
-    if source_iterator.started_tool_call or isinstance(
-        e.original_exception, litellm_exceptions.ContentPolicyViolationError
-    ):
+    if isinstance(e.original_exception, litellm_exceptions.ContentPolicyViolationError):
         _raise_original_mid_stream_error(e)
     cut_deployment_id: Final = (get_hidden_params(source_iterator) or {}).get("model_id")
     if constrains_responses_continuation(_params_sent_to_deployment(attempt, cut_deployment_id)):
@@ -1777,6 +1792,99 @@ def _responses_continuation_request(
         RESPONSES_CONTINUATION_KWARG: continuation,
         "input": responses_continuation_input(continuation),
     }
+
+
+def _responses_stream_retries(
+    attempt: StreamAttempt, e: MidStreamFallbackError, source_iterator: "BaseResponsesAPIStreamingIterator"
+) -> bool:
+    """Whether a broken Responses stream retries in its own group first: it broke before any output and
+    before a tool call, with an error the retry rule takes (408, 409, 429, 5xx, or no status), as a
+    ``/v1/messages`` stream does. After output the continuation fallback takes over instead."""
+    if not _mid_stream_error_before_output(e) or source_iterator.started_tool_call:
+        return False
+    status_code: Final = _stream_raised_error_status(_mid_stream_retry_trigger(e))
+    return status_code is None or attempt.should_retry_status(status_code)
+
+
+async def _responses_recover_stream_error(
+    attempt: StreamAttempt,
+    e: MidStreamFallbackError,
+    source_iterator: "BaseResponsesAPIStreamingIterator",
+    wrapper: object,
+    adopt_headers: Callable[[object], _Prepared],
+    held: tuple[object, ...],
+) -> AsyncGenerator[object, None]:
+    """A Responses stream that broke before any output is retried in its own group, then falls back
+    with the newest failure once the retries are spent. The primary's held lifecycle events are dropped
+    when a retry or a fallback answers."""
+    last_error: MidStreamFallbackError = e  # rebind-ok: the newest failure once a retry also failed
+    if _responses_stream_retries(attempt, e, source_iterator):
+        if hasattr(source_iterator, "aclose"):
+            with anyio.CancelScope(shield=True), contextlib.suppress(Exception):
+                await source_iterator.aclose()  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]  # checked above
+        await attempt.failure_recorded()
+        trigger: Final = _mid_stream_retry_trigger(e)
+        retried: Final = await attempt.retry(trigger)
+        if not isinstance(retried, BaseException):
+            async for retried_item in _responses_yield_retried(retried, wrapper, adopt_headers):
+                yield retried_item
+            return
+        if retried is not trigger:
+            last_error = _stream_pre_content_error(  # rebind-ok: the retry failed again, so its failure is the newest
+                retried if isinstance(retried, Exception) else e, e.model or "", e.llm_provider
+            )
+    async with contextlib.aclosing(
+        _responses_fallback_attempt(attempt, last_error, source_iterator, adopt_headers, held)
+    ) as fallback_stream:
+        async for fallback_item in fallback_stream:
+            yield fallback_item
+
+
+async def _responses_yield_retried(
+    retried: tuple[object, int, int], wrapper: object, adopt_headers: Callable[[object], _Prepared]
+) -> AsyncGenerator[object, None]:
+    """Hands a same-group retry's stream to the client through the wrapper, with the retry's headers, and
+    closes it after. A retried stream that breaks again counts on from the retries already made, and when
+    it recovers onto another source (its own fallback) the wrapper and the events follow that source."""
+    response, attempted, budget = retried
+    inner_attempt: Final = getattr(response, "attempt", None)
+    if isinstance(inner_attempt, StreamAttempt):
+        inner_attempt.attempted_retries = attempted
+        inner_attempt.committed_budget = budget
+
+    served_as: Final = _prepare_fallback_hidden_params(wrapper)[1].get("x-litellm-model-group")
+
+    def follow_source() -> _Prepared:
+        prepared: Final = adopt_headers(response)
+        if served_as is not None:
+            _ = prepared[1].setdefault("x-litellm-model-group", served_as)
+        newest: Final = prepared[1].get("x-litellm-attempted-retries")
+        _ = add_retry_headers_to_response(
+            response=wrapper,
+            attempted_retries=max(attempted, newest) if isinstance(newest, int) else attempted,
+            max_retries=budget,
+        )
+        return prepared
+
+    followed: _Prepared = follow_source()  # rebind-ok: refreshed when the retried stream changes its source
+    source: object = getattr(response, "_billing_source", None)  # rebind-ok: the retried stream's current source
+    try:
+        if hasattr(response, "__aiter__"):
+            async for retried_item in cast("AsyncIterator[object]", response):  # cast-ok: __aiter__ checked above
+                if (current_source := getattr(response, "_billing_source", None)) is not source:
+                    source = current_source
+                    followed = follow_source()
+                _apply_fallback_hidden_params_to_item(retried_item, followed)
+                yield retried_item
+        else:
+            yield response
+    finally:
+        if hasattr(response, "aclose"):
+            with anyio.CancelScope(shield=True):
+                try:
+                    await response.aclose()  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]  # checked above
+                except Exception as exc:  # noqa: BLE001  # closing is best-effort
+                    verbose_router_logger.debug("stream_with_fallbacks(aresponses): error closing retry: %s", exc)
 
 
 async def _responses_fallback_attempt(

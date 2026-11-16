@@ -27,7 +27,7 @@ from typing_extensions import overload
 
 import litellm
 from litellm import LlmProviders
-from litellm._logging import verbose_logger
+from litellm._logging import WarningLogger, verbose_logger
 from litellm.constants import DEFAULT_MAX_RETRIES
 from litellm.exceptions import UnsupportedParamsError
 from litellm.files.types import FileContentStreamingResult
@@ -260,6 +260,8 @@ class OpenAIConfig(BaseConfig):
         optional_params: dict,
         model: str,
         drop_params: bool,
+        *,
+        reasoning_drop_logger: WarningLogger = verbose_logger,
     ) -> dict:
         """ """
         if openaiOSeriesConfig.is_model_o_series_model(model=model):
@@ -275,6 +277,7 @@ class OpenAIConfig(BaseConfig):
                 optional_params=optional_params,
                 model=model,
                 drop_params=drop_params,
+                reasoning_drop_logger=reasoning_drop_logger,
             )
         elif litellm.openAIGPTAudioConfig.is_model_gpt_audio_model(model=model):
             return litellm.openAIGPTAudioConfig.map_openai_params(
@@ -1166,7 +1169,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         shared_session: Optional["ClientSession"] = None,
     ):
         response = None
-        data = provider_config.transform_request(
+        data = await provider_config.async_transform_request(
             model=model,
             messages=messages,
             optional_params=optional_params,

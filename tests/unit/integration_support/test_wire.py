@@ -7,7 +7,7 @@ import ssl
 import time
 from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import ExitStack
+from contextlib import ExitStack, closing
 from http.client import HTTPConnection, HTTPResponse, HTTPSConnection
 from pathlib import Path
 from typing import Final
@@ -19,6 +19,7 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.x509.oid import NameOID
 
+from tests.integration._support.ports import FIRST_PORT, LAST_PORT, allocate_port
 from tests.integration._support.wire import Reply, Request, wire_server
 
 PAUSE_SECONDS: Final = 6
@@ -26,6 +27,24 @@ HANDLER_READ_SECONDS: Final = 0.3
 FIRST: Final = b'{"call": "first"}'
 LATE: Final = b'{"call": "late"}'
 UNREAD: Final = b"x" * (32 * 1024 * 1024)
+
+
+@pytest.mark.parametrize("port", (None, 0), ids=("default", "zero"))
+def test_default_listener_uses_the_harness_port_range(port: int | None) -> None:
+    with wire_server(_echo, **({} if port is None else {"port": port})) as wire:
+        bound_port: Final = urlsplit(wire.url).port
+        assert bound_port is not None and FIRST_PORT <= bound_port <= LAST_PORT
+        with closing(_client(wire.url)) as connection:
+            connection.request("POST", "/echo", FIRST)
+            response: Final = connection.getresponse()
+            assert (response.status, response.read()) == (200, FIRST)
+
+
+def test_explicit_listener_port_is_preserved() -> None:
+    port: Final = allocate_port()
+    with wire_server(_echo, port=port) as wire:
+        assert urlsplit(wire.url).port == port
+        assert wire.drain() == ()
 
 
 def _self_signed_server_context(directory: Path) -> ssl.SSLContext:

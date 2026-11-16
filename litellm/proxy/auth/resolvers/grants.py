@@ -28,6 +28,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.auth_checks import (
     TeamNotFoundError,
+    forget_missing_user,
     get_team_membership,
     get_team_object,
     get_user_object,
@@ -53,6 +54,7 @@ class UserLoader(Protocol):
         proxy_logging_obj: ProxyLogging | None,
         sso_user_id: str | None,
         user_email: str | None,
+        email_verified: bool | None = None,
     ) -> Coroutine[object, object, LiteLLM_UserTable | None]: ...
 
 
@@ -90,6 +92,7 @@ class UserLookup:
     user_email: str | None = None
     sso_user_id: str | None = None
     upsert: bool = False
+    email_verified: bool | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -246,6 +249,8 @@ class GrantResolver:
         return ResolvedGrants(user_object, team_object, membership, effective_user_id)
 
     async def _user(self, lookup: UserLookup) -> LiteLLM_UserTable | None:
+        if lookup.user_id is not None:
+            forget_missing_user(lookup.user_id)
         return await self._load_user(
             user_id=lookup.user_id,
             prisma_client=self._prisma,
@@ -255,6 +260,7 @@ class GrantResolver:
             proxy_logging_obj=self._proxy_logging_obj,
             user_email=lookup.user_email,
             sso_user_id=lookup.sso_user_id,
+            email_verified=lookup.email_verified,
         )
 
     async def _membership(self, user_id: str, team_id: str) -> LiteLLM_TeamMembership | None:
