@@ -64,6 +64,15 @@
     "api_base_env": "ZEROGPU_API_BASE",
     "supported_endpoints": ["/v1/chat/completions", "/v1/responses"]
   },
+  "meragpt": {
+    "base_url": "https://meragpt.com/v1",
+    "api_key_env": "MERAGPT_API_KEY",
+    "api_base_env": "MERAGPT_API_BASE",
+    "special_handling": {
+      "require_api_key": true
+    },
+    "supported_endpoints": ["/v1/chat/completions"]
+  },
   "chutes": {
     "base_url": "https://llm.chutes.ai/v1/",
     "api_key_env": "CHUTES_API_KEY",
