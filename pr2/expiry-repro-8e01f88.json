@@ -1,0 +1,193 @@
+[
+ {
+  "case": "control: M3 arrives before the old boundary",
+  "ttl_ms": 8000,
+  "steps": [
+   {
+    "step": "P proof",
+    "at_ms": 1,
+    "reply": [],
+    "state_pttl": 8000,
+    "misses_pttl": -2,
+    "misses_zcard": 0,
+    "proof_until_ms": 8000
+   },
+   {
+    "step": "M1 miss started 2500",
+    "at_ms": 3002,
+    "reply": [],
+    "state_pttl": 4999,
+    "misses_pttl": 4998,
+    "misses_zcard": 1,
+    "proof_until_ms": 8000
+   },
+   {
+    "step": "M2 miss started 2600",
+    "at_ms": 3002,
+    "reply": [],
+    "state_pttl": 4999,
+    "misses_pttl": 4998,
+    "misses_zcard": 2,
+    "proof_until_ms": 8000
+   },
+   {
+    "step": "H late hit started 2000",
+    "at_ms": 3003,
+    "reply": [],
+    "state_pttl": 6998,
+    "misses_pttl": 4997,
+    "misses_zcard": 2,
+    "proof_until_ms": 10000
+   },
+   {
+    "step": "M3 miss started now",
+    "at_ms": 3003,
+    "reply": [
+     3,
+     "2048",
+     "1794797012368"
+    ],
+    "state_pttl": 6998,
+    "misses_pttl": -2,
+    "misses_zcard": 0,
+    "proof_until_ms": 10000
+   }
+  ],
+  "alert_triggered": true
+ },
+ {
+  "case": "finding: M3 arrives after the old boundary, proof still live",
+  "ttl_ms": 8000,
+  "steps": [
+   {
+    "step": "P proof",
+    "at_ms": 0,
+    "reply": [],
+    "state_pttl": 8000,
+    "misses_pttl": -2,
+    "misses_zcard": 0,
+    "proof_until_ms": 8000
+   },
+   {
+    "step": "M1 miss started 2500",
+    "at_ms": 3006,
+    "reply": [],
+    "state_pttl": 4994,
+    "misses_pttl": 4994,
+    "misses_zcard": 1,
+    "proof_until_ms": 8000
+   },
+   {
+    "step": "M2 miss started 2600",
+    "at_ms": 3006,
+    "reply": [],
+    "state_pttl": 4994,
+    "misses_pttl": 4994,
+    "misses_zcard": 2,
+    "proof_until_ms": 8000
+   },
+   {
+    "step": "H late hit started 2000",
+    "at_ms": 3007,
+    "reply": [],
+    "state_pttl": 6993,
+    "misses_pttl": 4993,
+    "misses_zcard": 2,
+    "proof_until_ms": 10000
+   },
+   {
+    "step": "waited past old boundary T+8000; misses key exists=0",
+    "at_ms": 8106,
+    "reply": null,
+    "state_pttl": 1894,
+    "misses_pttl": -2,
+    "misses_zcard": 0,
+    "proof_until_ms": 10000
+   },
+   {
+    "step": "M3 miss started now",
+    "at_ms": 8107,
+    "reply": [],
+    "state_pttl": 1893,
+    "misses_pttl": 1893,
+    "misses_zcard": 1,
+    "proof_until_ms": 10000
+   }
+  ],
+  "alert_triggered": false
+ },
+ {
+  "case": "control: same as finding, misses expiry aligned by harness",
+  "ttl_ms": 8000,
+  "steps": [
+   {
+    "step": "P proof",
+    "at_ms": 0,
+    "reply": [],
+    "state_pttl": 8000,
+    "misses_pttl": -2,
+    "misses_zcard": 0,
+    "proof_until_ms": 8000
+   },
+   {
+    "step": "M1 miss started 2500",
+    "at_ms": 3008,
+    "reply": [],
+    "state_pttl": 4992,
+    "misses_pttl": 4991,
+    "misses_zcard": 1,
+    "proof_until_ms": 8000
+   },
+   {
+    "step": "M2 miss started 2600",
+    "at_ms": 3009,
+    "reply": [],
+    "state_pttl": 4991,
+    "misses_pttl": 4991,
+    "misses_zcard": 2,
+    "proof_until_ms": 8000
+   },
+   {
+    "step": "H late hit started 2000",
+    "at_ms": 3009,
+    "reply": [],
+    "state_pttl": 6991,
+    "misses_pttl": 4991,
+    "misses_zcard": 2,
+    "proof_until_ms": 10000
+   },
+   {
+    "step": "harness PEXPIRE misses = state pttl (simulated repair, not shipped code)",
+    "at_ms": 3010,
+    "reply": null,
+    "state_pttl": 6990,
+    "misses_pttl": 6990,
+    "misses_zcard": 2,
+    "proof_until_ms": 10000
+   },
+   {
+    "step": "waited past old boundary T+8000; misses key exists=1",
+    "at_ms": 8104,
+    "reply": null,
+    "state_pttl": 1896,
+    "misses_pttl": 1896,
+    "misses_zcard": 2,
+    "proof_until_ms": 10000
+   },
+   {
+    "step": "M3 miss started now",
+    "at_ms": 8104,
+    "reply": [
+     3,
+     "2048",
+     "1794797023478"
+    ],
+    "state_pttl": 1896,
+    "misses_pttl": -2,
+    "misses_zcard": 0,
+    "proof_until_ms": 10000
+   }
+  ],
+  "alert_triggered": true
+ }
+]
