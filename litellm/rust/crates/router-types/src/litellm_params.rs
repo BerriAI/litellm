@@ -3,6 +3,7 @@ use std::{collections::BTreeMap, fmt, ops::Deref};
 use litellm_auth_types::{AwsParams, ParamSpec, VertexParams};
 use litellm_secret_value::SecretValue;
 
+use litellm_python_compat::lenient::LaxBool;
 use serde::Deserialize;
 use serde_json::Value;
 use serde_with::{OneOrMany, formats::PreferMany, serde_as};
@@ -15,8 +16,9 @@ use crate::Spelled;
 /// map. Every key no field names lands in [`Self::extra`], as Python's `extra="allow"` keeps it.
 ///
 /// A key a field names but cannot hold is an error, as it is for Python's pydantic model;
-/// the coercions Python's validators apply (`max_retries` from text, `drop_params` from a flag
-/// word) are left to the readers, so the shapes here are the ones the YAML carries. An
+/// the coercions Python's validators apply (`max_retries` from text) are left to the readers, so
+/// the shapes here are the ones the YAML carries, except `drop_params`, which Python's validator
+/// never refuses. An
 /// `organization` list is what Python's router expands into one deployment per entry.
 #[serde_as]
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
@@ -40,7 +42,9 @@ pub struct LitellmParams {
     pub max_parallel_requests: Option<u64>,
     #[serde_as(as = "Option<OneOrMany<_, PreferMany>>")]
     pub organization: Option<Vec<String>>,
-    pub drop_params: Option<Spelled<bool>>,
+    #[serde_as(as = "LaxBool")]
+    #[serde(default)]
+    pub drop_params: Option<bool>,
     pub tags: Option<Box<[String]>>,
     pub tag_regex: Option<Box<[String]>>,
     pub max_budget: Option<f64>,

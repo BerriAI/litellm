@@ -5,8 +5,10 @@
 
 use std::{collections::BTreeSet, sync::Arc};
 
-use litellm_python_compat::{json::from_json, pydantic::lax_bool};
+use litellm_python_compat::lenient::LaxBoolOr;
+use serde::Deserialize;
 use serde_json::{Map, Value};
+use serde_with::{OneOrMany, formats::PreferMany, serde_as};
 
 use crate::{error::Error, registry::Deployment, resolve::Caller};
 
@@ -34,29 +36,26 @@ fn endpoint_path(endpoint: &str) -> String {
     }
 }
 
-/// The flag as pydantic's lax `bool | None` reads it: `None` for a value it refuses, which fails
-/// the whole declaration.
-fn enforce_flag(value: Option<&Value>) -> Option<bool> {
-    match value {
-        None | Some(Value::Null) => Some(false),
-        Some(value) => lax_bool(&from_json(value.clone())),
-    }
+/// `_EndpointDeclaration`: a flag pydantic refuses enforces nothing, as a declaration that fails
+/// validation does.
+#[serde_as]
+#[derive(Deserialize)]
+struct EndpointDeclaration {
+    #[serde_as(as = "LaxBoolOr<false>")]
+    #[serde(default)]
+    enforce_supported_endpoints: bool,
+    #[serde_as(as = "Option<OneOrMany<_, PreferMany>>")]
+    #[serde(default)]
+    supported_endpoints: Option<Vec<String>>,
 }
 
-/// `_enforced_endpoints`: the declared endpoints of a deployment that enforces them. One endpoint
-/// may be written as a string; a declaration that does not validate enforces nothing.
+/// `_enforced_endpoints`: the declared endpoints of a deployment that enforces them.
 fn enforced_endpoints(model_info: &Map<String, Value>) -> Option<Vec<String>> {
-    if !enforce_flag(model_info.get("enforce_supported_endpoints"))? {
-        return None;
-    }
-    match model_info.get("supported_endpoints")? {
-        Value::String(endpoint) => Some(vec![endpoint.clone()]),
-        Value::Array(endpoints) => endpoints
-            .iter()
-            .map(|endpoint| endpoint.as_str().map(str::to_owned))
-            .collect(),
-        _ => None,
-    }
+    let declaration = EndpointDeclaration::deserialize(model_info).ok()?;
+    declaration
+        .enforce_supported_endpoints
+        .then_some(declaration.supported_endpoints)
+        .flatten()
 }
 
 /// `non_chat_endpoints`: what a deployment serves when it serves no chat-shaped endpoint, else

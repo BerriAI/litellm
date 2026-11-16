@@ -4833,7 +4833,6 @@ dependencies = [
  "litellm-inference-messages",
  "litellm-llms",
  "litellm-model-catalog",
- "litellm-python-compat",
  "litellm-router-types",
  "rstest",
  "serde_json",
@@ -4867,6 +4866,7 @@ name = "litellm-router-types"
 version = "0.1.0"
 dependencies = [
  "litellm-auth-types",
+ "litellm-python-compat",
  "litellm-secret-value",
  "rstest",
  "serde",

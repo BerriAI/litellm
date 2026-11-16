@@ -1,4 +1,4 @@
-use litellm_python_compat::lenient::IsTrue;
+use litellm_python_compat::lenient::{IsTrue, LaxBool};
 use litellm_secret_value::SecretValue;
 use serde::Deserialize;
 use serde_with::serde_as;
@@ -158,6 +158,7 @@ pub struct RouterSettings {
 }
 
 /// Callback entries can carry credentials inline, so only whether they are set is printed.
+#[serde_as]
 #[derive(Clone, Default, Deserialize, Redact)]
 #[serde(default)]
 pub struct LiteLlmSettings {
@@ -170,7 +171,8 @@ pub struct LiteLlmSettings {
     pub aiohttp_trust_env: Option<bool>,
     pub disable_aiohttp_trust_env: Option<bool>,
     pub disable_aiohttp_transport: Option<bool>,
-    pub drop_params: Option<Spelled<bool>>,
+    #[serde_as(as = "LaxBool")]
+    pub drop_params: Option<bool>,
     pub request_timeout: Option<Spelled<f64>>,
     pub num_retries: Option<u64>,
     pub cache: Option<bool>,
