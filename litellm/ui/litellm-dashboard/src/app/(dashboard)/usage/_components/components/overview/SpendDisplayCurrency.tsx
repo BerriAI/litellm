@@ -38,11 +38,7 @@ export default function SpendDisplayCurrency({ usdSpend, loading }: SpendDisplay
     <div className="mt-1 grid gap-1 text-xs leading-4 text-muted-foreground">
       <div className="flex items-center gap-2">
         <span>{t("usage.statStrip.spendDisplay.label")}</span>
-        <Select
-          value={shown}
-          onValueChange={(value) => setCurrency(value ?? "USD")}
-          onOpenChange={handleOpenChange}
-        >
+        <Select value={shown} onValueChange={(value) => setCurrency(value ?? "USD")} onOpenChange={handleOpenChange}>
           <SelectTrigger size="sm" aria-label={t("usage.statStrip.spendDisplay.label")}>
             <SelectValue />
           </SelectTrigger>
