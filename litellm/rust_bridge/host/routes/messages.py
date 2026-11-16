@@ -15,7 +15,13 @@ import socket
 import ssl
 from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Iterable, Iterator, Mapping, Sequence
 from dataclasses import asdict, dataclass, replace
-from typing import Final, TypeAlias, TypeVar, cast  # noqa: TID251  # narrows native payloads to public TypedDicts
+from typing import (  # noqa: TID251  # narrows native payloads to public TypedDicts
+    Final,
+    NoReturn,
+    TypeAlias,
+    TypeVar,
+    cast,
+)
 from urllib.parse import SplitResult, urlsplit
 
 import httpx
@@ -302,9 +308,37 @@ def _shape_bedrock_tools(tools: object, model: str) -> None:
     ensure_bedrock_anthropic_messages_tool_names(body)
 
 
+def _mantle_route(request: Mapping[str, object], request_provider: str | None) -> bool:
+    """Whether Python serves the call with a Bedrock Mantle Messages config."""
+    from litellm.llms.bedrock.common_utils import BedrockModelInfo
+
+    model: Final = str(request["model"]).removeprefix(f"{request_provider}/")
+    if request_provider == "bedrock_mantle":
+        return True
+    return (
+        request_provider == "bedrock"
+        and not BedrockModelInfo._explicit_claude_platform_route(model)  # pyright: ignore[reportPrivateUsage]  # the route order Python's config lookup applies
+        and not BedrockModelInfo._explicit_converse_route(model)  # pyright: ignore[reportPrivateUsage]  # see above
+        and BedrockModelInfo._explicit_mantle_route(model)  # pyright: ignore[reportPrivateUsage]  # see above
+    )
+
+
+def _mantle_model_id(request: Mapping[str, object], request_provider: str | None) -> str:
+    """The model Python's Mantle configs hand the Invoke transform: `get_llm_provider` drops the
+    provider and a region prefix, then the first `mantle/` goes."""
+    from litellm.llms.bedrock_mantle.common_utils import split_mantle_region_prefix
+
+    model: Final = str(request["model"]).removeprefix(f"{request_provider}/")
+    resolved: Final = split_mantle_region_prefix(model)[1] if request_provider == "bedrock_mantle" else model
+    return resolved.replace("mantle/", "", 1)
+
+
 def body_params(request: Mapping[str, object], asynchronous: bool, hooked: bool = False) -> Mapping[str, object]:
     fields: Final = _body_fields(request)
-    if _resolved_provider(request) == "bedrock":
+    provider: Final = _resolved_provider(request)
+    if _mantle_route(request, provider):
+        _shape_bedrock_tools(fields.get("tools"), _mantle_model_id(request, provider))
+    elif provider == "bedrock":
         _shape_bedrock_tools(fields.get("tools"), str(request["model"]).removeprefix("bedrock/"))
     if not detectors.cache_control_injection(NativeCall(args=(), kwargs=request, base={})):
         return {**fields, "messages": request["messages"]} if hooked else fields
@@ -727,6 +761,9 @@ def _rejection(error: Exception, request: Mapping[str, object], request_provider
     if getattr(error, "messages_unsupported_param", False):
         _flag_messages_call(request.get("litellm_logging_obj"), asynchronous)
         return litellm.UnsupportedParamsError(message=str(error))
+    mantle_failure: Final = _mantle_request_failure(request, request_provider)
+    if mantle_failure is not None:
+        return mantle_failure
     return litellm.BadRequestError(
         message=str(error),
         model=str(request["model"]).removeprefix(f"{request_provider}/"),
@@ -741,6 +778,11 @@ def _provider_rejection(
     maps into their error class by its text."""
     if not bad_request:
         return _config_error(400, text, (), request, request_provider)
+    if request_provider == "bedrock_mantle":
+        # Python's Mantle config inherits the Bedrock invoke transform, which raises naming `bedrock`.
+        return litellm.BadRequestError(
+            message=text, model=_mantle_model_id(request, request_provider), llm_provider="bedrock"
+        )
     raised: Final = litellm.BadRequestError(
         message=text,
         model=str(request["model"]).removeprefix(f"{request_provider}/"),
@@ -863,11 +905,13 @@ def _bedrock_credential_failure(error: Exception, request: Mapping[str, object])
     if not isinstance(kind, str):
         return None
     known: Final = _signing_failure(kind)
-    if known is not None:
+    if known is not None and not _mantle_route(request, failure_provider(request)):
         return _raised(known)
     call: Final = _provider_call(request)
     if call is None:
-        return None
+        return None if known is None else _raised(known)
+    if known is not None:
+        return _mantle_signing_failure(known, call, request)
     try:
         call.config.sign_request(  # pyright: ignore[reportUnknownMemberType]  # the config's untyped params dicts
             headers={},
@@ -884,6 +928,71 @@ def _bedrock_credential_failure(error: Exception, request: Mapping[str, object])
     return None
 
 
+def _mantle_signing_failure(known: Exception, call: _ProviderCall, request: Mapping[str, object]) -> Exception:
+    """What Python's Mantle config raises when its AWS signer raises `known`: `bedrock_mantle/`
+    wraps botocore's credential errors in its own ValueError, `bedrock/mantle/` lets them through."""
+    from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+    from litellm.llms.bedrock_mantle.messages.transformation import BedrockMantleAnthropicMessagesConfig
+
+    if not isinstance(call.config, BedrockMantleAnthropicMessagesConfig):
+        return _raised(known)
+
+    class _FailingSigner(BaseAWSLLM):
+        def _sign_request(  # pyright: ignore[reportIncompatibleMethodOverride]  # raises instead of signing
+            self,
+            service_name: str,
+            headers: Mapping[str, object],
+            optional_params: Mapping[str, object],
+            request_data: Mapping[str, object],
+            api_base: str,
+            model: str | None = None,
+            stream: bool | None = None,
+            fake_stream: bool | None = None,
+            api_key: str | None = None,
+        ) -> NoReturn:
+            raise known
+
+    try:
+        BedrockMantleAnthropicMessagesConfig(aws_signer=_FailingSigner()).sign_request(  # pyright: ignore[reportUnknownMemberType]  # the config's untyped params dicts
+            headers={},
+            optional_params=call.params,
+            request_data={},
+            api_base=_complete_url(call, request),
+            api_key=optional_str(request.get("api_key")),
+            model=call.model,
+            stream=request.get("stream") is True,
+            fake_stream=False,
+        )
+    except Exception as python_failure:  # noqa: BLE001  # the exception Python's signing raises is the answer
+        return python_failure
+    return _raised(known)
+
+
+def _mantle_request_failure(request: Mapping[str, object], request_provider: str) -> Exception | None:
+    """The exception Python raises resolving, addressing or signing a Mantle call Rust refused before
+    sending it, such as `get_llm_provider`'s BadRequestError or `_get_aws_region_name`'s ValueError for
+    an invalid region."""
+    if not _mantle_route(request, request_provider):
+        return None
+    try:
+        call: Final = _provider_call(request)
+        if call is None:
+            return None
+        call.config.sign_request(  # pyright: ignore[reportUnknownMemberType]  # the config's untyped params dicts
+            headers={},
+            optional_params=call.params,
+            request_data={},
+            api_base=_complete_url(call, request),
+            api_key=optional_str(request.get("api_key")),
+            model=call.model,
+            stream=request.get("stream") is True,
+            fake_stream=False,
+        )
+    except Exception as python_failure:  # noqa: BLE001  # the exception Python raises is the answer
+        return python_failure
+    return None
+
+
 def _sent_base(request: Mapping[str, object], request_provider: str, secrets_read: _SecretsRead) -> str | None:
     """The base the call was sent to: azure_ai's falls back to the `AZURE_API_BASE` the host read
     to send it, anthropic's to its default and bedrock's to the URL its config builds."""
@@ -894,7 +1003,7 @@ def _sent_base(request: Mapping[str, object], request_provider: str, secrets_rea
         return anthropic_pass_through_api_base()
     if request_provider == "azure_ai":
         return dict(secrets_read).get("AZURE_API_BASE")
-    if request_provider == "bedrock":
+    if request_provider in ("bedrock", "bedrock_mantle"):
         return _bedrock_url(request)
     return None
 
@@ -1201,7 +1310,9 @@ def map_failure(
             ),
             request_provider,
         )
-    credential_failure: Final = _bedrock_credential_failure(error, request) if request_provider == "bedrock" else None
+    credential_failure: Final = (
+        _bedrock_credential_failure(error, request) if request_provider in ("bedrock", "bedrock_mantle") else None
+    )
     if credential_failure is not None:
         _log_resolved_call(request, request_provider)
         return map_token_failure(credential_failure, request, request_provider, asynchronous)
