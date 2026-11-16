@@ -379,9 +379,9 @@ def _reserved_window(
 
 
 def _without_counter(descriptor: RateLimitDescriptor, counter: RateLimitStatus) -> RateLimitDescriptor:
-    if (descriptor["key"], descriptor["value"]) != (counter["descriptor_key"], counter["descriptor_value"]):
+    if (descriptor["key"], descriptor["value"]) != (counter["descriptor_key"], counter.get("descriptor_value")):
         return descriptor
-    limits: Final = descriptor["rate_limit"] or RateLimitDescriptorRateLimitObject()
+    limits: Final = descriptor.get("rate_limit") or RateLimitDescriptorRateLimitObject()
     return RateLimitDescriptor(
         key=descriptor["key"],
         value=descriptor["value"],
