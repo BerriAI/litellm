@@ -50,10 +50,8 @@ import {
   ShieldCheck,
   Tags,
   Terminal,
-  Trophy,
   User,
   Users,
-  Receipt,
   Wallet,
   Wrench,
   Workflow,
@@ -74,6 +72,7 @@ import {
   formatUserRole,
   internalUserRoles,
   isAdminRole,
+  isProxyAdminRole,
   isUserTeamAdminForAnyTeam,
   rolesAllowedToViewWriteScopedPages,
   rolesWithWriteAccess,
@@ -199,21 +198,14 @@ export const visibleMenuGroups = (groups: readonly MenuGroup[], context: MenuVis
 // icons changed to lucide as part of the sidebar redesign.
 const customerPortalGroups: MenuGroup[] = [
   {
-    groupLabel: "CUSTOMER PORTAL",
+    groupLabel: "CUSTOMER MANAGEMENT",
     items: [
       {
         key: "customers",
         page: "customers",
         label: "shell.nav.items.customers",
-        icon: <Users {...ICON} />,
-        roles: all_admin_roles,
-      },
-      {
-        key: "chargebacks",
-        page: "chargebacks",
-        label: "shell.nav.items.chargebacks",
-        icon: <Receipt {...ICON} />,
-        roles: all_admin_roles,
+        icon: <Building2 {...ICON} />,
+        roles: all_admin_roles.filter(isProxyAdminRole),
       },
     ],
   },
@@ -332,17 +324,6 @@ const menuGroups: MenuGroup[] = [
         label: "shell.nav.items.alerts",
         icon: <Bell {...ICON} />,
         roles: rolesWithCapability("viewGlobalSpend"),
-      },
-      {
-        key: "model-insights",
-        page: "model-insights",
-        icon: <Trophy {...ICON} />,
-        roles: all_admin_roles,
-        label: (
-          <span className="flex items-center gap-2">
-            <Trans i18nKey="shell.nav.items.modelLeaderboard" /> <BetaBadge />
-          </span>
-        ),
       },
       {
         key: "cost-optimization",
@@ -538,7 +519,7 @@ const findParentKey = (route: string): string | null => {
 };
 
 const findMenuItemKey = (route: string): string => {
-  for (const group of menuGroups) {
+  for (const group of [...menuGroups, ...customerPortalGroups]) {
     for (const item of group.items) {
       if (routeOf(item) === route) return item.key;
       const child = item.children?.find((c) => routeOf(c) === route);
@@ -550,7 +531,7 @@ const findMenuItemKey = (route: string): string => {
 
 const GROUP_LABELS: Record<string, ParseKeys> = {
   "AI GATEWAY": "shell.nav.groups.aiGateway",
-  "CUSTOMER PORTAL": "shell.nav.groups.customerPortal",
+  "CUSTOMER MANAGEMENT": "shell.nav.groups.customerPortal",
   OBSERVABILITY: "shell.nav.groups.observability",
   "ACCESS CONTROL": "shell.nav.groups.accessControl",
   "DEVELOPER TOOLS": "shell.nav.groups.developerTools",
@@ -562,7 +543,7 @@ export const groupText = (groupLabel: string): string =>
 
 const SECTION_DISPLAY: Record<string, ParseKeys> = {
   "AI GATEWAY": "shell.nav.sections.aiGateway",
-  "CUSTOMER PORTAL": "shell.nav.sections.customerPortal",
+  "CUSTOMER MANAGEMENT": "shell.nav.sections.customerPortal",
   OBSERVABILITY: "shell.nav.sections.observability",
   "ACCESS CONTROL": "shell.nav.sections.accessControl",
   "DEVELOPER TOOLS": "shell.nav.sections.developerTools",

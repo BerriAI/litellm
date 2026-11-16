@@ -60,7 +60,7 @@ from litellm.proxy.agent_endpoints.auth.managed_authorization import managed_age
 from litellm.proxy.agent_endpoints.identity import has_legacy_identity
 from litellm.proxy.agent_endpoints.identity_store import AgentIdentityStore, resolve_managed_agent
 from litellm.proxy.agent_endpoints.managed_identity import raise_identity_failure
-from litellm.proxy.auth.auth_checks import can_team_access_model
+from litellm.proxy.auth.auth_checks import can_team_access_model, read_email_verified
 from litellm.proxy.auth.model_access_denied import (
     ModelAccessDeniedHTTPException,
     model_access_denied_client_message,
@@ -699,6 +699,9 @@ class JWTHandler:
         except KeyError:
             user_email = default_value
         return user_email
+
+    def get_email_verified(self, token: Mapping[str, object]) -> bool | None:
+        return read_email_verified(token.get("email_verified"))
 
     def get_object_id(self, token: dict, default_value: str | None) -> str | None:
         try:
@@ -1917,6 +1920,7 @@ class JWTAuthManager:
         route: str,
         org_alias: str | None = None,
         user_id_upsert: bool | None = None,
+        email_verified: bool | None = None,
     ) -> tuple[
         LiteLLM_UserTable | None,
         LiteLLM_OrganizationTable | None,
@@ -1980,6 +1984,7 @@ class JWTAuthManager:
                 user_id=user_id,
                 user_email=user_email,
                 sso_user_id=user_id,
+                email_verified=email_verified,
                 upsert=(
                     jwt_handler.is_upsert_user_id(valid_user_email=valid_user_email)
                     if user_id_upsert is None
@@ -2277,12 +2282,13 @@ class JWTAuthManager:
     ) -> None:
         """Attach team context from x-litellm-team-id to an admin result.
 
-        Only applies on LLM API routes so team TPM/RPM limits and attribution
-        are enforced when admins act on behalf of a team. Admin management
-        routes ignore the header to preserve pre-existing bypass behavior.
+        Only applies on inference routes (LLM API routes and the queued chat
+        route) so team TPM/RPM limits and attribution are enforced when admins
+        act on behalf of a team. Admin management routes ignore the header to
+        preserve pre-existing bypass behavior.
         """
         header_team_id: Final = request_headers.get("x-litellm-team-id") if request_headers else None
-        if not header_team_id or not RouteChecks.is_llm_api_route(route=route):
+        if not header_team_id or not RouteChecks.runs_inference_checks(route=route):
             return
         try:
             team_object: Final = await get_team_object(
@@ -2639,6 +2645,7 @@ class JWTAuthManager:
                 parent_otel_span=parent_otel_span,
                 proxy_logging_obj=proxy_logging_obj,
                 route="",
+                email_verified=jwt_handler.get_email_verified(claims),
                 user_id_upsert=False,
             )
         except UserNotFoundError:
@@ -2782,6 +2789,7 @@ class JWTAuthManager:
                     user_id=user_id,
                     user_email=user_email,
                     sso_user_id=user_id,
+                    email_verified=handler.get_email_verified(jwt_valid_token),
                     prisma_client=prisma_client,
                     user_api_key_cache=user_api_key_cache,
                     user_id_upsert=False,
@@ -2971,6 +2979,7 @@ class JWTAuthManager:
             route=route,
             org_alias=org_alias,
             user_id_upsert=provisioning.user_id_upsert if provisioning is not None and managed is None else False,
+            email_verified=handler.get_email_verified(jwt_valid_token),
         )
 
         # Derive org_id from org_object if resolved by alias

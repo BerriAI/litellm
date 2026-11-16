@@ -18,7 +18,7 @@ import { ALERT_TYPES, AlertFilter, AlertItem, TYPE_LABEL_KEYS, presentAlert } fr
 import AlertActions from "./AlertActions";
 import AlertChart from "./AlertChart";
 import AlertDetail from "./AlertDetail";
-import PerformanceMonitoring from "./PerformanceMonitoring";
+import ManageAlerts from "./ManageAlerts";
 
 const parsers = {
   alert: parseAsString,
@@ -123,8 +123,7 @@ function AlertsInbox({ auth }: { auth: ReturnType<typeof useAuthorized> }) {
   }
   return (
     <>
-      <h1 className="text-2xl font-semibold">{t("alerts.unified.title")}</h1>
-      <PerformanceMonitoring scope={scope} readOnly={Boolean(auth.isViewOnly)} />
+      <ManageAlerts scope={scope} readOnly={Boolean(auth.isViewOnly)} />
       <PageTabs
         value={params.state}
         onValueChange={(value) => void setParams({ state: value as AlertStatus })}
@@ -205,7 +204,7 @@ function AlertsInbox({ auth }: { auth: ReturnType<typeof useAuthorized> }) {
           {list.isFetchingNextPage ? t("alerts.unified.loadingMore") : t("alerts.unified.loadMore")}
         </Button>
       )}
-      {showDeprecations && <DeprecationEmailSetup />}
+      <DeprecationEmailSetup />
     </>
   );
 }

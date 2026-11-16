@@ -245,6 +245,7 @@ const SkillsPanelContent: React.FC<ClaudeCodePluginsPanelProps> = ({
                   accessToken={accessToken}
                   queryScope={queryScope}
                   canReview={isAdmin}
+                  canWrite={canWrite}
                   adminView={adminView}
                   onChanged={refreshSkills}
                 />

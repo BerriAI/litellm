@@ -49,6 +49,7 @@ def _repository(
     transaction: Final = MagicMock(query_raw=query, execute_raw=execute)
     context: Final = MagicMock(__aenter__=AsyncMock(return_value=transaction), __aexit__=AsyncMock(return_value=False))
     client: Final = MagicMock(writer_db=MagicMock(tx=MagicMock(return_value=context)))
+    client.writer_db.litellm_config.find_unique = AsyncMock(return_value=None)
     return PerformanceAlertRepository(client, enterprise=enterprise), query, execute
 
 
@@ -191,7 +192,12 @@ async def test_first_read_initializes_the_allowance_once(enterprise: bool) -> No
 @pytest.mark.parametrize("enabled", (False, True))
 async def test_admin_toggle_persists_the_requested_value(enabled: bool) -> None:
     repository, query, execute = _repository(())
-    query.side_effect = ((), ({"enabled": not enabled, "alerts_used": 2},), ({"enabled": enabled, "alerts_used": 2},))
+    query.side_effect = (
+        (),
+        ({"enabled": not enabled, "alerts_used": 2},),
+        (),
+        ({"enabled": enabled, "alerts_used": 2},),
+    )
     result: Final = await repository.set_enabled(enabled)
     assert result.enabled is enabled
     assert result.active is enabled

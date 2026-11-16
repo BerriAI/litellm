@@ -93,6 +93,10 @@ CONNECTION_NAMES: Final = (
     "litellm_credential_name",
     "github_copilot_auth_type",
     "github_copilot_host",
+    "github_copilot_app_id",
+    "github_copilot_app_installation_id",
+    "github_copilot_app_private_key_ref",
+    "github_copilot_app_private_key",
     "configurable_clientside_auth_params",
     "use_xai_oauth",
     "chatgpt_auth_file",
@@ -680,6 +684,10 @@ def test_routing_options_accept_every_strategy_the_router_accepts(strategy: str)
 NAMES_SHARED_WITH_TYPED_MODELS: Final[Mapping[str, tuple[str, ...]]] = MappingProxyType(
     {
         "credentials": (
+            "github_copilot_app_id",
+            "github_copilot_app_installation_id",
+            "github_copilot_app_private_key_ref",
+            "github_copilot_app_private_key",
             "anthropic_disable_workload_identity_federation",
             "anthropic_federation_rule_id",
             "anthropic_federation_workspace_id",

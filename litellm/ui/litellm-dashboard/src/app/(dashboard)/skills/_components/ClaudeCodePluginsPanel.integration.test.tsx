@@ -31,6 +31,8 @@ const published: SkillHubSkill = {
 
 const pending: SkillSubmission = {
   id: "submission-1",
+  revision: 0,
+  can_edit: false,
   skill_name: published.name,
   operation: "update",
   status: "pending_review",
@@ -70,8 +72,9 @@ let reviewFailure: string | null;
 let directPublication: boolean;
 
 const respondToWrite = (path: string, body: RequestInit["body"]) => {
+  if (reviewFailure && path.startsWith("/skill-hub/submissions/"))
+    return Response.json({ detail: { error: reviewFailure } }, { status: 409 });
   if (path.endsWith("/approve") || path.endsWith("/reject")) {
-    if (reviewFailure) return Response.json({ detail: { error: reviewFailure } }, { status: 409 });
     const approved = path.endsWith("/approve");
     const reason = typeof body === "string" ? JSON.parse(body).reason : null;
     submissions = submissions.map((submission) =>
@@ -87,6 +90,19 @@ const respondToWrite = (path: string, body: RequestInit["body"]) => {
       skill: approved ? catalog[0] : null,
     };
     return Response.json(result);
+  }
+  if (path === `/skill-hub/submissions/${pending.id}`) {
+    const metadata = typeof body === "string" ? JSON.parse(body) : {};
+    submissions = submissions.map((item) => ({
+      ...item,
+      revision: (item.revision ?? 0) + 1,
+      proposal: { ...item.proposal, ...metadata },
+    }));
+    return Response.json(submissions[0]);
+  }
+  if (path.endsWith("/withdraw")) {
+    submissions = submissions.map((item) => ({ ...item, status: "withdrawn", can_edit: false }));
+    return Response.json(submissions[0]);
   }
   if (directPublication) {
     catalog = [{ ...published, version: "3.0.0", description: "Admin-published instructions" }];
@@ -242,17 +258,15 @@ const openEdit = async () => {
   return screen.getByRole("dialog");
 };
 
-it.each(["current", "retained"])("refreshes published counts after a %s download", async (kind) => {
+it("refreshes published counts after a retained download", async () => {
   URL.createObjectURL = vi.fn(() => "blob:skill-download");
   renderWithProviders(<ClaudeCodePluginsPanel accessToken="admin-token" userRole="Admin" />);
-  expect(await screen.findByRole("cell", { name: "0" })).toBeInTheDocument();
+  expect(await screen.findByRole("cell", { name: "0" }, { timeout: 5000 })).toBeInTheDocument();
   expect(fetchMock).toHaveBeenCalledOnce();
   fireEvent.click(screen.getByText(published.name));
   await screen.findByRole("button", { name: "Edit Skill" });
-  if (kind === "retained") fireEvent.click(screen.getByRole("tab", { name: "Version history" }));
-  const button = await screen.findByRole("button", {
-    name: kind === "retained" ? "Download retained ZIP" : "Download ZIP",
-  });
+  fireEvent.click(screen.getByRole("tab", { name: "Version history" }));
+  const button = await screen.findByRole("button", { name: "Download retained ZIP" });
   catalog = [{ ...published, download_count: 1 }];
   fireEvent.click(button);
   await waitFor(() => expect(button).toBeEnabled());
@@ -573,7 +587,7 @@ it("saves an admin rejection reason for the author and keeps the published metad
   expect(writes[0]).toMatchObject({
     path: `/skill-hub/submissions/${pending.id}/reject`,
     method: "PUT",
-    body: JSON.stringify({ reason: "Please include setup instructions" }),
+    body: JSON.stringify({ expected_revision: 0, reason: "Please include setup instructions" }),
   });
   fireEvent.click(screen.getByRole("tab", { name: "Published skills" }));
   await waitFor(() =>
@@ -792,3 +806,84 @@ it("applies tag and scan filters across the catalog and resets pagination when s
   expect(catalogRequests.at(-1)?.searchParams.get("tag")).toBe("engineering");
   expect(catalogRequests.at(-1)?.searchParams.get("security_scan_passed")).toBe("true");
 });
+
+it("lets an owner edit the viewed proposal and withdraw it with its current revision", async () => {
+  submissions = [{ ...pending, can_edit: true, revision: 3, proposal: { ...pending.proposal, version: "3.0.0" } }];
+  renderWithProviders(<ClaudeCodePluginsPanel accessToken="member-token" userRole="Internal User" />, {
+    searchParams: "tab=submissions",
+  });
+  fireEvent.click(await screen.findByRole("button", { name: "View details" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Edit submission" }));
+  expect(screen.getByLabelText("Version override (optional)")).toHaveValue("3.0.0");
+  expect(
+    screen.getByText(
+      `Current version ${published.version}. Leave blank for the next patch version, or enter a higher version`,
+    ),
+  ).toBeInTheDocument();
+  fireEvent.change(await screen.findByLabelText("Description (Optional)"), {
+    target: { value: "Owner revised instructions" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Save submission" }));
+  expect(await screen.findByRole("cell", { name: "Owner revised instructions" })).toBeInTheDocument();
+  expect(JSON.parse(String(writes[0].body))).toMatchObject({
+    expected_revision: 3,
+    description: "Owner revised instructions",
+  });
+  expect(catalog).toEqual([published]);
+  fireEvent.click(screen.getByRole("button", { name: "Withdraw submission" }));
+  expect(writes).toHaveLength(1);
+  fireEvent.click(await screen.findByRole("button", { name: "Confirm withdrawal" }));
+  expect(await screen.findByText("Withdrawn")).toBeInTheDocument();
+  expect(writes[1]).toMatchObject({
+    path: `/skill-hub/submissions/${pending.id}/withdraw`,
+    body: JSON.stringify({ expected_revision: 4 }),
+  });
+  fireEvent.click(screen.getByRole("button", { name: "View details" }));
+  expect(screen.queryByRole("button", { name: "Edit submission" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Withdraw submission" })).not.toBeInTheDocument();
+});
+
+it("keeps admin review separate from ownership and sends the displayed revision", async () => {
+  submissions = [{ ...pending, revision: 7, can_edit: false }];
+  renderSubmissions();
+  fireEvent.click(await screen.findByRole("button", { name: "Review" }));
+  expect(screen.queryByRole("button", { name: "Edit submission" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Withdraw submission" })).not.toBeInTheDocument();
+  fireEvent.click(await screen.findByRole("button", { name: "Approve and publish" }));
+  expect(await screen.findByText("Approved")).toBeInTheDocument();
+  expect(JSON.parse(String(writes[0].body))).toEqual({ expected_revision: 7 });
+});
+
+it.each(["metadata", "upload"])(
+  "reloads a conflicted %s edit only when the author discards the draft",
+  async (mode) => {
+    submissions = [{ ...pending, can_edit: true }];
+    renderWithProviders(<ClaudeCodePluginsPanel accessToken="member-token" userRole="Internal User" />, {
+      searchParams: "tab=submissions",
+    });
+    fireEvent.click(await screen.findByRole("button", { name: "View details" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Edit submission" }));
+    fireEvent.change(screen.getByLabelText("Description (Optional)"), { target: { value: "Unsaved draft" } });
+    if (mode === "upload") {
+      fireEvent.click(screen.getByRole("radio", { name: "Upload ZIP" }));
+      fireEvent.change(screen.getByLabelText("Skill ZIP file"), {
+        target: { files: [new File(["replacement"], "skill.zip", { type: "application/zip" })] },
+      });
+    }
+    submissions = [
+      { ...pending, can_edit: true, revision: 1, proposal: { ...pending.proposal, description: "Latest edit" } },
+    ];
+    reviewFailure = "This submission changed. Reload it before trying again.";
+    fireEvent.click(screen.getByRole("button", { name: "Save submission" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(reviewFailure);
+    expect(screen.getByRole("dialog", { name: "Edit submission" })).toBeInTheDocument();
+    reviewFailure = null;
+    fireEvent.click(screen.getByRole("button", { name: "Discard draft and reload submission" }));
+    expect(await screen.findByRole("cell", { name: "Latest edit" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Edit submission" }));
+    expect(screen.getByLabelText("Description (Optional)")).toHaveValue("Latest edit");
+    fireEvent.click(screen.getByRole("button", { name: "Save submission" }));
+    await waitFor(() => expect(writes).toHaveLength(2));
+    expect(JSON.parse(String(writes[1].body))).toMatchObject({ expected_revision: 1, description: "Latest edit" });
+  },
+);

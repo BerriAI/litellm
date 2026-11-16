@@ -24,6 +24,7 @@ from litellm.models.performance_alert import (
 )
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.repositories.alert_repository import record_alerts
+from litellm.repositories.config_repository import ConfigRepository
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
@@ -161,6 +162,7 @@ class PerformanceAlertRepository:
         )
         self._enterprise: Final = enterprise
         self._configured: Final = configured
+        self._config: Final = ConfigRepository(prisma_client, use_writer=True)
 
     async def _monitoring(self, transaction: _Transaction, *, lock: bool = False) -> AlertMonitoring:
         query: Final = 'SELECT enabled, alerts_used FROM "LiteLLM_PerformanceAlertState" WHERE id = 1'
@@ -190,7 +192,14 @@ class PerformanceAlertRepository:
 
     async def monitoring(self) -> AlertMonitoring:
         async with self._transaction() as transaction:
-            return await self._monitoring(transaction)
+            monitoring: Final = await self._monitoring(transaction)
+        return monitoring.model_copy(
+            update={"model_deprecations_enabled": await self._config.model_deprecations_enabled()}
+        )
+
+    async def set_model_deprecations_enabled(self, enabled: bool) -> AlertMonitoring:
+        await self._config.set_model_deprecations_enabled(enabled)
+        return await self.monitoring()
 
     async def set_enabled(self, enabled: bool) -> AlertMonitoring:
         async with self._database.tx(timeout=timedelta(seconds=10)) as transaction:
@@ -203,7 +212,7 @@ class PerformanceAlertRepository:
                 updated_at = now() AT TIME ZONE 'UTC' WHERE id = 1""",
                 enabled,
             )
-            return await self._monitoring(transaction)
+        return await self.monitoring()
 
     @asynccontextmanager
     async def _transaction(self) -> AsyncGenerator[_Transaction]:

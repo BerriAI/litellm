@@ -74,6 +74,9 @@ const EmailEventSettings: React.FC<EmailEventSettingsProps> = ({ accessToken }) 
 
   // Helper function to get a description for each event type
   const getEventDescription = (event: EmailEvent): string => {
+    if (event === "Performance Alerts") {
+      return t("loggingAndAlerts.emailEvents.descriptions.performanceAlerts");
+    }
     if (event === "Model Deprecations") {
       return t("loggingAndAlerts.emailEvents.descriptions.modelDeprecations");
     }

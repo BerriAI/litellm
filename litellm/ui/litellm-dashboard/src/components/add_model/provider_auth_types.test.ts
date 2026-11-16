@@ -11,8 +11,10 @@ import {
 import { Providers } from "../provider_info_helpers";
 
 describe("provider auth types", () => {
-  it("resolves provider enum keys and display names", () => {
+  it("resolves provider enum keys, canonical names, and display names", () => {
     expect(authTypesFor("MICROSOFT_365_COPILOT")).toEqual(PROVIDER_AUTH_TYPES.MICROSOFT_365_COPILOT);
+    expect(authTypesFor("microsoft_365_copilot")).toEqual(PROVIDER_AUTH_TYPES.MICROSOFT_365_COPILOT);
+    expect(authTypesFor("github_copilot")).toEqual(PROVIDER_AUTH_TYPES.GITHUB_COPILOT);
     expect(authTypesFor(Providers.MICROSOFT_365_COPILOT)).toEqual(PROVIDER_AUTH_TYPES.MICROSOFT_365_COPILOT);
     expect(authTypesFor(null)).toEqual([]);
     expect(authTypesFor("unknown")).toEqual([]);
@@ -84,11 +86,24 @@ describe("provider auth types", () => {
     const authTypes = authTypesFor("GITHUB_COPILOT");
 
     expect(inferAuthTypeId(authTypes, { api_key: "" })).toBe("shared_device_login");
+    expect(inferAuthTypeId(authTypes, { github_copilot_auth_type: "github_app" })).toBe("github_app");
+    expect(hiddenAuthFieldKeys(authTypes, "github_app")).toEqual(["api_base", "api_key"]);
     expect(inferAuthTypeId(authTypes, { github_copilot_auth_type: "per_user_oauth" })).toBe("per_user_oauth");
-    expect(hiddenAuthFieldKeys(authTypes, "per_user_oauth")).toEqual(["api_base", "api_key"]);
+    expect(hiddenAuthFieldKeys(authTypes, "per_user_oauth")).toEqual([
+      "api_base",
+      "api_key",
+      "github_copilot_app_id",
+      "github_copilot_app_installation_id",
+      "github_copilot_app_private_key_ref",
+      "github_copilot_app_private_key",
+    ]);
     expect(hiddenAuthFieldKeys(authTypes, "shared_device_login")).toEqual([
       "github_copilot_auth_type",
       "github_copilot_host",
+      "github_copilot_app_id",
+      "github_copilot_app_installation_id",
+      "github_copilot_app_private_key_ref",
+      "github_copilot_app_private_key",
     ]);
   });
 });

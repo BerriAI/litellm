@@ -55,6 +55,7 @@ def app(table: MagicMock, history_query: AsyncMock) -> FastAPI:
     app.include_router(router)
     prisma: Final = MagicMock()
     prisma.writer_db.litellm_alert = table
+    prisma.writer_db.litellm_config.find_unique = AsyncMock(return_value=None)
     prisma.writer_db.tx.return_value.__aenter__.return_value.query_raw = history_query
     app.dependency_overrides[get_database] = lambda: Database(prisma, native_database())
     app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
@@ -123,8 +124,38 @@ def test_monitoring_only_accepts_a_boolean_opt_out(
     history_query.assert_not_awaited()
 
 
+@pytest.mark.parametrize("enabled", (False, True))
+def test_deprecation_preference_updates_without_changing_performance(app: FastAPI, enabled: bool) -> None:
+    prisma: Final = MagicMock()
+    prisma.writer_db.litellm_config.find_unique = AsyncMock(return_value=MagicMock(param_value=enabled))
+    prisma.writer_db.litellm_config.upsert = AsyncMock()
+    transaction: Final = prisma.writer_db.tx.return_value.__aenter__.return_value
+    transaction.query_raw = AsyncMock(side_effect=((), ({"enabled": False, "alerts_used": 3},)))
+    transaction.execute_raw = AsyncMock()
+    app.dependency_overrides[get_alert_monitoring_repository] = lambda: PerformanceAlertRepository(prisma)
+    with TestClient(app) as client:
+        response: Final = client.patch("/alerts/monitoring", json={"model_deprecations_enabled": enabled})
+    assert response.status_code == 200, response.text
+    assert response.json() == {
+        "enabled": False,
+        "model_deprecations_enabled": enabled,
+        "alerts_used": 3,
+        "alert_limit": 5,
+        "disabled_by_config": False,
+    }
+    prisma.writer_db.litellm_config.upsert.assert_awaited_once_with(
+        where={"param_name": "model_deprecation_alerts_enabled"},
+        data={
+            "create": {"param_name": "model_deprecation_alerts_enabled", "param_value": str(enabled).lower()},
+            "update": {"param_value": str(enabled).lower()},
+        },
+    )
+    transaction.execute_raw.assert_not_awaited()
+
+
 def test_config_opt_out_cannot_be_enabled_from_the_api(app: FastAPI) -> None:
     prisma: Final = MagicMock()
+    prisma.writer_db.litellm_config.find_unique = AsyncMock(return_value=None)
     transaction: Final = prisma.writer_db.tx.return_value.__aenter__.return_value
     transaction.query_raw = AsyncMock(return_value=[{"enabled": True, "alerts_used": 0}])
     transaction.execute_raw = AsyncMock()
@@ -134,7 +165,13 @@ def test_config_opt_out_cannot_be_enabled_from_the_api(app: FastAPI) -> None:
     with TestClient(app) as client:
         status: Final = client.get("/alerts/monitoring")
         response: Final = client.patch("/alerts/monitoring", json={"enabled": True})
-    assert status.json() == {"enabled": False, "alerts_used": 0, "alert_limit": 5, "disabled_by_config": True}
+    assert status.json() == {
+        "enabled": False,
+        "alerts_used": 0,
+        "alert_limit": 5,
+        "disabled_by_config": True,
+        "model_deprecations_enabled": True,
+    }
     assert response.status_code == 409, response.text
     transaction.execute_raw.assert_not_awaited()
 

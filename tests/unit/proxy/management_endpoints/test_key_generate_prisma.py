@@ -135,54 +135,6 @@ def prisma_client():
     return prisma_client
 
 
-@pytest.mark.asyncio()
-@pytest.mark.flaky(retries=6, delay=1)
-@pytest.mark.skip(reason="Requires reliable external DB connection (prisma).")
-async def test_new_user_response(prisma_client):
-    try:
-        print("prisma client=", prisma_client)
-
-        setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-        setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
-
-        await litellm.proxy.proxy_server.prisma_client.connect()
-        from litellm.proxy.proxy_server import user_api_key_cache
-
-        _team_id = "ishaan-special-team_{}".format(uuid.uuid4())
-        await new_team(
-            NewTeamRequest(
-                team_id=_team_id,
-            ),
-            http_request=Request(scope={"type": "http"}),
-            user_api_key_dict=UserAPIKeyAuth(
-                user_role=LitellmUserRoles.PROXY_ADMIN,
-                api_key=MASTER_KEY,
-                user_id="1234",
-            ),
-        )
-
-        _response = await new_user(
-            data=NewUserRequest(
-                models=["azure-gpt-3.5"],
-                team_id=_team_id,
-                tpm_limit=20,
-                user_api_key_dict=UserAPIKeyAuth(
-                    user_role=LitellmUserRoles.PROXY_ADMIN,
-                    api_key=MASTER_KEY,
-                    user_id="1234",
-                ),
-            )
-        )
-        print(_response)
-        assert _response.models == ["azure-gpt-3.5"]
-        assert _response.team_id == _team_id
-        assert _response.tpm_limit == 20
-
-    except Exception as e:
-        print("Got Exception", e)
-        pytest.fail(f"Got exception {e}")
-
-
 @pytest.mark.parametrize(
     "api_route",
     [

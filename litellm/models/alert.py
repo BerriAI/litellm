@@ -41,6 +41,24 @@ class DeprecationEvidence(BaseModel):
     )
 
 
+class AlertSummary(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    id: AlertID
+    type: AlertType
+    resource_type: AlertResourceType
+    resource_name: str
+    created_at: AwareDatetime
+    evidence: MetricEvidence
+
+
+class AlertRecipient(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    user_id: str
+    email: str
+
+
 class AlertDetection(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 

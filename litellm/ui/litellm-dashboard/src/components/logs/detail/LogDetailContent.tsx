@@ -28,6 +28,7 @@ import { ConfigInfoMessage } from "./sections/ConfigInfoMessage";
 import { VectorStoreViewer } from "./sections/VectorStoreViewer";
 import { CREDENTIAL_LABELS, KUBERNETES_POD_ROUTING_LABELS } from "../constants";
 import { TruncatedValue } from "./TruncatedValue";
+import { CustomerSection } from "./CustomerSection";
 import { TokenFlow } from "./TokenFlow";
 import { JsonViewer } from "./JsonViewer";
 import { RoutingDecisionCard, type RoutingDecision } from "./RoutingDecisionCard";
@@ -205,6 +206,8 @@ export function LogDetailContent({
 
       {/* Metrics */}
       <MetricsSection logEntry={logEntry} metadata={metadata} />
+
+      <CustomerSection metadata={metadata} endUser={logEntry.end_user} />
 
       {/* Cost Breakdown */}
       <CostBreakdownViewer

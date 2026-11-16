@@ -38,6 +38,7 @@ import {
   KeyRateLimitFields,
   KeyTypeSelect,
   labelWithHint,
+  moveMetadataBudgetAlertsToKeyRows,
   moveMetadataTagsToTagsField,
 } from "./KeyEditViewControls";
 import {
@@ -49,6 +50,7 @@ import {
   clearMcpGrants,
   writeMcpToolPermissions,
 } from "./keyEditFormValues";
+import { BudgetAlertEmailsEditor } from "../key_team_helpers/BudgetAlertEmailsEditor";
 import { BudgetFallbacksEditor } from "../key_team_helpers/BudgetFallbacksEditor";
 import { END_USER_BUDGET_HINT, EndUserBudgetSelect } from "../key_team_helpers/EndUserBudgetSelect";
 import {
@@ -90,6 +92,7 @@ interface KeyEditViewProps {
   userID: string | null;
   userRole: string | null;
   premiumUser?: boolean;
+  editingMemberKeyAsTeamAdmin?: boolean;
 }
 
 const sessionKey = (keyData: KeyResponse) => keyData.token || keyData.token_id;
@@ -105,6 +108,7 @@ function KeyEditSession({
   userID,
   userRole,
   premiumUser = false,
+  editingMemberKeyAsTeamAdmin = false,
 }: KeyEditViewProps) {
   const { t } = useTranslation();
   const canEditGuardrails = premiumUser || (userRole != null && rolesWithWriteAccess.includes(userRole));
@@ -323,7 +327,7 @@ function KeyEditSession({
           ...values,
           ...(detachProject && enableProjectsUI && canDetachProject ? { project_id: null } : {}),
         }),
-        [...Object.keys(dirtyFields), ...(budgetLimitsUnchanged ? [] : ["budget_limits"])],
+        [...Object.keys(form.formState.dirtyFields), ...(budgetLimitsUnchanged ? [] : ["budget_limits"])],
       );
     } finally {
       setIsKeySaving(false);
@@ -373,16 +377,17 @@ function KeyEditSession({
     );
   };
 
+  const submitForm = (event: React.FormEvent<HTMLFormElement>) => {
+    moveMetadataTagsToTagsField(form, t);
+    if (!editingMemberKeyAsTeamAdmin) moveMetadataBudgetAlertsToKeyRows(form, t);
+    return form.handleSubmit((values) => handleSubmit(toSubmittedValues(values, { canViewPolicies, canViewPrompts })))(
+      event,
+    );
+  };
+
   return (
     <TooltipProvider>
-      <form
-        onSubmit={(event) => {
-          moveMetadataTagsToTagsField(form, t);
-          return form.handleSubmit((values) =>
-            handleSubmit(toSubmittedValues(values, { canViewPolicies, canViewPrompts })),
-          )(event);
-        }}
-      >
+      <form onSubmit={submitForm}>
         <FieldGroup>
           <FormField control={form.control} name="key_alias" label={t("keyDetail.keyEditView.fields.keyAlias")}>
             {(field) => <Input {...field} value={(field.value as string | undefined) ?? ""} />}
@@ -466,6 +471,23 @@ function KeyEditSession({
             label={t("keyDetail.keyEditView.fields.softBudget")}
             placeholder={t("keyDetail.keyEditView.fields.softBudgetPlaceholder")}
           />
+
+          {!editingMemberKeyAsTeamAdmin && (
+            <BudgetAlertEmailsEditor
+              control={form.control}
+              name="max_budget_alert_emails"
+              label={labelWithHint(
+                t("keyDetail.maxBudgetAlertEmails.budgetAlertThresholds"),
+                t("keyDetail.maxBudgetAlertEmails.budgetAlertThresholdsHint"),
+              )}
+              text={{
+                thresholdPlaceholder: t("keyDetail.maxBudgetAlertEmails.thresholdPlaceholder"),
+                recipientsPlaceholder: t("keyDetail.maxBudgetAlertEmails.recipientsPlaceholder"),
+                removeThreshold: t("keyDetail.maxBudgetAlertEmails.removeThreshold"),
+                addThreshold: t("keyDetail.maxBudgetAlertEmails.addThreshold"),
+              }}
+            />
+          )}
 
           <FormField
             control={form.control}
@@ -896,7 +918,7 @@ function KeyEditSession({
             )}
           </FormField>
 
-          <KeyMetadataField form={form} />
+          <KeyMetadataField form={form} budgetAlertRowsShown={!editingMemberKeyAsTeamAdmin} />
 
           <div className="mb-4">
             <FormField control={form.control} name="duration">

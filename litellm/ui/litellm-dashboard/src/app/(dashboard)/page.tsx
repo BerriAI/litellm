@@ -8,10 +8,10 @@ import {
   buildLoginUrlWithReturn,
   consumeReturnUrl,
   getLoginUrl,
-  isValidReturnUrl,
   normalizeUrlForCompare,
   storeReturnUrl,
 } from "@/utils/returnUrlUtils";
+import { navigateToUiPage } from "@/utils/uiNavigation";
 import { legacyPageRedirectHref } from "@/app/(dashboard)/legacyPageRoutes";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useRef } from "react";
@@ -60,19 +60,14 @@ function CreateKeyPageContent() {
 
     // Check for a stored return URL
     const returnUrl = consumeReturnUrl(getRuntimeBackendBaseUrl());
-    if (returnUrl && isValidReturnUrl(returnUrl, getRuntimeBackendBaseUrl())) {
-      // Inline origin check: only redirect to same-origin URLs to prevent open redirect.
-      const safeUrl = new URL(getUiPageUrl(returnUrl, true), window.location.origin);
-      if (safeUrl.origin !== window.location.origin) {
-        return;
-      }
+    if (returnUrl) {
       const currentUrl = window.location.href;
-      const normalizedReturnUrl = normalizeUrlForCompare(returnUrl);
+      const normalizedReturnUrl = normalizeUrlForCompare(getUiPageUrl(returnUrl));
       const normalizedCurrentUrl = normalizeUrlForCompare(currentUrl);
       // Only redirect if the return URL is different from the current URL
       // This prevents infinite redirect loops
       if (normalizedReturnUrl !== normalizedCurrentUrl) {
-        window.location.replace(safeUrl.href);
+        navigateToUiPage(returnUrl, true);
       }
     }
   }, [authLoading, token]);

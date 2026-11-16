@@ -539,21 +539,57 @@ fn translate_adaptive_effort_for_non_adaptive_model(
     })
 }
 
+pub(crate) fn drop_unsupported_effort(
+    request: MessagesRequest,
+    capabilities: &MessagesModelCapabilities,
+) -> MessagesRequest {
+    let rejected = |level: EffortLevel| !accepts_effort(capabilities, level);
+    let drops_reasoning_effort = capabilities.supports_adaptive_thinking
+        && matches!(
+            &request.params.reasoning_effort,
+            Some(Recognized::Known(effort)) if output_effort(*effort).is_some_and(rejected)
+        );
+    let reshaped_to_budget = !capabilities.supports_adaptive_thinking
+        && matches!(known_thinking(&request), Some(ThinkingConfig::Adaptive(_)));
+    let drops_output_effort = supports_effort_param(capabilities)
+        && !reshaped_to_budget
+        && matches!(known_effort(&request), Some(Recognized::Known(level)) if rejected(*level));
+    MessagesRequest {
+        params: MessagesOptionalParams {
+            reasoning_effort: request
+                .params
+                .reasoning_effort
+                .filter(|_| !drops_reasoning_effort),
+            output_config: if drops_output_effort {
+                without_effort(request.params.output_config)
+            } else {
+                request.params.output_config
+            },
+            ..request.params
+        },
+        ..request
+    }
+}
+
 fn drop_incompatible_temperature_for_thinking(
     request: MessagesRequest,
     context: &ThinkingContext,
 ) -> MessagesRequest {
-    if context.capabilities.supports_adaptive_thinking {
-        return request;
-    }
     let pinned = request
         .params
         .temperature
         .as_ref()
         .is_some_and(|temperature| !is_one(temperature));
-    let thinking_enabled = matches!(known_thinking(&request), Some(ThinkingConfig::Enabled(_)));
-    let effort_enabled = known_effort(&request).is_some();
-    if !pinned || !(thinking_enabled || effort_enabled) {
+    let thinking_on = matches!(
+        known_thinking(&request),
+        Some(ThinkingConfig::Enabled(_) | ThinkingConfig::Adaptive(_))
+    );
+    let droppable = if context.capabilities.supports_adaptive_thinking {
+        context.drop_params && thinking_on
+    } else {
+        thinking_on || known_effort(&request).is_some()
+    };
+    if !pinned || !droppable {
         return request;
     }
     MessagesRequest {
@@ -606,6 +642,17 @@ mod tests {
         fields: Value,
     ) -> Result<MessagesRequest, Error> {
         translate_thinking(request(fields), &context(capabilities))
+    }
+
+    fn translate_dropping_params(
+        capabilities: MessagesModelCapabilities,
+        fields: Value,
+    ) -> Result<MessagesRequest, Error> {
+        let context = ThinkingContext {
+            drop_params: true,
+            ..context(capabilities)
+        };
+        translate_thinking(request(fields), &context)
     }
 
     fn overridden_budgets(overrides: &[(&str, &str)]) -> ThinkingBudgets {
@@ -1355,6 +1402,47 @@ mod tests {
     }
 
     #[rstest]
+    #[case::claude_code_payload(
+        opus_4_7(),
+        claude_code_payload("medium", 8192),
+        0.0,
+        claude_code_payload("medium", 8192)
+    )]
+    #[case::legacy_thinking_kept_on_legacy_capable_model(
+        sonnet_4_6(),
+        serde_json::json!({"max_tokens": 8192, "thinking": {"type": "enabled", "budget_tokens": 4096}}),
+        0.5,
+        serde_json::json!({"max_tokens": 8192, "thinking": {"type": "enabled", "budget_tokens": 4096}})
+    )]
+    #[case::bare_adaptive_thinking(
+        sonnet_4_6(),
+        serde_json::json!({"max_tokens": 8192, "thinking": {"type": "adaptive"}}),
+        0.5,
+        serde_json::json!({"max_tokens": 8192, "thinking": {"type": "adaptive"}})
+    )]
+    #[case::reasoning_effort_synthesized_adaptive_thinking(
+        sonnet_4_6(),
+        serde_json::json!({"max_tokens": 8192, "reasoning_effort": "high"}),
+        0.0,
+        serde_json::json!({
+            "max_tokens": 8192,
+            "thinking": {"type": "adaptive", "display": "summarized"},
+            "output_config": {"effort": "high"}
+        })
+    )]
+    fn pinned_temperature_is_dropped_under_drop_params_when_thinking_survives_on_adaptive_model(
+        #[case] capabilities: MessagesModelCapabilities,
+        #[case] input: Value,
+        #[case] temperature: f64,
+        #[case] expected: Value,
+    ) {
+        assert_eq!(
+            translate_dropping_params(capabilities, with_temperature(input, temperature)),
+            Ok(request(expected))
+        );
+    }
+
+    #[rstest]
     #[case::temperature_one_with_enabled_thinking(
         haiku_4_5(),
         claude_code_payload("medium", 8192),
@@ -1386,17 +1474,35 @@ mod tests {
         0.0,
         serde_json::json!({"max_tokens": 8192, "output_config": {"format": {"type": "json_schema"}}})
     )]
-    #[case::adaptive_model(
+    #[case::claude_code_payload_on_adaptive_model_without_drop_params(
         opus_4_7(),
         claude_code_payload("medium", 8192),
         0.0,
         claude_code_payload("medium", 8192)
     )]
-    #[case::legacy_thinking_on_adaptive_model(
+    #[case::adaptive_thinking_without_drop_params(
+        sonnet_4_6(),
+        serde_json::json!({"max_tokens": 8192, "thinking": {"type": "adaptive"}}),
+        0.5,
+        serde_json::json!({"max_tokens": 8192, "thinking": {"type": "adaptive"}})
+    )]
+    #[case::legacy_thinking_on_adaptive_model_without_drop_params(
         sonnet_4_6(),
         serde_json::json!({"max_tokens": 8192, "thinking": {"type": "enabled", "budget_tokens": 4096}}),
         0.0,
         serde_json::json!({"max_tokens": 8192, "thinking": {"type": "enabled", "budget_tokens": 4096}})
+    )]
+    #[case::effort_without_thinking_on_adaptive_model(
+        sonnet_4_6(),
+        serde_json::json!({"max_tokens": 8192, "output_config": {"effort": "high"}}),
+        0.5,
+        serde_json::json!({"max_tokens": 8192, "output_config": {"effort": "high"}})
+    )]
+    #[case::disabled_thinking_on_adaptive_model(
+        sonnet_4_6(),
+        serde_json::json!({"max_tokens": 8192, "thinking": {"type": "disabled"}}),
+        0.5,
+        serde_json::json!({"max_tokens": 8192, "thinking": {"type": "disabled"}})
     )]
     fn temperature_is_kept(
         #[case] capabilities: MessagesModelCapabilities,
