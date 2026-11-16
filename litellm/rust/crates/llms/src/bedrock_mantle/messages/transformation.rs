@@ -139,7 +139,7 @@ fn split_mantle_region_prefix(model: &str) -> (Option<&str>, &str) {
 
 /// The model Python's Mantle transform sends: `get_llm_provider` drops the region prefix, then
 /// `AmazonMantleMessagesConfig` drops the first `mantle/`.
-fn mantle_model_id(model: &str) -> String {
+pub fn mantle_model_id(model: &str) -> String {
     split_mantle_region_prefix(model)
         .1
         .replacen("mantle/", "", 1)

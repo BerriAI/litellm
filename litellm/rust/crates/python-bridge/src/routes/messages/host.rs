@@ -23,7 +23,11 @@ use litellm_llms::{
         CALLABLE_TOKEN_PROVIDER, CALLER_TOKEN_PROVIDER_PARAM, ENTRA_ID_PARAMS,
     },
     base_llm::messages::context::MessagesModelCapabilities,
-    bedrock::chat::invoke_handler::BedrockStreamRaise,
+    bedrock::{
+        chat::invoke_handler::BedrockStreamRaise,
+        messages::mantle_transformation::amazon_mantle_model_id,
+    },
+    bedrock_mantle::messages::transformation::mantle_model_id,
 };
 use litellm_llms_types::headers::ProviderSpecificHeaders;
 use litellm_router_types::LitellmParams;
@@ -167,6 +171,9 @@ const AZURE_AI_PROVIDER: &str = "azure_ai";
 const ENABLE_TOKEN_REFRESH: &str = "enable_azure_ad_token_refresh";
 
 const BEDROCK_PROVIDER: &str = "bedrock";
+const BEDROCK_MANTLE_PROVIDER: &str = "bedrock_mantle";
+const MANTLE_ROUTE: &str = "mantle/";
+const MANTLE_PASSTHROUGH_PARAMS: [&str; 1] = ["aws_bedrock_project_id"];
 const BEDROCK_PASSTHROUGH_PARAMS: [&str; 2] = ["model_id", "guardrailConfig"];
 const BEDROCK_METADATA_PARAMS: [&str; 2] = ["metadata", "litellm_metadata"];
 const BEDROCK_SPEND_LOGS_METADATA: &str = "spend_logs_metadata";
@@ -217,6 +224,39 @@ fn bedrock_litellm_params<'py>(
         );
     }
     Ok(extra)
+}
+
+/// The route Python serves with a Bedrock Mantle Messages config: provider `bedrock_mantle`, or
+/// provider `bedrock` with a `mantle/` model.
+fn mantle_route(provider: Option<&str>, model: &str) -> bool {
+    match provider {
+        Some(BEDROCK_MANTLE_PROVIDER) => true,
+        Some(BEDROCK_PROVIDER) => {
+            !has_route_prefix(model, "claude_platform/")
+                && !has_route_prefix(model, "converse/")
+                && has_route_prefix(model, MANTLE_ROUTE)
+        }
+        _ => false,
+    }
+}
+
+/// Python's `BedrockModelInfo._model_has_route_prefix`.
+fn has_route_prefix(model: &str, prefix: &str) -> bool {
+    model.starts_with(prefix) || model.contains(&format!("/{prefix}"))
+}
+
+/// The model Python's Bedrock helpers look capabilities up for: the Mantle routes hand the Invoke
+/// transform the model id they send.
+fn bedrock_capability_model(provider: Option<&str>, model: &str) -> String {
+    match provider {
+        Some(BEDROCK_MANTLE_PROVIDER) => {
+            mantle_model_id(model.strip_prefix("bedrock_mantle/").unwrap_or(model))
+        }
+        _ if mantle_route(provider, model) => {
+            amazon_mantle_model_id(model.strip_prefix("bedrock/").unwrap_or(model))
+        }
+        _ => model.to_string(),
+    }
 }
 
 fn global_drop_params(py: Python<'_>) -> PyResult<bool> {
@@ -681,11 +721,15 @@ impl MessagesPythonHost {
             Some(AZURE_AI_PROVIDER) => Some(azure_module_settings(|name| module_global(py, name))?),
             _ => None,
         };
-        let bedrock = custom_llm_provider.as_deref() == Some(BEDROCK_PROVIDER);
+        let mantle = mantle_route(custom_llm_provider.as_deref(), &model);
+        let bedrock = custom_llm_provider.as_deref() == Some(BEDROCK_PROVIDER) || mantle;
         let mut capabilities = self.capabilities(py, &model, custom_llm_provider.as_deref())?;
         if bedrock {
-            capabilities.bedrock =
-                super::model_catalog::bedrock_capabilities(py, &model, argument("model_info")?)?;
+            capabilities.bedrock = super::model_catalog::bedrock_capabilities(
+                py,
+                &bedrock_capability_model(custom_llm_provider.as_deref(), &model),
+                argument("model_info")?,
+            )?;
         }
         let shaping = MessagesShaping {
             capabilities,
@@ -712,7 +756,13 @@ impl MessagesPythonHost {
             (Some(azure), _) => {
                 azure_settled_params(azure, argument(CALLER_TOKEN_PROVIDER_PARAM)?)?
             }
-            (None, true) => bedrock_litellm_params(py, argument)?,
+            (None, true) => bedrock_litellm_params(py, argument)?
+                .into_iter()
+                .chain(match mantle {
+                    true => project_optional_fields(MANTLE_PASSTHROUGH_PARAMS, argument)?,
+                    false => Map::new(),
+                })
+                .collect(),
             (None, false) => Map::new(),
         };
         let litellm_params = project_litellm_params(provider_fields, settled, argument, |name| {
@@ -1215,6 +1265,35 @@ mod tests {
 
     fn map(value: Value) -> Map<String, Value> {
         serde_json::from_value(value).unwrap()
+    }
+
+    #[rstest]
+    #[case::bedrock_mantle_region_prefix(
+        Some("bedrock_mantle"),
+        "bedrock_mantle/us-west-2/anthropic.claude-sonnet-5-5",
+        "anthropic.claude-sonnet-5-5"
+    )]
+    #[case::bedrock_mantle_route(
+        Some("bedrock"),
+        "bedrock/mantle/anthropic.claude-sonnet-5-5",
+        "anthropic.claude-sonnet-5-5"
+    )]
+    #[case::invoke_unchanged(
+        Some("bedrock"),
+        "bedrock/us.anthropic.claude-sonnet-5-5",
+        "bedrock/us.anthropic.claude-sonnet-5-5"
+    )]
+    #[case::claude_platform_unchanged(
+        Some("bedrock"),
+        "bedrock/claude_platform/mantle/claude-sonnet-5-5",
+        "bedrock/claude_platform/mantle/claude-sonnet-5-5"
+    )]
+    fn bedrock_capabilities_are_looked_up_for_the_model_python_transforms(
+        #[case] provider: Option<&str>,
+        #[case] model: &str,
+        #[case] expected: &str,
+    ) {
+        assert_eq!(bedrock_capability_model(provider, model), expected);
     }
 
     #[rstest]
