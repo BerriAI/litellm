@@ -90,6 +90,7 @@ from litellm.proxy.health_check import (  # noqa: F401  # legacy module exports
     resolve_health_check_mode,
     run_with_timeout,
     update_litellm_params_for_health_check,
+    without_probe_identity,
 )
 from litellm.proxy.middleware.admission_control_middleware import (
     get_admission_control_stats,
@@ -2493,19 +2494,6 @@ async def health_liveliness_options():
     return Response(headers=response_headers, status_code=200)
 
 
-def _without_probe_identity(params: Mapping[str, object]) -> Mapping[str, object]:
-    return {
-        key: {
-            name: item
-            for name, item in _OBJECT_MAPPING.validate_python(value).items()
-            if name != "health_check_deployment_id"
-        }
-        if key in ("metadata", "litellm_metadata") and isinstance(value, Mapping)
-        else value
-        for key, value in params.items()
-    }
-
-
 @router.post(
     "/health/test_connection",
     tags=["health"],
@@ -2746,7 +2734,7 @@ async def test_model_connection(
             http_parsing_utils.safe_get_request_headers(request)
         )
         health_check_params: Final = {
-            **_without_probe_identity(_OBJECT_MAPPING.validate_python(litellm_params)),
+            **without_probe_identity(_OBJECT_MAPPING.validate_python(litellm_params)),
             **_admin_api_key_from_request(
                 _OBJECT_MAPPING.validate_python(request_litellm_params),
                 _OBJECT_MAPPING.validate_python(litellm_params),

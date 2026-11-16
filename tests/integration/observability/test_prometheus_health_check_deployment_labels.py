@@ -23,6 +23,7 @@ _GROUP: Final = "plain"
 _STANDBY_GROUP: Final = "standby"
 _TESTED_GROUP: Final = "tested"
 _BROKEN_GROUP: Final = "tested-broken"
+_MISLABELED_GROUP: Final = "mislabeled"
 _PAYING: Final = "provider-b-pay"
 _SERVING: Final = "provider-a-model"
 _PAYING_ID: Final = f"paying-{uuid.uuid4().hex[:8]}"
@@ -30,6 +31,9 @@ _SERVING_ID: Final = f"serving-{uuid.uuid4().hex[:8]}"
 _STANDBY_ID: Final = f"standby-{uuid.uuid4().hex[:8]}"
 _TESTED_ID: Final = f"tested-{uuid.uuid4().hex[:8]}"
 _BROKEN_ID: Final = f"broken-{uuid.uuid4().hex[:8]}"
+_STORED_METADATA_ID: Final = f"stored-metadata-{uuid.uuid4().hex[:8]}"
+_PROBE_PARAMS_ID: Final = f"probe-params-{uuid.uuid4().hex[:8]}"
+_FORGED_IN_CONFIG: Final = f"forged-config-{uuid.uuid4().hex[:8]}"
 _FORGED: Final = f"forged-{uuid.uuid4().hex[:8]}"
 _FORGED_PROBE_KEY: Final = f"forged-probe-{uuid.uuid4().hex[:8]}"
 _HEALTH_CHECK_KEY: Final = "litellm-internal-health-check"
@@ -115,6 +119,20 @@ def _config(directory: Path, upstream: Wire) -> Path:
         ),
         _deployment(_TESTED_GROUP, _SERVING, _TESTED_ID, upstream, {}),
         _deployment(_BROKEN_GROUP, _PAYING, _BROKEN_ID, upstream, {}),
+        _deployment(
+            _MISLABELED_GROUP,
+            _SERVING,
+            _STORED_METADATA_ID,
+            upstream,
+            {"metadata": {"health_check_deployment_id": _FORGED_IN_CONFIG}},
+        ),
+        {
+            **_deployment(_MISLABELED_GROUP, _SERVING, _PROBE_PARAMS_ID, upstream, {}),
+            "model_info": {
+                "id": _PROBE_PARAMS_ID,
+                "health_check_params": {"metadata": {"health_check_deployment_id": _FORGED_IN_CONFIG}},
+            },
+        },
     ]
     configuration["litellm_settings"] = {
         **configuration["litellm_settings"],
@@ -125,7 +143,7 @@ def _config(directory: Path, upstream: Wire) -> Path:
         **configuration["general_settings"],
         "background_health_checks": True,
         "health_check_interval": 1,
-        "background_health_check_model_groups": [_GROUP, _STANDBY_GROUP],
+        "background_health_check_model_groups": [_GROUP, _STANDBY_GROUP, _MISLABELED_GROUP],
     }
     configuration["router_settings"] = {
         **configuration["router_settings"],
@@ -280,12 +298,28 @@ def test_failing_probes_do_not_cool_down_the_deployment_for_routed_traffic(rig: 
     assert routed == (_PAYING, _SERVING), "the order 1 deployment was skipped, so the probes cooled it down"
 
 
-def test_probes_write_no_deployment_state_or_limit_gauges(rig: _Rig) -> None:
+def test_a_healthy_probe_writes_state_and_limit_gauges_under_its_deployment(rig: _Rig) -> None:
     _probe_of(rig, _SUCCESSES, _STANDBY_ID)
-    samples: Final = scrape(rig.gateway)
-    gauges: Final = _LIMITS | {_STATE}
-    assert not _series(samples, gauges, _STANDBY_ID)
-    assert not _series(samples, gauges, "")
+    assert eventually(lambda: _state_of(rig, _STANDBY_ID), bool, seconds=30) == (0.0,)
+    limits: Final = _series(scrape(rig.gateway), _LIMITS, _STANDBY_ID)
+    assert {sample.name: sample.value for sample in limits} == {
+        "litellm_deployment_tpm_limit": 100000.0,
+        "litellm_deployment_rpm_limit": 1000.0,
+    }
+    assert {sample.labels["api_base"] for sample in limits} == {f"{rig.upstream.url}/v1"}
+
+
+def test_a_deployment_config_cannot_count_its_probes_under_another_deployment(rig: _Rig) -> None:
+    mislabeled: Final = {_STORED_METADATA_ID, _PROBE_PARAMS_ID}
+    events: Final = eventually(
+        lambda: _probe_payloads(rig),
+        lambda found: mislabeled <= {event.get("deployment_id") for event in found},
+        seconds=60,
+        return_last_on_timeout=True,
+    )
+    assert mislabeled <= {event.get("deployment_id") for event in events}
+    assert _FORGED_IN_CONFIG not in {event.get("deployment_id") for event in events}
+    assert not tuple(sample for sample in scrape(rig.gateway) if _FORGED_IN_CONFIG in sample.labels.values())
 
 
 def test_probe_spend_stays_off_the_deployment_so_its_budget_still_serves_users(rig: _Rig) -> None:

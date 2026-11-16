@@ -397,6 +397,19 @@ def _is_marker(deployment: Mapping[str, object]) -> bool:
     return isinstance(params, Mapping) and _is_strategy_router_deployment(params)
 
 
+def without_probe_identity(params: Mapping[str, object]) -> Mapping[str, object]:
+    return {
+        key: {
+            name: item
+            for name, item in _ANY_KEY_MAPPING.validate_python(value).items()
+            if name != "health_check_deployment_id"
+        }
+        if key in ("metadata", "litellm_metadata") and isinstance(value, Mapping)
+        else value
+        for key, value in params.items()
+    }
+
+
 def _deployment_id(deployment: Mapping[str, object]) -> str | None:
     info: Final = deployment.get("model_info")
     ident: Final = info.get("id") if isinstance(info, Mapping) else None
@@ -608,7 +621,7 @@ async def _run_model_health_check(model: dict):
 
     return await run_with_timeout(
         litellm.ahealth_check(
-            {**probe_params, **identity},
+            {**without_probe_identity(probe_params), **identity},
             mode=mode,
             prompt=DEFAULT_HEALTH_CHECK_PROMPT,
             input=["test from litellm"],
@@ -834,6 +847,7 @@ def _resolve_health_check_max_tokens(model_info: dict, litellm_params: dict) -> 
 
 _PROBE_PARAMS_ADAPTER: Final = TypeAdapter(dict[str, object])
 _MODEL_INFO_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_ANY_KEY_MAPPING: Final = TypeAdapter(Mapping[object, object])
 
 
 def _same_health_check_model(deployment_model: str | None, probe_params: Mapping[str, object]) -> bool:

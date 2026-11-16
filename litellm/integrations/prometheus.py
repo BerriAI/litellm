@@ -3737,12 +3737,12 @@ class PrometheusLogger(CustomLogger):
                 PrometheusLabelFactoryContext(deployment_values) if probed_deployment_id else label_context
             )
 
-            if (_model_info or _litellm_params) and not probed_deployment_id:
+            if _model_info or _litellm_params:
                 self._set_deployment_tpm_rpm_limit_metrics(
                     model_info=_model_info,
                     litellm_params=_litellm_params,
                     litellm_model_name=litellm_model_name,
-                    model_id=model_id,
+                    model_id=probed_deployment_id or model_id,
                     api_base=api_base,
                     llm_provider=llm_provider,
                     model_group=enum_values.model_group,
@@ -3796,13 +3796,12 @@ class PrometheusLogger(CustomLogger):
             log these labels
             ["litellm_model_name", "requested_model", model_id", "api_base", "api_provider"]
             """
-            if not probed_deployment_id:
-                self.set_deployment_healthy(
-                    litellm_model_name=litellm_model_name or "",
-                    model_id=model_id or "",
-                    api_base=api_base or "",
-                    api_provider=llm_provider or "",
-                )
+            self.set_deployment_healthy(
+                litellm_model_name=litellm_model_name or "",
+                model_id=probed_deployment_id or model_id or "",
+                api_base=api_base or "",
+                api_provider=llm_provider or "",
+            )
 
             PrometheusLogger._inc_labeled_counter(
                 self,

@@ -1765,7 +1765,10 @@ async def test_a_background_probe_is_labeled_with_its_deployment_only_through_de
     ]
     assert labels == [("standby-deployment", "", "openai", _PROBE_BASE)] * 2
     assert "provider-a-model" in observed.series(counter)[0]["litellm_model_name"]
-    assert [observed.series(gauge) for gauge in _DEPLOYMENT_GAUGES] == [[], [], []]
+    gauged: Final = {
+        series["model_id"] for series in itertools.chain.from_iterable(map(observed.series, _DEPLOYMENT_GAUGES))
+    }
+    assert gauged == ({"standby-deployment"} if outcome == "success" else set())
 
 
 @pytest.mark.asyncio
