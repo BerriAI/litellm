@@ -214,7 +214,7 @@ pub(crate) fn strip_trailing_slashes(api_base: &str) -> String {
 
 /// Python's `ensure_api_route`: an `api_base` whose path already ends in the route is kept as
 /// it is, query string included; anything else gets the route appended to the whole string.
-fn ensure_api_route(api_base: &str, route: &str) -> String {
+pub(crate) fn ensure_api_route(api_base: &str, route: &str) -> String {
     let base = strip_trailing_slashes(api_base);
     let route = route.trim_start_matches('/');
     if url_path(&base).ends_with(&format!("/{route}")) {

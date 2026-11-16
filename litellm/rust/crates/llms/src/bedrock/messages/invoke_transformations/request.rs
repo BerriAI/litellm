@@ -28,7 +28,9 @@ use crate::bedrock::common_utils::{
     structured_output::apply_bedrock_invoke_structured_output, tools_without_eager_input_streaming,
 };
 
-use super::betas::get_bedrock_invoke_anthropic_beta_headers;
+use super::betas::{
+    BEDROCK_INVOKE_CONTEXT_MANAGEMENT_EDITS, get_bedrock_invoke_anthropic_beta_headers,
+};
 
 const BEDROCK_INVOKE_LOG_PROVIDER: &str = "bedrock_invoke";
 
@@ -56,6 +58,33 @@ const BEDROCK_INVOKE_ALLOWED_TOP_LEVEL_FIELDS: [&str; 17] = [
     "context_management",
     "compaction",
 ];
+
+/// What Python's Mantle subclasses override on `AmazonAnthropicClaudeMessagesConfig`.
+#[derive(Clone, Copy, Debug)]
+pub struct InvokeRequestSettings {
+    pub custom_llm_provider: BetaProvider,
+    pub beta_headers_provider: BetaProvider,
+    pub filters_caller_betas: bool,
+    pub drops_dangerous_tool_use_beta_without_safeguards: bool,
+    pub extra_allowed_top_level_fields: &'static [&'static str],
+    pub context_management_edits: &'static [(&'static str, &'static str)],
+}
+
+pub const BEDROCK_INVOKE_REQUEST_SETTINGS: InvokeRequestSettings = InvokeRequestSettings {
+    custom_llm_provider: BetaProvider::Bedrock,
+    beta_headers_provider: BetaProvider::Bedrock,
+    filters_caller_betas: true,
+    drops_dangerous_tool_use_beta_without_safeguards: true,
+    extra_allowed_top_level_fields: &[],
+    context_management_edits: &BEDROCK_INVOKE_CONTEXT_MANAGEMENT_EDITS,
+};
+
+impl InvokeRequestSettings {
+    fn allows_top_level_field(&self, field: &str) -> bool {
+        BEDROCK_INVOKE_ALLOWED_TOP_LEVEL_FIELDS.contains(&field)
+            || self.extra_allowed_top_level_fields.contains(&field)
+    }
+}
 
 const ADAPTIVE_THINKING_KEYS: [&str; 3] = ["type", "display", "block_binding"];
 
@@ -97,7 +126,7 @@ fn get_bedrock_output_config_effort_ceiling(
 }
 
 /// Port of Python's `_clamp_adaptive_reasoning_effort_for_bedrock`.
-pub(super) fn clamp_adaptive_reasoning_effort_for_bedrock(
+pub(crate) fn clamp_adaptive_reasoning_effort_for_bedrock(
     request: MessagesRequest,
     capabilities: &MessagesModelCapabilities,
 ) -> Result<MessagesRequest, Error> {
@@ -453,10 +482,10 @@ fn pop_output_config_under_global_drop(
 }
 
 /// Port of Python's `_strip_unsupported_bedrock_invoke_fields`.
-fn strip_unsupported_bedrock_invoke_fields(body: Body) -> Body {
+fn strip_unsupported_bedrock_invoke_fields(body: Body, settings: &InvokeRequestSettings) -> Body {
     let stripped: Vec<&String> = body
         .keys()
-        .filter(|key| !BEDROCK_INVOKE_ALLOWED_TOP_LEVEL_FIELDS.contains(&key.as_str()))
+        .filter(|key| !settings.allows_top_level_field(key))
         .collect();
     if !stripped.is_empty() {
         litellm_tracing::debug!(
@@ -464,15 +493,17 @@ fn strip_unsupported_bedrock_invoke_fields(body: Body) -> Body {
         );
     }
     body.into_iter()
-        .filter(|(key, _)| BEDROCK_INVOKE_ALLOWED_TOP_LEVEL_FIELDS.contains(&key.as_str()))
+        .filter(|(key, _)| settings.allows_top_level_field(key))
         .collect()
 }
 
-/// Port of Python's `AmazonAnthropicClaudeMessagesConfig.transform_anthropic_messages_request`.
-pub(super) fn transform_anthropic_messages_request(
+/// Port of Python's `AmazonAnthropicClaudeMessagesConfig.transform_anthropic_messages_request`,
+/// shared by Bedrock Invoke and both Mantle routes (`bedrock/mantle/`, `bedrock_mantle/`).
+pub(crate) fn transform_anthropic_messages_request(
     request: MessagesRequest,
     context: &MessagesTransformContext,
     headers: Headers,
+    settings: &InvokeRequestSettings,
 ) -> Result<(MessagesRequest, Headers), Error> {
     let model = request.model.clone();
     let stream = request.params.stream.clone();
@@ -486,7 +517,7 @@ pub(super) fn transform_anthropic_messages_request(
         transform_messages_request(request, context)?,
         capabilities.supports_mid_conversation_system,
         context.drops_unsupported_params,
-        BetaProvider::Bedrock,
+        settings.custom_llm_provider,
     );
     let mut body = to_body(&request)?;
     let shared_params = body.clone();
@@ -525,6 +556,7 @@ pub(super) fn transform_anthropic_messages_request(
         &model,
         capabilities,
         injected_thinking,
+        settings,
     )?;
     if !betas.is_empty() {
         body.insert(
@@ -538,7 +570,7 @@ pub(super) fn transform_anthropic_messages_request(
     }
     tools_without_eager_input_streaming(&mut body);
     pop_output_config_under_global_drop(&mut body, context.global_drop_params, supports_effort);
-    let mut body = strip_unsupported_bedrock_invoke_fields(body);
+    let mut body = strip_unsupported_bedrock_invoke_fields(body, settings);
     body.insert("model".into(), Value::String(model));
     if let Some(stream) = stream {
         body.insert(
