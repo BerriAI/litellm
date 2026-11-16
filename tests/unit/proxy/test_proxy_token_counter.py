@@ -15,6 +15,7 @@ import uuid
 from collections.abc import Callable, Coroutine, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import replace
+from datetime import datetime
 from functools import partial
 from pathlib import Path
 from types import MappingProxyType, SimpleNamespace
@@ -27,6 +28,7 @@ import pytest
 import respx
 import tiktoken
 from dotenv import load_dotenv
+from google.oauth2.credentials import Credentials
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter
 from tokenizers import Tokenizer
 from tokenizers.models import WordLevel
@@ -5887,10 +5889,15 @@ def test_count_routes_send_the_claude_count_api_the_user_profile_id_inference_wo
             "get_async_httpx_client",
             return_value=AsyncHTTPHandler(transport=httpx.MockTransport(count_api)),
         ),
-        patch.object(
-            VertexAIPartnerModelsTokenCounter,
-            "_ensure_access_token_async",
-            new=AsyncMock(return_value=("fake-token", "test-project")),
+        patch(
+            "google.auth.default",
+            return_value=(
+                Credentials(
+                    token="fake-token",
+                    refresh_handler=lambda request, scopes: ("fake-token", datetime(2100, 1, 1)),
+                ),
+                "test-project",
+            ),
         ),
     ):
         response: Final = TestClient(app, raise_server_exceptions=False).post(
