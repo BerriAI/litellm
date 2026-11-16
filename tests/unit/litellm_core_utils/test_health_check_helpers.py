@@ -242,6 +242,17 @@ def test_health_check_tracking_adds_no_deployment_id_when_none_is_incoming():
     assert "model_group" not in result["litellm_metadata"]
 
 
+@pytest.mark.parametrize("malformed", ["oops", ["a"], 5], ids=["str", "list", "int"])
+def test_health_check_tracking_overwrites_non_mapping_incoming_metadata(malformed: object):
+    result: Final = HealthCheckHelpers.update_model_params_with_health_check_tracking_information(
+        {"model": "gpt-3.5-turbo", "api_key": "test_key", "litellm_metadata": malformed}
+    )
+
+    metadata: Final = result["litellm_metadata"]
+    assert "health_check_deployment_id" not in metadata
+    assert metadata["user_api_key_hash"] == LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME
+
+
 def test_get_metadata_for_health_check_call():
     """Test _get_metadata_for_health_check_call returns correct metadata structure."""
     result: Final = HealthCheckHelpers._get_metadata_for_health_check_call()
