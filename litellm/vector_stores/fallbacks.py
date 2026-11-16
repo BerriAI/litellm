@@ -41,6 +41,7 @@ class VectorStoreTarget:
 class VectorStoreFallbackPlan:
     targets: tuple[VectorStoreTarget, ...]
     cooldown_time: float = DEFAULT_COOLDOWN_TIME_SECONDS
+    caller_options: Mapping[str, object] | None = None
 
 
 _FALLBACK_CONTEXT: Final[ContextVar[VectorStoreFallbackPlan | None]] = ContextVar(

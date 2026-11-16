@@ -925,3 +925,138 @@ async def test_fallback_honors_global_query_image_dropping(monkeypatch: pytest.M
             {"query": "q", "filters": None, "max_num_results": None, "ranking_options": None, "rewrite_query": None}
         ] * (1 + int(primary_status == 503))
         assert response["data"] == MOCK_SEARCH_RESPONSE["data"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("caller_filter", [None, {"type": "eq", "key": "category", "value": "guide"}])
+async def test_fallback_preserves_target_filter_and_defaults_separately_from_primary(caller_filter):
+    from litellm.vector_stores.fallbacks import (
+        VectorStoreFallbackPlan,
+        VectorStoreTarget,
+        vector_store_fallback_context,
+    )
+
+    primary_filter: Final = {"type": "eq", "key": "tenant", "value": "primary-tenant"}
+    backup_filter: Final = {"type": "eq", "key": "tenant", "value": "backup-tenant"}
+    primary: Final = VectorStoreTarget(
+        "defaults-primary",
+        "openai",
+        {
+            "api_base": "https://defaults-primary.example/v1",
+            "api_key": "primary",
+            "filters": primary_filter,
+            "max_num_results": 9,
+        },
+    )
+    backup: Final = VectorStoreTarget(
+        "defaults-backup",
+        "openai",
+        {
+            "api_base": "https://defaults-backup.example/v1",
+            "api_key": "backup",
+            "filters": backup_filter,
+            "max_num_results": 2,
+        },
+    )
+    caller_options: Final = {"filters": caller_filter, "max_num_results": None}
+    with respx.mock(assert_all_called=True) as upstream:
+        first: Final = upstream.route(host="defaults-primary.example").respond(503)
+        second: Final = upstream.route(host="defaults-backup.example").respond(200, json=MOCK_SEARCH_RESPONSE)
+        with vector_store_fallback_context(
+            VectorStoreFallbackPlan((primary, backup), cooldown_time=0, caller_options=caller_options)
+        ):
+            await vector_stores_main.asearch(
+                "defaults-primary",
+                query="q",
+                filters=primary_filter,
+                max_num_results=9,
+                client=AsyncHTTPHandler(transport=httpx.AsyncHTTPTransport()),
+            )
+        assert [json.loads(route.calls[0].request.content) for route in (first, second)] == [
+            {
+                "query": "q",
+                "filters": registered
+                if caller_filter is None
+                else {"type": "and", "filters": [registered, caller_filter]},
+                "max_num_results": limit,
+                "ranking_options": None,
+                "rewrite_query": None,
+            }
+            for registered, limit in ((primary_filter, 9), (backup_filter, 2))
+        ]
+
+
+@pytest.mark.asyncio
+async def test_global_drop_params_applies_to_fallback_optional_parameter_mapping(monkeypatch: pytest.MonkeyPatch):
+    from litellm.vector_stores.fallbacks import (
+        VectorStoreFallbackPlan,
+        VectorStoreTarget,
+        vector_store_fallback_context,
+    )
+
+    monkeypatch.setattr(litellm, "drop_params", True)
+    targets: Final = tuple(
+        VectorStoreTarget(
+            f"drop-{host}",
+            "bedrock",
+            {
+                "api_base": f"https://drop-{host}.example/knowledgebases",
+                "aws_region_name": "us-west-2",
+                "aws_access_key_id": "test-key",
+                "aws_secret_access_key": "test-secret",
+            },
+        )
+        for host in ("primary", "backup")
+    )
+    with respx.mock(assert_all_called=True) as upstream:
+        first: Final = upstream.route(host="drop-primary.example").respond(503)
+        second: Final = upstream.route(host="drop-backup.example").respond(200, json={"retrievalResults": []})
+        with vector_store_fallback_context(VectorStoreFallbackPlan(targets, cooldown_time=0)):
+            await vector_stores_main.asearch(
+                "drop-primary",
+                query="q",
+                filters={"type": "eq", "key": "missing-value"},
+                client=AsyncHTTPHandler(transport=httpx.AsyncHTTPTransport()),
+            )
+        assert [json.loads(route.calls[0].request.content) for route in (first, second)] == [
+            {"retrievalQuery": {"text": "q"}},
+            {"retrievalQuery": {"text": "q"}},
+        ]
+
+
+@pytest.mark.asyncio
+async def test_global_drop_cannot_remove_a_registered_filter_when_caller_filter_is_invalid(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from litellm.vector_stores.fallbacks import (
+        VectorStoreFallbackPlan,
+        VectorStoreTarget,
+        vector_store_fallback_context,
+    )
+
+    monkeypatch.setattr(litellm, "drop_params", True)
+    registered_filter: Final = {"type": "eq", "key": "tenant", "value": "mine"}
+    targets: Final = tuple(
+        VectorStoreTarget(
+            f"guard-{host}",
+            "bedrock",
+            {
+                "filters": registered_filter,
+                "api_base": f"https://guard-{host}.example/knowledgebases",
+                "aws_region_name": "us-west-2",
+                "aws_access_key_id": "test-key",
+                "aws_secret_access_key": "test-secret",
+            },
+        )
+        for host in ("primary", "backup")
+    )
+    with respx.mock(assert_all_called=False) as upstream:
+        with vector_store_fallback_context(VectorStoreFallbackPlan(targets, cooldown_time=0)):
+            with pytest.raises(litellm.BadRequestError, match="cannot drop a registered"):
+                await vector_stores_main.asearch(
+                    "guard-primary",
+                    query="q",
+                    filters={"type": "eq", "key": "missing-value"},
+                    client=AsyncHTTPHandler(transport=httpx.AsyncHTTPTransport()),
+                )
+        assert len(upstream.calls) == 0

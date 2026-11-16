@@ -226,7 +226,17 @@ async def test_unified_fallback_allows_another_provider(
 
 
 @pytest.mark.parametrize(
-    "field", ["api_base", "api_key", "model", "extra_headers", "fallbacks", "_vector_store_fallback_plan"]
+    "field",
+    [
+        "api_base",
+        "api_key",
+        "model",
+        "extra_headers",
+        "fallbacks",
+        "_vector_store_fallback_plan",
+        "timeout",
+        "request_timeout",
+    ],
 )
 def test_search_fallback_rejects_caller_routing_and_connection_overrides(field: str) -> None:
     from fastapi import HTTPException
@@ -332,3 +342,38 @@ async def test_invalid_registered_fallback_returns_client_error(monkeypatch: pyt
     with pytest.raises(HTTPException) as invalid:
         await resolve_vector_store_fallback_plan(primary, UserAPIKeyAuth(user_role="proxy_admin"))
     assert invalid.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_search_rejects_caller_timeout_before_any_provider_attempt(monkeypatch: pytest.MonkeyPatch):
+    from fastapi import HTTPException, Request, Response
+
+    from litellm.proxy.vector_store_endpoints.endpoints import vector_store_search
+    from litellm.types.vector_stores import LiteLLM_ManagedVectorStore
+
+    stores: Final = [
+        LiteLLM_ManagedVectorStore(
+            vector_store_id=store_id,
+            custom_llm_provider="openai",
+            litellm_params={"fallbacks": ["timeout-backup"]} if store_id == "timeout-primary" else {},
+        )
+        for store_id in ("timeout-primary", "timeout-backup")
+    ]
+    monkeypatch.setattr(litellm, "vector_store_registry", VectorStoreRegistry(stores))
+
+    async def receive():
+        return {"type": "http.request", "body": b'{"query":"q","timeout":0.001}', "more_body": False}
+
+    request: Final = Request(
+        {"type": "http", "method": "POST", "path": "/v1/vector_stores/timeout-primary/search", "headers": []},
+        receive=receive,
+    )
+    with pytest.raises(HTTPException) as rejected:
+        await vector_store_search(
+            request=request,
+            vector_store_id="timeout-primary",
+            fastapi_response=Response(),
+            user_api_key_dict=UserAPIKeyAuth(user_role="proxy_admin"),
+        )
+    assert rejected.value.status_code == 400
+    assert rejected.value.detail == "'timeout' is owned by the vector store registration"

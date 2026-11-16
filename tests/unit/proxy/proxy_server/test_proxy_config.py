@@ -6513,7 +6513,7 @@ async def test_yaml_fallback_resolves_backup_loaded_from_database(monkeypatch: p
     from litellm.proxy.utils import PrismaClient
 
     client: Final = MagicMock(spec=PrismaClient)
-    client.db = SimpleNamespace(
+    client.writer_db = SimpleNamespace(
         litellm_managedvectorstorestable=SimpleNamespace(
             find_many=AsyncMock(
                 return_value=[
@@ -6568,7 +6568,7 @@ async def test_vector_store_db_refresh_updates_and_removes_rows_preserving_yaml(
         ]
     )
     client: Final = MagicMock(spec=PrismaClient)
-    client.db = SimpleNamespace(
+    client.writer_db = SimpleNamespace(
         litellm_managedvectorstorestable=SimpleNamespace(
             find_many=AsyncMock(
                 side_effect=[
@@ -6637,7 +6637,7 @@ async def test_invalid_db_fallback_refresh_keeps_last_valid_registry(monkeypatch
     )
     previous: Final = tuple(registry.vector_stores)
     client: Final = MagicMock(spec=PrismaClient)
-    client.db = SimpleNamespace(
+    client.writer_db = SimpleNamespace(
         litellm_managedvectorstorestable=SimpleNamespace(
             find_many=AsyncMock(
                 return_value=[
@@ -6653,3 +6653,76 @@ async def test_invalid_db_fallback_refresh_keeps_last_valid_registry(monkeypatch
     monkeypatch.setattr(litellm, "vector_store_registry", registry)
     await ProxyConfig()._init_vector_stores_in_db(client)
     assert tuple(registry.vector_stores) == previous
+
+
+@pytest.mark.asyncio
+async def test_vector_store_refresh_uses_committed_writer_instead_of_lagging_replica(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy.utils import PrismaClient
+    from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
+
+    registry: Final = VectorStoreRegistry()
+    client: Final = MagicMock(spec=PrismaClient)
+    client.db = SimpleNamespace(litellm_managedvectorstorestable=SimpleNamespace(find_many=AsyncMock(return_value=[])))
+    client.writer_db = SimpleNamespace(
+        litellm_managedvectorstorestable=SimpleNamespace(
+            find_many=AsyncMock(
+                return_value=[
+                    (("vector_store_id", "committed-backup"), ("custom_llm_provider", "openai")),
+                ]
+            )
+        )
+    )
+    monkeypatch.setattr(litellm, "vector_store_registry", registry)
+    await ProxyConfig()._init_vector_stores_in_db(client)
+    assert registry.vector_stores == [{"vector_store_id": "committed-backup", "custom_llm_provider": "openai"}]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mutation", ["create", "update", "delete"])
+async def test_inflight_vector_store_refresh_preserves_concurrent_local_commit(
+    monkeypatch: pytest.MonkeyPatch,
+    mutation: str,
+) -> None:
+    from litellm.proxy.utils import PrismaClient
+    from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
+
+    registry: Final = VectorStoreRegistry(
+        vector_stores=[
+            {"vector_store_id": "backup", "custom_llm_provider": "openai", "litellm_params": {"api_key": "old"}},
+        ]
+    )
+    read_started: Final = asyncio.Event()
+    finish_read: Final = asyncio.Event()
+
+    async def stale_read(**kwargs: object) -> list[tuple[tuple[str, object], ...]]:
+        read_started.set()
+        await finish_read.wait()
+        return [
+            (("vector_store_id", "backup"), ("custom_llm_provider", "openai"), ("litellm_params", {"api_key": "old"}))
+        ]
+
+    client: Final = MagicMock(spec=PrismaClient)
+    client.writer_db = SimpleNamespace(litellm_managedvectorstorestable=SimpleNamespace(find_many=stale_read))
+    monkeypatch.setattr(litellm, "vector_store_registry", registry)
+    refresh: Final = asyncio.create_task(ProxyConfig()._init_vector_stores_in_db(client))
+    await read_started.wait()
+    match mutation:
+        case "create":
+            registry.add_vector_store_to_registry({"vector_store_id": "new", "custom_llm_provider": "openai"})
+        case "update":
+            registry.update_vector_store_in_registry(
+                "backup",
+                {
+                    "vector_store_id": "backup",
+                    "custom_llm_provider": "openai",
+                    "litellm_params": {"api_key": "new"},
+                },
+            )
+        case "delete":
+            registry.delete_vector_store_from_registry("backup")
+    committed: Final = tuple(registry.vector_stores)
+    finish_read.set()
+    await refresh
+    assert tuple(registry.vector_stores) == committed

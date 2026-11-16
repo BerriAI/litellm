@@ -1,4 +1,5 @@
 from collections.abc import Mapping, Sequence
+from dataclasses import replace
 from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
@@ -109,7 +110,9 @@ def reject_caller_fallback_selection(payload: Mapping[str, object], *, enabled: 
     from litellm.litellm_core_utils.clientside_credential_handler import UPSTREAM_BOUND_PARAMS
 
     always: Final = frozenset({"fallbacks", "_vector_store_fallback_plan"})
-    owned: Final = UPSTREAM_BOUND_PARAMS | frozenset({"model", "custom_llm_provider", "client", "extra_query"})
+    owned: Final = UPSTREAM_BOUND_PARAMS | frozenset(
+        {"model", "custom_llm_provider", "client", "extra_query", "timeout", "request_timeout"}
+    )
     blocked: Final = always | owned if enabled else always
     found: Final = next((key for key in payload if key in blocked), None)
     if found is not None:
@@ -204,9 +207,23 @@ async def vector_store_search(
     data["vector_store_id"] = vector_store_id
     caller_body: Final = JSON_OBJECT_ADAPTER.validate_python(data)
     registered_store: Final = await get_litellm_managed_vector_store(vector_store_id)
-    fallback_plan: Final = (
+    resolved_plan: Final = (
         await resolve_vector_store_fallback_plan(registered_store, user_api_key_dict)
         if registered_store is not None
+        else None
+    )
+    fallback_plan: Final = (
+        replace(
+            resolved_plan,
+            caller_options=MappingProxyType(
+                {
+                    key: caller_body[key]
+                    for key in ("filters", "max_num_results", "ranking_options", "rewrite_query")
+                    if key in caller_body
+                }
+            ),
+        )
+        if resolved_plan is not None
         else None
     )
     reject_caller_fallback_selection(caller_body, enabled=fallback_plan is not None)

@@ -9905,7 +9905,15 @@ class ProxyConfig:
         from litellm.vector_stores.vector_store_registry import VectorStoreRegistry, validate_vector_store_fallbacks
 
         try:
-            vector_stores: Final = await VectorStoreRegistry.get_vector_stores_from_db(prisma_client=prisma_client)
+            before_registry: Final = litellm.vector_store_registry
+            before_generation: Final = before_registry.generation if before_registry is not None else None
+            vector_stores: Final = await VectorStoreRegistry.get_vector_stores_from_db(
+                prisma_client=prisma_client, use_writer=True
+            )
+            if litellm.vector_store_registry is not before_registry or (
+                before_registry is not None and before_registry.generation != before_generation
+            ):
+                return
             configured: Final = (
                 tuple(store for store in litellm.vector_store_registry.vector_stores if store.get("is_config"))
                 if litellm.vector_store_registry is not None
@@ -9921,6 +9929,7 @@ class ProxyConfig:
                 litellm.vector_store_registry = VectorStoreRegistry(vector_stores=list(snapshot))
             else:
                 litellm.vector_store_registry.vector_stores = list(snapshot)
+                litellm.vector_store_registry.generation += 1
         except Exception as e:
             verbose_proxy_logger.exception(
                 "litellm.proxy.proxy_server.py::ProxyConfig:_init_vector_stores_in_db - %s", e
@@ -12047,6 +12056,7 @@ class ProxyStartupEvent:
             if litellm.vector_store_registry is not None:
                 from litellm.vector_stores.vector_store_registry import validate_vector_store_fallbacks
 
+                # Initial DB load may leave unresolved YAML references; only periodic refresh has a last valid graph.
                 validate_vector_store_fallbacks(litellm.vector_store_registry.vector_stores)
 
             proxy_config.start_config_sync_subscriber(

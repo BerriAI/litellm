@@ -360,6 +360,14 @@ def _optional_search_mapping(value: object) -> Mapping[str, object] | None:
     return None if value is None else _SEARCH_FIELDS.validate_python(value)
 
 
+def _combined_search_filter(registered: object, requested: object) -> object:
+    if registered is None:
+        return requested
+    if requested is None or registered == requested:
+        return registered
+    return {"type": "and", "filters": [registered, requested]}
+
+
 async def _fallback_search_attempt(
     request: _FallbackSearch, target: VectorStoreTarget
 ) -> Attempt[VectorStoreSearchResponse]:
@@ -384,12 +392,20 @@ async def _fallback_search_attempt(
     options: Final = VectorStoreRequestUtils.get_requested_vector_store_search_optional_param(
         {
             **connection,
-            **request.options,
+            **{key: value for key, value in request.options.items() if value is not None},
+            "filters": _combined_search_filter(connection.get("filters"), request.options.get("filters")),
             "query_image": searched.image,
             "drop_params": request.metadata.get("drop_params"),
         },
         provider_config,
     )
+    mapped_options: Final = _SEARCH_FIELDS.validate_python(options)
+    if connection.get("filters") is not None and mapped_options.get("filters") is None:
+        raise litellm.BadRequestError(
+            message="Search parameter mapping cannot drop a registered vector store filter",
+            model=physical_id,
+            llm_provider=provider_name,
+        )
     embedding: Final = _SearchEmbeddingExecutor(request.embedding)
     extra_headers: Final = _optional_search_mapping(connection.get("extra_headers"))
     extra_body: Final = _optional_search_mapping(connection.get("extra_body"))
@@ -482,7 +498,9 @@ async def asearch(
             _FallbackSearch(
                 plan=fallback_plan,
                 query=tuple(query) if isinstance(query, builtins.list) else query,
-                options=MappingProxyType(
+                options=fallback_plan.caller_options
+                if fallback_plan.caller_options is not None
+                else MappingProxyType(
                     {
                         "filters": _optional_search_mapping(filters),
                         "max_num_results": max_num_results,

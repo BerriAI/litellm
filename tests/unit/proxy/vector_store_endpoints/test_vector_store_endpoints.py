@@ -3943,3 +3943,29 @@ async def test_fallback_patch_retains_connection_and_nested_embedding_credential
     }
     assert "registered-test-key" not in str(response)
     assert "embedding-test-key" not in str(response)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"litellm_params": {"api_base": "https://untrusted.example/v1"}},
+        {"litellm_params": {"litellm_embedding_config": {"api_base": "https://untrusted.example/v1"}}},
+        {"custom_llm_provider": "pg_vector"},
+    ],
+)
+async def test_store_access_does_not_allow_retargeting_registered_credentials(
+    fallback_management_database: MagicMock, changes: dict[str, object]
+):
+    from litellm.proxy.vector_store_endpoints.management_endpoints import update_vector_store
+    from litellm.types.vector_stores import VectorStoreUpdateRequest
+
+    table: Final = fallback_management_database.db.litellm_managedvectorstorestable
+    with pytest.raises(HTTPException) as denied:
+        await update_vector_store(
+            VectorStoreUpdateRequest.model_validate({"vector_store_id": "backup", **changes}),
+            UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER),
+        )
+    assert denied.value.status_code == 403
+    table.find_unique.assert_not_awaited()
+    table.update.assert_not_awaited()

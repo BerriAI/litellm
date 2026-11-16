@@ -36,6 +36,7 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.rbac_utils import check_feature_access_for_user
 from litellm.proxy.vector_store_endpoints.utils import (
+    assert_proxy_admin_for_vector_store_index_management,
     can_user_access_vector_store,
     filter_listable_vector_stores,
     normalize_litellm_params,
@@ -667,6 +668,8 @@ async def update_vector_store(
     The updated data is immediately synchronized to the in-memory registry.
     """
     await check_feature_access_for_user(user_api_key_dict, "vector_stores")
+    if {"litellm_params", "custom_llm_provider"} & data.model_fields_set:
+        assert_proxy_admin_for_vector_store_index_management(user_api_key_dict, operation="update")
 
     from litellm.proxy.proxy_server import prisma_client
     from litellm.types.router import GenericLiteLLMParams
