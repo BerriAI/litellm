@@ -1132,11 +1132,27 @@ def _mcp_tool_call_name(route: str, request_body: Mapping[str, object]) -> str |
     return string_field(request_body.get("params"), "name")
 
 
-def _native_names_displayed_as(display_name: str, server: "MCPServer") -> tuple[str, ...]:
-    return tuple(
+def _native_names_displayed_as(display_name: str, server: "MCPServer") -> frozenset[str]:
+    return frozenset(
         native_name
         for native_name, shown_name in (server.tool_name_to_display_name or {}).items()
         if shown_name == display_name
+    )
+
+
+def _native_names_reached_from(tool_name: str, server: "MCPServer", seen: frozenset[str]) -> frozenset[str]:
+    """Execution resolves a display name more than once, so a tool shown under another tool's name is reached too."""
+    from litellm.proxy.mcp_server.utils import (  # noqa: PLC0415  # the MCP package imports the auth stack
+        add_server_prefix_to_name,
+        get_server_prefix,
+    )
+
+    found: Final = _native_names_displayed_as(tool_name, server) - seen
+    names_they_are_called_by: Final = found | {
+        add_server_prefix_to_name(native_name, get_server_prefix(server)) for native_name in found
+    }
+    return found.union(
+        *(_native_names_reached_from(name, server, seen | found) for name in names_they_are_called_by - {tool_name})
     )
 
 
@@ -1153,7 +1169,8 @@ def _costs_of_running_tool_on(tool_name: str, server: "MCPServer") -> tuple[floa
     return tuple(
         mcp_tool_cost_per_query(cost_info=cost_info, tool_name=native_name)
         for native_name in (
-            _native_names_displayed_as(tool_name, server) or (strip_known_server_prefix(tool_name, server),)
+            _native_names_reached_from(tool_name, server, frozenset())
+            or (strip_known_server_prefix(tool_name, server),)
         )
     )
 
@@ -1207,7 +1224,7 @@ def is_zero_cost_mcp_tool_call(route: str, request_body: Mapping[str, object]) -
     servers_showing_the_name: Final = tuple(
         server for server in servers if _native_names_displayed_as(tool_name, server)
     )
-    if not named_servers and (not servers_showing_the_name or _is_reserved_mcp_tool_name(tool_name)):
+    if _is_reserved_mcp_tool_name(tool_name) or not (named_servers or servers_showing_the_name):
         return False
     return all(
         max(_costs_of_running_tool_on(tool_name, server)) <= 0
