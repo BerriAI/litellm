@@ -16,12 +16,20 @@ pub enum PythonException {
     Value,
     #[strum(serialize = "TypeError")]
     Type,
+    #[strum(serialize = "AttributeError")]
+    Attribute,
+    #[strum(serialize = "IndexError")]
+    Index,
+    #[strum(serialize = "OSError")]
+    OS,
     #[strum(serialize = "google.auth.exceptions.DefaultCredentialsError")]
     DefaultCredentials,
     #[strum(serialize = "google.auth.exceptions.MalformedError")]
     Malformed,
     #[strum(serialize = "google.auth.exceptions.InvalidValue")]
     InvalidValue,
+    #[strum(serialize = "google.auth.exceptions.InvalidResource")]
+    InvalidResource,
     #[strum(serialize = "google.auth.exceptions.RefreshError")]
     Refresh,
     #[strum(serialize = "google.auth.exceptions.TransportError")]
@@ -120,6 +128,19 @@ pub(crate) fn python_type(value: &Value) -> &'static str {
         Value::String(_) => "<class 'str'>",
         Value::Array(_) => "<class 'list'>",
         Value::Object(_) => "<class 'dict'>",
+    }
+}
+
+/// Python's `type(value).__name__` for a value parsed from JSON, `NoneType` for a missing one.
+pub(crate) fn python_type_name(value: Option<&Value>) -> &'static str {
+    match value {
+        None | Some(Value::Null) => "NoneType",
+        Some(Value::Bool(_)) => "bool",
+        Some(Value::Number(number)) if number.is_f64() => "float",
+        Some(Value::Number(_)) => "int",
+        Some(Value::String(_)) => "str",
+        Some(Value::Array(_)) => "list",
+        Some(Value::Object(_)) => "dict",
     }
 }
 

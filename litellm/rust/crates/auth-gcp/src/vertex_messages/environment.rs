@@ -1,15 +1,13 @@
-use std::{future::Future, pin::Pin, sync::Arc, time::Duration};
+use std::{future::Future, pin::Pin, time::Duration};
 
 use google_cloud_auth::credentials::mds;
-use litellm_http::{
-    ClientVariant, HttpClientPool, HttpSettings, Resolution, media::PublicDnsResolver,
-};
 use litellm_secret_value::SecretValue;
 use serde_json::Value;
 
 use super::{
     builders::{TokenSource, token_failure},
     failure::{GoogleLoginFailure, PythonException},
+    transport::Requests,
 };
 use crate::{
     constants::{CLOUD_PLATFORM_SCOPE, GOOGLE_OAUTH_TOKEN_ENDPOINT},
@@ -50,26 +48,23 @@ pub trait GoogleEnvironment: Send + Sync {
     ) -> EnvironmentFuture<'_, Result<Option<String>, GoogleLoginFailure>>;
 }
 
+/// google-auth's own lookups go through `requests`, which reads its proxy and CA bundle from the
+/// environment for every request.
 pub struct SystemGoogleEnvironment {
-    pool: HttpClientPool,
+    requests: Requests,
 }
 
 impl Default for SystemGoogleEnvironment {
     fn default() -> Self {
         Self {
-            pool: HttpClientPool::new(Arc::new(PublicDnsResolver)),
+            requests: Requests::process(),
         }
     }
 }
 
 impl SystemGoogleEnvironment {
-    fn client(&self) -> Option<litellm_http::Client> {
-        self.pool
-            .client(
-                &Resolution::from(&HttpSettings::default()).config,
-                ClientVariant::Provider,
-            )
-            .ok()
+    fn client(&self, url: &str) -> Option<litellm_http::Client> {
+        self.requests.client(url).ok()
     }
 
     fn numeric_env<T: std::str::FromStr>(&self, name: &str, default: T) -> T {
@@ -92,7 +87,7 @@ impl SystemGoogleEnvironment {
             DEFAULT_METADATA_DETECT_RETRIES,
         );
         for _ in 0..attempts {
-            let Some(client) = self.client() else {
+            let Some(client) = self.client(&root) else {
                 return false;
             };
             let response = client
@@ -162,7 +157,7 @@ impl GoogleEnvironment for SystemGoogleEnvironment {
                 self.metadata_host()
             );
             for _ in 0..METADATA_PROJECT_RETRIES {
-                let client = self.client()?;
+                let client = self.client(&url)?;
                 let Ok(response) = client
                     .get(&url)
                     .header(METADATA_FLAVOR, GOOGLE)
@@ -202,9 +197,7 @@ impl GoogleEnvironment for SystemGoogleEnvironment {
         token: SecretValue,
     ) -> EnvironmentFuture<'_, Result<Option<String>, GoogleLoginFailure>> {
         Box::pin(async move {
-            let client = self.client().ok_or_else(|| {
-                GoogleLoginFailure::new(PythonException::Transport, "no HTTP client")
-            })?;
+            let client = self.requests.client(&url)?;
             let response = client
                 .get(&url)
                 .bearer_auth(token.expose())
@@ -271,7 +264,7 @@ impl GoogleEnvironment for OnGce {
             }
         }
 
-        Ok(Arc::new(Granted(self.token)))
+        Ok(std::sync::Arc::new(Granted(self.token)))
     }
 
     fn resource_manager_project(

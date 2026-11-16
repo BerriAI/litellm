@@ -1,8 +1,6 @@
 use std::{error::Error as StdError, sync::Arc};
 
-use google_cloud_auth::credentials::{
-    AccessTokenCredentials, external_account, impersonated, user_account,
-};
+use google_cloud_auth::credentials::{AccessTokenCredentials, external_account, impersonated};
 use serde_json::{Map, Value};
 
 use super::{
@@ -18,7 +16,6 @@ use crate::{
 pub(crate) type TokenSource = Arc<dyn GcpTokenSource>;
 
 const SERVICE_ACCOUNT_FIELDS: [&str; 2] = ["client_email", "token_uri"];
-const AUTHORIZED_USER_FIELDS: [&str; 3] = ["refresh_token", "client_id", "client_secret"];
 const NO_CREDENTIAL_SOURCE: &str =
     "A valid credential source or a subject token supplier must be provided.";
 
@@ -71,29 +68,8 @@ pub(crate) fn service_account(info: &Map<String, Value>) -> Result<Loaded, Googl
     service_account_grant(info)
 }
 
-/// google-auth's `oauth2.credentials.Credentials.from_authorized_user_info`, which always
-/// refreshes at Google's token endpoint whatever `token_uri` the credentials name.
-pub(crate) fn authorized_user(
-    info: &Map<String, Value>,
-    token_endpoint: &str,
-) -> Result<TokenSource, GoogleLoginFailure> {
-    if let Some(missing) = missing_fields(info, &AUTHORIZED_USER_FIELDS) {
-        return Err(GoogleLoginFailure::new(
-            PythonException::Value,
-            format!(
-                "Authorized user info was not in the expected format, missing fields {missing}."
-            ),
-        ));
-    }
-    user_account::Builder::new(without_quota_project(info))
-        .with_token_uri(token_endpoint)
-        .with_scopes([CLOUD_PLATFORM_SCOPE])
-        .build_access_token_credentials()
-        .map(sdk_source)
-        .map_err(value_failure)
-}
-
-/// google-auth's identity pool, AWS and pluggable `external_account` credentials.
+/// google-auth's identity pool credentials with a certificate source, which mint through mutual
+/// TLS in Google's Rust SDK.
 pub(crate) fn external_account(
     info: &Map<String, Value>,
 ) -> Result<TokenSource, GoogleLoginFailure> {
@@ -193,26 +169,6 @@ mod tests {
             "client_email": "a@b", "token_uri": "https://oauth2.googleapis.com/token", "private_key": "nope"
         }))));
         assert_eq!(failure.exception, PythonException::Value);
-    }
-
-    #[rstest]
-    #[case::all(json!({"type": "authorized_user"}), "refresh_token, client_id, client_secret")]
-    #[case::some(json!({"type": "authorized_user", "client_id": "x"}), "refresh_token, client_secret")]
-    fn authorized_user_info_names_its_missing_fields(
-        #[case] configured: Value,
-        #[case] missing: &str,
-    ) {
-        let failure = failure(authorized_user(
-            &info(configured),
-            "https://oauth2.googleapis.com/token",
-        ));
-        assert_eq!(failure.exception, PythonException::Value);
-        assert_eq!(
-            failure.message,
-            format!(
-                "Authorized user info was not in the expected format, missing fields {missing}."
-            )
-        );
     }
 
     #[rstest]

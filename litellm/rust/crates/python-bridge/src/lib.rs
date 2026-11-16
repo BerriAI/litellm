@@ -124,6 +124,15 @@ mod _native {
     fn init(module: &Bound<'_, PyModule>) -> PyResult<()> {
         let _ = rustls::crypto::ring::default_provider().install_default();
         let py = module.py();
+        // `requests` verifies Vertex AI Messages token requests against certifi's bundle when the
+        // environment names none, so the native login reads the same file.
+        if let Ok(path) = py
+            .import("certifi")
+            .and_then(|certifi| certifi.call_method0("where"))
+            .and_then(|path| path.extract::<String>())
+        {
+            litellm_auth::gcp::vertex_messages::set_certifi_bundle(path.into());
+        }
         let dict = module.dict();
         dict.set_item(
             "_SecretManagerRuntime",

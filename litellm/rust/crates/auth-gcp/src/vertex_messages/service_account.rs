@@ -5,15 +5,11 @@ use std::{sync::Arc, time::Duration};
 
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use jsonwebtoken::{Algorithm, EncodingKey};
-use litellm_http::{
-    ClientVariant, HttpClientPool, HttpSettings, Resolution, media::PublicDnsResolver,
-};
 use litellm_python_compat::{
     Value as PyValue,
     json::{dumps, from_json},
     repr::{repr, to_str},
 };
-use litellm_secret_value::SecretValue;
 use serde_json::{Map, Value};
 use time::OffsetDateTime;
 
@@ -21,6 +17,7 @@ use super::{
     builders::token_failure,
     credentials::{Credentials, Expiry, Loaded, Minted, RefreshFuture},
     failure::{GoogleLoginFailure, PythonException},
+    transport::Requests,
 };
 use crate::constants::{CLOUD_PLATFORM_SCOPE, GOOGLE_OAUTH_TOKEN_ENDPOINT};
 
@@ -46,7 +43,7 @@ pub(crate) struct ServiceAccountGrant {
     email: String,
     token_uri: String,
     first_retry_wait: Duration,
-    pool: HttpClientPool,
+    requests: Requests,
 }
 
 /// `service_account.Credentials.from_service_account_info` with the key already checked for the
@@ -54,7 +51,11 @@ pub(crate) struct ServiceAccountGrant {
 pub(crate) fn service_account_grant(
     info: &Map<String, Value>,
 ) -> Result<Loaded, GoogleLoginFailure> {
-    Ok(Arc::new(grant(info, FIRST_RETRY_WAIT)?))
+    Ok(Arc::new(grant(
+        info,
+        FIRST_RETRY_WAIT,
+        Requests::process(),
+    )?))
 }
 
 fn text(info: &Map<String, Value>, field: &str) -> String {
@@ -67,6 +68,7 @@ fn text(info: &Map<String, Value>, field: &str) -> String {
 fn grant(
     info: &Map<String, Value>,
     first_retry_wait: Duration,
+    requests: Requests,
 ) -> Result<ServiceAccountGrant, GoogleLoginFailure> {
     let key = EncodingKey::from_rsa_pem(text(info, "private_key").as_bytes())
         .map_err(|error| GoogleLoginFailure::new(PythonException::Value, error.to_string()))?;
@@ -79,13 +81,13 @@ fn grant(
         email: text(info, "client_email"),
         token_uri: text(info, "token_uri"),
         first_retry_wait,
-        pool: HttpClientPool::new(Arc::new(PublicDnsResolver)),
+        requests,
     })
 }
 
 /// `_client._handle_error_response`: a body that is not JSON is the text itself, else
 /// `"{error}: {error_description}"` beside the response data.
-fn refused(body: &str) -> GoogleLoginFailure {
+pub(crate) fn refused(body: &str) -> GoogleLoginFailure {
     let data = match serde_json::from_str::<Value>(body) {
         Ok(Value::String(text)) => return GoogleLoginFailure::new(PythonException::Refresh, text),
         Ok(data) => data,
@@ -136,7 +138,10 @@ fn retryable(status: u16, body: &str) -> bool {
 }
 
 /// `_client._parse_expiry`.
-fn expiry(granted: &Map<String, Value>, now: OffsetDateTime) -> Result<Expiry, GoogleLoginFailure> {
+pub(crate) fn expiry(
+    granted: &Map<String, Value>,
+    now: OffsetDateTime,
+) -> Result<Expiry, GoogleLoginFailure> {
     let seconds = match granted.get("expires_in") {
         None | Some(Value::Null) => return Ok(Expiry::Never),
         Some(Value::Number(number)) => number.as_f64(),
@@ -190,18 +195,44 @@ impl ServiceAccountGrant {
         Ok(format!("{signing_input}.{signature}"))
     }
 
-    async fn post(&self, assertion: &str) -> Result<(u16, String), GoogleLoginFailure> {
-        let client = self
-            .pool
-            .client(
-                &Resolution::from(&HttpSettings::default()).config,
-                ClientVariant::Provider,
-            )
-            .map_err(|error| token_failure(&error))?;
-        let response = client
-            .post(&self.token_uri)
+    async fn mint(&self) -> Result<Minted, GoogleLoginFailure> {
+        let assertion = self.assertion(OffsetDateTime::now_utc())?;
+        let form = [
+            ("assertion", assertion.as_str()),
+            ("grant_type", JWT_BEARER_GRANT),
+        ];
+        let (status, body) = token_endpoint_request(
+            &self.requests,
+            &self.token_uri,
+            &form,
+            self.first_retry_wait,
+        )
+        .await?;
+        if status != 200 {
+            return Err(refused(&body));
+        }
+        let granted = granted(&body)?;
+        Ok(Minted::from_reply(
+            granted.get("access_token"),
+            expiry(&granted, OffsetDateTime::now_utc())?,
+        ))
+    }
+}
+
+/// `_client._token_endpoint_request_no_throw`: a form post with `accept: */*`, tried again after
+/// a retryable answer up to three times, waiting twice as long before each later attempt.
+pub(crate) async fn token_endpoint_request(
+    requests: &Requests,
+    token_uri: &str,
+    form: &[(&str, &str)],
+    first_retry_wait: Duration,
+) -> Result<(u16, String), GoogleLoginFailure> {
+    let post = || async {
+        let response = requests
+            .client(token_uri)?
+            .post(token_uri)
             .header(http::header::ACCEPT, "*/*")
-            .form(&[("assertion", assertion), ("grant_type", JWT_BEARER_GRANT)])
+            .form(form)
             .send()
             .await
             .map_err(|error| token_failure(&error))?;
@@ -210,44 +241,60 @@ impl ServiceAccountGrant {
             .text()
             .await
             .map_err(|error| token_failure(&error))?;
-        Ok((status, body))
+        Ok::<_, GoogleLoginFailure>((status, body))
+    };
+    let mut wait = first_retry_wait;
+    let mut answer = post().await?;
+    for _ in 1..TOKEN_REQUEST_ATTEMPTS {
+        if answer.0 == 200 || !retryable(answer.0, &answer.1) {
+            break;
+        }
+        tokio::time::sleep(wait).await;
+        wait *= 2;
+        answer = post().await?;
     }
+    Ok(answer)
+}
 
-    async fn mint(&self) -> Result<Minted, GoogleLoginFailure> {
-        let now = OffsetDateTime::now_utc();
-        let assertion = self.assertion(now)?;
-        let mut wait = self.first_retry_wait;
-        let mut answer = self.post(&assertion).await?;
-        for _ in 1..TOKEN_REQUEST_ATTEMPTS {
-            if answer.0 == 200 || !retryable(answer.0, &answer.1) {
-                break;
-            }
-            tokio::time::sleep(wait).await;
-            wait *= 2;
-            answer = self.post(&assertion).await?;
-        }
-        let (status, body) = answer;
-        if status != 200 {
-            return Err(refused(&body));
-        }
-        let granted = match serde_json::from_str::<Value>(&body) {
-            Ok(Value::Object(granted)) => granted,
-            _ => return Err(refused(&body)),
-        };
-        let Some(token) = granted.get("access_token") else {
-            return Err(GoogleLoginFailure::new(
-                PythonException::Refresh,
-                format!(
-                    "('No access token in response.', {})",
-                    repr(&from_json(Value::Object(granted)))
-                ),
-            ));
-        };
-        Ok(Minted {
-            value: SecretValue::new(to_str(&from_json(token.clone()))),
-            expiry: expiry(&granted, OffsetDateTime::now_utc())?,
-        })
+/// The response data google-auth reads a granted token from: the JSON body, or its text when it
+/// is not JSON.
+pub(crate) fn response_data(body: &str) -> Value {
+    serde_json::from_str(body).unwrap_or_else(|_| Value::String(body.to_owned()))
+}
+
+/// The `TypeError` Python raises for `data["access_token"]` on data that is not a dict.
+pub(crate) fn not_subscriptable(data: &Value) -> Option<GoogleLoginFailure> {
+    let message = match data {
+        Value::Object(_) => return None,
+        Value::String(_) => "string indices must be integers, not 'str'",
+        Value::Array(_) => "list indices must be integers or slices, not str",
+        Value::Null => "'NoneType' object is not subscriptable",
+        Value::Bool(_) => "'bool' object is not subscriptable",
+        Value::Number(number) if number.is_f64() => "'float' object is not subscriptable",
+        Value::Number(_) => "'int' object is not subscriptable",
+    };
+    Some(GoogleLoginFailure::new(PythonException::Type, message))
+}
+
+/// `response_data["access_token"]` as `jwt_grant` and `_handle_refresh_grant_response` read it.
+pub(crate) fn granted(body: &str) -> Result<Map<String, Value>, GoogleLoginFailure> {
+    let data = response_data(body);
+    if let Some(failure) = not_subscriptable(&data) {
+        return Err(failure);
     }
+    let Value::Object(granted) = data else {
+        unreachable!("only a dict is subscriptable by a string");
+    };
+    if !granted.contains_key("access_token") {
+        return Err(GoogleLoginFailure::new(
+            PythonException::Refresh,
+            format!(
+                "('No access token in response.', {})",
+                repr(&from_json(Value::Object(granted)))
+            ),
+        ));
+    }
+    Ok(granted)
 }
 
 impl Credentials for ServiceAccountGrant {
@@ -299,6 +346,8 @@ pub(crate) mod tests {
         pub(crate) forms: Arc<Mutex<Vec<String>>>,
         /// Each request's `accept` header.
         pub(crate) accepts: Arc<Mutex<Vec<Option<String>>>>,
+        /// Each request's `content-type` header.
+        pub(crate) content_types: Arc<Mutex<Vec<Option<String>>>>,
         server: tokio::task::JoinHandle<()>,
     }
 
@@ -314,6 +363,8 @@ pub(crate) mod tests {
         let recorded = forms.clone();
         let accepts = Arc::new(Mutex::new(Vec::new()));
         let accepted = accepts.clone();
+        let content_types = Arc::new(Mutex::new(Vec::new()));
+        let typed = content_types.clone();
         let next = Arc::new(AtomicUsize::new(0));
         let answers = Arc::new(answers);
         let app = Router::new().route(
@@ -324,6 +375,11 @@ pub(crate) mod tests {
                     headers
                         .get(axum::http::header::ACCEPT)
                         .map(|accept| accept.to_str().unwrap().to_owned()),
+                );
+                typed.lock().unwrap().push(
+                    headers
+                        .get(axum::http::header::CONTENT_TYPE)
+                        .map(|kind| kind.to_str().unwrap().to_owned()),
                 );
                 let answers = answers.clone();
                 let index = next.fetch_add(1, Ordering::SeqCst);
@@ -344,12 +400,18 @@ pub(crate) mod tests {
             url,
             forms,
             accepts,
+            content_types,
             server,
         }
     }
 
     fn quick(url: &str) -> ServiceAccountGrant {
-        grant(&key(url, json!({})), Duration::from_millis(1)).unwrap()
+        grant(
+            &key(url, json!({})),
+            Duration::from_millis(1),
+            Requests::with_environment(&[]),
+        )
+        .unwrap()
     }
 
     #[tokio::test]
@@ -490,6 +552,39 @@ pub(crate) mod tests {
         );
     }
 
+    /// An endpoint answering 200 with a body that is not JSON text.
+    async fn raw_endpoint(body: &'static str) -> (String, tokio::task::JoinHandle<()>) {
+        let app = Router::new().route("/token", post(move || async move { body }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/token", listener.local_addr().unwrap());
+        (
+            url,
+            tokio::spawn(async move { axum::serve(listener, app).await.unwrap() }),
+        )
+    }
+
+    #[rstest]
+    #[case::html(
+        "<html>token service unavailable</html>",
+        "string indices must be integers, not 'str'"
+    )]
+    #[case::json_text("\"granted\"", "string indices must be integers, not 'str'")]
+    #[case::list("[1]", "list indices must be integers or slices, not str")]
+    #[case::number("7", "'int' object is not subscriptable")]
+    #[case::null("null", "'NoneType' object is not subscriptable")]
+    #[tokio::test]
+    async fn a_granted_body_that_is_not_a_dict_is_python_s_type_error(
+        #[case] body: &'static str,
+        #[case] expected: &str,
+    ) {
+        let (url, server) = raw_endpoint(body).await;
+        assert_eq!(
+            quick(&url).mint().await.unwrap_err(),
+            GoogleLoginFailure::new(PythonException::Type, expected)
+        );
+        server.abort();
+    }
+
     #[rstest]
     #[case::named(json!({}), r#"{"typ": "JWT", "alg": "RS256", "kid": "key-1"}"#)]
     #[case::null(json!({"private_key_id": null}), r#"{"typ": "JWT", "alg": "RS256"}"#)]
@@ -498,10 +593,14 @@ pub(crate) mod tests {
         #[case] extra: Value,
         #[case] expected: &str,
     ) {
-        let assertion = grant(&key("http://127.0.0.1:9/token", extra), FIRST_RETRY_WAIT)
-            .unwrap()
-            .assertion(OffsetDateTime::now_utc())
-            .unwrap();
+        let assertion = grant(
+            &key("http://127.0.0.1:9/token", extra),
+            FIRST_RETRY_WAIT,
+            Requests::with_environment(&[]),
+        )
+        .unwrap()
+        .assertion(OffsetDateTime::now_utc())
+        .unwrap();
         let header = base64::Engine::decode(
             &base64::engine::general_purpose::URL_SAFE_NO_PAD,
             assertion.split('.').next().unwrap(),

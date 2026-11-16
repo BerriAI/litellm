@@ -691,7 +691,14 @@ _BODY_CUT: Final = TypeAdapter(tuple[int, int | None, bool])
 _ERROR_CLASS: TypeAlias = Callable[..., Exception]
 _GOOGLE_LOGIN_FAILURE: Final = TypeAdapter(tuple[str, str, tuple[Literal["unreadable", "invalid"], str, str] | None])
 _PYTHON_LOGIN_FAILURES: Final[Mapping[str, _ERROR_CLASS]] = MappingProxyType(
-    {"ValueError": ValueError, "TypeError": TypeError, "ImportError": ImportError}
+    {
+        "ValueError": ValueError,
+        "TypeError": TypeError,
+        "ImportError": ImportError,
+        "AttributeError": AttributeError,
+        "IndexError": IndexError,
+        "OSError": OSError,
+    }
 )
 _validate_metadata: Final = cast(  # cast-ok: the handler's untyped metadata validator
     Callable[[object], object], handler.validate_anthropic_api_metadata
@@ -708,6 +715,12 @@ _UNSENDABLE_HEADER: Final = "invalid request: failed to parse header value"
 _AIOHTTP_UNSENDABLE_HEADER: Final = "Forbidden control character detected in headers. Potential header injection attack."  # aiohttp's `_safe_header` text
 _TOO_MANY_REDIRECTS: Final = "upstream network error: error following redirect: too many redirects"
 _SEND_FAILED: Final = "upstream network error: error sending request: client error (SendRequest): "
+# rustls' text for a TLS peer that closed without `close_notify`, which is how a provider reached
+# through a CONNECT tunnel closes before sending headers.
+_TLS_CLOSED_WITHOUT_NOTIFY: Final = (
+    "peer closed connection without sending TLS close_notify: "
+    "https://docs.rs/rustls/latest/rustls/manual/_03_howto/index.html#unexpected-eof"
+)
 _DNS_FAILURE: Final = "failed to lookup address information: "
 _HTTPX_DNS_ERRNO: Final = {
     "Name or service not known": socket.EAI_NONAME,
@@ -1019,7 +1032,9 @@ def _transport_failure(
         return "Exceeded maximum allowed redirects."
     if native.startswith(_SEND_FAILED):
         reset: Final = native.endswith(f"Connection reset by peer (os error {errno.ECONNRESET})")
-        closed: Final = native.endswith("connection closed before message completed")
+        closed: Final = native.endswith("connection closed before message completed") or (
+            request_provider == "vertex_ai" and native.endswith(_TLS_CLOSED_WITHOUT_NOTIFY)
+        )
         if http_transport.uses_aiohttp_transport():
             if reset:
                 return str(ConnectionResetError(errno.ECONNRESET, os.strerror(errno.ECONNRESET)))
