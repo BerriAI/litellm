@@ -1213,8 +1213,14 @@ async def common_checks(
 
     skip_all_budget_checks: Final = (
         skip_budget_checks
-        or request_skips_budget_checks(route=route, model=_model, llm_router=llm_router)
-        or is_mcp_discovery_request(route=route, request_body=_typed_request_body(request_body))
+        if skip_budget_checks is not None
+        else request_skips_budget_checks(
+            route=route,
+            model=_model,
+            llm_router=llm_router,
+            request_body=_typed_request_body(request_body),
+            http_method=RouteChecks.get_request_method(request),
+        )
     )
 
     membership_user_id: Final = (
