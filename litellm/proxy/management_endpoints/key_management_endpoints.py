@@ -1402,13 +1402,14 @@ async def validate_team_id_used_in_service_account_request(
 
 def _enforce_upperbound_key_params(
     data: GenerateKeyRequest | UpdateKeyRequest,
-    fill_defaults: bool = True,
+    existing_key_row: LiteLLM_VerificationToken | None = None,
 ) -> None:
     """
     Enforce upperbound limits on key parameters.
 
-    For key generation (fill_defaults=True): fills None values with upperbound defaults.
-    For key update (fill_defaults=False): only validates explicitly provided values.
+    For key generation (no existing_key_row): fills None values with upperbound defaults.
+    For key update and regenerate: validates provided values, and rejects an explicit null that would
+    remove a limit the existing key has.
     """
     # Always reject NaN / Inf regardless of whether an upperbound config is set
     # (GHSA-2rv4-xv66-fpjg): float('nan') passes every `< 0` check because
@@ -1430,43 +1431,42 @@ def _enforce_upperbound_key_params(
                     detail={"error": f"{field_name} must be a finite number. Received: {field_value}"},
                 )
 
-    if litellm.upperbound_key_generate_params is None:
+    upperbound: Final = litellm.upperbound_key_generate_params
+    if upperbound is None:
         return
 
-    for elem in data:
-        key, value = elem
-        upperbound_value = getattr(litellm.upperbound_key_generate_params, key, None)
-        if upperbound_value is not None:
-            if value is None:
-                if fill_defaults:
-                    setattr(data, key, upperbound_value)
-            else:
-                if key in [
-                    "max_budget",
-                    "max_parallel_requests",
-                    "tpm_limit",
-                    "rpm_limit",
-                ]:
-                    if value > upperbound_value:
-                        raise HTTPException(
-                            status_code=400,
-                            detail={
-                                "error": f"{key} is over max limit set in config - user_value={value}; max_value={upperbound_value}"
-                            },
-                        )
-                elif key in ["budget_duration", "duration"]:
-                    upperbound_duration = duration_in_seconds(duration=upperbound_value)
-                    if value == "-1":
-                        user_duration = float("inf")
-                    else:
-                        user_duration = duration_in_seconds(duration=value)
-                    if user_duration > upperbound_duration:
-                        raise HTTPException(
-                            status_code=400,
-                            detail={
-                                "error": f"{key} is over max limit set in config - user_value={value}; max_value={upperbound_value}"
-                            },
-                        )
+    for key, upperbound_value in upperbound:
+        if upperbound_value is None:
+            continue
+        value: Final = getattr(data, key)
+        # use upper bound value if the value is None and there is no existing key row
+        if value is None and existing_key_row is None:
+            setattr(data, key, upperbound_value)
+            continue
+        is_current_value_bounded: Final = (
+            existing_key_row is not None
+            and getattr(existing_key_row, "expires" if key == "duration" else key) is not None
+        )
+        exceeds_upperbound: Final = (
+            key in data.model_fields_set and is_current_value_bounded
+            if value is None
+            else _comparable_limit(value) > _comparable_limit(upperbound_value)
+        )
+        if exceeds_upperbound:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": f"{key} is over max limit set in config - user_value={value}; max_value={upperbound_value}"
+                },
+            )
+
+
+def _comparable_limit(limit: float | str) -> float:
+    if not isinstance(limit, str):
+        return limit
+    if limit == "-1":
+        return math.inf
+    return duration_in_seconds(duration=limit)
 
 
 def _team_admin_requests_member_key(
@@ -1642,7 +1642,7 @@ async def _common_key_generation_helper(
                 setattr(data, key, litellm.default_key_generate_params.get(key, {}))
 
     # check if user set upperbound key/generate params on config.yaml
-    _enforce_upperbound_key_params(data, fill_defaults=True)
+    _enforce_upperbound_key_params(data)
 
     _enforce_budget_delegation_ceiling(
         requested_max_budget=_requested_max_budget,
@@ -3477,7 +3477,7 @@ async def _process_single_key_update(
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=message)
 
     # Enforce upperbound key params on update (don't fill defaults)
-    _enforce_upperbound_key_params(update_key_request, fill_defaults=False)
+    _enforce_upperbound_key_params(update_key_request, existing_key_row)
 
     # Get team object and check team limits if team_id is provided
     team_obj: LiteLLM_TeamTableCachedObj | None = None
@@ -4287,7 +4287,7 @@ async def update_key_fn(
         await _enforce_custom_key_update_policy(hook=_custom_key_update_hook(proxy_server), data=data)
 
         # Enforce upperbound key params on update (don't fill defaults)
-        _enforce_upperbound_key_params(data, fill_defaults=False)
+        _enforce_upperbound_key_params(data, existing_key_row)
         raise_on_logging_credential_change(data.metadata, existing_key_row, user_api_key_dict)
         non_default_values: Final = await prepare_key_update_data(
             data=data,
@@ -6484,7 +6484,7 @@ async def _execute_virtual_key_regeneration(
         if update_request is not None:
             await _enforce_custom_key_update_policy(hook=_custom_key_update_hook(proxy_server), data=update_request)
         # Enforce upperbound key params on regenerate (don't fill defaults)
-        _enforce_upperbound_key_params(data, fill_defaults=False)
+        _enforce_upperbound_key_params(data, key_in_db)
         raise_on_logging_credential_change(data.metadata, key_in_db, user_api_key_dict)
         non_default_values = await prepare_key_update_data(
             data=data,
