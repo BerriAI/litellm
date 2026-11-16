@@ -5619,3 +5619,131 @@ async def test_apply_guardrail_returns_the_unmasked_inputs_on_a_single_text_resc
     assert result is inputs
     entries: Final = request_data["metadata"]["standard_logging_guardrail_information"]
     assert [entry["guardrail_status"] for entry in entries] == ["success", "guardrail_failed_to_respond"]
+
+
+def _skipped_armor_response(matched: dict[str, object] | None = None) -> dict[str, object]:
+    return {
+        "sanitizationResult": {
+            "filterResults": {
+                "pi_and_jailbreak": {"piAndJailbreakFilterResult": {"executionState": "EXECUTION_SKIPPED"}},
+                "malicious_uris": {
+                    "maliciousUriFilterResult": {"executionState": "EXECUTION_SUCCESS", "matchState": "NO_MATCH_FOUND"}
+                },
+                **(matched or {}),
+            }
+        }
+    }
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_withholds_a_response_model_armor_skipped_a_filter_on_when_failing_on_error():
+    guardrail = _post_mcp_call_guardrail([_skipped_armor_response()], fail_on_error=True)
+
+    request_data: Final[dict] = {"metadata": {}}
+
+    with pytest.raises(ModelArmorAPIError) as withheld:
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["a very large tool result"]}, request_data=request_data, input_type="response"
+        )
+
+    assert "a very large tool result" not in withheld.value.detail
+    entries: Final = request_data["metadata"]["standard_logging_guardrail_information"]
+    assert [entry["guardrail_status"] for entry in entries] == ["guardrail_failed_to_respond"]
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_passes_a_response_model_armor_skipped_a_filter_on_when_not_failing_on_error():
+    guardrail = _post_mcp_call_guardrail([_skipped_armor_response()], fail_on_error=False)
+    inputs = {"texts": ["a very large tool result"]}
+
+    result = await guardrail.apply_guardrail(inputs=inputs, request_data={"metadata": {}}, input_type="response")
+
+    assert result["texts"] == ["a very large tool result"]
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_does_not_release_masked_text_when_another_filter_was_skipped():
+    skipped_with_mask: Final = _skipped_armor_response(
+        cast(dict[str, object], _deidentified_armor_response("ssn [REDACTED]")["sanitizationResult"])["filterResults"]
+    )
+    guardrail = _post_mcp_call_guardrail([skipped_with_mask, skipped_with_mask], fail_on_error=True)
+
+    with pytest.raises(ModelArmorAPIError):
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["ssn 078-05-1120"]}, request_data={"metadata": {}}, input_type="response"
+        )
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_blocks_a_matched_response_even_when_another_filter_was_skipped():
+    guardrail = _post_mcp_call_guardrail(
+        [_skipped_armor_response({"rai": {"raiFilterResult": {"matchState": "MATCH_FOUND"}}})], fail_on_error=False
+    )
+
+    with pytest.raises(HTTPException) as blocked:
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["harmful text"]}, request_data={"metadata": {}}, input_type="response"
+        )
+
+    assert blocked.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_blocks_when_a_redaction_spans_text_blocks_and_no_block_can_be_rewritten():
+    guardrail = _post_mcp_call_guardrail(
+        [_deidentified_armor_response("card [REDACTED]"), {"sanitizationResult": {}}, {"sanitizationResult": {}}]
+    )
+    request_data: Final[dict] = {"metadata": {}}
+
+    with pytest.raises(HTTPException) as blocked:
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["card 4111 1111", "1111 1111"]}, request_data=request_data, input_type="response"
+        )
+
+    assert blocked.value.status_code == 400
+    assert "1111" not in str(blocked.value.detail)
+    entries: Final = request_data["metadata"]["standard_logging_guardrail_information"]
+    assert [entry["guardrail_status"] for entry in entries] == ["success", "guardrail_flagged"]
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_blocks_when_block_rewrites_miss_a_redaction_that_spans_text_blocks():
+    guardrail = _post_mcp_call_guardrail(
+        [
+            _deidentified_armor_response("mail [EMAIL]\ncard [REDACTED]"),
+            _deidentified_armor_response("mail [EMAIL]"),
+            {"sanitizationResult": {}},
+            {"sanitizationResult": {}},
+        ]
+    )
+
+    with pytest.raises(HTTPException) as blocked:
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["mail a@b.co", "card 4111 1111", "1111 1111"]},
+            request_data={"metadata": {}},
+            input_type="response",
+        )
+
+    assert blocked.value.status_code == 400
+    assert "1111" not in str(blocked.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_withholds_a_response_whose_sensitive_data_inspection_was_skipped():
+    guardrail = _post_mcp_call_guardrail(
+        [
+            {
+                "sanitizationResult": {
+                    "filterResults": {
+                        "sdp": {"sdpFilterResult": {"inspectResult": {"executionState": "EXECUTION_SKIPPED"}}}
+                    }
+                }
+            }
+        ],
+        fail_on_error=True,
+    )
+
+    with pytest.raises(ModelArmorAPIError):
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["a very large tool result"]}, request_data={"metadata": {}}, input_type="response"
+        )

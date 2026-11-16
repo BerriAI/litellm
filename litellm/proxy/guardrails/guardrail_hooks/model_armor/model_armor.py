@@ -68,6 +68,7 @@ from litellm.types.utils import (
 
 GUARDRAIL_NAME: Final = "model_armor"
 _RESPONSE_JSON: Final = TypeAdapter(object)
+_FILTER_RESULT_FIELDS: Final = TypeAdapter(Mapping[str, object])
 
 
 @runtime_checkable
@@ -420,9 +421,15 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
             raise ModelArmorAPIError(detail)
 
         json_response: Final = _RESPONSE_JSON.validate_python(response.json())
-        if isinstance(json_response, _AwaitableJSON):
-            return _ModelArmorResponseRoot.model_validate(await json_response).root
-        return _ModelArmorResponseRoot.model_validate(json_response).root
+        armor_response: Final = _ModelArmorResponseRoot.model_validate(
+            await json_response if isinstance(json_response, _AwaitableJSON) else json_response
+        ).root
+        if self._skipped_a_filter(armor_response) and not self._should_block_content(
+            armor_response, allow_sanitization=True
+        ):
+            verbose_proxy_logger.error("Model Armor skipped a filter, so the content was not fully scanned")
+            raise ModelArmorAPIError("Model Armor skipped a filter, so the content was not fully scanned")
+        return armor_response
 
     def sanitize_file_prompt(self, file_bytes: bytes, file_type: str, source: str = "user_prompt") -> dict:
         """
@@ -506,6 +513,18 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         if isinstance(filter_results, list):
             return filter_results
         return []
+
+    @staticmethod
+    def _execution_skipped(result: object) -> bool:
+        if not isinstance(result, Mapping):
+            return False
+        fields: Final = _FILTER_RESULT_FIELDS.validate_python(result)
+        return fields.get("executionState") == "EXECUTION_SKIPPED" or any(
+            map(ModelArmorGuardrail._execution_skipped, fields.values())
+        )
+
+    def _skipped_a_filter(self, armor_response: _ModelArmorResponse) -> bool:
+        return any(map(self._execution_skipped, self._filter_result_items(armor_response)))
 
     def _has_deidentify_match(self, armor_response: _ModelArmorResponse) -> bool:
         """Whether an SDP de-identify filter matched, i.e. Model Armor owes this response a redaction."""
@@ -1367,33 +1386,40 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         if flagged or not mask or (self._get_sanitized_content(armor_response) or content) == content:
             return inputs
 
+        def blocked_after_rescan(rescan_response: _ModelArmorResponse) -> HTTPException:
+            rescan_end_time: Final = time.time()
+            self.add_standard_logging_guardrail_information_to_request_data(
+                guardrail_json_response=self._build_logging_response(rescan_response),
+                request_data=request_data,
+                guardrail_status="guardrail_flagged",
+                guardrail_provider="model_armor",
+                start_time=start_time,
+                end_time=rescan_end_time,
+                duration=rescan_end_time - start_time,
+            )
+            return HTTPException(
+                status_code=400,
+                detail=self._build_block_error_detail("Response blocked by Model Armor", rescan_response),
+            )
+
         async def sanitized(text: str) -> str:
             text_response: Final = await self.make_model_armor_request(
                 content=text, source="model_response", request_data=request_data
             )
             if self._should_block_content(text_response, allow_sanitization=True):
-                rescan_end_time: Final = time.time()
-                self.add_standard_logging_guardrail_information_to_request_data(
-                    guardrail_json_response=self._build_logging_response(text_response),
-                    request_data=request_data,
-                    guardrail_status="guardrail_flagged",
-                    guardrail_provider="model_armor",
-                    start_time=start_time,
-                    end_time=rescan_end_time,
-                    duration=rescan_end_time - start_time,
-                )
-                raise HTTPException(
-                    status_code=400,
-                    detail=self._build_block_error_detail("Response blocked by Model Armor", text_response),
-                )
+                raise blocked_after_rescan(text_response)
             return self._get_sanitized_content(text_response) or text
 
+        texts: Final = list(inputs.get("texts") or ())
         try:
-            return {**inputs, "texts": [await sanitized(text) if text else text for text in inputs.get("texts") or ()]}
+            masked_texts: Final = [await sanitized(text) if text else text for text in texts]
         except (ModelArmorAPIError, httpx.HTTPError) as e:
             if not fails_open(e):
                 raise
             return inputs
+        if "\n".join(text for text in masked_texts if text) != self._get_sanitized_content(armor_response):
+            raise blocked_after_rescan(armor_response)
+        return {**inputs, "texts": masked_texts}
 
     @staticmethod
     def get_config_model() -> type["GuardrailConfigModel"] | None:
