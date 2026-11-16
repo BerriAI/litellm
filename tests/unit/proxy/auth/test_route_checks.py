@@ -1174,6 +1174,44 @@ def test_claude_code_gateway_routes_open_to_signed_in_cli_users(role: str, route
     )
 
 
+@pytest.mark.parametrize("route", ["/api/plugins", "/api/plugins/auth-token"])
+def test_plugin_ui_routes_open_to_internal_users(route: str):  # test-quality-ok: allowed path returns None, not raising is the observable
+    user_obj: Final = LiteLLM_UserTable(
+        user_id="test_user", user_email="test@example.com", user_role=LitellmUserRoles.INTERNAL_USER.value
+    )
+    valid_token: Final = UserAPIKeyAuth(user_id="test_user", user_role=LitellmUserRoles.INTERNAL_USER.value)
+    request: Final = MagicMock(spec=Request)
+    request.query_params = {}
+
+    RouteChecks.non_proxy_admin_allowed_routes_check(
+        user_obj=user_obj,
+        _user_role=LitellmUserRoles.INTERNAL_USER.value,
+        route=route,
+        request=request,
+        valid_token=valid_token,
+        request_data={},
+    )
+
+
+def test_plugin_proxy_route_stays_closed_to_internal_users():
+    user_obj: Final = LiteLLM_UserTable(
+        user_id="test_user", user_email="test@example.com", user_role=LitellmUserRoles.INTERNAL_USER.value
+    )
+    valid_token: Final = UserAPIKeyAuth(user_id="test_user", user_role=LitellmUserRoles.INTERNAL_USER.value)
+    request: Final = MagicMock(spec=Request)
+    request.query_params = {}
+
+    with pytest.raises(Exception, match="Only proxy admin"):
+        RouteChecks.non_proxy_admin_allowed_routes_check(
+            user_obj=user_obj,
+            _user_role=LitellmUserRoles.INTERNAL_USER.value,
+            route="/plugin-proxy/some-plugin/items",
+            request=request,
+            valid_token=valid_token,
+            request_data={},
+        )
+
+
 def test_virtual_key_llm_api_routes_allows_registered_pass_through_endpoints():
     """
     Virtual keys with llm_api_routes can access auth=true pass-through endpoints only when
