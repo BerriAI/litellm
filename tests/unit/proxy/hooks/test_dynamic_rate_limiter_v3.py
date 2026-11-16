@@ -4228,6 +4228,41 @@ async def test_a_team_id_shaped_like_a_customer_org_holder_does_not_draw_on_that
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("reserved_prefix", ["key\x1f", "customer_org\x1f", "customer_member\x1f", "team\x1f"])
+async def test_a_team_id_starting_with_a_reserved_prefix_is_held_to_its_own_slice_of_the_class_share(
+    monkeypatch: pytest.MonkeyPatch, reserved_prefix: str
+):
+    handler: Final = _split_handler(monkeypatch, "team")
+    prefixed: Final = _class_team(f"{reserved_prefix}heavy")
+    await _use(handler, _class_team("team-light"), 20, saturation=1.0, priority="interactive")
+    await _use(handler, prefixed, 300, saturation=1.0, priority="interactive")
+    await _use(handler, prefixed, 200, saturation=1.0, priority="interactive")
+
+    with pytest.raises(ProxyRateLimitError) as exc:
+        await _check(handler, prefixed, saturation=0.52, priority="interactive")
+    _held_to_class_share(exc.value)
+    assert "Active callers in class: 2, Active classes: 1, " in str(exc.value.detail)
+    assert "Share: 500, Remaining: 0, " in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_a_team_id_equal_to_another_teams_registry_id_does_not_draw_on_that_teams_slice(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from litellm.proxy.hooks.priority_class_share import key_member, team_member
+
+    handler: Final = _split_handler(monkeypatch, "team")
+    victim: Final = _class_team(key_member("victim"))
+    lookalike: Final = _class_team(team_member(key_member("victim")))
+    await _use(handler, victim, 20, saturation=1.0, priority="interactive")
+    await _use(handler, _class_team("team-other"), 20, saturation=1.0, priority="interactive")
+    await _use(handler, lookalike, 300, saturation=1.0, priority="interactive")
+    await _use(handler, lookalike, 200, saturation=1.0, priority="interactive")
+
+    await _check(handler, victim, saturation=0.52, priority="interactive")
+
+
+@pytest.mark.asyncio
 async def test_a_team_key_naming_a_new_customer_org_stays_on_its_teams_slice(monkeypatch: pytest.MonkeyPatch):
     from litellm.types.proxy.auth.customer_hierarchy import CustomerHierarchyAuth
 

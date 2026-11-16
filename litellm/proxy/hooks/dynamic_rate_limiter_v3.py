@@ -222,6 +222,7 @@ _CLASS_SHARE_HOLDER_PREFIXES: Final[Mapping[str, BorrowerKind | None]] = Mapping
         key_member(""): "key",
         customer_member("customer_org", ""): "customer_org",
         customer_member("customer_member", ""): None,
+        team_member(""): "team",
     }
 )
 
@@ -276,6 +277,12 @@ def _class_share_kind(holder: str | None) -> BorrowerKind | None:
 
 def _is_team_class_share_holder(holder: str) -> bool:
     return not any(holder.startswith(prefix) for prefix in _CLASS_SHARE_HOLDER_PREFIXES)
+
+
+def _team_class_share_holder(team_id: str) -> str:
+    """A team's counter owner: its id, or its registry id when the id starts like another holder's, so the team keeps
+    a slice of its own without sharing a counter with a key or customer."""
+    return team_id if _is_team_class_share_holder(team_id) else team_member(team_id)
 
 
 def _team_limit_name(rate_limit_type: str) -> str:
@@ -671,10 +678,8 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         hierarchy: Final = user_api_key_dict.customer_hierarchy
         candidates: Final = (
             (
-                "team" in entities
-                and user_api_key_dict.team_id is not None
-                and _is_team_class_share_holder(user_api_key_dict.team_id),
-                lambda: str(user_api_key_dict.team_id),
+                "team" in entities and user_api_key_dict.team_id is not None,
+                lambda: _team_class_share_holder(str(user_api_key_dict.team_id)),
             ),
             (
                 "customer_member" in entities and hierarchy is not None and hierarchy.customer_member_id is not None,

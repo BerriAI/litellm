@@ -101,6 +101,31 @@ def test_second_interactive_team_keeps_its_half_of_the_class_share(saturated_mod
         assert still_served.status_code == 200, still_served.text
 
 
+@pytest.mark.parametrize("reserved_prefix", ["key\x1f", "customer_org\x1f", "customer_member\x1f", "team\x1f"])
+def test_team_id_starting_with_a_reserved_prefix_keeps_its_half_of_the_class_share(
+    saturated_model: tuple[Gateway, str], reserved_prefix: str
+) -> None:
+    """A team whose id starts like another holder's registry id is still a team: it is held to half the class share."""
+    owned, upstream = saturated_model
+    with owned.scenario() as scenario:
+        model: Final = scenario.model(
+            model=f"openai/{OPENAI_MODEL}", api_base=f"{upstream}/v1", api_key="synthetic-openai-key", tpm=MODEL_TPM
+        )
+        prefixed_team: Final = scenario.team(
+            team_id=f"{reserved_prefix}{uuid.uuid4().hex}", metadata={"priority": "interactive"}
+        )
+        prefixed: Final = scenario.key(team_id=prefixed_team)
+        other: Final = _team_key(scenario, "interactive")
+        assert _call(owned, model, other).status_code == 200
+
+        responses: Final = _spend_until_blocked(owned, model, prefixed, max_calls=MODEL_TPM // TOKENS_PER_CALL + 1)
+        blocked: Final = responses[-1]
+        assert blocked.status_code == 429, blocked.text
+        assert blocked.headers.get("rate_limited_by") == "priority_class_share_saturated", dict(blocked.headers)
+        served: Final = (len(responses) - 1) * TOKENS_PER_CALL
+        assert MODEL_TPM // 2 <= served < MODEL_TPM // 2 + 2 * TOKENS_PER_CALL, served
+
+
 def test_only_active_class_gets_the_whole_model(saturated_model: tuple[Gateway, str]) -> None:
     """One batch team alone on the model is held to 100% of the model, not to batch's 40%."""
     owned, upstream = saturated_model
