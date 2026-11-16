@@ -232,6 +232,7 @@ def test_provider_defaults_read_the_litellm_globals(monkeypatch: pytest.MonkeyPa
     monkeypatch.setattr(litellm, "azure_key", "azure-module-key")
     monkeypatch.setattr(litellm, "drop_params", True)
     monkeypatch.setattr(litellm, "bedrock_request_metadata_fields", ["team"])
+    monkeypatch.setattr(litellm, "vertex_request_label_fields", ["user_api_key_team_id"])
 
     assert settings.provider_defaults() == settings.ProviderDefaults(
         vertex_project="configured-project",
@@ -241,4 +242,5 @@ def test_provider_defaults_read_the_litellm_globals(monkeypatch: pytest.MonkeyPa
         azure_key="azure-module-key",
         drop_params=True,
         bedrock_request_metadata_fields=["team"],
+        vertex_request_label_fields=["user_api_key_team_id"],
     )

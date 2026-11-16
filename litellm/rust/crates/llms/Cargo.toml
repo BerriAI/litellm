@@ -41,6 +41,7 @@ thiserror.workspace = true
 time.workspace = true
 tokio = { workspace = true, features = ["sync"] }
 tokio-util = { version = "0.7", features = ["codec"] }
+unicode-general-category = "1.1"
 url.workspace = true
 
 [dev-dependencies]
