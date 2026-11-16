@@ -19,6 +19,9 @@ from botocore.credentials import RefreshableCredentials
 from h2.events import ConnectionTerminated
 
 import litellm
+from datetime import datetime
+from litellm.constants import MAX_IMAGE_FAN_OUT_REQUESTS
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.anthropic.messages.native import handler as python_messages
 from litellm._logging import verbose_logger
 from litellm.integrations.code_interpreter_interception.handler import (
@@ -429,9 +432,7 @@ def test_response_api_handler_sends_no_stream_options_when_web_search_forces_a_n
 ):
     sent: Final = _SentRequestRecorder()
     recorder: Final = _AgenticLoopKwargsRecorder()
-    monkeypatch.setattr(
-        litellm, "callbacks", [WebSearchInterceptionLogger(enabled_providers=["azure"]), recorder]
-    )
+    monkeypatch.setattr(litellm, "callbacks", [WebSearchInterceptionLogger(enabled_providers=["azure"]), recorder])
     logging_obj: Final = Mock()
     logging_obj.dynamic_success_callbacks = []
 
@@ -2674,7 +2675,9 @@ async def test_async_anthropic_messages_handler_passes_deployment_api_base_to_ag
             super().__init__()
             self.hook_kwargs: dict | None = None
 
-        async def async_should_run_agentic_loop(self, response, model, messages, tools, stream, custom_llm_provider, kwargs):
+        async def async_should_run_agentic_loop(
+            self, response, model, messages, tools, stream, custom_llm_provider, kwargs
+        ):
             self.hook_kwargs = dict(kwargs)
             return False, {}
 
@@ -3222,9 +3225,7 @@ def _transform_subtitle_response(payload):
 
 
 def test_subtitle_synthesis_fallback_without_timings_drops_words():
-    response = _transform_subtitle_response(
-        {"text": "hello world", "words": [{"word": "hello"}, {"word": "world"}]}
-    )
+    response = _transform_subtitle_response({"text": "hello world", "words": [{"word": "hello"}, {"word": "world"}]})
 
     assert response.text == "hello world"
     assert "words" not in response
@@ -4239,7 +4240,13 @@ def _capture_video_create_request(captured):
         captured["body"] = request.content
         return httpx.Response(
             200,
-            json={"id": "video_123", "object": "video", "status": "queued", "created_at": 1712697600, "model": "sora-2"},
+            json={
+                "id": "video_123",
+                "object": "video",
+                "status": "queued",
+                "created_at": 1712697600,
+                "model": "sora-2",
+            },
         )
 
     return respond
@@ -4262,7 +4269,9 @@ def test_video_generation_without_file_sends_multipart_form_data():
     captured = {}
     client = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_capture_video_create_request(captured))))
 
-    result = BaseLLMHTTPHandler().video_generation_handler(client=client, **_video_create_call_kwargs(OpenAIVideoConfig()))
+    result = BaseLLMHTTPHandler().video_generation_handler(
+        client=client, **_video_create_call_kwargs(OpenAIVideoConfig())
+    )
 
     assert captured["content_type"].startswith("multipart/form-data")
     assert _multipart_text_fields(captured["content_type"], captured["body"]) == {
@@ -4302,7 +4311,9 @@ def test_azure_video_generation_without_file_sends_multipart_form_data():
     captured = {}
     client = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_capture_video_create_request(captured))))
 
-    result = BaseLLMHTTPHandler().video_generation_handler(client=client, **_video_create_call_kwargs(AzureVideoConfig()))
+    result = BaseLLMHTTPHandler().video_generation_handler(
+        client=client, **_video_create_call_kwargs(AzureVideoConfig())
+    )
 
     assert captured["content_type"].startswith("multipart/form-data")
     assert _multipart_text_fields(captured["content_type"], captured["body"]) == {
@@ -4317,7 +4328,9 @@ def test_video_generation_json_provider_keeps_json_body():
     captured = {}
     client = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_capture_video_create_request(captured))))
 
-    result = BaseLLMHTTPHandler().video_generation_handler(client=client, **_video_create_call_kwargs(_JSONBodyVideoConfig()))
+    result = BaseLLMHTTPHandler().video_generation_handler(
+        client=client, **_video_create_call_kwargs(_JSONBodyVideoConfig())
+    )
 
     assert captured["content_type"] == "application/json"
     assert json.loads(captured["body"]) == {"model": "sora-2", "prompt": "a cat surfing", "seconds": "4"}
@@ -4361,9 +4374,7 @@ A_COMPLETION = {
     "object": "chat.completion",
     "created": 1,
     "model": "grok-3",
-    "choices": [
-        {"index": 0, "message": {"role": "assistant", "content": "sent"}, "finish_reason": "stop"}
-    ],
+    "choices": [{"index": 0, "message": {"role": "assistant", "content": "sent"}, "finish_reason": "stop"}],
     "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
 }
 
@@ -4407,9 +4418,7 @@ def _call_azure_ai(recorder: _RecordedAzureAI, **overrides):
 
 
 def test_a_tool_field_the_provider_rejects_is_dropped_and_the_call_retried():
-    recorder = _RecordedAzureAI(
-        [_rejection(TOOL_LEVEL_REJECTION), httpx.Response(200, json=A_COMPLETION)]
-    )
+    recorder = _RecordedAzureAI([_rejection(TOOL_LEVEL_REJECTION), httpx.Response(200, json=A_COMPLETION)])
 
     response = _call_azure_ai(recorder)
 
@@ -4420,9 +4429,7 @@ def test_a_tool_field_the_provider_rejects_is_dropped_and_the_call_retried():
 
 
 def test_the_retry_changes_only_the_field_the_provider_named():
-    recorder = _RecordedAzureAI(
-        [_rejection(TOOL_LEVEL_REJECTION), httpx.Response(200, json=A_COMPLETION)]
-    )
+    recorder = _RecordedAzureAI([_rejection(TOOL_LEVEL_REJECTION), httpx.Response(200, json=A_COMPLETION)])
 
     _call_azure_ai(recorder)
 
@@ -4461,9 +4468,7 @@ def test_an_extra_input_outside_a_tool_is_not_retried_unless_dropping_params_was
 
 
 def test_an_extra_input_outside_a_tool_is_retried_when_dropping_params_was_asked_for():
-    recorder = _RecordedAzureAI(
-        [_rejection(UNRELATED_REJECTION), httpx.Response(200, json=A_COMPLETION)]
-    )
+    recorder = _RecordedAzureAI([_rejection(UNRELATED_REJECTION), httpx.Response(200, json=A_COMPLETION)])
 
     response = _call_azure_ai(recorder, drop_params=True)
 
@@ -4477,9 +4482,7 @@ async def test_a_tool_field_the_provider_rejects_is_dropped_and_retried_on_the_a
 ):
     import respx
 
-    recorder = _RecordedAzureAI(
-        [_rejection(TOOL_LEVEL_REJECTION), httpx.Response(200, json=A_COMPLETION)]
-    )
+    recorder = _RecordedAzureAI([_rejection(TOOL_LEVEL_REJECTION), httpx.Response(200, json=A_COMPLETION)])
 
     with respx.mock(assert_all_called=True) as router:
         router.post(AZURE_AI_CHAT_COMPLETIONS_URL).mock(side_effect=recorder)
@@ -4659,7 +4662,11 @@ async def test_create_batch_says_which_setting_is_missing_when_the_provider_reso
 
     with pytest.raises(ValueError, match="api_base is required for create_batch"):
         await BaseLLMHTTPHandler().create_batch(
-            create_batch_data={"input_file_id": "file_1", "endpoint": "/v1/chat/completions", "completion_window": "24h"},
+            create_batch_data={
+                "input_file_id": "file_1",
+                "endpoint": "/v1/chat/completions",
+                "completion_window": "24h",
+            },
             litellm_params={},
             provider_config=provider_config,
             headers={},
@@ -4840,7 +4847,9 @@ def _start_async_completion(config, logging_obj=None):
         custom_llm_provider="openai",
         model_response=ModelResponse(),
         encoding=None,
-        logging_obj=logging_obj if logging_obj is not None else Mock(dynamic_success_callbacks=None, model_call_details={}),
+        logging_obj=logging_obj
+        if logging_obj is not None
+        else Mock(dynamic_success_callbacks=None, model_call_details={}),
         optional_params={},
         timeout=10.0,
         litellm_params={},
@@ -5092,7 +5101,9 @@ def _answers_only_the_streaming_route(request: httpx.Request) -> httpx.Response:
 
 @pytest.mark.parametrize("fake_stream", ["true", 1], ids=["string", "int"])
 async def test_a_fake_stream_value_other_than_true_still_streams_from_the_streaming_route(fake_stream: object):
-    sync_client: Final = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_answers_only_the_streaming_route)))
+    sync_client: Final = HTTPHandler(
+        client=httpx.Client(transport=httpx.MockTransport(_answers_only_the_streaming_route))
+    )
     async_client: Final = AsyncHTTPHandler()
     async_client.client = httpx.AsyncClient(transport=httpx.MockTransport(_answers_only_the_streaming_route))
 
@@ -5314,7 +5325,9 @@ async def test_async_realtime_bridges_a_transcription_session_through_the_provid
     logging_obj.dispatch_failure_handlers = AsyncMock()
     handler = BaseLLMHTTPHandler()
 
-    with patch.object(handler, "_open_realtime_backend_ws", AsyncMock(side_effect=AssertionError("dialed a websocket"))) as dial:
+    with patch.object(
+        handler, "_open_realtime_backend_ws", AsyncMock(side_effect=AssertionError("dialed a websocket"))
+    ) as dial:
         await handler.async_realtime(
             model="chirp_3",
             websocket=client_ws,
@@ -5722,7 +5735,9 @@ def _tool_calls_of(response: object) -> list:
 async def _run_chat_completion_agentic_hooks(
     response: ModelResponse, *callbacks: CustomLogger, kwargs: Mapping[str, object] = MappingProxyType({})
 ) -> object:
-    logging_obj: Final = Mock(litellm_call_id="call-1", dynamic_success_callbacks=list(callbacks), model_call_details={})
+    logging_obj: Final = Mock(
+        litellm_call_id="call-1", dynamic_success_callbacks=list(callbacks), model_call_details={}
+    )
     return await BaseLLMHTTPHandler()._call_agentic_chat_completion_hooks(
         response=response,
         model="gpt-4o-mini",
@@ -5753,7 +5768,10 @@ async def test_chat_completion_agentic_hooks_surface_a_failed_follow_up_instead_
 async def test_chat_completion_agentic_hooks_return_the_tool_call_turn_when_the_plan_terminates():
     response: Final = ModelResponse()
 
-    assert await _run_chat_completion_agentic_hooks(response, _PlannedChatLoop(AgenticLoopPlan(terminate=True))) is response
+    assert (
+        await _run_chat_completion_agentic_hooks(response, _PlannedChatLoop(AgenticLoopPlan(terminate=True)))
+        is response
+    )
 
 
 @pytest.mark.asyncio
@@ -6598,7 +6616,12 @@ def _answer_search(request: httpx.Request) -> httpx.Response:
 
 
 async def _search_through(transport: httpx.MockTransport, is_async: bool) -> object:
-    search_kwargs: Final = {"vector_store_id": "vs_1", "query": "q", "custom_llm_provider": "openai", "api_key": "sk-test"}
+    search_kwargs: Final = {
+        "vector_store_id": "vs_1",
+        "query": "q",
+        "custom_llm_provider": "openai",
+        "api_key": "sk-test",
+    }
     if not is_async:
         with httpx.Client(transport=transport) as sync_client:
             return litellm.vector_stores.search(**search_kwargs, client=HTTPHandler(client=sync_client))
@@ -6738,17 +6761,27 @@ async def test_vector_store_search_sends_once_when_the_connection_drops_without_
 @pytest.mark.parametrize("is_async", (False, True))
 @pytest.mark.parametrize("provider", ("openai", "azure"))
 async def test_non_chatgpt_responses_preserves_caller_headers_after_validation(
-    is_async: bool, provider: str, respx_mock: respx.MockRouter,
+    is_async: bool,
+    provider: str,
+    respx_mock: respx.MockRouter,
 ) -> None:
     route: Final = respx_mock.post(url__regex=r"https://responses\.example\.com/.*").respond(
         200,
         json={
-            "id": "resp_headers", "object": "response", "created_at": 1,
-            "model": "gpt-6-luna", "status": "completed", "output": [],
-            "parallel_tool_calls": False, "tool_choice": "auto", "tools": [],
+            "id": "resp_headers",
+            "object": "response",
+            "created_at": 1,
+            "model": "gpt-6-luna",
+            "status": "completed",
+            "output": [],
+            "parallel_tool_calls": False,
+            "tool_choice": "auto",
+            "tools": [],
         },
     )
-    client: Final = AsyncHTTPHandler(transport=httpx.AsyncHTTPTransport()) if is_async else HTTPHandler(client=httpx.Client())
+    client: Final = (
+        AsyncHTTPHandler(transport=httpx.AsyncHTTPTransport()) if is_async else HTTPHandler(client=httpx.Client())
+    )
     kwargs: Final = {
         "model": f"{provider}/gpt-6-luna",
         "input": "hello",
@@ -6901,9 +6934,7 @@ async def test_a_stream_answered_with_one_json_body_is_not_replayed_for_a_provid
 ) -> None:
     with respx.mock(assert_all_called=True) as router:
         router.post("https://api.openai.com/v1/responses").respond(json={"error": {"message": "quota exceeded"}})
-        stream: Final = await litellm.aresponses(
-            model="openai/gpt-5.5", input="Hello", api_key="fake-key", stream=True
-        )
+        stream: Final = await litellm.aresponses(model="openai/gpt-5.5", input="Hello", api_key="fake-key", stream=True)
         with pytest.raises(litellm.exceptions.MidStreamFallbackError, match="before any terminal event"):
             _ = tuple([event async for event in stream])
 
@@ -6973,16 +7004,26 @@ def test_sync_responses_run_a_v2_callback_pre_deployment_hook_without_any_legacy
 
 
 class _GeminiImageUpstream:
-    def __init__(self) -> None:
-        self.bodies: Final[list[Mapping[str, object]]] = []  # mutable-ok: records each upstream request the handler sends
+    def __init__(self, failing_request: int | None = None) -> None:
+        self.failing_request: Final = failing_request
+        self.bodies: Final[
+            list[Mapping[str, object]]
+        ] = []  # mutable-ok: records each upstream request the handler sends
 
     def respond(self, request: httpx.Request) -> httpx.Response:
         self.bodies.append(json.loads(request.content))
+        if len(self.bodies) == self.failing_request:
+            return httpx.Response(429, json={"error": {"message": "quota exceeded"}}, request=request)
         return httpx.Response(
             200,
+            request=request,
             json={
                 "candidates": [
-                    {"content": {"parts": [{"inlineData": {"mimeType": "image/png", "data": f"image-{len(self.bodies)}"}}]}}
+                    {
+                        "content": {
+                            "parts": [{"inlineData": {"mimeType": "image/png", "data": f"image-{len(self.bodies)}"}}]
+                        }
+                    }
                 ],
                 "usageMetadata": {
                     "promptTokenCount": 8,
@@ -7003,9 +7044,13 @@ class _GeminiImageUpstream:
 
 
 async def _gemini_images(
-    upstream: _GeminiImageUpstream, route: str, is_async: bool, openai_params: dict[str, object]
+    upstream: _GeminiImageUpstream,
+    route: str,
+    is_async: bool,
+    openai_params: dict[str, object],
+    logging_obj: object = None,
 ) -> ImageResponse:
-    logging_obj: Final = Mock()
+    logging_obj = logging_obj or Mock()  # rebind-ok: default double for tests that do not read the log
     model: Final = "gemini-3.1-flash-lite-image"
     if route == "edit":
         edit_config: Final = GeminiImageEditConfig()
@@ -7072,3 +7117,44 @@ async def test_gemini_image_without_multiple_n_sends_one_request(route: str, ope
 
     assert [image.b64_json for image in response.data] == ["image-1"]
     assert len(upstream.bodies) == 1
+
+
+@pytest.mark.parametrize("route", ["generation", "edit"])
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.asyncio
+async def test_gemini_image_n_above_the_cap_is_rejected_before_any_upstream_request(route: str, is_async: bool) -> None:
+    upstream: Final = _GeminiImageUpstream()
+
+    with pytest.raises(litellm.BadRequestError, match="maximum of") as raised:
+        await _gemini_images(upstream, route, is_async, {"n": MAX_IMAGE_FAN_OUT_REQUESTS + 1})
+
+    assert raised.value.status_code == 400
+    assert upstream.bodies == []
+
+
+@pytest.mark.parametrize("route", ["generation", "edit"])
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.asyncio
+async def test_gemini_image_fan_out_bills_the_served_images_when_one_request_fails(route: str, is_async: bool) -> None:
+    upstream: Final = _GeminiImageUpstream(failing_request=2)
+    logging_obj: Final = LiteLLMLoggingObj(
+        model="gemini-3.1-flash-lite-image",
+        messages=[],
+        stream=False,
+        call_type="image_generation" if route == "generation" else "image_edit",
+        start_time=datetime(2026, 1, 1),
+        litellm_call_id="fan-out-partial-failure",
+        function_id="fan-out-partial-failure",
+    )
+    logging_obj.update_environment_variables(
+        model="gemini-3.1-flash-lite-image", optional_params={}, litellm_params={}, custom_llm_provider="gemini"
+    )
+
+    with pytest.raises(BaseLLMException) as raised:
+        await _gemini_images(upstream, route, is_async, {"n": 3}, logging_obj)
+
+    assert raised.value.status_code == 429
+    assert len(upstream.bodies) == 3
+    billed: Final = logging_obj.model_call_details["combined_usage_object"]
+    assert (billed.prompt_tokens, billed.completion_tokens, billed.total_tokens) == (2 * 8, 2 * 1120, 2 * 1128)
+    assert logging_obj.model_call_details["response_cost"] > 0

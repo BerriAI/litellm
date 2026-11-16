@@ -1,20 +1,37 @@
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from functools import reduce
-from typing import Final, TypeVar
+from typing import Final, Protocol, TypeVar
 
 from pydantic import TypeAdapter
 
-from litellm.types.utils import ImageResponse, ImageUsage
+from litellm.constants import MAX_IMAGE_FAN_OUT_REQUESTS
+from litellm.exceptions import BadRequestError
+from litellm.types.utils import ImageResponse, ImageUsage, Usage
 
 _T = TypeVar("_T")
 _REQUEST_COUNT: Final = TypeAdapter(int)
 _USAGE: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 
 
-def image_request_count(requested_images: object) -> int:
+class _FailureSpendLog(Protocol):
+    def response_cost_calculator(self, result: ImageResponse) -> float | None: ...
+
+    def record_partial_usage_for_failure(self, usage: Usage, response_cost: float) -> None: ...
+
+
+def image_request_count(requested_images: object, *, model: str, llm_provider: str) -> int:
     """How many single-image upstream requests serve a caller's `n` for a provider that returns one image per call."""
-    return 1 if requested_images is None else max(_REQUEST_COUNT.validate_python(requested_images), 1)
+    if requested_images is None:
+        return 1
+    request_count: Final = max(_REQUEST_COUNT.validate_python(requested_images), 1)
+    if request_count > MAX_IMAGE_FAN_OUT_REQUESTS:
+        raise BadRequestError(
+            message=f"n={request_count} is above the maximum of {MAX_IMAGE_FAN_OUT_REQUESTS} images per request.",
+            model=model,
+            llm_provider=llm_provider,
+        )
+    return request_count
 
 
 def _sum_token_counts(left: object, right: object) -> object:
@@ -50,9 +67,40 @@ def merge_image_responses(responses: Sequence[ImageResponse]) -> ImageResponse:
     )
 
 
-def run_concurrently(request_count: int, send: Callable[[], _T]) -> tuple[_T, ...]:
+def _outcome(send: Callable[[], _T]) -> _T | BaseException:
+    try:
+        return send()
+    except Exception as e:
+        return e
+
+
+def run_concurrently(request_count: int, send: Callable[[], _T]) -> tuple[_T | BaseException, ...]:
+    """Every request runs to completion, so a failed one cannot hide what the others were billed."""
     if request_count == 1:
-        return (send(),)
+        return (_outcome(send),)
     with ThreadPoolExecutor(max_workers=request_count) as pool:
-        futures: Final = tuple(pool.submit(send) for _ in range(request_count))
+        futures: Final = tuple(pool.submit(_outcome, send) for _ in range(request_count))
         return tuple(future.result() for future in futures)
+
+
+def split_outcomes(outcomes: Sequence[_T | BaseException]) -> tuple[tuple[_T, ...], Exception | None]:
+    failure: Final = next((outcome for outcome in outcomes if isinstance(outcome, BaseException)), None)
+    if failure is not None and not isinstance(failure, Exception):
+        raise failure
+    return tuple(outcome for outcome in outcomes if not isinstance(outcome, BaseException)), failure
+
+
+def record_partial_image_spend(logging_obj: _FailureSpendLog, responses: Sequence[ImageResponse]) -> None:
+    """Bill the images the provider did return when another request of the same fan-out failed."""
+    if not responses:
+        return
+    served: Final = merge_image_responses(responses)
+    usage: Final = served.usage
+    logging_obj.record_partial_usage_for_failure(
+        Usage(
+            prompt_tokens=usage.input_tokens if usage else 0,
+            completion_tokens=usage.output_tokens if usage else 0,
+            total_tokens=usage.total_tokens if usage else 0,
+        ),
+        logging_obj.response_cost_calculator(result=served) or 0.0,
+    )

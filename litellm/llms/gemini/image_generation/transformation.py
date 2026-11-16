@@ -77,7 +77,7 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
     def get_request_count(self, model: str, optional_params: Mapping[str, object]) -> int:
         if not is_gemini_image_model(model):
             return 1
-        return image_request_count(optional_params.get("sampleCount"))
+        return image_request_count(optional_params.get("sampleCount"), model=model, llm_provider="gemini")
 
     def get_complete_url(
         self,

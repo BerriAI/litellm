@@ -67,7 +67,9 @@ class GeminiImageEditConfig(BaseImageEditConfig):
         )
 
     def get_request_count(self, model: str, image_edit_optional_request_params: Mapping[str, object]) -> int:
-        return image_request_count(image_edit_optional_request_params.get("sampleCount"))
+        return image_request_count(
+            image_edit_optional_request_params.get("sampleCount"), model=model, llm_provider="gemini"
+        )
 
     def validate_environment(
         self,

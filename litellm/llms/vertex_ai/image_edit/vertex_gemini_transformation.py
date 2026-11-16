@@ -83,7 +83,7 @@ class VertexAIGeminiImageEditConfig(BaseImageEditConfig, VertexLLM):
         return {**request_count, **(map_vertex_image_size(size, model) or {"aspectRatio": "1:1"})}
 
     def get_request_count(self, model: str, image_edit_optional_request_params: Mapping[str, object]) -> int:
-        return image_request_count(image_edit_optional_request_params.get("n"))
+        return image_request_count(image_edit_optional_request_params.get("n"), model=model, llm_provider="vertex_ai")
 
     def _resolve_vertex_project(self) -> str | None:
         return (

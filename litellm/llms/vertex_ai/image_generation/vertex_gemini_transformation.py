@@ -74,7 +74,7 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
         ]
 
     def get_request_count(self, model: str, optional_params: Mapping[str, object]) -> int:
-        return image_request_count(optional_params.get("n"))
+        return image_request_count(optional_params.get("n"), model=model, llm_provider="vertex_ai")
 
     def map_openai_params(
         self,
