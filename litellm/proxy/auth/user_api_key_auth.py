@@ -2733,6 +2733,9 @@ async def user_api_key_auth_builder(
                                         parent_otel_span=parent_otel_span,
                                         proxy_logging_obj=proxy_logging_obj,
                                         user_email=mapped_user_email,
+                                        email_verified=jwt_handler.get_email_verified(
+                                            mapped_claims  # pyright: ignore[reportUnknownArgumentType]  # untyped dict token
+                                        ),
                                     )
                                 except Exception as e:
                                     verbose_proxy_logger.debug("JWT mapped-key user_email backfill skipped: %s", e)
