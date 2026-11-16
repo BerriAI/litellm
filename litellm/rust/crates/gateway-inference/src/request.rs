@@ -6,7 +6,7 @@ use axum::{
 };
 use serde_json::{Map, Value};
 
-use crate::{BodyError, Deployment, Error, Gateway};
+use crate::{BodyError, Error};
 
 pub(crate) const MAX_FILE_BYTES: usize = 50 * 1024 * 1024;
 pub(crate) const MAX_BODY_BYTES: usize = MAX_FILE_BYTES + 1024 * 1024;
@@ -103,42 +103,11 @@ fn object(body: &[u8]) -> Result<Map<String, Value>, BodyError> {
     }
 }
 
-pub(crate) async fn authorize_model(
-    identity: &litellm_gateway_auth::AuthenticatedRequest,
-    deployment: &Deployment,
-    body: &Map<String, Value>,
-) -> Result<(), Error> {
-    let name = body
-        .get("model")
+/// The public model name the request asks for.
+pub(crate) fn model(body: &Map<String, Value>) -> Result<&str, BodyError> {
+    body.get("model")
         .and_then(Value::as_str)
-        .ok_or(BodyError::MissingModel)?;
-    let access = litellm_gateway_auth::AccessRequest::Model {
-        name: name.into(),
-        deployment: deployment.model.clone(),
-    };
-    identity
-        .authorize(access.clone())
-        .await?
-        .consume(identity.caller(), &access)?;
-    Ok(())
-}
-
-pub(crate) fn resolve_deployment<'a>(
-    gateway: &'a Gateway,
-    route: &'static str,
-    body: &Map<String, Value>,
-) -> Result<&'a Deployment, Error> {
-    let model = body
-        .get("model")
-        .and_then(Value::as_str)
-        .ok_or(BodyError::MissingModel)?;
-    gateway
-        .models
-        .get(model)
-        .ok_or_else(|| Error::UnknownModel {
-            route,
-            model: model.to_owned(),
-        })
+        .ok_or(BodyError::MissingModel)
 }
 
 async fn parse_multipart(mut multipart: Multipart) -> Result<InferenceBody, Error> {

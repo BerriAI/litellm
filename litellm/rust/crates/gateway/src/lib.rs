@@ -1,11 +1,16 @@
 mod admit;
 mod auth;
+mod boot;
 mod error;
+pub mod host;
 mod redis;
 mod secrets;
 pub use admit::{Admission, Refused, Unsupported, unsupported};
 pub use error::Error;
 pub use redis::RedisClients;
+
+/// The gateway served through the native host.
+pub type Gateway = litellm_gateway_inference::Gateway<host::NativeHost>;
 
 use std::{sync::Arc, time::Instant};
 
@@ -20,7 +25,6 @@ use http_body_util::BodyExt;
 
 use litellm_config::Config;
 use litellm_gateway_auth::Auth;
-use litellm_gateway_inference::{Gateway, ModelRouter};
 use litellm_http::{
     ClientVariant, HttpClientPool, HttpSettings, HttpSettingsLayer, Resolution, SslVerify,
     media::PublicDnsResolver,
@@ -31,7 +35,7 @@ use litellm_secrets::source::EnvironmentSecrets;
 use litellm_tracing::ByteChunk;
 use uuid::Uuid;
 
-pub fn build_inference(config: &Config) -> Result<Arc<Gateway>, Error> {
+pub async fn build_inference(config: &Config) -> Result<Arc<Gateway>, Error> {
     let pool = Arc::new(HttpClientPool::new(Arc::new(PublicDnsResolver)));
     let environment = secrets::environment_values(&config.environment_variables)?;
     let lookup = |name: &str| {
@@ -41,7 +45,7 @@ pub fn build_inference(config: &Config) -> Result<Arc<Gateway>, Error> {
             .or_else(|| std::env::var(name).ok())
     };
     let catalog = Catalog::parse(BUNDLED_REGISTRY)?.value;
-    let router = ModelRouter::from_config(config, &lookup, &catalog);
+    let (router, shaping) = boot::router(config, &lookup, &catalog).await?;
     let settings = &config.litellm_settings;
     let http_settings = HttpSettings::from_layers([
         HttpSettingsLayer::from_environment(&lookup),
@@ -69,7 +73,14 @@ pub fn build_inference(config: &Config) -> Result<Arc<Gateway>, Error> {
         Arc::new(EnvironmentSecrets::python_compatible(client)),
     ));
     let resources = CoreResources::new(pool);
-    Ok(Arc::new(Gateway::new(resources, http, secrets, router)?))
+    Ok(Arc::new(Gateway::new(
+        resources,
+        http,
+        secrets,
+        router,
+        shaping,
+        host::NativeHost,
+    )?))
 }
 
 pub fn install_crypto_provider() {

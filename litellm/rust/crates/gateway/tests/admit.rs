@@ -55,7 +55,7 @@ async fn serves_only_requests_it_admits_and_names_who_answered_each(
         "model_list: []\ngeneral_settings:\n  master_key: gateway-key\n  {setting}\n"
     ))
     .unwrap();
-    let inference = litellm_gateway::build_inference(&config).unwrap();
+    let inference = litellm_gateway::build_inference(&config).await.unwrap();
     let auth = litellm_gateway_auth::Auth::from_config(&config, inference.secrets.clone());
     let port = free_port().await;
     let settings = Settings {
