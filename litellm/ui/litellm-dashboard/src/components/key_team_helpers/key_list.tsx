@@ -43,6 +43,7 @@ export interface KeyResponse {
   max_budget: number | null;
   expires: string;
   models: string[];
+  disallowed_models?: string[];
   aliases: Record<string, unknown>;
   config: Record<string, unknown>;
   user_id: string;

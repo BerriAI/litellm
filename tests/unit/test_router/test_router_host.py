@@ -1,4 +1,5 @@
 import sys
+from typing import Final
 
 import pytest
 
@@ -61,3 +62,67 @@ def test_default_host_keeps_nothing_and_compresses_nothing():
     assert host.compression_policy(None, "auto", {}, ()) is None
     assert host.model_hop_compression_armed() is False
     assert asyncio.run(host.messages_for_routing(None, [{"role": "user", "content": "hi"}], {})) is None
+
+
+_TIER_KEYWORD: Final = "zzsimpletier"
+
+
+def _complexity_router_reply(metadata: dict[str, object] | None) -> str:
+    import asyncio
+
+    from litellm import Router
+
+    router: Final = Router(
+        model_list=[
+            {"model_name": tier, "litellm_params": {"model": f"openai/{tier}", "api_key": "k", "mock_response": tier}}
+            for tier in ("cheap", "smart")
+        ]
+        + [
+            {
+                "model_name": "auto",
+                "litellm_params": {
+                    "model": "auto_router/complexity_router",
+                    "complexity_router_config": {
+                        "classifier_type": "heuristic",
+                        "keyword_tier_rules": [{"keywords": [_TIER_KEYWORD], "tier": "SIMPLE"}],
+                        "tiers": {"SIMPLE": "cheap", "MEDIUM": "smart", "COMPLEX": "smart", "REASONING": "smart"},
+                    },
+                },
+            }
+        ]
+    )
+    extra: Final = {} if metadata is None else {"metadata": metadata}
+    response: Final = asyncio.run(
+        router.acompletion(model="auto", messages=[{"role": "user", "content": _TIER_KEYWORD}], **extra)
+    )
+    return response.choices[0].message.content  # pyright: ignore[reportAttributeAccessIssue]  # non-streaming reply
+
+
+@pytest.mark.parametrize(
+    "disallowed_models", [None, [], ["smart"]], ids=["no-key", "no-deny-list", "other-tier-denied"]
+)
+def test_a_complexity_router_serves_its_selected_tier_when_the_key_does_not_disallow_it(
+    disallowed_models: list[str] | None,
+):
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    metadata: Final = (
+        None
+        if disallowed_models is None
+        else {"user_api_key_auth": UserAPIKeyAuth(api_key="sk", disallowed_models=disallowed_models)}
+    )
+
+    assert _complexity_router_reply(metadata) == "cheap"
+
+
+@pytest.mark.parametrize("deny_entry", ["cheap", "che*"])
+def test_a_complexity_router_cannot_send_a_key_to_a_tier_it_disallows(deny_entry: str):
+    from litellm.proxy._types import ModelAccessDeniedProxyException, ProxyErrorTypes, UserAPIKeyAuth
+
+    key: Final = UserAPIKeyAuth(api_key="sk", disallowed_models=[deny_entry])
+
+    with pytest.raises(ModelAccessDeniedProxyException) as denied:
+        _complexity_router_reply({"user_api_key_auth": key})
+
+    assert denied.value.type == ProxyErrorTypes.key_model_access_denied
+    assert denied.value.code == "403"

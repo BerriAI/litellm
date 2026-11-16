@@ -29,6 +29,7 @@ export interface AgentsAndGroups {
 export interface KeyEditFormValues {
   key_alias?: string;
   models?: string[];
+  disallowed_models?: string[];
   allowed_routes?: string;
   max_budget?: number | string | null;
   soft_budget?: number | string | null;
@@ -78,6 +79,7 @@ const readMetadata = (keyData: KeyResponse, key: string): unknown =>
 export const toKeyEditFormValues = (keyData: KeyResponse): KeyEditFormValues => ({
   key_alias: keyData.key_alias,
   models: keyData.models,
+  disallowed_models: keyData.disallowed_models,
   allowed_routes:
     Array.isArray(keyData.allowed_routes) && keyData.allowed_routes.length > 0 ? keyData.allowed_routes.join(", ") : "",
   max_budget: keyData.max_budget,
@@ -135,6 +137,7 @@ export const toKeyEditFormValues = (keyData: KeyResponse): KeyEditFormValues => 
 export const keyEditFormSchema = z.object({
   key_alias: z.custom<string | undefined>().optional(),
   models: z.custom<string[] | undefined>().optional(),
+  disallowed_models: z.custom<string[] | undefined>().optional(),
   allowed_routes: z.custom<string | undefined>().optional(),
   max_budget: z.custom<number | string | null | undefined>().optional(),
   soft_budget: z.custom<number | string | null | undefined>().optional(),
@@ -197,6 +200,7 @@ export const toSubmittedValues = (
 ): Record<string, unknown> => ({
   key_alias: values.key_alias,
   models: values.models,
+  disallowed_models: values.disallowed_models,
   allowed_routes: values.allowed_routes,
   max_budget: values.max_budget,
   soft_budget: values.soft_budget,

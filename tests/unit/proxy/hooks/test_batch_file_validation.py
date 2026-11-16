@@ -980,6 +980,8 @@ def test_key_requires_batch_model_access_check_branches():
         check(UserAPIKeyAuth(api_key="sk", models=[], access_group_ids=["grp"])) is True
     )
     assert check(UserAPIKeyAuth(api_key="sk", models=[])) is False
+    assert check(UserAPIKeyAuth(api_key="sk", models=[], disallowed_models=["gpt-denied"])) is True
+    assert check(UserAPIKeyAuth(api_key="sk", models=["*"], disallowed_models=["gpt-denied"])) is True
     assert check(UserAPIKeyAuth(api_key="sk", models=["gpt-4o-mini"])) is True
     # Wildcard / all-proxy-models grant access to every model, so
     # can_key_call_model passes any model regardless of access groups (which

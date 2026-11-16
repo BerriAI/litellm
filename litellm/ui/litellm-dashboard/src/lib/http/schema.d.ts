@@ -8622,6 +8622,7 @@ export interface paths {
          *         - max_budget: Optional[float] - Max budget for key
          *         - team_id: Optional[str] - Team ID associated with key
          *         - tags: Optional[List[str]] - Tags for organizing keys
+         *         - disallowed_models: Optional[List[str]] - Model names, aliases or `*` patterns the key can never call (at most 500 entries), even when `models`, its team or an access group would allow them. A deployment id entry blocks requests that name that id. Only a proxy admin or an admin of the key's team can remove entries.
          *         - object_permission: Optional[LiteLLM_ObjectPermissionBase] - key-specific object permission, as on /key/update
          *
          *     Only the fields an item carries are written: a field left out keeps its current value, and a field
@@ -8722,6 +8723,7 @@ export interface paths {
          *     - budget_id: Optional[str] - The budget id associated with the key. Created by calling `/budget/new`.
          *     - end_user_budget_id: Optional[str] - Proxy admin only. Budget id applied to end users first seen through this key that carry no budget of their own. Takes precedence over `litellm_settings.max_end_user_budget_id`.
          *     - models: Optional[list] - Model_name's a user is allowed to call. (if empty, key is allowed to call all models)
+         *     - disallowed_models: Optional[List[str]] - Model names, aliases or `*` patterns the key can never call (at most 500 entries), even when `models`, its team or an access group would allow them. A deployment id entry blocks requests that name that id.
          *     - aliases: Optional[dict] - Any alias mappings, on top of anything in the config.yaml model list. - https://docs.litellm.ai/docs/proxy/virtual_keys#managing-auth---upgradedowngrade-models
          *     - config: Optional[dict] - any key-specific configs, overrides config in config.yaml
          *     - spend: Optional[int] - Amount spent by key. Default is 0. Will be updated by proxy whenever key is used. https://docs.litellm.ai/docs/proxy/virtual_keys#managing-auth---tracking-spend
@@ -8979,6 +8981,7 @@ export interface paths {
          *         - user_id: Optional[str] - User ID associated with key
          *         - team_id: Optional[str] - Team ID associated with key
          *         - models: Optional[list] - Model_name's a user is allowed to call
+         *         - disallowed_models: Optional[List[str]] - Model names, aliases or `*` patterns the key can never call (at most 500 entries), even when `models`, its team or an access group would allow them. A deployment id entry blocks requests that name that id. Only a proxy admin or an admin of the key's team can remove entries.
          *         - tags: Optional[List[str]] - Tags for organizing keys (Enterprise only)
          *         - spend: Optional[float] - Amount spent by key
          *         - max_budget: Optional[float] - Max budget for key
@@ -9049,6 +9052,7 @@ export interface paths {
          *     - budget_id: Optional[str] - The budget id associated with the key. Created by calling `/budget/new`.
          *     - end_user_budget_id: Optional[str] - Proxy admin only. Budget id applied to end users first seen through this key that carry no budget of their own. Omit to keep the current value, pass an empty string to clear it.
          *     - models: Optional[list] - Model_name's a user is allowed to call. (if empty, key is allowed to call all models)
+         *     - disallowed_models: Optional[List[str]] - Model names, aliases or `*` patterns the key can never call (at most 500 entries), even when `models`, its team or an access group would allow them. A deployment id entry blocks requests that name that id.
          *     - aliases: Optional[dict] - Any alias mappings, on top of anything in the config.yaml model list. - https://docs.litellm.ai/docs/proxy/virtual_keys#managing-auth---upgradedowngrade-models
          *     - config: Optional[dict] - any key-specific configs, overrides config in config.yaml
          *     - spend: Optional[int] - Amount spent by key. Default is 0. Will be updated by proxy whenever key is used. https://docs.litellm.ai/docs/proxy/virtual_keys#managing-auth---tracking-spend
@@ -9187,6 +9191,7 @@ export interface paths {
          *     - budget_id: Optional[str] - The budget id associated with the key. Created by calling `/budget/new`.
          *     - end_user_budget_id: Optional[str] - Proxy admin only. Budget id applied to end users first seen through this key that carry no budget of their own. Omit to keep the current value, pass an empty string to clear it.
          *     - models: Optional[list] - Model_name's a user is allowed to call
+         *     - disallowed_models: Optional[List[str]] - Model names, aliases or `*` patterns the key can never call (at most 500 entries), even when `models`, its team or an access group would allow them. A deployment id entry blocks requests that name that id. Only a proxy admin or an admin of the key's team can remove entries.
          *     - tags: Optional[List[str]] - Tags for organizing keys (Enterprise only)
          *     - prompts: Optional[List[str]] - List of prompts that the key is allowed to use.
          *     - enforced_params: Optional[List[str]] - List of enforced params for the key (Enterprise only). [Docs](https://docs.litellm.ai/docs/enterprise#governance-and-cost)
@@ -9278,6 +9283,7 @@ export interface paths {
          *         - user_id: Optional[str] - User ID associated with key
          *         - team_id: Optional[str] - Team ID associated with key
          *         - models: Optional[list] - Model_name's a user is allowed to call
+         *         - disallowed_models: Optional[List[str]] - Model names, aliases or `*` patterns the key can never call (at most 500 entries), even when `models`, its team or an access group would allow them. A deployment id entry blocks requests that name that id. Only a proxy admin or an admin of the key's team can remove entries.
          *         - tags: Optional[List[str]] - Tags for organizing keys (Enterprise only)
          *         - spend: Optional[float] - Amount spent by key
          *         - max_budget: Optional[float] - Max budget for key
@@ -30176,6 +30182,8 @@ export interface components {
         BulkUpdateKeyRequestItem: {
             /** Budget Id */
             budget_id?: string | null;
+            /** Disallowed Models */
+            disallowed_models?: string[] | null;
             /** Key */
             key: string;
             /** Max Budget */
@@ -35230,6 +35238,8 @@ export interface components {
             denied_passthrough_routes?: string[] | null;
             /** Disable Global Guardrails */
             disable_global_guardrails?: boolean | null;
+            /** Disallowed Models */
+            disallowed_models?: string[] | null;
             /** Duration */
             duration?: string | null;
             /** Enable Prompt Caching */
@@ -35398,6 +35408,8 @@ export interface components {
             denied_passthrough_routes?: string[] | null;
             /** Disable Global Guardrails */
             disable_global_guardrails?: boolean | null;
+            /** Disallowed Models */
+            disallowed_models?: string[] | null;
             /** Duration */
             duration?: string | null;
             /** Enable Prompt Caching */
@@ -37007,6 +37019,8 @@ export interface components {
             deleted_by?: string | null;
             /** Deleted By Api Key */
             deleted_by_api_key?: string | null;
+            /** Disallowed Models */
+            disallowed_models?: string[] | null;
             /** Expires */
             expires?: string | null;
             /** Id */
@@ -38902,6 +38916,8 @@ export interface components {
             created_at?: string | null;
             /** Created By */
             created_by?: string | null;
+            /** Disallowed Models */
+            disallowed_models?: string[] | null;
             /** Expires */
             expires?: string | null;
             /** Key Alias */
@@ -42387,6 +42403,8 @@ export interface components {
             denied_passthrough_routes?: string[] | null;
             /** Disable Global Guardrails */
             disable_global_guardrails?: boolean | null;
+            /** Disallowed Models */
+            disallowed_models?: string[] | null;
             /** Duration */
             duration?: string | null;
             /** Enable Prompt Caching */
@@ -45239,6 +45257,8 @@ export interface components {
             denied_passthrough_routes?: string[] | null;
             /** Disable Global Guardrails */
             disable_global_guardrails?: boolean | null;
+            /** Disallowed Models */
+            disallowed_models?: string[] | null;
             /** Duration */
             duration?: string | null;
             /** Enable Prompt Caching */
@@ -52040,6 +52060,8 @@ export interface components {
             denied_passthrough_routes?: string[] | null;
             /** Disable Global Guardrails */
             disable_global_guardrails?: boolean | null;
+            /** Disallowed Models */
+            disallowed_models?: string[] | null;
             /** Duration */
             duration?: string | null;
             /** Enable Prompt Caching */
@@ -53191,6 +53213,8 @@ export interface components {
             /** Created By User */
             created_by_user?: unknown | null;
             customer_hierarchy?: components["schemas"]["CustomerHierarchyAuth"] | null;
+            /** Disallowed Models */
+            disallowed_models?: string[] | null;
             /** End User Id */
             end_user_id?: string | null;
             /** End User Max Budget */

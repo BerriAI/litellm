@@ -22,7 +22,7 @@ class LiteLLM_VerificationToken(LiteLLMPydanticObjectBase):
     max_budget: float | None = None
     expires: str | datetime | None = None
     models: list = []
-    aliases: dict = {}
+    aliases: dict[str, object] = {}
     config: dict = {}
     user_id: str | None = None
     team_id: str | None = None
@@ -56,6 +56,7 @@ class LiteLLM_VerificationToken(LiteLLMPydanticObjectBase):
     object_permission_id: str | None = None
     object_permission: LiteLLM_ObjectPermissionTable | None = None
     access_group_ids: list[str] | None = None
+    disallowed_models: tuple[str, ...] | None = None
     rotation_count: int | None = 0
     auto_rotate: bool | None = False
     rotation_interval: str | None = None

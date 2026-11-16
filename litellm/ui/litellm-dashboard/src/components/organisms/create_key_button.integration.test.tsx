@@ -112,6 +112,7 @@ const OPENAPI_SCHEMA = {
           soft_budget: { type: "number", title: "Soft Budget" },
           blocked: { type: "boolean", title: "Blocked" },
           max_budget: { type: "number", title: "Max Budget" },
+          disallowed_models: { type: "array", items: { type: "string" }, title: "Disallowed Models" },
         },
       },
     },
@@ -227,6 +228,12 @@ const createdPayload = async () => {
   return vi.mocked(keyCreateCall).mock.calls[0][2] as Record<string, unknown>;
 };
 
+const listModelsOrAccessGroups =
+  (models: string[], accessGroups: string[]) =>
+  async (...args: Parameters<typeof modelAvailableCall>) => ({
+    data: (args[6] === true ? accessGroups : models).map((id) => ({ id })),
+  });
+
 describe("CreateKey", () => {
   beforeEach(() => {
     testQueryClient.clear();
@@ -246,7 +253,7 @@ describe("CreateKey", () => {
     vi.mocked(toast.fromError).mockClear();
     vi.mocked(modelAvailableCall)
       .mockClear()
-      .mockResolvedValue({ data: [{ id: "gpt-4" }] });
+      .mockImplementation(listModelsOrAccessGroups(["gpt-4"], []));
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: RequestInfo | URL) => {
@@ -954,6 +961,44 @@ describe("CreateKey", () => {
 
       expect(await screen.findByRole("option", { name: "All Team Models" })).toBeInTheDocument();
       expect(screen.queryByRole("option", { name: "All Proxy Models" })).not.toBeInTheDocument();
+    });
+  });
+
+  describe("disallowed models", () => {
+    it("sends the model picked as disallowed on the create request", async () => {
+      await openModal();
+      await nameTheKey();
+
+      await userEvent.click(await screen.findByLabelText("Disallowed Models"));
+      await userEvent.click(await screen.findByRole("option", { name: "gpt-4" }));
+      await userEvent.keyboard("{Escape}");
+      await submit();
+
+      expect((await createdPayload()).disallowed_models).toEqual(["gpt-4"]);
+    });
+
+    it("offers the models a key would get but none of the model access group names", async () => {
+      vi.mocked(modelAvailableCall).mockImplementation(
+        listModelsOrAccessGroups(["gpt-4", "beta-models"], ["beta-models"]),
+      );
+      await openModal();
+
+      await userEvent.click(await screen.findByLabelText("Disallowed Models"));
+
+      expect(await screen.findByRole("option", { name: "gpt-4" })).toBeInTheDocument();
+      expect(screen.queryByRole("option", { name: "beta-models" })).not.toBeInTheDocument();
+    });
+
+    it("keeps the schema-driven Advanced Settings from rendering a second disallowed models control", async () => {
+      await openModal();
+      await openSection(/Optional Settings/i);
+      await openSection(SECTIONS.advanced);
+      await screen.findByLabelText("Soft Budget");
+
+      const disallowedLabels = screen.getAllByText(
+        (_, element) => element?.tagName === "LABEL" && element.textContent?.trim() === "Disallowed Models",
+      );
+      expect(disallowedLabels).toHaveLength(1);
     });
   });
 

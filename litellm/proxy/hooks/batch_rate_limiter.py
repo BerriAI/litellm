@@ -474,6 +474,8 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         user_api_key_dict: UserAPIKeyAuth,
     ) -> bool:
         """True when the key may only call a subset of models (JSONL must be checked)."""
+        if user_api_key_dict.disallowed_models:
+            return True
         models: Final = user_api_key_dict.models or []
         if "*" in models:
             return False
@@ -1131,6 +1133,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             get_team_object,
             key_access_group_grants_model,
         )
+        from litellm.proxy.auth.key_disallowed_models import ensure_key_may_call_model
         from litellm.proxy.proxy_server import llm_router, prisma_client, proxy_logging_obj, user_api_key_cache
 
         if target_model_names:
@@ -1168,6 +1171,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             model_to_check = model
             try:
                 if team_object is not None:
+                    ensure_key_may_call_model(model_to_check, user_api_key_dict, llm_router)
                     try:
                         await can_team_access_model(
                             model=model_to_check,

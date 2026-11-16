@@ -20,6 +20,16 @@ def _mapping(value: object) -> Mapping[str, object] | None:
         return None
 
 
+def ensure_key_may_call_routed_model(*, model: str, request_kwargs: Mapping[str, object], llm_router: Router) -> None:
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.auth.key_disallowed_models import ensure_key_may_call_model
+
+    metadata: Final = _mapping(request_kwargs.get(get_metadata_variable_name_from_kwargs(request_kwargs)))
+    actor: Final = metadata.get("user_api_key_auth") if metadata is not None else None
+    if isinstance(actor, UserAPIKeyAuth):
+        ensure_key_may_call_model(model, actor, llm_router)
+
+
 async def authorize_member_auto_router_inference(
     *,
     deployment: Mapping[str, object] | None,

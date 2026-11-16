@@ -17,7 +17,7 @@ import litellm
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, normalize_drop_params
 from litellm.litellm_core_utils.fallback_utils import without_global_fallbacks_around
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.litellm_core_utils.routing_common_utils import is_proxy_admin_request
+from litellm.litellm_core_utils.routing_common_utils import comma_separated_models, is_proxy_admin_request
 from litellm.litellm_core_utils.total_deadline import enforce_total_timeout_scope
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.openai_files_endpoints.common_utils import (
@@ -928,7 +928,7 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
         if data.get("fastest_response", False):
             return llm_router.abatch_completion_fastest_response(**data)
         else:
-            models: Final = [model.strip() for model in data.pop("model").split(",")]
+            models: Final = list(comma_separated_models(data.pop("model")))
             return llm_router.abatch_completion(models=models, **data)
 
     elif "user_config" in data:

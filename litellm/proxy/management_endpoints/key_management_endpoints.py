@@ -26,7 +26,7 @@ from typing import TYPE_CHECKING, Final, Literal, Optional, Protocol, TypeVar, c
 import fastapi
 import yaml
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
-from pydantic import ConfigDict, TypeAdapter
+from pydantic import BaseModel, ConfigDict, TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
@@ -64,6 +64,7 @@ from litellm.proxy.auth.auth_utils import (
     enforce_output_token_estimates_are_admin_only,
     enforce_vector_store_index_grants_are_admin_only,
 )
+from litellm.proxy.auth.key_disallowed_models import disallowed_models_removed_by
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
     evict_and_broadcast,
@@ -2467,6 +2468,7 @@ async def generate_key_fn(
     - budget_id: Optional[str] - The budget id associated with the key. Created by calling `/budget/new`.
     - end_user_budget_id: Optional[str] - Proxy admin only. Budget id applied to end users first seen through this key that carry no budget of their own. Takes precedence over `litellm_settings.max_end_user_budget_id`.
     - models: Optional[list] - Model_name's a user is allowed to call. (if empty, key is allowed to call all models)
+    - disallowed_models: Optional[List[str]] - Model names, aliases or `*` patterns the key can never call (at most 500 entries), even when `models`, its team or an access group would allow them. A deployment id entry blocks requests that name that id.
     - aliases: Optional[dict] - Any alias mappings, on top of anything in the config.yaml model list. - https://docs.litellm.ai/docs/proxy/virtual_keys#managing-auth---upgradedowngrade-models
     - config: Optional[dict] - any key-specific configs, overrides config in config.yaml
     - spend: Optional[int] - Amount spent by key. Default is 0. Will be updated by proxy whenever key is used. https://docs.litellm.ai/docs/proxy/virtual_keys#managing-auth---tracking-spend
@@ -2681,6 +2683,7 @@ async def generate_service_account_key_fn(
     - budget_id: Optional[str] - The budget id associated with the key. Created by calling `/budget/new`.
     - end_user_budget_id: Optional[str] - Proxy admin only. Budget id applied to end users first seen through this key that carry no budget of their own. Omit to keep the current value, pass an empty string to clear it.
     - models: Optional[list] - Model_name's a user is allowed to call. (if empty, key is allowed to call all models)
+    - disallowed_models: Optional[List[str]] - Model names, aliases or `*` patterns the key can never call (at most 500 entries), even when `models`, its team or an access group would allow them. A deployment id entry blocks requests that name that id.
     - aliases: Optional[dict] - Any alias mappings, on top of anything in the config.yaml model list. - https://docs.litellm.ai/docs/proxy/virtual_keys#managing-auth---upgradedowngrade-models
     - config: Optional[dict] - any key-specific configs, overrides config in config.yaml
     - spend: Optional[int] - Amount spent by key. Default is 0. Will be updated by proxy whenever key is used. https://docs.litellm.ai/docs/proxy/virtual_keys#managing-auth---tracking-spend
@@ -3135,6 +3138,8 @@ async def prepare_key_update_data(
     data_json.pop("key", None)
     data_json.pop("new_key", None)
     data_json.pop("grace_period", None)  # Request-only param, not a DB column
+    if "disallowed_models" in data_json and data_json["disallowed_models"] is None:
+        data_json["disallowed_models"] = []
     if _resends_stored_routes(data, existing_key_row):
         data_json.pop("allowed_routes", None)
     if (
@@ -3376,6 +3381,38 @@ async def _check_single_key_update_team_permissions(
     )
 
 
+async def check_disallowed_models_caller_permission(
+    data: BaseModel | None,
+    user_api_key_dict: UserAPIKeyAuth,
+    existing_key_row: LiteLLM_VerificationToken,
+    prisma_client: PrismaClient | None,
+    user_api_key_cache: UserApiKeyCache,
+    team_lookup: Callable[..., Awaitable[LiteLLM_TeamTableCachedObj | None]] = get_team_object,
+) -> None:
+    removed: Final = disallowed_models_removed_by(data, existing_key_row.disallowed_models)
+    if not removed or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
+        return
+    team_table: Final = (
+        await team_lookup(
+            team_id=existing_key_row.team_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            check_db_only=True,
+        )
+        if existing_key_row.team_id is not None and prisma_client is not None
+        else None
+    )
+    if team_table is not None and is_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_table):
+        return
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail={
+            "error": "Only proxy admins and admins of the key's team can remove models from a key's "
+            f"`disallowed_models`. Removed: {sorted(removed)}"
+        },
+    )
+
+
 async def _process_single_key_update(
     update_key_request: UpdateKeyRequest,
     user_api_key_dict: UserAPIKeyAuth,
@@ -3456,6 +3493,9 @@ async def _process_single_key_update(
         update_key_request,
         user_api_key_dict,
         existing_metadata=existing_key_row.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # LiteLLM_VerificationToken.metadata is a bare dict
+    )
+    await check_disallowed_models_caller_permission(
+        update_key_request, user_api_key_dict, existing_key_row, prisma_client, user_api_key_cache
     )
     await validate_guardrail_names(
         update_key_request.guardrails,
@@ -4025,6 +4065,9 @@ async def _validate_update_key_data(
         user_api_key_dict,
         existing_metadata=existing_key_row.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # LiteLLM_VerificationToken.metadata is a bare dict
     )
+    await check_disallowed_models_caller_permission(
+        data, user_api_key_dict, existing_key_row, checked_prisma_client, user_api_key_cache
+    )
     await validate_guardrail_names(
         data.guardrails,
         data.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # request models declare `metadata` as bare dict
@@ -4181,6 +4224,7 @@ async def update_key_fn(
     - budget_id: Optional[str] - The budget id associated with the key. Created by calling `/budget/new`.
     - end_user_budget_id: Optional[str] - Proxy admin only. Budget id applied to end users first seen through this key that carry no budget of their own. Omit to keep the current value, pass an empty string to clear it.
     - models: Optional[list] - Model_name's a user is allowed to call
+    - disallowed_models: Optional[List[str]] - Model names, aliases or `*` patterns the key can never call (at most 500 entries), even when `models`, its team or an access group would allow them. A deployment id entry blocks requests that name that id. Only a proxy admin or an admin of the key's team can remove entries.
     - tags: Optional[List[str]] - Tags for organizing keys (Enterprise only)
     - prompts: Optional[List[str]] - List of prompts that the key is allowed to use.
     - enforced_params: Optional[List[str]] - List of enforced params for the key (Enterprise only). [Docs](https://docs.litellm.ai/docs/enterprise#governance-and-cost)
@@ -4470,6 +4514,7 @@ async def bulk_update_keys(
         - max_budget: Optional[float] - Max budget for key
         - team_id: Optional[str] - Team ID associated with key
         - tags: Optional[List[str]] - Tags for organizing keys
+        - disallowed_models: Optional[List[str]] - Model names, aliases or `*` patterns the key can never call (at most 500 entries), even when `models`, its team or an access group would allow them. A deployment id entry blocks requests that name that id. Only a proxy admin or an admin of the key's team can remove entries.
         - object_permission: Optional[LiteLLM_ObjectPermissionBase] - key-specific object permission, as on /key/update
 
     Only the fields an item carries are written: a field left out keeps its current value, and a field
@@ -5445,6 +5490,7 @@ async def generate_key_helper_fn(
     rotation_interval: str | None = None,
     router_settings: dict[str, object] | None = None,
     access_group_ids: list[str] | None = None,
+    disallowed_models: list[str] | None = None,
     budget_limits: list | None = None,  # multiple concurrent budget windows
     *,
     llm_router: Router | None = None,
@@ -5585,6 +5631,7 @@ async def generate_key_helper_fn(
             "object_permission_id": object_permission_id,
             "router_settings": router_settings_json,
             "access_group_ids": access_group_ids or [],
+            "disallowed_models": disallowed_models or [],
         }
 
         # Add rotation fields if auto_rotate is enabled
@@ -6662,6 +6709,7 @@ async def regenerate_key_fn(
         - user_id: Optional[str] - User ID associated with key
         - team_id: Optional[str] - Team ID associated with key
         - models: Optional[list] - Model_name's a user is allowed to call
+        - disallowed_models: Optional[List[str]] - Model names, aliases or `*` patterns the key can never call (at most 500 entries), even when `models`, its team or an access group would allow them. A deployment id entry blocks requests that name that id. Only a proxy admin or an admin of the key's team can remove entries.
         - tags: Optional[List[str]] - Tags for organizing keys (Enterprise only)
         - spend: Optional[float] - Amount spent by key
         - max_budget: Optional[float] - Max budget for key
@@ -6839,6 +6887,9 @@ async def regenerate_key_fn(
             data,
             user_api_key_dict,
             existing_metadata=_key_in_db.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # LiteLLM_VerificationToken.metadata is a bare dict
+        )
+        await check_disallowed_models_caller_permission(
+            data, user_api_key_dict, _key_in_db, prisma_client, user_api_key_cache
         )
         await validate_guardrail_names(
             data.guardrails if data is not None else None,

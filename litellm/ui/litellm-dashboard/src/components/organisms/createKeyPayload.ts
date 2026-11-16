@@ -170,6 +170,7 @@ const consumedSourceKeys = (
   new Set<string>([
     "mcp_tool_permissions",
     "allowed_skills",
+    ...(nonEmptyList(values.disallowed_models) ? [] : ["disallowed_models"]),
     KEY_MAX_BUDGET_ALERT_EMAILS_KEY,
     ...(values.disable_global_guardrails ? [] : ["disable_global_guardrails"]),
     ...(vectorStores ? ["allowed_vector_store_ids"] : []),

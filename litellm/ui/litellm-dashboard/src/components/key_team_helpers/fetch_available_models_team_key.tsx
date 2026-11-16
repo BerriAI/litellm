@@ -36,6 +36,21 @@ export const fetchAvailableModelsForTeamOrKey = async (
   }
 };
 
+export const fetchModelAccessGroupNames = async (
+  userID: string,
+  userRole: string,
+  accessToken: string,
+  teamID: string | null,
+): Promise<string[]> => {
+  try {
+    const groups = await modelAvailableCall(accessToken, userID, userRole, false, teamID, true, true);
+    return groups["data"].map((element: { id: string }) => element.id);
+  } catch (error) {
+    console.error("Error fetching model access groups:", error);
+    return [];
+  }
+};
+
 export const excludeProxyWideSentinel = (models: string[]): string[] =>
   models.filter((model) => model !== "all-proxy-models");
 

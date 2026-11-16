@@ -102,6 +102,7 @@ from litellm.proxy.auth.budget_throttle import (
     budget_throttle_percentage,
     should_throttle_budget_exceeded,
 )
+from litellm.proxy.auth.key_disallowed_models import ensure_key_may_call_model
 from litellm.proxy.auth.model_access_denied import (
     customer_model_access_denied_client_message,
     model_access_denied_client_message,
@@ -5097,7 +5098,7 @@ def check_model_access_helper(
 _check_model_access_helper: Final = check_model_access_helper
 
 
-def _owning_team_names_for_team_deployment(
+def owning_team_names_for_team_deployment(
     model: str,
     llm_router: RegistryReader | None,
     team_id: str | None,
@@ -5187,7 +5188,7 @@ def _can_object_call_model(
     owning_team_names: Final = (
         ()
         if key_alias_applied
-        else _owning_team_names_for_team_deployment(
+        else owning_team_names_for_team_deployment(
             model=model, llm_router=llm_router, team_id=team_id, team_model_aliases=team_model_aliases
         )
     )
@@ -5671,6 +5672,7 @@ async def can_key_call_model(
     Raises:
         - Exception: If token not allowed to call model
     """
+    ensure_key_may_call_model(model, valid_token, llm_router)
     if _is_dashboard_session(valid_token) and personal_key_team_model_access_applies(valid_token):
         from litellm.proxy.proxy_server import (
             prisma_client as dashboard_prisma_client,
@@ -5780,7 +5782,9 @@ async def _can_key_call_resolved_model(
     skip_key_model_check: Final = valid_token.config or (
         isinstance(valid_token.models, list) and SpecialModelNames.all_team_models.value in valid_token.models
     )
-    if not skip_key_model_check:
+    if skip_key_model_check:
+        ensure_key_may_call_model(model, valid_token, llm_router)
+    else:
         await can_key_call_model(
             model=model,
             llm_model_list=llm_model_list,

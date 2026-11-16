@@ -63,6 +63,14 @@ class RouterHost:
                 response=httpx.Response(status_code=403, request=httpx.Request("POST", "https://litellm.invalid")),
             )
 
+    def authorize_routed_model(
+        self,
+        model: str,
+        request_kwargs: Mapping[str, object],
+        llm_router: "Router",
+    ) -> None:
+        """Raise when the caller may not be sent to ``model``, the one a routing strategy selected."""
+
     def compression_policy(
         self,
         llm_router: "Router | None",

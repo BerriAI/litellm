@@ -25,6 +25,22 @@ describe("tpd_limit round trip", () => {
   });
 });
 
+describe("disallowed_models round trip", () => {
+  const gates = { canViewPolicies: true, canViewPrompts: true };
+  const keyData = { token: "tok", models: ["gpt-4o"], disallowed_models: ["gpt-4o-mini"] } as unknown as KeyResponse;
+
+  it("hydrates the stored disallowed models and submits them unchanged", () => {
+    const values = toKeyEditFormValues(keyData);
+    expect(values.disallowed_models).toEqual(["gpt-4o-mini"]);
+    expect(toSubmittedValues(values, gates).disallowed_models).toEqual(["gpt-4o-mini"]);
+  });
+
+  it("submits an empty list when the operator clears every disallowed model", () => {
+    const values = keyEditFormSchema.parse({ ...toKeyEditFormValues(keyData), disallowed_models: [] });
+    expect(JSON.parse(JSON.stringify(toSubmittedValues(values, gates)))).toHaveProperty("disallowed_models", []);
+  });
+});
+
 describe("keyEditFormSchema", () => {
   it("accepts an empty form", () => {
     expect(parse({}).success).toBe(true);

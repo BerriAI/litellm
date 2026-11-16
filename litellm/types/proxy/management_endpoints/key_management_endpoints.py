@@ -1,13 +1,14 @@
 from datetime import datetime
 from typing import Final, Literal, TypeAlias
 
-from pydantic import ConfigDict, model_validator
+from pydantic import ConfigDict, Field, model_validator
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm.models.verification_token import LiteLLM_VerificationToken
 from litellm.types.llms.base import LiteLLMBaseModel, LiteLLMPydanticObjectBase
 from litellm.types.proxy.management_endpoints.internal_user_endpoints import InsensitiveContains
 from litellm.types.proxy.management_endpoints.key_requests import (
+    MAX_KEY_DISALLOWED_MODELS,
     GenerateKeyRequest,
     RegenerateKeyRequest,
     UpdateKeyRequest,
@@ -37,6 +38,7 @@ class BulkUpdateKeyRequestItem(LiteLLMBaseModel):
     max_budget: float | None = None  # Max budget for key
     team_id: str | None = None  # Team ID associated with key
     tags: list[str] | None = None  # Tags for organizing keys
+    disallowed_models: tuple[str, ...] | None = Field(default=None, max_length=MAX_KEY_DISALLOWED_MODELS)
     object_permission: LiteLLM_ObjectPermissionBase | None = None
 
 

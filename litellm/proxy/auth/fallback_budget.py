@@ -27,8 +27,8 @@ Two known limitations of that narrow scope, both shared with `fallback_model_acc
   `reserve_budget_for_request`, which the zero-cost bypass skips. Turning the soft cap into a hard
   one means reserving per fallback attempt and reconciling on completion.
 * A request that reaches the router without `metadata["user_api_key_auth"]` is not restricted.
-  Only `add_litellm_data_to_request` populates that key, so endpoints that assemble metadata by
-  hand (for example `/queue/chat/completions`) fall through as unauthenticated.
+  An endpoint that assembles metadata by hand and leaves that key out falls through as
+  unauthenticated.
 """
 
 from collections.abc import Callable, Mapping
