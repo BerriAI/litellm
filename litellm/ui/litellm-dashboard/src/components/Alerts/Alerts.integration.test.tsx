@@ -200,7 +200,9 @@ describe("Alerts", () => {
       await screen.findByRole("button", { name: "Prompt cache usage not observed on claude-east-1" }),
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Spend on Research agent/ })).toBeInTheDocument();
-    expect(screen.getByText(/3 requests in a row to claude-sonnet-5-5/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/3 observed requests to claude-sonnet-5-5 reported no cache usage.*not necessarily consecutive/),
+    ).toBeInTheDocument();
     expect(
       calls
         .filter((call) => call.path === "/alerts")
@@ -259,6 +261,7 @@ describe("Alerts", () => {
     expect(
       await screen.findByRole("heading", { name: "Prompt cache usage not observed on claude-east-1" }),
     ).toBeInTheDocument();
+    expect(screen.getByText(/not necessarily consecutive and do not prove an outage/)).toBeInTheDocument();
     const evidence = screen.getByRole("region", { name: "What was observed" });
     expect(within(evidence).getByText("claude-east-1")).toBeInTheDocument();
     expect(within(evidence).getByText("claude-sonnet-5-5")).toBeInTheDocument();

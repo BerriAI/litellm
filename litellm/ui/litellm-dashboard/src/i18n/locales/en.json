@@ -5870,11 +5870,11 @@
       "retiresTitle": "{{name}} retires on {{date}}",
       "promptCache": {
         "title": "Prompt cache usage not observed on {{name}}",
-        "description": "{{misses}} requests in a row to {{model}} reported no cache read or write for a prefix the provider had cached before.",
+        "description": "{{misses}} observed requests to {{model}} reported no cache usage for a prefix the provider had cached before. Delayed, missing or unlogged requests can fall between them, so they are not necessarily consecutive and do not prove an outage.",
         "evidenceHeading": "What was observed",
         "deployment": "Deployment",
         "model": "Model",
-        "misses": "Requests in a row with no cache read or write",
+        "misses": "Observed requests with no cache usage",
         "provenWrite": "Earlier cache write that proved the prefix",
         "provenWriteTokens_one": "{{count}} token",
         "provenWriteTokens_other": "{{count}} tokens",
