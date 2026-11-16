@@ -314,5 +314,14 @@
       "supports_function_calling": true,
       "supports_reasoning": true
     }
+  },
+  "adaption": {
+    "base_url": "https://api.prod.adaptionlabs.ai/api/v1",
+    "api_key_env": "ADAPTION_API_KEY",
+    "api_base_env": "ADAPTION_API_BASE",
+    "provider_info": {
+      "supports_function_calling": true
+    },
+    "supported_endpoints": ["/v1/chat/completions", "/v1/responses"]
   }
 }
