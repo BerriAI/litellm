@@ -1773,12 +1773,26 @@ def _readable_port(parts: SplitResult) -> bool:
 
 def _sent_api_base(request: Mapping[str, object]) -> tuple[object, _SecretsRead]:
     """The base Python's URL builder reads, and the secrets read to find it: azure_ai falls back to
-    `AZURE_API_BASE`, read once, which the native route then reuses."""
+    `AZURE_API_BASE` and anthropic to `ANTHROPIC_API_BASE` then `ANTHROPIC_BASE_URL`, each read
+    once, which the native route then reuses."""
     api_base: Final = request.get("api_base")
-    if api_base or "model" not in request or _resolved_provider(request) != "azure_ai":
+    if api_base or "model" not in request:
+        return api_base, []
+    provider: Final = _resolved_provider(request)
+    if provider == "anthropic":
+        return _anthropic_environment_base()
+    if provider != "azure_ai":
         return api_base, []
     environment: Final = get_secret_str("AZURE_API_BASE")
     return environment, [("AZURE_API_BASE", environment)]
+
+
+def _anthropic_environment_base() -> tuple[str | None, _SecretsRead]:
+    api_base: Final = get_secret_str("ANTHROPIC_API_BASE")
+    if api_base:
+        return api_base, [("ANTHROPIC_API_BASE", api_base)]
+    base_url: Final = get_secret_str("ANTHROPIC_BASE_URL")
+    return base_url, [("ANTHROPIC_API_BASE", api_base), ("ANTHROPIC_BASE_URL", base_url)]
 
 
 def transport_handler(request: Mapping[str, object]) -> tuple[AsyncHTTPHandler | None, _SecretsRead]:

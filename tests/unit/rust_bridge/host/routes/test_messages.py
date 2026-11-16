@@ -1363,14 +1363,61 @@ def test_azure_ai_reads_azure_api_base_once_and_hands_it_to_the_native_route(
 
 @pytest.mark.usefixtures("no_tls_settings")
 @pytest.mark.parametrize(
+    ("environment", "hosted", "read"),
+    (
+        (
+            {"ANTHROPIC_API_BASE": "http:///d/anthropic", "ANTHROPIC_BASE_URL": "https://b.example"},
+            True,
+            [("ANTHROPIC_API_BASE", "http:///d/anthropic")],
+        ),
+        (
+            {"ANTHROPIC_BASE_URL": "http://user:pass@h.example/anthropic"},
+            True,
+            [("ANTHROPIC_API_BASE", None), ("ANTHROPIC_BASE_URL", "http://user:pass@h.example/anthropic")],
+        ),
+        (
+            {"ANTHROPIC_API_BASE": "   ", "ANTHROPIC_BASE_URL": "https://b.example"},
+            True,
+            [("ANTHROPIC_API_BASE", "   ")],
+        ),
+        (
+            {"ANTHROPIC_API_BASE": "", "ANTHROPIC_BASE_URL": "https://b.example"},
+            False,
+            [("ANTHROPIC_API_BASE", ""), ("ANTHROPIC_BASE_URL", "https://b.example")],
+        ),
+        ({}, False, [("ANTHROPIC_API_BASE", None), ("ANTHROPIC_BASE_URL", None)]),
+    ),
+    ids=("no-host-api-base", "credentials-base-url", "whitespace-api-base", "empty-api-base", "unset"),
+)
+@pytest.mark.parametrize("api_base", (None, ""), ids=("absent", "empty"))
+def test_anthropic_env_base_is_guarded_like_a_caller_base_and_handed_to_the_native_route(
+    monkeypatch: pytest.MonkeyPatch,
+    environment: Mapping[str, str],
+    hosted: bool,
+    read: list[tuple[str, str | None]],
+    api_base: str | None,
+) -> None:
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
+    monkeypatch.setattr(messages_host, "get_secret_str", environment.get)
+
+    handler, sent_read = messages_host.transport_handler(
+        {"client": None, "model": "anthropic/claude-x", "api_base": api_base}
+    )
+
+    assert (handler is not None) is hosted
+    assert sent_read == read
+
+
+@pytest.mark.usefixtures("no_tls_settings")
+@pytest.mark.parametrize(
     "request_",
     (
-        {"client": None, "model": "anthropic/claude-x"},
+        {"client": None, "model": "anthropic/claude-x", "api_base": "https://call.example/d"},
         {"client": None, "model": "azure_ai/claude-x", "api_base": "https://call.example/d"},
         {"client": AsyncHTTPHandler(), "model": "azure_ai/claude-x"},
         {"client": None, "model": "azure_ai/claude-x", "timeout": 0},
     ),
-    ids=("anthropic", "azure-call-base", "azure-caller-handler", "azure-python-timeout"),
+    ids=("anthropic-call-base", "azure-call-base", "azure-caller-handler", "azure-python-timeout"),
 )
 def test_azure_api_base_is_left_to_the_native_route_when_the_choice_does_not_need_it(
     monkeypatch: pytest.MonkeyPatch, request_: Mapping[str, object]
