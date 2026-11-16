@@ -131,13 +131,16 @@ class BedrockInvokeStreamGuardrail:
     model_ran: bool = False
     guardrail_wrote_reply: bool = False
 
-    def with_event(self, event: Mapping[str, object]) -> BedrockInvokeStreamGuardrail:
-        actions: Final = _trace_actions(event)
+    def with_event(self, event: object) -> BedrockInvokeStreamGuardrail:
+        fields: Final = object_mapping(event)
+        if fields is None:
+            return self
+        actions: Final = _trace_actions(fields)
         return BedrockInvokeStreamGuardrail(
-            intervened=self.intervened or _intervened(event),
+            intervened=self.intervened or _intervened(fields),
             trace_actions=self.trace_actions if actions is None else actions | (self.trace_actions or frozenset()),
-            model_ran=self.model_ran or _reports_model_run(event),
-            guardrail_wrote_reply=self.guardrail_wrote_reply or _guardrail_wrote_reply(event),
+            model_ran=self.model_ran or _reports_model_run(fields),
+            guardrail_wrote_reply=self.guardrail_wrote_reply or _guardrail_wrote_reply(fields),
         )
 
     @property
