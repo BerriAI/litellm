@@ -2,11 +2,10 @@ mod deployment;
 
 use std::collections::HashMap;
 
-use litellm_config::{Config, Spelled};
+use litellm_config::Config;
 use litellm_inference_messages::{MessagesSettings, MessagesShaping};
 use litellm_llms::anthropic::model_capabilities::anthropic_model_capabilities;
 use litellm_model_catalog::Catalog;
-use litellm_python_compat::flags::lax_bool;
 use litellm_router_types::ExtraParams;
 use serde_json::Value;
 
@@ -14,14 +13,6 @@ pub use deployment::Deployment;
 
 #[derive(Clone, Debug, Default)]
 pub struct Router(HashMap<String, Deployment>);
-
-fn is_on(flag: Option<&Spelled<bool>>) -> bool {
-    match flag {
-        Some(Spelled::Value(on)) => *on,
-        Some(Spelled::Text(text)) => lax_bool(&text.as_str().into()) == Some(true),
-        None => false,
-    }
-}
 
 fn additional_drop_params(extra: &ExtraParams) -> Vec<String> {
     extra
@@ -39,13 +30,13 @@ fn additional_drop_params(extra: &ExtraParams) -> Vec<String> {
 
 impl Router {
     pub fn from_config(config: &Config, catalog: &Catalog) -> Self {
-        let drops_params_globally = is_on(config.litellm_settings.drop_params.as_ref());
+        let drops_params_globally = config.litellm_settings.drop_params == Some(true);
         config
             .model_list
             .iter()
             .map(|model| {
                 let drop_params =
-                    drops_params_globally || is_on(model.litellm_params.drop_params.as_ref());
+                    drops_params_globally || model.litellm_params.drop_params == Some(true);
                 let litellm_params = model.litellm_params.clone();
                 (
                     model.model_name.clone(),
@@ -118,6 +109,8 @@ mod tests {
     #[case::deployment_unknown_word("", "\n      drop_params: maybe", false)]
     #[case::deployment_yes("", "\n      drop_params: yes", true)]
     #[case::deployment_no("", "\n      drop_params: \"no\"", false)]
+    #[case::deployment_one("", "\n      drop_params: 1", true)]
+    #[case::deployment_list("", "\n      drop_params: [true]", false)]
     #[case::global_flag("litellm_settings:\n  drop_params: true\n", "", true)]
     #[case::global_word("litellm_settings:\n  drop_params: \"true\"\n", "", true)]
     #[case::global_off("litellm_settings:\n  drop_params: false\n", "", false)]
