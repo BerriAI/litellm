@@ -1351,6 +1351,32 @@ def test_anthropic_speed_and_geo_survive_stream_assembly():
     assert fast_cost == pytest.approx(standard_cost * 2.0)
 
 
+def test_pricing_fields_take_last_reported_value_across_stream_chunks():
+    def _chunk(usage: Usage | None) -> ModelResponseStream:
+        return ModelResponseStream(
+            id="chatcmpl-1",
+            created=1745513206,
+            model="claude-opus-4-8",
+            choices=[StreamingChoices(index=0, delta=Delta(content="Hi"))],
+            usage=usage,
+        )
+
+    first_usage: Final = Usage(prompt_tokens=10, completion_tokens=1, total_tokens=11)
+    first_usage.speed = "fast"
+    first_usage.inference_geo = "us"
+    last_usage: Final = Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15)
+    last_usage.inference_geo = "eu"
+    chunks: Final = [_chunk(first_usage), _chunk(None), _chunk(last_usage), _chunk(None)]
+
+    usage: Final = ChunkProcessor(chunks=chunks).calculate_usage(
+        chunks=chunks, model="claude-opus-4-8", completion_output="HiHiHiHi"
+    )
+
+    assert usage.speed == "fast"
+    assert usage.inference_geo == "eu"
+    assert usage.completion_tokens == 5
+
+
 def test_prompt_tokens_details_survive_later_usage_chunk_without_details():
     """Regression for #34801: a trailing usage chunk that omits
     `prompt_tokens_details` must not wipe the OpenAI cache-read/cache-write split,

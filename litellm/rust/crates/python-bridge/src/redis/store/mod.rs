@@ -1,8 +1,10 @@
 pub(crate) mod auth_cache;
+pub(crate) mod deployment_health;
 mod policy;
 pub(crate) mod rate_limits;
 pub(crate) mod request;
 pub(crate) mod router_cooldowns;
+pub(crate) mod router_session_pins;
 pub(crate) mod router_usage;
 pub(crate) mod sensitive_route_pins;
 pub(crate) mod spend_counters;
@@ -16,7 +18,6 @@ use std::{
     time::Duration,
 };
 
-use litellm_host_python::PythonContext;
 use litellm_python_compat::number::{SecondsError, seconds};
 use litellm_redis_store::{Error, FromValue, IntoValue, Number, Pending, Remote};
 use pyo3::{
@@ -29,14 +30,14 @@ use pyo3::{
 use crate::execution::{run_async_value, run_sync_value};
 use crate::redis::{
     client::NativeRedisClient,
-    events::{EventLoop, RedisCall},
+    events::{EventLoop, RedisCall, ReportContext},
 };
 
 /// The labels `RedisCache` reports for this operation, in the caller's context so its
 /// `service_target` reaches the service event, dispatched on the loop the caller runs on.
 fn call(py: Python<'_>, call_type: &'static str) -> PyResult<RedisCall> {
     Ok(RedisCall {
-        context: PythonContext::capture(py)?,
+        context: ReportContext::of_caller(py)?,
         event_loop: EventLoop::running(py),
         call_type,
     })
@@ -234,6 +235,10 @@ impl<'py, T: IntoValue> IntoPyObject<'py> for PyData<T> {
     fn into_pyobject(self, py: Python<'py>) -> PyResult<Self::Output> {
         PyValue(self.0.into_value()).into_pyobject(py)
     }
+}
+
+fn unwrap_values(values: Vec<PyValue>) -> Vec<litellm_python_compat::Value> {
+    values.into_iter().map(|value| value.0).collect()
 }
 
 fn unwrap_all<T>(values: Vec<PyData<T>>) -> Vec<T> {

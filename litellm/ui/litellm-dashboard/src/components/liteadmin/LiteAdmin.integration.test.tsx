@@ -256,6 +256,38 @@ afterEach(() => {
 });
 
 describe("Aria Agent in the gateway", () => {
+  it.each(["internal_user", "internal_user_viewer"])("hides Aria for %s with no internal access", async (role) => {
+    session(role);
+    gateway([], { uiSettings: async () => json({ values: { aria_internal_user_access: "none" } }) });
+    const { client } = renderWidget(undefined, false, true);
+    await screen.findByText("Session ready");
+    await waitFor(() => expect(client.isFetching()).toBe(0));
+    expect(screen.queryByRole("link", { name: "Aria Agent" })).not.toBeInTheDocument();
+    expect(screen.queryByPlaceholderText("Ask Aria…")).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ["internal_user", "own_usage", false],
+    ["internal_user", "own_and_team_usage", true],
+    ["proxy_admin", "none", true],
+    ["proxy_admin_viewer", "none", true],
+  ] as const)("applies internal access %s %s to team tools", async (role, access, teamTool) => {
+    session(role, "first-admin", { premium_user: true });
+    const requests = gateway([answer("Ready.")], {
+      uiSettings: async () => json({ values: { aria_internal_user_access: access } }),
+    });
+    renderWidget(undefined, false, true);
+    const input = await screen.findByPlaceholderText("Ask Aria…");
+    await waitFor(() => expect(input).toBeEnabled());
+    fireEvent.change(input, { target: { value: "What usage can I see?" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await screen.findByText("Ready.");
+    const completion = requests.find((request) => request.url.endsWith("/chat/completions"));
+    const names = completion?.body.tools.map((tool: { function: { name: string } }) => tool.function.name);
+    expect(names).toContain("get_usage_data");
+    expect(names.includes("get_team_usage_data")).toBe(teamTool);
+    if (role === "internal_user") expect(names).toHaveLength(teamTool ? 3 : 2);
+  });
   it.each([
     ["proxy_admin", true],
     ["proxy_admin", false],

@@ -469,6 +469,35 @@ describe("usage access", () => {
     expect(input.onMessage).toHaveBeenCalledExactlyOnceWith("Done");
   });
 
+  it.each([null, "administered-team"])(
+    "queries permitted teams without a user override for team selection %s",
+    async (teamIds) => {
+      const input = {
+        ...options(),
+        access: { mode: "usage", scope: { type: "user_and_teams", userId: "signed-in-user" } } as const,
+      };
+      const model = transport([
+        completion([call("get_team_usage_data", { ...dates, team_ids: teamIds })]),
+        completion(),
+      ]);
+      await runLiteAdmin(input, model.client);
+      expect(managementFetch).toHaveBeenCalledTimes(1);
+      const url = new URL(String(managementFetch.mock.calls[0][0]));
+      expect(url.pathname).toBe("/root/team/daily/activity/aggregated");
+      expect(Object.fromEntries(url.searchParams)).toEqual({
+        ...dates,
+        ...(teamIds ? { team_ids: teamIds } : {}),
+        api_key_limit: "20",
+      });
+      expect(model.requests[0].messages[0].content).toContain("permitted team usage");
+      expect(model.requests[0].tools?.map((tool) => tool.function.name)).toEqual([
+        "render_usage_chart",
+        "get_team_usage_data",
+        "get_usage_data",
+      ]);
+    },
+  );
+
   it.each([
     ["get_usage_data", { ...dates, user_id: "other-user" }],
     ["get_team_usage_data", { ...dates, team_ids: null }],

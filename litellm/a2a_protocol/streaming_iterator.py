@@ -18,6 +18,7 @@ from litellm.constants import A2A_COMPLETION_BRIDGE_WORKING_MESSAGE
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.responses.streaming_iterator import spawn_logging_task
 
 if TYPE_CHECKING:
     from a2a.compat.v0_3.types import SendStreamingMessageRequest, SendStreamingMessageResponse
@@ -172,14 +173,16 @@ class A2AStreamingIterator:
             result: Final = self._build_logging_result(usage)
 
             # Call success handlers - they will build standard_logging_object
-            asyncio.create_task(
+            spawn_logging_task(
+                asyncio.get_running_loop(),
                 self.logging_obj.dispatch_success_handlers(
                     result,
                     start_time=self.start_time,
                     end_time=end_time,
                     cache_hit=None,
                     prefer_async_handlers=True,
-                )
+                ),
+                task_name="A2A stream success log",
             )
 
             verbose_logger.info(

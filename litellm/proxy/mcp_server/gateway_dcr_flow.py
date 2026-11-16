@@ -411,6 +411,7 @@ class _ConnectFlow(_ServerScopedSealedModel):
     audience: SessionAudience | None = None
     requested_scopes: tuple[str, ...] = ()
     upstream_scopes: tuple[UpstreamScope, ...] = ()
+    unresolved_resource: Literal[True] | None = None
 
 
 class _GatewayAuthCode(_ServerScopedSealedModel):
@@ -756,6 +757,9 @@ def aggregate_authorize(
         if resource_scoped_server is not None and not upstream_scopes
         else (),
         upstream_scopes=upstream_scopes,
+        unresolved_resource=True
+        if resource is not None and resource_scoped_server is None and not _is_aggregate_resource(request, resource)
+        else None,
     )
     connect_url: Final = _append_query_params(f"{base_url}/ui/connect", (("connect_flow", handle),))
     response: Final = RedirectResponse(connect_url, status_code=303)
@@ -919,6 +923,7 @@ def _new_connect_flow(
     audience: SessionAudience | None,
     requested_scopes: tuple[str, ...] = (),
     upstream_scopes: tuple[UpstreamScope, ...] = (),
+    unresolved_resource: Literal[True] | None = None,
 ) -> _ConnectFlow:
     now: Final = datetime.now(timezone.utc)
     return _ConnectFlow(
@@ -933,6 +938,7 @@ def _new_connect_flow(
         audience=audience,
         requested_scopes=requested_scopes,
         upstream_scopes=upstream_scopes,
+        unresolved_resource=unresolved_resource,
     )
 
 
@@ -1028,6 +1034,8 @@ class ConnectFlowDescription(TypedDict):
     connected: ReadOnly[bool | None]
     servers: ReadOnly[Sequence[ConnectFlowServer] | None]
     requested_scopes: NotRequired[ReadOnly[tuple[str, ...]]]
+    selectable: NotRequired[ReadOnly[Literal[False]]]
+    required_server_ids: NotRequired[ReadOnly[tuple[str, ...]]]
 
 
 async def _describe_connect_flow_server(
@@ -1174,6 +1182,17 @@ async def _describe_upstream_scope_flow(
     return descriptions[0]
 
 
+def _with_selection_limits(flow: _ConnectFlow, described: ConnectFlowDescription) -> ConnectFlowDescription:
+    if flow.unresolved_resource:
+        unselectable: Final[ConnectFlowDescription] = {**described, "selectable": False}
+        return unselectable
+    if not flow.upstream_scopes:
+        return described
+    required: Final = tuple(dict.fromkeys(item.server_id for item in flow.upstream_scopes))
+    with_required: Final[ConnectFlowDescription] = {**described, "required_server_ids": required}
+    return with_required
+
+
 async def describe_connect_flow(
     request: Request,
     flow_handle: str,
@@ -1188,7 +1207,7 @@ async def describe_connect_flow(
     return (
         described
         if isinstance(described, Response)
-        else JSONResponse(content=described, headers=TOKEN_NO_CACHE_HEADERS)
+        else JSONResponse(content=_with_selection_limits(opened, described), headers=TOKEN_NO_CACHE_HEADERS)
     )
 
 
@@ -1202,6 +1221,8 @@ async def complete_connect_flow(
     decision: str | None = None,
     lookup_vendor_credential: LookupVendorCredential = _unavailable_vendor_credential,
     lookup_server_reachability: LookupServerReachability = _unreachable_server,
+    selected_server_ids: Sequence[str] = (),
+    master_key: str | None = None,
 ) -> Response:
     """Mint the code only after a deliberate POST by the sealed user.
 
@@ -1227,6 +1248,13 @@ async def complete_connect_flow(
             return _oauth_error(400, "invalid_request", "authorize the requested MCP server before finishing")
         if described["connected"] is False:
             return _oauth_error(400, "invalid_request", "authorize the requested MCP server before finishing")
+    narrowed: Final = (
+        opened
+        if decision == "deny"
+        else await _narrowed_to_selection(opened, selected_server_ids, lookup_server_reachability, master_key)
+    )
+    if isinstance(narrowed, Response):
+        return narrowed
     flow_refusal: Final = _claim_refusal(
         await _SingleUseGuard(cache).claim(
             f"{_USED_FLOW_CACHE_PREFIX}{opened.jti}", CONNECT_FLOW_TTL_SECONDS + _CLAIM_TTL_BUFFER_SECONDS
@@ -1238,11 +1266,60 @@ async def complete_connect_flow(
     if flow_refusal is not None:
         return flow_refusal
     response: Final = (
-        _denied_flow_response(opened) if decision == "deny" else _approved_flow_response(opened, delivery, team_id, now)
+        _denied_flow_response(narrowed)
+        if decision == "deny"
+        else _approved_flow_response(narrowed, delivery, team_id, now)
     )
     path, secure = _cookie_path_and_secure(request)
     response.delete_cookie(key=_flow_cookie_name(flow_handle), path=path, secure=secure, httponly=True, samesite="lax")
     return response
+
+
+async def _narrowed_to_selection(
+    flow: _ConnectFlow,
+    selected_server_ids: Sequence[str],
+    lookup_server_reachability: LookupServerReachability,
+    master_key: str | None,
+) -> _ConnectFlow | Response:
+    if (
+        not any(server_id.strip() for server_id in selected_server_ids)
+        or flow.resource_server_ids is not None
+        or flow.audience is not None
+        or flow.unresolved_resource
+    ):
+        return flow
+    from litellm.proxy.mcp_server.mcp_server_manager import (  # noqa: PLC0415  # import cycle
+        global_mcp_server_manager,
+    )
+
+    listed_ids: Final = frozenset(server.server_id for server in global_mcp_server_manager.get_registry().values())
+    known_ids: Final = tuple(dict.fromkeys(server_id for server_id in selected_server_ids if server_id in listed_ids))
+    if not known_ids:
+        return _oauth_error(400, "invalid_request", "the requested MCP server is no longer available")
+    reachable_ids: Final = tuple(
+        [server_id for server_id in known_ids if await lookup_server_reachability(flow.user_id, server_id)]
+    )
+    if not reachable_ids:
+        return _oauth_error(400, "invalid_request", "you do not have access to the requested MCP server")
+    upstream_ids: Final = tuple(item.server_id for item in flow.upstream_scopes)
+    granted: Final = tuple(dict.fromkeys((*upstream_ids, *reachable_ids)))
+    if not _session_tokens_fit(flow, granted, master_key):
+        return _oauth_error(
+            400, "invalid_request", "too many MCP servers are turned on for one connection, turn some off and try again"
+        )
+    return flow.model_copy(update={"resource_server_ids": granted})
+
+
+def _session_tokens_fit(flow: _ConnectFlow, server_ids: tuple[str, ...], master_key: str | None) -> bool:
+    """A grant that cannot be minted would fail at /token after the code is spent."""
+    keys: Final = None if master_key is None else active_session_signing_keys(master_key)
+    if not isinstance(keys, SessionSigningKeys):
+        return True
+    principal: Final = SessionPrincipal(user_id=flow.user_id, client_id=flow.client_id, resource_server_ids=server_ids)
+    now: Final = datetime.now(timezone.utc)
+    access: Final = mint_session_token(principal, keys, now)
+    rotated_refresh: Final = mint_session_refresh_token(principal, keys, now, family=secrets.token_urlsafe(16))
+    return isinstance(access, MintedSessionToken) and isinstance(rotated_refresh, MintedSessionToken)
 
 
 def _state_param(state: str) -> tuple[tuple[str, str], ...]:

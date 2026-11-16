@@ -11,6 +11,7 @@ interface ObjectPermissionsViewProps {
   inheritedMcpServers?: InheritedGrant[];
   inheritedAgents?: InheritedGrant[];
   inheritedSkills?: InheritedGrant[];
+  inheritedVectorStores?: InheritedGrant[];
   unresolvedAccessGroupIds?: string[] | null;
   variant?: "card" | "inline";
   className?: string;
@@ -22,6 +23,7 @@ export function ObjectPermissionsView({
   inheritedMcpServers = [],
   inheritedAgents = [],
   inheritedSkills,
+  inheritedVectorStores,
   unresolvedAccessGroupIds,
   variant = "card",
   className = "",
@@ -78,7 +80,11 @@ export function ObjectPermissionsView({
 
   const content = (
     <div className={variant === "card" ? "grid grid-cols-1 @xl:grid-cols-2 @4xl:grid-cols-3 gap-6" : "space-y-4"}>
-      <VectorStorePermissions vectorStores={vectorStores} accessToken={accessToken} />
+      <VectorStorePermissions
+        vectorStores={vectorStores}
+        inheritedVectorStores={inheritedVectorStores}
+        accessToken={accessToken}
+      />
       <MCPServerPermissions
         mcpServers={mcpServers}
         mcpAccessGroups={mcpAccessGroups}

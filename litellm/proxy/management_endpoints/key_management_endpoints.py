@@ -88,6 +88,7 @@ from litellm.proxy.common_utils.customer_usage import (
     customer_usage_http_status,
     normalize_customer_key_metadata,
 )
+from litellm.proxy.common_utils.key_expiry_alerts import key_expiry_alert_metadata_error
 from litellm.proxy.common_utils.openai_error_payload import openai_error_param, proxy_exception_for
 from litellm.proxy.common_utils.rbac_utils import check_org_admin_can_generate_keys
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time, keeps_due_budget_reset
@@ -143,6 +144,7 @@ from litellm.proxy.management_helpers.access_group_key_sync import (
     sync_key_regeneration_access_group_membership,
     sync_key_update_access_group_membership,
 )
+from litellm.proxy.management_helpers.audit_logs import with_audit_actor
 from litellm.proxy.management_helpers.key_settings_audit import with_settings_updated_at
 from litellm.proxy.management_helpers.managed_resource_owner_sync import repoint_key_owned_managed_resources
 from litellm.proxy.management_helpers.object_permission_utils import (  # noqa: F401  # legacy module exports
@@ -159,7 +161,7 @@ from litellm.proxy.management_helpers.object_permission_utils import (  # noqa: 
 from litellm.proxy.management_helpers.team_member_permission_checks import (
     TeamMemberPermissionChecks,
 )
-from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
+from litellm.proxy.management_helpers.utils import management_endpoint_wrapper, validate_scalar_budget_attachment
 from litellm.proxy.mcp_server.db import (
     rotate_mcp_server_credentials_master_key,
     rotate_mcp_user_credentials_master_key,
@@ -959,6 +961,19 @@ def raise_on_invalid_key_logging_config(metadata: Mapping[str, object] | None) -
         raise HTTPException(status_code=400, detail={"error": error})
 
 
+def raise_on_invalid_key_expiry_alert_days(metadata: Mapping[str, object] | None) -> None:
+    """metadata.key_expiry_alert_days must be a day count the expiry alert job can act on."""
+    error: Final = key_expiry_alert_metadata_error(metadata)
+    if error is not None:
+        raise HTTPException(status_code=400, detail={"error": error})
+
+
+def raise_on_invalid_key_metadata(metadata: Mapping[str, object] | None) -> None:
+    """Every key metadata check that rejects a write: logging config and expiry alert days."""
+    raise_on_invalid_key_logging_config(metadata)
+    raise_on_invalid_key_expiry_alert_days(metadata)
+
+
 def raise_on_logging_credential_change(
     requested_metadata: object, existing_key_row: LiteLLM_VerificationToken | None, user_api_key_dict: UserAPIKeyAuth
 ) -> None:
@@ -1547,7 +1562,9 @@ async def _common_key_generation_helper(
     )
 
     validate_budget_duration(data.budget_duration)
-    raise_on_invalid_key_logging_config(data.metadata)
+    if prisma_client is not None:
+        await validate_scalar_budget_attachment(prisma_client, data.budget_id)
+    raise_on_invalid_key_metadata(data.metadata)
     raise_on_logging_credential_change(data.metadata, None, user_api_key_dict)
 
     if data.throttle_on_budget_exceeded is True and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value:
@@ -2808,7 +2825,7 @@ def prepare_metadata_fields(data: BaseModel, non_default_values: dict, existing_
     """
     Check LiteLLM_ManagementEndpoint_MetadataFields (proxy/_types.py) for fields that are allowed to be updated
     """
-    raise_on_invalid_key_logging_config(non_default_values.get("metadata"))
+    raise_on_invalid_key_metadata(non_default_values.get("metadata"))
 
     if "metadata" not in non_default_values:  # allow user to set metadata to none
         non_default_values["metadata"] = existing_metadata.copy()
@@ -3704,7 +3721,9 @@ async def _validate_end_user_budget_id_change(
         raise HTTPException(status_code=403, detail=forbidden_detail)
     if requested_budget_id == "":
         return
-    budget_row: Final = await BudgetRepository(_require_prisma_client(prisma_client)).find_by_id(requested_budget_id)
+    budget_row: Final = await validate_scalar_budget_attachment(
+        _require_prisma_client(prisma_client), requested_budget_id
+    )
     if budget_row is None:
         missing_detail: Final = {"error": f"end_user_budget_id={requested_budget_id} does not match any budget."}
         raise HTTPException(status_code=400, detail=missing_detail)
@@ -3935,6 +3954,7 @@ async def _validate_update_key_data(
         user_api_key_dict=user_api_key_dict,
         prisma_client=checked_prisma_client,
     )
+    await validate_scalar_budget_attachment(checked_prisma_client, data.budget_id)
 
     enforce_output_token_estimates_are_admin_only(
         data=data,
@@ -5218,12 +5238,13 @@ async def info_key_fn(
     )
 
     try:
+        if user_api_key_dict.impersonated_by is not None and key is None:
+            raise HTTPException(status_code=400, detail="A key must be specified when impersonating a user.")
         if prisma_client is None:
             raise Exception(
                 "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
             )
 
-        # default to using Auth token if no key is passed in
         key = key or user_api_key_dict.api_key
         if not key:
             raise ProxyException(
@@ -5523,6 +5544,8 @@ async def generate_key_helper_fn(
         }
         if teams is not None:
             user_data["teams"] = teams
+        if request_type == "user" and budget_limits_json is not None:
+            user_data["budget_limits"] = budget_limits_json
         if model_max_budget:
             # Only when supplied: the SSO and default-key callers reach this with the
             # empty default, and writing that would clear an existing user's budgets.
@@ -5554,7 +5577,7 @@ async def generate_key_helper_fn(
             "organization_id": organization_id,
             "budget_id": budget_id,
             "blocked": blocked,
-            "budget_limits": budget_limits_json,
+            "budget_limits": None if request_type == "user" and team_id is None else budget_limits_json,
             "created_by": created_by,
             "updated_by": updated_by,
             "allowed_routes": allowed_routes or [],
@@ -8256,20 +8279,23 @@ async def block_key(
     if is_audit_logging_enabled():
         asyncio.create_task(
             create_audit_log_for_update(
-                request_data=LiteLLM_AuditLogs(
-                    id=str(uuid.uuid4()),
-                    updated_at=datetime.now(timezone.utc),
-                    changed_by=get_audit_log_changed_by(
-                        litellm_changed_by=litellm_changed_by,
-                        user_api_key_dict=user_api_key_dict,
-                        litellm_proxy_admin_name=litellm_proxy_admin_name,
+                request_data=with_audit_actor(
+                    LiteLLM_AuditLogs(
+                        id=str(uuid.uuid4()),
+                        updated_at=datetime.now(timezone.utc),
+                        changed_by=get_audit_log_changed_by(
+                            litellm_changed_by=litellm_changed_by,
+                            user_api_key_dict=user_api_key_dict,
+                            litellm_proxy_admin_name=litellm_proxy_admin_name,
+                        ),
+                        changed_by_api_key=user_api_key_dict.api_key,
+                        table_name=LitellmTableNames.KEY_TABLE_NAME,
+                        object_id=hashed_token,
+                        action="blocked",
+                        updated_values="{}",
+                        before_value=existing_record.model_dump_json(),
                     ),
-                    changed_by_api_key=user_api_key_dict.api_key,
-                    table_name=LitellmTableNames.KEY_TABLE_NAME,
-                    object_id=hashed_token,
-                    action="blocked",
-                    updated_values="{}",
-                    before_value=existing_record.model_dump_json(),
+                    user_api_key_dict,
                 )
             )
         )
@@ -8370,20 +8396,23 @@ async def unblock_key(
     if is_audit_logging_enabled():
         asyncio.create_task(
             create_audit_log_for_update(
-                request_data=LiteLLM_AuditLogs(
-                    id=str(uuid.uuid4()),
-                    updated_at=datetime.now(timezone.utc),
-                    changed_by=get_audit_log_changed_by(
-                        litellm_changed_by=litellm_changed_by,
-                        user_api_key_dict=user_api_key_dict,
-                        litellm_proxy_admin_name=litellm_proxy_admin_name,
+                request_data=with_audit_actor(
+                    LiteLLM_AuditLogs(
+                        id=str(uuid.uuid4()),
+                        updated_at=datetime.now(timezone.utc),
+                        changed_by=get_audit_log_changed_by(
+                            litellm_changed_by=litellm_changed_by,
+                            user_api_key_dict=user_api_key_dict,
+                            litellm_proxy_admin_name=litellm_proxy_admin_name,
+                        ),
+                        changed_by_api_key=user_api_key_dict.api_key,
+                        table_name=LitellmTableNames.KEY_TABLE_NAME,
+                        object_id=hashed_token,
+                        action="unblocked",
+                        updated_values="{}",
+                        before_value=existing_record.model_dump_json(),
                     ),
-                    changed_by_api_key=user_api_key_dict.api_key,
-                    table_name=LitellmTableNames.KEY_TABLE_NAME,
-                    object_id=hashed_token,
-                    action="unblocked",
-                    updated_values="{}",
-                    before_value=existing_record.model_dump_json(),
+                    user_api_key_dict,
                 )
             )
         )
@@ -8501,7 +8530,7 @@ async def _can_user_query_key_info(
             user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
             or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value
         )
-        or user_api_key_dict.api_key == key
+        or (user_api_key_dict.impersonated_by is None and user_api_key_dict.api_key == key)
         or key_info.user_id == user_api_key_dict.user_id
         or await TeamMemberPermissionChecks.user_belongs_to_keys_team(
             user_api_key_dict=user_api_key_dict,
