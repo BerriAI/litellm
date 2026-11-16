@@ -1761,7 +1761,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                         )
                     # Follow provider defaults unless explicitly opted into legacy behavior.
                     if litellm.enable_gemini_default_thinking_level_low is True:
-                        params["thinkingLevel"] = (
+                        params["thinkingLevel"] = (  # pyright: ignore[reportTypedDictNotRequiredAccess]  # built in place
                             "minimal" if VertexGeminiConfig._supports_minimal_thinking_level(model) else "low"
                         )
             else:
