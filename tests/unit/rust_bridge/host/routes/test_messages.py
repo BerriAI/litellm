@@ -2960,6 +2960,52 @@ def test_a_credential_failure_text_without_the_marker_keeps_the_native_mapping()
     assert mapped.llm_provider == "bedrock"  # pyright: ignore[reportUnknownMemberType]  # the public error leaves llm_provider untyped
 
 
+def _google_login_failure(name: str, message: str) -> RuntimeError:
+    native: Final = RuntimeError("provider authentication failed: " + message)
+    native.messages_google_login_failure = (name, message)  # pyright: ignore[reportAttributeAccessIssue]  # set by the native host
+    return native
+
+
+@pytest.mark.parametrize(
+    ("name", "error_class"),
+    [
+        ("ValueError", ValueError),
+        ("TypeError", TypeError),
+        ("google.auth.exceptions.DefaultCredentialsError", "DefaultCredentialsError"),
+        ("google.auth.exceptions.MalformedError", "MalformedError"),
+        ("google.auth.exceptions.InvalidValue", "InvalidValue"),
+        ("google.auth.exceptions.RefreshError", "RefreshError"),
+        ("google.auth.exceptions.TransportError", "TransportError"),
+    ],
+)
+def test_a_vertex_login_failure_raises_the_exception_python_s_load_auth_raises(
+    name: str, error_class: type[Exception] | str
+) -> None:
+    from google.auth import exceptions as google_exceptions
+
+    expected: Final = getattr(google_exceptions, error_class) if isinstance(error_class, str) else error_class
+
+    mapped: Final = messages_host.map_failure(
+        _google_login_failure(name, "Could not resolve project_id"),
+        {"model": "vertex_ai/claude-sonnet-4-5", "messages": []},
+        "vertex_ai",
+    )
+
+    assert type(mapped) is expected
+    assert str(mapped) == "Could not resolve project_id"
+    assert mapped.__traceback__ is not None
+
+
+def test_a_google_login_failure_outside_vertex_ai_keeps_the_native_mapping() -> None:
+    mapped: Final = messages_host.map_failure(
+        _google_login_failure("ValueError", "Could not resolve project_id"),
+        {"model": _BEDROCK_INVOKE, "messages": [], **_AWS},
+        "bedrock",
+    )
+
+    assert not isinstance(mapped, ValueError)
+
+
 @pytest.mark.parametrize(
     ("thread", "error_class", "status", "text"),
     [

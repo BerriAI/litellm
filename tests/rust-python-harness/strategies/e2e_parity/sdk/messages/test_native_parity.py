@@ -23,13 +23,16 @@ import asyncio
 import contextlib
 import copy
 import datetime
+import functools
 import gc
 import gzip
+import http.server
 import json
 import logging
 import math
 import os
 import re
+import threading
 import time
 import uuid
 from collections.abc import (
@@ -81,6 +84,7 @@ from litellm.proxy.hooks.message_thread_ownership import MessageThreadOwnership
 from litellm.proxy.utils import InternalUsageCache
 from litellm.router_utils.cooldown_handlers import is_message_thread_not_found
 from litellm.rust_bridge import catalog
+from litellm.rust_bridge.catalog import Route
 from litellm.rust_bridge.configuration import Rollout
 from litellm.types.integrations.custom_logger import AgenticLoopPlan, AgenticLoopRequestPatch
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
@@ -4232,6 +4236,177 @@ AZURE_PASSTHROUGH_CASES: Final = tuple(
 )
 
 
+VERTEX_CLAUDE: Final = "vertex_ai/claude-sonnet-4-5"
+TOKEN_SERVER: Final = "<token-server>"
+
+
+@functools.cache
+def _token_server() -> str:
+    """An OAuth token endpoint both legs mint Vertex AI tokens from, apart from the scripted
+    upstream so that the compared requests are the Vertex calls alone."""
+
+    class Grant(http.server.BaseHTTPRequestHandler):
+        def do_POST(self) -> None:
+            self.rfile.read(int(self.headers.get("content-length") or 0))
+            body: Final = json.dumps(
+                {"access_token": "vertex-access-token", "expires_in": 3600, "token_type": "Bearer"}
+            ).encode()
+            self.send_response(200)
+            self.send_header("content-type", "application/json")
+            self.send_header("content-length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, format: str, *args: object) -> None:
+            pass
+
+    server: Final = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Grant)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return f"http://127.0.0.1:{server.server_address[1]}"
+
+
+@functools.cache
+def _private_key() -> str:
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+
+    return (
+        rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        .private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption())
+        .decode()
+    )
+
+
+def _service_account(name: str, **fields: JsonValue) -> Mapping[str, JsonValue]:
+    """A service account the token server grants. Each case names its own account, so no case
+    reuses a login another case cached."""
+    return MappingProxyType(
+        {
+            "type": "service_account",
+            "client_email": f"{name}@parity.iam.gserviceaccount.com",
+            "private_key_id": name,
+            "token_uri": f"{TOKEN_SERVER}/token",
+            **fields,
+        }
+    )
+
+
+def _vertex(**kwargs: object) -> Mapping[str, object]:
+    return MappingProxyType({"api_key": None, "vertex_location": "us-east5", **kwargs})
+
+
+VERTEX_AUTH_CASES: Final = tuple(
+    replace(case, model=VERTEX_CLAUDE)
+    for case in (
+        Case(
+            "vertex_ai_service_account_names_the_project",
+            _vertex(vertex_credentials=dict(_service_account("a3-project", project_id="credentials-project"))),
+        ),
+        Case(
+            "vertex_ai_configured_project_outranks_the_credentials",
+            _vertex(
+                vertex_project="configured-project",
+                vertex_credentials=dict(_service_account("p2-configured", project_id="credentials-project")),
+            ),
+        ),
+        Case(
+            "vertex_ai_no_project_after_the_login",
+            _vertex(vertex_credentials=dict(_service_account("e1-no-project"))),
+            upstream=(),
+        ),
+        Case(
+            "vertex_ai_numeric_project_after_the_login",
+            _vertex(vertex_credentials=dict(_service_account("e1-numeric-project", project_id=7))),
+            upstream=(),
+        ),
+        Case(
+            "vertex_ai_invalid_location_after_the_login",
+            _vertex(
+                api_base=None,
+                vertex_project="p",
+                vertex_location="US EAST",
+                vertex_credentials=dict(_service_account("p3-location")),
+            ),
+            upstream=(),
+        ),
+        Case(
+            "vertex_ai_impersonated_credentials_are_refused",
+            _vertex(
+                vertex_project="p",
+                vertex_credentials={
+                    "type": "impersonated_service_account",
+                    "client_email": "sa@p.iam.gserviceaccount.com",
+                    "source_credentials": {"type": "authorized_user"},
+                },
+            ),
+            upstream=(),
+        ),
+        Case(
+            "vertex_ai_service_account_without_a_private_key",
+            _vertex(
+                vertex_project="p",
+                vertex_credentials={"client_email": "sa@p.iam.gserviceaccount.com", "token_uri": "https://t"},
+            ),
+            upstream=(),
+        ),
+        Case(
+            "vertex_ai_authorized_user_missing_a_field",
+            _vertex(
+                vertex_project="p",
+                vertex_credentials={"type": "authorized_user", "client_id": "c", "client_secret": "s"},
+            ),
+            upstream=(),
+        ),
+        Case(
+            "vertex_ai_inline_credentials_not_json",
+            _vertex(vertex_project="p", vertex_credentials="{oops"),
+            upstream=(),
+        ),
+        Case("vertex_ai_blank_credentials", _vertex(vertex_project="p", vertex_credentials="   "), upstream=()),
+        Case(
+            "vertex_ai_missing_credentials_file",
+            _vertex(vertex_project="p", vertex_credentials="/nonexistent/vertex-credentials.json"),
+            upstream=(),
+        ),
+        Case(
+            "vertex_ai_explicit_aws_without_a_region",
+            _vertex(
+                vertex_project="p",
+                vertex_credentials={
+                    "type": "external_account",
+                    "audience": "//iam.googleapis.com/projects/1/locations/global/workloadIdentityPools/p/providers/aws",
+                    "subject_token_type": "urn:ietf:params:aws:token-type:aws4_request",
+                    "credential_source": {"environment_id": "aws1"},
+                    "aws_access_key_id": "AKIDPARITY",
+                },
+            ),
+            upstream=(),
+        ),
+        Case(
+            "vertex_ai_missing_application_default_credentials_file",
+            _vertex(vertex_project="p"),
+            env=MappingProxyType({"GOOGLE_APPLICATION_CREDENTIALS": "/nonexistent/adc.json"}),
+            upstream=(),
+        ),
+    )
+)
+
+
+@contextmanager
+def _vertex_preview(case: Case, native: bool) -> Generator[None]:
+    """H1: vertex_ai reaches the native route once the cutover adds its rule, which the native
+    leg of a Vertex AI case adds ahead of time."""
+    if not native or not case.model.startswith("vertex_ai/"):
+        yield
+        return
+    cutover: Final = catalog.RouteRule(Route.MESSAGES, Rollout.RUST_REQUIRED, providers=frozenset({"vertex_ai"}))
+    fallback: Final = next(
+        index for index, rule in enumerate(catalog.RULES) if rule.route is Route.MESSAGES and rule.unconstrained()
+    )
+    with rebound(catalog, "RULES", (*catalog.RULES[:fallback], cutover, *catalog.RULES[fallback:])):
+        yield
+
+
 CASES: Final = (
     *REQUEST_CASES,
     *INPUT_VALUE_CASES,
@@ -4264,6 +4439,7 @@ CASES: Final = (
     *AZURE_ERROR_CASES,
     *ANTHROPIC_ON_AZURE_CLAUDE_ERROR_CASES,
     *AZURE_STREAM_CACHE_CASES,
+    *VERTEX_AUTH_CASES,
 )
 
 
@@ -4341,6 +4517,13 @@ def _environment(env: Mapping[str, str]) -> Generator[None]:
         "AZURE_CREDENTIAL",
         "AZURE_FEDERATED_TOKEN_FILE",
         "AZURE_AUTHORITY_HOST",
+        "VERTEXAI_CREDENTIALS",
+        "VERTEXAI_PROJECT",
+        "VERTEXAI_LOCATION",
+        "VERTEX_LOCATION",
+        "GOOGLE_APPLICATION_CREDENTIALS",
+        "GOOGLE_CLOUD_PROJECT",
+        "GCLOUD_PROJECT",
     )
     with pytest.MonkeyPatch.context() as patch:
         for name in names:
@@ -4411,6 +4594,12 @@ def _kwargs(case: Case, server: RecordingServer) -> dict[str, object]:
     suffix: Final = supplied.pop("api_base_suffix", "")
     userinfo: Final = supplied.pop("api_base_userinfo", "")
     base: Final = server.base_url.replace("://", f"://{userinfo}@", 1) if userinfo else server.base_url
+    credentials: Final = supplied.get("vertex_credentials")
+    if isinstance(credentials, dict) and "private_key_id" in credentials:
+        supplied["vertex_credentials"] = {
+            **json.loads(json.dumps(credentials).replace(TOKEN_SERVER, _token_server())),
+            "private_key": _private_key(),
+        }
     kwargs: Final[dict[str, object]] = {
         "model": case.model,
         "max_tokens": 64,
@@ -4724,6 +4913,7 @@ async def _leg(case: Case, server: RecordingServer, probe: FallbackProbe | None)
         _classifier(case.classifier, classified),
         _interceptor(case.interceptor),
         _gateway(case, runs),
+        _vertex_preview(case, probe is not None),
     ):
         for spec in case.upstream:
             server.enqueue(replace(spec))
