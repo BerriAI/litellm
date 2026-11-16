@@ -249,24 +249,26 @@ impl Logins {
     async fn serve(&self, login: &Arc<Login>) -> Result<SecretValue, GoogleLoginFailure> {
         let token = login.current();
         if token.expiry == Expiry::Managed {
-            return Ok(login.credentials.refresh().await?.value);
+            return login.credentials.refresh().await?.usable();
         }
         match token.state(OffsetDateTime::now_utc()) {
-            TokenState::Fresh => return Ok(token.value),
-            TokenState::Stale => {
+            TokenState::Fresh => return token.usable(),
+            TokenState::Stale if token.non_string.is_none() => {
                 login.refresh_in_background();
                 return Ok(token.value);
             }
-            TokenState::Invalid => {}
+            TokenState::Stale | TokenState::Invalid => {}
         }
         let _refreshing = login.refreshing.lock().await;
         let token = login.current();
-        if token.state(OffsetDateTime::now_utc()) != TokenState::Invalid {
-            return Ok(token.value);
+        match token.state(OffsetDateTime::now_utc()) {
+            TokenState::Fresh => return token.usable(),
+            TokenState::Stale if token.non_string.is_none() => return Ok(token.value),
+            TokenState::Stale | TokenState::Invalid => {}
         }
         let refreshed = login.credentials.refresh().await?;
         login.replace(refreshed.clone());
-        Ok(refreshed.value)
+        refreshed.usable()
     }
 
     /// `_handle_reauthentication_async`: Google refused the cached credentials for good, so they
@@ -339,17 +341,14 @@ mod tests {
     }
 
     fn token(value: &str, expires_in: i64) -> Minted {
-        Minted {
-            value: SecretValue::new(value),
-            expiry: Expiry::At(OffsetDateTime::now_utc() + time::Duration::seconds(expires_in)),
-        }
+        Minted::new(
+            SecretValue::new(value),
+            Expiry::At(OffsetDateTime::now_utc() + time::Duration::seconds(expires_in)),
+        )
     }
 
     fn managed(value: &str) -> Minted {
-        Minted {
-            value: SecretValue::new(value),
-            expiry: Expiry::Managed,
-        }
+        Minted::new(SecretValue::new(value), Expiry::Managed)
     }
 
     fn scripted(answers: Vec<Result<Minted, GoogleLoginFailure>>) -> Arc<Scripted> {

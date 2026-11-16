@@ -23,12 +23,14 @@ percent-encoding.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+shlex = "2.0.1"
 sha2.workspace = true
 strum.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 time = { workspace = true, features = ["macros"] }
 tokio = { workspace = true, features = ["process"] }
+url.workspace = true
 veil.workspace = true
 
 gcp_auth = "0.12.7"

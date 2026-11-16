@@ -4,11 +4,12 @@
 use std::{future::Future, pin::Pin, sync::Arc, time::Duration};
 
 use litellm_secret_value::SecretValue;
+use serde_json::Value;
 use time::OffsetDateTime;
 
 use super::{
     builders::{TokenSource, token_failure},
-    failure::{GoogleLoginFailure, PythonException},
+    failure::{GoogleLoginFailure, PythonException, python_str, python_type_name},
 };
 
 /// `google.auth._helpers.REFRESH_THRESHOLD`: a token this close to its expiry is stale.
@@ -39,6 +40,8 @@ pub(crate) enum Expiry {
 pub(crate) struct Minted {
     pub(crate) value: SecretValue,
     pub(crate) expiry: Expiry,
+    /// The Python type of a token google-auth took from a reply that did not hold a string.
+    pub(crate) non_string: Option<&'static str>,
 }
 
 /// google-auth's `TokenState`.
@@ -50,7 +53,43 @@ pub(crate) enum TokenState {
 }
 
 impl Minted {
+    pub(crate) fn new(value: SecretValue, expiry: Expiry) -> Self {
+        Self {
+            value,
+            expiry,
+            non_string: None,
+        }
+    }
+
+    /// The token google-auth sets from a reply's `access_token`, whatever JSON it holds.
+    pub(crate) fn from_reply(token: Option<&Value>, expiry: Expiry) -> Self {
+        Self {
+            value: SecretValue::new(python_str(token)),
+            expiry,
+            non_string: match token {
+                Some(Value::String(_)) => None,
+                other => Some(python_type_name(other)),
+            },
+        }
+    }
+
+    /// The final validation of `get_access_token_async`.
+    pub(crate) fn usable(self) -> Result<SecretValue, GoogleLoginFailure> {
+        match self.non_string {
+            None => Ok(self.value),
+            Some(kind) => Err(GoogleLoginFailure::new(
+                PythonException::Value,
+                format!(
+                    "Could not resolve credentials token. Got None or non-string token (type={kind})"
+                ),
+            )),
+        }
+    }
+
     pub(crate) fn state(&self, now: OffsetDateTime) -> TokenState {
+        if self.non_string == Some("NoneType") {
+            return TokenState::Invalid;
+        }
         match self.expiry {
             Expiry::Never => TokenState::Fresh,
             Expiry::Managed => TokenState::Invalid,
@@ -80,10 +119,7 @@ impl Credentials for Managed {
                 .token()
                 .await
                 .map_err(|error| token_failure(&error))?;
-            Ok(Minted {
-                value,
-                expiry: Expiry::Managed,
-            })
+            Ok(Minted::new(value, Expiry::Managed))
         })
     }
 }
@@ -102,10 +138,7 @@ mod tests {
     const NOW: OffsetDateTime = datetime!(2026-11-16 12:00 UTC);
 
     fn minted(expiry: Expiry) -> Minted {
-        Minted {
-            value: SecretValue::new("t"),
-            expiry,
-        }
+        Minted::new(SecretValue::new("t"), expiry)
     }
 
     #[rstest]
@@ -120,6 +153,33 @@ mod tests {
         #[case] expected: TokenState,
     ) {
         assert_eq!(minted(expiry).state(NOW), expected);
+    }
+
+    #[rstest]
+    #[case::none(None, Some("NoneType"))]
+    #[case::null(Some(serde_json::json!(null)), Some("NoneType"))]
+    #[case::number(Some(serde_json::json!(7)), Some("int"))]
+    #[case::text(Some(serde_json::json!("t")), None)]
+    fn a_reply_s_token_keeps_its_python_type(
+        #[case] token: Option<Value>,
+        #[case] expected: Option<&str>,
+    ) {
+        let minted = Minted::from_reply(token.as_ref(), Expiry::Never);
+        assert_eq!(minted.non_string, expected);
+        assert_eq!(
+            minted.state(NOW) == TokenState::Invalid,
+            expected == Some("NoneType")
+        );
+        let usable = minted.usable().map(|token| token.expose().to_owned());
+        match expected {
+            None => assert_eq!(usable, Ok("t".to_owned())),
+            Some(kind) => assert_eq!(
+                usable.unwrap_err().message,
+                format!(
+                    "Could not resolve credentials token. Got None or non-string token (type={kind})"
+                )
+            ),
+        }
     }
 
     #[rstest]

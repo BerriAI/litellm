@@ -2,12 +2,15 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value};
 
+use std::sync::Arc;
+
 use super::{
-    builders,
+    authorized_user, aws_wif, builders,
     credentials::{Loaded, managed},
     environment::GoogleEnvironment,
+    external_account::{self, OsEnvironment},
     external_authorized_user,
-    failure::{GoogleLoginFailure, PythonException, python_str},
+    failure::{GoogleLoginFailure, PythonException, python_str, python_type_name},
 };
 
 const MISSING_CREDENTIALS: &str = "Your default credentials were not found. To set up Application Default Credentials, see https://cloud.google.com/docs/authentication/external/set-up-adc for more information.";
@@ -74,23 +77,96 @@ fn wrapped(
     })
 }
 
+fn os_env(env: &dyn GoogleEnvironment) -> OsEnvironment {
+    let variables: Vec<(String, String)> = [
+        "AWS_REGION",
+        "AWS_DEFAULT_REGION",
+        "AWS_ACCESS_KEY_ID",
+        "AWS_SECRET_ACCESS_KEY",
+        "AWS_SESSION_TOKEN",
+        "GOOGLE_EXTERNAL_ACCOUNT_ALLOW_EXECUTABLES",
+    ]
+    .into_iter()
+    .filter_map(|name| Some((name.to_owned(), env.os_env(name)?)))
+    .collect();
+    Arc::new(move |name| {
+        variables
+            .iter()
+            .find(|(known, _)| known == name)
+            .map(|(_, value)| value.clone())
+    })
+}
+
 /// `_default._get_external_account_credentials`: AWS and executable sources raise their own
-/// failure, an identity pool's is named by the file it came from.
-fn external_account(info: &Map<String, Value>, file: &str) -> Result<Loaded, GoogleLoginFailure> {
-    let raises_its_own = info.get("subject_token_type").and_then(Value::as_str)
-        == Some(AWS_SUBJECT_TOKEN_TYPE)
-        || info
-            .get("credential_source")
-            .and_then(|source| source.get("executable"))
-            .is_some_and(|executable| !executable.is_null());
-    builders::external_account(info)
-        .map(managed)
-        .map_err(|failure| match raises_its_own {
-            true => failure,
-            false => default_failure(format!(
-                "Failed to load external account credentials from {file}"
-            )),
-        })
+/// failure, an identity pool's `ValueError` is named by the file it came from.
+fn external_account(
+    env: &dyn GoogleEnvironment,
+    info: &Map<String, Value>,
+    file: &str,
+) -> Result<Loaded, GoogleLoginFailure> {
+    if info.get("subject_token_type").and_then(Value::as_str) == Some(AWS_SUBJECT_TOKEN_TYPE) {
+        return aws_wif::metadata_aws_credentials(info, os_env(env));
+    }
+    match info.get("credential_source") {
+        None | Some(Value::Null) => {}
+        Some(Value::Object(source)) => {
+            if source
+                .get("executable")
+                .is_some_and(|executable| !executable.is_null())
+            {
+                return external_account::pluggable(info, os_env(env));
+            }
+        }
+        Some(other) => {
+            return Err(GoogleLoginFailure::new(
+                PythonException::Attribute,
+                format!(
+                    "'{}' object has no attribute 'get'",
+                    python_type_name(Some(other))
+                ),
+            ));
+        }
+    }
+    let unloadable = |failure: GoogleLoginFailure| match failure.exception {
+        PythonException::Value
+        | PythonException::Malformed
+        | PythonException::InvalidValue
+        | PythonException::InvalidResource => default_failure(format!(
+            "Failed to load external account credentials from {file}"
+        )),
+        _ => failure,
+    };
+    match external_account::identity_pool(info).map_err(unloadable)? {
+        Some(loaded) => Ok(loaded),
+        None => builders::external_account(info)
+            .map(managed)
+            .map_err(unloadable),
+    }
+}
+
+/// `impersonated_credentials.Credentials.from_impersonated_service_account_info` crashes on
+/// `info.get("source_credentials").get("type")` and on `rfind` over the impersonation URL
+/// before it checks anything.
+fn impersonated_crash(info: &Map<String, Value>) -> Option<GoogleLoginFailure> {
+    let crash = |value: Option<&Value>, attribute: &str| {
+        GoogleLoginFailure::new(
+            PythonException::Attribute,
+            format!(
+                "'{}' object has no attribute '{attribute}'",
+                python_type_name(value)
+            ),
+        )
+    };
+    let source = info.get("source_credentials");
+    let Some(Value::Object(source)) = source else {
+        return Some(crash(source, "get"));
+    };
+    let supported = matches!(
+        source.get("type").and_then(Value::as_str),
+        Some("authorized_user" | "service_account" | "external_account_authorized_user")
+    );
+    let url = info.get("service_account_impersonation_url");
+    (supported && !matches!(url, Some(Value::String(_)))).then(|| crash(url, "rfind"))
 }
 
 /// `_default.load_credentials_from_file`.
@@ -106,10 +182,14 @@ fn load_credentials_from_file(
     })?;
     let info = match serde_json::from_str::<Value>(&contents) {
         Ok(Value::Object(info)) => info,
-        Ok(_) => {
-            return Err(default_failure(format!(
-                "File {file} is not a valid json file."
-            )));
+        Ok(other) => {
+            return Err(GoogleLoginFailure::new(
+                PythonException::Attribute,
+                format!(
+                    "'{}' object has no attribute 'get'",
+                    python_type_name(Some(&other))
+                ),
+            ));
         }
         Err(error) => {
             return Err(default_failure(format!(
@@ -125,7 +205,7 @@ fn load_credentials_from_file(
     match info.get("type").and_then(Value::as_str) {
         Some("authorized_user") => Ok(found(
             wrapped(
-                builders::authorized_user(&info, &env.google_token_endpoint()).map(managed),
+                authorized_user::authorized_user(&info, &env.google_token_endpoint()),
                 "authorized user",
                 file,
             )?,
@@ -138,10 +218,13 @@ fn load_credentials_from_file(
             Kind::Other,
         )),
         Some("external_account") => Ok(found(
-            external_account(&info, file)?,
+            external_account(env, &info, file)?,
             None,
             Kind::ExternalAccount { info },
         )),
+        Some("impersonated_service_account") if let Some(crash) = impersonated_crash(&info) => {
+            Err(crash)
+        }
         Some("impersonated_service_account") => Ok(found(
             wrapped(
                 builders::impersonated_service_account(&info).map(managed),

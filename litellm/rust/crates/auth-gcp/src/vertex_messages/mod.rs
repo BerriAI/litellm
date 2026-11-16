@@ -3,15 +3,18 @@
 //! shared [`crate::GcpAuth`] loader.
 
 mod adc;
+mod authorized_user;
 mod aws_wif;
 mod builders;
 mod credentials;
 mod environment;
+mod external_account;
 mod external_authorized_user;
 mod failure;
 mod logins;
 mod service_account;
 mod source;
+mod transport;
 
 use std::sync::Arc;
 
@@ -23,6 +26,7 @@ use serde_json::{Map, Value};
 pub use environment::OnGce;
 pub use environment::{EnvironmentFuture, GoogleEnvironment, SystemGoogleEnvironment};
 pub use failure::{CredentialsFile, GOOGLE_SDK_MISSING, GoogleLoginFailure, PythonException};
+pub use transport::set_certifi_bundle;
 
 use credentials::{Loaded, managed};
 use failure::python_type;
@@ -105,9 +109,15 @@ pub struct VertexLogin {
     pub project_id: String,
 }
 
+/// `ProviderConfigManager._get_provider_anthropic_messages_config_cached`'s bound: Python keeps one
+/// Messages config, and so one credential cache, per model for this many models.
+const MAX_CACHED_MODELS: u64 = 64;
+
 #[derive(Clone)]
 pub struct VertexMessagesAuth {
-    logins: Arc<Logins>,
+    /// Python's credential cache lives on the Messages config, which it caches per model as the
+    /// call names it after the provider prefix, so each model logs in on its own.
+    logins: moka::future::Cache<String, Arc<Logins>>,
     environment: Arc<dyn GoogleEnvironment>,
 }
 
@@ -145,7 +155,7 @@ fn credentials_project(info: &Map<String, Value>) -> Option<Value> {
 impl VertexMessagesAuth {
     pub fn new(environment: Arc<dyn GoogleEnvironment>) -> Self {
         Self {
-            logins: Arc::default(),
+            logins: moka::future::Cache::new(MAX_CACHED_MODELS),
             environment,
         }
     }
@@ -154,6 +164,7 @@ impl VertexMessagesAuth {
     /// `safe_get_vertex_ai_credentials` and `safe_get_vertex_ai_project` resolve them.
     pub async fn login(
         &self,
+        model: &str,
         credentials: Option<String>,
         project: Option<String>,
     ) -> Result<VertexLogin, Error> {
@@ -162,28 +173,51 @@ impl VertexMessagesAuth {
             identity: logins::identity(credentials.as_deref(), application_credentials.as_deref()),
             project: project.clone(),
         };
-        let (token, project_id) = self
+        let logins = self
             .logins
+            .get_with(model.to_owned(), async { Arc::default() })
+            .await;
+        let (token, project_id) = logins
             .token(key, || self.load(credentials.clone(), project.clone()))
             .await?;
         Ok(VertexLogin { token, project_id })
     }
 
+    fn os_env(&self) -> external_account::OsEnvironment {
+        let environment = self.environment.clone();
+        Arc::new(move |name| environment.os_env(name))
+    }
+
+    /// `_credentials_from_json`'s external account routes: an AWS environment to LiteLLM's
+    /// explicit AWS login or google-auth's metadata one, an executable to `pluggable`, the rest
+    /// to `identity_pool`.
+    fn external_account(&self, info: &Map<String, Value>) -> Result<Loaded, GoogleLoginFailure> {
+        let source = info.get("credential_source").and_then(Value::as_object);
+        let names_aws = source
+            .and_then(|source| source.get("environment_id"))
+            .and_then(Value::as_str)
+            .is_some_and(|environment_id| environment_id.contains("aws"));
+        if names_aws && aws_wif::uses_explicit_aws(info) {
+            return aws_wif::explicit_aws_credentials(info, self.os_env());
+        }
+        if names_aws {
+            return aws_wif::metadata_aws_credentials(info, self.os_env());
+        }
+        if source.is_some_and(|source| source.contains_key("executable")) {
+            return external_account::pluggable(info, self.os_env());
+        }
+        match external_account::identity_pool(info)? {
+            Some(loaded) => Ok(loaded),
+            None => builders::external_account(info).map(managed),
+        }
+    }
+
     fn explicit_source(&self, credentials: &CredentialsJson) -> Result<Loaded, GoogleLoginFailure> {
         let info = &credentials.info;
         let built = match info.get("type").and_then(Value::as_str) {
-            Some("external_account") if aws_wif::uses_explicit_aws(info) => {
-                let environment = self.environment.clone();
-                aws_wif::explicit_aws_credentials(
-                    info,
-                    Arc::new(move |name| environment.os_env(name)),
-                )
-                .map(managed)
-            }
-            Some("external_account") => builders::external_account(info).map(managed),
+            Some("external_account") => self.external_account(info),
             Some("authorized_user") => {
-                builders::authorized_user(info, &self.environment.google_token_endpoint())
-                    .map(managed)
+                authorized_user::authorized_user(info, &self.environment.google_token_endpoint())
             }
             _ => builders::service_account(info),
         };
@@ -236,6 +270,8 @@ impl VertexMessagesAuth {
 
 #[cfg(test)]
 mod tests {
+    const MODEL: &str = "claude-sonnet-5-5@default";
+
     use std::{
         collections::BTreeMap,
         sync::atomic::{AtomicUsize, Ordering},
@@ -402,6 +438,7 @@ mod tests {
         let server = token_server.await;
         let login = auth(at(&server))
             .login(
+                MODEL,
                 Some(authorized_user(&server, extra).to_string()),
                 configured.map(str::to_string),
             )
@@ -428,7 +465,11 @@ mod tests {
     ) {
         let server = token_server.await;
         let error = auth(at(&server))
-            .login(Some(authorized_user(&server, extra).to_string()), None)
+            .login(
+                MODEL,
+                Some(authorized_user(&server, extra).to_string()),
+                None,
+            )
             .await
             .unwrap_err();
         assert_eq!(failure(error), GoogleLoginFailure::new(exception, message));
@@ -446,6 +487,7 @@ mod tests {
             ..FakeEnvironment::default()
         })
         .login(
+            MODEL,
             Some(authorized_user(&server, json!({"quota_project_id": "quota"})).to_string()),
             None,
         )
@@ -463,6 +505,7 @@ mod tests {
         let server = token_server.await;
         let error = auth(at(&server))
             .login(
+                MODEL,
                 Some(authorized_user(&server, json!({"quota_project_id": "quota"})).to_string()),
                 Some(String::new()),
             )
@@ -483,7 +526,7 @@ mod tests {
         #[case] configured: Value,
     ) {
         let error = auth(FakeEnvironment::default())
-            .login(Some(configured.to_string()), Some("project".into()))
+            .login(MODEL, Some(configured.to_string()), Some("project".into()))
             .await
             .unwrap_err();
         assert_eq!(
@@ -501,6 +544,7 @@ mod tests {
         let file = key_file(&json!({"type": "impersonated_service_account"}));
         let error = auth(FakeEnvironment::default())
             .login(
+                MODEL,
                 Some(file.path().to_str().unwrap().into()),
                 Some("project".into()),
             )
@@ -554,7 +598,7 @@ mod tests {
                     .collect::<Vec<_>>(),
             )
         };
-        let login = auth(fake).login(None, None).await.unwrap();
+        let login = auth(fake).login(MODEL, None, None).await.unwrap();
         assert_eq!(login.project_id, expected);
     }
 
@@ -576,7 +620,7 @@ mod tests {
                 file.path().to_str().unwrap(),
             )])
         };
-        let error = auth(fake).login(None, None).await.unwrap_err();
+        let error = auth(fake).login(MODEL, None, None).await.unwrap_err();
         assert_eq!(failure(error).message, "Could not resolve project_id");
     }
 
@@ -588,7 +632,7 @@ mod tests {
             gce_project: Some("gce-project"),
             ..FakeEnvironment::default()
         };
-        let login = auth(fake).login(None, None).await.unwrap();
+        let login = auth(fake).login(MODEL, None, None).await.unwrap();
         assert_eq!(login.project_id, "gce-project");
         assert_eq!(login.token.expose(), "metadata-token");
     }
@@ -620,7 +664,7 @@ mod tests {
             )])
         });
         let login = VertexMessagesAuth::new(fake.clone())
-            .login(None, None)
+            .login(MODEL, None, None)
             .await;
         assert_eq!(
             login
@@ -655,7 +699,7 @@ mod tests {
             ("GOOGLE_CLOUD_PROJECT", "env-project"),
         ]));
         let login = VertexMessagesAuth::new(fake.clone())
-            .login(None, None)
+            .login(MODEL, None, None)
             .await
             .unwrap();
         assert_eq!(login.project_id, "env-project");
@@ -677,7 +721,7 @@ mod tests {
         #[case] message: &str,
     ) {
         let error = auth(environment(env))
-            .login(None, Some("p".into()))
+            .login(MODEL, None, Some("p".into()))
             .await
             .unwrap_err();
         assert_eq!(
@@ -692,7 +736,7 @@ mod tests {
         let file = key_file(&json!({"type": "weird"}));
         let path = file.path().to_str().unwrap().to_string();
         let error = auth(environment(&[("GOOGLE_APPLICATION_CREDENTIALS", &path)]))
-            .login(None, Some("p".into()))
+            .login(MODEL, None, Some("p".into()))
             .await
             .unwrap_err();
         assert_eq!(
@@ -718,7 +762,7 @@ mod tests {
             "GOOGLE_APPLICATION_CREDENTIALS",
             file.path().to_str().unwrap(),
         )]))
-        .login(None, Some("p".into()))
+        .login(MODEL, None, Some("p".into()))
         .await
         .unwrap();
         assert_eq!(
@@ -739,7 +783,7 @@ mod tests {
             "GOOGLE_APPLICATION_CREDENTIALS",
             file.path().to_str().unwrap(),
         )]))
-        .login(None, Some("p".into()))
+        .login(MODEL, None, Some("p".into()))
         .await
         .unwrap_err();
         assert_ne!(
@@ -824,7 +868,7 @@ mod tests {
             ))
         ));
         let messages = auth(at(&server))
-            .login(Some(credentials), None)
+            .login(MODEL, Some(credentials), None)
             .await
             .unwrap();
         assert_eq!(messages.project_id, "quota");
@@ -852,7 +896,7 @@ mod tests {
             .await;
         assert!(shared.is_ok(), "{:?}", shared.err());
         let error = auth(FakeEnvironment::default())
-            .login(Some(explicit_aws), Some("p".into()))
+            .login(MODEL, Some(explicit_aws), Some("p".into()))
             .await
             .unwrap_err();
         assert_eq!(
@@ -890,7 +934,7 @@ mod tests {
         file: &tempfile::NamedTempFile,
     ) -> Result<String, Error> {
         let path = file.path().to_str().unwrap().to_owned();
-        let login = auth.login(Some(path), None).await?;
+        let login = auth.login(MODEL, Some(path), None).await?;
         Ok(login.token.expose().to_owned())
     }
 
@@ -1013,5 +1057,132 @@ mod tests {
             )
         );
         assert_eq!(endpoint.forms.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn request_supplied_service_account_mints_at_its_own_token_uri() {
+        let endpoint = service_account::tests::endpoint(vec![granted("own-uri", 3600)]).await;
+        assert!(!endpoint.url.starts_with("https://oauth2.googleapis.com"));
+        let login = auth(FakeEnvironment::default())
+            .login(
+                MODEL,
+                Some(service_account_file(&endpoint, json!({})).to_string()),
+                Some("p".into()),
+            )
+            .await
+            .unwrap();
+        assert_eq!(login.token.expose(), "own-uri");
+        assert_eq!(endpoint.forms.lock().unwrap().len(), 1);
+    }
+
+    fn external_account_file(
+        endpoint: &service_account::tests::Endpoint,
+        subject: &tempfile::NamedTempFile,
+    ) -> String {
+        json!({
+            "type": "external_account",
+            "audience": "//iam.googleapis.com/projects/1/locations/global/workloadIdentityPools/p/providers/q",
+            "subject_token_type": "urn:ietf:params:oauth:token-type:jwt",
+            "token_url": endpoint.url,
+            "credential_source": {"file": subject.path().to_str().unwrap()},
+        })
+        .to_string()
+    }
+
+    fn subject_file() -> tempfile::NamedTempFile {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(file.path(), "subject-jwt").unwrap();
+        file
+    }
+
+    #[tokio::test]
+    async fn an_sts_reply_with_only_an_access_token_logs_in() {
+        let endpoint = service_account::tests::endpoint(vec![(
+            200,
+            json!({"access_token": "sts-only", "expires_in": 3600}),
+        )])
+        .await;
+        let subject = subject_file();
+        let login = auth(FakeEnvironment::default())
+            .login(
+                MODEL,
+                Some(external_account_file(&endpoint, &subject)),
+                Some("p".into()),
+            )
+            .await
+            .unwrap();
+        assert_eq!(login.token.expose(), "sts-only");
+        assert!(endpoint.forms.lock().unwrap()[0].contains("&subject_token=subject-jwt&"));
+    }
+
+    #[tokio::test]
+    async fn an_sts_reply_without_a_token_is_exchanged_twice_then_refused() {
+        let endpoint = service_account::tests::endpoint(vec![(
+            200,
+            json!({"token_type": "Bearer", "expires_in": 3600, "issued_token_type": "urn:ietf:params:oauth:token-type:access_token"}),
+        )])
+        .await;
+        let subject = subject_file();
+        let error = auth(FakeEnvironment::default())
+            .login(
+                MODEL,
+                Some(external_account_file(&endpoint, &subject)),
+                Some("p".into()),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(
+            failure(error),
+            GoogleLoginFailure::new(
+                PythonException::Value,
+                "Could not resolve credentials token. Got None or non-string token (type=NoneType)"
+            )
+        );
+        assert_eq!(endpoint.forms.lock().unwrap().len(), 2);
+    }
+
+    #[rstest]
+    #[case::array(json!(["a"]), "'list' object has no attribute 'get'")]
+    #[case::impersonated_without_source(
+        json!({"type": "impersonated_service_account", "service_account_impersonation_url": "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/sa:generateAccessToken"}),
+        "'NoneType' object has no attribute 'get'"
+    )]
+    #[tokio::test]
+    async fn application_default_files_google_auth_crashes_on_raise_its_attribute_error(
+        #[case] contents: Value,
+        #[case] message: &str,
+    ) {
+        let file = key_file(&contents);
+        let error = auth(environment(&[(
+            "GOOGLE_APPLICATION_CREDENTIALS",
+            file.path().to_str().unwrap(),
+        )]))
+        .login(MODEL, None, Some("p".into()))
+        .await
+        .unwrap_err();
+        assert_eq!(
+            failure(error),
+            GoogleLoginFailure::new(PythonException::Attribute, message)
+        );
+    }
+
+    #[rstest]
+    #[case::one_model_twice(["claude-sonnet-5-5@default", "claude-sonnet-5-5@default"], 1)]
+    #[case::two_models(["claude-sonnet-5-5@default", "claude-opus-5-5@default"], 2)]
+    #[case::versions_are_other_models(["claude-sonnet-5-5", "claude-sonnet-5-5@default"], 2)]
+    #[tokio::test]
+    async fn each_model_keeps_its_own_login_as_python_s_config_cache_does(
+        #[case] models: [&str; 2],
+        #[case] mints: usize,
+    ) {
+        let endpoint = service_account::tests::endpoint(vec![granted("sa-token", 3600)]).await;
+        let credentials = service_account_file(&endpoint, json!({})).to_string();
+        let auth = auth(FakeEnvironment::default());
+        for model in models {
+            auth.login(model, Some(credentials.clone()), Some("p".into()))
+                .await
+                .unwrap();
+        }
+        assert_eq!(endpoint.forms.lock().unwrap().len(), mints);
     }
 }
