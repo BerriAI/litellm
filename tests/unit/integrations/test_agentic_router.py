@@ -232,3 +232,36 @@ def test_jsonl_logs_are_size_rotated(tmp_path):
     assert active <= 512 * 4, "current log must stay small"
     assert (home / "decisions.jsonl.1").exists(), "rotated generation must exist"
     assert sum(1 for _ in (home / "decisions.jsonl").open()) < 30
+
+
+class _BudgetKey:
+    """user_api_key_dict stand-in with per-model budget state."""
+
+    def __init__(self, max_budget, spend):
+        self.models = None  # unrestricted
+        self.model_max_budget = max_budget
+        self.model_spend = spend
+
+
+def test_hook_blocks_rewrite_to_exhausted_budget_model(tmp_path):
+    """The proxy enforces model_max_budget against the *requested* model before
+    this hook; a rewrite must not land on a model whose budget is exhausted."""
+    hook = AgenticRouterHook(mode="active", home=str(tmp_path), exploration=0,
+                             tier_models={"fast": "flash-model", "mid": "base-model",
+                                          "strong": "pro-model"})
+    data = {"model": "base-model", "litellm_call_id": "call-b",
+            "messages": [{"role": "user", "content": "帮我总结这篇文章的要点"}]}
+    key = _BudgetKey(max_budget=10.0, spend={"flash-model": 12.0, "base-model": 1.0})
+    out = asyncio.run(hook.async_pre_call_hook(key, None, data, "acompletion"))
+    assert out["model"] == "base-model"  # destination budget exhausted -> keep original
+    assert out["metadata"]["agentic_router"]["blocked"] == "budget-model-restriction"
+    asyncio.run(hook.async_post_call_success_hook(
+        None, {"litellm_call_id": "call-b"}, None, start_time=None, end_time=None))
+    assert hook.stats()["linSamples"] == 0  # rejected rewrites never train
+
+    # destination well within budget -> rewrite goes through
+    data2 = {"model": "base-model", "litellm_call_id": "call-b2",
+             "messages": [{"role": "user", "content": "帮我总结这篇文章的要点"}]}
+    key2 = _BudgetKey(max_budget=10.0, spend={"flash-model": 2.0, "base-model": 1.0})
+    out2 = asyncio.run(hook.async_pre_call_hook(key2, None, data2, "acompletion"))
+    assert "agentic_router" in out2.get("metadata", {}) and "blocked" not in out2["metadata"]["agentic_router"]

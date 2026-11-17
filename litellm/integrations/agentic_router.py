@@ -602,6 +602,23 @@ def _last_user_text(messages):
     return ""
 
 
+def _destination_budget_exhausted(user_api_key_dict, model):
+    """Key-level per-model budgets (model_max_budget / model_spend) are enforced
+    by the proxy against the *requested* model before this hook runs. A rewrite
+    must not land on a destination model whose budget is already exhausted —
+    the proxy would have rejected a direct request to it. Unknown/missing spend
+    data never blocks (only a known, exhausted bucket does)."""
+    if not user_api_key_dict or not model:
+        return False
+    max_budget = getattr(user_api_key_dict, "model_max_budget", None)
+    if not isinstance(max_budget, (int, float)) or max_budget <= 0:
+        return False  # no per-model budget configured for this key
+    spend = getattr(user_api_key_dict, "model_spend", None)
+    if isinstance(spend, dict) and isinstance(spend.get(model), (int, float)):
+        return spend[model] >= max_budget
+    return False
+
+
 def _key_allowed_models(user_api_key_dict):
     """Collect the model allowlist the proxy attached to this key (key models,
     team models, team aliases). Empty set = unrestricted (or unknowable here)."""
@@ -717,6 +734,8 @@ class AgenticRouterHook(CustomLogger):
                 blocked = "key-model-restriction"
             elif decision["model"] in self.guarded_models:
                 blocked = "guardrail-model-restriction"
+            elif _destination_budget_exhausted(user_api_key_dict, decision["model"]):
+                blocked = "budget-model-restriction"
             if blocked is None:
                 data["model"] = decision["model"]
                 data.setdefault("metadata", {})["agentic_router"] = {
