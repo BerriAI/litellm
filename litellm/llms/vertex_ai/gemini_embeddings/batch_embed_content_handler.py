@@ -3,9 +3,11 @@ Google AI Studio /batchEmbedContents Embeddings Endpoint
 """
 
 import json
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Final, Literal
 
 import httpx
+from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
@@ -17,12 +19,12 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.types.llms.vertex_ai import (
     GeminiEmbeddingInput,
     VertexAIBatchEmbeddingsRequestBody,
-    VertexAIBatchEmbeddingsResponseObject,
 )
 from litellm.types.utils import EmbeddingResponse
 
 from ..gemini.vertex_and_google_ai_studio_gemini import VertexLLM
 from .batch_embed_content_transformation import (
+    audio_track_extraction_enabled,
     file_reference_name,
     flatten_media_sources,
     is_file_reference,
@@ -34,6 +36,8 @@ from .batch_embed_content_transformation import (
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+
+_OPTIONAL_PARAMS: Final = TypeAdapter(Mapping[str, object])
 
 
 class _GeminiFileResource(TypedDict, total=False):
@@ -217,6 +221,9 @@ class GoogleBatchEmbeddings(VertexLLM):
             )
 
         ### TRANSFORMATION (sync path) ###
+        audio_track_extraction: Final = not use_embed_content and audio_track_extraction_enabled(
+            _OPTIONAL_PARAMS.validate_python(optional_params)
+        )
         request_data: VertexAIBatchEmbeddingsRequestBody | dict[str, object]
         flat_elements, has_file_refs = self._flatten_and_detect_file_refs(input)
         if use_embed_content:
@@ -282,12 +289,13 @@ class GoogleBatchEmbeddings(VertexLLM):
                 resolved_files=resolved_files,
             )
         else:
-            _predictions: Final = VertexAIBatchEmbeddingsResponseObject(**_json_response)
             return process_response(
                 model=model,
                 model_response=model_response,
-                _predictions=_predictions,
+                _predictions=_json_response,
                 input=input,
+                resolved_files=resolved_files,
+                audio_track_extraction=audio_track_extraction,
             )
 
     async def async_batch_embeddings(
@@ -324,6 +332,9 @@ class GoogleBatchEmbeddings(VertexLLM):
             async_handler = client
 
         ### TRANSFORMATION (async path) ###
+        audio_track_extraction: Final = not use_embed_content and audio_track_extraction_enabled(
+            _OPTIONAL_PARAMS.validate_python(optional_params or {})
+        )
         flat_elements, has_file_refs = self._flatten_and_detect_file_refs(input)
         if use_embed_content:
             resolved_files = {}
@@ -389,10 +400,11 @@ class GoogleBatchEmbeddings(VertexLLM):
                 resolved_files=resolved_files,
             )
         else:
-            _predictions: Final = VertexAIBatchEmbeddingsResponseObject(**_json_response)
             return process_response(
                 model=model,
                 model_response=model_response,
-                _predictions=_predictions,
+                _predictions=_json_response,
                 input=input,
+                resolved_files=resolved_files,
+                audio_track_extraction=audio_track_extraction,
             )
