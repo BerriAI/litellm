@@ -268,13 +268,15 @@ def requests_audio_mime_type(request_body: Mapping[str, object]) -> bool:
     match request_body.get("generationConfig") or request_body.get("generation_config"):
         case {
             "responseFormat": {
-                "audio": {"mimeType": str() | int() as mime_type} | {"mime_type": str() | int() as mime_type}
+                "audio": {"mimeType": str() | int() | float() as mime_type}
+                | {"mime_type": str() | int() | float() as mime_type}
             }
         }:
             return bool(mime_type)
         case {
             "response_format": {
-                "audio": {"mimeType": str() | int() as mime_type} | {"mime_type": str() | int() as mime_type}
+                "audio": {"mimeType": str() | int() | float() as mime_type}
+                | {"mime_type": str() | int() | float() as mime_type}
             }
         }:
             return bool(mime_type)
