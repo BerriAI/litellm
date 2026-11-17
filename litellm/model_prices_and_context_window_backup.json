@@ -87352,5 +87352,26 @@
         "supports_parallel_function_calling": true,
         "supports_system_messages": true,
         "supports_tool_choice": true
+    },
+    "fal_ai/minimax/h3-max/recast": {
+        "litellm_provider": "fal_ai",
+        "metadata": {
+            "comment": "per second of generated video by resolution; output_cost_per_second is the default resolution 1080p rate"
+        },
+        "mode": "video_generation",
+        "output_cost_per_second": 0.45,
+        "output_cost_per_second_1080p": 0.45,
+        "output_cost_per_second_768p": 0.3,
+        "source": "https://fal.ai/models/minimax/h3-max/recast",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
     }
 }
