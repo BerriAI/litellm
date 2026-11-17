@@ -4512,6 +4512,18 @@ VERTEX_LABELS_CASES: Final = (
         _labelled(extra_headers={"X-Vertex-AI-Labels": _CALLER_LABELS}),
         model=VERTEX_CLAUDE,
     ),
+    Case(
+        "vertex_labels_replace_a_header_python_cannot_encode",
+        _labelled(extra_headers={"X-Vertex-AI-Labels": "ZWJ\u200djoined"}),
+        model=VERTEX_CLAUDE,
+        settings=_LABEL_FIELDS,
+    ),
+    Case(
+        "vertex_labels_unset_send_nothing_for_a_header_python_cannot_encode",
+        _labelled(extra_headers={"X-Vertex-AI-Labels": "ZWJ\u200djoined"}),
+        model=VERTEX_CLAUDE,
+        upstream=(),
+    ),
     replace(_vertex_stream("vertex_labels_stream", litellm_metadata=dict(_VERTEX_IDENTITY)), settings=_LABEL_FIELDS),
 )
 
