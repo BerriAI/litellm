@@ -9,7 +9,7 @@ from litellm.litellm_core_utils.get_llm_provider_logic import (
     get_llm_provider,
     resolve_model_and_provider_for_metadata,
 )
-from litellm.litellm_core_utils.prompt_templates.common_utils import is_empty_user_message
+from litellm.litellm_core_utils.prompt_templates.common_utils import is_whitespace_user_message
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import message_field
 from litellm.llms.azure_ai.chat.transformation import AzureAIGPT5Config
 from litellm.llms.azure_ai.common_utils import (
@@ -357,7 +357,7 @@ def needs_empty_user_turn_back(
     custom_llm_provider: str | None,
     litellm_params: Mapping[str, object],
 ) -> bool:
-    if not is_empty_user_message(caller_last_message):
+    if not is_whitespace_user_message(caller_last_message):
         return False
     if sent_messages and message_field(sent_messages[-1], "role") in _USER_TURN_ROLES:
         return False

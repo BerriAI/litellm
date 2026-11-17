@@ -776,6 +776,29 @@ def is_empty_user_message(message: object) -> bool:
     return getattr(message, "role", None) == "user" and is_blank_content(getattr(message, "content", None))
 
 
+def _is_whitespace_text(text: object) -> bool:
+    return not text or (isinstance(text, str) and not text.strip())
+
+
+def _is_whitespace_text_block(block: object) -> bool:
+    fields: Final = as_str_mapping(block)
+    return fields is not None and fields.get("type") in _TEXT_BLOCK_TYPES and _is_whitespace_text(fields.get("text"))
+
+
+def _is_whitespace_content(content: object) -> bool:
+    if content is None or isinstance(content, str):
+        return _is_whitespace_text(content)
+    blocks: Final = as_object_list(content)
+    return blocks is not None and all(map(_is_whitespace_text_block, blocks))
+
+
+def is_whitespace_user_message(message: object) -> bool:
+    mapping: Final = as_str_mapping(message)
+    if mapping is not None:
+        return mapping.get("role") == "user" and _is_whitespace_content(mapping.get("content"))
+    return getattr(message, "role", None) == "user" and _is_whitespace_content(getattr(message, "content", None))
+
+
 def _counts_for_alternation(message: AllMessageValues) -> bool:
     role: Final = message.get("role")
     if role == "user":
