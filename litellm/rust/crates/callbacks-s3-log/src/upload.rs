@@ -384,7 +384,7 @@ impl Uploader {
             .settings
             .region_name
             .as_ref()
-            .map(crate::pyjson::py_str)
+            .map(crate::settings::py_str)
         else {
             tracing::error!("Error downloading from S3: no s3_region_name to sign with");
             return None;

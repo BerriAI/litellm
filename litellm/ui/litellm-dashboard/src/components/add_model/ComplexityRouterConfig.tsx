@@ -407,6 +407,7 @@ export interface ComplexityRouterConfigValue {
   classification_examples?: string;
   /** Highest tier the scorer may decide alone under heuristic_first. Required by that type, rejected by the others. */
   heuristic_first_max_tier?: string;
+  heuristic_first_max_context_tokens?: number;
   /** How near a tier boundary a score may land before hybrid defers to the classifier. Required by that type, rejected by the others. */
   hybrid_boundary_margin?: number;
   classification_mode?: ClassificationMode;

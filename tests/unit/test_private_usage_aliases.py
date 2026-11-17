@@ -68,11 +68,6 @@ PROXY_CLASS_NAME_ALIAS_CASES: Final = (
         "PROXY_MaxParallelRequestsHandler",
     ),
     (
-        "litellm.proxy.hooks.parallel_request_limiter_v3",
-        "_PROXY_MaxParallelRequestsHandler_v3",
-        "PROXY_MaxParallelRequestsHandler_v3",
-    ),
-    (
         "litellm.proxy.hooks.sensitive_data_routing",
         "_PROXY_SensitiveDataRoutingHandler",
         "PROXY_SensitiveDataRoutingHandler",
@@ -3172,13 +3167,6 @@ PROXY_ALIAS_CASES: Final = (
         "",
         "_PROXY_MaxParallelRequestsHandler_v3",
         "PROXY_MaxParallelRequestsHandler_v3",
-        False,
-    ),
-    (
-        "litellm.proxy.hooks.parallel_request_limiter_v3",
-        "_PROXY_MaxParallelRequestsHandler_v3",
-        "_create_rate_limit_descriptors",
-        "create_rate_limit_descriptors",
         False,
     ),
     (

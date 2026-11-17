@@ -23,10 +23,15 @@ from typing_extensions import NotRequired, TypedDict
 import litellm
 from litellm import verbose_logger
 from litellm._uuid import uuid
-from litellm.constants import STREAM_CHUNK_CHOICE_FIELDS, STREAM_FINISH_CHOICE_FIELDS
+from litellm.constants import (
+    PROVIDER_FINISH_REASONS_HIDDEN_PARAM,
+    STREAM_CHUNK_CHOICE_FIELDS,
+    STREAM_FINISH_CHOICE_FIELDS,
+)
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.core_helpers import (
     UPSTREAM_USAGE_COST,
+    FinishEvidence,
     as_str_mapping,
     attribute_or_none,
     chunk_usage,
@@ -171,6 +176,35 @@ def _prepend_upstream_choice_extras(
 
 _NO_UPSTREAM_CHOICE_FIELDS: Final[Mapping[str, object]] = MappingProxyType({})
 _NO_CHOICE_FIELDS_BY_INDEX: Final[Mapping[int, Mapping[str, object]]] = MappingProxyType({})
+_NO_FINISH_REASONS_BY_INDEX: Final[Mapping[int, str]] = MappingProxyType({})
+
+
+def _indexed_finish_reason(choice: object) -> tuple[int, str] | None:
+    reason: Final[object] = getattr(choice, "finish_reason", None)
+    index: Final[object] = getattr(choice, "index", None)
+    if not isinstance(reason, str) or not reason or not isinstance(index, int):
+        return None
+    return index, reason
+
+
+_PROVIDER_FINISH_REASONS: Final = TypeAdapter(tuple[tuple[int, str], ...])
+
+
+def _provider_finish_reasons(evidence: object) -> Mapping[int, str]:
+    if evidence is None:
+        return _NO_FINISH_REASONS_BY_INDEX
+    try:
+        return MappingProxyType(dict(_PROVIDER_FINISH_REASONS.validate_python(evidence, strict=True)))
+    except ValidationError:
+        return _NO_FINISH_REASONS_BY_INDEX
+
+
+def _finish_reasons_by_index(upstream_chunk: object) -> Mapping[int, str]:
+    hidden_params: Final = get_hidden_params(upstream_chunk)
+    if hidden_params is not None and hidden_params.get("is_finished") is False:
+        return _provider_finish_reasons(hidden_params.get(PROVIDER_FINISH_REASONS_HIDDEN_PARAM))
+    choices: Final[object] = getattr(upstream_chunk, "choices", None)
+    return MappingProxyType(dict(filter(None, map(_indexed_finish_reason, object_items(choices)))))
 
 
 def _upstream_first_choice(upstream_chunk: object) -> BaseModel | None:
@@ -509,6 +543,7 @@ class CustomStreamWrapper:
         self._upstream_provider: str | None = None
         self.received_finish_reason: str | None = None
         self.received_finish_choice_fields: Mapping[int, Mapping[str, object]] = _NO_CHOICE_FIELDS_BY_INDEX
+        self.received_finish_reasons: Mapping[int, str] = _NO_FINISH_REASONS_BY_INDEX
         self.carried_chunk_choice_fields: Mapping[int, Mapping[str, object]] = _NO_CHOICE_FIELDS_BY_INDEX
         self.intermittent_finish_reason: str | None = None  # finish reasons that show up mid-stream
         self.received_any_finish_reason = False  # a later chunk can reset intermittent_finish_reason
@@ -1729,6 +1764,7 @@ class CustomStreamWrapper:
             response_obj = self.handle_openai_text_completion_chunk(chunk)
             completion_obj["content"] = response_obj["text"]
             print_verbose(f"completion obj content: {completion_obj['content']}")
+            self._record_finish_reasons(chunk)
             if response_obj["is_finished"]:
                 self._record_finish_choice_fields(chunk)
             if response_obj["is_finished"] and response_obj["sibling_finish_reason"] is None:
@@ -1805,6 +1841,7 @@ class CustomStreamWrapper:
                 self.response_id = cached_chunk.id
             if hasattr(cached_chunk, "system_fingerprint"):
                 self.system_fingerprint = cached_chunk.system_fingerprint
+            self._record_finish_reasons(cached_chunk)
             if response_obj["is_finished"]:
                 self.received_finish_reason = response_obj["finish_reason"]
                 self._record_finish_choice_fields(cached_chunk)
@@ -1840,6 +1877,7 @@ class CustomStreamWrapper:
                     )
                 self.received_finish_reason = response_obj["finish_reason"]
                 self._record_finish_choice_fields(chunk)
+            self._record_finish_reasons(chunk)
             if response_obj.get("original_chunk", None) is not None:
                 if hasattr(response_obj["original_chunk"], "id"):
                     model_response = self.set_model_id(response_obj["original_chunk"].id, model_response)
@@ -2189,6 +2227,18 @@ class CustomStreamWrapper:
         )
         if self.logging_obj.is_sync_litellm_request(litellm_params):
             self.logging_obj.success_handler(processed_chunk, None, None, cache_hit)
+
+    @property
+    def finish_evidence(self) -> FinishEvidence:
+        return FinishEvidence(
+            by_choice=self.received_finish_reasons,
+            unindexed=None if self.received_finish_reasons else self.received_finish_reason,
+        )
+
+    def _record_finish_reasons(self, upstream_chunk: object) -> None:
+        received: Final = _finish_reasons_by_index(upstream_chunk)
+        if received:
+            self.received_finish_reasons = MappingProxyType({**self.received_finish_reasons, **received})
 
     def _normalize_tool_call_finish_reason(self, finish_reason: str) -> str:
         if finish_reason == "stop" and self.tool_call:
@@ -2715,6 +2765,8 @@ class CustomStreamWrapper:
             self._log_stream_failure_and_raise(e)
 
     async def _finalize_completed_stream(self, cache_hit: bool) -> "ModelResponseStream":
+        from litellm.responses.streaming_iterator import spawn_logging_task
+
         if self.sent_last_chunk is True:
             complete_streaming_response: Final = await self._async_build_complete_streaming_response()
             response: Final = self._new_usage_chunk()
@@ -2776,14 +2828,16 @@ class CustomStreamWrapper:
                 # prefer_async_handlers routes CustomLogger to async_success_handler
                 # when consumers use ``async for`` on sync-SDK streams. Legacy string
                 # callbacks still run via executor.submit inside dispatch_success_handlers.
-                asyncio.create_task(
+                spawn_logging_task(
+                    asyncio.get_running_loop(),
                     self.logging_obj.dispatch_success_handlers(
                         complete_streaming_response,
                         cache_hit=cache_hit,
                         start_time=None,
                         end_time=None,
                         prefer_async_handlers=True,
-                    )
+                    ),
+                    task_name="Chat completions stream success log",
                 )
 
             await self.aclose()

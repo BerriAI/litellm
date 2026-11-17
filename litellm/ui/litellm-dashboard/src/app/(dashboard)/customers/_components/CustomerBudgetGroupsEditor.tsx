@@ -1,5 +1,6 @@
 import { Plus, Trash2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
+import { v4 as uuidv4 } from "uuid";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { InputGroup, InputGroupAddon, InputGroupInput, InputGroupText } from "@/components/ui/input-group";
@@ -67,7 +68,7 @@ export default function CustomerBudgetGroupsEditor({
   };
   const addGroup = () => {
     const group: CustomerBudgetGroupFields = {
-      id: crypto.randomUUID(),
+      id: uuidv4(),
       name: "",
       monthlyBudget: "",
       yearlyBudget: "",

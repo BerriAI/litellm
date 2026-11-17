@@ -416,7 +416,7 @@ module.__getattr__ = fail
     #[serde_with::serde_as]
     #[derive(Debug, serde::Deserialize, serde::Serialize, PartialEq)]
     struct Numbers {
-        #[serde_as(deserialize_as = "Option<Vec<litellm_llms_types::serde_compat::LaxI64>>")]
+        #[serde_as(deserialize_as = "Option<Vec<litellm_python_compat::pydantic::LaxI64>>")]
         integers: Option<Vec<i64>>,
         #[serde_as(deserialize_as = "Option<litellm_llms_types::serde_compat::FiniteF64>")]
         float: Option<f64>,
