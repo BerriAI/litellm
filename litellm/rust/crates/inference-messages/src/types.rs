@@ -108,6 +108,9 @@ pub struct MessagesSettings {
     pub detached_drain_timeout: Option<f64>,
     #[serde(default)]
     pub detached_drain_limit: Option<usize>,
+    /// Python's async client retries a request whose connection failed to open, once.
+    #[serde(default)]
+    pub connect_retry: bool,
 }
 
 impl MessagesSettings {

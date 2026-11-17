@@ -9,9 +9,12 @@ JSON-shaped setting can carry: None, booleans, integers, floats, strings, lists 
 
 import json
 import sys
+from typing import TypeVar
 
 import pydantic
 from pydantic import TypeAdapter, ValidationError
+
+T = TypeVar("T")
 
 TEXTS = [
     "",
@@ -78,6 +81,35 @@ TEXTS = [
     "1 ",
     "\u00a05",
     "\u20035",
+    "-007",
+    "-00",
+    "-0_1",
+    "+007",
+    "-1_000",
+    "+0",
+    "00.0",
+    "0_0",
+    "-01.00",
+    "+-1",
+    "--1",
+]
+
+# pydantic's int parser refuses more than 4300 characters, counting a `-` but not the `+`, whitespace,
+# leading zeros, underscores or `.0` that pydantic strips first.
+LONG_TEXTS = [
+    "9" * 4300,
+    "9" * 4301,
+    "-" + "9" * 4299,
+    "-" + "9" * 4300,
+    "+" + "9" * 4300,
+    " " + "9" * 4300 + " ",
+    "0" * 5000 + "9" * 4300,
+    "0" * 5000 + "9" * 4301,
+    "-" + "0" * 5000 + "9" * 4299,
+    "1" + "_1" * 4299,
+    "1" + "_1" * 4300,
+    "9" * 4300 + ".0",
+    "9" * 4301 + ".0",
 ]
 
 VALUES = [
@@ -114,17 +146,18 @@ VALUES = [
     {},
     {"a": 1},
     *TEXTS,
+    *LONG_TEXTS,
 ]
 
 
-def validated(adapter, value):
+def validated(adapter: TypeAdapter[T], value: object) -> T | None:
     try:
         return adapter.validate_python(value)
     except ValidationError:
         return None
 
 
-def row(value):
+def row(value: object) -> dict[str, str | bool | None]:
     as_int = validated(TypeAdapter(int), value)
     return {
         "input": json.dumps(value),

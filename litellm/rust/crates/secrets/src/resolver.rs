@@ -1,10 +1,13 @@
 use std::sync::Arc;
 
 use crate::compatibility::python_manager_string;
-use litellm_core_utils::{serde_compat::parse_str_bool, settings::Lookup};
+use litellm_env::Lookup;
+use litellm_python_compat::flags::str_to_bool;
 
-use crate::state::{LookupTarget, normalize_secret_name};
-use crate::{Error, OidcResolver, Secret, SecretManagerState};
+use crate::state::Route;
+use crate::{
+    Error, KeyManagementSettings, OidcResolver, Secret, SecretManager, SecretManagerState,
+};
 use litellm_secret_value::SecretValue;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -56,6 +59,17 @@ impl SecretResolver {
         }
     }
 
+    pub fn environment(&self) -> Arc<dyn Lookup + Send + Sync> {
+        Arc::clone(&self.environment)
+    }
+
+    pub fn with_environment(self, environment: Arc<dyn Lookup + Send + Sync>) -> Self {
+        Self {
+            environment,
+            ..self
+        }
+    }
+
     pub async fn get_secret(
         &self,
         name: &str,
@@ -74,17 +88,32 @@ impl SecretResolver {
         name: &str,
         default_value: Option<Secret>,
     ) -> Result<Option<Secret>, Error> {
-        let name = normalize_secret_name(name);
-        if name.starts_with("oidc/") {
-            return self
+        match self.state.route(name.try_into()?) {
+            Route::Oidc(reference) => self
                 .oidc
-                .resolve(name, self.environment.as_ref())
+                .read(reference, self.environment.as_ref())
                 .await
-                .map(|value| value.map(Secret::String));
+                .map(|value| value.map(Secret::String)),
+            Route::Environment(name) => Ok(self.environment_value(name)),
+            Route::Manager {
+                backend,
+                settings,
+                name,
+            } => {
+                // Boxed: a provider SDK's request future laid out inline overflows rustc's query
+                // depth limit in callers that await this without a `SecretSource` box.
+                Box::pin(self.read_manager(backend, settings, name, default_value)).await
+            }
         }
-        let LookupTarget::Manager { backend, settings } = self.state.lookup_target(name) else {
-            return Ok(self.environment_value(name));
-        };
+    }
+
+    async fn read_manager(
+        &self,
+        backend: &SecretManager,
+        settings: &KeyManagementSettings,
+        name: &str,
+        default_value: Option<Secret>,
+    ) -> Result<Option<Secret>, Error> {
         let result = if self.python_compatible {
             crate::get_secret_from_python_manager(
                 backend,
@@ -140,7 +169,7 @@ impl SecretResolver {
             .await?
         {
             Some(Secret::Bool(value)) => Ok(Some(value)),
-            Some(Secret::String(value)) => match parse_str_bool(value.expose()) {
+            Some(Secret::String(value)) => match str_to_bool(value.expose()) {
                 Some(value) => Ok(Some(value)),
                 None if self.python_compatible => Ok(None),
                 None => Err(Error::TypeMismatch {
@@ -168,7 +197,7 @@ impl SecretResolver {
             return Some(python_manager_string(SecretValue::new(value)));
         }
         Some(
-            parse_str_bool(&value)
+            str_to_bool(&value)
                 .map_or_else(|| Secret::String(SecretValue::new(value)), Secret::Bool),
         )
     }

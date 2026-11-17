@@ -7,6 +7,7 @@ from pydantic import ConfigDict, TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.images.fan_out import image_request_count
 from litellm.llms.base_llm.image_generation.transformation import (
     BaseImageGenerationConfig,
 )
@@ -72,6 +73,9 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
             "web_search_options",
         ]
 
+    def get_request_count(self, model: str, optional_params: Mapping[str, object]) -> int:
+        return image_request_count(optional_params.get("n"), model=model, llm_provider="vertex_ai")
+
     def map_openai_params(
         self,
         non_default_params: dict,
@@ -87,7 +91,7 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
                 if k in supported_params:
                     # Map OpenAI parameters to Gemini format
                     if k == "n":
-                        mapped_params["candidate_count"] = v
+                        mapped_params["n"] = v
                     elif k == "size":
                         continue
                     elif k in ("aspectRatio", "aspect_ratio"):
@@ -246,11 +250,8 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
         if image_config:
             generation_config["imageConfig"] = image_config
 
-        # Handle candidate_count (n parameter)
         if "candidate_count" in optional_params:
             generation_config["candidateCount"] = optional_params["candidate_count"]
-        elif "n" in optional_params:
-            generation_config["candidateCount"] = optional_params["n"]
 
         request_body: Final[dict[str, object]] = {
             "contents": contents,
