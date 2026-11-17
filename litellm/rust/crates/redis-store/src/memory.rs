@@ -77,6 +77,10 @@ impl<V: Clone> Memory<V> {
         self.cache.expires_at(key)
     }
 
+    pub fn default_ttl(&self) -> Duration {
+        self.cache.default_ttl()
+    }
+
     pub fn entries(&self) -> Result<Vec<(String, V)>, Error> {
         self.cache.entries()
     }
@@ -119,7 +123,21 @@ impl<V: Counter> Memory<V> {
         amount: Number,
         ttl: Option<Duration>,
     ) -> Result<Number, Error> {
-        self.cache.update(key, Expiry::KeepExisting(ttl), |held| {
+        self.add(key, amount, Expiry::KeepExisting(ttl))
+    }
+
+    /// [`Memory::increment`] that moves the entry's deadline out to `ttl` from now.
+    pub(crate) fn increment_refreshing(
+        &self,
+        key: &str,
+        amount: Number,
+        ttl: Duration,
+    ) -> Result<Number, Error> {
+        self.add(key, amount, Expiry::Refresh(Some(ttl)))
+    }
+
+    fn add(&self, key: &str, amount: Number, expiry: Expiry) -> Result<Number, Error> {
+        self.cache.update(key, expiry, |held| {
             let current = match held {
                 None => Number::Int(0),
                 Some(value) => value.as_number().ok_or(Error::InvalidEntry(None))?,
