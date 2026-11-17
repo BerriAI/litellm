@@ -2,18 +2,24 @@ from collections.abc import AsyncIterator, Coroutine, Iterable, Mapping
 from typing import Final, cast
 
 from openai.types.chat import ChatCompletionStreamOptionsParam
+from typing_extensions import TypedDict
 
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.rules import Rules
 from litellm.types.google_genai.adapters import GenerateContentCompletionKwargs
 from litellm.types.router import GenericLiteLLMParams
-from litellm.types.utils import CallTypes, ModelResponse
+from litellm.types.utils import CallTypes, CustomPricingLiteLLMParams, ModelResponse
 
 from .transformation import GoogleGenAIAdapter
 
 # Initialize adapter
 GOOGLE_GENAI_ADAPTER: Final = GoogleGenAIAdapter()
+CUSTOM_PRICING_PARAMS: Final = frozenset(CustomPricingLiteLLMParams.model_fields)
+
+
+class _TranslatedCompletionKwargs(TypedDict, total=False, extra_items=object):
+    pass
 
 
 _FORWARDED_REQUEST_KEYS: Final = (
@@ -41,6 +47,20 @@ def _run_pre_call_rules(logging_obj: LiteLLMLoggingObj, messages: Iterable[Mappi
         raise
 
 
+def _forwarded_request_kwargs(
+    request_kwargs: Mapping[str, object], custom_logging_obj: LiteLLMLoggingObj | None
+) -> Mapping[str, object]:
+    forwarded: Final = {key: request_kwargs[key] for key in _FORWARDED_REQUEST_KEYS if key in request_kwargs}
+    if not isinstance(custom_logging_obj, LiteLLMLoggingObj):
+        return forwarded
+    return {
+        **forwarded,
+        **{key: value for key, value in request_kwargs.items() if key in CUSTOM_PRICING_PARAMS},
+        "litellm_logging_obj": custom_logging_obj,
+        "litellm_call_id": custom_logging_obj.litellm_call_id,
+    }
+
+
 def _adapter_stream_options(requested: object) -> ChatCompletionStreamOptionsParam | None:
     match requested:
         case {"include_usage": True}:
@@ -62,6 +82,7 @@ class GenerateContentToCompletionHandler:
         stream: bool = False,
         litellm_params: GenericLiteLLMParams | None = None,
         extra_kwargs: Mapping[str, object] | None = None,
+        custom_logging_obj: LiteLLMLoggingObj | None = None,
         completion_call_type: CallTypes = CallTypes.acompletion,
     ) -> GenerateContentCompletionKwargs:
         """Prepare kwargs for litellm.completion/acompletion"""
@@ -75,18 +96,22 @@ class GenerateContentToCompletionHandler:
             **request_kwargs,
         )
         stream_options: Final = _adapter_stream_options(request_kwargs.get("stream_options")) if stream else None
-        logging_obj: Final = request_kwargs.get("litellm_logging_obj")
-        if isinstance(logging_obj, LiteLLMLoggingObj):
+        forwarded_kwargs: Final = _forwarded_request_kwargs(request_kwargs, custom_logging_obj)
+        logging_obj: Final = forwarded_kwargs.get("litellm_logging_obj")
+        if isinstance(logging_obj, LiteLLMLoggingObj) and custom_logging_obj is None:
             logging_obj.call_type = completion_call_type.value
+        if isinstance(logging_obj, LiteLLMLoggingObj):
             logging_obj.update_messages(completion_request["messages"])
         if stream and isinstance(logging_obj, LiteLLMLoggingObj):
             logging_obj.stream_options = stream_options
         completion_kwargs: Final = GenerateContentCompletionKwargs(
-            **dict(
-                completion_request,
-                **{key: request_kwargs[key] for key in _FORWARDED_REQUEST_KEYS if key in request_kwargs},
-                **({"stream": True} if stream else {}),
-                **({"stream_options": stream_options} if stream_options is not None else {}),
+            **_TranslatedCompletionKwargs(
+                **dict[str, object](
+                    completion_request,
+                    **forwarded_kwargs,
+                    **({"stream": True} if stream else {}),
+                    **({"stream_options": stream_options} if stream_options is not None else {}),
+                )
             )
         )
         messages: Final = completion_kwargs.get("messages", ())
@@ -102,6 +127,7 @@ class GenerateContentToCompletionHandler:
         litellm_params: GenericLiteLLMParams,
         config: dict[str, object] | None = None,
         stream: bool = False,
+        custom_logging_obj: LiteLLMLoggingObj | None = None,
         **kwargs: object,
     ) -> dict[str, object] | AsyncIterator[bytes]:
         """Handle generate_content call asynchronously using completion adapter"""
@@ -113,6 +139,7 @@ class GenerateContentToCompletionHandler:
             stream=stream,
             litellm_params=litellm_params,
             extra_kwargs=kwargs,
+            custom_logging_obj=custom_logging_obj,
         )
 
         completion_response: Final = await litellm.acompletion(**completion_kwargs)
@@ -149,6 +176,7 @@ class GenerateContentToCompletionHandler:
         config: dict[str, object] | None = None,
         stream: bool = False,
         _is_async: bool = False,
+        custom_logging_obj: LiteLLMLoggingObj | None = None,
         **kwargs: object,
     ) -> dict[str, object] | AsyncIterator[bytes] | Coroutine[None, None, dict[str, object] | AsyncIterator[bytes]]:
         """Handle generate_content call using completion adapter"""
@@ -160,6 +188,7 @@ class GenerateContentToCompletionHandler:
                 config=config,
                 stream=stream,
                 litellm_params=litellm_params,
+                custom_logging_obj=custom_logging_obj,
                 **kwargs,
             )
 
@@ -170,6 +199,7 @@ class GenerateContentToCompletionHandler:
             stream=stream,
             litellm_params=litellm_params,
             extra_kwargs=kwargs,
+            custom_logging_obj=custom_logging_obj,
             completion_call_type=CallTypes.completion,
         )
 

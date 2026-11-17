@@ -1,10 +1,10 @@
 # this is a patch to allow for agentic loops covering llm_http_handler.py and openai sdk based calling flows for the .completion() api
 
 import json
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from itertools import chain
 from types import MappingProxyType
-from typing import Final
+from typing import Final, cast
 
 from pydantic import TypeAdapter, ValidationError
 
@@ -15,7 +15,14 @@ from litellm.litellm_core_utils.agentic_loop_settings import (
     DEFAULT_MAX_AGENTIC_LOOPS,
     validated_max_agentic_loops,
 )
+from litellm.litellm_core_utils.allowed_tools_tool_choice import (
+    parse_allowed_tools_tool_choice,
+    refuse_tool_calls_the_choice_excludes,
+    tool_calls_the_choice_excludes,
+)
+from litellm.litellm_core_utils.get_litellm_params import AGENTIC_LOOP_TOOL_CHOICE_KEY
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
+from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import message_field, parts_of
 from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
 from litellm.types.integrations.custom_logger import (
     CHAT_COMPLETION_AGENTIC_SURFACE,
@@ -26,7 +33,11 @@ from litellm.types.integrations.custom_logger import (
     is_interception_internal_key,
     stashed_stream_options,
 )
-from litellm.types.utils import ModelResponse
+from litellm.types.utils import (
+    ChatCompletionMessageCustomToolCall,
+    ChatCompletionMessageToolCall,
+    ModelResponse,
+)
 from litellm.utils import CustomStreamWrapper
 
 _FOLLOWUP_INTERNAL_PARAMS: Final = frozenset(
@@ -74,7 +85,7 @@ def _coerce_int(value: object, default: int) -> int:
     return int(value) if isinstance(value, (int, str)) else default
 
 
-def _agentic_loop_settings(kwargs: dict[str, object]) -> tuple[int, int, list[str]]:
+def _agentic_loop_settings(kwargs: Mapping[str, object]) -> tuple[int, int, list[str]]:
     depth: Final = _coerce_int(kwargs.get("_agentic_loop_depth"), 0)
     configured: Final = validated_max_agentic_loops(
         kwargs.get("max_agentic_loops"), field="litellm_params.max_agentic_loops"
@@ -130,6 +141,68 @@ def _converted_stream_replay(
         logging_obj=logging_obj,
         stream_options=_stashed_stream_options(kwargs),
     )
+
+
+def _tool_call_name(call: ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall) -> str:
+    match call:
+        case ChatCompletionMessageCustomToolCall():
+            return call.custom.name
+        case ChatCompletionMessageToolCall():
+            return call.function.name or ""
+
+
+def _called_tool_names(response: ModelResponse) -> tuple[str, ...]:
+    calls: Final = chain.from_iterable(choice.message.tool_calls or () for choice in response.choices)
+    return tuple(map(_tool_call_name, calls))
+
+
+_TOOL_CALL_ITEM_TYPES: Final = frozenset({"function_call", "custom_tool_call", "tool_use"})
+
+
+def called_tool_names(response: object) -> frozenset[str]:
+    items: Final = (*parts_of(message_field(response, "output")), *parts_of(message_field(response, "content")))
+    names: Final = (
+        message_field(item, "name") for item in items if message_field(item, "type") in _TOOL_CALL_ITEM_TYPES
+    )
+    return frozenset(name for name in names if isinstance(name, str))
+
+
+def _client_tool_names(tool_names: Iterable[str], callbacks: Iterable[object]) -> tuple[str, ...]:
+    server_fulfilled: Final = frozenset(
+        chain.from_iterable(
+            callback.server_fulfilled_tool_names for callback in callbacks if isinstance(callback, CustomLogger)
+        )
+    )
+    return tuple(name for name in tool_names if name not in server_fulfilled)
+
+
+def holds_a_call_the_choice_excludes(
+    tool_names: Iterable[str], kwargs: Mapping[str, object], callbacks: Iterable[object]
+) -> bool:
+    return bool(
+        tool_calls_the_choice_excludes(
+            kwargs.get(AGENTIC_LOOP_TOOL_CHOICE_KEY), _client_tool_names(tool_names, callbacks)
+        )
+    )
+
+
+def refuse_a_call_the_choice_excludes(
+    response: object, kwargs: Mapping[str, object], callbacks: Iterable[object], model: str
+) -> None:
+    if not isinstance(response, ModelResponse):
+        return
+    refuse_tool_calls_the_choice_excludes(
+        kwargs.get(AGENTIC_LOOP_TOOL_CHOICE_KEY), _client_tool_names(_called_tool_names(response), callbacks), model
+    )
+
+
+def with_caller_tool_choice(
+    kwargs: Mapping[str, object], optional_params: Mapping[str, object]
+) -> Mapping[str, object]:
+    tool_choice: Final = optional_params.get("tool_choice")
+    if AGENTIC_LOOP_TOOL_CHOICE_KEY in kwargs or parse_allowed_tools_tool_choice(tool_choice) is None:
+        return kwargs
+    return {**kwargs, AGENTIC_LOOP_TOOL_CHOICE_KEY: tool_choice}
 
 
 def _with_agentic_loop_metadata(kwargs_for_followup: Mapping[str, object]) -> Mapping[str, object]:
@@ -261,7 +334,11 @@ async def maybe_run_chat_completion_agentic_loop(
     import litellm
 
     callbacks: Final = litellm.callbacks + (getattr(logging_obj, "dynamic_success_callbacks", None) or [])
-    depth, max_loops, fingerprints = _agentic_loop_settings(kwargs)
+    requested_optional_params: Final = cast(  # cast-ok: optional_params is a str-keyed dict
+        "Mapping[str, object]", optional_params
+    )
+    request_kwargs: Final = with_caller_tool_choice(kwargs, requested_optional_params)
+    depth, max_loops, fingerprints = _agentic_loop_settings(request_kwargs)
     tools: Final = optional_params.get("tools", [])
 
     for callback in callbacks:
@@ -272,7 +349,7 @@ async def maybe_run_chat_completion_agentic_loop(
             continue
 
         hook_kwargs = {
-            **kwargs,
+            **request_kwargs,
             "_agentic_loop_api_surface": CHAT_COMPLETION_AGENTIC_SURFACE,
             "custom_llm_provider": custom_llm_provider,
         }
@@ -296,6 +373,7 @@ async def maybe_run_chat_completion_agentic_loop(
         if not should_run:
             continue
 
+        refuse_a_call_the_choice_excludes(response, request_kwargs, callbacks, model)
         fingerprint = _check_agentic_loop_safety(
             tool_calls=tool_calls,
             fingerprints=fingerprints,
@@ -342,7 +420,7 @@ async def maybe_run_chat_completion_agentic_loop(
                 callback=callback,
                 model=model,
                 optional_params=optional_params,
-                kwargs=kwargs,
+                kwargs=dict(request_kwargs),
                 logging_obj=logging_obj,
                 custom_llm_provider=custom_llm_provider,
                 depth=depth,
@@ -358,7 +436,7 @@ async def maybe_run_chat_completion_agentic_loop(
 
     return _converted_stream_replay(
         response,
-        kwargs=kwargs,
+        kwargs=request_kwargs,
         depth=depth,
         model=model,
         custom_llm_provider=custom_llm_provider,

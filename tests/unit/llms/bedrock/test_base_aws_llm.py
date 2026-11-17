@@ -3848,6 +3848,39 @@ def test_get_runtime_endpoint(base_aws_llm):
     assert endpoint_url == "https://bedrock-runtime.us-east-1.amazonaws.com"
     assert proxy_endpoint_url == "https://bedrock-runtime.us-east-1.amazonaws.com"
 
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+@pytest.mark.parametrize(
+    ("api_base", "aws_bedrock_runtime_endpoint", "env_runtime_endpoint", "expected"),
+    (
+        ("", None, None, "https://bedrock-runtime.us-east-1.amazonaws.com"),
+        (None, "", None, "https://bedrock-runtime.us-east-1.amazonaws.com"),
+        ("", "", None, "https://bedrock-runtime.us-east-1.amazonaws.com"),
+        ("", "https://vpce-runtime.example.com", None, "https://vpce-runtime.example.com"),
+        ("", None, "https://env-runtime.example.com", "https://env-runtime.example.com"),
+        (None, "", "https://env-runtime.example.com", "https://env-runtime.example.com"),
+    ),
+)
+def test_get_runtime_endpoint_treats_an_empty_setting_as_unset(
+    base_aws_llm: BaseAWSLLM,
+    monkeypatch: pytest.MonkeyPatch,
+    api_base: str | None,
+    aws_bedrock_runtime_endpoint: str | None,
+    env_runtime_endpoint: str | None,
+    expected: str,
+) -> None:
+    if env_runtime_endpoint is None:
+        monkeypatch.delenv("AWS_BEDROCK_RUNTIME_ENDPOINT", raising=False)
+    else:
+        monkeypatch.setenv("AWS_BEDROCK_RUNTIME_ENDPOINT", env_runtime_endpoint)
+
+    endpoints: Final = base_aws_llm.get_runtime_endpoint(
+        api_base=api_base,
+        aws_bedrock_runtime_endpoint=aws_bedrock_runtime_endpoint,
+        aws_region_name="us-east-1",
+    )
+
+    assert endpoints == (expected, expected)
+
 @pytest.fixture
 def clear_cache(base_aws_llm):
     """Clear the cache before each test"""

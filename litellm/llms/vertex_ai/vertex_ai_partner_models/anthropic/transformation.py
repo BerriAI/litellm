@@ -1,5 +1,7 @@
 # What is this?
 ## Handler file for calling claude-3 on vertex ai
+import base64
+import json
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Final
 
@@ -9,6 +11,12 @@ from pydantic import TypeAdapter
 import litellm
 from litellm.litellm_core_utils.prompt_templates.image_handling import RemoteMedia, inline_remote_image_urls
 from litellm.llms.base_llm.chat.transformation import LiteLLMLoggingObj
+from litellm.llms.vertex_ai.request_labels import (
+    VERTEX_LABELS_HEADER,
+    is_vertex_labels_header,
+    vertex_partner_labels_header,
+    vertex_request_label_fields,
+)
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse
 
@@ -19,6 +27,18 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
 _NON_DEFAULT_PARAMS: Final = TypeAdapter(Mapping[str, object])
+_LABELS: Final = TypeAdapter(Mapping[object, object])
+
+
+def _vertex_labels_header(labels: object, header_names: Mapping[str, object]) -> str | None:
+    if not isinstance(labels, dict) or any(map(is_vertex_labels_header, header_names)):
+        return None
+    string_labels: Final = {
+        key: value
+        for key, value in _LABELS.validate_python(labels).items()
+        if isinstance(key, str) and isinstance(value, str)
+    }
+    return base64.b64encode(json.dumps(string_labels).encode()).decode() if string_labels else None
 
 
 class VertexAIError(Exception):
@@ -102,6 +122,28 @@ class VertexAIAnthropicConfig(AnthropicConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
+        params: Final = _NON_DEFAULT_PARAMS.validate_python(optional_params)
+        outbound_headers: Final = _NON_DEFAULT_PARAMS.validate_python(headers)
+        allowed_fields: Final = vertex_request_label_fields()
+        labels_header, replaced_headers = (
+            (
+                vertex_partner_labels_header(
+                    allowed_fields,
+                    params.get("labels"),
+                    outbound_headers,
+                    _NON_DEFAULT_PARAMS.validate_python(litellm_params),
+                ),
+                tuple(filter(is_vertex_labels_header, outbound_headers)),
+            )
+            if allowed_fields
+            else (_vertex_labels_header(params.get("labels"), outbound_headers), ())
+        )
+        if "labels" in params:
+            del optional_params["labels"]  # rebind-ok: labels travel in the X-Vertex-AI-Labels header, not the body
+        for name in replaced_headers:
+            del headers[name]  # rebind-ok: the resolved identity labels replace a caller-set labels header
+        if labels_header is not None:
+            headers[VERTEX_LABELS_HEADER] = labels_header  # rebind-ok: outbound headers are returned by mutation
         data: Final = super().transform_request(
             model=model,
             messages=messages,
@@ -137,11 +179,8 @@ class VertexAIAnthropicConfig(AnthropicConfig):
 
         extra_headers: Final = optional_params.get("extra_headers") or {}
         anthropic_beta_value: Final = extra_headers.get("anthropic-beta", "")
-        if isinstance(anthropic_beta_value, str) and anthropic_beta_value:
-            for beta in anthropic_beta_value.split(","):
-                beta = beta.strip()
-                if beta:
-                    beta_set.add(beta)
+        if isinstance(anthropic_beta_value, str):
+            beta_set.update(filter(None, (beta.strip() for beta in anthropic_beta_value.split(","))))
         elif isinstance(anthropic_beta_value, list):
             beta_set.update(anthropic_beta_value)
 
