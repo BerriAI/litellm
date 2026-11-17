@@ -1,5 +1,5 @@
 import json
-from collections.abc import Awaitable, Callable, Iterator
+from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from typing import Final, TypeAlias
 
 import httpx
@@ -8,6 +8,10 @@ import respx
 
 import litellm
 from litellm.caching.llm_caching_handler import LLMClientCache
+from litellm.integrations.custom_prompt_management import CustomPromptManagement
+from litellm.types.llms.openai import AllMessageValues
+from litellm.types.prompts.init_prompts import PromptSpec
+from litellm.types.utils import StandardCallbackDynamicParams
 
 GEMINI_API: Final = "https://generativelanguage.googleapis.com/"
 VOICE_API: Final = "https://voice.test/v1"
@@ -271,3 +275,89 @@ async def test_chat_completions_still_returns_audio_from_tts_model(respx_mock: r
 
     assert upstream.call_count == 1
     assert response.choices[0].message.audio is not None
+
+
+def _spoken_answer(
+    model: str, messages: list[AllMessageValues], non_default_params: Mapping[str, object]
+) -> tuple[str, list[AllMessageValues], dict[str, object]]:
+    return model, list(messages), {**non_default_params, "audio": AUDIO, "modalities": ["text", "audio"]}
+
+
+class _SpokenAnswerTemplate(CustomPromptManagement):
+    def get_chat_completion_prompt(
+        self,
+        model: str,
+        messages: list[AllMessageValues],
+        non_default_params: Mapping[str, object],
+        prompt_id: str | None,
+        prompt_variables: Mapping[str, object] | None,
+        dynamic_callback_params: StandardCallbackDynamicParams,
+        prompt_spec: PromptSpec | None = None,
+        prompt_label: str | None = None,
+        prompt_version: int | None = None,
+        ignore_prompt_manager_model: bool | None = False,
+        ignore_prompt_manager_optional_params: bool | None = False,
+    ) -> tuple[str, list[AllMessageValues], dict[str, object]]:
+        return _spoken_answer(model, messages, non_default_params)
+
+    async def async_get_chat_completion_prompt(
+        self,
+        model: str,
+        messages: list[AllMessageValues],
+        non_default_params: Mapping[str, object],
+        prompt_id: str | None,
+        prompt_variables: Mapping[str, object] | None,
+        dynamic_callback_params: StandardCallbackDynamicParams,
+        litellm_logging_obj: object,
+        prompt_spec: PromptSpec | None = None,
+        tools: Sequence[Mapping[str, object]] | None = None,
+        prompt_label: str | None = None,
+        prompt_version: int | None = None,
+        ignore_prompt_manager_model: bool | None = False,
+        ignore_prompt_manager_optional_params: bool | None = False,
+    ) -> tuple[str, list[AllMessageValues], dict[str, object]]:
+        return _spoken_answer(model, messages, non_default_params)
+
+
+async def _responses_with_a_spoken_answer_template(asynchronous: bool, **params: object) -> object:
+    request: Final[dict[str, object]] = {
+        "model": VOICE_MODEL,
+        "input": "Say hello",
+        "api_key": "test-key",
+        "api_base": VOICE_API,
+        "prompt_id": "spoken-answer",
+        "callbacks": [_SpokenAnswerTemplate()],
+        **params,
+    }
+    return await litellm.aresponses(**request) if asynchronous else litellm.responses(**request)
+
+
+@pytest.mark.respx(assert_all_called=False)
+@pytest.mark.parametrize("asynchronous", [True, False], ids=["aresponses", "responses"])
+async def test_audio_a_prompt_template_asks_for_on_a_responses_call_is_refused_without_drop_params(
+    respx_mock: respx.MockRouter, asynchronous: bool
+) -> None:
+    upstream: Final = _upstream(respx_mock, VOICE_API, TEXT_REPLY)
+
+    with pytest.raises(litellm.UnsupportedParamsError) as refusal:
+        await _responses_with_a_spoken_answer_template(asynchronous)
+
+    assert refusal.value.status_code == 400
+    assert f"asks {VOICE_MODEL} for audio through audio and modalities, which /v1/responses cannot carry" in str(
+        refusal.value
+    )
+    assert upstream.call_count == 0
+
+
+@pytest.mark.respx(assert_all_called=True)
+@pytest.mark.parametrize("asynchronous", [True, False], ids=["aresponses", "responses"])
+async def test_audio_a_prompt_template_asks_for_on_a_responses_call_is_dropped_under_drop_params(
+    respx_mock: respx.MockRouter, asynchronous: bool
+) -> None:
+    upstream: Final = _upstream(respx_mock, VOICE_API, TEXT_REPLY)
+
+    await _responses_with_a_spoken_answer_template(asynchronous, drop_params=True)
+
+    sent: Final = _sent_body(upstream)
+    assert sent["modalities"] == ["text"]
+    assert "audio" not in sent

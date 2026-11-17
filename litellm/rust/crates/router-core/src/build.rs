@@ -18,14 +18,6 @@ use crate::{
     registry::{DeploymentSpec, deployment_id},
 };
 
-/// The `litellm_params` keys whose `os.environ/` value is a secret pointer the identity source
-/// dereferences at use time, so the build leaves it as written. The router's copy of
-/// `_WIF_POINTER_FIELDS` (litellm/types/router.py), which the proxy's config loader also reads.
-pub const SECRET_POINTER_PARAMS: &[&str] = &[
-    "anthropic_issuer_signing_key_ref",
-    "anthropic_keycloak_client_secret_ref",
-];
-
 const SECRET_PREFIX: &str = "os.environ/";
 
 /// How a build's deployments join the registry.
@@ -175,7 +167,7 @@ async fn build_one(
 fn param_refs(params: &Map<String, Value>) -> Vec<SecretRef> {
     params
         .iter()
-        .filter(|(key, _)| !SECRET_POINTER_PARAMS.contains(&key.as_str()))
+        .filter(|(key, _)| !litellm_router_types::holds_secret_pointer(key))
         .filter_map(|(key, value)| {
             let name = value
                 .as_str()
