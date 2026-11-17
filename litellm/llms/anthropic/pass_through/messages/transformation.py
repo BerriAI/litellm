@@ -661,7 +661,6 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         anthropic_messages_request: Final[AnthropicMessagesRequest] = AnthropicMessagesRequest(
             messages=strip_unsignable_thinking_blocks_for_claude(
                 strip_encrypted_reasoning_blocks_from_anthropic_messages(messages),
-                custom_llm_provider=self._resolved_provider,
                 model=model,
             ),
             max_tokens=max_tokens,

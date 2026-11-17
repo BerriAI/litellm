@@ -8,7 +8,10 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 from litellm.llms.anthropic.pass_through.messages.transformation import (
     AnthropicMessagesConfig,
 )
+from litellm.llms.bedrock_mantle.messages.transformation import BedrockMantleAnthropicMessagesConfig
 from litellm.llms.deepseek.messages.transformation import DeepSeekAnthropicMessagesConfig
+from litellm.llms.openai_like.messages.transformation import OpenAILikeAnthropicMessagesConfig
+from litellm.types.router import GenericLiteLLMParams
 
 
 def _transform(messages):
@@ -122,14 +125,18 @@ def _pending_tool_turn(opening: list[dict[str, object]]) -> list[dict[str, objec
     ]
 
 
-def test_unsigned_thinking_that_opens_the_pending_tool_turn_is_left_for_the_retry() -> None:
+def test_unsigned_thinking_that_opens_the_pending_tool_turn_is_dropped_too() -> None:
     messages: Final = [
         {"role": "user", "content": "Solve it."},
         _open_model_turn({"type": "thinking", "thinking": "open model plan", "signature": ""}),
         *_pending_tool_turn([{"type": "thinking", "thinking": "call ls", "signature": ""}]),
     ]
 
-    assert _transform(messages)["messages"] == messages
+    sent: Final = _transform(messages)["messages"]
+
+    assert sent[1]["content"] == [{"type": "text", "text": "Draft."}]
+    assert sent[3]["content"] == [{"type": "tool_use", "id": "toolu_1", "name": "ls", "input": {}}]
+    assert sent[4] == messages[4]
 
 
 def test_unsigned_thinking_is_dropped_when_the_pending_tool_turn_never_opened_with_thinking() -> None:
@@ -149,3 +156,29 @@ def test_a_non_object_message_item_reaches_claude_as_sent() -> None:
     messages: Final = ["hi", 7, {"role": "user", "content": "Solve it."}]
 
     assert _transform(messages)["messages"] == messages
+
+
+@pytest.mark.parametrize(
+    "config, model",
+    [
+        (OpenAILikeAnthropicMessagesConfig(), "anthropic/claude-sonnet-4.5"),
+        (BedrockMantleAnthropicMessagesConfig(), "anthropic.claude-mythos-preview"),
+    ],
+    ids=["anthropic_compatible_server", "bedrock_mantle"],
+)
+def test_unsigned_thinking_never_reaches_claude_on_any_route(config: AnthropicMessagesConfig, model: str) -> None:
+    messages: Final = [
+        {"role": "user", "content": "Solve it."},
+        _open_model_turn({"type": "thinking", "thinking": "open model plan", "signature": ""}),
+        {"role": "user", "content": "Refine it."},
+    ]
+
+    sent: Final = config.transform_anthropic_messages_request(
+        model=model,
+        messages=messages,
+        anthropic_messages_optional_request_params={"max_tokens": 1024},
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )["messages"]
+
+    assert sent[1]["content"] == [{"type": "text", "text": "Draft."}]
