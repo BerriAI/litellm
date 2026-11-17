@@ -523,9 +523,10 @@ CALLER_CLIENT_STREAM_TIMEOUT_DEBUG_INFO: Final = (
     "The caller client's ReadTimeout from a stalled stream reaches the caller without litellm_debug_info, "
     "which Python's stream mapping attaches from the deployment's litellm_params"
 )
-V_UNSENDABLE_URL_TEXT: Final = (
-    "V: a URL with a non-printable character raises the same InvalidURL with litellm's own text, "
-    "which Rust writes instead of borrowing httpx's"
+V_LOCATION_NEWLINE_REFUSED: Final = (
+    "V (owner ruling, review #2): a vertex_location with a trailing newline is refused at validation "
+    "with litellm's 'Invalid vertex_location format' ValueError; Python accepts it and fails later "
+    "with InvalidURL"
 )
 E04_HTTPX_CHUNK_READS: Final = "E04: httpx yields each HTTP chunk whole from a 64 KiB socket read; hyper hands a large chunk over in pieces of its smaller read buffer"
 A10_NO_MAX_TOKENS: Final = "A10: native admission hands a call without an int max_tokens to Python, whose signature raises the TypeError; only dispatch differs"
@@ -4693,7 +4694,20 @@ VERTEX_AUTH_CASES: Final = tuple(
                 vertex_credentials=dict(_service_account("p3-newline")),
             ),
             upstream=(),
-            gaps=_gaps(outcome=V_UNSENDABLE_URL_TEXT, logged_error=V_UNSENDABLE_URL_TEXT),
+            gaps=_gaps(
+                **dict.fromkeys(
+                    (
+                        "outcome",
+                        "logged",
+                        "logged_error",
+                        "logged_api_key",
+                        "logged_call",
+                        "logged_request",
+                        "logged_model_parameters",
+                    ),
+                    V_LOCATION_NEWLINE_REFUSED,
+                )
+            ),
         ),
         Case(
             "vertex_ai_impersonated_credentials_are_refused",
