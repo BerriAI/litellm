@@ -3,7 +3,7 @@
 import asyncio
 import threading
 from collections import deque
-from collections.abc import AsyncGenerator, AsyncIterable, Awaitable, Callable, Iterable, Iterator, Mapping, Sequence
+from collections.abc import AsyncGenerator, AsyncIterable, Iterable, Iterator, Mapping, Sequence
 from typing import TYPE_CHECKING, Final, Protocol, runtime_checkable
 
 import anyio
@@ -125,6 +125,7 @@ class AnthropicResponsesStreamWrapper:
       response.output_text.delta         -> content_block_delta (text_delta)
       response.reasoning_summary_part.added -> content_block_delta (thinking_delta separator)
       response.reasoning_summary_text.delta -> content_block_delta (thinking_delta)
+      response.reasoning_text.delta      -> content_block_delta (thinking_delta)
       response.function_call_arguments.delta -> content_block_delta (input_json_delta)
       response.output_item.done          -> content_block_delta (signature_delta) + content_block_stop
       response.completed                 -> message_delta + message_stop
@@ -207,32 +208,52 @@ class AnthropicResponsesStreamWrapper:
     def _field(source: object, name: str) -> object:
         return source.get(name) if isinstance(source, dict) else getattr(source, name, None)
 
+    def _replay_whole_reasoning_item(self, item: object, item_id: str | None) -> None:
+        block: Final = LiteLLMAnthropicToResponsesAPIAdapter.thinking_block_from_reasoning_item(
+            iter_items(self._field(item, "summary") or self._field(item, "content") or ()),
+            self._field(item, "encrypted_content"),
+        )
+        if block is None:
+            return
+        if block.get("type") == "redacted_thinking":
+            redacted_idx: Final = self._open_block(item_id, block)
+            self._chunk_queue.append({"type": "content_block_stop", "index": redacted_idx})
+            return
+        block_idx: Final = self._open_block(item_id, {"type": "thinking", "thinking": "", "signature": ""})
+        self._chunk_queue.extend(
+            (
+                {
+                    "type": "content_block_delta",
+                    "index": block_idx,
+                    "delta": {"type": "thinking_delta", "thinking": block.get("thinking")},
+                },
+                {
+                    "type": "content_block_delta",
+                    "index": block_idx,
+                    "delta": {"type": "signature_delta", "signature": block.get("signature")},
+                },
+                {"type": "content_block_stop", "index": block_idx},
+            )
+        )
+
     def _close_reasoning_item(self, item: object, item_id: str | None) -> None:
         block_idx: Final = self._item_id_to_block_index.get(item_id, -1) if item_id else self._current_block_index
+        if block_idx < 0:
+            self._replay_whole_reasoning_item(item, item_id)
+            return
         encrypted_content: Final = self._field(item, "encrypted_content")
         signature: Final = (
             encrypted_reasoning_signature(encrypted_content)
             if isinstance(encrypted_content, str) and encrypted_content
             else None
         )
-        if block_idx < 0 and signature is None:
-            return
-        if block_idx < 0:
-            redacted_idx: Final = self._open_block(
-                item_id,
-                {"type": "redacted_thinking", "data": signature},
-            )
-            stop: Final[dict[str, object]] = {"type": "content_block_stop", "index": redacted_idx}
-            self._chunk_queue.append(stop)
-            return
-        if signature is not None:
-            self._chunk_queue.append(
-                {
-                    "type": "content_block_delta",
-                    "index": block_idx,
-                    "delta": {"type": "signature_delta", "signature": signature},
-                }
-            )
+        self._chunk_queue.append(
+            {
+                "type": "content_block_delta",
+                "index": block_idx,
+                "delta": {"type": "signature_delta", "signature": signature or ""},
+            }
+        )
         self._chunk_queue.append({"type": "content_block_stop", "index": block_idx})
 
     def _process_event(self, event: object) -> None:
@@ -336,8 +357,7 @@ class AnthropicResponsesStreamWrapper:
             )
             return
 
-        # ---- reasoning summary text delta ----
-        if event_type == "response.reasoning_summary_text.delta":
+        if event_type in ("response.reasoning_summary_text.delta", "response.reasoning_text.delta"):
             item_id = getattr(event, "item_id", None) or (event.get("item_id") if isinstance(event, dict) else None)
             delta = getattr(event, "delta", "") or (event.get("delta", "") if isinstance(event, dict) else "")
             block_idx = self._item_id_to_block_index.get(item_id, -1) if item_id else self._current_block_index
@@ -490,14 +510,12 @@ class AnthropicResponsesStreamWrapper:
         if failure is None:
             return
         self._unreported_failure = None
-        on_failure: Final[Callable[[Exception], Awaitable[None]] | None] = getattr(
-            self.litellm_logging_obj, "_on_detached_stream_failure", None
-        )
-        if on_failure is None:
+        logging_obj: Final = self.litellm_logging_obj
+        if logging_obj is None:
             return
         try:
             with anyio.CancelScope(shield=True):
-                await on_failure(failure)
+                await logging_obj.report_detached_stream_failure(failure)
         except Exception as hook_failure:  # noqa: BLE001  # a failing proxy hook must not hide the error event from the client
             verbose_logger.warning(
                 "AnthropicResponsesStreamWrapper: stream failure hook raised: %s(%s)",

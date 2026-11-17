@@ -1,14 +1,9 @@
 {{- if .Values.migrationJob.enabled -}}
-# Pre-install / pre-upgrade hook that runs `prisma migrate deploy` against
-# the writer database before the application Deployments are rolled out.
-# Required because the proxy, gateway and backend all spin up Prisma at
-# startup and assume the LiteLLM schema (LiteLLM_Config,
-# LiteLLM_VerificationToken, LiteLLM_SpendLogs, ...) already exists.
-#
-# Running this pre-upgrade closes the window where new application pods would
-# otherwise serve traffic against the previous release's unmigrated schema.
-# Argo CD users can swap the Helm hook for a PreSync hook through
-# `migrationJob.hooks`, which re-runs the Job on every sync.
+{{- $mode := .Values.migrationJob.mode -}}
+{{- if not (has $mode (list "data-plane" "control-plane")) -}}
+{{- fail (printf "migrationJob.mode must be data-plane or control-plane (got %q)" $mode) -}}
+{{- end -}}
+{{- $controlPlane := eq $mode "control-plane" -}}
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -29,7 +24,7 @@ metadata:
     {{- end }}
     {{- if .Values.migrationJob.hooks.argocd.enabled }}
     argocd.argoproj.io/hook: PreSync
-    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation,HookSucceeded
     {{- end }}
     {{- with .Values.migrationJob.jobAnnotations }}
     {{- toYaml . | nindent 4 }}
@@ -37,7 +32,9 @@ metadata:
   {{- end }}
 spec:
   backoffLimit: {{ .Values.migrationJob.backoffLimit }}
+  {{- if not .Values.migrationJob.hooks.argocd.enabled }}
   ttlSecondsAfterFinished: {{ .Values.migrationJob.ttlSecondsAfterFinished }}
+  {{- end }}
   {{- with .Values.migrationJob.activeDeadlineSeconds }}
   activeDeadlineSeconds: {{ . }}
   {{- end }}
@@ -71,7 +68,7 @@ spec:
         {{- tpl (toYaml .) $ | nindent 8 }}
       {{- end }}
       containers:
-        - name: prisma-migrations
+        - name: {{ ternary "control-plane-migrations" "prisma-migrations" $controlPlane }}
           image: {{ include "litellm.image" . | quote }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           {{- with .Values.migrationJob.securityContext }}
@@ -85,12 +82,28 @@ spec:
           args: {{ toYaml .Values.migrationJob.args | nindent 12 }}
           {{- else if .Values.migrationJob.command }}
           args: []
+          {{- else if $controlPlane }}
+          args:
+            - proxy
+            - --control-plane
+            - --skip_server_startup
           {{- else }}
           args:
             - migrations
           {{- end }}
           env:
+            {{- if $controlPlane }}
+            - name: CONTROL_PLANE_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ required "migrationJob.controlPlane.databaseSecret.name is required in control-plane mode" .Values.migrationJob.controlPlane.databaseSecret.name | quote }}
+                  key: {{ required "migrationJob.controlPlane.databaseSecret.key is required in control-plane mode" .Values.migrationJob.controlPlane.databaseSecret.key | quote }}
+            {{- with .Values.migrationJob.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+            {{- else }}
             {{- include "litellm.serverEnv" (dict "root" $ "component" .Values.migrationJob) | nindent 12 }}
+            {{- end }}
           {{- with .Values.migrationJob.volumeMounts }}
           volumeMounts:
             {{- toYaml . | nindent 12 }}

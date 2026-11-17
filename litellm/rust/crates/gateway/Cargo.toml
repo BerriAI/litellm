@@ -6,6 +6,8 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+litellm-python-compat.workspace = true
+litellm-env.workspace = true
 litellm-secret-value.workspace = true
 axum.workspace = true
 envy = "0.4.2"
@@ -20,7 +22,7 @@ futures-util.workspace = true
 litellm-gateway-auth.workspace = true
 litellm-gateway-ui.workspace = true
 litellm-config.workspace = true
-litellm-core-utils.workspace = true
+litellm-config-load.workspace = true
 litellm-error.workspace = true
 litellm-circuit-breaker.workspace = true
 litellm-redis-client.workspace = true
@@ -30,6 +32,7 @@ litellm-redis-types.workspace = true
 rustls.workspace = true
 litellm-http.workspace = true
 litellm-llms.workspace = true
+litellm-model-catalog.workspace = true
 litellm-secrets.workspace = true
 litellm-tracing.workspace = true
 serde_json.workspace = true
@@ -48,3 +51,4 @@ rstest.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["sync"] }
 tower = { version = "0.5", features = ["util"] }
+wiremock.workspace = true

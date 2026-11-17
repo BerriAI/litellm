@@ -65,6 +65,10 @@ pub struct ChatCompletionsChoiceMessage {
     // while Converse assigns the joined string unconditionally. Each config
     // mirrors its own, so keep this optional and serialize it even when None.
     pub content: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_content: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking_blocks: Option<Vec<ChatCompletionThinkingBlock>>,
 }
 
 #[macro_rules_attribute::apply(crate::wire_type)]

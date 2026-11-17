@@ -23,10 +23,15 @@ from typing_extensions import NotRequired, TypedDict
 import litellm
 from litellm import verbose_logger
 from litellm._uuid import uuid
-from litellm.constants import STREAM_CHUNK_CHOICE_FIELDS, STREAM_FINISH_CHOICE_FIELDS
+from litellm.constants import (
+    PROVIDER_FINISH_REASONS_HIDDEN_PARAM,
+    STREAM_CHUNK_CHOICE_FIELDS,
+    STREAM_FINISH_CHOICE_FIELDS,
+)
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.core_helpers import (
     UPSTREAM_USAGE_COST,
+    FinishEvidence,
     as_str_mapping,
     attribute_or_none,
     chunk_usage,
@@ -171,6 +176,35 @@ def _prepend_upstream_choice_extras(
 
 _NO_UPSTREAM_CHOICE_FIELDS: Final[Mapping[str, object]] = MappingProxyType({})
 _NO_CHOICE_FIELDS_BY_INDEX: Final[Mapping[int, Mapping[str, object]]] = MappingProxyType({})
+_NO_FINISH_REASONS_BY_INDEX: Final[Mapping[int, str]] = MappingProxyType({})
+
+
+def _indexed_finish_reason(choice: object) -> tuple[int, str] | None:
+    reason: Final[object] = getattr(choice, "finish_reason", None)
+    index: Final[object] = getattr(choice, "index", None)
+    if not isinstance(reason, str) or not reason or not isinstance(index, int):
+        return None
+    return index, reason
+
+
+_PROVIDER_FINISH_REASONS: Final = TypeAdapter(tuple[tuple[int, str], ...])
+
+
+def _provider_finish_reasons(evidence: object) -> Mapping[int, str]:
+    if evidence is None:
+        return _NO_FINISH_REASONS_BY_INDEX
+    try:
+        return MappingProxyType(dict(_PROVIDER_FINISH_REASONS.validate_python(evidence, strict=True)))
+    except ValidationError:
+        return _NO_FINISH_REASONS_BY_INDEX
+
+
+def _finish_reasons_by_index(upstream_chunk: object) -> Mapping[int, str]:
+    hidden_params: Final = get_hidden_params(upstream_chunk)
+    if hidden_params is not None and hidden_params.get("is_finished") is False:
+        return _provider_finish_reasons(hidden_params.get(PROVIDER_FINISH_REASONS_HIDDEN_PARAM))
+    choices: Final[object] = getattr(upstream_chunk, "choices", None)
+    return MappingProxyType(dict(filter(None, map(_indexed_finish_reason, object_items(choices)))))
 
 
 def _upstream_first_choice(upstream_chunk: object) -> BaseModel | None:
@@ -199,6 +233,10 @@ def _response_choice_index(response_obj: Mapping[str, object]) -> int:
     if isinstance(choice_index, int):
         return choice_index
     return _upstream_choice_index(response_obj.get("original_chunk"))
+
+
+def _carries_payload(choice: StreamingChoices) -> bool:
+    return choice.logprobs is not None or any(choice.delta.model_dump(exclude_none=True, exclude={"role"}).values())
 
 
 def _delta_choice_index(completion_fields: Mapping[str, object], response_fields: Mapping[str, object]) -> object:
@@ -476,6 +514,7 @@ class CustomStreamWrapper:
         _response_headers: dict | httpx.Headers | None = None,
         count_prompt_tokens: Callable[[], int] | None = None,
         is_mock: bool = False,
+        response_cost: float | None = None,
     ):
         self.model = model
         self.make_call = make_call
@@ -504,6 +543,7 @@ class CustomStreamWrapper:
         self._upstream_provider: str | None = None
         self.received_finish_reason: str | None = None
         self.received_finish_choice_fields: Mapping[int, Mapping[str, object]] = _NO_CHOICE_FIELDS_BY_INDEX
+        self.received_finish_reasons: Mapping[int, str] = _NO_FINISH_REASONS_BY_INDEX
         self.carried_chunk_choice_fields: Mapping[int, Mapping[str, object]] = _NO_CHOICE_FIELDS_BY_INDEX
         self.intermittent_finish_reason: str | None = None  # finish reasons that show up mid-stream
         self.received_any_finish_reason = False  # a later chunk can reset intermittent_finish_reason
@@ -530,6 +570,7 @@ class CustomStreamWrapper:
         self._hidden_params: dict[str, object] = {
             "model_id": (_model_info.get("id", None)),
             "api_base": _api_base,
+            **({} if response_cost is None else {"response_cost": response_cost}),
         }  # returned as x-litellm-model-id response header in proxy
 
         self._hidden_params["additional_headers"] = process_response_headers(
@@ -570,7 +611,7 @@ class CustomStreamWrapper:
         # this cache must be removed.
         self._base_hidden_params: dict[str, object] = {
             **self._hidden_params,
-            "response_cost": None,
+            "response_cost": response_cost,
         }
 
         self._post_streaming_hooks: list | None = None
@@ -1447,10 +1488,10 @@ class CustomStreamWrapper:
                 if self.custom_llm_provider == "bedrock" and "trace" in model_response:
                     return model_response
 
-                # Don't raise StopIteration here - some providers (like OpenRouter)
-                # send usage/cost data in chunks after the finish_reason chunk
-                if hasattr(model_response, "usage") and model_response.usage is not None:
-                    return model_response
+                if getattr(model_response, "usage", None) is not None:
+                    return model_response.model_copy(
+                        update={"choices": [choice for choice in model_response.choices if _carries_payload(choice)]}
+                    )
                 return
             # flush any remaining holding chunk
             if len(self.holding_chunk) > 0:
@@ -1723,6 +1764,7 @@ class CustomStreamWrapper:
             response_obj = self.handle_openai_text_completion_chunk(chunk)
             completion_obj["content"] = response_obj["text"]
             print_verbose(f"completion obj content: {completion_obj['content']}")
+            self._record_finish_reasons(chunk)
             if response_obj["is_finished"]:
                 self._record_finish_choice_fields(chunk)
             if response_obj["is_finished"] and response_obj["sibling_finish_reason"] is None:
@@ -1799,6 +1841,7 @@ class CustomStreamWrapper:
                 self.response_id = cached_chunk.id
             if hasattr(cached_chunk, "system_fingerprint"):
                 self.system_fingerprint = cached_chunk.system_fingerprint
+            self._record_finish_reasons(cached_chunk)
             if response_obj["is_finished"]:
                 self.received_finish_reason = response_obj["finish_reason"]
                 self._record_finish_choice_fields(cached_chunk)
@@ -1834,6 +1877,7 @@ class CustomStreamWrapper:
                     )
                 self.received_finish_reason = response_obj["finish_reason"]
                 self._record_finish_choice_fields(chunk)
+            self._record_finish_reasons(chunk)
             if response_obj.get("original_chunk", None) is not None:
                 if hasattr(response_obj["original_chunk"], "id"):
                     model_response = self.set_model_id(response_obj["original_chunk"].id, model_response)
@@ -2184,6 +2228,18 @@ class CustomStreamWrapper:
         if self.logging_obj.is_sync_litellm_request(litellm_params):
             self.logging_obj.success_handler(processed_chunk, None, None, cache_hit)
 
+    @property
+    def finish_evidence(self) -> FinishEvidence:
+        return FinishEvidence(
+            by_choice=self.received_finish_reasons,
+            unindexed=None if self.received_finish_reasons else self.received_finish_reason,
+        )
+
+    def _record_finish_reasons(self, upstream_chunk: object) -> None:
+        received: Final = _finish_reasons_by_index(upstream_chunk)
+        if received:
+            self.received_finish_reasons = MappingProxyType({**self.received_finish_reasons, **received})
+
     def _normalize_tool_call_finish_reason(self, finish_reason: str) -> str:
         if finish_reason == "stop" and self.tool_call:
             return "tool_calls"
@@ -2396,6 +2452,10 @@ class CustomStreamWrapper:
             dict[str, object], getattr(chunk, HIDDEN_PARAMS_ATTR)
         )
 
+    def _maybe_set_final_chunk_usage(self, chunk: ModelResponseStream) -> None:
+        if self.sent_last_chunk is True and not self.send_stream_usage:
+            self._set_final_chunk_usage(chunk)
+
     def __next__(self) -> "ModelResponseStream":
         if self._closed:
             raise StopIteration
@@ -2475,8 +2535,8 @@ class CustomStreamWrapper:
                         if is_empty:
                             continue
                     # add usage as hidden param
+                    self._maybe_set_final_chunk_usage(response)
                     if self.sent_last_chunk is True and self.stream_options is None:
-                        self._set_final_chunk_usage(response)
                         # Add MCP metadata to final chunk if present
                         response = self._add_mcp_metadata_to_final_chunk(response)
                     # RETURN RESULT
@@ -2493,6 +2553,7 @@ class CustomStreamWrapper:
             if self.sent_last_chunk is True:
                 complete_streaming_response: Final = self._build_complete_streaming_response()
                 response = self._new_usage_chunk()
+                logs_stream_end: Final = not self.sent_stream_usage
                 if complete_streaming_response is not None:
                     self._propagate_usage_cost_to_hidden_params(
                         complete_streaming_response, self.custom_llm_provider, self.chunks
@@ -2515,21 +2576,10 @@ class CustomStreamWrapper:
                         processed_chunk=_cache_copy,
                         cache_hit=cache_hit,
                     )
-                    executor.submit(
-                        self.logging_obj.success_handler,
-                        _log_copy,
-                        None,
-                        None,
-                        cache_hit,
-                    )
-                else:
-                    executor.submit(
-                        self.logging_obj.success_handler,
-                        response,
-                        None,
-                        None,
-                        cache_hit,
-                    )
+                    if logs_stream_end:
+                        executor.submit(self.logging_obj.stream_end_success_handler, _log_copy, cache_hit)
+                elif logs_stream_end:
+                    executor.submit(self.logging_obj.stream_end_success_handler, response, cache_hit)
                 # Update hidden_params with final usage from
                 # stream_chunk_builder.  Some providers (e.g. OpenRouter)
                 # send usage in a chunk after finish_reason, which arrives
@@ -2538,7 +2588,7 @@ class CustomStreamWrapper:
                 # (shared by reference), so mutating it here also corrects
                 # the user's copy.
                 if (
-                    self.stream_options is None
+                    not self.send_stream_usage
                     and complete_streaming_response is not None
                     and self._last_returned_hidden_params is not None
                 ):
@@ -2557,8 +2607,7 @@ class CustomStreamWrapper:
                 final_chunk_for_logging: Final = self._final_chunk_for_logging(processed_chunk)
                 if final_chunk_for_logging is not None:
                     self.chunks.append(final_chunk_for_logging)
-                if self.stream_options is None:
-                    self._set_final_chunk_usage(processed_chunk)
+                self._maybe_set_final_chunk_usage(processed_chunk)
                 ## LOGGING
                 executor.submit(
                     self.run_success_logging_and_cache_storage,
@@ -2661,8 +2710,7 @@ class CustomStreamWrapper:
                         self.chunks.append(processed_chunk)
 
                     # add usage as hidden param
-                    if self.sent_last_chunk is True and self.stream_options is None:
-                        self._set_final_chunk_usage(processed_chunk)
+                    self._maybe_set_final_chunk_usage(processed_chunk)
 
                     # Call post-call streaming deployment hook for final chunk
                     if self.sent_last_chunk is True:
@@ -2691,13 +2739,10 @@ class CustomStreamWrapper:
                             if isinstance(choice, StreamingChoices):
                                 self._accumulate_streamed_delta(choice.delta)
                         self.rules.post_call_rules(input=self.response_uptil_now, model=self.model)
-                        if not self.send_stream_usage or getattr(processed_chunk, "usage", None) is None:
-                            self.chunks.append(processed_chunk)
-                            return processed_chunk
-                        usage_free_chunk = self._record_and_strip_usage_chunk(processed_chunk)
-                        if usage_free_chunk is None:
+                        if (returned_chunk := self._returned_sync_stream_chunk(processed_chunk)) is None:
                             continue
-                        return usage_free_chunk
+                        self._maybe_set_final_chunk_usage(returned_chunk)
+                        return returned_chunk
         except (StopAsyncIteration, StopIteration):
             if self._should_fail_on_clean_eof():
                 await self.aclose()
@@ -2720,6 +2765,8 @@ class CustomStreamWrapper:
             self._log_stream_failure_and_raise(e)
 
     async def _finalize_completed_stream(self, cache_hit: bool) -> "ModelResponseStream":
+        from litellm.responses.streaming_iterator import spawn_logging_task
+
         if self.sent_last_chunk is True:
             complete_streaming_response: Final = await self._async_build_complete_streaming_response()
             response: Final = self._new_usage_chunk()
@@ -2748,7 +2795,7 @@ class CustomStreamWrapper:
             # Update hidden_params with final usage from
             # stream_chunk_builder (see sync __next__ for full comment).
             if (
-                self.stream_options is None
+                not self.send_stream_usage
                 and complete_streaming_response is not None
                 and self._last_returned_hidden_params is not None
             ):
@@ -2781,14 +2828,16 @@ class CustomStreamWrapper:
                 # prefer_async_handlers routes CustomLogger to async_success_handler
                 # when consumers use ``async for`` on sync-SDK streams. Legacy string
                 # callbacks still run via executor.submit inside dispatch_success_handlers.
-                asyncio.create_task(
+                spawn_logging_task(
+                    asyncio.get_running_loop(),
                     self.logging_obj.dispatch_success_handlers(
                         complete_streaming_response,
                         cache_hit=cache_hit,
                         start_time=None,
                         end_time=None,
                         prefer_async_handlers=True,
-                    )
+                    ),
+                    task_name="Chat completions stream success log",
                 )
 
             await self.aclose()
@@ -2799,8 +2848,7 @@ class CustomStreamWrapper:
             final_chunk_for_logging: Final = self._final_chunk_for_logging(processed_chunk)
             if final_chunk_for_logging is not None:
                 self.chunks.append(final_chunk_for_logging)
-            if self.stream_options is None:
-                self._set_final_chunk_usage(processed_chunk)
+            self._maybe_set_final_chunk_usage(processed_chunk)
             # see sync __next__'s sibling branch: deliberately do NOT restore
             # here - this chunk is still this call's own data, and restoring
             # before returning it would corrupt the caller's own log
@@ -2917,6 +2965,12 @@ class CustomStreamWrapper:
             ),
         )
         return None if is_model_response_stream_empty(model_response=usage_free_chunk) else usage_free_chunk
+
+    def _returned_sync_stream_chunk(self, chunk: ModelResponseStream) -> ModelResponseStream | None:
+        if getattr(chunk, "usage", None) is None or (not self.send_stream_usage and chunk.choices):
+            self.chunks.append(chunk)
+            return chunk
+        return self._record_and_strip_usage_chunk(chunk)
 
     def _accumulate_streamed_delta(self, delta: object) -> None:
         get: Final = getattr(delta, "get", None)

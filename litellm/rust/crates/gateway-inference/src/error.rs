@@ -324,8 +324,8 @@ mod tests {
     #[rstest]
     #[case::upstream_status(upstream(429, ""), StatusCode::TOO_MANY_REQUESTS)]
     #[case::declined(
-        Error::Route(InferenceError::from(litellm_http::Error::computed_header(
-            "authorization"
+        Error::Route(InferenceError::Declined(litellm_core_utils::decline::Decline::new(
+            "unrecognized request parameter"
         ))),
         StatusCode::NOT_IMPLEMENTED
     )]

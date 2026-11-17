@@ -78,6 +78,7 @@ def _uses_bundled_map_only() -> bool:
 class _LoadedSnapshot:
     rows: Mapping[str, Mapping[str, object]]
     fields: frozenset[str]
+    keys_by_casefold: Mapping[str, str]
 
 
 @lru_cache(maxsize=1)
@@ -86,6 +87,7 @@ def _loaded_snapshot(revision: str) -> _LoadedSnapshot:
     return _LoadedSnapshot(
         rows=MappingProxyType({key: MappingProxyType(entry) for key, entry in raw.items()}),
         fields=frozenset(chain.from_iterable(entry.keys() for entry in raw.values())),
+        keys_by_casefold=MappingProxyType({key.casefold(): key for key in raw}),
     )
 
 
@@ -109,6 +111,12 @@ class GetModelCostMap:
     def loaded_model_cost_map() -> Mapping[str, Mapping[str, object]]:
         """The catalog as last loaded (bundled or remote), untouched by ``register_model`` or router registrations."""
         return _loaded_snapshot(model_cost_inputs.provenance.revision).rows
+
+    @staticmethod
+    def loaded_model_cost_map_key(key: str) -> str | None:
+        """``key`` as the loaded catalog spells it, matched exactly first and then ignoring case."""
+        snapshot: Final = _loaded_snapshot(model_cost_inputs.provenance.revision)
+        return key if key in snapshot.rows else snapshot.keys_by_casefold.get(key.casefold())
 
     @staticmethod
     def loaded_model_cost_map_fields() -> frozenset[str]:
