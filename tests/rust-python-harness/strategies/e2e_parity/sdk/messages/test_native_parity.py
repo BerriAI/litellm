@@ -3594,7 +3594,7 @@ MALFORMED_BASE_CASES: Final = tuple(
 AZURE_OPUS_4_8: Final = "azure_ai/claude-opus-4-8"
 E4_UNTRACED_VERSION_REFUSAL: Final = (
     "E4: Python logs the attributed anthropic-version refusal with the traceback of its raise in the transform; the "
-    "native host hands the refusal back unraised, so its failure log has none"
+    "Rust host hands the refusal back unraised, so its failure log has none"
 )
 JSON_SCHEMA_FORMAT: Final[Mapping[str, JsonValue]] = MappingProxyType(
     {

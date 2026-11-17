@@ -951,7 +951,7 @@ def _sent_base(
 
 
 def _connect_failure(
-    native: str,
+    rust_error: str,
     request: Mapping[str, object],
     request_provider: str,
     secrets_read: _SecretsRead,
@@ -960,9 +960,9 @@ def _connect_failure(
     base: Final = _sent_base(request, request_provider, secrets_read, sent_origin)
     if base is None:
         return None
-    refused: Final = "tcp connect error: Connection refused" in native
-    dns_reason: Final = native.rsplit(_DNS_FAILURE, 1)[1] if _DNS_FAILURE in native else None
-    tls_eof: Final = native.endswith("tls handshake eof")
+    refused: Final = "tcp connect error: Connection refused" in rust_error
+    dns_reason: Final = rust_error.rsplit(_DNS_FAILURE, 1)[1] if _DNS_FAILURE in rust_error else None
+    tls_eof: Final = rust_error.endswith("tls handshake eof")
     if not http_transport.uses_aiohttp_transport():
         if refused:
             return "All connection attempts failed"
@@ -999,31 +999,31 @@ def _transport_failure(
     body_cut: Final = getattr(error, "messages_body_cut", None)
     if body_cut is not None:
         return str(_body_cut(*_BODY_CUT.validate_python(body_cut)))
-    native: Final = str(error)
-    if native == _UNSENDABLE_HEADER and request_provider not in _MAIN_NATIVE_ERROR_PROVIDERS:
+    rust_error: Final = str(error)
+    if rust_error == _UNSENDABLE_HEADER and request_provider not in _MAIN_NATIVE_ERROR_PROVIDERS:
         # httpx names the header value in its text, which may be a credential.
-        return _AIOHTTP_UNSENDABLE_HEADER if http_transport.uses_aiohttp_transport() else native
-    if native == _TOO_MANY_REDIRECTS:
+        return _AIOHTTP_UNSENDABLE_HEADER if http_transport.uses_aiohttp_transport() else rust_error
+    if rust_error == _TOO_MANY_REDIRECTS:
         return "Exceeded maximum allowed redirects."
-    if native.startswith(_SEND_FAILED):
-        reset: Final = native.endswith(f"Connection reset by peer (os error {errno.ECONNRESET})")
-        closed: Final = native.endswith("connection closed before message completed") or (
-            request_provider == "vertex_ai" and native.endswith(_TLS_CLOSED_WITHOUT_NOTIFY)
+    if rust_error.startswith(_SEND_FAILED):
+        reset: Final = rust_error.endswith(f"Connection reset by peer (os error {errno.ECONNRESET})")
+        closed: Final = rust_error.endswith("connection closed before message completed") or (
+            request_provider == "vertex_ai" and rust_error.endswith(_TLS_CLOSED_WITHOUT_NOTIFY)
         )
         if http_transport.uses_aiohttp_transport():
             if reset:
                 return str(ConnectionResetError(errno.ECONNRESET, os.strerror(errno.ECONNRESET)))
-            return "Server disconnected" if closed else native
+            return "Server disconnected" if closed else rust_error
         if reset:
             return ""
-        return "Server disconnected without sending a response." if closed else native
-    if not native.startswith(_UNREACHABLE):
+        return "Server disconnected without sending a response." if closed else rust_error
+    if not rust_error.startswith(_UNREACHABLE):
         return None
     sent_origin: Final = getattr(error, "messages_sent_origin", None)
     connect: Final = _connect_failure(
-        native, request, request_provider, secrets_read, sent_origin if isinstance(sent_origin, str) else None
+        rust_error, request, request_provider, secrets_read, sent_origin if isinstance(sent_origin, str) else None
     )
-    return native if connect is None else connect
+    return rust_error if connect is None else connect
 
 
 def _upstream_failure(
