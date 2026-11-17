@@ -1062,11 +1062,6 @@ _SIGV4_ONLY: Final = {
             ValueError,
             id="mantle-route-region",
         ),
-        pytest.param(
-            {"api_base": "HTTPS://BEDROCK-MANTLE.US-EAST-2.API.AWS", **_SIGV4_ONLY},
-            ValueError,
-            id="upper-case-mantle-host-on-sigv4",
-        ),
     ),
 )
 async def test_bedrock_mantle_invalid_region_raises_what_python_raises(

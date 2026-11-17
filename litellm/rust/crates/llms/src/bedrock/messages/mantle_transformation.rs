@@ -12,19 +12,18 @@ use litellm_host::interceptors::RetriedRequest;
 use litellm_llms_types::{
     formats::messages::{MessagesOptionalParams, MessagesRequest, MessagesResponse},
     providers::anthropic::BetaProvider,
+    recognized::Recognized,
 };
 use litellm_router_types::LitellmParams;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+use url::Url;
 
 use crate::{
     Error, ErrorDetail, MantleRegionCheck,
-    anthropic::{
-        common_utils::ensure_api_route,
-        messages::{
-            handler::shape_anthropic_messages_request,
-            transformation::retry_anthropic_messages_after_http_error,
-        },
+    anthropic::messages::{
+        handler::shape_anthropic_messages_request,
+        transformation::retry_anthropic_messages_after_http_error,
     },
     base_llm::{
         auth::AuthScheme,
@@ -199,7 +198,21 @@ pub(crate) fn transform_mantle_messages_request(
         settings,
     )?;
     let headers = move_betas_into_header(&request, headers)?;
-    Ok((MessagesRequest { model, ..request }, headers))
+    let stream = request
+        .params
+        .stream
+        .filter(|stream| *stream == Recognized::Known(true));
+    Ok((
+        MessagesRequest {
+            model,
+            params: MessagesOptionalParams {
+                stream,
+                ..request.params
+            },
+            ..request
+        },
+        headers,
+    ))
 }
 
 pub fn amazon_mantle_model_id(model: &str) -> String {
@@ -307,24 +320,48 @@ fn mantle_api_base_from_env(env_lookup: &dyn Fn(&str) -> Option<String>) -> Opti
         .iter()
         .find_map(|suffix| base.strip_suffix(suffix))
         .unwrap_or(base);
-    Some(stripped.to_string()).filter(|base| !base.is_empty())
+    Some(stripped.to_string()).filter(|base| !base.trim().is_empty())
 }
 
-/// Python's `build_mantle_messages_url`.
+/// A Mantle base parsed as a URL, refused when it is not one.
+pub(crate) fn parse_mantle_base(base: &str) -> Result<Url, Error> {
+    Url::parse(base).map_err(|error| Error::InvalidRequest(ErrorDetail::invalid("api_base", error)))
+}
+
+/// `base` with the first of `suffixes` its path ends in taken off and the Messages route put on.
+/// The query string stays after the path.
+pub(crate) fn with_mantle_messages_path(mut base: Url, suffixes: &[&str]) -> Url {
+    let path = base.path().trim_end_matches('/');
+    let stripped = suffixes
+        .iter()
+        .find_map(|suffix| path.strip_suffix(suffix))
+        .unwrap_or(path);
+    let path = format!("{stripped}{MANTLE_MESSAGES_PATH}");
+    base.set_path(&path);
+    base
+}
+
+/// Python's `build_mantle_messages_url`. A blank base counts as unset.
 fn build_mantle_messages_url(
     api_base: Option<&str>,
     aws_bedrock_runtime_endpoint: Option<&str>,
     region: &str,
     env_lookup: &dyn Fn(&str) -> Option<String>,
-) -> String {
+) -> Result<String, Error> {
     let explicit = [api_base, aws_bedrock_runtime_endpoint]
         .into_iter()
         .flatten()
-        .find(|base| !base.is_empty())
+        .find(|base| !base.trim().is_empty())
         .map(str::to_string);
     match explicit.or_else(|| mantle_api_base_from_env(env_lookup)) {
-        Some(base) => ensure_api_route(&base, MANTLE_MESSAGES_PATH),
-        None => format!("https://bedrock-mantle.{region}.api.aws{MANTLE_MESSAGES_PATH}"),
+        Some(base) => Ok(with_mantle_messages_path(
+            parse_mantle_base(&base)?,
+            &[MANTLE_MESSAGES_PATH],
+        )
+        .into()),
+        None => Ok(format!(
+            "https://bedrock-mantle.{region}.api.aws{MANTLE_MESSAGES_PATH}"
+        )),
     }
 }
 
@@ -405,12 +442,12 @@ impl BaseMessagesConfig for AmazonMantleMessagesConfig {
             bedrock_region(model, litellm_params, env_lookup),
             MantleRegionCheck::Request,
         )?;
-        Ok(build_mantle_messages_url(
+        build_mantle_messages_url(
             api_base.or(litellm_params.api_base.as_deref()),
             litellm_params.aws.aws_bedrock_runtime_endpoint.as_deref(),
             &region,
             env_lookup,
-        ))
+        )
     }
 
     fn finalize_request(
@@ -495,6 +532,7 @@ impl BaseMessagesConfig for AmazonMantleMessagesConfig {
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<ValidatedEnvironment, Error> {
         let headers = mantle_headers(headers, litellm_params)?;
+        let api_key = api_key.filter(|key| key.is_empty() || !key.trim().is_empty());
         Ok(match bearer_token(api_key, env_lookup) {
             Some(token) => bearer_environment(headers, &token),
             None => sigv4_environment(
@@ -578,6 +616,24 @@ mod tests {
         None,
         &[],
         "https://x.test/anthropic/v1/messages?x=1"
+    )]
+    #[case::query_stays_after_the_route(
+        Some("https://x.test/v1?tenant=a"),
+        None,
+        &[],
+        "https://x.test/v1/anthropic/v1/messages?tenant=a"
+    )]
+    #[case::blank_base_is_unset(
+        Some("   "),
+        Some("https://runtime.test"),
+        &[],
+        "https://runtime.test/anthropic/v1/messages"
+    )]
+    #[case::upper_case_host_lowercased(
+        Some("https://BEDROCK-MANTLE.US-EAST-2.API.AWS"),
+        None,
+        &[],
+        "https://bedrock-mantle.us-east-2.api.aws/anthropic/v1/messages"
     )]
     #[case::public_host_never_rewritten(
         Some("https://bedrock-mantle.us-west-2.api.aws/custom"),
@@ -701,6 +757,23 @@ mod tests {
         assert_eq!(
             matches!(validated.auth, AuthScheme::AwsSigV4 { .. }),
             expected.is_none()
+        );
+    }
+
+    #[rstest]
+    fn a_blank_api_key_counts_as_unset() {
+        let validated = environment(
+            &[],
+            Some("   "),
+            "mantle/anthropic.claude-test",
+            &params(Some("us-east-1"), None),
+            &[("AWS_BEARER_TOKEN_BEDROCK", "aws")],
+        );
+        assert!(
+            validated
+                .headers
+                .iter()
+                .any(|(name, value)| name == "Authorization" && value == "Bearer aws")
         );
     }
 
