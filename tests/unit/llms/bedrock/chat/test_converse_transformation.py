@@ -4520,6 +4520,16 @@ def _conversation_ending_in(shape: str) -> list[AllMessageValues]:
                 {"role": "assistant", "content": guarded_call, "tool_calls": [_LOOKUP_CALL]},
                 {"role": "tool", "tool_call_id": "call_1", "content": "Sunny."},
             ]
+        case "system_after_assistant_after_guarded_question":
+            return [
+                {"role": "user", "content": [{"type": "guarded_text", "text": _BLOCKED_QUESTION}]},
+                *_conversation_ending_in("system_after_assistant")[1:],
+            ]
+        case "system_after_tool_result_after_guarded_question":
+            return [
+                {"role": "user", "content": [{"type": "guarded_text", "text": _BLOCKED_QUESTION}]},
+                *_conversation_ending_in("system_after_tool_result")[1:],
+            ]
         case "system_after_guarded_assistant":
             guarded_answer: Final = [{"type": "guarded_text", "text": _GUARDED_PART_TEXT}]
             return [question, {"role": "assistant", "content": guarded_answer}, reply_rule]
@@ -4543,6 +4553,8 @@ def _conversation_ending_in(shape: str) -> list[AllMessageValues]:
         ("system_after_assistant", ()),
         ("system_after_tool_result", ()),
         ("system_after_guarded_assistant", ()),
+        ("system_after_assistant_after_guarded_question", (_BLOCKED_QUESTION, CONVERTED_SYSTEM_NOTE, _REPLY_RULE)),
+        ("system_after_tool_result_after_guarded_question", (_BLOCKED_QUESTION, CONVERTED_SYSTEM_NOTE, _REPLY_RULE)),
         ("user_turn", (_REPLY_RULE,)),
         ("system_after_user_turn", ("Be brief.", CONVERTED_SYSTEM_NOTE, _REPLY_RULE)),
     ],

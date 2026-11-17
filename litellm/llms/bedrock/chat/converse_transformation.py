@@ -1703,8 +1703,9 @@ class AmazonConverseConfig(BaseConfig):
     def _guards_user_input(self, messages: Sequence[AllMessageValues], optional_params: Mapping[str, object]) -> bool:
         """Whether the request guards a user turn, the caller's or the trailing wrap's.
 
-        Only then do tool results rewritten into user turns get guarded too, since guarding them alone would shrink the
-        input check to the tool results and let a blocked word in a user turn through.
+        Only then do tool results rewritten into user turns and a converted system turn that ends the request get
+        guarded too, since guarding them alone would shrink the input check to them and let a blocked word in a user
+        turn through.
         """
         remaining: Final = messages[_leading_system_count(messages) :]
         return "guardrailConfig" in optional_params and (
@@ -2382,9 +2383,6 @@ class AmazonConverseConfig(BaseConfig):
         sends_guarded_text: Final = _sends_guarded_text(typed_optional_params, litellm_params)
         sendable_messages: Final = _sendable_messages(messages, sends_guarded_text)
         guards_user_input: Final = self._guards_user_input(sendable_messages, typed_optional_params)
-        wraps_trailing_turns: Final = guards_user_input and bool(
-            self._turns_the_trailing_wrap_guards(sendable_messages, typed_optional_params)
-        )
         keeps_full_input_check: Final = self._keeps_the_full_input_check(
             sendable_messages, typed_optional_params, guards_user_input=guards_user_input
         )
@@ -2397,7 +2395,7 @@ class AmazonConverseConfig(BaseConfig):
         )
         messages = (
             guard_input
-            if not wraps_trailing_turns
+            if not guards_user_input
             else self._convert_consecutive_user_messages_to_guarded_text(guard_input, optional_params)
         )
         ## TRANSFORMATION ##
@@ -2481,9 +2479,6 @@ class AmazonConverseConfig(BaseConfig):
         sends_guarded_text: Final = _sends_guarded_text(typed_optional_params, litellm_params)
         sendable_messages: Final = _sendable_messages(messages, sends_guarded_text)
         guards_user_input: Final = self._guards_user_input(sendable_messages, typed_optional_params)
-        wraps_trailing_turns: Final = guards_user_input and bool(
-            self._turns_the_trailing_wrap_guards(sendable_messages, typed_optional_params)
-        )
         keeps_full_input_check: Final = self._keeps_the_full_input_check(
             sendable_messages, typed_optional_params, guards_user_input=guards_user_input
         )
@@ -2496,7 +2491,7 @@ class AmazonConverseConfig(BaseConfig):
         )
         messages = (
             guard_input
-            if not wraps_trailing_turns
+            if not guards_user_input
             else self._convert_consecutive_user_messages_to_guarded_text(guard_input, optional_params)
         )
 
