@@ -28,7 +28,7 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET,
 )
 from litellm.exceptions import UnsupportedParamsError
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, lax_bool
+from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping, lax_bool
 from litellm.litellm_core_utils.prompt_templates.factory import THOUGHT_SIGNATURE_SEPARATOR
 from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
     get_file_ids_from_messages,
@@ -41,6 +41,7 @@ from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import 
 )
 from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
     is_encrypted_reasoning_block,
+    is_unsignable_thinking_block,
     native_redacted_thinking_data,
 )
 from litellm.litellm_core_utils.reasoning_effort_utils import DroppedThinkingBudget, non_numeric_thinking_budget_error
@@ -757,7 +758,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             case _:
                 return False
 
-    def thinking_betas(self, thinking: AnthropicThinkingParam | None) -> tuple[str, ...]:
+    def thinking_betas(self, thinking: object) -> tuple[str, ...]:
         return (
             *(
                 (ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER,)
@@ -2187,6 +2188,36 @@ def strip_encrypted_reasoning_blocks_from_anthropic_messages(
     return [m for m in stripped if m is not None]
 
 
+def _without_unsignable_thinking(
+    message: dict[str, object],  # mutable-ok: AnthropicMessagesRequest.messages is typed list[dict]
+) -> dict[str, object] | None:  # mutable-ok: AnthropicMessagesRequest.messages is typed list[dict]
+    fields: Final = as_str_mapping(message)
+    content: Final = as_object_list(fields.get("content")) if fields is not None else None
+    if content is None:
+        return message
+    kept: Final = [block for block in content if not is_unsignable_thinking_block(block)]
+    if len(kept) == len(content):
+        return message
+    return {**message, "content": kept} if kept else None
+
+
+def strip_unsignable_thinking_blocks_for_claude(
+    messages: list[dict[str, object]],  # mutable-ok: AnthropicMessagesRequest.messages is typed list[dict]
+    model: str,
+    base_model: str | None = None,
+) -> list[dict[str, object]]:  # mutable-ok: AnthropicMessagesRequest.messages is typed list[dict]
+    """
+    Drop thinking blocks Claude cannot verify (no signature, or another provider's
+    encrypted reasoning) before /v1/messages sends the request to a Claude model on
+    the native or chat adapter route, since Claude answers 400 to them, a pending
+    tool turn included. Other targets (DeepSeek, MiniMax, GLM) need their unsigned
+    reasoning replayed.
+    """
+    if not any("claude" in name.lower() for name in (model, base_model or "")):
+        return messages
+    return [m for m in map(_without_unsignable_thinking, messages) if m is not None]
+
+
 def strip_thinking_blocks_from_anthropic_messages_request_dict(
     data: dict[str, object],
 ) -> None:
@@ -2570,7 +2601,7 @@ def changed_server_tool_call_arguments(
 
 
 def write_anthropic_hosted_web_call_arguments(holder: Message | Delta, arguments_by_tool_id: Mapping[str, str]) -> None:
-    fields: Final = holder.provider_specific_fields
+    fields: Final[Mapping[str, object]] = holder.provider_specific_fields or {}
     if not arguments_by_tool_id or not fields or fields.get("web_search_calls") is None:
         return
     holder.provider_specific_fields = {  # rebind-ok: the hosted copy of a rewritten call must not keep its old input
@@ -2598,7 +2629,7 @@ def _jsonable_hosted_web_call(item: object, arguments_by_tool_id: Mapping[str, s
     call: Final = _with_hosted_web_call_arguments(item, arguments_by_tool_id)
     if not isinstance(call, ResponseFunctionWebSearch):
         return call
-    return _WEB_SEARCH_CALL_ADAPTER.dump_python(call, mode="json", exclude_none=True)
+    return _DECODED_JSON.validate_python(_WEB_SEARCH_CALL_ADAPTER.dump_python(call, mode="json", exclude_none=True))
 
 
 def _with_hosted_web_call_arguments(item: object, arguments_by_tool_id: Mapping[str, str]) -> object:
@@ -2613,7 +2644,7 @@ def _with_hosted_web_call_arguments(item: object, arguments_by_tool_id: Mapping[
 
 
 def without_anthropic_server_tool_calls(holder: Message, tool_ids: frozenset[str]) -> None:
-    fields: Final = holder.provider_specific_fields or {}
+    fields: Final[Mapping[str, object]] = holder.provider_specific_fields or {}
     holder.provider_specific_fields = {  # rebind-ok: a denied call must leave every copy of the message it was on
         **fields,
         "server_tool_calls": [

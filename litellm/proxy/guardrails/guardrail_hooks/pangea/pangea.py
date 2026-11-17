@@ -1,6 +1,6 @@
 # litellm/proxy/guardrails/guardrail_hooks/pangea.py
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sized
 from typing import TYPE_CHECKING, Final
 
 from fastapi import HTTPException
@@ -12,7 +12,7 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
-from litellm.litellm_core_utils.core_helpers import decoded_json_object
+from litellm.litellm_core_utils.core_helpers import decoded_json_object, iter_items, subscript
 from litellm.llms.anthropic.common_utils import (
     message_dict_with_server_tool_calls,
     message_dict_with_server_tool_calls_split_out,
@@ -40,6 +40,12 @@ if TYPE_CHECKING:
 _DECODED_JSON: Final = TypeAdapter(object)
 
 
+def _json_len(value: object) -> int:
+    if isinstance(value, Sized):
+        return len(value)
+    raise TypeError(f"object of type '{type(value).__name__}' has no len()")
+
+
 def _choice_with_message(choice: object, rewrite: Callable[[object], object]) -> object:
     mapping: Final = validated_object_mapping(choice)
     if mapping is None or "message" not in mapping:
@@ -59,9 +65,9 @@ class _TextCompletionRequest:
         return [{"role": "user", "content": self.body["prompt"]}]
 
     # This mutates the original dict, but we'll still return it anyways
-    def update_original_body(self, prompt_messages: list[dict]) -> dict[str, object]:
-        assert len(prompt_messages) == 1
-        self.body["prompt"] = prompt_messages[0]["content"]
+    def update_original_body(self, prompt_messages: object) -> dict[str, object]:
+        assert _json_len(prompt_messages) == 1
+        self.body["prompt"] = subscript(subscript(prompt_messages, 0), "content")
         return self.body
 
 
@@ -117,7 +123,7 @@ class PangeaHandler(CustomGuardrail):
             self.api_base,
         )
 
-    async def _call_pangea_ai_guard(self, api: str, payload: dict, hook_name: str) -> dict:
+    async def _call_pangea_ai_guard(self, api: str, payload: dict, hook_name: str) -> Mapping[str, object]:
         """
         Makes the API call to the Pangea AI Guard endpoint.
         The function itself will raise an error in the case that a response
@@ -153,8 +159,7 @@ class PangeaHandler(CustomGuardrail):
         )
         response.raise_for_status()
 
-        result: Final = response.json()
-        decoded_result: Final = decoded_json_object(_DECODED_JSON.validate_python(result))
+        decoded_result: Final = decoded_json_object(_DECODED_JSON.validate_python(response.json()))
         verdict: Final = decoded_json_object(decoded_result.get("result", {}))
 
         if verdict.get("blocked"):
@@ -172,7 +177,7 @@ class PangeaHandler(CustomGuardrail):
             "Pangea Guardrail (%s): Request passed. Response: %s", hook_name, verdict.get("detectors")
         )
 
-        return result
+        return decoded_result
 
     async def _async_pre_call_hook(
         self,
@@ -200,14 +205,15 @@ class PangeaHandler(CustomGuardrail):
         ai_guard_response = await self._call_pangea_ai_guard("v1beta/guard", ai_guard_payload, "async_pre_call_hook")
         add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=self.guardrail_name)
 
-        if not ai_guard_response.get("result", {}).get("transformed"):
+        pangea_result: Final = decoded_json_object(ai_guard_response.get("result", {}))
+        if not pangea_result.get("transformed"):
             return
 
-        output: Final = ai_guard_response.get("result", {}).get("output", {})
+        output: Final = pangea_result.get("output", {})
         if call_type == "text_completion" or call_type == "atext_completion":
-            data = transformer.update_original_body(output["messages"])
+            data = transformer.update_original_body(subscript(output, "messages"))
         else:
-            data["messages"] = output["messages"]
+            data["messages"] = subscript(output, "messages")
         return data
 
     @log_guardrail_information
@@ -290,12 +296,14 @@ class PangeaHandler(CustomGuardrail):
         ai_guard_response = await self._call_pangea_ai_guard("v1beta/guard", ai_guard_payload, "async_pre_call_hook")
         add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=self.guardrail_name)
 
-        if not ai_guard_response.get("result", {}).get("transformed"):
+        pangea_result: Final = decoded_json_object(ai_guard_response.get("result", {}))
+        if not pangea_result.get("transformed"):
             return
 
-        output: Final = ai_guard_response.get("result", {}).get("output", {})
+        output: Final = pangea_result.get("output", {})
         response.choices = [  # pyright: ignore[reportAttributeAccessIssue]  # Pangea returns untyped choice dicts
-            _choice_with_message(choice, message_dict_with_server_tool_calls_split_out) for choice in output["choices"]
+            _choice_with_message(choice, message_dict_with_server_tool_calls_split_out)
+            for choice in iter_items(subscript(output, "choices"))
         ]
         return response
 

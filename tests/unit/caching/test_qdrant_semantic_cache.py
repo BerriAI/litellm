@@ -995,10 +995,10 @@ def test_qdrant_semantic_cache_defaults_embedding_timeout():
 
 @pytest.mark.asyncio
 async def test_qdrant_async_embedding_truncates_off_the_event_loop(monkeypatch):
-    from tests.large_text import text
     from tests.unit.litellm_core_utils.event_loop_lag import (
         assert_loop_stayed_free,
         timed_with_loop_lags,
+        uncounted_text,
         warm_tokenizer,
     )
 
@@ -1019,7 +1019,7 @@ async def test_qdrant_async_embedding_truncates_off_the_event_loop(monkeypatch):
         _router_proxy_module(router, "sem-embed"),
     )
 
-    response, took, lags = await timed_with_loop_lags(lambda: cache._get_async_embedding(text * 100))
+    response, took, lags = await timed_with_loop_lags(lambda: cache._get_async_embedding(uncounted_text()))
 
     assert response["data"][0]["embedding"] == [0.1, 0.2]
     assert _token_count("sem-embed", router.aembedding.call_args.kwargs["input"]) == 5

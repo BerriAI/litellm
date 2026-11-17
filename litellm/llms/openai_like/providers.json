@@ -183,6 +183,12 @@
     },
     "supported_endpoints": ["/v1/chat/completions", "/v1/responses", "/v1/embeddings"]
   },
+  "ezkielyna": {
+    "base_url": "https://api.ezkielyna.store/v1",
+    "api_key_env": "EZKIELYNA_API_KEY",
+    "api_base_env": "EZKIELYNA_API_BASE",
+    "supported_endpoints": ["/v1/chat/completions", "/v1/responses"]
+  },
   "meta": {
     "base_url": "https://api.meta.ai/v1",
     "api_key_env": "META_API_KEY",
@@ -315,10 +321,16 @@
       "supports_reasoning": true
     }
   },
-  "ezkielyna": {
-    "base_url": "https://api.ezkielyna.store/v1",
-    "api_key_env": "EZKIELYNA_API_KEY",
-    "api_base_env": "EZKIELYNA_API_BASE",
-    "supported_endpoints": ["/v1/chat/completions", "/v1/responses"]
+  "vispark": {
+    "base_url": "https://api.lab.vispark.in/v1",
+    "api_key_env": "VISPARK_LAB_API_KEY",
+    "api_base_env": "VISPARK_LAB_API_BASE",
+    "param_mappings": {
+      "max_completion_tokens": "max_tokens"
+    },
+    "supported_endpoints": [
+      "/v1/chat/completions",
+      "/v1/completions"
+    ]
   }
 }

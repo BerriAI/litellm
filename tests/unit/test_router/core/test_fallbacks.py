@@ -1,8 +1,10 @@
 """Cross-group fallbacks of a router core: where the chain comes from, how it is walked, and what is raised."""
 
 from collections.abc import Callable, Mapping
+from functools import partial
 from typing import Final
 
+import httpx
 import pytest
 
 import litellm
@@ -92,6 +94,51 @@ async def test_a_failed_group_falls_back_to_the_chain_from_the_winning_source(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("field", "error"),
+    [
+        ("fallbacks", rate_limit),
+        ("context_window_fallbacks", context_window),
+        ("content_policy_fallbacks", content_policy),
+    ],
+    ids=["fallbacks", "context-window", "content-policy"],
+)
+async def test_request_fallback_string_is_ignored_and_router_chain_is_used(
+    make_core: MakeCore, host: ScriptedHost, field: str, error: Callable[[], Exception]
+) -> None:
+    core = build(make_core, **{field: [{"a": ["b"]}]})
+    host.answer("openai/a", error())
+
+    response = await complete(core, **{field: "unconfigured-scalar-model"})
+
+    assert host.deployments_called("acompletion") == ["a", "b"]
+    assert headers(response)["x-litellm-model-group"] == "b"
+
+
+@pytest.mark.parametrize(
+    ("field", "error"),
+    [
+        ("fallbacks", rate_limit),
+        ("context_window_fallbacks", context_window),
+        ("content_policy_fallbacks", content_policy),
+    ],
+    ids=["fallbacks", "context-window", "content-policy"],
+)
+def test_sync_request_fallback_string_is_ignored_and_router_chain_is_used(
+    make_core: MakeCore, host: ScriptedHost, field: str, error: Callable[[], Exception]
+) -> None:
+    core = build(make_core, **{field: [{"a": ["b"]}]})
+    host.answer("openai/a", error())
+
+    response: Final = core.completion(  # pyright: ignore[reportAttributeAccessIssue]  # endpoint method
+        model="a", messages=MESSAGES, **{field: "unconfigured-scalar-model"}
+    )
+
+    assert host.deployments_called("completion") == ["a", "b"]
+    assert headers(response)["x-litellm-model-group"] == "b"
+
+
+@pytest.mark.asyncio
 async def test_an_empty_request_fallback_list_overrides_the_constructor_chain(
     make_core: MakeCore, host: ScriptedHost
 ) -> None:
@@ -100,6 +147,19 @@ async def test_an_empty_request_fallback_list_overrides_the_constructor_chain(
 
     with pytest.raises(litellm.RateLimitError):
         await complete(core, fallbacks=[])
+
+    assert host.deployments_called("acompletion") == ["a"]
+
+
+@pytest.mark.asyncio
+async def test_a_null_request_fallback_list_overrides_the_constructor_chain(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    core = build(make_core, fallbacks=[{"a": ["b"]}])
+    host.answer("openai/a", rate_limit())
+
+    with pytest.raises(litellm.RateLimitError):
+        await complete(core, fallbacks=None)
 
     assert host.deployments_called("acompletion") == ["a"]
 
@@ -298,6 +358,71 @@ async def test_max_fallbacks_applied_by_changeset_bounds_the_walk(make_core: Mak
         await complete(core)
 
     assert host.deployments_called("acompletion") == ["a", "b"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (True, ["a", "b"]),
+        (False, ["a"]),
+        (1.0, ["a", "b"]),
+        ("1", ["a", "b"]),
+        ("1.0", ["a", "b"]),
+        (0, ["a"]),
+    ],
+    ids=["true", "false", "integral-float", "integer-string", "decimal-string", "zero"],
+)
+async def test_request_max_fallbacks_uses_bounded_integer_coercion(
+    make_core: MakeCore, host: ScriptedHost, value: object, expected: list[str]
+) -> None:
+    core = build(make_core, model_list=GROUPS_ABCD, fallbacks=CHAIN_ABCD)
+    host.answer("*", rate_limit())
+
+    with pytest.raises(litellm.RateLimitError):
+        await complete(core, max_fallbacks=value)
+
+    assert host.deployments_called("acompletion") == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("fallbacks", 3),
+        ("fallbacks", ["c", 1]),
+        ("context_window_fallbacks", [None]),
+        ("content_policy_fallbacks", [True]),
+        ("max_fallbacks", "not-an-integer"),
+        ("max_fallbacks", -1),
+        ("max_fallbacks", 2**32),
+        ("max_fallbacks", 1.5),
+        ("max_fallbacks", float("nan")),
+        ("max_fallbacks", float("inf")),
+    ],
+    ids=[
+        "fallbacks-not-a-list",
+        "fallbacks-invalid-entry",
+        "context-window-invalid-entry",
+        "content-policy-invalid-entry",
+        "max-fallbacks-invalid-string",
+        "max-fallbacks-negative",
+        "max-fallbacks-too-large",
+        "max-fallbacks-fractional",
+        "max-fallbacks-nan",
+        "max-fallbacks-infinite",
+    ],
+)
+async def test_invalid_request_fallback_fields_raise_bad_request(
+    make_core: MakeCore, host: ScriptedHost, field: str, value: object
+) -> None:
+    core = build(make_core)
+
+    with pytest.raises(litellm.BadRequestError) as raised:
+        await complete(core, **{field: value})
+
+    assert raised.value.status_code == 400
+    assert host.deployments_called("acompletion") == []
 
 
 @pytest.mark.asyncio
@@ -695,17 +820,27 @@ def unsupported_params() -> litellm.UnsupportedParamsError:
     return litellm.UnsupportedParamsError(message="nope", llm_provider="openai", model="a")
 
 
+def bad_request_with_status(status_code: int, llm_provider: str = "openai") -> litellm.BadRequestError:
+    response: Final = httpx.Response(status_code, request=httpx.Request("POST", "https://provider.test"))
+    return litellm.BadRequestError(message="rejected", llm_provider=llm_provider, model="a", response=response)
+
+
 @pytest.mark.asyncio
-@pytest.mark.parametrize("error", [bad_request, unsupported_params], ids=["bad-request", "unsupported-params"])
+@pytest.mark.parametrize(
+    "error",
+    [bad_request, partial(bad_request_with_status, 413), partial(bad_request_with_status, 422), unsupported_params],
+    ids=["bad-request", "bad-request-413", "bad-request-422", "unsupported-params"],
+)
 async def test_a_bad_request_does_not_fall_back_when_fallback_on_unsupported_params_is_off(
-    make_core: MakeCore, host: ScriptedHost, error: Callable[[], Exception]
+    make_core: MakeCore, host: ScriptedHost, error: Callable[[], litellm.BadRequestError]
 ) -> None:
     core = build(make_core, fallbacks=[{"a": ["b"]}], fallback_on_unsupported_params=False)
     host.answer("openai/a", error())
 
-    with pytest.raises(type(error())):
+    with pytest.raises(type(error())) as raised:
         await complete(core)
 
+    assert raised.value.status_code == error().status_code
     assert host.deployments_called("acompletion") == ["a"]
 
 
@@ -714,7 +849,12 @@ async def test_a_bad_request_does_not_fall_back_when_fallback_on_unsupported_par
     ("error", "fallback_on_unsupported_params"),
     [
         (bad_request, True),
+        (partial(bad_request_with_status, 413), True),
+        (partial(bad_request_with_status, 422), True),
         (unsupported_params, True),
+        (partial(bad_request_with_status, 413, llm_provider=""), False),
+        (partial(bad_request_with_status, 422, llm_provider=""), False),
+        (partial(bad_request_with_status, 409), False),
         (context_window, False),
         (content_policy, False),
         (rate_limit, False),
@@ -722,7 +862,12 @@ async def test_a_bad_request_does_not_fall_back_when_fallback_on_unsupported_par
     ],
     ids=[
         "bad-request-flag-on",
+        "bad-request-413-flag-on",
+        "bad-request-422-flag-on",
         "unsupported-params-flag-on",
+        "providerless-413-flag-off",
+        "providerless-422-flag-off",
+        "bad-request-409-flag-off",
         "context-window-flag-off",
         "content-policy-flag-off",
         "rate-limit-flag-off",
