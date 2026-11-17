@@ -7015,6 +7015,9 @@ SETTINGS_ONLY_TEMPLATES: Final[Mapping[str, Mapping[str, object]]] = MappingProx
         "short-chat-answers-with-a-deadline": MappingProxyType(
             {"temperature": 0.25, "max_tokens": 64, "timeout": 30.0, "extra_headers": {"x-template": "short"}}
         ),
+        "short-chat-answers-from-another-host": MappingProxyType(
+            {"temperature": 0.25, "max_tokens": 64, "api_base": "https://template-host.test/v1"}
+        ),
     }
 )
 

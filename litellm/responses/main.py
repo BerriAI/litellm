@@ -1,8 +1,7 @@
 import asyncio
 import contextvars
-import inspect
 import json
-from collections.abc import Callable, Coroutine, Generator, Iterable, Mapping, Sequence
+from collections.abc import Coroutine, Generator, Iterable, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from functools import partial
@@ -22,7 +21,12 @@ from litellm._logging import verbose_logger
 from litellm.completion_extras.litellm_responses_transformation.transformation import (
     LiteLLMResponsesTransformationHandler,
 )
-from litellm.constants import DEFAULT_CHAT_COMPLETION_PARAM_VALUES, request_timeout
+from litellm.constants import (
+    DEFAULT_CHAT_COMPLETION_PARAM_VALUES,
+    OPENAI_CHAT_COMPLETION_PARAMS,
+    OPENAI_CHAT_COMPLETION_TRANSPORT_PARAMS,
+    request_timeout,
+)
 from litellm.exceptions import UnsupportedParamsError
 from litellm.integrations.anthropic_cache_control_hook import (
     CARRY_UNMATCHED_MESSAGE_POINTS,
@@ -663,6 +667,9 @@ def previous_response_client_ids(previous_response_id: str | None, kwargs: Mappi
 
 
 _RESPONSES_REQUEST_FIELDS: Final = frozenset(get_type_hints(ResponsesAPIOptionalRequestParams))
+_CHAT_SETTINGS_A_TEMPLATE_PASSES_TO_THE_BRIDGED_CALL: Final = frozenset(OPENAI_CHAT_COMPLETION_PARAMS).difference(
+    OPENAI_CHAT_COMPLETION_TRANSPORT_PARAMS, _RESPONSES_REQUEST_FIELDS
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -795,7 +802,11 @@ def _chat_bridge_prompt_kwargs(
         return MappingProxyType({})
     return MappingProxyType(
         {
-            **{key: value for key, value in changed_params.items() if key not in _SETTINGS_THE_RESPONSES_CALL_OWNS},
+            **{
+                key: value
+                for key, value in changed_params.items()
+                if key in _CHAT_SETTINGS_A_TEMPLATE_PASSES_TO_THE_BRIDGED_CALL
+            },
             **PROMPT_TEMPLATE_APPLIED,
         }
     )
@@ -1973,16 +1984,6 @@ def responses(
             completion_kwargs=local_vars,
             extra_kwargs=kwargs,
         )
-
-
-_SETTINGS_THE_RESPONSES_CALL_OWNS: Final = _RESPONSES_REQUEST_FIELDS.union(
-    inspect.signature(
-        cast(  # cast-ok: the @client decorator is untyped
-            Callable[..., object],
-            responses,
-        )
-    ).parameters
-)
 
 
 @client

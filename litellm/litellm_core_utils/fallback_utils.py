@@ -126,14 +126,19 @@ def _provider_of(model: str, custom_llm_provider: object) -> str | None:
 
 
 def _inherited_kwargs(
-    base_kwargs: Mapping[str, object], original_model: str, model: str, custom_llm_provider: object
+    base_kwargs: Mapping[str, object], original_model: str, model: str, overrides: Mapping[str, object]
 ) -> Mapping[str, object]:
     if model == original_model:
         return base_kwargs
     requested_provider: Final = base_kwargs.get("custom_llm_provider")
     original_provider: Final = _provider_of(original_model, requested_provider)
-    provider: Final = _provider_of(model, custom_llm_provider) or _provider_of(model, requested_provider)
-    switches_provider: Final = original_provider is None or original_provider != provider
+    provider: Final = _provider_of(model, overrides.get("custom_llm_provider")) or _provider_of(
+        model, requested_provider
+    )
+    its_own_template_picks_the_provider: Final = "prompt_id" in overrides and routes_through_a_prompt_manager(model)
+    switches_provider: Final = (
+        its_own_template_picks_the_provider or original_provider is None or original_provider != provider
+    )
     model_bound: Final = (
         _MODEL_BOUND_PARAMS | {"custom_llm_provider"} if routes_through_a_prompt_manager(model) else _MODEL_BOUND_PARAMS
     )
@@ -153,7 +158,7 @@ def _fallback_attempt(plan: _FallbackPlan, fallback: str | Mapping[str, object])
     overrides: Final = _NO_OVERRIDES if isinstance(fallback, str) else fallback
     model: Final = fallback if isinstance(fallback, str) else str(overrides.get("model", plan.original_model))
     inherited: Final = _without_the_applied_prompt_when_the_fallback_renders_its_own(
-        _inherited_kwargs(plan.base_kwargs, plan.original_model, model, overrides.get("custom_llm_provider")),
+        _inherited_kwargs(plan.base_kwargs, plan.original_model, model, overrides),
         model,
         overrides,
     )

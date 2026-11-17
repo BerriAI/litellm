@@ -984,6 +984,22 @@ OPENAI_CHAT_COMPLETION_PARAMS: Final = [
     "store",
 ]
 
+OPENAI_CHAT_COMPLETION_TRANSPORT_PARAMS: Final = frozenset(
+    {
+        "api_base",
+        "api_key",
+        "api_version",
+        "deployment_id",
+        "organization",
+        "base_url",
+        "default_headers",
+        "timeout",
+        "request_timeout",
+        "max_retries",
+        "extra_headers",
+    }
+)
+
 OPENAI_TRANSCRIPTION_PARAMS: Final = [
     "language",
     "languages",
