@@ -78,9 +78,7 @@ _test_app.include_router(router)
 def client():
     """Test client with a fixed authenticated user (bypasses the session
     cookie check by overriding the dep)."""
-    _test_app.dependency_overrides[_byok_session_auth] = lambda: UserAPIKeyAuth(
-        api_key="hashed", user_id="user-123"
-    )
+    _test_app.dependency_overrides[_byok_session_auth] = lambda: UserAPIKeyAuth(api_key="hashed", user_id="user-123")
     try:
         yield TestClient(_test_app, raise_server_exceptions=False)
     finally:
@@ -134,7 +132,11 @@ def test_byok_challenge_discovers_api_key_flow(monkeypatch, byok_first):
     [
         ("", "", "/v1/mcp/oauth/protected-resource"),
         ("", "/proxy", "/proxy/v1/mcp/oauth/protected-resource"),
-        ("https://gateway.example.com/proxy", "/proxy", "https://gateway.example.com/proxy/v1/mcp/oauth/protected-resource"),
+        (
+            "https://gateway.example.com/proxy",
+            "/proxy",
+            "https://gateway.example.com/proxy/v1/mcp/oauth/protected-resource",
+        ),
     ],
 )
 def test_byok_challenge_preserves_external_base(monkeypatch, base_url, root_path, expected):
@@ -1020,9 +1022,7 @@ def test_authorize_post_rejects_replayed_byok_session_token(unauthenticated_clie
             "real-master-key",
             algorithm="HS256",
         )
-        resp = _authorize_post_with_cookie(
-            unauthenticated_client, byok_session, api_key="k"
-        )
+        resp = _authorize_post_with_cookie(unauthenticated_client, byok_session, api_key="k")
     assert resp.status_code == 401
 
 
@@ -1093,9 +1093,7 @@ def test_authorize_post_rejects_cookie_missing_login_method(unauthenticated_clie
             "real-master-key",
             algorithm="HS256",
         )
-        resp = _authorize_post_with_cookie(
-            unauthenticated_client, malformed, api_key="k"
-        )
+        resp = _authorize_post_with_cookie(unauthenticated_client, malformed, api_key="k")
     assert resp.status_code == 401
 
 
@@ -1484,9 +1482,7 @@ def test_validate_trusted_redirect_uri_rejects_unlisted_native_callback(
     )
     req = _make_trusted_request("http://localhost:4000/")
     with pytest.raises(HTTPException) as exc:
-        validate_trusted_redirect_uri(
-            req, "cursor://anysphere.cursor-mcp/oauth/callback"
-        )
+        validate_trusted_redirect_uri(req, "cursor://anysphere.cursor-mcp/oauth/callback")
     assert exc.value.status_code == 400
 
 
@@ -1516,9 +1512,7 @@ def test_validate_trusted_redirect_uri_rejects_native_callback_with_fragment():
 
     req = _make_trusted_request("http://localhost:4000/")
     with pytest.raises(HTTPException) as exc:
-        validate_trusted_redirect_uri(
-            req, "cursor://anysphere.cursor-mcp/oauth/callback#frag"
-        )
+        validate_trusted_redirect_uri(req, "cursor://anysphere.cursor-mcp/oauth/callback#frag")
     assert exc.value.status_code == 400
 
 
@@ -1569,13 +1563,9 @@ def test_validate_trusted_redirect_uri_native_wildcard_respects_path_boundary(
         "cursor://anysphere.cursor-mcp/oauth/callback*",
     )
     req = _make_trusted_request("http://localhost:4000/")
-    validate_trusted_redirect_uri(
-        req, "cursor://anysphere.cursor-mcp/oauth/callback/extra"
-    )
+    validate_trusted_redirect_uri(req, "cursor://anysphere.cursor-mcp/oauth/callback/extra")
     with pytest.raises(HTTPException):
-        validate_trusted_redirect_uri(
-            req, "cursor://anysphere.cursor-mcp/oauth/callback-2"
-        )
+        validate_trusted_redirect_uri(req, "cursor://anysphere.cursor-mcp/oauth/callback-2")
 
 
 def test_validate_trusted_redirect_uri_native_wildcard_directory_prefix(
@@ -1643,18 +1633,14 @@ def test_validate_trusted_redirect_uri_rejects_userinfo(monkeypatch):
     monkeypatch.setenv("MCP_TRUSTED_REDIRECT_ORIGINS", "app.example.com")
     req = _make_trusted_request("https://llm.other-proxy.com/")
     with pytest.raises(HTTPException) as exc:
-        validate_trusted_redirect_uri(
-            req, "https://app.example.com@attacker.example/cb"
-        )
+        validate_trusted_redirect_uri(req, "https://app.example.com@attacker.example/cb")
     assert exc.value.status_code == 400
 
     # (3) Same-origin path — userinfo that mimics the proxy's host.
     monkeypatch.delenv("MCP_TRUSTED_REDIRECT_ORIGINS", raising=False)
     req = _make_trusted_request("https://llm.example.com/")
     with pytest.raises(HTTPException) as exc:
-        validate_trusted_redirect_uri(
-            req, "https://llm.example.com@attacker.example/cb"
-        )
+        validate_trusted_redirect_uri(req, "https://llm.example.com@attacker.example/cb")
     assert exc.value.status_code == 400
 
     # (4) Loopback path — userinfo that mimics 127.0.0.1.
@@ -1942,9 +1928,7 @@ def test_parse_trusted_redirect_origins_drops_bare_path_entries(monkeypatch):
         _parse_trusted_redirect_origins,
     )
 
-    monkeypatch.setenv(
-        "MCP_TRUSTED_REDIRECT_ORIGINS", "https:///, /foo, app.example.com"
-    )
+    monkeypatch.setenv("MCP_TRUSTED_REDIRECT_ORIGINS", "https:///, /foo, app.example.com")
     # The two malformed entries drop out; only the real host survives.
     assert _parse_trusted_redirect_origins() == ["app.example.com"]
 
@@ -2002,121 +1986,53 @@ async def test_authenticated_browser_identity_checks_embedded_session(
 
 
 class _SharedStore:
-    """Stands in for redis_usage_cache: one store every worker sees."""
+    """Stands in for redis_usage_cache: one store every worker sees. ``down`` holds the
+    (operation, key prefix) pairs that fault, each the way the real cache faults for that call."""
 
-    def __init__(self, fail_increment: bool = False, fail_window: bool = False) -> None:
-        self.values: dict[str, Any] = {}
+    def __init__(self, down: set[tuple[str, str]] | None = None) -> None:
+        self.values: dict[str, str] = {}
         self.counts: dict[str, int] = {}
-        self.fail_increment = fail_increment
-        self.fail_window = fail_window
+        self.down: set[tuple[str, str]] = down or set()
 
-    async def async_set_cache(self, key: str, value: Any, **_: Any) -> None:
+    def _fails(self, operation: str, key: str) -> bool:
+        return any(operation == op and key.startswith(prefix) for op, prefix in self.down)
+
+    async def async_set_cache(self, key: str, value: str, ttl: int) -> bool | None:
+        if self._fails("set", key):
+            return None
         self.values[key] = value
+        return True
 
-    async def async_get_cache(self, key: str, **_: Any) -> Any:
+    async def async_get_cache(self, key: str, raise_on_error: bool = False) -> str | None:
+        if self._fails("get", key) and raise_on_error:
+            raise ConnectionError("redis down")
         return self.values.get(key)
 
     async def async_delete_cache(self, key: str) -> None:
+        if self._fails("delete", key):
+            raise ConnectionError("redis down")
         self.values.pop(key, None)
 
-    async def async_increment(self, key: str, value: int, **_: Any) -> int:
-        if self.fail_increment and key.startswith("mcp_byok_auth_code_claim:"):
-            raise ConnectionError("redis down")
-        if self.fail_window and key.startswith("mcp_byok_auth_code_window:"):
+    async def async_increment(self, key: str, value: int, ttl: int) -> int:
+        if self._fails("increment", key):
             raise ConnectionError("redis down")
         self.counts[key] = self.counts.get(key, 0) + value
         return self.counts[key]
 
 
-def _authorize(client, challenge: str) -> str:
-    from urllib.parse import parse_qs, urlparse
+class _CredentialTable:
+    def __init__(self) -> None:
+        self.rows: dict[tuple[str, str], str] = {}
 
-    resp = client.post(
-        "/v1/mcp/oauth/authorize",
-        data={
-            "client_id": "user-123",
-            "redirect_uri": "http://127.0.0.1:3000/callback",
-            "code_challenge": challenge,
-            "code_challenge_method": "S256",
-            "state": "st",
-            "server_id": "server-xyz",
-            "api_key": "sk-supersecretkey",
-        },
-        follow_redirects=False,
-    )
-    assert resp.status_code == 302
-    return parse_qs(urlparse(resp.headers["location"]).query)["code"][0]
+    async def upsert(self, where: dict[str, dict[str, str]], data: dict[str, dict[str, str]]) -> None:
+        created: Final = data["create"]
+        self.rows[(created["user_id"], created["server_id"])] = created["credential_b64"]
 
 
-async def _redeem(code: str, verifier: str, store_credential: AsyncMock):
-    from litellm.proxy.mcp_server.byok_oauth_endpoints import byok_token
-
-    with (
-        patch("litellm.proxy.mcp_server.byok_oauth_endpoints.store_user_credential", store_credential),
-        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
-        patch("litellm.proxy.proxy_server.master_key", "test_master_key_value"),
-        patch("litellm.proxy.mcp_server.server._invalidate_byok_cred_cache", AsyncMock(), create=True),
-    ):
-        return await byok_token(
-            request=MagicMock(),
-            grant_type="authorization_code",
-            code=code,
-            redirect_uri="http://127.0.0.1:3000/callback",
-            code_verifier=verifier,
-            client_id="user-123",
-        )
-
-
-@pytest.mark.asyncio
-async def test_a_code_issued_on_one_worker_is_redeemed_on_another_through_the_shared_store(client, monkeypatch):
-    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-test-salt-key")
-    shared = _SharedStore()
-    verifier = "a_code_verifier_that_is_long_enough_for_pkce_43"
-    with patch("litellm.proxy.proxy_server.redis_usage_cache", shared):
-        code = _authorize(client, _make_challenge(verifier))
-        assert code not in _byok_auth_codes
-        (sealed,) = shared.values.values()
-        assert "sk-supersecretkey" not in json.dumps(sealed)
-
-        store_credential = AsyncMock()
-        result = await _redeem(code, verifier, store_credential)
-    assert result.status_code == 200
-    assert json.loads(result.body)["access_token"]
-    store_credential.assert_awaited_once()
-    assert store_credential.await_args.kwargs["credential"] == "sk-supersecretkey"
-    assert shared.values == {}
-
-
-@pytest.mark.asyncio
-async def test_a_shared_code_is_redeemed_only_once(client, monkeypatch):
-    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-test-salt-key")
-    shared = _SharedStore()
-    verifier = "a_code_verifier_that_is_long_enough_for_pkce_43"
-    with patch("litellm.proxy.proxy_server.redis_usage_cache", shared):
-        code = _authorize(client, _make_challenge(verifier))
-        sealed = dict(shared.values)
-        first = await _redeem(code, verifier, AsyncMock())
-        # a concurrent redemption that read the record before the first one deleted it
-        shared.values.update(sealed)
-        store_credential = AsyncMock()
-        second = await _redeem(code, verifier, store_credential)
-    assert first.status_code == 200
-    assert second.status_code == 400
-    assert json.loads(second.body)["error"] == "invalid_grant"
-    store_credential.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_a_shared_code_is_not_redeemed_when_the_single_use_claim_cannot_be_recorded(client, monkeypatch):
-    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-test-salt-key")
-    shared = _SharedStore(fail_increment=True)
-    verifier = "a_code_verifier_that_is_long_enough_for_pkce_43"
-    with patch("litellm.proxy.proxy_server.redis_usage_cache", shared):
-        code = _authorize(client, _make_challenge(verifier))
-        store_credential = AsyncMock()
-        result = await _redeem(code, verifier, store_credential)
-    assert result.status_code == 400
-    store_credential.assert_not_awaited()
+_VERIFIER: Final = "a_code_verifier_that_is_long_enough_for_pkce_43"
+_SHARED_CODE: Final = "mcp_byok_auth_code:"
+_SHARED_CLAIM: Final = "mcp_byok_auth_code_claim:"
+_SHARED_WINDOW: Final = "mcp_byok_auth_code_window:"
 
 
 def _authorize_as(user_id: str) -> Any:
@@ -2124,9 +2040,11 @@ def _authorize_as(user_id: str) -> Any:
     return TestClient(_test_app, raise_server_exceptions=False).post(
         "/v1/mcp/oauth/authorize",
         data={
+            "client_id": "user-123",
             "redirect_uri": "http://127.0.0.1:3000/callback",
-            "code_challenge": _make_challenge("a_code_verifier_that_is_long_enough_for_pkce_43"),
+            "code_challenge": _make_challenge(_VERIFIER),
             "code_challenge_method": "S256",
+            "state": "st",
             "server_id": "server-xyz",
             "api_key": "sk-supersecretkey",
         },
@@ -2134,10 +2052,121 @@ def _authorize_as(user_id: str) -> Any:
     )
 
 
-def test_one_user_at_the_shared_pending_code_cap_does_not_block_other_users(client, monkeypatch):
+def _issued_code(user_id: str = "user-123") -> str:
+    from urllib.parse import parse_qs, urlparse
+
+    resp: Final = _authorize_as(user_id)
+    assert resp.status_code == 302
+    return parse_qs(urlparse(resp.headers["location"]).query)["code"][0]
+
+
+async def _redeem(code: str, credentials: _CredentialTable) -> Any:
+    from types import SimpleNamespace
+
+    from litellm.proxy.mcp_server.byok_oauth_endpoints import byok_token
+
+    prisma: Final = SimpleNamespace(db=SimpleNamespace(litellm_mcpusercredentials=credentials))
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", prisma),
+        patch("litellm.proxy.proxy_server.master_key", "test_master_key_value"),
+    ):
+        return await byok_token(
+            request=MagicMock(),
+            grant_type="authorization_code",
+            code=code,
+            redirect_uri="http://127.0.0.1:3000/callback",
+            code_verifier=_VERIFIER,
+            client_id="user-123",
+        )
+
+
+def _stored_credential(credentials: _CredentialTable) -> str | None:
+    from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
+
+    sealed: Final = credentials.rows.get(("user-123", "server-xyz"))
+    return None if sealed is None else decrypt_value_helper(sealed, "credential")
+
+
+@pytest.fixture
+def salted(monkeypatch):
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-test-salt-key")
+
+
+@pytest.mark.asyncio
+async def test_a_code_issued_on_one_worker_is_redeemed_on_another_through_the_shared_store(client, salted):
+    shared: Final = _SharedStore()
+    credentials: Final = _CredentialTable()
+    with patch("litellm.proxy.proxy_server.redis_usage_cache", shared):
+        code: Final = _issued_code()
+        sealed_records: Final = tuple(shared.values.values())
+        result: Final = await _redeem(code, credentials)
+    assert code not in _byok_auth_codes
+    assert len(sealed_records) == 1
+    assert "sk-supersecretkey" not in sealed_records[0]
+    assert result.status_code == 200
+    assert json.loads(result.body)["access_token"]
+    assert _stored_credential(credentials) == "sk-supersecretkey"
+    assert shared.values == {}
+
+
+@pytest.mark.asyncio
+async def test_a_shared_code_is_redeemed_only_once(client, salted):
+    shared: Final = _SharedStore()
+    with patch("litellm.proxy.proxy_server.redis_usage_cache", shared):
+        code: Final = _issued_code()
+        sealed: Final = dict(shared.values)
+        first: Final = await _redeem(code, _CredentialTable())
+        shared.values.update(sealed)
+        late_credentials: Final = _CredentialTable()
+        second: Final = await _redeem(code, late_credentials)
+    assert first.status_code == 200
+    assert second.status_code == 400
+    assert json.loads(second.body)["error"] == "invalid_grant"
+    assert late_credentials.rows == {}
+
+
+@pytest.mark.parametrize(
+    "fault", [("get", _SHARED_CODE), ("increment", _SHARED_CLAIM)], ids=["record read", "single-use claim"]
+)
+@pytest.mark.asyncio
+async def test_a_store_fault_during_redemption_is_retryable_and_keeps_the_code(client, salted, fault):
+    shared: Final = _SharedStore()
+    credentials: Final = _CredentialTable()
+    with patch("litellm.proxy.proxy_server.redis_usage_cache", shared):
+        code: Final = _issued_code()
+        shared.down.add(fault)
+        during_outage: Final = await _redeem(code, credentials)
+        shared.down.clear()
+        after_outage: Final = await _redeem(code, credentials)
+    assert during_outage.status_code == 503
+    assert json.loads(during_outage.body)["error"] == "temporarily_unavailable"
+    assert after_outage.status_code == 200
+    assert _stored_credential(credentials) == "sk-supersecretkey"
+
+
+@pytest.mark.asyncio
+async def test_a_failed_delete_after_the_claim_still_stores_the_key_and_issues_a_token(client, salted):
+    shared: Final = _SharedStore(down={("delete", _SHARED_CODE)})
+    credentials: Final = _CredentialTable()
+    with patch("litellm.proxy.proxy_server.redis_usage_cache", shared):
+        code: Final = _issued_code()
+        result: Final = await _redeem(code, credentials)
+    assert result.status_code == 200
+    assert json.loads(result.body)["access_token"]
+    assert _stored_credential(credentials) == "sk-supersecretkey"
+
+
+def test_no_code_is_handed_out_when_the_shared_store_drops_the_write(client, salted):
+    shared: Final = _SharedStore(down={("set", _SHARED_CODE)})
+    with patch("litellm.proxy.proxy_server.redis_usage_cache", shared):
+        resp: Final = _authorize_as("user-123")
+    assert resp.status_code == 503
+    assert "location" not in resp.headers
+
+
+def test_one_user_at_the_shared_pending_code_cap_does_not_block_other_users(client, salted):
     from litellm.proxy.mcp_server.byok_oauth_endpoints import _AUTH_CODES_PER_USER_MAX
 
-    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-test-salt-key")
     shared: Final = _SharedStore()
     with patch("litellm.proxy.proxy_server.redis_usage_cache", shared):
         issued: Final = [_authorize_as("busy-user").status_code for _ in range(_AUTH_CODES_PER_USER_MAX)]
@@ -2149,9 +2178,8 @@ def test_one_user_at_the_shared_pending_code_cap_does_not_block_other_users(clie
     assert other.status_code == 302
 
 
-def test_no_shared_code_is_issued_when_the_pending_code_counter_is_unavailable(client, monkeypatch):
-    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-test-salt-key")
-    shared: Final = _SharedStore(fail_window=True)
+def test_no_shared_code_is_issued_when_the_pending_code_counter_is_unavailable(client, salted):
+    shared: Final = _SharedStore(down={("increment", _SHARED_WINDOW)})
     with patch("litellm.proxy.proxy_server.redis_usage_cache", shared):
         resp: Final = _authorize_as("user-123")
     assert resp.status_code == 503
@@ -2161,12 +2189,12 @@ def test_no_shared_code_is_issued_when_the_pending_code_counter_is_unavailable(c
 def test_an_oversized_api_key_is_rejected_before_a_code_is_issued(client):
     from litellm.proxy.mcp_server.byok_oauth_endpoints import _MAX_API_KEY_LENGTH
 
-    resp = client.post(
+    resp: Final = client.post(
         "/v1/mcp/oauth/authorize",
         data={
             "client_id": "user-123",
             "redirect_uri": "http://127.0.0.1:3000/callback",
-            "code_challenge": _make_challenge("a_code_verifier_that_is_long_enough_for_pkce_43"),
+            "code_challenge": _make_challenge(_VERIFIER),
             "code_challenge_method": "S256",
             "state": "st",
             "server_id": "server-xyz",
