@@ -21,7 +21,7 @@ from litellm.integrations.opentelemetry_utils.base_otel_llm_obs_attributes impor
     safe_set_attribute,
 )
 from litellm.litellm_core_utils.core_helpers import has_attributes, require_attributes
-from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+from litellm.litellm_core_utils.safe_json_dumps import jsonable_or_str, safe_dumps
 from litellm.types.integrations.weave_otel import WeaveOtelConfig, WeaveSpanAttributes
 from litellm.types.utils import StandardCallbackDynamicParams
 
@@ -74,7 +74,11 @@ class WeaveLLMObsOTELAttributes(BaseLLMObsOTELAttributes):
             prompt["functions"] = functions
         if tools is not None:
             prompt["tools"] = tools
-        safe_set_attribute(span, OpenInferenceSpanAttributes.INPUT_VALUE, json.dumps(prompt))
+        safe_set_attribute(
+            span,
+            OpenInferenceSpanAttributes.INPUT_VALUE,
+            json.dumps(prompt, default=jsonable_or_str),
+        )
 
 
 def _set_weave_specific_attributes(span: Span, kwargs: Mapping[str, object], response_obj: object):

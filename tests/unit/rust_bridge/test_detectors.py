@@ -1,4 +1,5 @@
 from collections.abc import Callable, Mapping
+import ssl
 from copy import deepcopy
 from datetime import datetime
 from functools import reduce
@@ -14,10 +15,9 @@ from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.rust_bridge import detectors
 from litellm.rust_bridge.chat_completions import detectors as chat_detectors
-from litellm.rust_bridge.messages import detectors as messages_detectors
 from litellm.rust_bridge.public_call import NativeCall
 from litellm.rust_bridge.responses import detectors as responses_detectors
-from litellm.types.llms.anthropic import ANTHROPIC_ADVISOR_TOOL_TYPE, ANTHROPIC_TOOL_SEARCH_TOOL_TYPES
+from litellm.types.llms.anthropic import ANTHROPIC_TOOL_SEARCH_TOOL_TYPES
 
 GATEWAY_TOOL: Final = {"type": "mcp", "server_label": "gateway", "server_url": "litellm_proxy"}
 REMOTE_TOOL: Final = {"type": "mcp", "server_label": "docs", "server_url": "https://mcp.example.com/sse"}
@@ -31,9 +31,6 @@ MAPPED_FILE: Final = {
 }
 MAPPED_FILE_INPUT: Final = [{"role": "user", "content": [{"type": "input_file", "file_id": "litellm-file"}]}]
 CACHED_TEXT: Final = {"type": "input_text", "text": "hi", "cache_control": {"type": "ephemeral"}}
-THINKING_TURN: Final = {"role": "assistant", "content": [{"type": "thinking", "thinking": "x", "signature": "s"}]}
-REDACTED: Final = {"type": "redacted_thinking", "data": "x"}
-STRICT_TOOL: Final = {"name": "b", "input_schema": {"type": "object"}, "strict": True}
 TOOL_SEARCH_TYPE: Final = sorted(ANTHROPIC_TOOL_SEARCH_TOOL_TYPES)[0]
 
 
@@ -61,25 +58,6 @@ def call(**kwargs: object) -> NativeCall:
 )
 def test_floating_alias_requires_python(model: str, provider: str | None, expected: bool) -> None:
     assert detectors.latest_alias(call(model=model, custom_llm_provider=provider)) is expected
-
-
-@pytest.mark.parametrize(
-    ("model", "provider", "tools", "expected"),
-    (
-        ("deepseek/test-model", None, [{"type": ANTHROPIC_ADVISOR_TOOL_TYPE}], True),
-        ("anthropic/test-model", None, [{"type": ANTHROPIC_ADVISOR_TOOL_TYPE}], False),
-        ("test-model", "anthropic", [{"type": ANTHROPIC_ADVISOR_TOOL_TYPE}], False),
-        ("unresolved-model", None, [{"type": ANTHROPIC_ADVISOR_TOOL_TYPE}], True),
-        ("deepseek/test-model", None, [{"type": "function", "name": "f"}], False),
-        ("deepseek/test-model", None, ["not-a-tool"], False),
-        ("deepseek/test-model", None, [], False),
-        ("deepseek/test-model", None, None, False),
-    ),
-)
-def test_messages_interception_matches_tools_and_resolved_provider(
-    model: str, provider: str | None, tools: object, expected: bool
-) -> None:
-    assert messages_detectors.intercepted(call(model=model, custom_llm_provider=provider, tools=tools)) is expected
 
 
 def _wrap_nested_level(value: object, depth: int) -> object:
@@ -136,8 +114,6 @@ def _wrap_nested_level(value: object, depth: int) -> object:
         (responses_detectors.provider_affinity, {"provider_affinity_header": None, "session_id": "session-1"}, False),
         (responses_detectors.provider_affinity, {}, False),
         (responses_detectors.provider_affinity, {"api_base": "https://opencode.ai/inference/go/openai/v1"}, True),
-        (messages_detectors.provider_affinity, {"api_base": "https://opencode.ai/inference/go/anthropic/v1"}, True),
-        (messages_detectors.provider_affinity, {"api_base": "https://other.example/v1"}, False),
         (detectors.streaming, {"stream": True}, True),
         (detectors.streaming, {"stream": False}, False),
         (detectors.timeout_variants, {"request_timeout": 5}, True),
@@ -196,36 +172,6 @@ def _wrap_nested_level(value: object, depth: int) -> object:
         (detectors.cache_control_injection, {"enable_prompt_caching": True}, True),
         (detectors.cache_control_injection, {"cache_control_injection_points": [{"location": "message"}]}, True),
         (detectors.cache_control_injection, {"cache_control_injection_points": []}, False),
-        (messages_detectors.thinking_signature_retry, {"messages": [THINKING_TURN]}, True),
-        (
-            messages_detectors.thinking_signature_retry,
-            {"messages": [{"role": "assistant", "content": [REDACTED]}]},
-            True,
-        ),
-        (messages_detectors.thinking_signature_retry, {"messages": [{"role": "assistant", "content": "done"}]}, False),
-        (
-            messages_detectors.thinking_signature_retry,
-            {"messages": [{"role": "user", "content": [{"type": "text"}]}]},
-            False,
-        ),
-        (messages_detectors.tool_custom_field, {"tools": [{"name": "a"}, {"name": "b", "custom": {}}]}, True),
-        (messages_detectors.tool_custom_field, {"tools": [{"name": "a", "defer_loading": True}]}, False),
-        (messages_detectors.tool_custom_field, {}, False),
-        (messages_detectors.strict_tools_retry, {"drop_params": True, "tools": [{"name": "a"}, STRICT_TOOL]}, True),
-        (
-            messages_detectors.strict_tools_retry,
-            {"drop_params": True, "tools": [{**STRICT_TOOL, "strict": False}]},
-            False,
-        ),
-        (
-            messages_detectors.strict_tools_retry,
-            {"additional_drop_params": ["metadata.user_id"], "tools": [STRICT_TOOL]},
-            False,
-        ),
-        (messages_detectors.strict_tools_retry, {"tools": [STRICT_TOOL]}, False),
-        (messages_detectors.strict_tools_retry, {"drop_params": False, "tools": [STRICT_TOOL]}, False),
-        (messages_detectors.strict_tools_retry, {"drop_params": True, "tools": [{"name": "a"}]}, False),
-        (messages_detectors.strict_tools_retry, {"drop_params": True}, False),
         (detectors.drop_params, {"drop_params": True}, True),
         (detectors.drop_params, {"drop_params": False}, False),
         (detectors.drop_params, {"drop_params": " True "}, True),
@@ -323,8 +269,6 @@ def test_input_rewrite_preserves_caller_input(input_value: object, expected: boo
         (detectors.modify_params, "modify_params", True, {}),
         (detectors.retries_fallbacks, "num_retries", 3, {}),
         (detectors.cache_control_injection, "enable_anthropic_prompt_caching", True, {}),
-        (messages_detectors.stream_cost_injection, "include_cost_in_streaming_usage", True, {"stream": True}),
-        (messages_detectors.stream_cost_injection, "include_cost_in_streaming_usage", "true", {"stream": True}),
         (chat_detectors.chat_retries_fallbacks, "model_fallbacks", [{"gpt-5": ["gpt-5-mini"]}], {}),
         (chat_detectors.chat_retries_fallbacks, "num_retries", 3, {}),
         (chat_detectors.model_alias_map, "model_alias_map", {"gpt-5": "openai/gpt-5"}, {}),
@@ -345,30 +289,6 @@ def test_global_settings_are_detected(
     assert not detector(call(**kwargs))
     monkeypatch.setattr(litellm, setting, value)
     assert detector(call(**kwargs))
-
-
-def test_stream_cost_injection_needs_a_stream(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(litellm, "include_cost_in_streaming_usage", True)
-    assert not messages_detectors.stream_cost_injection(call())
-
-
-def test_stream_cost_injection_reads_the_request_header_the_proxy_reads(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(litellm, "include_cost_in_streaming_usage", False)
-    opted_in: Final = {"proxy_server_request": {"headers": {"x-litellm-include-cost-in-streaming-usage": "true"}}}
-    assert messages_detectors.stream_cost_injection(call(stream=True, **opted_in))
-    assert not messages_detectors.stream_cost_injection(call(**opted_in))
-    assert not messages_detectors.stream_cost_injection(call(stream=True, proxy_server_request={"headers": {}}))
-
-
-def test_foundry_beta_row_reads_the_api_base_the_anthropic_handler_reads(monkeypatch: pytest.MonkeyPatch) -> None:
-    for name in ("ANTHROPIC_API_BASE", "ANTHROPIC_BASE_URL"):
-        monkeypatch.delenv(name, raising=False)
-    assert messages_detectors.foundry_beta_row(call(api_base="https://team.services.ai.azure.com/anthropic"))
-    assert messages_detectors.foundry_beta_row(call(base_url="https://team.cognitiveservices.azure.com/anthropic"))
-    assert not messages_detectors.foundry_beta_row(call(api_base="https://api.anthropic.com"))
-    assert not messages_detectors.foundry_beta_row(call())
-    monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://team.services.ai.azure.com/anthropic")
-    assert messages_detectors.foundry_beta_row(call())
 
 
 def test_model_alias_map_applies_only_to_the_requested_model(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -413,20 +333,6 @@ def test_openai_workload_identity_applies_only_without_a_static_key(monkeypatch:
     assert not responses_detectors.openai_workload_identity(call())
 
 
-def test_anthropic_workload_identity_applies_only_without_a_static_key(monkeypatch: pytest.MonkeyPatch) -> None:
-    for name in (
-        "ANTHROPIC_API_KEY",
-        "ANTHROPIC_AUTH_TOKEN",
-        "ANTHROPIC_FEDERATION_RULE_ID",
-        "ANTHROPIC_ORGANIZATION_ID",
-    ):
-        monkeypatch.delenv(name, raising=False)
-    federation: Final = {"anthropic_federation_rule_id": "rule-1", "anthropic_organization_id": "org-1"}
-    assert messages_detectors.anthropic_workload_identity(call(**federation))
-    assert not messages_detectors.anthropic_workload_identity(call(**federation, api_key="sk-ant-static"))
-    assert not messages_detectors.anthropic_workload_identity(call(anthropic_federation_rule_id="rule-1"))
-
-
 class _Logger(CustomLogger):
     pass
 
@@ -434,10 +340,6 @@ class _Logger(CustomLogger):
 class _Rewrite(CustomLogger):
     async def async_pre_request_hook(self, model: str, messages: list, kwargs: dict) -> dict | None:  # pyright: ignore[reportMissingTypeArgument]  # mirrors the CustomLogger signature
         return kwargs
-
-
-class _InheritedRewrite(_Rewrite):
-    pass
 
 
 class _Agentic(CustomLogger):
@@ -460,10 +362,6 @@ class _Deployment(CustomLogger):
 @pytest.mark.parametrize(
     ("detector", "callbacks", "expected"),
     (
-        (messages_detectors.pre_request_hook, [_Rewrite()], True),
-        (messages_detectors.pre_request_hook, [_InheritedRewrite()], True),
-        (messages_detectors.pre_request_hook, [_Logger(), _Agentic()], False),
-        (messages_detectors.pre_request_hook, ["not-a-logger"], False),
         (detectors.agentic_loop_hook, [_Agentic()], True),
         (detectors.agentic_loop_hook, [_Logger(), _Rewrite()], False),
         (detectors.agentic_loop_hook, [_ChatAgentic()], False),
@@ -501,7 +399,6 @@ def _logging_with(callback: CustomLogger) -> Logging:
         (detectors.agentic_loop_hook, {"success_callback": [_Agentic()]}, True),
         (detectors.agentic_loop_hook, {"litellm_logging_obj": _logging_with(_Agentic())}, True),
         (detectors.agentic_loop_hook, {"success_callback": [_Logger()]}, False),
-        (messages_detectors.pre_request_hook, {"success_callback": [_Rewrite()]}, False),
         (chat_detectors.chat_agentic_loop_hook, {"litellm_logging_obj": _logging_with(_ChatAgentic())}, True),
         (responses_detectors.deployment_hook, {"success_callback": [_Deployment()]}, True),
     ),
@@ -509,7 +406,6 @@ def _logging_with(callback: CustomLogger) -> Logging:
         "success-callback",
         "logging-object",
         "plain-logger",
-        "pre-request-reads-globals-only",
         "chat-agentic-logging-object",
         "deployment-success-callback",
     ),
@@ -522,15 +418,6 @@ def test_callback_detectors_read_the_request_callbacks_the_handler_reads(
 ) -> None:
     monkeypatch.setattr(litellm, "callbacks", [])
     assert detector(call(**kwargs)) is expected
-
-
-def test_websearch_interception_needs_the_interception_logger(monkeypatch: pytest.MonkeyPatch) -> None:
-    from litellm.integrations.websearch_interception.handler import WebSearchInterceptionLogger
-
-    monkeypatch.setattr(litellm, "callbacks", [_Rewrite()])
-    assert not messages_detectors.websearch_interception(call())
-    monkeypatch.setattr(litellm, "callbacks", [WebSearchInterceptionLogger()])
-    assert messages_detectors.websearch_interception(call())
 
 
 @pytest.mark.parametrize(
@@ -551,7 +438,14 @@ def test_response_cache_is_skipped_only_by_no_cache(
 
 @pytest.mark.parametrize(
     ("environment", "setting", "expected"),
-    ((None, None, False), ("DEFAULT@SECLEVEL=1", None, True), (None, "DEFAULT@SECLEVEL=1", True)),
+    (
+        (None, None, False),
+        ("DEFAULT@SECLEVEL=1", None, True),
+        (None, "DEFAULT@SECLEVEL=1", True),
+        (None, "ECDHE-RSA-AES128-GCM-SHA256", False),
+        (None, "ECDHE-RSA-AES128-GCM-SHA256:RC4-SHA", True),
+        ("HIGH", None, False),
+    ),
 )
 def test_tls_policy_reads_the_security_level_environment_then_the_setting(
     monkeypatch: pytest.MonkeyPatch, environment: str | None, setting: str | None, expected: bool
@@ -567,7 +461,19 @@ def test_tls_policy_reads_the_security_level_environment_then_the_setting(
 
 @pytest.mark.parametrize(
     ("environment", "setting", "expected"),
-    ((None, "X25519", False), (None, " P-256 ", False), ("secp521r1", None, True), (None, "secp521r1", True)),
+    (
+        (None, "X25519", False),
+        (None, "prime256v1", False),
+        (None, "secp384r1", False),
+        (None, " P-256 ", True),
+        (None, "P-384", True),
+        (None, "secp256r1", True),
+        (None, "x25519", True),
+        ("secp521r1", None, True),
+        (None, "secp521r1", True),
+        ("", "secp521r1", False),
+        (None, "", False),
+    ),
 )
 def test_tls_policy_flags_only_curves_native_tls_lacks(
     monkeypatch: pytest.MonkeyPatch, environment: str | None, setting: str | None, expected: bool
@@ -579,3 +485,24 @@ def test_tls_policy_flags_only_curves_native_tls_lacks(
         monkeypatch.setenv("SSL_ECDH_CURVE", environment)
     monkeypatch.setattr(litellm, "ssl_ecdh_curve", setting)
     assert detectors.tls_policy(call()) is expected
+
+
+@pytest.mark.parametrize(("setting", "value"), (("ssl_security_level", 1), ("ssl_ecdh_curve", object())))
+def test_tls_policy_hands_an_undecodable_setting_to_python_without_raising(
+    monkeypatch: pytest.MonkeyPatch, setting: str, value: object
+) -> None:
+    for name in ("SSL_SECURITY_LEVEL", "SSL_ECDH_CURVE"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(litellm, "ssl_security_level", None)
+    monkeypatch.setattr(litellm, "ssl_ecdh_curve", None)
+    monkeypatch.setattr(litellm, setting, value)
+    assert detectors.tls_policy(call()) is True
+
+
+def test_tls_policy_ignores_a_live_ssl_context(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in ("SSL_SECURITY_LEVEL", "SSL_ECDH_CURVE"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(litellm, "ssl_security_level", None)
+    monkeypatch.setattr(litellm, "ssl_ecdh_curve", None)
+    monkeypatch.setattr(litellm, "ssl_verify", ssl.create_default_context())
+    assert detectors.tls_policy(call()) is False

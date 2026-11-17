@@ -22,6 +22,7 @@ from litellm.integrations.langfuse.langfuse_mock_client import (
 from litellm.litellm_core_utils.core_helpers import (
     as_str_mapping,
     filter_exceptions_from_params,
+    json_contains,
     reconstruct_model_name,
     safe_deep_copy,
 )
@@ -1311,11 +1312,11 @@ def _end_grounding_span(*, tracing: "LangfuseTracing", parent: "LangfuseObservat
     ).end()
 
 
-def log_requester_metadata(clean_metadata: Mapping[str, Any]):
+def log_requester_metadata(clean_metadata: Mapping[str, object]):
     returned_metadata: Final = {}
-    requester_metadata: Final = clean_metadata.get("requester_metadata") or {}
+    requester_metadata: Final[object] = clean_metadata.get("requester_metadata") or {}
     for k, v in clean_metadata.items():
-        if k not in requester_metadata:
+        if not json_contains(requester_metadata, k):
             returned_metadata[k] = v
 
     returned_metadata.update({"requester_metadata": requester_metadata})

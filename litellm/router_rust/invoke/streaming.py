@@ -15,7 +15,8 @@ Each wrapper also reports its stream's outcome to the core when the stream ends,
 logging reports it to the Python router's callbacks: the attempt that returned the stream counted
 only its request (the attempt answer is ``deferred``), so the success with the stream's final tokens,
 or a failure the stream raised after it opened, is recorded then (``StreamAttempt.report_success`` /
-``report_failure``). A stream closed before it ends reports nothing.
+``report_failure``). A stream closed before it ends reports nothing, except a speech stream, which
+litellm logs as a success.
 
 The wrappers decide nothing about routing: what may take over, the retry budget and every
 deployment pick come from the core. They hold live Python iterators, frames and hidden params,
@@ -42,6 +43,7 @@ from collections.abc import (
     Mapping,
     Sequence,
 )
+from collections.abc import Set as AbstractSet
 from typing import (
     TYPE_CHECKING,
     Final,
@@ -62,9 +64,12 @@ from litellm.litellm_core_utils.add_retry_fallback_headers import (
     get_hidden_params_dict,
     replace_complexity_router_headers,
 )
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, without
+from litellm.litellm_core_utils.core_helpers import FinishEvidence, as_str_mapping, finish_evidence_of, without
 from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, get_hidden_params, set_hidden_params
+from litellm.litellm_core_utils.on_end_byte_stream import StreamClosedEarly, StreamCompleted, StreamEnd, StreamFailed
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+from litellm.llms.custom_httpx.stream_close import aclose_if_supported
+from litellm.router_rust.invoke.slots import hold_slot_until_closed
 from litellm.router_rust.surface.health import failure_already_logged, logged_call
 from litellm.types.utils import ModelResponseStream, Usage
 
@@ -110,8 +115,9 @@ class StreamAttempt:
     committed_budget: int | None = None
     # The group a pre-routing hook selected for ``group``, which a fallback lookup keys on first.
     routed: str | None = None
-    # The deployment's max_parallel_requests slot the attempt holds; an open chat stream takes it.
+    # The deployment's max_parallel_requests slot the attempt holds; an open chat or speech stream takes it.
     slot: contextlib.ExitStack | None = None
+    explain_failure: "Callable[[BaseException], tuple[str, str] | None] | None" = None
     # Set by the wrapper that reports the stream's outcome when it ends; the attempt's answer is then
     # deferred and counts only the request and the tokens read so far (``counted_tokens``).
     reports_outcome: bool = False
@@ -192,7 +198,7 @@ class StreamAttempt:
         }
 
     def _failure_logged(self, error: BaseException) -> dict[str, object]:  # mutable-ok: litellm's logging kwargs
-        return {**logged_call(self.op, self.kwargs), **self.logged(), "exception": _provider_error(error)}
+        return {**logged_call(self.op, self.kwargs), **self.logged(), "exception": provider_error(error)}
 
     def _callbacks(self, *, sync: bool) -> Mapping[str, bool]:
         """The outcome callbacks that run for this attempt when its stream ends."""
@@ -259,7 +265,7 @@ class StreamAttempt:
 _RECORDINGS: Final[set["asyncio.Task[None]"]] = set()  # mutable-ok: tasks leave it when they finish
 
 
-def _provider_error(error: BaseException) -> BaseException:
+def provider_error(error: BaseException) -> BaseException:
     """The provider's own error, which the failure rules classify, rather than the router's envelope."""
     if isinstance(error, MidStreamFallbackError) and error.original_exception is not None:
         return error.original_exception
@@ -511,6 +517,48 @@ def _raise_fallback_failure(error: Exception) -> NoReturn:
     raise error
 
 
+def _walk_outcome(error: Exception, trigger_message: str | None) -> str:
+    from litellm.litellm_core_utils.routing_common_utils import carries_fallback_failure
+
+    if not isinstance(error, MidStreamFallbackError) or error.original_exception is None or trigger_message is None:
+        return ""
+    if not error.message.startswith(trigger_message):
+        return ""
+    outcome: Final = error.message[len(trigger_message) :]
+    return outcome if carries_fallback_failure(outcome) else ""
+
+
+def _client_failure_message(primary_message: str, outcome: str) -> str:
+    from litellm._logging import redact_internal_details_from_client_message
+
+    return "".join(map(redact_internal_details_from_client_message, (primary_message, outcome)))
+
+
+def _failure_message(
+    attempt: StreamAttempt, error: Exception, surfaced: BaseException, trigger_message: str | None
+) -> str | None:
+    if attempt.explain_failure is not None:
+        explained: Final = attempt.explain_failure(surfaced)
+        return _client_failure_message(*explained) if explained is not None else None
+    outcome: Final = _walk_outcome(error, trigger_message)
+    surfaced_message: Final[object] = getattr(surfaced, "message", None)
+    if not outcome or not isinstance(surfaced_message, str):
+        return None
+    return _client_failure_message(surfaced_message, outcome)
+
+
+def _raise_stream_failure(
+    attempt: StreamAttempt, error: Exception, before_content: bool, trigger_message: str | None = None
+) -> NoReturn:
+    surfaced: Final = provider_error(error)
+    message: Final = _failure_message(attempt, error, surfaced, trigger_message) if before_content else None
+    if message is not None and hasattr(surfaced, "message"):
+        surfaced.message = message  # pyright: ignore[reportAttributeAccessIssue]  # checked above
+    if surfaced is error:
+        raise error
+    raise surfaced from error
+
+
 def _stream_pre_content_error(error: Exception, model: str, llm_provider: str = "anthropic") -> MidStreamFallbackError:
     """The envelope the fallback chain judges a failure by when the client has received no content yet."""
     return MidStreamFallbackError(
@@ -629,8 +677,8 @@ def continuation_routing(core: "RustCore", request: Mapping[str, object]) -> Map
     registry: Final = core.registry()
     excluded: Final = [
         deployment.model_info.id
-        for record in registry.all()
-        if (deployment := registry.deployment(str(_record_id(record)))) is not None
+        for record_id in _record_ids(registry.all())
+        if (deployment := registry.deployment(str(record_id))) is not None
         and not deployment_can_continue(deployment.model_dump(exclude_none=True))
     ]
     return {"body": {CONTINUATION_EXCLUDED_IDS: excluded}}
@@ -641,13 +689,21 @@ def _record_id(record: Mapping[str, object]) -> object:
     return model_info.get("id") if isinstance(model_info, Mapping) else None  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # a plain record
 
 
+def _record_ids(records: Iterable[Mapping[str, object]]) -> Iterator[object]:
+    return (_record_id(record) for record in records)
+
+
+def _record_model_names(records: Iterable[Mapping[str, object]]) -> AbstractSet[object]:
+    return {record.get("model_name") for record in records}
+
+
 def _names_deployment_that_cannot_continue(core: "RustCore", target: object) -> bool:
     from litellm.router_utils.fallback_event_handlers import fallback_target_name
     from litellm.router_utils.pre_call_checks.continuation_prefill_check import deployment_can_continue
 
     name: Final = fallback_target_name(target)
     registry: Final = core.registry()
-    model_names: Final = {record.get("model_name") for record in registry.all()}
+    model_names: Final = _record_model_names(registry.all())
     if name is None or name in model_names or not registry.has_deployment(name):
         return False
     deployment: Final = registry.deployment(name)
@@ -852,6 +908,11 @@ class FallbackAwareStreamWrapper(CustomStreamWrapper):
     fallback takes over."""
 
     fallback_headers_adopted: bool = False
+    _source_stream: CustomStreamWrapper
+
+    @property
+    def finish_evidence(self) -> FinishEvidence:
+        return self._source_stream.finish_evidence
 
     def adopt_fallback_response_headers(
         self,
@@ -901,6 +962,7 @@ def _chat_wrapper_init(
 class _AsyncChatStream(FallbackAwareStreamWrapper):
     def __init__(self, generator: AsyncGenerator[object, None], model_response: CustomStreamWrapper) -> None:  # pyright: ignore[reportMissingSuperCall]  # _chat_wrapper_init calls it
         _chat_wrapper_init(self, generator, model_response)
+        self._source_stream = model_response
         self._async_generator: Final = generator
 
     def __aiter__(self) -> "_AsyncChatStream":  # pyright: ignore[reportIncompatibleMethodOverride]  # iterates the generator
@@ -913,6 +975,7 @@ class _AsyncChatStream(FallbackAwareStreamWrapper):
 class _SyncChatStream(FallbackAwareStreamWrapper):
     def __init__(self, generator: Generator[object, None, None], model_response: CustomStreamWrapper) -> None:  # pyright: ignore[reportMissingSuperCall]  # _chat_wrapper_init calls it
         _chat_wrapper_init(self, generator, model_response)
+        self._source_stream = model_response
         self.chunks = []  # the sync twin keeps no inner chunk list
         hidden_params: Final = get_hidden_params(model_response)
         if hidden_params is not None:
@@ -1124,6 +1187,10 @@ class FallbackAwareAnthropicMessagesStream:
         return getattr(self._source_iterator, "chunks", None)
 
     @property
+    def finish_evidence(self) -> FinishEvidence:
+        return finish_evidence_of(self._source_iterator)
+
+    @property
     def messages(self) -> object:
         return getattr(self._source_iterator, "messages", None)
 
@@ -1179,6 +1246,23 @@ def _anthropic_stream_forwards_ping_live(chunk: object, has_generated_content: b
     from litellm.llms.anthropic.messages.native.streaming_iterator import is_anthropic_ping_chunk
 
     return not has_generated_content and is_anthropic_ping_chunk(chunk)
+
+
+_ANTHROPIC_PREAMBLE_EVENT_LINES: Final = frozenset((b"event: message_start", b"event: ping"))
+
+
+def _is_anthropic_preamble_chunk(chunk: object) -> bool:
+    event: Final = as_str_mapping(chunk)
+    if event is not None:
+        return event.get("type") in ("message_start", "ping")
+    if not isinstance(chunk, (bytes, bytearray)):
+        return False
+    event_lines: Final = tuple(line for line in chunk.splitlines() if line.startswith(b"event:"))
+    return (
+        bool(event_lines)
+        and all(line in _ANTHROPIC_PREAMBLE_EVENT_LINES for line in event_lines)
+        and chunk.startswith(b"event:")
+    )
 
 
 def _is_retriable_anthropic_status(status_code: int) -> bool:
@@ -1258,6 +1342,43 @@ def _anthropic_recoverable_frame_error(
     return None
 
 
+def _error_line_with_message(line: bytes, message: str) -> bytes:
+    from pydantic import TypeAdapter, ValidationError
+
+    if not line.startswith(b"data:"):
+        return line
+    try:
+        payload: Final = TypeAdapter(dict[str, object]).validate_json(line.removeprefix(b"data:"))
+    except ValidationError:
+        return line
+    error: Final = as_str_mapping(payload.get("error"))
+    if payload.get("type") != "error" or error is None:
+        return line
+    line_end: Final = b"\r" if line.endswith(b"\r") else b""
+    return b"data: " + json.dumps({**payload, "error": {**error, "message": message}}).encode() + line_end
+
+
+def _hop_error_frame(
+    attempt: StreamAttempt,
+    chunk: bytes,
+    error_event: tuple[str, str, int],
+    model: str,
+    bridged_failure: Exception | None,
+) -> bytes:
+    from litellm.llms.anthropic.common_utils import anthropic_error_frame_exception
+
+    if attempt.explain_failure is None or not isinstance(chunk, (bytes, bytearray)):  # pyright: ignore[reportUnnecessaryIsInstance]  # bridge-path chunks are not always bytes
+        return chunk
+    hop_error: Final = (
+        bridged_failure if bridged_failure is not None else anthropic_error_frame_exception(*error_event, model)
+    )
+    explained: Final = attempt.explain_failure(provider_error(hop_error))
+    if explained is None:
+        return chunk
+    message: Final = _client_failure_message(*explained)
+    return b"\n".join(_error_line_with_message(line, message) for line in bytes(chunk).split(b"\n"))
+
+
 def wrap_anthropic_stream(
     attempt: StreamAttempt, response: AsyncIterator[bytes]
 ) -> FallbackAwareAnthropicMessagesStream:
@@ -1270,10 +1391,12 @@ def wrap_anthropic_stream(
         aclose_superseded_attempt,
         parse_anthropic_error_event,
         parse_anthropic_refusal_stop_details,
+        sse_frames,
     )
     from litellm.llms.anthropic.messages.native.utils import safeguard_refusal_error
 
     source_iterator: Final = response
+    framed_source: Final = sse_frames(source_iterator) if attempt.level > 0 else source_iterator
     replays_a_finished_agentic_turn: Final = isinstance(source_iterator, FakeAnthropicMessagesStreamIterator)
     model: Final = attempt.group
     usage: Final = _AnthropicStreamUsage()
@@ -1281,6 +1404,7 @@ def wrap_anthropic_stream(
 
     async def close_source() -> None:
         with anyio.CancelScope(shield=True), contextlib.suppress(BaseException):
+            await aclose_if_supported(framed_source)
             await aclose_if_supported(source_iterator)
 
     async def close_superseded() -> None:
@@ -1293,11 +1417,14 @@ def wrap_anthropic_stream(
             policy.get("can_retry") is True or policy.get("can_fall_back") is True
         )
         buffered: tuple[bytes, ...] = ()  # rebind-ok: flushed once committed or on decline
+        content_seen = False  # rebind-ok: set at the first chunk past message_start and pings
         try:
-            async for chunk in _areported(attempt, source_iterator, usage.total_tokens, usage.observe):
+            async for chunk in _areported(attempt, framed_source, usage.total_tokens, usage.observe):
                 if _anthropic_stream_forwards_ping_live(chunk, has_generated_content):
                     yield chunk
                     continue
+                before_content = not content_seen
+                content_seen = content_seen or not _is_anthropic_preamble_chunk(chunk)
                 if _stream_commits_now(chunk, has_generated_content, len(buffered)):
                     has_generated_content = True
                 # A transport can split one SSE data line across byte chunks, so pre-content detection
@@ -1346,12 +1473,23 @@ def wrap_anthropic_stream(
                 for buffered_chunk in buffered:
                     yield buffered_chunk
                 buffered = ()
-                yield chunk
+                yield (
+                    _hop_error_frame(attempt, chunk, error_event, model, bridged_failure)
+                    if error_event is not None and before_content
+                    else chunk
+                )
             for buffered_chunk in buffered:
                 yield buffered_chunk
         except Exception as stream_error:  # noqa: BLE001  # any raised provider error must reach the fallback gate
             async for item in _anthropic_recover_stream_error(
-                attempt, stream_error, has_generated_content, buffered, model, wrapper, close_superseded
+                attempt,
+                stream_error,
+                has_generated_content,
+                content_seen,
+                buffered,
+                model,
+                wrapper,
+                close_superseded,
             ):
                 yield item
         finally:
@@ -1365,6 +1503,7 @@ async def _anthropic_recover_stream_error(
     attempt: StreamAttempt,
     stream_error: Exception,
     has_generated_content: bool,
+    content_seen: bool,
     buffered: tuple[bytes, ...],
     model: str,
     wrapper: FallbackAwareAnthropicMessagesStream,
@@ -1376,16 +1515,14 @@ async def _anthropic_recover_stream_error(
     ):
         for buffered_chunk in buffered:
             yield buffered_chunk
-        if stream_error.original_exception is not None:
-            raise stream_error.original_exception from stream_error
-        raise stream_error
+        _raise_stream_failure(attempt, stream_error, not content_seen)
     fallback_error: Final = (
         stream_error
         if isinstance(stream_error, MidStreamFallbackError)
         else _stream_fallback_error_for_raised(attempt, stream_error, model, has_generated_content)
     )
     if fallback_error is None:
-        raise stream_error
+        _raise_stream_failure(attempt, stream_error, not content_seen)
     # A native error frame or a refusal the wrapper raised fails the attempt too (a raised error or a
     # bridged frame already did).
     attempt.report_failure(fallback_error)
@@ -1407,6 +1544,7 @@ async def _anthropic_recover_stream_error(
     inner: Final = response
     if isinstance(inner, FallbackAwareAnthropicMessagesStream):
         inner.attempt.attempted_retries = attempted
+        inner.attempt.explain_failure = attempt.explain_failure
         inner.attempt.committed_budget = budget
     async for item in _anthropic_yield_recovered(inner, wrapper, (attempted, budget)):
         yield item
@@ -1451,13 +1589,16 @@ async def _anthropic_fallback_attempt(
     trigger: Final = _fallback_trigger(
         e, (litellm_exceptions.ContentPolicyViolationError, litellm_exceptions.ContextWindowExceededError)
     )
+    trigger_message: Final = trigger.message if isinstance(trigger, MidStreamFallbackError) else None
+    content_seen = False  # rebind-ok: set at the fallback's first chunk past message_start and pings
     try:
         fallback_response: Final = await attempt.fallback(trigger)
         async for fallback_item in _anthropic_yield_recovered(fallback_response, wrapper):
+            content_seen = content_seen or not _is_anthropic_preamble_chunk(fallback_item)
             yield fallback_item
     except Exception as fallback_error:  # noqa: BLE001  # as the Python wrapper: logged, then the stream's error raises
         verbose_router_logger.error("Anthropic messages streaming fallback also failed: %s", fallback_error)
-        _raise_fallback_failure(fallback_error)
+        _raise_stream_failure(attempt, fallback_error, not content_seen, trigger_message)
 
 
 # --- Responses API ------------------------------------------------------------------------------
@@ -1566,6 +1707,7 @@ def wrap_responses_stream(  # noqa: C901  # one function per Python wrapper it p
 
         def __init__(self, async_generator: AsyncGenerator[object, None]) -> None:  # pyright: ignore[reportMissingSuperCall]  # no httpx response of its own
             self._async_generator: Final = async_generator
+            self.attempt: Final = attempt
             self._billing_source: object = source_iterator
             self._last_sequence_number = -1
             self.response = getattr(source_iterator, "response", None)  # pyright: ignore[reportAttributeAccessIssue]  # copied from the source
@@ -1659,6 +1801,7 @@ def wrap_responses_stream(  # noqa: C901  # one function per Python wrapper it p
     async def stream_with_fallbacks() -> AsyncGenerator[object, None]:
         held: tuple[object, ...] = ()  # rebind-ok: flushed at first output, dropped on fallback
         response_id_exposed = False  # rebind-ok: set once, before an early-released event is yielded
+        output_started = False  # rebind-ok: set at the first event that is not held
         try:
             async for item in _areported(
                 attempt,
@@ -1673,6 +1816,7 @@ def wrap_responses_stream(  # noqa: C901  # one function per Python wrapper it p
                 for held_event in held:
                     yield held_event
                 held = ()
+                output_started = True
                 yield item
             for held_event in held:
                 yield held_event
@@ -1690,14 +1834,16 @@ def wrap_responses_stream(  # noqa: C901  # one function per Python wrapper it p
             if response_id_exposed:
                 _raise_released_stream_error(attempt, e)
             async with contextlib.aclosing(
-                _responses_fallback_attempt(attempt, e, source_iterator, wrapper.adopt_fallback_headers, held)
-            ) as fallback_stream:
-                async for fallback_item in fallback_stream:
-                    yield fallback_item
-        except Exception:
+                _responses_recover_stream_error(
+                    attempt, e, source_iterator, wrapper, wrapper.adopt_fallback_headers, held, output_started
+                )
+            ) as recovered_stream:
+                async for recovered_item in recovered_stream:
+                    yield recovered_item
+        except Exception as stream_error:  # noqa: BLE001  # re-raised, with the walk's outcome on a fallback hop
             for held_event in held:
                 yield held_event
-            raise
+            _raise_stream_failure(attempt, stream_error, before_content=not output_started)
         finally:
             with anyio.CancelScope(shield=True):
                 if hasattr(source_iterator, "aclose"):
@@ -1754,11 +1900,11 @@ def _responses_continuation_request(
         responses_continuation_input,
     )
 
+    if source_iterator.started_tool_call:
+        _raise_original_mid_stream_error(e)
     if _mid_stream_error_before_output(e):
         return None
-    if source_iterator.started_tool_call or isinstance(
-        e.original_exception, litellm_exceptions.ContentPolicyViolationError
-    ):
+    if isinstance(e.original_exception, litellm_exceptions.ContentPolicyViolationError):
         _raise_original_mid_stream_error(e)
     cut_deployment_id: Final = (get_hidden_params(source_iterator) or {}).get("model_id")
     if constrains_responses_continuation(_params_sent_to_deployment(attempt, cut_deployment_id)):
@@ -1782,12 +1928,113 @@ def _responses_continuation_request(
     }
 
 
+def _responses_stream_retries(
+    attempt: StreamAttempt, e: MidStreamFallbackError, source_iterator: "BaseResponsesAPIStreamingIterator"
+) -> bool:
+    """Whether a broken Responses stream retries in its own group first: it broke before any output and
+    before a tool call, with an error the retry rule takes (408, 409, 429, 5xx, or no status), as a
+    ``/v1/messages`` stream does. After output the continuation fallback takes over instead."""
+    if not _mid_stream_error_before_output(e) or source_iterator.started_tool_call:
+        return False
+    status_code: Final = _stream_raised_error_status(_mid_stream_retry_trigger(e))
+    return status_code is None or attempt.should_retry_status(status_code)
+
+
+async def _responses_recover_stream_error(
+    attempt: StreamAttempt,
+    e: MidStreamFallbackError,
+    source_iterator: "BaseResponsesAPIStreamingIterator",
+    wrapper: object,
+    adopt_headers: Callable[[object], _Prepared],
+    held: tuple[object, ...],
+    output_started: bool,
+) -> AsyncGenerator[object, None]:
+    """A Responses stream that broke before any output is retried in its own group, then falls back
+    with the newest failure once the retries are spent. The primary's held lifecycle events are dropped
+    when a retry or a fallback answers."""
+    last_error: MidStreamFallbackError = e  # rebind-ok: the newest failure once a retry also failed
+    if _responses_stream_retries(attempt, e, source_iterator):
+        if hasattr(source_iterator, "aclose"):
+            with anyio.CancelScope(shield=True), contextlib.suppress(Exception):
+                await aclose_if_supported(source_iterator)
+        await attempt.failure_recorded()
+        trigger: Final = _mid_stream_retry_trigger(e)
+        retried: Final = await attempt.retry(trigger)
+        if not isinstance(retried, BaseException):
+            async for retried_item in _responses_yield_retried(
+                retried, wrapper, adopt_headers, attempt.explain_failure
+            ):
+                yield retried_item
+            return
+        if retried is not trigger:
+            last_error = _stream_pre_content_error(  # rebind-ok: the retry failed again, so its failure is the newest
+                retried if isinstance(retried, Exception) else e, e.model or "", e.llm_provider
+            )
+    async with contextlib.aclosing(
+        _responses_fallback_attempt(attempt, last_error, source_iterator, adopt_headers, held, output_started)
+    ) as fallback_stream:
+        async for fallback_item in fallback_stream:
+            yield fallback_item
+
+
+async def _responses_yield_retried(
+    retried: tuple[object, int, int],
+    wrapper: object,
+    adopt_headers: Callable[[object], _Prepared],
+    explain_failure: "Callable[[BaseException], tuple[str, str] | None] | None",
+) -> AsyncGenerator[object, None]:
+    """Hands a same-group retry's stream to the client through the wrapper, with the retry's headers, and
+    closes it after. A retried stream that breaks again counts on from the retries already made, and when
+    it recovers onto another source (its own fallback) the wrapper and the events follow that source."""
+    response, attempted, budget = retried
+    inner_attempt: Final = getattr(response, "attempt", None)
+    if isinstance(inner_attempt, StreamAttempt):
+        inner_attempt.attempted_retries = attempted
+        inner_attempt.committed_budget = budget
+        inner_attempt.explain_failure = explain_failure
+
+    served_as: Final = _prepare_fallback_hidden_params(wrapper)[1].get("x-litellm-model-group")
+
+    def follow_source() -> _Prepared:
+        prepared: Final = adopt_headers(response)
+        if served_as is not None:
+            _ = prepared[1].setdefault("x-litellm-model-group", served_as)
+        newest: Final = prepared[1].get("x-litellm-attempted-retries")
+        _ = add_retry_headers_to_response(
+            response=wrapper,
+            attempted_retries=max(attempted, newest) if isinstance(newest, int) else attempted,
+            max_retries=budget,
+        )
+        return prepared
+
+    followed: _Prepared = follow_source()  # rebind-ok: refreshed when the retried stream changes its source
+    source: object = getattr(response, "_billing_source", None)  # rebind-ok: the retried stream's current source
+    try:
+        if hasattr(response, "__aiter__"):
+            async for retried_item in cast("AsyncIterator[object]", response):  # cast-ok: __aiter__ checked above
+                if (current_source := getattr(response, "_billing_source", None)) is not source:
+                    source = current_source
+                    followed = follow_source()
+                _apply_fallback_hidden_params_to_item(retried_item, followed)
+                yield retried_item
+        else:
+            yield response
+    finally:
+        if hasattr(response, "aclose"):
+            with anyio.CancelScope(shield=True):
+                try:
+                    await aclose_if_supported(response)
+                except Exception as exc:  # noqa: BLE001  # closing is best-effort
+                    verbose_router_logger.debug("stream_with_fallbacks(aresponses): error closing retry: %s", exc)
+
+
 async def _responses_fallback_attempt(
     attempt: StreamAttempt,
     e: MidStreamFallbackError,
     source_iterator: "BaseResponsesAPIStreamingIterator",
     adopt_headers: Callable[[object], _Prepared],
     held: tuple[object, ...],
+    output_started: bool,
 ) -> AsyncGenerator[object, None]:
     """Re-enters the fallback walk for a mid-stream Responses error. The primary's held lifecycle events
     reach the client only when no fallback lands."""
@@ -1799,10 +2046,14 @@ async def _responses_fallback_attempt(
     trigger: Final = _fallback_trigger(
         e, (litellm_exceptions.ContentPolicyViolationError, litellm_exceptions.ContextWindowExceededError)
     )
+    trigger_message: Final = trigger.message if isinstance(trigger, MidStreamFallbackError) else None
     fallback_response: object = None  # rebind-ok: set once a fallback answered, closed at the end
     fallback_yielded = False  # rebind-ok: flipped on the first fallback item
     try:
         fallback_response = await attempt.fallback(trigger, continued)  # rebind-ok: rebound as the stream advances
+        hop: Final = getattr(fallback_response, "attempt", None)
+        if output_started and isinstance(hop, StreamAttempt):
+            hop.explain_failure = None
         prepared: Final = adopt_headers(fallback_response)
         if hasattr(fallback_response, "__aiter__"):
             spliced: Final = cast(  # cast-ok: the fallback's events
@@ -1823,7 +2074,9 @@ async def _responses_fallback_attempt(
         if not fallback_yielded:
             for held_event in held:
                 yield held_event
-        _raise_fallback_failure(fallback_error)
+        _raise_stream_failure(
+            attempt, fallback_error, not output_started and continued is None and not fallback_yielded, trigger_message
+        )
     finally:
         if fallback_response is not None and hasattr(fallback_response, "aclose"):
             with anyio.CancelScope(shield=True):
@@ -1845,6 +2098,25 @@ def _reported_transcription_stream(attempt: StreamAttempt, response: object) -> 
     return response
 
 
+def _reported_speech_stream(attempt: StreamAttempt, response: object) -> object:
+    """A speech response still pulling audio from the provider keeps its deployment's slot until the
+    audio ends and reports its attempt's outcome then: a read that fails counts against the deployment
+    and cools it down by the rules, as the router's failure callback does, and a caller hanging up
+    counts nothing against it. A buffered response is done at the attempt, which counts it as any other."""
+
+    def report(end: StreamEnd) -> None:
+        match end:
+            case StreamFailed(error=error):
+                attempt.report_failure(error)
+            case StreamCompleted() | StreamClosedEarly():
+                attempt.report_success(0, response)
+
+    slot: Final = attempt.slot if attempt.slot is not None else contextlib.ExitStack()
+    if hold_slot_until_closed(response, slot, report):
+        attempt.take_outcome()
+    return response
+
+
 # --- the attempt hook ---------------------------------------------------------------------------
 
 
@@ -1859,6 +2131,8 @@ async def open_attempt_stream(attempt: StreamAttempt, response: object) -> objec
         first_chunk: Final = await _aread_first_chunk(response)
         held_slot: Final = attempt.slot.pop_all() if attempt.slot is not None else contextlib.ExitStack()
         return wrap_chat_stream(attempt, response, first_chunk, held_slot)
+    if attempt.op == "aspeech":
+        return _reported_speech_stream(attempt, response)
     if not attempt.kwargs.get("stream"):
         return response
     if attempt.op == "atranscription":
@@ -1922,5 +2196,6 @@ __all__ = [
     "StreamAttempt",
     "open_attempt_stream",
     "open_attempt_stream_sync",
+    "provider_error",
     "shape_attempt_kwargs",
 ]

@@ -2,6 +2,7 @@ import threading
 from collections.abc import Mapping
 from typing import Final
 
+from litellm.llms.custom_httpx.http_handler import exclude_rsa_key_exchange_and_chacha20
 from litellm.secret_managers.main import str_to_bool
 
 FIPS_MODE_SETTING: Final = "fips_mode"
@@ -13,7 +14,7 @@ class FipsModeError(Exception):
     pass
 
 
-def _fips_mode_setting(general_settings: Mapping[str, object]) -> bool | None:
+def fips_mode_setting(general_settings: Mapping[str, object]) -> bool | None:
     """general_settings.fips_mode as a boolean: False when the key is absent, None when it is not a boolean, including
     a key with no value."""
     if FIPS_MODE_SETTING not in general_settings:
@@ -60,7 +61,7 @@ def cryptography_enforces_fips() -> bool:
 def fips_mode_refusal(general_settings: Mapping[str, object]) -> str | None:
     """Why the proxy must not start: general_settings.fips_mode is not a boolean, or is on but Python's or the
     cryptography library's OpenSSL does not enforce FIPS. None when it may start."""
-    setting: Final = _fips_mode_setting(general_settings)
+    setting: Final = fips_mode_setting(general_settings)
     if setting is None:
         value: Final = general_settings.get(FIPS_MODE_SETTING)
         if value is None:
@@ -89,7 +90,9 @@ def enforce_fips_mode(general_settings: Mapping[str, object]) -> None:
     refusal: Final = fips_mode_refusal(general_settings)
     if refusal is not None:
         raise FipsModeError(refusal)
-    if _fips_mode_setting(general_settings):
+    active: Final = fips_mode_setting(general_settings) is True
+    exclude_rsa_key_exchange_and_chacha20(active)
+    if active:
         _FIPS_MODE_ACTIVE.set()
     else:
         _FIPS_MODE_ACTIVE.clear()
