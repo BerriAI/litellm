@@ -15,7 +15,7 @@ import httpx2
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import TypeAdapter, ValidationError
 from starlette.datastructures import Headers
-from typing_extensions import ReadOnly
+from typing_extensions import Never, ReadOnly
 
 from litellm._logging import verbose_logger
 from litellm.constants import MCP_CLIENT_TIMEOUT, MCP_TOOL_LISTING_TIMEOUT
@@ -117,6 +117,8 @@ _MCP_GUARDRAIL_REJECTIONS: Final = (
 )
 
 _CLIENT_FORWARDED_TOKEN_AUTH_TYPES: Final = frozenset((MCPAuth.true_passthrough, MCPAuth.oauth_delegate))
+
+_NO_TOOL_ARGUMENTS: Final[Mapping[str, Never]] = MappingProxyType({})
 
 
 def _connection_error_message(exc: BaseException, url: str | None, timeout_seconds: float) -> str:
@@ -356,7 +358,7 @@ if MCP_AVAILABLE:
                 status_code=403,
                 detail={"error": "forbidden", "message": f"{tool_name} requires mcp_tool_search_enabled on the key"},
             )
-        tool_arguments: Final = data.get("arguments") or {}
+        tool_arguments: Final = data.get("arguments") or _NO_TOOL_ARGUMENTS
         if tool_name == AGENT_SEARCH_TOOL_NAME:
             return await handle_agent_search(
                 query=str(tool_arguments.get("query", "")),
@@ -746,6 +748,7 @@ if MCP_AVAILABLE:
         proxy_logging_obj: "ProxyLogging | None",
         *,
         record_listing: bool,
+        use_tool_list_cache: bool,
     ) -> list[MCPTool]:
         return list(
             await global_mcp_server_manager.get_tools_from_server(
@@ -758,6 +761,7 @@ if MCP_AVAILABLE:
                 user_api_key_auth=user_api_key_auth,
                 proxy_logging_obj=proxy_logging_obj,
                 record_listing=record_listing,
+                use_tool_list_cache=use_tool_list_cache,
             )
         )
 
@@ -791,6 +795,7 @@ if MCP_AVAILABLE:
             client_ip,
             proxy_logging_obj,
             record_listing=False,
+            use_tool_list_cache=apply_tool_filters,
         )
 
         server_filtered: Final = filter_tools_by_allowed_tools(tools, server) if apply_tool_filters else tools
@@ -837,6 +842,7 @@ if MCP_AVAILABLE:
             IPAddressUtils.get_mcp_client_ip(request),
             None,
             record_listing=False,
+            use_tool_list_cache=False,
         )
         scan: Final = await scan_tool_descriptions(
             apply_description_overrides(upstream, server),

@@ -58,6 +58,15 @@ def submission_owner(caller: UserAPIKeyAuth) -> str | None | SkillMutationError:
     return caller.user_id
 
 
+def submission_editor(caller: UserAPIKeyAuth) -> str | SkillMutationError:
+    error: Final = writer_error(caller)
+    if error is not None:
+        return error
+    if not caller.user_id or caller.user_id == DB_UNAVAILABLE_FALLBACK_USER_ID:
+        return SkillMutationError(403, "Editing submissions requires the original submitting user's identity.")
+    return caller.user_id
+
+
 async def archive_writer(caller: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)]) -> UserAPIKeyAuth:
     from litellm.proxy.proxy_server import proxy_logging_obj
 
@@ -149,13 +158,19 @@ async def review_skill(
     approve: bool,
     reason: str | None,
     publication_base_url: str | None = None,
+    expected_revision: int | None = None,
 ) -> SubmissionReviewed | SkillMutationError:
     if not is_proxy_admin(caller):
         return SkillMutationError(403, "Only proxy admins may review skill submissions.")
     if submissions is None:
         return SkillMutationError(503, "Skills Hub requires a connected database")
     result: Final = await submissions.review(
-        submission_id, caller.user_id or "proxy-admin", approve, reason, publication_base_url=publication_base_url
+        submission_id,
+        caller.user_id or "proxy-admin",
+        approve,
+        reason,
+        publication_base_url=publication_base_url,
+        expected_revision=expected_revision,
     )
     match result:
         case SubmissionMissing():

@@ -4,7 +4,7 @@ import re
 import sys
 from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from dataclasses import dataclass
-from functools import cache, lru_cache
+from functools import cache, lru_cache, partial
 from itertools import accumulate, chain, repeat
 from logging import Logger
 from types import MappingProxyType
@@ -21,7 +21,13 @@ from litellm.constants import (
     EMPTY_MAPPING,
     INVALID_VIRTUAL_KEY_ERROR_MARKER,
     MINIMUM_CUSTOM_KEY_LENGTH,
+    MODEL_BATCH_ENQUEUED_TOKEN_LIMIT_METADATA_KEY,
+    MODEL_LIMIT_MAX_BORROW_MULTIPLE_METADATA_KEY,
     STANDARD_CUSTOMER_ID_HEADERS,
+)
+from litellm.litellm_core_utils.clientside_credential_handler import (
+    _ADMIN_CONFIG_FIELDS_TO_CLEAR_ON_BASE_OVERRIDE,  # pyright: ignore[reportPrivateUsage]  # one canonical list of deployment credential fields
+    clientside_credential_keys,
 )
 from litellm.litellm_core_utils.cloud_storage_security import REQUEST_S3_BUCKET_PARAMS, STORED_S3_BUCKET_PARAM
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor, reject_api_key_secret_reference
@@ -42,6 +48,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     read_request_path_params,
     resolve_inference_model,
 )
+from litellm.proxy.pricing_currency import PRICING_CURRENCY_FIELD
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_ENDPOINT_MARKER,
 )
@@ -54,7 +61,12 @@ from litellm.types.router import (
     server_owned_wif_fields_present,
 )
 from litellm.types.router import reject_server_owned_wif_params as _reject_server_owned_wif_params
-from litellm.types.utils import CustomPricingLiteLLMParams, LlmProviders, oauth_token_exchange_litellm_params
+from litellm.types.utils import (
+    OIDC_SECRET_REFERENCE_PREFIX,
+    CustomPricingLiteLLMParams,
+    LlmProviders,
+    oauth_token_exchange_litellm_params,
+)
 from litellm.types.videos.main import DecodedVideoId
 
 
@@ -380,6 +392,37 @@ def _without_route_named_vertex_target(request_body: Mapping[str, object], route
     return MappingProxyType({key: value for key, value in request_body.items() if key not in VERTEX_TARGET_PARAMS})
 
 
+_AZURE_ENTRA_CREDENTIAL_PARAMS: Final[tuple[str, ...]] = (
+    "tenant_id",
+    "client_id",
+    "client_secret",
+    "azure_username",
+    "azure_password",
+    "azure_scope",
+)
+_MCP_OAUTH_CLIENT_FORM_FIELDS: Final[frozenset[str]] = frozenset(("client_id", "client_secret"))
+_TRANSCRIPTION_SESSION_ROUTES: Final[frozenset[str]] = frozenset(
+    (
+        "/v1/realtime/transcription_sessions",
+        "/realtime/transcription_sessions",
+        "/openai/v1/realtime/transcription_sessions",
+    )
+)
+_TRANSCRIPTION_SESSION_FIELDS: Final[frozenset[str]] = frozenset(("client_secret",))
+_TOKEN_INTROSPECTION_ROUTE: Final = "/introspect"
+_BANNED_PARAMS_ALLOWED_IN_METADATA: Final[frozenset[str]] = VERTEX_TARGET_PARAMS | frozenset(
+    _AZURE_ENTRA_CREDENTIAL_PARAMS
+)
+
+
+def _entra_params_owned_by_route(route: str | None) -> frozenset[str]:
+    if route in _TRANSCRIPTION_SESSION_ROUTES:
+        return _TRANSCRIPTION_SESSION_FIELDS
+    if route_manages_mcp_servers(route) or route == _TOKEN_INTROSPECTION_ROUTE:
+        return _MCP_OAUTH_CLIENT_FORM_FIELDS
+    return frozenset()
+
+
 _NESTED_CONFIG_KEYS: Final[tuple[str, ...]] = ("litellm_embedding_config", "extra_body")
 
 # Metadata containers that carry per-request configuration consumed by the
@@ -483,6 +526,7 @@ _BANNED_REQUEST_BODY_PARAMS: Final[tuple[str, ...]] = (
     # caller-supplied value is the same exfil shape as
     # ``aws_web_identity_token`` on the Bedrock path.
     "azure_ad_token",
+    *_AZURE_ENTRA_CREDENTIAL_PARAMS,
     # Endpoint-targeting fields that retarget the outbound request or
     # an observability callback. An attacker-controlled value either
     # exfiltrates the request payload (incl. messages + admin-set
@@ -546,10 +590,37 @@ _BANNED_REQUEST_BODY_PARAMS: Final[tuple[str, ...]] = (
     # order and reviewable diffs.
     *sorted(_build_banned_observability_params()),
     *sorted(CustomPricingLiteLLMParams.model_fields.keys()),
+    PRICING_CURRENCY_FIELD,
 )
 
+_SECRET_REFERENCE_PREFIXES: Final[tuple[str, ...]] = ("os.environ/", OIDC_SECRET_REFERENCE_PREFIX)
+_SECRET_RESOLVING_PARAMS: Final[frozenset[str]] = frozenset(
+    (*_BANNED_REQUEST_BODY_PARAMS, *_ADMIN_CONFIG_FIELDS_TO_CLEAR_ON_BASE_OVERRIDE, *clientside_credential_keys)
+)
+
+
+def _reject_secret_references(body: Mapping[str, object]) -> None:
+    _reject_secret_reference_in(MappingProxyType({k: v for k, v in body.items() if k in _SECRET_RESOLVING_PARAMS}))
+
+
+def _reject_secret_reference_in(params: Mapping[str, object]) -> None:
+    referencing: Final = next(
+        (
+            param
+            for param, value in params.items()
+            if isinstance(value, str) and value.startswith(_SECRET_REFERENCE_PREFIXES)
+        ),
+        None,
+    )
+    if referencing is not None:
+        raise ValueError(
+            f"Rejected Request: {referencing} holds a secret reference, which only a deployment or credential a "
+            "proxy admin configures can carry."
+        )
+
+
 _BANNED_METADATA_PARAMS: Final[tuple[str, ...]] = tuple(
-    param for param in _BANNED_REQUEST_BODY_PARAMS if param not in VERTEX_TARGET_PARAMS
+    param for param in _BANNED_REQUEST_BODY_PARAMS if param not in _BANNED_PARAMS_ALLOWED_IN_METADATA
 )
 
 
@@ -678,6 +749,12 @@ class _ClientSideStorageAllowlist(BaseModel):
                 return value in (self.allowed_client_side_s3_endpoint_urls or ())
 
 
+def client_side_s3_bucket_check(general_settings: Mapping[str, object]) -> Callable[[str], bool]:
+    return partial(
+        _ClientSideStorageAllowlist.model_validate(general_settings).admits, "allowed_client_side_s3_buckets"
+    )
+
+
 def _banned_param_error(param: str) -> ValueError:
     setting: Final = _PROXY_ALLOWLIST_SETTING_BY_PARAM.get(param)
     team_hint: Final = (
@@ -707,6 +784,8 @@ def _check_banned_params(
     *,
     manages_deployments: bool = False,
     mcp_server_fields_allowed: bool = False,
+    route_owned_params: frozenset[str] = frozenset(),
+    rejects_secret_references: bool = True,
     banned_params: tuple[str, ...] = _BANNED_REQUEST_BODY_PARAMS,
     opt_in_groups: Callable[[], _OptInGroups],
     defer_model_checks: bool = False,
@@ -726,8 +805,12 @@ def _check_banned_params(
     reject_server_owned_wif_params(wif_body)
     if not manages_deployments:
         reject_federated_credential_reference(body)
+        if rejects_secret_references:
+            _reject_secret_references(body)
     for param in banned_params:
         if param not in body:
+            continue
+        if param in route_owned_params:
             continue
         if general_settings.get("allow_client_side_credentials") is True:
             # Proxy-wide opt-in: every banned param is permitted, exit
@@ -951,6 +1034,7 @@ def is_request_body_safe(
         llm_router,
         manages_deployments=manages_deployments,
         mcp_server_fields_allowed=route_manages_mcp_servers(route),
+        route_owned_params=_entra_params_owned_by_route(route),
         opt_in_groups=opt_in_groups,
         defer_model_checks=defer_model_checks,
         defer_s3_buckets=defer_s3_buckets,
@@ -976,6 +1060,7 @@ def is_request_body_safe(
                 llm_router,
                 manages_deployments=manages_deployments,
                 banned_params=_BANNED_METADATA_PARAMS,
+                rejects_secret_references=False,
                 opt_in_groups=opt_in_groups,
                 defer_model_checks=defer_model_checks,
                 defer_s3_buckets=defer_s3_buckets,
@@ -987,6 +1072,7 @@ def is_request_body_safe(
                 llm_router,
                 manages_deployments=manages_deployments,
                 banned_params=_BANNED_METADATA_PARAMS,
+                rejects_secret_references=False,
                 opt_in_groups=opt_in_groups,
                 defer_model_checks=defer_model_checks,
                 defer_s3_buckets=defer_s3_buckets,
@@ -1020,13 +1106,28 @@ def is_request_body_safe(
                 llm_router,
                 manages_deployments=manages_deployments,
                 banned_params=_BANNED_METADATA_PARAMS,
+                rejects_secret_references=False,
                 opt_in_groups=opt_in_groups,
                 defer_model_checks=defer_model_checks,
                 defer_s3_buckets=defer_s3_buckets,
             )
     for user_config_params in _user_config_litellm_params(request_body):
         reject_api_key_secret_reference(user_config_params)
+        _reject_user_config_secret_references(user_config_params)
     return True
+
+
+def _reject_user_config_secret_references(litellm_params: Mapping[str, object]) -> None:
+    for params in (litellm_params, *_nested_configs(litellm_params), *_data_source_parameters(litellm_params)):
+        _reject_secret_reference_in(params)
+
+
+def _data_source_parameters(litellm_params: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
+    return tuple(
+        parameters
+        for source in _mappings_in(litellm_params.get("dataSources"))
+        if (parameters := _coerce_metadata_to_dict(source.get("parameters"))) is not None
+    )
 
 
 def _reject_request_credential_params(litellm_params: Mapping[str, object], *, manages_deployments: bool) -> None:
@@ -1824,22 +1925,37 @@ class BatchLimitRequest(Protocol):
     def model_fields_set(self) -> Collection[str]: ...
 
 
-_ADMIN_ONLY_METADATA_KEYS: Final = (*ADMIN_ONLY_BATCH_LIMIT_METADATA_KEYS, TEAM_S3_BUCKET_ALLOWLIST_METADATA_KEY)
+_ADMIN_ONLY_METADATA_KEYS: Final = (
+    *ADMIN_ONLY_BATCH_LIMIT_METADATA_KEYS,
+    TEAM_S3_BUCKET_ALLOWLIST_METADATA_KEY,
+    MODEL_LIMIT_MAX_BORROW_MULTIPLE_METADATA_KEY,
+)
+_ADMIN_ONLY_METADATA_REASONS: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        TEAM_S3_BUCKET_ALLOWLIST_METADATA_KEY: (
+            "It lets the holder read and write those buckets with the proxy's AWS credentials."
+        ),
+        MODEL_LIMIT_MAX_BORROW_MULTIPLE_METADATA_KEY: (
+            "It caps how far the holder borrows idle model capacity, so the holder cannot raise or remove it."
+        ),
+    }
+)
 
 
 def enforce_batch_limits_are_admin_only(
     data: BatchLimitRequest,
     existing_metadata: Mapping[str, object] | None,
     user_api_key_dict: UserAPIKeyAuth,
-    entity: Literal["key", "team"],
+    entity: Literal["key", "team", "project"],
 ) -> None:
-    """Only a proxy admin may change a key or team's batch limits.
+    """Only a proxy admin may change a key, team, or project's batch limits.
 
     Every key in ``ADMIN_ONLY_BATCH_LIMIT_METADATA_KEYS`` caps what the holder
     may do with batches, so a holder-writable copy would let a caller lift their
     own quota, and the S3 bucket list grants access to buckets with the proxy's
-    own credentials. Gated on the resulting value rather than on presence, so a form
-    resending the stored value stays a no-op.
+    own credentials. A project only enforces ``model_batch_enqueued_token_limit``,
+    so that is the one key gated there. Gated on the resulting value rather than
+    on presence, so a form resending the stored value stays a no-op.
     """
     if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
         return
@@ -1847,16 +1963,17 @@ def enforce_batch_limits_are_admin_only(
     requested: Final[Mapping[str, object]] = (
         (data.metadata or EMPTY_MAPPING) if "metadata" in data.model_fields_set else stored
     )
+    admin_only_keys: Final[tuple[str, ...]] = (
+        (MODEL_BATCH_ENQUEUED_TOKEN_LIMIT_METADATA_KEY,) if entity == "project" else _ADMIN_ONLY_METADATA_KEYS
+    )
     changed: Final = next(
-        (key for key in _ADMIN_ONLY_METADATA_KEYS if requested.get(key) != stored.get(key)),
+        (key for key in admin_only_keys if requested.get(key) != stored.get(key)),
         None,
     )
     if changed is None:
         return
-    reason: Final = (
-        "It lets the holder read and write those buckets with the proxy's AWS credentials."
-        if changed == TEAM_S3_BUCKET_ALLOWLIST_METADATA_KEY
-        else "It limits what the holder can do with batches, so the holder cannot raise it."
+    reason: Final = _ADMIN_ONLY_METADATA_REASONS.get(
+        changed, "It limits what the holder can do with batches, so the holder cannot raise it."
     )
     raise HTTPException(
         status_code=403,
@@ -2332,12 +2449,14 @@ _MODEL_ROUTING_ROUTE_MARKERS: Final = (
     "/evals",
     "/fine_tuning",
     "/videos",
+    "/interactions/",
 )
 _MODEL_ROUTING_HEADER_OR_QUERY_ROUTE_MARKERS: Final = (
     "/files",
     "/batches",
     "/skills",
     "/evals",
+    "/interactions/",
 )
 _MODEL_ROUTING_QUERY_TARGET_MODEL_ROUTE_MARKERS: Final = (
     "/files",
@@ -2511,6 +2630,19 @@ def video_access_group(
     return creating_group
 
 
+_INTERACTION_BY_ID_ROUTE_MARKERS: Final = ("/interactions/",)
+
+
+def _group_of_deployment_selector(selector: object, llm_router: Router | None) -> object:
+    if not isinstance(selector, str) or llm_router is None:
+        return selector
+    registry: Final = llm_router.registry()
+    if selector in registry.index("model_name"):
+        return selector
+    deployment: Final = registry.deployment(selector)
+    return selector if deployment is None else deployment.model_name
+
+
 def _resolve_model_id_with_router(model_id: str | None, llm_router: Router | None) -> str | None:
     if model_id is None or llm_router is None:
         return model_id
@@ -2548,7 +2680,7 @@ def _cache_prediction_model_candidates(
 
 
 def _extract_model_candidates_from_request(
-    request_data: dict,
+    request_data: Mapping[str, object],
     route: str,
     request_headers: Mapping[str, object] | None = None,
     request_query_params: Mapping[str, object] | None = None,
@@ -2589,28 +2721,35 @@ def _extract_model_candidates_from_request(
     uses_completion_model_sources: Final = _route_matches_any_marker(
         route=route, markers=_MODEL_ROUTING_COMPLETION_MODEL_ROUTE_MARKERS
     )
+    selects_by_interaction_id: Final = _route_matches_any_marker(route=route, markers=_INTERACTION_BY_ID_ROUTE_MARKERS)
 
     body_model: Final = request_data.get("model")
-    _append_model_candidates(candidates, body_model)
+    _append_model_candidates(
+        candidates,
+        _group_of_deployment_selector(body_model, llm_router)
+        if selects_by_interaction_id and isinstance(body_model, str)
+        else body_model,
+    )
     if uses_body_target_model_sources or not body_model:
         _append_model_candidates(candidates, request_data.get("target_model_names"))
     if _route_matches_any_marker(route=route, markers=_MODEL_ROUTING_SESSION_MODEL_ROUTE_MARKERS):
         session: Final = request_data.get("session")
-        if isinstance(session, dict):
+        if isinstance(session, Mapping):
             _append_model_candidates(candidates, session.get("model"))
-    if uses_completion_model_sources and isinstance(request_data.get("completion"), dict):
-        _append_model_candidates(candidates, request_data["completion"].get("model"))
+    completion: Final = request_data.get("completion")
+    if uses_completion_model_sources and isinstance(completion, Mapping):
+        _append_model_candidates(candidates, completion.get("model"))
 
     if uses_model_routing_sources:
         if uses_header_or_query_model_sources:
-            _append_model_candidates(
-                candidates,
+            for selector in (
                 _get_case_insensitive_mapping_value(request_query_params, "model"),
-            )
-            _append_model_candidates(
-                candidates,
                 _get_case_insensitive_mapping_value(request_headers, MODEL_ROUTING_HEADER_NAME),
-            )
+            ):
+                _append_model_candidates(
+                    candidates,
+                    _group_of_deployment_selector(selector, llm_router) if selects_by_interaction_id else selector,
+                )
         if uses_query_target_model_sources:
             _append_model_candidates(
                 candidates,
@@ -2669,7 +2808,7 @@ def request_dispatched_to_provider_pass_through(request: Request) -> bool:
 
 
 def get_model_from_request(
-    request_data: dict,
+    request_data: Mapping[str, object],
     route: str,
     request_headers: Mapping[str, object] | None = None,
     request_query_params: Mapping[str, object] | None = None,

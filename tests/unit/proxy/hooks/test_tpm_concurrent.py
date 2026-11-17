@@ -3404,10 +3404,10 @@ async def test_post_call_success_hook_contains_header_merge_failures(rate_limite
 
 @pytest.mark.asyncio
 async def test_the_project_itpm_reservation_counts_the_request_off_the_event_loop(rate_limiter):
-    from tests.large_text import text
     from tests.unit.litellm_core_utils.event_loop_lag import (
         assert_loop_stayed_free,
         timed_with_loop_lags,
+        uncounted_text,
         warm_tokenizer,
     )
 
@@ -3416,7 +3416,7 @@ async def test_the_project_itpm_reservation_counts_the_request_off_the_event_loo
     warm_tokenizer("claude-fable-5")
     data: dict[str, object] = {
         "model": "claude-fable-5",
-        "messages": [{"role": "user", "content": text * 100}],
+        "messages": [{"role": "user", "content": uncounted_text()}],
     }
     itpm_descriptor = {
         "key": PROJECT_ITPM_DESCRIPTOR_KEY,
