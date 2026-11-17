@@ -88,6 +88,7 @@ def _job_record(job: ActiveShadowEvalJob, target_type="key", target_id="key-hash
         models=sorted(job.models),
         direction=job.direction,
         baseline_model=job.baseline_model,
+        skip_same_model=job.skip_same_model,
         shadow_percentage=job.shadow_percentage,
         judge_model=job.judge_model,
         max_turns=job.max_turns,
@@ -2562,3 +2563,137 @@ class TestSamplingFunnel:
 
         assert logger._test_funnel == []
         prisma.db.litellm_shadowevalattempt.create.assert_not_awaited()
+
+
+
+_FAR_FUTURE: Final = datetime(2099, 1, 1, tzinfo=timezone.utc)
+
+
+def _skipping_job(baseline_model: str = "baseline-model", max_turns: int = 200) -> ActiveShadowEvalJob:
+    return _reverse_job(skip_same_model=True, ends_at=_FAR_FUTURE, baseline_model=baseline_model, max_turns=max_turns)
+
+
+def _served(
+    routed_model: str | None = "baseline-model", attempted_fallbacks: int | None = None
+) -> Mapping[str, object]:
+    """Request metadata as the router under evaluation leaves it on the request it served."""
+    decision: Final = {
+        "router_model_name": "my-router",
+        "tier_label": "COMPLEX",
+        **({"routed_model": routed_model} if routed_model else {}),
+    }
+    return {
+        "routing_decision": decision,
+        **({"attempted_fallbacks": attempted_fallbacks} if attempted_fallbacks is not None else {}),
+    }
+
+
+async def _hook_and_settle(logger: ShadowEvalLogger, kwargs: Mapping[str, object]) -> tuple[asyncio.Task, ...]:
+    """Run the success hook, then await exactly the background tasks it spawned. The hook
+    schedules every pipeline before it returns, so the set taken here is complete."""
+    before: Final = asyncio.all_tasks()
+    await logger.async_log_success_event(kwargs, RESPONSE, None, None)
+    spawned: Final = tuple(asyncio.all_tasks() - before)
+    await asyncio.wait_for(asyncio.gather(*spawned), timeout=5)
+    return spawned
+
+
+@pytest.mark.asyncio
+class TestSameModelSkip:
+    """An opted-in reverse job skips a sample whose response came from the baseline's own
+    group: comparing a group with itself only manufactures ties, so it is counted apart
+    and costs nothing, while any doubt about the served group falls back to evaluating."""
+
+    @pytest.mark.parametrize(
+        ("baseline_model", "model_group", "metadata", "aliases"),
+        [
+            ("baseline-model", "my-router", _served("baseline-model"), {}),
+            ("baseline-model", "my-router", _served("fast"), {"fast": "baseline-model"}),
+            ("fast", "my-router", _served("baseline-model"), {"fast": "baseline-model"}),
+            ("baseline-model", "baseline-model", _served("other-model", attempted_fallbacks=1), {}),
+        ],
+        ids=["router-picked-the-baseline", "pick-is-an-alias", "baseline-is-an-alias", "fallback-landed-on-baseline"],
+    )
+    async def test_baseline_served_sample_is_skipped_without_spend(
+        self, baseline_model, model_group, metadata, aliases
+    ):
+        prisma: Final = _prisma()
+        router: Final = _router()
+        _serve_aliases(router, aliases)
+        logger: Final = _logger(router=router, prisma=prisma, jobs=(_skipping_job(baseline_model=baseline_model),))
+
+        spawned: Final = await _hook_and_settle(
+            logger, _success_kwargs(request_metadata=metadata, model_group=model_group)
+        )
+
+        assert spawned == ()
+        router.acompletion.assert_not_called()
+        prisma.db.litellm_shadowevalattempt.create.assert_not_awaited()
+        assert logger._test_counter == {}
+        assert logger._test_funnel == [("job-1", "same_model")]
+
+    @pytest.mark.parametrize(
+        ("model_group", "metadata"),
+        [
+            ("my-router", _served("other-model")),
+            ("my-router", _served("baseline-twin")),
+            ("fallback-model", _served("baseline-model", attempted_fallbacks=1)),
+            ("my-router", _served("baseline-model", attempted_fallbacks=1)),
+            ("", _served("baseline-model")),
+            ("my-router", _served(None)),
+        ],
+        ids=[
+            "router-picked-another-group",
+            "differently-named-group-for-the-same-provider-model",
+            "fallback-left-the-baseline-pick",
+            "hop-back-onto-the-router-name",
+            "no-served-group",
+            "no-routed-model",
+        ],
+    )
+    async def test_sample_not_provably_served_by_the_baseline_is_judged(self, model_group, metadata):
+        prisma: Final = _prisma()
+        logger: Final = _logger(router=_router(), prisma=prisma, jobs=(_skipping_job(),))
+
+        await _hook_and_settle(logger, _success_kwargs(request_metadata=metadata, model_group=model_group))
+
+        row: Final = prisma.db.litellm_shadowevalattempt.create.await_args.kwargs["data"]
+        assert row["shadow_model"] == "baseline-model"
+        assert row["outcome"] in ("real", "shadow", "tie")
+        assert logger._test_funnel == []
+
+    async def test_a_job_without_the_flag_still_judges_the_baseline_against_itself(self):
+        prisma: Final = _prisma()
+        logger: Final = _logger(router=_router(), prisma=prisma, jobs=(_reverse_job(ends_at=_FAR_FUTURE),))
+
+        await _hook_and_settle(logger, _success_kwargs(request_metadata=_served(), model_group="my-router"))
+
+        assert prisma.db.litellm_shadowevalattempt.create.await_count == 1
+        assert logger._test_funnel == []
+
+    async def test_skips_leave_the_turn_budget_for_judged_samples(self):
+        prisma: Final = _prisma()
+        logger: Final = _logger(router=_router(), prisma=prisma, jobs=(_skipping_job(max_turns=1),))
+
+        for request_id in ("req-skip-1", "req-skip-2"):
+            await _hook_and_settle(
+                logger, _success_kwargs(request_id=request_id, request_metadata=_served(), model_group="my-router")
+            )
+        await _hook_and_settle(
+            logger,
+            _success_kwargs(request_id="req-judged", request_metadata=_served("other-model"), model_group="my-router"),
+        )
+
+        judged: Final = prisma.db.litellm_shadowevalattempt.create.await_args_list
+        assert [call.kwargs["data"]["request_id"] for call in judged] == ["req-judged"]
+        assert logger._test_funnel == [("job-1", "same_model"), ("job-1", "same_model")]
+
+    async def test_the_flag_is_read_off_the_stored_job_row(self):
+        prisma: Final = _prisma(jobs=[_job_record(_skipping_job())])
+        router: Final = _router()
+        logger: Final = _logger(router=router, prisma=prisma)
+
+        await _hook_and_settle(logger, _success_kwargs(request_metadata=_served(), model_group="my-router"))
+
+        router.acompletion.assert_not_called()
+        assert logger._test_funnel == [("job-1", "same_model")]
