@@ -145,6 +145,11 @@ def _stamp_served_service_tier(response: ModelResponseStream, complete_streaming
         setattr(response, "service_tier", served_tier)  # noqa: B010  # pydantic extra, not a declared field
 
 
+def _served_service_tier_update(upstream_chunk: object) -> Mapping[str, str]:
+    served_tier: Final = stored_attribute(upstream_chunk, "service_tier")
+    return MappingProxyType({"service_tier": served_tier} if isinstance(served_tier, str) and served_tier else {})
+
+
 def _apply_provider_fields(response: ModelResponseStream, fields: Mapping[str, object]) -> None:
     for key, value in fields.items():
         setattr(response, key, value)
@@ -1490,7 +1495,10 @@ class CustomStreamWrapper:
 
                 if getattr(model_response, "usage", None) is not None:
                     return model_response.model_copy(
-                        update={"choices": [choice for choice in model_response.choices if _carries_payload(choice)]}
+                        update={
+                            "choices": [choice for choice in model_response.choices if _carries_payload(choice)],
+                            **_served_service_tier_update(response_obj.get("original_chunk")),
+                        }
                     )
                 return
             # flush any remaining holding chunk

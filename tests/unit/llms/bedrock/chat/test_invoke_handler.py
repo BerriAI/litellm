@@ -2207,6 +2207,90 @@ async def test_a_nova_invoke_stream_without_a_served_tier_reports_no_tier(
     assert getattr(non_streaming, "service_tier", None) is None
 
 
+def _converse_serving(served_tier: str) -> httpx.MockTransport:
+    usage: Final = {"inputTokens": 1000, "outputTokens": 1000, "totalTokens": 2000}
+
+    def reply(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/converse-stream"):
+            return httpx.Response(
+                200,
+                headers=_event_stream_headers(),
+                content=b"".join(
+                    (
+                        _converse_event_frame("messageStart", {"role": "assistant"}),
+                        _converse_event_frame("contentBlockDelta", {"contentBlockIndex": 0, "delta": {"text": "hi"}}),
+                        _converse_event_frame("contentBlockStop", {"contentBlockIndex": 0}),
+                        _converse_event_frame("messageStop", {"stopReason": "end_turn"}),
+                        _converse_event_frame(
+                            "metadata",
+                            {"usage": usage, "metrics": {"latencyMs": 1}, "serviceTier": {"type": served_tier}},
+                        ),
+                    )
+                ),
+            )
+        return httpx.Response(
+            200,
+            json={
+                "output": {"message": {"role": "assistant", "content": [{"text": "hi"}]}},
+                "stopReason": "end_turn",
+                "usage": usage,
+                "metrics": {"latencyMs": 1},
+                "serviceTier": {"type": served_tier},
+            },
+        )
+
+    return httpx.MockTransport(reply)
+
+
+@pytest.mark.parametrize(
+    ("requested_tier", "served_tier"),
+    [
+        pytest.param({"extra_body": {"serviceTier": {"type": "priority"}}}, "priority", id="extra-body"),
+        pytest.param({"service_tier": "flex"}, "priority", id="openai-served-priority"),
+        pytest.param({"serviceTier": {"type": "priority"}}, "default", id="native-served-default"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_a_converse_stream_reports_and_bills_the_tier_its_metadata_event_names_like_a_non_streaming_call(
+    _aws_test_credentials: None, requested_tier: Mapping[str, object], served_tier: str
+) -> None:
+    model: Final = "bedrock/converse/mistral.mistral-large-3-675b-instruct"
+    messages: Final = [{"role": "user", "content": "hi"}]
+    non_streaming: Final = litellm.completion(
+        model=model,
+        messages=messages,
+        client=HTTPHandler(client=httpx.Client(transport=_converse_serving(served_tier))),
+        **requested_tier,
+    )
+    sync_chunks: Final = tuple(
+        litellm.completion(
+            model=model,
+            messages=messages,
+            stream=True,
+            client=HTTPHandler(client=httpx.Client(transport=_converse_serving(served_tier))),
+            **requested_tier,
+        )
+    )
+    async_stream: Final = await litellm.acompletion(
+        model=model,
+        messages=messages,
+        stream=True,
+        client=AsyncHTTPHandler(transport=_converse_serving(served_tier)),
+        **requested_tier,
+    )
+    async_chunks: Final = tuple([chunk async for chunk in async_stream])
+    sync_streamed: Final = litellm.stream_chunk_builder(list(sync_chunks))
+    async_streamed: Final = litellm.stream_chunk_builder(list(async_chunks))
+
+    assert isinstance(non_streaming, litellm.ModelResponse)
+    assert sync_streamed.service_tier == async_streamed.service_tier == non_streaming.service_tier == served_tier
+    assert (
+        litellm.completion_cost(sync_streamed)
+        == litellm.completion_cost(async_streamed)
+        == non_streaming._hidden_params["response_cost"]
+    )
+
+
 @pytest.mark.asyncio
 async def test_aws_event_stream_decoder_aiter_bytes_closes_its_source_on_aclose() -> None:
     source_closed: Final = asyncio.Event()
