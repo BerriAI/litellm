@@ -60,7 +60,7 @@ from litellm.litellm_core_utils.core_helpers import (
     get_metadata_variable_name_from_kwargs,
     get_or_create_metadata_bucket,
 )
-from litellm.litellm_core_utils.get_provider_specific_headers import override_headers
+from litellm.litellm_core_utils.get_provider_specific_headers import names_a_claude_model, override_headers
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import validate_no_callback_env_reference
 from litellm.litellm_core_utils.internal_call_metadata import MODEL_ACCESS_GROUP_METADATA_KEY
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -1106,7 +1106,7 @@ _LITELLM_PARAMS: Final = TypeAdapter(Mapping[str, object])
 _UPSTREAM_CREDENTIAL_HEADERS: Final = frozenset(("authorization", "x-api-key", "api-key"))
 
 
-def _with_pinned_profile_id_where_sent(
+def _with_pinned_profile_id_for_claude_or_where_sent(
     pinned_profile_id: str | None,
     caller_credentials: Mapping[str, str],
     headers: Mapping[str, str],
@@ -1117,7 +1117,9 @@ def _with_pinned_profile_id_where_sent(
     sends_caller_credential: Final = any(
         caller_credentials.get(name.lower()) == value for name, value in headers.items()
     )
-    if pinned_profile_id is None or not sends_profile_id or sends_caller_credential:
+    model: Final = None if body is None else body.get("model")
+    names_claude: Final = isinstance(model, str) and names_a_claude_model(model)
+    if pinned_profile_id is None or sends_caller_credential or not (sends_profile_id or names_claude):
         return headers, body
     return override_headers(headers, {ANTHROPIC_USER_PROFILE_ID_HEADER: pinned_profile_id}), body
 
@@ -1144,7 +1146,9 @@ def _upstream_request_filter_or_pin(
         }
     )
     return partial(
-        _with_pinned_profile_id_where_sent, pinned_anthropic_user_profile_id(user_api_key_dict), caller_credentials
+        _with_pinned_profile_id_for_claude_or_where_sent,
+        pinned_anthropic_user_profile_id(user_api_key_dict),
+        caller_credentials,
     )
 
 
