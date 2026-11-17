@@ -14,6 +14,7 @@ from integration._support.scim import (
     PATCH_OP_SCHEMA,
     TAKE_TEAM_LOCK_SQL,
     TAKE_USER_ROW_LOCK_SQL,
+    add_to_group,
     create_group,
     created_team,
     seed_users,
@@ -21,6 +22,7 @@ from integration._support.scim import (
     waiters_on_lock_held_by,
     waiters_on_rows_locked_by,
 )
+from pydantic import JsonValue
 
 pytestmark: Final = pytest.mark.shares_worker_state
 
@@ -40,6 +42,16 @@ SET members_with_roles = COALESCE(
 WHERE team_id = %(team)s
 """
 READD_TEAM_SQL: Final = 'UPDATE "LiteLLM_UserTable" SET teams = array_append(teams, %(team)s) WHERE user_id = %(user)s'
+USER_TEAM_COUNT_SQL: Final = 'SELECT cardinality(teams)::text AS teams FROM "LiteLLM_UserTable" WHERE user_id = %s'
+ROSTER_SQL: Final = """
+SELECT member->>'user_id' AS user_id
+FROM "LiteLLM_TeamTable", jsonb_array_elements(members_with_roles::jsonb) AS member
+WHERE team_id = %s
+"""
+SESSIONS_WAITING_ON_A_LOCK_SQL: Final = """
+SELECT count(*)::text AS waiting FROM pg_stat_activity
+WHERE datname = current_database() AND wait_event_type = 'Lock'
+"""
 TEAM_ENTRIES_SQL: Final = (
     'SELECT cardinality(array_positions(teams, %s))::text AS entries FROM "LiteLLM_UserTable" WHERE user_id = %s'
 )
@@ -208,3 +220,140 @@ def test_a_scim_user_write_that_leaves_out_a_deleted_team_drops_it_from_the_user
         assert response.status_code == 200, response.text
         assert users_referencing(deleted_team) == frozenset()
         assert users_referencing(team) == frozenset({user})
+
+
+def _roster(team: str) -> list[str]:
+    return [str(row["user_id"]) for row in read_rows(ROSTER_SQL, (team,))]
+
+
+def _sessions_waiting_on_a_lock() -> int:
+    return int(str(read_rows(SESSIONS_WAITING_ON_A_LOCK_SQL, ())[0]["waiting"]))
+
+
+@pytest.mark.parametrize(
+    ("write", "status"),
+    [(_put_profile, 200), (_patch_display_name, 200), (_post_existing_email, 201)],
+    ids=["put", "patch", "post_existing_email"],
+)
+def test_a_scim_user_write_keeps_the_team_a_scim_group_push_on_a_peer_proxy_committed_first(
+    gateway: Gateway, peer: Gateway, write: Callable[[Gateway, str, str], httpx.Response], status: int
+) -> None:
+    with gateway.scenario() as scenario, ThreadPoolExecutor(max_workers=2) as pool:
+        (user,) = seed_users(scenario, 1)
+        email: Final = f"{user}@example.com"
+        write_rows(SET_EMAIL_SQL, (email, user))
+        team: Final = created_team(scenario, create_group(gateway, ()))
+
+        with _held_user_row(user):
+            pushing: Final = pool.submit(add_to_group, peer, team, (user,))
+            eventually(_sessions_waiting_on_a_lock, lambda waiting: waiting >= 1, seconds=30)
+            writing: Final = pool.submit(write, gateway, user, email)
+            eventually(_sessions_waiting_on_a_lock, lambda waiting: waiting >= 2, seconds=30)
+        pushed: Final = pushing.result()
+        response: Final = writing.result()
+
+        assert pushed.status_code == 200, pushed.text
+        assert response.status_code == status, response.text
+        assert _roster(team) == [user]
+        assert read_rows(TEAM_ENTRIES_SQL, (team, user)) == [{"entries": "1"}]
+        assert read_rows(USER_ALIAS_SQL, (user,)) == [{"user_alias": PROFILE_NAME}]
+
+
+@pytest.mark.parametrize("write", [_put_with_group, _patch_replace_groups], ids=["put", "patch"])
+def test_dropping_a_deleted_team_keeps_a_team_appended_while_the_write_waited_on_the_user_row(
+    gateway: Gateway, write: Callable[[Gateway, str, str], httpx.Response]
+) -> None:
+    with gateway.scenario() as scenario, ThreadPoolExecutor(max_workers=1) as pool:
+        (user,) = seed_users(scenario, 1)
+        team: Final = created_team(scenario, create_group(gateway, (user,)))
+        deleted_team: Final = f"integration-deleted-team-{uuid.uuid4().hex}"
+        concurrent_team: Final = f"integration-concurrent-team-{uuid.uuid4().hex}"
+        write_rows(APPEND_TEAM_SQL, (deleted_team, user))
+
+        with _held_user_row(user) as holder:
+            pending: Final = pool.submit(write, gateway, user, team)
+            eventually(
+                lambda: waiters_on_rows_locked_by(holder.info.backend_pid), lambda waiting: waiting >= 1, seconds=30
+            )
+            holder.execute(APPEND_TEAM_SQL, (concurrent_team, user))
+        response: Final = pending.result()
+
+        assert response.status_code == 200, response.text
+        assert users_referencing(deleted_team) == frozenset()
+        assert users_referencing(concurrent_team) == frozenset({user})
+        assert read_rows(TEAM_ENTRIES_SQL, (team, user)) == [{"entries": "1"}]
+
+
+@pytest.mark.parametrize("write", [_put_with_group, _patch_add_group], ids=["put", "patch"])
+def test_repeating_the_write_that_repaired_a_member_leaves_the_team_on_the_user_once(
+    gateway: Gateway, write: Callable[[Gateway, str, str], httpx.Response]
+) -> None:
+    with gateway.scenario() as scenario:
+        (user,) = seed_users(scenario, 1)
+        team: Final = created_team(scenario, create_group(gateway, (user,)))
+        write_rows(DROP_TEAM_SQL, (team, user))
+
+        first: Final = write(gateway, user, team)
+        second: Final = write(gateway, user, team)
+
+        assert first.status_code == 200, first.text
+        assert second.status_code == 200, second.text
+        assert read_rows(TEAM_ENTRIES_SQL, (team, user)) == [{"entries": "1"}]
+        assert _roster(team) == [user]
+
+
+def _put_groups(candidate: Gateway, user: str, groups: list[JsonValue], key: str | None) -> httpx.Response:
+    return candidate.request(
+        "PUT",
+        f"/scim/v2/Users/{user}",
+        {
+            "schemas": [SCIM_CORE_USER_SCHEMA],
+            "userName": user,
+            "emails": [{"value": f"{user}@example.com", "primary": True}],
+            "groups": groups,
+            "active": True,
+        },
+        key=key,
+    )
+
+
+def _patch_groups(candidate: Gateway, user: str, groups: list[JsonValue], key: str | None) -> httpx.Response:
+    return candidate.request(
+        "PATCH",
+        f"/scim/v2/Users/{user}",
+        {"schemas": [PATCH_OP_SCHEMA], "Operations": [{"op": "replace", "path": "groups", "value": groups}]},
+        key=key,
+    )
+
+
+@pytest.mark.parametrize("write", [_put_groups, _patch_groups], ids=["put", "patch"])
+@pytest.mark.parametrize(
+    ("extra_group", "key", "status"),
+    [
+        (f"integration-never-created-{uuid.uuid4().hex}", None, 200),
+        ("", None, 200),
+        ("x" * 5120, None, 200),
+        (None, None, 200),
+        (None, "sk-not-a-scim-token", 401),
+    ],
+    ids=["unknown_team", "empty_id", "5kb_id", "same_team_twice", "unauthenticated"],
+)
+def test_a_scim_user_write_with_an_unusable_group_or_token_leaves_the_users_team_on_it_once(
+    gateway: Gateway,
+    write: Callable[[Gateway, str, list[JsonValue], str | None], httpx.Response],
+    extra_group: str | None,
+    key: str | None,
+    status: int,
+) -> None:
+    with gateway.scenario() as scenario:
+        (user,) = seed_users(scenario, 1)
+        team: Final = created_team(scenario, create_group(gateway, (user,)))
+
+        groups: Final[list[JsonValue]] = [{"value": team}, {"value": team if extra_group is None else extra_group}]
+
+        response: Final = write(gateway, user, groups, key)
+
+        assert response.status_code == status, response.text
+        assert read_rows(TEAM_ENTRIES_SQL, (team, user)) == [{"entries": "1"}]
+        assert _roster(team) == [user]
+        assert read_rows(USER_TEAM_COUNT_SQL, (user,)) == [{"teams": "1"}]
