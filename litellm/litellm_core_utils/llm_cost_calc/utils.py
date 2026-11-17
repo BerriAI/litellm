@@ -20,7 +20,7 @@ from litellm.litellm_core_utils.llm_cost_calc.tiered_pricing import (
     tier_rate,
 )
 from litellm.litellm_core_utils.llm_cost_calc.typed_token_rates import token_rates
-from litellm.litellm_core_utils.typed_model_config import resolved_model_config
+from litellm.litellm_core_utils.typed_model_config import billed_fields, resolved_model_config
 from litellm.llms.fireworks_ai.cache_pricing import with_default_cache_read_rate
 from litellm.types.cost_map_configs import OffPeakPricing, TokenPricing
 from litellm.types.utils import (
@@ -2154,21 +2154,15 @@ def calculate_prompt_caching_savings(
     ``billed_at`` is the request's completion time, so off-peak windows resolve as the
     biller saw them rather than at the later spend write.
     """
-    if custom_llm_provider == "openai" or custom_llm_provider == "anthropic":  # noqa: PLR1714  # narrows the literal
-        billed_fields: Final = type(resolved_model_config("", custom_llm_provider, model_info)).model_fields
-        return calculate_prompt_caching_savings(
-            cast(  # cast-ok: a ModelInfo minus keys stays a ModelInfo
-                ModelInfo,
-                {key: value for key, value in model_info.items() if "cost" not in key or key in billed_fields},
-            ),
-            usage,
-            None,
-            service_tier,
-            data_residency,
-            vertex_location,
-            billed_at,
+    fields: Final = billed_fields(custom_llm_provider)
+    billed_info: Final = (
+        model_info
+        if fields is None
+        else cast(  # cast-ok: a ModelInfo minus keys stays a ModelInfo
+            ModelInfo, {key: value for key, value in model_info.items() if "cost" not in key or key in fields}
         )
-    model_info_with_cache_read_default: Final = apply_provider_cache_read_default(model_info, custom_llm_provider)
+    )
+    model_info_with_cache_read_default: Final = apply_provider_cache_read_default(billed_info, custom_llm_provider)
     base_costs: Final = _get_token_base_cost(
         model_info=model_info_with_cache_read_default,
         usage=usage,
@@ -2177,7 +2171,7 @@ def calculate_prompt_caching_savings(
         threshold_is_inclusive=_uses_inclusive_token_thresholds(custom_llm_provider),
     )
     provider_cache_read_cost: Final = resolve_explicit_cache_read_cost_rate(
-        model_info=model_info,
+        model_info=billed_info,
         usage=usage,
         current_time=billed_at,
         service_tier=service_tier,
@@ -2211,9 +2205,9 @@ def calculate_prompt_caching_savings(
         ),
     )
     uplift: Final = (
-        get_regional_uplift_multiplier(model_info, data_residency)
-        * get_fedramp_uplift_multiplier(model_info, data_residency)
-        * get_vertex_regional_endpoint_uplift(model_info, vertex_location)
+        get_regional_uplift_multiplier(billed_info, data_residency)
+        * get_fedramp_uplift_multiplier(billed_info, data_residency)
+        * get_vertex_regional_endpoint_uplift(billed_info, vertex_location)
     )
     return (read_discount - write_premium) * uplift
 

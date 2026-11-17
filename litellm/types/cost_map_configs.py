@@ -146,6 +146,7 @@ class SharedModelConfig(CostMapConfig):
     input_cost_per_token_batches: UsdPrice | None = None
     max_input_tokens: NonNegativeInt | None = None
     max_output_tokens: NonNegativeInt | None = None
+    max_tokens: NonNegativeInt | None = None
     mode: str | None = None
     off_peak_pricing: OffPeakPricing | None = None
     output_cost_per_token: UsdPrice | None = None
@@ -156,11 +157,14 @@ class SharedModelConfig(CostMapConfig):
     supports_computer_use: bool | None = None
     supports_function_calling: bool | None = None
     supports_max_reasoning_effort: bool | None = None
+    supports_parallel_function_calling: bool | None = None
     supports_pdf_input: bool | None = None
     supports_prompt_caching: bool | None = None
     supports_reasoning: bool | None = None
     supports_response_schema: bool | None = None
+    supports_system_messages: bool | None = None
     supports_tool_choice: bool | None = None
+    supports_tool_search: bool | None = None
     supports_vision: bool | None = None
     supports_web_search: bool | None = None
     supports_xhigh_reasoning_effort: bool | None = None
@@ -284,10 +288,7 @@ class OpenAIModelOnOpenAIProvider(SharedModelConfig):
     supports_minimal_reasoning_effort: bool | None = None
     supports_native_streaming: bool | None = None
     supports_none_reasoning_effort: bool | None = None
-    supports_parallel_function_calling: bool | None = None
     supports_prompt_cache_breakpoint: bool | None = None
-    supports_system_messages: bool | None = None
-    supports_tool_search: bool | None = None
     tiered_pricing: tuple[OpenAIPricingTier, ...] | None = None
 
     def _service_tier_prices(self, service_tier: str | None) -> tuple[TokenPrices, TokenPrices] | None:

@@ -20,7 +20,7 @@ _CONFIGS: Final[Mapping[str, type[SharedModelConfig]]] = MappingProxyType(
         AnthropicModelOnAnthropicProvider.inference_provider: AnthropicModelOnAnthropicProvider,
     }
 )
-_COST_MAP_FIELDS: Final = frozenset(ModelInfo.__required_keys__ | ModelInfo.__optional_keys__).union(
+_COST_MAP_FIELDS: Final = frozenset((ModelInfo.__required_keys__ | ModelInfo.__optional_keys__) - {"key"}).union(
     *(config.model_fields for config in _CONFIGS.values())
 )
 
@@ -118,3 +118,9 @@ def resolved_model_config(
     if unbilled:
         _warn_once("%s: model=%s sets %s, which this provider does not bill", config.__name__, model, unbilled)
     return _parse(config, model, row)
+
+
+def billed_fields(custom_llm_provider: str | None) -> frozenset[str] | None:
+    """The fields the provider's config bills, or ``None`` for a provider without a typed config."""
+    config: Final = _CONFIGS.get(custom_llm_provider or "")
+    return None if config is None else frozenset(config.model_fields)

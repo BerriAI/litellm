@@ -6,16 +6,14 @@ import litellm
 from litellm.litellm_core_utils.typed_model_config import _CONFIGS, typed_model_config
 from litellm.llms.anthropic.compaction import supports_native_compaction
 
-_ROWS = tuple(
-    (name, row["litellm_provider"])
-    for name, row in litellm.model_cost.items()
-    if row.get("litellm_provider") in _CONFIGS
-)
+_CATALOG = {name: dict(row) for name, row in litellm.model_cost.items() if row.get("litellm_provider") in _CONFIGS}
+_ROWS = tuple((name, row["litellm_provider"]) for name, row in _CATALOG.items())
 
 
 @pytest.mark.parametrize(("model", "provider"), _ROWS)
-def test_every_field_a_catalog_row_sets_reaches_the_typed_config(model, provider, caplog):
-    row = litellm.model_cost[model]
+def test_every_field_a_catalog_row_sets_reaches_the_typed_config(model, provider, caplog, monkeypatch):
+    row = _CATALOG[model]
+    monkeypatch.setitem(litellm.model_cost, model, row)
     with caplog.at_level(logging.WARNING, logger="LiteLLM"):
         config = typed_model_config(model, provider)
     assert not caplog.records
@@ -86,3 +84,16 @@ def test_unmapped_model_has_no_capabilities():
 def test_native_compaction_follows_the_catalog_flag(model):
     expected = litellm.model_cost[model].get("supports_anthropic_compaction") is True
     assert supports_native_compaction({"model": model, "custom_llm_provider": "anthropic"}) is expected
+
+
+@pytest.mark.parametrize(
+    ("deployment_model", "provider"), [("openai/gpt-5.4-mini", "openai"), ("anthropic/claude-sonnet-4-5", "anthropic")]
+)
+def test_router_registered_model_does_not_warn(deployment_model, provider, caplog, monkeypatch):
+    model = deployment_model.split("/", 1)[1]
+    monkeypatch.setitem(litellm.model_cost, model, dict(_CATALOG[model]))
+    litellm.Router(model_list=[{"model_name": "x", "litellm_params": {"model": deployment_model, "api_key": "sk-x"}}])
+    assert litellm.model_cost[model].keys() > _CATALOG[model].keys()
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        typed_model_config(model, provider)
+    assert not caplog.records
