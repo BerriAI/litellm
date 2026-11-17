@@ -27,6 +27,53 @@ def _matched_models(matches: list[dict] | None) -> list[str]:
     return [deployment["litellm_params"]["model"] for deployment in matches or []]
 
 
+@pytest.mark.parametrize("flag", [False, True])
+@pytest.mark.parametrize(
+    "params,kept_flags",
+    [
+        ({"model": "bedrock/*"}, ()),
+        ({"model": "openai/*"}, ()),
+        (
+            {"model": "azure_ai/*"},
+            ("supports_prompt_cache_breakpoint", "supports_openai_prompt_cache_breakpoint"),
+        ),
+        (
+            {"model": "*", "custom_llm_provider": "azure_ai"},
+            ("supports_prompt_cache_breakpoint", "supports_openai_prompt_cache_breakpoint"),
+        ),
+        (
+            {"model": "openai/fixed-deployment"},
+            (
+                "supports_prompt_cache_breakpoint",
+                "supports_openai_prompt_cache_breakpoint",
+                "supports_bedrock_converse_cache_point",
+                "supports_prompt_caching",
+            ),
+        ),
+    ],
+)
+def test_wildcards_leave_scoped_cache_capabilities_to_the_catalog(params, kept_flags, flag):
+    router = PatternMatchRouter()
+    router.add_pattern(
+        "any/*",
+        {
+            "litellm_params": params,
+            "model_info": {
+                "id": "wildcard",
+                "supports_prompt_cache_breakpoint": flag,
+                "supports_openai_prompt_cache_breakpoint": flag,
+                "supports_bedrock_converse_cache_point": flag,
+                "supports_prompt_caching": flag,
+            },
+        },
+    )
+
+    matches = router.route("any/requested-model")
+
+    assert matches is not None
+    assert matches[0]["model_info"] == {"id": "wildcard", **{name: flag for name in kept_flags}}
+
+
 def test_get_pattern_never_resolves_declared_authenticating_providers(monkeypatch):
     """Regression: resolving a github_copilot/chatgpt name through ``get_llm_provider`` runs the
     provider's OAuth device flow; the auth layer walks every wildcard router on every request, so

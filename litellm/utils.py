@@ -3552,19 +3552,26 @@ def supports_tool_choice(model: str, custom_llm_provider: str | None = None) -> 
     return supports_factory(model=model, custom_llm_provider=custom_llm_provider, key="supports_tool_choice")
 
 
-def _supports_provider_info_factory(model: str, custom_llm_provider: str | None, key: str) -> Literal[True] | None:
+def _declared_capability(model_info: Mapping[str, object], key: str | tuple[str, ...]) -> object:
+    keys: Final = (key,) if isinstance(key, str) else key
+    return next((value for name in keys if (value := model_info.get(name)) is not None), None)
+
+
+def _supports_provider_info_factory(
+    model: str, custom_llm_provider: str | None, key: str | tuple[str, ...]
+) -> Literal[True] | None:
     """
     Check if the given model supports a provider specific model info and return a boolean value.
     """
 
     provider_info: Final = get_provider_info(model=model, custom_llm_provider=custom_llm_provider)
 
-    if provider_info is not None and provider_info.get(key, False) is True:
+    if provider_info is not None and _declared_capability(provider_info, key) is True:
         return True
     return None
 
 
-def supports_factory(model: str, custom_llm_provider: str | None, key: str) -> bool:
+def supports_factory(model: str, custom_llm_provider: str | None, key: str | tuple[str, ...]) -> bool:
     """
     Check if the given model supports function calling and return a boolean value.
 
@@ -3592,17 +3599,18 @@ def supports_factory(model: str, custom_llm_provider: str | None, key: str) -> b
 
         model_info: Final = get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider)
 
-        if model_info.get(key, False) is True:
+        capability: Final = _declared_capability(model_info, key)
+        if capability is True:
             return True
-        elif model_info.get(key) is None:  # don't check if 'False' explicitly set
+        elif capability is None:  # don't check if 'False' explicitly set
             # Fallback: when the provider-prefixed entry (e.g.
             # "deepseek/deepseek-chat") exists but is missing a capability
             # field, check the bare model-name entry (e.g. "deepseek-chat")
             # which may carry the complete metadata.  See #20885.
             bare_model_key: Final = get_model_cost_key(model)
             if bare_model_key is not None:
-                bare_entry: Final = litellm.model_cost.get(bare_model_key) or {}
-                if bare_entry.get(key, False) is True:
+                bare_entry: Final = _get_model_info_from_model_cost(bare_model_key)
+                if _declared_capability(bare_entry, key) is True:
                     return True
 
             supported_by_provider = _supports_provider_info_factory(model, custom_llm_provider, key)
@@ -3760,9 +3768,11 @@ def supports_prompt_caching(model: str, custom_llm_provider: str | None = None) 
 
 
 def supports_prompt_cache_breakpoint(model: str, custom_llm_provider: str | None = None) -> bool:
-    from litellm.integrations.anthropic_cache_control_hook import supports_openai_prompt_cache_breakpoint
-
-    return supports_openai_prompt_cache_breakpoint(model, custom_llm_provider)
+    return _supports_factory(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        key=("supports_openai_prompt_cache_breakpoint", "supports_prompt_cache_breakpoint"),
+    )
 
 
 def supports_assistant_prefill(model: str, custom_llm_provider: str | None = None) -> bool:

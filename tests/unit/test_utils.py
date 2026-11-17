@@ -7130,6 +7130,46 @@ async def test_registered_guardrail_does_not_starve_vector_store_search_results(
     assert provider_fields["search_results"] == search_results
 
 
+@pytest.mark.parametrize("catalog_prefix", ["", "openai/"])
+@pytest.mark.parametrize("query_prefix,provider", [("", "openai"), ("openai/", None)])
+@pytest.mark.parametrize(
+    "canonical,legacy,expected",
+    [(None, True, True), (None, False, False), (True, False, True), (False, True, False)],
+)
+def test_public_cache_breakpoint_lookup_preserves_registered_model_names(
+    monkeypatch, catalog_prefix, query_prefix, provider, canonical, legacy, expected
+):
+    model: Final = "cache-capability-prefix-test"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        f"{catalog_prefix}{model}",
+        {
+            "litellm_provider": "openai",
+            "mode": "chat",
+            "supports_openai_prompt_cache_breakpoint": canonical,
+            "supports_prompt_cache_breakpoint": legacy,
+        },
+    )
+
+    assert litellm.utils.supports_prompt_cache_breakpoint(f"{query_prefix}{model}", provider) is expected
+
+
+def test_public_cache_breakpoint_lookup_keeps_explicit_provider_values_ahead_of_bare_aliases(monkeypatch):
+    model: Final = "cache-capability-precedence-test"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        f"openai/{model}",
+        {"litellm_provider": "openai", "mode": "chat", "supports_prompt_cache_breakpoint": False},
+    )
+    monkeypatch.setitem(
+        litellm.model_cost,
+        model,
+        {"litellm_provider": "openai", "mode": "chat", "supports_openai_prompt_cache_breakpoint": True},
+    )
+
+    assert litellm.utils.supports_prompt_cache_breakpoint(model, "openai") is False
+
+
 class TestIsVisionExplicitlyDisabled:
     """github_copilot and chatgpt run an OAuth device flow inside get_llm_provider; the
     explicit-disable lookup must adopt the declared prefix instead of resolving it, exactly

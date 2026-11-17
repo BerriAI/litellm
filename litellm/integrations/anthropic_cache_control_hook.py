@@ -503,7 +503,7 @@ def _cost_map_lists_model_for_provider(model: str, provider: str, model_cost: Co
     return any(isinstance(entry, Mapping) and entry.get("litellm_provider") == provider for entry in entries)
 
 
-_PROVIDERS_READING_THE_FLAG_AS_CACHE_POINT: Final = frozenset(("bedrock", "bedrock_converse"))
+_PROVIDERS_USING_BEDROCK_CACHE_POINTS: Final = frozenset(("bedrock", "bedrock_converse"))
 _PROVIDERS_HOSTING_OPENAIS_API: Final = frozenset(("azure", "azure_ai", "bedrock_mantle"))
 
 
@@ -511,18 +511,19 @@ def _declared_hosted_flag(
     declared: bool, model: str, provider: str | None, model_cost: CostMap, deployment_provider: object
 ) -> bool | None:
     """
-    A deployment's own ``supports_prompt_cache_breakpoint`` picks OpenAI's breakpoint only where the
-    request goes out OpenAI-shaped. Bedrock reads the same flag on every route as whether Converse takes
-    a ``cachePoint``, and a provider building Anthropic messages takes ``cache_control``, so both keep
-    the Anthropic mark. A gateway or self-hosted server (OpenRouter, a LiteLLM proxy, vLLM) may pass
-    the request on to Anthropic, so there the flag only picks OpenAI's breakpoint for a model the cost
-    map, or the deployment's own ``litellm_provider``, lists under that provider.
+    A deployment's ``supports_openai_prompt_cache_breakpoint`` or its legacy alias picks OpenAI's
+    breakpoint only where the request goes out OpenAI-shaped. Bedrock uses the separate
+    ``supports_bedrock_converse_cache_point`` capability and keeps ``cache_control`` for its Converse
+    translation. Providers building Anthropic messages also keep ``cache_control``. A gateway or
+    self-hosted server (OpenRouter, a LiteLLM proxy, vLLM) may pass the request on to Anthropic, so there
+    the OpenAI flag only picks OpenAI's breakpoint for a model the cost map, or the deployment's own
+    ``litellm_provider``, lists under that provider.
     """
     if provider is None or provider == "openai":
         return None
     return (
         declared
-        and provider not in _PROVIDERS_READING_THE_FLAG_AS_CACHE_POINT
+        and provider not in _PROVIDERS_USING_BEDROCK_CACHE_POINTS
         and (
             provider in _PROVIDERS_HOSTING_OPENAIS_API
             or deployment_provider == provider
