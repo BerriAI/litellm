@@ -194,7 +194,7 @@ pub(crate) fn transform_mantle_messages_request(
             model: model_id,
             ..request
         },
-        context,
+        &context.warning_dropped_disabled_thinking(),
         headers,
         settings,
     )?;
