@@ -60,6 +60,7 @@ from litellm.proxy.common_utils.user_api_key_cache import (
 from litellm.proxy.db.db_lookup_gate import db_lookup_stall_tracker
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     KeyProjectBindingError,
+    _can_user_query_key_info,
     _check_key_project_team,
     _check_key_project_team_on_mutation,
     _check_org_key_limits,
@@ -95,6 +96,7 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
     generate_key_fn,
     generate_key_helper_fn,
     generate_service_account_key_fn,
+    info_key_fn,
     key_aliases,
     key_generation_check,
     list_key_helper,
@@ -120,6 +122,33 @@ from litellm.types.utils import CredentialItem
 from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
 
 client = TestClient(app)
+
+
+@pytest.mark.asyncio
+async def test_impersonated_caller_cannot_use_the_service_key_for_key_info() -> None:
+    auth: Final = UserAPIKeyAuth(api_key="service-key", user_id="subject").model_copy(
+        update={"impersonated_by": "service-user"}
+    )
+    key_info: Final = LiteLLM_VerificationToken(token="service-key", user_id="service-user")
+
+    assert (
+        await _can_user_query_key_info(
+            user_api_key_dict=auth,
+            key=auth.api_key,
+            key_info=key_info,
+        )
+        is False
+    )
+
+
+@pytest.mark.asyncio
+async def test_impersonated_key_info_requires_an_explicit_key() -> None:
+    auth: Final = UserAPIKeyAuth(user_id="subject").model_copy(update={"impersonated_by": "service-user"})
+
+    with pytest.raises(ProxyException) as error:
+        await info_key_fn(key=None, user_api_key_dict=auth)
+
+    assert error.value.code == "400"
 
 
 @pytest.mark.asyncio
@@ -7645,7 +7674,14 @@ async def _run_bulk_update_on_one_key(
     from litellm.proxy.management_endpoints.key_management_endpoints import bulk_update_keys
 
     key_in_db = LiteLLM_VerificationToken(
-        token=_BULK_UPDATE_TOKEN, user_id="test-user", team_id="team-1", max_budget=100.0, budget_id="budget-1"
+        token=_BULK_UPDATE_TOKEN,
+        user_id="test-user",
+        team_id="team-1",
+        max_budget=100.0,
+        budget_id="budget-1",
+        budget_duration="30d",
+        budget_reset_at=datetime(2025, 1, 1, tzinfo=timezone.utc),
+        metadata={"purpose": "unchanged"},
     )
     mock_prisma_client = AsyncMock()
     mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(return_value=key_in_db)
@@ -7704,7 +7740,7 @@ async def test_bulk_update_keys_item_without_a_field_leaves_that_column_alone(mo
     written = _written_key_row(await _bulk_update_one_key(monkeypatch, {"tags": ["team-a"]}))
 
     assert written["metadata"]["tags"] == ["team-a"]
-    assert not {"max_budget", "team_id", "budget_id"} & written.keys()
+    assert not {"max_budget", "team_id", "budget_id", "user_id", "budget_duration", "budget_reset_at"} & written.keys()
 
 
 @pytest.mark.asyncio
@@ -7714,6 +7750,56 @@ async def test_bulk_update_keys_explicit_null_still_clears_the_field(monkeypatch
 
     assert written["max_budget"] is None
     assert not {"team_id", "budget_id"} & written.keys()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("item_payload", "expected_changes"),
+    [
+        ({"user_id": "new-owner"}, {"user_id": "new-owner"}),
+        ({"user_id": None}, {"user_id": None}),
+        ({"budget_duration": None}, {"budget_duration": None, "budget_reset_at": None}),
+    ],
+)
+async def test_bulk_update_keys_applies_owner_and_period_changes_without_overwriting_other_fields(
+    monkeypatch: pytest.MonkeyPatch,
+    item_payload: Mapping[str, object],
+    expected_changes: Mapping[str, object],
+) -> None:
+    written: Final = _written_key_row(await _bulk_update_one_key(monkeypatch, item_payload))
+
+    assert written == {"token": _BULK_UPDATE_TOKEN, "metadata": {"purpose": "unchanged"}, **expected_changes}
+
+
+@pytest.mark.asyncio
+async def test_bulk_update_keys_new_period_reschedules_the_budget_without_changing_its_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    written: Final = _written_key_row(await _bulk_update_one_key(monkeypatch, {"budget_duration": "7d"}))
+
+    assert isinstance(written["budget_reset_at"], datetime)
+    assert {field: value for field, value in written.items() if field != "budget_reset_at"} == {
+        "token": _BULK_UPDATE_TOKEN,
+        "budget_duration": "7d",
+        "metadata": {"purpose": "unchanged"},
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bad_duration", ["0s", "-5m", "invalid"])
+async def test_bulk_update_keys_rejects_invalid_period_without_writing_the_key(
+    monkeypatch: pytest.MonkeyPatch, bad_duration: str
+) -> None:
+    response, prisma = await _run_bulk_update_on_one_key(monkeypatch, {"budget_duration": bad_duration})
+
+    assert response.successful_updates == []
+    assert [(update.key, update.failed_reason) for update in response.failed_updates] == [
+        (
+            _BULK_UPDATE_TOKEN,
+            f"Invalid budget_duration '{bad_duration}'. Use a format like '1h', '24h', '7d', or '30d'.",
+        )
+    ]
+    prisma.update_data.assert_not_awaited()
 
 
 @pytest.mark.asyncio

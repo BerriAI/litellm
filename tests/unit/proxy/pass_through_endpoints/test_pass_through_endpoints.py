@@ -1984,6 +1984,58 @@ async def test_pass_through_request_strips_client_guardrail_information(allow_cl
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("currency", ["EUR", "USD"])
+async def test_pass_through_request_rejects_pricing_currency_before_any_hook_or_upstream(currency: str) -> None:
+    mock_request: Final = MagicMock(spec=Request)
+    mock_request.method = "POST"
+    mock_request.headers = Headers({})
+    mock_request.query_params = QueryParams({})
+
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging:
+        mock_proxy_logging.pre_call_hook = AsyncMock(side_effect=RuntimeError("must not be reached"))
+        mock_proxy_logging.post_call_failure_hook = AsyncMock()
+        with pytest.raises(ProxyException) as rejected:
+            await pass_through_request(
+                request=mock_request,
+                target="http://test.com",
+                custom_headers={},
+                user_api_key_dict=UserAPIKeyAuth(metadata={"allow_client_pricing_override": True}),
+                custom_body={"model": "gpt-5.4-mini", "pricing_currency": currency, "input_cost_per_token": 0.5},
+            )
+
+    assert rejected.value.code == "400"
+    assert rejected.value.param == "pricing_currency"
+    mock_proxy_logging.pre_call_hook.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("body", [{}, {"pricing_currency": None}], ids=["omitted", "null"])
+async def test_pass_through_request_keeps_usd_prices_without_an_explicit_pricing_currency(
+    body: dict[str, object],
+) -> None:
+    mock_request: Final = MagicMock(spec=Request)
+    mock_request.method = "POST"
+    mock_request.headers = Headers({})
+    mock_request.query_params = QueryParams({})
+
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging:
+        mock_proxy_logging.pre_call_hook = AsyncMock(side_effect=RuntimeError("stop before upstream"))
+        mock_proxy_logging.post_call_failure_hook = AsyncMock()
+        with pytest.raises(ProxyException):
+            await pass_through_request(
+                request=mock_request,
+                target="http://test.com",
+                custom_headers={},
+                user_api_key_dict=UserAPIKeyAuth(metadata={"allow_client_pricing_override": True}),
+                custom_body={"model": "gpt-5.4-mini", "input_cost_per_token": 0.5, **body},
+            )
+
+    hooked_body: Final = mock_proxy_logging.pre_call_hook.call_args.kwargs["data"]
+    assert hooked_body["input_cost_per_token"] == 0.5
+    assert "pricing_currency" not in hooked_body
+
+
+@pytest.mark.asyncio
 async def test_create_pass_through_route_forwards_timeout():
     unique_path = "/test/path/unique/timeout"
     endpoint_func = create_pass_through_route(

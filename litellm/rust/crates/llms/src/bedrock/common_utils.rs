@@ -16,8 +16,8 @@ const ROUTING_PREFIXES: [&str; 8] = [
     "nova-2/",
     "nova/",
 ];
-const CROSS_REGION_INFERENCE_PREFIXES: [&str; 7] =
-    ["global", "us", "eu", "apac", "jp", "au", "us-gov"];
+const CROSS_REGION_INFERENCE_PREFIXES: [&str; 8] =
+    ["global", "us", "eu", "apac", "jp", "au", "ca", "us-gov"];
 
 pub fn bedrock_base_model(model: &str) -> &str {
     let unrouted = ROUTE_PREFIXES
@@ -319,6 +319,7 @@ mod tests {
 
     #[rstest]
     #[case::cross_region("us.anthropic.claude-x-v1:0", "anthropic.claude-x-v1:0")]
+    #[case::canada_cross_region("ca.anthropic.claude-x-v1:0", "anthropic.claude-x-v1:0")]
     #[case::converse_route("bedrock/converse/anthropic.claude-x", "anthropic.claude-x")]
     #[case::mantle_route(
         "bedrock/mantle/anthropic.claude-sonnet-5",

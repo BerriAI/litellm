@@ -1,6 +1,8 @@
 use std::time::Duration;
 
-use litellm_python_compat::{BigInt, number};
+use litellm_python_compat::{
+    BigInt, flags::redis_str_to_bool, json::from_json, number, pydantic::lax_bool, truthy::truthy,
+};
 use litellm_redis_types::Ignored;
 use litellm_secret_value::SecretValue;
 use serde_json::Value;
@@ -210,11 +212,10 @@ pub(super) fn flag(entry: Option<&Entry>) -> Result<bool, Error> {
         return Ok(false);
     };
     match &entry.value {
-        Value::Bool(flag) => Ok(*flag),
-        Value::Number(number) => Ok(number.as_f64().is_some_and(|number| number != 0.0)),
-        Value::String(text) => match text.to_ascii_lowercase().as_str() {
-            "true" | "1" | "yes" => Ok(true),
-            "false" | "0" | "no" | "off" | "f" | "n" => Ok(false),
+        Value::Bool(_) | Value::Number(_) => Ok(truthy(&from_json(entry.value.clone()))),
+        Value::String(text) => match (redis_str_to_bool(text), lax_bool(&text.as_str().into())) {
+            (true, Some(true)) => Ok(true),
+            (false, Some(false)) => Ok(false),
             _ => Err(invalid(&entry.source, Expected::Boolean)),
         },
         _ => Err(invalid(&entry.source, Expected::Boolean)),

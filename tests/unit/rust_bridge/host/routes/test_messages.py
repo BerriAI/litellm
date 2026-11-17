@@ -19,6 +19,7 @@ import pytest
 from pydantic import TypeAdapter, ValidationError
 
 import litellm
+from litellm import anthropic_beta_headers_manager
 from litellm.caching.llm_caching_handler import LLMClientCache
 from litellm.constants import (
     ANTHROPIC_MESSAGES_DETACHED_STREAM_DRAIN_TIMEOUT_SECONDS,
@@ -87,6 +88,11 @@ def test_settings_drain_a_detached_stream_only_on_an_async_call(asynchronous: bo
     )
 
 
+@pytest.mark.parametrize("asynchronous", [True, False])
+def test_settings_retry_a_failed_connect_only_on_an_async_call(asynchronous: bool) -> None:
+    assert messages_host.settings({}, asynchronous=asynchronous)["connect_retry"] is asynchronous
+
+
 def test_settings_project_caller_configuration_without_resolving_a_model(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "drop_params", False)
     monkeypatch.setattr(litellm, "reasoning_auto_summary", True)
@@ -113,6 +119,7 @@ def test_settings_project_caller_configuration_without_resolving_a_model(monkeyp
         "ascii_request_headers": True,
         "detached_drain_timeout": None,
         "detached_drain_limit": None,
+        "connect_retry": False,
     }
 
 
@@ -290,6 +297,33 @@ def test_azure_ad_token_is_the_one_python_mints(
 )
 def test_filters_beta_headers_is_what_the_provider_config_says(model: str, provider: str, expected: bool) -> None:
     assert messages_host.filters_beta_headers(model, provider, None) is expected
+
+
+@pytest.mark.parametrize(
+    ("model", "provider", "api_base", "carried"),
+    [
+        pytest.param("anthropic/claude-sonnet-4-5", "anthropic", None, False, id="anthropic"),
+        pytest.param(
+            "anthropic/claude-sonnet-4-5",
+            "anthropic",
+            "https://example-resource.services.ai.azure.com/anthropic",
+            True,
+            id="anthropic_foundry",
+        ),
+        pytest.param("azure_ai/claude-sonnet-4-5", "azure_ai", None, True, id="azure_ai"),
+        pytest.param(_BEDROCK_INVOKE, "bedrock", None, True, id="bedrock_invoke"),
+    ],
+)
+def test_beta_headers_config_is_the_map_python_loaded_for_a_filtering_call(
+    monkeypatch: pytest.MonkeyPatch, model: str, provider: str, api_base: str | None, carried: bool
+) -> None:
+    loaded: Final = {"provider_aliases": {}, "azure_ai": {"advisor-tool-2026-03-01": "advisor-tool-2026-03-01"}}
+    monkeypatch.setattr(anthropic_beta_headers_manager, "_BETA_HEADERS_CONFIG", loaded)
+
+    config: Final = messages_host.beta_headers_config(model, provider, api_base)
+
+    assert (config is loaded) is carried
+    assert carried or config is None
 
 
 @pytest.mark.parametrize(
@@ -1363,14 +1397,61 @@ def test_azure_ai_reads_azure_api_base_once_and_hands_it_to_the_native_route(
 
 @pytest.mark.usefixtures("no_tls_settings")
 @pytest.mark.parametrize(
+    ("environment", "hosted", "read"),
+    (
+        (
+            {"ANTHROPIC_API_BASE": "http:///d/anthropic", "ANTHROPIC_BASE_URL": "https://b.example"},
+            True,
+            [("ANTHROPIC_API_BASE", "http:///d/anthropic")],
+        ),
+        (
+            {"ANTHROPIC_BASE_URL": "http://user:pass@h.example/anthropic"},
+            True,
+            [("ANTHROPIC_API_BASE", None), ("ANTHROPIC_BASE_URL", "http://user:pass@h.example/anthropic")],
+        ),
+        (
+            {"ANTHROPIC_API_BASE": "   ", "ANTHROPIC_BASE_URL": "https://b.example"},
+            True,
+            [("ANTHROPIC_API_BASE", "   ")],
+        ),
+        (
+            {"ANTHROPIC_API_BASE": "", "ANTHROPIC_BASE_URL": "https://b.example"},
+            False,
+            [("ANTHROPIC_API_BASE", ""), ("ANTHROPIC_BASE_URL", "https://b.example")],
+        ),
+        ({}, False, [("ANTHROPIC_API_BASE", None), ("ANTHROPIC_BASE_URL", None)]),
+    ),
+    ids=("no-host-api-base", "credentials-base-url", "whitespace-api-base", "empty-api-base", "unset"),
+)
+@pytest.mark.parametrize("api_base", (None, ""), ids=("absent", "empty"))
+def test_anthropic_env_base_is_guarded_like_a_caller_base_and_handed_to_the_native_route(
+    monkeypatch: pytest.MonkeyPatch,
+    environment: Mapping[str, str],
+    hosted: bool,
+    read: list[tuple[str, str | None]],
+    api_base: str | None,
+) -> None:
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
+    monkeypatch.setattr(messages_host, "get_secret_str", environment.get)
+
+    handler, sent_read = messages_host.transport_handler(
+        {"client": None, "model": "anthropic/claude-x", "api_base": api_base}
+    )
+
+    assert (handler is not None) is hosted
+    assert sent_read == read
+
+
+@pytest.mark.usefixtures("no_tls_settings")
+@pytest.mark.parametrize(
     "request_",
     (
-        {"client": None, "model": "anthropic/claude-x"},
+        {"client": None, "model": "anthropic/claude-x", "api_base": "https://call.example/d"},
         {"client": None, "model": "azure_ai/claude-x", "api_base": "https://call.example/d"},
         {"client": AsyncHTTPHandler(), "model": "azure_ai/claude-x"},
         {"client": None, "model": "azure_ai/claude-x", "timeout": 0},
     ),
-    ids=("anthropic", "azure-call-base", "azure-caller-handler", "azure-python-timeout"),
+    ids=("anthropic-call-base", "azure-call-base", "azure-caller-handler", "azure-python-timeout"),
 )
 def test_azure_api_base_is_left_to_the_native_route_when_the_choice_does_not_need_it(
     monkeypatch: pytest.MonkeyPatch, request_: Mapping[str, object]
@@ -1751,6 +1832,28 @@ def test_agentic_stream_tags_the_head_only_when_a_hook_runs(monkeypatch: pytest.
     assert call.params["tools"] is request["tools"]
     assert call.kwargs["api_key"] == "sk-test"
     assert "tools" not in call.kwargs
+
+
+_HOISTED: Final = [{"type": "text", "text": "S"}, {"type": "text", "text": "R"}]
+
+
+@pytest.mark.parametrize(
+    ("sent_system", "requested_system", "expected"),
+    [
+        pytest.param({"system": _HOISTED}, {"system": "S"}, {"system": "S"}, id="caller-system-and-hoisted-turn"),
+        pytest.param({"system": _HOISTED[1:]}, {}, {}, id="hoisted-turn-only"),
+        pytest.param({}, {"system": "S"}, {}, id="system-not-sent"),
+    ],
+)
+def test_agentic_params_take_the_callers_system_not_the_hoisted_wire_system(
+    sent_system: Mapping[str, object], requested_system: Mapping[str, object], expected: Mapping[str, object]
+) -> None:
+    sent: Final = {"model": "claude-sonnet-4-5", "messages": [], "max_tokens": 16, "stream": False, **sent_system}
+    requested: Final = {"max_tokens": 16, "stream": False, **requested_system}
+
+    params: Final = messages_host._agentic_params(sent, requested, {"model": "azure_ai/claude-sonnet-4-5"})  # pyright: ignore[reportPrivateUsage]  # the follow-up params the handler's hooks read
+
+    assert params == {"stream": False, **expected}
 
 
 _DANGEROUS_TOOL_USE: Final = [{"type": "dangerous_tool_use"}]
