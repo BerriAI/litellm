@@ -46,6 +46,11 @@ Design constraints honored here:
   at ``LITELLM_GUARD_TRUSTED_PROXY_DEPTH``) and closing with 1008 before
   accept on a miss. WebSocket scopes still get no rate limiting, no auto-ban
   and no payload inspection, and those routes still go through key auth.
+- Only the unauthenticated k8s probes (``/health/liveliness``,
+  ``/health/liveness``, ``/health/readiness``) bypass guard by default, matched
+  by exact path, with the IP lists still enforced as guard does on its own
+  exclusions. ``LITELLM_GUARD_EXCLUDED_PATHS`` replaces that default and is
+  handed to guard, which matches each entry as a subtree.
 - Rejections guard itself builds use guard's response shapes; the one
   rejection this wrapper builds (guard unavailable) uses litellm's
   OpenAI-error JSON shape (the ``AdmissionControlMiddleware`` model), so
@@ -70,7 +75,14 @@ from litellm.types.proxy.auth.special_headers import SpecialHeaders
 
 GUARD_ENABLED_ENV: Final = "LITELLM_GUARD_ENABLED"
 GUARD_EXCLUDED_PATHS_ENV: Final = "LITELLM_GUARD_EXCLUDED_PATHS"
-DEFAULT_EXCLUDED_PATHS: Final = ("/health", "/health/liveliness", "/health/readiness", "/metrics")
+# Only the unauthenticated k8s probes (health_endpoints/_health_endpoints.py).
+# /health runs live deployment calls behind auth and /metrics can be public,
+# so neither is exempt by default. guard-core matches exclude_paths by subtree
+# (the entry or anything under entry + "/"), which would also exempt the
+# authenticated /health/readiness/details, so the defaults bypass guard's
+# pipeline by exact path in the wrapper instead (the IP lists are still
+# enforced there) and are not passed to guard.
+DEFAULT_EXCLUDED_PATHS: Final = ("/health/liveliness", "/health/liveness", "/health/readiness")
 
 
 def _env_str(name: str, default: str = "") -> str:
@@ -134,18 +146,18 @@ def _in_any(address: IPAddress, networks: Sequence[IPNetwork]) -> bool:
     return any(address in network for network in networks)
 
 
-class _WebSocketScopeView(TypedDict):
-    """The slice of an ASGI websocket scope the IP check reads."""
+class _ClientScopeView(TypedDict):
+    """The slice of an ASGI http or websocket scope the IP check reads."""
 
     headers: ReadOnly[Sequence[tuple[bytes, bytes]]]
     client: NotRequired[ReadOnly[tuple[str, int] | None]]
 
 
-_WEBSOCKET_SCOPE_VIEW: Final = TypeAdapter(_WebSocketScopeView)
+_CLIENT_SCOPE_VIEW: Final = TypeAdapter(_ClientScopeView)
 
 
-def _websocket_peer_and_forwarded_for(scope: Scope) -> tuple[str | None, str | None]:
-    view: Final = _WEBSOCKET_SCOPE_VIEW.validate_python(scope)
+def _peer_and_forwarded_for(scope: Scope) -> tuple[str | None, str | None]:
+    view: Final = _CLIENT_SCOPE_VIEW.validate_python(scope)
     client: Final = view.get("client")
     forwarded_for: Final = next(
         (value.decode("latin-1") for name, value in view["headers"] if name == b"x-forwarded-for"), None
@@ -153,12 +165,12 @@ def _websocket_peer_and_forwarded_for(scope: Scope) -> tuple[str | None, str | N
     return (client[0] if client else None), forwarded_for
 
 
-def _resolve_websocket_client(scope: Scope, trusted: Sequence[IPNetwork], depth: int) -> IPAddress | None:
+def _resolve_client(scope: Scope, trusted: Sequence[IPNetwork], depth: int) -> IPAddress | None:
     """The client address the way guard-core resolves it on HTTP: the socket
     peer, unless the peer is a trusted proxy, in which case the
     ``X-Forwarded-For`` entry ``depth`` from the right (the rightmost
     untrusted entry when proxies to its right are not all listed)."""
-    peer_text, forwarded_for = _websocket_peer_and_forwarded_for(scope)
+    peer_text, forwarded_for = _peer_and_forwarded_for(scope)
     peer: Final = _parse_ip(peer_text) if peer_text is not None else None
     if peer is None or not _in_any(peer, trusted) or not forwarded_for:
         return peer
@@ -172,16 +184,17 @@ def _resolve_websocket_client(scope: Scope, trusted: Sequence[IPNetwork], depth:
     return chain[-depth] or peer
 
 
-def _websocket_client_permitted(scope: Scope) -> bool:
+def _ip_lists_permit(scope: Scope) -> bool:
     """Enforce LITELLM_GUARD_BLOCKED_IPS and LITELLM_GUARD_ALLOWED_IPS (IPs or
-    CIDRs) on a WebSocket handshake. Guard's pipeline only screens HTTP
-    scopes: rate limits, bans and payload inspection do not apply here."""
+    CIDRs) outside guard's pipeline: on WebSocket handshakes (guard only
+    screens HTTP scopes) and on the exact-path probes. Rate limits, bans and
+    payload inspection do not apply to either."""
     blocked: Final = _networks(_csv(_env_str("LITELLM_GUARD_BLOCKED_IPS")))
     allowed: Final = _networks(_csv(_env_str("LITELLM_GUARD_ALLOWED_IPS")))
     if not blocked and not allowed:
         return True
     trusted: Final = _networks(_csv(_env_str("LITELLM_GUARD_TRUSTED_PROXIES")))
-    client: Final = _resolve_websocket_client(scope, trusted, _env_int("LITELLM_GUARD_TRUSTED_PROXY_DEPTH", 1))
+    client: Final = _resolve_client(scope, trusted, _env_int("LITELLM_GUARD_TRUSTED_PROXY_DEPTH", 1))
     permitted: Final = not (
         (client is not None and _in_any(client, blocked))
         or (allowed and (client is None or not _in_any(client, allowed)))
@@ -190,6 +203,12 @@ def _websocket_client_permitted(scope: Scope) -> bool:
         verbose_proxy_logger.warning("guard passive mode: WebSocket client %s would be rejected", client)
         return True
     return permitted
+
+
+def _is_default_probe(scope: Scope) -> bool:
+    """Exact probe path, and only while the operator has not replaced the
+    exclusions with ``LITELLM_GUARD_EXCLUDED_PATHS``."""
+    return scope["path"] in DEFAULT_EXCLUDED_PATHS and not _csv(_env_str(GUARD_EXCLUDED_PATHS_ENV))
 
 
 def guard_enabled() -> bool:
@@ -275,11 +294,25 @@ def _build_guard_config() -> object:
         # ingress addresses to enable X-Forwarded-For resolution.
         "trusted_proxies": _csv(_env_str("LITELLM_GUARD_TRUSTED_PROXIES")),
         "trusted_proxy_depth": _env_int("LITELLM_GUARD_TRUSTED_PROXY_DEPTH", 1),
-        "exclude_paths": list(_csv(_env_str(GUARD_EXCLUDED_PATHS_ENV)) or DEFAULT_EXCLUDED_PATHS),
+        # Operator entries only, with guard's subtree matching.
+        "exclude_paths": list(_csv(_env_str(GUARD_EXCLUDED_PATHS_ENV))),
         "ipinfo_token": ipinfo_token_env or None,
         "log_sensitive_headers": _credential_header_names(),
     }
     return security_config_cls(**kwargs)
+
+
+def _ip_rejected_response() -> JSONResponse:
+    return JSONResponse(
+        status_code=403,
+        content={
+            "error": {
+                "message": "Client IP is not permitted by the guard IP lists.",
+                "type": "guard_ip_rejected_error",
+                "code": "403",
+            }
+        },
+    )
 
 
 def _guard_unavailable_response() -> JSONResponse:
@@ -347,12 +380,21 @@ class GuardMiddleware:
             await self.app(scope, receive, send)
             return
 
+        if scope["type"] == "http" and _is_default_probe(scope):
+            # Same scope guard gives its own exclusions: the IP lists still
+            # apply, rate limits, bans and payload inspection do not.
+            if _ip_lists_permit(scope):
+                await self.app(scope, receive, send)
+            else:
+                await _ip_rejected_response()(scope, receive, send)
+            return
+
         guard_asgi: Final = self._ensure_guard()
         if scope["type"] == "websocket":
             # Guard's pipeline only handles HTTP, so a WebSocket handshake
             # gets the IP lists enforced here (and fails closed with the
             # package missing). Closing before accept rejects the handshake.
-            if guard_asgi is None or not _websocket_client_permitted(scope):
+            if guard_asgi is None or not _ip_lists_permit(scope):
                 await send({"type": "websocket.close", "code": WS_POLICY_VIOLATION})
                 return
             await self.app(scope, receive, send)

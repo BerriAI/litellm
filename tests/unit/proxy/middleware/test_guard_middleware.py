@@ -200,12 +200,7 @@ def test_enabled_wires_guard_with_env_config(monkeypatch):
     assert wired.config.kwargs["rate_limit"] == 33
     assert wired.config.kwargs["enable_redis"] is False
     assert wired.config.kwargs["trusted_proxies"] == ()
-    assert wired.config.kwargs["exclude_paths"] == [
-        "/health",
-        "/health/liveliness",
-        "/health/readiness",
-        "/metrics",
-    ]
+    assert wired.config.kwargs["exclude_paths"] == []
 
 
 @pytest.mark.skipif(not _GUARD_AVAILABLE, reason="fastapi-guard not installed")
@@ -441,3 +436,86 @@ async def test_websocket_passes_through_when_guard_disabled(monkeypatch):
     monkeypatch.setenv("LITELLM_GUARD_BLOCKED_IPS", "203.0.113.7")
     reached, _ = await _run_websocket(_ws_scope("203.0.113.7"))
     assert reached is True
+
+
+def _build_health_app():
+    from starlette.applications import Starlette
+    from starlette.responses import JSONResponse
+    from starlette.routing import Route
+
+    async def ok(request):
+        return JSONResponse({"ok": True})
+
+    paths: Final = [
+        "/health",
+        "/health/liveliness",
+        "/health/liveness",
+        "/health/readiness",
+        "/health/readiness/details",
+        "/health/test_connection",
+        "/health/services",
+        "/health/drain",
+        "/metrics",
+    ]
+    app: Final = Starlette(routes=[Route(path, ok, methods=["GET"]) for path in paths])
+    app.add_middleware(GuardMiddleware)
+    return app
+
+
+def test_only_unauthenticated_probes_bypass_guard_by_default(monkeypatch):
+    """guard-core matches exclude_paths by subtree (path == entry or under
+    entry + "/"), so excluding /health would also exempt the authenticated
+    /health/test_connection and /health/readiness/details. Only the exact
+    probe paths bypass guard."""
+    _install_stub_guard(monkeypatch)
+    monkeypatch.delenv("LITELLM_GUARD_EXCLUDED_PATHS", raising=False)
+    client: Final = _client(_unique_ip(), _build_health_app())
+    probes: Final = ["/health/liveliness", "/health/liveness", "/health/readiness"]
+    screened: Final = [
+        "/health",
+        "/health/readiness/details",
+        "/health/test_connection",
+        "/health/services",
+        "/health/drain",
+        "/metrics",
+    ]
+    for path in probes + screened:
+        assert client.get(path).status_code == 200
+    assert _StubSecurityMiddleware.seen_paths == screened
+
+
+def test_operator_excluded_paths_replace_the_default_probes(monkeypatch):
+    _install_stub_guard(monkeypatch)
+    monkeypatch.setenv("LITELLM_GUARD_EXCLUDED_PATHS", "/metrics")
+    client: Final = _client(_unique_ip(), _build_health_app())
+    assert client.get("/health/liveliness").status_code == 200
+    assert _StubSecurityMiddleware.seen_paths == ["/health/liveliness"]
+    assert _StubSecurityMiddleware.instances[-1].config.kwargs["exclude_paths"] == ["/metrics"]
+
+
+def test_probes_still_enforce_the_ip_lists(monkeypatch):
+    """Guard keeps the IP lists on its own excluded paths, so the wrapper's
+    probe bypass must too: a blocked address gets 403 on a probe."""
+    blocked: Final = _unique_ip()
+    _install_stub_guard(monkeypatch)
+    monkeypatch.setenv("LITELLM_GUARD_BLOCKED_IPS", blocked)
+    client: Final = _client(blocked, _build_health_app())
+    assert client.get("/health/readiness").status_code == 403
+    assert _client(_unique_ip(), _build_health_app()).get("/health/readiness").status_code == 200
+    assert _StubSecurityMiddleware.seen_paths == []
+
+
+@pytest.mark.skipif(not _GUARD_AVAILABLE, reason="fastapi-guard not installed")
+def test_probes_are_not_rate_limited_but_other_health_routes_are(monkeypatch):
+    """A 429 on a liveness probe gets the pod killed, so probes skip the rate
+    limit; the authenticated /health/readiness/details and /metrics do not."""
+    monkeypatch.setenv("LITELLM_GUARD_ENABLED", "true")
+    monkeypatch.setenv("LITELLM_GUARD_RATE_LIMIT", "2")
+    monkeypatch.setenv("LITELLM_GUARD_RATE_LIMIT_WINDOW", "60")
+    with _client(_unique_ip(), _build_health_app()) as client:
+        probe_codes: Final = [client.get("/health/readiness").status_code for _ in range(4)]
+        details_codes: Final = [client.get("/health/readiness/details").status_code for _ in range(3)]
+        metrics_codes: Final = [client.get("/metrics").status_code for _ in range(3)]
+    assert probe_codes == [200, 200, 200, 200]
+    assert details_codes == [200, 200, 429]
+    assert metrics_codes == [429, 429, 429]
