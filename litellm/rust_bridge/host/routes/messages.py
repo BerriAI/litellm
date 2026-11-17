@@ -1240,6 +1240,13 @@ def map_failure(
         return _raised_like_python(error, request_provider)
     if getattr(error, "messages_request_error", False):
         return _rejection(error, request, request_provider, asynchronous)
+    if getattr(error, "messages_refused_reply", False):
+        return litellm.APIError(
+            status_code=500,
+            message=str(error),
+            llm_provider=request_provider,
+            model=str(request["model"]).removeprefix(f"{request_provider}/"),
+        )
     if getattr(error, "messages_missing_credential", False):
         return _raised_like_python(
             litellm.AuthenticationError(

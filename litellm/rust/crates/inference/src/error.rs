@@ -160,6 +160,13 @@ impl Error {
         }
     }
 
+    pub fn refused_response(&self) -> Option<&ErrorDetail> {
+        match self {
+            Self::Llm(error) => error.invalid_response(),
+            _ => None,
+        }
+    }
+
     /// The provider's response headers on an upstream failure; empty for every other error.
     pub fn upstream_headers(&self) -> &[(String, String)] {
         match self {

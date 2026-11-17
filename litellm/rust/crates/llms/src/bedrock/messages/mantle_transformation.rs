@@ -229,11 +229,17 @@ pub(crate) fn mantle_wire_body(body: Value, model_id: impl Fn(&str) -> String) -
     Value::Object(kept.chain(mantle_fields).collect::<Map<_, _>>())
 }
 
-/// Python's `AmazonMantleMessagesConfig.transform_anthropic_messages_response`.
-pub(crate) fn with_zero_usage(response: MessagesResponse) -> MessagesResponse {
+/// Python's `AmazonMantleMessagesConfig.transform_anthropic_messages_response`: an absent or null
+/// `usage` bills zero tokens, any other non-object `usage` is refused.
+pub(crate) fn with_zero_usage(response: MessagesResponse) -> Result<MessagesResponse, Error> {
     let existing = match response.usage {
+        None | Some(Value::Null) => Map::new(),
         Some(Value::Object(ref usage)) => usage.clone(),
-        _ => Map::new(),
+        Some(ref other) => {
+            return Err(Error::InvalidResponse(ErrorDetail::NonObjectUsage {
+                actual: json_type_name(other),
+            }));
+        }
     };
     let zero_filled = ZERO_USAGE_FIELDS.map(|name| {
         (
@@ -249,9 +255,20 @@ pub(crate) fn with_zero_usage(response: MessagesResponse) -> MessagesResponse {
                 .filter(|(name, _)| !ZERO_USAGE_FIELDS.contains(&name.as_str())),
         )
         .collect::<Map<_, _>>();
-    MessagesResponse {
+    Ok(MessagesResponse {
         usage: Some(Value::Object(usage)),
         ..response
+    })
+}
+
+fn json_type_name(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "null",
+        Value::Bool(_) => "a boolean",
+        Value::Number(_) => "a number",
+        Value::String(_) => "a string",
+        Value::Array(_) => "an array",
+        Value::Object(_) => "an object",
     }
 }
 
@@ -413,7 +430,7 @@ impl BaseMessagesConfig for AmazonMantleMessagesConfig {
         _model: &str,
         response: MessagesResponse,
     ) -> Result<MessagesResponse, Error> {
-        Ok(with_zero_usage(response))
+        with_zero_usage(response)
     }
 
     fn wire_body(&self, body: Value) -> Value {

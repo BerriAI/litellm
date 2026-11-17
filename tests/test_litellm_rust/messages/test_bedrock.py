@@ -1004,6 +1004,24 @@ async def test_bedrock_mantle_route_answers_the_usage_python_answers(
     assert {name: rust_usage.get(name) for name in usage} == usage
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", (MANTLE_MODEL, "bedrock/mantle/anthropic.claude-opus-4-8"))
+@pytest.mark.parametrize("usage", ([1], "", 0), ids=("array", "string", "number"))
+async def test_bedrock_mantle_refuses_a_usage_that_is_not_an_object(
+    server: RecordingServer, model: str, usage: object
+) -> None:
+    server.default_response = ResponseSpec(body={**MESSAGES_RESPONSE, "usage": usage})
+    route: Final = {"model": model, "api_key": None, **AWS}
+
+    with pytest.raises(litellm.APIError) as raised:
+        await _mantle(_RUST_ENTRY, server, **route)
+
+    assert type(raised.value) is litellm.APIError
+    assert raised.value.status_code == 500
+    assert raised.value.llm_provider == model.split("/")[0]  # pyright: ignore[reportUnknownMemberType]  # the public error leaves llm_provider untyped
+    assert_served_natively(server)
+
+
 _SIGV4_ONLY: Final = {
     "api_key": None,
     "aws_access_key_id": "test-access-key",

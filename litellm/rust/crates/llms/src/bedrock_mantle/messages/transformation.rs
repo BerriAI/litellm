@@ -338,7 +338,7 @@ impl BaseMessagesConfig for BedrockMantleAnthropicMessagesConfig {
         _model: &str,
         response: MessagesResponse,
     ) -> Result<MessagesResponse, Error> {
-        Ok(with_zero_usage(response))
+        with_zero_usage(response)
     }
 
     fn wire_body(&self, body: Value) -> Value {
@@ -984,22 +984,10 @@ mod tests {
     #[rstest]
     #[case::missing(None, json!({"input_tokens": 0, "output_tokens": 0}))]
     #[case::null(Some(json!(null)), json!({"input_tokens": 0, "output_tokens": 0}))]
-    #[case::not_an_object(Some(json!([1])), json!({"input_tokens": 0, "output_tokens": 0}))]
     #[case::partial(Some(json!({"output_tokens": 7, "cache_read_input_tokens": 3})), json!({"input_tokens": 0, "output_tokens": 7, "cache_read_input_tokens": 3}))]
     fn response_usage_is_zero_filled(#[case] usage: Option<Value>, #[case] expected: Value) {
-        let response: MessagesResponse = serde_json::from_value(json!({
-            "id": "msg_1",
-            "type": "message",
-            "role": "assistant",
-            "model": "claude-test",
-            "content": [],
-            "stop_reason": "end_turn",
-            "stop_sequence": null,
-        }))
-        .unwrap();
-        let response = MessagesResponse { usage, ..response };
         let usage = BEDROCK_MANTLE_MESSAGES_CONFIG
-            .transform_anthropic_messages_response("claude-test", response)
+            .transform_anthropic_messages_response("claude-test", replied_usage(usage))
             .unwrap()
             .usage
             .unwrap();
@@ -1013,5 +1001,37 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["input_tokens", "output_tokens"]
         );
+    }
+
+    #[rstest]
+    #[case::bedrock_mantle_array(&BEDROCK_MANTLE_MESSAGES_CONFIG, json!([1]), "an array")]
+    #[case::bedrock_mantle_empty_string(&BEDROCK_MANTLE_MESSAGES_CONFIG, json!(""), "a string")]
+    #[case::bedrock_mantle_route_number(&AMAZON_MANTLE_MESSAGES_CONFIG, json!(0), "a number")]
+    fn a_non_object_usage_is_refused_instead_of_billed_as_zero(
+        #[case] config: &dyn BaseMessagesConfig,
+        #[case] usage: Value,
+        #[case] actual: &str,
+    ) {
+        let refused =
+            config.transform_anthropic_messages_response("claude-test", replied_usage(Some(usage)));
+        let Err(Error::InvalidResponse(ErrorDetail::NonObjectUsage { actual: named })) = refused
+        else {
+            panic!("expected a refused usage, got {refused:?}");
+        };
+        assert_eq!(named, actual);
+    }
+
+    fn replied_usage(usage: Option<Value>) -> MessagesResponse {
+        let response: MessagesResponse = serde_json::from_value(json!({
+            "id": "msg_1",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-test",
+            "content": [],
+            "stop_reason": "end_turn",
+            "stop_sequence": null,
+        }))
+        .unwrap();
+        MessagesResponse { usage, ..response }
     }
 }

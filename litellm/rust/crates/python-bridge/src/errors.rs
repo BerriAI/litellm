@@ -47,6 +47,8 @@ const MESSAGES_PROVIDER_BAD_REQUEST: &str = "messages_provider_bad_request";
 /// Python's `get_llm_provider` raised the refusal while resolving the provider, which it wraps
 /// into its own `BadRequestError`.
 const MESSAGES_PROVIDER_RESOLUTION: &str = "messages_provider_resolution";
+/// The provider replied with a body litellm refuses to read, which Python raises as `APIError` 500.
+const MESSAGES_REFUSED_REPLY: &str = "messages_refused_reply";
 /// Which failure Python's AWS signing raises for a credential Rust could not acquire, or `replay`
 /// when only running Python's signing again gives its exception.
 const MESSAGES_CREDENTIAL_FAILURE: &str = "messages_credential_failure";
@@ -277,6 +279,12 @@ pub(crate) fn route_failure(
             }
             if error.is_missing_credential() {
                 value.setattr(MESSAGES_MISSING_CREDENTIAL, true)?;
+            }
+            if matches!(
+                error.refused_response(),
+                Some(litellm_llms::ErrorDetail::NonObjectUsage { .. })
+            ) {
+                value.setattr(MESSAGES_REFUSED_REPLY, true)?;
             }
             if let Some(failure) = credential_failure(&error) {
                 value.setattr(MESSAGES_CREDENTIAL_FAILURE, failure)?;
