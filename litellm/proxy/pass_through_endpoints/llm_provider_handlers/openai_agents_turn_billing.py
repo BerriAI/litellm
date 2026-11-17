@@ -1,4 +1,5 @@
 import asyncio
+import itertools
 import math
 import re
 import time
@@ -10,6 +11,7 @@ from typing import Final, Protocol, TypeAlias, TypeVar
 from urllib.parse import urlparse
 
 import httpx
+import openai
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 import litellm
@@ -19,6 +21,7 @@ from litellm.constants import (
     OPENAI_AGENTS_LIST_PAGE_LIMIT,
     OPENAI_AGENTS_TURN_CLAIM_WINDOW_SECONDS,
     OPENAI_AGENTS_TURN_CLAIMS_MAX_SIZE,
+    OPENAI_AGENTS_TURN_CLOCK_SKEW_SECONDS,
     OPENAI_AGENTS_TURN_POLL_INITIAL_DELAY_SECONDS,
     OPENAI_AGENTS_TURN_POLL_MAX_DELAY_SECONDS,
     OPENAI_AGENTS_TURN_POLL_TIMEOUT_SECONDS,
@@ -30,6 +33,7 @@ from litellm.litellm_core_utils.litellm_logging import (
 )
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.llms.custom_httpx.sse_lines import split_sse_lines
+from litellm.llms.openai.common_utils import OpenAIError as LiteLLMOpenAIError
 from litellm.passthrough.utils import BasePassthroughUtils
 from litellm.proxy._types import PassThroughEndpointLoggingResultValues
 from litellm.responses.utils import ResponseAPILoggingUtils
@@ -50,6 +54,7 @@ _SCOPE_HEADERS: Final = frozenset({"openai-organization", "openai-project"})
 _TURN_CLAIM_KEY_PREFIX: Final = "openai_agents_turn_claim:"
 _RETRYABLE_STATUS_CODES: Final = frozenset({408, 409, 429})
 _WEB_SEARCH_CALL: Final = "web_search_call"
+_POLL_ERRORS: Final = (httpx.HTTPError, openai.OpenAIError, LiteLLMOpenAIError)
 
 
 class AgentSpec(BaseModel):
@@ -72,16 +77,52 @@ class _SessionEvent(BaseModel):
     session: _Session
 
 
+class _ContentPart(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    text: str | None = None
+
+
+class _Message(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    role: str | None = None
+    content: tuple[_ContentPart, ...] = ()
+
+    @property
+    def texts(self) -> Iterator[str]:
+        return (part.text for part in self.content if part.text)
+
+
 class _SessionCreateBody(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     input: str | tuple[object, ...] | None = None
 
 
+class _SessionCreateMessages(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    input: str | tuple[_Message, ...] = ()
+
+
 class _InputEvent(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     type: str
+
+
+class _InputMessageEvent(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    type: str
+    input: tuple[_Message, ...] = ()
+
+
+class _MessageEventsBody(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    events: tuple[_InputMessageEvent, ...]
 
 
 class _EventsBody(BaseModel):
@@ -109,6 +150,7 @@ class _Subagent(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     id: str
+    closed_at: int | None = None
 
 
 class _SubagentsPage(BaseModel):
@@ -131,7 +173,27 @@ class _ItemsPage(BaseModel):
     last_id: str | None = None
 
 
-_PageT: Final = TypeVar("_PageT", _TurnsPage, _SubagentsPage, _ItemsPage, _Session)
+class _MessageItem(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    type: str
+    role: str | None = None
+    content: tuple[_ContentPart, ...] | str | None = None
+
+    @property
+    def user_texts(self) -> Iterator[str]:
+        if self.type != "message" or self.role != "user" or not isinstance(self.content, tuple):
+            return iter(())
+        return (part.text for part in self.content if part.text)
+
+
+class _MessageItemsPage(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    data: tuple[_MessageItem, ...]
+
+
+_PageT: Final = TypeVar("_PageT", _TurnsPage, _SubagentsPage, _ItemsPage, _MessageItemsPage, _Session)
 
 
 @dataclass(frozen=True, slots=True)
@@ -141,6 +203,11 @@ class AgentsTurnStart:
     started_at: int
     agent: AgentSpec | None
     scope_headers: Mapping[str, str]
+    input_texts: frozenset[str] = frozenset()
+
+    @property
+    def earliest_turn_created_at(self) -> int:
+        return self.started_at - OPENAI_AGENTS_TURN_CLOCK_SKEW_SECONDS if self.input_texts else self.started_at
 
 
 @dataclass(frozen=True, slots=True)
@@ -280,10 +347,10 @@ def _coordination_redis() -> TurnClaimStore | None:
     return redis_usage_cache
 
 
-async def _release_request_parallel_slot() -> None:
+async def _release_request_parallel_slot(logging_obj: LiteLLMLoggingObj) -> None:
     from litellm.proxy.proxy_server import proxy_logging_obj
 
-    await proxy_logging_obj.arelease_request_parallel_slot()
+    await proxy_logging_obj.arelease_slot_before_logging(logging_obj)
 
 
 def _sessions_route(path: str) -> _SessionsRoute | None:
@@ -309,6 +376,35 @@ def _has_input_message(request_body: Mapping[str, object]) -> bool:
     except ValidationError:
         return False
     return any(event.type == _TURN_STARTING_EVENT_TYPE for event in events)
+
+
+def _create_input_texts(request_body: Mapping[str, object]) -> frozenset[str]:
+    try:
+        create_input: Final = _SessionCreateMessages.model_validate(request_body).input
+    except ValidationError:
+        return frozenset()
+    if isinstance(create_input, str):
+        return frozenset((create_input,)) if create_input else frozenset()
+    return frozenset(itertools.chain.from_iterable(message.texts for message in create_input))
+
+
+def _events_input_texts(request_body: Mapping[str, object]) -> frozenset[str]:
+    try:
+        events: Final = _MessageEventsBody.model_validate(request_body).events
+    except ValidationError:
+        return frozenset()
+    messages: Final = itertools.chain.from_iterable(
+        event.input for event in events if event.type == _TURN_STARTING_EVENT_TYPE
+    )
+    return frozenset(itertools.chain.from_iterable(message.texts for message in messages))
+
+
+def _input_texts(route: _SessionsRoute, request_body: Mapping[str, object]) -> frozenset[str]:
+    match route:
+        case _CreateRoute():
+            return _create_input_texts(request_body)
+        case _SessionRoute():
+            return _events_input_texts(request_body)
 
 
 def _scope_headers(request_headers: Mapping[str, object] | None) -> Mapping[str, str]:
@@ -386,6 +482,7 @@ def _turn_start(
         started_at=math.floor(start_time.timestamp()),
         agent=session.agent if session is not None else None,
         scope_headers=_scope_headers(request_headers),
+        input_texts=_input_texts(call.route, request_body),
     )
 
 
@@ -521,7 +618,7 @@ class OpenAIAgentsTurnBiller:
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         clock: Callable[[], float] = time.monotonic,
         claims: TurnClaims | None = None,
-        release_request_slot: Callable[[], Awaitable[None]] = _release_request_parallel_slot,
+        release_request_slot: Callable[[LiteLLMLoggingObj], Awaitable[None]] = _release_request_parallel_slot,
     ) -> None:
         self._get: Final = get
         self._sleep: Final = sleep
@@ -544,8 +641,8 @@ class OpenAIAgentsTurnBiller:
             _ = await asyncio.wait(tuple(self._tasks), timeout=timeout)
 
     async def _bill(self, turn_start: AgentsTurnStart, row: DeferredAgentsRow) -> None:
-        await self._release_request_slot()
-        outcome: Final = await self._await_billable_turns(turn_start, row.logging_obj.litellm_call_id, self._clock())
+        await self._release_request_slot(row.logging_obj)
+        outcome: Final = await self._turn_outcome(turn_start, row.logging_obj.litellm_call_id)
         match outcome:
             case _BilledTurns(turns=turns, unsettled_reason=None):
                 await self._log_billed(turn_start, row, turns)
@@ -563,6 +660,12 @@ class OpenAIAgentsTurnBiller:
                     reason,
                 )
                 await self._log(row, row.kwargs)
+
+    async def _turn_outcome(self, turn_start: AgentsTurnStart, claimant: str) -> _TurnOutcome:
+        try:
+            return await self._await_billable_turns(turn_start, claimant, self._clock())
+        except Exception as e:  # noqa: BLE001  # the call already succeeded upstream, so its row logs even when polling breaks
+            return _UnbilledTurn(reason=f"polling its turns failed: {e!r}")
 
     async def _await_billable_turns(
         self,
@@ -621,7 +724,7 @@ class OpenAIAgentsTurnBiller:
             return _Polled(claimed=claimed, failure=root)
         if root is None or not root.settled:
             return _Polled(claimed=_Claimed(root=root))
-        subagent_turns: Final = await self._refreshed_subagent_turns(turn_start, claimant, claimed.subagent_turns)
+        subagent_turns: Final = await self._refreshed_subagent_turns(turn_start, claimant, root, claimed.subagent_turns)
         if isinstance(subagent_turns, _FetchFailed):
             return _Polled(claimed=_Claimed(root=root, subagent_turns=claimed.subagent_turns), failure=subagent_turns)
         return _Polled(claimed=_Claimed(root=root, subagent_turns=subagent_turns))
@@ -645,16 +748,31 @@ class OpenAIAgentsTurnBiller:
         self, page: _TurnsPage, turn_start: AgentsTurnStart, claimant: str, turns_path: str
     ) -> _ClaimedTurn | None:
         candidates: Final = sorted(
-            (turn for turn in reversed(page.data) if turn.created_at >= turn_start.started_at),
+            (turn for turn in reversed(page.data) if turn.created_at >= turn_start.earliest_turn_created_at),
             key=lambda turn: turn.created_at,
         )
         for turn in candidates:
-            if await self._claims.claim(turn.id, claimant):
+            if await self._started_by_call(turn_start, turns_path, turn) and await self._claims.claim(
+                turn.id, claimant
+            ):
                 return _ClaimedTurn(turn=turn, turns_path=turns_path)
         return None
 
+    async def _started_by_call(self, turn_start: AgentsTurnStart, turns_path: str, turn: _Turn) -> bool:
+        if not turn_start.input_texts:
+            return True
+        items: Final = await self._fetch_page(
+            turn_start,
+            f"{turns_path}/{turn.id}/items?order=asc&limit={OPENAI_AGENTS_LIST_PAGE_LIMIT}",
+            _MessageItemsPage,
+        )
+        if isinstance(items, _FetchFailed):
+            return not items.retryable
+        turn_texts: Final = itertools.chain.from_iterable(item.user_texts for item in items.data)
+        return not turn_start.input_texts.isdisjoint(turn_texts)
+
     async def _refreshed_subagent_turns(
-        self, turn_start: AgentsTurnStart, claimant: str, known: tuple[_ClaimedTurn, ...]
+        self, turn_start: AgentsTurnStart, claimant: str, root: _ClaimedTurn, known: tuple[_ClaimedTurn, ...]
     ) -> tuple[_ClaimedTurn, ...] | _FetchFailed:
         session_path: Final = f"agents/sessions/{turn_start.session_id}"
         subagents: Final = await self._fetch_page(
@@ -662,7 +780,13 @@ class OpenAIAgentsTurnBiller:
         )
         if isinstance(subagents, _FetchFailed):
             return subagents
-        turns_paths: Final = tuple(f"{session_path}/subagents/{subagent.id}/turns" for subagent in subagents.data)
+        root_created_at: Final = root.turn.created_at
+        open_during_turn: Final = (
+            subagent
+            for subagent in subagents.data
+            if subagent.closed_at is None or subagent.closed_at >= root_created_at
+        )
+        turns_paths: Final = tuple(f"{session_path}/subagents/{subagent.id}/turns" for subagent in open_during_turn)
         pages: Final = await asyncio.gather(*(self._fetch_turns(turn_start, turns_path) for turns_path in turns_paths))
         failure: Final = next((page for page in pages if isinstance(page, _FetchFailed)), None)
         if failure is not None:
@@ -675,7 +799,7 @@ class OpenAIAgentsTurnBiller:
                 claimed_turn
                 for claimed_turn in listed
                 if claimed_turn.turn.id not in known_ids
-                and claimed_turn.turn.created_at >= turn_start.started_at
+                and claimed_turn.turn.created_at >= root_created_at
                 and await self._claims.claim(claimed_turn.turn.id, claimant)
             ]
         )
@@ -684,7 +808,7 @@ class OpenAIAgentsTurnBiller:
     async def _fetch(self, turn_start: AgentsTurnStart, path: str) -> bytes | _FetchFailed:
         try:
             response: Final = await self._get(turn_start.base_url, path, turn_start.scope_headers)
-        except httpx.HTTPError as e:
+        except _POLL_ERRORS as e:
             verbose_proxy_logger.warning("OpenAI Agents passthrough: GET %s failed: %s", path, e)
             return _FetchFailed(reason=f"GET {path} failed: {e}", retryable=True)
         if not response.is_success:
