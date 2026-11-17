@@ -22,11 +22,13 @@ API Reference: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parame
 """
 
 import base64
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import TYPE_CHECKING, Any, Final, Protocol, cast, runtime_checkable
 
 import httpx
 from httpx._types import RequestFiles
+from pydantic import TypeAdapter
 
+from litellm.litellm_core_utils.core_helpers import decoded_json_object, iter_items, json_contains
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
 from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.types.images.main import ImageEditOptionalRequestParams
@@ -43,6 +45,19 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+_DECODED_JSON: Final = TypeAdapter(object)
+
+
+@runtime_checkable
+class _SupportsGetItem(Protocol):
+    def __getitem__(self, key: str | int, /) -> object: ...
+
+
+def _subscript(value: object, key: str | int) -> object:
+    if isinstance(value, _SupportsGetItem):
+        return value[key]
+    raise TypeError(f"'{type(value).__name__}' object is not subscriptable")
 
 
 class BedrockStabilityImageEditConfig(BaseImageEditConfig):
@@ -299,7 +314,7 @@ class BedrockStabilityImageEditConfig(BaseImageEditConfig):
         OpenAI expects: {"data": [{"b64_json": "base64..."}], "created": timestamp}
         """
         try:
-            response_data: Final = raw_response.json()
+            response_data: Final = _DECODED_JSON.validate_python(raw_response.json())
         except Exception as e:
             raise self.get_error_class(
                 error_message=f"Error parsing Bedrock Stability response: {e}",
@@ -308,18 +323,19 @@ class BedrockStabilityImageEditConfig(BaseImageEditConfig):
             )
 
         # Check for errors in response
-        if "errors" in response_data:
+        if json_contains(response_data, "errors"):
             raise self.get_error_class(
-                error_message=f"Bedrock Stability error: {response_data['errors']}",
+                error_message=f"Bedrock Stability error: {_subscript(response_data, 'errors')}",
                 status_code=raw_response.status_code,
                 headers=raw_response.headers,
             )
 
         # Check finish_reasons
-        finish_reasons: Final = response_data.get("finish_reasons", [])
-        if finish_reasons and finish_reasons[0]:
+        response_fields: Final = decoded_json_object(response_data)
+        finish_reasons: Final = response_fields.get("finish_reasons", [])
+        if finish_reasons and _subscript(finish_reasons, 0):
             raise self.get_error_class(
-                error_message=f"Bedrock Stability error: {finish_reasons[0]}",
+                error_message=f"Bedrock Stability error: {_subscript(finish_reasons, 0)}",
                 status_code=400,
                 headers=raw_response.headers,
             )
@@ -329,9 +345,9 @@ class BedrockStabilityImageEditConfig(BaseImageEditConfig):
             model_response.data = []
 
         # Extract images from response
-        images: Final = response_data.get("images", [])
+        images: Final = response_fields.get("images", [])
         if images:
-            for image_b64 in images:
+            for image_b64 in iter_items(images):
                 if image_b64:
                     model_response.data.append(
                         ImageObject(

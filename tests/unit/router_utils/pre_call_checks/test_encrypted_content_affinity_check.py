@@ -3,7 +3,7 @@ Tests for encrypted_content_affinity pre-call check.
 
 The mechanism works without any cache and supports two encoding strategies:
 
-1. **Items with IDs**: item IDs for output items with `encrypted_content` are rewritten to
+1. **Items with IDs**: IDs of reasoning, compaction and other `encrypted_content` output items are rewritten to
    `encitem_{base64("litellm:model_id:{model_id};item_id:{original_id}")}`.
 
 2. **Items without IDs** (Codex): encrypted_content itself is wrapped with model_id metadata:
@@ -15,17 +15,23 @@ The mechanism works without any cache and supports two encoding strategies:
   encrypted_content back to their original forms before sending to the upstream provider.
 """
 
+import datetime
 import time
+from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Final
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from pydantic import TypeAdapter
 
 import litellm
+from litellm.integrations.custom_secret_manager import CustomSecretManager
 from litellm.models.credentials import CredentialItem
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.router_api import RoutingContext
 from litellm.types.llms.openai import ResponsesAPIResponse
+from litellm.types.secret_managers.main import KeyManagementSettings, KeyManagementSystem
 
 
 @pytest.fixture(autouse=True)
@@ -128,6 +134,13 @@ class TestEncryptedItemIdCodec:
         assert decoded["item_id"] == original_item_id
 
 
+@dataclass(frozen=True, slots=True)
+class _ReadOnlyReasoningItem:
+    id: str
+    type: str
+    encrypted_content: str
+
+
 class TestUpdateEncryptedContentItemIds:
     def test_rewrites_encrypted_items_in_dict_response(self):
         model_id = "deployment-1"
@@ -152,6 +165,52 @@ class TestUpdateEncryptedContentItemIds:
         response = {"output": [{"id": "rs_xyz", "type": "reasoning", "encrypted_content": "secret"}]}
         result = ResponsesAPIRequestUtils._update_encrypted_content_item_ids_in_response(response, None)
         assert result["output"][0]["id"] == "rs_xyz"
+
+    @pytest.mark.parametrize(
+        "response",
+        [
+            {"id": "resp_failed", "status": "failed", "error": {"code": "server_error", "message": "boom"}},
+            {
+                "id": "resp_failed",
+                "status": "failed",
+                "error": {"code": "server_error", "message": "boom"},
+                "output": None,
+            },
+        ],
+        ids=["output-absent", "output-none"],
+    )
+    def test_passes_a_response_without_output_through_unchanged(self, response: dict[str, object]):
+        expected: Final = {**response}
+        result: Final = ResponsesAPIRequestUtils._update_encrypted_content_item_ids_in_response(
+            response, "deployment-1"
+        )
+        assert result == expected
+
+    def test_leaves_read_only_output_items_as_returned(self):
+        result: Final = ResponsesAPIRequestUtils._update_encrypted_content_item_ids_in_response(
+            {"id": "resp_123", "output": [_ReadOnlyReasoningItem("rs_xyz", "reasoning", "secret")]}, "deployment-1"
+        )
+        assert result["output"] == [_ReadOnlyReasoningItem("rs_xyz", "reasoning", "secret")]
+
+    @pytest.mark.parametrize(
+        "item, encoded",
+        [
+            ({"id": "rs_xyz", "type": "reasoning", "summary": []}, True),
+            ({"id": "cmp_xyz", "type": "compaction", "encrypted_content": "secret"}, True),
+            ({"id": "ws_xyz", "type": "web_search_call"}, False),
+            ({"id": ResponsesAPIRequestUtils._build_encrypted_item_id("dep-0", "rs_xyz"), "type": "reasoning"}, False),
+        ],
+        ids=["reasoning-before-ciphertext", "compaction", "non-reasoning", "already-encoded"],
+    )
+    def test_encodes_reasoning_and_compaction_ids_by_type(self, item: dict[str, object], encoded: bool):
+        result: Final = ResponsesAPIRequestUtils._update_encrypted_content_item_ids_in_response(
+            {"id": "resp_123", "output": [dict(item)]}, "deployment-1"
+        )
+        assert result["output"][0]["id"] == (
+            ResponsesAPIRequestUtils._build_encrypted_item_id("deployment-1", str(item["id"]))
+            if encoded
+            else item["id"]
+        )
 
 
 class TestEncryptedContentWrapping:
@@ -215,10 +274,10 @@ class TestRestoreEncryptedContentItemIds:
         request_input = [
             {"type": "message", "id": "msg_abc123", "role": "assistant"},
             {"type": "reasoning", "id": encoded_id, "encrypted_content": "secret"},
+            {"type": "item_reference", "id": encoded_id},
         ]
         restored = ResponsesAPIRequestUtils.restore_encrypted_content_item_ids_in_input(request_input)
-        assert restored[0]["id"] == "msg_abc123"
-        assert restored[1]["id"] == original_id
+        assert [item["id"] for item in restored] == ["msg_abc123", original_id, original_id]
 
     def test_unwraps_encrypted_content(self):
         """Test that wrapped encrypted_content is unwrapped before forwarding."""
@@ -712,6 +771,32 @@ async def test_encrypted_content_affinity_does_not_create_litellm_metadata_for_c
 
 
 @pytest.mark.asyncio
+async def test_item_reference_to_a_reasoning_item_returned_without_ciphertext_pins_its_deployment():
+    returned: Final = ResponsesAPIRequestUtils.update_responses_api_response_id_with_model_id(
+        {"id": "resp_stored", "output": [{"type": "reasoning", "id": "rs_stored", "summary": []}]},
+        "openai",
+        {"model_info": {"id": "dep-2"}, "encrypted_content_affinity_enabled": True},
+    )
+    returned_output: Final = TypeAdapter(list[dict[str, object]]).validate_python(returned["output"])
+    deployments: Final = [
+        {"model_info": {"id": "dep-1"}, "litellm_params": {"model": "openai/gpt-5.1-codex"}},
+        {"model_info": {"id": "dep-2"}, "litellm_params": {"model": "openai/gpt-5.1-codex"}},
+    ]
+
+    pinned: Final = await EncryptedContentAffinityCheck().async_filter_deployments(
+        model="gpt-5.1-codex",
+        healthy_deployments=deployments,
+        messages=None,
+        request_kwargs={
+            "input": [{"type": "item_reference", "id": returned_output[0]["id"]}],
+            "litellm_metadata": {},
+        },
+    )
+
+    assert pinned == [deployments[1]]
+
+
+@pytest.mark.asyncio
 async def test_encrypted_content_affinity_preserves_litellm_metadata_for_responses():
     """
     For Responses API calls, litellm_metadata already exists.  The affinity
@@ -845,31 +930,19 @@ async def test_affinity_falls_back_to_same_encryption_boundary_on_model_group_sw
         num_retries=0,
     )
 
-    def first_call_picks_account_a(seq):
-        for d in seq:
-            if d["model_info"]["id"] == "gpt-5.3-codex-account-a":
-                return d
-        return seq[0]
-
-    with (
-        patch(
-            "litellm.llms.custom_httpx.llm_http_handler.BaseLLMHTTPHandler.async_response_api_handler",
-            new_callable=AsyncMock,
-            return_value=first_resp,
-        ),
-        patch(
-            "litellm.router_strategy.simple_shuffle.random.choice",
-            side_effect=first_call_picks_account_a,
-        ),
+    with patch(
+        "litellm.llms.custom_httpx.llm_http_handler.BaseLLMHTTPHandler.async_response_api_handler",
+        new_callable=AsyncMock,
+        return_value=first_resp,
     ):
         r1 = await router.aresponses(model="gpt-5.3-codex", input="hi")
 
-    assert r1._hidden_params["model_id"] == "gpt-5.3-codex-account-a"
+    origin_account = r1._hidden_params["model_id"].removeprefix("gpt-5.3-codex-")
+    assert origin_account in ("account-a", "account-b")
     encoded_id = _extract_encoded_item_id(r1)
     assert encoded_id.startswith("encitem_")
 
-    # simple_shuffle.random.choice NOT patched: prove affinity narrows the
-    # candidate pool to a single deployment regardless of which one shuffle picks.
+    # Affinity narrows the candidate pool to the origin's account regardless of which one shuffle picks.
     with patch(
         "litellm.llms.custom_httpx.llm_http_handler.BaseLLMHTTPHandler.async_response_api_handler",
         new_callable=AsyncMock,
@@ -886,7 +959,7 @@ async def test_affinity_falls_back_to_same_encryption_boundary_on_model_group_sw
             ],
         )
 
-    assert r2._hidden_params["model_id"] == "gpt-5.4-account-a"
+    assert r2._hidden_params["model_id"] == f"gpt-5.4-{origin_account}"
 
 
 @pytest.mark.asyncio
@@ -973,25 +1046,15 @@ async def test_affinity_falls_back_to_same_boundary_on_alias_switch():
         num_retries=0,
     )
 
-    def pick_account_a(seq):
-        for d in seq:
-            if d["model_info"]["id"] == "gpt-5.3-codex-account-a":
-                return d
-        return seq[0]
-
-    with (
-        patch(
-            "litellm.llms.custom_httpx.llm_http_handler.BaseLLMHTTPHandler.async_response_api_handler",
-            new_callable=AsyncMock,
-            return_value=first_resp,
-        ),
-        patch(
-            "litellm.router_strategy.simple_shuffle.random.choice",
-            side_effect=pick_account_a,
-        ),
+    with patch(
+        "litellm.llms.custom_httpx.llm_http_handler.BaseLLMHTTPHandler.async_response_api_handler",
+        new_callable=AsyncMock,
+        return_value=first_resp,
     ):
         r1 = await router.aresponses(model="gpt-5.3-codex", input="hi")
 
+    origin_account = r1._hidden_params["model_id"].removeprefix("gpt-5.3-codex-")
+    assert origin_account in ("account-a", "account-b")
     encoded_id = _extract_encoded_item_id(r1)
     assert encoded_id.startswith("encitem_")
 
@@ -1011,7 +1074,7 @@ async def test_affinity_falls_back_to_same_boundary_on_alias_switch():
             ],
         )
 
-    assert r2._hidden_params["model_id"] == "gpt-5.2-codex-account-a"
+    assert r2._hidden_params["model_id"] == f"gpt-5.2-codex-{origin_account}"
 
 
 def test_boundary_fallback_no_router_ref_returns_empty():
@@ -1100,14 +1163,7 @@ def test_boundary_key_accepts_pydantic_litellm_params_instance():
     plain_key = EncryptedContentAffinityCheck._encryption_boundary_key(plain_params)
 
     assert pydantic_key is not None
-    assert (
-        pydantic_key
-        == plain_key
-        == (
-            "https://mateo-resource.openai.azure.com",
-            "fake-azure-resource-key-a",
-        )
-    )
+    assert pydantic_key == plain_key
 
 
 def test_boundary_key_resolves_missing_values_from_named_credential():
@@ -1131,14 +1187,35 @@ def test_boundary_key_resolves_missing_values_from_named_credential():
     ):
         boundary = EncryptedContentAffinityCheck._encryption_boundary_key({"litellm_credential_name": "account-a"})
 
-    assert boundary == ("https://account-a.example.com", "credential-key-a")
+    assert boundary is not None
+    assert boundary == EncryptedContentAffinityCheck._encryption_boundary_key(
+        {"api_base": "https://account-a.example.com", "api_key": "credential-key-a"}
+    )
+    assert boundary != EncryptedContentAffinityCheck._encryption_boundary_key(
+        {"api_base": "https://account-a.example.com", "api_key": "credential-key-b"}
+    )
 
 
-def test_boundary_key_matches_named_credential_precedence():
+@pytest.mark.parametrize(
+    "deployment_values",
+    [
+        pytest.param({"api_base": "https://deployment.example.com", "api_key": "deployment-key"}, id="set values"),
+        pytest.param({"api_base": "", "api_key": ""}, id="empty values"),
+    ],
+)
+@pytest.mark.usefixtures("no_process_wide_api_base")
+def test_boundary_key_resolves_named_credential_values_the_way_the_request_does(
+    monkeypatch: pytest.MonkeyPatch, deployment_values: dict[str, str]
+):
     from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
         EncryptedContentAffinityCheck,
     )
+    from litellm.utils import with_named_credential
 
+    monkeypatch.setattr(litellm, "api_key", None)
+    monkeypatch.setattr(litellm, "openai_key", None)
+    monkeypatch.setenv("OPENAI_API_KEY", "env-key")
+    deployment: Final = {"model": "openai/gpt-5.5", **deployment_values, "litellm_credential_name": "account-a"}
     with patch.object(
         litellm,
         "credential_list",
@@ -1153,45 +1230,13 @@ def test_boundary_key_matches_named_credential_precedence():
             )
         ],
     ):
-        boundary = EncryptedContentAffinityCheck._encryption_boundary_key(
-            {
-                "api_base": "https://deployment.example.com",
-                "api_key": "deployment-key",
-                "litellm_credential_name": "account-a",
-            }
-        )
+        boundary: Final = EncryptedContentAffinityCheck._encryption_boundary_key(deployment)
+        sent_params: Final = with_named_credential(deployment)
 
-    assert boundary == ("https://credential.example.com", "credential-key-a")
-
-
-def test_boundary_key_resolves_credential_when_explicit_values_are_empty():
-    from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
-        EncryptedContentAffinityCheck,
+    assert boundary is not None
+    assert boundary == EncryptedContentAffinityCheck._encryption_boundary_key(
+        {key: value for key, value in sent_params.items() if key != "litellm_credential_name"}
     )
-
-    with patch.object(
-        litellm,
-        "credential_list",
-        [
-            CredentialItem(
-                credential_name="account-a",
-                credential_values={
-                    "api_base": "https://credential.example.com",
-                    "api_key": "credential-key-a",
-                },
-                credential_info={},
-            )
-        ],
-    ):
-        boundary = EncryptedContentAffinityCheck._encryption_boundary_key(
-            {
-                "api_base": "",
-                "api_key": "",
-                "litellm_credential_name": "account-a",
-            }
-        )
-
-    assert boundary == ("https://credential.example.com", "credential-key-a")
 
 
 def test_boundary_fallback_matches_deployments_with_same_named_credential_values():
@@ -1788,11 +1833,7 @@ async def test_model_group_encrypted_content_affinity_overrides_global_deploymen
             model_group=model_group,
             user_key=user_api_key_hash,
         )
-        await deployment_callback.cache.async_set_cache(
-            key=cache_key,
-            value={"model_id": "deployment-a"},
-            ttl=60,
-        )
+        await deployment_callback.pins.set(cache_key, {"model_id": "deployment-a"}, 60)
         encoded_id = ResponsesAPIRequestUtils._build_encrypted_item_id("deployment-b", "rs_test")
         request_kwargs = {
             "input": [
@@ -2675,7 +2716,7 @@ async def test_affinity_strips_and_dispatches_when_origin_already_failed_this_re
         request_kwargs={"litellm_metadata": {}, "input": reasoning_input, **failed_in_request, **continuing},
     )
 
-    assert result is group
+    assert [deployment["model_info"]["id"] for deployment in result] == ["region-b"]
     assert reasoning_input[0] == {"type": "reasoning", "summary": [{"type": "summary_text", "text": "scattering"}]}
 
 
@@ -2728,3 +2769,1031 @@ async def test_affinity_keeps_reasoning_when_every_deployment_already_refused_th
 
     assert [deployment["model_info"]["id"] for deployment in result] == ["region-a"]
     assert reasoning_input[0] == original_reasoning
+
+
+@pytest.mark.asyncio
+async def test_retry_leaves_the_pinned_origin_after_a_server_error():
+    def deployment(region: str, mock_response: object) -> dict[str, object]:
+        base: Final = _region_deployment(region)
+        return {**base, "litellm_params": {**base["litellm_params"], "mock_response": mock_response}}
+
+    router: Final = litellm.Router(
+        model_list=[
+            deployment("region-a", Exception("upstream 500")),
+            deployment("region-b", "ok"),
+            deployment("region-c", "ok"),
+        ],
+        disable_cooldowns=True,
+        num_retries=3,
+        retry_after=0,
+        optional_pre_call_checks=["encrypted_content_affinity"],
+    )
+    try:
+        response: Final = await router.aresponses(
+            model="gpt-5.4", input=_reasoning_input_minted_by("region-a"), litellm_metadata={}
+        )
+        assert response._hidden_params["model_id"] in {"region-b", "region-c"}
+    finally:
+        router.discard()
+
+
+def _default_endpoint_deployment(model_id: str, litellm_params: Mapping[str, object]) -> dict[str, object]:
+    return {"model_name": "gpt-5.5", "litellm_params": dict(litellm_params), "model_info": {"id": model_id}}
+
+
+def _deployment_of(ctx: RoutingContext, model_id: str) -> dict[str, object]:
+    deployment: Final = ctx.registry().deployment(model_id)
+    assert deployment is not None
+    return deployment.model_dump(exclude_none=True)
+
+
+SUMMARY_ONLY_REASONING: Final = {"type": "reasoning", "summary": [{"type": "summary_text", "text": "scattering"}]}
+UNMARKED_REASONING: Final = {**SUMMARY_ONLY_REASONING, "id": "rs_test", "encrypted_content": "gAAAAA-blob"}
+OPENAI_SHARED_KEY: Final = {"model": "openai/gpt-5.5", "api_key": "shared-key"}
+
+
+@pytest.fixture
+def no_process_wide_api_base(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "api_base", None)
+    monkeypatch.delenv("AZURE_API_BASE", raising=False)
+
+
+@pytest.mark.usefixtures("no_process_wide_api_base")
+@pytest.mark.parametrize("marked", [True, False], ids=["marked origin", "unmarked origin"])
+@pytest.mark.parametrize(
+    "origin_params, target_params, target_can_decrypt",
+    [
+        pytest.param(OPENAI_SHARED_KEY, OPENAI_SHARED_KEY, True, id="same key on the provider default endpoint"),
+        pytest.param(
+            {"model": "gpt-5.5", "custom_llm_provider": "openai", "api_key": "shared-key"},
+            OPENAI_SHARED_KEY,
+            True,
+            id="provider named apart from the model",
+        ),
+        pytest.param(OPENAI_SHARED_KEY, {**OPENAI_SHARED_KEY, "api_key": "other-key"}, False, id="different key"),
+        pytest.param(
+            OPENAI_SHARED_KEY,
+            {**OPENAI_SHARED_KEY, "model": "openai/gpt-5.5-mini"},
+            False,
+            id="same key on the default endpoint for another model",
+        ),
+        pytest.param(
+            {"model": "bedrock_mantle/us-west-2/openai.gpt-6-astra", "api_key": "shared-key"},
+            {"model": "bedrock_mantle/us-west-2/openai.gpt-6-astra", "api_key": "shared-key"},
+            False,
+            id="same key on Bedrock Mantle, which serves several vendors",
+        ),
+        pytest.param(
+            {"model": "openrouter/openai/gpt-6.1-sol", "api_key": "shared-key"},
+            {"model": "openrouter/anthropic/claude-haiku-5.5", "api_key": "shared-key"},
+            False,
+            id="same key on an aggregator that serves several vendors",
+        ),
+        pytest.param(
+            {"model": "anthropic/claude-opus-5-5", "api_key": "shared-key"},
+            {"model": "anthropic/claude-opus-5-5", "api_key": "shared-key"},
+            False,
+            id="provider without a Responses URL builder",
+        ),
+        pytest.param(
+            {"model": "azure/gpt-5.5", "api_key": "shared-key"},
+            {"model": "azure/gpt-5.5", "api_key": "shared-key"},
+            False,
+            id="provider whose builder needs an api_base",
+        ),
+        pytest.param(
+            {"model": "github_copilot/gpt-5.5", "api_key": "shared-key"},
+            {"model": "github_copilot/gpt-5.5", "api_key": "shared-key"},
+            False,
+            id="same key on a provider that authenticates with its own token",
+        ),
+        pytest.param(
+            {"model": "groq/llama-4-scout"},
+            {"model": "groq/llama-4-scout"},
+            False,
+            id="provider with no default key",
+        ),
+        pytest.param(
+            {"model": "vertex_ai/gemini-3-pro"},
+            {"model": "vertex_ai/gemini-3-pro"},
+            False,
+            id="provider whose default key is a credentials file",
+        ),
+        pytest.param(
+            {**OPENAI_SHARED_KEY, "api_base": "https://openai-proxy.example.com/v1"},
+            OPENAI_SHARED_KEY,
+            False,
+            id="explicit api_base beside the default endpoint",
+        ),
+        pytest.param(
+            {**OPENAI_SHARED_KEY, "extra_headers": {"OpenAI-Organization": "org-a"}},
+            {**OPENAI_SHARED_KEY, "extra_headers": {"openai-organization": "org-b"}},
+            False,
+            id="same key sent to different OpenAI organizations",
+        ),
+        pytest.param(
+            {**OPENAI_SHARED_KEY, "extra_headers": {"OpenAI-Project": "proj-a"}},
+            OPENAI_SHARED_KEY,
+            False,
+            id="same key with an OpenAI project beside one without",
+        ),
+        pytest.param(
+            {**OPENAI_SHARED_KEY, "extra_headers": {"Cookie": "session=account-a"}},
+            {**OPENAI_SHARED_KEY, "extra_headers": {"cookie": "session=account-b"}},
+            False,
+            id="same key signed in to different accounts by cookie",
+        ),
+        pytest.param(
+            {**OPENAI_SHARED_KEY, "headers": {"api-key": "account-a"}},
+            {**OPENAI_SHARED_KEY, "headers": {"api-key": "account-b"}},
+            False,
+            id="explicit key beside different api-key headers",
+        ),
+        pytest.param(
+            {**OPENAI_SHARED_KEY, "organization": "org-a"},
+            {**OPENAI_SHARED_KEY, "organization": "org-b"},
+            True,
+            id="organization param the Responses request never sends",
+        ),
+        pytest.param(
+            {**OPENAI_SHARED_KEY, "extra_headers": {"x-team": "a", "OpenAI-Organization": "org-a"}},
+            {**OPENAI_SHARED_KEY, "extra_headers": {"x-team": "b", "OpenAI-Organization": "org-a"}},
+            True,
+            id="same OpenAI organization beside unrelated headers",
+        ),
+        pytest.param(
+            {
+                **OPENAI_SHARED_KEY,
+                "headers": {"OpenAI-Organization": "org-a"},
+                "extra_headers": {"openai-organization": "org-b"},
+            },
+            {**OPENAI_SHARED_KEY, "extra_headers": {"OpenAI-Organization": "org-b"}},
+            True,
+            id="extra headers override the organization the headers set",
+        ),
+    ],
+)
+def test_hop_strip_keeps_reasoning_between_same_key_deployments_on_the_default_endpoint(
+    origin_params: dict[str, object], target_params: dict[str, object], target_can_decrypt: bool, marked: bool
+):
+    from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
+        EncryptedContentAffinityCheck,
+    )
+
+    router: Final = litellm.Router(
+        model_list=[
+            _default_endpoint_deployment("origin", origin_params),
+            _default_endpoint_deployment("target", target_params),
+        ]
+    )
+    ctx: Final = RoutingContext(router)
+    reasoning: Final = _reasoning_input_minted_by("origin")[0] if marked else dict(UNMARKED_REASONING)
+    original_reasoning: Final = dict(reasoning)
+    request_input: Final = [reasoning, {"role": "user", "content": "and sunsets?"}]
+
+    EncryptedContentAffinityCheck.strip_reasoning_the_targets_cannot_decrypt(
+        ctx,
+        request_input,
+        None,
+        (_deployment_of(ctx, "target"),),
+        unmarked_origin=None if marked else "origin",
+    )
+
+    assert request_input[0] == (original_reasoning if target_can_decrypt else SUMMARY_ONLY_REASONING)
+
+
+@pytest.mark.usefixtures("no_process_wide_api_base")
+@pytest.mark.parametrize(
+    "target_api_key, target_can_decrypt",
+    [
+        pytest.param(None, True, id="both on the environment key"),
+        pytest.param("env-key", True, id="explicit key equal to the environment key"),
+        pytest.param("other-key", False, id="explicit key other than the environment key"),
+    ],
+)
+def test_hop_strip_resolves_a_missing_key_from_the_environment(
+    monkeypatch: pytest.MonkeyPatch, target_api_key: str | None, target_can_decrypt: bool
+):
+    from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
+        EncryptedContentAffinityCheck,
+    )
+
+    monkeypatch.setattr(litellm, "api_key", None)
+    monkeypatch.setattr(litellm, "openai_key", None)
+    monkeypatch.setenv("OPENAI_API_KEY", "env-key")
+    target_params: Final = {"model": "openai/gpt-5.5", **({"api_key": target_api_key} if target_api_key else {})}
+    router: Final = litellm.Router(
+        model_list=[
+            _default_endpoint_deployment("origin", {"model": "openai/gpt-5.5"}),
+            _default_endpoint_deployment("target", target_params),
+        ]
+    )
+    ctx: Final = RoutingContext(router)
+    reasoning: Final = _reasoning_input_minted_by("origin")[0]
+    original_reasoning: Final = dict(reasoning)
+    request_input: Final = [reasoning, {"role": "user", "content": "and sunsets?"}]
+
+    EncryptedContentAffinityCheck.strip_reasoning_the_targets_cannot_decrypt(
+        ctx, request_input, None, (_deployment_of(ctx, "target"),), unmarked_origin=None
+    )
+
+    assert request_input[0] == (original_reasoning if target_can_decrypt else SUMMARY_ONLY_REASONING)
+
+
+def test_hop_strip_leaves_input_items_that_are_not_objects_as_sent():
+    from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
+        EncryptedContentAffinityCheck,
+    )
+
+    request_input: Final = ["and sunsets?", *_reasoning_input_minted_by("origin")]
+
+    EncryptedContentAffinityCheck.strip_reasoning_the_targets_cannot_decrypt(
+        None, request_input, None, (), unmarked_origin=None
+    )
+
+    assert request_input == ["and sunsets?", SUMMARY_ONLY_REASONING, {"role": "user", "content": "and sunsets?"}]
+
+
+GATEWAY_BASE: Final = {"model": "openai/gpt-5.5", "api_base": "https://gateway.example.com/v1"}
+
+
+@pytest.mark.parametrize(
+    "origin_params, target_params, target_can_decrypt",
+    [
+        pytest.param(
+            {**GATEWAY_BASE, "extra_headers": {"Authorization": "Bearer sk-account-a"}},
+            {**GATEWAY_BASE, "extra_headers": {"Authorization": "Bearer sk-account-b"}},
+            False,
+            id="environment key replaced by different Authorization headers",
+        ),
+        pytest.param(
+            {**GATEWAY_BASE, "api_key": "shared-key", "extra_headers": {"x-idempotency-key": "a"}},
+            {**GATEWAY_BASE, "api_key": "shared-key", "extra_headers": {"x-idempotency-key": "b"}},
+            True,
+            id="explicit pair beside different tag headers",
+        ),
+        pytest.param(
+            {**GATEWAY_BASE, "extra_headers": {"Authorization": "Bearer sk-account-a"}},
+            {**GATEWAY_BASE, "extra_headers": {"authorization": "Bearer sk-account-a"}},
+            True,
+            id="same Authorization header on both",
+        ),
+    ],
+)
+def test_hop_strip_keeps_accounts_that_sign_in_through_headers_apart(
+    monkeypatch: pytest.MonkeyPatch,
+    origin_params: dict[str, object],
+    target_params: dict[str, object],
+    target_can_decrypt: bool,
+):
+    from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
+        EncryptedContentAffinityCheck,
+    )
+
+    monkeypatch.setenv("OPENAI_API_KEY", "env-key")
+    router: Final = litellm.Router(
+        model_list=[
+            _default_endpoint_deployment("origin", origin_params),
+            _default_endpoint_deployment("target", target_params),
+        ]
+    )
+    ctx: Final = RoutingContext(router)
+    reasoning: Final = _reasoning_input_minted_by("origin")[0]
+    original_reasoning: Final = dict(reasoning)
+    request_input: Final = [reasoning, {"role": "user", "content": "and sunsets?"}]
+
+    EncryptedContentAffinityCheck.strip_reasoning_the_targets_cannot_decrypt(
+        ctx, request_input, None, (_deployment_of(ctx, "target"),), unmarked_origin=None
+    )
+
+    assert request_input[0] == (original_reasoning if target_can_decrypt else SUMMARY_ONLY_REASONING)
+
+
+@pytest.mark.parametrize(
+    "environment_key, target_model, target_can_decrypt",
+    [
+        pytest.param("shared-key", GATEWAY_BASE["model"], True, id="environment key equal to the explicit key"),
+        pytest.param("other-key", GATEWAY_BASE["model"], False, id="environment key other than the explicit key"),
+        pytest.param("shared-key", "openai/gpt-5.5-mini", False, id="equal keys serving another model"),
+    ],
+)
+def test_hop_strip_matches_an_explicit_key_and_the_environment_key_on_one_api_base(
+    monkeypatch: pytest.MonkeyPatch, environment_key: str, target_model: str, target_can_decrypt: bool
+):
+    from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
+        EncryptedContentAffinityCheck,
+    )
+
+    monkeypatch.setattr(litellm, "api_key", None)
+    monkeypatch.setattr(litellm, "openai_key", None)
+    monkeypatch.setenv("OPENAI_API_KEY", environment_key)
+    router: Final = litellm.Router(
+        model_list=[
+            _default_endpoint_deployment("origin", {**GATEWAY_BASE, "api_key": "shared-key"}),
+            _default_endpoint_deployment("target", {**GATEWAY_BASE, "model": target_model}),
+        ]
+    )
+    ctx: Final = RoutingContext(router)
+    reasoning: Final = _reasoning_input_minted_by("origin")[0]
+    original_reasoning: Final = dict(reasoning)
+    request_input: Final = [reasoning, {"role": "user", "content": "and sunsets?"}]
+
+    EncryptedContentAffinityCheck.strip_reasoning_the_targets_cannot_decrypt(
+        ctx, request_input, None, (_deployment_of(ctx, "target"),), unmarked_origin=None
+    )
+
+    assert request_input[0] == (original_reasoning if target_can_decrypt else SUMMARY_ONLY_REASONING)
+
+
+class _SecretReadCounter(CustomSecretManager):
+    def __init__(self) -> None:
+        super().__init__(secret_manager_name="read-counter")
+        self.reads: int = 0
+
+    async def async_read_secret(
+        self, secret_name: str, optional_params: Mapping[str, object] | None = None, timeout: object = None
+    ) -> str | None:
+        self.reads += 1
+        return None
+
+    def sync_read_secret(
+        self, secret_name: str, optional_params: Mapping[str, object] | None = None, timeout: object = None
+    ) -> str | None:
+        self.reads += 1
+        return None
+
+
+@pytest.mark.parametrize(
+    "deployment_params, reasoning_minted_by",
+    [
+        pytest.param(OPENAI_SHARED_KEY, None, id="no reasoning in the input"),
+        pytest.param(OPENAI_SHARED_KEY, "target", id="reasoning the hop's target minted"),
+        pytest.param(
+            {"model": "groq/llama-4-scout"}, "origin", id="reasoning from a provider with no default boundary"
+        ),
+        pytest.param({**GATEWAY_BASE, "api_key": "shared-key"}, "origin", id="reasoning between explicit pairs"),
+    ],
+)
+def test_hop_strip_reads_no_secrets_when_no_default_boundary_needs_resolving(
+    monkeypatch: pytest.MonkeyPatch, deployment_params: dict[str, object], reasoning_minted_by: str | None
+):
+    from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
+        EncryptedContentAffinityCheck,
+    )
+
+    router: Final = litellm.Router(
+        model_list=[
+            _default_endpoint_deployment("origin", deployment_params),
+            _default_endpoint_deployment("target", deployment_params),
+        ]
+    )
+    ctx: Final = RoutingContext(router)
+    secret_reads: Final = _SecretReadCounter()
+    monkeypatch.setattr(litellm, "secret_manager_client", secret_reads)
+    monkeypatch.setattr(litellm, "_key_management_system", KeyManagementSystem.CUSTOM)
+    monkeypatch.setattr(litellm, "_key_management_settings", KeyManagementSettings(access_mode="read_only"))
+    request_input: Final = (
+        _reasoning_input_minted_by(reasoning_minted_by)
+        if reasoning_minted_by
+        else [{"role": "user", "content": "and sunsets?"}]
+    )
+
+    EncryptedContentAffinityCheck.strip_reasoning_the_targets_cannot_decrypt(
+        ctx, request_input, None, (_deployment_of(ctx, "target"),), unmarked_origin="origin"
+    )
+
+    assert secret_reads.reads == 0
+
+
+@pytest.mark.parametrize(
+    "unreadable_params",
+    [
+        pytest.param(
+            {"model": "openai/gpt-5.5", "litellm_credential_name": "mistyped"},
+            id="named credential with a value of the wrong type",
+        ),
+        pytest.param(
+            {**GATEWAY_BASE, "api_key": "shared-key", "extra_headers": {1: "one"}},
+            id="extra header whose name is not a string",
+        ),
+    ],
+)
+def test_hop_strip_keeps_reasoning_a_target_can_decrypt_beside_a_target_with_unreadable_params(
+    monkeypatch: pytest.MonkeyPatch, unreadable_params: dict[str, object]
+):
+    from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
+        EncryptedContentAffinityCheck,
+    )
+
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            CredentialItem(
+                credential_name="mistyped",
+                credential_values={"api_key": "shared-key", "api_version": datetime.date(2024, 10, 21)},
+                credential_info={},
+            )
+        ],
+    )
+    shared_pair: Final = {**GATEWAY_BASE, "api_key": "shared-key"}
+    router: Final = litellm.Router(
+        model_list=[
+            _default_endpoint_deployment("origin", shared_pair),
+            _default_endpoint_deployment("unreadable", unreadable_params),
+            _default_endpoint_deployment("target", shared_pair),
+        ]
+    )
+    ctx: Final = RoutingContext(router)
+    reasoning: Final = _reasoning_input_minted_by("origin")[0]
+    original_reasoning: Final = dict(reasoning)
+    request_input: Final = [reasoning, {"role": "user", "content": "and sunsets?"}]
+
+    EncryptedContentAffinityCheck.strip_reasoning_the_targets_cannot_decrypt(
+        ctx,
+        request_input,
+        None,
+        (_deployment_of(ctx, "unreadable"), _deployment_of(ctx, "target")),
+        unmarked_origin=None,
+    )
+
+    assert request_input[0] == original_reasoning
+
+
+def test_boundary_key_puts_pydantic_and_plain_params_on_one_default_endpoint_boundary():
+    from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
+        EncryptedContentAffinityCheck,
+    )
+    from litellm.types.router import LiteLLM_Params
+
+    pydantic_key: Final = EncryptedContentAffinityCheck._encryption_boundary_key(LiteLLM_Params(**OPENAI_SHARED_KEY))
+    plain_key: Final = EncryptedContentAffinityCheck._encryption_boundary_key(dict(OPENAI_SHARED_KEY))
+
+    assert pydantic_key is not None
+    assert plain_key is not None
+    assert pydantic_key.is_shared_with(plain_key)
+    assert plain_key.is_shared_with(pydantic_key)
+
+
+def test_boundary_key_has_no_default_endpoint_for_a_model_no_provider_claims():
+    from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
+        EncryptedContentAffinityCheck,
+    )
+
+    unmapped: Final = {"model": "unmapped-model-name", "api_key": "shared-key"}
+
+    assert EncryptedContentAffinityCheck._encryption_boundary_key(unmapped) is None
+
+
+def test_boundary_key_has_no_default_key_for_a_custom_provider(monkeypatch: pytest.MonkeyPatch):
+    from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
+        EncryptedContentAffinityCheck,
+    )
+
+    monkeypatch.setattr(litellm, "provider_list", [*litellm.provider_list, "qa-custom"])
+    monkeypatch.setattr(litellm, "_custom_providers", ["qa-custom"])
+
+    assert EncryptedContentAffinityCheck._encryption_boundary_key({"model": "qa-custom/some-model"}) is None
+
+
+@pytest.mark.asyncio
+async def test_affinity_pins_to_the_same_key_peer_on_the_default_endpoint_when_the_origin_cannot_serve():
+    from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
+        EncryptedContentAffinityCheck,
+    )
+
+    router: Final = litellm.Router(
+        model_list=[
+            _default_endpoint_deployment("origin", OPENAI_SHARED_KEY),
+            _default_endpoint_deployment("peer", OPENAI_SHARED_KEY),
+            _default_endpoint_deployment("other-org", {**OPENAI_SHARED_KEY, "api_key": "other-key"}),
+        ]
+    )
+    ctx: Final = RoutingContext(router)
+    peer: Final = _deployment_of(ctx, "peer")
+    reasoning_input: Final = _reasoning_input_minted_by("origin")
+    original_reasoning: Final = dict(reasoning_input[0])
+
+    result: Final[list[dict[str, object]]] = await EncryptedContentAffinityCheck(ctx=ctx).async_filter_deployments(
+        model="gpt-5.5",
+        healthy_deployments=[peer, _deployment_of(ctx, "other-org")],
+        messages=None,
+        request_kwargs={"litellm_metadata": {}, "input": reasoning_input},
+    )
+
+    assert result == [peer]
+    assert reasoning_input[0] == original_reasoning
+
+
+class _HandAdvancedClock:
+    def __init__(self) -> None:
+        self.now: float = 0.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+def _count_secret_reads(monkeypatch: pytest.MonkeyPatch) -> _SecretReadCounter:
+    secret_reads: Final = _SecretReadCounter()
+    monkeypatch.setattr(litellm, "secret_manager_client", secret_reads)
+    monkeypatch.setattr(litellm, "_key_management_system", KeyManagementSystem.CUSTOM)
+    monkeypatch.setattr(litellm, "_key_management_settings", KeyManagementSettings(access_mode="read_only"))
+    return secret_reads
+
+
+async def _pin_a_turn_minted_by_the_origin(
+    affinity: object, healthy_deployments: list[dict[str, object]]
+) -> tuple[list[dict[str, object]], Mapping[str, object]]:
+    from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
+        EncryptedContentAffinityCheck,
+    )
+
+    assert isinstance(affinity, EncryptedContentAffinityCheck)
+    reasoning_input: Final = _reasoning_input_minted_by("origin")
+    result: Final[list[dict[str, object]]] = await affinity.async_filter_deployments(
+        model="gpt-5.5",
+        healthy_deployments=list(healthy_deployments),
+        messages=None,
+        request_kwargs={"litellm_metadata": {}, "input": reasoning_input},
+    )
+    return result, reasoning_input[0]
+
+
+@pytest.mark.asyncio
+async def test_repeated_pins_to_a_default_endpoint_peer_ask_the_secret_manager_once_a_minute(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
+        EncryptedContentAffinityCheck,
+    )
+
+    router: Final = litellm.Router(
+        model_list=[
+            _default_endpoint_deployment("origin", OPENAI_SHARED_KEY),
+            _default_endpoint_deployment("peer", OPENAI_SHARED_KEY),
+            _default_endpoint_deployment("other-org", {**OPENAI_SHARED_KEY, "api_key": "other-key"}),
+        ]
+    )
+    ctx: Final = RoutingContext(router)
+    peer: Final = _deployment_of(ctx, "peer")
+    healthy_deployments: Final = [peer, _deployment_of(ctx, "other-org")]
+    secret_reads: Final = _count_secret_reads(monkeypatch)
+    EncryptedContentAffinityCheck._encryption_boundary_in_refresh_window.cache_clear()
+    clock: Final = _HandAdvancedClock()
+    affinity: Final = EncryptedContentAffinityCheck(ctx=ctx, clock=clock)
+
+    first_pin, first_reasoning = await _pin_a_turn_minted_by_the_origin(affinity, healthy_deployments)
+    reads_for_the_first_pin: Final = secret_reads.reads
+    clock.now = 59.0
+    second_pin, second_reasoning = await _pin_a_turn_minted_by_the_origin(affinity, healthy_deployments)
+    reads_within_the_minute: Final = secret_reads.reads
+    clock.now = 60.0
+    third_pin, third_reasoning = await _pin_a_turn_minted_by_the_origin(affinity, healthy_deployments)
+
+    assert first_pin == second_pin == third_pin == [peer]
+    assert first_reasoning == second_reasoning == third_reasoning == _reasoning_input_minted_by("origin")[0]
+    assert reads_for_the_first_pin > 0
+    assert reads_within_the_minute == reads_for_the_first_pin
+    assert secret_reads.reads > reads_within_the_minute
+
+
+@pytest.mark.asyncio
+async def test_a_changed_named_credential_moves_the_pin_within_the_secret_manager_refresh_minute(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
+        EncryptedContentAffinityCheck,
+    )
+
+    def origin_credential(api_key: str) -> list[CredentialItem]:
+        return [
+            CredentialItem(credential_name="origin-account", credential_values={"api_key": api_key}, credential_info={})
+        ]
+
+    monkeypatch.setattr(litellm, "credential_list", origin_credential("shared-key"))
+    router: Final = litellm.Router(
+        model_list=[
+            _default_endpoint_deployment(
+                "origin", {"model": "openai/gpt-5.5", "litellm_credential_name": "origin-account"}
+            ),
+            _default_endpoint_deployment("peer", OPENAI_SHARED_KEY),
+            _default_endpoint_deployment("other-org", {**OPENAI_SHARED_KEY, "api_key": "other-key"}),
+        ]
+    )
+    ctx: Final = RoutingContext(router)
+    peer: Final = _deployment_of(ctx, "peer")
+    other_org: Final = _deployment_of(ctx, "other-org")
+    _count_secret_reads(monkeypatch)
+    EncryptedContentAffinityCheck._encryption_boundary_in_refresh_window.cache_clear()
+    affinity: Final = EncryptedContentAffinityCheck(ctx=ctx, clock=_HandAdvancedClock())
+
+    pin_before_the_change, _ = await _pin_a_turn_minted_by_the_origin(affinity, [peer, other_org])
+    monkeypatch.setattr(litellm, "credential_list", origin_credential("other-key"))
+    pin_after_the_change, reasoning_after_the_change = await _pin_a_turn_minted_by_the_origin(
+        affinity, [peer, other_org]
+    )
+
+    assert pin_before_the_change == [peer]
+    assert pin_after_the_change == [other_org]
+    assert reasoning_after_the_change == _reasoning_input_minted_by("origin")[0]
+
+
+# ---------------------------------------------------------------------------
+# Operator-declared encryption boundary (model_info.encrypted_content_boundary)
+# ---------------------------------------------------------------------------
+
+
+def _regional_deployment(model_name: str, region: str, boundary: str | None) -> dict:
+    return {
+        "model_name": model_name,
+        "litellm_params": {
+            "model": "openai/gpt-5.6",
+            "api_base": f"https://{region}.example.invalid/v1",
+            "api_key": "sk-one-org",
+        },
+        "model_info": {"id": region} | ({} if boundary is None else {"encrypted_content_boundary": boundary}),
+    }
+
+
+async def _forwarded_reasoning_after_model_switch(origin_boundary: str | None, peer_boundary: str | None) -> tuple:
+    router: Final = litellm.Router(
+        model_list=[
+            _regional_deployment("reasoning-a", "region-1", origin_boundary),
+            _regional_deployment("reasoning-b", "region-2", peer_boundary),
+        ],
+        optional_pre_call_checks=["encrypted_content_affinity"],
+        num_retries=0,
+    )
+    handler: Final = AsyncMock(return_value=_build_mock_response(output_items=[], response_id="resp_second"))
+    with patch(
+        "litellm.llms.custom_httpx.llm_http_handler.BaseLLMHTTPHandler.async_response_api_handler",
+        new=handler,
+    ):
+        response: Final = await router.aresponses(
+            model="reasoning-b",
+            input=[
+                {
+                    "type": "reasoning",
+                    "summary": [],
+                    "encrypted_content": ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id(
+                        "blob-from-region-1", "region-1"
+                    ),
+                },
+                {"role": "user", "content": "follow-up"},
+            ],
+            litellm_metadata={},
+        )
+    forwarded_reasoning: Final = handler.await_args.kwargs["input"][0]
+    return response._hidden_params["model_id"], forwarded_reasoning.get("encrypted_content")
+
+
+@pytest.mark.asyncio
+async def test_declared_boundary_keeps_reasoning_across_endpoints_with_different_api_bases():
+    assert await _forwarded_reasoning_after_model_switch("org-1", "org-1") == ("region-2", "blob-from-region-1")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("origin_boundary", "peer_boundary"),
+    [(None, None), ("org-1", "org-2"), ("org-1", None), (None, "org-1")],
+    ids=["undeclared", "different-boundaries", "only-origin-declared", "only-peer-declared"],
+)
+async def test_reasoning_is_stripped_unless_both_deployments_declare_the_same_boundary(origin_boundary, peer_boundary):
+    assert await _forwarded_reasoning_after_model_switch(origin_boundary, peer_boundary) == ("region-2", None)
+
+
+def test_declared_boundary_overrides_a_shared_api_base_and_key():
+    origin: Final = _make_originating_mock("https://region-1.example.invalid/v1", "sk-one-org")
+    origin.model_info = litellm.types.router.ModelInfo(id="region-1", encrypted_content_boundary="org-1")
+    check: Final = EncryptedContentAffinityCheck(ctx=_make_router_mock_with_cooldown(origin))
+    other_org: Final = {
+        "model_info": {"id": "region-1-org-2", "encrypted_content_boundary": "org-2"},
+        "litellm_params": {"api_base": "https://region-1.example.invalid/v1", "api_key": "sk-one-org"},
+    }
+
+    matches, _ = check._find_deployments_on_same_encryption_boundary([other_org], "region-1")
+
+    assert matches == []
+
+
+@pytest.mark.asyncio
+async def test_boundary_pin_only_selects_deployments_that_declare_the_origins_boundary():
+    origin: Final = _make_originating_mock("https://region-1.example.invalid/v1", "sk-one-org")
+    origin.model_info = litellm.types.router.ModelInfo(id="region-1", encrypted_content_boundary="org-1")
+    check: Final = EncryptedContentAffinityCheck(ctx=_make_router_mock_with_cooldown(origin))
+    peer: Final = _regional_deployment("reasoning-b", "region-2", "org-1")
+    stranger: Final = _regional_deployment("reasoning-b", "region-3", "org-2")
+    request_kwargs: Final = {
+        "input": [
+            {
+                "type": "reasoning",
+                "encrypted_content": ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id(
+                    "blob-from-region-1", "region-1"
+                ),
+            }
+        ]
+    }
+
+    result: Final = await check.async_filter_deployments(
+        model="reasoning-b",
+        healthy_deployments=[stranger, peer],
+        messages=None,
+        request_kwargs=request_kwargs,
+    )
+
+    assert result == [peer]
+    assert request_kwargs["input"][0]["encrypted_content"] == (
+        ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id("blob-from-region-1", "region-1")
+    )
+
+
+def test_a_boundary_declared_on_one_side_keeps_the_shared_api_base_and_key_match():
+    origin: Final = _make_originating_mock("https://region-1.example.invalid/v1", "sk-one-org")
+    origin.model_info = litellm.types.router.ModelInfo(id="region-1", encrypted_content_boundary="org-1")
+    check: Final = EncryptedContentAffinityCheck(ctx=_make_router_mock_with_cooldown(origin))
+    undeclared_twin: Final = {
+        "model_info": {"id": "region-1-twin"},
+        "litellm_params": {"api_base": "https://region-1.example.invalid/v1", "api_key": "sk-one-org"},
+    }
+
+    matches, _ = check._find_deployments_on_same_encryption_boundary([undeclared_twin], "region-1")
+
+    assert matches == [undeclared_twin]
+
+
+def test_declared_boundary_matches_deployments_whose_credentials_cannot_be_resolved():
+    origin: Final = _make_originating_mock("https://region-1.example.invalid/v1", "")
+    origin.litellm_params.model_dump.return_value = {"api_base": "https://region-1.example.invalid/v1"}
+    origin.model_info = litellm.types.router.ModelInfo(id="region-1", encrypted_content_boundary="org-1")
+    check: Final = EncryptedContentAffinityCheck(ctx=_make_router_mock_with_cooldown(origin))
+    peer: Final = {
+        "model_info": {"id": "region-2", "encrypted_content_boundary": "org-1"},
+        "litellm_params": {"api_base": "https://region-2.example.invalid/v1"},
+    }
+
+    matches, _ = check._find_deployments_on_same_encryption_boundary([peer], "region-1")
+
+    assert matches == [peer]
+
+
+async def _forwarded_reasoning_after_order_fallback(boundary: str | None) -> tuple:
+    primary: Final = _regional_deployment("reasoning", "region-1", boundary)
+    backup: Final = _regional_deployment("reasoning", "region-3", boundary)
+    router: Final = litellm.Router(
+        model_list=[
+            primary | {"litellm_params": primary["litellm_params"] | {"order": 1}},
+            backup | {"litellm_params": backup["litellm_params"] | {"order": 2}},
+        ],
+        optional_pre_call_checks=["encrypted_content_affinity"],
+        disable_cooldowns=True,
+        num_retries=0,
+    )
+
+    async def upstream(*, litellm_params, **_kwargs):
+        if "region-1" in litellm_params.api_base:
+            raise litellm.InternalServerError("upstream 500", llm_provider="openai", model="gpt-5.6")
+        return _build_mock_response(output_items=[], response_id="resp_second")
+
+    handler: Final = AsyncMock(side_effect=upstream)
+    with patch(
+        "litellm.llms.custom_httpx.llm_http_handler.BaseLLMHTTPHandler.async_response_api_handler",
+        new=handler,
+    ):
+        response: Final = await router.aresponses(
+            model="reasoning",
+            input=[
+                {
+                    "type": "reasoning",
+                    "summary": [],
+                    "encrypted_content": ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id(
+                        "blob-from-region-1", "region-1"
+                    ),
+                },
+                {"role": "user", "content": "follow-up"},
+            ],
+            litellm_metadata={},
+        )
+    forwarded_reasoning: Final = handler.await_args.kwargs["input"][0]
+    return response._hidden_params["model_id"], forwarded_reasoning.get("encrypted_content")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("boundary", "expected_reasoning"),
+    [("org-1", "blob-from-region-1"), (None, None)],
+    ids=["declared", "undeclared"],
+)
+async def test_order_fallback_keeps_reasoning_only_on_a_declared_boundary_peer(boundary, expected_reasoning):
+    assert await _forwarded_reasoning_after_order_fallback(boundary) == ("region-3", expected_reasoning)
+
+
+def _tagged_deployment(
+    vendor: str, boundary: str | None = None, tags: tuple[str, ...] = ("default",)
+) -> dict[str, object]:
+    return {
+        "model_name": "tagged-group",
+        "litellm_params": {
+            "model": "openai/gpt-5.6",
+            "api_base": f"https://{vendor}.example.invalid/v1",
+            "api_key": f"sk-{vendor}",
+            "tags": [*tags, f"vendor:{vendor}"],
+        },
+        "model_info": {"id": vendor} | ({} if boundary is None else {"encrypted_content_boundary": boundary}),
+    }
+
+
+async def _tagged_followup(
+    tags: list[str] | None, peer_boundary: str | None = None, origin_tags: tuple[str, ...] = ("default",)
+) -> tuple[str, object]:
+    router: Final = litellm.Router(
+        model_list=[_tagged_deployment("a", "org-a", origin_tags), _tagged_deployment("b", peer_boundary)],
+        enable_tag_filtering=True,
+        optional_pre_call_checks=["encrypted_content_affinity"],
+        num_retries=0,
+    )
+    handler: Final = AsyncMock(return_value=_build_mock_response(output_items=[], response_id="resp_tagged"))
+    with patch(
+        "litellm.llms.custom_httpx.llm_http_handler.BaseLLMHTTPHandler.async_response_api_handler",
+        new=handler,
+    ):
+        response: Final = await router.aresponses(
+            model="tagged-group",
+            input=[
+                {"role": "user", "content": "first question"},
+                {
+                    "type": "reasoning",
+                    "summary": [{"type": "summary_text", "text": "thought about it"}],
+                    "encrypted_content": ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id(
+                        "blob-from-a", "a"
+                    ),
+                },
+                {"role": "user", "content": "follow-up"},
+            ],
+            litellm_metadata={} if tags is None else {"tags": tags},
+        )
+    return response._hidden_params["model_id"], handler.await_args.kwargs["input"][1]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tags", [None, ["vendor:a"]], ids=["untagged", "tag-matches-pin"])
+async def test_tagged_followup_stays_on_the_deployment_that_minted_its_reasoning(tags: list[str] | None) -> None:
+    served_by, reasoning = await _tagged_followup(tags)
+
+    assert served_by == "a"
+    assert reasoning["encrypted_content"] == "blob-from-a"
+
+
+@pytest.mark.asyncio
+async def test_untagged_followup_stays_pinned_when_only_another_deployment_is_tagged_default() -> None:
+    served_by, reasoning = await _tagged_followup(None, origin_tags=())
+
+    assert served_by == "a"
+    assert reasoning["encrypted_content"] == "blob-from-a"
+
+
+@pytest.mark.asyncio
+async def test_routing_tag_that_excludes_the_pin_routes_to_the_tagged_deployment_without_its_reasoning() -> None:
+    served_by, reasoning = await _tagged_followup(["vendor:b"])
+
+    assert served_by == "b"
+    assert "encrypted_content" not in reasoning
+    assert reasoning["summary"] == [{"type": "summary_text", "text": "thought about it"}]
+
+
+@pytest.mark.asyncio
+async def test_routing_tag_that_picks_an_encryption_boundary_peer_keeps_the_reasoning() -> None:
+    served_by, reasoning = await _tagged_followup(["vendor:b"], peer_boundary="org-a")
+
+    assert served_by == "b"
+    assert reasoning["encrypted_content"] == "blob-from-a"
+
+
+@pytest.mark.asyncio
+async def test_routing_tag_left_to_fail_open_keeps_the_pin_when_only_a_cooled_deployment_opts_in() -> None:
+    router: Final = litellm.Router(
+        model_list=[
+            _tagged_deployment("a"),
+            _tagged_deployment("opted-in") | {"model_info": {"id": "opted-in", "allow_fail_open": True}},
+        ],
+        enable_tag_filtering=True,
+        optional_pre_call_checks=["encrypted_content_affinity"],
+        num_retries=0,
+    )
+    router.cooldown_cache.add_deployment_to_cooldown(
+        model_id="opted-in", original_exception=RuntimeError("unavailable"), exception_status=500, cooldown_time=3600
+    )
+    handler: Final = AsyncMock(return_value=_build_mock_response(output_items=[], response_id="resp_fail_open"))
+    with patch(
+        "litellm.llms.custom_httpx.llm_http_handler.BaseLLMHTTPHandler.async_response_api_handler",
+        new=handler,
+    ):
+        response: Final = await router.aresponses(
+            model="tagged-group",
+            input=[
+                {
+                    "type": "reasoning",
+                    "summary": [],
+                    "encrypted_content": ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id(
+                        "blob-from-a", "a"
+                    ),
+                },
+                {"role": "user", "content": "follow-up"},
+            ],
+            litellm_metadata={"tags": ["!default"], "inherited_tags": []},
+        )
+
+    assert response._hidden_params["model_id"] == "a"
+    assert handler.await_args.kwargs["input"][0]["encrypted_content"] == "blob-from-a"
+
+
+@pytest.mark.asyncio
+async def test_routing_tag_strips_reasoning_only_a_rejected_boundary_peer_could_decrypt() -> None:
+    shares_only_a_credentials: Final = _tagged_deployment("a", tags=()) | {
+        "model_name": "other-group",
+        "model_info": {"id": "c"},
+    }
+    router: Final = litellm.Router(
+        model_list=[_tagged_deployment("a", "org-a"), _tagged_deployment("b", "org-a"), shares_only_a_credentials],
+        enable_tag_filtering=True,
+        optional_pre_call_checks=["encrypted_content_affinity"],
+        num_retries=0,
+    )
+    handler: Final = AsyncMock(return_value=_build_mock_response(output_items=[], response_id="resp_peer"))
+    with patch(
+        "litellm.llms.custom_httpx.llm_http_handler.BaseLLMHTTPHandler.async_response_api_handler",
+        new=handler,
+    ):
+        response: Final = await router.aresponses(
+            model="tagged-group",
+            input=[
+                {
+                    "type": "reasoning",
+                    "summary": [{"type": "summary_text", "text": "from a"}],
+                    "encrypted_content": ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id(
+                        "blob-from-a", "a"
+                    ),
+                },
+                {
+                    "type": "reasoning",
+                    "summary": [{"type": "summary_text", "text": "from c"}],
+                    "encrypted_content": ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id(
+                        "blob-from-c", "c"
+                    ),
+                },
+                {"role": "user", "content": "follow-up"},
+            ],
+            litellm_metadata={"tags": ["vendor:b"]},
+        )
+    forwarded: Final = handler.await_args.kwargs["input"]
+
+    assert response._hidden_params["model_id"] == "b"
+    assert [item.get("encrypted_content") for item in forwarded[:2]] == ["blob-from-a", None]
+
+
+def _boundary_peer(name: str, tags: list[str], model_info: Mapping[str, object]) -> dict[str, object]:
+    return {
+        "model_name": "tagged-group",
+        "litellm_params": {
+            "model": "openai/gpt-5.6",
+            "api_base": f"https://{name}.example.invalid/v1",
+            "api_key": f"sk-{name}",
+            "tags": tags,
+        },
+        "model_info": {"id": name, "encrypted_content_boundary": "org-a", **model_info},
+    }
+
+
+@pytest.mark.asyncio
+async def test_routing_tags_that_fail_open_onto_a_boundary_peer_are_served_by_it() -> None:
+    router: Final = litellm.Router(
+        model_list=[
+            _boundary_peer("a", ["z"], {}) | {"model_name": "other-group"},
+            _boundary_peer("default-peer", ["default", "x"], {"allow_fail_open": True}),
+            _boundary_peer("y-peer", ["y"], {}),
+        ],
+        enable_tag_filtering=True,
+        optional_pre_call_checks=["encrypted_content_affinity"],
+        num_retries=0,
+    )
+    handler: Final = AsyncMock(return_value=_build_mock_response(output_items=[], response_id="resp_fail_open"))
+    with patch(
+        "litellm.llms.custom_httpx.llm_http_handler.BaseLLMHTTPHandler.async_response_api_handler",
+        new=handler,
+    ):
+        response: Final = await router.aresponses(
+            model="tagged-group",
+            input=[
+                {
+                    "type": "reasoning",
+                    "summary": [],
+                    "encrypted_content": ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id(
+                        "blob-from-a", "a"
+                    ),
+                },
+                {"role": "user", "content": "follow-up"},
+            ],
+            litellm_metadata={"tags": ["&x", "&y"], "inherited_tags": []},
+        )
+
+    assert response._hidden_params["model_id"] == "default-peer"
+    assert handler.await_args.kwargs["input"][0]["encrypted_content"] == "blob-from-a"

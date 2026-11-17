@@ -5,7 +5,7 @@ Response Polling Handler for Background Responses with Cache
 import json
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 from pydantic import TypeAdapter
 from redis.exceptions import ResponseError
@@ -17,11 +17,15 @@ from litellm.caching.redis_cache import RedisCache
 from litellm.proxy.litellm_pre_call_utils import sanitize_for_log
 from litellm.types.llms.openai import ResponsesAPIResponse, ResponsesAPIStatus
 
+if TYPE_CHECKING:
+    from litellm.router import Router
+
 _RESPONSE_POLLING_TARGET: Final = "response_polling"
 _JSON_OBJECT: Final = TypeAdapter(dict[str, object])
 _JSON_LIST: Final = TypeAdapter(list[object])
 _SCRIPT_REPLY: Final = TypeAdapter(int)
 _WRITTEN: Final = 1
+_CACHED_VALUE: Final = TypeAdapter(object)
 
 
 def _encoded_state(state: Mapping[str, object]) -> str:
@@ -44,6 +48,12 @@ return 1
 
 async def _stored_status_prefix(redis_cache: RedisCache, cache_key: str) -> str:
     return await redis_cache.async_getrange(cache_key, 0, len(_CANCELLED_PREFIX) - 1)
+
+
+def _json_document(value: object) -> str | bytes | bytearray:
+    if isinstance(value, (str, bytes, bytearray)):
+        return value
+    raise TypeError(f"the JSON object must be str, bytes or bytearray, not {value.__class__.__name__}")
 
 
 class ResponsePollingHandler:
@@ -142,6 +152,7 @@ class ResponsePollingHandler:
         parallel_tool_calls: bool | None = None,
         user: str | None = None,
         store: bool | None = None,
+        timing: Mapping[str, float] | None = None,
     ) -> None:
         """
         Update the polling state in Redis
@@ -170,6 +181,7 @@ class ResponsePollingHandler:
             parallel_tool_calls: Whether parallel tool calls are enabled
             user: User identifier
             store: Whether to store the response
+            timing: Server execution timings in milliseconds
         """
         if not self.redis_cache:
             return
@@ -177,13 +189,13 @@ class ResponsePollingHandler:
         cache_key: Final = self.get_cache_key(polling_id)
 
         # Get current state
-        cached_state: Final = await self.redis_cache.async_get_cache(cache_key)
+        cached_state: Final = _CACHED_VALUE.validate_python(await self.redis_cache.async_get_cache(cache_key))
         if not cached_state:
             verbose_proxy_logger.warning("No cached state found for polling_id: %s", sanitize_for_log(polling_id))
             return
 
         # Parse existing ResponsesAPIResponse from cache
-        state: Final = _JSON_OBJECT.validate_python(json.loads(cached_state))
+        state: Final = _JSON_OBJECT.validate_python(json.loads(_json_document(cached_state)))
 
         # Update status (using OpenAI native status values)
         if status:
@@ -192,6 +204,9 @@ class ResponsePollingHandler:
         # Replace full output list if provided
         if output is not None:
             state["output"] = output
+
+        if timing is not None:
+            state["litellm_response_timing"] = timing
 
         # Update usage
         if usage:
@@ -264,10 +279,10 @@ class ResponsePollingHandler:
             return None
 
         cache_key: Final = self.get_cache_key(polling_id)
-        cached_state: Final = await self.redis_cache.async_get_cache(cache_key)
+        cached_state: Final = _CACHED_VALUE.validate_python(await self.redis_cache.async_get_cache(cache_key))
 
         if cached_state:
-            return _JSON_OBJECT.validate_python(json.loads(cached_state))
+            return _JSON_OBJECT.validate_python(json.loads(_json_document(cached_state)))
 
         return None
 
@@ -323,10 +338,10 @@ class ResponsePollingHandler:
 
 def should_use_polling_for_request(
     background_mode: bool,
-    polling_via_cache_enabled,  # Can be False, "all", or List[str]
-    redis_cache,  # RedisCache or None
+    polling_via_cache_enabled: bool | str | Sequence[str],
+    redis_cache: RedisCache | None,
     model: str,
-    llm_router,  # Router instance or None
+    llm_router: "Router | None",
     native_background_mode: Sequence[str] | None = None,  # List of models that should use native background mode
 ) -> bool:
     """

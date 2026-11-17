@@ -28,7 +28,7 @@ from litellm.proxy.middleware.admission_control_middleware import create_prometh
 from litellm.proxy.middleware.in_flight_requests_middleware import InFlightRequestsMiddleware
 from litellm.tracing.exporter import lens_export_counters
 
-_GRAFANA_DIR: Final = Path(__file__).parents[3] / "cookbook" / "litellm_proxy_server" / "grafana_dashboard"
+_GRAFANA_DIR: Final = Path(__file__).parents[3] / "litellm" / "integrations" / "prometheus_helpers" / "grafana_dashboards"
 _ALL_METRICS_DASHBOARD: Final = _GRAFANA_DIR / "dashboard_all_metrics" / "grafana_dashboard.json"
 _LITELLM_DASHBOARDS: Final = (_ALL_METRICS_DASHBOARD, _GRAFANA_DIR / "dashboard_v2" / "grafana_dashboard.json")
 _METRIC_TOKEN_RE: Final = re.compile(r"\blitellm_[a-z0-9_]+")

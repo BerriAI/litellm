@@ -1,10 +1,12 @@
 import asyncio
 import copy
+import functools
+import itertools
 import json
 import logging
 import re
-from collections.abc import AsyncIterator, Callable
-from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping
+from contextlib import AbstractAsyncContextManager, asynccontextmanager, contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -13,6 +15,7 @@ from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import httpx
 import pytest
+import respx
 from prisma.errors import DataError as PrismaDataError
 from prisma.errors import RawQueryError
 from redis.exceptions import DataError
@@ -21,8 +24,11 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm._service_logger import ServiceTypes
 from litellm.constants import SPEND_ROLLUP_LOCK_TIMEOUT_MS
+from litellm.integrations.customer_budget_webhook import CustomerBudgetWebhook
 from litellm.proxy._types import DailyTagSpendTransaction, Litellm_EntityType, SpendUpdateQueueItem
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.db.db_spend_update_writer import (
+    _SPEND_TABLE_COMMIT_ORDER,
     _TEAM_ADVISORY_LOCK_SQL,
     _TEAM_MEMBER_SPEND_SQL,
     DBSpendUpdateWriter,
@@ -36,9 +42,19 @@ from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import (
     build_window_spend_transaction,
 )
 from litellm.proxy.db.rollup_lock_timeout import ROLLUP_LOCK_TIMEOUT_SQL
+from litellm.proxy.spend_tracking.session_spend_total import SessionSpendTotals
+from litellm.proxy.utils import ProxyLogging
 from litellm.responses.streaming_iterator import drain_logging_tasks
 from litellm.types.caching import RedisPipelineLpopOperation, RedisPipelineRpushOperation
 from tests.unit.proxy.db.fake_prisma_engine import engine_call
+
+
+@pytest.fixture(autouse=True)
+def legacy_spend_writers(monkeypatch: pytest.MonkeyPatch) -> None:
+    """These tests cover the legacy writers, still reachable as the rollback path with use_spend_logs_ledger off."""
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setitem(proxy_server.general_settings, "use_spend_logs_ledger", False)
 
 
 @pytest.mark.asyncio
@@ -1060,6 +1076,143 @@ async def test_commit_spend_updates_to_db_increments_agent_spend():
     call_kwargs = mock_batcher.litellm_agentstable.update_many.call_args[1]
     assert call_kwargs["where"] == {"agent_id": agent_id}
     assert call_kwargs["data"] == {"spend": {"increment": response_cost}}
+
+
+@pytest.mark.asyncio
+async def test_commit_spend_updates_to_db_increments_every_customer_hierarchy_table():
+    """Spend a request ran under a customer member lands on the member, its team and its organization rows."""
+    db_writer = DBSpendUpdateWriter()
+    mock_batcher = MagicMock()
+    mock_transaction = AsyncMock()
+    mock_transaction.__aenter__ = AsyncMock(return_value=mock_transaction)
+    mock_transaction.__aexit__ = AsyncMock(return_value=False)
+    mock_transaction.batch_ = MagicMock(
+        return_value=AsyncMock(
+            __aenter__=AsyncMock(return_value=mock_batcher),
+            __aexit__=AsyncMock(return_value=False),
+        )
+    )
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db = MagicMock()
+    mock_prisma_client.db.tx = MagicMock(return_value=mock_transaction)
+    committed: list[str] = []
+
+    with patch("litellm.proxy.utils.raise_failed_update_spend_exception"):
+        await db_writer._commit_spend_updates_to_db(
+            prisma_client=mock_prisma_client,
+            n_retry_times=0,
+            proxy_logging_obj=MagicMock(),
+            db_spend_update_transactions={
+                **{name: {} for name in _SPEND_TABLE_COMMIT_ORDER},
+                "customer_org_list_transactions": {"org-1": 0.5},
+                "customer_team_list_transactions": {"team-1": 0.5},
+                "customer_member_list_transactions": {"member-1": 0.5},
+            },
+            on_table_committed=committed.append,
+        )
+
+    for table, column, entity_id in (
+        ("litellm_customerorganizationtable", "customer_org_id", "org-1"),
+        ("litellm_customerteamtable", "customer_team_id", "team-1"),
+        ("litellm_customermembertable", "customer_member_id", "member-1"),
+    ):
+        update_many = getattr(mock_batcher, table).update_many
+        update_many.assert_called_once_with(where={column: entity_id}, data={"spend": {"increment": 0.5}})
+    assert committed[-3:] == [
+        "customer_org_list_transactions",
+        "customer_team_list_transactions",
+        "customer_member_list_transactions",
+    ]
+
+
+@pytest.mark.parametrize("scope", ("org", "team", "member"))
+@pytest.mark.asyncio
+async def test_committed_customer_budget_webhooks_include_scope_and_dedupe(
+    scope: str, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "callbacks", [CustomerBudgetWebhook(endpoint="https://alerts.example/budget")])
+    receiver: Final = respx_mock.post("https://alerts.example/budget").respond(200)
+    logging: Final = ProxyLogging(user_api_key_cache=UserApiKeyCache())
+    organization: Final = {"customer_org_id": "org-1", "alias": "tenant"}
+    team: Final = {"customer_team_id": "team-1", "parent_org": organization}
+    row: Final = {
+        **organization,
+        **team,
+        "customer_member_id": "member-1",
+        "parent_team": team,
+        "spend": 0.25,
+        "budget": {"max_budget": 0.2, "soft_budget": 0.1},
+    }
+    batch: Final = MagicMock()
+    transaction: Final = AsyncMock()
+    transaction.__aenter__.return_value = transaction
+    transaction.batch_ = MagicMock(return_value=AsyncMock(__aenter__=AsyncMock(return_value=batch)))
+    prisma: Final = MagicMock()
+    prisma.db.tx.return_value = transaction
+    prisma.writer_db = prisma.db
+    table: Final = {
+        "org": "litellm_customerorganizationtable",
+        "team": "litellm_customerteamtable",
+        "member": "litellm_customermembertable",
+    }[scope]
+    getattr(prisma.db, table).find_unique = AsyncMock(return_value=SimpleNamespace(model_dump=lambda: row))
+    writer: Final = DBSpendUpdateWriter()
+    for _ in range(3):
+        await writer._commit_spend_updates_to_db(
+            prisma_client=prisma,
+            n_retry_times=0,
+            proxy_logging_obj=logging,
+            db_spend_update_transactions={
+                **{name: {} for name in _SPEND_TABLE_COMMIT_ORDER},
+                f"customer_{scope}_list_transactions": {f"{scope}-1": 0.25},
+            },
+        )
+    payloads: Final = tuple(json.loads(call.request.content) for call in receiver.calls)
+    assert len(payloads) == 2, payloads
+    assert {payload["event"] for payload in payloads} == {"soft_budget_crossed", "budget_crossed"}
+    for payload in payloads:
+        assert payload["scope"] == f"customer_{scope}"
+        assert payload["entity_id"] == f"{scope}-1"
+        assert payload["customer_org_id"] == "org-1"
+        assert payload["customer_org_alias"] == "tenant"
+        assert payload["spend"] == 0.25
+        assert payload["budget"] == (0.2 if payload["event"] == "budget_crossed" else 0.1)
+
+
+@pytest.mark.asyncio
+async def test_update_customer_hierarchy_db_enqueues_one_increment_per_level():
+    from litellm.types.proxy.auth.customer_hierarchy import customer_hierarchy_ids_from_request
+
+    db_writer = DBSpendUpdateWriter()
+    ids = customer_hierarchy_ids_from_request(
+        {
+            "litellm_params": {
+                "metadata": {
+                    "user_api_key_customer_member_id": "member-1",
+                    "user_api_key_customer_team_id": "team-1",
+                    "user_api_key_customer_org_id": "org-1",
+                }
+            }
+        }
+    )
+    assert ids is not None
+    assert (
+        customer_hierarchy_ids_from_request({"litellm_params": {"metadata": {"user_api_key_customer_member_id": "m"}}})
+        is None
+    )
+
+    await db_writer._update_customer_hierarchy_db(response_cost=0.25, customer_hierarchy=ids, prisma_client=MagicMock())
+    queued = await db_writer.spend_update_queue.flush_all_updates_from_in_memory_queue()
+    assert {(item["entity_type"], item["entity_id"], item["response_cost"]) for item in queued} == {
+        (Litellm_EntityType.CUSTOMER_ORG, "org-1", 0.25),
+        (Litellm_EntityType.CUSTOMER_TEAM, "team-1", 0.25),
+        (Litellm_EntityType.CUSTOMER_MEMBER, "member-1", 0.25),
+    }
+    aggregated = db_writer.spend_update_queue.get_aggregated_db_spend_update_transactions(queued)
+    assert aggregated["customer_member_list_transactions"] == {"member-1": 0.25}
+    assert aggregated["customer_team_list_transactions"] == {"team-1": 0.25}
+    assert aggregated["customer_org_list_transactions"] == {"org-1": 0.25}
 
 
 def _team_member_flush_fixtures() -> tuple[AsyncMock, MagicMock]:
@@ -2513,7 +2666,7 @@ async def test_commit_spend_updates_uses_pipeline():
     mock_redis_update_buffer.store_in_memory_spend_updates_in_redis = AsyncMock()
     # Return all-None tuple (no data to commit); the pipeline yields 6 slots
     mock_redis_update_buffer.get_all_transactions_from_redis_buffer_pipeline = AsyncMock(
-        return_value=(None, None, None, None, None, None, None)
+        return_value=(None, None, None, None, None, None, None, None)
     )
     db_writer.redis_update_buffer = mock_redis_update_buffer
 
@@ -2594,7 +2747,7 @@ async def test_commit_with_redis_requeues_all_on_db_failure():
 
     mock_redis_update_buffer = AsyncMock()
     mock_redis_update_buffer.get_all_transactions_from_redis_buffer_pipeline = AsyncMock(
-        return_value=(db_spend, daily_user, None, None, None, None, None)
+        return_value=(db_spend, daily_user, None, None, None, None, None, None)
     )
     mock_redis_update_buffer.restore_transactions_to_redis = AsyncMock()
     db_writer.redis_update_buffer = mock_redis_update_buffer
@@ -2649,7 +2802,7 @@ async def test_commit_with_redis_only_requeues_failed_category():
 
     mock_redis_update_buffer = AsyncMock()
     mock_redis_update_buffer.get_all_transactions_from_redis_buffer_pipeline = AsyncMock(
-        return_value=(db_spend, daily_user, None, None, None, None, None)
+        return_value=(db_spend, daily_user, None, None, None, None, None, None)
     )
     mock_redis_update_buffer.restore_transactions_to_redis = AsyncMock()
     db_writer.redis_update_buffer = mock_redis_update_buffer
@@ -2697,7 +2850,7 @@ async def test_commit_with_redis_no_requeue_on_success():
 
     mock_redis_update_buffer = AsyncMock()
     mock_redis_update_buffer.get_all_transactions_from_redis_buffer_pipeline = AsyncMock(
-        return_value=(db_spend, None, None, None, None, None, None)
+        return_value=(db_spend, None, None, None, None, None, None, None)
     )
     mock_redis_update_buffer.restore_transactions_to_redis = AsyncMock()
     db_writer.redis_update_buffer = mock_redis_update_buffer
@@ -3330,7 +3483,7 @@ async def test_window_spend_queue_is_handed_to_the_redis_buffer():
     db_writer = DBSpendUpdateWriter()
     mock_redis_update_buffer = AsyncMock()
     mock_redis_update_buffer.get_all_transactions_from_redis_buffer_pipeline = AsyncMock(
-        return_value=(None, None, None, None, None, None, None)
+        return_value=(None, None, None, None, None, None, None, None)
     )
     db_writer.redis_update_buffer = mock_redis_update_buffer
     db_writer.pod_lock_manager = AsyncMock()
@@ -3360,7 +3513,7 @@ async def test_window_spend_transactions_from_redis_are_committed_by_the_lock_wi
     )
     mock_redis_update_buffer = AsyncMock()
     mock_redis_update_buffer.get_all_transactions_from_redis_buffer_pipeline = AsyncMock(
-        return_value=(None, None, None, None, None, None, window_transactions)
+        return_value=(None, None, None, None, None, None, window_transactions, None)
     )
     db_writer.redis_update_buffer = mock_redis_update_buffer
     db_writer.pod_lock_manager = AsyncMock()
@@ -3618,7 +3771,7 @@ async def test_failed_window_spend_commit_from_redis_is_restored_to_redis():
     )
     mock_redis_update_buffer = AsyncMock()
     mock_redis_update_buffer.get_all_transactions_from_redis_buffer_pipeline = AsyncMock(
-        return_value=(None, None, None, None, None, None, window_transactions)
+        return_value=(None, None, None, None, None, None, window_transactions, None)
     )
     mock_redis_update_buffer.restore_transactions_to_redis = AsyncMock()
     db_writer.redis_update_buffer = mock_redis_update_buffer
@@ -3653,7 +3806,7 @@ async def test_failed_per_entity_increment_from_redis_restores_only_what_may_sti
     )
     mock_redis_update_buffer = AsyncMock()
     mock_redis_update_buffer.get_all_transactions_from_redis_buffer_pipeline = AsyncMock(
-        return_value=(db_spend_transactions, None, None, None, None, None, None)
+        return_value=(db_spend_transactions, None, None, None, None, None, None, None)
     )
     mock_redis_update_buffer.restore_transactions_to_redis = AsyncMock()
     db_writer.redis_update_buffer = mock_redis_update_buffer
@@ -3711,11 +3864,11 @@ async def test_failed_per_entity_increment_from_redis_restores_only_what_may_sti
             proxy_logging_obj=proxy_logging_obj,
         )
 
-    mock_redis_update_buffer.restore_transactions_to_redis.assert_awaited_once()
-    restored = mock_redis_update_buffer.restore_transactions_to_redis.call_args.kwargs["db_spend_update_transactions"]
-    assert restored["user_list_transactions"] is None
-    assert restored["team_list_transactions"] == {"team-1": 1.5}
-    assert restored["key_list_transactions"] == ({"key-1": 1.5} if safe_to_resend else None)
+    restores = mock_redis_update_buffer.restore_transactions_to_redis.await_args_list
+    assert [
+        {name: rows for name, rows in call.kwargs["db_spend_update_transactions"].items() if rows} for call in restores
+    ] == ([{"key_list_transactions": {"key-1": 1.5}}] if safe_to_resend else [])
+    mock_batcher.litellm_teamtable.update_many.assert_called_once()
     mock_batcher.litellm_usertable.update_many.assert_called_once()
 
 
@@ -3736,7 +3889,7 @@ async def test_failed_window_spend_commit_from_redis_is_restored_only_when_safe_
     )
     mock_redis_update_buffer = AsyncMock()
     mock_redis_update_buffer.get_all_transactions_from_redis_buffer_pipeline = AsyncMock(
-        return_value=(None, None, None, None, None, None, window_transactions)
+        return_value=(None, None, None, None, None, None, window_transactions, None)
     )
     mock_redis_update_buffer.restore_transactions_to_redis = AsyncMock()
     db_writer.redis_update_buffer = mock_redis_update_buffer
@@ -3889,17 +4042,20 @@ async def test_commit_spend_updates_to_db_reports_each_completed_table():
     )
 
     assert on_table_committed.call_args_list == [
-        call("user_list_transactions"),
-        call("end_user_list_transactions"),
-        call("key_list_transactions"),
-        call("team_list_transactions"),
-        call("team_member_list_transactions"),
         call("org_list_transactions"),
         call("org_member_list_transactions"),
+        call("team_list_transactions"),
+        call("user_list_transactions"),
+        call("end_user_list_transactions"),
+        call("team_member_list_transactions"),
+        call("key_list_transactions"),
         call("project_list_transactions"),
         call("tag_list_transactions"),
         call("model_access_group_list_transactions"),
         call("agent_list_transactions"),
+        call("customer_org_list_transactions"),
+        call("customer_team_list_transactions"),
+        call("customer_member_list_transactions"),
     ]
 
 
@@ -4380,7 +4536,6 @@ async def test_insert_spend_log_asks_for_an_immediate_flush_only_on_rows_the_bri
     assert prisma.spend_log_flush_requested.is_set() is expects_flush
 
 
-
 @pytest.mark.asyncio
 @pytest.mark.timeout(30)
 async def test_a_chatgpt_responses_row_queues_without_a_default_chatgpt_login(
@@ -4422,6 +4577,8 @@ def _batch_cost_payload() -> dict:
 def _spend_logs_prisma(inserted: int, existing: object, taken_over: int = 1) -> MagicMock:
     prisma = _tool_usage_prisma()
     prisma.jsonify_object = lambda data: dict(data)
+    prisma.writer_db = prisma.db
+    prisma.db.query_raw = AsyncMock(return_value=[])
     prisma.db.litellm_spendlogs.create_many = AsyncMock(return_value=inserted)
     prisma.db.litellm_spendlogs.find_unique = AsyncMock(return_value=existing)
     prisma.db.litellm_spendlogs.update_many = AsyncMock(return_value=taken_over)
@@ -4456,7 +4613,7 @@ async def _update_database_with(
             end_user_id=None,
             team_id=None,
             org_id=None,
-            kwargs={"model": "gpt-5.6-luna", "call_type": "aretrieve_batch"},
+            kwargs={"model": "gpt-5.6-luna", "call_type": payload["call_type"]},
             completion_response=None,
             start_time=datetime.now(timezone.utc),
             end_time=datetime.now(timezone.utc),
@@ -4705,6 +4862,392 @@ async def test_update_database_queues_every_other_spend_row_for_the_next_flush(p
     prisma.db.litellm_spendlogs.create_many.assert_not_called()
     assert prisma.spend_log_transactions == [payload]
     assert db_writer._batch_database_updates.await_count == 1
+
+
+def _video_status_payload(request_id: str = "video_abc_video_cost") -> dict:
+    return {
+        **_minimal_spend_payload(),
+        "request_id": request_id,
+        "call_type": "avideo_status",
+        "status": "success",
+    }
+
+
+class _SpendLogsTable:
+    """LiteLLM_SpendLogs keyed by its request_id primary key, as the writer's three queries see it."""
+
+    def __init__(self) -> None:
+        self.rows: dict[str, dict] = {}
+
+    async def create_many(self, data: list[dict], skip_duplicates: bool) -> int:
+        fresh = {row["request_id"]: dict(row) for row in data if row["request_id"] not in self.rows}
+        self.rows.update(fresh)
+        return len(fresh)
+
+    async def find_unique(self, where: dict) -> SimpleNamespace | None:
+        row = self.rows.get(where["request_id"])
+        return None if row is None else SimpleNamespace(**row)
+
+    async def update_many(self, data: dict, where: dict) -> int:
+        row = self.rows.get(where["request_id"])
+        if row is None or any(row.get(field) != value for field, value in where.items()):
+            return 0
+        row.update(data)
+        return 1
+
+
+def _spend_logs_table_prisma() -> MagicMock:
+    prisma = _tool_usage_prisma()
+    prisma.jsonify_object = lambda data: dict(data)
+    prisma.db.litellm_spendlogs = _SpendLogsTable()
+    prisma.writer_db.query_raw = AsyncMock(return_value=[])
+    return prisma
+
+
+async def _flush_queued_spend_logs(prisma: MagicMock) -> None:
+    await prisma.db.litellm_spendlogs.create_many(data=prisma.spend_log_transactions, skip_duplicates=True)
+    prisma.spend_log_transactions.clear()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "flushes_before_completion",
+    [0, 1],
+    ids=["rendering_poll_still_queued", "rendering_poll_already_written"],
+)
+async def test_update_database_charges_a_video_once_from_the_poll_that_sees_it_completed(
+    flushes_before_completion: int,
+):
+    """
+    A custom video provider reports the video's cost on the status poll that sees it completed,
+    and clients poll a finished video again before they download it, so only that first completed
+    poll may charge, and its spend row has to carry the charge (LIT-10404). The $0 poll written
+    while the video was still rendering keeps the bare video id, so it lands on the create row.
+    """
+    db_writer = DBSpendUpdateWriter()
+    db_writer._batch_database_updates = AsyncMock()
+    prisma = _spend_logs_table_prisma()
+
+    rendering = await _update_database_with(db_writer, prisma, _video_status_payload("video_abc"), response_cost=0.0)
+    for _ in range(flushes_before_completion):
+        await _flush_queued_spend_logs(prisma)
+    completed = await _update_database_with(db_writer, prisma, _video_status_payload(), response_cost=0.42)
+    repolled = await _update_database_with(db_writer, prisma, _video_status_payload(), response_cost=0.42)
+    await _flush_queued_spend_logs(prisma)
+
+    assert (rendering, completed, repolled) == (True, True, False)
+    assert db_writer._batch_database_updates.await_count == 2
+    rows = prisma.db.litellm_spendlogs.rows
+    assert {request_id: (row["call_type"], row["spend"]) for request_id, row in rows.items()} == {
+        "video_abc": ("avideo_status", 0.0),
+        "video_abc_video_cost": ("avideo_status", 0.42),
+    }
+
+
+def _indexed_guardrail_request_ids(prisma: MagicMock, index_table: str) -> tuple[str, ...]:
+    calls: Final = getattr(prisma.db, index_table).create_many.await_args_list
+    batches: Final = tuple(call.kwargs["data"] for call in calls)
+    return tuple(row["request_id"] for row in itertools.chain.from_iterable(batches))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("disable_spend_logs", [False, True], ids=["spend_logs_on", "spend_logs_off"])
+@pytest.mark.parametrize("left_uncharged", [False, True], ids=["claimed_row", "taken_over_row"])
+async def test_a_job_cost_row_counts_its_polls_guardrail_run_in_guardrail_usage_once(
+    disable_spend_logs: bool, left_uncharged: bool
+):
+    """The job's cost row is written by its claim, not the spend log queue whose flush counts guardrail runs, so a
+    finished video's guardrail run must still reach guardrail usage, once, and not when spend logs are off."""
+    from litellm.repositories.table_repositories import (
+        DailyGuardrailMetricsRepository,
+        SpendLogGuardrailIndexRepository,
+    )
+
+    db_writer = DBSpendUpdateWriter()
+    db_writer._batch_database_updates = AsyncMock()
+    prisma = _spend_logs_table_prisma()
+    getattr(prisma.db, SpendLogGuardrailIndexRepository.table_name).create_many = AsyncMock(return_value=1)
+    getattr(prisma.db, DailyGuardrailMetricsRepository.table_name).upsert = AsyncMock()
+    if left_uncharged:
+        prisma.db.litellm_spendlogs.rows["video_abc_video_cost"] = {**_video_status_payload(), "spend": 0.0}
+    guarded_poll: Final = {
+        **_video_status_payload(),
+        "metadata": json.dumps(
+            {"guardrail_information": [{"guardrail_name": "priced", "guardrail_status": "success"}]}
+        ),
+    }
+
+    charged = [
+        await _update_database_with(
+            db_writer, prisma, guarded_poll, disable_spend_logs=disable_spend_logs, response_cost=0.43
+        )
+        for _ in range(2)
+    ]
+
+    assert charged == [True, False]
+    assert _indexed_guardrail_request_ids(prisma, SpendLogGuardrailIndexRepository.table_name) == (
+        () if disable_spend_logs else ("video_abc_video_cost",)
+    )
+
+
+def _job_poll(
+    litellm_call_id: str,
+    response_cost: float,
+    status: str = "completed",
+    polled_video_id: str = "video_abc",
+    guardrail_cost: float = 0.0,
+    call_type: str = "avideo_status",
+) -> tuple[dict[str, object], object]:
+    """The logging kwargs a job poll reaches the spend writer with: litellm logs the provider's own cost as
+    response_cost and the guardrails' on top of it only in the standard logging payload."""
+    from litellm.types.utils import LiteLLMBatch
+    from litellm.types.videos.main import VideoObject
+
+    polled_job = (
+        VideoObject(id="video_abc", object="video", status=status)
+        if call_type == "avideo_status"
+        else LiteLLMBatch(
+            id="batch_abc",
+            completion_window="24h",
+            created_at=1,
+            endpoint="/v1/chat/completions",
+            input_file_id="f",
+            object="batch",
+            status=status,
+            output_file_id="file-out",
+        )
+    )
+    kwargs: Final[dict[str, object]] = {
+        "model": "sora-2",
+        "call_type": call_type,
+        "litellm_call_id": litellm_call_id,
+        "response_cost": response_cost - guardrail_cost,
+        "polled_video_status": status,
+        "litellm_params": {"metadata": {"user_api_key": "test-key"}, "video_id": polled_video_id},
+        **(
+            {
+                "standard_logging_object": {
+                    "response_cost": response_cost,
+                    "guardrail_information": [{"guardrail_name": "priced", "guardrail_cost": guardrail_cost}],
+                    "metadata": {},
+                    "hidden_params": {},
+                    "request_tags": [],
+                    "model_map_information": None,
+                }
+            }
+            if guardrail_cost
+            else {}
+        ),
+    }
+    return kwargs, polled_job
+
+
+def _spend_writer_call(db_writer: DBSpendUpdateWriter, polled_job: object) -> Callable[..., Awaitable[bool]]:
+    return functools.partial(
+        db_writer.update_database,
+        token="test-token",
+        user_id="test-user",
+        end_user_id=None,
+        team_id=None,
+        org_id=None,
+        completion_response=polled_job,
+        start_time=datetime.now(timezone.utc),
+        end_time=datetime.now(timezone.utc),
+    )
+
+
+@contextmanager
+def _proxy_globals(prisma: MagicMock) -> Iterator[None]:
+    with (
+        patch(  # test-quality-ok: update_database reads this proxy_server global at call time, no seam
+            "litellm.proxy.proxy_server.prisma_client", prisma
+        ),
+        patch(  # test-quality-ok: update_database reads this proxy_server global at call time, no seam
+            "litellm.proxy.proxy_server.litellm_proxy_budget_name", "test-budget"
+        ),
+    ):
+        yield
+
+
+async def _update_database_for_video_poll(
+    db_writer: DBSpendUpdateWriter,
+    prisma: MagicMock,
+    litellm_call_id: str,
+    response_cost: float,
+    status: str = "completed",
+    polled_video_id: str = "video_abc",
+    guardrail_cost: float = 0.0,
+    call_type: str = "avideo_status",
+) -> bool:
+    kwargs, polled_job = _job_poll(litellm_call_id, response_cost, status, polled_video_id, guardrail_cost, call_type)
+    with _proxy_globals(prisma):
+        charged = await _spend_writer_call(db_writer, polled_job)(kwargs=kwargs, response_cost=response_cost)
+        await asyncio.sleep(0)
+        return charged
+
+
+@pytest.mark.asyncio
+async def test_update_database_charges_the_completed_polls_cost_and_not_a_running_polls():
+    """A provider that also prices a running video must still have the completed poll's cost billed, once."""
+    db_writer = DBSpendUpdateWriter()
+    db_writer._batch_database_updates = AsyncMock()
+    prisma = _spend_logs_table_prisma()
+
+    running = await _update_database_for_video_poll(db_writer, prisma, "poll-1", 0.1, status="in_progress")
+    completed = await _update_database_for_video_poll(db_writer, prisma, "poll-2", 0.42)
+    repolled = await _update_database_for_video_poll(db_writer, prisma, "poll-3", 0.42)
+    await _flush_queued_spend_logs(prisma)
+
+    assert (running, completed, repolled) == (True, True, False)
+    assert prisma.db.litellm_spendlogs.rows["video_abc_video_cost"]["spend"] == 0.42
+
+
+@pytest.mark.asyncio
+async def test_a_poll_paying_only_its_guardrail_cannot_take_the_jobs_charge_whatever_call_id_the_client_sent():
+    """A client picks its own x-litellm-call-id, so a guardrail-only video poll naming the job's charge row, once or
+    twice, must still be charged each time and leave the finished job's charge to the poll that sees it done. An
+    unfinished batch retrieve never reaches the writer, and its row is named by the batch id the provider sent."""
+    call_type: Final = "avideo_status"
+    charge_row_id: Final = "video_abc_video_cost"
+    db_writer = DBSpendUpdateWriter()
+    db_writer._batch_database_updates = AsyncMock()
+    prisma = _spend_logs_table_prisma()
+
+    charged = [
+        await _update_database_for_video_poll(
+            db_writer, prisma, call_id, cost, status=status, guardrail_cost=0.01, call_type=call_type
+        )
+        for call_id, cost, status in (
+            (charge_row_id, 0.01, "in_progress"),
+            (charge_row_id, 0.01, "in_progress"),
+            ("poll-3", 0.43, "completed"),
+        )
+    ]
+    await _flush_queued_spend_logs(prisma)
+
+    assert charged == [True, True, True]
+    assert prisma.db.litellm_spendlogs.rows[charge_row_id]["spend"] == 0.43
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("call_type", "charge_row_id"),
+    [("avideo_status", "video_abc_video_cost"), ("aretrieve_batch", "batch_abc_batch_cost")],
+)
+async def test_a_finished_job_cheaper_than_its_polls_guardrail_is_still_charged_once(call_type, charge_row_id):
+    """A batch of a few cheap requests costs less than a priced guardrail on its retrieve, and the finished job's
+    cost must still settle under its charge row once instead of being billed again on every poll."""
+    db_writer = DBSpendUpdateWriter()
+    db_writer._batch_database_updates = AsyncMock()
+    prisma = _spend_logs_table_prisma()
+
+    charged = [
+        await _update_database_for_video_poll(
+            db_writer, prisma, call_id, 0.01002775, guardrail_cost=0.01, call_type=call_type
+        )
+        for call_id in ("poll-1", "poll-2")
+    ]
+    await _flush_queued_spend_logs(prisma)
+
+    assert charged == [True, False]
+    assert {request_id: row["spend"] for request_id, row in prisma.db.litellm_spendlogs.rows.items()} == {
+        charge_row_id: 0.01002775
+    }
+
+
+@pytest.mark.asyncio
+async def test_a_finished_batch_that_cost_nothing_itself_settles_its_retrieves_guardrail_once():
+    """A batch whose every request failed costs nothing itself, and its finished retrieves must still settle under
+    the batch's charge row once, as they always have, instead of each paying the retrieve's guardrail again."""
+    db_writer = DBSpendUpdateWriter()
+    db_writer._batch_database_updates = AsyncMock()
+    prisma = _spend_logs_table_prisma()
+
+    charged = [
+        await _update_database_for_video_poll(
+            db_writer, prisma, call_id, 0.01, status="failed", guardrail_cost=0.01, call_type="aretrieve_batch"
+        )
+        for call_id in ("poll-1", "poll-2", "poll-3")
+    ]
+    await _flush_queued_spend_logs(prisma)
+
+    assert charged == [True, False, False]
+    assert {request_id: row["spend"] for request_id, row in prisma.db.litellm_spendlogs.rows.items()} == {
+        "batch_abc_batch_cost": 0.01
+    }
+
+
+@pytest.mark.asyncio
+async def test_a_repeat_poll_of_a_finished_video_charges_its_guardrail_on_a_row_of_its_own():
+    from litellm.proxy.hooks.proxy_track_cost_callback import _charge_request_cost
+
+    db_writer = DBSpendUpdateWriter()
+    db_writer._batch_database_updates = AsyncMock()
+    prisma = _spend_logs_table_prisma()
+    await _update_database_for_video_poll(db_writer, prisma, "poll-1", 0.43, guardrail_cost=0.01)
+    kwargs, polled_job = _job_poll("poll-2", 0.43, guardrail_cost=0.01)
+
+    async def charge_spend(
+        *, kwargs: dict[str, object], response_cost: float, budget_reservation: dict[str, object] | None
+    ) -> bool:
+        return await _spend_writer_call(db_writer, polled_job)(kwargs=kwargs, response_cost=response_cost)
+
+    with _proxy_globals(prisma):
+        repeat_charge = await _charge_request_cost(charge_spend, kwargs, 0.43, None)
+        await asyncio.sleep(0)
+    await _flush_queued_spend_logs(prisma)
+
+    assert repeat_charge == 0.01
+    assert {request_id: row["spend"] for request_id, row in prisma.db.litellm_spendlogs.rows.items()} == {
+        "video_abc_video_cost": 0.43,
+        "poll-2_guardrail_cost": 0.01,
+    }
+
+
+@pytest.mark.asyncio
+async def test_update_database_charges_each_deployments_video_though_their_provider_ids_match():
+    """A custom provider's own ids can repeat across deployments, so the cost row keys off the id the client polled."""
+    db_writer = DBSpendUpdateWriter()
+    db_writer._batch_database_updates = AsyncMock()
+    prisma = _spend_logs_table_prisma()
+
+    charged = [
+        await _update_database_for_video_poll(db_writer, prisma, call_id, 0.42, polled_video_id=polled_id)
+        for call_id, polled_id in (("poll-1", "video_dep_a"), ("poll-2", "video_dep_b"), ("poll-3", "video_dep_a"))
+    ]
+
+    assert charged == [True, True, False]
+    assert {
+        request_id: row["spend"]
+        for request_id, row in prisma.db.litellm_spendlogs.rows.items()
+        if request_id.endswith("_video_cost")
+    } == {"video_dep_a_video_cost": 0.42, "video_dep_b_video_cost": 0.42}
+
+
+@pytest.mark.asyncio
+async def test_update_database_writes_no_row_of_its_own_for_a_video_poll_that_reports_no_cost():
+    """
+    Built-in video providers charge at create and report nothing on the status poll, so those
+    polls keep the ordinary queued write under the create row's id and still count as requests
+    in the daily rollups, leaving the video with its one create row.
+    """
+    db_writer = DBSpendUpdateWriter()
+    db_writer._batch_database_updates = AsyncMock()
+    prisma = _spend_logs_table_prisma()
+    await prisma.db.litellm_spendlogs.create_many(
+        data=[{**_minimal_spend_payload(), "request_id": "video_abc", "call_type": "avideo_generation", "spend": 0.3}],
+        skip_duplicates=True,
+    )
+
+    assert await _update_database_for_video_poll(db_writer, prisma, "poll-1", response_cost=0.0) is True
+    assert await _update_database_for_video_poll(db_writer, prisma, "poll-2", response_cost=0.0) is True
+    await _flush_queued_spend_logs(prisma)
+
+    assert db_writer._batch_database_updates.await_count == 2
+    rows = prisma.db.litellm_spendlogs.rows
+    assert {request_id: (row["call_type"], row["spend"]) for request_id, row in rows.items()} == {
+        "video_abc": ("avideo_generation", 0.3)
+    }
 
 
 @pytest.mark.asyncio
@@ -5418,7 +5961,9 @@ async def test_completed_spend_survives_error_log_suppression(
     prisma.get_request_status.return_value = status
     monkeypatch.setattr(proxy_server, "prisma_client", prisma)
     monkeypatch.setattr(proxy_server, "disable_spend_logs", False)
-    monkeypatch.setattr(proxy_server, "general_settings", {"disable_error_logs": disable_error_logs})
+    monkeypatch.setattr(
+        proxy_server, "general_settings", {"disable_error_logs": disable_error_logs, "use_spend_logs_ledger": False}
+    )
     now: Final = datetime(2026, 10, 20, 12, tzinfo=timezone.utc)
     result: Final = ModelResponse(
         model="gpt-4o-mini", usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15)
@@ -5452,3 +5997,230 @@ async def test_completed_spend_survives_error_log_suppression(
     assert len(rows) == 1
     assert rows[0]["spend"] == pytest.approx(0.23)
     assert (rows[0]["prompt_tokens"], rows[0]["completion_tokens"]) == (10, 5)
+
+
+@pytest.mark.parametrize("ledger_enabled", [False, True])
+@pytest.mark.asyncio
+async def test_request_error_counts_survive_the_ledger_path_switch(
+    monkeypatch: pytest.MonkeyPatch, ledger_enabled: bool
+):
+    from litellm.proxy import proxy_server
+    from litellm.proxy.db import db_spend_update_writer as writer_module
+    from litellm.proxy.db.request_error_tracking import RequestErrorAccumulator
+    from litellm.types.proxy.request_errors import RequestErrorKey
+
+    accumulator = RequestErrorAccumulator()
+    prisma = _tool_usage_prisma()
+    prisma.get_request_status.return_value = "failure"
+    monkeypatch.setattr(writer_module, "request_error_accumulator", accumulator)
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+    monkeypatch.setattr(proxy_server, "general_settings", {"use_spend_logs_ledger": ledger_enabled})
+    monkeypatch.setattr(proxy_server, "disable_spend_logs", False)
+    now = datetime(2026, 11, 2, tzinfo=timezone.utc)
+    await DBSpendUpdateWriter().update_database(
+        token="key",
+        user_id="user",
+        team_id=None,
+        org_id=None,
+        end_user_id=None,
+        kwargs={
+            "model": "ledger-test",
+            "call_type": "acompletion",
+            "litellm_call_id": "failed-request",
+            "litellm_params": {
+                "metadata": {
+                    "user_api_key": "key",
+                    "user_api_key_user_id": "user",
+                    "status": "failure",
+                    "error_information": {"error_code": "503"},
+                }
+            },
+        },
+        completion_response=None,
+        start_time=now,
+        end_time=now,
+        response_cost=0,
+    )
+    await drain_logging_tasks()
+    assert accumulator.drain() == {
+        RequestErrorKey(
+            date="2026-11-02",
+            api_key=prisma.spend_log_transactions[0]["api_key"],
+            team_id="",
+            user_id="user",
+            model_group="ledger-test",
+            status_code=503,
+        ): 1
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("call_type", ["aresponses", "aget_responses", "acancel_responses"])
+@pytest.mark.parametrize(
+    ("security_disabled", "status", "cost", "keep_read"),
+    [
+        (False, "success", 0.0, True),
+        (True, "success", 0.0, False),
+        (True, "success", None, False),
+        (True, "success", 0.23, True),
+        (True, "failure", 0.0, True),
+    ],
+)
+async def test_unsecured_free_response_reads_leave_the_creation_spend_row_alone(
+    monkeypatch: pytest.MonkeyPatch,
+    call_type: str,
+    security_disabled: bool,
+    status: str,
+    cost: float | None,
+    keep_read: bool,
+) -> None:
+    from litellm.proxy import proxy_server
+
+    writer: Final = DBSpendUpdateWriter()
+    prisma: Final = _tool_usage_prisma()
+    prisma.get_request_status.return_value = status
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+    monkeypatch.setattr(proxy_server, "disable_spend_logs", False)
+    monkeypatch.setitem(proxy_server.general_settings, "disable_responses_id_security", security_disabled)
+    now: Final = datetime(2026, 11, 11, tzinfo=timezone.utc)
+    assert await writer.update_database(
+        token="test-token",
+        user_id="test-user",
+        end_user_id=None,
+        team_id=None,
+        org_id=None,
+        kwargs={
+            "model": "response-model",
+            "call_type": call_type,
+            "litellm_call_id": "read-call",
+            "litellm_params": {"metadata": {"user_api_key": "test-token", "status": status}},
+        },
+        completion_response={"id": "resp-shared"},
+        start_time=now,
+        end_time=now,
+        response_cost=cost,
+    )
+    await drain_logging_tasks()
+    expected: Final = [call_type] if call_type == "aresponses" or keep_read else []
+    assert [row["call_type"] for row in prisma.spend_log_transactions] == expected
+
+
+class _SessionTotalsRedis:
+    def __init__(self) -> None:
+        self.values: dict[str, float] = {}  # mutable-ok: stands in for Redis state
+
+    async def async_increment(self, key: str, value: float, ttl: int | None = None, refresh_ttl: bool = False) -> float:
+        self.values[key] = self.values.get(key, 0.0) + value
+        return self.values[key]
+
+    async def async_get_cache(self, key: str) -> object:
+        return self.values.get(key)
+
+
+def _session_writer() -> tuple[DBSpendUpdateWriter, SessionSpendTotals]:
+    redis: Final = _SessionTotalsRedis()
+    totals: Final = SessionSpendTotals(lambda: redis)
+    writer: Final = DBSpendUpdateWriter(session_spend_totals=totals)
+    writer._batch_database_updates = AsyncMock()  # pyright: ignore[reportPrivateUsage]  # the batch rollup needs a database this test does not stand up
+    return writer, totals
+
+
+async def _record_spend_row(writer: DBSpendUpdateWriter, spend: float, litellm_params: Mapping[str, object]) -> None:
+    payload: Final[dict[str, object]] = {
+        **_minimal_spend_payload(),
+        "request_id": "req-1",
+        "call_type": "anthropic_messages",
+        "api_key": "hashed-key",
+        "spend": spend,
+        "status": "success",
+    }
+    with (
+        patch(  # test-quality-ok: update_database reads this proxy_server global at call time, no seam
+            "litellm.proxy.proxy_server.disable_spend_logs", False
+        ),
+        patch(  # test-quality-ok: update_database reads this proxy_server global at call time, no seam
+            "litellm.proxy.proxy_server.prisma_client", _tool_usage_prisma()
+        ),
+        patch(  # test-quality-ok: update_database reads this proxy_server global at call time, no seam
+            "litellm.proxy.proxy_server.litellm_proxy_budget_name", "test-budget"
+        ),
+        patch(  # test-quality-ok: update_database imports the payload builder inside its body, no seam
+            "litellm.proxy.spend_tracking.spend_tracking_utils.get_logging_payload",
+            return_value=payload,
+        ),
+    ):
+        await writer.update_database(
+            token="hashed-key",
+            user_id="test-user",
+            end_user_id=None,
+            team_id=None,
+            org_id=None,
+            kwargs={"model": "claude-haiku-5-5", "litellm_params": dict(litellm_params)},
+            completion_response=None,
+            start_time=datetime(2026, 11, 10, 10, 0, tzinfo=timezone.utc),
+            end_time=datetime(2026, 11, 10, 10, 0, 1, tzinfo=timezone.utc),
+            response_cost=spend,
+        )
+
+
+_CALLER_SESSION: Final[Mapping[str, object]] = {
+    "litellm_session_id": "cc-session-1",
+    "metadata": {"session_id": "cc-session-1"},
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "litellm_params",
+    [
+        pytest.param(_CALLER_SESSION, id="direct-call"),
+        pytest.param(
+            {
+                "litellm_session_id": "cc-session-1",
+                "metadata": {"session_id": "cc-session-1", "trace_id": "cc-session-1"},
+            },
+            id="claude-code-session-header",
+        ),
+        pytest.param(
+            {
+                **_CALLER_SESSION,
+                "metadata": {"session_id": "cc-session-1", "internal_call_origin": "autorouter_classifier"},
+            },
+            id="classifier-sub-call",
+        ),
+    ],
+)
+async def test_a_billed_row_in_a_caller_session_adds_its_spend_to_that_sessions_total(
+    litellm_params: Mapping[str, object],
+):
+    writer, totals = _session_writer()
+
+    await _record_spend_row(writer, 0.25, litellm_params)
+
+    assert await totals.read("hashed-key", "cc-session-1") == 0.25
+    assert await totals.read("another-key", "cc-session-1") is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("litellm_params", "spend"),
+    [
+        pytest.param(
+            {
+                "litellm_session_id": "minted-1",
+                "metadata": {"session_id": "minted-1", "litellm_session_id_generated": True},
+            },
+            0.25,
+            id="generated-session",
+        ),
+        pytest.param({"metadata": {}}, 0.25, id="no-session"),
+        pytest.param(_CALLER_SESSION, 0.0, id="free-row"),
+    ],
+)
+async def test_a_row_without_a_caller_session_or_cost_adds_nothing(litellm_params: Mapping[str, object], spend: float):
+    writer, totals = _session_writer()
+
+    await _record_spend_row(writer, spend, litellm_params)
+
+    assert await totals.read("hashed-key", "cc-session-1") is None
+    assert await totals.read("hashed-key", "minted-1") is None

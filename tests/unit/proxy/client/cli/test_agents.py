@@ -33,6 +33,7 @@ from litellm.proxy.client.cli.commands.agents import (
     verify_proxy_key,
     verify_subscription_key,
 )
+from litellm.proxy.client.cli.commands.auth import save_token
 from litellm.proxy.client.cli.commands.claude_settings import ClaudeSettingsError
 from litellm.proxy.client.cli.commands.config import save_config
 from litellm.proxy.client.cli.main import cli as lite
@@ -217,8 +218,13 @@ class _FakeJsonResponse:
         return self._payload
 
 
+PROXY: Final = "http://localhost:4000"
+OTHER_PROXY: Final = "https://other-proxy.example.com"
+LITE_HELPER: Final = f"/usr/local/bin/lite --base-url {PROXY} auth print-token"
+
+
 def _overlay_writer(tmp_path):
-    def write(text, environ):
+    def write(name, text, environ):
         target = tmp_path / "overlay.json"
         target.write_text(text)
         return target
@@ -1037,10 +1043,11 @@ class TestCodexModelSync:
         assert entry["supported_in_api"] is True
         assert entry["shell_type"] == "unified_exec"
         assert entry["supported_reasoning_levels"] == []
-        assert entry["truncation_policy"] == {"mode": "bytes", "limit": 10000}
+        assert entry["truncation_policy"] == {"mode": "tokens", "limit": 10000}
         assert entry["experimental_supported_tools"] == []
         assert entry["support_verbosity"] is False
         assert entry["supports_reasoning_summaries"] is False
+        assert "supports_reasoning_summary_parameter" not in entry
         assert entry["supports_parallel_tool_calls"] is False
         for nullable in ("description", "availability_nux", "upgrade", "default_verbosity", "apply_patch_tool_type"):
             assert nullable in entry and entry[nullable] is None
@@ -1666,6 +1673,223 @@ class TestRunAgent:
         )
         assert calls["args"] == ("claude", "--resume")
 
+    @pytest.mark.parametrize(
+        ("args", "project_local", "user", "key_from_stored_login", "exports_the_key"),
+        [
+            ((), {}, {"apiKeyHelper": LITE_HELPER}, True, False),
+            ((), {}, {"apiKeyHelper": LITE_HELPER}, False, True),
+            ((), {}, {"apiKeyHelper": LITE_HELPER.replace("localhost:4000", "other-proxy:4000")}, True, True),
+            ((), {}, {"apiKeyHelper": "/opt/mine/helper"}, True, True),
+            ((), {"apiKeyHelper": "/opt/mine/helper"}, {"apiKeyHelper": LITE_HELPER}, True, True),
+            ((), {}, {}, True, True),
+            (("--settings", '{"apiKeyHelper":""}'), {}, {"apiKeyHelper": LITE_HELPER}, True, True),
+            (("--settings={}",), {}, {"apiKeyHelper": LITE_HELPER}, True, False),
+        ],
+        ids=[
+            "lites-helper-for-this-proxy",
+            "key-passed-with-api-key",
+            "another-proxy",
+            "users-own-helper",
+            "project-helper-wins",
+            "no-helper",
+            "settings-flag-disables-the-helper",
+            "settings-flag-without-a-helper",
+        ],
+    )
+    def test_claude_takes_the_key_from_lites_renewing_helper_only_when_it_is_the_one_claude_code_runs(
+        self, tmp_path, monkeypatch, args, project_local, user, key_from_stored_login, exports_the_key
+    ):
+        files = {
+            tmp_path / "repo" / ".claude" / "settings.local.json": project_local,
+            tmp_path / "cfg" / "settings.json": user,
+        }
+        monkeypatch.chdir(tmp_path)
+        launched = {}
+        run_agent(
+            "http://localhost:4000",
+            "sk-key",
+            ["claude", *args],
+            base_env={"CLAUDE_CONFIG_DIR": str(tmp_path / "cfg"), "ANTHROPIC_AUTH_TOKEN": "sk-stale"},
+            which=lambda name: f"/usr/local/bin/{name}",
+            verify=lambda *a: None,
+            launcher=lambda p, a, e: launched.update(env=dict(e)),
+            read_settings=lambda path: files.get(path, {}),
+            project_dir=tmp_path / "repo",
+            key_from_stored_login=key_from_stored_login,
+        )
+        assert launched["env"]["ANTHROPIC_BASE_URL"] == "http://localhost:4000"
+        assert launched["env"].get("ANTHROPIC_AUTH_TOKEN") == ("sk-key" if exports_the_key else None)
+
+    @pytest.mark.parametrize(
+        ("args", "user", "key_from_stored_login", "expected_overlay"),
+        [
+            ((), {"apiKeyHelper": LITE_HELPER}, False, {"apiKeyHelper": "", "env": {"ANTHROPIC_AUTH_TOKEN": "sk-key", "ANTHROPIC_BASE_URL": PROXY}}),
+            ((), {"apiKeyHelper": LITE_HELPER.replace("/usr/local/bin/lite", "/opt/other-venv/bin/lite")}, True, None),
+            (
+                (),
+                {
+                    "apiKeyHelper": LITE_HELPER.replace("http://localhost:4000", OTHER_PROXY),
+                    "env": {"ANTHROPIC_BASE_URL": OTHER_PROXY, "ANTHROPIC_AUTH_TOKEN": ""},
+                },
+                True,
+                {"apiKeyHelper": "", "env": {"ANTHROPIC_AUTH_TOKEN": "sk-key", "ANTHROPIC_BASE_URL": PROXY}},
+            ),
+            ((), {"apiKeyHelper": LITE_HELPER}, True, None),
+            ((), {"apiKeyHelper": "/opt/mine/helper"}, False, None),
+            (
+                ("--settings", '{"model":"opus"}'),
+                {"apiKeyHelper": LITE_HELPER},
+                False,
+                {"apiKeyHelper": "", "model": "opus", "env": {"ANTHROPIC_AUTH_TOKEN": "sk-key", "ANTHROPIC_BASE_URL": PROXY}},
+            ),
+            (
+                ("--settings", '{"apiKeyHelper":"","env":{"FOO":"1"}}'),
+                {"apiKeyHelper": LITE_HELPER},
+                True,
+                {"apiKeyHelper": "", "env": {"ANTHROPIC_AUTH_TOKEN": "sk-key", "ANTHROPIC_BASE_URL": PROXY, "FOO": "1"}},
+            ),
+            (
+                ("--settings", '{"apiKeyHelper":"/opt/mine/helper","env":{"ANTHROPIC_AUTH_TOKEN":"sk-mine"}}'),
+                {"apiKeyHelper": LITE_HELPER},
+                False,
+                {"apiKeyHelper": "/opt/mine/helper", "env": {"ANTHROPIC_AUTH_TOKEN": "sk-mine", "ANTHROPIC_BASE_URL": PROXY}},
+            ),
+        ],
+        ids=[
+            "key-passed-with-api-key",
+            "helper-from-another-lite-install-renews-the-same-login",
+            "helper-for-another-proxy",
+            "lites-helper-renews-the-stored-key",
+            "users-own-helper",
+            "users-settings-flag-is-merged",
+            "users-settings-flag-turns-the-helper-off",
+            "users-settings-flag-keeps-its-own-credentials",
+        ],
+    )
+    def test_claude_sends_the_key_the_launch_resolved_when_lites_helper_would_not_renew_it(
+        self, tmp_path, args, user, key_from_stored_login, expected_overlay
+    ):
+        """`lite login --pkce --config-claude` blanks ANTHROPIC_AUTH_TOKEN beside its helper, so an exported key
+        would be dropped and only a `--settings` overlay can carry it."""
+        launched = {}
+        run_agent(
+            "http://localhost:4000",
+            "sk-key",
+            ["claude", *args],
+            base_env={"CLAUDE_CONFIG_DIR": str(tmp_path / "cfg")},
+            which=lambda name: f"/usr/local/bin/{name}",
+            verify=lambda *a: None,
+            launcher=lambda p, a, e: launched.update(args=tuple(a)),
+            read_settings=lambda path: user if path == tmp_path / "cfg" / "settings.json" else {},
+            write_overlay=_overlay_writer(tmp_path),
+            project_dir=tmp_path / "repo",
+            key_from_stored_login=key_from_stored_login,
+        )
+        if expected_overlay is None:
+            assert launched["args"] == ("claude", *args)
+        else:
+            assert launched["args"][:2] == ("claude", "--settings") and len(launched["args"]) == 3
+            assert _overlay(launched["args"]) == expected_overlay
+
+    @pytest.mark.parametrize("project_helper", ["", "/opt/project/helper"], ids=["disabled", "its-own"])
+    @pytest.mark.parametrize("key_from_stored_login", [True, False], ids=["stored-login", "api-key"])
+    def test_claude_sends_the_launch_key_when_a_project_helper_sits_over_a_pkce_login(
+        self, tmp_path, project_helper, key_from_stored_login
+    ):
+        files = {
+            tmp_path / "repo" / ".claude" / "settings.json": {"apiKeyHelper": project_helper},
+            tmp_path / "cfg" / "settings.json": {"apiKeyHelper": LITE_HELPER, "env": {"ANTHROPIC_AUTH_TOKEN": ""}},
+        }
+        launched = {}
+        run_agent(
+            "http://localhost:4000",
+            "sk-key",
+            ["claude"],
+            base_env={"CLAUDE_CONFIG_DIR": str(tmp_path / "cfg")},
+            which=lambda name: f"/usr/local/bin/{name}",
+            verify=lambda *a: None,
+            launcher=lambda p, a, e: launched.update(args=tuple(a)),
+            read_settings=lambda path: files.get(path, {}),
+            write_overlay=_overlay_writer(tmp_path),
+            project_dir=tmp_path / "repo",
+            key_from_stored_login=key_from_stored_login,
+        )
+        assert _overlay(launched["args"]) == {
+            "apiKeyHelper": "",
+            "env": {"ANTHROPIC_AUTH_TOKEN": "sk-key", "ANTHROPIC_BASE_URL": PROXY},
+        }
+
+    def test_concurrent_key_launches_each_read_their_own_settings_file(self, tmp_path):
+        config_dir = tmp_path / "cfg"
+
+        def launch(base_url, api_key, *, subscription=False):
+            launched = {}
+            run_agent(
+                base_url,
+                api_key,
+                ["claude"],
+                subscription=subscription,
+                base_env={"CLAUDE_CONFIG_DIR": str(config_dir)},
+                which=lambda name: f"/usr/local/bin/{name}",
+                verify=lambda *a: None,
+                verify_subscription=lambda *a: None,
+                launcher=lambda p, a, e: launched.update(args=tuple(a)),
+                read_settings=lambda path: {"apiKeyHelper": LITE_HELPER, "env": {"ANTHROPIC_AUTH_TOKEN": ""}},
+                project_dir=tmp_path / "repo",
+            )
+            return Path(launched["args"][launched["args"].index("--settings") + 1])
+
+        first = launch(PROXY, "sk-a")
+        second = launch(OTHER_PROXY, "sk-b")
+        subscription = launch(PROXY, "sk-a", subscription=True)
+        assert len({first, second, subscription}) == 3
+        assert json.loads(first.read_text())["env"] == {"ANTHROPIC_AUTH_TOKEN": "sk-a", "ANTHROPIC_BASE_URL": PROXY}
+        assert json.loads(second.read_text())["env"] == {
+            "ANTHROPIC_AUTH_TOKEN": "sk-b",
+            "ANTHROPIC_BASE_URL": OTHER_PROXY,
+        }
+        assert launch(PROXY, "sk-a") == first
+        assert sorted(path.name for path in config_dir.iterdir()) == sorted(
+            path.name for path in (first, second, subscription)
+        )
+        if os.name == "posix":
+            assert {stat.S_IMODE(path.stat().st_mode) for path in (first, second, subscription)} == {0o600}
+
+    def test_an_unreadable_settings_flag_beside_lites_helper_fails_before_launch(self, tmp_path):
+        launched = {}
+        with pytest.raises(AgentRunError, match="file not found"):
+            run_agent(
+                "http://localhost:4000",
+                "sk-key",
+                ["claude", "--settings", "missing.json"],
+                base_env={"CLAUDE_CONFIG_DIR": str(tmp_path / "cfg")},
+                which=lambda name: f"/usr/local/bin/{name}",
+                verify=lambda *a: None,
+                launcher=lambda p, a, e: launched.update(args=tuple(a)),
+                read_settings=lambda path: {"apiKeyHelper": LITE_HELPER},
+                write_overlay=_overlay_writer(tmp_path),
+                project_dir=tmp_path / "repo",
+                )
+        assert launched == {}
+
+    def test_a_malformed_settings_file_still_launches_claude_with_the_key(self, tmp_path):
+        def unreadable(path):
+            raise ClaudeSettingsError(f"{path} contains invalid JSON")
+
+        launched = {}
+        run_agent(
+            "http://localhost:4000",
+            "sk-key",
+            ["claude"],
+            base_env={"CLAUDE_CONFIG_DIR": str(tmp_path / "cfg")},
+            which=lambda name: f"/usr/local/bin/{name}",
+            verify=lambda *a: None,
+            launcher=lambda p, a, e: launched.update(env=dict(e)),
+            read_settings=unreadable,
+            project_dir=tmp_path / "repo",
+        )
+        assert launched["env"]["ANTHROPIC_AUTH_TOKEN"] == "sk-key"
+
     def test_missing_binary_raises_with_install_hint(self):
         with pytest.raises(AgentRunError, match=r"claude.*Install it first"):
             run_agent(
@@ -1754,7 +1978,9 @@ class TestRunAgent:
         assert launched["env"]["ANTHROPIC_CUSTOM_HEADERS"] == "x-litellm-api-key: Bearer sk-key"
         assert "ANTHROPIC_AUTH_TOKEN" not in launched["env"]
 
-    def test_subscription_launch_blanks_the_credentials_claude_code_would_load_from_settings_json(self, tmp_path):
+    def test_subscription_launch_blanks_the_credentials_and_helper_claude_code_would_load_from_settings(
+        self, tmp_path
+    ):
         launched = {}
         run_agent(
             "http://localhost:4000",
@@ -1770,11 +1996,12 @@ class TestRunAgent:
         )
         assert launched["args"][:2] == ("claude", "--settings")
         assert _overlay(launched["args"]) == {
+            "apiKeyHelper": "",
             "env": {
                 "ANTHROPIC_AUTH_TOKEN": "",
                 "ANTHROPIC_API_KEY": "",
                 "ANTHROPIC_CUSTOM_HEADERS": "x-litellm-api-key: Bearer sk-key",
-            }
+            },
         }
         assert launched["args"][3:] == ("--resume",)
 
@@ -1880,6 +2107,7 @@ class TestRunAgent:
         assert launched["args"][:2] == ["claude", "--settings"]
         assert _overlay(launched["args"]) == {
             "model": "opus",
+            "apiKeyHelper": "",
             "env": {
                 "ANTHROPIC_AUTH_TOKEN": "",
                 "FOO": "bar",
@@ -1906,6 +2134,7 @@ class TestRunAgent:
         assert launched["args"][:2] == ["claude", "--settings"]
         assert _overlay(launched["args"]) == {
             "theme": "dark",
+            "apiKeyHelper": "",
             "env": {
                 "ANTHROPIC_API_KEY": "",
                 "ANTHROPIC_AUTH_TOKEN": "",
@@ -1984,6 +2213,7 @@ class TestRunAgent:
         assert launched["args"][:2] == ["claude", "--settings"]
         assert _overlay(launched["args"]) == {
             "theme": "dark",
+            "apiKeyHelper": "",
             "env": {
                 "ANTHROPIC_AUTH_TOKEN": "",
                 "ANTHROPIC_API_KEY": "",
@@ -2038,7 +2268,7 @@ class TestRunAgent:
             verify_subscription=lambda *a: probed.append(("header", a)),
             sync_models=lambda *a: {},
             preparers={},
-            write_overlay=lambda text, environ: overlays.append(text),
+            write_overlay=lambda name, text, environ: overlays.append(text),
             launcher=lambda p, a, e: launched.update(path=p, args=tuple(a), env=dict(e)),
         )
         assert probed == [("header", ("http://localhost:4000", "sk-key"))]
@@ -2435,6 +2665,27 @@ class TestAgentCommands:
         assert captured["skip_verify"] is False
         assert "routing Claude Code through proxy at http://localhost:4000" in result.output
 
+    @pytest.mark.parametrize(
+        ("obj", "key_from_stored_login"),
+        [
+            ({"api_key": "sk-stored", "api_key_from_token_file": True}, True),
+            ({"api_key": "sk-explicit", "api_key_from_token_file": False}, False),
+        ],
+        ids=["stored-login", "api-key-flag-or-env"],
+    )
+    def test_only_a_stored_login_key_lets_lites_helper_stand_in_for_it(self, obj, key_from_stored_login):
+        captured = {}
+        with patch(
+            f"{AGENTS_MODULE}.run_agent",
+            side_effect=lambda b, k, c, **kw: captured.update(api_key=k, stored=kw.get("key_from_stored_login")),
+        ):
+            result = self.runner.invoke(
+                _agent_command("claude"), [], obj={"base_url": "http://localhost:4000", **obj}
+            )
+
+        assert result.exit_code == 0, result.output
+        assert captured == {"api_key": obj["api_key"], "stored": key_from_stored_login}
+
     def test_codex_shows_friendly_name(self):
         captured = {}
         with patch(
@@ -2593,7 +2844,8 @@ class TestAgentCommands:
         vault = secret_vault_factory()
 
         @click.command()
-        def fake_login():
+        @click.option("--pkce", is_flag=True, default=None)
+        def fake_login(pkce):
             pass
 
         with (
@@ -2614,6 +2866,46 @@ class TestAgentCommands:
         assert result.exit_code == 0, result.output
         assert captured["api_key"] == "sk-after-login"
         mock_get.assert_called_once_with(expected_base_url="http://localhost:4000", vault=vault)
+
+    @pytest.mark.parametrize(
+        ("stored", "expected_pkce"),
+        [
+            ({"refresh_token": "llm_srefresh_old"}, True),
+            ({}, False),
+            ({"refresh_token": "llm_srefresh_old", "base_url": "http://other-proxy:4000"}, False),
+        ],
+        ids=["renewing-login-stored", "plain-login-stored", "renewing-login-for-another-proxy"],
+    )
+    def test_the_login_lite_claude_starts_again_renews_like_the_stored_one(
+        self, tmp_path, monkeypatch, secret_vault_factory, stored, expected_pkce
+    ):
+        monkeypatch.setenv("HOME", str(tmp_path))
+        vault = secret_vault_factory()
+        save_token(
+            {"base_url": "http://localhost:4000", "key": "sk-lapsed", "user_id": "u1", "timestamp": 1.0, **stored},
+            vault=vault,
+        )
+        logins = []
+
+        @click.command()
+        @click.option("--pkce", is_flag=True, default=None)
+        def fake_login(pkce):
+            logins.append(pkce)
+
+        with (
+            patch(f"{AGENTS_MODULE}._is_interactive", return_value=True),
+            patch(f"{AGENTS_MODULE}.login", fake_login),
+            patch(f"{AGENTS_MODULE}.get_stored_api_key", return_value="sk-after-login"),
+            patch(f"{AGENTS_MODULE}.run_agent"),
+        ):
+            result = self.runner.invoke(
+                _agent_command("claude"),
+                [],
+                obj={"base_url": "http://localhost:4000", "api_key": None, "secret_vault": vault},
+            )
+
+        assert result.exit_code == 0, result.output
+        assert logins == [expected_pkce]
 
     def test_child_exit_code_reaches_the_shell(self):
         with patch(f"{AGENTS_MODULE}.run_agent", side_effect=SystemExit(42)):
