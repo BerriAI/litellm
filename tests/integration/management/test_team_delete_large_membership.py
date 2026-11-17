@@ -21,6 +21,7 @@ import httpx
 import psycopg
 import pytest
 import yaml
+from psycopg.rows import TupleRow
 from pydantic import JsonValue
 from redis import Redis
 
@@ -55,7 +56,11 @@ FROM generate_series(1, %s::int) AS n
 """
 TAKE_TEAM_LOCK_SQL: Final = "SELECT pg_advisory_xact_lock(hashtext(%s))"
 LOCK_MODEL_ROW_SQL: Final = 'SELECT model_id FROM "LiteLLM_ProxyModelTable" WHERE model_id = %s FOR UPDATE'
+LOCK_TEAM_KEY_ROWS_SQL: Final = 'SELECT token FROM "LiteLLM_VerificationToken" WHERE team_id = %s FOR UPDATE'
+LOCK_BUDGET_ROW_SQL: Final = 'SELECT budget_id FROM "LiteLLM_BudgetTable" WHERE budget_id = %s FOR UPDATE'
 LOCK_HELD_PAST_DEFAULT_TRANSACTION_SECONDS: Final = 7
+POOL_HELD_PAST_DELETE_RETRIES_SECONDS: Final = 12
+SATURATED_POOL_LIMIT: Final = 2
 OLDEST_TRANSACTION_BLOCKED_BY_SQL: Final = """
 SELECT coalesce(max(extract(epoch FROM clock_timestamp() - xact_start)), 0)::float AS age
 FROM pg_stat_activity
@@ -144,6 +149,16 @@ def _waiters_on_lock_held_by(backend_pid: int) -> int:
     waiting: Final = rows[0]["waiting"]
     assert isinstance(waiting, int)
     return waiting
+
+
+def _sessions_blocked_by(backend_pid: int) -> int:
+    rows: Final = read_rows(
+        "SELECT count(*)::int AS blocked FROM pg_stat_activity WHERE %s::int = ANY(pg_blocking_pids(pid))",
+        (str(backend_pid),),
+    )
+    blocked: Final = rows[0]["blocked"]
+    assert isinstance(blocked, int)
+    return blocked
 
 
 def _oldest_transaction_blocked_by(backend_pid: int) -> float:
@@ -465,6 +480,83 @@ def test_delete_completes_after_waiting_on_the_team_lock_past_the_default_transa
         assert _team_rows(team) == []
         assert _membership_user_ids(team) == []
         assert _user_teams(user) == []
+        assert len(_tombstones(team)) == 1, _tombstones(team)
+
+
+def _park_on_team_key_rows(holder: psycopg.Connection[TupleRow], team_id: str) -> None:
+    _ = holder.execute(LOCK_TEAM_KEY_ROWS_SQL, (team_id,))
+
+
+def _park_on_deleted_key_records(holder: psycopg.Connection[TupleRow], _team_id: str) -> None:
+    _ = holder.execute('LOCK TABLE "LiteLLM_DeletedVerificationToken" IN SHARE MODE')
+
+
+def _requests_in_flight_including_this_one(proxy: Gateway) -> JsonValue:
+    return proxy.get("/health/backlog")["in_flight_requests"]
+
+
+@pytest.mark.timeout(240)
+@pytest.mark.parametrize(
+    "park",
+    [
+        pytest.param(_park_on_team_key_rows, id="next-transaction-is-the-team-model-delete"),
+        pytest.param(_park_on_deleted_key_records, id="next-transaction-is-the-team-key-delete"),
+    ],
+)
+def test_delete_waits_for_a_pooled_connection_when_every_one_is_busy(
+    gateway: Gateway,
+    tmp_path: Path,
+    park: Callable[[psycopg.Connection[TupleRow], str], None],
+) -> None:
+    database_url: Final = os.environ["DATABASE_URL"]
+    with (
+        gateway.scenario() as scenario,
+        owned_proxy_process(
+            gateway,
+            tmp_path,
+            {"DATABASE_URL": database_url},
+            config=_config_with_pool_limit(tmp_path, SATURATED_POOL_LIMIT),
+            remove_environment=("DATABASE_URL_READ_REPLICA",),
+        ) as owned,
+        ThreadPoolExecutor(max_workers=3) as pool,
+    ):
+        team: Final = string_value(
+            owned.gateway.post("/team/new", {"team_alias": f"integration-{uuid.uuid4().hex}"})["team_id"]
+        )
+        scenario.cleanups.callback(_remove_team_by_sql, team)
+        scenario.cleanups.callback(write_rows, 'DELETE FROM "LiteLLM_VerificationToken" WHERE team_id = %s', (team,))
+        keys: Final = _seeded_team_keys(team, 3)
+        budget: Final = f"integration-{uuid.uuid4().hex}"
+        owned.gateway.post("/budget/new", {"budget_id": budget, "max_budget": 100})
+        scenario.cleanups.callback(write_rows, 'DELETE FROM "LiteLLM_BudgetTable" WHERE budget_id = %s', (budget,))
+        update_budget: Final = {"budget_id": budget, "max_budget": 1}
+
+        with psycopg.connect(database_url) as budget_holder:
+            budget_holder.execute(LOCK_BUDGET_ROW_SQL, (budget,))
+            first_connection_taker: Final = _post_in_background(pool, owned.gateway, "/budget/update", update_budget)
+            eventually(lambda: _sessions_blocked_by(budget_holder.info.backend_pid), lambda count: count == 1)
+            with psycopg.connect(database_url) as parking:
+                park(parking, team)
+                pending_delete: Final = _post_in_background(pool, owned.gateway, "/team/delete", {"team_ids": [team]})
+                eventually(lambda: _sessions_blocked_by(parking.info.backend_pid), lambda count: count == 1)
+                second_connection_taker: Final = _post_in_background(
+                    pool, owned.gateway, "/budget/update", update_budget
+                )
+                eventually(lambda: _requests_in_flight_including_this_one(owned.gateway), lambda count: count == 4)
+            eventually(
+                pending_delete.done,
+                lambda done: done,
+                seconds=POOL_HELD_PAST_DELETE_RETRIES_SECONDS,
+                return_last_on_timeout=True,
+            )
+
+        response: Final = pending_delete.result(timeout=60)
+        assert response.status_code == 200, response.text
+        assert response.json() == {"deleted_teams": [team]}
+        takers: Final = (first_connection_taker, second_connection_taker)
+        assert [taker.result(timeout=60).status_code for taker in takers] == [200, 200]
+        assert _team_rows(team) == []
+        assert [_live_token(_hashed(key)) for key in keys] == [[], [], []]
         assert len(_tombstones(team)) == 1, _tombstones(team)
 
 

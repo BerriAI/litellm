@@ -888,6 +888,57 @@ async def test_message_history_replays_real_key_named_tool_payloads() -> None:
     assert json.loads(tool_message["content"]) == function_output
 
 
+async def test_message_history_keeps_the_joined_name_of_a_stored_self_named_namespace_member() -> None:
+    request_id: Final = "chatcmpl-self-named-namespace"
+    responses_request_body: Final = {
+        "model": "anthropic/claude-sonnet-4-5",
+        "tools": [
+            {
+                "type": "namespace",
+                "name": "search",
+                "tools": [{"type": "function", "name": "search", "parameters": {"type": "object", "properties": {}}}],
+            }
+        ],
+        "input": [
+            {"role": "user", "content": "Search for the release notes."},
+            {"type": "function_call", "call_id": "call_1", "name": "search", "namespace": "search", "arguments": "{}"},
+            {"type": "function_call_output", "call_id": "call_1", "output": "release notes found"},
+        ],
+    }
+
+    with patch(
+        "litellm.proxy.spend_tracking.spend_tracking_utils.should_store_prompts_and_responses_in_spend_logs",
+        return_value=True,
+    ):
+        proxy_server_request: Final = json.loads(
+            _get_proxy_server_request_for_spend_logs_payload(
+                metadata={},
+                litellm_params={"proxy_server_request": {"body": responses_request_body}},
+                kwargs={},
+            )
+        )
+
+    spend_log: Final = {
+        "request_id": request_id,
+        "call_type": "aresponses",
+        "session_id": "session-self-named-namespace",
+        "proxy_server_request": proxy_server_request,
+        "response": _chat_completion_response(request_id, "Found them."),
+    }
+
+    with patch.object(
+        ResponsesSessionHandler,
+        "get_all_spend_logs_for_previous_response_id",
+        new_callable=AsyncMock,
+    ) as mock_get_spend_logs:
+        mock_get_spend_logs.return_value = [spend_log]
+        result: Final = await ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id(
+            request_id
+        )
+
+    assert [call["function"]["name"] for call in result["messages"][1]["tool_calls"]] == ["search__search"]
+
+
 def _turn_spend_log(
     turn_input: str | list[dict[str, str]], answer: str, compaction_blocks: list[dict[str, str]] | None = None
 ) -> dict[str, object]:
@@ -1162,7 +1213,10 @@ async def test_an_item_a_poll_caught_half_written_replays_its_finished_text_once
             "resp_poll_done",
             "aget_responses",
             "completed",
-            [_identified_output_message("msg_answer", "One, two, three"), _identified_output_message("msg_more", "Done")],
+            [
+                _identified_output_message("msg_answer", "One, two, three"),
+                _identified_output_message("msg_more", "Done"),
+            ],
         ),
     )
 

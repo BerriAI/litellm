@@ -5,6 +5,8 @@ from urllib.parse import quote
 import requests
 from pydantic import TypeAdapter
 
+from litellm.models.credentials import UserConnectionPollResponse, UserConnectionStartResponse
+
 from .exceptions import UnauthorizedError
 
 _DECODED_JSON: Final = TypeAdapter(object)
@@ -217,3 +219,33 @@ class CredentialsManagementClient:
             if e.response.status_code == 401:
                 raise UnauthorizedError(e)
             raise
+
+    def _send_json(self, request: requests.Request) -> object:
+        try:
+            response: Final = requests.Session().send(request.prepare(), timeout=self._timeout)
+            response.raise_for_status()
+            return _DECODED_JSON.validate_python(response.json())
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 401:
+                raise UnauthorizedError(e)
+            raise
+
+    def _user_connection_url(self, credential_name: str, action: str) -> str:
+        return f"{self._base_url}/credentials/{quote(credential_name, safe='')}/user_connection/{action}"
+
+    def start_user_connection(self, credential_name: str) -> UserConnectionStartResponse:
+        """Start the GitHub device login that connects the calling key's user to a per-user credential."""
+        request: Final = requests.Request(
+            "POST", self._user_connection_url(credential_name, "start"), headers=self._get_headers()
+        )
+        return UserConnectionStartResponse.model_validate(self._send_json(request))
+
+    def poll_user_connection(self, credential_name: str, flow_handle: str) -> UserConnectionPollResponse:
+        """Check once whether the user approved the device login that ``start_user_connection`` began."""
+        request: Final = requests.Request(
+            "POST",
+            self._user_connection_url(credential_name, "poll"),
+            headers=self._get_headers(),
+            json={"flow_handle": flow_handle},
+        )
+        return UserConnectionPollResponse.model_validate(self._send_json(request))

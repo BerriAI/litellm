@@ -311,9 +311,7 @@ async def test_generic_api_callback_settings_retry_config():
     }
 
     try:
-        result = LoggingCallbackManager.add_custom_callback_generic_api_str(
-            callback_name
-        )
+        result = LoggingCallbackManager.add_custom_callback_generic_api_str(callback_name)
 
         assert isinstance(result, GenericAPILogger)
         assert result.endpoint == "https://example.com/api/logs"
@@ -481,3 +479,59 @@ async def test_final_flush_error_on_shutdown_is_swallowed(monkeypatch: pytest.Mo
 
     await asyncio.wait_for(logger._flush_task, timeout=5)
     assert flushed.is_set()
+
+
+def test_get_callbacks_by_type_treats_both_failure_lists_as_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    for callback_list in (
+        "callbacks",
+        "success_callback",
+        "_async_success_callback",
+        "failure_callback",
+        "_async_failure_callback",
+    ):
+        monkeypatch.setattr(litellm, callback_list, [])
+    manager = LoggingCallbackManager()
+    manager.add_litellm_callback("general_logger")
+    manager.add_litellm_success_callback("sync_success_logger")
+    manager.add_litellm_async_success_callback("async_success_logger")
+    manager.add_litellm_failure_callback("sync_failure_logger")
+    manager.add_litellm_async_failure_callback("async_failure_logger")
+    manager.add_litellm_success_callback("sync_success_and_async_failure_logger")
+    manager.add_litellm_async_failure_callback("sync_success_and_async_failure_logger")
+
+    callbacks_by_type = manager.get_callbacks_by_type()
+
+    assert set(callbacks_by_type["success"]) == {"sync_success_logger", "async_success_logger"}
+    assert set(callbacks_by_type["failure"]) == {"sync_failure_logger", "async_failure_logger"}
+    assert set(callbacks_by_type["success_and_failure"]) == {"general_logger", "sync_success_and_async_failure_logger"}
+
+
+def test_a_v2_callback_is_added_to_every_event_list_once_per_logger_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.integrations.custom_logger_v2 import CallContext, CustomLoggerV2, Hook, on
+
+    class Observer(CustomLoggerV2):
+        def __init__(self, bucket: str) -> None:
+            self.bucket = bucket
+
+        @on(Hook.attempt_ended)
+        def attempt_ended(self, view: object, ctx: CallContext[object]) -> None:
+            return None
+
+    for callback_list in ("success_callback", "_async_success_callback", "failure_callback", "_async_failure_callback"):
+        monkeypatch.setattr(litellm, callback_list, [])
+    manager = LoggingCallbackManager()
+    first, twin, second = Observer("a"), Observer("a"), Observer("b")
+
+    for callback in (first, first, twin, second):
+        manager.add_litellm_success_callback(callback)
+        manager.add_litellm_failure_callback(callback)
+        manager.add_litellm_async_success_callback(callback)
+        manager.add_litellm_async_failure_callback(callback)
+
+    for callback_list in (
+        litellm.success_callback,
+        litellm._async_success_callback,
+        litellm.failure_callback,
+        litellm._async_failure_callback,
+    ):
+        assert callback_list == [first, second]

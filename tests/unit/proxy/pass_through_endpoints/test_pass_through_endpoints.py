@@ -98,6 +98,7 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
 )
 from tests._master_key import MASTER_KEY
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
+from tests.unit.proxy.spend_tracking.native_budgets_replica import native_reservation
 
 MESSAGE_START_SSE_FRAME = b'event: message_start\ndata: {"type": "message_start"}\n\n'
 PROTOCOL_CONSTRAINED_PASS_THROUGH_ROUTES: Final = MappingProxyType(
@@ -1980,6 +1981,58 @@ async def test_pass_through_request_strips_client_guardrail_information(allow_cl
     hooked_body: Final = mock_proxy_logging.pre_call_hook.call_args.kwargs["data"]
     assert hooked_body["metadata"] == {"trace_id": "keep-me"}
     assert ("input_cost_per_token" in hooked_body) is allow_client_pricing_override
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("currency", ["EUR", "USD"])
+async def test_pass_through_request_rejects_pricing_currency_before_any_hook_or_upstream(currency: str) -> None:
+    mock_request: Final = MagicMock(spec=Request)
+    mock_request.method = "POST"
+    mock_request.headers = Headers({})
+    mock_request.query_params = QueryParams({})
+
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging:
+        mock_proxy_logging.pre_call_hook = AsyncMock(side_effect=RuntimeError("must not be reached"))
+        mock_proxy_logging.post_call_failure_hook = AsyncMock()
+        with pytest.raises(ProxyException) as rejected:
+            await pass_through_request(
+                request=mock_request,
+                target="http://test.com",
+                custom_headers={},
+                user_api_key_dict=UserAPIKeyAuth(metadata={"allow_client_pricing_override": True}),
+                custom_body={"model": "gpt-5.4-mini", "pricing_currency": currency, "input_cost_per_token": 0.5},
+            )
+
+    assert rejected.value.code == "400"
+    assert rejected.value.param == "pricing_currency"
+    mock_proxy_logging.pre_call_hook.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("body", [{}, {"pricing_currency": None}], ids=["omitted", "null"])
+async def test_pass_through_request_keeps_usd_prices_without_an_explicit_pricing_currency(
+    body: dict[str, object],
+) -> None:
+    mock_request: Final = MagicMock(spec=Request)
+    mock_request.method = "POST"
+    mock_request.headers = Headers({})
+    mock_request.query_params = QueryParams({})
+
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging:
+        mock_proxy_logging.pre_call_hook = AsyncMock(side_effect=RuntimeError("stop before upstream"))
+        mock_proxy_logging.post_call_failure_hook = AsyncMock()
+        with pytest.raises(ProxyException):
+            await pass_through_request(
+                request=mock_request,
+                target="http://test.com",
+                custom_headers={},
+                user_api_key_dict=UserAPIKeyAuth(metadata={"allow_client_pricing_override": True}),
+                custom_body={"model": "gpt-5.4-mini", "input_cost_per_token": 0.5, **body},
+            )
+
+    hooked_body: Final = mock_proxy_logging.pre_call_hook.call_args.kwargs["data"]
+    assert hooked_body["input_cost_per_token"] == 0.5
+    assert "pricing_currency" not in hooked_body
 
 
 @pytest.mark.asyncio
@@ -7712,7 +7765,7 @@ async def test_websocket_passthrough_keeps_normal_upstream_close_normal():
     websocket.close.assert_awaited_once_with()
 
 
-async def _run_setup_rewrite_passthrough(setup_model: str, llm_router) -> str:
+async def _run_setup_rewrite_passthrough(setup_model: str, llm_router, keeps_caller_resource_path: bool = False) -> str:
     from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
         _build_vertex_live_setup_model_rewriter,
     )
@@ -7740,7 +7793,9 @@ async def _run_setup_rewrite_passthrough(setup_model: str, llm_router) -> str:
             setup_model_rewriter=_build_vertex_live_setup_model_rewriter(
                 vertex_project="proj-db",
                 vertex_location="global",
+                configured_location="global",
                 llm_router=llm_router,
+                keeps_caller_resource_path=keeps_caller_resource_path,
             ),
         )
 
@@ -7778,6 +7833,67 @@ async def test_websocket_passthrough_rewrites_gateway_alias_setup_model():
     assert sent_setup["model"] == "projects/proj-db/locations/global/publishers/google/models/gemini-live-2.5-flash"
 
 
+async def _run_binary_client_frame_passthrough(frame: bytes):
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+        _build_vertex_live_setup_model_rewriter,
+    )
+
+    upstream_ws = RecordingUpstreamWebSocket()
+    websocket = _client_websocket(
+        AsyncMock(
+            side_effect=[
+                {"type": "websocket.receive", "bytes": frame},
+                {"type": "websocket.disconnect"},
+            ]
+        )
+    )
+
+    with _patched_websocket_passthrough_environment(upstream_ws):
+        await websocket_passthrough_request(
+            websocket=websocket,
+            target="wss://aiplatform.googleapis.com/ws/google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent",
+            custom_headers={"Authorization": "Bearer token"},
+            user_api_key_dict=UserAPIKeyAuth(),
+            forward_headers=False,
+            endpoint="/vertex_ai/live",
+            accept_websocket=False,
+            setup_model_rewriter=_build_vertex_live_setup_model_rewriter(
+                vertex_project="proj-a",
+                vertex_location="europe-west4",
+                configured_location="europe-west4",
+                llm_router=None,
+                keeps_caller_resource_path=False,
+            ),
+        )
+
+    return websocket, upstream_ws
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_moves_a_binary_setup_frame_onto_the_pinned_project():
+    setup_frame = json.dumps(
+        {"setup": {"model": "projects/proj-b/locations/europe-west4/publishers/google/models/gemini-2.0-flash"}}
+    ).encode("utf-8")
+
+    _, upstream_ws = await _run_binary_client_frame_passthrough(setup_frame)
+
+    upstream_ws.send.assert_awaited_once()
+    sent_frame = upstream_ws.send.await_args.args[0]
+    assert isinstance(sent_frame, bytes), "a binary client message must stay binary upstream"
+    assert json.loads(sent_frame)["setup"]["model"] == (
+        "projects/proj-a/locations/europe-west4/publishers/google/models/gemini-2.0-flash"
+    )
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_closes_on_a_binary_frame_that_is_not_utf8():
+    websocket, upstream_ws = await _run_binary_client_frame_passthrough(b"\xff\xfe\x00projects/proj-b")
+
+    upstream_ws.send.assert_not_awaited()
+    websocket.close.assert_awaited_once()
+    assert websocket.close.await_args.kwargs["code"] == 1008
+
+
 @pytest.mark.parametrize(
     "setup_model",
     ["gemini-live-2.5-flash", "models/gemini-live-2.5-flash", "publishers/google/models/gemini-live-2.5-flash"],
@@ -7799,7 +7915,11 @@ def test_vertex_live_setup_model_resolves_before_extraction(setup_model):
     )
 
     rewriter = _build_vertex_live_setup_model_rewriter(
-        vertex_project="proj-db", vertex_location="global", llm_router=None
+        vertex_project="proj-db",
+        vertex_location="global",
+        configured_location="global",
+        llm_router=None,
+        keeps_caller_resource_path=False,
     )
     setup_data = {"model": setup_model}
 
@@ -7849,7 +7969,11 @@ async def test_websocket_passthrough_logs_a_bare_alias_setup_model():
                 endpoint="/vertex_ai/live",
                 accept_websocket=False,
                 setup_model_rewriter=_build_vertex_live_setup_model_rewriter(
-                    vertex_project="proj-db", vertex_location="global", llm_router=None
+                    vertex_project="proj-db",
+                    vertex_location="global",
+                    configured_location="global",
+                    llm_router=None,
+                    keeps_caller_resource_path=False,
                 ),
             )
 
@@ -7914,14 +8038,24 @@ async def test_websocket_passthrough_rewrites_alias_of_unrecognised_upstream_mod
 
 
 @pytest.mark.asyncio
-async def test_websocket_passthrough_leaves_full_resource_setup_model_untouched():
-    full_resource = "projects/other/locations/us-central1/publishers/google/models/gemini-2.0-flash-live-preview-04-09"
+@pytest.mark.parametrize(
+    "keeps_caller_resource_path, expected_prefix",
+    [(True, "projects/other/locations/us-central1/"), (False, "projects/proj-db/locations/global/")],
+    ids=["caller_path_kept", "moved_onto_session_target"],
+)
+async def test_websocket_passthrough_full_resource_setup_model(
+    keeps_caller_resource_path: bool, expected_prefix: str
+) -> None:
+    model_suffix = "publishers/google/models/gemini-2.0-flash-live-preview-04-09"
 
-    sent_frame = await _run_setup_rewrite_passthrough(full_resource, llm_router=None)
+    sent_frame = await _run_setup_rewrite_passthrough(
+        f"projects/other/locations/us-central1/{model_suffix}",
+        llm_router=None,
+        keeps_caller_resource_path=keeps_caller_resource_path,
+    )
 
-    assert json.loads(sent_frame)["setup"]["model"] == full_resource
     assert sent_frame == json.dumps(
-        {"setup": {"model": full_resource, "generationConfig": {"responseModalities": ["TEXT"]}}}
+        {"setup": {"model": f"{expected_prefix}{model_suffix}", "generationConfig": {"responseModalities": ["TEXT"]}}}
     )
 
 
@@ -9755,7 +9889,7 @@ async def test_passthrough_charge_moves_the_committed_spend_of_the_entities_auth
 
 
 @pytest.mark.asyncio
-async def test_passthrough_success_reconciles_budget_reservation():
+async def test_passthrough_success_reconciles_budget_reservation(native_budgets_on):
     """
     A successful pass-through request must hand its pre-call budget reservation
     to the spend-counter update so the reserved amount is reconciled down to the
@@ -9763,14 +9897,17 @@ async def test_passthrough_success_reconciles_budget_reservation():
     the actual cost is added on top, so the counter drifts above real spend until
     the key falsely trips BudgetExceededError.
     """
-    budget_reservation = {
-        "reserved_cost": 0.5,
-        "entries": [{"counter_key": "spend:key:hashed-token", "reserved_cost": 0.5}],
-    }
     user_api_key_dict = UserAPIKeyAuth(
         api_key="hashed-token",
         user_id="u1",
-        budget_reservation=budget_reservation,
+    )
+    from litellm.proxy import proxy_server
+
+    budget_reservation = await native_reservation(
+        proxy_server.spend_counter_store,
+        user_api_key_dict,
+        [{"counter_key": "spend:key:hashed-token", "entity_type": "Key", "entity_id": "hashed-token"}],
+        0.5,
     )
 
     reservation = user_api_key_dict.budget_reservation
@@ -13381,6 +13518,74 @@ async def test_chat_completion_pass_through_endpoint_reads_a_body_only_json_can_
         "anthropic",
     )
     assert forwarded["messages"] == [{"role": "user", "content": "hi"}]
+
+
+_ADAPTER_BODY_WITH_S3_IMAGE: Final = json.dumps(
+    {
+        "model": "unknown-model",
+        "messages": [
+            {"role": "user", "content": [{"type": "image_url", "image_url": {"url": "s3://private-bucket/cat.png"}}]}
+        ],
+    }
+).encode()
+_ADAPTER_PYTHON_LITERAL_BODY_WITH_S3_IMAGE_IN_TUPLES: Final = repr(
+    {
+        "model": "unknown-model",
+        "messages": (
+            {"role": "user", "content": ({"type": "image_url", "image_url": {"url": "s3://private-bucket/cat.png"}},)},
+        ),
+    }
+).encode()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "body",
+    [_ADAPTER_BODY_WITH_S3_IMAGE, _ADAPTER_PYTHON_LITERAL_BODY_WITH_S3_IMAGE_IN_TUPLES],
+    ids=["json", "python_literal_with_tuples"],
+)
+async def test_chat_completion_pass_through_endpoint_refuses_an_s3_image_in_an_unlisted_bucket(
+    monkeypatch: pytest.MonkeyPatch,
+    body: bytes,
+):
+    proxy_logging: Final = _stub_adapter_proxy(monkeypatch)
+    request: Final = MagicMock(spec=Request)
+    request.body = AsyncMock(return_value=body)
+
+    with pytest.raises(ProxyException) as raised:
+        await chat_completion_pass_through_endpoint(
+            fastapi_response=Response(),
+            request=request,
+            adapter_id="anthropic",
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+        )
+
+    assert raised.value.code == "403"
+    proxy_logging.pre_call_hook.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_chat_completion_pass_through_endpoint_routes_an_s3_image_in_a_listed_bucket(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", ProxyLogging(user_api_key_cache=DualCache()))
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_model", None)
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.general_settings", {"allowed_client_side_s3_buckets": ["private-bucket"]}
+    )
+    request: Final = _request_with_body("application/json", _ADAPTER_BODY_WITH_S3_IMAGE)
+
+    with pytest.raises(ProxyException) as raised:
+        await chat_completion_pass_through_endpoint(
+            fastapi_response=Response(),
+            request=request,
+            adapter_id="anthropic",
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+        )
+
+    assert raised.value.code == "400"
+    assert raised.value.message == str(ProxyModelNotFoundError(route="completion", model_name="unknown-model"))
 
 
 @pytest.mark.asyncio

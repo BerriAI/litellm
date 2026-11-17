@@ -24,7 +24,8 @@ import logging
 import os
 import subprocess
 from collections.abc import AsyncIterator, Awaitable, Callable
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
+from datetime import datetime, timedelta, timezone
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -993,6 +994,40 @@ async def test_proxy_startup_event_prunes_dead_workers_live_gauges(tmp_path):
     assert counter.exists()
 
 
+class _PromptCacheRegistration:
+    def __init__(self) -> None:
+        self.events: tuple[str, ...] = ()
+
+    def __call__(self, settings: object, prisma: object, resources: AsyncExitStack) -> None:
+        self.events = (*self.events, "registered")
+        resources.callback(self._released)
+
+    def _released(self) -> None:
+        self.events = (*self.events, "released")
+
+
+@pytest.mark.asyncio
+async def test_the_proxy_lifespan_registers_prompt_cache_alerts_and_releases_them_on_exit() -> None:
+    """The lifespan must still run as an async context manager, register on entry and release on exit."""
+    registration: Final = _PromptCacheRegistration()
+    scheduler: Final = AsyncIOScheduler()
+    clean_env: Final = {
+        k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL", "WORKER_CONFIG")
+    } | {"LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY": "true"}
+    with (
+        patch.dict(os.environ, clean_env, clear=True),
+        patch.object(ps, "scheduler", scheduler),
+        patch.object(ps, "register_prompt_cache_alerts", registration),
+    ):
+        try:
+            async with proxy_startup_event(app=None):
+                assert registration.events == ("registered",)
+        finally:
+            if scheduler.running:
+                scheduler.shutdown(wait=False)
+    assert registration.events == ("registered", "released")
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("disable_model_info_refresh", "job_scheduled"), [(True, False), (False, True)])
 async def test_proxy_startup_event_honors_disable_model_info_refresh(
@@ -1391,6 +1426,25 @@ async def test_monthly_spend_report_sent_when_the_lock_is_free_or_absent(acquire
     await jobs["monthly_spend_report_job"]()
 
     proxy_logging_obj.slack_alerting_instance.send_monthly_spend_report.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
+async def test_weekly_spend_report_first_run_is_minutes_ahead_when_the_scheduler_zone_differs_from_the_clock():
+    """TZ=Asia/Calcutta on a host without the legacy alias puts the scheduler on IST through tzdata while
+    datetime.now() stays on UTC, so a naive first run landed hours in the past, past the misfire grace."""
+    local_offset: Final = datetime.now().astimezone().utcoffset() or timedelta(0)
+    scheduler: Final = AsyncIOScheduler(timezone=timezone(local_offset + timedelta(hours=5, minutes=30)))
+    registered_after: Final = datetime.now(timezone.utc)
+
+    await ProxyStartupEvent._initialize_slack_alerting_jobs(
+        scheduler=scheduler,
+        general_settings={},
+        proxy_logging_obj=_make_slack_alerting_proxy_logging(acquire_lock_result=True),
+        prisma_client=MagicMock(),
+    )
+
+    first_run: Final = scheduler.get_job("weekly_spend_report_job").next_run_time
+    assert registered_after < first_run < datetime.now(timezone.utc) + timedelta(seconds=311)
 
 
 @pytest.mark.asyncio
