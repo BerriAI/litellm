@@ -2445,10 +2445,15 @@ def test_gemini_tts_chat_audio_is_raw_pcm16_whatever_container_gemini_answers(
 
 
 @pytest.mark.respx(assert_all_called=True)
-@pytest.mark.parametrize("mime_type", ["AUDIO_WAV", "AUDIO_L16"])
+@pytest.mark.parametrize(
+    "audio_format",
+    [{"mimeType": "AUDIO_WAV"}, {"mimeType": "AUDIO_L16"}, {"mime_type": "AUDIO_WAV"}],
+    ids=["wav", "l16", "snake-case-key"],
+)
+@pytest.mark.parametrize("through_extra_body", [False, True], ids=["param", "extra-body"])
 @pytest.mark.parametrize("sends_data_uri", [False, True], ids=["inline-data", "data-uri"])
 def test_gemini_tts_chat_audio_keeps_the_container_the_caller_asked_gemini_for(
-    respx_mock: respx.MockRouter, mime_type: str, sends_data_uri: bool
+    respx_mock: respx.MockRouter, audio_format: dict[str, str], through_extra_body: bool, sends_data_uri: bool
 ) -> None:
     wav_base64: Final = _b64(_gemini_wav_with_trailing_chunk(GEMINI_TTS_PCM16_FRAMES))
     route: Final = _mock_gemini_part(
@@ -2457,21 +2462,44 @@ def test_gemini_tts_chat_audio_keeps_the_container_the_caller_asked_gemini_for(
         if sends_data_uri
         else {"inlineData": {"mimeType": "audio/wav", "data": wav_base64}},
     )
+    response_format: Final = {"audio": audio_format}
 
     response: Final = completion(
         model="gemini/gemini-3.8-flash-tts",
         messages=[{"role": "user", "content": "Say hello"}],
         modalities=["audio"],
         audio={"voice": "Kore"},
-        responseFormat={"audio": {"mimeType": mime_type}},
+        api_key="test-api-key",
+        client=HTTPHandler(),
+        **(
+            {"extra_body": {"generationConfig": {"responseFormat": response_format}}}
+            if through_extra_body
+            else {"responseFormat": response_format}
+        ),
+    )
+
+    assert json.loads(route.calls.last.request.content)["generationConfig"]["responseFormat"] == response_format
+    assert response.choices[0].message.audio.data == wav_base64
+
+
+@pytest.mark.respx(assert_all_called=True)
+@pytest.mark.parametrize("audio_format", [{}, {"mimeType": None}], ids=["no-mime-type", "null-mime-type"])
+def test_gemini_tts_chat_audio_is_raw_pcm16_when_the_caller_names_no_audio_mime_type(
+    respx_mock: respx.MockRouter, audio_format: dict[str, None]
+) -> None:
+    _mock_gemini_audio(respx_mock, "audio/wav", _b64(_gemini_wav_with_trailing_chunk(GEMINI_TTS_PCM16_FRAMES)))
+
+    response: Final = completion(
+        model="gemini/gemini-3.8-flash-tts",
+        messages=[{"role": "user", "content": "Say hello"}],
+        modalities=["audio"],
+        audio={"voice": "Kore"},
+        responseFormat={"audio": audio_format},
         api_key="test-api-key",
         client=HTTPHandler(),
     )
 
-    assert json.loads(route.calls.last.request.content)["generationConfig"]["responseFormat"] == {
-        "audio": {"mimeType": mime_type}
-    }
-    assert response.choices[0].message.audio.data == wav_base64
+    assert base64.b64decode(response.choices[0].message.audio.data) == GEMINI_TTS_PCM16_FRAMES
 
 
 @pytest.mark.usefixtures("_gemini_httpx_transport")

@@ -265,8 +265,14 @@ def _served_model_name(model_version: object) -> str | None:
 
 
 def _requests_audio_mime_type(optional_params: Mapping[str, object]) -> bool:
-    match optional_params.get("responseFormat"):
-        case {"audio": {"mimeType": str()}}:
+    match optional_params:
+        case {"responseFormat": {"audio": {"mimeType": str()} | {"mime_type": str()}}}:
+            return True
+        case {
+            "extra_body": {
+                "generationConfig": {"responseFormat": {"audio": {"mimeType": str()} | {"mime_type": str()}}}
+            }
+        }:
             return True
         case _:
             return False
