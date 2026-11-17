@@ -57,7 +57,7 @@ def test_environment_variables_win_over_the_process_environment(tmp_path: Path) 
     get `x-api-key: sk-dec1-config` (unit case `config_wins_over_the_process`, `environ.rs`). Python reads the
     process value on a first load, so this is a deliberate preview difference noted in `environ.rs`."""
     with scripted_provider() as provider:
-        model: Final = anthropic_deployment("claude", provider.url, api_key="os.environ/DEC1_GW2_KEY")
+        model: Final = _keyless("claude", provider.url, api_key="os.environ/DEC1_GW2_KEY")
         config: Final = {**master_key_config([model]), "environment_variables": {"DEC1_GW2_KEY": "sk-dec1-config"}}
         case: Final = marker()
         with native_gateway(config, tmp_path, {"DEC1_GW2_KEY": "sk-dec1-process"}) as gateway:
@@ -95,7 +95,7 @@ def test_an_uppercase_os_environ_prefix_is_not_a_reference(tmp_path: Path) -> No
     prefix `os.environ/` is a reference (unit case `b: OS.ENVIRON/PROBE_SET` stays literal), so the provider must
     get `x-api-key: OS.ENVIRON/DEC1_GW2_KEY`."""
     with scripted_provider() as provider:
-        model: Final = anthropic_deployment("claude", provider.url, api_key="OS.ENVIRON/DEC1_GW2_KEY")
+        model: Final = _keyless("claude", provider.url, api_key="OS.ENVIRON/DEC1_GW2_KEY")
         case: Final = marker()
         with native_gateway(master_key_config([model]), tmp_path, {"DEC1_GW2_KEY": "sk-dec1-not-used"}) as gateway:
             gateway.post("/v1/messages", messages_body(case))
@@ -109,7 +109,7 @@ def test_an_unset_api_key_reference_falls_back_to_anthropic_api_key(tmp_path: Pa
     UNVERIFIED: that the Anthropic env lookup in the gateway reads the process environment through
     `ConfigEnvironment` (`build_inference`)."""
     with scripted_provider() as provider:
-        model: Final = anthropic_deployment("claude", provider.url, api_key="os.environ/DEC1_GW2_UNSET")
+        model: Final = _keyless("claude", provider.url, api_key="os.environ/DEC1_GW2_UNSET")
         case: Final = marker()
         with native_gateway(
             master_key_config([model]), tmp_path, {"ANTHROPIC_API_KEY": "sk-dec1-env-fallback"}
@@ -141,7 +141,7 @@ def test_a_padded_deployment_key_is_sent_trimmed(tmp_path: Path) -> None:
     whitespace stripped (unit cases `env_key_stripped_of_whitespace` and `api_key_param_stripped_of_separators`
     in `anthropic/common_utils.rs`)."""
     with scripted_provider() as provider:
-        model: Final = anthropic_deployment("claude", provider.url, api_key="  sk-dec1-padded \t")
+        model: Final = _keyless("claude", provider.url, api_key="  sk-dec1-padded \t")
         case: Final = marker()
         with native_gateway(master_key_config([model]), tmp_path) as gateway:
             gateway.post("/v1/messages", messages_body(case))

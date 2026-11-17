@@ -180,15 +180,25 @@ def test_two_authorization_headers_are_refused_even_if_one_is_right(gateway: Nat
     assert (first_right.status_code, both_right.status_code) == (401, 401)
 
 
-@pytest.mark.parametrize("header", ["x-api-key", "x-litellm-api-key", "api-key", "Ocp-Apim-Subscription-Key"])
+@pytest.mark.parametrize("header", ["x-litellm-api-key", "api-key", "Ocp-Apim-Subscription-Key"])
 def test_the_master_key_in_another_header_is_refused_today(gateway: NativeGateway, header: str) -> None:
     """Pins the preview: the master key sent as `<header>` with no Authorization header on
-    `POST /v1/messages`. Only `Authorization: Bearer` is read (the One Pager lists `x-api-key` and
+    `POST /v1/messages`. Only `Authorization: Bearer` and the Anthropic `x-api-key` are read (the One Pager lists
     `x-litellm-api-key` as not started), so the answer must be 401 `missing or invalid bearer token`.
     The Python proxy accepts these headers; see the parity file for the intended behaviour."""
     response: Final = gateway.post("/v1/messages", messages_body(marker()), key=None, headers={header: GATEWAY_KEY})
     assert response.status_code == 401, response.text
     assert response.text == UNAUTHENTICATED
+
+
+def test_the_master_key_in_x_api_key_is_served(gateway: NativeGateway) -> None:
+    """The master key sent as `x-api-key` with no Authorization header on `POST /v1/messages`. The preview now
+    reads it like the Python proxy does (`BearerOrXApiKey`, litellm/rust/crates/gateway-auth/src/http.rs:51 and
+    gateway-auth/AGENTS.md on main), so the call must be served with 200, as observed in CI run 44176682961."""
+    response: Final = gateway.post(
+        "/v1/messages", messages_body(marker()), key=None, headers={"x-api-key": GATEWAY_KEY}
+    )
+    assert response.status_code == 200, response.text
 
 
 def test_a_virtual_key_shaped_token_is_refused_like_any_wrong_token(

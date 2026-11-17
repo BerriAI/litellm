@@ -294,9 +294,10 @@ def test_a_repeated_content_length_list_is_refused_by_rust_with_an_empty_400(rig
 
 def test_a_transfer_coding_other_than_chunked_is_refused_by_rust_with_an_empty_400(rig: Rig) -> None:
     """PINNED DIFFERENCE (`rewrite.rs` `only_chunked`, `Rejection::UnsupportedTransferCoding`). A raw chat request
-    with `Transfer-Encoding: gzip, chunked`. Rust answers 400 with an empty body and never reaches Python. Python
-    alone also refuses it, but with its own answer: uvicorn's `Invalid HTTP request received.` text, or, with
-    httptools, a 400 JSON envelope after the still-gzip body fails to parse. Both are 400; only the bodies differ."""
+    with `Transfer-Encoding: gzip, chunked` whose chunked payload is plain JSON. Rust answers 400 with an empty body
+    and never reaches Python. Python alone serves it: CI runs uvicorn with httptools, which only de-chunks and
+    ignores the `gzip` coding, so the plain JSON parses and the call answers 200 (pinned from CI run 44176682961).
+    A Rust first deployment therefore refuses a request Python alone used to serve."""
 
     def send(proxy: Booted) -> RawAnswer:
         body = chat_bytes(OPENAI, marker())  # rebind-ok: one per proxy
@@ -319,7 +320,7 @@ def test_a_transfer_coding_other_than_chunked_is_refused_by_rust_with_an_empty_4
 
     answers: Final = rig.both(send)
     assert (answers.rust.status, answers.rust.body) == (400, b"")
-    assert answers.python.status in (400, 501) and answers.python.body != b""
+    assert answers.python.status == 200, answers.python.body[:300]
 
 
 def test_http_1_1_without_a_host_header_is_refused_by_rust_with_an_empty_400(rig: Rig) -> None:

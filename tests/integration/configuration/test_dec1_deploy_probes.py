@@ -77,13 +77,13 @@ class _Rig:
 
 
 @pytest.fixture(scope="module")
-def rig(gateway: Gateway, tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Rig]:
+def rig(session_gateway: Gateway, tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Rig]:
     directory: Final = tmp_path_factory.mktemp("dec1-deploy-probes")
     with provider() as upstream:
         config: Final = write_config(
             directory, deploy_config(upstream.api_base, extra_models=(deployment(DEAD, DEAD_BASE),))
         )
-        with owned_proxy_process(gateway, directory / "proxy", {}, config=config) as owned:
+        with owned_proxy_process(session_gateway, directory / "proxy", {}, config=config) as owned:
             yield _Rig(owned, upstream)
 
 

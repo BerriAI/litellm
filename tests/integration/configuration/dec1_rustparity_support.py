@@ -149,6 +149,10 @@ SPEND_COLUMNS: Final = (
 )
 """The `LiteLLM_SpendLogs` columns compared between the two modes (schema.prisma:816)."""
 
+_SPEND_SELECT: Final = ", ".join(f'"{column}"' for column in SPEND_COLUMNS)
+"""Only the compared columns: `SELECT *` returns the timestamp columns as `datetime`, which `read_rows` refuses as
+not JSON (`_support/database.py:21`)."""
+
 _FAIL: Final = re.compile(r"fail=(\d{3})")
 _ABORT: Final = "abort-mid-stream"
 _HOLD: Final = "hold-at-provider"
@@ -163,12 +167,19 @@ def _sse(event: str | None, payload: Mapping[str, JsonValue] | str) -> bytes:
     return (f"event: {event}\n" if event else "").encode() + f"data: {data}\n\n".encode()
 
 
+def _reply_id() -> str:
+    """A fresh suffix for every provider reply id. litellm keys `LiteLLM_SpendLogs.request_id` (the primary key) on
+    the provider's response id (`get_spend_logs_id`, spend_tracking_utils.py:408-432), so a constant id would make
+    every call after the first collide and lose its spend row."""
+    return uuid.uuid4().hex[:16]
+
+
 def _usage_openai() -> dict[str, JsonValue]:
     return {"prompt_tokens": PROMPT_TOKENS, "completion_tokens": COMPLETION_TOKENS, "total_tokens": 8}
 
 
 def openai_chat(stream: bool) -> Reply:
-    base: Final = {"id": "chatcmpl-rustparity", "created": 1, "model": "gpt-4o-mini"}
+    base: Final = {"id": f"chatcmpl-rustparity-{_reply_id()}", "created": 1, "model": "gpt-4o-mini"}
     if not stream:
         return Reply(
             body=json.dumps(
@@ -199,7 +210,7 @@ def openai_chat(stream: bool) -> Reply:
 
 def anthropic_message(stream: bool) -> Reply:
     message: Final[dict[str, JsonValue]] = {
-        "id": "msg_rustparity",
+        "id": f"msg_rustparity_{_reply_id()}",
         "type": "message",
         "role": "assistant",
         "model": "claude-rustparity",
@@ -239,7 +250,7 @@ def anthropic_message(stream: bool) -> Reply:
 
 def responses_object(stream: bool) -> Reply:
     done: Final[dict[str, JsonValue]] = {
-        "id": "resp_rustparity",
+        "id": f"resp_rustparity_{_reply_id()}",
         "object": "response",
         "created_at": 1,
         "status": "completed",
@@ -530,7 +541,10 @@ def parity_config(
         "model_list": model_list(url),
         "general_settings": {"master_key": "os.environ/LITELLM_MASTER_KEY", **(general_settings or {})},
         "litellm_settings": dict(litellm_settings or {}),
-        "router_settings": {"num_retries": 0},
+        # Cooldowns off: one rig serves a whole module, and a scripted provider 429 or 5xx would otherwise park the
+        # single deployment of a model group for 5 seconds and turn the next tests' calls into the router's own
+        # `all_deployments_in_cooldown` 429 (litellm/router_utils/cooldown_handlers.py:414).
+        "router_settings": {"num_retries": 0, "disable_cooldowns": True},
     }
 
 
@@ -870,7 +884,8 @@ def spend_row(proxy: Booted, call_id: str, seconds: float = 90) -> dict[str, Jso
     """The one spend row the proxy writes for `call_id`, polled until it lands, reduced to `SPEND_COLUMNS`."""
     rows: Final = eventually(
         lambda: proxy.gateway.rows(
-            'SELECT * FROM "LiteLLM_SpendLogs" WHERE litellm_call_id = %s OR request_id = %s', (call_id, call_id)
+            f'SELECT {_SPEND_SELECT} FROM "LiteLLM_SpendLogs" WHERE litellm_call_id = %s OR request_id = %s',
+            (call_id, call_id),
         ),
         lambda found: len(found) >= 1,
         seconds=seconds,
@@ -882,7 +897,8 @@ def spend_row(proxy: Booted, call_id: str, seconds: float = 90) -> dict[str, Jso
 def spend_rows_for(proxy: Booted, case: str) -> list[dict[str, JsonValue]]:
     """Spend rows whose stored prompt mentions `case`; used for refused calls that return no call id."""
     return proxy.gateway.rows(
-        'SELECT * FROM "LiteLLM_SpendLogs" WHERE messages::text LIKE %s OR proxy_server_request::text LIKE %s',
+        'SELECT request_id, litellm_call_id FROM "LiteLLM_SpendLogs" '
+        "WHERE messages::text LIKE %s OR proxy_server_request::text LIKE %s",
         (f"%{case}%", f"%{case}%"),
     )
 
@@ -992,6 +1008,10 @@ def read_answer(stream: BinaryIO) -> RawAnswer:
         name, _, value = line.partition(":")
         headers.append((name.strip().lower(), value.strip()))
     lookup: Final = dict(headers)
+    if 100 <= status < 200 or status in (204, 304):
+        # An interim or bodiless answer (RFC 9112 section 6.3): reading to EOF would block until the server closes,
+        # so `100 Continue` from an `Expect` exchange returns at once.
+        return RawAnswer(status, tuple(headers), b"")
     if lookup.get("transfer-encoding", "").lower() == "chunked":
         pieces: list[bytes] = []
         while (size := int(stream.readline().split(b";", 1)[0].strip() or b"0", 16)) > 0:

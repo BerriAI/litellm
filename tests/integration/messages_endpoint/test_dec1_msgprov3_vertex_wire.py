@@ -262,8 +262,10 @@ def test_a_plain_call_sends_no_anthropic_beta_header(gateway: Gateway) -> None:
 def test_a_vertex_claude_call_without_deployment_prices_is_priced_from_the_vertex_row(gateway: Gateway) -> None:
     """With no prices on the deployment, 1000 input, 100 output, 2000 cache read and 400 cache creation tokens are
     priced on `vertex_ai/claude-sonnet-4-5@20250929` (3e-06, 1.5e-05, 3e-07, 3.75e-06 in
-    `litellm/model_prices_and_context_window_backup.json`): `0.003 + 0.0015 + 0.0006 + 0.0015 = 0.0066`, on the row
-    and in `x-litellm-response-cost`."""
+    `litellm/model_prices_and_context_window_backup.json`): `0.003 + 0.0015 + 0.0006 + 0.0015 = 0.0066`, times the
+    row's regional endpoint uplift, since the deployment names a regional `vertex_location`
+    (`get_vertex_regional_endpoint_uplift`, litellm/litellm_core_utils/llm_cost_calc/utils.py:1478-1500 and :1772 on
+    main): 1.1, so 0.00726 on the row and in `x-litellm-response-cost` (pinned from CI run 44176682961)."""
     usage: Final[dict[str, JsonValue]] = {
         "input_tokens": 1000,
         "output_tokens": 100,
@@ -275,6 +277,6 @@ def test_a_vertex_claude_call_without_deployment_prices_is_priced_from_the_verte
         response: Final = rig.post(rig.body())
         assert response.status_code == 200, response.text
         assert object_value(JSON_OBJECT.validate_json(response.content)["usage"])["cache_read_input_tokens"] == 2000
-        expected: Final = 1000 * 3e-06 + 100 * 1.5e-05 + 2000 * 3e-07 + 400 * 3.75e-06
+        expected: Final = (1000 * 3e-06 + 100 * 1.5e-05 + 2000 * 3e-07 + 400 * 3.75e-06) * 1.1
         assert float(response.headers["x-litellm-response-cost"]) == pytest.approx(expected)
         assert spend_of(only_spend_row(rig)) == pytest.approx(expected)

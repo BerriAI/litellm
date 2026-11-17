@@ -79,6 +79,18 @@ def gateway(provider: ScriptedProvider, tmp_path_factory: pytest.TempPathFactory
         yield booted
 
 
+@pytest.fixture(scope="module")
+def dropping(tmp_path_factory: pytest.TempPathFactory) -> Iterator[tuple[NativeGateway, ScriptedProvider]]:
+    """A gateway in front of a provider that closes every connection after its answer, so a reply cut short with
+    `abort_after` really drops the connection instead of leaving a keep-alive socket open mid-body."""
+    with scripted_provider(keep_alive=False) as scripted:
+        config: Final = master_key_config(
+            [anthropic_deployment("claude", scripted.url), openai_deployment("responses", scripted.url)]
+        )
+        with native_gateway(config, tmp_path_factory.mktemp("gwnative-stream-drop")) as booted:
+            yield booted, scripted
+
+
 def _stream_text(gateway: NativeGateway, path: str, body: dict[str, object]) -> httpx.Response:
     with gateway.client() as client:
         response: Final = client.post(path, json=body, headers=_HEADERS)
@@ -133,22 +145,24 @@ def test_the_first_messages_event_arrives_before_the_provider_finishes(
             gateway.client() as client,
             client.stream("POST", "/v1/messages", json=messages_body(case, stream=True), headers=_HEADERS) as response,
         ):
-            first: Final = next(response.iter_text())
+            pieces: Final = response.iter_text()
+            first: Final = next(pieces)
             assert "message_start" in first, first
             gate.set()
-            rest: Final = "".join(response.iter_text())
+            rest: Final = "".join(pieces)
     finally:
         gate.set()
     assert "message_stop" in rest
 
 
 def test_a_provider_that_drops_mid_stream_ends_with_an_anthropic_error_event(
-    gateway: NativeGateway, provider: ScriptedProvider
+    dropping: tuple[NativeGateway, ScriptedProvider],
 ) -> None:
     """The provider sends two events and then drops the connection. The caller already has 200 headers, so
     the stream must end with an `event: error` frame whose data is `{"type": "error", "error": {"type":
     ..., "message": ...}}` (`Error::sse_frame`), and must not contain `message_stop`. UNVERIFIED: the exact
     `error.type`, which depends on how the dropped read is classified (likely `api_error`)."""
+    gateway, provider = dropping
     case: Final = marker()
     provider.script(case, lambda _: anthropic_stream("dec1 dropped", abort_after=2, pause=0.1))
     response: Final = _stream_text(gateway, "/v1/messages", messages_body(case, stream=True))
@@ -233,11 +247,12 @@ def test_a_responses_stream_relays_the_responses_events(gateway: NativeGateway, 
 
 
 def test_a_responses_stream_that_breaks_ends_with_a_responses_error_event(
-    gateway: NativeGateway, provider: ScriptedProvider
+    dropping: tuple[NativeGateway, ScriptedProvider],
 ) -> None:
     """The Responses provider sends one event and drops. The last frame must be `event: error` whose data has
     `type: error`, a string `code` holding an HTTP status and a `message` (`responses_sse_frame`). UNVERIFIED:
     the code value; a dropped read is most likely classified 500."""
+    gateway, provider = dropping
     case: Final = marker()
     provider.script(case, lambda _: responses_stream("dec1 broken", abort_after=1))
     response: Final = _stream_text(gateway, "/v1/responses", responses_body(case, stream=True))
@@ -289,10 +304,11 @@ def test_sigterm_lets_an_open_messages_stream_finish_then_exits_zero(tmp_path: P
                         "POST", "/v1/messages", json=messages_body(case, stream=True), headers=_HEADERS
                     ) as response,
                 ):
-                    first: Final = next(response.iter_text())
+                    pieces: Final = response.iter_text()
+                    first: Final = next(pieces)
                     begin_shutdown(gateway)
                     gate.set()
-                    rest: Final = "".join(response.iter_text())
+                    rest: Final = "".join(pieces)
             finally:
                 gate.set()
             status: Final = terminate(gateway)
@@ -317,7 +333,8 @@ def test_no_new_connection_is_accepted_while_a_stream_drains(tmp_path: Path) -> 
                         "POST", "/v1/messages", json=messages_body(case, stream=True), headers=_HEADERS
                     ) as response,
                 ):
-                    next(response.iter_text())
+                    pieces: Final = response.iter_text()
+                    next(pieces)
                     begin_shutdown(gateway)
 
                     def refused() -> bool:
@@ -329,7 +346,7 @@ def test_no_new_connection_is_accepted_while_a_stream_drains(tmp_path: Path) -> 
 
                     assert eventually(refused, bool, seconds=10)
                     gate.set()
-                    "".join(response.iter_text())
+                    "".join(pieces)
             finally:
                 gate.set()
             assert terminate(gateway) == 0

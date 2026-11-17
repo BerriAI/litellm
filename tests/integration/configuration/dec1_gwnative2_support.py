@@ -14,7 +14,7 @@ import base64
 import json
 import threading
 from collections.abc import Callable, Iterator, Mapping
-from contextlib import contextmanager
+from contextlib import AbstractContextManager, closing, contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
@@ -137,13 +137,16 @@ def open_stream(
     path: str,
     body: Mapping[str, JsonValue],
     headers: Mapping[str, str] = MappingProxyType({}),
-) -> tuple[httpx.Client, httpx.Response]:
-    """Start a streaming call and return the open client and response; the caller reads and closes both."""
+) -> tuple[AbstractContextManager[httpx.Client], httpx.Response]:
+    """Start a streaming call and return a closer for its client and the open response; the caller enters both.
+
+    The client is already open once `send` ran, and httpx refuses `with client` on an open client
+    (`Cannot open a client instance more than once`), so the caller gets `closing(client)` instead."""
     client: Final = gateway.client(timeout=60)
     request: Final = client.build_request(
         "POST", path, json=dict(body), headers={"Authorization": f"Bearer {GATEWAY_KEY}", **headers}
     )
-    return client, client.send(request, stream=True)
+    return closing(client), client.send(request, stream=True)
 
 
 def first_block(response: httpx.Response) -> str:

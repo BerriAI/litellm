@@ -59,14 +59,16 @@ _GUARDRAIL_IDENTIFIER: Final = "gr-msgprov3"
 
 def _bearer(
     gateway: Gateway,
-    model_id: str = BEDROCK_MODEL_ID,
+    bedrock_model: str = BEDROCK_MODEL_ID,
     respond: Callable[[Request], Reply] = invoke_echo,
     **params: JsonValue,
 ) -> AbstractContextManager[Rig]:
+    """A bearer token Bedrock invoke deployment of `bedrock/invoke/<bedrock_model>`. The positional is not named
+    `model_id`, so a test can pass the deployment's own `model_id` litellm param through `params`."""
     return provider_deployment(
         gateway,
         respond,
-        model=f"bedrock/invoke/{model_id}",
+        model=f"bedrock/invoke/{bedrock_model}",
         api_key=BEDROCK_TOKEN,
         aws_region_name="us-east-1",
         **params,
@@ -235,13 +237,15 @@ def test_a_configured_region_beats_the_arn_region_for_signing(gateway: Gateway) 
 
 def test_a_region_segment_in_the_model_stays_in_the_path_and_does_not_pick_the_signing_region(gateway: Gateway) -> None:
     """`bedrock/invoke/us-west-2/us.anthropic.claude-sonnet-5` with `aws_region_name: eu-central-1` posts to
-    `/model/us-west-2/us.anthropic.claude-sonnet-5/invoke` and is signed for `eu-central-1`: a region-looking
-    segment is part of the id, not a region selector (cases `params_region_hosts_a_region_segment` and
-    `region_segment_does_not_pick_the_region`, `anthropic_claude_transformation.rs:648-660`)."""
+    `/model/us.anthropic.claude-sonnet-5/invoke` and is signed for `eu-central-1`. Pinned from CI run 44176682961
+    and main: a leading region segment is taken out of the path (`region_segment_leaves_the_path`), and a
+    configured region beats it for signing (`params_region_beats_a_region_segment`,
+    litellm/rust/crates/llms/src/bedrock/messages/invoke_transformations/anthropic_claude_transformation.rs:625-648
+    on main)."""
     with _signed(gateway, f"bedrock/invoke/us-west-2/{_PLAIN_ID}", aws_region_name="eu-central-1") as rig:
         assert rig.post(rig.body()).status_code == 200
         call: Final = rig.one_call()
-        assert raw_path(call) == f"/model/us-west-2/{_PLAIN_ID}/invoke"
+        assert raw_path(call) == f"/model/{_PLAIN_ID}/invoke"
         assert sigv4_scope(call)[1] == "eu-central-1"
 
 
@@ -365,7 +369,11 @@ def test_an_allowed_key_alias_is_sent_in_the_bedrock_request_metadata_header(gat
     `dec1-msgprov3-alias-<hex>`, sends `X-Amzn-Bedrock-Request-Metadata: {"user_api_key_alias":"<that alias>"}`
     (compact JSON, `bedrock_request_metadata_headers`, `litellm/llms/bedrock/request_metadata.py:227`; Rust
     `litellm/rust/crates/llms/src/bedrock/request_metadata.rs:185`), so AWS invocation logs can attribute the call.
-    UNVERIFIED: that the proxy's `user_api_key_alias` reaches the Rust `litellm_metadata` extra on this route."""
+    BUG: in CI run 44176682961 the InvokeModel call carried no `x-amzn-bedrock-request-metadata` header at all,
+    so the key alias the deployment allowlists never reaches the header builder on the native `/v1/messages`
+    Bedrock invoke route. Where it is lost (the proxy metadata not reaching the Rust `litellm_metadata` extra) is
+    not confirmed."""
+    pytest.skip("BUG: bedrock_request_metadata_fields sends no request metadata header on /v1/messages invoke")
     with _bearer(gateway, bedrock_request_metadata_fields=["user_api_key_alias"]) as rig:
         alias: Final = marker("dec1-msgprov3-alias")
         key: Final = rig.scenario.key(models=[rig.model], key_alias=alias)

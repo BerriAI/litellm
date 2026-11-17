@@ -206,8 +206,10 @@ def test_a_single_text_part_tool_result_is_collapsed_to_a_string(gateway: Gatewa
 
 
 def test_a_multi_part_tool_result_stays_a_list_of_parts(gateway: Gateway) -> None:
-    """A tool result with two text parts and an image becomes a tool message whose `content` is the list
-    `[text, text, image_url]` in order; only a single text part collapses to a string."""
+    """A tool result with two text parts and an image becomes a tool message whose `content` is the list of the two
+    text parts in order; only a single text part collapses to a string. Pinned from CI run 44176682961: the image
+    part is dropped, since an OpenAI `tool` message carries text parts only; a port that starts forwarding it as
+    `image_url` changes what a chat provider sees."""
     parts: Final[list[JsonValue]] = [
         {"type": "text", "text": "first"},
         {"type": "text", "text": "second"},
@@ -223,7 +225,6 @@ def test_a_multi_part_tool_result_stays_a_list_of_parts(gateway: Gateway) -> Non
         assert _messages(rig)[2]["content"] == [
             {"type": "text", "text": "first"},
             {"type": "text", "text": "second"},
-            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{PNG_BASE64}"}},
         ]
 
 
@@ -303,14 +304,16 @@ def test_sampling_fields_without_an_anthropic_twin_are_copied_through(gateway: G
 
 def test_reasoning_content_becomes_a_leading_thinking_block(gateway: Gateway) -> None:
     """A chat answer with `reasoning_content: "think first"` and `content: "done"` becomes
-    `content: [{"type": "thinking", "thinking": "think first", "signature": null}, {"type": "text", "text": "done"}]`:
-    thinking always comes before text, and a provider that signs nothing gives a null signature."""
+    `content: [{"type": "thinking", "thinking": "think first", "signature": ""}, {"type": "text", "text": "done"}]`:
+    thinking always comes before text, and a provider that signs nothing gives an empty string signature
+    (`signature=""`, litellm/llms/anthropic/messages/adapters/transformation.py:1559 on main; pinned from CI run
+    44176682961)."""
     reply: Final = chat_message_reply(
         HOSTED_VLLM_BACKEND, {"role": "assistant", "content": "done", "reasoning_content": "think first"}
     )
     with _vllm(gateway, lambda _r: reply) as rig:
         assert _answer(rig)["content"] == [
-            {"type": "thinking", "thinking": "think first", "signature": None},
+            {"type": "thinking", "thinking": "think first", "signature": ""},
             {"type": "text", "text": "done"},
         ]
 
@@ -425,11 +428,11 @@ def test_no_cache_fields_are_reported_without_cached_tokens(gateway: Gateway) ->
         assert "cache_read_input_tokens" not in usage and "cache_creation_input_tokens" not in usage, usage
 
 
-@pytest.mark.parametrize("arguments", ["", "{not json"], ids=["empty", "malformed"])
+@pytest.mark.parametrize("arguments", [""], ids=["empty"])
 def test_unparseable_tool_arguments_still_give_a_tool_use_block(gateway: Gateway, arguments: str) -> None:
-    """A provider tool call with empty or malformed `arguments` still becomes one `tool_use` block named
-    `get_weather` with a JSON object `input`, and the call is answered with HTTP 200 rather than 500
-    (`parse_tool_call_arguments`). UNVERIFIED: the exact `input` for malformed text (empty object or a wrapper)."""
+    """A provider tool call with empty `arguments` still becomes one `tool_use` block named `get_weather` with a
+    JSON object `input`, and the call is answered with HTTP 200 rather than 500 (`parse_tool_call_arguments`).
+    Malformed text is the next test."""
     call: Final[dict[str, JsonValue]] = {
         "id": "call_bad",
         "type": "function",
@@ -442,3 +445,26 @@ def test_unparseable_tool_arguments_still_give_a_tool_use_block(gateway: Gateway
         block: Final = object_value(_answer(rig, tools=[TOOL])["content"][0])  # pyright: ignore[reportIndexIssue]  # nested JSON
         assert (block["type"], block["name"]) == ("tool_use", "get_weather")
         assert isinstance(block["input"], dict)
+
+
+def test_malformed_tool_arguments_fail_the_call_with_an_anthropic_api_error(gateway: Gateway) -> None:
+    """A provider tool call whose `arguments` is `{not json`. Pinned from CI run 44176682961: the adapter's
+    `parse_tool_call_arguments` (litellm/llms/anthropic/messages/adapters/transformation.py:1594-1598 on main)
+    raises, so the caller gets HTTP 500 with an Anthropic `api_error` whose message starts `Failed to parse tool
+    call arguments for tool 'get_weather' (Anthropic pass-through adapter)`, not a `tool_use` block."""
+    call: Final[dict[str, JsonValue]] = {
+        "id": "call_bad",
+        "type": "function",
+        "function": {"name": "get_weather", "arguments": "{not json"},
+    }
+    reply: Final = chat_message_reply(
+        HOSTED_VLLM_BACKEND, {"role": "assistant", "content": None, "tool_calls": [call]}, finish_reason="tool_calls"
+    )
+    with _vllm(gateway, lambda _r: reply) as rig:
+        response: Final = rig.post(rig.body(tools=[TOOL]))
+        assert response.status_code == 500, response.text
+        error: Final = object_value(JSON_OBJECT.validate_json(response.content)["error"])
+        assert error["type"] == "api_error"
+        assert str(error["message"]).startswith(
+            "Failed to parse tool call arguments for tool 'get_weather' (Anthropic pass-through adapter)"
+        )

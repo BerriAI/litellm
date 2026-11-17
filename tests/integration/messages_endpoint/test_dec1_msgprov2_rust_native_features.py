@@ -54,7 +54,10 @@ def _echo(provider: str) -> Callable[[Request], Reply]:
 
 
 def _gated(provider: str, gate: threading.Event) -> Callable[[Request], Reply]:
-    """The provider's echo, held before its first byte until `gate` is set."""
+    """The provider's echo, held before its first byte until `gate` is set.
+
+    `gate_before_first` only holds a chunked reply (`_support/wire.py`), so a plain JSON echo is sent as one chunk;
+    without that the provider answered at once and the timeout never fired (CI run 44176682961)."""
     echo: Final = _echo(provider)
 
     def respond(request: Request) -> Reply:
@@ -63,7 +66,7 @@ def _gated(provider: str, gate: threading.Event) -> Callable[[Request], Reply]:
             status=reply.status,
             body=reply.body,
             content_type=reply.content_type,
-            chunks=reply.chunks,
+            chunks=reply.chunks if reply.chunks is not None else (reply.body,),
             headers=reply.headers,
             gate_before_first=gate,
         )

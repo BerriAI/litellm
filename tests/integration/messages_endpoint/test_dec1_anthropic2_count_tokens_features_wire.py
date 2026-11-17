@@ -151,11 +151,14 @@ def test_a_count_with_display_updates_thinking_sends_the_thinking_and_its_beta(g
     `thinking` is a count option (`COUNT_TOKEN_OPTION_NAMES`), so it must be in the count body, and the headers
     must carry `thinking-display-updates-2026-08-18` from `AnthropicModelInfo.thinking_betas`
     (`get_count_tokens_headers`, #51079). UNVERIFIED: whether `messages_count_options` rewrites `adaptive` for the
-    pre-adaptive backend `claude-sonnet-4-5-20250929` the way inference does; only presence is pinned.
+    pre-adaptive backend `claude-sonnet-4-5-20250929` the way inference does; only presence is pinned. In CI run
+    44176682961 only `token-counting-2024-11-01` was sent although `thinking_betas` adds the display beta
+    (litellm/llms/anthropic/count_tokens/transformation.py:460-471 on main); the failure now prints the `thinking`
+    the count body carried, to tell a rewrite that dropped `display` from a lost beta.
     """
     sent, sent_betas, _ = _counted(gateway, thinking={"type": "adaptive", "display": "updates"})
     assert "thinking" in sent
-    assert "thinking-display-updates-2026-08-18" in sent_betas
+    assert "thinking-display-updates-2026-08-18" in sent_betas, (sent.get("thinking"), sorted(sent_betas))
 
 
 def test_a_count_forwards_tool_choice(gateway: Gateway) -> None:

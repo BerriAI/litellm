@@ -328,7 +328,10 @@ def test_the_fireworks_spend_row_prices_cached_tokens(gateway: Gateway) -> None:
         "total_tokens": 25,
         "prompt_tokens_details": {"cached_tokens": 8},
     }
-    reply: Final = chat_reply("chatcmpl-msgprov", model=FIREWORKS_BACKEND, usage=usage)
+    # A fresh provider id: `LiteLLM_SpendLogs.request_id` (the primary key) is the provider's response id
+    # (`get_spend_logs_id`, litellm/proxy/spend_tracking/spend_tracking_utils.py:408-432), and the shared proxy's
+    # database already holds `chatcmpl-msgprov` rows from other tests, so a constant id loses this row.
+    reply: Final = chat_reply(f"chatcmpl-msgprov-{uuid.uuid4().hex}", model=FIREWORKS_BACKEND, usage=usage)
     with _fireworks(gateway, lambda _r: reply, **PRICES) as rig:
         assert rig.post(rig.body()).status_code == 200
         row: Final = only_spend_row(rig)
@@ -348,7 +351,10 @@ def test_fireworks_count_tokens_is_answered_without_a_provider_call(gateway: Gat
     estimate: HTTP 200 with a positive integer `input_tokens`, and Fireworks is never called.
     UNVERIFIED: that no provider count is attempted for `fireworks_ai`."""
     with _fireworks(gateway) as rig:
-        body: Final[dict[str, JsonValue]] = {"model": rig.model, "messages": [{"role": "user", "content": unique_text()}]}
+        body: Final[dict[str, JsonValue]] = {
+            "model": rig.model,
+            "messages": [{"role": "user", "content": unique_text()}],
+        }
         response: Final = rig.post(body, path="/v1/messages/count_tokens")
         assert response.status_code == 200, response.text
         count: Final = JSON_OBJECT.validate_json(response.content)["input_tokens"]
@@ -434,4 +440,3 @@ def test_the_baseten_spend_row_names_baseten(gateway: Gateway) -> None:
         row: Final = only_spend_row(rig)
         assert (row["call_type"], row["custom_llm_provider"]) == ("anthropic_messages", "baseten")
         assert spend_of(row) == pytest.approx(11 * INPUT_COST + 7 * OUTPUT_COST)
-

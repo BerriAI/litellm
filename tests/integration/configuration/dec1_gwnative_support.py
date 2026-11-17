@@ -314,7 +314,12 @@ def _default_reply(request: Request) -> Reply:
 
 
 @contextmanager
-def scripted_provider() -> Iterator[ScriptedProvider]:
+def scripted_provider(*, keep_alive: bool = True) -> Iterator[ScriptedProvider]:
+    """A wire peer answering each request by the first script whose case is in the body.
+
+    Use `keep_alive=False` for replies with `abort_after`: on a keep-alive connection the wire server leaves the
+    socket open after an aborted chunked body (`_support/wire.py` sets `close_connection = not keep_alive`), so
+    the gateway never sees the drop and the caller times out."""
     holder: list[ScriptedProvider] = []
 
     def respond(request: Request) -> Reply:
@@ -325,7 +330,7 @@ def scripted_provider() -> Iterator[ScriptedProvider]:
             ]
         return scripted[0](request) if scripted else _default_reply(request)
 
-    with wire_server(respond, keep_alive=True) as wire:
+    with wire_server(respond, keep_alive=keep_alive) as wire:
         holder.append(ScriptedProvider(wire))
         yield holder[0]
 

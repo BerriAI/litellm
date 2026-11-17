@@ -230,7 +230,8 @@ def test_request_timeout_in_litellm_settings_bounds_a_call_to_a_silent_provider(
 
     def silent(request: Request) -> Reply:
         if request.target.endswith("/chat/completions"):
-            return Reply(body=chat_reply().body, gate_before_first=never)
+            # `gate_before_first` only holds a chunked reply (`_support/wire.py`), so the body goes out as one chunk.
+            return Reply(chunks=(chat_reply().body,), gate_before_first=never)
         return chat_reply()
 
     with scripted_upstream(silent) as upstream:

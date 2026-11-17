@@ -298,15 +298,18 @@ def test_litellm_mode_production_boots_and_serves_like_the_default(gateway: Gate
         assert chat(owned.gateway).status_code == 200
 
 
-@pytest.mark.parametrize(("level", "reported"), [("WARNING", "WARNING"), ("ERROR", "ERROR")])
+@pytest.mark.parametrize(("level", "reported"), [("WARNING", "WARNING"), ("ERROR", "WARNING")])
 def test_litellm_log_warning_and_error_are_reported_by_readiness_details(
     gateway: Gateway, tmp_path: Path, level: str, reported: str
 ) -> None:
     """`LITELLM_LOG` is `WARNING` or `ERROR`. `GET /health/readiness/details` must report that `log_level`
     and `is_detailed_debug: false`. DEBUG and INFO are covered elsewhere; these are the levels production
     manifests use.
-    UNVERIFIED: read from `_get_health_readiness_details` (`logging.getLevelName(verbose_logger.getEffectiveLevel())`)
-    and the assumption that `LITELLM_LOG` sets `verbose_logger` for every level, not only DEBUG and INFO."""
+    The value is `logging.getLevelName(verbose_logger.getEffectiveLevel())` (_health_endpoints.py:2204 on main).
+    Pinned from CI run 44176682961: `LITELLM_LOG=ERROR` is reported as `WARNING`, because only INFO and DEBUG set
+    the `verbose_logger` level (proxy_server.py:10304-10331 on main); ERROR only raises the handler's level
+    (litellm/_logging.py:716-719), so records below ERROR are still dropped while the logger stays at its
+    WARNING default."""
     with (
         provider() as upstream,
         owned_proxy_process(

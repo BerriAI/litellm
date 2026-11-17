@@ -103,14 +103,18 @@ def test_an_included_file_can_supply_a_section_the_root_lacks(gateway: Gateway, 
     """The root has the model list and `router_settings.num_retries` only and no `general_settings`;
     `aliases.yaml` supplies `general_settings.litellm_key_header_name: x-dec1-included-header`. `GET
     /v1/models` with the master
-    key in `x-dec1-included-header` must return 200: a section that only an included file declares is
-    applied like one in the root."""
+    key in `x-dec1-included-header` (as `Bearer <key>`, the form the custom header is parsed in; a bare key is
+    refused with `Malformed API Key passed in. Ensure Key has `Bearer ` prefix.`, see
+    `test_dec1_config_general_settings_matrix.py`) must return 200: a section that only an included file
+    declares is applied like one in the root."""
     write_config(tmp_path, {"general_settings": {"litellm_key_header_name": "x-dec1-included-header"}}, "aliases.yaml")
     root: Final = write_config(
         tmp_path, {**_models("dec1-root-model"), "include": ["aliases.yaml"], "router_settings": _RETRIES}
     )
     with booted(gateway, tmp_path, root) as owned:
-        response: Final = owned.gateway.client.get("/v1/models", headers={"x-dec1-included-header": gateway.key})
+        response: Final = owned.gateway.client.get(
+            "/v1/models", headers={"x-dec1-included-header": f"Bearer {gateway.key}"}
+        )
     assert response.status_code == 200, response.text
 
 

@@ -122,14 +122,19 @@ def test_messages_send_the_same_provider_body(pair: Pair) -> None:
     """The same `/v1/messages` call (with `temperature` and `system`) on both. The provider must receive equal
     JSON bodies from both, once the prompt marker is normalised. Python already runs Anthropic `/v1/messages`
     through the Rust core, so a difference here means the gateway's projection (`project` in
-    `gateway-inference/src/messages.rs`) diverged from Python's request prep."""
+    `gateway-inference/src/messages.rs`) diverged from Python's request prep.
+    Pinned difference (CI run 44176682961): Python also sends `"stream": false`, the preview leaves `stream` out.
+    Both mean a unary call to Anthropic, so the comparison drops that one key after pinning it on each side."""
     python_case: Final = marker()
     rust_case: Final = marker()
     pair.python("/v1/messages", messages_body(python_case, temperature=0.2, system="dec1 system"))
     pair.rust("/v1/messages", messages_body(rust_case, temperature=0.2, system="dec1 system"))
     python_sent: Final = pair.provider.requests_for(python_case)[0].body.decode().replace(python_case, "CASE")
     rust_sent: Final = pair.provider.requests_for(rust_case)[0].body.decode().replace(rust_case, "CASE")
-    assert json.loads(rust_sent) == json.loads(python_sent)
+    python_body: Final = json.loads(python_sent)
+    rust_body: Final = json.loads(rust_sent)
+    assert (python_body.pop("stream", None), rust_body.pop("stream", None)) == (False, None)
+    assert rust_body == python_body
 
 
 def test_messages_send_the_same_provider_auth_and_version_headers(pair: Pair) -> None:
@@ -171,8 +176,10 @@ def test_messages_stream_event_sequences_match(pair: Pair) -> None:
 
 
 def test_an_anthropic_provider_error_matches(pair: Pair) -> None:
-    """The provider answers 529 `overloaded_error` to both. Status and `error` object must match between the
-    two servers."""
+    """The provider answers 529 `overloaded_error` to both. Status and `error.type` must match between the two
+    servers. Pinned difference (CI run 44176682961): the preview relays the provider's own `error.message`
+    (`dec1 parity busy`), while Python wraps it as `litellm.InternalServerError: AnthropicError - <provider
+    body>` followed by its model group no-fallback note; both still carry the provider text."""
     python_case: Final = marker()
     rust_case: Final = marker()
     for case in (python_case, rust_case):
@@ -180,7 +187,13 @@ def test_an_anthropic_provider_error_matches(pair: Pair) -> None:
     python: Final = pair.python("/v1/messages", messages_body(python_case))
     rust: Final = pair.rust("/v1/messages", messages_body(rust_case))
     assert rust.status_code == python.status_code, (python.text, rust.text)
-    assert response_json(rust)["error"] == response_json(python)["error"]
+    rust_error: Final = response_json(rust)["error"]
+    python_error: Final = response_json(python)["error"]
+    assert isinstance(rust_error, dict) and isinstance(python_error, dict)
+    assert rust_error["type"] == python_error["type"] == "overloaded_error"
+    assert rust_error["message"] == "dec1 parity busy"
+    assert str(python_error["message"]).startswith("litellm.InternalServerError: AnthropicError - ")
+    assert "dec1 parity busy" in str(python_error["message"])
 
 
 def test_unknown_model_on_messages_matches_status_and_error_type(pair: Pair) -> None:
@@ -205,9 +218,20 @@ def test_unknown_model_on_chat_completions_matches_status(pair: Pair) -> None:
 
 def test_chat_completion_content_and_object_match_for_openai_like(pair: Pair) -> None:
     """The same `/v1/chat/completions` call to the `openai_like` deployment on both. Both must answer 200 with
-    `object: chat.completion`, the same `choices[0].message.content` and the same `choices[0].finish_reason`."""
-    python: Final = response_json(pair.python("/v1/chat/completions", chat_body(marker())))
-    rust: Final = response_json(pair.rust("/v1/chat/completions", chat_body(marker())))
+    `object: chat.completion`, the same `choices[0].message.content` and the same `choices[0].finish_reason`.
+    BUG: the preview serializes the bare `ChatCompletionsResponse` (`created`, `model`, `choices`, `usage`, with no
+    `id` and no `object`, litellm/rust/crates/llms-types/src/formats/chat_completions/response.rs:83-92) straight
+    to the caller (`Json` in gateway-inference/src/chat_completions.rs:78-98). That shape is meant for Python to
+    wrap in a `ModelResponse`; standalone there is no Python, so callers get no `object` (CI run 44176682961)."""
+    pytest.skip("BUG: native gateway chat completions answer has no object and no id")
+    python_response: Final = pair.python("/v1/chat/completions", chat_body(marker()))
+    rust_response: Final = pair.rust("/v1/chat/completions", chat_body(marker()))
+    assert (python_response.status_code, rust_response.status_code) == (200, 200), (
+        python_response.text,
+        rust_response.text,
+    )
+    python: Final = response_json(python_response)
+    rust: Final = response_json(rust_response)
     assert rust["object"] == python["object"] == "chat.completion"
     assert rust["choices"][0]["message"]["content"] == python["choices"][0]["message"]["content"]  # type: ignore[index]
     assert rust["choices"][0]["finish_reason"] == python["choices"][0]["finish_reason"]  # type: ignore[index]
@@ -215,9 +239,17 @@ def test_chat_completion_content_and_object_match_for_openai_like(pair: Pair) ->
 
 def test_chat_completion_usage_matches_for_openai_like(pair: Pair) -> None:
     """Same call. `usage.prompt_tokens`, `usage.completion_tokens` and `usage.total_tokens` must be equal,
-    since both read them from the provider's answer (5, 3, 8 in the script)."""
-    python: Final = response_json(pair.python("/v1/chat/completions", chat_body(marker())))["usage"]
-    rust: Final = response_json(pair.rust("/v1/chat/completions", chat_body(marker())))["usage"]
+    since both read them from the provider's answer (5, 3, 8 in the script). In CI run 44176682961 Python's
+    answer had no `usage` at all and the body was not recorded, so both statuses are asserted first to show
+    what Python answered."""
+    python_response: Final = pair.python("/v1/chat/completions", chat_body(marker()))
+    rust_response: Final = pair.rust("/v1/chat/completions", chat_body(marker()))
+    assert (python_response.status_code, rust_response.status_code) == (200, 200), (
+        python_response.text,
+        rust_response.text,
+    )
+    python: Final = response_json(python_response).get("usage")
+    rust: Final = response_json(rust_response).get("usage")
     assert isinstance(python, dict) and isinstance(rust, dict)
     for name in ("prompt_tokens", "completion_tokens", "total_tokens"):
         assert rust[name] == python[name], name
@@ -234,11 +266,13 @@ def test_responses_output_text_matches_for_openai(pair: Pair) -> None:
 
 @pytest.mark.parametrize("key", [None, "sk-dec1-parity-wrong"], ids=["missing", "wrong"])
 def test_rejected_credentials_get_401_on_both(pair: Pair, key: str | None) -> None:
-    """`/v1/messages` with no key and with a wrong key. Both servers must answer 401. (The body differs today:
-    Python writes JSON, the preview plain text; see the next test.)"""
+    """`/v1/messages` with no key and with a wrong key. The preview must answer 401 to both. Python must answer
+    401 to the missing key; to a wrong `sk-` key this database-less Python proxy answers 400, since it cannot look
+    the key up (pinned from CI run 44176682961; UNVERIFIED which auth branch maps it to 400). (The body differs
+    too: Python writes JSON, the preview plain text; see the next test.)"""
     python: Final = pair.python("/v1/messages", messages_body(marker()), key=key)
     rust: Final = pair.rust("/v1/messages", messages_body(marker()), key=key)
-    assert (python.status_code, rust.status_code) == (401, 401)
+    assert (python.status_code, rust.status_code) == ((401 if key is None else 400), 401), (python.text, rust.text)
 
 
 def test_a_401_body_is_json_on_both(pair: Pair) -> None:

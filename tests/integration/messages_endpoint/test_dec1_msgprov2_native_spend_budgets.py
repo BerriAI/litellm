@@ -186,17 +186,18 @@ def test_a_zero_budget_key_is_refused_before_the_provider(gateway: Gateway, prov
 
 
 @pytest.mark.parametrize("provider", NATIVE_PROVIDERS)
-def test_a_zero_budget_team_is_refused_before_the_provider(gateway: Gateway, provider: str) -> None:
-    """A key of a team with `max_budget: 0` is refused the same way, with a message naming `Team=`, and the
-    provider is not called."""
+def test_a_zero_budget_team_with_no_spend_is_still_served(gateway: Gateway, provider: str) -> None:
+    """A key of a team with `max_budget: 0` and no spend yet calls the provider. Pinned from CI run 44176682961:
+    the team check refuses only when spend is strictly over the budget (`over`, `spend > max_budget`,
+    litellm/rust/crates/callbacks-budgets/src/checks.rs:164-166 and :231-245 on main), unlike the key check, which
+    refuses at or over (`at_or_over`, checks.rs:160-162). So 0 spend against a 0 budget is served with 200 and
+    the provider is called once; a migration that switches the team check to `>=` would change this."""
     with native_deployment(gateway, provider, **PRICES) as rig:
         team: Final = rig.scenario.team(max_budget=0.0)
         key: Final = rig.scenario.key(team_id=team, models=[rig.model])
         response: Final = rig.post(rig.body(), key=key)
-        error: Final = anthropic_error(response)
-        _budget_refusal(response.status_code, error, response.text)
-        assert "Team=" in str(error["message"]), response.text
-        assert rig.calls() == ()
+        assert response.status_code == 200, response.text
+        assert len(rig.calls()) == 1
 
 
 @pytest.mark.parametrize("provider", NATIVE_PROVIDERS)

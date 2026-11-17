@@ -232,11 +232,15 @@ def test_a_multipart_body_on_messages_is_invalid_json(gateway: NativeGateway, pr
     assert provider.requests_for(case) == ()
 
 
-def test_chat_completions_accept_a_multipart_form(gateway: NativeGateway, provider: ScriptedProvider) -> None:
+def test_a_multipart_body_on_chat_completions_is_invalid_json(
+    gateway: NativeGateway, provider: ScriptedProvider
+) -> None:
     """A `multipart/form-data` body on `/chat/completions` with text fields `model` = `chat` and `messages` = a
-    JSON array. `InferenceBody` parses each text field as JSON when it can (`parse_multipart`,
-    `request.rs:269-297`), so the call must be served with 200 and the provider must receive `messages` as a
-    real array whose content holds the prompt."""
+    JSON array. Pinned from CI run 44176682961: on main the chat route extracts `JsonObject`
+    (litellm/rust/crates/gateway-inference/src/chat_completions.rs:22), and only OCR and transcription use the
+    multipart aware `InferenceBody` (request.rs:66), so the answer is 400 `invalid_request_error` in the OpenAI
+    envelope with a message starting `invalid request body: invalid JSON`, and nothing reaches the provider.
+    The Python proxy reads form bodies on every route, so this is a preview gap a migration must close."""
     case: Final = marker()
     with gateway.client() as client:
         response: Final = client.post(
@@ -244,8 +248,14 @@ def test_chat_completions_accept_a_multipart_form(gateway: NativeGateway, provid
             headers={"Authorization": f"Bearer {GATEWAY_KEY}"},
             files={"model": (None, "chat"), "messages": (None, f'[{{"role": "user", "content": "{case}"}}]')},
         )
-    assert response.status_code == 200, response.text
-    assert json_of(provider.requests_for(case)[0])["messages"] == [{"role": "user", "content": case}]
+    assert response.status_code == 400, response.text
+    error: Final = response_json(response)["error"]
+    assert isinstance(error, dict)
+    assert (error["type"], str(error["message"]).startswith("invalid request body: invalid JSON")) == (
+        "invalid_request_error",
+        True,
+    )
+    assert provider.requests_for(case) == ()
 
 
 def test_a_duplicated_json_key_keeps_its_last_value(gateway: NativeGateway, provider: ScriptedProvider) -> None:

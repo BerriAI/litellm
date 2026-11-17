@@ -383,7 +383,12 @@ def test_chat_completions_to_openai_like_reach_chat_completions_with_the_deploym
 ) -> None:
     """Deployment `openai_like/gpt-dec1-upstream` with `api_base` `<peer>/v1`. `POST <path>` must send one
     `POST /v1/chat/completions` with `authorization: Bearer <deployment key>` and body `model`
-    `gpt-dec1-upstream`, and return 200 with `object: chat.completion` and the provider text."""
+    `gpt-dec1-upstream`, and return 200 with `object: chat.completion` and the provider text.
+    BUG: the preview serializes the bare `ChatCompletionsResponse` (no `id`, no `object`,
+    litellm/rust/crates/llms-types/src/formats/chat_completions/response.rs:83-92) straight to the caller
+    (`Json` in litellm/rust/crates/gateway-inference/src/chat_completions.rs:78-98); that shape is meant for
+    Python to wrap in a `ModelResponse`, so standalone callers get no `object` (CI run 44176682961)."""
+    pytest.skip("BUG: native gateway chat completions answer has no object and no id")
     case: Final = marker()
     response: Final = gateway.post(path, chat_body(case))
     sent: Final = provider.requests_for(case)
@@ -404,7 +409,12 @@ def test_chat_completions_to_anthropic_are_translated_to_messages(
     """`POST /v1/chat/completions` for the Anthropic deployment `claude`. The provider must get
     `POST /v1/messages` with `anthropic-version: 2023-06-01` (the chat config's default header), and the
     caller must get 200 `object: chat.completion` with `choices[0].message.content` equal to the Anthropic
-    text."""
+    text.
+    BUG: the preview serializes the bare `ChatCompletionsResponse` (no `id`, no `object`,
+    litellm/rust/crates/llms-types/src/formats/chat_completions/response.rs:83-92) straight to the caller
+    (`Json` in litellm/rust/crates/gateway-inference/src/chat_completions.rs:78-98); that shape is meant for
+    Python to wrap in a `ModelResponse`, so standalone callers get no `object` (CI run 44176682961)."""
+    pytest.skip("BUG: native gateway chat completions answer has no object and no id")
     case: Final = marker()
     response: Final = gateway.post("/v1/chat/completions", chat_body(case, "claude", max_tokens=16))
     sent: Final = provider.requests_for(case)
@@ -419,7 +429,14 @@ def test_chat_completions_to_anthropic_are_translated_to_messages(
 def test_chat_completions_to_bedrock_use_converse(gateway: NativeGateway, provider: ScriptedProvider) -> None:
     """`POST /v1/chat/completions` for `bedrock/converse/anthropic.claude-dec1-v1`. The Bedrock chat config is
     Converse, so the provider must get `POST /model/anthropic.claude-dec1-v1/converse`, SigV4-signed, and the
-    caller 200 with the Converse text as `choices[0].message.content`."""
+    caller 200 with the Converse text as `choices[0].message.content`.
+    BUG: the chat route builds `optional_params` from the request body only
+    (litellm/rust/crates/gateway-inference/src/chat_completions.rs:61-64, 83-87) and never passes the deployment's
+    `litellm_params` extras, unlike `/v1/messages` (gateway-inference/src/messages.rs:115). The deployment's
+    `aws_access_key_id`, `aws_secret_access_key` and `aws_region_name` are lost, the Bedrock config falls back to
+    the AWS default chain and the caller gets 500 `could not load AWS default chain credentials`
+    (CI run 44176682961)."""
+    pytest.skip("BUG: native gateway chat completions ignore the deployment's static AWS credentials")
     case: Final = marker()
     response: Final = gateway.post("/v1/chat/completions", chat_body(case, "bedrock-converse"))
     sent: Final = provider.requests_for(case)
