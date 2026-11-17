@@ -715,10 +715,24 @@ def _cache_points(node: object) -> Iterator[object]:
     ("model_info", "expected_cache_point"),
     [
         ({"base_model": _OPUS}, {"type": "default", "ttl": "1h"}),
-        ({"base_model": _OPUS, "supports_prompt_cache_breakpoint": False}, None),
-        ({"base_model": _OPUS, "supports_prompt_cache_breakpoint": True}, {"type": "default", "ttl": "1h"}),
+        ({"base_model": _OPUS, "supports_bedrock_converse_cache_point": False}, None),
+        ({"base_model": _OPUS, "supports_bedrock_converse_cache_point": True}, {"type": "default", "ttl": "1h"}),
         ({"base_model": _LLAMA}, None),
-        ({"base_model": _LLAMA, "supports_prompt_cache_breakpoint": True}, {"type": "default"}),
+        ({"base_model": _LLAMA, "supports_bedrock_converse_cache_point": True}, {"type": "default"}),
+        ({"base_model": _OPUS, "supports_prompt_cache_breakpoint": False}, {"type": "default", "ttl": "1h"}),
+        ({"base_model": _LLAMA, "supports_prompt_cache_breakpoint": True}, None),
+        (
+            {
+                "base_model": _OPUS,
+                "supports_bedrock_converse_cache_point": False,
+                "supports_prompt_cache_breakpoint": True,
+            },
+            None,
+        ),
+        (
+            {"base_model": _OPUS, "supports_bedrock_converse_cache_point": None},
+            {"type": "default", "ttl": "1h"},
+        ),
     ],
     ids=[
         "base_model_allows",
@@ -726,6 +740,10 @@ def _cache_points(node: object) -> Iterator[object]:
         "deployment_enables_keeps_ttl",
         "base_model_disallows",
         "deployment_enables",
+        "openai_breakpoint_opt_out_keeps_claude_caching",
+        "openai_breakpoint_opt_in_does_not_enable_cache_points",
+        "dedicated_opt_out_beats_openai_breakpoint_opt_in",
+        "null_dedicated_flag_falls_back_to_base_model",
     ],
 )
 @pytest.mark.respx(assert_all_called=True)
@@ -10589,16 +10607,22 @@ def test_converse_translates_prompt_cache_breakpoint_on_an_unmapped_arn_only_whe
 
     flagged_arn: Final = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/claude-flagged"
     unflagged_arn: Final = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/mistral"
+    openai_flagged_arn: Final = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/openai-flag"
     Router(
         model_list=[
             {
                 "model_name": "claude-profile",
                 "litellm_params": {"model": f"bedrock/{flagged_arn}", "aws_region_name": "us-east-1"},
-                "model_info": {"supports_prompt_cache_breakpoint": True},
+                "model_info": {"supports_bedrock_converse_cache_point": True},
             },
             {
                 "model_name": "mistral-profile",
                 "litellm_params": {"model": f"bedrock/{unflagged_arn}", "aws_region_name": "us-east-1"},
+            },
+            {
+                "model_name": "openai-flagged-profile",
+                "litellm_params": {"model": f"bedrock/{openai_flagged_arn}", "aws_region_name": "us-east-1"},
+                "model_info": {"supports_prompt_cache_breakpoint": True},
             },
         ]
     )
@@ -10621,6 +10645,7 @@ def test_converse_translates_prompt_cache_breakpoint_on_an_unmapped_arn_only_whe
     assert user_content(flagged_arn, {}) == [{"text": "Hello"}, {"cachePoint": {"type": "default"}}]
     assert user_content(unflagged_arn, {}) == [{"text": "Hello"}]
     assert user_content(unflagged_arn, {"ttl": "30m"}) == [{"text": "Hello"}]
+    assert user_content(openai_flagged_arn, {}) == [{"text": "Hello"}]
 
 
 def test_converse_prompt_cache_breakpoint_follows_the_arn_flag_over_its_base_model(local_model_cost_map):
@@ -10633,12 +10658,12 @@ def test_converse_prompt_cache_breakpoint_follows_the_arn_flag_over_its_base_mod
             {
                 "model_name": "opted-in",
                 "litellm_params": {"model": f"bedrock/{opted_in_arn}", "aws_region_name": "us-east-1"},
-                "model_info": {"supports_prompt_cache_breakpoint": True},
+                "model_info": {"supports_bedrock_converse_cache_point": True},
             },
             {
                 "model_name": "opted-out",
                 "litellm_params": {"model": f"bedrock/{opted_out_arn}", "aws_region_name": "us-east-1"},
-                "model_info": {"supports_prompt_cache_breakpoint": False},
+                "model_info": {"supports_bedrock_converse_cache_point": False},
             },
         ]
     )
