@@ -1,6 +1,6 @@
 import os
 import threading
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from typing import Final
 
 from litellm.llms.custom_httpx.http_handler import exclude_rsa_key_exchange_and_chacha20
@@ -72,11 +72,10 @@ def cryptography_enforces_fips() -> bool:
     return True
 
 
-def fips_mode_refusal(general_settings: Mapping[str, object], salt_key: str | None) -> str | None:
+def fips_mode_refusal(general_settings: Mapping[str, object]) -> str | None:
     """Why the proxy must not start: general_settings.fips_mode is not a boolean, or is on but Python's or the
-    cryptography library's OpenSSL does not enforce FIPS, or salt_key is missing or gives a key_derivation_key under
-    112 bits. salt_key is LITELLM_SALT_KEY, or the master key when LITELLM_SALT_KEY is not set. None when it may
-    start."""
+    cryptography library's OpenSSL does not enforce FIPS, or LITELLM_SALT_KEY is not set or gives a key_derivation_key
+    under 112 bits. None when it may start."""
     setting: Final = fips_mode_setting(general_settings)
     if setting is None:
         value: Final = general_settings.get(FIPS_MODE_SETTING)
@@ -99,28 +98,22 @@ def fips_mode_refusal(general_settings: Mapping[str, object], salt_key: str | No
             "against the system OpenSSL (pip install --no-binary cryptography cryptography), or turn "
             f"{_SETTING} off."
         )
+    salt_key: Final = os.getenv(SALT_KEY_ENV_VAR)
     if salt_key is None:
         return (
-            f"{_SETTING} is on but neither {SALT_KEY_ENV_VAR} nor a master key is set, so fips_mode has no key to "
-            f"derive its encryption keys from. Set {_NEW_SALT_KEY}, or turn {_SETTING} off."
+            f"{_SETTING} is on but {SALT_KEY_ENV_VAR} is not set. fips_mode derives its encryption keys from it and "
+            f"never from the master key, which also signs tokens. Set {_NEW_SALT_KEY}, or turn {_SETTING} off."
         )
     if key_derivation_key(salt_key) is None:
-        checked: Final = (
-            SALT_KEY_ENV_VAR
-            if os.getenv(SALT_KEY_ENV_VAR) is not None
-            else f"the master key ({SALT_KEY_ENV_VAR} is not set)"
-        )
         return (
-            f"{_SETTING} is on but {checked} is too short. fips_mode derives its encryption keys from it, so it "
-            f"must be {KEY_DERIVATION_KEY_RULE}. Set {_NEW_SALT_KEY}, or turn {_SETTING} off."
+            f"{_SETTING} is on but {SALT_KEY_ENV_VAR} is too short. fips_mode derives its encryption keys from it, "
+            f"so it must be {KEY_DERIVATION_KEY_RULE}. Set {_NEW_SALT_KEY}, or turn {_SETTING} off."
         )
     return None
 
 
-def enforce_fips_mode(
-    general_settings: Mapping[str, object], get_salt_key: Callable[[], str | None] = lambda: None
-) -> None:
-    refusal: Final = fips_mode_refusal(general_settings, get_salt_key())
+def enforce_fips_mode(general_settings: Mapping[str, object]) -> None:
+    refusal: Final = fips_mode_refusal(general_settings)
     if refusal is not None:
         raise FipsModeError(refusal)
     active: Final = fips_mode_setting(general_settings) is True

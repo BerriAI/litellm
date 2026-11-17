@@ -1860,11 +1860,12 @@ def _boot_in_fips_mode(
     "master_key, environment, refusal",
     [
         (_HEX_KEY, {"LITELLM_SALT_KEY": "thirteen-byte"}, r"but LITELLM_SALT_KEY is too short"),
-        ("sk-short-key!", {}, r"but the master key \(LITELLM_SALT_KEY is not set\) is too short"),
+        ("sk-a-safe-master-key", {}, r"but LITELLM_SALT_KEY is not set"),
+        (_HEX_KEY, {}, r"but LITELLM_SALT_KEY is not set"),
     ],
-    ids=["13-byte-salt-key-and-hex-master-key", "13-byte-master-key-and-no-salt-key"],
+    ids=["13-byte-salt-key-and-hex-master-key", "20-byte-master-key-and-no-salt-key", "hex-master-key-and-no-salt-key"],
 )
-async def test_proxy_startup_refuses_fips_mode_when_the_key_it_encrypts_with_is_under_112_bits(
+async def test_proxy_startup_refuses_fips_mode_without_a_salt_key_of_at_least_112_bits(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, master_key: str, environment: Mapping[str, str], refusal: str
 ) -> None:
     from litellm.proxy.common_utils.fips import FipsModeError, fips_mode_active
@@ -1881,10 +1882,13 @@ async def test_proxy_startup_refuses_fips_mode_when_the_key_it_encrypts_with_is_
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "master_key, environment",
-    [("sk-short-key!", {"LITELLM_SALT_KEY": _HEX_KEY}), ("sk-a-safe-master-key", {})],
-    ids=["salt-key-and-13-byte-master-key", "20-byte-master-key-and-no-salt-key"],
+    [
+        ("sk-short-key!", {"LITELLM_SALT_KEY": _HEX_KEY}),
+        ("sk-a-safe-master-key", {"LITELLM_SALT_KEY": "fourteen-bytes"}),
+    ],
+    ids=["hex-salt-key-and-13-byte-master-key", "14-byte-salt-key-and-20-byte-master-key"],
 )
-async def test_proxy_startup_starts_fips_mode_when_the_key_it_encrypts_with_is_at_least_112_bits(
+async def test_proxy_startup_starts_fips_mode_with_a_salt_key_of_at_least_112_bits(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, master_key: str, environment: Mapping[str, str]
 ) -> None:
     from litellm.proxy.common_utils.fips import enforce_fips_mode, fips_mode_active
