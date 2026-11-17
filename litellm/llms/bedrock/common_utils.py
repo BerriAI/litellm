@@ -1747,7 +1747,8 @@ def _warn_legacy_cache_point_flag(model: str) -> None:
         "Bedrock model %s sets supports_prompt_cache_breakpoint, which no longer controls Converse cachePoint "
         "blocks and only selects the OpenAI prompt_cache_breakpoint format. Set "
         "supports_bedrock_converse_cache_point to true or false to choose whether cachePoint blocks are sent. "
-        "Without it, the model's supports_prompt_caching decides.",
+        "Without it, a model in the cost map gets them when it supports prompt caching, and a model the cost map "
+        "does not list, such as an application inference profile ARN, gets them.",
         model,
     )
 

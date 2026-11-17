@@ -7337,6 +7337,8 @@ def get_model_info_helper(
                 supports_assistant_prefill=None,
                 supports_prompt_caching=None,
                 supports_prompt_cache_breakpoint=None,
+                supports_openai_prompt_cache_breakpoint=None,
+                supports_bedrock_converse_cache_point=None,
                 supports_thinking_cache_preservation=None,
                 supports_computer_use=None,
                 supports_pdf_input=None,
@@ -7669,6 +7671,10 @@ def get_model_info_helper(
                 supports_assistant_prefill=_model_info.get("supports_assistant_prefill", None),
                 supports_prompt_caching=_model_info.get("supports_prompt_caching", None),
                 supports_prompt_cache_breakpoint=_model_info.get("supports_prompt_cache_breakpoint", None),
+                supports_openai_prompt_cache_breakpoint=_model_info.get(
+                    "supports_openai_prompt_cache_breakpoint", None
+                ),
+                supports_bedrock_converse_cache_point=_model_info.get("supports_bedrock_converse_cache_point", None),
                 supports_thinking_cache_preservation=_model_info.get("supports_thinking_cache_preservation", None),
                 supports_audio_input=_model_info.get("supports_audio_input", None),
                 supports_video_input=_model_info.get("supports_video_input", None),
