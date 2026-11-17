@@ -879,18 +879,20 @@ async def test_presidio_filter_scope_initializer(monkeypatch):
     assert callbacks[0].apply_to_output is False
     assert callbacks[1].apply_to_output is True
 
-    # both + output_parse_pii -> two callbacks (input + unmask), all returned, input
-    # first; no output masker, it would re-mask the values the unmasker restores
+    # both + output_parse_pii -> three callbacks, all returned, input first and
+    # the output masker before the unmasker, so the masker analyzes the
+    # still-tokenised response and cannot re-mask the restored values
     created.clear()
     params_all = LitellmParams(
         guardrail="presidio", mode="pre_call", presidio_filter_scope="both", output_parse_pii=True
     )
     callbacks = initialize_presidio(params_all, guardrail_dict)
-    assert len(created) == 2
+    assert len(created) == 3
     assert callbacks == tuple(created)
     assert callbacks[0].apply_to_output is False
-    assert not any(callback.apply_to_output for callback in created)
-    assert mgr.added[-2:] == list(created)
+    assert callbacks[1].apply_to_output is True
+    assert callbacks[2].apply_to_output is False
+    assert mgr.added[-3:] == list(created)
 
 
 @pytest.mark.asyncio
