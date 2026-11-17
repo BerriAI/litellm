@@ -48,6 +48,7 @@ const STRING_INDEX_TYPE_FIELD: &str = "stringIndexType";
 const MARKDOWN_MODEL_ID: &str = "prebuilt-layout";
 const UNRETURNABLE_OUTPUT_REASON: &str =
     "LiteLLM does not return the analyze result id that Azure serves figures and PDFs from";
+const UNSLICEABLE_INDEX_TYPE_REASON: &str = "LiteLLM splits prebuilt-layout markdown into pages only with unicodeCodePoint or utf16CodeUnit offsets";
 
 #[derive(
     Clone,
@@ -87,6 +88,16 @@ pub enum StringIndexType {
     UnicodeCodePoint,
     #[strum(serialize = "utf16CodeUnit")]
     Utf16CodeUnit,
+}
+
+impl StringIndexType {
+    fn code_unit_width(self) -> Option<fn(char) -> usize> {
+        match self {
+            Self::UnicodeCodePoint => Some(|_| 1),
+            Self::Utf16CodeUnit => Some(char::len_utf16),
+            Self::TextElements => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -283,7 +294,7 @@ impl BaseOcrConfig for AzureDocumentIntelligenceOcrConfig {
             string_index_type: query_option(
                 non_default_params,
                 STRING_INDEX_TYPE_FIELD,
-                parse_string_index_type,
+                |value, path| parse_string_index_type(value, path, slices_markdown_pages),
             )?
             .or(slices_markdown_pages.then_some(StringIndexType::UnicodeCodePoint)),
             locale: query_option(non_default_params, LOCALE_PARAM, normalize_locale)?,
@@ -444,6 +455,12 @@ fn normalize_pages_param(
     if !normalized.split(',').all(valid_page_token) {
         return Err(Error::Pages("invalid native page range".into()));
     }
+    if normalized
+        .split([',', '-'])
+        .any(|page| page.chars().all(|digit| digit == '0'))
+    {
+        return Err(Error::Pages("page numbers start at 1".into()));
+    }
     Ok(Some(normalized))
 }
 
@@ -554,15 +571,25 @@ fn reject_unreturnable_output(arguments: &CallArguments) -> Result<(), Error> {
 fn parse_string_index_type(
     value: Option<&Value>,
     path: &str,
+    slices_markdown_pages: bool,
 ) -> Result<Option<StringIndexType>, Error> {
-    value
+    let parsed = value
         .map(|value| {
             value
                 .as_str()
-                .and_then(|name| name.trim().parse().ok())
+                .and_then(|name| name.trim().parse::<StringIndexType>().ok())
                 .ok_or_else(|| invalid_field(path))
         })
-        .transpose()
+        .transpose()?;
+    match parsed {
+        Some(index_type) if slices_markdown_pages && index_type.code_unit_width().is_none() => {
+            Err(Error::UnsupportedParam {
+                param: path.to_owned(),
+                reason: UNSLICEABLE_INDEX_TYPE_REASON,
+            })
+        }
+        parsed => Ok(parsed),
+    }
 }
 
 fn normalize_locale(value: Option<&Value>, path: &str) -> Result<Option<String>, Error> {
@@ -671,18 +698,23 @@ fn transform_completed_response(
         ));
     }
     let result = response.analyze_result.unwrap_or_default();
+    let code_unit_width = result
+        .string_index_type
+        .as_deref()
+        .and_then(|unit| unit.parse::<StringIndexType>().ok())
+        .and_then(StringIndexType::code_unit_width);
     let markdown_content = result
         .content
         .as_deref()
         .filter(|_| {
             result.content_format.as_deref() == Some(<&str>::from(OutputContentFormat::Markdown))
-                && result.string_index_type.as_deref()
-                    == Some(<&str>::from(StringIndexType::UnicodeCodePoint))
                 && result.pages.iter().all(|page| page.spans.is_some())
         })
-        .map(|content| {
-            CodePointText::new(
+        .zip(code_unit_width)
+        .map(|(content, code_unit_width)| {
+            IndexedText::new(
                 content,
+                code_unit_width,
                 result
                     .pages
                     .iter()
@@ -705,7 +737,7 @@ fn transform_completed_response(
         }),
         extra_fields: result
             .string_index_type
-            .filter(|unit| unit == <&str>::from(StringIndexType::UnicodeCodePoint))
+            .filter(|unit| unit != <&str>::from(StringIndexType::TextElements))
             .map(|unit| Map::from_iter([(STRING_INDEX_TYPE_FIELD.to_owned(), Value::String(unit))]))
             .unwrap_or_default(),
         ..LiteLLMOcrResponse::new(model, pages)
@@ -714,7 +746,7 @@ fn transform_completed_response(
 
 fn transform_azure_page(
     page: AzureDocumentIntelligencePage,
-    markdown_content: Option<&CodePointText<'_>>,
+    markdown_content: Option<&IndexedText<'_>>,
     dpi: i64,
 ) -> Result<OcrPage, Error> {
     let index = page
@@ -750,14 +782,15 @@ fn transform_azure_page(
     })
 }
 
-struct CodePointText<'a> {
+struct IndexedText<'a> {
     text: &'a str,
     byte_offsets: BTreeMap<usize, usize>,
 }
 
-impl<'a> CodePointText<'a> {
+impl<'a> IndexedText<'a> {
     fn new<'s>(
         text: &'a str,
+        code_unit_width: fn(char) -> usize,
         spans: impl Iterator<Item = &'s AzureDocumentIntelligenceSpan>,
     ) -> Self {
         let span_bounds = spans
@@ -767,17 +800,20 @@ impl<'a> CodePointText<'a> {
             text,
             byte_offsets: text
                 .char_indices()
-                .map(|(byte_offset, _)| byte_offset)
-                .enumerate()
-                .filter(|(code_point, _)| span_bounds.contains(code_point))
+                .scan(0, |code_units, (byte_offset, character)| {
+                    let offset = *code_units;
+                    *code_units += code_unit_width(character);
+                    Some((offset, byte_offset))
+                })
+                .filter(|(offset, _)| span_bounds.contains(offset))
                 .collect(),
         }
     }
 
     fn slice(&self, span: &AzureDocumentIntelligenceSpan) -> &'a str {
-        let byte_offset = |code_point: usize| {
+        let byte_offset = |offset: usize| {
             self.byte_offsets
-                .get(&code_point)
+                .get(&offset)
                 .copied()
                 .unwrap_or(self.text.len())
         };
@@ -1363,6 +1399,9 @@ mod tests {
 
     #[rstest]
     #[case::zero_page(json!({"pages": [0]}), Error::Pages("page numbers start at 1".into()))]
+    #[case::zero_page_string(json!({"pages": "0"}), Error::Pages("page numbers start at 1".into()))]
+    #[case::range_from_zero(json!({"pages": "00-2"}), Error::Pages("page numbers start at 1".into()))]
+    #[case::zero_in_string_list(json!({"pages": ["2", "1-0"]}), Error::Pages("page numbers start at 1".into()))]
     #[case::negative_page(json!({"pages": [-1]}), Error::Pages("negative page index".into()))]
     #[case::bad_range(json!({"pages": "abc"}), Error::Pages("invalid native page range".into()))]
     #[case::bad_features(json!({"features": 5}), Error::Features)]
@@ -1390,6 +1429,7 @@ mod tests {
     #[rstest]
     #[case::bad_range(json!({"pages": "abc"}))]
     #[case::zero_page(json!({"pages": [0]}))]
+    #[case::zero_page_string(json!({"pages": "0"}))]
     #[case::bad_features(json!({"features": 5}))]
     #[case::bad_format(json!({"outputContentFormat": "html"}))]
     #[case::bad_locale(json!({"locale": 5}))]
@@ -1536,13 +1576,93 @@ mod tests {
         json!({"locale": "fr-FR", "queryFields": "Vendor"})
     )]
     #[case::caller_index_type_over_the_markdown_default(
-        json!({"outputContentFormat": "markdown", "extra_body": {"stringIndexType": "textElements"}}),
+        json!({"outputContentFormat": "markdown", "extra_body": {"stringIndexType": "utf16CodeUnit"}}),
+        json!({"outputContentFormat": "markdown", "stringIndexType": "utf16CodeUnit"})
+    )]
+    #[case::text_elements_without_page_slicing(
+        json!({"outputContentFormat": "text", "extra_body": {"stringIndexType": "textElements"}}),
+        json!({"outputContentFormat": "text", "stringIndexType": "textElements"})
+    )]
+    #[case::text_elements_in_native_format(
+        json!({"outputContentFormat": "markdown", "req_format": "native", "stringIndexType": "textElements"}),
         json!({"outputContentFormat": "markdown", "stringIndexType": "textElements"})
     )]
     fn other_azure_query_options_are_mapped(#[case] options: Value, #[case] expected: Value) {
         let mapped = map(options).unwrap();
 
         assert_eq!(serde_json::to_value(mapped).unwrap(), expected);
+    }
+
+    #[rstest]
+    #[case::top_level(
+        json!({"outputContentFormat": "markdown", "stringIndexType": "textElements"}),
+        "stringIndexType"
+    )]
+    #[case::extra_body(
+        json!({
+            "outputContentFormat": "markdown",
+            "stringIndexType": "utf16CodeUnit",
+            "extra_body": {"stringIndexType": "TEXTELEMENTS"}
+        }),
+        "extra_body.stringIndexType"
+    )]
+    fn text_elements_are_rejected_when_layout_markdown_is_split_into_pages(
+        #[case] options: Value,
+        #[case] param: &str,
+    ) {
+        let error = map(options).unwrap_err();
+
+        assert_eq!(
+            format!("{error:?}"),
+            format!(
+                "{:?}",
+                Error::UnsupportedParam {
+                    param: param.into(),
+                    reason: UNSLICEABLE_INDEX_TYPE_REASON,
+                }
+            )
+        );
+        assert_eq!(error.http_status_code(), Some(400));
+    }
+
+    #[test]
+    fn text_elements_on_another_model_reach_azure() {
+        let mapped = map_for_model(
+            json!({"outputContentFormat": "markdown", "stringIndexType": "textElements"}),
+            "azure_ai/doc-intelligence/prebuilt-read",
+        )
+        .unwrap();
+
+        assert_eq!(
+            mapped.string_index_type,
+            Some(StringIndexType::TextElements)
+        );
+    }
+
+    #[rstest]
+    #[case::top_level(
+        json!({"drop_params": true, "outputContentFormat": "markdown", "stringIndexType": "textElements"}),
+        "unicodeCodePoint"
+    )]
+    #[case::extra_body_falls_back_to_the_top_level(
+        json!({
+            "drop_params": true,
+            "outputContentFormat": "markdown",
+            "stringIndexType": "utf16CodeUnit",
+            "extra_body": {"stringIndexType": "textElements"}
+        }),
+        "utf16CodeUnit"
+    )]
+    fn drop_params_drops_text_elements_when_layout_markdown_is_split_into_pages(
+        #[case] options: Value,
+        #[case] string_index_type: &str,
+    ) {
+        let mapped = map(options).unwrap();
+
+        assert_eq!(
+            serde_json::to_value(mapped).unwrap(),
+            json!({"outputContentFormat": "markdown", "stringIndexType": string_index_type})
+        );
     }
 
     #[rstest]
@@ -1604,6 +1724,66 @@ mod tests {
         assert_eq!(
             pages,
             ["# Ünïcode क्ष\n\n<!-- PageBreak -->\n\n", "## Två 🙂|a|"]
+        );
+    }
+
+    #[rstest]
+    fn markdown_pages_are_utf16_slices_of_the_content() {
+        let first_page = "# 🙂 𝔸 क्ष\n\n<!-- PageBreak -->\n\n";
+        let second_page_start = first_page.encode_utf16().count();
+        let raw = serde_json::to_vec(&json!({"status": "succeeded", "analyzeResult": {
+            "content": format!("{first_page}## Två 🙂 tail"),
+            "contentFormat": "markdown",
+            "stringIndexType": "utf16CodeUnit",
+            "pages": [
+                {"pageNumber": 1, "spans": [{"offset": 0, "length": second_page_start}]},
+                {"pageNumber": 2, "spans": [{"offset": second_page_start, "length": 9}]}
+            ]
+        }}))
+        .unwrap();
+
+        let response = AzureDocumentIntelligenceOcrConfig
+            .transform_ocr_response("model", &raw, OcrResponseFormat::Litellm)
+            .unwrap();
+
+        assert_eq!(
+            response
+                .pages
+                .iter()
+                .map(|page| page.markdown.as_str())
+                .collect::<Vec<_>>(),
+            [first_page, "## Två 🙂"]
+        );
+        assert_eq!(
+            response.extra_fields.get(STRING_INDEX_TYPE_FIELD),
+            Some(&json!("utf16CodeUnit"))
+        );
+    }
+
+    #[rstest]
+    #[case::code_points(json!("unicodeCodePoint"), Some(json!("unicodeCodePoint")))]
+    #[case::utf16(json!("utf16CodeUnit"), Some(json!("utf16CodeUnit")))]
+    #[case::azure_default(json!("textElements"), None)]
+    #[case::omitted(Value::Null, None)]
+    fn response_reports_a_non_default_string_index_type(
+        #[case] string_index_type: Value,
+        #[case] reported: Option<Value>,
+    ) {
+        let raw = serde_json::to_vec(&json!({"status": "succeeded", "analyzeResult": {
+            "content": "a",
+            "contentFormat": "text",
+            "stringIndexType": string_index_type,
+            "pages": [{"lines": [{"content": "a"}]}]
+        }}))
+        .unwrap();
+
+        let response = AzureDocumentIntelligenceOcrConfig
+            .transform_ocr_response("model", &raw, OcrResponseFormat::Litellm)
+            .unwrap();
+
+        assert_eq!(
+            response.extra_fields.get(STRING_INDEX_TYPE_FIELD),
+            reported.as_ref()
         );
     }
 
