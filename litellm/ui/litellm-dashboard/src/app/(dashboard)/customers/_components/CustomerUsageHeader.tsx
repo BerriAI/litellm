@@ -3,7 +3,8 @@ import { ChevronRight } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import AdvancedDatePicker from "@/components/shared/advanced_date_picker";
 import type { DateRangePickerValue } from "@/components/shared/date_picker_types";
-import { uiHref } from "@/utils/uiHref";
+import { useCustomerHierarchyLinks } from "./CustomerHierarchyNavigation";
+import { customerUsagePresets, CUSTOMER_USAGE_MAX_RANGE_DAYS } from "./customerUsageRange";
 import type { CustomerHierarchyUsage, CustomerUsageScope } from "./customerUsageApi";
 
 interface CustomerUsageHeaderProps {
@@ -29,12 +30,13 @@ function CustomerUsageBreadcrumbs({
   onTeamClick,
 }: Pick<CustomerUsageHeaderProps, "scope" | "data" | "onOrganizationClick" | "onTeamClick">) {
   const { t } = useTranslation();
+  const { customersHref } = useCustomerHierarchyLinks();
   return (
     <nav
       aria-label={t("customerPortal.analytics.breadcrumb")}
       className="mb-5 flex flex-wrap items-center gap-2 text-xs text-muted-foreground"
     >
-      <a href={uiHref("customers")} className="hover:text-foreground">
+      <a href={customersHref} className="hover:text-foreground">
         {t("customerPortal.entities.organizations")}
       </a>
       <ChevronRight aria-hidden="true" className="size-3" />
@@ -88,7 +90,10 @@ export default function CustomerUsageHeader({
         <AdvancedDatePicker
           value={dateValue}
           presetShortLabel={preset}
+          label={t("customerPortal.range.label")}
           showTimeRange={false}
+          presets={customerUsagePresets}
+          maxRangeDays={CUSTOMER_USAGE_MAX_RANGE_DAYS}
           onValueChange={onDateRangeChange}
         />
       </div>

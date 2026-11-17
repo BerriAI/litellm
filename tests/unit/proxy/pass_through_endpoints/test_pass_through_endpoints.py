@@ -98,6 +98,7 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
 )
 from tests._master_key import MASTER_KEY
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
+from tests.unit.proxy.spend_tracking.native_budgets_replica import native_reservation
 
 MESSAGE_START_SSE_FRAME = b'event: message_start\ndata: {"type": "message_start"}\n\n'
 PROTOCOL_CONSTRAINED_PASS_THROUGH_ROUTES: Final = MappingProxyType(
@@ -1980,6 +1981,58 @@ async def test_pass_through_request_strips_client_guardrail_information(allow_cl
     hooked_body: Final = mock_proxy_logging.pre_call_hook.call_args.kwargs["data"]
     assert hooked_body["metadata"] == {"trace_id": "keep-me"}
     assert ("input_cost_per_token" in hooked_body) is allow_client_pricing_override
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("currency", ["EUR", "USD"])
+async def test_pass_through_request_rejects_pricing_currency_before_any_hook_or_upstream(currency: str) -> None:
+    mock_request: Final = MagicMock(spec=Request)
+    mock_request.method = "POST"
+    mock_request.headers = Headers({})
+    mock_request.query_params = QueryParams({})
+
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging:
+        mock_proxy_logging.pre_call_hook = AsyncMock(side_effect=RuntimeError("must not be reached"))
+        mock_proxy_logging.post_call_failure_hook = AsyncMock()
+        with pytest.raises(ProxyException) as rejected:
+            await pass_through_request(
+                request=mock_request,
+                target="http://test.com",
+                custom_headers={},
+                user_api_key_dict=UserAPIKeyAuth(metadata={"allow_client_pricing_override": True}),
+                custom_body={"model": "gpt-5.4-mini", "pricing_currency": currency, "input_cost_per_token": 0.5},
+            )
+
+    assert rejected.value.code == "400"
+    assert rejected.value.param == "pricing_currency"
+    mock_proxy_logging.pre_call_hook.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("body", [{}, {"pricing_currency": None}], ids=["omitted", "null"])
+async def test_pass_through_request_keeps_usd_prices_without_an_explicit_pricing_currency(
+    body: dict[str, object],
+) -> None:
+    mock_request: Final = MagicMock(spec=Request)
+    mock_request.method = "POST"
+    mock_request.headers = Headers({})
+    mock_request.query_params = QueryParams({})
+
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging:
+        mock_proxy_logging.pre_call_hook = AsyncMock(side_effect=RuntimeError("stop before upstream"))
+        mock_proxy_logging.post_call_failure_hook = AsyncMock()
+        with pytest.raises(ProxyException):
+            await pass_through_request(
+                request=mock_request,
+                target="http://test.com",
+                custom_headers={},
+                user_api_key_dict=UserAPIKeyAuth(metadata={"allow_client_pricing_override": True}),
+                custom_body={"model": "gpt-5.4-mini", "input_cost_per_token": 0.5, **body},
+            )
+
+    hooked_body: Final = mock_proxy_logging.pre_call_hook.call_args.kwargs["data"]
+    assert hooked_body["input_cost_per_token"] == 0.5
+    assert "pricing_currency" not in hooked_body
 
 
 @pytest.mark.asyncio
@@ -9836,7 +9889,7 @@ async def test_passthrough_charge_moves_the_committed_spend_of_the_entities_auth
 
 
 @pytest.mark.asyncio
-async def test_passthrough_success_reconciles_budget_reservation():
+async def test_passthrough_success_reconciles_budget_reservation(native_budgets_on):
     """
     A successful pass-through request must hand its pre-call budget reservation
     to the spend-counter update so the reserved amount is reconciled down to the
@@ -9844,14 +9897,17 @@ async def test_passthrough_success_reconciles_budget_reservation():
     the actual cost is added on top, so the counter drifts above real spend until
     the key falsely trips BudgetExceededError.
     """
-    budget_reservation = {
-        "reserved_cost": 0.5,
-        "entries": [{"counter_key": "spend:key:hashed-token", "reserved_cost": 0.5}],
-    }
     user_api_key_dict = UserAPIKeyAuth(
         api_key="hashed-token",
         user_id="u1",
-        budget_reservation=budget_reservation,
+    )
+    from litellm.proxy import proxy_server
+
+    budget_reservation = await native_reservation(
+        proxy_server.spend_counter_store,
+        user_api_key_dict,
+        [{"counter_key": "spend:key:hashed-token", "entity_type": "Key", "entity_id": "hashed-token"}],
+        0.5,
     )
 
     reservation = user_api_key_dict.budget_reservation
@@ -11766,6 +11822,7 @@ async def _boot_db_backed_proxy(
     monkeypatch.setattr(proxy_server, "config_passthrough_endpoints", None)
     monkeypatch.setattr(proxy_server, "master_key", None)
     monkeypatch.setattr(proxy_server, "premium_user", False)
+    monkeypatch.setattr(proxy_server, "litellm_jwtauth", proxy_server.litellm_jwtauth)
     monkeypatch.setattr(proxy_utils, "litellm_config_cache", DualCache())
     monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
     monkeypatch.delitem(proxy_server.app.dependency_overrides, user_api_key_auth, raising=False)
@@ -11774,6 +11831,11 @@ async def _boot_db_backed_proxy(
     await proxy_config.load_config(router=None, config_file_path=str(config_path))
     monkeypatch.setattr(proxy_server, "prisma_client", config_table)
     monkeypatch.setattr(proxy_server, "store_model_in_db", store_model_in_db)
+    proxy_server.ProxyStartupEvent.initialize_jwt_auth(
+        general_settings=proxy_server.general_settings,
+        prisma_client=config_table,
+        user_api_key_cache=proxy_server.user_api_key_cache,
+    )
     return _DbBackedProxy(proxy_config, str(config_path), config_table)
 
 

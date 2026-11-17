@@ -196,6 +196,7 @@ fn known_effort(request: &MessagesRequest) -> Option<&Recognized<EffortLevel>> {
         .as_ref()
         .and_then(Recognized::known)
         .and_then(|config| config.effort.as_ref())
+        .filter(|effort| !matches!(effort, Recognized::Unrecognized(Value::Null)))
 }
 
 fn with_default_effort(
@@ -787,6 +788,16 @@ mod tests {
         opus_4_7(),
         serde_json::json!({"max_tokens": 1024, "reasoning_effort": "low", "output_config": {"effort": "max"}}),
         serde_json::json!({"max_tokens": 1024, "thinking": {"type": "adaptive", "display": "summarized"}, "output_config": {"effort": "max"}})
+    )]
+    #[case::caller_null_output_config_effort_is_kept(
+        opus_4_7(),
+        serde_json::json!({"max_tokens": 1024, "reasoning_effort": "low", "output_config": {"effort": null}}),
+        serde_json::json!({"max_tokens": 1024, "thinking": {"type": "adaptive", "display": "summarized"}, "output_config": {"effort": null}})
+    )]
+    #[case::null_output_config_effort_is_not_an_effort_on_non_adaptive_model(
+        opus_4_5(),
+        serde_json::json!({"max_tokens": 1024, "temperature": 0.5, "output_config": {"effort": null}}),
+        serde_json::json!({"max_tokens": 1024, "temperature": 0.5, "output_config": {"effort": null}})
     )]
     #[case::effort_merges_into_caller_output_config(
         opus_4_7(),

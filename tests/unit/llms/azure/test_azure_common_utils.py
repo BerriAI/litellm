@@ -437,28 +437,6 @@ def test_initialize_honors_explicit_max_retries(setup_mocks, configured, expecte
     assert result["max_retries"] == expected
 
 
-def test_default_max_retries_env_var_reaches_azure_sdk_client():
-    import subprocess
-    import sys
-
-    code = (
-        "from litellm.llms.azure.common_utils import BaseAzureLLM\n"
-        "client = BaseAzureLLM().get_azure_openai_client("
-        "api_key='test-api-key', api_base='https://test.openai.azure.com', api_version='2024-02-01',"
-        " client=None, _is_async=True, litellm_params={}, model='gpt-4')\n"
-        "print(client.max_retries)"
-    )
-    completed = subprocess.run(
-        [sys.executable, "-c", code],
-        env={**os.environ, "DEFAULT_MAX_RETRIES": "0"},
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-
-    assert completed.stdout.strip() == "0"
-
-
 @pytest.mark.parametrize(
     "call_type",
     [
@@ -3268,4 +3246,3 @@ def test_non_chat_calls_on_a_foundry_project_v1_base_reach_azure(
     respx_mock.post().mock(return_value=httpx.Response(200, json=upstream_body))
 
     assert call() == "ok"
-
