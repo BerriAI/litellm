@@ -538,6 +538,20 @@ def test_configured_content_guardrails_cannot_be_silently_bypassed(
     assert not respx_mock.calls
 
 
+@pytest.mark.parametrize("endpoint", [_RUN, _APPEND])
+def test_log_payload_redaction_does_not_block_cursor(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, endpoint: str
+) -> None:
+    from litellm.integrations.s3_v2 import S3StripBase64Files
+
+    monkeypatch.setattr(litellm, "callbacks", [S3StripBase64Files("test-s3-logger")])
+    upstream: Final = respx_mock.post(f"{_BASE}/{endpoint}").respond(content=b"native-response")
+    response: Final = client.post(f"/cursor-cli/{endpoint}", headers=_HEADERS, content=b"\xff")
+    assert response.status_code == 200, response.text
+    assert response.content == b"native-response"
+    assert upstream.calls.last.request.content == b"\xff"
+
+
 @pytest.mark.parametrize("enforcing", [False, True])
 def test_v2_content_callbacks_cannot_be_silently_bypassed(
     client: TestClient, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, enforcing: bool
