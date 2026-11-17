@@ -958,8 +958,11 @@ def get_redis_connection_pool(
         return async_redis.BlockingConnectionPool.from_url(**pool_kwargs)
 
     if redis_kwargs.pop("ssl", None):
-        redis_kwargs["connection_class"] = async_redis.SSLConnection
-    return async_redis.BlockingConnectionPool(timeout=REDIS_CONNECTION_POOL_TIMEOUT, **redis_kwargs)
+        return async_redis.BlockingConnectionPool(
+            timeout=REDIS_CONNECTION_POOL_TIMEOUT, connection_class=async_redis.SSLConnection, **redis_kwargs
+        )
+    plaintext_kwargs: Final = {k: v for k, v in redis_kwargs.items() if not k.startswith("ssl_")}
+    return async_redis.BlockingConnectionPool(timeout=REDIS_CONNECTION_POOL_TIMEOUT, **plaintext_kwargs)
 
 
 def _mask_for_display(masker: SensitiveDataMasker, redis_kwargs: Mapping[str, object]) -> Mapping[str, object]:
