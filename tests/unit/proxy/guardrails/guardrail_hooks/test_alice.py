@@ -287,6 +287,19 @@ def _request_data(messages: list[dict[str, object]]) -> dict[str, object]:
     }
 
 
+_INSTRUCTIONS: Final = "answer in one paragraph"
+_RESPONSES_TOOLS: Final = [{"type": "function", "name": "search", "parameters": {"type": "object"}}]
+
+
+def _responses_request_data() -> dict[str, object]:
+    return {
+        "model": "gpt-4o",
+        "instructions": _INSTRUCTIONS,
+        "input": [{"role": "user", "content": _PROMPT}],
+        "tools": _RESPONSES_TOOLS,
+    }
+
+
 class TestAliceRequestDataCopies:
     """request_data never repeats what inputs already carries, so a prompt crosses once per inputs slot."""
 
@@ -364,6 +377,41 @@ class TestAliceRequestDataCopies:
         body: Final = guardrail.async_handler.post.call_args.kwargs["json"]
         assert json.dumps(body).count(_PROMPT) == 2
         assert body["request_data"]["metadata"] == {"user_api_key_alias": "payments-bot", "request": None}
+
+    @pytest.mark.asyncio
+    async def test_leaves_out_the_responses_input_and_instructions_once_parsed(self):
+        guardrail: Final = _guardrail()
+        guardrail.async_handler.post = AsyncMock(return_value=_verdict({"verdict": "ALLOW", "categories": []}))
+        request_data: Final = _responses_request_data()
+        structured: Final = [{"role": "system", "content": _INSTRUCTIONS}, {"role": "user", "content": _PROMPT}]
+
+        await guardrail.apply_guardrail(
+            inputs={"texts": [_PROMPT], "structured_messages": structured},
+            request_data=request_data,
+            input_type="request",
+        )
+
+        body: Final = guardrail.async_handler.post.call_args.kwargs["json"]
+        serialized: Final = json.dumps(body)
+        assert serialized.count(_PROMPT) == 2
+        assert serialized.count(_INSTRUCTIONS) == 1
+        assert body["request_data"] == {"model": "gpt-4o", "tools": _RESPONSES_TOOLS}
+        assert request_data["input"] == [{"role": "user", "content": _PROMPT}]
+        assert request_data["instructions"] == _INSTRUCTIONS
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("structured", [{}, {"structured_messages": []}], ids=["absent", "empty"])
+    async def test_keeps_the_responses_input_and_instructions_without_a_parsed_conversation(
+        self, structured: dict[str, object]
+    ):
+        guardrail: Final = _guardrail()
+        guardrail.async_handler.post = AsyncMock(return_value=_verdict({"verdict": "ALLOW", "categories": []}))
+
+        await guardrail.apply_guardrail(
+            inputs={"texts": [_PROMPT], **structured}, request_data=_responses_request_data(), input_type="request"
+        )
+
+        assert guardrail.async_handler.post.call_args.kwargs["json"]["request_data"] == _responses_request_data()
 
 
 class TestAliceVerdicts:

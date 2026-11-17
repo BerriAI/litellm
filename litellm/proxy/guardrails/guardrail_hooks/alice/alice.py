@@ -74,6 +74,7 @@ _CREDENTIAL_KEYS_TO_STRIP: Final = frozenset(
 )
 
 _UNREAD_REQUEST_KEYS: Final = frozenset({"proxy_server_request"})
+_CONVERSATION_REQUEST_KEYS: Final = frozenset({"messages", "input", "instructions"})
 
 
 class AliceReplacement(TypedDict):
@@ -110,7 +111,8 @@ class AliceGuardrail(CustomGuardrail):
     `headers`, or `provider_specific_header` is dropped from `request_data` at any nesting depth
     before it is serialized, and never reaches Alice. And `request_data` leaves out what would only
     repeat the conversation in `inputs`: the proxy's `proxy_server_request` snapshot always, and
-    `messages` when `structured_messages` is populated. Short of that, it selects nothing and
+    `messages`, or the Responses `input` and `instructions`, when `structured_messages` is
+    populated. Short of that, it selects nothing and
     renames nothing: which parts of a conversation are worth evaluating, and how a verdict is
     reached, are decided by Alice — so changing either is a change on their side rather than a
     LiteLLM upgrade. A batch with nothing selectable at all (no `texts`, `images`, `tools`,
@@ -333,10 +335,13 @@ class AliceGuardrail(CustomGuardrail):
 
 
 def _request_keys_to_omit(inputs: GenericGuardrailAPIInputs) -> frozenset[str]:
-    """Alice reads `request_data["messages"]` only when `structured_messages` is not a non-empty list."""
+    """
+    Alice reads `request_data["messages"]` only when `structured_messages` is not a non-empty list,
+    and a non-empty one already carries the Responses `input` and `instructions` it was parsed from.
+    """
     structured: Final = inputs.get("structured_messages")
     carries_conversation: Final = isinstance(structured, list) and len(structured) > 0
-    return _UNREAD_REQUEST_KEYS | (frozenset({"messages"}) if carries_conversation else frozenset[str]())
+    return _UNREAD_REQUEST_KEYS | (_CONVERSATION_REQUEST_KEYS if carries_conversation else frozenset[str]())
 
 
 def _json_safe(
