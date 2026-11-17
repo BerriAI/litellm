@@ -114,7 +114,6 @@ class StreamAttempt:
     routed: str | None = None
     # The deployment's max_parallel_requests slot the attempt holds; an open chat stream takes it.
     slot: contextlib.ExitStack | None = None
-    # A fallback hop's: the message its stream's failure before any content reads as, from the walk that served it.
     explain_failure: "Callable[[BaseException], str | None] | None" = None
     # Set by the wrapper that reports the stream's outcome when it ends; the attempt's answer is then
     # deferred and counts only the request and the tokens read so far (``counted_tokens``).
@@ -516,8 +515,6 @@ def _raise_fallback_failure(error: Exception) -> NoReturn:
 
 
 def _raise_stream_failure(attempt: StreamAttempt, error: Exception, before_content: bool) -> NoReturn:
-    """``_raise_fallback_failure``, where a fallback hop's failure before any content also carries the
-    primary's error and the fallback outcome, as the walk's own failure would."""
     surfaced: Final = provider_error(error)
     explained: Final = (
         attempt.explain_failure(surfaced) if before_content and attempt.explain_failure is not None else None
@@ -1317,7 +1314,6 @@ def _hop_error_frame(
     model: str,
     bridged_failure: Exception | None,
 ) -> bytes:
-    """A fallback hop's ``event: error`` frame before content, with the message the walk's own failure reads as."""
     from litellm.llms.anthropic.common_utils import anthropic_error_frame_exception
 
     if attempt.explain_failure is None or not isinstance(chunk, (bytes, bytearray)):  # pyright: ignore[reportUnnecessaryIsInstance]  # bridge-path chunks are not always bytes

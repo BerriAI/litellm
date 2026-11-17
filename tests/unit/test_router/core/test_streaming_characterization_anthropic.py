@@ -519,8 +519,6 @@ async def test_a_stream_retry_keeps_reporting_the_first_deployment_when_the_retr
     assert headers(stream)["x-litellm-attempted-retries"] == 1
 
 
-# --- both errors when the cross-group fallback also fails -------------------------------------
-
 PRIMARY_RATE_LIMITED: Final = "litellm.RateLimitError: slow down"
 OUTCOME: Final = "\n\nLiteLLM: model group 'a' failed with the error above. Fallback to b also failed: "
 FALLBACK_FRAME_DOWN: Final = error_frame("api_error", "fallback down")

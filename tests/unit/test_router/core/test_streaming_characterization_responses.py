@@ -553,8 +553,6 @@ async def test_the_failed_stream_is_closed_before_the_retry_is_opened(make_core:
     assert closed_when_retry_opens == [True]
 
 
-# --- both errors when the cross-group fallback also fails -------------------------------------
-
 OUTCOME: Final = "\n\nLiteLLM: model group 'a' failed with the error above. Fallback to b also failed: "
 FALLBACK_BOOM: Final = "litellm.InternalServerError: boom"
 

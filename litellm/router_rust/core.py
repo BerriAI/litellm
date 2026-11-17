@@ -5623,8 +5623,6 @@ class _Driver:
         return primary
 
     def _hop_failure_explainer(self, step: Mapping[str, object]) -> "Callable[[BaseException], str | None] | None":
-        """What a fallback hop's stream that fails before any content reads as: the primary's error with
-        the outcome ``_failure`` appends, the hop's own error as the fallback that also failed."""
         level: Final = step.get("fallback_level")
         primary: Final = self._level_errors.get(self._base_level)
         if self._base_level != 0 or not isinstance(level, int) or level == 0 or primary is None:
