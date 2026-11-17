@@ -33,6 +33,7 @@ ROSTER: Final = 5000
 WITH_MEMBERSHIP: Final = 4000
 CUSTOM_BUDGETS: Final = 10
 OWN_BUDGET_MEMBER: Final = 1232
+SIGNED_IN_MEMBER: Final = 4242
 DEFAULT_MEMBER_BUDGET: Final = 25.0
 MAX_PAGE_SIZE: Final = 100
 CONCURRENT_NUDGES: Final = 16
@@ -53,10 +54,11 @@ SET members_with_roles = (
 WHERE team_id = %s
 """
 SEED_USERS_SQL: Final = """
-INSERT INTO "LiteLLM_UserTable" (user_id, user_role, user_email, user_alias, teams, models)
+INSERT INTO "LiteLLM_UserTable" (user_id, user_role, user_email, user_alias, teams, models, metadata)
 SELECT %s || '-' || lpad(n::text, 5, '0'), 'internal_user',
        %s || '.' || lpad((n * 37 %% 5003)::text, 5, '0') || '@users.example',
-       %s || ' alias ' || lpad((%s::int + 1 - n)::text, 5, '0'), ARRAY[%s]::text[], '{}'::text[]
+       %s || ' alias ' || lpad((%s::int + 1 - n)::text, 5, '0'), ARRAY[%s]::text[], '{}'::text[],
+       jsonb_build_object('scim_active', n = %s::int)
 FROM generate_series(1, %s::int) AS n
 """
 SEED_BUDGETS_SQL: Final = """
@@ -118,7 +120,7 @@ def large_team(session_gateway: Gateway) -> Iterator[LargeTeam]:
         )
         default_budget_id: Final = string_value(metadata["team_member_budget_id"])
         scenario.cleanups.callback(_delete_seeded_rows, prefix)
-        write_rows(SEED_USERS_SQL, (prefix, prefix, prefix, str(ROSTER), team_id, str(ROSTER)))
+        write_rows(SEED_USERS_SQL, (prefix, prefix, prefix, str(ROSTER), team_id, str(SIGNED_IN_MEMBER), str(ROSTER)))
         own: Final = (str(OWN_BUDGET_MEMBER), str(CUSTOM_BUDGETS))
         write_rows(SEED_BUDGETS_SQL, (prefix, str(CUSTOM_BUDGETS), prefix, *own, *own))
         write_rows(
@@ -317,7 +319,7 @@ def test_only_readers_of_team_info_can_list_members(
     gateway: Gateway, scenario: Scenario, large_team: LargeTeam
 ) -> None:
     outsider: Final = scenario.key(user_id=scenario.user(user_role="internal_user"))
-    member: Final = scenario.key(user_id=large_team.user_id(4242))
+    member: Final = scenario.key(user_id=large_team.user_id(SIGNED_IN_MEMBER))
     team_key: Final = scenario.key(team_id=large_team.team_id)
     other_team_key: Final = scenario.key(team_id=scenario.team())
     statuses: Final = {
