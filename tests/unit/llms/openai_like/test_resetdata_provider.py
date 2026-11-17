@@ -1,169 +1,147 @@
-"""
-Tests for ResetData provider configuration and integration.
+import json
+from pathlib import Path
+from typing import Final
 
-ResetData is an Australian sovereign AI-inference provider with an
-OpenAI-compatible API at https://api.resetdata.ai/api/v1. Model slugs are
-in "provider/model" form (e.g. zai/glm-5.3), so full LiteLLM model ids are
-three segments: resetdata/zai/glm-5.3.
-"""
-
-from typing import Any
+import pytest
+import respx
 
 import litellm
-import pytest
+from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+
+_DEFAULT_API_BASE: Final = "https://api.resetdata.ai/api/v1"
+_CHAT_COMPLETIONS_URL: Final = f"{_DEFAULT_API_BASE}/chat/completions"
+_CHAT_COMPLETION: Final = {
+    "id": "chatcmpl_resetdata",
+    "object": "chat.completion",
+    "created": 1_790_000_000,
+    "model": "zai/glm-5.3",
+    "choices": [
+        {
+            "index": 0,
+            "message": {"role": "assistant", "content": "Hello from ResetData", "reasoning_content": "Say hi"},
+            "finish_reason": "stop",
+        }
+    ],
+    "usage": {"prompt_tokens": 4, "completion_tokens": 3, "total_tokens": 7},
+}
+RESETDATA_MODELS: Final = tuple(sorted(name for name in litellm.model_cost if name.startswith("resetdata/")))
 
 
-class TestResetDataProviderConfig:
-    """Test ResetData provider configuration"""
+def test_resetdata_provider_resolution_keeps_the_nested_model_slug(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("RESETDATA_API_KEY", "sk-rd-env")
+    monkeypatch.delenv("RESETDATA_API_BASE", raising=False)
 
-    def test_resetdata_in_provider_list(self):
-        """Test that resetdata is in the provider list"""
-        from litellm import LlmProviders
+    model, provider, api_key, api_base = get_llm_provider(
+        model="resetdata/zai/glm-5.3",
+        custom_llm_provider=None,
+        api_base=None,
+        api_key=None,
+    )
 
-        assert hasattr(LlmProviders, "RESETDATA")
-        assert LlmProviders.RESETDATA.value == "resetdata"
-        assert "resetdata" in litellm.provider_list
+    assert model == "zai/glm-5.3"
+    assert provider == "resetdata"
+    assert api_key == "sk-rd-env"
+    assert api_base == _DEFAULT_API_BASE
 
-    def test_resetdata_json_config_exists(self):
-        """Test that resetdata is configured in providers.json"""
-        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 
-        assert JSONProviderRegistry.exists("resetdata")
+def test_resetdata_api_base_env_overrides_default(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("RESETDATA_API_KEY", "sk-rd-env")
+    monkeypatch.setenv("RESETDATA_API_BASE", "https://resetdata.env.example/api/v1")
 
-        resetdata = JSONProviderRegistry.get("resetdata")
-        assert resetdata is not None
-        assert resetdata.base_url == "https://api.resetdata.ai/api/v1"
-        assert resetdata.api_key_env == "RESETDATA_API_KEY"
-        assert resetdata.api_base_env == "RESETDATA_API_BASE"
-        assert resetdata.supported_endpoints == ["/v1/chat/completions"]
+    _, provider, _, api_base = get_llm_provider(
+        model="resetdata/zai/glm-5.3",
+        custom_llm_provider=None,
+        api_base=None,
+        api_key=None,
+    )
 
-    def test_resetdata_serves_chat_endpoint(self):
-        """The registry declares chat completions as the served endpoint."""
-        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+    assert provider == "resetdata"
+    assert api_base == "https://resetdata.env.example/api/v1"
 
-        assert (
-            JSONProviderRegistry.serves_endpoint(
-                "resetdata", None, "/v1/chat/completions"
-            )
-            is True
-        )
-        # Only chat completions is claimed for the initial contribution.
-        assert (
-            JSONProviderRegistry.serves_endpoint("resetdata", None, "/v1/embeddings")
-            is False
-        )
-        assert (
-            JSONProviderRegistry.serves_endpoint("resetdata", None, "/v1/responses")
-            is False
-        )
-        assert JSONProviderRegistry.supports_embeddings("resetdata") is False
 
-    def test_resetdata_provider_resolution(self, monkeypatch: pytest.MonkeyPatch):
-        """Test that provider resolution finds resetdata and the default base URL.
+def test_resetdata_explicit_credentials_win_over_env(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("RESETDATA_API_KEY", "sk-rd-env")
+    monkeypatch.setenv("RESETDATA_API_BASE", "https://resetdata.env.example/api/v1")
 
-        ResetData model slugs contain a slash (provider/model form), so the
-        full model id is three segments. Only the first segment (the LiteLLM
-        provider prefix) must be stripped.
-        """
-        from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+    _, provider, api_key, api_base = get_llm_provider(
+        model="resetdata/zai/glm-5.3",
+        custom_llm_provider=None,
+        api_base="https://resetdata.internal.example/api/v1",
+        api_key="sk-rd-explicit",
+    )
 
-        # A developer machine with these exported would otherwise flip the
-        # default-base-url assertion.
-        monkeypatch.delenv("RESETDATA_API_KEY", raising=False)
-        monkeypatch.delenv("RESETDATA_API_BASE", raising=False)
+    assert provider == "resetdata"
+    assert api_key == "sk-rd-explicit"
+    assert api_base == "https://resetdata.internal.example/api/v1"
 
-        model, provider, api_key, api_base = get_llm_provider(
+
+def test_resetdata_chat_completion_request():
+    with respx.mock() as upstream:
+        route: Final = upstream.post(_CHAT_COMPLETIONS_URL).respond(200, json=_CHAT_COMPLETION)
+        response: Final = litellm.completion(
             model="resetdata/zai/glm-5.3",
-            custom_llm_provider=None,
-            api_base=None,
-            api_key=None,
+            messages=[{"role": "user", "content": "Say hello"}],
+            max_tokens=64,
+            api_key="sk-rd-test",
         )
 
-        assert model == "zai/glm-5.3"
-        assert provider == "resetdata"
-        assert api_base == "https://api.resetdata.ai/api/v1"
+    request: Final = route.calls.last.request
+    body: Final = json.loads(request.content)
+    assert route.call_count == 1
+    assert request.headers["authorization"] == "Bearer sk-rd-test"
+    assert body["model"] == "zai/glm-5.3"
+    assert body["messages"] == [{"role": "user", "content": "Say hello"}]
+    assert body["max_tokens"] == 64
+    assert response.choices[0].message.content == "Hello from ResetData"
+    assert response.choices[0].message.reasoning_content == "Say hi"
 
-    def test_resetdata_api_base_override(self, monkeypatch: pytest.MonkeyPatch):
-        """Test that an explicit api_base / api_key overrides the default"""
-        from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 
-        monkeypatch.delenv("RESETDATA_API_KEY", raising=False)
-        monkeypatch.delenv("RESETDATA_API_BASE", raising=False)
-
-        model, provider, api_key, api_base = get_llm_provider(
+def test_resetdata_responses_request_is_bridged_to_chat_completions():
+    with respx.mock() as upstream:
+        route: Final = upstream.post(_CHAT_COMPLETIONS_URL).respond(200, json=_CHAT_COMPLETION)
+        response: Final = litellm.responses(
             model="resetdata/zai/glm-5.3",
-            custom_llm_provider=None,
-            api_base="https://custom.example.com/v1",
-            api_key="sk-test",
+            input="Say hello",
+            api_key="sk-rd-test",
         )
 
-        assert provider == "resetdata"
-        assert api_base == "https://custom.example.com/v1"
-        assert api_key == "sk-test"
+    body: Final = json.loads(route.calls.last.request.content)
+    assert route.call_count == 1
+    assert body["model"] == "zai/glm-5.3"
+    assert body["messages"] == [{"role": "user", "content": "Say hello"}]
+    message_items: Final = [item for item in response.output if item.type == "message"]
+    assert message_items[0].content[0].text == "Hello from ResetData"
 
-    def test_resetdata_model_cost_map(self, monkeypatch: pytest.MonkeyPatch):
-        """ResetData models are present in the packaged model cost map.
 
-        The local packaged map is asserted (not the runtime litellm.model_cost,
-        which may reflect the remote main-branch map) so the test is
-        deterministic before and after the catalog entries merge upstream.
-        """
-        monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-        local_cost: dict[str, dict[str, Any]] = litellm.get_model_cost_map(url="")
+@pytest.mark.usefixtures("local_model_cost_map")
+def test_resetdata_wildcard_expands_to_every_resetdata_row():
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
 
-        assert "resetdata/zai/glm-5.3" in local_cost
-        info = local_cost["resetdata/zai/glm-5.3"]
-        assert info["litellm_provider"] == "resetdata"
-        assert info["mode"] == "chat"
+    assert RESETDATA_MODELS
+    assert set(get_known_models_from_wildcard("resetdata/*")) == set(RESETDATA_MODELS)
 
-    def test_resetdata_router_config(self):
-        """Test that resetdata can be used in Router configuration"""
-        from litellm import Router
 
-        router = Router(
-            model_list=[
-                {
-                    "model_name": "resetdata-chat",
-                    "litellm_params": {
-                        "model": "resetdata/zai/glm-5.3",
-                        "api_key": "test-key",
-                    },
-                }
-            ]
-        )
+def test_resetdata_backup_maps_mirror_the_root_maps():
+    package_root: Final = Path(litellm.__file__).parent
+    cost_map: Final = json.loads((package_root.parent / "model_prices_and_context_window.json").read_text())
+    cost_backup: Final = json.loads((package_root / "model_prices_and_context_window_backup.json").read_text())
+    endpoints: Final = json.loads((package_root.parent / "provider_endpoints_support.json").read_text())
+    endpoints_backup: Final = json.loads((package_root / "provider_endpoints_support_backup.json").read_text())
+    resetdata_rows: Final = {name: entry for name, entry in cost_map.items() if name.startswith("resetdata/")}
 
-        deployments = router.registry().all()
-        assert len(deployments) == 1
-        assert deployments[0]["model_name"] == "resetdata-chat"
+    assert tuple(sorted(resetdata_rows)) == RESETDATA_MODELS
+    assert resetdata_rows == {name: cost_backup[name] for name in resetdata_rows}
+    assert endpoints["providers"]["resetdata"] == endpoints_backup["providers"]["resetdata"]
 
-    def test_resetdata_model_modes(self, monkeypatch: pytest.MonkeyPatch):
-        """All resetdata catalog entries are chat models from the resetdata provider."""
-        monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-        local_cost: dict[str, dict[str, Any]] = litellm.get_model_cost_map(url="")
 
-        resetdata_models = [k for k in local_cost if k.startswith("resetdata/")]
-        assert len(resetdata_models) > 0
-        for key in resetdata_models:
-            assert local_cost[key]["mode"] == "chat", key
-            assert local_cost[key]["litellm_provider"] == "resetdata", key
+def test_resetdata_is_available_in_add_model_form():
+    fields_path: Final = Path(litellm.__file__).parent / "proxy" / "public_endpoints" / "provider_create_fields.json"
+    providers: Final = json.loads(fields_path.read_text())
+    resetdata: Final = next(provider for provider in providers if provider["litellm_provider"] == "resetdata")
 
-    def test_resetdata_supported_endpoints_matrix(self):
-        """The runtime-served backup matrix (GET /public/supported_endpoints) lists resetdata."""
-        import json
-        from pathlib import Path
-
-        import litellm as _litellm
-
-        backup_path = (
-            Path(_litellm.__file__).parent / "provider_endpoints_support_backup.json"
-        )
-        matrix = json.loads(backup_path.read_text())
-
-        assert "resetdata" in matrix["providers"]
-        endpoints = matrix["providers"]["resetdata"]["endpoints"]
-        assert endpoints["chat_completions"] is True
-        # Only chat completions is claimed for the initial contribution:
-        # ResetData documents /chat/completions as its core endpoint today.
-        # Other endpoints can be enabled as they are validated.
-        assert endpoints["embeddings"] is False
-        assert endpoints["responses"] is False
+    assert resetdata["provider"] == "RESETDATA"
+    assert resetdata["default_model_placeholder"] in RESETDATA_MODELS
+    assert {field["key"]: field["required"] for field in resetdata["credential_fields"]} == {
+        "api_base": False,
+        "api_key": True,
+    }
