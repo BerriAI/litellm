@@ -713,10 +713,10 @@ def _proxy_user_profile_header(user_profile_id: str) -> object:
 
 
 @pytest.mark.parametrize("auth_kwargs", [API_KEY_KWARGS, SIGV4_KWARGS], ids=["api_key", "sigv4"])
-def test_chat_completion_claude_platform_forwards_the_proxy_user_profile_id(auth_kwargs):
+def test_chat_completion_claude_platform_forwards_the_proxy_user_profile_id(auth_kwargs: dict[str, str]) -> None:
     import litellm
 
-    requests: list[dict] = []
+    requests: Final[list[dict]] = []  # mutable-ok: the fake gateway client records each request it receives
 
     litellm.completion(
         model="bedrock/claude_platform/claude-sonnet-4-6",
@@ -736,10 +736,12 @@ def test_chat_completion_claude_platform_forwards_the_proxy_user_profile_id(auth
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("auth_kwargs", [API_KEY_KWARGS, SIGV4_KWARGS], ids=["api_key", "sigv4"])
-async def test_anthropic_messages_claude_platform_forwards_the_proxy_user_profile_id(auth_kwargs):
+async def test_anthropic_messages_claude_platform_forwards_the_proxy_user_profile_id(
+    auth_kwargs: dict[str, str],
+) -> None:
     import litellm
 
-    requests: list[dict] = []
+    requests: Final[list[dict]] = []  # mutable-ok: the fake gateway client records each request it receives
 
     await litellm.anthropic_messages(
         model="bedrock/claude_platform/claude-sonnet-4-6",
