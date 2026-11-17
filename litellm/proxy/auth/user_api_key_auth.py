@@ -2772,7 +2772,7 @@ async def run_centralized_common_checks(
     # if a DB row was fetched. Every admin token except the built-in admin
     # identity (litellm_proxy_admin_name: the master key and the UI
     # username/password login) keeps the row's personal budget (max_budget,
-    # and user_email for budget alerts) so common_checks enforces it; every
+    # soft_budget, and user_email for budget alerts) so common_checks enforces it; every
     # other field keeps its default.
     if user_api_key_auth_obj.user_role == LitellmUserRoles.PROXY_ADMIN:
         budget_row: Final = (
@@ -2785,6 +2785,7 @@ async def run_centralized_common_checks(
             user_role=LitellmUserRoles.PROXY_ADMIN,
             spend=user_object.spend if user_object is not None else 0.0,
             max_budget=budget_row.max_budget if budget_row is not None else None,
+            soft_budget=budget_row.soft_budget if budget_row is not None else None,
             budget_limits=budget_row.budget_limits if budget_row is not None else None,
             user_email=budget_row.user_email if budget_row is not None else None,
             object_permission_id=(

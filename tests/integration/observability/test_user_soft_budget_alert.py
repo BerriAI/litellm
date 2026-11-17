@@ -104,6 +104,7 @@ class MailingProxy:
     gateway: Gateway
     webhooks: AlertLog
     mailbox: Mailbox
+    log: Path
 
 
 @dataclass(frozen=True, slots=True)
@@ -194,8 +195,8 @@ def mailing(tmp_path_factory: pytest.TempPathFactory) -> Iterator[MailingProxy]:
             "SMTP_SENDER_EMAIL": "alerts@integration.test",
         }
         config: Final = alerting_config(directory, "mailing", alerting=["slack", "webhook", "email"])
-        with owned_proxy(shared, directory, overrides, config=config) as gateway:
-            yield MailingProxy(gateway, AlertLog(webhooks), mailbox)
+        with owned_proxy_process(shared, directory, overrides, config=config) as proxy:
+            yield MailingProxy(proxy.gateway, AlertLog(webhooks), mailbox, proxy.log)
 
 
 @pytest.fixture(scope="module")
@@ -603,6 +604,21 @@ def test_user_over_soft_budget_gets_alert_and_request_still_succeeds(
         key: Final = scenario.key(user_id=user_id)
 
         response: Final = gateway.chat(model, key=key)
+
+        assert response["choices"], response
+        assert_user_soft_budget_alert(exactly_one_alert_naming(alerting.alerts, user_id), user_id, SOFT_BUDGET, SPEND)
+
+
+@pytest.mark.parametrize("max_budget", [None, 100.0])
+def test_proxy_admin_over_soft_budget_gets_alert_and_request_still_succeeds(
+    alerting: AlertingProxy, max_budget: float | None
+) -> None:
+    gateway: Final = alerting.gateway
+    with gateway.scenario() as scenario:
+        model: Final = scenario.model()
+        user_id: Final = crossing_user(scenario, user_role="proxy_admin", max_budget=max_budget)
+
+        response: Final = gateway.chat(model, key=scenario.key(user_id=user_id))
 
         assert response["choices"], response
         assert_user_soft_budget_alert(exactly_one_alert_naming(alerting.alerts, user_id), user_id, SOFT_BUDGET, SPEND)
@@ -1055,6 +1071,8 @@ def test_user_without_an_email_is_served_and_still_reaches_the_webhook(mailing: 
         event: Final = JSON_OBJECT.validate_json(exactly_one_alert_naming(mailing.webhooks, user_id))
         assert (event["event"], event["event_group"], event["user_email"]) == ("soft_budget_crossed", "user", None)
         assert [html for delivery in mailing.mailbox.deliveries() if user_id in (html := delivery.html)] == []
+        logged: Final = [line for line in mailing.log.read_text().splitlines() if user_id in line]
+        assert logged == [], logged
 
 
 @dataclass(frozen=True, slots=True)

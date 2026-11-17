@@ -526,6 +526,11 @@ class BaseEmailLogger(CustomLogger):
                 # For non-team alerts, require either max_budget or soft_budget
                 if user_info.max_budget is None and user_info.soft_budget is None:
                     return
+                if user_info.event_group == Litellm_EntityType.USER and not user_info.user_email:
+                    verbose_proxy_logger.debug(
+                        "Skipping user soft budget email alert: user %s has no email", user_info.user_id
+                    )
+                    return
             if (
                 user_info.soft_budget is not None
                 and user_info.spend >= user_info.soft_budget
