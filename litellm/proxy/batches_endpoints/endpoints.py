@@ -56,6 +56,7 @@ from litellm.proxy.openai_files_endpoints.common_utils import (  # noqa: F401  #
     authorize_model_for_key,
     batch_cost_poller_is_active,
     batch_deployment_id,
+    batch_deployment_on_another_resource,
     decode_deployment_from_file_id,
     decode_model_from_file_id,
     encode_batch_response_ids,
@@ -155,6 +156,11 @@ def _page_listing(page: object, batches: Sequence[object], has_more: bool) -> ob
 
 def _listed_batches(page: object) -> tuple[object, ...]:
     return tuple(iter_items(attribute_or_none(page, "data") or ()))
+
+
+async def _list_group_batches(list_page: _ListBatchPage, after: str | None, limit: int | None) -> object:
+    page: Final = await list_page(None, get_original_file_id(after) if after else None, limit)
+    return _page_listing(page, _listed_batches(page), attribute_or_none(page, "has_more") is True)
 
 
 async def _list_mixed_group_batches(
@@ -1022,7 +1028,7 @@ async def list_batches(
         ):
             # SCENARIO 2: Use model-based routing from header/query/body
             list_deployment_id: Final = (
-                batch_deployment_id(llm_router, model_param) if isinstance(model_param, str) else None
+                batch_deployment_on_another_resource(llm_router, model_param) if isinstance(model_param, str) else None
             )
             list_page: Final = partial(
                 _list_batches_on_deployment,
@@ -1033,7 +1039,7 @@ async def list_batches(
                 list_provider_batches=litellm.alist_batches,
             )
             response = (
-                await list_page(None, after, limit)
+                await _list_group_batches(list_page, after, limit)
                 if list_deployment_id is None
                 else await _list_mixed_group_batches(list_page, list_deployment_id, after, limit)
             )

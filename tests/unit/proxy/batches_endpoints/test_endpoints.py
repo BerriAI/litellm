@@ -3619,7 +3619,9 @@ async def test_cancel__executed_batch_rejects_key_without_model_grant(cancel_har
     cancel_harness.router_acancel.assert_not_called()
 
 
-def _mixed_azure_group_router(paused_deployment_ids: frozenset[str] = frozenset()) -> Router:
+def _mixed_azure_group_router(
+    paused_deployment_ids: frozenset[str] = frozenset(), batch_sku: str = "batch-sku"
+) -> Router:
     return Router(
         model_list=[
             {
@@ -3634,7 +3636,7 @@ def _mixed_azure_group_router(paused_deployment_ids: frozenset[str] = frozenset(
             }
             for model_group, sku, mode, deployment_id in (
                 ("gpt-mixed", "chat-sku", "chat", "chat-id"),
-                ("gpt-mixed", "batch-sku", "batch", "batch-id"),
+                ("gpt-mixed", batch_sku, "batch", "batch-id"),
                 ("gpt-other", "other-sku", "batch", "other-batch-id"),
             )
         ]
@@ -3721,23 +3723,26 @@ def _azure_like_batch_list(batch_ids_by_api_base: Mapping[str, tuple[str, ...]])
     return AsyncMock(side_effect=list_batches)
 
 
+async def _header_listed_pages(
+    list_harness, after: str | None, model_group: str = "gpt-mixed"
+) -> tuple[tuple[str | None, str, str | None], ...]:
+    page: Final = await call_list(list_harness, limit=2, after=after, headers={"x-litellm-model": model_group})
+    listed: Final = tuple(map(_decoded, (batch.id for batch in page.data)))
+    assert (page.first_id, page.last_id) == (page.data[0].id, page.data[-1].id)
+    return listed + (await _header_listed_pages(list_harness, page.data[-1].id, model_group) if page.has_more else ())
+
+
 @pytest.mark.asyncio
 async def test_list__model_header_on_a_mixed_group_pages_through_its_chat_then_its_batch_resource(list_harness):
     provider_list: Final = _azure_like_batch_list(
         {_BATCH_SKU[0]: ("batch-b1", "batch-b2", "batch-b3"), _CHAT_SKU[0]: ("batch-a1", "batch-a2")}
     )
 
-    async def pages_from(after: str | None) -> tuple[tuple[str | None, str, str | None], ...]:
-        page: Final = await call_list(list_harness, limit=2, after=after, headers={"x-litellm-model": "gpt-mixed"})
-        listed: Final = tuple(map(_decoded, (batch.id for batch in page.data)))
-        assert (page.first_id, page.last_id) == (page.data[0].id, page.data[-1].id)
-        return listed + (await pages_from(page.data[-1].id) if page.has_more else ())
-
     with (
         patch.object(proxy_server, "llm_router", _mixed_azure_group_router()),
         patch.object(litellm, "alist_batches", provider_list),
     ):
-        listed: Final = await pages_from(None)
+        listed: Final = await _header_listed_pages(list_harness, None)
 
     assert listed == (
         ("gpt-mixed", "batch-a1", None),
@@ -3745,6 +3750,40 @@ async def test_list__model_header_on_a_mixed_group_pages_through_its_chat_then_i
         ("gpt-mixed", "batch-b1", "batch-id"),
         ("gpt-mixed", "batch-b2", "batch-id"),
         ("gpt-mixed", "batch-b3", "batch-id"),
+    )
+
+
+@pytest.mark.asyncio
+async def test_list__model_header_on_a_one_deployment_group_pages_with_the_ids_it_listed(list_harness):
+    provider_list: Final = _azure_like_batch_list(
+        {"https://other-sku.openai.azure.com": ("batch-o1", "batch-o2", "batch-o3")}
+    )
+    with (
+        patch.object(proxy_server, "llm_router", _mixed_azure_group_router()),
+        patch.object(litellm, "alist_batches", provider_list),
+    ):
+        listed: Final = await _header_listed_pages(list_harness, None, "gpt-other")
+    assert listed == (
+        ("gpt-other", "batch-o1", None),
+        ("gpt-other", "batch-o2", None),
+        ("gpt-other", "batch-o3", None),
+    )
+
+
+@pytest.mark.asyncio
+async def test_list__model_header_on_a_mixed_group_sharing_one_azure_resource_lists_each_batch_once(list_harness):
+    provider_list: Final = _azure_like_batch_list({_CHAT_SKU[0]: ("batch-s1", "batch-s2", "batch-s3")})
+
+    with (
+        patch.object(proxy_server, "llm_router", _mixed_azure_group_router(batch_sku="chat-sku")),
+        patch.object(litellm, "alist_batches", provider_list),
+    ):
+        listed: Final = await _header_listed_pages(list_harness, None)
+
+    assert listed == (
+        ("gpt-mixed", "batch-s1", None),
+        ("gpt-mixed", "batch-s2", None),
+        ("gpt-mixed", "batch-s3", None),
     )
 
 

@@ -695,6 +695,19 @@ def _group_default_deployment_id(llm_router: "Router", model: str) -> str | None
     return deployment.model_info.id if deployment is not None else None
 
 
+def _deployment_api_base(llm_router: "Router", model_or_deployment_id: str) -> str | None:
+    deployment: Final = llm_router.registry().credentials(model_or_deployment_id, form="deployment")
+    return deployment.litellm_params.api_base if deployment is not None else None
+
+
+def batch_deployment_on_another_resource(llm_router: Optional["Router"], model: str) -> str | None:
+    deployment_id: Final = batch_deployment_id(llm_router, model)
+    if llm_router is None or deployment_id is None:
+        return None
+    shares_resource: Final = _deployment_api_base(llm_router, deployment_id) == _deployment_api_base(llm_router, model)
+    return None if shares_resource else deployment_id
+
+
 def hinted_batch_deployment_id(
     llm_router: Optional["Router"], model: str, encoded_id: str, reads_existing_object: bool = False
 ) -> str | None:
