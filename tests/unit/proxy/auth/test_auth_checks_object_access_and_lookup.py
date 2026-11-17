@@ -3547,6 +3547,22 @@ async def test_enforce_key_access_keys_skipping_the_model_check_still_stop_at_ot
             ),
             ProxyErrorTypes.team_model_access_denied,
         ),
+        (
+            UserAPIKeyAuth(api_key="sk-team-a-open", models=[], team_id="team-a", team_models=["bedrock-group"]),
+            ProxyErrorTypes.team_model_access_denied,
+        ),
+        (
+            UserAPIKeyAuth(
+                api_key="sk-team-a-all", models=["all-proxy-models"], team_id="team-a", team_models=["bedrock-group"]
+            ),
+            ProxyErrorTypes.team_model_access_denied,
+        ),
+        (
+            UserAPIKeyAuth(
+                api_key="sk-team-a-named", models=["model_name_team-b_1111"], team_id="team-a", team_models=[]
+            ),
+            ProxyErrorTypes.key_model_access_denied,
+        ),
     ],
 )
 async def test_can_key_call_resolved_model_all_team_models_key_denied_other_teams_deployment(

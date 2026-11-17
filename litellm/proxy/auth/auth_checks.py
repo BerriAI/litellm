@@ -5839,6 +5839,12 @@ async def can_key_call_model(
     return True
 
 
+_KEY_MODEL_NAMES: Final = TypeAdapter(tuple[str, ...])
+_UNRESTRICTED_KEY_GRANTS: Final = frozenset(
+    {SpecialModelNames.all_team_models.value, SpecialModelNames.all_proxy_models.value}
+)
+
+
 def raise_when_key_reaches_only_other_teams_deployments(
     model: str | Sequence[str],
     llm_router: RegistryReader | None,
@@ -5853,11 +5859,9 @@ def raise_when_key_reaches_only_other_teams_deployments(
     )
     if foreign_model is None:
         return
-    denied_object: Final = (
-        "team"
-        if valid_token.team_id is not None and SpecialModelNames.all_team_models.value in (valid_token.models or ())
-        else "key"
-    )
+    key_models: Final = _KEY_MODEL_NAMES.validate_python(valid_token.models or ())
+    key_grant_defers_to_team: Final = not key_models or not _UNRESTRICTED_KEY_GRANTS.isdisjoint(key_models)
+    denied_object: Final = "team" if valid_token.team_id is not None and key_grant_defers_to_team else "key"
     raise ModelAccessDeniedProxyException(
         message=model_access_denied_client_message(model=foreign_model),
         internal_message=(
@@ -5923,7 +5927,7 @@ async def _can_key_call_resolved_model(
     if valid_token.customer_hierarchy is not None:
         check_customer_hierarchy_model_access(valid_token.customer_hierarchy, model, llm_router)
     skip_key_model_check: Final = valid_token.config or (
-        isinstance(valid_token.models, list) and SpecialModelNames.all_team_models.value in valid_token.models
+        SpecialModelNames.all_team_models.value in _KEY_MODEL_NAMES.validate_python(valid_token.models or ())
     )
     if skip_key_model_check:
         raise_when_key_reaches_only_other_teams_deployments(model=model, llm_router=llm_router, valid_token=valid_token)

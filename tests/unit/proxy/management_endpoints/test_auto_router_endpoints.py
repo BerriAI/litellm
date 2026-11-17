@@ -3434,19 +3434,54 @@ async def test_validate_config_gates_like_the_write_it_rehearses(monkeypatch: py
     assert not_their_team.value.status_code == 403
 
 
-def _configure_team_admin_preview(monkeypatch: pytest.MonkeyPatch) -> UserAPIKeyAuth:
+def _configure_team_admin_preview(
+    monkeypatch: pytest.MonkeyPatch, *, extra_team_models: tuple[str, ...] = ()
+) -> UserAPIKeyAuth:
     from litellm.proxy._types import LiteLLM_TeamTable
 
     team: Final = LiteLLM_TeamTable(
         team_id="admin-preview-team",
-        models=["saved-jev", "typesafe/jev-latest", *[TIERS[name][0] for name in TIERS]],
+        models=["saved-jev", "typesafe/jev-latest", *[TIERS[name][0] for name in TIERS], *extra_team_models],
         members_with_roles=[{"role": "admin", "user_id": "preview-admin"}],
     )
     database: Final = MagicMock()
     database.db.litellm_teamtable.find_unique = AsyncMock(return_value=team)
+    database.db.litellm_teammembership.find_unique = AsyncMock(return_value=None)
     monkeypatch.setattr(proxy_server, "prisma_client", database)
     monkeypatch.setattr(proxy_server, "premium_user", True)
     return UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="preview-admin", api_key="sk-preview")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("owner_team", ["admin-preview-team", "other-team"])
+async def test_team_admin_preview_reaches_only_its_own_teams_classifier(
+    monkeypatch: pytest.MonkeyPatch, owner_team: str
+) -> None:
+    router, recorded_calls = _recording_router("SIMPLE")
+    router.add_deployment(
+        Deployment.model_validate(
+            {
+                "model_name": "team-classifier",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "fake-key"},
+                "model_info": {"id": "team-classifier-id", "team_id": owner_team},
+            }
+        )
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    actor: Final = _configure_team_admin_preview(monkeypatch, extra_team_models=("team-classifier",))
+    data: Final = _request_from(
+        {"prompt": "hi", "team_id": "admin-preview-team"},
+        classifier_type="llm",
+        classifier_llm_config={"model": "team-classifier"},
+    )
+    if owner_team == "other-team":
+        with pytest.raises(ProxyException) as denied:
+            await preview_auto_router_routing(data, actor, ROUTING_HTTP_REQUEST)
+        assert denied.value.type == ProxyErrorTypes.team_model_access_denied
+        assert recorded_calls == []
+    else:
+        await preview_auto_router_routing(data, actor, ROUTING_HTTP_REQUEST)
+        assert [call["model"] for call in recorded_calls] == ["team-classifier"]
 
 
 @pytest.mark.asyncio

@@ -479,6 +479,12 @@ async def get_auto_router_availability(
     )
 
 
+def _acting_for_team(user_api_key_dict: UserAPIKeyAuth, team_id: str | None) -> UserAPIKeyAuth:
+    if team_id is None or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
+        return user_api_key_dict
+    return user_api_key_dict.model_copy(update=MappingProxyType({"team_id": team_id}))
+
+
 async def _resolve_saved_routing_test(
     data: AutoRouterRoutingTestRequest,
     user_api_key_dict: UserAPIKeyAuth,
@@ -573,7 +579,9 @@ async def preview_auto_router_routing(
             status_code=500,
             detail={"error": CommonProxyErrors.no_llm_router.value},
         )
-    resolved: Final = await _resolve_saved_routing_test(data, user_api_key_dict, llm_router)
+    resolved: Final = await _resolve_saved_routing_test(
+        data, _acting_for_team(user_api_key_dict, data.team_id), llm_router
+    )
     if data.saved_model_id is None:
         raise_auto_router_environment_reference_error(
             auto_router_environment_reference_error(
@@ -610,7 +618,7 @@ async def preview_auto_router_routing(
 
     await _authorize_models_this_test_can_call(
         config=resolved.complexity_router_config,
-        user_api_key_dict=actor,
+        user_api_key_dict=_acting_for_team(actor, data.team_id),
         llm_router=llm_router,
     )
 
