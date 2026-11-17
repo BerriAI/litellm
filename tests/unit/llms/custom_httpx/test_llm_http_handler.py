@@ -6873,13 +6873,9 @@ _STORED_RESPONSE_CALLS: Final = MappingProxyType(
 )
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("is_async", (False, True))
-@pytest.mark.parametrize("call_name", tuple(_STORED_RESPONSE_CALLS))
-@pytest.mark.parametrize("authorization_name", ("authorization", "Authorization"))
-async def test_stored_response_calls_send_only_the_caller_authorization(
-    is_async: bool, call_name: str, authorization_name: str, respx_mock: respx.MockRouter
-) -> None:
+async def _send_stored_response_call(
+    respx_mock: respx.MockRouter, is_async: bool, call_name: str, custom_llm_provider: str, authorization_name: str
+) -> httpx.Request:
     route: Final = respx_mock.route(url__regex=r"https://responses\.example\.com/.*").respond(
         200, json={**_responses_body("gpt-6-luna"), "deleted": True, "data": [], "has_more": False}
     )
@@ -6887,14 +6883,36 @@ async def test_stored_response_calls_send_only_the_caller_authorization(
     async with _responses_http_client(is_async) as client:
         kwargs: Final = {
             **call_kwargs,
-            "custom_llm_provider": "openai",
+            "custom_llm_provider": custom_llm_provider,
             "api_key": "fake-configured-key",
             "api_base": "https://responses.example.com/v1",
             "extra_headers": {authorization_name: "Bearer fake-caller-key"},
             "client": client,
         }
         await async_call(**kwargs) if is_async else sync_call(**kwargs)
-    assert route.calls[0].request.headers.get_list("authorization") == ["Bearer fake-caller-key"]
+    return route.calls[0].request
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_async", (False, True))
+@pytest.mark.parametrize("call_name", tuple(_STORED_RESPONSE_CALLS))
+@pytest.mark.parametrize("authorization_name", ("authorization", "Authorization"))
+async def test_stored_response_calls_send_only_the_caller_authorization(
+    is_async: bool, call_name: str, authorization_name: str, respx_mock: respx.MockRouter
+) -> None:
+    request: Final = await _send_stored_response_call(respx_mock, is_async, call_name, "openai", authorization_name)
+    assert request.headers.get_list("authorization") == ["Bearer fake-caller-key"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_async", (False, True))
+@pytest.mark.parametrize("call_name", tuple(_STORED_RESPONSE_CALLS))
+@pytest.mark.parametrize("authorization_name", ("authorization", "Authorization"))
+async def test_chatgpt_stored_response_calls_send_only_the_configured_token_over_a_caller_api_key(
+    is_async: bool, call_name: str, authorization_name: str, respx_mock: respx.MockRouter
+) -> None:
+    request: Final = await _send_stored_response_call(respx_mock, is_async, call_name, "chatgpt", authorization_name)
+    assert request.headers.get_list("authorization") == ["Bearer fake-configured-key"]
 
 
 @pytest.mark.asyncio

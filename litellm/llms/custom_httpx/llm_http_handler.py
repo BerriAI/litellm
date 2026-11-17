@@ -269,7 +269,8 @@ def _stored_response_request_headers(
     provider_headers: Final[Mapping[str, object]] = responses_api_provider_config.validate_environment(
         headers=dict(extra_headers or {}), model=model, litellm_params=litellm_params
     )
-    return _merge_headers_case_insensitive(provider_headers, extra_headers)
+    validated_by_provider: Final = responses_api_provider_config.custom_llm_provider == litellm.LlmProviders.CHATGPT
+    return _merge_headers_case_insensitive(provider_headers, None if validated_by_provider else extra_headers)
 
 
 def _requested_stream(response_api_optional_request_params: Mapping[str, object]) -> object:
@@ -361,9 +362,9 @@ _ResponseT = TypeVar("_ResponseT")
 
 
 class _DeleteRequestKwargs(TypedDict, total=False):
-    url: str
-    headers: dict[str, object]
-    timeout: float | httpx.Timeout | None
+    url: ReadOnly[str]
+    headers: ReadOnly[dict[str, object]]
+    timeout: ReadOnly[float | httpx.Timeout | None]
     json: dict[str, object]
 
 
