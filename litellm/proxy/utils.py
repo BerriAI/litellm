@@ -1833,6 +1833,10 @@ object, meaning the request died (auth, body parsing, model resolution) before t
 object rather than ``True`` because ``request_data`` is the client body: JSON cannot forge this identity, so a
 client can neither hide a guardrail block nor force a row by sending the key or a ``litellm_call_id`` itself."""
 
+FAILURE_ROW_ALREADY_WRITTEN_KEY: Final = "litellm_failure_row_already_written"
+FAILURE_ROW_ALREADY_WRITTEN: Final = object()
+"""An object, like ``REJECTED_BEFORE_REQUEST_SETUP``, so the client body cannot forge it."""
+
 GUARDRAIL_ENDPOINT_FAILURE_KEY: Final = "litellm_guardrail_endpoint_failure"
 GUARDRAIL_ENDPOINT_FAILURE: Final = object()
 """Stored under ``GUARDRAIL_ENDPOINT_FAILURE_KEY`` by ``/apply_guardrail`` when a request it had set up fails, so the

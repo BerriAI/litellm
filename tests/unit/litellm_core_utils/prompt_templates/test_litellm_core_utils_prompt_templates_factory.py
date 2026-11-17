@@ -85,6 +85,7 @@ from litellm.types.utils import ChatCompletionMessageToolCall, Function, ModelRe
 from litellm.utils import (
     Rules,
     function_setup,
+    messages_without_foreign_thought_signatures,
     validate_and_fix_openai_messages,
 )
 from litellm.litellm_core_utils.model_cost_table import publish
@@ -210,8 +211,8 @@ def test_encode_tool_call_id_with_signature(thought_signature, expected):
             "function-signature",
         ),
         (
-            {"id": encode_tool_call_id_with_signature("call_123", "embedded-signature")},
-            "embedded-signature",
+            {"id": encode_tool_call_id_with_signature("call_123", "ZW1iZWRkZWQtc2lnbmF0dXJl")},
+            "ZW1iZWRkZWQtc2lnbmF0dXJl",
         ),
         ({}, None),
     ],
@@ -321,7 +322,11 @@ def test_ollama_pt_consecutive_user_messages():
 
 
 def _ollama_tool_turn(*results: object) -> list[dict]:
-    call: Final = {"id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'}}
+    call: Final = {
+        "id": "call_1",
+        "type": "function",
+        "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
+    }
     return [
         {"role": "user", "content": "Weather in Paris?"},
         {"role": "assistant", "content": None, "tool_calls": [call]},
@@ -1377,7 +1382,6 @@ def test_anthropic_messages_pt_sends_a_signed_block_once_when_thinking_blocks_ho
     assert result[1] == {"role": "assistant", "content": [signed, redacted, {"type": "text", "text": "hello"}]}
 
 
-
 def test_anthropic_messages_pt_sends_a_block_once_when_two_assistant_messages_carry_it():
     signed: Final = {"type": "thinking", "thinking": "Let me look this up.", "signature": "sig-abc"}
     redacted: Final = {"type": "redacted_thinking", "data": _NATIVE_REDACTED_DATA}
@@ -1396,6 +1400,7 @@ def test_anthropic_messages_pt_sends_a_block_once_when_two_assistant_messages_ca
             {"type": "tool_use", "id": "tooluse_weather_1", "name": "get_weather", "input": {"city": "Paris"}},
         ],
     }
+
 
 @REASONING_PLACEMENTS
 @pytest.mark.parametrize("drop_params", [False, True])
@@ -2185,7 +2190,11 @@ def test_convert_to_gemini_tool_call_invoke_drops_unusable_arguments_under_drop_
 
     function: Final = {"name": "get_weather", "arguments": arguments}
     message: Final = (
-        {"role": "assistant", "content": None, "tool_calls": [{"id": "call_1", "type": "function", "function": function}]}
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{"id": "call_1", "type": "function", "function": function}],
+        }
         if shape == "tool_calls"
         else {"role": "assistant", "content": None, "function_call": function}
     )
@@ -2429,10 +2438,11 @@ def test_gemini_tool_media_keeps_vertex_reference_when_inline_data_is_absent(
     ]
 
 
-
 def test_gemini_tool_media_fetch_failure_preserves_tool_text() -> None:
     message: Final = ChatCompletionToolMessage(
-        role="tool", name="lookup", content=[
+        role="tool",
+        name="lookup",
+        content=[
             {"type": "text", "text": '{"ok":true}'},
             {"type": "image_url", "image_url": {"url": "https://8.8.8.8/unavailable.png"}},
         ],
@@ -2441,6 +2451,7 @@ def test_gemini_tool_media_fetch_failure_preserves_tool_text() -> None:
         router.get("https://8.8.8.8/unavailable.png").respond(404)
         result: Final = convert_to_gemini_tool_call_result(message, None, custom_llm_provider="gemini")
     assert result == {"function_response": {"name": "lookup", "response": {"ok": True}}}
+
 
 def test_convert_gemini_tool_call_result_with_anthropic_image_block():
     """
@@ -6749,181 +6760,74 @@ def test_empty_content():
     )
 
 
-@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
-def test_thought_signature_removal_for_non_gemini():
-    """
-    Test that thought signatures are removed from tool call IDs when sending to non-Gemini models
-    """
-    rules_obj = Rules()
-
-    # Create messages with thought signatures (as would come from Gemini)
-    messages = [
+def _signed_tool_turn(*call_ids: str) -> Sequence[Mapping[str, object]]:
+    return [
         {"role": "user", "content": "What's the weather?"},
         {
             "role": "assistant",
             "tool_calls": [
                 {
-                    "id": f"call_123{THOUGHT_SIGNATURE_SEPARATOR}sig1",
-                    "type": "function",
-                    "function": {
-                        "name": "get_weather",
-                        "arguments": '{"location": "SF"}',
-                    },
-                }
-            ],
-        },
-        {
-            "role": "tool",
-            "tool_call_id": f"call_123{THOUGHT_SIGNATURE_SEPARATOR}sig1",
-            "content": "Sunny, 72°F",
-        },
-    ]
-
-    # Call function_setup with OpenAI model (non-Gemini)
-    logging_obj, kwargs = function_setup(
-        original_function="acompletion",
-        rules_obj=rules_obj,
-        start_time=datetime.now(),
-        model="gpt-4",
-        messages=messages,
-        litellm_call_id=str(uuid.uuid4()),
-        custom_llm_provider="openai",
-    )
-
-    # Verify thought signatures were removed
-    processed_messages = kwargs["messages"]
-    assert processed_messages[1]["tool_calls"][0]["id"] == "call_123"
-    assert processed_messages[2]["tool_call_id"] == "call_123"
-    assert THOUGHT_SIGNATURE_SEPARATOR not in processed_messages[1]["tool_calls"][0]["id"]
-    assert THOUGHT_SIGNATURE_SEPARATOR not in processed_messages[2]["tool_call_id"]
-
-
-@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
-def test_thought_signature_preserved_for_gemini():
-    """
-    Test that thought signatures are preserved when sending to Gemini models
-    """
-    rules_obj = Rules()
-
-    # Create messages with thought signatures
-    messages = [
-        {"role": "user", "content": "What's the weather?"},
-        {
-            "role": "assistant",
-            "tool_calls": [
-                {
-                    "id": f"call_456{THOUGHT_SIGNATURE_SEPARATOR}sig2",
-                    "type": "function",
-                    "function": {
-                        "name": "get_weather",
-                        "arguments": '{"location": "NYC"}',
-                    },
-                }
-            ],
-        },
-        {
-            "role": "tool",
-            "tool_call_id": f"call_456{THOUGHT_SIGNATURE_SEPARATOR}sig2",
-            "content": "Rainy, 65°F",
-        },
-    ]
-
-    # Call function_setup with Gemini model
-    logging_obj, kwargs = function_setup(
-        original_function="acompletion",
-        rules_obj=rules_obj,
-        start_time=datetime.now(),
-        model="gemini-1.5-pro",
-        messages=messages,
-        litellm_call_id=str(uuid.uuid4()),
-        custom_llm_provider="vertex_ai",
-    )
-
-    # Verify thought signatures were preserved (messages should be unchanged)
-    processed_messages = kwargs["messages"]
-    assert THOUGHT_SIGNATURE_SEPARATOR in processed_messages[1]["tool_calls"][0]["id"]
-    assert THOUGHT_SIGNATURE_SEPARATOR in processed_messages[2]["tool_call_id"]
-
-
-@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
-def test_thought_signature_removal_with_multiple_tool_calls():
-    """
-    Test that thought signatures are removed from multiple tool calls
-    """
-    rules_obj = Rules()
-
-    messages = [
-        {"role": "user", "content": "Get weather and time"},
-        {
-            "role": "assistant",
-            "tool_calls": [
-                {
-                    "id": f"call_1{THOUGHT_SIGNATURE_SEPARATOR}sig1",
+                    "id": f"{call_id}{THOUGHT_SIGNATURE_SEPARATOR}sig{index}",
                     "type": "function",
                     "function": {"name": "get_weather", "arguments": "{}"},
-                },
-                {
-                    "id": f"call_2{THOUGHT_SIGNATURE_SEPARATOR}sig2",
-                    "type": "function",
-                    "function": {"name": "get_time", "arguments": "{}"},
-                },
+                }
+                for index, call_id in enumerate(call_ids)
             ],
         },
-        {
-            "role": "tool",
-            "tool_call_id": f"call_1{THOUGHT_SIGNATURE_SEPARATOR}sig1",
-            "content": "Sunny",
-        },
-        {
-            "role": "tool",
-            "tool_call_id": f"call_2{THOUGHT_SIGNATURE_SEPARATOR}sig2",
-            "content": "3:00 PM",
-        },
+        *(
+            {"role": "tool", "tool_call_id": f"{call_id}{THOUGHT_SIGNATURE_SEPARATOR}sig{index}", "content": "Sunny"}
+            for index, call_id in enumerate(call_ids)
+        ),
     ]
 
-    logging_obj, kwargs = function_setup(
-        original_function="acompletion",
-        rules_obj=rules_obj,
-        start_time=datetime.now(),
-        model="claude-3-opus",
-        messages=messages,
-        litellm_call_id=str(uuid.uuid4()),
-        custom_llm_provider="anthropic",
+
+@pytest.mark.parametrize(
+    ("model", "custom_llm_provider"),
+    [("gpt-4", "openai"), ("claude-3-opus", "anthropic"), ("openai/gpt-4", None)],
+)
+def test_thought_signatures_are_cut_from_every_tool_call_id_for_a_non_gemini_target(model, custom_llm_provider):
+    stripped = messages_without_foreign_thought_signatures(
+        "acompletion", model, _signed_tool_turn("call_1", "call_2"), custom_llm_provider
     )
 
-    processed_messages = kwargs["messages"]
+    assert stripped is not None
+    assert [call["id"] for call in stripped[1]["tool_calls"]] == ["call_1", "call_2"]
+    assert [message["tool_call_id"] for message in stripped[2:]] == ["call_1", "call_2"]
 
-    # Check all tool call IDs are cleaned
-    assert processed_messages[1]["tool_calls"][0]["id"] == "call_1"
-    assert processed_messages[1]["tool_calls"][1]["id"] == "call_2"
-    assert processed_messages[2]["tool_call_id"] == "call_1"
-    assert processed_messages[3]["tool_call_id"] == "call_2"
+
+@pytest.mark.parametrize(
+    ("model", "custom_llm_provider"),
+    [("gemini-1.5-pro", "vertex_ai"), ("vertex_ai/gemini-3.8-flash", None), ("gemini/gemini-3.8-flash", None)],
+)
+def test_thought_signatures_are_kept_for_a_gemini_target(model, custom_llm_provider):
+    assert (
+        messages_without_foreign_thought_signatures(
+            "acompletion", model, _signed_tool_turn("call_1"), custom_llm_provider
+        )
+        is None
+    )
+
+
+def test_messages_without_signed_tool_call_ids_are_left_alone_for_a_non_gemini_target():
+    messages = [{"role": "user", "content": "Hello"}, {"role": "assistant", "content": "Hi there!"}]
+
+    assert messages_without_foreign_thought_signatures("acompletion", "gpt-4", messages, "openai") is None
 
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
-def test_messages_without_tool_calls_unchanged():
-    """
-    Test that messages without tool calls pass through unchanged
-    """
-    rules_obj = Rules()
+def test_proxy_request_setup_keeps_signatures_for_a_model_name_without_gemini_in_it():
+    messages = _signed_tool_turn("call_1")
 
-    messages = [
-        {"role": "user", "content": "Hello"},
-        {"role": "assistant", "content": "Hi there!"},
-    ]
-
-    logging_obj, kwargs = function_setup(
+    _, kwargs = function_setup(
         original_function="acompletion",
-        rules_obj=rules_obj,
+        rules_obj=Rules(),
         start_time=datetime.now(),
-        model="gpt-4",
+        model="g38flash",
         messages=messages,
         litellm_call_id=str(uuid.uuid4()),
-        custom_llm_provider="openai",
     )
 
-    # Messages should be unchanged
-    assert kwargs["messages"] == messages
+    assert kwargs["messages"] is messages, "the proxy alias must not decide signature stripping before routing"
 
 
 def test_llama_3_prompt():
@@ -8990,7 +8894,6 @@ def test_anthropic_messages_pt_interleave_more_thinking_than_tool_groups():
     ], f"Expected order but got: {types}"
 
 
-
 def _paused_web_search_turn(
     thinking_blocks: list[dict[str, str]] | None, content: str | list[dict[str, str]] = "Step 1 is Tokyo."
 ) -> dict[str, object]:
@@ -9453,7 +9356,11 @@ TEMPLATE_INITIAL = "<start>"
 TEMPLATE_FINAL = "<end>"
 
 PARTIAL_TEMPLATE = {"roles": TEMPLATE_ROLES}
-FULL_TEMPLATE = {"roles": TEMPLATE_ROLES, "initial_prompt_value": TEMPLATE_INITIAL, "final_prompt_value": TEMPLATE_FINAL}
+FULL_TEMPLATE = {
+    "roles": TEMPLATE_ROLES,
+    "initial_prompt_value": TEMPLATE_INITIAL,
+    "final_prompt_value": TEMPLATE_FINAL,
+}
 ROLELESS_TEMPLATE = {"initial_prompt_value": TEMPLATE_INITIAL, "final_prompt_value": TEMPLATE_FINAL}
 
 
@@ -9675,7 +9582,9 @@ def test_template_wraps_only_the_roles_it_defines_across_a_conversation(monkeypa
         pytest.param({"roles": {"user": {**TEMPLATE_ROLES["user"], "priority": 1}}}, id="extra-role-key"),
         pytest.param({"roles": {**TEMPLATE_ROLES, "tool": {"pre_message": 5}}}, id="unused-role-wrong-type"),
         pytest.param({"roles": {**TEMPLATE_ROLES, 1: {"pre_message": "x"}}}, id="unused-non-string-role"),
-        pytest.param({"roles": TEMPLATE_ROLES, "initial_prompt_value": None, "bos_token": 7}, id="null-and-unread-keys"),
+        pytest.param(
+            {"roles": TEMPLATE_ROLES, "initial_prompt_value": None, "bos_token": 7}, id="null-and-unread-keys"
+        ),
     ],
 )
 def test_template_shapes_main_rendered_keep_rendering(template, monkeypatch):

@@ -1296,14 +1296,22 @@ def _called_tool_name(tool_call_id: str, tool_calls: Sequence[Mapping[str, objec
     return name if isinstance(name, str) else None
 
 
+def _is_strict_base64(value: str) -> bool:
+    try:
+        base64.b64decode(value, validate=True)
+    except ValueError:
+        return False
+    return True
+
+
 def get_thought_signature_from_tool(tool: Mapping[str, object]) -> str | None:
     """Extract thought signature from tool call's provider_specific_fields.
 
     If not provided try to extract thought signature from tool call id
 
     Checks both tool.provider_specific_fields and tool.function.provider_specific_fields.
-    Returns None when the tool call carries no signature; callers decide whether a
-    placeholder signature is needed.
+    Returns None when the tool call carries no signature or its id-embedded signature is not
+    valid base64; callers decide whether a placeholder signature is needed.
     """
     # First check tool's provider_specific_fields
     provider_fields: Final = tool.get("provider_specific_fields") or {}
@@ -1347,7 +1355,7 @@ def get_thought_signature_from_tool(tool: Mapping[str, object]) -> str | None:
         parts: Final = tool_call_id.split(THOUGHT_SIGNATURE_SEPARATOR, 1)
         if len(parts) == 2:
             _, signature = parts
-            return signature
+            return signature if _is_strict_base64(signature) else None
     return None
 
 
