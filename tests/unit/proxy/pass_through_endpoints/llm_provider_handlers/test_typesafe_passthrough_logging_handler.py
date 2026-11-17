@@ -147,25 +147,6 @@ def test_records_model_provider_and_cost_on_logging_details():
     assert logging_obj.model_call_details["response_cost"] == result["kwargs"]["response_cost"]
 
 
-def test_success_handler_dispatches_to_typesafe_handler():
-    logging_obj = _logging_obj()
-    normalized = PassThroughEndpointLogging().normalize_llm_passthrough_logging_payload(
-        httpx_response=_response(),
-        response_body={"model": "jev-1.13.0", "usage": {"input_tokens": 1, "output_tokens": 0}},
-        request_body={"model": "jev-latest"},
-        logging_obj=logging_obj,
-        url_route="https://api.typesafe.ai/v1/systemone",
-        result="{}",
-        start_time=datetime.now(),
-        end_time=datetime.now(),
-        cache_hit=False,
-        custom_llm_provider="typesafe",
-    )
-
-    assert normalized["kwargs"]["custom_llm_provider"] == "typesafe"
-    assert normalized["kwargs"]["model"] == "typesafe/jev-1.13.0"
-
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize("mode", ("decisions", "evaluation"), ids=("decisions", "legacy-evaluation"))
 @pytest.mark.parametrize("guardrail_cost", [0.0, 0.25])

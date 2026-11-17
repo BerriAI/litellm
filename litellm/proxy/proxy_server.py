@@ -13027,7 +13027,6 @@ async def _key_model_listing(
     include_wildcard_routes: bool = False,
     include_metadata: bool = False,
     fallback_type: str | None = None,
-    offered_model_names: Sequence[str] = (),
 ) -> _KeyModelListing:
     from litellm.proxy.utils import get_available_models_for_user
 
@@ -13044,12 +13043,11 @@ async def _key_model_listing(
         return_wildcard_routes=include_wildcard_routes,
         user_api_key_cache=user_api_key_cache,
     )
-    names: Final = (*available, *(name for name in offered_model_names if name not in available))
     excluded: Final = hidden_names | undiscoverable_model_names(
-        names, llm_router, user_api_key_dict, team_id or user_api_key_dict.team_id
+        available, llm_router, user_api_key_dict, team_id or user_api_key_dict.team_id
     )
     translated_entries: Final = TeamModelNameTranslator.listing_entries(
-        [name for name in names if name not in excluded], llm_router, general_settings_view()
+        [name for name in available if name not in excluded], llm_router, general_settings_view()
     )
     verdict: Final = await _listing_callback_verdict(
         user_api_key_dict,
@@ -13193,12 +13191,6 @@ async def model_list(
 
     hidden_names: Final = await _listing_hidden_names(healthy_only)
 
-    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import typesafe_allowlist_model_names
-
-    asks_for_allowlist_names: Final = (
-        include_model_access_groups is True and return_wildcard_routes is True and only_model_access_groups is not True
-    )
-
     # If scope=expand and user has admin privileges, return all proxy models
     if should_expand_scope:
         # Get all proxy models as if user is a proxy admin
@@ -13221,10 +13213,7 @@ async def model_list(
                 get_complete_model_list,
                 key_models=[],
                 team_models=[],
-                proxy_model_list=[
-                    *proxy_model_list,
-                    *(typesafe_allowlist_model_names() if asks_for_allowlist_names else ()),
-                ],
+                proxy_model_list=proxy_model_list,
                 user_model=None,
                 infer_model_from_keys=False,
                 return_wildcard_routes=include_wildcard_routes,
@@ -13292,9 +13281,6 @@ async def model_list(
             object="list",
         )
 
-    offers_typesafe_allowlist_names: Final = (
-        asks_for_allowlist_names and team_id is None and user_api_key_has_admin_view(user_api_key_dict)
-    )
     key_listing: Final = await _key_model_listing(
         user_api_key_dict,
         caller_aliases,
@@ -13305,7 +13291,6 @@ async def model_list(
         include_wildcard_routes=include_wildcard_routes,
         include_metadata=include_metadata or False,
         fallback_type=fallback_type,
-        offered_model_names=typesafe_allowlist_model_names() if offers_typesafe_allowlist_names else (),
     )
     listing: Final = key_listing.rows
     entries: Final = key_listing.entries
