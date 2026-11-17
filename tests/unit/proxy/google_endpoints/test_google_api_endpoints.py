@@ -3,9 +3,11 @@
 Test to verify the Google GenAI proxy API endpoints
 """
 
+from collections.abc import Callable
 from typing import Final
 from unittest.mock import AsyncMock, patch
 
+import httpx
 import pytest
 
 from litellm.types.utils import TokenCountResponse
@@ -170,7 +172,7 @@ def test_google_count_tokens_unchanged():
     )
 
     with patch(
-        "litellm.proxy.proxy_server.token_counter",
+        "litellm.proxy.proxy_server.count_request_tokens",
         new_callable=AsyncMock,
         return_value=fake_response,
     ):
@@ -192,7 +194,7 @@ def test_google_count_tokens_unexpected_failure_uses_the_google_error_envelope()
         pytest.skip(f"Skipping test due to missing dependency: {e}")
 
     with patch(
-        "litellm.proxy.proxy_server.token_counter",
+        "litellm.proxy.proxy_server.count_request_tokens",
         new_callable=AsyncMock,
         side_effect=RuntimeError("tokenizer unavailable"),
     ):
@@ -225,7 +227,7 @@ def test_google_count_tokens_uses_normalized_total_when_provider_shape_differs()
     )
 
     with patch(
-        "litellm.proxy.proxy_server.token_counter",
+        "litellm.proxy.proxy_server.count_request_tokens",
         new_callable=AsyncMock,
         return_value=fake_response,
     ):
@@ -240,3 +242,95 @@ def test_google_count_tokens_uses_normalized_total_when_provider_shape_differs()
         assert body["promptTokensDetails"] == []
         assert body["litellm_count_source"] == "token_count_model"
         assert body["litellm_count_model"] == "us.anthropic.claude-opus-5-5"
+
+
+@pytest.mark.parametrize("path", ["/v1beta/models/count-log-claude:countTokens", "/models/count-log-claude:countTokens"])
+def test_google_count_tokens_logs_one_line_with_the_callers_call_id_model_and_count(
+    monkeypatch: pytest.MonkeyPatch, token_count_log_lines: Callable[[], tuple[dict[str, object], ...]], path: str
+) -> None:
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm import Router
+    from litellm.llms.anthropic.count_tokens import handler as anthropic_count_tokens_handler
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+
+    claude: Final = {"model": "anthropic/claude-zeta-9", "api_key": "test-key", "api_base": "https://count-tokens.test"}
+    monkeypatch.setattr(
+        proxy_server,
+        "llm_router",
+        Router(
+            model_list=[
+                {
+                    "model_name": "count-log-claude",
+                    "litellm_params": claude,
+                    "model_info": {"id": "count-log-gemini-deployment"},
+                }
+            ]
+        ),
+    )
+    monkeypatch.setattr(
+        anthropic_count_tokens_handler,
+        "get_async_httpx_client",
+        lambda *args, **kwargs: AsyncHTTPHandler(
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(200, json={"input_tokens": 77}, request=request)
+            )
+        ),
+    )
+
+    response: Final = _build_test_client().post(
+        path,
+        json={"contents": [{"role": "user", "parts": [{"text": "Hello"}]}]},
+        headers={"x-litellm-call-id": "count-log-gemini"},
+    )
+
+    assert (response.status_code, response.json()["totalTokens"]) == (200, 77), response.text
+    assert response.headers.get("x-litellm-call-id") == "count-log-gemini"
+    assert token_count_log_lines() == (
+        {
+            "litellm_call_id": "count-log-gemini",
+            "request_model": "count-log-claude",
+            "model_id": "count-log-gemini-deployment",
+            "model_used": "claude-zeta-9",
+            "input_tokens": 77,
+            "count_source": "provider",
+            "status_code": 200,
+        },
+    )
+
+
+def test_google_count_tokens_rejected_body_logs_the_400_it_answers(
+    token_count_log_lines: Callable[[], tuple[dict[str, object], ...]],
+) -> None:
+    response: Final = _build_test_client().post(
+        "/v1beta/models/count-log-claude:countTokens",
+        json={"contents": "not a list"},
+        headers={"x-litellm-call-id": "count-log-gemini-bad-body"},
+    )
+
+    assert response.status_code == 400, response.text
+    assert token_count_log_lines() == (
+        {
+            "litellm_call_id": "count-log-gemini-bad-body",
+            "request_model": "count-log-claude",
+            "model_id": None,
+            "model_used": None,
+            "input_tokens": None,
+            "count_source": None,
+            "status_code": 400,
+        },
+    )
+
+
+@pytest.mark.parametrize("client_call_id", [None, "count-echo-gemini"])
+def test_google_count_tokens_rejected_body_answers_the_call_id_its_count_line_names(
+    token_count_log_lines: Callable[[], tuple[dict[str, object], ...]], client_call_id: str | None
+) -> None:
+    response: Final = _build_test_client().post(
+        "/v1beta/models/count-log-claude:countTokens",
+        json={"contents": "not a list"},
+        headers={} if client_call_id is None else {"x-litellm-call-id": client_call_id},
+    )
+
+    (line,) = token_count_log_lines()
+    assert (response.status_code, response.headers.get("x-litellm-call-id")) == (400, line["litellm_call_id"])
+    assert client_call_id in (None, line["litellm_call_id"])

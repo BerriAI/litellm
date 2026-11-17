@@ -121,6 +121,24 @@ class TestGCSBucketBase:
             )
 
     @pytest.mark.asyncio
+    async def test_gcs_logging_config_ignores_request_time_bucket_and_credentials(self, monkeypatch):
+        monkeypatch.setenv("GCS_PATH_SERVICE_ACCOUNT", "/admin/sa.json")
+        handler = GCSBucketBase(bucket_name="admin-bucket")
+
+        with patch.object(handler, "get_or_create_vertex_instance", new_callable=AsyncMock) as mock_vertex:
+            config = await handler.get_gcs_logging_config(
+                {
+                    "standard_callback_dynamic_params": {
+                        "gcs_bucket_name": "caller-bucket",
+                        "gcs_path_service_account": "/caller/sa.json",
+                    }
+                }
+            )
+
+        assert (config["bucket_name"], config["path_service_account"]) == ("admin-bucket", "/admin/sa.json")
+        mock_vertex.assert_awaited_once_with(credentials="/admin/sa.json")
+
+    @pytest.mark.asyncio
     async def test_log_json_data_on_gcs_url_encodes_object_name(self):
         handler = GCSBucketBase(bucket_name="test-bucket")
         handler.async_httpx_client = AsyncMock()
