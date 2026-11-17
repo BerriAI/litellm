@@ -9721,3 +9721,35 @@ def test_media_models_resolve_to_each_deployment_base_model():
     assert _resolve_media_models(None, "whisper", None) == ("whisper",)
     assert _resolve_media_models(router, "whisper", None) == ("azure/whisper-1",)
     assert _resolve_media_models(router, "unknown", None) == ("unknown",)
+
+
+@pytest.mark.asyncio
+async def test_raise_if_over_limit_before_body_refuses_an_exhausted_key_without_charging_it() -> None:
+    cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(cache))
+    auth: Final = UserAPIKeyAuth(api_key=hash_token("sk-exhausted"), rpm_limit=1)
+    requests: Final = handler.create_rate_limit_keys("api_key", auth.api_key, "requests")
+
+    assert await handler.raise_if_over_limit_before_body(auth) is None
+    await handler.async_pre_call_hook(auth, cache, {"model": "gpt-5.6", "messages": []}, "acompletion")
+    charged: Final = await cache.async_get_cache(key=requests, local_only=True)
+    assert charged is not None
+
+    with pytest.raises(ProxyRateLimitError) as exc:
+        await handler.raise_if_over_limit_before_body(auth)
+    assert exc.value.status_code == 429
+    assert exc.value.descriptor_key == "api_key"
+    assert await cache.async_get_cache(key=requests, local_only=True) == charged, (
+        "the headers-only refusal must not count as a request"
+    )
+
+
+@pytest.mark.asyncio
+async def test_raise_if_over_limit_before_body_skips_limits_that_need_the_model() -> None:
+    cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(cache))
+    auth: Final = UserAPIKeyAuth(api_key=hash_token("sk-per-model"), metadata={"model_rpm_limit": {"gpt-5.6": 1}})
+
+    await handler.async_pre_call_hook(auth, cache, {"model": "gpt-5.6", "messages": []}, "acompletion")
+
+    assert await handler.raise_if_over_limit_before_body(auth) is None
