@@ -2204,6 +2204,12 @@ class _AssistantToolCall(NamedTuple):
     arguments: object
 
 
+def _has_tool_calls(message: object) -> bool:
+    if isinstance(message, dict) and "tool_calls" not in message:
+        return False
+    return bool(message_field(message, "tool_calls"))
+
+
 def _assistant_tool_calls_of(message_index: int, message: object) -> tuple[_AssistantToolCall, ...]:
     if message_field(message, "role") != "assistant":
         return ()
@@ -2233,15 +2239,17 @@ def _split_tool_use_ids_by_message(
     """
     calls: Final = tuple(
         itertools.chain.from_iterable(
-            _assistant_tool_calls_of(index, message) for index, message in enumerate(messages)
+            _assistant_tool_calls_of(index, message)
+            for index, message in enumerate(messages)
+            if _has_tool_calls(message)
         )
     )
+    if all(object_count(call.arguments) == 1 for call in calls):
+        return ()
     turns: Final = _assistant_turn_indexes(messages)
     largest_counts: Final = MappingProxyType(
         dict(sorted(((turns[call.message_index], call.tool_id), object_count(call.arguments)) for call in calls))
     )
-    if all(count == 1 for count in largest_counts.values()):
-        return ()
     id_groups: Final = _split_tool_call_ids(
         tuple((tool_id, count) for (_, tool_id), count in largest_counts.items()), sanitize, infix
     )
