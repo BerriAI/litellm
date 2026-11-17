@@ -3,9 +3,9 @@ from collections.abc import AsyncIterator, Iterator, Mapping
 from typing import Final
 
 import httpx
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
-import litellm
+from litellm.litellm_core_utils import model_cost_table
 from litellm.types.llms.openai import HttpxBinaryResponseContent
 from litellm.types.utils import CompletionTokensDetailsWrapper, Usage
 
@@ -26,6 +26,16 @@ class _SpeechUsage(BaseModel):
 
     input_tokens: int
     output_tokens: int
+
+
+class _SpeechPricing(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    litellm_provider: str | None = None
+    output_cost_per_audio_token: float | None = None
+
+
+_EXTRA_BODY: Final = TypeAdapter(dict[str, object])
 
 
 class _SpeechEvent(BaseModel):
@@ -67,11 +77,12 @@ class SpeechUsageDecoder:
         return b"" if event.audio is None else base64.b64decode(event.audio)
 
 
-def _attach_usage(speech_response: HttpxBinaryResponseContent, usage: Usage | None) -> None:
-    if usage is None or speech_response.usage is usage:
-        return
-    speech_response.usage = usage
-    speech_response.set_response_cost(None)
+def _decoded_audio(decoder: SpeechUsageDecoder, speech_response: HttpxBinaryResponseContent, chunk: bytes) -> bytes:
+    audio: Final = decoder.feed(chunk)
+    if decoder.usage is not None and speech_response.usage is not decoder.usage:
+        speech_response.usage = decoder.usage  # rebind-ok: the caller already holds this response while it streams
+        speech_response.set_response_cost(None)
+    return audio
 
 
 class _UsageAsyncByteStream(httpx.AsyncByteStream):
@@ -82,9 +93,7 @@ class _UsageAsyncByteStream(httpx.AsyncByteStream):
 
     async def __aiter__(self) -> AsyncIterator[bytes]:
         async for chunk in self._stream:
-            audio: Final = self._decoder.feed(chunk)
-            _attach_usage(self._speech_response, self._decoder.usage)
-            if audio:
+            if audio := _decoded_audio(self._decoder, self._speech_response, chunk):
                 yield audio
 
     async def aclose(self) -> None:
@@ -99,9 +108,7 @@ class _UsageSyncByteStream(httpx.SyncByteStream):
 
     def __iter__(self) -> Iterator[bytes]:
         for chunk in self._stream:
-            audio: Final = self._decoder.feed(chunk)
-            _attach_usage(self._speech_response, self._decoder.usage)
-            if audio:
+            if audio := _decoded_audio(self._decoder, self._speech_response, chunk):
                 yield audio
 
     def close(self) -> None:
@@ -109,18 +116,23 @@ class _UsageSyncByteStream(httpx.SyncByteStream):
 
 
 def bills_audio_output_tokens(model: str) -> bool:
-    model_info: Final = litellm.model_cost.get(model)
-    return (
-        model_info is not None
-        and model_info.get("litellm_provider") == "openai"
-        and model_info.get("output_cost_per_audio_token") is not None
-    )
+    row: Final = model_cost_table.published().get(model)
+    if row is None:
+        return False
+    try:
+        pricing: Final = _SpeechPricing.model_validate(row)
+    except ValidationError:
+        return False
+    return pricing.litellm_provider == "openai" and pricing.output_cost_per_audio_token is not None
+
+
+def _caller_extra_body(optional_params: Mapping[str, object]) -> Mapping[str, object]:
+    return _EXTRA_BODY.validate_python(optional_params.get("extra_body") or {})
 
 
 def wants_usage_stream(model: str, optional_params: Mapping[str, object]) -> bool:
-    extra_body: Final = optional_params.get("extra_body")
-    caller_asked: Final = _STREAM_FORMAT_KEY in optional_params or (
-        isinstance(extra_body, Mapping) and _STREAM_FORMAT_KEY in extra_body
+    caller_asked: Final = _STREAM_FORMAT_KEY in optional_params or _STREAM_FORMAT_KEY in _caller_extra_body(
+        optional_params
     )
     return bills_audio_output_tokens(model) and not caller_asked
 
@@ -129,9 +141,7 @@ def with_usage_stream(model: str, optional_params: Mapping[str, object]) -> Mapp
     """Asks OpenAI for the SSE form of the audio, the only form that reports the audio tokens it bills."""
     if not wants_usage_stream(model, optional_params):
         return optional_params
-    extra_body: Final = optional_params.get("extra_body")
-    caller_body: Final[Mapping[str, object]] = extra_body if isinstance(extra_body, Mapping) else {}
-    return {**optional_params, "extra_body": {**caller_body, _STREAM_FORMAT_KEY: "sse"}}
+    return {**optional_params, "extra_body": {**_caller_extra_body(optional_params), _STREAM_FORMAT_KEY: "sse"}}
 
 
 def _audio_headers(headers: httpx.Headers, response_format: object) -> httpx.Headers:
@@ -146,10 +156,9 @@ def speech_response_with_usage(
     raw_response: httpx.Response, model: str, optional_params: Mapping[str, object]
 ) -> HttpxBinaryResponseContent:
     """The speech response the caller gets. The SSE answer we asked for is decoded back to audio with its usage."""
-    if not wants_usage_stream(model, optional_params) or not raw_response.headers.get("content-type", "").startswith(
-        _SSE_MEDIA_TYPE
-    ):
-        return HttpxBinaryResponseContent(response=raw_response)
+    unchanged: Final = HttpxBinaryResponseContent(response=raw_response)
+    if not wants_usage_stream(model, optional_params) or not (unchanged.content_type or "").startswith(_SSE_MEDIA_TYPE):
+        return unchanged
     headers: Final = _audio_headers(raw_response.headers, optional_params.get("response_format"))
     if raw_response.is_stream_consumed:
         decoder: Final = SpeechUsageDecoder()
@@ -160,10 +169,11 @@ def speech_response_with_usage(
             ),
             usage=decoder.usage,
         )
-    raw_response.headers = headers
+    raw_response.headers = headers  # rebind-ok: the unread provider response is what streams the audio to the caller
     speech_response: Final = HttpxBinaryResponseContent(response=raw_response)
-    if isinstance(raw_response.stream, httpx.AsyncByteStream):
-        raw_response.stream = _UsageAsyncByteStream(raw_response.stream, speech_response)
-    elif isinstance(raw_response.stream, httpx.SyncByteStream):
-        raw_response.stream = _UsageSyncByteStream(raw_response.stream, speech_response)
+    raw_response.stream = (  # rebind-ok: the unread provider response is what streams the audio to the caller
+        _UsageAsyncByteStream(raw_response.stream, speech_response)
+        if isinstance(raw_response.stream, httpx.AsyncByteStream)
+        else _UsageSyncByteStream(raw_response.stream, speech_response)
+    )
     return speech_response
