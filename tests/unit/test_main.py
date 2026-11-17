@@ -7012,6 +7012,9 @@ SETTINGS_ONLY_TEMPLATES: Final[Mapping[str, Mapping[str, object]]] = MappingProx
     {
         "short-chat-answers": MappingProxyType({"temperature": 0.25, "max_tokens": 64}),
         "short-responses-answers": MappingProxyType({"temperature": 0.25, "max_output_tokens": 64}),
+        "short-chat-answers-with-a-deadline": MappingProxyType(
+            {"temperature": 0.25, "max_tokens": 64, "timeout": 30.0, "extra_headers": {"x-template": "short"}}
+        ),
     }
 )
 
@@ -7487,7 +7490,7 @@ async def test_a_responses_call_handed_to_chat_still_places_the_cache_points_on_
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("prompt_id", ["short-chat-answers", "short-responses-answers"])
+@pytest.mark.parametrize("prompt_id", list(SETTINGS_ONLY_TEMPLATES))
 @pytest.mark.parametrize("asynchronous", [True, False], ids=["aresponses", "responses"])
 async def test_a_responses_call_whose_template_only_sets_parameters_sends_them_once_with_the_cache_points(
     monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, asynchronous: bool, prompt_id: str

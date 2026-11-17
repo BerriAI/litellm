@@ -1,7 +1,8 @@
 import asyncio
 import contextvars
+import inspect
 import json
-from collections.abc import Coroutine, Generator, Iterable, Mapping, Sequence
+from collections.abc import Callable, Coroutine, Generator, Iterable, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from functools import partial
@@ -794,7 +795,7 @@ def _chat_bridge_prompt_kwargs(
         return MappingProxyType({})
     return MappingProxyType(
         {
-            **{key: value for key, value in changed_params.items() if key not in _RESPONSES_REQUEST_FIELDS},
+            **{key: value for key, value in changed_params.items() if key not in _SETTINGS_THE_RESPONSES_CALL_OWNS},
             **PROMPT_TEMPLATE_APPLIED,
         }
     )
@@ -1972,6 +1973,16 @@ def responses(
             completion_kwargs=local_vars,
             extra_kwargs=kwargs,
         )
+
+
+_SETTINGS_THE_RESPONSES_CALL_OWNS: Final = _RESPONSES_REQUEST_FIELDS.union(
+    inspect.signature(
+        cast(  # cast-ok: the @client decorator is untyped
+            Callable[..., object],
+            responses,
+        )
+    ).parameters
+)
 
 
 @client
