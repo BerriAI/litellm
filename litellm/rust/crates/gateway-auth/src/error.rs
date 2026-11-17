@@ -6,10 +6,10 @@ use litellm_error::Source;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("missing or invalid API key")]
-    InvalidToken,
     #[error("missing or invalid bearer token")]
-    InvalidBearer,
+    InvalidToken,
+    #[error("missing or invalid API key")]
+    InvalidApiKey,
     #[error("invalid UI credentials or session")]
     InvalidSession,
     #[error("credential has expired")]
@@ -33,7 +33,7 @@ pub enum Error {
 impl Error {
     pub fn status(&self) -> StatusCode {
         match self {
-            Self::InvalidToken | Self::InvalidBearer | Self::InvalidSession | Self::Expired => {
+            Self::InvalidToken | Self::InvalidApiKey | Self::InvalidSession | Self::Expired => {
                 StatusCode::UNAUTHORIZED
             }
             Self::Forbidden => StatusCode::FORBIDDEN,
@@ -49,7 +49,7 @@ impl Error {
     pub fn is_denied(&self) -> bool {
         match self {
             Self::InvalidToken
-            | Self::InvalidBearer
+            | Self::InvalidApiKey
             | Self::InvalidSession
             | Self::Expired
             | Self::Forbidden => true,

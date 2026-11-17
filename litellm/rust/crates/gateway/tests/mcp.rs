@@ -216,8 +216,10 @@ async fn mcp_protocol_routes_require_bearer_admission(
 }
 
 #[rstest]
-#[case::missing(&[], "missing or invalid API key")]
+#[case::missing(&[], "missing or invalid bearer token")]
+#[case::wrong_bearer(&[("authorization", "Bearer wrong")], "missing or invalid bearer token")]
 #[case::wrong_x_api_key(&[("x-api-key", "wrong")], "missing or invalid API key")]
+#[case::empty_x_api_key(&[("x-api-key", "")], "missing or invalid API key")]
 #[case::non_bearer_authorization(
     &[("authorization", "Basic admission-secret"), ("x-api-key", "admission-secret")],
     "missing or invalid bearer token"

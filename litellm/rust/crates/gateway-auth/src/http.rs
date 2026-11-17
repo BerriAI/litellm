@@ -13,6 +13,10 @@ use crate::{AccessRequest, Auth, AuthenticatedRequest, Credential, Error};
 
 pub trait CredentialExtractor: Send + Sync {
     fn extract(&self, parts: &Parts) -> Result<Credential, Error>;
+
+    fn reject(&self, _: &Parts, error: Error) -> Error {
+        error
+    }
 }
 
 pub struct Bearer;
@@ -27,26 +31,39 @@ pub struct BearerOrXApiKey;
 
 impl CredentialExtractor for BearerOrXApiKey {
     fn extract(&self, parts: &Parts) -> Result<Credential, Error> {
-        if parts
+        if !reads_x_api_key(parts) {
+            return Bearer.extract(parts);
+        }
+        single(parts, X_API_KEY)
+            .and_then(token)
+            .map(Credential::Token)
+            .ok_or(Error::InvalidApiKey)
+    }
+
+    fn reject(&self, parts: &Parts, error: Error) -> Error {
+        match error {
+            Error::InvalidToken if reads_x_api_key(parts) => Error::InvalidApiKey,
+            error => error,
+        }
+    }
+}
+
+const X_API_KEY: &str = "x-api-key";
+
+fn reads_x_api_key(parts: &Parts) -> bool {
+    parts.headers.contains_key(X_API_KEY)
+        && parts
             .headers
             .get_all(AUTHORIZATION)
             .iter()
-            .any(|value| !value.is_empty())
-        {
-            return Bearer.extract(parts);
-        }
-        single(parts, "x-api-key")
-            .and_then(token)
-            .map(Credential::Token)
-            .ok_or(Error::InvalidToken)
-    }
+            .all(|value| value.is_empty())
 }
 
 fn bearer(parts: &Parts) -> Result<SecretValue, Error> {
     single(parts, AUTHORIZATION)
         .and_then(|value| value.strip_prefix("Bearer "))
         .and_then(token)
-        .ok_or(Error::InvalidBearer)
+        .ok_or(Error::InvalidToken)
 }
 
 fn single(parts: &Parts, name: impl AsHeaderName) -> Option<&str> {

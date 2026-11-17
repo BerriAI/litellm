@@ -39,24 +39,25 @@ fn inference() -> Arc<Gateway> {
 }
 
 #[rstest]
-#[case::authorized("/v1/messages", &[("authorization", "Bearer gateway-key")], Some("gateway-key"), 400)]
-#[case::x_api_key("/v1/messages", &[("x-api-key", "gateway-key")], Some("gateway-key"), 400)]
-#[case::wrong_x_api_key("/v1/messages", &[("x-api-key", "wrong")], Some("gateway-key"), 401)]
-#[case::missing_token("/v1/messages", &[], Some("gateway-key"), 401)]
-#[case::wrong_token("/v1/messages", &[("authorization", "Bearer wrong")], Some("gateway-key"), 401)]
-#[case::ocr("/ocr", &[], Some("gateway-key"), 401)]
-#[case::chat("/v1/chat/completions", &[], Some("gateway-key"), 401)]
+#[case::authorized("/v1/messages", &[("authorization", "Bearer gateway-key")], Some("gateway-key"), 400, None)]
+#[case::x_api_key("/v1/messages", &[("x-api-key", "gateway-key")], Some("gateway-key"), 400, None)]
+#[case::wrong_x_api_key("/v1/messages", &[("x-api-key", "wrong")], Some("gateway-key"), 401, Some("missing or invalid API key"))]
+#[case::missing_token("/v1/messages", &[], Some("gateway-key"), 401, Some("missing or invalid bearer token"))]
+#[case::wrong_token("/v1/messages", &[("authorization", "Bearer wrong")], Some("gateway-key"), 401, Some("missing or invalid bearer token"))]
+#[case::ocr("/ocr", &[], Some("gateway-key"), 401, Some("missing or invalid bearer token"))]
+#[case::chat("/v1/chat/completions", &[], Some("gateway-key"), 401, Some("missing or invalid bearer token"))]
 #[case::deployment(
     "/openai/deployments/model/chat/completions",
     &[],
     Some("gateway-key"),
-    401
+    401,
+    Some("missing or invalid bearer token")
 )]
-#[case::transcription("/audio/transcriptions", &[], Some("gateway-key"), 401)]
-#[case::unsupported_route("/responses", &[], Some("gateway-key"), 401)]
-#[case::unknown_path("/unknown", &[], Some("gateway-key"), 404)]
-#[case::unknown_path_unconfigured("/unknown", &[], None, 404)]
-#[case::unconfigured("/v1/messages", &[("authorization", "Bearer gateway-key")], None, 500)]
+#[case::transcription("/audio/transcriptions", &[], Some("gateway-key"), 401, Some("missing or invalid bearer token"))]
+#[case::unsupported_route("/responses", &[], Some("gateway-key"), 401, Some("missing or invalid bearer token"))]
+#[case::unknown_path("/unknown", &[], Some("gateway-key"), 404, None)]
+#[case::unknown_path_unconfigured("/unknown", &[], None, 404, None)]
+#[case::unconfigured("/v1/messages", &[("authorization", "Bearer gateway-key")], None, 500, None)]
 #[tokio::test]
 async fn authenticates_before_serving_mounted_inference_routes(
     inference: Arc<Gateway>,
@@ -64,6 +65,7 @@ async fn authenticates_before_serving_mounted_inference_routes(
     #[case] headers: &[(&str, &str)],
     #[case] master_key: Option<&str>,
     #[case] status: u16,
+    #[case] unauthorized: Option<&str>,
 ) {
     let config = Config::from_yaml(&format!(
         "model_list: []\ngeneral_settings:\n  master_key: {}\n",
@@ -112,8 +114,9 @@ async fn authenticates_before_serving_mounted_inference_routes(
         let text = response.text().await.unwrap();
         assert!(!text.contains("gateway-key"));
         assert!(!text.contains("unconfigured-model"));
-        if status == 401 {
-            assert_eq!(text, "missing or invalid API key");
+        assert_eq!(unauthorized.is_some(), status == 401);
+        if let Some(message) = unauthorized {
+            assert_eq!(text, message);
         }
     }
 
