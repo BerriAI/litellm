@@ -439,8 +439,8 @@ def as_raw_pcm16_base64(media_type: str, audio_base64: str) -> str:
     if media_type.partition(";")[0].strip().lower() != FILE_MIME_TYPES[FileType.WAV]:
         return audio_base64
     try:
-        audio: Final = base64.b64decode(audio_base64)
-    except binascii.Error:
+        audio: Final = base64.b64decode(audio_base64, validate=True)
+    except ValueError:
         return audio_base64
     frames: Final = _pcm16_wav_frames(audio)
     return base64.b64encode(frames).decode("ascii") if frames else audio_base64

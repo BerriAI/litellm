@@ -2031,7 +2031,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                                 transcript = ""  # Gemini doesn't provide transcript
 
                                 return ChatCompletionAudioResponse(
-                                    data=audio_data,
+                                    data=as_raw_pcm16_base64(media_type, audio_data),
                                     expires_at=expires_at,
                                     transcript=transcript,
                                 )
