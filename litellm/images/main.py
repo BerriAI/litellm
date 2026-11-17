@@ -40,7 +40,7 @@ from openai.types.audio.transcription_create_params import FileTypes
 from litellm.llms.black_forest_labs.image_edit.handler import bfl_image_edit
 from litellm.llms.black_forest_labs.image_generation.handler import bfl_image_generation
 from litellm.llms.openai.workload_identity import resolve_openai_workload_identity_config
-from litellm.llms.openai_like.common_utils import missing_json_provider_key_error
+from litellm.llms.openai_like.common_utils import missing_json_provider_key_error, with_canonical_authorization
 from litellm.main import (
     azure_chat_completions,
     base_llm_aiohttp_handler,
@@ -504,7 +504,7 @@ def image_generation(
             ) is not None:
                 raise missing_key_error
             if extra_headers is not None:
-                optional_params["extra_headers"] = extra_headers
+                optional_params["extra_headers"] = with_canonical_authorization(custom_llm_provider, extra_headers)
             # Forward OpenAI organization if present (set by proxy pre-call utils)
             organization: Final[str | None] = kwargs.get("organization", None)
             model_response = openai_chat_completions.image_generation(
@@ -519,7 +519,7 @@ def image_generation(
                 organization=organization,
                 aimg_generation=aimg_generation,
                 client=client,
-                headers=headers,
+                headers=with_canonical_authorization(custom_llm_provider, headers),
                 litellm_params=litellm_params_dict,
             )
         elif custom_llm_provider == "bedrock":
