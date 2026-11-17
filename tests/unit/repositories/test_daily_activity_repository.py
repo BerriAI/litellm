@@ -1,5 +1,5 @@
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from typing import Final
 
@@ -660,6 +660,37 @@ async def test_daily_rows_selects_the_table_and_applies_filters_and_pagination(
     assert selected_table.find_many_calls == [expected_where]
     assert selected_table.pagination_calls == [(4, 2, ({"date": "desc"}, {"id": "asc"}))]
     assert sum(len(daily_table.find_many_calls) for daily_table in tables.values()) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("empty", (False, True))
+async def test_customer_team_page_returns_loaded_metrics_and_retains_count_on_empty_pages(empty: bool) -> None:
+    stored: Final = {
+        **_key_spend_row("key-a"),
+        "id": "row-a",
+        "end_user_id": "customer-a",
+        "date": "2026-01-01",
+        "compression_saved_tokens": 2,
+        "compression_savings_spend": 0.5,
+        "prompt_caching_savings_spend": 0.25,
+        "gateway_injected_caching_savings_spend": 0.125,
+        "autorouter_savings_spend": 0.0,
+        "guardrail_spend": 0.0,
+        "total_response_time_ms": 10,
+        "timed_requests": 1,
+        "created_at": "2026-01-01T00:00:00Z",
+        "updated_at": "2026-01-01T00:00:00Z",
+    }
+    database: Final = _FakeDatabase((({"total_count": 33000, "rows": [] if empty else [stored]},),))
+    repository, _ = _repository(database)
+    scope: Final = replace(_scope(table=DailyActivityTable.CUSTOMER), team_ids=("team-a",))
+
+    result: Final = await repository.daily_rows(scope, page=3301 if empty else 1, page_size=10)
+
+    assert result.total_count == 33000
+    assert tuple((row.id, row.api_key, row.spend, row.prompt_tokens) for row in result.rows) == (
+        () if empty else (("row-a", "key-a", 1.0, 10),)
+    )
 
 
 @pytest.mark.asyncio

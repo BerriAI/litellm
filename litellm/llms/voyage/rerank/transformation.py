@@ -29,6 +29,7 @@ _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_i
 _JSON_OBJECTS: Final = TypeAdapter(Iterable[Mapping[str, object]], config=ConfigDict(hide_input_in_errors=True))
 _OPTIONAL_INT: Final[TypeAdapter[int | None]] = TypeAdapter(int | None)
 _STR: Final = TypeAdapter(str)
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class VoyageRerankConfig(BaseRerankConfig):
@@ -112,7 +113,7 @@ class VoyageRerankConfig(BaseRerankConfig):
         logging_obj.post_call(original_response=raw_response.text)
 
         try:
-            _json_response: Final = raw_response.json()
+            _json_response: Final = _DECODED_JSON.validate_python(raw_response.json())
         except Exception:
             raise VoyageError(
                 message=f"Failed to parse response: {raw_response.text}",

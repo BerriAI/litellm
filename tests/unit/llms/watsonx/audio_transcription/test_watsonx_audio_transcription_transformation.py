@@ -4,6 +4,7 @@ Tests for IBM WatsonX Audio Transcription.
 Validates the WatsonX transcription response transformation.
 """
 
+import traceback
 from unittest.mock import MagicMock
 
 import httpx
@@ -120,17 +121,21 @@ def test_transform_audio_transcription_response_copies_every_field_except_model(
     assert {key: response[key] for key in expected_extras} == expected_extras
 
 
-@pytest.mark.parametrize("payload", [{}, {"model": "whisper"}, {"duration": 2.0}, {"text": None, "usage": None}])
-def test_transform_audio_transcription_response_without_text_or_usage_reports_the_body(
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"model": "sensitive"},
+        {"duration": 2.0, "segments": [{"text": "sensitive"}]},
+        {"text": None, "usage": None, "note": "sensitive"},
+    ],
+)
+def test_transform_audio_transcription_response_without_text_or_usage_keeps_the_body_out_of_the_error(
     payload: dict[str, object],
 ) -> None:
     with pytest.raises(ValueError, match="Invalid response format") as exc_info:
         _transform_transcription_response(payload)
 
-    assert exc_info.value.args == (
-        "Invalid response format. Received response does not match the expected format. Got: ",
-        payload,
-    )
+    assert "sensitive" not in "".join(traceback.format_exception(exc_info.value))
 
 
 @pytest.mark.parametrize("payload", [["not", "an", "object"], "plain text", 7, True])
@@ -141,3 +146,12 @@ def test_transform_audio_transcription_response_rejects_non_object_bodies_withou
         _transform_transcription_response(payload)
 
     assert "input_value" not in str(exc_info.value)
+
+
+def test_transform_audio_transcription_response_keeps_a_non_json_body_out_of_the_error() -> None:
+    raw_response = httpx.Response(200, text='{"text": "sensitive')
+
+    with pytest.raises(ValueError, match="Error transforming response to json") as exc_info:
+        IBMWatsonXAudioTranscriptionConfig().transform_audio_transcription_response(raw_response)
+
+    assert "sensitive" not in str(exc_info.value)

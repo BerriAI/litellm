@@ -14,6 +14,8 @@ from litellm.types.guardrails import GuardrailEventHooks
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
+
 import litellm
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import (
@@ -1816,21 +1818,11 @@ async def test_get_user_info_for_proxy_admin(mock_team_data, mock_key_data):
 
 
 def test_custom_openid_response():
-    from litellm.caching import DualCache
     from litellm.proxy._types import LiteLLM_JWTAuth
-    from litellm.proxy.management_endpoints.ui_sso import (
-        JWTHandler,
-        generic_response_convertor,
-    )
+    from litellm.proxy.auth.jwt import ClaimReading
+    from litellm.proxy.management_endpoints.ui_sso import generic_response_convertor
 
-    jwt_handler = JWTHandler()
-    jwt_handler.update_environment(
-        prisma_client={},
-        user_api_key_cache=DualCache(),
-        litellm_jwtauth=LiteLLM_JWTAuth(
-            team_ids_jwt_field="department",
-        ),
-    )
+    jwt_handler = ClaimReading(LiteLLM_JWTAuth(team_ids_jwt_field="department"))
     response = {
         "sub": "3f196e06-7484-451e-be5a-ea6c6bb86c5b",
         "email_verified": True,
@@ -1928,7 +1920,7 @@ def test_update_key_budget_with_temp_budget_increase():
 
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.auth.user_api_key_auth import (
-        _update_key_budget_with_temp_budget_increase,
+        update_key_budget_with_temp_budget_increase,
     )
 
     expiry = datetime.now() + timedelta(days=1)
@@ -1942,7 +1934,7 @@ def test_update_key_budget_with_temp_budget_increase():
             "temp_budget_expiry": expiry_in_isoformat,
         },
     )
-    result = _update_key_budget_with_temp_budget_increase(valid_token)
+    result = update_key_budget_with_temp_budget_increase(valid_token)
     assert result.max_budget == 200
     assert result is not valid_token
     assert valid_token.max_budget == 100
@@ -2476,9 +2468,9 @@ def test_team_alias_stale_bypass_disabled_by_default(monkeypatch):
     # Reset module-level cache to ensure test isolation
     pre_call_utils._ENABLE_TEAM_STALE_ALIAS_BYPASS = None
 
-    class _MockRouter:
-        model_name_to_deployment_indices = {"model_name_team-1_legacy-uuid": [0]}
-        team_model_to_deployment_indices = {("team-1", "gpt-4o"): [1]}
+    mock_router = route_entry_points_to_stubs(MagicMock())
+    mock_router.model_name_to_deployment_indices = {"model_name_team-1_legacy-uuid": [0]}
+    mock_router.team_model_to_deployment_indices = {("team-1", "gpt-4o"): [1]}
 
     test_data = {"model": "gpt-4o"}
     user_api_key_dict = UserAPIKeyAuth(
@@ -2487,7 +2479,7 @@ def test_team_alias_stale_bypass_disabled_by_default(monkeypatch):
         team_model_aliases={"gpt-4o": "model_name_team-1_legacy-uuid"},
     )
 
-    with patch("litellm.proxy.proxy_server.llm_router", _MockRouter()):
+    with patch("litellm.proxy.proxy_server.llm_router", mock_router):
         _update_model_if_team_alias_exists(
             data=test_data, user_api_key_dict=user_api_key_dict
         )
@@ -2502,9 +2494,9 @@ def test_team_alias_stale_bypass_enabled_by_flag(monkeypatch):
     # Reset module-level cache to ensure test isolation
     pre_call_utils._ENABLE_TEAM_STALE_ALIAS_BYPASS = None
 
-    class _MockRouter:
-        model_name_to_deployment_indices = {"model_name_team-1_legacy-uuid": [0]}
-        team_model_to_deployment_indices = {("team-1", "gpt-4o"): [1]}
+    mock_router = route_entry_points_to_stubs(MagicMock())
+    mock_router.model_name_to_deployment_indices = {"model_name_team-1_legacy-uuid": [0]}
+    mock_router.team_model_to_deployment_indices = {("team-1", "gpt-4o"): [1]}
 
     test_data = {"model": "gpt-4o"}
     user_api_key_dict = UserAPIKeyAuth(
@@ -2514,7 +2506,7 @@ def test_team_alias_stale_bypass_enabled_by_flag(monkeypatch):
     )
     monkeypatch.setenv("LITELLM_ENABLE_TEAM_STALE_ALIAS_BYPASS", "true")
 
-    with patch("litellm.proxy.proxy_server.llm_router", _MockRouter()):
+    with patch("litellm.proxy.proxy_server.llm_router", mock_router):
         _update_model_if_team_alias_exists(
             data=test_data, user_api_key_dict=user_api_key_dict
         )
@@ -3714,3 +3706,183 @@ async def test_evict_config_param_clears_the_local_layer_and_survives_a_redis_ou
     await evict_config_param("router_settings", cache=cache)
 
     assert await cache.in_memory_cache.async_get_cache(_config_cache_key("router_settings")) is None
+
+
+@pytest.mark.asyncio
+async def test_query_raw_within_statement_timeout_has_postgres_cancel_the_read_at_30s() -> None:
+    from datetime import timedelta
+
+    from litellm.proxy.utils import query_raw_within_statement_timeout
+    from tests.unit.proxy.db.fake_prisma_engine import statement_timeout_reads
+
+    prisma: Final = MagicMock()
+    transaction: Final = statement_timeout_reads(prisma, AsyncMock(return_value=[{"spend": 1.5}]))
+
+    rows: Final = await query_raw_within_statement_timeout(
+        prisma, 'SELECT spend FROM "LiteLLM_SpendLogs" WHERE "user" = $1', "u1"
+    )
+
+    assert rows == [{"spend": 1.5}]
+    assert transaction.statements == ("SET LOCAL statement_timeout = 30000",)
+    transaction.query_raw.assert_awaited_once_with('SELECT spend FROM "LiteLLM_SpendLogs" WHERE "user" = $1', "u1")
+    assert prisma.read_db.tx.call_args.kwargs["timeout"] > timedelta(seconds=30), "Prisma must outlive the Postgres cancel"
+
+
+@pytest.mark.asyncio
+async def test_query_raw_within_statement_timeout_reports_a_cancelled_read_as_503() -> None:
+    from litellm.proxy.utils import query_raw_within_statement_timeout
+    from tests.unit.proxy.db.fake_prisma_engine import statement_timeout_error, statement_timeout_reads
+
+    prisma: Final = MagicMock()
+    statement_timeout_reads(prisma, AsyncMock(side_effect=statement_timeout_error()))
+
+    with pytest.raises(HTTPException) as exc_info:
+        await query_raw_within_statement_timeout(prisma, "SELECT 1", what="Spend per user")
+
+    assert exc_info.value.status_code == 503
+    assert exc_info.value.detail == {"error": "Spend per user took longer than 30s. Pick a shorter date range"}
+
+
+@pytest.mark.asyncio
+async def test_query_raw_within_statement_timeout_leaves_other_database_errors_alone() -> None:
+    from prisma.errors import DataError
+
+    from litellm.proxy.utils import query_raw_within_statement_timeout
+    from tests.unit.proxy.db.fake_prisma_engine import statement_timeout_reads
+
+    prisma: Final = MagicMock()
+    failure: Final = DataError(data={"user_facing_error": {"is_panic": False, "message": "relation does not exist"}})
+    statement_timeout_reads(prisma, AsyncMock(side_effect=failure))
+
+    with pytest.raises(DataError) as exc_info:
+        await query_raw_within_statement_timeout(prisma, "SELECT 1")
+
+    assert exc_info.value is failure
+
+
+@pytest.mark.asyncio
+async def test_stream_ends_without_waiting_for_served_output_and_logging_still_sees_it(monkeypatch):
+    from litellm.caching.caching import DualCache
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.litellm_core_utils.served_output_texts import SERVED_OUTPUT_TEXTS_KEY
+    from litellm.litellm_core_utils.token_counter import _count_offload_limiter_for_this_loop
+    from litellm.proxy.utils import ProxyLogging
+
+    class PassThroughIterator(CustomLogger):
+        async def async_post_call_streaming_iterator_hook(self, user_api_key_dict, response, request_data):
+            async for chunk in response:
+                yield chunk
+
+    monkeypatch.setattr(litellm, "callbacks", [PassThroughIterator()])
+    logging_obj: Final = Logging(
+        model="claude-sonnet-4-5",
+        messages=[],
+        stream=True,
+        call_type="anthropic_messages",
+        start_time=datetime.now(),
+        litellm_call_id="served-output-close",
+        function_id="served-output-close",
+    )
+    served_texts_seen_by_logging: Final = asyncio.get_running_loop().create_future()
+
+    async def deferred_logging() -> None:
+        served_texts_seen_by_logging.set_result(logging_obj.model_call_details.get(SERVED_OUTPUT_TEXTS_KEY))
+
+    logging_obj._on_deferred_stream_complete = deferred_logging
+    logging_obj._deferred_stream_complete_args = ()
+    events: Final = _anthropic_thinking_sse(50)
+
+    async def upstream():
+        for event in events:
+            yield event
+
+    async def drain() -> list[object]:
+        return [
+            chunk
+            async for chunk in ProxyLogging(user_api_key_cache=DualCache()).async_post_call_streaming_iterator_hook(
+                response=upstream(),
+                user_api_key_dict=UserAPIKeyAuth(api_key="sk-1", request_route="/v1/messages"),
+                request_data={"model": "claude-sonnet-4-5", "litellm_logging_obj": logging_obj},
+            )
+        ]
+
+    offload_limiter: Final = _count_offload_limiter_for_this_loop()
+    holders: Final = tuple(object() for _ in range(int(offload_limiter.total_tokens)))
+    for holder in holders:
+        await offload_limiter.acquire_on_behalf_of(holder)
+
+    served: Final = await asyncio.wait_for(drain(), timeout=5)
+    for holder in holders:
+        offload_limiter.release_on_behalf_of(holder)
+
+    assert served == events
+    assert await asyncio.wait_for(served_texts_seen_by_logging, timeout=5) == ("final answer",)
+
+
+@pytest.mark.asyncio
+async def test_streams_wait_for_their_served_output_once_background_rebuilds_hit_the_cap(monkeypatch):
+    from litellm.caching.caching import DualCache
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.litellm_core_utils.served_output_texts import SERVED_OUTPUT_TEXTS_KEY
+    from litellm.litellm_core_utils.token_counter import _count_offload_limiter_for_this_loop
+    from litellm.proxy.utils import _MAX_BACKGROUND_SERVED_OUTPUT_REBUILDS, ProxyLogging
+
+    class PassThroughIterator(CustomLogger):
+        async def async_post_call_streaming_iterator_hook(self, user_api_key_dict, response, request_data):
+            async for chunk in response:
+                yield chunk
+
+    monkeypatch.setattr(litellm, "callbacks", [PassThroughIterator()])
+    proxy_logging: Final = ProxyLogging(user_api_key_cache=DualCache())
+    events: Final = _anthropic_thinking_sse(1)
+    logging_objs: Final = tuple(
+        Logging(
+            model="claude-sonnet-4-5",
+            messages=[],
+            stream=True,
+            call_type="anthropic_messages",
+            start_time=datetime.now(),
+            litellm_call_id=f"served-output-cap-{index}",
+            function_id=f"served-output-cap-{index}",
+        )
+        for index in range(_MAX_BACKGROUND_SERVED_OUTPUT_REBUILDS + 1)
+    )
+
+    async def upstream():
+        for event in events:
+            yield event
+
+    async def drain(logging_obj: Logging) -> list[object]:
+        return [
+            chunk
+            async for chunk in proxy_logging.async_post_call_streaming_iterator_hook(
+                response=upstream(),
+                user_api_key_dict=UserAPIKeyAuth(api_key="sk-1", request_route="/v1/messages"),
+                request_data={"model": "claude-sonnet-4-5", "litellm_logging_obj": logging_obj},
+            )
+        ]
+
+    offload_limiter: Final = _count_offload_limiter_for_this_loop()
+    holders: Final = tuple(object() for _ in range(int(offload_limiter.total_tokens)))
+    for holder in holders:
+        await offload_limiter.acquire_on_behalf_of(holder)
+
+    for logging_obj in logging_objs[:-1]:
+        assert await asyncio.wait_for(drain(logging_obj), timeout=5) == events
+    over_cap: Final = asyncio.ensure_future(drain(logging_objs[-1]))
+    await asyncio.sleep(0.2)
+    over_cap_waited: Final = not over_cap.done()
+
+    for holder in holders:
+        offload_limiter.release_on_behalf_of(holder)
+
+    assert over_cap_waited
+    assert await asyncio.wait_for(over_cap, timeout=5) == events
+
+    async def every_stream_recorded() -> None:
+        while any(SERVED_OUTPUT_TEXTS_KEY not in obj.model_call_details for obj in logging_objs):
+            await asyncio.sleep(0.01)
+
+    await asyncio.wait_for(every_stream_recorded(), timeout=10)

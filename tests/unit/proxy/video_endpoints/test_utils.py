@@ -20,8 +20,10 @@ import pytest
 
 
 from litellm.router import Router
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.videos.main import DecodedVideoId
 from litellm.proxy.video_endpoints.utils import (
+    authorized_video_model,
     encode_character_id_in_response,
     encode_video_id_in_response,
     extract_model_from_target_model_names,
@@ -546,6 +548,33 @@ def _wildcard_router() -> Router:
             }
         ]
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("enforce_fallback_model_access", "allowed_model"),
+    [(False, "sora-pair"), (True, "sora-backup")],
+)
+async def test_authorized_video_model_keeps_fallback_routing_after_the_key_check(
+    monkeypatch: pytest.MonkeyPatch, enforce_fallback_model_access: bool, allowed_model: str
+) -> None:
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.general_settings",
+        {"enforce_fallback_model_access": enforce_fallback_model_access},
+    )
+    decoded: Final = decode_video_id_with_provider(
+        encode_video_id_with_provider(
+            "video_raw", "azure", "sora-2", deployment_id="dep-sora-backup", requested_model="sora-pair"
+        )
+    )
+    token: Final = UserAPIKeyAuth(api_key="hashed", models=[allowed_model])
+
+    assert await authorized_video_model(decoded, _fallback_router(), token) == "sora-backup"
+
+
+@pytest.mark.asyncio
+async def test_authorized_video_model_without_a_router_has_no_routing_model() -> None:
+    assert await authorized_video_model(_decoded("sora-2", "dep-sora-backup"), None, UserAPIKeyAuth()) is None
 
 
 @pytest.mark.parametrize(

@@ -1,15 +1,18 @@
 import asyncio
 import importlib
 import os
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from typing import Final
 
+import httpx
 import pytest
 import pytest_asyncio
 
 import litellm
 from litellm.constants import LOGGING_WORKER_MAX_TIME_PER_COROUTINE
+from litellm.integrations import humanloop
 from litellm.integrations.humanloop import HumanLoopPromptManager
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
@@ -28,6 +31,58 @@ def test_compile_prompt():
     prompt_variables = {"person": "John"}
     compiled_prompt = prompt_manager._compile_prompt_helper(prompt_template, prompt_variables)
     assert compiled_prompt[0]["content"] == "You are John. Answer questions as this person. Do not break character."
+
+
+def _serve_humanloop_prompt(monkeypatch: pytest.MonkeyPatch, prompt_body: Mapping[str, object]) -> None:
+    def humanloop_api(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v5/prompts/pr_1" and request.headers.get("X-Api-Key") == "hl-key":
+            return httpx.Response(200, json=prompt_body)
+        return httpx.Response(404, json={"detail": "not found"})
+
+    monkeypatch.setattr(
+        humanloop,
+        "get_httpx_client",
+        lambda: HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(humanloop_api))),
+    )
+
+
+@pytest.mark.parametrize(
+    ("template", "expected_template"),
+    [
+        ({"role": "system", "content": "You are {{person}}."}, [{"role": "system", "content": "You are {{person}}."}]),
+        (
+            [{"role": "system", "content": "Be brief."}, {"role": "user", "content": "{{question}}"}],
+            [{"role": "system", "content": "Be brief."}, {"role": "user", "content": "{{question}}"}],
+        ),
+    ],
+)
+def test_humanloop_prompt_from_api_lists_its_template_and_keeps_only_openai_params(
+    monkeypatch: pytest.MonkeyPatch, template: object, expected_template: list[dict[str, str]]
+) -> None:
+    _serve_humanloop_prompt(
+        monkeypatch,
+        {
+            "id": "pr_1",
+            "name": "support-bot",
+            "template": template,
+            "model": "gpt-4o",
+            "temperature": 0.3,
+            "max_tokens": 64,
+        },
+    )
+
+    prompt: Final = HumanLoopPromptManager()._get_prompt_from_id_api("pr_1", "hl-key")
+
+    assert prompt["prompt_template"] == expected_template
+    assert prompt["model"] == "gpt-4o"
+    assert prompt["optional_params"] == {"temperature": 0.3, "max_tokens": 64}
+
+
+def test_humanloop_prompt_from_api_rejects_a_template_that_is_not_messages(monkeypatch: pytest.MonkeyPatch) -> None:
+    _serve_humanloop_prompt(monkeypatch, {"id": "pr_1", "template": "plain text", "model": "gpt-4o"})
+
+    with pytest.raises(ValueError, match="Invalid template message type: <class 'str'>"):
+        HumanLoopPromptManager()._get_prompt_from_id_api("pr_1", "hl-key")
 
 
 @pytest.fixture(autouse=True)
