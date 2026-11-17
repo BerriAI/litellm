@@ -396,6 +396,41 @@ def test_drop_anthropic_only_tool_keys_strips_tool_and_function_levels(key: str)
     assert tools[0]["function"][key] is True
 
 
+def test_completion_through_the_responses_bridge_honors_a_string_allowlist(
+    respx_mock: respx.MockRouter,
+):
+    route: Final = respx_mock.post("https://api.openai.com/v1/responses").respond(
+        json={
+            "id": "resp_allowlist",
+            "object": "response",
+            "created_at": 1,
+            "status": "completed",
+            "model": "gpt-5.6",
+            "output": [
+                {
+                    "type": "message",
+                    "id": "msg_allowlist",
+                    "role": "assistant",
+                    "status": "completed",
+                    "content": [{"type": "output_text", "text": "hi", "annotations": []}],
+                }
+            ],
+            "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+        }
+    )
+
+    litellm.completion(
+        model="openai/responses/gpt-5.6",
+        api_key="sk-test",
+        api_base="https://api.openai.com/v1",
+        messages=[{"role": "user", "content": "hi"}],
+        presence_penalty=0.1,
+        allowed_openai_params="presence_penalty",
+    )
+
+    assert route.call_count == 1
+
+
 def test_completion_strips_eager_input_streaming_before_openai(respx_mock: respx.MockRouter, openai_api_response):
     api_base: Final = "http://localhost:12346/v1"
     mock_route: Final = respx_mock.post(url__regex=rf"{api_base}/chat/completions.*").mock(
