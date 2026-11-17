@@ -1270,6 +1270,44 @@ async def test_user_api_key_auth_websocket():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("scheme", ["bearer", "BEARER"])
+async def test_user_api_key_auth_websocket_accepts_a_non_canonical_case_of_the_bearer_scheme(scheme):
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth_websocket
+
+    mock_websocket = MagicMock(spec=WebSocket)
+    mock_websocket.query_params = {"model": "some_model"}
+    mock_websocket.headers = {"authorization": f"{scheme} some_api_key"}
+    mock_websocket.scope = {"headers": [(b"authorization", f"{scheme} some_api_key".encode())]}
+    mock_websocket.url = URL(url="/ws")
+
+    with patch("litellm.proxy.auth.user_api_key_auth.user_api_key_auth", autospec=True) as mock_user_api_key_auth:
+        await user_api_key_auth_websocket(mock_websocket)
+
+        assert mock_user_api_key_auth.call_args.kwargs["api_key"] == "Bearer some_api_key"
+        mock_websocket.close.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("authorization", ["Basic some_api_key", "Bearersome_api_key"])
+async def test_user_api_key_auth_websocket_rejects_a_non_bearer_authorization_header(authorization):
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth_websocket
+
+    mock_websocket = MagicMock(spec=WebSocket)
+    mock_websocket.query_params = {"model": "some_model"}
+    mock_websocket.headers = {"authorization": authorization}
+    mock_websocket.scope = {"headers": [(b"authorization", authorization.encode())]}
+    mock_websocket.url = URL(url="/ws")
+
+    with patch("litellm.proxy.auth.user_api_key_auth.user_api_key_auth", autospec=True) as mock_user_api_key_auth:
+        with pytest.raises(HTTPException) as exc_info:
+            await user_api_key_auth_websocket(mock_websocket)
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail == "Invalid Authorization header format"
+    mock_user_api_key_auth.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_user_api_key_auth_websocket_carries_asgi_path():
     """
     The synthetic Request must carry the ASGI scope's ``path`` so
