@@ -5,6 +5,7 @@ use serde_json::{Map, Value};
 
 pub enum OptionalParams {
     OpenAi(Map<String, Value>),
+    OpenAiWithClientSideCredentials(Map<String, Value>),
     ProviderMapped(Map<String, Value>),
 }
 

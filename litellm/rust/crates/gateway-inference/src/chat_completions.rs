@@ -56,17 +56,22 @@ async fn handle(
     };
 
     let messages = body.get("messages").cloned().unwrap_or_default();
+    let params = body
+        .into_iter()
+        .filter(|(name, _)| !matches!(name.as_str(), "model" | "messages"))
+        .collect();
+    let optional_params = if gateway.client_side_credentials {
+        OptionalParams::OpenAiWithClientSideCredentials(params)
+    } else {
+        OptionalParams::OpenAi(params)
+    };
     let headers = crate::caching::CacheHeaders::default();
     let response = litellm_host_http::serve_unary(
         route.machine(
             ChatCompletionsCall {
                 model: deployment.model.clone(),
                 messages,
-                optional_params: OptionalParams::OpenAi(
-                    body.into_iter()
-                        .filter(|(name, _)| !matches!(name.as_str(), "model" | "messages"))
-                        .collect(),
-                ),
+                optional_params,
                 api_key: deployment.api_key.clone(),
                 api_base: deployment.api_base.clone(),
                 custom_llm_provider: deployment.custom_llm_provider.clone(),

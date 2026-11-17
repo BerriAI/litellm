@@ -42,9 +42,9 @@ use crate::{
 /// place verbatim in the Messages body.
 ///
 /// `top_k` is deliberately absent even though the Messages API takes it.
-/// `temperature` and `top_p` reach this gate already resolved, because
-/// `map_openai_params` runs first and applies `_apply_sampling_param` to them.
-/// `top_k` bypasses `map_openai_params` entirely, so Python applies that same
+/// On the Python bridge path `temperature` and `top_p` reach this gate already
+/// resolved by `_apply_sampling_param`, and the gateway forwards them as sent.
+/// `top_k` bypasses Python's `map_openai_params` entirely, so Python applies that same
 /// per-model gate inside `transform_request`, the function this route replaces.
 /// Forwarding it would send `top_k` to a model that removed sampling params and
 /// take a 400 after the call, where Python drops it and succeeds.
@@ -676,9 +676,9 @@ mod tests {
 
     #[test]
     fn declines_top_k_because_python_gates_it_by_model_below_this_point() {
-        // `temperature` and `top_p` arrive already resolved, because
-        // `map_openai_params` applies `_apply_sampling_param` to them before the
-        // gate runs. `top_k` bypasses that and is gated inside `transform_request`,
+        // On the Python bridge path `temperature` and `top_p` arrive already
+        // resolved by `_apply_sampling_param`, and the gateway forwards them as
+        // sent. `top_k` bypasses that and is gated inside `transform_request`,
         // the function this route replaces, so forwarding it would send `top_k` to
         // a model that removed sampling params and take a 400 after the call, where
         // Python drops it and succeeds.

@@ -81,6 +81,8 @@ pub struct GeneralSettings {
     pub enable_oauth2_auth: bool,
     #[serde_as(as = "IsTrue")]
     pub enable_oauth2_proxy_auth: bool,
+    #[serde_as(as = "IsTrue")]
+    pub allow_client_side_credentials: bool,
     pub public_routes: Option<RouteList>,
     pub litellm_jwtauth: Option<JwtAuthSettings>,
     #[serde(flatten)]
@@ -124,6 +126,7 @@ impl Default for GeneralSettings {
             enable_jwt_auth: false,
             enable_oauth2_auth: false,
             enable_oauth2_proxy_auth: false,
+            allow_client_side_credentials: false,
             public_routes: None,
             litellm_jwtauth: None,
             additional_fields: AdditionalFields::default(),

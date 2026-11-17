@@ -67,6 +67,17 @@ pub(super) fn resolve_request(
         OptionalParams::OpenAi(params) => config
             .map_openai_params(model, params)
             .map_err(Error::Declined)?,
+        OptionalParams::OpenAiWithClientSideCredentials(params) => {
+            let (call_config, openai): (Map<String, Value>, Map<String, Value>) = params
+                .into_iter()
+                .partition(|(name, _)| config.config_params().contains(&name.as_str()));
+            config
+                .map_openai_params(model, openai)
+                .map_err(Error::Declined)?
+                .into_iter()
+                .chain(call_config)
+                .collect()
+        }
         OptionalParams::ProviderMapped(params) => params,
     };
     if let Some(reason) = config.unsupported_reason(&messages, &optional_params) {
