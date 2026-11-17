@@ -139,10 +139,7 @@ def _is_other_version_of_key_file(
 
 @functools.cache
 def _timeout_request_type() -> "Callable[[int], GoogleAuthRequest]":
-    try:
-        from google.auth.transport.requests import Request
-    except ImportError:
-        raise ImportError(GOOGLE_IMPORT_ERROR_MESSAGE)
+    from google.auth.transport.requests import Request
 
     class _TimeoutRequest(Request):
         def __init__(self, timeout: int) -> None:
@@ -377,7 +374,9 @@ class VertexBase:
         except ImportError:
             raise ImportError(GOOGLE_IMPORT_ERROR_MESSAGE)
 
-        return google_auth.default(scopes=scopes, request=self._auth_request())
+        if self._auth_timeout is None:
+            return google_auth.default(scopes=scopes)
+        return google_auth.default(scopes=scopes, request=self._auth_request())  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType, reportUnknownArgumentType]  # the same partly unannotated google-auth call as the line above, which the baseline already counts
 
     def get_default_vertex_location(self) -> str:
         return "us-central1"
@@ -463,13 +462,15 @@ class VertexBase:
         return api_base
 
     def _auth_request(self) -> "GoogleAuthRequest":
-        if self._auth_timeout is not None:
-            return _timeout_request_type()(self._auth_timeout)
         try:
-            from google.auth.transport.requests import Request
+            from google.auth.transport.requests import (
+                Request,
+            )
         except ImportError:
             raise ImportError(GOOGLE_IMPORT_ERROR_MESSAGE)
-        return Request()
+        if self._auth_timeout is None:
+            return Request()
+        return _timeout_request_type()(self._auth_timeout)
 
     def refresh_auth(self, credentials: _VertexCredentialsObject) -> None:
         # ``credentials.refresh()`` is not safe to call concurrently on the
