@@ -2214,11 +2214,21 @@ def _assistant_tool_calls_of(message_index: int, message: object) -> tuple[_Assi
     )
 
 
+def _assistant_turn_indexes(messages: Sequence[object]) -> tuple[int, ...]:
+    is_assistant: Final = tuple(message_field(message, "role") == "assistant" for message in messages)
+    return tuple(
+        itertools.accumulate(
+            current and not previous for previous, current in itertools.pairwise((False, *is_assistant))
+        )
+    )
+
+
 def _split_tool_use_ids_by_message(
     messages: Sequence[object], object_count: Callable[[object], int], sanitize: Callable[[str], str], infix: str
 ) -> tuple[Mapping[str, tuple[str, ...]], ...]:
     """Per message, the extra tool use ids each tool call of its assistant turn splits into.
 
+    Messages of one turn share one mapping, and a tool call id repeated inside a turn reuses its extra ids.
     Empty when no tool call in the history carries concatenated JSON argument objects.
     """
     calls: Final = tuple(
@@ -2226,33 +2236,30 @@ def _split_tool_use_ids_by_message(
             _assistant_tool_calls_of(index, message) for index, message in enumerate(messages)
         )
     )
-    counts: Final = tuple((call.tool_id, object_count(call.arguments)) for call in calls)
-    if all(count == 1 for _, count in counts):
+    turns: Final = _assistant_turn_indexes(messages)
+    largest_counts: Final = MappingProxyType(
+        dict(sorted(((turns[call.message_index], call.tool_id), object_count(call.arguments)) for call in calls))
+    )
+    if all(count == 1 for count in largest_counts.values()):
         return ()
-    id_groups: Final = _split_tool_call_ids(counts, sanitize, infix)
-    own: Final = MappingProxyType(
+    id_groups: Final = _split_tool_call_ids(
+        tuple((tool_id, count) for (_, tool_id), count in largest_counts.items()), sanitize, infix
+    )
+    by_turn: Final = MappingProxyType(
         {
-            index: MappingProxyType(
-                {call.tool_id: tuple(filter(None, extra_ids)) for call, (_, *extra_ids) in group if extra_ids}
+            turn: MappingProxyType(
+                {
+                    tool_id: tuple(sanitize(extra_id) for extra_id in extra_ids if extra_id)
+                    for (_, tool_id), (_, *extra_ids) in group
+                    if extra_ids
+                }
             )
-            for index, group in itertools.groupby(
-                zip(calls, id_groups, strict=True), key=lambda pair: pair[0].message_index
+            for turn, group in itertools.groupby(
+                zip(largest_counts, id_groups, strict=True), key=lambda pair: pair[0][0]
             )
         }
     )
-
-    def turn_split_ids(
-        turn: tuple[bool, Mapping[str, tuple[str, ...]]], indexed_message: tuple[int, object]
-    ) -> tuple[bool, Mapping[str, tuple[str, ...]]]:
-        in_assistant_turn, split_ids = turn
-        index, message = indexed_message
-        if message_field(message, "role") != "assistant":
-            return False, split_ids
-        mine: Final = own.get(index, _NO_SPLIT_TOOL_USE_IDS)
-        return True, MappingProxyType({**split_ids, **mine}) if in_assistant_turn else mine
-
-    turns: Final = itertools.accumulate(enumerate(messages), turn_split_ids, initial=(False, _NO_SPLIT_TOOL_USE_IDS))
-    return tuple(split_ids for _, split_ids in itertools.islice(turns, 1, None))
+    return tuple(by_turn.get(turn, _NO_SPLIT_TOOL_USE_IDS) for turn in turns)
 
 
 def _split_tool_use_ids_at(
@@ -2279,9 +2286,9 @@ def _anthropic_tool_inputs(
     except ValueError:
         objects: Final = salvage_concatenated_tool_arguments(arguments) if isinstance(arguments, str) else ()
         tool_use_ids: Final = (tool_id, *split_tool_use_ids.get(tool_id, ()))
-        if len(objects) != len(tool_use_ids):
+        if not objects or len(objects) > len(tool_use_ids):
             raise
-        return tuple(zip(tool_use_ids, objects, strict=True))
+        return tuple(zip(tool_use_ids, objects, strict=False))
 
 
 def _reject_split_server_tool_call(tool_inputs: Sequence[object], tool_name: str) -> None:
@@ -4521,8 +4528,7 @@ def _bedrock_argument_object_count(arguments: object) -> int:
     try:
         json.loads(arguments)
     except json.JSONDecodeError:
-        object_count: Final = len(split_concatenated_json_objects(arguments))
-        return object_count if 1 < object_count <= MAX_SALVAGED_TOOL_ARGUMENT_OBJECTS else 1
+        return min(max(len(split_concatenated_json_objects(arguments)), 1), MAX_SALVAGED_TOOL_ARGUMENT_OBJECTS)
     return 1
 
 
@@ -4531,8 +4537,8 @@ def _bedrock_split_tool_use_ids(
 ) -> tuple[str, ...]:
     reserved: Final = split_tool_use_ids.get(tool_id, ())
     ids: Final = (
-        (tool_id, *reserved)
-        if len(reserved) == object_count - 1
+        (tool_id, *reserved[: object_count - 1])
+        if len(reserved) >= object_count - 1
         else (tool_id, *(f"{tool_id}_{index}" for index in range(1, object_count)))
     )
     return tuple(_sanitize_bedrock_tool_use_id(block_id) for block_id in ids)
@@ -4593,6 +4599,7 @@ def _convert_to_bedrock_tool_call_invoke(
     - extract id
     """
     from litellm.litellm_core_utils.prompt_templates.tool_call_json_repair import (
+        MAX_SALVAGED_TOOL_ARGUMENT_OBJECTS,
         split_concatenated_json_objects,
     )
 
@@ -4624,6 +4631,11 @@ def _convert_to_bedrock_tool_call_invoke(
                         # Split them and emit one toolUse block per object.
                         # Fixes: https://github.com/BerriAI/litellm/issues/20543
                         parsed_objects = split_concatenated_json_objects(arguments)
+                        if len(parsed_objects) > MAX_SALVAGED_TOOL_ARGUMENT_OBJECTS:
+                            raise ValueError(
+                                f"Tool call '{name}' carries {len(parsed_objects)} concatenated JSON argument objects, "
+                                f"more than the {MAX_SALVAGED_TOOL_ARGUMENT_OBJECTS} supported"
+                            ) from None
                         if parsed_objects:
                             # First object keeps the original tool id.
                             for block_id, obj in zip(

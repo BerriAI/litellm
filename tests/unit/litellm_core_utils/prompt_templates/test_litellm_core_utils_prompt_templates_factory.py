@@ -9898,13 +9898,45 @@ async def test_bedrock_converse_messages_pt_copies_results_only_into_the_turn_th
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("use_async", [False, True])
-async def test_bedrock_converse_messages_pt_does_not_copy_results_past_the_split_cap(use_async: bool):
+async def test_bedrock_converse_messages_pt_rejects_more_split_tool_uses_than_the_cap(use_async: bool):
     payloads = [{"path": f"/{index}"} for index in range(MAX_SALVAGED_TOOL_ARGUMENT_OBJECTS + 1)]
     messages = _history_with_concatenated_tool_arguments(*payloads)
 
-    _, _, tool_results = await _bedrock_converse_messages(messages, use_async)
+    with pytest.raises(litellm.BadRequestError, match="concatenated JSON argument objects"):
+        await _bedrock_converse_messages(messages, use_async)
 
-    assert len(_bedrock_results_by_id(tool_results)) == 2
+
+_CALL_1_SPLIT_IN_TWO = {
+    "role": "assistant",
+    "content": None,
+    "tool_calls": [
+        {"id": "call.1", "type": "function", "function": {"name": "ls", "arguments": '{"path": "/a"}{"path": "/b"}'}}
+    ],
+}
+_CALL_1_REPEATED_IN_ONE_TURN = (
+    {"role": "user", "content": "List files in /a and /b"},
+    _CALL_1_SPLIT_IN_TWO,
+    _CALL_1_SPLIT_IN_TWO,
+    {"role": "tool", "tool_call_id": "call.1", "content": "a.txt"},
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+async def test_bedrock_converse_messages_pt_answers_a_split_call_repeated_in_one_turn(use_async: bool):
+    _, assistant, tool_results = await _bedrock_converse_messages(list(_CALL_1_REPEATED_IN_ONE_TURN), use_async)
+
+    assert set(_bedrock_results_by_id(tool_results)) == set(_bedrock_tool_use_ids(assistant))
+
+
+def test_anthropic_messages_pt_answers_a_split_call_with_an_unsanitized_id_repeated_in_one_turn():
+    _, assistant, tool_results = anthropic_messages_pt(
+        list(_CALL_1_REPEATED_IN_ONE_TURN), model="claude-sonnet-4-5", llm_provider="anthropic"
+    )
+
+    tool_use_ids = {block["id"] for block in assistant["content"] if block["type"] == "tool_use"}
+    assert len(tool_use_ids) == 2
+    assert {block["tool_use_id"] for block in tool_results["content"]} == tool_use_ids
 
 
 def test_anthropic_messages_pt_copies_results_only_into_the_turn_that_split():
