@@ -127,6 +127,31 @@ describe("useTeamMemberBudgets", () => {
     expect(teamMemberBudgetGate(result.current, "owner-b", null, now)).toMatchObject({ maxBudget: 20, spend: 3 });
   });
 
+  it("keeps the hint of an owner already on screen while another page of owners loads", async () => {
+    const team = { team_id: teamId, team_member_budget_table: { max_budget: 20 } };
+    const row = (userId: string) => ({ user_id: userId, spend: 7, litellm_budget_table: { max_budget: 50 } });
+    vi.mocked(teamInfoCall).mockResolvedValue({ team_info: team, team_memberships: [] } as never);
+    vi.mocked(fetchTeamMembersByUserId).mockResolvedValueOnce([row("owner-a")] as never);
+    const { wrapper } = createQueryWrapper();
+    const { result, rerender } = renderHook((owners: readonly string[]) => useTeamMemberBudgets({ [teamId]: owners }), {
+      wrapper,
+      initialProps: ["owner-a"],
+    });
+    await waitFor(() => expect(teamMemberBudgetGate(result.current[teamId], "owner-a")?.maxBudget).toBe(50));
+
+    const nextPage = Promise.withResolvers<never>();
+    vi.mocked(fetchTeamMembersByUserId).mockReturnValueOnce(nextPage.promise);
+    rerender(["owner-a", "owner-b"]);
+
+    expect(teamMemberBudgetGate(result.current[teamId], "owner-a")).toMatchObject({ maxBudget: 50, spend: 7 });
+    expect(teamMemberBudgetGate(result.current[teamId], "owner-b")).toBeNull();
+
+    nextPage.resolve([row("owner-a"), { user_id: "owner-b", spend: 3 }] as never);
+    await waitFor(() =>
+      expect(teamMemberBudgetGate(result.current[teamId], "owner-b")).toMatchObject({ maxBudget: 20, spend: 3 }),
+    );
+  });
+
   it("refetches a viewer-scoped entry when invalidated by the team prefix", async () => {
     const { queryClient, wrapper } = createQueryWrapper();
     renderHook(() => useTeamMemberBudgets(userIdsByTeam), { wrapper });

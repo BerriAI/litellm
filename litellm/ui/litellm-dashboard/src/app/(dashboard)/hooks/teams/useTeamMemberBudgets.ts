@@ -1,6 +1,6 @@
 "use client";
 
-import { useQueries, type UseQueryResult } from "@tanstack/react-query";
+import { useQueries, useQueryClient, type UseQueryResult } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 
 import type { TeamMemberBudgetSource } from "@/components/shared/InheritedBudgetHint";
@@ -36,6 +36,7 @@ export const useTeamMemberBudgets = (
   userIdsByTeam: Readonly<Record<string, readonly string[]>>,
 ): Readonly<Record<string, TeamMemberBudgetSource>> => {
   const { accessToken, userId } = useAuthorized();
+  const queryClient = useQueryClient();
   const teams = useMemo(
     () => Object.entries(userIdsByTeam).map(([teamId, userIds]) => ({ teamId, userIds: [...new Set(userIds)].sort() })),
     [userIdsByTeam],
@@ -58,6 +59,20 @@ export const useTeamMemberBudgets = (
       queryFn: () => fetchTeamMemberBudgetSource(accessToken!, teamId, userIds),
       enabled: Boolean(accessToken && userId),
       retry: false,
+      placeholderData: (): TeamMemberBudgetSource | undefined => {
+        const [latest] = queryClient
+          .getQueryCache()
+          .findAll({ queryKey: [...teamMemberBudgetQueryKey(teamId), userId] })
+          .filter((query) => query.state.data !== undefined)
+          .sort((a, b) => b.state.dataUpdatedAt - a.state.dataUpdatedAt);
+        if (!latest) return undefined;
+        const loadedUserIds: unknown = latest.queryKey.at(-1);
+        const loaded = new Set(Array.isArray(loadedUserIds) ? loadedUserIds : []);
+        return {
+          ...(latest.state.data as TeamMemberBudgetSource),
+          pending_user_ids: userIds.filter((id) => !loaded.has(id)),
+        };
+      },
     })),
     combine,
   });
