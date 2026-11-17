@@ -105283,5 +105283,41 @@
         "supported_endpoints": [
             "/v1/images/generations"
         ]
+    },
+    "github_copilot/mai-code-2": {
+        "cache_read_input_token_cost": 2.5e-08,
+        "input_cost_per_token": 5e-07,
+        "litellm_provider": "github_copilot",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 128000,
+        "mode": "responses",
+        "output_cost_per_token": 2.5e-06,
+        "source": "https://docs.github.com/en/copilot/reference/copilot-billing/models-and-pricing",
+        "supported_endpoints": [
+            "/v1/responses"
+        ],
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_vision": true
+    },
+    "github_copilot/mai-code-2-flash": {
+        "cache_read_input_token_cost": 5e-09,
+        "input_cost_per_token": 5e-08,
+        "litellm_provider": "github_copilot",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 128000,
+        "mode": "responses",
+        "output_cost_per_token": 2.5e-07,
+        "source": "https://docs.github.com/en/copilot/reference/copilot-billing/models-and-pricing",
+        "supported_endpoints": [
+            "/v1/responses"
+        ],
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_vision": true
     }
 }
