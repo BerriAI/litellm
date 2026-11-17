@@ -74,6 +74,7 @@ from litellm.proxy.auth.auth_checks import (
     UserNotFoundError,
     get_key_object,
     cache_key_object,
+    cache_team_object,
     jwt_key_mapping_cache_key,
 )
 from litellm.proxy.auth.route_checks import RouteChecks
@@ -14196,6 +14197,81 @@ async def test_exhausted_cached_key_is_only_refused_before_the_body_where_a_mete
         )
 
     assert (outcome[0] is None, getattr(outcome[0], "code", None) == "429") == (not refused, refused)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "team_id, key_team_rpm_limit, team_rpm_limit, cache_order, refused",
+    [
+        pytest.param("team-a", 1, 1000, ("key", "team"), False, id="team-limit-raised-after-key-cached"),
+        pytest.param("team-a", 1000, 1, ("key", "team"), True, id="team-limit-lowered-after-key-cached"),
+        pytest.param("team-a", 1, 1000, ("team", "key"), True, id="key-cached-after-team"),
+        pytest.param("team-a", 1, 1000, ("key",), False, id="team-not-cached"),
+        pytest.param("litellm-dashboard", 1, 1000, ("key",), True, id="dashboard-session-key"),
+    ],
+)
+async def test_early_rate_limit_check_uses_the_team_limits_full_auth_would_apply(
+    team_id: str, key_team_rpm_limit: int, team_rpm_limit: int, cache_order: tuple[str, ...], refused: bool
+) -> None:
+    from litellm.proxy.auth.user_api_key_auth import _reject_from_headers_before_reading_body
+    from litellm.proxy.utils import hash_token
+
+    api_key: Final = "sk-team-limited-key"
+    limiter: Final = PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(DualCache()))
+    await limiter.async_pre_call_hook(
+        UserAPIKeyAuth(api_key=hash_token(api_key), team_id=team_id, team_rpm_limit=1000),
+        DualCache(),
+        {"model": "gpt-5.6", "messages": []},
+        "acompletion",
+    )
+    user_api_key_cache: Final = DualCache()
+    writes: Final = MappingProxyType(
+        {
+            "key": partial(
+                cache_key_object,
+                hashed_token=hash_token(api_key),
+                user_api_key_obj=UserAPIKeyAuth(
+                    token=hash_token(api_key), team_id=team_id, team_rpm_limit=key_team_rpm_limit, models=["gpt-5.6"]
+                ),
+                user_api_key_cache=user_api_key_cache,
+                proxy_logging_obj=None,
+            ),
+            "team": partial(
+                cache_team_object,
+                team_id=team_id,
+                team_table=LiteLLM_TeamTableCachedObj(team_id=team_id, rpm_limit=team_rpm_limit),
+                user_api_key_cache=user_api_key_cache,
+                proxy_logging_obj=None,
+            ),
+        }
+    )
+    for name in cache_order:
+        await writes[name]()
+    proxy_logging_obj: Final = MagicMock()
+    proxy_logging_obj.get_proxy_hook.return_value = limiter
+    proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
+    with (
+        patch("litellm.proxy.proxy_server.general_settings", {}),
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", user_api_key_cache),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging_obj),
+    ):
+        outcome: Final = await asyncio.gather(
+            _reject_from_headers_before_reading_body(
+                request=_request_whose_body_must_not_be_read(api_key),
+                api_key=f"Bearer {api_key}",
+                custom_litellm_key_header=None,
+                route="/v1/chat/completions",
+            ),
+            return_exceptions=True,
+        )
+
+    rejection: Final = outcome[0]
+    assert (
+        rejection is None,
+        getattr(rejection, "code", None),
+        getattr(rejection, "headers", {}).get("rate_limited_by"),
+    ) == ((False, "429", "team") if refused else (True, None, None))
 
 
 @pytest.mark.asyncio
