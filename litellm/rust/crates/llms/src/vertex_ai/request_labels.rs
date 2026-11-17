@@ -108,21 +108,20 @@ fn spend_logs_labels(metadata: Option<&Map<String, Value>>) -> Vec<Label> {
         .collect()
 }
 
-/// Python's `_decoded_labels_header` then `string_labels`: the caller's header counts only when
-/// it decodes to a JSON object, and only its string pairs are kept.
+/// The caller's header counts only when it is strict base64 of a JSON object, and only its string
+/// pairs are kept. JSON that standard parsers refuse (`NaN`, `Infinity`) drops the header.
 fn caller_header_labels(encoded: &str) -> Vec<Label> {
-    let Some(PyValue::Dict(pairs)) = STRICT_BASE64
+    let Some(Value::Object(pairs)) = STRICT_BASE64
         .decode(encoded)
         .ok()
-        .and_then(|bytes| String::from_utf8(bytes).ok())
-        .and_then(|text| python_json::loads(&text).ok())
+        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
     else {
         return Vec::new();
     };
     pairs
         .into_iter()
-        .filter_map(|pair| match pair {
-            (PyValue::Str(key), PyValue::Str(value)) => Some((key, value)),
+        .filter_map(|(key, value)| match value {
+            Value::String(value) => Some((key, value)),
             _ => None,
         })
         .collect()
@@ -329,5 +328,25 @@ mod tests {
     #[case::whitespace(" YQ==", false)]
     fn the_header_decodes_as_strictly_as_python(#[case] encoded: &str, #[case] decodes: bool) {
         assert_eq!(STRICT_BASE64.decode(encoded).is_ok(), decodes);
+    }
+
+    #[rstest]
+    #[case::string_pairs(r#"{"team": "a", "n": 1, "env": "prod"}"#, vec![("team", "a"), ("env", "prod")])]
+    #[case::duplicate_key_keeps_first_position(r#"{"a": "1", "b": "2", "a": "3"}"#, vec![("a", "3"), ("b", "2")])]
+    #[case::nan_drops_the_header(r#"{"team": "a", "x": NaN}"#, vec![])]
+    #[case::infinity_drops_the_header(r#"{"team": "a", "x": Infinity}"#, vec![])]
+    #[case::not_an_object(r#"["team"]"#, vec![])]
+    fn the_callers_header_keeps_the_string_pairs_of_a_json_object(
+        #[case] json: &str,
+        #[case] expected: Vec<(&str, &str)>,
+    ) {
+        let labels = caller_header_labels(&general_purpose::STANDARD.encode(json));
+        assert_eq!(
+            labels,
+            expected
+                .into_iter()
+                .map(|(key, value)| (key.to_owned(), value.to_owned()))
+                .collect::<Vec<_>>()
+        );
     }
 }
