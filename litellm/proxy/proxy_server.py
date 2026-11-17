@@ -385,6 +385,7 @@ from litellm.constants import (
 from litellm.exceptions import RejectedRequestError
 from litellm.integrations.custom_guardrail import CustomGuardrail, ModifyResponseException
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.generic_api.generic_api_callback import GenericAPILogger
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 from litellm.litellm_core_utils.agentic_loop_settings import (
     validated_max_agentic_loops,
@@ -6177,11 +6178,21 @@ def _registered_callback_entries() -> tuple[tuple[str, object], ...]:
     return tuple(chain.from_iterable(_callback_list_entries(list_name) for list_name in _CALLBACK_LIST_NAMES))
 
 
+def _current_callback(entry: object) -> object:
+    return entry.active_logger() if isinstance(entry, GenericAPILogger) else entry
+
+
+def _current_entries(entries: tuple[tuple[str, object], ...]) -> tuple[tuple[str, object], ...]:
+    return tuple((list_name, _current_callback(entry)) for list_name, entry in entries)
+
+
 def _entries_missing_from(
     entries: tuple[tuple[str, object], ...], others: tuple[tuple[str, object], ...]
 ) -> tuple[tuple[str, object], ...]:
-    other_ids: Final = frozenset((list_name, id(entry)) for list_name, entry in others)
-    return tuple((list_name, entry) for list_name, entry in entries if (list_name, id(entry)) not in other_ids)
+    other_ids: Final = frozenset((list_name, id(entry)) for list_name, entry in _current_entries(others))
+    return tuple(
+        (list_name, entry) for list_name, entry in entries if (list_name, id(_current_callback(entry))) not in other_ids
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -6205,7 +6216,7 @@ def _restore_displaced_callback(list_name: str, entry: object) -> None:
 
 
 def _unregister_db_callback(registration: _DbCallbackRegistration) -> None:
-    for list_name, entry in registration.added:
+    for list_name, entry in _current_entries(registration.added):
         litellm.logging_callback_manager.remove_callback_from_list_by_object(
             _UNTYPED_VALUE.validate_python(getattr(litellm, list_name)), entry, require_self=False
         )
@@ -8496,7 +8507,7 @@ class ProxyConfig:
         )
         after: Final = _registered_callback_entries()
         return _DbCallbackRegistration(
-            added=previous.added + _entries_missing_from(after, before),
+            added=_current_entries(previous.added) + _entries_missing_from(after, before),
             displaced=previous.displaced + _entries_missing_from(before, after),
         )
 

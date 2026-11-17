@@ -1356,10 +1356,7 @@ async def test_async_log_success_event_increments_by_actual_tokens(monkeypatch):
 
     # Create mock response with 50 completion tokens
     mock_response = MagicMock(spec=ModelResponse)
-    mock_response.usage = MagicMock(spec=Usage)
-    mock_response.usage.prompt_tokens = 10
-    mock_response.usage.completion_tokens = 50
-    mock_response.usage.total_tokens = 60
+    mock_response.usage = Usage(prompt_tokens=10, completion_tokens=50, total_tokens=60)
 
     # Create kwargs with priority in user_api_key_auth_metadata
     kwargs = {
@@ -1518,10 +1515,7 @@ async def test_async_log_success_event_uses_team_priority_from_auth_metadata(mon
 
     # Create mock response
     mock_response = MagicMock(spec=ModelResponse)
-    mock_response.usage = MagicMock(spec=Usage)
-    mock_response.usage.prompt_tokens = 10
-    mock_response.usage.completion_tokens = 20
-    mock_response.usage.total_tokens = 30
+    mock_response.usage = Usage(prompt_tokens=10, completion_tokens=20, total_tokens=30)
 
     # Simulate team metadata inheritance: priority is in user_api_key_auth_metadata
     # This is how the proxy passes team metadata to the callback
@@ -2546,6 +2540,27 @@ async def test_an_input_token_limit_leaves_the_reply_length_alone(monkeypatch: p
     prompt: Final[dict[str, object]] = {"messages": [{"role": "user", "content": "hi"}]}
     await _check(handler, _team_key(), saturation=1.0, data=prompt)
     assert "max_tokens" not in prompt
+
+
+@pytest.mark.parametrize(("rate_limit_type", "counted"), [("input", 20), ("total", 25), ("output", 5)])
+@pytest.mark.asyncio
+async def test_cache_read_tokens_are_left_out_of_the_tokens_a_response_settles(
+    monkeypatch: pytest.MonkeyPatch, rate_limit_type: str, counted: int
+):
+    from litellm.proxy import proxy_server
+    from litellm.types.utils import PromptTokensDetailsWrapper
+
+    monkeypatch.setitem(proxy_server.general_settings, "token_rate_limit_type", rate_limit_type)
+    handler = _borrowing_handler(monkeypatch, borrows=True)
+    usage: Final = litellm.Usage(
+        prompt_tokens=50,
+        completion_tokens=5,
+        total_tokens=55,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=30),
+    )
+    await _check(handler, _team_key(), saturation=0.5)
+    await _settle_tokens(handler, 0, response=litellm.ModelResponse(usage=usage))
+    assert await _team_tokens_remaining(handler) == 100 - counted
 
 
 @pytest.mark.asyncio
