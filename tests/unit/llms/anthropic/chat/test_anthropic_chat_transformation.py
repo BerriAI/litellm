@@ -11732,3 +11732,119 @@ def test_get_supported_params_reports_sampling_params_only_when_the_request_keep
 
     assert ("temperature" in supported) == ("temperature" in sent), (model, supported, sent)
     assert ("top_p" in supported) == ("top_p" in sent), (model, supported, sent)
+
+
+_LATEST_CLAUDE: Final = "anthropic/claude-opus-5-5"
+_READ_FILE_TOOL: Final = {
+    "type": "function",
+    "function": {
+        "name": "read_file",
+        "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]},
+    },
+}
+_FILE_CONTENTS: Final = "alpha bravo charlie"
+_FINAL_REPLY: Final = "Both files are read."
+
+
+def _reply_route(respx_mock: respx.MockRouter) -> respx.Route:
+    return respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=httpx.Response(
+            200, json=_anthropic_message_body([{"type": "text", "text": _FINAL_REPLY}], "end_turn")
+        )
+    )
+
+
+def _complete_after_read_file_call(arguments: str) -> litellm.ModelResponse:
+    return litellm.completion(
+        model=_LATEST_CLAUDE,
+        api_key="mock_api_key",
+        tools=[_READ_FILE_TOOL],
+        messages=[
+            {"role": "user", "content": "Read /a and /b."},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {"id": "call_1", "type": "function", "function": {"name": "read_file", "arguments": arguments}}
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": _FILE_CONTENTS},
+        ],
+    )
+
+
+def _text(content: object) -> str:
+    if isinstance(content, str):
+        return content
+    assert isinstance(content, list), content
+    return "".join(str(block["text"]) for block in content if block.get("type") == "text")
+
+
+def _sent_tool_round(route: respx.Route) -> tuple[tuple[tuple[str, str, object], ...], tuple[tuple[str, str], ...]]:
+    messages: Final = json.loads(route.calls.last.request.content)["messages"]
+    assistant_turn: Final = next(message for message in messages if message["role"] == "assistant")
+    next_user_turn: Final = messages[messages.index(assistant_turn) + 1]
+    tool_uses: Final = tuple(
+        (block["id"], block["name"], block["input"])
+        for block in assistant_turn["content"]
+        if block["type"] == "tool_use"
+    )
+    tool_results: Final = tuple(
+        (block["tool_use_id"], _text(block["content"]))
+        for block in next_user_turn["content"]
+        if block["type"] == "tool_result"
+    )
+    return tool_uses, tool_results
+
+
+def _assert_one_read_file_call_round_trip(respx_mock: respx.MockRouter, arguments: str) -> None:
+    route: Final = _reply_route(respx_mock)
+
+    response: Final = _complete_after_read_file_call(arguments)
+
+    assert _sent_tool_round(route) == (
+        (("call_1", "read_file", {"path": "/a"}),),
+        (("call_1", _FILE_CONTENTS),),
+    )
+    assert response.choices[0].message.content == _FINAL_REPLY
+
+
+def test_completion_splits_concatenated_tool_call_arguments_into_paired_tool_uses(
+    respx_mock: respx.MockRouter,
+):
+    route: Final = _reply_route(respx_mock)
+
+    response: Final = _complete_after_read_file_call('{"path": "/a"}{"path": "/b"}')
+
+    tool_uses, tool_results = _sent_tool_round(route)
+    assert tool_uses == (
+        ("call_1", "read_file", {"path": "/a"}),
+        ("call_1__concat_1", "read_file", {"path": "/b"}),
+    )
+    assert sorted(tool_use_id for tool_use_id, _ in tool_results) == sorted(tool_use[0] for tool_use in tool_uses)
+    result_text: Final = dict(tool_results)
+    assert result_text["call_1"] == _FILE_CONTENTS
+    assert "call_1" in result_text["call_1__concat_1"]
+    assert _FILE_CONTENTS not in result_text["call_1__concat_1"]
+    assert response.choices[0].message.content == _FINAL_REPLY
+
+
+def test_completion_collapses_identical_concatenated_tool_call_arguments_into_one_tool_use(
+    respx_mock: respx.MockRouter,
+):
+    _assert_one_read_file_call_round_trip(respx_mock, '{"path": "/a"}{"path": "/a"}')
+
+
+def test_completion_sends_valid_tool_call_arguments_as_one_tool_use(respx_mock: respx.MockRouter):
+    _assert_one_read_file_call_round_trip(respx_mock, '{"path": "/a"}')
+
+
+def test_completion_rejects_tool_call_arguments_with_a_junk_tail_without_calling_anthropic(
+    respx_mock: respx.MockRouter,
+):
+    route: Final = _reply_route(respx_mock)
+
+    with pytest.raises(litellm.BadRequestError):
+        _complete_after_read_file_call('{"path": "/a"}garbage')
+
+    assert route.call_count == 0

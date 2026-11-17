@@ -16,6 +16,7 @@ from sdk_clients import NO_PROXY_CACHE, SdkClients
 pytestmark = pytest.mark.e2e
 
 ANTHROPIC_BACKEND: Final = "anthropic/claude-sonnet-5-5"
+LATEST_CLAUDE_BACKEND: Final = "anthropic/claude-opus-5-5"
 COMPUTER_20250124_BACKEND: Final = "anthropic/claude-sonnet-4-5-20250929"
 MCP_SERVER_URL: Final = "https://mcp.zapier.com/api/mcp/mcp"
 
@@ -211,6 +212,61 @@ class TestAnthropicCompletion:
         tool_call: Final = choice.message.tool_calls[0]
         assert tool_call.type == "function", f"not a function tool call: {tool_call!r}"
         assert tool_call.function.name == "str_replace_based_edit_tool"
+
+    @pytest.mark.covers("llm.chat_completions.anthropic.tool_use.nonstream.works")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.ANTHROPIC,),
+            models=(LATEST_CLAUDE_BACKEND,),
+            capabilities=(Capability.FUNCTION_CALLING,),
+            mode=Mode.NONSTREAM,
+        )
+    )
+    def test_history_with_concatenated_tool_call_arguments_gets_a_reply(
+        self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
+    ) -> None:
+        model, client = _register_anthropic(
+            proxy, resources, sdk, "e2e-anthropic-concat-tool-args", backend=LATEST_CLAUDE_BACKEND
+        )
+        response: Final = client.chat.completions.create(
+            model=model,
+            max_tokens=256,
+            tool_choice="none",
+            tools=[
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "read_file",
+                        "description": "Read a file and return its contents",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"path": {"type": "string"}},
+                            "required": ["path"],
+                        },
+                    },
+                }
+            ],
+            messages=[
+                {"role": "user", "content": f"Read /a and /b, then say what /a contains. {unique_marker()}"},
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {"name": "read_file", "arguments": '{"path": "/a"}{"path": "/b"}'},
+                        }
+                    ],
+                },
+                {"role": "tool", "tool_call_id": "call_1", "content": "alpha bravo charlie"},
+            ],
+            extra_body=dict(NO_PROXY_CACHE),
+        )
+        choice: Final = response.choices[0] if response.choices else None
+        assert choice is not None and choice.message.content, f"no reply after the replayed history: {response!r}"
 
     @pytest.mark.covers("llm.chat_completions.anthropic.tool_use.nonstream.works")
     @meta(
