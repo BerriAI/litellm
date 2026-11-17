@@ -5,7 +5,8 @@ import json
 import logging
 import threading
 import time
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
+from contextlib import asynccontextmanager
 from datetime import datetime
 from types import MappingProxyType
 from typing import Final
@@ -6790,6 +6791,34 @@ async def test_vector_store_search_sends_once_when_the_connection_drops_without_
     assert next(sends) is _answer_search
 
 
+def _responses_body(model: str) -> Mapping[str, object]:
+    return {
+        "id": "resp_headers",
+        "object": "response",
+        "created_at": 1,
+        "model": model,
+        "status": "completed",
+        "output": [],
+        "parallel_tool_calls": False,
+        "tool_choice": "auto",
+        "tools": [],
+    }
+
+
+@asynccontextmanager
+async def _responses_http_client(is_async: bool) -> AsyncIterator[AsyncHTTPHandler | HTTPHandler]:
+    client: Final = (
+        AsyncHTTPHandler(transport=httpx.AsyncHTTPTransport()) if is_async else HTTPHandler(client=httpx.Client())
+    )
+    try:
+        yield client
+    finally:
+        if isinstance(client, AsyncHTTPHandler):
+            await client.close()
+        else:
+            client.client.close()
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("is_async", (False, True))
 @pytest.mark.parametrize(
@@ -6812,44 +6841,101 @@ async def test_non_chatgpt_responses_preserves_caller_headers_after_validation(
     respx_mock: respx.MockRouter,
 ) -> None:
     route: Final = respx_mock.post(url__regex=r"https://responses\.example\.com/.*").respond(
-        200,
-        json={
-            "id": "resp_headers",
-            "object": "response",
-            "created_at": 1,
-            "model": upstream_model,
-            "status": "completed",
-            "output": [],
-            "parallel_tool_calls": False,
-            "tool_choice": "auto",
-            "tools": [],
-        },
+        200, json=_responses_body(upstream_model)
     )
-    client: Final = (
-        AsyncHTTPHandler(transport=httpx.AsyncHTTPTransport()) if is_async else HTTPHandler(client=httpx.Client())
-    )
-    kwargs: Final = {
-        "model": f"{provider}/{upstream_model}",
-        "input": "hello",
-        "api_key": "fake-configured-key",
-        "api_base": "https://responses.example.com/v1",
-        "api_version": "2025-04-01-preview",
-        "extra_headers": {
-            **caller_authorization_headers,
-            "content-type": "application/vnd.example+json",
-        },
-        "client": client,
-    }
-    try:
+    async with _responses_http_client(is_async) as client:
+        kwargs: Final = {
+            "model": f"{provider}/{upstream_model}",
+            "input": "hello",
+            "api_key": "fake-configured-key",
+            "api_base": "https://responses.example.com/v1",
+            "api_version": "2025-04-01-preview",
+            "extra_headers": {
+                **caller_authorization_headers,
+                "content-type": "application/vnd.example+json",
+            },
+            "client": client,
+        }
         response: Final = await litellm.aresponses(**kwargs) if is_async else litellm.responses(**kwargs)
-        assert response.status == "completed"
-        assert route.calls[0].request.headers.get_list("authorization") == ["Bearer fake-caller-key"]
-        assert route.calls[0].request.headers.get_list("content-type") == ["application/vnd.example+json"]
-    finally:
-        if isinstance(client, AsyncHTTPHandler):
-            await client.close()
-        else:
-            client.client.close()
+    assert response.status == "completed"
+    assert route.calls[0].request.headers.get_list("authorization") == ["Bearer fake-caller-key"]
+    assert route.calls[0].request.headers.get_list("content-type") == ["application/vnd.example+json"]
+
+
+_STORED_RESPONSE_CALLS: Final = MappingProxyType(
+    {
+        "get": (litellm.get_responses, litellm.aget_responses, {"response_id": "resp_headers"}),
+        "delete": (litellm.delete_responses, litellm.adelete_responses, {"response_id": "resp_headers"}),
+        "cancel": (litellm.cancel_responses, litellm.acancel_responses, {"response_id": "resp_headers"}),
+        "input_items": (litellm.list_input_items, litellm.alist_input_items, {"response_id": "resp_headers"}),
+        "compact": (litellm.compact_responses, litellm.acompact_responses, {"model": "gpt-6-luna", "input": "hello"}),
+    }
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_async", (False, True))
+@pytest.mark.parametrize("call_name", tuple(_STORED_RESPONSE_CALLS))
+@pytest.mark.parametrize("authorization_name", ("authorization", "Authorization"))
+async def test_stored_response_calls_send_only_the_caller_authorization(
+    is_async: bool, call_name: str, authorization_name: str, respx_mock: respx.MockRouter
+) -> None:
+    route: Final = respx_mock.route(url__regex=r"https://responses\.example\.com/.*").respond(
+        200, json={**_responses_body("gpt-6-luna"), "deleted": True, "data": [], "has_more": False}
+    )
+    sync_call, async_call, call_kwargs = _STORED_RESPONSE_CALLS[call_name]
+    async with _responses_http_client(is_async) as client:
+        kwargs: Final = {
+            **call_kwargs,
+            "custom_llm_provider": "openai",
+            "api_key": "fake-configured-key",
+            "api_base": "https://responses.example.com/v1",
+            "extra_headers": {authorization_name: "Bearer fake-caller-key"},
+            "client": client,
+        }
+        await async_call(**kwargs) if is_async else sync_call(**kwargs)
+    assert route.calls[0].request.headers.get_list("authorization") == ["Bearer fake-caller-key"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_async", (False, True))
+async def test_responses_sends_a_bytes_caller_header_value_as_given(
+    is_async: bool, respx_mock: respx.MockRouter
+) -> None:
+    route: Final = respx_mock.post(url__regex=r"https://responses\.example\.com/.*").respond(
+        200, json=_responses_body("gpt-6-luna")
+    )
+    async with _responses_http_client(is_async) as client:
+        kwargs: Final = {
+            "model": "openai/gpt-6-luna",
+            "input": "hello",
+            "api_key": "fake-configured-key",
+            "api_base": "https://responses.example.com/v1",
+            "extra_headers": {"x-trace": b"abc"},
+            "client": client,
+        }
+        await litellm.aresponses(**kwargs) if is_async else litellm.responses(**kwargs)
+    assert route.calls[0].request.headers.get_list("x-trace") == ["abc"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_async", (False, True))
+async def test_responses_rejects_a_none_caller_header_value(is_async: bool, respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post(url__regex=r"https://responses\.example\.com/.*").respond(
+        200, json=_responses_body("gpt-6-luna")
+    )
+    async with _responses_http_client(is_async) as client:
+        kwargs: Final = {
+            "model": "openai/gpt-6-luna",
+            "input": "hello",
+            "api_key": "fake-configured-key",
+            "api_base": "https://responses.example.com/v1",
+            "extra_headers": {"x-trace": None},
+            "client": client,
+        }
+        with pytest.raises(litellm.InternalServerError, match="Header value must be str or bytes"):
+            await litellm.aresponses(**kwargs) if is_async else litellm.responses(**kwargs)
+    assert not route.called
 
 
 _BETA_THE_TABLE_DOES_NOT_LIST: Final = "not-in-the-beta-table-2099-01-01"
