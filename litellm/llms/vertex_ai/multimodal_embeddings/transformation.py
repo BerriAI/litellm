@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from typing import Final, cast
 
 from httpx import Headers, Response
@@ -21,8 +22,9 @@ from litellm.types.utils import (
 )
 from litellm.utils import count_characters, is_base64_encoded
 
-from ...base_llm.embedding.transformation import BaseEmbeddingConfig
-from ..common_utils import VertexAIError
+from ...base_llm.embedding.transformation import BaseEmbeddingConfig, extra_body_fields
+from ..common_utils import VertexAIError, pop_vertex_request_labels
+from ..request_labels import vertex_request_label_fields
 
 
 class VertexAIMultimodalEmbeddingConfig(BaseEmbeddingConfig):
@@ -169,8 +171,14 @@ class VertexAIMultimodalEmbeddingConfig(BaseEmbeddingConfig):
         input: AllEmbeddingInputValues,
         optional_params: dict,
         headers: dict,
-    ) -> dict:
+        litellm_params: Mapping[str, object] | None = None,
+    ) -> dict[str, object]:
         optional_params = optional_params or {}
+        labels: Final = (
+            pop_vertex_request_labels(optional_params, dict(litellm_params or {}))
+            if vertex_request_label_fields()
+            else None
+        )
 
         request_data: Final = VertexMultimodalEmbeddingRequest(instances=[])
 
@@ -189,10 +197,13 @@ class VertexAIMultimodalEmbeddingConfig(BaseEmbeddingConfig):
 
             request_data["instances"] = [vertex_request_instance]
 
+        extra_body: Final = extra_body_fields(optional_params)
         if "outputDimensionality" in optional_params:
-            request_data["parameters"] = {"dimension": optional_params["outputDimensionality"]}
+            request_data["parameters"] = {**extra_body, "dimension": optional_params["outputDimensionality"]}
+        elif extra_body:
+            request_data["parameters"] = dict(extra_body)
 
-        return cast(dict, request_data)
+        return {**request_data, "labels": labels} if labels else {**request_data}
 
     def transform_embedding_response(
         self,

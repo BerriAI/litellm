@@ -13,7 +13,9 @@ from litellm.google_genai.streaming_iterator import (
 )
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.responses.streaming_iterator import drain_logging_tasks
 from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointType
+from tests.unit.litellm_core_utils.weakly_parked_logger import weakly_parked_logger
 
 
 class _SuccessRecorder(CustomLogger):
@@ -28,7 +30,7 @@ class _SuccessRecorder(CustomLogger):
 
 
 def _logging_obj(
-    start_time: datetime = datetime(2026, 10, 9, 12, 0, 0), recorder: _SuccessRecorder | None = None
+    start_time: datetime = datetime(2026, 10, 9, 12, 0, 0), recorder: CustomLogger | None = None
 ) -> LiteLLMLoggingObj:
     logging_obj: Final = LiteLLMLoggingObj(
         model="gemini-3.1-flash",
@@ -247,3 +249,23 @@ async def test_async_stream_logs_its_first_chunk_time_measured_from_the_call_sta
 
     assert first_chunk_at is not None
     assert recorder.logged == [(call_start, first_chunk_at)]
+
+
+@pytest.mark.asyncio
+async def test_async_stream_success_log_survives_garbage_collection_while_its_callback_is_pending():
+    async with weakly_parked_logger() as logger:
+        response: Final = httpx.Response(200, content=(_gemini_event("Hel") + _gemini_event("lo", "STOP")).encode())
+        iterator: Final = AsyncGoogleGenAIGenerateContentStreamingIterator(
+            response=response,
+            model="gemini-3.1-flash",
+            logging_obj=_logging_obj(recorder=logger),
+            generate_content_provider_config=MagicMock(),
+            litellm_metadata={},
+            custom_llm_provider="gemini",
+        )
+
+        yielded: Final = len([chunk async for chunk in iterator])
+        survived: Final = await logger.survives_collection()
+        await drain_logging_tasks()
+
+        assert (yielded, survived, logger.parks, logger.finished.is_set()) == (2, True, 1, True)

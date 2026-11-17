@@ -3537,20 +3537,21 @@ _REDIS_CACHE_MODULES = (
     "litellm/caching/redis_cluster_cache.py",
     "litellm/caching/redis_semantic_cache.py",
     "litellm/caching/dual_cache.py",
-    "litellm/caching/redis_batch.py",
 )
+_NATIVE_REQUEST_BATCHES = "litellm/rust/crates/python-bridge/src/redis/store/request.rs"
 
 
 def _redis_call_types_emitted_by_the_cache_layer():
     """Every ``call_type`` literal the Redis cache layer hands to the service logger, plus the
-    two ``RedisBatch`` names it passes as ``call_type=self.name``."""
+    names the native request batches report their flushes under."""
     import re
     from pathlib import Path
 
     repo = Path(__file__).resolve().parents[4]
     sources = "\n".join((repo / module).read_text() for module in _REDIS_CACHE_MODULES)
     literal = frozenset(re.findall(r'call_type="([a-z_]+)"', sources))
-    batch_names = frozenset(re.findall(r'RedisBatch\([^)]*name="([a-z_]+)"', sources))
+    native_request = (repo / _NATIVE_REQUEST_BATCHES).read_text()
+    batch_names = frozenset(re.findall(r'call\(py, "([a-z_]+)"\)', native_request))
     return sorted(literal | batch_names)
 
 
@@ -3571,31 +3572,6 @@ def test_no_call_type_the_redis_cache_layer_emits_can_fall_back_to_the_raw_metho
         if not service_span_name(ServiceSpanData(service_name="redis", call_type=call_type)).startswith("redis.")
     ]
     assert fallbacks == []
-
-
-def test_mixed_pipeline_families_land_on_their_own_bounded_attribute():
-    """A flush that carried several owners' ops is ``redis.pipeline mixed``; the sorted family
-    list goes to ``litellm.redis.families`` (not under ``litellm.metadata.``) while ``op_count``
-    stays an int on ``litellm.metadata.op_count``, and the legacy vocabulary keeps the bare keys."""
-    logger, exporter = _logger()
-    parent = _service_parent(logger)
-    try:
-        asyncio.run(
-            logger.async_service_success_hook(
-                payload=_ServicePayload("redis", "request_redis_batch", target="mixed"),
-                parent_otel_span=parent,
-                event_metadata={"op_count": 3, "families": "auth_objects,spend_counters"},
-            )
-        )
-    finally:
-        parent.end()
-    (span,) = [s for s in exporter.get_finished_spans() if s.name.startswith("redis")]
-    assert span.name == "redis.pipeline mixed"
-    assert span.attributes[LiteLLM.REDIS_FAMILIES] == "auth_objects,spend_counters"
-    assert span.attributes["families"] == "auth_objects,spend_counters"
-    assert f"{LiteLLM.METADATA_PREFIX}families" not in span.attributes
-    assert span.attributes[f"{LiteLLM.METADATA_PREFIX}op_count"] == 3
-    assert type(span.attributes[f"{LiteLLM.METADATA_PREFIX}op_count"]) is int
 
 
 def test_deferred_close_starts_at_the_provider_handoff_not_the_logging_objects_birth():

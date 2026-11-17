@@ -158,14 +158,13 @@ def test_an_upsert_that_empties_a_group_drops_the_group_name(make_core: MakeCore
     assert core.registry().deployments("emb") == []
 
 
-def test_a_failing_upsert_of_an_existing_deployment_raises_and_leaves_it_removed(make_core: MakeCore) -> None:
-    """Odd but current: without ignore_invalid_deployments the old deployment is popped and not restored."""
+def test_a_failing_upsert_of_an_existing_deployment_raises_and_keeps_it_serving(make_core: MakeCore) -> None:
     core = _core(make_core)
 
     with pytest.raises(litellm.BadRequestError):
         core.apply(ChangeSet(upsert=[typed("gpt", "a", model="notaprovider/x")]))
 
-    assert core.registry().names(kind="ids") == ["b", "e", "w", "t1"]
+    assert core.registry().names(kind="ids") == ["a", "b", "e", "w", "t1"]
 
 
 def test_a_failing_upsert_under_ignore_invalid_deployments_restores_the_previous_deployment(
@@ -179,7 +178,7 @@ def test_a_failing_upsert_under_ignore_invalid_deployments_restores_the_previous
     restored = core.registry().deployment("a")
     assert restored is not None
     assert restored.litellm_params.model == "openai/a"
-    assert core.registry().names(kind="ids") == ["b", "e", "w", "t1", "a"]
+    assert core.registry().names(kind="ids") == ["a", "b", "e", "w", "t1"]
 
 
 def test_the_deprecated_upsert_deployment_warns_and_returns_the_deployment(make_core: MakeCore) -> None:
@@ -540,7 +539,7 @@ def test_a_read_on_another_thread_waits_for_an_upsert_to_read_the_list_back(make
     past the list nor, after a removal, the neighbouring group's entries."""
     core: Final = _two_per_group(make_core)
     hosted: Final = core._hosted  # pyright: ignore[reportAttributeAccessIssue]  # the registry under test
-    write: Final[Callable[[Mapping[str, object]], None]] = hosted.changes_runner
+    write: Final = hosted.build_runner
     started: Final = threading.Event()
     pool: Final = ThreadPoolExecutor(max_workers=1)
     reads: Final[list[object]] = []  # mutable-ok: one per write
@@ -549,25 +548,30 @@ def test_a_read_on_another_thread_waits_for_an_upsert_to_read_the_list_back(make
         started.set()
         return _group_ids(core)
 
-    def write_with_a_read_started(changes: Mapping[str, object]) -> None:
-        write(changes)
+    def write_with_a_read_started(
+        entries: Sequence[object],
+        path: str,
+        resolve_secrets: bool,
+        install: str,
+        answer: Callable[[Mapping[str, object]], object],
+    ) -> None:
+        write(entries, path, resolve_secrets, install, answer)
         started.clear()
         reads.append(pool.submit(read))
         assert started.wait(timeout=5)
         # The reader runs while router-core holds the write and the mirror does not yet.
         _ = threading.Event().wait(0.02)
 
-    hosted.changes_runner = write_with_a_read_started
+    hosted.build_runner = write_with_a_read_started
     try:
         _ = core.apply(ChangeSet(upsert=[typed(f"m{upserted % _GROUPS}", f"d{upserted}", timeout=11)]))
     finally:
-        hosted.changes_runner = write
+        hosted.build_runner = write
 
     assert reads
     for future in reads:
         seen = future.result(timeout=5)  # pyright: ignore[reportAttributeAccessIssue]  # a Future
         for group in range(_GROUPS):
-            # Between the upsert's removal and its add, its group is served by the other deployment.
             assert seen[group], (group, seen)
             assert set(seen[group]) <= {f"d{group}", f"d{group + _GROUPS}"}, (group, seen)
     pool.shutdown()
