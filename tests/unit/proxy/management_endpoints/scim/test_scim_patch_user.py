@@ -613,7 +613,7 @@ def _team_rows(team_ids: Sequence[str]) -> list[MagicMock]:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "record_teams,requested_teams,teams_with_rows,expected_teams,expected_added,expected_removed",
+    "record_teams,requested_teams,teams_with_rows,expected_teams,expected_added,expected_removed,expected_detached",
     [
         pytest.param(
             [],
@@ -621,6 +621,7 @@ def _team_rows(team_ids: Sequence[str]) -> list[MagicMock]:
             ["team-real"],
             ("team-real",),
             ["team-real"],
+            [],
             [],
             id="an_add_with_no_team_row_is_left_out_and_the_real_team_is_written",
         ),
@@ -631,6 +632,7 @@ def _team_rows(team_ids: Sequence[str]) -> list[MagicMock]:
             ("team-real",),
             None,
             None,
+            ["team-gone"],
             id="a_remove_with_no_team_row_makes_no_roster_write_and_is_dropped_from_the_record",
         ),
         pytest.param(
@@ -640,6 +642,7 @@ def _team_rows(team_ids: Sequence[str]) -> list[MagicMock]:
             ("team-real",),
             None,
             None,
+            [],
             id="an_add_with_no_team_row_makes_no_roster_write_and_keeps_the_record_teams",
         ),
     ],
@@ -651,10 +654,12 @@ async def test_sync_requested_teams_leaves_out_groups_with_no_team_row(
     expected_teams: tuple[str, ...],
     expected_added: list[str] | None,
     expected_removed: list[str] | None,
+    expected_detached: list[str],
 ):
     mock_client: Final = MagicMock()
     mock_client.writer_db = mock_client.db
     mock_client.db.litellm_teamtable.find_many = AsyncMock(return_value=_team_rows(teams_with_rows))
+    mock_client.db.execute_raw = AsyncMock(return_value=1)
     mock_patch_team_membership: Final = AsyncMock()
 
     with patch(
@@ -669,6 +674,9 @@ async def test_sync_requested_teams_leaves_out_groups_with_no_team_row(
         )
 
     assert teams == expected_teams
+    assert [(call.args[1], call.args[2]) for call in mock_client.db.execute_raw.await_args_list] == [
+        (team, ["user-groups"]) for team in expected_detached
+    ]
     if expected_added is None:
         mock_patch_team_membership.assert_not_called()
         return
