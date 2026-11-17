@@ -932,8 +932,8 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
 
     elif (
         route_type == "acompletion"
-        and data.get("model", "") is not None
-        and "," in data.get("model", "")
+        and isinstance(comma_separated_models := data.get("model"), str)
+        and "," in comma_separated_models
         and llm_router is not None
     ):
         # Handle batch completions with comma-separated models BEFORE user_config check
@@ -942,7 +942,8 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
             return llm_router.abatch_completion_fastest_response(**data)
         if data.get("stream") is True:
             raise ProxyCommaSeparatedModelsStreamError()
-        models: Final = [model.strip() for model in data.pop("model").split(",")]
+        data.pop("model")
+        models: Final = [model.strip() for model in comma_separated_models.split(",")]
         return llm_router.abatch_completion(models=models, **data)
 
     elif "user_config" in data:
