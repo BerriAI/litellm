@@ -2464,7 +2464,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                     ## Filter the response to only include the files created by the user
                     ## Return the filtered response
                     file_ids = [
-                        file_object.id
+                        get_original_file_id(file_object.id)
                         for file_object in cast(List[FileObject], response.data)  # type: ignore
                     ]
                     user_created_file_ids = await self.get_user_created_file_ids(user_api_key_dict, file_ids)

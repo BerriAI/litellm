@@ -6762,3 +6762,63 @@ async def test_get_unified_file_ids_for_provider_file_ids_maps_every_spelling_on
         "files/upload-1": "file-encoded-gemini-upload",
         "upload-1": "file-encoded-gemini-upload",
     }
+
+
+@pytest.mark.asyncio
+async def test_file_list_keeps_a_managed_file_listed_with_a_deployment_hint():
+    from openai.pagination import AsyncCursorPage
+    from openai.types import FileObject
+
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.openai_files_endpoints.common_utils import (
+        encode_file_id_with_model,
+    )
+
+    hinted_id = encode_file_id_with_model(
+        file_id="file-mine", model="mixed-group", deployment_id="batch-deployment"
+    )
+    upstream_page = AsyncCursorPage[FileObject].construct(
+        data=[
+            FileObject(
+                id=hinted_id,
+                bytes=100,
+                created_at=1,
+                filename="mine.jsonl",
+                object="file",
+                purpose="batch",
+                status="processed",
+            )
+        ],
+        has_more=False,
+        first_id=hinted_id,
+        last_id=hinted_id,
+        object="list",
+    )
+
+    managed_row = MagicMock()
+    managed_row.unified_file_id = "litellm_proxy:mine"
+    managed_row.file_object = {
+        "id": "file-mine",
+        "bytes": 100,
+        "created_at": 1,
+        "filename": "mine.jsonl",
+        "object": "file",
+        "purpose": "batch",
+        "status": "processed",
+    }
+
+    async def rows_holding_a_listed_provider_id(where, **_):
+        return [managed_row] if "file-mine" in where["flat_model_file_ids"]["hasSome"] else []
+
+    prisma_client = AsyncMock()
+    prisma_client.db.litellm_managedfiletable.find_many.side_effect = rows_holding_a_listed_provider_id
+    proxy_managed_files = PROXY_LiteLLMManagedFiles(DualCache(), prisma_client=prisma_client)
+
+    response = await proxy_managed_files.async_post_call_success_hook(
+        data={},
+        user_api_key_dict=UserAPIKeyAuth(user_id="mine-user", parent_otel_span=MagicMock()),
+        response=upstream_page,
+    )
+
+    assert [file_object.id for file_object in response.data] == ["litellm_proxy:mine"]
+    assert response.first_id == "litellm_proxy:mine"
