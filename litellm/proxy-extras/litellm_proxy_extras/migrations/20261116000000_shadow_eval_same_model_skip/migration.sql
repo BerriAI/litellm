@@ -1,3 +1,5 @@
+SET LOCAL lock_timeout = '10s';
+
 -- AlterTable
 ALTER TABLE "LiteLLM_ShadowEvalJob" ADD COLUMN IF NOT EXISTS "skip_same_model" BOOLEAN NOT NULL DEFAULT false;
 
