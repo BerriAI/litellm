@@ -399,6 +399,7 @@ def test_spend_log_key_alias_is_exact_includes_deleted_keys_and_preserves_scope(
                 key_alias: Final = f"prod-key-{uuid.uuid4().hex}"
                 overlapping_key_alias: Final = f"{key_alias}-2"
                 deleted_key_alias: Final = f"deleted-key-{uuid.uuid4().hex}"
+                cli_session_alias: Final = f"cli-session-{uuid.uuid4().hex}"
                 key: Final = scenario.key(user_id=owner, key_alias=key_alias)
                 overlapping_key: Final = scenario.key(
                     user_id=other_owner,
@@ -410,7 +411,7 @@ def test_spend_log_key_alias_is_exact_includes_deleted_keys_and_preserves_scope(
                 )
                 deleted_key: Final = string_value(deleted_key_response["key"])
                 scenario.cleanups.callback(delete_key_if_present, gateway, deleted_key)
-                request_ids: Final = tuple(f"alias-{uuid.uuid4().hex}" for _ in range(3))
+                request_ids: Final = tuple(f"alias-{uuid.uuid4().hex}" for _ in range(4))
                 session_id: Final = f"key-alias-{uuid.uuid4().hex}"
                 started: Final = datetime.now(timezone.utc) - timedelta(hours=1)
                 scenario.cleanups.callback(_delete_session, session_id, database_url)
@@ -431,6 +432,7 @@ def test_spend_log_key_alias_is_exact_includes_deleted_keys_and_preserves_scope(
                                 other_owner,
                                 deleted_key_alias,
                             ),
+                            (request_ids[3], cli_session_alias, other_owner, cli_session_alias),
                         ),
                         session_id,
                         started,
@@ -459,6 +461,17 @@ def test_spend_log_key_alias_is_exact_includes_deleted_keys_and_preserves_scope(
                     assert deleted.status_code == 200, deleted.text
                     assert deleted.json()["total"] == 1, deleted.text
                     assert [row["request_id"] for row in deleted.json()["data"]] == [request_ids[2]], deleted.text
+
+                    cli_session: Final = gateway.request(
+                        "GET",
+                        path,
+                        params={**date_filters, "key_alias": cli_session_alias},
+                    )
+                    assert cli_session.status_code == 200, cli_session.text
+                    assert cli_session.json()["total"] == 1, cli_session.text
+                    assert [row["request_id"] for row in cli_session.json()["data"]] == [request_ids[3]], (
+                        cli_session.text
+                    )
 
                     absent: Final = gateway.request(
                         "GET",

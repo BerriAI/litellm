@@ -3011,7 +3011,8 @@ async def ui_view_spend_logs(
         if key_alias is not None:
             sql_conditions.append(
                 f'api_key IN (SELECT token FROM "LiteLLM_VerificationToken" WHERE key_alias = ${p} '
-                f'UNION SELECT token FROM "LiteLLM_DeletedVerificationToken" WHERE key_alias = ${p})'
+                f'UNION SELECT token FROM "LiteLLM_DeletedVerificationToken" WHERE key_alias = ${p} '
+                f"UNION SELECT ${p}::text)"
             )
             sql_params.append(key_alias)
             p += 1
