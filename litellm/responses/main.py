@@ -34,7 +34,11 @@ from litellm.litellm_core_utils.allowed_tools_tool_choice import (
     parse_allowed_tools_tool_choice,
 )
 from litellm.litellm_core_utils.asyncify import run_async_function
-from litellm.litellm_core_utils.core_helpers import drops_unsupported_params, normalize_drop_params
+from litellm.litellm_core_utils.core_helpers import (
+    allowed_openai_param_names,
+    drops_unsupported_params,
+    normalize_drop_params,
+)
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     update_responses_input_with_model_file_ids,
@@ -481,7 +485,7 @@ def _chat_completion_request_fields(allowed_openai_params: Sequence[str] | None)
             *DEFAULT_CHAT_COMPLETION_PARAM_VALUES,
             *all_litellm_params,
             *GenericLiteLLMParams.model_fields,
-            *(allowed_openai_params or ()),
+            *allowed_openai_param_names(allowed_openai_params),
         )
     ).difference(_RESPONSES_ONLY_REQUEST_FIELDS_NEVER_BRIDGED)
 
