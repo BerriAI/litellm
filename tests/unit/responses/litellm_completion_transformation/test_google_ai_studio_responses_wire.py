@@ -205,14 +205,19 @@ async def test_an_empty_trailing_user_item_reaches_gemini_as_a_user_turn(empty_u
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "dropped_user_item",
-    [pytest.param({"role": "user", "content": None}, id="null"), pytest.param({"role": "user"}, id="missing")],
+    "empty_user_item",
+    [
+        pytest.param({"role": "user", "content": ""}, id="empty_string"),
+        pytest.param({"role": "user", "content": []}, id="empty_list"),
+        pytest.param({"role": "user", "content": None}, id="null"),
+        pytest.param({"role": "user"}, id="missing"),
+    ],
 )
-async def test_a_dropped_trailing_user_item_reaches_an_alternating_gemini_deployment_as_a_blank_user_turn(
-    dropped_user_item: dict[str, object],
+async def test_an_empty_trailing_user_item_reaches_an_alternating_gemini_deployment_as_the_configured_continue_message(
+    empty_user_item: dict[str, object],
 ) -> None:
     contents: Final = await _gemini_contents_for(
-        [{"role": "user", "content": "Hi"}, {"role": "assistant", "content": "Hello!"}, dropped_user_item],
+        [{"role": "user", "content": "Hi"}, {"role": "assistant", "content": "Hello!"}, empty_user_item],
         ensure_alternating_roles=True,
         user_continue_message={"role": "user", "content": "Keep going"},
     )
@@ -220,5 +225,5 @@ async def test_a_dropped_trailing_user_item_reaches_an_alternating_gemini_deploy
     assert contents == [
         {"role": "user", "parts": [{"text": "Hi"}]},
         {"role": "model", "parts": [{"text": "Hello!"}]},
-        {"role": "user", "parts": [{"text": " "}]},
+        {"role": "user", "parts": [{"text": "Keep going"}]},
     ]
