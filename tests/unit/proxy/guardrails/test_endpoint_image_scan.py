@@ -6,10 +6,14 @@ import httpx
 import pytest
 from fastapi import HTTPException
 
+import litellm
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy.guardrails.endpoint_image_scan import scan_images
 from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import BedrockGuardrail
+from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.llms.openai import AllMessageValues
+from litellm.types.proxy.guardrails.guardrail_hooks.bedrock_guardrails import BedrockGuardrailResponse
 
 _PNG_BASE64: Final = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
 _PNG: Final = f"data:image/png;base64,{_PNG_BASE64}"
@@ -73,7 +77,14 @@ def _another_provider(bedrock: _Bedrock) -> CustomGuardrail:
 
 
 class _OwnBedrockCall(BedrockGuardrail):
-    async def make_bedrock_api_request(self, source, messages=None, response=None, request_data=None, **kwargs):
+    async def make_bedrock_api_request(
+        self,
+        source: Literal["INPUT", "OUTPUT"],
+        messages: list[AllMessageValues] | None = None,
+        response: litellm.ModelResponse | None = None,
+        request_data: dict | None = None,
+        logging_event_type: GuardrailEventHooks | None = None,
+    ) -> BedrockGuardrailResponse:
         return {"action": "NONE"}
 
 
