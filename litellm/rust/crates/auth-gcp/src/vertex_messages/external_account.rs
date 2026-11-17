@@ -22,7 +22,7 @@ use super::{
     external_authorized_user::oauth_error,
     failure::{GoogleLoginFailure, PythonException},
     service_account::invalid_lifetime,
-    source::{SdkJson, present},
+    source::{BoundedRead, MAX_CREDENTIALS_FILE_BYTES, SdkJson, present, read_bounded_off_runtime},
     transport::Requests,
 };
 use crate::constants::CLOUD_PLATFORM_SCOPE;
@@ -454,17 +454,39 @@ struct FileSource {
 impl SubjectToken for FileSource {
     fn subject_token<'a>(&'a self, _requests: &'a Requests) -> SubjectFuture<'a> {
         Box::pin(async move {
-            if !std::path::Path::new(&self.path).exists() {
-                return Err(GoogleLoginFailure::new(
-                    PythonException::Refresh,
-                    format!("The subject token file {} does not exist.", self.path),
-                ));
-            }
-            let content = std::fs::read_to_string(&self.path)
-                .map_err(|error| GoogleLoginFailure::new(PythonException::OS, error.to_string()))?;
+            let bytes = read_bounded_off_runtime(self.path.clone())
+                .await
+                .map_err(|failure| match failure {
+                    BoundedRead::Unreadable(error)
+                        if error.kind() == std::io::ErrorKind::NotFound =>
+                    {
+                        GoogleLoginFailure::new(
+                            PythonException::Refresh,
+                            format!("The subject token file {} does not exist.", self.path),
+                        )
+                    }
+                    BoundedRead::Unreadable(error) => {
+                        GoogleLoginFailure::new(PythonException::OS, error.to_string())
+                    }
+                    BoundedRead::TooLarge => too_large_file("subject token file", &self.path),
+                })?;
+            let content = String::from_utf8(bytes).map_err(|_| {
+                GoogleLoginFailure::new(
+                    PythonException::OS,
+                    format!("The subject token file {} is not UTF-8 text.", self.path),
+                )
+            })?;
             parse_token_data(&content, &self.path, &self.format)
         })
     }
+}
+
+/// A token file over [`MAX_CREDENTIALS_FILE_BYTES`], larger than any token a source can hold.
+fn too_large_file(kind: &str, path: &str) -> GoogleLoginFailure {
+    GoogleLoginFailure::new(
+        PythonException::Refresh,
+        format!("The {kind} {path} is over {MAX_CREDENTIALS_FILE_BYTES} bytes."),
+    )
 }
 
 /// A subject token fetched from a URL, as `identity_pool` fetches one.
@@ -687,11 +709,13 @@ struct Executable {
 }
 
 impl Executable {
-    fn cached(&self) -> Result<Option<String>, GoogleLoginFailure> {
+    /// The token a still-valid answer in `output_file` holds. A file that cannot be read, or is
+    /// too large to be an answer, is no cached answer.
+    async fn cached(&self) -> Result<Option<String>, GoogleLoginFailure> {
         let Some(path) = &self.output_file else {
             return Ok(None);
         };
-        let Some(content) = std::fs::read(path).ok() else {
+        let Ok(content) = read_bounded_off_runtime(path.clone()).await else {
             return Ok(None);
         };
         let response = match ExecutableResponse::parse(&content) {
@@ -720,7 +744,7 @@ impl Executable {
                 "Set GOOGLE_EXTERNAL_ACCOUNT_ALLOW_EXECUTABLES=1 to let credentials run an executable.",
             ));
         }
-        if let Some(token) = self.cached()? {
+        if let Some(token) = self.cached().await? {
             return Ok(token);
         }
         let unusable = |problem: &str| {
@@ -781,11 +805,16 @@ impl Executable {
         let response = match printed.is_empty() {
             false => ExecutableResponse::parse(&printed)?,
             true => match &self.output_file {
-                Some(path) => {
-                    ExecutableResponse::parse(&std::fs::read(path).map_err(|error| {
-                        GoogleLoginFailure::new(PythonException::OS, error.to_string())
-                    })?)?
-                }
+                Some(path) => ExecutableResponse::parse(
+                    &read_bounded_off_runtime(path.clone()).await.map_err(
+                        |failure| match failure {
+                            BoundedRead::Unreadable(error) => {
+                                GoogleLoginFailure::new(PythonException::OS, error.to_string())
+                            }
+                            BoundedRead::TooLarge => too_large_file("executable output file", path),
+                        },
+                    )?,
+                )?,
                 None => return Err(malformed_response()),
             },
         };
@@ -1098,6 +1127,96 @@ mod tests {
         assert_eq!(
             loaded.refresh().await.unwrap_err(),
             GoogleLoginFailure::new(exception, message)
+        );
+    }
+
+    /// A text subject token file holding `contents`.
+    fn token_file(contents: &[u8]) -> (tempfile::NamedTempFile, FileSource) {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(file.path(), contents).unwrap();
+        let source = FileSource {
+            path: file.path().to_str().unwrap().to_owned(),
+            format: Format::Text,
+        };
+        (file, source)
+    }
+
+    #[rstest]
+    #[case::normal(b"subject-jwt".to_vec(), Ok("subject-jwt"))]
+    #[case::oversize(
+        vec![b't'; MAX_CREDENTIALS_FILE_BYTES as usize + 1],
+        Err(PythonException::Refresh)
+    )]
+    #[tokio::test]
+    async fn a_subject_token_file_is_read_up_to_the_size_limit(
+        #[case] contents: Vec<u8>,
+        #[case] expected: Result<&str, PythonException>,
+    ) {
+        let (_file, source) = token_file(&contents);
+        let token = source.subject_token(&Requests::with_environment(&[])).await;
+        assert_eq!(
+            token.as_deref().map_err(|failure| failure.exception),
+            expected
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn an_oversize_subject_token_file_is_named_in_the_refusal() {
+        let (file, source) = token_file(&vec![b't'; MAX_CREDENTIALS_FILE_BYTES as usize + 1]);
+        assert_eq!(
+            source
+                .subject_token(&Requests::with_environment(&[]))
+                .await
+                .unwrap_err()
+                .message,
+            format!(
+                "The subject token file {} is over 4194304 bytes.",
+                file.path().display()
+            )
+        );
+    }
+
+    #[cfg(unix)]
+    #[rstest]
+    #[tokio::test]
+    async fn an_endless_subject_token_file_is_refused_by_its_size() {
+        let source = FileSource {
+            path: "/dev/zero".into(),
+            format: Format::Text,
+        };
+        assert_eq!(
+            source.subject_token(&Requests::with_environment(&[])).await,
+            Err(GoogleLoginFailure::new(
+                PythonException::Refresh,
+                "The subject token file /dev/zero is over 4194304 bytes."
+            ))
+        );
+    }
+
+    #[cfg(unix)]
+    #[rstest]
+    #[tokio::test]
+    async fn an_oversize_executable_output_file_is_refused_by_its_size() {
+        let (file, _) = token_file(&vec![b' '; MAX_CREDENTIALS_FILE_BYTES as usize + 1]);
+        let path = file.path().to_str().unwrap().to_owned();
+        let executable = Executable {
+            command: "true".into(),
+            timeout: Duration::from_secs(30),
+            output_file: Some(path.clone()),
+            audience: "aud".into(),
+            subject_token_type: "urn:ietf:params:oauth:token-type:jwt".into(),
+            impersonated_email: None,
+            os_env: Arc::new(|name| {
+                (name == "GOOGLE_EXTERNAL_ACCOUNT_ALLOW_EXECUTABLES").then(|| "1".into())
+            }),
+        };
+        assert_eq!(
+            executable.run().await,
+            Err(GoogleLoginFailure::new(
+                PythonException::Refresh,
+                format!("The executable output file {path} is over 4194304 bytes.")
+            ))
         );
     }
 

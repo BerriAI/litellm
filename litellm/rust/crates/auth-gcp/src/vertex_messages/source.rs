@@ -17,7 +17,9 @@ use crate::config::is_base64_encoded_json;
 
 const INLINE_JSON_LEADING_NOISE: [char; 7] = [' ', '\t', '\r', '\n', '\u{feff}', '"', '\''];
 const MAX_CREDENTIALS_FILE_CHARACTERS: usize = 1 << 20;
-const MAX_CREDENTIALS_FILE_BYTES: u64 = 4 * MAX_CREDENTIALS_FILE_CHARACTERS as u64;
+/// The most bytes any credentials or subject token file is read to: four UTF-8 bytes for each of
+/// [`MAX_CREDENTIALS_FILE_CHARACTERS`].
+pub(crate) const MAX_CREDENTIALS_FILE_BYTES: u64 = 4 * MAX_CREDENTIALS_FILE_CHARACTERS as u64;
 const NOT_A_JSON_OBJECT: &str = "is JSON but not a JSON object, it may be quoted or encoded twice";
 const PRIVATE_KEY_HINT: &str = "Check for unescaped newlines in private_key.";
 const LEADING_NOISE_HINT: &str = "Remove the quotes or byte-order mark before the opening `{`.";
@@ -190,6 +192,42 @@ fn inline_not_json(detail: &str, hint: &str) -> GoogleLoginFailure {
     )
 }
 
+/// Why [`read_bounded`] gave no contents.
+#[derive(Debug)]
+pub(crate) enum BoundedRead {
+    /// The file could not be opened or read.
+    Unreadable(std::io::Error),
+    /// The file holds more than [`MAX_CREDENTIALS_FILE_BYTES`].
+    TooLarge,
+}
+
+/// A file's bytes, read no further than one byte past [`MAX_CREDENTIALS_FILE_BYTES`], so a file
+/// such as `/dev/zero` is refused by its size instead of read without end.
+pub(crate) fn read_bounded(path: &str) -> Result<Vec<u8>, BoundedRead> {
+    let mut bytes = Vec::new();
+    std::fs::File::open(path)
+        .and_then(|file| {
+            file.take(MAX_CREDENTIALS_FILE_BYTES + 1)
+                .read_to_end(&mut bytes)
+        })
+        .map_err(BoundedRead::Unreadable)?;
+    match bytes.len() as u64 > MAX_CREDENTIALS_FILE_BYTES {
+        true => Err(BoundedRead::TooLarge),
+        false => Ok(bytes),
+    }
+}
+
+/// [`read_bounded`] on a blocking thread, so a slow file or a FIFO never holds up the runtime.
+pub(crate) async fn read_bounded_off_runtime(path: String) -> Result<Vec<u8>, BoundedRead> {
+    tokio::task::spawn_blocking(move || read_bounded(&path))
+        .await
+        .unwrap_or_else(|_| {
+            Err(BoundedRead::Unreadable(std::io::Error::other(
+                "the file read did not finish",
+            )))
+        })
+}
+
 fn read_json_file(path: &str) -> Result<CredentialsJson, GoogleLoginFailure> {
     let unreadable = |error: std::io::Error| {
         GoogleLoginFailure::credentials_file(UnusableFile::Unreadable {
@@ -206,17 +244,11 @@ fn read_json_file(path: &str) -> Result<CredentialsJson, GoogleLoginFailure> {
         )
     };
     // At most four UTF-8 bytes a character, so one byte past that is over the limit whatever it
-    // decodes to, and a file such as `/dev/zero` is never read further.
-    let mut bytes = Vec::new();
-    std::fs::File::open(path)
-        .and_then(|file| {
-            file.take(MAX_CREDENTIALS_FILE_BYTES + 1)
-                .read_to_end(&mut bytes)
-        })
-        .map_err(unreadable)?;
-    if bytes.len() as u64 > MAX_CREDENTIALS_FILE_BYTES {
-        return Err(too_large());
-    }
+    // decodes to.
+    let bytes = read_bounded(path).map_err(|failure| match failure {
+        BoundedRead::Unreadable(error) => unreadable(error),
+        BoundedRead::TooLarge => too_large(),
+    })?;
     let contents =
         String::from_utf8(bytes).map_err(|_| invalid_file(path, "is not UTF-8 text".into()))?;
     if contents.chars().count() > MAX_CREDENTIALS_FILE_CHARACTERS {
