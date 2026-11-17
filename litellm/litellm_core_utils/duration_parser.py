@@ -167,28 +167,42 @@ def _shift_months(moment: datetime, months: int) -> datetime:
     return moment.replace(year=year, month=month, day=min(moment.day, get_last_day_of_month(year, month)))
 
 
+def is_annual_budget_duration(duration: str) -> bool:
+    return _parse_duration(normalize_duration(duration)) == (12, "mo")
+
+
+def normalize_budget_window_start(moment: datetime) -> datetime:
+    return moment.replace(microsecond=moment.microsecond // 1000 * 1000)
+
+
+def get_annual_budget_window_start(reset_at: datetime, timezone_str: str) -> datetime:
+    boundary: Final = _setup_timezone(normalize_budget_window_start(reset_at), timezone_str)[0]
+    return _shift_months(boundary, -12).astimezone(timezone.utc)
+
+
 def get_budget_window_start(duration: str, reset_at: datetime) -> datetime:
     """Start of the budget period that ends at `reset_at`, under the same rules
     `get_next_standardized_reset_time` used to pick it: `30d` and `Nmo` span calendar
     months and a duration it does not recognize resets at the next midnight."""
+    boundary: Final = normalize_budget_window_start(reset_at)
     value, unit = _parse_duration(normalize_duration(duration))
     if value is None:
-        return reset_at - timedelta(days=1)
+        return boundary - timedelta(days=1)
     match unit:
         case "mo":
-            return _shift_months(reset_at, -value)
+            return _shift_months(boundary, -value)
         case "d":
-            return _shift_months(reset_at, -1) if value == 30 else reset_at - timedelta(days=value)
+            return _shift_months(boundary, -1) if value == 30 else boundary - timedelta(days=value)
         case "w":
-            return reset_at - timedelta(weeks=value)
+            return boundary - timedelta(weeks=value)
         case "h":
-            return reset_at - timedelta(hours=value)
+            return boundary - timedelta(hours=value)
         case "m":
-            return reset_at - timedelta(minutes=value)
+            return boundary - timedelta(minutes=value)
         case "s":
-            return reset_at - timedelta(seconds=value)
+            return boundary - timedelta(seconds=value)
         case _:
-            return reset_at - timedelta(days=1)
+            return boundary - timedelta(days=1)
 
 
 def _setup_timezone(current_time: datetime, timezone_str: str = "UTC") -> tuple[datetime, tzinfo]:
@@ -220,8 +234,12 @@ def _parse_duration(duration: str) -> tuple[int | None, str | None]:
     if not match:
         return None, None
 
-    value, unit = match.groups()
-    return int(value), unit
+    value: Final = int(match.group(1))
+    spelled_unit: Final = match.group(2)
+    unit: Final = _extract_from_regex(duration)[1] or spelled_unit
+    if unit == "mo" and spelled_unit != "mo" and value not in (1, 12):
+        return value, spelled_unit
+    return value, unit
 
 
 def _apply_time_of_day(dt: datetime, reset_time_of_day: time) -> datetime:
@@ -390,14 +408,22 @@ def _handle_month_reset(
     Args:
         current_time: Current datetime
         base_midnight: Midnight of current day
-        value: Number of months (currently only supports 1 month resets)
+        value: Number of months, 1 for monthly or 12 for annual resets
         reset_time_of_day: Wall-clock time the reset lands on
 
     Returns:
         datetime: First day of the next reset month at `reset_time_of_day`
     """
+    if value == 12:
+        first_of_year: Final = base_midnight.replace(month=1, day=1)
+        annual_candidate: Final = _apply_time_of_day(first_of_year, reset_time_of_day)
+        return (
+            annual_candidate.replace(year=annual_candidate.year + 1)
+            if annual_candidate <= current_time
+            else annual_candidate
+        )
     if value != 1:
-        raise ValueError("Monthly resets currently only support 1 month intervals")
+        raise ValueError("Calendar resets support 1 month or 12 month intervals")
 
     first_of_this_month: Final = base_midnight.replace(day=1)
     candidate: Final = _apply_time_of_day(first_of_this_month, reset_time_of_day)

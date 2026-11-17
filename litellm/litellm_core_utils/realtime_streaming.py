@@ -26,7 +26,7 @@ from litellm.constants import (
     REALTIME_SESSION_SUCCESS_LOGGED_KEY,
 )
 from litellm.litellm_core_utils.audio_utils.utils import normalized_audio_duration_seconds
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, decoded_json_object, json_contains
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.llms.base_llm.realtime.transcription_protocol import RealtimeTranscriptionProtocolError
 from litellm.llms.base_llm.realtime.transformation import (
@@ -47,13 +47,27 @@ from litellm.types.realtime import ALL_DELTA_TYPES
 
 from .litellm_logging import Logging as LiteLLMLogging
 from .realtime_errors import client_close_code, realtime_error_event, websocket_close_reason
+from .realtime_guardrails import (
+    RealtimeGuardedItem,
+    RealtimeGuardrailBlock,
+    RealtimeGuardrailRewrite,
+    RealtimeGuardrailVerdict,
+    RealtimeMessageText,
+    RealtimeToolOutput,
+    guardrail_violation_error_event,
+    guardrail_voice_prompt_events,
+    realtime_guarded_item,
+    realtime_guardrail_verdict,
+    realtime_runner_guardrail,
+    realtime_screening_guardrails,
+    rewritten_item,
+)
 
 if TYPE_CHECKING:
     from openai.types.realtime.realtime_audio_formats import RealtimeAudioFormats
     from websockets.asyncio.client import ClientConnection
     from websockets.exceptions import ConnectionClosed
 
-    from litellm.integrations.custom_guardrail import CustomGuardrail
     from litellm.types.guardrails import GuardrailEventHooks
 
     CLIENT_CONNECTION_CLASS = ClientConnection
@@ -206,9 +220,13 @@ def _unscreened_audio_error_event(client_event_id: object) -> Mapping[str, objec
     }
 
 
+def _decode_json(payload: str) -> object:
+    return _DECODED_JSON.validate_python(json.loads(payload))
+
+
 def _decode_json_object(payload: str) -> Mapping[str, object]:
     """Decode a realtime frame into its top-level field mapping."""
-    return json.loads(payload)
+    return decoded_json_object(_decode_json(payload))
 
 
 _GUARDRAIL_TURN_DETECTION_GATE: Final[Mapping[str, object]] = MappingProxyType(
@@ -437,21 +455,6 @@ def _opted_out_of_always_on_guardrail(callback: object, request_data: Mapping[st
     )
 
 
-def _realtime_runner_guardrail(
-    callback: object,
-    check_data: Mapping[str, object],
-    event_hooks: Sequence["GuardrailEventHooks"],
-) -> "CustomGuardrail | None":
-    from litellm.integrations.custom_guardrail import CustomGuardrail
-
-    if not isinstance(callback, CustomGuardrail) or callback.use_native_lifecycle_hooks:
-        return None
-    runs: Final = any(
-        callback.should_run_guardrail(data=check_data, event_type=event_hook) for event_hook in event_hooks
-    )
-    return callback if runs else None
-
-
 def translation_guardrails_apply(request_data: Mapping[str, object]) -> bool:
     from litellm.types.guardrails import GuardrailEventHooks
 
@@ -479,7 +482,7 @@ def realtime_guardrails_apply(request_data: Mapping[str, object], callbacks: Seq
     check_data: Final = {**request_data, "stream": True}
     runner_event_hooks: Final = (GuardrailEventHooks.realtime_input_transcription, GuardrailEventHooks.pre_call)
     return any(
-        _realtime_runner_guardrail(callback, check_data, runner_event_hooks) is not None for callback in callbacks
+        realtime_runner_guardrail(callback, check_data, runner_event_hooks) is not None for callback in callbacks
     )
 
 
@@ -512,7 +515,7 @@ class RealTimeStreaming:
         self._held_client_content: tuple[str, ...] = ()
         self._held_client_content_bytes: int = 0
         self._held_client_content_deadline: float | None = None
-        self._replay_scope: Final = client_websocket_scope(websocket)
+        self._replay_scope: Final = client_websocket_scope(self.websocket)
         self.backend_ws = backend_ws
         self.logging_obj = logging_obj
         self._logging_worker = logging_worker
@@ -534,7 +537,7 @@ class RealTimeStreaming:
         self._translation_usage_finalized = False
 
         # Detect whether the client is explicitly opting into the beta protocol.
-        self._client_wants_beta = self.detect_beta_header(websocket)
+        self._client_wants_beta = self.detect_beta_header(self.websocket)
         self._backend_uses_beta_protocol = not translation_session and (
             self._client_wants_beta if backend_uses_beta_protocol is None else backend_uses_beta_protocol
         )
@@ -675,7 +678,7 @@ class RealTimeStreaming:
         if not self._should_store_message(message_obj):
             return
         try:
-            event_type: Final = message_obj.get("type", "")
+            event_type: Final = decoded_json_object(message_obj).get("type", "")
             if event_type in self._SESSION_EVENT_TYPES:
                 typed_obj: OpenAIRealtimeEvents = OpenAIRealtimeStreamSessionEvents(**message_obj)
             else:
@@ -1021,7 +1024,7 @@ class RealTimeStreaming:
                     sent = True
                     continue
                 try:
-                    msg_obj = _decode_json_object(msg)
+                    msg_obj = as_str_mapping(_decode_json(msg))
                 except (json.JSONDecodeError, TypeError):
                     msg_obj = None
                 if isinstance(msg_obj, dict) and self.provider_config.is_setup_message(msg_obj):
@@ -1163,13 +1166,15 @@ class RealTimeStreaming:
         return _session_update_frame(self._held_session_update or _NO_SESSION_FIELDS)
 
     async def _hold_session_update(self, message: str) -> None:
-        client_event: Final = _decode_json_object(message)
+        client_event: Final = _decode_json(message)
         if self._held_session_update_bytes + len(message.encode("utf-8")) > RealTimeStreaming._MAX_BUFFERED_BYTES:
             await self.websocket.send_text(
-                json.dumps(_HELD_SESSION_UPDATE_TOO_LARGE.error_event(client_event.get("event_id")))
+                json.dumps(
+                    _HELD_SESSION_UPDATE_TOO_LARGE.error_event(decoded_json_object(client_event).get("event_id"))
+                )
             )
             return
-        session: Final = client_event.get("session")
+        session: Final = decoded_json_object(client_event).get("session")
         update: Final = _SESSION_FIELDS.validate_python(session) if isinstance(session, Mapping) else _NO_SESSION_FIELDS
         held: Final = _merge_session_fields(self._held_session_update or _NO_SESSION_FIELDS, update)
         self._held_session_update = held
@@ -1183,7 +1188,7 @@ class RealTimeStreaming:
             _session_update_frame(session), self.model, None
         )
         return next(
-            (frame for frame in preview if isinstance(frame, str) and "setup" in _decode_json_object(frame)), None
+            (frame for frame in preview if isinstance(frame, str) and json_contains(_decode_json(frame), "setup")), None
         )
 
     def _leaves_applied_setup_unchanged(self, update: Mapping[str, object]) -> bool:
@@ -1195,7 +1200,7 @@ class RealTimeStreaming:
         return (
             applied_setup is not None
             and merged_setup is not None
-            and _decode_json_object(applied_setup) == _decode_json_object(merged_setup)
+            and _decode_json(applied_setup) == _decode_json(merged_setup)
         )
 
     async def _acknowledge_session_setup(self, session: Mapping[str, object]) -> None:
@@ -1523,8 +1528,8 @@ class RealTimeStreaming:
         ``return_new_content_delta_events`` modality lookup, ...).
         """
         try:
-            message_obj: Final = _decode_json_object(transformed_message)
-            if "setup" in message_obj:
+            message_obj: Final = _decode_json(transformed_message)
+            if json_contains(message_obj, "setup"):
                 self.session_configuration_request = transformed_message
         except (json.JSONDecodeError, TypeError):
             return
@@ -1663,16 +1668,60 @@ class RealTimeStreaming:
 
     async def run_realtime_guardrails(
         self,
-        transcript: str,
+        transcript: object,
         item_id: str | None = None,
         pre_block_backend_message: str | None = None,
         event_hooks: Sequence["GuardrailEventHooks"] | None = None,
     ) -> bool:
         """
-        Run registered guardrails on realtime text (transcript, user message, tool output).
-
         Returns True if blocked (synthetic warning already sent to client).
         Returns False if clean (caller should send response.create to the backend).
+        """
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        if isinstance(transcript, str):
+            verdict: Final = await self.apply_realtime_guardrails(
+                (transcript,), "user", item_id, pre_block_backend_message, event_hooks
+            )
+            return isinstance(verdict, RealtimeGuardrailBlock)
+        if realtime_screening_guardrails(
+            "user",
+            event_hooks or (GuardrailEventHooks.realtime_input_transcription,),
+            {**self.request_data, "stream": True},
+            litellm.callbacks,
+        ):
+            raise TypeError(f"Realtime guardrails cannot screen a {type(transcript).__name__} transcript")
+        return False
+
+    async def _screen_client_item(self, guarded_item: RealtimeGuardedItem | None) -> RealtimeGuardrailVerdict:
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        match guarded_item:
+            case RealtimeToolOutput(texts=texts, sanitized_event=sanitized_event):
+                return await self.apply_realtime_guardrails(
+                    texts,
+                    "tool",
+                    pre_block_backend_message=sanitized_event,
+                    event_hooks=[GuardrailEventHooks.pre_call],
+                )
+            case RealtimeMessageText(role=role, texts=texts):
+                return await self.apply_realtime_guardrails(texts, role, event_hooks=[GuardrailEventHooks.pre_call])
+            case None:
+                return None
+
+    async def apply_realtime_guardrails(
+        self,
+        texts: tuple[str, ...],
+        role: str,
+        item_id: str | None = None,
+        pre_block_backend_message: str | None = None,
+        event_hooks: Sequence["GuardrailEventHooks"] | None = None,
+    ) -> RealtimeGuardrailVerdict:
+        """
+        Run registered guardrails on realtime text (transcript, user message, tool output).
+
+        A block has already been reported to the client and the backend when this returns.
+        A rewrite carries the masked texts the caller forwards in place of the originals.
 
         ``pre_block_backend_message`` (if provided) is sent to the backend
         BEFORE any of the guardrail's own backend messages when a block is
@@ -1687,102 +1736,33 @@ class RealTimeStreaming:
         """
         from litellm.types.guardrails import GuardrailEventHooks
 
-        if event_hooks is None:
-            event_hooks = [GuardrailEventHooks.realtime_input_transcription]
-        _realtime_event_types: Final = event_hooks
-        _check_data: Final = {**self.request_data, "transcript": transcript, "stream": True}
-        _already_run: Final[set] = set()
-
-        runner_guardrails: Final = (
-            _realtime_runner_guardrail(callback, _check_data, _realtime_event_types) for callback in litellm.callbacks
+        block: Final = await realtime_guardrail_verdict(
+            texts,
+            role,
+            event_hooks if event_hooks is not None else (GuardrailEventHooks.realtime_input_transcription,),
+            self.request_data,
+            self.user_api_key_dict,
+            litellm.callbacks,
         )
-        for callback in runner_guardrails:
-            if callback is None or id(callback) in _already_run:
-                continue
-            _already_run.add(id(callback))
-            try:
-                await callback.apply_guardrail(
-                    inputs={"texts": [transcript], "images": []},
-                    request_data={"user_api_key_dict": self.user_api_key_dict},
-                    input_type="request",
-                )
-            except Exception as e:
-                # Re-raise unexpected errors (no status_code/detail = programming bug, not a block).
-                # HTTPException and guardrail-raised exceptions have a status_code or detail attr.
-                is_guardrail_block = hasattr(e, "status_code") or isinstance(e, ValueError)
-                if not is_guardrail_block:
-                    verbose_logger.exception(
-                        "[realtime guardrail] unexpected error in apply_guardrail: %s",
-                        e,
-                    )
-                    raise
-                # Extract the human-readable error from the detail dict (HTTPException)
-                # or fall back to str(e) for plain ValueError.
-                detail: object | None = getattr(e, "detail", None)
-                if isinstance(detail, dict):
-                    safe_msg = detail.get("error") or str(e)
-                elif detail is not None:
-                    safe_msg = str(detail)
-                else:
-                    safe_msg = str(e) or "I'm sorry, that request was blocked by the content filter."
+        if not isinstance(block, RealtimeGuardrailBlock):
+            return block
+        await self._send_blocked_turn_to_backend(pre_block_backend_message, item_id)
+        await self.websocket.send_text(guardrail_violation_error_event(block.message))
+        if not self._is_transcription_session:
+            for voice_prompt_event in guardrail_voice_prompt_events(block.message):
+                await self._send_to_backend(voice_prompt_event)
 
-                # Use realtime_violation_message if configured; fall back to guardrail error text.
-                error_msg = getattr(callback, "realtime_violation_message", None) or safe_msg
+        self._violation_count += 1
+        if block.ends_session(self._violation_count):
+            verbose_logger.warning("[realtime guardrail] ending session after violation %d", self._violation_count)
+            await self.backend_ws.close()
 
-                await self._send_blocked_turn_to_backend(pre_block_backend_message, item_id)
-                # Send the policy violation hint (shows as small gray status text in UI).
-                await self.websocket.send_text(
-                    json.dumps(
-                        {
-                            "type": "error",
-                            "error": {
-                                "type": "guardrail_violation",
-                                "message": error_msg,
-                                "code": "content_policy_violation",
-                            },
-                        }
-                    )
-                )
-                if not self._is_transcription_session:
-                    # Ask the LLM to voice the exact guardrail message so the
-                    # user hears it as audio in voice sessions (not just text).
-                    guardrail_prompt = (
-                        f"Say exactly the following message to the user, word for word, "
-                        f"do not add anything else: {error_msg}"
-                    )
-                    await self._send_to_backend(
-                        json.dumps(
-                            {
-                                "type": "conversation.item.create",
-                                "item": {
-                                    "type": "message",
-                                    "role": "user",
-                                    "content": [{"type": "input_text", "text": guardrail_prompt}],
-                                },
-                            }
-                        )
-                    )
-                    await self._send_to_backend(json.dumps({"type": "response.create"}))
-
-                self._violation_count += 1
-                end_session_after: int | None = getattr(callback, "end_session_after_n_fails", None)
-                should_end = getattr(callback, "on_violation", None) == "end_session" or (
-                    end_session_after is not None and self._violation_count >= end_session_after
-                )
-                if should_end:
-                    verbose_logger.warning(
-                        "[realtime guardrail] ending session after violation %d",
-                        self._violation_count,
-                    )
-                    await self.backend_ws.close()
-
-                verbose_logger.warning(
-                    "[realtime guardrail] BLOCKED transcript (violation %d): %r",
-                    self._violation_count,
-                    transcript[:80],
-                )
-                return True
-        return False
+        verbose_logger.warning(
+            "[realtime guardrail] BLOCKED transcript (violation %d): %r",
+            self._violation_count,
+            " ".join(texts)[:80],
+        )
+        return block
 
     async def _handle_provider_config_message(self, raw_response: str) -> None:
         """Process a backend message when a provider_config is set (transformed path)."""
@@ -1866,7 +1846,7 @@ class RealTimeStreaming:
                 self.store_message(event_str)
                 self._capture_transcription_usage(event)
                 await self._send_event_to_client(event, event_str)
-                blocked = await self.run_realtime_guardrails(cast(str, transcript))
+                blocked = await self.run_realtime_guardrails(transcript)
                 if not blocked and self._should_disable_vad_auto_response():
                     await self._send_to_backend(json.dumps({"type": "response.create"}))
                 continue
@@ -1878,7 +1858,7 @@ class RealTimeStreaming:
     def _parse_backend_event(raw_response: str) -> dict[str, object] | None:
         """Parse a backend frame once. Returns None for non-JSON or non-object frames."""
         try:
-            event: Final = _decode_json_object(raw_response)
+            event: Final = as_str_mapping(_decode_json(raw_response))
         except (json.JSONDecodeError, TypeError):
             return None
         return event if isinstance(event, dict) else None
@@ -2267,92 +2247,22 @@ class RealTimeStreaming:
                 guardrail_turn_detection_injected = False
                 msg_type: str | None = None
                 try:
-                    from litellm.types.guardrails import GuardrailEventHooks
-
                     msg_obj = json.loads(message)
                     client_event = msg_obj
                     msg_type = client_event.get("type")
-
                     if msg_type == "conversation.item.create":
-                        # Check user text messages for prompt injection
-                        item = client_event.get("item", {})
-                        # Check function_call_output first so a client cannot
-                        # bypass the tool-result guardrail by also setting
-                        # role="user" on a function_call_output item.
-                        if item.get("type") == "function_call_output":
-                            # Tool results are client-controlled and fed to the
-                            # model; check them with the same guardrail used for
-                            # user text so an attacker cannot smuggle blocked
-                            # content into a function_call_output.
-                            output: object = item.get("output", "")
-                            output_text = output if isinstance(output, str) else json.dumps(output)
-                            if output_text:
-                                # Build the sanitized function_call_output up
-                                # front so we can hand it to the guardrail
-                                # runner as the pre-block message. Providers
-                                # that pair every toolCall with a toolResponse
-                                # (e.g. Gemini/Vertex Live) require the
-                                # toolResponse to arrive BEFORE any other
-                                # client message — otherwise the guardrail's
-                                # own clientContent would violate the
-                                # pending-tool-call protocol contract and the
-                                # backend could close the connection before
-                                # the sanitized response ever lands. Dropping
-                                # the blocked item outright would similarly
-                                # leave such providers waiting indefinitely.
-                                # The sanitized payload carries no blocked
-                                # content — only a generic policy marker.
-                                sanitized_msg = json.dumps(
-                                    {
-                                        **msg_obj,
-                                        "item": {
-                                            **item,
-                                            "output": json.dumps(
-                                                {
-                                                    "error": "Tool output blocked by content policy",
-                                                }
-                                            ),
-                                        },
-                                    }
-                                )
-                                blocked = await self.run_realtime_guardrails(
-                                    output_text,
-                                    pre_block_backend_message=sanitized_msg,
-                                    event_hooks=[GuardrailEventHooks.pre_call],
-                                )
-                                if blocked:
-                                    # ``_pending_guardrail_message`` is
-                                    # intentionally NOT set here. That flag
-                                    # exists to swallow the reflexive
-                                    # ``response.create`` an OpenAI client
-                                    # sends immediately after a user text
-                                    # message. In a tool-calling flow the
-                                    # client may not send a ``response.create``
-                                    # at all (e.g. Gemini SDKs auto-respond),
-                                    # so leaving the flag set would
-                                    # incorrectly drop an unrelated
-                                    # ``response.create`` from a later
-                                    # interaction turn.
-                                    continue
-                        elif item.get("role") == "user":
-                            content_list: Sequence[object] = item.get("content", [])
-                            texts = [
-                                c.get("text", "")
-                                for c in content_list
-                                if isinstance(c, dict) and c.get("type") == "input_text"
-                            ]
-                            combined_text = " ".join(texts)
-                            if combined_text:
-                                blocked = await self.run_realtime_guardrails(
-                                    combined_text,
-                                    event_hooks=[GuardrailEventHooks.pre_call],
-                                )
-                                if blocked:
-                                    # Store the guardrail reason so the next response.create
-                                    # (sent automatically by the client) is rewritten to
-                                    # include it as response instructions.
-                                    self._pending_guardrail_message = combined_text
-                                    continue  # don't forward the original blocked message
+                        self._pending_guardrail_message = None
+
+                    match await self._screen_client_item(guarded_item := realtime_guarded_item(client_event)):
+                        case RealtimeGuardrailBlock():
+                            if isinstance(guarded_item, RealtimeMessageText):
+                                self._pending_guardrail_message = " ".join(guarded_item.texts)
+                            continue
+                        case RealtimeGuardrailRewrite(texts=masked_texts):
+                            msg_obj["item"] = rewritten_item(client_event, masked_texts)
+                            message = json.dumps(msg_obj)
+                        case None:
+                            pass
 
                     if msg_type == "response.create" and self._pending_guardrail_message:
                         # The guardrail already sent the synthetic AI bubble — drop this

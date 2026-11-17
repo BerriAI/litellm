@@ -1339,6 +1339,7 @@ class TestAutoRouterSession:
             "turns": turns,
             "last_model": "anthropic/claude-sonnet-5",
             "spend": spend,
+            "total_spend": None,
             "saved_spend": 0.24,
             "savings_estimated_turns": 3 if estimated else 0,
             "savings_estimated_actual_spend": 0.14 if estimated else 0.0,
@@ -1349,6 +1350,42 @@ class TestAutoRouterSession:
             "baseline_model": "anthropic/claude-opus-5",
             "baseline_models": {"anthropic/claude-opus-5": 3},
         }
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(("recorded", "expected"), [((0.5, 0.25), 0.75), ((), None)], ids=["counted", "none"])
+    async def test_the_session_reports_the_spend_billed_to_its_key_under_the_session(
+        self, monkeypatch: pytest.MonkeyPatch, recorded: tuple[float, ...], expected: float | None
+    ) -> None:
+        from litellm.proxy import proxy_server
+        from litellm.proxy.management_endpoints.auto_router_endpoints import get_auto_router_session
+        from litellm.proxy.spend_tracking.session_spend_total import SessionSpendTotals
+
+        class _Redis:
+            def __init__(self) -> None:
+                self.values: dict[str, float] = {}  # mutable-ok: stands in for Redis state
+
+            async def async_increment(
+                self, key: str, value: float, ttl: int | None = None, refresh_ttl: bool = False
+            ) -> float:
+                self.values[key] = self.values.get(key, 0.0) + value
+                return self.values[key]
+
+            async def async_get_cache(self, key: str) -> object:
+                return self.values.get(key)
+
+        redis: Final = _Redis()
+        totals: Final = SessionSpendTotals(lambda: redis)
+        caller = UserAPIKeyAuth(api_key="sk-caller")
+        for spend in recorded:
+            await totals.record(caller.api_key or "", "sess-1", spend)
+        await totals.record(UserAPIKeyAuth(api_key="sk-other").api_key or "", "sess-1", 9.0)
+        monkeypatch.setattr(proxy_server.proxy_logging_obj, "session_spend_totals", totals)
+        self._rig(monkeypatch, [{**self.ROW, "api_key": caller.api_key, "session_id": "sess-1"}])
+
+        response = await get_auto_router_session(user_api_key_dict=caller, session_id="sess-1")
+
+        assert response.total_spend == expected
+        assert response.spend == self.ROW["spend"]
 
     @pytest.mark.asyncio
     async def test_another_keys_session_is_a_404_even_for_an_admin(self, monkeypatch: pytest.MonkeyPatch):

@@ -21,6 +21,7 @@ _NO_TOOL_INPUT: Final[Mapping[str, object]] = MappingProxyType({})
 _DATA_URL_RE: Final = re.compile(r"^data:(?P<mime>[^;,]+)?(?P<params>(?:;[^;,]+)*?)(?P<b64>;base64)?,", re.IGNORECASE)
 _URLSAFE_TO_STANDARD_B64: Final = str.maketrans("-_", "+/")
 _OBJECT_LIST: Final = TypeAdapter(list[object])
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 def str_or_none(value: object) -> str | None:
@@ -240,7 +241,7 @@ def _parsed_tool_input(raw_arguments: str) -> Mapping[str, object]:
     if not raw_arguments:
         return _NO_TOOL_INPUT
     try:
-        parsed: Final = json.loads(raw_arguments)
+        parsed: Final = _DECODED_JSON.validate_python(json.loads(raw_arguments))
     except (ValueError, TypeError):
         return _NO_TOOL_INPUT
     return as_str_mapping(parsed) or _NO_TOOL_INPUT
@@ -325,13 +326,17 @@ def _declarations_in(message_index: int, message: object) -> Iterator[_Declarati
             yield _Declaration(call_id, message_index, name)
 
 
+def _declaration_call_id(declaration: _Declaration) -> str:
+    return declaration.call_id
+
+
 def _declarations_by_call_id(messages: Sequence[object]) -> Mapping[str, tuple[_Declaration, ...]]:
     """Every named declaration of each tool call id, in message order, built in one pass."""
     declarations: Final = chain.from_iterable(
         _declarations_in(index, message) for index, message in enumerate(messages)
     )
     ordered: Final = sorted(declarations, key=attrgetter("call_id", "message_index"))
-    return MappingProxyType({call_id: tuple(group) for call_id, group in groupby(ordered, key=attrgetter("call_id"))})
+    return MappingProxyType({call_id: tuple(group) for call_id, group in groupby(ordered, key=_declaration_call_id)})
 
 
 def _resolve_tool_name(

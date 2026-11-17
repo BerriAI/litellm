@@ -15,6 +15,18 @@ if TYPE_CHECKING:
 
 class LedgerTransaction(Protocol):
     @property
+    def litellm_dailycustomermemberspend(self) -> TableActions[object]: ...
+
+    @property
+    def litellm_customerorganizationtable(self) -> TableActions[object]: ...
+
+    @property
+    def litellm_customerteamtable(self) -> TableActions[object]: ...
+
+    @property
+    def litellm_customermembertable(self) -> TableActions[object]: ...
+
+    @property
     def litellm_dailyguardrailusageunits(self) -> TableActions[object]: ...
 
     async def query_raw(self, query: str, *args: object) -> Sequence[Mapping[str, object]]: ...
@@ -60,12 +72,17 @@ class DeliveryBatchResult:
     error: str | None = None
 
 
-class DeliveryMetrics(BaseModel):
+class DeliveryBacklog(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     pending_count: int
     parked_count: int
     oldest_pending_seconds: float
+
+
+class DeliveryStorage(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
     batch_count: int
     table_bytes: int
 
@@ -88,6 +105,14 @@ SET attempts = attempts + 1, last_error = $3,
     state = $4::"AccountingDeliveryState"
 WHERE delivery_id = $1 AND state = 'pending' AND attempts = $2::integer
 RETURNING delivery_id, attempts"""
+_BACKLOG: Final = """SELECT COUNT(*) FILTER (WHERE state = 'pending') AS pending_count,
+    COUNT(*) FILTER (WHERE state = 'parked') AS parked_count,
+    COALESCE(EXTRACT(EPOCH FROM CURRENT_TIMESTAMP - MIN(created_at) FILTER (WHERE state = 'pending')), 0)
+        AS oldest_pending_seconds
+FROM "LiteLLM_SpendLogDelivery"
+WHERE state IN ('pending', 'parked')"""
+_STORAGE: Final = """SELECT (SELECT COUNT(*) FROM "LiteLLM_SpendLogDelivery" WHERE is_batch) AS batch_count,
+    pg_total_relation_size('"LiteLLM_SpendLogDelivery"') AS table_bytes"""
 _UNDECODABLE: Final = """UPDATE "LiteLLM_SpendLogDelivery"
 SET state = 'parked', attempts = attempts + 1, last_error = 'UndecodablePayload'
 WHERE delivery_id = ANY($1::text[]) AND state = 'pending'"""
@@ -114,17 +139,13 @@ class AccountingDeliveryRepository:
     def __init__(self, database: LedgerDatabase) -> None:
         self._database = database
 
-    async def metrics(self) -> DeliveryMetrics:
+    async def backlog(self) -> DeliveryBacklog:
         async with self._database.tx(timeout=_TIMEOUT) as transaction:
-            rows: Final = await transaction.query_raw(
-                "SELECT COUNT(*) FILTER (WHERE state = 'pending') AS pending_count, "
-                "COUNT(*) FILTER (WHERE state = 'parked') AS parked_count, "
-                "COALESCE(EXTRACT(EPOCH FROM CURRENT_TIMESTAMP - MIN(created_at) FILTER (WHERE state = 'pending')), 0) "
-                "AS oldest_pending_seconds, COUNT(*) FILTER (WHERE is_batch) AS batch_count, "
-                "pg_total_relation_size('\"LiteLLM_SpendLogDelivery\"') AS table_bytes "
-                'FROM "LiteLLM_SpendLogDelivery"'
-            )
-            return DeliveryMetrics.model_validate(rows[0])
+            return DeliveryBacklog.model_validate((await transaction.query_raw(_BACKLOG))[0])
+
+    async def storage(self) -> DeliveryStorage:
+        async with self._database.tx(timeout=_TIMEOUT) as transaction:
+            return DeliveryStorage.model_validate((await transaction.query_raw(_STORAGE))[0])
 
     async def cleanup_applied(self, *, retention_days: int = 1, batch_size: int = 1000) -> int:
         if retention_days < 1 or batch_size < 1:

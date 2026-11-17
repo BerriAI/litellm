@@ -45,8 +45,7 @@ class BaseTextToSpeechConfig(ABC):
         return {
             k: v
             for k, v in class_attributes.items()
-            if not k.startswith("__")
-            and not k.startswith("_abc")
+            if not k.startswith("_")
             and not isinstance(
                 v,
                 (

@@ -5,11 +5,11 @@ from dataclasses import dataclass
 from functools import partial, reduce
 from itertools import chain, groupby
 from types import MappingProxyType
-from typing import Any, Final, Literal, TypeAlias, TypedDict, TypeVar
+from typing import Final, Literal, TypeAlias, TypeVar
 
 from fastapi import HTTPException
 from pydantic import TypeAdapter
-from typing_extensions import ReadOnly, Required
+from typing_extensions import TypedDict
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.dual_cache import DualCache
@@ -22,8 +22,13 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_or_none
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_or_none, keyword_arguments
 from litellm.litellm_core_utils.tool_fields import declared_function_name, qualified_member_name
+from litellm.llms.anthropic.common_utils import (
+    anthropic_server_tool_call_params,
+    anthropic_server_tool_calls,
+    without_anthropic_server_tool_calls,
+)
 from litellm.llms.base_llm.guardrail_translation.utils import anthropic_tool_names
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.callback_utils import (
@@ -467,19 +472,13 @@ def _rewritten_tool_config(tool_config: object, removed_names: frozenset[str], f
     }
 
 
-class _ToolPermissionRuleFields(TypedDict, total=False):
-    """The config-file shape a :class:`ToolPermissionRule` is built from."""
-
-    id: ReadOnly[Required[str]]
-    tool_name: ReadOnly[str | None]
-    tool_type: ReadOnly[str | None]
-    decision: ReadOnly[Required[Literal["allow", "deny"]]]
-    allowed_param_patterns: ReadOnly[dict[str, str] | None]
+class _ToolPermissionRuleFields(TypedDict, total=False, extra_items=object):
+    pass
 
 
-def _rule_from_fields(fields: _ToolPermissionRuleFields) -> ToolPermissionRule:
+def _rule_from_fields(fields: object) -> ToolPermissionRule:
     """Validate one config-file rule entry into a :class:`ToolPermissionRule`."""
-    return ToolPermissionRule(**fields)
+    return ToolPermissionRule.model_validate(_ToolPermissionRuleFields(**keyword_arguments(fields, ToolPermissionRule)))
 
 
 def _is_tool_use_block(block: object) -> bool:
@@ -524,7 +523,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
             self.default_action,
         )
 
-    def _load_rules(self, rules: list[Any] | None) -> None:
+    def _load_rules(self, rules: Sequence[object] | None) -> None:
         """Parse ``rules`` and (re)build the compiled target/pattern lookups.
 
         ``self.rules`` plus ``_compiled_rule_targets`` / ``_compiled_rule_patterns``
@@ -943,10 +942,10 @@ class ToolPermissionGuardrail(CustomGuardrail):
         return is_allowed, None, message
 
     @staticmethod
-    def _get_mapping_value(item: object, key: str) -> Any:
+    def _get_mapping_value(item: object, key: str) -> object:
         if isinstance(item, dict):
             return item.get(key)
-        return getattr(item, key, None)
+        return attribute_or_none(item, key)
 
     @staticmethod
     def _legacy_function_call_id(choice_index: int) -> str:
@@ -983,7 +982,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
 
         for choice_index, choice in enumerate(response.choices):
             if isinstance(choice, Choices):
-                for tool in choice.message.tool_calls or []:
+                for tool in (*(choice.message.tool_calls or ()), *anthropic_server_tool_calls(choice.message)):
                     tool_calls.append(tool)
                 legacy_tool_call = self._legacy_function_call_to_tool_call(
                     getattr(choice.message, "function_call", None), choice_index
@@ -1492,6 +1491,23 @@ class ToolPermissionGuardrail(CustomGuardrail):
                         filtered_tool_calls.append(tool_call)
 
                 choice.message.tool_calls = filtered_tool_calls if filtered_tool_calls else None
+
+                server_error_results = tuple(
+                    error_results.get(self._judged_tool_call(server_tool_call))
+                    for server_tool_call in anthropic_server_tool_calls(choice.message)
+                )
+                if any(server_error_results):
+                    error_messages.extend(result.content for result in server_error_results if result is not None)
+                    without_anthropic_server_tool_calls(
+                        choice.message,
+                        frozenset(
+                            server_tool_call["id"] or ""
+                            for server_tool_call, result in zip(
+                                anthropic_server_tool_call_params(choice.message), server_error_results
+                            )
+                            if result is not None
+                        ),
+                    )
 
                 legacy_tool_call = self._legacy_function_call_to_tool_call(
                     getattr(choice.message, "function_call", None), choice_index
