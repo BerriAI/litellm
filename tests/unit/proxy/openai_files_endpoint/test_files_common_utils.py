@@ -401,6 +401,7 @@ from openai.types.batch import BatchRequestCounts
 from litellm.proxy.openai_files_endpoints.common_utils import (
     _completed_batch_safe_to_retire,
 )
+from litellm.proxy.openai_files_endpoints.common_utils import canonical_provider_file_id, encode_file_id_with_model, provider_file_id_spellings
 
 
 def _completed_batch_for_retire(output_file_id: str | None, counts: BatchRequestCounts | None = None) -> LiteLLMBatch:
@@ -896,3 +897,52 @@ def test_a_provider_wildcard_grant_finds_only_deployments_named_under_it(deploye
     )
 
     assert (None if credentials is None else credentials["api_key"]) == api_key
+
+
+@pytest.mark.parametrize(
+    ("file_id", "canonical"),
+    (
+        ("batch-out1", "batch-out1"),
+        ("files/batch-out1", "batch-out1"),
+        ("files%2Fbatch-out1", "batch-out1"),
+        ("batch-out1/", "batch-out1"),
+        ("/files/batch-out1/", "batch-out1"),
+        ("https://generativelanguage.googleapis.com/v1beta/files/batch-out1", "batch-out1"),
+        ("file-abc123", "file-abc123"),
+        ("s3://bucket/path/files/output.jsonl", "s3://bucket/path/files/output.jsonl"),
+        ("gs://bucket/prefix/predictions.jsonl", "gs://bucket/prefix/predictions.jsonl"),
+        (
+            "https://acct.blob.core.windows.net/uploads/0c4e.files%2Ffile-victim",
+            "https://acct.blob.core.windows.net/uploads/0c4e.files%2Ffile-victim",
+        ),
+        ("x://h/files/batch-out1", "x://h/files/batch-out1"),
+    ),
+)
+def test_canonical_provider_file_id_collapses_every_spelling_to_the_stored_id(file_id: str, canonical: str):
+    assert canonical_provider_file_id(file_id) == canonical
+
+
+def test_provider_file_id_spellings_unwraps_a_model_encoded_id_and_covers_the_stored_forms():
+    wrapped: Final = encode_file_id_with_model(file_id="batch-out1", model="gemini-deployment")
+
+    assert provider_file_id_spellings(wrapped) == (
+        wrapped,
+        "batch-out1",
+        "files/batch-out1",
+        "https://generativelanguage.googleapis.com/v1beta/files/batch-out1",
+    )
+    for spelling in ("batch-out1", "files%2Fbatch-out1", "batch-out1/"):
+        assert set(provider_file_id_spellings(spelling)) >= set(provider_file_id_spellings(wrapped)[1:]), spelling
+
+
+@pytest.mark.parametrize(
+    "respelling",
+    (
+        "HTTPS://generativelanguage.googleapis.com/v1beta/files/batch-out1",
+        "x://h/files/batch-out1",
+        "S3://b/files/batch-out1",
+        "x%3A%2F%2Fh%2Ffiles%2Fbatch-out1",
+    ),
+)
+def test_provider_file_id_spellings_reduce_any_scheme_the_way_gemini_does(respelling: str):
+    assert "batch-out1" in provider_file_id_spellings(respelling)
