@@ -79,6 +79,12 @@ from litellm.litellm_core_utils.audio_utils.utils import (
     calculate_request_duration,
     get_audio_file_for_health_check,
 )
+from litellm.litellm_core_utils.bridged_audio_output import (
+    AudioOnlyModel,
+    AudioRequested,
+    bridged_audio_output_request,
+    raise_audio_output_refusal,
+)
 from litellm.litellm_core_utils.chat_completion_agentic_loop import (
     maybe_run_chat_completion_agentic_loop,
 )
@@ -7886,11 +7892,14 @@ def text_completion(
     if model is None:
         raise ValueError("model is not set. Set either via 'model' or 'engine' param.")
     kwargs["text_completion"] = True
+    completion_kwargs: Final = bridged_audio_output_request(kwargs, _model, custom_llm_provider)
+    if isinstance(completion_kwargs, AudioOnlyModel | AudioRequested):
+        raise_audio_output_refusal(completion_kwargs, "/v1/completions")
     response = completion(
         model=model,
         messages=messages,
         *args,
-        **kwargs,
+        **completion_kwargs,
         **optional_params,
     )
     if kwargs.get("acompletion", False) is True:
