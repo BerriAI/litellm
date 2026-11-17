@@ -178,14 +178,6 @@ impl Error {
         }
     }
 
-    /// The scheme, host and port of a provider request that could not connect.
-    pub fn sent_origin(&self) -> Option<&str> {
-        match self {
-            Self::Http(error) => error.sent_origin(),
-            _ => None,
-        }
-    }
-
     pub fn body_cut(&self) -> Option<litellm_http::BodyCut> {
         match self {
             Self::Llm(error) => error.body_cut(),

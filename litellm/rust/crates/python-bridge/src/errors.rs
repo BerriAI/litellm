@@ -55,8 +55,6 @@ const MESSAGES_CREDENTIAL_FAILURE: &str = "messages_credential_failure";
 /// not complete, which the route raises in its place. `file` is `(kind, path, detail)` for a
 /// `vertex_credentials` file Python's `raise_vertex_credentials_failure` logs.
 const MESSAGES_GOOGLE_LOGIN_FAILURE: &str = "messages_google_login_failure";
-/// The scheme, host and port of a provider request that could not connect.
-const MESSAGES_SENT_ORIGIN: &str = "messages_sent_origin";
 
 struct ProviderRejection {
     text: String,
@@ -281,9 +279,6 @@ pub(crate) fn route_failure(
                     (false, false) => "Read",
                 };
                 value.setattr(MESSAGES_TIMEOUT, phase)?;
-            }
-            if let Some(origin) = error.sent_origin() {
-                value.setattr(MESSAGES_SENT_ORIGIN, origin)?;
             }
             if let Some(cut) = error.body_cut() {
                 value.setattr(MESSAGES_BODY_CUT, (cut.received, cut.expected, cut.reset))?;

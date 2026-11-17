@@ -883,7 +883,6 @@ impl MessagesPythonHost {
                     self.view.request(py)?,
                     self.provider(py),
                     self.asynchronous,
-                    self.transport.read().to_vec(),
                 ))
             })
             .and_then(|mapped| {
