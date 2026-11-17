@@ -3055,15 +3055,24 @@ def test_vector_store_search_rejects_caller_embedding_selection_params(blocked_k
 
 
 @pytest.mark.parametrize(
-    ("provider", "expected_status", "expected_searches"),
-    [("opensearch", 400, 0), ("opensearch/x", 400, 0), ("openai", 200, 1)],
+    ("store_key", "provider", "expected_status", "expected_searches"),
+    [
+        ("opensearch_index_name", "opensearch", 400, 0),
+        ("opensearch_index_name", "opensearch/x", 400, 0),
+        ("opensearch_index_name", "openai", 200, 1),
+        ("opensearch_search_pipeline", "opensearch", 400, 0),
+        ("opensearch_hybrid_search", "opensearch/x", 400, 0),
+        ("opensearch_search_pipeline", "openai", 200, 1),
+        ("opensearch_text_field", "opensearch", 200, 1),
+        ("opensearch_embedding_field", "opensearch/x", 200, 1),
+    ],
 )
-def test_vector_store_search_rejects_caller_opensearch_index_name_only_on_opensearch_stores(
-    provider, expected_status, expected_searches
+def test_vector_store_search_rejects_caller_opensearch_store_params_only_on_opensearch_stores(
+    store_key, provider, expected_status, expected_searches
 ):
     """
-    Regression: a caller must not pick the index an OpenSearch store searches, while
-    other providers keep ignoring the key as they did before OpenSearch support.
+    Regression: a caller must not change which index, pipeline, or hybrid mode an OpenSearch store
+    searches with, while the field keys and other providers' requests pass through as before.
     """
     from fastapi.testclient import TestClient
 
@@ -3097,13 +3106,14 @@ def test_vector_store_search_rejects_caller_opensearch_index_name_only_on_opense
             with patch("litellm.proxy.proxy_server.llm_router", router):  # test-quality-ok: router built over the fake search
                 response = TestClient(app).post(
                     "/v1/vector_stores/kb/search",
-                    json={"query": "q", "opensearch_index_name": "another-teams-index"},
+                    json={"query": "q", store_key: "_none"},
                 )
     finally:
         app.dependency_overrides = original_overrides
 
     assert response.status_code == expected_status, response.json()
-    assert fake_search.await_count == expected_searches
+    assert [call.kwargs.get(store_key) for call in fake_search.await_args_list] == ["_none"] * expected_searches
+    assert expected_status == 200 or store_key in str(response.json())
 
 
 def test_vector_store_search_accepts_a_query_image_without_a_query():

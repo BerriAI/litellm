@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import gc
 import json
@@ -13,6 +14,7 @@ from unittest.mock import patch
 
 import httpx
 import pytest
+from pydantic import TypeAdapter
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
@@ -25,8 +27,9 @@ from litellm.llms.bedrock.passthrough.transformation import (
 )
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.passthrough.main import AsyncPassthroughStreamingResponse, PassthroughStreamingResponse
-from litellm.types.utils import ModelResponse
+from litellm.types.utils import EmbeddingResponse, ModelResponse
 
+_STANDARD_LOGGING_OBJECT: Final = TypeAdapter(Mapping[str, object])
 CONVERSE_MODEL = "anthropic.claude-sonnet-4-5-20250929-v1:0"
 CONVERSE_STREAM_ENDPOINT = f"/model/{CONVERSE_MODEL}/converse-stream"
 INVOKE_STREAM_ENDPOINT = f"/model/{CONVERSE_MODEL}/invoke-with-response-stream"
@@ -954,7 +957,9 @@ def _provider_stream_reply(reply_headers: Mapping[str, str], stream: bytes) -> h
         200,
         headers={"content-type": "application/vnd.amazon.eventstream", **reply_headers},
         content=stream,
-        request=httpx.Request("POST", f"https://bedrock-runtime.us-east-1.amazonaws.com{TIERED_INVOKE_STREAM_ENDPOINT}"),
+        request=httpx.Request(
+            "POST", f"https://bedrock-runtime.us-east-1.amazonaws.com{TIERED_INVOKE_STREAM_ENDPOINT}"
+        ),
     )
 
 
@@ -1804,3 +1809,288 @@ def test_sdk_invoke_passthrough_bills_the_caller_guardrail_bedrock_traced_once(
     assert [_billed_guardrails(logged) for logged in callback.standard_logging_objects] == [
         [(BILLED_GUARDRAIL_USAGE, pytest.approx(BILLED_GUARDRAIL_COST))]
     ]
+
+
+TITAN_EMBEDDING_VECTOR: Final = (0.1, 0.2, 0.3)
+TITAN_EMBEDDING_INPUT_TOKENS: Final = 20
+
+
+def _log_titan_invoke_reply(
+    model: str,
+    body: Mapping[str, object],
+    request_data: Mapping[str, object] = MappingProxyType({"inputText": "example text"}),
+) -> object:
+    endpoint: Final = f"/model/{model}/invoke"
+    logging_obj: Final = _stream_logging_obj(endpoint, model=model)
+    return BedrockPassthroughConfig().logging_non_streaming_response(
+        model=logging_obj.model,
+        custom_llm_provider="bedrock",
+        httpx_response=httpx.Response(200, json=body),
+        request_data=dict(request_data),
+        logging_obj=logging_obj,
+        endpoint=endpoint,
+    )
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "amazon.titan-embed-text-v2:0",
+        "amazon.titan-embed-text-v1",
+        "amazon.titan-embed-g1-text-02",
+        "amazon.titan-embed-image-v1",
+    ],
+)
+def test_invoke_titan_embedding_reply_is_logged_and_priced_as_an_embedding(model: str) -> None:
+    logged: Final = _log_titan_invoke_reply(
+        model, {"embedding": list(TITAN_EMBEDDING_VECTOR), "inputTextTokenCount": TITAN_EMBEDDING_INPUT_TOKENS}
+    )
+
+    assert isinstance(logged, EmbeddingResponse)
+    assert tuple(logged.data[0]["embedding"]) == TITAN_EMBEDDING_VECTOR
+    assert logged.usage is not None
+    assert (logged.usage.prompt_tokens, logged.usage.completion_tokens) == (TITAN_EMBEDDING_INPUT_TOKENS, 0)
+    assert litellm.completion_cost(
+        model=f"bedrock/{model}", completion_response=logged, call_type="aembedding"
+    ) == pytest.approx(TITAN_EMBEDDING_INPUT_TOKENS * litellm.model_cost[model]["input_cost_per_token"])
+
+
+@pytest.mark.parametrize("encoding", ["binary", "float"])
+def test_invoke_titan_reply_carrying_only_embeddings_by_type_is_logged_as_an_embedding(encoding: str) -> None:
+    vector: Final = [1, 0, 1]
+    logged: Final = _log_titan_invoke_reply(
+        "amazon.titan-embed-text-v2:0",
+        {"embeddingsByType": {encoding: vector}, "inputTextTokenCount": TITAN_EMBEDDING_INPUT_TOKENS},
+    )
+
+    assert isinstance(logged, EmbeddingResponse)
+    assert logged.data[0]["embedding"] == vector
+    assert logged.usage is not None
+    assert logged.usage.prompt_tokens == TITAN_EMBEDDING_INPUT_TOKENS
+
+
+@pytest.mark.parametrize("text_tokens", [0, TITAN_EMBEDDING_INPUT_TOKENS])
+def test_invoke_titan_image_embedding_reply_bills_the_input_image(text_tokens: int) -> None:
+    model: Final = "amazon.titan-embed-image-v1"
+    logged: Final = _log_titan_invoke_reply(
+        model,
+        {"embedding": list(TITAN_EMBEDDING_VECTOR), "inputTextTokenCount": text_tokens},
+        request_data={"inputImage": "aGVsbG8="},
+    )
+
+    assert isinstance(logged, EmbeddingResponse)
+    assert logged.usage is not None
+    assert logged.usage.prompt_tokens == text_tokens
+    assert logged.usage.prompt_tokens_details is not None
+    assert logged.usage.prompt_tokens_details.image_count == 1
+    prices: Final = litellm.model_cost[model]
+    assert litellm.completion_cost(
+        model=f"bedrock/{model}", completion_response=logged, call_type="aembedding"
+    ) == pytest.approx(text_tokens * prices["input_cost_per_token"] + prices["input_cost_per_image"])
+
+
+def test_invoke_titan_text_reply_is_still_logged_as_a_chat_completion() -> None:
+    logged: Final = _log_titan_invoke_reply(
+        "amazon.titan-text-express-v1",
+        {"inputTextTokenCount": 3, "results": [{"tokenCount": 2, "outputText": "hi", "completionReason": "FINISH"}]},
+    )
+
+    assert isinstance(logged, ModelResponse)
+    assert logged.choices[0].message.content == "hi"
+
+
+CONVERSE_REPLY: Final = {
+    "output": {"message": {"role": "assistant", "content": [{"text": "OK"}]}},
+    "stopReason": "end_turn",
+    "usage": {"inputTokens": 25, "outputTokens": 2, "totalTokens": 27},
+}
+LLAMA_INVOKE_REPLY: Final = {"generation": "OK", "prompt_token_count": 25, "generation_token_count": 2}
+
+
+class _AwaitableSuccessCallback(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.logged: Final[asyncio.Future[dict[str, object]]] = asyncio.get_running_loop().create_future()
+
+    async def async_log_success_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        if not self.logged.done():
+            self.logged.set_result(kwargs)
+
+
+async def _logged_passthrough_request(
+    action: str, body: dict[str, object], reply: httpx.Response, monkeypatch: pytest.MonkeyPatch
+) -> Mapping[str, object]:
+    callback: Final = _AwaitableSuccessCallback()
+    monkeypatch.setattr(litellm, "callbacks", [callback])
+    response: Final = await litellm.allm_passthrough_route(
+        model="bedrock/meta.llama3-1-8b-instruct-v1:0",
+        method="POST",
+        endpoint=f"/model/meta.llama3-1-8b-instruct-v1:0/{action}",
+        json=body,
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(lambda request: reply)),
+        aws_access_key_id="AKIAROUTERKEY",
+        aws_secret_access_key="router-secret",
+        aws_region_name="us-west-2",
+    )
+    if not isinstance(response, httpx.Response):
+        _ = [chunk async for chunk in response]
+        assert await response.wait_for_spend_flush()
+    return _STANDARD_LOGGING_OBJECT.validate_python((await callback.logged)["standard_logging_object"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("action", "body", "reply", "expected_messages", "expected_parameters"),
+    [
+        pytest.param(
+            "invoke",
+            {"prompt": "actual llama prompt", "max_gen_len": 2, "temperature": 0.5},
+            LLAMA_INVOKE_REPLY,
+            [{"role": "user", "content": "actual llama prompt"}],
+            {"operation": "invoke", "max_gen_len": 2, "temperature": 0.5},
+            id="invoke prompt",
+        ),
+        pytest.param(
+            "invoke",
+            {
+                "inputText": "actual titan input",
+                "textGenerationConfig": {"maxTokenCount": 2, "stopSequences": ["never logged"]},
+            },
+            LLAMA_INVOKE_REPLY,
+            [{"role": "user", "content": "actual titan input"}],
+            {"operation": "invoke", "textGenerationConfig": {"maxTokenCount": 2}},
+            id="invoke inputText",
+        ),
+        pytest.param(
+            "invoke",
+            {
+                "anthropic_version": "bedrock-2023-05-31",
+                "max_tokens": 8,
+                "system": "be terse",
+                "messages": [
+                    {"role": "user", "content": "hi"},
+                    {"role": "assistant", "content": [{"type": "text", "text": "hello"}]},
+                ],
+            },
+            LLAMA_INVOKE_REPLY,
+            [
+                {"role": "system", "content": "be terse"},
+                {"role": "user", "content": "hi"},
+                {"role": "assistant", "content": "hello"},
+            ],
+            {"operation": "invoke", "max_tokens": 8},
+            id="invoke messages",
+        ),
+        pytest.param(
+            "invoke",
+            {
+                "anthropic_version": "bedrock-2023-05-31",
+                "max_tokens": 8,
+                "messages": [
+                    {"role": "user", "content": "weather in Paris?"},
+                    {
+                        "role": "assistant",
+                        "content": [{"type": "tool_use", "id": "t1", "name": "weather", "input": {"city": "Paris"}}],
+                    },
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "tool_result", "tool_use_id": "t1", "content": "18C"},
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": "t2",
+                                "content": [{"type": "text", "text": "sunny"}],
+                            },
+                        ],
+                    },
+                ],
+            },
+            LLAMA_INVOKE_REPLY,
+            [
+                {"role": "user", "content": "weather in Paris?"},
+                {"role": "assistant", "content": '{"city": "Paris"}'},
+                {"role": "user", "content": "18C\nsunny"},
+            ],
+            {"operation": "invoke", "max_tokens": 8},
+            id="invoke tool exchange",
+        ),
+        pytest.param(
+            "converse",
+            {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"guardContent": {"image": {"format": "png", "source": {"bytes": "aGk="}}}},
+                            {"text": "describe the picture"},
+                        ],
+                    }
+                ],
+                "inferenceConfig": {"maxTokens": 2},
+            },
+            CONVERSE_REPLY,
+            [{"role": "user", "content": "describe the picture"}],
+            {"operation": "converse", "inferenceConfig": {"maxTokens": 2}},
+            id="converse guarded image",
+        ),
+        pytest.param(
+            "converse",
+            {
+                "system": [{"text": "system instruction"}, {"guardContent": {"text": {"text": "guarded system"}}}],
+                "messages": [{"role": "user", "content": [{"text": "actual conversation"}]}],
+                "inferenceConfig": {"maxTokens": 2, "temperature": 0, "stopSequences": ["never logged"]},
+                "promptVariables": {"name": {"text": "never logged"}},
+            },
+            CONVERSE_REPLY,
+            [
+                {"role": "system", "content": "system instruction\nguarded system"},
+                {"role": "user", "content": "actual conversation"},
+            ],
+            {"operation": "converse", "inferenceConfig": {"maxTokens": 2, "temperature": 0}},
+            id="converse",
+        ),
+    ],
+)
+async def test_bedrock_passthrough_logs_the_prompt_and_settings_the_caller_sent(
+    action: str,
+    body: dict[str, object],
+    reply: Mapping[str, object],
+    expected_messages: list[dict[str, str]],
+    expected_parameters: dict[str, object],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    logged: Final = await _logged_passthrough_request(action, body, httpx.Response(200, json=reply), monkeypatch)
+
+    assert logged["messages"] == expected_messages
+    assert logged["model_parameters"] == expected_parameters
+    assert logged["stream"] is False
+
+
+@pytest.mark.asyncio
+async def test_bedrock_stream_passthrough_logs_the_prompt_and_that_it_streamed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    logged: Final = await _logged_passthrough_request(
+        "converse-stream",
+        {"messages": [{"role": "user", "content": [{"text": "stream prompt"}]}]},
+        httpx.Response(200, content=_converse_text_stream(["Converse response"])),
+        monkeypatch,
+    )
+
+    assert logged["messages"] == [{"role": "user", "content": "stream prompt"}]
+    assert logged["model_parameters"] == {"operation": "converse-stream"}
+    assert logged["stream"] is True
+
+
+@pytest.mark.asyncio
+async def test_bedrock_passthrough_with_an_unreadable_prompt_is_still_sent_and_logged(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    logged: Final = await _logged_passthrough_request(
+        "converse", {"messages": ["not a turn"]}, httpx.Response(200, json=CONVERSE_REPLY), monkeypatch
+    )
+
+    assert logged["status"] == "success"
+    assert logged["model_parameters"] == {}

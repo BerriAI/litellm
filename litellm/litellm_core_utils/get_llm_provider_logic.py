@@ -8,6 +8,7 @@ from litellm.constants import (
     NADIR_DEFAULT_API_BASE,
     PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO,
     REPLICATE_MODEL_NAME_WITH_ID_LENGTH,
+    TOGETHER_AI_API_KEY_ENV_VARS,
 )
 from litellm.litellm_core_utils.fallback_generalizations import (
     match_routing_generalization,
@@ -18,6 +19,10 @@ from litellm.llms.opencode.common_utils import is_opencode_api_base
 from litellm.secret_managers.main import get_secret, get_secret_str
 
 from ..types.router import GenericLiteLLMParams, LiteLLM_Params
+
+
+def _get_together_ai_api_key() -> str | None:
+    return next(filter(None, (get_secret_str(name) for name in TOGETHER_AI_API_KEY_ENV_VARS)), None)
 
 
 def invalid_provider_routing_hints_message(error: ValidationError) -> str:
@@ -355,12 +360,7 @@ def _get_llm_provider(
                         dynamic_api_key = get_secret_str("DEEPSEEK_API_KEY")
                     elif endpoint == "api.together.ai/v1" or endpoint == "api.together.xyz/v1":
                         custom_llm_provider = "together_ai"
-                        dynamic_api_key = api_key or (
-                            get_secret_str("TOGETHER_API_KEY")
-                            or get_secret_str("TOGETHER_AI_API_KEY")
-                            or get_secret_str("TOGETHERAI_API_KEY")
-                            or get_secret_str("TOGETHER_AI_TOKEN")
-                        )
+                        dynamic_api_key = api_key or _get_together_ai_api_key()
                     elif endpoint == "ollama.com":
                         custom_llm_provider = "ollama"
                         dynamic_api_key = get_secret_str("OLLAMA_API_KEY")
@@ -836,12 +836,7 @@ def _get_openai_compatible_provider_info(
         ) = litellm.ZAIChatConfig().get_openai_compatible_provider_info(api_base, api_key)
     elif custom_llm_provider == "together_ai":
         api_base = api_base or get_secret_str("TOGETHER_AI_API_BASE") or "https://api.together.ai/v1"
-        dynamic_api_key = api_key or (
-            get_secret_str("TOGETHER_API_KEY")
-            or get_secret_str("TOGETHER_AI_API_KEY")
-            or get_secret_str("TOGETHERAI_API_KEY")
-            or get_secret_str("TOGETHER_AI_TOKEN")
-        )
+        dynamic_api_key = api_key or _get_together_ai_api_key()
     elif custom_llm_provider == "friendliai":
         api_base = api_base or get_secret("FRIENDLI_API_BASE") or "https://api.friendli.ai/serverless/v1"
         dynamic_api_key = api_key or get_secret_str("FRIENDLIAI_API_KEY") or get_secret_str("FRIENDLI_TOKEN")
@@ -849,6 +844,7 @@ def _get_openai_compatible_provider_info(
         api_base = api_base or get_secret("GALADRIEL_API_BASE") or "https://api.galadriel.com/v1"
         dynamic_api_key = api_key or get_secret_str("GALADRIEL_API_KEY")
     elif custom_llm_provider == "github_copilot":
+        from litellm.llms.github_copilot.app_auth import app_config
         from litellm.llms.github_copilot.common_utils import DEFAULT_GITHUB_COPILOT_API_BASE
         from litellm.llms.github_copilot.per_user_auth import (
             github_copilot_per_user_credential_name,
@@ -858,9 +854,13 @@ def _get_openai_compatible_provider_info(
         user_session: Final = github_copilot_user_session_from(
             cast("dict[str, object]", litellm_params)  # cast-ok: litellm_params arrives as an untyped request dict
         )
+        github_app: Final = app_config(litellm_params) if user_session is None else None
         if user_session is not None:
             api_base = user_session.api_base  # rebind-ok: resolves provider args in place
             dynamic_api_key = user_session.token  # rebind-ok: resolves provider args in place
+        elif github_app is not None:
+            api_base = github_app.api_base  # rebind-ok: resolves provider args in place
+            dynamic_api_key = None  # rebind-ok: token resolution runs in the request wrapper
         elif (
             github_copilot_per_user_credential_name(
                 cast("dict[str, object]", litellm_params)  # cast-ok: untyped params dict
