@@ -200,6 +200,12 @@ def _coordination_redis() -> TurnClaimStore | None:
     return redis_usage_cache
 
 
+async def _release_request_parallel_slot() -> None:
+    from litellm.proxy.proxy_server import proxy_logging_obj
+
+    await proxy_logging_obj.arelease_request_parallel_slot()
+
+
 def _sessions_route(path: str) -> _SessionsRoute | None:
     match tuple(segment for segment in path.split("/") if segment):
         case (*prefix, "agents", "sessions"):
@@ -387,11 +393,13 @@ class OpenAIAgentsTurnBiller:
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         clock: Callable[[], float] = time.monotonic,
         claims: TurnClaims | None = None,
+        release_request_slot: Callable[[], Awaitable[None]] = _release_request_parallel_slot,
     ) -> None:
         self._get: Final = get
         self._sleep: Final = sleep
         self._clock: Final = clock
         self._claims: Final = claims if claims is not None else TurnClaims(shared_store=lambda: None)
+        self._release_request_slot: Final = release_request_slot
         self._tasks: Final[set[asyncio.Task[None]]] = set()  # mutable-ok: asyncio holds tasks weakly
 
     def schedule(self, turn_start: AgentsTurnStart, row: DeferredAgentsRow) -> "asyncio.Task[None]":
@@ -402,6 +410,7 @@ class OpenAIAgentsTurnBiller:
         return task
 
     async def _bill(self, turn_start: AgentsTurnStart, row: DeferredAgentsRow) -> None:
+        await self._release_request_slot()
         outcome: Final = await self._await_billable_turn(turn_start, row.logging_obj.litellm_call_id)
         match outcome:
             case _BilledTurn(turn=turn, usage=usage):
