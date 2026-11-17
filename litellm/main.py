@@ -6046,6 +6046,7 @@ def completion(
                 reasoning_effort=bridge_reasoning_effort(reasoning_effort, optional_params.get("extra_body")),
                 reasoning_summary=_reasoning_summary_for_bridge,
                 api_base=api_base,
+                base_model=base_model if isinstance(base_model, str) else None,
             )
 
         # Use base_model (the true underlying model) for Azure model-type
