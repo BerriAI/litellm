@@ -13,10 +13,10 @@ from __future__ import annotations
 
 import pytest
 
-from conftest import DdLogsReader
-from datadog_mcp import SEARCH_LOGS_TOOL, assert_dd_mcp_creds, register_datadog_mcp
+from datadog_mcp import SEARCH_LOGS_TOOL, DdLogsReader, assert_dd_mcp_creds, register_datadog_mcp
 from e2e_config import CHEAP_ANTHROPIC_MODEL, DD_SEARCH_FROM, unique_marker
 from e2e_http import NoBody, unwrap
+from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
 from lifecycle import ResourceManager
 from mcp_client import McpClient
 from models import ChatBody, ChatMessage
@@ -50,6 +50,15 @@ def _seed_completion(proxy: ProxyClient, *, key: str, marker: str) -> None:
 
 class TestDatadogMcpRoundTrip:
     @pytest.mark.covers("mcp.list_tools.api_key.succeeds", "mcp.call_tool.api_key.succeeds")
+    @meta(
+        Subject(
+            domain=Domain.MCP,
+            route=Route.MCP,
+            providers=(Provider.ANTHROPIC,),
+            models=(CHEAP_ANTHROPIC_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_search_logs_finds_seeded_completion(
         self,
         client: McpClient,
@@ -60,6 +69,7 @@ class TestDatadogMcpRoundTrip:
         _assert_datadog_logger_active(client.proxy)
 
         server_id = register_datadog_mcp(client, resources)
+        client.await_registered(server_id)
         marker = f"{MARKER_PREFIX}{unique_marker()}"
 
         key = client.generate_key(
@@ -77,28 +87,17 @@ class TestDatadogMcpRoundTrip:
             "within the poll deadline; MCP search would have nothing to find"
         )
 
-        tools = unwrap(client.list_tools(key))
-        tool_name = tools.tool_name_containing(server_id, SEARCH_LOGS_TOOL)
-        assert tool_name is not None, (
-            f"granted key never saw {SEARCH_LOGS_TOOL} on server {server_id}; "
-            f"tools={tools.tool_names_for_server(server_id)}"
-        )
-
-        call = unwrap(
-            client.call_tool(
-                key,
-                server_id=server_id,
-                name=tool_name,
-                arguments={
-                    "query": marker,
-                    "from": DD_SEARCH_FROM,
-                    "to": "now",
-                    "max_tokens": 5000,
-                    "telemetry": {
-                        "intent": "e2e assert seeded litellm completion log is searchable via MCP"
-                    },
-                },
-            )
+        tool_name = client.await_tool(key, server_id, SEARCH_LOGS_TOOL)
+        call = client.await_call_tool(
+            key,
+            server_id=server_id,
+            name=tool_name,
+            arguments={
+                "query": marker,
+                "from": DD_SEARCH_FROM,
+                "to": "now",
+                "max_tokens": 5000,
+            },
         )
         assert call.is_error is not True, f"search_datadog_logs errored: {call}"
         body = call.all_text

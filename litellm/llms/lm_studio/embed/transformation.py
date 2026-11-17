@@ -7,7 +7,8 @@ Docs - https://lmstudio.ai/docs/basics/server
 """
 
 import types
-from typing import List
+from collections.abc import Mapping
+from typing import Final
 
 
 class LmStudioEmbeddingConfig:
@@ -18,16 +19,17 @@ class LmStudioEmbeddingConfig:
     def __init__(
         self,
     ) -> None:
-        locals_ = locals().copy()
+        locals_: Final[Mapping[str, object]] = types.MappingProxyType(locals().copy())
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
 
     @classmethod
     def get_config(cls):
+        class_attributes: Final[Mapping[str, object]] = types.MappingProxyType(cls.__dict__)
         return {
             k: v
-            for k, v in cls.__dict__.items()
+            for k, v in class_attributes.items()
             if not k.startswith("__")
             and not isinstance(
                 v,
@@ -41,7 +43,7 @@ class LmStudioEmbeddingConfig:
             and v is not None
         }
 
-    def get_supported_openai_params(self) -> List[str]:
+    def get_supported_openai_params(self) -> list[str]:
         return []
 
     def map_openai_params(self, non_default_params: dict, optional_params: dict) -> dict:

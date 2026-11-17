@@ -3,7 +3,7 @@ from .enkryptai import EnkryptAIGuardrails
 __all__ = ["EnkryptAIGuardrails"]
 
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 from litellm.types.guardrails import SupportedGuardrailIntegrations
 
@@ -14,7 +14,7 @@ if TYPE_CHECKING:
 def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"):
     import litellm
 
-    _enkryptai_callback = EnkryptAIGuardrails(
+    _enkryptai_callback: Final = EnkryptAIGuardrails(
         guardrail_name=guardrail.get("guardrail_name", ""),
         api_key=litellm_params.api_key,
         api_base=litellm_params.api_base,
@@ -24,17 +24,18 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
         block_on_violation=litellm_params.block_on_violation,
         event_hook=litellm_params.mode,
         default_on=litellm_params.default_on,
+        timeout=litellm_params.timeout,
     )
     litellm.logging_callback_manager.add_litellm_callback(_enkryptai_callback)
 
     return _enkryptai_callback
 
 
-guardrail_initializer_registry = {
+guardrail_initializer_registry: Final = {
     SupportedGuardrailIntegrations.ENKRYPTAI.value: initialize_guardrail,
 }
 
 
-guardrail_class_registry = {
+guardrail_class_registry: Final = {
     SupportedGuardrailIntegrations.ENKRYPTAI.value: EnkryptAIGuardrails,
 }

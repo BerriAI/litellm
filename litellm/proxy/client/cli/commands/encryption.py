@@ -1,15 +1,22 @@
 """CLI commands for the at-rest credential encryption migration."""
 
+from typing import Final
+
 import click
 import rich
+from pydantic import TypeAdapter
+
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 
 from ...http_client import HTTPClient
+from ._cli_context import cli_context_values
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 @click.group()
 def encryption():
     """Migrate at-rest credentials to AES-256-GCM and attest residual state."""
-    pass
 
 
 @encryption.command(name="migrate")
@@ -35,26 +42,35 @@ def migrate(ctx: click.Context, check_only: bool, dry_run: bool):
     resumable; safe to re-run after an interruption.
 
     Examples:
-        litellm-proxy encryption migrate --check   # attestation scan, no writes
-        litellm-proxy encryption migrate           # perform the migration
+        lite encryption migrate --check   # attestation scan, no writes
+        lite encryption migrate           # perform the migration
     """
-    client = HTTPClient(ctx.obj["base_url"], ctx.obj["api_key"])
+    context: Final = cli_context_values(ctx)
+    client: Final = HTTPClient(context["base_url"], context["api_key"])
 
-    if check_only:
-        response = client.request("GET", "/credentials/migrate-encryption/check")
-    else:
-        response = client.request(
+    response: Final = _DECODED_JSON.validate_python(
+        client.request("GET", "/credentials/migrate-encryption/check")
+        if check_only
+        else client.request(
             "POST",
             "/credentials/migrate-encryption",
             json={},
             params={"dry_run": "true"} if dry_run else None,
         )
+    )
 
     rich.print_json(data=response)
 
-    report = response.get("report", {}) if isinstance(response, dict) else {}
-    residual = report.get("residual_legacy")
-    if residual is not None and residual > 0:
+    report_value: Final = (as_str_mapping(response) or {}).get("report", {})
+    report: Final = as_str_mapping(report_value)
+    if report is None:
+        raise click.ClickException(f"Unexpected report in the proxy response: {report_value!r}")
+    residual: Final = report.get("residual_legacy")
+    if residual is None:
+        return
+    if not isinstance(residual, int | float):
+        raise click.ClickException(f"Unexpected residual_legacy in the proxy response: {residual!r}")
+    if residual > 0:
         rich.print(f"[yellow]Residual legacy values remaining: {residual}[/yellow]")
     elif residual == 0:
         rich.print("[green]No legacy values remaining (residual_legacy == 0).[/green]")

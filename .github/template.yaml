@@ -21,7 +21,7 @@ Parameters:
   WorkerConfigParameter:
     Type: String
     Description: Sample environment variable
-    Default: '{"model": null, "alias": null, "api_base": null, "api_version": "2023-07-01-preview", "debug": false, "temperature": null, "max_tokens": null, "request_timeout": 600, "max_budget": null, "telemetry": true, "drop_params": false, "add_function_to_prompt": false, "headers": null, "save": false, "config": null, "use_queue": false}'
+    Default: '{"model": null, "alias": null, "api_base": null, "api_version": "2023-07-01-preview", "debug": false, "temperature": null, "max_tokens": null, "request_timeout": 600, "max_budget": null, "drop_params": false, "add_function_to_prompt": false, "headers": null, "save": false, "config": null, "use_queue": false}'
 
 Resources:
   MyUrlFunctionPermissions:

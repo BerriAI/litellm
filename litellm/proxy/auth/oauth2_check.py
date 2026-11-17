@@ -1,8 +1,9 @@
 import base64
 import os
-from typing import Dict, Optional, Tuple, cast
+from typing import Final, cast
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
 from litellm.llms.custom_httpx.http_handler import (
@@ -10,6 +11,13 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth
+
+_TOKEN_INFO_RESPONSE: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True, hide_input_in_errors=True))
+
+
+class OAuth2TokenValidationError(ValueError):
+    """The token-info or introspection endpoint did not vouch for the token: it rejected it, reported it
+    inactive, or could not be reached."""
 
 
 class Oauth2Handler:
@@ -20,8 +28,8 @@ class Oauth2Handler:
     @staticmethod
     def _is_introspection_endpoint(
         token_info_endpoint: str,
-        oauth_client_id: Optional[str],
-        oauth_client_secret: Optional[str],
+        oauth_client_id: str | None,
+        oauth_client_secret: str | None,
     ) -> bool:
         """
         Determine if this is an introspection endpoint (requires POST) or token info endpoint (uses GET).
@@ -43,9 +51,9 @@ class Oauth2Handler:
     @staticmethod
     def _prepare_introspection_request(
         token: str,
-        oauth_client_id: Optional[str],
-        oauth_client_secret: Optional[str],
-    ) -> Tuple[Dict[str, str], Dict[str, str]]:
+        oauth_client_id: str | None,
+        oauth_client_secret: str | None,
+    ) -> tuple[dict[str, str], dict[str, str]]:
         """
         Prepare headers and data for OAuth2 introspection endpoint (RFC 7662).
 
@@ -57,13 +65,13 @@ class Oauth2Handler:
         Returns:
             Tuple of (headers, data) for the introspection request
         """
-        headers = {"Content-Type": "application/x-www-form-urlencoded"}
-        data = {"token": token}
+        headers: Final = {"Content-Type": "application/x-www-form-urlencoded"}
+        data: Final = {"token": token}
 
         # Add client authentication if credentials are provided
         if oauth_client_id and oauth_client_secret:
             # Use HTTP Basic authentication for client credentials
-            credentials = base64.b64encode(f"{oauth_client_id}:{oauth_client_secret}".encode()).decode()
+            credentials: Final = base64.b64encode(f"{oauth_client_id}:{oauth_client_secret}".encode()).decode()
             headers["Authorization"] = f"Basic {credentials}"
         elif oauth_client_id:
             # For public clients, include client_id in the request body
@@ -72,7 +80,7 @@ class Oauth2Handler:
         return headers, data
 
     @staticmethod
-    def _prepare_token_info_request(token: str) -> Dict[str, str]:
+    def _prepare_token_info_request(token: str) -> dict[str, str]:
         """
         Prepare headers for generic token info endpoint.
 
@@ -86,11 +94,11 @@ class Oauth2Handler:
 
     @staticmethod
     def _extract_user_info(
-        response_data: Dict,
+        response_data: dict,
         user_id_field_name: str,
         user_role_field_name: str,
         user_team_id_field_name: str,
-    ) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+    ) -> tuple[str | None, str | None, str | None]:
         """
         Extract user information from OAuth2 response.
 
@@ -103,9 +111,9 @@ class Oauth2Handler:
         Returns:
             Tuple of (user_id, user_role, user_team_id)
         """
-        user_id = response_data.get(user_id_field_name)
-        user_team_id = response_data.get(user_team_id_field_name)
-        user_role = response_data.get(user_role_field_name)
+        user_id: Final = response_data.get(user_id_field_name)
+        user_team_id: Final = response_data.get(user_team_id_field_name)
+        user_role: Final = response_data.get(user_role_field_name)
 
         return user_id, user_role, user_team_id
 
@@ -136,22 +144,22 @@ class Oauth2Handler:
         verbose_proxy_logger.debug("Oauth2 token validation for token=[set=%s]", token is not None)
 
         # Get the token info endpoint from environment variable
-        token_info_endpoint = os.getenv("OAUTH_TOKEN_INFO_ENDPOINT")
-        user_id_field_name = os.environ.get("OAUTH_USER_ID_FIELD_NAME", "sub")
-        user_role_field_name = os.environ.get("OAUTH_USER_ROLE_FIELD_NAME", "role")
-        user_team_id_field_name = os.environ.get("OAUTH_USER_TEAM_ID_FIELD_NAME", "team_id")
+        token_info_endpoint: Final = os.getenv("OAUTH_TOKEN_INFO_ENDPOINT")
+        user_id_field_name: Final = os.environ.get("OAUTH_USER_ID_FIELD_NAME", "sub")
+        user_role_field_name: Final = os.environ.get("OAUTH_USER_ROLE_FIELD_NAME", "role")
+        user_team_id_field_name: Final = os.environ.get("OAUTH_USER_TEAM_ID_FIELD_NAME", "team_id")
 
         # OAuth2 client credentials for introspection endpoint authentication
-        oauth_client_id = os.environ.get("OAUTH_CLIENT_ID")
-        oauth_client_secret = os.environ.get("OAUTH_CLIENT_SECRET")
+        oauth_client_id: Final = os.environ.get("OAUTH_CLIENT_ID")
+        oauth_client_secret: Final = os.environ.get("OAUTH_CLIENT_SECRET")
 
         if not token_info_endpoint:
             raise ValueError("OAUTH_TOKEN_INFO_ENDPOINT environment variable is not set")
 
-        client = get_async_httpx_client(llm_provider=httpxSpecialProvider.Oauth2Check)
+        client: Final = get_async_httpx_client(llm_provider=httpxSpecialProvider.Oauth2Check)
 
         # Determine if this is an introspection endpoint (requires POST) or token info endpoint (uses GET)
-        is_introspection_endpoint = Oauth2Handler._is_introspection_endpoint(
+        is_introspection_endpoint: Final = Oauth2Handler._is_introspection_endpoint(
             token_info_endpoint=token_info_endpoint,
             oauth_client_id=oauth_client_id,
             oauth_client_secret=oauth_client_secret,
@@ -179,7 +187,7 @@ class Oauth2Handler:
             response.raise_for_status()
 
             # If we get here, the request was successful
-            data = response.json()
+            data = _TOKEN_INFO_RESPONSE.validate_python(response.json())
 
             verbose_proxy_logger.debug(
                 "Oauth2 token validation for token=%s, response from endpoint=%s",
@@ -207,7 +215,7 @@ class Oauth2Handler:
             )
         except httpx.HTTPStatusError as e:
             # This will catch any 4xx or 5xx errors
-            raise ValueError(f"Oauth 2.0 Token validation failed: {e}")
+            raise OAuth2TokenValidationError(f"Oauth 2.0 Token validation failed: {e}")
         except Exception as e:
             # This will catch any other errors (like network issues)
-            raise ValueError(f"An error occurred during token validation: {e}")
+            raise OAuth2TokenValidationError(f"An error occurred during token validation: {e}")

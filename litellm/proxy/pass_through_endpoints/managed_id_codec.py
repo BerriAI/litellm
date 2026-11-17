@@ -20,12 +20,12 @@ from __future__ import annotations
 import base64
 import uuid as _uuid_mod
 from dataclasses import dataclass
-from typing import Optional
+from typing import Final
 
 from litellm.types.utils import SpecialEnums
 
-_PREFIX = SpecialEnums.LITELM_MANAGED_FILE_ID_PREFIX.value  # "litellm_proxy"
-_DISCRIMINATOR = "passthrough"
+_PREFIX: Final = SpecialEnums.LITELM_MANAGED_FILE_ID_PREFIX.value  # "litellm_proxy"
+_DISCRIMINATOR: Final = "passthrough"
 
 
 @dataclass(frozen=True)
@@ -39,13 +39,13 @@ class ManagedIdPayload:
 
 def encode(provider: str, unified_uuid: str, raw_provider_id: str) -> str:
     """Return a urlsafe-base64 managed ID string (trailing ``=`` stripped)."""
-    plaintext = SpecialEnums.LITELLM_PASSTHROUGH_MANAGED_ID_COMPLETE_STR.value.format(
+    plaintext: Final = SpecialEnums.LITELLM_PASSTHROUGH_MANAGED_ID_COMPLETE_STR.value.format(
         provider, unified_uuid, raw_provider_id
     )
     return base64.urlsafe_b64encode(plaintext.encode()).decode().rstrip("=")
 
 
-def decode(managed_id: str) -> Optional[ManagedIdPayload]:
+def decode(managed_id: str) -> ManagedIdPayload | None:
     """
     Decode *managed_id*.
 
@@ -55,18 +55,18 @@ def decode(managed_id: str) -> Optional[ManagedIdPayload]:
     if not isinstance(managed_id, str):
         return None
     # Restore stripped padding before decoding
-    padded = managed_id + "=" * (-len(managed_id) % 4)
+    padded: Final = managed_id + "=" * (-len(managed_id) % 4)
     try:
-        plaintext = base64.urlsafe_b64decode(padded).decode()
+        plaintext: Final = base64.urlsafe_b64decode(padded).decode()
     except Exception:
         return None
 
     # Must start with "litellm_proxy:passthrough;"
-    expected_head = f"{_PREFIX}:{_DISCRIMINATOR};"
+    expected_head: Final = f"{_PREFIX}:{_DISCRIMINATOR};"
     if not plaintext.startswith(expected_head):
         return None
 
-    rest = plaintext[len(expected_head) :]
+    rest: Final = plaintext[len(expected_head) :]
     try:
         # Split only on first two ';' so a raw_id containing ';' cannot
         # break parsing (OpenAI IDs don't use ';', but defensive).

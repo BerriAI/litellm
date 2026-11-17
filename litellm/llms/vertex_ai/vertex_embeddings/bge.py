@@ -10,8 +10,9 @@ Model name handling:
 - This module focuses on request/response transformation only
 """
 
-from typing import List, Optional, Union
+from typing import Final, cast  # noqa: TID251  # extra_body carries raw fields the TypedDict lacks
 
+from litellm.llms.base_llm.embedding.transformation import split_extra_body
 from litellm.types.utils import EmbeddingResponse, Usage
 
 from .types import (
@@ -52,12 +53,12 @@ class VertexBGEConfig:
         Returns:
             bool: True if the model is a BGE model
         """
-        model_lower = model.lower()
+        model_lower: Final = model.lower()
         # Check for "bge/" prefix (endpoint pattern) or "bge" in model name
         return model_lower.startswith("bge/") or "bge" in model_lower
 
     @staticmethod
-    def transform_request(input: Union[list, str], optional_params: dict, model: str) -> VertexEmbeddingRequest:
+    def transform_request(input: list | str, optional_params: dict, model: str) -> VertexEmbeddingRequest:
         """
         Transforms an OpenAI request to a Vertex BGE embedding request.
 
@@ -71,10 +72,10 @@ class VertexBGEConfig:
         Returns:
             VertexEmbeddingRequest: The transformed request
         """
-        vertex_request: VertexEmbeddingRequest = VertexEmbeddingRequest()
-        vertex_text_embedding_input_list: List[TextEmbeddingBGEInput] = []
-        task_type: Optional[TaskType] = optional_params.get("task_type")
-        title = optional_params.get("title")
+        vertex_request: Final[VertexEmbeddingRequest] = VertexEmbeddingRequest()
+        vertex_text_embedding_input_list: Final[list[TextEmbeddingBGEInput]] = []
+        task_type: Final[TaskType | None] = optional_params.get("task_type")
+        title: Final = optional_params.get("title")
 
         if isinstance(input, str):
             input = [input]
@@ -84,15 +85,20 @@ class VertexBGEConfig:
             vertex_text_embedding_input_list.append(embedding_input)
 
         vertex_request["instances"] = vertex_text_embedding_input_list
-        vertex_request["parameters"] = EmbeddingParameters(**optional_params)
+        body_params, extra_body = split_extra_body(optional_params)
+        vertex_request["parameters"] = (
+            cast(  # cast-ok: extra_body carries raw Vertex fields the TypedDict does not list
+                EmbeddingParameters, {**extra_body, **body_params}
+            )
+        )
 
         return vertex_request
 
     @staticmethod
     def _create_embedding_input(
         prompt: str,
-        task_type: Optional[TaskType] = None,
-        title: Optional[str] = None,
+        task_type: TaskType | None = None,
+        title: str | None = None,
     ) -> TextEmbeddingBGEInput:
         """
         Creates a TextEmbeddingBGEInput object for BGE models.
@@ -107,7 +113,7 @@ class VertexBGEConfig:
         Returns:
             TextEmbeddingBGEInput: A TextEmbeddingBGEInput object
         """
-        text_embedding_input = TextEmbeddingBGEInput(prompt=prompt)
+        text_embedding_input: Final = TextEmbeddingBGEInput(prompt=prompt)
         if task_type is not None:
             text_embedding_input["task_type"] = task_type
         if title is not None:
@@ -142,14 +148,14 @@ class VertexBGEConfig:
         if "predictions" not in response:
             raise KeyError("Response missing 'predictions' field")
 
-        _predictions = response["predictions"]
+        _predictions: Final = response["predictions"]
 
         if not isinstance(_predictions, list):
             raise ValueError(f"Expected 'predictions' to be a list, got {type(_predictions)}")
 
-        embedding_response = []
+        embedding_response: Final = []
         # BGE models don't return token counts, so we estimate or set to 0
-        input_tokens = 0
+        input_tokens: Final = 0
 
         for idx, embedding_values in enumerate(_predictions):
             if not isinstance(embedding_values, list):
@@ -166,6 +172,6 @@ class VertexBGEConfig:
         model_response.object = "list"
         model_response.data = embedding_response
         model_response.model = model
-        usage = Usage(prompt_tokens=input_tokens, completion_tokens=0, total_tokens=input_tokens)
+        usage: Final = Usage(prompt_tokens=input_tokens, completion_tokens=0, total_tokens=input_tokens)
         setattr(model_response, "usage", usage)
         return model_response

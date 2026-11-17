@@ -1,12 +1,21 @@
 # What is this?
 ## API Handler for calling Vertex AI Partner Models
+from collections.abc import Callable, Mapping, Sequence
 from enum import Enum
-from typing import Callable, Optional, Union
+from types import MappingProxyType
+from typing import Final
 
-import httpx  # type: ignore
+import httpx
+from pydantic import TypeAdapter
 
 import litellm
 from litellm import LlmProviders
+from litellm.litellm_core_utils.prompt_templates.common_utils import messages_with_file_parts_as_image_urls
+from litellm.llms.vertex_ai.request_labels import (
+    VERTEX_LABELS_HEADER,
+    vertex_partner_labels_header,
+    vertex_request_label_fields,
+)
 from litellm.types.llms.vertex_ai import VertexPartnerProvider
 from litellm.utils import ModelResponse
 
@@ -14,6 +23,16 @@ from ...custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from ..vertex_llm_base import VertexBase
 
 base_llm_http_handler = BaseLLMHTTPHandler()
+_PARAMS: Final = TypeAdapter(Mapping[str, object])
+
+
+def _mapping(source: object) -> Mapping[str, object]:
+    return _PARAMS.validate_python(source) if isinstance(source, Mapping) else {}
+
+
+def _caller_labels(optional_params: Mapping[str, object]) -> Mapping[str, object]:
+    extra_body_labels: Final = _mapping(optional_params.get("extra_body")).get("labels")
+    return {**_mapping(optional_params.get("labels")), **_mapping(extra_body_labels)}
 
 
 class VertexAIError(Exception):
@@ -72,7 +91,7 @@ class VertexAIPartnerModels(VertexBase):
 
     @staticmethod
     def should_use_openai_handler(model: str):
-        OPENAI_LIKE_VERTEX_PROVIDERS = [
+        OPENAI_LIKE_VERTEX_PROVIDERS: Final = [
             "llama",
             PartnerModelPrefixes.DEEPSEEK_PREFIX,
             PartnerModelPrefixes.QWEN_PREFIX,
@@ -94,11 +113,11 @@ class VertexAIPartnerModels(VertexBase):
         print_verbose: Callable,
         encoding,
         logging_obj,
-        api_base: Optional[str],
+        api_base: str | None,
         optional_params: dict,
         custom_prompt_dict: dict,
-        headers: Optional[dict],
-        timeout: Union[float, httpx.Timeout],
+        headers: dict | None,
+        timeout: float | httpx.Timeout,
         litellm_params: dict,
         vertex_project=None,
         vertex_location=None,
@@ -108,8 +127,6 @@ class VertexAIPartnerModels(VertexBase):
         client=None,
     ):
         try:
-            import vertexai
-
             from litellm.llms.anthropic.chat import AnthropicChatCompletion
             from litellm.llms.codestral.completion.handler import (
                 CodestralTextCompletion,
@@ -118,14 +135,9 @@ class VertexAIPartnerModels(VertexBase):
         except Exception as e:
             raise VertexAIError(
                 status_code=400,
-                message=f"""vertexai import failed please run `pip install -U "google-cloud-aiplatform>=1.38"`. Got error: {e}""",
+                message=f"Failed to import a partner model handler. Got error: {e}",
             )
 
-        if not (hasattr(vertexai, "preview") or hasattr(vertexai.preview, "language_models")):
-            raise VertexAIError(
-                status_code=400,
-                message="""Upgrade vertex ai. Run `pip install "google-cloud-aiplatform>=1.38"`""",
-            )
         try:
             access_token, project_id = self._ensure_access_token(
                 credentials=vertex_credentials,
@@ -133,12 +145,12 @@ class VertexAIPartnerModels(VertexBase):
                 custom_llm_provider="vertex_ai",
             )
 
-            openai_like_chat_completions = OpenAILikeChatHandler()
-            codestral_fim_completions = CodestralTextCompletion()
-            anthropic_chat_completions = AnthropicChatCompletion()
+            openai_like_chat_completions: Final = OpenAILikeChatHandler()
+            codestral_fim_completions: Final = CodestralTextCompletion()
+            anthropic_chat_completions: Final = AnthropicChatCompletion()
 
             ## CONSTRUCT API BASE
-            stream: bool = optional_params.get("stream", False) or False
+            stream: Final[bool] = optional_params.get("stream", False) or False
 
             optional_params["stream"] = stream
 
@@ -163,12 +175,33 @@ class VertexAIPartnerModels(VertexBase):
                 model=model,
             )
 
+            label_fields: Final = vertex_request_label_fields() if partner == VertexPartnerProvider.mistralai else ()
+            params: Final = _PARAMS.validate_python(optional_params)
+            labels_header: Final = (
+                vertex_partner_labels_header(
+                    label_fields,
+                    _caller_labels(params),
+                    _PARAMS.validate_python(headers or {}),
+                    _PARAMS.validate_python(litellm_params),
+                )
+                if label_fields
+                else None
+            )
+            if label_fields and "labels" in optional_params:
+                del optional_params["labels"]  # rebind-ok: labels travel in the X-Vertex-AI-Labels header, not the body
+            extra_body: Final = _mapping(params.get("extra_body"))
+            if label_fields and "labels" in extra_body:
+                optional_params["extra_body"] = {  # rebind-ok: a copy, so a shared deployment extra_body stays intact
+                    key: value for key, value in extra_body.items() if key != "labels"
+                }
+            vertex_labels_headers: Final = {} if labels_header is None else {VERTEX_LABELS_HEADER: labels_header}
+
             if "codestral" in model or "mistral" in model:
                 model = model.split("@")[0]
 
             if "codestral" in model and litellm_params.get("text_completion") is True:
                 optional_params["model"] = model
-                text_completion_model_response = litellm.TextCompletionResponse(stream=stream)
+                text_completion_model_response: Final = litellm.TextCompletionResponse(stream=stream)
                 return codestral_fim_completions.completion(
                     model=model,
                     messages=messages,
@@ -184,12 +217,13 @@ class VertexAIPartnerModels(VertexBase):
                     logger_fn=logger_fn,
                     timeout=timeout,
                     encoding=encoding,
+                    headers=vertex_labels_headers,
                 )
             elif "claude" in model:
                 # Build a new dict so we never mutate the shared deployment extra_headers object.
                 headers = {
                     **(headers or {}),
-                    "Authorization": "Bearer {}".format(access_token),
+                    "Authorization": f"Bearer {access_token}",
                 }
 
                 optional_params.update(
@@ -222,7 +256,7 @@ class VertexAIPartnerModels(VertexBase):
                 return base_llm_http_handler.completion(
                     model=model,
                     stream=stream,
-                    messages=messages,
+                    messages=list(messages_with_file_parts_as_image_urls(messages)),
                     acompletion=acompletion,
                     api_base=api_base,
                     model_response=model_response,
@@ -254,6 +288,9 @@ class VertexAIPartnerModels(VertexBase):
                 encoding=encoding,
                 custom_llm_provider="vertex_ai",
                 custom_endpoint=True,
+                headers={"Content-Type": "application/json", **vertex_labels_headers}
+                if vertex_labels_headers
+                else None,
             )
 
         except Exception as e:
@@ -264,11 +301,15 @@ class VertexAIPartnerModels(VertexBase):
     async def count_tokens(
         self,
         model: str,
-        messages: list,
-        litellm_params: dict,
-        vertex_project=None,
-        vertex_location=None,
-        vertex_credentials=None,
+        messages: Sequence[Mapping[str, object]],
+        litellm_params: Mapping[str, object],
+        vertex_project: object = None,
+        vertex_location: object = None,
+        vertex_credentials: object = None,
+        system: object | None = None,
+        tools: Sequence[Mapping[str, object]] | None = None,
+        count_options: Mapping[str, object] = MappingProxyType({}),
+        context_management: object = None,
     ):
         """
         Count tokens for Vertex AI partner models (Anthropic Claude, Mistral, etc.)
@@ -299,23 +340,40 @@ class VertexAIPartnerModels(VertexBase):
             )
 
             # Prepare request data in Anthropic Messages API format
-            request_data = {
+            request_data: Final = {
                 "model": model,
                 "messages": messages,
+                **MappingProxyType(
+                    {
+                        key: value
+                        for key, value in (
+                            ("system", system),
+                            ("tools", tools),
+                            ("context_management", context_management),
+                        )
+                        if value is not None
+                    }
+                ),
+                **count_options,
             }
 
             # Prepare litellm_params with credentials
-            _litellm_params = litellm_params.copy()
-            if vertex_project:
-                _litellm_params["vertex_project"] = vertex_project
-            if vertex_location:
-                _litellm_params["vertex_location"] = vertex_location
-            if vertex_credentials:
-                _litellm_params["vertex_credentials"] = vertex_credentials
+            _litellm_params: Final = {
+                **litellm_params,
+                **{
+                    key: value
+                    for key, value in (
+                        ("vertex_project", vertex_project),
+                        ("vertex_location", vertex_location),
+                        ("vertex_credentials", vertex_credentials),
+                    )
+                    if value
+                },
+            }
 
             # Call the token counter
-            token_counter = VertexAIPartnerModelsTokenCounter()
-            result = await token_counter.handle_count_tokens_request(
+            token_counter: Final = VertexAIPartnerModelsTokenCounter()
+            result: Final = await token_counter.handle_count_tokens_request(
                 model=model,
                 request_data=request_data,
                 litellm_params=_litellm_params,

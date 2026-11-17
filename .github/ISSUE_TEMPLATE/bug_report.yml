@@ -3,75 +3,77 @@ description: File a bug report
 title: "[Bug]: "
 labels: ["bug"]
 body:
-  - type: markdown
-    attributes:
-      value: |
-        Thanks for taking the time to fill out this bug report!
-        
-        **💡 Tip:** See our [Troubleshooting Guide](https://docs.litellm.ai/docs/troubleshoot) for what information to include.
-  - type: checkboxes
-    id: duplicate-check
-    attributes:
-      label: Check for existing issues
-      description: Please search to see if an issue already exists for the bug you encountered.
-      options:
-        - label: I have searched the existing issues and checked that my issue is not a duplicate.
-          required: true
   - type: textarea
-    id: what-happened
+    id: description
     attributes:
-      label: What happened?
-      description: Also tell us, what did you expect to happen?
-      placeholder: Tell us what you see!
-      value: "A bug happened!"
+      label: Description
+      description: What happened, and what did you expect to happen?
     validations:
       required: true
   - type: textarea
-    id: steps-to-reproduce
+    id: config
     attributes:
-      label: Steps to Reproduce
-      description: Please provide detailed steps to reproduce this bug(A curl/python code to reproduce the bug)
-      placeholder: |
-        1. config.yaml file/ .env file/ etc.
-        2. Run the following code...
-        3. Observe the error...
-      value: |
-        1. 
-        2. 
-        3. 
-    validations:
-      required: true
-  - type: textarea
-    id: logs
-    attributes:
-      label: Relevant log output
-      description: Please copy and paste any relevant log output. This will be automatically formatted into code, so no need for backticks.
-      render: shell
-  - type: dropdown
-    id: component
-    attributes:
-      label: What part of LiteLLM is this about?
-      options:
-        - ''
-        - "SDK (litellm Python package)"
-        - "Proxy"
-        - "UI Dashboard"
-        - "Docs"
-        - "Other"
+      label: Config
+      description: What does your config look like? Paste your config.yaml, or the SDK call if you are not running the proxy. Remove sensitive values.
+      render: yaml
     validations:
       required: true
   - type: input
     id: version
     attributes:
-      label: What LiteLLM version are you on ? 
-      placeholder: v1.53.1
+      label: LiteLLM Version
+      placeholder: v1.100.0
     validations:
       required: true
-  - type: input
-    id: contact
+  - type: textarea
+    id: steps-to-repro
     attributes:
-      label: Twitter / LinkedIn details 
-      description: We announce new features on Twitter + LinkedIn. If this issue leads to an announcement, and you'd like a mention, we'll gladly shout you out!
-      placeholder: ex. @krrish_dh / https://www.linkedin.com/in/krish-d/
+      label: Steps to Repro
+      description: The exact request you sent and the full response you got back. For UI bugs, the page URL and a screenshot.
+      placeholder: |
+        1. curl -X POST http://localhost:4000/v1/chat/completions -H "Authorization: Bearer sk-..." -d '{"model": "gpt-5", "messages": [{"role": "user", "content": "hi"}]}'
+        2. Response: 500 {"error": {"message": "..."}}
+        3. Expected: 200 with a chat completion
+    validations:
+      required: true
+  - type: dropdown
+    id: domain
+    attributes:
+      label: Which part of LiteLLM is this about?
+      description: Best guess is fine, we will relabel if needed.
+      options:
+        - "Cost map: model prices and context windows"
+        - "LLM translation: a specific provider's request or response"
+        - "Routing: load balancing, fallbacks, retries, cooldowns"
+        - "Caching: response cache, Redis, semantic cache"
+        - "Proxy core: startup, config, health checks, endpoints"
+        - "Proxy auth: virtual keys, JWT, SSO, SCIM, roles"
+        - "Management: creating and editing keys, teams, users, orgs, models"
+        - "Spend tracking: spend logs, cost attribution, usage reports"
+        - "Budgets and rate limits: budgets, tpm/rpm, 429s"
+        - "Database: Prisma, migrations, Postgres"
+        - "Logging: callbacks, Langfuse, Datadog, OTel, Prometheus, alerting"
+        - "Guardrails: moderation, PII masking, policies"
+        - "MCP: servers, tools, OAuth"
+        - "Agents: A2A, agent endpoints, skills"
+        - "Vector stores: knowledge bases, RAG, search"
+        - "Passthrough: raw provider endpoints through the proxy"
+        - "Admin UI"
+        - "Python SDK: the litellm package itself"
+        - "Deploy: Docker, Helm, Terraform"
+        - "Docs"
+        - "Not sure"
+    validations:
+      required: false
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: How are you deploying?
+      options:
+        - Docker
+        - Helm chart, monolithic
+        - Helm chart, componentized (recommended)
+        - pip / Python SDK
+        - Other
     validations:
       required: false

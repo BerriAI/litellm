@@ -1,9 +1,30 @@
 from abc import ABC, abstractmethod
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, List, Optional, Union
+from types import MappingProxyType
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Final,
+    cast,  # noqa: TID251  # SDK file handles have no runtime validation schema
+)
 
 import httpx
+from openai import AsyncOpenAI, AsyncStream, OpenAI, Stream
+from openai.types.audio import (
+    Transcription,
+    TranscriptionDiarized,
+    TranscriptionStreamEvent,
+    TranscriptionVerbose,
+)
+from openai.types.audio.transcription_create_params import (
+    TranscriptionCreateParamsBase,
+    TranscriptionCreateParamsStreaming,
+)
+from pydantic import BaseModel, TypeAdapter
 
+from litellm.litellm_core_utils.audio_utils.transcription_streaming import transcription_stream_requested
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.llms.base_llm.chat.transformation import BaseConfig
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -11,12 +32,109 @@ from litellm.types.llms.openai import (
 )
 from litellm.types.utils import FileTypes, ModelResponse, TranscriptionResponse
 
+_TRANSCRIPTION_REQUEST: Final = TypeAdapter(Mapping[str, object])
+_TRANSCRIPTION_TEXT: Final = TypeAdapter(str)
+_TRANSCRIPTION_BODY: Final = TypeAdapter(dict[str, object])
+_TRANSCRIPTION_TYPES_BY_FORMAT: Final = MappingProxyType(
+    {"verbose_json": TranscriptionVerbose, "diarized_json": TranscriptionDiarized}
+)
+
+
+def sdk_compatible_transcription_request_data(data: object) -> Mapping[str, object]:
+    request_data: Final = _TRANSCRIPTION_REQUEST.validate_python(data)
+    extension_keys: Final = ("keywords", "languages")
+    extension_body: Final = {key: request_data[key] for key in extension_keys if key in request_data}
+    if not extension_body:
+        return request_data
+
+    existing_extra_body: Final = request_data.get("extra_body")
+    return {
+        **{key: value for key, value in request_data.items() if key not in extension_keys},
+        "extra_body": {
+            **(as_str_mapping(existing_extra_body) or {}),
+            **extension_body,
+        },
+    }
+
+
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+
+def sdk_compatible_transcription_response(response: object) -> BaseModel | str:
+    if isinstance(response, BaseModel):
+        return response
+    return _TRANSCRIPTION_TEXT.validate_python(response, strict=True)
+
+
+def _content_type(http_response: httpx.Response) -> str:
+    return next(iter(http_response.headers.get_list("content-type")), "")
+
+
+def _is_event_stream(http_response: httpx.Response) -> bool:
+    return _content_type(http_response).startswith("text/event-stream")
+
+
+def _unstreamed_transcription_response(http_response: httpx.Response, response_format: object) -> BaseModel | str:
+    if not _content_type(http_response).startswith("application/json"):
+        return http_response.text
+    transcription_type: Final = _TRANSCRIPTION_TYPES_BY_FORMAT.get(str(response_format), Transcription)
+    return transcription_type.model_construct(None, **_TRANSCRIPTION_BODY.validate_json(http_response.content))
+
+
+def _non_streaming_params(data: Mapping[str, object]) -> TranscriptionCreateParamsBase:
+    return cast(  # cast-ok: SDK file handles have no runtime validation schema
+        TranscriptionCreateParamsBase, {key: value for key, value in data.items() if key != "stream"}
+    )
+
+
+def _streaming_params(data: Mapping[str, object]) -> TranscriptionCreateParamsStreaming:
+    return cast(  # cast-ok: SDK file handles have no runtime validation schema
+        TranscriptionCreateParamsStreaming, data
+    )
+
+
+def create_sdk_transcription(
+    client: OpenAI, data: Mapping[str, object], timeout: float | httpx.Timeout
+) -> tuple[dict[str, str], Stream[TranscriptionStreamEvent] | BaseModel | str]:
+    if not transcription_stream_requested(data.get("stream")):
+        raw_response: Final = client.audio.transcriptions.with_raw_response.create(
+            **_non_streaming_params(data), timeout=timeout
+        )
+        return dict(raw_response.headers), sdk_compatible_transcription_response(raw_response.parse())
+    raw_stream: Final = client.audio.transcriptions.with_raw_response.create(
+        **_streaming_params({**data, "stream": True}), timeout=timeout
+    )
+    if _is_event_stream(raw_stream.http_response):
+        return dict(raw_stream.headers), raw_stream.parse(to=Stream[TranscriptionStreamEvent])
+    raw_stream.http_response.read()
+    return dict(raw_stream.headers), _unstreamed_transcription_response(
+        raw_stream.http_response, data.get("response_format")
+    )
+
+
+async def acreate_sdk_transcription(
+    client: AsyncOpenAI, data: Mapping[str, object], timeout: float | httpx.Timeout
+) -> tuple[dict[str, str], AsyncStream[TranscriptionStreamEvent] | BaseModel | str]:
+    if not transcription_stream_requested(data.get("stream")):
+        raw_response: Final = await client.audio.transcriptions.with_raw_response.create(
+            **_non_streaming_params(data), timeout=timeout
+        )
+        return dict(raw_response.headers), sdk_compatible_transcription_response(raw_response.parse())
+    raw_stream: Final = await client.audio.transcriptions.with_raw_response.create(
+        **_streaming_params({**data, "stream": True}), timeout=timeout
+    )
+    if _is_event_stream(raw_stream.http_response):
+        return dict(raw_stream.headers), raw_stream.parse(to=AsyncStream[TranscriptionStreamEvent])
+    await raw_stream.http_response.aread()
+    return dict(raw_stream.headers), _unstreamed_transcription_response(
+        raw_stream.http_response, data.get("response_format")
+    )
 
 
 @dataclass
@@ -30,24 +148,43 @@ class AudioTranscriptionRequestData:
         content_type: Optional content type override
     """
 
-    data: Union[dict, bytes]
-    files: Optional[dict] = None
-    content_type: Optional[str] = None
+    data: dict | bytes
+    files: dict | None = None
+    content_type: str | None = None
 
 
 class BaseAudioTranscriptionConfig(BaseConfig, ABC):
     @abstractmethod
-    def get_supported_openai_params(self, model: str) -> List[OpenAIAudioTranscriptionOptionalParams]:
+    def get_supported_openai_params(self, model: str) -> list[OpenAIAudioTranscriptionOptionalParams]:
         pass
+
+    @property
+    def supports_subtitle_synthesis(self) -> bool:
+        """
+        Opt-in for providers without a native srt/vtt response body: when True
+        and the user asked for response_format srt/vtt, the http handler
+        synthesizes the subtitle document from the word timestamps the
+        provider's TranscriptionResponse carries in `words`.
+        """
+        return False
+
+    @property
+    def has_native_transcription_endpoint(self) -> bool:
+        """
+        Opt-in for OpenAI-compatible providers whose transcription lives on a
+        non-OpenAI route: when True the request skips the OpenAI SDK transport
+        and goes through this config via the shared http handler.
+        """
+        return False
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         """
         OPTIONAL
@@ -81,7 +218,7 @@ class BaseAudioTranscriptionConfig(BaseConfig, ABC):
     def transform_request(
         self,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
@@ -97,12 +234,12 @@ class BaseAudioTranscriptionConfig(BaseConfig, ABC):
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
         request_data: dict,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
-        api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,
+        encoding: "Tokenizer | None",
+        api_key: str | None = None,
+        json_mode: bool | None = None,
     ) -> ModelResponse:
         raise NotImplementedError(
             "AudioTranscriptionConfig does not need a response transformation for audio transcription models"
@@ -112,7 +249,7 @@ class BaseAudioTranscriptionConfig(BaseConfig, ABC):
         self,
         model: str,
         optional_params: dict,
-        openai_params: List[OpenAIAudioTranscriptionOptionalParams],
+        openai_params: list[OpenAIAudioTranscriptionOptionalParams],
     ) -> dict:
         """
         Get provider specific parameters that are not OpenAI compatible
@@ -120,7 +257,7 @@ class BaseAudioTranscriptionConfig(BaseConfig, ABC):
         eg. if user passes `diarize=True`, we need to pass `diarize` to the provider
         but `diarize` is not an OpenAI parameter, so we need to handle it here
         """
-        provider_specific_params = {}
+        provider_specific_params: Final = {}
         for key, value in optional_params.items():
             # Skip None values
             if value is None:
@@ -154,7 +291,7 @@ class BaseAudioTranscriptionConfig(BaseConfig, ABC):
             True if the parameter should be excluded
         """
         # Parameters that are handled elsewhere or not relevant to Deepgram API
-        excluded_params = {
+        excluded_params: Final = {
             "model",  # Already in the URL path
             "OPENAI_TRANSCRIPTION_PARAMS",  # Internal litellm parameter
         }

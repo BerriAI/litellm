@@ -93,6 +93,89 @@
       ]
     },
     {
+      "name": "google_sheets",
+      "title": "Google Sheets",
+      "description": "Read, write, and format data in Google Sheets spreadsheets",
+      "icon_url": "https://cdn.simpleicons.org/googlesheets",
+      "spec_url": "https://raw.githubusercontent.com/APIs-guru/openapi-directory/main/APIs/googleapis.com/sheets/v4/openapi.yaml",
+      "oauth": {
+        "authorization_url": "https://accounts.google.com/o/oauth2/v2/auth",
+        "token_url": "https://oauth2.googleapis.com/token",
+        "pkce": true,
+        "docs_url": "https://developers.google.com/sheets/api/guides/authorizing"
+      },
+      "key_tools": [
+        { "name": "create_spreadsheet", "description": "Create a new spreadsheet" },
+        { "name": "get_spreadsheet", "description": "Get spreadsheet metadata and sheet properties" },
+        { "name": "get_values", "description": "Read cell values from a range" },
+        { "name": "update_values", "description": "Write cell values to a range" },
+        { "name": "append_values", "description": "Append rows of values to a range" },
+        { "name": "clear_values", "description": "Clear cell values in a range" },
+        { "name": "batch_update", "description": "Apply batched formatting and structural updates" }
+      ]
+    },
+    {
+      "name": "google_drive",
+      "title": "Google Drive",
+      "description": "List, read, upload, and manage files in Google Drive",
+      "icon_url": "https://cdn.simpleicons.org/googledrive",
+      "spec_url": "https://raw.githubusercontent.com/APIs-guru/openapi-directory/main/APIs/googleapis.com/drive/v3/openapi.yaml",
+      "oauth": {
+        "authorization_url": "https://accounts.google.com/o/oauth2/v2/auth",
+        "token_url": "https://oauth2.googleapis.com/token",
+        "pkce": true,
+        "docs_url": "https://developers.google.com/drive/api/guides/api-specific-auth"
+      },
+      "key_tools": [
+        { "name": "list_files", "description": "List and search files" },
+        { "name": "get_file", "description": "Get file metadata" },
+        { "name": "create_file", "description": "Create a file or folder" },
+        { "name": "update_file", "description": "Update file metadata or content" },
+        { "name": "copy_file", "description": "Copy a file" },
+        { "name": "delete_file", "description": "Delete a file" },
+        { "name": "list_permissions", "description": "List sharing permissions on a file" }
+      ]
+    },
+    {
+      "name": "google_calendar",
+      "title": "Google Calendar",
+      "description": "Read and manage Google Calendar events and calendars",
+      "icon_url": "https://cdn.simpleicons.org/googlecalendar",
+      "spec_url": "https://raw.githubusercontent.com/APIs-guru/openapi-directory/main/APIs/googleapis.com/calendar/v3/openapi.yaml",
+      "oauth": {
+        "authorization_url": "https://accounts.google.com/o/oauth2/v2/auth",
+        "token_url": "https://oauth2.googleapis.com/token",
+        "pkce": true,
+        "docs_url": "https://developers.google.com/workspace/calendar/api/guides/auth"
+      },
+      "key_tools": [
+        { "name": "list_events", "description": "List events on a calendar" },
+        { "name": "get_event", "description": "Get a single event" },
+        { "name": "insert_event", "description": "Create an event" },
+        { "name": "update_event", "description": "Update an event" },
+        { "name": "delete_event", "description": "Delete an event" },
+        { "name": "query_freebusy", "description": "Query free/busy availability" }
+      ]
+    },
+    {
+      "name": "google_docs",
+      "title": "Google Docs",
+      "description": "Create, read, and edit Google Docs documents",
+      "icon_url": "https://cdn.simpleicons.org/googledocs",
+      "spec_url": "https://raw.githubusercontent.com/APIs-guru/openapi-directory/main/APIs/googleapis.com/docs/v1/openapi.yaml",
+      "oauth": {
+        "authorization_url": "https://accounts.google.com/o/oauth2/v2/auth",
+        "token_url": "https://oauth2.googleapis.com/token",
+        "pkce": true,
+        "docs_url": "https://developers.google.com/docs/api/how-tos/authorizing"
+      },
+      "key_tools": [
+        { "name": "create_document", "description": "Create a new document" },
+        { "name": "get_document", "description": "Get a document's full content" },
+        { "name": "batch_update_document", "description": "Apply batched edits to a document" }
+      ]
+    },
+    {
       "name": "stripe",
       "title": "Stripe",
       "description": "Payments, customers, subscriptions, and billing",

@@ -15,16 +15,16 @@ Usage:
 
 from .credentials import (
     AccessToken,
-    TokenCredential,
     AzureADCredential,
     GenericOAuth2Credential,
     ProxyAuthHandler,
+    TokenCredential,
 )
 
 __all__ = [
     "AccessToken",
-    "TokenCredential",
     "AzureADCredential",
     "GenericOAuth2Credential",
     "ProxyAuthHandler",
+    "TokenCredential",
 ]

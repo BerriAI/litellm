@@ -1,16 +1,27 @@
 import mimetypes
+from collections.abc import Mapping
 from io import BufferedReader, BytesIO
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Any, Final, Protocol, cast
 from urllib.parse import quote
 
 import httpx
-from httpx._types import RequestFiles
+from httpx._types import FileContent, FileTypes, RequestFiles
+from pydantic import TypeAdapter
 
-import litellm
-from litellm.litellm_core_utils.url_utils import encode_url_path_segment
+from litellm.litellm_core_utils.core_helpers import (
+    as_object_list,
+    decoded_json_object,
+    iter_items,
+    json_contains,
+    require_attributes,
+    subscript,
+)
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base
+from litellm.llms.base_llm.videos.async_task_utils import unsupported_video_fields
 from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
 from litellm.llms.openai.image_edit.transformation import ImageEditRequestUtils
-from litellm.secret_managers.main import get_secret_str
+from litellm.llms.openai.workload_identity import resolve_openai_bearer_token
 from litellm.types.llms.openai import CreateVideoRequest
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.videos.main import (
@@ -26,6 +37,7 @@ from litellm.types.videos.utils import (
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
     from ...base_llm.chat.transformation import BaseLLMException as _BaseLLMException
 
@@ -34,6 +46,59 @@ if TYPE_CHECKING:
 else:
     LiteLLMLoggingObj = Any
     BaseLLMException = Any
+
+
+_REQUEST_VALUE: Final = TypeAdapter(object)
+
+
+def _dict_fields(value: object) -> Mapping[str, object] | None:
+    return value if isinstance(value, dict) else None
+
+
+class _JsonResponse(Protocol):
+    def json(self) -> object: ...
+
+
+def _json_body(response: _JsonResponse) -> object:
+    return response.json()
+
+
+def _model_label(model: object) -> str | None:
+    return format(model) if model else None
+
+
+def _encoded_video_id(video_id: object, provider: str, model: object) -> object:
+    if not video_id:
+        return video_id
+    return encode_video_id_with_provider(
+        require_attributes(video_id, str, "startswith"),
+        provider,
+        _model_label(model),
+    )
+
+
+def _with_encoded_id(video: object, provider: str) -> object:
+    fields: Final = _dict_fields(video)
+    if fields is None or "id" not in fields:
+        return video
+    return {**fields, "id": _encoded_video_id(fields["id"], provider, fields.get("model"))}
+
+
+def _edge_model(data: object, index: int) -> object:
+    if not data:
+        return None
+    edge: Final = _dict_fields(subscript(data, index))
+    return None if edge is None else edge.get("model")
+
+
+def _decoded_character(character: object) -> object:
+    fields: Final = _dict_fields(character)
+    if fields is None:
+        return character
+    character_id: Final = fields.get("id")
+    if not isinstance(character_id, str):
+        return character
+    return {**fields, "id": extract_original_character_id(character_id)}
 
 
 class OpenAIVideoConfig(BaseVideoConfig):
@@ -64,33 +129,37 @@ class OpenAIVideoConfig(BaseVideoConfig):
         video_create_optional_params: VideoCreateOptionalRequestParams,
         model: str,
         drop_params: bool,
-    ) -> Dict:
+    ) -> dict[str, object]:
         """No mapping applied since inputs are in OpenAI spec already"""
-        return dict(video_create_optional_params)
+        unsupported: Final = unsupported_video_fields(
+            video_create_optional_params,
+            model,
+            "openai",
+            drop_params,
+            frozenset({"seed", "duration", "aspect_ratio", "generate_audio"}),
+        )
+        return {key: value for key, value in video_create_optional_params.items() if key not in unsupported}
 
     def validate_environment(
         self,
         headers: dict,
         model: str,
-        api_key: Optional[str] = None,
-        litellm_params: Optional[GenericLiteLLMParams] = None,
+        api_key: str | None = None,
+        litellm_params: GenericLiteLLMParams | None = None,
     ) -> dict:
-        # Use api_key from litellm_params if available, otherwise fall back to other sources
-        if litellm_params and litellm_params.api_key:
-            api_key = api_key or litellm_params.api_key
-
-        api_key = api_key or litellm.api_key or litellm.openai_key or get_secret_str("OPENAI_API_KEY")
-        headers.update(
-            {
-                "Authorization": f"Bearer {api_key}",
-            }
+        params: Final = litellm_params or GenericLiteLLMParams()
+        bearer_token: Final = resolve_openai_bearer_token(
+            api_key=api_key or params.api_key,
+            api_base=params.api_base,
+            litellm_params=params.model_dump(exclude_none=True),
         )
+        headers.update({"Authorization": f"Bearer {bearer_token}"})
         return headers
 
     def get_complete_url(
         self,
         model: str,
-        api_base: Optional[str],
+        api_base: str | None,
         litellm_params: dict,
     ) -> str:
         """
@@ -99,17 +168,20 @@ class OpenAIVideoConfig(BaseVideoConfig):
         if api_base is None:
             api_base = "https://api.openai.com/v1"
 
-        return f"{api_base.rstrip('/')}/videos"
+        return join_api_base(api_base, "videos")
+
+    def use_multipart_form_data(self) -> bool:
+        return True
 
     def transform_video_create_request(
         self,
         model: str,
         prompt: str,
         api_base: str,
-        video_create_optional_request_params: Dict,
+        video_create_optional_request_params: dict,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> Tuple[Dict, RequestFiles, str]:
+    ) -> tuple[dict, RequestFiles, str]:
         """
         Transform the video creation request for OpenAI API.
         """
@@ -122,13 +194,13 @@ class OpenAIVideoConfig(BaseVideoConfig):
 
         # Create the request data
         video_create_request = CreateVideoRequest(model=model, prompt=prompt, **video_create_optional_request_params)
-        request_dict = cast(Dict, video_create_request)
+        request_dict = cast(dict, video_create_request)
         request_dict = self._decode_character_ids_in_create_video_request(request_dict)
 
         # Handle input_reference parameter if provided
-        _input_reference = video_create_optional_request_params.get("input_reference")
-        data_without_files = {k: v for k, v in request_dict.items() if k not in ["input_reference"]}
-        files_list: List[Tuple[str, Any]] = []
+        _input_reference: Final = video_create_optional_request_params.get("input_reference")
+        data_without_files: Final = {k: v for k, v in request_dict.items() if k not in ["input_reference"]}
+        files_list: Final[list[tuple[str, FileTypes]]] = []
 
         # Handle input_reference parameter
         if _input_reference is not None:
@@ -139,7 +211,7 @@ class OpenAIVideoConfig(BaseVideoConfig):
             )
         return data_without_files, files_list, api_base
 
-    def _decode_character_ids_in_create_video_request(self, request_dict: Dict) -> Dict:
+    def _decode_character_ids_in_create_video_request(self, request_dict: dict) -> dict:
         """
         Decode LiteLLM-managed encoded character ids for provider requests.
 
@@ -147,25 +219,11 @@ class OpenAIVideoConfig(BaseVideoConfig):
         `character_<base64-encoded-provider-payload>`, convert it back to the
         original provider id before forwarding upstream.
         """
-        raw_characters = request_dict.get("characters")
-        if not isinstance(raw_characters, list):
+        raw_characters: Final = as_object_list(_REQUEST_VALUE.validate_python(request_dict.get("characters")))
+        if raw_characters is None:
             return request_dict
 
-        decoded_characters: List[Any] = []
-        for character in raw_characters:
-            if not isinstance(character, dict):
-                decoded_characters.append(character)
-                continue
-
-            character_id = character.get("id")
-            if isinstance(character_id, str):
-                decoded_character = dict(character)
-                decoded_character["id"] = extract_original_character_id(character_id)
-                decoded_characters.append(decoded_character)
-            else:
-                decoded_characters.append(character)
-
-        request_dict["characters"] = decoded_characters
+        request_dict["characters"] = [_decoded_character(character) for character in raw_characters]
         return request_dict
 
     def transform_video_create_response(
@@ -173,18 +231,16 @@ class OpenAIVideoConfig(BaseVideoConfig):
         model: str,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
-        custom_llm_provider: Optional[str] = None,
-        request_data: Optional[Dict] = None,
+        custom_llm_provider: str | None = None,
+        request_data: dict | None = None,
     ) -> VideoObject:
         """Transform the OpenAI video creation response."""
-        response_data = raw_response.json()
-
-        video_obj = VideoObject(**response_data)  # type: ignore[arg-type]
+        video_obj: Final = VideoObject.model_validate(raw_response.json())
 
         if custom_llm_provider and video_obj.id:
             video_obj.id = encode_video_id_with_provider(video_obj.id, custom_llm_provider, model)
 
-        usage_data = {}
+        usage_data: Final = {}
         if video_obj:
             if hasattr(video_obj, "seconds") and video_obj.seconds:
                 try:
@@ -201,8 +257,8 @@ class OpenAIVideoConfig(BaseVideoConfig):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-        variant: Optional[str] = None,
-    ) -> Tuple[str, Dict]:
+        variant: str | None = None,
+    ) -> tuple[str, dict]:
         """
         Transform the video content request for OpenAI API.
 
@@ -210,11 +266,11 @@ class OpenAIVideoConfig(BaseVideoConfig):
         - GET /v1/videos/{video_id}/content
         - GET /v1/videos/{video_id}/content?variant=thumbnail
         """
-        original_video_id = extract_original_video_id(video_id)
-        encoded_video_id = encode_url_path_segment(original_video_id, field_name="video_id")
+        original_video_id: Final = extract_original_video_id(video_id)
+        encoded_video_id: Final = encode_url_path_segment(original_video_id, field_name="video_id")
 
         # Construct the URL for video content download
-        url = f"{api_base.rstrip('/')}/{encoded_video_id}/content"
+        url = join_api_base(api_base, f"{encoded_video_id}/content")
         if variant is not None:
             # Encode the user-controlled ``variant`` so a value like
             # ``thumbnail&extra=1`` cannot inject additional query params
@@ -223,7 +279,7 @@ class OpenAIVideoConfig(BaseVideoConfig):
             url = f"{url}?variant={quote(variant, safe='')}"
 
         # No additional data needed for GET content request
-        data: Dict[str, Any] = {}
+        data: Final[dict[str, object]] = {}
 
         return url, data
 
@@ -234,22 +290,22 @@ class OpenAIVideoConfig(BaseVideoConfig):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-        extra_body: Optional[Dict[str, Any]] = None,
-    ) -> Tuple[str, Dict]:
+        extra_body: dict[str, object] | None = None,
+    ) -> tuple[str, dict]:
         """
         Transform the video remix request for OpenAI API.
 
         OpenAI API expects the following request:
         - POST /v1/videos/{video_id}/remix
         """
-        original_video_id = extract_original_video_id(video_id)
-        encoded_video_id = encode_url_path_segment(original_video_id, field_name="video_id")
+        original_video_id: Final = extract_original_video_id(video_id)
+        encoded_video_id: Final = encode_url_path_segment(original_video_id, field_name="video_id")
 
         # Construct the URL for video remix
-        url = f"{api_base.rstrip('/')}/{encoded_video_id}/remix"
+        url: Final = join_api_base(api_base, f"{encoded_video_id}/remix")
 
         # Prepare the request data
-        data = {"prompt": prompt}
+        data: Final[dict[str, object]] = {"prompt": prompt}
 
         # Add any extra body parameters
         if extra_body:
@@ -261,6 +317,7 @@ class OpenAIVideoConfig(BaseVideoConfig):
         self,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
+        client: "HTTPHandler | None" = None,
     ) -> bytes:
         """Transform the OpenAI video content download response."""
         return raw_response.content
@@ -269,22 +326,20 @@ class OpenAIVideoConfig(BaseVideoConfig):
         self,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
-        custom_llm_provider: Optional[str] = None,
+        custom_llm_provider: str | None = None,
     ) -> VideoObject:
         """
         Transform the OpenAI video remix response.
         """
-        response_data = raw_response.json()
-
         # Transform the response data
-        video_obj = VideoObject(**response_data)  # type: ignore[arg-type]
+        video_obj: Final = VideoObject.model_validate(raw_response.json())
 
         if custom_llm_provider and video_obj.id:
             video_obj.id = encode_video_id_with_provider(video_obj.id, custom_llm_provider, None)
 
         # Create usage object with duration information for cost calculation
         # Video remix API doesn't provide usage, so we create one with duration
-        usage_data = {}
+        usage_data: Final = {}
         if video_obj:
             if hasattr(video_obj, "seconds") and video_obj.seconds:
                 try:
@@ -301,11 +356,11 @@ class OpenAIVideoConfig(BaseVideoConfig):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-        after: Optional[str] = None,
-        limit: Optional[int] = None,
-        order: Optional[str] = None,
-        extra_query: Optional[Dict[str, Any]] = None,
-    ) -> Tuple[str, Dict]:
+        after: str | None = None,
+        limit: int | None = None,
+        order: str | None = None,
+        extra_query: dict[str, object] | None = None,
+    ) -> tuple[str, dict]:
         """
         Transform the video list request for OpenAI API.
 
@@ -313,10 +368,10 @@ class OpenAIVideoConfig(BaseVideoConfig):
         - GET /v1/videos
         """
         # Use the api_base directly for video list
-        url = api_base
+        url: Final = api_base
 
         # Prepare query parameters
-        params = {}
+        params: Final = {}
         if after is not None:
             # Decode the wrapped video ID back to the original provider ID
             params["after"] = extract_original_video_id(after)
@@ -335,42 +390,28 @@ class OpenAIVideoConfig(BaseVideoConfig):
         self,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
-        custom_llm_provider: Optional[str] = None,
-    ) -> Dict[str, str]:
-        response_data = raw_response.json()
+        custom_llm_provider: str | None = None,
+    ) -> object:
+        response_data: Final = _json_body(raw_response)
+        if not custom_llm_provider or not json_contains(response_data, "data"):
+            return response_data
 
-        if custom_llm_provider and "data" in response_data:
-            for video_obj in response_data.get("data", []):
-                if isinstance(video_obj, dict) and "id" in video_obj:
-                    video_obj["id"] = encode_video_id_with_provider(
-                        video_obj["id"],
-                        custom_llm_provider,
-                        video_obj.get("model"),
-                    )
+        fields: Final = decoded_json_object(response_data)
+        data: Final = fields.get("data", [])
+        encoded_items: Final = [_with_encoded_id(item, custom_llm_provider) for item in iter_items(data)]
+        encoded_data: Final = encoded_items if as_object_list(data) is not None else data
 
-            # Encode pagination cursor IDs so they remain consistent
-            # with the wrapped data[].id format
-            data_list = response_data.get("data", [])
-            if response_data.get("first_id"):
-                first_model = None
-                if data_list and isinstance(data_list[0], dict):
-                    first_model = data_list[0].get("model")
-                response_data["first_id"] = encode_video_id_with_provider(
-                    response_data["first_id"],
-                    custom_llm_provider,
-                    first_model,
-                )
-            if response_data.get("last_id"):
-                last_model = None
-                if data_list and isinstance(data_list[-1], dict):
-                    last_model = data_list[-1].get("model")
-                response_data["last_id"] = encode_video_id_with_provider(
-                    response_data["last_id"],
-                    custom_llm_provider,
-                    last_model,
-                )
-
-        return response_data
+        # Encode pagination cursor IDs so they remain consistent
+        # with the wrapped data[].id format
+        first_id: Final = fields.get("first_id")
+        encoded_first: Final[Mapping[str, object]] = (
+            {"first_id": _encoded_video_id(first_id, custom_llm_provider, _edge_model(data, 0))} if first_id else {}
+        )
+        last_id: Final = fields.get("last_id")
+        encoded_last: Final[Mapping[str, object]] = (
+            {"last_id": _encoded_video_id(last_id, custom_llm_provider, _edge_model(data, -1))} if last_id else {}
+        )
+        return {**fields, "data": encoded_data, **encoded_first, **encoded_last}
 
     def transform_video_delete_request(
         self,
@@ -378,21 +419,21 @@ class OpenAIVideoConfig(BaseVideoConfig):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> Tuple[str, Dict]:
+    ) -> tuple[str, dict]:
         """
         Transform the video delete request for OpenAI API.
 
         OpenAI API expects the following request:
         - DELETE /v1/videos/{video_id}
         """
-        original_video_id = extract_original_video_id(video_id)
-        encoded_video_id = encode_url_path_segment(original_video_id, field_name="video_id")
+        original_video_id: Final = extract_original_video_id(video_id)
+        encoded_video_id: Final = encode_url_path_segment(original_video_id, field_name="video_id")
 
         # Construct the URL for video delete
-        url = f"{api_base.rstrip('/')}/{encoded_video_id}"
+        url: Final = f"{api_base.rstrip('/')}/{encoded_video_id}"
 
         # No data needed for DELETE request
-        data: Dict[str, Any] = {}
+        data: Final[dict[str, object]] = {}
 
         return url, data
 
@@ -404,10 +445,8 @@ class OpenAIVideoConfig(BaseVideoConfig):
         """
         Transform the OpenAI video delete response.
         """
-        response_data = raw_response.json()
-
         # Transform the response data
-        video_obj = VideoObject(**response_data)  # type: ignore[arg-type]  # type: ignore[arg-type]
+        video_obj: Final = VideoObject.model_validate(raw_response.json())
 
         return video_obj
 
@@ -417,19 +456,19 @@ class OpenAIVideoConfig(BaseVideoConfig):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> Tuple[str, Dict]:
+    ) -> tuple[str, dict]:
         """
         Transform the OpenAI video retrieve request.
         """
         # Extract the original video_id (remove provider encoding if present)
-        original_video_id = extract_original_video_id(video_id)
-        encoded_video_id = encode_url_path_segment(original_video_id, field_name="video_id")
+        original_video_id: Final = extract_original_video_id(video_id)
+        encoded_video_id: Final = encode_url_path_segment(original_video_id, field_name="video_id")
 
         # For video retrieve, we just need to construct the URL
-        url = f"{api_base.rstrip('/')}/{encoded_video_id}"
+        url: Final = f"{api_base.rstrip('/')}/{encoded_video_id}"
 
         # No additional data needed for GET request
-        data: Dict[str, Any] = {}
+        data: Final[dict[str, object]] = {}
 
         return url, data
 
@@ -437,23 +476,21 @@ class OpenAIVideoConfig(BaseVideoConfig):
         self,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
-        custom_llm_provider: Optional[str] = None,
+        custom_llm_provider: str | None = None,
+        client: "HTTPHandler | None" = None,
     ) -> VideoObject:
         """
         Transform the OpenAI video retrieve response.
         """
-        response_data = raw_response.json()
         # Transform the response data
-        video_obj = VideoObject(**response_data)  # type: ignore[arg-type]
+        video_obj: Final = VideoObject.model_validate(raw_response.json())
 
         if custom_llm_provider and video_obj.id:
             video_obj.id = encode_video_id_with_provider(video_obj.id, custom_llm_provider, None)
 
         return video_obj
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
-    ) -> BaseLLMException:
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         from ...base_llm.chat.transformation import BaseLLMException
 
         raise BaseLLMException(
@@ -465,22 +502,22 @@ class OpenAIVideoConfig(BaseVideoConfig):
     def transform_video_create_character_request(
         self,
         name: str,
-        video: Any,
+        video: FileContent,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> Tuple[str, list]:
-        url = f"{api_base.rstrip('/')}/characters"
-        files_list: List[Tuple[str, Any]] = [("name", (None, name))]
+    ) -> tuple[str, list]:
+        url: Final = join_api_base(api_base, "characters")
+        files_list: Final[list[tuple[str, FileTypes]]] = [("name", (None, name))]
         self._add_video_to_files(files_list, video, "video")
         return url, files_list
 
     def transform_video_create_character_response(
         self,
         raw_response: httpx.Response,
-        logging_obj: Any,
+        logging_obj: LiteLLMLoggingObj,
     ) -> CharacterObject:
-        return CharacterObject(**raw_response.json())
+        return CharacterObject.model_validate(raw_response.json())
 
     def transform_video_get_character_request(
         self,
@@ -488,18 +525,18 @@ class OpenAIVideoConfig(BaseVideoConfig):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> Tuple[str, Dict]:
-        original_character_id = extract_original_character_id(character_id)
-        encoded_character_id = encode_url_path_segment(original_character_id, field_name="character_id")
-        url = f"{api_base.rstrip('/')}/characters/{encoded_character_id}"
+    ) -> tuple[str, dict]:
+        original_character_id: Final = extract_original_character_id(character_id)
+        encoded_character_id: Final = encode_url_path_segment(original_character_id, field_name="character_id")
+        url: Final = join_api_base(api_base, f"characters/{encoded_character_id}")
         return url, {}
 
     def transform_video_get_character_response(
         self,
         raw_response: httpx.Response,
-        logging_obj: Any,
+        logging_obj: LiteLLMLoggingObj,
     ) -> CharacterObject:
-        return CharacterObject(**raw_response.json())
+        return CharacterObject.model_validate(raw_response.json())
 
     def transform_video_edit_request(
         self,
@@ -508,24 +545,35 @@ class OpenAIVideoConfig(BaseVideoConfig):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-        extra_body: Optional[Dict[str, Any]] = None,
-        prefetched_source_data: Optional[Dict[str, Any]] = None,
-    ) -> Tuple[str, Dict]:
-        original_video_id = extract_original_video_id(video_id)
-        url = f"{api_base.rstrip('/')}/edits"
-        data: Dict[str, Any] = {"prompt": prompt, "video": {"id": original_video_id}}
+        video_file: FileContent | None = None,
+        extra_body: dict[str, object] | None = None,
+        prefetched_source_data: dict[str, object] | None = None,
+    ) -> tuple[str, Mapping[str, object], RequestFiles | None]:
+        url: Final = join_api_base(api_base, "edits")
+
+        if video_file is not None:
+            files: Final[RequestFiles] = (self._video_file_tuple(video_file, "video"),)
+            form_data: Final = (
+                MappingProxyType({"prompt": prompt, **extra_body})
+                if extra_body
+                else MappingProxyType({"prompt": prompt})
+            )
+            return url, form_data, files
+
+        original_video_id: Final = extract_original_video_id(video_id)
+        data: Final[dict[str, object]] = {"prompt": prompt, "video": {"id": original_video_id}}
         if extra_body:
             data.update(extra_body)
-        return url, data
+        return url, data, None
 
     def transform_video_edit_response(
         self,
         raw_response: httpx.Response,
-        logging_obj: Any,
-        custom_llm_provider: Optional[str] = None,
-        request_data: Optional[Dict] = None,
+        logging_obj: LiteLLMLoggingObj,
+        custom_llm_provider: str | None = None,
+        request_data: dict | None = None,
     ) -> VideoObject:
-        video_obj = VideoObject(**raw_response.json())
+        video_obj: Final = VideoObject.model_validate(raw_response.json())
         if custom_llm_provider and video_obj.id:
             video_obj.id = encode_video_id_with_provider(video_obj.id, custom_llm_provider, None)
         return video_obj
@@ -538,11 +586,11 @@ class OpenAIVideoConfig(BaseVideoConfig):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-        extra_body: Optional[Dict[str, Any]] = None,
-    ) -> Tuple[str, Dict]:
-        original_video_id = extract_original_video_id(video_id)
-        url = f"{api_base.rstrip('/')}/extensions"
-        data: Dict[str, Any] = {
+        extra_body: dict[str, object] | None = None,
+    ) -> tuple[str, dict]:
+        original_video_id: Final = extract_original_video_id(video_id)
+        url: Final = join_api_base(api_base, "extensions")
+        data: Final[dict[str, object]] = {
             "prompt": prompt,
             "seconds": seconds,
             "video": {"id": original_video_id},
@@ -554,45 +602,46 @@ class OpenAIVideoConfig(BaseVideoConfig):
     def transform_video_extension_response(
         self,
         raw_response: httpx.Response,
-        logging_obj: Any,
-        custom_llm_provider: Optional[str] = None,
+        logging_obj: LiteLLMLoggingObj,
+        custom_llm_provider: str | None = None,
     ) -> VideoObject:
-        video_obj = VideoObject(**raw_response.json())
+        video_obj: Final = VideoObject.model_validate(raw_response.json())
         if custom_llm_provider and video_obj.id:
             video_obj.id = encode_video_id_with_provider(video_obj.id, custom_llm_provider, None)
         return video_obj
 
     def _add_image_to_files(
         self,
-        files_list: List[Tuple[str, Any]],
-        image: Any,
+        files_list: list[tuple[str, FileTypes]],
+        image: FileContent,
         field_name: str,
     ) -> None:
         """Add an image to the files list with appropriate content type"""
-        image_content_type = ImageEditRequestUtils.get_image_content_type(image)
+        image_content_type: Final = ImageEditRequestUtils.get_image_content_type(image)
 
         if isinstance(image, BufferedReader):
             files_list.append((field_name, (image.name, image, image_content_type)))
         else:
             files_list.append((field_name, ("input_reference.png", image, image_content_type)))
 
+    def _video_file_tuple(self, video: FileContent, field_name: str) -> tuple[str, FileTypes]:
+        """
+        Build a multipart field tuple for a video upload with proper video MIME
+        type detection: these paths must send video/mp4, not image/* content types.
+        """
+        filename: Final = getattr(video, "name", None) or "input_video.mp4"
+        content_type: Final = self._get_video_content_type(video=video, filename=filename)
+        return (field_name, (filename, video, content_type))
+
     def _add_video_to_files(
         self,
-        files_list: List[Tuple[str, Any]],
-        video: Any,
+        files_list: list[tuple[str, FileTypes]],
+        video: FileContent,
         field_name: str,
     ) -> None:
-        """
-        Add a video to files with proper video MIME type detection.
+        files_list.append(self._video_file_tuple(video, field_name))
 
-        This path is used by POST /videos/characters and must send video/mp4,
-        not image/* content types.
-        """
-        filename = getattr(video, "name", None) or "input_video.mp4"
-        content_type = self._get_video_content_type(video=video, filename=filename)
-        files_list.append((field_name, (filename, video, content_type)))
-
-    def _get_video_content_type(self, video: Any, filename: str) -> str:
+    def _get_video_content_type(self, video: FileContent, filename: str) -> str:
         guessed_content_type, _ = mimetypes.guess_type(filename)
         if guessed_content_type and guessed_content_type.startswith("video/"):
             return guessed_content_type
@@ -600,13 +649,8 @@ class OpenAIVideoConfig(BaseVideoConfig):
         # Fast-path detection for common MP4 signatures when filename is missing/incorrect.
         try:
             header_bytes = b""
-            if isinstance(video, BytesIO):
-                current_pos = video.tell()
-                video.seek(0)
-                header_bytes = video.read(64)
-                video.seek(current_pos)
-            elif isinstance(video, BufferedReader):
-                current_pos = video.tell()
+            if isinstance(video, BytesIO) or isinstance(video, BufferedReader):
+                current_pos: Final = video.tell()
                 video.seek(0)
                 header_bytes = video.read(64)
                 video.seek(current_pos)

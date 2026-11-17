@@ -1,14 +1,23 @@
 import json
-from typing import TYPE_CHECKING, Any, Union
+from typing import TYPE_CHECKING, Any, Final
 
-from litellm.proxy._types import SpanAttributes
+from litellm.litellm_core_utils.safe_json_dumps import jsonable_or_str
+from litellm.types.integrations.otel_span_attributes import SpanAttributes
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
-    Span = Union[_Span, Any]
+    Span = _Span
 else:
     Span = Any
+
+LANGTRACE_DEFAULT_HOST: Final = "https://app.langtrace.ai"
+LANGTRACE_TRACE_PATH: Final = "/api/trace"
+
+
+def langtrace_trace_endpoint(api_host: str | None) -> str:
+    host: Final = (api_host or LANGTRACE_DEFAULT_HOST).rstrip("/")
+    return host if host.endswith(LANGTRACE_TRACE_PATH) else host + LANGTRACE_TRACE_PATH
 
 
 class LangtraceAttributes:
@@ -21,9 +30,9 @@ class LangtraceAttributes:
         This function is used to log the event to Langtrace
         """
 
-        vendor = kwargs.get("litellm_params").get("custom_llm_provider")
-        optional_params = kwargs.get("optional_params", {})
-        options = {**kwargs, **optional_params}
+        vendor: Final = kwargs.get("litellm_params").get("custom_llm_provider")
+        optional_params: Final = kwargs.get("optional_params", {})
+        options: Final = {**kwargs, **optional_params}
         self.set_request_attributes(span, options, vendor)
         self.set_response_attributes(span, response_obj)
         self.set_usage_attributes(span, response_obj)
@@ -32,7 +41,7 @@ class LangtraceAttributes:
         """
         This function is used to get span attributes for the LLM request
         """
-        span_attributes = {
+        span_attributes: Final = {
             "gen_ai.operation.name": "chat",
             "langtrace.service.name": vendor,
             SpanAttributes.LLM_REQUEST_MODEL.value: kwargs.get("model"),
@@ -47,12 +56,12 @@ class LangtraceAttributes:
             SpanAttributes.LLM_PRESENCE_PENALTY.value: kwargs.get("presence_penalty"),
         }
 
-        prompts = kwargs.get("messages")
+        prompts: Final = kwargs.get("messages")
 
         if prompts:
             span.add_event(
                 name="gen_ai.content.prompt",
-                attributes={SpanAttributes.LLM_PROMPTS.value: json.dumps(prompts)},
+                attributes={SpanAttributes.LLM_PROMPTS.value: json.dumps(prompts, default=jsonable_or_str)},
             )
 
         self.set_span_attributes(span, span_attributes)
@@ -61,12 +70,12 @@ class LangtraceAttributes:
         """
         This function is used to get span attributes for the LLM response
         """
-        response_attributes = {
+        response_attributes: Final = {
             "gen_ai.response_id": response_obj.get("id"),
             "gen_ai.system_fingerprint": response_obj.get("system_fingerprint"),
             SpanAttributes.LLM_RESPONSE_MODEL.value: response_obj.get("model"),
         }
-        completions = []
+        completions: Final = []
         for choice in response_obj.get("choices", []):
             role = choice.get("message").get("role")
             content = choice.get("message").get("content")
@@ -83,9 +92,9 @@ class LangtraceAttributes:
         """
         This function is used to get span attributes for the LLM usage
         """
-        usage = response_obj.get("usage")
+        usage: Final = response_obj.get("usage")
         if usage:
-            usage_attributes = {
+            usage_attributes: Final = {
                 SpanAttributes.LLM_USAGE_PROMPT_TOKENS.value: usage.get("prompt_tokens"),
                 SpanAttributes.LLM_USAGE_COMPLETION_TOKENS.value: usage.get("completion_tokens"),
                 SpanAttributes.LLM_USAGE_TOTAL_TOKENS.value: usage.get("total_tokens"),

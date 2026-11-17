@@ -5,8 +5,9 @@ cost-savings read endpoints.
 """
 
 from collections.abc import Mapping
+from typing import Final
 
-HEADROOM_GUARDRAIL_PROVIDER = "headroom"
+HEADROOM_GUARDRAIL_PROVIDER: Final = "headroom"
 
 
 def _saved_tokens_or_zero(value: object) -> int:
@@ -32,7 +33,7 @@ def _headroom_entry_saved_tokens(entry: object) -> int:
 
 
 def _headroom_saved_tokens(guardrail_information: object) -> int:
-    entries = [guardrail_information] if isinstance(guardrail_information, Mapping) else guardrail_information
+    entries: Final = [guardrail_information] if isinstance(guardrail_information, Mapping) else guardrail_information
     if not isinstance(entries, list):
         return 0
     return sum(_headroom_entry_saved_tokens(entry) for entry in entries)

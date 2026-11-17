@@ -5,7 +5,7 @@ DeepSeek's reasoner defaults thinking ON and surfaces the chain as
 ``reasoning_effort="none"`` and ``thinking={"type": "disabled"}``. The DeepSeek
 param mapper (``litellm/llms/deepseek/chat/transformation.py``
 ``map_openai_params``) forwards both as ``thinking={"type": "disabled"}`` so the
-outbound body carries a real disable signal and ``deepseek-reasoner`` returns no
+outbound body carries a real disable signal and the reasoning model returns no
 ``reasoning_content``. This is the behavior tracked by LIT-3686 / GH #27453.
 
 The control case proves the model and path work (reasoning is returned when
@@ -20,6 +20,7 @@ from __future__ import annotations
 import pytest
 
 from e2e_config import unique_marker
+from e2e_metadata import Capability, Domain, Mode, Provider, Route, Subject, meta
 from e2e_http import unwrap
 from lifecycle import ResourceManager
 from models import ChatBody, ChatMessage, ChatResponse, LiteLLMParamsBody, ThinkingParam
@@ -27,7 +28,7 @@ from passthrough_client import PassthroughClient
 
 pytestmark = pytest.mark.e2e
 
-REASONER = "deepseek/deepseek-reasoner"
+REASONER = "deepseek/deepseek-v4-pro"
 PROMPT = "What is 17 + 26? Answer with just the number."
 
 
@@ -49,6 +50,16 @@ def _reasoning_content(response: ChatResponse) -> str | None:
 
 
 class TestDeepSeekReasoningDisable:
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.DEEPSEEK,),
+            models=(REASONER,),
+            capabilities=(Capability.REASONING,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_reasoner_returns_reasoning_by_default(
         self, client: PassthroughClient, resources: ResourceManager
     ) -> None:
@@ -67,10 +78,20 @@ class TestDeepSeekReasoningDisable:
         )
         reasoning = _reasoning_content(response)
         assert reasoning, (
-            "control case: deepseek-reasoner returned no reasoning_content with no "
+            "control case: the reasoning model returned no reasoning_content with no "
             f"disable param, so the disable assertions below can't be trusted: {response}"
         )
 
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.DEEPSEEK,),
+            models=(REASONER,),
+            capabilities=(Capability.REASONING,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_reasoning_effort_none_disables_reasoning(
         self, client: PassthroughClient, resources: ResourceManager
     ) -> None:
@@ -93,6 +114,16 @@ class TestDeepSeekReasoningDisable:
             f"is still present: {response}"
         )
 
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.DEEPSEEK,),
+            models=(REASONER,),
+            capabilities=(Capability.REASONING,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_thinking_disabled_disables_reasoning(
         self, client: PassthroughClient, resources: ResourceManager
     ) -> None:

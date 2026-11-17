@@ -1,6 +1,6 @@
-from typing import Any, Dict, Iterable, List, Literal, Optional, Union
+from typing import Literal
 
-from typing_extensions import Required, TypedDict
+from typing_extensions import NotRequired, ReadOnly, Required, TypedDict
 
 
 class ImageEmbeddingInput(TypedDict, total=False):
@@ -12,6 +12,12 @@ EncodingFormat = Literal["base64", "binary", "float", "int8", "ubinary", "uint8"
 
 
 class ImageEmbeddingRequest(TypedDict, total=False):
-    input: Required[List[ImageEmbeddingInput]]
+    input: Required[list[ImageEmbeddingInput]]
     dimensions: int
     encoding_format: EncodingFormat
+
+
+class FoundryAgentReference(TypedDict):
+    type: ReadOnly[Literal["agent_reference"]]
+    name: ReadOnly[str]
+    version: ReadOnly[NotRequired[str]]

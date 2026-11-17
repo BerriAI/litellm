@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+from typing import Final
 
 import polars as pl
 
@@ -16,7 +17,7 @@ class FocusParquetSerializer(FocusSerializer):
 
     def serialize(self, frame: pl.DataFrame) -> bytes:
         """Encode the provided frame as a parquet payload."""
-        target = frame if not frame.is_empty() else pl.DataFrame(schema=frame.schema)
-        buffer = io.BytesIO()
+        target: Final = frame if not frame.is_empty() else pl.DataFrame(schema=frame.schema)
+        buffer: Final = io.BytesIO()
         target.write_parquet(buffer, compression="snappy")
         return buffer.getvalue()

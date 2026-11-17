@@ -1,10 +1,12 @@
-from typing import List
+from typing import TYPE_CHECKING
 
-from typing_extensions import Dict, Required, TypedDict, override
+from typing_extensions import ReadOnly, TypedDict
 
-from litellm.llms.custom_llm import CustomLLM
+if TYPE_CHECKING:
+    from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
+    from litellm.llms.custom_llm import CustomLLM
 
 
 class CustomLLMItem(TypedDict):
     provider: str
-    custom_handler: CustomLLM
+    custom_handler: ReadOnly["CustomLLM | BaseVideoConfig"]

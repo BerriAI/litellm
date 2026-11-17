@@ -9,9 +9,12 @@ so the full proxy -> router -> OpenAI SDK -> httpx path is exercised.
 import json
 import time
 import uuid
-from typing import Tuple
+from typing import Final
 
 import httpx
+from pydantic import TypeAdapter
+
+from litellm.litellm_core_utils.core_helpers import decoded_json_object
 
 # ---------------------------------------------------------------------------
 # Pre-built response templates
@@ -22,7 +25,7 @@ def _mock_id() -> str:
     return f"chatcmpl-mock-{uuid.uuid4().hex[:8]}"
 
 
-def _chat_completion_json(model: str) -> dict:
+def _chat_completion_json(model: object) -> dict:
     """Return a minimal valid ChatCompletion object."""
     return {
         "id": _mock_id(),
@@ -51,9 +54,11 @@ def _chat_completion_json(model: str) -> dict:
 # Transport
 # ---------------------------------------------------------------------------
 
-_JSON_HEADERS = {
+_JSON_HEADERS: Final = {
     "content-type": "application/json",
 }
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class MockOpenAITransport(httpx.AsyncBaseTransport, httpx.BaseTransport):
@@ -64,18 +69,18 @@ class MockOpenAITransport(httpx.AsyncBaseTransport, httpx.BaseTransport):
     """
 
     @staticmethod
-    def _parse_request(request: httpx.Request) -> Tuple[str, bool]:
+    def _parse_request(request: httpx.Request) -> tuple[object, bool]:
         """Extract model from the request body."""
         try:
-            body = json.loads(request.content)
+            body: Final = _DECODED_JSON.validate_python(json.loads(request.content))
         except (json.JSONDecodeError, ValueError):
             return ("mock-model", False)
-        model = body.get("model", "mock-model")
+        model: Final = decoded_json_object(body).get("model", "mock-model")
         return (model, False)
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
         model, _ = self._parse_request(request)
-        body = json.dumps(_chat_completion_json(model)).encode()
+        body: Final = json.dumps(_chat_completion_json(model)).encode()
         return httpx.Response(
             status_code=200,
             headers=_JSON_HEADERS,
@@ -84,7 +89,7 @@ class MockOpenAITransport(httpx.AsyncBaseTransport, httpx.BaseTransport):
 
     def handle_request(self, request: httpx.Request) -> httpx.Response:
         model, _ = self._parse_request(request)
-        body = json.dumps(_chat_completion_json(model)).encode()
+        body: Final = json.dumps(_chat_completion_json(model)).encode()
         return httpx.Response(
             status_code=200,
             headers=_JSON_HEADERS,

@@ -1,11 +1,9 @@
 import os
-from typing import TYPE_CHECKING, Any, Optional, Union
+from typing import TYPE_CHECKING, Any, Final
 
 from litellm.integrations.opentelemetry import OpenTelemetry
 
 if TYPE_CHECKING:
-    from opentelemetry.trace import Span as _Span
-
     from litellm.integrations.opentelemetry import (
         OpenTelemetryConfig as _OpenTelemetryConfig,
     )
@@ -13,11 +11,9 @@ if TYPE_CHECKING:
 
     Protocol = _Protocol
     OpenTelemetryConfig = _OpenTelemetryConfig
-    Span = Union[_Span, Any]
 else:
     Protocol = Any
     OpenTelemetryConfig = Any
-    Span = Any
 
 
 class LevoConfig:
@@ -25,7 +21,7 @@ class LevoConfig:
 
     def __init__(
         self,
-        otlp_auth_headers: Optional[str],
+        otlp_auth_headers: str | None,
         protocol: Protocol,
         endpoint: str,
     ):
@@ -49,10 +45,10 @@ class LevoLogger(OpenTelemetry):
             ValueError: If required environment variables are missing.
         """
         # Required environment variables
-        api_key = os.environ.get("LEVOAI_API_KEY", None)
-        org_id = os.environ.get("LEVOAI_ORG_ID", None)
-        workspace_id = os.environ.get("LEVOAI_WORKSPACE_ID", None)
-        collector_url = os.environ.get("LEVOAI_COLLECTOR_URL", None)
+        api_key: Final = os.environ.get("LEVOAI_API_KEY", None)
+        org_id: Final = os.environ.get("LEVOAI_ORG_ID", None)
+        workspace_id: Final = os.environ.get("LEVOAI_WORKSPACE_ID", None)
+        collector_url: Final = os.environ.get("LEVOAI_COLLECTOR_URL", None)
 
         # Validate required env vars
         if not api_key:
@@ -68,16 +64,16 @@ class LevoLogger(OpenTelemetry):
             )
 
         # Use collector URL exactly as provided by the user
-        endpoint = collector_url
-        protocol: Protocol = "otlp_http"
+        endpoint: Final = collector_url
+        protocol: Final[Protocol] = "otlp_http"
 
         # Build OTLP headers string
         # Format: Authorization=Bearer {api_key},x-levo-organization-id={org_id},x-levo-workspace-id={workspace_id}
-        headers_parts = [f"Authorization=Bearer {api_key}"]
+        headers_parts: Final = [f"Authorization=Bearer {api_key}"]
         headers_parts.append(f"x-levo-organization-id={org_id}")
         headers_parts.append(f"x-levo-workspace-id={workspace_id}")
 
-        otlp_auth_headers = ",".join(headers_parts)
+        otlp_auth_headers: Final = ",".join(headers_parts)
 
         return LevoConfig(
             otlp_auth_headers=otlp_auth_headers,
@@ -93,7 +89,7 @@ class LevoLogger(OpenTelemetry):
             dict: Health status with status and message/error_message keys.
         """
         try:
-            config = self.get_levo_config()
+            config: Final = self.get_levo_config()
 
             if not config.otlp_auth_headers:
                 return {
