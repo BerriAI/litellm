@@ -23,7 +23,6 @@ use crate::{
         common_utils::{existing_betas, merge_beta_headers, supports_effort_param},
         messages::{
             handler::shape_anthropic_messages_request,
-            thinking::python_type_name,
             transformation::{provider_feature_betas, transform_messages_request},
         },
     },
@@ -36,13 +35,14 @@ use crate::{
         },
     },
     vertex_ai::{
-        common_utils::{BaseUrl, get_vertex_base_url, graft_default_vertex_path, join_api_base},
+        common_utils::{get_vertex_base_url, graft_default_vertex_path, join_api_base},
         request_labels::with_partner_labels_header,
     },
 };
 use litellm_llms_types::providers::vertex_ai::{
     ANTHROPIC_VERSION, RAW_PREDICT, STREAM_RAW_PREDICT,
 };
+use litellm_python_compat::urllib::urlsplit;
 
 const WEB_SEARCH_TOOL_PREFIX: &str = "web_search";
 const CONTENT_TYPE_HEADER: &str = "content-type";
@@ -296,11 +296,11 @@ pub fn complete_vertex_anthropic_url(
         return Ok(join_api_base(&get_vertex_base_url(location)?, &route));
     };
     let default_url = join_api_base(custom, &route);
-    let base_path = BaseUrl::split(custom).path;
+    let base_path = urlsplit(custom).path;
     let url = if base_path.is_empty() || base_path == "/" {
-        join_api_base(custom, BaseUrl::split(&default_url).path)
+        join_api_base(custom, urlsplit(&default_url).path)
     } else if matches!(base_path.trim_end_matches('/'), "/v1" | "/v1beta1")
-        && BaseUrl::split(&default_url).path.contains("/projects/")
+        && urlsplit(&default_url).path.contains("/projects/")
     {
         graft_default_vertex_path(custom, &default_url)
     } else {
@@ -309,7 +309,7 @@ pub fn complete_vertex_anthropic_url(
     if !stream {
         return Ok(url);
     }
-    let parsed = BaseUrl::split(&url);
+    let parsed = urlsplit(&url);
     let query = match parsed.query.is_empty() {
         true => "alt=sse".to_string(),
         false => format!("{}&alt=sse", parsed.query),
@@ -386,7 +386,7 @@ impl From<Value> for OutputFormat {
         match value {
             Value::Object(format) => Self::Object(format),
             other => Self::Other {
-                python_type: python_type_name(&other),
+                python_type: litellm_python_compat::json::type_name(&other),
             },
         }
     }

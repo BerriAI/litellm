@@ -395,7 +395,7 @@ fn python_int(text: &str) -> Option<i64> {
     })
 }
 
-pub(crate) fn python_type_name(value: &Value) -> &'static str {
+fn python_type_name(value: &Value) -> &'static str {
     match value {
         Value::Null => "NoneType",
         Value::Bool(_) => "bool",

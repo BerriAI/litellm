@@ -1,11 +1,6 @@
 use num_bigint::Sign;
 
-use crate::{Value, json::from_json};
-
-/// `bool(value)` for a field read from JSON, where a missing field is `None`.
-pub fn json_truthy(value: Option<&serde_json::Value>) -> bool {
-    value.is_some_and(|value| truthy(&from_json(value.clone())))
-}
+use crate::Value;
 
 /// `bool(value)` for plain data: `None`, `False`, zero, and empty containers are false.
 pub fn truthy(value: &Value) -> bool {
@@ -22,21 +17,34 @@ pub fn truthy(value: &Value) -> bool {
     }
 }
 
+/// Python's `a or b or ...` over optional text: the first non-empty value, else the last value,
+/// which may be empty or `None`.
+pub fn first_truthy(values: impl IntoIterator<Item = Option<String>>) -> Option<String> {
+    values.into_iter().fold(None, |chosen, value| match chosen {
+        Some(chosen) if !chosen.is_empty() => Some(chosen),
+        _ => value,
+    })
+}
+
 #[cfg(test)]
 mod tests {
-    #[rstest::rstest]
-    #[case::missing(None, false)]
-    #[case::null(Some(serde_json::json!(null)), false)]
-    #[case::empty_text(Some(serde_json::json!("")), false)]
-    #[case::zero(Some(serde_json::json!(0)), false)]
-    #[case::zero_float(Some(serde_json::json!(0.0)), false)]
-    #[case::empty_dict(Some(serde_json::json!({})), false)]
-    #[case::text(Some(serde_json::json!("x")), true)]
-    #[case::list(Some(serde_json::json!([0])), true)]
-    fn a_json_field_is_truthy_as_python_reads_it(
-        #[case] value: Option<serde_json::Value>,
-        #[case] expected: bool,
+    use rstest::rstest;
+
+    use super::first_truthy;
+
+    #[rstest]
+    #[case::first_non_empty(&[Some("a"), Some("b")], Some("a"))]
+    #[case::skips_empty_and_missing(&[Some(""), None, Some("c")], Some("c"))]
+    #[case::all_falsy_keeps_the_last_empty(&[None, Some("")], Some(""))]
+    #[case::all_falsy_keeps_the_last_missing(&[Some(""), None], None)]
+    #[case::nothing(&[], None)]
+    fn first_truthy_is_python_s_or_chain(
+        #[case] values: &[Option<&str>],
+        #[case] expected: Option<&str>,
     ) {
-        assert_eq!(super::json_truthy(value.as_ref()), expected);
+        assert_eq!(
+            first_truthy(values.iter().map(|value| value.map(str::to_owned))).as_deref(),
+            expected
+        );
     }
 }

@@ -19,6 +19,7 @@ mod transport;
 use std::sync::Arc;
 
 use litellm_auth_types::{Error, VertexParams};
+use litellm_python_compat::truthy::first_truthy;
 use litellm_secret_value::SecretValue;
 
 #[cfg(any(test, feature = "test-support"))]
@@ -32,21 +33,13 @@ use external_account::ExternalAccountInfo;
 use logins::{Login, LoginKey, Logins};
 use source::{CredentialsJson, ExplicitCredentials, load_vertex_credentials_source};
 
-/// Python's `a or b or ...`: the first non-empty value, else the last one, which may be empty.
-pub fn python_or(values: impl IntoIterator<Item = Option<String>>) -> Option<String> {
-    values.into_iter().fold(None, |chosen, value| match chosen {
-        Some(chosen) if !chosen.is_empty() => Some(chosen),
-        _ => value,
-    })
-}
-
 /// Python's `VertexBase.safe_get_vertex_ai_credentials`, with the deployment's
 /// `VERTEXAI_CREDENTIALS` read through the host's secrets as `get_secret_str` reads it.
 pub fn vertex_credentials(
     params: &VertexParams,
     secrets: &dyn Fn(&str) -> Option<String>,
 ) -> Option<String> {
-    python_or(
+    first_truthy(
         VertexParams::CREDENTIALS
             .wire
             .iter()
@@ -66,7 +59,7 @@ pub fn vertex_project(
     params: &VertexParams,
     secrets: &dyn Fn(&str) -> Option<String>,
 ) -> Option<String> {
-    python_or(
+    first_truthy(
         VertexParams::PROJECT
             .wire
             .iter()
@@ -80,7 +73,7 @@ pub fn vertex_location(
     params: &VertexParams,
     secrets: &dyn Fn(&str) -> Option<String>,
 ) -> Option<String> {
-    python_or(
+    first_truthy(
         VertexParams::LOCATION
             .wire
             .iter()

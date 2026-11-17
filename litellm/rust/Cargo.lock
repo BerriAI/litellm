@@ -4567,7 +4567,6 @@ dependencies = [
  "time",
  "tokio",
  "tokio-util",
- "unicode-general-category",
  "url",
 ]
 
@@ -4719,6 +4718,7 @@ dependencies = [
 name = "litellm-python-compat"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "criterion",
  "hex",
  "num-bigint 0.4.8",
@@ -4729,6 +4729,7 @@ dependencies = [
  "serde_json",
  "serde_with",
  "thiserror 2.0.21",
+ "unicode-general-category",
 ]
 
 [[package]]
