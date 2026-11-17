@@ -54,6 +54,9 @@ from litellm.secret_managers.main import get_secret_bool
 from litellm.types.integrations.slack_alerting import LITELLM_LOGO_URL
 
 _BUDGET_ALERT_CLAIMS_TARGET: Final = "budget_alert_claims"
+_USER_SOFT_BUDGET_ALERT_EMAIL_TEMPLATE: Final = SOFT_BUDGET_ALERT_EMAIL_TEMPLATE.replace(
+    "Your LiteLLM API key has crossed", "Your LiteLLM account has crossed"
+)
 
 
 def _max_budget_alert_id(user_info: CallInfo) -> str:
@@ -281,10 +284,14 @@ class BaseEmailLogger(CustomLogger):
         if event.max_budget is not None:
             max_budget_info = f"<b>Maximum Budget:</b> ${event.max_budget} <br />"
 
-        email_html_content = SOFT_BUDGET_ALERT_EMAIL_TEMPLATE.format(
+        template: Final = (
+            _USER_SOFT_BUDGET_ALERT_EMAIL_TEMPLATE
+            if event.event_group == Litellm_EntityType.USER
+            else SOFT_BUDGET_ALERT_EMAIL_TEMPLATE
+        )
+        email_html_content = template.format(
             email_logo_url=email_params.logo_url,
             recipient_email=email_params.recipient_email,
-            budget_owner="account" if event.event_group == Litellm_EntityType.USER else "API key",
             soft_budget=soft_budget_str,
             spend=spend_str,
             max_budget_info=max_budget_info,
