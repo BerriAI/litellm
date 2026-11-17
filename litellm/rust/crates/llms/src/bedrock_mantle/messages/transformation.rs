@@ -1,3 +1,8 @@
+//! Bedrock Mantle's Anthropic Messages endpoint on the `bedrock_mantle/` provider, Python's
+//! `BedrockMantleAnthropicMessagesConfig`: the `bedrock/mantle/` shaping with this provider's own
+//! region order, base suffix stripping, `BEDROCK_MANTLE_API_KEY` bearer auth, SigV4 signed in the
+//! URL's region, and the capability keys both Mantle routes probe.
+
 use std::sync::LazyLock;
 
 use litellm_host::interceptors::RetriedRequest;
@@ -99,6 +104,9 @@ const BEDROCK_MANTLE_REQUEST_SETTINGS: InvokeRequestSettings = InvokeRequestSett
     ..AMAZON_MANTLE_REQUEST_SETTINGS
 };
 
+/// The `bedrock_mantle/` Messages config for Claude models. Its region comes from
+/// `aws_region_name`, a public Mantle host, a region prefix on the model or the env, in Python's
+/// order, and it sends the model without that prefix.
 pub struct BedrockMantleAnthropicMessagesConfig;
 pub const BEDROCK_MANTLE_MESSAGES_CONFIG: BedrockMantleAnthropicMessagesConfig =
     BedrockMantleAnthropicMessagesConfig;
