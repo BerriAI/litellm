@@ -43,6 +43,7 @@ from litellm.litellm_core_utils.offline_mode import is_offline_mode
 _BETA_HEADERS_CONFIG: dict[str, object] | None = None
 _BETA_HEADERS_CONFIG_LOCK: Final = threading.Lock()
 _BETA_HEADERS_CONFIG_LOADER: Final = ThreadPoolExecutor(max_workers=1, thread_name_prefix="litellm-beta-headers-config")
+_BACKGROUND_LOAD_IN_FLIGHT: Final = threading.Lock()
 
 BetaHeadersConfig: TypeAlias = Mapping[str, str | Mapping[str, str | None]]
 _BETA_HEADERS_CONFIG_ADAPTER: Final = TypeAdapter(BetaHeadersConfig)
@@ -215,11 +216,14 @@ def loaded_beta_headers_config() -> Mapping[str, object] | None:
 
 
 def _cache_beta_headers_config() -> None:
-    _load_beta_headers_config()
+    try:
+        _load_beta_headers_config()
+    finally:
+        _BACKGROUND_LOAD_IN_FLIGHT.release()
 
 
 def load_beta_headers_config_in_background() -> None:
-    if _BETA_HEADERS_CONFIG is None:
+    if _BETA_HEADERS_CONFIG is None and _BACKGROUND_LOAD_IN_FLIGHT.acquire(blocking=False):
         _ = _BETA_HEADERS_CONFIG_LOADER.submit(_cache_beta_headers_config)
 
 
